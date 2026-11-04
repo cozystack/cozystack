@@ -184,8 +184,9 @@ func TestServerApplicationMetricsScope(t *testing.T) {
 		if want := formatTime(buildMetrics(t, "api/v1/query_range", hostile).start); r.form.Get("start") != want {
 			t.Errorf("%s start = %s, want the query's earliest read %s", r.path, r.form.Get("start"), want)
 		}
-		// One step past end, which vmselect rounds up to a whole step.
-		if r.form.Get("end") != formatTime(testNow.Add(time.Minute)) || r.form.Get("limit") != "101" {
+		// One step past end, which vmselect rounds up to a whole step, and
+		// two steps for each "(" that may be an implicit subquery.
+		if r.form.Get("end") != formatTime(testNow.Add(5*time.Minute)) || r.form.Get("limit") != "101" {
 			t.Errorf("%s end/limit = %s/%s", r.path, r.form.Get("end"), r.form.Get("limit"))
 		}
 	}
@@ -533,5 +534,22 @@ func TestServerApplicationRefusesForwardReads(t *testing.T) {
 	}
 	if n := len(h.requests()); n != 0 {
 		t.Fatalf("upstream saw %d requests for refused queries", n)
+	}
+}
+
+// TestServerApplicationLookupCoversSubquery: a pod created during the two
+// subquery steps past the evaluation time can show up through range_last,
+// so the lookup reaches that far.
+func TestServerApplicationLookupCoversSubquery(t *testing.T) {
+	h := newPolicyHarness(t, Config{}, appMetricsUpstream(nil, nil, http.StatusOK), appPolicy, nil)
+	at := testNow.Add(-6 * time.Hour)
+	q := url.Values{"query": {"max_over_time(range_last(container_cpu_usage_seconds_total)[1h:1h])"}, "time": {unix(at)}}
+	if got := h.status(http.MethodGet, appRoot+"db.main/metrics/api/v1/query?"+q.Encode(), "good"); got != http.StatusOK {
+		t.Fatalf("status = %d", got)
+	}
+	r := h.requests()[0]
+	end, err := time.Parse(time.RFC3339, r.form.Get("end"))
+	if err != nil || r.path != "/api/v1/label/pod/values" || end.Before(at.Add(2*time.Hour)) {
+		t.Fatalf("lookup %s end = %s, want at least %s", r.path, r.form.Get("end"), formatTime(at.Add(2*time.Hour)))
 	}
 }

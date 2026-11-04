@@ -130,14 +130,19 @@ func queryLookback(query string, step time.Duration) (time.Duration, bool) {
 }
 
 // queryLookahead is an upper bound on how far after its evaluation window
-// a query reads, from the same lexical scan. Only a negative offset reads
-// forward; the negative offsets are summed, which covers nesting. Any @
-// makes the bound unknown, as it does for queryLookback, and so does WITH,
-// which can apply one offset several times. vmselect also evaluates
-// rollup_candlestick one step ahead of the evaluation time
-// (evalRollupFuncWithoutAt), with the step of whatever subquery it sits
-// in, so it makes the bound unknown too.
-func queryLookahead(query string) (time.Duration, bool) {
+// a query reads, from the same lexical scan, with step the query's step.
+// A negative offset reads forward; the negative offsets are summed, which
+// covers nesting. vmselect also evaluates a subquery up to its end plus
+// its step, rounded up to the step (evalRollupFuncWithSubquery), and
+// range_* transforms and keep_next_value carry those later values back
+// onto earlier points, so each subquery level adds two steps; as for the
+// lookback, every "(" counts as a possible implicit subquery and each
+// term uses the largest step seen. Any @ makes the bound unknown, as it
+// does for queryLookback, and so does WITH, which can apply one offset
+// several times. vmselect also evaluates rollup_candlestick one step ahead
+// of the evaluation time (evalRollupFuncWithoutAt), so it makes the bound
+// unknown too.
+func queryLookahead(query string, step time.Duration) (time.Duration, bool) {
 	if strings.Contains(query, "@") {
 		return 0, false
 	}
@@ -146,7 +151,36 @@ func queryLookahead(query string) (time.Duration, bool) {
 		return 0, false
 	}
 	_, ahead, ok := scanOffsets(lower)
-	if !ok || ahead > 0 && hasKeyword(lower, "with") || ahead > float64(maxMetricsDuration) {
+	if !ok || ahead > 0 && hasKeyword(lower, "with") {
+		return 0, false
+	}
+	subqueries := 0
+	maxStep := float64(step)
+	for rest := query; ; {
+		open := strings.IndexByte(rest, '[')
+		if open < 0 {
+			break
+		}
+		closing := strings.IndexByte(rest[open:], ']')
+		if closing < 0 {
+			return 0, false
+		}
+		_, subStep, isSubquery := strings.Cut(rest[open+1:open+closing], ":")
+		rest = rest[open+closing+1:]
+		if !isSubquery {
+			continue
+		}
+		subqueries++
+		if strings.TrimSpace(subStep) != "" {
+			d, ok := parseQueryDuration(subStep)
+			if !ok {
+				return 0, false
+			}
+			maxStep = max(maxStep, d)
+		}
+	}
+	ahead += 2 * float64(subqueries+strings.Count(query, "(")) * maxStep
+	if ahead > float64(maxMetricsDuration) {
 		return 0, false
 	}
 	return time.Duration(ahead), true
