@@ -219,14 +219,25 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, route Route) *HTT
 	if ct := resp.Header.Get("Content-Type"); ct != "" {
 		w.Header().Set("Content-Type", ct)
 	}
-	w.WriteHeader(resp.StatusCode)
+	// Cancelling the upstream request does not interrupt a write to a
+	// client that stopped reading; only a write deadline does. A tail
+	// renews it before every line, so only a stalled client is cut; the
+	// server clears it once the response is finished.
 	rc := http.NewResponseController(w)
-	_ = rc.Flush()
-	if tail {
-		s.streamLines(w, rc, resp.Body, cancel)
+	arm := func() {}
+	if tail && s.cfg.TailIdleTimeout > 0 {
+		arm = func() { _ = rc.SetWriteDeadline(time.Now().Add(s.cfg.TailIdleTimeout)) }
+	} else if deadline, ok := ctx.Deadline(); ok {
+		_ = rc.SetWriteDeadline(deadline)
+	}
+	arm()
+	w.WriteHeader(resp.StatusCode)
+	if rc.Flush() != nil {
 		return nil
 	}
-	if _, err := io.Copy(w, resp.Body); err != nil && !errors.Is(err, context.Canceled) {
+	if tail {
+		s.streamLines(w, rc, resp.Body, cancel, arm)
+	} else if _, err := io.Copy(w, resp.Body); err != nil && !errors.Is(err, context.Canceled) {
 		slog.Debug("copying upstream response", "error", err)
 	}
 	return nil
@@ -282,7 +293,7 @@ func (s *Server) authorize(r *http.Request, route Route) (string, *HTTPError) {
 // streamLines flushes after every line so a live tail reaches the browser
 // as it happens, and cancels the upstream stream once no line has arrived
 // for the idle timeout.
-func (s *Server) streamLines(w http.ResponseWriter, rc *http.ResponseController, body io.Reader, cancel context.CancelFunc) {
+func (s *Server) streamLines(w http.ResponseWriter, rc *http.ResponseController, body io.Reader, cancel context.CancelFunc, arm func()) {
 	var idle *time.Timer
 	if s.cfg.TailIdleTimeout > 0 {
 		idle = time.AfterFunc(s.cfg.TailIdleTimeout, cancel)
@@ -295,6 +306,7 @@ func (s *Server) streamLines(w http.ResponseWriter, rc *http.ResponseController,
 			if idle != nil {
 				idle.Reset(s.cfg.TailIdleTimeout)
 			}
+			arm()
 			if _, werr := w.Write(chunk); werr != nil {
 				return
 			}

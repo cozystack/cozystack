@@ -135,3 +135,65 @@ func TestServerSlowBodyHoldsSlotUntilDeadline(t *testing.T) {
 		return h.status("GET", logsRoot+"query", "good") == http.StatusOK
 	}, "the slot of an unfinished body was not released")
 }
+
+// TestServerStalledClientReleasesTail holds a tail whose client stops
+// reading, once before the headers and once after the first line: the
+// slot must come back within a few idle timeouts in both cases.
+func TestServerStalledClientReleasesTail(t *testing.T) {
+	for _, readHeaders := range []bool{false, true} {
+		lines := make(chan string, 1)
+		done := make(chan struct{})
+		h := newHarness(t, Config{
+			TailIdleTimeout: 200 * time.Millisecond,
+			Limiter:         LimiterConfig{MaxTails: 1},
+		}, tailUpstream(lines, done))
+		t.Cleanup(func() { close(done) })
+		pipe := servePipe(t, h.server)
+		conn := pipe.send(t, "GET "+logsRoot+"tail?query=* HTTP/1.1\r\nHost: proxy\r\nAuthorization: Bearer good\r\n\r\n")
+		if readHeaders {
+			if resp := readResponse(t, conn); resp.StatusCode != http.StatusOK {
+				t.Fatalf("tail answered %d", resp.StatusCode)
+			}
+			lines <- `{"_msg":"unread"}`
+		}
+		eventually(t, time.Second, func() bool { return h.server.limits.openTails() == 1 }, "the tail never opened")
+		eventually(t, 2*time.Second, func() bool { return h.server.limits.openTails() == 0 },
+			"a client that stopped reading keeps its tail slot")
+	}
+}
+
+// TestServerStalledClientReleasesQuery does the same for a non-tail
+// response, which must be written by the request deadline.
+func TestServerStalledClientReleasesQuery(t *testing.T) {
+	h := newHarness(t, Config{
+		RequestTimeout: 200 * time.Millisecond,
+		Limiter:        LimiterConfig{MaxConcurrentPerUser: 1},
+	}, nil)
+	pipe := servePipe(t, h.server)
+	pipe.send(t, "GET "+logsRoot+"query?query=* HTTP/1.1\r\nHost: proxy\r\nAuthorization: Bearer good\r\n\r\n")
+	eventually(t, time.Second, func() bool {
+		return h.status("GET", logsRoot+"query", "good") == http.StatusTooManyRequests
+	}, "the stalled request never held its slot")
+	eventually(t, 2*time.Second, func() bool {
+		return h.status("GET", logsRoot+"query", "good") == http.StatusOK
+	}, "a client that stopped reading keeps its concurrency slot")
+}
+
+// TestServerActiveTailOutlivesWriteDeadline keeps a tail busy for several
+// idle timeouts: the write deadline must be renewed, not fixed.
+func TestServerActiveTailOutlivesWriteDeadline(t *testing.T) {
+	lines := make(chan string)
+	done := make(chan struct{})
+	t.Cleanup(func() { close(done) })
+	h := newHarness(t, Config{TailIdleTimeout: 150 * time.Millisecond}, tailUpstream(lines, done))
+	resp := h.do(http.MethodGet, logsRoot+"tail?query=*", "good", nil, nil)
+	defer func() { _ = resp.Body.Close() }()
+	rd := bufio.NewReader(resp.Body)
+	for i := range 8 {
+		lines <- `{"_msg":"line"}`
+		if _, err := rd.ReadString('\n'); err != nil {
+			t.Fatalf("line %d: %v", i, err)
+		}
+		time.Sleep(75 * time.Millisecond)
+	}
+}
