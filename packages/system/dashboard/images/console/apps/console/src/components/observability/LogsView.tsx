@@ -1,7 +1,9 @@
 import { useState } from "react"
 import { useQuery } from "@tanstack/react-query"
 import { useK8sClient } from "@cozystack/k8s-client"
-import { Button, Spinner } from "@cozystack/ui"
+import { Button } from "@cozystack/ui"
+import { Input } from "../ui/input.tsx"
+import { SelectItem, SelectLabel, SelectPopup, SelectRoot, SelectTrigger, SelectValue } from "../ui/select.tsx"
 import {
   CONTAINER_FIELD,
   LOG_RANGES,
@@ -20,6 +22,7 @@ import { useLogTail } from "../../lib/observability/use-log-tail.ts"
 import { ProxyNotice } from "./ProxyNotice.tsx"
 import { RangePicker } from "./RangePicker.tsx"
 import { LogLines } from "./LogLines.tsx"
+import { EmptyState } from "./EmptyState.tsx"
 
 const HISTORY_LIMIT = 500
 const FOLLOW_CAP = 1000
@@ -30,25 +33,40 @@ function windowFor(range: LogRangeKey) {
   return { start: new Date(end - LOG_RANGES[range] * 1000).toISOString(), end: new Date(end).toISOString() }
 }
 
+const ALL = ""
+
 function Picker({ label, value, options, onChange }: { label: string; value: string; options: string[]; onChange: (v: string) => void }) {
+  const items = [{ value: ALL, label: "All" }, ...options.map((o) => ({ value: o, label: o }))]
   return (
-    <label className="flex items-center gap-1.5 text-xs text-slate-600">
-      {label}
-      <select
-        aria-label={label}
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        className="rounded-md border border-slate-200 bg-white px-2 py-1 text-xs text-slate-900"
-      >
-        <option value="">All</option>
-        {options.map((o) => (
-          <option key={o} value={o}>
-            {o}
-          </option>
+    <SelectRoot items={items} value={value} onValueChange={(v) => onChange(v ?? ALL)}>
+      <div className="flex min-w-0 items-center gap-1.5">
+        <SelectLabel>{label}</SelectLabel>
+        <SelectTrigger className="w-40" title={value || undefined}>
+          <SelectValue />
+        </SelectTrigger>
+      </div>
+      <SelectPopup>
+        {items.map((item) => (
+          <SelectItem key={item.value} value={item.value}>
+            {item.label}
+          </SelectItem>
         ))}
-      </select>
-    </label>
+      </SelectPopup>
+    </SelectRoot>
   )
+}
+
+function placeholderFor({ follow, stopped, loading, failed }: { follow: boolean; stopped: boolean; loading: boolean; failed: boolean }) {
+  if (follow) {
+    return stopped ? (
+      <EmptyState tone="dark" title="Follow stopped before any line arrived." />
+    ) : (
+      <EmptyState tone="dark" busy title="Waiting for new log lines…" hint="Lines written from now on appear here." />
+    )
+  }
+  if (loading) return <EmptyState tone="dark" busy title="Loading log lines…" />
+  if (failed) return <EmptyState tone="dark" title="No log lines to show." />
+  return <EmptyState tone="dark" title="No log lines for this range and filter." hint="Try a longer range or a broader filter." />
 }
 
 export function LogsView({ scope }: { scope: ObservabilityScope }) {
@@ -107,12 +125,12 @@ export function LogsView({ scope }: { scope: ObservabilityScope }) {
             setFilter(draft)
           }}
         >
-          <input
+          <Input
             aria-label="LogsQL filter"
             value={draft}
-            onChange={(e) => setDraft(e.target.value)}
+            onValueChange={setDraft}
             placeholder='LogsQL filter, e.g. error or "connection refused"'
-            className="w-full rounded-md border border-slate-200 px-2.5 py-1.5 font-mono text-xs"
+            className="font-mono"
           />
         </form>
         <Picker label="Pod" value={pod} options={pods.data ?? []} onChange={(v) => { setPod(v); setContainer("") }} />
@@ -129,7 +147,11 @@ export function LogsView({ scope }: { scope: ObservabilityScope }) {
         </p>
       )}
       {error ? <ProxyNotice what="Logs" error={error} /> : null}
-      {!follow && history.isLoading ? <Spinner /> : <LogLines key={followRun ?? "history"} entries={entries} />}
+      <LogLines
+        key={followRun ?? "history"}
+        entries={entries}
+        placeholder={placeholderFor({ follow, stopped: tail.state === "stopped", loading: history.isLoading, failed: Boolean(error) })}
+      />
     </div>
   )
 }

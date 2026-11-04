@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest"
-import { screen, waitFor } from "@testing-library/react"
+import { screen, waitFor, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { K8sClient } from "@cozystack/k8s-client"
 import { renderWithK8sProvider } from "../../test-utils/render.tsx"
@@ -47,15 +47,59 @@ describe("LogsView", () => {
   it("narrows to the picked pod with a stream filter", async () => {
     const { client, raw } = clientWith(defaultHandler)
     renderWithK8sProvider(<LogsView scope={app} />, { client })
-    await screen.findByRole("option", { name: "db-1" })
 
-    await userEvent.selectOptions(screen.getByLabelText("Pod"), "db-1")
+    await userEvent.click(screen.getByRole("combobox", { name: "Pod" }))
+    await userEvent.click(await screen.findByRole("option", { name: "db-1" }))
 
     await waitFor(() =>
       expect(
         raw.mock.calls.some(([p]) => new URL(p, "http://x").searchParams.get("query") === '{kubernetes_pod_name="db-1"} (*)'),
       ).toBe(true),
     )
+  })
+
+  it("offers All next to every pod and starts on it", async () => {
+    const { client } = clientWith(defaultHandler)
+    renderWithK8sProvider(<LogsView scope={app} />, { client })
+    const pod = screen.getByRole("combobox", { name: "Pod" })
+    expect(pod).toHaveTextContent("All")
+
+    await userEvent.click(pod)
+
+    expect(await screen.findByRole("option", { name: "db-1" })).toBeInTheDocument()
+    expect(screen.getAllByRole("option").map((o) => o.textContent)).toEqual(["All", "db-0", "db-1"])
+  })
+
+  it("keeps the log console and says so inside it when nothing matches", async () => {
+    const { client } = clientWith((endpoint, params) =>
+      endpoint.endsWith("query") ? new Response("") : defaultHandler(endpoint, params),
+    )
+
+    renderWithK8sProvider(<LogsView scope={app} />, { client })
+
+    const frame = screen.getByRole("region", { name: "Log lines" })
+    expect(await within(frame).findByText("No log lines for this range and filter.")).toBeInTheDocument()
+  })
+
+  it("shows loading inside the log console", () => {
+    const { client } = clientWith((endpoint, params) =>
+      endpoint.endsWith("query") ? new Promise(() => {}) : defaultHandler(endpoint, params),
+    )
+
+    renderWithK8sProvider(<LogsView scope={app} />, { client })
+
+    const frame = screen.getByRole("region", { name: "Log lines" })
+    expect(within(frame).getByRole("status")).toHaveAttribute("aria-busy", "true")
+  })
+
+  it("says it is waiting while Follow has no line yet", async () => {
+    const { client } = clientWith(defaultHandler)
+    renderWithK8sProvider(<LogsView scope={app} />, { client })
+
+    await userEvent.click(screen.getByRole("button", { name: "Follow" }))
+
+    const frame = screen.getByRole("region", { name: "Log lines" })
+    expect(within(frame).getByText("Waiting for new log lines…")).toBeInTheDocument()
   })
 
   it("applies the LogsQL filter on submit", async () => {
