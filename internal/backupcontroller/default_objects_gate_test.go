@@ -1099,6 +1099,9 @@ func TestRenderedEndpointMatchesTheChart(t *testing.T) {
 		// No endpoint in the Secret: the chart renders its values fallback,
 		// which the gate cannot reproduce, so it compares nothing.
 		{"", ""},
+		// Present but blank: the helper's lookup sees a non-empty value and
+		// renders the bare scheme.
+		{"\n", "https://"},
 	} {
 		if got := renderedEndpointFor([]byte(tc.in)); got != tc.want {
 			t.Errorf("renderedEndpointFor(%q) = %q, want %q", tc.in, got, tc.want)
@@ -1123,5 +1126,51 @@ func TestForcedReleaseForNamesTheStaleCredentialsRelease(t *testing.T) {
 		if got := g.forcedReleaseFor(tc.missing); got != tc.want {
 			t.Errorf("forcedReleaseFor(%v) = %v, want %v", tc.missing, got, tc.want)
 		}
+	}
+}
+
+// TestCheckSkipsCredentialsComparisonWithoutDerivedSecret covers a
+// systemSecretName the bucket chart does not render: the same name as the COSI
+// Secret (the projector also reads a raw COSI Secret) or a Secret without the
+// endpoint key. Comparing it would report it stale on every tick, or fail the
+// check, and the missing objects would never be repaired.
+func TestCheckSkipsCredentialsComparisonWithoutDerivedSecret(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		apply func(g *DefaultObjectsGate, src *corev1.Secret)
+	}{
+		{"COSI Secret is the source", func(g *DefaultObjectsGate, src *corev1.Secret) {
+			g.CredentialsCOSISecretName = g.Config.SourceSecretName
+			src.Data["BucketInfo"] = cosiSecret("https://s3.new.example.com").Data["BucketInfo"]
+		}},
+		{"source without endpoint", func(_ *DefaultObjectsGate, src *corev1.Secret) {
+			delete(src.Data, "endpoint")
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			src := sourceSecret("bucket-1a2b")
+			var objs []runtime.Object
+			for _, o := range allDefaultObjects() {
+				if u := o.(*unstructured.Unstructured); u.GetName() != "cozy-default-cnpg" {
+					objs = append(objs, u)
+				}
+			}
+			objs = append(objs, helmReleaseObject(), credentialsHelmReleaseObject())
+			g, dyn := newGate(t, nil, objs...)
+			tc.apply(g, src)
+			g.Client = fake.NewClientBuilder().WithScheme(gateScheme()).
+				WithObjects(src, cosiSecret("https://s3.new.example.com"), cozyDefaultBackupClass()).Build()
+
+			missing, forced, err := g.Check(context.Background())
+			if err != nil {
+				t.Fatalf("Check: %v", err)
+			}
+			if !forced || len(missing) != 1 || missing[0] != "CNPG/cozy-default-cnpg" {
+				t.Fatalf("missing = %v, forced = %v; want the missing strategy repaired", missing, forced)
+			}
+			if ann := credentialsForceAnnotations(t, dyn); len(ann) != 0 {
+				t.Errorf("bucket release forced: %v", ann)
+			}
+		})
 	}
 }

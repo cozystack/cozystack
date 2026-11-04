@@ -51,15 +51,16 @@ var defaultObjectsMissing = prometheus.NewGaugeVec(
 )
 
 // defaultObjectsForceReconciles counts the forced Helm upgrades the gate
-// issued to materialise those objects. A counter that keeps climbing means
-// the forced render is not producing the objects (e.g. a CRD is missing),
+// issued to materialise those objects or to refresh their S3 endpoint. A
+// counter that keeps climbing means the forced render is not producing the
+// objects (e.g. a CRD is missing) or not changing their endpoint,
 // which is a different failure than the install-time race this gate closes.
 // A suspended release is NOT counted here: it is skipped before the patch,
 // so a paused release cannot masquerade as a render that keeps failing.
 var defaultObjectsForceReconciles = prometheus.NewCounterVec(
 	prometheus.CounterOpts{
 		Name: "cozystack_backup_default_objects_force_reconciles_total",
-		Help: "Number of forced HelmRelease reconciles issued to create missing platform backup objects.",
+		Help: "Number of forced HelmRelease reconciles issued to create missing platform backup objects or refresh their S3 endpoint.",
 	},
 	[]string{"namespace", "name"},
 )
@@ -125,8 +126,9 @@ var backupStorageLocationGVR = schema.GroupVersionResource{
 // is resolvable — read from the same platform credentials Secret the
 // projector already consumes, so no new dependency and no `lookup` — it
 // checks that every object the platform BackupClass routes to actually
-// exists, and forces one Helm upgrade when any is missing. A forced
-// upgrade re-runs the lookups, so the gated templates materialise.
+// exists, and forces one Helm upgrade when any is missing or carries a stale
+// S3 endpoint. A forced upgrade re-runs the lookups, so the gated templates
+// materialise with the current endpoint.
 //
 // It deliberately does not create the objects itself: their bodies are
 // values-driven (endpoint, region, forcePathStyle, the Altinity strategy's
@@ -317,8 +319,9 @@ func (g *DefaultObjectsGate) checkAndLog(ctx context.Context, logger logr.Logger
 }
 
 // forcedReleaseFor reports which release renders the given missing set, for
-// logging only. reconcileCredentials returns the credentials Secret as the
-// sole missing object, and it is never mixed with the routed objects —
+// logging only. reconcileCredentials and staleCredentials return the
+// credentials Secret as the sole entry, and it is never mixed with the routed
+// objects —
 // resolving the bucket name is a precondition for checking those at all.
 func (g *DefaultObjectsGate) forcedReleaseFor(missing []string) types.NamespacedName {
 	credsKey := fmt.Sprintf("Secret/%s", g.Config.SourceSecretName)
@@ -329,9 +332,10 @@ func (g *DefaultObjectsGate) forcedReleaseFor(missing []string) types.Namespaced
 }
 
 // Check resolves the platform bucket name, verifies that every object the
-// BackupClass routes to exists, and forces one Helm upgrade when any is
-// missing. It returns the missing objects (formatted for logs) and whether
-// a forced upgrade was issued on this call.
+// BackupClass routes to exists and carries the current S3 endpoint, and
+// forces one Helm upgrade when any is missing or stale. It returns those
+// objects (formatted for logs) and whether a forced upgrade was issued on this
+// call.
 //
 // While the source Secret is absent or carries no bucket name, the gate
 // cannot evaluate the routed objects — their templates gate on the same
@@ -412,9 +416,14 @@ func (g *DefaultObjectsGate) Check(ctx context.Context) ([]string, bool, error) 
 // its endpoint differs from the one in the COSI Secret it is rendered from,
 // comparing against what packages/system/bucket/templates/user-credentials.yaml
 // writes for it. The COSI Secret being absent (the BucketAccess is being
-// re-granted) leaves nothing to compare against and is not staleness.
+// re-granted) leaves nothing to compare against and is not staleness, and
+// neither is a source Secret the bucket chart does not render: the COSI Secret
+// itself (the projector accepts one) or one without the endpoint key.
 func (g *DefaultObjectsGate) staleCredentials(ctx context.Context, src *corev1.Secret) (string, error) {
 	if g.CredentialsCOSISecretName == "" || g.CredentialsHelmRelease.Name == "" || g.CredentialsHelmRelease.Namespace == "" {
+		return "", nil
+	}
+	if _, ok := src.Data["endpoint"]; !ok || g.CredentialsCOSISecretName == g.Config.SourceSecretName {
 		return "", nil
 	}
 	cosi := &corev1.Secret{}
@@ -446,13 +455,13 @@ func (g *DefaultObjectsGate) staleCredentials(ctx context.Context, src *corev1.S
 // renderedEndpointFor mirrors the "backupstrategy-controller.endpoint" helper
 // for a provisioned bucket: the credentials Secret's endpoint, trimmed, with
 // any scheme replaced by https://. It is the value the chart stamps as
-// endpointAnnotation. An empty endpoint makes the helper fall back to
-// backupStorage.endpoint, which the gate cannot see, so it returns "".
+// endpointAnnotation. An absent or empty endpoint makes the helper fall back
+// to backupStorage.endpoint, which the gate cannot see, so it returns "".
 func renderedEndpointFor(raw []byte) string {
-	host := strings.TrimSpace(string(raw))
-	if host == "" {
+	if len(raw) == 0 {
 		return ""
 	}
+	host := strings.TrimSpace(string(raw))
 	return "https://" + strings.TrimPrefix(strings.TrimPrefix(host, "https://"), "http://")
 }
 
@@ -511,7 +520,7 @@ func (g *DefaultObjectsGate) force(ctx context.Context, target types.NamespacedN
 			// annotations would be ignored, so skip the patch entirely and
 			// leave the force counter alone — a climbing counter must keep
 			// meaning "the forced render is not producing the objects".
-			log.FromContext(ctx).Info("skipped forcing a suspended HelmRelease; missing default backup objects will not be repaired until it is resumed",
+			log.FromContext(ctx).Info("skipped forcing a suspended HelmRelease; missing or stale default backup objects will not be repaired until it is resumed",
 				"helmRelease", target.String(), "missing", missing)
 			*last = now
 			return missing, false, nil
