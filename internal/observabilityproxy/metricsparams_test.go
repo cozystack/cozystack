@@ -156,6 +156,9 @@ func TestBuildMetricsParamsLimits(t *testing.T) {
 		{"points at the limit", "api/v1/query_range", rng(ago(10999*time.Minute), ago(0), "1m"), http.StatusOK},
 		{"points above the limit", "api/v1/query_range", rng(ago(11000*time.Minute), ago(0), "1m"), http.StatusUnprocessableEntity},
 		{"points above the limit after rounding the step up", "api/v1/query_range", rng(ago(22*time.Second), ago(0), "0.0019"), http.StatusUnprocessableEntity},
+		// 10.9999s admits 11000 points, but vmselect gets both bounds cut to
+		// the millisecond: 11.000s, 11001 points.
+		{"points above the limit once the bounds are cut to milliseconds", "api/v1/query_range", rng("2026-11-04T11:59:49.0009Z", "2026-11-04T12:00:00.0008Z", "0.001"), http.StatusUnprocessableEntity},
 		{"overflowing step", "api/v1/query_range", rng(ago(time.Hour), ago(0), "2562047h47m16.854775807s"), http.StatusBadRequest},
 		{"overflowing timeout", "api/v1/query", url.Values{"query": {"up"}, "timeout": {"2562047h47m16.854775807s"}}, http.StatusBadRequest},
 		{"step above the range limit", "api/v1/query_range", rng(ago(time.Hour), ago(0), "31d"), http.StatusUnprocessableEntity},
