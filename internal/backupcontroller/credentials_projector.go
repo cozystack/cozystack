@@ -454,9 +454,13 @@ func buildClickHouseBackupConfig(creds parsedCreds, forcePathStyle string) ([]by
 	s3 := map[string]any{
 		"bucket":     creds.bucket,
 		"endpoint":   "https://" + creds.endpoint,
-		"region":     creds.region,
 		"access_key": creds.accessKey,
 		"secret_key": creds.secretKey,
+	}
+	// An empty region in the file would override clickhouse-backup's own
+	// us-east-1 default instead of leaving it in place.
+	if creds.region != "" {
+		s3["region"] = creds.region
 	}
 	if forcePathStyle != "" {
 		pathStyle, err := strconv.ParseBool(forcePathStyle)

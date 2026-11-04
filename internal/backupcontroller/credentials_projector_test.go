@@ -721,6 +721,31 @@ func TestProject_WritesClickHouseBackupConfig(t *testing.T) {
 	}
 }
 
+// clickhouse-backup defaults the S3 region to us-east-1; an empty value in
+// its config file would replace that default rather than fall back to it.
+func TestProject_ClickHouseBackupConfigOmitsAnEmptyRegion(t *testing.T) {
+	c := newFakeClient(flatSourceSecret())
+	ctx := context.Background()
+	cfg := defaultCfg()
+	cfg.Region = ""
+	if err := ProjectBackupCredentials(ctx, c, cfg, "tenant-acme"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	got := &corev1.Secret{}
+	if err := c.Get(ctx, types.NamespacedName{Namespace: "tenant-acme", Name: "cozy-backups-creds"}, got); err != nil {
+		t.Fatalf("projected Secret not found: %v", err)
+	}
+	var doc struct {
+		S3 map[string]any `json:"s3"`
+	}
+	if err := yaml.Unmarshal(got.Data[clickHouseBackupConfigKey], &doc); err != nil {
+		t.Fatalf("%s is not YAML: %v", clickHouseBackupConfigKey, err)
+	}
+	if region, set := doc.S3["region"]; set {
+		t.Errorf("s3.region = %q, want it left to the clickhouse-backup default", region)
+	}
+}
+
 func TestProject_RejectsMalformedForcePathStyle(t *testing.T) {
 	c := newFakeClient(flatSourceSecret())
 	cfg := defaultCfg()
