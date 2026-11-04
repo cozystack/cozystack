@@ -118,6 +118,8 @@ func TestBuildLogsParamsRejects(t *testing.T) {
 		{"unknown endpoint", "tenant_ids", url.Values{}, http.StatusNotFound},
 		// Malformed rather than a request for the default.
 		{"empty fields_limit", "hits", url.Values{"field": {"level"}, "fields_limit": {""}}, http.StatusBadRequest},
+		{"empty limit", "query", url.Values{"limit": {""}}, http.StatusBadRequest},
+		{"empty facets cap", "facets", url.Values{"max_values_per_field": {""}}, http.StatusBadRequest},
 		{"stats_query is not proxied", "stats_query", url.Values{}, http.StatusNotFound},
 		{"ignore_global_time_filter", "query", url.Values{"query": {`* options(ignore_global_time_filter=true)`}}, http.StatusBadRequest},
 		{"ignore_global_time_filter in subquery", "hits", url.Values{"query": {`* | union (options(ignore_global_time_filter=true) error)`}}, http.StatusBadRequest},
