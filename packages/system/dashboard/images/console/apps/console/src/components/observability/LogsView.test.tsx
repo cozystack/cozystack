@@ -81,6 +81,20 @@ describe("LogsView", () => {
     expect(await within(frame).findByText("No log lines for this range and filter.")).toBeInTheDocument()
   })
 
+  it("suggests a longer range only while one exists", async () => {
+    const { client } = clientWith((endpoint, params) =>
+      endpoint.endsWith("query") ? new Response("") : defaultHandler(endpoint, params),
+    )
+    renderWithK8sProvider(<LogsView scope={app} />, { client })
+    const frame = screen.getByRole("region", { name: "Log lines" })
+    expect(await within(frame).findByText("Try a longer range or a broader filter.")).toBeInTheDocument()
+
+    await userEvent.click(screen.getByRole("button", { name: "24h" }))
+
+    expect(await within(frame).findByText("Try a broader filter.")).toBeInTheDocument()
+    expect(within(frame).queryByText(/longer range/)).toBeNull()
+  })
+
   it("shows loading inside the log console", () => {
     const { client } = clientWith((endpoint, params) =>
       endpoint.endsWith("query") ? new Promise(() => {}) : defaultHandler(endpoint, params),
