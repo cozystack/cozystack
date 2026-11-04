@@ -77,7 +77,7 @@ func parseFlags(args []string) (options, error) {
 	// One week covers an incident investigation and keeps a single query
 	// to a fraction of the default one-month log retention.
 	fs.DurationVar(&o.logs.MaxRange, "logs-max-range", 7*24*time.Hour, "longest [start, end] a logs request may span; wider windows are clamped")
-	// The same cap on points as the metrics proxy.
+	// Prometheus's cap on points per series in a range query.
 	fs.IntVar(&o.logs.MaxBuckets, "logs-max-buckets", 11000, "most buckets hits and stats_query_range may return over a window")
 	fs.IntVar(&o.logs.DefaultLimit, "logs-default-limit", 1000, "entries returned when a request sets no limit")
 	fs.IntVar(&o.logs.MaxLimit, "logs-max-limit", 10000, "largest limit a request may set")
