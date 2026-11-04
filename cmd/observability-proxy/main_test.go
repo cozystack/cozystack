@@ -43,7 +43,7 @@ func TestParseFlagsOverrides(t *testing.T) {
 		t.Errorf("overrides not applied: %+v", o)
 	}
 	// The smallest bucket count and range the step cap can satisfy.
-	if _, err := parseFlags([]string{"--logs-max-buckets=3", "--logs-max-range=3s", "--logs-default-range=1s"}); err != nil {
+	if _, err := parseFlags([]string{"--logs-max-buckets=4", "--logs-max-range=3s", "--logs-default-range=1s"}); err != nil {
 		t.Errorf("smallest satisfiable step cap refused: %v", err)
 	}
 }
@@ -53,7 +53,7 @@ func TestParseFlagsInvalid(t *testing.T) {
 		{"--root-tenant="},
 		{"--cluster-domain="},
 		{"--logs-default-range=48h", "--logs-max-range=24h"},
-		{"--logs-max-buckets=2"},
+		{"--logs-max-buckets=3"},
 		{"--logs-max-range=2s", "--logs-default-range=1s"},
 		{"--shutdown-timeout=-1s"},
 		{"--logs-default-limit=0"},
