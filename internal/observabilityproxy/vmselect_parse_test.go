@@ -109,7 +109,9 @@ func TestVmselectReadsSecondsWithFraction(t *testing.T) {
 func TestParseMetricsTimeRange(t *testing.T) {
 	// vmselect reads an RFC3339 time through time.UnixNano, which is
 	// undefined from 2262-04-11 on.
-	for _, v := range []string{"9223372037", "9999999999", "2262-04-12T00:00:00Z", "9999-01-01T00:00:00Z"} {
+	// Before 1970 vmselect clamps to 0, which would quietly answer for a
+	// window other than the one asked for.
+	for _, v := range []string{"9223372037", "9999999999", "2262-04-12T00:00:00Z", "9999-01-01T00:00:00Z", "1969-12-31T23:59:59Z", "1969-12-31T23:59:59.999Z"} {
 		if _, herr := parseMetricsTime("time", v); herr == nil {
 			t.Errorf("%q accepted, want refused", v)
 		}
