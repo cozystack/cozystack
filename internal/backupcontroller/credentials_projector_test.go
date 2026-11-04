@@ -13,6 +13,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/yaml"
 )
 
 func newFakeClient(objs ...client.Object) client.Client {
@@ -664,3 +665,70 @@ func TestProject_HappyPath_HTTPEndpoint(t *testing.T) {
 		t.Errorf("blob account host not stripped: %+v", blob.Accounts)
 	}
 }
+
+// The ClickHouse sidecar reads its S3 settings from this key as a mounted
+// file, which kubelet refreshes in place: clickhouse-backup reloads its
+// config file on every API call, while its environment is fixed at start.
+func TestProject_WritesClickHouseBackupConfig(t *testing.T) {
+	cases := []struct {
+		name           string
+		forcePathStyle string
+		wantPathStyle  *bool
+	}{
+		{name: "path style on", forcePathStyle: "true", wantPathStyle: ptrBool(true)},
+		{name: "path style off", forcePathStyle: "false", wantPathStyle: ptrBool(false)},
+		{name: "path style unset", forcePathStyle: ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			c := newFakeClient(flatSourceSecret())
+			ctx := context.Background()
+			cfg := defaultCfg()
+			cfg.ForcePathStyle = tc.forcePathStyle
+			if err := ProjectBackupCredentials(ctx, c, cfg, "tenant-acme"); err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			got := &corev1.Secret{}
+			if err := c.Get(ctx, types.NamespacedName{Namespace: "tenant-acme", Name: "cozy-backups-creds"}, got); err != nil {
+				t.Fatalf("projected Secret not found: %v", err)
+			}
+			var doc struct {
+				S3 map[string]any `json:"s3"`
+			}
+			if err := yaml.Unmarshal(got.Data[clickHouseBackupConfigKey], &doc); err != nil {
+				t.Fatalf("%s is not YAML: %v\n%s", clickHouseBackupConfigKey, err, got.Data[clickHouseBackupConfigKey])
+			}
+			for key, want := range map[string]string{
+				"bucket":     "cozy-backups",
+				"endpoint":   "https://seaweedfs-s3.tenant-root.svc:8333",
+				"region":     "us-east-1",
+				"access_key": "AK",
+				"secret_key": "SK",
+			} {
+				if doc.S3[key] != want {
+					t.Errorf("s3.%s = %v, want %q", key, doc.S3[key], want)
+				}
+			}
+			pathStyle, set := doc.S3["force_path_style"]
+			switch {
+			case tc.wantPathStyle == nil && set:
+				t.Errorf("s3.force_path_style = %v, want it left to the clickhouse-backup default", pathStyle)
+			case tc.wantPathStyle != nil && pathStyle != *tc.wantPathStyle:
+				t.Errorf("s3.force_path_style = %v, want %v", pathStyle, *tc.wantPathStyle)
+			}
+		})
+	}
+}
+
+func TestProject_RejectsMalformedForcePathStyle(t *testing.T) {
+	c := newFakeClient(flatSourceSecret())
+	cfg := defaultCfg()
+	cfg.ForcePathStyle = "yes please"
+	err := ProjectBackupCredentials(context.Background(), c, cfg, "tenant-acme")
+	var perr *ProjectionError
+	if !errors.As(err, &perr) || perr.Reason != ReasonSourceMalformed {
+		t.Fatalf("err = %v, want a %s ProjectionError", err, ReasonSourceMalformed)
+	}
+}
+
+func ptrBool(b bool) *bool { return &b }
