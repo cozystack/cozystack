@@ -200,8 +200,15 @@ backupStorage:
   # credentials Secret is missing it forces the bucket's <bucket>-system
   # release; once the bucket name resolves it checks that every object
   # cozy-default routes to exists and forces THIS release when any is
-  # missing. Both are throttled, independently, and a no-op in the steady
-  # state. A suspended release is skipped rather than re-stamped forever. The
+  # missing. It repairs a stale S3 endpoint the same way: when the
+  # credentials Secret's endpoint differs from the COSI Secret it is rendered
+  # from it forces the bucket's <bucket>-system release, and when the
+  # backups.cozystack.io/endpoint annotation on the Velero BSL or a default
+  # Strategy differs from the credentials Secret's endpoint it forces THIS
+  # release. The COSI Secret itself keeps the endpoint it was granted with, so
+  # after a publishing.host change that endpoint follows only once the
+  # BucketAccess is re-granted. Both are throttled, independently, and a no-op
+  # in the steady state. A suspended release is skipped rather than re-stamped forever. The
   # gate does NOT create the objects itself: their bodies are values-driven
   # and Helm stays their single owner.
   #

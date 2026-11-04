@@ -23,6 +23,8 @@ apiVersion: strategy.backups.cozystack.io/v1alpha1
 kind: Kafka
 metadata:
   name: cozy-default-kafka
+  annotations:
+    backups.cozystack.io/endpoint: {{ include "backupstrategy-controller.endpoint" . | quote }}
 spec:
   artifactURITemplate: {{ printf "s3://%s/{{ .Release.Namespace }}/{{ .Release.Name }}/{{ .BackupName }}/kafka-metadata.txt" $bucketName | quote }}
   template:

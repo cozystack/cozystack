@@ -5,6 +5,8 @@ apiVersion: strategy.backups.cozystack.io/v1alpha1
 kind: Etcd
 metadata:
   name: cozy-default-etcd
+  annotations:
+    backups.cozystack.io/endpoint: {{ include "backupstrategy-controller.endpoint" . | quote }}
 spec:
   template:
     destination:
