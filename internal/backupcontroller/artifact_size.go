@@ -16,6 +16,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	backupsv1alpha1 "github.com/cozystack/cozystack/api/backups/v1alpha1"
 )
@@ -54,11 +55,42 @@ type s3Connection struct {
 	CAOnly bool
 }
 
-func (r *BackupJobReconciler) s3Lister(conn s3Connection) (s3ObjectLister, error) {
-	if r.newS3ObjectLister != nil {
-		return r.newS3ObjectLister(conn)
+// objectStore reads back what a backup wrote: the Secrets it was written
+// with and the bucket itself. It is a value rather than reconciler methods
+// so that the restore path, which has a reconciler of its own, can read
+// the same objects.
+type objectStore struct {
+	// reader must reach Secrets; the manager's client reads them uncached.
+	reader client.Reader
+	// newLister overrides the S3 client; nil means a real minio client.
+	newLister func(conn s3Connection) (s3ObjectLister, error)
+}
+
+func (s objectStore) lister(conn s3Connection) (s3ObjectLister, error) {
+	if s.newLister != nil {
+		return s.newLister(conn)
 	}
 	return newMinioObjectLister(conn)
+}
+
+func (s objectStore) secretValue(ctx context.Context, namespace, name, key string) (string, error) {
+	secret := &corev1.Secret{}
+	if err := s.reader.Get(ctx, types.NamespacedName{Namespace: namespace, Name: name}, secret); err != nil {
+		return "", err
+	}
+	v, ok := secret.Data[key]
+	if !ok {
+		return "", fmt.Errorf("secret %s/%s has no key %q", namespace, name, key)
+	}
+	return string(v), nil
+}
+
+func (r *BackupJobReconciler) objectStore() objectStore {
+	return objectStore{reader: r.Client, newLister: r.newS3ObjectLister}
+}
+
+func (r *BackupJobReconciler) s3Lister(conn s3Connection) (s3ObjectLister, error) {
+	return r.objectStore().lister(conn)
 }
 
 type minioObjectLister struct {
@@ -179,13 +211,5 @@ func (r *BackupJobReconciler) existingBackup(ctx context.Context, namespace, nam
 }
 
 func (r *BackupJobReconciler) secretValue(ctx context.Context, namespace, name, key string) (string, error) {
-	secret := &corev1.Secret{}
-	if err := r.Get(ctx, types.NamespacedName{Namespace: namespace, Name: name}, secret); err != nil {
-		return "", err
-	}
-	v, ok := secret.Data[key]
-	if !ok {
-		return "", fmt.Errorf("secret %s/%s has no key %q", namespace, name, key)
-	}
-	return string(v), nil
+	return r.objectStore().secretValue(ctx, namespace, name, key)
 }

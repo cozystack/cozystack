@@ -220,6 +220,38 @@ func TestMariaDBArtifactSizeBytes(t *testing.T) {
 	})
 }
 
+// TestMatchMariaDBDump pins what a restore reads off a match: the object
+// itself, and errors it can tell apart.
+func TestMatchMariaDBDump(t *testing.T) {
+	created := time.Date(2026, 10, 21, 10, 0, 0, 0, time.UTC)
+	completed := created.Add(3 * time.Minute)
+	const prefix = "tenant/db/"
+	own := s3ObjectInfo{Key: dumpKey(prefix, created.Add(time.Minute), "gzip"), Size: 4242, LastModified: created.Add(2 * time.Minute)}
+
+	got, err := matchMariaDBDump([]s3ObjectInfo{own}, prefix, created, completed)
+	if err != nil {
+		t.Fatalf("matchMariaDBDump: %v", err)
+	}
+	want := mariadbDump{
+		Key:          own.Key,
+		Name:         strings.TrimPrefix(own.Key, prefix),
+		Timestamp:    created.Add(time.Minute),
+		Size:         4242,
+		LastModified: own.LastModified,
+	}
+	if got != want {
+		t.Errorf("matchMariaDBDump = %+v, want %+v", got, want)
+	}
+
+	if _, err := matchMariaDBDump(nil, prefix, created, completed); !errors.Is(err, errMariaDBDumpNotFound) {
+		t.Errorf("no dump: err = %v, want errMariaDBDumpNotFound", err)
+	}
+	second := s3ObjectInfo{Key: dumpKey(prefix, created.Add(2*time.Minute), "gzip"), Size: 1, LastModified: created.Add(2 * time.Minute)}
+	if _, err := matchMariaDBDump([]s3ObjectInfo{own, second}, prefix, created, completed); !errors.Is(err, errMariaDBDumpAmbiguous) {
+		t.Errorf("two dumps: err = %v, want errMariaDBDumpAmbiguous", err)
+	}
+}
+
 // TestMariaDBArtifactSizeBytes_MinioClient drives the real minio client
 // against a stub ListObjectsV2 endpoint, so the Secret wiring, prefix and
 // response parsing are exercised together.
