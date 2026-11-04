@@ -104,6 +104,10 @@ func BuildLogsParams(endpoint string, in url.Values, namespace string, now time.
 			}
 		}
 		if in.Has("fields_limit") {
+			// setLimit reads an empty value as the default, which here is 0.
+			if in.Get("fields_limit") == "" {
+				return nil, errorf(http.StatusBadRequest, "invalid fields_limit \"\"")
+			}
 			herr = setLimit(out, in, "fields_limit", 0, lim.MaxLimit)
 		}
 	case "stats_query_range":

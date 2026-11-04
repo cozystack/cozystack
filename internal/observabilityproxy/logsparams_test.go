@@ -116,6 +116,8 @@ func TestBuildLogsParamsRejects(t *testing.T) {
 		code     int
 	}{
 		{"unknown endpoint", "tenant_ids", url.Values{}, http.StatusNotFound},
+		// An empty value used to reach vlselect as fields_limit=0.
+		{"empty fields_limit", "hits", url.Values{"field": {"level"}, "fields_limit": {""}}, http.StatusBadRequest},
 		{"stats_query is not proxied", "stats_query", url.Values{}, http.StatusNotFound},
 		{"ignore_global_time_filter", "query", url.Values{"query": {`* options(ignore_global_time_filter=true)`}}, http.StatusBadRequest},
 		{"ignore_global_time_filter in subquery", "hits", url.Values{"query": {`* | union (options(ignore_global_time_filter=true) error)`}}, http.StatusBadRequest},
