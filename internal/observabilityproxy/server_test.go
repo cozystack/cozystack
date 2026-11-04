@@ -215,6 +215,9 @@ func TestServerRebuildsUpstreamRequest(t *testing.T) {
 		if r.headers.Get("AccountID") != "0" || r.headers.Get("ProjectID") != "0" {
 			t.Errorf("tenant headers = %q/%q, want 0/0", r.headers.Get("AccountID"), r.headers.Get("ProjectID"))
 		}
+		if ae := r.headers.Get("Accept-Encoding"); !strings.Contains(ae, "gzip") {
+			t.Errorf("upstream query Accept-Encoding = %q, want gzip outside tails", ae)
+		}
 		for _, k := range []string{"Authorization", "X-Forwarded-For", "Cookie"} {
 			if r.headers.Get(k) != "" {
 				t.Errorf("client header %s forwarded", k)
@@ -370,7 +373,11 @@ func TestServerTailHeadersBeforeFirstLine(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("tail response headers did not reach the client before the first line")
 	}
-	if ae := h.requests()[0].headers.Get("Accept-Encoding"); ae != "identity" {
+	reqs := h.requests()
+	if len(reqs) != 1 {
+		t.Fatalf("upstream saw %d requests, want 1", len(reqs))
+	}
+	if ae := reqs[0].headers.Get("Accept-Encoding"); ae != "identity" {
 		t.Fatalf("upstream tail Accept-Encoding = %q, want identity", ae)
 	}
 }
