@@ -23,6 +23,7 @@ _repos
 /flux-shard-operator
 /kubeovn-plunger
 /lineage-controller-webhook
+/observability-proxy
 /securitygroup-controller
 
 # User-specific stuff
