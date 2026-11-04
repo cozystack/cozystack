@@ -326,6 +326,55 @@ func TestServerTailFlushesEveryLine(t *testing.T) {
 	}
 }
 
+// TestServerTailHeadersBeforeFirstLine mimics vlselect, which holds even the
+// response headers of a gzip-negotiated tail until the first line arrives.
+func TestServerTailHeadersBeforeFirstLine(t *testing.T) {
+	done := make(chan struct{})
+	h := newHarness(t, Config{TailIdleTimeout: time.Minute}, func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.Header.Get("Accept-Encoding"), "gzip") {
+			select {
+			case <-done:
+			case <-r.Context().Done():
+			}
+			return
+		}
+		tailUpstream(nil, done)(w, r)
+	})
+	// Registered after the harness so it runs before the servers close and
+	// releases a held upstream when the assertion below fails.
+	t.Cleanup(func() { close(done) })
+
+	req, err := http.NewRequest(http.MethodGet, h.proxy.URL+logsRoot+"tail?query=*", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Authorization", "Bearer good")
+	got := make(chan *http.Response, 1)
+	go func() {
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			close(got)
+			return
+		}
+		got <- resp
+	}()
+	select {
+	case resp, ok := <-got:
+		if !ok {
+			t.Fatal("tail request failed")
+		}
+		defer func() { _ = resp.Body.Close() }()
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("status = %d, want 200", resp.StatusCode)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("tail response headers did not reach the client before the first line")
+	}
+	if ae := h.requests()[0].headers.Get("Accept-Encoding"); ae != "identity" {
+		t.Fatalf("upstream tail Accept-Encoding = %q, want identity", ae)
+	}
+}
+
 func TestServerTailCapsAndIdle(t *testing.T) {
 	done := make(chan struct{})
 	t.Cleanup(func() { close(done) })
