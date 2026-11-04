@@ -137,8 +137,8 @@ func parseFlags(args []string) (options, error) {
 		return o, errors.New("--metrics-shortterm-retention, --metrics-max-range and --metrics-max-timeout must be positive")
 	case o.metrics.Limits.MaxPoints < 2:
 		return o, errors.New("--metrics-max-points must be at least 2")
-	case o.metrics.App.Lookback < 0 || o.metrics.App.MaxPods < 1 || o.metrics.App.MaxPVCs < 1:
-		return o, errors.New("--metrics-app-lookback must not be negative and --metrics-app-max-pods and --metrics-app-max-pvcs must be positive")
+	case o.metrics.App.Lookback <= 0 || o.metrics.App.MaxPods < 1 || o.metrics.App.MaxPVCs < 1:
+		return o, errors.New("--metrics-app-lookback, --metrics-app-max-pods and --metrics-app-max-pvcs must be positive")
 	case o.logs.MaxTailResume < 0:
 		return o, errors.New("--logs-max-tail-resume must not be negative")
 	// The proxy's deadline starts before the request reaches vmselect, so
