@@ -13,8 +13,12 @@ import (
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -256,7 +260,25 @@ func altinityCleanupFixtures(backup *backupsv1alpha1.Backup) []client.Object {
 		backup,
 		newAltinityArchiveStrategy("cozy-default-altinity"),
 		altinityAPIAuthSecret(),
+		withUseSystemBucket(newAltinityClickHouseApp("ch-test", "tenant-test"), true),
 	}
+}
+
+// newAltinityCleanupClient registers the ClickHouse application kind the
+// cleanup path reads alongside what the Rabbitmq cleanup client carries.
+func newAltinityCleanupClient(objs ...client.Object) (client.Client, *runtime.Scheme) {
+	s := runtime.NewScheme()
+	_ = scheme.AddToScheme(s)
+	_ = backupsv1alpha1.AddToScheme(s)
+	_ = strategyv1alpha1.AddToScheme(s)
+	gv := schema.GroupVersion{Group: backupsv1alpha1.DefaultApplicationAPIGroup, Version: "v1alpha1"}
+	s.AddKnownTypeWithName(gv.WithKind("ClickHouse"), &unstructured.Unstructured{})
+	s.AddKnownTypeWithName(gv.WithKind("ClickHouseList"), &unstructured.UnstructuredList{})
+	mapper := meta.NewDefaultRESTMapper([]schema.GroupVersion{gv})
+	mapper.Add(gv.WithKind("ClickHouse"), meta.RESTScopeNamespace)
+	return clientfake.NewClientBuilder().WithScheme(s).WithRESTMapper(mapper).
+		WithStatusSubresource(&batchv1.Job{}).
+		WithObjects(objs...).Build(), s
 }
 
 func listJobs(t *testing.T, c client.Client) []batchv1.Job {
@@ -284,7 +306,7 @@ func envValue(t *testing.T, c corev1.Container, name string) string {
 func TestBackupReconcile_HoldsFinalizerWhileAltinityCleanupRuns(t *testing.T) {
 	backup := altinityCleanupBackup("ch-bk")
 	backup.Finalizers = []string{backupFinalizer}
-	c, s := newRabbitmqBackupReconcilerClient(altinityCleanupFixtures(backup)...)
+	c, s := newAltinityCleanupClient(altinityCleanupFixtures(backup)...)
 	r := &BackupReconciler{Client: c, Scheme: s, Recorder: record.NewFakeRecorder(10)}
 	ctx := context.Background()
 
@@ -370,14 +392,20 @@ func TestCleanupAltinityBackup_FailedJobIsRetried(t *testing.T) {
 			{Type: batchv1.JobFailed, Status: corev1.ConditionTrue},
 		}},
 	}
-	c, s := newRabbitmqBackupReconcilerClient(append(altinityCleanupFixtures(backup), failed)...)
-	r := &BackupReconciler{Client: c, Scheme: s, Recorder: record.NewFakeRecorder(10)}
+	c, s := newAltinityCleanupClient(append(altinityCleanupFixtures(backup), failed)...)
+	rec := record.NewFakeRecorder(10)
+	r := &BackupReconciler{Client: c, Scheme: s, Recorder: rec}
 	res, err := r.cleanupOnDelete(context.Background(), backup)
 	if err != nil {
 		t.Fatalf("cleanupOnDelete: %v", err)
 	}
 	if res.RequeueAfter == 0 {
 		t.Error("a failed delete must keep the Backup and requeue")
+	}
+	if len(rec.Events) == 0 {
+		t.Error("a failed delete must surface as a Warning Event on the Backup")
+	} else if ev := <-rec.Events; !strings.Contains(ev, "Warning") || !strings.Contains(ev, "ch-bk-cleanup") {
+		t.Errorf("event %q must be a Warning naming the failed Job", ev)
 	}
 	if left := listJobs(t, c); len(left) != 0 {
 		t.Errorf("expected the failed Job collected for a fresh attempt, %d left", len(left))
@@ -387,7 +415,7 @@ func TestCleanupAltinityBackup_FailedJobIsRetried(t *testing.T) {
 func TestCleanupAltinityBackup_RunningJobRequeues(t *testing.T) {
 	backup := altinityCleanupBackup("ch-bk")
 	running := &batchv1.Job{ObjectMeta: metav1.ObjectMeta{Name: "ch-bk-cleanup", Namespace: "tenant-test"}}
-	c, s := newRabbitmqBackupReconcilerClient(append(altinityCleanupFixtures(backup), running)...)
+	c, s := newAltinityCleanupClient(append(altinityCleanupFixtures(backup), running)...)
 	r := &BackupReconciler{Client: c, Scheme: s, Recorder: record.NewFakeRecorder(10)}
 	res, err := r.cleanupOnDelete(context.Background(), backup)
 	if err != nil {
@@ -405,8 +433,9 @@ func TestCleanupAltinityBackup_RunningJobRequeues(t *testing.T) {
 // either not the driver's to delete or cannot be deleted from here.
 func TestCleanupAltinityBackup_ReleasesWithoutJob(t *testing.T) {
 	cases := map[string]struct {
-		mutate    func(b *backupsv1alpha1.Backup, objs []client.Object) []client.Object
-		wantEvent bool
+		mutate     func(b *backupsv1alpha1.Backup, objs []client.Object) []client.Object
+		wantEvent  bool
+		wantReason string
 	}{
 		"no archive recorded": {mutate: func(b *backupsv1alpha1.Backup, objs []client.Object) []client.Object {
 			delete(b.Spec.DriverMetadata, altinityArchiveNameKey)
@@ -447,7 +476,18 @@ func TestCleanupAltinityBackup_ReleasesWithoutJob(t *testing.T) {
 			}
 			return objs
 		}},
-		"application gone with its API Secret": {wantEvent: true, mutate: func(b *backupsv1alpha1.Backup, objs []client.Object) []client.Object {
+		"application gone": {wantEvent: true, wantReason: "application is gone", mutate: func(b *backupsv1alpha1.Backup, objs []client.Object) []client.Object {
+			return dropObject(objs, &unstructured.Unstructured{})
+		}},
+		"application moved off the system bucket": {wantEvent: true, wantReason: "no longer uses the system bucket", mutate: func(b *backupsv1alpha1.Backup, objs []client.Object) []client.Object {
+			for _, o := range objs {
+				if u, ok := o.(*unstructured.Unstructured); ok {
+					withUseSystemBucket(u, false)
+				}
+			}
+			return objs
+		}},
+		"API Secret gone": {wantEvent: true, mutate: func(b *backupsv1alpha1.Backup, objs []client.Object) []client.Object {
 			return dropObject(objs, &corev1.Secret{})
 		}},
 		"namespace terminating": {wantEvent: true, mutate: func(b *backupsv1alpha1.Backup, objs []client.Object) []client.Object {
@@ -458,7 +498,7 @@ func TestCleanupAltinityBackup_ReleasesWithoutJob(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			backup := altinityCleanupBackup("ch-bk")
 			objs := tc.mutate(backup, altinityCleanupFixtures(backup))
-			c, s := newRabbitmqBackupReconcilerClient(objs...)
+			c, s := newAltinityCleanupClient(objs...)
 			rec := record.NewFakeRecorder(10)
 			r := &BackupReconciler{Client: c, Scheme: s, Recorder: rec}
 			res, err := r.cleanupOnDelete(context.Background(), backup)
@@ -478,9 +518,26 @@ func TestCleanupAltinityBackup_ReleasesWithoutJob(t *testing.T) {
 			if gotEvent {
 				if ev := <-rec.Events; !strings.Contains(ev, "ArtifactNotDeleted") || !strings.Contains(ev, "clickhouse-ch-test-ch-bk") && !strings.Contains(ev, "../other/x") {
 					t.Errorf("event %q must name the archive left behind", ev)
+				} else if !strings.Contains(ev, tc.wantReason) {
+					t.Errorf("event %q must give the reason %q", ev, tc.wantReason)
 				}
 			}
 		})
+	}
+}
+
+// With the ClickHouse kind no longer served there is no application to call.
+func TestCleanupAltinityBackup_ApplicationKindNotServedReleases(t *testing.T) {
+	backup := altinityCleanupBackup("ch-bk")
+	c, s := newRabbitmqBackupReconcilerClient(altinityCleanupFixtures(backup)[:4]...)
+	rec := record.NewFakeRecorder(10)
+	r := &BackupReconciler{Client: c, Scheme: s, Recorder: rec}
+	res, err := r.cleanupOnDelete(context.Background(), backup)
+	if err != nil {
+		t.Fatalf("cleanupOnDelete: %v", err)
+	}
+	if res.RequeueAfter != 0 || len(listJobs(t, c)) != 0 || len(rec.Events) == 0 {
+		t.Errorf("expected release with a Warning Event and no Job, got %+v, %d events", res, len(rec.Events))
 	}
 }
 
@@ -489,7 +546,7 @@ func TestCleanupAltinityBackup_SkipAnnotationReapsInflightJob(t *testing.T) {
 	backup := altinityCleanupBackup("ch-bk")
 	backup.Annotations = map[string]string{"backups.cozystack.io/skip-artifact-cleanup": "true"}
 	running := &batchv1.Job{ObjectMeta: metav1.ObjectMeta{Name: "ch-bk-cleanup", Namespace: "tenant-test"}}
-	c, s := newRabbitmqBackupReconcilerClient(append(altinityCleanupFixtures(backup), running)...)
+	c, s := newAltinityCleanupClient(append(altinityCleanupFixtures(backup), running)...)
 	r := &BackupReconciler{Client: c, Scheme: s, Recorder: record.NewFakeRecorder(10)}
 	if _, err := r.cleanupOnDelete(context.Background(), backup); err != nil {
 		t.Fatalf("cleanupOnDelete: %v", err)

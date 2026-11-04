@@ -824,6 +824,19 @@ func (r *BackupReconciler) cleanupAltinityBackup(ctx context.Context, backup *ba
 		if terminating {
 			return r.releaseAltinityCleanup(ctx, backup, archive, "namespace is terminating"), nil
 		}
+		// The delete goes through the application's current sidecar. One that
+		// has since moved to its own bucket reports the archive as not found
+		// there, which the script would take for a completed delete.
+		onSystemBucket, found, aerr := r.altinityAppOnSystemBucket(ctx, backup)
+		if aerr != nil {
+			return ctrl.Result{}, aerr
+		}
+		if !found {
+			return r.releaseAltinityCleanup(ctx, backup, archive, "the ClickHouse application is gone"), nil
+		}
+		if !onSystemBucket {
+			return r.releaseAltinityCleanup(ctx, backup, archive, "the ClickHouse application no longer uses the system bucket"), nil
+		}
 		release := backup.Spec.ApplicationRef.Name
 		authSecret := "clickhouse-" + release + "-backup-api-auth"
 		if serr := r.Get(ctx, types.NamespacedName{Namespace: backup.Namespace, Name: authSecret}, &corev1.Secret{}); serr != nil {
@@ -858,6 +871,10 @@ func (r *BackupReconciler) cleanupAltinityBackup(ctx context.Context, backup *ba
 		return ctrl.Result{}, nil
 	case batchv1.JobFailed:
 		logger.Debug("Altinity cleanup Job failed; retrying", "backup", backup.Name, "job", job.Name)
+		if r.Recorder != nil {
+			r.Recorder.Eventf(backup, corev1.EventTypeWarning, "ArtifactCleanupFailed",
+				"cleanup Job %s did not delete archive %s (see its Pod log); retrying", job.Name, archive)
+		}
 		if derr := r.deleteAltinityCleanupJob(ctx, job); derr != nil {
 			return ctrl.Result{}, derr
 		}
@@ -865,6 +882,35 @@ func (r *BackupReconciler) cleanupAltinityBackup(ctx context.Context, backup *ba
 	default:
 		return ctrl.Result{RequeueAfter: altinityPollInterval}, nil
 	}
+}
+
+// altinityAppOnSystemBucket reads the Backup's application and reports
+// whether it exists and still has spec.backup.useSystemBucket set.
+func (r *BackupReconciler) altinityAppOnSystemBucket(ctx context.Context, backup *backupsv1alpha1.Backup) (onSystemBucket, found bool, err error) {
+	group := backupsv1alpha1.DefaultApplicationAPIGroup
+	if ref := backup.Spec.ApplicationRef; ref.APIGroup != nil && *ref.APIGroup != "" {
+		group = *ref.APIGroup
+	}
+	mapping, err := r.RESTMapper().RESTMapping(schema.GroupKind{Group: group, Kind: backup.Spec.ApplicationRef.Kind})
+	if err != nil {
+		if apimeta.IsNoMatchError(err) {
+			return false, false, nil
+		}
+		return false, false, err
+	}
+	app := &unstructured.Unstructured{}
+	app.SetGroupVersionKind(mapping.GroupVersionKind)
+	if err := r.Get(ctx, types.NamespacedName{Namespace: backup.Namespace, Name: backup.Spec.ApplicationRef.Name}, app); err != nil {
+		if apierrors.IsNotFound(err) {
+			return false, false, nil
+		}
+		return false, false, err
+	}
+	v, _, err := unstructured.NestedBool(app.Object, "spec", "backup", "useSystemBucket")
+	if err != nil {
+		return false, true, fmt.Errorf("read spec.backup.useSystemBucket: %w", err)
+	}
+	return v, true, nil
 }
 
 func (r *BackupReconciler) deleteAltinityCleanupJob(ctx context.Context, job *batchv1.Job) error {
