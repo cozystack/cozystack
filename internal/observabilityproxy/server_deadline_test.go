@@ -18,6 +18,7 @@ package observabilityproxy
 
 import (
 	"bufio"
+	"io"
 	"net"
 	"net/http"
 	"sync"
@@ -226,5 +227,20 @@ func TestServerTailUpstreamWithoutHeaders(t *testing.T) {
 	}
 	if n := h.server.limits.openTails(); n != 0 {
 		t.Fatalf("open tails = %d after the tail ended", n)
+	}
+}
+
+// TestServerAbortsTruncatedResponse cuts the client connection when the
+// store's body breaks off after the headers went out, so a partial answer
+// does not end as a clean 200.
+func TestServerAbortsTruncatedResponse(t *testing.T) {
+	h := newHarness(t, Config{}, func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Length", "100")
+		_, _ = io.WriteString(w, `{"_msg":"a"}`+"\n")
+	})
+	resp := h.do(http.MethodGet, logsRoot+"query?query=*", "good", nil, nil)
+	defer func() { _ = resp.Body.Close() }()
+	if _, err := io.ReadAll(resp.Body); err == nil {
+		t.Fatal("a truncated store answer reached the client as a complete response")
 	}
 }
