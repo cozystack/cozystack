@@ -160,10 +160,11 @@ func window(in url.Values, now time.Time, lim LogsLimits) (time.Time, time.Time,
 	if end.Sub(start) > lim.MaxRange {
 		start = end.Add(-lim.MaxRange)
 	}
-	for k, t := range map[string]time.Time{"start": start, "end": end} {
-		if herr := sendableTime(k, t); herr != nil {
-			return time.Time{}, time.Time{}, herr
-		}
+	if herr := sendableTime("end", end); herr != nil {
+		return time.Time{}, time.Time{}, herr
+	}
+	if herr := sendableTime("start", start); herr != nil {
+		return time.Time{}, time.Time{}, herr
 	}
 	return start.UTC(), end.UTC(), nil
 }
@@ -337,7 +338,7 @@ func scaleDuration(f float64, unit time.Duration) (time.Duration, bool) {
 // actually sent are checked; an older start is clamped first.
 func sendableTime(key string, t time.Time) *HTTPError {
 	if t.Before(time.Unix(0, math.MinInt64)) || t.After(time.Unix(0, math.MaxInt64)) {
-		return errorf(http.StatusBadRequest, "invalid %s: %s is outside 1677..2262", key, t.Format(time.RFC3339))
+		return errorf(http.StatusBadRequest, "invalid %s: %s is outside 1677..2262", key, t.UTC().Format(time.RFC3339Nano))
 	}
 	return nil
 }
