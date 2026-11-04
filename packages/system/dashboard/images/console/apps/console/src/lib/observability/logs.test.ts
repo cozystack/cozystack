@@ -57,6 +57,12 @@ describe("mergeTail", () => {
     expect(out).toHaveLength(2)
   })
 
+  it("never deduplicates lines without _time, even on a resume", () => {
+    const out = mergeTail([{ _msg: "a" }], [{ _msg: "a" }], 10, "2026-01-01T00:00:02Z")
+
+    expect(out).toHaveLength(2)
+  })
+
   it("does not deduplicate outside a resume", () => {
     const out = mergeTail([e("t1", "a")], [e("t1", "a")], 10)
 

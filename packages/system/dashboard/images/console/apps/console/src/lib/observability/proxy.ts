@@ -140,9 +140,10 @@ export async function queryRange(
   return body.data?.result ?? []
 }
 
+// A pipe such as `fields _msg` or `stats` can drop _time and _msg.
 export interface LogEntry {
-  _time: string
-  _msg: string
+  _time?: string
+  _msg?: string
   _stream_id?: string
   [field: string]: string | undefined
 }
@@ -151,7 +152,7 @@ function parseLine(line: string): LogEntry | null {
   if (!line.trim()) return null
   try {
     const value: unknown = JSON.parse(line)
-    if (value && typeof value === "object" && "_time" in value) return value as LogEntry
+    if (value && typeof value === "object" && !Array.isArray(value)) return value as LogEntry
   } catch {
     // a torn or non-JSON line carries nothing to show
   }
@@ -173,7 +174,8 @@ export async function queryLogs(
 ): Promise<LogEntry[]> {
   const res = await proxyGet(client, `${root}select/logsql/query`, { ...params }, signal)
   const entries = (await res.text()).split("\n").map(parseLine).filter((e) => e !== null)
-  return entries.sort((a, b) => compareTime(a._time, b._time))
+  if (entries.some((e) => e._time === undefined)) return entries
+  return entries.sort((a, b) => compareTime(a._time ?? "", b._time ?? ""))
 }
 
 export interface FieldValuesParams {

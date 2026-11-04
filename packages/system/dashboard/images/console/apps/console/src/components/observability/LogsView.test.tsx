@@ -199,6 +199,19 @@ describe("LogsView", () => {
     expect(screen.getAllByRole("option").map((o) => o.textContent)).toEqual(["All", "db-0"])
   })
 
+  it("shows rows of a query whose pipe removed _time", async () => {
+    const { client } = clientWith((endpoint, params) =>
+      endpoint.endsWith("query") ? new Response('{"_msg":"visible message"}\n') : defaultHandler(endpoint, params),
+    )
+    renderWithK8sProvider(<LogsView scope={app} />, { client })
+
+    await userEvent.type(screen.getByLabelText("LogsQL filter"), "* | fields _msg{Enter}")
+
+    const frame = screen.getByRole("region", { name: "Log lines" })
+    expect(await within(frame).findByText("visible message")).toBeInTheDocument()
+    expect(within(frame).queryByText(/No log lines/)).toBeNull()
+  })
+
   it("names the source pod and container of each line", async () => {
     const { client } = clientWith(defaultHandler)
 

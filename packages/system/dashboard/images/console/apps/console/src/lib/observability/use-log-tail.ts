@@ -73,7 +73,7 @@ export function useLogTail(
         let delay = retryDelayMs
         try {
           await tailLogs(client, root, { query, since: lastTime ?? openedAt }, (entry) => {
-            if (!lastTime || compareTime(entry._time, lastTime) > 0) lastTime = entry._time
+            if (entry._time && (!lastTime || compareTime(entry._time, lastTime) > 0)) lastTime = entry._time
             pending.push(entry)
             timer ??= setTimeout(flush, FLUSH_MS)
           }, signal, () => {

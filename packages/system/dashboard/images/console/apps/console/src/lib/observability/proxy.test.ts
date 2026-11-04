@@ -122,6 +122,15 @@ describe("queryLogs", () => {
     expect(entries.map((e) => e._msg)).toEqual(["a", "b"])
   })
 
+  it("keeps rows a pipe stripped of _time, in the order the store sent them", async () => {
+    const ndjson = ['{"_msg":"visible message"}', '{"_msg":"second"}', "[1]", "null", "{torn"].join("\n")
+    const { client } = clientReturning(new Response(ndjson))
+
+    const entries = await queryLogs(client, logsRoot(ns), { query: "* | fields _msg", start: "s", end: "e", limit: 100 })
+
+    expect(entries).toEqual([{ _msg: "visible message" }, { _msg: "second" }])
+  })
+
   it("keeps a plain-text error body as the message", async () => {
     const { client } = clientReturning(new Response("cannot parse query", { status: 400 }))
 
@@ -170,13 +179,22 @@ describe("tailLogs", () => {
       },
     })
     const { client, raw } = clientReturning(new Response(body))
-    const seen: string[] = []
+    const seen: (string | undefined)[] = []
 
     await tailLogs(client, logsRoot(ns), { query: "*", since: "t0" }, (e) => seen.push(e._msg))
 
     expect(calledUrl(raw).pathname).toBe(`${logsRoot(ns)}select/logsql/tail`)
     expect(calledUrl(raw).searchParams.get("since")).toBe("t0")
     expect(seen).toEqual(["a", "b"])
+  })
+
+  it("delivers a line without _time", async () => {
+    const { client } = clientReturning(new Response('{"_msg":"untimed"}\n'))
+    const seen: (string | undefined)[] = []
+
+    await tailLogs(client, logsRoot(ns), { query: "* | fields _msg" }, (e) => seen.push(e._msg))
+
+    expect(seen).toEqual(["untimed"])
   })
 
   it("omits since on the first connect", async () => {

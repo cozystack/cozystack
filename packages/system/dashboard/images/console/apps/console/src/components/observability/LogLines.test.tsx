@@ -29,6 +29,18 @@ describe("LogLines", () => {
     expect(frame).not.toHaveTextContent("Waiting")
   })
 
+  it("shows a line without _time with no timestamp and no empty source", () => {
+    render(<LogLines placeholder="" entries={[{ _msg: "visible message" }]} />)
+
+    expect(screen.getByRole("listitem")).toHaveTextContent(/^visible message$/)
+  })
+
+  it("shows the remaining fields of a row without _msg", () => {
+    render(<LogLines placeholder="" entries={[{ kubernetes_pod_name: "db-0", rows: "42" }]} />)
+
+    expect(screen.getByRole("listitem")).toHaveTextContent(/^db-0\/ rows=42$/)
+  })
+
   it("keeps following the newest line while the reader is at the bottom", () => {
     const { rerender } = render(<LogLines placeholder="" entries={[entry(1)]} />)
     const list = screen.getByRole("list")

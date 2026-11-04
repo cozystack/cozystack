@@ -61,12 +61,13 @@ export function compareTime(a: string, b: string): number {
 const entryKey = (e: LogEntry) => `${e._stream_id ?? ""}\u0000${e._time}`
 
 // (_stream_id, _time) is not unique in VictoriaLogs, so dedup applies only to
-// lines a resumed tail replays at or before the resume point.
+// lines a resumed tail replays at or before the resume point, and never to
+// lines a pipe stripped of _time.
 export function mergeTail(buffer: LogEntry[], incoming: LogEntry[], cap: number, resumedFrom?: string): LogEntry[] {
   let fresh = incoming
   if (resumedFrom) {
     const seen = new Set(buffer.map(entryKey))
-    fresh = incoming.filter((e) => compareTime(e._time, resumedFrom) > 0 || !seen.has(entryKey(e)))
+    fresh = incoming.filter((e) => e._time === undefined || compareTime(e._time, resumedFrom) > 0 || !seen.has(entryKey(e)))
   }
   const merged = buffer.concat(fresh)
   return merged.length > cap ? merged.slice(merged.length - cap) : merged
