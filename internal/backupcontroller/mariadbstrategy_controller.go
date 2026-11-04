@@ -204,7 +204,10 @@ func (r *BackupJobReconciler) reconcileMariaDB(ctx context.Context, j *backupsv1
 	cond := apimeta.FindStatusCondition(mdbBackup.Status.Conditions, mariadbtypes.ConditionTypeComplete)
 
 	switch {
-	case cond != nil && cond.Status == metav1.ConditionTrue:
+	case cond != nil && cond.Reason == mariadbtypes.ConditionReasonJobFailed:
+		return r.markBackupJobFailed(ctx, j, mariadbJobFailedMessage("Backup", mdbBackup.Namespace, mdbBackup.Name, cond))
+
+	case cond != nil && cond.Status == metav1.ConditionTrue && cond.Reason == mariadbtypes.ConditionReasonJobComplete:
 		// Backup completed successfully. Materialise the Cozystack artifact
 		// and finalise the BackupJob. Idempotent: if the artifact already
 		// exists (a previous reconcile created it and then raced on the
@@ -231,22 +234,12 @@ func (r *BackupJobReconciler) reconcileMariaDB(ctx context.Context, j *backupsv1
 		}
 		return ctrl.Result{}, nil
 
-	case cond != nil && cond.Status == metav1.ConditionFalse && cond.Reason == mariadbtypes.ConditionReasonJobFailed:
-		// Terminal failure. The operator marks Complete=False/JobFailed only
-		// after the underlying Job exhausts its backoff budget, so we can
-		// fail the BackupJob immediately rather than waiting for the
-		// driver-side deadline.
-		message := cond.Message
-		if message == "" {
-			message = "k8s.mariadb.com Backup terminal failure"
-		}
-		return r.markBackupJobFailed(ctx, j, message)
-
 	default:
 		// Still running (Complete=False/JobRunning, Complete=False/JobNotComplete,
-		// JobSuspended, or no Complete condition yet). Apply a wall-clock
-		// deadline so a permanently-stuck Backup eventually fails the
-		// BackupJob instead of pinning it Running forever.
+		// JobSuspended, a reason this driver does not know, or no Complete
+		// condition yet). Apply a wall-clock deadline so a permanently-stuck
+		// Backup eventually fails the BackupJob instead of pinning it Running
+		// forever.
 		if mariadbBackupDeadlineExceeded(j.Status.StartedAt) {
 			detail := "no Complete condition observed"
 			if cond != nil {
@@ -257,6 +250,14 @@ func (r *BackupJobReconciler) reconcileMariaDB(ctx context.Context, j *backupsv1
 		}
 		return ctrl.Result{RequeueAfter: mariadbPollInterval}, nil
 	}
+}
+
+// mariadbJobFailedMessage names the operator object whose Job failed. The
+// operator's own condition message is only "Failed"; the cause is in the
+// logs of that object's Job.
+func mariadbJobFailedMessage(kind, namespace, name string, cond *metav1.Condition) string {
+	return fmt.Sprintf("k8s.mariadb.com/%s %s/%s failed (Complete=%s/%s); the cause is in the logs of its Job",
+		kind, namespace, name, cond.Status, cond.Reason)
 }
 
 // mariadbBackupDeadlineExceeded reports whether enough wall-clock time has
@@ -570,7 +571,10 @@ func (r *RestoreJobReconciler) reconcileMariaDBRestore(ctx context.Context, rest
 
 	cond := apimeta.FindStatusCondition(mdbRestore.Status.Conditions, mariadbtypes.ConditionTypeComplete)
 	switch {
-	case cond != nil && cond.Status == metav1.ConditionTrue:
+	case cond != nil && cond.Reason == mariadbtypes.ConditionReasonJobFailed:
+		return r.markRestoreJobFailed(ctx, restoreJob, mariadbJobFailedMessage("Restore", mdbRestore.Namespace, mdbRestore.Name, cond))
+
+	case cond != nil && cond.Status == metav1.ConditionTrue && cond.Reason == mariadbtypes.ConditionReasonJobComplete:
 		now := metav1.Now()
 		restoreJob.Status.CompletedAt = &now
 		restoreJob.Status.Phase = backupsv1alpha1.RestoreJobPhaseSucceeded
@@ -584,13 +588,6 @@ func (r *RestoreJobReconciler) reconcileMariaDBRestore(ctx context.Context, rest
 			return ctrl.Result{}, err
 		}
 		return ctrl.Result{}, nil
-
-	case cond != nil && cond.Status == metav1.ConditionFalse && cond.Reason == mariadbtypes.ConditionReasonJobFailed:
-		message := cond.Message
-		if message == "" {
-			message = fmt.Sprintf("k8s.mariadb.com/Restore %s/%s terminal failure", mdbRestore.Namespace, mdbRestore.Name)
-		}
-		return r.markRestoreJobFailed(ctx, restoreJob, message)
 
 	default:
 		deadline := options.effectiveRestoreDeadline()

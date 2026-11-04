@@ -27,14 +27,14 @@ const (
 	GroupName = "k8s.mariadb.com"
 	Version   = "v1alpha1"
 
-	// Operator-side condition type set on Backup and Restore once the run
-	// terminates. Status=True means success; Status=False with Reason
-	// explains the failure or in-progress state.
+	// Operator-side condition type set on Backup and Restore. Status=True
+	// means the backing Job terminated, successfully or not; only the
+	// Reason tells the two apart (SetCompleteWithJob in mariadb-operator).
 	ConditionTypeComplete = "Complete"
 
 	// Reason values the upstream operator emits on the Complete condition.
 	// JobComplete  -> Status=True (run succeeded).
-	// JobFailed    -> Status=False (terminal failure of the backing Job).
+	// JobFailed    -> Status=True (terminal failure of the backing Job).
 	// JobRunning   -> Status=False (still in progress).
 	// JobSuspended -> Status=False (admin-suspended via spec).
 	ConditionReasonJobComplete  = "JobComplete"
@@ -183,7 +183,7 @@ type S3TLS struct {
 }
 
 // BackupStatus mirrors Backup.status. The operator expresses success
-// via condition type "Complete" with status=True.
+// via condition type "Complete" with reason JobComplete.
 type BackupStatus struct {
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
 }
@@ -217,7 +217,7 @@ type RestoreSpec struct {
 }
 
 // RestoreStatus mirrors Restore.status. Same condition convention as
-// Backup: type=Complete, Status=True on success.
+// Backup: type=Complete, reason JobComplete on success.
 type RestoreStatus struct {
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
 }
