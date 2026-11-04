@@ -94,20 +94,21 @@ func applicationSelectors(ns, kind, name string, pods, pvcs []string) []string {
 }
 
 // applicationScope looks the application's pods and PVCs up in store over
-// the request window, reaching back by the query's own lookback up to the
-// configured limit and forward to the latest sample a negative offset
-// reads. A failed lookup, a list over its cap, or a query whose latest
-// sample is unknown fails the request, because a successful answer would
-// silently miss the application's series.
+// the samples the request reads: back by the query's own lookback, and
+// forward to the latest sample a negative offset reads. A query that reads
+// further back than the configured lookback, or whose earliest or latest
+// sample is unknown, a failed lookup, and a list over its cap all fail the
+// request, because a successful answer would silently miss the
+// application's series.
 func (s *Server) applicationScope(ctx context.Context, r *http.Request, store string, req metricsRequest, ns, kind, name string) ([]string, *HTTPError) {
 	if req.last.IsZero() {
 		return nil, errorf(http.StatusUnprocessableEntity, "the query reads samples at a time the application scope cannot cover (an @ other than start() or end(), or an offset that is not a plain duration); use the namespace root")
 	}
 	lim := s.cfg.Metrics.App
-	start := req.from.Add(-lim.Lookback)
-	if req.start.After(start) {
-		start = req.start
+	if req.start.IsZero() || req.start.Before(req.from.Add(-lim.Lookback)) {
+		return nil, errorf(http.StatusUnprocessableEntity, "the query reads further back than the application scope looks up pods (%s before the window, or an unknown lookback); use a shorter window or the namespace root", lim.Lookback)
 	}
+	start := req.start
 	var lists [2][]string
 	for i, l := range []struct {
 		label, metric string

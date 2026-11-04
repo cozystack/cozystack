@@ -316,17 +316,30 @@ func TestServerApplicationNarrowedGrant(t *testing.T) {
 	}
 }
 
-// An expression whose lookback cannot be bounded looks pods up from the
-// configured lookback before the window.
-func TestServerApplicationLookupUnknownLookback(t *testing.T) {
-	h := newPolicyHarness(t, Config{}, appMetricsUpstream(nil, nil, http.StatusOK), appPolicy, nil)
-	q := url.Values{"query": {"up @ end()"}, "time": {unix(testNow)}}
+// TestServerApplicationLookbackBeyondCap: the lookup reaches back at most
+// --metrics-app-lookback, so a query that reads further back, or whose
+// lookback is unknown, would miss pods that existed only earlier; it is
+// refused rather than answered without their series.
+func TestServerApplicationLookbackBeyondCap(t *testing.T) {
+	cfg := Config{Metrics: MetricsConfig{App: AppScopeLimits{Lookback: time.Hour, MaxPods: 100, MaxPVCs: 100}}}
+	h := newPolicyHarness(t, cfg, appMetricsUpstream(nil, nil, http.StatusOK), appPolicy, nil)
+	for _, query := range []string{"rate(x[7d])", "x[30d] @ end()", "rate(x[5i])"} {
+		q := url.Values{"query": {query}, "time": {unix(testNow)}}
+		if got := h.status(http.MethodGet, appRoot+"db.main/metrics/api/v1/query?"+q.Encode(), "good"); got != http.StatusUnprocessableEntity {
+			t.Errorf("%s answered %d, want 422", query, got)
+		}
+	}
+	if n := len(h.requests()); n != 0 {
+		t.Fatalf("upstream saw %d requests for refused queries", n)
+	}
+	q := url.Values{"query": {"rate(x[5m])"}, "time": {unix(testNow)}}
 	if got := h.status(http.MethodGet, appRoot+"db.main/metrics/api/v1/query?"+q.Encode(), "good"); got != http.StatusOK {
-		t.Fatalf("status = %d", got)
+		t.Fatalf("rate(x[5m]) answered %d, want 200", got)
 	}
 	r := h.requests()[0]
-	if want := formatTime(testNow.Add(-24 * time.Hour)); r.path != "/api/v1/label/pod/values" || r.form.Get("start") != want {
-		t.Fatalf("lookup %s start = %s, want %s", r.path, r.form.Get("start"), want)
+	want := formatTime(buildMetrics(t, "api/v1/query", q).start)
+	if r.path != "/api/v1/label/pod/values" || r.form.Get("start") != want {
+		t.Fatalf("lookup %s start = %s, want the query's earliest read %s", r.path, r.form.Get("start"), want)
 	}
 }
 

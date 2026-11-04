@@ -94,7 +94,7 @@ func parseFlags(args []string) (options, error) {
 	fs.DurationVar(&o.metrics.Limits.MaxRange, "metrics-max-range", 30*24*time.Hour, "longest [start, end] and step a metrics request may use")
 	fs.IntVar(&o.metrics.Limits.MaxPoints, "metrics-max-points", 11000, "most points per series a range query may return")
 	fs.DurationVar(&o.metrics.Limits.MaxTimeout, "metrics-max-timeout", 30*time.Second, "timeout forwarded to vmselect; a longer client timeout is clamped; must be below --request-timeout when that is set")
-	fs.DurationVar(&o.metrics.App.Lookback, "metrics-app-lookback", 24*time.Hour, "how far before the window the application root looks up the application's pods and PVCs at most")
+	fs.DurationVar(&o.metrics.App.Lookback, "metrics-app-lookback", 24*time.Hour, "how far before the window the application root looks up the application's pods and PVCs; a query reading further back answers 422")
 	fs.IntVar(&o.metrics.App.MaxPods, "metrics-app-max-pods", 500, "most pods of one application in the lookup window; more answer 422")
 	fs.IntVar(&o.metrics.App.MaxPVCs, "metrics-app-max-pvcs", 500, "most PVCs of one application in the lookup window; more answer 422")
 	fs.IntVar(&o.limiter.MaxConcurrentPerUser, "max-concurrent-per-user", 10, "concurrent non-tail requests per user; 0 disables")
