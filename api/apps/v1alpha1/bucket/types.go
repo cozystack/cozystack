@@ -22,6 +22,9 @@ type ConfigSpec struct {
 	// Selects a specific BucketClass by storage pool name.
 	// +kubebuilder:default:=""
 	StoragePool string `json:"storagePool,omitempty"`
+	// Deploys the web UI (s3manager) with its Service and its Ingress or HTTPRoute at `<bucket>.<tenant host>`. Set to `false` to run the bucket without them.
+	// +kubebuilder:default:=true
+	Ui bool `json:"ui"`
 	// Users configuration map.
 	// +kubebuilder:default:={}
 	Users map[string]User `json:"users,omitempty"`
