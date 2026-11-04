@@ -103,6 +103,9 @@ func TestParseFlagsInvalid(t *testing.T) {
 		{"--metrics-max-points=1"},
 		{"--metrics-max-timeout=0s"},
 		{"--unknown"},
+		// The proxy would cut the request while vmselect is still within
+		// the timeout it was given.
+		{"--request-timeout=10s", "--metrics-max-timeout=30s"},
 		{"unexpected", "--root-tenant=tenant-x"},
 	} {
 		if _, err := parseFlags(args); err == nil {
