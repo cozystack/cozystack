@@ -194,10 +194,11 @@ type DefaultObjectsGate struct {
 	// MinForceInterval for no reason.
 	lastForce            time.Time
 	lastCredentialsForce time.Time
-	// renderForced records that a forced render of HelmRelease went through.
-	// That render stamps endpointAnnotation on every object the chart
-	// renders, so from then on an object without it (one rendered by a chart
-	// that predates the annotation) is not counted as stale again.
+	// renderForced records that a forced render of HelmRelease was requested
+	// (the annotations were patched; whether the upgrade succeeds is not
+	// observed). That render stamps endpointAnnotation on every object the
+	// chart renders, so from then on an object without it (one rendered by a
+	// chart that predates the annotation) is not counted as stale again.
 	renderForced bool
 }
 
@@ -302,33 +303,41 @@ func (g *DefaultObjectsGate) checkAndLog(ctx context.Context, logger logr.Logger
 		// Info, not Error: every branch here is either transient (the
 		// bucket is still being provisioned) or already exposed as a
 		// metric, and this runs every minute for the life of the cluster.
-		logger.Info("default backup objects check failed", "error", err.Error())
+		logger.Info("default backup objects check failed", "error", err.Error(),
+			"missing", missing, "forced", forced)
 	case len(missing) > 0 && forced:
-		// The release named here is whichever one renders what is missing:
+		// The releases named here are the ones that render what is missing:
 		// the credentials Secret comes from the bucket's <bucket>-system
 		// release, everything else from this chart's own.
 		logger.Info("forced a Helm upgrade to create missing or stale default backup objects",
-			"helmRelease", g.forcedReleaseFor(missing).String(), "missing", missing)
+			"helmReleases", g.forcedReleasesFor(missing), "missing", missing)
 	case len(missing) > 0:
 		logger.Info("default backup objects still missing or stale, no force issued on this tick",
-			"helmRelease", g.forcedReleaseFor(missing).String(), "missing", missing,
+			"helmReleases", g.forcedReleasesFor(missing), "missing", missing,
 			"minForceInterval", g.MinForceInterval.String())
 	default:
 		logger.V(1).Info("all default backup objects present")
 	}
 }
 
-// forcedReleaseFor reports which release renders the given missing set, for
-// logging only. reconcileCredentials and staleCredentials return the
-// credentials Secret as the sole entry, and it is never mixed with the routed
-// objects —
-// resolving the bucket name is a precondition for checking those at all.
-func (g *DefaultObjectsGate) forcedReleaseFor(missing []string) types.NamespacedName {
+// forcedReleasesFor reports which releases render the given entries, for
+// logging only: the credentials Secret comes from CredentialsHelmRelease,
+// everything else from HelmRelease.
+func (g *DefaultObjectsGate) forcedReleasesFor(missing []string) []string {
 	credsKey := fmt.Sprintf("Secret/%s", g.Config.SourceSecretName)
-	if len(missing) == 1 && (missing[0] == credsKey || strings.HasPrefix(missing[0], credsKey+" ")) && g.CredentialsHelmRelease.Name != "" {
-		return g.CredentialsHelmRelease
+	var out []string
+	seen := map[string]bool{}
+	for _, m := range missing {
+		release := g.HelmRelease.String()
+		if (m == credsKey || strings.HasPrefix(m, credsKey+" ")) && g.CredentialsHelmRelease.Name != "" {
+			release = g.CredentialsHelmRelease.String()
+		}
+		if !seen[release] {
+			seen[release] = true
+			out = append(out, release)
+		}
 	}
-	return g.HelmRelease
+	return out
 }
 
 // Check resolves the platform bucket name, verifies that every object the
@@ -369,21 +378,17 @@ func (g *DefaultObjectsGate) Check(ctx context.Context) ([]string, bool, error) 
 		return g.reconcileCredentials(ctx)
 	}
 
-	// The objects below are rendered from this Secret, so while it is stale
-	// they would only be re-rendered with the same stale endpoint.
-	stale, err := g.staleCredentials(ctx, src)
-	if err != nil {
+	staleCreds, credsErr := g.staleCredentials(ctx, src)
+	if credsErr != nil {
 		defaultObjectsCheckErrors.WithLabelValues(g.BackupClassName).Inc()
-		return nil, false, err
-	}
-	if stale != "" {
-		return g.force(ctx, g.CredentialsHelmRelease, &g.lastCredentialsForce, []string{stale})
 	}
 
 	backupClass := &backupsv1alpha1.BackupClass{}
 	if err := g.Client.Get(ctx, client.ObjectKey{Name: g.BackupClassName}, backupClass); err != nil {
-		defaultObjectsCheckErrors.WithLabelValues(g.BackupClassName).Inc()
-		return nil, false, fmt.Errorf("get BackupClass %s: %w", g.BackupClassName, err)
+		if credsErr == nil {
+			defaultObjectsCheckErrors.WithLabelValues(g.BackupClassName).Inc()
+		}
+		return nil, false, errors.Join(credsErr, fmt.Errorf("get BackupClass %s: %w", g.BackupClassName, err))
 	}
 
 	// With provisionBucket=false (no bucket release) the chart renders
@@ -395,21 +400,33 @@ func (g *DefaultObjectsGate) Check(ctx context.Context) ([]string, bool, error) 
 	}
 	state, err := g.inspectObjects(ctx, backupClass, want)
 	if err != nil {
-		defaultObjectsCheckErrors.WithLabelValues(g.BackupClassName).Inc()
-		return nil, false, err
+		if credsErr == nil {
+			defaultObjectsCheckErrors.WithLabelValues(g.BackupClassName).Inc()
+		}
+		return nil, false, errors.Join(credsErr, err)
 	}
 	defaultObjectsMissing.WithLabelValues(g.BackupClassName).Set(float64(len(state.missing)))
-	needed := append(state.missing, state.stale...)
-	if len(needed) == 0 {
-		return nil, false, nil
-	}
-	sort.Strings(needed)
 
-	needed, forced, err := g.force(ctx, g.HelmRelease, &g.lastForce, needed)
-	if forced {
-		g.renderForced = true
+	var needed []string
+	var forced bool
+	errs := []error{credsErr}
+	if staleCreds != "" {
+		_, credsForced, err := g.force(ctx, g.CredentialsHelmRelease, &g.lastCredentialsForce, []string{staleCreds})
+		needed = append(needed, staleCreds)
+		forced = credsForced
+		errs = append(errs, err)
 	}
-	return needed, forced, err
+	if objects := append(state.missing, state.stale...); len(objects) > 0 {
+		sort.Strings(objects)
+		_, objectsForced, err := g.force(ctx, g.HelmRelease, &g.lastForce, objects)
+		needed = append(needed, objects...)
+		if objectsForced {
+			forced = true
+			g.renderForced = true
+		}
+		errs = append(errs, err)
+	}
+	return needed, forced, errors.Join(errs...)
 }
 
 // staleCredentials reports the credentials Secret, formatted for logs, when
@@ -559,8 +576,8 @@ func (g *DefaultObjectsGate) staleEndpoint(state *defaultObjectsState, key strin
 
 // inspectObjects returns a sorted, de-duplicated list of the
 // "<kind>/<name>" objects the BackupClass references that do not exist,
-// plus the Velero BSL when a Velero namespace is configured, and the existing
-// ones whose endpointAnnotation differs from want.
+// plus the Velero BSL when a Velero namespace is configured, and, unsorted,
+// the existing ones whose endpointAnnotation differs from want.
 //
 // An unmappable group/kind (the CRD is not installed) is NOT reported as
 // missing: no Helm re-render can create an object whose CRD is absent, and
