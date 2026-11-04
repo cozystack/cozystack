@@ -171,7 +171,7 @@ func run(o options) error {
 		Limiter:         o.limiter,
 		RequestTimeout:  o.requestTimeout,
 		TailIdleTimeout: o.tailIdleTimeout,
-	}, observabilityproxy.NewAuthorizer(client, o.authCacheTTL), observabilityproxy.NewStoreResolver(lister, o.rootTenant), reg)
+	}, observabilityproxy.NewAuthorizer(client, o.authCacheTTL), observabilityproxy.NewStoreResolver(lister, namespaces.Informer().HasSynced, o.rootTenant), reg)
 
 	probes := http.NewServeMux()
 	probes.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) { _, _ = io.WriteString(w, "ok") })

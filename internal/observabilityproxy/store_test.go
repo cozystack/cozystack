@@ -48,7 +48,8 @@ func TestStoreResolver(t *testing.T) {
 	}
 	add("tenant-forged", map[string]string{monitoringLabel: "pod.tenant-b"})
 	lister := corev1listers.NewNamespaceLister(indexer)
-	if got, err := NewStoreResolver(lister, "tenant-root").Resolve("tenant-forged"); err == nil {
+	synced := func() bool { return true }
+	if got, err := NewStoreResolver(lister, synced, "tenant-root").Resolve("tenant-forged"); err == nil {
 		t.Fatalf("label naming a host outside a namespace resolved to %q", got)
 	}
 
@@ -70,7 +71,7 @@ func TestStoreResolver(t *testing.T) {
 		{"tenant-a", "cozy-system", "tenant-a"},
 	}
 	for _, tt := range tests {
-		r := NewStoreResolver(lister, tt.root)
+		r := NewStoreResolver(lister, synced, tt.root)
 		got, err := r.Resolve(tt.ns)
 		if err != nil {
 			t.Fatalf("root=%s Resolve(%s) error: %v", tt.root, tt.ns, err)
@@ -78,5 +79,16 @@ func TestStoreResolver(t *testing.T) {
 		if got != tt.want {
 			t.Errorf("root=%s Resolve(%s) = %s, want %s", tt.root, tt.ns, got, tt.want)
 		}
+	}
+}
+
+// TestStoreResolverUnsynced: before the first list, every namespace looks
+// absent, and an absent one resolves to the root store; a labeled
+// namespace would read the wrong store.
+func TestStoreResolverUnsynced(t *testing.T) {
+	indexer := cache.NewIndexer(cache.MetaNamespaceKeyFunc, cache.Indexers{})
+	r := NewStoreResolver(corev1listers.NewNamespaceLister(indexer), func() bool { return false }, "tenant-root")
+	if got, err := r.Resolve("tenant-a"); err == nil {
+		t.Fatalf("unsynced cache resolved tenant-a to %q", got)
 	}
 }

@@ -17,6 +17,7 @@ limitations under the License.
 package observabilityproxy
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 
@@ -34,11 +35,14 @@ const monitoringLabel = "namespace.cozystack.io/monitoring"
 // its logs, by the same rule the collector writes with.
 type StoreResolver struct {
 	namespaces corev1listers.NamespaceLister
+	synced     func() bool
 	root       string
 }
 
-func NewStoreResolver(namespaces corev1listers.NamespaceLister, rootTenant string) *StoreResolver {
-	return &StoreResolver{namespaces: namespaces, root: rootTenant}
+// NewStoreResolver reads namespaces from a cache that synced reports as
+// filled.
+func NewStoreResolver(namespaces corev1listers.NamespaceLister, synced func() bool, rootTenant string) *StoreResolver {
+	return &StoreResolver{namespaces: namespaces, synced: synced, root: rootTenant}
 }
 
 // Resolve answers the root tenant for a namespace that no longer exists,
@@ -46,6 +50,12 @@ func NewStoreResolver(namespaces corev1listers.NamespaceLister, rootTenant strin
 // tenant's store are not found there; reading them needs routing history
 // (an open question of the design).
 func (r *StoreResolver) Resolve(namespace string) (string, error) {
+	// Before the first list every namespace looks gone, which would send
+	// a labeled one to the root store; readiness alone does not stop a
+	// client that addresses the pod directly.
+	if !r.synced() {
+		return "", errors.New("namespace cache not synced")
+	}
 	ns, err := r.namespaces.Get(namespace)
 	if apierrors.IsNotFound(err) {
 		return r.root, nil
