@@ -37,8 +37,9 @@ var ErrUnauthenticated = errors.New("unauthenticated")
 
 // Authorizer asks kube-apiserver who a token belongs to and whether that
 // identity may read a scope. Answers, including negative ones, are cached
-// for the TTL; transport errors are not, so an apiserver blip is retried on
-// the next request instead of locking a user out for the TTL.
+// for the TTL; transport errors and reviews that failed to decide are not,
+// so an outage is retried on the next request instead of locking a user
+// out for the TTL.
 type Authorizer struct {
 	client    kubernetes.Interface
 	now       func() time.Time
@@ -72,14 +73,16 @@ func (a *Authorizer) Authenticate(ctx context.Context, token string) (*authentic
 	if err != nil {
 		return nil, fmt.Errorf("token review: %w", err)
 	}
-	var u *authenticationv1.UserInfo
-	if tr.Status.Authenticated && tr.Status.User.Username != "" {
-		u = tr.Status.User.DeepCopy()
-	}
-	a.tokens.set(key, u, a.now())
-	if u == nil {
+	if !tr.Status.Authenticated || tr.Status.User.Username == "" {
+		// status.error also marks an authenticator that failed to decide;
+		// a cached refusal would outlast its recovery.
+		if tr.Status.Error == "" {
+			a.tokens.set(key, nil, a.now())
+		}
 		return nil, ErrUnauthenticated
 	}
+	u := tr.Status.User.DeepCopy()
+	a.tokens.set(key, u, a.now())
 	return u, nil
 }
 
@@ -109,7 +112,12 @@ func (a *Authorizer) Authorize(ctx context.Context, user *authenticationv1.UserI
 		return false, fmt.Errorf("subject access review: %w", err)
 	}
 	allowed := sar.Status.Allowed && !sar.Status.Denied
-	a.decisions.set(key, allowed, a.now())
+	// An evaluation error without a decision denies this request only: it
+	// may be a webhook authorizer that is down, and RBAC reports one for
+	// any binding to a missing role, so it cannot be told from a refusal.
+	if allowed || sar.Status.Denied || sar.Status.EvaluationError == "" {
+		a.decisions.set(key, allowed, a.now())
+	}
 	return allowed, nil
 }
 
