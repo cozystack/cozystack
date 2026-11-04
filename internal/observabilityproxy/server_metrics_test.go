@@ -187,8 +187,8 @@ func TestServerMetricsConcurrency(t *testing.T) {
 	}()
 	select {
 	case got := <-refused:
-		if got.StatusCode != http.StatusTooManyRequests || got.Header.Get("Retry-After") == "" {
-			t.Fatalf("concurrent request answered %d with Retry-After %q, want 429 with a value", got.StatusCode, got.Header.Get("Retry-After"))
+		if got.StatusCode != http.StatusTooManyRequests || got.Header.Get("Retry-After") != "1" {
+			t.Fatalf("concurrent request answered %d with Retry-After %q, want 429 with 1", got.StatusCode, got.Header.Get("Retry-After"))
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("concurrent request of the same user reached the upstream")
