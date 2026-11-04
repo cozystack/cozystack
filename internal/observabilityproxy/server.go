@@ -25,6 +25,7 @@ import (
 	"log/slog"
 	"math"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -159,15 +160,6 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, route Route) *HTT
 	if !ok {
 		return errorf(http.StatusNotFound, "not found")
 	}
-	r.Body = http.MaxBytesReader(w, r.Body, maxFormBytes)
-	if err := r.ParseForm(); err != nil {
-		return errorf(http.StatusBadRequest, "invalid form: %v", err)
-	}
-	params, herr := BuildLogsParams(endpoint, r.Form, route.Namespace, s.now(), s.cfg.Logs)
-	if herr != nil {
-		return herr
-	}
-
 	tail := endpoint == "tail"
 	acquire := s.limits.acquire
 	if tail {
@@ -178,6 +170,13 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, route Route) *HTT
 		return errorf(http.StatusTooManyRequests, "too many concurrent requests")
 	}
 	defer release()
+	if herr := s.readForm(w, r); herr != nil {
+		return herr
+	}
+	params, herr := BuildLogsParams(endpoint, r.Form, route.Namespace, s.now(), s.cfg.Logs)
+	if herr != nil {
+		return herr
+	}
 
 	store, err := s.stores.Resolve(route.Namespace)
 	if err != nil {
@@ -231,6 +230,29 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, route Route) *HTT
 		slog.Debug("copying upstream response", "error", err)
 	}
 	return nil
+}
+
+// readForm reads the body under the request timeout, so a client that
+// sends it slowly holds its slot only that long. Once the body is read the
+// deadline is lifted: the server's background read would take a later
+// expiry for a client that went away and cancel a tail. After a failed
+// read it stays, so the server's drain of the unread body is bounded too.
+func (s *Server) readForm(w http.ResponseWriter, r *http.Request) *HTTPError {
+	r.Body = http.MaxBytesReader(w, r.Body, maxFormBytes)
+	rc := http.NewResponseController(w)
+	if s.cfg.RequestTimeout > 0 {
+		_ = rc.SetReadDeadline(time.Now().Add(s.cfg.RequestTimeout))
+	}
+	err := r.ParseForm()
+	switch {
+	case err == nil:
+		_ = rc.SetReadDeadline(time.Time{})
+		return nil
+	case errors.Is(err, os.ErrDeadlineExceeded):
+		return errorf(http.StatusRequestTimeout, "request body not received within %s", s.cfg.RequestTimeout)
+	default:
+		return errorf(http.StatusBadRequest, "invalid form: %v", err)
+	}
 }
 
 func (s *Server) authorize(r *http.Request, route Route) (string, *HTTPError) {
