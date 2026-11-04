@@ -138,11 +138,11 @@ func TestBuildLogsParamsRejects(t *testing.T) {
 		{"trailing dot", "query", url.Values{"start": {"300."}}, http.StatusBadRequest},
 		{"infinite time", "query", url.Values{"end": {"Inf"}}, http.StatusBadRequest},
 		// vlselect keeps times as int64 nanoseconds (time.UnixNano), which
-		// overflows outside 1678..2262; before 1970 is no log time either.
-		{"time before 1970", "query", url.Values{"start": {"0001-01-01T00:00:00Z"}, "end": {"0001-01-02T00:00:00Z"}}, http.StatusBadRequest},
-		{"time past int64 nanoseconds", "query", url.Values{"start": {"9999-01-01T00:00:00Z"}, "end": {"9999-01-02T00:00:00Z"}}, http.StatusBadRequest},
-		{"tail since before 1970", "tail", url.Values{"since": {"1969-12-31T23:59:59Z"}}, http.StatusBadRequest},
+		// is undefined outside 1677..2262; a time sent there must fit.
+		{"end before int64 nanoseconds", "query", url.Values{"start": {"0001-01-01T00:00:00Z"}, "end": {"0001-01-02T00:00:00Z"}}, http.StatusBadRequest},
+		{"end past int64 nanoseconds", "query", url.Values{"end": {"9999-01-02T00:00:00Z"}}, http.StatusBadRequest},
 		{"unix seconds past int64 nanoseconds", "query", url.Values{"start": {"9999999990"}, "end": {"9999999999"}}, http.StatusBadRequest},
+		{"tail end past int64 nanoseconds", "tail", url.Values{"end": {"9999-01-02T00:00:00Z"}}, http.StatusBadRequest},
 		{"NaN time", "query", url.Values{"start": {"NaN"}}, http.StatusBadRequest},
 		{"NaN step", "hits", url.Values{"step": {"NaN"}}, http.StatusBadRequest},
 		{"NaN start_offset", "tail", url.Values{"start_offset": {"NaN"}}, http.StatusBadRequest},
@@ -390,5 +390,21 @@ func TestParseDurationBounds(t *testing.T) {
 		if d, err := parseDuration(in); err == nil {
 			t.Errorf("parseDuration(%q) = %s; want an error past the int64 range", in, d)
 		}
+	}
+}
+
+// TestBuildLogsParamsOldTimesClamped: only times that reach vlselect must
+// fit its int64 nanoseconds. An old start is clamped to MaxRange before it
+// is sent, and an old since becomes a start_offset capped at the resume
+// limit, so both are served.
+func TestBuildLogsParamsOldTimesClamped(t *testing.T) {
+	lim := testLimits()
+	out := build(t, "query", url.Values{"start": {"1900-01-01T00:00:00Z"}})
+	if want := testNow.Add(-lim.MaxRange).Format(time.RFC3339Nano); out.Get("start") != want {
+		t.Errorf("start = %s, want clamped to %s", out.Get("start"), want)
+	}
+	out = build(t, "tail", url.Values{"since": {"1969-12-31T23:59:59Z"}})
+	if got := out.Get("start_offset"); got != formatDuration(lim.MaxTailResume) {
+		t.Errorf("start_offset = %s, want the %s cap", got, lim.MaxTailResume)
 	}
 }
