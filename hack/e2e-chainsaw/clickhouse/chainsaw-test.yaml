@@ -377,3 +377,179 @@ spec:
           set -eu
           cd ../../..
           NAMESPACE="$NAMESPACE" examples/backups/clickhouse/cleanup.sh
+---
+# Backup and in-place restore through the shipped cozy-default BackupClass and
+# the platform system bucket, for a ClickHouse whose Pod started before the
+# platform projected cozy-backups-creds into its namespace. The sidecar has to
+# pick those credentials up while running; until it could, the first BackupJob
+# of such a release failed with "no EC2 IMDS role found" and kept failing until
+# the Pod was restarted.
+#
+# Unlike clickhouse-2-backup-roundtrip this targets the system bucket as
+# advertised, https://s3.example.org, so system-bucket-roundtrip.sh makes that
+# name reachable from tenant-root for the duration of its own step and undoes
+# it on exit: see its header for the two shared objects it touches and the
+# cert-manager behaviour that relies on. Runs in tenant-root, where the system
+# bucket's SeaweedFS and its Ingress controller sit.
+#
+# The precondition step deletes tenant-root's projected cozy-backups-creds,
+# which the mongodb and rabbitmq round-trips leave there after their
+# cozy-default BackupJobs. Nothing reads it between suites, and the projector
+# writes it again on the next BackupJob, which is the moment under test.
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: clickhouse-3-system-bucket-roundtrip
+spec:
+  namespace: tenant-root
+  catch:
+  - events: {}
+  - describe:
+      apiVersion: helm.toolkit.fluxcd.io/v2
+      kind: HelmRelease
+      name: clickhouse-sysbucket
+  - describe:
+      apiVersion: cert-manager.io/v1
+      kind: Certificate
+      name: e2e-system-bucket-s3
+  - describe:
+      apiVersion: cert-manager.io/v1
+      kind: Certificate
+      name: seaweedfs-s3-ingress-tls
+  - describe:
+      apiVersion: networking.k8s.io/v1
+      kind: Ingress
+      name: ingress-seaweedfs-s3
+  - describe:
+      apiVersion: backups.cozystack.io/v1alpha1
+      kind: BackupJob
+      name: sysbucket-backup
+  - describe:
+      apiVersion: backups.cozystack.io/v1alpha1
+      kind: RestoreJob
+      name: sysbucket-restore
+  - podLogs:
+      selector: app.kubernetes.io/instance=clickhouse-sysbucket
+      container: clickhouse-backup
+      tail: 200
+  - podLogs:
+      selector: app=clickhouse-sysbucket-keeper
+      tail: 100
+  steps:
+  - name: preconditions
+    try:
+    - script:
+        timeout: 2m
+        content: |
+          set -eu
+          if kubectl -n "$NAMESPACE" get secret seaweedfs-s3-ingress-tls -o name >/dev/null 2>&1; then
+            echo "Secret $NAMESPACE/seaweedfs-s3-ingress-tls already exists; this Test would have to replace it" >&2
+            exit 1
+          fi
+          if kubectl -n kube-system get configmap coredns -o jsonpath='{.data.Corefile}' | grep -qF 'BEGIN e2e-clickhouse-system-bucket'; then
+            echo "kube-system/coredns still carries the e2e-clickhouse-system-bucket block from an earlier run" >&2
+            exit 1
+          fi
+          # Fixed names in a persistent namespace: a leftover Succeeded job
+          # would satisfy the waits in the run step without a new attempt.
+          kubectl -n "$NAMESPACE" delete restorejob sysbucket-restore --ignore-not-found --wait=true --timeout=30s
+          kubectl -n "$NAMESPACE" delete backupjob sysbucket-backup --ignore-not-found --wait=true --timeout=30s
+          kubectl -n "$NAMESPACE" delete secret cozy-backups-creds --ignore-not-found --wait=true --timeout=30s
+        check:
+          ($error == null): true
+
+  - name: create-certificate-and-probe
+    try:
+    - apply:
+        file: system-bucket-tls.yaml
+    - assert:
+        timeout: 2m
+        resource:
+          apiVersion: cert-manager.io/v1
+          kind: Certificate
+          metadata:
+            name: e2e-system-bucket-s3
+          status:
+            (conditions[?type == 'Ready']):
+            - status: "True"
+    - assert:
+        timeout: 3m
+        resource:
+          apiVersion: v1
+          kind: Pod
+          metadata:
+            name: e2e-system-bucket-probe
+          status:
+            (conditions[?type == 'Ready']):
+            - status: "True"
+
+  - name: create-clickhouse
+    try:
+    - apply:
+        file: clickhouse-system-bucket.yaml
+    # 11m: above the 600s install timeout cozystack-api gives this release;
+    # see "Sizing an HR-Ready budget" in docs/agents/e2e-testing.md.
+    - assert:
+        timeout: 11m
+        resource:
+          apiVersion: helm.toolkit.fluxcd.io/v2
+          kind: HelmRelease
+          metadata:
+            name: clickhouse-sysbucket
+          status:
+            (conditions[?type == 'Ready']):
+            - status: "True"
+    - assert:
+        timeout: 5m
+        resource:
+          apiVersion: apps/v1
+          kind: StatefulSet
+          metadata:
+            name: chi-clickhouse-sysbucket-clickhouse-0-0
+          status:
+            readyReplicas: 1
+    # The Pod is running with no projected credentials: the state the first
+    # BackupJob of a fresh release meets.
+    - error:
+        timeout: 30s
+        resource:
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: cozy-backups-creds
+
+  - name: run
+    try:
+    # Inner budgets of system-bucket-roundtrip.sh:
+    #    240s  probe: CoreDNS picking up the rewrite and the Ingress serving
+    #          the Test certificate
+    #    480s  BackupJob to Succeeded, including the driver's 2m hold
+    #    480s  RestoreJob to Succeeded, same hold
+    #     90s  the EXIT trap: Corefile replace plus a 60s Secret delete
+    #   1290s  (21m30s)
+    # 25m leaves 3m30s for the SQL and kubectl calls between those waits, so
+    # an inner wait is what fires and names what stalled.
+    - script:
+        timeout: 25m
+        content: |
+          set -eu
+          cd ../../..
+          NAMESPACE="$NAMESPACE" hack/e2e-chainsaw/clickhouse/system-bucket-roundtrip.sh
+        check:
+          ($error == null): true
+    finally:
+    # Chainsaw did not apply these: the jobs come from the script and the
+    # Backup from the controller, and deleting a BackupJob reclaims no Backup.
+    # The Certificate's Secret outlives the Certificate Chainsaw deletes.
+    - description: system-bucket round-trip cleanup
+      script:
+        timeout: 3m
+        content: |
+          set -eu
+          backup=$(kubectl -n "$NAMESPACE" get backupjob sysbucket-backup --ignore-not-found -o jsonpath='{.status.backupRef.name}')
+          kubectl -n "$NAMESPACE" delete restorejob sysbucket-restore --ignore-not-found --wait=true --timeout=30s
+          kubectl -n "$NAMESPACE" delete backupjob sysbucket-backup --ignore-not-found --wait=true --timeout=30s
+          if [ -n "$backup" ]; then
+            kubectl -n "$NAMESPACE" delete backup "$backup" --ignore-not-found --wait=true --timeout=60s
+          fi
+          kubectl -n "$NAMESPACE" delete secret e2e-system-bucket-s3-tls --ignore-not-found --wait=true --timeout=30s
