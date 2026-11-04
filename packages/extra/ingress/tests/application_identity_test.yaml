@@ -20,13 +20,43 @@ tests:
       - lengthEqual:
           path: spec.podMetricsEndpoints
           count: 1
-      - contains:
-          path: spec.podMetricsEndpoints[0].relabelConfigs
-          content:
-            action: labeldrop
-            regex: apps_cozystack_io_application_(group|kind|name)
       - equal:
           path: spec.podMetricsEndpoints[0].metricRelabelConfigs
           value:
+            - action: labeldrop
+              regex: apps_cozystack_io_application_(group|kind|name)
+
+  # Endpoint rules run after the scrape class rules, so the drop takes
+  # effect wherever it sits in this list; it is pinned last so that no
+  # later rule can set the identity again.
+  - it: drops the identity from the basic endpoint's target as its last rule
+    documentIndex: 0
+    asserts:
+      - equal:
+          path: spec.podMetricsEndpoints[0].relabelConfigs
+          value:
+            - replacement: nginx-ingress-controller
+              targetLabel: job
+            - sourceLabels: [__meta_kubernetes_pod_node_name]
+              targetLabel: node
+            - targetLabel: tier
+              replacement: cluster
+            - action: labeldrop
+              regex: apps_cozystack_io_application_(group|kind|name)
+
+  - it: drops the identity from the detailed endpoint's target as its last rule
+    documentIndex: 1
+    asserts:
+      - equal:
+          path: spec.podMetricsEndpoints[0].relabelConfigs
+          value:
+            - replacement: nginx-ingress-controller
+              targetLabel: job
+            - sourceLabels: [__meta_kubernetes_pod_node_name]
+              targetLabel: node
+            - sourceLabels: [__meta_kubernetes_pod_label_app_kubernetes_io_name]
+              targetLabel: controller
+            - targetLabel: tier
+              replacement: cluster
             - action: labeldrop
               regex: apps_cozystack_io_application_(group|kind|name)
