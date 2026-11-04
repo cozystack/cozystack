@@ -131,22 +131,14 @@ func queryLookback(query string, step time.Duration) (time.Duration, bool) {
 
 // queryLookahead is an upper bound on how far after its evaluation window
 // a query reads, from the same lexical scan. Only a negative offset reads
-// forward; the negative offsets are summed, which covers nesting. An @
-// modifier pins samples to any instant unless it names start() or end(),
-// which lie in the window, and WITH can apply one offset several times;
-// either makes the bound unknown.
+// forward; the negative offsets are summed, which covers nesting. Any @
+// makes the bound unknown, as it does for queryLookback, and so does WITH,
+// which can apply one offset several times.
 func queryLookahead(query string) (time.Duration, bool) {
-	lower := strings.ToLower(query)
-	for rest := lower; ; {
-		at := strings.IndexByte(rest, '@')
-		if at < 0 {
-			break
-		}
-		rest = strings.TrimLeft(rest[at+1:], " \t\n\r")
-		if !strings.HasPrefix(rest, "start()") && !strings.HasPrefix(rest, "end()") {
-			return 0, false
-		}
+	if strings.Contains(query, "@") {
+		return 0, false
 	}
+	lower := strings.ToLower(query)
 	_, ahead, ok := scanOffsets(lower)
 	if !ok || ahead > 0 && hasKeyword(lower, "with") || ahead > float64(maxMetricsDuration) {
 		return 0, false

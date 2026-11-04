@@ -441,8 +441,6 @@ func TestQueryLookahead(t *testing.T) {
 		{`x OFFSET - 90m`, 90 * time.Minute},
 		{`rate(x[5m] offset -30m) offset -1h`, 90 * time.Minute},
 		{`x offset -1h + y offset 2h`, time.Hour},
-		{`x @ end()`, 0},
-		{`x @ start() offset -1h`, time.Hour},
 		{`node_offset_seconds - 1`, 0},
 	}
 	for _, tt := range tests {
@@ -455,6 +453,10 @@ func TestQueryLookahead(t *testing.T) {
 	}
 	for _, q := range []string{
 		`x @ 1700000000`,
+		// The lookback scan cannot bound any @, so the application root
+		// refuses every one; the lookahead does not tell them apart.
+		`x @ end()`,
+		`x @ start() offset -1h`,
 		`x @ (end() - 1h)`,
 		`x{a="a@b"}`,
 		`x offset -5i`,
