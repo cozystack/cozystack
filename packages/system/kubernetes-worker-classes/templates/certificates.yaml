@@ -1,0 +1,41 @@
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: {{ .Release.Name }}-selfsigned
+spec:
+  selfSigned: {}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ .Release.Name }}-ca
+spec:
+  secretName: {{ .Release.Name }}-ca
+  isCA: true
+  commonName: {{ .Release.Name }}-ca
+  duration: 43800h
+  issuerRef:
+    name: {{ .Release.Name }}-selfsigned
+---
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: {{ .Release.Name }}-issuer
+spec:
+  ca:
+    secretName: {{ .Release.Name }}-ca
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ .Release.Name }}
+spec:
+  secretName: {{ .Release.Name }}-cert
+  duration: 8760h
+  renewBefore: 720h
+  privateKey:
+    rotationPolicy: Always
+  issuerRef:
+    name: {{ .Release.Name }}-issuer
+  dnsNames:
+    - {{ .Release.Name }}.{{ .Release.Namespace }}.svc

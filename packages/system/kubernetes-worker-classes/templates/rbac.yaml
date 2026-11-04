@@ -1,0 +1,58 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ .Release.Name }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "workerclasses.registrationName" . }}
+rules:
+  - apiGroups: [cozystack.io]
+    resources: [workerclasses]
+    verbs: [get, list, watch, update, patch]
+  - apiGroups: [helm.toolkit.fluxcd.io]
+    resources: [helmreleases]
+    verbs: [get, list, watch]
+  - apiGroups: [admissionregistration.k8s.io]
+    resources: [mutatingwebhookconfigurations, validatingwebhookconfigurations]
+    resourceNames: [{{ include "workerclasses.registrationName" . }}]
+    verbs: [delete]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "workerclasses.registrationName" . }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "workerclasses.registrationName" . }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ .Release.Name }}
+    namespace: {{ .Release.Namespace }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ .Release.Name }}-leader-election
+rules:
+  - apiGroups: [coordination.k8s.io]
+    resources: [leases]
+    verbs: [get, list, watch, create, update, patch]
+  - apiGroups: [""]
+    resources: [events]
+    verbs: [create, patch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ .Release.Name }}-leader-election
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ .Release.Name }}-leader-election
+subjects:
+  - kind: ServiceAccount
+    name: {{ .Release.Name }}
+    namespace: {{ .Release.Namespace }}

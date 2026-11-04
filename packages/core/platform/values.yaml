@@ -743,6 +743,10 @@ backupStrategyController: {}
 # `replicated` must move the golden onto their class). Empty (the default)
 # forwards nothing and keeps the child chart defaults.
 kubernetesWorkerImage: {}
+# Creation-time default forwarded to the managed worker admission package.
+# It does not rewrite legacy pools or the class selected by an existing pool.
+kubernetesWorkerClasses:
+  defaultWorkerClass: talos
 # Pod scheduling configuration
 scheduling:
   globalAppTopologySpreadConstraints: ""

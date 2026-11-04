@@ -1,0 +1,38 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ .Release.Name }}-unregister
+  annotations:
+    helm.sh/hook: pre-delete
+    helm.sh/hook-weight: "-10"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 1
+  activeDeadlineSeconds: 60
+  template:
+    spec:
+      restartPolicy: Never
+      serviceAccountName: {{ .Release.Name }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: unregister
+          image: {{ include "workerclasses.image" . | quote }}
+          args:
+            - --unregister-mutating-webhook={{ include "workerclasses.registrationName" . }}
+            - --unregister-validating-webhook={{ include "workerclasses.registrationName" . }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+            limits:
+              cpu: 100m
+              memory: 128Mi

@@ -1,0 +1,31 @@
+apiVersion: cozystack.io/v1alpha1
+kind: PackageSource
+metadata:
+  name: cozystack.kubernetes-worker-classes
+spec:
+  sourceRef:
+    kind: OCIRepository
+    name: cozystack-packages
+    namespace: cozy-system
+    path: /
+  variants:
+    - name: default
+      dependsOn:
+        - cozystack.networking
+        - cozystack.cert-manager
+      libraries:
+        - name: cozy-lib
+          path: library/cozy-lib
+      components:
+        - name: kubernetes-worker-classes-crds
+          path: system/kubernetes-worker-classes-crds
+          install:
+            namespace: cozy-system
+            releaseName: kubernetes-worker-classes-crds
+        - name: kubernetes-worker-classes
+          path: system/kubernetes-worker-classes
+          libraries: [cozy-lib]
+          install:
+            namespace: cozy-system
+            releaseName: kubernetes-worker-classes
+            dependsOn: [kubernetes-worker-classes-crds]

@@ -1,0 +1,107 @@
+suite: package-owned worker admission
+release:
+  name: kubernetes-worker-classes
+  namespace: cozy-system
+templates:
+  - templates/deployment.yaml
+  - templates/service.yaml
+  - templates/webhooks.yaml
+  - templates/rbac.yaml
+  - templates/cleanup.yaml
+  - templates/certificates.yaml
+tests:
+  - it: gives the process the configured creation default
+    template: templates/deployment.yaml
+    set:
+      defaultWorkerClass: custom-talos
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --default-worker-class=custom-talos
+      - equal:
+          path: spec.strategy.rollingUpdate.maxUnavailable
+          value: 0
+      - equal:
+          path: spec.template.spec.containers[0].readinessProbe.httpGet.path
+          value: /readyz
+  - it: registers Fail webhooks only for pool creation and updates
+    template: templates/webhooks.yaml
+    asserts:
+      - equal:
+          path: webhooks[0].failurePolicy
+          value: Fail
+      - equal:
+          path: webhooks[0].rules[0].operations
+          value: [CREATE, UPDATE]
+      - equal:
+          path: webhooks[0].rules[0].apiGroups
+          value: [apps.cozystack.io]
+      - equal:
+          path: webhooks[0].rules[0].resources
+          value: [kubernetesnodeses]
+      - equal:
+          path: webhooks[0].namespaceSelector
+          value: {}
+      - equal:
+          path: webhooks[0].objectSelector
+          value: {}
+      - notExists:
+          path: webhooks[0].matchConditions
+  - it: unregisters admission before removing the backend
+    template: templates/cleanup.yaml
+    asserts:
+      - equal:
+          path: metadata.annotations["helm.sh/hook"]
+          value: pre-delete
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --unregister-mutating-webhook=cozy-system-kubernetes-worker-classes
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --unregister-validating-webhook=cozy-system-kubernetes-worker-classes
+  - it: restricts registration deletion to this release
+    template: templates/rbac.yaml
+    documentSelector:
+      path: kind
+      value: ClusterRole
+    asserts:
+      - contains:
+          path: rules
+          content:
+            apiGroups: [admissionregistration.k8s.io]
+            resources: [mutatingwebhookconfigurations, validatingwebhookconfigurations]
+            resourceNames: [cozy-system-kubernetes-worker-classes]
+            verbs: [delete]
+      - contains:
+          path: rules
+          content:
+            apiGroups: [helm.toolkit.fluxcd.io]
+            resources: [helmreleases]
+            verbs: [get, list, watch]
+  - it: issues a rotating service identity
+    template: templates/certificates.yaml
+    documentSelector:
+      path: metadata.name
+      value: kubernetes-worker-classes
+    asserts:
+      - equal:
+          path: spec.secretName
+          value: kubernetes-worker-classes-cert
+      - contains:
+          path: spec.dnsNames
+          content: kubernetes-worker-classes.cozy-system.svc
+      - equal:
+          path: spec.privateKey.rotationPolicy
+          value: Always
+  - it: permits leader election to publish namespace events
+    template: templates/rbac.yaml
+    documentSelector:
+      path: kind
+      value: Role
+    asserts:
+      - contains:
+          path: rules
+          content:
+            apiGroups: [""]
+            resources: [events]
+            verbs: [create, patch]

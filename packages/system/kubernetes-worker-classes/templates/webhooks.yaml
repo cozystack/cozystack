@@ -1,0 +1,29 @@
+{{- range $kind := list "MutatingWebhookConfiguration" "ValidatingWebhookConfiguration" }}
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: {{ $kind }}
+metadata:
+  name: {{ include "workerclasses.registrationName" $ }}
+  annotations:
+    cert-manager.io/inject-ca-from: {{ $.Release.Namespace }}/{{ $.Release.Name }}
+webhooks:
+  - name: {{ ternary "mutate" "validate" (eq $kind "MutatingWebhookConfiguration") }}.workerclasses.cozystack.io
+    admissionReviewVersions: [v1]
+    sideEffects: None
+    failurePolicy: Fail
+    matchPolicy: Exact
+    timeoutSeconds: 5
+    namespaceSelector: {}
+    objectSelector: {}
+    clientConfig:
+      service:
+        name: {{ $.Release.Name }}
+        namespace: {{ $.Release.Namespace }}
+        path: /{{ ternary "mutate" "validate" (eq $kind "MutatingWebhookConfiguration") }}-worker-pool
+        port: 443
+    rules:
+      - operations: [CREATE, UPDATE]
+        apiGroups: [apps.cozystack.io]
+        apiVersions: [v1alpha1]
+        resources: [kubernetesnodeses]
+{{- end }}

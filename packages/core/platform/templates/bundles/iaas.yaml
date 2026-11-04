@@ -256,6 +256,14 @@
 {{- if $proxmoxEnabled }}
 {{include "cozystack.platform.package.default" (list $proxmoxName $) }}
 {{- end }}
+{{- $managedKubernetes := or (not (has "cozystack.kubernetes-application" $pkgDisabled)) (not (has "cozystack.kubernetes-nodes-application" $pkgDisabled)) -}}
+{{- if $managedKubernetes -}}
+{{- if has "cozystack.kubernetes-worker-classes" $pkgDisabled -}}
+{{- fail "worker classes are required by managed Kubernetes; disable both Kubernetes application packages first" -}}
+{{- end -}}
+{{- $workerComponents := dict "kubernetes-worker-classes" (dict "values" .Values.kubernetesWorkerClasses) -}}
+{{include "cozystack.platform.package" (list "cozystack.kubernetes-worker-classes" "default" $ $workerComponents) }}
+{{- end }}
 {{include "cozystack.platform.package" (list "cozystack.kubernetes-application" "kubevirt" $) }}
 {{include "cozystack.platform.package" (list "cozystack.kubernetes-nodes-application" "kubevirt" $) }}
 {{include "cozystack.platform.package" (list "cozystack.computeplane-application" "kubevirt" $) }}

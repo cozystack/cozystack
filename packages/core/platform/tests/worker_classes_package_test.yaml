@@ -1,0 +1,41 @@
+suite: worker classes belong only to managed Kubernetes
+templates:
+  - templates/bundles/iaas.yaml
+release:
+  name: cozystack
+  namespace: cozy-system
+tests:
+  - it: enables the worker package with managed Kubernetes
+    set:
+      bundles.system.enabled: true
+      bundles.system.variant: isp-full
+      bundles.iaas.enabled: true
+      kubernetesWorkerClasses.defaultWorkerClass: custom-talos
+    documentSelector:
+      path: metadata.name
+      value: cozystack.kubernetes-worker-classes
+    asserts:
+      - equal:
+          path: spec.components.kubernetes-worker-classes.values.defaultWorkerClass
+          value: custom-talos
+  - it: emits no worker package without the managed Kubernetes applications
+    set:
+      bundles.system.enabled: true
+      bundles.system.variant: isp-full
+      bundles.iaas.enabled: true
+      bundles.disabledPackages:
+        - cozystack.kubernetes-application
+        - cozystack.kubernetes-nodes-application
+    asserts:
+      - notMatchRegex:
+          path: metadata.name
+          pattern: '^cozystack\.kubernetes-worker-classes$' 
+  - it: cannot disable required admission while keeping the applications
+    set:
+      bundles.system.enabled: true
+      bundles.system.variant: isp-full
+      bundles.iaas.enabled: true
+      bundles.disabledPackages: [cozystack.kubernetes-worker-classes]
+    asserts:
+      - failedTemplate:
+          errorPattern: 'worker classes are required by managed Kubernetes'

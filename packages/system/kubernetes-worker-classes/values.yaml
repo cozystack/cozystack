@@ -1,1 +1,13 @@
-{}
+## @param {string} defaultWorkerClass="talos" - Platform-selected class assigned to new standalone worker pools. Changing it does not classify legacy pools or move an existing pool.
+defaultWorkerClass: talos
+## @param {int} replicas=2 - Admission replicas. Controllers use leader election.
+## @minimum 1
+replicas: 2
+## @param {object} resources - Controller and webhook resource requests and limits.
+resources:
+  requests:
+    cpu: 10m
+    memory: 64Mi
+  limits:
+    cpu: 500m
+    memory: 256Mi

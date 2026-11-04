@@ -1,0 +1,32 @@
+{
+  "title": "Chart Values",
+  "type": "object",
+  "properties": {
+    "defaultWorkerClass": {
+      "description": "Platform-selected class assigned to new standalone worker pools. Changing it does not classify legacy pools or move an existing pool.",
+      "type": "string",
+      "default": "talos"
+    },
+    "replicas": {
+      "description": "Admission replicas. Controllers use leader election.",
+      "type": "integer",
+      "default": 2,
+      "minimum": 1
+    },
+    "resources": {
+      "description": "Controller and webhook resource requests and limits.",
+      "type": "object",
+      "default": {
+        "limits": {
+          "cpu": "500m",
+          "memory": "256Mi"
+        },
+        "requests": {
+          "cpu": "10m",
+          "memory": "64Mi"
+        }
+      },
+      "x-kubernetes-preserve-unknown-fields": true
+    }
+  }
+}
