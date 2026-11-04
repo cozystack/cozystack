@@ -398,7 +398,7 @@ func (r *BackupJobReconciler) createMariaDBBackupArtifact(
 	if uri := driverMD[mariadbStorageURIKey]; uri != "" {
 		status.Artifact = &backupsv1alpha1.BackupArtifact{URI: uri}
 		if probe {
-			status.Artifact.SizeBytes = r.mariadbArtifactSizeBytes(ctx, j.Namespace, rendered.Storage.S3, mdbBackup, takenAt.Time)
+			status.Artifact.SizeBytes = r.mariadbArtifactSizeBytes(ctx, mdbBackup, takenAt.Time)
 		}
 	}
 	backup := &backupsv1alpha1.Backup{

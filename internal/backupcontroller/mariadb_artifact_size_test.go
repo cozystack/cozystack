@@ -77,14 +77,26 @@ func TestMariaDBOperatorS3Prefix(t *testing.T) {
 	}
 }
 
+// operatorBackupStoringTo returns the operator Backup a strategy with s3
+// storage renders, created at created in namespace tenant.
+func operatorBackupStoringTo(t *testing.T, s3 *strategyv1alpha1.MariaDBS3Template, created time.Time) *mariadbtypes.Backup {
+	t.Helper()
+	storage, err := buildMariaDBBackupStorage(strategyv1alpha1.MariaDBStorageTemplate{S3: s3})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return &mariadbtypes.Backup{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "op-bk", CreationTimestamp: metav1.NewTime(created)},
+		Spec:       mariadbtypes.BackupSpec{Storage: storage},
+	}
+}
+
 func TestMariaDBArtifactSizeBytes(t *testing.T) {
 	created := time.Date(2026, 10, 21, 10, 0, 0, 0, time.UTC)
 	completed := created.Add(3 * time.Minute)
-	mdbBackup := &mariadbtypes.Backup{ObjectMeta: metav1.ObjectMeta{
-		Namespace: "tenant", Name: "op-bk", CreationTimestamp: metav1.NewTime(created),
-	}}
 	s3 := newRenderedMariaDBTemplate().Storage.S3
 	s3.Prefix = "tenant/db"
+	mdbBackup := operatorBackupStoringTo(t, s3, created)
 	const prefix = "tenant/db/"
 
 	t.Run("single dump inside the backup window", func(t *testing.T) {
@@ -93,7 +105,7 @@ func TestMariaDBArtifactSizeBytes(t *testing.T) {
 			{Key: dumpKey(prefix, created.Add(time.Minute), "gzip"), Size: 4242, LastModified: created.Add(time.Minute)},
 			{Key: prefix + "0-backup-target.txt", Size: 7},
 		}}
-		got := reconcilerWithLister(t, l, s3CredsSecret("tenant", "creds")).mariadbArtifactSizeBytes(context.Background(), "tenant", s3, mdbBackup, completed)
+		got := reconcilerWithLister(t, l, s3CredsSecret("tenant", "creds")).mariadbArtifactSizeBytes(context.Background(), mdbBackup, completed)
 		if got != 4242 {
 			t.Errorf("size = %d, want 4242", got)
 		}
@@ -118,7 +130,7 @@ func TestMariaDBArtifactSizeBytes(t *testing.T) {
 		}
 		l := &fakeS3Lister{objects: []s3ObjectInfo{{Key: dumpKey(prefix, created.Add(time.Minute), "gzip"), Size: 3, LastModified: created.Add(time.Minute)}}}
 		r := reconcilerWithLister(t, l, s3CredsSecret("tenant", "creds"), ca)
-		if got := r.mariadbArtifactSizeBytes(context.Background(), "tenant", tlsS3, mdbBackup, completed); got != 3 {
+		if got := r.mariadbArtifactSizeBytes(context.Background(), operatorBackupStoringTo(t, tlsS3, created), completed); got != 3 {
 			t.Errorf("size = %d, want 3", got)
 		}
 		if !l.conn.Secure || string(l.conn.CAPEM) != "PEM" {
@@ -136,7 +148,7 @@ func TestMariaDBArtifactSizeBytes(t *testing.T) {
 		}
 		l := &fakeS3Lister{objects: []s3ObjectInfo{{Key: dumpKey(prefix, created.Add(time.Minute), "gzip"), Size: 4, LastModified: created.Add(time.Minute)}}}
 		r := reconcilerWithLister(t, l, s3CredsSecret("tenant", "creds"), sts)
-		if got := r.mariadbArtifactSizeBytes(context.Background(), "tenant", stsS3, mdbBackup, completed); got != 4 {
+		if got := r.mariadbArtifactSizeBytes(context.Background(), operatorBackupStoringTo(t, stsS3, created), completed); got != 4 {
 			t.Errorf("size = %d, want 4", got)
 		}
 		if l.conn.SessionToken != "TOKEN" {
@@ -148,7 +160,7 @@ func TestMariaDBArtifactSizeBytes(t *testing.T) {
 		l := &fakeS3Lister{objects: []s3ObjectInfo{
 			{Key: dumpKey(prefix, created.Add(-30*time.Second), ""), Size: 9, LastModified: created.Add(time.Minute)},
 		}}
-		if got := reconcilerWithLister(t, l, s3CredsSecret("tenant", "creds")).mariadbArtifactSizeBytes(context.Background(), "tenant", s3, mdbBackup, completed); got != 9 {
+		if got := reconcilerWithLister(t, l, s3CredsSecret("tenant", "creds")).mariadbArtifactSizeBytes(context.Background(), mdbBackup, completed); got != 9 {
 			t.Errorf("size = %d, want 9", got)
 		}
 	})
@@ -161,7 +173,7 @@ func TestMariaDBArtifactSizeBytes(t *testing.T) {
 			{Key: dumpKey(prefix, created.Add(-4*time.Minute), "gzip"), Size: 7, LastModified: created.Add(time.Minute)},
 			{Key: dumpKey(prefix, created.Add(30*time.Second), "gzip"), Size: 666, LastModified: created.Add(-4 * time.Minute)},
 		}}
-		if got := reconcilerWithLister(t, l, s3CredsSecret("tenant", "creds")).mariadbArtifactSizeBytes(context.Background(), "tenant", s3, mdbBackup, completed); got != 0 {
+		if got := reconcilerWithLister(t, l, s3CredsSecret("tenant", "creds")).mariadbArtifactSizeBytes(context.Background(), mdbBackup, completed); got != 0 {
 			t.Errorf("size = %d, want 0: no dump is inside the window on both clocks", got)
 		}
 	})
@@ -170,7 +182,7 @@ func TestMariaDBArtifactSizeBytes(t *testing.T) {
 		l := &fakeS3Lister{objects: []s3ObjectInfo{
 			{Key: dumpKey(prefix, completed.Add(30*time.Second), "gzip"), Size: 5, LastModified: completed.Add(30 * time.Second)},
 		}}
-		if got := reconcilerWithLister(t, l, s3CredsSecret("tenant", "creds")).mariadbArtifactSizeBytes(context.Background(), "tenant", s3, mdbBackup, completed); got != 5 {
+		if got := reconcilerWithLister(t, l, s3CredsSecret("tenant", "creds")).mariadbArtifactSizeBytes(context.Background(), mdbBackup, completed); got != 5 {
 			t.Errorf("size = %d, want 5", got)
 		}
 	})
@@ -179,7 +191,7 @@ func TestMariaDBArtifactSizeBytes(t *testing.T) {
 		r := reconcilerWithLister(t, &fakeS3Lister{}, s3CredsSecret("tenant", "creds"))
 		r.newS3ObjectLister = func(s3Connection) (s3ObjectLister, error) { return blockingLister{}, nil }
 		withShortProbeTimeout(t, func() {
-			if got := r.mariadbArtifactSizeBytes(context.Background(), "tenant", s3, mdbBackup, completed); got != 0 {
+			if got := r.mariadbArtifactSizeBytes(context.Background(), mdbBackup, completed); got != 0 {
 				t.Errorf("size = %d, want 0", got)
 			}
 		})
@@ -190,7 +202,7 @@ func TestMariaDBArtifactSizeBytes(t *testing.T) {
 			{Key: dumpKey(prefix, created.Add(time.Minute), "gzip"), Size: 1, LastModified: created.Add(time.Minute)},
 			{Key: dumpKey(prefix, created.Add(2*time.Minute), "gzip"), Size: 2, LastModified: created.Add(2 * time.Minute)},
 		}}
-		if got := reconcilerWithLister(t, l, s3CredsSecret("tenant", "creds")).mariadbArtifactSizeBytes(context.Background(), "tenant", s3, mdbBackup, completed); got != 0 {
+		if got := reconcilerWithLister(t, l, s3CredsSecret("tenant", "creds")).mariadbArtifactSizeBytes(context.Background(), mdbBackup, completed); got != 0 {
 			t.Errorf("size = %d, want 0 (ambiguous)", got)
 		}
 	})
@@ -199,14 +211,14 @@ func TestMariaDBArtifactSizeBytes(t *testing.T) {
 		l := &fakeS3Lister{objects: []s3ObjectInfo{
 			{Key: dumpKey(prefix, completed.Add(time.Hour), "gzip"), Size: 1, LastModified: completed.Add(time.Hour)},
 		}}
-		if got := reconcilerWithLister(t, l, s3CredsSecret("tenant", "creds")).mariadbArtifactSizeBytes(context.Background(), "tenant", s3, mdbBackup, completed); got != 0 {
+		if got := reconcilerWithLister(t, l, s3CredsSecret("tenant", "creds")).mariadbArtifactSizeBytes(context.Background(), mdbBackup, completed); got != 0 {
 			t.Errorf("size = %d, want 0", got)
 		}
 	})
 
 	t.Run("list error leaves size unset", func(t *testing.T) {
 		l := &fakeS3Lister{err: errors.New("AccessDenied")}
-		if got := reconcilerWithLister(t, l, s3CredsSecret("tenant", "creds")).mariadbArtifactSizeBytes(context.Background(), "tenant", s3, mdbBackup, completed); got != 0 {
+		if got := reconcilerWithLister(t, l, s3CredsSecret("tenant", "creds")).mariadbArtifactSizeBytes(context.Background(), mdbBackup, completed); got != 0 {
 			t.Errorf("size = %d, want 0", got)
 		}
 	})
@@ -214,7 +226,7 @@ func TestMariaDBArtifactSizeBytes(t *testing.T) {
 	t.Run("missing credentials Secret leaves size unset", func(t *testing.T) {
 		c := newMariaDBStrategyTestClient(t)
 		r := &BackupJobReconciler{Client: c, Scheme: c.Scheme()}
-		if got := r.mariadbArtifactSizeBytes(context.Background(), "tenant", s3, mdbBackup, completed); got != 0 {
+		if got := r.mariadbArtifactSizeBytes(context.Background(), mdbBackup, completed); got != 0 {
 			t.Errorf("size = %d, want 0", got)
 		}
 	})
@@ -252,6 +264,45 @@ func TestMatchMariaDBDump(t *testing.T) {
 	}
 }
 
+// TestFindMariaDBDump pins that a dump is read with nothing but a client,
+// as a reconciler other than BackupJobReconciler has, and that an operator
+// Backup that does not store to S3 is refused without a listing.
+func TestFindMariaDBDump(t *testing.T) {
+	created := time.Date(2026, 10, 21, 10, 0, 0, 0, time.UTC)
+	completed := created.Add(3 * time.Minute)
+	s3 := newRenderedMariaDBTemplate().Storage.S3
+	s3.Prefix = "tenant/db"
+	l := &fakeS3Lister{objects: []s3ObjectInfo{
+		{Key: dumpKey("tenant/db/", created.Add(time.Minute), "gzip"), Size: 4242, LastModified: created.Add(time.Minute)},
+	}}
+	store := objectStore{
+		reader: newMariaDBStrategyTestClient(t, s3CredsSecret("tenant", "creds")),
+		newLister: func(conn s3Connection) (s3ObjectLister, error) {
+			l.conn = conn
+			return l, nil
+		},
+	}
+
+	got, err := findMariaDBDump(context.Background(), store, operatorBackupStoringTo(t, s3, created), completed)
+	if err != nil || got.Size != 4242 {
+		t.Fatalf("findMariaDBDump = %+v, %v; want the 4242-byte dump", got, err)
+	}
+	if l.conn.AccessKey != "AKID" {
+		t.Errorf("connection = %+v, want the Secret's key", l.conn)
+	}
+
+	pvc := &mariadbtypes.Backup{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "op-pvc", CreationTimestamp: metav1.NewTime(created)},
+		Spec:       mariadbtypes.BackupSpec{Storage: mariadbtypes.BackupStorage{PersistentVolumeClaim: &corev1.PersistentVolumeClaimSpec{}}},
+	}
+	if _, err := findMariaDBDump(context.Background(), store, pvc, completed); err == nil {
+		t.Error("findMariaDBDump on a PVC-backed operator Backup returned no error")
+	}
+	if l.calls != 1 {
+		t.Errorf("S3 listed %d times, want once: a PVC-backed Backup has nothing to list", l.calls)
+	}
+}
+
 // TestMariaDBArtifactSizeBytes_MinioClient drives the real minio client
 // against a stub ListObjectsV2 endpoint, so the Secret wiring, prefix and
 // response parsing are exercised together.
@@ -280,11 +331,8 @@ func TestMariaDBArtifactSizeBytes_MinioClient(t *testing.T) {
 	s3.Endpoint = strings.TrimPrefix(srv.URL, "http://")
 	s3.Prefix = "tenant/db/"
 	s3.Region = "us-east-1"
-	mdbBackup := &mariadbtypes.Backup{ObjectMeta: metav1.ObjectMeta{
-		Namespace: "tenant", Name: "op-bk", CreationTimestamp: metav1.NewTime(created),
-	}}
 
-	if got := r.mariadbArtifactSizeBytes(context.Background(), "tenant", s3, mdbBackup, created.Add(3*time.Minute)); got != 31337 {
+	if got := r.mariadbArtifactSizeBytes(context.Background(), operatorBackupStoringTo(t, s3, created), created.Add(3*time.Minute)); got != 31337 {
 		t.Fatalf("size = %d, want 31337", got)
 	}
 	if gotPath != "/bkt/" || gotPrefix != "tenant/db/" || gotDelimiter != "/" {
@@ -298,13 +346,11 @@ func TestMariaDBArtifactSizeBytes_MinioClient(t *testing.T) {
 func TestCreateMariaDBBackupArtifact_SizeBytes(t *testing.T) {
 	apps := mariadbapp.GroupName
 	completed := metav1.NewTime(time.Date(2026, 10, 21, 10, 3, 0, 0, time.UTC))
-	mdbBackup := &mariadbtypes.Backup{
-		ObjectMeta: metav1.ObjectMeta{
-			Namespace: "tenant", Name: "src-op-bk",
-			CreationTimestamp: metav1.NewTime(completed.Add(-3 * time.Minute)),
-		},
-		Status: mariadbtypes.BackupStatus{Conditions: []metav1.Condition{mariadbBackupSucceeded(completed)}},
-	}
+	rendered := newRenderedMariaDBTemplate()
+	rendered.Storage.S3.Prefix = "src/"
+	mdbBackup := operatorBackupStoringTo(t, rendered.Storage.S3, completed.Add(-3*time.Minute))
+	mdbBackup.Name = "src-op-bk"
+	mdbBackup.Status.Conditions = []metav1.Condition{mariadbBackupSucceeded(completed)}
 	resolved := &ResolvedBackupConfig{
 		StrategyRef: corev1.TypedLocalObjectReference{Kind: "MariaDB", Name: "mariadb-strategy-default"},
 		Parameters:  map[string]string{},
@@ -318,8 +364,6 @@ func TestCreateMariaDBBackupArtifact_SizeBytes(t *testing.T) {
 	r := reconcilerWithLister(t, &fakeS3Lister{objects: []s3ObjectInfo{
 		{Key: dumpKey("src/", completed.Add(-time.Minute), "gzip"), Size: 2048, LastModified: completed.Add(-time.Minute)},
 	}}, job, s3CredsSecret("tenant", "creds"))
-	rendered := newRenderedMariaDBTemplate()
-	rendered.Storage.S3.Prefix = "src/"
 
 	artefact, err := r.createMariaDBBackupArtifact(context.Background(), job, resolved, mdbBackup, rendered)
 	if err != nil {
@@ -327,6 +371,47 @@ func TestCreateMariaDBBackupArtifact_SizeBytes(t *testing.T) {
 	}
 	if artefact.Status.Artifact == nil || artefact.Status.Artifact.SizeBytes != 2048 {
 		t.Fatalf("Artifact = %#v, want SizeBytes 2048", artefact.Status.Artifact)
+	}
+}
+
+// TestCreateMariaDBBackupArtifact_StrategyEditedMidBackup pins that the
+// probe reads where the operator Backup wrote its dump, not where the
+// strategy, edited while the backup ran, now points.
+func TestCreateMariaDBBackupArtifact_StrategyEditedMidBackup(t *testing.T) {
+	apps := mariadbapp.GroupName
+	completed := metav1.NewTime(time.Date(2026, 10, 21, 10, 3, 0, 0, time.UTC))
+	original := newRenderedMariaDBTemplate().Storage.S3
+	original.Prefix = "original/"
+	mdbBackup := operatorBackupStoringTo(t, original, completed.Add(-3*time.Minute))
+	mdbBackup.Status.Conditions = []metav1.Condition{mariadbBackupSucceeded(completed)}
+	edited := newRenderedMariaDBTemplate()
+	edited.Storage.S3.Bucket = "replacement-bkt"
+	edited.Storage.S3.Endpoint = "replacement.example:9000"
+	edited.Storage.S3.Prefix = "replacement/"
+	job := &backupsv1alpha1.BackupJob{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "bj-edited"},
+		Spec: backupsv1alpha1.BackupJobSpec{
+			ApplicationRef: corev1.TypedLocalObjectReference{Kind: "MariaDB", Name: "src", APIGroup: &apps},
+		},
+	}
+	l := &fakeS3Lister{objects: []s3ObjectInfo{
+		{Key: dumpKey("original/", completed.Add(-time.Minute), "gzip"), Size: 2048, LastModified: completed.Add(-time.Minute)},
+	}}
+	r := reconcilerWithLister(t, l, job, s3CredsSecret("tenant", "creds"))
+	resolved := &ResolvedBackupConfig{
+		StrategyRef: corev1.TypedLocalObjectReference{Kind: "MariaDB", Name: "mariadb-strategy-default"},
+		Parameters:  map[string]string{},
+	}
+
+	artefact, err := r.createMariaDBBackupArtifact(context.Background(), job, resolved, mdbBackup, edited)
+	if err != nil {
+		t.Fatalf("createMariaDBBackupArtifact: %v", err)
+	}
+	if l.bucket != "bkt" || l.prefix != "original/" || l.conn.Endpoint != "s3.example:9000" {
+		t.Errorf("listed %s/%s at %s, want bkt/original/ at s3.example:9000, where the operator Backup wrote", l.bucket, l.prefix, l.conn.Endpoint)
+	}
+	if artefact.Status.Artifact == nil || artefact.Status.Artifact.SizeBytes != 2048 {
+		t.Errorf("Artifact = %#v, want SizeBytes 2048", artefact.Status.Artifact)
 	}
 }
 

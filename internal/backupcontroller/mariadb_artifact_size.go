@@ -8,7 +8,6 @@ import (
 	"strings"
 	"time"
 
-	strategyv1alpha1 "github.com/cozystack/cozystack/api/backups/strategy/v1alpha1"
 	"github.com/cozystack/cozystack/internal/backupcontroller/mariadbtypes"
 )
 
@@ -40,16 +39,10 @@ type mariadbDump struct {
 // mdbBackup. Returns 0 - leaving Artifact.SizeBytes absent - when the dump
 // cannot be found or told apart: an unknown size must not be reported as a
 // measured one.
-func (r *BackupJobReconciler) mariadbArtifactSizeBytes(
-	ctx context.Context,
-	namespace string,
-	s3 *strategyv1alpha1.MariaDBS3Template,
-	mdbBackup *mariadbtypes.Backup,
-	completedAt time.Time,
-) int64 {
+func (r *BackupJobReconciler) mariadbArtifactSizeBytes(ctx context.Context, mdbBackup *mariadbtypes.Backup, completedAt time.Time) int64 {
 	ctx, cancel := context.WithTimeout(ctx, artifactSizeProbeTimeout)
 	defer cancel()
-	dump, err := findMariaDBDump(ctx, r.objectStore(), namespace, s3, mdbBackup, completedAt)
+	dump, err := findMariaDBDump(ctx, r.objectStore(), mdbBackup, completedAt)
 	if err != nil {
 		getLogger(ctx).Info("MariaDB backup size not measured; leaving it unset", "backup", mdbBackup.Name, "error", err)
 		return 0
@@ -57,17 +50,17 @@ func (r *BackupJobReconciler) mariadbArtifactSizeBytes(
 	return dump.Size
 }
 
-// findMariaDBDump lists the bucket the operator Backup wrote to and returns
-// the one dump that belongs to it, as matchMariaDBDump decides.
-func findMariaDBDump(
-	ctx context.Context,
-	store objectStore,
-	namespace string,
-	s3 *strategyv1alpha1.MariaDBS3Template,
-	mdbBackup *mariadbtypes.Backup,
-	completedAt time.Time,
-) (mariadbDump, error) {
-	conn, err := mariadbS3Connection(ctx, store, namespace, s3)
+// findMariaDBDump lists the bucket mdbBackup wrote to and returns the one
+// dump that belongs to it, as matchMariaDBDump decides. The location and
+// credentials come from mdbBackup's own spec: the strategy it was rendered
+// from can have been edited since, and pointing at another bucket now says
+// nothing about where this dump went.
+func findMariaDBDump(ctx context.Context, store objectStore, mdbBackup *mariadbtypes.Backup, completedAt time.Time) (mariadbDump, error) {
+	s3 := mdbBackup.Spec.Storage.S3
+	if s3 == nil {
+		return mariadbDump{}, errors.New("the operator Backup does not store to S3")
+	}
+	conn, err := mariadbS3Connection(ctx, store, mdbBackup.Namespace, s3)
 	if err != nil {
 		return mariadbDump{}, fmt.Errorf("resolve S3 credentials: %w", err)
 	}
@@ -114,17 +107,17 @@ func matchMariaDBDump(objects []s3ObjectInfo, prefix string, created, completed 
 	}
 }
 
-// mariadbS3Connection resolves the Secrets and TLS settings the operator
-// Backup was rendered with, so the bucket is read with the tenant's
-// credentials rather than the controller's.
-func mariadbS3Connection(ctx context.Context, store objectStore, namespace string, s3 *strategyv1alpha1.MariaDBS3Template) (s3Connection, error) {
+// mariadbS3Connection resolves the Secrets and TLS settings of the operator
+// Backup's storage, so the bucket is read with the tenant's credentials
+// rather than the controller's.
+func mariadbS3Connection(ctx context.Context, store objectStore, namespace string, s3 *mariadbtypes.S3Storage) (s3Connection, error) {
 	conn := s3Connection{
 		Endpoint: s3.Endpoint,
 		Region:   s3.Region,
 		Secure:   s3.TLS != nil && s3.TLS.Enabled,
 	}
 	var err error
-	if conn.AccessKey, err = store.secretValue(ctx, namespace, s3.AccessKeyIDSecretKeyRef.Name, s3.AccessKeyIDSecretKeyRef.Key); err != nil {
+	if conn.AccessKey, err = store.secretValue(ctx, namespace, s3.AccessKeyIdSecretKeyRef.Name, s3.AccessKeyIdSecretKeyRef.Key); err != nil {
 		return conn, err
 	}
 	if conn.SecretKey, err = store.secretValue(ctx, namespace, s3.SecretAccessKeySecretKeyRef.Name, s3.SecretAccessKeySecretKeyRef.Key); err != nil {
