@@ -18,6 +18,7 @@ package observabilityproxy
 
 import (
 	"bufio"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -294,6 +295,56 @@ func TestServerOversizedBody(t *testing.T) {
 		_ = resp.Body.Close()
 		if resp.StatusCode != http.StatusRequestEntityTooLarge {
 			t.Errorf("%s body over the cap answered %d, want 413", ct, resp.StatusCode)
+		}
+	}
+}
+
+// TestServerEarlyRefusalWithUnreadBody refuses requests before the body is
+// read: a bad token, a full concurrency slot (the maintainer's case), and
+// a full tail slot. net/http drains up to 256 KiB of an unread body before
+// it sends the headers, so the answer must not wait on a body that never
+// comes, even under a long request timeout.
+func TestServerEarlyRefusalWithUnreadBody(t *testing.T) {
+	for _, timeout := range []time.Duration{200 * time.Millisecond, time.Minute} {
+		for _, tc := range []struct {
+			name, raw string
+			hold      string
+			want      int
+		}{
+			{"bad token", "POST " + logsRoot + "query HTTP/1.1\r\nHost: proxy\r\nAuthorization: Bearer bad\r\nContent-Type: application/x-www-form-urlencoded\r\nContent-Length: 1000\r\n\r\nquery=", "", http.StatusUnauthorized},
+			{"concurrency slot taken", "POST " + logsRoot + "query HTTP/1.1\r\nHost: proxy\r\nAuthorization: Bearer good\r\nContent-Type: application/x-www-form-urlencoded\r\nContent-Length: 1000\r\n\r\nquery=", "query", http.StatusTooManyRequests},
+			{"tail slot taken", "GET " + logsRoot + "tail?query=* HTTP/1.1\r\nHost: proxy\r\nAuthorization: Bearer good\r\nContent-Length: 1000\r\n\r\n", "tail", http.StatusTooManyRequests},
+		} {
+			// A held query ends at the request timeout by design, so the
+			// slot is only reliably taken under the long one.
+			if tc.hold == "query" && timeout < time.Second {
+				continue
+			}
+			t.Run(fmt.Sprintf("%s/%s", timeout, tc.name), func(t *testing.T) {
+				lines := make(chan string, 1)
+				done := make(chan struct{})
+				h := newHarness(t, Config{
+					RequestTimeout:  timeout,
+					TailIdleTimeout: time.Minute,
+					Limiter:         LimiterConfig{MaxConcurrentPerUser: 1, MaxTails: 1},
+				}, tailUpstream(lines, done))
+				t.Cleanup(func() { close(done) })
+				pipe := servePipe(t, h.server)
+				if tc.hold != "" {
+					pipe.send(t, "GET "+logsRoot+tc.hold+"?query=* HTTP/1.1\r\nHost: proxy\r\nAuthorization: Bearer good\r\n\r\n")
+					eventually(t, time.Second, func() bool {
+						h.server.limits.mu.Lock()
+						defer h.server.limits.mu.Unlock()
+						return h.server.limits.active["alice"]+h.server.limits.total == 1
+					}, "the first request never took its slot")
+				}
+				start := time.Now()
+				conn := pipe.send(t, tc.raw)
+				resp := readResponse(t, conn)
+				if resp.StatusCode != tc.want || time.Since(start) > time.Second {
+					t.Fatalf("answered %d after %s, want %d within a second", resp.StatusCode, time.Since(start), tc.want)
+				}
+			})
 		}
 	}
 }

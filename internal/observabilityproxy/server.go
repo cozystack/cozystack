@@ -110,6 +110,8 @@ func NewServer(cfg Config, auth *Authorizer, stores StoreLookup, reg prometheus.
 type statusRecorder struct {
 	http.ResponseWriter
 	code int
+	// bodyRead is set once readForm has read the whole body.
+	bodyRead bool
 }
 
 func (r *statusRecorder) WriteHeader(code int) {
@@ -130,11 +132,23 @@ func (r *statusRecorder) Unwrap() http.ResponseWriter { return r.ResponseWriter 
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	rec := &statusRecorder{ResponseWriter: w}
+	// The listener has no ReadTimeout, which would cut tails, so the body
+	// is bounded from here; readForm lifts the deadline once it has read
+	// the body. A refusal sent before that leaves the deadline in place.
+	if s.cfg.RequestTimeout > 0 {
+		_ = http.NewResponseController(w).SetReadDeadline(time.Now().Add(s.cfg.RequestTimeout))
+	}
 	route, herr := ParseRoute(r.URL.EscapedPath())
 	if herr == nil {
 		herr = s.serve(rec, r, route)
 	}
 	if herr != nil && herr != errAborted {
+		// net/http drains up to 256 KiB of an unread body before it sends
+		// the headers; closing the connection instead answers a refusal at
+		// once rather than after a body that may never come.
+		if r.ContentLength != 0 && !rec.bodyRead {
+			rec.Header().Set("Connection", "close")
+		}
 		writeError(rec, herr)
 	}
 	s.requests.WithLabelValues(route.Kind.String(), strconv.Itoa(rec.code)).Inc()
@@ -301,6 +315,9 @@ func (s *Server) readForm(w http.ResponseWriter, r *http.Request) *HTTPError {
 		return errorf(http.StatusRequestEntityTooLarge, "request body larger than %d bytes", tooLarge.Limit)
 	case err == nil:
 		_ = rc.SetReadDeadline(time.Time{})
+		if rec, ok := w.(*statusRecorder); ok {
+			rec.bodyRead = true
+		}
 		return nil
 	case errors.Is(err, os.ErrDeadlineExceeded):
 		return errorf(http.StatusRequestTimeout, "request body not received within %s", s.cfg.RequestTimeout)
