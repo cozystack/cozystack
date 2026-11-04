@@ -135,6 +135,12 @@ func TestBuildLogsParamsRejects(t *testing.T) {
 		{"exponent duration", "query", url.Values{"start": {"3e2"}}, http.StatusBadRequest},
 		{"trailing dot", "query", url.Values{"start": {"300."}}, http.StatusBadRequest},
 		{"infinite time", "query", url.Values{"end": {"Inf"}}, http.StatusBadRequest},
+		// vlselect keeps times as int64 nanoseconds (time.UnixNano), which
+		// overflows outside 1678..2262; before 1970 is no log time either.
+		{"time before 1970", "query", url.Values{"start": {"0001-01-01T00:00:00Z"}, "end": {"0001-01-02T00:00:00Z"}}, http.StatusBadRequest},
+		{"time past int64 nanoseconds", "query", url.Values{"start": {"9999-01-01T00:00:00Z"}, "end": {"9999-01-02T00:00:00Z"}}, http.StatusBadRequest},
+		{"tail since before 1970", "tail", url.Values{"since": {"1969-12-31T23:59:59Z"}}, http.StatusBadRequest},
+		{"unix seconds past int64 nanoseconds", "query", url.Values{"start": {"9999999990"}, "end": {"9999999999"}}, http.StatusBadRequest},
 		{"NaN time", "query", url.Values{"start": {"NaN"}}, http.StatusBadRequest},
 		{"NaN step", "hits", url.Values{"step": {"NaN"}}, http.StatusBadRequest},
 		{"NaN start_offset", "tail", url.Values{"start_offset": {"NaN"}}, http.StatusBadRequest},
