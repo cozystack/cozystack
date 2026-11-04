@@ -450,9 +450,6 @@ func TestQueryLookahead(t *testing.T) {
 		{`x offset 1h - 30m`, 0},
 		{`x offset -1h + 30m`, time.Hour},
 		{`x offset -1h30m`, 90 * time.Minute},
-		// A minus not followed by a duration is an operator.
-		{`x offset 1h-1`, 0},
-		{`x offset 5m-y`, 0},
 	}
 	for _, tt := range tests {
 		t.Run(tt.query, func(t *testing.T) {
@@ -477,6 +474,12 @@ func TestQueryLookahead(t *testing.T) {
 		`x offset - 1h-30m`,
 		`x offset 1h-2h`,
 		`x offset 1h-30m`,
+		// metricsql continues a duration with -1.h or -.5h too, so any minus
+		// right after the duration is refused rather than told apart.
+		`x offset 5m-1.h`,
+		`x offset 5m-.5h`,
+		`x offset 1h-1`,
+		`x offset 5m-y`,
 		`rate(x[5m] offset 1h-30m)`,
 		// vmselect evaluates rollup_candlestick one step ahead
 		// (evalRollupFuncWithoutAt), whatever the offset.
@@ -498,6 +501,7 @@ func TestQueryLookahead(t *testing.T) {
 // values back onto earlier points, so a series that starts after the
 // evaluation time can reach the answer.
 func TestQueryLookaheadSubquery(t *testing.T) {
+
 	for _, q := range []string{`max_over_time(range_last(x)[1h:1h])`, `max_over_time(keep_next_value(x)[1h:1h])`} {
 		got, ok := queryLookahead(q, time.Minute)
 		if !ok || got < 2*time.Hour {
