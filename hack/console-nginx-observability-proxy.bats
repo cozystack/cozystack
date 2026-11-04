@@ -4,7 +4,7 @@
 # nginx config baked into the console image, which no chart template and no
 # helm-unittest case can see, so it is pinned here.
 #
-# Three properties are checked. The location regex must take the four path
+# Four properties are checked. The location regex must take the four path
 # shapes the proxy serves and leave every ordinary Kubernetes API path to the
 # /apis and /api prefix locations; nginx runs the regex locations whenever the
 # longest prefix match is a plain prefix, so the prefix locations must not
@@ -13,7 +13,10 @@
 # read timeout. And the upstream must be a variable resolved per request,
 # because nginx resolves a literal upstream host once at startup and refuses
 # to start when it does not resolve, which is the case on every cluster that
-# does not run the proxy.
+# does not run the proxy. Finally, when nginx cannot reach the proxy it
+# answers with the Kubernetes Status the console reads as not installed,
+# while the proxy's own 502 passes through; that check runs the extracted
+# locations in a real nginx and is skipped where none is installed.
 #
 # The regex is evaluated with perl, whose syntax nginx's PCRE accepts for the
 # constructs used here.
@@ -222,11 +225,15 @@ assert s["kind"] == "Status" and s["apiVersion"] == "v1" and s["status"] == "Fai
 assert s["reason"] == "NotFound" and s["code"] == 404, s
 assert s["message"] == "the observability proxy is not available on this cluster", s
 ' || { echo "FAIL: the not-installed body is not the expected Status: $body" >&2; false; }
-    kill "$(cat "$BATS_TEST_TMPDIR/nginx.pid")"
+    # The next nginx gets fresh ports, so the old master need not have
+    # released its sockets; it is still stopped first to keep one running.
+    pid=$(cat "$BATS_TEST_TMPDIR/nginx.pid")
+    kill "$pid"
+    for _ in $(seq 1 50); do kill -0 "$pid" 2>/dev/null || break; sleep 0.1; done
     rm -f "$BATS_TEST_TMPDIR/nginx.pid"
-    sleep 0.2
 
     # The proxy answers 502 itself: the console must see that answer.
+    standin=$(free_port)
     port=$(start_console_nginx "$standin" "$standin")
     out=$(curl --silent --show-error --include --max-time 10 "http://127.0.0.1:$port$path")
     printf '%s\n' "$out" | head -n 1 | grep -q ' 502' \
