@@ -128,6 +128,19 @@ tests:
             name: BACKUP_CREDENTIALS_COSI_SECRET_NAME
             value: bucket-cozy-backups-system
 
+  # A systemSecretName that is not <COSI Secret>-credentials is not rendered by
+  # the bucket chart from a COSI Secret, so there is nothing to compare it to.
+  - it: "systemSecretName without the -credentials suffix: no COSI Secret to compare against"
+    template: templates/deployment.yaml
+    set:
+      backupStorage.systemSecretName: bucket-cozy-backups-system
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          any: true
+          content:
+            name: BACKUP_CREDENTIALS_COSI_SECRET_NAME
+
   - it: "velero.bslEnabled=false: the BSL is not rendered, so the gate must not look for it"
     template: templates/deployment.yaml
     set:

@@ -170,9 +170,9 @@ backupStorage:
   # release. The COSI Secret itself keeps the endpoint it was granted with, so
   # after a publishing.host change that endpoint follows only once the
   # BucketAccess is re-granted. Both are throttled, independently, and a no-op
-  # in the steady state. A suspended release is skipped rather than re-stamped forever. The
-  # gate does NOT create the objects itself: their bodies are values-driven
-  # and Helm stays their single owner.
+  # in the steady state. A suspended release is skipped rather than
+  # re-stamped forever. The gate does NOT create the objects itself: their
+  # bodies are values-driven and Helm stays their single owner.
   #
   # Turn this off only if you manage the default Strategy CRs out of band and
   # accept that a missed install-time render is never repaired. Watch
