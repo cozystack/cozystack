@@ -10,7 +10,7 @@ export function RangePicker<K extends string>({
   onChange: (value: K) => void
 }) {
   return (
-    <div className="inline-flex rounded-md border border-slate-200 bg-white p-0.5">
+    <div role="group" aria-label="Time range" className="inline-flex h-7 items-center rounded-lg border border-slate-300 bg-white p-0.5 shadow-xs">
       {options.map((key) => (
         <button
           key={key}
@@ -18,7 +18,7 @@ export function RangePicker<K extends string>({
           aria-pressed={value === key}
           onClick={() => onChange(key)}
           className={cn(
-            "rounded px-2.5 py-1 text-xs",
+            "h-full rounded-md px-2.5 text-xs outline-none focus-visible:ring-2 focus-visible:ring-slate-400",
             value === key ? "bg-slate-900 text-white" : "text-slate-600 hover:bg-slate-100",
           )}
         >
