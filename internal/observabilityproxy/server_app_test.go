@@ -222,6 +222,9 @@ func TestServerApplicationMetricsBranches(t *testing.T) {
 		// A failed lookup would leave the application's own series out of
 		// a successful answer, so it fails the request instead.
 		{name: "pod lookup fails", pods: []string{"p"}, pvcs: []string{"v"}, podStatus: http.StatusServiceUnavailable, path: "api/v1/query?query=up", wantCode: http.StatusBadGateway},
+		// vmselect refuses a lookup over its own series limits with 422;
+		// the client can act on that by narrowing the window.
+		{name: "pod lookup over the store's limits", pods: []string{"p"}, podStatus: http.StatusUnprocessableEntity, path: "api/v1/query?query=up", wantCode: http.StatusUnprocessableEntity},
 		{name: "pods over the cap", pods: []string{"p", "q"}, cfg: Config{Metrics: MetricsConfig{App: AppScopeLimits{Lookback: time.Hour, MaxPods: 1, MaxPVCs: 1}}},
 			path: "api/v1/query?query=up", wantCode: http.StatusUnprocessableEntity},
 		{name: "over the cap with an empty name", pods: []string{"", "p"}, cfg: Config{Metrics: MetricsConfig{App: AppScopeLimits{Lookback: time.Hour, MaxPods: 1, MaxPVCs: 1}}},
