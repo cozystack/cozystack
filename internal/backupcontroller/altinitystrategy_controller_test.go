@@ -3,7 +3,9 @@ package backupcontroller
 
 import (
 	"context"
+	"errors"
 	"testing"
+	"time"
 
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -17,6 +19,7 @@ import (
 	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	clientfake "sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	strategyv1alpha1 "github.com/cozystack/cozystack/api/backups/strategy/v1alpha1"
 	backupsv1alpha1 "github.com/cozystack/cozystack/api/backups/v1alpha1"
@@ -708,5 +711,188 @@ func TestBackupParameters_RoundTrip(t *testing.T) {
 	}
 	if _, ok := got["job.batch/name"]; ok {
 		t.Errorf("non-parameter key leaked through: %v", got)
+	}
+}
+
+func projectedCredentials(namespace string, updatedAt time.Time) *corev1.Secret {
+	return &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace:   namespace,
+			Name:        "cozy-backups-creds",
+			Annotations: map[string]string{credentialsUpdatedAtAnnotation: updatedAt.UTC().Format(time.RFC3339)},
+		},
+	}
+}
+
+// The ClickHouse sidecar reads the projected credentials from a mounted
+// file that kubelet rewrites only some time after the Secret changes, so a
+// strategy Job started right after a projection would reach a sidecar with
+// no or stale credentials.
+func TestReconcileAltinity_WaitsForProjectedCredentialsToReachTheSidecar(t *testing.T) {
+	cases := []struct {
+		name      string
+		secret    *corev1.Secret
+		jobExists bool
+		wantWait  bool
+	}{
+		{name: "credentials changed just now", secret: projectedCredentials("tenant-test", time.Now()), wantWait: true},
+		{name: "credentials changed long ago", secret: projectedCredentials("tenant-test", time.Now().Add(-altinityCredentialsPropagation-time.Second))},
+		{name: "no projected credentials", secret: nil},
+		{name: "the Job already runs", secret: projectedCredentials("tenant-test", time.Now()), jobExists: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			now := metav1.Now()
+			backupJob := &backupsv1alpha1.BackupJob{
+				ObjectMeta: metav1.ObjectMeta{Name: "test-bj", Namespace: "tenant-test"},
+				Spec: backupsv1alpha1.BackupJobSpec{
+					ApplicationRef:  newAltinityClickHouseRef("ch-test"),
+					BackupClassName: "clickhouse-backup",
+				},
+				Status: backupsv1alpha1.BackupJobStatus{StartedAt: &now},
+			}
+			objs := []client.Object{backupJob, newAltinityStrategy("clickhouse-strategy")}
+			if tc.secret != nil {
+				objs = append(objs, tc.secret)
+			}
+			if tc.jobExists {
+				objs = append(objs, &batchv1.Job{ObjectMeta: metav1.ObjectMeta{Namespace: "tenant-test", Name: jobNameForBackupJob(backupJob)}})
+			}
+			r, _, _ := newAltinityTestEnv(t, newAltinityClickHouseApp("ch-test", "tenant-test"), clientfake.NewClientBuilder().WithObjects(objs...))
+			r.CredentialsConfig.TargetSecretName = "cozy-backups-creds"
+			resolved := &ResolvedBackupConfig{
+				StrategyRef: corev1.TypedLocalObjectReference{
+					APIGroup: new(strategyv1alpha1.GroupVersion.Group),
+					Kind:     strategyv1alpha1.AltinityStrategyKind,
+					Name:     "clickhouse-strategy",
+				},
+			}
+			ctx := context.Background()
+			j := &backupsv1alpha1.BackupJob{}
+			if err := r.Get(ctx, client.ObjectKeyFromObject(backupJob), j); err != nil {
+				t.Fatalf("get BackupJob: %v", err)
+			}
+			res, err := r.reconcileAltinity(ctx, j, resolved)
+			if err != nil {
+				t.Fatalf("reconcileAltinity: %v", err)
+			}
+			jobs := &batchv1.JobList{}
+			if err := r.List(ctx, jobs, client.InNamespace("tenant-test")); err != nil {
+				t.Fatalf("list Jobs: %v", err)
+			}
+			ready := meta.FindStatusCondition(j.Status.Conditions, "Ready")
+			if tc.wantWait {
+				if len(jobs.Items) != 0 {
+					t.Errorf("a strategy Job was created %d time(s) before the credentials could reach the sidecar", len(jobs.Items))
+				}
+				if res.RequeueAfter <= 0 || res.RequeueAfter > altinityCredentialsPropagation {
+					t.Errorf("RequeueAfter = %v, want within (0, %v]", res.RequeueAfter, altinityCredentialsPropagation)
+				}
+				if ready == nil || ready.Reason != "WaitingForCredentials" {
+					t.Errorf("Ready = %+v, want WaitingForCredentials", ready)
+				}
+				return
+			}
+			if len(jobs.Items) != 1 {
+				t.Errorf("got %d strategy Jobs, want 1", len(jobs.Items))
+			}
+			if ready != nil && ready.Reason == "WaitingForCredentials" {
+				t.Errorf("Ready = %+v, the job should not wait", ready)
+			}
+		})
+	}
+}
+
+func TestReconcileAltinityRestore_WaitsForProjectedCredentialsToReachTheSidecar(t *testing.T) {
+	now := metav1.Now()
+	backup := &backupsv1alpha1.Backup{
+		ObjectMeta: metav1.ObjectMeta{Name: "ch-backup", Namespace: "tenant-test"},
+		Spec: backupsv1alpha1.BackupSpec{
+			ApplicationRef: newAltinityClickHouseRef("ch-test"),
+			StrategyRef: corev1.TypedLocalObjectReference{
+				APIGroup: new(strategyv1alpha1.GroupVersion.Group),
+				Kind:     strategyv1alpha1.AltinityStrategyKind,
+				Name:     "clickhouse-strategy",
+			},
+			TakenAt: now,
+		},
+	}
+	restoreJob := &backupsv1alpha1.RestoreJob{
+		ObjectMeta: metav1.ObjectMeta{Name: "test-rj", Namespace: "tenant-test"},
+		Spec:       backupsv1alpha1.RestoreJobSpec{BackupRef: corev1.LocalObjectReference{Name: backup.Name}},
+		Status:     backupsv1alpha1.RestoreJobStatus{StartedAt: &now, Phase: backupsv1alpha1.RestoreJobPhaseRunning},
+	}
+	_, rr, _ := newAltinityTestEnv(t, newAltinityClickHouseApp("ch-test", "tenant-test"),
+		clientfake.NewClientBuilder().WithObjects(newAltinityStrategy("clickhouse-strategy"), backup, restoreJob,
+			projectedCredentials("tenant-test", time.Now())))
+	rr.CredentialsConfig.TargetSecretName = "cozy-backups-creds"
+	ctx := context.Background()
+	rj := &backupsv1alpha1.RestoreJob{}
+	if err := rr.Get(ctx, client.ObjectKeyFromObject(restoreJob), rj); err != nil {
+		t.Fatalf("get RestoreJob: %v", err)
+	}
+	res, err := rr.reconcileAltinityRestore(ctx, rj, backup)
+	if err != nil {
+		t.Fatalf("reconcileAltinityRestore: %v", err)
+	}
+	jobs := &batchv1.JobList{}
+	if err := rr.List(ctx, jobs, client.InNamespace("tenant-test")); err != nil {
+		t.Fatalf("list Jobs: %v", err)
+	}
+	if len(jobs.Items) != 0 {
+		t.Errorf("a restore Job was created before the credentials could reach the sidecar")
+	}
+	if res.RequeueAfter <= 0 {
+		t.Errorf("RequeueAfter = %v, want a wait", res.RequeueAfter)
+	}
+	if ready := meta.FindStatusCondition(rj.Status.Conditions, "Ready"); ready == nil || ready.Reason != "WaitingForCredentials" {
+		t.Errorf("Ready = %+v, want WaitingForCredentials", ready)
+	}
+}
+
+// Without credentials projection configured there is no Secret to wait
+// for; client-go refuses a Get with an empty name, so it must not be asked.
+func TestReconcileAltinity_NoProjectionConfiguredDoesNotWait(t *testing.T) {
+	now := metav1.Now()
+	backupJob := &backupsv1alpha1.BackupJob{
+		ObjectMeta: metav1.ObjectMeta{Name: "test-bj", Namespace: "tenant-test"},
+		Spec: backupsv1alpha1.BackupJobSpec{
+			ApplicationRef:  newAltinityClickHouseRef("ch-test"),
+			BackupClassName: "clickhouse-backup",
+		},
+		Status: backupsv1alpha1.BackupJobStatus{StartedAt: &now},
+	}
+	builder := clientfake.NewClientBuilder().
+		WithObjects(backupJob, newAltinityStrategy("clickhouse-strategy")).
+		WithInterceptorFuncs(interceptor.Funcs{
+			Get: func(ctx context.Context, cl client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+				if key.Name == "" {
+					return errors.New("resource name may not be empty")
+				}
+				return cl.Get(ctx, key, obj, opts...)
+			},
+		})
+	r, _, _ := newAltinityTestEnv(t, newAltinityClickHouseApp("ch-test", "tenant-test"), builder)
+	resolved := &ResolvedBackupConfig{
+		StrategyRef: corev1.TypedLocalObjectReference{
+			APIGroup: new(strategyv1alpha1.GroupVersion.Group),
+			Kind:     strategyv1alpha1.AltinityStrategyKind,
+			Name:     "clickhouse-strategy",
+		},
+	}
+	ctx := context.Background()
+	j := &backupsv1alpha1.BackupJob{}
+	if err := r.Get(ctx, client.ObjectKeyFromObject(backupJob), j); err != nil {
+		t.Fatalf("get BackupJob: %v", err)
+	}
+	if _, err := r.reconcileAltinity(ctx, j, resolved); err != nil {
+		t.Fatalf("reconcileAltinity: %v", err)
+	}
+	jobs := &batchv1.JobList{}
+	if err := r.List(ctx, jobs, client.InNamespace("tenant-test")); err != nil {
+		t.Fatalf("list Jobs: %v", err)
+	}
+	if len(jobs.Items) != 1 {
+		t.Fatalf("got %d strategy Jobs, want 1", len(jobs.Items))
 	}
 }
