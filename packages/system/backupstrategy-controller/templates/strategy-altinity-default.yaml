@@ -18,6 +18,8 @@ apiVersion: strategy.backups.cozystack.io/v1alpha1
 kind: Altinity
 metadata:
   name: cozy-default-altinity
+  annotations:
+    backups.cozystack.io/endpoint: {{ include "backupstrategy-controller.endpoint" . | quote }}
 spec:
   template:
     spec:

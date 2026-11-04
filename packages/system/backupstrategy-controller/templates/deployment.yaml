@@ -87,6 +87,13 @@ spec:
           value: {{ printf "bucket-%s-system" .Values.backupStorage.bucketName | quote }}
         - name: BACKUP_CREDENTIALS_HELMRELEASE_NAMESPACE
           value: {{ .Values.backupStorage.namespace | quote }}
+        # The COSI Secret that release renders the credentials Secret from
+        # (packages/system/bucket/templates/user-credentials.yaml appends
+        # "-credentials" to its name). The COSI sidecar writes it once per
+        # BucketAccess, so the gate compares the two endpoints and forces the
+        # release when the credentials Secret lags behind.
+        - name: BACKUP_CREDENTIALS_COSI_SECRET_NAME
+          value: {{ trimSuffix "-credentials" .Values.backupStorage.systemSecretName | quote }}
         {{- end }}
         {{- if .Values.velero.bslEnabled }}
         - name: BACKUP_DEFAULT_OBJECTS_VELERO_NAMESPACE

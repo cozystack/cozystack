@@ -2,10 +2,12 @@ package backupcontroller
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/go-logr/logr"
@@ -91,6 +93,11 @@ const (
 	// same lookup-gated template as the Strategy CRs, so it belongs to the
 	// same existence check.
 	defaultBackupStorageLocationName = "cozy-default"
+
+	// endpointAnnotation carries the S3 endpoint the chart rendered into the
+	// object. The endpoint itself sits at a different path in every kind,
+	// and in some only as a bare host, so the gate compares this instead.
+	endpointAnnotation = "backups.cozystack.io/endpoint"
 )
 
 var backupStorageLocationGVR = schema.GroupVersionResource{
@@ -157,6 +164,14 @@ type DefaultObjectsGate struct {
 	// then admin-managed and no release renders it, so there is nothing
 	// to force.
 	CredentialsHelmRelease types.NamespacedName
+	// CredentialsCOSISecretName is the Secret the COSI sidecar writes for the
+	// platform bucket's BucketAccess, in Config.SourceNamespace, from which
+	// CredentialsHelmRelease renders the credentials Secret. The sidecar
+	// writes it once per BucketAccess, so after a publishing.host change a
+	// re-granted BucketAccess carries the new endpoint while the credentials
+	// Secret keeps the old one; the gate compares the two. Empty disables
+	// the comparison.
+	CredentialsCOSISecretName string
 	// VeleroNamespace is where the cozy-default BackupStorageLocation
 	// lives. Empty skips the BSL check (velero.bslEnabled=false).
 	VeleroNamespace string
@@ -177,6 +192,11 @@ type DefaultObjectsGate struct {
 	// MinForceInterval for no reason.
 	lastForce            time.Time
 	lastCredentialsForce time.Time
+	// renderForced records that a forced render of HelmRelease went through.
+	// That render stamps endpointAnnotation on every object the chart
+	// renders, so from then on an object without it (one rendered by a chart
+	// that predates the annotation) is not counted as stale again.
+	renderForced bool
 }
 
 // errHelmReleaseSuspended reports that the target release has
@@ -285,10 +305,10 @@ func (g *DefaultObjectsGate) checkAndLog(ctx context.Context, logger logr.Logger
 		// The release named here is whichever one renders what is missing:
 		// the credentials Secret comes from the bucket's <bucket>-system
 		// release, everything else from this chart's own.
-		logger.Info("forced a Helm upgrade to create missing default backup objects",
+		logger.Info("forced a Helm upgrade to create missing or stale default backup objects",
 			"helmRelease", g.forcedReleaseFor(missing).String(), "missing", missing)
 	case len(missing) > 0:
-		logger.Info("default backup objects still missing, no force issued on this tick",
+		logger.Info("default backup objects still missing or stale, no force issued on this tick",
 			"helmRelease", g.forcedReleaseFor(missing).String(), "missing", missing,
 			"minForceInterval", g.MinForceInterval.String())
 	default:
@@ -302,7 +322,7 @@ func (g *DefaultObjectsGate) checkAndLog(ctx context.Context, logger logr.Logger
 // resolving the bucket name is a precondition for checking those at all.
 func (g *DefaultObjectsGate) forcedReleaseFor(missing []string) types.NamespacedName {
 	credsKey := fmt.Sprintf("Secret/%s", g.Config.SourceSecretName)
-	if len(missing) == 1 && missing[0] == credsKey && g.CredentialsHelmRelease.Name != "" {
+	if len(missing) == 1 && (missing[0] == credsKey || strings.HasPrefix(missing[0], credsKey+" ")) && g.CredentialsHelmRelease.Name != "" {
 		return g.CredentialsHelmRelease
 	}
 	return g.HelmRelease
@@ -345,23 +365,95 @@ func (g *DefaultObjectsGate) Check(ctx context.Context) ([]string, bool, error) 
 		return g.reconcileCredentials(ctx)
 	}
 
+	// The objects below are rendered from this Secret, so while it is stale
+	// they would only be re-rendered with the same stale endpoint.
+	stale, err := g.staleCredentials(ctx, src)
+	if err != nil {
+		defaultObjectsCheckErrors.WithLabelValues(g.BackupClassName).Inc()
+		return nil, false, err
+	}
+	if stale != "" {
+		return g.force(ctx, g.CredentialsHelmRelease, &g.lastCredentialsForce, []string{stale})
+	}
+
 	backupClass := &backupsv1alpha1.BackupClass{}
 	if err := g.Client.Get(ctx, client.ObjectKey{Name: g.BackupClassName}, backupClass); err != nil {
 		defaultObjectsCheckErrors.WithLabelValues(g.BackupClassName).Inc()
 		return nil, false, fmt.Errorf("get BackupClass %s: %w", g.BackupClassName, err)
 	}
 
-	missing, err := g.missingObjects(ctx, backupClass)
+	// With provisionBucket=false (no bucket release) the chart renders
+	// backupStorage.endpoint rather than the Secret's, so the two may
+	// legitimately differ and there is nothing to compare.
+	want := ""
+	if g.CredentialsHelmRelease.Name != "" {
+		want = renderedEndpointFor(src.Data["endpoint"])
+	}
+	state, err := g.inspectObjects(ctx, backupClass, want)
 	if err != nil {
 		defaultObjectsCheckErrors.WithLabelValues(g.BackupClassName).Inc()
 		return nil, false, err
 	}
-	defaultObjectsMissing.WithLabelValues(g.BackupClassName).Set(float64(len(missing)))
-	if len(missing) == 0 {
+	defaultObjectsMissing.WithLabelValues(g.BackupClassName).Set(float64(len(state.missing)))
+	needed := append(state.missing, state.stale...)
+	if len(needed) == 0 {
 		return nil, false, nil
 	}
+	sort.Strings(needed)
 
-	return g.force(ctx, g.HelmRelease, &g.lastForce, missing)
+	needed, forced, err := g.force(ctx, g.HelmRelease, &g.lastForce, needed)
+	if forced {
+		g.renderForced = true
+	}
+	return needed, forced, err
+}
+
+// staleCredentials reports the credentials Secret, formatted for logs, when
+// its endpoint differs from the one in the COSI Secret it is rendered from,
+// comparing against what packages/system/bucket/templates/user-credentials.yaml
+// writes for it. The COSI Secret being absent (the BucketAccess is being
+// re-granted) leaves nothing to compare against and is not staleness.
+func (g *DefaultObjectsGate) staleCredentials(ctx context.Context, src *corev1.Secret) (string, error) {
+	if g.CredentialsCOSISecretName == "" || g.CredentialsHelmRelease.Name == "" || g.CredentialsHelmRelease.Namespace == "" {
+		return "", nil
+	}
+	cosi := &corev1.Secret{}
+	key := types.NamespacedName{Namespace: g.Config.SourceNamespace, Name: g.CredentialsCOSISecretName}
+	if err := g.Client.Get(ctx, key, cosi); err != nil {
+		if apierrors.IsNotFound(err) {
+			return "", nil
+		}
+		return "", fmt.Errorf("get COSI Secret %s: %w", key, err)
+	}
+	var info struct {
+		Spec struct {
+			SecretS3 struct {
+				Endpoint string `json:"endpoint"`
+			} `json:"secretS3"`
+		} `json:"spec"`
+	}
+	if err := json.Unmarshal(cosi.Data["BucketInfo"], &info); err != nil {
+		return "", fmt.Errorf("parse BucketInfo of COSI Secret %s: %w", key, err)
+	}
+	want := strings.TrimPrefix(strings.TrimPrefix(info.Spec.SecretS3.Endpoint, "https://"), "http://")
+	have := string(src.Data["endpoint"])
+	if have == want {
+		return "", nil
+	}
+	return fmt.Sprintf("Secret/%s (endpoint %q, COSI Secret has %q)", g.Config.SourceSecretName, have, want), nil
+}
+
+// renderedEndpointFor mirrors the "backupstrategy-controller.endpoint" helper
+// for a provisioned bucket: the credentials Secret's endpoint, trimmed, with
+// any scheme replaced by https://. It is the value the chart stamps as
+// endpointAnnotation. An empty endpoint makes the helper fall back to
+// backupStorage.endpoint, which the gate cannot see, so it returns "".
+func renderedEndpointFor(raw []byte) string {
+	host := strings.TrimSpace(string(raw))
+	if host == "" {
+		return ""
+	}
+	return "https://" + strings.TrimPrefix(strings.TrimPrefix(host, "https://"), "http://")
 }
 
 // reconcileCredentials handles the one object the gate cannot check the same
@@ -431,16 +523,42 @@ func (g *DefaultObjectsGate) force(ctx context.Context, target types.NamespacedN
 	return missing, true, nil
 }
 
-// missingObjects returns a sorted, de-duplicated list of the
+// defaultObjectsState is what inspectObjects found: the objects that do not
+// exist, and the existing ones rendered with an endpoint other than the one
+// the chart would render now.
+type defaultObjectsState struct {
+	missing []string
+	stale   []string
+}
+
+// staleEndpoint reports an existing object rendered with another endpoint
+// than want, formatted for logs. An empty want disables the comparison.
+func (g *DefaultObjectsGate) staleEndpoint(state *defaultObjectsState, key string, obj *unstructured.Unstructured, want string) {
+	if want == "" {
+		return
+	}
+	have, ok := obj.GetAnnotations()[endpointAnnotation]
+	switch {
+	case !ok:
+		if !g.renderForced {
+			state.stale = append(state.stale, key+" (no endpoint annotation)")
+		}
+	case have != want:
+		state.stale = append(state.stale, fmt.Sprintf("%s (endpoint %q, want %q)", key, have, want))
+	}
+}
+
+// inspectObjects returns a sorted, de-duplicated list of the
 // "<kind>/<name>" objects the BackupClass references that do not exist,
-// plus the Velero BSL when a Velero namespace is configured.
+// plus the Velero BSL when a Velero namespace is configured, and the existing
+// ones whose endpointAnnotation differs from want.
 //
 // An unmappable group/kind (the CRD is not installed) is NOT reported as
 // missing: no Helm re-render can create an object whose CRD is absent, and
 // counting it would keep the gate forcing upgrades forever.
-func (g *DefaultObjectsGate) missingObjects(ctx context.Context, backupClass *backupsv1alpha1.BackupClass) ([]string, error) {
+func (g *DefaultObjectsGate) inspectObjects(ctx context.Context, backupClass *backupsv1alpha1.BackupClass, want string) (defaultObjectsState, error) {
 	seen := map[string]struct{}{}
-	var missing []string
+	var state defaultObjectsState
 
 	for _, strategy := range backupClass.Spec.Strategies {
 		name := strategy.StrategyRef.Name
@@ -472,17 +590,18 @@ func (g *DefaultObjectsGate) missingObjects(ctx context.Context, backupClass *ba
 			if meta.IsNoMatchError(err) {
 				continue
 			}
-			return nil, fmt.Errorf("map %s/%s: %w", group, kind, err)
+			return defaultObjectsState{}, fmt.Errorf("map %s/%s: %w", group, kind, err)
 		}
 		// Strategy CRs are cluster-scoped; Namespace("") is correct for
 		// both scopes on the dynamic client.
-		_, err = g.Resource(mapping.Resource).Get(ctx, name, metav1.GetOptions{})
+		obj, err := g.Resource(mapping.Resource).Get(ctx, name, metav1.GetOptions{})
 		switch {
 		case err == nil:
+			g.staleEndpoint(&state, key, obj, want)
 		case apierrors.IsNotFound(err):
-			missing = append(missing, key)
+			state.missing = append(state.missing, key)
 		default:
-			return nil, fmt.Errorf("get %s %s: %w", kind, name, err)
+			return defaultObjectsState{}, fmt.Errorf("get %s %s: %w", kind, name, err)
 		}
 	}
 
@@ -496,24 +615,26 @@ func (g *DefaultObjectsGate) missingObjects(ctx context.Context, backupClass *ba
 		mapping, err := g.RESTMapping(schema.GroupKind{Group: backupStorageLocationGVR.Group, Kind: "BackupStorageLocation"})
 		switch {
 		case err == nil:
-			_, getErr := g.Resource(mapping.Resource).Namespace(g.VeleroNamespace).Get(ctx, defaultBackupStorageLocationName, metav1.GetOptions{})
+			key := fmt.Sprintf("BackupStorageLocation/%s", defaultBackupStorageLocationName)
+			obj, getErr := g.Resource(mapping.Resource).Namespace(g.VeleroNamespace).Get(ctx, defaultBackupStorageLocationName, metav1.GetOptions{})
 			switch {
 			case getErr == nil:
+				g.staleEndpoint(&state, key, obj, want)
 			case apierrors.IsNotFound(getErr):
-				missing = append(missing, fmt.Sprintf("BackupStorageLocation/%s", defaultBackupStorageLocationName))
+				state.missing = append(state.missing, key)
 			default:
-				return nil, fmt.Errorf("get BackupStorageLocation %s: %w", defaultBackupStorageLocationName, getErr)
+				return defaultObjectsState{}, fmt.Errorf("get BackupStorageLocation %s: %w", defaultBackupStorageLocationName, getErr)
 			}
 		case meta.IsNoMatchError(err):
 			// Velero API not served (e.g. Velero uninstalled after bootstrap):
 			// no Helm re-render can create the BSL, so it is not "missing".
 		default:
-			return nil, fmt.Errorf("map BackupStorageLocation: %w", err)
+			return defaultObjectsState{}, fmt.Errorf("map BackupStorageLocation: %w", err)
 		}
 	}
 
-	sort.Strings(missing)
-	return missing, nil
+	sort.Strings(state.missing)
+	return state, nil
 }
 
 // forceHelmRelease stamps BOTH reconcile.fluxcd.io/forceAt and

@@ -11,6 +11,8 @@ suite: DefaultObjectsGate wiring — the release the gate forces, and its RBAC
 templates:
   - templates/deployment.yaml
   - templates/rbac.yaml
+  - templates/strategy-cnpg-default.yaml
+  - templates/velero-bsl.yaml
 
 release:
   name: backupstrategy-controller
@@ -61,6 +63,16 @@ tests:
           content:
             name: BACKUP_CREDENTIALS_HELMRELEASE_NAMESPACE
             value: tenant-root
+      # The COSI Secret the bucket release renders the credentials Secret
+      # from is the BucketAccess credentialsSecretName, <bucket release>-system,
+      # which is also BACKUP_STORAGE_SECRET_NAME minus "-credentials"
+      # (packages/system/bucket/templates/user-credentials.yaml). The gate
+      # compares the two endpoints.
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: BACKUP_CREDENTIALS_COSI_SECRET_NAME
+            value: bucket-cozy-backups-system
       # BACKUP_STORAGE_SECRET_NAME is exactly the release name above with
       # "-credentials" appended — that is what makes forcing this release the
       # thing that creates that Secret.
@@ -86,6 +98,11 @@ tests:
           content:
             name: BACKUP_STORAGE_SECRET_NAME
             value: bucket-platform-backups-system-credentials
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: BACKUP_CREDENTIALS_COSI_SECRET_NAME
+            value: bucket-platform-backups-system
 
   # External S3: the Secret is admin-managed and no release renders it, so
   # there is nothing to force. Handing the gate stale coordinates would make
@@ -105,6 +122,11 @@ tests:
           content:
             name: BACKUP_CREDENTIALS_HELMRELEASE_NAMESPACE
             value: tenant-root
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: BACKUP_CREDENTIALS_COSI_SECRET_NAME
+            value: bucket-cozy-backups-system
 
   - it: "velero.bslEnabled=false: the BSL is not rendered, so the gate must not look for it"
     template: templates/deployment.yaml
@@ -154,3 +176,41 @@ tests:
             apiGroups: ["velero.io"]
             resources: ["backupstoragelocations"]
             verbs: ["get"]
+
+  # The gate compares backups.cozystack.io/endpoint with the endpoint it
+  # derives from the credentials Secret (renderedEndpointFor in
+  # internal/backupcontroller/default_objects_gate.go, whose test uses the
+  # same input). Any divergence would make every object look stale and force
+  # this release every MinForceInterval.
+  - it: "objects carry the endpoint derived from the credentials Secret as their endpoint annotation"
+    set:
+      backupStorage.bucketNameOverride: test-bucket
+    kubernetesProvider:
+      scheme:
+        "v1/Secret":
+          gvr:
+            version: v1
+            resource: secrets
+          namespaced: true
+      objects:
+        - apiVersion: v1
+          kind: Secret
+          metadata:
+            name: bucket-cozy-backups-system-credentials
+            namespace: tenant-root
+          data:
+            # "http://s3.example.com:8333\n"
+            endpoint: aHR0cDovL3MzLmV4YW1wbGUuY29tOjgzMzMK
+    asserts:
+      - equal:
+          path: metadata.annotations["backups.cozystack.io/endpoint"]
+          value: https://s3.example.com:8333
+        template: templates/strategy-cnpg-default.yaml
+      - equal:
+          path: spec.template.barmanObjectStore.endpointURL
+          value: https://s3.example.com:8333
+        template: templates/strategy-cnpg-default.yaml
+      - equal:
+          path: metadata.annotations["backups.cozystack.io/endpoint"]
+          value: https://s3.example.com:8333
+        template: templates/velero-bsl.yaml
