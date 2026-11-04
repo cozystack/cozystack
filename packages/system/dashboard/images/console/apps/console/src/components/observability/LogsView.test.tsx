@@ -135,6 +135,8 @@ describe("LogsView", () => {
 
     expect(await screen.findByText(/Stopped/)).toBeInTheDocument()
     expect(screen.getByText("pipe not allowed in tail")).toBeInTheDocument()
+    const frame = screen.getByRole("region", { name: "Log lines" })
+    expect(within(frame).getByText("Follow stopped before any line arrived.")).toBeInTheDocument()
   })
 
   it("renders a cluster without the proxy as not available", async () => {
@@ -165,6 +167,22 @@ describe("LogsView", () => {
 
     expect(await screen.findByText("cannot parse query")).toBeInTheDocument()
     expect(screen.getByLabelText("LogsQL filter")).toBeInTheDocument()
+    const frame = screen.getByRole("region", { name: "Log lines" })
+    expect(within(frame).getByText("No log lines to show.")).toBeInTheDocument()
+  })
+
+  it("offers All once when some lines carry no pod name", async () => {
+    const { client } = clientWith((endpoint, params) =>
+      endpoint.endsWith("stream_field_values") && params.get("field") === "kubernetes_pod_name"
+        ? values("", "db-0")
+        : defaultHandler(endpoint, params),
+    )
+    renderWithK8sProvider(<LogsView scope={app} />, { client })
+
+    await userEvent.click(screen.getByRole("combobox", { name: "Pod" }))
+
+    await screen.findByRole("option", { name: "db-0" })
+    expect(screen.getAllByRole("option").map((o) => o.textContent)).toEqual(["All", "db-0"])
   })
 
   it("names the source pod and container of each line", async () => {

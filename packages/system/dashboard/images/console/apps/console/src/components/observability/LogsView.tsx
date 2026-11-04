@@ -36,7 +36,7 @@ function windowFor(range: LogRangeKey) {
 const ALL = ""
 
 function Picker({ label, value, options, onChange }: { label: string; value: string; options: string[]; onChange: (v: string) => void }) {
-  const items = [{ value: ALL, label: "All" }, ...options.map((o) => ({ value: o, label: o }))]
+  const items = [{ value: ALL, label: "All" }, ...options.filter((o) => o !== ALL).map((o) => ({ value: o, label: o }))]
   return (
     <SelectRoot items={items} value={value} onValueChange={(v) => onChange(v ?? ALL)}>
       <div className="flex min-w-0 items-center gap-1.5">
