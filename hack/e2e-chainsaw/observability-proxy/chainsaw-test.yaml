@@ -227,8 +227,10 @@ spec:
           forward cozy-dashboard cozy-dashboard-console 18080:8080
           token=$(k -n tenant-test-logsa create token logs-viewer --duration=10m)
 
+          # The tail is not subscribed yet when the next ingest runs, so it
+          # replays the last minute to include the early line.
           timeout 150 curl --silent --no-buffer --header "Authorization: Bearer $token" \
-            "$CONSOLE$LOGS_A/tail?query=*" > "$tail_out" &
+            "$CONSOLE$LOGS_A/tail?query=*&start_offset=1m" > "$tail_out" &
           tail_pid=$!
           ingest tenant-test-logsa e2e-tail-early
           ingest tenant-test-logsb e2e-tail-b
