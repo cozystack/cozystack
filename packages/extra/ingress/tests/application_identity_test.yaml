@@ -10,13 +10,20 @@ release:
 # in whatever namespace they live (honorLabels keeps their namespace), so
 # the controller's identity would misattribute them, and with honorLabels
 # true an exporter-supplied identity would win over the class. Both
-# endpoints drop the identity instead.
+# endpoints drop the identity instead: from the target, because vmagent
+# adds up and scrape_* with the target labels after metric relabeling, and
+# from the scraped samples, because an exporter's copy is not renamed.
 tests:
   - it: drops the identity on every endpoint
     asserts:
       - lengthEqual:
           path: spec.podMetricsEndpoints
           count: 1
+      - contains:
+          path: spec.podMetricsEndpoints[0].relabelConfigs
+          content:
+            action: labeldrop
+            regex: apps_cozystack_io_application_(group|kind|name)
       - equal:
           path: spec.podMetricsEndpoints[0].metricRelabelConfigs
           value:

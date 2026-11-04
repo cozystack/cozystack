@@ -12,7 +12,8 @@ spec:
   # The series describe the Ingress objects served, in any namespace, not
   # this controller, so the application identity the vmagent scrape class
   # stamps from the controller pod would misattribute them; and with
-  # honorLabels an exporter-supplied identity would win over the class.
+  # honorLabels an exporter-supplied identity would win over the class. The
+  # target-stage drop also covers up and scrape_*, which skip metric relabeling.
   - port: metrics
     honorLabels: true
     interval: 30s
@@ -23,6 +24,8 @@ spec:
       targetLabel: node
     - targetLabel: tier
       replacement: cluster
+    - action: labeldrop
+      regex: apps_cozystack_io_application_(group|kind|name)
     metricRelabelConfigs:
     - action: labeldrop
       regex: apps_cozystack_io_application_(group|kind|name)
@@ -53,6 +56,8 @@ spec:
       targetLabel: controller
     - targetLabel: tier
       replacement: cluster
+    - action: labeldrop
+      regex: apps_cozystack_io_application_(group|kind|name)
     metricRelabelConfigs:
     - action: labeldrop
       regex: apps_cozystack_io_application_(group|kind|name)
