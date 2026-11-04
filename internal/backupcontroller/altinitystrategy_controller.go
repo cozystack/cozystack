@@ -102,9 +102,17 @@ func credentialsPropagationWait(ctx context.Context, c client.Client, secretName
 	if raw == "" {
 		return 0, nil
 	}
+	// The projector rewrites the stamp only when the content changes, so a
+	// stamp this hold cannot use stays as it is: holding on it would block
+	// every Job in the namespace for good.
 	updatedAt, err := time.Parse(time.RFC3339, raw)
 	if err != nil {
-		return 0, fmt.Errorf("parse %s on Secret %s/%s: %w", credentialsUpdatedAtAnnotation, namespace, secretName, err)
+		getLogger(ctx).Error(err, "ignoring unreadable credentials stamp", "secret", namespace+"/"+secretName, "annotation", credentialsUpdatedAtAnnotation)
+		return 0, nil
+	}
+	if updatedAt.After(time.Now().Add(altinityCredentialsPropagation)) {
+		getLogger(ctx).Error(nil, "ignoring a credentials stamp further ahead than clock skew explains", "secret", namespace+"/"+secretName, "annotation", credentialsUpdatedAtAnnotation, "value", raw)
+		return 0, nil
 	}
 	return time.Until(updatedAt.Add(altinityCredentialsPropagation)), nil
 }

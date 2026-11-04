@@ -896,3 +896,44 @@ func TestReconcileAltinity_NoProjectionConfiguredDoesNotWait(t *testing.T) {
 		t.Fatalf("got %d strategy Jobs, want 1", len(jobs.Items))
 	}
 }
+
+func projectedCredentialsStamped(namespace, stamp string) *corev1.Secret {
+	return &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace:   namespace,
+			Name:        "cozy-backups-creds",
+			Annotations: map[string]string{credentialsUpdatedAtAnnotation: stamp},
+		},
+	}
+}
+
+// The stamp is only ever rewritten when the projected content changes, so a
+// value the hold cannot use must not hold the job: an unreadable one would
+// fail every reconcile, and one far in the future would wait again on each.
+// A stamp a little ahead, as a skewed clock writes it, still waits, but only
+// until that stamp plus the propagation time.
+func TestCredentialsPropagationWait_UnusableStampsDoNotHoldTheJob(t *testing.T) {
+	cases := []struct {
+		name    string
+		stamp   string
+		wantMin time.Duration
+		wantMax time.Duration
+	}{
+		{name: "unreadable", stamp: "garbage"},
+		{name: "far in the future", stamp: "3000-01-01T00:00:00Z"},
+		{name: "slightly ahead", stamp: time.Now().Add(30 * time.Second).UTC().Format(time.RFC3339),
+			wantMin: altinityCredentialsPropagation, wantMax: altinityCredentialsPropagation + 31*time.Second},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			c := clientfake.NewClientBuilder().WithObjects(projectedCredentialsStamped("tenant-test", tc.stamp)).Build()
+			wait, err := credentialsPropagationWait(context.Background(), c, "cozy-backups-creds", "tenant-test", "job")
+			if err != nil {
+				t.Fatalf("credentialsPropagationWait: %v", err)
+			}
+			if wait < tc.wantMin || wait > tc.wantMax {
+				t.Errorf("wait = %v, want within [%v, %v]", wait, tc.wantMin, tc.wantMax)
+			}
+		})
+	}
+}
