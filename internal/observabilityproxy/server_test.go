@@ -64,7 +64,7 @@ func newHarness(t *testing.T, cfg Config, handler http.HandlerFunc) *harness {
 // and plural-to-kind mapping; nil kinds knows only postgreses.
 func newPolicyHarness(t *testing.T, cfg Config, handler http.HandlerFunc, allow func(string, *authorizationv1.ResourceAttributes) bool, kinds KindLookup) *harness {
 	h := &harness{t: t}
-	h.kube = newFakeKube(map[string]string{"good": "alice", "bob-token": "bob"}, allow)
+	h.kube = newFakeKube(map[string]string{"good": "alice", "bob-token": "bob", "carol-token": "carol"}, allow)
 	if kinds == nil {
 		kinds = newTestKinds(t, true, appDefinition("postgres", "Postgres", "postgreses"))
 	}

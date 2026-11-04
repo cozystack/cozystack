@@ -442,13 +442,15 @@ func (s *Server) authorize(r *http.Request, route Route) (string, *HTTPError) {
 		slog.Error("token review failed", "error", err)
 		return "", errorf(http.StatusServiceUnavailable, "authentication unavailable")
 	}
-	allowed, err := s.auth.Authorize(r.Context(), user, route.ResourceAttributes())
-	if err != nil {
-		slog.Error("subject access review failed", "error", err)
-		return "", errorf(http.StatusServiceUnavailable, "authorization unavailable")
-	}
-	if !allowed {
-		return "", errorf(http.StatusForbidden, "forbidden")
+	for _, attrs := range route.Reviews() {
+		allowed, err := s.auth.Authorize(r.Context(), user, attrs)
+		if err != nil {
+			slog.Error("subject access review failed", "error", err)
+			return "", errorf(http.StatusServiceUnavailable, "authorization unavailable")
+		}
+		if !allowed {
+			return "", errorf(http.StatusForbidden, "forbidden")
+		}
 	}
 	return user.Username, nil
 }
