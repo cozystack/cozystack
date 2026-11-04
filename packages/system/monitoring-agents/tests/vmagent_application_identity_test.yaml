@@ -7,8 +7,8 @@ release:
 
 # The tenant-resource-metrics proxy scopes a query to one application by
 # apps_cozystack_io_application_{group,kind,name}. The labels are only a
-# boundary if the scraped pod cannot choose them: the target always carries
-# all three (a placeholder when the pod has no lineage), so with
+# boundary if the scraped pod cannot choose them: the class sets all three
+# on every target it covers (a placeholder when the pod has no lineage), so with
 # honorLabels false an exporter's own copy is renamed to exported_* and
 # dropped. The same rules live in the tenant vmagent of the monitoring
 # package and are pinned there by the same assertions.
