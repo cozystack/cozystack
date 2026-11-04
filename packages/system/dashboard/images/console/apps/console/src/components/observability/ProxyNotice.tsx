@@ -5,6 +5,10 @@ interface ProxyNoticeProps {
   error: unknown
 }
 
+// Remedies the observability proxy itself appends; vmselect's 422 text carries
+// advice for operators (raise -search.max* flags), so it still gets ours.
+const PROXY_REMEDIES = ["; use a shorter range", "; raise step"]
+
 function describe(what: ProxyNoticeProps["what"], error: unknown): { quiet: boolean; text: string } {
   const lower = what.toLowerCase()
   if (!(error instanceof ProxyError)) {
@@ -20,8 +24,10 @@ function describe(what: ProxyNoticeProps["what"], error: unknown): { quiet: bool
     case "forbidden":
       return { quiet: false, text: `You do not have permission to read ${lower} here.` }
     case "limit":
-      // The proxy puts its own remedy after "; " (e.g. "use a shorter range", "raise step").
-      return { quiet: false, text: error.message.includes("; ") ? `${error.message}.` : `${error.message}. Choose a shorter range.` }
+      return {
+        quiet: false,
+        text: PROXY_REMEDIES.some((r) => error.message.endsWith(r)) ? `${error.message}.` : `${error.message}. Choose a shorter range.`,
+      }
     case "rate-limited":
       return { quiet: false, text: "Too many requests. Try again in a moment." }
     case "timeout":
