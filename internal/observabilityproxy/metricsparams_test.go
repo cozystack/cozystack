@@ -17,7 +17,6 @@ limitations under the License.
 package observabilityproxy
 
 import (
-	"math"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -198,7 +197,7 @@ func TestBuildMetricsParamsCanonicalForms(t *testing.T) {
 		"query": {"up"}, "start": {"2026-11-04T11:00:00.25Z"}, "end": {unix(testNow)}, "step": {"1m30s"},
 	})
 	want := url.Values{
-		"query": {"up"}, "start": {"1793790000.250"}, "end": {"1793793600.000"}, "step": {"90"},
+		"query": {"up"}, "start": {"2026-11-04T11:00:00.250Z"}, "end": {"2026-11-04T12:00:00.000Z"}, "step": {"90"},
 		"timeout": {"30"}, "extra_filters[]": {wantMetricsScope},
 	}
 	if req.params.Encode() != want.Encode() {
@@ -225,7 +224,7 @@ func TestBuildMetricsParamsCanonicalForms(t *testing.T) {
 	}
 
 	req = buildMetrics(t, "api/v1/labels", url.Values{})
-	if req.params.Get("end") != "1793793600.000" || req.params.Get("start") != "1793793300.000" {
+	if req.params.Get("end") != "2026-11-04T12:00:00.000Z" || req.params.Get("start") != "2026-11-04T11:55:00.000Z" {
 		t.Errorf("labels window = %s..%s, want the last 5m", req.params.Get("start"), req.params.Get("end"))
 	}
 	if q := buildMetrics(t, "api/v1/query", url.Values{"query": {"up"}}); q.params.Has("time") || !q.start.Equal(testNow.Add(-15*time.Minute-30*time.Second)) {
@@ -422,15 +421,7 @@ func TestBuildMetricsParamsPointsAsVmselectCounts(t *testing.T) {
 	}
 	req := buildMetrics(t, "api/v1/query_range", rng(11000))
 	stepMs := vmselectMillis(t, req.params.Get("step"))
-	// Times, unlike durations, are rounded (timeutil.ParseTimeMsec).
-	timeMs := func(v string) int64 {
-		secs, err := strconv.ParseFloat(v, 64)
-		if err != nil {
-			t.Fatal(err)
-		}
-		return int64(math.Round(secs * 1e3))
-	}
-	startMs, endMs := timeMs(req.params.Get("start")), timeMs(req.params.Get("end"))
+	startMs, endMs := vmselectTimeMillis(t, req.params.Get("start")), vmselectTimeMillis(t, req.params.Get("end"))
 	if points := (endMs-startMs)/stepMs + 1; stepMs != 1001 || points != 11000 {
 		t.Fatalf("vmselect reads step %dms and %d points, want 1001ms and 11000", stepMs, points)
 	}
