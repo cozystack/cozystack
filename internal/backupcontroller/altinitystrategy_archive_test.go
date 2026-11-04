@@ -57,7 +57,7 @@ func altinityResolved(strategyName string) *ResolvedBackupConfig {
 func runningAltinityBackupJob() *backupsv1alpha1.BackupJob {
 	now := metav1.Now()
 	return &backupsv1alpha1.BackupJob{
-		ObjectMeta: metav1.ObjectMeta{Name: "test-bj", Namespace: "tenant-test"},
+		ObjectMeta: metav1.ObjectMeta{Name: "test-bj", Namespace: "tenant-test", UID: "0f1e2d3c-aaaa-bbbb-cccc-000000000001"},
 		Spec: backupsv1alpha1.BackupJobSpec{
 			ApplicationRef:  newAltinityClickHouseRef("ch-test"),
 			BackupClassName: "clickhouse-backup",
@@ -110,7 +110,7 @@ func TestReconcileAltinity_RendersDriverMintedArchiveName(t *testing.T) {
 		t.Fatalf("get backup Job: %v", err)
 	}
 	args := job.Spec.Template.Spec.Containers[0].Args
-	if want := "--archive=clickhouse-ch-test-test-bj"; len(args) < 2 || args[1] != want {
+	if want := "--archive=clickhouse-ch-test-test-bj-0f1e2d3c"; len(args) < 2 || args[1] != want {
 		t.Errorf("rendered args = %q, want %q at [1]", args, want)
 	}
 }
@@ -118,8 +118,8 @@ func TestReconcileAltinity_RendersDriverMintedArchiveName(t *testing.T) {
 func TestReconcileAltinity_RecordsArchiveNameAndSystemBucketFlow(t *testing.T) {
 	app := withUseSystemBucket(newAltinityClickHouseApp("ch-test", "tenant-test"), true)
 	got := completeAltinityBackup(t, app, newAltinityArchiveStrategy("clickhouse-strategy"))
-	if v := got.Spec.DriverMetadata[altinityArchiveNameKey]; v != "clickhouse-ch-test-test-bj" {
-		t.Errorf("driverMetadata[%s] = %q, want clickhouse-ch-test-test-bj", altinityArchiveNameKey, v)
+	if v := got.Spec.DriverMetadata[altinityArchiveNameKey]; v != "clickhouse-ch-test-test-bj-0f1e2d3c" {
+		t.Errorf("driverMetadata[%s] = %q, want clickhouse-ch-test-test-bj-0f1e2d3c", altinityArchiveNameKey, v)
 	}
 	if v := got.Spec.DriverMetadata[altinityUseSystemBucketKey]; v != "true" {
 		t.Errorf("driverMetadata[%s] = %q, want true", altinityUseSystemBucketKey, v)
@@ -162,6 +162,62 @@ func TestRenderAltinityTemplate_ArchiveNameEmptyOnRestore(t *testing.T) {
 	}
 	if got := out.Spec.Containers[0].Args[1]; got != "--archive=" {
 		t.Errorf("restore render of .ArchiveName = %q, want empty", got)
+	}
+}
+
+// A BackupJob recreated under the name of a deleted one must not reuse its
+// archive: clickhouse-backup resumes an upload into an existing name, and the
+// old Backup's cleanup would delete the new archive.
+func TestAltinityArchiveName_DiffersAcrossBackupJobsOfTheSameName(t *testing.T) {
+	a := runningAltinityBackupJob()
+	b := runningAltinityBackupJob()
+	b.UID = "9a8b7c6d-aaaa-bbbb-cccc-000000000002"
+	if na, nb := altinityArchiveName(a), altinityArchiveName(b); na == nb {
+		t.Errorf("same archive name %q for two BackupJobs with different UIDs", na)
+	}
+}
+
+func TestReconcileAltinity_FailsOnMalformedUseSystemBucket(t *testing.T) {
+	app := newAltinityClickHouseApp("ch-test", "tenant-test")
+	if err := unstructured.SetNestedField(app.Object, "yes", "spec", "backup", "useSystemBucket"); err != nil {
+		t.Fatal(err)
+	}
+	bj := runningAltinityBackupJob()
+	strategy := newAltinityArchiveStrategy("clickhouse-strategy")
+	r, _, _ := newAltinityTestEnv(t, app,
+		clientfake.NewClientBuilder().WithObjects(bj, strategy, completedAltinityK8sJob(bj)))
+	ctx := context.Background()
+	if _, err := r.reconcileAltinity(ctx, bj, altinityResolved(strategy.Name)); err != nil {
+		t.Fatalf("reconcileAltinity: %v", err)
+	}
+	got := &backupsv1alpha1.BackupJob{}
+	if err := r.Get(ctx, client.ObjectKeyFromObject(bj), got); err != nil {
+		t.Fatalf("get BackupJob: %v", err)
+	}
+	if got.Status.Phase != backupsv1alpha1.BackupJobPhaseFailed {
+		t.Errorf("phase = %q, want Failed when the bucket flow cannot be read", got.Status.Phase)
+	}
+	if err := r.Get(ctx, client.ObjectKeyFromObject(bj), &backupsv1alpha1.Backup{}); !apierrors.IsNotFound(err) {
+		t.Errorf("expected no Backup without a recorded bucket flow, got %v", err)
+	}
+}
+
+// The expression the shipped template uses, rendered through the driver.
+func TestRenderAltinityTemplate_ShippedArchiveNameExpression(t *testing.T) {
+	tmpl := newAltinityStrategy("s").Spec.Template
+	tmpl.Spec.Containers[0].Args = []string{`target="{{ .ArchiveName | default "" }}"`}
+	backup := &backupsv1alpha1.Backup{Spec: backupsv1alpha1.BackupSpec{ApplicationRef: newAltinityClickHouseRef("ch")}}
+	for _, tc := range []struct{ mode, archive, want string }{
+		{altinityModeBackup, "clickhouse-ch-bj-0f1e2d3c", `target="clickhouse-ch-bj-0f1e2d3c"`},
+		{altinityModeRestore, "", `target=""`},
+	} {
+		out, err := renderAltinityTemplate(tmpl, map[string]any{}, "ch", "ns", tc.mode, nil, backup, tc.archive)
+		if err != nil {
+			t.Fatalf("render %s: %v", tc.mode, err)
+		}
+		if got := out.Spec.Containers[0].Args[0]; got != tc.want {
+			t.Errorf("%s: rendered %q, want %q", tc.mode, got, tc.want)
+		}
 	}
 }
 

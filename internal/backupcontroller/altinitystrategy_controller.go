@@ -98,9 +98,15 @@ func jobNameForRestoreJob(rj *backupsv1alpha1.RestoreJob) string {
 
 // altinityArchiveName is the remote archive name for a BackupJob. The
 // "clickhouse-<app>-" prefix is what the restore branch of the shipped
-// strategy filters list/remote on; the BackupJob name makes it unique.
-func altinityArchiveName(appName, backupJobName string) string {
-	return "clickhouse-" + appName + "-" + backupJobName
+// strategy filters list/remote on. The UID prefix keeps a BackupJob recreated
+// under an earlier name off that one's archive: clickhouse-backup resumes an
+// upload into an existing name, and the earlier Backup's cleanup deletes it.
+func altinityArchiveName(j *backupsv1alpha1.BackupJob) string {
+	uid := string(j.UID)
+	if len(uid) > 8 {
+		uid = uid[:8]
+	}
+	return "clickhouse-" + j.Spec.ApplicationRef.Name + "-" + j.Name + "-" + uid
 }
 
 // altinityTemplateUsesArchiveName reports whether a strategy template reads
@@ -250,7 +256,7 @@ func (r *BackupJobReconciler) reconcileAltinity(ctx context.Context, j *backupsv
 		altinityModeBackup,
 		resolved.Parameters,
 		nil,
-		altinityArchiveName(j.Spec.ApplicationRef.Name, j.Name),
+		altinityArchiveName(j),
 	)
 	if err != nil {
 		return r.markBackupJobFailed(ctx, j, fmt.Sprintf("failed to template Altinity strategy: %v", err))
@@ -519,7 +525,7 @@ func altinityArchiveMetadata(tmpl corev1.PodTemplateSpec, app map[string]any, j 
 		return nil, err
 	}
 	if uses {
-		md[altinityArchiveNameKey] = altinityArchiveName(j.Spec.ApplicationRef.Name, j.Name)
+		md[altinityArchiveNameKey] = altinityArchiveName(j)
 	}
 	return md, nil
 }
