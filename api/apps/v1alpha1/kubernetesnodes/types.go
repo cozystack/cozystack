@@ -77,7 +77,7 @@ type ConfigSpec struct {
 	// Kubernetes major.minor version the pool joins. Must not be ahead of the parent cluster's minor (workers may not lead the apiserver); it may lag behind during a rolling upgrade -- bump the parent Kubernetes CR first, then each pool. The render fails when it is ahead. Its pairing with the Talos release the pool resolves (`talos.version`, or the `osImage` override) is checked against the chart's Talos<->Kubernetes support matrix: for a Talos minor the matrix lists, a Kubernetes minor outside that minor's list is refused; a Talos minor the matrix does not list is not checked.
 	// +kubebuilder:default:="v1.35"
 	Version Version `json:"version"`
-	// Worker OS image source for this pool. Default (omitted): import over HTTP from the `talos.*` Image Factory. Set `osImage.builtin` to clone a golden from the opt-in worker image catalog instead. Editing this on an existing pool re-images that pool.
+	// Worker OS image source for this pool. Default (omitted): import over HTTP from the `talos.*` Image Factory. Set `osImage.builtin` to clone a golden from the opt-in worker image catalog instead. Editing this on an existing pool re-images that pool. The object is atomic: its two sources exclude each other, so a value that sets one of them replaces the whole object and is never completed from a default.
 	// +kubebuilder:default:={}
 	OsImage WorkerImage `json:"osImage,omitempty"`
 	// Talos worker image configuration for this pool.
