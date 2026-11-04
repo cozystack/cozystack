@@ -907,6 +907,100 @@ func projectedCredentialsStamped(namespace, stamp string) *corev1.Secret {
 	}
 }
 
+func waitingForCredentials() []metav1.Condition {
+	return []metav1.Condition{credentialsWaitCondition("cozy-backups-creds", time.Minute)}
+}
+
+// Once the hold is over and the Job runs, a Ready condition still saying the
+// job is waiting for credentials describes a state the job has left.
+func TestReconcileAltinity_ClearsTheCredentialsWaitOnceTheJobRuns(t *testing.T) {
+	now := metav1.Now()
+	backupJob := &backupsv1alpha1.BackupJob{
+		ObjectMeta: metav1.ObjectMeta{Name: "test-bj", Namespace: "tenant-test"},
+		Spec: backupsv1alpha1.BackupJobSpec{
+			ApplicationRef:  newAltinityClickHouseRef("ch-test"),
+			BackupClassName: "clickhouse-backup",
+		},
+		Status: backupsv1alpha1.BackupJobStatus{StartedAt: &now, Conditions: waitingForCredentials()},
+	}
+	r, _, _ := newAltinityTestEnv(t, newAltinityClickHouseApp("ch-test", "tenant-test"),
+		clientfake.NewClientBuilder().WithObjects(backupJob, newAltinityStrategy("clickhouse-strategy"),
+			projectedCredentials("tenant-test", time.Now().Add(-altinityCredentialsPropagation-time.Second))).
+			WithStatusSubresource(&backupsv1alpha1.BackupJob{}))
+	r.CredentialsConfig.TargetSecretName = "cozy-backups-creds"
+	resolved := &ResolvedBackupConfig{
+		StrategyRef: corev1.TypedLocalObjectReference{
+			APIGroup: new(strategyv1alpha1.GroupVersion.Group),
+			Kind:     strategyv1alpha1.AltinityStrategyKind,
+			Name:     "clickhouse-strategy",
+		},
+	}
+	ctx := context.Background()
+	j := &backupsv1alpha1.BackupJob{}
+	if err := r.Get(ctx, client.ObjectKeyFromObject(backupJob), j); err != nil {
+		t.Fatalf("get BackupJob: %v", err)
+	}
+	if _, err := r.reconcileAltinity(ctx, j, resolved); err != nil {
+		t.Fatalf("reconcileAltinity: %v", err)
+	}
+	jobs := &batchv1.JobList{}
+	if err := r.List(ctx, jobs, client.InNamespace("tenant-test")); err != nil {
+		t.Fatalf("list Jobs: %v", err)
+	}
+	if len(jobs.Items) != 1 {
+		t.Fatalf("got %d strategy Jobs, want 1", len(jobs.Items))
+	}
+	stored := &backupsv1alpha1.BackupJob{}
+	if err := r.Get(ctx, client.ObjectKeyFromObject(backupJob), stored); err != nil {
+		t.Fatalf("get BackupJob: %v", err)
+	}
+	if ready := meta.FindStatusCondition(stored.Status.Conditions, "Ready"); ready != nil && ready.Reason == "WaitingForCredentials" {
+		t.Errorf("stored Ready = %+v while the Job runs", ready)
+	}
+}
+
+func TestReconcileAltinityRestore_ClearsTheCredentialsWaitOnceTheJobRuns(t *testing.T) {
+	now := metav1.Now()
+	backup := &backupsv1alpha1.Backup{
+		ObjectMeta: metav1.ObjectMeta{Name: "ch-backup", Namespace: "tenant-test"},
+		Spec: backupsv1alpha1.BackupSpec{
+			ApplicationRef: newAltinityClickHouseRef("ch-test"),
+			StrategyRef: corev1.TypedLocalObjectReference{
+				APIGroup: new(strategyv1alpha1.GroupVersion.Group),
+				Kind:     strategyv1alpha1.AltinityStrategyKind,
+				Name:     "clickhouse-strategy",
+			},
+			TakenAt: now,
+		},
+	}
+	restoreJob := &backupsv1alpha1.RestoreJob{
+		ObjectMeta: metav1.ObjectMeta{Name: "test-rj", Namespace: "tenant-test"},
+		Spec:       backupsv1alpha1.RestoreJobSpec{BackupRef: corev1.LocalObjectReference{Name: backup.Name}},
+		Status: backupsv1alpha1.RestoreJobStatus{StartedAt: &now, Phase: backupsv1alpha1.RestoreJobPhaseRunning,
+			Conditions: waitingForCredentials()},
+	}
+	_, rr, _ := newAltinityTestEnv(t, newAltinityClickHouseApp("ch-test", "tenant-test"),
+		clientfake.NewClientBuilder().WithObjects(newAltinityStrategy("clickhouse-strategy"), backup, restoreJob,
+			projectedCredentials("tenant-test", time.Now().Add(-altinityCredentialsPropagation-time.Second))).
+			WithStatusSubresource(&backupsv1alpha1.RestoreJob{}))
+	rr.CredentialsConfig.TargetSecretName = "cozy-backups-creds"
+	ctx := context.Background()
+	rj := &backupsv1alpha1.RestoreJob{}
+	if err := rr.Get(ctx, client.ObjectKeyFromObject(restoreJob), rj); err != nil {
+		t.Fatalf("get RestoreJob: %v", err)
+	}
+	if _, err := rr.reconcileAltinityRestore(ctx, rj, backup); err != nil {
+		t.Fatalf("reconcileAltinityRestore: %v", err)
+	}
+	stored := &backupsv1alpha1.RestoreJob{}
+	if err := rr.Get(ctx, client.ObjectKeyFromObject(restoreJob), stored); err != nil {
+		t.Fatalf("get RestoreJob: %v", err)
+	}
+	if ready := meta.FindStatusCondition(stored.Status.Conditions, "Ready"); ready != nil && ready.Reason == "WaitingForCredentials" {
+		t.Errorf("stored Ready = %+v while the Job runs", ready)
+	}
+}
+
 // The stamp is only ever rewritten when the projected content changes, so a
 // value the hold cannot use must not hold the job: an unreadable one would
 // fail every reconcile, and one far in the future would wait again on each.
@@ -935,5 +1029,15 @@ func TestCredentialsPropagationWait_UnusableStampsDoNotHoldTheJob(t *testing.T) 
 				t.Errorf("wait = %v, want within [%v, %v]", wait, tc.wantMin, tc.wantMax)
 			}
 		})
+	}
+}
+
+func TestClearCredentialsWait_KeepsAReadyConditionItDidNotSet(t *testing.T) {
+	conditions := []metav1.Condition{{Type: "Ready", Status: metav1.ConditionFalse, Reason: "StrategyNotReady"}}
+	if clearCredentialsWait(&conditions) {
+		t.Errorf("clearCredentialsWait reported clearing a Ready condition with reason StrategyNotReady")
+	}
+	if ready := meta.FindStatusCondition(conditions, "Ready"); ready == nil || ready.Reason != "StrategyNotReady" {
+		t.Errorf("Ready = %+v, want the StrategyNotReady condition kept", ready)
 	}
 }

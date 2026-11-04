@@ -117,13 +117,25 @@ func credentialsPropagationWait(ctx context.Context, c client.Client, secretName
 	return time.Until(updatedAt.Add(altinityCredentialsPropagation)), nil
 }
 
+// clearCredentialsWait drops the Ready condition credentialsWaitCondition
+// left behind, once the job no longer waits. It reports whether it did.
+func clearCredentialsWait(conditions *[]metav1.Condition) bool {
+	ready := apimeta.FindStatusCondition(*conditions, "Ready")
+	if ready == nil || ready.Reason != credentialsWaitReason {
+		return false
+	}
+	return apimeta.RemoveStatusCondition(conditions, "Ready")
+}
+
+const credentialsWaitReason = "WaitingForCredentials"
+
 // credentialsWaitCondition is the Ready condition of a job held back by
 // credentialsPropagationWait.
 func credentialsWaitCondition(secretName string, wait time.Duration) metav1.Condition {
 	return metav1.Condition{
 		Type:   "Ready",
 		Status: metav1.ConditionFalse,
-		Reason: "WaitingForCredentials",
+		Reason: credentialsWaitReason,
 		Message: fmt.Sprintf("waiting %s for the updated Secret %s to reach the ClickHouse backup sidecar",
 			wait.Round(time.Second), secretName),
 	}
@@ -336,6 +348,11 @@ func (r *BackupJobReconciler) reconcileAltinity(ctx context.Context, j *backupsv
 		return r.markBackupJobFailed(ctx, j, message)
 
 	default:
+		if clearCredentialsWait(&j.Status.Conditions) {
+			if err := r.Status().Update(ctx, j); err != nil {
+				return ctrl.Result{}, err
+			}
+		}
 		return ctrl.Result{RequeueAfter: altinityPollInterval}, nil
 	}
 }
@@ -741,6 +758,11 @@ func (r *RestoreJobReconciler) reconcileAltinityRestore(ctx context.Context, res
 		return r.markRestoreJobFailed(ctx, restoreJob, message)
 
 	default:
+		if clearCredentialsWait(&restoreJob.Status.Conditions) {
+			if err := r.Status().Update(ctx, restoreJob); err != nil {
+				return ctrl.Result{}, err
+			}
+		}
 		return ctrl.Result{RequeueAfter: altinityPollInterval}, nil
 	}
 }
