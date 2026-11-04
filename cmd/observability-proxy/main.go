@@ -91,7 +91,7 @@ func parseFlags(args []string) (options, error) {
 	fs.DurationVar(&o.metrics.ShortTermRetention, "metrics-shortterm-retention", 72*time.Hour, "retention of the short-term store; older windows are read from the long-term one")
 	fs.DurationVar(&o.metrics.Limits.MaxRange, "metrics-max-range", 30*24*time.Hour, "longest [start, end] and step a metrics request may use")
 	fs.IntVar(&o.metrics.Limits.MaxPoints, "metrics-max-points", 11000, "most points per series a range query may return")
-	fs.DurationVar(&o.metrics.Limits.MaxTimeout, "metrics-max-timeout", 30*time.Second, "timeout forwarded to vmselect; a longer client timeout is clamped")
+	fs.DurationVar(&o.metrics.Limits.MaxTimeout, "metrics-max-timeout", 30*time.Second, "timeout forwarded to vmselect; a longer client timeout is clamped; must be below --request-timeout when that is set")
 	fs.IntVar(&o.limiter.MaxConcurrentPerUser, "max-concurrent-per-user", 10, "concurrent non-tail requests per user; 0 disables")
 	fs.Float64Var(&o.limiter.RatePerUser, "rate-limit-per-user", 10, "sustained requests per second per user; 0 disables")
 	fs.IntVar(&o.limiter.RateBurst, "rate-limit-burst", 20, "request burst per user")
@@ -134,10 +134,11 @@ func parseFlags(args []string) (options, error) {
 		return o, errors.New("--metrics-max-points must be at least 2")
 	case o.logs.MaxTailResume < 0:
 		return o, errors.New("--logs-max-tail-resume must not be negative")
-	// Past the request timeout the proxy cuts a query vmselect is still
-	// allowed to run, and answers 504 for a store that is within its time.
-	case o.requestTimeout > 0 && o.metrics.Limits.MaxTimeout > o.requestTimeout:
-		return o, errors.New("--metrics-max-timeout must not exceed --request-timeout")
+	// The proxy's deadline starts before the request reaches vmselect, so
+	// at an equal or longer timeout it cuts a query vmselect is still
+	// allowed to run and answers 504 for a store that is within its time.
+	case o.requestTimeout > 0 && o.metrics.Limits.MaxTimeout >= o.requestTimeout:
+		return o, errors.New("--metrics-max-timeout must be below --request-timeout")
 	case o.requestTimeout < 0 || o.tailIdleTimeout < 0 || o.authCacheTTL < 0 || o.shutdownTimeout < 0:
 		return o, errors.New("timeouts and the auth cache TTL must not be negative")
 	// NaN passes every comparison and +Inf never empties a bucket; either
