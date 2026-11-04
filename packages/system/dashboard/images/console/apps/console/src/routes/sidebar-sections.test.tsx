@@ -117,7 +117,7 @@ describe("useConsoleSidebarSections — admin areas moved out", () => {
       wrapper: makeWrapper(client),
     })
     await waitFor(() => expect(result.current.length).toBeGreaterThan(0))
-    expect(findItem(result.current, "Logs")?.to).toBe("/console/logs")
+    expect(findItem(result.current, "Logs")?.to).toBe("/console/observability/logs")
     expect(result.current.find((s) => s.title === "Observability")?.items).toHaveLength(1)
   })
 })
