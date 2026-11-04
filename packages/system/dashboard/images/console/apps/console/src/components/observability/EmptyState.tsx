@@ -4,12 +4,13 @@ import { cn, Spinner } from "@cozystack/ui"
 interface EmptyStateProps {
   title: ReactNode
   hint?: ReactNode
+  action?: ReactNode
   busy?: boolean
   tone?: "light" | "dark"
   className?: string
 }
 
-export function EmptyState({ title, hint, busy, tone = "light", className }: EmptyStateProps) {
+export function EmptyState({ title, hint, action, busy, tone = "light", className }: EmptyStateProps) {
   const dark = tone === "dark"
   return (
     <div
@@ -20,6 +21,7 @@ export function EmptyState({ title, hint, busy, tone = "light", className }: Emp
       {busy && <Spinner className={cn("mb-1 size-5", dark && "text-slate-500")} />}
       <p className={cn("text-sm", dark ? "text-slate-300" : "text-slate-600")}>{title}</p>
       {hint && <p className={cn("text-xs", dark ? "text-slate-500" : "text-slate-400")}>{hint}</p>}
+      {action && <div className="mt-2">{action}</div>}
     </div>
   )
 }

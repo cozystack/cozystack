@@ -59,7 +59,7 @@ function Picker({ label, value, options, onChange }: { label: string; value: str
 const RANGE_KEYS = Object.keys(LOG_RANGES) as LogRangeKey[]
 const LONGEST_RANGE = RANGE_KEYS[RANGE_KEYS.length - 1]
 
-function placeholderFor({ follow, stopped, loading, failed, longestRange }: { follow: boolean; stopped: boolean; loading: boolean; failed: boolean; longestRange: boolean }) {
+function placeholderFor({ follow, stopped, loading, failed, longestRange, retry }: { follow: boolean; stopped: boolean; loading: boolean; failed: boolean; longestRange: boolean; retry: () => void }) {
   if (follow) {
     return stopped ? (
       <EmptyState tone="dark" title="Follow stopped before any line arrived." />
@@ -68,7 +68,15 @@ function placeholderFor({ follow, stopped, loading, failed, longestRange }: { fo
     )
   }
   if (loading) return <EmptyState tone="dark" busy title="Loading log lines…" />
-  if (failed) return <EmptyState tone="dark" title="No log lines to show." />
+  if (failed) {
+    return (
+      <EmptyState
+        tone="dark"
+        title="No log lines to show."
+        action={<Button variant="outline" size="sm" onClick={retry}>Retry</Button>}
+      />
+    )
+  }
   return <EmptyState tone="dark" title="No log lines for this range and filter." hint={longestRange ? "Try a broader filter." : "Try a longer range or a broader filter."} />
 }
 
@@ -154,7 +162,7 @@ export function LogsView({ scope }: { scope: ObservabilityScope }) {
       <LogLines
         key={followRun ?? "history"}
         entries={entries}
-        placeholder={placeholderFor({ follow, stopped: tail.state === "stopped", loading: history.isLoading, failed: Boolean(error), longestRange: range === LONGEST_RANGE })}
+        placeholder={placeholderFor({ follow, stopped: tail.state === "stopped", loading: history.isLoading, failed: Boolean(error), longestRange: range === LONGEST_RANGE, retry: () => void history.refetch() })}
       />
     </div>
   )

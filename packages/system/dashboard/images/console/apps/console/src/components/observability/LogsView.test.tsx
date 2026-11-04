@@ -224,6 +224,19 @@ describe("LogsView", () => {
     expect(screen.queryByText("Logs are not available on this cluster.")).toBeNull()
   })
 
+  it("retries a failed history query on request", async () => {
+    let calls = 0
+    const { client } = clientWith((endpoint, params) =>
+      endpoint.endsWith("query") && calls++ === 0 ? new Response("upstream down", { status: 502 }) : defaultHandler(endpoint, params),
+    )
+    renderWithK8sProvider(<LogsView scope={app} />, { client })
+
+    await userEvent.click(await screen.findByRole("button", { name: "Retry" }))
+
+    expect(await screen.findByText("ready to accept connections")).toBeInTheDocument()
+    expect(screen.queryByRole("button", { name: "Retry" })).toBeNull()
+  })
+
   it("names the source pod and container of each line", async () => {
     const { client } = clientWith(defaultHandler)
 
