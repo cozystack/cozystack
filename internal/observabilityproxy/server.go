@@ -37,6 +37,10 @@ import (
 // on in pieces and flushed once its end arrives.
 const tailChunkBytes = 64 << 10
 
+// errTailIdle cancels a tail that received nothing for the idle timeout;
+// it wraps DeadlineExceeded so a store that never answered reads as 504.
+var errTailIdle = fmt.Errorf("tail idle: %w", context.DeadlineExceeded)
+
 // maxFormBytes bounds a POST body; LogsQL queries are a few KiB at most.
 const maxFormBytes = 1 << 20
 
@@ -184,11 +188,21 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, route Route) *HTT
 		return errorf(http.StatusServiceUnavailable, "cannot resolve the log store")
 	}
 
-	ctx, cancel := context.WithCancel(r.Context())
-	defer cancel()
-	if !tail && s.cfg.RequestTimeout > 0 {
-		ctx, cancel = context.WithTimeout(ctx, s.cfg.RequestTimeout)
-		defer cancel()
+	ctx, cancel := context.WithCancelCause(r.Context())
+	defer cancel(nil)
+	limit := s.cfg.RequestTimeout
+	var idle *time.Timer
+	if tail {
+		// Started before the request, so a store that never sends the
+		// headers is bounded as well as one that stops sending lines.
+		if limit = s.cfg.TailIdleTimeout; limit > 0 {
+			idle = time.AfterFunc(limit, func() { cancel(errTailIdle) })
+			defer idle.Stop()
+		}
+	} else if limit > 0 {
+		var stop context.CancelFunc
+		ctx, stop = context.WithTimeout(ctx, limit)
+		defer stop()
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
 		s.cfg.UpstreamURL(store)+"/select/logsql/"+endpoint, strings.NewReader(params.Encode()))
@@ -208,8 +222,8 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, route Route) *HTT
 	case err == nil:
 	case r.Context().Err() != nil:
 		return errorf(http.StatusBadGateway, "client went away")
-	case errors.Is(err, context.DeadlineExceeded):
-		return errorf(http.StatusGatewayTimeout, "log store did not answer within %s", s.cfg.RequestTimeout)
+	case errors.Is(context.Cause(ctx), context.DeadlineExceeded):
+		return errorf(http.StatusGatewayTimeout, "log store did not answer within %s", limit)
 	default:
 		slog.Warn("log store unreachable", "store", store, "error", err)
 		return errorf(http.StatusBadGateway, "log store unreachable")
@@ -236,7 +250,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, route Route) *HTT
 		return nil
 	}
 	if tail {
-		s.streamLines(w, rc, resp.Body, cancel, arm)
+		s.streamLines(w, rc, resp.Body, idle, arm)
 	} else if _, err := io.Copy(w, resp.Body); err != nil && !errors.Is(err, context.Canceled) {
 		slog.Debug("copying upstream response", "error", err)
 	}
@@ -291,14 +305,9 @@ func (s *Server) authorize(r *http.Request, route Route) (string, *HTTPError) {
 }
 
 // streamLines flushes after every line so a live tail reaches the browser
-// as it happens, and cancels the upstream stream once no line has arrived
-// for the idle timeout.
-func (s *Server) streamLines(w http.ResponseWriter, rc *http.ResponseController, body io.Reader, cancel context.CancelFunc, arm func()) {
-	var idle *time.Timer
-	if s.cfg.TailIdleTimeout > 0 {
-		idle = time.AfterFunc(s.cfg.TailIdleTimeout, cancel)
-		defer idle.Stop()
-	}
+// as it happens; each line pushes back idle, which cancels the upstream
+// stream once no line has arrived for the idle timeout.
+func (s *Server) streamLines(w http.ResponseWriter, rc *http.ResponseController, body io.Reader, idle *time.Timer, arm func()) {
 	rd := bufio.NewReaderSize(body, tailChunkBytes)
 	for {
 		chunk, err := rd.ReadSlice('\n')
