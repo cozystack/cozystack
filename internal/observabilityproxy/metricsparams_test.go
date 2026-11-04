@@ -480,6 +480,12 @@ func TestQueryLookahead(t *testing.T) {
 		`x offset 5m-.5h`,
 		`x offset 1h-1`,
 		`x offset 5m-y`,
+		// A subquery step the scan cannot read, an unclosed bracket, and a
+		// sum past the duration range.
+		`rate(x[1h:5i])`,
+		`rate(x[1h:$__interval])`,
+		`rate(x[1h`,
+		`max_over_time(x[1h:100y])`,
 		`rate(x[5m] offset 1h-30m)`,
 		// vmselect evaluates rollup_candlestick one step ahead
 		// (evalRollupFuncWithoutAt), whatever the offset.
@@ -501,7 +507,16 @@ func TestQueryLookahead(t *testing.T) {
 // values back onto earlier points, so a series that starts after the
 // evaluation time can reach the answer.
 func TestQueryLookaheadSubquery(t *testing.T) {
-
+	// One explicit subquery and one "(": two levels of two steps, at the
+	// subquery's step, or at the query's step when the subquery has none.
+	for q, want := range map[string]time.Duration{
+		`max_over_time(x[1h:1h])`: 4 * time.Hour,
+		`max_over_time(x[1h:])`:   4 * time.Minute,
+	} {
+		if got, ok := queryLookahead(q, time.Minute); !ok || got != want {
+			t.Errorf("queryLookahead(%q) = %s, %v; want %s", q, got, ok, want)
+		}
+	}
 	for _, q := range []string{`max_over_time(range_last(x)[1h:1h])`, `max_over_time(keep_next_value(x)[1h:1h])`} {
 		got, ok := queryLookahead(q, time.Minute)
 		if !ok || got < 2*time.Hour {
