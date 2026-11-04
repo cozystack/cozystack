@@ -47,6 +47,14 @@ const (
 	mariadbBackupNamespaceKey = "k8s.mariadb.com/backup-namespace"
 	mariadbStorageURIKey      = "k8s.mariadb.com/storage-uri"
 
+	// The dump the operator Backup wrote: its file name under the storage
+	// prefix, and the RFC3339 timestamp in that name. Every run of an
+	// application writes under the same prefix, so only this name tells its
+	// dump from the others. Recorded only when findMariaDBDump proved the
+	// dump belongs to the operator Backup.
+	mariadbDumpFileKey = "k8s.mariadb.com/dump-file"
+	mariadbDumpTimeKey = "k8s.mariadb.com/dump-time"
+
 	// Polling cadence for the operator Backup/Restore lifecycle.
 	mariadbPollInterval = 5 * time.Second
 
@@ -398,7 +406,11 @@ func (r *BackupJobReconciler) createMariaDBBackupArtifact(
 	if uri := driverMD[mariadbStorageURIKey]; uri != "" {
 		status.Artifact = &backupsv1alpha1.BackupArtifact{URI: uri}
 		if probe {
-			status.Artifact.SizeBytes = r.mariadbArtifactSizeBytes(ctx, mdbBackup, takenAt.Time)
+			if dump, ok := r.attributedMariaDBDump(ctx, mdbBackup, takenAt.Time); ok {
+				status.Artifact.SizeBytes = dump.Size
+				driverMD[mariadbDumpFileKey] = dump.Name
+				driverMD[mariadbDumpTimeKey] = dump.Timestamp.UTC().Format(time.RFC3339)
+			}
 		}
 	}
 	backup := &backupsv1alpha1.Backup{

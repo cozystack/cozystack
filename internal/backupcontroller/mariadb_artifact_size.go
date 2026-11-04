@@ -39,19 +39,19 @@ type mariadbDump struct {
 	LastModified time.Time
 }
 
-// mariadbArtifactSizeBytes measures the dump mariadb-operator uploaded for
-// mdbBackup. Returns 0 - leaving Artifact.SizeBytes absent - when the dump
-// cannot be found or told apart: an unknown size must not be reported as a
-// measured one.
-func (r *BackupJobReconciler) mariadbArtifactSizeBytes(ctx context.Context, mdbBackup *mariadbtypes.Backup, completedAt time.Time) int64 {
+// attributedMariaDBDump returns the dump mariadb-operator uploaded for
+// mdbBackup. ok is false when the dump cannot be found or told apart, and
+// the Backup then reports neither a size nor a dump: an unknown dump must
+// not be reported as a measured one.
+func (r *BackupJobReconciler) attributedMariaDBDump(ctx context.Context, mdbBackup *mariadbtypes.Backup, completedAt time.Time) (dump mariadbDump, ok bool) {
 	ctx, cancel := context.WithTimeout(ctx, artifactSizeProbeTimeout)
 	defer cancel()
 	dump, err := findMariaDBDump(ctx, r.objectStore(), mdbBackup, completedAt)
 	if err != nil {
-		getLogger(ctx).Info("MariaDB backup size not measured; leaving it unset", "backup", mdbBackup.Name, "error", err)
-		return 0
+		getLogger(ctx).Info("MariaDB dump not attributed; leaving its size and name unset", "backup", mdbBackup.Name, "error", err)
+		return mariadbDump{}, false
 	}
-	return dump.Size
+	return dump, true
 }
 
 // findMariaDBDump lists the bucket mdbBackup wrote to and returns the one
