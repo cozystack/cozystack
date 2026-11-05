@@ -283,6 +283,7 @@ rules:
     - storage.k8s.io
   resources:
     - storageclasses
+    - volumeattributesclasses
   verbs:
     - get
     - list
@@ -308,6 +309,7 @@ apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
   name: {{ include "piraeus-operator.fullname" . }}-leader-election
+  namespace: {{ .Release.Namespace }}
   labels:
     {{- include "piraeus-operator.labels" . | nindent 4 }}
 rules:
