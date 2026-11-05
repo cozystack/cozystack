@@ -9,6 +9,7 @@ import (
 
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -1039,5 +1040,137 @@ func TestClearCredentialsWait_KeepsAReadyConditionItDidNotSet(t *testing.T) {
 	}
 	if ready := meta.FindStatusCondition(conditions, "Ready"); ready == nil || ready.Reason != "StrategyNotReady" {
 		t.Errorf("Ready = %+v, want the StrategyNotReady condition kept", ready)
+	}
+}
+
+// A read the hold cannot complete must not release the Job: starting it
+// before the credentials reach the sidecar is the failure the hold prevents.
+func TestReconcileAltinity_UnreadableHoldStateDoesNotStartTheJob(t *testing.T) {
+	cases := []struct {
+		name string
+		fail func(key client.ObjectKey, obj client.Object) bool
+	}{
+		{name: "credentials Secret", fail: func(key client.ObjectKey, obj client.Object) bool {
+			_, isSecret := obj.(*corev1.Secret)
+			return isSecret && key.Name == "cozy-backups-creds"
+		}},
+		{name: "strategy Job", fail: func(key client.ObjectKey, obj client.Object) bool {
+			_, isJob := obj.(*batchv1.Job)
+			return isJob
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			now := metav1.Now()
+			backupJob := &backupsv1alpha1.BackupJob{
+				ObjectMeta: metav1.ObjectMeta{Name: "test-bj", Namespace: "tenant-test"},
+				Spec: backupsv1alpha1.BackupJobSpec{
+					ApplicationRef:  newAltinityClickHouseRef("ch-test"),
+					BackupClassName: "clickhouse-backup",
+				},
+				Status: backupsv1alpha1.BackupJobStatus{StartedAt: &now},
+			}
+			builder := clientfake.NewClientBuilder().
+				WithObjects(backupJob, newAltinityStrategy("clickhouse-strategy"),
+					projectedCredentials("tenant-test", time.Now().Add(-altinityCredentialsPropagation-time.Second))).
+				WithInterceptorFuncs(interceptor.Funcs{
+					Get: func(ctx context.Context, cl client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+						if tc.fail(key, obj) {
+							return apierrors.NewInternalError(errors.New("etcd unavailable"))
+						}
+						return cl.Get(ctx, key, obj, opts...)
+					},
+				})
+			r, _, _ := newAltinityTestEnv(t, newAltinityClickHouseApp("ch-test", "tenant-test"), builder)
+			r.CredentialsConfig.TargetSecretName = "cozy-backups-creds"
+			resolved := &ResolvedBackupConfig{
+				StrategyRef: corev1.TypedLocalObjectReference{
+					APIGroup: new(strategyv1alpha1.GroupVersion.Group),
+					Kind:     strategyv1alpha1.AltinityStrategyKind,
+					Name:     "clickhouse-strategy",
+				},
+			}
+			ctx := context.Background()
+			j := &backupsv1alpha1.BackupJob{}
+			if err := r.Get(ctx, client.ObjectKeyFromObject(backupJob), j); err != nil {
+				t.Fatalf("get BackupJob: %v", err)
+			}
+			if _, err := r.reconcileAltinity(ctx, j, resolved); err == nil {
+				t.Errorf("reconcileAltinity returned no error although the %s could not be read", tc.name)
+			}
+			jobs := &batchv1.JobList{}
+			if err := r.List(ctx, jobs, client.InNamespace("tenant-test")); err != nil {
+				t.Fatalf("list Jobs: %v", err)
+			}
+			if len(jobs.Items) != 0 {
+				t.Errorf("a strategy Job was created although the %s could not be read", tc.name)
+			}
+		})
+	}
+}
+
+func TestReconcileAltinityRestore_UnreadableHoldStateDoesNotStartTheJob(t *testing.T) {
+	cases := []struct {
+		name string
+		fail func(key client.ObjectKey, obj client.Object) bool
+	}{
+		{name: "credentials Secret", fail: func(key client.ObjectKey, obj client.Object) bool {
+			_, isSecret := obj.(*corev1.Secret)
+			return isSecret && key.Name == "cozy-backups-creds"
+		}},
+		{name: "strategy Job", fail: func(key client.ObjectKey, obj client.Object) bool {
+			_, isJob := obj.(*batchv1.Job)
+			return isJob
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			now := metav1.Now()
+			backup := &backupsv1alpha1.Backup{
+				ObjectMeta: metav1.ObjectMeta{Name: "ch-backup", Namespace: "tenant-test"},
+				Spec: backupsv1alpha1.BackupSpec{
+					ApplicationRef: newAltinityClickHouseRef("ch-test"),
+					StrategyRef: corev1.TypedLocalObjectReference{
+						APIGroup: new(strategyv1alpha1.GroupVersion.Group),
+						Kind:     strategyv1alpha1.AltinityStrategyKind,
+						Name:     "clickhouse-strategy",
+					},
+					TakenAt: now,
+				},
+			}
+			restoreJob := &backupsv1alpha1.RestoreJob{
+				ObjectMeta: metav1.ObjectMeta{Name: "test-rj", Namespace: "tenant-test"},
+				Spec:       backupsv1alpha1.RestoreJobSpec{BackupRef: corev1.LocalObjectReference{Name: backup.Name}},
+				Status:     backupsv1alpha1.RestoreJobStatus{StartedAt: &now, Phase: backupsv1alpha1.RestoreJobPhaseRunning},
+			}
+			builder := clientfake.NewClientBuilder().
+				WithObjects(newAltinityStrategy("clickhouse-strategy"), backup, restoreJob,
+					projectedCredentials("tenant-test", time.Now().Add(-altinityCredentialsPropagation-time.Second))).
+				WithInterceptorFuncs(interceptor.Funcs{
+					Get: func(ctx context.Context, cl client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+						if tc.fail(key, obj) {
+							return apierrors.NewInternalError(errors.New("etcd unavailable"))
+						}
+						return cl.Get(ctx, key, obj, opts...)
+					},
+				})
+			_, rr, _ := newAltinityTestEnv(t, newAltinityClickHouseApp("ch-test", "tenant-test"), builder)
+			rr.CredentialsConfig.TargetSecretName = "cozy-backups-creds"
+			ctx := context.Background()
+			rj := &backupsv1alpha1.RestoreJob{}
+			if err := rr.Get(ctx, client.ObjectKeyFromObject(restoreJob), rj); err != nil {
+				t.Fatalf("get RestoreJob: %v", err)
+			}
+			if _, err := rr.reconcileAltinityRestore(ctx, rj, backup); err == nil {
+				t.Errorf("reconcileAltinityRestore returned no error although the %s could not be read", tc.name)
+			}
+			jobs := &batchv1.JobList{}
+			if err := rr.List(ctx, jobs, client.InNamespace("tenant-test")); err != nil {
+				t.Fatalf("list Jobs: %v", err)
+			}
+			if len(jobs.Items) != 0 {
+				t.Errorf("a restore Job was created although the %s could not be read", tc.name)
+			}
+		})
 	}
 }
