@@ -282,9 +282,10 @@ func TestServerApplicationMetricsBranches(t *testing.T) {
 
 // A grant narrowed to application "a" by resourceNames must not reach "b"
 // through any endpoint of either root. Without read access to the
-// namespace roots it does not reach "a" either: the pod and PVC branches
-// match by name, and a name another application used earlier in the
-// window would pull its series in.
+// namespace roots it does not reach "a" either: an ownerless pod keeps the
+// lineage labels its creator set, so it can claim to be "a" on both roots,
+// and on the metrics root the pod and PVC branches match by name, so a name
+// another application used earlier in the window would pull its series in.
 func TestServerApplicationNarrowedGrant(t *testing.T) {
 	h := newPolicyHarness(t, Config{}, appMetricsUpstream([]string{"a-0"}, nil, http.StatusOK), appPolicy, nil)
 	paths := []string{

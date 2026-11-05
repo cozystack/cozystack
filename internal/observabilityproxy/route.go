@@ -132,10 +132,14 @@ func ParseRoute(escapedPath string) (Route, *HTTPError) {
 }
 
 // Reviews lists every access a request on the route needs. An application
-// root also needs read access to its namespace root: its pod and PVC
-// branches match by name across the window, so a name another application
-// held earlier reaches that application's series, and a grant narrowed by
-// resourceNames would read more than it names.
+// root also needs read access to its namespace root, because its scope
+// narrows within the namespace but does not isolate: on both roots the
+// identity comes from lineage labels that the lineage webhook keeps as set
+// on an object it finds no owner for, so anyone who can create a pod there
+// can label it as the application; on the metrics root the pod and PVC
+// branches also match by name across the window, so a name another
+// application held earlier reaches that application's series. A grant
+// narrowed by resourceNames would read more than it names.
 func (r Route) Reviews() []authorizationv1.ResourceAttributes {
 	switch r.Kind {
 	case ApplicationLog:
