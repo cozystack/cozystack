@@ -1037,13 +1037,13 @@ func TestCheckIgnoresObjectEndpointWithoutSecretEndpoint(t *testing.T) {
 	}
 }
 
-// TestCheckForcesOnceForUnannotatedObjects covers objects rendered by a chart
-// that predates the endpoint annotation. Their endpoint is unknown, so they
-// are treated as stale until one forced render has gone through, which stamps
-// the annotation. A force that did not go through (throttled) does not count,
-// and once one has, an object still without the annotation (one the chart
-// does not render) must not force again every MinForceInterval.
-func TestCheckForcesOnceForUnannotatedObjects(t *testing.T) {
+// TestCheckKeepsForcingForUnannotatedObjects covers objects rendered by a
+// chart that predates the endpoint annotation. Their endpoint is unknown, so
+// they count as stale until a render stamps the annotation. Having requested
+// a render proves nothing: one that failed leaves them unannotated, and the
+// next unthrottled check must force again rather than fall silent, so the
+// force counter keeps reporting the render that does not land.
+func TestCheckKeepsForcingForUnannotatedObjects(t *testing.T) {
 	base := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
 	objs := []runtime.Object{helmReleaseObject(), credentialsHelmReleaseObject()}
 	for _, o := range allDefaultObjects() {
@@ -1065,27 +1065,11 @@ func TestCheckForcesOnceForUnannotatedObjects(t *testing.T) {
 
 	g.now = func() time.Time { return base.Add(time.Hour) }
 	missing, forced, err := g.Check(context.Background())
-	if err != nil || forced || len(missing) != 0 {
-		t.Fatalf("after the forced render: missing = %v, forced = %v, err = %v; want a no-op", missing, forced, err)
+	if err != nil || !forced || len(missing) != 7 {
+		t.Fatalf("after a render that left them unannotated: missing = %v, forced = %v, err = %v; want 7 reported and forced again", missing, forced, err)
 	}
-	if again := forceAnnotations(t, dyn)["reconcile.fluxcd.io/forceAt"]; again != first {
-		t.Errorf("forced again for unannotated objects: %q, then %q", first, again)
-	}
-}
-
-// TestCheckStillForcesStaleAfterUnannotatedForce pins that the once-only
-// treatment covers the missing annotation alone: an annotation that names the
-// wrong endpoint still forces after that.
-func TestCheckStillForcesStaleAfterUnannotatedForce(t *testing.T) {
-	objs := []runtime.Object{helmReleaseObject(), credentialsHelmReleaseObject()}
-	for _, o := range allDefaultObjects() {
-		objs = append(objs, withEndpoint(o.(*unstructured.Unstructured), "https://s3.old.example.com"))
-	}
-	g, _ := newGate(t, []client.Object{sourceSecret("bucket-1a2b"), cozyDefaultBackupClass()}, objs...)
-	g.renderForced = true
-
-	if _, forced, err := g.Check(context.Background()); err != nil || !forced {
-		t.Fatalf("forced = %v, err = %v; want forced", forced, err)
+	if again := forceAnnotations(t, dyn)["reconcile.fluxcd.io/forceAt"]; again == first {
+		t.Errorf("not forced again for unannotated objects: forceAt still %q", first)
 	}
 }
 

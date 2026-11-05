@@ -137,9 +137,9 @@ $tpl: $obj does not gate on crdEstablished for $crd"
 # The controller's DefaultObjectsGate tells an object rendered with a stale S3
 # endpoint (publishing.host changed after the render) by the
 # backups.cozystack.io/endpoint annotation, because the endpoint itself sits at
-# a different path in every kind. An object the chart renders without it is
-# forced once and then never compared again, so a new template that forgets it
-# would silently keep a stale endpoint.
+# a different path in every kind. An object the chart renders without it
+# counts as stale on every check, so a new template that forgets it would
+# force this release every MinForceInterval forever.
 @test "every rendered Strategy CR and the Velero BSL carry the rendered endpoint annotation" {
   tmp=$(mktemp -d)
 
