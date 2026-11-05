@@ -588,3 +588,22 @@ func TestServerApplicationLookupCoversLatencyOffset(t *testing.T) {
 		t.Fatalf("lookup start = %s, want at most %s", r.form.Get("start"), formatTime(want))
 	}
 }
+
+// TestServerApplicationRefusesBackquoteEscapeTail: an escaped backquote
+// inside a quoted label name does not end the string in metricsql, so the
+// escaped rollup_candlestick after it must still be refused.
+func TestServerApplicationRefusesBackquoteEscapeTail(t *testing.T) {
+	h := newPolicyHarness(t, Config{}, appMetricsUpstream(nil, nil, http.StatusOK), appPolicy, nil)
+	for _, query := range []string{
+		"container_cpu_usage_seconds_total{`\\``=\"\"} or rollup\\_candlestick(container_cpu_usage_seconds_total offset -5m+1h)",
+		"{`\\`a`} or rollup\\_candlestick(container_cpu_usage_seconds_total offset -5m+1h)",
+	} {
+		q := url.Values{"query": {query}, "time": {unix(testNow.Add(-6 * time.Hour))}}
+		if got := h.status(http.MethodGet, appRoot+"db.main/metrics/api/v1/query?"+q.Encode(), "good"); got != http.StatusUnprocessableEntity {
+			t.Errorf("%s answered %d, want 422", query, got)
+		}
+	}
+	if n := len(h.requests()); n != 0 {
+		t.Fatalf("upstream saw %d requests for refused queries", n)
+	}
+}
