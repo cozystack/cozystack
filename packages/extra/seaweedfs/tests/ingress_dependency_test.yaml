@@ -149,6 +149,37 @@ tests:
           value:
             - name: seaweedfs-db
 
+  - it: depends on ingress-nginx-system for a sub-tenant that deploys its own ingress
+    set:
+      <<: *values
+      _namespace:
+        host: example.org
+        ingress: tenant-child
+    release:
+      namespace: tenant-child
+    documentSelector: *systemHR
+    kubernetesProvider:
+      scheme: *scheme
+      objects:
+        - kind: Namespace
+          apiVersion: v1
+          metadata:
+            name: tenant-child
+        - *unrelatedPVC
+        - *unrelatedSTS
+        - kind: HelmRelease
+          apiVersion: helm.toolkit.fluxcd.io/v2
+          metadata:
+            name: ingress
+            namespace: tenant-child
+    asserts:
+      - equal:
+          path: spec.dependsOn
+          value:
+            - name: seaweedfs-db
+            - name: ingress-nginx-system
+              namespace: tenant-child
+
   - it: renders without the dependency on a client-side render
     set: *values
     documentSelector: *systemHR
