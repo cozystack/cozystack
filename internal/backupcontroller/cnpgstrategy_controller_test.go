@@ -2561,6 +2561,17 @@ func (f *cnpgRolloutFixture) seedOtherBackupJob(name string, phase backupsv1alph
 func TestReconcileCNPG_RunningBackupDoesNotReapplyObjectStore(t *testing.T) {
 	f := newAttachedObjectStoreFixture(t, time.Now(), "s3://other/")
 	f.seedCNPGBackup("bj-cnpg", "bj", rolloutCluster, "running")
+	// Two jobs can pass the queue together, since it reads the cache; once
+	// both have a Backup neither may wait on the other.
+	f.seedOtherBackupJob("bj-other", backupsv1alpha1.BackupJobPhaseRunning)
+	f.seedCNPGBackup("bj-other-cnpg", "bj-other", rolloutCluster, "running")
+	writes := 0
+	f.r.Client = interceptor.NewClient(f.c.(client.WithWatch), interceptor.Funcs{
+		Patch: func(ctx context.Context, cl client.WithWatch, obj client.Object, patch client.Patch, opts ...client.PatchOption) error {
+			writes++
+			return cl.Patch(ctx, obj, patch, opts...)
+		},
+	})
 
 	j, _ := f.pass()
 	if j.Status.Phase == backupsv1alpha1.BackupJobPhaseFailed {
@@ -2569,8 +2580,11 @@ func TestReconcileCNPG_RunningBackupDoesNotReapplyObjectStore(t *testing.T) {
 	if got := f.liveDestination(); got != "s3://other/" {
 		t.Fatalf("a pass over a running backup re-applied the ObjectStore: destination %q", got)
 	}
-	if ready := apimeta.FindStatusCondition(j.Status.Conditions, "Ready"); ready != nil && ready.Reason == "WaitingForOtherBackup" {
-		t.Fatalf("a running backup waits on itself: %+v", ready)
+	if writes != 0 {
+		t.Errorf("a pass over a running backup patched %d object(s); the ObjectStore and the Cluster plugin are only read", writes)
+	}
+	if ready := apimeta.FindStatusCondition(j.Status.Conditions, "Ready"); ready == nil || ready.Reason != "WaitingForCNPGBackup" {
+		t.Fatalf("Ready = %+v, want the running backup followed rather than queued", ready)
 	}
 }
 
@@ -2624,7 +2638,7 @@ func TestReconcileCNPG_WaitsForAnotherRunningBackupOfTheApp(t *testing.T) {
 				},
 			})
 
-			j, backups := f.pass()
+			j, backups, res := f.passResult()
 			if j.Status.Phase == backupsv1alpha1.BackupJobPhaseFailed {
 				t.Fatalf("BackupJob failed: %s", j.Status.Message)
 			}
@@ -2645,8 +2659,13 @@ func TestReconcileCNPG_WaitsForAnotherRunningBackupOfTheApp(t *testing.T) {
 				if ready == nil || ready.Status != metav1.ConditionFalse || ready.Reason != "WaitingForOtherBackup" || !strings.Contains(ready.Message, "bj-other") {
 					t.Errorf("Ready = %+v, want False/WaitingForOtherBackup naming bj-other", ready)
 				}
+				if res.RequeueAfter == 0 {
+					t.Errorf("a queued job is not requeued, and nothing else wakes it when the holder finishes: %+v", res)
+				}
 				statusWrites = 0
-				f.pass()
+				if _, _, res = f.passResult(); res.RequeueAfter == 0 {
+					t.Errorf("a queued job whose status did not change is not requeued: %+v", res)
+				}
 				if statusWrites != 0 {
 					t.Errorf("a second pass with the same holder wrote the BackupJob status %d time(s)", statusWrites)
 				}
@@ -2715,7 +2734,7 @@ func TestReconcileCNPG_ObjectStoreApplyErrors(t *testing.T) {
 				},
 			})
 
-			j, backups := f.pass()
+			j, backups, res := f.passResult()
 			if j.Status.Phase != tc.wantPhase {
 				t.Fatalf("BackupJob phase = %q (%s), want %q", j.Status.Phase, j.Status.Message, tc.wantPhase)
 			}
@@ -2726,6 +2745,9 @@ func TestReconcileCNPG_ObjectStoreApplyErrors(t *testing.T) {
 				ready := apimeta.FindStatusCondition(j.Status.Conditions, "Ready")
 				if ready == nil || ready.Reason != "ClusterPluginApplyRetrying" || !strings.Contains(ready.Message, "connection refused") {
 					t.Errorf("Ready = %+v, want ClusterPluginApplyRetrying carrying the error", ready)
+				}
+				if res.RequeueAfter == 0 {
+					t.Errorf("a retried write is not requeued: %+v", res)
 				}
 			}
 		})
