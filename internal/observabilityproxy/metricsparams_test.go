@@ -227,7 +227,7 @@ func TestBuildMetricsParamsCanonicalForms(t *testing.T) {
 	if req.params.Get("end") != "2026-11-04T12:00:00.000Z" || req.params.Get("start") != "2026-11-04T11:55:00.000Z" {
 		t.Errorf("labels window = %s..%s, want the last 5m", req.params.Get("start"), req.params.Get("end"))
 	}
-	if q := buildMetrics(t, "api/v1/query", url.Values{"query": {"up"}}); q.params.Has("time") || !q.start.Equal(testNow.Add(-15*time.Minute-2*latencyOffset)) {
+	if q := buildMetrics(t, "api/v1/query", url.Values{"query": {"up"}}); q.params.Get("time") != "2026-11-04T12:00:00.000Z" || !q.start.Equal(testNow.Add(-15*time.Minute-2*latencyOffset)) {
 		t.Errorf("instant query without time: params %v, start %v", q.params, q.start)
 	}
 }

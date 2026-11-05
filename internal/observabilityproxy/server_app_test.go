@@ -363,6 +363,27 @@ func TestServerApplicationLookupCoversNegativeOffset(t *testing.T) {
 	}
 }
 
+// TestServerApplicationForwardsDefaultTime: without time the lookup is
+// sized at the proxy's clock, so that instant is forwarded. Otherwise
+// vmselect evaluates at its own later clock, past the end of the lookup by
+// however long the lookups took, and leaves out pods first sampled since.
+func TestServerApplicationForwardsDefaultTime(t *testing.T) {
+	h := newPolicyHarness(t, Config{}, appMetricsUpstream(nil, nil, http.StatusOK), appPolicy, nil)
+	q := url.Values{"query": {"container_cpu_usage_seconds_total"}}
+	if got := h.status(http.MethodGet, appRoot+"db.main/metrics/api/v1/query?"+q.Encode(), "good"); got != http.StatusOK {
+		t.Fatalf("status = %d", got)
+	}
+	reqs := h.requests()
+	lookup, final := reqs[0], reqs[len(reqs)-1]
+	want := formatTime(testNow)
+	if lookup.path != "/api/v1/label/pod/values" || lookup.form.Get("end") != want {
+		t.Fatalf("lookup %s end = %s, want %s", lookup.path, lookup.form.Get("end"), want)
+	}
+	if final.path != "/api/v1/query" || final.form.Get("time") != want {
+		t.Fatalf("query %s time = %q, want the lookup's instant %s", final.path, final.form.Get("time"), want)
+	}
+}
+
 // TestServerApplicationRefusesUnboundedSampleTime refuses a query whose
 // samples may lie at a time the lookup cannot be sized for, rather than
 // answer with series silently left out.
