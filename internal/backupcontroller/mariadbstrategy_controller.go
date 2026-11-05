@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"time"
 
+	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
@@ -204,7 +205,7 @@ func (r *BackupJobReconciler) reconcileMariaDB(ctx context.Context, j *backupsv1
 
 	switch {
 	case cond != nil && cond.Reason == mariadbtypes.ConditionReasonJobFailed:
-		return r.markBackupJobFailed(ctx, j, mariadbJobFailedMessage("Backup", mdbBackup.Namespace, mdbBackup.Name, cond))
+		return r.markBackupJobFailed(ctx, j, mariadbJobFailedMessage(ctx, r.Client, "Backup", mdbBackup.Namespace, mdbBackup.Name, cond))
 
 	case cond != nil && cond.Status == metav1.ConditionTrue && cond.Reason == mariadbtypes.ConditionReasonJobComplete:
 		// Backup completed successfully. Materialise the Cozystack artifact
@@ -251,12 +252,24 @@ func (r *BackupJobReconciler) reconcileMariaDB(ctx context.Context, j *backupsv1
 	}
 }
 
-// mariadbJobFailedMessage names the operator object whose Job failed. The
-// operator's own condition message is only "Failed"; the cause is in the
-// logs of that object's Job.
-func mariadbJobFailedMessage(kind, namespace, name string, cond *metav1.Condition) string {
-	return fmt.Sprintf("k8s.mariadb.com/%s %s/%s failed (Complete=%s/%s); the cause is in the logs of its Job",
-		kind, namespace, name, cond.Status, cond.Reason)
+// mariadbJobFailedMessage names the operator object whose Job failed and
+// carries that Job's own Failed condition, because the operator's condition
+// message is only "Failed". The operator names the Job after the object.
+func mariadbJobFailedMessage(ctx context.Context, c client.Reader, kind, namespace, name string, cond *metav1.Condition) string {
+	message := fmt.Sprintf("k8s.mariadb.com/%s %s/%s failed (Complete=%s/%s)", kind, namespace, name, cond.Status, cond.Reason)
+	job := &batchv1.Job{}
+	if err := c.Get(ctx, types.NamespacedName{Namespace: namespace, Name: name}, job); err != nil {
+		if apierrors.IsNotFound(err) {
+			return fmt.Sprintf("%s; Job %s/%s not found", message, namespace, name)
+		}
+		return fmt.Sprintf("%s; reading Job %s/%s: %v", message, namespace, name, err)
+	}
+	for _, jc := range job.Status.Conditions {
+		if jc.Type == batchv1.JobFailed && jc.Status == corev1.ConditionTrue {
+			return fmt.Sprintf("%s; Job %s/%s: %s: %s", message, namespace, name, jc.Reason, jc.Message)
+		}
+	}
+	return fmt.Sprintf("%s; Job %s/%s reports no Failed condition", message, namespace, name)
 }
 
 // mariadbBackupDeadlineExceeded reports whether enough wall-clock time has
@@ -567,7 +580,7 @@ func (r *RestoreJobReconciler) reconcileMariaDBRestore(ctx context.Context, rest
 	cond := apimeta.FindStatusCondition(mdbRestore.Status.Conditions, mariadbtypes.ConditionTypeComplete)
 	switch {
 	case cond != nil && cond.Reason == mariadbtypes.ConditionReasonJobFailed:
-		return r.markRestoreJobFailed(ctx, restoreJob, mariadbJobFailedMessage("Restore", mdbRestore.Namespace, mdbRestore.Name, cond))
+		return r.markRestoreJobFailed(ctx, restoreJob, mariadbJobFailedMessage(ctx, r.Client, "Restore", mdbRestore.Namespace, mdbRestore.Name, cond))
 
 	case cond != nil && cond.Status == metav1.ConditionTrue && cond.Reason == mariadbtypes.ConditionReasonJobComplete:
 		now := metav1.Now()
