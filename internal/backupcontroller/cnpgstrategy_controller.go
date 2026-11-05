@@ -334,6 +334,17 @@ func (r *BackupJobReconciler) reconcileCNPG(ctx context.Context, j *backupsv1alp
 	// Backup exists and only while no other job's Backup is in flight.
 	writeDestination := existingBackup == nil
 	if writeDestination {
+		// The gate in Reconcile sees only a job that has not started, and
+		// this one may have waited in the queue for as long as a restore
+		// takes to begin.
+		restore, err := activeRestoreTargeting(ctx, r.Client, j.Namespace, j.Spec.ApplicationRef)
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+		if restore != "" {
+			apimeta.RemoveStatusCondition(&j.Status.Conditions, backupCondDestinationApplied)
+			return r.holdForRestore(ctx, j, restore)
+		}
 		holder, err := r.otherCNPGBackupInFlight(ctx, j, clusterName)
 		if err != nil {
 			return ctrl.Result{}, err
