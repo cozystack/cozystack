@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/cozystack/cozystack/pkg/lineage"
+	admissionv1 "k8s.io/api/admission/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -123,7 +124,7 @@ func (h *LineageControllerWebhook) Handle(ctx context.Context, req admission.Req
 		logger.Error(err, "error computing lineage labels")
 		return admission.Errored(500, fmt.Errorf("error computing lineage labels: %w", err))
 	}
-	labels, err := h.computeLabels(ctx, obj, owner)
+	labels, err := h.computeLabels(ctx, obj, owner, req.Operation)
 	if err != nil {
 		logger.Error(err, "error computing lineage labels")
 		return admission.Errored(500, fmt.Errorf("error computing lineage labels: %w", err))
@@ -159,7 +160,7 @@ func (h *LineageControllerWebhook) getOwner(ctx context.Context, o *unstructured
 	return obj, err
 }
 
-func (h *LineageControllerWebhook) computeLabels(ctx context.Context, obj *unstructured.Unstructured, owner *unstructured.Unstructured) (map[string]string, error) {
+func (h *LineageControllerWebhook) computeLabels(ctx context.Context, obj *unstructured.Unstructured, owner *unstructured.Unstructured, op admissionv1.Operation) (map[string]string, error) {
 	if owner == nil {
 		return nil, nil
 	}
@@ -193,12 +194,20 @@ func (h *LineageControllerWebhook) computeLabels(ctx context.Context, obj *unstr
 	crd := cfg.appCRDMap[appRef{gv.Group, owner.GetKind()}]
 	resourceSelectors := h.getResourceSelectors(obj.GroupVersionKind().GroupKind(), crd)
 
-	labels[corev1alpha1.TenantResourceLabelKey] = func(b bool) string {
-		if b {
-			return corev1alpha1.TenantResourceLabelValue
-		}
-		return "false"
-	}(matchResourceToExcludeInclude(ctx, obj.GetName(), templateLabels, obj.GetLabels(), resourceSelectors))
+	selected := matchResourceToExcludeInclude(ctx, obj.GetName(), templateLabels, obj.GetLabels(), resourceSelectors)
+	// On CREATE the object may narrow the verdict and never widen it: a
+	// rendered "false" is kept even where the definition selects the name, a
+	// rendered "true" is replaced. Only on CREATE: a re-admission (UPDATE with
+	// managed-by-cozystack dropped, as the cacert controller does on a selector
+	// change) carries the "false" this webhook wrote earlier, and keeping it
+	// would block a grant.
+	if op == admissionv1.Create && obj.GetLabels()[corev1alpha1.TenantResourceLabelKey] == "false" {
+		selected = false
+	}
+	labels[corev1alpha1.TenantResourceLabelKey] = "false"
+	if selected {
+		labels[corev1alpha1.TenantResourceLabelKey] = corev1alpha1.TenantResourceLabelValue
+	}
 	return labels, nil
 }
 
