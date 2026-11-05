@@ -404,10 +404,6 @@ func (r *BackupJobReconciler) reconcileCNPG(ctx context.Context, j *backupsv1alp
 	}
 	if writeDestination {
 		apimeta.RemoveStatusCondition(&j.Status.Conditions, backupCondDestinationApplied)
-		if ready := apimeta.FindStatusCondition(j.Status.Conditions, "Ready"); ready != nil &&
-			(ready.Reason == "WaitingForOtherBackup" || ready.Reason == "ClusterPluginApplyRetrying") {
-			apimeta.RemoveStatusCondition(&j.Status.Conditions, "Ready")
-		}
 	}
 	if attachment.serverName != serverName {
 		logger.Info("preserving the live Cluster's barman serverName over the strategy template's",
