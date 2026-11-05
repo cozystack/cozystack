@@ -1,0 +1,52 @@
+suite: per-worker-pool Talos user namespace limit
+
+templates:
+  - templates/talos-reconcile-job.yaml
+
+release:
+  name: kubernetes-nodes-myk8s-agents
+  namespace: tenant-test
+
+set:
+  cluster: myk8s
+  _cluster:
+    cluster-domain: cozy.local
+
+tests:
+  - it: preserves the default by omitting the sysctl from an unconfigured pool
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - notMatchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'user\.max_user_namespaces'
+
+  - it: emits the sysctl at machine level for an opted-in pool
+    set:
+      talos.userNamespacesLimit: 11255
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: '\n {10}sysctls:\n {12}user\.max_user_namespaces: "11255"\n {10}network:'
+
+  - it: omits the override when explicitly set to zero
+    set:
+      talos.userNamespacesLimit: 0
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - notMatchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'user\.max_user_namespaces'
+
+  - it: rejects a negative user namespace limit
+    set:
+      talos.userNamespacesLimit: -1
+    asserts:
+      - failedTemplate:
+          errorMessage: "talos.userNamespacesLimit must be zero or a positive value, got -1"
