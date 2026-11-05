@@ -2814,6 +2814,115 @@ func TestReconcileCNPG_PluginRolloutDeadlineCountsFromAttach(t *testing.T) {
 	}
 }
 
+// The rollout is measured from the write that attached the plugin, not from
+// the latch recorded before it: retries of a failing write can lie between
+// the two, and an instance recreated in that time runs without the plugin.
+func TestReconcileCNPG_PluginRolloutCountsFromTheSuccessfulAttach(t *testing.T) {
+	cases := []struct {
+		name string
+		// podBetween recreates the instance after the latch and before the
+		// attach; otherwise it predates both.
+		podBetween bool
+	}{
+		{name: "an instance recreated before the attach still has to roll", podBetween: true},
+		{name: "retries before the attach do not spend the rollout deadline"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			expired := time.Now().Add(-(cnpgDefaultBackupDeadline + time.Minute)).Truncate(time.Second)
+			oldPod := newRolloutInstancePod(expired.Add(-time.Hour))
+			f := newCNPGRolloutFixture(t, newRolloutBackupJob(expired.Add(-time.Hour)),
+				newRolloutCluster(cnpgClusterHealthyPhase), oldPod)
+
+			j, _ := f.pass() // latch
+			latch := apimeta.FindStatusCondition(j.Status.Conditions, backupCondPluginRolledOut)
+			if latch == nil {
+				t.Fatalf("no %s latch: %+v", backupCondPluginRolledOut, j.Status.Conditions)
+			}
+			latch.LastTransitionTime = metav1.NewTime(expired)
+			if err := f.c.Status().Update(context.Background(), j); err != nil {
+				t.Fatalf("age the latch: %v", err)
+			}
+
+			failing := true
+			f.r.Client = interceptor.NewClient(f.c.(client.WithWatch), interceptor.Funcs{
+				Patch: func(ctx context.Context, cl client.WithWatch, obj client.Object, patch client.Patch, opts ...client.PatchOption) error {
+					if _, ok := obj.(*cnpgtypes.Cluster); ok && failing {
+						return apierrors.NewInternalError(errors.New(`failed calling webhook "mcluster.cnpg.io"`))
+					}
+					return cl.Patch(ctx, obj, patch, opts...)
+				},
+			})
+			if j, _ = f.pass(); j.Status.Phase == backupsv1alpha1.BackupJobPhaseFailed {
+				t.Fatalf("a failed attach failed the job: %s", j.Status.Message)
+			}
+			if tc.podBetween {
+				f.replacePod(oldPod, newRolloutInstancePod(expired.Add(time.Minute)))
+			}
+
+			failing = false
+			attachAt := time.Now().Truncate(time.Second)
+			j, backups := f.pass()
+			if len(backups) != 0 {
+				t.Fatalf("a cnpg.io/Backup was created in the pass that attached the plugin: %+v", backups)
+			}
+			rollout := apimeta.FindStatusCondition(j.Status.Conditions, backupCondPluginRolledOut)
+			if rollout == nil || rollout.Status != metav1.ConditionFalse || rollout.LastTransitionTime.Time.Before(attachAt) {
+				t.Fatalf("%s = %+v, want False since the attach at %s", backupCondPluginRolledOut, rollout, attachAt)
+			}
+
+			attached := &cnpgtypes.Cluster{}
+			if err := f.c.Get(context.Background(), client.ObjectKey{Namespace: rolloutNS, Name: rolloutCluster}, attached); err != nil {
+				t.Fatalf("get Cluster: %v", err)
+			}
+			f.observeCNPG(newRolloutCluster(cnpgClusterHealthyPhase, attached.Spec.Plugins...))
+			j, backups = f.pass()
+			if j.Status.Phase == backupsv1alpha1.BackupJobPhaseFailed {
+				t.Fatalf("a rollout that began with the attach failed: %s", j.Status.Message)
+			}
+			if len(backups) != 0 {
+				t.Fatalf("a cnpg.io/Backup was created against an instance older than the attach: %+v", backups)
+			}
+			if ready := apimeta.FindStatusCondition(j.Status.Conditions, "Ready"); ready == nil || !strings.Contains(ready.Message, "predates") {
+				t.Errorf("Ready = %+v, want the instance that predates the plugin", ready)
+			}
+		})
+	}
+}
+
+// A plugin attached by someone else after the latch, another backup job or
+// a restore, started the rollout before this job's write, which only finds
+// it there: instances that rolled since the latch carry the plugin.
+func TestReconcileCNPG_PluginAttachedByAnotherWriterKeepsTheLatch(t *testing.T) {
+	oldPod := newRolloutInstancePod(time.Now().Add(-time.Hour).Truncate(time.Second))
+	f := newCNPGRolloutFixture(t, newRolloutBackupJob(time.Now().Add(-time.Hour)),
+		newRolloutCluster(cnpgClusterHealthyPhase), oldPod)
+
+	j, _ := f.pass() // latch
+	latch := apimeta.FindStatusCondition(j.Status.Conditions, backupCondPluginRolledOut)
+	if latch == nil {
+		t.Fatalf("no %s latch: %+v", backupCondPluginRolledOut, j.Status.Conditions)
+	}
+	latchedAt := time.Now().Add(-10 * time.Minute).Truncate(time.Second)
+	latch.LastTransitionTime = metav1.NewTime(latchedAt)
+	if err := f.c.Status().Update(context.Background(), j); err != nil {
+		t.Fatalf("age the latch: %v", err)
+	}
+	f.observeCNPG(newRolloutCluster(cnpgClusterHealthyPhase, buildBarmanPlugin(rolloutCluster, rolloutCluster)))
+	f.replacePod(oldPod, newRolloutInstancePod(latchedAt.Add(5*time.Minute)))
+
+	var backups []cnpgtypes.Backup
+	for range 3 {
+		if j, backups = f.pass(); len(backups) != 0 || j.Status.Phase == backupsv1alpha1.BackupJobPhaseFailed {
+			break
+		}
+	}
+	if len(backups) != 1 {
+		t.Fatalf("got %d cnpg.io/Backups against instances that rolled with the plugin; Ready = %+v",
+			len(backups), apimeta.FindStatusCondition(j.Status.Conditions, "Ready"))
+	}
+}
+
 // Waiting for another backup resets the retry budget of the destination
 // write, so the queue does not spend it.
 func TestReconcileCNPG_QueueResetsDestinationRetryBudget(t *testing.T) {
