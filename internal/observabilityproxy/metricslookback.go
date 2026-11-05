@@ -243,9 +243,10 @@ func scanOffsets(lower string) (back, ahead float64, ok bool) {
 // rollup\_candlestick or offs\et name what the lexical scan looks for
 // without its spelling; "#" starts a comment to the end of the line, and
 // quotes or brackets inside one would mislead the string tracking here and
-// the bracket and offset scans. Inside double or single quotes a backslash
-// escapes the next character; inside backquotes it is literal, and a
-// backquote escaped there makes metricsql refuse the string anyway.
+// the bracket and offset scans. Inside any of the three quotes a backslash
+// skips the next character, as metricsql's scanString does: an escaped
+// closing quote does not end the string, backquotes included (a quoted
+// label name keeps such an escape).
 func unscannableOutsideString(query string) bool {
 	var quote byte
 	for i := 0; i < len(query); i++ {
@@ -255,7 +256,7 @@ func unscannableOutsideString(query string) bool {
 			return true
 		case quote == 0 && (c == '"' || c == '\'' || c == '`'):
 			quote = c
-		case quote != 0 && quote != '`' && c == '\\':
+		case quote != 0 && c == '\\':
 			i++
 		case quote != 0 && c == quote:
 			quote = 0

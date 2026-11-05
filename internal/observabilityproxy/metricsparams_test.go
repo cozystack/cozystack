@@ -506,6 +506,11 @@ func TestQueryLookahead(t *testing.T) {
 		"x # '\n+ rollup\\_candlestick(y) # '",
 		"x # \"\n+ rollup\\_candlestick(y) # \"",
 		"rate(x[5m]) # comment",
+		// metricsql lets a backslash escape the closing quote in backquotes
+		// too (scanString), and quoted label names keep such escapes, so
+		// a backquoted string must not end at an escaped backquote.
+		"container_cpu_usage_seconds_total{`\\``=\"\"} or rollup\\_candlestick(container_cpu_usage_seconds_total offset -5m+1h)",
+		"{`\\`a`} or rollup\\_candlestick(container_cpu_usage_seconds_total offset -5m+1h)",
 		// vmselect evaluates rollup_candlestick one step ahead
 		// (evalRollupFuncWithoutAt), whatever the offset.
 		`rollup_candlestick(x)`,
