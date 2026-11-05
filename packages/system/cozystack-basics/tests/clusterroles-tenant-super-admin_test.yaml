@@ -1,0 +1,32 @@
+suite: cozystack-basics tenant super-admin cannot write a raw VirtualMachine
+
+templates:
+  - templates/clusterroles.yaml
+
+release:
+  name: cozystack-basics
+  namespace: cozy-system
+
+# A kubevirt.io VirtualMachine written directly is sized outside any
+# application, so the super-admin keeps read and watch on it and nothing else.
+# The cluster-side check, after every aggregated role is folded in, is the
+# allowlist test in hack/e2e-install-cozystack.bats; this one fails earlier, on
+# the unit lane, for the role that carried the grant.
+tests:
+  - it: cozy:tenant:super-admin:base grants read and watch only on kubevirt.io virtualmachines
+    documentSelector:
+      path: metadata.name
+      value: cozy:tenant:super-admin:base
+    asserts:
+      - contains:
+          path: rules
+          content:
+            apiGroups: ["kubevirt.io"]
+            resources: ["virtualmachines"]
+            verbs: ["get", "list", "watch"]
+      - notContains:
+          path: rules
+          content:
+            apiGroups: ["kubevirt.io"]
+            resources: ["virtualmachines"]
+            verbs: ["*"]
