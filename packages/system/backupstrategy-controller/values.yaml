@@ -202,10 +202,12 @@ backupStorage:
   # cozy-default routes to exists and forces THIS release when any is
   # missing. It repairs a stale S3 endpoint the same way: when the
   # credentials Secret's endpoint differs from the COSI Secret it is rendered
-  # from it forces the bucket's <bucket>-system release, and when the
+  # from it forces the bucket's <bucket>-system release (only while
+  # systemSecretName is bucket-<bucketName>-system-credentials, the one
+  # Secret that release renders), and when the
   # backups.cozystack.io/endpoint annotation on the Velero BSL or a default
-  # Strategy differs from the credentials Secret's endpoint it forces THIS
-  # release. The COSI Secret itself keeps the endpoint it was granted with, so
+  # Strategy differs from the credentials Secret's endpoint, or is absent, it
+  # forces THIS release. The COSI Secret itself keeps the endpoint it was granted with, so
   # after a publishing.host change that endpoint follows only once the
   # BucketAccess is re-granted. Both are throttled, independently, and a no-op
   # in the steady state. A suspended release is skipped rather than
