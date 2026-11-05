@@ -44,3 +44,20 @@ tests:
         equal:
           path: metadata.namespace
           value: tenant-root
+
+  - it: renders the ingress HelmRelease next to seaweedfs for a sub-tenant with ingress
+    release:
+      name: tenant-acme
+      namespace: tenant-root
+    set:
+      ingress: true
+      seaweedfs: true
+    asserts:
+      - template: templates/ingress.yaml
+        equal:
+          path: metadata.namespace
+          value: tenant-acme
+      - template: templates/seaweedfs.yaml
+        equal:
+          path: metadata.namespace
+          value: tenant-acme
