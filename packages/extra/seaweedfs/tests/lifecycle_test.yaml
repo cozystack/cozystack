@@ -7,6 +7,7 @@ suite: seaweedfs lifecycle switch reaches the data plane
 templates:
   - templates/seaweedfs.yaml
   - templates/admin-credentials.yaml
+  - templates/dashboard-resourcemap.yaml
 
 release:
   name: seaweedfs
@@ -216,3 +217,36 @@ tests:
       - equal:
           path: spec.upgrade.remediation.retries
           value: -1
+
+  # The dashboard reads each WorkloadMonitor by name through this Role, so a
+  # monitor missing from it never shows up for the tenant.
+  - it: lets the dashboard read the admin and worker monitors
+    template: templates/dashboard-resourcemap.yaml
+    set: *platform
+    documentSelector:
+      path: kind
+      value: Role
+    asserts:
+      - contains:
+          path: rules[2].resourceNames
+          content: seaweedfs-admin
+      - contains:
+          path: rules[2].resourceNames
+          content: seaweedfs-worker
+
+  - it: grants no lifecycle monitors when lifecycle is off
+    template: templates/dashboard-resourcemap.yaml
+    set:
+      <<: *platform
+      lifecycle:
+        enabled: false
+    documentSelector:
+      path: kind
+      value: Role
+    asserts:
+      - notContains:
+          path: rules[2].resourceNames
+          content: seaweedfs-admin
+      - notContains:
+          path: rules[2].resourceNames
+          content: seaweedfs-worker
