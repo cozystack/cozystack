@@ -3141,6 +3141,34 @@ func TestReconcileCNPG_RestoreResetsDestinationRetryBudget(t *testing.T) {
 	}
 }
 
+// With two jobs holding the queue the wait names the same one on every pass,
+// whatever order the cache lists their Backups in, so a waiting job does not
+// rewrite its status each poll.
+func TestReconcileCNPG_QueueNamesOneHolderAcrossPasses(t *testing.T) {
+	f := newAttachedObjectStoreFixture(t, time.Now(), "s3://other/")
+	f.seedOtherBackupJob("holder-z", backupsv1alpha1.BackupJobPhaseRunning)
+	f.seedOtherBackupJob("holder-a", backupsv1alpha1.BackupJobPhaseRunning)
+	f.seedCNPGBackup("a-cnpg", "holder-z", rolloutCluster, "running")
+	f.seedCNPGBackup("z-cnpg", "holder-a", rolloutCluster, "running")
+	statusWrites := 0
+	f.r.Client = interceptor.NewClient(f.c.(client.WithWatch), interceptor.Funcs{
+		SubResourceUpdate: func(ctx context.Context, cl client.Client, sub string, obj client.Object, opts ...client.SubResourceUpdateOption) error {
+			statusWrites++
+			return cl.SubResource(sub).Update(ctx, obj, opts...)
+		},
+	})
+
+	j, _ := f.pass()
+	if ready := apimeta.FindStatusCondition(j.Status.Conditions, "Ready"); ready == nil || ready.Reason != "WaitingForOtherBackup" || !strings.Contains(ready.Message, "holder-a ") {
+		t.Fatalf("Ready = %+v, want WaitingForOtherBackup naming holder-a", ready)
+	}
+	statusWrites = 0
+	f.pass()
+	if statusWrites != 0 {
+		t.Errorf("a second pass with the same two holders wrote the BackupJob status %d time(s)", statusWrites)
+	}
+}
+
 func TestOtherCNPGBackupInFlight_IgnoresTheJobsOwnBackup(t *testing.T) {
 	f := newAttachedObjectStoreFixture(t, time.Now(), "s3://other/")
 	f.seedCNPGBackup("bj-cnpg", "bj", rolloutCluster, "running")
