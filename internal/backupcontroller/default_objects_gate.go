@@ -378,9 +378,21 @@ func (g *DefaultObjectsGate) Check(ctx context.Context) ([]string, bool, error) 
 		return g.reconcileCredentials(ctx)
 	}
 
+	// The credentials comparison needs only the two Secrets, so its force goes
+	// out before the object reads: an unreadable BackupClass or Strategy must
+	// not keep the stale endpoint in the Secret every driver reads.
+	var needed []string
+	var forced bool
 	staleCreds, credsErr := g.staleCredentials(ctx, src)
+	errs := []error{credsErr}
 	if credsErr != nil {
 		defaultObjectsCheckErrors.WithLabelValues(g.BackupClassName).Inc()
+	}
+	if staleCreds != "" {
+		_, credsForced, err := g.force(ctx, g.CredentialsHelmRelease, &g.lastCredentialsForce, []string{staleCreds})
+		needed = append(needed, staleCreds)
+		forced = credsForced
+		errs = append(errs, err)
 	}
 
 	backupClass := &backupsv1alpha1.BackupClass{}
@@ -388,7 +400,7 @@ func (g *DefaultObjectsGate) Check(ctx context.Context) ([]string, bool, error) 
 		if credsErr == nil {
 			defaultObjectsCheckErrors.WithLabelValues(g.BackupClassName).Inc()
 		}
-		return nil, false, errors.Join(credsErr, fmt.Errorf("get BackupClass %s: %w", g.BackupClassName, err))
+		return needed, forced, errors.Join(append(errs, fmt.Errorf("get BackupClass %s: %w", g.BackupClassName, err))...)
 	}
 
 	// With provisionBucket=false (no bucket release) the chart renders
@@ -403,19 +415,10 @@ func (g *DefaultObjectsGate) Check(ctx context.Context) ([]string, bool, error) 
 		if credsErr == nil {
 			defaultObjectsCheckErrors.WithLabelValues(g.BackupClassName).Inc()
 		}
-		return nil, false, errors.Join(credsErr, err)
+		return needed, forced, errors.Join(append(errs, err)...)
 	}
 	defaultObjectsMissing.WithLabelValues(g.BackupClassName).Set(float64(len(state.missing)))
 
-	var needed []string
-	var forced bool
-	errs := []error{credsErr}
-	if staleCreds != "" {
-		_, credsForced, err := g.force(ctx, g.CredentialsHelmRelease, &g.lastCredentialsForce, []string{staleCreds})
-		needed = append(needed, staleCreds)
-		forced = credsForced
-		errs = append(errs, err)
-	}
 	if objects := append(state.missing, state.stale...); len(objects) > 0 {
 		sort.Strings(objects)
 		_, objectsForced, err := g.force(ctx, g.HelmRelease, &g.lastForce, objects)
