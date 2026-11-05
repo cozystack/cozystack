@@ -176,10 +176,11 @@ const (
 	cnpgRecoveryMaxInspectPods = 5
 
 	// Cap on the wall-clock time a BackupJob waits for the barman-cloud
-	// plugin rollout, counted from the attach, or retries writing the WAL
-	// archive destination, counted from the first failure since the job last
-	// left the queue, before the cnpg.io/Backup exists. A Backup that exists
-	// is not capped: CloudNativePG keeps a healthy one pending while another
+	// plugin rollout, counted from the PluginRolledOut condition, or retries
+	// writing the WAL archive destination, counted from the first failure
+	// since the last successful write or the last wait for another backup or
+	// a restore, before the cnpg.io/Backup exists. A Backup that exists is
+	// not capped: CloudNativePG keeps a healthy one pending while another
 	// backup of the same Cluster runs, or while it restarts one on another
 	// instance, so no fixed deadline tells those apart from a stuck one.
 	cnpgDefaultBackupDeadline = 30 * time.Minute
@@ -193,8 +194,8 @@ const (
 	// instance, and a cnpg.io/Backup created meanwhile fails with "requested
 	// plugin is not available" or "instance manager was restarted during
 	// backup" and never recovers. False holds the Backup back; its
-	// LastTransitionTime, written before the plugin is attached, is what the
-	// instance pods must postdate (see cnpgPluginRolloutPending).
+	// LastTransitionTime is what the instance pods must postdate (see
+	// cnpgReasonAttachingPlugin and cnpgPluginRolloutPending).
 	backupCondPluginRolledOut = "PluginRolledOut"
 
 	// Reason of the PluginRolledOut latch recorded before the write that
@@ -205,7 +206,7 @@ const (
 	// Condition Type recorded while writing the WAL archive destination keeps
 	// failing. Its LastTransitionTime marks the first failure, so the retry
 	// budget is not spent by time the job waited for another backup of the
-	// app before it tried.
+	// app, or for a restore of it, before it tried.
 	backupCondDestinationApplied = "DestinationApplied"
 
 	cnpgPodRoleLabel    = "cnpg.io/podRole"
@@ -576,9 +577,8 @@ func cnpgBackupFailedMessage(b *cnpgtypes.Backup, errText string) string {
 
 // cnpgBackupDeadlineExceeded reports whether more than the backup deadline
 // has passed since the BackupJob began the step it is waiting on: the plugin
-// rollout, counted from the attach, or retrying the destination write,
-// counted from the first failure since the job last left the queue behind
-// another backup. Returns false for a nil time.
+// rollout or retrying the destination write (see cnpgDefaultBackupDeadline).
+// Returns false for a nil time.
 func cnpgBackupDeadlineExceeded(since *metav1.Time) bool {
 	if since == nil {
 		return false
