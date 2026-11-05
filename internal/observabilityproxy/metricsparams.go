@@ -134,8 +134,11 @@ func BuildMetricsParams(endpoint string, in url.Values, namespace string, now ti
 				return req, herr
 			}
 			at = t
-			out.Set("time", formatTime(t))
 		}
+		// The default is forwarded too: the application lookup is sized
+		// for at, and vmselect's own clock reads later, by as long as the
+		// lookups took.
+		out.Set("time", formatTime(at))
 		step := instantDefaultStep
 		if v := in.Get("step"); v != "" {
 			var herr *HTTPError
