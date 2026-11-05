@@ -60,6 +60,8 @@ var adGVR = schema.GroupVersionResource{Group: "cozystack.io", Version: "v1alpha
 
 const ns = "tenant-worker-integration"
 
+var poolResource string
+
 func check(t *testing.T, err error) {
 	t.Helper()
 	if err != nil {
@@ -145,7 +147,7 @@ func (h *harness) ok(method, path string, obj any, ct string) map[string]any {
 	return o
 }
 func (h *harness) poolPath(name string) string {
-	return "/apis/apps.cozystack.io/v1alpha1/namespaces/" + ns + "/kubernetesnodeses" + map[bool]string{true: "/" + name, false: ""}[name != ""]
+	return "/apis/apps.cozystack.io/v1alpha1/namespaces/" + ns + "/" + poolResource + map[bool]string{true: "/" + name, false: ""}[name != ""]
 }
 func (h *harness) persisted(name, class string) {
 	h.t.Helper()
@@ -246,6 +248,11 @@ func TestProductionPackage(t *testing.T) {
 	var adObject map[string]any
 	check(t, yaml.Unmarshal(rdRaw, &adObject))
 	adObject["metadata"].(map[string]any)["name"] = "package-integration-kubernetes-nodes"
+	poolResource, _, e = unstructured.NestedString(adObject, "spec", "application", "plural")
+	check(t, e)
+	if poolResource == "" {
+		t.Fatal("generated pool resource is empty")
+	}
 	_, e = dyn.Resource(adGVR).Create(ctx, u(adObject), metav1.CreateOptions{})
 	check(t, e)
 	rawSchema, _, e := unstructured.NestedString(adObject, "spec", "application", "openAPISchema")
@@ -535,7 +542,7 @@ func TestProductionPackage(t *testing.T) {
 	t.Run("real-VAP", func(t *testing.T) {
 		h.t = t
 		exact := ar.Exact
-		pol := &ar.ValidatingAdmissionPolicy{ObjectMeta: metav1.ObjectMeta{Name: "research-local-rule"}, Spec: ar.ValidatingAdmissionPolicySpec{ParamKind: &ar.ParamKind{APIVersion: "cozystack.io/v1alpha1", Kind: "WorkerClass"}, FailurePolicy: &fail, MatchConstraints: &ar.MatchResources{MatchPolicy: &exact, ResourceRules: []ar.NamedRuleWithOperations{{RuleWithOperations: ar.RuleWithOperations{Operations: []ar.OperationType{ar.Create, ar.Update}, Rule: ar.Rule{APIGroups: []string{"apps.cozystack.io"}, APIVersions: []string{"v1alpha1"}, Resources: []string{"kubernetesnodeses"}}}}}}, Validations: []ar.Validation{{Expression: "params.metadata.name == 'talos' && (!has(object.spec.maxReplicas) || object.spec.maxReplicas >= 0)", Message: "package-local-rule"}}}}
+		pol := &ar.ValidatingAdmissionPolicy{ObjectMeta: metav1.ObjectMeta{Name: "research-local-rule"}, Spec: ar.ValidatingAdmissionPolicySpec{ParamKind: &ar.ParamKind{APIVersion: "cozystack.io/v1alpha1", Kind: "WorkerClass"}, FailurePolicy: &fail, MatchConstraints: &ar.MatchResources{MatchPolicy: &exact, ResourceRules: []ar.NamedRuleWithOperations{{RuleWithOperations: ar.RuleWithOperations{Operations: []ar.OperationType{ar.Create, ar.Update}, Rule: ar.Rule{APIGroups: []string{"apps.cozystack.io"}, APIVersions: []string{"v1alpha1"}, Resources: []string{poolResource}}}}}}, Validations: []ar.Validation{{Expression: "params.metadata.name == 'talos' && (!has(object.spec.maxReplicas) || object.spec.maxReplicas >= 0)", Message: "package-local-rule"}}}}
 		_, err := kube.AdmissionregistrationV1().ValidatingAdmissionPolicies().Create(ctx, pol, metav1.CreateOptions{})
 		check(t, err)
 		_, err = kube.AdmissionregistrationV1().ValidatingAdmissionPolicyBindings().Create(ctx, &ar.ValidatingAdmissionPolicyBinding{ObjectMeta: metav1.ObjectMeta{Name: "research-local-rule"}, Spec: ar.ValidatingAdmissionPolicyBindingSpec{ParamRef: &ar.ParamRef{Name: "talos", ParameterNotFoundAction: func() *ar.ParameterNotFoundActionType { v := ar.DenyAction; return &v }()}, PolicyName: pol.Name, ValidationActions: []ar.ValidationAction{ar.Deny}}}, metav1.CreateOptions{})
@@ -971,9 +978,6 @@ func startPackage(t *testing.T, ctx context.Context, root, run string, host *res
 	for _, obj := range objects {
 		switch obj.GetKind() {
 		case "Deployment":
-			list, _, e := unstructured.NestedStringSlice(obj.Object, "spec", "template", "spec", "containers")
-			_ = list
-			_ = e
 			containers, _, _ := unstructured.NestedSlice(obj.Object, "spec", "template", "spec", "containers")
 			for _, raw := range containers {
 				for _, a := range raw.(map[string]any)["args"].([]any) {
@@ -995,6 +999,14 @@ func startPackage(t *testing.T, ctx context.Context, root, run string, host *res
 		case "Issuer":
 			continue
 		case "MutatingWebhookConfiguration", "ValidatingWebhookConfiguration":
+			hooks, _, _ := unstructured.NestedSlice(obj.Object, "webhooks")
+			for _, hook := range hooks {
+				rules := hook.(map[string]any)["rules"].([]any)
+				resources := rules[0].(map[string]any)["resources"].([]any)
+				if len(resources) != 1 || resources[0] != poolResource {
+					t.Fatalf("rendered webhook resource %v != actual generated resource %s", resources, poolResource)
+				}
+			}
 			registration = obj.GetName()
 			continue
 		}

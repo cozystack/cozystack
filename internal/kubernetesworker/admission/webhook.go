@@ -19,7 +19,8 @@ type Mutator struct{ DefaultWorkerClass string }
 type Validator struct{ Reader client.Reader }
 
 func matches(req ca.Request) bool {
-	return req.Resource.Group == "apps.cozystack.io" && req.Resource.Version == "v1alpha1" && req.Resource.Resource == "kubernetesnodeses" && (req.Operation == av1.Create || req.Operation == av1.Update)
+	resource := config.PoolResource()
+	return req.Resource.Group == resource.Group && req.Resource.Version == resource.Version && req.Resource.Resource == resource.Resource && (req.Operation == av1.Create || req.Operation == av1.Update)
 }
 
 func decode(raw []byte) (map[string]any, map[string]any, error) {

@@ -9,6 +9,7 @@ test:
 generate:
 	cozyvalues-gen -m 'kubernetesnodes' -v values.yaml -s values.schema.json -r README.md -g ../../../api/apps/v1alpha1/kubernetesnodes/types.go
 	../../../hack/update-crd.sh
+	go run ../../../hack/update-worker-resource.go --input ../../system/kubernetes-nodes-rd/cozyrds/kubernetes-nodes.yaml --go-output ../../../internal/kubernetesworker/config/resource.json --chart-output ../../system/kubernetes-worker-classes/files/pool-resource.json
 
 # Keep the worker-image inputs (Talos<->Kubernetes support matrix and the
 # kubectl.tag used by the talos-reconcile Job) in lockstep with the parent

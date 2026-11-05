@@ -1,3 +1,4 @@
+{{- $resource := .Files.Get "files/pool-resource.json" | fromJson -}}
 {{- range $kind := list "MutatingWebhookConfiguration" "ValidatingWebhookConfiguration" }}
 ---
 apiVersion: admissionregistration.k8s.io/v1
@@ -23,7 +24,7 @@ webhooks:
         port: 443
     rules:
       - operations: [CREATE, UPDATE]
-        apiGroups: [apps.cozystack.io]
-        apiVersions: [v1alpha1]
-        resources: [kubernetesnodeses]
+        apiGroups: [{{ $resource.group }}]
+        apiVersions: [{{ $resource.version }}]
+        resources: [{{ $resource.resource }}]
 {{- end }}

@@ -5,6 +5,7 @@ import (
 	workers "github.com/cozystack/cozystack/api/workers/v1alpha1"
 	"os"
 	"reflect"
+	"sigs.k8s.io/yaml"
 	"strings"
 	"testing"
 )
@@ -108,5 +109,22 @@ func TestEquivalentFactorySelections(t *testing.T) {
 	}
 	if !Equivalent(a, b) {
 		t.Fatal("equivalent factory syntax changes effective settings")
+	}
+}
+
+func TestResourceDescriptorTracksGeneratedApplication(t *testing.T) {
+	raw, err := os.ReadFile("../../../packages/system/kubernetes-nodes-rd/cozyrds/kubernetes-nodes.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var definition struct {
+		Spec struct{ Application struct{ Kind, Plural string } }
+	}
+	if err = yaml.Unmarshal(raw, &definition); err != nil {
+		t.Fatal(err)
+	}
+	descriptor := PoolResource()
+	if descriptor.Kind != definition.Spec.Application.Kind || descriptor.Resource != definition.Spec.Application.Plural {
+		t.Fatalf("stale resource descriptor: %+v vs %v", descriptor, definition.Spec.Application)
 	}
 }

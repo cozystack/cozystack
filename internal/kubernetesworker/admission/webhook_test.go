@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	workers "github.com/cozystack/cozystack/api/workers/v1alpha1"
+	"github.com/cozystack/cozystack/internal/kubernetesworker/config"
 	av1 "k8s.io/api/admission/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -26,7 +27,7 @@ func req(op av1.Operation, pool, old map[string]any) ca.Request {
 	if old != nil {
 		oldRaw, _ = json.Marshal(map[string]any{"spec": old})
 	}
-	return ca.Request{AdmissionRequest: av1.AdmissionRequest{Operation: op, Resource: metav1.GroupVersionResource{Group: "apps.cozystack.io", Version: "v1alpha1", Resource: "kubernetesnodeses"}, Kind: metav1.GroupVersionKind{Group: "apps.cozystack.io", Version: "v1alpha1", Kind: "KubernetesNodes"}, Namespace: "tenant-test", Name: "k-md0", Object: runtime.RawExtension{Raw: raw}, OldObject: runtime.RawExtension{Raw: oldRaw}}}
+	return ca.Request{AdmissionRequest: av1.AdmissionRequest{Operation: op, Resource: metav1.GroupVersionResource{Group: "apps.cozystack.io", Version: "v1alpha1", Resource: config.PoolResource().Resource}, Kind: metav1.GroupVersionKind{Group: "apps.cozystack.io", Version: "v1alpha1", Kind: "KubernetesNodes"}, Namespace: "tenant-test", Name: "k-md0", Object: runtime.RawExtension{Raw: raw}, OldObject: runtime.RawExtension{Raw: oldRaw}}}
 }
 func reader(t *testing.T, objects ...client.Object) client.WithWatch {
 	t.Helper()
