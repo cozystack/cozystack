@@ -37,6 +37,10 @@ const (
 	// JobFailed    -> Status=True (terminal failure of the backing Job).
 	// JobRunning   -> Status=False (still in progress).
 	// JobSuspended -> Status=False (admin-suspended via spec).
+	// The operator also writes reason Failed with Status=False and its own
+	// message ("Error creating Job", "Backup not complete") when a run fails
+	// outside its Job. It retries those, so the driver keeps waiting on
+	// Failed until its deadline rather than failing the run at once.
 	ConditionReasonJobComplete  = "JobComplete"
 	ConditionReasonJobFailed    = "JobFailed"
 	ConditionReasonJobRunning   = "JobRunning"
