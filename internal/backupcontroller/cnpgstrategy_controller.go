@@ -197,6 +197,11 @@ const (
 	// instance pods must postdate (see cnpgPluginRolloutPending).
 	backupCondPluginRolledOut = "PluginRolledOut"
 
+	// Reason of the PluginRolledOut latch recorded before the write that
+	// attaches the plugin. The write that attaches it replaces the latch with
+	// its own time, which retries can put long after the latch.
+	cnpgReasonAttachingPlugin = "AttachingPlugin"
+
 	// Condition Type recorded while writing the WAL archive destination keeps
 	// failing. Its LastTransitionTime marks the first failure, so the retry
 	// budget is not spent by time the job waited for another backup of the
@@ -356,6 +361,7 @@ func (r *BackupJobReconciler) reconcileCNPG(ctx context.Context, j *backupsv1alp
 		}
 	}
 
+	attemptedAt := metav1.Now()
 	attachment, err := r.applyClusterPluginBackup(ctx, j.Namespace, clusterName, rendered, serverName, existingBackup != nil || awaitingRollout, writeDestination)
 	if err != nil {
 		if apierrors.IsNotFound(err) {
@@ -419,8 +425,33 @@ func (r *BackupJobReconciler) reconcileCNPG(ctx context.Context, j *backupsv1alp
 			apimeta.SetStatusCondition(&j.Status.Conditions, metav1.Condition{
 				Type:    backupCondPluginRolledOut,
 				Status:  metav1.ConditionFalse,
+				Reason:  cnpgReasonAttachingPlugin,
+				Message: message,
+			})
+			apimeta.SetStatusCondition(&j.Status.Conditions, metav1.Condition{
+				Type:    "Ready",
+				Status:  metav1.ConditionFalse,
 				Reason:  "WaitingForPluginRollout",
 				Message: message,
+			})
+			if err := r.Status().Update(ctx, j); err != nil {
+				return ctrl.Result{}, err
+			}
+			return ctrl.Result{RequeueAfter: cnpgPollInterval}, nil
+		}
+		if rollout.Reason == cnpgReasonAttachingPlugin && attachment.missing {
+			// Instances recreated between the latch and this write run
+			// without the plugin, and the rollout deadline starts here. A
+			// plugin someone else attached since the latch keeps it: the
+			// rollout that attach started may already be over.
+			message := fmt.Sprintf("attached the barman-cloud plugin to cnpg.io/Cluster %s/%s, waiting for its instances to roll", j.Namespace, clusterName)
+			apimeta.RemoveStatusCondition(&j.Status.Conditions, backupCondPluginRolledOut)
+			apimeta.SetStatusCondition(&j.Status.Conditions, metav1.Condition{
+				Type:               backupCondPluginRolledOut,
+				Status:             metav1.ConditionFalse,
+				Reason:             "WaitingForPluginRollout",
+				Message:            message,
+				LastTransitionTime: attemptedAt,
 			})
 			apimeta.SetStatusCondition(&j.Status.Conditions, metav1.Condition{
 				Type:    "Ready",
