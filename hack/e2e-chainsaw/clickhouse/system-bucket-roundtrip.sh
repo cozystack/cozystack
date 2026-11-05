@@ -120,9 +120,12 @@ sidecar_before=$(sidecar_identity)
 [[ "$sidecar_before" =~ ^[0-9a-f-]+\ [0-9]+$ ]] \
     || { log_error "could not read the ClickHouse Pod uid and clickhouse-backup restart count (got '${sidecar_before}')"; exit 1; }
 
-log_step "Writing the sentinel row"
+# Restore picks the newest remote backup of the release, so only a row no
+# earlier run wrote shows that the archive restored is this run's.
+sentinel="before-backup-$(date -u +%Y%m%dT%H%M%SZ)-${RANDOM}"
+log_step "Writing the sentinel row ${sentinel}"
 clickhouse_query "$CLICKHOUSE_NAME" "CREATE TABLE IF NOT EXISTS default.sentinel (id UInt32, name String) ENGINE = MergeTree ORDER BY id"
-clickhouse_query "$CLICKHOUSE_NAME" "INSERT INTO default.sentinel VALUES (1, 'before-backup')"
+clickhouse_query "$CLICKHOUSE_NAME" "INSERT INTO default.sentinel VALUES (1, '${sentinel}')"
 
 log_step "Backing up through cozy-default"
 kubectl apply -f - <<EOF
@@ -163,10 +166,9 @@ spec:
 EOF
 wait_for_field restorejob "$RESTOREJOB_NAME" '{.status.phase}' Succeeded "$NAMESPACE" "$JOB_TIMEOUT" Failed
 
-count=$(clickhouse_query "$CLICKHOUSE_NAME" "SELECT count() FROM default.sentinel" | tr -d '[:space:]')
-[[ "$count" =~ ^[0-9]+$ ]] || { log_error "non-numeric sentinel count: '${count}'"; exit 1; }
-(( count >= 1 )) || { log_error "sentinel row count after restore is ${count}; expected >= 1"; exit 1; }
+count=$(clickhouse_query "$CLICKHOUSE_NAME" "SELECT count() FROM default.sentinel WHERE name = '${sentinel}'" | tr -d '[:space:]')
+[ "$count" = 1 ] || { log_error "after restore default.sentinel holds ${count} row(s) named ${sentinel}; expected 1"; exit 1; }
 sidecar_after=$(sidecar_identity)
 [ "$sidecar_after" = "$sidecar_before" ] \
     || { log_error "the ClickHouse Pod or its clickhouse-backup container restarted during the round-trip (uid restarts: '${sidecar_before}' then '${sidecar_after}')"; exit 1; }
-log_success "System-bucket round-trip verified: ${count} sentinel row(s) restored"
+log_success "System-bucket round-trip verified: sentinel row ${sentinel} restored"
