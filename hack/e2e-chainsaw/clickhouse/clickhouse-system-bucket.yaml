@@ -13,7 +13,9 @@ spec:
   logStorageSize: 1Gi
   shards: 1
   replicas: 1
-  resourcesPreset: nano
+  # The round-trip runs SQL against this server; at nano's 128Mi the first
+  # query OOM-kills it, so it takes the preset clickhouse-2 runs SQL on.
+  resourcesPreset: small
   resources: {}
   backup:
     enabled: true
