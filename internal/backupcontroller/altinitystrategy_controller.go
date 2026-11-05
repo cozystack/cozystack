@@ -509,6 +509,13 @@ func (r *BackupJobReconciler) createAltinityBackupArtifact(
 		if getErr := r.Get(ctx, types.NamespacedName{Namespace: backup.Namespace, Name: backup.Name}, existing); getErr != nil {
 			return nil, getErr
 		}
+		// A Backup outlives its BackupJob, so a BackupJob re-created under a
+		// used name meets the earlier run's Backup here. Only one recording
+		// this run's archive was created by an earlier reconcile of this run.
+		if got := existing.Spec.DriverMetadata[altinityArchiveMetaKey]; got != archive {
+			return nil, fmt.Errorf("Backup %s/%s already exists and records archive %q, not %q that this run wrote",
+				backup.Namespace, backup.Name, got, archive)
+		}
 		return existing, nil
 	}
 	return backup, nil
