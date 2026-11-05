@@ -7,7 +7,9 @@
 # operations and answers any new one with HTTP 423 while another is "in
 # progress", so a strategy Pod that starts its operation without waiting for
 # an idle sidecar burns a Job attempt in seconds. The gate has to fail the Pod
-# rather than proceed when the sidecar never becomes idle.
+# rather than proceed when the sidecar never becomes idle. Once started, an
+# operation the sidecar no longer lists (its action log lives in memory and a
+# restart empties it) has to fail the Pod too, since the Job has no deadline.
 #
 # Run from the repo root with make bats-unit-tests. The rendered script is run
 # with `bash`, not `sh`: it opens `set -euo pipefail`, which the production
@@ -43,7 +45,12 @@ render_script() {
 #                operation "in progress"; while it is positive a POST is
 #                refused the way the sidecar refuses it (423, curl -f exit 22)
 #   posted       the operation the script started, once it started one
+#   restarted    present: the action log no longer lists the started operation,
+#                as after the sidecar restarted and lost its in-memory log
 #   requests     one line per request: method and URL
+#   runaway      created when the script exceeds 200 requests; that request
+#                and every later one fails, so a polling loop that never ends
+#                stops the test instead of hanging it
 make_stubs() {
   bin=$1; state=$2
   mkdir -p "$bin" "$state"
@@ -59,6 +66,7 @@ for a in "\$@"; do
   prev=\$a
 done
 echo "\$method \$url" >> "\$state/requests"
+if [ "\$(wc -l < "\$state/requests")" -gt 200 ]; then touch "\$state/runaway"; exit 7; fi
 if [ -e "\$state/unreachable" ]; then exit 7; fi
 busy=\$(cat "\$state/busy" 2>/dev/null || echo 0)
 case "\$method \$url" in
@@ -71,7 +79,7 @@ case "\$method \$url" in
     if [ "\$busy" -gt 0 ]; then
       echo \$((busy - 1)) > "\$state/busy"
       echo '{"command":"upload --resumable=1 clickhouse-myapp-20260101T000000Z","status":"in progress","start":"2026-01-01 00:01:00"}'
-    elif [ -s "\$state/posted" ]; then
+    elif [ -s "\$state/posted" ] && [ ! -e "\$state/restarted" ]; then
       echo "{\"command\":\"\$(cat "\$state/posted")\",\"status\":\"success\",\"start\":\"2026-01-01 00:02:00\"}"
     fi
     ;;
@@ -153,4 +161,14 @@ run_script() {
   render_script "$tmp/s.sh" restore myapp
   if run_script "$tmp"; then echo "FAIL: a busy sidecar must fail the Pod"; false; fi
   if grep -q '^POST ' "$tmp/state/requests"; then echo "FAIL: no restore may start on a busy sidecar"; false; fi
+}
+
+@test "backup fails instead of polling forever when the sidecar restarts after create_remote" {
+  tmp=$(mktemp -d)
+  make_stubs "$tmp/bin" "$tmp/state"
+  touch "$tmp/state/restarted"
+  render_script "$tmp/s.sh" backup myapp
+  if run_script "$tmp"; then echo "FAIL: an operation lost from the action log must fail the Pod"; false; fi
+  grep -q '^POST .*/backup/create_remote?name=clickhouse-myapp-' "$tmp/state/requests"
+  if [ -e "$tmp/state/runaway" ]; then echo "FAIL: the script kept polling for an operation the sidecar no longer lists"; false; fi
 }

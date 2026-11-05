@@ -87,6 +87,13 @@ spec:
                 row=$(curl -fsS ${auth} "${api}/backup/actions" \
                   | jq -rs --arg suffix "${target}" \
                       '[.[] | select((.command // "") | endswith($suffix))] | sort_by(.start) | last')
+                # The sidecar logs the operation before acknowledging the POST
+                # and keeps that log only in memory, so a missing row means it
+                # restarted and the operation is gone; nothing will resume it.
+                if [ "${row}" = "null" ]; then
+                  echo "operation ${target} is no longer in the sidecar action log; the sidecar restarted and dropped it" >&2
+                  exit 1
+                fi
                 status=$(echo "${row}" | jq -r '.status // ""')
                 case "${status}" in
                   success) echo "operation succeeded" ; exit 0 ;;
