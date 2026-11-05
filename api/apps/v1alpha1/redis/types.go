@@ -7,6 +7,7 @@ package redis
 import (
 	resource "k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/apimachinery/pkg/apis/meta/v1"
+	k8sRuntime "k8s.io/apimachinery/pkg/runtime"
 )
 
 // +kubebuilder:object:root=true
@@ -26,6 +27,9 @@ type ConfigSpec struct {
 	// Default sizing preset used when `resources` is omitted.
 	// +kubebuilder:default:="t1.nano"
 	ResourcesPreset ResourcesPreset `json:"resourcesPreset"`
+	// Kubernetes affinity configuration for Redis and Sentinel pods.
+	// +kubebuilder:default:={}
+	Affinity AffinitySpec `json:"affinity,omitempty"`
 	// Persistent Volume Claim size available for application data.
 	// +kubebuilder:default:="1Gi"
 	Size resource.Quantity `json:"size"`
@@ -54,6 +58,15 @@ type ConfigSpec struct {
 	// Sentinel configuration. When `sentinel.resources` is empty and `sentinel.resourcesPreset` is unset, the three Sentinel pods are sized like the Redis pods (`resources` and `resourcesPreset`). An empty `sentinel.resources` map counts as unset, as an empty top-level `resources` does.
 	// +kubebuilder:default:={}
 	Sentinel Sentinel `json:"sentinel,omitempty"`
+}
+
+type AffinitySpec struct {
+	// Kubernetes Affinity for Redis pods. When set, redis-operator uses it verbatim and does not add its default soft podAntiAffinity; include podAntiAffinity unless replica co-location is intended.
+	// +kubebuilder:default:={}
+	Redis *k8sRuntime.RawExtension `json:"redis,omitempty"`
+	// Kubernetes Affinity for Sentinel pods. When set, redis-operator uses it verbatim and does not add its default soft podAntiAffinity; include podAntiAffinity unless replica co-location is intended.
+	// +kubebuilder:default:={}
+	Sentinel *k8sRuntime.RawExtension `json:"sentinel,omitempty"`
 }
 
 type Resources struct {

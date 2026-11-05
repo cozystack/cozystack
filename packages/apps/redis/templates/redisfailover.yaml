@@ -67,9 +67,15 @@ spec:
     image: {{ $redisImage | quote }}
     replicas: 3
     resources: {{- include "cozy-lib.resources.defaultingSanitize" (list $sentinelPreset $sentinelResources $) | nindent 6 }}
+    {{- with (.Values.affinity).sentinel }}
+    affinity: {{- toYaml . | nindent 6 }}
+    {{- end }}
   redis:
     image: {{ $redisImage | quote }}
     resources: {{- include "cozy-lib.resources.defaultingSanitize" (list .Values.resourcesPreset .Values.resources $) | nindent 6 }}
+    {{- with (.Values.affinity).redis }}
+    affinity: {{- toYaml . | nindent 6 }}
+    {{- end }}
     replicas: {{ .Values.replicas }}
     {{- with .Values.size }}
     storage:
