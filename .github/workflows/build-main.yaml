@@ -23,8 +23,20 @@ env:
 on:
   push:
     branches: [main]
+    # Mirrors hack/code-changed.sh; hack/code-changed_test.bats keeps them equal.
     paths-ignore:
       - 'docs/**'
+      - 'img/**'
+      - '.gemini/**'
+      - '.github/ISSUE_TEMPLATE/**'
+      - '.github/CODEOWNERS'
+      - '.github/PULL_REQUEST_TEMPLATE.md'
+      - '.github/labels.yml'
+      - '.github/renovate.json'
+      - '.coderabbit.yaml'
+      - 'security-insights.yml'
+      - 'LICENSE'
+      - '**.md'
 
 # Only the newest main commit's cache matters; cancel older in-flight warmers.
 concurrency:
