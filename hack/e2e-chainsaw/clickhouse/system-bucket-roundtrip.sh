@@ -103,6 +103,9 @@ while true; do
         kubectl -n "$NAMESPACE" describe ingress ingress-seaweedfs-s3 >&2 || true
         exit 1
     fi
+    # TODO(e2e-replace-fixed-timeouts): no condition reports that the host
+    # CoreDNS answers with the rewrite and the Ingress serves the Test
+    # certificate, as seen from this namespace; poll until one does.
     sleep 10
 done
 
