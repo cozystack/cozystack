@@ -1000,10 +1000,9 @@ func TestUnmarshalCNPGBackupSnapshot_RejectsMissingOrWrongKind(t *testing.T) {
 	}
 }
 
-// TestCNPGBackupDeadlineExceeded locks in the wall-clock cap that prevents a
-// perpetually-failed cnpg.io/Backup from pinning the BackupJob in Running
-// forever. Without this guard the Plan-controller queue would back up
-// behind a single broken backup.
+// TestCNPGBackupDeadlineExceeded locks in the wall-clock cap on waiting for
+// the barman-cloud plugin rollout, so a rollout that never finishes fails the
+// BackupJob instead of pinning it in Running.
 func TestCNPGBackupDeadlineExceeded(t *testing.T) {
 	cases := []struct {
 		name      string
