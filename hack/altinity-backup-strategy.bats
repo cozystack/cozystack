@@ -105,6 +105,7 @@ remote_rows() {
     echo "FAIL: render_script reported success with no chart"
     false
   fi
+  rm -rf "$tmp"
 }
 
 @test "restore reads back the archive the Backup recorded, not the newest one" {
@@ -116,6 +117,7 @@ remote_rows() {
   PATH="$tmp/bin:$PATH" bash "$tmp/s.sh"
   grep -qxF 'POST http://chi-clickhouse-myapp-clickhouse-0-0.tenant-x.svc:7171/backup/restore_remote/clickhouse-myapp-20260304T050607Z' "$tmp/curl.log"
   [ "$(grep -c '/backup/restore_remote/' "$tmp/curl.log")" -eq 1 ]
+  rm -rf "$tmp"
 }
 
 @test "restore fails naming the recorded archive when remote storage lacks it" {
@@ -133,6 +135,7 @@ remote_rows() {
     echo "FAIL: restored another archive: $(cat "$tmp/curl.log")"
     false
   fi
+  rm -rf "$tmp"
 }
 
 @test "restore of a Backup without a recorded archive takes the newest one stamped by its takenAt, and warns" {
@@ -150,6 +153,7 @@ remote_rows() {
   grep -qxF 'POST http://chi-clickhouse-myapp-clickhouse-0-0.tenant-x.svc:7171/backup/restore_remote/clickhouse-myapp-20260304T050607Z' "$tmp/curl.log"
   [ "$(grep -c '/backup/restore_remote/' "$tmp/curl.log")" -eq 1 ]
   printf '%s\n' "$out" | grep -qF 'WARNING: Backup bkp-a records no archive name'
+  rm -rf "$tmp"
 }
 
 @test "restore of a Backup without a recorded archive fails when no archive is stamped by its takenAt" {
@@ -167,6 +171,7 @@ remote_rows() {
     echo "FAIL: restored an archive newer than takenAt: $(cat "$tmp/curl.log")"
     false
   fi
+  rm -rf "$tmp"
 }
 
 @test "backup writes the archive under the name the controller chose" {
@@ -175,6 +180,7 @@ remote_rows() {
   render_script "$tmp/s.sh" backup myapp clickhouse-myapp-20260304T050607Z "" ""
   PATH="$tmp/bin:$PATH" bash "$tmp/s.sh"
   grep -qxF 'POST http://chi-clickhouse-myapp-clickhouse-0-0.tenant-x.svc:7171/backup/create_remote?name=clickhouse-myapp-20260304T050607Z&resume=true' "$tmp/curl.log"
+  rm -rf "$tmp"
 }
 
 @test "a retried backup waits on the attempt the sidecar is still running" {
@@ -189,6 +195,7 @@ remote_rows() {
     echo "FAIL: started another operation over the running one: $(cat "$tmp/curl.log")"
     false
   fi
+  rm -rf "$tmp"
 }
 
 @test "a retried backup after a failed attempt resumes the same archive" {
@@ -198,6 +205,7 @@ remote_rows() {
   printf '{"command":"create_remote clickhouse-myapp-20260304T050607Z","status":"error","start":"2026-03-04 05:06:08","error":"S3 PutObject 403"}\n' > "$tmp/actions"
   PATH="$tmp/bin:$PATH" bash "$tmp/s.sh"
   grep -qxF 'POST http://chi-clickhouse-myapp-clickhouse-0-0.tenant-x.svc:7171/backup/create_remote?name=clickhouse-myapp-20260304T050607Z&resume=true' "$tmp/curl.log"
+  rm -rf "$tmp"
 }
 
 @test "backup falls back to a timestamped name when the controller supplies none" {
@@ -206,4 +214,5 @@ remote_rows() {
   render_script "$tmp/s.sh" backup myapp "" "" ""
   PATH="$tmp/bin:$PATH" bash "$tmp/s.sh"
   grep -qE '^POST http://[^ ]*/backup/create_remote\?name=clickhouse-myapp-[0-9]{8}T[0-9]{6}Z&resume=true$' "$tmp/curl.log"
+  rm -rf "$tmp"
 }
