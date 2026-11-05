@@ -241,12 +241,8 @@ func (r *BackupJobReconciler) reconcileMariaDB(ctx context.Context, j *backupsv1
 		// Backup eventually fails the BackupJob instead of pinning it Running
 		// forever.
 		if mariadbBackupDeadlineExceeded(j.Status.StartedAt) {
-			detail := "no Complete condition observed"
-			if cond != nil {
-				detail = fmt.Sprintf("Complete=%s/%s", cond.Status, cond.Reason)
-			}
 			return r.markBackupJobFailed(ctx, j, fmt.Sprintf(
-				"k8s.mariadb.com Backup did not complete within %s (%s)", mariadbDefaultBackupDeadline, detail))
+				"k8s.mariadb.com Backup did not complete within %s (%s)", mariadbDefaultBackupDeadline, mariadbCompleteDetail(cond)))
 		}
 		return ctrl.Result{RequeueAfter: mariadbPollInterval}, nil
 	}
@@ -270,6 +266,20 @@ func mariadbJobFailedMessage(ctx context.Context, c client.Reader, kind, namespa
 		}
 	}
 	return fmt.Sprintf("%s; Job %s/%s reports no Failed condition", message, namespace, name)
+}
+
+// mariadbCompleteDetail describes the last Complete condition for a deadline
+// failure. The message matters for reason Failed, which the operator sets
+// with its own cause ("Error creating Job", "Backup not complete") rather
+// than from a Job.
+func mariadbCompleteDetail(cond *metav1.Condition) string {
+	if cond == nil {
+		return "no Complete condition observed"
+	}
+	if cond.Message == "" {
+		return fmt.Sprintf("Complete=%s/%s", cond.Status, cond.Reason)
+	}
+	return fmt.Sprintf("Complete=%s/%s: %s", cond.Status, cond.Reason, cond.Message)
 }
 
 // mariadbBackupDeadlineExceeded reports whether enough wall-clock time has
@@ -600,13 +610,9 @@ func (r *RestoreJobReconciler) reconcileMariaDBRestore(ctx context.Context, rest
 	default:
 		deadline := options.effectiveRestoreDeadline()
 		if restoreJob.Status.StartedAt != nil && time.Since(restoreJob.Status.StartedAt.Time) > deadline {
-			detail := "no Complete condition observed"
-			if cond != nil {
-				detail = fmt.Sprintf("Complete=%s/%s", cond.Status, cond.Reason)
-			}
 			return r.markRestoreJobFailed(ctx, restoreJob, fmt.Sprintf(
 				"k8s.mariadb.com/Restore did not complete within %s (%s; override via spec.options.restoreTimeoutSeconds)",
-				deadline, detail))
+				deadline, mariadbCompleteDetail(cond)))
 		}
 		return ctrl.Result{RequeueAfter: mariadbPollInterval}, nil
 	}
