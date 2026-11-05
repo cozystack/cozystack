@@ -214,10 +214,21 @@ spec:
     namespace: cozy-system
   interval: 30s
   timeout: 10m
+  {{- /* Flux remediates a failed install by uninstalling and a failed upgrade
+         by rolling back, and with retries: -1 it does so on every attempt. A
+         release waiting on tenant quota for the admin volume would then roll
+         the s3 pods back and forth with the [grpc.s3] restart annotation.
+         RetryOnFailure keeps what was applied and retries it. */}}
   install:
+    strategy:
+      name: RetryOnFailure
+      retryInterval: 30s
     remediation:
       retries: -1
   upgrade:
+    strategy:
+      name: RetryOnFailure
+      retryInterval: 30s
     remediation:
       retries: -1
   valuesFrom:

@@ -194,3 +194,25 @@ tests:
     asserts:
       - hasDocuments:
           count: 0
+
+  # The admin PVC and the two lifecycle pods can leave an upgrade waiting on a
+  # full tenant quota. Under Flux's default rollback remediation each failed
+  # attempt would roll back the [grpc.s3] section and its restart annotation
+  # and the next one would bring them back, restarting the s3 pods on every
+  # cycle. Retrying in place keeps what was applied while the release waits.
+  - it: retries the data-plane release in place instead of rolling it back
+    template: templates/seaweedfs.yaml
+    set: *platform
+    documentSelector:
+      path: metadata.name
+      value: seaweedfs-system
+    asserts:
+      - equal:
+          path: spec.install.strategy.name
+          value: RetryOnFailure
+      - equal:
+          path: spec.upgrade.strategy.name
+          value: RetryOnFailure
+      - equal:
+          path: spec.upgrade.remediation.retries
+          value: -1
