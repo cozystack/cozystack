@@ -321,3 +321,7 @@ generate:
 
 upload_assets: manifests
 	hack/upload-assets.sh
+
+.PHONY: test-worker-class-admission
+test-worker-class-admission:
+	RUN_WORKERCLASS_INTEGRATION=1 KUBE_FEATURE_WatchListClient=false go test -tags=integration -timeout=8m -count=1 -v ./internal/kubernetesworker/integration/
