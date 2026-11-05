@@ -439,7 +439,7 @@ spec:
   - name: preconditions
     try:
     - script:
-        timeout: 2m
+        timeout: 3m
         content: |
           set -eu
           if kubectl -n "$NAMESPACE" get secret seaweedfs-s3-ingress-tls -o name >/dev/null 2>&1; then
@@ -451,9 +451,11 @@ spec:
             exit 1
           fi
           # Fixed names in a persistent namespace: a leftover Succeeded job
-          # would satisfy the waits in the run step without a new attempt.
+          # would satisfy the waits in the run step without a new attempt, and
+          # the driver adopts a leftover Backup of the BackupJob's name.
           kubectl -n "$NAMESPACE" delete restorejob sysbucket-restore --ignore-not-found --wait=true --timeout=30s
           kubectl -n "$NAMESPACE" delete backupjob sysbucket-backup --ignore-not-found --wait=true --timeout=30s
+          kubectl -n "$NAMESPACE" delete backup sysbucket-backup --ignore-not-found --wait=true --timeout=60s
           kubectl -n "$NAMESPACE" delete secret cozy-backups-creds --ignore-not-found --wait=true --timeout=30s
         check:
           ($error == null): true
@@ -562,10 +564,9 @@ spec:
         timeout: 3m
         content: |
           set -eu
-          backup=$(kubectl -n "$NAMESPACE" get backupjob sysbucket-backup --ignore-not-found -o jsonpath='{.status.backupRef.name}')
           kubectl -n "$NAMESPACE" delete restorejob sysbucket-restore --ignore-not-found --wait=true --timeout=30s
           kubectl -n "$NAMESPACE" delete backupjob sysbucket-backup --ignore-not-found --wait=true --timeout=30s
-          if [ -n "$backup" ]; then
-            kubectl -n "$NAMESPACE" delete backup "$backup" --ignore-not-found --wait=true --timeout=60s
-          fi
+          # The driver names the Backup after the BackupJob; by name it is
+          # found even when status.backupRef was never written.
+          kubectl -n "$NAMESPACE" delete backup sysbucket-backup --ignore-not-found --wait=true --timeout=60s
           kubectl -n "$NAMESPACE" delete secret e2e-system-bucket-s3-tls --ignore-not-found --wait=true --timeout=30s

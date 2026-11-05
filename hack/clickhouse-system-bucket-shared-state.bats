@@ -91,3 +91,35 @@ restore() {
     }
     jq -e '.data.Corefile == ".:53 {\n    errors\n}\n"' "$STUB/replaced.json" >/dev/null
 }
+
+# The Altinity driver names the Backup after the BackupJob and adopts one that
+# already exists under that name, so a Backup left behind would stand in for
+# the next run's backup. It is reclaimed by name, whether or not the BackupJob
+# recorded it in status.backupRef.
+@test "the round-trip reclaims its Backup by name before and after the run" {
+    suite=hack/e2e-chainsaw/clickhouse/chainsaw-test.yaml
+    test='select(.metadata.name == "clickhouse-3-system-bucket-roundtrip") | .spec.steps[]'
+    calls="$STUB/calls"
+    # Nothing is left over from an earlier run, and no BackupJob recorded a
+    # backupRef.
+    cat >"$STUB/kubectl" <<'STUBEOF'
+#!/bin/bash
+echo "$*" >>"$STUB/calls"
+case "$*" in
+    *" get secret "*) exit 1 ;;
+esac
+STUBEOF
+    for selector in \
+        'select(.name == "preconditions") | .try[].script.content' \
+        'select(.name == "run") | .finally[] | select(.description == "system-bucket round-trip cleanup") | .script.content'; do
+        : >"$calls"
+        script=$(yq "$test | $selector" "$suite")
+        [ -n "$script" ] || { echo "no script at: $selector" >&2; false; }
+        PATH="$STUB:$PATH" NAMESPACE=tenant-root sh -c "$script"
+        grep -qE '^-n tenant-root delete backup sysbucket-backup( |$)' "$calls" || {
+            echo "the script at '$selector' does not delete Backup sysbucket-backup by name; kubectl calls:" >&2
+            cat "$calls" >&2
+            false
+        }
+    done
+}
