@@ -203,7 +203,9 @@ spec:
   {{- /* tenant-root's _namespace.ingress is hardcoded by cozystack-basics, so it
          does not say whether ingress-nginx-system will ever exist here; the
          tenant chart creates the `ingress` HelmRelease in the same render as
-         this release, and only for spec.ingress. */}}
+         this release, and only for spec.ingress. The ingress chart refuses any
+         other release name, so no differently named Ingress application can
+         bring ingress-nginx-system up here. */}}
   {{- $localIngress := lookup "helm.toolkit.fluxcd.io/v2" "HelmRelease" .Release.Namespace "ingress" }}
   {{- if and (eq $ingress .Release.Namespace) $localIngress }}
   # Ensure the ingress-nginx admission webhook is ready before creating Ingress resources.

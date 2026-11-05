@@ -1,0 +1,40 @@
+suite: ingress-nginx-system comes only from a release named ingress
+
+# extra/seaweedfs decides whether ingress-nginx-system will exist in its
+# namespace by looking up the HelmRelease `ingress` there. That holds only
+# while this chart refuses every other release name, since the Ingress
+# application allows any DNS-1035 name and Flux names the Helm release after
+# the HelmRelease.
+
+templates:
+  - templates/check-release-name.yaml
+  - templates/nginx-ingress.yaml
+
+set:
+  _namespace:
+    ingress: tenant-root
+    host: example.org
+  _cluster:
+    expose-ingress: tenant-root
+    issuer-name: letsencrypt-prod
+
+release:
+  namespace: tenant-root
+
+tests:
+  - it: refuses to render under any other release name
+    release:
+      name: frontdoor
+    asserts:
+      - template: templates/check-release-name.yaml
+        failedTemplate:
+          errorMessage: The name of the release MUST BE ingress
+
+  - it: renders ingress-nginx-system under the release name ingress
+    release:
+      name: ingress
+    asserts:
+      - template: templates/nginx-ingress.yaml
+        equal:
+          path: metadata.name
+          value: ingress-nginx-system
