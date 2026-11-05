@@ -136,3 +136,14 @@ tests:
           path: spec.template.spec.containers[0].command[2]
           pattern: '-logtostderr=true'
         template: charts/seaweedfs/templates/worker/worker-deployment.yaml
+
+  # One worker replica rolls out by surging a second pod. The subchart's hard
+  # hostname anti-affinity keeps that pod off the only node of a single-node
+  # cluster, so every later change to the worker template would hang the
+  # release on its rollout.
+  - it: lets the worker roll out on a single node
+    template: charts/seaweedfs/templates/worker/worker-deployment.yaml
+    set: *enabled
+    asserts:
+      - notExists:
+          path: spec.template.spec.affinity.podAntiAffinity.requiredDuringSchedulingIgnoredDuringExecution
