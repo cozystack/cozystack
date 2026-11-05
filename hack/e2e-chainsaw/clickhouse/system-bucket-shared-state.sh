@@ -1,8 +1,9 @@
 #!/bin/bash
 # The two shared objects system-bucket-roundtrip.sh changes for the duration
 # of its run, and how to put them back. Sourced by that script, whose EXIT trap
-# restores them. Needs NAMESPACE and log_success/log_error from
-# examples/backups/clickhouse/00-helpers.sh.
+# restores them, and by the finally of its Chainsaw step, which restores them
+# when the step ceiling killed the script before the trap could run. Needs
+# NAMESPACE and log_success/log_error from examples/backups/clickhouse/00-helpers.sh.
 
 S3_HOST=s3.example.org
 INGRESS_SECRET=seaweedfs-s3-ingress-tls
