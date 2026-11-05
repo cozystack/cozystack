@@ -896,6 +896,7 @@ var mariadbCompleteOutcomeCases = []struct {
 	{name: "Complete=True with an unknown reason keeps waiting", status: metav1.ConditionTrue, reason: "SomethingElse", message: "Something"},
 	{name: "Complete=False/JobComplete keeps waiting", status: metav1.ConditionFalse, reason: mariadbtypes.ConditionReasonJobComplete, message: "Success"},
 	{name: "Complete=False/JobRunning keeps waiting", status: metav1.ConditionFalse, reason: mariadbtypes.ConditionReasonJobRunning, message: "Running"},
+	{name: "Complete=False/Failed keeps waiting", status: metav1.ConditionFalse, reason: "Failed", message: "Error creating Job"},
 	{name: "no Complete condition keeps waiting", noCondition: true},
 	{name: "no Complete condition past the deadline fails", noCondition: true, expired: true, wantFailed: true,
 		wantMessage: []string{"no Complete condition observed"}},
