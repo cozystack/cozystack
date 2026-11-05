@@ -122,11 +122,11 @@ map_section() {
   [ "$docs_run" = 'make bats-unit-tests' ]
   [ "$code_run" = 'make unit-tests test-controllers test-controllers-envtest -j4 -k --output-sync=target' ]
 
-  # `code` is false for the CI-only tools too, so the docs lane is keyed on a
-  # docs/ path being present, not on `code` alone. Pin that the output means
-  # exactly that and that Bats gets installed for it.
+  # `code` is false for non-code paths and the CI-only tools alike, so the docs
+  # lane is keyed on any path outside the CI-only tools, not on `code` alone.
+  # Pin that the output means exactly that and that Bats gets installed for it.
   plan_run=$(yq -r '.jobs.plan.steps[] | select(.id == "p") | .run' "$WORKFLOW")
-  printf '%s\n' "$plan_run" | grep -qF "if grep -qE '^docs/' /tmp/changed_norenames.txt; then"
+  printf '%s\n' "$plan_run" | grep -qF "if grep -qvE '^cmd/(backport-batch|api-gate)/' /tmp/changed_norenames.txt; then"
   [ "$(yq -r '.jobs.plan.outputs.docs' "$WORKFLOW")" = '${{ steps.p.outputs.docs }}' ]
   toolchain_if=$(yq -r '.jobs.checks.steps[] | select(.name == "Set up test toolchain") | .if' "$WORKFLOW")
   [ "$toolchain_if" = "needs.plan.outputs.code == 'true' || needs.plan.outputs.docs == 'true'" ]

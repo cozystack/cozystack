@@ -57,9 +57,10 @@ permissions:
   contents: read
 
 jobs:
-  # Compute the docs-only gate and the per-package build matrix from the PR
-  # diff. hack/build-matrix.sh parses the root Makefile `build:` target (the
-  # single source of truth) and emits only the units whose package dir changed,
+  # Compute the docs-only gate (hack/code-changed.sh) and the per-package
+  # build matrix from the PR diff. hack/build-matrix.sh parses the root
+  # Makefile `build:` target (the single source of truth) and emits only the
+  # units whose package dir changed,
   # escalating to the full set on a shared-dependency change. talos + installer
   # are handled by dedicated jobs (see build-matrix.sh for why).
   plan:
@@ -169,20 +170,13 @@ jobs:
           # alone here rather than widened by a side effect.
           git diff --name-only --no-renames "origin/${BASE_REF}...HEAD" > /tmp/changed_norenames.txt
           echo "Changed files:"; sed 's/^/  /' /tmp/changed_norenames.txt
-          # `code` is false when every path is under docs/ or in a CI-only Go
-          # tool that no image builds (cmd/backport-batch, cmd/api-gate): there
-          # is nothing to build and nothing for e2e to install. e2e-fork.yaml
-          # answers the same question from the PR file list with the same
-          # prefixes, and hack/gate-concurrency-contract.bats holds the two lists
-          # equal.
-          if grep -qvE '^(docs/|cmd/backport-batch/|cmd/api-gate/)' /tmp/changed_norenames.txt; then
-            echo "code=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "code=false" >> "$GITHUB_OUTPUT"
-          fi
-          # The Bats contracts read docs, so a docs change runs them even when
-          # `code` is false; a change confined to the CI-only tools does not.
-          if grep -qE '^docs/' /tmp/changed_norenames.txt; then
+          code="$(hack/code-changed.sh /tmp/changed_norenames.txt)"
+          echo "Code changed: $code"
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+          # The Bats contracts read docs, labels.yml, CODEOWNERS, renovate.json,
+          # the PR template and the root Markdown, so any change outside the
+          # CI-only tools runs them even when `code` is false.
+          if grep -qvE '^cmd/(backport-batch|api-gate)/' /tmp/changed_norenames.txt; then
             echo "docs=true" >> "$GITHUB_OUTPUT"
           else
             echo "docs=false" >> "$GITHUB_OUTPUT"
@@ -1461,7 +1455,7 @@ jobs:
               description = `release packages candidate did not verify (result: ${CANDIDATE_RESULT})`;
             } else if (CODE !== 'true') {
               state = 'success';
-              description = 'docs or CI-only tools — e2e not required';
+              description = 'no code changed (docs, metadata or CI-only tools) — e2e not required';
             } else if (IS_RELEASE === 'true' && IS_FULL_E2E !== 'true') {
               // Release promotion PRs deliberately do not repeat e2e: the rc was
               // already verified against the immutable candidate whose digests
