@@ -1,0 +1,342 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.16.4
+    helm.sh/resource-policy: keep
+  name: gpuclasses.cozystack.io
+spec:
+  group: cozystack.io
+  names:
+    kind: GPUClass
+    listKind: GPUClassList
+    plural: gpuclasses
+    singular: gpuclass
+  scope: Cluster
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.mode
+      name: Mode
+      type: string
+    - jsonPath: .spec.model
+      name: Model
+      type: string
+    - jsonPath: .spec.profile
+      name: Profile
+      type: string
+    - jsonPath: .status.free
+      name: Free
+      type: integer
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: GPUClass is one GPU offer of the hoster's catalog.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: |-
+              GPUClassSpec defines one GPU offer of the hoster's catalog. What makes
+              the offer never changes, so a class name stands for one offer for its
+              lifetime.
+            properties:
+              displayName:
+                description: DisplayName is the human-readable name of the offer.
+                maxLength: 256
+                type: string
+              license:
+                description: |-
+                  License is set only for mode vgpu. A change reaches each VM at its
+                  next start.
+                properties:
+                  featureType:
+                    default: 1
+                    description: |-
+                      FeatureType is the FeatureType the guest's license client reads from
+                      gridd.conf: 1 lets the driver pick the license from the vGPU type,
+                      4 is NVIDIA vGPU for Compute.
+                    enum:
+                    - 1
+                    - 4
+                    format: int32
+                    type: integer
+                  secretName:
+                    description: |-
+                      SecretName names a Secret in cozy-system whose key
+                      client_configuration_token.tok holds the client configuration token
+                      of the hoster's NVIDIA license server.
+                    maxLength: 253
+                    minLength: 1
+                    pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$
+                    type: string
+                required:
+                - secretName
+                type: object
+              maxCount:
+                description: |-
+                  MaxCount is how many GPUs of this class one VM may take. Unset means 1
+                  for mode vgpu and, for mode passthrough, no limit beyond the GPUs of
+                  one node.
+                format: int32
+                minimum: 1
+                type: integer
+              memory:
+                anyOf:
+                - type: integer
+                - type: string
+                description: Memory is the GPU memory of one unit of the class.
+                pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                x-kubernetes-int-or-string: true
+                x-kubernetes-validations:
+                - message: memory must be positive
+                  rule: quantity(string(self)).isGreaterThan(quantity('0'))
+              mode:
+                description: GPUMode is how a class's GPUs reach a VM.
+                enum:
+                - passthrough
+                - vgpu
+                type: string
+                x-kubernetes-validations:
+                - message: mode is immutable; create a new GPUClass instead
+                  rule: self == oldSelf
+              model:
+                maxLength: 63
+                minLength: 1
+                type: string
+                x-kubernetes-validations:
+                - message: model is immutable; create a new GPUClass instead
+                  rule: self == oldSelf
+              profile:
+                description: Profile is the vGPU profile, such as L40S-24C. Set only
+                  for mode vgpu.
+                maxLength: 63
+                minLength: 1
+                type: string
+                x-kubernetes-validations:
+                - message: profile is immutable; create a new GPUClass instead
+                  rule: self == oldSelf
+              source:
+                description: |-
+                  GPUClassSource is the backend that serves a class. Exactly one member is
+                  set. The name "dra" is reserved for a DRA-backed member.
+                properties:
+                  devicePlugin:
+                    description: DevicePluginSource serves a class through a Kubernetes
+                      device plugin.
+                    properties:
+                      resourceName:
+                        description: |-
+                          ResourceName is the extended resource the device plugin advertises for
+                          this class's GPUs. A class whose resource name an older class already
+                          has is not offered.
+                        maxLength: 308
+                        minLength: 3
+                        pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/[A-Za-z0-9]([-A-Za-z0-9_.]{0,61}[A-Za-z0-9])?$
+                        type: string
+                        x-kubernetes-validations:
+                        - message: resourceName must not be in gpuclass.cozystack.io,
+                            whose keys are GPU budgets
+                          rule: '!self.startsWith(''gpuclass.cozystack.io/'') && !self.contains(''.gpuclass.cozystack.io/'')'
+                        - message: 'resourceName must be an extended resource name:
+                            outside kubernetes.io, without the requests. prefix, and
+                            with a domain of at most 244 characters'
+                          rule: '!self.startsWith(''requests.'') && !self.contains(''kubernetes.io/'')
+                            && self.indexOf(''/'') <= 244'
+                    required:
+                    - resourceName
+                    type: object
+                type: object
+                x-kubernetes-validations:
+                - message: exactly one source must be set; devicePlugin is the only
+                    source supported, dra is reserved
+                  rule: '[has(self.devicePlugin)].filter(x, x).size() == 1'
+                - message: source kind is immutable; create a new GPUClass instead
+                  rule: has(self.devicePlugin) == has(oldSelf.devicePlugin)
+              tolerations:
+                description: |-
+                  Tolerations are the taints of the class's nodes that its VMs
+                  tolerate, in the shape of a pod's, operators Exists and Equal only.
+                  The virt-launcher pod of a VM that names the class gets them, and a
+                  node with a NoSchedule or NoExecute taint they do not tolerate adds
+                  nothing to the class's free units.
+                items:
+                  description: |-
+                    GPUClassToleration is a pod toleration that pod validation accepts on
+                    every cluster: the class's tolerations are copied onto launcher pods, so
+                    one the API server refuses there would break every start of the class.
+                    Gt and Lt are left out because pod validation refuses them where their
+                    feature gate is off.
+                  properties:
+                    effect:
+                      description: Effect matches every effect when unset.
+                      enum:
+                      - NoSchedule
+                      - PreferNoSchedule
+                      - NoExecute
+                      type: string
+                    key:
+                      maxLength: 317
+                      pattern: ^(([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?[A-Za-z0-9]([-A-Za-z0-9_.]{0,61}[A-Za-z0-9])?)?$
+                      type: string
+                    operator:
+                      description: Operator is Equal when unset.
+                      enum:
+                      - Exists
+                      - Equal
+                      type: string
+                    tolerationSeconds:
+                      format: int64
+                      type: integer
+                    value:
+                      maxLength: 63
+                      pattern: ^(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])?$
+                      type: string
+                  type: object
+                  x-kubernetes-validations:
+                  - message: a toleration with an empty key needs operator Exists
+                    rule: (has(self.key) && size(self.key) > 0) || (has(self.operator)
+                      && self.operator == 'Exists')
+                  - message: a toleration with operator Exists takes no value
+                    rule: '!has(self.operator) || self.operator != ''Exists'' || !has(self.value)
+                      || size(self.value) == 0'
+                  - message: tolerationSeconds needs effect NoExecute
+                    rule: '!has(self.tolerationSeconds) || (has(self.effect) && self.effect
+                      == ''NoExecute'')'
+                  - message: toleration key prefix must be at most 253 characters
+                    rule: '!has(self.key) || self.key.indexOf(''/'') <= 253'
+                maxItems: 32
+                type: array
+                x-kubernetes-list-type: atomic
+              vendor:
+                maxLength: 63
+                minLength: 1
+                type: string
+                x-kubernetes-validations:
+                - message: vendor is immutable; create a new GPUClass instead
+                  rule: self == oldSelf
+            required:
+            - mode
+            - model
+            - source
+            - vendor
+            type: object
+            x-kubernetes-validations:
+            - message: profile is required for mode vgpu and not allowed for mode
+                passthrough
+              rule: 'self.mode == ''vgpu'' ? has(self.profile) : !has(self.profile)'
+            - message: license is allowed only for mode vgpu
+              rule: '!has(self.license) || self.mode == ''vgpu'''
+            - message: memory is immutable; create a new GPUClass instead
+              rule: has(self.memory) == has(oldSelf.memory) && (!has(self.memory)
+                || quantity(string(self.memory)).compareTo(quantity(string(oldSelf.memory)))
+                == 0)
+          status:
+            description: |-
+              GPUClassStatus is readable by every authenticated user, so it carries no
+              node names and no counts beyond free units.
+            properties:
+              conditions:
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - type
+                x-kubernetes-list-type: map
+              free:
+                description: |-
+                  Free is the number of free units of the class over its nodes that
+                  are Ready, not cordoned and have no NoSchedule or NoExecute taint
+                  the class does not tolerate. Absent until the controller has
+                  computed it.
+                format: int32
+                minimum: 0
+                type: integer
+              maxFreePerNode:
+                description: MaxFreePerNode is the largest number of free units on
+                  one node.
+                format: int32
+                minimum: 0
+                type: integer
+            type: object
+        required:
+        - spec
+        type: object
+        x-kubernetes-validations:
+        - message: GPUClass name must be a DNS label, since it becomes part of a quota
+            key
+          rule: size(self.metadata.name) <= 63 && self.metadata.name.matches('^[a-z0-9]([-a-z0-9]*[a-z0-9])?$')
+    served: true
+    storage: true
+    subresources:
+      status: {}
