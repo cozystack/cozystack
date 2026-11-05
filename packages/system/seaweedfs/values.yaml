@@ -351,6 +351,21 @@ seaweedfs:
     # Vacuum, balance and erasure coding move data; enabling lifecycle must
     # not start them.
     jobType: "s3_lifecycle"
+    # The subchart's hard hostname anti-affinity keeps the surge pod of a
+    # rollout off the node the running worker holds, so on a single-node
+    # cluster any change to the worker template never finishes rolling out.
+    # Only required -> preferred, as for the master above.
+    affinity: |
+      podAntiAffinity:
+        preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchLabels:
+                  app.kubernetes.io/name: {{ template "seaweedfs.name" . }}
+                  app.kubernetes.io/instance: {{ .Release.Name }}
+                  app.kubernetes.io/component: worker
+              topologyKey: kubernetes.io/hostname
     logs:
       type: ""
     resources:
