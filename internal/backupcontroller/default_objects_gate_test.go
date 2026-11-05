@@ -1283,3 +1283,53 @@ func TestCheckSurfacesCredentialsPatchFailure(t *testing.T) {
 		t.Error("lastCredentialsForce advanced despite the patch failing")
 	}
 }
+
+// TestCheckForcesStaleCredentialsWhenObjectsUnreadable pins that the
+// credentials comparison needs only the two Secrets: a BackupClass or a routed
+// object the gate cannot read must not keep the stale endpoint in the
+// credentials Secret, which every other driver reads through the projector.
+func TestCheckForcesStaleCredentialsWhenObjectsUnreadable(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		backupClass bool
+		forbidCNPG  bool
+	}{
+		{"BackupClass absent", false, false},
+		{"routed Strategy unreadable", true, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			defaultObjectsCheckErrors.Reset()
+			ctrlObjs := []client.Object{sourceSecret("bucket-1a2b"), cosiSecret("https://s3.new.example.com")}
+			if tc.backupClass {
+				ctrlObjs = append(ctrlObjs, cozyDefaultBackupClass())
+			}
+			objs := append([]runtime.Object{helmReleaseObject(), credentialsHelmReleaseObject()}, allDefaultObjects()...)
+			g, dyn := newGate(t, ctrlObjs, objs...)
+			if tc.forbidCNPG {
+				dyn.PrependReactor("get", "cnpgs", func(k8stesting.Action) (bool, runtime.Object, error) {
+					return true, nil, apierrors.NewForbidden(schema.GroupResource{Group: strategyAPIGroup, Resource: "cnpgs"}, "cozy-default-cnpg", nil)
+				})
+			}
+
+			missing, forced, err := g.Check(context.Background())
+			if err == nil {
+				t.Fatal("Check succeeded although the routed objects could not be evaluated")
+			}
+			if !forced {
+				t.Error("forced = false, want the bucket release forced for its stale credentials Secret")
+			}
+			if ann := credentialsForceAnnotations(t, dyn); ann["reconcile.fluxcd.io/forceAt"] == "" {
+				t.Errorf("bucket release not forced: %v", ann)
+			}
+			if ann := forceAnnotations(t, dyn); len(ann) != 0 {
+				t.Errorf("own HelmRelease forced without a conclusive object check: %v", ann)
+			}
+			if len(missing) != 1 || !strings.HasPrefix(missing[0], "Secret/bucket-cozy-backups-system-credentials") {
+				t.Errorf("missing = %v, want the credentials Secret", missing)
+			}
+			if got := testutil.ToFloat64(defaultObjectsCheckErrors.WithLabelValues("cozy-default")); got != 1 {
+				t.Errorf("check errors = %v, want 1", got)
+			}
+		})
+	}
+}
