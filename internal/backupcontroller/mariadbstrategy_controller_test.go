@@ -4,12 +4,15 @@ package backupcontroller
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 	"time"
 
+	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	apiequality "k8s.io/apimachinery/pkg/api/equality"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -17,6 +20,7 @@ import (
 	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	clientfake "sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	strategyv1alpha1 "github.com/cozystack/cozystack/api/backups/strategy/v1alpha1"
 	backupsv1alpha1 "github.com/cozystack/cozystack/api/backups/v1alpha1"
@@ -870,15 +874,18 @@ var mariadbCompleteOutcomeCases = []struct {
 	reason      string
 	message     string
 	expired     bool
+	failedJob   bool
 	wantFailed  bool
 	wantDone    bool
 	wantMessage []string
 }{
 	{name: "Complete=True/JobComplete succeeds", status: metav1.ConditionTrue, reason: mariadbtypes.ConditionReasonJobComplete, message: "Success", wantDone: true},
-	{name: "Complete=True/JobFailed fails", status: metav1.ConditionTrue, reason: mariadbtypes.ConditionReasonJobFailed, message: "Failed", wantFailed: true,
-		wantMessage: []string{"tenant/op"}},
-	{name: "Complete=False/JobFailed fails", status: metav1.ConditionFalse, reason: mariadbtypes.ConditionReasonJobFailed, message: "Failed", wantFailed: true,
-		wantMessage: []string{"tenant/op"}},
+	{name: "Complete=True/JobFailed fails with the Job's failure", status: metav1.ConditionTrue, reason: mariadbtypes.ConditionReasonJobFailed, message: "Failed", failedJob: true, wantFailed: true,
+		wantMessage: []string{"tenant/op", "BackoffLimitExceeded", "Job has reached the specified backoff limit"}},
+	{name: "Complete=False/JobFailed fails with the Job's failure", status: metav1.ConditionFalse, reason: mariadbtypes.ConditionReasonJobFailed, message: "Failed", failedJob: true, wantFailed: true,
+		wantMessage: []string{"tenant/op", "BackoffLimitExceeded", "Job has reached the specified backoff limit"}},
+	{name: "Complete=True/JobFailed with its Job gone fails", status: metav1.ConditionTrue, reason: mariadbtypes.ConditionReasonJobFailed, message: "Failed", wantFailed: true,
+		wantMessage: []string{"tenant/op", "Job tenant/op not found"}},
 	{name: "Complete=True with an unknown reason keeps waiting", status: metav1.ConditionTrue, reason: "SomethingElse", message: "Something"},
 	{name: "Complete=False/JobComplete keeps waiting", status: metav1.ConditionFalse, reason: mariadbtypes.ConditionReasonJobComplete, message: "Success"},
 	{name: "Complete=False/JobRunning keeps waiting", status: metav1.ConditionFalse, reason: mariadbtypes.ConditionReasonJobRunning, message: "Running"},
@@ -913,8 +920,29 @@ func mariadbOutcomeStartedAt(expired bool) *metav1.Time {
 	return &past
 }
 
+// mariadbOutcomeObjects adds the operator's Job, named after the operator
+// Backup or Restore, failed the way the Job controller fails it once the
+// backoff limit is spent.
+func mariadbOutcomeObjects(failedJob bool, objs ...client.Object) []client.Object {
+	if !failedJob {
+		return objs
+	}
+	return append(objs, &batchv1.Job{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "op"},
+		Status: batchv1.JobStatus{Conditions: []batchv1.JobCondition{{
+			Type:    batchv1.JobFailed,
+			Status:  corev1.ConditionTrue,
+			Reason:  batchv1.JobReasonBackoffLimitExceeded,
+			Message: "Job has reached the specified backoff limit",
+		}}},
+	})
+}
+
 func assertMariaDBFailureMessage(t *testing.T, message string, want []string) {
 	t.Helper()
+	if strings.Contains(message, "logs") {
+		t.Errorf("failure message must not send the reader to Job logs, which are gone with the deleted pod: %q", message)
+	}
 	for _, w := range want {
 		if !strings.Contains(message, w) {
 			t.Errorf("failure message must contain %q, got %q", w, message)
@@ -954,8 +982,8 @@ func TestReconcileMariaDBBackup_CompleteConditionOutcome(t *testing.T) {
 				},
 				Status: mariadbtypes.BackupStatus{Conditions: mariadbCompleteConditions(tc.noCondition, tc.status, tc.reason, tc.message)},
 			}
-			c := newMariaDBStrategyTestClient(t, seed, newMariaDBApp(seed.Spec.ApplicationRef.Name, "tenant"),
-				strategy, operatorMariaDB, operatorBackup)
+			c := newMariaDBStrategyTestClient(t, mariadbOutcomeObjects(tc.failedJob, seed, newMariaDBApp(seed.Spec.ApplicationRef.Name, "tenant"),
+				strategy, operatorMariaDB, operatorBackup)...)
 			r := &BackupJobReconciler{Client: c, Scheme: c.Scheme(), Recorder: record.NewFakeRecorder(10)}
 
 			bj := &backupsv1alpha1.BackupJob{}
@@ -1006,6 +1034,43 @@ func TestReconcileMariaDBBackup_CompleteConditionOutcome(t *testing.T) {
 	}
 }
 
+func TestMariaDBJobFailedMessage_JobUnreadable(t *testing.T) {
+	cond := &metav1.Condition{Type: mariadbtypes.ConditionTypeComplete, Status: metav1.ConditionTrue, Reason: mariadbtypes.ConditionReasonJobFailed}
+	readErr := apierrors.NewForbidden(batchv1.Resource("jobs"), "op", errors.New("rbac"))
+	c := interceptor.NewClient(newMariaDBStrategyTestClient(t).(client.WithWatch), interceptor.Funcs{
+		Get: func(ctx context.Context, cl client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+			if _, ok := obj.(*batchv1.Job); ok {
+				return readErr
+			}
+			return cl.Get(ctx, key, obj, opts...)
+		},
+	})
+
+	got := mariadbJobFailedMessage(context.Background(), c, "Backup", "tenant", "op", cond)
+	for _, want := range []string{"k8s.mariadb.com/Backup tenant/op failed (Complete=True/JobFailed)", "reading Job tenant/op", readErr.Error()} {
+		if !strings.Contains(got, want) {
+			t.Errorf("message must contain %q, got %q", want, got)
+		}
+	}
+}
+
+func TestMariaDBJobFailedMessage_JobWithoutFailedCondition(t *testing.T) {
+	cond := &metav1.Condition{Type: mariadbtypes.ConditionTypeComplete, Status: metav1.ConditionTrue, Reason: mariadbtypes.ConditionReasonJobFailed}
+	c := newMariaDBStrategyTestClient(t, &batchv1.Job{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "op"},
+		Status: batchv1.JobStatus{Conditions: []batchv1.JobCondition{
+			{Type: batchv1.JobFailureTarget, Status: corev1.ConditionTrue, Reason: batchv1.JobReasonPodFailurePolicy},
+			{Type: batchv1.JobFailed, Status: corev1.ConditionFalse, Reason: batchv1.JobReasonBackoffLimitExceeded},
+		}},
+	})
+
+	got := mariadbJobFailedMessage(context.Background(), c, "Restore", "tenant", "op", cond)
+	if !strings.Contains(got, "Job tenant/op reports no Failed condition") ||
+		strings.Contains(got, batchv1.JobReasonBackoffLimitExceeded) || strings.Contains(got, batchv1.JobReasonPodFailurePolicy) {
+		t.Errorf("a Failed condition that is not True must not be reported as the cause, got %q", got)
+	}
+}
+
 func TestReconcileMariaDBRestore_CompleteConditionOutcome(t *testing.T) {
 	apps := mariadbapp.GroupName
 
@@ -1037,9 +1102,9 @@ func TestReconcileMariaDBRestore_CompleteConditionOutcome(t *testing.T) {
 				},
 				Status: mariadbtypes.RestoreStatus{Conditions: mariadbCompleteConditions(tc.noCondition, tc.status, tc.reason, tc.message)},
 			}
-			c := newMariaDBStrategyTestClient(t, cozyBackup, seed, operatorRestore,
+			c := newMariaDBStrategyTestClient(t, mariadbOutcomeObjects(tc.failedJob, cozyBackup, seed, operatorRestore,
 				&mariadbtypes.Backup{ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "src-op-bk"}},
-				&mariadbtypes.MariaDB{ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: mariadbNameForApp("target")}})
+				&mariadbtypes.MariaDB{ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: mariadbNameForApp("target")}})...)
 			r := &RestoreJobReconciler{Client: c, Recorder: record.NewFakeRecorder(10)}
 
 			rj := &backupsv1alpha1.RestoreJob{}
