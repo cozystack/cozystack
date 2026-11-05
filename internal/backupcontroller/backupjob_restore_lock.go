@@ -130,13 +130,14 @@ func ptrString(s *string) string {
 	return *s
 }
 
-// holdForRestore keeps a BackupJob that has not started yet waiting while a
-// restore writes into its application. It stays non-terminal, so a scheduled
-// run still happens once the restore ends, only later than its slot.
+// holdForRestore keeps a BackupJob waiting while a restore writes into its
+// application: one that has not started yet, or a CNPG one about to write
+// its WAL archive destination. It stays non-terminal, so a scheduled run
+// still happens once the restore ends, only later than its slot.
 //
 // A failed status write is returned so the manager retries it with backoff.
-// The job is held either way, since nothing past the gate ran, but a hold
-// nobody can see reads as a run stuck for no reason.
+// The job is held either way, since it writes nothing past the hold, but a
+// hold nobody can see reads as a run stuck for no reason.
 func (r *BackupJobReconciler) holdForRestore(ctx context.Context, j *backupsv1alpha1.BackupJob, restore string) (ctrl.Result, error) {
 	if j.Status.Phase == backupsv1alpha1.BackupJobPhaseEmpty {
 		j.Status.Phase = backupsv1alpha1.BackupJobPhasePending
