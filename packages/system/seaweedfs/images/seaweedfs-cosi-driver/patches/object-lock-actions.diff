@@ -1,0 +1,82 @@
+diff --git a/pkg/driver/provisioner.go b/pkg/driver/provisioner.go
+index 3bbd0ad..3bb913d 100644
+--- a/pkg/driver/provisioner.go
++++ b/pkg/driver/provisioner.go
+@@ -26,6 +26,7 @@ import (
+ 	"fmt"
+ 	"os"
+ 	"regexp"
++	"slices"
+ 	"strconv"
+ 	"strings"
+ 	"sync"
+@@ -589,14 +590,30 @@ func validateObjectLockParams(params map[string]string) error {
+ 	return nil
+ }
+ 
++// SeaweedFS checks Object Lock operations against dedicated actions rather
++// than Read and Write, so each policy names them explicitly. Governance
++// bypass is left out: Write never covered it.
++var (
++	objectLockReadActions = []string{
++		s3_constants.ACTION_GET_OBJECT_RETENTION,
++		s3_constants.ACTION_GET_OBJECT_LEGAL_HOLD,
++		s3_constants.ACTION_GET_BUCKET_OBJECT_LOCK_CONFIG,
++	}
++	objectLockWriteActions = []string{
++		s3_constants.ACTION_PUT_OBJECT_RETENTION,
++		s3_constants.ACTION_PUT_OBJECT_LEGAL_HOLD,
++		s3_constants.ACTION_PUT_BUCKET_OBJECT_LOCK_CONFIG,
++	}
++)
++
+ // actionsForPolicy returns the IAM action names for the given access policy.
+ // Supported values: "readonly", "readwrite", "" (defaults to readwrite).
+ func actionsForPolicy(policy string) ([]string, error) {
+ 	switch policy {
+ 	case "readonly":
+-		return []string{"Read", "List"}, nil
++		return slices.Concat([]string{"Read", "List"}, objectLockReadActions), nil
+ 	case "readwrite", "":
+-		return []string{"Read", "Write", "List", "Tagging"}, nil
++		return slices.Concat([]string{"Read", "Write", "List", "Tagging"}, objectLockReadActions, objectLockWriteActions), nil
+ 	default:
+ 		return nil, fmt.Errorf("unsupported accessPolicy %q, must be \"readonly\" or \"readwrite\"", policy)
+ 	}
+diff --git a/pkg/driver/provisioner_test.go b/pkg/driver/provisioner_test.go
+index 94606ef..28c766e 100644
+--- a/pkg/driver/provisioner_test.go
++++ b/pkg/driver/provisioner_test.go
+@@ -456,17 +456,25 @@ func TestDriverGrantBucketAccessPolicy(t *testing.T) {
+ 		{
+ 			name:        "readonly access",
+ 			params:      map[string]string{"accessPolicy": "readonly"},
+-			wantActions: []string{"List:b", "Read:b"},
++			wantActions: []string{"GetBucketObjectLockConfiguration:b", "GetObjectLegalHold:b", "GetObjectRetention:b", "List:b", "Read:b"},
+ 		},
+ 		{
+-			name:        "readwrite access",
+-			params:      map[string]string{"accessPolicy": "readwrite"},
+-			wantActions: []string{"List:b", "Read:b", "Tagging:b", "Write:b"},
++			name:   "readwrite access",
++			params: map[string]string{"accessPolicy": "readwrite"},
++			wantActions: []string{
++				"GetBucketObjectLockConfiguration:b", "GetObjectLegalHold:b", "GetObjectRetention:b", "List:b",
++				"PutBucketObjectLockConfiguration:b", "PutObjectLegalHold:b", "PutObjectRetention:b", "Read:b",
++				"Tagging:b", "Write:b",
++			},
+ 		},
+ 		{
+-			name:        "default access (no param)",
+-			params:      nil,
+-			wantActions: []string{"List:b", "Read:b", "Tagging:b", "Write:b"},
++			name:   "default access (no param)",
++			params: nil,
++			wantActions: []string{
++				"GetBucketObjectLockConfiguration:b", "GetObjectLegalHold:b", "GetObjectRetention:b", "List:b",
++				"PutBucketObjectLockConfiguration:b", "PutObjectLegalHold:b", "PutObjectRetention:b", "Read:b",
++				"Tagging:b", "Write:b",
++			},
+ 		},
+ 		{
+ 			name:     "invalid access policy",

@@ -4,8 +4,10 @@ SEAWEEDFS_TAG=$(shell grep -F 'ARG VERSION=' images/seaweedfs/Dockerfile | cut -
 include ../../../hack/common-envs.mk
 include ../../../hack/package.mk
 
-.PHONY: image
-image:
+.PHONY: image image-seaweedfs image-cosi-driver
+image: image-seaweedfs image-cosi-driver
+
+image-seaweedfs:
 	docker buildx build images/seaweedfs \
 		$(call image-tags,seaweedfs,$(SEAWEEDFS_TAG)) \
 		$(call cache-args,seaweedfs) \
@@ -21,6 +23,7 @@ test:
 	helm unittest .
 	$(MAKE) test-guard-fail-closed
 	$(MAKE) test-image-version
+	$(MAKE) test-cosi-driver-version
 
 # The image replaces weed in the upstream image of ARG VERSION, so a chart moved
 # by `make update` without the Dockerfile would run the previous release's
@@ -31,6 +34,16 @@ test-image-version:
 	[ "$(SEAWEEDFS_TAG)" = "$$chart" ] \
 	  || { echo "FAIL: images/seaweedfs/Dockerfile builds $(SEAWEEDFS_TAG), the vendored chart is $$chart"; exit 1; }
 	@echo "ok: images/seaweedfs builds the chart's appVersion $(SEAWEEDFS_TAG)"
+
+# COSI_DRIVER_VERSION names the image tag, ARG VERSION the commit that is
+# built; a tag left behind by a commit bump would ship one build under
+# another's name.
+.PHONY: test-cosi-driver-version
+test-cosi-driver-version:
+	@commit=$$(grep -F 'ARG VERSION=' images/seaweedfs-cosi-driver/Dockerfile | cut -f2 -d=); \
+	abbrev=$$(echo "$(COSI_DRIVER_VERSION)" | sed -n 's/.*-g\([0-9a-f]\{7,\}\)$$/\1/p'); \
+	case "$$abbrev:$$commit" in ?*:"$$abbrev"*) ;; *) echo "FAIL: COSI_DRIVER_VERSION $(COSI_DRIVER_VERSION) does not name the commit images/seaweedfs-cosi-driver/Dockerfile builds ($$commit)"; exit 1;; esac
+	@echo "ok: COSI_DRIVER_VERSION $(COSI_DRIVER_VERSION) names the built commit"
 
 # The naming guard refuses to render an UPGRADE that cannot see the cluster
 # (templates/naming-guard.yaml): a client-side lookup silently returns nothing,
@@ -44,6 +57,26 @@ test-guard-fail-closed:
 	echo "$$out" | grep -q 'refusing to upgrade blind' \
 	  || { echo "FAIL: a blind upgrade rendered instead of refusing (naming-guard canary is not firing)"; echo "$$out" | head -5; exit 1; }
 	@echo "ok: naming guard refuses a blind upgrade"
+
+# `git describe` of the upstream commit pinned by ARG VERSION in the Dockerfile;
+# keep the two in lockstep.
+COSI_DRIVER_VERSION = v0.3.1-10-g0df543f
+# Bump when patches/ or the build changes on the same upstream commit.
+COSI_DRIVER_REV = 0
+COSI_DRIVER_COMPONENT_VERSION = $(COSI_DRIVER_VERSION)-cozystack.$(COSI_DRIVER_REV)
+
+# Depends on image-seaweedfs so the two `yq -i` stamps of values.yaml never run
+# concurrently under `make -j image`.
+image-cosi-driver: image-seaweedfs
+	docker buildx build images/seaweedfs-cosi-driver \
+		$(call image-tags,seaweedfs-cosi-driver,$(COSI_DRIVER_COMPONENT_VERSION)) \
+		$(call cache-args,seaweedfs-cosi-driver) \
+		--metadata-file images/seaweedfs-cosi-driver.json \
+		$(BUILDX_ARGS)
+	IMAGE="$(REGISTRY)/seaweedfs-cosi-driver:$(COSI_DRIVER_COMPONENT_VERSION)@$$(yq e '."containerimage.digest"' images/seaweedfs-cosi-driver.json -r)" \
+		yq -i '.seaweedfs.cosi.image = strenv(IMAGE)' values.yaml
+	rm -f images/seaweedfs-cosi-driver.json
+	yq .seaweedfs.cosi.image values.yaml > ../../extra/seaweedfs/images/seaweedfs-cosi-driver.tag
 
 update:
 	rm -rf charts
