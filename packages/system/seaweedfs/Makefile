@@ -61,7 +61,11 @@ update:
 	patch --no-backup-if-mismatch -p4 < patches/s3-service-name.patch
 	patch --no-backup-if-mismatch -p4 < patches/s3-service-name-consumers.patch
 	patch --no-backup-if-mismatch -p4 < patches/cluster-scoped-names-per-namespace.patch
-	patch --no-backup-if-mismatch -p4 < patches/s3-grpc-tls.patch
+	# Backport of seaweedfs/seaweedfs#11157, released in 4.46: drop the patch
+	# once the vendored chart carries [grpc.s3]. --forward makes that point
+	# fail here, where BSD patch would otherwise reverse it and remove the
+	# section without an error.
+	patch --forward --no-backup-if-mismatch -p4 < patches/s3-grpc-tls.patch
 	#patch --no-backup-if-mismatch -p4 < patches/retention-policy-delete.yaml
 	$(MAKE) update-image
 
