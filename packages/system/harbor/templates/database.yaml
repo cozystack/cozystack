@@ -8,6 +8,13 @@ spec:
   {{- $existingCluster := lookup "postgresql.cnpg.io/v1" "Cluster" .Release.Namespace (printf "%s-db" .Values.harbor.fullnameOverride) }}
   {{- $image := dig "spec" "imageName" "ghcr.io/cloudnative-pg/postgresql:17.7-standard-trixie" $existingCluster }}
   imageName: {{ if regexMatch ":17\\." $image }}ghcr.io/cloudnative-pg/postgresql:17.7-standard-trixie{{ else if regexMatch ":[0-9]+\\.[0-9]+$" $image }}{{ printf "%s-standard-trixie" $image }}{{ else }}{{ $image }}{{ end }}
+  {{- /* CloudNativePG's default anti-affinity is per node only. Spreading across
+         zones on top of it, rather than moving its topologyKey to the zone, keeps
+         instances off a shared node on a cluster that carries no zone labels. */}}
+  {{- if gt (int .Values.db.replicas) 1 }}
+  topologySpreadConstraints:
+  {{- include "harbor.topologySpreadConstraints" (list . (dict "cnpg.io/cluster" (printf "%s-db" .Values.harbor.fullnameOverride) "cnpg.io/podRole" "instance")) | nindent 2 }}
+  {{- end }}
   storage:
     size: {{ .Values.db.size }}
     {{- with .Values.db.storageClass }}

@@ -27,6 +27,13 @@ spec:
     # bump it as a deliberate, separate change.
     image: redis:6.2.6-alpine
     replicas: 3
+    {{- /* Setting affinity would replace the operator's default per-node
+           anti-affinity, so the zone spread goes through
+           topologySpreadConstraints instead and the two add up. The selector
+           leaves out redisfailovers-role, which flips between master and
+           slave at runtime. */}}
+    topologySpreadConstraints:
+    {{- include "harbor.topologySpreadConstraints" (list . (dict "app.kubernetes.io/name" (printf "%s-redis" .Values.harbor.fullnameOverride) "app.kubernetes.io/component" "sentinel")) | nindent 4 }}
     resources:
       limits:
         cpu: 250m
@@ -39,6 +46,10 @@ spec:
     # Harbor's dump.rdb into a 7.x format a platform rollback can no longer load.
     image: redis:6.2.6-alpine
     replicas: {{ .Values.redis.replicas }}
+    {{- if gt (int .Values.redis.replicas) 1 }}
+    topologySpreadConstraints:
+    {{- include "harbor.topologySpreadConstraints" (list . (dict "app.kubernetes.io/name" (printf "%s-redis" .Values.harbor.fullnameOverride) "app.kubernetes.io/component" "redis")) | nindent 4 }}
+    {{- end }}
     resources:
       limits:
         cpu: "1"
