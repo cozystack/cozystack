@@ -43,6 +43,7 @@ tests:
           content:
             name: computeplane
             path: extra/computeplane
+            libraries: ["cozy-lib"]
       - contains:
           path: spec.variants[0].components
           content:

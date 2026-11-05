@@ -45,6 +45,7 @@ metadata:
   labels:
     sharding.fluxcd.io/key: tenants
 spec:
+  {{- include "cozy-lib.postRenderers" (list (list) $) | nindent 2 }}
   chartRef:
     kind: ExternalArtifact
     name: cozystack-ingress-application-default-ingress-system

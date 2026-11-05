@@ -293,6 +293,10 @@ stringData:
       scheduling:
         {{- . | toYaml | nindent 8 }}
       {{- end }}
+      {{- with include "cozystack.platform.imageOverrides" . | fromYamlArray }}
+      image-overrides:
+        {{- . | toYaml | nindent 8 }}
+      {{- end }}
       {{- with $kubeRootCa.data }}
       kube-root-ca: {{ index . "ca.crt" | b64enc | quote }}
       {{- end }}

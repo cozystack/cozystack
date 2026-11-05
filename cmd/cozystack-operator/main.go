@@ -41,6 +41,7 @@ import (
 	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -336,6 +337,7 @@ func main() {
 		HelmReleaseInstallTimeout: hrInstallTimeoutDuration,
 		HelmReleaseUpgradeTimeout: hrUpgradeTimeoutDuration,
 		HelmReleaseMaxHistory:     helmReleaseMaxHistory,
+		ImageOverridesSecret:      types.NamespacedName{Namespace: cozyValuesSecretNamespace, Name: cozyValuesSecretName},
 
 		SystemNamespaceMemoryLimit:   systemNSMemoryLimit,
 		SystemNamespaceMemoryRequest: systemNSMemoryRequest,

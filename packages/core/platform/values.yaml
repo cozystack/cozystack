@@ -798,6 +798,24 @@ branding: {}
 #     "10.0.0.1:8082":
 #       tls:
 #         insecureSkipVerify: true
+#
+# Mirrors serve an image only under the name it was pinned with. To run an
+# image under another name, tag or digest, for example one rebuilt in a
+# distribution's own registry, list it in imageOverrides. Each entry rewrites
+# every container image whose name (without tag or digest) equals `name`, in
+# every HelmRelease the platform installs, including the addons of tenant
+# Kubernetes clusters, but not Flux or cozystack-operator, which the installer
+# deploys; the fields are those of a kustomize `images` entry. A
+# digest replaces the tag that was pinned; newTag alongside it only labels the
+# reference. Image references outside container specs (arguments, environment
+# variables, fields of custom resources) and images an operator picks at
+# runtime are not rewritten.
+#
+#   imageOverrides:
+#     - name: registry.k8s.io/sig-storage/csi-attacher
+#       newName: registry.example.org/os/external-attacher
+#       newTag: "4.10.0"
+#       digest: sha256:f80b60d4523dcdecb225c3113bcbd0eedc45b4d2b46f87c0ccf4f14d09a4a35f
 registries: {}
 # Resource allocation ratios
 resources:
