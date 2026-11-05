@@ -273,11 +273,11 @@ export function ApplicationDetailPage() {
             path="metrics"
             element={
               <Suspense fallback={<Spinner />}>
-                <MetricsTab ad={ad} instance={instance} />
+                <MetricsTab ad={ad} name={name} />
               </Suspense>
             }
           />
-          <Route path="logs" element={<LogsTab ad={ad} instance={instance} />} />
+          <Route path="logs" element={<LogsTab ad={ad} name={name} />} />
         </Routes>
       </div>
     </div>

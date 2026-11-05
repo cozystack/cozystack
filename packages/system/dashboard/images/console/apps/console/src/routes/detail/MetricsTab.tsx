@@ -1,15 +1,16 @@
-import type { ApplicationDefinition, ApplicationInstance } from "@cozystack/types"
+import type { ApplicationDefinition } from "@cozystack/types"
 import { useTenantContext } from "../../lib/tenant-context.tsx"
 import { MetricsView } from "../../components/observability/MetricsView.tsx"
 
 interface MetricsTabProps {
   ad: ApplicationDefinition
-  instance: ApplicationInstance
+  // The route's name: while the next application loads, the page still holds the previous instance.
+  name: string
 }
 
-export function MetricsTab({ ad, instance }: MetricsTabProps) {
+export function MetricsTab({ ad, name }: MetricsTabProps) {
   const { tenantNamespace } = useTenantContext()
   const plural = ad.spec?.application.plural
   if (!tenantNamespace || !plural) return null
-  return <MetricsView scope={{ namespace: tenantNamespace, plural, name: instance.metadata.name }} />
+  return <MetricsView scope={{ namespace: tenantNamespace, plural, name }} />
 }
