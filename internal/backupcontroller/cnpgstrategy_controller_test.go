@@ -2421,6 +2421,13 @@ func TestReconcileCNPG_BackupPhaseOutcome(t *testing.T) {
 			if j.Status.Phase != tc.wantPhase {
 				t.Fatalf("BackupJob phase = %q (%s), want %q", j.Status.Phase, j.Status.Message, tc.wantPhase)
 			}
+			stored := &backupsv1alpha1.BackupJob{}
+			if err := c.Get(context.Background(), client.ObjectKeyFromObject(job), stored); err != nil {
+				t.Fatalf("get BackupJob after reconcile: %v", err)
+			}
+			if stored.Status.Phase != tc.wantPhase {
+				t.Fatalf("stored BackupJob phase = %q, want %q", stored.Status.Phase, tc.wantPhase)
+			}
 
 			message := j.Status.Message
 			if tc.wantPhase == backupsv1alpha1.BackupJobPhaseRunning {
