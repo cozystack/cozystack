@@ -851,6 +851,10 @@ func TestCheckCredentialsEndpointComparison(t *testing.T) {
 		{"bare host", "s3.example.com", false},
 		{"other host", "https://s3.new.example.com", true},
 		{"other port", "https://s3.example.com:8443", true},
+		// A forced render from a BucketInfo with no endpoint would write an
+		// empty endpoint into the Secret every driver reads (or, with the key
+		// absent, fail the bucket release's render), never a working one.
+		{"no endpoint in BucketInfo", "", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			objs := append([]runtime.Object{helmReleaseObject(), credentialsHelmReleaseObject()}, allDefaultObjects()...)
