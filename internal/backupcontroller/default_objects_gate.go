@@ -194,12 +194,6 @@ type DefaultObjectsGate struct {
 	// MinForceInterval for no reason.
 	lastForce            time.Time
 	lastCredentialsForce time.Time
-	// renderForced records that a forced render of HelmRelease was requested
-	// (the annotations were patched; whether the upgrade succeeds is not
-	// observed). That render stamps endpointAnnotation on every object the
-	// chart renders, so from then on an object without it (one rendered by a
-	// chart that predates the annotation) is not counted as stale again.
-	renderForced bool
 }
 
 // errHelmReleaseSuspended reports that the target release has
@@ -423,10 +417,7 @@ func (g *DefaultObjectsGate) Check(ctx context.Context) ([]string, bool, error) 
 		sort.Strings(objects)
 		_, objectsForced, err := g.force(ctx, g.HelmRelease, &g.lastForce, objects)
 		needed = append(needed, objects...)
-		if objectsForced {
-			forced = true
-			g.renderForced = true
-		}
+		forced = forced || objectsForced
 		errs = append(errs, err)
 	}
 	return needed, forced, errors.Join(errs...)
@@ -563,7 +554,9 @@ type defaultObjectsState struct {
 }
 
 // staleEndpoint reports an existing object rendered with another endpoint
-// than want, formatted for logs. An empty want disables the comparison.
+// than want, formatted for logs. An empty want disables the comparison. An
+// object without the annotation (rendered by a chart that predates it) stays
+// stale until a render stamps it: requesting one does not prove it landed.
 func (g *DefaultObjectsGate) staleEndpoint(state *defaultObjectsState, key string, obj *unstructured.Unstructured, want string) {
 	if want == "" {
 		return
@@ -571,9 +564,7 @@ func (g *DefaultObjectsGate) staleEndpoint(state *defaultObjectsState, key strin
 	have, ok := obj.GetAnnotations()[endpointAnnotation]
 	switch {
 	case !ok:
-		if !g.renderForced {
-			state.stale = append(state.stale, key+" (no endpoint annotation)")
-		}
+		state.stale = append(state.stale, key+" (no endpoint annotation)")
 	case have != want:
 		state.stale = append(state.stale, fmt.Sprintf("%s (endpoint %q, want %q)", key, have, want))
 	}
