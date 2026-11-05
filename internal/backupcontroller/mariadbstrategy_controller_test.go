@@ -894,6 +894,8 @@ var mariadbCompleteOutcomeCases = []struct {
 		wantMessage: []string{"no Complete condition observed"}},
 	{name: "Complete=True with an unknown reason past the deadline fails", status: metav1.ConditionTrue, reason: "SomethingElse", message: "Something", expired: true, wantFailed: true,
 		wantMessage: []string{"Complete=True/SomethingElse"}},
+	{name: "Complete=False/Failed past the deadline carries the operator's message", status: metav1.ConditionFalse, reason: "Failed", message: "Error creating Job", expired: true, wantFailed: true,
+		wantMessage: []string{"Complete=False/Failed: Error creating Job"}},
 }
 
 func mariadbCompleteConditions(noCondition bool, status metav1.ConditionStatus, reason, message string) []metav1.Condition {
@@ -1068,6 +1070,21 @@ func TestMariaDBJobFailedMessage_JobWithoutFailedCondition(t *testing.T) {
 	if !strings.Contains(got, "Job tenant/op reports no Failed condition") ||
 		strings.Contains(got, batchv1.JobReasonBackoffLimitExceeded) || strings.Contains(got, batchv1.JobReasonPodFailurePolicy) {
 		t.Errorf("a Failed condition that is not True must not be reported as the cause, got %q", got)
+	}
+}
+
+func TestMariaDBCompleteDetail(t *testing.T) {
+	for _, tc := range []struct {
+		cond *metav1.Condition
+		want string
+	}{
+		{nil, "no Complete condition observed"},
+		{&metav1.Condition{Status: metav1.ConditionFalse, Reason: "Failed", Message: "Backup not complete"}, "Complete=False/Failed: Backup not complete"},
+		{&metav1.Condition{Status: metav1.ConditionFalse, Reason: "Failed"}, "Complete=False/Failed"},
+	} {
+		if got := mariadbCompleteDetail(tc.cond); got != tc.want {
+			t.Errorf("mariadbCompleteDetail(%+v) = %q, want %q", tc.cond, got, tc.want)
+		}
 	}
 }
 
