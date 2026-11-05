@@ -22,7 +22,10 @@ extract_has() {
 }
 
 DOCKERFILE="$PWD/packages/system/multus/images/multus-cni/Dockerfile"
-KUBEOVN_VALUES="$PWD/packages/system/kubeovn/values.yaml"
+# The chart's appVersion, not the values.yaml image tag: a release build
+# restamps that tag to the Cozystack version (v1.7.0), the chart keeps the
+# kube-ovn release it vendors.
+KUBEOVN_CHART="$PWD/packages/system/kubeovn/charts/kube-ovn/Chart.yaml"
 DOC="$PWD/docs/vm-external-vlan.md"
 PLATFORM_VALUES="$PWD/packages/core/platform/values.yaml"
 TEMPLATE="$PWD/packages/system/multus/templates/multus-daemonset-thick.yml"
@@ -347,13 +350,12 @@ PATCHFILE="$PWD/packages/system/multus/patches/customize-deployment.patch"
   checked=$(sed -n 's|^# kube-ovn-cni-plugins-checked-against: *\([^ ]*\) *$|\1|p' "$DOCKERFILE")
   [ -n "$checked" ]
 
-  vendored=$(yq -r '.global.images.kubeovn.tag' "$KUBEOVN_VALUES" | sed 's|@.*||')
-  [ -n "$vendored" ]
-  [ "$vendored" != "null" ]
+  vendored=$(awk '$1 == "appVersion:" {gsub(/"/, "", $2); print "v" $2}' "$KUBEOVN_CHART")
+  [ "$vendored" != "v" ]
 
   if [ "$checked" != "$vendored" ]; then
     echo "the multus CNI plugin pin was checked against kube-ovn $checked," >&2
-    echo "but packages/system/kubeovn/values.yaml now vendors $vendored." >&2
+    echo "but packages/system/kubeovn/charts/kube-ovn/Chart.yaml now vendors $vendored." >&2
     echo >&2
     echo "Read CNI_PLUGINS_VERSION in kube-ovn $vendored's base image" >&2
     echo "(dist/images/Dockerfile.base). If it still matches the" >&2
