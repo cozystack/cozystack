@@ -73,3 +73,21 @@ restore() {
     # writer makes it fail rather than be overwritten.
     [ "$(jq -r '.metadata.resourceVersion' "$STUB/replaced.json")" = 7 ]
 }
+
+@test "the run step's finally restores the shared objects" {
+    # When the step ceiling fires, Chainsaw kills the shell and the EXIT trap
+    # of system-bucket-roundtrip.sh never runs; the step's finally still does.
+    # Chainsaw runs a script's content with sh from the suite's directory.
+    suite=hack/e2e-chainsaw/clickhouse
+    finally=$(yq 'select(.metadata.name == "clickhouse-3-system-bucket-roundtrip")
+        | .spec.steps[] | select(.name == "run") | .finally[]
+        | select(.description == "restore the host CoreDNS and the S3 Ingress TLS Secret") | .script.content' \
+        "$suite/chainsaw-test.yaml")
+    [ -n "$finally" ] || { echo "the run step has no finally restoring the shared objects" >&2; false; }
+    (cd "$suite" && PATH="$STUB:$PATH" NAMESPACE=tenant-root sh -c "$finally")
+    [ -f "$STUB/replaced.json" ] || {
+        echo "the run step's finally did not put the Corefile back" >&2
+        false
+    }
+    jq -e '.data.Corefile == ".:53 {\n    errors\n}\n"' "$STUB/replaced.json" >/dev/null
+}

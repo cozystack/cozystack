@@ -539,6 +539,21 @@ spec:
         check:
           ($error == null): true
     finally:
+    # The script's EXIT trap puts the Corefile and the Ingress TLS Secret
+    # back, but a step ceiling kills the shell before the trap runs. A no-op
+    # when the trap already did it.
+    - description: restore the host CoreDNS and the S3 Ingress TLS Secret
+      script:
+        timeout: 2m
+        content: |
+          set -eu
+          cd ../../..
+          # Chainsaw runs this under sh; the helpers are bash.
+          NAMESPACE="$NAMESPACE" bash -euo pipefail -c '
+            source examples/backups/clickhouse/00-helpers.sh
+            source hack/e2e-chainsaw/clickhouse/system-bucket-shared-state.sh
+            restore_shared_state
+          '
     # Chainsaw did not apply these: the jobs come from the script and the
     # Backup from the controller, and deleting a BackupJob reclaims no Backup.
     # The Certificate's Secret outlives the Certificate Chainsaw deletes.
