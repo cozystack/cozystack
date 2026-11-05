@@ -438,7 +438,9 @@ func (g *DefaultObjectsGate) Check(ctx context.Context) ([]string, bool, error) 
 // writes for it. The COSI Secret being absent (the BucketAccess is being
 // re-granted) leaves nothing to compare against and is not staleness, and
 // neither is a source Secret the bucket chart does not render: the COSI Secret
-// itself (the projector accepts one) or one without the endpoint key.
+// itself (the projector accepts one) or one without the endpoint key. A
+// BucketInfo without an endpoint is not a target either: rendering from it
+// writes an empty endpoint, or fails the release when the key is absent.
 func (g *DefaultObjectsGate) staleCredentials(ctx context.Context, src *corev1.Secret) (string, error) {
 	if g.CredentialsCOSISecretName == "" || g.CredentialsHelmRelease.Name == "" || g.CredentialsHelmRelease.Namespace == "" {
 		return "", nil
@@ -466,7 +468,7 @@ func (g *DefaultObjectsGate) staleCredentials(ctx context.Context, src *corev1.S
 	}
 	want := strings.TrimPrefix(strings.TrimPrefix(info.Spec.SecretS3.Endpoint, "https://"), "http://")
 	have := string(src.Data["endpoint"])
-	if have == want {
+	if want == "" || have == want {
 		return "", nil
 	}
 	return fmt.Sprintf("Secret/%s (endpoint %q, COSI Secret has %q)", g.Config.SourceSecretName, have, want), nil
