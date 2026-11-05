@@ -1,0 +1,81 @@
+{{/*
+  cozystack-metallb-address-policy
+
+  The driver reserves an address by parking it on a placeholder Service and
+  hands it to a workload by pinning that workload's Service with
+  metallb.io/loadBalancerIPs. Both steps are MetalLB's ordinary annotations,
+  which any writer of a Service can set — so a tenant able to write those
+  annotations can point MetalLB at an address reserved for someone else. The
+  driver detects the theft and marks the address Conflict, but detection is
+  after the fact, and during the handoff gap (design §5) the address is briefly
+  unheld in MetalLB's books and admission is the only thing standing in front
+  of it. The driver's own design places this policy with the installation
+  rather than with the controller, which is why it lives here and not in the
+  vendored chart.
+
+  Rule: in tenant namespaces, nobody but the driver may introduce or alter the
+  pool-selecting and address-pinning annotations on a Service. Presence is not
+  what is forbidden — the driver writes the pin onto the tenant's own Service,
+  and the tenant must still be able to edit every other field of it afterwards
+  — so the comparison is against oldObject and an unchanged value always
+  passes. On CREATE oldObject is null, which reads as "absent", so a tenant
+  cannot arrive with an annotation already set.
+
+  Scope: tenant-* namespaces only, matching the hostname policies in
+  cozystack-basics — cozy-* namespaces are cluster-admin-managed. Placeholder
+  Services live in this release's own namespace, so they are outside the match
+  regardless of who writes them.
+
+  Not covered: spec.loadBalancerIP. MetalLB stopped honouring the field in
+  v0.14 (this tree vendors v0.16.1), so it selects nothing and pins nothing;
+  a clause for it would guard an input MetalLB ignores. Re-check if the
+  vendored MetalLB is ever moved backwards.
+*/}}
+{{- /* Gate on the ValidatingAdmissionPolicy API, as the cozystack-basics hostname policies do, so a cluster without it does not get an unrenderable resource. */}}
+{{- if .Capabilities.APIVersions.Has "admissionregistration.k8s.io/v1/ValidatingAdmissionPolicy" }}
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: cozystack-metallb-address-policy
+  labels:
+    internal.cozystack.io/managed-by-cozystack: ""
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+    - apiGroups: [""]
+      apiVersions: ["v1"]
+      operations: ["CREATE", "UPDATE"]
+      resources: ["services"]
+  matchConditions:
+  - name: tenant-namespace
+    expression: object.metadata.namespace.startsWith("tenant-")
+  - name: not-the-driver
+    # The ServiceAccount name is fixed by the vendored chart; the namespace is
+    # wherever the PackageSource installs this release.
+    expression: request.userInfo.username != "system:serviceaccount:{{ .Release.Namespace }}:metallb-iad"
+  variables:
+  - name: oldAnnotations
+    expression: '(oldObject == null || !has(oldObject.metadata.annotations)) ? {} : oldObject.metadata.annotations'
+  - name: newAnnotations
+    expression: '!has(object.metadata.annotations) ? {} : object.metadata.annotations'
+  validations:
+  - expression: >-
+      ["metallb.io/loadBalancerIPs", "metallb.io/address-pool"].all(k,
+      (k in variables.newAnnotations ? variables.newAnnotations[k] : "")
+      == (k in variables.oldAnnotations ? variables.oldAnnotations[k] : ""))
+    messageExpression: >-
+      "the MetalLB annotations metallb.io/loadBalancerIPs and metallb.io/address-pool are managed by the address driver and cannot be set or changed here; request an address with an IPAddressClaim and attach it by annotating this Service with local.sdn.cozystack.io/ip-address-claim (namespace " + object.metadata.namespace + ")"
+    reason: Forbidden
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: cozystack-metallb-address-policy
+  labels:
+    internal.cozystack.io/managed-by-cozystack: ""
+spec:
+  policyName: cozystack-metallb-address-policy
+  validationActions: [Deny]
+{{- end }}

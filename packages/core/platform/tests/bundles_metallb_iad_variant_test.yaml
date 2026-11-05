@@ -1,0 +1,111 @@
+suite: the MetalLB address driver is emitted only where MetalLB itself is
+templates:
+  - templates/bundles/system.yaml
+release:
+  name: cozystack
+  namespace: cozy-system
+
+# cozystack.metallb-iad hard-depends on cozystack.metallb. A driver Package
+# emitted without MetalLB beside it can never leave DependenciesNotReady, and
+# MetalLB is absent in three ways: on isp-hosted, on a slim variant that did
+# not opt into it, and wherever disabledPackages names it.
+tests:
+  - it: emits the driver on isp-full when enabled
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+        enabledPackages:
+          - cozystack.address-controller
+          - cozystack.metallb-iad
+    asserts:
+      - containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.metallb-iad
+          any: true
+      - containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.metallb
+          any: true
+
+  - it: withholds the driver on isp-hosted even when enabled
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-hosted
+        enabledPackages:
+          - cozystack.address-controller
+          - cozystack.metallb-iad
+    asserts:
+      # any: true is REQUIRED inside the matcher for the negative to search the
+      # whole document set; without it containsDocument matches nothing and
+      # `not: true` passes vacuously.
+      - containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.metallb-iad
+          any: true
+        not: true
+      # The core carries no MetalLB dependency, so it is still available there.
+      - containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.address-controller
+          any: true
+
+  - it: withholds the driver on a slim variant that did not opt into MetalLB
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-slim
+        enabledPackages:
+          - cozystack.address-controller
+          - cozystack.metallb-iad
+    asserts:
+      - containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.metallb-iad
+          any: true
+        not: true
+
+  - it: emits the driver on a slim variant that opted into MetalLB
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-slim
+        enabledPackages:
+          - cozystack.metallb
+          - cozystack.address-controller
+          - cozystack.metallb-iad
+    asserts:
+      - containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.metallb-iad
+          any: true
+
+  - it: withholds the driver where disabledPackages removes MetalLB
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+        enabledPackages:
+          - cozystack.address-controller
+          - cozystack.metallb-iad
+        disabledPackages:
+          - cozystack.metallb
+    asserts:
+      - containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.metallb-iad
+          any: true
+        not: true

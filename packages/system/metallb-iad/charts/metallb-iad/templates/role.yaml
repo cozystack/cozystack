@@ -1,0 +1,79 @@
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: metallb-iad
+rules:
+- apiGroups:
+  - ""
+  resources:
+  - events
+  verbs:
+  - create
+  - patch
+- apiGroups:
+  - ""
+  resources:
+  - services
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - coordination.k8s.io
+  resources:
+  - leases
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - local.sdn.cozystack.io
+  resources:
+  - ipaddressclaims
+  - ipaddressclasses
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - local.sdn.cozystack.io
+  resources:
+  - ipaddresses
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - local.sdn.cozystack.io
+  resources:
+  - ipaddresses/status
+  verbs:
+  - get
+  - patch
+  - update
+- apiGroups:
+  - metallb.io
+  resources:
+  - ipaddresspools
+  - l2advertisements
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch

@@ -1,0 +1,57 @@
+{{- /* The vendored chart is Cozystack-agnostic and grants the controller alone;
+       tenant access to the API group it serves is this wrapper's job. Cozystack
+       resolves cozy:tenant, cozy:tenant:view and cozy:tenant:admin by label
+       selector, so these fold in on install and are gone once the package is
+       removed, rather than sitting in platform policy naming an API group the
+       cluster may not serve.
+
+       Only IPAddressClaim is granted. IPAddress and IPAddressClass are
+       cluster-scoped and cozy:tenant* reaches a tenant through a per-namespace
+       RoleBinding, so a rule for either would never be consulted; a tenant
+       reads the address it was given from its own claim's status.addresses[]. */ -}}
+---
+# == addresses tenant ServiceAccount role ==
+# Aggregated into cozy:tenant, which every tenant chart renders under.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: cozy:addresses
+  labels:
+    rbac.cozystack.io/aggregate-to-tenant: "true"
+rules:
+- apiGroups: ["local.sdn.cozystack.io"]
+  resources: ["ipaddressclaims"]
+  verbs: ['*']
+---
+# == addresses view cluster role ==
+# Aggregated into cozy-tenant-view (and consequently use, admin, super-admin)
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: cozy:addresses:view
+  labels:
+    rbac.cozystack.io/aggregate-to-tenant-view: "true"
+rules:
+- apiGroups: ["local.sdn.cozystack.io"]
+  resources: ["ipaddressclaims"]
+  verbs:
+  - get
+  - list
+  - watch
+---
+# == addresses admin cluster role ==
+# Aggregated into cozy-tenant-admin (and consequently super-admin)
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: cozy:addresses:admin
+  labels:
+    rbac.cozystack.io/aggregate-to-tenant-admin: "true"
+rules:
+- apiGroups: ["local.sdn.cozystack.io"]
+  resources: ["ipaddressclaims"]
+  verbs:
+  - create
+  - update
+  - patch
+  - delete

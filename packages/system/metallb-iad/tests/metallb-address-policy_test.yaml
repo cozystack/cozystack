@@ -1,0 +1,58 @@
+suite: the MetalLB address policy fences the driver-managed annotations
+
+templates:
+  - templates/metallb-address-policy.yaml
+
+release:
+  name: metallb-iad
+  namespace: cozy-metallb-iad
+
+capabilities:
+  apiVersions:
+    - admissionregistration.k8s.io/v1/ValidatingAdmissionPolicy
+
+tests:
+  - it: gates both driver-managed annotations against their previous value
+    documentSelector:
+      path: kind
+      value: ValidatingAdmissionPolicy
+    asserts:
+      # The comparison is old-vs-new rather than a presence check: the driver
+      # writes the pin onto the tenant's own Service, and the tenant has to stay
+      # able to edit the rest of it. A presence check would freeze the Service.
+      - matchRegex:
+          path: spec.validations[0].expression
+          pattern: 'metallb\.io/loadBalancerIPs'
+      - matchRegex:
+          path: spec.validations[0].expression
+          pattern: 'metallb\.io/address-pool'
+      - matchRegex:
+          path: spec.validations[0].expression
+          pattern: 'variables\.oldAnnotations'
+      - equal:
+          path: spec.failurePolicy
+          value: Fail
+
+  - it: exempts the driver ServiceAccount in its own release namespace
+    documentSelector:
+      path: kind
+      value: ValidatingAdmissionPolicy
+    asserts:
+      - equal:
+          path: spec.matchConditions[1].expression
+          value: request.userInfo.username != "system:serviceaccount:cozy-metallb-iad:metallb-iad"
+
+  - it: scopes the policy to tenant namespaces and denies on failure
+    asserts:
+      - equal:
+          path: spec.matchConditions[0].expression
+          value: object.metadata.namespace.startsWith("tenant-")
+        documentSelector:
+          path: kind
+          value: ValidatingAdmissionPolicy
+      - equal:
+          path: spec.validationActions
+          value: [Deny]
+        documentSelector:
+          path: kind
+          value: ValidatingAdmissionPolicyBinding
