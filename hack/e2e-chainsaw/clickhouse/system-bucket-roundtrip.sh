@@ -24,18 +24,14 @@
 set -euo pipefail
 
 source examples/backups/clickhouse/00-helpers.sh
+source hack/e2e-chainsaw/clickhouse/system-bucket-shared-state.sh
 
 : "${NAMESPACE:?}"
 CLICKHOUSE_NAME=sysbucket
 BACKUPJOB_NAME=sysbucket-backup
 RESTOREJOB_NAME=sysbucket-restore
-S3_HOST=s3.example.org
-INGRESS_SECRET=seaweedfs-s3-ingress-tls
 CERT_SECRET=e2e-system-bucket-s3-tls
 PROBE_POD=e2e-system-bucket-probe
-OWNER_LABEL=cozystack.io/e2e-owner=clickhouse-system-bucket
-DNS_BEGIN='    # === BEGIN e2e-clickhouse-system-bucket ==='
-DNS_END='    # === END e2e-clickhouse-system-bucket ==='
 DNS_TARGET="root-ingress-controller.${NAMESPACE}.svc.cozy.local"
 # Kubelet refreshes a ConfigMap volume within about a minute and CoreDNS's
 # reload plugin polls every 30s; the rest is the 30s answer cache.
@@ -46,35 +42,10 @@ JOB_TIMEOUT=480
 
 workdir=$(mktemp -d)
 
-corefile_has_block() {
-    kubectl -n kube-system get configmap coredns -o jsonpath='{.data.Corefile}' | grep -qF -- "$DNS_BEGIN"
-}
-
-remove_dns_block() {
-    kubectl -n kube-system get configmap coredns -o json >"$workdir/coredns.json"
-    local begins
-    begins=$(jq -r '.data.Corefile' "$workdir/coredns.json" | grep -cF -- "$DNS_BEGIN" || true)
-    if [ "$begins" = 0 ]; then
-        return 0
-    fi
-    if [ "$begins" != 1 ] || ! jq -r '.data.Corefile' "$workdir/coredns.json" | grep -qF -- "$DNS_END"; then
-        log_error "kube-system/coredns holds ${begins} '${DNS_BEGIN# *}' markers or no END marker; reconcile the Corefile by hand"
-        return 1
-    fi
-    jq --arg b "$DNS_BEGIN" --arg e "$DNS_END" \
-        '.data.Corefile |= (split("\n") | (index($b)) as $i | (index($e)) as $j | .[:$i] + .[$j+1:] | join("\n"))' \
-        "$workdir/coredns.json" >"$workdir/coredns-clean.json"
-    kubectl replace -f "$workdir/coredns-clean.json" >/dev/null
-    log_success "Removed the ${S3_HOST} rewrite from kube-system/coredns"
-}
-
-restore_shared_state() {
+on_exit() {
     local rc=$?
     set +e
-    remove_dns_block || rc=1
-    if kubectl -n "$NAMESPACE" get secret "$INGRESS_SECRET" -l "$OWNER_LABEL" -o name 2>/dev/null | grep -q .; then
-        kubectl -n "$NAMESPACE" delete secret "$INGRESS_SECRET" --wait=true --timeout=60s || rc=1
-    fi
+    restore_shared_state || rc=1
     rm -rf "$workdir"
     exit "$rc"
 }
@@ -87,7 +58,7 @@ if corefile_has_block; then
     log_error "kube-system/coredns already carries the ${S3_HOST} rewrite block, left by an earlier run; remove it by hand"
     exit 1
 fi
-trap restore_shared_state EXIT
+trap on_exit EXIT
 
 log_step "Serving the Test certificate for ${S3_HOST} through the platform S3 Ingress"
 kubectl -n "$NAMESPACE" get secret "$CERT_SECRET" -o json \
