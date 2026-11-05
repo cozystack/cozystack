@@ -141,6 +141,21 @@ tests:
           content:
             name: BACKUP_CREDENTIALS_COSI_SECRET_NAME
 
+  # The forced release renders only <release>-credentials for its own system
+  # user. A systemSecretName naming another bucket's Secret is not refreshed by
+  # forcing bucket-<bucketName>-system, so comparing it would force that
+  # release every MinForceInterval and change nothing.
+  - it: "systemSecretName of another bucket: no COSI Secret to compare against"
+    template: templates/deployment.yaml
+    set:
+      backupStorage.systemSecretName: bucket-other-system-credentials
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          any: true
+          content:
+            name: BACKUP_CREDENTIALS_COSI_SECRET_NAME
+
   - it: "velero.bslEnabled=false: the BSL is not rendered, so the gate must not look for it"
     template: templates/deployment.yaml
     set:
