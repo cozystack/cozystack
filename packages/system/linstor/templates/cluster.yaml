@@ -7,14 +7,44 @@ metadata:
 spec:
   #nodeSelector:
   #  node-role.kubernetes.io/linstor: ""
+  {{- if eq .Values.backend "blockstor" }}
+  {{- /* External mode: piraeus-operator runs no linstor-controller of its
+         own. linstor-csi talks to blockstor-apiserver, which serves the
+         LINSTOR REST API on the mTLS port :3371 only. The URL has to match
+         the Service and a SAN of its serving certificate, both in
+         blockstor-apiserver*.yaml. */}}
+  externalController:
+    url: https://blockstor-apiserver.cozy-linstor.svc:3371
+  {{- else }}
   internalTLS:
     certManager:
       name: linstor-internal-ca
       kind: Issuer
+  {{- end }}
   apiTLS:
     certManager:
+      {{- if eq .Values.backend "blockstor" }}
+      {{- /* The operator issues linstor-csi-{controller,node}-tls from this
+             Issuer, so the CSI pods present a client certificate chained to
+             the CA blockstor-apiserver verifies. */}}
+      name: blockstor-api-ca
+      {{- else }}
       name: linstor-api-ca
+      {{- end }}
       kind: Issuer
+    {{- if eq .Values.backend "blockstor" }}
+    {{- /* The operator is a client of the API itself: it probes
+           /v1/controller/version before every LinstorCluster and
+           LinstorSatellite reconcile. In external mode it issues no
+           certificate for that client and only reads the Secret named here,
+           whose default, linstor-client-tls, either does not exist or, on a
+           cluster that ran the LINSTOR backend, still carries the old CA.
+           Either way the probe fails with "certificate signed by unknown
+           authority" and every reconcile stops before it starts, freezing the
+           satellite DaemonSets at their last spec. This is the client
+           certificate the chart issues from the same CA as the serving one. */}}
+    clientSecretName: blockstor-apiserver-client-tls
+    {{- end }}
   properties:
   {{- if .Values.linstor.autoDiskful.enabled }}
   - name: DrbdOptions/auto-diskful
@@ -32,6 +62,7 @@ spec:
     value: "20"
   - name: DrbdOptions/Net/timeout
     value: "100"
+  {{- if eq .Values.backend "linstor" }}
   controller:
     enabled: true
     podTemplate:
@@ -74,6 +105,7 @@ spec:
           configMap:
             name: linstor-plunger
             defaultMode: 0755
+  {{- end }}
   csiController:
     podTemplate:
       spec:
@@ -123,6 +155,7 @@ spec:
         - name: linstor-csi
           image: {{ .Values.linstorCSI.image.repository }}:{{ .Values.linstorCSI.image.tag }}
   patches:
+    {{- if eq .Values.backend "linstor" }}
     - target:
         kind: Deployment
         name: linstor-controller
@@ -130,6 +163,7 @@ spec:
         - op: add
           path: /metadata/annotations/reloader.stakater.com~1auto
           value: "true"
+    {{- end }}
     - target:
         kind: Deployment
         name: linstor-csi-controller
