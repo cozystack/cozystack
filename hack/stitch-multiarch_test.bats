@@ -376,10 +376,10 @@ _make_world() {
   wf=.github/workflows/tags.yaml
   [ "$(yq -r '.jobs.build-amd64.needs // "none"' "$wf")" = none ]
   [ "$(yq -r '.jobs.build-arm64.needs // "none"' "$wf")" = none ]
-  [ "$(yq -r '.jobs.build-arm64.if' "$wf")" = "contains(github.ref_name, '-')" ]
+  [ "$(yq -r '.jobs.build-arm64.if' "$wf")" = "\${{ github.repository == 'cozystack/cozystack' && (contains(github.ref_name, '-')) }}" ]
   # The amd64 job runs for every tag: it holds the release-exists no-op and the
   # hand-pushed stable tag rejection.
-  [ "$(yq -r '.jobs.build-amd64.if // "none"' "$wf")" = none ]
+  [ "$(yq -r '.jobs.build-amd64.if // "none"' "$wf")" = "github.repository == 'cozystack/cozystack'" ]
   amd_steps=$(yq -r '.jobs.build-amd64.steps[].name' "$wf")
   echo "$amd_steps" | grep -qx 'Check if release already exists'
   echo "$amd_steps" | grep -qx 'Reject hand-pushed stable tags'

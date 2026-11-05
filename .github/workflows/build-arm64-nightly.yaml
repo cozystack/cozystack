@@ -24,6 +24,7 @@ permissions:
 
 jobs:
   build-arm64:
+    if: github.repository == 'cozystack/cozystack'
     name: Build main arm64 images
     runs-on: oracle-vm-24cpu-96gb-arm64
     # Starts from the rc leg's budget; re-measure after the first runs.
