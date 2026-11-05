@@ -1,0 +1,33 @@
+suite: cozystack-operator platform source arguments
+
+templates:
+  - templates/cozystack-operator.yaml
+
+tests:
+  - it: passes platformSourceCertSecret to the operator
+    set:
+      cozystackOperator.platformSourceUrl: oci://registry.internal:8083/cozystack/cozystack/cozystack-packages
+      cozystackOperator.platformSourceSecret: registry-creds
+      cozystackOperator.platformSourceCertSecret: registry-ca
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --platform-source-cert-secret=registry-ca
+        documentSelector:
+          path: kind
+          value: Deployment
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --platform-source-secret=registry-creds
+        documentSelector:
+          path: kind
+          value: Deployment
+
+  - it: omits the cert secret flag by default
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].args
+          content: --platform-source-cert-secret=
+        documentSelector:
+          path: kind
+          value: Deployment
