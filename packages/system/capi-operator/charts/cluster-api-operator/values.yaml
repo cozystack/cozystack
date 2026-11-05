@@ -2,30 +2,118 @@
 # ---
 # Cluster API provider options
 core: {}
-# cluster-api: {}  # Name, required
-#   namespace: ""  # Optional
-#   version: ""    # Optional
+# cluster-api: {}         # Name, required
+#   namespace: ""         # Optional
+#   version: ""           # Optional
+#   createNamespace: true # Optional
+#   deployment:           # Optional
+#     replicas: 1
+#     nodeSelector: {}
+#     tolerations: []
+#     affinity: {}
+#     containers: []
+#     serviceAccountName: ""
+#     imagePullSecrets: []
+#   manager:              # Optional
+#     featureGates:
+#       ClusterTopology: true
+#     metrics:
+#       insecureDiagnostics: true
+#       diagnosticsAddress: localhost:8080
 bootstrap: {}
-# kubeadm: {}      # Name, required
-#   namespace: ""  # Optional
-#   version: ""    # Optional
+# kubeadm: {}             # Name, required
+#   namespace: ""         # Optional
+#   version: ""           # Optional
+#   createNamespace: true # Optional
+#   deployment:           # Optional
+#     replicas: 1
+#     nodeSelector: {}
+#     tolerations: []
+#     affinity: {}
+#     containers: []
+#     serviceAccountName: ""
+#     imagePullSecrets: []
+#   manager:              # Optional
+#     featureGates:
+#       ClusterTopology: true
+#       MachinePool: true
+#     metrics:
+#       insecureDiagnostics: true
+#       diagnosticsAddress: localhost:8080
 controlPlane: {}
-# kubeadm: {}      # Name, required
-#   namespace: ""  # Optional
-#   version: ""    # Optional
+# kubeadm: {}             # Name, required
+#   namespace: ""         # Optional
+#   version: ""           # Optional
+#   createNamespace: true # Optional
+#   deployment:           # Optional
+#     replicas: 1
+#     nodeSelector: {}
+#     tolerations: []
+#     affinity: {}
+#     containers: []
+#     serviceAccountName: ""
+#     imagePullSecrets: []
+#   manager:              # Optional
+#     featureGates:
+#       ClusterTopology: true
+#     metrics:
+#       insecureDiagnostics: true
+#       diagnosticsAddress: localhost:8080
 infrastructure: {}
-# docker: {}  # Name, required
-#   namespace: ""  # Optional
-#   version: ""    # Optional
+# docker: {}              # Name, required
+#   namespace: ""         # Optional
+#   version: ""           # Optional
+#   createNamespace: true # Optional
+#   deployment:           # Optional
+#     replicas: 1
+#     nodeSelector: {}
+#     tolerations: []
+#     affinity: {}
+#     containers: []
+#     serviceAccountName: ""
+#     imagePullSecrets: []
+#   manager:              # Optional
+#     featureGates:
+#       ClusterTopology: true
+#     metrics:
+#       insecureDiagnostics: true
+#       diagnosticsAddress: localhost:8080
 addon: {}
-# helm: {}         # Name, required
-#   namespace: ""  # Optional
-#   version: ""    # Optional
+# helm: {}                # Name, required
+#   namespace: ""         # Optional
+#   version: ""           # Optional
+#   createNamespace: true # Optional
+#   deployment:           # Optional
+#     replicas: 1
+#     nodeSelector: {}
+#     tolerations: []
+#     affinity: {}
+#     containers: []
+#     serviceAccountName: ""
+#     imagePullSecrets: []
+#   manager:              # Optional
+#     metrics:
+#       insecureDiagnostics: true
+#       diagnosticsAddress: localhost:8080
 ipam: {}
-# in-cluster: {}   # Name, required
-#   namespace: ""  # Optional
-#   version: ""    # Optional
-manager.featureGates: {}
+# in-cluster: {}          # Name, required
+#   namespace: ""         # Optional
+#   version: ""           # Optional
+#   createNamespace: true # Optional
+#   deployment:           # Optional
+#     replicas: 1
+#     nodeSelector: {}
+#     tolerations: []
+#     affinity: {}
+#     containers: []
+#     serviceAccountName: ""
+#     imagePullSecrets: []
+#   manager:              # Optional
+#     featureGates:
+#       ClusterTopology: true
+#     metrics:
+#       insecureDiagnostics: true
+#       diagnosticsAddress: localhost:8080
 fetchConfig: {}
 # ---
 # Common configuration secret options
@@ -39,20 +127,23 @@ leaderElection:
 image:
   manager:
     repository: registry.k8s.io/capi-operator/cluster-api-operator
-    tag: v0.19.0
+    tag: v0.29.0
     pullPolicy: IfNotPresent
 env:
   manager: []
 diagnosticsAddress: ":8443"
 healthAddr: ":9440"
+profilerAddress: ":6060"
+contentionProfiling: false
 insecureDiagnostics: false
 watchConfigSecret: false
+watchConfigMap: false
 imagePullSecrets: {}
 resources:
   manager:
     limits:
       cpu: 100m
-      memory: 150Mi
+      memory: 300Mi
     requests:
       cpu: 100m
       memory: 100Mi

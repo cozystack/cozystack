@@ -36,3 +36,14 @@ tests:
       - notContains:
           path: spec.template.spec.containers[0].args
           content: --force-delete-unregistered-nodes=true
+
+  - it: pins the Cluster API version the autoscaler reads to v1beta1
+    documentSelector:
+      path: kind
+      value: Deployment
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: CAPI_VERSION
+            value: v1beta1

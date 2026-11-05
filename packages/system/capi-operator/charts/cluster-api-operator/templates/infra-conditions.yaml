@@ -61,15 +61,6 @@ metadata:
     "argocd.argoproj.io/sync-wave": "2"
 {{- with .Values.configSecret }}
 spec:
-{{- if $.Values.manager }}
-{{- if and $.Values.manager.featureGates $.Values.manager.featureGates.kubeadm }}
-  manager:
-    featureGates:
-    {{- range $key, $value := $.Values.manager.featureGates.kubeadm }}
-      {{ $key }}: {{ $value }}
-    {{- end }}
-{{- end }}
-{{- end }}
   configSecret:
     name: {{ .name }}
     {{- if .namespace }}

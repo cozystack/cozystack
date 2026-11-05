@@ -3,6 +3,7 @@
   {{- $controlPlaneNamespace := default ( printf "%s-%s" $name "control-plane-system" ) (get $controlPlane "namespace") }}
   {{- $controlPlaneName := $name }}
   {{- $controlPlaneVersion := get $controlPlane "version" }}
+{{- if ne $controlPlane.createNamespace false }}
 ---
 apiVersion: v1
 kind: Namespace
@@ -14,6 +15,7 @@ metadata:
     {{- end }}
     "argocd.argoproj.io/sync-wave": "1"
   name: {{ $controlPlaneNamespace }}
+{{- end }}
 ---
 apiVersion: operator.cluster.x-k8s.io/v1alpha2
 kind: ControlPlaneProvider
@@ -26,34 +28,41 @@ metadata:
     "helm.sh/hook-weight": "2"
     {{- end }}
     "argocd.argoproj.io/sync-wave": "2"
-{{- if or $controlPlaneVersion $.Values.configSecret.name $.Values.manager }}
+{{- if or $controlPlaneVersion $.Values.configSecret.name $controlPlane.manager $controlPlane.deployment (($controlPlane).configSecret).name }}
 spec:
 {{- end}}
 {{- if $controlPlaneVersion }}
   version: {{ $controlPlaneVersion }}
 {{- end }}
-{{- if $.Values.manager }}
-{{- if hasKey $.Values.manager.featureGates $controlPlaneName }}
+{{- if $controlPlane.deployment }}
+  deployment: {{ toYaml $controlPlane.deployment | nindent 4 }}
+{{- end }}
+{{- if $controlPlane.manager }}
   manager:
-{{- range $key, $value := $.Values.manager.featureGates }}
-  {{- if eq $key $controlPlaneName }}
+  {{- if $controlPlane.manager.featureGates }}
     featureGates:
-    {{- range $k, $v := $value }}
-      {{ $k }}: {{ $v }}
+    {{- range $key, $value := $controlPlane.manager.featureGates }}
+      {{ $key }}: {{ $value }}
+    {{- end }}
+  {{- end }}
+  {{- if $controlPlane.manager.metrics }}
+    metrics:
+    {{- if $controlPlane.manager.metrics.insecureDiagnostics }}
+      insecureDiagnostics: {{ $controlPlane.manager.metrics.insecureDiagnostics }}
+    {{- end }}
+    {{- if $controlPlane.manager.metrics.diagnosticsAddress }}
+      diagnosticsAddress: {{ $controlPlane.manager.metrics.diagnosticsAddress }}
     {{- end }}
   {{- end }}
 {{- end }}
-{{- end }}
-{{- end }}
-{{- if $.Values.configSecret.name }}
-  configSecret:
-    name: {{ $.Values.configSecret.name }}
-    {{- if $.Values.configSecret.namespace }}
-    namespace: {{ $.Values.configSecret.namespace }}
-    {{- end }}
+{{- if (default (($controlPlane).configSecret).name (($.Values).configSecret).name) }}
+{{- include "capi-operator.configSecret" (dict "ROOT" $ "ARGUMENT" $controlPlane) | nindent 2 }}
 {{- end }}
 {{- if $controlPlane.manifestPatches }}
   manifestPatches: {{ toYaml $controlPlane.manifestPatches | nindent 4 }}
+{{- end }}
+{{- if $controlPlane.fetchConfig }}
+  fetchConfig: {{ toYaml $controlPlane.fetchConfig | nindent 4 }}
 {{- end }}
 {{- if $controlPlane.additionalManifests }}
   additionalManifests:

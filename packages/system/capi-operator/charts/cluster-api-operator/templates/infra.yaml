@@ -3,6 +3,7 @@
   {{- $infrastructureNamespace := default ( printf "%s-%s" $name "infrastructure-system" ) (get $infra "namespace") }}
   {{- $infrastructureName := $name }}
   {{- $infrastructureVersion := get $infra "version" }}
+{{- if ne $infra.createNamespace false }}
 ---
 apiVersion: v1
 kind: Namespace
@@ -14,6 +15,7 @@ metadata:
     {{- end }}
     "argocd.argoproj.io/sync-wave": "1"
   name: {{ $infrastructureNamespace }}
+{{- end }}
 ---
 apiVersion: operator.cluster.x-k8s.io/v1alpha2
 kind: InfrastructureProvider
@@ -26,24 +28,32 @@ metadata:
     "helm.sh/hook-weight": "2"
     {{- end }}
     "argocd.argoproj.io/sync-wave": "2"
-{{- if or $infrastructureVersion $.Values.configSecret.name $.Values.manager $.Values.additionalDeployments }}
+{{- if or $infrastructureVersion $.Values.configSecret.name $infra.manager $infra.deployment $.Values.additionalDeployments (($infra).configSecret).name }}
 spec:
 {{- end }}
 {{- if $infrastructureVersion }}
   version: {{ $infrastructureVersion }}
 {{- end }}
-{{- if $.Values.manager }}
-{{- if and (kindIs "map" $.Values.manager.featureGates) (hasKey $.Values.manager.featureGates $infrastructureName) }}
+{{- if $infra.deployment }}
+  deployment: {{ toYaml $infra.deployment | nindent 4 }}
+{{- end }}
+{{- if $infra.manager }}
   manager:
-{{- range $key, $value := $.Values.manager.featureGates }}
-  {{- if eq $key $infrastructureName }}
+  {{- if $infra.manager.featureGates }}
     featureGates:
-    {{- range $k, $v := $value }}
-      {{ $k }}: {{ $v }}
+    {{- range $key, $value := $infra.manager.featureGates }}
+      {{ $key }}: {{ $value }}
     {{- end }}
   {{- end }}
-{{- end }}
-{{- end }}
+  {{- if $infra.manager.metrics }}
+    metrics:
+    {{- if $infra.manager.metrics.insecureDiagnostics }}
+      insecureDiagnostics: {{ $infra.manager.metrics.insecureDiagnostics }}
+    {{- end }}
+    {{- if $infra.manager.metrics.diagnosticsAddress }}
+      diagnosticsAddress: {{ $infra.manager.metrics.diagnosticsAddress }}
+    {{- end }}
+  {{- end }}
 {{- end }}
 {{- if and (kindIs "map" $.Values.fetchConfig) (hasKey $.Values.fetchConfig $infrastructureName) }}
 {{- range $key, $value := $.Values.fetchConfig }}
@@ -55,12 +65,8 @@ spec:
   {{- end }}
 {{- end }}
 {{- end }}
-{{- if $.Values.configSecret.name }}
-  configSecret:
-    name: {{ $.Values.configSecret.name }}
-    {{- if $.Values.configSecret.namespace }}
-    namespace: {{ $.Values.configSecret.namespace }}
-    {{- end }}
+{{- if (default (($infra).configSecret).name (($.Values).configSecret).name) }}
+{{- include "capi-operator.configSecret" (dict "ROOT" $ "ARGUMENT" $infra) | nindent 2 }}
 {{- end }}
 {{- if $.Values.additionalDeployments }}
   additionalDeployments: {{ toYaml $.Values.additionalDeployments | nindent 4 }}
@@ -68,6 +74,12 @@ spec:
 {{- if $infra.manifestPatches }}
   manifestPatches: {{- toYaml $infra.manifestPatches | nindent 4 }}
 {{- end }} {{/* if $infra.manifestPatches */}}
+{{- if $infra.patches }}
+  patches: {{ toYaml $infra.patches | nindent 4 }}
+{{- end }} {{/* if $infra.patches */}}
+{{- if $infra.fetchConfig }}
+  fetchConfig: {{ toYaml $infra.fetchConfig | nindent 4 }}
+{{- end }}
 {{- if $infra.additionalManifests }}
   additionalManifests:
     name: {{ $infra.additionalManifests.name }}

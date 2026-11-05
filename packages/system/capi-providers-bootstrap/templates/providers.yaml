@@ -4,7 +4,7 @@ metadata:
   name: kubeadm
 spec:
   # https://github.com/kubernetes-sigs/cluster-api
-  version: v1.10.1-bootstrap
+  version: v1.13.7-bootstrap
   fetchConfig:
     selector:
       matchLabels:
@@ -27,7 +27,7 @@ metadata:
   name: talos
 spec:
   # https://github.com/siderolabs/cluster-api-bootstrap-provider-talos
-  version: v0.6.12-bootstrap-talos
+  version: v0.6.13-bootstrap-talos
   fetchConfig:
     selector:
       matchLabels:

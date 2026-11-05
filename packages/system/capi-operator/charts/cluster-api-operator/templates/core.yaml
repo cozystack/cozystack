@@ -3,6 +3,7 @@
   {{- $coreNamespace := default "capi-system" (get $core "namespace") }}
   {{- $coreName := $name }}
   {{- $coreVersion := get $core "version" }}
+{{- if ne $core.createNamespace false }}
 ---
 apiVersion: v1
 kind: Namespace
@@ -14,6 +15,7 @@ metadata:
     {{- end }}
     "argocd.argoproj.io/sync-wave": "1"
   name: {{ $coreNamespace }}
+{{- end }}
 ---
 apiVersion: operator.cluster.x-k8s.io/v1alpha2
 kind: CoreProvider
@@ -26,30 +28,41 @@ metadata:
     "helm.sh/hook-weight": "2"
     {{- end }}
     "argocd.argoproj.io/sync-wave": "2"
-{{- if or $coreVersion $.Values.configSecret.name $.Values.manager }}
+{{- if or $coreVersion $.Values.configSecret.name $core.manager $core.deployment (($core).configSecret).name }}
 spec:
 {{- end}}
 {{- if $coreVersion }}
   version: {{ $coreVersion }}
 {{- end }}
-{{- if $.Values.manager }}
-{{- if and $.Values.manager.featureGates $.Values.manager.featureGates.core }}
+{{- if $core.deployment }}
+  deployment: {{ toYaml $core.deployment | nindent 4 }}
+{{- end }}
+{{- if $core.manager }}
   manager:
+  {{- if $core.manager.featureGates }}
     featureGates:
-    {{- range $key, $value := $.Values.manager.featureGates.core }}
+    {{- range $key, $value := $core.manager.featureGates }}
       {{ $key }}: {{ $value }}
     {{- end }}
-{{- end }}
-{{- end }}
-{{- if $.Values.configSecret.name }}
-  configSecret:
-    name: {{ $.Values.configSecret.name }}
-    {{- if $.Values.configSecret.namespace }}
-    namespace: {{ $.Values.configSecret.namespace }}
+  {{- end }}
+  {{- if $core.manager.metrics }}
+    metrics:
+    {{- if $core.manager.metrics.insecureDiagnostics }}
+      insecureDiagnostics: {{ $core.manager.metrics.insecureDiagnostics }}
     {{- end }}
+    {{- if $core.manager.metrics.diagnosticsAddress }}
+      diagnosticsAddress: {{ $core.manager.metrics.diagnosticsAddress }}
+    {{- end }}
+  {{- end }}
+{{- end }}
+{{- if (default (($core).configSecret).name (($.Values).configSecret).name) }}
+{{- include "capi-operator.configSecret" (dict "ROOT" $ "ARGUMENT" $core) | nindent 2 }}
 {{- end }}
 {{- if $core.manifestPatches }}
   manifestPatches: {{ toYaml $core.manifestPatches | nindent 4 }}
+{{- end }}
+{{- if $core.fetchConfig }}
+  fetchConfig: {{ toYaml $core.fetchConfig | nindent 4 }}
 {{- end }}
 {{- if $core.additionalManifests }}
   additionalManifests:
