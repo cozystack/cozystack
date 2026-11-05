@@ -37,6 +37,18 @@ Two things about this organisation are worth stating plainly rather than leaving
 
 **Telemetry is received by a component adopters do not install.** [cozystack-telemetry-server](https://github.com/cozystack/cozystack-telemetry-server) runs as project infrastructure, but clusters report to it by default, so it is named here rather than omitted as out-of-scope. What is collected, why, and how to turn it off is documented on the [Telemetry](https://cozystack.io/docs/v1.6/operations/configuration/telemetry/) page.
 
+### Sub-project lifecycle
+
+**Adding a sub-project.** Anyone can propose a new sub-project, whether a new repository or existing code offered to the project, by opening an issue in the [community](https://github.com/cozystack/community) repository. The proposal states the category the repository would belong to, what it does and why it belongs in Cozystack rather than elsewhere, and at least one owner who is a maintainer or reviewer of the project. Code offered from outside the organisation must be under Apache-2.0, or relicensed to it with the consent of its copyright holders, before it is accepted.
+
+The maintainers decide through the [decision-making process](#project-decision-making-process) below. Once a proposal is accepted, the repository is created in or transferred to the `cozystack` organisation, gets a `CODEOWNERS` file naming its owners, and inherits the organisation's default Code of Conduct and security policy unless it carries its own. It must use DCO sign-off like every other repository. A pull request adds it to this section.
+
+**Status.** Packaged sub-projects carry one of three statuses in the table above. *Experimental* means the component is built into the distribution but its interfaces may still change between minor releases. *Stable* means it follows the same compatibility and release expectations as the main repository. *Deprecated* means it is scheduled for removal. A change of status is a pull request to this section, decided by the maintainers.
+
+**Changing category.** A repository moves between categories when its relationship to the distribution changes: for example, independent tooling becomes a packaged sub-project when the distribution starts building or vendoring it. The pull request that makes the change also updates this section.
+
+**Removing a sub-project.** A sub-project is removed when it is superseded, no longer needed, or left without an owner who can maintain it. Anyone can propose removal in the same way as an addition, and the maintainers decide through the same process. A packaged sub-project is first marked *Deprecated* and announced in the release notes of at least one minor release before the distribution stops shipping it. A removed repository is archived and kept read-only rather than deleted, so its history stays available, and this section is updated to match.
+
 ## Third-party Dependencies
 
 Cozystack packages and ships software it does not govern. Such components remain
