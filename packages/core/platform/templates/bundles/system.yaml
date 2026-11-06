@@ -178,9 +178,19 @@
 {{- $controllerValues := dict "cozystackController" (dict "disableTelemetry" true) -}}
 {{- $_ := set $cozystackEngineComponents "cozystack-controller" (dict "values" $controllerValues) -}}
 {{- end -}}
+{{- $keycloakTruststores := .Values.authentication.oidc.keycloakTruststores -}}
+{{- $hasKeycloakTruststores := and (not (kindIs "invalid" $keycloakTruststores)) (or (not (kindIs "slice" $keycloakTruststores)) (not (empty $keycloakTruststores))) -}}
+{{- $keycloakComponents := dict -}}
+{{- if $hasKeycloakTruststores }}
+{{- $_ := set $keycloakComponents "keycloak" (dict "values" (dict "truststores" $keycloakTruststores)) -}}
+{{- end }}
 {{- if .Values.authentication.oidc.enabled }}
 {{include "cozystack.platform.package" (list "cozystack.cozystack-engine" "oidc" $ $cozystackEngineComponents) }}
+{{- if $hasKeycloakTruststores }}
+{{include "cozystack.platform.package" (list "cozystack.keycloak" "default" $ $keycloakComponents) }}
+{{- else }}
 {{include "cozystack.platform.package.default" (list "cozystack.keycloak" $) }}
+{{- end }}
 {{include "cozystack.platform.package.default" (list "cozystack.keycloak-operator" $) }}
 {{- else }}
 {{include "cozystack.platform.package" (list "cozystack.cozystack-engine" "default" $ $cozystackEngineComponents) }}
