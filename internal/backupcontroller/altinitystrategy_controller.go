@@ -896,8 +896,9 @@ var altinityArchiveNamePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*
 // altinityCleanupScript deletes one remote archive through the
 // clickhouse-backup sidecar (POST /backup/delete/{where}/{name} in 2.7.x).
 // The sidecar answers 423 while any other operation runs, a backup of the
-// same application included, so the delete is retried until it is accepted
-// within a budget kept shorter than the Job's activeDeadlineSeconds. It
+// same application included, and cannot be reached at all while its Pod
+// restarts, so the delete is retried until it is answered and accepted within
+// a budget kept shorter than the Job's activeDeadlineSeconds. It
 // answers 500 with "is not found on remote storage" for an archive that is
 // already gone, which is the outcome cleanup wants; every other non-200
 // answer (a ClickHouse or S3 error) fails the Pod so the controller retries.
@@ -906,12 +907,13 @@ deadline=$(( $(date +%s) + 540 ))
 while :; do
   left=$(( deadline - $(date +%s) ))
   if [ "${left}" -le 0 ]; then
-    echo "delete ${ARCHIVE_NAME} not run: the sidecar stayed busy with another operation" >&2
+    echo "delete ${ARCHIVE_NAME} not run: the sidecar stayed busy with another operation or unreachable" >&2
     exit 1
   fi
-  resp=$(curl -sS --max-time "${left}" -u "${API_USERNAME}:${API_PASSWORD}" -w '\n%{http_code}' -X POST "http://${API_HOST}:7171/backup/delete/remote/${ARCHIVE_NAME}")
-  code=$(printf '%s' "${resp}" | tail -n 1)
-  [ "${code}" = "423" ] || break
+  if resp=$(curl -sS --max-time "${left}" -u "${API_USERNAME}:${API_PASSWORD}" -w '\n%{http_code}' -X POST "http://${API_HOST}:7171/backup/delete/remote/${ARCHIVE_NAME}"); then
+    code=$(printf '%s' "${resp}" | tail -n 1)
+    [ "${code}" = "423" ] || break
+  fi
   sleep 5
 done
 body=$(printf '%s' "${resp}" | sed '$d')

@@ -590,7 +590,9 @@ func runAltinityCleanupScript(t *testing.T, body, code string) (int, string) {
 }
 
 // runAltinityCleanupScriptSeq answers the n-th curl call with the n-th of the
-// space-separated codes, repeating the last one. sleep is a no-op and every
+// space-separated codes, repeating the last one; a code "xN" makes that call
+// fail with curl exit status N and no answer, as a connection that could not
+// be made does. sleep is a no-op and every
 // date call advances the clock by 100 seconds, so a wait loop ends at once.
 func runAltinityCleanupScriptSeq(t *testing.T, body, codes string) (int, []string) {
 	t.Helper()
@@ -599,7 +601,7 @@ func runAltinityCleanupScriptSeq(t *testing.T, body, codes string) (int, []strin
 	}
 	dir := t.TempDir()
 	stubs := map[string]string{
-		"curl":  "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$STUB_LOG\"\nn=$(wc -l < \"$STUB_LOG\")\nset -- $STUB_CODES\ncode=$1\ni=1\nfor c in \"$@\"; do [ \"$i\" -le \"$n\" ] && code=$c; i=$((i+1)); done\nprintf '%s\\n%s' \"$STUB_BODY\" \"$code\"\n",
+		"curl":  "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$STUB_LOG\"\nn=$(wc -l < \"$STUB_LOG\")\nset -- $STUB_CODES\ncode=$1\ni=1\nfor c in \"$@\"; do [ \"$i\" -le \"$n\" ] && code=$c; i=$((i+1)); done\ncase \"$code\" in x*) exit \"${code#x}\" ;; esac\nprintf '%s\\n%s' \"$STUB_BODY\" \"$code\"\n",
 		"sleep": "#!/bin/sh\nexit 0\n",
 		"date":  "#!/bin/sh\necho x >> \"$STUB_CLOCK\"\necho $((1000 + 100 * $(wc -l < \"$STUB_CLOCK\")))\n",
 	}
@@ -646,6 +648,29 @@ func TestAltinityCleanupScript_WaitsForABusySidecar(t *testing.T) {
 	}
 	if len(calls) != 3 {
 		t.Errorf("curl called %d times, want the delete retried until it was accepted", len(calls))
+	}
+}
+
+// A sidecar that cannot be reached, its Pod restarting or its node gone, is
+// waited for like a busy one; failing at once would spin a new Job, two Pods
+// and a Warning Event every few seconds for as long as it is down.
+func TestAltinityCleanupScript_WaitsForAnUnreachableSidecar(t *testing.T) {
+	exit, calls := runAltinityCleanupScriptSeq(t, `{"status":"success"}`, "x7 x28 200")
+	if exit != 0 {
+		t.Errorf("exit = %d, a delete that went through once the sidecar was back must succeed", exit)
+	}
+	if len(calls) != 3 {
+		t.Errorf("curl called %d times, want the delete retried until the sidecar answered", len(calls))
+	}
+}
+
+func TestAltinityCleanupScript_GivesUpOnASidecarThatStaysUnreachable(t *testing.T) {
+	exit, calls := runAltinityCleanupScriptSeq(t, "", "x7")
+	if exit == 0 {
+		t.Error("exit 0 for a sidecar that never answered, want the Job failed before its deadline")
+	}
+	if len(calls) < 2 || len(calls) > 10 {
+		t.Errorf("curl called %d times, want a few attempts within the bounded wait", len(calls))
 	}
 }
 
