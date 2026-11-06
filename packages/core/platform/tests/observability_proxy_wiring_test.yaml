@@ -1,0 +1,69 @@
+suite: observability-proxy package wiring
+# The proxy reads the tenant log and metrics stores, which the full variants
+# run by default and the slim ones only on request, so it follows
+# monitoring-agents: on by default in the full variants, opt-in on the slim.
+templates:
+  - templates/sources.yaml
+  - templates/bundles/system.yaml
+release:
+  name: cozystack
+  namespace: cozy-system
+tests:
+  - it: installs into cozy-observability-proxy once networking is up
+    template: templates/sources.yaml
+    documentSelector:
+      path: metadata.name
+      value: cozystack.observability-proxy
+    asserts:
+      - equal:
+          path: kind
+          value: PackageSource
+      - equal:
+          path: spec.variants[0].dependsOn
+          value:
+            - cozystack.networking
+      - equal:
+          path: spec.variants[0].components
+          value:
+            - name: observability-proxy
+              path: system/observability-proxy
+              install:
+                namespace: cozy-observability-proxy
+                releaseName: observability-proxy
+
+  - it: emits the package on a full variant
+    template: templates/bundles/system.yaml
+    values:
+      - ../values-isp-full.yaml
+    asserts:
+      - containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.observability-proxy
+          any: true
+
+  - it: leaves the package out of a slim variant by default
+    template: templates/bundles/system.yaml
+    values:
+      - ../values-isp-slim.yaml
+    asserts:
+      - containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.observability-proxy
+          any: true
+        not: true
+
+  - it: emits the package on a slim variant that lists it in enabledPackages
+    template: templates/bundles/system.yaml
+    values:
+      - ../values-isp-slim.yaml
+    set:
+      bundles.enabledPackages:
+        - cozystack.observability-proxy
+    asserts:
+      - containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.observability-proxy
+          any: true
