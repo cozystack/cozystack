@@ -2,7 +2,7 @@
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: {{ .Release.Name }}-cleanup-acme
+  name: {{ printf "%s-cleanup-acme" .Release.Name | trunc 63 | trimSuffix "-" }}
   labels:
     app.kubernetes.io/instance: {{ .Release.Name }}
   annotations:
