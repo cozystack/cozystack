@@ -1,0 +1,103 @@
+suite: Sentinel count follows the Redis replicas
+
+release:
+  name: my-redis
+  namespace: tenant-test
+
+set:
+  _cluster:
+    cluster-domain: cluster.local
+  _namespace:
+    host: example.com
+
+templates:
+  - templates/redisfailover.yaml
+
+tests:
+  - it: "runs a single Sentinel for a single Redis pod"
+    set:
+      replicas: 1
+    documentSelector:
+      path: kind
+      value: RedisFailover
+    asserts:
+      - equal:
+          path: spec.sentinel.replicas
+          value: 1
+      - equal:
+          path: spec.redis.replicas
+          value: 1
+
+  # The operator's Sentinel PDB is minAvailable 1 at two Redis replicas or
+  # fewer; on one Sentinel it would refuse every eviction and block node drains.
+  - it: "drops the Sentinel PDB when only one Sentinel runs"
+    set:
+      replicas: 1
+    documentSelector:
+      path: kind
+      value: RedisFailover
+    asserts:
+      - equal:
+          path: spec.sentinel.disablePodDisruptionBudget
+          value: true
+
+  - it: "keeps three Sentinels and their PDB from two Redis pods up"
+    set:
+      replicas: 2
+    documentSelector:
+      path: kind
+      value: RedisFailover
+    asserts:
+      - equal:
+          path: spec.sentinel.replicas
+          value: 3
+      - notExists:
+          path: spec.sentinel.disablePodDisruptionBudget
+
+  - it: "keeps three Sentinels for three Redis pods"
+    set:
+      replicas: 3
+    documentSelector:
+      path: kind
+      value: RedisFailover
+    asserts:
+      - equal:
+          path: spec.sentinel.replicas
+          value: 3
+
+  - it: "keeps three Sentinels at the chart default"
+    documentSelector:
+      path: kind
+      value: RedisFailover
+    asserts:
+      - equal:
+          path: spec.sentinel.replicas
+          value: 3
+
+  - it: "reports one expected Sentinel pod to the workload monitor"
+    set:
+      replicas: 1
+    documentSelector:
+      path: metadata.name
+      value: my-redis-sentinel
+    asserts:
+      - equal:
+          path: spec.replicas
+          value: 1
+      - equal:
+          path: spec.minReplicas
+          value: 1
+
+  - it: "reports three expected Sentinel pods to the workload monitor"
+    set:
+      replicas: 2
+    documentSelector:
+      path: metadata.name
+      value: my-redis-sentinel
+    asserts:
+      - equal:
+          path: spec.replicas
+          value: 3
+      - equal:
+          path: spec.minReplicas
+          value: 2

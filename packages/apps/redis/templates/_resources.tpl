@@ -47,3 +47,7 @@ These presets are for basic testing and not meant to be used in production
 {{- printf "ERROR: Preset key '%s' invalid. Allowed values are %s" .type (join "," (keys $presets)) | fail -}}
 {{- end -}}
 {{- end -}}
+
+{{- define "redis.sentinelReplicas" -}}
+{{- ternary 1 3 (le (int .Values.replicas) 1) -}}
+{{- end -}}
