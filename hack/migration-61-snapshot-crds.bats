@@ -42,6 +42,7 @@ run_migration() {
     -e NAMESPACE="${NAMESPACE-}" \
     -e FAKE_CRD_FAIL="${FAKE_CRD_FAIL-}" \
     -e FAKE_DELETE_FAIL="${FAKE_DELETE_FAIL-}" \
+    -e FAKE_RECORD_FAIL="${FAKE_RECORD_FAIL-}" \
     "$TESTIMG" "/migrations/$1" || _run_migration_rc=$?
   return "$_run_migration_rc"
 }
@@ -65,7 +66,7 @@ DOCKERFILE
   FAKE_CMDLOG="$WORK/cmdlog"
   : > "$FAKE_CMDLOG"
   export NAMESPACE=cozy-system
-  unset FAKE_CRD_FAIL FAKE_DELETE_FAIL || true
+  unset FAKE_CRD_FAIL FAKE_DELETE_FAIL FAKE_RECORD_FAIL || true
   return 0
 }
 
@@ -129,6 +130,20 @@ crd_field() {
   fi
   grep -qxF "DELETE volumegroupsnapshotcontents.groupsnapshot.storage.k8s.io" "$FAKE_CMDLOG"
   grep -qF "cozystack.io/migration-61-needs-attention=volumegroupsnapshots.groupsnapshot.storage.k8s.io=2" "$FAKE_CMDLOG"
+  grep -qxF "STAMP 62" "$FAKE_CMDLOG"
+  rm -rf "$WORK"
+}
+
+@test "a failed record of the kept CRDs still stamps the version" {
+  prep
+  echo '{"volumegroupsnapshots.groupsnapshot.storage.k8s.io": 2}' > "$WORK/state/objects.json"
+  export FAKE_RECORD_FAIL="Error from server (InternalError): etcdserver: request timed out"
+  rc=0
+  run_migration 61 >"$WORK/out" 2>&1 || rc=$?
+  cat "$WORK/out"; cat "$FAKE_CMDLOG"
+  [ "$rc" -eq 0 ]
+  grep -qF "failed to record the CRDs needing attention" "$WORK/out"
+  if grep -qF "RECORD" "$FAKE_CMDLOG"; then echo "the failed record was logged as written" >&2; return 1; fi
   grep -qxF "STAMP 62" "$FAKE_CMDLOG"
   rm -rf "$WORK"
 }

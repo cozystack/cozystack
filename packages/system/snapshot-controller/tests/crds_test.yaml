@@ -20,7 +20,7 @@ tests:
           path: metadata.annotations["helm.sh/resource-policy"]
           value: keep
 
-  - it: the group snapshot CRDs store v1beta2
+  - it: volumegroupsnapshots serves v1beta2 and no longer v1alpha1
     template: charts/snapshot-controller/templates/crds.yaml
     documentSelector:
       path: metadata.name
@@ -30,6 +30,43 @@ tests:
           path: spec.versions
           content:
             name: v1beta2
+            storage: true
+          any: true
+      - notContains:
+          path: spec.versions
+          content:
+            name: v1alpha1
+          any: true
+
+  - it: volumegroupsnapshotcontents serves v1beta2 and no longer v1alpha1
+    template: charts/snapshot-controller/templates/crds.yaml
+    documentSelector:
+      path: metadata.name
+      value: volumegroupsnapshotcontents.groupsnapshot.storage.k8s.io
+    asserts:
+      - contains:
+          path: spec.versions
+          content:
+            name: v1beta2
+            storage: true
+          any: true
+      - notContains:
+          path: spec.versions
+          content:
+            name: v1alpha1
+          any: true
+
+  - it: volumegroupsnapshotclasses serves v1beta2 and no longer v1alpha1
+    template: charts/snapshot-controller/templates/crds.yaml
+    documentSelector:
+      path: metadata.name
+      value: volumegroupsnapshotclasses.groupsnapshot.storage.k8s.io
+    asserts:
+      - contains:
+          path: spec.versions
+          content:
+            name: v1beta2
+            storage: true
           any: true
       - notContains:
           path: spec.versions

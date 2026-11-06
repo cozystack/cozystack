@@ -12,6 +12,7 @@
 #   FAKE_STATE       directory holding crds.json and objects.json
 #   FAKE_CRD_FAIL    non-empty => reading a CRD exits 1 with this stderr
 #   FAKE_DELETE_FAIL non-empty => deleting a CRD exits 1 with this stderr
+#   FAKE_RECORD_FAIL non-empty => annotating cozystack-version exits 1 with this stderr
 set -u
 
 log() { [ -n "${FAKE_CMDLOG:-}" ] && printf '%s\n' "$*" >> "$FAKE_CMDLOG"; }
@@ -75,6 +76,7 @@ case "$*" in
     ;;
 
   "annotate configmap "*)
+    if [ -n "${FAKE_RECORD_FAIL:-}" ]; then printf '%s\n' "$FAKE_RECORD_FAIL" >&2; exit 1; fi
     log "RECORD $*"
     exit 0
     ;;
