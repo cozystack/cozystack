@@ -83,19 +83,16 @@ spec:
         containers:
         - name: linstor-csi
           image: {{ .Values.linstorCSI.image.repository }}:{{ .Values.linstorCSI.image.tag }}
-        {{- /* piraeus-operator probes the groupsnapshot.storage.k8s.io/v1beta2
-               API once, when it starts, and turns this gate off when the API
-               is not served. On a cluster upgraded from the v1alpha1 CRDs the
-               operator started before snapshot-controller replaced them, so
-               the gate would stay off until the operator next restarted, so it
-               is set here, at render time, once the API is served. Without the
-               API the probe's answer stands. */}}
-        {{- if include "linstor.groupSnapshotAPIServed" . }}
+        {{- /* piraeus-operator probes groupsnapshot.storage.k8s.io/v1beta2
+               once, when it starts, and only for VolumeGroupSnapshot. Its
+               answer goes stale when the CRDs change after it started, and it
+               turns the gate on when that one kind is served without the
+               content or class kind. The gate is therefore always decided
+               here, from all three kinds. */}}
         - name: csi-snapshotter
           env:
           - name: FEATURE_GATE_CSI_VOLUME_GROUP_SNAPSHOT
-            value: "true"
-        {{- end }}
+            value: {{ include "linstor.groupSnapshotAPIServed" . | default "false" | quote }}
         {{- if .Values.linstorCSI.strictTopology }}
         {{- /* A `#` comment in a rendered template is part of the output: it
                is applied to the live LinstorCluster and read back on every
