@@ -92,9 +92,9 @@ restore() {
     jq -e '.data.Corefile == ".:53 {\n    errors\n}\n"' "$STUB/replaced.json" >/dev/null
 }
 
-# The Altinity driver names the Backup after the BackupJob and adopts one that
-# already exists under that name, so a Backup left behind would stand in for
-# the next run's backup. It is reclaimed by name, whether or not the BackupJob
+# The Altinity driver names the Backup after the BackupJob, and a Backup left
+# behind under that name records an earlier run's archive, which fails the next
+# run's BackupJob. It is reclaimed by name, whether or not the BackupJob
 # recorded it in status.backupRef.
 @test "the round-trip reclaims its Backup by name before and after the run" {
     suite=hack/e2e-chainsaw/clickhouse/chainsaw-test.yaml

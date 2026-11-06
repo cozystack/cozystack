@@ -452,7 +452,8 @@ spec:
           fi
           # Fixed names in a persistent namespace: a leftover Succeeded job
           # would satisfy the waits in the run step without a new attempt, and
-          # the driver adopts a leftover Backup of the BackupJob's name.
+          # a leftover Backup of the BackupJob's name, recording an earlier
+          # run's archive, fails the new BackupJob.
           kubectl -n "$NAMESPACE" delete restorejob sysbucket-restore --ignore-not-found --wait=true --timeout=30s
           kubectl -n "$NAMESPACE" delete backupjob sysbucket-backup --ignore-not-found --wait=true --timeout=30s
           kubectl -n "$NAMESPACE" delete backup sysbucket-backup --ignore-not-found --wait=true --timeout=60s
