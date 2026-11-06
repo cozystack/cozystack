@@ -1,0 +1,66 @@
+# Check if the TLS secret already exists and initialize variables for later use at the top level
+{{- $secret := lookup "v1" "Secret" .Release.Namespace (include "conversion-webhook.certifcateName" .) }}
+{{ $ca := "" }}
+{{ $key := "" }}
+{{ $crt := "" }}
+{{- if .Values.webhook.enabled }}
+{{- if .Values.webhook.tls.certManagerIssuerRef }}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ include "conversion-webhook.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+  {{- include "conversion-webhook.labels" . | nindent 4 }}
+spec:
+  secretName: {{ include "conversion-webhook.certifcateName" . }}
+  dnsNames:
+  - {{ include "conversion-webhook.fullname" . }}.{{ .Release.Namespace }}.svc
+  issuerRef:
+  {{- toYaml .Values.webhook.tls.certManagerIssuerRef | nindent 4 }}
+  privateKey:
+    rotationPolicy: Always
+---
+{{- else if .Values.webhook.tls.autogenerate }}
+  {{- if or .Values.webhook.tls.caBundle .Values.webhook.tls.certificate .Values.webhook.tls.key }}
+    {{- $ca = b64enc .Values.webhook.tls.caBundle }}
+    {{- $key = b64enc .Values.webhook.tls.key }}
+    {{- $crt = b64enc .Values.webhook.tls.certificate }}
+  {{- else if and $secret (not .Values.webhook.tls.renew) }}
+    {{- $ca = get $secret.data "ca.crt" }}
+    {{- $key = get $secret.data "tls.key" }}
+    {{- $crt = get $secret.data "tls.crt" }}
+  {{- else }}
+    {{- $serviceName := (printf "%s.%s.svc" (include "conversion-webhook.fullname" .) .Release.Namespace)}}
+    {{- $cert := genSelfSignedCert $serviceName nil (list $serviceName) 3650 }}
+    {{- $ca = b64enc $cert.Cert }}
+    {{- $key = b64enc $cert.Key }}
+    {{- $crt = b64enc $cert.Cert }}
+  {{- end }}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ include "conversion-webhook.certifcateName" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "conversion-webhook.labels" . | nindent 4 }}
+type: kubernetes.io/tls
+data:
+  ca.crt: {{ $ca }}
+  tls.key: {{ $key }}
+  tls.crt: {{ $crt }}
+{{- end }}
+{{- end }}
+---
+{{- if .Values.installCRDs }}
+{{- $insertCaFrom := "" }}
+{{- if and .Values.webhook.enabled .Values.webhook.tls.certManagerIssuerRef }}
+{{- $insertCaFrom = printf "%s/%s" .Release.Namespace (include "conversion-webhook.certifcateName" .) }}
+{{- end }}
+{{- $clientConfig := dict "service" (dict "namespace" .Release.Namespace "name" (include "conversion-webhook.fullname" .) "path" "/convert") }}
+{{- if $ca }}
+{{- $clientConfig = set $clientConfig "caBundle" $ca }}
+{{- end }}
+{{ tpl (.Files.Get "crds.yaml") (dict "ClientConfig" $clientConfig "InsertCaFrom" $insertCaFrom "WebhookEnabled" .Values.webhook.enabled "KeepCRDs" .Values.keepCRDs) }}
+{{- end }}

@@ -1,5 +1,7 @@
-{{- if .Values.controller.enabled }}
-{{- range .Values.controller.volumeSnapshotClasses }}
+{{- if .Values.controller.volumeSnapshotClasses }}
+{{ fail "Use volumeSnapshotClasses instead of controller.volumeSnapshotClasses" }}
+{{- end}}
+{{- range concat .Values.volumeSnapshotClasses }}
 ---
 kind: VolumeSnapshotClass
 apiVersion: snapshot.storage.k8s.io/v1
@@ -17,6 +19,5 @@ driver: {{ .driver }}
 deletionPolicy: {{ .deletionPolicy }}
 {{- with .parameters }}
 parameters: {{- . | toYaml | trim | nindent 2 }}
-{{- end }}
 {{- end }}
 {{- end }}

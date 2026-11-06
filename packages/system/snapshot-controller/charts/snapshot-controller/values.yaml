@@ -1,3 +1,10 @@
+installCRDs: true
+
+# Annotate the CRDs with `helm.sh/resource-policy: keep`, so that `helm uninstall` leaves them
+# in place instead of deleting them along with every VolumeSnapshot in the cluster. Only takes
+# effect when installCRDs is true.
+keepCRDs: false
+
 controller:
   enabled: true
 
@@ -5,10 +12,13 @@ controller:
 
   revisionHistoryLimit: 10
 
+  fullnameOverride: ""
+
   args:
     leaderElection: true
     leaderElectionNamespace: "$(NAMESPACE)"
     httpEndpoint: ":8080"
+    featureGates: CSIVolumeGroupSnapshot=true
 
   image:
     repository: registry.k8s.io/sig-storage/snapshot-controller
@@ -60,15 +70,6 @@ controller:
     # Specifies whether a ServiceMonitor should be created
     create: false
 
-  volumeSnapshotClasses: []
-#    - name: linstor-csi-delete
-#      annotations:
-#        snapshot.storage.kubernetes.io/is-default-class: "true"
-#      labels:
-#        velero.io/csi-volumesnapshot-class: "true"
-#      driver: linstor.csi.linbit.com
-#      deletionPolicy: Delete
-
   priorityClassName: ""
     # Specifies wether a Priority Class should be attached to deployment pods
 
@@ -82,60 +83,46 @@ controller:
   dnsPolicy: ClusterFirst
 
 webhook:
-  enabled: true
+  # The conversion webhook is only needed for clusters that still hold VolumeGroupSnapshot
+  # objects in the v1beta1/v1beta2 API versions. When disabled, the conversion strategy is
+  # not injected into the volumegroupsnapshotcontents CRD (it defaults to `None`, matching
+  # upstream). Enable this only if you rely on the older group snapshot API versions.
+  enabled: false
 
   replicaCount: 1
 
   revisionHistoryLimit: 10
 
-  args:
-    tlsPrivateKeyFile: /etc/snapshot-validation/tls.key
-    tlsCertFile: /etc/snapshot-validation/tls.crt
-    port: 8443
-    # enableVolumeGroupSnapshotWebhook: true
-
-  image:
-    repository: registry.k8s.io/sig-storage/snapshot-validation-webhook
-    pullPolicy: IfNotPresent
-    # Overrides the image tag whose default is the chart appVersion.
-    tag: ""
-
-  webhook:
-    timeoutSeconds: 2
-    failurePolicy: Fail
+  fullnameOverride: ""
 
   tls:
     certificateSecret: ""
     autogenerate: true
+    # Renew the certificate on every request
     renew: false
+    # Issuer to pass to the Certificate
     certManagerIssuerRef: {}
+    # PEM-Encoded content of ca.crt, tls.crt and tls.key. If set, Helm will not autogenerate the request.
+    caBundle: ""
+    certificate: ""
+    key: ""
+
+  args:
+    port: 8443
+    tlsCertFile: /etc/webhook/tls.crt
+    tlsPrivateKeyFile: /etc/webhook/tls.key
+
+  image:
+    repository: registry.k8s.io/sig-storage/snapshot-conversion-webhook
+    pullPolicy: IfNotPresent
+    # Overrides the image tag whose default is the chart appVersion.
+    tag: ""
 
   imagePullSecrets: []
+
   podAnnotations: {}
+
   podLabels: {}
-
-  networkPolicy:
-    enabled: false
-    ingress: {}
-      # - from:
-      #   - ipBlock:
-    #       cidr: 0.0.0.0/0
-
-  ## Ref: https://kubernetes.io/docs/tasks/run-application/configure-pdb/
-  ##
-  pdb: {}
-
-  priorityClassName:
-
-  ## Ref: https://kubernetes.io/docs/concepts/scheduling-eviction/topology-spread-constraints/
-  ##
-  topologySpreadConstraints: []
-    # - maxSkew: 1
-    #   topologyKey: topology.kubernetes.io/zone
-    #   whenUnsatisfiable: ScheduleAnyway
-    #   labelSelector:
-    #     matchLabels:
-  #       app.kubernetes.io/instance: snapshot-validation-webhook
 
   podSecurityContext: {}
   # fsGroup: 2000
@@ -143,7 +130,7 @@ webhook:
   securityContext:
     capabilities:
       drop:
-        - ALL
+      - ALL
     readOnlyRootFilesystem: true
     runAsNonRoot: true
     runAsUser: 1000
@@ -156,25 +143,44 @@ webhook:
 
   affinity: {}
 
+  ## Ref: https://kubernetes.io/docs/tasks/run-application/configure-pdb/
+  ##
+  pdb: {}
+
+  topologySpreadConstraints: []
+
   serviceAccount:
+    # Specifies whether a ServiceAccount should be created
     create: true
     name: ""
 
-  rbac:
-    create: true
+  priorityClassName: ""
+  # Specifies wether a Priority Class should be attached to deployment pods
 
   # Change `hostNetwork` to `true` when you want the pod to share its host's network namespace.
   hostNetwork: false
 
-  # DNS settings for the webhook pod. https://kubernetes.io/docs/concepts/services-networking/dns-pod-service/#pod-dns-config
+  # DNS settings for the controller pod. https://kubernetes.io/docs/concepts/services-networking/dns-pod-service/#pod-dns-config
   dnsConfig: {}
-  # DNS Policy for webhook pod. For Pods running with hostNetwork, set to `ClusterFirstWithHostNet`
+  # DNS Policy for controller pod. For Pods running with hostNetwork, set to `ClusterFirstWithHostNet`
   # For further reference: https://kubernetes.io/docs/concepts/services-networking/dns-pod-service/#pod-s-dns-policy.
   dnsPolicy: ClusterFirst
 
-  tests:
-    nodeSelector: { }
 
-    tolerations: [ ]
+volumeSnapshotClasses: []
+  #    - name: linstor-csi-delete
+  #      annotations:
+  #        snapshot.storage.kubernetes.io/is-default-class: "true"
+  #      labels:
+  #        velero.io/csi-volumesnapshot-class: "true"
+  #      driver: linstor.csi.linbit.com
+  #      deletionPolicy: Delete
 
-    affinity: { }
+volumeGroupSnapshotClasses: []
+#    - name: linstor-csi-delete
+#      annotations:
+#        groupsnapshot.storage.kubernetes.io/is-default-class: "true"
+#      labels:
+#        velero.io/csi-volumegroupsnapshot-class: "true"
+#      driver: linstor.csi.linbit.com
+#      deletionPolicy: Delete
