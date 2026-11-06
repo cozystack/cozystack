@@ -172,7 +172,7 @@ rules:
   # finalizer frees the object), and cancel a not-yet-started system-bucket CR at
   # the BackupJob timeout (a legacy CR is left in place). patch: strip the driver's own delete-backup finalizer
   # to release a wedged cleanup. See reconcileMongoDB / cleanupMongoDBBackup and
-  # docs/operations/backup-classes.md.
+  # https://cozystack.io/docs/v1/operations/services/backup-classes/.
   verbs: ["get", "list", "watch", "create", "delete", "patch"]
 - apiGroups: ["psmdb.percona.com"]
   resources: ["perconaservermongodbrestores"]

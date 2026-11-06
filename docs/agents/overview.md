@@ -118,6 +118,12 @@ A chart also declares the limits on its own resource name there, with `## @name 
 - Override configuration in root `values.yaml`
 - Use `values.schema.json` for input validation and dashboard UI rendering
 
+**No `lookup` that copies another object into the render.** A `lookup` reads cluster state at render time, and nothing re-renders the HelmRelease when that state changes, so whatever it copied into the output (a bucket name, an endpoint, a CA, a list of StorageClasses) stays stale until something unrelated upgrades the release. Lookups of this kind already in the charts have caused failures, and several have since been moved to values, so they are not precedent: do not add one of this kind unless a maintainer has authorized that specific one.
+
+A `lookup` is fine when a repeated render gives the same output and carries nothing from another object into it: checking that an object exists, keeping a generated Secret's value, keeping an immutable field of the chart's own live object, or a guard that `fail`s on an unsafe change. Keep its empty branch rendering, because offline `helm template` and helm-unittest without a `kubernetesProvider` mock see only that branch; test the other branch with such a mock.
+
+To use a fact about the cluster instead, read it from values: `_cluster` and `_namespace` in the `cozystack-values` Secret, or `valuesFrom` on a specific Secret, whose content change is a values change and so upgrades the release. Ask whether an API is served with `.Capabilities.APIVersions.Has`, since a `lookup` on an unserved group aborts the whole render. Otherwise check at run time in a hook or Job, or let a controller own the object.
+
 ### Go Code
 - Follow standard **Go conventions** and idioms
 - Use **controller-runtime** patterns for Kubernetes controllers
@@ -136,13 +142,23 @@ Set `upgradeCRDs: CreateReplace` for operators whose upstream regularly adds new
 
 Do **not** set `CreateReplace` blindly: it overwrites every CRD in `crds/` and can cause silent data loss if upstream drops a field from a CRD that has live objects. Only enable it for operators whose schema evolution is additive-only. When in doubt, leave it unset and apply new CRDs manually.
 
-### Documentation
+### Documentation — where a new document goes
 
-Documentation is organized as follows:
-- `docs/` - General documentation
-- `docs/agents/` - Instructions for AI agents
-- `docs/changelogs/` - Release changelogs
-- Main website: https://github.com/cozystack/website
+Product documentation lives in [`cozystack/website`](https://github.com/cozystack/website), not here. This repository holds only documentation that something in the repository references by path, or that describes the repository's own machinery. Pick the destination before writing, because moving a document later means chasing every `@param`, template comment and test comment that points at it.
+
+| Destination | What belongs there |
+| --- | --- |
+| `packages/<group>/<name>/README.md` | Anything scoped to a single package. Prose goes **above** `## Parameters`; that section is `cozyvalues-gen` output and is never hand-edited. The website's `make update-apps` / `update-vms` / `update-networking` / `update-k8s` / `update-services` targets append the whole README onto a published page, but only for the packages named in the `APPS`, `VMS`, `NETWORKING`, `K8S` and `SERVICES` lists of the website `Makefile`, and only from `packages/apps/` and `packages/extra/`: nothing under `packages/system/` is ever imported, and neither is a package that is not on those lists. The sync runs when a release is promoted or tagged, or by hand in the website repository, not when a pull request merges here. Use this route only for a package that is on the lists; for any other the prose reaches no reader, so put it on the website instead. |
+| `cozystack/website`, under `content/en/docs/` | Operator- and tenant-facing content that spans packages or is task-shaped: guides, how-tos, troubleshooting runbooks, reference tables. Which version directory a page goes into is set by the website's own [`CONTRIBUTING.md`](https://github.com/cozystack/website/blob/main/CONTRIBUTING.md); follow that file rather than a copy of its rules here. |
+| `docs/` | Documentation that a chart template, migration, script or workflow references by repo-relative path, plus this repository's own process docs (`docs/agents/`, `docs/changelogs/`, `docs/release.md`). |
+| `api/<group>/<version>/DESIGN.md`, `pkg/apis/<group>/DESIGN.md` | Design of an API group, beside the types it describes. |
+| [`cozystack/community`](https://github.com/cozystack/community) | Design proposals and RFCs. Not this repository. |
+
+When a document could go in either `docs/` or the website, the test is whether a non-documentation file has to link to it by path. `docs/operations/seaweedfs-431-rename-recovery.md` stays because `packages/*/seaweedfs/templates/_naming.tpl` and a platform migration point at it. A guide referenced only from a `values.yaml` `@param` does not qualify — put it on the website and link the URL.
+
+Documenting a feature's current limitations is useful and belongs with the feature. Documenting the *development process* around it does not: no "What is NOT in Phase N", no "out of scope for this PR", no "this PR" phrasing, no action plans or review negotiation. A merged document describes what the code does now, and states a limitation as a limitation rather than as a roadmap position. Scope, phasing and follow-ups belong in the pull request description or an issue.
+
+A document that names an unmerged pull request or an unreleased dependency needs a tracking issue, because nothing re-checks that claim later and it silently becomes false once the thing ships.
 
 ### Domain references for specific tasks
 

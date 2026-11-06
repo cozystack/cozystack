@@ -42,7 +42,8 @@ When the user asks to generate a changelog, follow these steps in the specified 
   - [ ] **MANDATORY**: For EVERY PR in main repo, get PR author via `gh pr view <PR_NUMBER> --json author --jq .author.login` (do NOT skip this step)
   - [ ] **MANDATORY**: Extract PR numbers from commit messages, then use `gh pr view` for each PR to get the PR author. Do NOT use commit author. Only for commits without PR numbers (rare), fall back to `gh api repos/cozystack/cozystack/commits/<hash> --jq '.author.login'`
 - [ ] Step 8: Form new changelog (structure, format, generate contributors list)
-- [ ] Step 9: Verify completeness and save
+- [ ] Step 8b: Verify every operator-facing statement against the code at the upper-bound tag (section 8b)
+- [ ] Step 9: Verify completeness and save, after running the checks in `docs/release.md` (section 9)
 
 ### 1. Updating information from remote
 
@@ -256,6 +257,7 @@ Cozystack release may include changes from related repositories. Check and inclu
    - **ALWAYS include author**: Every entry from additional repositories MUST include author in format `([**@username**](https://github.com/username) in cozystack/repo#123)`
    - Determine user impact and categorize appropriately
    - Format entries with repository prefix: `[website]`, `[talm]`, etc.
+   - **Pin each change to a release of its repository.** A commit merged during the period is not necessarily in a tag. For every entry from an optional repository, list the tags that contain its commit in the repository's clone under `_repos/` (`git -C _repos/<repo> tag --contains <commit_hash>`). If none does, end the entry with "merged after <last tag>, not yet in a <repo> release", and never write in Feature Highlights or the breaking-changes section that a released version of that repository does something only its main branch does.
 
 **Example entry format for additional repositories:**
 ```markdown
@@ -367,6 +369,7 @@ git log v<previous_version>..v<new_version> --format="%s%n%b" | grep -oE '#[0-9]
    - Review PR description and changed files
    - Understand functionality added/changed/fixed
    - **Determine user impact**: What can users do now? What problems are fixed? What improvements do users experience?
+   - **Read the whole `release-note` block, not its opening.** PR authors put what the operator has to do at the end of the block: "Action required", "before upgrading", "rolls once", "stays off until", "cannot be reversed". Every such sentence reaches the breaking-changes section (section 8b), not only the entry. Never cut a PR text at a character limit or end an entry with an ellipsis; if an entry is too long, rewrite it shorter in your own words.
 
 4. **For release branches (backports):**
    - If commit is from `release-X.Y` branch, check if it's a backport
@@ -392,7 +395,7 @@ Create a new changelog file in the format matching previous versions:
        - How it works and what users can do with it
        - How to use it (if applicable)
        - Benefits and impact for users
-     - **Links to documentation** when available (use markdown links)
+     - **Links to documentation** when available (use markdown links). cozystack.io docs are versioned: link `https://cozystack.io/docs/v<X.Y>/<path>/` for the release being written, never `https://cozystack.io/docs/next/...`, which answers 404 on the live site
      - **Code examples or configuration snippets** if helpful
    - Focus on user value and practical implications, not just technical details
    - Each feature should be substantial enough to warrant its own subsection
@@ -451,6 +454,8 @@ Create a new changelog file in the format matching previous versions:
 
 3. **Entry format:**
    - Use the format: `* **Brief description**: detailed description ([**@username**](https://github.com/username) in #PR_NUMBER)`
+   - **Describe the release's final state, not the PR's.** A later PR in the range can supersede, extend or interact with an earlier one: same file, same field, same component. Before describing a PR, list the later PRs that touch its paths (`git log --format='%h %s' <commit>..<new> -- <paths the PR changed>`, where `<commit>` is the PR's commit in the range and `<new>` is the upper-bound tag) and describe what the upper-bound tag does, naming the later PR in the earlier entry where the two meet. A component version stated outside its PR's own entry (a highlight, a version summary) is the one in the tree at the upper-bound tag, never the one in a PR title.
+   - **Compare with the previous release, not with the PR's parent.** A field, flag or value is "removed", "renamed" or "moved" only if it exists at `<previous>`: check with `git grep -c '<name>' <previous> -- <path>` before saying so. Something added and moved again inside the same cycle is new to every user of the previous release.
    - **⚠️ The brief description and the detailed description MUST NOT be the same string.** The brief description is typically the conventional-commit subject (e.g. `fix(api): drop legacy field`); the detailed description is a one-or-two-sentence explanation of what the change means for users — what is fixed, what is now possible, what behavior changed. If you find yourself writing `* **fix(foo): X**: fix(foo): X (...)` you have not done the second half of the work — go read the PR body or commit diff and write the user-facing description.
    - **⚠️ Do NOT invent entries.** Every entry must correspond to a commit in the `git log v<previous>..v<new>` range. If you can't find a commit for an entry you wrote, drop the entry. PR numbers from outside the release range (e.g. PRs from years ago, or PRs that were merged after the tag commit) MUST NOT appear in the changelog.
    - **CRITICAL - Get authorship correctly**: 
@@ -599,7 +604,18 @@ Create a new changelog file in the format matching previous versions:
    -->
    ```
 
+### 8b. Verifying claims against the code
+
+Feature Highlights, the breaking-changes section (Migration and Upgrades in a patch release) and every upgrade note are instructions an operator follows during an upgrade. Check each statement in them against the tree at the upper-bound tag `<new>` (the rc tag in the promotion configuration; `<previous>` is the previous version's tag) with `git show <new>:<path>`, not against PR text: a PR description says what its author meant when it was written, and the code at the tag is what ships.
+
+- **Identifiers come from the code.** Every Helm release name, namespace, value path, field type, flag, port, count and list named in an instruction is copied from the files at `<new>`. Write a value path the way its schema types it: a map field by key (`<field>.<key>.password`), never as a list (`<field>[].password`). A selector or a node label matters only where a template reads it: find the object that reads it before saying what breaks without it. A code comment is a claim to check, not evidence. If you cannot find an identifier in the tree, leave it out.
+- **Upgrade behaviour comes from the migrations.** An upgrade from `<previous>` runs every `packages/core/platform/images/migrations/migrations/<N>` from `migrations.targetVersion` in `packages/core/platform/values.yaml` at `<previous>` up to one below its value at `<new>`. Read the header comment of each: it states what is carried over, what is not, and sometimes what the release notes must say. Every claim about existing clusters, instances or pools ("adopted without churn", "keep their value", "create X after upgrading") must agree with those scripts, and an object they do not touch (a template the migration does not pin, for example) is not preserved by them.
+- **Keep the scope conditions.** Behaviour gated on a platform variant, a value or a version is stated with its condition. Migrations run only where `migrations.enabled` is true in the values files a variant renders, which `cmd/cozystack-operator/main.go` lists per variant: read the flag at `<new>` and name the variants a migration note applies to. A package that only some variants ship (`packages/core/platform/sources/`, `packages/core/platform/templates/bundles/`) affects only those. A default that follows another value (an issuer mode, a version floor) applies only while that value holds.
+- **Required actions come from more than `!` commits.** Besides breaking-change commits, the breaking-changes section collects every sentence of a PR `release-note` block that asks the operator to act or warns of a roll, a lockout or an irreversible step; every upgrade or migration section a README or operations doc gained in the range (`git diff --name-only -G'^#+ .*([Uu]pgrad|[Mm]igrat)' <previous>..<new> -- ':(glob)packages/*/*/README.md' ':(glob)docs/**/*.md' ':(exclude)docs/changelogs'` lists the files); and every pod roll the upgrade causes on running workloads.
+
 ### 9. Verification and saving
+
+**Check the written file.** Once the draft is in `docs/changelogs/v<new_version>.md`, run the checks in `docs/release.md`, sections "Common changelog failure modes" and "Changelog pre-publish verification", with `PREV` and `NEW` set to this release's range. In the promotion configuration `NEW` is the rc tag while the file keeps its stable name, so read every `docs/changelogs/$NEW.md` and `docs/changelogs/v<new>.md` in those checks as `docs/changelogs/v<new_version>.md`. Fix in the changelog every problem they report. A link may answer 404 only if it is the file's own `releases/tag/v<new_version>` or `compare/...v<new_version>` link, whose tag does not exist yet, or, in a minor release, a `https://cozystack.io/docs/v<X.Y>/` link, whose docs go live with the release: check that page under `content/en/docs/next/` in cozystack/website instead. Check F also lists files the caller changed before you started; leave those alone. Then run `hack/validate-changelog.sh docs/changelogs/v<new_version>.md <new_version>` and fix what it reports.
 
 **Before saving, verify completeness:**
 

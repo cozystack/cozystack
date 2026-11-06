@@ -31,7 +31,7 @@ spec:
       keeps stacking behind; the job-in-progress path has no other deadline. int
       so a large values-file override (parsed as float64) renders as an integer,
       not exponent form (1e+06), which would fail schema validation. Full
-      rationale: docs/operations/backup-classes.md.
+      rationale: https://cozystack.io/docs/v1/operations/services/backup-classes/.
       */}}
       activeDeadlineSeconds: {{ int .Values.backupStrategyController.redisBackupActiveDeadlineSeconds }}
       volumes:
@@ -58,7 +58,7 @@ spec:
         activeDeadlineSeconds (never a Failed Job) when the admin has not created
         it. A missing ca.crt does NOT skip verification: the script falls through
         to the image's system CA store and curl fails the handshake fast;
-        skip-verify still needs its explicit opt-in. See backup-classes.md.
+        skip-verify still needs its explicit opt-in. See https://cozystack.io/docs/v1/operations/services/backup-classes/.
         */}}
         - name: s3-ca
           secret:
@@ -346,7 +346,7 @@ spec:
           cluster-scoped and Helm-managed, so an admin raises the ceiling once
           via backupStrategyController.redisBackupResources in chart values (an
           in-place edit of the CR reverts on upgrade). Defaults suit
-          small-to-medium instances. See backup-classes.md.
+          small-to-medium instances. See https://cozystack.io/docs/v1/operations/services/backup-classes/.
           */}}
           resources:
             {{- toYaml .Values.backupStrategyController.redisBackupResources | nindent 12 }}

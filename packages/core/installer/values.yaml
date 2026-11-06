@@ -48,7 +48,7 @@ cozystackOperator:
   # Lowering or an oversized request creates a durable hold. A cluster administrator
   # must acknowledge its exact target before defaulting resumes; disabling retains holds.
   # Explicit container limits and foreign namespace memory policies are preserved.
-  # See docs/operations/system-memory-limits.md for sizing, exclusions and acknowledgement.
+  # See https://cozystack.io/docs/v1/operations/configuration/system-memory-limits/ for sizing, exclusions and acknowledgement.
   systemNamespaceMemoryLimit: ""
   # Default memory request paired with the limit. Empty selects 32Mi; 0 is supported.
   # Keep small to avoid reserving the full limit for every previously limitless container.
