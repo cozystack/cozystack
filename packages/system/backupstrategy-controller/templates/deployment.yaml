@@ -47,7 +47,7 @@ spec:
         - name: BACKUP_STORAGE_REGION
           value: {{ .Values.backupStorage.region | quote }}
         - name: BACKUP_STORAGE_FORCE_PATH_STYLE
-          value: {{ .Values.backupStorage.forcePathStyle | quote }}
+          value: {{ include "backupstrategy-controller.forcePathStyle" . | quote }}
         - name: BACKUP_STORAGE_SYSTEM_NAMESPACES
           value: {{ .Values.backupStorage.systemNamespaces | join "," | quote }}
         {{- if .Values.backupStorage.reconcileDefaultObjects }}

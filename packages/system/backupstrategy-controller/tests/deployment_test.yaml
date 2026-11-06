@@ -54,3 +54,12 @@ tests:
             name: BACKUP_STORAGE_SECRET_NAMESPACE
             value: tenant-root
           any: true
+
+  # A value no consumer took as a boolean is refused once, at render time; see
+  # tests/force_path_style_test.yaml for what each consumer receives.
+  - it: "forcePathStyle that is no boolean spelling fails the render and names the value"
+    set:
+      backupStorage.forcePathStyle: "maybe"
+    asserts:
+      - failedTemplate:
+          errorPattern: 'backupStorage\.forcePathStyle must be a boolean or unset, got "maybe"'
