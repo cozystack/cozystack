@@ -35,6 +35,7 @@ import (
 const installationDefaultsSchema = `{
   "type":"object", "required":["required"], "allOf":[{"properties":{"replicas":{"maximum":8}}}], "properties":{
     "required":{"type":"string"},
+    "untyped":{"properties":{"known":{"type":"string"}}},
     "replicas":{"type":"integer","minimum":0,"maximum":10},
     "mode":{"type":"string","enum":["safe","fast"]},
     "nested":{"type":"object","required":["name"],"allOf":[{"required":["name"]}],"properties":{"name":{"type":"string"},"enabled":{"type":"boolean"}}},
@@ -46,7 +47,13 @@ const installationDefaultsSchema = `{
     "choice":{"type":"string","oneOf":[{"enum":["safe"]},{"enum":["fast"]}]},
     "pair":{"type":"object","minProperties":2,"properties":{"a":{"type":"integer"},"b":{"type":"integer"}}},
     "either":{"type":"object","properties":{"url":{"type":"string"},"path":{"type":"string"}},"oneOf":[{"required":["url"]},{"required":["path"]}]},
-    "nullable":{"type":"string","nullable":true}
+    "anyEither":{"type":"object","properties":{"url":{"type":"string"},"path":{"type":"string"}},"anyOf":[{"required":["url"]},{"required":["path"]}]},
+    "mapish":{"type":"object","required":["name"],"properties":{"name":{"type":"string"}},"additionalProperties":{"type":"string"}},
+    "preservedRequired":{"type":"object","x-kubernetes-preserve-unknown-fields":true,"required":["kind"],"properties":{"kind":{"type":"string"}}},
+    "mapNested":{"type":"object","additionalProperties":{"type":"object","properties":{"in":{"type":"object","required":["n"],"properties":{"n":{"type":"string"}}}}}},
+    "mapAllOf":{"type":"object","additionalProperties":{"type":"object","properties":{"name":{"type":"string"}},"allOf":[{"required":["name"]}]}},
+    "nullable":{"type":"string","nullable":true},
+    "atomic":{"type":"object","x-kubernetes-map-type":"atomic","required":["name"],"properties":{"name":{"type":"string"},"enabled":{"type":"boolean"}}}
   }
 }`
 
@@ -56,7 +63,17 @@ func TestInstallationDefaultsSchemaValidation(t *testing.T) {
 	}{
 		{"partial object", `{"nested":{"enabled":false}}`, ""},
 		{"empty object", `{"nested":{}}`, ""},
-		{"partial dictionary value", `{"map":{"entry":{"enabled":true}}}`, ""},
+		{"incomplete dictionary value", `{"map":{"entry":{"enabled":true}}}`, "map"},
+		{"complete dictionary value", `{"map":{"entry":{"name":"worker"}}}`, ""},
+		{"incomplete object inside a dictionary value", `{"mapNested":{"a":{"in":{}}}}`, "mapNested"},
+		{"complete object inside a dictionary value", `{"mapNested":{"a":{"in":{"n":"x"}}}}`, ""},
+		{"incomplete dictionary value by an allOf branch", `{"mapAllOf":{"e":{}}}`, "mapAllOf"},
+		{"complete dictionary value by an allOf branch", `{"mapAllOf":{"e":{"name":"x"}}}`, ""},
+		{"incomplete object that also takes arbitrary keys", `{"mapish":{"other":"x"}}`, "mapish"},
+		{"complete object that also takes arbitrary keys", `{"mapish":{"name":"a","other":"x"}}`, ""},
+		{"incomplete preserve-unknown object", `{"preservedRequired":{"extra":1}}`, "preservedRequired"},
+		{"complete preserve-unknown object", `{"preservedRequired":{"kind":"a","extra":1}}`, ""},
+		{"no alternative of an anyOf", `{"anyEither":{}}`, ""},
 		{"complete array", `{"rows":[{"name":"worker"}]}`, ""},
 		{"free form", `{"free":{"arbitrary":{"nested":true}}}`, ""},
 		{"preserve unknown", `{"preserved":{"arbitrary":{"nested":true}}}`, ""},
@@ -73,6 +90,8 @@ func TestInstallationDefaultsSchemaValidation(t *testing.T) {
 		{"array unknown", `{"rows":[{"name":"worker","typo":true}]}`, "rows"},
 		{"dictionary unknown", `{"map":{"entry":{"typo":true}}}`, "map"},
 		{"closed object", `{"closed":{"typo":true}}`, "closed"},
+		{"unknown field in an object without a type", `{"untyped":{"typo":true}}`, "untyped"},
+		{"known field in an object without a type", `{"untyped":{"known":"x"}}`, ""},
 		{"preserved known type", `{"preserved":{"known":"wrong"}}`, "preserved.known"},
 		{"wrong type", `{"replicas":"three"}`, "replicas"},
 		{"number is not a string", `{"nullable":7}`, "nullable"},
@@ -86,6 +105,9 @@ func TestInstallationDefaultsSchemaValidation(t *testing.T) {
 		{"nonnullable", `{"mode":null}`, "mode"},
 		{"incomplete array", `{"rows":[{}]}`, "rows"},
 		{"array constraint", `{"rows":[]}`, "rows"},
+		{"complete atomic object", `{"atomic":{"name":"worker"}}`, ""},
+		{"incomplete atomic object", `{"atomic":{"enabled":true}}`, "atomic"},
+		{"empty atomic object", `{"atomic":{}}`, "atomic"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			r := defaultsREST(t, defaultsConfig(`{"widgets":`+tc.values+`,"futurecatalog":{"unknown":true}}`))

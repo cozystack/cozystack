@@ -109,30 +109,44 @@ func buildInstallationDefaultsValidator(raw string) (apiextvalidation.SchemaCrea
 }
 
 func prepareInstallationDefaultsSchema(schema *internalapiext.JSONSchemaProps, partial bool) {
+	prepareInstallationDefaultsFragment(schema, partial, nil)
+}
+
+// prepareInstallationDefaultsFragment prepares schema. For a branch of an allOf, anyOf
+// or oneOf, declared holds the properties of the object it belongs to: the branch
+// constrains a property declared next to it, so that property is judged like the
+// declared one, and is partial only if the merge completes the declared one.
+func prepareInstallationDefaultsFragment(schema *internalapiext.JSONSchemaProps, partial bool, declared map[string]internalapiext.JSONSchemaProps) {
 	// Objects can be completed by user fields; replacement arrays cannot. What an
 	// object must contain cannot be judged on a partial one, so required and the
 	// lower bound on its properties are dropped, and so is its oneOf: with required
 	// removed every branch that tells alternatives apart by presence matches. A
-	// scalar's oneOf constrains its value and stays.
+	// scalar's oneOf constrains its value and stays. Only an object that
+	// fillInstallationDefaults completes field by field is partial: a dictionary
+	// value or any other object it stores whole is judged whole, like an array row.
 	if partial {
 		schema.Required = nil
 		schema.MinProperties = nil
-		if schema.Type == "object" {
+		if objectSchema(schema, declared) {
 			schema.OneOf = nil
 		}
 	}
 	// Omitted additionalProperties is open in JSON Schema. Installation
 	// configuration requires an explicit declaration before accepting extra keys.
-	if schema.Type == "object" && schema.AdditionalProperties == nil &&
+	if objectSchema(schema, declared) && schema.AdditionalProperties == nil &&
 		(schema.XPreserveUnknownFields == nil || !*schema.XPreserveUnknownFields) {
 		schema.AdditionalProperties = &internalapiext.JSONSchemaPropsOrBool{Allows: false}
 	}
 	for key, child := range schema.Properties {
-		prepareInstallationDefaultsSchema(&child, partial)
+		whole, nested := storedWhole(&child), map[string]internalapiext.JSONSchemaProps(nil)
+		if sibling, ok := declared[key]; ok {
+			whole, nested = storedWhole(&sibling), sibling.Properties
+		}
+		prepareInstallationDefaultsFragment(&child, partial && !whole, nested)
 		schema.Properties[key] = child
 	}
 	if schema.AdditionalProperties != nil && schema.AdditionalProperties.Schema != nil {
-		prepareInstallationDefaultsSchema(schema.AdditionalProperties.Schema, partial)
+		prepareInstallationDefaultsSchema(schema.AdditionalProperties.Schema, false)
 	}
 	if schema.Items != nil {
 		if schema.Items.Schema != nil {
@@ -142,11 +156,40 @@ func prepareInstallationDefaultsSchema(schema *internalapiext.JSONSchemaProps, p
 			prepareInstallationDefaultsSchema(&schema.Items.JSONSchemas[i], false)
 		}
 	}
+	siblings := declared
+	if siblings == nil {
+		siblings = schema.Properties
+	}
 	for _, branches := range [][]internalapiext.JSONSchemaProps{schema.AllOf, schema.AnyOf, schema.OneOf} {
 		for i := range branches {
-			prepareInstallationDefaultsSchema(&branches[i], partial)
+			prepareInstallationDefaultsFragment(&branches[i], partial, siblings)
 		}
 	}
+}
+
+// objectSchema reports whether schema describes an object. A hand-written schema
+// may list properties without repeating type: object, and the merge already
+// completes such an object field by field, so its entry is checked as one too.
+// A branch of an allOf, anyOf or oneOf (declared is set) lists only the
+// properties it constrains, so it is never read as the whole object this way.
+func objectSchema(schema *internalapiext.JSONSchemaProps, declared map[string]internalapiext.JSONSchemaProps) bool {
+	return schema.Type == "object" || (declared == nil && schema.Type == "" && len(schema.Properties) > 0)
+}
+
+// storedWhole reports whether an object of this schema is never completed from
+// the defaults, which is the inverse of declaredProperty, so whatever the entry
+// holds for it is the final value and must be complete.
+func storedWhole(schema *internalapiext.JSONSchemaProps) bool {
+	if open := schema.AdditionalProperties; open != nil && (open.Allows || open.Schema != nil) {
+		return true
+	}
+	if schema.XPreserveUnknownFields != nil && *schema.XPreserveUnknownFields {
+		return true
+	}
+	if schema.XMapType != nil && *schema.XMapType == "atomic" {
+		return true
+	}
+	return len(schema.Properties) == 0
 }
 
 func parseInstallationDefaults(raw string) (map[string]map[string]any, error) {
@@ -183,9 +226,10 @@ func decodeDefaultsJSON(raw []byte, target any) error {
 }
 
 // fillInstallationDefaults copies missing fields from defaults into spec. It
-// recurses only into objects whose schema declares properties; dictionaries and
-// free-form objects are replaced as a whole, like arrays, so a user's map is
-// never completed with entries nobody wrote.
+// recurses only into objects whose schema declares properties; dictionaries,
+// free-form objects and objects marked x-kubernetes-map-type: atomic are
+// replaced as a whole, like arrays, so a user's map is never completed with
+// entries nobody wrote.
 func fillInstallationDefaults(spec, defaults map[string]any, schema *apiextv1.JSONSchemaProps) {
 	for key, value := range defaults {
 		current, present := spec[key]
@@ -217,6 +261,11 @@ func declaredProperty(schema *apiextv1.JSONSchemaProps, key string) (*apiextv1.J
 		return nil, false
 	}
 	if child.XPreserveUnknownFields != nil && *child.XPreserveUnknownFields {
+		return nil, false
+	}
+	// An atomic object is one value: its children exclude each other or only make
+	// sense together, so a user's part of it is never completed from the defaults.
+	if child.XMapType != nil && *child.XMapType == "atomic" {
 		return nil, false
 	}
 	return &child, true
