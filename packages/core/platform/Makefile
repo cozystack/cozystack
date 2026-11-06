@@ -27,6 +27,13 @@ unprotect:
 
 image: image-migrations
 
+GROUP_SNAPSHOT_CRDS_EXPR := select(.spec.group == "groupsnapshot.storage.k8s.io") \
+	| .metadata.annotations."meta.helm.sh/release-name" = "snapshot-controller" \
+	| .metadata.annotations."meta.helm.sh/release-namespace" = "cozy-snapshot-controller" \
+	| .metadata.labels."app.kubernetes.io/managed-by" = "Helm" \
+	| .metadata.labels."helm.toolkit.fluxcd.io/name" = "snapshot-controller" \
+	| .metadata.labels."helm.toolkit.fluxcd.io/namespace" = "cozy-snapshot-controller"
+
 image-migrations:
 	# Vendor the v1alpha2 CRDs into the build context so migration 50 can ensure
 	# they exist before adoption (the etcd-operator-crds HelmRelease only installs
@@ -36,12 +43,25 @@ image-migrations:
 	rm -rf images/migrations/etcd-operator-crds
 	mkdir -p images/migrations/etcd-operator-crds
 	cp ../../system/etcd-operator-crds/templates/*.yaml images/migrations/etcd-operator-crds/
+	# The v1beta2 group snapshot CRDs, rendered from the snapshot-controller
+	# chart with that release's ownership metadata, so migration 61 can create
+	# them before any HelmRelease renders against the cluster.
+	rm -rf images/migrations/snapshot-controller-crds
+	mkdir -p images/migrations/snapshot-controller-crds
+	helm template snapshot-controller ../../system/snapshot-controller \
+		--namespace cozy-snapshot-controller \
+		--show-only charts/snapshot-controller/templates/crds.yaml \
+	| yq --split-exp '"images/migrations/snapshot-controller-crds/" + .metadata.name + ".yaml"' \
+		'$(GROUP_SNAPSHOT_CRDS_EXPR)'
+	# yq exits 0 on empty input, so a failed render would otherwise ship an
+	# image whose migration 61 deletes the old CRDs and cannot recreate them.
+	test "$$(ls images/migrations/snapshot-controller-crds | wc -l)" -eq 3
 	docker buildx build images/migrations \
 		$(call image-tags,platform-migrations,v$(COZYSTACK_VERSION)) \
 		$(call cache-args,platform-migrations) \
 		--metadata-file images/migrations.json \
 		$(BUILDX_ARGS)
-	rm -rf images/migrations/etcd-operator-crds
+	rm -rf images/migrations/etcd-operator-crds images/migrations/snapshot-controller-crds
 	IMAGE="$(REGISTRY)/platform-migrations:$(IMAGE_TAG)@$$(yq -e -o json -r '.["containerimage.digest"]' images/migrations.json)" \
 		yq --inplace '.migrations.image = strenv(IMAGE)' values.yaml
 	rm -f images/migrations.json

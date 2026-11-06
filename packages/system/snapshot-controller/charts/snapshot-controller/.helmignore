@@ -16,10 +16,13 @@
 *.tmp
 *.orig
 *~
-crds/README.md
-Makefile
 # Various IDEs
 .project
 .idea/
 *.tmproj
 .vscode/
+
+# Custom files
+/Makefile
+/docker-bake.hcl
+/*.dockerfile

@@ -1,4 +1,7 @@
 snapshot-controller:
+  # The chart renders the CRDs from a template, so uninstalling the release
+  # would otherwise delete them along with every VolumeSnapshot.
+  keepCRDs: true
   controller:
     replicaCount: 2
     revisionHistoryLimit: 10
