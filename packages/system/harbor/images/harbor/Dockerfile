@@ -137,7 +137,7 @@ RUN case "${TARGETARCH}" in \
     && echo "${sum}  /tmp/trivy.tgz" | sha256sum -c - \
     && tar -xzf /tmp/trivy.tgz -C /out trivy
 
-FROM goharbor/photon:5.0@sha256:0e06d58615400bf2a3fe7da1175b889e2827969e3ac42e1c4010010770e6a712 AS harbor-base
+FROM goharbor/photon:5.0@sha256:9fbde5d41217bd26654173724409d17b01a3c7da6df4e6260661b265d6b2684c AS harbor-base
 RUN tdnf install -y tzdata shadow >> /dev/null \
     && tdnf clean all \
     && groupadd -r -g 10000 harbor && useradd --no-log-init -r -m -g 10000 -u 10000 harbor \
@@ -185,7 +185,7 @@ USER harbor
 VOLUME ["/var/lib/registry"]
 ENTRYPOINT ["/home/harbor/start.sh"]
 
-FROM goharbor/photon:5.0@sha256:0e06d58615400bf2a3fe7da1175b889e2827969e3ac42e1c4010010770e6a712 AS trivy-adapter-photon
+FROM goharbor/photon:5.0@sha256:9fbde5d41217bd26654173724409d17b01a3c7da6df4e6260661b265d6b2684c AS trivy-adapter-photon
 ARG TRIVY_VERSION
 RUN tdnf install -y rpm shadow >> /dev/null \
     && tdnf clean all \
@@ -198,7 +198,7 @@ ENV TRIVY_VERSION=${TRIVY_VERSION}
 USER scanner
 ENTRYPOINT ["/home/scanner/entrypoint.sh"]
 
-FROM goharbor/photon:5.0@sha256:0e06d58615400bf2a3fe7da1175b889e2827969e3ac42e1c4010010770e6a712 AS nginx-photon
+FROM goharbor/photon:5.0@sha256:9fbde5d41217bd26654173724409d17b01a3c7da6df4e6260661b265d6b2684c AS nginx-photon
 RUN tdnf install -y nginx shadow >> /dev/null \
     && tdnf clean all \
     && groupmod -g 10000 nginx && usermod -g 10000 -u 10000 -d /home/nginx -s /bin/bash nginx \

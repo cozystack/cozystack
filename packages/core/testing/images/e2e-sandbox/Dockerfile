@@ -5,7 +5,7 @@
 # chainsaw-transient/, once a chainsaw release carries kyverno/chainsaw#2761.
 # Go 1.26 and -trimpath follow the v0.2.15 release binary (go1.26.0); a newer
 # Go minor is not what that release was tested with.
-FROM --platform=$BUILDPLATFORM golang:1.26.8@sha256:3c3e25a4da13fd0478eed2df1eb35a0e667094a7124d3993a6a1d30f71c17e79 AS chainsaw
+FROM --platform=$BUILDPLATFORM golang:1.26.8@sha256:eb36c1664dd974cde625f736e02c204383deebe03977365caaec5bf49f794348 AS chainsaw
 ARG GOPROXY
 ARG CHAINSAW_VERSION=0.2.15
 ARG CHAINSAW_SOURCE_SHA256=04f3fc7dd8e958e4fc7d73383bc22b05827240dd2fe7a8e32ee99d8c0332da2a
@@ -49,7 +49,7 @@ RUN if [ "$TARGETOS/$TARGETARCH" = "$BUILDOS/$BUILDARCH" ]; then \
     printf '%s\n' "$out"; \
     if printf '%s\n' "$out" | grep -q -- '--- SKIP'; then echo "chainsaw-transient skipped its tests" >&2; exit 1; fi
 
-FROM ubuntu:24.04@sha256:008173c23f95b170204355c12626cb5a965d779a7e1283b09e9cffbb1bf33ca3
+FROM ubuntu:24.04@sha256:68ee22004a9109b44973313b02ff7b1de250f1de0f5ecb628d73f579aaff33ac
 
 ARG KUBECTL_VERSION=1.33.13
 ARG TALOSCTL_VERSION=1.13.5

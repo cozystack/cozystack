@@ -11,7 +11,7 @@ RUN curl -sSL https://github.com/kubernetes-sigs/container-object-storage-interf
 COPY patches /patches
 RUN git apply /patches/*.diff
 
-FROM --platform=$BUILDPLATFORM docker.io/golang:1.27@sha256:3680233e3204827fbdc66088528ae6d4b3d034f51d03a99d454f6de034888244 AS builder
+FROM --platform=$BUILDPLATFORM docker.io/golang:1.27@sha256:820153096fda4de6ac1b7194d12e416b7dd8f4e9a33d17e0345b111b945162d8 AS builder
 ARG GOPROXY
 ARG TARGETOS
 ARG TARGETARCH
