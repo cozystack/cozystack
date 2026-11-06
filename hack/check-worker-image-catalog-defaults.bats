@@ -152,25 +152,39 @@ NODES_SCHEMA="$REPO_ROOT/packages/apps/kubernetes-nodes/values.schema.json"
 # -----------------------------------------------------------------------------
 # Third guard, and the premise the first one rests on. The catalog is keyed off
 # the kubernetes-nodes chart's `talos` defaults, but the parent kubernetes chart
-# carries its own copy of the same block since the Phase 2 split, and its own
-# values.yaml says to keep the two in sync. Nothing enforced that: the pool
-# chart's `make update` copies files/versions.yaml and images/kubectl.tag from
-# the parent and not the talos block, so a one-sided bump leaves the parent's
-# support-matrix guard reasoning about one Talos release while every worker boots
-# another — and the catalog check above would go on passing, because it only ever
-# reads one of the two files.
+# carries its own `talos.version` since the Phase 2 split, and its own values.yaml
+# says to keep the two in sync. Nothing enforced that: the pool chart's
+# `make update` copies files/versions.yaml and images/kubectl.tag from the parent
+# and not the talos block, so a one-sided bump leaves the parent's support-matrix
+# guard reasoning about one Talos release while every worker boots another — and
+# the catalog check above would go on passing, because it only ever reads one of
+# the two files. The version is the only Talos field the parent still declares.
 
 PARENT_VALUES="$REPO_ROOT/packages/apps/kubernetes/values.yaml"
 
-@test "the parent kubernetes chart and kubernetes-nodes agree on their Talos defaults" {
-  for key in version schematicID imageFactoryURL installerRepository registryMirrors; do
-    parent=$(yq ".talos.${key}" "$PARENT_VALUES")
-    pool=$(yq ".talos.${key}" "$APP_VALUES")
-    if [ "$parent" != "$pool" ]; then
-      echo "talos.${key} differs between the two charts:" >&2
-      echo "  packages/apps/kubernetes/values.yaml:       $parent" >&2
-      echo "  packages/apps/kubernetes-nodes/values.yaml: $pool" >&2
-      echo "both are declared 'keep in sync' and a worker pool follows the second while the parent's support-matrix guard reads the first" >&2
+@test "the parent kubernetes chart and kubernetes-nodes agree on their Talos version" {
+  parent=$(yq '.talos.version' "$PARENT_VALUES")
+  pool=$(yq '.talos.version' "$APP_VALUES")
+  if [ "$parent" != "$pool" ]; then
+    echo "talos.version differs between the two charts:" >&2
+    echo "  packages/apps/kubernetes/values.yaml:       $parent" >&2
+    echo "  packages/apps/kubernetes-nodes/values.yaml: $pool" >&2
+    echo "both are declared 'keep in sync' and a worker pool follows the second while the parent's support-matrix guard reads the first" >&2
+    return 1
+  fi
+}
+
+# A field the parent chart declares but no parent template reads is a setting that
+# does nothing: workers are KubernetesNodes pools since the Phase 2 split, and the
+# pool chart reads its own `talos`. The parent once carried the pool's image and
+# mirror fields for years after that, and an operator who set them got no error.
+@test "every talos field the parent kubernetes chart declares is read by one of its templates" {
+  keys=$(yq '.talos | keys | .[]' "$PARENT_VALUES")
+  [ -n "$keys" ] || { echo "packages/apps/kubernetes/values.yaml declares no talos block, or yq could not read it" >&2; return 1; }
+  for key in $keys; do
+    if ! grep -rqE "\.Values\.talos\.${key}([^A-Za-z0-9_]|\$)" "$REPO_ROOT/packages/apps/kubernetes/templates"; then
+      echo "talos.${key} is declared in packages/apps/kubernetes/values.yaml but no template under packages/apps/kubernetes/templates reads .Values.talos.${key}" >&2
+      echo "an operator who sets it gets no effect and no error; remove the field, or read it" >&2
       return 1
     fi
   done

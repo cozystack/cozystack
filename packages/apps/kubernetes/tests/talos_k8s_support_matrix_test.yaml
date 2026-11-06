@@ -51,3 +51,26 @@ tests:
     asserts:
       - hasDocuments:
           count: 4
+
+  # The chart no longer declares imageFactoryURL, installerRepository,
+  # registryMirrors and schematicID under talos: worker pools take them from
+  # their own KubernetesNodes values. A spec stored before that still carries
+  # them, and the values schema does not close the object, so it must render.
+  - it: keeps rendering a stored spec that still carries the talos fields the chart no longer reads
+    release:
+      name: test-k8s
+      namespace: tenant-test
+    set:
+      talos:
+        version: "v1.13.6"
+        schematicID: "ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515"
+        imageFactoryURL: "https://factory.example.com"
+        installerRepository: "registry.example.com/installer"
+        registryMirrors:
+          ghcr.io:
+            endpoints:
+              - https://registry.example.com
+      version: "v1.31"
+    asserts:
+      - hasDocuments:
+          count: 4
