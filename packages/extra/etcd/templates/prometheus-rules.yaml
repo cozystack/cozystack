@@ -10,7 +10,7 @@ spec:
       annotations:
         summary: "etcd cluster '{{`{{ $labels.job }}`}}': insufficient members '{{`{{ $value }}`}}'."
       expr: |
-        sum(up{job=~".*etcd.*"} == bool 1) by (job) < ((count(up{job=~".*etcd.*"}) by (job) + 1) / 2)
+        sum(up{job="{{ .Release.Namespace }}/etcd-pod-scrape"} == bool 1) by (job) < ((count(up{job="{{ .Release.Namespace }}/etcd-pod-scrape"}) by (job) + 1) / 2)
       for: 3m
       labels:
         severity: critical
@@ -19,7 +19,7 @@ spec:
       annotations:
         summary: "etcd cluster '{{`{{ $labels.job }}`}}': member '{{`{{ $labels.instance }}`}}' has no leader."
       expr: |
-        etcd_server_has_leader{job=~".*etcd.*"} == 0
+        etcd_server_has_leader{job="{{ .Release.Namespace }}/etcd-pod-scrape"} == 0
       for: 1m
       labels:
         severity: critical
@@ -28,7 +28,7 @@ spec:
       annotations:
         summary: "etcd cluster '{{`{{ $labels.job }}`}}': instance '{{`{{ $labels.instance }}`}}' has seen '{{`{{ $value }}`}}' leader changes within the last hour."
       expr: |
-        rate(etcd_server_leader_changes_seen_total{job=~".*etcd.*"}[15m]) > 3
+        rate(etcd_server_leader_changes_seen_total{job="{{ .Release.Namespace }}/etcd-pod-scrape"}[15m]) > 3
       for: 15m
       labels:
         severity: warning
@@ -37,9 +37,9 @@ spec:
       annotations:
         summary: "etcd cluster '{{`{{ $labels.job }}`}}': '{{`{{ $value }}`}}' of requests for '{{`{{ $labels.grpc_method }}`}}' failed on etcd instance '{{`{{ $labels.instance }}`}}'."
       expr: |
-        100 * sum(rate(grpc_server_handled_total{job=~".*etcd.*", grpc_code=~"Unknown|FailedPrecondition|ResourceExhausted|Internal|Unavailable|DataLoss|DeadlineExceeded"}[5m])) BY (job, instance, grpc_service, grpc_method)
+        100 * sum(rate(grpc_server_handled_total{job="{{ .Release.Namespace }}/etcd-pod-scrape", grpc_code=~"Unknown|FailedPrecondition|ResourceExhausted|Internal|Unavailable|DataLoss|DeadlineExceeded"}[5m])) BY (job, instance, grpc_service, grpc_method)
           /
-        sum(rate(grpc_server_handled_total{job=~".*etcd.*"}[5m])) BY (job, instance, grpc_service, grpc_method)
+        sum(rate(grpc_server_handled_total{job="{{ .Release.Namespace }}/etcd-pod-scrape"}[5m])) BY (job, instance, grpc_service, grpc_method)
           > 1
       for: 10m
       labels:
@@ -49,9 +49,9 @@ spec:
       annotations:
         summary: "etcd cluster '{{`{{ $labels.job }}`}}': '{{`{{ $value }}`}}' of requests for '{{`{{ $labels.grpc_method }}`}}' failed on etcd instance '{{`{{ $labels.instance }}`}}'."
       expr: |
-        100 * sum(rate(grpc_server_handled_total{job=~".*etcd.*", grpc_code=~"Unknown|FailedPrecondition|ResourceExhausted|Internal|Unavailable|DataLoss|DeadlineExceeded"}[5m])) BY (job, instance, grpc_service, grpc_method)
+        100 * sum(rate(grpc_server_handled_total{job="{{ .Release.Namespace }}/etcd-pod-scrape", grpc_code=~"Unknown|FailedPrecondition|ResourceExhausted|Internal|Unavailable|DataLoss|DeadlineExceeded"}[5m])) BY (job, instance, grpc_service, grpc_method)
           /
-        sum(rate(grpc_server_handled_total{job=~".*etcd.*"}[5m])) BY (job, instance, grpc_service, grpc_method)
+        sum(rate(grpc_server_handled_total{job="{{ .Release.Namespace }}/etcd-pod-scrape"}[5m])) BY (job, instance, grpc_service, grpc_method)
           > 5
       for: 5m
       labels:
@@ -61,7 +61,7 @@ spec:
       annotations:
         summary: "etcd cluster '{{`{{ $labels.job }}`}}': gRPC requests to '{{`{{ $labels.grpc_method }}`}}' are taking '{{`{{ $value }}`}}' on etcd instance '{{`{{ $labels.instance }}`}}'."
       expr: |
-        histogram_quantile(0.99, sum(rate(grpc_server_handling_seconds_bucket{job=~".*etcd.*", grpc_type="unary"}[5m])) by (job, instance, grpc_service, grpc_method, le))
+        histogram_quantile(0.99, sum(rate(grpc_server_handling_seconds_bucket{job="{{ .Release.Namespace }}/etcd-pod-scrape", grpc_type="unary"}[5m])) by (job, instance, grpc_service, grpc_method, le))
         > 0.15
       for: 10m
       labels:
@@ -71,7 +71,7 @@ spec:
       annotations:
         summary: "etcd cluster '{{`{{ $labels.job }}`}}': member communication with '{{`{{ $labels.To }}`}}' is taking '{{`{{ $value }}`}}' on etcd instance '{{`{{ $labels.instance }}`}}'."
       expr: |
-        histogram_quantile(0.99, rate(etcd_network_peer_round_trip_time_seconds_bucket{job=~".*etcd.*"}[5m]))
+        histogram_quantile(0.99, rate(etcd_network_peer_round_trip_time_seconds_bucket{job="{{ .Release.Namespace }}/etcd-pod-scrape"}[5m]))
         > 0.15
       for: 10m
       labels:
@@ -81,7 +81,7 @@ spec:
       annotations:
         summary: "etcd cluster '{{`{{ $labels.job }}`}}': '{{`{{ $value }}`}}' proposal failures within the last hour on etcd instance '{{`{{ $labels.instance }}`}}'."
       expr: |
-        rate(etcd_server_proposals_failed_total{job=~".*etcd.*"}[15m]) > 5
+        rate(etcd_server_proposals_failed_total{job="{{ .Release.Namespace }}/etcd-pod-scrape"}[15m]) > 5
       for: 15m
       labels:
         severity: warning
@@ -90,7 +90,7 @@ spec:
       annotations:
         summary: "'{{`{{ $value }}`}}' of requests for '{{`{{ $labels.method }}`}}' failed on etcd instance '{{`{{ $labels.instance }}`}}'."
       expr: |
-        sum(rate(etcd_http_failed_total{job=~".*etcd.*", code!="404"}[5m])) BY (method) / sum(rate(etcd_http_received_total{job=~".*etcd.*"}[5m])) BY (method) > 0.01
+        sum(rate(etcd_http_failed_total{job="{{ .Release.Namespace }}/etcd-pod-scrape", code!="404"}[5m])) BY (method) / sum(rate(etcd_http_received_total{job="{{ .Release.Namespace }}/etcd-pod-scrape"}[5m])) BY (method) > 0.01
       for: 10m
       labels:
         severity: warning
@@ -99,7 +99,7 @@ spec:
       annotations:
         summary: "'{{`{{ $value }}`}}' of requests for '{{`{{ $labels.method }}`}}' failed on etcd instance '{{`{{ $labels.instance }}`}}'."
       expr: |
-        sum(rate(etcd_http_failed_total{job=~".*etcd.*", code!="404"}[5m])) BY (method) / sum(rate(etcd_http_received_total{job=~".*etcd.*"}[5m])) BY (method) > 0.05
+        sum(rate(etcd_http_failed_total{job="{{ .Release.Namespace }}/etcd-pod-scrape", code!="404"}[5m])) BY (method) / sum(rate(etcd_http_received_total{job="{{ .Release.Namespace }}/etcd-pod-scrape"}[5m])) BY (method) > 0.05
       for: 10m
       labels:
         severity: critical
@@ -108,7 +108,7 @@ spec:
       annotations:
         summary: "etcd instance '{{`{{ $labels.instance }}`}}' HTTP requests to '{{`{{ $labels.method }}`}}' are slow."
       expr: |
-        histogram_quantile(0.99, rate(etcd_http_successful_duration_seconds_bucket[5m]))
+        histogram_quantile(0.99, rate(etcd_http_successful_duration_seconds_bucket{job="{{ .Release.Namespace }}/etcd-pod-scrape"}[5m]))
         > 0.15
       for: 10m
       labels:
@@ -120,10 +120,10 @@ spec:
         description: 'etcd cluster "{{`{{ $labels.job }}`}}": members are down {{`{{ $value }}`}}.'
       expr: |
         max without (endpoint) (
-          sum without (instance, pod) (up{job=~".*etcd.*"} == bool 0)
+          sum without (instance, pod) (up{job="{{ .Release.Namespace }}/etcd-pod-scrape"} == bool 0)
         or
           count without (To) (
-            sum without (instance, pod) (rate(etcd_network_peer_sent_failures_total{job=~".*etcd.*"}[120s])) > 0.01
+            sum without (instance, pod) (rate(etcd_network_peer_sent_failures_total{job="{{ .Release.Namespace }}/etcd-pod-scrape"}[120s])) > 0.01
           )
         )
         > 0
