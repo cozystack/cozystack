@@ -10,9 +10,15 @@
 # rather than proceed when the sidecar never becomes idle. Once started, an
 # operation the sidecar no longer lists (its action log lives in memory and a
 # restart empties it) has to fail the Pod too, since the Job has no deadline.
-# A Job retry must not run a restore twice: it takes over the restore_remote
-# the attempt before it left running, and a few lost polls do not end an
+# A Job retry must not start its operation twice: it takes over the
+# restore_remote, or the create_remote of the archive the controller named,
+# that the attempt before it left running, and a few lost polls do not end an
 # attempt in the first place.
+#
+# Which archive a restore reads back is decided by the script's own jq
+# selection over list/remote, so it is exercised against several archives
+# rather than string-matched: exactly the archive the Backup recorded, or for
+# a Backup that records none, the newest one stamped no later than its takenAt.
 #
 # Run from the repo root with make bats-unit-tests. The rendered script is run
 # with `bash`, not `sh`: it opens `set -euo pipefail`, which the production
@@ -22,18 +28,25 @@ load test_helper
 
 CHART=packages/system/backupstrategy-controller
 
-# Render the shipped strategy's in-Pod script into $1 with the controller-render
-# placeholders substituted ($2 mode, $3 application name). An empty render, or
-# a placeholder left unsubstituted, is an early failure: these tests EXECUTE it.
+# Render the shipped strategy's in-Pod script into $1 and substitute the
+# controller-render placeholders the way the driver fills them: $2 mode, $3
+# app (release and source application), $4 the archive name the controller
+# chose or the Backup recorded (empty, the default, for none), $5 the Backup
+# name, $6 its takenAt in the archive-name layout (default: later than every
+# archive the stub lists). An empty render fails early, as does a placeholder
+# left unsubstituted: these tests EXECUTE it.
 render_script() {
-  out=$1; mode=$2; app=$3
+  out=$1; mode=$2; app=$3; archive=${4-}; backup=${5-bkp}; takenat=${6-99991231T235959Z}
   helm template t "$CHART" -n cozy-backup-controller \
     --set backupStorage.bucketNameOverride=test-bucket 2>/dev/null \
     | yq eval 'select(.kind == "Altinity") | .spec.template.spec.containers[0].args[0]' - \
     | sed -e "s#{{ .Mode }}#${mode}#g" \
           -e "s#{{ .Release.Name }}#${app}#g" \
           -e "s#{{ .Release.Namespace }}#tenant-x#g" \
-          -e "s#{{ .Backup.ApplicationRef.Name }}#${app}#g" > "$out"
+          -e "s#{{ .Backup.ApplicationRef.Name }}#${app}#g" \
+          -e "s#{{ .Backup.Name }}#${backup}#g" \
+          -e "s#{{ .ArchiveName | default \"\" }}#${archive}#g" \
+          -e "s#{{ .Backup.TakenAt | default \"\" }}#${takenat}#g" > "$out"
   [ -s "$out" ] || return 1
   if grep -q '{{' "$out"; then
     echo "rendered script still holds a controller placeholder" >&2
@@ -49,13 +62,17 @@ render_script() {
 #   busy            a number: that many GET /backup/actions answers still list
 #                   an operation of someone else "in progress"
 #   op              the command line of the sidecar's own operation, written
-#                   by an accepted POST or seeded by a test as the operation
+#                   by an accepted POST the way the sidecar logs it ("--resume"
+#                   before the name of a create_remote asking for it), or
+#                   seeded by a test as the operation
 #                   an earlier attempt of the same Job started
 #   op_left         how many more GET /backup/actions answers list op as
 #                   "in progress" before it ends with op_result
 #   op_duration     op_left given to an operation a POST starts (default 0)
 #   op_result       the status op ends with (default success)
 #   prior           extra action-log rows, verbatim, older than op
+#   remote          present: the list/remote answer, verbatim, in place of the
+#                   one archive listed by default
 #   restarted       present: the action log no longer lists op, as after the
 #                   sidecar restarted and lost its in-memory log
 #   fail_on_post    a POST that is accepted makes that many following
@@ -94,7 +111,10 @@ case "\$method \$url" in
   "POST "*)
     if [ "\$(num busy)" -gt 0 ] || [ "\$running" = 1 ] || [ ! -e "\$state/idle" ]; then exit 22; fi
     case "\$url" in
-      */create_remote\?name=*) cmd="create_remote \${url##*=}" ;;
+      */create_remote\?name=*)
+        name=\${url#*name=}; name=\${name%%&*}
+        case "\$url" in *[?\&]resume=true*) cmd="create_remote --resume \$name" ;; *) cmd="create_remote \$name" ;; esac
+        ;;
       */restore_remote/*) cmd="restore_remote \${url##*/}" ;;
       *) exit 22 ;;
     esac
@@ -130,7 +150,9 @@ case "\$method \$url" in
     if [ "\$inprog" = 0 ]; then touch "\$state/idle"; fi
     ;;
   "GET "*/backup/list/remote)
-    echo '{"name":"clickhouse-myapp-20260101T000000Z","created":"2026-01-01 00:00:00"}'
+    if [ -e "\$state/remote" ]; then cat "\$state/remote"; else
+      echo '{"name":"clickhouse-myapp-20260101T000000Z","created":"2026-01-01 00:00:00"}'
+    fi
     ;;
 esac
 exit 0
@@ -140,6 +162,17 @@ STUB
 exit 0
 STUB
   chmod 0755 "$bin/curl" "$bin/sleep"
+}
+
+# One list/remote row per argument, "name" or "name|desc"; created mirrors
+# the name's timestamp.
+remote_rows() {
+  for row in "$@"; do
+    name=${row%%|*}; desc="tar, regular"
+    if [ "$row" != "$name" ]; then desc=${row#*|}; fi
+    ts=${name##*-}
+    printf '{"name":"%s","created":"%s","location":"remote","required":"","desc":"%s"}\n' "$name" "$ts" "$desc"
+  done
 }
 
 # The number of operations the sidecar accepted.
@@ -175,7 +208,7 @@ run_script() {
   echo 3 > "$tmp/state/busy"
   render_script "$tmp/s.sh" backup myapp
   run_script "$tmp"
-  grep -q '^create_remote clickhouse-myapp-' "$tmp/state/accepted"
+  grep -q '^create_remote --resume clickhouse-myapp-' "$tmp/state/accepted"
   [ "$(cat "$tmp/state/busy")" = 0 ]
 }
 
@@ -320,4 +353,145 @@ run_script() {
   render_script "$tmp/s.sh" backup myapp
   if run_script "$tmp"; then echo "FAIL: a cancelled operation must fail the Pod"; false; fi
   if [ -e "$tmp/state/runaway" ]; then echo "FAIL: the script kept polling a cancelled operation"; false; fi
+}
+
+@test "restore reads back the archive the Backup recorded, not the newest one" {
+  tmp=$(mktemp -d)
+  make_stubs "$tmp/bin" "$tmp/state"
+  render_script "$tmp/s.sh" restore myapp clickhouse-myapp-20260304T050607Z bkp-a 20260304T050622Z
+  remote_rows clickhouse-myapp-20260304T040000Z clickhouse-myapp-20260304T050607Z \
+    clickhouse-myapp-20260304T060000Z clickhouse-myapp-20260304T070000Z > "$tmp/state/remote"
+  run_script "$tmp"
+  grep -qxF 'POST http://chi-clickhouse-myapp-clickhouse-0-0.tenant-x.svc:7171/backup/restore_remote/clickhouse-myapp-20260304T050607Z' "$tmp/state/requests"
+  [ "$(accepted "$tmp")" = 1 ]
+}
+
+@test "restore fails naming the recorded archive when remote storage lacks it" {
+  tmp=$(mktemp -d)
+  make_stubs "$tmp/bin" "$tmp/state"
+  render_script "$tmp/s.sh" restore myapp clickhouse-myapp-20260304T050607Z bkp-a 20260304T050622Z
+  remote_rows clickhouse-myapp-20260304T040000Z clickhouse-myapp-20260304T060000Z > "$tmp/state/remote"
+  out=""
+  if out=$(run_script "$tmp" 2>&1); then
+    echo "FAIL: restore succeeded without the recorded archive: $out"
+    false
+  fi
+  printf '%s\n' "$out" | grep -qF 'archive clickhouse-myapp-20260304T050607Z recorded on Backup bkp-a is not in remote storage'
+  if grep -qF '/backup/restore_remote/' "$tmp/state/requests"; then
+    echo "FAIL: restored another archive: $(cat "$tmp/state/requests")"
+    false
+  fi
+}
+
+@test "restore of a Backup without a recorded archive takes the newest one stamped by its takenAt, and warns" {
+  tmp=$(mktemp -d)
+  make_stubs "$tmp/bin" "$tmp/state"
+  render_script "$tmp/s.sh" restore myapp "" bkp-a 20260304T050800Z
+  # Each decoy sorts after the expected archive and is ruled out by one
+  # filter: broken, not a bare timestamp after the prefix, or stamped after
+  # takenAt.
+  remote_rows clickhouse-myapp-20260304T040000Z clickhouse-myapp-20260304T050607Z \
+    "clickhouse-myapp-20260304T050700Z|broken (can't stat metadata.json)" \
+    clickhouse-myapp-20260304T050710Z-copy \
+    clickhouse-myapp-20260304T060000Z > "$tmp/state/remote"
+  out=$(run_script "$tmp" 2>&1)
+  grep -qxF 'POST http://chi-clickhouse-myapp-clickhouse-0-0.tenant-x.svc:7171/backup/restore_remote/clickhouse-myapp-20260304T050607Z' "$tmp/state/requests"
+  [ "$(accepted "$tmp")" = 1 ]
+  printf '%s\n' "$out" | grep -qF 'WARNING: Backup bkp-a records no archive name'
+}
+
+@test "restore of a Backup without a recorded archive fails when no archive is stamped by its takenAt" {
+  tmp=$(mktemp -d)
+  make_stubs "$tmp/bin" "$tmp/state"
+  render_script "$tmp/s.sh" restore myapp "" bkp-a 20260304T050800Z
+  remote_rows clickhouse-myapp-20260304T060000Z clickhouse-myapp-20260304T070000Z > "$tmp/state/remote"
+  out=""
+  if out=$(run_script "$tmp" 2>&1); then
+    echo "FAIL: restore succeeded with every archive newer than takenAt: $out"
+    false
+  fi
+  printf '%s\n' "$out" | grep -qF 'no archive of myapp stamped no later than 20260304T050800Z'
+  if grep -qF '/backup/restore_remote/' "$tmp/state/requests"; then
+    echo "FAIL: restored an archive newer than takenAt: $(cat "$tmp/state/requests")"
+    false
+  fi
+}
+
+@test "backup writes the archive under the name the controller chose" {
+  tmp=$(mktemp -d)
+  make_stubs "$tmp/bin" "$tmp/state"
+  render_script "$tmp/s.sh" backup myapp clickhouse-myapp-20260304T050607Z
+  run_script "$tmp"
+  grep -qxF 'POST http://chi-clickhouse-myapp-clickhouse-0-0.tenant-x.svc:7171/backup/create_remote?name=clickhouse-myapp-20260304T050607Z&resume=true' "$tmp/state/requests"
+}
+
+@test "backup falls back to a timestamped name when the controller supplies none" {
+  tmp=$(mktemp -d)
+  make_stubs "$tmp/bin" "$tmp/state"
+  render_script "$tmp/s.sh" backup myapp ""
+  run_script "$tmp"
+  grep -qE '^POST http://[^ ]*/backup/create_remote\?name=clickhouse-myapp-[0-9]{8}T[0-9]{6}Z&resume=true$' "$tmp/state/requests"
+}
+
+# The sidecar answers a second operation with 423 while one runs, so a retry
+# that POSTed over its predecessor's upload would burn every attempt left.
+@test "a retried backup takes over the upload of its archive the sidecar is still running" {
+  tmp=$(mktemp -d)
+  make_stubs "$tmp/bin" "$tmp/state"
+  echo 'create_remote --resume clickhouse-myapp-20260304T050607Z' > "$tmp/state/op"
+  echo 3 > "$tmp/state/op_left"
+  render_script "$tmp/s.sh" backup myapp clickhouse-myapp-20260304T050607Z
+  run_script "$tmp"
+  if grep -q '^POST ' "$tmp/state/requests"; then
+    echo "FAIL: started another operation over the running one: $(cat "$tmp/state/requests")"
+    false
+  fi
+  [ "$(cat "$tmp/state/op_left")" = 0 ]
+}
+
+@test "a taken-over backup that ends in error fails the Pod" {
+  tmp=$(mktemp -d)
+  make_stubs "$tmp/bin" "$tmp/state"
+  echo 'create_remote --resume clickhouse-myapp-20260304T050607Z' > "$tmp/state/op"
+  echo 2 > "$tmp/state/op_left"
+  echo error > "$tmp/state/op_result"
+  render_script "$tmp/s.sh" backup myapp clickhouse-myapp-20260304T050607Z
+  if run_script "$tmp"; then echo "FAIL: a taken-over upload that failed must fail the Pod"; false; fi
+  if grep -q '^POST ' "$tmp/state/requests"; then
+    echo "FAIL: started another operation over the running one: $(cat "$tmp/state/requests")"
+    false
+  fi
+}
+
+@test "a retried backup after a failed attempt resumes the same archive" {
+  tmp=$(mktemp -d)
+  make_stubs "$tmp/bin" "$tmp/state"
+  echo '{"command":"create_remote clickhouse-myapp-20260304T050607Z","status":"error","start":"2026-01-01 00:01:30","error":"S3 PutObject 403"}' > "$tmp/state/prior"
+  render_script "$tmp/s.sh" backup myapp clickhouse-myapp-20260304T050607Z
+  run_script "$tmp"
+  grep -qxF 'POST http://chi-clickhouse-myapp-clickhouse-0-0.tenant-x.svc:7171/backup/create_remote?name=clickhouse-myapp-20260304T050607Z&resume=true' "$tmp/state/requests"
+}
+
+@test "backup does not take over an upload running for another archive" {
+  tmp=$(mktemp -d)
+  make_stubs "$tmp/bin" "$tmp/state"
+  echo 'create_remote --resume clickhouse-myapp-20260304T040000Z' > "$tmp/state/op"
+  echo 3 > "$tmp/state/op_left"
+  render_script "$tmp/s.sh" backup myapp clickhouse-myapp-20260304T050607Z
+  run_script "$tmp"
+  [ "$(accepted "$tmp")" = 1 ]
+  grep -qx 'create_remote --resume clickhouse-myapp-20260304T050607Z' "$tmp/state/accepted"
+}
+
+# The action log is never trimmed, so a finished row of the same archive may
+# be an earlier run's and is not taken for this attempt's result.
+@test "backup starts create_remote again when the log holds a finished one of the same archive" {
+  for status in success error cancel; do
+    tmp=$(mktemp -d)
+    make_stubs "$tmp/bin" "$tmp/state"
+    echo "{\"command\":\"create_remote --resume clickhouse-myapp-20260304T050607Z\",\"status\":\"$status\",\"start\":\"2026-01-01 00:01:30\"}" > "$tmp/state/prior"
+    render_script "$tmp/s.sh" backup myapp clickhouse-myapp-20260304T050607Z
+    run_script "$tmp"
+    if [ "$(accepted "$tmp")" != 1 ]; then echo "FAIL: a $status row of an earlier upload must not stand in for this one"; false; fi
+  done
 }

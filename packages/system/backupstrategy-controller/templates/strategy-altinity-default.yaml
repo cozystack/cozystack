@@ -3,8 +3,8 @@
    1. Helm renders this file at chart install time. Anything inside
       `{{ ... }}` is interpreted by Helm.
    2. The strategy controller renders the resulting Strategy CR
-      per-BackupJob, expanding `{{ .Application | .Release | .Mode }}`
-      against the live application object.
+      per-BackupJob, expanding `{{ .Application | .Release | .Mode |
+      .ArchiveName | .Backup }}` against the live application object.
   To emit a literal "{{ .Foo }}" that survives Helm, we pass it as the
   string argument of `printf` — Helm does not interpret inner template
   delimiters inside printf's quoted strings. Do NOT simplify by inlining
@@ -51,6 +51,11 @@ spec:
               host="chi-clickhouse-{{ printf "{{ .Release.Name }}" }}-clickhouse-0-0.{{ printf "{{ .Release.Namespace }}" }}.svc"
               api="http://${host}:7171"
               auth="-u ${API_USERNAME}:${API_PASSWORD}"
+              # The archive the controller named for this BackupJob and records
+              # on its Backup. The default renders it empty, rather than as
+              # text/template's missing-key marker, when a controller that
+              # predates archive names renders this template during an upgrade.
+              archive="{{ printf `{{ .ArchiveName | default "" }}` }}"
               # Every request but the POST is retried on failure, every 5s,
               # for $2 attempts in all: once the operation is accepted, a
               # dropped poll must not fail the attempt, since the Job retry it
@@ -91,23 +96,47 @@ spec:
               }
               if [ "{{ printf "{{ .Mode }}" }}" = "backup" ]; then
                 prefix="clickhouse-{{ printf "{{ .Release.Name }}" }}-"
-                # The name is new on every attempt, so a retry never takes over
-                # the create_remote of the attempt it replaces; that needs a
-                # name fixed for the whole BackupJob.
-                target="${prefix}$(date -u +%Y%m%dT%H%M%SZ)"
-                cmd="create_remote ${target}"
+                # Only a controller that predates archive names leaves it
+                # empty, and that one records no name on the Backup either.
+                target="${archive:-${prefix}$(date -u +%Y%m%dT%H%M%SZ)}"
+                # A retried Pod gets the same name, so it takes over an attempt
+                # the sidecar is still running, and otherwise asks for resume,
+                # so a local or partial remote backup an earlier attempt left is
+                # resumed rather than refused as existing, whatever
+                # use_resumable_state the sidecar runs with. The sidecar logs
+                # the request as "create_remote --resume <name>".
+                cmd="create_remote --resume ${target}"
                 wait_turn "${cmd}"
-                echo "${cmd}"
-                curl -fsS ${auth} -X POST "${api}/backup/create_remote?name=${target}" >/dev/null
+                if [ "${turn}" = "join" ]; then
+                  echo "${cmd} is already running; waiting for it"
+                else
+                  echo "${cmd}"
+                  curl -fsS ${auth} -X POST "${api}/backup/create_remote?name=${target}&resume=true" >/dev/null
+                fi
               else
-                prefix="clickhouse-{{ printf "{{ .Backup.ApplicationRef.Name }}" }}-"
-                listing=$(api_get /backup/list/remote 60)
-                target=$(printf '%s\n' "${listing}" \
-                  | jq -rs --arg prefix "${prefix}" \
-                      '[.[] | select((.name // "") | startswith($prefix))] | sort_by(.created // "") | last.name // ""')
-                if [ -z "${target}" ] || [ "${target}" = "null" ]; then
-                  echo "no remote backup found" >&2
-                  exit 1
+                app="{{ printf "{{ .Backup.ApplicationRef.Name }}" }}"
+                backup="{{ printf "{{ .Backup.Name }}" }}"
+                prefix="clickhouse-${app}-"
+                remote=$(api_get /backup/list/remote 60)
+                if [ -n "${archive}" ]; then
+                  if ! printf '%s\n' "${remote}" | jq -es --arg name "${archive}" 'any(.[]; .name == $name)' >/dev/null; then
+                    echo "archive ${archive} recorded on Backup ${backup} is not in remote storage; not restoring any other archive" >&2
+                    exit 1
+                  fi
+                  target="${archive}"
+                else
+                  # takenAt is set after the backup Job finished, so the
+                  # archive that Job wrote is stamped no later than it.
+                  notafter="{{ printf `{{ .Backup.TakenAt | default "" }}` }}"
+                  echo "WARNING: Backup ${backup} records no archive name; restoring the newest archive of ${app} stamped no later than its takenAt (${notafter}), a best-effort choice that may not be the archive this Backup was taken as" >&2
+                  target=$(printf '%s\n' "${remote}" | jq -rs --arg prefix "${prefix}" --arg notafter "${notafter}" '
+                    [.[] | select((.desc // "") | startswith("broken") | not) | .name // ""
+                      | select(startswith($prefix) and (ltrimstr($prefix) | test("^[0-9]{8}T[0-9]{6}Z$")) and ltrimstr($prefix) <= $notafter)]
+                    | sort | last // ""')
+                  if [ -z "${target}" ]; then
+                    echo "no archive of ${app} stamped no later than ${notafter} in remote storage" >&2
+                    exit 1
+                  fi
                 fi
                 # restore_remote drops every table it restores before
                 # recreating it, so a second run discards whatever was written
