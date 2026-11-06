@@ -222,6 +222,18 @@ spec:
                       key: backup
                 - name: ALLOW_EMPTY_BACKUPS
                   value: "true"
+                {{- /*
+                  create_remote keeps the local backup when its upload fails,
+                  and the upstream defaults never prune local backups (0) and
+                  resume unfinished uploads at start, which pushes a failed
+                  attempt to the bucket as an archive no Backup refers to and
+                  holds the API lock (423) while it does. -1 keeps only the
+                  newest local backup and removes it once its upload succeeds.
+                */}}
+                - name: BACKUPS_TO_KEEP_LOCAL
+                  value: "-1"
+                - name: API_COMPLETE_RESUMABLE_AFTER_RESTART
+                  value: "false"
                 - name: REMOTE_STORAGE
                   value: s3
                 {{- /*

@@ -56,32 +56,75 @@ spec:
               # text/template's missing-key marker, when a controller that
               # predates archive names renders this template during an upgrade.
               archive="{{ printf `{{ .ArchiveName | default "" }}` }}"
-              for _ in $(seq 1 60); do
-                if curl -fsS ${auth} --max-time 2 "${api}/backup/status" >/dev/null 2>&1; then break; fi
-                sleep 5
-              done
+              # Every request but the POST is retried on failure, every 5s,
+              # for $2 attempts in all: once the operation is accepted, a
+              # dropped poll must not fail the attempt, since the Job retry it
+              # causes cannot tell a lost poll from a lost operation.
+              api_get() {
+                n=0
+                while true; do
+                  if out=$(curl -fsS ${auth} --max-time 10 "${api}$1"); then
+                    printf '%s\n' "${out}"
+                    return 0
+                  fi
+                  n=$((n + 1))
+                  if [ "${n}" -ge "$2" ]; then
+                    echo "GET ${api}$1 failed ${n} times in a row" >&2
+                    return 1
+                  fi
+                  sleep 5
+                done
+              }
+              # The sidecar answers 423 to a new operation while any other is
+              # in progress, so starting before it is idle burns the attempt.
+              # The exception is the operation $1 itself already running, as
+              # left by an earlier attempt of this Job that died: it is taken
+              # over rather than started twice.
+              wait_turn() {
+                for _ in $(seq 1 60); do
+                  if actions=$(curl -fsS ${auth} --max-time 10 "${api}/backup/actions"); then
+                    turn=$(printf '%s\n' "${actions}" | jq -rs --arg cmd "$1" '
+                      if any(.[]; .status == "in progress" and .command == $cmd) then "join"
+                      elif any(.[]; .status == "in progress") then "busy"
+                      else "idle" end') || turn=
+                    case "${turn}" in join|idle) return 0 ;; esac
+                  fi
+                  sleep 5
+                done
+                echo "clickhouse-backup sidecar at ${api} did not become idle" >&2
+                exit 1
+              }
               if [ "{{ printf "{{ .Mode }}" }}" = "backup" ]; then
                 prefix="clickhouse-{{ printf "{{ .Release.Name }}" }}-"
-                # Only that older controller leaves the name empty, and it
-                # records no name on the Backup either.
+                # Only a controller that predates archive names leaves it
+                # empty, and that one records no name on the Backup either.
                 target="${archive:-${prefix}$(date -u +%Y%m%dT%H%M%SZ)}"
-                # A retried Pod gets the same name. Wait on an attempt the
-                # sidecar is still running, which would answer a new one with
-                # 423, and ask for resume, so a local or partial remote backup
-                # an earlier attempt left is resumed rather than refused as
-                # existing, whatever use_resumable_state the sidecar runs with.
-                state=$(curl -fsS ${auth} "${api}/backup/actions" \
-                  | jq -rs --arg suffix "${target}" \
-                      '[.[] | select((.command // "") | endswith($suffix))] | sort_by(.start) | last | .status // ""')
-                if [ "${state}" != "in progress" ]; then
-                  echo "create_remote ${target}"
+                # A retried Pod gets the same name, so it takes over an attempt
+                # the sidecar is still running, and otherwise asks for resume,
+                # so a local or partial remote backup an earlier attempt left is
+                # resumed rather than refused as existing, whatever
+                # use_resumable_state the sidecar runs with. The sidecar logs
+                # the request as "create_remote --resume <name>". The name is
+                # this BackupJob's alone, so an upload of it that last ended in
+                # success is an earlier attempt's finished result: resuming
+                # over it would upload the archive again and leave it broken if
+                # that upload died halfway.
+                cmd="create_remote --resume ${target}"
+                wait_turn "${cmd}"
+                if [ "${turn}" = "join" ]; then
+                  echo "${cmd} is already running; waiting for it"
+                elif printf '%s\n' "${actions}" | jq -es --arg cmd "${cmd}" \
+                    '[.[] | select(.command == $cmd)] | sort_by(.start) | last | .status == "success"' >/dev/null; then
+                  echo "${cmd} already succeeded in an earlier attempt"
+                else
+                  echo "${cmd}"
                   curl -fsS ${auth} -X POST "${api}/backup/create_remote?name=${target}&resume=true" >/dev/null
                 fi
               else
                 app="{{ printf "{{ .Backup.ApplicationRef.Name }}" }}"
                 backup="{{ printf "{{ .Backup.Name }}" }}"
                 prefix="clickhouse-${app}-"
-                remote=$(curl -fsS ${auth} "${api}/backup/list/remote")
+                remote=$(api_get /backup/list/remote 60)
                 if [ -n "${archive}" ]; then
                   if ! printf '%s\n' "${remote}" | jq -es --arg name "${archive}" 'any(.[]; .name == $name)' >/dev/null; then
                     echo "archive ${archive} recorded on Backup ${backup} is not in remote storage; not restoring any other archive" >&2
@@ -102,19 +145,39 @@ spec:
                     exit 1
                   fi
                 fi
-                echo "restore_remote ${target}"
-                curl -fsS ${auth} -X POST "${api}/backup/restore_remote/${target}" >/dev/null
+                # restore_remote drops every table it restores before
+                # recreating it, so a second run discards whatever was written
+                # after the first one finished. Only a running one is taken
+                # over: the action log is never trimmed, and a finished row of
+                # this archive may be left by an earlier RestoreJob.
+                cmd="restore_remote ${target}"
+                wait_turn "${cmd}"
+                if [ "${turn}" = "join" ]; then
+                  echo "${cmd} is already running; waiting for it"
+                else
+                  echo "${cmd}"
+                  curl -fsS ${auth} -X POST "${api}/backup/restore_remote/${target}" >/dev/null
+                fi
               fi
               while true; do
-                row=$(curl -fsS ${auth} "${api}/backup/actions" \
-                  | jq -rs --arg suffix "${target}" \
-                      '[.[] | select((.command // "") | endswith($suffix))] | sort_by(.start) | last')
+                actions=$(api_get /backup/actions 6)
+                row=$(printf '%s\n' "${actions}" \
+                  | jq -rs --arg cmd "${cmd}" \
+                      '[.[] | select(.command == $cmd)] | sort_by(.start) | last')
+                # The sidecar logs the operation before acknowledging the POST
+                # and keeps that log only in memory, so a missing row means it
+                # restarted and the operation is gone; nothing will resume it.
+                if [ "${row}" = "null" ]; then
+                  echo "operation ${target} is no longer in the sidecar action log; the sidecar restarted and dropped it" >&2
+                  exit 1
+                fi
                 status=$(echo "${row}" | jq -r '.status // ""')
                 case "${status}" in
                   success) echo "operation succeeded" ; exit 0 ;;
-                  error)
+                  "in progress") ;;
+                  *)
                     err=$(echo "${row}" | jq -r '.error // "unknown"')
-                    echo "operation failed: ${err}" >&2
+                    echo "operation ended with status ${status}: ${err}" >&2
                     exit 1
                     ;;
                 esac
