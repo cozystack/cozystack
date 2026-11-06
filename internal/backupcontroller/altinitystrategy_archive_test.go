@@ -411,6 +411,42 @@ func TestCleanupAltinityBackup_RunningJobRequeues(t *testing.T) {
 	}
 }
 
+// The strategy only supplies the image of a Job not yet created; one already
+// running deletes the archive without it, so losing the strategy then must
+// not release the Backup as if the archive were left behind.
+func TestCleanupAltinityBackup_RunningJobOutlivesItsStrategy(t *testing.T) {
+	for name, mutate := range map[string]func([]client.Object) []client.Object{
+		"strategy gone": func(objs []client.Object) []client.Object {
+			return dropObject(objs, &strategyv1alpha1.Altinity{})
+		},
+		"strategy has no container image": func(objs []client.Object) []client.Object {
+			for _, o := range objs {
+				if st, ok := o.(*strategyv1alpha1.Altinity); ok {
+					st.Spec.Template.Spec.Containers[0].Image = ""
+				}
+			}
+			return objs
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			backup := altinityCleanupBackup("ch-bk")
+			c, s := newAltinityCleanupClient(append(mutate(altinityCleanupFixtures(backup)), ownCleanupJob(backup))...)
+			rec := record.NewFakeRecorder(10)
+			r := &BackupReconciler{Client: c, Scheme: s, Recorder: rec}
+			res, err := r.cleanupOnDelete(context.Background(), backup)
+			if err != nil {
+				t.Fatalf("cleanupOnDelete: %v", err)
+			}
+			if res.RequeueAfter == 0 {
+				t.Error("expected the Backup held while its cleanup Job runs")
+			}
+			if len(rec.Events) != 0 {
+				t.Errorf("unexpected event %q for a delete still running", <-rec.Events)
+			}
+		})
+	}
+}
+
 // Every case here lets the Backup go without spawning a Job: the archive is
 // either not the driver's to delete or cannot be deleted from here.
 func TestCleanupAltinityBackup_ReleasesWithoutJob(t *testing.T) {
