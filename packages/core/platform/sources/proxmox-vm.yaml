@@ -1,0 +1,31 @@
+---
+apiVersion: cozystack.io/v1alpha1
+kind: PackageSource
+metadata:
+  name: cozystack.proxmox-vm
+spec:
+  sourceRef:
+    kind: OCIRepository
+    name: cozystack-packages
+    namespace: cozy-system
+    path: /
+  variants:
+    # Virtual machines for tenants on an external Proxmox VE cluster: the
+    # vm-disk and vm-instance applications with `substrate: proxmox` render
+    # kubemox objects, and kubemox, installed here, drives the hypervisor over
+    # its API with the credentials this package holds. The IPAM provider is
+    # needed because every port of such a machine gets a static address from an
+    # InClusterIPPool through an IPAddressClaim; there is no DHCP on the wire a
+    # tenant could rely on. Opt-in: add cozystack.proxmox-vm to
+    # bundles.enabledPackages, then fill its connections and catalog.
+    - name: default
+      dependsOn:
+        - cozystack.networking
+        - cozystack.capi-provider-ipam-in-cluster
+      components:
+        - name: proxmox-vm
+          path: system/proxmox-vm
+          install:
+            privileged: true
+            namespace: cozy-proxmox-vm
+            releaseName: proxmox-vm

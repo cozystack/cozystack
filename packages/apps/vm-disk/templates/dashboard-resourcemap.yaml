@@ -3,6 +3,15 @@ kind: Role
 metadata:
   name: {{ .Release.Name }}-dashboard-resources
 rules:
+{{- if eq (include "vm-disk.substrate" .) "proxmox" }}
+- apiGroups:
+  - proxmox.alperen.cloud
+  resources:
+  - virtualmachinevolumes
+  resourceNames:
+  - {{ .Release.Name }}
+  verbs: ["get", "list", "watch"]
+{{- else }}
 - apiGroups:
   - cdi.kubevirt.io
   resources:
@@ -10,6 +19,7 @@ rules:
   resourceNames:
   - {{ .Release.Name }}
   verbs: ["get", "list", "watch"]
+{{- end }}
 ---
 kind: RoleBinding
 apiVersion: rbac.authorization.k8s.io/v1

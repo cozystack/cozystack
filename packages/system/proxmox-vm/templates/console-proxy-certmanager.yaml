@@ -1,0 +1,51 @@
+# The serving certificate of the console proxy. kube-apiserver verifies the
+# aggregated API against the caBundle of the APIService, which cert-manager
+# injects from the CA below; the CA outlives the leaf so a renewal of the
+# leaf never leaves the APIService with a stale bundle.
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: proxmox-console-proxy-selfsigned
+  namespace: {{ .Release.Namespace }}
+spec:
+  selfSigned: {}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: proxmox-console-proxy-ca
+  namespace: {{ .Release.Namespace }}
+spec:
+  secretName: proxmox-console-proxy-ca
+  duration: 43800h  # 5 years
+  commonName: proxmox-console-proxy-ca
+  issuerRef:
+    name: proxmox-console-proxy-selfsigned
+  isCA: true
+  privateKey:
+    rotationPolicy: Never
+---
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: proxmox-console-proxy-ca
+  namespace: {{ .Release.Namespace }}
+spec:
+  ca:
+    secretName: proxmox-console-proxy-ca
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: proxmox-console-proxy
+  namespace: {{ .Release.Namespace }}
+spec:
+  secretName: proxmox-console-proxy-cert
+  duration: 8760h
+  renewBefore: 720h
+  issuerRef:
+    name: proxmox-console-proxy-ca
+  commonName: proxmox-console-proxy
+  dnsNames:
+    - proxmox-console-proxy
+    - proxmox-console-proxy.{{ .Release.Namespace }}.svc

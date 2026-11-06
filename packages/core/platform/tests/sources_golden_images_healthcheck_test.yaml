@@ -26,6 +26,30 @@ tests:
               failed: "has(status.phase) && status.phase == 'Failed'"
               current: "has(status.phase) && status.phase == 'Succeeded'"
 
+  - it: gates the proxmox variant of vm-default-images on VirtualMachineVolume Ready
+    documentSelector:
+      path: metadata.name
+      value: cozystack.vm-default-images
+    asserts:
+      - equal:
+          path: spec.variants[1].name
+          value: proxmox
+      - contains:
+          path: spec.variants[1].dependsOn
+          content: cozystack.proxmox-vm
+      - equal:
+          path: spec.variants[1].components[0].valuesFiles
+          value:
+            - values.yaml
+            - values-proxmox.yaml
+      - equal:
+          path: spec.variants[1].components[0].install.healthCheckExprs
+          value:
+            - apiVersion: proxmox.alperen.cloud/v1alpha1
+              kind: VirtualMachineVolume
+              failed: "has(status.phase) && status.phase == 'Failed'"
+              current: "has(status.phase) && status.phase == 'Ready'"
+
   - it: gates the kubernetes-worker-image component on DataVolume Succeeded
     documentSelector:
       path: metadata.name
