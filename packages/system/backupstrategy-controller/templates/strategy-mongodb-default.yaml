@@ -54,6 +54,8 @@ apiVersion: strategy.backups.cozystack.io/v1alpha1
 kind: MongoDB
 metadata:
   name: cozy-default-mongodb
+  annotations:
+    backups.cozystack.io/endpoint: {{ include "backupstrategy-controller.endpoint" . | quote }}
 spec:
   template:
     storageName: s3-storage
