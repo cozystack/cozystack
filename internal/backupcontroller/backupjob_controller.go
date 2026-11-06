@@ -39,6 +39,10 @@ type BackupJobReconciler struct {
 	// re-reads the BackupJob before dispatching to a driver. Wired in
 	// SetupWithManager.
 	APIReader client.Reader
+
+	// newS3ObjectLister overrides the S3 client used to measure artifact
+	// sizes; nil means a real minio client. Set by unit tests.
+	newS3ObjectLister func(conn s3Connection) (s3ObjectLister, error)
 }
 
 func (r *BackupJobReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
