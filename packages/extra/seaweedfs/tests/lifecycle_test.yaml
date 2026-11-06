@@ -14,7 +14,10 @@ release:
   namespace: tenant-root
 
 tests:
-  - it: runs the lifecycle admin and worker by default
+  # The upstream walker deletes without an object identity, so a key
+  # overwritten between its listing and the delete RPC goes too. Applying
+  # stored rules is therefore an operator's decision, not an upgrade's.
+  - it: keeps the lifecycle admin and worker off by default
     template: templates/seaweedfs.yaml
     set: &platform
       _namespace:
@@ -23,6 +26,23 @@ tests:
       _cluster:
         issuer-name: letsencrypt-prod
         solver: http01
+    documentSelector:
+      path: metadata.name
+      value: seaweedfs-system
+    asserts:
+      - equal:
+          path: spec.values.seaweedfs.admin.enabled
+          value: false
+      - equal:
+          path: spec.values.seaweedfs.worker.enabled
+          value: false
+
+  - it: runs the lifecycle admin and worker when lifecycle is enabled
+    template: templates/seaweedfs.yaml
+    set: &enabled
+      <<: *platform
+      lifecycle:
+        enabled: true
     documentSelector:
       path: metadata.name
       value: seaweedfs-system
@@ -59,7 +79,7 @@ tests:
   - it: puts the admin volume on the instance's storage class
     template: templates/seaweedfs.yaml
     set:
-      <<: *platform
+      <<: *enabled
       volume:
         storageClass: replicated
     documentSelector:
@@ -72,7 +92,7 @@ tests:
 
   - it: leaves the admin volume on the cluster default when the instance names none
     template: templates/seaweedfs.yaml
-    set: *platform
+    set: *enabled
     documentSelector:
       path: metadata.name
       value: seaweedfs-system
@@ -82,7 +102,7 @@ tests:
 
   - it: monitors the admin and the worker while lifecycle is on
     template: templates/seaweedfs.yaml
-    set: *platform
+    set: *enabled
     asserts:
       - containsDocument:
           kind: WorkloadMonitor
@@ -133,7 +153,7 @@ tests:
 
   - it: generates admin credentials for a new instance
     template: templates/admin-credentials.yaml
-    set: *platform
+    set: *enabled
     asserts:
       - isKind:
           of: Secret
@@ -151,7 +171,7 @@ tests:
   # one, since it reads the Secret into its environment once at start.
   - it: keeps the password of an existing Secret
     template: templates/admin-credentials.yaml
-    set: *platform
+    set: *enabled
     kubernetesProvider:
       scheme:
         "v1/Secret":
@@ -188,7 +208,7 @@ tests:
   - it: renders no credentials for a Client instance
     template: templates/admin-credentials.yaml
     set:
-      <<: *platform
+      <<: *enabled
       topology: Client
       filer:
         grpcHost: seaweedfs-filer.tenant-other.svc
@@ -222,7 +242,7 @@ tests:
   # monitor missing from it never shows up for the tenant.
   - it: lets the dashboard read the admin and worker monitors
     template: templates/dashboard-resourcemap.yaml
-    set: *platform
+    set: *enabled
     documentSelector:
       path: kind
       value: Role
