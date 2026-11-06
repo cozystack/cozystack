@@ -60,11 +60,22 @@ func (r *BackupJobReconciler) attributedMariaDBDump(ctx context.Context, mdbBack
 // from can have been edited since, and pointing at another bucket now says
 // nothing about where this dump went.
 func findMariaDBDump(ctx context.Context, store objectStore, mdbBackup *mariadbtypes.Backup, completedAt time.Time) (mariadbDump, error) {
-	lister, s3, err := mariadbStorage(ctx, store, mdbBackup)
+	lister, _, err := mariadbStorage(ctx, store, mdbBackup)
 	if err != nil {
 		return mariadbDump{}, err
 	}
-	others, err := finishedMariaDBRuns(ctx, store.reader, mdbBackup)
+	return findMariaDBDumpWith(ctx, lister, store.reader, mdbBackup, completedAt)
+}
+
+// findMariaDBDumpWith is findMariaDBDump reading the bucket through lister,
+// for a caller that reaches the bucket by another endpoint than the one
+// mdbBackup names.
+func findMariaDBDumpWith(ctx context.Context, lister s3ObjectLister, reader client.Reader, mdbBackup *mariadbtypes.Backup, completedAt time.Time) (mariadbDump, error) {
+	s3 := mdbBackup.Spec.Storage.S3
+	if s3 == nil {
+		return mariadbDump{}, errors.New("the operator Backup does not store to S3")
+	}
+	others, err := finishedMariaDBRuns(ctx, reader, mdbBackup)
 	if err != nil {
 		return mariadbDump{}, fmt.Errorf("list operator Backups: %w", err)
 	}
