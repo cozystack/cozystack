@@ -176,7 +176,8 @@ const (
 	cnpgRecoveryMaxInspectPods = 5
 
 	// Cap on the wall-clock time a BackupJob waits for the barman-cloud
-	// plugin rollout, counted from the PluginRolledOut condition, or retries
+	// plugin rollout, counted from the PluginRolledOut condition or from the
+	// release recorded in DestinationWriteHeld, whichever is later, or retries
 	// writing the WAL archive destination, counted from the first failure
 	// since the last successful write or the last wait for another backup or
 	// a restore, before the cnpg.io/Backup exists. A Backup that exists is
@@ -208,6 +209,13 @@ const (
 	// budget is not spent by time the job waited for another backup of the
 	// app, or for a restore of it, before it tried.
 	backupCondDestinationApplied = "DestinationApplied"
+
+	// Condition Type recorded while the job is held off writing the WAL
+	// archive destination, by another backup of the app in flight or by a
+	// restore of it, and set False when released. The release time restarts
+	// the plugin rollout deadline, which that wait must not spend; the
+	// instance pods still have to postdate the rollout's own start.
+	backupCondDestinationWriteHeld = "DestinationWriteHeld"
 
 	cnpgPodRoleLabel    = "cnpg.io/podRole"
 	cnpgPodRoleInstance = "instance"
@@ -349,6 +357,7 @@ func (r *BackupJobReconciler) reconcileCNPG(ctx context.Context, j *backupsv1alp
 		}
 		if restore != "" {
 			apimeta.RemoveStatusCondition(&j.Status.Conditions, backupCondDestinationApplied)
+			apimeta.SetStatusCondition(&j.Status.Conditions, cnpgDestinationWriteHeld(ConditionReasonRestoreInProgress))
 			return r.holdForRestore(ctx, j, restore)
 		}
 		holder, err := r.otherCNPGBackupInFlight(ctx, j, clusterName)
@@ -357,8 +366,17 @@ func (r *BackupJobReconciler) reconcileCNPG(ctx context.Context, j *backupsv1alp
 		}
 		if holder != "" {
 			apimeta.RemoveStatusCondition(&j.Status.Conditions, backupCondDestinationApplied)
+			apimeta.SetStatusCondition(&j.Status.Conditions, cnpgDestinationWriteHeld("WaitingForOtherBackup"))
 			return r.waitCNPGBackupJob(ctx, j, "WaitingForOtherBackup", fmt.Sprintf(
 				"waiting for BackupJob %s of the same application to finish its backup, which writes to the shared WAL archive destination", holder))
+		}
+		if apimeta.FindStatusCondition(j.Status.Conditions, backupCondDestinationWriteHeld) != nil {
+			apimeta.SetStatusCondition(&j.Status.Conditions, metav1.Condition{
+				Type:    backupCondDestinationWriteHeld,
+				Status:  metav1.ConditionFalse,
+				Reason:  "Released",
+				Message: "nothing holds the WAL archive destination write any more",
+			})
 		}
 	}
 
@@ -466,7 +484,12 @@ func (r *BackupJobReconciler) reconcileCNPG(ctx context.Context, j *backupsv1alp
 			return ctrl.Result{}, err
 		}
 		if pending != "" {
-			if cnpgBackupDeadlineExceeded(&rollout.LastTransitionTime) {
+			deadlineFrom := rollout.LastTransitionTime
+			if held := apimeta.FindStatusCondition(j.Status.Conditions, backupCondDestinationWriteHeld); held != nil &&
+				held.LastTransitionTime.After(deadlineFrom.Time) {
+				deadlineFrom = held.LastTransitionTime
+			}
+			if cnpgBackupDeadlineExceeded(&deadlineFrom) {
 				return r.markBackupJobFailed(ctx, j, fmt.Sprintf(
 					"barman-cloud plugin rollout did not finish within %s: %s", cnpgDefaultBackupDeadline, pending))
 			}
@@ -931,6 +954,15 @@ func (r *BackupJobReconciler) otherCNPGBackupInFlight(ctx context.Context, j *ba
 	}
 	sort.Strings(holders)
 	return holders[0], nil
+}
+
+func cnpgDestinationWriteHeld(reason string) metav1.Condition {
+	return metav1.Condition{
+		Type:    backupCondDestinationWriteHeld,
+		Status:  metav1.ConditionTrue,
+		Reason:  reason,
+		Message: "held off writing the WAL archive destination",
+	}
 }
 
 // waitCNPGBackupJob requeues the BackupJob and records why it waits in its
