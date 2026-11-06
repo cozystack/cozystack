@@ -41,7 +41,7 @@ func newWatchTestREST(t *testing.T) *REST {
 		t.Fatalf("register helmv2 scheme: %v", err)
 	}
 	fc := fake.NewClientBuilder().WithScheme(scheme).Build()
-	return NewREST(fc, fc, &config.Resource{
+	return NewREST(fc, fc, nil, &config.Resource{
 		Application: config.ApplicationConfig{Kind: "Redis", Singular: "redis", Plural: "redises"},
 		Release:     config.ReleaseConfig{Prefix: "redis-"},
 	})
