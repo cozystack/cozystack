@@ -52,6 +52,6 @@ spec:
         != "InfoInhibitor", severity =~ "warning|critical", alertstate="firing"} ==
         1
       labels:
-        severity: major
+        severity: none
         exported_instance: global
         service: general.rules
