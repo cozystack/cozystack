@@ -1,0 +1,25 @@
+suite: bucket needs an S3 backend in its tenant chain
+templates:
+  - templates/bucketclaim.yaml
+
+release:
+  name: my-bucket
+  namespace: tenant-demo
+
+tests:
+  - it: claims the bucket class of the nearest tenant with SeaweedFS
+    set:
+      _namespace:
+        seaweedfs: tenant-root
+    asserts:
+      - equal:
+          path: spec.bucketClassName
+          value: tenant-root
+
+  - it: refuses to render when no tenant up the chain runs SeaweedFS
+    set:
+      _namespace:
+        seaweedfs: ""
+    asserts:
+      - failedTemplate:
+          errorPattern: "a bucket needs S3, and neither this tenant nor a tenant above it runs SeaweedFS"
