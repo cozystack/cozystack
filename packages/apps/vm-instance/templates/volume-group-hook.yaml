@@ -50,7 +50,7 @@
 {{- $drivers := dict -}}
 {{- $bound := list -}}
 {{- range $claim := $members -}}
-  {{- with dig "spec" "volumeName" "" $claim -}}
+  {{- with and (eq (dig "status" "phase" "" $claim | toString) "Bound") (dig "spec" "volumeName" "" $claim) -}}
     {{- with dig "spec" "csi" "driver" "" (lookup "v1" "PersistentVolume" "" . | default dict) -}}
       {{- $_ := set $drivers (toString .) true -}}
       {{- $bound = append $bound $claim.metadata.name -}}
@@ -124,16 +124,20 @@ spec:
               cpu: "100m"
           command: ["sh", "-exc"]
           {{- /* A claim deleted since the render is skipped, not fatal: the rest
-                 of the group stays valid for Velero without it. */}}
+                 of the group stays valid for Velero without it. The read is an
+                 assignment of its own so that any other failure still stops
+                 the script under -e, which an `if` test would swallow. */}}
           args:
             - |
               {{- range $toLabel }}
-              if [ -n "$(kubectl get persistentvolumeclaims {{ . }} -n {{ $namespace }} --ignore-not-found -o name)" ]; then
+              claim=$(kubectl get persistentvolumeclaims {{ . }} -n {{ $namespace }} --ignore-not-found -o name)
+              if [ -n "$claim" ]; then
                 kubectl label persistentvolumeclaims {{ . }} -n {{ $namespace }} {{ $groupKey }}={{ $vmName }}
               fi
               {{- end }}
               {{- range $toUnlabel }}
-              if [ -n "$(kubectl get persistentvolumeclaims {{ . }} -n {{ $namespace }} --ignore-not-found -o name)" ]; then
+              claim=$(kubectl get persistentvolumeclaims {{ . }} -n {{ $namespace }} --ignore-not-found -o name)
+              if [ -n "$claim" ]; then
                 kubectl label persistentvolumeclaims {{ . }} -n {{ $namespace }} {{ $groupKey }}-
               fi
               {{- end }}

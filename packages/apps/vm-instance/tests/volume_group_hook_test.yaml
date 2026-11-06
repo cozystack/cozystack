@@ -31,11 +31,13 @@ x-system: &system
   apiVersion: v1
   metadata: {name: vm-disk-win-system, namespace: tenant-test}
   spec: {volumeName: pv-system}
+  status: {phase: Bound}
 x-data: &data
   kind: PersistentVolumeClaim
   apiVersion: v1
   metadata: {name: vm-disk-win-data, namespace: tenant-test}
   spec: {volumeName: pv-data}
+  status: {phase: Bound}
 x-state: &state
   kind: PersistentVolumeClaim
   apiVersion: v1
@@ -44,6 +46,7 @@ x-state: &state
     namespace: tenant-test
     labels: {persistent-state-for: vm-instance-win}
   spec: {volumeName: pv-state}
+  status: {phase: Bound}
 x-pv-system: &pvSystem {kind: PersistentVolume, apiVersion: v1, metadata: {name: pv-system}, spec: {csi: {driver: linstor.csi.linbit.com}}}
 x-pv-data: &pvData {kind: PersistentVolume, apiVersion: v1, metadata: {name: pv-data}, spec: {csi: {driver: linstor.csi.linbit.com}}}
 x-pv-state: &pvState {kind: PersistentVolume, apiVersion: v1, metadata: {name: pv-state}, spec: {csi: {driver: linstor.csi.linbit.com}}}
@@ -187,6 +190,25 @@ tests:
           value: [vm-disk-win-system, vm-disk-win-data]
         documentSelector: {path: kind, value: Role}
 
+  - it: leaves out a claim that names its volume but is not Bound yet
+    capabilities: *groupSnapshotServed
+    kubernetesProvider:
+      scheme: *scheme
+      objects:
+        - *system
+        - *data
+        - <<: *state
+          status: {phase: Pending}
+        - *pvSystem
+        - *pvData
+        - *pvState
+        - *defaultClass
+    asserts:
+      - equal:
+          path: rules[0].resourceNames
+          value: [vm-disk-win-system, vm-disk-win-data]
+        documentSelector: {path: kind, value: Role}
+
   - it: forms no group from a single bound claim
     set:
       disks:
@@ -218,6 +240,7 @@ tests:
           apiVersion: v1
           metadata: {name: vm-disk-other, namespace: tenant-test, labels: {velero.io/volume-group: vm-instance-other}}
           spec: {volumeName: pv-data}
+          status: {phase: Bound}
         - *pvSystem
         - *pvData
         - *pvState
@@ -269,7 +292,7 @@ tests:
     asserts:
       - matchRegex:
           path: spec.template.spec.containers[0].args[0]
-          pattern: 'if \[ -n "\$\(kubectl get persistentvolumeclaims vm-disk-win-data -n tenant-test --ignore-not-found -o name\)" \]; then\n\s+kubectl label persistentvolumeclaims vm-disk-win-data '
+          pattern: 'claim=\$\(kubectl get persistentvolumeclaims vm-disk-win-data -n tenant-test --ignore-not-found -o name\)\n\s*if \[ -n "\$claim" \]; then\n\s+kubectl label persistentvolumeclaims vm-disk-win-data '
 
   - it: runs the Job under a restrictive non-root securityContext
     capabilities: *groupSnapshotServed
