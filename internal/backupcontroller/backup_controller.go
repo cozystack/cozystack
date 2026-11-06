@@ -39,9 +39,16 @@ type BackupReconciler struct {
 	client.Client
 	Scheme   *runtime.Scheme
 	Recorder record.EventRecorder
-	// CredentialsConfig lets the Rabbitmq cleanup path project cozy-backups-creds
-	// into the Backup's namespace before spawning its best-effort delete Job.
+	// CredentialsConfig locates the platform backup credentials: the Job-based
+	// cleanups project them into the Backup's namespace, and the MariaDB
+	// cleanup reads them to reach the platform bucket.
 	CredentialsConfig BackupCredentialsConfig
+
+	// newS3ObjectLister and newS3ObjectRemover override the S3 client the
+	// MariaDB cleanup deletes a dump with; nil means a real minio client.
+	// Set by unit tests.
+	newS3ObjectLister  func(conn s3Connection) (s3ObjectLister, error)
+	newS3ObjectRemover func(conn s3Connection) (s3ObjectRemover, error)
 }
 
 func (r *BackupReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -126,22 +133,18 @@ func (r *BackupReconciler) cleanupOnDelete(ctx context.Context, backup *backupsv
 		// orchestration" for tenant-facing guidance.
 		return ctrl.Result{}, nil
 	case strategyv1alpha1.MariaDBStrategyKind:
-		// Cozystack Backup deletion does NOT delete the operator-side
-		// k8s.mariadb.com/Backup CR or the backing S3/PVC archive.
-		// Lifecycle of that CR is owned by mariadb-operator's
-		// MaxRetention setting and by tenants / explicit teardown flows;
-		// the controller's RBAC has no delete verb on
-		// k8s.mariadb.com/backups for that reason. Surfacing this as an
-		// explicit branch (rather than falling through to the Velero
-		// default) keeps the contract honest: the MariaDB driver does
-		// not own the archive, so it does not delete it on CR removal.
-		// Mirrors the Altinity branch's "we do not own S3" stance.
-		return ctrl.Result{}, nil
+		// mariadb-operator's maxRetention prunes only from inside the next
+		// backup run of the same prefix and a Plan never deletes a Backup, so
+		// a dump on the platform bucket is deleted here or never. A dump in
+		// a tenant's own bucket is deleted too: the Backup proves it owns
+		// it, and the tenant deleting the Backup is asking for exactly that
+		// (see cleanupMariaDBBackup).
+		return r.cleanupMariaDBBackup(ctx, backup)
 	case strategyv1alpha1.MongoDBStrategyKind:
 		// Split by flow (see cleanupMongoDBBackup). A legacy backup writes to the
 		// tenant's own bucket and its lifecycle stays the tenant's / psmdb
 		// operator's — that branch is a no-op, the same "we do not own the
-		// archive" contract as Altinity / MariaDB / FDB. A useSystemBucket backup
+		// archive" contract as Altinity / FDB. A useSystemBucket backup
 		// lands in the shared cozy-backups bucket with no psmdb task retention to
 		// prune it, so the driver OWNS it: this deletes the operator
 		// PerconaServerMongoDBBackup CR and waits for its delete-backup finalizer
@@ -154,7 +157,7 @@ func (r *BackupReconciler) cleanupOnDelete(ctx context.Context, backup *backupsv
 		// is governed by the next BackupJob's stopOtherFoundationDBBackups
 		// call, by manual operator action, or by
 		// examples/backups/foundationdb/cleanup.sh. Same "we do not own
-		// the archive" contract as Altinity / MariaDB — the explicit
+		// the archive" contract as Altinity — the explicit
 		// branch guards the seam against a future driver refactor that
 		// might incidentally stamp velero.io/backup-name onto FDB
 		// driverMetadata via a shared helper.
