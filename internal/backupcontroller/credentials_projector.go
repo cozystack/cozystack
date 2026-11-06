@@ -18,6 +18,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/yaml"
 )
 
@@ -88,8 +89,8 @@ type BackupCredentialsConfig struct {
 	TargetSecretName string
 	Endpoint         string
 	Region           string
-	// ForcePathStyle is the string "true"/"false" from
-	// backupStorage.forcePathStyle, projected into the credentials Secret
+	// ForcePathStyle is backupStorage.forcePathStyle as the chart
+	// normalises it ("true", "false", or "" when unset), projected into the credentials Secret
 	// under the forcePathStyle key and into clickhouse-backup.yml. The app
 	// charts cannot read backupStorage.* directly, so the ClickHouse
 	// sidecar takes it from there.
@@ -181,7 +182,14 @@ func ProjectBackupCredentials(ctx context.Context, c client.Client, cfg BackupCr
 	}
 
 	cloud := buildVeleroCredentialsFile(creds.accessKey, creds.secretKey)
-	clickHouseConfig, err := buildClickHouseBackupConfig(creds, cfg.ForcePathStyle)
+	clickHouseConfig, pathStyleErr, err := buildClickHouseBackupConfig(creds, cfg.ForcePathStyle)
+	if pathStyleErr != nil {
+		// The chart refuses such a value at render time, so only an env set
+		// around it gets here. It concerns the ClickHouse file alone, and
+		// failing the projection would take every other driver's
+		// credentials down with it.
+		log.FromContext(ctx).Error(pathStyleErr, "left force_path_style out of "+clickHouseBackupConfigKey, "namespace", targetNamespace)
+	}
 	if err != nil {
 		return &ProjectionError{
 			Reason:  ReasonSourceMalformed,
@@ -449,8 +457,9 @@ const clickHouseBackupConfigKey = "clickhouse-backup.yml"
 
 // buildClickHouseBackupConfig renders that file. The projected endpoint is
 // a bare host, and clickhouse-backup's S3 client rejects one without a
-// scheme.
-func buildClickHouseBackupConfig(creds parsedCreds, forcePathStyle string) ([]byte, error) {
+// scheme. A forcePathStyle that is not a boolean is left out of the file
+// and reported in pathStyleErr; err is a failure to render the file at all.
+func buildClickHouseBackupConfig(creds parsedCreds, forcePathStyle string) (config []byte, pathStyleErr, err error) {
 	s3 := map[string]any{
 		"bucket":     creds.bucket,
 		"endpoint":   "https://" + creds.endpoint,
@@ -463,13 +472,14 @@ func buildClickHouseBackupConfig(creds parsedCreds, forcePathStyle string) ([]by
 		s3["region"] = creds.region
 	}
 	if forcePathStyle != "" {
-		pathStyle, err := strconv.ParseBool(forcePathStyle)
-		if err != nil {
-			return nil, fmt.Errorf("forcePathStyle %q is not a boolean", forcePathStyle)
+		if pathStyle, perr := strconv.ParseBool(forcePathStyle); perr != nil {
+			pathStyleErr = fmt.Errorf("forcePathStyle %q is not a boolean", forcePathStyle)
+		} else {
+			s3["force_path_style"] = pathStyle
 		}
-		s3["force_path_style"] = pathStyle
 	}
-	return yaml.Marshal(map[string]any{"s3": s3})
+	config, err = yaml.Marshal(map[string]any{"s3": s3})
+	return config, pathStyleErr, err
 }
 
 // stripScheme returns the endpoint stripped of any leading scheme prefix

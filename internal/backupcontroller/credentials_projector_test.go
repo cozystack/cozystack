@@ -5,8 +5,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/go-logr/logr/funcr"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -14,6 +17,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/yaml"
 )
 
@@ -746,14 +750,51 @@ func TestProject_ClickHouseBackupConfigOmitsAnEmptyRegion(t *testing.T) {
 	}
 }
 
-func TestProject_RejectsMalformedForcePathStyle(t *testing.T) {
+// The parse only serves the ClickHouse file, while the same projection
+// carries every other driver's credentials. An unparseable platform value
+// must cost ClickHouse its path-style setting and say so, not fail the
+// projection for all of them.
+func TestProject_MalformedForcePathStyleSkipsOnlyTheClickHouseSetting(t *testing.T) {
 	c := newFakeClient(flatSourceSecret())
+	var logged []string
+	ctx := log.IntoContext(context.Background(), funcr.New(func(prefix, args string) {
+		logged = append(logged, args)
+	}, funcr.Options{}))
 	cfg := defaultCfg()
-	cfg.ForcePathStyle = "yes please"
-	err := ProjectBackupCredentials(context.Background(), c, cfg, "tenant-acme")
-	var perr *ProjectionError
-	if !errors.As(err, &perr) || perr.Reason != ReasonSourceMalformed {
-		t.Fatalf("err = %v, want a %s ProjectionError", err, ReasonSourceMalformed)
+	cfg.ForcePathStyle = "yes"
+	if err := ProjectBackupCredentials(ctx, c, cfg, "tenant-acme"); err != nil {
+		t.Fatalf("projection failed for every driver over a ClickHouse-only setting: %v", err)
+	}
+	got := &corev1.Secret{}
+	if err := c.Get(ctx, types.NamespacedName{Namespace: "tenant-acme", Name: "cozy-backups-creds"}, got); err != nil {
+		t.Fatalf("projected Secret not found: %v", err)
+	}
+	if string(got.Data["AWS_ACCESS_KEY_ID"]) != "AK" {
+		t.Errorf("AWS_ACCESS_KEY_ID = %q, want the projected key", got.Data["AWS_ACCESS_KEY_ID"])
+	}
+	if string(got.Data["forcePathStyle"]) != "yes" {
+		t.Errorf("forcePathStyle = %q, want the platform value carried verbatim", got.Data["forcePathStyle"])
+	}
+	var doc struct {
+		S3 map[string]any `json:"s3"`
+	}
+	if err := yaml.Unmarshal(got.Data[clickHouseBackupConfigKey], &doc); err != nil {
+		t.Fatalf("%s is not YAML: %v", clickHouseBackupConfigKey, err)
+	}
+	if doc.S3["access_key"] != "AK" {
+		t.Errorf("s3.access_key = %v, want the rest of the file written", doc.S3["access_key"])
+	}
+	if pathStyle, set := doc.S3["force_path_style"]; set {
+		t.Errorf("s3.force_path_style = %v, want it left out", pathStyle)
+	}
+	found := false
+	for _, line := range logged {
+		if strings.Contains(line, `"error"`) && strings.Contains(line, `\"yes\"`) && strings.Contains(line, "force_path_style") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("no error naming the rejected value and the skipped setting was logged; got %q", logged)
 	}
 }
 
