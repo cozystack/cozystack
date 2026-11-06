@@ -8,7 +8,7 @@ templates:
   - templates/etcd-cluster.yaml
 
 tests:
-  - it: uses a soft per-host spread by default
+  - it: uses a strict per-host spread by default
     set:
       _cluster: {}
     documentSelector:
@@ -16,17 +16,41 @@ tests:
       value: EtcdCluster
     asserts:
       - equal:
-          path: spec.topologySpreadConstraints[0].maxSkew
-          value: 1
+          path: spec.topologySpreadConstraints[0]
+          value:
+            maxSkew: 1
+            topologyKey: kubernetes.io/hostname
+            whenUnsatisfiable: DoNotSchedule
+            nodeTaintsPolicy: Ignore
+            labelSelector:
+              matchLabels:
+                app.kubernetes.io/instance: etcd
+      - lengthEqual:
+          path: spec.topologySpreadConstraints
+          count: 1
+
+  - it: renders a soft cluster-wide spread policy as written
+    set:
+      _cluster:
+        scheduling:
+          globalAppTopologySpreadConstraints: |
+            topologySpreadConstraints:
+            - maxSkew: 1
+              topologyKey: kubernetes.io/hostname
+              whenUnsatisfiable: ScheduleAnyway
+    documentSelector:
+      path: kind
+      value: EtcdCluster
+    asserts:
       - equal:
-          path: spec.topologySpreadConstraints[0].topologyKey
-          value: kubernetes.io/hostname
-      - equal:
-          path: spec.topologySpreadConstraints[0].whenUnsatisfiable
-          value: ScheduleAnyway
-      - equal:
-          path: spec.topologySpreadConstraints[0].labelSelector.matchLabels["app.kubernetes.io/instance"]
-          value: etcd
+          path: spec.topologySpreadConstraints[0]
+          value:
+            maxSkew: 1
+            topologyKey: kubernetes.io/hostname
+            whenUnsatisfiable: ScheduleAnyway
+            labelSelector:
+              matchLabels:
+                app.kubernetes.io/instance: etcd
       - lengthEqual:
           path: spec.topologySpreadConstraints
           count: 1
