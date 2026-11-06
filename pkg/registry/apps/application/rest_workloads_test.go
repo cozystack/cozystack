@@ -25,7 +25,7 @@ func newTestRESTWithSchemes(objs ...runtime.Object) *REST {
 	}
 	c := builder.Build()
 
-	return NewREST(c, nil, &config.Resource{
+	return NewREST(c, nil, nil, &config.Resource{
 		Application: config.ApplicationConfig{
 			Kind:     "PostgreSQL",
 			Plural:   "postgresqls",
