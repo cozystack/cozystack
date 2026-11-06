@@ -74,13 +74,15 @@ tests:
           path: spec.values.seaweedfs.worker.enabled
           value: false
 
-  # The admin's volume follows volume.storageClass when the instance sets one.
-  # Zone storage classes are not followed: the admin is not pinned to a zone.
-  - it: puts the admin volume on the instance's storage class
+  # volume.storageClass is chosen for volume data, and in MultiZone it can be
+  # a class local to one zone, while the admin is not pinned to any zone. Its
+  # volume therefore takes its own class, and the cluster default otherwise.
+  - it: puts the admin volume on the lifecycle storage class
     template: templates/seaweedfs.yaml
     set:
       <<: *enabled
-      volume:
+      lifecycle:
+        enabled: true
         storageClass: replicated
     documentSelector:
       path: metadata.name
@@ -90,7 +92,24 @@ tests:
           path: spec.values.seaweedfs.admin.data.storageClass
           value: replicated
 
-  - it: leaves the admin volume on the cluster default when the instance names none
+  - it: does not put the admin volume on the volume storage class
+    template: templates/seaweedfs.yaml
+    set:
+      <<: *enabled
+      topology: MultiZone
+      replicationFactor: 1
+      volume:
+        storageClass: zone-a-local
+        zones:
+          a: {}
+    documentSelector:
+      path: metadata.name
+      value: seaweedfs-system
+    asserts:
+      - notExists:
+          path: spec.values.seaweedfs.admin.data
+
+  - it: leaves the admin volume on the cluster default when lifecycle names none
     template: templates/seaweedfs.yaml
     set: *enabled
     documentSelector:
