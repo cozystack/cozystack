@@ -13,6 +13,7 @@
 
 ## What this PR does
 
+<!-- Link the issues this PR addresses. Use Closes #N when it fully resolves an issue; otherwise link it without a closing keyword. -->
 
 ### Screenshots
 
