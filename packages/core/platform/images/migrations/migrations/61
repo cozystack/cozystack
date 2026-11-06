@@ -26,9 +26,11 @@
 # hook, so the linstor release, which renders its group snapshot gate and
 # VolumeGroupSnapshotClass only when the v1beta2 API is served, renders against
 # it even when it upgrades before snapshot-controller. When a CRD was kept, none
-# is created: the API stays v1alpha1 and linstor renders the gate off, so the
-# warning asks for a forced linstor upgrade once the objects are removed and
-# snapshot-controller has upgraded.
+# is created: the API stays v1alpha1 and linstor renders the gate off. Recovery
+# is by hand, and the warning spells it out: delete the objects, then the CRD,
+# which still lists v1alpha1 in storedVersions and would keep failing the
+# snapshot-controller upgrade; once snapshot-controller serves the three
+# v1beta2 kinds, force a linstor upgrade, since nothing renders it again.
 #
 # Only CRDs labelled by helm-controller as installed by
 # cozy-snapshot-controller/snapshot-controller are touched, so a cluster whose
@@ -126,7 +128,7 @@ for plural in $GROUP_SNAPSHOT_CRDS; do
   fi
   count=$(kubectl get "$crd" --all-namespaces -o json | jq '.items | length')
   if [ "$count" -gt 0 ]; then
-    echo "WARN: CRD $crd still holds $count v1alpha1 object(s); the snapshot-controller upgrade fails until they are deleted, and the linstor HelmRelease needs a forced upgrade after that to enable group snapshots" >&2
+    echo "WARN: CRD $crd still holds $count v1alpha1 object(s); the snapshot-controller upgrade fails until they and then the empty CRD are deleted (the CRD keeps v1alpha1 in storedVersions), after which snapshot-controller recreates it at v1beta2 and the linstor HelmRelease needs a forced upgrade to enable group snapshots" >&2
     LEFTOVERS="${LEFTOVERS}${LEFTOVERS:+,}${crd}=${count}"
     continue
   fi
