@@ -1,0 +1,160 @@
+rule_files:
+  - rules.yaml
+
+evaluation_interval: 15s
+
+tests:
+  - name: a namespace that stays in Terminating
+    interval: 1m
+    input_series:
+      - series: 'kube_namespace_status_phase{job="kube-state-metrics", cluster="cozystack", namespace="tenant-a", phase="Active", node="node-c", pod="kube-state-metrics-7d4b9c6f8-k2x9p"}'
+        values: '0x60'
+      - series: 'kube_namespace_status_phase{job="kube-state-metrics", cluster="cozystack", namespace="tenant-a", phase="Terminating", node="node-c", pod="kube-state-metrics-7d4b9c6f8-k2x9p"}'
+        values: '1x60'
+    alert_rule_test:
+      - eval_time: 29m
+        groupname: namespace-deletion
+        alertname: KubeNamespaceStuckTerminating
+      - eval_time: 35m
+        groupname: namespace-deletion
+        alertname: KubeNamespaceStuckTerminating
+        exp_alerts:
+          - exp_labels:
+              cluster: cozystack
+              namespace: tenant-a
+              severity: warning
+              exported_instance: tenant-a
+              service: namespace-deletion
+            exp_annotations:
+              summary: A namespace has been terminating for more than 30 minutes.
+              description: >-
+                Namespace tenant-a in cluster cozystack has been in phase Terminating for more
+                than 30 minutes. Usually an object inside it still carries a finalizer. The
+                conditions in the namespace status list the remaining resource types and
+                finalizers.
+
+  - name: a namespace deleted after twenty minutes in Terminating
+    interval: 1m
+    input_series:
+      - series: 'kube_namespace_status_phase{job="kube-state-metrics", cluster="cozystack", namespace="tenant-a", phase="Active", node="node-c", pod="kube-state-metrics-7d4b9c6f8-k2x9p"}'
+        values: '0x19 stale'
+      - series: 'kube_namespace_status_phase{job="kube-state-metrics", cluster="cozystack", namespace="tenant-a", phase="Terminating", node="node-c", pod="kube-state-metrics-7d4b9c6f8-k2x9p"}'
+        values: '1x19 stale'
+    alert_rule_test:
+      - eval_time: 19m
+        groupname: namespace-deletion
+        alertname: KubeNamespaceStuckTerminating
+      - eval_time: 35m
+        groupname: namespace-deletion
+        alertname: KubeNamespaceStuckTerminating
+      - eval_time: 60m
+        groupname: namespace-deletion
+        alertname: KubeNamespaceStuckTerminating
+
+  - name: an active namespace
+    interval: 1m
+    input_series:
+      - series: 'kube_namespace_status_phase{job="kube-state-metrics", cluster="cozystack", namespace="tenant-a", phase="Active", node="node-c", pod="kube-state-metrics-7d4b9c6f8-k2x9p"}'
+        values: '1x120'
+      - series: 'kube_namespace_status_phase{job="kube-state-metrics", cluster="cozystack", namespace="tenant-a", phase="Terminating", node="node-c", pod="kube-state-metrics-7d4b9c6f8-k2x9p"}'
+        values: '0x120'
+    alert_rule_test:
+      - eval_time: 35m
+        groupname: namespace-deletion
+        alertname: KubeNamespaceStuckTerminating
+      - eval_time: 120m
+        groupname: namespace-deletion
+        alertname: KubeNamespaceStuckTerminating
+
+  - name: kube-state-metrics moves to another node while the namespace terminates
+    interval: 1m
+    input_series:
+      - series: 'kube_namespace_status_phase{job="kube-state-metrics", cluster="cozystack", namespace="tenant-a", phase="Active", node="node-a", pod="kube-state-metrics-7d4b9c6f8-k2x9p"}'
+        values: '0x19 stale'
+      - series: 'kube_namespace_status_phase{job="kube-state-metrics", cluster="cozystack", namespace="tenant-a", phase="Terminating", node="node-a", pod="kube-state-metrics-7d4b9c6f8-k2x9p"}'
+        values: '1x19 stale'
+      - series: 'kube_namespace_status_phase{job="kube-state-metrics", cluster="cozystack", namespace="tenant-a", phase="Active", node="node-b", pod="kube-state-metrics-7d4b9c6f8-w5r8t"}'
+        values: '_x15 0x45'
+      - series: 'kube_namespace_status_phase{job="kube-state-metrics", cluster="cozystack", namespace="tenant-a", phase="Terminating", node="node-b", pod="kube-state-metrics-7d4b9c6f8-w5r8t"}'
+        values: '_x15 1x45'
+    alert_rule_test:
+      - eval_time: 29m
+        groupname: namespace-deletion
+        alertname: KubeNamespaceStuckTerminating
+      - eval_time: 31m
+        groupname: namespace-deletion
+        alertname: KubeNamespaceStuckTerminating
+        exp_alerts:
+          - exp_labels:
+              cluster: cozystack
+              namespace: tenant-a
+              severity: warning
+              exported_instance: tenant-a
+              service: namespace-deletion
+            exp_annotations:
+              summary: A namespace has been terminating for more than 30 minutes.
+              description: >-
+                Namespace tenant-a in cluster cozystack has been in phase Terminating for more
+                than 30 minutes. Usually an object inside it still carries a finalizer. The
+                conditions in the namespace status list the remaining resource types and
+                finalizers.
+
+  - name: namespaces with one name in two clusters
+    interval: 1m
+    input_series:
+      - series: 'kube_namespace_status_phase{job="kube-state-metrics", cluster="cozystack", namespace="tenant-a", phase="Active", node="node-c", pod="kube-state-metrics-7d4b9c6f8-k2x9p"}'
+        values: '0x60'
+      - series: 'kube_namespace_status_phase{job="kube-state-metrics", cluster="cozystack", namespace="tenant-a", phase="Terminating", node="node-c", pod="kube-state-metrics-7d4b9c6f8-k2x9p"}'
+        values: '1x60'
+      - series: 'kube_namespace_status_phase{job="kube-state-metrics", cluster="kubernetes-example", namespace="tenant-a", phase="Active", node="node-a", pod="kube-state-metrics-5c8f6d9b7-q4m7z"}'
+        values: '1x19 0x40'
+      - series: 'kube_namespace_status_phase{job="kube-state-metrics", cluster="kubernetes-example", namespace="tenant-a", phase="Terminating", node="node-a", pod="kube-state-metrics-5c8f6d9b7-q4m7z"}'
+        values: '0x19 1x40'
+    alert_rule_test:
+      - eval_time: 35m
+        groupname: namespace-deletion
+        alertname: KubeNamespaceStuckTerminating
+        exp_alerts:
+          - exp_labels:
+              cluster: cozystack
+              namespace: tenant-a
+              severity: warning
+              exported_instance: tenant-a
+              service: namespace-deletion
+            exp_annotations:
+              summary: A namespace has been terminating for more than 30 minutes.
+              description: >-
+                Namespace tenant-a in cluster cozystack has been in phase Terminating for more
+                than 30 minutes. Usually an object inside it still carries a finalizer. The
+                conditions in the namespace status list the remaining resource types and
+                finalizers.
+      - eval_time: 51m
+        groupname: namespace-deletion
+        alertname: KubeNamespaceStuckTerminating
+        exp_alerts:
+          - exp_labels:
+              cluster: cozystack
+              namespace: tenant-a
+              severity: warning
+              exported_instance: tenant-a
+              service: namespace-deletion
+            exp_annotations:
+              summary: A namespace has been terminating for more than 30 minutes.
+              description: >-
+                Namespace tenant-a in cluster cozystack has been in phase Terminating for more
+                than 30 minutes. Usually an object inside it still carries a finalizer. The
+                conditions in the namespace status list the remaining resource types and
+                finalizers.
+          - exp_labels:
+              cluster: kubernetes-example
+              namespace: tenant-a
+              severity: warning
+              exported_instance: tenant-a
+              service: namespace-deletion
+            exp_annotations:
+              summary: A namespace has been terminating for more than 30 minutes.
+              description: >-
+                Namespace tenant-a in cluster kubernetes-example has been in phase Terminating for
+                more than 30 minutes. Usually an object inside it still carries a finalizer. The
+                conditions in the namespace status list the remaining resource types and
+                finalizers.
