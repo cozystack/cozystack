@@ -5,6 +5,7 @@ import Form from "@rjsf/core"
 import validator from "@rjsf/validator-ajv8"
 import { customTemplates, customWidgets } from "./rjsf-registry.ts"
 import { addDynamicOptionWidgets } from "../lib/dynamic-options.ts"
+import { serverFormStateBehavior } from "../lib/server-form.ts"
 
 export function AdditionalPropertiesField(props: FieldProps) {
   const { schema, formData, onChange, readonly, disabled, name, required, idSchema } =
@@ -17,6 +18,7 @@ export function AdditionalPropertiesField(props: FieldProps) {
     [schema.additionalProperties],
   )
   const keys = Object.keys(formData || {})
+  const serverDefaults = props.formContext?.serverDefaults === true
 
   // The nested <Form> renders its own subtree, so it needs its own uiSchema to
   // bind x-cozystack-options fields (e.g. nodeGroups.*.instanceType) to the
@@ -41,8 +43,8 @@ export function AdditionalPropertiesField(props: FieldProps) {
       return
     }
 
-    // Initialize with default value from schema
-    const defaultValue = itemSchema.type === "object" ? {} : itemSchema.default ?? ""
+    // Server mode adds an empty entry and leaves defaults to the API on create.
+    const defaultValue = itemSchema.type === "object" ? {} : serverDefaults ? "" : itemSchema.default ?? ""
     onChange({ ...formData, [newKey]: defaultValue })
     setNewKey("")
   }
@@ -98,9 +100,12 @@ export function AdditionalPropertiesField(props: FieldProps) {
                 schema={itemSchema}
                 uiSchema={itemUiSchema}
                 formData={formData[key]}
+                formContext={props.formContext}
+                experimental_defaultFormStateBehavior={serverDefaults ? serverFormStateBehavior : undefined}
                 validator={validator}
                 templates={templatesWithoutSubmit}
                 widgets={customWidgets}
+                fields={props.registry.fields}
                 onChange={(e) => handleValueChange(key, e.formData)}
                 disabled={isReadonly}
                 liveValidate={false}
