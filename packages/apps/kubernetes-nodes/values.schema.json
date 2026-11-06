@@ -245,7 +245,7 @@
       ]
     },
     "osImage": {
-      "description": "Worker OS image source for this pool. Default (omitted): import over HTTP from the `talos.*` Image Factory. Set `osImage.builtin` to clone a golden from the opt-in worker image catalog instead. Editing this on an existing pool re-images that pool.",
+      "description": "Worker OS image source for this pool. Default (omitted): import over HTTP from the `talos.*` Image Factory. Set `osImage.builtin` to clone a golden from the opt-in worker image catalog instead. Editing this on an existing pool re-images that pool. The object is atomic: its two sources exclude each other, so a value that sets one of them replaces the whole object and is never completed from a default.",
       "type": "object",
       "default": {},
       "properties": {
@@ -281,10 +281,11 @@
             }
           }
         }
-      }
+      },
+      "x-kubernetes-map-type": "atomic"
     },
     "talos": {
-      "description": "Talos worker image configuration. Keep in sync with the parent cluster's `talos`.",
+      "description": "Talos worker image configuration. Keep `version` in sync with the parent cluster's `talos.version`.",
       "type": "object",
       "default": {},
       "required": [
@@ -310,8 +311,14 @@
           "type": "string",
           "default": "factory.talos.dev/installer"
         },
+        "registryConfig": {
+          "description": "TLS settings for the mirror endpoints in `registryMirrors`: a map of endpoint host, written as in the mirror's URL with its port if it has one, to `{ tls: { ca, insecureSkipVerify } }`. `ca` is a complete PEM certificate block that Talos trusts for that endpoint, which is what an in-cluster mirror served by an internal CA needs; `insecureSkipVerify: true` turns verification off for it, and takes true or false only. Empty by default, so every endpoint is verified against the system trust store. Credentials and client keys are not accepted, and the render refuses them: this value ends up in the machine config stored in the tenant namespace. Each entry that sets `ca` or `insecureSkipVerify: true` is rendered as a RegistryTLSConfig document, under the same Talos 1.12 floor, and changing it rolls the pool's workers the same way `registryMirrors` does.",
+          "type": "object",
+          "default": {},
+          "x-kubernetes-preserve-unknown-fields": true
+        },
         "registryMirrors": {
-          "description": "Talos `machine.registries.mirrors` passthrough for worker nodes: a map of upstream registry host to `{ endpoints: [ ... ] }`. Empty by default, so workers pull container images (the Talos `kubelet` image included) directly from the upstream registry. Point a host such as `ghcr.io` at an in-cluster pull-through mirror for air-gapped, rate-limited, or flaky-egress environments so a worker's boot does not depend on live public egress. Talos still falls back to the upstream registry unless a host also sets `skipFallback: true`, so a mirror alone does not enforce air-gap. This value is part of the worker machine config, whose content hash names the TalosConfigTemplate, so changing it rolls every existing worker in the pool rather than only affecting nodes created later.",
+          "description": "Registry mirrors for worker nodes: a map of upstream registry host to `{ endpoints: [ ... ], skipFallback, overridePath }`. Empty by default, so workers pull container images (the Talos `kubelet` image included) directly from the upstream registry. Point a host such as `ghcr.io` at an in-cluster pull-through mirror for air-gapped, rate-limited, or flaky-egress environments so a worker's boot does not depend on live public egress. A mirror applies to every image the node pulls from the listed registry, including the in-guest Talos installer and the images of the tenant's own workloads, and not to the OS disk image, which is fetched over HTTP. Talos still falls back to the upstream registry unless a host also sets `skipFallback: true`, so a mirror alone does not enforce air-gap. `skipFallback` and `overridePath` take true or false, and the render refuses any other spelling, so a switch is never left off by a typo. Each host is rendered as a RegistryMirrorConfig document in the worker machine config, which Talos has from 1.12, and Cozystack supports workers on Talos 1.13 and newer: the render refuses a pool that resolves to a release below 1.12 once one of these documents would be rendered for it. This value is part of the worker machine config, whose content hash names the TalosConfigTemplate, so changing it rolls every existing worker in the pool rather than only affecting nodes created later.",
           "type": "object",
           "default": {},
           "x-kubernetes-preserve-unknown-fields": true
