@@ -385,7 +385,7 @@ spec:
         enabled: {{ .Values.lifecycle.enabled }}
         secret:
           existingSecret: {{ .Release.Name }}-admin-credentials
-        {{- with .Values.volume.storageClass }}
+        {{- with .Values.lifecycle.storageClass }}
         data:
           storageClass: {{ . }}
         {{- end }}
