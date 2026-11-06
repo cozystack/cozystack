@@ -175,7 +175,9 @@ crd_field() {
 @test "a group snapshot CRD that already serves v1beta2 is adopted, not deleted" {
   prep
   edit_crds '.items |= map(if .spec.group == "groupsnapshot.storage.k8s.io"
-    then .spec.versions = [{name: "v1beta2", served: true, storage: true}] else . end)'
+    then .spec.versions = [{name: "v1beta2", served: true, storage: true}]
+      | .status.storedVersions = ["v1beta2"]
+    else . end)'
   rc=0
   run_migration 61 >"$WORK/out" 2>&1 || rc=$?
   cat "$WORK/out"; cat "$FAKE_CMDLOG"
@@ -238,6 +240,41 @@ crd_field() {
   for p in volumegroupsnapshotclasses volumegroupsnapshotcontents volumegroupsnapshots; do
     grep -qxF "CREATE $p.groupsnapshot.storage.k8s.io" "$FAKE_CMDLOG"
   done
+  grep -qxF "STAMP 62" "$FAKE_CMDLOG"
+  rm -rf "$WORK"
+}
+
+@test "release labels on the group snapshot CRDs alone still get them recreated" {
+  prep
+  edit_crds '.items |= map(if .spec.group == "snapshot.storage.k8s.io" then .metadata.labels = {} else . end)'
+  rc=0
+  run_migration 61 >"$WORK/out" 2>&1 || rc=$?
+  cat "$WORK/out"; cat "$FAKE_CMDLOG"
+  [ "$rc" -eq 0 ]
+  for p in volumegroupsnapshotclasses volumegroupsnapshotcontents volumegroupsnapshots; do
+    grep -qxF "DELETE $p.groupsnapshot.storage.k8s.io" "$FAKE_CMDLOG"
+    grep -qxF "CREATE $p.groupsnapshot.storage.k8s.io" "$FAKE_CMDLOG"
+  done
+  if grep -qF "ANNOTATE volumesnapshot" "$FAKE_CMDLOG"; then echo "a foreign snapshot CRD was adopted" >&2; return 1; fi
+  grep -qxF "STAMP 62" "$FAKE_CMDLOG"
+  rm -rf "$WORK"
+}
+
+@test "a v1beta2 group snapshot CRD that still stores v1alpha1 is recorded, not adopted" {
+  prep
+  edit_crds '.items |= map(if .metadata.name == "volumegroupsnapshotcontents.groupsnapshot.storage.k8s.io"
+    then .spec.versions = [{name: "v1alpha1", served: true, storage: false}, {name: "v1beta2", served: true, storage: true}]
+      | .status.storedVersions = ["v1alpha1", "v1beta2"]
+    else . end)'
+  rc=0
+  run_migration 61 >"$WORK/out" 2>&1 || rc=$?
+  cat "$WORK/out"; cat "$FAKE_CMDLOG"
+  [ "$rc" -eq 0 ]
+  if grep -qE "^(ANNOTATE|LABEL|DELETE) volumegroupsnapshotcontents" "$FAKE_CMDLOG"; then
+    echo "a CRD still storing v1alpha1 was adopted or deleted" >&2; return 1
+  fi
+  if grep -qF "CREATE" "$FAKE_CMDLOG"; then echo "a CRD was created next to the recorded one" >&2; return 1; fi
+  grep -qF "cozystack.io/migration-61-needs-attention=volumegroupsnapshotcontents.groupsnapshot.storage.k8s.io=stored-v1alpha1" "$FAKE_CMDLOG"
   grep -qxF "STAMP 62" "$FAKE_CMDLOG"
   rm -rf "$WORK"
 }

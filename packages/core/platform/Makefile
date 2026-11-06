@@ -53,6 +53,9 @@ image-migrations:
 		--show-only charts/snapshot-controller/templates/crds.yaml \
 	| yq --split-exp '"images/migrations/snapshot-controller-crds/" + .metadata.name + ".yaml"' \
 		'$(GROUP_SNAPSHOT_CRDS_EXPR)'
+	# yq exits 0 on empty input, so a failed render would otherwise ship an
+	# image whose migration 61 deletes the old CRDs and cannot recreate them.
+	test "$$(ls images/migrations/snapshot-controller-crds | wc -l)" -eq 3
 	docker buildx build images/migrations \
 		$(call image-tags,platform-migrations,v$(COZYSTACK_VERSION)) \
 		$(call cache-args,platform-migrations) \

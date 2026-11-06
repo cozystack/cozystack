@@ -110,7 +110,16 @@ for plural in $GROUP_SNAPSHOT_CRDS; do
     echo "CRD $crd was not installed by $RELEASE_NS/$RELEASE_NAME; leaving it alone"
     continue
   fi
+  RELEASE_INSTALLED=1
   if printf '%s' "$obj" | jq -e '[.spec.versions[].name] | index("v1beta2")' >/dev/null; then
+    # The chart drops v1alpha1 from spec.versions, which the apiserver refuses
+    # while v1alpha1 is still a stored version, so such a CRD is left to an
+    # operator rather than adopted into an upgrade that cannot apply.
+    if printf '%s' "$obj" | jq -e '.status.storedVersions // [] | index("v1alpha1")' >/dev/null; then
+      echo "WARN: CRD $crd serves v1beta2 but still stores v1alpha1; the snapshot-controller upgrade fails until its objects are migrated and storedVersions trimmed" >&2
+      LEFTOVERS="${LEFTOVERS}${LEFTOVERS:+,}${crd}=stored-v1alpha1"
+      continue
+    fi
     adopt "$crd" "$obj"
     continue
   fi
