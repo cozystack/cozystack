@@ -22,13 +22,16 @@ spec:
       apps.cozystack.io/application.name: {{ $.Release.Name }}
   vlinsert:
     replicaCount: 2
+    {{- include "monitoring.topologySpreadConstraints" (list $ "vlinsert" .name "ScheduleAnyway") | nindent 4 }}
     resources: {}
   vlselect:
     replicaCount: 2
+    {{- include "monitoring.topologySpreadConstraints" (list $ "vlselect" .name "ScheduleAnyway") | nindent 4 }}
     resources: {}
   vlstorage:
     retentionPeriod: {{ .retentionPeriod | quote }}
     replicaCount: 2
+    {{- include "monitoring.topologySpreadConstraints" (list $ "vlstorage" .name "DoNotSchedule") | nindent 4 }}
     resources: {}
     storage:
       volumeClaimTemplate:
