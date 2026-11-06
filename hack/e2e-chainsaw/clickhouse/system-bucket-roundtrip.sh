@@ -120,8 +120,8 @@ sidecar_before=$(sidecar_identity)
 [[ "$sidecar_before" =~ ^[0-9a-f-]+\ [0-9]+$ ]] \
     || { log_error "could not read the ClickHouse Pod uid and clickhouse-backup restart count (got '${sidecar_before}')"; exit 1; }
 
-# Restore picks the newest remote backup of the release, so only a row no
-# earlier run wrote shows that the archive restored is this run's.
+# Restore takes the archive this run's Backup recorded; a row no earlier run
+# wrote is what shows the data restored is that archive's.
 sentinel="before-backup-$(date -u +%Y%m%dT%H%M%SZ)-${RANDOM}"
 log_step "Writing the sentinel row ${sentinel}"
 clickhouse_query "$CLICKHOUSE_NAME" "CREATE TABLE IF NOT EXISTS default.sentinel (id UInt32, name String) ENGINE = MergeTree ORDER BY id"
