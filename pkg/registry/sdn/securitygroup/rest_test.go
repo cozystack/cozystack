@@ -1470,6 +1470,97 @@ func TestCreateRejectsEmptyFQDNSelector(t *testing.T) {
 	}
 }
 
+func sgWithEgress(name string, eg sdnv1alpha1.EgressRule) *sdnv1alpha1.SecurityGroup {
+	return &sdnv1alpha1.SecurityGroup{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: testNamespace},
+		Spec: sdnv1alpha1.SecurityGroupSpec{
+			Attachments: []sdnv1alpha1.ApplicationReference{{Kind: "Postgres", Name: "db"}},
+			Egress:      []sdnv1alpha1.EgressRule{eg},
+		},
+	}
+}
+
+// TestCreateRejectsInvalidPortOrFQDN pins the field and the reason of each
+// rejection. A port range used to be reported as a malformed port name, and a
+// malformed FQDN reached the backing write, where the CiliumNetworkPolicy CRD
+// rejected it with an error about an object the tenant never wrote.
+func TestCreateRejectsInvalidPortOrFQDN(t *testing.T) {
+	fqdn := func(sel sdnv1alpha1.FQDNSelector) sdnv1alpha1.EgressRule {
+		return sdnv1alpha1.EgressRule{ToFQDNs: []sdnv1alpha1.FQDNSelector{sel}}
+	}
+	port := func(p string) sdnv1alpha1.EgressRule {
+		return sdnv1alpha1.EgressRule{ToPorts: []sdnv1alpha1.PortRule{{Ports: []sdnv1alpha1.PortProtocol{{Port: p}}}}}
+	}
+	cases := map[string]struct {
+		rule   sdnv1alpha1.EgressRule
+		field  string
+		detail string
+	}{
+		"port range":                    {port("80-90"), "spec.egress[0].toPorts[0].ports[0].port", "port ranges are not supported"},
+		"full port range":               {port("1-65535"), "spec.egress[0].toPorts[0].ports[0].port", "port ranges are not supported"},
+		"matchName with space":          {fqdn(sdnv1alpha1.FQDNSelector{MatchName: "bad name.example.org"}), "spec.egress[0].toFQDNs[0].matchName", "must be a DNS name"},
+		"matchName with wildcard":       {fqdn(sdnv1alpha1.FQDNSelector{MatchName: "*.example.org"}), "spec.egress[0].toFQDNs[0].matchName", "must be a DNS name"},
+		"matchName with leading dot":    {fqdn(sdnv1alpha1.FQDNSelector{MatchName: ".example.org"}), "spec.egress[0].toFQDNs[0].matchName", "must be a DNS name"},
+		"matchName with empty label":    {fqdn(sdnv1alpha1.FQDNSelector{MatchName: "example..org"}), "spec.egress[0].toFQDNs[0].matchName", "must be a DNS name"},
+		"matchName with scheme":         {fqdn(sdnv1alpha1.FQDNSelector{MatchName: "https://example.org"}), "spec.egress[0].toFQDNs[0].matchName", "must be a DNS name"},
+		"matchName too long":            {fqdn(sdnv1alpha1.FQDNSelector{MatchName: strings.Repeat("a", 256)}), "spec.egress[0].toFQDNs[0].matchName", "may not be more than 255"},
+		"matchPattern with slash":       {fqdn(sdnv1alpha1.FQDNSelector{MatchPattern: "*.example.org/path"}), "spec.egress[0].toFQDNs[0].matchPattern", "must be a DNS name"},
+		"matchPattern with question":    {fqdn(sdnv1alpha1.FQDNSelector{MatchPattern: "?.example.org"}), "spec.egress[0].toFQDNs[0].matchPattern", "must be a DNS name"},
+		"matchPattern with empty label": {fqdn(sdnv1alpha1.FQDNSelector{MatchPattern: "*..example.org"}), "spec.egress[0].toFQDNs[0].matchPattern", "must be a DNS name"},
+		"matchPattern too long":         {fqdn(sdnv1alpha1.FQDNSelector{MatchPattern: "*." + strings.Repeat("a", 254)}), "spec.egress[0].toFQDNs[0].matchPattern", "may not be more than 255"},
+		"both matchName and pattern":    {fqdn(sdnv1alpha1.FQDNSelector{MatchName: "example.org", MatchPattern: "*.example.org"}), "spec.egress[0].toFQDNs[0]", "only one of matchName or matchPattern"},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			r := newTestREST(t)
+			_, err := r.Create(ctxNS(), sgWithEgress("sg-bad", tc.rule), nil, &metav1.CreateOptions{})
+			var status apierrors.APIStatus
+			if !apierrors.IsInvalid(err) || !errors.As(err, &status) {
+				t.Fatalf("Create with %s: got err %v, want Invalid", name, err)
+			}
+			causes := status.Status().Details.Causes
+			if len(causes) != 1 || causes[0].Field != tc.field || !strings.Contains(causes[0].Message, tc.detail) {
+				t.Fatalf("Create with %s: causes = %+v, want one on %s containing %q", name, causes, tc.field, tc.detail)
+			}
+			np := &CiliumNetworkPolicy{}
+			if err := r.c.Get(context.Background(), types.NamespacedName{Namespace: testNamespace, Name: "sg-bad"}, np); !apierrors.IsNotFound(err) {
+				t.Fatalf("invalid SecurityGroup was persisted: err=%v", err)
+			}
+		})
+	}
+}
+
+func TestCreateAcceptsValidPortOrFQDN(t *testing.T) {
+	cases := map[string]sdnv1alpha1.EgressRule{
+		"single port":                 {ToPorts: []sdnv1alpha1.PortRule{{Ports: []sdnv1alpha1.PortProtocol{{Port: "8080"}}}}},
+		"named port with digits":      {ToPorts: []sdnv1alpha1.PortRule{{Ports: []sdnv1alpha1.PortProtocol{{Port: "http-8080"}}}}},
+		"matchName":                   {ToFQDNs: []sdnv1alpha1.FQDNSelector{{MatchName: "api.example.org"}}},
+		"matchName with trailing dot": {ToFQDNs: []sdnv1alpha1.FQDNSelector{{MatchName: "api.example.org."}}},
+		"matchName with underscore":   {ToFQDNs: []sdnv1alpha1.FQDNSelector{{MatchName: "_sip._tcp.example.org"}}},
+		"matchName single label":      {ToFQDNs: []sdnv1alpha1.FQDNSelector{{MatchName: "localhost"}}},
+		"matchName at max length":     {ToFQDNs: []sdnv1alpha1.FQDNSelector{{MatchName: strings.Repeat("a", 255)}}},
+		"matchPattern subdomain":      {ToFQDNs: []sdnv1alpha1.FQDNSelector{{MatchPattern: "*.example.org"}}},
+		"matchPattern multilevel":     {ToFQDNs: []sdnv1alpha1.FQDNSelector{{MatchPattern: "**.example.org"}}},
+		"matchPattern infix":          {ToFQDNs: []sdnv1alpha1.FQDNSelector{{MatchPattern: "sub*.example.org"}}},
+		"matchPattern match all":      {ToFQDNs: []sdnv1alpha1.FQDNSelector{{MatchPattern: "*"}}},
+	}
+	for name, rule := range cases {
+		t.Run(name, func(t *testing.T) {
+			r := newTestREST(t)
+			if _, err := r.Create(ctxNS(), sgWithEgress("sg-ok", rule), nil, &metav1.CreateOptions{}); err != nil {
+				t.Fatalf("Create with %s returned error: %v", name, err)
+			}
+			np := &CiliumNetworkPolicy{}
+			if err := r.c.Get(context.Background(), types.NamespacedName{Namespace: testNamespace, Name: "sg-ok"}, np); err != nil {
+				t.Fatalf("backing policy not found: %v", err)
+			}
+			if got := np.Spec.Egress[0]; !reflect.DeepEqual(got.ToFQDNs, rule.ToFQDNs) || !reflect.DeepEqual(got.ToPorts, rule.ToPorts) {
+				t.Fatalf("egress rule not projected 1:1: got %+v, want %+v", got, rule)
+			}
+		})
+	}
+}
+
 // TestCreateRejectsNamespaceMismatch asserts Create rejects a SecurityGroup
 // whose metadata.namespace differs from the request namespace, so a caller
 // cannot post to one namespace and persist into another. The aggregated
