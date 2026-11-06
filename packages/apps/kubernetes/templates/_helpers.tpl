@@ -138,12 +138,14 @@ scope from packages/system/keycloak-configure.
 {{- end }}
 
 {{/*
-Issuer URL for `mode: System`. Resolves to the platform Keycloak realm
-`cozy`, served at the root host published in the per-namespace bundle by
-cozystack-basics.
+Issuer URL for `mode: System`. Resolves to the platform Keycloak realm,
+served at the keycloak-host published in the per-namespace bundle by
+cozystack-basics (keycloak.<root-host> when the platform does not set one).
 */}}
 {{- define "kubernetes.oidc.systemIssuerURL" -}}
-{{- printf "https://keycloak.%s/realms/%s" (dig "root-host" "" (.Values._cluster | default dict)) (dig "oidc-realm-name" "cozy" (.Values._cluster | default dict) | toString) }}
+{{- $cluster := .Values._cluster | default dict }}
+{{- $keycloakHost := dig "keycloak-host" "" $cluster | default (printf "keycloak.%s" (dig "root-host" "" $cluster)) }}
+{{- printf "https://%s/realms/%s" $keycloakHost (dig "oidc-realm-name" "cozy" $cluster | toString) }}
 {{- end }}
 
 {{/*
