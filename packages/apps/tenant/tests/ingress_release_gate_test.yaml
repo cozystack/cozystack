@@ -1,0 +1,63 @@
+suite: the ingress HelmRelease exists only for a tenant with spec.ingress
+
+# extra/seaweedfs makes seaweedfs-system wait for ingress-nginx-system only
+# when it finds the HelmRelease `ingress` next to it, because tenant-root's
+# `_namespace.ingress` is hardcoded and cannot answer that. Pin the name, the
+# namespace and the gate that lookup relies on.
+
+templates:
+  - templates/ingress.yaml
+  - templates/seaweedfs.yaml
+
+release:
+  name: tenant-root
+  namespace: tenant-root
+
+tests:
+  - it: renders no ingress HelmRelease for a root tenant with seaweedfs and no ingress
+    set:
+      ingress: false
+      seaweedfs: true
+    asserts:
+      - template: templates/ingress.yaml
+        hasDocuments:
+          count: 0
+      - template: templates/seaweedfs.yaml
+        equal:
+          path: metadata.namespace
+          value: tenant-root
+
+  - it: renders the ingress HelmRelease next to seaweedfs for a root tenant with ingress
+    set:
+      ingress: true
+      seaweedfs: true
+    asserts:
+      - template: templates/ingress.yaml
+        equal:
+          path: metadata.name
+          value: ingress
+      - template: templates/ingress.yaml
+        equal:
+          path: metadata.namespace
+          value: tenant-root
+      - template: templates/seaweedfs.yaml
+        equal:
+          path: metadata.namespace
+          value: tenant-root
+
+  - it: renders the ingress HelmRelease next to seaweedfs for a sub-tenant with ingress
+    release:
+      name: tenant-acme
+      namespace: tenant-root
+    set:
+      ingress: true
+      seaweedfs: true
+    asserts:
+      - template: templates/ingress.yaml
+        equal:
+          path: metadata.namespace
+          value: tenant-acme
+      - template: templates/seaweedfs.yaml
+        equal:
+          path: metadata.namespace
+          value: tenant-acme

@@ -1,0 +1,190 @@
+suite: seaweedfs-system waits for ingress-nginx only when the tenant deploys it
+
+# cozystack-basics writes `_namespace.ingress: tenant-root` whatever the root
+# Tenant says, so for tenant-root the value does not tell whether
+# ingress-nginx-system exists. The HelmRelease `ingress`, which the tenant
+# chart creates in the same render as `seaweedfs` and only for spec.ingress,
+# does.
+
+templates:
+  - templates/seaweedfs.yaml
+
+release:
+  name: seaweedfs
+  namespace: tenant-root
+
+set: &values
+  topology: Simple
+  replicationFactor: 2
+  _namespace:
+    host: example.org
+    ingress: tenant-root
+  _cluster:
+    issuer-name: letsencrypt-prod
+    solver: http01
+
+documentSelector: &systemHR
+  path: metadata.name
+  value: seaweedfs-system
+
+tests:
+  - it: depends on ingress-nginx-system when the tenant deploys its ingress
+    set: *values
+    documentSelector: *systemHR
+    kubernetesProvider:
+      scheme: &scheme
+        "v1/Namespace":
+          gvr:
+            group: ""
+            version: "v1"
+            resource: "namespaces"
+          namespaced: false
+        "v1/PersistentVolumeClaim":
+          gvr:
+            group: ""
+            version: "v1"
+            resource: "persistentvolumeclaims"
+          namespaced: true
+        "apps/v1/StatefulSet":
+          gvr:
+            group: "apps"
+            version: "v1"
+            resource: "statefulsets"
+          namespaced: true
+        "helm.toolkit.fluxcd.io/v2/HelmRelease":
+          gvr:
+            group: "helm.toolkit.fluxcd.io"
+            version: "v2"
+            resource: "helmreleases"
+          namespaced: true
+      objects:
+        - &rootNS
+          kind: Namespace
+          apiVersion: v1
+          metadata:
+            name: tenant-root
+        - &unrelatedPVC
+          kind: PersistentVolumeClaim
+          apiVersion: v1
+          metadata:
+            name: unrelated-app-data-0
+            namespace: tenant-root
+        - &unrelatedSTS
+          kind: StatefulSet
+          apiVersion: apps/v1
+          metadata:
+            name: unrelated-app
+            namespace: tenant-root
+        - &ingressHR
+          kind: HelmRelease
+          apiVersion: helm.toolkit.fluxcd.io/v2
+          metadata:
+            name: ingress
+            namespace: tenant-root
+    asserts:
+      - equal:
+          path: spec.dependsOn
+          value:
+            - name: seaweedfs-db
+            - name: ingress-nginx-system
+              namespace: tenant-root
+
+  - it: does not depend on ingress-nginx-system when the root tenant runs no ingress
+    set: *values
+    documentSelector: *systemHR
+    kubernetesProvider:
+      scheme: *scheme
+      objects:
+        - *rootNS
+        - *unrelatedPVC
+        - *unrelatedSTS
+    asserts:
+      - equal:
+          path: spec.dependsOn
+          value:
+            - name: seaweedfs-db
+
+  - it: ignores an ingress HelmRelease in another namespace
+    set: *values
+    documentSelector: *systemHR
+    kubernetesProvider:
+      scheme: *scheme
+      objects:
+        - *rootNS
+        - *unrelatedPVC
+        - *unrelatedSTS
+        - kind: HelmRelease
+          apiVersion: helm.toolkit.fluxcd.io/v2
+          metadata:
+            name: ingress
+            namespace: tenant-other
+    asserts:
+      - equal:
+          path: spec.dependsOn
+          value:
+            - name: seaweedfs-db
+
+  - it: does not depend on it while the values still name a parent tenant's ingress
+    set: *values
+    release:
+      namespace: tenant-child
+    documentSelector: *systemHR
+    kubernetesProvider:
+      scheme: *scheme
+      objects:
+        - kind: Namespace
+          apiVersion: v1
+          metadata:
+            name: tenant-child
+        - *unrelatedPVC
+        - *unrelatedSTS
+        - kind: HelmRelease
+          apiVersion: helm.toolkit.fluxcd.io/v2
+          metadata:
+            name: ingress
+            namespace: tenant-child
+    asserts:
+      - equal:
+          path: spec.dependsOn
+          value:
+            - name: seaweedfs-db
+
+  - it: depends on ingress-nginx-system for a sub-tenant that deploys its own ingress
+    set:
+      <<: *values
+      _namespace:
+        host: example.org
+        ingress: tenant-child
+    release:
+      namespace: tenant-child
+    documentSelector: *systemHR
+    kubernetesProvider:
+      scheme: *scheme
+      objects:
+        - kind: Namespace
+          apiVersion: v1
+          metadata:
+            name: tenant-child
+        - *unrelatedPVC
+        - *unrelatedSTS
+        - kind: HelmRelease
+          apiVersion: helm.toolkit.fluxcd.io/v2
+          metadata:
+            name: ingress
+            namespace: tenant-child
+    asserts:
+      - equal:
+          path: spec.dependsOn
+          value:
+            - name: seaweedfs-db
+            - name: ingress-nginx-system
+              namespace: tenant-child
+
+  - it: renders without the dependency on a client-side render
+    set: *values
+    documentSelector: *systemHR
+    asserts:
+      - equal:
+          path: spec.dependsOn
+          value:
+            - name: seaweedfs-db
