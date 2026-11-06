@@ -84,5 +84,47 @@
     "user": { "user": true },
     "installation": { "object": {}, "nullable": null, "array": [] },
     "expected": { "user": true, "object": {}, "nullable": null, "array": [] }
+  },
+  {
+    "name": "an omitted atomic object is copied whole",
+    "schema": { "type": "object", "properties": { "osImage": { "type": "object", "x-kubernetes-map-type": "atomic", "properties": { "builtin": { "type": "object", "properties": { "version": { "type": "string" } } }, "factory": { "type": "object", "properties": { "version": { "type": "string" } } } } } } },
+    "user": {},
+    "installation": { "osImage": { "builtin": {} } },
+    "expected": { "osImage": { "builtin": {} } }
+  },
+  {
+    "name": "an atomic object the user fills is not completed from the installation",
+    "schema": { "type": "object", "properties": { "osImage": { "type": "object", "x-kubernetes-map-type": "atomic", "properties": { "builtin": { "type": "object", "properties": { "version": { "type": "string" } } }, "factory": { "type": "object", "properties": { "version": { "type": "string" } } } } } } },
+    "user": { "osImage": { "factory": { "version": "v1.13.0" } } },
+    "installation": { "osImage": { "builtin": {} } },
+    "expected": { "osImage": { "factory": { "version": "v1.13.0" } } }
+  },
+  {
+    "name": "an atomic object the user fills with an empty child is not completed either",
+    "schema": { "type": "object", "properties": { "osImage": { "type": "object", "x-kubernetes-map-type": "atomic", "properties": { "builtin": { "type": "object", "properties": { "version": { "type": "string" } } }, "factory": { "type": "object", "properties": { "version": { "type": "string" } } } } } } },
+    "user": { "osImage": { "factory": {} } },
+    "installation": { "osImage": { "builtin": {} } },
+    "expected": { "osImage": { "factory": {} } }
+  },
+  {
+    "name": "an explicit empty atomic object wins",
+    "schema": { "type": "object", "properties": { "osImage": { "type": "object", "x-kubernetes-map-type": "atomic", "properties": { "builtin": { "type": "object" } } } } },
+    "user": { "osImage": {} },
+    "installation": { "osImage": { "builtin": {} } },
+    "expected": { "osImage": {} }
+  },
+  {
+    "name": "granular objects still merge recursively",
+    "schema": { "type": "object", "properties": { "nested": { "type": "object", "x-kubernetes-map-type": "granular", "properties": { "a": { "type": "integer" }, "b": { "type": "integer" } } } } },
+    "user": { "nested": { "a": 1 } },
+    "installation": { "nested": { "a": 9, "b": 2 } },
+    "expected": { "nested": { "a": 1, "b": 2 } }
+  },
+  {
+    "name": "objects that also take arbitrary keys are replaced as a whole",
+    "schema": { "type": "object", "properties": { "options": { "type": "object", "properties": { "known": { "type": "string" } }, "additionalProperties": true } } },
+    "user": { "options": { "extra": "user" } },
+    "installation": { "options": { "known": "platform", "platformKey": "injected" } },
+    "expected": { "options": { "extra": "user" } }
   }
 ]
