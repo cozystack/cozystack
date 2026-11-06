@@ -974,18 +974,6 @@ func (r *BackupReconciler) cleanupAltinityBackup(ctx context.Context, backup *ba
 		return r.releaseAltinityCleanup(ctx, backup, archive, "the recorded archive name is not a valid archive name"), nil
 	}
 
-	strategy := &strategyv1alpha1.Altinity{}
-	if err := r.Get(ctx, client.ObjectKey{Name: backup.Spec.StrategyRef.Name}, strategy); err != nil {
-		if apierrors.IsNotFound(err) {
-			return r.releaseAltinityCleanup(ctx, backup, archive, "strategy CR is gone"), nil
-		}
-		return ctrl.Result{}, err
-	}
-	containers := strategy.Spec.Template.Spec.Containers
-	if len(containers) == 0 || containers[0].Image == "" {
-		return r.releaseAltinityCleanup(ctx, backup, archive, "strategy template has no container image"), nil
-	}
-
 	job := &batchv1.Job{}
 	err := r.Get(ctx, jobKey, job)
 	switch {
@@ -996,6 +984,17 @@ func (r *BackupReconciler) cleanupAltinityBackup(ctx context.Context, backup *ba
 		}
 		if terminating {
 			return r.releaseAltinityCleanup(ctx, backup, archive, "namespace is terminating"), nil
+		}
+		strategy := &strategyv1alpha1.Altinity{}
+		if err := r.Get(ctx, client.ObjectKey{Name: backup.Spec.StrategyRef.Name}, strategy); err != nil {
+			if apierrors.IsNotFound(err) {
+				return r.releaseAltinityCleanup(ctx, backup, archive, "strategy CR is gone"), nil
+			}
+			return ctrl.Result{}, err
+		}
+		containers := strategy.Spec.Template.Spec.Containers
+		if len(containers) == 0 || containers[0].Image == "" {
+			return r.releaseAltinityCleanup(ctx, backup, archive, "strategy template has no container image"), nil
 		}
 		twin, terr := r.altinityArchiveSharedWith(ctx, backup, archive)
 		if terr != nil {
