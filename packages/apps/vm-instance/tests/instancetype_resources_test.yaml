@@ -12,6 +12,9 @@ suite: vm-instance instance type versus explicit resources
 release:
   name: test-vm
   namespace: tenant-test
+templates:
+  - templates/vm.yaml
+  - templates/vm-update-hook.yaml
 
 set:
   fullnameOverride: test-vm
