@@ -483,15 +483,49 @@ run_script() {
   grep -qx 'create_remote --resume clickhouse-myapp-20260304T050607Z' "$tmp/state/accepted"
 }
 
-# The action log is never trimmed, so a finished row of the same archive may
-# be an earlier run's and is not taken for this attempt's result.
-@test "backup starts create_remote again when the log holds a finished one of the same archive" {
-  for status in success error cancel; do
+# The archive is named per BackupJob, so a success row of exactly this
+# upload is an earlier attempt of the same BackupJob that finished while it
+# could not see it. Uploading again with resume would re-upload over the
+# finished archive and break it if that second upload dies halfway.
+@test "a retried backup takes the upload of its archive an earlier attempt finished as its result" {
+  tmp=$(mktemp -d)
+  make_stubs "$tmp/bin" "$tmp/state"
+  echo '{"command":"create_remote --resume clickhouse-myapp-20260304T050607Z","status":"success","start":"2026-01-01 00:01:30"}' > "$tmp/state/prior"
+  render_script "$tmp/s.sh" backup myapp clickhouse-myapp-20260304T050607Z
+  run_script "$tmp"
+  if grep -q '^POST ' "$tmp/state/requests"; then
+    echo "FAIL: uploaded again over a finished archive: $(cat "$tmp/state/requests")"
+    false
+  fi
+}
+
+@test "a retried backup resumes an upload of its archive that ended in error or was cancelled" {
+  for status in error cancel; do
     tmp=$(mktemp -d)
     make_stubs "$tmp/bin" "$tmp/state"
     echo "{\"command\":\"create_remote --resume clickhouse-myapp-20260304T050607Z\",\"status\":\"$status\",\"start\":\"2026-01-01 00:01:30\"}" > "$tmp/state/prior"
     render_script "$tmp/s.sh" backup myapp clickhouse-myapp-20260304T050607Z
     run_script "$tmp"
-    if [ "$(accepted "$tmp")" != 1 ]; then echo "FAIL: a $status row of an earlier upload must not stand in for this one"; false; fi
+    if [ "$(accepted "$tmp")" != 1 ]; then echo "FAIL: a $status row must lead to a resumed upload"; false; fi
   done
+}
+
+@test "a retried backup resumes when its latest upload failed after an earlier one succeeded" {
+  tmp=$(mktemp -d)
+  make_stubs "$tmp/bin" "$tmp/state"
+  printf '%s\n' \
+    '{"command":"create_remote --resume clickhouse-myapp-20260304T050607Z","status":"success","start":"2026-01-01 00:01:00"}' \
+    '{"command":"create_remote --resume clickhouse-myapp-20260304T050607Z","status":"error","start":"2026-01-01 00:01:30"}' > "$tmp/state/prior"
+  render_script "$tmp/s.sh" backup myapp clickhouse-myapp-20260304T050607Z
+  run_script "$tmp"
+  [ "$(accepted "$tmp")" = 1 ]
+}
+
+@test "backup does not take another archive's finished upload as its own" {
+  tmp=$(mktemp -d)
+  make_stubs "$tmp/bin" "$tmp/state"
+  echo '{"command":"create_remote --resume clickhouse-myapp-20260304T040000Z","status":"success","start":"2026-01-01 00:01:30"}' > "$tmp/state/prior"
+  render_script "$tmp/s.sh" backup myapp clickhouse-myapp-20260304T050607Z
+  run_script "$tmp"
+  [ "$(accepted "$tmp")" = 1 ]
 }
