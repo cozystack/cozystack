@@ -52,9 +52,9 @@ spec:
               api="http://${host}:7171"
               auth="-u ${API_USERNAME}:${API_PASSWORD}"
               # Every request but the POST is retried on failure, every 5s,
-              # up to $2 times: once the operation is accepted, a dropped poll
-              # must not fail the attempt, since the Job retry it causes cannot
-              # tell a lost poll from a lost operation.
+              # for $2 attempts in all: once the operation is accepted, a
+              # dropped poll must not fail the attempt, since the Job retry it
+              # causes cannot tell a lost poll from a lost operation.
               api_get() {
                 n=0
                 while true; do
@@ -72,9 +72,9 @@ spec:
               }
               # The sidecar answers 423 to a new operation while any other is
               # in progress, so starting before it is idle burns the attempt.
-              # The exception is the operation $1 itself already running: an
-              # earlier attempt of this Job started it and died, and the retry
-              # takes it over rather than starting it twice.
+              # The exception is the operation $1 itself already running, as
+              # left by an earlier attempt of this Job that died: it is taken
+              # over rather than started twice.
               wait_turn() {
                 for _ in $(seq 1 60); do
                   if actions=$(curl -fsS ${auth} --max-time 10 "${api}/backup/actions"); then

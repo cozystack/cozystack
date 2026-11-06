@@ -205,6 +205,17 @@ run_script() {
   if grep -q '^POST ' "$tmp/state/requests"; then echo "FAIL: no operation may start on an unreachable sidecar"; false; fi
 }
 
+@test "restore fails without starting restore_remote when the sidecar never answers" {
+  tmp=$(mktemp -d)
+  make_stubs "$tmp/bin" "$tmp/state"
+  touch "$tmp/state/unreachable"
+  render_script "$tmp/s.sh" restore myapp
+  if run_script "$tmp" 2> "$tmp/err"; then echo "FAIL: an unreachable sidecar must fail the Pod"; false; fi
+  if grep -q '^POST ' "$tmp/state/requests"; then echo "FAIL: no restore may start on an unreachable sidecar"; false; fi
+  grep -q 'list/remote failed 60 times in a row' "$tmp/err"
+  [ "$(grep -c '^GET .*/backup/list/remote$' "$tmp/state/requests")" = 60 ]
+}
+
 @test "restore fails without starting restore_remote when the sidecar stays busy" {
   tmp=$(mktemp -d)
   make_stubs "$tmp/bin" "$tmp/state"
