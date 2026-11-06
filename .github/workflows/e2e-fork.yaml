@@ -60,8 +60,8 @@ jobs:
   # cannot forge — the workflow_run conclusion, the base-repo PR list, and the
   # base-repo PR file list — NOT from the presence/absence of an artifact the
   # fork's own build controls. Fail-closed if the fork build failed or the
-  # pr-patch artifact is missing; green-and-stop only for a PR whose file list is
-  # entirely under docs/ (verified against the base-repo API).
+  # pr-patch artifact is missing; green-and-stop only for a PR whose file list
+  # hack/code-changed.sh calls non-code (verified against the base-repo API).
   resolve:
     name: Resolve fork PR
     # Only fork PRs: head_repository differs from the base repository. Same-repo
@@ -87,6 +87,12 @@ jobs:
       changed_b64:  ${{ steps.r.outputs.changed_b64 }}
       full_e2e:     ${{ steps.r.outputs.full_e2e }}
     steps:
+      # The docs-only classifier for the verdict below. Under workflow_run this
+      # checks out the base repository's default branch, never the fork.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+          sparse-checkout: hack
       # Decide the verdict and post the "E2E Tests" commit status directly, with
       # this job's default (workflow_run) token — it already has the actions:read
       # / pull-requests:read scopes the lookups need, plus statuses:write from the
@@ -267,14 +273,19 @@ jobs:
               return;
             }
             // A rename reports the NEW path in `filename` and the old one in
-            // `previous_filename`. Checking only `filename` would read a
-            // packages/… -> docs/… rename as docs-only, when it in fact removes
-            // a code path. BOTH sides must be under docs/ to count as docs-only.
-            const isDocs = p => typeof p === 'string' && p.startsWith('docs/');
-            const hasNonDocs = files.some(f =>
-              !isDocs(f.filename) || (f.previous_filename && !isDocs(f.previous_filename)));
-            if (!hasNonDocs) {
-              await decide('success', 'docs-only PR (verified via PR file list) — e2e not required');
+            // `previous_filename`. List BOTH, the shape `git diff --no-renames`
+            // gives the in-tree plan job, so a packages/… -> docs/… rename
+            // still reads as code. hack/code-changed.sh (base repo, checked
+            // out above) is the one classifier for both lanes.
+            const paths = files.flatMap(f => [f.filename, f.previous_filename])
+              .filter(p => typeof p === 'string');
+            const listFile = `${process.env.RUNNER_TEMP}/pr-files.txt`;
+            require('fs').writeFileSync(listFile, paths.map(p => `${p}\n`).join(''));
+            let code = '';
+            await exec.exec('hack/code-changed.sh', [listFile],
+              { listeners: { stdout: d => { code += d.toString(); } } });
+            if (code.trim() === 'false') {
+              await decide('success', 'no code changed (docs/metadata only, verified via PR file list) — e2e not required');
               return;
             }
 
