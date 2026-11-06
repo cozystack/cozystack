@@ -13,6 +13,10 @@
 #   FAKE_CRD_FAIL    non-empty => reading a CRD exits 1 with this stderr
 #   FAKE_DELETE_FAIL non-empty => deleting a CRD exits 1 with this stderr
 #   FAKE_RECORD_FAIL non-empty => annotating cozystack-version exits 1 with this stderr
+#   FAKE_CREATE_FAIL non-empty => creating a CRD exits 1 with this stderr
+#
+# The CRD files the migration creates from are JSON, which kubectl reads as
+# well as YAML, so the fake can load them with jq.
 set -u
 
 log() { [ -n "${FAKE_CMDLOG:-}" ] && printf '%s\n' "$*" >> "$FAKE_CMDLOG"; }
@@ -72,6 +76,22 @@ case "$*" in
     if [ -n "${FAKE_DELETE_FAIL:-}" ]; then printf '%s\n' "$FAKE_DELETE_FAIL" >&2; exit 1; fi
     log "DELETE $3"
     jq --arg n "$3" '.items |= map(select(.metadata.name != $n))' "$CRDS" > "$CRDS.new" && mv "$CRDS.new" "$CRDS"
+    exit 0
+    ;;
+
+  "create -f "*)
+    if [ -n "${FAKE_CREATE_FAIL:-}" ]; then printf '%s\n' "$FAKE_CREATE_FAIL" >&2; exit 1; fi
+    name=$(jq -r '.metadata.name' "$3") || exit 1
+    if jq -e --arg n "$name" '.items[] | select(.metadata.name == $n)' "$CRDS" >/dev/null; then
+      printf 'Error from server (AlreadyExists): %s already exists\n' "$name" >&2
+      exit 1
+    fi
+    log "CREATE $name"
+    jq --slurpfile crd "$3" '.items += $crd' "$CRDS" > "$CRDS.new" && mv "$CRDS.new" "$CRDS"
+    exit 0
+    ;;
+
+  "wait --for=condition=Established "*)
     exit 0
     ;;
 

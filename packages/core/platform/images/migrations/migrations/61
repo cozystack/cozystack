@@ -15,11 +15,19 @@
 # and v1, and the apiserver rejects an update that drops a version still listed
 # in status.storedVersions. The old snapshot-controller ran without the
 # CSIVolumeGroupSnapshot gate, so no v1alpha1 object was ever acted on, and an
-# empty CRD is deleted here for the release to create anew. A CRD that still
-# holds objects is left alone and recorded on the cozystack-version ConfigMap:
-# deleting it would delete them, and the upgrade of that one release fails with
-# the storedVersions error until they are removed by hand, without holding the
-# rest of the platform.
+# empty CRD is deleted here. A CRD that still holds objects is left alone and
+# recorded on the cozystack-version ConfigMap: deleting it would delete them,
+# and the upgrade of that one release fails with the storedVersions error until
+# they are removed by hand, without holding the rest of the platform.
+#
+# The deleted CRDs are created again right away from the v1beta2 copies baked
+# into the image (see image-migrations in the platform Makefile), already
+# carrying the release's ownership metadata. Every HelmRelease waits for this
+# hook, so the linstor release, which renders its group snapshot gate and
+# VolumeGroupSnapshotClass only when the v1beta2 API is served, renders against
+# it even when it upgrades before snapshot-controller. When a CRD was kept, none
+# is created: the API stays v1alpha1, and the linstor release picks it up on the
+# upgrade after the objects are removed and snapshot-controller has upgraded.
 #
 # Only CRDs labelled by helm-controller as installed by
 # cozy-snapshot-controller/snapshot-controller are touched, so a cluster whose
@@ -44,7 +52,11 @@ RELEASE_NS="cozy-snapshot-controller"
 SNAPSHOT_CRDS="volumesnapshotclasses volumesnapshotcontents volumesnapshots"
 GROUP_SNAPSHOT_CRDS="volumegroupsnapshotclasses volumegroupsnapshotcontents volumegroupsnapshots"
 
+GROUP_CRD_DIR="${GROUP_CRD_DIR:-/snapshot-controller-crds}"
+
 LEFTOVERS=""
+RELEASE_INSTALLED=0
+CREATE=""
 
 # installed_by_release <crd json>
 installed_by_release() {
@@ -83,6 +95,7 @@ for plural in $SNAPSHOT_CRDS; do
     echo "CRD $crd was not installed by $RELEASE_NS/$RELEASE_NAME; leaving it alone"
     continue
   fi
+  RELEASE_INSTALLED=1
   adopt "$crd" "$obj"
 done
 
@@ -90,7 +103,7 @@ for plural in $GROUP_SNAPSHOT_CRDS; do
   crd="${plural}.groupsnapshot.storage.k8s.io"
   obj=$(kubectl get customresourcedefinitions.apiextensions.k8s.io "$crd" --ignore-not-found -o json)
   if [ -z "$obj" ]; then
-    echo "CRD $crd not found; the release creates it"
+    CREATE="$CREATE $crd"
     continue
   fi
   if ! installed_by_release "$obj"; then
@@ -109,7 +122,20 @@ for plural in $GROUP_SNAPSHOT_CRDS; do
   fi
   echo "Deleting empty v1alpha1 CRD $crd"
   kubectl delete customresourcedefinitions.apiextensions.k8s.io "$crd" --wait=true
+  CREATE="$CREATE $crd"
 done
+
+# A CRD missing on a cluster without the release, or with a kept one, is left
+# to the release. A retry after a failed create finds the deleted CRDs missing,
+# so it creates them here too.
+if [ "$RELEASE_INSTALLED" = 1 ] && [ -z "$LEFTOVERS" ]; then
+  for crd in $CREATE; do
+    echo "Creating CRD $crd at v1beta2 for $RELEASE_NS/$RELEASE_NAME"
+    kubectl create -f "$GROUP_CRD_DIR/$crd.yaml" >/dev/null
+    kubectl wait --for=condition=Established --timeout=60s \
+      "customresourcedefinitions.apiextensions.k8s.io/$crd" >/dev/null
+  done
+fi
 
 # The record is a diagnostic aid, so failing to write it must not block the
 # upgrade.

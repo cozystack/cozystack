@@ -1,12 +1,14 @@
 #!/usr/bin/env bats
 # -----------------------------------------------------------------------------
 # Unit tests for platform migration 61 --> 62 (hand the snapshot CRDs over to
-# the snapshot-controller release and delete the empty v1alpha1
-# VolumeGroupSnapshot CRDs). See
+# the snapshot-controller release and replace the empty v1alpha1
+# VolumeGroupSnapshot CRDs with v1beta2 ones). See
 # packages/core/platform/images/migrations/migrations/61 for the mechanism.
 #
-# The fake keeps the CRDs in a state file and applies each annotate, label and
-# delete to it, so a second run reads what the first one wrote.
+# The fake keeps the CRDs in a state file and applies each annotate, label,
+# delete and create to it, so a second run reads what the first one wrote. The
+# v1beta2 CRDs the migration creates come from group-crds/, standing in for the
+# copies `make image-migrations` bakes into the image.
 #
 # The harness (docker, jq baked onto the migrations base image, the explicit
 # `return` in run_migration) is the one hack/migration-55-fluxcd-orphan.bats
@@ -43,6 +45,8 @@ run_migration() {
     -e FAKE_CRD_FAIL="${FAKE_CRD_FAIL-}" \
     -e FAKE_DELETE_FAIL="${FAKE_DELETE_FAIL-}" \
     -e FAKE_RECORD_FAIL="${FAKE_RECORD_FAIL-}" \
+    -e FAKE_CREATE_FAIL="${FAKE_CREATE_FAIL-}" \
+    -e GROUP_CRD_DIR=/fakebin/group-crds \
     "$TESTIMG" "/migrations/$1" || _run_migration_rc=$?
   return "$_run_migration_rc"
 }
@@ -66,7 +70,7 @@ DOCKERFILE
   FAKE_CMDLOG="$WORK/cmdlog"
   : > "$FAKE_CMDLOG"
   export NAMESPACE=cozy-system
-  unset FAKE_CRD_FAIL FAKE_DELETE_FAIL FAKE_RECORD_FAIL || true
+  unset FAKE_CRD_FAIL FAKE_DELETE_FAIL FAKE_RECORD_FAIL FAKE_CREATE_FAIL || true
   return 0
 }
 
@@ -81,7 +85,7 @@ crd_field() {
   jq -r --arg n "$1" ".items[] | select(.metadata.name == \$n) | $2" "$WORK/state/crds.json"
 }
 
-@test "adopts the snapshot CRDs and deletes the empty v1alpha1 group snapshot CRDs" {
+@test "adopts the snapshot CRDs and replaces the empty v1alpha1 group snapshot CRDs" {
   prep
   rc=0
   run_migration 61 >"$WORK/out" 2>&1 || rc=$?
@@ -97,8 +101,15 @@ crd_field() {
   done
 
   for p in volumegroupsnapshotclasses volumegroupsnapshotcontents volumegroupsnapshots; do
-    grep -qxF "DELETE $p.groupsnapshot.storage.k8s.io" "$FAKE_CMDLOG"
+    crd="$p.groupsnapshot.storage.k8s.io"
+    grep -qxF "DELETE $crd" "$FAKE_CMDLOG"
+    grep -qxF "CREATE $crd" "$FAKE_CMDLOG"
+    [ "$(crd_field "$crd" '[.spec.versions[] | select(.served) | .name] | index("v1beta2") != null')" = "true" ]
+    [ "$(crd_field "$crd" '.metadata.annotations["meta.helm.sh/release-name"]')" = "snapshot-controller" ]
   done
+  # Every delete comes before the first create, so a kept CRD is known before
+  # anything is created.
+  [ "$(grep -nE '^(DELETE|CREATE) ' "$FAKE_CMDLOG" | sed -n '3p' | cut -d' ' -f1 | cut -d: -f2)" = "DELETE" ]
   if grep -qF "ANNOTATE volumegroupsnapshot" "$FAKE_CMDLOG"; then echo "a v1alpha1 CRD was adopted" >&2; return 1; fi
   if grep -qF "RECORD" "$FAKE_CMDLOG"; then echo "unexpected record" >&2; return 1; fi
   grep -qxF "STAMP 62" "$FAKE_CMDLOG"
@@ -113,7 +124,7 @@ crd_field() {
   run_migration 61 >"$WORK/out" 2>&1 || rc=$?
   cat "$WORK/out"; cat "$FAKE_CMDLOG"
   [ "$rc" -eq 0 ]
-  if grep -qE "^(ANNOTATE|LABEL|DELETE)" "$FAKE_CMDLOG"; then echo "second run changed a CRD" >&2; return 1; fi
+  if grep -qE "^(ANNOTATE|LABEL|DELETE|CREATE)" "$FAKE_CMDLOG"; then echo "second run changed a CRD" >&2; return 1; fi
   grep -qxF "STAMP 62" "$FAKE_CMDLOG"
   rm -rf "$WORK"
 }
@@ -129,6 +140,7 @@ crd_field() {
     echo "a CRD holding objects was deleted" >&2; return 1
   fi
   grep -qxF "DELETE volumegroupsnapshotcontents.groupsnapshot.storage.k8s.io" "$FAKE_CMDLOG"
+  if grep -qF "CREATE" "$FAKE_CMDLOG"; then echo "a v1beta2 CRD was created next to a kept v1alpha1 one" >&2; return 1; fi
   grep -qF "cozystack.io/migration-61-needs-attention=volumegroupsnapshots.groupsnapshot.storage.k8s.io=2" "$FAKE_CMDLOG"
   grep -qxF "STAMP 62" "$FAKE_CMDLOG"
   rm -rf "$WORK"
@@ -155,7 +167,7 @@ crd_field() {
   run_migration 61 >"$WORK/out" 2>&1 || rc=$?
   cat "$WORK/out"; cat "$FAKE_CMDLOG"
   [ "$rc" -eq 0 ]
-  if grep -qE "^(ANNOTATE|LABEL|DELETE)" "$FAKE_CMDLOG"; then echo "a foreign CRD was changed" >&2; return 1; fi
+  if grep -qE "^(ANNOTATE|LABEL|DELETE|CREATE)" "$FAKE_CMDLOG"; then echo "a foreign CRD was changed" >&2; return 1; fi
   grep -qxF "STAMP 62" "$FAKE_CMDLOG"
   rm -rf "$WORK"
 }
@@ -168,7 +180,7 @@ crd_field() {
   run_migration 61 >"$WORK/out" 2>&1 || rc=$?
   cat "$WORK/out"; cat "$FAKE_CMDLOG"
   [ "$rc" -eq 0 ]
-  if grep -qF "DELETE" "$FAKE_CMDLOG"; then echo "a v1beta2 CRD was deleted" >&2; return 1; fi
+  if grep -qE "^(DELETE|CREATE)" "$FAKE_CMDLOG"; then echo "a v1beta2 CRD was replaced" >&2; return 1; fi
   [ "$(crd_field volumegroupsnapshots.groupsnapshot.storage.k8s.io '.metadata.annotations["meta.helm.sh/release-name"]')" = "snapshot-controller" ]
   grep -qxF "STAMP 62" "$FAKE_CMDLOG"
   rm -rf "$WORK"
@@ -181,7 +193,7 @@ crd_field() {
   run_migration 61 >"$WORK/out" 2>&1 || rc=$?
   cat "$WORK/out"; cat "$FAKE_CMDLOG"
   [ "$rc" -eq 0 ]
-  if grep -qE "^(ANNOTATE|LABEL|DELETE)" "$FAKE_CMDLOG"; then echo "unexpected change" >&2; return 1; fi
+  if grep -qE "^(ANNOTATE|LABEL|DELETE|CREATE)" "$FAKE_CMDLOG"; then echo "unexpected change" >&2; return 1; fi
   grep -qxF "STAMP 62" "$FAKE_CMDLOG"
   rm -rf "$WORK"
 }
@@ -205,5 +217,27 @@ crd_field() {
   cat "$WORK/out"; cat "$FAKE_CMDLOG"
   [ "$rc" -ne 0 ]
   if grep -qF "STAMP" "$FAKE_CMDLOG"; then echo "unexpected STAMP after failed delete" >&2; return 1; fi
+  rm -rf "$WORK"
+}
+
+@test "a failing create aborts before stamping, and the retry creates the CRDs" {
+  prep
+  export FAKE_CREATE_FAIL="Error from server (InternalError): etcdserver: request timed out"
+  rc=0
+  run_migration 61 >"$WORK/out" 2>&1 || rc=$?
+  cat "$WORK/out"; cat "$FAKE_CMDLOG"
+  [ "$rc" -ne 0 ]
+  if grep -qF "STAMP" "$FAKE_CMDLOG"; then echo "unexpected STAMP after failed create" >&2; return 1; fi
+
+  unset FAKE_CREATE_FAIL
+  : > "$FAKE_CMDLOG"
+  rc=0
+  run_migration 61 >"$WORK/out" 2>&1 || rc=$?
+  cat "$WORK/out"; cat "$FAKE_CMDLOG"
+  [ "$rc" -eq 0 ]
+  for p in volumegroupsnapshotclasses volumegroupsnapshotcontents volumegroupsnapshots; do
+    grep -qxF "CREATE $p.groupsnapshot.storage.k8s.io" "$FAKE_CMDLOG"
+  done
+  grep -qxF "STAMP 62" "$FAKE_CMDLOG"
   rm -rf "$WORK"
 }
