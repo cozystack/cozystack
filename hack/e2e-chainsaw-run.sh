@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Runs the Chainsaw app suite one suite directory at a time and, after each,
-# fails the suite whose pods outlived its own cleanup (hack/e2e-chainsaw/_lib/
-# leak-guard.sh says how a pod is charged to a suite, and why).
+# fails the suite whose pods, or the Secrets cert-manager wrote for it,
+# outlived its own cleanup (hack/e2e-chainsaw/_lib/leak-guard.sh says how each
+# is charged to a suite, and why).
 #
 # Usage, from hack/e2e-chainsaw/ (where .chainsaw.yaml is):
 #   ../e2e-chainsaw-run.sh [--set-string KEY=VALUE]... [SUITE...]

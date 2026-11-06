@@ -103,6 +103,21 @@ tests:
           path: spec.template.spec.containers[0].command[2]
           pattern: "delete .*-l acme.cert-manager.io/http01-solver=true"
 
+  - it: deletes the TLS Secret of the UI Certificate only once that Certificate is deleted
+    documentIndex: 0
+    asserts:
+      # cert-manager writes the Secret with no owner reference, so nothing else
+      # reclaims it, and a Secret deleted while its Certificate still exists is
+      # issued again.
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'if kubectl delete certificate my-bucket-ui-tls -n tenant-root --ignore-not-found --wait=false; then[\s\S]*if ! kubectl delete secret my-bucket-ui-tls -n tenant-root --ignore-not-found --wait=false; then[\s\S]*key_left=1[\s\S]*else\s+echo "ERROR: cert-manager cleanup failed for my-bucket, so Secret my-bucket-ui-tls is left as well[^"]*" >&2\s+key_left=1'
+      # Leftover ACME objects only warn, but a Secret that may still hold the
+      # private key fails the Job, after the sweeps, so its log is kept.
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'if \[ "\$key_left" -ne 0 \]; then\s+echo "ACME cleanup FAILED for my-bucket[^"]*" >&2\s+exit 1\s+fi\s+echo "ACME cleanup complete\."'
+
   - it: sets resource requests and limits on the cleanup container
     documentIndex: 0
     asserts:
@@ -163,9 +178,17 @@ tests:
             apiGroups: [""]
             resources: ["services", "pods"]
             verbs: ["get", "list", "delete"]
+      # The TLS Secret of the UI Certificate, by name and nothing wider.
+      - contains:
+          path: rules
+          content:
+            apiGroups: [""]
+            resources: ["secrets"]
+            resourceNames: ["my-bucket-ui-tls"]
+            verbs: ["get", "delete"]
       - lengthEqual:
           path: rules
-          count: 3
+          count: 4
 
   - it: binds the Role to the cleanup ServiceAccount
     documentIndex: 3

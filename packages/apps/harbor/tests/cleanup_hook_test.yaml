@@ -274,6 +274,40 @@ tests:
             resources: ["pods"]
             verbs: ["get", "list", "watch", "delete"]
 
+  - it: may delete the TLS Secret of the Ingress Certificate and no other Secret
+    documentSelector:
+      path: kind
+      value: Role
+    asserts:
+      - contains:
+          path: rules
+          content:
+            apiGroups: [""]
+            resources: ["secrets"]
+            resourceNames: ["harbor-test-ingress-tls"]
+            verbs: ["get", "delete"]
+      # Without resourceNames the same rule would reach every Secret in the
+      # tenant namespace.
+      - notContains:
+          path: rules
+          content:
+            apiGroups: [""]
+            resources: ["secrets"]
+            verbs: ["get", "delete"]
+
+  - it: deletes that Secret only once the Certificate delete has succeeded
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      # cert-manager writes the Secret with no owner reference, so nothing else
+      # reclaims it, and a Secret deleted while its Certificate still exists is
+      # issued again. The Secret delete therefore sits in the success branch of
+      # the Certificate delete, and the failure branch reports both.
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'if kubectl delete certificate -n tenant-root \\\s+harbor-test-ingress-tls --ignore-not-found; then[\s\S]*kubectl delete secret -n tenant-root \\\s+harbor-test-ingress-tls --ignore-not-found[\s\S]*else\s+fail "failed to delete Certificate tenant-root/harbor-test-ingress-tls, so its Secret is left as well'
+
   - it: binds the Role to the cleanup ServiceAccount
     documentSelector:
       path: kind
