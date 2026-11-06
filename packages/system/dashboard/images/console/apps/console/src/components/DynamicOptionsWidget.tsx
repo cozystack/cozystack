@@ -42,6 +42,8 @@ export function DynamicOptionsWidget(props: WidgetProps) {
   ]?.source
 
   const rootFormData = (registry?.formContext as { rootFormData?: unknown })?.rootFormData
+  const serverDefaults = !!registry?.formContext?.serverDefaults
+  const autoSelectDefaults = registry?.formContext?.autoSelectDefaults !== false
   const { name: source, parameterised } = resolveSource(rawSource, rootFormData)
 
   // A parameterised source is deliberately absent from the Option list — it
@@ -81,14 +83,15 @@ export function DynamicOptionsWidget(props: WidgetProps) {
   // on initial load. The ref latches after the first auto-default and is never
   // reset, so deliberately clearing an optional field sticks — re-arming it
   // here would let the effect immediately re-apply the default and make the
-  // field impossible to clear.
+  // field impossible to clear. A form that did not start from the server's
+  // values leaves an empty field alone, so the API applies its own default.
   const hasAutoDefaulted = useRef(false)
   useEffect(() => {
-    if (!hasAutoDefaulted.current && !value && defaultItem && !isLoading) {
+    if (autoSelectDefaults && !hasAutoDefaulted.current && !value && defaultItem && !isLoading) {
       hasAutoDefaulted.current = true
       onChange(defaultItem.value)
     }
-  }, [value, defaultItem, isLoading, onChange])
+  }, [autoSelectDefaults, value, defaultItem, isLoading, onChange])
 
   const placeholder = isLoading
     ? "Loading..."
@@ -106,7 +109,10 @@ export function DynamicOptionsWidget(props: WidgetProps) {
     <select
       id={id}
       value={currentValue}
-      onChange={(e) => onChange(e.target.value || undefined)}
+      onChange={(e) => {
+        hasAutoDefaulted.current = true
+        onChange(serverDefaults ? e.target.value : e.target.value || undefined)
+      }}
       disabled={disabled || readonly}
       required={required}
       className="w-full rounded-lg border border-slate-300 bg-white pl-3 pr-8 py-2 text-sm text-slate-900 outline-none focus:border-blue-400 focus:ring-1 focus:ring-blue-400 disabled:opacity-50 disabled:cursor-not-allowed"

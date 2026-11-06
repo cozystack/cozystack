@@ -14,6 +14,7 @@ const TOGGLE_CLASS =
 
 export function SensitiveStringWidget(props: WidgetProps) {
   const { id, value, onChange, required, disabled, readonly, autofocus, placeholder } = props
+  const serverDefaults = !!props.registry?.formContext?.serverDefaults
   const [revealed, setRevealed] = useState(false)
 
   const stringValue = typeof value === "string" ? value : ""
@@ -36,9 +37,11 @@ export function SensitiveStringWidget(props: WidgetProps) {
         onChange={(event) => {
           // Empty string is coerced to undefined so the surrounding form
           // drops the key from the spec entirely on clear, matching the
-          // convention used by the other custom widgets in this folder.
+          // convention used by the other custom widgets in this folder. When
+          // the server owns defaults an omitted key gets its default back, so
+          // the empty string is kept as the user's explicit value.
           const next = event.target.value
-          onChange(next === "" ? undefined : next)
+          onChange(next === "" && !serverDefaults ? undefined : next)
         }}
         className={INPUT_CLASS}
       />
