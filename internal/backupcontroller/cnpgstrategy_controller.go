@@ -175,12 +175,13 @@ const (
 	// against an unreachable target reproduces the same FATAL.
 	cnpgRecoveryMaxInspectPods = 5
 
-	// Cap on the wall-clock time a BackupJob waits for the barman-cloud
-	// plugin rollout, counted from the PluginRolledOut condition or from the
-	// release recorded in DestinationWriteHeld, whichever is later, or retries
-	// writing the WAL archive destination, counted from the first failure
-	// since the last successful write or the last wait for another backup or
-	// a restore, before the cnpg.io/Backup exists. A Backup that exists is
+	// Cap on the wall-clock time a BackupJob spends before its
+	// cnpg.io/Backup exists on each of two waits. The plugin rollout is
+	// counted from the PluginRolledOut condition, or from the release
+	// recorded in DestinationWriteHeld when that is later. Retrying the WAL
+	// archive destination write is counted from the first failure since the
+	// last successful write or the last wait for another backup or a
+	// restore. A Backup that exists is
 	// not capped: CloudNativePG keeps a healthy one pending while another
 	// backup of the same Cluster runs, or while it restarts one on another
 	// instance, so no fixed deadline tells those apart from a stuck one.
@@ -200,8 +201,9 @@ const (
 	backupCondPluginRolledOut = "PluginRolledOut"
 
 	// Reason of the PluginRolledOut latch recorded before the write that
-	// attaches the plugin. The write that attaches it replaces the latch with
-	// its own time, which retries can put long after the latch.
+	// attaches the plugin. Every write of this job that attaches it replaces
+	// the condition with its own time, which retries can put long after the
+	// latch.
 	cnpgReasonAttachingPlugin = "AttachingPlugin"
 
 	// Condition Type recorded while writing the WAL archive destination keeps
@@ -454,9 +456,10 @@ func (r *BackupJobReconciler) reconcileCNPG(ctx context.Context, j *backupsv1alp
 			}
 			return ctrl.Result{RequeueAfter: cnpgPollInterval}, nil
 		}
-		if rollout.Reason == cnpgReasonAttachingPlugin && attachment.missing {
-			// Instances recreated between the latch and this write run
-			// without the plugin, and the rollout deadline starts here. A
+		if attachment.missing {
+			// This write attached the plugin, so its rollout starts here:
+			// instances recreated since the latch, or by a restore that
+			// re-rendered the Cluster without the plugin, run without it. A
 			// plugin someone else attached since the latch keeps it: the
 			// rollout that attach started may already be over.
 			message := fmt.Sprintf("attached the barman-cloud plugin to cnpg.io/Cluster %s/%s, waiting for its instances to roll", j.Namespace, clusterName)
