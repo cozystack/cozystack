@@ -1,0 +1,23 @@
+# Injected by the platform from the cozystack-values Secret. The empty
+# default keeps the chart renderable on its own, outside a cluster.
+_cluster: {}
+
+observabilityProxy:
+  image: "ghcr.io/cozystack/cozystack/observability-proxy:v0.0.0"
+  replicas: 2
+  rootTenant: tenant-root
+  authCacheTTL: 10s
+  # Names and retention of the root tenant's metricsStorages
+  # (packages/system/monitoring/values.yaml). The retention is a Go
+  # duration: 3d is written 72h.
+  metrics:
+    shorttermStore: shortterm
+    longtermStore: longterm
+    shorttermRetention: 72h
+  resources:
+    requests:
+      cpu: 10m
+      memory: 64Mi
+    limits:
+      cpu: 500m
+      memory: 256Mi
