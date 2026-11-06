@@ -104,11 +104,18 @@ spec:
                 # so a local or partial remote backup an earlier attempt left is
                 # resumed rather than refused as existing, whatever
                 # use_resumable_state the sidecar runs with. The sidecar logs
-                # the request as "create_remote --resume <name>".
+                # the request as "create_remote --resume <name>". The name is
+                # this BackupJob's alone, so an upload of it that last ended in
+                # success is an earlier attempt's finished result: resuming
+                # over it would upload the archive again and leave it broken if
+                # that upload died halfway.
                 cmd="create_remote --resume ${target}"
                 wait_turn "${cmd}"
                 if [ "${turn}" = "join" ]; then
                   echo "${cmd} is already running; waiting for it"
+                elif printf '%s\n' "${actions}" | jq -es --arg cmd "${cmd}" \
+                    '[.[] | select(.command == $cmd)] | sort_by(.start) | last | .status == "success"' >/dev/null; then
+                  echo "${cmd} already succeeded in an earlier attempt"
                 else
                   echo "${cmd}"
                   curl -fsS ${auth} -X POST "${api}/backup/create_remote?name=${target}&resume=true" >/dev/null
