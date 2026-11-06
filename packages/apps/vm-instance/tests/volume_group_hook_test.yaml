@@ -65,15 +65,15 @@ tests:
           count: 4
       - matchRegex:
           path: spec.template.spec.containers[0].args[0]
-          pattern: 'kubectl label persistentvolumeclaims vm-disk-win-system -n tenant-test --overwrite velero.io/volume-group=vm-instance-win'
+          pattern: 'kubectl label persistentvolumeclaims vm-disk-win-system -n tenant-test velero.io/volume-group=vm-instance-win'
         documentSelector: {path: kind, value: Job}
       - matchRegex:
           path: spec.template.spec.containers[0].args[0]
-          pattern: 'kubectl label persistentvolumeclaims vm-disk-win-data -n tenant-test --overwrite velero.io/volume-group=vm-instance-win'
+          pattern: 'kubectl label persistentvolumeclaims vm-disk-win-data -n tenant-test velero.io/volume-group=vm-instance-win'
         documentSelector: {path: kind, value: Job}
       - matchRegex:
           path: spec.template.spec.containers[0].args[0]
-          pattern: 'kubectl label persistentvolumeclaims persistent-state-for-vm-instance-win-abcde -n tenant-test --overwrite velero.io/volume-group=vm-instance-win'
+          pattern: 'kubectl label persistentvolumeclaims persistent-state-for-vm-instance-win-abcde -n tenant-test velero.io/volume-group=vm-instance-win'
         documentSelector: {path: kind, value: Job}
       - equal:
           path: rules[0].resourceNames
@@ -237,8 +237,39 @@ tests:
         documentSelector: {path: kind, value: Job}
       - notMatchRegex:
           path: spec.template.spec.containers[0].args[0]
-          pattern: '--overwrite'
+          pattern: 'velero.io/volume-group=vm-instance-win'
         documentSelector: {path: kind, value: Job}
+
+  - it: leaves a claim grouped under another VM out of this VM's group
+    # Taking it over would split the other VM's group across two snapshots.
+    capabilities: *groupSnapshotServed
+    kubernetesProvider:
+      scheme: *scheme
+      objects:
+        - <<: *system
+          metadata: {name: vm-disk-win-system, namespace: tenant-test, labels: {velero.io/volume-group: vm-instance-other}}
+        - *data
+        - *state
+        - *pvSystem
+        - *pvData
+        - *pvState
+        - *defaultClass
+    asserts:
+      - equal:
+          path: rules[0].resourceNames
+          value: [vm-disk-win-data, persistent-state-for-vm-instance-win-abcde]
+        documentSelector: {path: kind, value: Role}
+
+  - it: skips a claim deleted between the render and the Job
+    capabilities: *groupSnapshotServed
+    kubernetesProvider:
+      scheme: *scheme
+      objects: [*system, *data, *pvSystem, *pvData, *defaultClass]
+    documentSelector: {path: kind, value: Job}
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].args[0]
+          pattern: 'if \[ -n "\$\(kubectl get persistentvolumeclaims vm-disk-win-data -n tenant-test --ignore-not-found -o name\)" \]; then\n\s+kubectl label persistentvolumeclaims vm-disk-win-data '
 
   - it: runs the Job under a restrictive non-root securityContext
     capabilities: *groupSnapshotServed
@@ -262,3 +293,13 @@ tests:
       - equal:
           path: spec.template.metadata.labels["policy.cozystack.io/allow-to-apiserver"]
           value: "true"
+
+  - it: deletes the hook RBAC once the hooks succeed
+    capabilities: *groupSnapshotServed
+    kubernetesProvider:
+      scheme: *scheme
+      objects: [*system, *data, *pvSystem, *pvData, *defaultClass]
+    asserts:
+      - equal:
+          path: metadata.annotations["helm.sh/hook-delete-policy"]
+          value: hook-succeeded,before-hook-creation

@@ -15,7 +15,11 @@
        second CSI driver in the group, or no default VolumeGroupSnapshotClass
        for the driver fails it. The group is therefore formed only from bound
        claims of a single driver that exactly one default class serves, and the
-       label is removed from every claim of this VM otherwise. */}}
+       label is removed from every claim of this VM otherwise.
+
+       A claim already grouped under another VM is left out rather than taken
+       over: relabelling it would split that VM's group. A detached disk is
+       released when its former VM is next upgraded. */}}
 {{- $vmName := include "virtual-machine.fullname" . -}}
 {{- $namespace := .Release.Namespace -}}
 {{- $groupKey := "velero.io/volume-group" -}}
@@ -25,14 +29,20 @@
   {{- $_ := set $claims .metadata.name . -}}
 {{- end -}}
 
-{{- $members := list -}}
+{{- $candidates := list -}}
 {{- range .Values.disks -}}
   {{- with get $claims (printf "vm-disk-%s" .name) -}}
-    {{- $members = append $members . -}}
+    {{- $candidates = append $candidates . -}}
   {{- end -}}
 {{- end -}}
 {{- range $claims -}}
   {{- if eq (dig "metadata" "labels" "persistent-state-for" "" . | toString) $vmName -}}
+    {{- $candidates = append $candidates . -}}
+  {{- end -}}
+{{- end -}}
+{{- $members := list -}}
+{{- range $candidates -}}
+  {{- if has (dig "metadata" "labels" $groupKey "" . | toString) (list "" $vmName) -}}
     {{- $members = append $members . -}}
   {{- end -}}
 {{- end -}}
@@ -113,13 +123,19 @@ spec:
               memory: "128Mi"
               cpu: "100m"
           command: ["sh", "-exc"]
+          {{- /* A claim deleted since the render is skipped, not fatal: the rest
+                 of the group stays valid for Velero without it. */}}
           args:
             - |
               {{- range $toLabel }}
-              kubectl label persistentvolumeclaims {{ . }} -n {{ $namespace }} --overwrite {{ $groupKey }}={{ $vmName }}
+              if [ -n "$(kubectl get persistentvolumeclaims {{ . }} -n {{ $namespace }} --ignore-not-found -o name)" ]; then
+                kubectl label persistentvolumeclaims {{ . }} -n {{ $namespace }} {{ $groupKey }}={{ $vmName }}
+              fi
               {{- end }}
               {{- range $toUnlabel }}
-              kubectl label persistentvolumeclaims {{ . }} -n {{ $namespace }} {{ $groupKey }}-
+              if [ -n "$(kubectl get persistentvolumeclaims {{ . }} -n {{ $namespace }} --ignore-not-found -o name)" ]; then
+                kubectl label persistentvolumeclaims {{ . }} -n {{ $namespace }} {{ $groupKey }}-
+              fi
               {{- end }}
 ---
 apiVersion: v1
@@ -129,7 +145,7 @@ metadata:
   annotations:
     helm.sh/hook: post-install,post-upgrade
     helm.sh/hook-weight: "-5"
-    helm.sh/hook-delete-policy: before-hook-creation
+    helm.sh/hook-delete-policy: hook-succeeded,before-hook-creation
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
@@ -138,7 +154,7 @@ metadata:
   annotations:
     helm.sh/hook: post-install,post-upgrade
     helm.sh/hook-weight: "-5"
-    helm.sh/hook-delete-policy: before-hook-creation
+    helm.sh/hook-delete-policy: hook-succeeded,before-hook-creation
 rules:
   - apiGroups: [""]
     resources: ["persistentvolumeclaims"]
@@ -152,7 +168,7 @@ metadata:
   annotations:
     helm.sh/hook: post-install,post-upgrade
     helm.sh/hook-weight: "-5"
-    helm.sh/hook-delete-policy: before-hook-creation
+    helm.sh/hook-delete-policy: hook-succeeded,before-hook-creation
 subjects:
   - kind: ServiceAccount
     name: {{ $.Release.Name }}-volume-group
