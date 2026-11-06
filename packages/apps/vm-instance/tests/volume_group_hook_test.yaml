@@ -68,15 +68,15 @@ tests:
           count: 4
       - matchRegex:
           path: spec.template.spec.containers[0].args[0]
-          pattern: 'kubectl label persistentvolumeclaims vm-disk-win-system -n tenant-test velero.io/volume-group=vm-instance-win'
+          pattern: 'label_claim vm-disk-win-system velero.io/volume-group=vm-instance-win\n'
         documentSelector: {path: kind, value: Job}
       - matchRegex:
           path: spec.template.spec.containers[0].args[0]
-          pattern: 'kubectl label persistentvolumeclaims vm-disk-win-data -n tenant-test velero.io/volume-group=vm-instance-win'
+          pattern: 'label_claim vm-disk-win-data velero.io/volume-group=vm-instance-win\n'
         documentSelector: {path: kind, value: Job}
       - matchRegex:
           path: spec.template.spec.containers[0].args[0]
-          pattern: 'kubectl label persistentvolumeclaims persistent-state-for-vm-instance-win-abcde -n tenant-test velero.io/volume-group=vm-instance-win'
+          pattern: 'label_claim persistent-state-for-vm-instance-win-abcde velero.io/volume-group=vm-instance-win\n'
         documentSelector: {path: kind, value: Job}
       - equal:
           path: rules[0].resourceNames
@@ -248,11 +248,11 @@ tests:
     asserts:
       - matchRegex:
           path: spec.template.spec.containers[0].args[0]
-          pattern: 'kubectl label persistentvolumeclaims vm-disk-win-data -n tenant-test velero.io/volume-group-'
+          pattern: 'label_claim vm-disk-win-data velero.io/volume-group-\n'
         documentSelector: {path: kind, value: Job}
       - matchRegex:
           path: spec.template.spec.containers[0].args[0]
-          pattern: 'kubectl label persistentvolumeclaims vm-disk-win-system -n tenant-test velero.io/volume-group-'
+          pattern: 'label_claim vm-disk-win-system velero.io/volume-group-\n'
         documentSelector: {path: kind, value: Job}
       - notMatchRegex:
           path: spec.template.spec.containers[0].args[0]
@@ -283,6 +283,28 @@ tests:
           value: [vm-disk-win-data, persistent-state-for-vm-instance-win-abcde]
         documentSelector: {path: kind, value: Role}
 
+  - it: overwrites an empty group label and only that one
+    # kubectl refuses to change a present label without --overwrite, even an
+    # empty one; a claim with no label keeps the plain form.
+    capabilities: *groupSnapshotServed
+    kubernetesProvider:
+      scheme: *scheme
+      objects:
+        - <<: *system
+          metadata: {name: vm-disk-win-system, namespace: tenant-test, labels: {velero.io/volume-group: ""}}
+        - *data
+        - *pvSystem
+        - *pvData
+        - *defaultClass
+    documentSelector: {path: kind, value: Job}
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].args[0]
+          pattern: 'label_claim vm-disk-win-system --overwrite velero.io/volume-group=vm-instance-win\n'
+      - matchRegex:
+          path: spec.template.spec.containers[0].args[0]
+          pattern: 'label_claim vm-disk-win-data velero.io/volume-group=vm-instance-win\n'
+
   - it: skips a claim deleted between the render and the Job
     capabilities: *groupSnapshotServed
     kubernetesProvider:
@@ -292,7 +314,7 @@ tests:
     asserts:
       - matchRegex:
           path: spec.template.spec.containers[0].args[0]
-          pattern: 'claim=\$\(kubectl get persistentvolumeclaims vm-disk-win-data -n tenant-test --ignore-not-found -o name\)\n\s*if \[ -n "\$claim" \]; then\n\s+kubectl label persistentvolumeclaims vm-disk-win-data '
+          pattern: 'if ! out=\$\(kubectl label persistentvolumeclaims "\$@" -n tenant-test 2>&1\); then\n\s+case "\$out" in\n\s+\*"\(NotFound\)"\*\) echo "\$out" ;;\n\s+\*\) echo "\$out" >&2; return 1 ;;'
 
   - it: runs the Job under a restrictive non-root securityContext
     capabilities: *groupSnapshotServed

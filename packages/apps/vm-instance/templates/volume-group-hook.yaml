@@ -73,9 +73,13 @@
 {{- end -}}
 
 {{- $toLabel := list -}}
+{{- $emptyLabel := list -}}
 {{- range $desired -}}
   {{- if ne (dig "metadata" "labels" $groupKey "" (get $claims .) | toString) $vmName -}}
     {{- $toLabel = append $toLabel . -}}
+    {{- if hasKey (dig "metadata" "labels" dict (get $claims .)) $groupKey -}}
+      {{- $emptyLabel = append $emptyLabel . -}}
+    {{- end -}}
   {{- end -}}
 {{- end -}}
 {{- $toUnlabel := list -}}
@@ -124,22 +128,26 @@ spec:
               cpu: "100m"
           command: ["sh", "-exc"]
           {{- /* A claim deleted since the render is skipped, not fatal: the rest
-                 of the group stays valid for Velero without it. The read is an
-                 assignment of its own so that any other failure still stops
-                 the script under -e, which an `if` test would swallow. */}}
+                 of the group stays valid for Velero without it. Any other
+                 failure of the label call still fails the Job. --overwrite is
+                 passed only for a claim whose label is present but empty, so a
+                 claim grouped under another VM since the render is refused
+                 rather than taken over. */}}
           args:
             - |
+              label_claim() {
+                if ! out=$(kubectl label persistentvolumeclaims "$@" -n {{ $namespace }} 2>&1); then
+                  case "$out" in
+                    *"(NotFound)"*) echo "$out" ;;
+                    *) echo "$out" >&2; return 1 ;;
+                  esac
+                fi
+              }
               {{- range $toLabel }}
-              claim=$(kubectl get persistentvolumeclaims {{ . }} -n {{ $namespace }} --ignore-not-found -o name)
-              if [ -n "$claim" ]; then
-                kubectl label persistentvolumeclaims {{ . }} -n {{ $namespace }} {{ $groupKey }}={{ $vmName }}
-              fi
+              label_claim {{ . }}{{ if has . $emptyLabel }} --overwrite{{ end }} {{ $groupKey }}={{ $vmName }}
               {{- end }}
               {{- range $toUnlabel }}
-              claim=$(kubectl get persistentvolumeclaims {{ . }} -n {{ $namespace }} --ignore-not-found -o name)
-              if [ -n "$claim" ]; then
-                kubectl label persistentvolumeclaims {{ . }} -n {{ $namespace }} {{ $groupKey }}-
-              fi
+              label_claim {{ . }} {{ $groupKey }}-
               {{- end }}
 ---
 apiVersion: v1
