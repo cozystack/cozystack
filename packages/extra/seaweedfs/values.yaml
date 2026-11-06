@@ -194,8 +194,15 @@ s3:
   resourcesPreset: "t1.small"
 
 ## @typedef {struct} Lifecycle - Enforcement of S3 bucket lifecycle rules.
-## @field {bool} [enabled] - Run the SeaweedFS admin server and a worker that applies bucket lifecycle rules, once a day. When disabled, rules are still accepted and stored, but not applied. Ignored with the Client topology, whose rules are enforced by the instance it connects to.
+## @field {bool} [enabled] - Run the SeaweedFS admin server and a worker that applies bucket lifecycle rules, once a day. When disabled, rules are still accepted and stored, but not applied. Ignored with the Client topology, whose rules are enforced by the instance it connects to. Rules stored before enabling are applied on the first pass, minutes after the switch. While on, in a bucket without versioning enabled, an object overwritten between the daily listing and its expiry delete can be deleted although it is new.
 
 ## @param {Lifecycle} [lifecycle] - S3 bucket lifecycle configuration.
 lifecycle:
-  enabled: true
+  # Off by default. The daily walk of SeaweedFS (4.45 through 4.52) sends its
+  # expiry deletes without an object identity, which the s3 server takes as
+  # "skip the check" (weed/s3api/s3lifecycle/dailyrun/walker_dispatcher.go,
+  # identityMatches in weed/s3api/s3api_internal_lifecycle.go), and it does not
+  # re-check the object's age. A key overwritten between the walk's listing and
+  # the delete loses its new content, which a tenant bucket that rewrites a
+  # fixed key can hit. On by default only once that path carries identity.
+  enabled: false
