@@ -5,8 +5,13 @@
 # backupSource, so the target never needs to write into the source's prefix, and
 # a shared prefix would interleave the two clusters' oplog/backup metadata (both
 # run replset rs0) — a source PITR could then resolve oplog chunks the target
-# wrote. No "app" user or database is declared: the restore recreates the demo
-# database from the dump.
+# wrote.
+#
+# A to-copy restore keeps the target's own users and copies only the databases
+# the target declares, so the demo database the source writes its sentinel to
+# is declared here. Its roles map is empty because no user of the target needs
+# it in this demo, and the chart cannot render a database with no roles key
+# once the release has users.
 ---
 apiVersion: apps.cozystack.io/v1alpha1
 kind: MongoDB
@@ -15,6 +20,9 @@ metadata:
 spec:
   replicas: 1
   size: 1Gi
+  databases:
+    demo:
+      roles: {}
   backup:
     enabled: true
     destinationPath: "s3://REPLACE_WITH_COSI_BUCKET_NAME/mongodb-target/"
