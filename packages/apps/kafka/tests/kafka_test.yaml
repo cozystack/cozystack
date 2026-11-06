@@ -144,6 +144,8 @@ tests:
             port: 9094
             type: loadbalancer
             tls: false
+            authentication:
+              type: scram-sha-512
       - notContains:
           path: spec.kafka.listeners
           content:
@@ -151,6 +153,8 @@ tests:
             port: 9094
             type: loadbalancer
             tls: true
+            authentication:
+              type: scram-sha-512
 
   - it: creates external loadbalancer listener with tls when external is true
     release:
@@ -166,6 +170,8 @@ tests:
             port: 9094
             type: loadbalancer
             tls: true
+            authentication:
+              type: scram-sha-512
 
   - it: configures internal listeners by default and omits external
     release:
