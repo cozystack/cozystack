@@ -19,15 +19,22 @@ package server_test
 import (
 	"bufio"
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	helmv2 "github.com/fluxcd/helm-controller/api/v2"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apiserver/pkg/authentication/authenticator"
+	"k8s.io/apiserver/pkg/authentication/user"
+	"k8s.io/apiserver/pkg/authorization/authorizerfactory"
 	"k8s.io/apiserver/pkg/registry/rest"
 	genericapiserver "k8s.io/apiserver/pkg/server"
 	utilfeature "k8s.io/apiserver/pkg/util/feature"
@@ -36,6 +43,7 @@ import (
 	baseversion "k8s.io/component-base/version"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	appsv1alpha1 "github.com/cozystack/cozystack/pkg/apis/apps/v1alpha1"
 	"github.com/cozystack/cozystack/pkg/apiserver"
@@ -52,7 +60,7 @@ var redisConfig = config.Resource{
 // startAppsServer serves the apps group through the real apiserver handler
 // chain, with the application storage backed by a fake client. The kinds are
 // registered on the process-wide apiserver.Scheme.
-func startAppsServer(t *testing.T, rc *config.ResourceConfig) (*httptest.Server, client.Client) {
+func startAppsServer(t *testing.T, rc *config.ResourceConfig, objects ...client.Object) (*httptest.Server, client.Client) {
 	t.Helper()
 	if err := appsv1alpha1.RegisterDynamicTypes(apiserver.Scheme, rc); err != nil {
 		t.Fatal(err)
@@ -62,9 +70,28 @@ func startAppsServer(t *testing.T, rc *config.ResourceConfig) (*httptest.Server,
 	if err := helmv2.AddToScheme(backing); err != nil {
 		t.Fatal(err)
 	}
-	cli := fake.NewClientBuilder().WithScheme(backing).Build()
+	if err := corev1.AddToScheme(backing); err != nil {
+		t.Fatal(err)
+	}
+	// A real apiserver assigns metadata.uid on create. The fake client does not, and
+	// the generic patch handler treats a current object without a uid as missing, so
+	// a PATCH of an existing application would be applied onto an empty object.
+	var uids atomic.Int64
+	cli := fake.NewClientBuilder().WithScheme(backing).WithObjects(objects...).
+		WithInterceptorFuncs(interceptor.Funcs{
+			Create: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
+				if obj.GetUID() == "" {
+					obj.SetUID(types.UID(fmt.Sprintf("00000000-0000-0000-0000-%012d", uids.Add(1))))
+				}
+				return c.Create(ctx, obj, opts...)
+			},
+		}).Build()
 
 	cfg := genericapiserver.NewConfig(apiserver.Codecs)
+	cfg.Authorization.Authorizer = authorizerfactory.NewAlwaysAllowAuthorizer()
+	cfg.Authentication.Authenticator = authenticator.RequestFunc(func(*http.Request) (*authenticator.Response, bool, error) {
+		return &authenticator.Response{User: &user.DefaultInfo{Name: "test-user"}}, true, nil
+	})
 	cfg.ExternalAddress = "localhost:443"
 	cfg.LoopbackClientConfig = &restclient.Config{}
 	cfg.FeatureGate = utilfeature.DefaultMutableFeatureGate
@@ -78,7 +105,7 @@ func startAppsServer(t *testing.T, rc *config.ResourceConfig) (*httptest.Server,
 	}
 	storage := map[string]rest.Storage{}
 	for i := range rc.Resources {
-		storage[rc.Resources[i].Application.Plural] = applicationstorage.NewREST(cli, cli, &rc.Resources[i])
+		storage[rc.Resources[i].Application.Plural] = applicationstorage.NewREST(cli, cli, cli, &rc.Resources[i])
 	}
 	if err := apiserver.InstallAppsAPIGroup(srv, storage); err != nil {
 		t.Fatal(err)

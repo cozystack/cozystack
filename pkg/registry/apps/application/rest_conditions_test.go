@@ -284,7 +284,7 @@ func TestConvertConditions_WorkloadsReadyUnknownOnError(t *testing.T) {
 	// Deliberately NOT registering cozyv1alpha1 so that List returns an error
 
 	c := fake.NewClientBuilder().WithScheme(scheme).Build()
-	r := NewREST(c, nil, &config.Resource{
+	r := NewREST(c, nil, nil, &config.Resource{
 		Application: config.ApplicationConfig{
 			Kind:     "PostgreSQL",
 			Plural:   "postgresqls",
