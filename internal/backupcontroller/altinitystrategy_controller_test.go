@@ -1495,3 +1495,79 @@ func TestReconcileAltinityRestore_UnreadableHoldStateDoesNotStartTheJob(t *testi
 		})
 	}
 }
+
+// A backup held for the credentials keeps the archive name it was given from
+// its persisted StartedAt: the held reconciles write the job's status, and the
+// Pod created after the hold, and the Backup recorded after it, must still
+// name the same archive, which is stamped no later than the Backup's takenAt.
+func TestReconcileAltinity_CredentialsWaitKeepsTheArchiveName(t *testing.T) {
+	startedAt := metav1.NewTime(time.Date(2026, 3, 4, 5, 6, 7, 0, time.UTC))
+	backupJob := &backupsv1alpha1.BackupJob{
+		ObjectMeta: metav1.ObjectMeta{Name: "test-bj", Namespace: "tenant-test"},
+		Spec: backupsv1alpha1.BackupJobSpec{
+			ApplicationRef:  newAltinityClickHouseRef("ch-test"),
+			BackupClassName: "clickhouse-backup",
+		},
+		Status: backupsv1alpha1.BackupJobStatus{StartedAt: &startedAt, Phase: backupsv1alpha1.BackupJobPhaseRunning},
+	}
+	secret := projectedCredentials("tenant-test", time.Now())
+	r, _, _ := newAltinityTestEnv(t, newAltinityClickHouseApp("ch-test", "tenant-test"),
+		clientfake.NewClientBuilder().WithObjects(backupJob, newAltinityArchiveStrategy("clickhouse-strategy"), secret))
+	r.CredentialsConfig.TargetSecretName = "cozy-backups-creds"
+	resolved := &ResolvedBackupConfig{
+		StrategyRef: corev1.TypedLocalObjectReference{
+			APIGroup: new(strategyv1alpha1.GroupVersion.Group),
+			Kind:     strategyv1alpha1.AltinityStrategyKind,
+			Name:     "clickhouse-strategy",
+		},
+	}
+	ctx := context.Background()
+	const want = "clickhouse-ch-test-20260304T050607Z"
+	reconcile := func(step string) {
+		t.Helper()
+		j := &backupsv1alpha1.BackupJob{}
+		if err := r.Get(ctx, client.ObjectKeyFromObject(backupJob), j); err != nil {
+			t.Fatalf("%s: get BackupJob: %v", step, err)
+		}
+		if _, err := r.reconcileAltinity(ctx, j, resolved); err != nil {
+			t.Fatalf("%s: reconcileAltinity: %v", step, err)
+		}
+	}
+
+	reconcile("held")
+	job := &batchv1.Job{}
+	if err := r.Get(ctx, client.ObjectKey{Namespace: "tenant-test", Name: jobNameForBackupJob(backupJob)}, job); !apierrors.IsNotFound(err) {
+		t.Fatalf("the Job exists while the credentials wait should hold it: %v", err)
+	}
+
+	if err := r.Get(ctx, client.ObjectKeyFromObject(secret), secret); err != nil {
+		t.Fatalf("get projected Secret: %v", err)
+	}
+	secret.Annotations[credentialsUpdatedAtAnnotation] = time.Now().Add(-altinityCredentialsPropagation - time.Second).UTC().Format(time.RFC3339)
+	if err := r.Update(ctx, secret); err != nil {
+		t.Fatalf("age the credentials stamp: %v", err)
+	}
+	reconcile("after the wait")
+	if err := r.Get(ctx, client.ObjectKey{Namespace: "tenant-test", Name: jobNameForBackupJob(backupJob)}, job); err != nil {
+		t.Fatalf("get backup Job: %v", err)
+	}
+	if got := job.Spec.Template.Spec.Containers[0].Args[1]; got != "--archive="+want {
+		t.Fatalf("backup Pod was rendered with %q after the wait, want --archive=%s", got, want)
+	}
+
+	job.Status.Conditions = []batchv1.JobCondition{{Type: batchv1.JobComplete, Status: corev1.ConditionTrue}}
+	if err := r.Status().Update(ctx, job); err != nil {
+		t.Fatalf("mark backup Job complete: %v", err)
+	}
+	reconcile("completed")
+	created := &backupsv1alpha1.Backup{}
+	if err := r.Get(ctx, client.ObjectKey{Namespace: "tenant-test", Name: backupJob.Name}, created); err != nil {
+		t.Fatalf("get Backup: %v", err)
+	}
+	if got := created.Spec.DriverMetadata[altinityArchiveMetaKey]; got != want {
+		t.Errorf("Backup records archive %q, want %q", got, want)
+	}
+	if stamp := created.Spec.TakenAt.UTC().Format(altinityArchiveTimeLayout); stamp < "20260304T050607Z" {
+		t.Errorf("Backup takenAt %s is earlier than its archive's stamp", stamp)
+	}
+}
