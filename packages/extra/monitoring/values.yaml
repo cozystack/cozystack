@@ -163,6 +163,7 @@ tracingCollector:
 ## @field {string} [repeatInterval] - Minimum time before a still-firing alert is emailed again, as an Alertmanager duration with units `y`, `w`, `d`, `h`, `m`, `s`, `ms` in descending order, each at most once, such as `5m`, `12h` or `1h30m`. Delivery is evaluated every 5m, so shorter intervals take effect at 5m and other intervals round up to a multiple of 5m. Zero, a unit out of order and a total beyond what Alertmanager accepts fail the render. Empty keeps the 12h default.
 ## @field {[]string} [alertnames] - Alert names emailed whether or not the rule carries the notify_email label, with no severity filter. Earlier platform routes still take precedence. Alerts with `event="Heartbeat"`, including `Watchdog`, go only to Alerta, and alerts with severity `none`, `CDIDefaultStorageClassDegraded` and `CDINoDefaultStorageClass` are blackholed and never reach email. This is the way to opt in alerts the platform ships, since their helm-owned rule definitions cannot be labelled per cluster. Entries must be plain Prometheus alert names such as `KubeAPIDown`, and anything else fails the render. Empty adds no extra route.
 ## @field {[]string} [severities] - Severities the notify_email route accepts (e.g. ["critical","major","warning"]). Empty keeps the default of critical and major. List every severity in use to email opted-in alerts regardless of severity. Entries must be plain severity names, and anything else fails the render.
+## @field {string} [template] - Text of an Alertmanager template file that changes how the emails look. Define `email.default.subject` and `email.default.html` in it to replace the subject and the HTML body Alertmanager uses for every email, for example to mark the severity or to link to Alerta. The chart stores the text in a ConfigMap named `alertmanager-email-template` and lists it among the Alertmanager templates, so Alertmanager parses it together with its configuration. A template that does not parse fails that load, a running Alertmanager keeps the configuration it already has and a pod that starts with it does not come up. A template that parses but fails on a notification, for example on a missing key, drops that email. The text must contain at least one `define` action. Empty keeps the Alertmanager defaults.
 
 ## @typedef {struct} Alerts - Alert routing configuration.
 ## @field {TelegramAlerts} [telegram] - Configuration for Telegram alerts.
@@ -202,6 +203,7 @@ alerta:
       repeatInterval: ""
       alertnames: []
       severities: []
+      template: ""
 ##
 ## @section Grafana configuration
 ##
