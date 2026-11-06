@@ -44,7 +44,13 @@ type nodeDefaultsRender struct{ name, diskURL, script string }
 
 func nodeDefaultsREST(t *testing.T, objects ...client.Object) *REST {
 	t.Helper()
-	raw, err := os.ReadFile("../../../../packages/system/kubernetes-nodes-rd/cozyrds/kubernetes-nodes.yaml")
+	return definitionDefaultsREST(t, "../../../../packages/system/kubernetes-nodes-rd/cozyrds/kubernetes-nodes.yaml", objects...)
+}
+
+// definitionDefaultsREST serves the application of a real ApplicationDefinition from the tree.
+func definitionDefaultsREST(t *testing.T, path string, objects ...client.Object) *REST {
+	t.Helper()
+	raw, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -188,6 +194,76 @@ func TestInstallationDefaultsKubernetesNodesMirrorsReplaceAsAWhole(t *testing.T)
 	want := jsonValue(t, []byte(`{"docker.io":{"endpoints":["https://pool.example.com"]}}`))
 	if !reflect.DeepEqual(talos["registryMirrors"], want) {
 		t.Fatalf("registryMirrors = %v, want %v", talos["registryMirrors"], want)
+	}
+}
+
+// The chart refuses a pool that sets both osImage.builtin and osImage.factory, and an
+// entry that sets one of them passes validation, so only the atomic marker on the real
+// schema keeps the merge from handing a factory pool the platform's builtin.
+func TestInstallationDefaultsKubernetesNodesOsImageIsAtomic(t *testing.T) {
+	entry := `{"kubernetesnodeses":{"talos":{"imageFactoryURL":"https://factory.example.com"},"osImage":{"builtin":{"version":"v1.13.0","schematicID":"376567988ad370138ad8b2698212367b8edcb69b5fd68c80be1f2ec7d603b4ba"}}}}`
+	create := func(osImage string) *appsv1alpha1.Application {
+		r := nodeDefaultsREST(t, defaultsConfig(entry))
+		app := defaultsApp(`{"cluster":"demo","version":"v1.35","instanceType":"","resources":{"cpu":"2","memory":"4Gi"}` + osImage + `}`)
+		app.Name = "demo-md0"
+		created, err := r.Create(request.WithNamespace(context.Background(), "tenant-test"), app, nil, &metav1.CreateOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		stored := created.(*appsv1alpha1.Application)
+		if talos := jsonValue(t, stored.Spec.Raw).(map[string]any)["talos"].(map[string]any); talos["imageFactoryURL"] != "https://factory.example.com" {
+			t.Fatalf("the entry was skipped, so this test would pass without the merge rule: %v", talos)
+		}
+		return stored
+	}
+
+	factory := create(`,"osImage":{"factory":{"version":"v1.13.0"}}`)
+	want := jsonValue(t, []byte(`{"factory":{"version":"v1.13.0"}}`))
+	if got := jsonValue(t, factory.Spec.Raw).(map[string]any)["osImage"]; !reflect.DeepEqual(got, want) {
+		t.Fatalf("osImage = %v, want %v", got, want)
+	}
+	renderStoredNodeDefaults(t, &apiextv1.JSON{Raw: factory.Spec.Raw})
+
+	omitted := create(``)
+	builtin := jsonValue(t, omitted.Spec.Raw).(map[string]any)["osImage"].(map[string]any)
+	if _, ok := builtin["builtin"]; !ok || len(builtin) != 1 {
+		t.Fatalf("a pool without osImage should receive the platform's builtin whole, got %v", builtin)
+	}
+}
+
+// An object whose children exclude each other is one value: its chart refuses a spec
+// that sets two of them, and an entry that sets one passes validation, so the marker
+// on the real schema is all that keeps the merge from building that object.
+func TestInstallationDefaultsExclusiveChoicesAreAtomic(t *testing.T) {
+	for _, tc := range []struct{ name, definition, entry, user, whole, omitted string }{
+		{
+			"vm-disk source", "vm-disk-rd/cozyrds/vm-disk.yaml",
+			`{"vmdisks":{"source":{"image":{"name":"ubuntu"}}}}`,
+			`{"storage":"5Gi","source":{"http":{"url":"https://example.com/a.img"}}}`,
+			`{"storage":"5Gi","source":{"image":{"name":"ubuntu"}}}`,
+			`{"storage":"5Gi"}`,
+		},
+		{
+			"kubernetes oidc custom config", "kubernetes-rd/cozyrds/kubernetes.yaml",
+			`{"kuberneteses":{"oidc":{"mode":"CustomConfig","customConfig":{"config":"inline"}}}}`,
+			`{"oidc":{"mode":"CustomConfig","customConfig":{"secretRef":{"name":"my-oidc"}}}}`,
+			`{"oidc":{"mode":"CustomConfig","customConfig":{"config":"inline"}}}`,
+			`{}`,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := definitionDefaultsREST(t, "../../../../packages/system/"+tc.definition, defaultsConfig(tc.entry))
+			omitted := defaultsApp(tc.omitted)
+			if err := r.applyInstallationDefaults(context.Background(), omitted); err != nil {
+				t.Fatal(err)
+			}
+			assertSpec(t, omitted.Spec, tc.whole)
+			chosen := defaultsApp(tc.user)
+			if err := r.applyInstallationDefaults(context.Background(), chosen); err != nil {
+				t.Fatal(err)
+			}
+			assertSpec(t, chosen.Spec, tc.user)
+		})
 	}
 }
 
