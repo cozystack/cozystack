@@ -191,6 +191,11 @@ func main() {
 		os.Exit(1)
 	}
 
+	if err := validatePlatformSourceCertSecret(platformSourceURL, platformSourceCertSecret); err != nil {
+		setupLog.Error(err, "invalid platform source flags")
+		os.Exit(1)
+	}
+
 	config := ctrl.GetConfigOrDie()
 
 	// Create a direct client (without cache) for pre-start operations
@@ -439,8 +444,8 @@ func installPlatformSourceResource(ctx context.Context, k8sClient client.Client,
 			return fmt.Errorf("failed to generate OCIRepository: %w", err)
 		}
 	case "git":
-		if certSecretName != "" {
-			return fmt.Errorf("--platform-source-cert-secret is only supported for OCI sources; for a Git source put ca.crt into the --platform-source-secret Secret")
+		if err := validatePlatformSourceCertSecret(sourceURL, certSecretName); err != nil {
+			return err
 		}
 		obj, err = generateGitRepository(resourceName, repoURL, refMap, secretName)
 		if err != nil {
@@ -535,6 +540,19 @@ func parseSystemNamespaceMemory(rawLimit, rawRequest string) (limit, request res
 			request.String(), limit.String())
 	}
 	return limit, request, nil
+}
+
+// validatePlatformSourceCertSecret rejects --platform-source-cert-secret for a
+// Git source: GitRepository has no certSecretRef, and Flux reads a Git CA from
+// the ca.crt key of the --platform-source-secret Secret instead.
+func validatePlatformSourceCertSecret(sourceURL, certSecretName string) error {
+	if certSecretName == "" {
+		return nil
+	}
+	if sourceType, _, err := parsePlatformSourceURL(sourceURL); err == nil && sourceType == "git" {
+		return fmt.Errorf("--platform-source-cert-secret is only supported for OCI sources; for a Git source put ca.crt into the --platform-source-secret Secret")
+	}
+	return nil
 }
 
 // parsePlatformSourceURL parses the source URL and returns the source type and repository URL.
