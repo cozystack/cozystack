@@ -1,0 +1,26 @@
+{
+  "bypass_actors": [],
+  "conditions": {
+    "ref_name": {
+      "exclude": [],
+      "include": [
+        "refs/tags/v*",
+        "refs/tags/api/apps/v1alpha1/v*"
+      ]
+    }
+  },
+  "enforcement": "active",
+  "name": "Release tags are immutable (v*, api/apps/v1alpha1/v*)",
+  "rules": [
+    {
+      "type": "deletion"
+    },
+    {
+      "type": "update"
+    },
+    {
+      "type": "non_fast_forward"
+    }
+  ],
+  "target": "tag"
+}
