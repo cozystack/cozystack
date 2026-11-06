@@ -1,0 +1,351 @@
+suite: vm-instance labels its claims into one Velero volume group
+
+# The hook is lookup-gated: the claims, their volumes and the
+# VolumeGroupSnapshotClasses are mocked through the kubernetes provider, and
+# groupsnapshot v1beta2 is advertised through capabilities. Velero fails a
+# labelled claim it cannot group, so most cases pin what must stay unlabelled.
+release:
+  name: vm-instance-win
+  namespace: tenant-test
+templates:
+  - templates/volume-group-hook.yaml
+set:
+  disks:
+    - name: win-system
+    - name: win-data
+x-capabilities: &groupSnapshotServed
+  apiVersions:
+    - groupsnapshot.storage.k8s.io/v1beta2/VolumeGroupSnapshotClass
+x-scheme: &scheme
+  "v1/PersistentVolumeClaim":
+    gvr: {group: "", version: v1, resource: persistentvolumeclaims}
+    namespaced: true
+  "v1/PersistentVolume":
+    gvr: {group: "", version: v1, resource: persistentvolumes}
+    namespaced: false
+  "groupsnapshot.storage.k8s.io/v1beta2/VolumeGroupSnapshotClass":
+    gvr: {group: groupsnapshot.storage.k8s.io, version: v1beta2, resource: volumegroupsnapshotclasses}
+    namespaced: false
+x-system: &system
+  kind: PersistentVolumeClaim
+  apiVersion: v1
+  metadata: {name: vm-disk-win-system, namespace: tenant-test}
+  spec: {volumeName: pv-system}
+  status: {phase: Bound}
+x-data: &data
+  kind: PersistentVolumeClaim
+  apiVersion: v1
+  metadata: {name: vm-disk-win-data, namespace: tenant-test}
+  spec: {volumeName: pv-data}
+  status: {phase: Bound}
+x-state: &state
+  kind: PersistentVolumeClaim
+  apiVersion: v1
+  metadata:
+    name: persistent-state-for-vm-instance-win-abcde
+    namespace: tenant-test
+    labels: {persistent-state-for: vm-instance-win}
+  spec: {volumeName: pv-state}
+  status: {phase: Bound}
+x-pv-system: &pvSystem {kind: PersistentVolume, apiVersion: v1, metadata: {name: pv-system}, spec: {csi: {driver: linstor.csi.linbit.com}}}
+x-pv-data: &pvData {kind: PersistentVolume, apiVersion: v1, metadata: {name: pv-data}, spec: {csi: {driver: linstor.csi.linbit.com}}}
+x-pv-state: &pvState {kind: PersistentVolume, apiVersion: v1, metadata: {name: pv-state}, spec: {csi: {driver: linstor.csi.linbit.com}}}
+x-default-class: &defaultClass
+  kind: VolumeGroupSnapshotClass
+  apiVersion: groupsnapshot.storage.k8s.io/v1beta2
+  metadata:
+    name: linstor-group-snapshots
+    labels: {velero.io/csi-volumegroupsnapshot-class: "true"}
+  driver: linstor.csi.linbit.com
+tests:
+  - it: labels every disk and the persistent-state claim with the VM name
+    capabilities: *groupSnapshotServed
+    kubernetesProvider:
+      scheme: *scheme
+      objects: [*system, *data, *state, *pvSystem, *pvData, *pvState, *defaultClass]
+    asserts:
+      - hasDocuments:
+          count: 4
+      - matchRegex:
+          path: spec.template.spec.containers[0].args[0]
+          pattern: 'claim label vm-disk-win-system velero.io/volume-group=vm-instance-win\n'
+        documentSelector: {path: kind, value: Job}
+      - matchRegex:
+          path: spec.template.spec.containers[0].args[0]
+          pattern: 'claim label vm-disk-win-data velero.io/volume-group=vm-instance-win\n'
+        documentSelector: {path: kind, value: Job}
+      - matchRegex:
+          path: spec.template.spec.containers[0].args[0]
+          pattern: 'claim label persistent-state-for-vm-instance-win-abcde velero.io/volume-group=vm-instance-win\n'
+        documentSelector: {path: kind, value: Job}
+      - equal:
+          path: rules[0].resourceNames
+          value: [vm-disk-win-system, vm-disk-win-data, persistent-state-for-vm-instance-win-abcde]
+        documentSelector: {path: kind, value: Role}
+
+  - it: renders nothing once every claim already carries the group
+    capabilities: *groupSnapshotServed
+    kubernetesProvider:
+      scheme: *scheme
+      objects:
+        - <<: *system
+          metadata: {name: vm-disk-win-system, namespace: tenant-test, labels: {velero.io/volume-group: vm-instance-win}}
+        - <<: *data
+          metadata: {name: vm-disk-win-data, namespace: tenant-test, labels: {velero.io/volume-group: vm-instance-win}}
+        - <<: *state
+          metadata:
+            name: persistent-state-for-vm-instance-win-abcde
+            namespace: tenant-test
+            labels: {persistent-state-for: vm-instance-win, velero.io/volume-group: vm-instance-win}
+        - *pvSystem
+        - *pvData
+        - *pvState
+        - *defaultClass
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: labels nothing while groupsnapshot v1beta2 is not served
+    kubernetesProvider:
+      scheme: *scheme
+      objects: [*system, *data, *state, *pvSystem, *pvData, *pvState, *defaultClass]
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: labels nothing without a default VolumeGroupSnapshotClass for the driver
+    capabilities: *groupSnapshotServed
+    kubernetesProvider:
+      scheme: *scheme
+      objects:
+        - *system
+        - *data
+        - *pvSystem
+        - *pvData
+        - *pvState
+        - <<: *defaultClass
+          metadata: {name: linstor-group-snapshots}
+        - <<: *defaultClass
+          metadata:
+            name: other-driver
+            labels: {velero.io/csi-volumegroupsnapshot-class: "true"}
+          driver: other.csi.example.com
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: labels nothing when two default classes serve the driver
+    capabilities: *groupSnapshotServed
+    kubernetesProvider:
+      scheme: *scheme
+      objects:
+        - *system
+        - *data
+        - *pvSystem
+        - *pvData
+        - *pvState
+        - *defaultClass
+        - <<: *defaultClass
+          metadata:
+            name: linstor-group-snapshots-2
+            labels: {velero.io/csi-volumegroupsnapshot-class: "true"}
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: labels nothing when the claims span two CSI drivers
+    capabilities: *groupSnapshotServed
+    kubernetesProvider:
+      scheme: *scheme
+      objects:
+        - *system
+        - *data
+        - {kind: PersistentVolume, apiVersion: v1, metadata: {name: pv-system}, spec: {csi: {driver: linstor.csi.linbit.com}}}
+        - {kind: PersistentVolume, apiVersion: v1, metadata: {name: pv-data}, spec: {csi: {driver: other.csi.example.com}}}
+        - *defaultClass
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: leaves an unbound claim out of the group
+    capabilities: *groupSnapshotServed
+    kubernetesProvider:
+      scheme: *scheme
+      objects:
+        - *system
+        - *data
+        - <<: *state
+          spec: {}
+        - *pvSystem
+        - *pvData
+        - *pvState
+        - *defaultClass
+    asserts:
+      - notMatchRegex:
+          path: spec.template.spec.containers[0].args[0]
+          pattern: 'persistent-state-for-vm-instance-win-abcde'
+        documentSelector: {path: kind, value: Job}
+      - equal:
+          path: rules[0].resourceNames
+          value: [vm-disk-win-system, vm-disk-win-data]
+        documentSelector: {path: kind, value: Role}
+
+  - it: leaves out a claim that names its volume but is not Bound yet
+    capabilities: *groupSnapshotServed
+    kubernetesProvider:
+      scheme: *scheme
+      objects:
+        - *system
+        - *data
+        - <<: *state
+          status: {phase: Pending}
+        - *pvSystem
+        - *pvData
+        - *pvState
+        - *defaultClass
+    asserts:
+      - equal:
+          path: rules[0].resourceNames
+          value: [vm-disk-win-system, vm-disk-win-data]
+        documentSelector: {path: kind, value: Role}
+
+  - it: forms no group from a single bound claim
+    set:
+      disks:
+        - name: win-system
+    capabilities: *groupSnapshotServed
+    kubernetesProvider:
+      scheme: *scheme
+      objects: [*system, *pvSystem, *pvData, *pvState, *defaultClass]
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: removes the label from a detached disk and the group that can no longer form
+    # win-data is no longer attached, so only win-system remains: a group of
+    # one is not formed, and both claims that carry this VM's group lose it.
+    # A claim grouped under another VM is not this release's to touch.
+    set:
+      disks:
+        - name: win-system
+    capabilities: *groupSnapshotServed
+    kubernetesProvider:
+      scheme: *scheme
+      objects:
+        - <<: *system
+          metadata: {name: vm-disk-win-system, namespace: tenant-test, labels: {velero.io/volume-group: vm-instance-win}}
+        - <<: *data
+          metadata: {name: vm-disk-win-data, namespace: tenant-test, labels: {velero.io/volume-group: vm-instance-win}}
+        - kind: PersistentVolumeClaim
+          apiVersion: v1
+          metadata: {name: vm-disk-other, namespace: tenant-test, labels: {velero.io/volume-group: vm-instance-other}}
+          spec: {volumeName: pv-data}
+          status: {phase: Bound}
+        - *pvSystem
+        - *pvData
+        - *pvState
+        - *defaultClass
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].args[0]
+          pattern: 'claim label vm-disk-win-data velero.io/volume-group-\n'
+        documentSelector: {path: kind, value: Job}
+      - matchRegex:
+          path: spec.template.spec.containers[0].args[0]
+          pattern: 'claim label vm-disk-win-system velero.io/volume-group-\n'
+        documentSelector: {path: kind, value: Job}
+      - notMatchRegex:
+          path: spec.template.spec.containers[0].args[0]
+          pattern: 'vm-disk-other'
+        documentSelector: {path: kind, value: Job}
+      - notMatchRegex:
+          path: spec.template.spec.containers[0].args[0]
+          pattern: 'velero.io/volume-group=vm-instance-win'
+        documentSelector: {path: kind, value: Job}
+
+  - it: leaves a claim grouped under another VM out of this VM's group
+    # Taking it over would split the other VM's group across two snapshots.
+    capabilities: *groupSnapshotServed
+    kubernetesProvider:
+      scheme: *scheme
+      objects:
+        - <<: *system
+          metadata: {name: vm-disk-win-system, namespace: tenant-test, labels: {velero.io/volume-group: vm-instance-other}}
+        - *data
+        - *state
+        - *pvSystem
+        - *pvData
+        - *pvState
+        - *defaultClass
+    asserts:
+      - equal:
+          path: rules[0].resourceNames
+          value: [vm-disk-win-data, persistent-state-for-vm-instance-win-abcde]
+        documentSelector: {path: kind, value: Role}
+
+  - it: replaces an empty group label only if it is still empty
+    # kubectl refuses to change a present label without --overwrite, even an
+    # empty one, and --overwrite would also replace a group another VM set
+    # since the render; the JSON patch tests for the empty value first.
+    capabilities: *groupSnapshotServed
+    kubernetesProvider:
+      scheme: *scheme
+      objects:
+        - <<: *system
+          metadata: {name: vm-disk-win-system, namespace: tenant-test, labels: {velero.io/volume-group: ""}}
+        - *data
+        - *pvSystem
+        - *pvData
+        - *defaultClass
+    documentSelector: {path: kind, value: Job}
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].args[0]
+          pattern: 'claim patch vm-disk-win-system --type=json -p ''\[\{"op":"test","path":"/metadata/labels/velero.io~1volume-group","value":""\},\{"op":"replace","path":"/metadata/labels/velero.io~1volume-group","value":"vm-instance-win"\}\]''\n'
+      - matchRegex:
+          path: spec.template.spec.containers[0].args[0]
+          pattern: 'claim label vm-disk-win-data velero.io/volume-group=vm-instance-win\n'
+
+  - it: skips a claim deleted between the render and the Job
+    capabilities: *groupSnapshotServed
+    kubernetesProvider:
+      scheme: *scheme
+      objects: [*system, *data, *pvSystem, *pvData, *defaultClass]
+    documentSelector: {path: kind, value: Job}
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].args[0]
+          pattern: 'if ! out=\$\(kubectl "\$verb" persistentvolumeclaims "\$@" -n tenant-test 2>&1\); then\n\s+case "\$out" in\n\s+\*"\(NotFound\)"\*\) echo "\$out" ;;\n\s+\*\) echo "\$out" >&2; return 1 ;;'
+
+  - it: runs the Job under a restrictive non-root securityContext
+    capabilities: *groupSnapshotServed
+    kubernetesProvider:
+      scheme: *scheme
+      objects: [*system, *data, *pvSystem, *pvData, *pvState, *defaultClass]
+    documentSelector: {path: kind, value: Job}
+    asserts:
+      - equal:
+          path: spec.template.spec.securityContext.runAsNonRoot
+          value: true
+      - equal:
+          path: spec.template.spec.securityContext.runAsUser
+          value: 65534
+      - equal:
+          path: spec.template.spec.containers[0].securityContext.allowPrivilegeEscalation
+          value: false
+      - contains:
+          path: spec.template.spec.containers[0].securityContext.capabilities.drop
+          content: ALL
+      - equal:
+          path: spec.template.metadata.labels["policy.cozystack.io/allow-to-apiserver"]
+          value: "true"
+
+  - it: deletes the hook RBAC once the hooks succeed
+    capabilities: *groupSnapshotServed
+    kubernetesProvider:
+      scheme: *scheme
+      objects: [*system, *data, *pvSystem, *pvData, *defaultClass]
+    asserts:
+      - equal:
+          path: metadata.annotations["helm.sh/hook-delete-policy"]
+          value: hook-succeeded,before-hook-creation

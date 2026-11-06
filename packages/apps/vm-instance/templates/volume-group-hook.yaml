@@ -1,0 +1,198 @@
+{{- /* Velero snapshots the PVCs that share a velero.io/volume-group value as
+       one VolumeGroupSnapshot, so a VM whose disks are frozen together for an
+       application-consistent backup is thawed after a single snapshot instead
+       of one per volume; Windows holds a VSS freeze for 10 seconds at most.
+
+       Nothing this chart renders can carry that label onto the claims: CDI
+       copies DataVolume labels to the PVC only when it creates it, and a
+       VMDisk exists, PVC included, before any VM names it; KubeVirt creates
+       the persistent-state-for PVC (TPM, persistent EFI) with a fixed label
+       set. A hook labels the claims instead, and only the ones the render saw,
+       so a state PVC created after it (first boot, a migration onto a new RWO
+       claim) waits for the next upgrade and is snapshotted on its own.
+
+       Velero 1.18 has no fallback for a labelled claim: an unbound member, a
+       second CSI driver in the group, or no default VolumeGroupSnapshotClass
+       for the driver fails it. The group is therefore formed only from bound
+       claims of a single driver that exactly one default class serves, and the
+       label is removed from every claim of this VM otherwise.
+
+       A claim already grouped under another VM is left out rather than taken
+       over: relabelling it would split that VM's group. A detached disk is
+       released when its former VM is next upgraded. */}}
+{{- $vmName := include "virtual-machine.fullname" . -}}
+{{- $namespace := .Release.Namespace -}}
+{{- $groupKey := "velero.io/volume-group" -}}
+
+{{- $claims := dict -}}
+{{- range (lookup "v1" "PersistentVolumeClaim" $namespace "").items | default list -}}
+  {{- $_ := set $claims .metadata.name . -}}
+{{- end -}}
+
+{{- $candidates := list -}}
+{{- range .Values.disks -}}
+  {{- with get $claims (printf "vm-disk-%s" .name) -}}
+    {{- $candidates = append $candidates . -}}
+  {{- end -}}
+{{- end -}}
+{{- range $claims -}}
+  {{- if eq (dig "metadata" "labels" "persistent-state-for" "" . | toString) $vmName -}}
+    {{- $candidates = append $candidates . -}}
+  {{- end -}}
+{{- end -}}
+{{- $members := list -}}
+{{- range $candidates -}}
+  {{- if has (dig "metadata" "labels" $groupKey "" . | toString) (list "" $vmName) -}}
+    {{- $members = append $members . -}}
+  {{- end -}}
+{{- end -}}
+
+{{- $drivers := dict -}}
+{{- $bound := list -}}
+{{- range $claim := $members -}}
+  {{- with and (eq (dig "status" "phase" "" $claim | toString) "Bound") (dig "spec" "volumeName" "" $claim) -}}
+    {{- with dig "spec" "csi" "driver" "" (lookup "v1" "PersistentVolume" "" . | default dict) -}}
+      {{- $_ := set $drivers (toString .) true -}}
+      {{- $bound = append $bound $claim.metadata.name -}}
+    {{- end -}}
+  {{- end -}}
+{{- end -}}
+
+{{- $desired := list -}}
+{{- if and (eq (len $drivers) 1) (ge (len $bound) 2) (.Capabilities.APIVersions.Has "groupsnapshot.storage.k8s.io/v1beta2/VolumeGroupSnapshotClass") -}}
+  {{- $driver := first (keys $drivers) -}}
+  {{- $defaultClasses := 0 -}}
+  {{- range (lookup "groupsnapshot.storage.k8s.io/v1beta2" "VolumeGroupSnapshotClass" "" "").items | default list -}}
+    {{- if and (eq (.driver | toString) $driver) (eq (dig "metadata" "labels" "velero.io/csi-volumegroupsnapshot-class" "" . | toString) "true") -}}
+      {{- $defaultClasses = add1 $defaultClasses -}}
+    {{- end -}}
+  {{- end -}}
+  {{- if eq $defaultClasses 1 -}}
+    {{- $desired = $bound -}}
+  {{- end -}}
+{{- end -}}
+
+{{- $toLabel := list -}}
+{{- $emptyLabel := list -}}
+{{- range $desired -}}
+  {{- if ne (dig "metadata" "labels" $groupKey "" (get $claims .) | toString) $vmName -}}
+    {{- $toLabel = append $toLabel . -}}
+    {{- if hasKey (dig "metadata" "labels" dict (get $claims .)) $groupKey -}}
+      {{- $emptyLabel = append $emptyLabel . -}}
+    {{- end -}}
+  {{- end -}}
+{{- end -}}
+{{- $toUnlabel := list -}}
+{{- range $name, $claim := $claims -}}
+  {{- if and (eq (dig "metadata" "labels" $groupKey "" $claim | toString) $vmName) (not (has $name $desired)) -}}
+    {{- $toUnlabel = append $toUnlabel $name -}}
+  {{- end -}}
+{{- end -}}
+
+{{- if or $toLabel $toUnlabel }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: "{{ $.Release.Name }}-volume-group"
+  annotations:
+    helm.sh/hook: post-install,post-upgrade
+    helm.sh/hook-weight: "0"
+    helm.sh/hook-delete-policy: hook-succeeded,before-hook-creation
+spec:
+  template:
+    metadata:
+      labels:
+        app: "{{ $.Release.Name }}-volume-group"
+        policy.cozystack.io/allow-to-apiserver: "true"
+    spec:
+      serviceAccountName: {{ $.Release.Name }}-volume-group
+      restartPolicy: Never
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: label-claims
+          image: docker.io/alpine/k8s:1.36.2
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              memory: "16Mi"
+              cpu: "10m"
+            limits:
+              memory: "128Mi"
+              cpu: "100m"
+          command: ["sh", "-exc"]
+          {{- /* A claim deleted since the render is skipped, not fatal: the rest
+                 of the group stays valid for Velero without it. Any other
+                 failure still fails the Job. A label present but empty is
+                 replaced by a JSON patch that tests for the empty value first,
+                 so the API server refuses it, instead of taking the claim over,
+                 if another VM has grouped the claim since the render. */}}
+          args:
+            - |
+              claim() {
+                verb=$1
+                shift
+                if ! out=$(kubectl "$verb" persistentvolumeclaims "$@" -n {{ $namespace }} 2>&1); then
+                  case "$out" in
+                    *"(NotFound)"*) echo "$out" ;;
+                    *) echo "$out" >&2; return 1 ;;
+                  esac
+                fi
+              }
+              {{- range $toLabel }}
+              {{- if has . $emptyLabel }}
+              {{- $path := printf "/metadata/labels/%s" ($groupKey | replace "/" "~1") }}
+              claim patch {{ . }} --type=json -p '{{ list (dict "op" "test" "path" $path "value" "") (dict "op" "replace" "path" $path "value" $vmName) | toJson }}'
+              {{- else }}
+              claim label {{ . }} {{ $groupKey }}={{ $vmName }}
+              {{- end }}
+              {{- end }}
+              {{- range $toUnlabel }}
+              claim label {{ . }} {{ $groupKey }}-
+              {{- end }}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ $.Release.Name }}-volume-group
+  annotations:
+    helm.sh/hook: post-install,post-upgrade
+    helm.sh/hook-weight: "-5"
+    helm.sh/hook-delete-policy: hook-succeeded,before-hook-creation
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $.Release.Name }}-volume-group
+  annotations:
+    helm.sh/hook: post-install,post-upgrade
+    helm.sh/hook-weight: "-5"
+    helm.sh/hook-delete-policy: hook-succeeded,before-hook-creation
+rules:
+  - apiGroups: [""]
+    resources: ["persistentvolumeclaims"]
+    resourceNames: {{ concat $toLabel $toUnlabel | toJson }}
+    verbs: ["get", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $.Release.Name }}-volume-group
+  annotations:
+    helm.sh/hook: post-install,post-upgrade
+    helm.sh/hook-weight: "-5"
+    helm.sh/hook-delete-policy: hook-succeeded,before-hook-creation
+subjects:
+  - kind: ServiceAccount
+    name: {{ $.Release.Name }}-volume-group
+roleRef:
+  kind: Role
+  name: {{ $.Release.Name }}-volume-group
+  apiGroup: rbac.authorization.k8s.io
+{{- end }}
