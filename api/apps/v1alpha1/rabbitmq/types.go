@@ -48,6 +48,10 @@ type ConfigSpec struct {
 	// Virtual hosts configuration map.
 	// +kubebuilder:default:={}
 	Vhosts map[string]Vhost `json:"vhosts,omitempty"`
+	// Name of a SchedulingClass CR (cluster-scoped, group cozystack.io) applied to this application's workloads in place of the tenant's. Must be the tenant's own class or one listed in the tenant's `allowedSchedulingClasses`; any other value is refused. Empty means inherit from the tenant.
+	// +kubebuilder:default:=""
+	// +kubebuilder:validation:MaxLength=63
+	SchedulingClass string `json:"schedulingClass"`
 }
 
 type Resources struct {

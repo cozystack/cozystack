@@ -39,14 +39,15 @@ The scope is **definitions only** — vhosts, users, permissions, queues, exchan
 
 ### Application-specific parameters
 
-| Name                          | Description                      | Type                | Value |
-| ----------------------------- | -------------------------------- | ------------------- | ----- |
-| `users`                       | Users configuration map.         | `map[string]object` | `{}`  |
-| `users[name].password`        | Password for the user.           | `string`            | `""`  |
-| `vhosts`                      | Virtual hosts configuration map. | `map[string]object` | `{}`  |
-| `vhosts[name].roles`          | Virtual host roles list.         | `object`            | `{}`  |
-| `vhosts[name].roles.admin`    | List of admin users.             | `[]string`          | `[]`  |
-| `vhosts[name].roles.readonly` | List of readonly users.          | `[]string`          | `[]`  |
+| Name                          | Description                                                                                                                                                                                                                                                                                   | Type                | Value |
+| ----------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------- | ----- |
+| `users`                       | Users configuration map.                                                                                                                                                                                                                                                                      | `map[string]object` | `{}`  |
+| `users[name].password`        | Password for the user.                                                                                                                                                                                                                                                                        | `string`            | `""`  |
+| `vhosts`                      | Virtual hosts configuration map.                                                                                                                                                                                                                                                              | `map[string]object` | `{}`  |
+| `vhosts[name].roles`          | Virtual host roles list.                                                                                                                                                                                                                                                                      | `object`            | `{}`  |
+| `vhosts[name].roles.admin`    | List of admin users.                                                                                                                                                                                                                                                                          | `[]string`          | `[]`  |
+| `vhosts[name].roles.readonly` | List of readonly users.                                                                                                                                                                                                                                                                       | `[]string`          | `[]`  |
+| `schedulingClass`             | Name of a SchedulingClass CR (cluster-scoped, group cozystack.io) applied to this application's workloads in place of the tenant's. Must be the tenant's own class or one listed in the tenant's `allowedSchedulingClasses`; any other value is refused. Empty means inherit from the tenant. | `string`            | `""`  |
 
 
 ## TLS scope

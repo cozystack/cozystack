@@ -263,10 +263,11 @@ Releases with `external: false`, and sharded releases in any configuration, are 
 
 ### Bootstrap (recovery) parameters
 
-| Name                     | Description                                               | Type     | Value   |
-| ------------------------ | --------------------------------------------------------- | -------- | ------- |
-| `bootstrap`              | Bootstrap configuration.                                  | `object` | `{}`    |
-| `bootstrap.enabled`      | Whether to restore from a backup.                         | `bool`   | `false` |
-| `bootstrap.recoveryTime` | Timestamp for point-in-time recovery; empty means latest. | `string` | `""`    |
-| `bootstrap.backupName`   | Name of backup to restore from.                           | `string` | `""`    |
+| Name                     | Description                                                                                                                                                                                                                                                                                   | Type     | Value   |
+| ------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------- | ------- |
+| `bootstrap`              | Bootstrap configuration.                                                                                                                                                                                                                                                                      | `object` | `{}`    |
+| `bootstrap.enabled`      | Whether to restore from a backup.                                                                                                                                                                                                                                                             | `bool`   | `false` |
+| `bootstrap.recoveryTime` | Timestamp for point-in-time recovery; empty means latest.                                                                                                                                                                                                                                     | `string` | `""`    |
+| `bootstrap.backupName`   | Name of backup to restore from.                                                                                                                                                                                                                                                               | `string` | `""`    |
+| `schedulingClass`        | Name of a SchedulingClass CR (cluster-scoped, group cozystack.io) applied to this application's workloads in place of the tenant's. Must be the tenant's own class or one listed in the tenant's `allowedSchedulingClasses`; any other value is refused. Empty means inherit from the tenant. | `string` | `""`    |
 
