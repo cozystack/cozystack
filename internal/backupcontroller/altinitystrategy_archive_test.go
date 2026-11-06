@@ -856,3 +856,65 @@ func TestCleanupAltinityBackup_WaitsForADeletingJob(t *testing.T) {
 		t.Error("expected a requeue while the Job is being deleted, not a release on its stale completion")
 	}
 }
+
+// Two runs that a controller naming archives without the BackupJob's UID
+// started within the same second, recorded after the upgrade, record one
+// archive. Deleting either must not take the archive from the other.
+func TestCleanupAltinityBackup_KeepsAnArchiveAnotherBackupRecords(t *testing.T) {
+	sharing := func(name string) *backupsv1alpha1.Backup {
+		b := altinityCleanupBackup(name)
+		b.Spec.DriverMetadata[altinityArchiveMetaKey] = "clickhouse-ch-test-ch-bk"
+		return b
+	}
+	for name, tc := range map[string]struct {
+		other     *backupsv1alpha1.Backup
+		wantShare bool
+	}{
+		"another Backup records the archive":     {other: sharing("ch-bk-twin"), wantShare: true},
+		"another Backup records another archive": {other: altinityCleanupBackup("ch-bk-other")},
+		// One that is being deleted as well lets go of the archive; leaving it
+		// to each other would leave it to nobody.
+		"the other Backup is being deleted too": {other: func() *backupsv1alpha1.Backup {
+			b := sharing("ch-bk-twin")
+			now := metav1.Now()
+			b.DeletionTimestamp = &now
+			b.Finalizers = []string{"backups.cozystack.io/cleanup"}
+			return b
+		}()},
+		"a Backup in another namespace records the same name": {other: func() *backupsv1alpha1.Backup {
+			b := sharing("ch-bk-twin")
+			b.Namespace = "tenant-other"
+			return b
+		}()},
+	} {
+		t.Run(name, func(t *testing.T) {
+			backup := altinityCleanupBackup("ch-bk")
+			c, s := newAltinityCleanupClient(append(altinityCleanupFixtures(backup), tc.other)...)
+			rec := record.NewFakeRecorder(10)
+			r := &BackupReconciler{Client: c, Scheme: s, Recorder: rec}
+			res, err := r.cleanupOnDelete(context.Background(), backup)
+			if err != nil {
+				t.Fatalf("cleanupOnDelete: %v", err)
+			}
+			jobs := listJobs(t, c)
+			if !tc.wantShare {
+				if len(jobs) != 1 {
+					t.Errorf("expected the archive deleted through one cleanup Job, got %d", len(jobs))
+				}
+				return
+			}
+			if len(jobs) != 0 {
+				t.Errorf("a shared archive must not be deleted, %d cleanup Job(s) created", len(jobs))
+			}
+			if res.RequeueAfter != 0 || res.Requeue {
+				t.Errorf("expected the Backup released, got %+v", res)
+			}
+			if len(rec.Events) == 0 {
+				t.Fatal("expected a Warning Event naming the archive left behind")
+			}
+			if ev := <-rec.Events; !strings.Contains(ev, "ArtifactNotDeleted") || !strings.Contains(ev, "clickhouse-ch-test-ch-bk") || !strings.Contains(ev, "ch-bk-twin") {
+				t.Errorf("event %q must name the archive and the Backup sharing it", ev)
+			}
+		})
+	}
+}

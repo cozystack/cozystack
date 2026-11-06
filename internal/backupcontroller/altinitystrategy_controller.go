@@ -995,6 +995,13 @@ func (r *BackupReconciler) cleanupAltinityBackup(ctx context.Context, backup *ba
 		if terminating {
 			return r.releaseAltinityCleanup(ctx, backup, archive, "namespace is terminating"), nil
 		}
+		twin, terr := r.altinityArchiveSharedWith(ctx, backup, archive)
+		if terr != nil {
+			return ctrl.Result{}, terr
+		}
+		if twin != "" {
+			return r.releaseAltinityCleanup(ctx, backup, archive, fmt.Sprintf("the archive is shared with Backup %s", twin)), nil
+		}
 		// The delete goes through the application's current sidecar. One that
 		// has since moved to its own bucket reports the archive as not found
 		// there, which the script would take for a completed delete.
@@ -1076,6 +1083,30 @@ func (r *BackupReconciler) cleanupAltinityBackup(ctx context.Context, backup *ba
 	default:
 		return ctrl.Result{RequeueAfter: altinityPollInterval}, nil
 	}
+}
+
+// altinityArchiveSharedWith names another Backup of the namespace that
+// records the same archive: two runs of one application that a controller
+// naming archives without the BackupJob's UID started within the same second
+// share one name, and both are recorded with the bucket setting when their
+// Jobs complete after the upgrade. A Backup that is being deleted
+// too does not count, since each would otherwise leave the archive to the
+// other and it would outlive both.
+func (r *BackupReconciler) altinityArchiveSharedWith(ctx context.Context, backup *backupsv1alpha1.Backup, archive string) (string, error) {
+	list := &backupsv1alpha1.BackupList{}
+	if err := r.List(ctx, list, client.InNamespace(backup.Namespace)); err != nil {
+		return "", err
+	}
+	for i := range list.Items {
+		other := &list.Items[i]
+		if other.Name == backup.Name || !other.DeletionTimestamp.IsZero() {
+			continue
+		}
+		if other.Spec.DriverMetadata[altinityArchiveMetaKey] == archive {
+			return other.Name, nil
+		}
+	}
+	return "", nil
 }
 
 // altinityAppOnSystemBucket reads the flag live rather than from the Backup:
