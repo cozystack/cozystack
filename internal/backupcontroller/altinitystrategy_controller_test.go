@@ -791,6 +791,9 @@ func TestAltinityArchiveName_DistinctForRunsStartedInTheSameSecond(t *testing.T)
 		if !strings.HasPrefix(name, "ch-test-20260304050607-") {
 			t.Errorf("archive %q does not start with the application and start time, so names stop sorting chronologically", name)
 		}
+		if !altinityArchiveNamePattern.MatchString(name) {
+			t.Errorf("archive %q is not a name the cleanup path accepts", name)
+		}
 	}
 }
 
