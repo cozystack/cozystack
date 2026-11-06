@@ -26,8 +26,9 @@
 # hook, so the linstor release, which renders its group snapshot gate and
 # VolumeGroupSnapshotClass only when the v1beta2 API is served, renders against
 # it even when it upgrades before snapshot-controller. When a CRD was kept, none
-# is created: the API stays v1alpha1, and the linstor release picks it up on the
-# upgrade after the objects are removed and snapshot-controller has upgraded.
+# is created: the API stays v1alpha1 and linstor renders the gate off, so the
+# warning asks for a forced linstor upgrade once the objects are removed and
+# snapshot-controller has upgraded.
 #
 # Only CRDs labelled by helm-controller as installed by
 # cozy-snapshot-controller/snapshot-controller are touched, so a cluster whose
@@ -116,7 +117,7 @@ for plural in $GROUP_SNAPSHOT_CRDS; do
     # while v1alpha1 is still a stored version, so such a CRD is left to an
     # operator rather than adopted into an upgrade that cannot apply.
     if printf '%s' "$obj" | jq -e '.status.storedVersions // [] | index("v1alpha1")' >/dev/null; then
-      echo "WARN: CRD $crd serves v1beta2 but still stores v1alpha1; the snapshot-controller upgrade fails until its objects are migrated and storedVersions trimmed" >&2
+      echo "WARN: CRD $crd serves v1beta2 but still stores v1alpha1; the snapshot-controller upgrade fails until its objects are migrated and storedVersions trimmed, and the linstor HelmRelease needs a forced upgrade after that to enable group snapshots" >&2
       LEFTOVERS="${LEFTOVERS}${LEFTOVERS:+,}${crd}=stored-v1alpha1"
       continue
     fi
@@ -125,7 +126,7 @@ for plural in $GROUP_SNAPSHOT_CRDS; do
   fi
   count=$(kubectl get "$crd" --all-namespaces -o json | jq '.items | length')
   if [ "$count" -gt 0 ]; then
-    echo "WARN: CRD $crd still holds $count v1alpha1 object(s); the snapshot-controller upgrade fails until they are deleted" >&2
+    echo "WARN: CRD $crd still holds $count v1alpha1 object(s); the snapshot-controller upgrade fails until they are deleted, and the linstor HelmRelease needs a forced upgrade after that to enable group snapshots" >&2
     LEFTOVERS="${LEFTOVERS}${LEFTOVERS:+,}${crd}=${count}"
     continue
   fi
