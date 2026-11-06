@@ -44,6 +44,7 @@ import (
 	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/apiserver/pkg/endpoints/request"
 	"k8s.io/apiserver/pkg/registry/rest"
+	"k8s.io/apiserver/pkg/storage"
 	"k8s.io/apiserver/pkg/warning"
 	"k8s.io/client-go/util/retry"
 	"k8s.io/klog/v2"
@@ -289,47 +290,34 @@ func (r *REST) Create(ctx context.Context, obj runtime.Object, createValidation 
 
 // Get retrieves an Application by converting the corresponding HelmRelease
 func (r *REST) Get(ctx context.Context, name string, options *metav1.GetOptions) (runtime.Object, error) {
+	app, _, err := r.applicationSnapshot(ctx, name, options, r.c)
+	if err != nil {
+		return nil, err
+	}
+	return app, nil
+}
+
+func (r *REST) applicationSnapshot(ctx context.Context, name string, options *metav1.GetOptions, reader client.Reader) (*appsv1alpha1.Application, *helmv2.HelmRelease, error) {
 	namespace, err := r.getNamespace(ctx)
 	if err != nil {
-		klog.Errorf("Failed to get namespace: %v", err)
-		return nil, err
+		return nil, nil, err
 	}
-
-	klog.V(6).Infof("Attempting to retrieve resource %s of type %s in namespace %s", name, r.gvr.Resource, namespace)
-
-	// Get the corresponding HelmRelease using the new prefix
-	helmReleaseName := r.releaseConfig.Prefix + name
 	helmRelease := &helmv2.HelmRelease{}
-	err = r.c.Get(ctx, client.ObjectKey{Namespace: namespace, Name: helmReleaseName}, helmRelease, &client.GetOptions{Raw: options})
-	if err != nil {
-		klog.Errorf("Error retrieving HelmRelease for resource %s: %v", name, err)
-
-		// Check if the error is a NotFound error
+	if err := reader.Get(ctx, client.ObjectKey{Namespace: namespace, Name: r.releaseConfig.Prefix + name}, helmRelease, &client.GetOptions{Raw: options}); err != nil {
 		if apierrors.IsNotFound(err) {
-			// Return a NotFound error for the Application resource instead of HelmRelease
-			return nil, apierrors.NewNotFound(r.gvr.GroupResource(), name)
+			return nil, nil, apierrors.NewNotFound(r.gvr.GroupResource(), name)
 		}
-
-		// For other errors, return them as-is
-		return nil, err
+		return nil, nil, err
 	}
-
-	// Check if HelmRelease has required labels
 	if !r.hasRequiredApplicationLabels(helmRelease) {
-		klog.Errorf("HelmRelease %s does not match the required application labels", helmReleaseName)
-		// Return a NotFound error for the Application resource
-		return nil, apierrors.NewNotFound(r.gvr.GroupResource(), name)
+		return nil, nil, apierrors.NewNotFound(r.gvr.GroupResource(), name)
 	}
-
-	// Convert HelmRelease to Application
+	snapshot := helmRelease.DeepCopy()
 	convertedApp, err := r.ConvertHelmReleaseToApplication(ctx, helmRelease)
 	if err != nil {
-		klog.Errorf("Conversion error from HelmRelease to Application for resource %s: %v", name, err)
-		return nil, fmt.Errorf("conversion error: %v", err)
+		return nil, nil, fmt.Errorf("conversion error: %v", err)
 	}
-
-	klog.V(6).Infof("Successfully retrieved and converted resource %s of kind %s", name, r.gvr.Resource)
-	return &convertedApp, nil
+	return &convertedApp, snapshot, nil
 }
 
 // List retrieves a list of Applications by converting HelmReleases
@@ -512,12 +500,43 @@ func (r *REST) List(ctx context.Context, options *metainternalversion.ListOption
 
 // Update updates an existing Application by converting it to a HelmRelease
 func (r *REST) Update(ctx context.Context, name string, objInfo rest.UpdatedObjectInfo, createValidation rest.ValidateObjectFunc, updateValidation rest.ValidateObjectUpdateFunc, forceAllowCreate bool, options *metav1.UpdateOptions) (runtime.Object, bool, error) {
-	// Retrieve the existing Application
-	oldObj, err := r.Get(ctx, name, &metav1.GetOptions{})
+	var result runtime.Object
+	var created, retryable bool
+	preconditions := objInfo.Preconditions()
+	if preconditions != nil {
+		preconditions = preconditions.DeepCopy()
+	}
+	// A conflict invalidates the admission snapshot, not just the write's version.
+	err := retry.OnError(retry.DefaultBackoff, func(err error) bool {
+		return retryable && apierrors.IsConflict(err)
+	}, func() error {
+		var err error
+		result, retryable, err = r.updateAttempt(ctx, name, objInfo, preconditions, createValidation, updateValidation, forceAllowCreate, options, &created)
+		return err
+	})
+	return result, created, err
+}
+
+func (r *REST) checkUpdatePreconditions(name string, preconditions *metav1.Preconditions, app *appsv1alpha1.Application) error {
+	if preconditions == nil {
+		return nil
+	}
+	check := storage.Preconditions{UID: preconditions.UID, ResourceVersion: preconditions.ResourceVersion}
+	if err := check.Check(name, app); err != nil {
+		return apierrors.NewConflict(r.gvr.GroupResource(), name, err)
+	}
+	return nil
+}
+
+func (r *REST) updateAttempt(ctx context.Context, name string, objInfo rest.UpdatedObjectInfo, preconditions *metav1.Preconditions, createValidation rest.ValidateObjectFunc, updateValidation rest.ValidateObjectUpdateFunc, forceAllowCreate bool, options *metav1.UpdateOptions, created *bool) (runtime.Object, bool, error) {
+	oldObj, snapshot, err := r.applicationSnapshot(ctx, name, &metav1.GetOptions{}, r.w)
 	if err != nil {
 		if apierrors.IsNotFound(err) {
 			if !forceAllowCreate {
 				return nil, false, err
+			}
+			if preconditionErr := r.checkUpdatePreconditions(name, preconditions, &appsv1alpha1.Application{}); preconditionErr != nil {
+				return nil, false, preconditionErr
 			}
 			// If not found and force allow create, create a new one
 			obj, err := objInfo.UpdatedObject(ctx, nil)
@@ -530,16 +549,19 @@ func (r *REST) Update(ctx context.Context, name string, objInfo rest.UpdatedObje
 				klog.Errorf("Failed to create new Application: %v", err)
 				return nil, false, err
 			}
-			return createdObj, true, nil
+			*created = true
+			return createdObj, false, nil
 		}
 		klog.Errorf("Failed to get existing Application %s: %v", name, err)
 		return nil, false, err
 	}
 
-	previousFinalizers := slices.Clone(oldObj.(*appsv1alpha1.Application).Finalizers)
+	if err := r.checkUpdatePreconditions(name, preconditions, oldObj); err != nil {
+		return nil, false, err
+	}
+	previousFinalizers := slices.Clone(oldObj.Finalizers)
 
-	// Update the Application object
-	newObj, err := objInfo.UpdatedObject(ctx, oldObj)
+	newObj, err := objInfo.UpdatedObject(ctx, oldObj.DeepCopy())
 	if err != nil {
 		klog.Errorf("Failed to get updated object: %v", err)
 		return nil, false, err
@@ -553,6 +575,25 @@ func (r *REST) Update(ctx context.Context, name string, objInfo rest.UpdatedObje
 	}
 
 	app = app.DeepCopy()
+	versioner := storage.APIObjectVersioner{}
+	newRV, err := versioner.ObjectResourceVersion(app)
+	if err != nil {
+		return nil, false, err
+	}
+	oldRV, err := versioner.ObjectResourceVersion(snapshot)
+	if err != nil {
+		return nil, false, err
+	}
+	if newRV != 0 && newRV != oldRV {
+		return nil, false, apierrors.NewConflict(r.gvr.GroupResource(), name, fmt.Errorf("the object has been modified; please apply your changes to the latest version and try again"))
+	}
+	// Application updates have historically allowed an omitted resourceVersion.
+	app.ResourceVersion = snapshot.ResourceVersion
+	if app.UID == "" {
+		app.UID = snapshot.UID
+	} else if app.UID != snapshot.UID {
+		return nil, false, apierrors.NewInvalid(r.gvk.GroupKind(), name, field.ErrorList{field.Invalid(field.NewPath("metadata", "uid"), app.UID, "field is immutable")})
+	}
 
 	// Note: name validation (DNS-1035 format + length) is intentionally skipped on
 	// Update because Kubernetes names are immutable. Validating here would block
@@ -574,7 +615,7 @@ func (r *REST) Update(ctx context.Context, name string, objInfo rest.UpdatedObje
 
 	// Validate the update if a validation function is provided
 	if updateValidation != nil {
-		if err := updateValidation(ctx, app, oldObj); err != nil {
+		if err := updateValidation(ctx, app.DeepCopy(), oldObj.DeepCopy()); err != nil {
 			klog.Errorf("Update validation failed for Application %s: %v", name, err)
 			return nil, false, err
 		}
@@ -601,17 +642,12 @@ func (r *REST) Update(ctx context.Context, name string, objInfo rest.UpdatedObje
 		return nil, false, fmt.Errorf("conversion error: %v", err)
 	}
 
-	// Keep the conversion output pristine: the metadata assembly below reads the
-	// live object, so a conflict retry has to redo it from this copy rather than
-	// re-apply it on top of its own previous result.
-	converted := helmRelease.DeepCopy()
-
 	cur := &helmv2.HelmRelease{}
-	if err := r.c.Get(ctx, client.ObjectKey{Namespace: helmRelease.Namespace, Name: helmRelease.Name}, cur, &client.GetOptions{Raw: &metav1.GetOptions{}}); err != nil {
+	if err := r.w.Get(ctx, client.ObjectKeyFromObject(snapshot), cur, &client.GetOptions{Raw: &metav1.GetOptions{}}); err != nil {
 		return nil, false, registry.WrapPreservingStatus("failed to fetch current HelmRelease", err, r.gvr.GroupResource(), name)
 	}
-	if helmRelease.ResourceVersion == "" {
-		helmRelease.SetResourceVersion(cur.GetResourceVersion())
+	if cur.UID != snapshot.UID || cur.ResourceVersion != snapshot.ResourceVersion {
+		return nil, true, apierrors.NewConflict(r.gvr.GroupResource(), name, fmt.Errorf("the object changed during the update"))
 	}
 	r.applyLiveMetadata(helmRelease, cur, app, previousFinalizers)
 
@@ -628,41 +664,8 @@ func (r *REST) Update(ctx context.Context, name string, objInfo rest.UpdatedObje
 
 	klog.V(6).Infof("Updating HelmRelease %s in namespace %s", helmRelease.Name, helmRelease.Namespace)
 
-	// Update the HelmRelease in Kubernetes.
-	//
-	// Flux's helm-controller (and other controllers) continuously write the
-	// HelmRelease's status, which shares the object's resourceVersion. When a
-	// caller updates an app CR while a prior reconcile is still in flight, the
-	// resourceVersion read above goes stale and the Update is rejected with a
-	// 409 Conflict. Apart from suspend, the HelmRelease spec is derived from the
-	// Application the caller just applied, so a stale-resourceVersion conflict
-	// is never a real spec conflict here: refresh the resourceVersion from the
-	// live object and retry. Suspend is refreshed with it, because the write
-	// that caused the conflict may be the one that suspended the release.
-	//
-	// The carried-over metadata is not derived from the Application, though, and
-	// the writer that caused the conflict is usually the controller that owns it
-	// — helm-controller re-adding finalizers.fluxcd.io is the case this whole
-	// carry-over exists for. Keeping the copy read before the conflict would put
-	// the stale metadata back and undo that write, so rebuild from the
-	// conversion output against the object just read.
-	err = retry.RetryOnConflict(retry.DefaultBackoff, func() error {
-		updateErr := r.c.Update(ctx, helmRelease, registry.ClientUpdateOptions(options))
-		if apierrors.IsConflict(updateErr) {
-			cur := &helmv2.HelmRelease{}
-			if getErr := r.c.Get(ctx, client.ObjectKey{Namespace: helmRelease.Namespace, Name: helmRelease.Name}, cur, &client.GetOptions{Raw: &metav1.GetOptions{}}); getErr != nil {
-				return getErr
-			}
-			helmRelease = converted.DeepCopy()
-			r.applyLiveMetadata(helmRelease, cur, app, previousFinalizers)
-			helmRelease.SetResourceVersion(cur.GetResourceVersion())
-			helmRelease.Spec.Suspend = cur.Spec.Suspend
-		}
-		return updateErr
-	})
-	if err != nil {
-		klog.Errorf("Failed to update HelmRelease %s: %v", helmRelease.Name, err)
-		return nil, false, registry.WrapPreservingStatus("failed to update HelmRelease", err, r.gvr.GroupResource(), name)
+	if err := r.c.Update(ctx, helmRelease, registry.ClientUpdateOptions(options)); err != nil {
+		return nil, apierrors.IsConflict(err), registry.WrapPreservingStatus("failed to update HelmRelease", err, r.gvr.GroupResource(), name)
 	}
 
 	// Convert the updated HelmRelease back to Application
