@@ -8,23 +8,52 @@
 {{-   `40` }}
 {{- end }}
 
+{{- /*
+  The application's own allocation ratio for one resource kind ("cpu" or "memory"), read from the
+  application's values `resourcesAllocationRatio.<kind>`; empty when the application sets none, so
+  the cluster-wide ratio applies. A ratio below 1 would make the request exceed the limit, so it is
+  refused.   include "cozy-lib.resources.appAllocationRatio" (list "memory" $)
+*/}}
+{{- define "cozy-lib.resources.appAllocationRatio" }}
+{{-   $kind := index . 0 }}
+{{-   $ratios := dict }}
+{{-   with (index . 1).Values }}{{ $ratios = .resourcesAllocationRatio | default dict }}{{ end }}
+{{-   if and (hasKey $ratios $kind) (not (kindIs "invalid" (index $ratios $kind))) }}
+{{-     $r := index $ratios $kind }}
+{{-     if lt (float64 $r) 1.0 }}
+{{-       fail (printf "resourcesAllocationRatio.%s must be 1 or more (got %v): the request would exceed the limit" $kind $r) }}
+{{-     end }}
+{{-     $r }}
+{{-   end }}
+{{- end }}
+
 {{- define "cozy-lib.resources.cpuAllocationRatio" }}
-{{-   include "cozy-lib.loadCozyConfig" . }}
-{{-   $cozyConfig := index . 1 "cozyConfig" }}
-{{-   if not $cozyConfig }}
-{{-     include "cozy-lib.resources.defaultCpuAllocationRatio" . }}
+{{-   $app := include "cozy-lib.resources.appAllocationRatio" (list "cpu" (index . 1)) }}
+{{-   if $app }}
+{{-     $app }}
 {{-   else }}
-{{-     dig "data" "cpu-allocation-ratio" (include "cozy-lib.resources.defaultCpuAllocationRatio" dict) $cozyConfig }}
+{{-     include "cozy-lib.loadCozyConfig" . }}
+{{-     $cozyConfig := index . 1 "cozyConfig" }}
+{{-     if not $cozyConfig }}
+{{-       include "cozy-lib.resources.defaultCpuAllocationRatio" . }}
+{{-     else }}
+{{-       dig "data" "cpu-allocation-ratio" (include "cozy-lib.resources.defaultCpuAllocationRatio" dict) $cozyConfig }}
+{{-     end }}
 {{-   end }}
 {{- end }}
 
 {{- define "cozy-lib.resources.memoryAllocationRatio" }}
-{{-   include "cozy-lib.loadCozyConfig" . }}
-{{-   $cozyConfig := index . 1 "cozyConfig" }}
-{{-   if not $cozyConfig }}
-{{-     include "cozy-lib.resources.defaultMemoryAllocationRatio" . }}
+{{-   $app := include "cozy-lib.resources.appAllocationRatio" (list "memory" (index . 1)) }}
+{{-   if $app }}
+{{-     $app }}
 {{-   else }}
-{{-     dig "data" "memory-allocation-ratio" (include "cozy-lib.resources.defaultMemoryAllocationRatio" dict) $cozyConfig }}
+{{-     include "cozy-lib.loadCozyConfig" . }}
+{{-     $cozyConfig := index . 1 "cozyConfig" }}
+{{-     if not $cozyConfig }}
+{{-       include "cozy-lib.resources.defaultMemoryAllocationRatio" . }}
+{{-     else }}
+{{-       dig "data" "memory-allocation-ratio" (include "cozy-lib.resources.defaultMemoryAllocationRatio" dict) $cozyConfig }}
+{{-     end }}
 {{-   end }}
 {{- end }}
 

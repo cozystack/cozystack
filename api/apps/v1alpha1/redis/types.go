@@ -26,6 +26,9 @@ type ConfigSpec struct {
 	// Default sizing preset used when `resources` is omitted.
 	// +kubebuilder:default:="t1.nano"
 	ResourcesPreset ResourcesPreset `json:"resourcesPreset"`
+	// Overrides the cluster-wide allocation ratios for this instance only, so its limits (from `resources` or `resourcesPreset`) can stay high while its requests reflect normal use. Unset by default: the cluster-wide ratios apply and the rendered requests are unchanged. A ratio below 1 is refused, since the request would exceed the limit. Applies to the Redis and the Sentinel pods.
+	// +kubebuilder:default:={}
+	ResourcesAllocationRatio ResourcesAllocationRatio `json:"resourcesAllocationRatio,omitempty"`
 	// Persistent Volume Claim size available for application data.
 	// +kubebuilder:default:="1Gi"
 	Size resource.Quantity `json:"size"`
@@ -61,6 +64,15 @@ type Resources struct {
 	Cpu resource.Quantity `json:"cpu,omitempty"`
 	// Memory (RAM) available to each replica.
 	Memory resource.Quantity `json:"memory,omitempty"`
+}
+
+type ResourcesAllocationRatio struct {
+	// CPU ratio for this instance; overrides the cluster-wide `cpu-allocation-ratio`. Must be 1 or more.
+	// +kubebuilder:validation:Minimum=1
+	Cpu *int `json:"cpu,omitempty"`
+	// Memory ratio for this instance; overrides the cluster-wide `memory-allocation-ratio`. Must be 1 or more.
+	// +kubebuilder:validation:Minimum=1
+	Memory *int `json:"memory,omitempty"`
 }
 
 type Sentinel struct {
