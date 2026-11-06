@@ -1,0 +1,46 @@
+suite: resourcesAllocationRatio overrides the cluster-wide ratios for the Kafka brokers only
+
+templates:
+  - templates/migration-hook.yaml
+
+release:
+  name: kafka-test
+  namespace: tenant-test
+
+set:
+  _cluster:
+    cluster-domain: cluster.local
+  _namespace:
+    host: example.com
+  kafka.resources:
+    cpu: "2"
+    memory: 2Gi
+
+tests:
+  - it: unset, the broker memory request equals the limit (cluster default memory ratio 1)
+    documentIndex: 3
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].args[0]
+          pattern: "- broker\\s+resources:\\s+limits:(\\s+\\S+: \\S+)*\\s+memory: 2Gi\\s+requests:(\\s+\\S+: \\S+)*\\s+memory: \"2147483648\""
+
+  - it: a memory ratio of 2 reserves half the limit; the JVM is still sized from the limit
+    documentIndex: 3
+    set:
+      resourcesAllocationRatio:
+        memory: 2
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].args[0]
+          pattern: "- broker\\s+resources:\\s+limits:(\\s+\\S+: \\S+)*\\s+memory: 2Gi\\s+requests:(\\s+\\S+: \\S+)*\\s+memory: \"1073741824\""
+      - matchRegex:
+          path: spec.template.spec.containers[0].args[0]
+          pattern: "-XX:MaxRAM=2147483648 -XX:ActiveProcessorCount=2"
+
+  - it: a ratio below 1 is refused by the schema (cozy-lib also refuses it at render for callers without one)
+    set:
+      resourcesAllocationRatio:
+        memory: 0
+    asserts:
+      - failedTemplate:
+          errorPattern: "resourcesAllocationRatio/memory.*minimum: got 0, want 1"

@@ -64,6 +64,15 @@ resources: {}
 ## @param {ResourcesPreset} resourcesPreset="t1.nano" - Default sizing preset used when `resources` is omitted.
 resourcesPreset: "t1.nano"
 
+## @typedef {struct} ResourcesAllocationRatio - Per-instance overcommit for this instance: each request is its limit divided by the ratio.
+## @field {*int} [cpu] - CPU ratio for this instance; overrides the cluster-wide `cpu-allocation-ratio`. Must be 1 or more.
+## @minimum 1
+## @field {*int} [memory] - Memory ratio for this instance; overrides the cluster-wide `memory-allocation-ratio`. Must be 1 or more.
+## @minimum 1
+
+## @param {ResourcesAllocationRatio} [resourcesAllocationRatio] - Overrides the cluster-wide allocation ratios for this instance only, so its limits (from `resources` or `resourcesPreset`) can stay high while its requests reflect normal use. Unset by default: the cluster-wide ratios apply and the rendered requests are unchanged. A ratio below 1 is refused, since the request would exceed the limit. Applies to the Redis and the Sentinel pods.
+resourcesAllocationRatio: {}
+
 ## @param {quantity} size - Persistent Volume Claim size available for application data.
 size: 1Gi
 
