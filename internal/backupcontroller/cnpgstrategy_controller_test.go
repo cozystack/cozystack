@@ -2830,6 +2830,11 @@ func TestReconcileCNPG_PluginRolloutDeadlineCountsFromAttach(t *testing.T) {
 	if cond := apimeta.FindStatusCondition(j.Status.Conditions, "Ready"); cond == nil || cond.Reason != "WaitingForPluginRollout" {
 		t.Fatalf("Ready = %+v, want WaitingForPluginRollout", cond)
 	}
+	attached := &cnpgtypes.Cluster{}
+	if err := f.c.Get(context.Background(), client.ObjectKey{Namespace: rolloutNS, Name: rolloutCluster}, attached); err != nil {
+		t.Fatalf("get Cluster: %v", err)
+	}
+	f.observeCNPG(newRolloutCluster(cnpgClusterHealthyPhase, attached.Spec.Plugins...))
 
 	rollout := apimeta.FindStatusCondition(j.Status.Conditions, backupCondPluginRolledOut)
 	rollout.LastTransitionTime = metav1.NewTime(expired)
@@ -2919,8 +2924,9 @@ func TestReconcileCNPG_PluginRolloutCountsFromTheSuccessfulAttach(t *testing.T) 
 }
 
 // A plugin attached by someone else after the latch, another backup job or
-// a restore, started the rollout before this job's write, which only finds
-// it there: instances that rolled since the latch carry the plugin.
+// the chart re-rendering a restored Cluster outside the platform flow,
+// started the rollout before this job's write, which only finds it there:
+// instances that rolled since the latch carry the plugin.
 func TestReconcileCNPG_PluginAttachedByAnotherWriterKeepsTheLatch(t *testing.T) {
 	oldPod := newRolloutInstancePod(time.Now().Add(-time.Hour).Truncate(time.Second))
 	f := newCNPGRolloutFixture(t, newRolloutBackupJob(time.Now().Add(-time.Hour)),
@@ -3449,6 +3455,41 @@ func TestReconcileCNPG_AttachedPluginDoesNotDelayBackup(t *testing.T) {
 	}
 	if cond := apimeta.FindStatusCondition(j.Status.Conditions, backupCondDestinationWriteHeld); cond != nil {
 		t.Errorf("%s condition = %+v on a job nothing held", backupCondDestinationWriteHeld, cond)
+	}
+}
+
+// An in-place restore of the platform flow recreates the Cluster without the
+// barman-cloud plugin, so a job held through it attaches the plugin again
+// once released. That attach starts a rollout of its own, which the
+// instances restored after the job's first rollout began have not done.
+func TestReconcileCNPG_ReattachAfterRestoreRestartsTheRollout(t *testing.T) {
+	stampedAt := time.Now().Add(-10 * time.Minute).Truncate(time.Second)
+	j := newRolloutBackupJob(stampedAt.Add(-time.Hour))
+	j.Status.Conditions = []metav1.Condition{{
+		Type:               backupCondPluginRolledOut,
+		Status:             metav1.ConditionFalse,
+		Reason:             "WaitingForPluginRollout",
+		LastTransitionTime: metav1.NewTime(stampedAt),
+	}}
+	f := newCNPGRolloutFixture(t, j, newRolloutCluster(cnpgClusterHealthyPhase),
+		newRolloutInstancePod(time.Now().Add(-2*time.Minute)))
+	restore := f.seedRestoreOfApp()
+	if got, _ := f.pass(); apimeta.FindStatusCondition(got.Status.Conditions, "Ready").Reason != ConditionReasonRestoreInProgress {
+		t.Fatalf("Ready = %+v, want the job held by the restore", apimeta.FindStatusCondition(got.Status.Conditions, "Ready"))
+	}
+	restore.Status.Phase = backupsv1alpha1.RestoreJobPhaseSucceeded
+	if err := f.c.Status().Update(context.Background(), restore); err != nil {
+		t.Fatalf("finish the restore: %v", err)
+	}
+
+	attachAt := time.Now().Truncate(time.Second)
+	got, backups := f.pass()
+	if len(backups) != 0 {
+		t.Fatalf("cnpg.io/Backup created in the pass that attached the plugin to the restored Cluster: %+v", backups)
+	}
+	rollout := apimeta.FindStatusCondition(got.Status.Conditions, backupCondPluginRolledOut)
+	if rollout == nil || rollout.Status != metav1.ConditionFalse || rollout.LastTransitionTime.Time.Before(attachAt) {
+		t.Fatalf("%s = %+v, want False since the attach at %s", backupCondPluginRolledOut, rollout, attachAt)
 	}
 }
 
