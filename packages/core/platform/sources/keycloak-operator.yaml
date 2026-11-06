@@ -20,3 +20,10 @@ spec:
       install:
         namespace: cozy-keycloak
         releaseName: keycloak-operator
+        # helm-controller leaves existing CRDs alone on upgrade, so a cluster
+        # installed before v1.2.0 keeps the v1.25.0 schema and the apiserver
+        # prunes the realm session settings keycloak-configure sets. v1.32.0
+        # drops the realm, targetRealm and keycloakOwner fields deprecated in
+        # favour of realmRef and keycloakRef. The platform renders only the
+        # refs, so replace is safe.
+        upgradeCRDs: CreateReplace
