@@ -1,0 +1,291 @@
+suite: seaweedfs lifecycle switch reaches the data plane
+
+# lifecycle.enabled decides whether the data-plane release runs the admin
+# server and the worker that enforce bucket lifecycle rules. Both flags are
+# sent either way, so the data-plane chart's own default never decides.
+
+templates:
+  - templates/seaweedfs.yaml
+  - templates/admin-credentials.yaml
+  - templates/dashboard-resourcemap.yaml
+
+release:
+  name: seaweedfs
+  namespace: tenant-root
+
+tests:
+  # The upstream walker deletes without an object identity, so a key
+  # overwritten between its listing and the delete RPC goes too. Applying
+  # stored rules is therefore an operator's decision, not an upgrade's.
+  - it: keeps the lifecycle admin and worker off by default
+    template: templates/seaweedfs.yaml
+    set: &platform
+      _namespace:
+        host: example.org
+        ingress: tenant-root
+      _cluster:
+        issuer-name: letsencrypt-prod
+        solver: http01
+    documentSelector:
+      path: metadata.name
+      value: seaweedfs-system
+    asserts:
+      - equal:
+          path: spec.values.seaweedfs.admin.enabled
+          value: false
+      - equal:
+          path: spec.values.seaweedfs.worker.enabled
+          value: false
+
+  - it: runs the lifecycle admin and worker when lifecycle is enabled
+    template: templates/seaweedfs.yaml
+    set: &enabled
+      <<: *platform
+      lifecycle:
+        enabled: true
+    documentSelector:
+      path: metadata.name
+      value: seaweedfs-system
+    asserts:
+      - equal:
+          path: spec.values.seaweedfs.admin.enabled
+          value: true
+      - equal:
+          path: spec.values.seaweedfs.worker.enabled
+          value: true
+      - equal:
+          path: spec.values.seaweedfs.admin.secret.existingSecret
+          value: seaweedfs-admin-credentials
+
+  - it: turns both off when lifecycle is disabled
+    template: templates/seaweedfs.yaml
+    set:
+      <<: *platform
+      lifecycle:
+        enabled: false
+    documentSelector:
+      path: metadata.name
+      value: seaweedfs-system
+    asserts:
+      - equal:
+          path: spec.values.seaweedfs.admin.enabled
+          value: false
+      - equal:
+          path: spec.values.seaweedfs.worker.enabled
+          value: false
+
+  # volume.storageClass is chosen for volume data, and in MultiZone it can be
+  # a class local to one zone, while the admin is not pinned to any zone. Its
+  # volume therefore takes its own class, and the cluster default otherwise.
+  - it: puts the admin volume on the lifecycle storage class
+    template: templates/seaweedfs.yaml
+    set:
+      <<: *enabled
+      lifecycle:
+        enabled: true
+        storageClass: replicated
+    documentSelector:
+      path: metadata.name
+      value: seaweedfs-system
+    asserts:
+      - equal:
+          path: spec.values.seaweedfs.admin.data.storageClass
+          value: replicated
+
+  - it: does not put the admin volume on the volume storage class
+    template: templates/seaweedfs.yaml
+    set:
+      <<: *enabled
+      topology: MultiZone
+      replicationFactor: 1
+      volume:
+        storageClass: zone-a-local
+        zones:
+          a: {}
+    documentSelector:
+      path: metadata.name
+      value: seaweedfs-system
+    asserts:
+      - notExists:
+          path: spec.values.seaweedfs.admin.data
+
+  - it: leaves the admin volume on the cluster default when lifecycle names none
+    template: templates/seaweedfs.yaml
+    set: *enabled
+    documentSelector:
+      path: metadata.name
+      value: seaweedfs-system
+    asserts:
+      - notExists:
+          path: spec.values.seaweedfs.admin.data
+
+  - it: monitors the admin and the worker while lifecycle is on
+    template: templates/seaweedfs.yaml
+    set: *enabled
+    asserts:
+      - containsDocument:
+          kind: WorkloadMonitor
+          apiVersion: cozystack.io/v1alpha1
+          name: seaweedfs-admin
+          any: true
+      - containsDocument:
+          kind: WorkloadMonitor
+          apiVersion: cozystack.io/v1alpha1
+          name: seaweedfs-worker
+          any: true
+      - equal:
+          path: spec.selector
+          value:
+            app.kubernetes.io/component: worker
+            app.kubernetes.io/name: seaweedfs
+        documentSelector:
+          path: metadata.name
+          value: seaweedfs-worker
+      - equal:
+          path: spec.selector
+          value:
+            app.kubernetes.io/component: admin
+            app.kubernetes.io/name: seaweedfs
+        documentSelector:
+          path: metadata.name
+          value: seaweedfs-admin
+
+  - it: does not monitor them when lifecycle is off
+    template: templates/seaweedfs.yaml
+    set:
+      <<: *platform
+      lifecycle:
+        enabled: false
+    asserts:
+      - containsDocument:
+          kind: WorkloadMonitor
+          apiVersion: cozystack.io/v1alpha1
+          name: seaweedfs-admin
+          any: true
+        not: true
+      - containsDocument:
+          kind: WorkloadMonitor
+          apiVersion: cozystack.io/v1alpha1
+          name: seaweedfs-worker
+          any: true
+        not: true
+
+  - it: generates admin credentials for a new instance
+    template: templates/admin-credentials.yaml
+    set: *enabled
+    asserts:
+      - isKind:
+          of: Secret
+      - equal:
+          path: metadata.name
+          value: seaweedfs-admin-credentials
+      - equal:
+          path: data.adminUser
+          value: YWRtaW4=
+      - matchRegex:
+          path: data.adminPassword
+          pattern: '^.{40,}$'
+
+  # A new password on every render would leave the running admin on the old
+  # one, since it reads the Secret into its environment once at start.
+  - it: keeps the password of an existing Secret
+    template: templates/admin-credentials.yaml
+    set: *enabled
+    kubernetesProvider:
+      scheme:
+        "v1/Secret":
+          gvr:
+            version: v1
+            resource: secrets
+          namespaced: true
+      objects:
+        - apiVersion: v1
+          kind: Secret
+          metadata:
+            name: seaweedfs-admin-credentials
+            namespace: tenant-root
+          data:
+            adminUser: YWRtaW4=
+            adminPassword: a2VwdA==
+    asserts:
+      - equal:
+          path: data.adminPassword
+          value: a2VwdA==
+
+  - it: renders no credentials when lifecycle is off
+    template: templates/admin-credentials.yaml
+    set:
+      <<: *platform
+      lifecycle:
+        enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  # A Client instance runs no data plane of its own; its rules are enforced
+  # where the master it points at runs.
+  - it: renders no credentials for a Client instance
+    template: templates/admin-credentials.yaml
+    set:
+      <<: *enabled
+      topology: Client
+      filer:
+        grpcHost: seaweedfs-filer.tenant-other.svc
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  # The admin PVC and the two lifecycle pods can leave an upgrade waiting on a
+  # full tenant quota. Under Flux's default rollback remediation each failed
+  # attempt would roll back the [grpc.s3] section and its restart annotation
+  # and the next one would bring them back, restarting the s3 pods on every
+  # cycle. Retrying in place keeps what was applied while the release waits.
+  - it: retries the data-plane release in place instead of rolling it back
+    template: templates/seaweedfs.yaml
+    set: *platform
+    documentSelector:
+      path: metadata.name
+      value: seaweedfs-system
+    asserts:
+      - equal:
+          path: spec.install.strategy.name
+          value: RetryOnFailure
+      - equal:
+          path: spec.upgrade.strategy.name
+          value: RetryOnFailure
+      - equal:
+          path: spec.upgrade.remediation.retries
+          value: -1
+
+  # The dashboard reads each WorkloadMonitor by name through this Role, so a
+  # monitor missing from it never shows up for the tenant.
+  - it: lets the dashboard read the admin and worker monitors
+    template: templates/dashboard-resourcemap.yaml
+    set: *enabled
+    documentSelector:
+      path: kind
+      value: Role
+    asserts:
+      - contains:
+          path: rules[2].resourceNames
+          content: seaweedfs-admin
+      - contains:
+          path: rules[2].resourceNames
+          content: seaweedfs-worker
+
+  - it: grants no lifecycle monitors when lifecycle is off
+    template: templates/dashboard-resourcemap.yaml
+    set:
+      <<: *platform
+      lifecycle:
+        enabled: false
+    documentSelector:
+      path: kind
+      value: Role
+    asserts:
+      - notContains:
+          path: rules[2].resourceNames
+          content: seaweedfs-admin
+      - notContains:
+          path: rules[2].resourceNames
+          content: seaweedfs-worker
