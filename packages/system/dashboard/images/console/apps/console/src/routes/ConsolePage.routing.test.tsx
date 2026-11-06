@@ -70,4 +70,28 @@ describe("ConsolePage routing", () => {
     await waitFor(() => expect(client.list).toHaveBeenCalled())
     expect(screen.queryByText(/Cluster-scoped capacity/i)).toBeNull()
   })
+
+  it("serves the tenant logs page under observability/", async () => {
+    renderWithK8sProvider(
+      <TenantProvider>
+        <ConsolePage />
+      </TenantProvider>,
+      { client: makeClient(), initialRoute: "/observability/logs" },
+    )
+
+    expect(await screen.findByText(/^Every application in/)).toBeInTheDocument()
+  })
+
+  it("leaves /logs to an application kind whose plural is logs", async () => {
+    const client = makeClient()
+    renderWithK8sProvider(
+      <TenantProvider>
+        <ConsolePage />
+      </TenantProvider>,
+      { client, initialRoute: "/logs" },
+    )
+
+    await waitFor(() => expect(client.list).toHaveBeenCalled())
+    expect(screen.queryByText(/^Every application in/)).toBeNull()
+  })
 })
