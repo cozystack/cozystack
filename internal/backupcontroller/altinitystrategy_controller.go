@@ -85,6 +85,76 @@ func validateAltinityApplicationRef(ref corev1.TypedLocalObjectReference) error 
 	return nil
 }
 
+// altinityCredentialsPropagation bounds how long kubelet takes to rewrite
+// the mounted cozy-backups-creds in the ClickHouse Pod after it changes:
+// its sync period (a minute by default) plus the Secret cache. About 75s was
+// measured; the margin covers the rest.
+const altinityCredentialsPropagation = 2 * time.Minute
+
+// credentialsPropagationWait returns how long to hold back creating the
+// strategy Job named jobName in namespace, so that the clickhouse-backup
+// sidecar, which reads the projected credentials from a mounted file, sees
+// their latest content. A Job that already exists, or a namespace without
+// projected credentials, does not wait.
+func credentialsPropagationWait(ctx context.Context, c client.Client, secretName, namespace, jobName string) (time.Duration, error) {
+	if secretName == "" {
+		return 0, nil
+	}
+	if err := c.Get(ctx, types.NamespacedName{Namespace: namespace, Name: jobName}, &batchv1.Job{}); err == nil {
+		return 0, nil
+	} else if !apierrors.IsNotFound(err) {
+		return 0, err
+	}
+	secret := &corev1.Secret{}
+	if err := c.Get(ctx, types.NamespacedName{Namespace: namespace, Name: secretName}, secret); err != nil {
+		if apierrors.IsNotFound(err) {
+			return 0, nil
+		}
+		return 0, err
+	}
+	raw := secret.Annotations[credentialsUpdatedAtAnnotation]
+	if raw == "" {
+		return 0, nil
+	}
+	// The projector rewrites the stamp only when the content changes, so a
+	// stamp this hold cannot use stays as it is: holding on it would block
+	// every Job in the namespace for good.
+	updatedAt, err := time.Parse(time.RFC3339, raw)
+	if err != nil {
+		getLogger(ctx).Error(err, "ignoring unreadable credentials stamp", "secret", namespace+"/"+secretName, "annotation", credentialsUpdatedAtAnnotation)
+		return 0, nil
+	}
+	if updatedAt.After(time.Now().Add(altinityCredentialsPropagation)) {
+		getLogger(ctx).Error(nil, "ignoring a credentials stamp further ahead than clock skew explains", "secret", namespace+"/"+secretName, "annotation", credentialsUpdatedAtAnnotation, "value", raw)
+		return 0, nil
+	}
+	return time.Until(updatedAt.Add(altinityCredentialsPropagation)), nil
+}
+
+// clearCredentialsWait drops the Ready condition credentialsWaitCondition
+// left behind, once the job no longer waits. It reports whether it did.
+func clearCredentialsWait(conditions *[]metav1.Condition) bool {
+	ready := apimeta.FindStatusCondition(*conditions, "Ready")
+	if ready == nil || ready.Reason != credentialsWaitReason {
+		return false
+	}
+	return apimeta.RemoveStatusCondition(conditions, "Ready")
+}
+
+const credentialsWaitReason = "WaitingForCredentials"
+
+// credentialsWaitCondition is the Ready condition of a job held back by
+// credentialsPropagationWait.
+func credentialsWaitCondition(secretName string, wait time.Duration) metav1.Condition {
+	return metav1.Condition{
+		Type:   "Ready",
+		Status: metav1.ConditionFalse,
+		Reason: credentialsWaitReason,
+		Message: fmt.Sprintf("waiting %s for the updated Secret %s to reach the ClickHouse backup sidecar",
+			wait.Round(time.Second), secretName),
+	}
+}
+
 // jobNameForBackupJob returns the deterministic batch/v1.Job name used for
 // the backup pod that drives a BackupJob. Idempotency relies on this being
 // pure: a retried reconcile must hit the same Job name.
@@ -265,6 +335,18 @@ func (r *BackupJobReconciler) reconcileAltinity(ctx context.Context, j *backupsv
 		return r.markBackupJobFailed(ctx, j, fmt.Sprintf("failed to template Altinity strategy: %v", err))
 	}
 
+	wait, err := credentialsPropagationWait(ctx, r.Client, r.CredentialsConfig.TargetSecretName, j.Namespace, jobNameForBackupJob(j))
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	if wait > 0 {
+		apimeta.SetStatusCondition(&j.Status.Conditions, credentialsWaitCondition(r.CredentialsConfig.TargetSecretName, wait))
+		if err := r.Status().Update(ctx, j); err != nil {
+			return ctrl.Result{}, err
+		}
+		return ctrl.Result{RequeueAfter: wait}, nil
+	}
+
 	batchJob, err := r.ensureAltinityJob(ctx, j, j.Namespace, jobNameForBackupJob(j),
 		altinityModeBackup,
 		map[string]string{
@@ -312,6 +394,11 @@ func (r *BackupJobReconciler) reconcileAltinity(ctx context.Context, j *backupsv
 		return r.markBackupJobFailed(ctx, j, message)
 
 	default:
+		if clearCredentialsWait(&j.Status.Conditions) {
+			if err := r.Status().Update(ctx, j); err != nil {
+				return ctrl.Result{}, err
+			}
+		}
 		return ctrl.Result{RequeueAfter: altinityPollInterval}, nil
 	}
 }
@@ -681,6 +768,18 @@ func (r *RestoreJobReconciler) reconcileAltinityRestore(ctx context.Context, res
 		return r.markRestoreJobFailed(ctx, restoreJob, fmt.Sprintf("failed to template Altinity strategy: %v", err))
 	}
 
+	wait, err := credentialsPropagationWait(ctx, r.Client, r.CredentialsConfig.TargetSecretName, targetNamespace, jobNameForRestoreJob(restoreJob))
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	if wait > 0 {
+		apimeta.SetStatusCondition(&restoreJob.Status.Conditions, credentialsWaitCondition(r.CredentialsConfig.TargetSecretName, wait))
+		if err := r.Status().Update(ctx, restoreJob); err != nil {
+			return ctrl.Result{}, err
+		}
+		return ctrl.Result{RequeueAfter: wait}, nil
+	}
+
 	batchJob, err := r.ensureAltinityRestoreJob(ctx, restoreJob, targetNamespace, jobNameForRestoreJob(restoreJob),
 		altinityModeRestore,
 		map[string]string{
@@ -717,6 +816,11 @@ func (r *RestoreJobReconciler) reconcileAltinityRestore(ctx context.Context, res
 		return r.markRestoreJobFailed(ctx, restoreJob, message)
 
 	default:
+		if clearCredentialsWait(&restoreJob.Status.Conditions) {
+			if err := r.Status().Update(ctx, restoreJob); err != nil {
+				return ctrl.Result{}, err
+			}
+		}
 		return ctrl.Result{RequeueAfter: altinityPollInterval}, nil
 	}
 }

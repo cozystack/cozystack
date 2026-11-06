@@ -5,7 +5,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
+	"time"
+
+	"github.com/go-logr/logr/funcr"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -13,6 +17,8 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/yaml"
 )
 
 func newFakeClient(objs ...client.Object) client.Client {
@@ -662,5 +668,189 @@ func TestProject_HappyPath_HTTPEndpoint(t *testing.T) {
 	}
 	if _, ok := blob.Accounts["seaweedfs-s3.tenant-root.svc:8333"]; !ok {
 		t.Errorf("blob account host not stripped: %+v", blob.Accounts)
+	}
+}
+
+// The ClickHouse sidecar reads its S3 settings from this key as a mounted
+// file, which kubelet refreshes in place: clickhouse-backup reloads its
+// config file on every API call, while its environment is fixed at start.
+func TestProject_WritesClickHouseBackupConfig(t *testing.T) {
+	cases := []struct {
+		name           string
+		forcePathStyle string
+		wantPathStyle  *bool
+	}{
+		{name: "path style on", forcePathStyle: "true", wantPathStyle: ptrBool(true)},
+		{name: "path style off", forcePathStyle: "false", wantPathStyle: ptrBool(false)},
+		{name: "path style unset", forcePathStyle: ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			c := newFakeClient(flatSourceSecret())
+			ctx := context.Background()
+			cfg := defaultCfg()
+			cfg.ForcePathStyle = tc.forcePathStyle
+			if err := ProjectBackupCredentials(ctx, c, cfg, "tenant-acme"); err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			got := &corev1.Secret{}
+			if err := c.Get(ctx, types.NamespacedName{Namespace: "tenant-acme", Name: "cozy-backups-creds"}, got); err != nil {
+				t.Fatalf("projected Secret not found: %v", err)
+			}
+			var doc struct {
+				S3 map[string]any `json:"s3"`
+			}
+			if err := yaml.Unmarshal(got.Data[clickHouseBackupConfigKey], &doc); err != nil {
+				t.Fatalf("%s is not YAML: %v\n%s", clickHouseBackupConfigKey, err, got.Data[clickHouseBackupConfigKey])
+			}
+			for key, want := range map[string]string{
+				"bucket":     "cozy-backups",
+				"endpoint":   "https://seaweedfs-s3.tenant-root.svc:8333",
+				"region":     "us-east-1",
+				"access_key": "AK",
+				"secret_key": "SK",
+			} {
+				if doc.S3[key] != want {
+					t.Errorf("s3.%s = %v, want %q", key, doc.S3[key], want)
+				}
+			}
+			pathStyle, set := doc.S3["force_path_style"]
+			switch {
+			case tc.wantPathStyle == nil && set:
+				t.Errorf("s3.force_path_style = %v, want it left to the clickhouse-backup default", pathStyle)
+			case tc.wantPathStyle != nil && pathStyle != *tc.wantPathStyle:
+				t.Errorf("s3.force_path_style = %v, want %v", pathStyle, *tc.wantPathStyle)
+			}
+		})
+	}
+}
+
+// clickhouse-backup defaults the S3 region to us-east-1; an empty value in
+// its config file would replace that default rather than fall back to it.
+func TestProject_ClickHouseBackupConfigOmitsAnEmptyRegion(t *testing.T) {
+	c := newFakeClient(flatSourceSecret())
+	ctx := context.Background()
+	cfg := defaultCfg()
+	cfg.Region = ""
+	if err := ProjectBackupCredentials(ctx, c, cfg, "tenant-acme"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	got := &corev1.Secret{}
+	if err := c.Get(ctx, types.NamespacedName{Namespace: "tenant-acme", Name: "cozy-backups-creds"}, got); err != nil {
+		t.Fatalf("projected Secret not found: %v", err)
+	}
+	var doc struct {
+		S3 map[string]any `json:"s3"`
+	}
+	if err := yaml.Unmarshal(got.Data[clickHouseBackupConfigKey], &doc); err != nil {
+		t.Fatalf("%s is not YAML: %v", clickHouseBackupConfigKey, err)
+	}
+	if region, set := doc.S3["region"]; set {
+		t.Errorf("s3.region = %q, want it left to the clickhouse-backup default", region)
+	}
+}
+
+// The parse only serves the ClickHouse file, while the same projection
+// carries every other driver's credentials. An unparseable platform value
+// must cost ClickHouse its path-style setting and say so, not fail the
+// projection for all of them.
+func TestProject_MalformedForcePathStyleSkipsOnlyTheClickHouseSetting(t *testing.T) {
+	c := newFakeClient(flatSourceSecret())
+	var logged []string
+	ctx := log.IntoContext(context.Background(), funcr.New(func(prefix, args string) {
+		logged = append(logged, args)
+	}, funcr.Options{}))
+	cfg := defaultCfg()
+	cfg.ForcePathStyle = "yes"
+	if err := ProjectBackupCredentials(ctx, c, cfg, "tenant-acme"); err != nil {
+		t.Fatalf("projection failed for every driver over a ClickHouse-only setting: %v", err)
+	}
+	got := &corev1.Secret{}
+	if err := c.Get(ctx, types.NamespacedName{Namespace: "tenant-acme", Name: "cozy-backups-creds"}, got); err != nil {
+		t.Fatalf("projected Secret not found: %v", err)
+	}
+	if string(got.Data["AWS_ACCESS_KEY_ID"]) != "AK" {
+		t.Errorf("AWS_ACCESS_KEY_ID = %q, want the projected key", got.Data["AWS_ACCESS_KEY_ID"])
+	}
+	if string(got.Data["forcePathStyle"]) != "yes" {
+		t.Errorf("forcePathStyle = %q, want the platform value carried verbatim", got.Data["forcePathStyle"])
+	}
+	var doc struct {
+		S3 map[string]any `json:"s3"`
+	}
+	if err := yaml.Unmarshal(got.Data[clickHouseBackupConfigKey], &doc); err != nil {
+		t.Fatalf("%s is not YAML: %v", clickHouseBackupConfigKey, err)
+	}
+	if doc.S3["access_key"] != "AK" {
+		t.Errorf("s3.access_key = %v, want the rest of the file written", doc.S3["access_key"])
+	}
+	if pathStyle, set := doc.S3["force_path_style"]; set {
+		t.Errorf("s3.force_path_style = %v, want it left out", pathStyle)
+	}
+	found := false
+	for _, line := range logged {
+		if strings.Contains(line, `"error"`) && strings.Contains(line, `\"yes\"`) && strings.Contains(line, "force_path_style") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("no error naming the rejected value and the skipped setting was logged; got %q", logged)
+	}
+}
+
+func ptrBool(b bool) *bool { return &b }
+
+// Consumers that read the Secret through a mounted volume need to know when
+// its content last changed; an unchanged re-projection must keep the time.
+func TestProject_StampsWhenContentChanges(t *testing.T) {
+	src := flatSourceSecret()
+	c := newFakeClient(src)
+	ctx := context.Background()
+	key := types.NamespacedName{Namespace: "tenant-acme", Name: "cozy-backups-creds"}
+	stamp := func() string {
+		got := &corev1.Secret{}
+		if err := c.Get(ctx, key, got); err != nil {
+			t.Fatalf("projected Secret not found: %v", err)
+		}
+		return got.Annotations[credentialsUpdatedAtAnnotation]
+	}
+
+	if err := ProjectBackupCredentials(ctx, c, defaultCfg(), "tenant-acme"); err != nil {
+		t.Fatalf("first projection: %v", err)
+	}
+	first := stamp()
+	at, err := time.Parse(time.RFC3339, first)
+	if err != nil || time.Since(at) > time.Minute {
+		t.Fatalf("first projection stamp %q is not a recent RFC3339 time: %v", first, err)
+	}
+
+	old := &corev1.Secret{}
+	if err := c.Get(ctx, key, old); err != nil {
+		t.Fatalf("get projected Secret: %v", err)
+	}
+	old.Annotations[credentialsUpdatedAtAnnotation] = "2000-01-01T00:00:00Z"
+	if err := c.Update(ctx, old); err != nil {
+		t.Fatalf("age the stamp: %v", err)
+	}
+	if err := ProjectBackupCredentials(ctx, c, defaultCfg(), "tenant-acme"); err != nil {
+		t.Fatalf("unchanged re-projection: %v", err)
+	}
+	if got := stamp(); got != "2000-01-01T00:00:00Z" {
+		t.Fatalf("an unchanged re-projection moved the stamp to %q", got)
+	}
+
+	rotated := &corev1.Secret{}
+	if err := c.Get(ctx, types.NamespacedName{Namespace: src.Namespace, Name: src.Name}, rotated); err != nil {
+		t.Fatalf("get source Secret: %v", err)
+	}
+	rotated.Data["secretKey"] = []byte("SK2")
+	if err := c.Update(ctx, rotated); err != nil {
+		t.Fatalf("rotate source Secret: %v", err)
+	}
+	if err := ProjectBackupCredentials(ctx, c, defaultCfg(), "tenant-acme"); err != nil {
+		t.Fatalf("rotated re-projection: %v", err)
+	}
+	if got := stamp(); got == "2000-01-01T00:00:00Z" {
+		t.Fatalf("a rotation did not move the stamp")
 	}
 }
