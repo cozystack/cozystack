@@ -3447,6 +3447,41 @@ func TestReconcileCNPG_AttachedPluginDoesNotDelayBackup(t *testing.T) {
 	if cond := apimeta.FindStatusCondition(j.Status.Conditions, backupCondPluginRolledOut); cond != nil {
 		t.Errorf("%s condition = %+v on a Cluster the driver did not roll", backupCondPluginRolledOut, cond)
 	}
+	if cond := apimeta.FindStatusCondition(j.Status.Conditions, backupCondDestinationWriteHeld); cond != nil {
+		t.Errorf("%s condition = %+v on a job nothing held", backupCondDestinationWriteHeld, cond)
+	}
+}
+
+// A release older than the rollout, from a wait before the plugin was
+// attached, does not shorten the rollout that began after it.
+func TestReconcileCNPG_EarlierReleaseDoesNotShortenTheRollout(t *testing.T) {
+	expired := time.Now().Add(-(cnpgDefaultBackupDeadline + time.Minute))
+	j := newRolloutBackupJob(expired.Add(-time.Hour))
+	j.Status.Conditions = []metav1.Condition{
+		{
+			Type:               backupCondDestinationWriteHeld,
+			Status:             metav1.ConditionFalse,
+			Reason:             "Released",
+			LastTransitionTime: metav1.NewTime(expired),
+		},
+		{
+			Type:               backupCondPluginRolledOut,
+			Status:             metav1.ConditionFalse,
+			Reason:             "WaitingForPluginRollout",
+			LastTransitionTime: metav1.NewTime(time.Now().Add(-time.Minute)),
+		},
+	}
+	f := newCNPGRolloutFixture(t, j,
+		newRolloutCluster("Waiting for user action", buildBarmanPlugin(rolloutCluster, rolloutCluster)),
+		newRolloutInstancePod(expired.Add(-time.Hour)))
+
+	got, backups := f.pass()
+	if got.Status.Phase == backupsv1alpha1.BackupJobPhaseFailed {
+		t.Fatalf("a rollout that began a minute ago failed on an older release: %s", got.Status.Message)
+	}
+	if len(backups) != 0 {
+		t.Fatalf("a cnpg.io/Backup was created against an unfinished rollout: %+v", backups)
+	}
 }
 
 // TestReconcileCNPG_PluginRolloutWaitIsBounded: a rollout that never ends
@@ -3473,6 +3508,142 @@ func TestReconcileCNPG_PluginRolloutWaitIsBounded(t *testing.T) {
 	}
 	if !strings.Contains(got.Status.Message, "Waiting for user action") {
 		t.Errorf("BackupJob message = %q, want the phase CNPG is stuck in", got.Status.Message)
+	}
+}
+
+// A job whose plugin rollout started, and which then waited for another
+// backup of the app or for a restore of it, gets the rollout deadline back
+// from the moment it was released: that wait is not a rollout of its own.
+// The instance pods still count as rolled from the rollout's own start.
+func TestReconcileCNPG_HeldJobRolloutDeadlineCountsFromRelease(t *testing.T) {
+	type hold struct {
+		name    string
+		seed    func(f *cnpgRolloutFixture) (release func())
+		waiting string
+	}
+	holds := []hold{
+		{
+			name:    "another backup",
+			waiting: "WaitingForOtherBackup",
+			seed: func(f *cnpgRolloutFixture) func() {
+				f.seedOtherBackupJob("bj-other", backupsv1alpha1.BackupJobPhaseRunning)
+				f.seedCNPGBackup("bj-other-cnpg", "bj-other", rolloutCluster, "running")
+				return func() {
+					held := &cnpgtypes.Backup{}
+					if err := f.c.Get(context.Background(), client.ObjectKey{Namespace: rolloutNS, Name: "bj-other-cnpg"}, held); err != nil {
+						f.t.Fatalf("get holder Backup: %v", err)
+					}
+					held.Status.Phase = cnpgBackupPhaseComplete
+					if err := f.c.Update(context.Background(), held); err != nil {
+						f.t.Fatalf("complete holder Backup: %v", err)
+					}
+				}
+			},
+		},
+		{
+			name:    "a restore",
+			waiting: ConditionReasonRestoreInProgress,
+			seed: func(f *cnpgRolloutFixture) func() {
+				restore := f.seedRestoreOfApp()
+				return func() {
+					restore.Status.Phase = backupsv1alpha1.RestoreJobPhaseSucceeded
+					if err := f.c.Status().Update(context.Background(), restore); err != nil {
+						f.t.Fatalf("finish the restore: %v", err)
+					}
+				}
+			},
+		},
+	}
+	stampedAt := time.Now().Add(-(cnpgDefaultBackupDeadline + time.Minute)).Truncate(time.Second)
+	newHeldRollout := func(t *testing.T, h hold, cluster *cnpgtypes.Cluster, pod *corev1.Pod) *cnpgRolloutFixture {
+		t.Helper()
+		j := newRolloutBackupJob(stampedAt.Add(-time.Hour))
+		j.Status.Conditions = []metav1.Condition{{
+			Type:               backupCondPluginRolledOut,
+			Status:             metav1.ConditionFalse,
+			Reason:             "WaitingForPluginRollout",
+			LastTransitionTime: metav1.NewTime(stampedAt),
+		}}
+		f := newCNPGRolloutFixture(t, j, cluster, pod)
+		release := h.seed(f)
+		got, backups := f.pass()
+		for _, b := range backups {
+			if b.Labels[backupsv1alpha1.OwningJobNameLabel] == "bj" {
+				t.Fatalf("a held job created cnpg.io/Backup %s", b.Name)
+			}
+		}
+		if got.Status.Phase == backupsv1alpha1.BackupJobPhaseFailed {
+			t.Fatalf("a held job did not wait: %s", got.Status.Message)
+		}
+		if ready := apimeta.FindStatusCondition(got.Status.Conditions, "Ready"); ready == nil || ready.Reason != h.waiting {
+			t.Fatalf("Ready = %+v, want %s", ready, h.waiting)
+		}
+		release()
+		return f
+	}
+
+	for _, h := range holds {
+		t.Run(h.name+": the rollout is still waited for after the release", func(t *testing.T) {
+			f := newHeldRollout(t, h,
+				newRolloutCluster("Waiting for user action", buildBarmanPlugin(rolloutCluster, rolloutCluster)),
+				newRolloutInstancePod(stampedAt.Add(-time.Hour)))
+
+			releasedAt := time.Now().Truncate(time.Second)
+			j, backups := f.pass()
+			if j.Status.Phase == backupsv1alpha1.BackupJobPhaseFailed {
+				t.Fatalf("time held by %s was charged to the rollout: %s", h.name, j.Status.Message)
+			}
+			for _, b := range backups {
+				if b.Labels[backupsv1alpha1.OwningJobNameLabel] == "bj" {
+					t.Fatalf("cnpg.io/Backup %s was created against an unfinished rollout", b.Name)
+				}
+			}
+			if ready := apimeta.FindStatusCondition(j.Status.Conditions, "Ready"); ready == nil || ready.Reason != "WaitingForPluginRollout" {
+				t.Fatalf("Ready = %+v, want WaitingForPluginRollout", ready)
+			}
+			released := apimeta.FindStatusCondition(j.Status.Conditions, backupCondDestinationWriteHeld)
+			if released == nil || released.Status != metav1.ConditionFalse || released.LastTransitionTime.Time.Before(releasedAt) {
+				t.Fatalf("%s = %+v, want False since the release at %s", backupCondDestinationWriteHeld, released, releasedAt)
+			}
+			if rollout := apimeta.FindStatusCondition(j.Status.Conditions, backupCondPluginRolledOut); rollout == nil || !rollout.LastTransitionTime.Time.Equal(stampedAt) {
+				t.Errorf("%s = %+v, want its stamp kept at %s", backupCondPluginRolledOut, rollout, stampedAt)
+			}
+
+			released.LastTransitionTime = metav1.NewTime(stampedAt)
+			if err := f.c.Status().Update(context.Background(), j); err != nil {
+				t.Fatalf("age the release: %v", err)
+			}
+			j, _ = f.pass()
+			if j.Status.Phase != backupsv1alpha1.BackupJobPhaseFailed || !strings.Contains(j.Status.Message, "rollout did not finish") {
+				t.Fatalf("phase = %q (%s), want Failed once the rollout outlived the deadline after the release", j.Status.Phase, j.Status.Message)
+			}
+		})
+
+		t.Run(h.name+": an instance that rolled while the job was held counts", func(t *testing.T) {
+			f := newHeldRollout(t, h,
+				newRolloutCluster(cnpgClusterHealthyPhase, buildBarmanPlugin(rolloutCluster, rolloutCluster)),
+				newRolloutInstancePod(stampedAt.Add(time.Minute)))
+
+			var j *backupsv1alpha1.BackupJob
+			own := 0
+			for range 3 {
+				var backups []cnpgtypes.Backup
+				j, backups = f.pass()
+				own = 0
+				for _, b := range backups {
+					if b.Labels[backupsv1alpha1.OwningJobNameLabel] == "bj" {
+						own++
+					}
+				}
+				if own != 0 || j.Status.Phase == backupsv1alpha1.BackupJobPhaseFailed {
+					break
+				}
+			}
+			if own != 1 {
+				t.Fatalf("got %d cnpg.io/Backups of the job against an instance that rolled after the rollout began; Ready = %+v, phase %q (%s)",
+					own, apimeta.FindStatusCondition(j.Status.Conditions, "Ready"), j.Status.Phase, j.Status.Message)
+			}
+		})
 	}
 }
 
