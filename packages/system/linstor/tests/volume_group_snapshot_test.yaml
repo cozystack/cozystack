@@ -4,13 +4,19 @@ suite: VolumeGroupSnapshot support for linstor-csi
 # csi-snapshotter sidecar from an API probe it runs only at startup, so an
 # operator that started before snapshot-controller served
 # groupsnapshot.storage.k8s.io/v1beta2 leaves the gate off. The podTemplate
-# below is merged after the operator's own patch and sets it explicitly, and
-# the VolumeGroupSnapshotClass carries the label Velero selects a group
-# snapshot class by.
+# sets it explicitly once the API is served, and the VolumeGroupSnapshotClass
+# carries the label Velero selects a group snapshot class by. Neither is
+# rendered while the API is missing: the gate would stall csi-snapshotter and
+# the class would fail the upgrade.
 
 tests:
-  - it: "csi-snapshotter gets the CSIVolumeGroupSnapshot gate from the podTemplate"
+  - it: "csi-snapshotter gets the CSIVolumeGroupSnapshot gate once v1beta2 is served"
     template: templates/cluster.yaml
+    capabilities: &v1beta2
+      apiVersions:
+        - groupsnapshot.storage.k8s.io/v1beta2/VolumeGroupSnapshot
+        - groupsnapshot.storage.k8s.io/v1beta2/VolumeGroupSnapshotContent
+        - groupsnapshot.storage.k8s.io/v1beta2/VolumeGroupSnapshotClass
     asserts:
       - contains:
           path: spec.csiController.podTemplate.spec.containers
@@ -20,11 +26,12 @@ tests:
               - name: FEATURE_GATE_CSI_VOLUME_GROUP_SNAPSHOT
                 value: "true"
 
-  - it: "csi-snapshotter gate is kept when strict topology restates the provisioner args"
+  - it: "csi-snapshotter gate is kept when strict topology is disabled"
     template: templates/cluster.yaml
+    capabilities: *v1beta2
     set:
       linstorCSI:
-        strictTopology: true
+        strictTopology: false
     asserts:
       - contains:
           path: spec.csiController.podTemplate.spec.containers
@@ -33,9 +40,26 @@ tests:
             env:
               - name: FEATURE_GATE_CSI_VOLUME_GROUP_SNAPSHOT
                 value: "true"
+
+  # Asserted by container names, not a negated `contains`: a negation against a
+  # path that no longer resolves passes vacuously.
+  - it: "csi-snapshotter is left to the operator while a group API is missing"
+    template: templates/cluster.yaml
+    capabilities:
+      apiVersions:
+        - groupsnapshot.storage.k8s.io/v1beta2/VolumeGroupSnapshot
+        - groupsnapshot.storage.k8s.io/v1beta2/VolumeGroupSnapshotClass
+    asserts:
+      - lengthEqual:
+          path: spec.csiController.podTemplate.spec.containers
+          count: 2
+      - equal:
+          path: spec.csiController.podTemplate.spec.containers[1].name
+          value: csi-provisioner
 
   - it: "linstor VolumeGroupSnapshotClass is the default class Velero selects"
     template: templates/volumegroupsnapshotclass.yaml
+    capabilities: *v1beta2
     asserts:
       - isKind:
           of: VolumeGroupSnapshotClass
@@ -53,3 +77,9 @@ tests:
       - equal:
           path: metadata.annotations["groupsnapshot.storage.kubernetes.io/is-default-class"]
           value: "true"
+
+  - it: "no VolumeGroupSnapshotClass while v1beta2 is not served"
+    template: templates/volumegroupsnapshotclass.yaml
+    asserts:
+      - hasDocuments:
+          count: 0
