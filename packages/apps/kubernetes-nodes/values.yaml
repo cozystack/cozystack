@@ -159,10 +159,11 @@ talos:
 ## @immutable
 substrate: kubevirt
 
-## @typedef {struct} ProxmoxNetwork - Network attachment for a Proxmox worker VM.
-## @field {string} bridge - Proxmox bridge the VM NIC attaches to (e.g. `vmbr0`). Required when `substrate` is `proxmox`.
-## @field {int} [vlan] - L2 VLAN tag. Omitted when unset.
-## @field {int} [mtu] - NIC MTU. Omitted when unset.
+## @typedef {struct} ProxmoxNetwork - Network attachment for a Proxmox worker VM: either a Proxmox tenant network of this namespace by `name`, or a raw `bridge` and `vlan`.
+## @field {string} [name] - Name of a Proxmox tenant network the platform operator listed for this namespace in a ProxmoxNetworkZone (`cozystack.proxmox-network` package). The NIC takes the zone's bridge, the network's VLAN and MTU, and every worker claims its address from the network's own IP pool; the tenant picks none of them. Use the same name as the parent `Kubernetes` cluster's `proxmox.network.name`. Set either `name` or `bridge`, not both.
+## @field {string} [bridge] - Proxmox bridge the VM NIC attaches to (e.g. `vmbr0`), on the raw path without a tenant network. Required when `substrate` is `proxmox` and `name` is unset. The platform may warn about or refuse this path (`admission.rawNetworks` of the proxmox-network package).
+## @field {int} [vlan] - L2 VLAN tag on the raw path. Omitted when unset; refused next to `name`.
+## @field {int} [mtu] - NIC MTU. Omitted when unset. Next to `name` it overrides the network's MTU.
 
 ## @typedef {struct} Proxmox - Proxmox substrate settings. Ignored unless `substrate` is `proxmox`.
 ## @field {[]string} templateTags - Tags identifying the Talos VM template to clone. capmox matches a template when its tag set is EQUAL to this list, not when it contains it, so every tag on the template must be listed here — a missing one yields `found 0 VM templates with tags ...` while the tags are plainly present. The template has to carry this pool's `talos.schematicID` at `talos.version` in the nocloud flavour, with the Proxmox guest agent enabled for the `qemu-guest-agent` extension of the default schematic; `hack/proxmox-talos-template.sh` builds it from these values and prints the tags to list here. Do not build it from the platform release's `nocloud-amd64.raw.xz`: that is the bare-metal node image, whose `zfs` extension keeps a VM from finishing its boot sequence and reboots it at the Talos boot timeout. Required when `substrate` is `proxmox`.
@@ -180,6 +181,7 @@ proxmox:
   # integers, so a null default fails validation for every pool that does
   # not set them.
   network:
+    name: ""
     bridge: ""
   storage: ""
   pool: ""

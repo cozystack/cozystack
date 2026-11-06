@@ -1,0 +1,4 @@
+apiVersion: v2
+name: cozy-proxmox-network
+description: Platform-owned Proxmox bridge, VLANs and IP pools for tenant networks (ProxmoxNetworkZone), with admission that keeps Cluster API machines on their namespace's networks.
+version: 0.0.0 # Placeholder, the actual version will be automatically set during the build process
