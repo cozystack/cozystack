@@ -11,6 +11,8 @@ import (
 
 	"github.com/cozystack/cozystack/pkg/lineage"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -271,14 +273,15 @@ func (h *LineageControllerWebhook) applySchedulingClass(ctx context.Context, obj
 	schedulingClass := ns.Labels[schedulerapi.SchedulingClassLabel]
 
 	if appClass := ownerSchedulingClass(owner); appClass != "" && appClass != schedulingClass {
-		switch {
-		case !slices.Contains(allowedSchedulingClasses(ns), appClass):
+		if !slices.Contains(allowedSchedulingClasses(ns), appClass) {
 			logger.Info("application SchedulingClass is not allowed in this namespace, keeping the tenant class",
 				"schedulingClass", appClass, "tenantSchedulingClass", schedulingClass, "namespace", namespace)
-		case !h.schedulingClassExists(ctx, appClass):
+		} else if exists, err := h.schedulingClassExists(ctx, appClass); err != nil {
+			return err
+		} else if !exists {
 			logger.Info("application SchedulingClass not found, keeping the tenant class",
 				"schedulingClass", appClass, "tenantSchedulingClass", schedulingClass, "namespace", namespace)
-		default:
+		} else {
 			schedulingClass = appClass
 		}
 	}
@@ -287,7 +290,11 @@ func (h *LineageControllerWebhook) applySchedulingClass(ctx context.Context, obj
 		return nil
 	}
 
-	if !h.schedulingClassExists(ctx, schedulingClass) {
+	exists, err := h.schedulingClassExists(ctx, schedulingClass)
+	if err != nil {
+		return err
+	}
+	if !exists {
 		logger.Info("SchedulingClass not found, skipping scheduler injection",
 			"schedulingClass", schedulingClass, "namespace", namespace)
 		return nil
@@ -345,11 +352,21 @@ func allowedSchedulingClasses(ns *corev1.Namespace) []string {
 	return allowed
 }
 
-// schedulingClassExists treats any lookup error as absence: the CRD may not be
-// installed, and either way the class cannot be scheduled against.
-func (h *LineageControllerWebhook) schedulingClassExists(ctx context.Context, name string) bool {
+// schedulingClassExists reports a missing class, or a missing SchedulingClass
+// CRD, as absence. Any other lookup error is returned: treating a timeout or a
+// 5xx as absence would admit the Pod without the tenant's placement constraint,
+// which it then keeps until it is recreated. Failing the admission lets the
+// Pod's controller retry instead.
+func (h *LineageControllerWebhook) schedulingClassExists(ctx context.Context, name string) (bool, error) {
 	_, err := h.dynClient.Resource(schedulingClassGVR).Get(ctx, name, metav1.GetOptions{})
-	return err == nil
+	switch {
+	case err == nil:
+		return true, nil
+	case apierrors.IsNotFound(err) || meta.IsNoMatchError(err):
+		return false, nil
+	default:
+		return false, fmt.Errorf("getting SchedulingClass %s: %w", name, err)
+	}
 }
 
 var schedulingClassGVR = schema.GroupVersionResource{

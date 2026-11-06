@@ -3,6 +3,7 @@ package lineagecontrollerwebhook
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"sort"
 	"strings"
 	"testing"
@@ -12,6 +13,7 @@ import (
 	corev1alpha1 "github.com/cozystack/cozystack/pkg/apis/core/v1alpha1"
 	admissionv1 "k8s.io/api/admission/v1"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -19,6 +21,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	dynamicfake "k8s.io/client-go/dynamic/fake"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	k8stesting "k8s.io/client-go/testing"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
@@ -647,5 +650,57 @@ func TestApplySchedulingClass_RejectedOwnerApplicationClassWithoutTenantClassIsN
 	}
 	if sched, _, _ := unstructured.NestedString(pod.Object, "spec", "schedulerName"); sched != "" {
 		t.Errorf("pod spec.schedulerName should not be set, got %q", sched)
+	}
+}
+
+// failSchedulingClassGet makes every SchedulingClass lookup return err.
+func failSchedulingClassGet(h *LineageControllerWebhook, err error) {
+	h.dynClient.(*dynamicfake.FakeDynamicClient).PrependReactor("get", schedulerapi.Resource,
+		func(k8stesting.Action) (bool, runtime.Object, error) { return true, nil, err })
+}
+
+// A lookup that fails for any reason other than absence must fail the
+// admission, so the Pod's controller retries it. Admitting the Pod without
+// the tenant class would leave it on the default scheduler until recreated.
+func TestApplySchedulingClass_TransientLookupErrorFailsAdmission(t *testing.T) {
+	transient := apierrors.NewInternalError(errors.New("etcdserver: request timed out"))
+	for _, tc := range []struct {
+		name  string
+		owner *unstructured.Unstructured
+	}{
+		{name: "tenant class", owner: nil},
+		{name: "application class", owner: newOwnerApplication("tenant-acme", "db", map[string]interface{}{"schedulingClass": "app-class"})},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			h := newWebhookTestEnv(t, "tenant-acme", testSchedulingClass, true)
+			allowSchedulingClasses(t, h, "tenant-acme", "app-class")
+			failSchedulingClassGet(h, transient)
+			pod := newPod("tenant-acme", "db-0")
+
+			err := h.applySchedulingClass(ctx, pod, tc.owner, "tenant-acme")
+			if !apierrors.IsInternalError(err) {
+				t.Fatalf("expected the lookup error to be returned, got %v", err)
+			}
+			if _, ok := pod.GetAnnotations()[schedulerapi.SchedulingClassAnnotation]; ok {
+				t.Errorf("pod must not be mutated when the lookup fails")
+			}
+		})
+	}
+}
+
+// Without the SchedulingClass CRD there is no scheduler to send the Pod to, so
+// a NoMatch error is absence, like NotFound, and the injection is skipped.
+func TestApplySchedulingClass_MissingCRDSkipsInjection(t *testing.T) {
+	ctx := context.Background()
+	h := newWebhookTestEnv(t, "tenant-acme", testSchedulingClass, true)
+	failSchedulingClassGet(h, &meta.NoKindMatchError{GroupKind: schema.GroupKind{Group: schedulerapi.Group, Kind: "SchedulingClass"}})
+	pod := newPod("tenant-acme", "db-0")
+
+	if err := h.applySchedulingClass(ctx, pod, nil, "tenant-acme"); err != nil {
+		t.Fatalf("applySchedulingClass returned error: %v", err)
+	}
+	if sched, _, _ := unstructured.NestedString(pod.Object, "spec", "schedulerName"); sched != "" {
+		t.Errorf("pod spec.schedulerName should not be set without the CRD, got %q", sched)
 	}
 }
