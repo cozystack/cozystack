@@ -1,0 +1,35 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: cozy:observability-proxy
+rules:
+# Every request is authenticated and authorized against the API server.
+- apiGroups: ["authentication.k8s.io"]
+  resources: ["tokenreviews"]
+  verbs: ["create"]
+- apiGroups: ["authorization.k8s.io"]
+  resources: ["subjectaccessreviews"]
+  verbs: ["create"]
+# The namespace.cozystack.io/monitoring label names the logs store; it is
+# read from an informer cache, which only lists and watches.
+- apiGroups: [""]
+  resources: ["namespaces"]
+  verbs: ["list", "watch"]
+# Application roots map the plural in the path to the kind the lineage
+# labels carry, from an informer cache as well.
+- apiGroups: ["cozystack.io"]
+  resources: ["applicationdefinitions"]
+  verbs: ["list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: cozy:observability-proxy
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: cozy:observability-proxy
+subjects:
+- kind: ServiceAccount
+  name: observability-proxy
+  namespace: {{ .Release.Namespace }}
