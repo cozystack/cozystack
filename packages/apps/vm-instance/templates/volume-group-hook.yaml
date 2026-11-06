@@ -129,14 +129,16 @@ spec:
           command: ["sh", "-exc"]
           {{- /* A claim deleted since the render is skipped, not fatal: the rest
                  of the group stays valid for Velero without it. Any other
-                 failure of the label call still fails the Job. --overwrite is
-                 passed only for a claim whose label is present but empty, so a
-                 claim grouped under another VM since the render is refused
-                 rather than taken over. */}}
+                 failure still fails the Job. A label present but empty is
+                 replaced by a JSON patch that tests for the empty value first,
+                 so the API server refuses it, instead of taking the claim over,
+                 if another VM has grouped the claim since the render. */}}
           args:
             - |
-              label_claim() {
-                if ! out=$(kubectl label persistentvolumeclaims "$@" -n {{ $namespace }} 2>&1); then
+              claim() {
+                verb=$1
+                shift
+                if ! out=$(kubectl "$verb" persistentvolumeclaims "$@" -n {{ $namespace }} 2>&1); then
                   case "$out" in
                     *"(NotFound)"*) echo "$out" ;;
                     *) echo "$out" >&2; return 1 ;;
@@ -144,10 +146,15 @@ spec:
                 fi
               }
               {{- range $toLabel }}
-              label_claim {{ . }}{{ if has . $emptyLabel }} --overwrite{{ end }} {{ $groupKey }}={{ $vmName }}
+              {{- if has . $emptyLabel }}
+              {{- $path := printf "/metadata/labels/%s" ($groupKey | replace "/" "~1") }}
+              claim patch {{ . }} --type=json -p '{{ list (dict "op" "test" "path" $path "value" "") (dict "op" "replace" "path" $path "value" $vmName) | toJson }}'
+              {{- else }}
+              claim label {{ . }} {{ $groupKey }}={{ $vmName }}
+              {{- end }}
               {{- end }}
               {{- range $toUnlabel }}
-              label_claim {{ . }} {{ $groupKey }}-
+              claim label {{ . }} {{ $groupKey }}-
               {{- end }}
 ---
 apiVersion: v1

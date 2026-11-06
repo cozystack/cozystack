@@ -68,15 +68,15 @@ tests:
           count: 4
       - matchRegex:
           path: spec.template.spec.containers[0].args[0]
-          pattern: 'label_claim vm-disk-win-system velero.io/volume-group=vm-instance-win\n'
+          pattern: 'claim label vm-disk-win-system velero.io/volume-group=vm-instance-win\n'
         documentSelector: {path: kind, value: Job}
       - matchRegex:
           path: spec.template.spec.containers[0].args[0]
-          pattern: 'label_claim vm-disk-win-data velero.io/volume-group=vm-instance-win\n'
+          pattern: 'claim label vm-disk-win-data velero.io/volume-group=vm-instance-win\n'
         documentSelector: {path: kind, value: Job}
       - matchRegex:
           path: spec.template.spec.containers[0].args[0]
-          pattern: 'label_claim persistent-state-for-vm-instance-win-abcde velero.io/volume-group=vm-instance-win\n'
+          pattern: 'claim label persistent-state-for-vm-instance-win-abcde velero.io/volume-group=vm-instance-win\n'
         documentSelector: {path: kind, value: Job}
       - equal:
           path: rules[0].resourceNames
@@ -248,11 +248,11 @@ tests:
     asserts:
       - matchRegex:
           path: spec.template.spec.containers[0].args[0]
-          pattern: 'label_claim vm-disk-win-data velero.io/volume-group-\n'
+          pattern: 'claim label vm-disk-win-data velero.io/volume-group-\n'
         documentSelector: {path: kind, value: Job}
       - matchRegex:
           path: spec.template.spec.containers[0].args[0]
-          pattern: 'label_claim vm-disk-win-system velero.io/volume-group-\n'
+          pattern: 'claim label vm-disk-win-system velero.io/volume-group-\n'
         documentSelector: {path: kind, value: Job}
       - notMatchRegex:
           path: spec.template.spec.containers[0].args[0]
@@ -283,9 +283,10 @@ tests:
           value: [vm-disk-win-data, persistent-state-for-vm-instance-win-abcde]
         documentSelector: {path: kind, value: Role}
 
-  - it: overwrites an empty group label and only that one
+  - it: replaces an empty group label only if it is still empty
     # kubectl refuses to change a present label without --overwrite, even an
-    # empty one; a claim with no label keeps the plain form.
+    # empty one, and --overwrite would also replace a group another VM set
+    # since the render; the JSON patch tests for the empty value first.
     capabilities: *groupSnapshotServed
     kubernetesProvider:
       scheme: *scheme
@@ -300,10 +301,10 @@ tests:
     asserts:
       - matchRegex:
           path: spec.template.spec.containers[0].args[0]
-          pattern: 'label_claim vm-disk-win-system --overwrite velero.io/volume-group=vm-instance-win\n'
+          pattern: 'claim patch vm-disk-win-system --type=json -p ''\[\{"op":"test","path":"/metadata/labels/velero.io~1volume-group","value":""\},\{"op":"replace","path":"/metadata/labels/velero.io~1volume-group","value":"vm-instance-win"\}\]''\n'
       - matchRegex:
           path: spec.template.spec.containers[0].args[0]
-          pattern: 'label_claim vm-disk-win-data velero.io/volume-group=vm-instance-win\n'
+          pattern: 'claim label vm-disk-win-data velero.io/volume-group=vm-instance-win\n'
 
   - it: skips a claim deleted between the render and the Job
     capabilities: *groupSnapshotServed
@@ -314,7 +315,7 @@ tests:
     asserts:
       - matchRegex:
           path: spec.template.spec.containers[0].args[0]
-          pattern: 'if ! out=\$\(kubectl label persistentvolumeclaims "\$@" -n tenant-test 2>&1\); then\n\s+case "\$out" in\n\s+\*"\(NotFound\)"\*\) echo "\$out" ;;\n\s+\*\) echo "\$out" >&2; return 1 ;;'
+          pattern: 'if ! out=\$\(kubectl "\$verb" persistentvolumeclaims "\$@" -n tenant-test 2>&1\); then\n\s+case "\$out" in\n\s+\*"\(NotFound\)"\*\) echo "\$out" ;;\n\s+\*\) echo "\$out" >&2; return 1 ;;'
 
   - it: runs the Job under a restrictive non-root securityContext
     capabilities: *groupSnapshotServed
