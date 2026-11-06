@@ -51,42 +51,83 @@ spec:
               host="chi-clickhouse-{{ printf "{{ .Release.Name }}" }}-clickhouse-0-0.{{ printf "{{ .Release.Namespace }}" }}.svc"
               api="http://${host}:7171"
               auth="-u ${API_USERNAME}:${API_PASSWORD}"
+              # Every request but the POST is retried on failure, every 5s,
+              # up to $2 times: once the operation is accepted, a dropped poll
+              # must not fail the attempt, since the Job retry it causes cannot
+              # tell a lost poll from a lost operation.
+              api_get() {
+                n=0
+                while true; do
+                  if out=$(curl -fsS ${auth} --max-time 10 "${api}$1"); then
+                    printf '%s\n' "${out}"
+                    return 0
+                  fi
+                  n=$((n + 1))
+                  if [ "${n}" -ge "$2" ]; then
+                    echo "GET ${api}$1 failed ${n} times in a row" >&2
+                    return 1
+                  fi
+                  sleep 5
+                done
+              }
               # The sidecar answers 423 to a new operation while any other is
               # in progress, so starting before it is idle burns the attempt.
-              idle=
-              for _ in $(seq 1 60); do
-                if actions=$(curl -fsS ${auth} --max-time 5 "${api}/backup/actions") \
-                  && [ "$(printf '%s\n' "${actions}" | jq -rs '[.[] | select(.status == "in progress")] | length')" = 0 ]; then
-                  idle=1
-                  break
-                fi
-                sleep 5
-              done
-              if [ -z "${idle}" ]; then
+              # The exception is the operation $1 itself already running: an
+              # earlier attempt of this Job started it and died, and the retry
+              # takes it over rather than starting it twice.
+              wait_turn() {
+                for _ in $(seq 1 60); do
+                  if actions=$(curl -fsS ${auth} --max-time 10 "${api}/backup/actions"); then
+                    turn=$(printf '%s\n' "${actions}" | jq -rs --arg cmd "$1" '
+                      if any(.[]; .status == "in progress" and .command == $cmd) then "join"
+                      elif any(.[]; .status == "in progress") then "busy"
+                      else "idle" end') || turn=
+                    case "${turn}" in join|idle) return 0 ;; esac
+                  fi
+                  sleep 5
+                done
                 echo "clickhouse-backup sidecar at ${api} did not become idle" >&2
                 exit 1
-              fi
+              }
               if [ "{{ printf "{{ .Mode }}" }}" = "backup" ]; then
                 prefix="clickhouse-{{ printf "{{ .Release.Name }}" }}-"
+                # The name is new on every attempt, so a retry never takes over
+                # the create_remote of the attempt it replaces; that needs a
+                # name fixed for the whole BackupJob.
                 target="${prefix}$(date -u +%Y%m%dT%H%M%SZ)"
-                echo "create_remote ${target}"
+                cmd="create_remote ${target}"
+                wait_turn "${cmd}"
+                echo "${cmd}"
                 curl -fsS ${auth} -X POST "${api}/backup/create_remote?name=${target}" >/dev/null
               else
                 prefix="clickhouse-{{ printf "{{ .Backup.ApplicationRef.Name }}" }}-"
-                target=$(curl -fsS ${auth} "${api}/backup/list/remote" \
+                listing=$(api_get /backup/list/remote 60)
+                target=$(printf '%s\n' "${listing}" \
                   | jq -rs --arg prefix "${prefix}" \
                       '[.[] | select((.name // "") | startswith($prefix))] | sort_by(.created // "") | last.name // ""')
                 if [ -z "${target}" ] || [ "${target}" = "null" ]; then
                   echo "no remote backup found" >&2
                   exit 1
                 fi
-                echo "restore_remote ${target}"
-                curl -fsS ${auth} -X POST "${api}/backup/restore_remote/${target}" >/dev/null
+                # restore_remote drops every table it restores before
+                # recreating it, so a second run discards whatever was written
+                # after the first one finished. Only a running one is taken
+                # over: the action log is never trimmed, and a finished row of
+                # this archive may be left by an earlier RestoreJob.
+                cmd="restore_remote ${target}"
+                wait_turn "${cmd}"
+                if [ "${turn}" = "join" ]; then
+                  echo "${cmd} is already running; waiting for it"
+                else
+                  echo "${cmd}"
+                  curl -fsS ${auth} -X POST "${api}/backup/restore_remote/${target}" >/dev/null
+                fi
               fi
               while true; do
-                row=$(curl -fsS ${auth} "${api}/backup/actions" \
-                  | jq -rs --arg suffix "${target}" \
-                      '[.[] | select((.command // "") | endswith($suffix))] | sort_by(.start) | last')
+                actions=$(api_get /backup/actions 6)
+                row=$(printf '%s\n' "${actions}" \
+                  | jq -rs --arg cmd "${cmd}" \
+                      '[.[] | select(.command == $cmd)] | sort_by(.start) | last')
                 # The sidecar logs the operation before acknowledging the POST
                 # and keeps that log only in memory, so a missing row means it
                 # restarted and the operation is gone; nothing will resume it.
@@ -97,9 +138,10 @@ spec:
                 status=$(echo "${row}" | jq -r '.status // ""')
                 case "${status}" in
                   success) echo "operation succeeded" ; exit 0 ;;
-                  error)
+                  "in progress") ;;
+                  *)
                     err=$(echo "${row}" | jq -r '.error // "unknown"')
-                    echo "operation failed: ${err}" >&2
+                    echo "operation ended with status ${status}: ${err}" >&2
                     exit 1
                     ;;
                 esac
