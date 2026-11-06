@@ -305,9 +305,12 @@ jobs:
               }
             }
 
-      # Publish draft release and ensure correct latest flag
-      - name: Publish draft release
-        id: publish
+      # Pick the draft this run publishes and decide whether it becomes `latest`,
+      # before any registry write: a missing draft then fails the job while no
+      # stable image name exists yet, and the retag, the chart and the release
+      # page all act on this one decision.
+      - name: Resolve draft release
+        id: resolve
         uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
         with:
           github-token: ${{ steps.app-token.outputs.token }}
@@ -390,10 +393,16 @@ jobs:
             const isOutdated = maxRelease && compareSemver(currentSemver, maxRelease.semver) < 0;
             const makeLatest = (isRc || isOutdated) ? 'false' : 'true';
 
-            // The image retag step below reuses this exact decision to gate
+            // The retag and chart steps below reuse this exact decision to gate
             // whether :latest moves — the release's `latest` and the images'
             // :latest must agree (a patch on an old line moves neither).
             core.setOutput('make_latest', makeLatest);
+            core.setOutput('prerelease', String(isRc));
+            core.setOutput('draft_id', String(draft.id));
+            if (isOutdated && maxRelease) {
+              core.setOutput('restore_latest_id', String(maxRelease.id));
+              core.setOutput('restore_latest_tag', maxRelease.tag);
+            }
 
             if (isRc) {
               console.log(`🏷️  ${tag} is a prerelease, make_latest: false`);
@@ -402,6 +411,84 @@ jobs:
             } else {
               console.log(`🏷️  ${tag} is the highest version, make_latest: true`);
             }
+
+      # ── Transactional promotion: consumer-visible registry side effects run
+      #    HERE, after the candidate guard passed and the promote PR merged.
+      #    promote-rc.yaml published only a temporary `promotion-*` packages
+      #    candidate, so an abandoned promotion leaves no stable-named bytes.
+      #
+      #    The checked-out merge commit is the promoted stable tree: the rc's
+      #    digests with the tag string rewritten to stable and the verified
+      #    candidate pinned. skopeo retags those digests to the stable image tag;
+      #    helm packages+pushes the stable chart.
+
+      # Retag every rc image/digest plus the verified packages candidate to the
+      # stable tag. No container rebuild — bit-for-bit
+      # the e2e-tested rc. :latest moves only when this stable is the newest
+      # published version, gated by the SAME make_latest decision the release got.
+      - name: Retag rc images to stable
+        if: ${{ !contains(steps.get_tag.outputs.tag, '-') }}
+        env:
+          STABLE_TAG:  ${{ steps.get_tag.outputs.tag }}
+          MOVE_LATEST: ${{ steps.resolve.outputs.make_latest == 'true' && '1' || '0' }}
+        run: ./hack/promote-retag.sh "${STABLE_TAG}"
+
+      # Publish the stable cozy-installer OCI chart — the documented install path
+      # (`helm upgrade --install cozystack oci://…/cozy-installer --version X.Y.Z`).
+      # The retag above covers component images + the cozystack-packages artifact,
+      # but the chart is a separate OCI artifact referenced in no values.yaml, so
+      # the stable install 404s (manifest unknown) unless it is published here.
+      # No container rebuild: the chart is packaged from the merged stable tree,
+      # which pins the retagged images + artifact by digest; only the chart's
+      # version and its platformVersion default are stamped.
+      - name: Publish stable cozy-installer chart
+        if: ${{ !contains(steps.get_tag.outputs.tag, '-') }}
+        env:
+          TAG:         ${{ steps.get_tag.outputs.tag }}
+          MAKE_LATEST: ${{ steps.resolve.outputs.make_latest }}
+        run: |
+          set -eu
+          STABLE_VERSION="${TAG#v}"
+          # Bake the correct platform version into the chart's DEFAULT values so
+          # the primary `helm --install --version X.Y.Z` path reports the stable
+          # version in telemetry — the operator image itself still carries the rc
+          # version baked at build time, and this env override is what corrects
+          # it. Done on the working tree only (never committed): committing it
+          # would leak platformVersion=vX.Y.Z onto main/the release line when the
+          # promote PR merges, mis-stamping the next rc built from that branch.
+          export STABLE_VERSION
+          yq -i '.cozystackOperator.platformVersion = "v" + strenv(STABLE_VERSION)' \
+            packages/core/installer/values.yaml
+          PKG="$(helm package packages/core/installer \
+            --version "${STABLE_VERSION}" --app-version "${STABLE_VERSION}" | awk '{print $NF}')"
+          helm push "$PKG" "oci://${REGISTRY}"
+          rm -f "$PKG"
+          # cozy-installer:latest tracks the newest stable, matching the image
+          # :latest and the release's `latest` flag — never moved by a patch on
+          # an older line.
+          if [ "${MAKE_LATEST}" = "true" ]; then
+            skopeo copy --multi-arch all \
+              "docker://${REGISTRY}/cozy-installer:${STABLE_VERSION}" \
+              "docker://${REGISTRY}/cozy-installer:latest"
+          fi
+
+      # Last on purpose: the release page is what announces this version, so it
+      # goes public only once the stable images and chart it points at exist. A
+      # failed retag leaves the draft in place, where a re-run finds it again.
+      - name: Publish draft release
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
+        env:
+          PRERELEASE:         ${{ steps.resolve.outputs.prerelease }}
+          MAKE_LATEST:        ${{ steps.resolve.outputs.make_latest }}
+          DRAFT_ID:           ${{ steps.resolve.outputs.draft_id }}
+          RESTORE_LATEST_ID:  ${{ steps.resolve.outputs.restore_latest_id }}
+          RESTORE_LATEST_TAG: ${{ steps.resolve.outputs.restore_latest_tag }}
+        with:
+          github-token: ${{ steps.app-token.outputs.token }}
+          script: |
+            const tag = '${{ steps.get_tag.outputs.tag }}';
+            const isRc = process.env.PRERELEASE === 'true';
+            const makeLatest = process.env.MAKE_LATEST;
 
             // Release body comes from the changelog that merged with THIS PR
             // (promote-rc.yaml commits it onto the release-X.Y.Z branch), read
@@ -470,7 +557,7 @@ jobs:
             await github.rest.repos.updateRelease({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              release_id: draft.id,
+              release_id: Number(process.env.DRAFT_ID),
               draft: false,
               prerelease: isRc,
               make_latest: makeLatest,
@@ -479,73 +566,14 @@ jobs:
             console.log(`🚀 Published release ${tag}`);
 
             // If this is a backport/outdated release, ensure the correct release is marked as latest
-            if (isOutdated && maxRelease) {
-              console.log(`🔧 Ensuring ${maxRelease.tag} remains the latest release...`);
+            if (process.env.RESTORE_LATEST_ID) {
+              const restoreTag = process.env.RESTORE_LATEST_TAG;
+              console.log(`🔧 Ensuring ${restoreTag} remains the latest release...`);
               await github.rest.repos.updateRelease({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
-                release_id: maxRelease.id,
+                release_id: Number(process.env.RESTORE_LATEST_ID),
                 make_latest: 'true'
               });
-              console.log(`✅ Restored ${maxRelease.tag} as latest release`);
+              console.log(`✅ Restored ${restoreTag} as latest release`);
             }
-
-      # ── Transactional promotion: consumer-visible registry side effects run
-      #    HERE, after the candidate guard passed and the promote PR merged.
-      #    promote-rc.yaml published only a temporary `promotion-*` packages
-      #    candidate, so an abandoned promotion leaves no stable-named bytes.
-      #
-      #    The checked-out merge commit is the promoted stable tree: the rc's
-      #    digests with the tag string rewritten to stable and the verified
-      #    candidate pinned. skopeo retags those digests to the stable image tag;
-      #    helm packages+pushes the stable chart.
-
-      # Retag every rc image/digest plus the verified packages candidate to the
-      # stable tag. No container rebuild — bit-for-bit
-      # the e2e-tested rc. :latest moves only when this stable is the newest
-      # published version, gated by the SAME make_latest decision the release got.
-      - name: Retag rc images to stable
-        if: ${{ !contains(steps.get_tag.outputs.tag, '-') }}
-        env:
-          STABLE_TAG:  ${{ steps.get_tag.outputs.tag }}
-          MOVE_LATEST: ${{ steps.publish.outputs.make_latest == 'true' && '1' || '0' }}
-        run: ./hack/promote-retag.sh "${STABLE_TAG}"
-
-      # Publish the stable cozy-installer OCI chart — the documented install path
-      # (`helm upgrade --install cozystack oci://…/cozy-installer --version X.Y.Z`).
-      # The retag above covers component images + the cozystack-packages artifact,
-      # but the chart is a separate OCI artifact referenced in no values.yaml, so
-      # the stable install 404s (manifest unknown) unless it is published here.
-      # No container rebuild: the chart is packaged from the merged stable tree,
-      # which pins the retagged images + artifact by digest; only the chart's
-      # version and its platformVersion default are stamped.
-      - name: Publish stable cozy-installer chart
-        if: ${{ !contains(steps.get_tag.outputs.tag, '-') }}
-        env:
-          TAG:         ${{ steps.get_tag.outputs.tag }}
-          MAKE_LATEST: ${{ steps.publish.outputs.make_latest }}
-        run: |
-          set -eu
-          STABLE_VERSION="${TAG#v}"
-          # Bake the correct platform version into the chart's DEFAULT values so
-          # the primary `helm --install --version X.Y.Z` path reports the stable
-          # version in telemetry — the operator image itself still carries the rc
-          # version baked at build time, and this env override is what corrects
-          # it. Done on the working tree only (never committed): committing it
-          # would leak platformVersion=vX.Y.Z onto main/the release line when the
-          # promote PR merges, mis-stamping the next rc built from that branch.
-          export STABLE_VERSION
-          yq -i '.cozystackOperator.platformVersion = "v" + strenv(STABLE_VERSION)' \
-            packages/core/installer/values.yaml
-          PKG="$(helm package packages/core/installer \
-            --version "${STABLE_VERSION}" --app-version "${STABLE_VERSION}" | awk '{print $NF}')"
-          helm push "$PKG" "oci://${REGISTRY}"
-          rm -f "$PKG"
-          # cozy-installer:latest tracks the newest stable, matching the image
-          # :latest and the release's `latest` flag — never moved by a patch on
-          # an older line.
-          if [ "${MAKE_LATEST}" = "true" ]; then
-            skopeo copy --multi-arch all \
-              "docker://${REGISTRY}/cozy-installer:${STABLE_VERSION}" \
-              "docker://${REGISTRY}/cozy-installer:latest"
-          fi

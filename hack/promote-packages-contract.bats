@@ -120,6 +120,27 @@ step_line() {
   printf '%s\n' "$setup" | code_lines | grep -qF 'uses: fluxcd/flux2/action@'
 }
 
+# The release page announces the version, so it must not go public before the
+# stable images and chart it points at exist. A step that fails after the draft
+# is undrafted also cannot be re-run: the draft lookup in resolve no longer finds
+# anything to publish.
+@test "finalize publishes the release page only after the stable images and chart exist" {
+  resolve="$(step_line 'Resolve draft release' "$FINALIZE")"
+  retag="$(step_line 'Retag rc images to stable' "$FINALIZE")"
+  chart="$(step_line 'Publish stable cozy-installer chart' "$FINALIZE")"
+  publish="$(step_line 'Publish draft release' "$FINALIZE")"
+  [ -n "$resolve" ] && [ -n "$retag" ] && [ -n "$chart" ] && [ -n "$publish" ]
+  [ "$resolve" -lt "$retag" ]
+  [ "$retag" -lt "$chart" ]
+  [ "$chart" -lt "$publish" ]
+
+  # One latest decision, made before the first registry write; the registry
+  # steps and the release page read it instead of recomputing it.
+  for step in 'Retag rc images to stable' 'Publish stable cozy-installer chart' 'Publish draft release'; do
+    step_block "$step" "$FINALIZE" | code_lines | grep -qF 'steps.resolve.outputs.make_latest'
+  done
+}
+
 @test "promote rejects an old target base before publishing a candidate" {
   validate="$(step_block 'Validate rc is promotable' "$PROMOTE")"
   prepare_line="$(step_line 'Prepare stable branch' "$PROMOTE")"
