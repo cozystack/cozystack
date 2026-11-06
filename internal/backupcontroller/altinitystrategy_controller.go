@@ -15,6 +15,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -50,6 +51,12 @@ const (
 	// back exactly that archive: the newest one under the release's prefix
 	// may belong to a later Backup.
 	altinityArchiveMetaKey = "altinity.strategy.backups.cozystack.io/archive"
+
+	// altinityUseSystemBucketKey records, on the backup Job and then on the
+	// Backup, the application's spec.backup.useSystemBucket as it read when
+	// the backup Job was created. It is not proof of where the archive went:
+	// the sidecar uploads to the bucket it was last restarted with.
+	altinityUseSystemBucketKey = "altinity.strategy.backups.cozystack.io/use-system-bucket"
 
 	// altinityArchiveTimeLayout is the UTC timestamp that ends an archive
 	// name. It is fixed-width, so names sharing a prefix sort chronologically
@@ -375,12 +382,18 @@ func (r *BackupJobReconciler) reconcileAltinity(ctx context.Context, j *backupsv
 		return ctrl.Result{RequeueAfter: wait}, nil
 	}
 
+	useSystemBucket, _, err := unstructured.NestedBool(app, "spec", "backup", "useSystemBucket")
+	if err != nil {
+		return r.markBackupJobFailed(ctx, j, fmt.Sprintf("failed to read spec.backup.useSystemBucket: %v", err))
+	}
+
 	batchJob, err := r.ensureAltinityJob(ctx, j, j.Namespace, jobNameForBackupJob(j),
 		altinityModeBackup,
 		map[string]string{
 			backupsv1alpha1.OwningJobNameLabel:      j.Name,
 			backupsv1alpha1.OwningJobNamespaceLabel: j.Namespace,
 		},
+		map[string]string{altinityUseSystemBucketKey: fmt.Sprint(useSystemBucket)},
 		rendered,
 	)
 	if err != nil {
@@ -398,7 +411,15 @@ func (r *BackupJobReconciler) reconcileAltinity(ctx context.Context, j *backupsv
 				archive = ""
 			}
 		}
-		artifact, err := r.createAltinityBackupArtifact(ctx, j, resolved, archive)
+		// The flow stamped on the Job when it was created is the closest the
+		// controller sees to the bucket the sidecar uploads to, since the
+		// application may switch before the Job is seen complete; a Job
+		// created before that stamp existed falls back to the application.
+		flow, ok := batchJob.Annotations[altinityUseSystemBucketKey]
+		if !ok {
+			flow = fmt.Sprint(useSystemBucket)
+		}
+		artifact, err := r.createAltinityBackupArtifact(ctx, j, resolved, archive, flow)
 		if err != nil {
 			return r.markBackupJobFailed(ctx, j, fmt.Sprintf("failed to create Backup artifact: %v", err))
 		}
@@ -446,7 +467,7 @@ func (r *BackupJobReconciler) ensureAltinityJob(
 	ctx context.Context,
 	owner client.Object,
 	namespace, name, mode string,
-	ownerLabels map[string]string,
+	ownerLabels, annotations map[string]string,
 	rendered *corev1.PodTemplateSpec,
 ) (*batchv1.Job, error) {
 	existing := &batchv1.Job{}
@@ -462,6 +483,7 @@ func (r *BackupJobReconciler) ensureAltinityJob(
 	maps.Copy(labels, ownerLabels)
 
 	desired := buildAltinityBatchJob(namespace, name, labels, rendered)
+	desired.Annotations = annotations
 	if err := controllerutil.SetControllerReference(owner, desired, r.Scheme); err != nil {
 		return nil, fmt.Errorf("set controller reference on backup Job: %w", err)
 	}
@@ -583,9 +605,9 @@ func (r *BackupJobReconciler) createAltinityBackupArtifact(
 	ctx context.Context,
 	j *backupsv1alpha1.BackupJob,
 	resolved *ResolvedBackupConfig,
-	archive string,
+	archive, useSystemBucket string,
 ) (*backupsv1alpha1.Backup, error) {
-	driverMD := map[string]string{}
+	driverMD := map[string]string{altinityUseSystemBucketKey: useSystemBucket}
 	if archive != "" {
 		driverMD[altinityArchiveMetaKey] = archive
 	}
