@@ -127,17 +127,10 @@ func (r *BackupReconciler) cleanupOnDelete(ctx context.Context, backup *backupsv
 		// artifacts that survive Backup deletion.
 		return ctrl.Result{}, nil
 	case strategyv1alpha1.AltinityStrategyKind:
-		// Cozystack Backup deletion does NOT purge the upstream
-		// clickhouse-backup archive in object storage. Lifecycle of the
-		// archive belongs to the clickhouse-backup tool inside the chi-*
-		// Pod (its retention config) or to manual purge through that
-		// tool's HTTP API (DELETE /backup/<name>/remote). Surfacing this
-		// as an explicit branch (rather than falling through to the
-		// Velero default) makes the contract obvious: the Altinity
-		// driver does not own the S3 data, so it does not delete it on
-		// CR removal. See packages/apps/clickhouse/README.md "Backup
-		// orchestration" for tenant-facing guidance.
-		return ctrl.Result{}, nil
+		// The Altinity driver owns the archive of a system-bucket Backup, which
+		// nothing else prunes: delete it through the application's sidecar and
+		// wait for that before the Backup is removed (see cleanupAltinityBackup).
+		return r.cleanupAltinityBackup(ctx, backup)
 	case strategyv1alpha1.MariaDBStrategyKind:
 		// mariadb-operator's maxRetention prunes only from inside the next
 		// backup run of the same prefix and a Plan never deletes a Backup, so
@@ -152,7 +145,7 @@ func (r *BackupReconciler) cleanupOnDelete(ctx context.Context, backup *backupsv
 		// Split by flow (see cleanupMongoDBBackup). A legacy backup writes to the
 		// tenant's own bucket and its lifecycle stays the tenant's / psmdb
 		// operator's — that branch is a no-op, the same "we do not own the
-		// archive" contract as Altinity / FDB. A useSystemBucket backup
+		// archive" contract as FDB. A useSystemBucket backup
 		// lands in the shared cozy-backups bucket with no psmdb task retention to
 		// prune it, so the driver OWNS it: this deletes the operator
 		// PerconaServerMongoDBBackup CR and waits for its delete-backup finalizer
@@ -164,8 +157,8 @@ func (r *BackupReconciler) cleanupOnDelete(ctx context.Context, backup *backupsv
 		// continuously streaming backup_agent Deployment; its lifecycle
 		// is governed by the next BackupJob's stopOtherFoundationDBBackups
 		// call, by manual operator action, or by
-		// examples/backups/foundationdb/cleanup.sh. Same "we do not own
-		// the archive" contract as Altinity — the explicit
+		// examples/backups/foundationdb/cleanup.sh. The driver does not own
+		// the archive, so it does not delete it — the explicit
 		// branch guards the seam against a future driver refactor that
 		// might incidentally stamp velero.io/backup-name onto FDB
 		// driverMetadata via a shared helper.
