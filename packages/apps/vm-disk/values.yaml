@@ -21,6 +21,7 @@
 ## @field {*SourceDisk} [disk] - Clone an existing vm-disk.
 
 ## @param {Source} source - The source image location used to create a disk.
+## @x-kubernetes-map-type atomic
 ## @immutable
 source: {}
 

@@ -6,6 +6,7 @@ import { MemoryRouter } from "react-router"
 const h = vi.hoisted(() => ({
   create: vi.fn(),
   update: vi.fn(),
+  client: { dryRunCreate: vi.fn() },
   ad: {
     spec: {
       application: {
@@ -38,6 +39,7 @@ vi.mock("../lib/app-definitions.ts", () => ({
 vi.mock("@cozystack/k8s-client", () => ({
   useK8sCreate: () => ({ mutateAsync: h.create, isPending: false }),
   useK8sUpdate: () => ({ mutateAsync: h.update, isPending: false }),
+  useK8sClient: () => h.client,
   K8sApiError: class extends Error {},
 }))
 vi.mock("../components/YamlEditor.tsx", () => ({
@@ -51,12 +53,13 @@ describe("ApplicationOrderPage free-form objects", () => {
   beforeEach(() => {
     h.create.mockReset().mockResolvedValue({})
     h.update.mockReset().mockResolvedValue({})
+    h.client.dryRunCreate.mockReset().mockImplementation(async (_g, _v, _p, body: unknown) => body)
   })
 
   it("sends nested objects on create after a form/YAML round trip", async () => {
     const user = userEvent.setup()
     render(<MemoryRouter><ApplicationOrderPage appNameOverride="nats" /></MemoryRouter>)
-    await user.type(screen.getByPlaceholderText("nats"), "demo")
+    await user.type(await screen.findByPlaceholderText("nats"), "demo")
     fireEvent.change(screen.getByLabelText("merge"), { target: { value: JSON.stringify(merge) } })
     fireEvent.change(screen.getByLabelText("resolver"), { target: { value: '{"type":"full"}' } })
     await user.click(screen.getByRole("button", { name: /^yaml$/i }))
@@ -81,7 +84,9 @@ describe("ApplicationOrderPage free-form objects", () => {
   it.each([false, true])("blocks invalid JSON from the API in edit mode %s", async (edit) => {
     const user = userEvent.setup()
     render(<MemoryRouter><ApplicationOrderPage appNameOverride="nats" editMode={edit ? { name: "demo", initialSpec: { config: { merge } } } : undefined} /></MemoryRouter>)
-    if (!edit) await user.type(screen.getByPlaceholderText("nats"), "demo")
+    if (!edit) {
+      await user.type(await screen.findByPlaceholderText("nats"), "demo")
+    }
     fireEvent.change(screen.getByLabelText("merge"), { target: { value: "{" } })
     await user.click(screen.getByRole("button", { name: edit ? /^save$/i : /^deploy$/i }))
     expect(h.create).not.toHaveBeenCalled()
