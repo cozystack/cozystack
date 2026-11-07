@@ -17,12 +17,23 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     cert-manager.io/inject-ca-from: capmox-system/capmox-serving-cert
-    controller-gen.kubebuilder.io/version: v0.16.5
+    controller-gen.kubebuilder.io/version: v0.19.0
   labels:
     cluster.x-k8s.io/provider: infrastructure-proxmox
-    cluster.x-k8s.io/v1beta1: v1alpha1
+    cluster.x-k8s.io/v1beta1: v1alpha2
+    cluster.x-k8s.io/v1beta2: v1alpha2
   name: proxmoxclusters.infrastructure.cluster.x-k8s.io
 spec:
+  conversion:
+    strategy: Webhook
+    webhook:
+      clientConfig:
+        service:
+          name: capmox-webhook-service
+          namespace: capmox-system
+          path: /convert
+      conversionReviewVersions:
+      - v1
   group: infrastructure.cluster.x-k8s.io
   names:
     categories:
@@ -662,11 +673,25 @@ spec:
                           description: TemplateSelector defines MatchTags for looking
                             up VM templates.
                           properties:
+                            matchPolicy:
+                              default: exact
+                              description: |-
+                                MatchPolicy controls how MatchTags are evaluated against template tags.
+                                When not set, or set to "exact", the behaviour is identical to the previous implementation
+                                and requires an exact 1:1 tag match. When set to "subset", the template's tags must contain
+                                all MatchTags, but may include additional tags.
+                              enum:
+                              - exact
+                              - uniqueSubset
+                              - bestSubset
+                              type: string
                             matchTags:
                               description: |-
                                 Specifies all tags to look for, when looking up the VM template.
-                                Passed tags must be an exact 1:1 match with the tags on the template you want to use.
-                                If multiple VM templates with the same set of tags are found, provisioning will fail.
+                                When MatchPolicy is "exact" (the default), the template's tags must be an exact 1:1 match
+                                with MatchTags. If multiple VM templates with the same set of tags are found, provisioning will fail.
+                                When MatchPolicy is "subset", the template's tags must contain all of the MatchTags, but may
+                                have additional tags.
                               items:
                                 pattern: ^(?i)[a-z0-9_][a-z0-9_\-\+\.]*$
                                 type: string
@@ -714,10 +739,6 @@ spec:
                       - message: Must set full=true when specifying storage
                         rule: self.full || !has(self.storage)
                     type: object
-                    x-kubernetes-validations:
-                    - message: Cowardly refusing to deploy cluster without control
-                        plane
-                      rule: has(self.controlPlane)
                   sshAuthorizedKeys:
                     description: SshAuthorizedKeys contains the authorized keys deployed
                       to the PROXMOX VMs.
@@ -743,9 +764,6 @@ spec:
                     description: port is the port on which the API server is serving.
                     format: int32
                     type: integer
-                required:
-                - host
-                - port
                 type: object
                 x-kubernetes-validations:
                 - message: port must be within 1-65535
@@ -1052,6 +1070,536 @@ spec:
             type: object
         type: object
     served: true
+    storage: false
+    subresources:
+      status: {}
+  - additionalPrinterColumns:
+    - description: Cluster
+      jsonPath: .metadata.labels['cluster\.x-k8s\.io/cluster-name']
+      name: Cluster
+      type: string
+    - description: Cluster infrastructure is ready
+      jsonPath: .status.initialization.provisioned
+      name: Ready
+      type: string
+    - description: API Endpoint
+      jsonPath: .spec.controlPlaneEndpoint
+      name: Endpoint
+      type: string
+    name: v1alpha2
+    schema:
+      openAPIV3Schema:
+        description: ProxmoxCluster is the Schema for the proxmoxclusters API.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: spec is the Proxmox Cluster spec
+            properties:
+              allowedNodes:
+                description: |-
+                  allowedNodes specifies all Proxmox nodes which will be considered
+                  for operations. This implies that VMs can be cloned on different nodes from
+                  the node which holds the VM template.
+                items:
+                  type: string
+                type: array
+                x-kubernetes-list-type: set
+              controlPlaneEndpoint:
+                description: controlPlaneEndpoint represents the endpoint used to
+                  communicate with the control plane.
+                minProperties: 1
+                properties:
+                  host:
+                    description: host is the hostname on which the API server is serving.
+                    maxLength: 512
+                    minLength: 1
+                    type: string
+                  port:
+                    description: port is the port on which the API server is serving.
+                    format: int32
+                    maximum: 65535
+                    minimum: 1
+                    type: integer
+                type: object
+                x-kubernetes-validations:
+                - message: port must be within 1-65535
+                  rule: self.port > 0 && self.port < 65536
+              credentialsRef:
+                description: |-
+                  credentialsRef is a reference to a Secret that contains the credentials to use for provisioning this cluster. If not
+                  supplied then the credentials of the controller will be used.
+                  if no namespace is provided, the namespace of the ProxmoxCluster will be used.
+                properties:
+                  name:
+                    description: name is unique within a namespace to reference a
+                      secret resource.
+                    type: string
+                  namespace:
+                    description: namespace defines the space within which the secret
+                      name must be unique.
+                    type: string
+                type: object
+                x-kubernetes-map-type: atomic
+              dnsServers:
+                description: dnsServers contains information about nameservers used
+                  by the machines.
+                items:
+                  type: string
+                minItems: 1
+                type: array
+                x-kubernetes-list-type: set
+              externalManagedControlPlane:
+                default: false
+                description: |-
+                  externalManagedControlPlane can be enabled to allow externally managed Control Planes to patch the
+                  Proxmox cluster with the Load Balancer IP provided by Control Plane provider.
+                type: boolean
+              ipv4Config:
+                description: |-
+                  ipv4Config contains information about available IPv4 address pools and the gateway.
+                  This can be combined with ipv6Config in order to enable dual stack.
+                  Either IPv4Config or IPv6Config must be provided.
+                properties:
+                  addresses:
+                    description: addresses is a list of IP addresses that can be assigned.
+                      This set of addresses can be non-contiguous.
+                    items:
+                      type: string
+                    type: array
+                    x-kubernetes-list-type: set
+                  gateway:
+                    description: gateway is the network gateway
+                    minLength: 1
+                    type: string
+                  metric:
+                    default: 100
+                    description: metric is the route priority applied to the default
+                      gateway
+                    format: int32
+                    minimum: 0
+                    type: integer
+                  prefix:
+                    description: prefix is the network prefix to use.
+                    format: int32
+                    maximum: 128
+                    minimum: 1
+                    type: integer
+                required:
+                - addresses
+                - gateway
+                - prefix
+                type: object
+                x-kubernetes-validations:
+                - message: IPv4Config addresses must be provided
+                  rule: self.addresses.size() > 0
+              ipv6Config:
+                description: |-
+                  ipv6Config contains information about available IPv6 address pools and the gateway.
+                  This can be combined with ipv4Config in order to enable dual stack.
+                  Either IPv4Config or IPv6Config must be provided.
+                properties:
+                  addresses:
+                    description: addresses is a list of IP addresses that can be assigned.
+                      This set of addresses can be non-contiguous.
+                    items:
+                      type: string
+                    type: array
+                    x-kubernetes-list-type: set
+                  gateway:
+                    description: gateway is the network gateway
+                    minLength: 1
+                    type: string
+                  metric:
+                    default: 100
+                    description: metric is the route priority applied to the default
+                      gateway
+                    format: int32
+                    minimum: 0
+                    type: integer
+                  prefix:
+                    description: prefix is the network prefix to use.
+                    format: int32
+                    maximum: 128
+                    minimum: 1
+                    type: integer
+                required:
+                - addresses
+                - gateway
+                - prefix
+                type: object
+                x-kubernetes-validations:
+                - message: IPv6Config addresses must be provided
+                  rule: self.addresses.size() > 0
+              schedulerHints:
+                description: |-
+                  schedulerHints allows to influence the decision on where a VM will be scheduled. For example by applying a multiplicator
+                  to a node's resources, to allow for overprovisioning or to ensure a node will always have a safety buffer.
+                properties:
+                  memoryAdjustment:
+                    description: |-
+                      memoryAdjustment allows to adjust a node's memory by a given percentage.
+                      For example, setting it to 300 allows to allocate 300% of a host's memory for VMs,
+                      and setting it to 95 limits memory allocation to 95% of a host's memory.
+                      Setting it to 0 entirely disables scheduling memory constraints.
+                      By default 100% of a node's memory will be used for allocation.
+                    format: int64
+                    minimum: 0
+                    type: integer
+                type: object
+              zoneConfig:
+                description: zoneConfig defines a IPAddress config per deployment
+                  zone.
+                items:
+                  description: ZoneConfigSpec is the Network Configuration for further
+                    deployment zones.
+                  properties:
+                    dnsServers:
+                      description: dnsServers contains information about nameservers
+                        used by the machines in this zone.
+                      items:
+                        type: string
+                      minItems: 1
+                      type: array
+                      x-kubernetes-list-type: set
+                    ipv4Config:
+                      description: |-
+                        ipv4Config contains information about available IPv4 address pools and the gateway.
+                        This can be combined with ipv6Config in order to enable dual stack.
+                        Either IPv4Config or IPv6Config must be provided.
+                      properties:
+                        addresses:
+                          description: addresses is a list of IP addresses that can
+                            be assigned. This set of addresses can be non-contiguous.
+                          items:
+                            type: string
+                          type: array
+                          x-kubernetes-list-type: set
+                        gateway:
+                          description: gateway is the network gateway
+                          minLength: 1
+                          type: string
+                        metric:
+                          default: 100
+                          description: metric is the route priority applied to the
+                            default gateway
+                          format: int32
+                          minimum: 0
+                          type: integer
+                        prefix:
+                          description: prefix is the network prefix to use.
+                          format: int32
+                          maximum: 128
+                          minimum: 1
+                          type: integer
+                      required:
+                      - addresses
+                      - gateway
+                      - prefix
+                      type: object
+                      x-kubernetes-validations:
+                      - message: IPv4Config addresses must be provided
+                        rule: self.addresses.size() > 0
+                    ipv6Config:
+                      description: |-
+                        ipv6Config contains information about available IPv6 address pools and the gateway.
+                        This can be combined with ipv4Config in order to enable dual stack.
+                        Either IPv4Config or IPv6Config must be provided.
+                      properties:
+                        addresses:
+                          description: addresses is a list of IP addresses that can
+                            be assigned. This set of addresses can be non-contiguous.
+                          items:
+                            type: string
+                          type: array
+                          x-kubernetes-list-type: set
+                        gateway:
+                          description: gateway is the network gateway
+                          minLength: 1
+                          type: string
+                        metric:
+                          default: 100
+                          description: metric is the route priority applied to the
+                            default gateway
+                          format: int32
+                          minimum: 0
+                          type: integer
+                        prefix:
+                          description: prefix is the network prefix to use.
+                          format: int32
+                          maximum: 128
+                          minimum: 1
+                          type: integer
+                      required:
+                      - addresses
+                      - gateway
+                      - prefix
+                      type: object
+                      x-kubernetes-validations:
+                      - message: IPv6Config addresses must be provided
+                        rule: self.addresses.size() > 0
+                    zone:
+                      description: zone is the name of your deployment zone.
+                      pattern: ^[a-z0-9A-Z](?:[a-z0-9A-Z-_.]{0,61}[a-z0-9A-Z])?$
+                      type: string
+                  required:
+                  - dnsServers
+                  - zone
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - zone
+                x-kubernetes-list-type: map
+            required:
+            - dnsServers
+            type: object
+            x-kubernetes-validations:
+            - message: at least one ip config must be set, either ipv4Config or ipv6Config
+              rule: self.ipv4Config != null || self.ipv6Config != null
+          status:
+            description: status is the Proxmox Cluster status
+            properties:
+              conditions:
+                description: |-
+                  conditions represents the observations of a ProxmoxCluster's current state.
+                  Known condition types are Ready, ProxmoxAvailable and Paused.
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                maxItems: 32
+                type: array
+                x-kubernetes-list-map-keys:
+                - type
+                x-kubernetes-list-type: map
+              inClusterIPPoolRef:
+                description: inClusterIPPoolRef is the reference to the created in-cluster
+                  IP pool.
+                items:
+                  description: |-
+                    LocalObjectReference contains enough information to let you locate the
+                    referenced object inside the same namespace.
+                  properties:
+                    name:
+                      default: ""
+                      description: |-
+                        Name of the referent.
+                        This field is effectively required, but due to backwards compatibility is
+                        allowed to be empty. Instances of this type with an empty value here are
+                        almost certainly wrong.
+                        More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                      type: string
+                  type: object
+                  x-kubernetes-map-type: atomic
+                type: array
+                x-kubernetes-list-type: atomic
+              inClusterZoneRef:
+                description: inClusterZoneRef lists InClusterIPPools per proxmox-zone.
+                items:
+                  description: InClusterZoneRef holds the InClusterIPPools associated
+                    with a zone.
+                  properties:
+                    inClusterIPPoolRefV4:
+                      description: inClusterIPPoolRefV4 is the reference to the created
+                        in-cluster IP pool.
+                      properties:
+                        name:
+                          default: ""
+                          description: |-
+                            Name of the referent.
+                            This field is effectively required, but due to backwards compatibility is
+                            allowed to be empty. Instances of this type with an empty value here are
+                            almost certainly wrong.
+                            More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                          type: string
+                      type: object
+                      x-kubernetes-map-type: atomic
+                    inClusterIPPoolRefV6:
+                      description: inClusterIPPoolRefV6 is the reference to the created
+                        in-cluster IP pool.
+                      properties:
+                        name:
+                          default: ""
+                          description: |-
+                            Name of the referent.
+                            This field is effectively required, but due to backwards compatibility is
+                            allowed to be empty. Instances of this type with an empty value here are
+                            almost certainly wrong.
+                            More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                          type: string
+                      type: object
+                      x-kubernetes-map-type: atomic
+                    zone:
+                      default: default
+                      description: zone defines the deployment proxmox-zone.
+                      pattern: ^[a-z0-9A-Z](?:[a-z0-9A-Z-_.]{0,61}[a-z0-9A-Z])?$
+                      type: string
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - zone
+                x-kubernetes-list-type: map
+              initialization:
+                description: |-
+                  initialization provides observations of the ProxmoxCluster initialization process.
+                  NOTE: Fields in this struct are part of the Cluster API contract and are used to orchestrate initial Cluster provisioning.
+                minProperties: 1
+                properties:
+                  provisioned:
+                    description: |-
+                      provisioned is true when the infrastructure provider reports that the Cluster's infrastructure is fully provisioned.
+                      NOTE: this field is part of the Cluster API contract, and it is used to orchestrate initial Cluster provisioning.
+                    type: boolean
+                type: object
+              nodeLocations:
+                description: |-
+                  nodeLocations keeps track of which nodes have been selected
+                  for different machines.
+                properties:
+                  controlPlane:
+                    description: controlPlane contains all deployed control plane
+                      nodes.
+                    items:
+                      description: |-
+                        NodeLocation holds information about a single VM
+                        in Proxmox.
+                      properties:
+                        machine:
+                          description: machine is the reference to the ProxmoxMachine
+                            that the node is on.
+                          properties:
+                            name:
+                              default: ""
+                              description: |-
+                                Name of the referent.
+                                This field is effectively required, but due to backwards compatibility is
+                                allowed to be empty. Instances of this type with an empty value here are
+                                almost certainly wrong.
+                                More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                              type: string
+                          type: object
+                          x-kubernetes-map-type: atomic
+                        node:
+                          description: node is the Proxmox node.
+                          minLength: 1
+                          type: string
+                        zone:
+                          description: zone is the zone the Machine is in.
+                          pattern: ^[a-z0-9A-Z](?:[a-z0-9A-Z-_.]{0,61}[a-z0-9A-Z])?$
+                          type: string
+                      required:
+                      - machine
+                      - node
+                      type: object
+                    type: array
+                    x-kubernetes-list-type: atomic
+                  workers:
+                    description: workers contains all deployed worker nodes.
+                    items:
+                      description: |-
+                        NodeLocation holds information about a single VM
+                        in Proxmox.
+                      properties:
+                        machine:
+                          description: machine is the reference to the ProxmoxMachine
+                            that the node is on.
+                          properties:
+                            name:
+                              default: ""
+                              description: |-
+                                Name of the referent.
+                                This field is effectively required, but due to backwards compatibility is
+                                allowed to be empty. Instances of this type with an empty value here are
+                                almost certainly wrong.
+                                More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                              type: string
+                          type: object
+                          x-kubernetes-map-type: atomic
+                        node:
+                          description: node is the Proxmox node.
+                          minLength: 1
+                          type: string
+                        zone:
+                          description: zone is the zone the Machine is in.
+                          pattern: ^[a-z0-9A-Z](?:[a-z0-9A-Z-_.]{0,61}[a-z0-9A-Z])?$
+                          type: string
+                      required:
+                      - machine
+                      - node
+                      type: object
+                    type: array
+                    x-kubernetes-list-type: atomic
+                type: object
+            type: object
+        required:
+        - spec
+        type: object
+    served: true
     storage: true
     subresources:
       status: {}
@@ -1061,12 +1609,23 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     cert-manager.io/inject-ca-from: capmox-system/capmox-serving-cert
-    controller-gen.kubebuilder.io/version: v0.16.5
+    controller-gen.kubebuilder.io/version: v0.19.0
   labels:
     cluster.x-k8s.io/provider: infrastructure-proxmox
-    cluster.x-k8s.io/v1beta1: v1alpha1
+    cluster.x-k8s.io/v1beta1: v1alpha2
+    cluster.x-k8s.io/v1beta2: v1alpha2
   name: proxmoxclustertemplates.infrastructure.cluster.x-k8s.io
 spec:
+  conversion:
+    strategy: Webhook
+    webhook:
+      clientConfig:
+        service:
+          name: capmox-webhook-service
+          namespace: capmox-system
+          path: /convert
+      conversionReviewVersions:
+      - v1
   group: infrastructure.cluster.x-k8s.io
   names:
     categories:
@@ -1746,11 +2305,25 @@ spec:
                                   description: TemplateSelector defines MatchTags
                                     for looking up VM templates.
                                   properties:
+                                    matchPolicy:
+                                      default: exact
+                                      description: |-
+                                        MatchPolicy controls how MatchTags are evaluated against template tags.
+                                        When not set, or set to "exact", the behaviour is identical to the previous implementation
+                                        and requires an exact 1:1 tag match. When set to "subset", the template's tags must contain
+                                        all MatchTags, but may include additional tags.
+                                      enum:
+                                      - exact
+                                      - uniqueSubset
+                                      - bestSubset
+                                      type: string
                                     matchTags:
                                       description: |-
                                         Specifies all tags to look for, when looking up the VM template.
-                                        Passed tags must be an exact 1:1 match with the tags on the template you want to use.
-                                        If multiple VM templates with the same set of tags are found, provisioning will fail.
+                                        When MatchPolicy is "exact" (the default), the template's tags must be an exact 1:1 match
+                                        with MatchTags. If multiple VM templates with the same set of tags are found, provisioning will fail.
+                                        When MatchPolicy is "subset", the template's tags must contain all of the MatchTags, but may
+                                        have additional tags.
                                       items:
                                         pattern: ^(?i)[a-z0-9_][a-z0-9_\-\+\.]*$
                                         type: string
@@ -1799,10 +2372,6 @@ spec:
                               - message: Must set full=true when specifying storage
                                 rule: self.full || !has(self.storage)
                             type: object
-                            x-kubernetes-validations:
-                            - message: Cowardly refusing to deploy cluster without
-                                control plane
-                              rule: has(self.controlPlane)
                           sshAuthorizedKeys:
                             description: SshAuthorizedKeys contains the authorized
                               keys deployed to the PROXMOX VMs.
@@ -1830,9 +2399,6 @@ spec:
                               is serving.
                             format: int32
                             type: integer
-                        required:
-                        - host
-                        - port
                         type: object
                         x-kubernetes-validations:
                         - message: port must be within 1-65535
@@ -1959,21 +2525,361 @@ spec:
             type: object
         type: object
     served: true
-    storage: true
+    storage: false
     subresources:
       status: {}
+  - name: v1alpha2
+    schema:
+      openAPIV3Schema:
+        description: ProxmoxClusterTemplate is the Schema for the proxmoxclustertemplates
+          API.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: spec is the Proxmox Cluster Template spec
+            properties:
+              template:
+                description: template is the Proxmox Cluster template
+                properties:
+                  metadata:
+                    description: |-
+                      metadata is the standard object metadata.
+                      More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#metadata
+                    minProperties: 1
+                    properties:
+                      annotations:
+                        additionalProperties:
+                          type: string
+                        description: |-
+                          annotations is an unstructured key value map stored with a resource that may be
+                          set by external tools to store and retrieve arbitrary metadata. They are not
+                          queryable and should be preserved when modifying objects.
+                          More info: http://kubernetes.io/docs/user-guide/annotations
+                        type: object
+                      labels:
+                        additionalProperties:
+                          type: string
+                        description: |-
+                          labels is a map of string keys and values that can be used to organize and categorize
+                          (scope and select) objects. May match selectors of replication controllers
+                          and services.
+                          More info: http://kubernetes.io/docs/user-guide/labels
+                        type: object
+                    type: object
+                  spec:
+                    description: spec is the Proxmox Cluster spec
+                    properties:
+                      allowedNodes:
+                        description: |-
+                          allowedNodes specifies all Proxmox nodes which will be considered
+                          for operations. This implies that VMs can be cloned on different nodes from
+                          the node which holds the VM template.
+                        items:
+                          type: string
+                        type: array
+                        x-kubernetes-list-type: set
+                      controlPlaneEndpoint:
+                        description: controlPlaneEndpoint represents the endpoint
+                          used to communicate with the control plane.
+                        minProperties: 1
+                        properties:
+                          host:
+                            description: host is the hostname on which the API server
+                              is serving.
+                            maxLength: 512
+                            minLength: 1
+                            type: string
+                          port:
+                            description: port is the port on which the API server
+                              is serving.
+                            format: int32
+                            maximum: 65535
+                            minimum: 1
+                            type: integer
+                        type: object
+                        x-kubernetes-validations:
+                        - message: port must be within 1-65535
+                          rule: self.port > 0 && self.port < 65536
+                      credentialsRef:
+                        description: |-
+                          credentialsRef is a reference to a Secret that contains the credentials to use for provisioning this cluster. If not
+                          supplied then the credentials of the controller will be used.
+                          if no namespace is provided, the namespace of the ProxmoxCluster will be used.
+                        properties:
+                          name:
+                            description: name is unique within a namespace to reference
+                              a secret resource.
+                            type: string
+                          namespace:
+                            description: namespace defines the space within which
+                              the secret name must be unique.
+                            type: string
+                        type: object
+                        x-kubernetes-map-type: atomic
+                      dnsServers:
+                        description: dnsServers contains information about nameservers
+                          used by the machines.
+                        items:
+                          type: string
+                        minItems: 1
+                        type: array
+                        x-kubernetes-list-type: set
+                      externalManagedControlPlane:
+                        default: false
+                        description: |-
+                          externalManagedControlPlane can be enabled to allow externally managed Control Planes to patch the
+                          Proxmox cluster with the Load Balancer IP provided by Control Plane provider.
+                        type: boolean
+                      ipv4Config:
+                        description: |-
+                          ipv4Config contains information about available IPv4 address pools and the gateway.
+                          This can be combined with ipv6Config in order to enable dual stack.
+                          Either IPv4Config or IPv6Config must be provided.
+                        properties:
+                          addresses:
+                            description: addresses is a list of IP addresses that
+                              can be assigned. This set of addresses can be non-contiguous.
+                            items:
+                              type: string
+                            type: array
+                            x-kubernetes-list-type: set
+                          gateway:
+                            description: gateway is the network gateway
+                            minLength: 1
+                            type: string
+                          metric:
+                            default: 100
+                            description: metric is the route priority applied to the
+                              default gateway
+                            format: int32
+                            minimum: 0
+                            type: integer
+                          prefix:
+                            description: prefix is the network prefix to use.
+                            format: int32
+                            maximum: 128
+                            minimum: 1
+                            type: integer
+                        required:
+                        - addresses
+                        - gateway
+                        - prefix
+                        type: object
+                        x-kubernetes-validations:
+                        - message: IPv4Config addresses must be provided
+                          rule: self.addresses.size() > 0
+                      ipv6Config:
+                        description: |-
+                          ipv6Config contains information about available IPv6 address pools and the gateway.
+                          This can be combined with ipv4Config in order to enable dual stack.
+                          Either IPv4Config or IPv6Config must be provided.
+                        properties:
+                          addresses:
+                            description: addresses is a list of IP addresses that
+                              can be assigned. This set of addresses can be non-contiguous.
+                            items:
+                              type: string
+                            type: array
+                            x-kubernetes-list-type: set
+                          gateway:
+                            description: gateway is the network gateway
+                            minLength: 1
+                            type: string
+                          metric:
+                            default: 100
+                            description: metric is the route priority applied to the
+                              default gateway
+                            format: int32
+                            minimum: 0
+                            type: integer
+                          prefix:
+                            description: prefix is the network prefix to use.
+                            format: int32
+                            maximum: 128
+                            minimum: 1
+                            type: integer
+                        required:
+                        - addresses
+                        - gateway
+                        - prefix
+                        type: object
+                        x-kubernetes-validations:
+                        - message: IPv6Config addresses must be provided
+                          rule: self.addresses.size() > 0
+                      schedulerHints:
+                        description: |-
+                          schedulerHints allows to influence the decision on where a VM will be scheduled. For example by applying a multiplicator
+                          to a node's resources, to allow for overprovisioning or to ensure a node will always have a safety buffer.
+                        properties:
+                          memoryAdjustment:
+                            description: |-
+                              memoryAdjustment allows to adjust a node's memory by a given percentage.
+                              For example, setting it to 300 allows to allocate 300% of a host's memory for VMs,
+                              and setting it to 95 limits memory allocation to 95% of a host's memory.
+                              Setting it to 0 entirely disables scheduling memory constraints.
+                              By default 100% of a node's memory will be used for allocation.
+                            format: int64
+                            minimum: 0
+                            type: integer
+                        type: object
+                      zoneConfig:
+                        description: zoneConfig defines a IPAddress config per deployment
+                          zone.
+                        items:
+                          description: ZoneConfigSpec is the Network Configuration
+                            for further deployment zones.
+                          properties:
+                            dnsServers:
+                              description: dnsServers contains information about nameservers
+                                used by the machines in this zone.
+                              items:
+                                type: string
+                              minItems: 1
+                              type: array
+                              x-kubernetes-list-type: set
+                            ipv4Config:
+                              description: |-
+                                ipv4Config contains information about available IPv4 address pools and the gateway.
+                                This can be combined with ipv6Config in order to enable dual stack.
+                                Either IPv4Config or IPv6Config must be provided.
+                              properties:
+                                addresses:
+                                  description: addresses is a list of IP addresses
+                                    that can be assigned. This set of addresses can
+                                    be non-contiguous.
+                                  items:
+                                    type: string
+                                  type: array
+                                  x-kubernetes-list-type: set
+                                gateway:
+                                  description: gateway is the network gateway
+                                  minLength: 1
+                                  type: string
+                                metric:
+                                  default: 100
+                                  description: metric is the route priority applied
+                                    to the default gateway
+                                  format: int32
+                                  minimum: 0
+                                  type: integer
+                                prefix:
+                                  description: prefix is the network prefix to use.
+                                  format: int32
+                                  maximum: 128
+                                  minimum: 1
+                                  type: integer
+                              required:
+                              - addresses
+                              - gateway
+                              - prefix
+                              type: object
+                              x-kubernetes-validations:
+                              - message: IPv4Config addresses must be provided
+                                rule: self.addresses.size() > 0
+                            ipv6Config:
+                              description: |-
+                                ipv6Config contains information about available IPv6 address pools and the gateway.
+                                This can be combined with ipv4Config in order to enable dual stack.
+                                Either IPv4Config or IPv6Config must be provided.
+                              properties:
+                                addresses:
+                                  description: addresses is a list of IP addresses
+                                    that can be assigned. This set of addresses can
+                                    be non-contiguous.
+                                  items:
+                                    type: string
+                                  type: array
+                                  x-kubernetes-list-type: set
+                                gateway:
+                                  description: gateway is the network gateway
+                                  minLength: 1
+                                  type: string
+                                metric:
+                                  default: 100
+                                  description: metric is the route priority applied
+                                    to the default gateway
+                                  format: int32
+                                  minimum: 0
+                                  type: integer
+                                prefix:
+                                  description: prefix is the network prefix to use.
+                                  format: int32
+                                  maximum: 128
+                                  minimum: 1
+                                  type: integer
+                              required:
+                              - addresses
+                              - gateway
+                              - prefix
+                              type: object
+                              x-kubernetes-validations:
+                              - message: IPv6Config addresses must be provided
+                                rule: self.addresses.size() > 0
+                            zone:
+                              description: zone is the name of your deployment zone.
+                              pattern: ^[a-z0-9A-Z](?:[a-z0-9A-Z-_.]{0,61}[a-z0-9A-Z])?$
+                              type: string
+                          required:
+                          - dnsServers
+                          - zone
+                          type: object
+                        type: array
+                        x-kubernetes-list-map-keys:
+                        - zone
+                        x-kubernetes-list-type: map
+                    required:
+                    - dnsServers
+                    type: object
+                required:
+                - spec
+                type: object
+            required:
+            - template
+            type: object
+        required:
+        - spec
+        type: object
+    served: true
+    storage: true
 ---
 apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   annotations:
     cert-manager.io/inject-ca-from: capmox-system/capmox-serving-cert
-    controller-gen.kubebuilder.io/version: v0.16.5
+    controller-gen.kubebuilder.io/version: v0.19.0
   labels:
     cluster.x-k8s.io/provider: infrastructure-proxmox
-    cluster.x-k8s.io/v1beta1: v1alpha1
+    cluster.x-k8s.io/v1beta1: v1alpha2
+    cluster.x-k8s.io/v1beta2: v1alpha2
   name: proxmoxmachines.infrastructure.cluster.x-k8s.io
 spec:
+  conversion:
+    strategy: Webhook
+    webhook:
+      clientConfig:
+        service:
+          name: capmox-webhook-service
+          namespace: capmox-system
+          path: /convert
+      conversionReviewVersions:
+      - v1
   group: infrastructure.cluster.x-k8s.io
   names:
     categories:
@@ -2572,11 +3478,25 @@ spec:
                 description: TemplateSelector defines MatchTags for looking up VM
                   templates.
                 properties:
+                  matchPolicy:
+                    default: exact
+                    description: |-
+                      MatchPolicy controls how MatchTags are evaluated against template tags.
+                      When not set, or set to "exact", the behaviour is identical to the previous implementation
+                      and requires an exact 1:1 tag match. When set to "subset", the template's tags must contain
+                      all MatchTags, but may include additional tags.
+                    enum:
+                    - exact
+                    - uniqueSubset
+                    - bestSubset
+                    type: string
                   matchTags:
                     description: |-
                       Specifies all tags to look for, when looking up the VM template.
-                      Passed tags must be an exact 1:1 match with the tags on the template you want to use.
-                      If multiple VM templates with the same set of tags are found, provisioning will fail.
+                      When MatchPolicy is "exact" (the default), the template's tags must be an exact 1:1 match
+                      with MatchTags. If multiple VM templates with the same set of tags are found, provisioning will fail.
+                      When MatchPolicy is "subset", the template's tags must contain all of the MatchTags, but may
+                      have additional tags.
                     items:
                       pattern: ^(?i)[a-z0-9_][a-z0-9_\-\+\.]*$
                       type: string
@@ -2820,6 +3740,798 @@ spec:
             type: object
         type: object
     served: true
+    storage: false
+    subresources:
+      status: {}
+  - additionalPrinterColumns:
+    - description: Cluster to which this ProxmoxMachine belongs
+      jsonPath: .metadata.labels.cluster\.x-k8s\.io/cluster-name
+      name: Cluster
+      type: string
+    - description: Machine ready status
+      jsonPath: .status.initialization.provisioned
+      name: Ready
+      type: string
+    - description: Proxmox Node that the machine was deployed on
+      jsonPath: .status.proxmoxNode
+      name: Node
+      type: string
+    - description: Provider ID
+      jsonPath: .spec.providerID
+      name: Provider_ID
+      type: string
+    - description: Machine object which owns with this ProxmoxMachine
+      jsonPath: .metadata.ownerReferences[?(@.kind=="Machine")].name
+      name: Machine
+      type: string
+    name: v1alpha2
+    schema:
+      openAPIV3Schema:
+        description: ProxmoxMachine is the Schema for the proxmoxmachines API.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: spec is the Proxmox machine spec.
+            properties:
+              allowedNodes:
+                description: |-
+                  allowedNodes specifies all Proxmox nodes which will be considered
+                  for operations. This implies that VMs can be cloned on different nodes from
+                  the node which holds the VM template.
+
+                  This field is optional and should only be set if you want to restrict
+                  the nodes where the VM can be cloned.
+                  If not set, the ProxmoxCluster will be used to determine the nodes.
+                items:
+                  type: string
+                type: array
+                x-kubernetes-list-type: set
+              checks:
+                description: checks defines possible checks to skip.
+                properties:
+                  skipCloudInitStatus:
+                    description: skipCloudInitStatus skip checking CloudInit status
+                      which can be useful with specific Operating Systems like TalOS
+                    type: boolean
+                  skipQemuGuestAgent:
+                    description: skipQemuGuestAgent skips checking QEMU Agent readiness
+                      which can be useful with specific Operating Systems like TalOS
+                    type: boolean
+                type: object
+              description:
+                description: description for the new VM.
+                type: string
+              disks:
+                description: |-
+                  disks contains a set of disk configuration options,
+                  which will be applied before the first startup.
+                properties:
+                  bootVolume:
+                    description: |-
+                      bootVolume defines the storage size for the boot volume.
+                      This field is optional, and should only be set if you want
+                      to change the size of the boot volume.
+                    properties:
+                      disk:
+                        description: |-
+                          disk is the name of the disk device that should be resized.
+                          Example values are: ide[0-3], scsi[0-30], sata[0-5].
+                        minLength: 1
+                        type: string
+                      sizeGb:
+                        description: |-
+                          sizeGb defines the size in gigabytes.
+
+                          As Proxmox does not support shrinking, the size
+                          must be bigger than the already configured size in the
+                          template.
+                        format: int32
+                        minimum: 5
+                        type: integer
+                    required:
+                    - disk
+                    - sizeGb
+                    type: object
+                    x-kubernetes-validations:
+                    - message: Value is immutable
+                      rule: self == oldSelf
+                type: object
+              format:
+                description: format for file storage. Only valid for full clone.
+                enum:
+                - raw
+                - qcow2
+                - vmdk
+                type: string
+              full:
+                default: true
+                description: |-
+                  full Create a full copy of all disks.
+                  This is always done when you clone a normal VM.
+                  Defaults to true when not specified, creating a full clone by default.
+                type: boolean
+              memoryMiB:
+                description: |-
+                  memoryMiB is the size of a virtual machine's memory, in MiB.
+                  Defaults to the property value in the template from which the virtual machine is cloned.
+                format: int32
+                minimum: 0
+                multipleOf: 8
+                type: integer
+              metadataSettings:
+                description: metadataSettings defines the metadata settings for this
+                  machine's VM.
+                properties:
+                  providerIDInjection:
+                    description: |-
+                      providerIDInjection enables the injection of the `providerID` into the cloudinit metadata.
+                      this will basically set the `provider-id` field in the metadata to `proxmox://<instanceID>`.
+                    type: boolean
+                required:
+                - providerIDInjection
+                type: object
+              network:
+                description: network is the network configuration for this machine's
+                  VM.
+                properties:
+                  networkDevices:
+                    description: networkDevices is a list of network devices.
+                    items:
+                      description: NetworkDevice defines the required details of a
+                        virtual machine network device.
+                      properties:
+                        bridge:
+                          description: bridge is the network bridge to attach to the
+                            machine.
+                          minLength: 1
+                          type: string
+                        defaultIPv4:
+                          description: defaultIPv4 attaches the ipv4 host network
+                            to this interface.
+                          type: boolean
+                        defaultIPv6:
+                          description: defaultIPv6 attaches the ipv6 host network
+                            to this interface.
+                          type: boolean
+                        dnsServers:
+                          description: |-
+                            dnsServers contains information about nameservers to be used for this interface.
+                            If this field is not set, it will use the default dns servers from the ProxmoxCluster.
+                          items:
+                            type: string
+                          minItems: 1
+                          type: array
+                          x-kubernetes-list-type: set
+                        ipPoolRef:
+                          description: |-
+                            ipPoolRef is a reference to an IPAM Pool resource, which exposes IPv4 addresses.
+                            The network device will use an available IP address from the referenced pool.
+                            This can be combined with `IPv6PoolRef` in order to enable dual stack.
+                          items:
+                            description: |-
+                              TypedLocalObjectReference contains enough information to let you locate the
+                              typed referenced object inside the same namespace.
+                            properties:
+                              apiGroup:
+                                description: |-
+                                  APIGroup is the group for the resource being referenced.
+                                  If APIGroup is not specified, the specified Kind must be in the core API group.
+                                  For any other third-party types, APIGroup is required.
+                                type: string
+                              kind:
+                                description: Kind is the type of resource being referenced
+                                type: string
+                              name:
+                                description: Name is the name of resource being referenced
+                                type: string
+                            required:
+                            - kind
+                            - name
+                            type: object
+                            x-kubernetes-map-type: atomic
+                            x-kubernetes-validations:
+                            - message: ipPoolRef allows only IPAM apiGroup ipam.cluster.x-k8s.io
+                              rule: self.apiGroup == 'ipam.cluster.x-k8s.io'
+                            - message: ipPoolRef allows either InClusterIPPool or
+                                GlobalInClusterIPPool
+                              rule: self.kind == 'InClusterIPPool' || self.kind ==
+                                'GlobalInClusterIPPool'
+                          type: array
+                          x-kubernetes-list-type: atomic
+                        linkMtu:
+                          description: linkMtu is the network device Maximum Transmission
+                            Unit.
+                          format: int32
+                          type: integer
+                          x-kubernetes-validations:
+                          - message: invalid MTU value
+                            rule: self == 1 || (self >= 576 && self <= 65520)
+                        model:
+                          default: virtio
+                          description: |-
+                            model is the network device model.
+                            Defaults to "virtio" when not specified.
+                          enum:
+                          - e1000
+                          - virtio
+                          - rtl8139
+                          - vmxnet3
+                          type: string
+                        mtu:
+                          description: |-
+                            mtu is the network device Maximum Transmission Unit.
+                            When set to 1, virtio devices inherit the MTU value from the underlying bridge.
+                          format: int32
+                          type: integer
+                          x-kubernetes-validations:
+                          - message: invalid MTU value
+                            rule: self == 1 || (self >= 576 && self <= 65520)
+                        name:
+                          default: net0
+                          description: name is the network device name.
+                          minLength: 4
+                          pattern: ^net[0-9]+$
+                          type: string
+                        queues:
+                          description: |-
+                            queues is the number of queues assigned to the device.
+                            This value is passed to the Multiqueue field in PROXMOX.
+                          format: int32
+                          maximum: 65535
+                          minimum: 1
+                          type: integer
+                        routes:
+                          description: routes are the routes associated with this
+                            interface.
+                          items:
+                            description: RouteSpec describes an IPv4/IPv6 Route.
+                            properties:
+                              is6:
+                                description: |-
+                                  is6 defines if a RouteSpec is IPv6.
+                                  It is only required to disambiguate a 'default'|'all' placeholder 'to'
+                                  when 'via' is unset, otherwise the family is derived from 'via'.
+                                type: boolean
+                              metric:
+                                description: metric is the priority of the route in
+                                  the routing table.
+                                format: int32
+                                minimum: 0
+                                type: integer
+                              table:
+                                description: table is the routing table used for this
+                                  route.
+                                format: int32
+                                type: integer
+                              to:
+                                description: to is the subnet to be routed.
+                                type: string
+                              via:
+                                description: via is the gateway to the subnet.
+                                type: string
+                            type: object
+                          minItems: 1
+                          type: array
+                          x-kubernetes-list-type: atomic
+                        routingPolicy:
+                          description: routingPolicy is an interface-specific policy
+                            inserted into FIB (forwarding information base).
+                          items:
+                            description: RoutingPolicySpec is a Linux FIB rule.
+                            properties:
+                              from:
+                                description: from is the subnet of the source.
+                                type: string
+                              is6:
+                                description: |-
+                                  is6 defines if a RoutingPolicySpec is IPv6.
+                                  It is only required to disambiguate a 'default'|'all' placeholder when
+                                  neither 'to' nor 'from' carries a concrete address to derive the family.
+                                type: boolean
+                              priority:
+                                description: priority is the position in the ip rule
+                                  FIB table.
+                                format: int64
+                                maximum: 4294967295
+                                type: integer
+                                x-kubernetes-validations:
+                                - message: Cowardly refusing to insert FIB rule matching
+                                    kernel rules
+                                  rule: (self > 0 && self < 32765) || (self > 32766)
+                              table:
+                                description: table is the routing table ID.
+                                format: int32
+                                type: integer
+                              to:
+                                description: to is the subnet of the target.
+                                type: string
+                            type: object
+                          minItems: 1
+                          type: array
+                          x-kubernetes-list-type: atomic
+                        vlan:
+                          description: vlan is the network L2 VLAN.
+                          format: int32
+                          maximum: 4094
+                          minimum: 1
+                          type: integer
+                      type: object
+                    type: array
+                    x-kubernetes-list-map-keys:
+                    - name
+                    x-kubernetes-list-type: map
+                  vrfs:
+                    description: vrfs defines VRF Devices.
+                    items:
+                      description: VRFDevice defines Virtual Routing Flow devices.
+                      properties:
+                        interfaces:
+                          description: interfaces is the list of proxmox network devices
+                            managed by this virtual device.
+                          items:
+                            description: NetName is a formally verified Proxmox network
+                              name string.
+                            minLength: 4
+                            pattern: ^net[0-9]+$
+                            type: string
+                          type: array
+                          x-kubernetes-list-type: atomic
+                        name:
+                          description: |-
+                            name is the virtual network device name.
+                            Must be unique within the virtual machine.
+                          minLength: 3
+                          type: string
+                        routes:
+                          description: routes are the routes associated with this
+                            interface.
+                          items:
+                            description: RouteSpec describes an IPv4/IPv6 Route.
+                            properties:
+                              is6:
+                                description: |-
+                                  is6 defines if a RouteSpec is IPv6.
+                                  It is only required to disambiguate a 'default'|'all' placeholder 'to'
+                                  when 'via' is unset, otherwise the family is derived from 'via'.
+                                type: boolean
+                              metric:
+                                description: metric is the priority of the route in
+                                  the routing table.
+                                format: int32
+                                minimum: 0
+                                type: integer
+                              table:
+                                description: table is the routing table used for this
+                                  route.
+                                format: int32
+                                type: integer
+                              to:
+                                description: to is the subnet to be routed.
+                                type: string
+                              via:
+                                description: via is the gateway to the subnet.
+                                type: string
+                            type: object
+                          minItems: 1
+                          type: array
+                          x-kubernetes-list-type: atomic
+                        routingPolicy:
+                          description: routingPolicy is an interface-specific policy
+                            inserted into FIB (forwarding information base).
+                          items:
+                            description: RoutingPolicySpec is a Linux FIB rule.
+                            properties:
+                              from:
+                                description: from is the subnet of the source.
+                                type: string
+                              is6:
+                                description: |-
+                                  is6 defines if a RoutingPolicySpec is IPv6.
+                                  It is only required to disambiguate a 'default'|'all' placeholder when
+                                  neither 'to' nor 'from' carries a concrete address to derive the family.
+                                type: boolean
+                              priority:
+                                description: priority is the position in the ip rule
+                                  FIB table.
+                                format: int64
+                                maximum: 4294967295
+                                type: integer
+                                x-kubernetes-validations:
+                                - message: Cowardly refusing to insert FIB rule matching
+                                    kernel rules
+                                  rule: (self > 0 && self < 32765) || (self > 32766)
+                              table:
+                                description: table is the routing table ID.
+                                format: int32
+                                type: integer
+                              to:
+                                description: to is the subnet of the target.
+                                type: string
+                            type: object
+                          minItems: 1
+                          type: array
+                          x-kubernetes-list-type: atomic
+                        table:
+                          description: table is the ID of the routing table used for
+                            the l3mdev vrf device.
+                          format: int32
+                          maximum: 4294967295
+                          minimum: 1
+                          type: integer
+                          x-kubernetes-validations:
+                          - message: Cowardly refusing to insert l3mdev rules into
+                              kernel tables
+                            rule: (self > 0 && self < 254) || (self > 255)
+                      required:
+                      - name
+                      - table
+                      type: object
+                    type: array
+                    x-kubernetes-list-map-keys:
+                    - name
+                    x-kubernetes-list-type: map
+                  zone:
+                    description: zone is the cluster deployment zone this machine
+                      will refer to.
+                    pattern: ^[a-z0-9A-Z](?:[a-z0-9A-Z-_.]{0,61}[a-z0-9A-Z])?$
+                    type: string
+                required:
+                - networkDevices
+                type: object
+              numCores:
+                description: |-
+                  numCores is the number of cores per CPU socket in a virtual machine.
+                  Defaults to the property value in the template from which the virtual machine is cloned.
+                format: int32
+                minimum: 1
+                type: integer
+              numSockets:
+                description: |-
+                  numSockets is the number of CPU sockets in a virtual machine.
+                  Defaults to the property value in the template from which the virtual machine is cloned.
+                format: int32
+                minimum: 1
+                type: integer
+              pool:
+                description: pool Add the new VM to the specified pool.
+                type: string
+              providerID:
+                description: |-
+                  providerID is the virtual machine BIOS UUID formatted as
+                  proxmox://6c3fa683-bef9-4425-b413-eaa45a9d6191
+                maxLength: 46
+                minLength: 46
+                pattern: ^proxmox://[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12}$
+                type: string
+              snapName:
+                description: snapName is the name of the snapshot.
+                type: string
+              sourceNode:
+                description: |-
+                  sourceNode is the initially selected proxmox node.
+                  This node will be used to locate the template VM, which will
+                  be used for cloning operations.
+
+                  Cloning will be performed according to the configuration.
+                  Setting the `Target` field will tell Proxmox to clone the
+                  VM on that target node.
+
+                  When Target is not set and the ProxmoxCluster contains
+                  a set of `AllowedNodes`, the algorithm will instead evenly
+                  distribute the VMs across the nodes from that list.
+
+                  If neither a `Target` nor `AllowedNodes` was set, the VM
+                  will be cloned onto the same node as SourceNode.
+                minLength: 1
+                type: string
+              storage:
+                description: storage for full clone.
+                type: string
+              tags:
+                description: tags is a list of tags to be applied to the virtual machine.
+                items:
+                  pattern: ^(?i)[a-z0-9_][a-z0-9_\-\+\.]*$
+                  type: string
+                minItems: 1
+                type: array
+                x-kubernetes-list-type: set
+              templateID:
+                description: templateID the vm_template vmid used for cloning a new
+                  VM.
+                format: int32
+                type: integer
+              templateSelector:
+                description: |-
+                  templateSelector defines MatchTags for looking up VM templates.
+                  If a templateID is defined, templateSelector will be ignored.
+                properties:
+                  matchPolicy:
+                    default: exact
+                    description: |-
+                      matchPolicy controls how MatchTags are evaluated against template tags.
+                      When not set, or set to "exact", the behaviour is identical to the previous implementation
+                      and requires an exact 1:1 tag match. When set to "subset", the template's tags must contain
+                      all MatchTags, but may include additional tags.
+                    enum:
+                    - exact
+                    - uniqueSubset
+                    - bestSubset
+                    type: string
+                  matchTags:
+                    description: |-
+                      matchTags specifies all tags to look for when looking up the VM template.
+                      Passed tags must be an exact 1:1 match with the tags on the template you want to use.
+                      If multiple VM templates with the same set of tags are found, provisioning will fail.
+                    items:
+                      pattern: ^(?i)[a-z0-9_][a-z0-9_\-\+\.]*$
+                      type: string
+                    minItems: 1
+                    type: array
+                    x-kubernetes-list-type: set
+                required:
+                - matchTags
+                type: object
+              virtualMachineID:
+                description: virtualMachineID is the Proxmox identifier for the ProxmoxMachine
+                  VM.
+                format: int64
+                type: integer
+              vmIDRange:
+                description: vmIDRange is the range of VMIDs to use for VMs.
+                properties:
+                  end:
+                    description: |-
+                      end is the end of the VMID range to use for VMs.
+                      Only used if VMIDRangeStart is set.
+                    format: int64
+                    maximum: 999999999
+                    minimum: 100
+                    type: integer
+                  start:
+                    description: start is the start of the VMID range to use for VMs.
+                    format: int64
+                    maximum: 999999999
+                    minimum: 100
+                    type: integer
+                required:
+                - end
+                - start
+                type: object
+                x-kubernetes-validations:
+                - message: end should be greater than or equal to start
+                  rule: self.end >= self.start
+            required:
+            - network
+            type: object
+            x-kubernetes-validations:
+            - message: must define either a SourceNode with a TemplateID or a TemplateSelector
+              rule: '[has(self.sourceNode), has(self.templateSelector)].exists_one(c,
+                c)'
+            - message: must define either a SourceNode with a TemplateID or a TemplateSelector
+              rule: '[has(self.templateID), has(self.templateSelector)].exists_one(c,
+                c)'
+            - message: Must set full=true when specifying format
+              rule: self.full || !has(self.format)
+            - message: Must set full=true when specifying storage
+              rule: self.full || !has(self.storage)
+            - message: Must specify either templateID or templateSelector
+              rule: has(self.templateSelector) || (has(self.templateID) && has(self.sourceNode))
+          status:
+            description: status is the status of the Proxmox machine.
+            properties:
+              addresses:
+                description: addresses contains the Proxmox VM instance associated
+                  addresses.
+                items:
+                  description: MachineAddress contains information for the node's
+                    address.
+                  properties:
+                    address:
+                      description: address is the machine address.
+                      maxLength: 256
+                      minLength: 1
+                      type: string
+                    type:
+                      description: type is the machine address type, one of Hostname,
+                        ExternalIP, InternalIP, ExternalDNS or InternalDNS.
+                      enum:
+                      - Hostname
+                      - ExternalIP
+                      - InternalIP
+                      - ExternalDNS
+                      - InternalDNS
+                      type: string
+                  required:
+                  - address
+                  - type
+                  type: object
+                type: array
+                x-kubernetes-list-type: atomic
+              bootstrapDataProvided:
+                description: bootstrapDataProvided whether the virtual machine has
+                  an injected bootstrap data.
+                type: boolean
+              conditions:
+                description: conditions defines current service state of the ProxmoxMachine.
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                maxItems: 32
+                type: array
+                x-kubernetes-list-map-keys:
+                - type
+                x-kubernetes-list-type: map
+              initialization:
+                description: |-
+                  initialization provides observations of the ProxmoxMachine initialization process.
+                  NOTE: Fields in this struct are part of the Cluster API contract and are used to orchestrate initial Machine provisioning.
+                minProperties: 1
+                properties:
+                  provisioned:
+                    description: |-
+                      provisioned is true when the infrastructure provider reports that the Machine's infrastructure is fully provisioned.
+                      NOTE: this field is part of the Cluster API contract, and it is used to orchestrate initial Machine provisioning.
+                    type: boolean
+                type: object
+              ipAddresses:
+                description: ipAddresses are the IP addresses used to access the virtual
+                  machine.
+                items:
+                  description: IPAddressesSpec stores the IP addresses of a network
+                    interface. Used for status.
+                  properties:
+                    ipv4:
+                      description: ipv4 is the IPv4 address.
+                      items:
+                        type: string
+                      type: array
+                      x-kubernetes-list-type: set
+                    ipv6:
+                      description: ipv6 is the IPv6 address.
+                      items:
+                        type: string
+                      type: array
+                      x-kubernetes-list-type: set
+                    net:
+                      description: net is the proxmox network name these ipaddresses
+                        are attached to.
+                      minLength: 4
+                      pattern: ^(net[0-9]+|default)$
+                      type: string
+                  required:
+                  - net
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - net
+                x-kubernetes-list-type: map
+              network:
+                description: |-
+                  network returns the network status for each of the machine's configured
+                  network interfaces.
+                items:
+                  description: NetworkStatus provides information about one of a VM's
+                    networks.
+                  properties:
+                    connected:
+                      description: |-
+                        connected is a flag that indicates whether this network is currently
+                        connected to the VM.
+                      type: boolean
+                    ipAddrs:
+                      description: ipAddrs is one or more IP addresses reported by
+                        vm-tools.
+                      items:
+                        type: string
+                      type: array
+                      x-kubernetes-list-type: set
+                    macAddr:
+                      description: macAddr is the MAC address of the network device.
+                      maxLength: 17
+                      minLength: 17
+                      pattern: ^([0-9A-Fa-f]{2}[:]){5}([0-9A-Fa-f]{2})$
+                      type: string
+                    networkName:
+                      description: networkName is the name of the network.
+                      minLength: 4
+                      pattern: ^net[0-9]+$
+                      type: string
+                  required:
+                  - connected
+                  - macAddr
+                  type: object
+                type: array
+                x-kubernetes-list-type: atomic
+              proxmoxNode:
+                description: |-
+                  proxmoxNode is the name of the proxmox node, which was chosen for this
+                  machine to be deployed on.
+                type: string
+              retryAfter:
+                description: retryAfter tracks the time we can retry queueing a task.
+                format: date-time
+                type: string
+              taskRef:
+                description: |-
+                  taskRef is a managed object reference to a Task related to the ProxmoxMachine.
+                  This value is set automatically at runtime and should not be set or
+                  modified by users.
+                type: string
+              vmStatus:
+                description: vmStatus is used to identify the virtual machine status.
+                type: string
+            type: object
+        required:
+        - spec
+        type: object
+    served: true
     storage: true
     subresources:
       status: {}
@@ -2829,12 +4541,23 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     cert-manager.io/inject-ca-from: capmox-system/capmox-serving-cert
-    controller-gen.kubebuilder.io/version: v0.16.5
+    controller-gen.kubebuilder.io/version: v0.19.0
   labels:
     cluster.x-k8s.io/provider: infrastructure-proxmox
-    cluster.x-k8s.io/v1beta1: v1alpha1
+    cluster.x-k8s.io/v1beta1: v1alpha2
+    cluster.x-k8s.io/v1beta2: v1alpha2
   name: proxmoxmachinetemplates.infrastructure.cluster.x-k8s.io
 spec:
+  conversion:
+    strategy: Webhook
+    webhook:
+      clientConfig:
+        service:
+          name: capmox-webhook-service
+          namespace: capmox-system
+          path: /convert
+      conversionReviewVersions:
+      - v1
   group: infrastructure.cluster.x-k8s.io
   names:
     categories:
@@ -3474,11 +5197,25 @@ spec:
                         description: TemplateSelector defines MatchTags for looking
                           up VM templates.
                         properties:
+                          matchPolicy:
+                            default: exact
+                            description: |-
+                              MatchPolicy controls how MatchTags are evaluated against template tags.
+                              When not set, or set to "exact", the behaviour is identical to the previous implementation
+                              and requires an exact 1:1 tag match. When set to "subset", the template's tags must contain
+                              all MatchTags, but may include additional tags.
+                            enum:
+                            - exact
+                            - uniqueSubset
+                            - bestSubset
+                            type: string
                           matchTags:
                             description: |-
                               Specifies all tags to look for, when looking up the VM template.
-                              Passed tags must be an exact 1:1 match with the tags on the template you want to use.
-                              If multiple VM templates with the same set of tags are found, provisioning will fail.
+                              When MatchPolicy is "exact" (the default), the template's tags must be an exact 1:1 match
+                              with MatchTags. If multiple VM templates with the same set of tags are found, provisioning will fail.
+                              When MatchPolicy is "subset", the template's tags must contain all of the MatchTags, but may
+                              have additional tags.
                             items:
                               pattern: ^(?i)[a-z0-9_][a-z0-9_\-\+\.]*$
                               type: string
@@ -3530,6 +5267,629 @@ spec:
             required:
             - template
             type: object
+        type: object
+    served: true
+    storage: false
+  - name: v1alpha2
+    schema:
+      openAPIV3Schema:
+        description: ProxmoxMachineTemplate is the Schema for the proxmoxmachinetemplates
+          API.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: spec is the machine template spec.
+            properties:
+              template:
+                description: template is the Proxmox machine template resource.
+                properties:
+                  metadata:
+                    description: |-
+                      metadata is the standard object metadata.
+                      More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#metadata
+                    minProperties: 1
+                    properties:
+                      annotations:
+                        additionalProperties:
+                          type: string
+                        description: |-
+                          annotations is an unstructured key value map stored with a resource that may be
+                          set by external tools to store and retrieve arbitrary metadata. They are not
+                          queryable and should be preserved when modifying objects.
+                          More info: http://kubernetes.io/docs/user-guide/annotations
+                        type: object
+                      labels:
+                        additionalProperties:
+                          type: string
+                        description: |-
+                          labels is a map of string keys and values that can be used to organize and categorize
+                          (scope and select) objects. May match selectors of replication controllers
+                          and services.
+                          More info: http://kubernetes.io/docs/user-guide/labels
+                        type: object
+                    type: object
+                  spec:
+                    description: spec is the Proxmox machine spec.
+                    properties:
+                      allowedNodes:
+                        description: |-
+                          allowedNodes specifies all Proxmox nodes which will be considered
+                          for operations. This implies that VMs can be cloned on different nodes from
+                          the node which holds the VM template.
+
+                          This field is optional and should only be set if you want to restrict
+                          the nodes where the VM can be cloned.
+                          If not set, the ProxmoxCluster will be used to determine the nodes.
+                        items:
+                          type: string
+                        type: array
+                        x-kubernetes-list-type: set
+                      checks:
+                        description: checks defines possible checks to skip.
+                        properties:
+                          skipCloudInitStatus:
+                            description: skipCloudInitStatus skip checking CloudInit
+                              status which can be useful with specific Operating Systems
+                              like TalOS
+                            type: boolean
+                          skipQemuGuestAgent:
+                            description: skipQemuGuestAgent skips checking QEMU Agent
+                              readiness which can be useful with specific Operating
+                              Systems like TalOS
+                            type: boolean
+                        type: object
+                      description:
+                        description: description for the new VM.
+                        type: string
+                      disks:
+                        description: |-
+                          disks contains a set of disk configuration options,
+                          which will be applied before the first startup.
+                        properties:
+                          bootVolume:
+                            description: |-
+                              bootVolume defines the storage size for the boot volume.
+                              This field is optional, and should only be set if you want
+                              to change the size of the boot volume.
+                            properties:
+                              disk:
+                                description: |-
+                                  disk is the name of the disk device that should be resized.
+                                  Example values are: ide[0-3], scsi[0-30], sata[0-5].
+                                minLength: 1
+                                type: string
+                              sizeGb:
+                                description: |-
+                                  sizeGb defines the size in gigabytes.
+
+                                  As Proxmox does not support shrinking, the size
+                                  must be bigger than the already configured size in the
+                                  template.
+                                format: int32
+                                minimum: 5
+                                type: integer
+                            required:
+                            - disk
+                            - sizeGb
+                            type: object
+                            x-kubernetes-validations:
+                            - message: Value is immutable
+                              rule: self == oldSelf
+                        type: object
+                      format:
+                        description: format for file storage. Only valid for full
+                          clone.
+                        enum:
+                        - raw
+                        - qcow2
+                        - vmdk
+                        type: string
+                      full:
+                        default: true
+                        description: |-
+                          full Create a full copy of all disks.
+                          This is always done when you clone a normal VM.
+                          Defaults to true when not specified, creating a full clone by default.
+                        type: boolean
+                      memoryMiB:
+                        description: |-
+                          memoryMiB is the size of a virtual machine's memory, in MiB.
+                          Defaults to the property value in the template from which the virtual machine is cloned.
+                        format: int32
+                        minimum: 0
+                        multipleOf: 8
+                        type: integer
+                      metadataSettings:
+                        description: metadataSettings defines the metadata settings
+                          for this machine's VM.
+                        properties:
+                          providerIDInjection:
+                            description: |-
+                              providerIDInjection enables the injection of the `providerID` into the cloudinit metadata.
+                              this will basically set the `provider-id` field in the metadata to `proxmox://<instanceID>`.
+                            type: boolean
+                        required:
+                        - providerIDInjection
+                        type: object
+                      network:
+                        description: network is the network configuration for this
+                          machine's VM.
+                        properties:
+                          networkDevices:
+                            description: networkDevices is a list of network devices.
+                            items:
+                              description: NetworkDevice defines the required details
+                                of a virtual machine network device.
+                              properties:
+                                bridge:
+                                  description: bridge is the network bridge to attach
+                                    to the machine.
+                                  minLength: 1
+                                  type: string
+                                defaultIPv4:
+                                  description: defaultIPv4 attaches the ipv4 host
+                                    network to this interface.
+                                  type: boolean
+                                defaultIPv6:
+                                  description: defaultIPv6 attaches the ipv6 host
+                                    network to this interface.
+                                  type: boolean
+                                dnsServers:
+                                  description: |-
+                                    dnsServers contains information about nameservers to be used for this interface.
+                                    If this field is not set, it will use the default dns servers from the ProxmoxCluster.
+                                  items:
+                                    type: string
+                                  minItems: 1
+                                  type: array
+                                  x-kubernetes-list-type: set
+                                ipPoolRef:
+                                  description: |-
+                                    ipPoolRef is a reference to an IPAM Pool resource, which exposes IPv4 addresses.
+                                    The network device will use an available IP address from the referenced pool.
+                                    This can be combined with `IPv6PoolRef` in order to enable dual stack.
+                                  items:
+                                    description: |-
+                                      TypedLocalObjectReference contains enough information to let you locate the
+                                      typed referenced object inside the same namespace.
+                                    properties:
+                                      apiGroup:
+                                        description: |-
+                                          APIGroup is the group for the resource being referenced.
+                                          If APIGroup is not specified, the specified Kind must be in the core API group.
+                                          For any other third-party types, APIGroup is required.
+                                        type: string
+                                      kind:
+                                        description: Kind is the type of resource
+                                          being referenced
+                                        type: string
+                                      name:
+                                        description: Name is the name of resource
+                                          being referenced
+                                        type: string
+                                    required:
+                                    - kind
+                                    - name
+                                    type: object
+                                    x-kubernetes-map-type: atomic
+                                    x-kubernetes-validations:
+                                    - message: ipPoolRef allows only IPAM apiGroup
+                                        ipam.cluster.x-k8s.io
+                                      rule: self.apiGroup == 'ipam.cluster.x-k8s.io'
+                                    - message: ipPoolRef allows either InClusterIPPool
+                                        or GlobalInClusterIPPool
+                                      rule: self.kind == 'InClusterIPPool' || self.kind
+                                        == 'GlobalInClusterIPPool'
+                                  type: array
+                                  x-kubernetes-list-type: atomic
+                                linkMtu:
+                                  description: linkMtu is the network device Maximum
+                                    Transmission Unit.
+                                  format: int32
+                                  type: integer
+                                  x-kubernetes-validations:
+                                  - message: invalid MTU value
+                                    rule: self == 1 || (self >= 576 && self <= 65520)
+                                model:
+                                  default: virtio
+                                  description: |-
+                                    model is the network device model.
+                                    Defaults to "virtio" when not specified.
+                                  enum:
+                                  - e1000
+                                  - virtio
+                                  - rtl8139
+                                  - vmxnet3
+                                  type: string
+                                mtu:
+                                  description: |-
+                                    mtu is the network device Maximum Transmission Unit.
+                                    When set to 1, virtio devices inherit the MTU value from the underlying bridge.
+                                  format: int32
+                                  type: integer
+                                  x-kubernetes-validations:
+                                  - message: invalid MTU value
+                                    rule: self == 1 || (self >= 576 && self <= 65520)
+                                name:
+                                  default: net0
+                                  description: name is the network device name.
+                                  minLength: 4
+                                  pattern: ^net[0-9]+$
+                                  type: string
+                                queues:
+                                  description: |-
+                                    queues is the number of queues assigned to the device.
+                                    This value is passed to the Multiqueue field in PROXMOX.
+                                  format: int32
+                                  maximum: 65535
+                                  minimum: 1
+                                  type: integer
+                                routes:
+                                  description: routes are the routes associated with
+                                    this interface.
+                                  items:
+                                    description: RouteSpec describes an IPv4/IPv6
+                                      Route.
+                                    properties:
+                                      is6:
+                                        description: |-
+                                          is6 defines if a RouteSpec is IPv6.
+                                          It is only required to disambiguate a 'default'|'all' placeholder 'to'
+                                          when 'via' is unset, otherwise the family is derived from 'via'.
+                                        type: boolean
+                                      metric:
+                                        description: metric is the priority of the
+                                          route in the routing table.
+                                        format: int32
+                                        minimum: 0
+                                        type: integer
+                                      table:
+                                        description: table is the routing table used
+                                          for this route.
+                                        format: int32
+                                        type: integer
+                                      to:
+                                        description: to is the subnet to be routed.
+                                        type: string
+                                      via:
+                                        description: via is the gateway to the subnet.
+                                        type: string
+                                    type: object
+                                  minItems: 1
+                                  type: array
+                                  x-kubernetes-list-type: atomic
+                                routingPolicy:
+                                  description: routingPolicy is an interface-specific
+                                    policy inserted into FIB (forwarding information
+                                    base).
+                                  items:
+                                    description: RoutingPolicySpec is a Linux FIB
+                                      rule.
+                                    properties:
+                                      from:
+                                        description: from is the subnet of the source.
+                                        type: string
+                                      is6:
+                                        description: |-
+                                          is6 defines if a RoutingPolicySpec is IPv6.
+                                          It is only required to disambiguate a 'default'|'all' placeholder when
+                                          neither 'to' nor 'from' carries a concrete address to derive the family.
+                                        type: boolean
+                                      priority:
+                                        description: priority is the position in the
+                                          ip rule FIB table.
+                                        format: int64
+                                        maximum: 4294967295
+                                        type: integer
+                                        x-kubernetes-validations:
+                                        - message: Cowardly refusing to insert FIB
+                                            rule matching kernel rules
+                                          rule: (self > 0 && self < 32765) || (self
+                                            > 32766)
+                                      table:
+                                        description: table is the routing table ID.
+                                        format: int32
+                                        type: integer
+                                      to:
+                                        description: to is the subnet of the target.
+                                        type: string
+                                    type: object
+                                  minItems: 1
+                                  type: array
+                                  x-kubernetes-list-type: atomic
+                                vlan:
+                                  description: vlan is the network L2 VLAN.
+                                  format: int32
+                                  maximum: 4094
+                                  minimum: 1
+                                  type: integer
+                              type: object
+                            type: array
+                            x-kubernetes-list-map-keys:
+                            - name
+                            x-kubernetes-list-type: map
+                          vrfs:
+                            description: vrfs defines VRF Devices.
+                            items:
+                              description: VRFDevice defines Virtual Routing Flow
+                                devices.
+                              properties:
+                                interfaces:
+                                  description: interfaces is the list of proxmox network
+                                    devices managed by this virtual device.
+                                  items:
+                                    description: NetName is a formally verified Proxmox
+                                      network name string.
+                                    minLength: 4
+                                    pattern: ^net[0-9]+$
+                                    type: string
+                                  type: array
+                                  x-kubernetes-list-type: atomic
+                                name:
+                                  description: |-
+                                    name is the virtual network device name.
+                                    Must be unique within the virtual machine.
+                                  minLength: 3
+                                  type: string
+                                routes:
+                                  description: routes are the routes associated with
+                                    this interface.
+                                  items:
+                                    description: RouteSpec describes an IPv4/IPv6
+                                      Route.
+                                    properties:
+                                      is6:
+                                        description: |-
+                                          is6 defines if a RouteSpec is IPv6.
+                                          It is only required to disambiguate a 'default'|'all' placeholder 'to'
+                                          when 'via' is unset, otherwise the family is derived from 'via'.
+                                        type: boolean
+                                      metric:
+                                        description: metric is the priority of the
+                                          route in the routing table.
+                                        format: int32
+                                        minimum: 0
+                                        type: integer
+                                      table:
+                                        description: table is the routing table used
+                                          for this route.
+                                        format: int32
+                                        type: integer
+                                      to:
+                                        description: to is the subnet to be routed.
+                                        type: string
+                                      via:
+                                        description: via is the gateway to the subnet.
+                                        type: string
+                                    type: object
+                                  minItems: 1
+                                  type: array
+                                  x-kubernetes-list-type: atomic
+                                routingPolicy:
+                                  description: routingPolicy is an interface-specific
+                                    policy inserted into FIB (forwarding information
+                                    base).
+                                  items:
+                                    description: RoutingPolicySpec is a Linux FIB
+                                      rule.
+                                    properties:
+                                      from:
+                                        description: from is the subnet of the source.
+                                        type: string
+                                      is6:
+                                        description: |-
+                                          is6 defines if a RoutingPolicySpec is IPv6.
+                                          It is only required to disambiguate a 'default'|'all' placeholder when
+                                          neither 'to' nor 'from' carries a concrete address to derive the family.
+                                        type: boolean
+                                      priority:
+                                        description: priority is the position in the
+                                          ip rule FIB table.
+                                        format: int64
+                                        maximum: 4294967295
+                                        type: integer
+                                        x-kubernetes-validations:
+                                        - message: Cowardly refusing to insert FIB
+                                            rule matching kernel rules
+                                          rule: (self > 0 && self < 32765) || (self
+                                            > 32766)
+                                      table:
+                                        description: table is the routing table ID.
+                                        format: int32
+                                        type: integer
+                                      to:
+                                        description: to is the subnet of the target.
+                                        type: string
+                                    type: object
+                                  minItems: 1
+                                  type: array
+                                  x-kubernetes-list-type: atomic
+                                table:
+                                  description: table is the ID of the routing table
+                                    used for the l3mdev vrf device.
+                                  format: int32
+                                  maximum: 4294967295
+                                  minimum: 1
+                                  type: integer
+                                  x-kubernetes-validations:
+                                  - message: Cowardly refusing to insert l3mdev rules
+                                      into kernel tables
+                                    rule: (self > 0 && self < 254) || (self > 255)
+                              required:
+                              - name
+                              - table
+                              type: object
+                            type: array
+                            x-kubernetes-list-map-keys:
+                            - name
+                            x-kubernetes-list-type: map
+                          zone:
+                            description: zone is the cluster deployment zone this
+                              machine will refer to.
+                            pattern: ^[a-z0-9A-Z](?:[a-z0-9A-Z-_.]{0,61}[a-z0-9A-Z])?$
+                            type: string
+                        required:
+                        - networkDevices
+                        type: object
+                      numCores:
+                        description: |-
+                          numCores is the number of cores per CPU socket in a virtual machine.
+                          Defaults to the property value in the template from which the virtual machine is cloned.
+                        format: int32
+                        minimum: 1
+                        type: integer
+                      numSockets:
+                        description: |-
+                          numSockets is the number of CPU sockets in a virtual machine.
+                          Defaults to the property value in the template from which the virtual machine is cloned.
+                        format: int32
+                        minimum: 1
+                        type: integer
+                      pool:
+                        description: pool Add the new VM to the specified pool.
+                        type: string
+                      providerID:
+                        description: |-
+                          providerID is the virtual machine BIOS UUID formatted as
+                          proxmox://6c3fa683-bef9-4425-b413-eaa45a9d6191
+                        maxLength: 46
+                        minLength: 46
+                        pattern: ^proxmox://[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12}$
+                        type: string
+                      snapName:
+                        description: snapName is the name of the snapshot.
+                        type: string
+                      sourceNode:
+                        description: |-
+                          sourceNode is the initially selected proxmox node.
+                          This node will be used to locate the template VM, which will
+                          be used for cloning operations.
+
+                          Cloning will be performed according to the configuration.
+                          Setting the `Target` field will tell Proxmox to clone the
+                          VM on that target node.
+
+                          When Target is not set and the ProxmoxCluster contains
+                          a set of `AllowedNodes`, the algorithm will instead evenly
+                          distribute the VMs across the nodes from that list.
+
+                          If neither a `Target` nor `AllowedNodes` was set, the VM
+                          will be cloned onto the same node as SourceNode.
+                        minLength: 1
+                        type: string
+                      storage:
+                        description: storage for full clone.
+                        type: string
+                      tags:
+                        description: tags is a list of tags to be applied to the virtual
+                          machine.
+                        items:
+                          pattern: ^(?i)[a-z0-9_][a-z0-9_\-\+\.]*$
+                          type: string
+                        minItems: 1
+                        type: array
+                        x-kubernetes-list-type: set
+                      templateID:
+                        description: templateID the vm_template vmid used for cloning
+                          a new VM.
+                        format: int32
+                        type: integer
+                      templateSelector:
+                        description: |-
+                          templateSelector defines MatchTags for looking up VM templates.
+                          If a templateID is defined, templateSelector will be ignored.
+                        properties:
+                          matchPolicy:
+                            default: exact
+                            description: |-
+                              matchPolicy controls how MatchTags are evaluated against template tags.
+                              When not set, or set to "exact", the behaviour is identical to the previous implementation
+                              and requires an exact 1:1 tag match. When set to "subset", the template's tags must contain
+                              all MatchTags, but may include additional tags.
+                            enum:
+                            - exact
+                            - uniqueSubset
+                            - bestSubset
+                            type: string
+                          matchTags:
+                            description: |-
+                              matchTags specifies all tags to look for when looking up the VM template.
+                              Passed tags must be an exact 1:1 match with the tags on the template you want to use.
+                              If multiple VM templates with the same set of tags are found, provisioning will fail.
+                            items:
+                              pattern: ^(?i)[a-z0-9_][a-z0-9_\-\+\.]*$
+                              type: string
+                            minItems: 1
+                            type: array
+                            x-kubernetes-list-type: set
+                        required:
+                        - matchTags
+                        type: object
+                      virtualMachineID:
+                        description: virtualMachineID is the Proxmox identifier for
+                          the ProxmoxMachine VM.
+                        format: int64
+                        type: integer
+                      vmIDRange:
+                        description: vmIDRange is the range of VMIDs to use for VMs.
+                        properties:
+                          end:
+                            description: |-
+                              end is the end of the VMID range to use for VMs.
+                              Only used if VMIDRangeStart is set.
+                            format: int64
+                            maximum: 999999999
+                            minimum: 100
+                            type: integer
+                          start:
+                            description: start is the start of the VMID range to use
+                              for VMs.
+                            format: int64
+                            maximum: 999999999
+                            minimum: 100
+                            type: integer
+                        required:
+                        - end
+                        - start
+                        type: object
+                        x-kubernetes-validations:
+                        - message: end should be greater than or equal to start
+                          rule: self.end >= self.start
+                    required:
+                    - network
+                    type: object
+                    x-kubernetes-validations:
+                    - message: Must set full=true when specifying format
+                      rule: self.full || !has(self.format)
+                    - message: Must set full=true when specifying storage
+                      rule: self.full || !has(self.storage)
+                    - message: Must specify either templateID or templateSelector
+                      rule: has(self.templateSelector) || (has(self.templateID) &&
+                        has(self.sourceNode))
+                required:
+                - spec
+                type: object
+            required:
+            - template
+            type: object
+        required:
+        - spec
         type: object
     served: true
     storage: true
@@ -3710,6 +6070,66 @@ metadata:
 rules:
 - nonResourceURLs:
   - /metrics
+  verbs:
+  - get
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  labels:
+    app.kubernetes.io/component: rbac
+    app.kubernetes.io/created-by: cluster-api-provider-proxmox
+    app.kubernetes.io/instance: proxmoxmachine-editor-role
+    app.kubernetes.io/managed-by: kustomize
+    app.kubernetes.io/name: clusterrole
+    app.kubernetes.io/part-of: cluster-api-provider-proxmox
+    cluster.x-k8s.io/provider: infrastructure-proxmox
+  name: capmox-proxmoxmachine-editor-role
+rules:
+- apiGroups:
+  - infrastructure.cluster.x-k8s.io
+  resources:
+  - proxmoxmachines
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - infrastructure.cluster.x-k8s.io
+  resources:
+  - proxmoxmachines/status
+  verbs:
+  - get
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  labels:
+    app.kubernetes.io/component: rbac
+    app.kubernetes.io/created-by: cluster-api-provider-proxmox
+    app.kubernetes.io/instance: proxmoxmachine-viewer-role
+    app.kubernetes.io/managed-by: kustomize
+    app.kubernetes.io/name: clusterrole
+    app.kubernetes.io/part-of: cluster-api-provider-proxmox
+    cluster.x-k8s.io/provider: infrastructure-proxmox
+  name: capmox-proxmoxmachine-viewer-role
+rules:
+- apiGroups:
+  - infrastructure.cluster.x-k8s.io
+  resources:
+  - proxmoxmachines
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - infrastructure.cluster.x-k8s.io
+  resources:
+  - proxmoxmachines/status
   verbs:
   - get
 ---
@@ -3913,7 +6333,7 @@ spec:
             secretKeyRef:
               key: secret
               name: capmox-manager-credentials
-        image: ghcr.io/ionos-cloud/cluster-api-provider-proxmox:v0.7.7
+        image: ghcr.io/ionos-cloud/cluster-api-provider-proxmox:v0.9.2
         livenessProbe:
           httpGet:
             path: /healthz
@@ -3998,6 +6418,106 @@ spec:
   selfSigned: {}
 ---
 apiVersion: admissionregistration.k8s.io/v1
+kind: MutatingWebhookConfiguration
+metadata:
+  annotations:
+    cert-manager.io/inject-ca-from: capmox-system/capmox-serving-cert
+  labels:
+    app.kubernetes.io/component: webhook
+    app.kubernetes.io/created-by: cluster-api-provider-proxmox
+    app.kubernetes.io/instance: mutating-webhook-configuration
+    app.kubernetes.io/managed-by: kustomize
+    app.kubernetes.io/name: mutatingwebhookconfiguration
+    app.kubernetes.io/part-of: cluster-api-provider-proxmox
+    cluster.x-k8s.io/provider: infrastructure-proxmox
+  name: capmox-mutating-webhook-configuration
+webhooks:
+- admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: capmox-webhook-service
+      namespace: capmox-system
+      path: /mutate-infrastructure-cluster-x-k8s-io-v1alpha2-proxmoxcluster
+  failurePolicy: Fail
+  matchPolicy: Equivalent
+  name: default.proxmoxcluster.infrastructure.cluster.x-k8s.io
+  rules:
+  - apiGroups:
+    - infrastructure.cluster.x-k8s.io
+    apiVersions:
+    - v1alpha2
+    operations:
+    - CREATE
+    - UPDATE
+    resources:
+    - proxmoxclusters
+  sideEffects: None
+- admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: capmox-webhook-service
+      namespace: capmox-system
+      path: /mutate-infrastructure-cluster-x-k8s-io-v1alpha2-proxmoxclustertemplate
+  failurePolicy: Fail
+  matchPolicy: Exact
+  name: default.proxmoxclustertemplate.infrastructure.cluster.x-k8s.io
+  rules:
+  - apiGroups:
+    - infrastructure.cluster.x-k8s.io
+    apiVersions:
+    - v1alpha2
+    operations:
+    - CREATE
+    - UPDATE
+    resources:
+    - proxmoxclustertemplates
+  sideEffects: None
+- admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: capmox-webhook-service
+      namespace: capmox-system
+      path: /mutate-infrastructure-cluster-x-k8s-io-v1alpha2-proxmoxmachine
+  failurePolicy: Fail
+  matchPolicy: Equivalent
+  name: default.proxmoxmachine.infrastructure.cluster.x-k8s.io
+  rules:
+  - apiGroups:
+    - infrastructure.cluster.x-k8s.io
+    apiVersions:
+    - v1alpha2
+    operations:
+    - CREATE
+    - UPDATE
+    resources:
+    - proxmoxmachines
+  sideEffects: None
+- admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: capmox-webhook-service
+      namespace: capmox-system
+      path: /mutate-infrastructure-cluster-x-k8s-io-v1alpha2-proxmoxmachinetemplate
+  failurePolicy: Fail
+  matchPolicy: Equivalent
+  name: default.proxmoxmachinetemplate.infrastructure.cluster.x-k8s.io
+  rules:
+  - apiGroups:
+    - infrastructure.cluster.x-k8s.io
+    apiVersions:
+    - v1alpha2
+    operations:
+    - CREATE
+    - UPDATE
+    resources:
+    - proxmoxmachinetemplates
+  sideEffects: None
+---
+apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingWebhookConfiguration
 metadata:
   annotations:
@@ -4018,7 +6538,7 @@ webhooks:
     service:
       name: capmox-webhook-service
       namespace: capmox-system
-      path: /validate-infrastructure-cluster-x-k8s-io-v1alpha1-proxmoxcluster
+      path: /validate-infrastructure-cluster-x-k8s-io-v1alpha2-proxmoxcluster
   failurePolicy: Fail
   matchPolicy: Equivalent
   name: validation.proxmoxcluster.infrastructure.cluster.x-k8s.io
@@ -4026,7 +6546,7 @@ webhooks:
   - apiGroups:
     - infrastructure.cluster.x-k8s.io
     apiVersions:
-    - v1alpha1
+    - v1alpha2
     operations:
     - CREATE
     - UPDATE
@@ -4039,7 +6559,28 @@ webhooks:
     service:
       name: capmox-webhook-service
       namespace: capmox-system
-      path: /validate-infrastructure-cluster-x-k8s-io-v1alpha1-proxmoxmachine
+      path: /validate-infrastructure-cluster-x-k8s-io-v1alpha2-proxmoxclustertemplate
+  failurePolicy: Fail
+  matchPolicy: Exact
+  name: validation.proxmoxclustertemplate.infrastructure.cluster.x-k8s.io
+  rules:
+  - apiGroups:
+    - infrastructure.cluster.x-k8s.io
+    apiVersions:
+    - v1alpha2
+    operations:
+    - CREATE
+    - UPDATE
+    resources:
+    - proxmoxclustertemplates
+  sideEffects: None
+- admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: capmox-webhook-service
+      namespace: capmox-system
+      path: /validate-infrastructure-cluster-x-k8s-io-v1alpha2-proxmoxmachine
   failurePolicy: Fail
   matchPolicy: Equivalent
   name: validation.proxmoxmachine.infrastructure.cluster.x-k8s.io
@@ -4047,10 +6588,31 @@ webhooks:
   - apiGroups:
     - infrastructure.cluster.x-k8s.io
     apiVersions:
-    - v1alpha1
+    - v1alpha2
     operations:
     - CREATE
     - UPDATE
     resources:
     - proxmoxmachines
+  sideEffects: None
+- admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: capmox-webhook-service
+      namespace: capmox-system
+      path: /validate-infrastructure-cluster-x-k8s-io-v1alpha2-proxmoxmachinetemplate
+  failurePolicy: Fail
+  matchPolicy: Equivalent
+  name: validation.proxmoxmachinetemplate.infrastructure.cluster.x-k8s.io
+  rules:
+  - apiGroups:
+    - infrastructure.cluster.x-k8s.io
+    apiVersions:
+    - v1alpha2
+    operations:
+    - CREATE
+    - UPDATE
+    resources:
+    - proxmoxmachinetemplates
   sideEffects: None

@@ -1,12 +1,12 @@
 export NAME=capi-providers-infraprovider-proxmox
 export NAMESPACE=cozy-cluster-api
 
-CAPMOX_VERSION=v0.7.7
+CAPMOX_VERSION=v0.9.2
 CAPMOX_URL=https://github.com/ionos-cloud/cluster-api-provider-proxmox/releases/download/$(CAPMOX_VERSION)
 # SHA-256 of the two release assets at CAPMOX_VERSION. A release tag can be moved;
 # these cannot. Bumping the version means recording the new sums here.
-CAPMOX_SHA256_COMPONENTS=831e3debeb677e9a73183dc858e9fd673f4346c18dafeb4cddee62823c059589
-CAPMOX_SHA256_METADATA=66a57b6865ed68cf4edf460dfa4c75fa7ff80f27e519a9a062cafceeabb88500
+CAPMOX_SHA256_COMPONENTS=6817322435b42cfda07a8f94006bacb709afb83445ce24545af253c7904755d8
+CAPMOX_SHA256_METADATA=df2916a79503ac053f6a9866a8de025e780e24d6d472f00f59f84898b5a1c572
 
 include ../../../hack/package.mk
 

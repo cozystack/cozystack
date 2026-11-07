@@ -1,7 +1,7 @@
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: v0.7.7-infraprovider-proxmox
+  name: v0.9.2-infraprovider-proxmox
   {{- /*
     NOT 'infraprovider-components: cozy'. That label already identifies the
     KubeVirt provider's ConfigMap, and a shared label would put both in the
