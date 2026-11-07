@@ -5,7 +5,8 @@ release:
 templates:
   - templates/proxmox-vm.yaml
 set:
-  substrate: proxmox
+  _cluster:
+    vm-substrate: proxmox
   fullnameOverride: vm-instance-bare
 kubernetesProvider:
   scheme:

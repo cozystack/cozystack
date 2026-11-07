@@ -8,13 +8,13 @@ release:
 templates:
   - templates/proxmox-vm.yaml
 set:
-  substrate: proxmox
   fullnameOverride: vm-instance-web
   disks:
     - name: web-system
   networks:
     - name: lan
   _cluster:
+    vm-substrate: proxmox
     scheduling:
       dedicatedNodesForWindowsVMs: "false"
 capabilities:

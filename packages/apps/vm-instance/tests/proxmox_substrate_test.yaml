@@ -12,7 +12,6 @@ templates:
   - templates/vm.yaml
   - templates/service.yaml
 set:
-  substrate: proxmox
   fullnameOverride: vm-instance-web
   disks:
     - name: web-system
@@ -21,6 +20,7 @@ set:
   sshKeys:
     - ssh-ed25519 AAAATEST
   _cluster:
+    vm-substrate: proxmox
     scheduling:
       dedicatedNodesForWindowsVMs: "false"
 kubernetesProvider:
@@ -476,3 +476,11 @@ tests:
       - matchRegex:
           path: spec.vmSpec.smbiosUUID
           pattern: "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-9[0-9a-f]{3}-[0-9a-f]{12}$"
+  - it: refuses a leftover per-app substrate that disagrees with the platform
+    # vm.yaml renders first and is the one that fails.
+    template: templates/vm.yaml
+    set:
+      substrate: kubevirt
+    asserts:
+      - failedTemplate:
+          errorPattern: "substrate is a platform setting now"

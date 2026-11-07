@@ -1,10 +1,11 @@
 {{- /*
-  substrate decides what a disk is: a CDI DataVolume on kubevirt, a Proxmox
+  The platform's vmSubstrate (_cluster.vm-substrate in the cozystack-values
+  Secret) decides what a disk is: a CDI DataVolume on kubevirt, a Proxmox
   volume on a holder VM on proxmox. It is safe to choose only once: the two
   objects share nothing, so switching would render a new, empty disk under the
-  same name while the old one still holds the data. The `## @immutable` marker
-  is dashboard-only, which is why this reads the live object of the other
-  substrate and refuses when it exists.
+  same name while the old one still holds the data. A platform that changes
+  vmSubstrate later is refused here: this reads the live object of the other
+  substrate and fails when it exists.
 
   Each lookup is gated on its API being served: a lookup of a kind the
   cluster does not know fails the render instead of returning nothing, and a
@@ -14,17 +15,21 @@
   unit tests are unaffected and a first install has nothing to compare against.
 */}}
 {{- define "vm-disk.substrate" -}}
-{{- $substrate := .Values.substrate | default "kubevirt" -}}
+{{- $substrate := index (.Values._cluster | default dict) "vm-substrate" | default "kubevirt" -}}
 {{- if and (ne $substrate "kubevirt") (ne $substrate "proxmox") -}}
-{{- fail (printf "substrate must be \"kubevirt\" or \"proxmox\", got %q" $substrate) -}}
+{{- fail (printf "_cluster.vm-substrate must be \"kubevirt\" or \"proxmox\", got %q; it comes from vmSubstrate in the platform values" $substrate) -}}
+{{- end -}}
+{{- /* Values written before vmSubstrate may still carry the per-app key. One that matches is harmless; one that disagrees would build on the other hypervisor than the owner asked for. */ -}}
+{{- if ne (.Values.substrate | default $substrate | toString) $substrate -}}
+{{- fail (printf "substrate is a platform setting now (vmSubstrate in the platform values, here %q); remove substrate: %v from the values of %s" $substrate .Values.substrate .Release.Name) -}}
 {{- end -}}
 {{- if eq $substrate "proxmox" -}}
 {{- if and (.Capabilities.APIVersions.Has "cdi.kubevirt.io/v1beta1/DataVolume") (lookup "cdi.kubevirt.io/v1beta1" "DataVolume" .Release.Namespace .Release.Name) -}}
-{{- fail (printf "vm-disk: %s already exists as a DataVolume (substrate kubevirt) and substrate is now \"proxmox\". A disk cannot move between hypervisors; create a new disk on the other substrate and copy the data." .Release.Name) -}}
+{{- fail (printf "vm-disk: %s already exists as a DataVolume (substrate kubevirt) and the platform's vmSubstrate is now \"proxmox\". A disk cannot move between hypervisors; create a new disk on the other substrate and copy the data." .Release.Name) -}}
 {{- end -}}
 {{- else -}}
 {{- if and (.Capabilities.APIVersions.Has "proxmox.alperen.cloud/v1alpha1/VirtualMachineVolume") (lookup "proxmox.alperen.cloud/v1alpha1" "VirtualMachineVolume" .Release.Namespace .Release.Name) -}}
-{{- fail (printf "vm-disk: %s already exists as a VirtualMachineVolume (substrate proxmox) and substrate is now %q. A disk cannot move between hypervisors; create a new disk on the other substrate and copy the data." .Release.Name $substrate) -}}
+{{- fail (printf "vm-disk: %s already exists as a VirtualMachineVolume (substrate proxmox) and the platform's vmSubstrate is now %q. A disk cannot move between hypervisors; create a new disk on the other substrate and copy the data." .Release.Name $substrate) -}}
 {{- end -}}
 {{- end -}}
 {{- $substrate -}}
