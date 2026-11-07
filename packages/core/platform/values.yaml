@@ -753,6 +753,22 @@ kubernetesWorkerImage: {}
 # the defaults only carry a URL. Empty (the default) forwards nothing and keeps
 # the kubevirt collection.
 vmDefaultImages: {}
+# Which hypervisor runs tenant virtual machines, the vm-disk and vm-instance
+# applications. `kubevirt` (the default) runs them as pods inside this cluster.
+# `proxmox` runs every one of them on the external Proxmox VE cluster of
+# cozystack.proxmox-vm through kubemox, so that package has to be in
+# bundles.enabledPackages. Tenants keep the same values: a disk becomes a
+# volume kept on a per-namespace holder VM, `networks`, `instanceType`,
+# `instanceProfile` and `gpus` map through the package's catalog (an empty
+# `networks` list is the catalog's default tenant network), and `cloudInit`
+# plus `sshKeys` reach the guest as a NoCloud ISO. Fields with no exact
+# Proxmox counterpart map to the nearest one: `netplanDhcp` (the address is
+# the platform's anyway), `runStrategy` RerunOnFailure and Once (start like
+# Always), the `rt1` types (pinned cores, no realtime scheduling).
+# It reaches the charts as _cluster.vm-substrate and is chosen once: a machine
+# or disk that already exists on the other hypervisor fails its next render
+# rather than being recreated empty. vmDefaultImages.substrate defaults to it.
+vmSubstrate: kubevirt
 # Pod scheduling configuration
 scheduling:
   globalAppTopologySpreadConstraints: ""

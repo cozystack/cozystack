@@ -93,7 +93,7 @@ tests:
         substrate: proxmox
     asserts:
       - failedTemplate:
-          errorPattern: "vmDefaultImages.substrate is proxmox, so cozystack.vm-default-images needs cozystack.proxmox-vm"
+          errorPattern: "the golden images are on the proxmox substrate .*, so cozystack.vm-default-images needs cozystack.proxmox-vm"
   - it: does not emit the package when the values are set but the package is not enabled
     set:
       bundles:
@@ -113,3 +113,43 @@ tests:
           name: cozystack.vm-default-images
           any: true
         not: true
+  - it: follows vmSubstrate when vmDefaultImages names no substrate
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+        iaas:
+          enabled: true
+        enabledPackages:
+          - cozystack.vm-default-images
+          - cozystack.proxmox-vm
+      vmSubstrate: proxmox
+    documentSelector:
+      path: metadata.name
+      value: cozystack.vm-default-images
+    asserts:
+      - equal:
+          path: spec.variant
+          value: proxmox
+  - it: lets vmDefaultImages.substrate override vmSubstrate
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+        iaas:
+          enabled: true
+        enabledPackages:
+          - cozystack.vm-default-images
+          - cozystack.proxmox-vm
+      vmSubstrate: proxmox
+      vmDefaultImages:
+        substrate: kubevirt
+    documentSelector:
+      path: metadata.name
+      value: cozystack.vm-default-images
+    asserts:
+      - equal:
+          path: spec.variant
+          value: default
