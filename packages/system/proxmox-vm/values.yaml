@@ -1,8 +1,8 @@
 ## @section Proxmox VM substrate
 ##
 ## Runs the vm-disk and vm-instance applications on an external Proxmox VE
-## cluster instead of KubeVirt. The applications keep their API; with
-## `substrate: proxmox` they render kubemox objects — VirtualMachineVolume for
+## cluster instead of KubeVirt. The applications keep their API; when the
+## platform sets `vmSubstrate: proxmox` they render kubemox objects — VirtualMachineVolume for
 ## a disk, VirtualMachine for an instance — and kubemox, installed by this
 ## package, drives the hypervisor over its API. Nothing of the hypervisor's
 ## credentials reaches a tenant namespace: the connection objects below are

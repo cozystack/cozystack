@@ -265,6 +265,14 @@ stringData:
              (Tenant/root spec.ingress). `dig`, as for monitoring-enabled
              above, so an explicit false survives. */}}
       ingress-enabled: {{ dig "rootEnabled" true (.Values.ingress | default dict) | quote }}
+      {{- /* The hypervisor of every vm-disk and vm-instance (see vmSubstrate in
+             values.yaml). Validated here so a typo stops the platform render
+             instead of each tenant's next VM render. */}}
+      {{- $vmSubstrate := .Values.vmSubstrate | default "kubevirt" | toString }}
+      {{- if not (has $vmSubstrate (list "kubevirt" "proxmox")) }}
+      {{-   fail (printf "vmSubstrate must be kubevirt or proxmox, got %q" $vmSubstrate) }}
+      {{- end }}
+      vm-substrate: {{ $vmSubstrate | quote }}
       {{- /* The rate each shared-central tracing tenant's collector holds it
              to. Only written when set: every release in every tenant reads
              this Secret, and a key appearing would upgrade all of them. */}}

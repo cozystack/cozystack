@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Every KubeVirt instance type and preference name the platform ships must
 # mean something on Proxmox too, so that a values file that works on the
-# kubevirt substrate works with `substrate: proxmox`. Architectures this
+# kubevirt substrate works on a platform with `vmSubstrate: proxmox`. Architectures this
 # hypervisor cannot run (arm64, s390x) are the one exception: on KubeVirt such
 # a machine is just as unschedulable on an x86 cluster.
 set -euo pipefail

@@ -93,3 +93,16 @@ tests:
     asserts:
       - failedTemplate:
           errorPattern: "cozystack.proxmox-vm requires cozystack.capi-provider-ipam-in-cluster, which is listed in bundles.disabledPackages"
+  - it: refuses vmSubstrate proxmox without the package
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+        iaas:
+          enabled: true
+        enabledPackages: []
+      vmSubstrate: proxmox
+    asserts:
+      - failedTemplate:
+          errorPattern: "vmSubstrate is proxmox, so cozystack.proxmox-vm has to be in bundles.enabledPackages"
