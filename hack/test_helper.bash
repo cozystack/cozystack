@@ -9,3 +9,31 @@ strict_setup() {
 setup() {
   strict_setup
 }
+
+# Only a successful matcher explicitly reporting no match passes; missing,
+# non-regular or unreadable files and matcher errors fail closed.
+assert_file_lacks_pattern() {
+  local pattern="$1"
+  local file="$2"
+  local found
+
+  if [ ! -f "${file}" ]; then
+    printf 'expected %s to exist so it could be checked for: %s\n' "${file}" "${pattern}" >&2
+    return 1
+  fi
+  # Validate even an empty file, and keep the match result separate from awk's
+  # status: some implementations also use status 1 for evaluation errors.
+  if ! found=$(awk -v pattern="${pattern}" '
+    BEGIN { match("", pattern) }
+    $0 ~ pattern { found = 1 }
+    END { print found ? 1 : 0 }
+  ' "${file}"); then
+    printf 'awk could not evaluate pattern %s against %s\n' "${pattern}" "${file}" >&2
+    return 1
+  fi
+  if [ "${found}" != 0 ]; then
+    printf 'expected %s not to match: %s\n' "${file}" "${pattern}" >&2
+    return 1
+  fi
+  return 0
+}

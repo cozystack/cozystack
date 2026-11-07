@@ -129,23 +129,6 @@ assert_file_contains() {
   return 1
 }
 
-assert_file_lacks_pattern() {
-  local pattern="$1"
-  local file="$2"
-
-  # A missing file must fail rather than vacuously pass: awk exits 2 on an
-  # unreadable path, which is indistinguishable from "no line matched" once the
-  # status is folded into an if.
-  if [ ! -f "${file}" ]; then
-    printf 'expected %s to exist so it could be checked for: %s\n' "${file}" "${pattern}" >&2
-    return 1
-  fi
-  if awk -v pattern="${pattern}" '$0 ~ pattern { found = 1 } END { exit found ? 0 : 1 }' "${file}"; then
-    printf 'expected %s not to match: %s\n' "${file}" "${pattern}" >&2
-    return 1
-  fi
-}
-
 # The function under test redirects a command's stderr into a report file and
 # decides which artifact to write from it. cozytest.sh runs under `set -x`, so
 # the tracer's own line for that command is emitted on the very stderr being
