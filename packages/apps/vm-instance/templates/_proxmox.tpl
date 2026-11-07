@@ -1,27 +1,32 @@
 {{- /*
-  substrate decides what the machine is: a KubeVirt VirtualMachine (a pod)
+  The platform's vmSubstrate (_cluster.vm-substrate in the cozystack-values
+  Secret) decides what the machine is: a KubeVirt VirtualMachine (a pod)
   on kubevirt, a kubemox VirtualMachine on an external Proxmox cluster on
-  proxmox. Safe to choose only once: switching would render a second
-  machine under the same name on the other hypervisor while the first keeps
-  running. The `## @immutable` marker is dashboard-only, which is why this
-  reads the live object of the other substrate and refuses when it exists.
+  proxmox. Safe to choose only once: switching the platform later would
+  render a second machine under the same name on the other hypervisor while
+  the first keeps running, so this reads the live object of the other
+  substrate and refuses when it exists.
   Each lookup is gated on its API being served (a lookup of a kind the
   cluster does not know fails the render), and inert offline like the other
   lookup guards in this chart.
 */}}
 {{- define "virtual-machine.substrate" -}}
-{{- $substrate := .Values.substrate | default "kubevirt" -}}
+{{- $substrate := index (.Values._cluster | default dict) "vm-substrate" | default "kubevirt" -}}
 {{- if and (ne $substrate "kubevirt") (ne $substrate "proxmox") -}}
-{{- fail (printf "substrate must be \"kubevirt\" or \"proxmox\", got %q" $substrate) -}}
+{{- fail (printf "_cluster.vm-substrate must be \"kubevirt\" or \"proxmox\", got %q; it comes from vmSubstrate in the platform values" $substrate) -}}
+{{- end -}}
+{{- /* Values written before vmSubstrate may still carry the per-app key. One that matches is harmless; one that disagrees would build on the other hypervisor than the owner asked for. */ -}}
+{{- if ne (.Values.substrate | default $substrate | toString) $substrate -}}
+{{- fail (printf "substrate is a platform setting now (vmSubstrate in the platform values, here %q); remove substrate: %v from the values of %s" $substrate .Values.substrate .Release.Name) -}}
 {{- end -}}
 {{- $name := include "virtual-machine.fullname" . -}}
 {{- if eq $substrate "proxmox" -}}
 {{- if and (.Capabilities.APIVersions.Has "kubevirt.io/v1/VirtualMachine") (lookup "kubevirt.io/v1" "VirtualMachine" .Release.Namespace $name) -}}
-{{- fail (printf "vm-instance: %s already runs on KubeVirt (substrate kubevirt) and substrate is now \"proxmox\". A machine cannot move between hypervisors; create a new instance on the other substrate." $name) -}}
+{{- fail (printf "vm-instance: %s already runs on KubeVirt (substrate kubevirt) and the platform's vmSubstrate is now \"proxmox\". A machine cannot move between hypervisors; create a new instance on the other substrate." $name) -}}
 {{- end -}}
 {{- else -}}
 {{- if and (.Capabilities.APIVersions.Has "proxmox.alperen.cloud/v1alpha1/VirtualMachine") (lookup "proxmox.alperen.cloud/v1alpha1" "VirtualMachine" .Release.Namespace $name) -}}
-{{- fail (printf "vm-instance: %s already runs on Proxmox (substrate proxmox) and substrate is now %q. A machine cannot move between hypervisors; create a new instance on the other substrate." $name $substrate) -}}
+{{- fail (printf "vm-instance: %s already runs on Proxmox (substrate proxmox) and the platform's vmSubstrate is now %q. A machine cannot move between hypervisors; create a new instance on the other substrate." $name $substrate) -}}
 {{- end -}}
 {{- end -}}
 {{- $substrate -}}

@@ -10,9 +10,9 @@ templates:
   - templates/proxmox-vm.yaml
   - templates/service.yaml
 set:
-  substrate: proxmox
   fullnameOverride: vm-instance-compat
   _cluster:
+    vm-substrate: proxmox
     scheduling:
       dedicatedNodesForWindowsVMs: "false"
 kubernetesProvider:

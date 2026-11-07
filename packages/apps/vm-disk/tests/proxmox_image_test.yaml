@@ -12,7 +12,8 @@ release:
 templates:
   - templates/proxmox-volume.yaml
 set:
-  substrate: proxmox
+  _cluster:
+    vm-substrate: proxmox
   storage: 20Gi
   storageClass: replicated
 kubernetesProvider:

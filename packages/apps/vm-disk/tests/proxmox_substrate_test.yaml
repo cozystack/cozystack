@@ -10,7 +10,8 @@ templates:
   - templates/proxmox-volume.yaml
   - templates/dv.yaml
 set:
-  substrate: proxmox
+  _cluster:
+    vm-substrate: proxmox
   storage: 20Gi
   storageClass: replicated
 kubernetesProvider:
@@ -169,10 +170,25 @@ tests:
   - it: refuses an unknown substrate
     template: templates/proxmox-volume.yaml
     set:
-      substrate: vsphere
+      _cluster:
+        vm-substrate: vsphere
     asserts:
       - failedTemplate:
-          errorPattern: "substrate must be \"kubevirt\" or \"proxmox\""
+          errorPattern: "_cluster.vm-substrate must be \"kubevirt\" or \"proxmox\""
+  - it: accepts a leftover per-app substrate that matches the platform
+    template: templates/proxmox-volume.yaml
+    set:
+      substrate: proxmox
+    asserts:
+      - isKind:
+          of: VirtualMachineVolume
+  - it: refuses a leftover per-app substrate that disagrees with the platform
+    template: templates/proxmox-volume.yaml
+    set:
+      substrate: kubevirt
+    asserts:
+      - failedTemplate:
+          errorPattern: "substrate is a platform setting now"
   - it: refuses substrate proxmox when the disk already is a DataVolume
     template: templates/proxmox-volume.yaml
     capabilities:
