@@ -22,7 +22,9 @@ spec:
       resources:
         limits:
           cpu: 500m
-          memory: 256Mi
+          # capmox caches every Secret in the cluster once it provisions a
+          # machine; 256Mi was OOMKilled with 1236 Secrets (87 MB as JSON).
+          memory: 512Mi
         requests:
           cpu: 10m
           memory: 64Mi
