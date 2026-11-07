@@ -101,6 +101,7 @@ spec:
     customConfig:
       - tcp-keepalive 0
       - loglevel notice
+      - maxmemory-policy {{ .Values.maxmemoryPolicy | default "noeviction" }}
       {{- if not .Values.size }}
       - appendonly no
       - save ""

