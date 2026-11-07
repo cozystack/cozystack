@@ -1,21 +1,11 @@
 import { describe, it, expect } from "vitest"
-import type { ApplicationInstance } from "@cozystack/types"
 import { consoleSocketPath, vmConsoleApi, vmPowerStatus, vmSubstrate } from "./vm-substrate.ts"
 
-function instance(spec?: Record<string, unknown>): ApplicationInstance {
-  return {
-    apiVersion: "apps.cozystack.io/v1alpha1",
-    kind: "VMInstance",
-    metadata: { name: "demo-vm", namespace: "tenant-root" },
-    ...(spec ? { spec } : {}),
-  }
-}
-
 describe("vmSubstrate", () => {
-  it("is kubevirt unless the VMInstance says proxmox", () => {
-    expect(vmSubstrate(instance())).toBe("kubevirt")
-    expect(vmSubstrate(instance({ substrate: "kubevirt" }))).toBe("kubevirt")
-    expect(vmSubstrate(instance({ substrate: "proxmox" }))).toBe("proxmox")
+  it("is kubevirt unless the platform config says proxmox", () => {
+    expect(vmSubstrate({})).toBe("kubevirt")
+    expect(vmSubstrate({ vmSubstrate: "kubevirt" })).toBe("kubevirt")
+    expect(vmSubstrate({ vmSubstrate: "proxmox" })).toBe("proxmox")
   })
 })
 

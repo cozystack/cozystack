@@ -29,7 +29,8 @@ const instance: ApplicationInstance = {
   metadata: { name: "demo-vm", namespace: "tenant-root" },
 }
 
-const proxmoxInstance: ApplicationInstance = { ...instance, spec: { substrate: "proxmox" } }
+// Nothing on the instance names the hypervisor; the platform config does.
+const proxmoxInstance: ApplicationInstance = { ...instance }
 
 function makeClient(printableStatus?: string) {
   const client = new K8sClient()
@@ -173,7 +174,7 @@ describe("VMPowerControls actions", () => {
 describe("VMPowerControls on the Proxmox substrate", () => {
   it("watches the kubemox VirtualMachine of the same name", async () => {
     const client = makeProxmoxClient("stopped")
-    renderWithK8sProvider(<VMPowerControls ad={makeAd()} instance={proxmoxInstance} />, { client })
+    renderWithK8sProvider(<VMPowerControls ad={makeAd()} instance={proxmoxInstance} />, { client, config: { vmSubstrate: "proxmox" } })
 
     await waitFor(() =>
       expect(client.list).toHaveBeenCalledWith(
@@ -188,7 +189,7 @@ describe("VMPowerControls on the Proxmox substrate", () => {
 
   it("reads the hypervisor state as the power status", async () => {
     const client = makeProxmoxClient("running")
-    renderWithK8sProvider(<VMPowerControls ad={makeAd()} instance={proxmoxInstance} />, { client })
+    renderWithK8sProvider(<VMPowerControls ad={makeAd()} instance={proxmoxInstance} />, { client, config: { vmSubstrate: "proxmox" } })
 
     await waitFor(() => expect(screen.getByText("Running")).toBeInTheDocument())
     expect(screen.getByRole("button", { name: "Start" })).toBeDisabled()
@@ -197,7 +198,7 @@ describe("VMPowerControls on the Proxmox substrate", () => {
 
   it("invokes the start action against subresources.proxmox.cozystack.io", async () => {
     const client = makeProxmoxClient("stopped")
-    renderWithK8sProvider(<VMPowerControls ad={makeAd()} instance={proxmoxInstance} />, { client })
+    renderWithK8sProvider(<VMPowerControls ad={makeAd()} instance={proxmoxInstance} />, { client, config: { vmSubstrate: "proxmox" } })
 
     const user = userEvent.setup()
     const startButton = await screen.findByRole("button", { name: "Start" })

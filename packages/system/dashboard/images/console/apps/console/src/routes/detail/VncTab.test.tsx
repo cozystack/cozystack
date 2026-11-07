@@ -50,7 +50,8 @@ function makeClient(printableStatus = "Stopped") {
   return client
 }
 
-const proxmoxInstance: ApplicationInstance = { ...instance, spec: { substrate: "proxmox" } }
+// Nothing on the instance names the hypervisor; the platform config does.
+const proxmoxInstance: ApplicationInstance = { ...instance }
 
 function makeProxmoxClient(state = "stopped") {
   const client = new K8sClient()
@@ -166,6 +167,7 @@ describe("VncTab on the Proxmox substrate", () => {
   it("watches the kubemox VirtualMachine instead of the KubeVirt one", async () => {
     const client = makeProxmoxClient()
     renderWithK8sProvider(<VncTab ad={makeAd("VMInstance")} instance={proxmoxInstance} />, {
+      config: { vmSubstrate: "proxmox" },
       client,
     })
 
@@ -183,6 +185,7 @@ describe("VncTab on the Proxmox substrate", () => {
   it("shows the hypervisor state in the not-running notice", async () => {
     const client = makeProxmoxClient("stopped")
     renderWithK8sProvider(<VncTab ad={makeAd("VMInstance")} instance={proxmoxInstance} />, {
+      config: { vmSubstrate: "proxmox" },
       client,
     })
 
@@ -194,12 +197,14 @@ describe("VncTab on the Proxmox substrate", () => {
   it("resolves the same name as VMPowerControls there too", async () => {
     const pcClient = makeProxmoxClient()
     renderWithK8sProvider(<VMPowerControls ad={makeAd("VMInstance")} instance={proxmoxInstance} />, {
+      config: { vmSubstrate: "proxmox" },
       client: pcClient,
     })
     await waitFor(() => expect(pcClient.list).toHaveBeenCalled())
 
     const vncClient = makeProxmoxClient()
     renderWithK8sProvider(<VncTab ad={makeAd("VMInstance")} instance={proxmoxInstance} />, {
+      config: { vmSubstrate: "proxmox" },
       client: vncClient,
     })
     await waitFor(() => expect(vncClient.list).toHaveBeenCalled())

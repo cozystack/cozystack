@@ -1,4 +1,4 @@
-import type { ApplicationInstance } from "@cozystack/types"
+import type { AppConfig } from "./config.ts"
 
 /**
  * Where a vm-instance runs, and which APIs its console and power buttons go
@@ -12,8 +12,8 @@ import type { ApplicationInstance } from "@cozystack/types"
  *   the subresources under subresources.proxmox.cozystack.io, served by the
  *   platform's console proxy, all on the VirtualMachine itself.
  *
- * The VMInstance's spec.substrate picks one; everything else in the tabs is
- * shared.
+ * The platform's vmSubstrate, served in the console config, picks one for
+ * every machine; everything else in the tabs is shared.
  */
 export type VMSubstrate = "kubevirt" | "proxmox"
 
@@ -62,8 +62,8 @@ const PROXMOX: VMConsoleApi = {
   },
 }
 
-export function vmSubstrate(instance: ApplicationInstance): VMSubstrate {
-  return instance.spec?.substrate === "proxmox" ? "proxmox" : "kubevirt"
+export function vmSubstrate(config: AppConfig): VMSubstrate {
+  return config.vmSubstrate === "proxmox" ? "proxmox" : "kubevirt"
 }
 
 export function vmConsoleApi(substrate: VMSubstrate): VMConsoleApi {

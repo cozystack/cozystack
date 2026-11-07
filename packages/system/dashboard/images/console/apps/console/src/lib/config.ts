@@ -15,6 +15,9 @@ export interface AppConfig {
   // Absent when the platform leaves publishing.serviceDomain empty; the tab
   // then shows no hostname.
   serviceDomain?: string
+  // Hypervisor of every VMInstance and VMDisk on this platform, from the
+  // platform's vmSubstrate. Absent means kubevirt.
+  vmSubstrate?: "kubevirt" | "proxmox"
 }
 
 export const AppConfigContext = createContext<AppConfig>({})

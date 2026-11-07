@@ -8,6 +8,7 @@ import {
 } from "@cozystack/k8s-client"
 import type { ApplicationDefinition, ApplicationInstance } from "@cozystack/types"
 import { releasePrefix } from "../../lib/app-definitions.ts"
+import { useAppConfig } from "../../lib/config.ts"
 import { vmConsoleApi, vmPowerStatus, vmSubstrate, type VMStatus } from "../../lib/vm-substrate.ts"
 
 // The VirtualMachine object and the start/stop/restart action endpoints live
@@ -33,7 +34,7 @@ export function VMPowerControls({
   // discovers the prefix from the ApplicationDefinition (falling back to
   // "<singular>-") so this resolves identically to VncTab — never hardcode it.
   const vmName = `${releasePrefix(ad)}${instance.metadata.name}`
-  const substrate = vmSubstrate(instance)
+  const substrate = vmSubstrate(useAppConfig())
   const api = vmConsoleApi(substrate)
 
   // The VirtualMachine object (and its status) is served by the substrate's

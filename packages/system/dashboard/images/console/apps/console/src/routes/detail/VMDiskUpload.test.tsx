@@ -18,7 +18,7 @@ const instance: ApplicationInstance = {
   apiVersion: "apps.cozystack.io/v1alpha1",
   kind: "VMDisk",
   metadata: { name: "data", namespace: "tenant-root" },
-  spec: { substrate: "proxmox", source: { upload: {} } },
+  spec: { source: { upload: {} } },
 }
 
 // The kubemox VirtualMachineVolume behind the disk, waiting for its file.
@@ -88,7 +88,7 @@ function pickFile(name: string) {
 describe("VMDiskUpload", () => {
   it("shows nothing while the volume waits for no upload", async () => {
     const client = makeClient()
-    renderWithK8sProvider(<VMDiskUpload ad={ad} instance={instance} />, { client })
+    renderWithK8sProvider(<VMDiskUpload ad={ad} instance={instance} />, { client, config: { vmSubstrate: "proxmox" } })
     await waitFor(() => expect(client.list).toHaveBeenCalled())
     expect(screen.queryByText("Upload image")).toBeNull()
   })
@@ -106,7 +106,7 @@ describe("VMDiskUpload", () => {
   it("streams the picked file to the volume's upload subresource with progress", async () => {
     vi.stubGlobal("XMLHttpRequest", FakeXHR)
     const client = makeClient({ node: "pve1", storage: "local", content: "import", filename: "vm-disk-data" })
-    renderWithK8sProvider(<VMDiskUpload ad={ad} instance={instance} />, { client })
+    renderWithK8sProvider(<VMDiskUpload ad={ad} instance={instance} />, { client, config: { vmSubstrate: "proxmox" } })
     await screen.findByText("Upload image")
     expect(client.list).toHaveBeenCalledWith(
       "proxmox.alperen.cloud",
@@ -139,7 +139,7 @@ describe("VMDiskUpload", () => {
     FakeXHR.status = 400
     FakeXHR.responseText = JSON.stringify({ kind: "Status", message: '"a.vhdx" is not an image the volume takes' })
     const client = makeClient({ content: "iso" })
-    renderWithK8sProvider(<VMDiskUpload ad={ad} instance={instance} />, { client })
+    renderWithK8sProvider(<VMDiskUpload ad={ad} instance={instance} />, { client, config: { vmSubstrate: "proxmox" } })
     await screen.findByText("Upload image")
     expect((document.querySelector('input[type="file"]') as HTMLInputElement).accept).toBe(".iso,.img")
 

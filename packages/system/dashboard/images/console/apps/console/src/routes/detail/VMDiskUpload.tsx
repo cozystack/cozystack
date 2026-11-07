@@ -4,6 +4,7 @@ import { Button } from "@cozystack/ui"
 import { useK8sList, type K8sResource } from "@cozystack/k8s-client"
 import type { ApplicationDefinition, ApplicationInstance } from "@cozystack/types"
 import { releasePrefix } from "../../lib/app-definitions.ts"
+import { useAppConfig } from "../../lib/config.ts"
 import { vmSubstrate } from "../../lib/vm-substrate.ts"
 import { imageAccept, uploadImage, volumeUploadPath, type VolumeStatus } from "../../lib/image-upload.ts"
 
@@ -26,7 +27,7 @@ export function VMDiskUpload({
   // The VirtualMachineVolume is named after the vm-disk release, as the
   // kubemox VirtualMachine is after the vm-instance one.
   const volumeName = `${releasePrefix(ad)}${instance.metadata.name}`
-  const proxmox = vmSubstrate(instance) === "proxmox"
+  const proxmox = vmSubstrate(useAppConfig()) === "proxmox"
 
   const { data: volumes } = useK8sList<K8sResource<unknown, VolumeStatus>>(
     { apiGroup: "proxmox.alperen.cloud", apiVersion: "v1alpha1", plural: "virtualmachinevolumes", namespace: ns },
