@@ -1,0 +1,68 @@
+suite: bucket BucketClass selection
+templates:
+  - templates/bucketclaim.yaml
+
+release:
+  name: bucket-my-bucket
+  namespace: tenant-root
+
+set:
+  _namespace:
+    seaweedfs: tenant-root
+
+tests:
+  - it: provisions from the plain class by default
+    documentIndex: 0
+    asserts:
+      - equal:
+          path: spec.bucketClassName
+          value: tenant-root
+
+  - it: keeps the -lock class, with its default retention, when only locking is set
+    documentIndex: 0
+    set:
+      locking: true
+    asserts:
+      - equal:
+          path: spec.bucketClassName
+          value: tenant-root-lock
+
+  - it: provisions from -lock-noretention when the default retention is turned off
+    documentIndex: 0
+    set:
+      locking: true
+      lockingDefaultRetention: false
+    asserts:
+      - equal:
+          path: spec.bucketClassName
+          value: tenant-root-lock-noretention
+
+  - it: ignores lockingDefaultRetention without locking
+    documentIndex: 0
+    set:
+      lockingDefaultRetention: false
+    asserts:
+      - equal:
+          path: spec.bucketClassName
+          value: tenant-root
+
+  - it: keeps -lock when lockingDefaultRetention is absent from the values
+    documentIndex: 0
+    set:
+      locking: true
+      lockingDefaultRetention: null
+    asserts:
+      - equal:
+          path: spec.bucketClassName
+          value: tenant-root-lock
+
+  - it: puts the storage pool before the lock suffixes
+    documentIndex: 0
+    set:
+      storagePool: fast
+      locking: true
+      lockingDefaultRetention: false
+    asserts:
+      - equal:
+          path: spec.bucketClassName
+          value: tenant-root-fast-lock-noretention

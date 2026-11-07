@@ -19,6 +19,9 @@ type ConfigSpec struct {
 	// Provisions bucket from the `-lock` BucketClass (with object lock enabled).
 	// +kubebuilder:default:=false
 	Locking bool `json:"locking"`
+	// With `locking`, keeps the default retention of the `-lock` BucketClass (COMPLIANCE, 365 days). Set to `false` to provision from the `-lock-noretention` BucketClass instead: Object Lock is enabled with no default retention, and retention is then set on the bucket or per object through the S3 API. Read at creation only.
+	// +kubebuilder:default:=true
+	LockingDefaultRetention bool `json:"lockingDefaultRetention"`
 	// Selects a specific BucketClass by storage pool name.
 	// +kubebuilder:default:=""
 	StoragePool string `json:"storagePool,omitempty"`
