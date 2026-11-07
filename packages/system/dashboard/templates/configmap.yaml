@@ -26,6 +26,11 @@
 {{- with index .Values._cluster "service-domain" }}
 {{- $_ := set $config "serviceDomain" . }}
 {{- end }}
+{{- /* Which hypervisor runs VMInstances and VMDisks; the console and power
+       tabs pick their APIs by it. Omitted on kubevirt, the console's default. */}}
+{{- if eq (index .Values._cluster "vm-substrate" | default "kubevirt") "proxmox" }}
+{{- $_ := set $config "vmSubstrate" "proxmox" }}
+{{- end }}
 apiVersion: v1
 kind: ConfigMap
 metadata:

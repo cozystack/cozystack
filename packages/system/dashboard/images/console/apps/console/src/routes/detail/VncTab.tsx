@@ -5,6 +5,7 @@ import type { ApplicationDefinition, ApplicationInstance } from "@cozystack/type
 import { releasePrefix } from "../../lib/app-definitions.ts"
 import { pastesWithMeta } from "../../lib/platform.ts"
 import { planKeystrokes } from "../../lib/vnc-keymap.ts"
+import { useAppConfig } from "../../lib/config.ts"
 import {
   consoleSocketPath,
   vmConsoleApi,
@@ -52,7 +53,7 @@ export function VncTab({ ad, instance, keyDelayMs = DEFAULT_KEY_DELAY_MS }: VncT
   const vmName = `${releasePrefix(ad)}${instance.metadata.name}`
   // The substrate the machine runs on picks the VirtualMachine object to
   // watch and the aggregated API the console comes from; the rest is shared.
-  const substrate = vmSubstrate(instance)
+  const substrate = vmSubstrate(useAppConfig())
   const api = vmConsoleApi(substrate)
 
   // Don't open a VNC websocket unless the VM is actually running — there is no

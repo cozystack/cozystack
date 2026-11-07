@@ -104,7 +104,8 @@ const instance: ApplicationInstance = {
   metadata: { name: "demo-vm", namespace: "tenant-root" },
 }
 
-const proxmoxInstance: ApplicationInstance = { ...instance, spec: { substrate: "proxmox" } }
+// Nothing on the instance names the hypervisor; the platform config does.
+const proxmoxInstance: ApplicationInstance = { ...instance }
 
 function makeProxmoxClient(state = "running") {
   const client = new K8sClient()
@@ -370,6 +371,7 @@ describe("SerialTab on the Proxmox substrate", () => {
     vi.stubGlobal("WebSocket", FakeWebSocket)
     const client = makeProxmoxClient()
     renderWithK8sProvider(<SerialTab ad={makeAd("VMInstance")} instance={proxmoxInstance} />, {
+      config: { vmSubstrate: "proxmox" },
       client,
     })
 
@@ -391,6 +393,7 @@ describe("SerialTab on the Proxmox substrate", () => {
   it("opens no console while the hypervisor reports the machine stopped", async () => {
     vi.stubGlobal("WebSocket", FakeWebSocket)
     renderWithK8sProvider(<SerialTab ad={makeAd("VMInstance")} instance={proxmoxInstance} />, {
+      config: { vmSubstrate: "proxmox" },
       client: makeProxmoxClient("stopped"),
     })
 

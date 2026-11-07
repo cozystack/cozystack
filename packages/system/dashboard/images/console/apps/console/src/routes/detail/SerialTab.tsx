@@ -8,6 +8,7 @@ import type { ApplicationDefinition, ApplicationInstance } from "@cozystack/type
 import { releasePrefix } from "../../lib/app-definitions.ts"
 import { pastesWithMeta } from "../../lib/platform.ts"
 import { openSerialStream, serialConsoleUrl, type SerialStream } from "../../lib/serial-stream.ts"
+import { useAppConfig } from "../../lib/config.ts"
 import { vmConsoleApi, vmPowerStatus, vmSubstrate, type VMStatus } from "../../lib/vm-substrate.ts"
 
 type ConnectionPhase = "connecting" | "connected" | "closed"
@@ -34,7 +35,7 @@ export function SerialTab({ ad, instance }: SerialTabProps) {
   const vmName = `${releasePrefix(ad)}${instance.metadata.name}`
   // The substrate picks the VirtualMachine object to watch and the aggregated
   // API the console comes from (see lib/vm-substrate.ts).
-  const substrate = vmSubstrate(instance)
+  const substrate = vmSubstrate(useAppConfig())
   const api = vmConsoleApi(substrate)
 
   const { data: vmList, isLoading: vmLoading } = useK8sList<K8sResource<unknown, VMStatus>>(
