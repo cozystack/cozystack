@@ -179,3 +179,26 @@ STUBEOF
         }
     done
 }
+
+# cert-manager issues the Secret of a Certificate that still exists again as
+# soon as it is deleted, so the Certificate has to go first or its Secret
+# outlives the run.
+@test "the round-trip cleanup deletes the Certificate before its Secret" {
+    script=$(yq 'select(.metadata.name == "clickhouse-3-system-bucket-roundtrip") | .spec.steps[]
+        | select(.name == "run") | .finally[]
+        | select(.description == "system-bucket round-trip cleanup") | .script.content' \
+        hack/e2e-chainsaw/clickhouse/chainsaw-test.yaml)
+    [ -n "$script" ] || { echo "the run step has no system-bucket round-trip cleanup" >&2; false; }
+    cat >"$STUB/kubectl" <<'STUBEOF'
+#!/bin/bash
+echo "$*" >>"$STUB/calls"
+STUBEOF
+    PATH="$STUB:$PATH" NAMESPACE=tenant-root sh -c "$script"
+    cert=$(grep -nE '^-n tenant-root delete certificate e2e-system-bucket-s3( |$)' "$STUB/calls" | cut -d: -f1)
+    secret=$(grep -nE '^-n tenant-root delete secret e2e-system-bucket-s3-tls( |$)' "$STUB/calls" | cut -d: -f1)
+    [ -n "$cert" ] && [ -n "$secret" ] && [ "$cert" -lt "$secret" ] || {
+        echo "the cleanup does not delete Certificate e2e-system-bucket-s3 before Secret e2e-system-bucket-s3-tls; kubectl calls:" >&2
+        cat "$STUB/calls" >&2
+        false
+    }
+}

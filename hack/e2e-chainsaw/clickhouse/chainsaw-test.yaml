@@ -559,10 +559,12 @@ spec:
           '
     # Chainsaw did not apply these: the jobs come from the script and the
     # Backup from the controller, and deleting a BackupJob reclaims no Backup.
-    # The Certificate's Secret outlives the Certificate Chainsaw deletes.
+    # The Certificate's Secret outlives the Certificate, and cert-manager
+    # issues it again while the Certificate exists, so the Certificate goes
+    # first rather than at Chainsaw's cleanup after this finally.
     - description: system-bucket round-trip cleanup
       script:
-        timeout: 3m
+        timeout: 4m
         content: |
           set -eu
           kubectl -n "$NAMESPACE" delete restorejob sysbucket-restore --ignore-not-found --wait=true --timeout=30s
@@ -570,4 +572,5 @@ spec:
           # The driver names the Backup after the BackupJob; by name it is
           # found even when status.backupRef was never written.
           kubectl -n "$NAMESPACE" delete backup sysbucket-backup --ignore-not-found --wait=true --timeout=60s
+          kubectl -n "$NAMESPACE" delete certificate e2e-system-bucket-s3 --ignore-not-found --wait=true --timeout=30s
           kubectl -n "$NAMESPACE" delete secret e2e-system-bucket-s3-tls --ignore-not-found --wait=true --timeout=30s
