@@ -81,6 +81,34 @@ func TestWalkResolvesCAPKNodeVMToKubernetesApp(t *testing.T) {
 	}
 }
 
+func TestWalkFollowsCAPKLabelsOnlyFromKubeVirtVMs(t *testing.T) {
+	// The CAPK labels name a valid KubevirtMachine in the same namespace in
+	// every case: only the kind and API group of the labelled object differ, so
+	// each case fails solely on the guard that restricts the bridge to
+	// kubevirt.io/v1 VirtualMachines.
+	capkLabels := map[string]string{
+		KubevirtMachineNameLabel:      "kubernetes-cluster-a-md0-x-y",
+		KubevirtMachineNamespaceLabel: capkNamespace,
+	}
+	for _, tc := range []struct {
+		name, apiVersion, kind string
+	}{
+		{name: "other kind in the kubevirt.io group", apiVersion: VMAPIVersion, kind: "Cluster"},
+		{name: "VirtualMachineInstance", apiVersion: VMAPIVersion, kind: "VirtualMachineInstance"},
+		{name: "VirtualMachine of another group", apiVersion: "example.com/v1", kind: VMKind},
+		{name: "VirtualMachine of another kubevirt.io version", apiVersion: "kubevirt.io/v1alpha3", kind: VMKind},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, objs, mapper := capkNodeChain(nil)
+			impostor := capkObject(tc.apiVersion, tc.kind, "impostor", capkLabels, nil)
+			dyn := dynamicfake.NewSimpleDynamicClient(runtime.NewScheme(), objs...)
+			if got := WalkOwnershipGraph(context.Background(), dyn, mapper, kubernetesAppMapper{}, impostor); len(got) != 0 {
+				t.Fatalf("WalkOwnershipGraph(%s %s) = %+v, want no ancestors", tc.apiVersion, tc.kind, got)
+			}
+		})
+	}
+}
+
 func TestWalkIgnoresKubevirtMachineOfAnotherNamespace(t *testing.T) {
 	// A VM pointing at a KubevirtMachine outside its own namespace (an external
 	// infrastructure cluster, or a forged label) must not be resolved through it.
