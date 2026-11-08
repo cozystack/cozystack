@@ -1,0 +1,57 @@
+suite: opencost optional package (opt-in via enabledPackages)
+templates:
+  - templates/bundles/system.yaml
+release:
+  name: cozystack
+  namespace: cozy-system
+tests:
+  # OpenCost is optional: operators opt in through enabledPackages.
+  - it: does not emit cozystack.opencost by default (optional, not enabled)
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+    asserts:
+      # any: true is REQUIRED inside the matcher for the negative to search the whole
+      # document set; without it containsDocument matches nothing and `not: true` is a
+      # vacuous no-op (a package.default regression would pass unnoticed).
+      - containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.opencost
+          any: true
+        not: true
+
+  - it: emits cozystack.opencost when listed in enabledPackages
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+        enabledPackages:
+          - cozystack.opencost
+    asserts:
+      - containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.opencost
+          any: true
+
+  - it: honors disabledPackages even when also enabled
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+        enabledPackages:
+          - cozystack.opencost
+        disabledPackages:
+          - cozystack.opencost
+    asserts:
+      - containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.opencost
+          any: true
+        not: true

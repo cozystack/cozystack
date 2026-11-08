@@ -1,0 +1,27 @@
+suite: opencost PackageSource dependencies
+templates:
+  - templates/sources.yaml
+release:
+  name: cozystack
+  namespace: cozy-system
+tests:
+  - it: opencost PackageSource installs into cozy-opencost and depends on networking + victoria-metrics-operator
+    documentSelector:
+      path: metadata.name
+      value: cozystack.opencost
+    asserts:
+      - equal:
+          path: kind
+          value: PackageSource
+      - contains:
+          path: spec.variants[0].dependsOn
+          content: cozystack.networking
+      - contains:
+          path: spec.variants[0].dependsOn
+          content: cozystack.victoria-metrics-operator
+      - equal:
+          path: spec.variants[0].components[0].path
+          value: system/opencost
+      - equal:
+          path: spec.variants[0].components[0].install.namespace
+          value: cozy-opencost
