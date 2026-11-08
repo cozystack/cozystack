@@ -117,7 +117,7 @@ func (r *BackupReconciler) cleanupMariaDBBackup(ctx context.Context, backup *bac
 		if err != nil {
 			return r.retryMariaDBCleanup(ctx, backup, location, fmt.Errorf("build S3 client: %w", err))
 		}
-		dump, err := findMariaDBDumpWith(s3ctx, lister, r.Client, op, backup.Spec.TakenAt.Time)
+		dump, err := findMariaDBDumpWith(s3ctx, lister, r.Client, op, backup.Spec.TakenAt.Time, true)
 		if errors.Is(err, errMariaDBDumpNotFound) || errors.Is(err, errMariaDBDumpAmbiguous) {
 			return r.releaseMariaDBCleanup(ctx, backup, location,
 				fmt.Sprintf("the Backup records no dump and none is proven to be the one k8s.mariadb.com/Backup %s wrote (%v); the operator Backup is kept", opName, err)), nil

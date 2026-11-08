@@ -385,6 +385,58 @@ func TestCleanupMariaDBBackup_LegacyBackupWhoseDumpANeighbourCouldOwnIsReleased(
 	assertReleasedUntouched(t, r, rec, bucket, res, err)
 }
 
+// A run started before this one completed can upload its dump and prune
+// this run's through maxRetention before its own operator Backup completes.
+// Its dump is then the only one in this run's window, and only its open
+// window says it may be its own.
+func TestCleanupMariaDBBackup_LegacyBackupWhoseDumpAnUnfinishedRunCouldOwnIsReleased(t *testing.T) {
+	started := cleanupCreated.Add(2 * time.Minute)
+	cases := map[string][]metav1.Condition{
+		"running": {{
+			Type: mariadbtypes.ConditionTypeComplete, Status: metav1.ConditionFalse,
+			Reason: mariadbtypes.ConditionReasonJobRunning, Message: "Running", LastTransitionTime: metav1.NewTime(started),
+		}},
+		"not yet reconciled": nil,
+	}
+	for name, conditions := range cases {
+		t.Run(name, func(t *testing.T) {
+			bucket := &fakeS3Bucket{objects: []s3ObjectInfo{
+				{Key: dumpKey(cleanupPrefix, started.Add(90*time.Second), "gzip"), LastModified: started.Add(100 * time.Second)},
+			}}
+			running := cleanupOperatorBackup(t)
+			running.Name = "op-running"
+			running.CreationTimestamp = metav1.NewTime(started)
+			running.Status.Conditions = conditions
+			backup := cleanupBackup("")
+			r, rec := cleanupReconciler(t, bucket, backup, cleanupOperatorBackup(t), running, s3CredsSecret("tenant", "creds"), tenantNamespace())
+
+			res, err := r.cleanupMariaDBBackup(context.Background(), backup)
+			assertReleasedUntouched(t, r, rec, bucket, res, err)
+		})
+	}
+}
+
+// An unfinished run contests only what it could have written: a dump
+// that predates it, on both clocks, is still this run's.
+func TestCleanupMariaDBBackup_LegacyBackupDeletesItsDumpDespiteALaterUnfinishedRun(t *testing.T) {
+	key := cleanupPrefix + cleanupDumpName
+	bucket := &fakeS3Bucket{objects: []s3ObjectInfo{{Key: key, LastModified: cleanupCreated.Add(2 * time.Minute)}}}
+	running := cleanupOperatorBackup(t)
+	running.Name = "op-running"
+	running.CreationTimestamp = metav1.NewTime(cleanupCompleted.Add(time.Hour))
+	running.Status.Conditions = nil
+	backup := cleanupBackup("")
+	r, _ := cleanupReconciler(t, bucket, backup, cleanupOperatorBackup(t), running, s3CredsSecret("tenant", "creds"), tenantNamespace())
+
+	res, err := r.cleanupMariaDBBackup(context.Background(), backup)
+	if err != nil || requeues(res) {
+		t.Fatalf("got res=%+v err=%v, want the Backup released", res, err)
+	}
+	if want := []string{"bkt/" + key}; fmt.Sprint(bucket.removed) != fmt.Sprint(want) {
+		t.Errorf("removed %v, want %v", bucket.removed, want)
+	}
+}
+
 func TestCleanupMariaDBBackup_LegacyListingFailureRetries(t *testing.T) {
 	bucket := &fakeS3Bucket{listErr: errors.New("connection refused")}
 	r, rec := cleanupReconciler(t, bucket, cleanupOperatorBackup(t), s3CredsSecret("tenant", "creds"), tenantNamespace())

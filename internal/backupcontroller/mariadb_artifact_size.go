@@ -64,18 +64,19 @@ func findMariaDBDump(ctx context.Context, store objectStore, mdbBackup *mariadbt
 	if err != nil {
 		return mariadbDump{}, err
 	}
-	return findMariaDBDumpWith(ctx, lister, store.reader, mdbBackup, completedAt)
+	return findMariaDBDumpWith(ctx, lister, store.reader, mdbBackup, completedAt, false)
 }
 
 // findMariaDBDumpWith is findMariaDBDump reading the bucket through lister,
 // for a caller that reaches the bucket by another endpoint than the one
-// mdbBackup names.
-func findMariaDBDumpWith(ctx context.Context, lister s3ObjectLister, reader client.Reader, mdbBackup *mariadbtypes.Backup, completedAt time.Time) (mariadbDump, error) {
+// mdbBackup names. withUnfinished lets runs that have not completed contest
+// the dump too, as neighbourMariaDBRuns describes.
+func findMariaDBDumpWith(ctx context.Context, lister s3ObjectLister, reader client.Reader, mdbBackup *mariadbtypes.Backup, completedAt time.Time, withUnfinished bool) (mariadbDump, error) {
 	s3 := mdbBackup.Spec.Storage.S3
 	if s3 == nil {
 		return mariadbDump{}, errors.New("the operator Backup does not store to S3")
 	}
-	others, err := finishedMariaDBRuns(ctx, reader, mdbBackup)
+	others, err := neighbourMariaDBRuns(ctx, reader, mdbBackup, withUnfinished)
 	if err != nil {
 		return mariadbDump{}, fmt.Errorf("list operator Backups: %w", err)
 	}
@@ -136,6 +137,10 @@ type mariadbRun struct {
 	lower, upper time.Time
 }
 
+// mariadbUnfinishedRunEnd closes the window of a run that has not completed,
+// which can still write its dump at any time.
+var mariadbUnfinishedRunEnd = time.Date(9999, time.December, 31, 0, 0, 0, 0, time.UTC)
+
 func newMariaDBRun(b *mariadbtypes.Backup, created, completed time.Time) mariadbRun {
 	return mariadbRun{
 		name:  b.Namespace + "/" + b.Name,
@@ -161,8 +166,8 @@ func (r mariadbRun) placesOnEitherClock(d mariadbDump) bool {
 // dump in the window on one clock only may be this run's own, misplaced by
 // a skewed clock, which leaves any other candidate unproven. A neighbour's
 // dump is still taken if this run's own is missing from the listing, or
-// misplaced on both clocks, and the neighbour's operator Backup is gone or
-// has not completed.
+// misplaced on both clocks, and the neighbour's operator Backup is gone or,
+// unless others includes unfinished runs, has not completed.
 func matchMariaDBDump(objects []s3ObjectInfo, prefix string, own mariadbRun, others []mariadbRun) (mariadbDump, error) {
 	var near []mariadbDump
 	for _, obj := range objects {
@@ -194,14 +199,17 @@ func matchMariaDBDump(objects []s3ObjectInfo, prefix string, own mariadbRun, oth
 	return d, nil
 }
 
-// finishedMariaDBRuns returns the runs of the other operator Backups that
+// neighbourMariaDBRuns returns the runs of the other operator Backups that
 // write under the same bucket and prefix as b and have completed, whether
-// their Job succeeded or failed. One still running is left out: its window
-// has no end yet, and an operator Backup stuck short of Complete, as one
-// whose Job pod never starts is, would otherwise contest every later run of
-// the application for good. The endpoint is not compared, since one has
-// several spellings, and a false neighbour only leaves a size unset.
-func finishedMariaDBRuns(ctx context.Context, reader client.Reader, b *mariadbtypes.Backup) ([]mariadbRun, error) {
+// their Job succeeded or failed. One still running is left out unless
+// withUnfinished is set: its window has no end yet, and an operator Backup
+// stuck short of Complete, as one whose Job pod never starts is, would
+// otherwise contest every later run of the application for good. That is
+// the price of deleting a dump, since a run can upload its dump and prune
+// older ones through maxRetention before it completes. The endpoint is not
+// compared, since one has several spellings, and a false neighbour only
+// keeps a dump unattributed.
+func neighbourMariaDBRuns(ctx context.Context, reader client.Reader, b *mariadbtypes.Backup, withUnfinished bool) ([]mariadbRun, error) {
 	list := &mariadbtypes.BackupList{}
 	if err := reader.List(ctx, list); err != nil {
 		return nil, err
@@ -218,6 +226,9 @@ func finishedMariaDBRuns(ctx context.Context, reader client.Reader, b *mariadbty
 		}
 		cond := apimeta.FindStatusCondition(other.Status.Conditions, mariadbtypes.ConditionTypeComplete)
 		if cond == nil || cond.Status != metav1.ConditionTrue {
+			if withUnfinished {
+				runs = append(runs, newMariaDBRun(other, other.CreationTimestamp.Time, mariadbUnfinishedRunEnd))
+			}
 			continue
 		}
 		runs = append(runs, newMariaDBRun(other, other.CreationTimestamp.Time, cond.LastTransitionTime.Time))
