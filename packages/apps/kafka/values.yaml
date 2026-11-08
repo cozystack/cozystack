@@ -9,7 +9,7 @@
 external: false
 
 ## @typedef {struct} TLS - TLS configuration for the external listener.
-## @field {*bool} enabled - Enable TLS on the external listener. When unset, inherits the value of `external` (TLS is on when external access is enabled). The external listener always requires SCRAM-SHA-512 credentials from `users`; setting this to false while external is true still sends those credentials and all data in plaintext over a public IP, so use it only in controlled networks.
+## @field {*bool} enabled - Enable TLS on the external listener. When unset, inherits the value of `external` (TLS is on when external access is enabled). The external listener always requires SCRAM-SHA-512 credentials from `users`; setting this to false while external is true sends all data unencrypted over a public IP and exposes the SCRAM authentication exchange to anyone on the path, although not the password itself, so use it only in controlled networks.
 
 ## @param {TLS} tls - TLS configuration. Strimzi manages the cluster PKI automatically (no cert-manager is involved for this chart): the operator auto-creates `<release>-cluster-ca-cert` and `<release>-clients-ca-cert` secrets, both exposed for client trust setup. The internal TLS listener on 9093 is always on; this toggle only controls the external listener on 9094.
 tls: {}

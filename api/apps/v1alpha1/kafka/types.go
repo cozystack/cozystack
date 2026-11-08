@@ -68,7 +68,7 @@ type Resources struct {
 }
 
 type TLS struct {
-	// Enable TLS on the external listener. When unset, inherits the value of `external` (TLS is on when external access is enabled). The external listener always requires SCRAM-SHA-512 credentials from `users`; setting this to false while external is true still sends those credentials and all data in plaintext over a public IP, so use it only in controlled networks.
+	// Enable TLS on the external listener. When unset, inherits the value of `external` (TLS is on when external access is enabled). The external listener always requires SCRAM-SHA-512 credentials from `users`; setting this to false while external is true sends all data unencrypted over a public IP and exposes the SCRAM authentication exchange to anyone on the path, although not the password itself, so use it only in controlled networks.
 	Enabled *bool `json:"enabled,omitempty"`
 }
 
