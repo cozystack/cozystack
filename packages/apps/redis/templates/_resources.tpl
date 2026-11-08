@@ -49,5 +49,5 @@ These presets are for basic testing and not meant to be used in production
 {{- end -}}
 
 {{- define "redis.sentinelReplicas" -}}
-{{- ternary 1 3 (le (int .Values.replicas) 1) -}}
+{{- ternary 1 3 (eq (int .Values.replicas) 1) -}}
 {{- end -}}
