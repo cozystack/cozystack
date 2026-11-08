@@ -114,3 +114,23 @@ tests:
       maxUnavailable: -1
     asserts:
       - failedTemplate: {}
+
+  # CAPI decodes the field as an int32, so a larger value would render and
+  # then be refused by the MachineDeployment decoder.
+  - it: refuses a maxUnavailable above the int32 range (schema maximum)
+    set:
+      maxUnavailable: 2147483648
+    asserts:
+      - failedTemplate:
+          errorPattern: "maxUnavailable"
+
+  - it: accepts the int32 maximum
+    set:
+      maxUnavailable: 2147483647
+    documentSelector:
+      path: kind
+      value: MachineDeployment
+    asserts:
+      - equal:
+          path: spec.strategy.rollingUpdate.maxUnavailable
+          value: 2147483647
