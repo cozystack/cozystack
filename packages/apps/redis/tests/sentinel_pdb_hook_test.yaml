@@ -77,6 +77,26 @@ tests:
       - hasDocuments:
           count: 0
 
+  # The operator runs three Redis pods for a zero or negative count, so their
+  # Sentinel PDB stays.
+  - it: renders nothing for a zero replica count
+    release:
+      upgrade: true
+    set:
+      replicas: 0
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: renders nothing for a negative replica count
+    release:
+      upgrade: true
+    set:
+      replicas: -1
+    asserts:
+      - hasDocuments:
+          count: 0
+
   # The pods' job-name label takes 63 characters at most; a 53-character
   # release name plus -sentinel-pdb would pass it and Kubernetes would refuse
   # the Job, leaving the stale PDB in place.
