@@ -6,10 +6,12 @@
 # The CRDs live in $FAKE_STATE/crds.json and every annotate, label and delete
 # is applied to that file, so a second run of the migration reads what the
 # first one wrote. $FAKE_STATE/objects.json maps a CRD name to the number of
-# objects it holds.
+# objects it holds. The snapshot-controller HelmRelease exists while
+# $FAKE_STATE/helmrelease does.
 #
 #   FAKE_CMDLOG      file to append a one-line record of each call to
 #   FAKE_STATE       directory holding crds.json and objects.json
+#   FAKE_HR_FAIL     non-empty => reading the HelmRelease exits 1 with this stderr
 #   FAKE_CRD_FAIL    non-empty => reading a CRD exits 1 with this stderr
 #   FAKE_DELETE_FAIL non-empty => deleting a CRD exits 1 with this stderr
 #   FAKE_RECORD_FAIL non-empty => annotating cozystack-version exits 1 with this stderr
@@ -50,6 +52,12 @@ case "$*" in
     esac
     printf 'fake kubectl: unmodelled apply\n' >&2
     exit 1
+    ;;
+
+  "get helmreleases.helm.toolkit.fluxcd.io --namespace cozy-snapshot-controller snapshot-controller --ignore-not-found -o name")
+    if [ -n "${FAKE_HR_FAIL:-}" ]; then printf '%s\n' "$FAKE_HR_FAIL" >&2; exit 1; fi
+    [ -e "$FAKE_STATE/helmrelease" ] && echo "helmrelease.helm.toolkit.fluxcd.io/snapshot-controller"
+    exit 0
     ;;
 
   "get customresourcedefinitions.apiextensions.k8s.io "*)

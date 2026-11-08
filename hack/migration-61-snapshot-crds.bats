@@ -42,6 +42,7 @@ run_migration() {
     -e FAKE_CMDLOG=/work/cmdlog \
     -e FAKE_STATE=/work/state \
     -e NAMESPACE="${NAMESPACE-}" \
+    -e FAKE_HR_FAIL="${FAKE_HR_FAIL-}" \
     -e FAKE_CRD_FAIL="${FAKE_CRD_FAIL-}" \
     -e FAKE_DELETE_FAIL="${FAKE_DELETE_FAIL-}" \
     -e FAKE_RECORD_FAIL="${FAKE_RECORD_FAIL-}" \
@@ -67,10 +68,11 @@ DOCKERFILE
   mkdir -p "$WORK/state"
   cp "$FIXTURES/crds.json" "$WORK/state/"
   echo '{}' > "$WORK/state/objects.json"
+  : > "$WORK/state/helmrelease"
   FAKE_CMDLOG="$WORK/cmdlog"
   : > "$FAKE_CMDLOG"
   export NAMESPACE=cozy-system
-  unset FAKE_CRD_FAIL FAKE_DELETE_FAIL FAKE_RECORD_FAIL FAKE_CREATE_FAIL || true
+  unset FAKE_HR_FAIL FAKE_CRD_FAIL FAKE_DELETE_FAIL FAKE_RECORD_FAIL FAKE_CREATE_FAIL || true
   return 0
 }
 
@@ -188,15 +190,40 @@ crd_field() {
   rm -rf "$WORK"
 }
 
-@test "a cluster without the snapshot CRDs only stamps the version" {
+@test "a cluster without the snapshot-controller release only stamps the version" {
   prep
-  edit_crds '.items = []'
+  rm "$WORK/state/helmrelease"
   rc=0
   run_migration 61 >"$WORK/out" 2>&1 || rc=$?
   cat "$WORK/out"; cat "$FAKE_CMDLOG"
   [ "$rc" -eq 0 ]
   if grep -qE "^(ANNOTATE|LABEL|DELETE|CREATE)" "$FAKE_CMDLOG"; then echo "unexpected change" >&2; return 1; fi
   grep -qxF "STAMP 62" "$FAKE_CMDLOG"
+  rm -rf "$WORK"
+}
+
+@test "a cluster with the release but no group snapshot CRDs gets them created" {
+  prep
+  edit_crds '.items |= map(select(.spec.group != "groupsnapshot.storage.k8s.io"))'
+  rc=0
+  run_migration 61 >"$WORK/out" 2>&1 || rc=$?
+  cat "$WORK/out"; cat "$FAKE_CMDLOG"
+  [ "$rc" -eq 0 ]
+  for p in volumegroupsnapshotclasses volumegroupsnapshotcontents volumegroupsnapshots; do
+    grep -qxF "CREATE $p.groupsnapshot.storage.k8s.io" "$FAKE_CMDLOG"
+  done
+  grep -qxF "STAMP 62" "$FAKE_CMDLOG"
+  rm -rf "$WORK"
+}
+
+@test "a failing HelmRelease read aborts instead of treating the release as absent" {
+  prep
+  export FAKE_HR_FAIL="Error from server (InternalError): etcdserver: request timed out"
+  rc=0
+  run_migration 61 >"$WORK/out" 2>&1 || rc=$?
+  cat "$WORK/out"; cat "$FAKE_CMDLOG"
+  [ "$rc" -ne 0 ]
+  if grep -qE "^(ANNOTATE|LABEL|DELETE|CREATE|STAMP)" "$FAKE_CMDLOG"; then echo "changed something after a failed HelmRelease read" >&2; return 1; fi
   rm -rf "$WORK"
 }
 
@@ -256,6 +283,30 @@ crd_field() {
     grep -qxF "CREATE $p.groupsnapshot.storage.k8s.io" "$FAKE_CMDLOG"
   done
   if grep -qF "ANNOTATE volumesnapshot" "$FAKE_CMDLOG"; then echo "a foreign snapshot CRD was adopted" >&2; return 1; fi
+  grep -qxF "STAMP 62" "$FAKE_CMDLOG"
+  rm -rf "$WORK"
+}
+
+@test "release labels on the group snapshot CRDs alone survive a failed create" {
+  prep
+  edit_crds '.items |= map(if .spec.group == "snapshot.storage.k8s.io" then .metadata.labels = {} else . end)'
+  export FAKE_CREATE_FAIL="Error from server (InternalError): etcdserver: request timed out"
+  rc=0
+  run_migration 61 >"$WORK/out" 2>&1 || rc=$?
+  cat "$WORK/out"; cat "$FAKE_CMDLOG"
+  [ "$rc" -ne 0 ]
+  if grep -qF "STAMP" "$FAKE_CMDLOG"; then echo "unexpected STAMP after failed create" >&2; return 1; fi
+
+  unset FAKE_CREATE_FAIL
+  : > "$FAKE_CMDLOG"
+  rc=0
+  run_migration 61 >"$WORK/out" 2>&1 || rc=$?
+  cat "$WORK/out"; cat "$FAKE_CMDLOG"
+  [ "$rc" -eq 0 ]
+  for p in volumegroupsnapshotclasses volumegroupsnapshotcontents volumegroupsnapshots; do
+    grep -qxF "CREATE $p.groupsnapshot.storage.k8s.io" "$FAKE_CMDLOG"
+    [ "$(crd_field "$p.groupsnapshot.storage.k8s.io" '[.spec.versions[] | select(.served) | .name] | index("v1beta2") != null')" = "true" ]
+  done
   grep -qxF "STAMP 62" "$FAKE_CMDLOG"
   rm -rf "$WORK"
 }

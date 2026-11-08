@@ -1,0 +1,61 @@
+suite: snapshot CRDs owned outside the release
+
+# A distribution can ship its own snapshot CRDs. The chart renders a CRD only
+# when it is absent or already carries this release's Helm ownership, so an
+# upgrade never takes over or rewrites one owned elsewhere. Migration 61 adopts
+# the CRDs the release installed before, which keeps them in the manifest.
+
+templates:
+  - charts/snapshot-controller/templates/crds.yaml
+
+release:
+  name: snapshot-controller
+  namespace: cozy-snapshot-controller
+
+kubernetesProvider:
+  scheme:
+    "apiextensions.k8s.io/v1/CustomResourceDefinition":
+      gvr:
+        group: apiextensions.k8s.io
+        version: v1
+        resource: customresourcedefinitions
+      namespaced: false
+  objects:
+    - apiVersion: apiextensions.k8s.io/v1
+      kind: CustomResourceDefinition
+      metadata:
+        name: volumesnapshots.snapshot.storage.k8s.io
+    - apiVersion: apiextensions.k8s.io/v1
+      kind: CustomResourceDefinition
+      metadata:
+        name: volumesnapshotcontents.snapshot.storage.k8s.io
+        annotations:
+          meta.helm.sh/release-name: other
+          meta.helm.sh/release-namespace: cozy-snapshot-controller
+    - apiVersion: apiextensions.k8s.io/v1
+      kind: CustomResourceDefinition
+      metadata:
+        name: volumesnapshotclasses.snapshot.storage.k8s.io
+        annotations:
+          meta.helm.sh/release-name: snapshot-controller
+          meta.helm.sh/release-namespace: cozy-snapshot-controller
+
+tests:
+  - it: renders only the absent CRDs and the ones this release owns
+    asserts:
+      - hasDocuments:
+          count: 4
+      - notEqual:
+          path: metadata.name
+          value: volumesnapshots.snapshot.storage.k8s.io
+      - notEqual:
+          path: metadata.name
+          value: volumesnapshotcontents.snapshot.storage.k8s.io
+
+  - it: keeps rendering a CRD this release owns
+    documentSelector:
+      path: metadata.name
+      value: volumesnapshotclasses.snapshot.storage.k8s.io
+    asserts:
+      - isKind:
+          of: CustomResourceDefinition

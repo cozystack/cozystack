@@ -5,10 +5,12 @@
 #
 # The snapshot-controller chart used to ship its six CRDs in crds/, which Helm
 # creates on install and never touches again, so the live CRDs carry no Helm
-# ownership metadata. The chart now renders them from a template. Helm refuses
-# to upgrade over an object that already exists without that metadata ("exists
-# and cannot be imported into the current release"), so the CRDs the release
-# installed are annotated for adoption here.
+# ownership metadata. The chart now renders them from a template, and renders a
+# CRD only when it is absent or already carries this release's ownership
+# metadata (patches/skip-foreign-crds.diff in the package). The CRDs the release
+# installed are annotated for adoption here, so they stay in its manifest; any
+# other CRD stays out of it, and the upgrade neither takes it over nor rewrites
+# it.
 #
 # The three groupsnapshot.storage.k8s.io CRDs cannot be adopted that way. The
 # old chart served them as v1alpha1 only, the new one serves v1beta1, v1beta2
@@ -34,7 +36,13 @@
 #
 # Only CRDs labelled by helm-controller as installed by
 # cozy-snapshot-controller/snapshot-controller are touched, so a cluster whose
-# distribution ships its own snapshot CRDs keeps them as they are.
+# distribution ships its own snapshot CRDs keeps them as they are, here and in
+# the release.
+#
+# Whether the release is installed is read from its HelmRelease, not from those
+# labels: a retry after a failed create finds the group CRDs it deleted gone,
+# and their labels with them. Without the HelmRelease nothing would render the
+# CRDs again, so nothing is changed.
 #
 # This runs as a pre-upgrade hook, before the release renders the new chart. The
 # old chart does not render the CRDs, so the adoption metadata and the deletion
@@ -58,8 +66,15 @@ GROUP_SNAPSHOT_CRDS="volumegroupsnapshotclasses volumegroupsnapshotcontents volu
 GROUP_CRD_DIR="${GROUP_CRD_DIR:-/snapshot-controller-crds}"
 
 LEFTOVERS=""
-RELEASE_INSTALLED=0
 CREATE=""
+
+# Assigned on its own line: inside a test, a failed read would not abort.
+hr=$(kubectl get helmreleases.helm.toolkit.fluxcd.io --namespace "$RELEASE_NS" "$RELEASE_NAME" --ignore-not-found -o name)
+if [ -z "$hr" ]; then
+  echo "HelmRelease $RELEASE_NS/$RELEASE_NAME not found; leaving the snapshot CRDs alone"
+  stamp_cozystack_version 62
+  exit 0
+fi
 
 # installed_by_release <crd json>
 installed_by_release() {
@@ -98,7 +113,6 @@ for plural in $SNAPSHOT_CRDS; do
     echo "CRD $crd was not installed by $RELEASE_NS/$RELEASE_NAME; leaving it alone"
     continue
   fi
-  RELEASE_INSTALLED=1
   adopt "$crd" "$obj"
 done
 
@@ -113,7 +127,6 @@ for plural in $GROUP_SNAPSHOT_CRDS; do
     echo "CRD $crd was not installed by $RELEASE_NS/$RELEASE_NAME; leaving it alone"
     continue
   fi
-  RELEASE_INSTALLED=1
   if printf '%s' "$obj" | jq -e '[.spec.versions[].name] | index("v1beta2")' >/dev/null; then
     # The chart drops v1alpha1 from spec.versions, which the apiserver refuses
     # while v1alpha1 is still a stored version, so such a CRD is left to an
@@ -137,10 +150,9 @@ for plural in $GROUP_SNAPSHOT_CRDS; do
   CREATE="$CREATE $crd"
 done
 
-# A CRD missing on a cluster without the release, or with a kept one, is left
-# to the release. A retry after a failed create finds the deleted CRDs missing,
-# so it creates them here too.
-if [ "$RELEASE_INSTALLED" = 1 ] && [ -z "$LEFTOVERS" ]; then
+# A CRD missing next to a kept one is left to the release. A retry after a
+# failed create finds the deleted CRDs missing, so it creates them here too.
+if [ -z "$LEFTOVERS" ]; then
   for crd in $CREATE; do
     echo "Creating CRD $crd at v1beta2 for $RELEASE_NS/$RELEASE_NAME"
     kubectl create -f "$GROUP_CRD_DIR/$crd.yaml" >/dev/null
