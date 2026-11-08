@@ -181,24 +181,24 @@ STUBEOF
 }
 
 # cert-manager issues the Secret of a Certificate that still exists again as
-# soon as it is deleted, so the Certificate has to go first or its Secret
-# outlives the run.
-@test "the round-trip cleanup deletes the Certificate before its Secret" {
-    script=$(yq 'select(.metadata.name == "clickhouse-3-system-bucket-roundtrip") | .spec.steps[]
-        | select(.name == "run") | .finally[]
-        | select(.description == "system-bucket round-trip cleanup") | .script.content' \
-        hack/e2e-chainsaw/clickhouse/chainsaw-test.yaml)
-    [ -n "$script" ] || { echo "the run step has no system-bucket round-trip cleanup" >&2; false; }
-    cat >"$STUB/kubectl" <<'STUBEOF'
-#!/bin/bash
-echo "$*" >>"$STUB/calls"
-STUBEOF
-    PATH="$STUB:$PATH" NAMESPACE=tenant-root sh -c "$script"
-    cert=$(grep -nE '^-n tenant-root delete certificate e2e-system-bucket-s3( |$)' "$STUB/calls" | cut -d: -f1)
-    secret=$(grep -nE '^-n tenant-root delete secret e2e-system-bucket-s3-tls( |$)' "$STUB/calls" | cut -d: -f1)
-    [ -n "$cert" ] && [ -n "$secret" ] && [ "$cert" -lt "$secret" ] || {
-        echo "the cleanup does not delete Certificate e2e-system-bucket-s3 before Secret e2e-system-bucket-s3-tls; kubectl calls:" >&2
-        cat "$STUB/calls" >&2
+# soon as it is deleted. Chainsaw deletes the Certificate it applied, and waits
+# for it, before it runs the cleanup ops of the same step, so the Secret is
+# deleted there and nowhere earlier.
+@test "the Certificate's Secret is deleted after Chainsaw deletes the Certificate" {
+    test='select(.metadata.name == "clickhouse-3-system-bucket-roundtrip") | .spec.steps[]'
+    suite=hack/e2e-chainsaw/clickhouse/chainsaw-test.yaml
+    applies=$(yq "$test | select(.name == \"create-certificate-and-probe\") | .try[] | select(has(\"apply\")) | .apply.file" "$suite")
+    [ "$applies" = system-bucket-tls.yaml ] || {
+        echo "step create-certificate-and-probe no longer applies system-bucket-tls.yaml alone: $applies" >&2
         false
     }
+    deletes=$(yq -o=json -I=0 "$test | select(.name == \"create-certificate-and-probe\") | .cleanup" "$suite")
+    [ "$deletes" = '[{"delete":{"ref":{"apiVersion":"v1","kind":"Secret","name":"e2e-system-bucket-s3-tls"}}}]' ] || {
+        echo "the cleanup of step create-certificate-and-probe is not the one delete of Secret e2e-system-bucket-s3-tls: $deletes" >&2
+        false
+    }
+    if yq "$test | (.try[], .finally[]?) | .script.content // \"\"" "$suite" | grep -qE 'delete +(secret +e2e-system-bucket-s3-tls|certificate +e2e-system-bucket-s3)( |$)'; then
+        echo "a step script deletes the Certificate or its Secret while Chainsaw still holds the Certificate" >&2
+        false
+    fi
 }
