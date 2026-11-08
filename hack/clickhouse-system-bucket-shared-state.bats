@@ -18,8 +18,12 @@ setup() {
             metadata: {name: "coredns", namespace: "kube-system", resourceVersion: "7"},
             data: {Corefile: ".:53 {\n    # === BEGIN e2e-clickhouse-system-bucket ===\n    rewrite name exact s3.example.org root-ingress-controller.tenant-root.svc.cozy.local\n    # === END e2e-clickhouse-system-bucket ===\n    errors\n}\n"}}' \
         >"$STUB/coredns.json"
+    # The secret lookup follows kubectl's contract: a name together with a
+    # selector is refused, and a selector-only lookup prints the names in
+    # OWNED_SECRETS, the Secrets carrying the owner label.
     cat >"$STUB/kubectl" <<'EOF'
 #!/bin/bash
+echo "$*" >>"$STUB/calls"
 case "$*" in
     *"get configmap coredns -o json"*) cat "$STUB/coredns.json" ;;
     replace*)
@@ -29,7 +33,29 @@ case "$*" in
             exit 1
         fi
         ;;
-    *"get secret"*) ;;
+    *"get secret"*)
+        # Positionals are "get", "secret" and then any names.
+        words=0 selector=
+        while [ $# -gt 0 ]; do
+            case "$1" in
+                -l|--selector) selector=$2; shift 2 ;;
+                -n|--namespace|-o|--output) shift 2 ;;
+                -*) shift ;;
+                *) words=$((words + 1)); shift ;;
+            esac
+        done
+        if [ -n "${LOOKUP_FAILS:-}" ]; then
+            echo 'Unable to connect to the server: dial tcp: i/o timeout' >&2
+            exit 1
+        fi
+        if [ -n "$selector" ] && [ "$words" -gt 2 ]; then
+            echo 'error: name cannot be provided when a selector is specified' >&2
+            exit 1
+        fi
+        [ "$selector" = cozystack.io/e2e-owner=clickhouse-system-bucket ] || exit 0
+        for s in ${OWNED_SECRETS:-}; do echo "secret/$s"; done
+        ;;
+    *"delete secret "*) ;;
     *) echo "unexpected kubectl $*" >&2; exit 2 ;;
 esac
 EOF
@@ -72,6 +98,36 @@ restore() {
     # The resourceVersion read travels with the replace, so a concurrent
     # writer makes it fail rather than be overwritten.
     [ "$(jq -r '.metadata.resourceVersion' "$STUB/replaced.json")" = 7 ]
+}
+
+@test "the restore deletes the Ingress TLS Secret the Test created" {
+    OWNED_SECRETS=seaweedfs-s3-ingress-tls restore
+    grep -qE '^-n tenant-root delete secret seaweedfs-s3-ingress-tls( |$)' "$STUB/calls" || {
+        echo "restore_shared_state did not delete the Secret carrying the owner label; kubectl calls:" >&2
+        cat "$STUB/calls" >&2
+        false
+    }
+}
+
+@test "the restore leaves an Ingress TLS Secret without the owner label alone" {
+    for owned in '' e2e-other seaweedfs-s3-ingress-tls-old; do
+        : >"$STUB/calls"
+        OWNED_SECRETS=$owned restore
+        if grep -q 'delete secret' "$STUB/calls"; then
+            echo "restore_shared_state deleted a Secret although the labelled ones are '$owned'; kubectl calls:" >&2
+            cat "$STUB/calls" >&2
+            false
+        fi
+    done
+}
+
+@test "a Secret lookup that fails fails the restore" {
+    err=$(mktemp)
+    if LOOKUP_FAILS=1 restore 2>"$err"; then
+        echo "restore_shared_state returned 0 although it could not tell whether the Secret is left over" >&2
+        cat "$err" >&2
+        false
+    fi
 }
 
 @test "the run step's finally restores the shared objects" {

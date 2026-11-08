@@ -47,7 +47,13 @@ remove_dns_block() {
 restore_shared_state() {
     local rc=0
     remove_dns_block || rc=1
-    if kubectl -n "$NAMESPACE" get secret "$INGRESS_SECRET" -l "$OWNER_LABEL" -o name 2>/dev/null | grep -q .; then
+    # kubectl refuses a name together with a selector, so the label is
+    # looked up on its own and the name matched in what comes back.
+    local owned
+    if ! owned=$(kubectl -n "$NAMESPACE" get secret -l "$OWNER_LABEL" -o name); then
+        log_error "could not list the Secrets labelled ${OWNER_LABEL} in ${NAMESPACE}; delete ${INGRESS_SECRET} by hand if it carries that label"
+        rc=1
+    elif printf '%s\n' "$owned" | grep -qxF "secret/$INGRESS_SECRET"; then
         kubectl -n "$NAMESPACE" delete secret "$INGRESS_SECRET" --wait=true --timeout=60s || rc=1
     fi
     return "$rc"
