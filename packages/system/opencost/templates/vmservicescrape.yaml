@@ -6,6 +6,9 @@ spec:
   endpoints:
     - port: http
       path: /metrics
+      # Cost metrics carry the namespace/pod of the measured workload, not of
+      # the exporter; without honorLabels they all collapse onto cozy-opencost.
+      honorLabels: true
   selector:
     matchLabels:
       app.kubernetes.io/instance: opencost
