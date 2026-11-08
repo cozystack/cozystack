@@ -55,7 +55,12 @@ case "$*" in
         [ "$selector" = cozystack.io/e2e-owner=clickhouse-system-bucket ] || exit 0
         for s in ${OWNED_SECRETS:-}; do echo "secret/$s"; done
         ;;
-    *"delete secret "*) ;;
+    *"delete secret "*)
+        if [ -n "${DELETE_FAILS:-}" ]; then
+            echo 'Error from server (Forbidden): secrets "seaweedfs-s3-ingress-tls" is forbidden' >&2
+            exit 1
+        fi
+        ;;
     *) echo "unexpected kubectl $*" >&2; exit 2 ;;
 esac
 EOF
@@ -119,6 +124,15 @@ restore() {
             false
         fi
     done
+}
+
+@test "a Secret delete the API server refuses fails the restore" {
+    err=$(mktemp)
+    if OWNED_SECRETS=seaweedfs-s3-ingress-tls DELETE_FAILS=1 restore 2>"$err"; then
+        echo "restore_shared_state returned 0 although kubectl delete secret was refused" >&2
+        cat "$err" >&2
+        false
+    fi
 }
 
 @test "a Secret lookup that fails fails the restore" {
