@@ -211,7 +211,7 @@ spec:
            clone or repoint itself at another Image Factory, both of which are
            operator decisions about the platform's own images. Keep this list in
            sync with the kubernetes-nodes values schema's pool-shape params. */}}
-    {{- with pick $group "minReplicas" "maxReplicas" "instanceType" "diskSize" "storageClass" "roles" "resources" "gpus" "kubelet" "logSerialConsole" "maxUnhealthy" "nodeStartupTimeout" "readyUnknownTimeout" "readyFalseTimeout" "podCpuLimit" "podCpuRequest" "maxNodeProvisionTime" }}
+    {{- with pick $group "minReplicas" "maxReplicas" "instanceType" "diskSize" "storageClass" "roles" "resources" "gpus" "kubelet" "logSerialConsole" "maxUnhealthy" "nodeStartupTimeout" "readyUnknownTimeout" "readyFalseTimeout" "podCpuLimit" "podCpuRequest" "maxNodeProvisionTime" "maxUnavailable" }}
     {{- toYaml . | nindent 4 }}
     {{- end }}
   valuesFrom:
