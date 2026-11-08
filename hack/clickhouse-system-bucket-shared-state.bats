@@ -133,6 +133,11 @@ restore() {
         cat "$err" >&2
         false
     fi
+    grep -qE '^-n tenant-root delete secret seaweedfs-s3-ingress-tls( |$)' "$STUB/calls" || {
+        echo "restore_shared_state failed before it reached the Secret delete; kubectl calls:" >&2
+        cat "$STUB/calls" "$err" >&2
+        false
+    }
 }
 
 @test "a Secret lookup that fails fails the restore" {
@@ -142,6 +147,11 @@ restore() {
         cat "$err" >&2
         false
     fi
+    grep -q 'could not list the Secrets labelled' "$err" || {
+        echo "restore_shared_state failed without naming the Secret lookup:" >&2
+        cat "$err" >&2
+        false
+    }
 }
 
 @test "the run step's finally restores the shared objects" {
