@@ -68,6 +68,9 @@ tracingCollector:
       cpu: 100m
       memory: 256Mi
 alerta:
+  # Alerta respun on a patched base (images/alerta); `make image` replaces this
+  # upstream default with the cozystack build.
+  image: docker.io/alerta/alerta-web:9.1.0@sha256:693845fb8a95a483c8c9d560786f661f5b6198e5ea0baa6ddf368a7e53c94f39
   storage: 10Gi
   storageClassName: ""
   resources:
