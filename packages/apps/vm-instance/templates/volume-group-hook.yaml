@@ -23,6 +23,14 @@
 {{- $vmName := include "virtual-machine.fullname" . -}}
 {{- $namespace := .Release.Namespace -}}
 {{- $groupKey := "velero.io/volume-group" -}}
+{{- $path := printf "/metadata/labels/%s" ($groupKey | replace "/" "~1") -}}
+{{- /* Job names and label values stop at 63 characters, and a release name
+       may take 53 of them; a hash keeps two long names that share a prefix
+       apart. */}}
+{{- $hookName := printf "%s-volume-group" .Release.Name -}}
+{{- if gt (len $hookName) 63 -}}
+  {{- $hookName = printf "%s-%s-volume-group" (.Release.Name | trunc 41 | trimSuffix "-") (sha256sum .Release.Name | trunc 8) -}}
+{{- end -}}
 
 {{- $claims := dict -}}
 {{- range (lookup "v1" "PersistentVolumeClaim" $namespace "").items | default list -}}
@@ -59,7 +67,13 @@
 {{- end -}}
 
 {{- $desired := list -}}
-{{- if and (eq (len $drivers) 1) (ge (len $bound) 2) (.Capabilities.APIVersions.Has "groupsnapshot.storage.k8s.io/v1beta2/VolumeGroupSnapshotClass") -}}
+{{- $groupAPI := true -}}
+{{- range list "VolumeGroupSnapshotClass" "VolumeGroupSnapshot" "VolumeGroupSnapshotContent" -}}
+  {{- if not ($.Capabilities.APIVersions.Has (printf "groupsnapshot.storage.k8s.io/v1beta2/%s" .)) -}}
+    {{- $groupAPI = false -}}
+  {{- end -}}
+{{- end -}}
+{{- if and (eq (len $drivers) 1) (ge (len $bound) 2) $groupAPI -}}
   {{- $driver := first (keys $drivers) -}}
   {{- $defaultClasses := 0 -}}
   {{- range (lookup "groupsnapshot.storage.k8s.io/v1beta2" "VolumeGroupSnapshotClass" "" "").items | default list -}}
@@ -93,7 +107,7 @@
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: "{{ $.Release.Name }}-volume-group"
+  name: {{ $hookName }}
   annotations:
     helm.sh/hook: post-install,post-upgrade
     helm.sh/hook-weight: "0"
@@ -102,10 +116,10 @@ spec:
   template:
     metadata:
       labels:
-        app: "{{ $.Release.Name }}-volume-group"
+        app: {{ $hookName }}
         policy.cozystack.io/allow-to-apiserver: "true"
     spec:
-      serviceAccountName: {{ $.Release.Name }}-volume-group
+      serviceAccountName: {{ $hookName }}
       restartPolicy: Never
       securityContext:
         runAsNonRoot: true
@@ -130,9 +144,10 @@ spec:
           {{- /* A claim deleted since the render is skipped, not fatal: the rest
                  of the group stays valid for Velero without it. Any other
                  failure still fails the Job. A label present but empty is
-                 replaced by a JSON patch that tests for the empty value first,
-                 so the API server refuses it, instead of taking the claim over,
-                 if another VM has grouped the claim since the render. */}}
+                 replaced, and this VM's label removed, by a JSON patch that tests
+                 the value it expects first, so the API server refuses the change,
+                 instead of taking the claim over or dropping its new group, if
+                 another VM has grouped the claim since the render. */}}
           args:
             - |
               claim() {
@@ -147,20 +162,19 @@ spec:
               }
               {{- range $toLabel }}
               {{- if has . $emptyLabel }}
-              {{- $path := printf "/metadata/labels/%s" ($groupKey | replace "/" "~1") }}
               claim patch {{ . }} --type=json -p '{{ list (dict "op" "test" "path" $path "value" "") (dict "op" "replace" "path" $path "value" $vmName) | toJson }}'
               {{- else }}
               claim label {{ . }} {{ $groupKey }}={{ $vmName }}
               {{- end }}
               {{- end }}
               {{- range $toUnlabel }}
-              claim label {{ . }} {{ $groupKey }}-
+              claim patch {{ . }} --type=json -p '{{ list (dict "op" "test" "path" $path "value" $vmName) (dict "op" "remove" "path" $path) | toJson }}'
               {{- end }}
 ---
 apiVersion: v1
 kind: ServiceAccount
 metadata:
-  name: {{ $.Release.Name }}-volume-group
+  name: {{ $hookName }}
   annotations:
     helm.sh/hook: post-install,post-upgrade
     helm.sh/hook-weight: "-5"
@@ -169,7 +183,7 @@ metadata:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
-  name: {{ $.Release.Name }}-volume-group
+  name: {{ $hookName }}
   annotations:
     helm.sh/hook: post-install,post-upgrade
     helm.sh/hook-weight: "-5"
@@ -183,16 +197,16 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
-  name: {{ $.Release.Name }}-volume-group
+  name: {{ $hookName }}
   annotations:
     helm.sh/hook: post-install,post-upgrade
     helm.sh/hook-weight: "-5"
     helm.sh/hook-delete-policy: hook-succeeded,before-hook-creation
 subjects:
   - kind: ServiceAccount
-    name: {{ $.Release.Name }}-volume-group
+    name: {{ $hookName }}
 roleRef:
   kind: Role
-  name: {{ $.Release.Name }}-volume-group
+  name: {{ $hookName }}
   apiGroup: rbac.authorization.k8s.io
 {{- end }}
