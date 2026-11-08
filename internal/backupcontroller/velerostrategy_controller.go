@@ -359,7 +359,7 @@ func (r *BackupJobReconciler) reconcileVelero(ctx context.Context, j *backupsv1a
 	}
 
 	// Step 5: On failure
-	if phase == "Failed" || phase == "PartiallyFailed" {
+	if phase == "Failed" || phase == "PartiallyFailed" || phase == "FailedValidation" {
 		message := formatVeleroBackupFailureMessageForBackupJob(ctx, r.Client, veleroBackup)
 		return r.markBackupJobFailed(ctx, j, message)
 	}
