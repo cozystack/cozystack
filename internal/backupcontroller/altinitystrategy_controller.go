@@ -4,6 +4,7 @@ package backupcontroller
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"maps"
 	"regexp"
@@ -21,6 +22,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/apiutil"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
 	strategyv1alpha1 "github.com/cozystack/cozystack/api/backups/strategy/v1alpha1"
@@ -400,6 +402,18 @@ func (r *BackupJobReconciler) reconcileAltinity(ctx context.Context, j *backupsv
 		map[string]string{altinityUseSystemBucketKey: fmt.Sprint(useSystemBucket)},
 		rendered,
 	)
+	if errors.Is(err, errAltinityPredecessorJob) {
+		apimeta.SetStatusCondition(&j.Status.Conditions, metav1.Condition{
+			Type:    "Ready",
+			Status:  metav1.ConditionFalse,
+			Reason:  "PredecessorJobPending",
+			Message: err.Error(),
+		})
+		if uerr := r.Status().Update(ctx, j); uerr != nil {
+			return ctrl.Result{}, uerr
+		}
+		return ctrl.Result{RequeueAfter: altinityPollInterval}, nil
+	}
 	if err != nil {
 		return r.markBackupJobFailed(ctx, j, fmt.Sprintf("failed to ensure batch/v1.Job: %v", err))
 	}
@@ -477,7 +491,7 @@ func (r *BackupJobReconciler) ensureAltinityJob(
 	existing := &batchv1.Job{}
 	err := r.Get(ctx, types.NamespacedName{Namespace: namespace, Name: name}, existing)
 	if err == nil {
-		return existing, nil
+		return existing, r.checkAltinityJobController(existing, owner)
 	}
 	if !apierrors.IsNotFound(err) {
 		return nil, err
@@ -496,11 +510,35 @@ func (r *BackupJobReconciler) ensureAltinityJob(
 			if err := r.Get(ctx, types.NamespacedName{Namespace: namespace, Name: name}, existing); err != nil {
 				return nil, err
 			}
-			return existing, nil
+			return existing, r.checkAltinityJobController(existing, owner)
 		}
 		return nil, err
 	}
 	return desired, nil
+}
+
+// errAltinityPredecessorJob marks a backup Job left under the Job name by an
+// earlier BackupJob of the same name. Its owner is gone, so the garbage
+// collector removes it, and the BackupJob waits for that instead of failing.
+var errAltinityPredecessorJob = errors.New("waiting for the garbage collector to remove a Job of an earlier owner of the same name")
+
+// checkAltinityJobController refuses a Job under owner's Job name that owner
+// does not control. A BackupJob re-created under a used name meets the Job of
+// the earlier one, and that Job's completion says nothing about this run.
+func (r *BackupJobReconciler) checkAltinityJobController(job *batchv1.Job, owner client.Object) error {
+	if metav1.IsControlledBy(job, owner) {
+		return nil
+	}
+	gvk, err := apiutil.GVKForObject(owner, r.Scheme)
+	if err != nil {
+		return err
+	}
+	if ref := metav1.GetControllerOf(job); ref != nil && ref.Kind == gvk.Kind && ref.Name == owner.GetName() {
+		if gv, perr := schema.ParseGroupVersion(ref.APIVersion); perr == nil && gv.Group == gvk.Group {
+			return fmt.Errorf("%w: Job %s", errAltinityPredecessorJob, job.Name)
+		}
+	}
+	return fmt.Errorf("Job %s, which this %s did not create, holds its Job name", job.Name, gvk.Kind)
 }
 
 // ensureAltinityRestoreJob mirrors ensureAltinityJob from the RestoreJob
