@@ -301,6 +301,44 @@ tests:
           path: spec.values.maxUnavailable
           value: 1
 
+  # An explicit 0 must reach the pool chart: there it overrides the 1 a GPU
+  # pool gets by default, so dropping it as empty would change the strategy.
+  - it: forwards an explicit maxUnavailable of 0 to the pool chart
+    documentSelector:
+      path: metadata.name
+      value: kubernetes-nodes-computeplane-cluster-md0
+    set:
+      nodeGroups:
+        md0:
+          minReplicas: 1
+          maxReplicas: 3
+          instanceType: u1.large
+          diskSize: 32Gi
+          roles: ["ingress-nginx"]
+          maxUnavailable: 0
+    asserts:
+      - equal:
+          path: spec.values.maxUnavailable
+          value: 0
+
+  - it: forwards the int32 maximum to the pool chart
+    documentSelector:
+      path: metadata.name
+      value: kubernetes-nodes-computeplane-cluster-md0
+    set:
+      nodeGroups:
+        md0:
+          minReplicas: 1
+          maxReplicas: 3
+          instanceType: u1.large
+          diskSize: 32Gi
+          roles: ["ingress-nginx"]
+          maxUnavailable: 2147483647
+    asserts:
+      - equal:
+          path: spec.values.maxUnavailable
+          value: 2147483647
+
   - it: refuses a maxUnavailable above the int32 range CAPI decodes
     set:
       nodeGroups:
