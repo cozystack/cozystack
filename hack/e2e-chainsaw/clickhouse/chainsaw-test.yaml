@@ -393,9 +393,11 @@ spec:
 # bucket's SeaweedFS and its Ingress controller sit.
 #
 # The precondition step deletes tenant-root's projected cozy-backups-creds,
-# which the mongodb and rabbitmq round-trips leave there after their
-# cozy-default BackupJobs. Nothing reads it between suites, and the projector
-# writes it again on the next BackupJob, which is the moment under test.
+# which any BackupJob that ran in tenant-root before this Test leaves there:
+# the projector runs for each BackupJob whatever its strategy, and Chainsaw
+# does not fix the order of the Tests in a suite, so the earlier one may come
+# from this suite or another. It writes the Secret again on the next
+# BackupJob, which is the moment under test.
 apiVersion: chainsaw.kyverno.io/v1alpha1
 kind: Test
 metadata:
@@ -547,7 +549,8 @@ spec:
     #          the Ingress serving the Test certificate, plus one last 30s
     #          attempt and its 10s pause
     #    480s  BackupJob to Succeeded, including the driver's 2m hold
-    #    480s  RestoreJob to Succeeded, same hold
+    #    480s  RestoreJob to Succeeded; no hold by then, the stamp is
+    #          already older than the backup's own 2m wait
     #     90s  the EXIT trap: Corefile replace plus a 60s Secret delete
     #   1330s  (22m10s)
     # 25m leaves 2m50s for the SQL and kubectl calls between those waits, so
