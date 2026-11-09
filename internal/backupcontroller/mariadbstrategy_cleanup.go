@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -37,7 +38,8 @@ var mariadbDumpCleanupTimeout = 10 * time.Second
 // cleanupMariaDBBackup deletes the dump a MariaDB Backup was taken as, then
 // the operator Backup that wrote it. Every run of an application writes
 // under one prefix, so the only key deleted is one proven to be this
-// Backup's: the dump it records, or, for a Backup taken before dumps were
+// Backup's: the dump it records, unless contestedMariaDBDump finds another
+// run that could have written it, or, for a Backup taken before dumps were
 // recorded, the one findMariaDBDump attributes to its operator Backup. When
 // no dump is proven the Backup is released with a Warning and nothing is
 // deleted, the operator Backup included, since it is what any later
@@ -112,11 +114,20 @@ func (r *BackupReconciler) cleanupMariaDBBackup(ctx context.Context, backup *bac
 	s3ctx, cancel := context.WithTimeout(ctx, mariadbDumpCleanupTimeout)
 	defer cancel()
 	store := r.objectStore()
-	if name == "" {
-		lister, err := store.lister(conn)
+	lister, err := store.lister(conn)
+	if err != nil {
+		return r.retryMariaDBCleanup(ctx, backup, location, fmt.Errorf("build S3 client: %w", err))
+	}
+	if name != "" {
+		other, err := contestedMariaDBDump(s3ctx, lister, r.Client, op, name)
 		if err != nil {
-			return r.retryMariaDBCleanup(ctx, backup, location, fmt.Errorf("build S3 client: %w", err))
+			return r.retryMariaDBCleanup(ctx, backup, location+name, err)
 		}
+		if other != "" {
+			return r.releaseMariaDBCleanup(ctx, backup, location+name,
+				fmt.Sprintf("the recorded dump also falls in the lifetime of k8s.mariadb.com/Backup %s, which may have written it; the operator Backup is kept", other)), nil
+		}
+	} else {
 		dump, err := findMariaDBDumpWith(s3ctx, lister, r.Client, op, backup.Spec.TakenAt.Time, true)
 		if errors.Is(err, errMariaDBDumpNotFound) || errors.Is(err, errMariaDBDumpAmbiguous) {
 			return r.releaseMariaDBCleanup(ctx, backup, location,
@@ -149,6 +160,40 @@ func (r *BackupReconciler) cleanupMariaDBBackup(ctx context.Context, backup *bac
 	}
 	logger.Info("deleted MariaDB dump and its operator Backup", "backup", backup.Name, "dump", location+name, "operatorBackup", opName)
 	return ctrl.Result{}, nil
+}
+
+// contestedMariaDBDump returns the name of another operator Backup on op's
+// bucket and prefix whose run, finished or not, could have written the dump
+// name, or "" when none could. The size probe that recorded name let only
+// runs finished by then contest it, and a run can upload its dump and prune
+// op's through maxRetention before it completes. A dump no longer in the
+// bucket is contested by nobody: deleting it again removes nothing.
+func contestedMariaDBDump(ctx context.Context, lister s3ObjectLister, reader client.Reader, op *mariadbtypes.Backup, name string) (string, error) {
+	ts, ok := parseMariaDBLogicalBackupFile(name)
+	if !ok {
+		return "", fmt.Errorf("%q is not the name of a mariadb-operator dump", name)
+	}
+	s3 := op.Spec.Storage.S3
+	key := mariadbOperatorS3Prefix(s3.Prefix) + name
+	objects, err := lister.ListObjects(ctx, s3.Bucket, key, false)
+	if err != nil {
+		return "", fmt.Errorf("list s3://%s/%s: %w", s3.Bucket, key, err)
+	}
+	i := slices.IndexFunc(objects, func(obj s3ObjectInfo) bool { return obj.Key == key })
+	if i < 0 {
+		return "", nil
+	}
+	others, err := neighbourMariaDBRuns(ctx, reader, op, true)
+	if err != nil {
+		return "", fmt.Errorf("list operator Backups: %w", err)
+	}
+	d := mariadbDump{Key: key, Name: name, Timestamp: ts, LastModified: objects[i].LastModified}
+	for _, other := range others {
+		if other.placesOnEitherClock(d) {
+			return other.name, nil
+		}
+	}
+	return "", nil
 }
 
 // activeRestoreOf returns the name of a RestoreJob that restores from

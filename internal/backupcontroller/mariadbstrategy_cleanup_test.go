@@ -22,6 +22,7 @@ import (
 
 	strategyv1alpha1 "github.com/cozystack/cozystack/api/backups/strategy/v1alpha1"
 	backupsv1alpha1 "github.com/cozystack/cozystack/api/backups/v1alpha1"
+	"github.com/cozystack/cozystack/internal/backupcontroller/mariadbapp"
 	"github.com/cozystack/cozystack/internal/backupcontroller/mariadbtypes"
 )
 
@@ -435,6 +436,220 @@ func TestCleanupMariaDBBackup_LegacyBackupDeletesItsDumpDespiteALaterUnfinishedR
 	if want := []string{"bkt/" + key}; fmt.Sprint(bucket.removed) != fmt.Sprint(want) {
 		t.Errorf("removed %v, want %v", bucket.removed, want)
 	}
+}
+
+// The size probe that records a dump lets only finished runs contest it, so
+// a run still unfinished then, which uploaded its dump and pruned this
+// run's through maxRetention, can have its dump recorded here. Deletion
+// contests the recorded dump again, with every run as it stands now.
+func TestCleanupMariaDBBackup_RecordedDumpARunUnfinishedAtTheProbeCouldOwnIsReleased(t *testing.T) {
+	started := cleanupCreated.Add(time.Minute)
+	theirs := dumpKey(cleanupPrefix, started.Add(30*time.Second), "gzip")
+	cases := map[string][]metav1.Condition{
+		"running": {{
+			Type: mariadbtypes.ConditionTypeComplete, Status: metav1.ConditionFalse,
+			Reason: mariadbtypes.ConditionReasonJobRunning, Message: "Running", LastTransitionTime: metav1.NewTime(started),
+		}},
+		"not yet reconciled": nil,
+		"completed since":    {mariadbBackupSucceeded(metav1.NewTime(cleanupCompleted.Add(5 * time.Minute)))},
+	}
+	for name, conditions := range cases {
+		t.Run(name, func(t *testing.T) {
+			bucket := &fakeS3Bucket{objects: []s3ObjectInfo{{Key: theirs, LastModified: started.Add(time.Minute)}}}
+			other := cleanupOperatorBackup(t)
+			other.Name = "op-other"
+			other.CreationTimestamp = metav1.NewTime(started)
+			other.Status.Conditions = conditions
+			r, rec := cleanupReconciler(t, bucket, cleanupOperatorBackup(t), other, s3CredsSecret("tenant", "creds"), tenantNamespace())
+
+			res, err := r.cleanupMariaDBBackup(context.Background(), cleanupBackup(strings.TrimPrefix(theirs, cleanupPrefix)))
+			assertReleasedUntouched(t, r, rec, bucket, res, err)
+		})
+	}
+}
+
+// Either clock placing the recorded dump in another run's lifetime is
+// enough: the backup pod's clock can be skewed while the store's is not.
+func TestCleanupMariaDBBackup_RecordedDumpAnotherRunPlacesOnOneClockIsReleased(t *testing.T) {
+	stamped := cleanupCreated.Add(20 * time.Second)
+	uploaded := cleanupCreated.Add(2 * time.Minute)
+	theirs := dumpKey(cleanupPrefix, stamped, "gzip")
+	bucket := &fakeS3Bucket{objects: []s3ObjectInfo{{Key: theirs, LastModified: uploaded}}}
+	other := cleanupOperatorBackup(t)
+	other.Name = "op-other"
+	other.CreationTimestamp = metav1.NewTime(uploaded.Add(30 * time.Second))
+	other.Status.Conditions = nil
+	r, rec := cleanupReconciler(t, bucket, cleanupOperatorBackup(t), other, s3CredsSecret("tenant", "creds"), tenantNamespace())
+
+	res, err := r.cleanupMariaDBBackup(context.Background(), cleanupBackup(strings.TrimPrefix(theirs, cleanupPrefix)))
+	assertReleasedUntouched(t, r, rec, bucket, res, err)
+}
+
+// The listing is by prefix, so a longer key sharing it is not the dump and
+// contests nothing.
+func TestCleanupMariaDBBackup_RecordedDumpIgnoresAKeyItIsOnlyAPrefixOf(t *testing.T) {
+	key := cleanupPrefix + cleanupDumpName
+	bucket := &fakeS3Bucket{objects: []s3ObjectInfo{{Key: key + ".tmp", LastModified: cleanupCompleted.Add(2 * time.Hour)}}}
+	running := cleanupOperatorBackup(t)
+	running.Name = "op-running"
+	running.CreationTimestamp = metav1.NewTime(cleanupCompleted.Add(time.Hour))
+	running.Status.Conditions = nil
+	r, _ := cleanupReconciler(t, bucket, cleanupOperatorBackup(t), running, s3CredsSecret("tenant", "creds"), tenantNamespace())
+
+	res, err := r.cleanupMariaDBBackup(context.Background(), cleanupBackup(cleanupDumpName))
+	if err != nil || requeues(res) {
+		t.Fatalf("got res=%+v err=%v, want the Backup released", res, err)
+	}
+	if want := []string{"bkt/" + key}; fmt.Sprint(bucket.removed) != fmt.Sprint(want) {
+		t.Errorf("removed %v, want %v", bucket.removed, want)
+	}
+}
+
+// A name the dump time cannot be read from leaves one clock out of the
+// contest, so it is an error rather than a contest on half the evidence.
+func TestContestedMariaDBDump_RejectsANameWithoutADumpTime(t *testing.T) {
+	op := cleanupOperatorBackup(t)
+	name := "backup.not-a-time.sql"
+	bucket := &fakeS3Bucket{objects: []s3ObjectInfo{{Key: cleanupPrefix + name, LastModified: cleanupCreated}}}
+	c := newMariaDBStrategyTestClient(t, op)
+	if _, err := contestedMariaDBDump(context.Background(), bucket, c, op, name); err == nil {
+		t.Fatal("err = nil, want the unreadable dump time reported")
+	}
+}
+
+// A retry after the dump was deleted but the operator Backup was not finds
+// nothing to contest, whichever run's lifetime the dump's name falls in.
+func TestCleanupMariaDBBackup_RecordedDumpAlreadyGoneIsNotContested(t *testing.T) {
+	bucket := &fakeS3Bucket{}
+	running := cleanupOperatorBackup(t)
+	running.Name = "op-running"
+	running.CreationTimestamp = metav1.NewTime(cleanupCreated)
+	running.Status.Conditions = nil
+	r, rec := cleanupReconciler(t, bucket, cleanupOperatorBackup(t), running, s3CredsSecret("tenant", "creds"), tenantNamespace())
+
+	res, err := r.cleanupMariaDBBackup(context.Background(), cleanupBackup(cleanupDumpName))
+	if err != nil || requeues(res) {
+		t.Fatalf("got res=%+v err=%v, want the Backup released", res, err)
+	}
+	if operatorBackupExists(t, r.Client) {
+		t.Error("operator Backup kept, want it deleted")
+	}
+	if events := drainEvents(rec); hasEvent(events, "Warning ArtifactNotDeleted") {
+		t.Errorf("events = %v, want no ArtifactNotDeleted", events)
+	}
+}
+
+// A run started after the recorded dump was uploaded cannot have written it.
+func TestCleanupMariaDBBackup_DeletesItsRecordedDumpDespiteALaterUnfinishedRun(t *testing.T) {
+	key := cleanupPrefix + cleanupDumpName
+	bucket := &fakeS3Bucket{objects: []s3ObjectInfo{{Key: key, LastModified: cleanupCreated.Add(2 * time.Minute)}}}
+	running := cleanupOperatorBackup(t)
+	running.Name = "op-running"
+	running.CreationTimestamp = metav1.NewTime(cleanupCompleted.Add(time.Hour))
+	running.Status.Conditions = nil
+	r, _ := cleanupReconciler(t, bucket, cleanupOperatorBackup(t), running, s3CredsSecret("tenant", "creds"), tenantNamespace())
+
+	res, err := r.cleanupMariaDBBackup(context.Background(), cleanupBackup(cleanupDumpName))
+	if err != nil || requeues(res) {
+		t.Fatalf("got res=%+v err=%v, want the Backup released", res, err)
+	}
+	if want := []string{"bkt/" + key}; fmt.Sprint(bucket.removed) != fmt.Sprint(want) {
+		t.Errorf("removed %v, want %v", bucket.removed, want)
+	}
+	if operatorBackupExists(t, r.Client) {
+		t.Error("operator Backup kept, want it deleted once its dump is")
+	}
+}
+
+func TestCleanupMariaDBBackup_RecordedDumpListingFailureRetries(t *testing.T) {
+	bucket := &fakeS3Bucket{listErr: errors.New("connection refused")}
+	r, rec := cleanupReconciler(t, bucket, cleanupOperatorBackup(t), s3CredsSecret("tenant", "creds"), tenantNamespace())
+
+	res, err := r.cleanupMariaDBBackup(context.Background(), cleanupBackup(cleanupDumpName))
+	if err != nil || !requeues(res) {
+		t.Fatalf("got res=%+v err=%v, want the Backup held and retried", res, err)
+	}
+	if len(bucket.removed) != 0 || !operatorBackupExists(t, r.Client) {
+		t.Errorf("removed=%v operatorBackupExists=%v, want nothing deleted", bucket.removed, operatorBackupExists(t, r.Client))
+	}
+	if events := drainEvents(rec); !hasEvent(events, "Warning ArtifactCleanupFailed") {
+		t.Errorf("events = %v, want a Warning ArtifactCleanupFailed", events)
+	}
+}
+
+// Without the list of runs nothing is known about who else could have
+// written the dump, so it is kept and the delete retried.
+func TestCleanupMariaDBBackup_RecordedDumpWithUnreadableRunsRetries(t *testing.T) {
+	key := cleanupPrefix + cleanupDumpName
+	bucket := &fakeS3Bucket{objects: []s3ObjectInfo{{Key: key, LastModified: cleanupCreated.Add(2 * time.Minute)}}}
+	c := interceptor.NewClient(newMariaDBStrategyTestClient(t, cleanupOperatorBackup(t), s3CredsSecret("tenant", "creds"), tenantNamespace()).(client.WithWatch), interceptor.Funcs{
+		List: func(ctx context.Context, c client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
+			if _, ok := list.(*mariadbtypes.BackupList); ok {
+				return errors.New("apiserver unavailable")
+			}
+			return c.List(ctx, list, opts...)
+		},
+	})
+	r, rec := cleanupReconcilerWithClient(c, bucket)
+
+	res, err := r.cleanupMariaDBBackup(context.Background(), cleanupBackup(cleanupDumpName))
+	if err != nil || !requeues(res) {
+		t.Fatalf("got res=%+v err=%v, want the Backup held and retried", res, err)
+	}
+	if len(bucket.removed) != 0 || !operatorBackupExists(t, r.Client) {
+		t.Errorf("removed=%v operatorBackupExists=%v, want nothing deleted", bucket.removed, operatorBackupExists(t, r.Client))
+	}
+	if events := drainEvents(rec); !hasEvent(events, "Warning ArtifactCleanupFailed") {
+		t.Errorf("events = %v, want a Warning ArtifactCleanupFailed", events)
+	}
+}
+
+// The whole sequence: run B uploads its dump and prunes this run's before
+// B completes, this run's Backup is created and probed, then deleted. B's
+// dump must survive whatever the probe recorded.
+func TestMariaDBBackup_ProbeThenCleanupKeepsADumpAnUnfinishedRunUploaded(t *testing.T) {
+	apps := mariadbapp.GroupName
+	started := cleanupCreated.Add(time.Minute)
+	theirs := s3ObjectInfo{Key: dumpKey(cleanupPrefix, started.Add(30*time.Second), "gzip"), Size: 42, LastModified: started.Add(time.Minute)}
+	rendered := newRenderedMariaDBTemplate()
+	rendered.Storage.S3.Prefix = "tenant/db"
+	resolved := &ResolvedBackupConfig{
+		StrategyRef: corev1.TypedLocalObjectReference{Kind: "MariaDB", Name: "mariadb-strategy-default"},
+		Parameters:  map[string]string{},
+	}
+	job := &backupsv1alpha1.BackupJob{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "bk"},
+		Spec: backupsv1alpha1.BackupJobSpec{
+			ApplicationRef: corev1.TypedLocalObjectReference{Kind: "MariaDB", Name: "db", APIGroup: &apps},
+		},
+	}
+	other := func() *mariadbtypes.Backup {
+		b := cleanupOperatorBackup(t)
+		b.Name = "op-other"
+		b.CreationTimestamp = metav1.NewTime(started)
+		b.Status.Conditions = nil
+		return b
+	}
+
+	prober := reconcilerWithLister(t, &fakeS3Lister{objects: []s3ObjectInfo{theirs}}, job, other(), s3CredsSecret("tenant", "creds"))
+	created, err := prober.createMariaDBBackupArtifact(context.Background(), job, resolved, cleanupOperatorBackup(t), rendered)
+	if err != nil {
+		t.Fatalf("createMariaDBBackupArtifact: %v", err)
+	}
+	if got, want := created.Spec.DriverMetadata[mariadbDumpFileKey], strings.TrimPrefix(theirs.Key, cleanupPrefix); got != want {
+		t.Fatalf("probe recorded dump %q, want %q: this test covers the recorded path", got, want)
+	}
+
+	backup := created.DeepCopy()
+	backup.ResourceVersion = ""
+	now := metav1.Now()
+	backup.DeletionTimestamp = &now
+	backup.Finalizers = []string{backupFinalizer}
+	bucket := &fakeS3Bucket{objects: []s3ObjectInfo{theirs}}
+	r, rec := cleanupReconciler(t, bucket, backup, cleanupOperatorBackup(t), other(), s3CredsSecret("tenant", "creds"), tenantNamespace())
+
+	res, err := r.cleanupMariaDBBackup(context.Background(), backup)
+	assertReleasedUntouched(t, r, rec, bucket, res, err)
 }
 
 func TestCleanupMariaDBBackup_LegacyListingFailureRetries(t *testing.T) {
