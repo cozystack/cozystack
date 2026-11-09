@@ -40,6 +40,15 @@ tests:
           path: spec.template.spec.containers[0].args
           content: --auth-cache-ttl=10s
 
+  # Envoy behind a Cilium Gateway resets a stream after 300s without data
+  # (envoy.streamIdleTimeoutDurationSeconds), so a silent tail has to be
+  # ended by the proxy first, or the client sees a reset instead of an end.
+  - it: ends a silent tail before the Gateway stream idle timeout
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --tail-idle-timeout=4m30s
+
   - it: falls back to cozy.local when the platform passes no cluster domain
     asserts:
       - contains:

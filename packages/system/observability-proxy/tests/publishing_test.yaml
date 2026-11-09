@@ -3,7 +3,7 @@ suite: observability-proxy public endpoint
 # Kubernetes bearer token, so the route must pass Authorization and the
 # /apis/... path through untouched, and must not end a request before the
 # proxy does: a non-tail request may take up to --request-timeout (1m), and
-# a tail may stay silent up to --tail-idle-timeout (5m). Whole objects are
+# a tail may stay silent up to --tail-idle-timeout (4m30s). Whole objects are
 # compared rather than single keys, so an annotation or a field that should
 # not be there fails the test too.
 templates:

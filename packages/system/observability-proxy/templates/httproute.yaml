@@ -22,7 +22,9 @@ spec:
       port: 80
     {{- /* Without a request timeout Cilium leaves Envoy's 15s route default
            in place, which would cut every tail. The proxy bounds each
-           request itself, so the route sets none. */}}
+           request itself, so the route disables it. Envoy's 300s stream
+           idle timeout still applies; the proxy's tail idle limit stays
+           below it (see deployment.yaml). */}}
     timeouts:
       request: 0s
 {{- end }}

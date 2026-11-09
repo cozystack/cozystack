@@ -25,8 +25,9 @@ metadata:
            in batches. */}}
     nginx.ingress.kubernetes.io/proxy-buffering: "off"
     {{- /* The controller default is 10s. The longest silence the proxy
-           allows is a tail with no new line for --tail-idle-timeout (5m),
-           after which it ends the response itself. */}}
+           allows is a tail with no new line for --tail-idle-timeout (4m30s),
+           after which it ends the response itself; before the first byte
+           the token and access reviews may add up to --request-timeout (1m). */}}
     nginx.ingress.kubernetes.io/proxy-read-timeout: "360"
 spec:
   ingressClassName: {{ $exposeIngress }}
