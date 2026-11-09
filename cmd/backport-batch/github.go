@@ -52,7 +52,7 @@ var (
 	batchBranchRE = regexp.MustCompile(`^backport-batch/(release-\d+\.\d+)-(\d{8})$`)
 	loginRE       = regexp.MustCompile(`^[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?$`)
 	botLoginRE    = regexp.MustCompile(`^[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?\[bot\]$`)
-	pullURLRE     = regexp.MustCompile(`^https://[^/\s]+/[^/\s]+/[^/\s]+/pull/[1-9][0-9]*$`)
+	pullURLRE     = regexp.MustCompile(`^https://[^/\s]+/[^/\s]+/[^/\s]+/pull/([1-9][0-9]{0,8})$`)
 )
 
 // batchBotEnv names the GitHub App bot the scheduled batch opens its pull
@@ -122,8 +122,10 @@ type github interface {
 	permission(login string) (string, error)
 	// labelled lists the pull requests merged into main that carry label.
 	labelled(label string) ([]int, error)
-	// createPull opens the draft and returns its URL.
-	createPull(base, head, title, bodyFile string) (string, error)
+	// pull reads one pull request as it is now.
+	pull(number int) (pullRequest, error)
+	// createPull opens the draft and returns its number and URL.
+	createPull(base, head, title, bodyFile string) (int, string, error)
 	editPull(number int, title, bodyFile string) error
 	comments(number int) ([]issueComment, error)
 	createComment(number int, bodyFile string) error
@@ -223,16 +225,33 @@ func (ghCLI) labelled(label string) ([]int, error) {
 	return numbers, nil
 }
 
-func (ghCLI) createPull(base, head, title, bodyFile string) (string, error) {
+func (ghCLI) pull(number int) (pullRequest, error) {
+	var pr pullRequest
+	out, err := capture("gh", "api", "repos/{owner}/{repo}/pulls/"+strconv.Itoa(number))
+	if err != nil {
+		return pr, err
+	}
+	if err := json.Unmarshal([]byte(out), &pr); err != nil {
+		return pr, fmt.Errorf("reading pull request #%d: %w", number, err)
+	}
+	if pr.Number != number {
+		return pr, fmt.Errorf("asked for pull request #%d, GitHub answered with #%d", number, pr.Number)
+	}
+	return pr, nil
+}
+
+func (ghCLI) createPull(base, head, title, bodyFile string) (int, string, error) {
 	out, err := capture("gh", "pr", "create", "--draft", "--base", base, "--head", head, "--title", title, "--body-file", bodyFile)
 	if err != nil {
-		return "", err
+		return 0, "", err
 	}
 	url := strings.TrimSpace(out)
-	if !pullURLRE.MatchString(url) {
-		return "", fmt.Errorf("gh pr create printed %q, not the URL of a pull request", url)
+	m := pullURLRE.FindStringSubmatch(url)
+	if m == nil {
+		return 0, "", fmt.Errorf("gh pr create printed %q, not the URL of a pull request", url)
 	}
-	return url, nil
+	n, err := strconv.Atoi(m[1])
+	return n, url, err
 }
 
 func (ghCLI) editPull(number int, title, bodyFile string) error {

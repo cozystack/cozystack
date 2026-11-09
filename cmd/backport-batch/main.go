@@ -38,6 +38,7 @@ Usage:
   backport-batch fold  --line release-X.Y --original N --commit SHA [--policy REF]
   backport-batch verify --line release-X.Y [--head SHA]
   backport-batch notify --line release-X.Y [--mention org/team|login] [--push]
+  backport-batch report --pr N [--id ID] [--json]
   backport-batch lines [--policy REF]
 
 run    Builds backport-batch/<line>-<yyyymmdd> in this working tree, off
@@ -69,11 +70,15 @@ notify Prints what waits on the open batch PR for a maintainer: a batch
        open for 3 days or more, its deferred conflicts, and the originals
        that change workflows. --push keeps one comment on the PR that says
        what waits, mentioning --mention.
+report Prints a report batch PR N keeps: the one its body carries, or the
+       one --id names, read from its comments or its body. --json prints the
+       report as it is stored. It writes nothing, so it reads merged and
+       closed batches too.
 lines  Prints the release lines the batch runs for, newest first.
 
 The policy is docs/release/backports.md. run, check, fold and lines read its
 policy block from that page on origin/main, or on --policy REF. Every command
-but notify, which reads only GitHub, fetches origin first.
+but notify and report, which read only GitHub, fetches origin first.
 
 BACKPORT_BATCH_BOT names the bot the scheduled batch writes as,
 <app>[bot], cozystack-ci[bot] when unset: a batch pull request or a notify
@@ -93,10 +98,12 @@ type app struct {
 	now    func() time.Time
 	// policyRef is where the policy page is read from; origin/main when empty.
 	policyRef string
+	// tool is the commit backport-batch was built from, for the record.
+	tool string
 }
 
 func main() {
-	a := &app{gh: ghCLI{bot: batchBotLogin(os.LookupEnv)}, stdout: os.Stdout, stderr: os.Stderr, now: time.Now}
+	a := &app{gh: ghCLI{bot: batchBotLogin(os.LookupEnv)}, stdout: os.Stdout, stderr: os.Stderr, now: time.Now, tool: toolVersion()}
 	os.Exit(a.main(os.Args[1:]))
 }
 
@@ -121,6 +128,8 @@ func (a *app) main(args []string) int {
 		return a.verify(args[1:])
 	case "notify":
 		return a.notify(args[1:])
+	case "report":
+		return a.report(args[1:])
 	case "lines":
 		return a.lines(args[1:])
 	case "-h", "--help", "help":
@@ -199,11 +208,15 @@ type batch struct {
 	newer    *line
 	lineHead string
 	mainHead string
-	base     string
-	other    []string
-	verdicts []*verdict
-	pr       *pullRequest
-	prHead   string
+	// newerHead is the newer line's head, and policyAt the commit the
+	// policy was read from.
+	newerHead string
+	policyAt  string
+	base      string
+	other     []string
+	verdicts  []*verdict
+	pr        *pullRequest
+	prHead    string
 	// picks is what the open batch pull request carries beyond the line.
 	picks *history
 	// src is the line's record and where it was found.
@@ -229,18 +242,20 @@ func fetch() error {
 	return err
 }
 
-func (a *app) policy(mainHead string) (*policy, error) {
+// policy reads the policy and says from which commit.
+func (a *app) policy(mainHead string) (*policy, string, error) {
 	at := mainHead
 	if a.policyRef != "" {
 		if strings.HasPrefix(a.policyRef, "-") {
-			return nil, fmt.Errorf("--policy %q is not a ref", a.policyRef)
+			return nil, "", fmt.Errorf("--policy %q is not a ref", a.policyRef)
 		}
 		var err error
 		if at, err = resolve(a.policyRef); err != nil {
-			return nil, err
+			return nil, "", err
 		}
 	}
-	return readPolicy(at)
+	pol, err := readPolicy(at)
+	return pol, at, err
 }
 
 // prepare reads the line, main and the open batch pull request, each pinned to
@@ -251,7 +266,7 @@ func (a *app) prepare(l line) (*batch, error) {
 	if b.mainHead, err = resolve("refs/remotes/" + remote + "/main"); err != nil {
 		return nil, err
 	}
-	pol, err := a.policy(b.mainHead)
+	pol, policyAt, err := a.policy(b.mainHead)
 	if err != nil {
 		return nil, err
 	}
@@ -265,7 +280,7 @@ func (a *app) prepare(l line) (*batch, error) {
 	if b.lineHead, err = resolve("refs/remotes/" + remote + "/" + l.branch()); err != nil {
 		return nil, err
 	}
-	b.start, b.textUntil = pol.starts[l.branch()], pol.batchOnly
+	b.start, b.textUntil, b.policyAt = pol.starts[l.branch()], pol.batchOnly, policyAt
 	out, err := git("merge-base", "--end-of-options", b.mainHead, b.lineHead)
 	if err != nil {
 		return nil, fmt.Errorf("%s shares no history with main: %w", l.branch(), err)
@@ -282,11 +297,10 @@ func (a *app) prepare(l line) (*batch, error) {
 	}
 	var newerHist *history
 	if b.newer != nil {
-		newerHead, err := resolve("refs/remotes/" + remote + "/" + b.newer.branch())
-		if err != nil {
+		if b.newerHead, err = resolve("refs/remotes/" + remote + "/" + b.newer.branch()); err != nil {
 			return nil, err
 		}
-		if newerHist, err = readHistory(newerHead, b.mainHead, b.textUntil); err != nil {
+		if newerHist, err = readHistory(b.newerHead, b.mainHead, b.textUntil); err != nil {
 			return nil, err
 		}
 	}

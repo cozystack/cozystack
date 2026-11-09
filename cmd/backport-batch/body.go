@@ -190,25 +190,11 @@ type deferredRecord struct {
 	Deferred []deferredEntry `json:"deferred"`
 }
 
-// deferredBlock is the machine-readable list of what the batch defers. One
-// line of JSON: encoding/json escapes newlines and <, > and &, so nothing in a
-// file name or a reason can end the fence or open HTML. It leaves bidi and
-// zero-width characters as they are, so file names go through clean first,
-// as the reason does.
+// deferredBlock is a version 1 record, which batches carried before records
+// had a version. encoding/json leaves bidi and zero-width characters as they
+// are, so file names go through clean first, as the reason does.
 func deferredBlock(l line, conflicts, held, waiting []pick) string {
-	rec := deferredRecord{Line: l.branch(), Deferred: []deferredEntry{}}
-	for _, p := range conflicts {
-		files := cleanFiles(p.files[:min(len(p.files), filesKept)])
-		rec.Deferred = append(rec.Deferred, deferredEntry{Original: p.v.o.number, Commit: p.failed, Files: files, More: len(p.files) - len(files) + p.more})
-	}
-	for _, p := range held {
-		rec.Deferred = append(rec.Deferred, deferredEntry{Original: p.v.o.number, Files: []string{}, Reason: capped(oneLine(clean(p.reason, false)), titleLimit)})
-	}
-	for _, p := range waiting {
-		files := cleanFiles(p.files[:min(len(p.files), filesKept)])
-		rec.Deferred = append(rec.Deferred, deferredEntry{Original: p.v.o.number, Files: files, More: len(p.files) - len(files) + p.more, Workflows: true})
-	}
-	data, _ := json.Marshal(rec)
+	data, _ := json.Marshal(deferredRecord{Line: l.branch(), Deferred: deferredEntries(conflicts, held, waiting)})
 	return deferredFence + "\n" + string(data) + "\n```"
 }
 
@@ -254,6 +240,14 @@ type report struct {
 	start     time.Time
 	// shapes says, for an original on the branch, what it brought.
 	shapes map[*verdict]string
+	// missing are originals the policy takes that the run neither tried nor
+	// found anywhere.
+	missing []*verdict
+	// opts is how the run was asked to classify, and built what it read.
+	opts  runOptions
+	built builtFrom
+	// blocks are the record and the report the body ends with.
+	blocks string
 }
 
 // ruleName is how output names what kept an original out: the policy's
@@ -368,7 +362,7 @@ func (r *report) what(details map[int]bool) string {
 			b.WriteString("\n</details>\n")
 		}
 	}
-	b.WriteString("\n" + deferredBlock(r.line, r.deferred, r.held, r.waiting) + "\n")
+	b.WriteString("\n" + r.blocks + "\n")
 	return b.String()
 }
 

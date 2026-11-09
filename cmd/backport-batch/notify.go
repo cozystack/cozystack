@@ -182,6 +182,9 @@ func (a *app) comment(pr *pullRequest, mention string, today time.Time, text []s
 	if err := f.Close(); err != nil {
 		return a.fail(err)
 	}
+	if err := a.stillOpen(pr.Number); err != nil {
+		return a.fail(err)
+	}
 	if ours != nil {
 		err = a.gh.editComment(ours.ID, f.Name())
 	} else {
@@ -207,7 +210,7 @@ func (a *app) lines(args []string) int {
 	if err != nil {
 		return a.fail(err)
 	}
-	pol, err := a.policy(mainHead)
+	pol, _, err := a.policy(mainHead)
 	if err != nil {
 		return a.fail(err)
 	}

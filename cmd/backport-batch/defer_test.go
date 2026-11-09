@@ -261,8 +261,8 @@ func TestDeferLeasesTheHeadItRebuilt(t *testing.T) {
 
 	pr := f.batchPR(90, "release-1.1", batchBranch1, gh.prs[0].Body)
 	a := &app{gh: gh}
-	b := &batch{line: l, lineHead: lineHead, pr: &pr, prHead: head}
-	err := a.publish(b, batchBranch1, rebuilt, "title", "body", true)
+	b := &batch{line: l, lineHead: lineHead, pr: &pr, prHead: head, src: recordSource{carrier: &pr, open: true, code: &pr}}
+	err := a.publish(b, publication{branch: batchBranch1, head: rebuilt, title: "title", body: "body"}, true)
 	if err == nil || !strings.Contains(err.Error(), "which the rebuild started from") {
 		t.Errorf("publish over a head pushed since = %v, want a refusal", err)
 	}

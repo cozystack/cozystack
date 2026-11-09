@@ -285,6 +285,27 @@ func (b *builtFrom) validate() error {
 
 var runURLRE = regexp.MustCompile(`^https://[^/\s]+/[^/\s]+/[^/\s]+/actions/runs/[0-9]+(/attempts/[0-9]+)?$`)
 
+// recordBlock is the block that holds rec. One line of JSON: encoding/json
+// escapes newlines and <, > and &, so nothing in a file name or a reason can
+// end the fence or open HTML.
+func recordBlock(rec lineRecord) string {
+	data, _ := json.Marshal(rec)
+	return deferredFence + "\n" + string(data) + "\n```"
+}
+
+// savedNoWorkflowFiles is the --no-workflow-files the open batch was last
+// assembled with, which an operation that only changes the record keeps. A
+// record from before it was saved says so by listing a wait.
+func (s recordSource) savedNoWorkflowFiles() bool {
+	if !s.open || s.rec == nil {
+		return false
+	}
+	if s.rec.Built != nil {
+		return s.rec.Built.Options.NoWorkflowFiles
+	}
+	return slices.ContainsFunc(s.rec.Deferred, func(d deferredEntry) bool { return d.Workflows })
+}
+
 // deferred maps the originals the record defers to their entries.
 func (rec *lineRecord) deferred() map[int]deferredEntry {
 	out := map[int]deferredEntry{}

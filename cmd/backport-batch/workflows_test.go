@@ -110,7 +110,8 @@ func TestWorkflowChangesWaitUntilOnTheLine(t *testing.T) {
 	if code != 0 || !strings.Contains(stdout, "1 originals on #90 change .github/workflows/ and wait for a maintainer") || strings.Contains(stdout, "deferred conflicts") {
 		t.Errorf("notify = %d, %q; want #5 for a maintainer and no conflict\n%s", code, stdout, stderr)
 	}
-	if len(gh.issueComments) != 1 || !strings.Contains(gh.issueComments[0].Body, "[#5](") || !strings.Contains(gh.issueComments[0].Body, "#changes-to-workflows") || strings.Contains(gh.issueComments[0].Body, "These conflicts") {
+	notes := slices.DeleteFunc(slices.Clone(gh.issueComments), func(c issueComment) bool { return !strings.HasPrefix(c.Body, notifyMarker) })
+	if len(notes) != 1 || !strings.Contains(notes[0].Body, "[#5](") || !strings.Contains(notes[0].Body, "#changes-to-workflows") || strings.Contains(notes[0].Body, "These conflicts") {
 		t.Errorf("the comment does not list #5 for a maintainer: %+v", gh.issueComments)
 	}
 

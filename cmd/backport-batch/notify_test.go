@@ -313,3 +313,24 @@ func TestRunWithNothingToPick(t *testing.T) {
 		t.Errorf("pushed %q and opened %q with nothing picked", f.remoteHead(batchBranch1), gh.created)
 	}
 }
+
+// notify writes its comment only after GitHub says the batch is still open,
+// so a batch closed while notify reads it is not written to, whether the
+// comment would be new or an update of its own.
+func TestNotifyWritesNothingOnABatchClosedMeanwhile(t *testing.T) {
+	for _, update := range []bool{false, true} {
+		t.Run(map[bool]string{false: "a new comment", true: "an update"}[update], func(t *testing.T) {
+			gh := &fakeGH{prs: []pullRequest{notifyPR("20261023", recordBody(5))}}
+			if update {
+				ours := issueComment{ID: 7, Body: notifyMarker + "\nearlier"}
+				ours.User.Login, ours.User.Type = "maintainer", "User"
+				gh.issueComments = []issueComment{ours}
+			}
+			gh.after = map[string]func(){"comments": func() { gh.find(90).State = "closed" }}
+			code, _, stderr := notifyRun(gh, "--push")
+			if code != 2 || !strings.Contains(stderr, "batch pull request #90 is closed now; nothing is written to it") || len(gh.closedWrites) != 0 || update && gh.issueComments[0].Body != notifyMarker+"\nearlier" {
+				t.Errorf("notify = %d, closed writes %q, comments %+v; want 2 and nothing written:\n%s", code, gh.closedWrites, gh.issueComments, stderr)
+			}
+		})
+	}
+}

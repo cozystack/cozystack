@@ -18,6 +18,7 @@ package main
 
 import (
 	"bytes"
+	"cmp"
 	"fmt"
 	"os"
 	"os/exec"
@@ -36,6 +37,8 @@ type fixture struct {
 	dir    string
 	remote string
 	now    time.Time
+	// tool is the commit the tool says it was built from.
+	tool string
 }
 
 func newFixture(t *testing.T) *fixture {
@@ -256,6 +259,48 @@ type fakeGH struct {
 	// closedWrites names every write the tool attempted on a pull request
 	// that is no longer open; exec fails the test on one.
 	closedWrites []string
+	// fail makes the next call of an operation, by its method name, fail.
+	fail map[string]error
+	// nextPR is the number createPull gives, 90 when unset.
+	nextPR int
+	// remoteHead reads a branch's head off the fixture's remote: GitHub
+	// reports an open pull request at what its branch has.
+	remoteHead func(string) string
+	// commented lists the pull request each comment went to, in order.
+	commented []int
+	// after runs once an operation, by its method name, has succeeded: what
+	// someone else does on GitHub meanwhile.
+	after map[string]func()
+}
+
+// live is pr as GitHub reports it now: an open one at the head its branch
+// has on the remote.
+func (g *fakeGH) live(pr pullRequest) pullRequest {
+	if g.remoteHead != nil && (pr.State == "" || pr.State == "open") {
+		if head := g.remoteHead(pr.Head.Ref); head != "" {
+			pr.Head.SHA = head
+		}
+	}
+	return pr
+}
+
+// inject is the failure a test set for the next call of op, once.
+func (g *fakeGH) inject(op string) error {
+	err := g.fail[op]
+	delete(g.fail, op)
+	return err
+}
+
+func (g *fakeGH) pull(n int) (pullRequest, error) {
+	if err := g.inject("pull"); err != nil {
+		return pullRequest{}, err
+	}
+	for _, pr := range g.prs {
+		if pr.Number == n {
+			return g.live(pr), nil
+		}
+	}
+	return pullRequest{}, fmt.Errorf("HTTP 404: no pull request #%d", n)
 }
 
 // isOpen says whether the fake has pull request n open, or does not know it.
@@ -296,6 +341,11 @@ func (g *fakeGH) recentPulls(base string, page int) ([]pullRequest, error) {
 func (g *fakeGH) batchBot() string { return g.bot }
 
 func (g *fakeGH) comments(int) ([]issueComment, error) {
+	defer func() {
+		if f := g.after["comments"]; f != nil {
+			f()
+		}
+	}()
 	return slices.Clone(g.issueComments), nil
 }
 
@@ -303,6 +353,15 @@ func (g *fakeGH) createComment(number int, bodyFile string) error {
 	if err := g.write(number, "a comment"); err != nil {
 		return err
 	}
+	if err := g.inject("createComment"); err != nil {
+		return err
+	}
+	g.commented = append(g.commented, number)
+	defer func() {
+		if f := g.after["createComment"]; f != nil {
+			f()
+		}
+	}()
 	data, err := os.ReadFile(bodyFile)
 	var c issueComment
 	c.ID, c.Body = int64(1000+len(g.issueComments)), string(data)
@@ -346,23 +405,56 @@ func (g *fakeGH) openPulls(base string) ([]pullRequest, error) {
 	var out []pullRequest
 	for _, pr := range g.prs {
 		if pr.Base.Ref == base && (pr.State == "" || pr.State == "open") {
-			out = append(out, pr)
+			out = append(out, g.live(pr))
 		}
 	}
 	return out, g.err
 }
 
-func (g *fakeGH) createPull(base, head, title, bodyFile string) (string, error) {
+// createPull opens the pull request on the fake, as the maintainer, at the
+// head the remote has, numbered nextPR.
+func (g *fakeGH) createPull(base, head, title, bodyFile string) (int, string, error) {
+	if err := g.inject("createPull"); err != nil {
+		return 0, "", err
+	}
 	g.created = append(g.created, base+" "+head+" "+title)
-	return fmt.Sprintf("https://github.com/%s/pull/90", upstreamRepo), g.readBody(bodyFile)
+	if err := g.readBody(bodyFile); err != nil {
+		return 0, "", err
+	}
+	n := cmp.Or(g.nextPR, 90)
+	var pr pullRequest
+	pr.Number, pr.Body, pr.State = n, g.bodies[len(g.bodies)-1], "open"
+	pr.HTMLURL = fmt.Sprintf("https://github.com/%s/pull/%d", upstreamRepo, n)
+	pr.User.Login, pr.User.Type = "maintainer", "User"
+	pr.Head.Ref = head
+	if g.remoteHead != nil {
+		pr.Head.SHA = g.remoteHead(head)
+	}
+	pr.Head.Repo = &struct {
+		FullName string `json:"full_name"`
+	}{upstreamRepo}
+	pr.Base.Ref, pr.Base.Repo.FullName = base, upstreamRepo
+	g.prs = append(slices.DeleteFunc(g.prs, func(p pullRequest) bool { return p.Number == n }), pr)
+	return n, pr.HTMLURL, nil
 }
 
 func (g *fakeGH) editPull(number int, title, bodyFile string) error {
 	if err := g.write(number, "an edit"); err != nil {
 		return err
 	}
+	if err := g.inject("editPull"); err != nil {
+		return err
+	}
 	g.edited = append(g.edited, fmt.Sprintf("#%d %s", number, title))
-	return g.readBody(bodyFile)
+	if err := g.readBody(bodyFile); err != nil {
+		return err
+	}
+	for i := range g.prs {
+		if g.prs[i].Number == number {
+			g.prs[i].Body = g.bodies[len(g.bodies)-1]
+		}
+	}
+	return nil
 }
 
 func (g *fakeGH) readBody(path string) error {
@@ -423,8 +515,11 @@ func (f *fixture) exec(gh *fakeGH, args ...string) (int, string, string) {
 	if gh == nil {
 		gh = &fakeGH{}
 	}
+	if gh.remoteHead == nil {
+		gh.remoteHead = f.remoteHead
+	}
 	var stdout, stderr bytes.Buffer
-	a := &app{gh: gh, stdout: &stdout, stderr: &stderr, now: func() time.Time { return f.now }}
+	a := &app{gh: gh, stdout: &stdout, stderr: &stderr, now: func() time.Time { return f.now }, tool: f.tool}
 	written := len(gh.closedWrites)
 	code := a.main(args)
 	if len(gh.closedWrites) > written {

@@ -242,3 +242,77 @@ func TestRecordAsksForAPermissionOnce(t *testing.T) {
 		t.Errorf("asked GitHub for %q, want the author once", gh.asked)
 	}
 }
+
+// The record and the report name what the classification was made of: the
+// heads it read, the policy, the tool, the job, the time and the flags.
+func TestRecordNamesItsInputs(t *testing.T) {
+	f := newFixture(t)
+	f.lines()
+	mc5 := f.pr(5, "fix(app): five", "", map[string]string{"app/five.txt": "5\n"})
+	f.onLine("release-1.1", "fix(app): five\n\n(cherry picked from commit "+mc5+")", map[string]string{"app/five.txt": "5\n"})
+	f.tool = strings.Repeat("c", 40) + "+dirty"
+	t.Setenv("GITHUB_SERVER_URL", "https://github.com")
+	t.Setenv("GITHUB_REPOSITORY", "cozystack/cozystack")
+	t.Setenv("GITHUB_RUN_ID", "123")
+	t.Setenv("GITHUB_RUN_ATTEMPT", "2")
+	gh := &fakeGH{}
+	stdout := mustRun(t, f, gh, "run", "--line", "release-1.0", "--no-workflow-files", "--push")
+	l, _ := parseLine("release-1.0")
+	const branch = "backport-batch/release-1.0-20261026"
+	rec, err := parseRecord(stdout, l)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := builtFrom{Main: f.git("rev-parse", "origin/main"), Line: f.git("rev-parse", "origin/release-1.0"), Newer: f.git("rev-parse", "origin/release-1.1"),
+		Policy: f.git("rev-parse", "origin/main"), Batch: f.remoteHead(branch), Tool: f.tool, Run: "https://github.com/cozystack/cozystack/actions/runs/123/attempts/2",
+		At: "2026-10-26T06:00:00Z", Options: runOptions{NoWorkflowFiles: true, Mode: modeNew}}
+	if rec.Version != 2 || *rec.Built != want || bodyReportOf(t, stdout, l).doc.Built != want || rec.Report != bodyReportOf(t, stdout, l).doc.ID {
+		t.Errorf("record = %+v, built %+v; want built %+v and the report it names", rec, rec.Built, want)
+	}
+
+	// A policy from another ref, a run by hand that continues the batch.
+	f.git("push", "-q", "origin", "origin/main:refs/heads/policy-draft")
+	f.git("fetch", "-q", "origin")
+	t.Setenv("GITHUB_RUN_ID", "")
+	gh.prs = []pullRequest{f.batchPR(90, "release-1.0", branch, stdout)}
+	mc6 := f.pr(6, "fix(app): six", "", map[string]string{"app/six.txt": "6\n"})
+	f.onLine("release-1.1", "fix(app): six\n\n(cherry picked from commit "+mc6+")", map[string]string{"app/six.txt": "6\n"})
+	stdout = mustRun(t, f, gh, "run", "--line", "release-1.0", "--continue", "--policy", "origin/policy-draft", "--push")
+	if rec, err = parseRecord(stdout, l); err != nil {
+		t.Fatal(err)
+	}
+	if b := rec.Built; b.Policy != f.git("rev-parse", "origin/policy-draft") || b.Main != f.git("rev-parse", "origin/main") || b.Run != "" || b.Options != (runOptions{Mode: modeContinue}) || b.Batch != f.remoteHead(branch) {
+		t.Errorf("built %+v; want the draft's policy, no job and a continuation without the flag", b)
+	}
+}
+
+// What a run assembled with --no-workflow-files stays saved through the
+// operations that only change the record, which take no such flag: check
+// keeps failing the cut on the wait they leave in place.
+func TestMetadataOperationsKeepTheMode(t *testing.T) {
+	for _, v1 := range []bool{false, true} {
+		t.Run(fmt.Sprintf("an open record of version 1: %v", v1), func(t *testing.T) {
+			f := workflowWorld(t)
+			f.pr(7, "fix(app): seven", "", map[string]string{"app/seven.txt": "7\n"})
+			f.pr(8, "fix(app): eight", "", map[string]string{"app/eight.txt": "8\n"})
+			gh := &fakeGH{}
+			stdout := mustRun(t, f, gh, "run", "--line", "release-1.1", "--no-workflow-files", "--push")
+			reopen(f, gh)
+			if v1 {
+				waits := []pick{{v: &verdict{o: &original{number: 5}}, files: []string{".github/workflows/five.yaml"}}}
+				gh.prs[0].Body = strings.Replace(stdout, strings.Split(strings.Split(stdout, deferredFence+"\n")[1], "\n")[0], strings.Split(deferredBlock(notifyLine, nil, nil, waits), "\n")[1], 1)
+			} else if rec, err := parseRecord(stdout, notifyLine); err != nil || !rec.Built.Options.NoWorkflowFiles {
+				t.Fatalf("the scheduled run saved %+v, %v", rec, err)
+			}
+			stdout = mustRun(t, f, gh, "run", "--line", "release-1.1", "--defer", "7", "--reason", "fails the e2e", "--push")
+			rec, err := parseRecord(stdout, notifyLine)
+			if err != nil || rec.Built.Options != (runOptions{NoWorkflowFiles: true, Mode: modeDefer}) {
+				t.Errorf("after --defer the record is %+v, %v; want the flag kept", rec.Built, err)
+			}
+			reopen(f, gh)
+			if code, stdout, _ := f.exec(gh, "check", "--line", "release-1.1", "--cut"); code != 1 || !strings.Contains(stdout, "#5 changes .github/workflows/") {
+				t.Errorf("check --cut = %d, want #5 still waiting:\n%s", code, stdout)
+			}
+		})
+	}
+}

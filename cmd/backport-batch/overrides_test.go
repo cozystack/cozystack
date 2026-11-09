@@ -238,15 +238,25 @@ func TestGHCLI(t *testing.T) {
 	// A batch pull request carries no label: the release workflows act on a
 	// pull request cozystack-ci[bot] opened only when it has the release label.
 	write("https://github.com/cozystack/cozystack/pull/5300\n")
-	if url, err := (ghCLI{}).createPull("release-1.7", batchBranch1, "fix(backport): batch", "/tmp/body.md"); err != nil || url != "https://github.com/cozystack/cozystack/pull/5300" {
-		t.Errorf("createPull = %q, %v; want the URL gh printed", url, err)
+	if n, url, err := (ghCLI{}).createPull("release-1.7", batchBranch1, "fix(backport): batch", "/tmp/body.md"); err != nil || n != 5300 || url != "https://github.com/cozystack/cozystack/pull/5300" {
+		t.Errorf("createPull = %d, %q, %v; want the pull request gh printed", n, url, err)
 	}
 	if want := "pr create --draft --base release-1.7 --head " + batchBranch1 + " --title fix(backport): batch --body-file /tmp/body.md"; called() != want {
 		t.Errorf("gh %q, want gh %q", called(), want)
 	}
 	write("Warning: 1 uncommitted change\n")
-	if _, err := (ghCLI{}).createPull("release-1.7", batchBranch1, "fix(backport): batch", "/tmp/body.md"); err == nil {
+	if _, _, err := (ghCLI{}).createPull("release-1.7", batchBranch1, "fix(backport): batch", "/tmp/body.md"); err == nil {
 		t.Error("createPull took output that is no pull request URL")
+	}
+	write(`{"number":90,"state":"closed","merged_at":"2026-10-26T12:00:00Z","head":{"ref":"x","sha":"y"}}`)
+	if pr, err := (ghCLI{}).pull(90); err != nil || pr.State != "closed" || pr.MergedAt == nil {
+		t.Errorf("pull = %+v, %v; want #90 merged", pr, err)
+	}
+	if want := "api repos/{owner}/{repo}/pulls/90"; called() != want {
+		t.Errorf("gh %q, want gh %q", called(), want)
+	}
+	if _, err := (ghCLI{}).pull(91); err == nil {
+		t.Error("pull took GitHub's answer about another pull request")
 	}
 	write("")
 	if err := (ghCLI{}).editPull(90, "fix(backport): batch", "/tmp/body.md"); err != nil {

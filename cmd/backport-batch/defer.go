@@ -114,6 +114,9 @@ func (a *app) rebuild(b *batch, numbers []int, reason string, push bool) int {
 		return a.fail(err)
 	}
 	r := newReport(b)
+	// Taking an original out changes nothing about how the batch is
+	// assembled, so the record keeps the flag the batch was assembled with.
+	r.opts = runOptions{NoWorkflowFiles: b.src.savedNoWorkflowFiles(), Mode: modeDefer}
 	if r.stale, err = keptOut(b, picks); err != nil {
 		return a.fail(err)
 	}
@@ -128,6 +131,10 @@ func (a *app) rebuild(b *batch, numbers []int, reason string, push bool) int {
 			r.waiting = append(r.waiting, pick{v: v, status: "waiting", files: e.Files, more: e.More})
 		case len(e.Files) > 0:
 			r.deferred = append(r.deferred, pick{v: v, status: "conflict", files: e.Files, more: e.More, failed: e.Commit})
+		default:
+			// Merged into main since the batch was assembled, or recorded
+			// nowhere: a rebuild adds no original, the next run tries it.
+			r.missing = append(r.missing, v)
 		}
 	}
 	return a.finish(b, r, branch, date, push, true)

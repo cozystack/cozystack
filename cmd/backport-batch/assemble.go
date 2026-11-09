@@ -158,7 +158,9 @@ func (a *app) run(args []string) int {
 	}
 
 	r := newReport(b)
+	r.opts = runOptions{NoWorkflowFiles: *noWorkflows, Mode: modeNew}
 	if carried != nil {
+		r.opts.Mode = modeContinue
 		if r.stale, err = keptOut(b, carried); err != nil {
 			return a.fail(err)
 		}
@@ -264,12 +266,25 @@ func (a *app) finish(b *batch, r *report, branch string, date time.Time, push, r
 	if r.shapes, err = summarize(b, head, r.onBranch); err != nil {
 		return a.fail(err)
 	}
-	title := prTitle(b.line, date.Format(time.DateOnly))
+	r.built = builtFrom{Main: b.mainHead, Line: b.lineHead, Newer: b.newerHead, Policy: b.policyAt, Batch: head, Tool: a.tool,
+		Run: runURL(os.LookupEnv), At: a.now().UTC().Format(time.RFC3339), Options: r.opts}
+	doc, err := buildReport(b, r)
+	if err != nil {
+		return a.fail(err)
+	}
+	p := publication{branch: branch, head: head, title: prTitle(b.line, date.Format(time.DateOnly)), report: storedReport{doc: doc, raw: reportJSON(doc)}}
+	p.record = r.lineRecord(doc)
+	// A record the next command would refuse is never written.
+	if err := p.record.validate(b.line); err != nil {
+		return a.fail(fmt.Errorf("the record this run made %w", err))
+	}
+	r.blocks = recordBlock(p.record) + "\n\n" + reportBlock(p.report.raw)
 	template, err := lineTemplate(b.lineHead)
 	if err != nil {
 		return a.fail(err)
 	}
 	body, left := r.body(template)
+	p.body = body
 	fmt.Fprint(a.stdout, body)
 	skipped := 0
 	for _, items := range r.skipped {
@@ -283,8 +298,8 @@ func (a *app) finish(b *batch, r *report, branch string, date time.Time, push, r
 	for _, p := range r.waiting {
 		fmt.Fprintf(a.stderr, "waiting for a maintainer: %s %s changes %s\n", p.v.o.url(), terminalSafe(p.v.o.title), terminalSafe(strings.Join(p.files, ", ")))
 	}
-	fmt.Fprintf(a.stderr, "%s at %.12s: %d on the branch, %d deferred, %d waiting for a maintainer, %d skipped\ntitle: %s\n",
-		branch, head, len(r.onBranch), len(r.deferred)+len(r.held), len(r.waiting), skipped, title)
+	fmt.Fprintf(a.stderr, "%s at %.12s: %d on the branch, %d deferred, %d waiting for a maintainer, %d skipped\ntitle: %s\nreport: %s\n",
+		branch, head, len(r.onBranch), len(r.deferred)+len(r.held), len(r.waiting), skipped, p.title, doc.ID)
 	if !push {
 		return 0
 	}
@@ -296,10 +311,17 @@ func (a *app) finish(b *batch, r *report, branch string, date time.Time, push, r
 		fmt.Fprintf(a.stderr, "no batch pull request is open on %s; this run's classification is not retained\n", b.line.branch())
 		return 0
 	}
-	if err := a.publish(b, branch, head, title, body, rebuilt); err != nil {
+	if err := a.publish(b, p, rebuilt); err != nil {
 		return a.fail(err)
 	}
 	return 0
+}
+
+// lineRecord is the record a run leaves for the line: what later commands
+// act on, with the full classification left to the report it names.
+func (r *report) lineRecord(doc reportDoc) lineRecord {
+	built := doc.Built
+	return lineRecord{Version: 2, Line: doc.Line, Built: &built, Report: doc.ID, Deferred: slices.Clone(doc.Primary.Deferred), Dropped: []droppedEntry{}, Stale: slices.Clone(doc.Overlays.Stale)}
 }
 
 // branchDate is the date a batch branch was opened under.
@@ -446,51 +468,64 @@ func lineTemplate(lineHead string) (string, error) {
 	return git("show", "--end-of-options", lineHead+":"+template)
 }
 
+// publication is what a run publishes: the branch at head, and the body that
+// carries the record and the report.
+type publication struct {
+	branch, head, title, body string
+	report                    storedReport
+	record                    lineRecord
+}
+
 // publish pushes the batch branch, then opens the draft batch pull request or
 // updates the open one. A run pushes only a fast-forward of what the remote
 // has. A rebuild replaces the branch, and only the head it was rebuilt from:
 // the lease is that head, as ls-remote reads it now, so a commit pushed since
 // is never dropped.
-func (a *app) publish(b *batch, branch, head, title, body string, rebuilt bool) error {
-	if b.pr != nil && b.pr.Head.Ref != branch {
+//
+// The report goes up as a comment before the push and the body that names
+// it, so no write leaves a body naming a report nobody can read; a new batch
+// carries the report in the body it is opened with, and the comment follows.
+// Everything is rendered and measured before the first write.
+func (a *app) publish(b *batch, p publication, rebuilt bool) error {
+	if b.pr != nil && b.pr.Head.Ref != p.branch {
 		return fmt.Errorf("the open batch pull request #%d is on %s; continue it with --onto %s", b.pr.Number, b.pr.Head.Ref, b.prHead)
 	}
 	// A body without the block was written by hand, and the tool's would
 	// replace it whole, title included; such a batch is the maintainer's.
-	if b.pr != nil && !strings.Contains("\n"+strings.ReplaceAll(b.pr.Body, "\r\n", "\n")+"\n", "\n"+deferredFence+"\n") {
+	if b.pr != nil && !b.src.open {
 		return fmt.Errorf("batch pull request #%d has no %s block, so backport-batch did not write it; merge or close it, and the next run opens a batch of its own", b.pr.Number, deferredFence)
 	}
-	if head == b.lineHead {
+	if p.head == b.lineHead {
 		if rebuilt {
-			return fmt.Errorf("without what is deferred, %s carries nothing beyond %s; close batch pull request #%d instead", branch, b.line.branch(), b.pr.Number)
+			return fmt.Errorf("without what is deferred, %s carries nothing beyond %s; close batch pull request #%d instead", p.branch, b.line.branch(), b.pr.Number)
 		}
-		return fmt.Errorf("%s carries nothing beyond %s; nothing to push", branch, b.line.branch())
+		return fmt.Errorf("%s carries nothing beyond %s; nothing to push", p.branch, b.line.branch())
 	}
 	heads, err := remoteBatchHeads(b.line)
 	if err != nil {
 		return err
 	}
-	pushed, onRemote := heads[branch]
+	pushed, onRemote := heads[p.branch]
 	lease := ""
 	switch {
 	case rebuilt:
 		if !onRemote || pushed != b.prHead {
-			return fmt.Errorf("%s on %s is at %.12s, not at %.12s, which the rebuild started from; run again", branch, remote, pushed, b.prHead)
+			return fmt.Errorf("%s on %s is at %.12s, not at %.12s, which the rebuild started from; run again", p.branch, remote, pushed, b.prHead)
 		}
 		lease = pushed
-	case onRemote && pushed != head:
+	case onRemote && pushed != p.head:
 		have, err := lookup(pushed)
 		if err != nil {
 			return err
 		}
 		descends := false
 		if have != "" {
-			if descends, err = isAncestor(pushed, head); err != nil {
+			if descends, err = isAncestor(pushed, p.head); err != nil {
 				return err
 			}
 		}
 		if !descends {
-			refusal := fmt.Sprintf("%s on %s is at %.12s, which %.12s does not descend from; refusing a non-fast-forward push", branch, remote, pushed, head)
+			refusal := fmt.Sprintf("%s on %s is at %.12s, which %.12s does not descend from; refusing a non-fast-forward push", p.branch, remote, pushed, p.head)
 			// A run that stopped between its push and opening the pull request
 			// leaves the branch, and the next run that day builds it anew.
 			if b.pr == nil {
@@ -499,35 +534,97 @@ func (a *app) publish(b *batch, branch, head, title, body string, rebuilt bool) 
 			return errors.New(refusal)
 		}
 	}
-	if pushed != head {
-		if _, err := git(pushArgs(branch, head, lease)...); err != nil {
+	if err := p.fits(); err != nil {
+		return err
+	}
+	if b.pr != nil {
+		if err := a.keepReports(b, &p); err != nil {
 			return err
 		}
 	}
-	f, err := os.CreateTemp("", "backport-batch-body-*.md")
+	if pushed != p.head {
+		if _, err := git(pushArgs(p.branch, p.head, lease)...); err != nil {
+			return err
+		}
+	}
+	name, err := writeTemp("backport-batch-body-*.md", p.body)
 	if err != nil {
 		return err
 	}
-	defer os.Remove(f.Name())
-	if _, err := f.WriteString(body); err != nil {
-		f.Close()
-		return err
-	}
-	if err := f.Close(); err != nil {
-		return err
-	}
+	defer os.Remove(name)
 	if b.pr == nil {
-		url, err := a.gh.createPull(b.line.branch(), branch, title, f.Name())
+		n, url, err := a.gh.createPull(b.line.branch(), p.branch, p.title, name)
 		if err != nil {
 			return err
 		}
 		fmt.Fprintf(a.stderr, "opened draft %s\n", url)
+		if err := a.postReport(n, p.report); err != nil {
+			return fmt.Errorf("posting report %.12s on #%d: %w; the body keeps it, and the next run --push posts it", p.report.doc.ID, n, err)
+		}
 		return nil
 	}
-	if err := a.gh.editPull(b.pr.Number, title, f.Name()); err != nil {
+	if err := a.stillOpen(b.pr.Number); err != nil {
+		return err
+	}
+	if err := a.gh.editPull(b.pr.Number, p.title, name); err != nil {
 		return err
 	}
 	fmt.Fprintf(a.stderr, "updated %s\n", pullURL(b.pr))
+	return nil
+}
+
+// fits says why GitHub would not take the comment or the body.
+func (p *publication) fits() error {
+	if _, err := reportComment(p.report); err != nil {
+		return err
+	}
+	if len(p.body) > bodyLimit {
+		return fmt.Errorf("the body is %d bytes with only what it cannot leave out, over GitHub's %d; nothing is published", len(p.body), bodyLimit)
+	}
+	return nil
+}
+
+// keepReports makes sure the open batch's comments keep both the report its
+// body carries now and the one this run made, in that order, each once.
+// When this run's report is one already kept, the body carries the kept
+// bytes, which differ only in when and in which job it was made.
+func (a *app) keepReports(b *batch, p *publication) error {
+	pr := b.pr
+	posted, bad, err := findReports(a.gh, pr.Number, b.line)
+	if err != nil {
+		return err
+	}
+	for _, why := range bad {
+		a.warn("batch pull request #%d: %s; it does not count as a report", pr.Number, why)
+	}
+	earlier, err := bodyReport(pr.Body, b.line)
+	if err != nil {
+		return fmt.Errorf("batch pull request #%d: %w", pr.Number, err)
+	}
+	kept, ok := posted[p.report.doc.ID]
+	if !ok && earlier != nil && earlier.doc.ID == p.report.doc.ID {
+		kept, ok = *earlier, true
+	}
+	if ok {
+		p.body = strings.Replace(p.body, reportBlock(p.report.raw), reportBlock(kept.raw), 1)
+		p.report = kept
+		if err := p.fits(); err != nil {
+			return err
+		}
+	}
+	if earlier != nil {
+		if _, ok := posted[earlier.doc.ID]; !ok {
+			if err := a.postReport(pr.Number, *earlier); err != nil {
+				return fmt.Errorf("posting the earlier report %.12s on #%d: %w", earlier.doc.ID, pr.Number, err)
+			}
+			posted[earlier.doc.ID] = *earlier
+		}
+	}
+	if _, ok := posted[p.report.doc.ID]; !ok {
+		if err := a.postReport(pr.Number, p.report); err != nil {
+			return fmt.Errorf("posting report %.12s on #%d: %w", p.report.doc.ID, pr.Number, err)
+		}
+	}
 	return nil
 }
 
