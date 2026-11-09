@@ -297,6 +297,18 @@ type report struct {
 	shapes map[*verdict]string
 }
 
+// ruleName is how output names what kept an original out: the policy's
+// number for its own rules, and words for what the policy does not number.
+func ruleName(rule int) string {
+	switch rule {
+	case ruleSkipLabel:
+		return labelSkip
+	case ruleBeforeStart:
+		return "rule 1, before the line's start"
+	}
+	return "rule " + strconv.Itoa(rule)
+}
+
 func (r *report) ruleTitle(rule int) string {
 	switch rule {
 	case ruleBeforeStart:
@@ -417,7 +429,7 @@ func (r *report) outcome(v *verdict) string {
 	case slices.ContainsFunc(r.waiting, func(p pick) bool { return p.v == v }):
 		return "waiting for a maintainer: it changes " + codeSpan(workflowsDir)
 	case v.rule != 0:
-		return "skipped by rule " + strconv.Itoa(v.rule) + ", " + titleSpan(v.reason)
+		return "skipped by " + ruleName(v.rule) + ", " + titleSpan(v.reason)
 	}
 	return "not picked"
 }

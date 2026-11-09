@@ -279,7 +279,7 @@ func (a *app) finish(b *batch, r *report, branch string, date time.Time, push, r
 	}
 	for _, rule := range left {
 		for _, v := range r.skipped[rule] {
-			fmt.Fprintf(a.stderr, "skipped by rule %d: %s %s (%s)\n", rule, v.o.url(), terminalSafe(v.o.title), terminalSafe(v.reason))
+			fmt.Fprintf(a.stderr, "skipped by %s: %s %s (%s)\n", ruleName(rule), v.o.url(), terminalSafe(v.o.title), terminalSafe(v.reason))
 		}
 	}
 	for _, p := range r.waiting {

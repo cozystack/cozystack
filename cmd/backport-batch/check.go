@@ -209,7 +209,7 @@ func refuseFold(b *batch, n int, commit string) (string, error) {
 	case v.rule == ruleSkipLabel:
 		return fmt.Sprintf("#%d carries %s", n, labelSkip), nil
 	case v.rule != 0:
-		return fmt.Sprintf("#%d is not one the batch takes: rule %d, %s", n, v.rule, v.reason), nil
+		return fmt.Sprintf("#%d is not one the batch takes: %s, %s", n, ruleName(v.rule), v.reason), nil
 	case b.pr == nil:
 		return fmt.Sprintf("no batch pull request is open on %s", b.line.branch()), nil
 	case v.onBatch != "":

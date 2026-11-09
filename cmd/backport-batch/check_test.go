@@ -17,6 +17,7 @@ limitations under the License.
 package main
 
 import (
+	"regexp"
 	"strings"
 	"testing"
 	"unicode"
@@ -356,6 +357,32 @@ func TestCheckDispositions(t *testing.T) {
 				t.Errorf("check --cut passes without saying so:\n%s", stdout)
 			}
 		})
+	}
+}
+
+// Output names a rule as the policy does: the numbers the tool keeps for
+// what is no rule of the policy never reach a reader.
+func TestOutputNamesNoInternalRule(t *testing.T) {
+	f := newFixture(t)
+	f.lines()
+	f.pr(5, "fix(app): five", "", map[string]string{"app/five.txt": "5\n"})
+	f.pr(6, "fix(app): six", "", map[string]string{"app/six.txt": "6\n"})
+	f.setPolicy("release-1.1: 2099-01-01\n")
+	gh := &fakeGH{labels: map[string][]int{labelInclude: {6}}}
+	head := openBatch(t, f, gh)
+	internal := regexp.MustCompile(`rule 1[0-9][0-9]`)
+	for _, args := range [][]string{
+		{"fold", "--line", "release-1.1", "--original", "5", "--commit", head},
+		{"run", "--line", "release-1.1", "--defer", "5", "--reason", "x"},
+	} {
+		code, stdout, stderr := f.exec(gh, args...)
+		f.git("switch", "-q", "main")
+		if code == 0 || !strings.Contains(stdout+stderr, "#5 is not one the batch takes: rule 1, before the line's start, merged ") {
+			t.Errorf("%s = %d, want a refusal naming rule 1:\n%s%s", args[0], code, stdout, stderr)
+		}
+		if m := internal.FindString(stdout + stderr); m != "" {
+			t.Errorf("%s prints %q:\n%s%s", args[0], m, stdout, stderr)
+		}
 	}
 }
 

@@ -82,7 +82,7 @@ func (a *app) rebuild(b *batch, numbers []int, reason string, push bool) int {
 		case v == nil:
 			return a.fail(fmt.Errorf("#%d did not merge into main after %s branched", n, b.line.branch()))
 		case v.rule != 0 && !slices.Contains(stale, v):
-			return a.fail(fmt.Errorf("#%d is not one the batch takes: rule %d, %s", n, v.rule, terminalSafe(v.reason)))
+			return a.fail(fmt.Errorf("#%d is not one the batch takes: %s, %s", n, ruleName(v.rule), terminalSafe(v.reason)))
 		}
 		hold[n] = reason
 	}
