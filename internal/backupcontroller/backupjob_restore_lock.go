@@ -38,7 +38,7 @@ const ConditionReasonRestoreInProgress = "RestoreInProgress"
 // restored cluster back on the source's WAL prefix, where its recovery fails
 // with "Expected empty archive". Plan-created runs are the ones that hit
 // this, since nothing else looks at restores before creating a BackupJob.
-func activeRestoreTargeting(ctx context.Context, c client.Client, namespace string, app corev1.TypedLocalObjectReference) (string, error) {
+func activeRestoreTargeting(ctx context.Context, c client.Reader, namespace string, app corev1.TypedLocalObjectReference) (string, error) {
 	app = NormalizeApplicationRef(app)
 	list := &backupsv1alpha1.RestoreJobList{}
 	if err := c.List(ctx, list, client.InNamespace(namespace)); err != nil {
@@ -80,7 +80,7 @@ func activeRestoreTargeting(ctx context.Context, c client.Client, namespace stri
 // reads options.targetNamespace, so the option is looked at only when the
 // Backup's strategy is Velero — the CNPG and Job-based drivers ignore it and
 // restore in place.
-func restoreJobTarget(ctx context.Context, c client.Client, rj *backupsv1alpha1.RestoreJob) (corev1.TypedLocalObjectReference, bool, error) {
+func restoreJobTarget(ctx context.Context, c client.Reader, rj *backupsv1alpha1.RestoreJob) (corev1.TypedLocalObjectReference, bool, error) {
 	backup := &backupsv1alpha1.Backup{}
 	if err := c.Get(ctx, client.ObjectKey{Namespace: rj.Namespace, Name: rj.Spec.BackupRef.Name}, backup); err != nil {
 		if client.IgnoreNotFound(err) == nil {

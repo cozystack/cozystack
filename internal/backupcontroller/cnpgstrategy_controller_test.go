@@ -3209,6 +3209,34 @@ func (f *cnpgRolloutFixture) seedRestoreOfApp() *backupsv1alpha1.RestoreJob {
 	return restore
 }
 
+// The restore check before the destination write reads the apiserver: the
+// cache can still miss a RestoreJob created a moment ago, and a write landing
+// in that gap can put the restored Cluster back on the source's WAL prefix.
+func TestReconcileCNPG_RestoreCheckReadsPastTheCache(t *testing.T) {
+	f := newAttachedObjectStoreFixture(t, time.Now().Add(-time.Hour), "s3://other/")
+	f.seedRestoreOfApp()
+	f.r.APIReader = f.c
+	f.r.Client = interceptor.NewClient(f.c.(client.WithWatch), interceptor.Funcs{
+		List: func(ctx context.Context, cl client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
+			if _, ok := list.(*backupsv1alpha1.RestoreJobList); ok {
+				return nil
+			}
+			return cl.List(ctx, list, opts...)
+		},
+	})
+
+	j, backups := f.pass()
+	if got := f.liveDestination(); got != "s3://other/" {
+		t.Errorf("destination written during a restore the cache had not caught: %q", got)
+	}
+	if len(backups) != 0 {
+		t.Errorf("a cnpg.io/Backup was created during a restore the cache had not caught: %+v", backups)
+	}
+	if ready := apimeta.FindStatusCondition(j.Status.Conditions, "Ready"); ready == nil || ready.Reason != ConditionReasonRestoreInProgress {
+		t.Errorf("Ready = %+v, want %s", ready, ConditionReasonRestoreInProgress)
+	}
+}
+
 // A job past its start writes the WAL archive destination only while no
 // restore rewrites its application. The restore gate in Reconcile looks only
 // at a job that has not started, and a job released from the queue, or one
