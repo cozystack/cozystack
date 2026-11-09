@@ -835,6 +835,30 @@ func TestReconcileAltinity_RecordsTheArchiveTheJobWasGiven(t *testing.T) {
 // re-rendered, so its archive carries the old name, and the Backup has to
 // record that name rather than none.
 func TestReconcileAltinity_RecordsTheArchiveOfAJobNamedBeforeUIDs(t *testing.T) {
+	const legacy = "clickhouse-ch-test-20260304T050607Z"
+	cases := []struct {
+		name    string
+		archive string // archive the Job's Pod was rendered with
+		want    string
+	}{
+		{name: "the name without the UID", archive: legacy, want: legacy},
+		{name: "a longer name that starts with it", archive: legacy + "-copy", want: ""},
+		{name: "a longer name that ends with it", archive: "copy-" + legacy, want: ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := recordAltinityArchiveOfJobRenderedWith(t, tc.archive); got != tc.want {
+				t.Errorf("Backup records archive %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// recordAltinityArchiveOfJobRenderedWith completes a backup Job whose Pod
+// carries the given archive in place of the one the controller rendered, and
+// returns the archive the resulting Backup records.
+func recordAltinityArchiveOfJobRenderedWith(t *testing.T, archive string) string {
+	t.Helper()
 	app := newAltinityClickHouseApp("ch-test", "tenant-test")
 	strategy := newAltinityArchiveStrategy("clickhouse-strategy")
 	startedAt := metav1.NewTime(time.Date(2026, 3, 4, 5, 6, 7, 0, time.UTC))
@@ -855,7 +879,6 @@ func TestReconcileAltinity_RecordsTheArchiveOfAJobNamedBeforeUIDs(t *testing.T) 
 	}
 	r, _, _ := newAltinityTestEnv(t, app, clientfake.NewClientBuilder().WithObjects(backupJob, strategy))
 	ctx := context.Background()
-	const legacy = "clickhouse-ch-test-20260304T050607Z"
 
 	if _, err := r.reconcileAltinity(ctx, backupJob, resolved); err != nil {
 		t.Fatalf("reconcileAltinity() creating the Job: %v", err)
@@ -864,9 +887,9 @@ func TestReconcileAltinity_RecordsTheArchiveOfAJobNamedBeforeUIDs(t *testing.T) 
 	if err := r.Get(ctx, client.ObjectKey{Namespace: "tenant-test", Name: jobNameForBackupJob(backupJob)}, job); err != nil {
 		t.Fatalf("get backup Job: %v", err)
 	}
-	job.Spec.Template.Spec.Containers[0].Args[1] = "--archive=" + legacy
+	job.Spec.Template.Spec.Containers[0].Args[1] = "--archive=" + archive
 	if err := r.Update(ctx, job); err != nil {
-		t.Fatalf("give the backup Job the name without the UID: %v", err)
+		t.Fatalf("render the backup Job with archive %q: %v", archive, err)
 	}
 	job.Status.Conditions = []batchv1.JobCondition{{Type: batchv1.JobComplete, Status: corev1.ConditionTrue}}
 	if err := r.Status().Update(ctx, job); err != nil {
@@ -883,9 +906,7 @@ func TestReconcileAltinity_RecordsTheArchiveOfAJobNamedBeforeUIDs(t *testing.T) 
 	if err := r.Get(ctx, client.ObjectKey{Namespace: "tenant-test", Name: backupJob.Name}, created); err != nil {
 		t.Fatalf("get Backup: %v", err)
 	}
-	if got := created.Spec.DriverMetadata[altinityArchiveMetaKey]; got != legacy {
-		t.Errorf("Backup records archive %q, want %q", got, legacy)
-	}
+	return created.Spec.DriverMetadata[altinityArchiveMetaKey]
 }
 
 // TestReconcileAltinity_RecordsNoArchiveTheJobWasNotGiven covers a Job whose
