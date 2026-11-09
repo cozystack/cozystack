@@ -126,6 +126,45 @@ describe("LogsView with the production query defaults", () => {
     expect(await screen.findByText(/previous lines/)).toHaveAttribute("aria-busy", "true")
     expect(screen.getByText("ready to accept connections")).toBeInTheDocument()
   })
+
+  it("drops the standing-in note once the longer range answers", async () => {
+    let answer: (r: Response) => void = () => {}
+    const longer = new Promise<Response>((resolve) => { answer = resolve })
+    const { client } = clientWith((endpoint, params) =>
+      endpoint.endsWith("query") && Date.parse(params.get("start") ?? "") < Date.now() - 2 * 3600_000
+        ? longer
+        : defaultHandler(endpoint, params),
+    )
+    renderWithProductionDefaults(client, "tenant-range-c")
+    expect(await screen.findByText("ready to accept connections")).toBeInTheDocument()
+    await userEvent.click(screen.getByRole("button", { name: "24h" }))
+    expect(await screen.findByText(/previous lines/)).toBeInTheDocument()
+
+    answer(new Response(`${line("2026-11-03T12:00:00Z", "checkpoint complete")}\n`))
+
+    expect(await screen.findByText("checkpoint complete")).toBeInTheDocument()
+    expect(screen.queryByText(/previous lines/)).toBeNull()
+    expect(screen.queryByText("ready to accept connections")).toBeNull()
+  })
+
+  it("shows no standing-in note while following", async () => {
+    const { client } = clientWith((endpoint, params) =>
+      endpoint.endsWith("tail")
+        ? new Response(`${line("2026-11-04T10:00:02Z", "live line")}\n`)
+        : endpoint.endsWith("query") && params.get("query")?.includes("error")
+          ? new Promise(() => {})
+          : defaultHandler(endpoint, params),
+    )
+    renderWithProductionDefaults(client, "tenant-follow-a")
+    expect(await screen.findByText("ready to accept connections")).toBeInTheDocument()
+
+    await userEvent.type(screen.getByLabelText("LogsQL filter"), "error{Enter}")
+    expect(await screen.findByText(/previous lines/)).toBeInTheDocument()
+    await userEvent.click(screen.getByRole("button", { name: "Follow" }))
+
+    expect(await screen.findByText("live line")).toBeInTheDocument()
+    expect(screen.queryByText(/previous lines/)).toBeNull()
+  })
 })
 
 describe("LogsView", () => {
