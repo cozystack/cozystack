@@ -421,15 +421,20 @@ func stalledAPIServer(t *testing.T, stallTokens bool) kubernetes.Interface {
 // a bounded review call ends the request.
 func TestServerStalledReviewAnswersInTime(t *testing.T) {
 	for _, tc := range []struct {
-		name        string
+		name, path  string
 		stallTokens bool
-	}{{"token review", true}, {"subject access review", false}} {
+	}{
+		{"logs token review", logsRoot + "query", true},
+		{"logs subject access review", logsRoot + "query", false},
+		{"metrics token review", metricsRoot + "api/v1/query", true},
+		{"metrics subject access review", metricsRoot + "api/v1/query", false},
+	} {
 		t.Run(tc.name, func(t *testing.T) {
 			h := newHarness(t, Config{RequestTimeout: 200 * time.Millisecond}, nil)
 			h.server.auth = NewAuthorizer(stalledAPIServer(t, tc.stallTokens), 10*time.Second)
 			got := make(chan int, 1)
 			go func() {
-				resp := h.do(http.MethodPost, logsRoot+"query", "good", url.Values{"query": {"*"}}, nil)
+				resp := h.do(http.MethodPost, tc.path, "good", url.Values{"query": {"up"}}, nil)
 				_ = resp.Body.Close()
 				got <- resp.StatusCode
 			}()
