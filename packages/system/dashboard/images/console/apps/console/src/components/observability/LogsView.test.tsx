@@ -110,6 +110,22 @@ describe("LogsView with the production query defaults", () => {
     await waitFor(() => expect(within(frame()).getByRole("status")).toHaveAttribute("aria-busy", "true"))
     expect(within(frame()).queryByText("No log lines for this range and filter.")).toBeNull()
   })
+
+  it("marks the lines of the previous range as standing in while a longer range loads", async () => {
+    const { client } = clientWith((endpoint, params) =>
+      endpoint.endsWith("query") && Date.parse(params.get("start") ?? "") < Date.now() - 2 * 3600_000
+        ? new Promise(() => {})
+        : defaultHandler(endpoint, params),
+    )
+    renderWithProductionDefaults(client, "tenant-range-b")
+    expect(await screen.findByText("ready to accept connections")).toBeInTheDocument()
+    expect(screen.queryByText(/previous lines/)).toBeNull()
+
+    await userEvent.click(screen.getByRole("button", { name: "24h" }))
+
+    expect(await screen.findByText(/previous lines/)).toHaveAttribute("aria-busy", "true")
+    expect(screen.getByText("ready to accept connections")).toBeInTheDocument()
+  })
 })
 
 describe("LogsView", () => {
@@ -317,6 +333,21 @@ describe("LogsView", () => {
 
     expect(await screen.findByText("ready to accept connections")).toBeInTheDocument()
     expect(screen.queryByRole("button", { name: "Retry" })).toBeNull()
+  })
+
+  it("says it is loading while a retry runs", async () => {
+    let calls = 0
+    const { client } = clientWith((endpoint, params) => {
+      if (!endpoint.endsWith("query")) return defaultHandler(endpoint, params)
+      return calls++ === 0 ? new Response("upstream down", { status: 502 }) : new Promise(() => {})
+    })
+    renderWithK8sProvider(<LogsView scope={app} />, { client })
+
+    await userEvent.click(await screen.findByRole("button", { name: "Retry" }))
+
+    const frame = screen.getByRole("region", { name: "Log lines" })
+    await waitFor(() => expect(within(frame).getByRole("status")).toHaveAttribute("aria-busy", "true"))
+    expect(within(frame).queryByRole("button", { name: "Retry" })).toBeNull()
   })
 
   it("opens a new history result at its newest line, not the old scroll position", async () => {

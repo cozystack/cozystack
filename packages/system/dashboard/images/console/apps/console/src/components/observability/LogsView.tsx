@@ -163,12 +163,17 @@ function ScopedLogsView({ root }: { root: string }) {
           {` · newest ${FOLLOW_CAP} lines kept`}
         </p>
       )}
+      {!follow && history.isPlaceholderData && entries.length > 0 && (
+        <p role="status" aria-busy="true" className="text-xs text-slate-500">
+          Showing the previous lines until the new range or filter loads…
+        </p>
+      )}
       {error ? <ProxyNotice what="Logs" error={error} /> : null}
       <LogLines
         // Previous results stay as placeholder data while a new query loads, so only a new key resets the scroll pin.
         key={followRun ?? `history\n${query}\n${range}`}
         entries={entries}
-        placeholder={placeholderFor({ follow, stopped: tail.state === "stopped", loading: history.isLoading || (history.isPlaceholderData && history.isFetching), failed: Boolean(error), longestRange: range === LONGEST_RANGE, retry: () => void history.refetch() })}
+        placeholder={placeholderFor({ follow, stopped: tail.state === "stopped", loading: history.isLoading || history.isPlaceholderData, failed: Boolean(error), longestRange: range === LONGEST_RANGE, retry: () => void history.refetch() })}
       />
     </div>
   )
