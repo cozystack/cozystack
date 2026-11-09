@@ -3122,9 +3122,10 @@ func TestReconcileCNPG_LaterWriteKeepsTheAttachRecord(t *testing.T) {
 }
 
 // An attach record that does not parse cannot tell which instances rolled
-// with the plugin, so the job fails naming it instead of guessing. One in the
-// future would hold every instance as older than the plugin and push the
-// rollout deadline out by as far as it lies ahead, so it fails the same way.
+// with the plugin, so the job fails naming it instead of guessing. One further
+// ahead than controller clocks drift apart would hold every instance as older
+// than the plugin and push the rollout deadline out by as far as it lies
+// ahead, so it fails the same way.
 func TestReconcileCNPG_UnreadableAttachRecordFailsTheJob(t *testing.T) {
 	for _, tc := range []struct{ name, record string }{
 		{name: "does not parse", record: "yesterday"},
@@ -3148,6 +3149,34 @@ func TestReconcileCNPG_UnreadableAttachRecordFailsTheJob(t *testing.T) {
 				t.Errorf("phase %q, message %q; want Failed naming %s", j.Status.Phase, j.Status.Message, cnpgPluginAttachedAtAnnotation)
 			}
 		})
+	}
+}
+
+// A record a little ahead of this controller's clock is what a leadership
+// change between controllers whose clocks differ leaves behind, so the job
+// waits for the clocks to agree rather than failing an attach that worked.
+func TestReconcileCNPG_AttachRecordSlightlyAheadWaits(t *testing.T) {
+	f := newCNPGRolloutFixture(t, newRolloutBackupJob(time.Now().Add(-time.Hour)),
+		newRolloutCluster(cnpgClusterHealthyPhase), newRolloutInstancePod(time.Now().Add(-time.Hour)))
+	if j, _ := f.pass(); apimeta.FindStatusCondition(j.Status.Conditions, backupCondPluginRolledOut) == nil {
+		t.Fatalf("no %s latch: %+v", backupCondPluginRolledOut, j.Status.Conditions)
+	}
+	live := newRolloutCluster(cnpgClusterHealthyPhase, buildBarmanPlugin(rolloutCluster, rolloutCluster))
+	live.Annotations = map[string]string{cnpgPluginAttachedAtAnnotation: time.Now().Add(time.Minute).UTC().Format(time.RFC3339)}
+	f.observeCNPG(live)
+
+	j, backups, res := f.passResult()
+	if j.Status.Phase == backupsv1alpha1.BackupJobPhaseFailed {
+		t.Fatalf("the job failed on a record a minute ahead: %s", j.Status.Message)
+	}
+	if len(backups) != 0 {
+		t.Fatalf("a cnpg.io/Backup was created before the rollout could be judged: %+v", backups)
+	}
+	if res.RequeueAfter == 0 {
+		t.Errorf("a waiting job is not requeued: %+v", res)
+	}
+	if ready := apimeta.FindStatusCondition(j.Status.Conditions, "Ready"); ready == nil || ready.Reason != "WaitingForPluginRollout" {
+		t.Errorf("Ready = %+v, want WaitingForPluginRollout", ready)
 	}
 }
 

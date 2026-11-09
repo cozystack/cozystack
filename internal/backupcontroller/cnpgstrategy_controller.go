@@ -233,6 +233,11 @@ const (
 	// cannot be lost to a failed BackupJob status write after the attach.
 	cnpgPluginAttachedAtAnnotation = "backups.cozystack.io/barman-plugin-attached-at"
 
+	// How far ahead of this controller's clock an attach record may be
+	// before it is taken as corrupt rather than as written by a leader whose
+	// clock ran ahead.
+	cnpgAttachClockSkewTolerance = 5 * time.Minute
+
 	cnpgPodRoleLabel    = "cnpg.io/podRole"
 	cnpgPodRoleInstance = "instance"
 )
@@ -499,20 +504,18 @@ func (r *BackupJobReconciler) reconcileCNPG(ctx context.Context, j *backupsv1alp
 		}
 		// The Cluster's record covers an attach whose status write was lost.
 		attachedAt := rollout.LastTransitionTime
-		if attachment.attachedAt != "" {
-			recorded, err := time.Parse(time.RFC3339, attachment.attachedAt)
-			if recorded.After(time.Now()) {
-				// Every instance would predate it, and the deadline would count from it.
-				err = fmt.Errorf("%s is in the future", attachment.attachedAt)
-			}
-			if err != nil {
-				return r.markBackupJobFailed(ctx, j, fmt.Sprintf(
-					"cannot tell when the barman-cloud plugin was attached: the %s annotation of cnpg.io/Cluster %s/%s: %v",
-					cnpgPluginAttachedAtAnnotation, j.Namespace, clusterName, err))
-			}
-			if recorded.After(attachedAt.Time) {
-				attachedAt = metav1.NewTime(recorded)
-			}
+		recorded, ok, err := cnpgRecordedAttach(attachment.attachedAt)
+		if err == nil && ok && time.Until(recorded) > cnpgAttachClockSkewTolerance {
+			// Every instance would predate it, and the deadline would count from it.
+			err = fmt.Errorf("%s is in the future", attachment.attachedAt)
+		}
+		if err != nil {
+			return r.markBackupJobFailed(ctx, j, fmt.Sprintf(
+				"cannot tell when the barman-cloud plugin was attached: the %s annotation of cnpg.io/Cluster %s/%s: %v",
+				cnpgPluginAttachedAtAnnotation, j.Namespace, clusterName, err))
+		}
+		if ok && recorded.After(attachedAt.Time) {
+			attachedAt = metav1.NewTime(recorded)
 		}
 		pending, err := r.cnpgPluginRolloutPending(ctx, j.Namespace, clusterName, attachment, attachedAt)
 		if err != nil {
@@ -895,6 +898,19 @@ func (r *BackupJobReconciler) cnpgPluginRolloutPending(ctx context.Context, name
 		}
 	}
 	return "", nil
+}
+
+// cnpgRecordedAttach parses a cnpgPluginAttachedAtAnnotation value; ok is
+// false for "", a Cluster that carries no record.
+func cnpgRecordedAttach(raw string) (recorded time.Time, ok bool, err error) {
+	if raw == "" {
+		return time.Time{}, false, nil
+	}
+	recorded, err = time.Parse(time.RFC3339, raw)
+	if err != nil {
+		return time.Time{}, false, err
+	}
+	return recorded, true, nil
 }
 
 func podReady(pod *corev1.Pod) bool {
