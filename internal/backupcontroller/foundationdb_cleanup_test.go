@@ -402,6 +402,21 @@ func TestFoundationDBCleanupJobName(t *testing.T) {
 	}
 }
 
+func TestFoundationDBCleanupImage(t *testing.T) {
+	for _, tc := range []struct {
+		template, want string
+	}{
+		{"", "foundationdb/foundationdb:7.3.79"},
+		{"registry.local:5000/mirror/foundationdb", "registry.local:5000/mirror/foundationdb:7.3.79"},
+		{"registry.local:5000/mirror/foundationdb:7.3.80", "registry.local:5000/mirror/foundationdb:7.3.80"},
+		{"foundationdb/foundationdb@sha256:abc", "foundationdb/foundationdb@sha256:abc"},
+	} {
+		if got := foundationdbCleanupImage(tc.template, "7.3.79"); got != tc.want {
+			t.Errorf("foundationdbCleanupImage(%q) = %q, want %q", tc.template, got, tc.want)
+		}
+	}
+}
+
 // The script runs with a stub fdbbackup, so its exit-code handling is
 // exercised as bash executes it.
 func TestFoundationDBCleanupScript_ExitCodes(t *testing.T) {
