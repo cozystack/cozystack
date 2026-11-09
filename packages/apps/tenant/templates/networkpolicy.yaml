@@ -50,6 +50,9 @@ spec:
     - matchLabels:
         "k8s:app.kubernetes.io/name": "vminsert"
         "k8s:io.kubernetes.pod.namespace": {{ join "-" (slice $parts 0 (add $i 1)) }}
+    - matchLabels:
+        "k8s:app.kubernetes.io/name": "vlinsert"
+        "k8s:io.kubernetes.pod.namespace": {{ join "-" (slice $parts 0 (add $i 1)) }}
     {{- end }}
     {{- end }}
     {{- end }}
@@ -141,6 +144,33 @@ spec:
     - matchLabels:
         "k8s:io.cilium.k8s.namespace.labels.namespace.cozystack.io/etcd": "{{ include "tenant.name" . }}"
         policy.cozystack.io/allow-to-etcd: "true"
+{{- end }}
+---
+{{- if .Values.monitoring }}
+# Sub-tenants (and the guest clusters inside them) that resolve their
+# monitoring to this tenant ship logs and metrics to its vlinsert / vminsert.
+# The {{ include "tenant.name" . }}-egress rule above opens the write hop to
+# the ancestor; this opens the matching ingress on the ingest endpoints,
+# scoped to namespaces whose namespace.cozystack.io/monitoring points here.
+# Without it the egress allow has no counterpart and delivery is dropped.
+apiVersion: cilium.io/v2
+kind: CiliumClusterwideNetworkPolicy
+metadata:
+  name: {{ include "tenant.name" . }}-ingress-monitoring
+spec:
+  endpointSelector:
+    matchLabels:
+      "k8s:io.kubernetes.pod.namespace": "{{ include "tenant.name" . }}"
+    matchExpressions:
+      - key: "k8s:app.kubernetes.io/name"
+        operator: In
+        values:
+          - vlinsert
+          - vminsert
+  ingress:
+  - fromEndpoints:
+    - matchLabels:
+        "k8s:io.cilium.k8s.namespace.labels.namespace.cozystack.io/monitoring": "{{ include "tenant.name" . }}"
 {{- end }}
 ---
 apiVersion: cilium.io/v2

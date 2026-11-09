@@ -1,0 +1,71 @@
+suite: tenant monitoring ingest (logs and metrics) crosses the tenant boundary
+# A sub-tenant (and the guest clusters inside it) that resolves its monitoring
+# to an ancestor must be able to write both metrics (vminsert) and logs
+# (vlinsert) to that ancestor's ingest endpoints. The egress opens the write
+# hop; the ancestor's ingress must accept it.
+templates:
+  - templates/networkpolicy.yaml
+release:
+  name: tenant-ktj
+  namespace: tenant-root
+set:
+  _cluster:
+    bundle-name: paas-full
+tests:
+  - it: lets a sub-tenant egress to the ancestor's vlinsert as well as vminsert
+    release:
+      name: tenant-sub
+      namespace: tenant-ktj
+    set:
+      _cluster:
+        bundle-name: paas-full
+    documentSelector:
+      path: metadata.name
+      value: tenant-ktj-sub-egress
+    asserts:
+      - isKind:
+          of: CiliumClusterwideNetworkPolicy
+      - contains:
+          path: spec.egress[1].toEndpoints
+          content:
+            matchLabels:
+              "k8s:app.kubernetes.io/name": "vminsert"
+              "k8s:io.kubernetes.pod.namespace": tenant-ktj
+      - contains:
+          path: spec.egress[1].toEndpoints
+          content:
+            matchLabels:
+              "k8s:app.kubernetes.io/name": "vlinsert"
+              "k8s:io.kubernetes.pod.namespace": tenant-ktj
+
+  - it: opens the ancestor's ingress on vlinsert and vminsert for its sub-tenants
+    set:
+      monitoring: true
+      _cluster:
+        bundle-name: paas-full
+    documentSelector:
+      path: metadata.name
+      value: tenant-ktj-ingress-monitoring
+    asserts:
+      - isKind:
+          of: CiliumClusterwideNetworkPolicy
+      - equal:
+          path: spec.endpointSelector.matchExpressions[0].values
+          value:
+            - vlinsert
+            - vminsert
+      - equal:
+          path: spec.ingress[0].fromEndpoints[0].matchLabels["k8s:io.cilium.k8s.namespace.labels.namespace.cozystack.io/monitoring"]
+          value: tenant-ktj
+
+  - it: does not open the ingest ingress when the tenant has no monitoring
+    set:
+      monitoring: false
+      _cluster:
+        bundle-name: paas-full
+    asserts:
+      - containsDocument:
+          apiVersion: cilium.io/v2
+          kind: CiliumClusterwideNetworkPolicy
+          name: tenant-ktj-ingress-monitoring
+        not: true
