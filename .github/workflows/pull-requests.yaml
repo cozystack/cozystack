@@ -1348,28 +1348,6 @@ jobs:
             Resume from inside: `breakpoint resume`. Otherwise the breakpoint
             exits 10 minutes after the last SSH session disconnects.
 
-      # ▸ Tear down environment (always runs)
-      #
-      #   Both halves, and in this order: the compose project owns the nodes and
-      #   the zpools outlive it. A leftover pool makes the next run on a reused
-      #   host adopt storage that already carries a dead cluster's volumes.
-      - name: Tear down sandbox
-        if: always()
-        run: |
-          # Loud, but never the job's verdict. A failed teardown means a dirty
-          # host, and this runner is discarded after the job, so there is no next
-          # run to protect -- while failing the job here posts the required
-          # "E2E Tests" status as a failure that no reader can tell apart from a
-          # real one. The annotation is what a reused host (a developer machine)
-          # needs; `delete-cluster-container` returning non-zero is not evidence
-          # about the product.
-          cleanup_rc=0
-          make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME delete-cluster-container || cleanup_rc=$?
-          make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME delete || true
-          if [ "$cleanup_rc" -ne 0 ]; then
-            echo "::error title=sandbox teardown::teardown exited $cleanup_rc; the host may hold a stale compose project or zpool"
-          fi
-
   # Report the required "E2E Tests" gate as a commit status rather than relying
   # on a job named "E2E Tests". A required *job* that is skipped counts
   # as PASSED by branch protection — desired for docs-only PRs, but the exact
