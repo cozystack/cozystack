@@ -110,3 +110,15 @@ tests:
       - equal:
           path: spec.tls[0].hosts
           value: ["true"]
+
+  - it: keeps a boolean-looking host a string in the HTTPRoute
+    template: templates/httproute.yaml
+    set:
+      _cluster:
+        root-host: example.com
+        keycloak-host: "true"
+        gateway-enabled: "true"
+    asserts:
+      - equal:
+          path: spec.hostnames
+          value: ["true"]
