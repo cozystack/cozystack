@@ -175,7 +175,6 @@ remote_rows() {
   done
 }
 
-# The number of operations the sidecar accepted.
 accepted() {
   if [ -e "$1/state/accepted" ]; then wc -l < "$1/state/accepted" | tr -d ' '; else echo 0; fi
 }
