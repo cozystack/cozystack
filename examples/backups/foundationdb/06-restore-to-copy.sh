@@ -20,8 +20,8 @@ metadata:
   name: ${FDB_RESTORE_NAME}
   namespace: ${NAMESPACE}
 spec:
+  version: v7.3
   cluster:
-    version: "7.3.63"
     processCounts:
       storage: 1
       stateless: -1

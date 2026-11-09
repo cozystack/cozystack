@@ -1,6 +1,6 @@
 <!-- Thank you for making a contribution! Here are some tips for you:
 - Use Conventional Commits for the PR title: `type(scope): description`
-  - Types: feat, fix, docs, style, refactor, perf, test, build, ci, chore
+  - Types: feat, fix, security (a fix that comes through a security advisory), docs, style, refactor, perf, test, build, ci, chore
   - Scopes are not an exhaustive list — pick the most specific scope for the change and extend the list when a genuinely new area appears. Examples:
     - System components: dashboard, platform, operator, cilium, kube-ovn, linstor, fluxcd, cluster-api
     - Managed apps: postgres, mariadb, redis, kafka, clickhouse, virtual-machine, kubernetes
@@ -8,7 +8,7 @@
   - Breaking changes: append `!` after type/scope (`feat(api)!: ...`) or add a `BREAKING CHANGE:` footer
 - If it's a work in progress, consider creating this PR as a draft.
 - Don't hesistate to ask for opinion and review in the community chats, even if it's still a draft.
-- Add the label `kind/backport` if it's a bugfix that needs to be backported to a previous version.
+- Fixes merged to `main` reach the release lines the backport batch runs for automatically, so do not open backport PRs by hand: https://github.com/cozystack/cozystack/blob/main/docs/release/backports.md
 -->
 
 ## What this PR does

@@ -83,13 +83,9 @@ type RabbitmqSpec struct {
 	//                  .ApplicationRef.{APIGroup,Kind,Name} so a to-copy
 	//                  restore can address the source release's object key.
 	//
-	// The template is stored schemaless (its content is preserved but not
-	// validated by the apiserver): the driver renders and validates the pod
-	// spec, and generating the full PodTemplateSpec OpenAPI schema here would
-	// add ~590 KB to this CRD. The backupstrategy-controller chart inlines
-	// every definitions/*.yaml into one Helm release, whose state Secret is
-	// capped at 1 MiB - a fourth full PodTemplateSpec schema (after Altinity,
-	// Job and FoundationDB) pushes that Secret over the cap and fails install.
+	// Stored schemaless: the apiserver keeps it as written rather than
+	// checking it against the pod schema, and it is validated when the
+	// driver creates the workload from it.
 	//
 	// +kubebuilder:validation:Schemaless
 	// +kubebuilder:pruning:PreserveUnknownFields

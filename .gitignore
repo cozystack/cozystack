@@ -11,7 +11,7 @@ _repos
 # root-level binary waiting to happen — each ~80 MB, and nothing else here
 # matched them, leaving `git add .` one keystroke from committing one.
 /api-gate
-/backport-audit
+/backport-batch
 /backup-controller
 /backupstrategy-controller
 /check-readiness

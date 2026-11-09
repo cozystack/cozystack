@@ -81,6 +81,7 @@ spec:
               Name kubernetes
               Match kube.*
               Merge_Log On
+              Merge_Log_Key log_processed
               Keep_Log On
               K8S-Logging.Parser On
               K8S-Logging.Exclude On
