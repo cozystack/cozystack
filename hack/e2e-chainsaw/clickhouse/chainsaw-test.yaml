@@ -438,8 +438,11 @@ spec:
   steps:
   - name: preconditions
     try:
+    # The deletes below wait up to 270s in all (30+30+60+30+30+30+60), so a
+    # stuck one is named by its kubectl --timeout before the 5m ceiling kills
+    # the shell with no object named. A new delete needs its own --timeout.
     - script:
-        timeout: 3m
+        timeout: 5m
         content: |
           set -eu
           if kubectl -n "$NAMESPACE" get secret seaweedfs-s3-ingress-tls -o name >/dev/null 2>&1; then
