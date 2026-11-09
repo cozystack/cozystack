@@ -353,6 +353,20 @@ tests:
       - failedTemplate:
           errorPattern: "maxUnavailable"
 
+  - it: refuses a negative maxUnavailable
+    set:
+      nodeGroups:
+        md0:
+          minReplicas: 1
+          maxReplicas: 3
+          instanceType: u1.large
+          diskSize: 32Gi
+          roles: ["ingress-nginx"]
+          maxUnavailable: -1
+    asserts:
+      - failedTemplate:
+          errorPattern: "maxUnavailable"
+
   # Helm caps a HelmRelease name at 53 chars and each pool renders a 38-char fixed
   # prefix, so a pool key over 15 chars would create a release the apiserver
   # accepts but Flux never reconciles. The render must refuse instead (the same
