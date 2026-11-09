@@ -77,8 +77,10 @@ func TestLimiterRate(t *testing.T) {
 	now := time.Unix(1000, 0)
 	l := newLimiter(LimiterConfig{RatePerUser: 2, RateBurst: 2})
 	l.now = func() time.Time { return now }
-	if !allowed(l, "alice") || !allowed(l, "alice") {
-		t.Fatal("burst refused")
+	for i := range 2 {
+		if !allowed(l, "alice") {
+			t.Fatalf("burst request %d refused", i+1)
+		}
 	}
 	if wait, ok := l.allowRate("alice"); ok || wait != 500*time.Millisecond {
 		t.Fatalf("request over the burst: admitted %v, wait %s, want refused with 500ms", ok, wait)
