@@ -2925,63 +2925,92 @@ func TestReconcileCNPG_PluginRolloutCountsFromTheSuccessfulAttach(t *testing.T) 
 }
 
 // The status write that records the attach can be lost after the attach
-// itself went through, by a conflict or a restart; an instance recreated
-// between the latch and the attach still has to roll, and the rollout
-// deadline still counts from the attach.
+// itself went through, by a conflict, an apiserver that is briefly
+// unavailable, or a restart, including on the retry of an attach that
+// failed; an instance recreated between the latch and the attach still has
+// to roll, and the rollout deadline still counts from the attach.
 func TestReconcileCNPG_LostAttachRecordStillWaitsForTheRollout(t *testing.T) {
-	latchedAt := time.Now().Add(-(cnpgDefaultBackupDeadline + time.Minute)).Truncate(time.Second)
-	oldPod := newRolloutInstancePod(latchedAt.Add(-time.Hour))
-	f := newCNPGRolloutFixture(t, newRolloutBackupJob(latchedAt.Add(-time.Hour)),
-		newRolloutCluster(cnpgClusterHealthyPhase), oldPod)
+	jobs := backupsv1alpha1.GroupVersion.WithResource("backupjobs").GroupResource()
+	for _, tc := range []struct {
+		name             string
+		failFirstAttach  bool
+		statusWriteError error
+	}{
+		{name: "conflict", statusWriteError: apierrors.NewConflict(jobs, "bj", errors.New("the object has been modified"))},
+		{name: "retried attach, apiserver unavailable", failFirstAttach: true, statusWriteError: apierrors.NewServiceUnavailable("the server is currently unable to handle the request")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			latchedAt := time.Now().Add(-(cnpgDefaultBackupDeadline + time.Minute)).Truncate(time.Second)
+			oldPod := newRolloutInstancePod(latchedAt.Add(-time.Hour))
+			f := newCNPGRolloutFixture(t, newRolloutBackupJob(latchedAt.Add(-time.Hour)),
+				newRolloutCluster(cnpgClusterHealthyPhase), oldPod)
 
-	j, _ := f.pass() // latch
-	latch := apimeta.FindStatusCondition(j.Status.Conditions, backupCondPluginRolledOut)
-	if latch == nil {
-		t.Fatalf("no %s latch: %+v", backupCondPluginRolledOut, j.Status.Conditions)
-	}
-	latch.LastTransitionTime = metav1.NewTime(latchedAt)
-	if err := f.c.Status().Update(context.Background(), j); err != nil {
-		t.Fatalf("age the latch: %v", err)
-	}
-	f.replacePod(oldPod, newRolloutInstancePod(latchedAt.Add(time.Minute)))
+			j, _ := f.pass() // latch
+			latch := apimeta.FindStatusCondition(j.Status.Conditions, backupCondPluginRolledOut)
+			if latch == nil {
+				t.Fatalf("no %s latch: %+v", backupCondPluginRolledOut, j.Status.Conditions)
+			}
+			latch.LastTransitionTime = metav1.NewTime(latchedAt)
+			if err := f.c.Status().Update(context.Background(), j); err != nil {
+				t.Fatalf("age the latch: %v", err)
+			}
+			f.replacePod(oldPod, newRolloutInstancePod(latchedAt.Add(time.Minute)))
 
-	base := f.r.Client
-	f.r.Client = interceptor.NewClient(f.c.(client.WithWatch), interceptor.Funcs{
-		SubResourceUpdate: func(ctx context.Context, cl client.Client, sub string, obj client.Object, opts ...client.SubResourceUpdateOption) error {
-			return apierrors.NewConflict(backupsv1alpha1.GroupVersion.WithResource("backupjobs").GroupResource(), obj.GetName(), errors.New("the object has been modified"))
-		},
-	})
-	j = &backupsv1alpha1.BackupJob{}
-	if err := f.c.Get(context.Background(), client.ObjectKey{Namespace: rolloutNS, Name: "bj"}, j); err != nil {
-		t.Fatalf("get BackupJob: %v", err)
-	}
-	if _, err := f.r.reconcileCNPG(context.Background(), j, f.resolved); err == nil {
-		t.Fatalf("the pass that attached the plugin reported no lost status write")
-	}
-	f.r.Client = base
+			base := f.r.Client
+			if tc.failFirstAttach {
+				f.r.Client = interceptor.NewClient(f.c.(client.WithWatch), interceptor.Funcs{
+					Patch: func(ctx context.Context, cl client.WithWatch, obj client.Object, patch client.Patch, opts ...client.PatchOption) error {
+						if _, ok := obj.(*cnpgtypes.Cluster); ok {
+							return apierrors.NewServiceUnavailable("the server is currently unable to handle the request")
+						}
+						return cl.Patch(ctx, obj, patch, opts...)
+					},
+				})
+				if j, _ = f.pass(); apimeta.IsStatusConditionTrue(j.Status.Conditions, backupCondPluginRolledOut) {
+					t.Fatalf("a failed attach reported the rollout done: %+v", j.Status.Conditions)
+				}
+				if applied := apimeta.FindStatusCondition(j.Status.Conditions, backupCondDestinationApplied); applied == nil || applied.Reason != "ClusterPluginApplyRetrying" {
+					t.Fatalf("%s = %+v, want the attach retrying", backupCondDestinationApplied, applied)
+				}
+			}
+			f.r.Client = interceptor.NewClient(f.c.(client.WithWatch), interceptor.Funcs{
+				SubResourceUpdate: func(ctx context.Context, cl client.Client, sub string, obj client.Object, opts ...client.SubResourceUpdateOption) error {
+					return tc.statusWriteError
+				},
+			})
+			j = &backupsv1alpha1.BackupJob{}
+			if err := f.c.Get(context.Background(), client.ObjectKey{Namespace: rolloutNS, Name: "bj"}, j); err != nil {
+				t.Fatalf("get BackupJob: %v", err)
+			}
+			if _, err := f.r.reconcileCNPG(context.Background(), j, f.resolved); err == nil {
+				t.Fatalf("the pass that attached the plugin reported no lost status write")
+			}
+			f.r.Client = base
 
-	attached := &cnpgtypes.Cluster{}
-	if err := f.c.Get(context.Background(), client.ObjectKey{Namespace: rolloutNS, Name: rolloutCluster}, attached); err != nil {
-		t.Fatalf("get Cluster: %v", err)
-	}
-	if len(attached.Spec.Plugins) == 0 {
-		t.Fatalf("the plugin was not attached")
-	}
-	live := newRolloutCluster(cnpgClusterHealthyPhase, attached.Spec.Plugins...)
-	live.Annotations = attached.Annotations
-	f.observeCNPG(live)
+			attached := &cnpgtypes.Cluster{}
+			if err := f.c.Get(context.Background(), client.ObjectKey{Namespace: rolloutNS, Name: rolloutCluster}, attached); err != nil {
+				t.Fatalf("get Cluster: %v", err)
+			}
+			if len(attached.Spec.Plugins) == 0 {
+				t.Fatalf("the plugin was not attached")
+			}
+			live := newRolloutCluster(cnpgClusterHealthyPhase, attached.Spec.Plugins...)
+			live.Annotations = attached.Annotations
+			f.observeCNPG(live)
 
-	var backups []cnpgtypes.Backup
-	for range 3 {
-		if j, backups = f.pass(); len(backups) != 0 || j.Status.Phase == backupsv1alpha1.BackupJobPhaseFailed {
-			break
-		}
-	}
-	if len(backups) != 0 {
-		t.Fatalf("a cnpg.io/Backup was created against an instance recreated before the attach: %+v", backups)
-	}
-	if j.Status.Phase == backupsv1alpha1.BackupJobPhaseFailed {
-		t.Fatalf("the job failed instead of waiting for the rollout: %s", j.Status.Message)
+			var backups []cnpgtypes.Backup
+			for range 3 {
+				if j, backups = f.pass(); len(backups) != 0 || j.Status.Phase == backupsv1alpha1.BackupJobPhaseFailed {
+					break
+				}
+			}
+			if len(backups) != 0 {
+				t.Fatalf("a cnpg.io/Backup was created against an instance recreated before the attach: %+v", backups)
+			}
+			if j.Status.Phase == backupsv1alpha1.BackupJobPhaseFailed {
+				t.Fatalf("the job failed instead of waiting for the rollout: %s", j.Status.Message)
+			}
+		})
 	}
 }
 
