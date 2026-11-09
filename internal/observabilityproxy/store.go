@@ -48,7 +48,7 @@ func NewStoreResolver(namespaces corev1listers.NamespaceLister, synced func() bo
 // Resolve answers the root tenant for a namespace that no longer exists,
 // because its label went with it. Lines it wrote while routed to another
 // tenant's store are not found there; reading them needs routing history
-// (an open question of the design).
+// the proxy does not keep.
 func (r *StoreResolver) Resolve(namespace string) (string, error) {
 	// Before the first list every namespace looks gone, which would send
 	// a labeled one to the root store; readiness alone does not stop a

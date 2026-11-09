@@ -69,7 +69,7 @@ func parseFlags(args []string) (options, error) {
 	fs.StringVar(&o.rootTenant, "root-tenant", "tenant-root", "tenant namespace hosting the default store")
 	fs.StringVar(&o.kubeconfig, "kubeconfig", "", "kubeconfig path; in-cluster config when empty")
 	fs.DurationVar(&o.authCacheTTL, "auth-cache-ttl", 10*time.Second, "how long TokenReview and SubjectAccessReview answers are cached")
-	fs.DurationVar(&o.requestTimeout, "request-timeout", time.Minute, "upstream deadline for every endpoint but tail")
+	fs.DurationVar(&o.requestTimeout, "request-timeout", time.Minute, "deadline for reading the request body, the token and access reviews, and every upstream endpoint but tail; 0 disables it")
 	fs.DurationVar(&o.tailIdleTimeout, "tail-idle-timeout", 5*time.Minute, "close a tail after this long without a line")
 	fs.DurationVar(&o.shutdownTimeout, "shutdown-timeout", 15*time.Second, "grace period for in-flight requests on shutdown")
 	fs.DurationVar(&o.logs.DefaultRange, "logs-default-range", time.Hour, "window used when a logs request has no start")
