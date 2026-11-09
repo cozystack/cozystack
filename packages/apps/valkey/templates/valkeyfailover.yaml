@@ -42,7 +42,7 @@ spec:
     {{- if $spreadConstraints }}
     topologySpreadConstraints:
     {{- range $spreadConstraints }}
-    - {{- toYaml (ternary . (merge (deepCopy .) (dict "labelSelector" (dict "matchLabels" (dict "app.kubernetes.io/name" $.Release.Name "app.kubernetes.io/component" "sentinel")))) (hasKey . "labelSelector")) | nindent 6 }}
+    - {{- toYaml (ternary . (merge (deepCopy .) (dict "labelSelector" (dict "matchLabels" (dict "app.kubernetes.io/name" $.Release.Name "app.kubernetes.io/component" "sentinel")))) (not (kindIs "invalid" .labelSelector))) | nindent 6 }}
     {{- end }}
     {{- else }}
     topologySpreadConstraints:
@@ -65,7 +65,7 @@ spec:
     {{- if $spreadConstraints }}
     topologySpreadConstraints:
     {{- range $spreadConstraints }}
-    - {{- toYaml (ternary . (merge (deepCopy .) (dict "labelSelector" (dict "matchLabels" (dict "app.kubernetes.io/name" $.Release.Name "app.kubernetes.io/component" "redis")))) (hasKey . "labelSelector")) | nindent 6 }}
+    - {{- toYaml (ternary . (merge (deepCopy .) (dict "labelSelector" (dict "matchLabels" (dict "app.kubernetes.io/name" $.Release.Name "app.kubernetes.io/component" "redis")))) (not (kindIs "invalid" .labelSelector))) | nindent 6 }}
     {{- end }}
     {{- else }}
     topologySpreadConstraints:
