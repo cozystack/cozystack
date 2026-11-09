@@ -117,12 +117,16 @@ func backupParameters(b *backupsv1alpha1.Backup) map[string]string {
 }
 
 // altinityArchiveName mints the archive name for one BackupJob from its
-// persisted StartedAt, so every reconcile and every Pod retry of the Job
-// writes the same archive. It keeps the clickhouse-<release>-<timestamp>
-// shape, because a Backup that records no archive is restored by the
-// timestamp in that shape.
+// persisted StartedAt and its UID, so every reconcile and every Pod retry of
+// the Job writes the same archive and no other run writes it. StartedAt has
+// one-second resolution, and two Plans on one schedule start their runs in
+// the same second; the strategy takes a finished upload of its archive as an
+// earlier attempt of its own run, so a shared name would let one run report
+// the other's archive. The UID goes after the timestamp so names still sort
+// chronologically, and the restore of a Backup that records no archive, which
+// accepts only clickhouse-<release>-<timestamp>, never picks one of these.
 func altinityArchiveName(j *backupsv1alpha1.BackupJob) string {
-	return fmt.Sprintf("clickhouse-%s-%s", j.Spec.ApplicationRef.Name, j.Status.StartedAt.UTC().Format(altinityArchiveTimeLayout))
+	return fmt.Sprintf("clickhouse-%s-%s-%s", j.Spec.ApplicationRef.Name, j.Status.StartedAt.UTC().Format(altinityArchiveTimeLayout), j.UID)
 }
 
 // altinityJobCarriesArchive reports whether the Job's Pod was rendered with

@@ -14,6 +14,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/types"
 	dynamicfake "k8s.io/client-go/dynamic/fake"
 	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/tools/record"
@@ -730,11 +731,38 @@ func newAltinityArchiveStrategy(name string) *strategyv1alpha1.Altinity {
 func TestAltinityArchiveName_FromStartedAtInUTC(t *testing.T) {
 	startedAt := metav1.NewTime(time.Date(2026, 3, 4, 8, 6, 7, 890000000, time.FixedZone("UTC+3", 3*3600)))
 	j := &backupsv1alpha1.BackupJob{
-		Spec:   backupsv1alpha1.BackupJobSpec{ApplicationRef: newAltinityClickHouseRef("ch-test")},
-		Status: backupsv1alpha1.BackupJobStatus{StartedAt: &startedAt},
+		ObjectMeta: metav1.ObjectMeta{UID: "0f3c9a1e-5b7d-4c2a-9e8f-1a2b3c4d5e6f"},
+		Spec:       backupsv1alpha1.BackupJobSpec{ApplicationRef: newAltinityClickHouseRef("ch-test")},
+		Status:     backupsv1alpha1.BackupJobStatus{StartedAt: &startedAt},
 	}
-	if got, want := altinityArchiveName(j), "clickhouse-ch-test-20260304T050607Z"; got != want {
+	if got, want := altinityArchiveName(j), "clickhouse-ch-test-20260304T050607Z-0f3c9a1e-5b7d-4c2a-9e8f-1a2b3c4d5e6f"; got != want {
 		t.Errorf("altinityArchiveName = %q, want %q", got, want)
+	}
+}
+
+// TestAltinityArchiveName_DistinctForRunsStartedInTheSameSecond pins that two
+// BackupJobs of one application started within the same second, as two Plans
+// on the same schedule are, write different archives. With a shared name, the
+// strategy takes the other run's finished upload for an earlier attempt of its
+// own and records an archive missing what changed since that upload.
+func TestAltinityArchiveName_DistinctForRunsStartedInTheSameSecond(t *testing.T) {
+	startedAt := metav1.NewTime(time.Date(2026, 3, 4, 5, 6, 7, 0, time.UTC))
+	run := func(name, uid string) *backupsv1alpha1.BackupJob {
+		return &backupsv1alpha1.BackupJob{
+			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "tenant-test", UID: types.UID(uid)},
+			Spec:       backupsv1alpha1.BackupJobSpec{ApplicationRef: newAltinityClickHouseRef("ch-test")},
+			Status:     backupsv1alpha1.BackupJobStatus{StartedAt: &startedAt},
+		}
+	}
+	daily := altinityArchiveName(run("daily-1", "11111111-1111-1111-1111-111111111111"))
+	weekly := altinityArchiveName(run("weekly-1", "22222222-2222-2222-2222-222222222222"))
+	if daily == weekly {
+		t.Fatalf("two runs started in the same second share archive %q", daily)
+	}
+	for _, name := range []string{daily, weekly} {
+		if !strings.HasPrefix(name, "clickhouse-ch-test-20260304T050607Z-") {
+			t.Errorf("archive %q does not start with the application and start time, so names stop sorting chronologically", name)
+		}
 	}
 }
 
@@ -748,7 +776,7 @@ func TestReconcileAltinity_RecordsTheArchiveTheJobWasGiven(t *testing.T) {
 	strategy := newAltinityArchiveStrategy("clickhouse-strategy")
 	startedAt := metav1.NewTime(time.Date(2026, 3, 4, 5, 6, 7, 0, time.UTC))
 	backupJob := &backupsv1alpha1.BackupJob{
-		ObjectMeta: metav1.ObjectMeta{Name: "test-bj", Namespace: "tenant-test"},
+		ObjectMeta: metav1.ObjectMeta{Name: "test-bj", Namespace: "tenant-test", UID: "test-bj-uid"},
 		Spec: backupsv1alpha1.BackupJobSpec{
 			ApplicationRef:  newAltinityClickHouseRef("ch-test"),
 			BackupClassName: "clickhouse-backup",
@@ -765,7 +793,7 @@ func TestReconcileAltinity_RecordsTheArchiveTheJobWasGiven(t *testing.T) {
 	}
 	r, _, _ := newAltinityTestEnv(t, app, clientfake.NewClientBuilder().WithObjects(backupJob, strategy))
 	ctx := context.Background()
-	const want = "clickhouse-ch-test-20260304T050607Z"
+	const want = "clickhouse-ch-test-20260304T050607Z-test-bj-uid"
 
 	if _, err := r.reconcileAltinity(ctx, backupJob, resolved); err != nil {
 		t.Fatalf("reconcileAltinity() creating the Job: %v", err)
@@ -869,13 +897,13 @@ func TestReconcileAltinity_RecordsNoArchiveTheJobWasNotGiven(t *testing.T) {
 // A Backup recording this run's own archive is the one an earlier reconcile
 // created before its status write was lost, and is adopted.
 func TestReconcileAltinity_BackupNameAlreadyTaken(t *testing.T) {
-	const thisRun = "clickhouse-ch-test-20260305T050607Z"
+	const thisRun = "clickhouse-ch-test-20260305T050607Z-test-bj-uid"
 	cases := []struct {
 		name          string
 		existing      string // archive the existing Backup records; empty for none
 		wantSucceeded bool
 	}{
-		{name: "earlier run's Backup records another archive", existing: "clickhouse-ch-test-20260304T050607Z"},
+		{name: "earlier run's Backup records another archive", existing: "clickhouse-ch-test-20260304T050607Z-earlier-bj-uid"},
 		{name: "earlier run's Backup records no archive", existing: ""},
 		{name: "this run's Backup from a reconcile whose status write was lost", existing: thisRun, wantSucceeded: true},
 	}
@@ -885,7 +913,7 @@ func TestReconcileAltinity_BackupNameAlreadyTaken(t *testing.T) {
 			strategy := newAltinityArchiveStrategy("clickhouse-strategy")
 			startedAt := metav1.NewTime(time.Date(2026, 3, 5, 5, 6, 7, 0, time.UTC))
 			backupJob := &backupsv1alpha1.BackupJob{
-				ObjectMeta: metav1.ObjectMeta{Name: "test-bj", Namespace: "tenant-test"},
+				ObjectMeta: metav1.ObjectMeta{Name: "test-bj", Namespace: "tenant-test", UID: "test-bj-uid"},
 				Spec: backupsv1alpha1.BackupJobSpec{
 					ApplicationRef:  newAltinityClickHouseRef("ch-test"),
 					BackupClassName: "clickhouse-backup",
