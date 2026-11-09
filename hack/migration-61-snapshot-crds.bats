@@ -223,6 +223,7 @@ crd_field() {
   run_migration 61 >"$WORK/out" 2>&1 || rc=$?
   cat "$WORK/out"; cat "$FAKE_CMDLOG"
   [ "$rc" -ne 0 ]
+  grep -qF "$FAKE_HR_FAIL" "$WORK/out"
   if grep -qE "^(ANNOTATE|LABEL|DELETE|CREATE|STAMP)" "$FAKE_CMDLOG"; then echo "changed something after a failed HelmRelease read" >&2; return 1; fi
   rm -rf "$WORK"
 }

@@ -67,7 +67,7 @@ data:
        to this release. A CRD the distribution ships, or that another release
        owns, stays out of the manifest, so the upgrade neither takes it over nor
        rewrites it. */}}
-{{- range $crd := regexSplit "(?m)^---$" $crds -1 }}
+{{- range $crd := regexSplit "(?m)^---[ \\t]*\\r?$" $crds -1 }}
 {{- $obj := fromYaml $crd }}
 {{- if hasKey $obj "Error" }}
 {{- fail (printf "snapshot-controller: cannot parse a CRD from crds.yaml: %s" $obj.Error) }}
