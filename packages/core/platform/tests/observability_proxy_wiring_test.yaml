@@ -5,6 +5,7 @@ suite: observability-proxy package wiring
 templates:
   - templates/sources.yaml
   - templates/bundles/system.yaml
+  - templates/apps.yaml
 release:
   name: cozystack
   namespace: cozy-system
@@ -67,3 +68,12 @@ tests:
           kind: Package
           name: cozystack.observability-proxy
           any: true
+
+  # The proxy's HTTPRoute lives in its own namespace, and the tenant Gateway
+  # admits routes only from the namespaces listed here.
+  - it: lets the proxy namespace attach a route to the publishing Gateway
+    template: templates/apps.yaml
+    asserts:
+      - matchRegex:
+          path: stringData["values.yaml"]
+          pattern: 'gateway-attached-namespaces: "([^"]*,)?cozy-observability-proxy(,[^"]*)?"'

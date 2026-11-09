@@ -668,6 +668,7 @@ gateway:
     - cozy-kubevirt-cdi
     - cozy-monitoring
     - cozy-linstor-gui
+    - cozy-observability-proxy
     - default
 # Platform monitoring configuration.
 monitoring:
