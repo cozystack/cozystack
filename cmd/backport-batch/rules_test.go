@@ -432,12 +432,21 @@ func cozyrd(name, schema string) string {
 		"\n    openAPISchema: '" + schema + "'\n"
 }
 
-// Rule 4 holds back a change to the API only when the API review gate calls it
-// sizeable: a new or removed resource or group, or a breaking schema change.
+// nestedRD is an ApplicationDefinition whose schema nests fields in an object,
+// in the items of an array and in the values of a map.
+var nestedRD = cozyrd("demo", `{"type":"object","properties":{`+
+	`"backup":{"type":"object","properties":{"schedule":{"type":"string","description":"When."}}},`+
+	`"hosts":{"type":"array","items":{"type":"object","properties":{"name":{"type":"string"}}}},`+
+	`"users":{"type":"object","additionalProperties":{"type":"object","properties":{"password":{"type":"string"}}}}}}`)
+
+// Rule 4 holds back a change to the API when the API review gate calls it
+// sizeable, a new or removed resource or group or a breaking schema change,
+// and when it adds a field, which the gate passes as additive.
 func TestAPIGateRule(t *testing.T) {
 	typesGo := "api/apps/v1alpha1/demo/types.go"
 	cases := []struct {
 		name  string
+		setup map[string]string
 		files map[string]string
 		want  string
 	}{
@@ -448,7 +457,31 @@ func TestAPIGateRule(t *testing.T) {
 		{name: "an optional field added", files: map[string]string{
 			demoRD:  cozyrd("demo", `{"type":"object","properties":{"size":{"type":"string"},"zone":{"type":"string"}}}`),
 			typesGo: "package demo\n\ntype Spec struct{ Size, Zone string }\n",
+		}, want: `a new API field ([v1alpha1] spec: field "zone" was added)`},
+		{name: "a nested description reworded", setup: map[string]string{demoRD: nestedRD}, files: map[string]string{
+			demoRD: strings.Replace(nestedRD, `"When."`, `"When it runs."`, 1),
 		}},
+		{name: "an optional field added to an object", setup: map[string]string{demoRD: nestedRD}, files: map[string]string{
+			demoRD: strings.Replace(nestedRD, `"schedule":`, `"keep":{"type":"integer"},"schedule":`, 1),
+		}, want: `a new API field ([v1alpha1] spec.backup: field "keep" was added)`},
+		{name: "an optional field added to the items of an array", setup: map[string]string{demoRD: nestedRD}, files: map[string]string{
+			demoRD: strings.Replace(nestedRD, `"name":`, `"port":{"type":"integer"},"name":`, 1),
+		}, want: `a new API field ([v1alpha1] spec.hosts[]: field "port" was added)`},
+		{name: "an optional field added to the values of a map", setup: map[string]string{demoRD: nestedRD}, files: map[string]string{
+			demoRD: strings.Replace(nestedRD, `"password":`, `"role":{"type":"string"},"password":`, 1),
+		}, want: `a new API field ([v1alpha1] spec.users{}: field "role" was added)`},
+		{name: "a field named like a nested one added", setup: map[string]string{demoRD: nestedRD}, files: map[string]string{
+			demoRD: strings.Replace(nestedRD, `"backup":`, `"backup.schedule":{"type":"string"},"backup":`, 1),
+		}, want: `a new API field ([v1alpha1] spec: field "backup.schedule" was added)`},
+		{name: "an optional field added to the spec of a first-party CRD", setup: map[string]string{widgetPath: widgetCRD("")}, files: map[string]string{
+			widgetPath: widgetCRD("              zone:\n                type: string\n"),
+		}, want: `a new API field ([v1alpha1] spec: field "zone" was added), a CRD`},
+		{name: "two optional fields added", setup: map[string]string{demoRD: nestedRD}, files: map[string]string{
+			demoRD: strings.Replace(strings.Replace(nestedRD, `"name":`, `"port":{"type":"integer"},"name":`, 1), `"schedule":`, `"keep":{"type":"integer"},"schedule":`, 1),
+		}, want: `a new API field ([v1alpha1] spec.backup: field "keep" was added, and 1 more)`},
+		{name: "a schema given to an ApplicationDefinition that had none", setup: map[string]string{demoRD: cozyrd("demo", "")}, files: map[string]string{
+			demoRD: cozyrd("demo", `{"type":"object","properties":{"size":{"type":"string"}}}`),
+		}, want: `a new API field ([v1alpha1] spec: field "size" was added)`},
 		{name: "a field removed", files: map[string]string{
 			demoRD:  cozyrd("demo", `{"type":"object","properties":{}}`),
 			typesGo: "package demo\n\ntype Spec struct{}\n",
@@ -481,6 +514,7 @@ func TestAPIGateRule(t *testing.T) {
 			f := newFixture(t)
 			setup := maps.Clone(apiBase)
 			maps.Copy(setup, demoAPI)
+			maps.Copy(setup, tc.setup)
 			f.squash(1000, "chore: setup", "", setup)
 			mc := f.pr(10+i, "fix(x): y", "", tc.files)
 			o := &original{number: 10 + i, merge: mc, parents: 2}
@@ -497,6 +531,17 @@ func TestAPIGateRule(t *testing.T) {
 			}
 		})
 	}
+}
+
+const widgetPath = "packages/system/x/definitions/x.cozystack.io_widgets.yaml"
+
+// widgetCRD is a first-party CRD, which apigate reads, with extra among the
+// properties of its spec.
+func widgetCRD(extra string) string {
+	return "apiVersion: apiextensions.k8s.io/v1\nkind: CustomResourceDefinition\nmetadata:\n  name: widgets.x.cozystack.io\nspec:\n" +
+		"  group: x.cozystack.io\n  names:\n    kind: Widget\n    plural: widgets\n  scope: Namespaced\n  versions:\n" +
+		"  - name: v1alpha1\n    served: true\n    storage: true\n    schema:\n      openAPIV3Schema:\n        type: object\n" +
+		"        properties:\n          spec:\n            type: object\n            properties:\n              size:\n                type: string\n" + extra
 }
 
 func apiService(group string) string {

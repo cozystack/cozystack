@@ -147,6 +147,7 @@ const (
 	touchesMigrations    = "platform migrations"
 	touchesTargetVersion = "targetVersion"
 	touchesAPI           = "a sizeable API change"
+	touchesField         = "a new API field"
 	touchesCRD           = "a CRD"
 )
 
@@ -175,19 +176,23 @@ func touchesRule(o *original, changes []fileChange) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	apiDetail := ""
+	detail := map[string]string{}
 	if asks {
-		if apiDetail, err = sizeableAPIChange(o); err != nil {
+		if detail[touchesAPI], err = sizeableAPIChange(o); err != nil {
 			return "", err
 		}
-		hit[touchesAPI] = apiDetail != ""
+		if detail[touchesField], err = addedAPIField(o); err != nil {
+			return "", err
+		}
+		hit[touchesAPI] = detail[touchesAPI] != ""
+		hit[touchesField] = detail[touchesField] != ""
 	}
 	var why []string
-	for _, r := range []string{touchesMigrations, touchesTargetVersion, touchesAPI, touchesCRD} {
+	for _, r := range []string{touchesMigrations, touchesTargetVersion, touchesAPI, touchesField, touchesCRD} {
 		switch {
 		case !hit[r]:
-		case r == touchesAPI:
-			why = append(why, r+" ("+apiDetail+")")
+		case detail[r] != "":
+			why = append(why, r+" ("+detail[r]+")")
 		default:
 			why = append(why, r)
 		}
