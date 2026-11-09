@@ -2887,6 +2887,36 @@ func TestReconcileCNPG_PluginRolloutDeadlineCountsFromAttach(t *testing.T) {
 	}
 }
 
+// A rollout dated by the Cluster's attach record runs out like one dated by
+// the job's own condition: a record newer than the condition but older than
+// the deadline fails the job too.
+func TestReconcileCNPG_PluginRolloutDeadlineCountsFromTheAttachRecord(t *testing.T) {
+	expired := time.Now().Add(-(cnpgDefaultBackupDeadline + time.Minute)).Truncate(time.Second)
+	f := newCNPGRolloutFixture(t, newRolloutBackupJob(expired.Add(-time.Hour)),
+		newRolloutCluster(cnpgClusterHealthyPhase), newRolloutInstancePod(expired.Add(-time.Hour)))
+
+	j, _ := f.pass() // latch
+	latch := apimeta.FindStatusCondition(j.Status.Conditions, backupCondPluginRolledOut)
+	if latch == nil {
+		t.Fatalf("no %s latch: %+v", backupCondPluginRolledOut, j.Status.Conditions)
+	}
+	latch.LastTransitionTime = metav1.NewTime(expired.Add(-10 * time.Minute))
+	if err := f.c.Status().Update(context.Background(), j); err != nil {
+		t.Fatalf("age the latch: %v", err)
+	}
+	live := newRolloutCluster(cnpgClusterHealthyPhase, buildBarmanPlugin(rolloutCluster, rolloutCluster))
+	live.Annotations = map[string]string{cnpgPluginAttachedAtAnnotation: expired.UTC().Format(time.RFC3339)}
+	f.observeCNPG(live)
+
+	j, backups := f.pass()
+	if len(backups) != 0 {
+		t.Fatalf("a cnpg.io/Backup was created against an instance older than the attach: %+v", backups)
+	}
+	if j.Status.Phase != backupsv1alpha1.BackupJobPhaseFailed || !strings.Contains(j.Status.Message, "rollout did not finish") {
+		t.Fatalf("phase = %q (%s), want Failed on a rollout recorded longer ago than the deadline", j.Status.Phase, j.Status.Message)
+	}
+}
+
 // The rollout is measured from the write that attached the plugin, not from
 // the latch recorded before it: retries of a failing write can lie between
 // the two, and an instance recreated in that time runs without the plugin.
