@@ -129,3 +129,7 @@ authEnabled: true
 
 ## @param {Sentinel} [sentinel] - Sentinel configuration. When `sentinel.resources` is empty and `sentinel.resourcesPreset` is unset, the three Sentinel pods are sized like the Redis pods (`resources` and `resourcesPreset`). An empty `sentinel.resources` map counts as unset, as an empty top-level `resources` does.
 sentinel: {}
+
+## @param {string} schedulingClass - Name of a SchedulingClass CR (cluster-scoped, group cozystack.io) applied to this application's workloads in place of the tenant's. Must be the tenant's own class or one listed in the tenant's `allowedSchedulingClasses`; any other value is refused. Empty means inherit from the tenant.
+## @maxLength 63
+schedulingClass: ""
