@@ -62,7 +62,7 @@ git commit --signoff -m "type(scope): brief description"
 - Apps, e.g.: `postgres`, `mariadb`, `redis`, `kafka`, `clickhouse`, `virtual-machine`, `kubernetes`
 - Other, e.g.: `api`, `hack`, `tests`, `ci`, `docs`, `agents`, `maintenance`
 
-Breaking changes: append `!` after type/scope (`feat(api)!: ...`) or add a `BREAKING CHANGE:` footer.
+Breaking changes: append `!` after type/scope (`feat(api)!: ...`) or add a `BREAKING CHANGE:` footer. What counts as breaking is defined in [What counts as breaking](#what-counts-as-breaking).
 
 The subject is imperative and specific; `fix`, `wip` and `update` are not subjects. The body, when there is one, explains why the change is made and only that: the diff already shows what changed and how. Write for a reader who has only `git log`, so no review-iteration or planning vocabulary (`address review comments`, `pass 2`, `batch 1`, `as discussed`) and no bare issue or ticket number in place of the explanation.
 
@@ -72,6 +72,14 @@ git commit --signoff -m "feat(dashboard): add config hash annotations to restart
 git commit --signoff -m "fix(postgres): update operator to version 1.2.3"
 git commit --signoff -m "docs(contributing): add installation guide"
 ```
+
+### What counts as breaking
+
+A change is breaking when, after the upgrade, an existing install, client or consumer is refused, loses something it used, or has to be edited to keep working. That covers a refusal at render, admission or runtime of something that worked before, including a refusal that hits only new or changed objects while existing ones keep working. Losing something covers a removed or renamed key, field or name, and a name or format a consumer reads.
+
+A change is not breaking when it only accepts more, makes something broken work, changes how a working install runs while it keeps working and there is nothing for the user to do, or refuses only what never worked, even if that rendered or deployed. The commit type does not exempt a change, and neither does the old behaviour having been a bug, as long as an install was running on it.
+
+The `release-note` block describes the consequence and what to do about it; it does not stand in for the marker. A release note that asks the operator to act, with an `Action required` line for instance, is a prompt to apply the definition above, and a change the definition calls breaking carries the `!` or the footer as well as the note.
 
 ### AI Agent Attribution
 
