@@ -22,11 +22,16 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
 )
 
 // pipeListener hands the server one end of a net.Pipe per dial. A pipe has
@@ -384,5 +389,58 @@ func TestServerEarlyRefusalWithUnreadBody(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+// stalledAPIServer answers the TokenReview for "good" unless stallTokens
+// is set, and never answers a SubjectAccessReview: it holds each stalled
+// call until the caller gives up or the test ends.
+func stalledAPIServer(t *testing.T, stallTokens bool) kubernetes.Interface {
+	t.Helper()
+	release := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/tokenreviews") && !stallTokens {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = io.WriteString(w, `{"apiVersion":"authentication.k8s.io/v1","kind":"TokenReview","status":{"authenticated":true,"user":{"username":"alice"}}}`)
+			return
+		}
+		select {
+		case <-r.Context().Done():
+		case <-release:
+		}
+	}))
+	t.Cleanup(srv.Close)
+	// After srv, so it runs first and srv.Close does not wait on a stalled call.
+	t.Cleanup(func() { close(release) })
+	return kubernetes.NewForConfigOrDie(&rest.Config{Host: srv.URL})
+}
+
+// TestServerStalledReviewAnswersInTime holds TokenReview or
+// SubjectAccessReview open on a POST whose body is complete but unread:
+// net/http does not watch the connection until the body is read, so only
+// a bounded review call ends the request.
+func TestServerStalledReviewAnswersInTime(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		stallTokens bool
+	}{{"token review", true}, {"subject access review", false}} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newHarness(t, Config{RequestTimeout: 200 * time.Millisecond}, nil)
+			h.server.auth = NewAuthorizer(stalledAPIServer(t, tc.stallTokens), 10*time.Second)
+			got := make(chan int, 1)
+			go func() {
+				resp := h.do(http.MethodPost, logsRoot+"query", "good", url.Values{"query": {"*"}}, nil)
+				_ = resp.Body.Close()
+				got <- resp.StatusCode
+			}()
+			select {
+			case code := <-got:
+				if code != http.StatusServiceUnavailable {
+					t.Fatalf("stalled %s answered %d, want 503", tc.name, code)
+				}
+			case <-time.After(2 * time.Second):
+				t.Fatalf("a stalled %s holds the request past ten request timeouts", tc.name)
+			}
+		})
 	}
 }

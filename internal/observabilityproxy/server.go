@@ -331,7 +331,16 @@ func (s *Server) authorize(r *http.Request, route Route) (string, *HTTPError) {
 	if !strings.EqualFold(scheme, "Bearer") {
 		return "", errorf(http.StatusUnauthorized, "missing bearer token")
 	}
-	user, err := s.auth.Authenticate(r.Context(), strings.TrimSpace(token))
+	// The kube client sets no timeout of its own, and net/http cancels
+	// r.Context on a dropped client only once the body is read, so a
+	// stalled review would otherwise outlive every other limit.
+	ctx := r.Context()
+	if s.cfg.RequestTimeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, s.cfg.RequestTimeout)
+		defer cancel()
+	}
+	user, err := s.auth.Authenticate(ctx, strings.TrimSpace(token))
 	if errors.Is(err, ErrUnauthenticated) {
 		return "", errorf(http.StatusUnauthorized, "invalid bearer token")
 	}
@@ -339,7 +348,7 @@ func (s *Server) authorize(r *http.Request, route Route) (string, *HTTPError) {
 		slog.Error("token review failed", "error", err)
 		return "", errorf(http.StatusServiceUnavailable, "authentication unavailable")
 	}
-	allowed, err := s.auth.Authorize(r.Context(), user, route.ResourceAttributes())
+	allowed, err := s.auth.Authorize(ctx, user, route.ResourceAttributes())
 	if err != nil {
 		slog.Error("subject access review failed", "error", err)
 		return "", errorf(http.StatusServiceUnavailable, "authorization unavailable")
