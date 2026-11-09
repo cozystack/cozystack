@@ -531,7 +531,7 @@ func (r *BackupJobReconciler) reconcileCNPG(ctx context.Context, j *backupsv1alp
 			"cluster", clusterName, "live", attachment.flavor, "application", specFlavor)
 	}
 
-	cnpgBackup, err := r.ensureCNPGBackup(ctx, j, clusterName, cnpgDestinationOf(rendered))
+	cnpgBackup, err := r.ensureCNPGBackup(ctx, j, clusterName, existingBackup, cnpgDestinationOf(rendered))
 	if err != nil {
 		return r.markBackupJobFailed(ctx, j, fmt.Sprintf("failed to ensure cnpg.io/Backup: %v", err))
 	}
@@ -876,18 +876,16 @@ func currentBarmanServerName(c *cnpgtypes.Cluster) string {
 }
 
 // ensureCNPGBackup creates a one-shot postgresql.cnpg.io/Backup CR labelled
-// with the BackupJob, or returns the existing one if a previous reconcile
-// already created it. Idempotency relies on the OwningJob labels.
+// with the BackupJob, or returns existing, the job's Backup as looked up at
+// the start of the pass. It does not look again: a reconcile of the same
+// job cannot run in between, and a failed lookup here would come after the
+// destination write and fail the job.
 //
 // written is the destination this pass wrote to the ObjectStore. A pass
 // reaches the create only after that write: a job without a Backup writes
 // the destination on every pass, and a pass that wrote nothing, or wrote it
 // and waits for the plugin rollout, returns before this point.
-func (r *BackupJobReconciler) ensureCNPGBackup(ctx context.Context, j *backupsv1alpha1.BackupJob, clusterName string, written cnpgDestination) (*cnpgtypes.Backup, error) {
-	existing, err := r.findCNPGBackupForJob(ctx, j)
-	if err != nil {
-		return nil, err
-	}
+func (r *BackupJobReconciler) ensureCNPGBackup(ctx context.Context, j *backupsv1alpha1.BackupJob, clusterName string, existing *cnpgtypes.Backup, written cnpgDestination) (*cnpgtypes.Backup, error) {
 	if existing != nil {
 		return existing, nil
 	}
@@ -923,16 +921,26 @@ func (r *BackupJobReconciler) ensureCNPGBackup(ctx context.Context, j *backupsv1
 // findCNPGBackupForJob returns the cnpg.io/Backup labelled with the
 // BackupJob's OwningJob{Name,Namespace}, if any. Returns (nil, nil) when
 // no match is found.
+//
+// A miss in the cache is checked against the apiserver: the cache can lag
+// behind a Backup the previous pass created, and taking that miss as no
+// Backup would write the destination under it and create a second one.
 func (r *BackupJobReconciler) findCNPGBackupForJob(ctx context.Context, j *backupsv1alpha1.BackupJob) (*cnpgtypes.Backup, error) {
-	list := &cnpgtypes.BackupList{}
-	if err := r.List(ctx, list,
+	opts := []client.ListOption{
 		client.InNamespace(j.Namespace),
 		client.MatchingLabels{
 			backupsv1alpha1.OwningJobNameLabel:      j.Name,
 			backupsv1alpha1.OwningJobNamespaceLabel: j.Namespace,
 		},
-	); err != nil {
+	}
+	list := &cnpgtypes.BackupList{}
+	if err := r.List(ctx, list, opts...); err != nil {
 		return nil, err
+	}
+	if len(list.Items) == 0 {
+		if err := r.apiReader().List(ctx, list, opts...); err != nil {
+			return nil, err
+		}
 	}
 	if len(list.Items) == 0 {
 		return nil, nil
@@ -944,9 +952,12 @@ func (r *BackupJobReconciler) findCNPGBackupForJob(ctx context.Context, j *backu
 // running and whose cnpg.io/Backup of clusterName has not finished, or "" when
 // there is none. A Backup left behind by a finished or deleted job does not
 // hold the queue.
+//
+// The Backups are read from the apiserver, not the cache, which can still
+// miss a Backup another job's earlier pass created.
 func (r *BackupJobReconciler) otherCNPGBackupInFlight(ctx context.Context, j *backupsv1alpha1.BackupJob, clusterName string) (string, error) {
 	list := &cnpgtypes.BackupList{}
-	if err := r.List(ctx, list, client.InNamespace(j.Namespace)); err != nil {
+	if err := r.apiReader().List(ctx, list, client.InNamespace(j.Namespace)); err != nil {
 		return "", err
 	}
 	var holders []string

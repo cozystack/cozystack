@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -2207,7 +2208,7 @@ func TestEnsureCNPGBackup_UsesPluginMethod(t *testing.T) {
 	c := newCNPGStrategyTestClient(t, j)
 	r := &BackupJobReconciler{Client: c}
 
-	bk, err := r.ensureCNPGBackup(context.Background(), j, "postgres-app", cnpgDestination{DestinationPath: "s3://bucket/"})
+	bk, err := r.ensureCNPGBackup(context.Background(), j, "postgres-app", nil, cnpgDestination{DestinationPath: "s3://bucket/"})
 	if err != nil {
 		t.Fatalf("ensureCNPGBackup: %v", err)
 	}
@@ -2567,8 +2568,8 @@ func (f *cnpgRolloutFixture) seedOtherBackupJob(name string, phase backupsv1alph
 func TestReconcileCNPG_RunningBackupDoesNotReapplyObjectStore(t *testing.T) {
 	f := newAttachedObjectStoreFixture(t, time.Now(), "s3://other/")
 	f.seedCNPGBackup("bj-cnpg", "bj", rolloutCluster, "running")
-	// Two jobs can pass the queue together, since it reads the cache; once
-	// both have a Backup neither may wait on the other.
+	// Two jobs can still pass the queue together, across a leader handover;
+	// once both have a Backup neither may wait on the other.
 	f.seedOtherBackupJob("bj-other", backupsv1alpha1.BackupJobPhaseRunning)
 	f.seedCNPGBackup("bj-other-cnpg", "bj-other", rolloutCluster, "running")
 	writes := 0
@@ -5653,5 +5654,128 @@ func TestReconcileCNPG_ArtifactOfABackupWithoutARecord(t *testing.T) {
 	artifact := f.artifact()
 	if artifact == nil || artifact.Spec.DriverMetadata[cnpgDestinationPathKey] != "s3://bucket/" {
 		t.Fatalf("artifact = %+v, want one built from the strategy", artifact)
+	}
+}
+
+// cacheLaggingBehind makes the reconciler's cached client miss the named
+// cnpg.io/Backups, as an informer does right after they are created, while
+// its uncached reader sees them.
+func (f *cnpgRolloutFixture) cacheLaggingBehind(hidden ...string) {
+	f.r.APIReader = f.c
+	f.r.Client = interceptor.NewClient(f.c.(client.WithWatch), interceptor.Funcs{
+		List: func(ctx context.Context, cl client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
+			if err := cl.List(ctx, list, opts...); err != nil {
+				return err
+			}
+			if backups, ok := list.(*cnpgtypes.BackupList); ok {
+				backups.Items = slices.DeleteFunc(backups.Items, func(b cnpgtypes.Backup) bool {
+					return slices.Contains(hidden, b.Name)
+				})
+			}
+			return nil
+		},
+	})
+}
+
+// Reconciles run one at a time, so a Backup created by one pass exists by
+// the next; the queue has to see it even when the cache does not yet, or
+// the next job rewrites the destination under it and the record on that
+// Backup no longer names where its WAL goes.
+func TestReconcileCNPG_QueueSeesABackupTheCacheHasNotCaught(t *testing.T) {
+	f := newAttachedObjectStoreFixture(t, time.Now(), "s3://other/")
+	f.seedOtherBackupJob("bj-other", backupsv1alpha1.BackupJobPhaseRunning)
+	f.seedCNPGBackup("bj-other-cnpg", "bj-other", rolloutCluster, "running")
+	f.cacheLaggingBehind("bj-other-cnpg")
+
+	j, backups := f.pass()
+	if ready := apimeta.FindStatusCondition(j.Status.Conditions, "Ready"); ready == nil || ready.Reason != "WaitingForOtherBackup" {
+		t.Fatalf("Ready = %+v, want WaitingForOtherBackup", ready)
+	}
+	if got := f.liveDestination(); got != "s3://other/" {
+		t.Fatalf("destination = %q, rewritten under the other job's Backup", got)
+	}
+	if len(backups) != 1 {
+		t.Fatalf("got %d cnpg.io/Backups, want only the other job's", len(backups))
+	}
+}
+
+// The job's own Backup, missing from the cache right after it was created,
+// is neither created again nor written under.
+func TestReconcileCNPG_OwnBackupTheCacheHasNotCaught(t *testing.T) {
+	f := newAttachedObjectStoreFixture(t, time.Now(), "s3://other/")
+	f.seedCNPGBackup("bj-cnpg", "bj", rolloutCluster, "running")
+	f.cacheLaggingBehind("bj-cnpg")
+
+	_, backups := f.pass()
+	if len(backups) != 1 {
+		t.Fatalf("got %d cnpg.io/Backups, want the job's one", len(backups))
+	}
+	if got := f.liveDestination(); got != "s3://other/" {
+		t.Fatalf("destination = %q, rewritten under the job's own Backup", got)
+	}
+}
+
+// failingBackupLists makes the uncached reader fail the cnpg.io/Backup lists
+// for which fail, given whether the list selects the job's own Backup by
+// label and how many such lists came before, returns true.
+func (f *cnpgRolloutFixture) failingBackupLists(fail func(own bool, n int) bool) {
+	counts := map[bool]int{}
+	f.r.APIReader = interceptor.NewClient(f.c.(client.WithWatch), interceptor.Funcs{
+		List: func(ctx context.Context, cl client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
+			if _, ok := list.(*cnpgtypes.BackupList); ok {
+				o := &client.ListOptions{}
+				o.ApplyOptions(opts)
+				own := o.LabelSelector != nil && !o.LabelSelector.Empty()
+				counts[own]++
+				if fail(own, counts[own]) {
+					return apierrors.NewServiceUnavailable("apiserver unavailable")
+				}
+			}
+			return cl.List(ctx, list, opts...)
+		},
+	})
+}
+
+// A failed apiserver read of the Backups is retried, not taken as the job
+// failing: nothing has been written yet that the retry would not redo.
+func TestReconcileCNPG_BackupListErrorIsReturned(t *testing.T) {
+	for name, own := range map[string]bool{"own Backup": true, "queue": false} {
+		t.Run(name, func(t *testing.T) {
+			f := newAttachedObjectStoreFixture(t, time.Now(), "s3://other/")
+			f.failingBackupLists(func(o bool, _ int) bool { return o == own })
+			j := &backupsv1alpha1.BackupJob{}
+			if err := f.c.Get(context.Background(), client.ObjectKey{Namespace: rolloutNS, Name: "bj"}, j); err != nil {
+				t.Fatalf("get BackupJob: %v", err)
+			}
+			if _, err := f.r.reconcileCNPG(context.Background(), j, f.resolved); err == nil {
+				t.Fatalf("reconcileCNPG swallowed the Backup list error")
+			}
+			got := &backupsv1alpha1.BackupJob{}
+			if err := f.c.Get(context.Background(), client.ObjectKey{Namespace: rolloutNS, Name: "bj"}, got); err != nil {
+				t.Fatalf("get BackupJob: %v", err)
+			}
+			if got.Status.Phase == backupsv1alpha1.BackupJobPhaseFailed {
+				t.Fatalf("BackupJob failed on a Backup list error: %s", got.Status.Message)
+			}
+			if dest := f.liveDestination(); dest != "s3://other/" {
+				t.Fatalf("destination = %q, written although the Backups could not be read", dest)
+			}
+		})
+	}
+}
+
+// The pass that writes the destination looks its own Backup up once, at the
+// start: a second lookup before the create could only fail, after the write,
+// and fail the job with it.
+func TestReconcileCNPG_LooksUpItsOwnBackupOncePerPass(t *testing.T) {
+	f := newAttachedObjectStoreFixture(t, time.Now(), "s3://other/")
+	f.failingBackupLists(func(own bool, n int) bool { return own && n > 1 })
+
+	j, backups := f.pass()
+	if j.Status.Phase == backupsv1alpha1.BackupJobPhaseFailed {
+		t.Fatalf("BackupJob failed: %s", j.Status.Message)
+	}
+	if len(backups) != 1 {
+		t.Fatalf("got %d cnpg.io/Backups, want 1", len(backups))
 	}
 }
