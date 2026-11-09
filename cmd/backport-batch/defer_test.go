@@ -684,3 +684,26 @@ func TestRefusalNamesTheMergedBatchsBranch(t *testing.T) {
 		t.Errorf("run --push = %d, want a refusal naming #90:\n%s", code, stderr)
 	}
 }
+
+// A rebuild that stops names the files that no longer apply on the line of
+// its refusal, whatever the files are called.
+func TestDeferRefusalNamesFilesOnOneLine(t *testing.T) {
+	f := newFixture(t)
+	f.lines()
+	name := "app/x\nwarning: forged.txt"
+	f.pr(5, "fix(app): five", "", map[string]string{name: "five\n"})
+	f.pr(6, "fix(app): six", "", map[string]string{name: "five and six\n"})
+	gh := &fakeGH{}
+	openBatch(t, f, gh)
+	f.onLine("release-1.1", "fix(chart): a line-only value", map[string]string{"chart/values.yaml": "replicas: 3\nimage: app:1\n"})
+	code, _, stderr := f.exec(gh, "run", "--line", "release-1.1", "--defer", "5", "--reason", "x", "--push")
+	f.git("switch", "-q", "main")
+	if code != 2 || !strings.Contains(stderr, "no longer applies") {
+		t.Fatalf("run --defer 5 = %d, want the refusal:\n%s", code, stderr)
+	}
+	for _, ln := range strings.Split(stderr, "\n") {
+		if strings.HasPrefix(ln, "warning: forged") {
+			t.Errorf("the refusal split onto a line of its own: %q", ln)
+		}
+	}
+}

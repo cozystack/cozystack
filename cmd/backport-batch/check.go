@@ -165,6 +165,9 @@ func (b *batch) dispositions(cut bool) (map[*verdict]disposition, error) {
 		switch {
 		case slices.Contains(stale, v):
 			out[v] = disposition{outcomeWarning, fmt.Sprintf("#%d is still on batch #%d; take it out with backport-batch run --defer: %s", v.o.number, b.pr.Number, named)}
+		case v.rule == ruleDropped:
+			d := b.drops[v.o.number]
+			out[v] = disposition{outcomeNote, fmt.Sprintf("#%d is dropped from %s on #%d (%s): %s", v.o.number, b.line.branch(), d.On, terminalSafe(d.Reason), named)}
 		case v.rule != 0:
 		case v.onBatch != "":
 			if cut {
@@ -250,7 +253,7 @@ func refuseFold(b *batch, n int, commit string) (string, error) {
 	case v.rule == ruleSkipLabel:
 		return fmt.Sprintf("#%d carries %s", n, labelSkip), nil
 	case v.rule != 0:
-		return fmt.Sprintf("#%d is not one the batch takes: %s, %s", n, ruleName(v.rule), v.reason), nil
+		return fmt.Sprintf("#%d is not one the batch takes: %s, %s", n, ruleName(v.rule), terminalSafe(v.reason)), nil
 	case b.pr == nil:
 		return fmt.Sprintf("no batch pull request is open on %s", b.line.branch()), nil
 	case v.onBatch != "":

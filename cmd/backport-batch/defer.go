@@ -27,23 +27,29 @@ import (
 // parseDefer reads --defer N[,N] and the --reason that has to come with it.
 func parseDefer(list, reason string) ([]int, string, error) {
 	if list == "" {
-		return nil, "", errors.New("--reason goes with --defer")
+		return nil, "", errors.New("--reason goes with --defer or --drop")
 	}
 	reason = capped(oneLine(clean(reason, false)), titleLimit)
 	if reason == "" {
 		return nil, "", errors.New("--defer needs a --reason, which the batch body records")
 	}
+	numbers, err := parseNumbers("--defer", list)
+	return numbers, reason, err
+}
+
+// parseNumbers reads the N[,N] list a flag takes, each once.
+func parseNumbers(flag, list string) ([]int, error) {
 	var numbers []int
 	for _, s := range strings.Split(list, ",") {
 		n, err := strconv.Atoi(strings.TrimPrefix(strings.TrimSpace(s), "#"))
 		if err != nil || n <= 0 {
-			return nil, "", fmt.Errorf("--defer %q is not a list of pull request numbers", list)
+			return nil, fmt.Errorf("%s %q is not a list of pull request numbers", flag, list)
 		}
 		if !slices.Contains(numbers, n) {
 			numbers = append(numbers, n)
 		}
 	}
-	return numbers, reason, nil
+	return numbers, nil
 }
 
 // rebuild takes the originals in numbers out of the open batch: it builds the
@@ -54,17 +60,8 @@ func (a *app) rebuild(b *batch, numbers []int, reason string, push bool) int {
 	if b.pr == nil {
 		return a.fail(fmt.Errorf("no batch pull request is open on %s; --defer rebuilds the open one", b.line.branch()))
 	}
-	branch := b.pr.Head.Ref
-	date, err := branchDate(branch)
-	if err != nil {
-		return a.fail(err)
-	}
-	recorded := map[int]deferredEntry{}
-	if b.src.open {
-		recorded = b.src.rec.deferred()
-	}
 	hold := map[int]string{}
-	for n, e := range recorded {
+	for n, e := range b.recorded() {
 		if e.Reason != "" {
 			hold[n] = e.Reason
 		}
@@ -86,7 +83,15 @@ func (a *app) rebuild(b *batch, numbers []int, reason string, push bool) int {
 		}
 		hold[n] = reason
 	}
-	start, replay, err := rebuildPlan(b, hold)
+	return a.reassemble(b, hold, hold, b.src.rec.dropped(), modeDefer, push)
+}
+
+// reassemble builds the open batch again off the line's head without the
+// units of the originals in out, and reports it with hold deferred for their
+// reasons and drops kept.
+func (a *app) reassemble(b *batch, out, hold map[int]string, drops []droppedEntry, mode string, push bool) int {
+	branch := b.pr.Head.Ref
+	start, replay, err := rebuildPlan(b, out)
 	if err != nil {
 		return a.fail(err)
 	}
@@ -102,7 +107,7 @@ func (a *app) rebuild(b *batch, numbers []int, reason string, push bool) int {
 		case err != nil:
 			return a.fail(err)
 		case failed != "":
-			return a.fail(fmt.Errorf("without what is deferred, %.12s%s no longer applies (%s); defer it as well", failed, originName(b, u), strings.Join(files, ", ")))
+			return a.fail(fmt.Errorf("without what is deferred, %.12s%s no longer applies (%s); defer it as well", failed, originName(b, u), terminalSafe(strings.Join(files, ", "))))
 		}
 	}
 	head, err := resolve("HEAD")
@@ -113,10 +118,23 @@ func (a *app) rebuild(b *batch, numbers []int, reason string, push bool) int {
 	if err != nil {
 		return a.fail(err)
 	}
+	return a.reclassify(b, picks, hold, drops, mode, push)
+}
+
+// reclassify reports the open batch as picks shows it, after an operation
+// that adds no original: what the record held stays held, and an original
+// the batch neither carries nor records is missing until a run tries it.
+func (a *app) reclassify(b *batch, picks *history, hold map[int]string, drops []droppedEntry, mode string, push bool) int {
+	date, err := branchDate(b.pr.Head.Ref)
+	if err != nil {
+		return a.fail(err)
+	}
+	recorded := b.recorded()
 	r := newReport(b)
-	// Taking an original out changes nothing about how the batch is
-	// assembled, so the record keeps the flag the batch was assembled with.
-	r.opts = runOptions{NoWorkflowFiles: b.src.savedNoWorkflowFiles(), Mode: modeDefer}
+	// None of these changes how the batch is assembled, so the record keeps
+	// the flag the batch was assembled with.
+	r.opts = runOptions{NoWorkflowFiles: b.src.savedNoWorkflowFiles(), Mode: mode}
+	r.dropped = drops
 	if r.stale, err = keptOut(b, picks); err != nil {
 		return a.fail(err)
 	}
@@ -137,7 +155,16 @@ func (a *app) rebuild(b *batch, numbers []int, reason string, push bool) int {
 			r.missing = append(r.missing, v)
 		}
 	}
-	return a.finish(b, r, branch, date, push, true)
+	return a.finish(b, r, b.pr.Head.Ref, date, push, true)
+}
+
+// recorded is what the open batch's record defers; a closed batch's record
+// holds nothing back on this one.
+func (b *batch) recorded() map[int]deferredEntry {
+	if !b.src.open {
+		return map[int]deferredEntry{}
+	}
+	return b.src.rec.deferred()
 }
 
 // rebuildPlan is where the rebuild of the open batch without the originals in

@@ -34,6 +34,8 @@ Usage:
   backport-batch run   --line release-X.Y [--onto SHA] [--date YYYY-MM-DD] [--no-workflow-files] [--push] [--policy REF]
   backport-batch run   --line release-X.Y --continue [--no-workflow-files] [--push] [--policy REF]
   backport-batch run   --line release-X.Y --defer N[,N] --reason TEXT [--push] [--policy REF]
+  backport-batch run   --line release-X.Y --drop N[,N] --reason TEXT [--push] [--policy REF]
+  backport-batch run   --line release-X.Y --undrop N[,N] [--push] [--policy REF]
   backport-batch check --line release-X.Y [--cut] [--policy REF]
   backport-batch fold  --line release-X.Y --original N --commit SHA [--policy REF]
   backport-batch verify --line release-X.Y [--head SHA]
@@ -56,6 +58,11 @@ run    Builds backport-batch/<line>-<yyyymmdd> in this working tree, off
        them out, the next one tries them again. --push replaces the branch,
        leased on the head the rebuild started from; when nothing is left it
        closes the batch PR instead, after recording why in it.
+       --drop drops originals from the line for --reason: the line's record
+       keeps them out of this batch and every later one. One the open batch
+       carries is taken off it as --defer would; otherwise only the record
+       changes. --undrop withdraws a drop. Both need an open batch PR whose
+       record they change.
 check  Exits 1 while a change the policy takes is neither on the line nor on
        the open batch PR, 0 when nothing is, 2 when it cannot tell. With --cut,
        the gate before an rc or a patch is cut, it also exits 1 while a change
@@ -79,7 +86,10 @@ lines  Prints the release lines the batch runs for, newest first.
 
 The policy is docs/release/backports.md. run, check, fold and lines read its
 policy block from that page on origin/main, or on --policy REF. Every command
-but notify and report, which read only GitHub, fetches origin first.
+but notify and report fetches origin first. notify reads only GitHub; report
+reads GitHub, and for a report that keeps drops also this clone's history,
+which has to hold the main and line heads the report was made from: report
+never fetches on its own.
 
 BACKPORT_BATCH_BOT names the bot the scheduled batch writes as,
 <app>[bot], cozystack-ci[bot] when unset: a batch pull request or a notify
@@ -220,8 +230,13 @@ type batch struct {
 	prHead    string
 	// picks is what the open batch pull request carries beyond the line.
 	picks *history
-	// src is the line's record and where it was found.
-	src recordSource
+	// src is the line's record and where it was found, and drops its drops
+	// that name an original of this batch.
+	src   recordSource
+	drops map[int]droppedEntry
+	// lineHist and newerHist are what the line and the newer line carry,
+	// read once for every original judged.
+	lineHist, newerHist *history
 	// start is when the line started under the policy, zero for its fork point.
 	start time.Time
 	// textUntil is the batch-only day: what a commit's text says counts as
@@ -292,16 +307,14 @@ func (a *app) prepare(l line) (*batch, error) {
 		return nil, err
 	}
 	b.other = other
-	lineHist, err := readHistory(b.lineHead, b.mainHead, b.textUntil)
-	if err != nil {
+	if b.lineHist, err = readHistory(b.lineHead, b.mainHead, b.textUntil); err != nil {
 		return nil, err
 	}
-	var newerHist *history
 	if b.newer != nil {
 		if b.newerHead, err = resolve("refs/remotes/" + remote + "/" + b.newer.branch()); err != nil {
 			return nil, err
 		}
-		if newerHist, err = readHistory(b.newerHead, b.mainHead, b.textUntil); err != nil {
+		if b.newerHist, err = readHistory(b.newerHead, b.mainHead, b.textUntil); err != nil {
 			return nil, err
 		}
 	}
@@ -332,17 +345,31 @@ func (a *app) prepare(l line) (*batch, error) {
 	if b.src, err = findLineRecord(a.gh, l, pr); err != nil {
 		return nil, err
 	}
+	if b.drops, err = b.bindDrops(merges); err != nil {
+		return nil, err
+	}
 	for _, o := range merges {
-		v, err := judge(o, labels[o.number], b.start, lineHist, b.newer, newerHist)
-		if err != nil {
+		v := &verdict{o: o, label: labels[o.number]}
+		if err := b.judge(v, b.drops); err != nil {
 			return nil, err
-		}
-		if v.rule == 0 && b.picks != nil {
-			v.onBatch, _ = b.picks.found(v.o, v.commits)
 		}
 		b.verdicts = append(b.verdicts, v)
 	}
 	return b, nil
+}
+
+// judge judges v again under drops, and finds it on the open batch when the
+// policy takes it.
+func (b *batch) judge(v *verdict, drops map[int]droppedEntry) error {
+	j, err := judge(v.o, v.label, b.start, b.lineHist, b.newer, b.newerHist, drops)
+	if err != nil {
+		return err
+	}
+	*v = *j
+	if v.rule == 0 && b.picks != nil {
+		v.onBatch, _ = b.picks.found(v.o, v.commits)
+	}
+	return nil
 }
 
 // overrides maps each pull request merged into main that carries a backport/
@@ -366,8 +393,9 @@ func overrides(gh github) (map[int]string, error) {
 // started under the policy after it branched takes nothing merged before that
 // start. backport/skip keeps an original out whatever the rules say, and
 // backport/include lifts the start and rules 2 to 4, but not what the line or
-// the newer line carries.
-func judge(o *original, label string, start time.Time, lineHist *history, newer *line, newerHist *history) (*verdict, error) {
+// the newer line carries. A maintainer's drop keeps out what the line does
+// not carry, include or not.
+func judge(o *original, label string, start time.Time, lineHist *history, newer *line, newerHist *history, drops map[int]droppedEntry) (*verdict, error) {
 	v := &verdict{o: o, label: label}
 	if label == labelSkip {
 		v.rule, v.reason = ruleSkipLabel, labelSkip
@@ -408,6 +436,10 @@ func judge(o *original, label string, start time.Time, lineHist *history, newer 
 	}
 	if how != "" {
 		v.rule, v.reason = ruleOnLine, how
+		return v, nil
+	}
+	if d, ok := drops[o.number]; ok {
+		v.rule, v.reason = ruleDropped, fmt.Sprintf("dropped on #%d: %s", d.On, d.Reason)
 		return v, nil
 	}
 	if newer != nil {

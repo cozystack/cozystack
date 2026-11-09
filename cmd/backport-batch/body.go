@@ -221,7 +221,7 @@ func prTitle(l line, date string) string {
 }
 
 // skipRules are the rules a skipped original is reported under, in order.
-var skipRules = []int{ruleBeforeStart, ruleOnLine, ruleType, ruleBreaking, ruleTouches, ruleNewer}
+var skipRules = []int{ruleBeforeStart, ruleOnLine, ruleType, ruleBreaking, ruleTouches, ruleNewer, ruleDropped}
 
 // report is what one run put on the batch branch and what it left out.
 type report struct {
@@ -251,6 +251,8 @@ type report struct {
 	// closing is the close of the open batch this run leaves carrying
 	// nothing.
 	closing *closing
+	// dropped are the maintainers' drops the record keeps.
+	dropped []droppedEntry
 }
 
 // ruleName is how output names what kept an original out: the policy's
@@ -261,8 +263,18 @@ func ruleName(rule int) string {
 		return labelSkip
 	case ruleBeforeStart:
 		return "rule 1, before the line's start"
+	case ruleDropped:
+		return "a maintainer's drop"
 	}
 	return "rule " + strconv.Itoa(rule)
+}
+
+// listTitle titles the list of what a rule skipped, a drop among them.
+func (r *report) listTitle(rule int) string {
+	if rule == ruleDropped {
+		return "Dropped from " + codeSpan(r.line.branch()) + " by a maintainer"
+	}
+	return r.ruleTitle(rule)
 }
 
 func (r *report) ruleTitle(rule int) string {
@@ -350,7 +362,7 @@ func (r *report) what(details map[int]bool) string {
 		if !details[rule] {
 			left = ", too many to list here; the run's output lists them"
 		}
-		fmt.Fprintf(&b, "- %s: %d%s\n", r.ruleTitle(rule), len(items), left)
+		fmt.Fprintf(&b, "- %s: %d%s\n", r.listTitle(rule), len(items), left)
 	}
 	if r.other > 0 {
 		fmt.Fprintf(&b, "- Commits on `main` that merged no pull request: %d\n", r.other)
@@ -358,7 +370,7 @@ func (r *report) what(details map[int]bool) string {
 	for _, rule := range skipRules {
 		items := r.skipped[rule]
 		if len(items) > 0 && details[rule] {
-			fmt.Fprintf(&b, "\n<details><summary>%s</summary>\n\n", r.ruleTitle(rule))
+			fmt.Fprintf(&b, "\n<details><summary>%s</summary>\n\n", r.listTitle(rule))
 			for _, v := range items {
 				fmt.Fprintf(&b, "- %s %s, %s\n", prLink(v.o.number), titleSpan(v.o.title), titleSpan(v.reason))
 			}
@@ -372,6 +384,8 @@ func (r *report) what(details map[int]bool) string {
 // outcome is what became of an original a label overrode.
 func (r *report) outcome(v *verdict) string {
 	switch {
+	case slices.Contains(r.stale, v) && v.rule == ruleDropped:
+		return "dropped, but still on this branch; take it out with `backport-batch run --defer`"
 	case slices.Contains(r.stale, v):
 		return "still on this branch, picked before the label; take it out with `backport-batch run --defer`"
 	case v.label == labelSkip:

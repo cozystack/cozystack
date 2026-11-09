@@ -75,8 +75,10 @@ func (a *app) run(args []string) int {
 	cont := fs.Bool("continue", false, "continue the open batch pull request, or start a batch when none is open")
 	dateArg := fs.String("date", "", "batch date, YYYY-MM-DD (default: today, UTC)")
 	deferArg := fs.String("defer", "", "originals to take out of the open batch, N[,N]; rebuilds it without them")
+	dropArg := fs.String("drop", "", "originals to drop from the line, N[,N]; recorded on the open batch, and taken off it")
+	undropArg := fs.String("undrop", "", "originals whose drop to withdraw, N[,N]")
 	noWorkflows := fs.Bool("no-workflow-files", false, "leave an original that changes "+workflowsDir+" to a maintainer, for a token that cannot push one")
-	reasonArg := fs.String("reason", "", "why --defer takes them out, recorded in the batch body")
+	reasonArg := fs.String("reason", "", "why --defer takes them out or --drop drops them, recorded in the batch body")
 	push := fs.Bool("push", false, "push the branch and open or update the draft batch PR")
 	if err := parse(fs, args); err != nil {
 		return 2
@@ -96,9 +98,30 @@ func (a *app) run(args []string) int {
 			return a.fail(fmt.Errorf("--onto: %w", err))
 		}
 	}
-	var deferred []int
-	reason := ""
+	var deferred, drops []int
+	reason, ops := "", 0
+	for _, op := range []string{*deferArg, *dropArg, *undropArg} {
+		if op != "" {
+			ops++
+		}
+	}
 	switch {
+	case ops > 1:
+		return a.fail(errors.New("--defer, --drop and --undrop each change the open batch pull request on their own; give one"))
+	case *dropArg != "" || *undropArg != "":
+		if *onto != "" || *cont || *dateArg != "" {
+			return a.fail(errors.New("--drop and --undrop change the open batch pull request; each takes no --onto, --continue or --date"))
+		}
+		if *undropArg != "" && *reasonArg != "" {
+			return a.fail(errors.New("--undrop takes no --reason"))
+		}
+		list := *dropArg + *undropArg
+		if drops, err = parseNumbers(map[bool]string{true: "--drop", false: "--undrop"}[*dropArg != ""], list); err != nil {
+			return a.fail(err)
+		}
+		if reason = capped(oneLine(clean(*reasonArg, false)), titleLimit); *dropArg != "" && reason == "" {
+			return a.fail(errors.New("--drop needs a --reason, which the line's record keeps"))
+		}
 	case *deferArg != "" || *reasonArg != "":
 		if deferred, reason, err = parseDefer(*deferArg, *reasonArg); err != nil {
 			return a.fail(err)
@@ -119,8 +142,11 @@ func (a *app) run(args []string) int {
 	if err != nil {
 		return a.fail(err)
 	}
-	if goOn, code := a.resumeClose(b, *push, deferred != nil); !goOn {
+	if goOn, code := a.resumeClose(b, *push, deferred != nil || drops != nil); !goOn {
 		return code
+	}
+	if drops != nil {
+		return a.redrop(b, drops, reason, *undropArg != "", *push)
 	}
 	if deferred != nil {
 		return a.rebuild(b, deferred, reason, *push)
@@ -162,6 +188,9 @@ func (a *app) run(args []string) int {
 
 	r := newReport(b)
 	r.opts = runOptions{NoWorkflowFiles: *noWorkflows, Mode: modeNew}
+	// A drop is a decision about the line, not about one batch: a new batch
+	// keeps the ones the closed batch recorded.
+	r.dropped = b.src.rec.dropped()
 	if carried != nil {
 		r.opts.Mode = modeContinue
 		if r.stale, err = keptOut(b, carried); err != nil {
@@ -221,12 +250,12 @@ func (a *app) run(args []string) int {
 	return a.finish(b, r, branch, date, *push, false)
 }
 
-// keptOut lists the originals with backport/skip that the batch picked before
-// the label came: a run never takes a commit off the batch, --defer does.
+// keptOut lists the originals with backport/skip, or dropped, that the batch
+// still carries: a run never takes a commit off the batch, --defer does.
 func keptOut(b *batch, carried *history) ([]*verdict, error) {
 	var out []*verdict
 	for _, v := range b.verdicts {
-		if v.label != labelSkip {
+		if v.rule != ruleSkipLabel && v.rule != ruleDropped {
 			continue
 		}
 		if err := b.load(v); err != nil {
@@ -331,7 +360,12 @@ func (a *app) finish(b *batch, r *report, branch string, date time.Time, push, r
 // act on, with the full classification left to the report it names.
 func (r *report) lineRecord(doc reportDoc) lineRecord {
 	built := doc.Built
-	return lineRecord{Version: 2, Line: doc.Line, Built: &built, Report: doc.ID, Closing: r.closing, Deferred: slices.Clone(doc.Primary.Deferred), Dropped: []droppedEntry{}, Stale: slices.Clone(doc.Overlays.Stale)}
+	dropped := slices.Clone(r.dropped)
+	if dropped == nil {
+		dropped = []droppedEntry{}
+	}
+	slices.SortFunc(dropped, func(a, b droppedEntry) int { return a.Original - b.Original })
+	return lineRecord{Version: 2, Line: doc.Line, Built: &built, Report: doc.ID, Closing: r.closing, Deferred: slices.Clone(doc.Primary.Deferred), Dropped: dropped, Stale: slices.Clone(doc.Overlays.Stale)}
 }
 
 // branchDate is the date a batch branch was opened under.
@@ -686,7 +720,7 @@ func (a *app) finishClose(l line, url string, c closing) error {
 		return fmt.Errorf("closing #%d, reading it again: %w", c.PR, err)
 	}
 	if st := prState(&pr); st != "open" || pr.Head.SHA != c.Head {
-		return fmt.Errorf("closing #%d: it is %s at %.12s, not open at %.12s, which its record froze", c.PR, st, pr.Head.SHA, c.Head)
+		return fmt.Errorf("closing #%d: it is %s at %.12s, not open at %.12s, which its record froze", c.PR, st, terminalSafe(pr.Head.SHA), c.Head)
 	}
 	heads, err := remoteBatchHeads(l)
 	if err != nil {

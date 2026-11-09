@@ -396,6 +396,20 @@ func TestOutputNamesNoInternalRule(t *testing.T) {
 	}
 }
 
+// A refusal fold prints is one line with no control sequence, whatever the
+// reason it repeats says: a drop's reason comes from a pull request body, a
+// rule 4 reason from file names an original's author chose.
+func TestFoldRefusalPrintsNothingThatDrivesATerminal(t *testing.T) {
+	l, _ := parseLine("release-1.1")
+	for _, reason := range []string{"dropped on #90: x\n\x1b[2Jrefused: forged", "touches \"app/a\x1b]0;x\x07\nok\""} {
+		b := &batch{line: l, verdicts: []*verdict{{o: &original{number: 5}, rule: ruleDropped, reason: reason}}}
+		why, err := refuseFold(b, 5, strings.Repeat("a", 40))
+		if err != nil || why == "" || strings.ContainsFunc(why, func(r rune) bool { return unicode.IsControl(r) || unicode.Is(unicode.Cf, r) }) {
+			t.Errorf("refuseFold = %q, %v; want one clean line", why, err)
+		}
+	}
+}
+
 type errString string
 
 func (e errString) Error() string { return string(e) }

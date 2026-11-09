@@ -250,6 +250,10 @@ func TestReportPartition(t *testing.T) {
 	gh.prs = []pullRequest{f.batchPR(90, "release-1.0", branch, stdout)}
 	pr(14, "fix(app): fourteen, after the batch", map[string]string{"app/fourteen.txt": "14\n"}, true)
 	stdout = mustRun(t, f, gh, "run", "--line", "release-1.0", "--defer", "13", "--reason", "fails the e2e", "--push")
+	// An active drop, of #5, which the batch carries, and one of a feat,
+	// which rule 2 keeps out first.
+	gh.prs = []pullRequest{f.batchPR(90, "release-1.0", branch, stdout)}
+	stdout = mustRun(t, f, gh, "run", "--line", "release-1.0", "--drop", "5,1", "--reason", "not for 1.0", "--push")
 
 	l, _ := parseLine("release-1.0")
 	s := bodyReportOf(t, stdout, l)
@@ -257,7 +261,7 @@ func TestReportPartition(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := map[int]string{1: "skipped.type", 4: "skipped.before-start", 5: "picked", 6: "skipped.newer", 7: "skipped.breaking",
+	want := map[int]string{1: "skipped.type", 4: "skipped.before-start", 5: "skipped.dropped", 6: "skipped.newer", 7: "skipped.breaking",
 		8: "skipped.touches", 9: "skipped.skip-label", 10: "skipped.on-line", 11: "deferred", 12: "deferred", 13: "deferred",
 		14: "missing", 9000: "skipped.type"}
 	for n, category := range want {
@@ -268,6 +272,12 @@ func TestReportPartition(t *testing.T) {
 	}
 	if len(got) != 0 {
 		t.Errorf("the report also names %v", got)
+	}
+	if gh.find(90).State != "closed" || !strings.Contains(stdout, `"mode":"close"`) {
+		t.Errorf("dropping the batch's last pick left #90 %s; want it closed", gh.find(90).State)
+	}
+	if !slices.Equal(droppedNumbers(s.doc.Overlays.Dropped), []int{1, 5}) || len(s.doc.Primary.Picked) != 0 {
+		t.Errorf("the report drops %v and picks %v; want #1 and #5 dropped, nothing picked", s.doc.Overlays.Dropped, s.doc.Primary.Picked)
 	}
 	if !slices.Contains(s.doc.Other, direct) {
 		t.Errorf("the report does not count the direct push %.12s: %v", direct, s.doc.Other)
@@ -564,8 +574,10 @@ func TestReportRefusesWhatItCannotVouchFor(t *testing.T) {
 		"a deferred commit that is none": func(d *reportDoc) {
 			d.Primary.Deferred = []deferredEntry{{Original: 6, Commit: "-x", Files: []string{"a"}}}
 		},
-		"an original named twice":  func(d *reportDoc) { d.Primary.Missing = []int{5} },
-		"an original that is none": func(d *reportDoc) { d.Primary.Skipped.Type = []int{-1} },
+		"an original named twice":     func(d *reportDoc) { d.Primary.Missing = []int{5} },
+		"an original that is none":    func(d *reportDoc) { d.Primary.Skipped.Type = []int{-1} },
+		"a diagnostic of two lines":   func(d *reportDoc) { d.Diag = map[string][]string{"5": {"incomplete\n\x1b[2Jforged"}} },
+		"a diagnostic of no original": func(d *reportDoc) { d.Diag = map[string][]string{"five": {"incomplete"}} },
 		// Fields that speak of one another have to agree.
 		"a drop category with no drop": func(d *reportDoc) { d.Primary.Skipped.Dropped = []int{6} },
 		"a stale original it has missing": func(d *reportDoc) {
@@ -674,5 +686,21 @@ func TestReportReaderTakesOnlyTrustedComments(t *testing.T) {
 		if read := code == 0 && strings.Contains(stdout, "#5 picked"); read != tc.read || !tc.read && (code != 2 || !strings.Contains(stderr, "keeps no report")) {
 			t.Errorf("a report by %s: report = %d, read %v, want %v:\n%s%s", tc.login, code, read, tc.read, stdout, stderr)
 		}
+	}
+}
+
+// A report whose ID is not one says so without repeating it as written.
+func TestReportErrorsRepeatNothingRaw(t *testing.T) {
+	s := forged(func(*reportDoc) {})
+	// Short enough that a cut to 12 characters keeps the forged line.
+	raw := strings.Replace(s.raw, `"id":"`+s.doc.ID+`"`, `"id":"\nforged"`, 1)
+	code, _, stderr := reportRun(&fakeGH{prs: []pullRequest{notifyPR("20261026", "text\n\n"+reportBlock(raw)+"\n")}}, "--pr", "90")
+	for _, ln := range strings.Split(stderr, "\n") {
+		if strings.HasPrefix(ln, "forged") {
+			t.Errorf("report = %d, printed the forged line %q", code, ln)
+		}
+	}
+	if code != 2 {
+		t.Errorf("report = %d, want 2:\n%s", code, stderr)
 	}
 }

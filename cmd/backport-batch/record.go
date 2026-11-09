@@ -102,6 +102,11 @@ var (
 	reportIDRE = regexp.MustCompile(`^[0-9a-f]{64}$`)
 )
 
+// oneLineText is s as a run writes a reason: one line, cleaned and capped.
+// A record holding anything else was not written by a run, and its text
+// would reach a terminal, a body or a comment as someone else wrote it.
+func oneLineText(s string) string { return capped(oneLine(clean(s, false)), titleLimit) }
+
 // fencedLines lists the one line of each block that fence opens.
 func fencedLines(body, fence string) ([]string, error) {
 	var blocks []string
@@ -220,6 +225,10 @@ func (rec *lineRecord) validate(l line) error {
 			return fmt.Errorf("does not say whether #%d is a conflict, deferred for a reason or waiting", d.Original)
 		case d.Reason != "" && strings.TrimSpace(d.Reason) == "":
 			return fmt.Errorf("defers #%d for an empty reason", d.Original)
+		case d.Reason != oneLineText(d.Reason):
+			return fmt.Errorf("defers #%d for %q, which is no reason a run writes", d.Original, d.Reason)
+		case !slices.Equal(d.Files, cleanFiles(d.Files)):
+			return fmt.Errorf("names files of #%d that are not as a run writes them: %q", d.Original, d.Files)
 		case d.More < 0:
 			return fmt.Errorf("counts %d more files for #%d", d.More, d.Original)
 		}
@@ -230,6 +239,9 @@ func (rec *lineRecord) validate(l line) error {
 		}
 		if _, err := time.Parse(time.DateOnly, d.Date); err != nil || checkSHA(d.Merge) != nil || strings.TrimSpace(d.Reason) == "" || d.On <= 0 {
 			return fmt.Errorf("drops #%d with a merge, reason, pull request or date it cannot have", d.Original)
+		}
+		if d.Reason != oneLineText(d.Reason) {
+			return fmt.Errorf("drops #%d for %q, which is no reason a run writes", d.Original, d.Reason)
 		}
 	}
 	staleSeen := map[int]bool{}
@@ -306,6 +318,14 @@ func (s recordSource) savedNoWorkflowFiles() bool {
 	return slices.ContainsFunc(s.rec.Deferred, func(d deferredEntry) bool { return d.Workflows })
 }
 
+// dropped is what the record drops, which every later record keeps.
+func (rec *lineRecord) dropped() []droppedEntry {
+	if rec == nil {
+		return nil
+	}
+	return slices.Clone(rec.Dropped)
+}
+
 // deferred maps the originals the record defers to their entries.
 func (rec *lineRecord) deferred() map[int]deferredEntry {
 	out := map[int]deferredEntry{}
@@ -343,10 +363,12 @@ func prState(pr *pullRequest) string {
 	switch {
 	case pr.MergedAt != nil:
 		return "merged"
-	case pr.State == "":
+	case pr.State == "" || pr.State == "open":
 		return "open"
+	case pr.State == "closed":
+		return "closed"
 	}
-	return pr.State
+	return fmt.Sprintf("in state %q", pr.State)
 }
 
 func hasRecord(body string) bool {

@@ -110,6 +110,8 @@ func (s *reportSkipped) list(rule int) *[]int {
 		return &s.Newer
 	case ruleSkipLabel:
 		return &s.SkipLabel
+	case ruleDropped:
+		return &s.Dropped
 	}
 	return nil
 }
@@ -180,6 +182,7 @@ func buildReport(b *batch, r *report) (reportDoc, error) {
 		*list = append(*list, numbers(vs)...)
 	}
 	doc.Overlays = reportOverlays{Dropped: []droppedEntry{}, Stale: numbers(r.stale), Changed: []int{}}
+	doc.Overlays.Dropped = append(doc.Overlays.Dropped, r.dropped...)
 	doc.canonical()
 	where, err := doc.categories()
 	if err != nil {
@@ -286,9 +289,12 @@ func parseReport(raw string, l line) (reportDoc, error) {
 		return doc, fmt.Errorf("the report is format %d, which this backport-batch does not read", doc.Format)
 	}
 	if !reportIDRE.MatchString(doc.ID) || reportID(doc) != doc.ID {
-		return doc, fmt.Errorf("report %.12s does not match what it says", doc.ID)
+		return doc, fmt.Errorf("report %.12s does not match what it says", terminalSafe(doc.ID))
 	}
 	if err := doc.validate(l); err != nil {
+		return doc, fmt.Errorf("report %.12s %w", doc.ID, err)
+	}
+	if err := doc.bindDrops(); err != nil {
 		return doc, fmt.Errorf("report %.12s %w", doc.ID, err)
 	}
 	return doc, nil
@@ -316,6 +322,16 @@ func (d *reportDoc) validate(l line) error {
 	kept := lineRecord{Version: 1, Line: d.Line, Deferred: d.Primary.Deferred, Dropped: d.Overlays.Dropped}
 	if err := kept.validate(l); err != nil {
 		return err
+	}
+	for n, lines := range d.Diag {
+		if k, err := strconv.Atoi(n); err != nil || k <= 0 || strconv.Itoa(k) != n {
+			return fmt.Errorf("has diagnostics for %q, which is no original", n)
+		}
+		for _, ln := range lines {
+			if ln != oneLineText(ln) {
+				return fmt.Errorf("has a diagnostic for #%s that is not one clean line: %q", n, ln)
+			}
+		}
 	}
 	for _, list := range [][]int{d.Overrides.Include, d.Overrides.Skip, d.Overlays.Stale, d.Overlays.Changed} {
 		for _, n := range list {
@@ -529,8 +545,10 @@ func runURL(lookup func(string) (string, bool)) string {
 	return url
 }
 
-// report prints a report a batch pull request keeps, reading GitHub alone and
-// writing nothing, so it works on merged and closed batches too.
+// report prints a report a batch pull request keeps, writing nothing, so it
+// works on merged and closed batches too. It reads GitHub, and for a report
+// that keeps drops also this clone's history at the heads the report was
+// made from, which it never fetches.
 func (a *app) report(args []string) int {
 	fs := a.flags("report")
 	number := fs.Int("pr", 0, "the batch pull request")

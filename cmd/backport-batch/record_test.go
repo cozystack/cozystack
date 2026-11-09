@@ -87,6 +87,12 @@ func TestRecordRefuses(t *testing.T) {
 		"an unknown key":              v2(`,"parked":[]`),
 		"an entry of no kind":         strings.Replace(v2(""), `{"original":6,"files":[],"reason":"fails the e2e"}`, `{"original":6,"files":[]}`, 1),
 		"another line":                strings.Replace(v2(""), `"line":"release-1.1"`, `"line":"release-1.0"`, 1),
+		"an escape in a reason":       strings.Replace(v2(""), `"reason":"fails the e2e"`, `"reason":"fails\u001b[2J the e2e"`, 1),
+		"a newline in a reason":       strings.Replace(v2(""), `"reason":"fails the e2e"`, `"reason":"fails\nwarning: forged"`, 1),
+		"an escape in a drop":         strings.Replace(v2(""), `"reason":"needs #4"`, `"reason":"needs\u001b]0;x\u0007 #4"`, 1),
+		"a newline in a drop":         strings.Replace(v2(""), `"reason":"needs #4"`, `"reason":"needs #4\nnote: forged"`, 1),
+		"a reason past its length":    strings.Replace(v2(""), `"reason":"needs #4"`, `"reason":"`+strings.Repeat("x", titleLimit+1)+`"`, 1),
+		"a bidi file name":            strings.Replace(v2(""), `"files":["app/five.txt"]`, `"files":["app/\u202efive.txt"]`, 1),
 	} {
 		if _, err := parseRecord(block(json), l); err == nil {
 			t.Errorf("%s: parseRecord accepted it", name)
@@ -293,8 +299,10 @@ func TestMetadataOperationsKeepTheMode(t *testing.T) {
 	for _, v1 := range []bool{false, true} {
 		t.Run(fmt.Sprintf("an open record of version 1: %v", v1), func(t *testing.T) {
 			f := workflowWorld(t)
+			f.onLine("release-1.1", "fix(app): a line-only nine", map[string]string{"app/nine.txt": "line\n"})
 			f.pr(7, "fix(app): seven", "", map[string]string{"app/seven.txt": "7\n"})
 			f.pr(8, "fix(app): eight", "", map[string]string{"app/eight.txt": "8\n"})
+			f.pr(9, "fix(app): nine", "", map[string]string{"app/nine.txt": "9\n"})
 			gh := &fakeGH{}
 			stdout := mustRun(t, f, gh, "run", "--line", "release-1.1", "--no-workflow-files", "--push")
 			reopen(f, gh)
@@ -304,11 +312,23 @@ func TestMetadataOperationsKeepTheMode(t *testing.T) {
 			} else if rec, err := parseRecord(stdout, notifyLine); err != nil || !rec.Built.Options.NoWorkflowFiles {
 				t.Fatalf("the scheduled run saved %+v, %v", rec, err)
 			}
-			stdout = mustRun(t, f, gh, "run", "--line", "release-1.1", "--defer", "7", "--reason", "fails the e2e", "--push")
-			rec, err := parseRecord(stdout, notifyLine)
-			if err != nil || rec.Built.Options != (runOptions{NoWorkflowFiles: true, Mode: modeDefer}) {
-				t.Errorf("after --defer the record is %+v, %v; want the flag kept", rec.Built, err)
+			for _, op := range []struct {
+				args []string
+				mode string
+			}{
+				{[]string{"--drop", "9", "--reason", "needs #4"}, modeDrop},
+				{[]string{"--undrop", "9"}, modeUndrop},
+				{[]string{"--defer", "7", "--reason", "fails the e2e"}, modeDefer},
+			} {
+				stdout = mustRun(t, f, gh, append(append([]string{"run", "--line", "release-1.1"}, op.args...), "--push")...)
+				rec, err := parseRecord(stdout, notifyLine)
+				if err != nil || rec.Built.Options != (runOptions{NoWorkflowFiles: true, Mode: op.mode}) {
+					t.Errorf("after %q the record is %+v, %v; want the flag kept", op.args, rec.Built, err)
+				}
+				reopen(f, gh)
 			}
+			var rec *lineRecord
+			var err error
 			reopen(f, gh)
 			if code, stdout, _ := f.exec(gh, "check", "--line", "release-1.1", "--cut"); code != 1 || !strings.Contains(stdout, "#5 changes .github/workflows/") {
 				t.Errorf("check --cut = %d, want #5 still waiting:\n%s", code, stdout)
@@ -325,5 +345,24 @@ func TestMetadataOperationsKeepTheMode(t *testing.T) {
 				t.Errorf("check --cut = %d, want #5 missing once no batch lists it:\n%s", code, stdout)
 			}
 		})
+	}
+}
+
+// A state is named only when it is one GitHub uses; anything else is quoted.
+func TestPRStateNamesOnlyKnownStates(t *testing.T) {
+	at := "2026-10-26T12:00:00Z"
+	for _, tc := range []struct {
+		pr   pullRequest
+		want string
+	}{
+		{pullRequest{State: "open"}, "open"},
+		{pullRequest{State: ""}, "open"},
+		{pullRequest{State: "closed"}, "closed"},
+		{pullRequest{State: "closed", MergedAt: &at}, "merged"},
+		{pullRequest{State: "open\n\x1b[2Jforged"}, `in state "open\n\x1b[2Jforged"`},
+	} {
+		if got := prState(&tc.pr); got != tc.want {
+			t.Errorf("prState(%q) = %q, want %q", tc.pr.State, got, tc.want)
+		}
 	}
 }
