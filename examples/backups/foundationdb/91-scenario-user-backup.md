@@ -21,7 +21,7 @@ streamed into.
      ```json
      {
        "accounts": {
-         "<api_key>@<endpoint-host>:<port>": {
+         "<api_key>@<endpoint-host>": {
            "api_key": "<access_key>",
            "secret":  "<secret_key>"
          }
