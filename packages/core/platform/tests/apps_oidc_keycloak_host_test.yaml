@@ -82,3 +82,21 @@ tests:
       - matchRegex:
           path: stringData["values.yaml"]
           pattern: 'keycloak-host:\s*"a{63}\.example\.org"'
+
+  # Both are valid DNS labels, so they must survive validation and reach the
+  # _cluster channel as strings.
+  - it: accepts an all-digit keycloak host
+    set:
+      authentication.oidc.keycloakHost: "123"
+    asserts:
+      - matchRegex:
+          path: stringData["values.yaml"]
+          pattern: 'keycloak-host:\s*"123"'
+
+  - it: accepts a boolean-looking keycloak host
+    set:
+      authentication.oidc.keycloakHost: "true"
+    asserts:
+      - matchRegex:
+          path: stringData["values.yaml"]
+          pattern: 'keycloak-host:\s*"true"'
