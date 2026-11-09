@@ -137,8 +137,8 @@ func (r *BackupReconciler) cleanupOnDelete(ctx context.Context, backup *backupsv
 		// backup run of the same prefix and a Plan never deletes a Backup, so
 		// a dump on the platform bucket is deleted here or never. A dump in
 		// a tenant's own bucket is deleted too: the Backup proves it owns
-		// it, and the tenant deleting the Backup is asking for exactly that
-		// (see cleanupMariaDBBackup).
+		// it, and tenants cannot delete Backups, so the delete comes from an
+		// administrator or from namespace teardown (see cleanupMariaDBBackup).
 		return r.cleanupMariaDBBackup(ctx, backup)
 	case strategyv1alpha1.MongoDBStrategyKind:
 		// Split by flow (see cleanupMongoDBBackup). A legacy backup writes to the
