@@ -1,0 +1,26 @@
+suite: ingress-nginx client keepalive_time
+release:
+  name: ingress-nginx
+  namespace: cozy-ingress-nginx
+templates:
+  - charts/ingress-nginx/templates/controller-configmap.yaml
+tests:
+  - it: raises the client keepalive_time above the nginx 1h default
+    asserts:
+      - equal:
+          path: data.http-snippet
+          value: keepalive_time 12h;
+  - it: keeps the snippet when a tenant ingress sets its own config keys
+    # The tenant ingress HelmRelease passes controller.config for whitelist,
+    # Cloudflare and PROXY protocol; Helm merges maps, so those keys must not
+    # drop the default snippet.
+    set:
+      ingress-nginx.controller.config.use-proxy-protocol: "true"
+      ingress-nginx.controller.config.whitelist-source-range: 10.0.0.0/8
+    asserts:
+      - equal:
+          path: data.http-snippet
+          value: keepalive_time 12h;
+      - equal:
+          path: data.use-proxy-protocol
+          value: "true"
