@@ -44,8 +44,13 @@ spec:
       externalLabels:
         cluster: {{ .Release.Name }}
         tenant: {{ .Release.Namespace }}
+      # The cozy-monitoring-agents chart reads vmagent.remoteWrite.urls (a list);
+      # a singular `url` here is ignored and the chart falls back to its default
+      # global.target (cozy-monitoring), which a guest cluster cannot resolve.
       remoteWrite:
-        url: http://vminsert-shortterm.{{ $targetTenant }}.svc.{{ $clusterDomain }}:8480/insert/0/prometheus
+        urls:
+          - http://vminsert-shortterm.{{ $targetTenant }}.svc.{{ $clusterDomain }}:8480/insert/0/prometheus
+          - http://vminsert-longterm.{{ $targetTenant }}.svc.{{ $clusterDomain }}:8480/insert/0/prometheus
     fluent-bit:
       readinessProbe:
         httpGet:

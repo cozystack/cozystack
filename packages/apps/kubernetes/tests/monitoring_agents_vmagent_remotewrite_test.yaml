@@ -1,0 +1,29 @@
+suite: guest vmagent remote-writes metrics to the ancestor tenant's vminsert
+
+templates:
+  - templates/helmreleases/monitoring-agents.yaml
+
+values:
+  - values/common.yaml
+
+release:
+  name: kubernetes-test
+  namespace: tenant-test
+
+# The cozy-monitoring-agents chart reads vmagent.remoteWrite.urls (a list). A
+# singular `url` here is ignored and the chart falls back to its global.target
+# default (cozy-monitoring), which a guest cluster cannot resolve. The target
+# must be the ancestor tenant that provides monitoring (_namespace.monitoring).
+tests:
+  - it: writes to the ancestor tenant vminsert via the urls key the chart reads
+    set:
+      addons.monitoringAgents.enabled: true
+      _namespace.monitoring: tenant-foo
+    asserts:
+      - isKind:
+          of: HelmRelease
+      - equal:
+          path: spec.values.vmagent.remoteWrite.urls
+          value:
+            - http://vminsert-shortterm.tenant-foo.svc.cozy.local:8480/insert/0/prometheus
+            - http://vminsert-longterm.tenant-foo.svc.cozy.local:8480/insert/0/prometheus
