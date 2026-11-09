@@ -87,13 +87,9 @@
 {{- end -}}
 
 {{- $toLabel := list -}}
-{{- $emptyLabel := list -}}
 {{- range $desired -}}
   {{- if ne (dig "metadata" "labels" $groupKey "" (get $claims .) | toString) $vmName -}}
     {{- $toLabel = append $toLabel . -}}
-    {{- if hasKey (dig "metadata" "labels" dict (get $claims .)) $groupKey -}}
-      {{- $emptyLabel = append $emptyLabel . -}}
-    {{- end -}}
   {{- end -}}
 {{- end -}}
 {{- $toUnlabel := list -}}
@@ -143,16 +139,53 @@ spec:
           command: ["sh", "-exc"]
           {{- /* A claim deleted since the render is skipped, not fatal: the rest
                  of the group stays valid for Velero without it. Any other
-                 failure still fails the Job. A label present but empty is
-                 replaced, and this VM's label removed, by a JSON patch that tests
-                 the value it expects first, so the API server refuses the change,
-                 instead of taking the claim over or dropping its new group, if
-                 another VM has grouped the claim since the render. A refused
-                 change is accepted when the claim already carries the value
-                 this VM wanted, which is what a retried Pod finds for every
-                 change its predecessor made. */}}
+                 failure still fails the Job.
+
+                 Neither write may take a claim over, or drop a group, that
+                 another VM set since the render. kubectl label reads, then
+                 sends a merge patch carrying only the new value, so a group
+                 set in between would be replaced. group therefore reads the
+                 resourceVersion with the value and writes with
+                 --resource-version: the API server answers Conflict if the
+                 claim changed, and the claim is read again. The removal is a
+                 JSON patch that tests for this VM's value first.
+
+                 A claim that already carries the value this VM wants is done,
+                 which is what a retried Pod finds for every change its
+                 predecessor made. */}}
           args:
             - |
+              group() {
+                name=$1
+                for attempt in 1 2 3 4 5; do
+                  if ! state=$(kubectl get persistentvolumeclaims "$name" -n {{ $namespace }} -o jsonpath='{.metadata.resourceVersion}{" "}{.metadata.labels.{{ $groupKey | replace "." "\\." }}}' 2>&1); then
+                    case "$state" in
+                      *"(NotFound)"*) echo "$state"; return 0 ;;
+                    esac
+                    echo "$state" >&2
+                    return 1
+                  fi
+                  version=${state%% *}
+                  have=${state#* }
+                  if [ "$have" = {{ $vmName }} ]; then
+                    return 0
+                  fi
+                  if [ -n "$have" ]; then
+                    echo "$name is grouped under $have" >&2
+                    return 1
+                  fi
+                  if out=$(kubectl label persistentvolumeclaims "$name" -n {{ $namespace }} --overwrite --resource-version="$version" {{ $groupKey }}={{ $vmName }} 2>&1); then
+                    return 0
+                  fi
+                  case "$out" in
+                    *"(NotFound)"*) echo "$out"; return 0 ;;
+                    *"(Conflict)"*) ;;
+                    *) echo "$out" >&2; return 1 ;;
+                  esac
+                done
+                echo "$name kept changing" >&2
+                return 1
+              }
               claim() {
                 want=$1 verb=$2 name=$3
                 shift 3
@@ -168,11 +201,7 @@ spec:
                 fi
               }
               {{- range $toLabel }}
-              {{- if has . $emptyLabel }}
-              claim {{ $vmName }} patch {{ . }} --type=json -p '{{ list (dict "op" "test" "path" $path "value" "") (dict "op" "replace" "path" $path "value" $vmName) | toJson }}'
-              {{- else }}
-              claim {{ $vmName }} label {{ . }} {{ $groupKey }}={{ $vmName }}
-              {{- end }}
+              group {{ . }}
               {{- end }}
               {{- range $toUnlabel }}
               claim "" patch {{ . }} --type=json -p '{{ list (dict "op" "test" "path" $path "value" $vmName) (dict "op" "remove" "path" $path) | toJson }}'

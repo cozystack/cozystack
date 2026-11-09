@@ -70,15 +70,15 @@ tests:
           count: 4
       - matchRegex:
           path: spec.template.spec.containers[0].args[0]
-          pattern: 'claim vm-instance-win label vm-disk-win-system velero.io/volume-group=vm-instance-win\n'
+          pattern: 'group vm-disk-win-system\n'
         documentSelector: {path: kind, value: Job}
       - matchRegex:
           path: spec.template.spec.containers[0].args[0]
-          pattern: 'claim vm-instance-win label vm-disk-win-data velero.io/volume-group=vm-instance-win\n'
+          pattern: 'group vm-disk-win-data\n'
         documentSelector: {path: kind, value: Job}
       - matchRegex:
           path: spec.template.spec.containers[0].args[0]
-          pattern: 'claim vm-instance-win label persistent-state-for-vm-instance-win-abcde velero.io/volume-group=vm-instance-win\n'
+          pattern: 'group persistent-state-for-vm-instance-win-abcde\n'
         documentSelector: {path: kind, value: Job}
       - equal:
           path: rules[0].resourceNames
@@ -299,7 +299,7 @@ tests:
         documentSelector: {path: kind, value: Job}
       - notMatchRegex:
           path: spec.template.spec.containers[0].args[0]
-          pattern: 'velero.io/volume-group=vm-instance-win'
+          pattern: '\ngroup [a-z]'
         documentSelector: {path: kind, value: Job}
 
   - it: leaves a claim grouped under another VM out of this VM's group
@@ -322,10 +322,7 @@ tests:
           value: [vm-disk-win-data, persistent-state-for-vm-instance-win-abcde]
         documentSelector: {path: kind, value: Role}
 
-  - it: replaces an empty group label only if it is still empty
-    # kubectl refuses to change a present label without --overwrite, even an
-    # empty one, and --overwrite would also replace a group another VM set
-    # since the render; the JSON patch tests for the empty value first.
+  - it: groups a claim whose group label is present but empty
     capabilities: *groupSnapshotServed
     kubernetesProvider:
       scheme: *scheme
@@ -340,10 +337,10 @@ tests:
     asserts:
       - matchRegex:
           path: spec.template.spec.containers[0].args[0]
-          pattern: 'claim vm-instance-win patch vm-disk-win-system --type=json -p ''\[\{"op":"test","path":"/metadata/labels/velero.io~1volume-group","value":""\},\{"op":"replace","path":"/metadata/labels/velero.io~1volume-group","value":"vm-instance-win"\}\]''\n'
+          pattern: 'group vm-disk-win-system\n'
       - matchRegex:
           path: spec.template.spec.containers[0].args[0]
-          pattern: 'claim vm-instance-win label vm-disk-win-data velero.io/volume-group=vm-instance-win\n'
+          pattern: 'group vm-disk-win-data\n'
 
   - it: skips a claim deleted between the render and the Job
     capabilities: *groupSnapshotServed
@@ -355,6 +352,15 @@ tests:
       - matchRegex:
           path: spec.template.spec.containers[0].args[0]
           pattern: 'if ! out=\$\(kubectl "\$verb" persistentvolumeclaims "\$name" "\$@" -n tenant-test 2>&1\); then\n\s+case "\$out" in\n\s+\*"\(NotFound\)"\*\) echo "\$out"; return 0 ;;'
+      - matchRegex:
+          path: spec.template.spec.containers[0].args[0]
+          pattern: 'state=\$\(kubectl get persistentvolumeclaims "\$name" -n tenant-test -o jsonpath=''\{\.metadata\.resourceVersion\}\{" "\}\{\.metadata\.labels\.velero\\\.io/volume-group\}'' 2>&1\)'
+      - matchRegex:
+          path: spec.template.spec.containers[0].args[0]
+          pattern: 'kubectl label persistentvolumeclaims "\$name" -n tenant-test --overwrite --resource-version="\$version" velero\.io/volume-group=vm-instance-win 2>&1'
+      - matchRegex:
+          path: spec.template.spec.containers[0].args[0]
+          pattern: '\*"\(Conflict\)"\*\) ;;'
       - matchRegex:
           path: spec.template.spec.containers[0].args[0]
           pattern: 'have=\$\(kubectl get persistentvolumeclaims "\$name" -n tenant-test -o jsonpath=''\{\.metadata\.labels\.velero\\\.io/volume-group\}''\)\n\s+if \[ "\$have" != "\$want" \]; then'
