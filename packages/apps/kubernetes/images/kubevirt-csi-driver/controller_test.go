@@ -314,12 +314,15 @@ const (
 // including when the VMI outlives its VM during CAPI/CAPK teardown.
 type teardownClient struct {
 	kubevirtclient.Client
-	vm          *kubevirtv1.VirtualMachine
-	vmiOwners   []metav1.OwnerReference
-	detached    bool
-	vmRemovals  int
-	vmiRemovals int
-	lookups     int
+	vm                *kubevirtv1.VirtualMachine
+	vmiOwners         []metav1.OwnerReference
+	detached          bool
+	vmiGone           bool
+	vmiGoneAfterCheck bool
+	vmiLookups        int
+	vmRemovals        int
+	vmiRemovals       int
+	lookups           int
 }
 
 func (c *teardownClient) vmiGarbageCollected() bool {
@@ -337,6 +340,10 @@ func (c *teardownClient) GetWorkloadManagingVirtualMachine(context.Context, stri
 
 func (c *teardownClient) GetVirtualMachine(context.Context, string, string) (*kubevirtv1.VirtualMachineInstance, error) {
 	c.lookups++
+	c.vmiLookups++
+	if c.vmiGone {
+		return nil, k8serrors.NewNotFound(schema.GroupResource{Group: "kubevirt.io", Resource: "virtualmachineinstances"}, testVMName)
+	}
 	vmi := &kubevirtv1.VirtualMachineInstance{
 		ObjectMeta: metav1.ObjectMeta{Name: testVMName, Namespace: testInfraNamespace, OwnerReferences: c.vmiOwners},
 	}
@@ -351,7 +358,11 @@ func (c *teardownClient) EnsureVolumeRemovedVM(context.Context, string, string, 
 }
 
 func (c *teardownClient) EnsureVolumeRemovedVMI(context.Context, string, string, string) (bool, error) {
-	return c.detached || c.vmRemovals > 0 || c.vmiRemovals > 0, nil
+	removed := c.vmiGone || c.detached || c.vmRemovals > 0 || c.vmiRemovals > 0
+	if c.vmiGoneAfterCheck {
+		c.vmiGone = true
+	}
+	return removed, nil
 }
 
 func (c *teardownClient) RemoveVolumeFromVM(_ context.Context, namespace, name string, opts *kubevirtv1.RemoveVolumeOptions) error {
@@ -369,7 +380,7 @@ func (c *teardownClient) RemoveVolumeFromVMI(context.Context, string, string, *k
 }
 
 func (c *teardownClient) EnsureVolumeRemoved(context.Context, string, string, string, time.Duration) error {
-	if c.detached || c.vmRemovals > 0 || c.vmiRemovals > 0 || c.vmiGarbageCollected() {
+	if c.vmiGone || c.detached || c.vmRemovals > 0 || c.vmiRemovals > 0 || c.vmiGarbageCollected() {
 		return nil
 	}
 	return errors.New("timed out waiting for the VMI to drop the volume")
@@ -429,20 +440,25 @@ func TestControllerUnpublishVolumeHonoursVMIHotplugFallback(t *testing.T) {
 
 func TestControllerUnpublishVolumeMissingPVC(t *testing.T) {
 	tests := []struct {
-		name         string
-		vmGone       bool
-		detached     bool
-		wantVMCalls  int
-		wantVMICalls int
+		name              string
+		vmGone            bool
+		detached          bool
+		vmiGone           bool
+		vmiGoneAfterCheck bool
+		wantVMILookups    int
+		wantVMCalls       int
+		wantVMICalls      int
 	}{
 		{name: "pending hotplug volume", wantVMCalls: 1},
 		{name: "already detached", detached: true},
-		{name: "VM gone, VMI still has volume", vmGone: true, wantVMICalls: 1},
+		{name: "VM gone, VMI still has volume", vmGone: true, wantVMICalls: 1, wantVMILookups: 1},
 		{name: "VM gone, no attached volume", vmGone: true, detached: true},
+		{name: "VM and VMI gone", vmGone: true, vmiGone: true},
+		{name: "VMI disappears after attachment check", vmGone: true, vmiGoneAfterCheck: true, wantVMILookups: 1},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			client := &teardownClient{detached: tt.detached}
+			client := &teardownClient{detached: tt.detached, vmiGone: tt.vmiGone, vmiGoneAfterCheck: tt.vmiGoneAfterCheck}
 			if !tt.vmGone {
 				client.vm = &kubevirtv1.VirtualMachine{Spec: kubevirtv1.VirtualMachineSpec{Template: &kubevirtv1.VirtualMachineInstanceTemplateSpec{}}}
 				if !tt.detached {
@@ -463,6 +479,9 @@ func TestControllerUnpublishVolumeMissingPVC(t *testing.T) {
 			}
 			if client.vmRemovals != tt.wantVMCalls || client.vmiRemovals != tt.wantVMICalls {
 				t.Errorf("VM/VMI removevolume calls = %d/%d, want %d/%d", client.vmRemovals, client.vmiRemovals, tt.wantVMCalls, tt.wantVMICalls)
+			}
+			if client.vmiLookups != tt.wantVMILookups {
+				t.Errorf("GetVirtualMachine calls = %d, want %d", client.vmiLookups, tt.wantVMILookups)
 			}
 			if client.vm != nil && len(client.vm.Spec.Template.Spec.Volumes) != 0 {
 				t.Error("hotplug volume remains in VM spec")
