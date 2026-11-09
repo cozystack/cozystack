@@ -221,8 +221,43 @@ STUBEOF
         echo "the cleanup of step create-certificate-and-probe is not the one delete of Secret e2e-system-bucket-s3-tls: $deletes" >&2
         false
     }
-    if yq "$test | (.try[], .finally[]?) | .script.content // \"\"" "$suite" | grep -qE 'delete +(secret +e2e-system-bucket-s3-tls|certificate +e2e-system-bucket-s3)( |$)'; then
+    # The preconditions run before the apply, when Chainsaw holds no Certificate.
+    if yq "$test | select(.name != \"preconditions\") | (.try[], .finally[]?) | .script.content // \"\"" "$suite" | grep -qE 'delete +(secret +e2e-system-bucket-s3-tls|certificate +e2e-system-bucket-s3)( |$)'; then
         echo "a step script deletes the Certificate or its Secret while Chainsaw still holds the Certificate" >&2
         false
     fi
+}
+
+# Chainsaw registers an applied object for deletion only when its apply created
+# it; an object left by a run killed past its cleanup is patched and kept. The
+# Certificate would then outlive every later run, re-issuing its Secret after
+# each step cleanup, and a probe Pod whose `sleep` had ended never turns Ready
+# again, so the preconditions remove all three before the apply.
+@test "the preconditions remove the TLS objects and probe Pod a killed run left" {
+    suite=hack/e2e-chainsaw/clickhouse/chainsaw-test.yaml
+    test='select(.metadata.name == "clickhouse-3-system-bucket-roundtrip") | .spec.steps[]'
+    calls="$STUB/calls"
+    cat >"$STUB/kubectl" <<'STUBEOF'
+#!/bin/bash
+echo "$*" >>"$STUB/calls"
+case "$*" in
+    *" get secret "*) exit 1 ;;
+esac
+STUBEOF
+    : >"$calls"
+    script=$(yq "$test | select(.name == \"preconditions\") | .try[].script.content" "$suite")
+    PATH="$STUB:$PATH" NAMESPACE=tenant-root sh -c "$script"
+    line_of() { grep -nE "^-n tenant-root delete $1 --ignore-not-found --wait=true( |$)" "$calls" | head -n1 | cut -d: -f1; }
+    cert=$(line_of 'certificate e2e-system-bucket-s3')
+    secret=$(line_of 'secret e2e-system-bucket-s3-tls')
+    pod=$(line_of 'pod e2e-system-bucket-probe')
+    [ -n "$cert" ] && [ -n "$secret" ] && [ -n "$pod" ] || {
+        echo "the preconditions do not delete, and wait for, the Certificate, its Secret and the probe Pod; kubectl calls:" >&2
+        cat "$calls" >&2
+        false
+    }
+    [ "$cert" -lt "$secret" ] || {
+        echo "the preconditions delete Secret e2e-system-bucket-s3-tls before its Certificate, which cert-manager then issues again" >&2
+        false
+    }
 }

@@ -458,6 +458,12 @@ spec:
           kubectl -n "$NAMESPACE" delete backupjob sysbucket-backup --ignore-not-found --wait=true --timeout=30s
           kubectl -n "$NAMESPACE" delete backup sysbucket-backup --ignore-not-found --wait=true --timeout=60s
           kubectl -n "$NAMESPACE" delete secret cozy-backups-creds --ignore-not-found --wait=true --timeout=30s
+          # Chainsaw reclaims only what its apply created, so objects a killed
+          # run left would be patched and kept. The Certificate goes before its
+          # Secret, which cert-manager issues again while the Certificate exists.
+          kubectl -n "$NAMESPACE" delete certificate e2e-system-bucket-s3 --ignore-not-found --wait=true --timeout=30s
+          kubectl -n "$NAMESPACE" delete secret e2e-system-bucket-s3-tls --ignore-not-found --wait=true --timeout=30s
+          kubectl -n "$NAMESPACE" delete pod e2e-system-bucket-probe --ignore-not-found --wait=true --timeout=60s
         check:
           ($error == null): true
 
