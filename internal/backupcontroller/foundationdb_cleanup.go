@@ -269,7 +269,7 @@ func (r *BackupReconciler) startFoundationDBCleanupJob(ctx context.Context, back
 		return r.releaseFoundationDBCleanup(ctx, backup, url, fmt.Sprintf("cannot project credentials: %v", perr)), nil
 	}
 
-	job := buildFoundationDBCleanupJob(backup, jobName, url, foundationdbCleanupBaseImage+":"+version, rendered.BackupDeploymentPodTemplateSpec)
+	job := buildFoundationDBCleanupJob(backup, jobName, url, version, rendered.BackupDeploymentPodTemplateSpec)
 	if err := r.Create(ctx, job); err != nil && !apierrors.IsAlreadyExists(err) {
 		// Forbidden (namespace went Terminating after the check) or Invalid
 		// cannot be fixed by retrying.
@@ -281,10 +281,24 @@ func (r *BackupReconciler) startFoundationDBCleanupJob(ctx context.Context, back
 	return ctrl.Result{RequeueAfter: foundationdbPollInterval}, nil
 }
 
+// foundationdbCleanupImage resolves the template image the way the operator
+// resolves the backup_agent's (GetImage in its internal/pod_models.go): an
+// untagged image is a base that takes the agent version as its tag, and a
+// tagged one is what the agents already run, so it is kept as is.
+func foundationdbCleanupImage(image, version string) string {
+	if image == "" {
+		image = foundationdbCleanupBaseImage
+	}
+	if strings.Contains(image, "@") || strings.Contains(image[strings.LastIndex(image, "/")+1:], ":") {
+		return image
+	}
+	return image + ":" + version
+}
+
 // buildFoundationDBCleanupJob runs `fdbbackup delete` in the strategy's agent
 // pod template: its volumes and environment carry the credentials file and CA
 // bundle, and only the foundationdb container's image and command change.
-func buildFoundationDBCleanupJob(backup *backupsv1alpha1.Backup, name, url, image string, tmpl *corev1.PodTemplateSpec) *batchv1.Job {
+func buildFoundationDBCleanupJob(backup *backupsv1alpha1.Backup, name, url, version string, tmpl *corev1.PodTemplateSpec) *batchv1.Job {
 	pod := corev1.PodTemplateSpec{}
 	if tmpl != nil {
 		pod = *tmpl.DeepCopy()
@@ -300,9 +314,7 @@ func buildFoundationDBCleanupJob(backup *backupsv1alpha1.Backup, name, url, imag
 		idx = len(pod.Spec.Containers) - 1
 	}
 	c := &pod.Spec.Containers[idx]
-	if c.Image == "" {
-		c.Image = image
-	}
+	c.Image = foundationdbCleanupImage(c.Image, version)
 	c.Command = []string{"/bin/bash", "-c", foundationdbCleanupScript}
 	c.Args = nil
 	c.Env = append(c.Env, corev1.EnvVar{Name: "FDB_BACKUP_URL", Value: url})
