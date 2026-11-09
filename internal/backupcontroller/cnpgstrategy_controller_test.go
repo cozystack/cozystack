@@ -1075,7 +1075,7 @@ func TestCreateCNPGBackupArtifact_AlreadyExistsReturnsExisting(t *testing.T) {
 	}
 
 	sourceApp := newPostgresApp("pg", "tenant")
-	got, err := r.createCNPGBackupArtifact(context.Background(), j, resolved, cnpgBk, "postgres-pg", "postgres-pg", "postgresql", rendered, sourceApp)
+	got, err := r.createCNPGBackupArtifact(context.Background(), j, resolved, cnpgBk, "postgres-pg", "postgres-pg", "postgresql", cnpgDestinationOf(rendered), rendered, sourceApp)
 	if err != nil {
 		t.Fatalf("expected AlreadyExists to be swallowed, got error %v", err)
 	}
@@ -2207,7 +2207,7 @@ func TestEnsureCNPGBackup_UsesPluginMethod(t *testing.T) {
 	c := newCNPGStrategyTestClient(t, j)
 	r := &BackupJobReconciler{Client: c}
 
-	bk, err := r.ensureCNPGBackup(context.Background(), j, "postgres-app")
+	bk, err := r.ensureCNPGBackup(context.Background(), j, "postgres-app", cnpgDestination{DestinationPath: "s3://bucket/"})
 	if err != nil {
 		t.Fatalf("ensureCNPGBackup: %v", err)
 	}
@@ -5311,7 +5311,7 @@ func TestCreateCNPGBackupArtifact_RecordsMajorVersion(t *testing.T) {
 			rendered := &strategyv1alpha1.CNPGTemplate{
 				BarmanObjectStore: strategyv1alpha1.BarmanObjectStoreTemplate{DestinationPath: "s3://b/"},
 			}
-			got, err := r.createCNPGBackupArtifact(context.Background(), j, resolved, cnpgBk, "postgres-pg", "postgres-pg", "postgresql", rendered, newPostgresApp("pg", "tenant"))
+			got, err := r.createCNPGBackupArtifact(context.Background(), j, resolved, cnpgBk, "postgres-pg", "postgres-pg", "postgresql", cnpgDestinationOf(rendered), rendered, newPostgresApp("pg", "tenant"))
 			if err != nil {
 				t.Fatalf("createCNPGBackupArtifact: %v", err)
 			}
@@ -5490,5 +5490,168 @@ func TestReconcileCNPGRestore_RefusesCrossMajorRestore(t *testing.T) {
 				t.Errorf("a refused restore must not patch the target app")
 			}
 		})
+	}
+}
+
+func (f *cnpgRolloutFixture) setStrategyDestination(destination, endpoint, secret string) {
+	f.t.Helper()
+	strategy := &strategyv1alpha1.CNPG{}
+	if err := f.c.Get(context.Background(), client.ObjectKey{Name: "cnpg-strategy"}, strategy); err != nil {
+		f.t.Fatalf("get strategy: %v", err)
+	}
+	strategy.Spec.Template.BarmanObjectStore.DestinationPath = destination
+	strategy.Spec.Template.BarmanObjectStore.EndpointURL = endpoint
+	strategy.Spec.Template.BarmanObjectStore.S3Credentials = &strategyv1alpha1.S3CredentialsTemplate{SecretRef: corev1.LocalObjectReference{Name: secret}}
+	if err := f.c.Update(context.Background(), strategy); err != nil {
+		f.t.Fatalf("update strategy: %v", err)
+	}
+}
+
+// completeOwnBackup applies edit, when given, to the job's cnpg.io/Backup and
+// marks it completed.
+func (f *cnpgRolloutFixture) completeOwnBackup(edit func(b *cnpgtypes.Backup)) {
+	f.t.Helper()
+	backups := &cnpgtypes.BackupList{}
+	if err := f.c.List(context.Background(), backups, client.InNamespace(rolloutNS)); err != nil {
+		f.t.Fatalf("list cnpg.io/Backups: %v", err)
+	}
+	for i := range backups.Items {
+		b := &backups.Items[i]
+		if b.Labels[backupsv1alpha1.OwningJobNameLabel] != "bj" {
+			continue
+		}
+		if edit != nil {
+			edit(b)
+		}
+		b.Status.Phase = cnpgBackupPhaseComplete
+		if err := f.c.Update(context.Background(), b); err != nil {
+			f.t.Fatalf("complete cnpg.io/Backup: %v", err)
+		}
+		return
+	}
+	f.t.Fatalf("the job has no cnpg.io/Backup")
+}
+
+func (f *cnpgRolloutFixture) artifact() *backupsv1alpha1.Backup {
+	f.t.Helper()
+	artifact := &backupsv1alpha1.Backup{}
+	if err := f.c.Get(context.Background(), client.ObjectKey{Namespace: rolloutNS, Name: "bj"}, artifact); err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil
+		}
+		f.t.Fatalf("get Backup artifact: %v", err)
+	}
+	return artifact
+}
+
+// The destination is written by the pass that creates the cnpg.io/Backup and
+// not again while it runs, so the artifact has to name what that pass wrote:
+// a strategy edited while the backup runs does not reach the backup, and must
+// not reach its artifact either. The BackupJob, which a tenant can edit,
+// carries no part of it.
+func TestReconcileCNPG_ArtifactNamesTheDestinationItsBackupWasCreatedWith(t *testing.T) {
+	f := newAttachedObjectStoreFixture(t, time.Now(), "s3://other/")
+	f.setStrategyDestination("s3://bucket/", "https://s3.one", "creds-one")
+
+	j, backups := f.pass()
+	if len(backups) != 1 {
+		t.Fatalf("got %d cnpg.io/Backups after the first pass, want 1; Ready = %+v", len(backups), apimeta.FindStatusCondition(j.Status.Conditions, "Ready"))
+	}
+	if got := f.liveDestination(); got != "s3://bucket/" {
+		t.Fatalf("destination = %q, want s3://bucket/", got)
+	}
+	want := `{"destinationPath":"s3://bucket/","endpointURL":"https://s3.one","s3SecretRef":"creds-one"}`
+	if got := backups[0].Annotations[cnpgWrittenDestinationAnnotation]; got != want {
+		t.Fatalf("%s on the created cnpg.io/Backup = %q, want %q", cnpgWrittenDestinationAnnotation, got, want)
+	}
+
+	f.setStrategyDestination("s3://edited/", "https://s3.two", "creds-two")
+	j.Annotations = map[string]string{cnpgWrittenDestinationAnnotation: `{"destinationPath":"s3://tenant/","endpointURL":"https://tenant","s3SecretRef":"creds-one"}`}
+	if err := f.c.Update(context.Background(), j); err != nil {
+		t.Fatalf("annotate BackupJob: %v", err)
+	}
+	f.completeOwnBackup(nil)
+	j, _ = f.pass()
+	if j.Status.Phase != backupsv1alpha1.BackupJobPhaseSucceeded {
+		t.Fatalf("phase = %q (%s), want Succeeded", j.Status.Phase, j.Status.Message)
+	}
+	artifact := f.artifact()
+	if artifact == nil {
+		t.Fatalf("no Backup artifact")
+	}
+	md := artifact.Spec.DriverMetadata
+	if md[cnpgDestinationPathKey] != "s3://bucket/" || md[cnpgEndpointURLKey] != "https://s3.one" || md[cnpgS3SecretRefKey] != "creds-one" {
+		t.Fatalf("artifact driver metadata = %v, want the destination written with the Backup (s3://bucket/, https://s3.one, creds-one)", md)
+	}
+}
+
+// A strategy without credentials records none, and the artifact names none.
+func TestReconcileCNPG_ArtifactOfARecordWithoutCredentials(t *testing.T) {
+	f := newAttachedObjectStoreFixture(t, time.Now(), "s3://bucket/")
+	if _, backups := f.pass(); len(backups) != 1 || backups[0].Annotations[cnpgWrittenDestinationAnnotation] != `{"destinationPath":"s3://bucket/"}` {
+		t.Fatalf("cnpg.io/Backups after the first pass = %+v, want one recording only s3://bucket/", backups)
+	}
+	f.setStrategyDestination("s3://edited/", "https://s3.two", "creds-two")
+	f.completeOwnBackup(nil)
+	j, _ := f.pass()
+	if j.Status.Phase != backupsv1alpha1.BackupJobPhaseSucceeded {
+		t.Fatalf("phase = %q (%s), want Succeeded", j.Status.Phase, j.Status.Message)
+	}
+	md := f.artifact().Spec.DriverMetadata
+	if _, ok := md[cnpgS3SecretRefKey]; ok || md[cnpgDestinationPathKey] != "s3://bucket/" || md[cnpgEndpointURLKey] != "" {
+		t.Fatalf("artifact driver metadata = %v, want s3://bucket/ with no endpoint and no credentials", md)
+	}
+}
+
+// A record that names no usable destination cannot say where the backup is,
+// so no artifact is created rather than one pointing at the strategy as it
+// reads now.
+func TestReconcileCNPG_ArtifactRefusedForAnUnusableDestinationRecord(t *testing.T) {
+	for name, value := range map[string]string{
+		"empty":             "",
+		"unreadable":        "{not json",
+		"not an object":     `"s3://bucket/"`,
+		"null":              "null",
+		"no fields":         "{}",
+		"empty destination": `{"destinationPath":"","endpointURL":"https://s3.one"}`,
+		// Decoding sets the destination path and skips the mistyped
+		// endpoint, which would leave the artifact on the default one.
+		"mistyped endpoint": `{"destinationPath":"s3://bucket/","endpointURL":7}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newAttachedObjectStoreFixture(t, time.Now(), "s3://other/")
+			if _, backups := f.pass(); len(backups) != 1 {
+				t.Fatalf("got %d cnpg.io/Backups after the first pass, want 1", len(backups))
+			}
+			f.completeOwnBackup(func(b *cnpgtypes.Backup) {
+				if b.Annotations == nil {
+					b.Annotations = map[string]string{}
+				}
+				b.Annotations[cnpgWrittenDestinationAnnotation] = value
+			})
+			j, _ := f.pass()
+			if f.artifact() != nil {
+				t.Fatalf("an artifact was created from the record %q", value)
+			}
+			if j.Status.Phase != backupsv1alpha1.BackupJobPhaseFailed || !strings.Contains(j.Status.Message, cnpgWrittenDestinationAnnotation) {
+				t.Fatalf("phase = %q (%s), want Failed naming %s", j.Status.Phase, j.Status.Message, cnpgWrittenDestinationAnnotation)
+			}
+		})
+	}
+}
+
+// A cnpg.io/Backup created by a controller that recorded nothing keeps
+// getting its artifact from the strategy.
+func TestReconcileCNPG_ArtifactOfABackupWithoutARecord(t *testing.T) {
+	f := newAttachedObjectStoreFixture(t, time.Now(), "s3://bucket/")
+	f.seedCNPGBackup("bj-legacy", "bj", rolloutCluster, cnpgBackupPhaseComplete)
+
+	j, _ := f.pass()
+	if j.Status.Phase != backupsv1alpha1.BackupJobPhaseSucceeded {
+		t.Fatalf("phase = %q (%s), want Succeeded", j.Status.Phase, j.Status.Message)
+	}
+	artifact := f.artifact()
+	if artifact == nil || artifact.Spec.DriverMetadata[cnpgDestinationPathKey] != "s3://bucket/" {
+		t.Fatalf("artifact = %+v, want one built from the strategy", artifact)
 	}
 }

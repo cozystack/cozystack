@@ -219,6 +219,11 @@ const (
 	// instance pods still have to postdate the rollout's own start.
 	backupCondDestinationWriteHeld = "DestinationWriteHeld"
 
+	// Annotation on a cnpg.io/Backup carrying, as JSON, the WAL archive
+	// destination written by the pass that created it: the destination
+	// path, the endpoint URL and the name of the credentials Secret.
+	cnpgWrittenDestinationAnnotation = "backups.cozystack.io/cnpg-written-destination"
+
 	cnpgPodRoleLabel    = "cnpg.io/podRole"
 	cnpgPodRoleInstance = "instance"
 )
@@ -526,7 +531,7 @@ func (r *BackupJobReconciler) reconcileCNPG(ctx context.Context, j *backupsv1alp
 			"cluster", clusterName, "live", attachment.flavor, "application", specFlavor)
 	}
 
-	cnpgBackup, err := r.ensureCNPGBackup(ctx, j, clusterName)
+	cnpgBackup, err := r.ensureCNPGBackup(ctx, j, clusterName, cnpgDestinationOf(rendered))
 	if err != nil {
 		return r.markBackupJobFailed(ctx, j, fmt.Sprintf("failed to ensure cnpg.io/Backup: %v", err))
 	}
@@ -546,7 +551,11 @@ func (r *BackupJobReconciler) reconcileCNPG(ctx context.Context, j *backupsv1alp
 		if j.Status.BackupRef != nil {
 			return ctrl.Result{}, nil
 		}
-		artifact, err := r.createCNPGBackupArtifact(ctx, j, resolved, cnpgBackup, clusterName, serverName, attachment.flavor, rendered, app)
+		destination, err := cnpgArtifactDestination(cnpgBackup, rendered)
+		if err != nil {
+			return r.markBackupJobFailed(ctx, j, fmt.Sprintf("refusing to create the Backup artifact: %v", err))
+		}
+		artifact, err := r.createCNPGBackupArtifact(ctx, j, resolved, cnpgBackup, clusterName, serverName, attachment.flavor, destination, rendered, app)
 		if err != nil {
 			return r.failBackupArtifact(ctx, j, err)
 		}
@@ -869,13 +878,22 @@ func currentBarmanServerName(c *cnpgtypes.Cluster) string {
 // ensureCNPGBackup creates a one-shot postgresql.cnpg.io/Backup CR labelled
 // with the BackupJob, or returns the existing one if a previous reconcile
 // already created it. Idempotency relies on the OwningJob labels.
-func (r *BackupJobReconciler) ensureCNPGBackup(ctx context.Context, j *backupsv1alpha1.BackupJob, clusterName string) (*cnpgtypes.Backup, error) {
+//
+// written is the destination this pass wrote to the ObjectStore. A pass
+// reaches the create only after that write: a job without a Backup writes
+// the destination on every pass, and a pass that wrote nothing, or wrote it
+// and waits for the plugin rollout, returns before this point.
+func (r *BackupJobReconciler) ensureCNPGBackup(ctx context.Context, j *backupsv1alpha1.BackupJob, clusterName string, written cnpgDestination) (*cnpgtypes.Backup, error) {
 	existing, err := r.findCNPGBackupForJob(ctx, j)
 	if err != nil {
 		return nil, err
 	}
 	if existing != nil {
 		return existing, nil
+	}
+	record, err := json.Marshal(written)
+	if err != nil {
+		return nil, fmt.Errorf("encode the WAL archive destination: %w", err)
 	}
 
 	obj := &cnpgtypes.Backup{
@@ -887,6 +905,7 @@ func (r *BackupJobReconciler) ensureCNPGBackup(ctx context.Context, j *backupsv1
 				backupsv1alpha1.OwningJobNamespaceLabel: j.Namespace,
 				cnpgClusterLabel:                        clusterName,
 			},
+			Annotations: map[string]string{cnpgWrittenDestinationAnnotation: string(record)},
 		},
 		Spec: cnpgtypes.BackupSpec{
 			Method:              cnpgtypes.BackupMethodPlugin,
@@ -984,6 +1003,67 @@ func (r *BackupJobReconciler) waitCNPGBackupJob(ctx context.Context, j *backupsv
 	return ctrl.Result{RequeueAfter: cnpgPollInterval}, nil
 }
 
+// cnpgDestination is the WAL archive destination recorded in
+// cnpgWrittenDestinationAnnotation. S3SecretRef is nil when the strategy
+// names no credentials Secret.
+type cnpgDestination struct {
+	DestinationPath string  `json:"destinationPath"`
+	EndpointURL     string  `json:"endpointURL,omitempty"`
+	S3SecretRef     *string `json:"s3SecretRef,omitempty"`
+}
+
+func cnpgDestinationOf(t *strategyv1alpha1.CNPGTemplate) cnpgDestination {
+	d := cnpgDestination{
+		DestinationPath: t.BarmanObjectStore.DestinationPath,
+		EndpointURL:     t.BarmanObjectStore.EndpointURL,
+	}
+	if t.BarmanObjectStore.S3Credentials != nil {
+		name := t.BarmanObjectStore.S3Credentials.SecretRef.Name
+		d.S3SecretRef = &name
+	}
+	return d
+}
+
+// cnpgArtifactDestination returns the destination the artifact of b names:
+// the one recorded when b was created. A Backup without the record was
+// created by a controller that kept none, and falls back to the strategy
+// rendered now. A record that names no destination is an error: the
+// strategy may have changed since the write, so it cannot stand in.
+func cnpgArtifactDestination(b *cnpgtypes.Backup, rendered *strategyv1alpha1.CNPGTemplate) (cnpgDestination, error) {
+	raw, ok := b.Annotations[cnpgWrittenDestinationAnnotation]
+	if !ok {
+		return cnpgDestinationOf(rendered), nil
+	}
+	var d cnpgDestination
+	if err := json.Unmarshal([]byte(raw), &d); err != nil {
+		return cnpgDestination{}, fmt.Errorf("read the %s annotation of cnpg.io/Backup %s/%s: %w", cnpgWrittenDestinationAnnotation, b.Namespace, b.Name, err)
+	}
+	if d.DestinationPath == "" {
+		return cnpgDestination{}, fmt.Errorf("the %s annotation of cnpg.io/Backup %s/%s names no destination path", cnpgWrittenDestinationAnnotation, b.Namespace, b.Name)
+	}
+	return d, nil
+}
+
+// cnpgProbeStore is the object store the size probe reads: the location
+// and the credentials Secret recorded for the backup, with the Secret keys
+// and the endpoint CA the record does not carry taken from the strategy.
+// After a strategy edit those may not fit the recorded location; the probe
+// then reports no size rather than measuring somewhere else.
+func cnpgProbeStore(rendered *strategyv1alpha1.BarmanObjectStoreTemplate, destination cnpgDestination) *strategyv1alpha1.BarmanObjectStoreTemplate {
+	store := rendered.DeepCopy()
+	store.DestinationPath = destination.DestinationPath
+	store.EndpointURL = destination.EndpointURL
+	if destination.S3SecretRef == nil {
+		store.S3Credentials = nil
+	} else {
+		if store.S3Credentials == nil {
+			store.S3Credentials = &strategyv1alpha1.S3CredentialsTemplate{}
+		}
+		store.S3Credentials.SecretRef.Name = *destination.S3SecretRef
+	}
+	return store
+}
+
 // createCNPGBackupArtifact materialises a Cozystack Backup resource carrying
 // the metadata callers need to drive a future restore. The source app's
 // spec.databases / spec.users are snapshotted into Status.UnderlyingResources
@@ -995,6 +1075,7 @@ func (r *BackupJobReconciler) createCNPGBackupArtifact(
 	resolved *ResolvedBackupConfig,
 	cnpgBackup *cnpgtypes.Backup,
 	clusterName, serverName, flavor string,
+	destination cnpgDestination,
 	rendered *strategyv1alpha1.CNPGTemplate,
 	sourceApp *postgresapp.Postgres,
 ) (*backupsv1alpha1.Backup, error) {
@@ -1010,12 +1091,12 @@ func (r *BackupJobReconciler) createCNPGBackupArtifact(
 	driverMD := map[string]string{
 		cnpgBackupNameKey:      cnpgBackup.Name,
 		cnpgServerNameKey:      serverName,
-		cnpgDestinationPathKey: rendered.BarmanObjectStore.DestinationPath,
-		cnpgEndpointURLKey:     rendered.BarmanObjectStore.EndpointURL,
+		cnpgDestinationPathKey: destination.DestinationPath,
+		cnpgEndpointURLKey:     destination.EndpointURL,
 		cnpgClusterNameKey:     clusterName,
 	}
-	if rendered.BarmanObjectStore.S3Credentials != nil {
-		driverMD[cnpgS3SecretRefKey] = rendered.BarmanObjectStore.S3Credentials.SecretRef.Name
+	if destination.S3SecretRef != nil {
+		driverMD[cnpgS3SecretRefKey] = *destination.S3SecretRef
 	}
 	// Copied rather than read back at restore time: barman retention deletes
 	// the cnpg.io/Backup while the artifact can still be restored from.
@@ -1048,7 +1129,7 @@ func (r *BackupJobReconciler) createCNPGBackupArtifact(
 		},
 	}
 	if probe {
-		backup.Status.Artifact.SizeBytes = r.cnpgArtifactSizeBytes(ctx, j.Namespace, &rendered.BarmanObjectStore, serverName, cnpgBackup.Status.BackupID)
+		backup.Status.Artifact.SizeBytes = r.cnpgArtifactSizeBytes(ctx, j.Namespace, cnpgProbeStore(&rendered.BarmanObjectStore, destination), serverName, cnpgBackup.Status.BackupID)
 	}
 	if j.Spec.PlanRef != nil {
 		backup.Spec.PlanRef = j.Spec.PlanRef
