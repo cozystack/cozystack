@@ -24,6 +24,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -129,12 +130,38 @@ func readResponse(t *testing.T, conn net.Conn) *http.Response {
 	return nil
 }
 
+// atUpstream calls probe each time a request reaches the upstream and
+// sends the result on the returned channel. The proxy holds the request's
+// slot from before it calls the upstream until the upstream answers, so
+// the probe sees it held however late the test goroutine gets scheduled.
+func atUpstream(probe func(*harness) int, next http.HandlerFunc) (http.HandlerFunc, *atomic.Pointer[harness], <-chan int) {
+	var h atomic.Pointer[harness]
+	seen := make(chan int, 1)
+	return func(w http.ResponseWriter, r *http.Request) {
+		seen <- probe(h.Load())
+		next(w, r)
+	}, &h, seen
+}
+
+func receive(t *testing.T, ch <-chan int, msg string) int {
+	t.Helper()
+	select {
+	case v := <-ch:
+		return v
+	case <-time.After(3 * time.Second):
+		t.Fatal(msg)
+	}
+	return 0
+}
+
 // TestServerSlowBodyHoldsSlotUntilDeadline sends a POST whose body never
 // completes: it must count against the user's concurrency, and the read
 // must give up at the request timeout instead of holding the handler.
 func TestServerSlowBodyHoldsSlotUntilDeadline(t *testing.T) {
+	// The slot is only observable while the body is pending, so the
+	// timeout is long enough for the poll below to see it on a busy runner.
 	h := newHarness(t, Config{
-		RequestTimeout: 200 * time.Millisecond,
+		RequestTimeout: time.Second,
 		Limiter:        LimiterConfig{MaxConcurrentPerUser: 1},
 	}, nil)
 	pipe := servePipe(t, h.server)
@@ -157,10 +184,12 @@ func TestServerStalledClientReleasesTail(t *testing.T) {
 	for _, readHeaders := range []bool{false, true} {
 		lines := make(chan string, 1)
 		done := make(chan struct{})
+		upstream, hp, held := atUpstream(func(h *harness) int { return h.server.limits.openTails() }, tailUpstream(lines, done))
 		h := newHarness(t, Config{
 			TailIdleTimeout: 200 * time.Millisecond,
 			Limiter:         LimiterConfig{MaxTails: 1},
-		}, tailUpstream(lines, done))
+		}, upstream)
+		hp.Store(h)
 		t.Cleanup(func() { close(done) })
 		pipe := servePipe(t, h.server)
 		conn := pipe.send(t, "GET "+logsRoot+"tail?query=* HTTP/1.1\r\nHost: proxy\r\nAuthorization: Bearer good\r\n\r\n")
@@ -170,7 +199,9 @@ func TestServerStalledClientReleasesTail(t *testing.T) {
 			}
 			lines <- `{"_msg":"unread"}`
 		}
-		eventually(t, time.Second, func() bool { return h.server.limits.openTails() == 1 }, "the tail never opened")
+		if n := receive(t, held, "the tail never reached the store"); n != 1 {
+			t.Fatalf("open tails while the store answers = %d, want 1", n)
+		}
 		eventually(t, 2*time.Second, func() bool { return h.server.limits.openTails() == 0 },
 			"a client that stopped reading keeps its tail slot")
 	}
@@ -179,13 +210,20 @@ func TestServerStalledClientReleasesTail(t *testing.T) {
 // TestServerStalledClientReleasesQuery does the same for a non-tail
 // response, which must be written by the request deadline.
 func TestServerStalledClientReleasesQuery(t *testing.T) {
+	upstream, hp, held := atUpstream(slotsHeld, func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/stream+json")
+		_, _ = io.WriteString(w, `{"_msg":"hello"}`+"\n")
+	})
 	h := newHarness(t, Config{
 		RequestTimeout: 200 * time.Millisecond,
 		Limiter:        LimiterConfig{MaxConcurrentPerUser: 1},
-	}, nil)
+	}, upstream)
+	hp.Store(h)
 	pipe := servePipe(t, h.server)
 	pipe.send(t, "GET "+logsRoot+"query?query=* HTTP/1.1\r\nHost: proxy\r\nAuthorization: Bearer good\r\n\r\n")
-	eventually(t, time.Second, func() bool { return slotsHeld(h) == 1 }, "the stalled request never held its slot")
+	if n := receive(t, held, "the stalled request never reached the store"); n != 1 {
+		t.Fatalf("slots held while the store answers = %d, want 1", n)
+	}
 	eventually(t, 2*time.Second, func() bool { return slotsHeld(h) == 0 },
 		"a client that stopped reading keeps its concurrency slot")
 }
