@@ -3083,23 +3083,32 @@ func TestReconcileCNPG_LaterWriteKeepsTheAttachRecord(t *testing.T) {
 }
 
 // An attach record that does not parse cannot tell which instances rolled
-// with the plugin, so the job fails naming it instead of guessing.
+// with the plugin, so the job fails naming it instead of guessing. One in the
+// future would hold every instance as older than the plugin and push the
+// rollout deadline out by as far as it lies ahead, so it fails the same way.
 func TestReconcileCNPG_UnreadableAttachRecordFailsTheJob(t *testing.T) {
-	f := newCNPGRolloutFixture(t, newRolloutBackupJob(time.Now().Add(-time.Hour)),
-		newRolloutCluster(cnpgClusterHealthyPhase), newRolloutInstancePod(time.Now().Add(-time.Hour)))
-	if j, _ := f.pass(); apimeta.FindStatusCondition(j.Status.Conditions, backupCondPluginRolledOut) == nil {
-		t.Fatalf("no %s latch: %+v", backupCondPluginRolledOut, j.Status.Conditions)
-	}
-	live := newRolloutCluster(cnpgClusterHealthyPhase, buildBarmanPlugin(rolloutCluster, rolloutCluster))
-	live.Annotations = map[string]string{cnpgPluginAttachedAtAnnotation: "yesterday"}
-	f.observeCNPG(live)
+	for _, tc := range []struct{ name, record string }{
+		{name: "does not parse", record: "yesterday"},
+		{name: "in the future", record: time.Now().Add(time.Hour).UTC().Format(time.RFC3339)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newCNPGRolloutFixture(t, newRolloutBackupJob(time.Now().Add(-time.Hour)),
+				newRolloutCluster(cnpgClusterHealthyPhase), newRolloutInstancePod(time.Now().Add(-time.Hour)))
+			if j, _ := f.pass(); apimeta.FindStatusCondition(j.Status.Conditions, backupCondPluginRolledOut) == nil {
+				t.Fatalf("no %s latch: %+v", backupCondPluginRolledOut, j.Status.Conditions)
+			}
+			live := newRolloutCluster(cnpgClusterHealthyPhase, buildBarmanPlugin(rolloutCluster, rolloutCluster))
+			live.Annotations = map[string]string{cnpgPluginAttachedAtAnnotation: tc.record}
+			f.observeCNPG(live)
 
-	j, backups := f.pass()
-	if len(backups) != 0 {
-		t.Fatalf("a cnpg.io/Backup was created with an unreadable attach record: %+v", backups)
-	}
-	if j.Status.Phase != backupsv1alpha1.BackupJobPhaseFailed || !strings.Contains(j.Status.Message, cnpgPluginAttachedAtAnnotation) {
-		t.Errorf("phase %q, message %q; want Failed naming %s", j.Status.Phase, j.Status.Message, cnpgPluginAttachedAtAnnotation)
+			j, backups := f.pass()
+			if len(backups) != 0 {
+				t.Fatalf("a cnpg.io/Backup was created with an unreadable attach record: %+v", backups)
+			}
+			if j.Status.Phase != backupsv1alpha1.BackupJobPhaseFailed || !strings.Contains(j.Status.Message, cnpgPluginAttachedAtAnnotation) {
+				t.Errorf("phase %q, message %q; want Failed naming %s", j.Status.Phase, j.Status.Message, cnpgPluginAttachedAtAnnotation)
+			}
+		})
 	}
 }
 

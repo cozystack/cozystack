@@ -499,6 +499,10 @@ func (r *BackupJobReconciler) reconcileCNPG(ctx context.Context, j *backupsv1alp
 		attachedAt := rollout.LastTransitionTime
 		if attachment.attachedAt != "" {
 			recorded, err := time.Parse(time.RFC3339, attachment.attachedAt)
+			if recorded.After(time.Now()) {
+				// Every instance would predate it, and the deadline would count from it.
+				err = fmt.Errorf("%s is in the future", attachment.attachedAt)
+			}
 			if err != nil {
 				return r.markBackupJobFailed(ctx, j, fmt.Sprintf(
 					"cannot tell when the barman-cloud plugin was attached: the %s annotation of cnpg.io/Cluster %s/%s: %v",
