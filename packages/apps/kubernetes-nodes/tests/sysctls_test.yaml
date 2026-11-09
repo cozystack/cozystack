@@ -1,0 +1,38 @@
+suite: worker sysctl overrides
+templates:
+  - templates/talos-reconcile-job.yaml
+release:
+  name: kubernetes-nodes-myk8s-md0
+  namespace: tenant-test
+set:
+  cluster: myk8s
+  _cluster:
+    cluster-domain: cozy.local
+  version: v1.35
+  instanceType: ""
+  resources:
+    cpu: "2"
+    memory: 4Gi
+tests:
+  - it: preserves Talos defaults when no sysctls are configured
+    asserts:
+      - notMatchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'sysctls:'
+        documentSelector:
+          path: kind
+          value: Job
+
+  - it: renders multiple string overrides under machine.sysctls
+    set:
+      talos.sysctls:
+        user.max_user_namespaces: "11255"
+        net.ipv4.ip_local_port_range: "1024 65535"
+        kernel.kptr_restrict: "0"
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: '\n {10}sysctls:\n {12}"kernel.kptr_restrict": "0"\n {12}"net.ipv4.ip_local_port_range": "1024 65535"\n {12}"user.max_user_namespaces": "11255"\n {10}network:'
+        documentSelector:
+          path: kind
+          value: Job

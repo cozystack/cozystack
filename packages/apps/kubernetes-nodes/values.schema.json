@@ -321,6 +321,14 @@
           "type": "string",
           "default": "ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515"
         },
+        "sysctls": {
+          "description": "Sysctl overrides rendered into Talos `machine.sysctls` on this pool's guest workers only. Values must be strings (quote numeric values); for example, `user.max_user_namespaces: \"11255\"` enables the user namespaces required by the Talos gVisor extension. An empty map preserves Talos defaults and the existing bootstrap hash. Adding, changing or removing an override changes the content-hashed TalosConfigTemplate and rolls the pool's workers. Supported names and values depend on the worker's Talos release and kernel; unsafe settings can weaken guest isolation or prevent workers from booting. This does not install gVisor or configure a RuntimeClass, and does not change the management hosts, control plane or other pools.",
+          "type": "object",
+          "default": {},
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
         "version": {
           "description": "Default Talos release for this pool's worker OS image and in-guest installer. The pool can pin its own release via `osImage.builtin.version` or `osImage.factory.version`; when `osImage` omits it, this value applies. Both ways in are checked against the chart's Talos\u003c-\u003eKubernetes support matrix, against whichever release the pool actually resolves to, so an override cannot slip past a check `talos.version` would have failed. The matrix rejects a pairing it lists as unsupported; it lists the Talos minors this chart ships and passes any other minor unchecked, so pointing either field at a Talos release the chart does not know about is the operator's call, not a checked one. Whichever release applies is interpolated into an image URL and a DataVolume name, so it must be a full `vMAJOR.MINOR.PATCH` release, optionally with a pre-release suffix -- the render refuses anything else, a minor-only `v1.13` included. The values schema types this as a bare string, so a malformed one is accepted by the CR and fails the pool's HelmRelease instead.",
           "type": "string",
