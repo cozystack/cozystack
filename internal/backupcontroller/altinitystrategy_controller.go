@@ -2,11 +2,11 @@
 package backupcontroller
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"maps"
+	"regexp"
 	"strings"
 	"time"
 
@@ -140,13 +140,16 @@ func altinityArchiveNameBeforeUIDs(j *backupsv1alpha1.BackupJob) string {
 // the archive name. A Job created by a controller that predates archive
 // names, or rendered from a strategy that names its own archives, wrote an
 // archive under another name, and recording this one would point the Backup
-// at an archive that does not exist.
+// at an archive that does not exist. The name has to stand on its own: the
+// name without the UID starts the name with it, and a strategy may append to
+// either.
 func altinityJobCarriesArchive(job *batchv1.Job, archive string) bool {
 	spec, err := json.Marshal(job.Spec.Template.Spec)
 	if err != nil {
 		return false
 	}
-	return bytes.Contains(spec, []byte(archive))
+	whole := regexp.MustCompile(`(^|[^A-Za-z0-9._-])` + regexp.QuoteMeta(archive) + `($|[^A-Za-z0-9._-])`)
+	return whole.Match(spec)
 }
 
 // renderAltinityTemplate runs the strategy's PodTemplateSpec through the
@@ -293,8 +296,6 @@ func (r *BackupJobReconciler) reconcileAltinity(ctx context.Context, j *backupsv
 		if j.Status.BackupRef != nil {
 			return ctrl.Result{}, nil
 		}
-		// The name without the UID is a prefix of the one with it, so it is
-		// tried only after the full name is not found.
 		if !altinityJobCarriesArchive(batchJob, archive) {
 			archive = altinityArchiveNameBeforeUIDs(j)
 			if !altinityJobCarriesArchive(batchJob, archive) {
