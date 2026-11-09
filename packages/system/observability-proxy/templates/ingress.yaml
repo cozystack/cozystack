@@ -1,0 +1,52 @@
+{{- $cluster := .Values._cluster | default dict }}
+{{- $solver := (index $cluster "solver") | default "http01" }}
+{{- $clusterIssuer := (index $cluster "issuer-name") | default "letsencrypt-prod" }}
+{{- $host := index $cluster "root-host" }}
+{{- $exposeServices := splitList "," ((index $cluster "expose-services") | default "") }}
+{{- $exposeIngress := (index $cluster "expose-ingress") | default "tenant-root" }}
+{{- $gatewayEnabled := (index $cluster "gateway-enabled") | default "false" }}
+{{- $wildcardSecret := (index $cluster "wildcard-secret-name") | default "" }}
+{{- if and (has "observability-proxy" $exposeServices) (ne $gatewayEnabled "true") }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: observability-proxy
+  annotations:
+    {{- if not $wildcardSecret }}
+    cert-manager.io/cluster-issuer: {{ $clusterIssuer }}
+    {{- if eq $solver "http01" }}
+    acme.cert-manager.io/http01-ingress-ingressclassname: {{ $exposeIngress }}
+    {{- end }}
+    {{- end }}
+    {{- /* The proxy refuses a body above 1 MiB itself; nginx's 1m is the
+           same bound, so an oversized body stops at the edge. */}}
+    nginx.ingress.kubernetes.io/proxy-body-size: 1m
+    {{- /* A tail flushes every line; buffered, lines would reach the client
+           in batches. */}}
+    nginx.ingress.kubernetes.io/proxy-buffering: "off"
+    {{- /* The controller default is 10s. The longest silence the proxy
+           allows is a tail with no new line for --tail-idle-timeout (5m),
+           after which it ends the response itself. */}}
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "360"
+spec:
+  ingressClassName: {{ $exposeIngress }}
+  rules:
+    - host: observability-proxy.{{ $host }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: observability-proxy
+                port:
+                  name: http
+  tls:
+    - hosts:
+        - observability-proxy.{{ $host }}
+      {{- /* Wildcard mode: ingress-nginx serves its default certificate, and
+             the tls section stays to keep the HTTP-to-HTTPS redirect. */}}
+      {{- if not $wildcardSecret }}
+      secretName: observability-proxy-tls
+      {{- end }}
+{{- end }}

@@ -1,0 +1,28 @@
+{{- $cluster := .Values._cluster | default dict }}
+{{- $host := index $cluster "root-host" }}
+{{- $exposeServices := splitList "," ((index $cluster "expose-services") | default "") }}
+{{- $exposeIngress := (index $cluster "expose-ingress") | default "tenant-root" }}
+{{- $gatewayEnabled := (index $cluster "gateway-enabled") | default "false" }}
+{{- if and (has "observability-proxy" $exposeServices) (eq $gatewayEnabled "true") }}
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: observability-proxy
+spec:
+  parentRefs:
+  - group: gateway.networking.k8s.io
+    kind: Gateway
+    name: cozystack
+    namespace: {{ $exposeIngress }}
+  hostnames:
+  - {{ printf "observability-proxy.%s" $host | quote }}
+  rules:
+  - backendRefs:
+    - name: observability-proxy
+      port: 80
+    {{- /* Without a request timeout Cilium leaves Envoy's 15s route default
+           in place, which would cut every tail. The proxy bounds each
+           request itself, so the route sets none. */}}
+    timeouts:
+      request: 0s
+{{- end }}
