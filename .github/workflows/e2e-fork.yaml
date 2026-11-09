@@ -540,10 +540,8 @@ jobs:
     # per-node 8 CPU / 24 GiB in hack/e2e-compose.yaml is why the class is this
     # one. See the `e2e` job there for the full sizing note.
     runs-on: oracle-vm-32cpu-128gb-x86-64
-    # Covers a green full suite. It does not cover a tenant-Kubernetes suite
-    # running into its node-join deadline, so a red there can end as a
-    # cancelled job. Held to one figure across every lane that runs the suite.
-    timeout-minutes: 215
+    # The job limit includes cleanup; it does not reserve time for it.
+    timeout-minutes: 265
     permissions:
       contents: read
       packages: read

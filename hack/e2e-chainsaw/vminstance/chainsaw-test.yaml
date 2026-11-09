@@ -473,7 +473,7 @@ spec:
     # scripts) so their worst-case sum stays under this op timeout, and a hung
     # wait trips the script's own named "Timeout waiting for ..." rather than a
     # bare `signal: killed` (docs/agents/e2e-testing.md). Sized small on purpose:
-    # this suite is execution.parallel:1 and shares the job's 215m cap with every
+    # this suite is execution.parallel:1 and shares the job's time limit with every
     # other Test in it and their finally blocks — an oversized op timeout lets the
     # job cap fire first and lose the report before any op timeout can.
     - script:
@@ -650,7 +650,7 @@ spec:
     # timeout, so a hung wait trips the script's own named fail-fast, not
     # Chainsaw's bare `signal: killed`; and
     # it is sized small on purpose, since this suite (execution.parallel:1) shares
-    # the 215m job cap with the other Tests and the finally blocks — an oversized
+    # the job's time limit with the other Tests and the finally blocks — an oversized
     # op timeout lets the cap fire first and lose the report. BSL setup is in this
     # step (not a separate one) so the finally below always tears the BSL down.
     - script:

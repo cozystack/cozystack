@@ -966,6 +966,19 @@ STUB
   }
 }
 
+@test "PR E2E jobs leave room for cleanup after a long successful run" {
+  for wf in pull-requests e2e-fork; do
+    minutes="$(yq --unwrapScalar '.jobs.e2e."timeout-minutes"' "$HACK_DIR/../.github/workflows/$wf.yaml")"
+    case "$minutes" in
+      ''|*[!0-9]*) echo "FAIL: $wf E2E job timeout is not a whole number: $minutes"; false ;;
+    esac
+    if [ "$minutes" -lt 223 ]; then
+      echo "FAIL: $wf E2E job budget $minutes minutes cannot fit a 211m15s run and 11m25s cleanup"
+      false
+    fi
+  done
+}
+
 @test "the step that runs this collector has a ceiling of its own everywhere" {
   # Every bound inside the script protects one read. None of them protects the
   # STEP: the tarball is written on the collector's last line, the upload is the

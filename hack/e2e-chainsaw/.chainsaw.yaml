@@ -66,7 +66,7 @@ spec:
   # script: it SIGKILLs the shell alone, orphaned children hold the pipe open,
   # and the op overruns (#4268 measured 606s under a 300s ceiling), so the
   # nominal ~5m was a figure a busy catch could exceed, not a cap. Tests run
-  # sequentially, and the E2E job is capped at 215 timeout-minutes. A cascade
+  # sequentially, and each E2E job has a time limit. A cascade
   # reddening many suites can therefore spend a large share of the job in
   # diagnostics. That is deliberate — the old ceiling
   # bought its speed by collecting nothing at all — and it is bounded: both legs
