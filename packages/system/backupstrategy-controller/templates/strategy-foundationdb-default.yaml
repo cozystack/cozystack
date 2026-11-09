@@ -1,5 +1,6 @@
 {{- $endpoint := include "backupstrategy-controller.endpoint" . -}}
-{{- $endpointHost := $endpoint | trimPrefix "https://" | trimPrefix "http://" -}}
+{{- /* host[:port] only: a path or trailing slash would land in the blob URL host and miss the "@<host>" credentials key the projector writes */ -}}
+{{- $endpointHost := $endpoint | trimPrefix "https://" | trimPrefix "http://" | splitList "/" | first -}}
 {{- $secureConn := ternary "1" "0" (hasPrefix "https://" $endpoint) -}}
 {{- $bucketName := include "backupstrategy-controller.bucketName" . -}}
 {{- $crdEstablished := include "backupstrategy-controller.crdEstablished" (dict "root" . "crd" "foundationdbs.strategy.backups.cozystack.io") -}}
