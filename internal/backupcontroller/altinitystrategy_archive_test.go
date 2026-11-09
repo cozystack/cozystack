@@ -66,7 +66,7 @@ func runningAltinityBackupJob() *backupsv1alpha1.BackupJob {
 // BackupJob's archive name.
 func completedAltinityK8sJob(j *backupsv1alpha1.BackupJob) *batchv1.Job {
 	return &batchv1.Job{
-		ObjectMeta: metav1.ObjectMeta{Name: jobNameForBackupJob(j), Namespace: j.Namespace},
+		ObjectMeta: metav1.ObjectMeta{Name: jobNameForBackupJob(j), Namespace: j.Namespace, OwnerReferences: altinityControllerRef(j)},
 		Spec: batchv1.JobSpec{Template: corev1.PodTemplateSpec{Spec: corev1.PodSpec{
 			Containers: []corev1.Container{{Name: "c", Args: []string{"--archive=" + altinityArchiveName(j)}}},
 		}}},
