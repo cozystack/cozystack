@@ -20,15 +20,6 @@ export function logsRoot(scope: ObservabilityScope): string {
   return app ? `${app}/log/` : `/apis/cozystack.io/v1alpha1/namespaces/${scope.namespace}/logs/`
 }
 
-// The provider's default keeps a useQuery's previous result while its key
-// changes; across scopes that would show one tenant's or application's data
-// under another. (useQueries starts a new observer per key, so it never does.)
-// Every observability query key carries its root at index 2.
-export function keepWithinScope(root: string) {
-  return <T,>(previous: T | undefined, previousQuery?: { queryKey: readonly unknown[] }): T | undefined =>
-    previousQuery?.queryKey[2] === root ? previous : undefined
-}
-
 export type ProxyErrorKind =
   | "bad-request"
   | "unauthorized"

@@ -14,7 +14,6 @@ import {
 import {
   fieldValues,
   isScopeWide,
-  keepWithinScope,
   logsRoot,
   queryLogs,
   type ObservabilityScope,
@@ -81,7 +80,7 @@ function placeholderFor({ follow, stopped, loading, failed, longestRange, retry 
   return <EmptyState tone="dark" title="No log lines for this range and filter." hint={longestRange ? "Try a broader filter." : "Try a longer range or a broader filter."} />
 }
 
-// Filter, pod and container belong to one scope; a new tenant or application starts clean.
+// Filter, pod, container and the lines already read belong to one scope; a new tenant or application starts clean.
 export function LogsView({ scope }: { scope: ObservabilityScope }) {
   const root = logsRoot(scope)
   return <ScopedLogsView key={root} root={root} />
@@ -107,7 +106,6 @@ function ScopedLogsView({ root }: { root: string }) {
         query: buildLogsQuery({ filter: "", pod: narrowTo }),
         ...windowFor(range),
       }, signal),
-    placeholderData: keepWithinScope(root),
     retry: false,
   })
   const pods = useQuery(pickerQuery(POD_FIELD))
@@ -117,7 +115,6 @@ function ScopedLogsView({ root }: { root: string }) {
     queryKey: ["observability", "logs", root, query, range],
     queryFn: ({ signal }) => queryLogs(client, root, { query, limit: HISTORY_LIMIT, ...windowFor(range) }, signal),
     enabled: !follow,
-    placeholderData: keepWithinScope(root),
     retry: false,
   })
   const tail = useLogTail(root, query, followRun, { cap: FOLLOW_CAP })
