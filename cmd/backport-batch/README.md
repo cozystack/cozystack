@@ -42,7 +42,9 @@ The pull request body goes to stdout, built from the line's own `.github/PULL_RE
 
 Exits 1 and prints the URL of every pull request the rules take that is neither on the line nor on the open batch pull request, 0 when there is none, and 2 when it cannot tell. A pull request that the open batch lists as deferred, a conflict or one taken out with `--defer`, prints as a warning and does not fail the check: deferring is a maintainer's call. So does one it lists as waiting for a maintainer because it changes workflows.
 
-`--cut` makes it the gate before a patch release or an rc is cut from a line. A cut tags the line, so a pull request that is only on the open batch pull request fails it too, with one line each: `#N is only on open batch PR #M, merge it before the cut`. One that waits there for a maintainer fails it as well, since nobody decided to leave it out: bring it over, or take it out with `run --defer` and a reason. Everything else is as without it. The scheduled run checks without `--cut`, since its batch is open by design.
+`--cut` makes it the gate before a patch release or an rc is cut from a line. A cut tags the line, so a pull request that is only on the open batch pull request fails it too, with one line each: `#N is only on open batch PR #M, merge it before the cut`. One that waits there for a maintainer fails it as well, since nobody decided to leave it out, also when it is all the batch has left: bring it over, or take it out with `run --defer` and a reason. Everything else is as without it, and a cut that passes says `no change the policy takes is missing before the cut`. The scheduled run checks without `--cut`, since its batch is open by design.
+
+An original with `backport/skip` that the open batch picked before the label came prints a warning in either mode, naming the batch and `run --defer`, which takes it out; it fails neither.
 
 ### fold
 

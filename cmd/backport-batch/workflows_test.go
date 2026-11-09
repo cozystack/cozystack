@@ -173,8 +173,12 @@ func TestDeferKeepsWorkflowChangesWaiting(t *testing.T) {
 	}
 	f.git("switch", "-q", "main")
 	reopen(f, gh)
-	if code, stdout, _ := f.exec(gh, "check", "--line", "release-1.1", "--cut"); strings.Contains(stdout, "#5 changes") {
-		t.Errorf("check --cut = %d, %q; a deferred #5 still stops the cut as waiting", code, stdout)
+	// #6 and #7 are still only on the batch, which fails the cut; #5 does not.
+	if code, stdout, _ := f.exec(gh, "check", "--line", "release-1.1", "--cut"); code != 1 || strings.Contains(stdout, "#5 changes") || !strings.Contains(stdout, "#6 is only on open batch PR #90") {
+		t.Errorf("check --cut = %d, %q; want 1 for #6 and #7 alone, a deferred #5 no longer waiting", code, stdout)
+	}
+	if code, _, stderr := f.exec(gh, "check", "--line", "release-1.1"); code != 0 || !strings.Contains(stderr, "deferred on #90 to the next batch: https://github.com/cozystack/cozystack/pull/5 ") {
+		t.Errorf("check = %d, want 0 with a warning about #5:\n%s", code, stderr)
 	}
 }
 

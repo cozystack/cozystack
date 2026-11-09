@@ -186,6 +186,179 @@ func TestCheck(t *testing.T) {
 	}
 }
 
+// Every category an original can be in, through the commands that put it
+// there, with what check and check --cut make of it: the exit code, and the
+// warning or note on stderr that leaves it 0.
+func TestCheckDispositions(t *testing.T) {
+	plain := func(t *testing.T) *fixture {
+		f := newFixture(t)
+		f.lines()
+		f.pr(5, "fix(app): five", "", map[string]string{"app/five.txt": "5\n"})
+		f.pr(6, "fix(app): six", "", map[string]string{"app/six.txt": "6\n"})
+		return f
+	}
+	// conflicting has #5 conflict on the line, beside #6, which picks.
+	conflicting := func(t *testing.T) *fixture {
+		f := newFixture(t)
+		f.lines()
+		f.onLine("release-1.1", "fix(app): a line-only five", map[string]string{"app/five.txt": "line\n"})
+		f.pr(5, "fix(app): five", "", map[string]string{"app/five.txt": "5\n"})
+		f.pr(6, "fix(app): six", "", map[string]string{"app/six.txt": "6\n"})
+		return f
+	}
+	must := func(t *testing.T, f *fixture, gh *fakeGH, args ...string) {
+		t.Helper()
+		if code, _, stderr := f.exec(gh, args...); code != 0 {
+			t.Fatalf("%q = %d\n%s", args, code, stderr)
+		}
+		f.git("switch", "-q", "main")
+		if len(gh.bodies) > 0 {
+			reopen(f, gh)
+		}
+	}
+	sixOnLine := func(f *fixture) { pickOnLine(f, 6, map[string]string{"app/six.txt": "6\n"}) }
+	cases := []struct {
+		name      string
+		arrange   func(t *testing.T) (*fixture, *fakeGH)
+		line      string
+		check     int
+		cut       int
+		checkErr  string // on stderr from check
+		cutOut    string // on stdout from check --cut
+		cutErr    string // on stderr from check --cut
+		notCutOut string
+	}{
+		{
+			name:    "missing",
+			arrange: func(t *testing.T) (*fixture, *fakeGH) { return plain(t), &fakeGH{} },
+			check:   1, cut: 1, cutOut: "/pull/5 ",
+		},
+		{
+			name: "carried",
+			arrange: func(t *testing.T) (*fixture, *fakeGH) {
+				f := plain(t)
+				pickOnLine(f, 5, map[string]string{"app/five.txt": "5\n"})
+				sixOnLine(f)
+				return f, &fakeGH{}
+			},
+			check: 0, cut: 0, notCutOut: "/pull/5",
+		},
+		{
+			name: "picked, on the open batch",
+			arrange: func(t *testing.T) (*fixture, *fakeGH) {
+				f, gh := plain(t), &fakeGH{}
+				openBatch(t, f, gh)
+				return f, gh
+			},
+			check: 0, cut: 1, cutOut: "#5 is only on open batch PR #90",
+		},
+		{
+			name: "deferred conflict, open record",
+			arrange: func(t *testing.T) (*fixture, *fakeGH) {
+				f, gh := conflicting(t), &fakeGH{}
+				openBatch(t, f, gh)
+				sixOnLine(f)
+				return f, gh
+			},
+			check: 0, cut: 0, checkErr: "warning: deferred conflict on #90: https://github.com/cozystack/cozystack/pull/5 ", cutErr: "warning: deferred conflict on #90",
+		},
+		{
+			name: "deferred with a reason, open record",
+			arrange: func(t *testing.T) (*fixture, *fakeGH) {
+				f, gh := plain(t), &fakeGH{}
+				openBatch(t, f, gh)
+				must(t, f, gh, "run", "--line", "release-1.1", "--defer", "5", "--reason", "fails the app e2e", "--push")
+				sixOnLine(f)
+				return f, gh
+			},
+			check: 0, cut: 0, checkErr: "warning: deferred on #90 to the next batch: https://github.com/cozystack/cozystack/pull/5 ", cutErr: "(fails the app e2e)",
+		},
+		{
+			name: "workflow wait, open record, beside a pick",
+			arrange: func(t *testing.T) (*fixture, *fakeGH) {
+				f, gh := workflowWorld(t), &fakeGH{}
+				must(t, f, gh, "run", "--line", "release-1.1", "--no-workflow-files", "--push")
+				return f, gh
+			},
+			check: 0, cut: 1, checkErr: "warning: waiting on #90 for a maintainer", cutOut: "#5 changes .github/workflows/ and waits on batch PR #90",
+		},
+		{
+			name: "workflow wait, open record, alone",
+			arrange: func(t *testing.T) (*fixture, *fakeGH) {
+				f, gh := workflowWorld(t), &fakeGH{}
+				must(t, f, gh, "run", "--line", "release-1.1", "--no-workflow-files", "--push")
+				pickOnLine(f, 6, map[string]string{"app/six.txt": "6\n", ".github/renovate.json": "{}\n"})
+				return f, gh
+			},
+			check: 0, cut: 1, checkErr: "warning: waiting on #90 for a maintainer", cutOut: "#5 changes .github/workflows/ and waits on batch PR #90",
+		},
+		{
+			name: "backport/skip, not picked",
+			arrange: func(t *testing.T) (*fixture, *fakeGH) {
+				f := plain(t)
+				sixOnLine(f)
+				return f, &fakeGH{labels: map[string][]int{labelSkip: {5}}}
+			},
+			check: 0, cut: 0, notCutOut: "/pull/5",
+		},
+		{
+			name: "backport/skip after the pick, still on the open batch",
+			arrange: func(t *testing.T) (*fixture, *fakeGH) {
+				f, gh := plain(t), &fakeGH{}
+				openBatch(t, f, gh)
+				sixOnLine(f)
+				gh.labels = map[string][]int{labelSkip: {5}}
+				return f, gh
+			},
+			check: 0, cut: 0, checkErr: "warning: #5 is still on batch #90; take it out with backport-batch run --defer", cutErr: "still on batch #90",
+		},
+		{
+			name: "rule 6",
+			arrange: func(t *testing.T) (*fixture, *fakeGH) {
+				f := newFixture(t)
+				f.lines()
+				f.pr(5, "fix(app): five", "", map[string]string{"app/five.txt": "5\n"})
+				return f, &fakeGH{}
+			},
+			line:  "release-1.0",
+			check: 0, cut: 0, notCutOut: "/pull/5",
+		},
+		{
+			name: "rules 2 to 4",
+			arrange: func(t *testing.T) (*fixture, *fakeGH) {
+				f := newFixture(t)
+				f.lines()
+				f.pr(5, "feat(app): five", "", map[string]string{"app/five.txt": "5\n"})
+				return f, &fakeGH{}
+			},
+			check: 0, cut: 0, notCutOut: "/pull/5",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f, gh := tc.arrange(t)
+			line := tc.line
+			if line == "" {
+				line = "release-1.1"
+			}
+			code, stdout, stderr := f.exec(gh, "check", "--line", line)
+			if code != tc.check || !strings.Contains(stderr, tc.checkErr) {
+				t.Errorf("check = %d, want %d with %q\nstdout:\n%s\nstderr:\n%s", code, tc.check, tc.checkErr, stdout, stderr)
+			}
+			code, stdout, stderr = f.exec(gh, "check", "--line", line, "--cut")
+			if code != tc.cut || !strings.Contains(stdout, tc.cutOut) || !strings.Contains(stderr, tc.cutErr) {
+				t.Errorf("check --cut = %d, want %d with %q, %q\nstdout:\n%s\nstderr:\n%s", code, tc.cut, tc.cutOut, tc.cutErr, stdout, stderr)
+			}
+			if tc.notCutOut != "" && strings.Contains(stdout, tc.notCutOut) {
+				t.Errorf("check --cut lists %q:\n%s", tc.notCutOut, stdout)
+			}
+			if tc.cut == 0 && !strings.Contains(stdout, "no change the policy takes is missing before the cut") {
+				t.Errorf("check --cut passes without saying so:\n%s", stdout)
+			}
+		})
+	}
+}
+
 type errString string
 
 func (e errString) Error() string { return string(e) }

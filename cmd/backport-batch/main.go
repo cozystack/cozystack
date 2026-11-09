@@ -203,6 +203,8 @@ type batch struct {
 	verdicts []*verdict
 	pr       *pullRequest
 	prHead   string
+	// picks is what the open batch pull request carries beyond the line.
+	picks *history
 	// start is when the line started under the policy, zero for its fork point.
 	start time.Time
 	// textUntil is the batch-only day: what a commit's text says counts as
@@ -300,13 +302,12 @@ func (a *app) prepare(l line) (*batch, error) {
 	if err != nil {
 		return nil, err
 	}
-	var prPicks *history
 	if pr != nil {
 		b.pr = pr
 		if b.prHead, err = batchHead(pr); err != nil {
 			return nil, err
 		}
-		if prPicks, err = readPicks(b.prHead, b.lineHead, b.textUntil); err != nil {
+		if b.picks, err = readPicks(b.prHead, b.lineHead, b.textUntil); err != nil {
 			return nil, err
 		}
 	}
@@ -315,8 +316,8 @@ func (a *app) prepare(l line) (*batch, error) {
 		if err != nil {
 			return nil, err
 		}
-		if v.rule == 0 && prPicks != nil {
-			v.onBatch, _ = prPicks.found(v.o, v.commits)
+		if v.rule == 0 && b.picks != nil {
+			v.onBatch, _ = b.picks.found(v.o, v.commits)
 		}
 		b.verdicts = append(b.verdicts, v)
 	}

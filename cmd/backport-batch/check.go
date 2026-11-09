@@ -18,6 +18,7 @@ package main
 
 import (
 	"fmt"
+	"slices"
 	"strconv"
 )
 
@@ -46,57 +47,109 @@ func (a *app) check(args []string) int {
 	if err != nil {
 		return a.fail(err)
 	}
-	deferred := map[int]deferredEntry{}
-	if b.pr != nil {
-		if deferred, err = parseDeferred(b.pr.Body, l); err != nil {
-			return a.fail(fmt.Errorf("batch pull request #%d: %w", b.pr.Number, err))
+	disp, err := b.dispositions(*cut)
+	if err != nil {
+		return a.fail(err)
+	}
+	var missing, failing []string
+	for _, v := range b.verdicts {
+		d, ok := disp[v]
+		switch {
+		case !ok:
+		case d.kind == outcomeMissing:
+			missing = append(missing, d.text)
+		case d.kind == outcomeUnmerged || d.kind == outcomeWaiting:
+			failing = append(failing, d.text)
+		case d.kind == outcomeWarning:
+			a.warn("%s", d.text)
+		case d.kind == outcomeNote:
+			fmt.Fprintf(a.stderr, "note: %s\n", d.text)
 		}
 	}
-	var missing, unmerged, waiting []*verdict
-	for _, v := range b.qualifying() {
-		e, isDeferred := deferred[v.o.number]
-		switch {
-		case v.onBatch != "":
-			if *cut {
-				unmerged = append(unmerged, v)
-			}
-		case isDeferred && e.Workflows && *cut:
-			waiting = append(waiting, v)
-		case isDeferred && e.Workflows:
-			a.warn("waiting on #%d for a maintainer, since it changes %s: %s %s", b.pr.Number, workflowsDir, v.o.url(), terminalSafe(v.o.title))
-		case isDeferred && e.Reason != "":
-			a.warn("deferred on #%d to the next batch: %s %s (%s)", b.pr.Number, v.o.url(), terminalSafe(v.o.title), terminalSafe(e.Reason))
-		case isDeferred:
-			a.warn("deferred conflict on #%d: %s %s", b.pr.Number, v.o.url(), terminalSafe(v.o.title))
-		default:
-			missing = append(missing, v)
+	if len(missing)+len(failing) == 0 {
+		if *cut {
+			fmt.Fprintf(a.stdout, "%s: no change the policy takes is missing before the cut\n", l.branch())
+		} else {
+			fmt.Fprintf(a.stdout, "%s: every change the policy takes is on the line or on the batch\n", l.branch())
 		}
+		return 0
 	}
 	where := "and no batch pull request is open"
 	if b.pr != nil {
 		where = "nor on batch pull request #" + strconv.Itoa(b.pr.Number)
 	}
-	switch {
-	case len(missing) == 0 && len(unmerged) == 0 && len(waiting) == 0 && *cut:
-		fmt.Fprintf(a.stdout, "%s: every change the policy takes is on the line\n", l.branch())
-		return 0
-	case len(missing) == 0 && len(unmerged) == 0:
-		fmt.Fprintf(a.stdout, "%s: every change the policy takes is on the line or on the batch\n", l.branch())
-		return 0
-	}
 	if len(missing) > 0 {
 		fmt.Fprintf(a.stdout, "%s: %d changes the policy takes are not on the line, %s:\n", l.branch(), len(missing), where)
-		for _, v := range missing {
-			fmt.Fprintf(a.stdout, "  %s %s\n", v.o.url(), terminalSafe(v.o.title))
+		for _, text := range missing {
+			fmt.Fprintf(a.stdout, "  %s\n", text)
 		}
 	}
-	for _, v := range unmerged {
-		fmt.Fprintf(a.stdout, "%s: #%d is only on open batch PR #%d, merge it before the cut: %s %s\n", l.branch(), v.o.number, b.pr.Number, v.o.url(), terminalSafe(v.o.title))
-	}
-	for _, v := range waiting {
-		fmt.Fprintf(a.stdout, "%s: #%d changes %s and waits on batch PR #%d for a maintainer, bring it over or defer it before the cut: %s %s\n", l.branch(), v.o.number, workflowsDir, b.pr.Number, v.o.url(), terminalSafe(v.o.title))
+	for _, text := range failing {
+		fmt.Fprintf(a.stdout, "%s: %s\n", l.branch(), text)
 	}
 	return 1
+}
+
+// outcome is what check makes of one original.
+type outcome int
+
+const (
+	// outcomeMissing fails check and the cut: nothing accounts for an
+	// original the line lacks.
+	outcomeMissing outcome = iota + 1
+	// outcomeUnmerged and outcomeWaiting fail the cut only: the cut would not
+	// carry what is only on the open batch, nor what waits there.
+	outcomeUnmerged
+	outcomeWaiting
+	outcomeWarning
+	outcomeNote
+)
+
+type disposition struct {
+	kind outcome
+	text string
+}
+
+// dispositions says what check reports about each original that needs a line
+// of its own; the others pass in silence. The text is what follows the line's
+// name, or the original alone for one that is missing.
+func (b *batch) dispositions(cut bool) (map[*verdict]disposition, error) {
+	deferred := map[int]deferredEntry{}
+	var stale []*verdict
+	if b.pr != nil {
+		var err error
+		if deferred, err = parseDeferred(b.pr.Body, b.line); err != nil {
+			return nil, fmt.Errorf("batch pull request #%d: %w", b.pr.Number, err)
+		}
+		if stale, err = keptOut(b, b.picks); err != nil {
+			return nil, err
+		}
+	}
+	out := map[*verdict]disposition{}
+	for _, v := range b.verdicts {
+		named := v.o.url() + " " + terminalSafe(v.o.title)
+		e, isDeferred := deferred[v.o.number]
+		switch {
+		case slices.Contains(stale, v):
+			out[v] = disposition{outcomeWarning, fmt.Sprintf("#%d is still on batch #%d; take it out with backport-batch run --defer: %s", v.o.number, b.pr.Number, named)}
+		case v.rule != 0:
+		case v.onBatch != "":
+			if cut {
+				out[v] = disposition{outcomeUnmerged, fmt.Sprintf("#%d is only on open batch PR #%d, merge it before the cut: %s", v.o.number, b.pr.Number, named)}
+			}
+		case isDeferred && e.Workflows && cut:
+			out[v] = disposition{outcomeWaiting, fmt.Sprintf("#%d changes %s and waits on batch PR #%d for a maintainer, bring it over or defer it before the cut: %s", v.o.number, workflowsDir, b.pr.Number, named)}
+		case isDeferred && e.Workflows:
+			out[v] = disposition{outcomeWarning, fmt.Sprintf("waiting on #%d for a maintainer, since it changes %s: %s", b.pr.Number, workflowsDir, named)}
+		case isDeferred && e.Reason != "":
+			out[v] = disposition{outcomeWarning, fmt.Sprintf("deferred on #%d to the next batch: %s (%s)", b.pr.Number, named, terminalSafe(e.Reason))}
+		case isDeferred:
+			out[v] = disposition{outcomeWarning, fmt.Sprintf("deferred conflict on #%d: %s", b.pr.Number, named)}
+		default:
+			out[v] = disposition{outcomeMissing, named}
+		}
+	}
+	return out, nil
 }
 
 // terminalSafe keeps a title from carrying escape sequences into a terminal.
