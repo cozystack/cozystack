@@ -15,6 +15,7 @@ import (
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
@@ -2518,19 +2519,20 @@ func (f *cnpgRolloutFixture) liveDestination() string {
 }
 
 // seedCNPGBackup creates a cnpg.io/Backup of cluster owned by the BackupJob
-// named owner; an empty owner leaves it unlabelled, as a Backup created by
-// hand.
+// named owner, labelled as ensureCNPGBackup labels it; an empty owner leaves
+// it unlabelled, as a Backup created by hand.
 func (f *cnpgRolloutFixture) seedCNPGBackup(name, owner, cluster, phase string) {
 	f.t.Helper()
-	var labels map[string]string
+	var backupLabels map[string]string
 	if owner != "" {
-		labels = map[string]string{
+		backupLabels = map[string]string{
 			backupsv1alpha1.OwningJobNameLabel:      owner,
 			backupsv1alpha1.OwningJobNamespaceLabel: rolloutNS,
+			cnpgClusterLabel:                        cluster,
 		}
 	}
 	b := &cnpgtypes.Backup{
-		ObjectMeta: metav1.ObjectMeta{Namespace: rolloutNS, Name: name, Labels: labels},
+		ObjectMeta: metav1.ObjectMeta{Namespace: rolloutNS, Name: name, Labels: backupLabels},
 		Spec:       cnpgtypes.BackupSpec{Cluster: cnpgtypes.ClusterReference{Name: cluster}},
 		Status:     cnpgtypes.BackupStatus{Phase: phase},
 	}
@@ -2592,6 +2594,43 @@ func TestReconcileCNPG_RunningBackupDoesNotReapplyObjectStore(t *testing.T) {
 	}
 	if ready := apimeta.FindStatusCondition(j.Status.Conditions, "Ready"); ready == nil || ready.Reason != "WaitingForCNPGBackup" {
 		t.Fatalf("Ready = %+v, want the running backup followed rather than queued", ready)
+	}
+}
+
+// The queue reads the apiserver on every pass of every waiting job, so it
+// asks only for the Backups this controller created for the Cluster rather
+// than the namespace's whole Backup history.
+func TestReconcileCNPG_QueueListsOnlyTheClustersOwnedBackups(t *testing.T) {
+	f := newAttachedObjectStoreFixture(t, time.Now().Add(-time.Hour), "s3://bucket/")
+	var selectors []labels.Selector
+	f.r.APIReader = interceptor.NewClient(f.c.(client.WithWatch), interceptor.Funcs{
+		List: func(ctx context.Context, cl client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
+			if _, ok := list.(*cnpgtypes.BackupList); ok {
+				lo := &client.ListOptions{}
+				lo.ApplyOptions(opts)
+				selectors = append(selectors, lo.LabelSelector)
+			}
+			return cl.List(ctx, list, opts...)
+		},
+	})
+	f.pass()
+	owned := labels.Set{cnpgClusterLabel: rolloutCluster, backupsv1alpha1.OwningJobNameLabel: "bj-other"}
+	foreignCluster := labels.Set{cnpgClusterLabel: "postgres-other", backupsv1alpha1.OwningJobNameLabel: "bj-other"}
+	unowned := labels.Set{cnpgClusterLabel: rolloutCluster}
+	var queue labels.Selector
+	for _, s := range selectors {
+		if s == nil {
+			s = labels.Everything()
+		}
+		if s.Matches(owned) {
+			queue = s
+		}
+	}
+	if queue == nil {
+		t.Fatalf("no cnpg.io/Backup list would find another job's Backup; selectors = %v", selectors)
+	}
+	if queue.Matches(foreignCluster) || queue.Matches(unowned) {
+		t.Errorf("queue selector %q, want it to match only owned Backups of %s", queue, rolloutCluster)
 	}
 }
 
@@ -5974,16 +6013,22 @@ func TestReconcileCNPG_OwnBackupTheCacheHasNotCaught(t *testing.T) {
 }
 
 // failingBackupLists makes the uncached reader fail the cnpg.io/Backup lists
-// for which fail, given whether the list selects the job's own Backup by
-// label and how many such lists came before, returns true.
+// for which fail, given whether the list selects only the job's own Backup
+// (it would not find another job's) and how many such lists came before,
+// returns true.
 func (f *cnpgRolloutFixture) failingBackupLists(fail func(own bool, n int) bool) {
 	counts := map[bool]int{}
+	anotherJobs := labels.Set{
+		backupsv1alpha1.OwningJobNameLabel:      "bj-other",
+		backupsv1alpha1.OwningJobNamespaceLabel: rolloutNS,
+		cnpgClusterLabel:                        rolloutCluster,
+	}
 	f.r.APIReader = interceptor.NewClient(f.c.(client.WithWatch), interceptor.Funcs{
 		List: func(ctx context.Context, cl client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
 			if _, ok := list.(*cnpgtypes.BackupList); ok {
 				o := &client.ListOptions{}
 				o.ApplyOptions(opts)
-				own := o.LabelSelector != nil && !o.LabelSelector.Empty()
+				own := o.LabelSelector != nil && !o.LabelSelector.Matches(anotherJobs)
 				counts[own]++
 				if fail(own, counts[own]) {
 					return apierrors.NewServiceUnavailable("apiserver unavailable")

@@ -1002,10 +1002,15 @@ func (r *BackupJobReconciler) findCNPGBackupForJob(ctx context.Context, j *backu
 // hold the queue.
 //
 // The Backups are read from the apiserver, not the cache, which can still
-// miss a Backup another job's earlier pass created.
+// miss a Backup another job's earlier pass created. Only the ones this
+// controller created for the Cluster are asked for, by the labels
+// ensureCNPGBackup has always set, so a waiting job's poll does not fetch
+// the namespace's whole Backup history.
 func (r *BackupJobReconciler) otherCNPGBackupInFlight(ctx context.Context, j *backupsv1alpha1.BackupJob, clusterName string) (string, error) {
 	list := &cnpgtypes.BackupList{}
-	if err := r.apiReader().List(ctx, list, client.InNamespace(j.Namespace)); err != nil {
+	if err := r.apiReader().List(ctx, list, client.InNamespace(j.Namespace),
+		client.MatchingLabels{cnpgClusterLabel: clusterName},
+		client.HasLabels{backupsv1alpha1.OwningJobNameLabel}); err != nil {
 		return "", err
 	}
 	var holders []string
