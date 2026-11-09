@@ -101,7 +101,6 @@ type GPUClassToleration struct {
 	TolerationSeconds *int64 `json:"tolerationSeconds,omitempty"`
 }
 
-// Toleration returns t as a pod toleration.
 func (t GPUClassToleration) Toleration() corev1.Toleration {
 	return corev1.Toleration{Key: t.Key, Operator: t.Operator, Value: t.Value, Effect: t.Effect, TolerationSeconds: t.TolerationSeconds}
 }
