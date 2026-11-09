@@ -119,6 +119,9 @@ func (a *app) run(args []string) int {
 	if err != nil {
 		return a.fail(err)
 	}
+	if goOn, code := a.resumeClose(b, *push, deferred != nil); !goOn {
+		return code
+	}
 	if deferred != nil {
 		return a.rebuild(b, deferred, reason, *push)
 	}
@@ -266,6 +269,13 @@ func (a *app) finish(b *batch, r *report, branch string, date time.Time, push, r
 	if r.shapes, err = summarize(b, head, r.onBranch); err != nil {
 		return a.fail(err)
 	}
+	if rebuilt && head == b.lineHead && b.pr != nil {
+		// Deferring everything the batch carries leaves nothing to push: the
+		// batch is closed, and its record says so first, with the head the
+		// close is leased on.
+		r.closing = &closing{PR: b.pr.Number, Branch: branch, Head: b.prHead}
+		r.opts.Mode = modeClose
+	}
 	r.built = builtFrom{Main: b.mainHead, Line: b.lineHead, Newer: b.newerHead, Policy: b.policyAt, Batch: head, Tool: a.tool,
 		Run: runURL(os.LookupEnv), At: a.now().UTC().Format(time.RFC3339), Options: r.opts}
 	doc, err := buildReport(b, r)
@@ -321,7 +331,7 @@ func (a *app) finish(b *batch, r *report, branch string, date time.Time, push, r
 // act on, with the full classification left to the report it names.
 func (r *report) lineRecord(doc reportDoc) lineRecord {
 	built := doc.Built
-	return lineRecord{Version: 2, Line: doc.Line, Built: &built, Report: doc.ID, Deferred: slices.Clone(doc.Primary.Deferred), Dropped: []droppedEntry{}, Stale: slices.Clone(doc.Overlays.Stale)}
+	return lineRecord{Version: 2, Line: doc.Line, Built: &built, Report: doc.ID, Closing: r.closing, Deferred: slices.Clone(doc.Primary.Deferred), Dropped: []droppedEntry{}, Stale: slices.Clone(doc.Overlays.Stale)}
 }
 
 // branchDate is the date a batch branch was opened under.
@@ -496,8 +506,8 @@ func (a *app) publish(b *batch, p publication, rebuilt bool) error {
 		return fmt.Errorf("batch pull request #%d has no %s block, so backport-batch did not write it; merge or close it, and the next run opens a batch of its own", b.pr.Number, deferredFence)
 	}
 	if p.head == b.lineHead {
-		if rebuilt {
-			return fmt.Errorf("without what is deferred, %s carries nothing beyond %s; close batch pull request #%d instead", p.branch, b.line.branch(), b.pr.Number)
+		if rebuilt && p.record.Closing != nil {
+			return a.closeBatch(b, p)
 		}
 		return fmt.Errorf("%s carries nothing beyond %s; nothing to push", p.branch, b.line.branch())
 	}
@@ -528,7 +538,13 @@ func (a *app) publish(b *batch, p publication, rebuilt bool) error {
 			refusal := fmt.Sprintf("%s on %s is at %.12s, which %.12s does not descend from; refusing a non-fast-forward push", p.branch, remote, pushed, p.head)
 			// A run that stopped between its push and opening the pull request
 			// leaves the branch, and the next run that day builds it anew.
-			if b.pr == nil {
+			switch c := b.src.carrier; {
+			case b.pr != nil:
+			case c != nil && !b.src.open && c.Head.Ref == p.branch:
+				// Continuing a batch that merged or closed would publish
+				// what nobody can merge any more.
+				refusal += fmt.Sprintf("; it is the branch of batch pull request #%d, which is %s; the next run picks again what the tool put on it, but not a commit someone pushed there, such as a resolved conflict: check what %.12s carries, then delete it with git push origin --delete %s and run again", c.Number, prState(c), pushed, p.branch)
+			default:
 				refusal += fmt.Sprintf("; no batch pull request is open on it, and backport-batch run --line %s --onto %s --push continues it and opens one", b.line.branch(), pushed)
 			}
 			return errors.New(refusal)
@@ -636,6 +652,140 @@ func pullURL(pr *pullRequest) string {
 	return fmt.Sprintf("%spull/%d", ourRepoURL, pr.Number)
 }
 
+// closeBatch closes the open batch that --defer left carrying nothing. Every
+// write happens while it is open: the report, then the body whose record
+// says it is closing and at which head. The close and the deletion of its
+// branch then go only while both are still at that head.
+func (a *app) closeBatch(b *batch, p publication) error {
+	c := *p.record.Closing
+	if err := p.fits(); err != nil {
+		return err
+	}
+	if err := a.keepReports(b, &p); err != nil {
+		return err
+	}
+	name, err := writeTemp("backport-batch-body-*.md", p.body)
+	if err != nil {
+		return err
+	}
+	defer os.Remove(name)
+	if err := a.stillOpen(c.PR); err != nil {
+		return err
+	}
+	if err := a.gh.editPull(c.PR, p.title, name); err != nil {
+		return fmt.Errorf("recording the close of #%d: %w", c.PR, err)
+	}
+	return a.finishClose(b.line, pullURL(b.pr), c)
+}
+
+// finishClose closes the batch pull request a record says is closing, and
+// deletes its branch, each only while it is at the head the record froze.
+func (a *app) finishClose(l line, url string, c closing) error {
+	pr, err := a.gh.pull(c.PR)
+	if err != nil {
+		return fmt.Errorf("closing #%d, reading it again: %w", c.PR, err)
+	}
+	if st := prState(&pr); st != "open" || pr.Head.SHA != c.Head {
+		return fmt.Errorf("closing #%d: it is %s at %.12s, not open at %.12s, which its record froze", c.PR, st, pr.Head.SHA, c.Head)
+	}
+	heads, err := remoteBatchHeads(l)
+	if err != nil {
+		return err
+	}
+	if h := heads[c.Branch]; h != c.Head {
+		return fmt.Errorf("closing #%d: %s on %s is at %.12s, not at %.12s, which its record froze", c.PR, c.Branch, remote, h, c.Head)
+	}
+	if err := a.gh.closePull(c.PR); err != nil {
+		return fmt.Errorf("closing #%d: %w; backport-batch run --line %s --push finishes it", c.PR, err, l.branch())
+	}
+	if err := a.deleteBranch(l, c); err != nil {
+		return err
+	}
+	fmt.Fprintf(a.stderr, "closed %s: without what is deferred it carries nothing beyond %s; the next batch tries them again\n", url, l.branch())
+	return nil
+}
+
+// deleteBranch deletes the branch of a closed batch, leased on the head it
+// was closed at: one someone pushed since is a person's to delete or keep.
+func (a *app) deleteBranch(l line, c closing) error {
+	heads, err := remoteBatchHeads(l)
+	if err != nil {
+		return err
+	}
+	switch h, ok := heads[c.Branch]; {
+	case !ok:
+		return nil
+	case h != c.Head:
+		return movedBranch(c, h)
+	}
+	if _, err := git(deleteArgs(c.Branch, c.Head)...); err != nil {
+		return fmt.Errorf("deleting %s, left by the close of #%d: %w; backport-batch run --line %s --push deletes it", c.Branch, c.PR, err, l.branch())
+	}
+	return nil
+}
+
+// takenBranch is the refusal for a branch a close left that an open batch
+// pull request now uses, whatever it holds, or nil.
+func takenBranch(b *batch, c closing) error {
+	if b.pr == nil || b.pr.Head.Ref != c.Branch {
+		return nil
+	}
+	return fmt.Errorf("batch pull request #%d is open on %s, which the close of #%d left; the branch is that pull request's now, and the close leaves it alone", b.pr.Number, c.Branch, c.PR)
+}
+
+func movedBranch(c closing, h string) error {
+	return fmt.Errorf("batch pull request #%d was closed at %.12s, but %s is at %.12s now; the next run picks again what the tool put on it, but not a commit someone pushed there, such as a resolved conflict: check what %.12s carries, then delete it with git push origin --delete %s, and run again", c.PR, c.Head, c.Branch, h, h, c.Branch)
+}
+
+// resumeClose finishes a close the record says is under way, before a run
+// does anything else, and only under --push. It says whether the run may go
+// on: only once the batch is closed and its branch gone. A run that finishes
+// one stops there, and fails when it was asked to change the batch.
+func (a *app) resumeClose(b *batch, push, changing bool) (bool, int) {
+	if b.src.rec == nil || b.src.rec.Closing == nil {
+		return true, 0
+	}
+	c := *b.src.rec.Closing
+	heads, err := remoteBatchHeads(b.line)
+	if err != nil {
+		return false, a.fail(err)
+	}
+	h, onRemote := heads[c.Branch]
+	switch {
+	case b.src.open && h != c.Head:
+		return false, a.fail(fmt.Errorf("batch pull request #%d is being closed, but %s is at %.12s, not at %.12s, which its record froze; a person closes it, or pushes the branch back, by hand", c.PR, c.Branch, h, c.Head))
+	case b.src.open && !push:
+		return false, a.fail(fmt.Errorf("batch pull request #%d is being closed: closing it and deleting %s are left; backport-batch run --line %s --push finishes it", c.PR, c.Branch, b.line.branch()))
+	case b.src.open:
+		if err := a.finishClose(b.line, pullURL(b.src.carrier), c); err != nil {
+			return false, a.fail(err)
+		}
+		return false, a.finished(c, changing)
+	case !onRemote:
+		return true, 0
+	case takenBranch(b, c) != nil:
+		return false, a.fail(takenBranch(b, c))
+	case h != c.Head:
+		return false, a.fail(movedBranch(c, h))
+	case !push:
+		return false, a.fail(fmt.Errorf("batch pull request #%d was closed, but %s is still at %.12s; backport-batch run --line %s --push deletes it", c.PR, c.Branch, h, b.line.branch()))
+	}
+	if err := a.deleteBranch(b.line, c); err != nil {
+		return false, a.fail(err)
+	}
+	fmt.Fprintf(a.stderr, "deleted %s, which the close of #%d left\n", c.Branch, c.PR)
+	return false, a.finished(c, changing)
+}
+
+// finished is the exit of a run that finished a close: a change it was asked
+// for needs an open batch pull request, and none is left to make it on.
+func (a *app) finished(c closing, changing bool) int {
+	if !changing {
+		return 0
+	}
+	return a.fail(fmt.Errorf("finished the close of #%d and made no other change: what this run was asked to change needs an open batch pull request, which the next run opens", c.PR))
+}
+
 // pushArgs pushes head to branch: as a fast-forward, which the remote checks,
 // or, given a lease, over exactly that commit and no other.
 func pushArgs(branch, head, lease string) []string {
@@ -644,4 +794,9 @@ func pushArgs(branch, head, lease string) []string {
 		args = append(args, "--force-with-lease=refs/heads/"+branch+":"+lease)
 	}
 	return append(args, "--end-of-options", remote, head+":refs/heads/"+branch)
+}
+
+// deleteArgs deletes branch, only while the remote has it at lease.
+func deleteArgs(branch, lease string) []string {
+	return []string{"push", "--quiet", "--force-with-lease=refs/heads/" + branch + ":" + lease, "--end-of-options", remote, ":refs/heads/" + branch}
 }

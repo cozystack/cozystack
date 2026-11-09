@@ -259,6 +259,13 @@ func TestGHCLI(t *testing.T) {
 		t.Error("pull took GitHub's answer about another pull request")
 	}
 	write("")
+	if err := (ghCLI{}).closePull(90); err != nil {
+		t.Fatal(err)
+	}
+	if want := "pr close 90"; called() != want {
+		t.Errorf("gh %q, want gh %q", called(), want)
+	}
+	write("")
 	if err := (ghCLI{}).editPull(90, "fix(backport): batch", "/tmp/body.md"); err != nil {
 		t.Fatal(err)
 	}

@@ -313,6 +313,17 @@ func TestMetadataOperationsKeepTheMode(t *testing.T) {
 			if code, stdout, _ := f.exec(gh, "check", "--line", "release-1.1", "--cut"); code != 1 || !strings.Contains(stdout, "#5 changes .github/workflows/") {
 				t.Errorf("check --cut = %d, want #5 still waiting:\n%s", code, stdout)
 			}
+
+			// Deferring the last picks closes the batch, and its record
+			// still says how the batch was assembled.
+			mustRun(t, f, gh, "run", "--line", "release-1.1", "--defer", "6,8", "--reason", "fails the e2e", "--push")
+			rec, err = parseRecord(gh.find(90).Body, notifyLine)
+			if err != nil || gh.find(90).State != "closed" || rec.Closing == nil || rec.Built.Options != (runOptions{NoWorkflowFiles: true, Mode: modeClose}) {
+				t.Errorf("after the close the record is %+v, %v; want the flag kept", rec.Built, err)
+			}
+			if code, stdout, _ := f.exec(gh, "check", "--line", "release-1.1", "--cut"); code != 1 || !strings.Contains(stdout, "/pull/5 ") {
+				t.Errorf("check --cut = %d, want #5 missing once no batch lists it:\n%s", code, stdout)
+			}
 		})
 	}
 }

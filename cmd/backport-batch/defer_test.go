@@ -378,3 +378,309 @@ func TestSkipAfterThePick(t *testing.T) {
 		t.Errorf("check = %d\n%s", code, stderr)
 	}
 }
+
+// closeWorld is a batch carrying #5 alone, opened and pushed.
+func closeWorld(t *testing.T) (*fixture, *fakeGH, string) {
+	t.Helper()
+	f := newFixture(t)
+	f.lines()
+	f.pr(5, "fix(app): five", "", map[string]string{"app/five.txt": "5\n"})
+	gh := &fakeGH{}
+	h1 := openBatch(t, f, gh)
+	return f, gh, h1
+}
+
+// Deferring everything a batch carries closes it: the record says why and
+// what it froze while the pull request is still open, then the pull request
+// is closed and its branch deleted, leased on that head. The next batch
+// tries what was deferred again.
+func TestDeferEverythingClosesTheBatch(t *testing.T) {
+	f, gh, h1 := closeWorld(t)
+	var log []string
+	gh.after = map[string]func(){
+		"createComment": func() { log = append(log, "comment") },
+		"editPull":      func() { log = append(log, "edit") },
+		"closePull":     func() { log = append(log, "close, branch at "+f.remoteHead(batchBranch1)) },
+	}
+	code, stdout, stderr := f.exec(gh, "run", "--line", "release-1.1", "--defer", "5", "--reason", "fails the app e2e", "--push")
+	if code != 0 || !strings.Contains(stderr, "closed https://github.com/cozystack/cozystack/pull/90: without what is deferred it carries nothing beyond release-1.1; the next batch tries them again") {
+		t.Fatalf("run --defer of the last pick = %d\n%s", code, stderr)
+	}
+	f.git("switch", "-q", "main")
+	if want := []string{"comment", "edit", "close, branch at " + h1}; !slices.Equal(log, want) || f.remoteHead(batchBranch1) != "" || gh.find(90).State != "closed" {
+		t.Errorf("writes %q, branch at %q, #90 %s; want %q, the branch deleted and #90 closed", log, f.remoteHead(batchBranch1), gh.find(90).State, want)
+	}
+	rec, err := parseRecord(gh.find(90).Body, notifyLine)
+	if err != nil || rec.Closing == nil || *rec.Closing != (closing{PR: 90, Branch: batchBranch1, Head: h1}) || rec.Built.Options.Mode != modeClose || rec.deferred()[5].Reason != "fails the app e2e" {
+		t.Errorf("the closed batch's record is %+v, %v; want #5 deferred and the close it froze", rec, err)
+	}
+	if !strings.Contains(stdout, `"closing":{"pr":90,"branch":"`+batchBranch1+`","head":"`+h1+`"}`) {
+		t.Errorf("the body printed does not say what the close froze:\n%s", stdout)
+	}
+	code, _, stderr = f.exec(gh, "check", "--line", "release-1.1")
+	if code != 0 || !strings.Contains(stderr, "warning: deferred on #90 (closed) to the next batch: https://github.com/cozystack/cozystack/pull/5 ") {
+		t.Errorf("check = %d, want 0 with #5 deferred:\n%s", code, stderr)
+	}
+	gh.nextPR = 91
+	mustRun(t, f, gh, "run", "--line", "release-1.1", "--continue", "--push")
+	if got := f.subjects("origin/release-1.1", f.remoteHead(batchBranch1)); !slices.Equal(got, []string{"fix(app): five (#5)"}) || gh.find(91) == nil {
+		t.Errorf("the next batch carries %q, want #5 tried again on a new pull request", got)
+	}
+}
+
+// A close that stopped part way is finished by run --push, and by nothing
+// else, and never past a head it did not freeze; nothing is ever written to
+// the closed pull request.
+func TestCloseRecovery(t *testing.T) {
+	deferAll := []string{"run", "--line", "release-1.1", "--defer", "5", "--reason", "fails the app e2e", "--push"}
+	push := []string{"run", "--line", "release-1.1", "--continue", "--push"}
+	// moveBranch pushes a commit onto the batch branch, or recreates it, as
+	// someone else would.
+	moveBranch := func(f *fixture, base string) string {
+		f.git("switch", "-q", "--detach", base)
+		f.git("commit", "-q", "--allow-empty", "-m", "pushed since")
+		h2 := f.git("rev-parse", "HEAD")
+		f.git("push", "-q", "origin", "HEAD:refs/heads/"+batchBranch1)
+		f.git("switch", "-q", "main")
+		return h2
+	}
+	writes := func(gh *fakeGH) int { return len(gh.issueComments) + len(gh.edited) }
+
+	t.Run("stopped after the record, then the branch moved", func(t *testing.T) {
+		f, gh, h1 := closeWorld(t)
+		gh.after = map[string]func(){"editPull": func() { gh.fail = map[string]error{"pull": errString("HTTP 502")} }}
+		if code, _, stderr := f.exec(gh, deferAll...); code != 2 || !strings.Contains(stderr, "HTTP 502") {
+			t.Fatalf("run = %d\n%s", code, stderr)
+		}
+		f.git("switch", "-q", "main")
+		h2 := moveBranch(f, h1)
+		before := writes(gh)
+		if code, _, stderr := f.exec(gh, push...); code != 2 || !strings.Contains(stderr, h2[:12]) {
+			t.Errorf("run --push over a moved branch = %d, want 2 naming it:\n%s", code, stderr)
+		}
+		if gh.find(90).State != "open" || f.remoteHead(batchBranch1) != h2 || writes(gh) != before {
+			t.Error("the run acted on a branch that moved since the close froze it")
+		}
+	})
+	// GitHub and the remote are read apart, and either may be the first to
+	// show that someone pushed while the record was written.
+	for _, seen := range []string{"by the remote", "by GitHub"} {
+		t.Run("the branch moved while the record was written, seen "+seen, func(t *testing.T) {
+			f, gh, h1 := closeWorld(t)
+			gh.after = map[string]func(){"editPull": func() {
+				gh.remoteHead = func(string) string { return "" }
+				if seen == "by GitHub" {
+					gh.find(90).Head.SHA = strings.Repeat("b", 40)
+				} else {
+					moveBranch(f, h1)
+				}
+			}}
+			code, _, stderr := f.exec(gh, deferAll...)
+			f.git("switch", "-q", "main")
+			if code != 2 || !strings.Contains(stderr, "which its record froze") || gh.find(90).State != "open" || f.remoteHead(batchBranch1) == "" {
+				t.Errorf("run = %d, #90 %s, branch %q; want 2, #90 open and the branch kept:\n%s", code, gh.find(90).State, f.remoteHead(batchBranch1), stderr)
+			}
+		})
+	}
+	t.Run("the close failed", func(t *testing.T) {
+		f, gh, _ := closeWorld(t)
+		gh.fail = map[string]error{"closePull": errString("HTTP 502")}
+		if code, _, stderr := f.exec(gh, deferAll...); code != 2 {
+			t.Fatalf("run = %d\n%s", code, stderr)
+		}
+		f.git("switch", "-q", "main")
+		before := writes(gh)
+		// Anything but run --push leaves it as it is.
+		for _, args := range [][]string{
+			{"run", "--line", "release-1.1", "--continue"},
+			{"check", "--line", "release-1.1"},
+			{"fold", "--line", "release-1.1", "--original", "5", "--commit", strings.Repeat("a", 40)},
+			{"notify", "--line", "release-1.1", "--push"},
+		} {
+			if code, _, stderr := f.exec(gh, args...); code != 2 || !strings.Contains(stderr, "being closed") {
+				t.Errorf("%q = %d, want 2:\n%s", args, code, stderr)
+			}
+			f.git("switch", "-q", "main")
+		}
+		if writes(gh) != before || gh.find(90).State != "open" {
+			t.Error("a command other than run --push wrote to the batch")
+		}
+		code, _, stderr := f.exec(gh, push...)
+		if code != 0 || gh.find(90).State != "closed" || f.remoteHead(batchBranch1) != "" || writes(gh) != before {
+			t.Errorf("run --push = %d, #90 %s, branch %q, %d writes; want the close finished and nothing else\n%s", code, gh.find(90).State, f.remoteHead(batchBranch1), writes(gh)-before, stderr)
+		}
+	})
+	// A run that finishes a close stops there: the change it was asked for
+	// needs an open batch pull request, and none is left to make it on.
+	t.Run("a change asked for while the close was left", func(t *testing.T) {
+		f, gh, _ := closeWorld(t)
+		gh.fail = map[string]error{"closePull": errString("HTTP 502")}
+		if code, _, stderr := f.exec(gh, deferAll...); code != 2 {
+			t.Fatalf("run = %d\n%s", code, stderr)
+		}
+		f.git("switch", "-q", "main")
+		code, _, stderr := f.exec(gh, deferAll...)
+		f.git("switch", "-q", "main")
+		if code != 2 || !strings.Contains(stderr, "finished the close of #90 and made no other change") || gh.find(90).State != "closed" || f.remoteHead(batchBranch1) != "" {
+			t.Errorf("run --defer = %d, #90 %s, branch %q; want 2, the close finished and nothing deferred:\n%s", code, gh.find(90).State, f.remoteHead(batchBranch1), stderr)
+		}
+	})
+	t.Run("closed by hand while the close writes", func(t *testing.T) {
+		f, gh, h1 := closeWorld(t)
+		gh.after = map[string]func(){"createComment": func() { gh.find(90).State = "closed" }}
+		code, _, stderr := f.exec(gh, deferAll...)
+		f.git("switch", "-q", "main")
+		if code != 2 || !strings.Contains(stderr, "batch pull request #90 is closed now; nothing is written to it") || len(gh.edited) != 0 || f.remoteHead(batchBranch1) != h1 {
+			t.Errorf("run = %d, edited %q, branch %q; want 2, no edit and the branch kept:\n%s", code, gh.edited, f.remoteHead(batchBranch1), stderr)
+		}
+	})
+	t.Run("the delete failed", func(t *testing.T) {
+		f, gh, h1 := closeWorld(t)
+		gh.after = map[string]func(){"closePull": func() { f.refusePushes(true) }}
+		if code, _, stderr := f.exec(gh, deferAll...); code != 2 {
+			t.Fatalf("run = %d\n%s", code, stderr)
+		}
+		f.git("switch", "-q", "main")
+		f.refusePushes(false)
+		code, _, stderr := f.exec(gh, "check", "--line", "release-1.1")
+		if code != 0 || !strings.Contains(stderr, "warning: batch pull request #90 is closed, but its branch "+batchBranch1+" is still at "+h1[:12]) {
+			t.Errorf("check = %d, want 0 naming the branch:\n%s", code, stderr)
+		}
+		if code, _, stderr := f.exec(gh, "run", "--line", "release-1.1", "--continue"); code != 2 {
+			t.Errorf("run without --push = %d, want 2:\n%s", code, stderr)
+		}
+		f.git("switch", "-q", "main")
+		if code, _, stderr := f.exec(gh, push...); code != 0 || f.remoteHead(batchBranch1) != "" {
+			t.Errorf("run --push = %d, branch %q; want it deleted\n%s", code, f.remoteHead(batchBranch1), stderr)
+		}
+		mustRun(t, f, gh, "check", "--line", "release-1.1")
+	})
+	// A batch pull request a person opens on the branch a close left owns
+	// it: neither recovery nor check offers to delete it, moved or not. One
+	// on another branch does not stop the delete.
+	for _, tc := range []struct {
+		name   string
+		branch string
+		moved  bool
+	}{
+		{"a batch opened on the branch the close left", batchBranch1, false},
+		{"a batch opened on the branch the close left, moved since", batchBranch1, true},
+		{"a batch opened on another branch", "backport-batch/release-1.1-20261027", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f, gh, h1 := closeWorld(t)
+			gh.after = map[string]func(){"closePull": func() { f.refusePushes(true) }}
+			if code, _, stderr := f.exec(gh, deferAll...); code != 2 {
+				t.Fatalf("run = %d\n%s", code, stderr)
+			}
+			f.git("switch", "-q", "main")
+			f.refusePushes(false)
+			gh.after = nil
+			if tc.branch != batchBranch1 {
+				f.git("push", "-q", "origin", h1+":refs/heads/"+tc.branch)
+			}
+			left := h1
+			if tc.moved {
+				left = moveBranch(f, h1)
+			}
+			gh.prs = append(gh.prs, f.batchPR(91, "release-1.1", tc.branch, "a maintainer's batch"))
+			taken := tc.branch == batchBranch1
+			_, _, stderr := f.exec(gh, "check", "--line", "release-1.1")
+			f.git("switch", "-q", "main")
+			if named := strings.Contains(stderr, "batch pull request #91 is open on "+batchBranch1); named != taken || taken == strings.Contains(stderr, "--push deletes it") || taken && strings.Contains(stderr, "git push origin --delete") {
+				t.Errorf("check names the branch as #91's: %v, want %v, and offers no delete of it:\n%s", named, taken, stderr)
+			}
+			code, _, stderr := f.exec(gh, push...)
+			f.git("switch", "-q", "main")
+			if taken && (code != 2 || !strings.Contains(stderr, "batch pull request #91 is open on "+batchBranch1) || strings.Contains(stderr, "git push origin --delete") || f.remoteHead(batchBranch1) != left || gh.find(91).State != "open") {
+				t.Errorf("run --push = %d, branch %q; want 2, no delete offered and #91's branch kept:\n%s", code, f.remoteHead(batchBranch1), stderr)
+			}
+			if !taken && (code != 0 || f.remoteHead(batchBranch1) != "") {
+				t.Errorf("run --push = %d, branch %q; want the left branch deleted:\n%s", code, f.remoteHead(batchBranch1), stderr)
+			}
+		})
+	}
+	t.Run("the branch moved after the close", func(t *testing.T) {
+		f, gh, h1 := closeWorld(t)
+		var h2 string
+		gh.after = map[string]func(){"closePull": func() { h2 = moveBranch(f, h1) }}
+		if code, _, stderr := f.exec(gh, deferAll...); code != 2 || !strings.Contains(stderr, "is at "+h2[:12]+" now") {
+			t.Fatalf("run = %d, want 2 naming where the branch moved\n%s", code, stderr)
+		}
+		f.git("switch", "-q", "main")
+		// What was pushed onto the branch may be work the next run cannot
+		// pick again, so the refusal promises nothing about deleting it.
+		if code, _, stderr := f.exec(gh, push...); code != 2 || !strings.Contains(stderr, h1[:12]) || !strings.Contains(stderr, h2[:12]) || !strings.Contains(stderr, "#90") || strings.Contains(stderr, "nothing on it is lost") || !strings.Contains(stderr, "check what "+h2[:12]+" carries") {
+			t.Errorf("run --push = %d, want 2 naming both heads and #90, and what to check before deleting:\n%s", code, stderr)
+		}
+		if f.remoteHead(batchBranch1) != h2 {
+			t.Error("the run moved a branch it did not freeze")
+		}
+		if _, err := git(deleteArgs(batchBranch1, h1)...); err == nil || f.remoteHead(batchBranch1) != h2 {
+			t.Error("the remote took a delete whose lease names a head it no longer has")
+		}
+	})
+	t.Run("a batch of the same day that opened no pull request", func(t *testing.T) {
+		f, gh, _ := closeWorld(t)
+		if code, _, stderr := f.exec(gh, deferAll...); code != 0 || f.remoteHead(batchBranch1) != "" {
+			t.Fatalf("run = %d\n%s", code, stderr)
+		}
+		f.git("switch", "-q", "main")
+		// The same day, a new batch reuses the branch name, pushes, and
+		// fails to open its pull request.
+		f.pr(6, "fix(app): six", "", map[string]string{"app/six.txt": "6\n"})
+		gh.fail = map[string]error{"createPull": errString("HTTP 502")}
+		if code, _, stderr := f.exec(gh, push...); code != 2 {
+			t.Fatalf("the same-day run = %d\n%s", code, stderr)
+		}
+		f.git("switch", "-q", "main")
+		h2 := f.remoteHead(batchBranch1)
+		for _, args := range [][]string{push, {"run", "--line", "release-1.1", "--onto", h2, "--push"}} {
+			if code, _, stderr := f.exec(gh, args...); code != 2 || !strings.Contains(stderr, "git push origin --delete "+batchBranch1) {
+				t.Errorf("%q = %d, want 2 naming the branch to delete:\n%s", args, code, stderr)
+			}
+			f.git("switch", "-q", "main")
+		}
+		if f.remoteHead(batchBranch1) != h2 || len(gh.created) != 1 {
+			t.Errorf("the branch moved to %.12s or a pull request was opened: %q", f.remoteHead(batchBranch1), gh.created)
+		}
+		f.git("push", "-q", "origin", "--delete", batchBranch1)
+		gh.nextPR = 91
+		mustRun(t, f, gh, push...)
+		if gh.find(91) == nil {
+			t.Error("after the branch was deleted the next run opened no batch")
+		}
+	})
+	t.Run("a preview", func(t *testing.T) {
+		f, gh, _ := closeWorld(t)
+		gh.fail = map[string]error{"closePull": errString("HTTP 502")}
+		if code, _, stderr := f.exec(gh, deferAll...); code != 2 {
+			t.Fatalf("run = %d\n%s", code, stderr)
+		}
+		f.git("switch", "-q", "main")
+		before := writes(gh)
+		code, _, stderr := f.exec(gh, "run", "--line", "release-1.1", "--defer", "5", "--reason", "x")
+		if code != 2 || !strings.Contains(stderr, "run --line release-1.1 --push finishes") || writes(gh) != before || gh.find(90).State != "open" {
+			t.Errorf("a preview = %d, want 2 naming the step left and nothing written:\n%s", code, stderr)
+		}
+	})
+}
+
+// A batch that merged on GitHub and left its branch behind is named when a
+// run of the same day refuses to push over that branch.
+func TestRefusalNamesTheMergedBatchsBranch(t *testing.T) {
+	f, gh, _ := closeWorld(t)
+	head := f.remoteHead(batchBranch1)
+	mergeBatch(f, gh)
+	// A commit pushed onto the batch after it merged is left on its branch.
+	f.git("switch", "-q", "--detach", head)
+	f.git("commit", "-q", "--allow-empty", "-m", "pushed after the merge")
+	pushed := f.git("rev-parse", "HEAD")
+	f.git("push", "-q", "origin", "HEAD:refs/heads/"+batchBranch1)
+	f.git("switch", "-q", "main")
+	f.pr(6, "fix(app): six", "", map[string]string{"app/six.txt": "6\n"})
+	code, _, stderr := f.exec(gh, "run", "--line", "release-1.1", "--continue", "--push")
+	if code != 2 || !strings.Contains(stderr, "it is the branch of batch pull request #90, which is merged") || strings.Contains(stderr, "--onto") || !strings.Contains(stderr, "check what "+pushed[:12]+" carries") {
+		t.Errorf("run --push = %d, want a refusal naming #90:\n%s", code, stderr)
+	}
+}

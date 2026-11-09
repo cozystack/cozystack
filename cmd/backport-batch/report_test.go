@@ -55,15 +55,6 @@ func bodyReportOf(t *testing.T, body string, on ...line) storedReport {
 	return *s
 }
 
-func (g *fakeGH) find(n int) *pullRequest {
-	for i := range g.prs {
-		if g.prs[i].Number == n {
-			return &g.prs[i]
-		}
-	}
-	return nil
-}
-
 // refusePushes makes the remote refuse every push, as a lost connection or
 // a protected branch would, until it is called with false.
 func (f *fixture) refusePushes(on bool) {

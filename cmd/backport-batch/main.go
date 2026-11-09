@@ -54,7 +54,8 @@ run    Builds backport-batch/<line>-<yyyymmdd> in this working tree, off
        --defer rebuilds the open batch off origin/<line> without those
        originals and records them as deferred, for --reason: the batch keeps
        them out, the next one tries them again. --push replaces the branch,
-       leased on the head the rebuild started from.
+       leased on the head the rebuild started from; when nothing is left it
+       closes the batch PR instead, after recording why in it.
 check  Exits 1 while a change the policy takes is neither on the line nor on
        the open batch PR, 0 when nothing is, 2 when it cannot tell. With --cut,
        the gate before an rc or a patch is cut, it also exits 1 while a change

@@ -248,6 +248,9 @@ type report struct {
 	built builtFrom
 	// blocks are the record and the report the body ends with.
 	blocks string
+	// closing is the close of the open batch this run leaves carrying
+	// nothing.
+	closing *closing
 }
 
 // ruleName is how output names what kept an original out: the policy's

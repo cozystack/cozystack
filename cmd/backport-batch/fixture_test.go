@@ -449,9 +449,35 @@ func (g *fakeGH) editPull(number int, title, bodyFile string) error {
 	if err := g.readBody(bodyFile); err != nil {
 		return err
 	}
+	if pr := g.find(number); pr != nil {
+		pr.Body = g.bodies[len(g.bodies)-1]
+	}
+	if f := g.after["editPull"]; f != nil {
+		f()
+	}
+	return nil
+}
+
+func (g *fakeGH) closePull(number int) error {
+	if err := g.write(number, "a close"); err != nil {
+		return err
+	}
+	if err := g.inject("closePull"); err != nil {
+		return err
+	}
+	if pr := g.find(number); pr != nil {
+		pr.State = "closed"
+	}
+	if f := g.after["closePull"]; f != nil {
+		f()
+	}
+	return nil
+}
+
+func (g *fakeGH) find(n int) *pullRequest {
 	for i := range g.prs {
-		if g.prs[i].Number == number {
-			g.prs[i].Body = g.bodies[len(g.bodies)-1]
+		if g.prs[i].Number == n {
+			return &g.prs[i]
 		}
 	}
 	return nil

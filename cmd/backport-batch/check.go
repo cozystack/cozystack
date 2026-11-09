@@ -47,6 +47,9 @@ func (a *app) check(args []string) int {
 	if err != nil {
 		return a.fail(err)
 	}
+	if err := a.warnLeftBranch(b); err != nil {
+		return a.fail(err)
+	}
 	disp, err := b.dispositions(*cut)
 	if err != nil {
 		return a.fail(err)
@@ -88,6 +91,28 @@ func (a *app) check(args []string) int {
 		fmt.Fprintf(a.stdout, "%s: %s\n", l.branch(), text)
 	}
 	return 1
+}
+
+// warnLeftBranch names the branch a closed batch's close left behind.
+func (a *app) warnLeftBranch(b *batch) error {
+	if b.src.open || b.src.rec == nil || b.src.rec.Closing == nil {
+		return nil
+	}
+	c := b.src.rec.Closing
+	heads, err := remoteBatchHeads(b.line)
+	if err != nil {
+		return err
+	}
+	switch h, ok := heads[c.Branch]; {
+	case !ok:
+	case takenBranch(b, *c) != nil:
+		a.warn("%v", takenBranch(b, *c))
+	case h == c.Head:
+		a.warn("batch pull request #%d is closed, but its branch %s is still at %.12s; backport-batch run --line %s --push deletes it", c.PR, c.Branch, h, b.line.branch())
+	default:
+		a.warn("%v", movedBranch(*c, h))
+	}
+	return nil
 }
 
 // outcome is what check makes of one original.
@@ -195,6 +220,9 @@ func (a *app) fold(args []string) int {
 	}
 	if c := b.src.closingOpen(); c != nil {
 		return a.fail(fmt.Errorf("batch pull request #%d is being closed; backport-batch run --line %s --push finishes it", c.PR, l.branch()))
+	}
+	if err := a.warnLeftBranch(b); err != nil {
+		return a.fail(err)
 	}
 	why, err := refuseFold(b, *number, *commit)
 	if err != nil {
