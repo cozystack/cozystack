@@ -77,3 +77,36 @@ tests:
     asserts:
       - failedTemplate:
           errorPattern: 'ingress.host "sso.example.com" conflicts with the platform authentication.oidc.keycloakHost "auth.example.com"'
+
+  # Platform validation accepts all-digit labels and words YAML would read as
+  # booleans. Unquoted, "123" and "true" render as a number and a bool, and the
+  # Ingress no longer decodes as networking.k8s.io/v1.
+  - it: keeps an all-digit host a string in the Ingress
+    template: templates/ingress.yaml
+    set:
+      _cluster:
+        root-host: example.com
+        keycloak-host: "123"
+    asserts:
+      - isAPIVersion:
+          of: networking.k8s.io/v1
+      - equal:
+          path: spec.rules[0].host
+          value: "123"
+      - equal:
+          path: spec.tls[0].hosts
+          value: ["123"]
+
+  - it: keeps a boolean-looking host a string in the Ingress
+    template: templates/ingress.yaml
+    set:
+      _cluster:
+        root-host: example.com
+        keycloak-host: "true"
+    asserts:
+      - equal:
+          path: spec.rules[0].host
+          value: "true"
+      - equal:
+          path: spec.tls[0].hosts
+          value: ["true"]
