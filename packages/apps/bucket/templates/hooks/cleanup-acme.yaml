@@ -1,3 +1,4 @@
+{{- $sharedTLS := eq (printf "%s-ui-tls" .Release.Name) (index (.Values._cluster | default dict) "wildcard-secret-name" | default "") -}}
 ---
 apiVersion: batch/v1
 kind: Job
@@ -76,6 +77,7 @@ spec:
               # left behind keeps the private key of the bucket host, so that
               # one fails the hook at the end and the Job keeps its log.
               key_left=0
+{{- if not $sharedTLS }}
               if kubectl delete certificate {{ .Release.Name }}-ui-tls -n {{ .Release.Namespace }} --ignore-not-found --wait=false; then
                 # cert-manager writes the Secret without an owner reference, so
                 # it outlives the Certificate together with the private key of
@@ -92,6 +94,7 @@ spec:
                 echo "ERROR: cert-manager cleanup failed for {{ .Release.Name }}, so Secret {{ .Release.Name }}-ui-tls is left as well and orphaned ACME resources may remain" >&2
                 key_left=1
               fi
+{{- end }}
               # Orders are owned by the Certificate and are removed by the cascade
               # above; Challenges carry no labels and are reaped by the
               # host-scoped .spec.dnsName sweep below. There is therefore no
@@ -159,6 +162,7 @@ metadata:
     "helm.sh/hook-weight": "5"
     "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
 rules:
+{{- if not $sharedTLS }}
   - apiGroups: ["cert-manager.io"]
     resources: ["certificates"]
     verbs: ["get", "list", "delete"]
@@ -168,6 +172,7 @@ rules:
     resources: ["secrets"]
     resourceNames: ["{{ .Release.Name }}-ui-tls"]
     verbs: ["get", "delete"]
+{{- end }}
   - apiGroups: ["acme.cert-manager.io"]
     resources: ["orders", "challenges"]
     verbs: ["get", "list", "delete"]

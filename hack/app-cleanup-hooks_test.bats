@@ -867,3 +867,75 @@ line_of() {
   fi
   rm -rf "$tmp"
 }
+
+@test "harbor and bucket preserve a colliding wildcard key and still clean their solvers" {
+  for app in harbor bucket; do
+    tmp=$(mktemp -d)
+    write_fake_kubectl "$tmp"
+    if [ "$app" = harbor ]; then
+      suffix=ingress-tls job=harbor-test-cleanup
+    else
+      suffix=ui-tls job=bucket-test-cleanup-acme
+    fi
+    key="$app-test-$suffix"
+    render_hook "packages/apps/$app" "$app-test" tenant-root "$job" "$tmp/hook.sh" \
+      --set '_namespace.host=example.org' --set "_cluster.wildcard-secret-name=$key"
+
+    export KLOG="$tmp/calls" CHALLENGE_LIST='old-challenge' SOLVER_LIST='old-solver'
+    export EXISTING="$key old-challenge old-solver"
+    PATH="$tmp:$PATH" sh "$tmp/hook.sh"
+    if grep -Eq 'delete (certificate|secret) ' "$tmp/calls"; then
+      echo "FAIL: $app attempted to delete the shared wildcard key"
+      cat "$tmp/calls"
+      false
+    fi
+    grep -q 'delete challenge .*old-challenge' "$tmp/calls"
+    grep -q 'delete ingress .*old-solver' "$tmp/calls"
+    rm -rf "$tmp"
+  done
+}
+
+@test "harbor and bucket still remove old app keys with a different wildcard name" {
+  for app in harbor bucket; do
+    tmp=$(mktemp -d)
+    write_fake_kubectl "$tmp"
+    if [ "$app" = harbor ]; then
+      suffix=ingress-tls job=harbor-test-cleanup
+    else
+      suffix=ui-tls job=bucket-test-cleanup-acme
+    fi
+    key="$app-test-$suffix"
+    render_hook "packages/apps/$app" "$app-test" tenant-root "$job" "$tmp/hook.sh" \
+      --set '_namespace.host=example.org' --set '_cluster.wildcard-secret-name=shared-tls'
+
+    export KLOG="$tmp/calls" CHALLENGE_LIST='' SOLVER_LIST=''
+    export EXISTING="$key shared-tls"
+    PATH="$tmp:$PATH" sh "$tmp/hook.sh"
+    grep -q "delete certificate .*$key" "$tmp/calls"
+    grep -q "delete secret .*$key" "$tmp/calls"
+    if grep -q 'shared-tls' "$tmp/calls"; then
+      echo "FAIL: $app touched the shared wildcard key"
+      cat "$tmp/calls"
+      false
+    fi
+    rm -rf "$tmp"
+  done
+}
+
+@test "the Secret helper removes app keys while preserving a colliding wildcard key" {
+  tmp=$(mktemp -d)
+  write_fake_kubectl "$tmp"
+  render_hook "$QDRANT_CHART" myapp tenant-root myapp-secrets-cleanup "$tmp/hook.sh" \
+    --set '_namespace.host=example.org' --set 'tls.enabled=false' \
+    --set '_cluster.wildcard-secret-name=myapp-tls'
+
+  export KLOG="$tmp/calls" EXISTING='myapp-ca myapp-tls'
+  PATH="$tmp:$PATH" sh "$tmp/hook.sh"
+  grep -q 'delete secret .*myapp-ca' "$tmp/calls"
+  if grep -q 'myapp-tls' "$tmp/calls"; then
+    echo 'FAIL: the helper touched the shared wildcard key'
+    cat "$tmp/calls"
+    false
+  fi
+  rm -rf "$tmp"
+}

@@ -322,3 +322,33 @@ tests:
       - equal:
           path: subjects[0].name
           value: harbor-test-cleanup
+
+  - it: preserves the shared wildcard Certificate and Secret
+    release:
+      name: harbor-test
+    set:
+      _cluster.wildcard-secret-name: harbor-test-ingress-tls
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - notMatchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'kubectl delete (certificate|secret) '
+
+  - it: grants no Secret deletion when the TLS name is shared
+    release:
+      name: harbor-test
+    set:
+      _cluster.wildcard-secret-name: harbor-test-ingress-tls
+    documentSelector:
+      path: kind
+      value: Role
+    asserts:
+      - notContains:
+          path: rules
+          content:
+            apiGroups: [""]
+            resources: ["secrets"]
+            resourceNames: ["harbor-test-ingress-tls"]
+            verbs: ["get", "delete"]

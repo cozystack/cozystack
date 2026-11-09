@@ -18,7 +18,7 @@ Usage from a template of the app chart, with certificates optional.
         "secrets" (list (printf "%s-ca" .Release.Name) (printf "%s-tls" .Release.Name))) }}
 
 secrets lists every Secret name the chart can create, whatever its current
-values. The hook renders unconditionally and deletes with --ignore-not-found,
+values. The hook deletes with --ignore-not-found,
 so a release that had TLS on earlier and off at uninstall is cleaned as well.
 Delete is granted by explicit resourceNames rather than by a label selector.
 cert-manager stamps its Secrets only with the cluster-wide
@@ -65,6 +65,12 @@ a failure there leaves the Secrets in place.
 {{- fail (printf "cozy-lib.hooks.deleteSecrets: every entry of certificates must be a Kubernetes resource name, got %q" .) -}}
 {{- end -}}
 {{- end -}}
+{{- /* The configured wildcard Secret belongs to the cluster, even if its
+       name matches a key this app would otherwise create. */ -}}
+{{- $wildcardSecret := index ($root.Values._cluster | default dict) "wildcard-secret-name" | default "" -}}
+{{- $secrets = without $secrets $wildcardSecret -}}
+{{- $certificates = without $certificates $wildcardSecret -}}
+{{- if $secrets -}}
 {{- /* A Job name goes into the job-name label of its pods, which takes at
        most 63 characters, while the apps API admits release names of up to
        53. Cutting the suffix keeps the whole release name, so the name stays
@@ -207,4 +213,5 @@ spec:
       volumes:
         - name: tmp
           emptyDir: {}
+{{- end -}}
 {{- end -}}

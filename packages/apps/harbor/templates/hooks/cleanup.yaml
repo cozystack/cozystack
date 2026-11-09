@@ -1,3 +1,4 @@
+{{- $sharedTLS := eq (printf "%s-ingress-tls" .Release.Name) (index (.Values._cluster | default dict) "wildcard-secret-name" | default "") -}}
 {{- $harborHost := .Values.host | default (printf "%s.%s" .Release.Name .Values._namespace.host) }}
 ---
 apiVersion: batch/v1
@@ -109,6 +110,7 @@ spec:
                 -l release={{ .Release.Name }}-system --ignore-not-found --wait=true --timeout=120s \
                 || fail "failed to delete PVCs matching release={{ .Release.Name }}-system in {{ .Release.Namespace }}; orphaned PVCs may remain"
 
+{{- if not $sharedTLS }}
               # Remove the cert-manager Certificate owned by this release's
               # Ingress so an in-flight http01 challenge does not leave a
               # dangling cm-acme-http-solver-* Pod/Service/Ingress behind.
@@ -138,6 +140,7 @@ spec:
                 fail "failed to delete Certificate {{ .Release.Namespace }}/{{ .Release.Name }}-ingress-tls, so its Secret is left as well and orphaned ACME resources may remain"
               fi
 
+{{- end }}
               # Belt-and-braces sweep for ACME http01 solver objects that
               # cert-manager may have orphaned (e.g. the Certificate was
               # already gone, so deleting it above did not cascade). We scope
@@ -215,6 +218,7 @@ rules:
   - apiGroups: [""]
     resources: ["persistentvolumeclaims"]
     verbs: ["get", "list", "watch", "delete"]
+{{- if not $sharedTLS }}
   - apiGroups: ["cert-manager.io"]
     resources: ["certificates"]
     verbs: ["get", "list", "watch", "delete"]
@@ -224,6 +228,7 @@ rules:
     resources: ["secrets"]
     resourceNames: ["{{ .Release.Name }}-ingress-tls"]
     verbs: ["get", "delete"]
+{{- end }}
   # Only Challenges are touched directly (the host-scoped sweep lists and
   # deletes them); Orders are cascade-deleted by cert-manager itself when the
   # Certificate is removed, so the hook needs no RBAC for them.

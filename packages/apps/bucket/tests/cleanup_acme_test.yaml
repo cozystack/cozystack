@@ -202,3 +202,33 @@ tests:
       - equal:
           path: subjects[0].name
           value: my-bucket-cleanup-acme
+
+  - it: preserves the shared wildcard Certificate and Secret
+    release:
+      name: bucket-test
+    set:
+      _cluster.wildcard-secret-name: bucket-test-ui-tls
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - notMatchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'kubectl delete (certificate|secret) '
+
+  - it: grants no Secret deletion when the TLS name is shared
+    release:
+      name: bucket-test
+    set:
+      _cluster.wildcard-secret-name: bucket-test-ui-tls
+    documentSelector:
+      path: kind
+      value: Role
+    asserts:
+      - notContains:
+          path: rules
+          content:
+            apiGroups: [""]
+            resources: ["secrets"]
+            resourceNames: ["bucket-test-ui-tls"]
+            verbs: ["get", "delete"]
