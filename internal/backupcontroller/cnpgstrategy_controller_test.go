@@ -2985,6 +2985,44 @@ func TestReconcileCNPG_LostAttachRecordStillWaitsForTheRollout(t *testing.T) {
 	}
 }
 
+// A record older than the latch is left from an earlier attach of a plugin
+// since removed; the plugin found now was attached by someone who keeps no
+// record, after the latch, so an instance recreated between the record and
+// the latch still has to roll.
+func TestReconcileCNPG_AttachRecordOlderThanTheLatchKeepsTheLatch(t *testing.T) {
+	latchedAt := time.Now().Add(-10 * time.Minute).Truncate(time.Second)
+	oldPod := newRolloutInstancePod(latchedAt.Add(-2 * time.Hour))
+	f := newCNPGRolloutFixture(t, newRolloutBackupJob(latchedAt.Add(-2*time.Hour)),
+		newRolloutCluster(cnpgClusterHealthyPhase), oldPod)
+
+	j, _ := f.pass() // latch
+	latch := apimeta.FindStatusCondition(j.Status.Conditions, backupCondPluginRolledOut)
+	if latch == nil {
+		t.Fatalf("no %s latch: %+v", backupCondPluginRolledOut, j.Status.Conditions)
+	}
+	latch.LastTransitionTime = metav1.NewTime(latchedAt)
+	if err := f.c.Status().Update(context.Background(), j); err != nil {
+		t.Fatalf("age the latch: %v", err)
+	}
+	f.replacePod(oldPod, newRolloutInstancePod(latchedAt.Add(-time.Minute)))
+	live := newRolloutCluster(cnpgClusterHealthyPhase, buildBarmanPlugin(rolloutCluster, rolloutCluster))
+	live.Annotations = map[string]string{cnpgPluginAttachedAtAnnotation: latchedAt.Add(-time.Hour).UTC().Format(time.RFC3339)}
+	f.observeCNPG(live)
+
+	var backups []cnpgtypes.Backup
+	for range 3 {
+		if j, backups = f.pass(); len(backups) != 0 || j.Status.Phase == backupsv1alpha1.BackupJobPhaseFailed {
+			break
+		}
+	}
+	if len(backups) != 0 {
+		t.Fatalf("a cnpg.io/Backup was created against an instance recreated before the latch: %+v", backups)
+	}
+	if j.Status.Phase == backupsv1alpha1.BackupJobPhaseFailed {
+		t.Fatalf("the job failed instead of waiting for the rollout: %s", j.Status.Message)
+	}
+}
+
 // A later write to a Cluster that already carries the plugin re-sends the
 // attach record as it is: moving it would make the instances that rolled
 // with the plugin look older than the attach.

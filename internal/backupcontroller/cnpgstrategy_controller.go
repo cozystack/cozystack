@@ -835,7 +835,8 @@ type cnpgPluginAttachment struct {
 	// missing reports a Cluster that carried no barman-cloud plugin.
 	missing bool
 	// attachedAt is the cnpgPluginAttachedAtAnnotation the Cluster carried,
-	// "" when no backup job attached the plugin.
+	// "" when it carries no record: the plugin was attached by the chart, or
+	// before the record existed.
 	attachedAt    string
 	clusterStatus cnpgtypes.ClusterStatus
 }
