@@ -1,0 +1,50 @@
+suite: seaweedfs public-read BucketAccessClass
+release:
+  name: seaweedfs
+  namespace: tenant-root
+
+set:
+  filer:
+    grpcHost: seaweedfs-filer.tenant-other.svc
+  _namespace:
+    host: example.org
+    ingress: tenant-root
+  _cluster:
+    issuer-name: letsencrypt-prod
+    solver: http01
+
+tests:
+  - it: offers a -public access class to a Client instance
+    template: templates/client/cosi-bucket-class.yaml
+    set:
+      topology: Client
+    documentSelector:
+      path: metadata.name
+      value: tenant-root-public
+    asserts:
+      - isKind:
+          of: BucketAccessClass
+      - equal:
+          path: parameters.accessPolicy
+          value: public-read
+      - equal:
+          path: driverName
+          value: tenant-root.seaweedfs.objectstorage.k8s.io
+
+  - it: offers a -public access class per storage pool
+    template: templates/storage-pool-bucket-classes.yaml
+    set:
+      topology: Simple
+      volume:
+        pools:
+          fast:
+            diskType: ssd
+    documentSelector:
+      path: metadata.name
+      value: tenant-root-fast-public
+    asserts:
+      - isKind:
+          of: BucketAccessClass
+      - equal:
+          path: parameters.accessPolicy
+          value: public-read

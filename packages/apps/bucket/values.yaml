@@ -8,6 +8,9 @@ storagePool: ""
 ## @param {bool} ui=true - Deploys the web UI (s3manager) with its Service and its Ingress or HTTPRoute at `<bucket>.<tenant host>`. Set to `false` to run the bucket without them.
 ui: true
 
+## @param {bool} publicRead=false - Serves the bucket's objects to anyone without credentials at `<endpoint>/<bucket>/<key>`. Anonymous callers can read objects but cannot list the bucket or write to it.
+publicRead: false
+
 ## @typedef {struct} User - Bucket user configuration.
 ## @field {bool} [readonly] - Whether the user has read-only access.
 

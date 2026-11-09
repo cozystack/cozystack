@@ -22,3 +22,18 @@ spec:
   credentialsSecretName: {{ $.Release.Name }}-{{ $name }}
   protocol: s3
 {{- end }}
+{{- if .Values.publicRead }}
+{{- if hasKey .Values.users "public-read" }}
+{{- fail "publicRead creates the BucketAccess <bucket>-public-read, which the user \"public-read\" already owns: rename that user" }}
+{{- end }}
+---
+apiVersion: objectstorage.k8s.io/v1alpha1
+kind: BucketAccess
+metadata:
+  name: {{ .Release.Name }}-public-read
+spec:
+  bucketAccessClassName: {{ $seaweedfs }}{{- if $pool }}-{{ $pool }}{{- end }}-public
+  bucketClaimName: {{ .Release.Name }}
+  credentialsSecretName: {{ .Release.Name }}-public-read
+  protocol: s3
+{{- end }}
