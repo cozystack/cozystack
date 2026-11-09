@@ -1286,7 +1286,9 @@ const foundationdbRestoreAgentsLabel = "backups.cozystack.io/foundationdb-restor
 //
 // A destination that already has any FoundationDBBackup keeps its agents and
 // gets none from here: the operator reads backup state for the whole cluster,
-// so a Stopped CR next to a running backup would discontinue that backup.
+// so a Stopped CR next to a running backup would discontinue that backup. If
+// none of those CRs runs agents (agentCount: 0 makes the operator create no
+// Deployment), the restore fails at once instead of running out its deadline.
 func (r *RestoreJobReconciler) ensureFoundationDBRestoreAgents(
 	ctx context.Context,
 	rj *backupsv1alpha1.RestoreJob,
@@ -1300,10 +1302,21 @@ func (r *RestoreJobReconciler) ensureFoundationDBRestoreAgents(
 	if err := r.List(ctx, list, client.InNamespace(rj.Namespace)); err != nil {
 		return err
 	}
+	var agentless []string
 	for i := range list.Items {
-		if list.Items[i].Spec.ClusterName == cluster.Name {
+		item := &list.Items[i]
+		if item.Spec.ClusterName != cluster.Name {
+			continue
+		}
+		if item.Spec.AgentCount == nil || *item.Spec.AgentCount > 0 {
 			return nil
 		}
+		agentless = append(agentless, item.Name)
+	}
+	if len(agentless) > 0 {
+		return &foundationdbRestoreAgentsError{fmt.Errorf(
+			"FoundationDBBackup %s of cluster %s runs no backup agents (agentCount: 0), and the restore needs agents connected to the destination",
+			strings.Join(agentless, ", "), cluster.Name)}
 	}
 
 	strategy := &strategyv1alpha1.FoundationDB{}

@@ -2243,6 +2243,34 @@ func TestReconcileFoundationDBRestore_InPlaceKeepsRunningBackup(t *testing.T) {
 	}
 }
 
+func TestReconcileFoundationDBRestore_AgentlessBackupFailsRestore(t *testing.T) {
+	zero := int32(0)
+	agentless := &foundationdbtypes.FoundationDBBackup{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace: "tenant",
+			Name:      "bj-1-fdb",
+			Labels:    map[string]string{foundationdbClusterLabel: "foundationdb-fdb-src"},
+		},
+		Spec: foundationdbtypes.FoundationDBBackupSpec{
+			ClusterName: "foundationdb-fdb-src",
+			Version:     "7.3.79",
+			BackupState: foundationdbtypes.BackupStateStopped,
+			AgentCount:  &zero,
+		},
+	}
+	c, r, rj, backup := seedFoundationDBRestore(t, foundationdbRestoreSeed{extra: []client.Object{agentless}})
+
+	if _, err := r.reconcileFoundationDBRestore(context.Background(), rj, backup); err != nil {
+		t.Fatalf("reconcileFoundationDBRestore: %v", err)
+	}
+	if rj.Status.Phase != backupsv1alpha1.RestoreJobPhaseFailed {
+		t.Errorf("phase = %q, want Failed when no FoundationDBBackup of the destination runs agents", rj.Status.Phase)
+	}
+	if agents := listFoundationDBBackups(t, c); len(agents) != 1 || agents[0].Name != agentless.Name {
+		t.Errorf("the existing CR must stay the only one, got %+v", agents)
+	}
+}
+
 func TestReconcileFoundationDB_NotRestorableRequestsStatusRefresh(t *testing.T) {
 	c, job, resolved := reconcileFoundationDBSeed(
 		t,
