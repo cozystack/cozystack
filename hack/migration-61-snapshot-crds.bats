@@ -144,6 +144,12 @@ crd_field() {
   grep -qxF "DELETE volumegroupsnapshotcontents.groupsnapshot.storage.k8s.io" "$FAKE_CMDLOG"
   if grep -qF "CREATE" "$FAKE_CMDLOG"; then echo "a v1beta2 CRD was created next to a kept v1alpha1 one" >&2; return 1; fi
   grep -qF "cozystack.io/migration-61-needs-attention=volumegroupsnapshots.groupsnapshot.storage.k8s.io=2" "$FAKE_CMDLOG"
+  # The kept CRD stays out of the release, so the warning carries the whole
+  # recovery: recreate it through the release, restart the controller, then
+  # re-render linstor.
+  grep -qF "flux reconcile helmrelease --namespace cozy-snapshot-controller snapshot-controller --force" "$WORK/out"
+  grep -qF "kubectl rollout restart --namespace cozy-snapshot-controller deployment/snapshot-controller" "$WORK/out"
+  grep -qF "flux reconcile helmrelease --namespace cozy-linstor linstor --force" "$WORK/out"
   grep -qxF "STAMP 62" "$FAKE_CMDLOG"
   rm -rf "$WORK"
 }
@@ -327,6 +333,12 @@ crd_field() {
   fi
   if grep -qF "CREATE" "$FAKE_CMDLOG"; then echo "a CRD was created next to the recorded one" >&2; return 1; fi
   grep -qF "cozystack.io/migration-61-needs-attention=volumegroupsnapshotcontents.groupsnapshot.storage.k8s.io=stored-v1alpha1" "$FAKE_CMDLOG"
+  # The kept CRD stays out of the release, so the warning carries the whole
+  # recovery: recreate it through the release, restart the controller, then
+  # re-render linstor.
+  grep -qF "flux reconcile helmrelease --namespace cozy-snapshot-controller snapshot-controller --force" "$WORK/out"
+  grep -qF "kubectl rollout restart --namespace cozy-snapshot-controller deployment/snapshot-controller" "$WORK/out"
+  grep -qF "flux reconcile helmrelease --namespace cozy-linstor linstor --force" "$WORK/out"
   grep -qxF "STAMP 62" "$FAKE_CMDLOG"
   rm -rf "$WORK"
 }

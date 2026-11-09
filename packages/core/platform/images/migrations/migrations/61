@@ -18,9 +18,9 @@
 # in status.storedVersions. The old snapshot-controller ran without the
 # CSIVolumeGroupSnapshot gate, so no v1alpha1 object was ever acted on, and an
 # empty CRD is deleted here. A CRD that still holds objects is left alone and
-# recorded on the cozystack-version ConfigMap: deleting it would delete them,
-# and the upgrade of that one release fails with the storedVersions error until
-# they are removed by hand, without holding the rest of the platform.
+# recorded on the cozystack-version ConfigMap: deleting it would delete them.
+# It carries no Helm ownership metadata, so the chart leaves it out of the
+# release, which upgrades with that group snapshot API still at v1alpha1.
 #
 # The deleted CRDs are created again right away from the v1beta2 copies baked
 # into the image (see image-migrations in the platform Makefile), already
@@ -28,11 +28,12 @@
 # hook, so the linstor release, which renders its group snapshot gate and
 # VolumeGroupSnapshotClass only when the v1beta2 API is served, renders against
 # it even when it upgrades before snapshot-controller. When a CRD was kept, none
-# is created: the API stays v1alpha1 and linstor renders the gate off. Recovery
-# is by hand, and the warning spells it out: delete the objects, then the CRD,
-# which still lists v1alpha1 in storedVersions and would keep failing the
-# snapshot-controller upgrade; once snapshot-controller serves the three
-# v1beta2 kinds, force a linstor upgrade, since nothing renders it again.
+# is created here, the release creates the missing ones, and linstor renders
+# the gate off. Recovery is by hand, since nothing renders either release again
+# once the CRD is gone, and RECOVERY below spells it out: delete the objects and
+# the CRD, force a snapshot-controller upgrade so the chart creates it at
+# v1beta2, restart snapshot-controller, which sets up its group snapshot
+# watches only when it starts, then force a linstor upgrade.
 #
 # Only CRDs labelled by helm-controller as installed by
 # cozy-snapshot-controller/snapshot-controller are touched, so a cluster whose
@@ -64,6 +65,8 @@ SNAPSHOT_CRDS="volumesnapshotclasses volumesnapshotcontents volumesnapshots"
 GROUP_SNAPSHOT_CRDS="volumegroupsnapshotclasses volumegroupsnapshotcontents volumegroupsnapshots"
 
 GROUP_CRD_DIR="${GROUP_CRD_DIR:-/snapshot-controller-crds}"
+
+RECOVERY="once its objects are deleted, delete the CRD, run 'flux reconcile helmrelease --namespace $RELEASE_NS $RELEASE_NAME --force' so the chart creates it at v1beta2, 'kubectl rollout restart --namespace $RELEASE_NS deployment/snapshot-controller', then 'flux reconcile helmrelease --namespace cozy-linstor linstor --force' to enable group snapshots"
 
 LEFTOVERS=""
 CREATE=""
@@ -132,7 +135,7 @@ for plural in $GROUP_SNAPSHOT_CRDS; do
     # while v1alpha1 is still a stored version, so such a CRD is left to an
     # operator rather than adopted into an upgrade that cannot apply.
     if printf '%s' "$obj" | jq -e '.status.storedVersions // [] | index("v1alpha1")' >/dev/null; then
-      echo "WARN: CRD $crd serves v1beta2 but still stores v1alpha1; the snapshot-controller upgrade fails until its objects are migrated and storedVersions trimmed, and the linstor HelmRelease needs a forced upgrade after that to enable group snapshots" >&2
+      echo "WARN: CRD $crd serves v1beta2 but still stores v1alpha1; it stays out of $RELEASE_NS/$RELEASE_NAME and group snapshots stay off: $RECOVERY" >&2
       LEFTOVERS="${LEFTOVERS}${LEFTOVERS:+,}${crd}=stored-v1alpha1"
       continue
     fi
@@ -141,7 +144,7 @@ for plural in $GROUP_SNAPSHOT_CRDS; do
   fi
   count=$(kubectl get "$crd" --all-namespaces -o json | jq '.items | length')
   if [ "$count" -gt 0 ]; then
-    echo "WARN: CRD $crd still holds $count v1alpha1 object(s); the snapshot-controller upgrade fails until they and then the empty CRD are deleted (the CRD keeps v1alpha1 in storedVersions), after which snapshot-controller recreates it at v1beta2 and the linstor HelmRelease needs a forced upgrade to enable group snapshots" >&2
+    echo "WARN: CRD $crd still holds $count v1alpha1 object(s); it stays out of $RELEASE_NS/$RELEASE_NAME and group snapshots stay off: $RECOVERY" >&2
     LEFTOVERS="${LEFTOVERS}${LEFTOVERS:+,}${crd}=${count}"
     continue
   fi
