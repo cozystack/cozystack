@@ -32,8 +32,7 @@ func TestParseFlagsDefaults(t *testing.T) {
 	if o.authCacheTTL != 10*time.Second || o.logs.MaxTailResume != 15*time.Minute || o.logs.MaxRange != 7*24*time.Hour {
 		t.Errorf("limit defaults changed: %+v", o)
 	}
-	// Retention and store names of packages/system/monitoring/values.yaml;
-	// cost limits of the metrics proposal (Design 7).
+	// Retention and store names of packages/system/monitoring/values.yaml.
 	m := o.metrics
 	if m.ShortTermStore != "shortterm" || m.LongTermStore != "longterm" || m.ShortTermRetention != 72*time.Hour {
 		t.Errorf("metrics store defaults changed: %+v", m)
