@@ -551,6 +551,29 @@ func (r *BackupJobReconciler) reconcileCNPG(ctx context.Context, j *backupsv1alp
 		})
 		apimeta.RemoveStatusCondition(&j.Status.Conditions, "Ready")
 		rolledOut = true
+	} else if existingBackup == nil && attachment.attachedAt != "" {
+		// Another backup job attached the plugin. Its rollout can still be
+		// running while the attach is recent, and later than that the
+		// attaching job has failed it already. The record is that job's:
+		// one this job cannot read does not fail it, and neither does one
+		// further ahead than clocks drift, which every instance would
+		// predate for as long as it lies ahead.
+		recorded, _, err := cnpgRecordedAttach(attachment.attachedAt)
+		if err == nil && time.Until(recorded) > cnpgAttachClockSkewTolerance {
+			err = fmt.Errorf("%s is in the future", attachment.attachedAt)
+		}
+		if err != nil {
+			logger.Info("ignoring an unusable attach record another backup job left",
+				"cluster", clusterName, "annotation", cnpgPluginAttachedAtAnnotation, "error", err)
+		} else if time.Since(recorded) < cnpgDefaultBackupDeadline {
+			pending, err := r.cnpgPluginRolloutPending(ctx, j.Namespace, clusterName, attachment, metav1.NewTime(recorded))
+			if err != nil {
+				return ctrl.Result{}, err
+			}
+			if pending != "" {
+				return r.waitCNPGBackupJob(ctx, j, "WaitingForPluginRollout", pending)
+			}
+		}
 	}
 
 	// The chart refuses a flavor change on a live Cluster, but the app keeps

@@ -3180,6 +3180,50 @@ func TestReconcileCNPG_AttachRecordSlightlyAheadWaits(t *testing.T) {
 	}
 }
 
+// A job that attached nothing itself still finds the plugin another backup
+// job attached a moment ago, while CNPG rolls the instances for it; a Backup
+// created then fails for good. It waits for that rollout as long as the
+// attach is recent enough for it to be running, and an attach record it
+// cannot read is not its own to fail on.
+func TestReconcileCNPG_JobWithoutLatchWaitsForAnotherJobsRollout(t *testing.T) {
+	cases := []struct {
+		name       string
+		record     string
+		podCreated time.Time
+		wantBackup bool
+	}{
+		{name: "recent attach, instance not rolled yet", record: time.Now().Add(-5 * time.Minute).UTC().Format(time.RFC3339), podCreated: time.Now().Add(-10 * time.Minute), wantBackup: false},
+		{name: "recent attach, instance rolled", record: time.Now().Add(-5 * time.Minute).UTC().Format(time.RFC3339), podCreated: time.Now().Add(-time.Minute), wantBackup: true},
+		{name: "attach older than the rollout deadline", record: time.Now().Add(-2 * cnpgDefaultBackupDeadline).UTC().Format(time.RFC3339), podCreated: time.Now().Add(-3 * cnpgDefaultBackupDeadline), wantBackup: true},
+		{name: "unreadable record", record: "yesterday", podCreated: time.Now().Add(-time.Hour), wantBackup: true},
+		{name: "record further ahead than clocks drift", record: time.Now().Add(time.Hour).UTC().Format(time.RFC3339), podCreated: time.Now().Add(-time.Hour), wantBackup: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cluster := newRolloutCluster(cnpgClusterHealthyPhase, buildBarmanPlugin(rolloutCluster, rolloutCluster))
+			cluster.Annotations = map[string]string{cnpgPluginAttachedAtAnnotation: tc.record}
+			f := newCNPGRolloutFixture(t, newRolloutBackupJob(time.Now().Add(-time.Hour)), cluster,
+				newRolloutInstancePod(tc.podCreated.Truncate(time.Second)))
+
+			j, backups, res := f.passResult()
+			if j.Status.Phase == backupsv1alpha1.BackupJobPhaseFailed {
+				t.Fatalf("the job failed: %s", j.Status.Message)
+			}
+			if got := len(backups) == 1; got != tc.wantBackup {
+				t.Fatalf("cnpg.io/Backup created = %t, want %t; Ready = %+v", got, tc.wantBackup, apimeta.FindStatusCondition(j.Status.Conditions, "Ready"))
+			}
+			if !tc.wantBackup {
+				if res.RequeueAfter == 0 {
+					t.Errorf("a waiting job is not requeued: %+v", res)
+				}
+				if ready := apimeta.FindStatusCondition(j.Status.Conditions, "Ready"); ready == nil || ready.Reason != "WaitingForPluginRollout" {
+					t.Errorf("Ready = %+v, want WaitingForPluginRollout", ready)
+				}
+			}
+		})
+	}
+}
+
 // A plugin attached by someone else after the latch, another backup job or
 // the chart re-rendering a restored Cluster outside the platform flow,
 // started the rollout before this job's write, which only finds it there:
