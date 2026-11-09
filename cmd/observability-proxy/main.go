@@ -14,10 +14,9 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-// Command observability-proxy serves tenant logs (and, in later waves,
-// metrics) from the VictoriaLogs and VictoriaMetrics stores behind a
-// Kubernetes TokenReview and SubjectAccessReview, with the tenant's
-// namespace scope forced into every upstream request.
+// Command observability-proxy serves tenant logs from the VictoriaLogs
+// stores behind a Kubernetes TokenReview and SubjectAccessReview, with the
+// tenant's namespace scope forced into every upstream request.
 package main
 
 import (

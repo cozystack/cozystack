@@ -164,8 +164,8 @@ func writeError(w http.ResponseWriter, e *HTTPError) {
 	http.Error(w, e.Message, e.Code)
 }
 
-// serve answers an unimplemented root before authenticating, so later
-// waves only add a case here.
+// serve answers a root it has no handler for before authenticating, so an
+// unknown path costs no review calls.
 func (s *Server) serve(w http.ResponseWriter, r *http.Request, route Route) *HTTPError {
 	if route.Kind != NamespaceLogs {
 		return errorf(http.StatusNotFound, "not found")
