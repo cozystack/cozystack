@@ -19,6 +19,7 @@ package main
 import (
 	"maps"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -190,6 +191,113 @@ func TestTouchesRule(t *testing.T) {
 		// As pathspec magic, :(icase)... would match a file of that name in
 		// another case, and there is none.
 		{name: "a file named like pathspec magic declaring a CRD", files: map[string]string{":(icase)zz-crd.yaml": "kind: CustomResourceDefinition\n"}, want: "a CRD"},
+		{
+			name:  "a CRD's descriptions reworded at every depth",
+			setup: map[string]string{backupCRDPath: backupCRD},
+			files: map[string]string{backupCRDPath: editCRD(
+				"        description: Backup is a backup.\n", "        description: A Backup records one backup.\n",
+				"                description: Plan names the plan.\n", "                description: Plan names the plan this backup ran for.\n",
+				"                description: Size is the size of the artifact in bytes, if\n                  known.\n", "                description: |-\n                  Size is the stored size in bytes of the files this backup owns,\n                  if known.\n",
+				"                  description: A tag.\n", "                  description: One tag of the backup.\n",
+				"                  description: A label value.\n", "                  description: The value of one label.\n",
+				"                - description: A count of bytes.\n", "                - description: How many bytes.\n",
+			)},
+		},
+		{
+			name:  "a description added to a CRD field and another dropped",
+			setup: map[string]string{backupCRDPath: backupCRD},
+			files: map[string]string{backupCRDPath: editCRD(
+				"                description: Mode of the backup.\n", "",
+				"                    key:\n                      type: string\n", "                    key:\n                      description: Key of the tag.\n                      type: string\n",
+			)},
+		},
+		{
+			name:  "an optional property added to a CRD",
+			setup: map[string]string{backupCRDPath: backupCRD},
+			files: map[string]string{backupCRDPath: editCRD("            required:\n", "              zone:\n                description: Zone of the backup.\n                type: string\n            required:\n")},
+			want:  "a CRD",
+		},
+		{
+			name:  "a CRD field's type changed",
+			setup: map[string]string{backupCRDPath: backupCRD},
+			files: map[string]string{backupCRDPath: editCRD("                description: Plan names the plan.\n                type: string\n", "                description: Plan names the plan.\n                type: integer\n")},
+			want:  "a CRD",
+		},
+		{
+			name:  "an enum value added to a CRD",
+			setup: map[string]string{backupCRDPath: backupCRD},
+			files: map[string]string{backupCRDPath: editCRD("                - incremental\n", "                - incremental\n                - differential\n")},
+			want:  "a CRD",
+		},
+		{
+			name:  "a CRD field made required",
+			setup: map[string]string{backupCRDPath: backupCRD},
+			files: map[string]string{backupCRDPath: editCRD("            - plan\n", "            - mode\n            - plan\n")},
+			want:  "a CRD",
+		},
+		{
+			name:  "descriptions reworded and a format changed in one CRD",
+			setup: map[string]string{backupCRDPath: backupCRD},
+			files: map[string]string{backupCRDPath: editCRD(
+				"        description: Backup is a backup.\n", "        description: A Backup records one backup.\n",
+				"                format: int64\n", "                format: int32\n",
+			)},
+			want: "a CRD",
+		},
+		{
+			name:  "a CRD field named description changes type",
+			setup: map[string]string{backupCRDPath: backupCRD},
+			files: map[string]string{backupCRDPath: editCRD("                    maxLength: 9007199254740993\n                    type: string\n", "                    maxLength: 9007199254740993\n                    type: integer\n")},
+			want:  "a CRD",
+		},
+		{
+			name:  "a description inside a CRD default changed",
+			setup: map[string]string{backupCRDPath: backupCRD},
+			files: map[string]string{backupCRDPath: editCRD("                  description: kept\n", "                  description: dropped\n")},
+			want:  "a CRD",
+		},
+		{
+			name:  "a CRD printer column's description reworded",
+			setup: map[string]string{backupCRDPath: backupCRD},
+			files: map[string]string{backupCRDPath: editCRD("    - description: The phase the backup is in.\n", "    - description: The phase of the backup.\n")},
+			want:  "a CRD",
+		},
+		{
+			name:  "a CRD validation message reworded",
+			setup: map[string]string{backupCRDPath: backupCRD},
+			files: map[string]string{backupCRDPath: editCRD("                - message: must not be empty\n", "                - message: may not be empty\n")},
+			want:  "a CRD",
+		},
+		{
+			// The text drops the field with the description entries, so only the
+			// object can tell the two bounds apart.
+			name:  "a bound under a CRD field named description changed past float64's precision",
+			setup: map[string]string{backupCRDPath: backupCRD},
+			files: map[string]string{backupCRDPath: editCRD("                    maxLength: 9007199254740993\n", "                    maxLength: 9007199254740992\n")},
+			want:  "a CRD",
+		},
+		{
+			name:  "a comment added to a CRD",
+			setup: map[string]string{backupCRDPath: backupCRD},
+			files: map[string]string{backupCRDPath: editCRD("      openAPIV3Schema:\n", "      openAPIV3Schema:\n        # Generated; do not edit.\n")},
+			want:  "a CRD",
+		},
+		{
+			name:  "descriptions quoting a Go template reworded in a file a chart inserts with .Files.Get",
+			setup: map[string]string{backupCRDPath: goTemplateCRD("pattern")},
+			files: map[string]string{backupCRDPath: goTemplateCRD("example")},
+		},
+		{
+			name:  "descriptions quoting a Go template reworded under a chart's crds/",
+			setup: map[string]string{"packages/system/x/charts/x/crds/backups.yaml": goTemplateCRD("pattern")},
+			files: map[string]string{"packages/system/x/charts/x/crds/backups.yaml": goTemplateCRD("example")},
+		},
+		{
+			name:  "descriptions holding template actions reworded in a template Helm renders",
+			setup: map[string]string{"packages/system/x/templates/backups.yaml": goTemplateCRD("pattern")},
+			files: map[string]string{"packages/system/x/templates/backups.yaml": goTemplateCRD("example")},
+			want:  "a CRD",
+		},
 		{
 			name:  "a migration and a sizeable API change together",
 			setup: demoAPI,
@@ -448,6 +556,116 @@ func TestReadsAPI(t *testing.T) {
 func crdDoc(name, version string) string {
 	return "apiVersion: apiextensions.k8s.io/v1\nkind: CustomResourceDefinition\nmetadata:\n  name: " + name +
 		"\nspec:\n  group: x.io\n  versions:\n  - name: v1" + version + "\n"
+}
+
+const backupCRDPath = "packages/system/x/definitions/x.io_backups.yaml"
+
+// backupCRD is a CRD as controller-gen writes one, with schema descriptions
+// at every depth a schema nests them and the word description in the places
+// that are not one: a printer column, a default and a field's name.
+const backupCRD = `apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.16.4
+  name: backups.x.io
+spec:
+  group: x.io
+  names:
+    kind: Backup
+    plural: backups
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - description: The phase the backup is in.
+      jsonPath: .status.phase
+      name: Phase
+      type: string
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: Backup is a backup.
+        properties:
+          spec:
+            description: Spec of the backup.
+            properties:
+              labels:
+                additionalProperties:
+                  description: A label value.
+                  type: string
+                type: object
+              mode:
+                description: Mode of the backup.
+                enum:
+                - full
+                - incremental
+                type: string
+              note:
+                properties:
+                  description:
+                    maxLength: 9007199254740993
+                    type: string
+                type: object
+              plan:
+                description: Plan names the plan.
+                type: string
+              quota:
+                anyOf:
+                - description: A count of bytes.
+                  type: integer
+                - type: string
+                description: Quota of the backup.
+                x-kubernetes-int-or-string: true
+              retention:
+                default:
+                  description: kept
+                type: object
+                x-kubernetes-validations:
+                - message: must not be empty
+                  rule: self.size() > 0
+              size:
+                description: Size is the size of the artifact in bytes, if
+                  known.
+                format: int64
+                type: integer
+              tags:
+                items:
+                  description: A tag.
+                  properties:
+                    key:
+                      type: string
+                  type: object
+                type: array
+            required:
+            - plan
+            type: object
+        type: object
+    served: true
+    storage: true
+`
+
+// editCRD is backupCRD with each old text that pairs gives replaced by the new
+// one after it. An old text backupCRD does not hold exactly once is a broken
+// case, which would otherwise read as an unchanged CRD.
+func editCRD(pairs ...string) string {
+	s := backupCRD
+	for i := 0; i+1 < len(pairs); i += 2 {
+		if strings.Count(s, pairs[i]) != 1 {
+			panic("backupCRD does not hold exactly one " + strconv.Quote(pairs[i]))
+		}
+		s = strings.Replace(s, pairs[i], pairs[i+1], 1)
+	}
+	return s
+}
+
+// goTemplateCRD is backupCRD with descriptions that quote a Go template, the
+// way controller-gen copies one from a Go comment: in a literal block and in a
+// double-quoted scalar folded inside the braces.
+func goTemplateCRD(word string) string {
+	return editCRD(
+		"        description: Backup is a backup.\n", "        description: |-\n          Backup is a backup. Its Secret name is templated\n          (typical "+word+": \"{{ .Application.metadata.name }}-backup\").\n",
+		"                description: Plan names the plan.\n", "                description: \"Plan names the plan, with the variables:\\n- {{ .name\n                  }}: the name of the application ("+word+")\"\n",
+	)
 }
 
 func daemonSet(replicas string) string {
