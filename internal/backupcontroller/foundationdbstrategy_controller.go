@@ -494,11 +494,9 @@ func (r *BackupJobReconciler) ensureFoundationDBBackup(ctx context.Context, j *b
 		return nil, err
 	}
 
-	// The namespace prefix keeps same-named BackupJobs of different tenants
-	// apart when their strategies share a bucket.
 	blobName := rendered.BlobStoreConfiguration.BackupName
 	if blobName == "" {
-		blobName = j.Namespace + "/" + j.Name
+		blobName = foundationdbJobDirectory(j)
 	}
 
 	obj := &foundationdbtypes.FoundationDBBackup{
@@ -813,6 +811,13 @@ func podTemplateSpecMissingSecrets(tmpl *corev1.PodTemplateSpec) []string {
 	return out
 }
 
+// foundationdbJobDirectory is the blob-store directory the driver names for a
+// BackupJob when the strategy pins none. The namespace prefix keeps
+// same-named BackupJobs of different tenants apart in a shared bucket.
+func foundationdbJobDirectory(j *backupsv1alpha1.BackupJob) string {
+	return j.Namespace + "/" + j.Name
+}
+
 // findFoundationDBBackupForJob returns the FoundationDBBackup labelled
 // with the BackupJob's OwningJob{Name,Namespace}, if any. Returns
 // (nil, nil) when no match is found. Mirrors the MariaDB driver's
@@ -869,7 +874,10 @@ func (r *BackupJobReconciler) createFoundationDBBackupArtifact(
 		foundationdbBlobBackupNameKey:  fdbBackup.Spec.BlobStoreConfiguration.BackupName,
 		foundationdbAgentVersionKey:    fdbBackup.Spec.Version,
 	}
-	if rendered.BlobStoreConfiguration.BackupName == "" {
+	// Ownership follows the directory the CR writes, not the strategy as it
+	// renders now: a CR reused after an admin changed backupName keeps the
+	// directory it was created with.
+	if fdbBackup.Spec.BlobStoreConfiguration.BackupName == foundationdbJobDirectory(j) {
 		driverMD[foundationdbOwnsDirectoryKey] = "true"
 	}
 	if uri := foundationdbBackupURI(fdbBackup); uri != "" {

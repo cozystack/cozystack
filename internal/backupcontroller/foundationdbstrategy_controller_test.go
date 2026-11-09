@@ -2313,12 +2313,15 @@ func TestCreateFoundationDBBackupArtifact_RecordsDirectoryOwnership(t *testing.T
 	apps := foundationdbapp.GroupName
 	strategyAPIGroup := strategyv1alpha1.GroupVersion.Group
 	for _, tc := range []struct {
-		name       string
-		backupName string
-		wantOwned  bool
+		name         string
+		crBackupName string
+		rendered     string
+		wantOwned    bool
 	}{
-		{"driver-named directory is owned", "", true},
-		{"pinned directory is shared", "{{ .Application.metadata.name }}", false},
+		{"driver-named directory is owned", "tenant/bj-own", "", true},
+		{"pinned directory is shared", "fdb-src", "{{ .Application.metadata.name }}", false},
+		{"pin cleared after the CR was created keeps the shared directory", "fdb-src", "", false},
+		{"pin added after the CR was created keeps the job's own directory", "tenant/bj-own", "{{ .Application.metadata.name }}", true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			job := &backupsv1alpha1.BackupJob{
@@ -2333,11 +2336,14 @@ func TestCreateFoundationDBBackupArtifact_RecordsDirectoryOwnership(t *testing.T
 				StrategyRef: corev1.TypedLocalObjectReference{APIGroup: &strategyAPIGroup, Kind: strategyv1alpha1.FoundationDBStrategyKind, Name: "fdb-strategy"},
 			}
 			rendered := newRenderedFoundationDBTemplate()
-			rendered.BlobStoreConfiguration.BackupName = tc.backupName
+			rendered.BlobStoreConfiguration.BackupName = tc.rendered
 			fdbBackup := &foundationdbtypes.FoundationDBBackup{
 				ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "fdb-bk"},
-				Spec:       foundationdbtypes.FoundationDBBackupSpec{Version: "7.3.79"},
-				Status:     foundationdbtypes.FoundationDBBackupStatus{BackupDetails: &foundationdbtypes.BackupDetails{Running: true, Restorable: true}},
+				Spec: foundationdbtypes.FoundationDBBackupSpec{
+					Version:                "7.3.79",
+					BlobStoreConfiguration: foundationdbtypes.BlobStoreConfiguration{BackupName: tc.crBackupName},
+				},
+				Status: foundationdbtypes.FoundationDBBackupStatus{BackupDetails: &foundationdbtypes.BackupDetails{Running: true, Restorable: true}},
 			}
 			artifact, err := r.createFoundationDBBackupArtifact(context.Background(), job, resolved, fdbBackup, rendered, newFoundationDBApp("fdb-src", "tenant"))
 			if err != nil {
