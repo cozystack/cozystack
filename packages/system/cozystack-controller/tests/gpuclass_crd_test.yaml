@@ -1,0 +1,24 @@
+suite: GPUClass CRD
+templates:
+  - templates/crds/crds.yaml
+
+# The chart installs every file in definitions/, so a GPUClass type in
+# api/v1alpha1 ships with no template of its own.
+tests:
+  - it: installs the cluster-scoped GPUClass CRD in cozystack.io and keeps it on uninstall
+    documentSelector:
+      path: metadata.name
+      value: gpuclasses.cozystack.io
+    asserts:
+      - equal:
+          path: spec.group
+          value: cozystack.io
+      - equal:
+          path: spec.scope
+          value: Cluster
+      - equal:
+          path: metadata.annotations["helm.sh/resource-policy"]
+          value: keep
+      - equal:
+          path: spec.versions[0].served
+          value: true
