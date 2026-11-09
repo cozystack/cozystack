@@ -128,9 +128,7 @@ func queryLookback(query string, step time.Duration) (time.Duration, bool) {
 		if negative {
 			arg = strings.TrimLeft(arg[1:], " \t\n\r")
 		}
-		end := strings.IndexFunc(arg, func(r rune) bool {
-			return !(r >= '0' && r <= '9' || r >= 'a' && r <= 'z' || r == '.' || r == '_')
-		})
+		end := strings.IndexFunc(arg, func(r rune) bool { return !inDuration(r) })
 		if end < 0 {
 			end = len(arg)
 		}
@@ -156,7 +154,12 @@ func queryLookback(query string, step time.Duration) (time.Duration, bool) {
 // isKeyword reports whether lower[start:end] stands on its own rather than
 // inside an identifier.
 func isKeyword(lower string, start, end int) bool {
-	return !(start > 0 && continuesIdent(lower[start-1], false) || end < len(lower) && continuesIdent(lower[end], true))
+	return (start == 0 || !continuesIdent(lower[start-1], false)) &&
+		(end == len(lower) || !continuesIdent(lower[end], true))
+}
+
+func inDuration(r rune) bool {
+	return r >= '0' && r <= '9' || r >= 'a' && r <= 'z' || r == '.' || r == '_'
 }
 
 func hasKeyword(lower, word string) bool {
