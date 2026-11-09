@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"regexp"
 	"strconv"
+	"strings"
 )
 
 // openPullsCap is the page size of the open pull request listing. The REST
@@ -43,6 +44,7 @@ var (
 	batchBranchRE = regexp.MustCompile(`^backport-batch/(release-\d+\.\d+)-(\d{8})$`)
 	loginRE       = regexp.MustCompile(`^[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?$`)
 	botLoginRE    = regexp.MustCompile(`^[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?\[bot\]$`)
+	pullURLRE     = regexp.MustCompile(`^https://[^/\s]+/[^/\s]+/[^/\s]+/pull/[1-9][0-9]*$`)
 )
 
 // batchBotEnv names the GitHub App bot the scheduled batch opens its pull
@@ -107,7 +109,8 @@ type github interface {
 	permission(login string) (string, error)
 	// labelled lists the pull requests merged into main that carry label.
 	labelled(label string) ([]int, error)
-	createPull(base, head, title, bodyFile string) error
+	// createPull opens the draft and returns its URL.
+	createPull(base, head, title, bodyFile string) (string, error)
 	editPull(number int, title, bodyFile string) error
 	comments(number int) ([]issueComment, error)
 	createComment(number int, bodyFile string) error
@@ -175,9 +178,16 @@ func (ghCLI) labelled(label string) ([]int, error) {
 	return numbers, nil
 }
 
-func (ghCLI) createPull(base, head, title, bodyFile string) error {
-	_, err := capture("gh", "pr", "create", "--draft", "--base", base, "--head", head, "--title", title, "--body-file", bodyFile)
-	return err
+func (ghCLI) createPull(base, head, title, bodyFile string) (string, error) {
+	out, err := capture("gh", "pr", "create", "--draft", "--base", base, "--head", head, "--title", title, "--body-file", bodyFile)
+	if err != nil {
+		return "", err
+	}
+	url := strings.TrimSpace(out)
+	if !pullURLRE.MatchString(url) {
+		return "", fmt.Errorf("gh pr create printed %q, not the URL of a pull request", url)
+	}
+	return url, nil
 }
 
 func (ghCLI) editPull(number int, title, bodyFile string) error {

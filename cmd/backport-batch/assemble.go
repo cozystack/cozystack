@@ -517,9 +517,26 @@ func (a *app) publish(b *batch, branch, head, title, body string, rebuilt bool) 
 		return err
 	}
 	if b.pr == nil {
-		return a.gh.createPull(b.line.branch(), branch, title, f.Name())
+		url, err := a.gh.createPull(b.line.branch(), branch, title, f.Name())
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(a.stderr, "opened draft %s\n", url)
+		return nil
 	}
-	return a.gh.editPull(b.pr.Number, title, f.Name())
+	if err := a.gh.editPull(b.pr.Number, title, f.Name()); err != nil {
+		return err
+	}
+	fmt.Fprintf(a.stderr, "updated %s\n", pullURL(b.pr))
+	return nil
+}
+
+// pullURL is where a pull request is on GitHub.
+func pullURL(pr *pullRequest) string {
+	if pullURLRE.MatchString(pr.HTMLURL) {
+		return pr.HTMLURL
+	}
+	return fmt.Sprintf("%spull/%d", ourRepoURL, pr.Number)
 }
 
 // pushArgs pushes head to branch: as a fast-forward, which the remote checks,

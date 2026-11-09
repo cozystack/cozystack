@@ -309,9 +309,9 @@ func (g *fakeGH) openPulls(base string) ([]pullRequest, error) {
 	return out, g.err
 }
 
-func (g *fakeGH) createPull(base, head, title, bodyFile string) error {
+func (g *fakeGH) createPull(base, head, title, bodyFile string) (string, error) {
 	g.created = append(g.created, base+" "+head+" "+title)
-	return g.readBody(bodyFile)
+	return fmt.Sprintf("https://github.com/%s/pull/90", upstreamRepo), g.readBody(bodyFile)
 }
 
 func (g *fakeGH) editPull(number int, title, bodyFile string) error {
