@@ -158,8 +158,9 @@ func (s *Server) lookupNames(ctx context.Context, r *http.Request, store, label,
 		return nil, errorf(resp.StatusCode, "metrics store answered %s", resp.Status)
 	}
 	var body struct {
-		Status string   `json:"status"`
-		Data   []string `json:"data"`
+		Status    string   `json:"status"`
+		IsPartial bool     `json:"isPartial"`
+		Data      []string `json:"data"`
 	}
 	if err := json.NewDecoder(io.LimitReader(resp.Body, maxLookupBytes)).Decode(&body); err != nil {
 		return nil, err
@@ -170,7 +171,12 @@ func (s *Server) lookupNames(ctx context.Context, r *http.Request, store, label,
 	if len(body.Data) > limit {
 		// Over the cap before dropping empty values: the store cut the
 		// list at limit+1, so a shorter filtered list could hide names.
+		// A partial list over the cap settles it too.
 		return body.Data, nil
+	}
+	// A storage node that did not answer leaves names out of the list.
+	if body.IsPartial {
+		return nil, errorf(http.StatusBadGateway, "metrics store answered a partial %s list", label)
 	}
 	names := body.Data[:0]
 	for _, n := range body.Data {

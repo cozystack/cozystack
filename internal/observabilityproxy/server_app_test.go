@@ -516,6 +516,43 @@ func TestServerApplicationLookupStoreErrors(t *testing.T) {
 	}
 }
 
+// TestServerApplicationRefusesPartialLookup: vmselect answers a label
+// values lookup with isPartial when a vmstorage node is down, and a short
+// pod list would drop the missing pods' series without a word.
+func TestServerApplicationRefusesPartialLookup(t *testing.T) {
+	for _, label := range []string{"pod", "persistentvolumeclaim"} {
+		h := newPolicyHarness(t, Config{}, func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/api/v1/label/"+label+"/values" {
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = io.WriteString(w, `{"status":"success","isPartial":true,"data":["db-0"]}`)
+				return
+			}
+			appMetricsUpstream([]string{"p"}, nil, http.StatusOK)(w, r)
+		}, appPolicy, nil)
+		if got := h.status(http.MethodGet, appRoot+"db.main/metrics/api/v1/query?query=up", "good"); got != http.StatusBadGateway {
+			t.Errorf("partial %s lookup answered %d, want 502", label, got)
+		}
+		for _, req := range h.requests() {
+			if req.path == "/api/v1/query" {
+				t.Errorf("partial %s lookup still sent the query", label)
+			}
+		}
+	}
+	// A partial list already over the cap settles it: the full one is longer.
+	cfg := Config{Metrics: MetricsConfig{App: AppScopeLimits{Lookback: time.Hour, MaxPods: 1, MaxPVCs: 1}}}
+	h := newPolicyHarness(t, cfg, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/v1/label/pod/values" {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = io.WriteString(w, `{"status":"success","isPartial":true,"data":["db-0","db-1"]}`)
+			return
+		}
+		appMetricsUpstream([]string{"p"}, nil, http.StatusOK)(w, r)
+	}, appPolicy, nil)
+	if got := h.status(http.MethodGet, appRoot+"db.main/metrics/api/v1/query?query=up", "good"); got != http.StatusUnprocessableEntity {
+		t.Errorf("partial pod list over the cap answered %d, want 422", got)
+	}
+}
+
 // TestServerApplicationRefusesEveryAt: no @ form can be bounded, and the
 // answer says so rather than naming forms that would pass.
 func TestServerApplicationRefusesEveryAt(t *testing.T) {
