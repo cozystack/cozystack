@@ -93,6 +93,23 @@ describe("LogsView with the production query defaults", () => {
 
     expect(screen.getByText("ready to accept connections")).toBeInTheDocument()
   })
+
+  it("says it is loading, not that nothing matched, while a longer range replaces an empty one", async () => {
+    const { client } = clientWith((endpoint, params) => {
+      if (!endpoint.endsWith("query")) return defaultHandler(endpoint, params)
+      return Date.parse(params.get("start") ?? "") < Date.now() - 2 * 3600_000
+        ? new Promise(() => {})
+        : new Response("")
+    })
+    renderWithProductionDefaults(client, "tenant-range-a")
+    const frame = () => screen.getByRole("region", { name: "Log lines" })
+    expect(await within(frame()).findByText("No log lines for this range and filter.")).toBeInTheDocument()
+
+    await userEvent.click(screen.getByRole("button", { name: "24h" }))
+
+    await waitFor(() => expect(within(frame()).getByRole("status")).toHaveAttribute("aria-busy", "true"))
+    expect(within(frame()).queryByText("No log lines for this range and filter.")).toBeNull()
+  })
 })
 
 describe("LogsView", () => {

@@ -168,7 +168,7 @@ function ScopedLogsView({ root }: { root: string }) {
         // Previous results stay as placeholder data while a new query loads, so only a new key resets the scroll pin.
         key={followRun ?? `history\n${query}\n${range}`}
         entries={entries}
-        placeholder={placeholderFor({ follow, stopped: tail.state === "stopped", loading: history.isLoading, failed: Boolean(error), longestRange: range === LONGEST_RANGE, retry: () => void history.refetch() })}
+        placeholder={placeholderFor({ follow, stopped: tail.state === "stopped", loading: history.isLoading || (history.isPlaceholderData && history.isFetching), failed: Boolean(error), longestRange: range === LONGEST_RANGE, retry: () => void history.refetch() })}
       />
     </div>
   )
