@@ -121,7 +121,7 @@ export function useConsoleSidebarSections(): SidebarSection[] {
 
     const observabilitySection: SidebarSection = {
       title: "Observability",
-      items: [{ label: "Logs", to: "/console/observability/logs", icon: ScrollText }],
+      items: [{ label: "Logs", to: "/console/-/observability/logs", icon: ScrollText }],
     }
 
     return [...categorySections, backupsSection, migrationSection, observabilitySection]

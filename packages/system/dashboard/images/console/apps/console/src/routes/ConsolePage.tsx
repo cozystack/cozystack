@@ -97,7 +97,7 @@ export function ConsolePage() {
         path="migration/vmimporttasks/:name"
         element={<MigrationTaskDetailPage />}
       />
-      <Route path="observability/logs" element={<LogsPage />} />
+      <Route path="-/observability/logs" element={<LogsPage />} />
       <Route path="new/:appName" element={<ApplicationOrderPage />} />
       <Route path=":plural/:name/edit" element={<ApplicationEditRoute />} />
       <Route path=":plural/:name/*" element={<ApplicationDetailPage />} />

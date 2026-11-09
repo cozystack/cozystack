@@ -71,12 +71,12 @@ describe("ConsolePage routing", () => {
     expect(screen.queryByText(/Cluster-scoped capacity/i)).toBeNull()
   })
 
-  it("serves the tenant logs page under observability/", async () => {
+  it("serves the tenant logs page under the reserved -/ segment", async () => {
     renderWithK8sProvider(
       <TenantProvider>
         <ConsolePage />
       </TenantProvider>,
-      { client: makeClient(), initialRoute: "/observability/logs" },
+      { client: makeClient(), initialRoute: "/-/observability/logs" },
     )
 
     expect(await screen.findByText(/^Every application in/)).toBeInTheDocument()
@@ -92,6 +92,20 @@ describe("ConsolePage routing", () => {
     )
 
     await waitFor(() => expect(client.list).toHaveBeenCalled())
+    expect(screen.queryByText(/^Every application in/)).toBeNull()
+  })
+
+  // No ApplicationDefinition plural or application name can be "-", so only
+  // routes under it are safe from shadowing an application's own pages.
+  it("leaves /observability/logs to an application named logs of kind observability", async () => {
+    renderWithK8sProvider(
+      <TenantProvider>
+        <ConsolePage />
+      </TenantProvider>,
+      { client: makeClient(), initialRoute: "/observability/logs" },
+    )
+
+    expect(await screen.findByText("Loading…")).toBeInTheDocument()
     expect(screen.queryByText(/^Every application in/)).toBeNull()
   })
 })
