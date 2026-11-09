@@ -18,6 +18,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -491,7 +492,7 @@ func (r *BackupJobReconciler) ensureAltinityJob(
 	existing := &batchv1.Job{}
 	err := r.Get(ctx, types.NamespacedName{Namespace: namespace, Name: name}, existing)
 	if err == nil {
-		return existing, r.checkAltinityJobController(existing, owner)
+		return existing, checkAltinityJobController(r.Scheme, existing, owner)
 	}
 	if !apierrors.IsNotFound(err) {
 		return nil, err
@@ -510,26 +511,27 @@ func (r *BackupJobReconciler) ensureAltinityJob(
 			if err := r.Get(ctx, types.NamespacedName{Namespace: namespace, Name: name}, existing); err != nil {
 				return nil, err
 			}
-			return existing, r.checkAltinityJobController(existing, owner)
+			return existing, checkAltinityJobController(r.Scheme, existing, owner)
 		}
 		return nil, err
 	}
 	return desired, nil
 }
 
-// errAltinityPredecessorJob marks a backup Job left under the Job name by an
-// earlier BackupJob of the same name. Its owner is gone, so the garbage
-// collector removes it, and the BackupJob waits for that instead of failing.
+// errAltinityPredecessorJob marks a Job left under the Job name by an earlier
+// BackupJob or RestoreJob of the same name. Its owner is gone, so the garbage
+// collector removes it, and the new owner waits for that instead of failing.
 var errAltinityPredecessorJob = errors.New("waiting for the garbage collector to remove a Job of an earlier owner of the same name")
 
 // checkAltinityJobController refuses a Job under owner's Job name that owner
-// does not control. A BackupJob re-created under a used name meets the Job of
-// the earlier one, and that Job's completion says nothing about this run.
-func (r *BackupJobReconciler) checkAltinityJobController(job *batchv1.Job, owner client.Object) error {
+// does not control. A BackupJob or RestoreJob re-created under a used name
+// meets the Job of the earlier one, and that Job's completion says nothing
+// about this run.
+func checkAltinityJobController(scheme *runtime.Scheme, job *batchv1.Job, owner client.Object) error {
 	if metav1.IsControlledBy(job, owner) {
 		return nil
 	}
-	gvk, err := apiutil.GVKForObject(owner, r.Scheme)
+	gvk, err := apiutil.GVKForObject(owner, scheme)
 	if err != nil {
 		return err
 	}
@@ -557,7 +559,7 @@ func (r *RestoreJobReconciler) ensureAltinityRestoreJob(
 	existing := &batchv1.Job{}
 	err := r.Get(ctx, types.NamespacedName{Namespace: namespace, Name: name}, existing)
 	if err == nil {
-		return existing, nil
+		return existing, checkAltinityJobController(r.Scheme, existing, owner)
 	}
 	if !apierrors.IsNotFound(err) {
 		return nil, err
@@ -575,7 +577,7 @@ func (r *RestoreJobReconciler) ensureAltinityRestoreJob(
 			if err := r.Get(ctx, types.NamespacedName{Namespace: namespace, Name: name}, existing); err != nil {
 				return nil, err
 			}
-			return existing, nil
+			return existing, checkAltinityJobController(r.Scheme, existing, owner)
 		}
 		return nil, err
 	}
@@ -890,6 +892,18 @@ func (r *RestoreJobReconciler) reconcileAltinityRestore(ctx context.Context, res
 		},
 		rendered,
 	)
+	if errors.Is(err, errAltinityPredecessorJob) {
+		apimeta.SetStatusCondition(&restoreJob.Status.Conditions, metav1.Condition{
+			Type:    "Ready",
+			Status:  metav1.ConditionFalse,
+			Reason:  "PredecessorJobPending",
+			Message: err.Error(),
+		})
+		if uerr := r.Status().Update(ctx, restoreJob); uerr != nil {
+			return ctrl.Result{}, uerr
+		}
+		return ctrl.Result{RequeueAfter: altinityPollInterval}, nil
+	}
 	if err != nil {
 		return r.markRestoreJobFailed(ctx, restoreJob, fmt.Sprintf("failed to ensure batch/v1.Job: %v", err))
 	}
