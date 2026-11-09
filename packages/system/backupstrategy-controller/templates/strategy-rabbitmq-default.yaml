@@ -26,6 +26,8 @@ apiVersion: strategy.backups.cozystack.io/v1alpha1
 kind: Rabbitmq
 metadata:
   name: cozy-default-rabbitmq
+  annotations:
+    backups.cozystack.io/endpoint: {{ include "backupstrategy-controller.endpoint" . | quote }}
 spec:
   # The driver defers the run until the RabbitmqCluster reports AllReplicasReady
   # (a Go-side precondition), so a not-yet-ready broker surfaces a precise
