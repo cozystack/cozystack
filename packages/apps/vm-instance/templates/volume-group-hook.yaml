@@ -147,28 +147,35 @@ spec:
                  replaced, and this VM's label removed, by a JSON patch that tests
                  the value it expects first, so the API server refuses the change,
                  instead of taking the claim over or dropping its new group, if
-                 another VM has grouped the claim since the render. */}}
+                 another VM has grouped the claim since the render. A refused
+                 change is accepted when the claim already carries the value
+                 this VM wanted, which is what a retried Pod finds for every
+                 change its predecessor made. */}}
           args:
             - |
               claim() {
-                verb=$1
-                shift
-                if ! out=$(kubectl "$verb" persistentvolumeclaims "$@" -n {{ $namespace }} 2>&1); then
+                want=$1 verb=$2 name=$3
+                shift 3
+                if ! out=$(kubectl "$verb" persistentvolumeclaims "$name" "$@" -n {{ $namespace }} 2>&1); then
                   case "$out" in
-                    *"(NotFound)"*) echo "$out" ;;
-                    *) echo "$out" >&2; return 1 ;;
+                    *"(NotFound)"*) echo "$out"; return 0 ;;
                   esac
+                  have=$(kubectl get persistentvolumeclaims "$name" -n {{ $namespace }} -o jsonpath='{.metadata.labels.{{ $groupKey | replace "." "\\." }}}')
+                  if [ "$have" != "$want" ]; then
+                    echo "$out" >&2
+                    return 1
+                  fi
                 fi
               }
               {{- range $toLabel }}
               {{- if has . $emptyLabel }}
-              claim patch {{ . }} --type=json -p '{{ list (dict "op" "test" "path" $path "value" "") (dict "op" "replace" "path" $path "value" $vmName) | toJson }}'
+              claim {{ $vmName }} patch {{ . }} --type=json -p '{{ list (dict "op" "test" "path" $path "value" "") (dict "op" "replace" "path" $path "value" $vmName) | toJson }}'
               {{- else }}
-              claim label {{ . }} {{ $groupKey }}={{ $vmName }}
+              claim {{ $vmName }} label {{ . }} {{ $groupKey }}={{ $vmName }}
               {{- end }}
               {{- end }}
               {{- range $toUnlabel }}
-              claim patch {{ . }} --type=json -p '{{ list (dict "op" "test" "path" $path "value" $vmName) (dict "op" "remove" "path" $path) | toJson }}'
+              claim "" patch {{ . }} --type=json -p '{{ list (dict "op" "test" "path" $path "value" $vmName) (dict "op" "remove" "path" $path) | toJson }}'
               {{- end }}
 ---
 apiVersion: v1
