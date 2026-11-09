@@ -251,6 +251,46 @@ type fakeGH struct {
 	issueComments []issueComment
 	// bot is what BACKPORT_BATCH_BOT would say.
 	bot string
+	// listed counts the pages of recentPulls read.
+	listed int
+	// closedWrites names every write the tool attempted on a pull request
+	// that is no longer open; exec fails the test on one.
+	closedWrites []string
+}
+
+// isOpen says whether the fake has pull request n open, or does not know it.
+func (g *fakeGH) isOpen(n int) bool {
+	for _, pr := range g.prs {
+		if pr.Number == n {
+			return pr.State == "" || pr.State == "open"
+		}
+	}
+	return true
+}
+
+// write refuses a write to a pull request that is no longer open, which the
+// tool must never attempt.
+func (g *fakeGH) write(n int, what string) error {
+	if g.isOpen(n) {
+		return nil
+	}
+	g.closedWrites = append(g.closedWrites, fmt.Sprintf("%s on #%d", what, n))
+	return fmt.Errorf("#%d is closed", n)
+}
+
+// recentPulls pages every pull request against base, newest first, as the
+// REST listing sorted by creation does; a higher number is a newer one.
+func (g *fakeGH) recentPulls(base string, page int) ([]pullRequest, error) {
+	g.listed++
+	var all []pullRequest
+	for _, pr := range g.prs {
+		if pr.Base.Ref == base {
+			all = append(all, pr)
+		}
+	}
+	slices.SortFunc(all, func(a, b pullRequest) int { return b.Number - a.Number })
+	from := min(len(all), (page-1)*recentPullsPage)
+	return slices.Clone(all[from:min(len(all), from+recentPullsPage)]), g.err
 }
 
 func (g *fakeGH) batchBot() string { return g.bot }
@@ -260,6 +300,9 @@ func (g *fakeGH) comments(int) ([]issueComment, error) {
 }
 
 func (g *fakeGH) createComment(number int, bodyFile string) error {
+	if err := g.write(number, "a comment"); err != nil {
+		return err
+	}
 	data, err := os.ReadFile(bodyFile)
 	var c issueComment
 	c.ID, c.Body = int64(1000+len(g.issueComments)), string(data)
@@ -302,7 +345,7 @@ func (g *fakeGH) permission(login string) (string, error) {
 func (g *fakeGH) openPulls(base string) ([]pullRequest, error) {
 	var out []pullRequest
 	for _, pr := range g.prs {
-		if pr.Base.Ref == base {
+		if pr.Base.Ref == base && (pr.State == "" || pr.State == "open") {
 			out = append(out, pr)
 		}
 	}
@@ -315,6 +358,9 @@ func (g *fakeGH) createPull(base, head, title, bodyFile string) (string, error) 
 }
 
 func (g *fakeGH) editPull(number int, title, bodyFile string) error {
+	if err := g.write(number, "an edit"); err != nil {
+		return err
+	}
 	g.edited = append(g.edited, fmt.Sprintf("#%d %s", number, title))
 	return g.readBody(bodyFile)
 }
@@ -338,10 +384,40 @@ func (f *fixture) batchPR(n int, base, branch, body string) pullRequest {
 		FullName string `json:"full_name"`
 	}{upstreamRepo}
 	pr.Base.Ref, pr.Base.Repo.FullName = base, upstreamRepo
+	pr.State = "open"
 	return pr
 }
 
-// exec runs the tool in the fixture with gh faked, on the fixture's date.
+// botBatchPR is batchPR opened by the bot the scheduled batch runs as.
+func (f *fixture) botBatchPR(gh *fakeGH, n int, base, branch, body string) pullRequest {
+	f.t.Helper()
+	gh.bot = defaultBatchBot
+	pr := f.batchPR(n, base, branch, body)
+	pr.User.Login, pr.User.Type, pr.AuthorAssociation = defaultBatchBot, "Bot", "CONTRIBUTOR"
+	return pr
+}
+
+// mergeBatch merges the open batch into release-1.1 with a merge commit, as
+// GitHub does, and deletes its branch, as the repository's
+// delete_branch_on_merge does. The pull request stays, merged, with its body
+// and comments.
+func mergeBatch(f *fixture, gh *fakeGH) {
+	f.t.Helper()
+	f.git("fetch", "-q", "origin")
+	f.git("switch", "-q", "--detach", "origin/release-1.1")
+	f.git("merge", "-q", "--no-ff", "-m", "Merge pull request #90 from cozystack/"+batchBranch1, "origin/"+batchBranch1)
+	f.git("push", "-q", "origin", "HEAD:refs/heads/release-1.1", ":refs/heads/"+batchBranch1)
+	f.git("switch", "-q", "main")
+	for i := range gh.prs {
+		if gh.prs[i].Number == 90 {
+			at := "2026-10-26T12:00:00Z"
+			gh.prs[i].State, gh.prs[i].MergedAt = "closed", &at
+		}
+	}
+}
+
+// exec runs the tool in the fixture with gh faked, on the fixture's date, and
+// fails the test when the tool wrote to a pull request that is not open.
 func (f *fixture) exec(gh *fakeGH, args ...string) (int, string, string) {
 	f.t.Helper()
 	if gh == nil {
@@ -349,7 +425,11 @@ func (f *fixture) exec(gh *fakeGH, args ...string) (int, string, string) {
 	}
 	var stdout, stderr bytes.Buffer
 	a := &app{gh: gh, stdout: &stdout, stderr: &stderr, now: func() time.Time { return f.now }}
+	written := len(gh.closedWrites)
 	code := a.main(args)
+	if len(gh.closedWrites) > written {
+		f.t.Errorf("%v wrote to a pull request that is not open: %q", args, gh.closedWrites[written:])
+	}
 	return code, stdout.String(), stderr.String()
 }
 

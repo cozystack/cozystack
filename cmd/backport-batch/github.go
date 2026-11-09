@@ -28,6 +28,14 @@ import (
 // listing stops at it in silence, so a full page is an error, not an answer.
 const openPullsCap = 100
 
+// recentPullsPage is the page size of the listing of every pull request
+// against a line, newest first, and recentPullsPages how many pages of it a
+// search for the line's record reads.
+const (
+	recentPullsPage  = 100
+	recentPullsPages = 10
+)
+
 // searchResultCap is the most results GitHub search returns for one query,
 // however far it is paginated. gh pr list answers a --label filter through
 // search, so a listing that long has to be taken as cut short.
@@ -68,10 +76,12 @@ func batchBotLogin(lookup func(string) (string, bool)) string {
 // pullRequest is the REST view of a pull request: unlike gh pr list, it
 // carries the author's association with the repository.
 type pullRequest struct {
-	Number            int    `json:"number"`
-	HTMLURL           string `json:"html_url"`
-	Body              string `json:"body"`
-	AuthorAssociation string `json:"author_association"`
+	Number            int     `json:"number"`
+	HTMLURL           string  `json:"html_url"`
+	Body              string  `json:"body"`
+	State             string  `json:"state"`
+	MergedAt          *string `json:"merged_at"`
+	AuthorAssociation string  `json:"author_association"`
 	User              struct {
 		Login string `json:"login"`
 		Type  string `json:"type"`
@@ -104,6 +114,9 @@ type issueComment struct {
 // github is the part of GitHub the tool talks to: gh outside tests.
 type github interface {
 	openPulls(base string) ([]pullRequest, error)
+	// recentPulls is one page of every pull request against base, open,
+	// merged or closed, newest first.
+	recentPulls(base string, page int) ([]pullRequest, error)
 	// permission is login's permission on the repository as GitHub's
 	// legacy field gives it: admin, write, read or none.
 	permission(login string) (string, error)
@@ -137,6 +150,38 @@ func (ghCLI) openPulls(base string) ([]pullRequest, error) {
 		return nil, fmt.Errorf("the open pull requests on %s fill a page of %d, so the list may be truncated", base, openPullsCap)
 	}
 	return prs, nil
+}
+
+func (ghCLI) recentPulls(base string, page int) ([]pullRequest, error) {
+	out, err := capture("gh", "api", "-X", "GET", "repos/{owner}/{repo}/pulls",
+		"-f", "state=all", "-f", "base="+base, "-f", "sort=created", "-f", "direction=desc",
+		"-f", "per_page="+strconv.Itoa(recentPullsPage), "-f", "page="+strconv.Itoa(page))
+	if err != nil {
+		return nil, err
+	}
+	var prs []pullRequest
+	if err := json.Unmarshal([]byte(out), &prs); err != nil {
+		return nil, fmt.Errorf("reading the pull requests against %s: %w", base, err)
+	}
+	return prs, nil
+}
+
+// permCache asks GitHub for a login's permission once per command: the open
+// batch's author is asked when it is chosen and again when its record is.
+type permCache struct {
+	github
+	perms map[string]string
+}
+
+func (c *permCache) permission(login string) (string, error) {
+	if p, ok := c.perms[login]; ok {
+		return p, nil
+	}
+	p, err := c.github.permission(login)
+	if err == nil {
+		c.perms[login] = p
+	}
+	return p, err
 }
 
 func (ghCLI) permission(login string) (string, error) {

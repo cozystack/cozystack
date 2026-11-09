@@ -114,15 +114,23 @@ type disposition struct {
 // of its own; the others pass in silence. The text is what follows the line's
 // name, or the original alone for one that is missing.
 func (b *batch) dispositions(cut bool) (map[*verdict]disposition, error) {
-	deferred := map[int]deferredEntry{}
+	if c := b.src.closingOpen(); c != nil {
+		return nil, fmt.Errorf("batch pull request #%d is being closed; backport-batch run --line %s --push finishes it", c.PR, b.line.branch())
+	}
 	var stale []*verdict
 	if b.pr != nil {
 		var err error
-		if deferred, err = parseDeferred(b.pr.Body, b.line); err != nil {
-			return nil, fmt.Errorf("batch pull request #%d: %w", b.pr.Number, err)
-		}
 		if stale, err = keptOut(b, b.picks); err != nil {
 			return nil, err
+		}
+	}
+	// A record a closed batch left still says what a maintainer decided, but
+	// nothing waits on a batch that is gone.
+	deferred, on := b.src.rec.deferred(), ""
+	if c := b.src.carrier; c != nil {
+		on = fmt.Sprintf("#%d", c.Number)
+		if !b.src.open {
+			on += " (" + prState(c) + ")"
 		}
 	}
 	out := map[*verdict]disposition{}
@@ -137,14 +145,16 @@ func (b *batch) dispositions(cut bool) (map[*verdict]disposition, error) {
 			if cut {
 				out[v] = disposition{outcomeUnmerged, fmt.Sprintf("#%d is only on open batch PR #%d, merge it before the cut: %s", v.o.number, b.pr.Number, named)}
 			}
+		case isDeferred && e.Workflows && !b.src.open:
+			out[v] = disposition{outcomeMissing, named}
 		case isDeferred && e.Workflows && cut:
-			out[v] = disposition{outcomeWaiting, fmt.Sprintf("#%d changes %s and waits on batch PR #%d for a maintainer, bring it over or defer it before the cut: %s", v.o.number, workflowsDir, b.pr.Number, named)}
+			out[v] = disposition{outcomeWaiting, fmt.Sprintf("#%d changes %s and waits on batch PR %s for a maintainer, bring it over or defer it before the cut: %s", v.o.number, workflowsDir, on, named)}
 		case isDeferred && e.Workflows:
-			out[v] = disposition{outcomeWarning, fmt.Sprintf("waiting on #%d for a maintainer, since it changes %s: %s", b.pr.Number, workflowsDir, named)}
+			out[v] = disposition{outcomeWarning, fmt.Sprintf("waiting on %s for a maintainer, since it changes %s: %s", on, workflowsDir, named)}
 		case isDeferred && e.Reason != "":
-			out[v] = disposition{outcomeWarning, fmt.Sprintf("deferred on #%d to the next batch: %s (%s)", b.pr.Number, named, terminalSafe(e.Reason))}
+			out[v] = disposition{outcomeWarning, fmt.Sprintf("deferred on %s to the next batch: %s (%s)", on, named, terminalSafe(e.Reason))}
 		case isDeferred:
-			out[v] = disposition{outcomeWarning, fmt.Sprintf("deferred conflict on #%d: %s", b.pr.Number, named)}
+			out[v] = disposition{outcomeWarning, fmt.Sprintf("deferred conflict on %s: %s", on, named)}
 		default:
 			out[v] = disposition{outcomeMissing, named}
 		}
@@ -182,6 +192,9 @@ func (a *app) fold(args []string) int {
 	b, err := a.prepare(l)
 	if err != nil {
 		return a.fail(err)
+	}
+	if c := b.src.closingOpen(); c != nil {
+		return a.fail(fmt.Errorf("batch pull request #%d is being closed; backport-batch run --line %s --push finishes it", c.PR, l.branch()))
 	}
 	why, err := refuseFold(b, *number, *commit)
 	if err != nil {

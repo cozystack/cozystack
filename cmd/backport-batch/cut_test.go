@@ -62,3 +62,57 @@ func TestCutFailsWhenOnlyAWorkflowWaitIsLeft(t *testing.T) {
 		})
 	}
 }
+
+// A conflict the batch deferred is still deferred once that batch merged:
+// the next run picks nothing, opens nothing and writes nothing to the merged
+// pull request, and check reads the merged batch's record.
+func TestCheckAfterTheBatchMerged(t *testing.T) {
+	f := newFixture(t)
+	f.lines()
+	f.onLine("release-1.1", "fix(app): a line-only five", map[string]string{"app/five.txt": "line\n"})
+	f.pr(5, "fix(app): five", "", map[string]string{"app/five.txt": "5\n"})
+	f.pr(6, "fix(app): six", "", map[string]string{"app/six.txt": "6\n"})
+	gh := &fakeGH{}
+	openBatch(t, f, gh)
+	mergeBatch(f, gh)
+	written := len(gh.created) + len(gh.edited) + len(gh.issueComments)
+	if code, _, stderr := f.exec(gh, "run", "--line", "release-1.1", "--continue", "--push"); code != 0 {
+		t.Fatalf("run --continue --push = %d\n%s", code, stderr)
+	}
+	f.git("switch", "-q", "main")
+	if got := len(gh.created) + len(gh.edited) + len(gh.issueComments); got != written || f.remoteHead(batchBranch1) != "" {
+		t.Errorf("the run picked nothing and still wrote: created %q, edited %q", gh.created, gh.edited)
+	}
+	for _, cut := range []bool{false, true} {
+		args := []string{"check", "--line", "release-1.1"}
+		if cut {
+			args = append(args, "--cut")
+		}
+		code, stdout, stderr := f.exec(gh, args...)
+		if code != 0 || !strings.Contains(stderr, "warning: deferred conflict on #90 (merged): https://github.com/cozystack/cozystack/pull/5 ") {
+			t.Errorf("%q = %d, want 0 with #5 a deferred conflict:\nstdout:\n%s\nstderr:\n%s", args, code, stdout, stderr)
+		}
+	}
+}
+
+// A workflow original waits only while a batch is open to list it: once the
+// batch that listed it merged, it is missing.
+func TestWorkflowWaitAfterTheBatchMergedIsMissing(t *testing.T) {
+	f := workflowWorld(t)
+	gh := &fakeGH{}
+	if code, _, stderr := f.exec(gh, "run", "--line", "release-1.1", "--no-workflow-files", "--push"); code != 0 {
+		t.Fatalf("run --push = %d\n%s", code, stderr)
+	}
+	f.git("switch", "-q", "main")
+	reopen(f, gh)
+	mergeBatch(f, gh)
+	for _, cut := range []bool{false, true} {
+		args := []string{"check", "--line", "release-1.1"}
+		if cut {
+			args = append(args, "--cut")
+		}
+		if code, stdout, stderr := f.exec(gh, args...); code != 1 || !strings.Contains(stdout, "/pull/5 ") {
+			t.Errorf("%q = %d, want 1 with #5 missing:\nstdout:\n%s\nstderr:\n%s", args, code, stdout, stderr)
+		}
+	}
+}

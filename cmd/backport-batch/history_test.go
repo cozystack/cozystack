@@ -202,6 +202,9 @@ func TestCarriedByTheBatch(t *testing.T) {
 		{name: "the batch's bot", edit: func(pr *pullRequest, gh *fakeGH) {
 			gh.bot = "cozystack-ci[bot]"
 			pr.User.Login, pr.User.Type, pr.AuthorAssociation = "cozystack-ci[bot]", "Bot", "CONTRIBUTOR"
+			// The bot writes the record into every body it opens.
+			l, _ := parseLine("release-1.1")
+			pr.Body = deferredBlock(l, nil, nil, nil)
 		}, carried: true, notAsked: true},
 		{name: "the batch's bot when no bot is configured", edit: func(pr *pullRequest, _ *fakeGH) {
 			pr.User.Login, pr.User.Type = "cozystack-ci[bot]", "Bot"

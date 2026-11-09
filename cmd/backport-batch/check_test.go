@@ -141,11 +141,21 @@ func TestCheck(t *testing.T) {
 		{
 			name: "a batch opened by a member with read access claims nothing",
 			arrange: func(s *state) {
-				batch(s, "body\n\n"+deferred6+"\n", s.mc5)
+				batch(s, "body\n\n", s.mc5)
 				s.gh.perms = map[string]string{"maintainer": "read"}
 			},
 			code:   1,
 			listed: []string{"/pull/5 ", "/pull/6 "},
+		},
+		{
+			// An older record is never taken in place of a newer one nobody
+			// can vouch for.
+			name: "a record by a member with read access stops it",
+			arrange: func(s *state) {
+				batch(s, "body\n\n"+deferred6+"\n", s.mc5)
+				s.gh.perms = map[string]string{"maintainer": "read"}
+			},
+			code: 2,
 		},
 		{
 			name:    "a deferred list for another line",

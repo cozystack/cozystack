@@ -59,9 +59,9 @@ func (a *app) rebuild(b *batch, numbers []int, reason string, push bool) int {
 	if err != nil {
 		return a.fail(err)
 	}
-	recorded, err := parseDeferred(b.pr.Body, b.line)
-	if err != nil {
-		return a.fail(fmt.Errorf("batch pull request #%d: %w", b.pr.Number, err))
+	recorded := map[int]deferredEntry{}
+	if b.src.open {
+		recorded = b.src.rec.deferred()
 	}
 	hold := map[int]string{}
 	for n, e := range recorded {

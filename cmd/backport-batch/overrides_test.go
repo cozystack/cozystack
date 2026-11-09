@@ -196,6 +196,13 @@ func TestGHCLI(t *testing.T) {
 	if want := "api -X GET repos/{owner}/{repo}/pulls -f state=open -f base=release-1.6 -f per_page=100"; called() != want {
 		t.Errorf("gh %q, want gh %q", called(), want)
 	}
+	write("[]")
+	if _, err := (ghCLI{}).recentPulls("release-1.6", 2); err != nil {
+		t.Fatal(err)
+	}
+	if want := "api -X GET repos/{owner}/{repo}/pulls -f state=all -f base=release-1.6 -f sort=created -f direction=desc -f per_page=100 -f page=2"; called() != want {
+		t.Errorf("gh %q, want gh %q", called(), want)
+	}
 	var page []string
 	for i := range openPullsCap {
 		page = append(page, fmt.Sprintf(`{"number":%d}`, i+1))

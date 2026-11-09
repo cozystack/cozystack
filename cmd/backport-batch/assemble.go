@@ -147,10 +147,8 @@ func (a *app) run(args []string) int {
 	// Continuing the open batch keeps out what was deferred from it by hand;
 	// a new batch tries those again.
 	held := map[int]deferredEntry{}
-	if carried != nil && b.pr != nil && b.pr.Head.Ref == branch {
-		if held, err = parseDeferred(b.pr.Body, l); err != nil {
-			return a.fail(fmt.Errorf("batch pull request #%d: %w", b.pr.Number, err))
-		}
+	if carried != nil && b.src.open && b.pr.Head.Ref == branch {
+		held = b.src.rec.deferred()
 	}
 	if err := a.warnReset(branch, start); err != nil {
 		return a.fail(err)
@@ -292,8 +290,10 @@ func (a *app) finish(b *batch, r *report, branch string, date time.Time, push, r
 	}
 	if head == b.lineHead && b.pr == nil {
 		// Picking nothing is not a failure of the run; check still reports
-		// whatever the line lacks.
+		// whatever the line lacks. Merged and closed batches are never
+		// written, so there is nowhere to keep what the run found.
 		fmt.Fprintf(a.stderr, "%s carries nothing beyond %s; nothing to push\n", branch, b.line.branch())
+		fmt.Fprintf(a.stderr, "no batch pull request is open on %s; this run's classification is not retained\n", b.line.branch())
 		return 0
 	}
 	if err := a.publish(b, branch, head, title, body, rebuilt); err != nil {

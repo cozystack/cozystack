@@ -24,7 +24,8 @@ import (
 
 // A maintainer's run by hand continues the batch pull request the scheduled
 // run opened as its bot, with nothing set: it edits that pull request rather
-// than opening a second one for the line.
+// than opening a second one for the line. A record another bot wrote is no
+// record the batch trusts, and the run stops rather than reach past it.
 func TestHandRunContinuesTheBotsBatch(t *testing.T) {
 	for _, tc := range []struct {
 		name, author string
@@ -44,12 +45,12 @@ func TestHandRunContinuesTheBotsBatch(t *testing.T) {
 			f.now = f.now.AddDate(0, 0, 3)
 
 			code, _, stderr := f.exec(gh, "run", "--line", "release-1.1", "--continue", "--push")
-			if code != 0 {
+			if tc.continued && code != 0 || !tc.continued && (code != 2 || !strings.Contains(stderr, "batch pull request #90 (open) carries a ```backport-batch block but was opened by \"renovate[bot]\"")) {
 				t.Fatalf("run --continue = %d\n%s", code, stderr)
 			}
 			continued := slices.Equal(gh.edited, []string{"#90 fix(backport): batch for release-1.1, 2026-10-26"}) && len(gh.created) == 1
-			if continued != tc.continued {
-				t.Errorf("edited %q, created %q; want the batch of %s continued=%v\n%s", gh.edited, gh.created, tc.author, tc.continued, stderr)
+			if continued != tc.continued || len(gh.created) != 1 {
+				t.Errorf("edited %q, created %q; want the batch of %s continued=%v and no second one\n%s", gh.edited, gh.created, tc.author, tc.continued, stderr)
 			}
 			if !tc.continued && !strings.Contains(stderr, "ignoring #90") {
 				t.Errorf("the run does not say it ignores #90:\n%s", stderr)

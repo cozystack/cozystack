@@ -220,54 +220,13 @@ func cleanFiles(files []string) []string {
 	return out
 }
 
-// parseDeferred reads what a batch body defers: exactly one block, for this
-// line, naming each original once.
+// parseDeferred reads what a batch body's record defers.
 func parseDeferred(body string, l line) (map[int]deferredEntry, error) {
-	var blocks []string
-	lines := strings.Split(strings.ReplaceAll(body, "\r\n", "\n"), "\n")
-	for i := 0; i < len(lines); i++ {
-		if strings.TrimSpace(lines[i]) != deferredFence {
-			continue
-		}
-		if i+2 >= len(lines) || strings.TrimSpace(lines[i+2]) != "```" {
-			return nil, fmt.Errorf("the %s block is not one line of JSON", deferredFence)
-		}
-		blocks = append(blocks, lines[i+1])
-		i += 2
+	rec, err := parseRecord(body, l)
+	if err != nil {
+		return nil, err
 	}
-	switch len(blocks) {
-	case 0:
-		return map[int]deferredEntry{}, nil
-	case 1:
-	default:
-		return nil, fmt.Errorf("the body holds %d %s blocks", len(blocks), deferredFence)
-	}
-	dec := json.NewDecoder(strings.NewReader(blocks[0]))
-	dec.DisallowUnknownFields()
-	var rec deferredRecord
-	if err := dec.Decode(&rec); err != nil {
-		return nil, fmt.Errorf("reading the %s block: %w", deferredFence, err)
-	}
-	if rec.Line != l.branch() {
-		return nil, fmt.Errorf("the %s block is for %q, not %s", deferredFence, rec.Line, l.branch())
-	}
-	out := map[int]deferredEntry{}
-	for _, d := range rec.Deferred {
-		if d.Original <= 0 {
-			return nil, fmt.Errorf("the %s block names original %d", deferredFence, d.Original)
-		}
-		if d.Commit != "" && checkSHA(d.Commit) != nil {
-			return nil, fmt.Errorf("the %s block names commit %q for #%d", deferredFence, d.Commit, d.Original)
-		}
-		if d.Workflows && (d.Commit != "" || d.Reason != "") {
-			return nil, fmt.Errorf("the %s block has #%d wait for a maintainer and defers it as well", deferredFence, d.Original)
-		}
-		if _, dup := out[d.Original]; dup {
-			return nil, fmt.Errorf("the %s block names #%d twice", deferredFence, d.Original)
-		}
-		out[d.Original] = d
-	}
-	return out, nil
+	return rec.deferred(), nil
 }
 
 // prTitle is built from the line and the date alone, never from carried text.

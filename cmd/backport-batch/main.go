@@ -102,6 +102,7 @@ func main() {
 
 func (a *app) main(args []string) int {
 	a.stdout, a.stderr = textWriter{a.stdout}, textWriter{a.stderr}
+	a.gh = &permCache{github: a.gh, perms: map[string]string{}}
 	if len(args) == 0 {
 		fmt.Fprint(a.stderr, usageText)
 		return 2
@@ -205,6 +206,8 @@ type batch struct {
 	prHead   string
 	// picks is what the open batch pull request carries beyond the line.
 	picks *history
+	// src is the line's record and where it was found.
+	src recordSource
 	// start is when the line started under the policy, zero for its fork point.
 	start time.Time
 	// textUntil is the batch-only day: what a commit's text says counts as
@@ -310,6 +313,9 @@ func (a *app) prepare(l line) (*batch, error) {
 		if b.picks, err = readPicks(b.prHead, b.lineHead, b.textUntil); err != nil {
 			return nil, err
 		}
+	}
+	if b.src, err = findLineRecord(a.gh, l, pr); err != nil {
+		return nil, err
 	}
 	for _, o := range merges {
 		v, err := judge(o, labels[o.number], b.start, lineHist, b.newer, newerHist)
