@@ -177,14 +177,15 @@ const (
 
 	// Cap on the wall-clock time a BackupJob spends before its
 	// cnpg.io/Backup exists on each of two waits. The plugin rollout is
-	// counted from the PluginRolledOut condition, or from the release
+	// counted from the attach, the later of the PluginRolledOut condition and
+	// the Cluster's cnpgPluginAttachedAtAnnotation, or from the release
 	// recorded in DestinationWriteHeld when that is later. Retrying the WAL
 	// archive destination write is counted from the first failure since the
 	// last successful write or the last wait for another backup or a
-	// restore. A Backup that exists is
-	// not capped: CloudNativePG keeps a healthy one pending while another
-	// backup of the same Cluster runs, or while it restarts one on another
-	// instance, so no fixed deadline tells those apart from a stuck one.
+	// restore. A Backup that exists is not capped: CloudNativePG keeps a
+	// healthy one pending while another backup of the same Cluster runs, or
+	// while it restarts one on another instance, so no fixed deadline tells
+	// those apart from a stuck one.
 	cnpgDefaultBackupDeadline = 30 * time.Minute
 
 	cnpgClusterHealthyPhase = "Cluster in healthy state"
@@ -195,9 +196,10 @@ const (
 	// instance pod spec (the plugin injects its sidecar), so CNPG rolls every
 	// instance, and a cnpg.io/Backup created meanwhile fails with "requested
 	// plugin is not available" or "instance manager was restarted during
-	// backup" and never recovers. False holds the Backup back; its
-	// LastTransitionTime is what the instance pods must postdate (see
-	// cnpgReasonAttachingPlugin and cnpgPluginRolloutPending).
+	// backup" and never recovers. False holds the Backup back; the instance
+	// pods must postdate its LastTransitionTime and the Cluster's
+	// cnpgPluginAttachedAtAnnotation (see cnpgReasonAttachingPlugin and
+	// cnpgPluginRolloutPending).
 	backupCondPluginRolledOut = "PluginRolledOut"
 
 	// Reason of the PluginRolledOut latch recorded before the write that
@@ -223,6 +225,12 @@ const (
 	// destination written by the pass that created it: the destination
 	// path, the endpoint URL and the name of the credentials Secret.
 	cnpgWrittenDestinationAnnotation = "backups.cozystack.io/cnpg-written-destination"
+
+	// Annotation on a cnpg.io/Cluster carrying, as RFC 3339, when a backup
+	// job attached the barman-cloud plugin. It is written by the same apply
+	// that attaches the plugin, so unlike the PluginRolledOut condition it
+	// cannot be lost to a failed BackupJob status write after the attach.
+	cnpgPluginAttachedAtAnnotation = "backups.cozystack.io/barman-plugin-attached-at"
 
 	cnpgPodRoleLabel    = "cnpg.io/podRole"
 	cnpgPodRoleInstance = "instance"
@@ -487,12 +495,25 @@ func (r *BackupJobReconciler) reconcileCNPG(ctx context.Context, j *backupsv1alp
 			}
 			return ctrl.Result{RequeueAfter: cnpgPollInterval}, nil
 		}
-		pending, err := r.cnpgPluginRolloutPending(ctx, j.Namespace, clusterName, attachment, rollout.LastTransitionTime)
+		// The Cluster's record covers an attach whose status write was lost.
+		attachedAt := rollout.LastTransitionTime
+		if attachment.attachedAt != "" {
+			recorded, err := time.Parse(time.RFC3339, attachment.attachedAt)
+			if err != nil {
+				return r.markBackupJobFailed(ctx, j, fmt.Sprintf(
+					"cannot tell when the barman-cloud plugin was attached: the %s annotation of cnpg.io/Cluster %s/%s: %v",
+					cnpgPluginAttachedAtAnnotation, j.Namespace, clusterName, err))
+			}
+			if recorded.After(attachedAt.Time) {
+				attachedAt = metav1.NewTime(recorded)
+			}
+		}
+		pending, err := r.cnpgPluginRolloutPending(ctx, j.Namespace, clusterName, attachment, attachedAt)
 		if err != nil {
 			return ctrl.Result{}, err
 		}
 		if pending != "" {
-			deadlineFrom := rollout.LastTransitionTime
+			deadlineFrom := attachedAt
 			if held := apimeta.FindStatusCondition(j.Status.Conditions, backupCondDestinationWriteHeld); held != nil &&
 				held.LastTransitionTime.After(deadlineFrom.Time) {
 				deadlineFrom = held.LastTransitionTime
@@ -744,6 +765,7 @@ func (r *BackupJobReconciler) applyClusterPluginBackup(ctx context.Context, name
 		flavor:        cnpgImageFlavor(existing.Spec.ImageName),
 		clusterStatus: existing.Status,
 	}
+	attachment.attachedAt = existing.Annotations[cnpgPluginAttachedAtAnnotation]
 	if live := currentBarmanServerName(existing); live != "" {
 		attachment.serverName = live
 	} else {
@@ -788,6 +810,15 @@ func (r *BackupJobReconciler) applyClusterPluginBackup(ctx context.Context, name
 
 	patch := newCNPGClusterPatch(namespace, clusterName)
 	patch.Spec.Plugins = []cnpgtypes.PluginConfiguration{buildBarmanPlugin(objStoreName, serverName)}
+	// Re-sent unchanged on later applies: the field manager owns it, and an
+	// apply that left it out would delete it.
+	stamp := existing.Annotations[cnpgPluginAttachedAtAnnotation]
+	if attachment.missing {
+		stamp = metav1.Now().UTC().Format(time.RFC3339)
+	}
+	if stamp != "" {
+		patch.Annotations = map[string]string{cnpgPluginAttachedAtAnnotation: stamp}
+	}
 	if err := r.Patch(ctx, patch, client.Apply, client.FieldOwner(cnpgFieldManager), client.ForceOwnership); err != nil {
 		return cnpgPluginAttachment{}, err
 	}
@@ -802,7 +833,10 @@ type cnpgPluginAttachment struct {
 	// flavor is the image flavor the live Cluster runs.
 	flavor string
 	// missing reports a Cluster that carried no barman-cloud plugin.
-	missing       bool
+	missing bool
+	// attachedAt is the cnpgPluginAttachedAtAnnotation the Cluster carried,
+	// "" when no backup job attached the plugin.
+	attachedAt    string
 	clusterStatus cnpgtypes.ClusterStatus
 }
 

@@ -2924,6 +2924,118 @@ func TestReconcileCNPG_PluginRolloutCountsFromTheSuccessfulAttach(t *testing.T) 
 	}
 }
 
+// The status write that records the attach can be lost after the attach
+// itself went through, by a conflict or a restart; an instance recreated
+// between the latch and the attach still has to roll, and the rollout
+// deadline still counts from the attach.
+func TestReconcileCNPG_LostAttachRecordStillWaitsForTheRollout(t *testing.T) {
+	latchedAt := time.Now().Add(-(cnpgDefaultBackupDeadline + time.Minute)).Truncate(time.Second)
+	oldPod := newRolloutInstancePod(latchedAt.Add(-time.Hour))
+	f := newCNPGRolloutFixture(t, newRolloutBackupJob(latchedAt.Add(-time.Hour)),
+		newRolloutCluster(cnpgClusterHealthyPhase), oldPod)
+
+	j, _ := f.pass() // latch
+	latch := apimeta.FindStatusCondition(j.Status.Conditions, backupCondPluginRolledOut)
+	if latch == nil {
+		t.Fatalf("no %s latch: %+v", backupCondPluginRolledOut, j.Status.Conditions)
+	}
+	latch.LastTransitionTime = metav1.NewTime(latchedAt)
+	if err := f.c.Status().Update(context.Background(), j); err != nil {
+		t.Fatalf("age the latch: %v", err)
+	}
+	f.replacePod(oldPod, newRolloutInstancePod(latchedAt.Add(time.Minute)))
+
+	base := f.r.Client
+	f.r.Client = interceptor.NewClient(f.c.(client.WithWatch), interceptor.Funcs{
+		SubResourceUpdate: func(ctx context.Context, cl client.Client, sub string, obj client.Object, opts ...client.SubResourceUpdateOption) error {
+			return apierrors.NewConflict(backupsv1alpha1.GroupVersion.WithResource("backupjobs").GroupResource(), obj.GetName(), errors.New("the object has been modified"))
+		},
+	})
+	j = &backupsv1alpha1.BackupJob{}
+	if err := f.c.Get(context.Background(), client.ObjectKey{Namespace: rolloutNS, Name: "bj"}, j); err != nil {
+		t.Fatalf("get BackupJob: %v", err)
+	}
+	if _, err := f.r.reconcileCNPG(context.Background(), j, f.resolved); err == nil {
+		t.Fatalf("the pass that attached the plugin reported no lost status write")
+	}
+	f.r.Client = base
+
+	attached := &cnpgtypes.Cluster{}
+	if err := f.c.Get(context.Background(), client.ObjectKey{Namespace: rolloutNS, Name: rolloutCluster}, attached); err != nil {
+		t.Fatalf("get Cluster: %v", err)
+	}
+	if len(attached.Spec.Plugins) == 0 {
+		t.Fatalf("the plugin was not attached")
+	}
+	live := newRolloutCluster(cnpgClusterHealthyPhase, attached.Spec.Plugins...)
+	live.Annotations = attached.Annotations
+	f.observeCNPG(live)
+
+	var backups []cnpgtypes.Backup
+	for range 3 {
+		if j, backups = f.pass(); len(backups) != 0 || j.Status.Phase == backupsv1alpha1.BackupJobPhaseFailed {
+			break
+		}
+	}
+	if len(backups) != 0 {
+		t.Fatalf("a cnpg.io/Backup was created against an instance recreated before the attach: %+v", backups)
+	}
+	if j.Status.Phase == backupsv1alpha1.BackupJobPhaseFailed {
+		t.Fatalf("the job failed instead of waiting for the rollout: %s", j.Status.Message)
+	}
+}
+
+// A later write to a Cluster that already carries the plugin re-sends the
+// attach record as it is: moving it would make the instances that rolled
+// with the plugin look older than the attach.
+func TestReconcileCNPG_LaterWriteKeepsTheAttachRecord(t *testing.T) {
+	const stamp = "2026-01-02T03:04:05Z"
+	cluster := newRolloutCluster(cnpgClusterHealthyPhase, buildBarmanPlugin(rolloutCluster, rolloutCluster))
+	cluster.Annotations = map[string]string{cnpgPluginAttachedAtAnnotation: stamp}
+	f := newCNPGRolloutFixture(t, newRolloutBackupJob(time.Now().Add(-time.Hour)), cluster,
+		newRolloutInstancePod(time.Now().Add(-time.Hour)))
+
+	var sent []map[string]string
+	f.r.Client = interceptor.NewClient(f.c.(client.WithWatch), interceptor.Funcs{
+		Patch: func(ctx context.Context, cl client.WithWatch, obj client.Object, patch client.Patch, opts ...client.PatchOption) error {
+			if _, ok := obj.(*cnpgtypes.Cluster); ok {
+				sent = append(sent, obj.GetAnnotations())
+			}
+			return cl.Patch(ctx, obj, patch, opts...)
+		},
+	})
+	if _, backups := f.pass(); len(backups) != 1 {
+		t.Fatalf("got %d cnpg.io/Backups, want the one this pass creates", len(backups))
+	}
+	if len(sent) != 1 {
+		t.Fatalf("got %d Cluster writes, want 1", len(sent))
+	}
+	if got := sent[0][cnpgPluginAttachedAtAnnotation]; got != stamp {
+		t.Errorf("the write sent %s = %q, want the recorded %q", cnpgPluginAttachedAtAnnotation, got, stamp)
+	}
+}
+
+// An attach record that does not parse cannot tell which instances rolled
+// with the plugin, so the job fails naming it instead of guessing.
+func TestReconcileCNPG_UnreadableAttachRecordFailsTheJob(t *testing.T) {
+	f := newCNPGRolloutFixture(t, newRolloutBackupJob(time.Now().Add(-time.Hour)),
+		newRolloutCluster(cnpgClusterHealthyPhase), newRolloutInstancePod(time.Now().Add(-time.Hour)))
+	if j, _ := f.pass(); apimeta.FindStatusCondition(j.Status.Conditions, backupCondPluginRolledOut) == nil {
+		t.Fatalf("no %s latch: %+v", backupCondPluginRolledOut, j.Status.Conditions)
+	}
+	live := newRolloutCluster(cnpgClusterHealthyPhase, buildBarmanPlugin(rolloutCluster, rolloutCluster))
+	live.Annotations = map[string]string{cnpgPluginAttachedAtAnnotation: "yesterday"}
+	f.observeCNPG(live)
+
+	j, backups := f.pass()
+	if len(backups) != 0 {
+		t.Fatalf("a cnpg.io/Backup was created with an unreadable attach record: %+v", backups)
+	}
+	if j.Status.Phase != backupsv1alpha1.BackupJobPhaseFailed || !strings.Contains(j.Status.Message, cnpgPluginAttachedAtAnnotation) {
+		t.Errorf("phase %q, message %q; want Failed naming %s", j.Status.Phase, j.Status.Message, cnpgPluginAttachedAtAnnotation)
+	}
+}
+
 // A plugin attached by someone else after the latch, another backup job or
 // the chart re-rendering a restored Cluster outside the platform flow,
 // started the rollout before this job's write, which only finds it there:
