@@ -5777,7 +5777,7 @@ func TestReconcileCNPG_ArtifactNamesTheDestinationItsBackupWasCreatedWith(t *tes
 	if got := f.liveDestination(); got != "s3://bucket/" {
 		t.Fatalf("destination = %q, want s3://bucket/", got)
 	}
-	want := `{"destinationPath":"s3://bucket/","endpointURL":"https://s3.one","s3SecretRef":"creds-one"}`
+	want := `{"destinationPath":"s3://bucket/","endpointURL":"https://s3.one","s3SecretRef":"creds-one","serverName":"` + rolloutCluster + `"}`
 	if got := backups[0].Annotations[cnpgWrittenDestinationAnnotation]; got != want {
 		t.Fatalf("%s on the created cnpg.io/Backup = %q, want %q", cnpgWrittenDestinationAnnotation, got, want)
 	}
@@ -5802,10 +5802,52 @@ func TestReconcileCNPG_ArtifactNamesTheDestinationItsBackupWasCreatedWith(t *tes
 	}
 }
 
+// The serverName is the archive prefix under the destination, so the record
+// carries it too: a restore that re-renders the Cluster between the backup
+// and its artifact gives the live Cluster another one. A record written
+// before it carried a serverName falls back to the live Cluster.
+func TestReconcileCNPG_ArtifactNamesTheServerNameItsBackupWasCreatedWith(t *testing.T) {
+	f := newAttachedObjectStoreFixture(t, time.Now(), "s3://bucket/")
+	_, backups := f.pass()
+	want := `{"destinationPath":"s3://bucket/","serverName":"` + rolloutCluster + `"}`
+	if len(backups) != 1 || backups[0].Annotations[cnpgWrittenDestinationAnnotation] != want {
+		t.Fatalf("cnpg.io/Backups after the first pass = %+v, want one recording %s", backups, want)
+	}
+	f.observeCNPG(newRolloutCluster(cnpgClusterHealthyPhase, buildBarmanPlugin(rolloutCluster, "restored-server")))
+	f.completeOwnBackup(nil)
+	j, _ := f.pass()
+	if j.Status.Phase != backupsv1alpha1.BackupJobPhaseSucceeded {
+		t.Fatalf("phase = %q (%s), want Succeeded", j.Status.Phase, j.Status.Message)
+	}
+	artifact := f.artifact()
+	if got := artifact.Spec.DriverMetadata[cnpgServerNameKey]; got != rolloutCluster {
+		t.Errorf("artifact serverName = %q, want %q recorded with the Backup", got, rolloutCluster)
+	}
+	if !strings.HasPrefix(artifact.Status.Artifact.URI, "cnpg://"+rolloutCluster+"/") {
+		t.Errorf("artifact URI = %q, want it under %s", artifact.Status.Artifact.URI, rolloutCluster)
+	}
+}
+
+func TestReconcileCNPG_ArtifactOfARecordWithoutServerName(t *testing.T) {
+	f := newAttachedObjectStoreFixture(t, time.Now(), "s3://bucket/")
+	f.pass()
+	f.observeCNPG(newRolloutCluster(cnpgClusterHealthyPhase, buildBarmanPlugin(rolloutCluster, "live-server")))
+	f.completeOwnBackup(func(b *cnpgtypes.Backup) {
+		b.Annotations[cnpgWrittenDestinationAnnotation] = `{"destinationPath":"s3://bucket/"}`
+	})
+	j, _ := f.pass()
+	if j.Status.Phase != backupsv1alpha1.BackupJobPhaseSucceeded {
+		t.Fatalf("phase = %q (%s), want Succeeded", j.Status.Phase, j.Status.Message)
+	}
+	if got := f.artifact().Spec.DriverMetadata[cnpgServerNameKey]; got != "live-server" {
+		t.Errorf("artifact serverName = %q, want the live Cluster's live-server", got)
+	}
+}
+
 // A strategy without credentials records none, and the artifact names none.
 func TestReconcileCNPG_ArtifactOfARecordWithoutCredentials(t *testing.T) {
 	f := newAttachedObjectStoreFixture(t, time.Now(), "s3://bucket/")
-	if _, backups := f.pass(); len(backups) != 1 || backups[0].Annotations[cnpgWrittenDestinationAnnotation] != `{"destinationPath":"s3://bucket/"}` {
+	if _, backups := f.pass(); len(backups) != 1 || backups[0].Annotations[cnpgWrittenDestinationAnnotation] != `{"destinationPath":"s3://bucket/","serverName":"`+rolloutCluster+`"}` {
 		t.Fatalf("cnpg.io/Backups after the first pass = %+v, want one recording only s3://bucket/", backups)
 	}
 	f.setStrategyDestination("s3://edited/", "https://s3.two", "creds-two")

@@ -223,7 +223,8 @@ const (
 
 	// Annotation on a cnpg.io/Backup carrying, as JSON, the WAL archive
 	// destination written by the pass that created it: the destination
-	// path, the endpoint URL and the name of the credentials Secret.
+	// path, the endpoint URL, the name of the credentials Secret and the
+	// serverName the Cluster archived under.
 	cnpgWrittenDestinationAnnotation = "backups.cozystack.io/cnpg-written-destination"
 
 	// Annotation on a cnpg.io/Cluster carrying, as RFC 3339, when a backup
@@ -557,7 +558,9 @@ func (r *BackupJobReconciler) reconcileCNPG(ctx context.Context, j *backupsv1alp
 			"cluster", clusterName, "live", attachment.flavor, "application", specFlavor)
 	}
 
-	cnpgBackup, err := r.ensureCNPGBackup(ctx, j, clusterName, existingBackup, cnpgDestinationOf(rendered))
+	written := cnpgDestinationOf(rendered)
+	written.ServerName = serverName
+	cnpgBackup, err := r.ensureCNPGBackup(ctx, j, clusterName, existingBackup, written)
 	if err != nil {
 		return r.markBackupJobFailed(ctx, j, fmt.Sprintf("failed to ensure cnpg.io/Backup: %v", err))
 	}
@@ -580,6 +583,11 @@ func (r *BackupJobReconciler) reconcileCNPG(ctx context.Context, j *backupsv1alp
 		destination, err := cnpgArtifactDestination(cnpgBackup, rendered)
 		if err != nil {
 			return r.markBackupJobFailed(ctx, j, fmt.Sprintf("refusing to create the Backup artifact: %v", err))
+		}
+		// A restore can re-render the Cluster under another serverName
+		// between the backup and this pass.
+		if destination.ServerName != "" {
+			serverName = destination.ServerName
 		}
 		artifact, err := r.createCNPGBackupArtifact(ctx, j, resolved, cnpgBackup, clusterName, serverName, attachment.flavor, destination, rendered, app)
 		if err != nil {
@@ -1056,11 +1064,13 @@ func (r *BackupJobReconciler) waitCNPGBackupJob(ctx context.Context, j *backupsv
 
 // cnpgDestination is the WAL archive destination recorded in
 // cnpgWrittenDestinationAnnotation. S3SecretRef is nil when the strategy
-// names no credentials Secret.
+// names no credentials Secret. ServerName is empty in a record written
+// before it carried one.
 type cnpgDestination struct {
 	DestinationPath string  `json:"destinationPath"`
 	EndpointURL     string  `json:"endpointURL,omitempty"`
 	S3SecretRef     *string `json:"s3SecretRef,omitempty"`
+	ServerName      string  `json:"serverName,omitempty"`
 }
 
 func cnpgDestinationOf(t *strategyv1alpha1.CNPGTemplate) cnpgDestination {
