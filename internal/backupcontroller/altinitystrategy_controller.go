@@ -126,7 +126,14 @@ func backupParameters(b *backupsv1alpha1.Backup) map[string]string {
 // chronologically, and the restore of a Backup that records no archive, which
 // accepts only clickhouse-<release>-<timestamp>, never picks one of these.
 func altinityArchiveName(j *backupsv1alpha1.BackupJob) string {
-	return fmt.Sprintf("clickhouse-%s-%s-%s", j.Spec.ApplicationRef.Name, j.Status.StartedAt.UTC().Format(altinityArchiveTimeLayout), j.UID)
+	return altinityArchiveNameBeforeUIDs(j) + "-" + string(j.UID)
+}
+
+// altinityArchiveNameBeforeUIDs is the name a controller that did not append
+// the UID gave the same BackupJob, which a Job it created before an upgrade
+// still writes.
+func altinityArchiveNameBeforeUIDs(j *backupsv1alpha1.BackupJob) string {
+	return fmt.Sprintf("clickhouse-%s-%s", j.Spec.ApplicationRef.Name, j.Status.StartedAt.UTC().Format(altinityArchiveTimeLayout))
 }
 
 // altinityJobCarriesArchive reports whether the Job's Pod was rendered with
@@ -286,8 +293,13 @@ func (r *BackupJobReconciler) reconcileAltinity(ctx context.Context, j *backupsv
 		if j.Status.BackupRef != nil {
 			return ctrl.Result{}, nil
 		}
+		// The name without the UID is a prefix of the one with it, so it is
+		// tried only after the full name is not found.
 		if !altinityJobCarriesArchive(batchJob, archive) {
-			archive = ""
+			archive = altinityArchiveNameBeforeUIDs(j)
+			if !altinityJobCarriesArchive(batchJob, archive) {
+				archive = ""
+			}
 		}
 		artifact, err := r.createAltinityBackupArtifact(ctx, j, resolved, archive)
 		if err != nil {
