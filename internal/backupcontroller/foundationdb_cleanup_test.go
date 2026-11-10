@@ -266,8 +266,12 @@ func TestCleanupFoundationDBBackup_SkipAnnotationReleases(t *testing.T) {
 	if jobs := listCleanupJobs(t, c); len(jobs) != 0 {
 		t.Errorf("skip annotation must not start a delete Job, got %d", len(jobs))
 	}
-	if err := c.Get(context.Background(), client.ObjectKey{Namespace: "tenant", Name: "bj-1-fdb"}, &foundationdbtypes.FoundationDBBackup{}); !apierrors.IsNotFound(err) {
-		t.Errorf("the operator CR must not keep streaming into a released directory, got err=%v", err)
+	got := &foundationdbtypes.FoundationDBBackup{}
+	if err := c.Get(context.Background(), client.ObjectKey{Namespace: "tenant", Name: "bj-1-fdb"}, got); err != nil {
+		t.Fatalf("the stopped operator CR stays for the next BackupJob to wait on and prune: %v", err)
+	}
+	if got.Spec.BackupState != foundationdbtypes.BackupStateStopped {
+		t.Errorf("the operator CR must not keep streaming into a released directory, got %q", got.Spec.BackupState)
 	}
 }
 

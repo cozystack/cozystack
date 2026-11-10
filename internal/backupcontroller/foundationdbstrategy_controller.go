@@ -524,13 +524,16 @@ func (r *BackupJobReconciler) ensureFoundationDBBackup(ctx context.Context, j *b
 	if waiting, err := r.waitForStoppedFoundationDBBackups(ctx, j, clusterName); err != nil || waiting != "" {
 		return nil, waiting, err
 	}
-	// A Backup of the same name that is being deleted is about to delete the
-	// directory this job would write to.
+	// The Backup this job will record is named after it, and so is the
+	// directory. One that already exists records an earlier job's backup in
+	// that directory: wait while its deletion removes the directory, and
+	// refuse to write into it otherwise.
 	prior := &backupsv1alpha1.Backup{}
 	if err := r.Get(ctx, types.NamespacedName{Namespace: j.Namespace, Name: j.Name}, prior); err == nil {
 		if prior.DeletionTimestamp != nil {
 			return nil, fmt.Sprintf("waiting for Backup %s/%s, whose deletion removes the directory this BackupJob writes to, to be deleted", j.Namespace, j.Name), nil
 		}
+		return nil, "", fmt.Errorf("Backup %s/%s of an earlier BackupJob of this name already exists; delete it or use another BackupJob name", j.Namespace, j.Name)
 	} else if !apierrors.IsNotFound(err) {
 		return nil, "", err
 	}
@@ -1528,6 +1531,11 @@ func (r *RestoreJobReconciler) ensureFoundationDBRestoreAgents(
 			AgentCount:             int32PtrCopy(rendered.AgentCount),
 			CustomParameters:       append([]string(nil), rendered.CustomParameters...),
 		},
+	}
+	// These agents exist only to run the restore; an explicit zero would make
+	// the operator start none, so it falls back to the operator default.
+	if obj.Spec.AgentCount != nil && *obj.Spec.AgentCount == 0 {
+		obj.Spec.AgentCount = nil
 	}
 	if rendered.BackupDeploymentPodTemplateSpec != nil {
 		obj.Spec.PodTemplateSpec = rendered.BackupDeploymentPodTemplateSpec.DeepCopy()

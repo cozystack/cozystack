@@ -2164,6 +2164,35 @@ func TestReconcileFoundationDBRestore_ToCopyStartsAgents(t *testing.T) {
 	}
 }
 
+// Restore agents exist only to run the restore, so a strategy's explicit
+// agentCount: 0 must not leave the destination without any.
+func TestReconcileFoundationDBRestore_AgentsIgnoreZeroAgentCount(t *testing.T) {
+	c, r, rj, backup := seedFoundationDBRestore(t, foundationdbRestoreSeed{toCopy: true})
+	ctx := context.Background()
+	strategy := &strategyv1alpha1.FoundationDB{}
+	if err := c.Get(ctx, client.ObjectKey{Name: "fdb-strategy"}, strategy); err != nil {
+		t.Fatalf("get strategy: %v", err)
+	}
+	zero := int32(0)
+	strategy.Spec.Template.AgentCount = &zero
+	if err := c.Update(ctx, strategy); err != nil {
+		t.Fatalf("update strategy: %v", err)
+	}
+
+	for range 2 {
+		if _, err := r.reconcileFoundationDBRestore(ctx, rj, backup); err != nil {
+			t.Fatalf("reconcileFoundationDBRestore: %v", err)
+		}
+	}
+	if rj.Status.Phase == backupsv1alpha1.RestoreJobPhaseFailed {
+		t.Fatalf("the restore's own agents must not count as agentless")
+	}
+	agents := listFoundationDBBackups(t, c)
+	if len(agents) != 1 || agents[0].Spec.AgentCount != nil {
+		t.Errorf("restore agents must fall back to the operator's agent count, got %+v", agents)
+	}
+}
+
 func TestReconcileFoundationDBRestore_CompletedRemovesAgents(t *testing.T) {
 	c, r, rj, backup := seedFoundationDBRestore(t, foundationdbRestoreSeed{toCopy: true})
 	if _, err := r.reconcileFoundationDBRestore(context.Background(), rj, backup); err != nil {
@@ -2721,6 +2750,31 @@ func TestReconcileFoundationDB_WaitsForSameNamedBackupDeletion(t *testing.T) {
 	}
 	if job.Status.Phase == backupsv1alpha1.BackupJobPhaseFailed {
 		t.Errorf("waiting for the deletion must not fail the job")
+	}
+}
+
+// A Backup named after the job already records a backup in the directory the
+// job would write; a new backup there would be deleted along with it.
+func TestReconcileFoundationDB_RefusesSameNamedLiveBackup(t *testing.T) {
+	c, job, resolved := reconcileFoundationDBSeed(
+		t,
+		foundationdbtypes.FoundationDBClusterSpec{Version: "7.3.63"},
+		foundationdbtypes.FoundationDBClusterStatus{Health: foundationdbtypes.FoundationDBClusterHealth{Available: true}},
+	)
+	ctx := context.Background()
+	if err := c.Create(ctx, &backupsv1alpha1.Backup{ObjectMeta: metav1.ObjectMeta{Namespace: job.Namespace, Name: job.Name}}); err != nil {
+		t.Fatalf("seed Backup: %v", err)
+	}
+	r := &BackupJobReconciler{Client: c, Scheme: c.Scheme(), Recorder: record.NewFakeRecorder(10)}
+
+	if _, err := r.reconcileFoundationDB(ctx, job, resolved); err != nil {
+		t.Fatalf("reconcileFoundationDB: %v", err)
+	}
+	if job.Status.Phase != backupsv1alpha1.BackupJobPhaseFailed {
+		t.Errorf("phase = %q, want Failed for a name whose Backup already exists", job.Status.Phase)
+	}
+	if n := len(listFoundationDBBackups(t, c)); n != 0 {
+		t.Errorf("no backup may start in that directory, got %d CRs", n)
 	}
 }
 
