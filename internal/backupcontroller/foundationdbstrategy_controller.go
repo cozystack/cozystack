@@ -292,17 +292,17 @@ func (r *BackupJobReconciler) reconcileFoundationDB(ctx context.Context, j *back
 			detail := foundationdbBackupNotReadyDetail(fdbBackup)
 			// The backup never became restorable, so a stop would leave
 			// it running for good and wedge the cluster's next backup:
-			// abort it, together with the partial directory when the job
-			// named that directory. A CR another job stopped that has
-			// already gone quiet runs nothing (the cluster may be running
-			// the newer backup by now) and is only deleted. Best-effort:
-			// the BackupJob terminates either way so the deadline gate
-			// stays trustworthy.
+			// abort it. A CR another job stopped that has already gone
+			// quiet runs nothing (the cluster may be running the newer
+			// backup by now) and is only deleted. The partial directory
+			// stays: no Backup records it. Best-effort: the BackupJob
+			// terminates either way so the deadline gate stays
+			// trustworthy.
 			var dropErr error
 			if foundationdbBackupQuiet(fdbBackup) {
 				dropErr = client.IgnoreNotFound(r.Delete(ctx, fdbBackup))
 			} else {
-				dropErr = r.abortFoundationDBBackup(ctx, fdbBackup, fdbBackup.Spec.BlobStoreConfiguration.BackupName == foundationdbJobDirectory(j))
+				dropErr = r.abortFoundationDBBackup(ctx, fdbBackup)
 			}
 			if dropErr != nil {
 				getLogger(ctx).Debug("failed to abort FoundationDBBackup on deadline expiry; continuing with BackupJob failure",
@@ -349,7 +349,10 @@ func foundationdbBackupReady(b *foundationdbtypes.FoundationDBBackup) bool {
 	if b == nil || b.Status.BackupDetails == nil {
 		return false
 	}
-	if !b.Status.BackupDetails.Running {
+	// A CR a later job stopped before its first snapshot still completes:
+	// discontinue lets the backup reach a restorable snapshot and then ends
+	// it, so a stopped CR counts once its own directory is restorable.
+	if !b.Status.BackupDetails.Running && b.Spec.BackupState != foundationdbtypes.BackupStateStopped {
 		return false
 	}
 	if !b.Status.BackupDetails.Restorable {
@@ -630,20 +633,21 @@ func (r *BackupJobReconciler) waitForStoppedFoundationDBBackups(ctx context.Cont
 				return fmt.Sprintf("waiting for the operator to abort the backup of FoundationDBBackup %s", b.Name), nil
 			}
 			// A stop never ends a backup that is not restorable. Once the job
-			// that ran it is over nothing else will either, so it is aborted;
-			// nothing else of the cluster runs at this point.
+			// that ran it has failed nothing else will either, so it is
+			// aborted; nothing else of the cluster runs at this point. A
+			// job that succeeded had a restorable backup, which the stop
+			// does end, and is never aborted.
 			if _, restoreAgents := b.Labels[foundationdbRestoreAgentsLabel]; !restoreAgents &&
 				b.Status.BackupDetails != nil && !b.Status.BackupDetails.Restorable {
-				finished := foundationdbPreviousAttempt(b, j)
-				if !finished {
+				abandoned := foundationdbPreviousAttempt(b, j)
+				if !abandoned {
 					var err error
-					if finished, err = r.foundationdbOwnerJobFinished(ctx, b); err != nil {
+					if abandoned, err = r.foundationdbOwnerJobFailed(ctx, b); err != nil {
 						return "", err
 					}
 				}
-				if finished {
-					ownDir := b.Labels[backupsv1alpha1.OwningJobNamespaceLabel] + "/" + b.Labels[backupsv1alpha1.OwningJobNameLabel]
-					if err := r.abortFoundationDBBackup(ctx, b, b.Labels[backupsv1alpha1.OwningJobNameLabel] != "" && b.Spec.BlobStoreConfiguration.BackupName == ownDir); err != nil {
+				if abandoned {
+					if err := r.abortFoundationDBBackup(ctx, b); err != nil {
 						return "", err
 					}
 					return fmt.Sprintf("aborting the backup of FoundationDBBackup %s, which never became restorable", b.Name), nil
@@ -680,6 +684,29 @@ func (r *BackupJobReconciler) foundationdbOwnerJobFinished(ctx context.Context, 
 		return false, err
 	}
 	return ownerJob.Status.Phase == backupsv1alpha1.BackupJobPhaseSucceeded || ownerJob.Status.Phase == backupsv1alpha1.BackupJobPhaseFailed, nil
+}
+
+// foundationdbOwnerJobFailed reports whether the BackupJob that created a CR
+// failed, or is gone without having recorded a Backup (named after it).
+func (r *BackupJobReconciler) foundationdbOwnerJobFailed(ctx context.Context, b *foundationdbtypes.FoundationDBBackup) (bool, error) {
+	owner, namespace := b.Labels[backupsv1alpha1.OwningJobNameLabel], b.Labels[backupsv1alpha1.OwningJobNamespaceLabel]
+	if owner == "" {
+		return false, nil
+	}
+	ownerJob := &backupsv1alpha1.BackupJob{}
+	err := r.Get(ctx, types.NamespacedName{Namespace: namespace, Name: owner}, ownerJob)
+	if err == nil {
+		return ownerJob.Status.Phase == backupsv1alpha1.BackupJobPhaseFailed, nil
+	}
+	if !apierrors.IsNotFound(err) {
+		return false, err
+	}
+	if err := r.Get(ctx, types.NamespacedName{Namespace: namespace, Name: owner}, &backupsv1alpha1.Backup{}); err == nil {
+		return false, nil
+	} else if !apierrors.IsNotFound(err) {
+		return false, err
+	}
+	return true, nil
 }
 
 // foundationdbAgentVersion returns the version the backup_agent runs: the
@@ -798,9 +825,8 @@ func (r *BackupJobReconciler) pruneStoppedFoundationDBBackups(ctx context.Contex
 }
 
 const (
-	foundationdbOperatorFinalizer     = "foundationdb.org/fdb-kubernetes-operator"
-	foundationdbDeletionPolicyStop    = "stop"
-	foundationdbDeletionPolicyCleanup = "cleanup"
+	foundationdbOperatorFinalizer  = "foundationdb.org/fdb-kubernetes-operator"
+	foundationdbDeletionPolicyStop = "stop"
 )
 
 // foundationdbBackupQuiet reports whether the operator has acted on a stopped
@@ -821,13 +847,12 @@ func foundationdbBackupQuiet(b *foundationdbtypes.FoundationDBBackup) bool {
 // ever reconciling its CR, until it is aborted. The operator aborts on
 // deletion only with a stop or cleanup policy and its finalizer already in
 // place, so both are set before the delete. Callers make sure the backup the
-// cluster runs is this CR's: abort takes no tag or directory. With deleteData
-// the operator also deletes the CR's own directory.
-func (r *BackupJobReconciler) abortFoundationDBBackup(ctx context.Context, b *foundationdbtypes.FoundationDBBackup, deleteData bool) error {
+// cluster runs is this CR's: abort takes no tag or directory. The cleanup
+// policy, which would also delete the directory, is not used: the operator
+// keeps its finalizer until that delete succeeds, which it never does for a
+// bucket whose credentials it lacks.
+func (r *BackupJobReconciler) abortFoundationDBBackup(ctx context.Context, b *foundationdbtypes.FoundationDBBackup) error {
 	policy := foundationdbDeletionPolicyStop
-	if deleteData {
-		policy = foundationdbDeletionPolicyCleanup
-	}
 	if b.DeletionTimestamp == nil {
 		base := b.DeepCopy()
 		b.Spec.DeletionPolicy = &policy
