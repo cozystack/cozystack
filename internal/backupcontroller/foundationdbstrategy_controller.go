@@ -282,17 +282,23 @@ func (r *BackupJobReconciler) reconcileFoundationDB(ctx context.Context, j *back
 	if !foundationdbBackupReady(fdbBackup) {
 		if foundationdbBackupDeadlineExceeded(j.Status.StartedAt) {
 			detail := foundationdbBackupNotReadyDetail(fdbBackup)
-			// Stop the operator-side backup before marking the job
-			// Failed, so it does not keep running against a broken
-			// endpoint. The stopped CR and its agent Deployment stay
-			// until the cluster's next BackupJob prunes them, or a
-			// BackupJob recreated under this name replaces them.
-			// Best-effort: if the Stop patch fails, the BackupJob
-			// still terminates so the deadline gate stays
-			// trustworthy.
-			if stopErr := r.stopFoundationDBBackupForJob(ctx, fdbBackup); stopErr != nil {
-				getLogger(ctx).Debug("failed to stop FoundationDBBackup on deadline expiry; continuing with BackupJob failure",
-					"backupjob", j.Name, "fdbBackup", fdbBackup.Name, "error", stopErr.Error())
+			// The backup never became restorable, so a stop would leave
+			// it running for good and wedge the cluster's next backup:
+			// abort it, together with the partial directory when the job
+			// named that directory. A CR another job stopped that has
+			// already gone quiet runs nothing (the cluster may be running
+			// the newer backup by now) and is only deleted. Best-effort:
+			// the BackupJob terminates either way so the deadline gate
+			// stays trustworthy.
+			var dropErr error
+			if foundationdbBackupQuiet(fdbBackup) {
+				dropErr = client.IgnoreNotFound(r.Delete(ctx, fdbBackup))
+			} else {
+				dropErr = r.abortFoundationDBBackup(ctx, fdbBackup, fdbBackup.Spec.BlobStoreConfiguration.BackupName == foundationdbJobDirectory(j))
+			}
+			if dropErr != nil {
+				getLogger(ctx).Debug("failed to abort FoundationDBBackup on deadline expiry; continuing with BackupJob failure",
+					"backupjob", j.Name, "fdbBackup", fdbBackup.Name, "error", dropErr.Error())
 			}
 			return r.markBackupJobFailed(ctx, j, fmt.Sprintf(
 				"apps.foundationdb.org/FoundationDBBackup did not reach a restorable snapshot within %s (%s)",
@@ -495,7 +501,7 @@ func (r *BackupJobReconciler) requeueWithReason(ctx context.Context, j *backupsv
 // Cleanup of the operator-side CR is therefore the framework's
 // responsibility, not Kubernetes ownerRef GC. See:
 //   - examples/backups/foundationdb/cleanup.sh (label-based reap),
-//   - stopFoundationDBBackupForJob (deadline-expiry cleanup in this file).
+//   - abortFoundationDBBackup (deadline-expiry cleanup in this file).
 //
 // The `TestEnsureFoundationDBBackup_DoesNotSetOwnerReference` test pins
 // the contract so a future patch that adds an OwnerReference "for
@@ -606,10 +612,33 @@ func (r *BackupJobReconciler) waitForStoppedFoundationDBBackups(ctx context.Cont
 		if b.Spec.BackupState != foundationdbtypes.BackupStateStopped {
 			continue
 		}
-		if b.Status.Generations == nil || b.Status.Generations.Reconciled < b.Generation {
-			return fmt.Sprintf("waiting for the operator to stop FoundationDBBackup %s", b.Name), nil
-		}
-		if b.Status.BackupDetails != nil && b.Status.BackupDetails.Running {
+		if !foundationdbBackupQuiet(b) {
+			if b.DeletionTimestamp != nil {
+				return fmt.Sprintf("waiting for the operator to abort the backup of FoundationDBBackup %s", b.Name), nil
+			}
+			// A stop never ends a backup that is not restorable. Once the job
+			// that ran it is over nothing else will either, so it is aborted;
+			// nothing else of the cluster runs at this point.
+			if _, restoreAgents := b.Labels[foundationdbRestoreAgentsLabel]; !restoreAgents &&
+				b.Status.BackupDetails != nil && !b.Status.BackupDetails.Restorable {
+				finished := foundationdbPreviousAttempt(b, j)
+				if !finished {
+					var err error
+					if finished, err = r.foundationdbOwnerJobFinished(ctx, b); err != nil {
+						return "", err
+					}
+				}
+				if finished {
+					ownDir := b.Labels[backupsv1alpha1.OwningJobNamespaceLabel] + "/" + b.Labels[backupsv1alpha1.OwningJobNameLabel]
+					if err := r.abortFoundationDBBackup(ctx, b, b.Labels[backupsv1alpha1.OwningJobNameLabel] != "" && b.Spec.BlobStoreConfiguration.BackupName == ownDir); err != nil {
+						return "", err
+					}
+					return fmt.Sprintf("aborting the backup of FoundationDBBackup %s, which never became restorable", b.Name), nil
+				}
+			}
+			if b.Status.Generations == nil || b.Status.Generations.Reconciled < b.Generation {
+				return fmt.Sprintf("waiting for the operator to stop FoundationDBBackup %s", b.Name), nil
+			}
 			r.requestFoundationDBStatusRefresh(ctx, b, now)
 			return fmt.Sprintf("waiting for the backup stopped through FoundationDBBackup %s to stop running", b.Name), nil
 		}
@@ -621,6 +650,23 @@ func (r *BackupJobReconciler) waitForStoppedFoundationDBBackups(ctx context.Cont
 		}
 	}
 	return "", nil
+}
+
+// foundationdbOwnerJobFinished reports whether the BackupJob that created a CR
+// has finished or is gone. A CR without an owning job counts as finished.
+func (r *BackupJobReconciler) foundationdbOwnerJobFinished(ctx context.Context, b *foundationdbtypes.FoundationDBBackup) (bool, error) {
+	owner := b.Labels[backupsv1alpha1.OwningJobNameLabel]
+	if owner == "" {
+		return true, nil
+	}
+	ownerJob := &backupsv1alpha1.BackupJob{}
+	if err := r.Get(ctx, types.NamespacedName{Namespace: b.Labels[backupsv1alpha1.OwningJobNamespaceLabel], Name: owner}, ownerJob); err != nil {
+		if apierrors.IsNotFound(err) {
+			return true, nil
+		}
+		return false, err
+	}
+	return ownerJob.Status.Phase == backupsv1alpha1.BackupJobPhaseSucceeded || ownerJob.Status.Phase == backupsv1alpha1.BackupJobPhaseFailed, nil
 }
 
 // foundationdbAgentVersion returns the version the backup_agent runs: the
@@ -729,15 +775,8 @@ func (r *BackupJobReconciler) pruneStoppedFoundationDBBackups(ctx context.Contex
 		}
 		// A BackupJob that is still running would recreate its missing CR and
 		// stop this one in turn; its CR goes once that job has finished.
-		if owner := b.Labels[backupsv1alpha1.OwningJobNameLabel]; owner != "" {
-			ownerJob := &backupsv1alpha1.BackupJob{}
-			err := r.Get(ctx, types.NamespacedName{Namespace: b.Labels[backupsv1alpha1.OwningJobNamespaceLabel], Name: owner}, ownerJob)
-			if err != nil && !apierrors.IsNotFound(err) {
-				continue
-			}
-			if err == nil && ownerJob.Status.Phase != backupsv1alpha1.BackupJobPhaseSucceeded && ownerJob.Status.Phase != backupsv1alpha1.BackupJobPhaseFailed {
-				continue
-			}
+		if finished, err := r.foundationdbOwnerJobFinished(ctx, b); err != nil || !finished {
+			continue
 		}
 		if err := r.Delete(ctx, b); err != nil && !apierrors.IsNotFound(err) {
 			getLogger(ctx).Debug("failed to prune a stopped FoundationDBBackup", "fdbBackup", b.Name, "error", err.Error())
@@ -745,21 +784,46 @@ func (r *BackupJobReconciler) pruneStoppedFoundationDBBackups(ctx context.Contex
 	}
 }
 
-// stopFoundationDBBackupForJob is the single-CR variant of
-// stopOtherFoundationDBBackups, used on terminal BackupJob failure to keep
-// the operator-side backup_agent Deployment from leaking past the
-// BackupJob's lifetime. Same Conflict-retry semantics.
-func (r *BackupJobReconciler) stopFoundationDBBackupForJob(ctx context.Context, b *foundationdbtypes.FoundationDBBackup) error {
-	if b == nil {
-		return nil
+const (
+	foundationdbOperatorFinalizer     = "foundationdb.org/fdb-kubernetes-operator"
+	foundationdbDeletionPolicyStop    = "stop"
+	foundationdbDeletionPolicyCleanup = "cleanup"
+)
+
+// foundationdbBackupQuiet reports whether the operator has acted on a stopped
+// CR and it no longer shows a backup running on the cluster.
+func foundationdbBackupQuiet(b *foundationdbtypes.FoundationDBBackup) bool {
+	if b.Spec.BackupState != foundationdbtypes.BackupStateStopped {
+		return false
 	}
-	if b.Spec.BackupState == foundationdbtypes.BackupStateStopped {
-		return nil
+	if b.Status.Generations == nil || b.Status.Generations.Reconciled < b.Generation {
+		return false
 	}
-	if err := r.patchStopWithRetry(ctx, b); err != nil {
-		return fmt.Errorf("stop FoundationDBBackup %s/%s: %w", b.Namespace, b.Name, err)
+	return b.Status.BackupDetails == nil || !b.Status.BackupDetails.Running
+}
+
+// abortFoundationDBBackup deletes a CR so that the operator aborts the backup
+// the cluster runs. A stop (discontinue) ends a backup only once it is
+// restorable, so one that never got there runs, and keeps the operator from
+// ever reconciling its CR, until it is aborted. The operator aborts on
+// deletion only with a stop or cleanup policy and its finalizer already in
+// place, so both are set before the delete. Callers make sure the backup the
+// cluster runs is this CR's: abort takes no tag or directory. With deleteData
+// the operator also deletes the CR's own directory.
+func (r *BackupJobReconciler) abortFoundationDBBackup(ctx context.Context, b *foundationdbtypes.FoundationDBBackup, deleteData bool) error {
+	policy := foundationdbDeletionPolicyStop
+	if deleteData {
+		policy = foundationdbDeletionPolicyCleanup
 	}
-	return nil
+	if b.DeletionTimestamp == nil {
+		base := b.DeepCopy()
+		b.Spec.DeletionPolicy = &policy
+		controllerutil.AddFinalizer(b, foundationdbOperatorFinalizer)
+		if err := r.Patch(ctx, b, client.MergeFrom(base)); err != nil {
+			return client.IgnoreNotFound(err)
+		}
+	}
+	return client.IgnoreNotFound(r.Delete(ctx, b))
 }
 
 // foundationdbStopConflictRetries caps the patch-retry budget so a

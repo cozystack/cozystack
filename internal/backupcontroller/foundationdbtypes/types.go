@@ -163,6 +163,13 @@ type FoundationDBBackupSpec struct {
 	// (credentials volumes, environment, resource overrides).
 	// +optional
 	PodTemplateSpec *corev1.PodTemplateSpec `json:"podTemplateSpec,omitempty"`
+
+	// DeletionPolicy is what the operator does when the CR is deleted:
+	// "noop" (the default), "stop" (abort the backup the cluster runs) or
+	// "cleanup" (abort it and delete this CR's directory). The operator only
+	// acts if its finalizer is on the CR when the deletion starts.
+	// +optional
+	DeletionPolicy *string `json:"deletionPolicy,omitempty"`
 }
 
 // FoundationDBBackupStatus mirrors the subset of
