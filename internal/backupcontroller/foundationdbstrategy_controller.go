@@ -78,6 +78,9 @@ const (
 	// touch more headroom because the first snapshot for an empty
 	// cluster still has to do range-file rotation through the
 	// backup_agent.
+	// A large database takes longer to write its first snapshot, and on the
+	// deadline its backup is aborted with the partial data, so a BackupClass
+	// raises it with the backupTimeout parameter (as for Kafka).
 	foundationdbDefaultBackupDeadline = 45 * time.Minute
 
 	// Default deadline on a RestoreJob waiting for the operator
@@ -147,6 +150,11 @@ func (r *BackupJobReconciler) reconcileFoundationDB(ctx context.Context, j *back
 
 	if err := validateFoundationDBApplicationRef(j.Spec.ApplicationRef); err != nil {
 		return r.markBackupJobFailed(ctx, j, err.Error())
+	}
+
+	deadline, deadlineWarn := backupTimeoutDeadline(resolved.Parameters, foundationdbDefaultBackupDeadline)
+	if deadlineWarn != "" && r.Recorder != nil {
+		r.Recorder.Event(j, corev1.EventTypeWarning, "BackupTimeoutInvalid", deadlineWarn)
 	}
 
 	if j.Status.StartedAt == nil {
@@ -261,10 +269,10 @@ func (r *BackupJobReconciler) reconcileFoundationDB(ctx context.Context, j *back
 	}
 	r.pruneStoppedFoundationDBBackups(ctx, j, clusterName)
 	if waiting != "" {
-		if foundationdbBackupDeadlineExceeded(j.Status.StartedAt) {
+		if foundationdbBackupDeadlineExceeded(j.Status.StartedAt, deadline) {
 			return r.markBackupJobFailed(ctx, j, fmt.Sprintf(
-				"apps.foundationdb.org/FoundationDBBackup could not be started within %s (%s)",
-				foundationdbDefaultBackupDeadline, waiting))
+				"apps.foundationdb.org/FoundationDBBackup could not be started within %s (%s; raise the BackupClass backupTimeout parameter for a longer wait)",
+				deadline, waiting))
 		}
 		return r.requeueWithReason(ctx, j, "FoundationDBPreviousBackupStopping", waiting)
 	}
@@ -280,7 +288,7 @@ func (r *BackupJobReconciler) reconcileFoundationDB(ctx context.Context, j *back
 	// configured, and the backup_agent has written at least one full
 	// snapshot (restorable).
 	if !foundationdbBackupReady(fdbBackup) {
-		if foundationdbBackupDeadlineExceeded(j.Status.StartedAt) {
+		if foundationdbBackupDeadlineExceeded(j.Status.StartedAt, deadline) {
 			detail := foundationdbBackupNotReadyDetail(fdbBackup)
 			// The backup never became restorable, so a stop would leave
 			// it running for good and wedge the cluster's next backup:
@@ -301,8 +309,8 @@ func (r *BackupJobReconciler) reconcileFoundationDB(ctx context.Context, j *back
 					"backupjob", j.Name, "fdbBackup", fdbBackup.Name, "error", dropErr.Error())
 			}
 			return r.markBackupJobFailed(ctx, j, fmt.Sprintf(
-				"apps.foundationdb.org/FoundationDBBackup did not reach a restorable snapshot within %s (%s)",
-				foundationdbDefaultBackupDeadline, detail))
+				"apps.foundationdb.org/FoundationDBBackup did not reach a restorable snapshot within %s (%s; raise the BackupClass backupTimeout parameter for a database whose first snapshot takes longer)",
+				deadline, detail))
 		}
 		r.refreshFoundationDBBackupStatus(ctx, fdbBackup, time.Now())
 		return r.requeueWithReason(ctx, j, "FoundationDBBackupRunning",
@@ -420,11 +428,11 @@ func foundationdbBackupNotReadyDetail(b *foundationdbtypes.FoundationDBBackup) s
 // has elapsed since the BackupJob started that we should give up on a stuck
 // operator backup. Returns false when StartedAt is nil so the very first
 // reconcile (which sets StartedAt) does not trip the gate.
-func foundationdbBackupDeadlineExceeded(startedAt *metav1.Time) bool {
+func foundationdbBackupDeadlineExceeded(startedAt *metav1.Time, deadline time.Duration) bool {
 	if startedAt == nil {
 		return false
 	}
-	return time.Since(startedAt.Time) > foundationdbDefaultBackupDeadline
+	return time.Since(startedAt.Time) > deadline
 }
 
 // requeueWithReason stamps a transient Ready=False/<reason> condition and
@@ -518,16 +526,11 @@ func (r *BackupJobReconciler) ensureFoundationDBBackup(ctx context.Context, j *b
 		return existing, "", nil
 	}
 
-	if err := r.stopOtherFoundationDBBackups(ctx, j, clusterName); err != nil {
-		return nil, "", err
-	}
-	if waiting, err := r.waitForStoppedFoundationDBBackups(ctx, j, clusterName); err != nil || waiting != "" {
-		return nil, waiting, err
-	}
 	// The Backup this job will record is named after it, and so is the
 	// directory. One that already exists records an earlier job's backup in
 	// that directory: wait while its deletion removes the directory, and
-	// refuse to write into it otherwise.
+	// refuse to write into it otherwise. Both are decided before
+	// the cluster's running backup is stopped for this job.
 	prior := &backupsv1alpha1.Backup{}
 	if err := r.Get(ctx, types.NamespacedName{Namespace: j.Namespace, Name: j.Name}, prior); err == nil {
 		if prior.DeletionTimestamp != nil {
@@ -536,6 +539,13 @@ func (r *BackupJobReconciler) ensureFoundationDBBackup(ctx context.Context, j *b
 		return nil, "", fmt.Errorf("Backup %s/%s of an earlier BackupJob of this name already exists; delete it or use another BackupJob name", j.Namespace, j.Name)
 	} else if !apierrors.IsNotFound(err) {
 		return nil, "", err
+	}
+
+	if err := r.stopOtherFoundationDBBackups(ctx, j, clusterName); err != nil {
+		return nil, "", err
+	}
+	if waiting, err := r.waitForStoppedFoundationDBBackups(ctx, j, clusterName); err != nil || waiting != "" {
+		return nil, waiting, err
 	}
 
 	blobName := rendered.BlobStoreConfiguration.BackupName
