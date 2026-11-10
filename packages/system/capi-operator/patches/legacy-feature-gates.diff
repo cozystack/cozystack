@@ -1,0 +1,51 @@
+--- a/charts/cluster-api-operator/templates/core.yaml
++++ b/charts/cluster-api-operator/templates/core.yaml
+@@ -1,5 +1,6 @@
+ # Core provider
+ {{- range $name, $core := $.Values.core }}
++{{- include "cozystack.capi-operator.legacyFeatureGates" (dict "root" $ "provider" $core "key" "core") }}
+   {{- $coreNamespace := default "capi-system" (get $core "namespace") }}
+   {{- $coreName := $name }}
+   {{- $coreVersion := get $core "version" }}
+--- a/charts/cluster-api-operator/templates/control-plane.yaml
++++ b/charts/cluster-api-operator/templates/control-plane.yaml
+@@ -1,5 +1,6 @@
+ # Control plane provider
+ {{- range $name, $controlPlane := $.Values.controlPlane }}
++{{- include "cozystack.capi-operator.legacyFeatureGates" (dict "root" $ "provider" $controlPlane "key" $name) }}
+   {{- $controlPlaneNamespace := default ( printf "%s-%s" $name "control-plane-system" ) (get $controlPlane "namespace") }}
+   {{- $controlPlaneName := $name }}
+   {{- $controlPlaneVersion := get $controlPlane "version" }}
+--- a/charts/cluster-api-operator/templates/infra.yaml
++++ b/charts/cluster-api-operator/templates/infra.yaml
+@@ -1,5 +1,6 @@
+ # Infrastructure providers
+ {{- range $name, $infra := $.Values.infrastructure }}
++{{- include "cozystack.capi-operator.legacyFeatureGates" (dict "root" $ "provider" $infra "key" $name) }}
+   {{- $infrastructureNamespace := default ( printf "%s-%s" $name "infrastructure-system" ) (get $infra "namespace") }}
+   {{- $infrastructureName := $name }}
+   {{- $infrastructureVersion := get $infra "version" }}
+--- a/charts/cluster-api-operator/templates/ipam.yaml
++++ b/charts/cluster-api-operator/templates/ipam.yaml
+@@ -1,5 +1,6 @@
+ # IPAM providers
+ {{- range $name, $ipam := $.Values.ipam }}
++{{- include "cozystack.capi-operator.legacyFeatureGates" (dict "root" $ "provider" $ipam "key" $name) }}
+   {{- $ipamNamespace := default ( printf "%s-%s" $name "ipam-system" ) (get $ipam "namespace") }}
+   {{- $ipamName := $name }}
+   {{- $ipamVersion := get $ipam "version" }}
+--- a/charts/cluster-api-operator/templates/infra-conditions.yaml
++++ b/charts/cluster-api-operator/templates/infra-conditions.yaml
+@@ -61,6 +61,12 @@
+     "argocd.argoproj.io/sync-wave": "2"
+ {{- with .Values.configSecret }}
+ spec:
++{{- $controlPlane := dict }}
++{{- include "cozystack.capi-operator.legacyFeatureGates" (dict "root" $ "provider" $controlPlane "key" "kubeadm") }}
++{{- with $controlPlane.manager }}
++  manager:
++    {{- toYaml . | nindent 4 }}
++{{- end }}
+   configSecret:
+     name: {{ .name }}
+     {{- if .namespace }}
