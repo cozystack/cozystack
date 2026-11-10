@@ -176,6 +176,9 @@ type deferredEntry struct {
 	More      int      `json:"more,omitempty"`
 	Reason    string   `json:"reason,omitempty"`
 	Workflows bool     `json:"workflows,omitempty"`
+	// Needs, from version 3, are the originals still to come that it waits
+	// on, those of the kind that decides the wait.
+	Needs []int `json:"needs,omitempty"`
 }
 
 // How many conflicting files of one original the body names, in the list and
@@ -194,7 +197,7 @@ type deferredRecord struct {
 // had a version. encoding/json leaves bidi and zero-width characters as they
 // are, so file names go through clean first, as the reason does.
 func deferredBlock(l line, conflicts, held, waiting []pick) string {
-	data, _ := json.Marshal(deferredRecord{Line: l.branch(), Deferred: deferredEntries(conflicts, held, waiting)})
+	data, _ := json.Marshal(deferredRecord{Line: l.branch(), Deferred: deferredEntries(conflicts, held, waiting, nil)})
 	return deferredFence + "\n" + string(data) + "\n```"
 }
 
@@ -231,6 +234,7 @@ type report struct {
 	deferred []pick     // conflicts
 	held     []pick     // what --defer took out, with the reason
 	waiting  []pick     // what changes workflows, left to a maintainer
+	needs    []pick     // what waits on other originals still to come
 	skipped  map[int][]*verdict
 	other    int
 	// overrides are the originals a backport/ label kept out or let in, and
@@ -381,6 +385,12 @@ func (r *report) what(details map[int]bool) string {
 			fmt.Fprintf(&b, "- %s %s: %s\n%s", prLink(v.o.number), titleSpan(v.o.title), parkReason(*v.park), diagItems(v))
 		}
 	}
+	if len(r.needs) > 0 {
+		fmt.Fprintf(&b, "\n### Waiting on another original\n\nThese build on another original that has not reached %s yet, so the batch does not try them; each names the one it waits on, and the batch tries it again once that one is there.\n\n", codeSpan(r.line.branch()))
+		for _, p := range r.needs {
+			fmt.Fprintf(&b, "- %s %s: after %s\n%s", prLink(p.v.o.number), titleSpan(p.v.o.title), prLinks(p.needs), diagItems(p.v))
+		}
+	}
 	if len(r.overrides) > 0 {
 		b.WriteString("\n### Maintainer overrides\n\n")
 		for _, v := range r.overrides {
@@ -437,6 +447,9 @@ func (r *report) outcome(v *verdict) string {
 		return "waiting for a maintainer: it changes " + codeSpan(workflowsDir)
 	case slices.Contains(r.parked, v):
 		return "parked: " + parkReason(*v.park)
+	case slices.ContainsFunc(r.needs, func(p pick) bool { return p.v == v }):
+		i := slices.IndexFunc(r.needs, func(p pick) bool { return p.v == v })
+		return "waiting on " + prLinks(r.needs[i].needs)
 	case v.rule != 0:
 		return "skipped by " + ruleName(v.rule) + ", " + titleSpan(v.reason)
 	}
@@ -461,6 +474,15 @@ func fileSpans(files []string) string {
 	}
 	if more := len(files) - len(out); more > 0 {
 		out = append(out, fmt.Sprintf("%d more", more))
+	}
+	return strings.Join(out, ", ")
+}
+
+// prLinks links to pull requests by number.
+func prLinks(numbers []int) string {
+	var out []string
+	for _, n := range numbers {
+		out = append(out, prLink(n))
 	}
 	return strings.Join(out, ", ")
 }

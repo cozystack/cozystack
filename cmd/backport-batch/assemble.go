@@ -33,6 +33,8 @@ type pick struct {
 	files  []string
 	// failed is the commit whose pick conflicted.
 	failed string
+	// needs are the originals still to come it waits on.
+	needs []int
 	// more counts the conflicting files a recorded conflict no longer names.
 	more   int
 	reason string
@@ -204,6 +206,19 @@ func (a *app) run(args []string) int {
 			return a.fail(err)
 		}
 	}
+	// cls is what each original became in this run, to an original that
+	// builds on it; the rules decide the rest.
+	mode := analysisMode{noWorkflowFiles: *noWorkflows}
+	cls := map[*verdict]edgeClass{}
+	classOf := func(f *verdict) edgeClass {
+		if c, ok := b.ruleClass(f); ok {
+			return c
+		}
+		if c, ok := cls[f]; ok {
+			return c
+		}
+		return edgeMissing
+	}
 	for _, v := range b.qualifying() {
 		on := false
 		if carried != nil {
@@ -214,9 +229,11 @@ func (a *app) run(args []string) int {
 		switch {
 		case on:
 			r.onBranch = append(r.onBranch, v)
+			cls[v] = edgeSatisfied
 			continue
 		case held[v.o.number].Reason != "":
 			r.held = append(r.held, pick{v: v, status: "held", reason: held[v.o.number].Reason})
+			cls[v] = edgeDeferred
 			continue
 		case v.onBatch != "":
 			v.rule, v.reason = ruleOnLine, fmt.Sprintf("on the open batch pull request #%d", b.pr.Number)
@@ -231,6 +248,17 @@ func (a *app) run(args []string) int {
 			}
 			if v.partial != nil {
 				r.parked = append(r.parked, v)
+				cls[v] = edgeNever
+				continue
+			}
+		}
+		if len(v.deps) > 0 {
+			kind, err := a.dependsAt(b, r, v, mode, classOf)
+			if err != nil {
+				return a.fail(err)
+			}
+			if kind != edgeSatisfied {
+				cls[v] = kind
 				continue
 			}
 		}
@@ -241,6 +269,7 @@ func (a *app) run(args []string) int {
 			}
 			if len(files) > 0 {
 				r.waiting = append(r.waiting, pick{v: v, status: "waiting", files: files})
+				cls[v] = edgeWorkflow
 				continue
 			}
 		}
@@ -257,10 +286,13 @@ func (a *app) run(args []string) int {
 			v.partial = p.files
 			v.park = &parkedEntry{Original: v.o.number, Merge: v.o.merge, Kind: parkPartial, Files: sortedClean(p.files)}
 			r.parked = append(r.parked, v)
+			cls[v] = edgeNever
 		case "picked":
 			r.onBranch = append(r.onBranch, v)
+			cls[v] = edgeSatisfied
 		case "conflict":
 			r.deferred = append(r.deferred, p)
+			cls[v] = edgeDeferred
 		case "empty":
 			v.rule, v.reason = ruleOnLine, "the earlier picks already carry it"
 			r.skipped[ruleOnLine] = append(r.skipped[ruleOnLine], v)
@@ -283,6 +315,50 @@ func (a *app) run(args []string) int {
 		}
 	}
 	return a.finish(b, r, branch, date, *push, false)
+}
+
+// dependsAt decides, from what v builds on that the branch lacks, whether
+// the run leaves it out: waiting for a maintainer in the scheduled mode
+// when only tests or docs build on what never comes, parked when anything
+// else never comes, or waiting on prerequisites still to come. What is
+// there, the line's, the batch's, or what this run picked or found empty,
+// counts for nothing; once earlier picks moved the branch, v is judged at
+// its head. It returns what v became to an original that builds on it,
+// edgeSatisfied when the run goes on to pick it.
+func (a *app) dependsAt(b *batch, r *report, v *verdict, mode analysisMode, classOf func(*verdict) edgeClass) (edgeClass, error) {
+	deps := v.deps
+	head, err := resolve("HEAD")
+	if err != nil {
+		return 0, err
+	}
+	if head != b.lineHead {
+		if deps, err = b.depsAt(v, head); err != nil {
+			return 0, err
+		}
+	}
+	never, pending := edges(deps, classOf)
+	primary, err := workflowPrimary(mode, v, never, pending)
+	switch {
+	case err != nil:
+		return 0, err
+	case primary:
+		files, err := workflowFiles(v.commits)
+		if err != nil {
+			return 0, err
+		}
+		v.addDiag(testsOnly(v, never, b.line))
+		r.waiting = append(r.waiting, pick{v: v, status: "waiting", files: files})
+		return edgeWorkflow, nil
+	case len(never) > 0:
+		v.park = dependencyPark(v, never)
+		r.parked = append(r.parked, v)
+		return edgeNever, nil
+	case len(pending) > 0:
+		class, needs := strongest(pending)
+		r.needs = append(r.needs, pick{v: v, status: "waiting", needs: numbers(needs)})
+		return class, nil
+	}
+	return edgeSatisfied, nil
 }
 
 // partialAtHead judges v again where the run has got to, when earlier picks

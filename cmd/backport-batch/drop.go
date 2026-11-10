@@ -117,6 +117,9 @@ func (a *app) redrop(b *batch, numbers []int, reason string, undrop bool, push b
 		if err := b.load(v); err != nil {
 			return a.fail(err)
 		}
+		if err := b.rejudged(v); err != nil {
+			return a.fail(err)
+		}
 		if undrop {
 			continue
 		}
@@ -157,6 +160,38 @@ func (b *batch) bindDrops(merges []*original) (map[int]droppedEntry, error) {
 	return bindEntries(b.src.rec.dropped(), merges, b.mainHead, func(d droppedEntry) string {
 		return fmt.Sprintf("batch pull request #%d drops #%d by %.12s", b.src.carrier.Number, d.Original, d.Merge)
 	})
+}
+
+// waitOrder refuses a record whose waits or parks need an original merged
+// after the one that needs it: a dependency is always on main first.
+func (b *batch) waitOrder(merges []*original) error {
+	if b.src.rec == nil {
+		return nil
+	}
+	at := map[int]int{}
+	for i, o := range merges {
+		at[o.number] = i
+	}
+	check := func(n int, needs []int) error {
+		i, ok := at[n]
+		for _, f := range needs {
+			if j, known := at[f]; ok && known && j >= i {
+				return fmt.Errorf("batch pull request #%d has #%d wait on #%d, which merged after it", b.src.carrier.Number, n, f)
+			}
+		}
+		return nil
+	}
+	for _, d := range b.src.rec.Deferred {
+		if err := check(d.Original, d.Needs); err != nil {
+			return err
+		}
+	}
+	for _, p := range b.src.rec.Parked {
+		if err := check(p.Original, p.Needs); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // bindEntries binds drops to main: one whose original is among merges, the

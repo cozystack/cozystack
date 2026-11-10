@@ -21,6 +21,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"regexp"
 	"slices"
 	"strings"
@@ -258,6 +259,9 @@ func parseRecord(body string, l line) (*lineRecord, error) {
 	default:
 		return nil, fmt.Errorf("the %s block is version %d, which this backport-batch does not read; it reads 1 to %d", deferredFence, version, recordVersion)
 	}
+	if err == nil && version < 3 && slices.ContainsFunc(rec.Deferred, func(d deferredEntry) bool { return d.Needs != nil }) {
+		err = fmt.Errorf("version %d has no waits on other originals", version)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("reading the %s block: %w", deferredFence, err)
 	}
@@ -294,7 +298,7 @@ func (rec *lineRecord) validate(l line) error {
 		// A conflict names the commit that failed and its files, a deferral
 		// its reason, and a wait its workflow files.
 		kinds := 0
-		for _, is := range []bool{d.Commit != "" || len(d.Files) > 0 && !d.Workflows && d.Reason == "", d.Reason != "", d.Workflows} {
+		for _, is := range []bool{d.Commit != "" || len(d.Files) > 0 && !d.Workflows && d.Reason == "" && len(d.Needs) == 0, d.Reason != "", d.Workflows, len(d.Needs) > 0} {
 			if is {
 				kinds++
 			}
@@ -312,6 +316,13 @@ func (rec *lineRecord) validate(l line) error {
 			return fmt.Errorf("names files of #%d that are not as a run writes them: %q", d.Original, d.Files)
 		case d.More < 0:
 			return fmt.Errorf("counts %d more files for #%d", d.More, d.Original)
+		case len(d.Needs) > 0 && (len(d.Files) > 0 || d.More != 0):
+			return fmt.Errorf("has #%d wait on other originals with files of its own", d.Original)
+		}
+		for i, n := range d.Needs {
+			if n <= 0 || n == d.Original || i > 0 && d.Needs[i-1] >= n {
+				return fmt.Errorf("has #%d wait on %v, which is not what a run writes", d.Original, d.Needs)
+			}
 		}
 	}
 	for _, d := range rec.Dropped {
@@ -346,6 +357,27 @@ func (rec *lineRecord) validate(l line) error {
 			return fmt.Errorf("lists %d as a changed pick more than once or not at all", n)
 		}
 		changedSeen[n] = true
+	}
+	if err := rec.waitsHold(); err != nil {
+		return err
+	}
+	// What is on the batch is neither deferred nor parked.
+	left := map[int]bool{}
+	for _, d := range rec.Deferred {
+		left[d.Original] = true
+	}
+	for _, p := range rec.Parked {
+		left[p.Original] = true
+		if slices.Contains(p.Commits, p.Merge) {
+			return fmt.Errorf("parks #%d for its own merge", p.Original)
+		}
+	}
+	for _, list := range [][]int{rec.Partial, rec.Changed} {
+		for _, n := range list {
+			if left[n] {
+				return fmt.Errorf("has #%d on the batch and left off it at once", n)
+			}
+		}
 	}
 	partialSeen := map[int]bool{}
 	for _, n := range rec.Partial {
@@ -400,6 +432,74 @@ func (b *builtFrom) validate() error {
 }
 
 var runURLRE = regexp.MustCompile(`^https://[^/\s]+/[^/\s]+/[^/\s]+/actions/runs/[0-9]+(/attempts/[0-9]+)?$`)
+
+// waitsHold holds what waits and parks need to what the record says of the
+// originals they need: a wait needs ones still to come, so none parked or
+// dropped, a park ones that never come, so none deferred, and no wait ends
+// up waiting on itself. Its errors read after "the block".
+func (rec *lineRecord) waitsHold() error {
+	deferred, never := map[int][]int{}, map[int]bool{}
+	for _, d := range rec.Deferred {
+		deferred[d.Original] = d.Needs
+	}
+	for _, p := range rec.Parked {
+		never[p.Original] = true
+	}
+	for _, d := range rec.Dropped {
+		never[d.Original] = true
+	}
+	for _, d := range rec.Deferred {
+		for _, n := range d.Needs {
+			if never[n] {
+				return fmt.Errorf("has #%d wait on #%d, which never comes", d.Original, n)
+			}
+		}
+	}
+	for _, p := range rec.Parked {
+		for _, n := range p.Needs {
+			if _, ok := deferred[n]; ok {
+				return fmt.Errorf("parks #%d for #%d, which is still to come", p.Original, n)
+			}
+		}
+	}
+	needs := map[int][]int{}
+	for _, d := range rec.Deferred {
+		needs[d.Original] = d.Needs
+	}
+	for _, p := range rec.Parked {
+		needs[p.Original] = p.Needs
+	}
+	return waitCycle(needs)
+}
+
+// waitCycle refuses waits that lead back to where they started, which no
+// run writes: a prerequisite merged before what needs it.
+func waitCycle(needs map[int][]int) error {
+	state := map[int]int{} // 1 on the path, 2 done
+	var visit func(n int) error
+	visit = func(n int) error {
+		switch state[n] {
+		case 1:
+			return fmt.Errorf("has #%d wait on itself through what it waits on", n)
+		case 2:
+			return nil
+		}
+		state[n] = 1
+		for _, f := range needs[n] {
+			if err := visit(f); err != nil {
+				return err
+			}
+		}
+		state[n] = 2
+		return nil
+	}
+	for _, n := range slices.Sorted(maps.Keys(needs)) {
+		if err := visit(n); err != nil {
+			return err
+		}
+	}
+	return nil
+}
 
 // lineRecordWithout is a version 2 record as the newest version holds it.
 func lineRecordWithout(v2 lineRecordV2) lineRecord {

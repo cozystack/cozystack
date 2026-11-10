@@ -145,7 +145,7 @@ func numbers(vs []*verdict) []int {
 
 // deferredEntries is what the record and the report say about the conflicts,
 // the deferrals and the waits of a run.
-func deferredEntries(conflicts, held, waiting []pick) []deferredEntry {
+func deferredEntries(conflicts, held, waiting, needs []pick) []deferredEntry {
 	out := []deferredEntry{}
 	for _, p := range conflicts {
 		files := cleanFiles(p.files[:min(len(p.files), filesKept)])
@@ -157,6 +157,9 @@ func deferredEntries(conflicts, held, waiting []pick) []deferredEntry {
 	for _, p := range waiting {
 		files := cleanFiles(p.files[:min(len(p.files), filesKept)])
 		out = append(out, deferredEntry{Original: p.v.o.number, Files: files, More: len(p.files) - len(files) + p.more, Workflows: true})
+	}
+	for _, p := range needs {
+		out = append(out, deferredEntry{Original: p.v.o.number, Files: []string{}, Needs: slices.Sorted(slices.Values(p.needs))})
 	}
 	return out
 }
@@ -188,7 +191,7 @@ func buildReport(b *batch, r *report) (reportDoc, error) {
 			doc.Overrides.Skip = append(doc.Overrides.Skip, v.o.number)
 		}
 	}
-	doc.Primary = reportPrimary{Picked: numbers(r.onBranch), Missing: numbers(r.missing), Deferred: deferredEntries(r.deferred, r.held, r.waiting), Parked: parkedEntries(r.parked)}
+	doc.Primary = reportPrimary{Picked: numbers(r.onBranch), Missing: numbers(r.missing), Deferred: deferredEntries(r.deferred, r.held, r.waiting, r.needs), Parked: parkedEntries(r.parked)}
 	for _, l := range doc.Primary.Skipped.lists() {
 		*l.list = []int{}
 	}
@@ -415,6 +418,9 @@ func (d *reportDoc) links() error {
 				return fmt.Errorf("parks #%d for #%d, which it has %s", p.Original, n, or(c, "nowhere"))
 			}
 		}
+		if other[p.Merge] || slices.Contains(p.Commits, p.Merge) {
+			return fmt.Errorf("parks #%d by a merge it counts as no pull request's, or for its own merge", p.Original)
+		}
 		for _, c := range p.Commits {
 			if !other[c] {
 				return fmt.Errorf("parks #%d for %.12s, which it does not count among main's commits that merged no pull request", p.Original, c)
@@ -480,6 +486,28 @@ func (d *reportDoc) links() error {
 		if e.Workflows && !d.Built.Options.NoWorkflowFiles {
 			return fmt.Errorf("has #%d waiting for its workflow files, but was made bringing them over", e.Original)
 		}
+		// What a wait waits on is still to come: not on the line, deferred,
+		// or held by rule 6.
+		for _, n := range e.Needs {
+			switch c := where[n]; c {
+			case "missing", "deferred", "skipped.newer":
+			default:
+				return fmt.Errorf("has #%d wait on #%d, which it has %s", e.Original, n, or(c, "nowhere"))
+			}
+		}
+		if d.Format == 1 && len(e.Needs) > 0 {
+			return fmt.Errorf("has #%d wait on other originals, which format 1 does not", e.Original)
+		}
+	}
+	needs := map[int][]int{}
+	for _, e := range d.Primary.Deferred {
+		needs[e.Original] = e.Needs
+	}
+	for _, p := range d.Primary.Parked {
+		needs[p.Original] = p.Needs
+	}
+	if err := waitCycle(needs); err != nil {
+		return err
 	}
 	if d.Built.Options.Mode == modeClose && len(d.Primary.Picked)+len(d.Overlays.Stale) > 0 {
 		return errors.New("closes the batch, but still has originals on it")
@@ -734,6 +762,12 @@ func (a *app) printReport(pr *pullRequest, s storedReport, inBody *storedReport,
 		switch {
 		case e.Workflows:
 			text += "waits for a maintainer, changes " + strings.Join(e.Files, ", ")
+		case len(e.Needs) > 0:
+			var needs []string
+			for _, n := range e.Needs {
+				needs = append(needs, "#"+strconv.Itoa(n))
+			}
+			text += "waits on " + strings.Join(needs, ", ")
 		case e.Reason != "":
 			text += e.Reason
 		default:

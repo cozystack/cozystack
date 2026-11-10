@@ -633,6 +633,27 @@ func TestReportRefusesWhatItCannotVouchFor(t *testing.T) {
 			d.Primary.Parked = []parkedEntry{{Original: 16, Merge: strings.Repeat("b", 40), Kind: parkDependency, Commits: []string{strings.Repeat("c", 40)}}}
 		},
 		"a partial unit not on the batch": func(d *reportDoc) { d.Overlays.Partial = []int{5} },
+		"a wait on an original it picks": func(d *reportDoc) {
+			d.Primary.Deferred = []deferredEntry{{Original: 6, Files: []string{}, Needs: []int{5}}}
+		},
+		"a wait on an original it puts nowhere": func(d *reportDoc) {
+			d.Primary.Deferred = []deferredEntry{{Original: 6, Files: []string{}, Needs: []int{19}}}
+		},
+		"a park on its own merge as a commit": func(d *reportDoc) {
+			d.Other = append(d.Other, strings.Repeat("b", 40))
+			d.Primary.Parked = []parkedEntry{{Original: 16, Merge: strings.Repeat("b", 40), Kind: parkDependency, Commits: []string{strings.Repeat("b", 40)}}}
+		},
+		"a park cycle": func(d *reportDoc) {
+			d.Primary.Parked = []parkedEntry{{Original: 16, Merge: strings.Repeat("b", 40), Kind: parkDependency, Needs: []int{18}}, {Original: 18, Merge: strings.Repeat("b", 40), Kind: parkDependency, Needs: []int{16}}}
+		},
+		"a wait cycle": func(d *reportDoc) {
+			d.Primary.Deferred = []deferredEntry{{Original: 6, Files: []string{}, Needs: []int{7}}, {Original: 7, Files: []string{}, Needs: []int{6}}}
+		},
+		"format 1 with a wait": func(d *reportDoc) {
+			d.Format = 1
+			d.Primary.Missing = []int{19}
+			d.Primary.Deferred = []deferredEntry{{Original: 6, Files: []string{}, Needs: []int{19}}}
+		},
 		"format 1 with a park": func(d *reportDoc) {
 			d.Format = 1
 			d.Primary.Parked = []parkedEntry{{Original: 16, Merge: strings.Repeat("b", 40), Kind: parkPartial, Files: []string{"a"}}}

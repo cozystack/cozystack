@@ -87,20 +87,42 @@ func (a *app) notify(args []string) int {
 		return a.fail(err)
 	}
 	deferred := map[int]deferredEntry{}
+	var partial []int
 	if src.open {
-		deferred = src.rec.deferred()
+		deferred, partial = src.rec.deferred(), src.rec.Partial
 	}
+	// An original that waits on others is listed once, after what decides
+	// its wait, where that one is listed.
 	var conflicts, waiting []int
+	after := map[int][]int{}
 	for n, e := range deferred {
-		switch {
-		case e.Workflows:
+		switch place := placement(deferred, n, map[int]bool{}); {
+		case place == "workflow":
 			waiting = append(waiting, n)
-		case e.Reason == "":
+		case place == "conflict":
 			conflicts = append(conflicts, n)
+		}
+		if len(e.Needs) > 0 {
+			after[n] = e.Needs
 		}
 	}
 	slices.Sort(conflicts)
 	slices.Sort(waiting)
+	item := func(n int) string {
+		if needs := after[n]; len(needs) > 0 {
+			return fmt.Sprintf("\n- %s, after %s", prLink(n), prLinks(needs))
+		}
+		return "\n- " + prLink(n)
+	}
+	count := func(ns []int) int {
+		c := 0
+		for _, n := range ns {
+			if len(after[n]) == 0 {
+				c++
+			}
+		}
+		return c
+	}
 
 	today := a.now().UTC().Truncate(24 * time.Hour)
 	days := int(today.Sub(opened).Hours() / 24)
@@ -110,21 +132,34 @@ func (a *app) notify(args []string) int {
 		fmt.Fprintf(a.stdout, "%s: batch pull request #%d has been open since %s, %d days\n", l.branch(), pr.Number, opened.Format(time.DateOnly), days)
 		text = append(text, fmt.Sprintf("This batch has been open since %s, %d days, through at least one scheduled run. Merge it, or close it and the next run starts a new one; until then each run adds what the rules take to it.", opened.Format(time.DateOnly), days))
 	}
-	if len(conflicts) > 0 {
-		fmt.Fprintf(a.stdout, "%s: %d deferred conflicts on #%d wait for a maintainer\n", l.branch(), len(conflicts), pr.Number)
+	if len(partial) > 0 {
+		fmt.Fprintf(a.stdout, "%s: %d units on #%d carry only part of their originals\n", l.branch(), len(partial), pr.Number)
 		var b strings.Builder
-		fmt.Fprintf(&b, "These conflicts wait for a maintainer, as [resolving a conflict](%sresolve-conflict.md) describes; unresolved, each goes to the next batch:\n", tasksURL)
+		b.WriteString("These are on the batch but carry only part of their originals on this line; take each out with `backport-batch run --defer` before the cut, and port what applies as a pull request of its own:\n")
+		for _, n := range partial {
+			b.WriteString(item(n))
+		}
+		text = append(text, b.String())
+	}
+	if len(conflicts) > 0 {
+		fmt.Fprintf(a.stdout, "%s: %d deferred conflicts on #%d wait for a maintainer\n", l.branch(), count(conflicts), pr.Number)
+		var b strings.Builder
+		fmt.Fprintf(&b, "These conflicts wait for a maintainer, as [resolving a conflict](%sresolve-conflict.md) describes; unresolved, each goes to the next batch, and so does what waits on one:\n", tasksURL)
 		for _, n := range conflicts {
-			fmt.Fprintf(&b, "\n- %s", prLink(n))
+			b.WriteString(item(n))
 		}
 		text = append(text, b.String())
 	}
 	if len(waiting) > 0 {
-		fmt.Fprintf(a.stdout, "%s: %d originals on #%d change %s and wait for a maintainer\n", l.branch(), len(waiting), pr.Number, workflowsDir)
+		if count(waiting) == len(waiting) {
+			fmt.Fprintf(a.stdout, "%s: %d originals on #%d change %s and wait for a maintainer\n", l.branch(), len(waiting), pr.Number, workflowsDir)
+		} else {
+			fmt.Fprintf(a.stdout, "%s: %d originals on #%d change %s or wait on one that does\n", l.branch(), len(waiting), pr.Number, workflowsDir)
+		}
 		var b strings.Builder
-		fmt.Fprintf(&b, "These change `%s`, which the batch's token may not push, and wait for a maintainer to bring them over, as [changes to workflows](%s#changes-to-workflows) describes:\n", workflowsDir, policyURL)
+		fmt.Fprintf(&b, "These change `%s`, which the batch's token may not push, and wait for a maintainer to bring them over, as [changes to workflows](%s#changes-to-workflows) describes, or wait on one that does:\n", workflowsDir, policyURL)
 		for _, n := range waiting {
-			fmt.Fprintf(&b, "\n- %s", prLink(n))
+			b.WriteString(item(n))
 		}
 		text = append(text, b.String())
 	}
@@ -132,6 +167,36 @@ func (a *app) notify(args []string) int {
 		return 0
 	}
 	return a.comment(pr, *mention, today, text)
+}
+
+// placement says under which list notify names original n of the record:
+// workflow for a wait for a maintainer, conflict for a deferred conflict, ""
+// for neither, a deferral for a reason among them. One that waits on others
+// goes where what decides its wait goes, followed down the record; one that
+// is not in the record is held by rule 6 or missing, and waits on nobody.
+func placement(deferred map[int]deferredEntry, n int, seen map[int]bool) string {
+	e, ok := deferred[n]
+	switch {
+	case !ok || seen[n]:
+		return ""
+	case e.Workflows:
+		return "workflow"
+	case e.Reason != "":
+		return ""
+	case len(e.Needs) == 0:
+		return "conflict"
+	}
+	seen[n] = true
+	place := ""
+	for _, f := range e.Needs {
+		switch p := placement(deferred, f, seen); {
+		case p == "workflow":
+			return p
+		case p == "conflict":
+			place = p
+		}
+	}
+	return place
 }
 
 // comment writes what waits into the one notify comment on the batch pull

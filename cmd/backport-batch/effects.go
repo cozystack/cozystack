@@ -444,6 +444,7 @@ func (b *batch) partialStates() error {
 			return err
 		}
 		for v, commit := range on {
+			v.batched = commit
 			if v.rule == 0 && v.onBatch == "" {
 				v.onBatch = commit
 			}
@@ -508,6 +509,58 @@ func (b *batch) markPartial(r *report, head string) error {
 			r.stale = append(r.stale, v)
 		}
 	}
+	return nil
+}
+
+// keepRecordedPartials judges again, at head, what the batch carries now,
+// each original the open record parks as partial that the line's head
+// judges whole: the run's picker found it partial after the picks before
+// it, which check and an operation that picks nothing do not replay. It
+// stays parked while its net merge onto head still leaves something
+// without effect, and is the line's again once that went, as when the pick
+// that made it partial was taken off.
+func (b *batch) keepRecordedPartials(head string) error {
+	if !b.src.open || b.src.rec == nil {
+		return nil
+	}
+	for _, p := range b.src.rec.Parked {
+		v := b.find(p.Original)
+		if p.Kind != parkPartial || v == nil || v.rule != 0 || v.onBatch != "" || v.park != nil || v.o.merge != p.Merge {
+			continue
+		}
+		if err := b.partialAt(v, head); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// rejudged reads again what partialStates and analyze read for v once its
+// rules changed, as a withdrawn drop changes them: it is back where the
+// line puts it.
+func (b *batch) rejudged(v *verdict) error {
+	if b.pr != nil {
+		on, err := b.unitsOn(b.prHead)
+		if err != nil {
+			return err
+		}
+		v.batched = on[v]
+		if v.rule == 0 && v.onBatch == "" {
+			v.onBatch = on[v]
+		}
+	}
+	if v.rule != 0 || v.onBatch != "" {
+		return nil
+	}
+	if err := b.partialAt(v, b.lineHead); err != nil {
+		return err
+	}
+	deps, diag, err := b.dependencies(v, b.lineHead)
+	if err != nil {
+		return err
+	}
+	v.deps = deps
+	v.addDiag(diag...)
 	return nil
 }
 

@@ -436,6 +436,23 @@ func (b *batch) dependencies(v *verdict, target string) ([]dependency, []string,
 	for _, d := range byMerge {
 		slices.Sort(d.paths)
 		deps = append(deps, *d)
+		// The rules decide before the line is looked at, so whether the
+		// line carries a prerequisite they keep out is asked here.
+		if f := d.v; f != nil && f.rule != 0 && f.rule != ruleOnLine && f.rule != ruleNewer && b.lineHist != nil {
+			if _, asked := b.lineCarries[f]; !asked {
+				if err := b.load(f); err != nil {
+					return nil, nil, err
+				}
+				how, err := b.lineHist.carries(f.o, f.commits)
+				if err != nil {
+					return nil, nil, err
+				}
+				if b.lineCarries == nil {
+					b.lineCarries = map[*verdict]bool{}
+				}
+				b.lineCarries[f] = how != ""
+			}
+		}
 	}
 	slices.SortFunc(deps, func(x, y dependency) int { return strings.Compare(x.merge, y.merge) })
 	return deps, diag, nil
@@ -614,25 +631,9 @@ func (b *batch) beforeBase(commit string) (bool, error) {
 	return ok, err
 }
 
-// depNote is how a dependency is shown with its original.
-func (d dependency) note(l line) string {
-	who := fmt.Sprintf("%.12s, a commit on main that merged no pull request", d.merge)
-	if d.v != nil {
-		who = fmt.Sprintf("#%d", d.v.o.number)
-	}
-	quoted := make([]string, len(d.paths))
-	for i, p := range d.paths {
-		quoted[i] = shown(p)
-	}
-	how := "in " + strings.Join(quoted, ", ")
-	if d.added {
-		how = "which added " + strings.Join(quoted, ", ")
-	}
-	return oneLineText(fmt.Sprintf("builds on %s, %s, which %s lacks", who, how, l.branch()))
-}
-
 // analyze reads what every original the policy takes and nothing carries
-// builds on that the line lacks, and keeps it with the original.
+// builds on that the line lacks, and keeps it with the original, for the
+// parks and waits that follow from it.
 func (b *batch) analyze() error {
 	defer b.timed(time.Now())
 	for _, v := range b.qualifying() {
@@ -645,9 +646,267 @@ func (b *batch) analyze() error {
 		}
 		v.deps = deps
 		v.addDiag(diag...)
-		for _, d := range deps {
-			v.addDiag(d.note(b.line))
-		}
 	}
 	return nil
+}
+
+// analysisMode is how a classification treats an original that changes a
+// workflow: as the scheduled run does, whose token cannot push one, or as a
+// maintainer's run.
+type analysisMode struct{ noWorkflowFiles bool }
+
+// edgeClass is what a prerequisite is to an original that builds on it,
+// from what never matters to what decides first.
+type edgeClass int
+
+const (
+	edgeSatisfied edgeClass = iota
+	// edgeNewer is held by rule 6 on this line.
+	edgeNewer
+	// edgeDeferred is a deferred conflict, or deferred for a reason.
+	edgeDeferred
+	// edgeWorkflow waits on the open batch for a maintainer.
+	edgeWorkflow
+	// edgeMissing is on neither the line, the batch nor the record.
+	edgeMissing
+	// edgeNever never reaches the line.
+	edgeNever
+)
+
+// edge is a dependency whose prerequisite has not reached the line, with
+// what that prerequisite is.
+type edge struct {
+	dep   dependency
+	class edgeClass
+}
+
+// ruleClass is what the rules alone make of a prerequisite, or ok false when
+// it depends on what this classification makes of it: one the line or the
+// open batch carries is there, whatever its label, drop or rule says, and a
+// direct push and an original the rules keep out never come.
+func (b *batch) ruleClass(f *verdict) (edgeClass, bool) {
+	switch {
+	case f == nil:
+		return edgeNever, true
+	case f.rule == ruleOnLine || f.onBatch != "" || f.batched != "" || b.lineCarries[f]:
+		return edgeSatisfied, true
+	case f.rule == ruleNewer:
+		return edgeNewer, true
+	case f.rule != 0:
+		return edgeNever, true
+	}
+	return 0, false
+}
+
+// edges sorts dependencies by what classOf says of each prerequisite into
+// those that never come and those still to come, dropping the ones there.
+func edges(deps []dependency, classOf func(*verdict) edgeClass) (never, pending []edge) {
+	for _, d := range deps {
+		switch c := classOf(d.v); c {
+		case edgeSatisfied:
+		case edgeNever:
+			never = append(never, edge{d, c})
+		default:
+			pending = append(pending, edge{d, c})
+		}
+	}
+	return never, pending
+}
+
+// strongest is the class of prerequisite that decides a wait, and the
+// prerequisites of that class, in merge order.
+func strongest(pending []edge) (edgeClass, []*verdict) {
+	top := edgeSatisfied
+	for _, e := range pending {
+		top = max(top, e.class)
+	}
+	var out []*verdict
+	for _, e := range pending {
+		if e.class == top && !slices.Contains(out, e.dep.v) {
+			out = append(out, e.dep.v)
+		}
+	}
+	return top, out
+}
+
+// auxiliary says whether a path holds tests or documentation, which an
+// original can change without building on what it needs to work.
+func auxiliary(p string) bool {
+	parts := strings.Split(p, "/")
+	base := parts[len(parts)-1]
+	for _, d := range parts[:len(parts)-1] {
+		if d == "test" || d == "tests" || d == "testdata" {
+			return true
+		}
+	}
+	switch {
+	case strings.HasSuffix(base, "_test.go"), strings.Contains(base, ".test."), strings.Contains(base, ".spec."), strings.HasSuffix(base, ".bats"):
+		return true
+	case len(parts) > 1 && parts[0] == "docs":
+		return true
+	}
+	return len(parts) == 1 && strings.HasSuffix(base, ".md")
+}
+
+// workflowPrimary says whether v waits for a maintainer rather than parks:
+// in the scheduled mode, an original that changes a workflow, all of whose
+// missing dependencies that never come are tests or docs, and whose
+// workflow lines build on nothing still missing. The workflow is what it is
+// for, and a maintainer brings over what applies. Only what is still
+// missing counts: never and pending are what is left once what is there was
+// taken out.
+func workflowPrimary(mode analysisMode, v *verdict, never, pending []edge) (bool, error) {
+	if !mode.noWorkflowFiles || len(never) == 0 {
+		return false, nil
+	}
+	for _, e := range never {
+		if slices.ContainsFunc(e.dep.paths, func(p string) bool { return !auxiliary(p) }) {
+			return false, nil
+		}
+	}
+	for _, e := range append(slices.Clone(never), pending...) {
+		if slices.ContainsFunc(e.dep.paths, func(p string) bool { return strings.HasPrefix(p, workflowsDir) }) {
+			return false, nil
+		}
+	}
+	files, err := workflowFiles(v.commits)
+	return len(files) > 0, err
+}
+
+// testsOnly is the note a workflow original gets that waits for a
+// maintainer although its tests build on what never comes.
+func testsOnly(v *verdict, never []edge, l line) string {
+	var who []string
+	for _, e := range never {
+		if e.dep.v != nil {
+			who = append(who, fmt.Sprintf("#%d", e.dep.v.o.number))
+		} else {
+			who = append(who, e.dep.merge[:12])
+		}
+	}
+	slices.Sort(who)
+	return oneLineText(fmt.Sprintf("only its tests or docs build on %s, which never reaches %s", strings.Join(slices.Compact(who), ", "), l.branch()))
+}
+
+// dependencyPark is the park of v for prerequisites that never come.
+func dependencyPark(v *verdict, never []edge) *parkedEntry {
+	p := &parkedEntry{Original: v.o.number, Merge: v.o.merge, Kind: parkDependency}
+	for _, e := range never {
+		if e.dep.v != nil {
+			p.Needs = append(p.Needs, e.dep.v.o.number)
+		} else {
+			p.Commits = append(p.Commits, e.dep.merge)
+		}
+	}
+	slices.Sort(p.Needs)
+	p.Needs = slices.Compact(p.Needs)
+	slices.Sort(p.Commits)
+	p.Commits = slices.Compact(p.Commits)
+	return p
+}
+
+// depsAt is what v builds on that target lacks, read once per target: the
+// run asks again at its head once earlier picks moved the branch.
+func (b *batch) depsAt(v *verdict, target string) ([]dependency, error) {
+	key := target + " " + v.o.merge
+	if d, ok := b.depCache[key]; ok {
+		return d, nil
+	}
+	deps, diag, err := b.dependencies(v, target)
+	if err != nil {
+		return nil, err
+	}
+	v.addDiag(diag...)
+	if b.depCache == nil {
+		b.depCache = map[string][]dependency{}
+	}
+	b.depCache[key] = deps
+	return deps, nil
+}
+
+// stateKind is what a classification makes of an original the policy takes
+// that nothing carries, in the order that decides it.
+type stateKind int
+
+const (
+	// stHeld is deferred for a reason a person gave.
+	stHeld stateKind = iota + 1
+	// stPartial would leave part of it without effect on the line.
+	stPartial
+	// stWorkflowPrimary waits for a maintainer, though its tests build on
+	// what never comes.
+	stWorkflowPrimary
+	// stParked builds on what never comes.
+	stParked
+	// stNeeds waits on prerequisites still to come.
+	stNeeds
+	// stOwn is what the record says of it, or missing.
+	stOwn
+)
+
+// state is a classification of one original: what it is, what it is to an
+// original that builds on it, and for a wait the class that decides it and
+// the prerequisites of that class.
+type state struct {
+	kind  stateKind
+	class edgeClass
+	wait  edgeClass
+	needs []*verdict
+}
+
+// classify decides, in merge order, what becomes of every original the
+// policy takes that neither the line nor the open batch carries, as an
+// operation that picks nothing sees it: check, and the ones that only
+// change the record. held are the reasons people deferred originals for,
+// recorded what the record defers, and listed says the record's workflow
+// waits still wait on an open batch. Parks it finds go into each verdict.
+func (b *batch) classify(mode analysisMode, held map[int]string, recorded map[int]deferredEntry, listed bool) (map[*verdict]*state, error) {
+	states := map[*verdict]*state{}
+	classOf := func(f *verdict) edgeClass {
+		if c, ok := b.ruleClass(f); ok {
+			return c
+		}
+		if s := states[f]; s != nil {
+			return s.class
+		}
+		return edgeMissing
+	}
+	for _, v := range b.qualifying() {
+		if v.onBatch != "" {
+			continue
+		}
+		s := &state{}
+		states[v] = s
+		e := recorded[v.o.number]
+		never, pending := edges(v.deps, classOf)
+		primary, err := workflowPrimary(mode, v, never, pending)
+		if err != nil {
+			return nil, err
+		}
+		switch {
+		case held[v.o.number] != "":
+			s.kind, s.class = stHeld, edgeDeferred
+		case v.park != nil && v.park.Kind == parkPartial:
+			s.kind, s.class = stPartial, edgeNever
+		case primary:
+			s.kind, s.class = stWorkflowPrimary, edgeMissing
+			if listed && e.Workflows {
+				s.class = edgeWorkflow
+			}
+		case len(never) > 0:
+			v.park = dependencyPark(v, never)
+			s.kind, s.class = stParked, edgeNever
+		case len(pending) > 0:
+			s.kind = stNeeds
+			s.wait, s.needs = strongest(pending)
+			s.class = s.wait
+		case listed && e.Workflows:
+			s.kind, s.class = stOwn, edgeWorkflow
+		case !e.Workflows && len(e.Needs) == 0 && (e.Commit != "" || len(e.Files) > 0):
+			s.kind, s.class = stOwn, edgeDeferred
+		default:
+			s.kind, s.class = stOwn, edgeMissing
+		}
+	}
+	return states, nil
 }

@@ -381,6 +381,22 @@ func TestFoldRefusesAKeptDeletion(t *testing.T) {
 	}
 }
 
+// An original parked for what it builds on can still land as a complete
+// hand adaptation: every file it changes, changed, in the batch's shape.
+func TestFoldAcceptsACompleteAdaptationOfAParkedOriginal(t *testing.T) {
+	f := newFixture(t)
+	f.squash(2, "chore: a", "", map[string]string{"app/a.txt": appFile})
+	f.lines()
+	f.pr(3, "feat(app): a loud two", "", map[string]string{"app/a.txt": strings.Replace(appFile, "two", "TWO", 1)})
+	mc5 := f.pr(5, "fix(app): an excited two", "", map[string]string{"app/a.txt": strings.Replace(appFile, "two", "TWO!", 1)})
+	w := emptyBatch(f, &fakeGH{}, "")
+	pick := w.pick(w.head, f.git("rev-parse", mc5+"^2"), map[string]string{"app/a.txt": strings.Replace(appFile, "two", "two!", 1)})
+	fold := w.merge(w.head, pick, "fix(app): an excited two (#5)\n\n"+batchTrailer+": "+mc5)
+	if code, out, stderr := f.exec(w.gh, "fold", "--line", "release-1.1", "--original", "5", "--commit", fold); code != 0 || out != "ok\n" {
+		t.Errorf("fold of an adaptation of #5 = %d, %q\n%s", code, out, stderr)
+	}
+}
+
 // A fold that keeps a file the original deletes leaves the deletion without
 // effect, whatever it changes in the file: a port that keeps what the line
 // made of it, or the file with a line added, is a pull request of its own.

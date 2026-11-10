@@ -138,22 +138,50 @@ func (a *app) reclassify(b *batch, picks *history, hold map[int]string, drops []
 	if r.stale, err = keptOut(b, picks); err != nil {
 		return a.fail(err)
 	}
+	// What the rebuild took off is no longer there for what builds on it.
+	units, err := b.unitsOn(picks.head)
+	if err != nil {
+		return a.fail(err)
+	}
+	for _, v := range b.verdicts {
+		v.batched = units[v]
+	}
+	on := map[*verdict]bool{}
 	for _, v := range b.qualifying() {
-		e := recorded[v.o.number]
-		on, err := b.onBranch(picks, v)
-		if err != nil {
+		if on[v], err = b.onBranch(picks, v); err != nil {
 			return a.fail(err)
 		}
+		if !on[v] {
+			v.onBatch = ""
+		}
+	}
+	if err := b.keepRecordedPartials(picks.head); err != nil {
+		return a.fail(err)
+	}
+	states, err := b.classify(analysisMode{noWorkflowFiles: r.opts.NoWorkflowFiles}, hold, recorded, true)
+	if err != nil {
+		return a.fail(err)
+	}
+	for _, v := range b.qualifying() {
+		e := recorded[v.o.number]
+		s := states[v]
+		if s == nil {
+			s = &state{kind: stOwn}
+		}
 		switch {
-		case on:
+		case on[v]:
 			r.onBranch = append(r.onBranch, v)
 		case hold[v.o.number] != "":
 			r.held = append(r.held, pick{v: v, status: "held", reason: hold[v.o.number]})
-		case v.park != nil:
+		case s.kind == stPartial || s.kind == stParked:
 			r.parked = append(r.parked, v)
+		case s.kind == stNeeds:
+			r.needs = append(r.needs, pick{v: v, status: "waiting", needs: numbers(s.needs)})
+		case s.kind == stWorkflowPrimary && !e.Workflows:
+			r.missing = append(r.missing, v)
 		case e.Workflows:
 			r.waiting = append(r.waiting, pick{v: v, status: "waiting", files: e.Files, more: e.More})
-		case len(e.Files) > 0:
+		case len(e.Files) > 0 && len(e.Needs) == 0:
 			r.deferred = append(r.deferred, pick{v: v, status: "conflict", files: e.Files, more: e.More, failed: e.Commit})
 		default:
 			// Merged into main since the batch was assembled, or recorded

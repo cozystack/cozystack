@@ -207,8 +207,11 @@ type verdict struct {
 	// and by load for anything else.
 	commits []string
 	changes []fileChange
-	// onBatch is the commit of the open batch pull request that picks it.
+	// onBatch is the commit of the open batch pull request that picks it,
+	// and batched the unit of the open batch that carries it whatever the
+	// rules now say of it.
 	onBatch string
+	batched string
 	// label is the maintainer override the original carries, if any.
 	label string
 	// partial lists what its clean net merge onto the line would leave
@@ -268,6 +271,10 @@ type batch struct {
 	ancestors map[string]bool
 	// detecting is how long judging partial units and dependencies took.
 	detecting time.Duration
+	depCache  map[string][]dependency
+	// lineCarries says, for a prerequisite the rules keep out, whether the
+	// line carries it all the same.
+	lineCarries map[*verdict]bool
 }
 
 // fetch moves to the top of the working tree first: every path the batch
@@ -372,6 +379,9 @@ func (a *app) prepare(l line) (*batch, error) {
 		return nil, err
 	}
 	if b.drops, err = b.bindDrops(merges); err != nil {
+		return nil, err
+	}
+	if err := b.waitOrder(merges); err != nil {
 		return nil, err
 	}
 	for _, o := range merges {

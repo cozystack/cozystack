@@ -380,9 +380,31 @@ func TestRecordVersion3(t *testing.T) {
 	block := func(json string) string { return "text\n\n" + deferredFence + "\n" + json + "\n```\n" }
 	sha, other := strings.Repeat("a", 40), strings.Repeat("c", 40)
 	parked := `,"parked":[{"original":10,"merge":"` + sha + `","kind":"partial","files":["a","b"]},{"original":11,"merge":"` + sha + `","kind":"dependency","needs":[3,4],"commits":["` + other + `"],"announced":true}],"partial":[9]`
-	rec, err := parseRecord(block(v3(parked)), l)
-	if err != nil || rec.Version != 3 || len(rec.Parked) != 2 || !rec.Parked[1].Announced || !slices.Equal(rec.Partial, []int{9}) {
+	waits := strings.Replace(v3(parked), `{"original":6,"files":[],"reason":"fails the e2e"}`, `{"original":6,"files":[],"needs":[3,5]}`, 1)
+	rec, err := parseRecord(block(waits), l)
+	if err != nil || rec.Version != 3 || len(rec.Parked) != 2 || !rec.Parked[1].Announced || !slices.Equal(rec.Partial, []int{9}) || !slices.Equal(rec.deferred()[6].Needs, []int{3, 5}) {
 		t.Fatalf("parseRecord of a whole v3 record = %+v, %v", rec, err)
+	}
+	for name, json := range map[string]string{
+		"version 1 with a wait":        `{"line":"release-1.1","deferred":[{"original":6,"files":[],"needs":[3,5]}]}`,
+		"a wait with files":            strings.Replace(waits, `"files":[],"needs":[3,5]`, `"files":["a"],"needs":[3,5]`, 1),
+		"a wait that is a conflict":    strings.Replace(waits, `"files":[],"needs":[3,5]`, `"commit":"`+sha+`","files":[],"needs":[3,5]`, 1),
+		"a wait on itself":             strings.Replace(waits, `"needs":[3,5]`, `"needs":[3,6]`, 1),
+		"an unsorted wait":             strings.Replace(waits, `"needs":[3,5]`, `"needs":[5,3]`, 1),
+		"a wait on nothing":            strings.Replace(waits, `"needs":[3,5]`, `"needs":[0]`, 1),
+		"a wait cycle":                 strings.Replace(strings.Replace(waits, `"needs":[3,5]`, `"needs":[12]`, 1), `"deferred":[`, `"deferred":[{"original":12,"files":[],"needs":[6]},`, 1),
+		"a wait on a parked one":       strings.Replace(waits, `"needs":[3,5]`, `"needs":[10]`, 1),
+		"a wait on a dropped one":      strings.Replace(waits, `"needs":[3,5]`, `"needs":[8]`, 1),
+		"a park on a deferred one":     strings.Replace(waits, `"needs":[3,4]`, `"needs":[3,5]`, 1),
+		"a partial unit also deferred": strings.Replace(strings.Replace(waits, `"stale":[9]`, `"stale":[9,5]`, 1), `"partial":[9]`, `"partial":[9,5]`, 1),
+		"a changed pick also parked":   v3(parked + `,"changed":[10]`),
+		"a changed pick also deferred": v3(parked + `,"changed":[5]`),
+		"a park on its own merge":      strings.Replace(waits, `"commits":["`+other+`"]`, `"commits":["`+sha+`"]`, 1),
+		"a park cycle":                 strings.Replace(strings.Replace(waits, `"needs":[3,4]`, `"needs":[3,13]`, 1), `"parked":[`, `"parked":[{"original":13,"merge":"`+sha+`","kind":"dependency","needs":[11]},`, 1),
+	} {
+		if _, err := parseRecord(block(json), l); err == nil {
+			t.Errorf("%s: parseRecord accepted it", name)
+		}
 	}
 	for name, json := range map[string]string{
 		"version 2 with a park":           v2(parked),
