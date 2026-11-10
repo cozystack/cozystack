@@ -498,13 +498,15 @@ func (r *BackupJobReconciler) createRedisBackupArtifact(
 			Phase: backupsv1alpha1.BackupPhaseReady,
 		},
 	}
+	unmeasured := "whether the Backup already exists could not be checked"
 	if probe {
 		artifact, err := r.redisArtifact(ctx, j.Namespace, objectKey, podSpec)
+		unmeasured = ""
 		if err != nil {
 			getLogger(ctx).Info("leaving the Redis backup artifact unset", "backupjob", j.Name, "objectKey", objectKey, "error", err)
 			var probeErr *artifactProbeError
-			if r.Recorder != nil && errors.As(err, &probeErr) {
-				r.Recorder.Eventf(j, corev1.EventTypeNormal, "ArtifactNotMeasured", "The backup succeeded, but its location and size were not recorded: %s", probeErr.reason)
+			if errors.As(err, &probeErr) {
+				unmeasured = probeErr.reason
 			}
 		}
 		backup.Status.Artifact = artifact
@@ -521,6 +523,11 @@ func (r *BackupJobReconciler) createRedisBackupArtifact(
 			return nil, fmt.Errorf("%w: %v", errBackupNotReadBack, getErr)
 		}
 		return existing, nil
+	}
+	// Only once the Backup exists: a terminal Create error fails the
+	// BackupJob, and a collision returns a Backup another pass measured.
+	if unmeasured != "" && r.Recorder != nil {
+		r.Recorder.Eventf(j, corev1.EventTypeNormal, "ArtifactNotMeasured", "The backup succeeded, but its location and size were not recorded: %s", unmeasured)
 	}
 	return backup, nil
 }

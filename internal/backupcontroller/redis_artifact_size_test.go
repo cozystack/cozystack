@@ -186,6 +186,16 @@ func configMapS3CA(spec *corev1.PodSpec) *corev1.PodSpec {
 	return spec
 }
 
+// nextEvent returns the next recorded event, or "" when there is none.
+func nextEvent(rec *record.FakeRecorder) string {
+	select {
+	case ev := <-rec.Events:
+		return ev
+	default:
+		return ""
+	}
+}
+
 func TestRedisS3Trust(t *testing.T) {
 	caSecret := func(data map[string]string) *corev1.Secret {
 		s := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "s3-endpoint-ca"}, Data: map[string][]byte{}}
@@ -267,6 +277,14 @@ func TestRedisS3Trust(t *testing.T) {
 			objs: []client.Object{caSecret(map[string]string{"other": "x"})},
 		},
 		"an s3-ca volume of another source": {spec: func(skip string) *corev1.PodSpec { return configMapS3CA(redisPodSpec("", skip)) }},
+		"a CA Secret whose keys the volume does not project": {
+			spec: func(skip string) *corev1.PodSpec {
+				s := redisPodSpec("s3-endpoint-ca", skip)
+				s.Volumes[0].Secret.Items = []corev1.KeyToPath{{Key: "bundle.pem", Path: "ca.crt"}}
+				return s
+			},
+			objs: []client.Object{caSecret(map[string]string{"tls.crt": "UNPROJECTED"})},
+		},
 	}
 	for name, tc := range refused {
 		for _, skip := range []string{"", "true"} {
@@ -445,12 +463,45 @@ func TestCreateRedisBackupArtifact_RetryCheck(t *testing.T) {
 		l := &fakeS3Lister{statSize: 777}
 		r := redisReconciler(t, l, j, projectedCredsSecret(nil))
 		r.APIReader = failingReads(t, newMariaDBStrategyTestClient(t))
+		rec := record.NewFakeRecorder(4)
+		r.Recorder = rec
 		got, err := r.createRedisBackupArtifact(context.Background(), j, &ResolvedBackupConfig{}, redisTestKey, nil)
 		if err != nil || got == nil {
 			t.Fatalf("createRedisBackupArtifact = %v, %v; a transient read must not fail the backup", got, err)
 		}
 		if l.calls != 0 {
 			t.Errorf("S3 probed %d times after the existence check failed", l.calls)
+		}
+		if ev := nextEvent(rec); !strings.HasPrefix(ev, "Normal ArtifactNotMeasured ") || !strings.Contains(ev, "could not be checked") {
+			t.Errorf("event = %q, want ArtifactNotMeasured saying the existence check failed", ev)
+		}
+	})
+
+	t.Run("no event when Create fails", func(t *testing.T) {
+		r := redisReconciler(t, &fakeS3Lister{statErr: errors.New("NoSuchKey")}, j, projectedCredsSecret(nil))
+		r.Client = forbidBackupCreate(t, r.Client)
+		rec := record.NewFakeRecorder(4)
+		r.Recorder = rec
+		if _, err := r.createRedisBackupArtifact(context.Background(), j, &ResolvedBackupConfig{}, redisTestKey, nil); err == nil {
+			t.Fatal("createRedisBackupArtifact succeeded although Create was rejected")
+		}
+		if ev := nextEvent(rec); ev != "" {
+			t.Errorf("event %q although the BackupJob fails", ev)
+		}
+	})
+
+	t.Run("no event when Create collides with a Backup another pass made", func(t *testing.T) {
+		backup := &backupsv1alpha1.Backup{ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "bj-1"}}
+		store := newMariaDBStrategyTestClient(t, j, backup, projectedCredsSecret(nil))
+		r := redisReconciler(t, &fakeS3Lister{statErr: errors.New("NoSuchKey")})
+		r.Client, r.APIReader = staleCache(t, store), notFoundOnce(t, store)
+		rec := record.NewFakeRecorder(4)
+		r.Recorder = rec
+		if _, err := r.createRedisBackupArtifact(context.Background(), j, &ResolvedBackupConfig{}, redisTestKey, nil); err != nil {
+			t.Fatalf("createRedisBackupArtifact: %v", err)
+		}
+		if ev := nextEvent(rec); ev != "" {
+			t.Errorf("event %q about a Backup this pass did not create", ev)
 		}
 	})
 
