@@ -92,9 +92,12 @@ func namespaceSelector(ns string) string {
 // namespaceScope selects the series of namespace ns. Besides its own, it
 // takes the series an exporter in a platform namespace attributes to ns:
 // vmagent sets namespace to the scraped target's and, without honorLabels,
-// moves the exporter's own namespace label to exported_namespace. Only
-// platform namespaces are trusted with that label, since any tenant pod can
-// write it; tenants cannot run pods or scrape objects in them.
+// moves the exporter's own namespace label to exported_namespace. Any pod
+// can write that label, so it is trusted only where the platform's vmagent
+// set namespace to one with the platform prefix, in which tenants cannot run
+// pods or scrape objects. Series remote-written from a tenant's nested
+// cluster carry whatever namespace that cluster chose, so they are outside
+// this guarantee for both values alike.
 func (c MetricsConfig) namespaceScope(ns string) []string {
 	scope := []string{namespaceSelector(ns)}
 	if c.PlatformNamespacePrefix != "" {
