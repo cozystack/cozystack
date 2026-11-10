@@ -882,7 +882,9 @@
         "storageClass": {
           "description": "StorageClass of the admin server's 1Gi job-state volume. Empty uses the cluster default; `volume.storageClass` is not used, because in MultiZone it can be local to one zone. Prefer a replicated class: on a node-local one, losing the node stops lifecycle enforcement. Set it before enabling lifecycle: the class is part of the admin StatefulSet's volume claim template, which cannot change, so changing it while lifecycle is on makes every upgrade of the instance fail until it is reverted. To move the volume, disable lifecycle, delete the `admin-data-seaweedfs-admin-0` PVC of the instance, change the class and enable lifecycle again.",
           "type": "string",
-          "default": ""
+          "default": "",
+          "maxLength": 253,
+          "pattern": "^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*)?$"
         }
       }
     }

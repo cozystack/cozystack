@@ -260,7 +260,7 @@ spec:
           type: "persistentVolumeClaim"
           size: "{{ .Values.volume.size }}"
           {{- with .Values.volume.storageClass }}
-          storageClass: {{ . }}
+          storageClass: {{ . | quote }}
           {{- end }}
           maxVolumes: 0
         {{- if .Values.volume.diskType }}
@@ -387,7 +387,7 @@ spec:
           existingSecret: {{ .Release.Name }}-admin-credentials
         {{- with .Values.lifecycle.storageClass }}
         data:
-          storageClass: {{ . }}
+          storageClass: {{ . | quote }}
         {{- end }}
       worker:
         enabled: {{ .Values.lifecycle.enabled }}

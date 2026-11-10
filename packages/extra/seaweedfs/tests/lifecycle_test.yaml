@@ -119,6 +119,45 @@ tests:
       - notExists:
           path: spec.values.seaweedfs.admin.data
 
+  # A StorageClass name may be all digits. Handed on unquoted it reaches the
+  # data-plane release as a number, and the claim it ends up in is rejected.
+  - it: hands a numeric storage class name on as a string
+    template: templates/seaweedfs.yaml
+    set:
+      <<: *enabled
+      lifecycle:
+        enabled: true
+        storageClass: "123"
+    documentSelector:
+      path: metadata.name
+      value: seaweedfs-system
+    asserts:
+      - equal:
+          path: spec.values.seaweedfs.admin.data.storageClass
+          value: "123"
+
+  - it: refuses a storage class that is not a StorageClass name
+    template: templates/seaweedfs.yaml
+    set:
+      <<: *enabled
+      lifecycle:
+        enabled: true
+        storageClass: "replicated\n  image:\n    repository: example/other"
+    asserts:
+      - failedTemplate:
+          errorPattern: "/lifecycle/storageClass"
+
+  - it: refuses a storage class longer than a StorageClass name can be
+    template: templates/seaweedfs.yaml
+    set:
+      <<: *enabled
+      lifecycle:
+        enabled: true
+        storageClass: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    asserts:
+      - failedTemplate:
+          errorPattern: "/lifecycle/storageClass"
+
   - it: monitors the admin and the worker while lifecycle is on
     template: templates/seaweedfs.yaml
     set: *enabled
