@@ -251,3 +251,19 @@ VALUES
   done
   rm -rf "$TMP"
 }
+
+@test "sysctl file values reject invalid UTF-8 rather than changing their bytes" {
+  TMP=$(mktemp -d)
+  # --set-file reads raw bytes, unlike the YAML/JSON-facing application API.
+  for bytes in '\377' '\300\257' '\342\202'; do
+    printf '%b' "$bytes" > "$TMP/value"
+    if render_pool "$TMP/r.yaml" --skip-schema-validation --set-file "talos.sysctls.kernel\\.panic=$TMP/value"; then
+      echo "FAIL: accepted invalid UTF-8 sysctl bytes: $bytes"
+      false
+    fi
+    grep -Fq 'must be valid UTF-8' "$TMP/r.yaml.err"
+  done
+  printf '\357\277\275' > "$TMP/value"
+  render_pool "$TMP/r.yaml" --skip-schema-validation --set-file "talos.sysctls.kernel\\.panic=$TMP/value"
+  rm -rf "$TMP"
+}

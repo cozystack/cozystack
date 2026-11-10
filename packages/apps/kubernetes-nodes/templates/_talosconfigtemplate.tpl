@@ -51,6 +51,13 @@
 {{- if not (kindIs "string" $value) }}
 {{- fail (printf "talos.sysctls[%q] must be a string" $key) }}
 {{- end }}
+{{- /* JSON replaces invalid UTF-8 with replacement runes. Comparing the
+      round-trip detects raw --set-file bytes that quote would change into
+      different Unicode characters in the machine config. */}}
+{{- $roundTrip := dict "value" $value | toJson | fromJson }}
+{{- if ne $value $roundTrip.value }}
+{{- fail (printf "talos.sysctls[%q] must be valid UTF-8" $key) }}
+{{- end }}
 {{- end }}
 {{- end }}
 {{- $kubeletVersion := include "kubernetes.versionMap" $root | trim }}
