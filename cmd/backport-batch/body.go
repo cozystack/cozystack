@@ -238,8 +238,10 @@ type report struct {
 	overrides []*verdict
 	stale     []*verdict
 	start     time.Time
-	// shapes says, for an original on the branch, what it brought.
-	shapes map[*verdict]string
+	// shapes says, for an original on the branch, what it brought, and
+	// partialFiles what a partial unit leaves without effect.
+	shapes       map[*verdict]string
+	partialFiles map[*verdict][]string
 	// missing are originals the policy takes that the run neither tried nor
 	// found anywhere.
 	missing []*verdict
@@ -253,6 +255,11 @@ type report struct {
 	closing *closing
 	// dropped are the maintainers' drops the record keeps.
 	dropped []droppedEntry
+	// parked are what the batch leaves out because it cannot land whole,
+	// each with its park, and partial the originals on the branch whose unit
+	// does only part of what they do on main.
+	parked  []*verdict
+	partial []*verdict
 }
 
 // ruleName is how output names what kept an original out: the policy's
@@ -346,6 +353,18 @@ func (r *report) what(details map[int]bool) string {
 			fmt.Fprintf(&b, "- %s %s: %s\n", prLink(p.v.o.number), titleSpan(p.v.o.title), strings.Join(files, ", "))
 		}
 	}
+	if len(r.partial) > 0 {
+		fmt.Fprintf(&b, "\n### Still on this branch: only part of it applies\n\nEach of these is on this branch but leaves files of its original as they were on %s, so it carries only part of what it does on `main`. Take each out with `backport-batch run --defer` before the cut; what applies of it goes as a pull request of its own.\n\n", codeSpan(r.line.branch()))
+		for _, v := range r.partial {
+			fmt.Fprintf(&b, "- %s %s: leaves %s without effect\n", prLink(v.o.number), titleSpan(v.o.title), fileSpans(r.partialFiles[v]))
+		}
+	}
+	if len(r.parked) > 0 {
+		fmt.Fprintf(&b, "\n### Parked\n\nThese cannot land on %s whole, so the batch does not pick them: each would leave part of it without effect there, or builds on a change that never reaches the line. A maintainer ports what applies as a pull request of its own, or drops the original with `backport-batch run --drop`; `backport/include` does not lift a park.\n\n", codeSpan(r.line.branch()))
+		for _, v := range r.parked {
+			fmt.Fprintf(&b, "- %s %s: %s\n", prLink(v.o.number), titleSpan(v.o.title), parkReason(*v.park))
+		}
+	}
 	if len(r.overrides) > 0 {
 		b.WriteString("\n### Maintainer overrides\n\n")
 		for _, v := range r.overrides {
@@ -384,6 +403,8 @@ func (r *report) what(details map[int]bool) string {
 // outcome is what became of an original a label overrode.
 func (r *report) outcome(v *verdict) string {
 	switch {
+	case slices.Contains(r.partial, v):
+		return "still on this branch, but only part of it applies; take it out with `backport-batch run --defer`"
 	case slices.Contains(r.stale, v) && v.rule == ruleDropped:
 		return "dropped, but still on this branch; take it out with `backport-batch run --defer`"
 	case slices.Contains(r.stale, v):
@@ -398,10 +419,39 @@ func (r *report) outcome(v *verdict) string {
 		return "deferred to the next batch"
 	case slices.ContainsFunc(r.waiting, func(p pick) bool { return p.v == v }):
 		return "waiting for a maintainer: it changes " + codeSpan(workflowsDir)
+	case slices.Contains(r.parked, v):
+		return "parked: " + parkReason(*v.park)
 	case v.rule != 0:
 		return "skipped by " + ruleName(v.rule) + ", " + titleSpan(v.reason)
 	}
 	return "not picked"
+}
+
+// fileSpans lists files as code spans, the first few of them.
+func fileSpans(files []string) string {
+	var out []string
+	for _, f := range files[:min(len(files), filesListed)] {
+		out = append(out, codeSpan(f))
+	}
+	if more := len(files) - len(out); more > 0 {
+		out = append(out, fmt.Sprintf("%d more", more))
+	}
+	return strings.Join(out, ", ")
+}
+
+// parkReason says why a park leaves its original out, for the body.
+func parkReason(p parkedEntry) string {
+	if p.Kind == parkPartial {
+		return "only part of it applies; it would leave " + fileSpans(p.Files) + " without effect"
+	}
+	var needs []string
+	for _, n := range p.Needs {
+		needs = append(needs, prLink(n))
+	}
+	for _, c := range p.Commits {
+		needs = append(needs, codeSpan(c[:12]))
+	}
+	return "builds on " + strings.Join(needs, ", ") + ", which never reaches this line"
 }
 
 func (r *report) notes() string {

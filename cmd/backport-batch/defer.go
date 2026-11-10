@@ -78,7 +78,7 @@ func (a *app) rebuild(b *batch, numbers []int, reason string, push bool) int {
 		switch v := b.find(n); {
 		case v == nil:
 			return a.fail(fmt.Errorf("#%d did not merge into main after %s branched", n, b.line.branch()))
-		case v.rule != 0 && !slices.Contains(stale, v):
+		case v.rule != 0 && !slices.Contains(stale, v) && b.partialUnits[v] == nil:
 			return a.fail(fmt.Errorf("#%d is not one the batch takes: %s, %s", n, ruleName(v.rule), terminalSafe(v.reason)))
 		}
 		hold[n] = reason
@@ -140,11 +140,17 @@ func (a *app) reclassify(b *batch, picks *history, hold map[int]string, drops []
 	}
 	for _, v := range b.qualifying() {
 		e := recorded[v.o.number]
+		on, err := b.onBranch(picks, v)
+		if err != nil {
+			return a.fail(err)
+		}
 		switch {
-		case found(picks, v):
+		case on:
 			r.onBranch = append(r.onBranch, v)
 		case hold[v.o.number] != "":
 			r.held = append(r.held, pick{v: v, status: "held", reason: hold[v.o.number]})
+		case v.park != nil:
+			r.parked = append(r.parked, v)
 		case e.Workflows:
 			r.waiting = append(r.waiting, pick{v: v, status: "waiting", files: e.Files, more: e.More})
 		case len(e.Files) > 0:
@@ -154,6 +160,9 @@ func (a *app) reclassify(b *batch, picks *history, hold map[int]string, drops []
 			// nowhere: a rebuild adds no original, the next run tries it.
 			r.missing = append(r.missing, v)
 		}
+	}
+	if err := b.markPartial(r, picks.head); err != nil {
+		return a.fail(err)
 	}
 	return a.finish(b, r, b.pr.Head.Ref, date, push, true)
 }

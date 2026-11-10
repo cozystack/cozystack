@@ -17,6 +17,7 @@ limitations under the License.
 package main
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"slices"
@@ -33,10 +34,11 @@ import (
 
 // pickOriginal picks one original onto HEAD in that shape. A conflict on any
 // of its commits takes the branch back to where it was before the original,
-// so nothing of it is left half applied. Hooks are off so that each commit
-// carries its message and -x line as git writes them; signing is left to the
-// user's configuration.
-func pickOriginal(v *verdict) (pick, error) {
+// so nothing of it is left half applied, and so does a clean pick validate
+// finds leaving something of the original without effect: partial, with
+// those paths. Hooks are off so that each commit carries its message and -x
+// line as git writes them; signing is left to the user's configuration.
+func pickOriginal(v *verdict, validate func(base, head string) ([]string, error)) (pick, error) {
 	p := pick{v: v}
 	base, err := resolve("HEAD")
 	if err != nil {
@@ -59,10 +61,34 @@ func pickOriginal(v *verdict) (pick, error) {
 	switch {
 	case err != nil:
 		return p, err
+	case head == base && validate != nil:
+		// Picks that change nothing carry the original only when the line
+		// already has its changes: a change made where its branch merged
+		// main is in no pick.
+		omitted, err := validate(base, head)
+		if err != nil {
+			return p, err
+		}
+		if len(omitted) > 0 {
+			p.status, p.files = "partial", omitted
+			return p, nil
+		}
+		p.status = "empty"
+		return p, nil
 	case head == base:
 		p.status = "empty"
 		return p, nil
-	case v.o.parents < 2:
+	}
+	if validate != nil {
+		omitted, err := validate(base, head)
+		if err == nil && len(omitted) > 0 {
+			p.status, p.files = "partial", omitted
+		}
+		if err != nil || len(omitted) > 0 {
+			return p, errors.Join(err, resetTo(base))
+		}
+	}
+	if v.o.parents < 2 {
 		p.status, p.commit = "picked", head
 		return p, nil
 	}
@@ -301,7 +327,8 @@ func checkMerge(b *batch, u unit) (string, *verdict, error) {
 }
 
 // contained says why the change from base to tip is not inside the files v
-// changes, or "" when it is.
+// changes, or the paths a rename on main or on the line gave them at base,
+// or "" when it is.
 func contained(b *batch, v *verdict, base, tip string) (string, error) {
 	if err := b.load(v); err != nil {
 		return "", err
@@ -313,7 +340,14 @@ func contained(b *batch, v *verdict, base, tip string) (string, error) {
 	if len(changes) == 0 {
 		return fmt.Sprintf("%.12s changes nothing", tip), nil
 	}
+	corr, _, err := b.correspondence(v, base)
+	if err != nil {
+		return "", err
+	}
 	allowed := paths(v.changes)
+	for _, c := range corr {
+		allowed = append(allowed, c)
+	}
 	var extra []string
 	for _, p := range paths(changes) {
 		if !slices.Contains(allowed, p) {

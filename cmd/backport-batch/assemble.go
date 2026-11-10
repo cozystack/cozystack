@@ -198,8 +198,14 @@ func (a *app) run(args []string) int {
 		}
 	}
 	for _, v := range b.qualifying() {
+		on := false
+		if carried != nil {
+			if on, err = b.onBranch(carried, v); err != nil {
+				return a.fail(err)
+			}
+		}
 		switch {
-		case carried != nil && found(carried, v):
+		case on:
 			r.onBranch = append(r.onBranch, v)
 			continue
 		case held[v.o.number].Reason != "":
@@ -209,6 +215,17 @@ func (a *app) run(args []string) int {
 			v.rule, v.reason = ruleOnLine, fmt.Sprintf("on the open batch pull request #%d", b.pr.Number)
 			r.skipped[ruleOnLine] = append(r.skipped[ruleOnLine], v)
 			continue
+		}
+		if v.partial != nil {
+			// Judged at the line's head; what the batch picked since may
+			// supply what it lacked there.
+			if err := a.partialAtHead(b, v); err != nil {
+				return a.fail(err)
+			}
+			if v.partial != nil {
+				r.parked = append(r.parked, v)
+				continue
+			}
 		}
 		if *noWorkflows {
 			files, err := workflowFiles(v.commits)
@@ -220,11 +237,19 @@ func (a *app) run(args []string) int {
 				continue
 			}
 		}
-		p, err := pickOriginal(v)
+		p, err := pickOriginal(v, func(base, head string) ([]string, error) {
+			omitted, diag, err := b.omittedEffects(v, base, head)
+			v.addDiag(diag...)
+			return omitted, err
+		})
 		if err != nil {
 			return a.fail(err)
 		}
 		switch p.status {
+		case "partial":
+			v.partial = p.files
+			v.park = &parkedEntry{Original: v.o.number, Merge: v.o.merge, Kind: parkPartial, Files: sortedClean(p.files)}
+			r.parked = append(r.parked, v)
 		case "picked":
 			r.onBranch = append(r.onBranch, v)
 		case "conflict":
@@ -246,8 +271,21 @@ func (a *app) run(args []string) int {
 		if !descends {
 			return a.fail(fmt.Errorf("%.12s does not descend from --onto %.12s", head, *onto))
 		}
+		if err := b.markPartial(r, carried.head); err != nil {
+			return a.fail(err)
+		}
 	}
 	return a.finish(b, r, branch, date, *push, false)
+}
+
+// partialAtHead judges v again where the run has got to, when earlier picks
+// moved the branch past the line's head.
+func (a *app) partialAtHead(b *batch, v *verdict) error {
+	head, err := resolve("HEAD")
+	if err != nil || head == b.lineHead {
+		return err
+	}
+	return b.partialAt(v, head)
 }
 
 // keptOut lists the originals with backport/skip, or dropped, that the batch
@@ -261,7 +299,11 @@ func keptOut(b *batch, carried *history) ([]*verdict, error) {
 		if err := b.load(v); err != nil {
 			return nil, err
 		}
-		if found(carried, v) {
+		on, err := b.onBranch(carried, v)
+		if err != nil {
+			return nil, err
+		}
+		if on {
 			out = append(out, v)
 		}
 	}
@@ -365,7 +407,8 @@ func (r *report) lineRecord(doc reportDoc) lineRecord {
 		dropped = []droppedEntry{}
 	}
 	slices.SortFunc(dropped, func(a, b droppedEntry) int { return a.Original - b.Original })
-	return lineRecord{Version: 2, Line: doc.Line, Built: &built, Report: doc.ID, Closing: r.closing, Deferred: slices.Clone(doc.Primary.Deferred), Dropped: dropped, Stale: slices.Clone(doc.Overlays.Stale)}
+	return lineRecord{Version: recordVersion, Line: doc.Line, Built: &built, Report: doc.ID, Closing: r.closing, Deferred: slices.Clone(doc.Primary.Deferred), Dropped: dropped, Stale: slices.Clone(doc.Overlays.Stale),
+		Parked: slices.Clone(doc.Primary.Parked), Partial: slices.Clone(doc.Overlays.Partial)}
 }
 
 // branchDate is the date a batch branch was opened under.

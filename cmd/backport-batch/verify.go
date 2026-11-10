@@ -91,6 +91,15 @@ func (a *app) verify(args []string) int {
 		if why == "" && seen[v] != "" {
 			why = fmt.Sprintf("carries #%d again, which %.12s already carries", v.o.number, seen[v])
 		}
+		if why == "" {
+			omitted, _, err := b.omittedEffects(v, u.parents[0], u.commit)
+			if err != nil {
+				return a.fail(err)
+			}
+			if len(omitted) > 0 {
+				why = leftOut(v, l, omitted)
+			}
+		}
 		if why != "" {
 			refused = append(refused, why)
 			fmt.Fprintf(a.stdout, "refused %.12s: %s\n", u.commit, why)

@@ -348,3 +348,59 @@ func TestFoldRefusesADroppedOriginal(t *testing.T) {
 		t.Errorf("fold = %d, %q, %s; want a refusal naming the drop", code, stdout, stderr)
 	}
 }
+
+// A resolution that ports what the line has of #5 and leaves alone a file
+// the line lacks is no fold: what #5 does to that file would be lost, and a
+// line-only port is a pull request of its own.
+func TestFoldRefusesAnOmittedEffect(t *testing.T) {
+	f := newFixture(t)
+	f.lines()
+	f.pr(3, "feat(app): a feature the line never gets", "", map[string]string{"app/feature2.txt": "v1\n"})
+	mc5 := f.pr(5, "fix(app): five", "", map[string]string{"app/feature2.txt": "v2\n", "app/five.txt": "5\n"})
+	w := emptyBatch(f, &fakeGH{}, "")
+	pick := w.pick(w.head, f.git("rev-parse", mc5+"^2"), map[string]string{"app/five.txt": "5\n"})
+	fold := w.merge(w.head, pick, "fix(app): five (#5)\n\n"+batchTrailer+": "+mc5)
+	code, out, stderr := f.exec(w.gh, "fold", "--line", "release-1.1", "--original", "5", "--commit", fold)
+	if code != 1 || out != "refused: #5 leaves \"app/feature2.txt\" without effect on release-1.1; port only what the line has as a pull request of its own\n" {
+		t.Errorf("fold = %d, %q, want it refused for app/feature2.txt\n%s", code, out, stderr)
+	}
+}
+
+// A resolution that keeps a file the original deletes leaves the deletion
+// without effect.
+func TestFoldRefusesAKeptDeletion(t *testing.T) {
+	f := newFixture(t)
+	f.squash(2, "chore: x", "", map[string]string{"app/x.txt": "x\n"})
+	f.lines()
+	mc5 := f.pr(5, "fix(app): five, and x goes", "", map[string]string{"app/x.txt": "", "app/five.txt": "5\n"})
+	w := emptyBatch(f, &fakeGH{}, "")
+	pick := w.pick(w.head, f.git("rev-parse", mc5+"^2"), map[string]string{"app/five.txt": "5\n"})
+	fold := w.merge(w.head, pick, "fix(app): five, and x goes (#5)\n\n"+batchTrailer+": "+mc5)
+	if code, out, stderr := f.exec(w.gh, "fold", "--line", "release-1.1", "--original", "5", "--commit", fold); code != 1 || !strings.Contains(out, `leaves "app/x.txt" without effect`) {
+		t.Errorf("fold that keeps app/x.txt = %d, %q\n%s", code, out, stderr)
+	}
+}
+
+// A fold that keeps a file the original deletes leaves the deletion without
+// effect, whatever it changes in the file: a port that keeps what the line
+// made of it, or the file with a line added, is a pull request of its own.
+func TestFoldRefusesAChangedKeptDeletion(t *testing.T) {
+	for name, kept := range map[string]string{
+		"the line's own content":  "line only\n",
+		"the file, one line more": "feature\nline only\n# reviewed\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newFixture(t)
+			f.squash(2, "chore: a feature", "", map[string]string{"app/x.txt": "feature\n"})
+			f.lines()
+			f.onLine("release-1.1", "fix(app): a line-only setting beside the feature", map[string]string{"app/x.txt": "feature\nline only\n"})
+			mc5 := f.pr(5, "fix(app): drop the feature, and five", "", map[string]string{"app/x.txt": "", "app/five.txt": "5\n"})
+			w := emptyBatch(f, &fakeGH{}, "")
+			pick := w.pick(w.head, f.git("rev-parse", mc5+"^2"), map[string]string{"app/x.txt": kept, "app/five.txt": "5\n"})
+			fold := w.merge(w.head, pick, "fix(app): drop the feature, and five (#5)\n\n"+batchTrailer+": "+mc5)
+			if code, out, stderr := f.exec(w.gh, "fold", "--line", "release-1.1", "--original", "5", "--commit", fold); code != 1 || !strings.Contains(out, `leaves "app/x.txt" without effect`) {
+				t.Errorf("fold = %d, %q, want it refused\n%s", code, out, stderr)
+			}
+		})
+	}
+}

@@ -34,7 +34,8 @@ import (
 // carries a record of its own.
 
 // lineRecord is the one line of JSON in the block. Version 1, the block
-// before it had a version, holds only line and deferred.
+// before it had a version, holds only line and deferred; version 3 adds what
+// is parked and which units on the batch do only part of their original.
 type lineRecord struct {
 	Version  int             `json:"version"`
 	Line     string          `json:"line"`
@@ -44,6 +45,80 @@ type lineRecord struct {
 	Deferred []deferredEntry `json:"deferred"`
 	Dropped  []droppedEntry  `json:"dropped"`
 	Stale    []int           `json:"stale"`
+	Parked   []parkedEntry   `json:"parked,omitempty"`
+	Partial  []int           `json:"partial,omitempty"`
+}
+
+// recordVersion is the version a run writes.
+const recordVersion = 3
+
+// lineRecordV2 is version 2, which has none of version 3's keys.
+type lineRecordV2 struct {
+	Version  int             `json:"version"`
+	Line     string          `json:"line"`
+	Built    *builtFrom      `json:"built,omitempty"`
+	Report   string          `json:"report,omitempty"`
+	Closing  *closing        `json:"closing"`
+	Deferred []deferredEntry `json:"deferred"`
+	Dropped  []droppedEntry  `json:"dropped"`
+	Stale    []int           `json:"stale"`
+}
+
+// The kinds of park: an original that builds on what never reaches the
+// line, and one whose clean pick would leave part of it without effect.
+const (
+	parkDependency = "dependency"
+	parkPartial    = "partial"
+)
+
+// parkedEntry is an original the batch leaves out because it cannot land on
+// the line whole: what it needs that never comes, or the paths it would
+// leave without effect. announced says notify has named it on the open
+// batch, for exactly this entry.
+type parkedEntry struct {
+	Original  int      `json:"original"`
+	Merge     string   `json:"merge"`
+	Kind      string   `json:"kind"`
+	Needs     []int    `json:"needs,omitempty"`
+	Commits   []string `json:"commits,omitempty"`
+	Files     []string `json:"files,omitempty"`
+	Announced bool     `json:"announced,omitempty"`
+}
+
+// validate holds a parked entry to what a run writes. Its errors read after
+// "the block" or "report <id>".
+func (p parkedEntry) validate() error {
+	sortedUnique := func(n int, less func(i int) bool) bool {
+		for i := 1; i < n; i++ {
+			if !less(i) {
+				return false
+			}
+		}
+		return true
+	}
+	switch {
+	case checkSHA(p.Merge) != nil:
+		return fmt.Errorf("parks #%d by merge %q", p.Original, p.Merge)
+	case !sortedUnique(len(p.Needs), func(i int) bool { return p.Needs[i-1] < p.Needs[i] }) || slices.ContainsFunc(p.Needs, func(n int) bool { return n <= 0 || n == p.Original }):
+		return fmt.Errorf("parks #%d for originals %v, which are not what a run writes", p.Original, p.Needs)
+	case !sortedUnique(len(p.Commits), func(i int) bool { return p.Commits[i-1] < p.Commits[i] }) || slices.ContainsFunc(p.Commits, func(c string) bool { return checkSHA(c) != nil }):
+		return fmt.Errorf("parks #%d for commits %q, which are not what a run writes", p.Original, p.Commits)
+	case !sortedUnique(len(p.Files), func(i int) bool { return p.Files[i-1] < p.Files[i] }) || !slices.Equal(p.Files, cleanFiles(p.Files)):
+		return fmt.Errorf("parks #%d for files %q, which are not what a run writes", p.Original, p.Files)
+	}
+	switch p.Kind {
+	case parkPartial:
+		if len(p.Files) == 0 || len(p.Needs)+len(p.Commits) > 0 {
+			return fmt.Errorf("parks #%d as partial with no files it leaves without effect, or with what it needs", p.Original)
+		}
+	case parkDependency:
+		if len(p.Needs)+len(p.Commits) == 0 || len(p.Files) > 0 {
+			return fmt.Errorf("parks #%d for a dependency it does not name, or with files", p.Original)
+		}
+	default:
+		return fmt.Errorf("parks #%d as %q, which is no kind of park", p.Original, p.Kind)
+	}
+	return nil
 }
 
 // builtFrom is what a classification was made of; batch is the head it
@@ -173,9 +248,13 @@ func parseRecord(body string, l line) (*lineRecord, error) {
 		err = decodeStrict(blocks[0], &v1)
 		rec = lineRecord{Version: 1, Line: v1.Line, Deferred: v1.Deferred}
 	case 2:
+		var v2 lineRecordV2
+		err = decodeStrict(blocks[0], &v2)
+		rec = lineRecordWithout(v2)
+	case 3:
 		err = decodeStrict(blocks[0], &rec)
 	default:
-		return nil, fmt.Errorf("the %s block is version %d, which this backport-batch does not read; it reads 1 and 2", deferredFence, version)
+		return nil, fmt.Errorf("the %s block is version %d, which this backport-batch does not read; it reads 1 to %d", deferredFence, version, recordVersion)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("reading the %s block: %w", deferredFence, err)
@@ -244,12 +323,28 @@ func (rec *lineRecord) validate(l line) error {
 			return fmt.Errorf("drops #%d for %q, which is no reason a run writes", d.Original, d.Reason)
 		}
 	}
+	for _, p := range rec.Parked {
+		if err := once(p.Original); err != nil {
+			return err
+		}
+		if err := p.validate(); err != nil {
+			return err
+		}
+	}
 	staleSeen := map[int]bool{}
 	for _, n := range rec.Stale {
 		if n <= 0 || staleSeen[n] {
 			return fmt.Errorf("lists %d as still on the batch more than once or not at all", n)
 		}
 		staleSeen[n] = true
+	}
+	partialSeen := map[int]bool{}
+	for _, n := range rec.Partial {
+		// A unit that does only part of its original is still on the batch.
+		if !staleSeen[n] || partialSeen[n] {
+			return fmt.Errorf("lists #%d as a partial unit more than once, or not as still on the batch", n)
+		}
+		partialSeen[n] = true
 	}
 	if rec.Version < 2 {
 		return nil
@@ -296,6 +391,11 @@ func (b *builtFrom) validate() error {
 }
 
 var runURLRE = regexp.MustCompile(`^https://[^/\s]+/[^/\s]+/[^/\s]+/actions/runs/[0-9]+(/attempts/[0-9]+)?$`)
+
+// lineRecordWithout is a version 2 record as the newest version holds it.
+func lineRecordWithout(v2 lineRecordV2) lineRecord {
+	return lineRecord{Version: v2.Version, Line: v2.Line, Built: v2.Built, Report: v2.Report, Closing: v2.Closing, Deferred: v2.Deferred, Dropped: v2.Dropped, Stale: v2.Stale}
+}
 
 // recordBlock is the block that holds rec. One line of JSON: encoding/json
 // escapes newlines and <, > and &, so nothing in a file name or a reason can

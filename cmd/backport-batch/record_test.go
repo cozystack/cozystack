@@ -18,6 +18,7 @@ package main
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -272,7 +273,7 @@ func TestRecordNamesItsInputs(t *testing.T) {
 	want := builtFrom{Main: f.git("rev-parse", "origin/main"), Line: f.git("rev-parse", "origin/release-1.0"), Newer: f.git("rev-parse", "origin/release-1.1"),
 		Policy: f.git("rev-parse", "origin/main"), Batch: f.remoteHead(branch), Tool: f.tool, Run: "https://github.com/cozystack/cozystack/actions/runs/123/attempts/2",
 		At: "2026-10-26T06:00:00Z", Options: runOptions{NoWorkflowFiles: true, Mode: modeNew}}
-	if rec.Version != 2 || *rec.Built != want || bodyReportOf(t, stdout, l).doc.Built != want || rec.Report != bodyReportOf(t, stdout, l).doc.ID {
+	if rec.Version != recordVersion || *rec.Built != want || bodyReportOf(t, stdout, l).doc.Built != want || rec.Report != bodyReportOf(t, stdout, l).doc.ID {
 		t.Errorf("record = %+v, built %+v; want built %+v and the report it names", rec, rec.Built, want)
 	}
 
@@ -363,6 +364,46 @@ func TestPRStateNamesOnlyKnownStates(t *testing.T) {
 	} {
 		if got := prState(&tc.pr); got != tc.want {
 			t.Errorf("prState(%q) = %q, want %q", tc.pr.State, got, tc.want)
+		}
+	}
+}
+
+// v3 is v2 as version 3, with extra after the stale list.
+func v3(extra string) string {
+	return strings.Replace(v2(extra), `"version":2`, `"version":3`, 1)
+}
+
+// Version 3 adds what is parked and which units do only part of their
+// original, each held to what a run writes, and version 2 has neither.
+func TestRecordVersion3(t *testing.T) {
+	l, _ := parseLine("release-1.1")
+	block := func(json string) string { return "text\n\n" + deferredFence + "\n" + json + "\n```\n" }
+	sha, other := strings.Repeat("a", 40), strings.Repeat("c", 40)
+	parked := `,"parked":[{"original":10,"merge":"` + sha + `","kind":"partial","files":["a","b"]},{"original":11,"merge":"` + sha + `","kind":"dependency","needs":[3,4],"commits":["` + other + `"],"announced":true}],"partial":[9]`
+	rec, err := parseRecord(block(v3(parked)), l)
+	if err != nil || rec.Version != 3 || len(rec.Parked) != 2 || !rec.Parked[1].Announced || !slices.Equal(rec.Partial, []int{9}) {
+		t.Fatalf("parseRecord of a whole v3 record = %+v, %v", rec, err)
+	}
+	for name, json := range map[string]string{
+		"version 2 with a park":           v2(parked),
+		"version 4":                       strings.Replace(v3(""), `"version":3`, `"version":4`, 1),
+		"a park of a deferred original":   v3(strings.Replace(parked, `"original":10`, `"original":5`, 1)),
+		"a park of a dropped original":    v3(strings.Replace(parked, `"original":10`, `"original":8`, 1)),
+		"a partial park with no files":    v3(strings.Replace(parked, `"files":["a","b"]`, `"files":[]`, 1)),
+		"a partial park that needs":       v3(strings.Replace(parked, `"files":["a","b"]`, `"files":["a"],"needs":[3]`, 1)),
+		"unsorted files":                  v3(strings.Replace(parked, `"files":["a","b"]`, `"files":["b","a"]`, 1)),
+		"a file that drives a terminal":   v3(strings.Replace(parked, `"files":["a","b"]`, `"files":["a\u001b[2J"]`, 1)),
+		"a dependency park with no need":  v3(strings.Replace(strings.Replace(parked, `"needs":[3,4],`, ``, 1), `"commits":["`+other+`"],`, ``, 1)),
+		"unsorted needs":                  v3(strings.Replace(parked, `"needs":[3,4]`, `"needs":[4,3]`, 1)),
+		"a park that needs itself":        v3(strings.Replace(parked, `"needs":[3,4]`, `"needs":[3,11]`, 1)),
+		"a short commit":                  v3(strings.Replace(parked, `"commits":["`+other+`"]`, `"commits":["abc"]`, 1)),
+		"a short merge":                   v3(strings.Replace(parked, `"merge":"`+sha+`","kind":"partial"`, `"merge":"abc","kind":"partial"`, 1)),
+		"an unknown kind":                 v3(strings.Replace(parked, `"kind":"partial"`, `"kind":"later"`, 1)),
+		"a partial unit not on the batch": v3(strings.Replace(parked, `"partial":[9]`, `"partial":[10]`, 1)),
+		"a partial unit twice":            v3(strings.Replace(parked, `"partial":[9]`, `"partial":[9,9]`, 1)),
+	} {
+		if _, err := parseRecord(block(json), l); err == nil {
+			t.Errorf("%s: parseRecord accepted it", name)
 		}
 	}
 }

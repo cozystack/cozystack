@@ -211,6 +211,13 @@ type verdict struct {
 	onBatch string
 	// label is the maintainer override the original carries, if any.
 	label string
+	// partial lists what its clean net merge onto the line would leave
+	// without effect, and park why the batch leaves it out, if it does.
+	partial []string
+	park    *parkedEntry
+	// diag is what could not be judged about it, shown whatever became of
+	// it.
+	diag []string
 }
 
 // batch is everything read about a line before anything is written.
@@ -242,6 +249,16 @@ type batch struct {
 	// textUntil is the batch-only day: what a commit's text says counts as
 	// evidence only on commits from before it.
 	textUntil time.Time
+	// partialUnits are the originals whose unit on the open batch leaves
+	// what it lists without effect.
+	partialUnits map[*verdict][]string
+	// What one command read once and asks again: renames by commit pair,
+	// units by batch head, and how often git merge-file ran.
+	renameCache map[string]renameSet
+	unitCache   map[string]map[*verdict]string
+	mergeFiles  int
+	// renameLimit is the -l rename detection runs with; 0, git's widest.
+	renameLimit int
 }
 
 // fetch moves to the top of the working tree first: every path the batch
@@ -354,6 +371,9 @@ func (a *app) prepare(l line) (*batch, error) {
 			return nil, err
 		}
 		b.verdicts = append(b.verdicts, v)
+	}
+	if err := b.partialStates(); err != nil {
+		return nil, err
 	}
 	return b, nil
 }

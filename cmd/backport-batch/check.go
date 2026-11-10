@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"slices"
 	"strconv"
+	"strings"
 )
 
 // check says whether every original the policy takes is on the line, on the
@@ -163,6 +164,10 @@ func (b *batch) dispositions(cut bool) (map[*verdict]disposition, error) {
 		named := v.o.url() + " " + terminalSafe(v.o.title)
 		e, isDeferred := deferred[v.o.number]
 		switch {
+		case b.partialUnits[v] != nil && cut:
+			out[v] = disposition{outcomeUnmerged, fmt.Sprintf("#%d is on batch #%d, but only part of it applies to %s: it leaves %s without effect; take it out with backport-batch run --defer before the cut: %s", v.o.number, b.pr.Number, b.line.branch(), quotedFiles(b.partialUnits[v]), named)}
+		case b.partialUnits[v] != nil:
+			out[v] = disposition{outcomeWarning, fmt.Sprintf("#%d is on batch #%d, but only part of it applies to %s: it leaves %s without effect; take it out with backport-batch run --defer: %s", v.o.number, b.pr.Number, b.line.branch(), quotedFiles(b.partialUnits[v]), named)}
 		case slices.Contains(stale, v):
 			out[v] = disposition{outcomeWarning, fmt.Sprintf("#%d is still on batch #%d; take it out with backport-batch run --defer: %s", v.o.number, b.pr.Number, named)}
 		case v.rule == ruleDropped:
@@ -173,14 +178,16 @@ func (b *batch) dispositions(cut bool) (map[*verdict]disposition, error) {
 			if cut {
 				out[v] = disposition{outcomeUnmerged, fmt.Sprintf("#%d is only on open batch PR #%d, merge it before the cut: %s", v.o.number, b.pr.Number, named)}
 			}
+		case isDeferred && e.Reason != "":
+			out[v] = disposition{outcomeWarning, fmt.Sprintf("deferred on %s to the next batch: %s (%s)", on, named, terminalSafe(e.Reason))}
+		case v.park != nil && v.park.Kind == parkPartial:
+			out[v] = disposition{outcomeNote, fmt.Sprintf("#%d is parked: only part of it applies to %s, which would leave %s without effect; port what applies as a pull request of its own: %s", v.o.number, b.line.branch(), quotedFiles(v.park.Files), named)}
 		case isDeferred && e.Workflows && !b.src.open:
 			out[v] = disposition{outcomeMissing, named}
 		case isDeferred && e.Workflows && cut:
 			out[v] = disposition{outcomeWaiting, fmt.Sprintf("#%d changes %s and waits on batch PR %s for a maintainer, bring it over or defer it before the cut: %s", v.o.number, workflowsDir, on, named)}
 		case isDeferred && e.Workflows:
 			out[v] = disposition{outcomeWarning, fmt.Sprintf("waiting on %s for a maintainer, since it changes %s: %s", on, workflowsDir, named)}
-		case isDeferred && e.Reason != "":
-			out[v] = disposition{outcomeWarning, fmt.Sprintf("deferred on %s to the next batch: %s (%s)", on, named, terminalSafe(e.Reason))}
 		case isDeferred:
 			out[v] = disposition{outcomeWarning, fmt.Sprintf("deferred conflict on %s: %s", on, named)}
 		default:
@@ -188,6 +195,18 @@ func (b *batch) dispositions(cut bool) (map[*verdict]disposition, error) {
 		}
 	}
 	return out, nil
+}
+
+// quotedFiles names files for a terminal, each quoted, the first few of them.
+func quotedFiles(files []string) string {
+	var out []string
+	for _, f := range files[:min(len(files), filesListed)] {
+		out = append(out, strconv.Quote(f))
+	}
+	if more := len(files) - len(out); more > 0 {
+		out = append(out, fmt.Sprintf("%d more", more))
+	}
+	return strings.Join(out, ", ")
 }
 
 // terminalSafe keeps a title from carrying escape sequences into a terminal.
@@ -289,5 +308,9 @@ func refuseFold(b *batch, n int, commit string) (string, error) {
 	case carried != v:
 		return fmt.Sprintf("%.12s carries #%d, not #%d", commit, carried.o.number, n), nil
 	}
-	return "", nil
+	omitted, _, err := b.omittedEffects(v, u.parents[0], u.commit)
+	if err != nil || len(omitted) == 0 {
+		return "", err
+	}
+	return leftOut(v, b.line, omitted), nil
 }
