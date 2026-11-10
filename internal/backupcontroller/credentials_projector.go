@@ -157,7 +157,7 @@ func ProjectBackupCredentials(ctx context.Context, c client.Client, cfg BackupCr
 		// Scheme-strip the env-var fallback to match the source-Secret path
 		// (parseSourceSecret strips there). The projected `endpoint` key is
 		// consumed verbatim as S3_ENDPOINT by the ClickHouse sidecar, which
-		// expects a bare host:port — see docs/operations/backup-classes.md.
+		// expects a bare host:port — see https://cozystack.io/docs/v1/operations/services/backup-classes/.
 		creds.endpoint = stripScheme(cfg.Endpoint)
 	}
 	if creds.endpoint == "" {

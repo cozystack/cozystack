@@ -175,13 +175,11 @@ const (
 	// against an unreachable target reproduces the same FATAL.
 	cnpgRecoveryMaxInspectPods = 5
 
-	// Cap on the wall-clock time a BackupJob can spend observing a
-	// cnpg.io/Backup stuck in phase=failed before the driver gives up and
-	// marks the BackupJob Failed. CNPG can transition out of "failed" on
-	// internal retries (e.g. transient instance-manager restart), so we
-	// don't fail on the first observation. But without this cap, a
-	// permanently-broken Backup would pin the BackupJob in Running forever,
-	// blocking later runs and wedging the Plan-controller queue.
+	// Cap on the wall-clock time a BackupJob waits for the barman-cloud
+	// plugin rollout before the cnpg.io/Backup exists. A Backup that exists
+	// is not capped: CloudNativePG keeps a healthy one pending while another
+	// backup of the same Cluster runs, or while it restarts one on another
+	// instance, so no fixed deadline tells those apart from a stuck one.
 	cnpgDefaultBackupDeadline = 30 * time.Minute
 
 	cnpgClusterHealthyPhase = "Cluster in healthy state"
@@ -435,7 +433,7 @@ func (r *BackupJobReconciler) reconcileCNPG(ctx context.Context, j *backupsv1alp
 		}
 		artifact, err := r.createCNPGBackupArtifact(ctx, j, resolved, cnpgBackup, clusterName, serverName, attachment.flavor, rendered, app)
 		if err != nil {
-			return r.markBackupJobFailed(ctx, j, fmt.Sprintf("failed to create Backup artifact: %v", err))
+			return r.failBackupArtifact(ctx, j, err)
 		}
 		now := metav1.Now()
 		j.Status.BackupRef = &corev1.LocalObjectReference{Name: artifact.Name}
@@ -453,44 +451,46 @@ func (r *BackupJobReconciler) reconcileCNPG(ctx context.Context, j *backupsv1alp
 		return ctrl.Result{}, nil
 
 	case cnpgBackupPhaseFailed:
-		// CNPG can transition the same Backup CR back out of "failed" when it
-		// retries internally (e.g., after a transient instance-manager
-		// restart), so we don't fail the BackupJob on the first observation.
-		// But without a cap a permanently-broken Backup would pin the
-		// BackupJob in Running forever; once StartedAt + cnpgDefaultBackupDeadline
-		// has elapsed and the cnpg.io/Backup is still failed, we give up.
-		if cnpgBackupDeadlineExceeded(j.Status.StartedAt) {
-			final := message
-			if final == "" {
-				final = fmt.Sprintf(
-					"cnpg.io Backup remained in phase=failed past %s deadline",
-					cnpgDefaultBackupDeadline)
-			}
-			return r.markBackupJobFailed(ctx, j, final)
-		}
-		if message == "" {
-			message = "cnpg.io Backup reported phase=failed; awaiting recovery or retry"
-		}
-		apimeta.SetStatusCondition(&j.Status.Conditions, metav1.Condition{
-			Type:    "Ready",
-			Status:  metav1.ConditionFalse,
-			Reason:  "CNPGBackupTransientFailure",
-			Message: message,
-		})
-		if err := r.Status().Update(ctx, j); err != nil {
-			return ctrl.Result{}, err
-		}
-		return ctrl.Result{RequeueAfter: cnpgPollInterval}, nil
+		// CloudNativePG does not reconcile a Backup out of a terminal phase,
+		// so waiting on a failed one cannot change the outcome.
+		return r.markBackupJobFailed(ctx, j, cnpgBackupFailedMessage(cnpgBackup, message))
 
 	default:
+		waiting := fmt.Sprintf("waiting for cnpg.io/Backup %s/%s, phase %q",
+			cnpgBackup.Namespace, cnpgBackup.Name, phase)
+		if apimeta.SetStatusCondition(&j.Status.Conditions, metav1.Condition{
+			Type:    "Ready",
+			Status:  metav1.ConditionFalse,
+			Reason:  "WaitingForCNPGBackup",
+			Message: waiting,
+		}) {
+			if err := r.Status().Update(ctx, j); err != nil {
+				return ctrl.Result{}, err
+			}
+		}
 		return ctrl.Result{RequeueAfter: cnpgPollInterval}, nil
 	}
 }
 
+// cnpgBackupFailedMessage carries the error CloudNativePG recorded. When the
+// plugin run itself failed that is only its exit status, and the storage
+// error behind it is logged by the plugin-barman-cloud sidecar.
+func cnpgBackupFailedMessage(b *cnpgtypes.Backup, errText string) string {
+	if errText == "" {
+		errText = "no error recorded"
+	}
+	message := fmt.Sprintf("cnpg.io/Backup %s/%s failed: %s", b.Namespace, b.Name, errText)
+	if strings.Contains(errText, "exit status") {
+		message += "; the cause is in the log of the plugin-barman-cloud sidecar of the instance that ran it"
+	}
+	return message
+}
+
 // cnpgBackupDeadlineExceeded reports whether enough wall-clock time has
-// elapsed since the BackupJob started that we should stop polling a stuck
-// cnpg.io/Backup and fail the run. Returns false when StartedAt is nil so
-// the very first reconcile (which sets StartedAt) does not trip the gate.
+// elapsed since the BackupJob started that we should stop waiting for the
+// barman-cloud plugin rollout and fail the run. Returns false when
+// StartedAt is nil so the very first reconcile (which sets StartedAt) does
+// not trip the gate.
 func cnpgBackupDeadlineExceeded(startedAt *metav1.Time) bool {
 	if startedAt == nil {
 		return false
@@ -815,6 +815,10 @@ func (r *BackupJobReconciler) createCNPGBackupArtifact(
 	rendered *strategyv1alpha1.CNPGTemplate,
 	sourceApp *postgresapp.Postgres,
 ) (*backupsv1alpha1.Backup, error) {
+	existing, probe := r.existingBackup(ctx, j.Namespace, j.Name)
+	if existing != nil {
+		return existing, nil
+	}
 	takenAt := metav1.Now()
 	if cnpgBackup.Status.StartedAt != nil && !cnpgBackup.Status.StartedAt.IsZero() {
 		takenAt = *cnpgBackup.Status.StartedAt
@@ -860,6 +864,9 @@ func (r *BackupJobReconciler) createCNPGBackupArtifact(
 			UnderlyingResources: underlyingResources,
 		},
 	}
+	if probe {
+		backup.Status.Artifact.SizeBytes = r.cnpgArtifactSizeBytes(ctx, j.Namespace, &rendered.BarmanObjectStore, serverName, cnpgBackup.Status.BackupID)
+	}
 	if j.Spec.PlanRef != nil {
 		backup.Spec.PlanRef = j.Spec.PlanRef
 	}
@@ -872,8 +879,8 @@ func (r *BackupJobReconciler) createCNPGBackupArtifact(
 			return nil, err
 		}
 		existing := &backupsv1alpha1.Backup{}
-		if getErr := r.Get(ctx, types.NamespacedName{Namespace: backup.Namespace, Name: backup.Name}, existing); getErr != nil {
-			return nil, getErr
+		if getErr := r.apiReader().Get(ctx, types.NamespacedName{Namespace: backup.Namespace, Name: backup.Name}, existing); getErr != nil {
+			return nil, fmt.Errorf("%w: %v", errBackupNotReadBack, getErr)
 		}
 		return existing, nil
 	}

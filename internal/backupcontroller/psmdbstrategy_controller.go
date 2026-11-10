@@ -482,14 +482,14 @@ func (r *BackupJobReconciler) reconcileMongoDB(ctx context.Context, j *backupsv1
 			// Opting out (useSystemBucket true→false) stops the injection but
 			// leaves the driver's storage entry on the live cluster: the chart never
 			// owned it and does not prune it, so it stays until removed by hand
-			// (backup-classes.md). A CR minted against it would carry no finalizer
+			// (https://cozystack.io/docs/v1/operations/services/backup-classes/). A CR minted against it would carry no finalizer
 			// and land the dump in the platform bucket as an object nothing owns or
 			// prunes. The injected entry is identified by its credentialsSecret, the
 			// one field on it the driver chose: bucket names collide with an admin's
 			// external bucket and drift when the platform bucket is re-provisioned.
 			if psmdbBackupDeadlineExceeded(j.Status.StartedAt) {
 				return r.markBackupJobFailed(ctx, j, fmt.Sprintf(
-					"psmdb.percona.com/PerconaServerMongoDB %s/%s storage %q is still the entry injected for the system bucket (credentialsSecret %q) while backup.useSystemBucket=false (%s after the job started); delete that storage entry from the PerconaServerMongoDB by hand or set backup.useSystemBucket=true again (see docs/operations/backup-classes.md)",
+					"psmdb.percona.com/PerconaServerMongoDB %s/%s storage %q is still the entry injected for the system bucket (credentialsSecret %q) while backup.useSystemBucket=false (%s after the job started); delete that storage entry from the PerconaServerMongoDB by hand or set backup.useSystemBucket=true again (see https://cozystack.io/docs/v1/operations/services/backup-classes/)",
 					j.Namespace, psmdbName, storageName, cred, psmdbDefaultBackupDeadline))
 			}
 			return r.requeueMongoDBBackupWaiting(ctx, j, "PerconaServerMongoDBStorageStale",
@@ -1634,7 +1634,7 @@ func (r *RestoreJobReconciler) reconcileMongoDBRestore(ctx context.Context, rest
 
 	// Point-in-time recovery needs an oplog stream, which the useSystemBucket flow
 	// never captures — the chart leaves spec.backup.pitr unset there (see
-	// backup-classes.md). Refuse a recoveryTime restore of a system-bucket backup
+	// https://cozystack.io/docs/v1/operations/services/backup-classes/). Refuse a recoveryTime restore of a system-bucket backup
 	// with a named error rather than hand the operator a PITR target it cannot
 	// serve. Identify the flow from the flag recorded on the snapshot at backup
 	// time, not from the resolved credentialsSecret: a BackupClass may name any
@@ -1652,7 +1652,7 @@ func (r *RestoreJobReconciler) reconcileMongoDBRestore(ctx context.Context, rest
 		}
 		if snap != nil && snap.UseSystemBucket {
 			return r.markRestoreJobFailed(ctx, restoreJob,
-				"restoreJob.spec.options.recoveryTime is set, but point-in-time recovery is not available for a backup taken on the useSystemBucket flow (no oplog is captured there); omit recoveryTime to restore the backup as taken. See docs/operations/backup-classes.md.")
+				"restoreJob.spec.options.recoveryTime is set, but point-in-time recovery is not available for a backup taken on the useSystemBucket flow (no oplog is captured there); omit recoveryTime to restore the backup as taken. See https://cozystack.io/docs/v1/operations/services/backup-classes/.")
 		}
 	}
 

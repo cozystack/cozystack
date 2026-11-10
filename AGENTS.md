@@ -16,7 +16,11 @@ This file provides structured guidance for AI coding assistants and agents worki
 
 - **Release creation** (e.g., "create release", "prepare release", "tag release", "make a release")
   - Read: [`releasing.md`](./docs/agents/releasing.md)
-  - Action: Read the file and follow the referenced release process in `docs/release.md`
+  - Action: Read the file and follow the referenced release process: [`docs/release.md`](./docs/release.md) indexes one page per topic under `docs/release/`
+
+- **Backports, patch content** (e.g., "backport this fix", "will this reach 1.6", "what goes into the next patch", "open a PR against release-X.Y")
+  - Read: [`backports.md`](./docs/release/backports.md)
+  - Action: Read the entire file. Backports are automatic: a fix merged to `main` with a `fix` title, or a `security` one for a fix that comes through a security advisory, reaches the release lines the batch runs for, the newest released lines and any line in its rc window, so never open a backport PR by hand. A pull request against `release-*` from outside the team is closed automatically when it is opened; a maintainer keeps a fix with no counterpart on `main` by reopening it
 
 - **Image references, tags and digests** (e.g., "why is this image tagged rc", "add an image to a package", "change how an image is stamped", "promotion/nightly missed an image", "where do image refs live")
   - Read: [`image-refs.md`](./docs/agents/image-refs.md)
@@ -28,7 +32,7 @@ This file provides structured guidance for AI coding assistants and agents worki
 
 - **Go code, Helm charts, build and test commands, project structure** (e.g., "add a field to this CRD", "fix this controller", "add a value to the postgres chart", "regenerate the values schema", "how do I build/test this", "where should I put X", "what's the convention for Y", "how is the project organized")
   - Read: [`overview.md`](./docs/agents/overview.md)
-  - Action: Read the section that matches — `Go Code` (controller-runtime patterns, kubebuilder markers), `Helm Charts` (umbrella pattern, vendored upstream charts), `Values schema generation`, `Build and Development Commands`, `Testing`, `Package Structure`
+  - Action: Read the section that matches — `Go Code` (controller-runtime patterns, kubebuilder markers), `Helm Charts` (umbrella pattern, vendored upstream charts, which `lookup` is allowed), `Values schema generation`, `Build and Development Commands`, `Testing`, `Package Structure`
 
 - **E2E tests and E2E CI** (e.g., "write/fix an e2e test", "stabilize a flaky test", "add a bats test", "change the e2e workflow", "why did e2e fail")
   - Read: [`e2e-testing.md`](./docs/agents/e2e-testing.md)

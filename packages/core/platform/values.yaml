@@ -173,7 +173,7 @@ networking:
   #
   # On a running cluster this is set on the `platform` component of the
   # `cozystack.cozystack-platform` Package CR, the same path as backupStorage
-  # (see docs/operations/backup-classes.md). Editing the multus HelmRelease or
+  # (see https://cozystack.io/docs/v1/operations/services/backup-classes/). Editing the multus HelmRelease or
   # the child Package cozystack.multus directly is reverted by the platform
   # reconcile.
   # stageCniPlugins: true
@@ -712,7 +712,7 @@ monitoring:
 # documents every knob: provisionBucket, bucketName, endpoint, region,
 # forcePathStyle, systemSecretName, systemNamespaces, …). Admins set this via
 # spec.components.platform.values.backupStorage on the
-# cozystack.cozystack-platform Package — see docs/operations/backup-classes.md.
+# cozystack.cozystack-platform Package — see https://cozystack.io/docs/v1/operations/services/backup-classes/.
 # Empty (the default) forwards nothing and keeps the child chart defaults.
 backupStorage: {}
 
@@ -768,37 +768,6 @@ scheduling:
 #   loginTheme: acme
 #   loginThemeImage: registry.example.com/acme-keycloak-theme:v1
 branding: {}
-# Container registry mirrors configuration
-#
-# Example:
-# registries:
-#   mirrors:
-#     docker.io:
-#       endpoints:
-#         - http://10.0.0.1:8082
-#     ghcr.io:
-#       endpoints:
-#         - http://10.0.0.1:8083
-#     gcr.io:
-#       endpoints:
-#         - http://10.0.0.1:8084
-#     registry.k8s.io:
-#       endpoints:
-#         - http://10.0.0.1:8085
-#     quay.io:
-#       endpoints:
-#         - http://10.0.0.1:8086
-#     cr.fluentbit.io:
-#       endpoints:
-#         - http://10.0.0.1:8087
-#     docker-registry3.mariadb.com:
-#       endpoints:
-#         - http://10.0.0.1:8088
-#   config:
-#     "10.0.0.1:8082":
-#       tls:
-#         insecureSkipVerify: true
-registries: {}
 # Resource allocation ratios
 resources:
   cpuAllocationRatio: 10
