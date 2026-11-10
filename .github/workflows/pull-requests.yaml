@@ -950,7 +950,8 @@ jobs:
     # scheduler and not what a pod reads from /proc, so a workload that sizes
     # itself from /proc/cpuinfo or /proc/meminfo is configured for the whole host.
     runs-on: oracle-vm-32cpu-128gb-x86-64
-    # The job limit includes cleanup; it does not reserve time for it.
+    # Covers a green full suite and its teardown; hack/cozyreport.bats holds
+    # the floor. Teardown is the last step and gets whatever time is left.
     timeout-minutes: 265
     permissions:
       contents: read
@@ -1222,8 +1223,8 @@ jobs:
 
       # ▸ Collect debug information (always runs)
       #
-      #   A ceiling of its own, not the job's 265 minutes. `Upload
-      #   cozyreport.tgz` is the next step and the collector writes its tarball
+      #   A ceiling of its own, not the job's. `Upload cozyreport.tgz` is the
+      #   next step and the collector writes its tarball
       #   at the very end of its run, so a read that never returns spends what
       #   is left of the job budget, the job is cancelled, and the upload never
       #   runs -- the artifact is lost rather than truncated, on exactly the run
@@ -1231,11 +1232,10 @@ jobs:
       #   non-zero exit, not against a read that does not return.
       #
       #   30 minutes is measured against the step: it takes 3-42s across sampled
-      #   runs, on failed e2e jobs as well as green ones. It RESERVES nothing --
-      #   `timeout-minutes` caps a step, it does not carve budget out of the job,
-      #   so a suite that has already burned 260 of the 265 leaves this step five
-      #   minutes and the upload is cancelled with everything else. What the cap
-      #   buys is that a hung read cannot be the reason.
+      #   runs, on failed e2e jobs as well as green ones. It reserves nothing:
+      #   a suite that leaves five minutes of the job leaves this step five
+      #   minutes, and the upload is cancelled with everything else. The cap
+      #   only stops a hung read from being the reason.
       #   `continue-on-error` because the ceiling must not change what the job
       #   REPORTS. `|| true` on the make call is this step's standing statement
       #   that collecting diagnostics is never fatal, and a step killed at its

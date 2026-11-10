@@ -79,9 +79,9 @@ spec:
         # of job wait, a 600s cozy_wait_helmrelease_upgrade and another 1m of job
         # wait, all on the passing path. The guard in
         # hack/run-kubernetes-serial-console_test.bats holds COZY_OP_CEILING equal
-        # to BOTH suites' `timeout:`; both suites and their teardowns share the
-        # job's time limit. On the green run of this branch
-        # (33724179053) the whole Test took 569.72s against this 4020s op, with
+        # to both suites' `timeout:`, so raising it raises both, and both suites
+        # and their teardowns share the job's time limit. On green run
+        # 33724179053 the whole Test took 569.72s against this 4020s op, with
         # kubernetes-previous, which carries no OIDC fold, at 470.19s. The
         # ceilings only bind when something is already hung.
         timeout: 67m

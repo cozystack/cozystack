@@ -540,7 +540,8 @@ jobs:
     # per-node 8 CPU / 24 GiB in hack/e2e-compose.yaml is why the class is this
     # one. See the `e2e` job there for the full sizing note.
     runs-on: oracle-vm-32cpu-128gb-x86-64
-    # The job limit includes cleanup; it does not reserve time for it.
+    # Covers a green full suite and its teardown; hack/cozyreport.bats holds
+    # the floor. Teardown is the last step and gets whatever time is left.
     timeout-minutes: 265
     permissions:
       contents: read

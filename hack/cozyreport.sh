@@ -120,15 +120,13 @@
 # it sits UNDER this composition deliberately. Add the terms yourself if you need
 # the number; do not expect to find it written here.
 #
-# TWO ceilings sit outside it, and they fail differently. Reaching the job's
-# `timeout-minutes` cancels every step still to come --
-# the artifact upload among them. The step running this script is capped at 30 of
-# its own, and reaching THAT ends only this step: the uploads after it still run,
-# and `continue-on-error` on that step keeps the overrun out of the job's result,
-# so a passing run whose collection was slow is still reported as passing.
-# Neither ceiling saves this report: the tarball is written on the last line of
-# this file, so an overrun of either loses it rather than truncating it. What the
-# step ceiling buys is the rest of the job.
+# Two ceilings sit outside it. Reaching the job's `timeout-minutes` cancels
+# every remaining step, the artifact upload included. Reaching the step's own
+# 30 minutes ends only this step: the uploads after it still run, and
+# `continue-on-error` keeps the overrun out of the job's result, so a passing
+# run with a slow collection still reports as passing. Either overrun loses the
+# report rather than truncating it, because the tarball is written on the last
+# line of this file.
 #
 # The step's 30 minutes is deliberately UNDER the sum above rather than over it.
 # The sum is what a run costs when essentially every read hits its ceiling, and

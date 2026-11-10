@@ -206,11 +206,10 @@ _cozy_on_exit() {
       # 300s sits above the ~270s worst case inside (a ~30s pod list plus up to
       # 12 × 20s log reads), so it should not fire; if it does, a silently cut
       # capture would read as a complete one listing fewer crash-loops than
-      # actually occurred. This handler's whole worst case is ~1350s (330 + 390
-      # + 630, each leg including its 30s kill grace) against a job with no
-      # per-step timeout —
-      # deliberate, for the same reason recorded in hack/e2e-chainsaw/.chainsaw.yaml:
-      # a bounded, honest wait beats a kill that collects nothing.
+      # actually occurred. This handler's worst case is ~1350s (330 + 390 + 630,
+      # each leg including its 30s kill grace), and the steps that run it carry
+      # no timeout-minutes, for the reason in hack/e2e-chainsaw/.chainsaw.yaml:
+      # a bounded wait beats a kill that collects nothing.
       if [ "$_prev_rc" -ne 0 ]; then
         echo "» previous-instance capture INCOMPLETE (exit $_prev_rc); kept what landed in $_snap/previous-logs"
       fi

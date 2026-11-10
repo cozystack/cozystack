@@ -35,8 +35,8 @@
 # and the teardown. This is the third suite in a full run that brings up a
 # tenant cluster, next to kubernetes-latest and kubernetes-previous. A failure
 # that stalls worker join everywhere reddens all three, and their red paths
-# together can exceed the E2E job's time limit, which cancels the job and
-# loses its log and report.
+# together can outlast the E2E job's time limit; the cancelled job loses its
+# log and report.
 apiVersion: chainsaw.kyverno.io/v1alpha1
 kind: Test
 metadata:

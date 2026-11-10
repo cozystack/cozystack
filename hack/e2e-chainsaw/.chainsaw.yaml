@@ -66,17 +66,15 @@ spec:
   # script: it SIGKILLs the shell alone, orphaned children hold the pipe open,
   # and the op overruns (#4268 measured 606s under a 300s ceiling), so the
   # nominal ~5m was a figure a busy catch could exceed, not a cap. Tests run
-  # sequentially, and each E2E job has a time limit. A cascade
-  # reddening many suites can therefore spend a large share of the job in
-  # diagnostics. That is deliberate — the old ceiling
-  # bought its speed by collecting nothing at all — and it is bounded: both legs
-  # only approach their ceilings on a genuinely degraded cluster, a systemic
-  # failure usually reds the install gate and skips the E2E step entirely, and
-  # the report-upload steps are `if: always()`. That last point does NOT extend
-  # to a job timeout: a 215-minute cap ends the job `cancelled`, and the ~4m48s
-  # grace window is consumed by the earlier `Collect report` step, so both
-  # cozyreport.tgz and the job log are lost (measured on runs 29557003429 and
-  # 29568562337). If this ever does start truncating runs, bound the number of
+  # sequentially within the E2E job's time limit, so a cascade reddening many
+  # suites can spend a large share of the job in diagnostics. That cost is
+  # accepted, since the old ceiling bought its speed by collecting nothing, and
+  # it is bounded: both legs approach their ceilings only on a degraded cluster,
+  # and a systemic failure usually reds the install gate and skips the E2E step.
+  # The report uploads are `if: always()`, but a job that reaches its time limit
+  # ends `cancelled`, the earlier `Collect report` step consumes the ~4m48s
+  # grace window, and both cozyreport.tgz and the job log are lost (measured on
+  # runs 29557003429 and 29568562337). If this ever does start truncating runs, bound the number of
   # snapshotted tests rather than shrinking these timeouts back down: the op
   # ceiling firing does not cleanly cut a busy script (it SIGKILLs the shell
   # alone and orphaned children hold the pipe open, so the op overruns), so a
