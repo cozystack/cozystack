@@ -315,7 +315,7 @@ func (r *report) what(details map[int]bool) string {
 		if s, ok := r.shapes[v]; ok {
 			shape = ", " + s.String()
 		}
-		fmt.Fprintf(&b, "- %s %s%s\n", prLink(v.o.number), titleSpan(v.o.title), shape)
+		fmt.Fprintf(&b, "- %s %s%s\n%s", prLink(v.o.number), titleSpan(v.o.title), shape, diagItems(v))
 	}
 	if len(r.deferred) > 0 {
 		fmt.Fprintf(&b, "\n### Deferred conflicts\n\nThese do not pick cleanly onto this branch. Each names the first of its commits that conflicted and the files it conflicted in, and nothing of it is on the branch. Each moves to the next batch, unless a resolution checked with `backport-batch fold` is pushed here first, as [resolving a conflict](%sresolve-conflict.md) describes.\n\n", tasksURL)
@@ -331,13 +331,13 @@ func (r *report) what(details map[int]bool) string {
 			if p.failed != "" {
 				at = " at " + codeSpan(p.failed[:12])
 			}
-			fmt.Fprintf(&b, "- %s %s%s: %s\n", prLink(p.v.o.number), titleSpan(p.v.o.title), at, strings.Join(files, ", "))
+			fmt.Fprintf(&b, "- %s %s%s: %s\n%s", prLink(p.v.o.number), titleSpan(p.v.o.title), at, strings.Join(files, ", "), diagItems(p.v))
 		}
 	}
 	if len(r.held) > 0 {
 		b.WriteString("\n### Deferred to the next batch\n\nTaken out of this batch with `backport-batch run --defer`, each for the reason given. This pull request keeps them out; the next batch picks them again.\n\n")
 		for _, p := range r.held {
-			fmt.Fprintf(&b, "- %s %s: %s\n", prLink(p.v.o.number), titleSpan(p.v.o.title), titleSpan(p.reason))
+			fmt.Fprintf(&b, "- %s %s: %s\n%s", prLink(p.v.o.number), titleSpan(p.v.o.title), titleSpan(p.reason), diagItems(p.v))
 		}
 	}
 	if len(r.waiting) > 0 {
@@ -350,7 +350,7 @@ func (r *report) what(details map[int]bool) string {
 			if more := len(p.files) - len(files) + p.more; more > 0 {
 				files = append(files, fmt.Sprintf("%d more", more))
 			}
-			fmt.Fprintf(&b, "- %s %s: %s\n", prLink(p.v.o.number), titleSpan(p.v.o.title), strings.Join(files, ", "))
+			fmt.Fprintf(&b, "- %s %s: %s\n%s", prLink(p.v.o.number), titleSpan(p.v.o.title), strings.Join(files, ", "), diagItems(p.v))
 		}
 	}
 	if changed := r.changed(); len(changed) > 0 {
@@ -378,7 +378,7 @@ func (r *report) what(details map[int]bool) string {
 	if len(r.parked) > 0 {
 		fmt.Fprintf(&b, "\n### Parked\n\nThese cannot land on %s whole, so the batch does not pick them: each would leave part of it without effect there, or builds on a change that never reaches the line. A maintainer ports what applies as a pull request of its own, or drops the original with `backport-batch run --drop`; `backport/include` does not lift a park.\n\n", codeSpan(r.line.branch()))
 		for _, v := range r.parked {
-			fmt.Fprintf(&b, "- %s %s: %s\n", prLink(v.o.number), titleSpan(v.o.title), parkReason(*v.park))
+			fmt.Fprintf(&b, "- %s %s: %s\n%s", prLink(v.o.number), titleSpan(v.o.title), parkReason(*v.park), diagItems(v))
 		}
 	}
 	if len(r.overrides) > 0 {
@@ -441,6 +441,16 @@ func (r *report) outcome(v *verdict) string {
 		return "skipped by " + ruleName(v.rule) + ", " + titleSpan(v.reason)
 	}
 	return "not picked"
+}
+
+// diagItems lists, under an original's line, what could not be judged about
+// it or what it was seen to build on, each as a code span.
+func diagItems(v *verdict) string {
+	var b strings.Builder
+	for _, d := range v.diag {
+		fmt.Fprintf(&b, "  - %s\n", titleSpan(d))
+	}
+	return b.String()
 }
 
 // fileSpans lists files as code spans, the first few of them.

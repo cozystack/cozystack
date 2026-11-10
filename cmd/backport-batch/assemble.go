@@ -138,6 +138,7 @@ func (a *app) run(args []string) int {
 	if err := fetch(); err != nil {
 		return a.fail(err)
 	}
+	started := time.Now()
 	b, err := a.prepare(l)
 	if err != nil {
 		return a.fail(err)
@@ -145,6 +146,12 @@ func (a *app) run(args []string) int {
 	if goOn, code := a.resumeClose(b, *push, deferred != nil || drops != nil); !goOn {
 		return code
 	}
+	if err := b.analyze(); err != nil {
+		return a.fail(err)
+	}
+	// The scheduled job has half an hour for every line; this says where it
+	// goes.
+	fmt.Fprintf(a.stderr, "prepared %s in %s, %s of it judging partial units and what originals build on\n", l.branch(), time.Since(started).Round(time.Millisecond), b.detecting.Round(time.Millisecond))
 	if drops != nil {
 		return a.redrop(b, drops, reason, *undropArg != "", *push)
 	}

@@ -215,6 +215,8 @@ type verdict struct {
 	// without effect, and park why the batch leaves it out, if it does.
 	partial []string
 	park    *parkedEntry
+	// deps is what it builds on that the line lacks.
+	deps []dependency
 	// diag is what could not be judged about it, shown whatever became of
 	// it.
 	diag []string
@@ -259,6 +261,13 @@ type batch struct {
 	mergeFiles  int
 	// renameLimit is the -l rename detection runs with; 0, git's widest.
 	renameLimit int
+	// brought maps main's commits since the fork point to the first-parent
+	// commit that brought each, and ancestors says which commits blame
+	// named are older than the fork point.
+	brought   map[string]string
+	ancestors map[string]bool
+	// detecting is how long judging partial units and dependencies took.
+	detecting time.Duration
 }
 
 // fetch moves to the top of the working tree first: every path the batch

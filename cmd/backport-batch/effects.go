@@ -17,12 +17,14 @@ limitations under the License.
 package main
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // A clean pick can still carry only part of an original: git deletes a file
@@ -51,9 +53,14 @@ func treeEntries(treeish string, paths []string) (map[string]treeEntry, error) {
 	for len(paths) > 0 {
 		n := min(chunk, len(paths))
 		args := append([]string{"--literal-pathspecs", "ls-tree", "-r", "-z", "--full-tree", "--end-of-options", treeish, "--"}, paths[:n]...)
-		raw, err := git(args...)
-		if err != nil {
-			return nil, err
+		raw, stderr, code, err := gitStatus(args...)
+		switch {
+		case err != nil:
+			return nil, fmt.Errorf("git ls-tree %s did not run", terminalSafe(treeish))
+		case code != 0:
+			// The paths stay out of the error: they are file names someone
+			// chose, and the error reaches a terminal.
+			return nil, fmt.Errorf("git ls-tree %s: exit %d: %s", terminalSafe(treeish), code, terminalSafe(stderr))
 		}
 		for _, rec := range splitNUL(raw) {
 			meta, path, ok := strings.Cut(rec, "\t")
@@ -87,8 +94,17 @@ func (b *batch) renames(from, to string) (renameSet, error) {
 	}
 	// -l0 lifts git's own limit, which the picker's merge does not share:
 	// a rename the pick follows has to be one the checks of its shape see.
-	stdout, stderr, code, err := gitStatus("diff", "--no-ext-diff", "--no-textconv", "-M", "-l"+strconv.Itoa(b.renameLimit), "--name-status", "-z", "--diff-filter=R", "--end-of-options", from, to)
+	stdout, stderr, code, err := gitStatusTimed("diff", "--no-ext-diff", "--no-textconv", "-M", "-l"+strconv.Itoa(b.renameLimit), "--name-status", "-z", "--diff-filter=R", "--end-of-options", from, to)
 	switch {
+	case errors.Is(err, errDeadline):
+		// Out of time is rename detection skipped: no path is called
+		// absent for want of it.
+		s := renameSet{moved: map[string]string{}}
+		if b.renameCache == nil {
+			b.renameCache = map[string]renameSet{}
+		}
+		b.renameCache[key] = s
+		return s, nil
 	case err != nil:
 		return renameSet{}, err
 	case code != 0:
@@ -416,6 +432,7 @@ func (b *batch) onBranch(h *history, v *verdict) (bool, error) {
 // partial one is found with no record and no adder; a conflict is never
 // called partial.
 func (b *batch) partialStates() error {
+	defer b.timed(time.Now())
 	b.partialUnits = map[*verdict][]string{}
 	if b.pr != nil {
 		var err error

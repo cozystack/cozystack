@@ -227,6 +227,19 @@ func TestOmittedEffects(t *testing.T) {
 	})
 }
 
+// What git says when it fails names file names as text, never as lines a
+// terminal or a CI log would take for its own.
+func TestGitErrorsQuoteFileNames(t *testing.T) {
+	newFixture(t)
+	const evil = "x\n::warning::forged"
+	if _, err := gitTimed("log", "--no-such-option", "--", evil); err == nil || strings.Contains(err.Error(), "\n::warning") {
+		t.Errorf("gitTimed error = %v, want the path quoted", err)
+	}
+	if _, err := treeEntries("no-such-revision", []string{evil}); err == nil || strings.Contains(err.Error(), "\n::warning") {
+		t.Errorf("treeEntries error = %v, want the path quoted", err)
+	}
+}
+
 // fixedWorld is the sign-off's two-file case: the base has a and b as old,
 // #5 fixes both, and the line already has a as onLine says, if anything.
 func fixedWorld(t *testing.T, a, old, onLine, fixed string) (*fixture, string) {
