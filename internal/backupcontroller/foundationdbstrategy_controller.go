@@ -544,8 +544,12 @@ func (r *BackupJobReconciler) ensureFoundationDBBackup(ctx context.Context, j *b
 		return nil, "", err
 	}
 
-	if err := r.stopOtherFoundationDBBackups(ctx, j, clusterName); err != nil {
+	// The wait below reads the cache, which may not show a stop patched in
+	// this pass yet; it resumes on the next one.
+	if stopped, err := r.stopOtherFoundationDBBackups(ctx, j, clusterName); err != nil {
 		return nil, "", err
+	} else if len(stopped) > 0 {
+		return nil, fmt.Sprintf("stopped FoundationDBBackup %s; waiting for the operator to act on it", strings.Join(stopped, ", ")), nil
 	}
 	if waiting, err := r.waitForStoppedFoundationDBBackups(ctx, j, clusterName); err != nil || waiting != "" {
 		return nil, waiting, err
@@ -626,7 +630,9 @@ func (r *BackupJobReconciler) waitForStoppedFoundationDBBackups(ctx context.Cont
 	for i := range list.Items {
 		b := &list.Items[i]
 		if b.Spec.BackupState != foundationdbtypes.BackupStateStopped {
-			continue
+			// Every other backup of the cluster was stopped before this
+			// wait; one the cache still shows running is a stop not seen yet.
+			return fmt.Sprintf("waiting for the stop of FoundationDBBackup %s to show", b.Name), nil
 		}
 		if !foundationdbBackupQuiet(b) {
 			if b.DeletionTimestamp != nil {
@@ -653,10 +659,13 @@ func (r *BackupJobReconciler) waitForStoppedFoundationDBBackups(ctx context.Cont
 					return fmt.Sprintf("aborting the backup of FoundationDBBackup %s, which never became restorable", b.Name), nil
 				}
 			}
+			// The operator retries a stopped CR only on its error backoff
+			// once a repeated discontinue fails, so it is refreshed in
+			// either case.
+			r.requestFoundationDBStatusRefresh(ctx, b, now)
 			if b.Status.Generations == nil || b.Status.Generations.Reconciled < b.Generation {
 				return fmt.Sprintf("waiting for the operator to stop FoundationDBBackup %s", b.Name), nil
 			}
-			r.requestFoundationDBStatusRefresh(ctx, b, now)
 			return fmt.Sprintf("waiting for the backup stopped through FoundationDBBackup %s to stop running", b.Name), nil
 		}
 		if foundationdbPreviousAttempt(b, j) {
@@ -754,14 +763,15 @@ func parseFoundationDBVersion(s string) ([3]int, bool) {
 // resourceVersion. Retry-on-Conflict by refetching the CR and re-applying
 // the Stop intent; if the refetch shows the CR is already Stopped, we're
 // done.
-func (r *BackupJobReconciler) stopOtherFoundationDBBackups(ctx context.Context, j *backupsv1alpha1.BackupJob, clusterName string) error {
+func (r *BackupJobReconciler) stopOtherFoundationDBBackups(ctx context.Context, j *backupsv1alpha1.BackupJob, clusterName string) ([]string, error) {
 	list := &foundationdbtypes.FoundationDBBackupList{}
 	if err := r.List(ctx, list,
 		client.InNamespace(j.Namespace),
 		client.MatchingLabels{foundationdbClusterLabel: clusterName},
 	); err != nil {
-		return err
+		return nil, err
 	}
+	var stopped []string
 	for i := range list.Items {
 		b := &list.Items[i]
 		if b.Spec.BackupState == foundationdbtypes.BackupStateStopped {
@@ -775,10 +785,11 @@ func (r *BackupJobReconciler) stopOtherFoundationDBBackups(ctx context.Context, 
 			continue
 		}
 		if err := r.patchStopWithRetry(ctx, b); err != nil {
-			return fmt.Errorf("stop prior FoundationDBBackup %s/%s: %w", b.Namespace, b.Name, err)
+			return nil, fmt.Errorf("stop prior FoundationDBBackup %s/%s: %w", b.Namespace, b.Name, err)
 		}
+		stopped = append(stopped, b.Name)
 	}
-	return nil
+	return stopped, nil
 }
 
 // pruneStoppedFoundationDBBackups deletes the cluster's earlier backup CRs
@@ -1551,8 +1562,10 @@ func (r *RestoreJobReconciler) ensureFoundationDBRestoreAgents(
 
 	obj := &foundationdbtypes.FoundationDBBackup{
 		ObjectMeta: metav1.ObjectMeta{
-			Namespace:    rj.Namespace,
-			GenerateName: fmt.Sprintf("%s-agents-", rj.Name),
+			Namespace: rj.Namespace,
+			// A fixed name makes a create repeated over a stale cache
+			// collide instead of starting a second set of agents.
+			Name: rj.Name + "-agents",
 			Labels: map[string]string{
 				foundationdbRestoreAgentsLabel: rj.Name,
 				foundationdbClusterLabel:       cluster.Name,
@@ -1565,6 +1578,7 @@ func (r *RestoreJobReconciler) ensureFoundationDBRestoreAgents(
 			BlobStoreConfiguration: blob,
 			AgentCount:             int32PtrCopy(rendered.AgentCount),
 			CustomParameters:       append([]string(nil), rendered.CustomParameters...),
+			EncryptionKeyPath:      rendered.EncryptionKeyPath,
 		},
 	}
 	// These agents exist only to run the restore; an explicit zero would make
@@ -1581,6 +1595,9 @@ func (r *RestoreJobReconciler) ensureFoundationDBRestoreAgents(
 		return err
 	}
 	if err := r.Create(ctx, obj); err != nil {
+		if apierrors.IsAlreadyExists(err) {
+			return nil
+		}
 		// Invalid (a RestoreJob name too long for the label) or Forbidden
 		// cannot be fixed by retrying.
 		if apierrors.IsInvalid(err) || apierrors.IsForbidden(err) {
