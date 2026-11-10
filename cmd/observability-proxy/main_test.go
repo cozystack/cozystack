@@ -112,8 +112,7 @@ func TestParseFlagsInvalid(t *testing.T) {
 		{"--metrics-max-range=0s"},
 		{"--metrics-max-points=1"},
 		{"--metrics-max-timeout=0s"},
-		// Only namespace name characters: a regex metacharacter or an upper
-		// case letter would widen or empty the scope.
+		// No namespace name starts with these, so they would match nothing.
 		{"--metrics-platform-namespace-prefix=Cozy-"},
 		{"--metrics-platform-namespace-prefix=cozy.*"},
 		{"--metrics-platform-namespace-prefix=-"},

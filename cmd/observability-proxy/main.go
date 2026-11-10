@@ -113,8 +113,8 @@ func parseFlags(args []string) (options, error) {
 			return o, fmt.Errorf("invalid metrics store name %q", store)
 		}
 	}
-	// Anything but namespace name characters would make the prefix match
-	// differently from the namespaces it is meant to name.
+	// The prefix is matched literally, so one no namespace name can start
+	// with would turn the exporter branch off without a word.
 	if p := o.metrics.PlatformNamespacePrefix; p != "" && len(validation.IsDNS1123Label(p+"x")) > 0 {
 		return o, fmt.Errorf("invalid metrics platform namespace prefix %q", p)
 	}
