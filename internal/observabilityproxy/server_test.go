@@ -83,6 +83,7 @@ func newHarness(t *testing.T, cfg Config, handler http.HandlerFunc) *harness {
 	cfg.Metrics.UpstreamURL = cfg.UpstreamURL
 	if cfg.Metrics.ShortTermStore == "" {
 		cfg.Metrics.ShortTermStore, cfg.Metrics.LongTermStore, cfg.Metrics.ShortTermRetention = "shortterm", "longterm", 72*time.Hour
+		cfg.Metrics.PlatformNamespacePrefix = "cozy-"
 	}
 	if cfg.Metrics.Limits == (MetricsLimits{}) {
 		cfg.Metrics.Limits = testMetricsLimits()

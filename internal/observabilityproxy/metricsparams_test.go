@@ -19,6 +19,7 @@ package observabilityproxy
 import (
 	"net/http"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -29,13 +30,20 @@ func testMetricsLimits() MetricsLimits {
 	return MetricsLimits{MaxRange: 30 * 24 * time.Hour, MaxPoints: 11000, MaxTimeout: 30 * time.Second}
 }
 
-const wantMetricsScope = `{namespace="tenant-a"}`
+// wantMetricsScope is the namespace root's scope under the default
+// platform prefix: the namespace's own series, then the series a platform
+// exporter attributes to it.
+var wantMetricsScope = []string{`{namespace="tenant-a"}`, `{namespace=~"cozy-.*",exported_namespace="tenant-a"}`}
+
+func testScope() []string {
+	return MetricsConfig{PlatformNamespacePrefix: "cozy-"}.namespaceScope("tenant-a")
+}
 
 func unix(t time.Time) string { return strconv.FormatInt(t.Unix(), 10) }
 
 func buildMetrics(t *testing.T, endpoint string, in url.Values) metricsRequest {
 	t.Helper()
-	req, err := BuildMetricsParams(endpoint, in, "tenant-a", testNow, testMetricsLimits())
+	req, err := BuildMetricsParams(endpoint, in, testScope(), testNow, testMetricsLimits())
 	if err != nil {
 		t.Fatalf("BuildMetricsParams(%s, %v): %v", endpoint, in, err)
 	}
@@ -43,7 +51,7 @@ func buildMetrics(t *testing.T, endpoint string, in url.Values) metricsRequest {
 }
 
 func metricsStatus(endpoint string, in url.Values) int {
-	_, err := BuildMetricsParams(endpoint, in, "tenant-a", testNow, testMetricsLimits())
+	_, err := BuildMetricsParams(endpoint, in, testScope(), testNow, testMetricsLimits())
 	if err == nil {
 		return http.StatusOK
 	}
@@ -84,8 +92,8 @@ func TestBuildMetricsParamsAllowlist(t *testing.T) {
 					t.Errorf("parameter %q forwarded: %v", k, req.params)
 				}
 			}
-			if got := req.params["extra_filters[]"]; len(got) != 1 || got[0] != wantMetricsScope {
-				t.Errorf("extra_filters[] = %q, want exactly [%s]", got, wantMetricsScope)
+			if got := req.params["extra_filters[]"]; !slices.Equal(got, wantMetricsScope) {
+				t.Errorf("extra_filters[] = %q, want exactly %q", got, wantMetricsScope)
 			}
 			for _, m := range req.params["match[]"] {
 				if strings.Contains(m, "tenant-b") {
@@ -116,8 +124,8 @@ func TestNamespaceSelectorEscapes(t *testing.T) {
 func TestBuildMetricsParamsLabelEndpointsAlwaysMatch(t *testing.T) {
 	for _, endpoint := range []string{"api/v1/labels", "api/v1/label/__name__/values"} {
 		req := buildMetrics(t, endpoint, url.Values{})
-		if got := req.params["match[]"]; len(got) != 1 || got[0] != wantMetricsScope {
-			t.Errorf("%s without match[] sends %q, want the namespace selector", endpoint, got)
+		if got := req.params["match[]"]; !slices.Equal(got, wantMetricsScope) {
+			t.Errorf("%s without match[] sends %q, want the namespace scope %q", endpoint, got, wantMetricsScope)
 		}
 		req = buildMetrics(t, endpoint, url.Values{"match[]": {"up", `{job="x"}`}})
 		if got := req.params["match[]"]; len(got) != 2 || got[0] != "up" || got[1] != `{job="x"}` {
@@ -198,7 +206,7 @@ func TestBuildMetricsParamsCanonicalForms(t *testing.T) {
 	})
 	want := url.Values{
 		"query": {"up"}, "start": {"2026-11-04T11:00:00.250Z"}, "end": {"2026-11-04T12:00:00.000Z"}, "step": {"90"},
-		"timeout": {"30"}, "extra_filters[]": {wantMetricsScope},
+		"timeout": {"30"}, "extra_filters[]": wantMetricsScope,
 	}
 	if req.params.Encode() != want.Encode() {
 		t.Errorf("params = %v\nwant     %v", req.params, want)

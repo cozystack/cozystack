@@ -289,7 +289,7 @@ func (s *Server) serveMetrics(w http.ResponseWriter, r *http.Request, route Rout
 		return herr
 	}
 	now := s.now()
-	req, herr := BuildMetricsParams(route.Endpoint, r.Form, route.Namespace, now, s.cfg.Metrics.Limits)
+	req, herr := BuildMetricsParams(route.Endpoint, r.Form, s.cfg.Metrics.namespaceScope(route.Namespace), now, s.cfg.Metrics.Limits)
 	if herr != nil {
 		return herr
 	}

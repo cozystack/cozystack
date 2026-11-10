@@ -22,6 +22,7 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -46,6 +47,9 @@ type MetricsConfig struct {
 	LongTermStore      string
 	ShortTermRetention time.Duration
 	Limits             MetricsLimits
+	// PlatformNamespacePrefix names the namespaces whose exporters may
+	// attribute a series to another namespace; empty trusts none.
+	PlatformNamespacePrefix string
 	// UpstreamURL maps a store name to its Prometheus API base URL, without
 	// a trailing slash; nil means the in-cluster vmselect Service.
 	UpstreamURL func(store string) string
@@ -85,15 +89,34 @@ func namespaceSelector(ns string) string {
 	return "{namespace=" + strconv.Quote(ns) + "}"
 }
 
+// namespaceScope selects the series of namespace ns. Besides its own, it
+// takes the series an exporter in a platform namespace attributes to ns:
+// vmagent sets namespace to the scraped target's and, without honorLabels,
+// moves the exporter's own namespace label to exported_namespace. Only
+// platform namespaces are trusted with that label, since any tenant pod can
+// write it; tenants cannot run pods or scrape objects in them.
+func (c MetricsConfig) namespaceScope(ns string) []string {
+	scope := []string{namespaceSelector(ns)}
+	if c.PlatformNamespacePrefix != "" {
+		// MetricsQL anchors =~ at both ends.
+		platform := strconv.Quote(regexp.QuoteMeta(c.PlatformNamespacePrefix) + ".*")
+		scope = append(scope, "{namespace=~"+platform+",exported_namespace="+strconv.Quote(ns)+"}")
+	}
+	return scope
+}
+
 // BuildMetricsParams rebuilds the upstream parameters from an allowlist and
-// adds the namespace scope as the only extra_filters[] value. vmselect ORs
-// repeated extra_filters, so a client value would widen the scope; it ANDs
-// the single one into every selector of the query and every match[], which
-// is what lets the query pass through unparsed.
-func BuildMetricsParams(endpoint string, in url.Values, namespace string, now time.Time, lim MetricsLimits) (metricsRequest, *HTTPError) {
+// sends scope as the only extra_filters[] values. vmselect ORs repeated
+// extra_filters, so a client value would widen the scope; it ANDs each into
+// every selector of the query and every match[], which is what lets the
+// query pass through unparsed.
+func BuildMetricsParams(endpoint string, in url.Values, scope []string, now time.Time, lim MetricsLimits) (metricsRequest, *HTTPError) {
 	req := metricsRequest{path: endpoint, params: url.Values{}}
+	if len(scope) == 0 {
+		return req, errorf(http.StatusInternalServerError, "no metrics scope")
+	}
 	out := req.params
-	out.Set("extra_filters[]", namespaceSelector(namespace))
+	out["extra_filters[]"] = slices.Clone(scope)
 	timeout := lim.MaxTimeout
 	if v := in.Get("timeout"); v != "" {
 		d, herr := parseMetricsDuration("timeout", v)
@@ -192,8 +215,11 @@ func BuildMetricsParams(endpoint string, in url.Values, namespace string, now ti
 		}
 		// vmselect started with -search.ignoreExtraFiltersAtLabelsAPI drops
 		// extra_filters[] on the label APIs unless a match[] is present
-		// (getCommonParamsInternal), so the scope is repeated here.
-		out.Set("match[]", namespaceSelector(namespace))
+		// (getCommonParamsInternal), so the scope is repeated here. Where both
+		// are sent, vmselect ANDs every match[] with every extra_filters[];
+		// a cross pair is narrower than one of its halves, so the union is
+		// still the scope.
+		out["match[]"] = slices.Clone(scope)
 	}
 	return req, nil
 }
