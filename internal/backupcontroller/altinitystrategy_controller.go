@@ -943,6 +943,13 @@ func (r *RestoreJobReconciler) reconcileAltinityRestore(ctx context.Context, res
 // path segment; the name is interpolated into the sidecar's delete route.
 var altinityArchiveNamePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
 
+// altinityArchiveNamedBeforeUIDs matches a name ending in its start time, as a
+// controller that did not append the BackupJob's UID gave it. Two runs of one
+// application started in the same second got that name, and a run still in
+// flight across the upgrade may yet record it, so no Backup can tell that the
+// archive is its alone.
+var altinityArchiveNamedBeforeUIDs = regexp.MustCompile(`-[0-9]{8}T[0-9]{6}Z$`)
+
 // altinityCleanupScript deletes one remote archive through the
 // clickhouse-backup sidecar (POST /backup/delete/{where}/{name} in 2.7.x).
 // The sidecar answers 423 while any other operation runs, a backup of the
@@ -1046,12 +1053,9 @@ func (r *BackupReconciler) cleanupAltinityBackup(ctx context.Context, backup *ba
 		if len(containers) == 0 || containers[0].Image == "" {
 			return r.releaseAltinityCleanup(ctx, backup, archive, "strategy template has no container image"), nil
 		}
-		twin, terr := r.altinityArchiveSharedWith(ctx, backup, archive)
-		if terr != nil {
-			return ctrl.Result{}, terr
-		}
-		if twin != "" {
-			return r.releaseAltinityCleanup(ctx, backup, archive, fmt.Sprintf("the archive is shared with Backup %s", twin)), nil
+		if altinityArchiveNamedBeforeUIDs.MatchString(archive) {
+			return r.releaseAltinityCleanup(ctx, backup, archive,
+				"the archive is named without its BackupJob's UID, so another run started in the same second may have written or still be writing it"), nil
 		}
 		// The delete goes through the application's current sidecar. One that
 		// has since moved to its own bucket reports the archive as not found
@@ -1134,30 +1138,6 @@ func (r *BackupReconciler) cleanupAltinityBackup(ctx context.Context, backup *ba
 	default:
 		return ctrl.Result{RequeueAfter: altinityPollInterval}, nil
 	}
-}
-
-// altinityArchiveSharedWith names another Backup of the namespace that
-// records the same archive: two runs of one application that a controller
-// naming archives without the BackupJob's UID started within the same second
-// share one name, and both are recorded with the bucket setting when their
-// Jobs complete after the upgrade. A Backup that is being deleted
-// too does not count, since each would otherwise leave the archive to the
-// other and it would outlive both.
-func (r *BackupReconciler) altinityArchiveSharedWith(ctx context.Context, backup *backupsv1alpha1.Backup, archive string) (string, error) {
-	list := &backupsv1alpha1.BackupList{}
-	if err := r.List(ctx, list, client.InNamespace(backup.Namespace)); err != nil {
-		return "", err
-	}
-	for i := range list.Items {
-		other := &list.Items[i]
-		if other.Name == backup.Name || !other.DeletionTimestamp.IsZero() {
-			continue
-		}
-		if other.Spec.DriverMetadata[altinityArchiveMetaKey] == archive {
-			return other.Name, nil
-		}
-	}
-	return "", nil
 }
 
 // altinityAppOnSystemBucket reads the flag live rather than from the Backup:
