@@ -587,15 +587,15 @@ func TestFoundationDBRestoreOptions_EffectiveDeadline(t *testing.T) {
 }
 
 func TestFoundationDBBackupDeadlineExceeded(t *testing.T) {
-	if foundationdbBackupDeadlineExceeded(nil) {
+	if foundationdbBackupDeadlineExceeded(nil, foundationdbDefaultBackupDeadline) {
 		t.Fatalf("nil StartedAt must not trip the gate (deadline starts when StartedAt is set)")
 	}
 	recent := metav1.NewTime(time.Now())
-	if foundationdbBackupDeadlineExceeded(&recent) {
+	if foundationdbBackupDeadlineExceeded(&recent, foundationdbDefaultBackupDeadline) {
 		t.Fatalf("recent StartedAt must not trip the gate")
 	}
 	old := metav1.NewTime(time.Now().Add(-2 * foundationdbDefaultBackupDeadline))
-	if !foundationdbBackupDeadlineExceeded(&old) {
+	if !foundationdbBackupDeadlineExceeded(&old, foundationdbDefaultBackupDeadline) {
 		t.Fatalf("StartedAt past default deadline must trip the gate")
 	}
 }
@@ -2765,6 +2765,17 @@ func TestReconcileFoundationDB_RefusesSameNamedLiveBackup(t *testing.T) {
 	if err := c.Create(ctx, &backupsv1alpha1.Backup{ObjectMeta: metav1.ObjectMeta{Namespace: job.Namespace, Name: job.Name}}); err != nil {
 		t.Fatalf("seed Backup: %v", err)
 	}
+	cluster := foundationdbClusterNameForApp("fdb-src")
+	running := &foundationdbtypes.FoundationDBBackup{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace: "tenant", Name: "nightly-running",
+			Labels: map[string]string{foundationdbClusterLabel: cluster, backupsv1alpha1.OwningJobNameLabel: "nightly", backupsv1alpha1.OwningJobNamespaceLabel: "tenant"},
+		},
+		Spec: foundationdbtypes.FoundationDBBackupSpec{ClusterName: cluster, Version: "7.3.79", BackupState: foundationdbtypes.BackupStateRunning},
+	}
+	if err := c.Create(ctx, running); err != nil {
+		t.Fatalf("seed running backup: %v", err)
+	}
 	r := &BackupJobReconciler{Client: c, Scheme: c.Scheme(), Recorder: record.NewFakeRecorder(10)}
 
 	if _, err := r.reconcileFoundationDB(ctx, job, resolved); err != nil {
@@ -2773,8 +2784,45 @@ func TestReconcileFoundationDB_RefusesSameNamedLiveBackup(t *testing.T) {
 	if job.Status.Phase != backupsv1alpha1.BackupJobPhaseFailed {
 		t.Errorf("phase = %q, want Failed for a name whose Backup already exists", job.Status.Phase)
 	}
-	if n := len(listFoundationDBBackups(t, c)); n != 0 {
-		t.Errorf("no backup may start in that directory, got %d CRs", n)
+	backups := listFoundationDBBackups(t, c)
+	if len(backups) != 1 || backups[0].Spec.BackupState != foundationdbtypes.BackupStateRunning {
+		t.Errorf("a refused job must neither start a backup nor stop the cluster's running one, got %+v", backups)
+	}
+}
+
+// The first snapshot of a large database can take longer than the default
+// deadline, which aborts the backup with its data; backupTimeout raises it.
+func TestReconcileFoundationDB_BackupTimeoutParameterExtendsDeadline(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		params     map[string]string
+		wantFailed bool
+	}{
+		{"default deadline has passed", nil, true},
+		{"backupTimeout still covers the run", map[string]string{"backupTimeout": "3h"}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c, job, resolved := reconcileFoundationDBSeed(
+				t,
+				foundationdbtypes.FoundationDBClusterSpec{Version: "7.3.63"},
+				foundationdbtypes.FoundationDBClusterStatus{Health: foundationdbtypes.FoundationDBClusterHealth{Available: true}},
+			)
+			ctx := context.Background()
+			resolved.Parameters = tc.params
+			started := metav1.NewTime(time.Now().Add(-2 * foundationdbDefaultBackupDeadline))
+			job.Status.StartedAt = &started
+			if err := c.Status().Update(ctx, job); err != nil {
+				t.Fatalf("set StartedAt: %v", err)
+			}
+			r := &BackupJobReconciler{Client: c, Scheme: c.Scheme(), Recorder: record.NewFakeRecorder(10)}
+
+			if _, err := r.reconcileFoundationDB(ctx, job, resolved); err != nil {
+				t.Fatalf("reconcileFoundationDB: %v", err)
+			}
+			if failed := job.Status.Phase == backupsv1alpha1.BackupJobPhaseFailed; failed != tc.wantFailed {
+				t.Errorf("failed = %v, want %v (phase %q)", failed, tc.wantFailed, job.Status.Phase)
+			}
+		})
 	}
 }
 
