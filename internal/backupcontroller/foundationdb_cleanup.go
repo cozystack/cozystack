@@ -70,7 +70,7 @@ func (r *BackupReconciler) cleanupFoundationDBBackup(ctx context.Context, backup
 		// The data stays, but the agents must not keep writing into a
 		// directory nothing owns any more. Best-effort and without waiting
 		// on the operator: the annotation is the way out of a stuck delete.
-		r.dropFoundationDBOperatorBackup(ctx, backup)
+		r.stopFoundationDBOperatorBackup(ctx, backup)
 		getLogger(ctx).Debug("skipping FoundationDB artifact cleanup per annotation; directory left in bucket", "backup", backup.Name, "url", url)
 		return ctrl.Result{}, nil
 	}
@@ -160,9 +160,13 @@ func (r *BackupReconciler) removeFoundationDBOperatorBackup(ctx context.Context,
 	return false, client.IgnoreNotFound(r.Delete(ctx, fdbBackup))
 }
 
-// dropFoundationDBOperatorBackup stops and deletes the Backup's operator-side
-// FoundationDBBackup without waiting for the operator. Errors are logged.
-func (r *BackupReconciler) dropFoundationDBOperatorBackup(ctx context.Context, backup *backupsv1alpha1.Backup) {
+// stopFoundationDBOperatorBackup stops the Backup's operator-side
+// FoundationDBBackup without waiting for the operator. The CR is left for the
+// cluster's next BackupJob to prune once the stop has gone through: deleting
+// it now would hide a backup that is still running from that job, which waits
+// for every stopped backup of the cluster before starting its own. Errors are
+// logged.
+func (r *BackupReconciler) stopFoundationDBOperatorBackup(ctx context.Context, backup *backupsv1alpha1.Backup) {
 	md := backup.Spec.DriverMetadata
 	name := md[foundationdbBackupNameKey]
 	if name == "" {
@@ -176,15 +180,13 @@ func (r *BackupReconciler) dropFoundationDBOperatorBackup(ctx context.Context, b
 	if err := r.Get(ctx, types.NamespacedName{Namespace: namespace, Name: name}, fdbBackup); err != nil {
 		return
 	}
-	if fdbBackup.Spec.BackupState != foundationdbtypes.BackupStateStopped {
-		base := fdbBackup.DeepCopy()
-		fdbBackup.Spec.BackupState = foundationdbtypes.BackupStateStopped
-		if err := r.Patch(ctx, fdbBackup, client.MergeFrom(base)); err != nil {
-			getLogger(ctx).Debug("failed to stop FoundationDBBackup on skipped cleanup", "fdbBackup", name, "error", err.Error())
-		}
+	if fdbBackup.Spec.BackupState == foundationdbtypes.BackupStateStopped {
+		return
 	}
-	if err := r.Delete(ctx, fdbBackup); err != nil && !apierrors.IsNotFound(err) {
-		getLogger(ctx).Debug("failed to delete FoundationDBBackup on skipped cleanup", "fdbBackup", name, "error", err.Error())
+	base := fdbBackup.DeepCopy()
+	fdbBackup.Spec.BackupState = foundationdbtypes.BackupStateStopped
+	if err := r.Patch(ctx, fdbBackup, client.MergeFrom(base)); err != nil {
+		getLogger(ctx).Debug("failed to stop FoundationDBBackup on skipped cleanup", "fdbBackup", name, "error", err.Error())
 	}
 }
 
