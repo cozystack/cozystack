@@ -2332,6 +2332,154 @@ func TestReconcileCNPG_StartedAtReturnsEarlyToAvoidStaleResourceVersion(t *testi
 	}
 }
 
+// CloudNativePG never reconciles a Backup out of a terminal phase (the
+// backup controller returns early on failed and completed), so a failed
+// Backup fails the BackupJob at once. Any other phase keeps the BackupJob
+// waiting past the backup deadline: CNPG keeps a healthy Backup pending
+// while another backup of the Cluster runs or while it restarts one.
+func TestReconcileCNPG_BackupPhaseOutcome(t *testing.T) {
+	apiGroup := backupsv1alpha1.DefaultApplicationAPIGroup
+	strategyGroup := strategyv1alpha1.GroupVersion.Group
+	const ns, appName = "tenant", "pg"
+	clusterName := cnpgClusterNameForApp(appName)
+	expired := time.Now().Add(-(cnpgDefaultBackupDeadline + time.Minute))
+
+	cases := []struct {
+		name         string
+		phase        string
+		errText      string
+		startedAt    time.Time
+		wantPhase    backupsv1alpha1.BackupJobPhase
+		wantMessage  []string
+		notInMessage []string
+	}{
+		{name: "failed fails at once", phase: cnpgBackupPhaseFailed, errText: "rpc error: code = Unknown desc = exit status 1", startedAt: time.Now(),
+			wantPhase: backupsv1alpha1.BackupJobPhaseFailed, wantMessage: []string{"bj-cnpg", "exit status 1", "plugin-barman-cloud"}},
+		{name: "failed without an error text fails at once", phase: cnpgBackupPhaseFailed, startedAt: time.Now(),
+			wantPhase: backupsv1alpha1.BackupJobPhaseFailed, wantMessage: []string{"bj-cnpg", "no error recorded"}, notInMessage: []string{"plugin-barman-cloud"}},
+		{name: "failed before the plugin ran points nowhere else", phase: cnpgBackupPhaseFailed, errText: "cannot backup a hibernated cluster", startedAt: time.Now(),
+			wantPhase: backupsv1alpha1.BackupJobPhaseFailed, wantMessage: []string{"bj-cnpg", "hibernated"}, notInMessage: []string{"plugin-barman-cloud"}},
+		{name: "pending keeps waiting", phase: "pending", startedAt: time.Now(),
+			wantPhase: backupsv1alpha1.BackupJobPhaseRunning, wantMessage: []string{"bj-cnpg", "pending"}},
+		{name: "pending is not capped by the backup deadline", phase: "pending", startedAt: expired,
+			wantPhase: backupsv1alpha1.BackupJobPhaseRunning, wantMessage: []string{"bj-cnpg", "pending"}},
+		{name: "no phase yet keeps waiting", phase: "", startedAt: expired,
+			wantPhase: backupsv1alpha1.BackupJobPhaseRunning, wantMessage: []string{"bj-cnpg"}},
+		{name: "started keeps running", phase: "started", startedAt: expired,
+			wantPhase: backupsv1alpha1.BackupJobPhaseRunning, wantMessage: []string{"bj-cnpg", "started"}},
+		{name: "walArchivingFailing keeps waiting", phase: "walArchivingFailing", startedAt: expired,
+			wantPhase: backupsv1alpha1.BackupJobPhaseRunning, wantMessage: []string{"bj-cnpg", "walArchivingFailing"}},
+		{name: "completed succeeds", phase: cnpgBackupPhaseComplete, startedAt: expired,
+			wantPhase: backupsv1alpha1.BackupJobPhaseSucceeded},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			startedAt := metav1.NewTime(tc.startedAt)
+			job := &backupsv1alpha1.BackupJob{
+				ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "bj"},
+				Spec: backupsv1alpha1.BackupJobSpec{
+					ApplicationRef: corev1.TypedLocalObjectReference{APIGroup: &apiGroup, Kind: postgresAppKind, Name: appName},
+				},
+				Status: backupsv1alpha1.BackupJobStatus{StartedAt: &startedAt},
+			}
+			strategy := &strategyv1alpha1.CNPG{
+				ObjectMeta: metav1.ObjectMeta{Name: "cnpg-strategy"},
+				Spec: strategyv1alpha1.CNPGSpec{
+					Template: strategyv1alpha1.CNPGTemplate{
+						BarmanObjectStore: strategyv1alpha1.BarmanObjectStoreTemplate{DestinationPath: "s3://bucket/"},
+					},
+				},
+			}
+			cluster := &cnpgtypes.Cluster{
+				ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: clusterName, UID: "cluster-uid"},
+			}
+			cnpgBackup := &cnpgtypes.Backup{
+				ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "bj-cnpg", Labels: map[string]string{
+					backupsv1alpha1.OwningJobNameLabel:      job.Name,
+					backupsv1alpha1.OwningJobNamespaceLabel: job.Namespace,
+				}},
+				Spec:   cnpgtypes.BackupSpec{Cluster: cnpgtypes.ClusterReference{Name: clusterName}},
+				Status: cnpgtypes.BackupStatus{Phase: tc.phase, Error: tc.errText},
+			}
+			c := newCNPGStrategyTestClient(t, job, strategy, newPostgresApp(appName, ns), cluster, cnpgBackup)
+			r := &BackupJobReconciler{Client: c, Interface: cnpgDynamicFor(t, cluster)}
+			resolved := &ResolvedBackupConfig{
+				StrategyRef: corev1.TypedLocalObjectReference{APIGroup: &strategyGroup, Kind: strategyv1alpha1.CNPGStrategyKind, Name: strategy.Name},
+			}
+
+			j := &backupsv1alpha1.BackupJob{}
+			if err := c.Get(context.Background(), client.ObjectKeyFromObject(job), j); err != nil {
+				t.Fatalf("get BackupJob: %v", err)
+			}
+			res, err := r.reconcileCNPG(context.Background(), j, resolved)
+			if err != nil {
+				t.Fatalf("reconcileCNPG: %v", err)
+			}
+			if j.Status.Phase != tc.wantPhase {
+				t.Fatalf("BackupJob phase = %q (%s), want %q", j.Status.Phase, j.Status.Message, tc.wantPhase)
+			}
+
+			message := j.Status.Message
+			if tc.wantPhase == backupsv1alpha1.BackupJobPhaseRunning {
+				if res.RequeueAfter == 0 {
+					t.Errorf("expected a requeue while the cnpg.io/Backup is in progress, got %+v", res)
+				}
+				persisted := &backupsv1alpha1.BackupJob{}
+				if err := c.Get(context.Background(), client.ObjectKeyFromObject(job), persisted); err != nil {
+					t.Fatalf("get BackupJob after reconcile: %v", err)
+				}
+				ready := apimeta.FindStatusCondition(persisted.Status.Conditions, "Ready")
+				if ready == nil || ready.Status != metav1.ConditionFalse || ready.Reason != "WaitingForCNPGBackup" {
+					t.Fatalf("expected Ready=False/WaitingForCNPGBackup while waiting, got %+v", ready)
+				}
+				message = ready.Message
+
+				// A pass that observes the same phase again must not write the
+				// BackupJob status: the driver polls every few seconds.
+				statusWrites := 0
+				r.Client = interceptor.NewClient(c.(client.WithWatch), interceptor.Funcs{
+					SubResourceUpdate: func(ctx context.Context, cl client.Client, sub string, obj client.Object, opts ...client.SubResourceUpdateOption) error {
+						statusWrites++
+						return cl.SubResource(sub).Update(ctx, obj, opts...)
+					},
+					SubResourcePatch: func(ctx context.Context, cl client.Client, sub string, obj client.Object, patch client.Patch, opts ...client.SubResourcePatchOption) error {
+						statusWrites++
+						return cl.SubResource(sub).Patch(ctx, obj, patch, opts...)
+					},
+				})
+				if _, err := r.reconcileCNPG(context.Background(), persisted, resolved); err != nil {
+					t.Fatalf("second reconcileCNPG: %v", err)
+				}
+				if statusWrites != 0 {
+					t.Errorf("an unchanged phase wrote the BackupJob status %d time(s)", statusWrites)
+				}
+			}
+			for _, want := range tc.wantMessage {
+				if !strings.Contains(message, want) {
+					t.Errorf("message %q does not mention %q", message, want)
+				}
+			}
+			for _, unwanted := range tc.notInMessage {
+				if strings.Contains(message, unwanted) {
+					t.Errorf("message %q mentions %q", message, unwanted)
+				}
+			}
+
+			artifacts := &backupsv1alpha1.BackupList{}
+			if err := c.List(context.Background(), artifacts, client.InNamespace(ns)); err != nil {
+				t.Fatalf("list Backups: %v", err)
+			}
+			wantArtifacts := 0
+			if tc.wantPhase == backupsv1alpha1.BackupJobPhaseSucceeded {
+				wantArtifacts = 1
+			}
+			if len(artifacts.Items) != wantArtifacts {
+				t.Errorf("got %d Backup artifacts, want %d", len(artifacts.Items), wantArtifacts)
+			}
+		})
+	}
+}
+
 // cnpgRolloutFixture drives reconcileCNPG against one Postgres app whose
 // Cluster and instance pods a test swaps between passes, standing in for
 // CNPG rolling the instances.
@@ -2516,8 +2664,8 @@ func TestReconcileCNPG_WaitsForPluginRolloutBeforeBackup(t *testing.T) {
 	if !apimeta.IsStatusConditionTrue(j.Status.Conditions, backupCondPluginRolledOut) {
 		t.Errorf("%s condition = %+v, want True", backupCondPluginRolledOut, apimeta.FindStatusCondition(j.Status.Conditions, backupCondPluginRolledOut))
 	}
-	if cond := apimeta.FindStatusCondition(j.Status.Conditions, "Ready"); cond != nil {
-		t.Errorf("Ready condition = %+v left over from the wait while the backup runs", cond)
+	if cond := apimeta.FindStatusCondition(j.Status.Conditions, "Ready"); cond == nil || cond.Reason != "WaitingForCNPGBackup" {
+		t.Errorf("Ready condition = %+v, want the wait on the cnpg.io/Backup rather than one left over from the rollout", cond)
 	}
 }
 
