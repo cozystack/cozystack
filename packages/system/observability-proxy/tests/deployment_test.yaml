@@ -51,6 +51,9 @@ tests:
       - contains:
           path: spec.template.spec.containers[0].args
           content: --metrics-shortterm-retention=72h
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --metrics-platform-namespace-prefix=cozy-
 
   - it: follows renamed metrics stores
     set:
@@ -68,6 +71,19 @@ tests:
       - contains:
           path: spec.template.spec.containers[0].args
           content: --metrics-shortterm-retention=24h
+
+  # An empty value must reach the binary as an explicit empty flag; a
+  # dropped flag would fall back to the cozy- default.
+  - it: passes an empty platform namespace prefix through
+    set:
+      observabilityProxy.metrics.platformNamespacePrefix: ""
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --metrics-platform-namespace-prefix=
+      - notContains:
+          path: spec.template.spec.containers[0].args
+          content: --metrics-platform-namespace-prefix=cozy-
 
   - it: falls back to cozy.local when the platform passes no cluster domain
     asserts:

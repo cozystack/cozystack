@@ -14,6 +14,10 @@ observabilityProxy:
     shorttermStore: shortterm
     longtermStore: longterm
     shorttermRetention: 72h
+    # Exporters in namespaces with this prefix may attribute a series to a
+    # tenant namespace through exported_namespace, and the series is then
+    # part of that namespace's metrics. Empty disables it.
+    platformNamespacePrefix: cozy-
   resources:
     requests:
       cpu: 10m
