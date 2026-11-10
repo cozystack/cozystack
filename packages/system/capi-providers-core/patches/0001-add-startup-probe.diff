@@ -1,0 +1,13 @@
+--- core-components.yaml
++++ core-components.yaml
+@@ -20276,4 +20276,10 @@
+         imagePullPolicy: IfNotPresent
++        startupProbe:
++          httpGet:
++            path: /healthz
++            port: healthz
++          failureThreshold: 30
++          periodSeconds: 10
+         livenessProbe:
+           httpGet:
+             path: /healthz

@@ -1,0 +1,32 @@
+{{- $bridge := required "intermediate provider version is missing" (.Files.Get "files/bridge-version" | trim) -}}
+{{/* Keep repositories available for providers left at the intermediate version. */}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $bridge }}-core
+  labels:
+    provider.cluster.x-k8s.io/version: {{ $bridge }}-core
+    core-components: cozy
+  annotations:
+    provider.cluster.x-k8s.io/compressed: "true"
+    helm.sh/resource-policy: keep
+binaryData:
+  components: {{ required "intermediate core bundle is missing" (.Files.Get "files/bridge-core-components.gz") | b64enc | quote }}
+data:
+  metadata: {{ required "intermediate provider metadata is missing" (.Files.Get "files/bridge-metadata.yaml") | quote }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $bridge }}-bootstrap
+  labels:
+    provider.cluster.x-k8s.io/version: {{ $bridge }}-bootstrap
+    bootstrap-components: cozy
+    bootstrap-provider: kubeadm
+  annotations:
+    provider.cluster.x-k8s.io/compressed: "true"
+    helm.sh/resource-policy: keep
+binaryData:
+  components: {{ required "intermediate kubeadm bundle is missing" (.Files.Get "files/bridge-bootstrap-components.gz") | b64enc | quote }}
+data:
+  metadata: {{ required "intermediate provider metadata is missing" (.Files.Get "files/bridge-metadata.yaml") | quote }}

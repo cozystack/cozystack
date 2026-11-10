@@ -2,3 +2,7 @@
 packages/system/capi-providers-infraprovider/images/cluster-api-provider-kubevirt/patches/*.diff -whitespace
 packages/system/cilium/images/cilium-operator/patches/*.diff -whitespace
 packages/system/seaweedfs/images/seaweedfs/patches/*.diff -whitespace
+packages/system/capi-operator/charts/** linguist-vendored
+packages/system/capi-operator/files/bridge-*.yaml linguist-generated
+packages/system/capi-providers-core/files/*-components*.yaml linguist-generated
+packages/system/capi-providers-bootstrap/files/*-components*.yaml linguist-generated
