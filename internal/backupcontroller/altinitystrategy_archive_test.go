@@ -336,6 +336,38 @@ func TestBackupReconcile_HoldsFinalizerWhileAltinityCleanupRuns(t *testing.T) {
 	}
 }
 
+// A Backup deleted before the Backup reconciler first sees it still has its
+// archive deleted: the finalizer that holds it for cleanup comes with it from
+// the driver, not from that reconciler's first pass.
+func TestBackupReconcile_DeletesTheArchiveOfABackupDeletedAtOnce(t *testing.T) {
+	created := completeAltinityBackup(t, withUseSystemBucket(newAltinityClickHouseApp("ch-test", "tenant-test"), true), completedAltinityK8sJob)
+	if !controllerutil.ContainsFinalizer(created, backupFinalizer) {
+		t.Errorf("Backup created without %s, finalizers %v", backupFinalizer, created.Finalizers)
+	}
+	created.ResourceVersion = ""
+	c, s := newAltinityCleanupClient(append(altinityCleanupFixtures(created), newAltinityArchiveStrategy(created.Spec.StrategyRef.Name))...)
+	r := &BackupReconciler{Client: c, Scheme: s, Recorder: record.NewFakeRecorder(10)}
+	ctx := context.Background()
+
+	if err := c.Delete(ctx, created); err != nil {
+		t.Fatalf("delete backup: %v", err)
+	}
+	key := client.ObjectKeyFromObject(created)
+	if err := c.Get(ctx, key, &backupsv1alpha1.Backup{}); err != nil {
+		t.Fatalf("Backup gone before its archive was deleted: %v", err)
+	}
+	if _, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: key}); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	jobs := listJobs(t, c)
+	if len(jobs) != 1 {
+		t.Fatalf("expected one cleanup Job, got %d", len(jobs))
+	}
+	if got, want := envValue(t, jobs[0].Spec.Template.Spec.Containers[0], "ARCHIVE_NAME"), created.Spec.DriverMetadata[altinityArchiveMetaKey]; got != want || got == "" {
+		t.Errorf("ARCHIVE_NAME = %q, want the recorded archive %q", got, want)
+	}
+}
+
 // ownCleanupJob is the cleanup Job this Backup's own cleanup would create.
 func ownCleanupJob(b *backupsv1alpha1.Backup) *batchv1.Job {
 	return buildAltinityCleanupJob(b.Namespace, b.Name+"-cleanup", corev1.Container{Image: "img"}, nil, "host", "secret",
