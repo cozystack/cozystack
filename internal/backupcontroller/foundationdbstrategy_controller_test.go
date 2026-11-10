@@ -2538,9 +2538,16 @@ func TestReconcileFoundationDB_PrunesStoppedPriorBackups(t *testing.T) {
 		t.Errorf("restore agents must not be pruned by the backup path")
 	}
 	if len(names) != 2 {
-		t.Errorf("no new backup may start while a stop is pending, got %v", names)
+		t.Errorf("no new backup may start while a restore runs into the cluster, got %v", names)
 	}
 
+	// The restore finishes and its agents go.
+	if err := c.Delete(ctx, &foundationdbtypes.FoundationDBBackup{ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "restore-agents"}}); err != nil {
+		t.Fatalf("delete restore agents: %v", err)
+	}
+	if names := reconcileNames(); len(names) != 1 || !names["stopped-pending"] {
+		t.Errorf("no new backup may start while a stop is pending, got %v", names)
+	}
 	pending := &foundationdbtypes.FoundationDBBackup{}
 	if err := c.Get(ctx, types.NamespacedName{Namespace: "tenant", Name: "stopped-pending"}, pending); err != nil {
 		t.Fatalf("get stopped-pending: %v", err)
@@ -2552,8 +2559,64 @@ func TestReconcileFoundationDB_PrunesStoppedPriorBackups(t *testing.T) {
 	if err := c.Update(ctx, pending); err != nil {
 		t.Fatalf("mark stop reconciled: %v", err)
 	}
-	if names := reconcileNames(); len(names) != 2 || !names["restore-agents"] || names["stopped-pending"] {
+	if names := reconcileNames(); len(names) != 1 || names["stopped-pending"] {
 		t.Errorf("once the stop is reconciled the prior CR goes and the new backup starts, got %v", names)
+	}
+}
+
+// A restore runs on a stopped agents CR; a backup started next to it would be
+// discontinued the next time the operator reconciles that CR.
+func TestReconcileFoundationDB_WaitsForRestoreIntoTheCluster(t *testing.T) {
+	c, job, resolved := reconcileFoundationDBSeed(
+		t,
+		foundationdbtypes.FoundationDBClusterSpec{Version: "7.3.63"},
+		foundationdbtypes.FoundationDBClusterStatus{Health: foundationdbtypes.FoundationDBClusterHealth{Available: true}},
+	)
+	ctx := context.Background()
+	cluster := foundationdbClusterNameForApp("fdb-src")
+	if err := c.Create(ctx, &foundationdbtypes.FoundationDBBackup{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace: "tenant", Name: "rj-agents", Generation: 1,
+			Labels: map[string]string{foundationdbClusterLabel: cluster, foundationdbRestoreAgentsLabel: "rj"},
+		},
+		Spec:   foundationdbtypes.FoundationDBBackupSpec{ClusterName: cluster, Version: "7.3.79", BackupState: foundationdbtypes.BackupStateStopped},
+		Status: foundationdbtypes.FoundationDBBackupStatus{Generations: &foundationdbtypes.BackupGenerationStatus{Reconciled: 1}},
+	}); err != nil {
+		t.Fatalf("seed agents: %v", err)
+	}
+	r := &BackupJobReconciler{Client: c, Scheme: c.Scheme(), Recorder: record.NewFakeRecorder(10)}
+	if _, err := r.reconcileFoundationDB(ctx, job, resolved); err != nil {
+		t.Fatalf("reconcileFoundationDB: %v", err)
+	}
+	if n := len(listFoundationDBBackups(t, c)); n != 1 {
+		t.Errorf("no backup may start while a restore runs into the cluster, got %d CRs", n)
+	}
+}
+
+// A BackupJob that fails to reach the API server is retried within its
+// deadline: an earlier pass may already have stopped the cluster's backup.
+func TestReconcileFoundationDB_TransientEnsureErrorIsRetried(t *testing.T) {
+	c, job, resolved := reconcileFoundationDBSeed(
+		t,
+		foundationdbtypes.FoundationDBClusterSpec{Version: "7.3.63"},
+		foundationdbtypes.FoundationDBClusterStatus{Health: foundationdbtypes.FoundationDBClusterHealth{Available: true}},
+	)
+	unavailable := apierrors.NewServiceUnavailable("apiserver restarting")
+	faulty := interceptor.NewClient(c.(client.WithWatch), interceptor.Funcs{
+		Get: func(ctx context.Context, cl client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+			if _, ok := obj.(*backupsv1alpha1.Backup); ok {
+				return unavailable
+			}
+			return cl.Get(ctx, key, obj, opts...)
+		},
+	})
+	r := &BackupJobReconciler{Client: faulty, Scheme: c.Scheme(), Recorder: record.NewFakeRecorder(10)}
+
+	if _, err := r.reconcileFoundationDB(context.Background(), job, resolved); err == nil {
+		t.Fatalf("a transient error must be returned for a requeue")
+	}
+	if job.Status.Phase == backupsv1alpha1.BackupJobPhaseFailed {
+		t.Errorf("a transient error must not fail the BackupJob")
 	}
 }
 
@@ -2714,46 +2777,57 @@ func TestReconcileFoundationDB_AbortsStuckBackupOfFinishedJob(t *testing.T) {
 // gets a backup: discontinue lets it reach a restorable snapshot and then ends
 // it, so the stopped CR reports its own directory restorable and not running.
 func TestReconcileFoundationDB_StoppedBackupThatCompletedSucceeds(t *testing.T) {
-	c, job, resolved := reconcileFoundationDBSeed(
-		t,
-		foundationdbtypes.FoundationDBClusterSpec{Version: "7.3.63"},
-		foundationdbtypes.FoundationDBClusterStatus{Health: foundationdbtypes.FoundationDBClusterHealth{Available: true}},
-	)
-	ctx := context.Background()
-	cluster := foundationdbClusterNameForApp("fdb-src")
-	cfg := foundationdbtypes.BlobStoreConfiguration{AccountName: "@s3.example.com", Bucket: "b", BackupName: "tenant/bj"}
-	url, err := foundationdbBlobURL(cfg)
-	if err != nil {
-		t.Fatalf("foundationdbBlobURL: %v", err)
-	}
-	completed := &foundationdbtypes.FoundationDBBackup{
-		ObjectMeta: metav1.ObjectMeta{
-			Namespace: "tenant", Name: "bj-x", Generation: 2,
-			Labels: map[string]string{
-				foundationdbClusterLabel:                cluster,
-				backupsv1alpha1.OwningJobNameLabel:      job.Name,
-				backupsv1alpha1.OwningJobNamespaceLabel: job.Namespace,
-			},
-		},
-		Spec: foundationdbtypes.FoundationDBBackupSpec{ClusterName: cluster, Version: "7.3.79", BackupState: foundationdbtypes.BackupStateStopped, BlobStoreConfiguration: cfg},
-		Status: foundationdbtypes.FoundationDBBackupStatus{
-			Generations:   &foundationdbtypes.BackupGenerationStatus{Reconciled: 2},
-			BackupDetails: &foundationdbtypes.BackupDetails{Running: false, Restorable: true, URL: url},
-		},
-	}
-	if err := c.Create(ctx, completed); err != nil {
-		t.Fatalf("seed completed backup: %v", err)
-	}
-	r := &BackupJobReconciler{Client: c, Scheme: c.Scheme(), Recorder: record.NewFakeRecorder(10)}
+	for _, tc := range []struct {
+		name       string
+		reconciled int64
+		running    bool
+	}{
+		{"completed after the stop", 2, false},
+		{"restorable while the operator has not acted on the stop yet", 1, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c, job, resolved := reconcileFoundationDBSeed(
+				t,
+				foundationdbtypes.FoundationDBClusterSpec{Version: "7.3.63"},
+				foundationdbtypes.FoundationDBClusterStatus{Health: foundationdbtypes.FoundationDBClusterHealth{Available: true}},
+			)
+			ctx := context.Background()
+			cluster := foundationdbClusterNameForApp("fdb-src")
+			cfg := foundationdbtypes.BlobStoreConfiguration{AccountName: "@s3.example.com", Bucket: "b", BackupName: "tenant/bj"}
+			url, err := foundationdbBlobURL(cfg)
+			if err != nil {
+				t.Fatalf("foundationdbBlobURL: %v", err)
+			}
+			completed := &foundationdbtypes.FoundationDBBackup{
+				ObjectMeta: metav1.ObjectMeta{
+					Namespace: "tenant", Name: "bj-x", Generation: 2,
+					Labels: map[string]string{
+						foundationdbClusterLabel:                cluster,
+						backupsv1alpha1.OwningJobNameLabel:      job.Name,
+						backupsv1alpha1.OwningJobNamespaceLabel: job.Namespace,
+					},
+				},
+				Spec: foundationdbtypes.FoundationDBBackupSpec{ClusterName: cluster, Version: "7.3.79", BackupState: foundationdbtypes.BackupStateStopped, BlobStoreConfiguration: cfg},
+				Status: foundationdbtypes.FoundationDBBackupStatus{
+					Generations:   &foundationdbtypes.BackupGenerationStatus{Reconciled: tc.reconciled},
+					BackupDetails: &foundationdbtypes.BackupDetails{Running: tc.running, Restorable: true, URL: url},
+				},
+			}
+			if err := c.Create(ctx, completed); err != nil {
+				t.Fatalf("seed completed backup: %v", err)
+			}
+			r := &BackupJobReconciler{Client: c, Scheme: c.Scheme(), Recorder: record.NewFakeRecorder(10)}
 
-	if _, err := r.reconcileFoundationDB(ctx, job, resolved); err != nil {
-		t.Fatalf("reconcileFoundationDB: %v", err)
-	}
-	if job.Status.Phase != backupsv1alpha1.BackupJobPhaseSucceeded || job.Status.BackupRef == nil {
-		t.Fatalf("a completed stopped backup in the job's own directory must succeed, got phase %q", job.Status.Phase)
-	}
-	if err := c.Get(ctx, types.NamespacedName{Namespace: job.Namespace, Name: job.Status.BackupRef.Name}, &backupsv1alpha1.Backup{}); err != nil {
-		t.Errorf("the Backup that owns the directory must exist: %v", err)
+			if _, err := r.reconcileFoundationDB(ctx, job, resolved); err != nil {
+				t.Fatalf("reconcileFoundationDB: %v", err)
+			}
+			if job.Status.Phase != backupsv1alpha1.BackupJobPhaseSucceeded || job.Status.BackupRef == nil {
+				t.Fatalf("a completed stopped backup in the job's own directory must succeed, got phase %q", job.Status.Phase)
+			}
+			if err := c.Get(ctx, types.NamespacedName{Namespace: job.Namespace, Name: job.Status.BackupRef.Name}, &backupsv1alpha1.Backup{}); err != nil {
+				t.Errorf("the Backup that owns the directory must exist: %v", err)
+			}
+		})
 	}
 }
 
