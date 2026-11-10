@@ -90,10 +90,10 @@ const (
 // when neither exists does it honour S3_INSECURE_SKIP_VERIFY=true. Both are
 // read from the pod spec the backup Job ran with, but the Secret is read
 // now, so an s3-ca volume that yields no CA now - a Secret that is gone or
-// lacks the keys, or a source other than a Secret - never lets the probe
-// skip verification: the Job may have verified against it. Without
-// skip-verify such a volume leaves the system roots, as in the script,
-// which mounts it optionally.
+// lacks the keys, or a source other than a Secret - is refused: the Job may
+// have verified against a CA that is gone, and neither the system roots nor
+// skip-verify would trust as narrowly. The default strategy mounts s3-ca
+// only when the admin configured an endpoint CA.
 func (r *BackupJobReconciler) redisS3Trust(ctx context.Context, namespace string, podSpec *corev1.PodSpec) ([]byte, bool, error) {
 	if podSpec == nil {
 		return nil, false, nil
@@ -123,13 +123,10 @@ func (r *BackupJobReconciler) redisS3Trust(ctx context.Context, namespace string
 		}
 		caUnknown = true
 	}
-	if !redisSkipsVerify(podSpec.Containers) {
-		return nil, false, nil
-	}
 	if caUnknown {
-		return nil, false, fmt.Errorf("the %s volume yields no CA now; not skipping TLS verification in its place", redisS3CAVolume)
+		return nil, false, fmt.Errorf("the %s volume yields no CA now", redisS3CAVolume)
 	}
-	return nil, true, nil
+	return nil, redisSkipsVerify(podSpec.Containers), nil
 }
 
 // redisSkipsVerify reports whether every container sets
