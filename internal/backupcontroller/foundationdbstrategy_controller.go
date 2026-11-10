@@ -265,7 +265,15 @@ func (r *BackupJobReconciler) reconcileFoundationDB(ctx context.Context, j *back
 
 	fdbBackup, waiting, err := r.ensureFoundationDBBackup(ctx, j, clusterName, cluster.Spec.Version, rendered)
 	if err != nil {
-		return r.markBackupJobFailed(ctx, j, fmt.Sprintf("failed to ensure apps.foundationdb.org/FoundationDBBackup: %v", err))
+		// A pass may already have stopped the cluster's running backup, so a
+		// failure retrying can fix is retried within the deadline rather than
+		// leaving the cluster without one until the next run.
+		var refused *foundationdbBackupRefusedError
+		if errors.As(err, &refused) || apierrors.IsInvalid(err) || apierrors.IsForbidden(err) ||
+			foundationdbBackupDeadlineExceeded(j.Status.StartedAt, deadline) {
+			return r.markBackupJobFailed(ctx, j, fmt.Sprintf("failed to ensure apps.foundationdb.org/FoundationDBBackup: %v", err))
+		}
+		return ctrl.Result{}, err
 	}
 	r.pruneStoppedFoundationDBBackups(ctx, j, clusterName)
 	if waiting != "" {
@@ -358,7 +366,11 @@ func foundationdbBackupReady(b *foundationdbtypes.FoundationDBBackup) bool {
 	if !b.Status.BackupDetails.Restorable {
 		return false
 	}
-	if b.Status.Generations != nil && b.Status.Generations.Reconciled < b.Generation {
+	// The stop is the only spec change a stopped CR gets, and a directory
+	// that was restorable stays so, so its status counts before the
+	// operator has acted on the stop.
+	if b.Spec.BackupState != foundationdbtypes.BackupStateStopped &&
+		b.Status.Generations != nil && b.Status.Generations.Reconciled < b.Generation {
 		return false
 	}
 	// The operator reports backup state for the whole cluster, so a new CR
@@ -539,7 +551,7 @@ func (r *BackupJobReconciler) ensureFoundationDBBackup(ctx context.Context, j *b
 		if prior.DeletionTimestamp != nil {
 			return nil, fmt.Sprintf("waiting for Backup %s/%s, whose deletion removes the directory this BackupJob writes to, to be deleted", j.Namespace, j.Name), nil
 		}
-		return nil, "", fmt.Errorf("Backup %s/%s of an earlier BackupJob of this name already exists; delete it or use another BackupJob name", j.Namespace, j.Name)
+		return nil, "", &foundationdbBackupRefusedError{fmt.Errorf("Backup %s/%s of an earlier BackupJob of this name already exists; delete it or use another BackupJob name", j.Namespace, j.Name)}
 	} else if !apierrors.IsNotFound(err) {
 		return nil, "", err
 	}
@@ -599,6 +611,12 @@ func (r *BackupJobReconciler) ensureFoundationDBBackup(ctx context.Context, j *b
 	return obj, "", nil
 }
 
+// foundationdbBackupRefusedError is a BackupJob the driver will not run however
+// often it retries.
+type foundationdbBackupRefusedError struct{ error }
+
+func (e *foundationdbBackupRefusedError) Unwrap() error { return e.error }
+
 // foundationdbPreviousAttempt reports whether a CR carrying the job's name
 // was created by an earlier BackupJob of that name and has been stopped (a
 // stop on deadline expiry, or by a later job). A recreated job that reused it
@@ -633,6 +651,12 @@ func (r *BackupJobReconciler) waitForStoppedFoundationDBBackups(ctx context.Cont
 			// Every other backup of the cluster was stopped before this
 			// wait; one the cache still shows running is a stop not seen yet.
 			return fmt.Sprintf("waiting for the stop of FoundationDBBackup %s to show", b.Name), nil
+		}
+		// A restore into the cluster runs on a stopped agents CR, which the
+		// operator would turn on a backup started next to it (a stopped CR
+		// discontinues whatever the cluster runs) if it reconciled it again.
+		if rj := b.Labels[foundationdbRestoreAgentsLabel]; rj != "" {
+			return fmt.Sprintf("waiting for RestoreJob %s into this cluster to finish", rj), nil
 		}
 		if !foundationdbBackupQuiet(b) {
 			if b.DeletionTimestamp != nil {
