@@ -1495,8 +1495,8 @@ func TestReconcileFoundationDB_DeadlineExpiry_AbortsFoundationDBBackup(t *testin
 		quiet      bool
 		wantPolicy string // "" means the CR is simply gone
 	}{
-		{"running backup in the job's directory is aborted with its data", foundationdbtypes.BackupStateRunning, "tenant/bj", false, foundationdbDeletionPolicyCleanup},
-		{"running backup in a pinned directory is aborted and its data kept", foundationdbtypes.BackupStateRunning, "shared", false, foundationdbDeletionPolicyStop},
+		{"running backup in the job's directory is aborted", foundationdbtypes.BackupStateRunning, "tenant/bj", false, foundationdbDeletionPolicyStop},
+		{"running backup in a pinned directory is aborted", foundationdbtypes.BackupStateRunning, "shared", false, foundationdbDeletionPolicyStop},
 		{"backup another job stopped and that went quiet is only deleted", foundationdbtypes.BackupStateStopped, "tenant/bj", true, ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -2666,11 +2666,121 @@ func TestReconcileFoundationDB_AbortsStuckBackupOfFinishedJob(t *testing.T) {
 	if got.DeletionTimestamp == nil || !controllerutil.ContainsFinalizer(got, foundationdbOperatorFinalizer) {
 		t.Errorf("the stuck backup must be aborted through the operator, got %+v", got.ObjectMeta)
 	}
-	if got.Spec.DeletionPolicy == nil || *got.Spec.DeletionPolicy != foundationdbDeletionPolicyCleanup {
-		t.Errorf("the failed job's own directory goes with it, deletionPolicy = %v", got.Spec.DeletionPolicy)
+	if got.Spec.DeletionPolicy == nil || *got.Spec.DeletionPolicy != foundationdbDeletionPolicyStop {
+		t.Errorf("the abort must not depend on the operator deleting data, deletionPolicy = %v", got.Spec.DeletionPolicy)
 	}
 	if n := len(listFoundationDBBackups(t, c)); n != 1 {
 		t.Errorf("no new backup may start until the abort is through, got %d CRs", n)
+	}
+}
+
+// A BackupJob whose CR a later job stopped before its first snapshot still
+// gets a backup: discontinue lets it reach a restorable snapshot and then ends
+// it, so the stopped CR reports its own directory restorable and not running.
+func TestReconcileFoundationDB_StoppedBackupThatCompletedSucceeds(t *testing.T) {
+	c, job, resolved := reconcileFoundationDBSeed(
+		t,
+		foundationdbtypes.FoundationDBClusterSpec{Version: "7.3.63"},
+		foundationdbtypes.FoundationDBClusterStatus{Health: foundationdbtypes.FoundationDBClusterHealth{Available: true}},
+	)
+	ctx := context.Background()
+	cluster := foundationdbClusterNameForApp("fdb-src")
+	cfg := foundationdbtypes.BlobStoreConfiguration{AccountName: "@s3.example.com", Bucket: "b", BackupName: "tenant/bj"}
+	url, err := foundationdbBlobURL(cfg)
+	if err != nil {
+		t.Fatalf("foundationdbBlobURL: %v", err)
+	}
+	completed := &foundationdbtypes.FoundationDBBackup{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace: "tenant", Name: "bj-x", Generation: 2,
+			Labels: map[string]string{
+				foundationdbClusterLabel:                cluster,
+				backupsv1alpha1.OwningJobNameLabel:      job.Name,
+				backupsv1alpha1.OwningJobNamespaceLabel: job.Namespace,
+			},
+		},
+		Spec: foundationdbtypes.FoundationDBBackupSpec{ClusterName: cluster, Version: "7.3.79", BackupState: foundationdbtypes.BackupStateStopped, BlobStoreConfiguration: cfg},
+		Status: foundationdbtypes.FoundationDBBackupStatus{
+			Generations:   &foundationdbtypes.BackupGenerationStatus{Reconciled: 2},
+			BackupDetails: &foundationdbtypes.BackupDetails{Running: false, Restorable: true, URL: url},
+		},
+	}
+	if err := c.Create(ctx, completed); err != nil {
+		t.Fatalf("seed completed backup: %v", err)
+	}
+	r := &BackupJobReconciler{Client: c, Scheme: c.Scheme(), Recorder: record.NewFakeRecorder(10)}
+
+	if _, err := r.reconcileFoundationDB(ctx, job, resolved); err != nil {
+		t.Fatalf("reconcileFoundationDB: %v", err)
+	}
+	if job.Status.Phase != backupsv1alpha1.BackupJobPhaseSucceeded || job.Status.BackupRef == nil {
+		t.Fatalf("a completed stopped backup in the job's own directory must succeed, got phase %q", job.Status.Phase)
+	}
+	if err := c.Get(ctx, types.NamespacedName{Namespace: job.Namespace, Name: job.Status.BackupRef.Name}, &backupsv1alpha1.Backup{}); err != nil {
+		t.Errorf("the Backup that owns the directory must exist: %v", err)
+	}
+}
+
+// A stopped backup that is not restorable is aborted only for a job that
+// failed: one whose job succeeded had a restorable backup, which the stop ends.
+func TestReconcileFoundationDB_NeverAbortsBackupOfSucceededJob(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		jobExists bool
+	}{
+		{"succeeded job", true},
+		{"job deleted after recording its Backup", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c, job, resolved := reconcileFoundationDBSeed(
+				t,
+				foundationdbtypes.FoundationDBClusterSpec{Version: "7.3.63"},
+				foundationdbtypes.FoundationDBClusterStatus{Health: foundationdbtypes.FoundationDBClusterHealth{Available: true}},
+			)
+			ctx := context.Background()
+			cluster := foundationdbClusterNameForApp("fdb-src")
+			if tc.jobExists {
+				done := &backupsv1alpha1.BackupJob{ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "bj-done"}, Spec: job.Spec}
+				if err := c.Create(ctx, done); err != nil {
+					t.Fatalf("seed job: %v", err)
+				}
+				done.Status.Phase = backupsv1alpha1.BackupJobPhaseSucceeded
+				if err := c.Status().Update(ctx, done); err != nil {
+					t.Fatalf("seed job status: %v", err)
+				}
+			} else if err := c.Create(ctx, &backupsv1alpha1.Backup{ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "bj-done"}}); err != nil {
+				t.Fatalf("seed Backup: %v", err)
+			}
+			stopped := &foundationdbtypes.FoundationDBBackup{
+				ObjectMeta: metav1.ObjectMeta{
+					Namespace: "tenant", Name: "bj-done-x", Generation: 2,
+					Labels: map[string]string{
+						foundationdbClusterLabel:                cluster,
+						backupsv1alpha1.OwningJobNameLabel:      "bj-done",
+						backupsv1alpha1.OwningJobNamespaceLabel: "tenant",
+					},
+				},
+				Spec: foundationdbtypes.FoundationDBBackupSpec{ClusterName: cluster, Version: "7.3.79", BackupState: foundationdbtypes.BackupStateStopped},
+				Status: foundationdbtypes.FoundationDBBackupStatus{
+					Generations:   &foundationdbtypes.BackupGenerationStatus{Reconciled: 1},
+					BackupDetails: &foundationdbtypes.BackupDetails{Running: true},
+				},
+			}
+			if err := c.Create(ctx, stopped); err != nil {
+				t.Fatalf("seed stopped: %v", err)
+			}
+			r := &BackupJobReconciler{Client: c, Scheme: c.Scheme(), Recorder: record.NewFakeRecorder(10)}
+			if _, err := r.reconcileFoundationDB(ctx, job, resolved); err != nil {
+				t.Fatalf("reconcileFoundationDB: %v", err)
+			}
+			got := &foundationdbtypes.FoundationDBBackup{}
+			if err := c.Get(ctx, client.ObjectKeyFromObject(stopped), got); err != nil {
+				t.Fatalf("get stopped: %v", err)
+			}
+			if got.DeletionTimestamp != nil || got.Spec.DeletionPolicy != nil {
+				t.Errorf("the backup of a succeeded job must not be aborted, got %+v", got.ObjectMeta)
+			}
+		})
 	}
 }
 
