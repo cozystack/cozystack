@@ -337,7 +337,7 @@ stringData:
     RESTORE_MARK={{ with .Values.bootstrap.newServerName }}$(echo {{ b64enc . }} | base64 -d){{ end }}
     ADOPTED_MARK=$(psql -v ON_ERROR_STOP=1 -t -A --dbname postgres -c "SELECT current_setting('cozystack.adopted_restore', true)")
     MANAGED_DBS=$(psql -v ON_ERROR_STOP=1 -t -A -c "SELECT datname FROM pg_database d JOIN pg_shdescription s ON d.oid = s.objoid WHERE s.description = 'database managed by helm'")
-    DEFINED_DBS="{{ join " " (keys .Values.databases) }}"
+    DEFINED_DBS="{{ join " " (keys .Values.databases | sortAlpha) }}"
     DELETE_DBS=$(for db in $MANAGED_DBS; do case " $DEFINED_DBS " in *" $db "*) :;; *) echo $db;; esac; done)
 
     if [ -n "$RESTORE_MARK" ] && [ "$ADOPTED_MARK" != "$RESTORE_MARK" ]; then
