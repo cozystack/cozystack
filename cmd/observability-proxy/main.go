@@ -92,6 +92,7 @@ func parseFlags(args []string) (options, error) {
 	fs.DurationVar(&o.metrics.Limits.MaxRange, "metrics-max-range", 30*24*time.Hour, "longest [start, end] and step a metrics request may use")
 	fs.IntVar(&o.metrics.Limits.MaxPoints, "metrics-max-points", 11000, "most points per series a range query may return")
 	fs.DurationVar(&o.metrics.Limits.MaxTimeout, "metrics-max-timeout", 30*time.Second, "timeout forwarded to vmselect; a longer client timeout is clamped; must be below --request-timeout when that is set")
+	fs.StringVar(&o.metrics.PlatformNamespacePrefix, "metrics-platform-namespace-prefix", "cozy-", "namespaces with this prefix run platform exporters, whose exported_namespace label adds series to that namespace's scope; empty disables")
 	fs.IntVar(&o.limiter.MaxConcurrentPerUser, "max-concurrent-per-user", 10, "concurrent non-tail requests per user; 0 disables")
 	fs.Float64Var(&o.limiter.RatePerUser, "rate-limit-per-user", 10, "sustained requests per second per user; 0 disables")
 	fs.IntVar(&o.limiter.RateBurst, "rate-limit-burst", 20, "request burst per user")
@@ -111,6 +112,11 @@ func parseFlags(args []string) (options, error) {
 		if errs := validation.IsDNS1123Label("vmselect-" + store); store == "" || len(errs) > 0 {
 			return o, fmt.Errorf("invalid metrics store name %q", store)
 		}
+	}
+	// Anything but namespace name characters would make the prefix match
+	// differently from the namespaces it is meant to name.
+	if p := o.metrics.PlatformNamespacePrefix; p != "" && len(validation.IsDNS1123Label(p+"x")) > 0 {
+		return o, fmt.Errorf("invalid metrics platform namespace prefix %q", p)
 	}
 	switch {
 	case o.rootTenant == "":
