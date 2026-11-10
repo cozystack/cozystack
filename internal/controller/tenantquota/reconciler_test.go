@@ -227,3 +227,139 @@ func TestReconcile_GarbageCollect(t *testing.T) {
 		t.Fatalf("stale allocated quota in tenant-gone should have been garbage-collected")
 	}
 }
+
+// chartLimitRange builds the chart-rendered "tenant-range-limits" LimitRange,
+// which the tenant chart emits alongside its "tenant-quota".
+func chartLimitRange(namespace, defaultCPU string) *corev1.LimitRange {
+	return &corev1.LimitRange{
+		ObjectMeta: metav1.ObjectMeta{Name: chartLimitRangeName, Namespace: namespace},
+		Spec: corev1.LimitRangeSpec{Limits: []corev1.LimitRangeItem{{
+			Type:           corev1.LimitTypeContainer,
+			Default:        resourceList(map[string]string{"cpu": defaultCPU, "memory": "128Mi"}),
+			DefaultRequest: resourceList(map[string]string{"cpu": "25m", "memory": "128Mi"}),
+		}}},
+	}
+}
+
+func getLimitRange(c client.Client, namespace, name string) (*corev1.LimitRange, bool) {
+	lr := &corev1.LimitRange{}
+	if err := c.Get(context.Background(), types.NamespacedName{Namespace: namespace, Name: name}, lr); err != nil {
+		return nil, false
+	}
+	return lr, true
+}
+
+// TestReconcile_UnboundedMemberGetsPoolLimitRange: an unbounded child renders
+// no chart quota and therefore no chart LimitRange, yet the controller clamps
+// it with an allocated quota. Without container defaults, every pod that omits
+// a limit the quota bounds (e.g. a sidecar without a CPU limit) is rejected at
+// admission, so the controller must copy the pool root's LimitRange into it.
+func TestReconcile_UnboundedMemberGetsPoolLimitRange(t *testing.T) {
+	r, c := newReconciler(t,
+		tenantHR("foo", "tenant-root"),
+		tenantHR("bar", "tenant-foo"),
+		ns("tenant-foo"), ns("tenant-foo-bar"),
+		chartQuota("tenant-foo", map[string]string{"limits.cpu": "10"}, nil),
+		chartLimitRange("tenant-foo", "250m"),
+	)
+	if _, err := r.Reconcile(context.Background(), sweepKey); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	lr, ok := getLimitRange(c, "tenant-foo-bar", allocatedLimitRangeName)
+	if !ok {
+		t.Fatalf("unbounded member tenant-foo-bar has an allocated quota but no LimitRange")
+	}
+	if len(lr.Spec.Limits) != 1 {
+		t.Fatalf("tenant-foo-bar LimitRange limits = %d, want 1", len(lr.Spec.Limits))
+	}
+	if got := lr.Spec.Limits[0].Default[corev1.ResourceCPU]; got.String() != "250m" {
+		t.Fatalf("tenant-foo-bar default cpu = %q, want 250m copied from the pool root", got.String())
+	}
+	if lr.Labels[managedByLabel] != managedByValue {
+		t.Fatalf("tenant-foo-bar LimitRange is not marked as controller-owned")
+	}
+	if _, ok := getLimitRange(c, "tenant-foo", allocatedLimitRangeName); ok {
+		t.Fatalf("pool root tenant-foo already has the chart LimitRange and must not get a second one")
+	}
+}
+
+// TestReconcile_PoolLimitRangeFollowsRoot: a change to the root's chart
+// LimitRange propagates to the members on the next sweep.
+func TestReconcile_PoolLimitRangeFollowsRoot(t *testing.T) {
+	root := chartLimitRange("tenant-foo", "250m")
+	r, c := newReconciler(t,
+		tenantHR("foo", "tenant-root"),
+		tenantHR("bar", "tenant-foo"),
+		ns("tenant-foo"), ns("tenant-foo-bar"),
+		chartQuota("tenant-foo", map[string]string{"limits.cpu": "10"}, nil),
+		root,
+	)
+	if _, err := r.Reconcile(context.Background(), sweepKey); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	root.Spec.Limits[0].Default[corev1.ResourceCPU] = resource.MustParse("500m")
+	if err := c.Update(context.Background(), root); err != nil {
+		t.Fatalf("update root LimitRange: %v", err)
+	}
+	if _, err := r.Reconcile(context.Background(), sweepKey); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	lr, ok := getLimitRange(c, "tenant-foo-bar", allocatedLimitRangeName)
+	if !ok {
+		t.Fatalf("tenant-foo-bar lost its LimitRange")
+	}
+	if got := lr.Spec.Limits[0].Default[corev1.ResourceCPU]; got.String() != "500m" {
+		t.Fatalf("tenant-foo-bar default cpu = %q, want 500m after the root changed", got.String())
+	}
+}
+
+// TestReconcile_PoolLimitRangeGarbageCollected: once the child declares its own
+// quota, the chart renders its LimitRange and the controller-owned copy goes.
+func TestReconcile_PoolLimitRangeGarbageCollected(t *testing.T) {
+	stale := &corev1.LimitRange{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      allocatedLimitRangeName,
+			Namespace: "tenant-foo-bar",
+			Labels:    map[string]string{managedByLabel: managedByValue},
+		},
+	}
+	r, c := newReconciler(t,
+		tenantHR("foo", "tenant-root"),
+		tenantHR("bar", "tenant-foo"),
+		ns("tenant-foo"), ns("tenant-foo-bar"),
+		chartQuota("tenant-foo", map[string]string{"limits.cpu": "10"}, nil),
+		chartLimitRange("tenant-foo", "250m"),
+		chartQuota("tenant-foo-bar", map[string]string{"limits.cpu": "4"}, nil),
+		chartLimitRange("tenant-foo-bar", "250m"),
+		stale,
+	)
+	if _, err := r.Reconcile(context.Background(), sweepKey); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if _, ok := getLimitRange(c, "tenant-foo-bar", allocatedLimitRangeName); ok {
+		t.Fatalf("bounded child tenant-foo-bar renders its own LimitRange; the controller copy must be removed")
+	}
+	if _, ok := getLimitRange(c, "tenant-foo-bar", chartLimitRangeName); !ok {
+		t.Fatalf("the chart-owned LimitRange must never be touched")
+	}
+}
+
+// TestReconcile_PoolRootWithoutLimitRange: if the root has no chart LimitRange
+// there is nothing to copy; the quota is still enforced and the sweep succeeds.
+func TestReconcile_PoolRootWithoutLimitRange(t *testing.T) {
+	r, c := newReconciler(t,
+		tenantHR("foo", "tenant-root"),
+		tenantHR("bar", "tenant-foo"),
+		ns("tenant-foo"), ns("tenant-foo-bar"),
+		chartQuota("tenant-foo", map[string]string{"cpu": "10"}, nil),
+	)
+	if _, err := r.Reconcile(context.Background(), sweepKey); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if _, ok := allocatedHard(t, c, "tenant-foo-bar", "cpu"); !ok {
+		t.Fatalf("tenant-foo-bar must still get its allocated quota")
+	}
+	if _, ok := getLimitRange(c, "tenant-foo-bar", allocatedLimitRangeName); ok {
+		t.Fatalf("no LimitRange can be copied from a root that has none")
+	}
+}
