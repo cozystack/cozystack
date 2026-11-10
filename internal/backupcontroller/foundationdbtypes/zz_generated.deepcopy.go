@@ -139,6 +139,10 @@ func (in *FoundationDBBackupSpec) DeepCopyInto(out *FoundationDBBackupSpec) {
 	if in.PodTemplateSpec != nil {
 		out.PodTemplateSpec = in.PodTemplateSpec.DeepCopy()
 	}
+	if in.DeletionPolicy != nil {
+		out.DeletionPolicy = new(string)
+		*out.DeletionPolicy = *in.DeletionPolicy
+	}
 }
 
 func (in *FoundationDBBackupSpec) DeepCopy() *FoundationDBBackupSpec {
