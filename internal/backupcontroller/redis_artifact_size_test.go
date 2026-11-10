@@ -14,6 +14,7 @@ import (
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	clientfake "sigs.k8s.io/controller-runtime/pkg/client/fake"
 
@@ -56,7 +57,7 @@ func TestRedisArtifact(t *testing.T) {
 	t.Run("stats the snapshot with the projected credentials", func(t *testing.T) {
 		l := &fakeS3Lister{statSize: 2048}
 		r := redisReconciler(t, l, projectedCredsSecret(nil))
-		got := r.redisArtifact(context.Background(), "tenant", redisTestKey, nil)
+		got, _ := r.redisArtifact(context.Background(), "tenant", redisTestKey, nil)
 		if got == nil || got.URI != "s3://cozy-backups/"+redisTestKey || got.SizeBytes != 2048 {
 			t.Fatalf("artifact = %#v", got)
 		}
@@ -87,7 +88,7 @@ func TestRedisArtifact(t *testing.T) {
 			if tc.noTarget {
 				r.CredentialsConfig.TargetSecretName = ""
 			}
-			if got := r.redisArtifact(context.Background(), "tenant", redisTestKey, nil); got != nil {
+			if got, _ := r.redisArtifact(context.Background(), "tenant", redisTestKey, nil); got != nil {
 				t.Errorf("artifact = %#v, want nil", got)
 			}
 		})
@@ -124,11 +125,11 @@ func TestRedisArtifact_MinioClient(t *testing.T) {
 	r := &BackupJobReconciler{Client: c, Scheme: c.Scheme()}
 	r.CredentialsConfig.TargetSecretName = "cozy-backups-creds"
 
-	if got := r.redisArtifact(context.Background(), "tenant", redisTestKey, &corev1.PodSpec{}); got != nil {
+	if got, _ := r.redisArtifact(context.Background(), "tenant", redisTestKey, &corev1.PodSpec{}); got != nil {
 		t.Errorf("without the Job's trust settings: artifact = %#v, want nil (untrusted certificate)", got)
 	}
 
-	got := r.redisArtifact(context.Background(), "tenant", redisTestKey, redisPodSpec("s3-endpoint-ca", ""))
+	got, _ := r.redisArtifact(context.Background(), "tenant", redisTestKey, redisPodSpec("s3-endpoint-ca", ""))
 	if got == nil || got.SizeBytes != 4096 {
 		t.Fatalf("with the s3-ca volume: artifact = %#v, want SizeBytes 4096", got)
 	}
@@ -139,7 +140,7 @@ func TestRedisArtifact_MinioClient(t *testing.T) {
 		t.Errorf("request not signed with the Secret's access key: %q", gotAuth)
 	}
 
-	if got := r.redisArtifact(context.Background(), "tenant", redisTestKey, redisPodSpec("", "true")); got == nil || got.SizeBytes != 4096 {
+	if got, _ := r.redisArtifact(context.Background(), "tenant", redisTestKey, redisPodSpec("", "true")); got == nil || got.SizeBytes != 4096 {
 		t.Errorf("with S3_INSECURE_SKIP_VERIFY=true: artifact = %#v, want SizeBytes 4096", got)
 	}
 
@@ -147,7 +148,7 @@ func TestRedisArtifact_MinioClient(t *testing.T) {
 	if err := c.Update(context.Background(), ca); err != nil {
 		t.Fatalf("update CA Secret: %v", err)
 	}
-	if got := r.redisArtifact(context.Background(), "tenant", redisTestKey, redisPodSpec("s3-endpoint-ca", "true")); got != nil {
+	if got, _ := r.redisArtifact(context.Background(), "tenant", redisTestKey, redisPodSpec("s3-endpoint-ca", "true")); got != nil {
 		t.Errorf("with a CA that did not sign the endpoint and S3_INSECURE_SKIP_VERIFY=true: artifact = %#v, want nil", got)
 	}
 }
@@ -314,6 +315,40 @@ func TestCreateRedisBackupArtifact_Artifact(t *testing.T) {
 		}
 	})
 
+	t.Run("an unmeasured artifact is reported on the BackupJob without the raw error", func(t *testing.T) {
+		l := &fakeS3Lister{statErr: errors.New("Get https://s3.internal.example/cozy-backups: NoSuchKey")}
+		r := redisReconciler(t, l, j, projectedCredsSecret(nil))
+		rec := record.NewFakeRecorder(4)
+		r.Recorder = rec
+		got, err := r.createRedisBackupArtifact(context.Background(), j, &ResolvedBackupConfig{}, redisTestKey, nil)
+		if err != nil || got == nil || got.Status.Artifact != nil {
+			t.Fatalf("createRedisBackupArtifact = %#v, %v; want a Backup without an artifact", got, err)
+		}
+		select {
+		case ev := <-rec.Events:
+			if !strings.HasPrefix(ev, "Normal ArtifactNotMeasured ") || !strings.Contains(ev, "could not be found or read") {
+				t.Errorf("event = %q, want Normal ArtifactNotMeasured with the reason", ev)
+			}
+			if strings.Contains(ev, "s3.internal.example") {
+				t.Errorf("event = %q leaks the raw S3 error into the application namespace", ev)
+			}
+		default:
+			t.Error("no event on the BackupJob for an artifact left unset")
+		}
+	})
+
+	t.Run("a measured artifact raises no event", func(t *testing.T) {
+		r := redisReconciler(t, &fakeS3Lister{statSize: 1}, j, projectedCredsSecret(nil))
+		rec := record.NewFakeRecorder(4)
+		r.Recorder = rec
+		if _, err := r.createRedisBackupArtifact(context.Background(), j, &ResolvedBackupConfig{}, redisTestKey, nil); err != nil {
+			t.Fatalf("createRedisBackupArtifact: %v", err)
+		}
+		if len(rec.Events) != 0 {
+			t.Errorf("event %q for an artifact that was recorded", <-rec.Events)
+		}
+	})
+
 	t.Run("an existing Backup is returned without probing", func(t *testing.T) {
 		existing := &backupsv1alpha1.Backup{ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "bj-1"}}
 		l := &fakeS3Lister{statSize: 777}
@@ -445,7 +480,7 @@ func TestRedisArtifact_HangingEndpointIsGivenUp(t *testing.T) {
 	r := redisReconciler(t, &fakeS3Lister{}, projectedCredsSecret(nil))
 	r.newS3ObjectLister = func(s3Connection) (s3ObjectLister, error) { return blockingLister{}, nil }
 	withShortProbeTimeout(t, func() {
-		if got := r.redisArtifact(context.Background(), "tenant", redisTestKey, nil); got != nil {
+		if got, _ := r.redisArtifact(context.Background(), "tenant", redisTestKey, nil); got != nil {
 			t.Errorf("artifact = %#v, want nil", got)
 		}
 	})
@@ -458,7 +493,7 @@ func TestRedisArtifact_TrustsOnlyTheCA(t *testing.T) {
 		Data:       map[string][]byte{"ca.crt": []byte("PEM")},
 	}
 	r := redisReconciler(t, l, projectedCredsSecret(nil), ca)
-	if got := r.redisArtifact(context.Background(), "tenant", redisTestKey, redisPodSpec("s3-endpoint-ca", "")); got == nil {
+	if got, _ := r.redisArtifact(context.Background(), "tenant", redisTestKey, redisPodSpec("s3-endpoint-ca", "")); got == nil {
 		t.Fatal("artifact = nil")
 	}
 	if !l.conn.CAOnly {

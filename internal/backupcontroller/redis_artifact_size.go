@@ -17,42 +17,48 @@ import (
 // an Artifact carrying its s3:// URI and size. The default Redis strategy
 // takes its S3 coordinates from the projected backup credentials Secret, so
 // the object is looked up there, with the TLS trust the Job's pod applied
-// (see redisS3Trust). Returns nil - leaving Status.Artifact absent - when
-// the Secret cannot be read or the object is not found: a custom strategy
-// that writes elsewhere must not get a URI pointing at an object that does
-// not exist.
-func (r *BackupJobReconciler) redisArtifact(ctx context.Context, namespace, objectKey string, podSpec *corev1.PodSpec) *backupsv1alpha1.BackupArtifact {
-	logger := getLogger(ctx)
+// (see redisS3Trust). It returns an artifactProbeError, and no Artifact,
+// when the Secret cannot be read or the object is not found: a custom
+// strategy that writes elsewhere must not get a URI pointing at an object
+// that does not exist.
+func (r *BackupJobReconciler) redisArtifact(ctx context.Context, namespace, objectKey string, podSpec *corev1.PodSpec) (*backupsv1alpha1.BackupArtifact, error) {
 	ctx, cancel := context.WithTimeout(ctx, artifactSizeProbeTimeout)
 	defer cancel()
 
 	bucket, conn, err := r.projectedS3Connection(ctx, namespace)
 	if err != nil {
-		logger.Info("cannot resolve backup credentials to locate the Redis snapshot", "objectKey", objectKey, "error", err)
-		return nil
+		return nil, &artifactProbeError{reason: "the backup credentials Secret is unusable", err: err}
 	}
 	if conn.CAPEM, conn.InsecureSkipVerify, err = r.redisS3Trust(ctx, namespace, podSpec); err != nil {
-		logger.Info("cannot read the S3 endpoint CA to locate the Redis snapshot", "objectKey", objectKey, "error", err)
-		return nil
+		return nil, &artifactProbeError{reason: "the S3 endpoint CA the Job mounted cannot be read", err: err}
 	}
 	// The script passes the CA as curl --cacert, which replaces the default
 	// trust store rather than adding to it.
 	conn.CAOnly = true
 	lister, err := r.s3Lister(conn)
 	if err != nil {
-		logger.Info("cannot build S3 client to locate the Redis snapshot", "objectKey", objectKey, "error", err)
-		return nil
+		return nil, &artifactProbeError{reason: "the S3 endpoint is not usable", err: err}
 	}
 	size, err := lister.StatObject(ctx, bucket, objectKey)
 	if err != nil {
-		logger.Info("cannot stat the Redis snapshot; leaving the artifact unset", "bucket", bucket, "objectKey", objectKey, "error", err)
-		return nil
+		return nil, &artifactProbeError{reason: "the snapshot could not be found or read in the bucket", err: err}
 	}
 	return &backupsv1alpha1.BackupArtifact{
 		URI:       fmt.Sprintf("s3://%s/%s", bucket, objectKey),
 		SizeBytes: size,
-	}
+	}, nil
 }
+
+// artifactProbeError carries a fixed reason fit for an Event in the
+// application namespace; err may name the platform's endpoint and bucket,
+// so it goes to the controller log only.
+type artifactProbeError struct {
+	reason string
+	err    error
+}
+
+func (e *artifactProbeError) Error() string { return e.reason + ": " + e.err.Error() }
+func (e *artifactProbeError) Unwrap() error { return e.err }
 
 // projectedS3Connection reads the backup credentials Secret the controller
 // projects into the application namespace. The projector stores the endpoint
