@@ -66,6 +66,7 @@ update:
 	# fail here, where BSD patch would otherwise reverse it and remove the
 	# section without an error.
 	patch --forward --no-backup-if-mismatch -p4 < patches/s3-grpc-tls.patch
+	patch --forward --no-backup-if-mismatch -p4 < patches/storage-class-string.patch
 	#patch --no-backup-if-mismatch -p4 < patches/retention-policy-delete.yaml
 	$(MAKE) update-image
 

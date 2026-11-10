@@ -147,3 +147,29 @@ tests:
     asserts:
       - notExists:
           path: spec.template.spec.affinity.podAntiAffinity.requiredDuringSchedulingIgnoredDuringExecution
+
+  # The parent hands the class on as a string, and a class name may be all
+  # digits; emitted unquoted it turns back into a number the claim rejects.
+  - it: keeps a numeric admin storage class name a string
+    template: charts/seaweedfs/templates/admin/admin-statefulset.yaml
+    set:
+      seaweedfs:
+        admin:
+          enabled: true
+          secret:
+            existingSecret: seaweedfs-admin-credentials
+          data:
+            storageClass: "123"
+    asserts:
+      - equal:
+          path: spec.volumeClaimTemplates[0].spec.storageClassName
+          value: "123"
+
+  # An empty storageClassName disables dynamic provisioning; with no class
+  # named, the claim must leave the field out so the cluster default applies.
+  - it: leaves the admin claim on the cluster default when no class is named
+    template: charts/seaweedfs/templates/admin/admin-statefulset.yaml
+    set: *enabled
+    asserts:
+      - notExists:
+          path: spec.volumeClaimTemplates[0].spec.storageClassName
