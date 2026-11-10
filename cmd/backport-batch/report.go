@@ -199,7 +199,7 @@ func buildReport(b *batch, r *report) (reportDoc, error) {
 		}
 		*list = append(*list, numbers(vs)...)
 	}
-	doc.Overlays = reportOverlays{Dropped: []droppedEntry{}, Stale: numbers(r.stale), Changed: []int{}}
+	doc.Overlays = reportOverlays{Dropped: []droppedEntry{}, Stale: numbers(r.stale), Changed: numbers(r.changed())}
 	if len(r.partial) > 0 {
 		doc.Overlays.Partial = numbers(r.partial)
 	}
@@ -440,15 +440,15 @@ func (d *reportDoc) links() error {
 			return fmt.Errorf("has #%d dropped, but keeps no drop of it", n)
 		}
 	}
-	// Stale and changed mark something a run took or excluded.
-	for _, o := range []struct {
-		name string
-		list []int
-	}{{"stale", d.Overlays.Stale}, {"changed", d.Overlays.Changed}} {
-		for _, n := range o.list {
-			if c := where[n]; c != "picked" && !strings.HasPrefix(c, "skipped.") {
-				return fmt.Errorf("marks #%d %s, which it has %s", n, o.name, or(c, "nowhere"))
-			}
+	// Stale marks something a run took or excluded, and changed a pick.
+	for _, n := range d.Overlays.Stale {
+		if c := where[n]; c != "picked" && !strings.HasPrefix(c, "skipped.") {
+			return fmt.Errorf("marks #%d stale, which it has %s", n, or(c, "nowhere"))
+		}
+	}
+	for _, n := range d.Overlays.Changed {
+		if c := where[n]; c != "picked" {
+			return fmt.Errorf("marks #%d changed, which it has %s", n, or(c, "nowhere"))
 		}
 	}
 	// backport/skip decides before any rule, and backport/include lifts

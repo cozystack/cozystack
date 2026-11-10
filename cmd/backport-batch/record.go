@@ -47,6 +47,8 @@ type lineRecord struct {
 	Stale    []int           `json:"stale"`
 	Parked   []parkedEntry   `json:"parked,omitempty"`
 	Partial  []int           `json:"partial,omitempty"`
+	// Changed are the picks that differ from their originals.
+	Changed []int `json:"changed,omitempty"`
 }
 
 // recordVersion is the version a run writes.
@@ -337,6 +339,13 @@ func (rec *lineRecord) validate(l line) error {
 			return fmt.Errorf("lists %d as still on the batch more than once or not at all", n)
 		}
 		staleSeen[n] = true
+	}
+	changedSeen := map[int]bool{}
+	for _, n := range rec.Changed {
+		if n <= 0 || changedSeen[n] {
+			return fmt.Errorf("lists %d as a changed pick more than once or not at all", n)
+		}
+		changedSeen[n] = true
 	}
 	partialSeen := map[int]bool{}
 	for _, n := range rec.Partial {

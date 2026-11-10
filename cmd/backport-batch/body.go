@@ -240,7 +240,7 @@ type report struct {
 	start     time.Time
 	// shapes says, for an original on the branch, what it brought, and
 	// partialFiles what a partial unit leaves without effect.
-	shapes       map[*verdict]string
+	shapes       map[*verdict]unitShape
 	partialFiles map[*verdict][]string
 	// missing are originals the policy takes that the run neither tried nor
 	// found anywhere.
@@ -306,14 +306,14 @@ func (r *report) ruleTitle(rule int) string {
 // in details written out.
 func (r *report) what(details map[int]bool) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "Backports to %s from `main`, picked by the rules of the [backport policy](%s) in merge order. A merged pull request comes as its own commits, picked with `git cherry-pick -x` so each keeps its author, message and sign-offs, and a merge commit that carries the original's merge message with a `%s:` trailer naming it; a squash-merged one comes as one pick. `backport-batch verify` checks that shape. A pick listed as changed differs from the commit it came from; `git range-diff <merge>^1..<merge>^2 <batch merge>^1..<batch merge>^2` shows how. A conflict or a failing check here is a [backport task](%sREADME.md).\n\n", codeSpan(r.line.branch()), policyURL, batchTrailer, tasksURL)
+	fmt.Fprintf(&b, "Backports to %s from `main`, picked by the rules of the [backport policy](%s) in merge order. A merged pull request comes as its own commits, picked with `git cherry-pick -x` so each keeps its author, message and sign-offs, and a merge commit that carries the original's merge message with a `%s:` trailer naming it; a squash-merged one comes as one pick. `backport-batch verify` checks that shape. A pick listed as changed differs from the commit it came from, and its release note waits under Check these notes. A conflict or a failing check here is a [backport task](%sREADME.md).\n\n", codeSpan(r.line.branch()), policyURL, batchTrailer, tasksURL)
 	if len(r.onBranch) == 0 {
 		b.WriteString("Nothing is picked yet.\n")
 	}
 	for _, v := range r.onBranch {
 		shape := ""
-		if s := r.shapes[v]; s != "" {
-			shape = ", " + s
+		if s, ok := r.shapes[v]; ok {
+			shape = ", " + s.String()
 		}
 		fmt.Fprintf(&b, "- %s %s%s\n", prLink(v.o.number), titleSpan(v.o.title), shape)
 	}
@@ -351,6 +351,22 @@ func (r *report) what(details map[int]bool) string {
 				files = append(files, fmt.Sprintf("%d more", more))
 			}
 			fmt.Fprintf(&b, "- %s %s: %s\n", prLink(p.v.o.number), titleSpan(p.v.o.title), strings.Join(files, ", "))
+		}
+	}
+	if changed := r.changed(); len(changed) > 0 {
+		b.WriteString("\n### Check these notes\n\nThese picks differ from their originals, so their release notes are left out of the release-note block until someone checks that each still holds for this line. Each comes with what to compare: every pick that differs against the commit it came from, and the original's change against the unit's.\n")
+		for _, v := range changed {
+			s := r.shapes[v]
+			fmt.Fprintf(&b, "\n%s %s, carried by %s:\n\n", prLink(v.o.number), titleSpan(v.o.title), codeSpan(s.unit[:12]))
+			if n := releaseNote(v.o.body); n != "" {
+				fmt.Fprintf(&b, "```text\n%s\n```\n\n", neutralNote(n))
+			} else {
+				b.WriteString("It has no release note.\n\n")
+			}
+			for _, p := range s.pairs {
+				fmt.Fprintf(&b, "- %s\n", codeSpan(fmt.Sprintf("git range-diff --creation-factor=999 %s^! %s^!", p.source[:12], p.pick[:12])))
+			}
+			fmt.Fprintf(&b, "- %s\n- %s\n", codeSpan(fmt.Sprintf("git diff %s^1 %s", v.o.merge[:12], v.o.merge[:12])), codeSpan(fmt.Sprintf("git diff %s^1 %s", s.unit[:12], s.unit[:12])))
 		}
 	}
 	if len(r.partial) > 0 {
@@ -454,9 +470,26 @@ func parkReason(p parkedEntry) string {
 	return "builds on " + strings.Join(needs, ", ") + ", which never reaches this line"
 }
 
+// changed lists the originals on the branch whose unit differs from them, in
+// merge order.
+func (r *report) changed() []*verdict {
+	var out []*verdict
+	for _, v := range r.onBranch {
+		if s, ok := r.shapes[v]; ok && s.changed() {
+			out = append(out, v)
+		}
+	}
+	return out
+}
+
+// notes are the release notes of what the branch carries as its originals
+// made it; a changed pick's note waits under Check these notes.
 func (r *report) notes() string {
 	var notes []string
 	for _, v := range r.onBranch {
+		if s, ok := r.shapes[v]; ok && s.changed() {
+			continue
+		}
 		if n := releaseNote(v.o.body); n != "" {
 			notes = append(notes, neutralNote(n))
 		}

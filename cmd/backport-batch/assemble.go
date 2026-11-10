@@ -408,7 +408,7 @@ func (r *report) lineRecord(doc reportDoc) lineRecord {
 	}
 	slices.SortFunc(dropped, func(a, b droppedEntry) int { return a.Original - b.Original })
 	return lineRecord{Version: recordVersion, Line: doc.Line, Built: &built, Report: doc.ID, Closing: r.closing, Deferred: slices.Clone(doc.Primary.Deferred), Dropped: dropped, Stale: slices.Clone(doc.Overlays.Stale),
-		Parked: slices.Clone(doc.Primary.Parked), Partial: slices.Clone(doc.Overlays.Partial)}
+		Parked: slices.Clone(doc.Primary.Parked), Partial: slices.Clone(doc.Overlays.Partial), Changed: slices.Clone(doc.Overlays.Changed)}
 }
 
 // branchDate is the date a batch branch was opened under.

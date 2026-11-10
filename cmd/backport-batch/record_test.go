@@ -401,6 +401,8 @@ func TestRecordVersion3(t *testing.T) {
 		"an unknown kind":                 v3(strings.Replace(parked, `"kind":"partial"`, `"kind":"later"`, 1)),
 		"a partial unit not on the batch": v3(strings.Replace(parked, `"partial":[9]`, `"partial":[10]`, 1)),
 		"a partial unit twice":            v3(strings.Replace(parked, `"partial":[9]`, `"partial":[9,9]`, 1)),
+		"a changed pick twice":            v3(parked + `,"changed":[4,4]`),
+		"a changed pick that is none":     v3(parked + `,"changed":[0]`),
 	} {
 		if _, err := parseRecord(block(json), l); err == nil {
 			t.Errorf("%s: parseRecord accepted it", name)

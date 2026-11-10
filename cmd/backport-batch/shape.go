@@ -392,15 +392,50 @@ func replayUnit(u unit) (string, []string, error) {
 	return "", nil, err
 }
 
-// summarize says, for each original the batch head carries in units, how many
-// commits it brought and which of them differ from the commit they were picked
-// from: a resolution, or a pick git had to fit to the line.
-func summarize(b *batch, head string, on []*verdict) (map[*verdict]string, error) {
+// pickPair is a pick on the batch and the commit it was picked from.
+type pickPair struct{ source, pick string }
+
+// unitShape is what an original's unit on the batch brought: how many
+// commits, the picks that differ from the commit they came from, a
+// resolution or a pick git had to fit to the line, and whether the unit as a
+// whole makes another change than the original's merge.
+type unitShape struct {
+	unit    string
+	commits int
+	pairs   []pickPair
+	net     bool
+}
+
+// changed says whether the unit differs from its original, so its release
+// note may no longer hold.
+func (s unitShape) changed() bool { return len(s.pairs) > 0 || s.net }
+
+// String is the shape as the body lists it.
+func (s unitShape) String() string {
+	out := "1 commit"
+	if s.commits != 1 {
+		out = fmt.Sprintf("%d commits", s.commits)
+	}
+	if len(s.pairs) > 0 {
+		var picks []string
+		for _, p := range s.pairs {
+			picks = append(picks, codeSpan(p.pick[:12]))
+		}
+		out += ", changed in the pick: " + strings.Join(picks, ", ")
+	} else if s.net {
+		out += ", changed as a whole: some of its change is not in the picks"
+	}
+	return out
+}
+
+// summarize says, for each original the batch head carries in units, what
+// its unit brought.
+func summarize(b *batch, head string, on []*verdict) (map[*verdict]unitShape, error) {
 	units, err := batchUnits(head, b.lineHead)
 	if err != nil {
 		return nil, err
 	}
-	out := map[*verdict]string{}
+	out := map[*verdict]unitShape{}
 	for _, u := range units {
 		v := b.unitOriginal(u)
 		if v == nil || !slices.Contains(on, v) {
@@ -414,7 +449,7 @@ func summarize(b *batch, head string, on []*verdict) (map[*verdict]string, error
 		if err != nil {
 			return nil, err
 		}
-		var changed []string
+		s := unitShape{unit: u.commit, commits: len(picks)}
 		for _, c := range picks {
 			source := appendedSource(msgs[c].message)
 			if source == "" {
@@ -425,16 +460,20 @@ func summarize(b *batch, head string, on []*verdict) (map[*verdict]string, error
 				return nil, err
 			}
 			if !same {
-				changed = append(changed, codeSpan(c[:12]))
+				s.pairs = append(s.pairs, pickPair{source: source, pick: c})
 			}
 		}
-		s := "1 commit"
-		if len(picks) != 1 {
-			s = fmt.Sprintf("%d commits", len(picks))
+		// A pick that came out empty leaves no pick to differ, only a net
+		// change short of the original's.
+		mine, err := patchIDRange(v.o.merge+"^1", v.o.merge)
+		if err != nil {
+			return nil, err
 		}
-		if len(changed) > 0 {
-			s += ", changed in the pick: " + strings.Join(changed, ", ")
+		theirs, err := patchIDRange(u.parents[0], u.commit)
+		if err != nil {
+			return nil, err
 		}
+		s.net = mine != theirs
 		out[v] = s
 	}
 	return out, nil
@@ -451,16 +490,17 @@ func plural(n int, word string) string {
 // parents, by git patch-id of their diffs without context, so that a pick
 // that only lands among other lines on the line counts as the same.
 func samePatch(a, b string) (bool, error) {
-	pa, err := patchID(a)
+	pa, err := patchIDRange(a+"^", a)
 	if err != nil {
 		return false, err
 	}
-	pb, err := patchID(b)
+	pb, err := patchIDRange(b+"^", b)
 	return pa == pb, err
 }
 
-func patchID(c string) (string, error) {
-	diff, err := git("diff", "--no-ext-diff", "--no-textconv", "--unified=0", "--end-of-options", c+"^", c)
+// patchIDRange is the patch-id of the change from one revision to another.
+func patchIDRange(from, to string) (string, error) {
+	diff, err := git("diff", "--no-ext-diff", "--no-textconv", "--unified=0", "--end-of-options", from, to)
 	if err != nil {
 		return "", err
 	}
