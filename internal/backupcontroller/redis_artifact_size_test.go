@@ -17,6 +17,7 @@ import (
 	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	clientfake "sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	backupsv1alpha1 "github.com/cozystack/cozystack/api/backups/v1alpha1"
 )
@@ -367,15 +368,38 @@ func TestCreateRedisBackupArtifact_Artifact(t *testing.T) {
 		}
 	})
 
-	t.Run("an existing Backup is returned without probing", func(t *testing.T) {
+	t.Run("an existing Backup is returned without probing or creating", func(t *testing.T) {
 		existing := &backupsv1alpha1.Backup{ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "bj-1"}}
 		l := &fakeS3Lister{statSize: 777}
 		r := redisReconciler(t, l, j, existing, projectedCredsSecret(nil))
+		creates := 0
+		r.Client = interceptor.NewClient(r.Client.(client.WithWatch), interceptor.Funcs{
+			Create: func(ctx context.Context, cl client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
+				creates++
+				return cl.Create(ctx, obj, opts...)
+			},
+		})
 		if _, err := r.createRedisBackupArtifact(context.Background(), j, &ResolvedBackupConfig{}, redisTestKey, nil); err != nil {
 			t.Fatalf("createRedisBackupArtifact: %v", err)
 		}
 		if l.calls != 0 {
 			t.Errorf("S3 probed %d times for a Backup that already exists", l.calls)
+		}
+		if creates != 0 {
+			t.Errorf("Create called %d times for a Backup that already exists", creates)
+		}
+	})
+
+	t.Run("an empty snapshot is recorded and warned about", func(t *testing.T) {
+		r := redisReconciler(t, &fakeS3Lister{statSize: 0}, j, projectedCredsSecret(nil))
+		rec := record.NewFakeRecorder(4)
+		r.Recorder = rec
+		got, err := r.createRedisBackupArtifact(context.Background(), j, &ResolvedBackupConfig{}, redisTestKey, nil)
+		if err != nil || got == nil || got.Status.Artifact == nil || got.Status.Artifact.URI != "s3://cozy-backups/"+redisTestKey {
+			t.Fatalf("createRedisBackupArtifact = %#v, %v; want the artifact recorded", got, err)
+		}
+		if ev := nextEvent(rec); !strings.HasPrefix(ev, "Warning EmptySnapshot ") {
+			t.Errorf("event = %q, want Warning EmptySnapshot", ev)
 		}
 	})
 }

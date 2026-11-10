@@ -526,8 +526,15 @@ func (r *BackupJobReconciler) createRedisBackupArtifact(
 	}
 	// Only once the Backup exists: a terminal Create error fails the
 	// BackupJob, and a collision returns a Backup another pass measured.
-	if unmeasured != "" && r.Recorder != nil {
-		r.Recorder.Eventf(j, corev1.EventTypeNormal, "ArtifactNotMeasured", "The backup succeeded, but its location and size were not recorded: %s", unmeasured)
+	if r.Recorder != nil {
+		switch {
+		case unmeasured != "":
+			r.Recorder.Eventf(j, corev1.EventTypeNormal, "ArtifactNotMeasured", "The backup succeeded, but its location and size were not recorded: %s", unmeasured)
+		case backup.Status.Artifact != nil && backup.Status.Artifact.SizeBytes == 0:
+			// sizeBytes is omitempty, so a 0 reads as "not measured" on the
+			// Backup; a valid RDB snapshot always carries a header.
+			r.Recorder.Event(j, corev1.EventTypeWarning, "EmptySnapshot", "The backup's RDB snapshot is empty (0 bytes); a valid snapshot is never empty, so this backup is likely broken.")
+		}
 	}
 	return backup, nil
 }
