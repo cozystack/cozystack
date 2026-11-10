@@ -3227,6 +3227,7 @@ func TestReconcileCNPG_JobWithoutLatchWaitsForAnotherJobsRollout(t *testing.T) {
 		{name: "attach older than the rollout deadline", record: time.Now().Add(-2 * cnpgDefaultBackupDeadline).UTC().Format(time.RFC3339), podCreated: time.Now().Add(-3 * cnpgDefaultBackupDeadline), wantBackup: true},
 		{name: "unreadable record", record: "yesterday", podCreated: time.Now().Add(-time.Hour), wantBackup: true},
 		{name: "record further ahead than clocks drift", record: time.Now().Add(time.Hour).UTC().Format(time.RFC3339), podCreated: time.Now().Add(-time.Hour), wantBackup: true},
+		{name: "record ahead within clock drift", record: time.Now().Add(time.Minute).UTC().Format(time.RFC3339), podCreated: time.Now().Add(-time.Hour), wantBackup: false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

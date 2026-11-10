@@ -505,10 +505,6 @@ func (r *BackupJobReconciler) reconcileCNPG(ctx context.Context, j *backupsv1alp
 		// The Cluster's record covers an attach whose status write was lost.
 		attachedAt := rollout.LastTransitionTime
 		recorded, ok, err := cnpgRecordedAttach(attachment.attachedAt)
-		if err == nil && ok && time.Until(recorded) > cnpgAttachClockSkewTolerance {
-			// Every instance would predate it, and the deadline would count from it.
-			err = fmt.Errorf("%s is in the future", attachment.attachedAt)
-		}
 		if err != nil {
 			return r.markBackupJobFailed(ctx, j, fmt.Sprintf(
 				"cannot tell when the barman-cloud plugin was attached: the %s annotation of cnpg.io/Cluster %s/%s: %v",
@@ -553,15 +549,12 @@ func (r *BackupJobReconciler) reconcileCNPG(ctx context.Context, j *backupsv1alp
 		rolledOut = true
 	} else if existingBackup == nil && attachment.attachedAt != "" {
 		// Another backup job attached the plugin. Its rollout can still be
-		// running while the attach is recent, and later than that the
-		// attaching job has failed it already. The record is that job's:
-		// one this job cannot read does not fail it, and neither does one
-		// further ahead than clocks drift, which every instance would
-		// predate for as long as it lies ahead.
+		// running while the attach is recent; past the rollout deadline
+		// this job stops waiting, as the attaching job normally has judged
+		// the rollout by then unless a wait of its own moved its deadline
+		// on. The record is that job's:
+		// one this job cannot use does not fail it.
 		recorded, _, err := cnpgRecordedAttach(attachment.attachedAt)
-		if err == nil && time.Until(recorded) > cnpgAttachClockSkewTolerance {
-			err = fmt.Errorf("%s is in the future", attachment.attachedAt)
-		}
 		if err != nil {
 			logger.Info("ignoring an unusable attach record another backup job left",
 				"cluster", clusterName, "annotation", cnpgPluginAttachedAtAnnotation, "error", err)
@@ -924,7 +917,10 @@ func (r *BackupJobReconciler) cnpgPluginRolloutPending(ctx context.Context, name
 }
 
 // cnpgRecordedAttach parses a cnpgPluginAttachedAtAnnotation value; ok is
-// false for "", a Cluster that carries no record.
+// false for "", a Cluster that carries no record. A record further ahead of
+// this controller's clock than cnpgAttachClockSkewTolerance is an error:
+// every instance would predate it, and a deadline counted from it would not
+// run out for as long as it lies ahead.
 func cnpgRecordedAttach(raw string) (recorded time.Time, ok bool, err error) {
 	if raw == "" {
 		return time.Time{}, false, nil
@@ -932,6 +928,9 @@ func cnpgRecordedAttach(raw string) (recorded time.Time, ok bool, err error) {
 	recorded, err = time.Parse(time.RFC3339, raw)
 	if err != nil {
 		return time.Time{}, false, err
+	}
+	if time.Until(recorded) > cnpgAttachClockSkewTolerance {
+		return time.Time{}, false, fmt.Errorf("%s is in the future", raw)
 	}
 	return recorded, true, nil
 }
