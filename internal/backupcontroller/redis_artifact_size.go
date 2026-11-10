@@ -86,26 +86,31 @@ const (
 )
 
 // redisS3Trust mirrors how the default strategy script verifies the S3
-// endpoint: it trusts ca.crt, then tls.crt, from the Secret mounted as the
-// s3-ca volume, and only when neither exists does it honour
-// S3_INSECURE_SKIP_VERIFY=true. Both are read from the pod spec the backup
-// Job ran with, but the Secret is read now, so a CA Secret the pod mounts
-// and that is gone by now never lets the probe skip verification: the Job
-// may have verified against it. Without skip-verify a missing CA Secret
-// leaves the system roots, as in the script, which mounts it optionally.
+// endpoint: it trusts ca.crt, then tls.crt, from the s3-ca volume, and only
+// when neither exists does it honour S3_INSECURE_SKIP_VERIFY=true. Both are
+// read from the pod spec the backup Job ran with, but the Secret is read
+// now, so an s3-ca volume that yields no CA now - a Secret that is gone or
+// lacks the keys, or a source other than a Secret - never lets the probe
+// skip verification: the Job may have verified against it. Without
+// skip-verify such a volume leaves the system roots, as in the script,
+// which mounts it optionally.
 func (r *BackupJobReconciler) redisS3Trust(ctx context.Context, namespace string, podSpec *corev1.PodSpec) ([]byte, bool, error) {
 	if podSpec == nil {
 		return nil, false, nil
 	}
-	caMissing := false
+	caUnknown := false
 	for _, v := range podSpec.Volumes {
-		if v.Name != redisS3CAVolume || v.Secret == nil {
+		if v.Name != redisS3CAVolume {
 			continue
+		}
+		if v.Secret == nil {
+			caUnknown = true
+			break
 		}
 		secret := &corev1.Secret{}
 		err := r.Get(ctx, types.NamespacedName{Namespace: namespace, Name: v.Secret.SecretName}, secret)
 		if apierrors.IsNotFound(err) {
-			caMissing = true
+			caUnknown = true
 			break
 		}
 		if err != nil {
@@ -116,19 +121,35 @@ func (r *BackupJobReconciler) redisS3Trust(ctx context.Context, namespace string
 				return pem, false, nil
 			}
 		}
-		caMissing = true
+		caUnknown = true
 	}
-	for _, c := range podSpec.Containers {
+	if !redisSkipsVerify(podSpec.Containers) {
+		return nil, false, nil
+	}
+	if caUnknown {
+		return nil, false, fmt.Errorf("the %s volume yields no CA now; not skipping TLS verification in its place", redisS3CAVolume)
+	}
+	return nil, true, nil
+}
+
+// redisSkipsVerify reports whether every container sets
+// S3_INSECURE_SKIP_VERIFY=true: the probe cannot tell which container
+// uploaded, so one that verified is enough to keep verification on. When a
+// container lists the variable twice, the last entry wins, as in the
+// kubelet.
+func redisSkipsVerify(containers []corev1.Container) bool {
+	for _, c := range containers {
+		value := ""
 		for _, e := range c.Env {
-			if e.Name == redisS3InsecureSkipEnv && e.Value == "true" {
-				if caMissing {
-					return nil, false, fmt.Errorf("the %s volume yields no CA now; not skipping TLS verification in its place", redisS3CAVolume)
-				}
-				return nil, true, nil
+			if e.Name == redisS3InsecureSkipEnv {
+				value = e.Value
 			}
 		}
+		if value != "true" {
+			return false
+		}
 	}
-	return nil, false, nil
+	return len(containers) > 0
 }
 
 // secretKeyForFile returns the Secret key a secret volume projects to file:

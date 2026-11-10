@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -98,6 +99,11 @@ func TestRedisArtifact(t *testing.T) {
 // covers, in one pass, the trust settings the backup Job used, request
 // signing and Content-Length parsing.
 func TestRedisArtifact_MinioClient(t *testing.T) {
+	// minio-go retries a TLS failure with backoff; a refusal needs no more
+	// than the first attempt.
+	saved := artifactSizeProbeTimeout
+	artifactSizeProbeTimeout = time.Second
+	defer func() { artifactSizeProbeTimeout = saved }()
 	var gotMethod, gotPath, gotAuth string
 	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		gotMethod, gotPath, gotAuth = req.Method, req.URL.Path, req.Header.Get("Authorization")
@@ -136,6 +142,14 @@ func TestRedisArtifact_MinioClient(t *testing.T) {
 	if got := r.redisArtifact(context.Background(), "tenant", redisTestKey, redisPodSpec("", "true")); got == nil || got.SizeBytes != 4096 {
 		t.Errorf("with S3_INSECURE_SKIP_VERIFY=true: artifact = %#v, want SizeBytes 4096", got)
 	}
+
+	ca.Data["ca.crt"] = unrelatedCAPEM(t)
+	if err := c.Update(context.Background(), ca); err != nil {
+		t.Fatalf("update CA Secret: %v", err)
+	}
+	if got := r.redisArtifact(context.Background(), "tenant", redisTestKey, redisPodSpec("s3-endpoint-ca", "true")); got != nil {
+		t.Errorf("with a CA that did not sign the endpoint and S3_INSECURE_SKIP_VERIFY=true: artifact = %#v, want nil", got)
+	}
 }
 
 // redisPodSpec builds the parts of the backup Job's pod spec that
@@ -152,6 +166,22 @@ func redisPodSpec(caSecret, skipVerify string) *corev1.PodSpec {
 			VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{SecretName: caSecret}},
 		}}
 	}
+	return spec
+}
+
+func withVolume(spec *corev1.PodSpec, name, secret string) *corev1.PodSpec {
+	spec.Volumes = append(spec.Volumes, corev1.Volume{
+		Name:         name,
+		VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{SecretName: secret}},
+	})
+	return spec
+}
+
+func configMapS3CA(spec *corev1.PodSpec) *corev1.PodSpec {
+	spec.Volumes = append(spec.Volumes, corev1.Volume{
+		Name:         "s3-ca",
+		VolumeSource: corev1.VolumeSource{ConfigMap: &corev1.ConfigMapVolumeSource{LocalObjectReference: corev1.LocalObjectReference{Name: "s3-endpoint-ca"}}},
+	})
 	return spec
 }
 
@@ -199,7 +229,44 @@ func TestRedisS3Trust(t *testing.T) {
 			spec: redisPodSpec("", "false"),
 		},
 		"no pod spec": {},
+		"the Redis CA volume is not the S3 CA": {
+			spec: withVolume(redisPodSpec("", "true"), "redis-ca", "redis-tls"),
+			objs: []client.Object{caSecret(map[string]string{"ca.crt": "CA"}),
+				&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "redis-tls"}, Data: map[string][]byte{"ca.crt": []byte("REDIS")}}},
+			wantSkip: true,
+		},
+		"the S3 CA next to the Redis CA": {
+			spec: withVolume(withVolume(&corev1.PodSpec{Containers: redisPodSpec("", "").Containers}, "redis-ca", "redis-tls"), "s3-ca", "s3-endpoint-ca"),
+			objs: []client.Object{caSecret(map[string]string{"ca.crt": "CA"}),
+				&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "redis-tls"}, Data: map[string][]byte{"ca.crt": []byte("REDIS")}}},
+			wantCA: "CA",
+		},
+		"another variable set to true is not skip-verify": {
+			spec: &corev1.PodSpec{Containers: []corev1.Container{{Name: "backup", Env: []corev1.EnvVar{{Name: "REDIS_TLS", Value: "true"}}}}},
+		},
+		"skip-verify only when every container skips": {
+			spec: &corev1.PodSpec{Containers: []corev1.Container{
+				{Name: "upload", Env: []corev1.EnvVar{{Name: "S3_INSECURE_SKIP_VERIFY", Value: "false"}}},
+				{Name: "sidecar", Env: []corev1.EnvVar{{Name: "S3_INSECURE_SKIP_VERIFY", Value: "true"}}},
+			}},
+		},
+		"the last entry of a repeated variable wins": {
+			spec: &corev1.PodSpec{Containers: []corev1.Container{{Name: "backup", Env: []corev1.EnvVar{
+				{Name: "S3_INSECURE_SKIP_VERIFY", Value: "true"},
+				{Name: "S3_INSECURE_SKIP_VERIFY", Value: "false"},
+			}}}},
+		},
+		"an s3-ca volume of another source leaves the system roots": {
+			spec: configMapS3CA(redisPodSpec("", "")),
+		},
 	}
+	t.Run("an s3-ca volume of another source never turns into skip-verify", func(t *testing.T) {
+		r := &BackupJobReconciler{Client: newMariaDBStrategyTestClient(t)}
+		ca, skip, err := r.redisS3Trust(context.Background(), "tenant", configMapS3CA(redisPodSpec("", "true")))
+		if err == nil || skip || ca != nil {
+			t.Errorf("trust = (%q, %v, %v), want an error and no skip-verify", ca, skip, err)
+		}
+	})
 	t.Run("a mounted CA Secret without CA keys never turns into skip-verify", func(t *testing.T) {
 		r := &BackupJobReconciler{Client: newMariaDBStrategyTestClient(t, caSecret(map[string]string{"other": "x"}))}
 		ca, skip, err := r.redisS3Trust(context.Background(), "tenant", redisPodSpec("s3-endpoint-ca", "true"))
@@ -352,6 +419,17 @@ func TestCreateRedisBackupArtifact_RetryCheck(t *testing.T) {
 		}
 		if l.calls != 0 {
 			t.Errorf("S3 probed %d times after the existence check failed", l.calls)
+		}
+	})
+
+	t.Run("a Create collision is resolved from the API server past the cache", func(t *testing.T) {
+		backup := &backupsv1alpha1.Backup{ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "bj-1"}}
+		store := newMariaDBStrategyTestClient(t, j, backup, projectedCredsSecret(nil))
+		r := redisReconciler(t, &fakeS3Lister{statSize: 777})
+		r.Client, r.APIReader = staleCache(t, store), notFoundOnce(t, store)
+		got, err := r.createRedisBackupArtifact(context.Background(), j, &ResolvedBackupConfig{}, redisTestKey, nil)
+		if err != nil || got == nil || got.Name != "bj-1" {
+			t.Fatalf("createRedisBackupArtifact = %v, %v; want the Backup that already exists", got, err)
 		}
 	})
 
