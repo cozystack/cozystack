@@ -60,25 +60,18 @@ spec:
   # itself wrapped in `timeout`, not left to the op ceiling. Keep each op's
   # `timeout:` above the sum of the inner budgets it contains.
   #
-  # Accepted tradeoff, so the arithmetic does not have to be rediscovered: this
-  # raises the worst-case catch to ~19m per failed test. The old design had no
-  # inner caps and leaned on the op ceiling, which does not reliably cut a busy
-  # script: it SIGKILLs the shell alone, orphaned children hold the pipe open,
-  # and the op overruns (#4268 measured 606s under a 300s ceiling), so the
-  # nominal ~5m was a figure a busy catch could exceed, not a cap. Tests run
-  # sequentially within the E2E job's time limit, so a cascade reddening many
-  # suites can spend a large share of the job in diagnostics. That cost is
-  # accepted, since the old ceiling bought its speed by collecting nothing, and
-  # it is bounded: both legs approach their ceilings only on a degraded cluster,
-  # and a systemic failure usually reds the install gate and skips the E2E step.
-  # The report uploads are `if: always()`, but a job that reaches its time limit
-  # ends `cancelled`, the earlier `Collect report` step consumes the ~4m48s
-  # grace window, and both cozyreport.tgz and the job log are lost (measured on
-  # runs 29557003429 and 29568562337). If this ever does start truncating runs, bound the number of
-  # snapshotted tests rather than shrinking these timeouts back down: the op
-  # ceiling firing does not cleanly cut a busy script (it SIGKILLs the shell
-  # alone and orphaned children hold the pipe open, so the op overruns), so a
-  # smaller timeout does not guarantee a kill.
+  # Cost: the worst-case catch is ~19m per failed test. The previous catch had
+  # a nominal ~5m op ceiling and no inner timeouts; the op ceiling does not stop
+  # a busy script (above), and #4268 measured 606s under a 300s ceiling. Tests
+  # run sequentially within the E2E job's time limit, so n failed tests can
+  # spend up to n × 19m of it in catches. Both legs approach their ceilings only
+  # on a degraded cluster, and a systemic failure usually fails the install
+  # step, which skips the E2E step. After the job reaches its time limit the
+  # runner allows ~4m48s for `if: always()` steps; `Collect report` uses that
+  # window, the uploads after it do not run, and both cozyreport.tgz and the
+  # job log are lost (runs 29557003429 and 29568562337). If catches start to
+  # exhaust the job, bound the number of snapshotted tests: a smaller op
+  # timeout does not guarantee a kill (above).
   error:
     catch:
     # Ordered cheapest-and-most-decisive first: if anything downstream overruns,

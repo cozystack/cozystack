@@ -202,14 +202,14 @@ _cozy_on_exit() {
       _prev_rc=0
       timeout -k 30 300 "$(dirname "$0")/e2e-capture-previous-logs.sh" \
         "$_snap/previous-logs" "${COZY_TEST_NAMESPACE:-tenant-test}" 2>&1 || _prev_rc=$?
-      # A backstop that fires must say so, matching the crust-gather leg below.
-      # 300s sits above the ~270s worst case inside (a ~30s pod list plus up to
-      # 12 × 20s log reads), so it should not fire; if it does, a silently cut
-      # capture would read as a complete one listing fewer crash-loops than
-      # actually occurred. This handler's worst case is ~1350s (330 + 390 + 630,
-      # each leg including its 30s kill grace), and the steps that run it carry
-      # no timeout-minutes, for the reason in hack/e2e-chainsaw/.chainsaw.yaml:
-      # a bounded wait beats a kill that collects nothing.
+      # 300s exceeds the ~270s worst case inside (a ~30s pod list plus up to
+      # 12 × 20s log reads), so this backstop is not expected to fire. If it
+      # fires, the capture is incomplete and lists fewer crash-loops than
+      # occurred, so the message below reports it, as the crust-gather leg does.
+      # The handler's worst case is ~1350s: 330 + 390 + 630, each including its
+      # 30s kill grace. The steps that run it have no timeout-minutes, for the
+      # reason in hack/e2e-chainsaw/.chainsaw.yaml: an inner timeout leaves a
+      # partial capture, and an outer kill does not.
       if [ "$_prev_rc" -ne 0 ]; then
         echo "» previous-instance capture INCOMPLETE (exit $_prev_rc); kept what landed in $_snap/previous-logs"
       fi

@@ -74,16 +74,16 @@ spec:
         # inside that bringup rather than inside this phase. Those residuals are
         # tracked in cozystack/cozystack#3666.
         #
-        # The OIDC lifecycle folded onto this cluster by the 5th argument joins
-        # that list rather than being priced into the ceiling: it adds up to 1m
-        # of job wait, a 600s cozy_wait_helmrelease_upgrade and another 1m of job
-        # wait, all on the passing path. The guard in
-        # hack/run-kubernetes-serial-console_test.bats holds COZY_OP_CEILING equal
-        # to both suites' `timeout:`, so raising it raises both, and both suites
-        # and their teardowns share the job's time limit. On green run
-        # 33724179053 the whole Test took 569.72s against this 4020s op, with
-        # kubernetes-previous, which carries no OIDC fold, at 470.19s. The
-        # ceilings only bind when something is already hung.
+        # The OIDC lifecycle that the 5th argument adds to this cluster is not
+        # counted in this ceiling either. On the passing path it adds up to 1m
+        # of job wait, a 600s cozy_wait_helmrelease_upgrade and 1m more of job
+        # wait. hack/run-kubernetes-serial-console_test.bats requires
+        # COZY_OP_CEILING to equal the `timeout:` of this suite and of
+        # kubernetes-previous, so a change to one changes both, and both suites
+        # and their teardowns run within the job's time limit. Green run
+        # 33724179053: this Test took 569.72s of its 4020s op, and
+        # kubernetes-previous, which has no OIDC lifecycle, took 470.19s. The
+        # ceilings are reached only when an operation hangs.
         timeout: 67m
         # Co-locate the tenant crust-gather snapshot (captured by
         # run-kubernetes.sh on failure) under the same snapshots/<test>/ dir as

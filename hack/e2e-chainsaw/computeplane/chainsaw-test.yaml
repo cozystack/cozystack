@@ -30,13 +30,12 @@
 # script op's ceiling clears the sum of those bounds, so a hung apiserver
 # fails the script before its ceiling fires; the ceiling alone would not
 # hold, for the reason .chainsaw.yaml gives above its catch scripts.
-# The try figure is reached only if every op passes just under its own
-# ceiling; a red run ends at the first op that expires, then pays the catches
-# and the teardown. This is the third suite in a full run that brings up a
-# tenant cluster, next to kubernetes-latest and kubernetes-previous. A failure
-# that stalls worker join everywhere reddens all three, and their red paths
-# together can outlast the E2E job's time limit; the cancelled job loses its
-# log and report.
+# The try total applies only when every op passes just under its ceiling. A
+# red run ends at the first op that expires, then runs the catches and the
+# teardown. Three suites in a full run bring up a tenant cluster: this one,
+# kubernetes-latest and kubernetes-previous. A failure that stalls worker join
+# fails all three, and the sum of their red paths can exceed the E2E job's
+# time limit. The job is then cancelled, and its log and report are lost.
 apiVersion: chainsaw.kyverno.io/v1alpha1
 kind: Test
 metadata:

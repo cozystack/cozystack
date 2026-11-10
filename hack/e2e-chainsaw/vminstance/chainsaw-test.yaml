@@ -463,19 +463,19 @@ spec:
   steps:
   - name: run
     try:
-    # 40m budget: build the in-cluster BSL, import the tiny cirros image + boot
-    # the VM, a CSI-snapshot data-mover backup to S3, and an in-place restore
-    # with a second boot — all fast on a 2Gi cirros guest (realistic ~15m). BSL
-    # setup is in this step (not a separate one) so the finally below always tears
-    # the BSL down, even if setup fails. run-all.sh is `set -e` and fails fast on
-    # a terminal BackupJob/RestoreJob phase. The script waits are bounded (the
-    # IMPORT/BOOT/BACKUP/RESTORE_WAIT values below plus fixed ones in the example
-    # scripts) so their worst-case sum stays under this op timeout, and a hung
-    # wait trips the script's own named "Timeout waiting for ..." rather than a
-    # bare `signal: killed` (docs/agents/e2e-testing.md). It is sized small
-    # because this suite is execution.parallel:1 and shares the job's time limit
-    # with every other Test and their finally blocks: an oversized op timeout
-    # lets the job's time limit fire first and lose the report.
+    # 40m op timeout. The step builds the in-cluster BSL, imports the cirros
+    # image and boots the VM, takes a CSI-snapshot data-mover backup to S3, and
+    # restores in place with a second boot; on a 2Gi cirros guest this takes
+    # ~15m. BSL setup is in this step so that the finally below tears the BSL
+    # down even if setup fails. run-all.sh runs under `set -e` and exits on a
+    # terminal BackupJob/RestoreJob phase. The worst-case sum of the script's
+    # waits (IMPORT/BOOT/BACKUP/RESTORE_WAIT below and the fixed waits in the
+    # example scripts) is below this op timeout, so a hung wait fails with the
+    # script's "Timeout waiting for ..." message, not Chainsaw's
+    # `signal: killed` (docs/agents/e2e-testing.md). The suite runs with
+    # execution.parallel:1, and every Test and finally block in the job counts
+    # against the job's time limit. An op timeout larger than needed lets the
+    # job's time limit expire first, and the report is lost.
     - script:
         timeout: 40m
         content: |
@@ -640,17 +640,16 @@ spec:
   steps:
   - name: run
     try:
-    # 40m budget: build the in-cluster BSL, import the Ubuntu image into a 5Gi
-    # disk (~150s proven by the vmdisk test above), a CSI-snapshot data-mover
-    # backup to S3, and a restore. run-all.sh is `set -e` and fails fast on a
-    # terminal BackupJob/RestoreJob phase rather than polling the budget out. As
-    # with the vminstance step above, the worst-case sum of the script waits
-    # (the BSL waits, IMPORT/BACKUP/RESTORE_WAIT below and the fixed ones in the
-    # example scripts, the consumer Pod delete included) is 38m, under this op
-    # timeout, so a hung wait trips the script's own named fail-fast, not
-    # Chainsaw's bare `signal: killed`. It is sized small for the reason given on
-    # the vminstance step above. BSL setup is in this
-    # step (not a separate one) so the finally below always tears the BSL down.
+    # 40m op timeout. The step builds the in-cluster BSL, imports the Ubuntu
+    # image into a 5Gi disk (~150s in the vmdisk test above), takes a
+    # CSI-snapshot data-mover backup to S3, and restores. BSL setup is in this
+    # step so that the finally below tears the BSL down. run-all.sh runs under
+    # `set -e` and exits on a terminal BackupJob/RestoreJob phase. The
+    # worst-case sum of the script's waits (the BSL waits, IMPORT/BACKUP/
+    # RESTORE_WAIT below and the fixed waits in the example scripts, the
+    # consumer Pod delete included) is 38m, below this op timeout, so a hung
+    # wait fails with the script's own message. The op timeout is kept small
+    # for the reason given on the vminstance step above.
     - script:
         timeout: 40m
         content: |
