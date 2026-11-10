@@ -458,6 +458,22 @@ func (g *fakeGH) editPull(number int, title, bodyFile string) error {
 	return nil
 }
 
+func (g *fakeGH) editBody(number int, bodyFile string) error {
+	if err := g.write(number, "a body edit"); err != nil {
+		return err
+	}
+	if err := g.inject("editBody"); err != nil {
+		return err
+	}
+	if err := g.readBody(bodyFile); err != nil {
+		return err
+	}
+	if pr := g.find(number); pr != nil {
+		pr.Body = g.bodies[len(g.bodies)-1]
+	}
+	return nil
+}
+
 func (g *fakeGH) closePull(number int) error {
 	if err := g.write(number, "a close"); err != nil {
 		return err

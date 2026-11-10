@@ -401,7 +401,7 @@ func found(h *history, v *verdict) bool {
 // newReport starts the report of a run with what the rules left out and what
 // the labels overrode.
 func newReport(b *batch) *report {
-	r := &report{line: b.line, newer: b.newer, skipped: map[int][]*verdict{}, other: len(b.other), start: b.start}
+	r := &report{line: b.line, newer: b.newer, skipped: map[int][]*verdict{}, other: len(b.other), start: b.start, carried: b.src.rec}
 	for _, v := range b.verdicts {
 		if v.rule != 0 {
 			r.skipped[v.rule] = append(r.skipped[v.rule], v)
@@ -491,7 +491,7 @@ func (r *report) lineRecord(doc reportDoc) lineRecord {
 	}
 	slices.SortFunc(dropped, func(a, b droppedEntry) int { return a.Original - b.Original })
 	return lineRecord{Version: recordVersion, Line: doc.Line, Built: &built, Report: doc.ID, Closing: r.closing, Deferred: slices.Clone(doc.Primary.Deferred), Dropped: dropped, Stale: slices.Clone(doc.Overlays.Stale),
-		Parked: slices.Clone(doc.Primary.Parked), Partial: slices.Clone(doc.Overlays.Partial), Changed: slices.Clone(doc.Overlays.Changed)}
+		Parked: carryAnnounced(doc.Primary.Parked, r.carried), Partial: slices.Clone(doc.Overlays.Partial), Changed: slices.Clone(doc.Overlays.Changed)}
 }
 
 // branchDate is the date a batch branch was opened under.

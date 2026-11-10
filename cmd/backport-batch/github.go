@@ -127,6 +127,8 @@ type github interface {
 	// createPull opens the draft and returns its number and URL.
 	createPull(base, head, title, bodyFile string) (int, string, error)
 	editPull(number int, title, bodyFile string) error
+	// editBody replaces the body of pull request number and nothing else.
+	editBody(number int, bodyFile string) error
 	closePull(number int) error
 	comments(number int) ([]issueComment, error)
 	createComment(number int, bodyFile string) error
@@ -257,6 +259,11 @@ func (ghCLI) createPull(base, head, title, bodyFile string) (int, string, error)
 
 func (ghCLI) editPull(number int, title, bodyFile string) error {
 	_, err := capture("gh", "pr", "edit", strconv.Itoa(number), "--title", title, "--body-file", bodyFile)
+	return err
+}
+
+func (ghCLI) editBody(number int, bodyFile string) error {
+	_, err := capture("gh", "pr", "edit", strconv.Itoa(number), "--body-file", bodyFile)
 	return err
 }
 

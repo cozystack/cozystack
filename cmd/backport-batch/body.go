@@ -264,6 +264,9 @@ type report struct {
 	// does only part of what they do on main.
 	parked  []*verdict
 	partial []*verdict
+	// carried is the line's record this run found, whose announcements the
+	// parks that did not change keep.
+	carried *lineRecord
 }
 
 // ruleName is how output names what kept an original out: the policy's

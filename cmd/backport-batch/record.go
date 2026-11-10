@@ -88,6 +88,39 @@ type parkedEntry struct {
 	Announced bool     `json:"announced,omitempty"`
 }
 
+// parkEvent is what makes a park the same park from one record to the
+// next: its merge, kind, prerequisites, commits and files. A park whose
+// event changed is news, and notify names it again.
+func parkEvent(p parkedEntry) string {
+	data, _ := json.Marshal(struct {
+		Merge   string   `json:"merge"`
+		Kind    string   `json:"kind"`
+		Needs   []int    `json:"needs"`
+		Commits []string `json:"commits"`
+		Files   []string `json:"files"`
+	}{p.Merge, p.Kind, p.Needs, p.Commits, p.Files})
+	return string(data)
+}
+
+// carryAnnounced marks each park announced that the carrier's record holds
+// announced as the same event, a closed carrier's too, so a new batch does
+// not name again what an earlier one named.
+func carryAnnounced(parked []parkedEntry, carrier *lineRecord) []parkedEntry {
+	out := slices.Clone(parked)
+	for i := range out {
+		out[i].Announced = false
+	}
+	if carrier == nil {
+		return out
+	}
+	for i := range out {
+		out[i].Announced = slices.ContainsFunc(carrier.Parked, func(c parkedEntry) bool {
+			return c.Announced && c.Original == out[i].Original && parkEvent(c) == parkEvent(out[i])
+		})
+	}
+	return out
+}
+
 // validate holds a parked entry to what a run writes. Its errors read after
 // "the block" or "report <id>".
 func (p parkedEntry) validate() error {
