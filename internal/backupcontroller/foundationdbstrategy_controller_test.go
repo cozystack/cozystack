@@ -1458,7 +1458,7 @@ func TestStopOtherFoundationDBBackups_RetriesOnConflict(t *testing.T) {
 		Build()
 	r := &BackupJobReconciler{Client: c, Scheme: s}
 
-	if err := r.stopOtherFoundationDBBackups(context.Background(), job, clusterName); err != nil {
+	if _, err := r.stopOtherFoundationDBBackups(context.Background(), job, clusterName); err != nil {
 		t.Fatalf("stopOtherFoundationDBBackups returned error despite retry budget; the 409 should have been absorbed: %v", err)
 	}
 	if patchAttempts < 2 {
@@ -2193,6 +2193,39 @@ func TestReconcileFoundationDBRestore_AgentsIgnoreZeroAgentCount(t *testing.T) {
 	}
 }
 
+func TestEnsureFoundationDBRestoreAgents_CarryKeyAndSurviveARepeatedCreate(t *testing.T) {
+	c, r, rj, backup := seedFoundationDBRestore(t, foundationdbRestoreSeed{toCopy: true})
+	ctx := context.Background()
+	strategy := &strategyv1alpha1.FoundationDB{}
+	if err := c.Get(ctx, client.ObjectKey{Name: "fdb-strategy"}, strategy); err != nil {
+		t.Fatalf("get strategy: %v", err)
+	}
+	strategy.Spec.Template.EncryptionKeyPath = "/var/fdb-key/key.bin"
+	if err := c.Update(ctx, strategy); err != nil {
+		t.Fatalf("update strategy: %v", err)
+	}
+	if _, err := r.reconcileFoundationDBRestore(ctx, rj, backup); err != nil {
+		t.Fatalf("reconcileFoundationDBRestore: %v", err)
+	}
+	agents := listFoundationDBBackups(t, c)
+	if len(agents) != 1 || agents[0].Name != rj.Name+"-agents" || agents[0].Spec.EncryptionKeyPath != "/var/fdb-key/key.bin" {
+		t.Fatalf("expected one agents CR named after the RestoreJob carrying the key path, got %+v", agents)
+	}
+	agents[0].Spec.ClusterName = "elsewhere"
+	if err := c.Update(ctx, &agents[0]); err != nil {
+		t.Fatalf("hide agents from the lookup: %v", err)
+	}
+	if _, err := r.reconcileFoundationDBRestore(ctx, rj, backup); err != nil {
+		t.Fatalf("second reconcile: %v", err)
+	}
+	if rj.Status.Phase == backupsv1alpha1.RestoreJobPhaseFailed {
+		t.Errorf("a repeated create of the agents must not fail the restore")
+	}
+	if n := len(listFoundationDBBackups(t, c)); n != 1 {
+		t.Errorf("a repeated create must not start a second set of agents, got %d", n)
+	}
+}
+
 func TestReconcileFoundationDBRestore_CompletedRemovesAgents(t *testing.T) {
 	c, r, rj, backup := seedFoundationDBRestore(t, foundationdbRestoreSeed{toCopy: true})
 	if _, err := r.reconcileFoundationDBRestore(context.Background(), rj, backup); err != nil {
@@ -2512,6 +2545,9 @@ func TestReconcileFoundationDB_PrunesStoppedPriorBackups(t *testing.T) {
 	if err := c.Get(ctx, types.NamespacedName{Namespace: "tenant", Name: "stopped-pending"}, pending); err != nil {
 		t.Fatalf("get stopped-pending: %v", err)
 	}
+	if pending.Annotations[foundationdbStatusRefreshAnnotation] == "" {
+		t.Errorf("a stop the operator has not acted on must be refreshed rather than left to its error backoff")
+	}
 	pending.Status.Generations.Reconciled = pending.Generation
 	if err := c.Update(ctx, pending); err != nil {
 		t.Fatalf("mark stop reconciled: %v", err)
@@ -2781,6 +2817,66 @@ func TestReconcileFoundationDB_NeverAbortsBackupOfSucceededJob(t *testing.T) {
 				t.Errorf("the backup of a succeeded job must not be aborted, got %+v", got.ObjectMeta)
 			}
 		})
+	}
+}
+
+// The cache can show a stop patched in this pass as not applied yet, or the
+// stopped CR as already quiet; either way the new CR waits for a later pass.
+func TestEnsureFoundationDBBackup_DoesNotCreateInThePassThatStops(t *testing.T) {
+	c, job, resolved := reconcileFoundationDBSeed(
+		t,
+		foundationdbtypes.FoundationDBClusterSpec{Version: "7.3.63"},
+		foundationdbtypes.FoundationDBClusterStatus{Health: foundationdbtypes.FoundationDBClusterHealth{Available: true}},
+	)
+	ctx := context.Background()
+	cluster := foundationdbClusterNameForApp("fdb-src")
+	prior := &foundationdbtypes.FoundationDBBackup{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace: "tenant", Name: "prior", Generation: 1,
+			Labels: map[string]string{foundationdbClusterLabel: cluster, backupsv1alpha1.OwningJobNameLabel: "bj-old", backupsv1alpha1.OwningJobNamespaceLabel: "tenant"},
+		},
+		Spec: foundationdbtypes.FoundationDBBackupSpec{ClusterName: cluster, Version: "7.3.79", BackupState: foundationdbtypes.BackupStateRunning},
+		Status: foundationdbtypes.FoundationDBBackupStatus{
+			Generations:   &foundationdbtypes.BackupGenerationStatus{Reconciled: 1},
+			BackupDetails: &foundationdbtypes.BackupDetails{},
+		},
+	}
+	if err := c.Create(ctx, prior); err != nil {
+		t.Fatalf("seed prior: %v", err)
+	}
+	r := &BackupJobReconciler{Client: c, Scheme: c.Scheme(), Recorder: record.NewFakeRecorder(10)}
+	rendered, err := renderFoundationDBTemplate(*newRenderedFoundationDBTemplate(), newFoundationDBApp("fdb-src", "tenant"), resolved.Parameters)
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+
+	got, waiting, err := r.ensureFoundationDBBackup(ctx, job, cluster, "7.3.63", rendered)
+	if err != nil {
+		t.Fatalf("ensureFoundationDBBackup: %v", err)
+	}
+	if got != nil || waiting == "" || len(listFoundationDBBackups(t, c)) != 1 {
+		t.Errorf("the pass that stops the previous backup must not create a new one, got %v, %q", got, waiting)
+	}
+}
+
+func TestWaitForStoppedFoundationDBBackups_WaitsOnUnstoppedCR(t *testing.T) {
+	c, job, _ := reconcileFoundationDBSeed(
+		t,
+		foundationdbtypes.FoundationDBClusterSpec{Version: "7.3.63"},
+		foundationdbtypes.FoundationDBClusterStatus{Health: foundationdbtypes.FoundationDBClusterHealth{Available: true}},
+	)
+	ctx := context.Background()
+	cluster := foundationdbClusterNameForApp("fdb-src")
+	if err := c.Create(ctx, &foundationdbtypes.FoundationDBBackup{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "lagging", Labels: map[string]string{foundationdbClusterLabel: cluster}},
+		Spec:       foundationdbtypes.FoundationDBBackupSpec{ClusterName: cluster, Version: "7.3.79", BackupState: foundationdbtypes.BackupStateRunning},
+	}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	r := &BackupJobReconciler{Client: c, Scheme: c.Scheme(), Recorder: record.NewFakeRecorder(10)}
+	waiting, err := r.waitForStoppedFoundationDBBackups(ctx, job, cluster)
+	if err != nil || waiting == "" {
+		t.Errorf("a CR the cache still shows running must hold the new backup back, got %q, %v", waiting, err)
 	}
 }
 
