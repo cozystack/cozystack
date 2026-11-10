@@ -161,6 +161,10 @@ func (l *minioObjectLister) StatObject(ctx context.Context, bucket, key string) 
 	if err != nil {
 		return 0, err
 	}
+	// minio-go reports -1 when the response carries no Content-Length.
+	if info.Size < 0 {
+		return 0, fmt.Errorf("object %s/%s: the endpoint reported no size", bucket, key)
+	}
 	return info.Size, nil
 }
 
