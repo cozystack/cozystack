@@ -670,6 +670,10 @@ func (r *BackupJobReconciler) createAltinityBackupArtifact(
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      j.Name,
 			Namespace: j.Namespace,
+			// The archive is deleted from the finalizer; without it at creation,
+			// a Backup deleted before the Backup reconciler first sees it goes
+			// at once and leaves its archive in the bucket.
+			Finalizers: []string{backupFinalizer},
 		},
 		Spec: backupsv1alpha1.BackupSpec{
 			ApplicationRef: j.Spec.ApplicationRef,
@@ -684,14 +688,8 @@ func (r *BackupJobReconciler) createAltinityBackupArtifact(
 	if j.Spec.PlanRef != nil {
 		backup.Spec.PlanRef = j.Spec.PlanRef
 	}
-	// Status fields set on the struct above are dropped server-side because
-	// Backup has the status subresource, but populating them here keeps the
-	// struct in step with what an out-of-band reconciler will fill in (the
-	// owning BackupReconciler watches Backup and is the natural place to
-	// promote phase=Ready). Mirrors the CNPG/Velero pattern - issuing a
-	// follow-up Status().Patch from this driver races with that reconciler
-	// adding the cleanup finalizer and surfaces as a "not found" 404 even
-	// though the Backup is on disk in Ready state.
+	// Status fields set on the struct above are dropped server-side, because
+	// Backup has the status subresource.
 	if err := r.Create(ctx, backup); err != nil {
 		if !apierrors.IsAlreadyExists(err) {
 			return nil, err
