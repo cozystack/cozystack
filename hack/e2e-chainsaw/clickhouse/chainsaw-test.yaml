@@ -91,7 +91,7 @@ spec:
           status:
             replicas: 1
 ---
-# ClickHouse Altinity backup/restore E2E — the two backup Tests below sit in
+# ClickHouse Altinity backup/restore E2E — the three backup Tests below sit in
 # this suite alongside the plain `clickhouse` Test above. Chainsaw port of the
 # intended hack/e2e-apps/backup-clickhouse.bats (cozystack#2600), shaped like the
 # etcd/mariadb/postgres suites:
@@ -107,8 +107,15 @@ spec:
 #                                    driving the validated example scripts
 #                                    (examples/backups/clickhouse). Also runs in
 #                                    CI, in tenant-root.
+#   clickhouse-3-system-bucket-roundtrip
+#                                  — backup and in-place restore through the
+#                                    shipped cozy-default BackupClass and the
+#                                    platform system bucket, for a release
+#                                    whose Pod started before its credentials
+#                                    were projected. Runs in CI, in tenant-root.
 #
-# Why the split: the two Tests answer different questions at different cost. The
+# Why the split: the first two Tests answer different questions at different
+# cost, and the third covers the system-bucket path neither of them takes. The
 # contracts Test needs no object store, so it stays in the default tenant-test
 # namespace next to the other app suites and is the seconds-long guard on the
 # chart wiring the Altinity strategy depends on — the sidecar container/port and
