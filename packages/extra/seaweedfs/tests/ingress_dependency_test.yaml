@@ -1,0 +1,61 @@
+suite: seaweedfs waits for ingress-nginx only in a namespace that runs it
+templates:
+  - templates/seaweedfs.yaml
+
+release:
+  name: seaweedfs
+  namespace: tenant-root
+
+set:
+  topology: Simple
+  replicationFactor: 2
+  _cluster:
+    issuer-name: letsencrypt-prod
+
+tests:
+  - it: depends on ingress-nginx-system when the namespace runs its own ingress
+    documentSelector:
+      path: metadata.name
+      value: seaweedfs-system
+    set:
+      _namespace:
+        host: example.org
+        ingress: tenant-root
+    asserts:
+      - contains:
+          path: spec.dependsOn
+          content:
+            name: ingress-nginx-system
+            namespace: tenant-root
+
+  - it: does not depend on ingress-nginx-system when the root tenant has no ingress
+    documentSelector:
+      path: metadata.name
+      value: seaweedfs-system
+    set:
+      _namespace:
+        host: example.org
+        ingress: ""
+    asserts:
+      - notContains:
+          path: spec.dependsOn
+          content:
+            name: ingress-nginx-system
+            namespace: tenant-root
+
+  - it: does not depend on ingress-nginx-system when ingress lives in a parent namespace
+    release:
+      namespace: tenant-acme
+    documentSelector:
+      path: metadata.name
+      value: seaweedfs-system
+    set:
+      _namespace:
+        host: acme.example.org
+        ingress: tenant-root
+    asserts:
+      - notContains:
+          path: spec.dependsOn
+          content:
+            name: ingress-nginx-system
+            namespace: tenant-acme
