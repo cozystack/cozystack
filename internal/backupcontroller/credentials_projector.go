@@ -450,9 +450,10 @@ const credentialsUpdatedAtAnnotation = "backups.cozystack.io/credentials-updated
 // clickHouseBackupConfigKey holds the s3 section of a clickhouse-backup
 // config. The ClickHouse chart mounts it as the sidecar's config file
 // instead of passing the values as environment: clickhouse-backup reloads
-// the file on every API call and kubelet rewrites a mounted Secret in
-// place, so credentials projected after the pod started, or rotated since,
-// reach a running sidecar.
+// the file in each API handler that reaches S3, among them the
+// create_remote, restore_remote and list calls the strategy makes, and
+// kubelet rewrites a mounted Secret in place, so credentials projected
+// after the pod started, or rotated since, reach a running sidecar.
 const clickHouseBackupConfigKey = "clickhouse-backup.yml"
 
 // buildClickHouseBackupConfig renders that file. The projected endpoint is

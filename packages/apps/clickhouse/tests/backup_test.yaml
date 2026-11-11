@@ -47,9 +47,10 @@ tests:
       - equal:
           path: spec.templates.podTemplates[0].spec.containers[?(@.name=="clickhouse-backup")].env[?(@.name=="S3_PATH")].value
           value: tenant-test/ch-test
-      # clickhouse-backup reloads this file on every API call and kubelet
-      # rewrites the mounted Secret in place, so credentials projected after
-      # the Pod started, or rotated since, reach the running sidecar.
+      # clickhouse-backup reloads this file in each API handler that reaches
+      # S3 and kubelet rewrites the mounted Secret in place, so credentials
+      # projected after the Pod started, or rotated since, reach the running
+      # sidecar.
       - equal:
           path: spec.templates.podTemplates[0].spec.containers[?(@.name=="clickhouse-backup")].env[?(@.name=="CLICKHOUSE_BACKUP_CONFIG")].value
           value: /etc/clickhouse-backup-s3/config.yml

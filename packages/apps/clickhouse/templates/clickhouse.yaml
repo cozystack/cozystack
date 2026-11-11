@@ -230,12 +230,12 @@ spec:
                   backupStorage.forcePathStyle included, comes
                   from the clickhouse-backup.yml key the platform projects
                   into cozy-backups-creds, mounted below as the config file.
-                  clickhouse-backup reloads that file on every API call and
-                  kubelet rewrites a mounted Secret in place, so credentials
-                  projected after the Pod started, or rotated since, reach
-                  the running sidecar; environment would be read only at
-                  start and would override the file, so none of those is
-                  set here.
+                  clickhouse-backup reloads that file in each API handler
+                  that reaches S3 and kubelet rewrites a mounted Secret in
+                  place, so credentials projected after the Pod started, or
+                  rotated since, reach the running sidecar; environment
+                  would be read only at start and would override the file,
+                  so none of those is set here.
 
                   S3_FORCE_PATH_STYLE selects path-style vs vhost-style S3
                   addressing. On the legacy paths (own Secret via

@@ -673,7 +673,8 @@ func TestProject_HappyPath_HTTPEndpoint(t *testing.T) {
 
 // The ClickHouse sidecar reads its S3 settings from this key as a mounted
 // file, which kubelet refreshes in place: clickhouse-backup reloads its
-// config file on every API call, while its environment is fixed at start.
+// config file in each API handler that reaches S3, while its environment
+// is fixed at start.
 func TestProject_WritesClickHouseBackupConfig(t *testing.T) {
 	cases := []struct {
 		name           string
