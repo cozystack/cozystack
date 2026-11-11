@@ -59,3 +59,32 @@ tests:
           content:
             name: ingress-nginx-system
             namespace: tenant-acme
+
+  - it: disables the S3 Ingress when the namespace has no ingress
+    documentSelector:
+      path: metadata.name
+      value: seaweedfs-system
+    set:
+      _namespace:
+        host: example.org
+        ingress: ""
+    asserts:
+      - equal:
+          path: spec.values.seaweedfs.s3.ingress.enabled
+          value: false
+
+  - it: keeps the S3 Ingress when the namespace has an ingress
+    documentSelector:
+      path: metadata.name
+      value: seaweedfs-system
+    set:
+      _namespace:
+        host: example.org
+        ingress: tenant-root
+    asserts:
+      - equal:
+          path: spec.values.seaweedfs.s3.ingress.enabled
+          value: true
+      - equal:
+          path: spec.values.seaweedfs.s3.ingress.className
+          value: tenant-root
