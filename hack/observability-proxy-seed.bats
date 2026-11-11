@@ -4,13 +4,14 @@ load test_helper
 
 REPO_ROOT="$(cd "$(dirname "${BATS_TEST_FILENAME:-$0}")/.." && pwd)"
 
-setup() {
+prepare_seed_capture() {
     strict_setup
-    mkdir -p "$BATS_TEST_TMPDIR/bin"
-    export SEED_CAPTURE="$BATS_TEST_TMPDIR/seed"
-    export TMPDIR="$BATS_TEST_TMPDIR"
-    export PATH="$BATS_TEST_TMPDIR/bin:$PATH"
-    cat > "$BATS_TEST_TMPDIR/bin/curl" <<'EOF'
+    seed_tmp=$(mktemp -d)
+    seed_old_path=$PATH
+    mkdir -p "$seed_tmp/bin"
+    export SEED_CAPTURE="$seed_tmp/seed"
+    export PATH="$seed_tmp/bin:$PATH"
+    cat > "$seed_tmp/bin/curl" <<'EOF'
 #!/usr/bin/env bash
 set -eu
 printf '%s\n' "$@" > "$SEED_CAPTURE.args"
@@ -20,11 +21,12 @@ if ! grep --fixed-strings --line-regexp --quiet 'Content-Type: application/json'
     exit 22
 fi
 EOF
-    chmod +x "$BATS_TEST_TMPDIR/bin/curl"
+    chmod +x "$seed_tmp/bin/curl"
 }
 
 assert_seed_request() {
     local account=$1
+    prepare_seed_capture
     # shellcheck source=e2e-chainsaw/observability-proxy/lib.sh
     . "$REPO_ROOT/hack/e2e-chainsaw/observability-proxy/lib.sh"
     if [ "$account" = 0 ]; then
@@ -39,7 +41,9 @@ assert_seed_request() {
     grep --fixed-strings --line-regexp --quiet '@-' "$SEED_CAPTURE.args"
     printf '%s\n' '{"kubernetes_namespace_name":"tenant-test-logsa","log":"e2e-marker-a"}' > "$SEED_CAPTURE.expected"
     cmp "$SEED_CAPTURE.expected" "$SEED_CAPTURE.body"
-    rm "$body"
+    rm "$body" "$SEED_CAPTURE.args" "$SEED_CAPTURE.body" "$SEED_CAPTURE.expected" "$seed_tmp/bin/curl"
+    rmdir "$seed_tmp/bin" "$seed_tmp"
+    export PATH="$seed_old_path"
 }
 
 @test "observability seeds send JSON without consuming the body as form data" {
