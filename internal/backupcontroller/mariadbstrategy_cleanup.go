@@ -220,12 +220,18 @@ func (r *BackupReconciler) activeRestoreOf(ctx context.Context, backup *backupsv
 // Secret the platform credentials are projected to, is reached as the
 // platform reaches it now, so a Backup taken before the endpoint moved is
 // still deleted. Any other bucket, or the platform bucket while the
-// platform credentials cannot be read, is reached as op recorded it; a
-// delete that fails there is handled by retryMariaDBCleanup like any other.
+// platform credentials are missing or malformed, is reached as op recorded
+// it; a delete that fails there is handled by retryMariaDBCleanup like any
+// other. A failed read of the platform credentials is retried instead: the
+// recorded endpoint may be the one the platform moved off, where the dump
+// would be found missing and reported deleted.
 func (r *BackupReconciler) mariadbCleanupConnection(ctx context.Context, op *mariadbtypes.Backup) (s3Connection, error) {
 	if r.CredentialsConfig.IsEnabled() {
 		conn, bucket, err := r.platformS3Connection(ctx)
+		var projErr *ProjectionError
 		switch {
+		case errors.As(err, &projErr) && projErr.Reason == ReasonAPIError:
+			return s3Connection{}, err
 		case err != nil:
 			getLogger(ctx).Info("cannot read the platform backup credentials; using the operator Backup's own", "operatorBackup", op.Name, "error", err)
 		case bucket == op.Spec.Storage.S3.Bucket && op.Spec.Storage.S3.AccessKeyIdSecretKeyRef.Name == r.CredentialsConfig.TargetSecretName:

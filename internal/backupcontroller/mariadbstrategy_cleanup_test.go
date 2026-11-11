@@ -869,6 +869,36 @@ func TestCleanupMariaDBBackup_UnreadablePlatformCredentialsFallBackToTheOperator
 	}
 }
 
+// A missing or malformed platform Secret is a standing state, and the
+// operator Backup's own credentials are the best left. A failed read says
+// nothing about the Secret: falling back then can list a moved endpoint's
+// old address, find no dump there and report it deleted.
+func TestCleanupMariaDBBackup_TransientPlatformCredentialsReadIsRetried(t *testing.T) {
+	bucket := &fakeS3Bucket{objects: []s3ObjectInfo{{Key: cleanupPrefix + cleanupDumpName, LastModified: cleanupCreated.Add(2 * time.Minute)}}}
+	c := interceptor.NewClient(newMariaDBStrategyTestClient(t, cleanupOperatorBackup(t), s3CredsSecret("tenant", "creds"), tenantNamespace(),
+		platformCredsSecret("bkt", "s3.new.example")).(client.WithWatch), interceptor.Funcs{
+		Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+			if _, ok := obj.(*corev1.Secret); ok && key.Name == "cozy-backups-credentials" {
+				return errors.New("apiserver unavailable")
+			}
+			return c.Get(ctx, key, obj, opts...)
+		},
+	})
+	r, rec := cleanupReconcilerWithClient(c, bucket)
+	r.CredentialsConfig = platformCredsConfig("https://s3.new.example")
+
+	res, err := r.cleanupMariaDBBackup(context.Background(), cleanupBackup(cleanupDumpName))
+	if err != nil || !requeues(res) {
+		t.Fatalf("got res=%+v err=%v, want the Backup held and retried", res, err)
+	}
+	if len(bucket.conns) != 0 || len(bucket.removed) != 0 || !operatorBackupExists(t, r.Client) {
+		t.Errorf("conns=%v removed=%v operatorBackupExists=%v, want the bucket untouched", bucket.conns, bucket.removed, operatorBackupExists(t, r.Client))
+	}
+	if events := drainEvents(rec); !hasEvent(events, "Warning ArtifactCleanupFailed") {
+		t.Errorf("events = %v, want a Warning ArtifactCleanupFailed", events)
+	}
+}
+
 func TestCleanupMariaDBBackup_UnreadablePlatformCredentialsAndAFailingDeleteHold(t *testing.T) {
 	bucket := &fakeS3Bucket{removeErr: errors.New("dial tcp: no such host")}
 	r, rec := cleanupReconciler(t, bucket, cleanupOperatorBackup(t), s3CredsSecret("tenant", "creds"), tenantNamespace())
