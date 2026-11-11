@@ -12,13 +12,15 @@ Every convention below follows from that finding: **fail fast, fail loud, make t
 
 ## The Proxmox lane
 
-`hack/e2e-chainsaw/kubernetes-proxmox/` covers the Proxmox substrate and is the one suite in this tree that the normal lanes cannot run. It needs a Proxmox hypervisor, and the `oracle-vm-*` runners have none, so it ships as `chainsaw-test.yaml.disabled`: neither Chainsaw nor the selector counts a `.disabled` file as a test, and nothing else in the directory or below it is one, which registers it nowhere and makes it unselectable rather than merely unselected. `.github/workflows/e2e-proxmox.yaml` drops the suffix on a self-hosted runner that has one.
+`hack/e2e-chainsaw/kubernetes-proxmox/` covers the Proxmox substrate and is one of the suites in this tree that the normal lanes cannot run. It needs a Proxmox hypervisor, and the `oracle-vm-*` runners have none, so it ships as `chainsaw-test.yaml.disabled`: neither Chainsaw nor the selector counts a `.disabled` file as a test, and nothing else in the directory or below it is one, which registers it nowhere and makes it unselectable rather than merely unselected. `.github/workflows/e2e-proxmox.yaml` drops the suffix on a self-hosted runner that has one.
 
 Two properties of that workflow are security boundaries rather than preferences. It is never triggered by `pull_request`, because a self-hosted runner executes what the workflow checks out and this one stages a hypervisor token and a live kubeconfig — a fork PR trigger would hand both to its author. And its concurrency group never cancels in progress, because a killed run leaks VMs on the hypervisor rather than merely losing a result.
 
 It does not install Cozystack. Every other lane builds a sandbox per run; this one asserts against an existing cluster and an existing hypervisor, which is a weaker guarantee and is stated in the suite header rather than left to be discovered.
 
 The imperative half lives in `_lib/run-proxmox.sh` and is deliberately not a port of `_lib/run-kubernetes.sh`: that script's diagnostics are virt-launcher Pods, VirtualMachineInstances and guest consoles, none of which exist on an external hypervisor.
+
+`hack/e2e-chainsaw/proxmox-network-env/` is parked the same way, for the same reason: Proxmox-backed VPC subnets need trunk NICs on the nodes, a zone bridge on the hypervisors and a transit router. No workflow runs it. It is run by hand against an environment set aside for it, as its `README.md` describes, and its checks live in `_lib/run-proxmox-network.sh`. The part of that feature that needs no hypervisor, `hack/e2e-chainsaw/proxmox-network/`, is an ordinary suite in the normal lanes.
 
 ## Conventions
 

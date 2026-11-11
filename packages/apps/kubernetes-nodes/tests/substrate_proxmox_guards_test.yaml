@@ -35,7 +35,7 @@ tests:
         dnsServers: ["8.8.8.8"]
     asserts:
       - failedTemplate:
-          errorMessage: "substrate proxmox requires proxmox.network.bridge"
+          errorMessage: "substrate proxmox requires proxmox.network.bridge, or proxmox.network.vpc and proxmox.network.subnet"
 
   - it: refuses resolvers it would otherwise borrow from the management cluster
     set:

@@ -1,0 +1,305 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.16.4
+  name: proxmoxnetworkzones.proxmox.cozystack.io
+spec:
+  group: proxmox.cozystack.io
+  names:
+    kind: ProxmoxNetworkZone
+    listKind: ProxmoxNetworkZoneList
+    plural: proxmoxnetworkzones
+    shortNames:
+    - pxzone
+    singular: proxmoxnetworkzone
+  scope: Cluster
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.bridge
+      name: Bridge
+      type: string
+    - jsonPath: .spec.providerNetwork
+      name: Provider
+      type: string
+    - jsonPath: .status.allocatedVLANs
+      name: Allocated
+      type: integer
+    - jsonPath: .status.freeVLANs
+      name: Free
+      type: integer
+    - jsonPath: .status.conditions[?(@.type=="Ready")].status
+      name: Ready
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: ProxmoxNetworkZone is an infrastructure-owned Proxmox transport
+          domain.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: |-
+              ProxmoxNetworkZoneSpec describes one Proxmox transport domain: the bridge VMs
+              attach to, the VLANs the allocator may hand out on it, and the Kube-OVN
+              provider network that carries those VLANs to the cluster nodes.
+            properties:
+              bridge:
+                description: |-
+                  Bridge is the VLAN-aware Proxmox bridge every VM NIC of this zone attaches
+                  to. It must exist with the same name on every Proxmox node VMs may be
+                  placed on, and must pass every VLAN in VLANRanges.
+                maxLength: 15
+                minLength: 1
+                pattern: ^[a-zA-Z][a-zA-Z0-9_.-]*$
+                type: string
+              egress:
+                description: |-
+                  Egress names the platform transit network VPC egress gateways of this
+                  zone attach to.
+                properties:
+                  externalSubnet:
+                    description: |-
+                      ExternalSubnet is the Kube-OVN subnet VpcEgressGateways attach their
+                      external interface to.
+                    minLength: 1
+                    type: string
+                  gatewayNamespace:
+                    description: |-
+                      GatewayNamespace is the platform namespace the VPC egress gateways of
+                      this zone run in. Gateway pods need NET_ADMIN and a privileged init
+                      container, which a tenant namespace's Pod Security level refuses, so
+                      they never run next to the tenant's workloads.
+                    minLength: 1
+                    type: string
+                required:
+                - externalSubnet
+                - gatewayNamespace
+                type: object
+              mtu:
+                description: |-
+                  MTU written into every VM NIC of the zone. Unset keeps the Proxmox
+                  default.
+                format: int32
+                maximum: 65520
+                minimum: 576
+                type: integer
+              namespaceSelector:
+                description: |-
+                  NamespaceSelector limits which namespaces may bind networks to this zone.
+                  Unset admits every namespace.
+                properties:
+                  matchExpressions:
+                    description: matchExpressions is a list of label selector requirements.
+                      The requirements are ANDed.
+                    items:
+                      description: |-
+                        A label selector requirement is a selector that contains values, a key, and an operator that
+                        relates the key and values.
+                      properties:
+                        key:
+                          description: key is the label key that the selector applies
+                            to.
+                          type: string
+                        operator:
+                          description: |-
+                            operator represents a key's relationship to a set of values.
+                            Valid operators are In, NotIn, Exists and DoesNotExist.
+                          type: string
+                        values:
+                          description: |-
+                            values is an array of string values. If the operator is In or NotIn,
+                            the values array must be non-empty. If the operator is Exists or DoesNotExist,
+                            the values array must be empty. This array is replaced during a strategic
+                            merge patch.
+                          items:
+                            type: string
+                          type: array
+                          x-kubernetes-list-type: atomic
+                      required:
+                      - key
+                      - operator
+                      type: object
+                    type: array
+                    x-kubernetes-list-type: atomic
+                  matchLabels:
+                    additionalProperties:
+                      type: string
+                    description: |-
+                      matchLabels is a map of {key,value} pairs. A single {key,value} in the matchLabels
+                      map is equivalent to an element of matchExpressions, whose key field is "key", the
+                      operator is "In", and the values array contains only "value". The requirements are ANDed.
+                    type: object
+                type: object
+                x-kubernetes-map-type: atomic
+              providerNetwork:
+                description: |-
+                  ProviderNetwork is the Kube-OVN ProviderNetwork whose interface is the
+                  trunk carrying this zone's VLANs to the cluster nodes.
+                maxLength: 12
+                minLength: 1
+                type: string
+              reservedVLANs:
+                description: ReservedVLANs are never assigned, even inside VLANRanges.
+                items:
+                  format: int32
+                  maximum: 4094
+                  minimum: 1
+                  type: integer
+                type: array
+              staticAssignments:
+                description: |-
+                  StaticAssignments pins a VLAN to one ProxmoxNetwork. This is the only way
+                  a specific VLAN ID reaches a network, and only an infrastructure admin can
+                  write it. The VLAN does not have to be inside VLANRanges, but it may not be
+                  reserved or assigned to another network.
+                items:
+                  description: StaticVLANAssignment pins a VLAN to a ProxmoxNetwork.
+                  properties:
+                    name:
+                      description: Name of the ProxmoxNetwork.
+                      type: string
+                    namespace:
+                      description: Namespace of the ProxmoxNetwork.
+                      type: string
+                    vlan:
+                      description: VLAN to assign.
+                      format: int32
+                      maximum: 4094
+                      minimum: 1
+                      type: integer
+                  required:
+                  - name
+                  - namespace
+                  - vlan
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - namespace
+                - name
+                x-kubernetes-list-type: map
+              vlanRanges:
+                description: |-
+                  VLANRanges lists the VLAN IDs the allocator may assign, as single IDs
+                  ("120") or inclusive ranges ("101-199"). Shrinking a range never takes a
+                  VLAN away from a network that already holds it; the zone reports the
+                  stranded allocation instead.
+                items:
+                  pattern: ^[0-9]{1,4}(-[0-9]{1,4})?$
+                  type: string
+                minItems: 1
+                type: array
+            required:
+            - bridge
+            - providerNetwork
+            - vlanRanges
+            type: object
+          status:
+            description: ProxmoxNetworkZoneStatus reports allocation state.
+            properties:
+              allocatedVLANs:
+                description: AllocatedVLANs counts VLANs held by networks of this
+                  zone.
+                format: int32
+                type: integer
+              conditions:
+                description: 'Conditions: Ready.'
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - type
+                x-kubernetes-list-type: map
+              freeVLANs:
+                description: FreeVLANs counts VLANs still available for allocation.
+                format: int32
+                type: integer
+              networks:
+                description: Networks counts ProxmoxNetworks bound to this zone.
+                format: int32
+                type: integer
+              observedGeneration:
+                format: int64
+                type: integer
+              totalVLANs:
+                description: TotalVLANs is the size of VLANRanges minus ReservedVLANs.
+                format: int32
+                type: integer
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

@@ -1,0 +1,520 @@
+suite: Proxmox-backed subnets
+# A subnet with `proxmox` becomes a VLAN-backed logical switch of the VPC
+# router, with one InClusterIPPool for the VM range and a ProxmoxNetwork that
+# the proxmox-network controller allocates the VLAN for. Fixture names:
+# release virtualprivatecloud-myvpc in tenant-test is vpc-a0c9fc; its subnets
+# "workers", "data" and "gone" are subnet-ff692499, subnet-bd55eab5 and
+# subnet-695b0802.
+templates:
+  - templates/vpc.yaml
+release:
+  name: virtualprivatecloud-myvpc
+  namespace: tenant-test
+capabilities:
+  apiVersions:
+    - proxmox.cozystack.io/v1alpha1
+kubernetesProvider:
+  scheme: &scheme
+    "proxmox.cozystack.io/v1alpha1/ProxmoxNetworkZone":
+      gvr:
+        group: "proxmox.cozystack.io"
+        version: "v1alpha1"
+        resource: "proxmoxnetworkzones"
+      namespaced: false
+    "proxmox.cozystack.io/v1alpha1/ProxmoxNetwork":
+      gvr:
+        group: "proxmox.cozystack.io"
+        version: "v1alpha1"
+        resource: "proxmoxnetworks"
+      namespaced: true
+  objects: &zones
+    - apiVersion: proxmox.cozystack.io/v1alpha1
+      kind: ProxmoxNetworkZone
+      metadata:
+        name: default
+      spec:
+        bridge: vmbr70
+        providerNetwork: pxtenant
+        vlanRanges: ["101-199"]
+        egress:
+          externalSubnet: px-transit
+          gatewayNamespace: cozy-proxmox-network
+    # helm-unittest registers a LIST kind only for a GVK with an object; this
+    # one lives in another namespace so the release namespace LIST is empty.
+    - apiVersion: proxmox.cozystack.io/v1alpha1
+      kind: ProxmoxNetwork
+      metadata:
+        name: scheme-registration-only
+        namespace: scheme-registration-only
+      spec: {zone: default, subnet: x, ipPool: x}
+tests:
+  - it: binds the subnet to its VLAN, routes it through the VPC and keeps the VM range from Kube-OVN
+    set:
+      subnets:
+        - name: workers
+          cidr: "10.208.64.0/24"
+          proxmox: {}
+    documentSelector:
+      path: kind
+      value: Subnet
+    asserts:
+      - equal:
+          path: spec.vlan
+          value: subnet-ff692499
+      - equal:
+          path: spec.logicalGateway
+          value: true
+      - equal:
+          path: spec.gateway
+          value: "10.208.64.1"
+      - equal:
+          path: spec.excludeIps
+          value: ["10.208.64.64..10.208.64.191"]
+      - equal:
+          path: spec.vpc
+          value: vpc-a0c9fc
+      - equal:
+          path: metadata.labels["proxmox.cozystack.io/zone"]
+          value: default
+      # The zone sets no MTU: Kube-OVN keeps its default.
+      - notExists:
+          path: spec.mtu
+
+  - it: gives the subnet the zone's MTU, the one the VM NICs get
+    kubernetesProvider:
+      # Merged with the suite's objects, so the zone needs its own name.
+      objects:
+        - {apiVersion: proxmox.cozystack.io/v1alpha1, kind: ProxmoxNetworkZone, metadata: {name: jumbo}, spec: {bridge: vmbr70, providerNetwork: pxtenant, vlanRanges: ["101-199"], mtu: "8996"}}
+    set:
+      subnets:
+        - name: workers
+          cidr: "10.208.64.0/24"
+          proxmox: {zone: jumbo}
+    documentSelector:
+      path: kind
+      value: Subnet
+    asserts:
+      - equal:
+          path: spec.mtu
+          value: 8996
+
+  - it: gives the VM range to exactly one namespaced pool with the subnet's gateway
+    set:
+      subnets:
+        - name: workers
+          cidr: "10.208.64.0/24"
+          proxmox: {vmRange: "10.208.64.100-10.208.64.199"}
+    documentSelector:
+      path: kind
+      value: InClusterIPPool
+    asserts:
+      - equal:
+          path: metadata.namespace
+          value: tenant-test
+      - equal:
+          path: spec
+          value:
+            addresses: ["10.208.64.100-10.208.64.199"]
+            prefix: 24
+            gateway: "10.208.64.1"
+      - equal:
+          path: metadata.annotations.metric
+          value: "100"
+      # An uninstall must not be refused while VMs hold addresses; the
+      # provider's ProtectPool finalizer keeps the pool until they are gone.
+      - equal:
+          path: metadata.annotations["ipam.cluster.x-k8s.io/skip-validate-delete-webhook"]
+          value: ""
+
+  - it: writes the ProxmoxNetwork the controller allocates the VLAN for
+    set:
+      subnets:
+        - name: workers
+          cidr: "10.208.64.0/24"
+          proxmox: {}
+    documentSelector:
+      path: kind
+      value: ProxmoxNetwork
+    asserts:
+      - equal:
+          path: spec
+          value:
+            zone: default
+            subnet: subnet-ff692499
+            ipPool: subnet-ff692499
+
+  - it: leaves an overlay subnet untouched
+    set:
+      subnets:
+        - name: plain
+          cidr: "172.16.0.0/24"
+    asserts:
+      - hasDocuments:
+          count: 0
+        documentSelector:
+          path: kind
+          value: InClusterIPPool
+          skipEmptyTemplates: true
+      - notExists:
+          path: spec.vlan
+        documentSelector:
+          path: kind
+          value: Subnet
+
+  - it: orders default routes by subnet position so a two-NIC VM never gets two equal ones
+    set:
+      subnets:
+        - name: workers
+          cidr: "10.208.64.0/24"
+          proxmox: {}
+        - name: data
+          cidr: "10.208.65.0/24"
+          proxmox: {}
+    asserts:
+      - equal:
+          path: metadata.annotations.metric
+          value: "100"
+        documentSelector:
+          path: spec.addresses[0]
+          value: "10.208.64.64-10.208.64.191"
+      - equal:
+          path: metadata.annotations.metric
+          value: "101"
+        documentSelector:
+          path: spec.addresses[0]
+          value: "10.208.65.64-10.208.65.191"
+
+  - it: renders an egress gateway for the Proxmox subnets on the zone's transit network
+    set:
+      subnets:
+        - name: workers
+          cidr: "10.208.64.0/24"
+          proxmox: {}
+        - name: plain
+          cidr: "172.16.0.0/24"
+      egress:
+        enabled: true
+    documentSelector:
+      path: kind
+      value: VpcEgressGateway
+    asserts:
+      - equal:
+          path: metadata.namespace
+          value: cozy-proxmox-network
+      - equal:
+          path: spec
+          value:
+            vpc: vpc-a0c9fc
+            replicas: 1
+            internalSubnet: subnet-ff692499
+            externalSubnet: px-transit
+            nodeSelector:
+              - matchLabels:
+                  pxtenant.provider-network.kubernetes.io/ready: "true"
+            policies:
+              - snat: true
+                subnets: [subnet-ff692499]
+
+  - it: refuses egress without a Proxmox subnet
+    set:
+      subnets:
+        - name: plain
+          cidr: "172.16.0.0/24"
+      egress:
+        enabled: true
+    asserts:
+      - failedTemplate:
+          errorPattern: "egress.enabled needs at least one Proxmox-backed subnet"
+
+  - it: refuses a VM range that covers the gateway
+    set:
+      subnets:
+        - name: workers
+          cidr: "10.208.64.0/24"
+          proxmox: {vmRange: "10.208.64.1-10.208.64.50"}
+    asserts:
+      - failedTemplate:
+          errorPattern: "must lie inside 10.208.64.0/24 after the gateway"
+
+  - it: refuses a VM range outside the subnet
+    set:
+      subnets:
+        - name: workers
+          cidr: "10.208.64.0/24"
+          proxmox: {vmRange: "10.208.64.100-10.208.65.10"}
+    asserts:
+      - failedTemplate:
+          errorPattern: "must lie inside 10.208.64.0/24"
+
+  - it: refuses IPv6, which the Proxmox path does not support
+    set:
+      subnets:
+        - name: workers
+          cidr: "fd00:10::/64"
+          proxmox: {}
+    asserts:
+      - failedTemplate:
+          errorPattern: "Proxmox-backed subnets are IPv4 only"
+
+  - it: refuses a CIDR with host bits set
+    set:
+      subnets:
+        - name: workers
+          cidr: "10.208.64.7/24"
+          proxmox: {}
+    asserts:
+      - failedTemplate:
+          errorPattern: "is not a network address"
+
+  - it: refuses a zone choice when several zones exist
+    # Test-level objects are added to the suite's, so "default" is there too.
+    kubernetesProvider:
+      scheme: *scheme
+      objects:
+        - {apiVersion: proxmox.cozystack.io/v1alpha1, kind: ProxmoxNetworkZone, metadata: {name: east}, spec: {bridge: vmbr70, providerNetwork: a, vlanRanges: ["101"]}}
+        - {apiVersion: proxmox.cozystack.io/v1alpha1, kind: ProxmoxNetworkZone, metadata: {name: west}, spec: {bridge: vmbr71, providerNetwork: b, vlanRanges: ["101"]}}
+        - {apiVersion: proxmox.cozystack.io/v1alpha1, kind: ProxmoxNetwork, metadata: {name: s, namespace: scheme-registration-only}, spec: {zone: east, subnet: x, ipPool: x}}
+    set:
+      subnets:
+        - name: workers
+          cidr: "10.208.64.0/24"
+          proxmox: {}
+    asserts:
+      - failedTemplate:
+          errorPattern: 'several ProxmoxNetworkZones exist \(default, east, west\); set proxmox.zone'
+
+  - it: keeps an overlay subnet private and makes a Proxmox subnet routable
+    set:
+      subnets:
+        - name: workers
+          cidr: "10.208.64.0/24"
+          proxmox: {}
+        - name: plain
+          cidr: "172.16.0.0/24"
+    asserts:
+      - equal:
+          path: spec.private
+          value: false
+        documentSelector:
+          path: spec.cidrBlock
+          value: "10.208.64.0/24"
+      - equal:
+          path: spec.private
+          value: true
+        documentSelector:
+          path: spec.cidrBlock
+          value: "172.16.0.0/24"
+
+  - it: refuses to drop proxmox from a subnet that keeps its name, even with no VM on it
+    kubernetesProvider:
+      scheme: *scheme
+      objects:
+        - apiVersion: proxmox.cozystack.io/v1alpha1
+          kind: ProxmoxNetwork
+          metadata:
+            name: subnet-ff692499
+            namespace: tenant-test
+            labels:
+              cozystack.io/vpcId: vpc-a0c9fc
+              cozystack.io/subnetName: workers
+          spec: {zone: default, subnet: subnet-ff692499, ipPool: subnet-ff692499}
+          status:
+            ipPool: {total: "100", used: "0", free: "100"}
+    set:
+      subnets:
+        - name: workers
+          cidr: "10.208.64.0/24"
+    asserts:
+      - failedTemplate:
+          errorPattern: 'subnet "workers" is Proxmox-backed and its proxmox setting cannot be removed'
+
+  - it: refuses to drop a Proxmox subnet while VMs hold addresses on it
+    kubernetesProvider:
+      scheme: *scheme
+      objects:
+        - apiVersion: proxmox.cozystack.io/v1alpha1
+          kind: ProxmoxNetwork
+          metadata:
+            name: subnet-695b0802
+            namespace: tenant-test
+            labels:
+              cozystack.io/vpcId: vpc-a0c9fc
+              cozystack.io/subnetName: gone
+          spec: {zone: default, subnet: subnet-695b0802, ipPool: subnet-695b0802}
+          status:
+            ipPool: {total: "100", used: "3", free: "97"}
+    set:
+      subnets:
+        - name: plain
+          cidr: "172.16.0.0/24"
+    asserts:
+      - failedTemplate:
+          errorPattern: 'subnet "gone" is Proxmox-backed and 3 VM address\(es\) are still allocated on it; delete those machines before removing the subnet'
+
+  - it: refuses a route whose next hop lies outside the VPC
+    set:
+      subnets:
+        - name: plain
+          cidr: "172.16.0.0/24"
+      routes:
+        - cidr: "10.208.128.0/24"
+          nextHopIP: "10.70.0.12"
+    asserts:
+      - failedTemplate:
+          errorMessage: "route to 10.208.128.0/24: next hop 10.70.0.12 is outside every subnet of this VPC"
+
+  - it: accepts a next hop inside the VPC and a peering link address
+    set:
+      subnets:
+        - name: plain
+          cidr: "172.16.0.0/24"
+      peers:
+        - vpcName: other
+          tenantNamespace: tenant-other
+      routes:
+        - cidr: "0.0.0.0/0"
+          nextHopIP: "172.16.0.10"
+        - cidr: "10.208.128.0/24"
+          nextHopIP: "169.254.12.2"
+    documentSelector:
+      path: kind
+      value: Vpc
+    asserts:
+      - lengthEqual:
+          path: spec.staticRoutes
+          count: 2
+
+  - it: can give the egress gateway its own overlay subnet
+    set:
+      subnets:
+        - name: workers
+          cidr: "10.208.64.0/24"
+          proxmox: {}
+      egress:
+        enabled: true
+        internalCidr: "10.208.127.248/29"
+    asserts:
+      - equal:
+          path: spec.internalSubnet
+          value: subnet-aa3414a4
+        documentSelector:
+          path: kind
+          value: VpcEgressGateway
+      - equal:
+          path: spec.cidrBlock
+          value: "10.208.127.248/29"
+        documentSelector:
+          path: metadata.name
+          value: subnet-aa3414a4
+      - equal:
+          path: metadata.labels["cozystack.io/egressSubnet"]
+          value: "true"
+        documentSelector:
+          path: metadata.name
+          value: subnet-aa3414a4
+
+  # Kube-OVN reroutes the Proxmox subnets to the egress gateway at 29100 and
+  # allows only the VPC's own subnets above that (31000). Router policies run
+  # after the routing table, so without an allow of its own a static route,
+  # such as one to a peered VPC, would lose its traffic to the gateway.
+  - it: keeps traffic to routed destinations, such as a peered VPC, out of the egress gateway
+    set:
+      subnets:
+        - name: workers
+          cidr: "10.208.64.0/24"
+          proxmox: {}
+      peers:
+        - vpcName: other
+          tenantNamespace: tenant-other
+      routes:
+        - cidr: "10.208.128.0/24"
+          nextHopIP: "169.254.19.245"
+        # A second next hop for the same destination needs no second policy.
+        - cidr: "10.208.128.0/24"
+          nextHopIP: "10.208.64.10"
+        # Host bits are cleared: OVN refuses a masked match that has them.
+        - cidr: "10.208.129.7/24"
+          nextHopIP: "169.254.19.245"
+        - cidr: "192.0.2.1"
+          nextHopIP: "10.208.64.10"
+        # A default route leaves the gateway as the Proxmox subnets' way out.
+        - cidr: "0.0.0.0/0"
+          nextHopIP: "10.208.64.10"
+        # The gateway reroutes IPv4 only.
+        - cidr: "fd00:10::/64"
+          nextHopIP: "fd00:20::1"
+      egress:
+        enabled: true
+    documentSelector:
+      path: kind
+      value: Vpc
+    asserts:
+      - equal:
+          path: spec.policyRoutes
+          value:
+            - {priority: 30500, action: allow, match: "ip4.dst == 10.208.128.0/24"}
+            - {priority: 30500, action: allow, match: "ip4.dst == 10.208.129.0/24"}
+            - {priority: 30500, action: allow, match: "ip4.dst == 192.0.2.1/32"}
+
+  - it: adds no policy routes without egress
+    set:
+      subnets:
+        - name: workers
+          cidr: "10.208.64.0/24"
+          proxmox: {}
+      routes:
+        - cidr: "10.208.128.0/24"
+          nextHopIP: "10.208.64.10"
+      egress:
+        enabled: false
+    documentSelector:
+      path: kind
+      value: Vpc
+    asserts:
+      - notExists:
+          path: spec.policyRoutes
+
+  # Nothing drops other VPCs' address space yet: that needs a platform-owned
+  # list (the open question at vpc.egressPolicyRoutes), and until then the
+  # transit router keeps one VPC's egress out of another.
+  - it: adds no policy routes when egress has nothing to keep apart
+    set:
+      subnets:
+        - name: workers
+          cidr: "10.208.64.0/24"
+          proxmox: {}
+      egress:
+        enabled: true
+    documentSelector:
+      path: kind
+      value: Vpc
+    asserts:
+      - notExists:
+          path: spec.policyRoutes
+
+  # Kube-OVN applies allowSubnets only through the private-subnet ACL, and a
+  # Proxmox-backed subnet is private: false, so the list would do nothing.
+  - it: refuses allowSubnets on a Proxmox-backed subnet
+    set:
+      subnets:
+        - name: workers
+          cidr: "10.208.64.0/24"
+          proxmox: {}
+          allowSubnets: ["192.168.1.0/24"]
+    asserts:
+      - failedTemplate:
+          errorPattern: 'subnet "workers": allowSubnets has no effect on a Proxmox-backed subnet'
+
+  - it: treats an empty allowSubnets on a Proxmox-backed subnet as unset
+    set:
+      subnets:
+        - name: workers
+          cidr: "10.208.64.0/24"
+          proxmox: {}
+          allowSubnets: []
+    documentSelector:
+      path: kind
+      value: Subnet
+    asserts:
+      - notExists:
+          path: spec.allowSubnets

@@ -45,6 +45,7 @@ bundles:
     - cozystack.openbao-application
     - cozystack.opensearch-application
     - cozystack.opensearch-operator
+    - cozystack.proxmox-network
     - cozystack.qdrant-application
     - cozystack.rabbitmq-application
     - cozystack.rabbitmq-operator

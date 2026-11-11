@@ -1,0 +1,34 @@
+# Two zones on the one provider network, so they share its VLAN space.
+#
+# pxnet-e2e has three allocatable VLANs: 3901-3904 without the reserved 3902.
+# The suite allocates exactly three (two networks in tenant A, one in tenant
+# B) to fill it, asks for a fourth to see ZoneExhausted, and then frees B's to
+# see the fourth take it.
+#
+# pxnet-e2e-locked admits tenant B's namespace only, so a subnet that tenant A
+# places there must stay unallocated (NamespaceNotAllowed).
+#
+# The bridge names are never looked up in CI: no Proxmox host exists. They
+# end up in each network's status and in the namespace annotation the
+# admission policy reads.
+apiVersion: proxmox.cozystack.io/v1alpha1
+kind: ProxmoxNetworkZone
+metadata:
+  name: pxnet-e2e
+spec:
+  bridge: vmbr-e2e
+  providerNetwork: pxe2e
+  vlanRanges: ["3901-3904"]
+  reservedVLANs: [3902]
+---
+apiVersion: proxmox.cozystack.io/v1alpha1
+kind: ProxmoxNetworkZone
+metadata:
+  name: pxnet-e2e-locked
+spec:
+  bridge: vmbr-e2e-l
+  providerNetwork: pxe2e
+  vlanRanges: ["3911"]
+  namespaceSelector:
+    matchLabels:
+      kubernetes.io/metadata.name: tenant-e2epxb

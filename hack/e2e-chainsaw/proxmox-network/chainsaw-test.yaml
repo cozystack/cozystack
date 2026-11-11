@@ -1,0 +1,750 @@
+# The proxmox-network package on the regular e2e cluster, which has no
+# Proxmox VE host and no NIC to trunk.
+#
+# What only a cluster shows, and what this suite therefore asserts: that the
+# package installs and its controller reaches the Kube-OVN API and the OVN
+# northbound database over TLS; that a zone counts its VLAN space; that the
+# vpc chart's objects for a Proxmox-backed subnet (Subnet, InClusterIPPool,
+# ProxmoxNetwork) turn into an allocated VLAN, a Kube-OVN Vlan, a bound Subnet
+# with a tagged localnet port and a checked pool; that VLANs are unique
+# across tenants, honour reserved IDs and a zone's namespaceSelector, run out
+# visibly, stay held while an address is in use and are reused once released;
+# and that the admission policies refuse a pod or a KubeVirt VM attaching
+# another namespace's network.
+#
+# What it cannot assert, because no node carries a trunk: GatewayReady=True
+# and so Ready=True (both stop at NoTrunkNodes, which still proves the NB was
+# read), the HA chassis group, the egress gateway, any datapath, and the
+# machine-binding policy on capmox's kinds, whose CRDs this cluster does not
+# serve. proxmox-network-env/ covers those on a Proxmox environment.
+#
+# The vpc chart is installed with helm from this checkout rather than through
+# the VirtualPrivateCloud application. Its HelmRelease waits through kstatus,
+# which reads a ProxmoxNetwork's Ready condition, and with no trunk that stays
+# False: the install would hold its reconcile for the release's whole 10m
+# install timeout, and the delete the lifecycle steps rely on would queue
+# behind it. helm --wait=false applies the same rendered objects and nothing
+# else.
+#
+# The package is opt-in in the iaas bundle; hack/e2e-platform-packages.sh
+# enables it, and hack/select-install.sh drops it again from a run that does
+# not select this suite.
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: proxmox-network
+spec:
+  # Tenant A. Chainsaw creates the namespace and deletes it at the end.
+  namespace: tenant-e2epxa
+  catch:
+  - events: {}
+  - podLogs:
+      namespace: cozy-proxmox-network
+      selector: app=proxmox-network-controller
+      tail: 200
+  - script:
+      timeout: 3m
+      content: |
+        set -u
+        k() { timeout -k 5 20 kubectl "$@" 2>&1; }
+        echo "--- zones";    k get proxmoxnetworkzones.proxmox.cozystack.io -o yaml
+        echo "--- networks"; k get proxmoxnetworks.proxmox.cozystack.io -A -o yaml
+        echo "--- vlans";    k get vlans.kubeovn.io -l proxmox.cozystack.io/zone -o yaml
+        echo "--- subnets";  k get subnets.kubeovn.io -l proxmox.cozystack.io/zone -o yaml
+        echo "--- pools";    k get inclusterippools.ipam.cluster.x-k8s.io -A
+        echo "--- namespace annotations"
+        k get ns tenant-e2epxa tenant-e2epxb -o jsonpath='{range .items[*]}{.metadata.name}: {.metadata.annotations.proxmox\.cozystack\.io/networks}{"\n"}{end}'
+        exit 0
+  steps:
+  - name: package-installed
+    try:
+    - assert:
+        timeout: 2m
+        resource:
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: proxmox-network-controller
+            namespace: cozy-proxmox-network
+          status:
+            readyReplicas: 1
+    - assert:
+        resource:
+          apiVersion: apiextensions.k8s.io/v1
+          kind: CustomResourceDefinition
+          metadata:
+            name: proxmoxnetworkzones.proxmox.cozystack.io
+          status:
+            (conditions[?type == 'Established']):
+            - status: "True"
+    - assert:
+        resource:
+          apiVersion: apiextensions.k8s.io/v1
+          kind: CustomResourceDefinition
+          metadata:
+            name: proxmoxnetworks.proxmox.cozystack.io
+          status:
+            (conditions[?type == 'Established']):
+            - status: "True"
+    # The attachment policies are on by default and hold in every namespace
+    # outside the platform's; the steps below rely on both being enforced.
+    - assert:
+        resource:
+          apiVersion: admissionregistration.k8s.io/v1
+          kind: ValidatingAdmissionPolicyBinding
+          metadata:
+            name: proxmox-network-pod-attachments
+          spec:
+            policyName: proxmox-network-pod-attachments
+            validationActions: [Deny]
+    - assert:
+        resource:
+          apiVersion: admissionregistration.k8s.io/v1
+          kind: ValidatingAdmissionPolicyBinding
+          metadata:
+            name: proxmox-network-vm-attachments
+          spec:
+            policyName: proxmox-network-vm-attachments
+            validationActions: [Deny]
+
+  - name: zones
+    try:
+    - apply:
+        file: namespace-b.yaml
+    - apply:
+        file: provider-network.yaml
+    - apply:
+        file: zones.yaml
+    # The counters come from the zone's ranges alone. Ready waits for a trunk
+    # this cluster cannot have (provider-network.yaml).
+    - assert:
+        resource:
+          apiVersion: proxmox.cozystack.io/v1alpha1
+          kind: ProxmoxNetworkZone
+          metadata:
+            name: pxnet-e2e
+          status:
+            totalVLANs: 3
+            allocatedVLANs: 0
+            freeVLANs: 3
+            networks: 0
+            (conditions[?type == 'Ready']):
+            - status: "False"
+              reason: ProviderNetworkNotReady
+    - assert:
+        resource:
+          apiVersion: proxmox.cozystack.io/v1alpha1
+          kind: ProxmoxNetworkZone
+          metadata:
+            name: pxnet-e2e-locked
+          status:
+            totalVLANs: 1
+            freeVLANs: 1
+            networks: 0
+
+  - name: vpcs
+    try:
+    # Two tenants' VPCs from the chart in this checkout (see the header for
+    # why helm and not the application). Each helm call is bounded, and the op
+    # clears both bounds with their kill grace.
+    - script:
+        timeout: 5m
+        content: |
+          set -eu
+          cd ../../..
+          timeout -k 10 120 helm upgrade --install virtualprivatecloud-net packages/apps/vpc \
+            --namespace tenant-e2epxa --values hack/e2e-chainsaw/proxmox-network/vpc-a.yaml --wait=false
+          timeout -k 10 120 helm upgrade --install virtualprivatecloud-net packages/apps/vpc \
+            --namespace tenant-e2epxb --values hack/e2e-chainsaw/proxmox-network/vpc-b.yaml --wait=false
+        check:
+          ($error == null): true
+    # Every condition up to the gateway, which stops at NoTrunkNodes: the
+    # controller found the router port in the OVN NB (else RouterPortMissing)
+    # over TLS (else NBUnavailable) and no trunk node to give it.
+    - assert:
+        resource:
+          apiVersion: proxmox.cozystack.io/v1alpha1
+          kind: ProxmoxNetwork
+          metadata:
+            labels:
+              cozystack.io/subnetName: private
+            (contains(finalizers, 'proxmox.cozystack.io/network')): true
+          spec:
+            zone: pxnet-e2e
+          status:
+            bridge: vmbr-e2e
+            cidr: 10.231.64.0/24
+            gateway: 10.231.64.1
+            prefix: 24
+            # The vpc chart's default VM range, the middle half of the /24.
+            ipPool:
+              total: 128
+              used: 0
+              free: 128
+            (conditions[?type == 'VLANAllocated']):
+            - status: "True"
+              reason: Allocated
+            (conditions[?type == 'SubnetReady']):
+            - status: "True"
+            (conditions[?type == 'IPPoolReady']):
+            - status: "True"
+              reason: Ready
+            (conditions[?type == 'GatewayReady']):
+            - status: "False"
+              reason: NoTrunkNodes
+            (conditions[?type == 'Ready']):
+            - status: "False"
+              reason: NoTrunkNodes
+    - assert:
+        resource:
+          apiVersion: proxmox.cozystack.io/v1alpha1
+          kind: ProxmoxNetwork
+          metadata:
+            labels:
+              cozystack.io/subnetName: data
+          status:
+            (conditions[?type == 'VLANAllocated']):
+            - status: "True"
+            (conditions[?type == 'SubnetReady']):
+            - status: "True"
+            (conditions[?type == 'IPPoolReady']):
+            - status: "True"
+    - assert:
+        resource:
+          apiVersion: proxmox.cozystack.io/v1alpha1
+          kind: ProxmoxNetwork
+          metadata:
+            namespace: tenant-e2epxb
+            labels:
+              cozystack.io/subnetName: private
+          status:
+            (conditions[?type == 'VLANAllocated']):
+            - status: "True"
+            (conditions[?type == 'SubnetReady']):
+            - status: "True"
+            (conditions[?type == 'IPPoolReady']):
+            - status: "True"
+    # A zone whose namespaceSelector leaves tenant A out allocates it nothing.
+    - assert:
+        resource:
+          apiVersion: proxmox.cozystack.io/v1alpha1
+          kind: ProxmoxNetwork
+          metadata:
+            labels:
+              cozystack.io/subnetName: locked
+          status:
+            (conditions[?type == 'VLANAllocated']):
+            - status: "False"
+              reason: NamespaceNotAllowed
+            (conditions[?type == 'Ready']):
+            - status: "False"
+              reason: NamespaceNotAllowed
+    - assert:
+        resource:
+          apiVersion: proxmox.cozystack.io/v1alpha1
+          kind: ProxmoxNetworkZone
+          metadata:
+            name: pxnet-e2e
+          status:
+            allocatedVLANs: 3
+            freeVLANs: 0
+            networks: 3
+    - assert:
+        resource:
+          apiVersion: proxmox.cozystack.io/v1alpha1
+          kind: ProxmoxNetworkZone
+          metadata:
+            name: pxnet-e2e-locked
+          status:
+            allocatedVLANs: 0
+            freeVLANs: 1
+            networks: 1
+    cleanup:
+    # Backstop for a run that fails before the teardown step: the releases,
+    # the claim the lifecycle step makes, and the wait for the networks'
+    # finalizers, so the zones and namespaces go after them. A network can
+    # take up to the controller's subnet prune timeout (10m) to release its
+    # VLAN. The op clears the sum of the bounds inside it (about 17.5m: the
+    # claim delete, two helm calls, two reads and two 300s waits, kill grace
+    # included).
+    - script:
+        timeout: 18m
+        content: |
+          set -u
+          cd ../../..
+          timeout -k 5 30 kubectl -n tenant-e2epxb delete ipaddressclaims.ipam.cluster.x-k8s.io pxnet-e2e-hold \
+            --ignore-not-found --wait=false
+          for ns in tenant-e2epxa tenant-e2epxb; do
+            timeout -k 10 120 helm uninstall virtualprivatecloud-net --namespace "$ns" --ignore-not-found --wait=false \
+              || echo "» helm uninstall in $ns failed"
+          done
+          for ns in tenant-e2epxa tenant-e2epxb; do
+            left=$(timeout -k 5 30 kubectl -n "$ns" get proxmoxnetworks.proxmox.cozystack.io -o name 2>/dev/null) || continue
+            [ -n "$left" ] || continue
+            timeout -k 5 300 kubectl -n "$ns" wait --for=delete $left --timeout=290s \
+              || { echo "» ProxmoxNetworks left in $ns:"; timeout -k 5 30 kubectl -n "$ns" get proxmoxnetworks.proxmox.cozystack.io -o wide; }
+          done
+          exit 0
+
+  - name: allocation-and-binding
+    try:
+    # One pass over what the asserts above cannot express: relations between
+    # objects. Every read is captured before it is tested, so a failed read is
+    # a failure and never an absence. About 26 reads of at most 25s each, kill
+    # grace included; the op clears their sum.
+    - script:
+        timeout: 12m
+        content: |
+          set -u
+          fail=0
+          bad() { echo "FAIL: $*" >&2; fail=1; }
+          k() { timeout -k 5 20 kubectl "$@"; }
+          id_of() { k -n "$1" get proxmoxnetworks.proxmox.cozystack.io -l "cozystack.io/subnetName=$2" -o jsonpath='{.items[0].metadata.name}'; }
+
+          A=tenant-e2epxa B=tenant-e2epxb
+          ida1=$(id_of $A private) && ida2=$(id_of $A data) && idb=$(id_of $B private) \
+            && [ -n "$ida1" ] && [ -n "$ida2" ] && [ -n "$idb" ] \
+            || { echo "FAIL: cannot read the networks' names (A private '${ida1:-}', A data '${ida2:-}', B private '${idb:-}')" >&2; exit 1; }
+
+          vlans=""
+          for pair in "$A $ida1" "$A $ida2" "$B $idb"; do
+            set -- $pair; ns=$1 id=$2
+            if ! v=$(k -n "$ns" get proxmoxnetworks.proxmox.cozystack.io "$id" -o jsonpath='{.status.vlan}') || [ -z "$v" ]; then
+              bad "$ns/$id: no status.vlan"; continue
+            fi
+            vlans="$vlans $v"
+            case $v in
+              3901|3903|3904) ;;
+              *) bad "$ns/$id: VLAN $v is outside 3901-3904 without the reserved 3902" ;;
+            esac
+
+            # The Kube-OVN Vlan: the allocated ID on the zone's provider
+            # network, pointing back at its network and held by the finalizer.
+            if got=$(k get vlans.kubeovn.io "$id" -o jsonpath='{.spec.id}/{.spec.provider}/{.metadata.labels.proxmox\.cozystack\.io/zone}/{.metadata.labels.proxmox\.cozystack\.io/network-namespace}/{.metadata.labels.proxmox\.cozystack\.io/network-name}/{.metadata.finalizers}'); then
+              want="$v/pxe2e/pxnet-e2e/$ns/$id/[\"proxmox.cozystack.io/network\"]"
+              [ "$got" = "$want" ] || bad "Vlan $id is '$got', want '$want'"
+            else bad "cannot read Vlan $id"; fi
+
+            # The Subnet: bound to that Vlan, routed by its VPC router, held by
+            # the finalizer, and its excludeIps keeps the pool's range from
+            # pods (Kube-OVN adds the gateway to the list itself).
+            if sj=$(k get subnets.kubeovn.io "$id" -o json) && pj=$(k -n "$ns" get inclusterippools.ipam.cluster.x-k8s.io "$id" -o json); then
+              range=$(printf '%s' "$pj" | jq -r '.spec.addresses[0]' | sed 's/-/../')
+              printf '%s' "$sj" | jq -e --arg id "$id" --arg r "$range" \
+                '.spec.vlan == $id and .spec.logicalGateway == true and .spec.private == false
+                 and (.spec.excludeIps | index($r) != null)
+                 and (.metadata.finalizers | index("proxmox.cozystack.io/network") != null)' >/dev/null \
+                || bad "Subnet $id: $(printf '%s' "$sj" | jq -c '{vlan: .spec.vlan, logicalGateway: .spec.logicalGateway, private: .spec.private, excludeIps: .spec.excludeIps, finalizers: .metadata.finalizers}') (pool range $range)"
+            else bad "cannot read Subnet $id or its pool in $ns"; fi
+
+            # OVN: the subnet's localnet port carries the VLAN tag.
+            if tag=$(k -n cozy-kubeovn exec deploy/ovn-central -c ovn-central -- ovn-nbctl --no-leader-only lsp-get-tag "localnet.$id"); then
+              [ "$tag" = "$v" ] || bad "OVN localnet.$id is tagged '$tag', want $v"
+            else bad "cannot read the tag of OVN port localnet.$id"; fi
+          done
+
+          n=$(printf '%s\n' $vlans | sort -u | grep -c .)
+          [ "$n" -eq 3 ] || bad "the three networks hold VLANs [$vlans ], not three distinct ones"
+
+          # The namespace annotation the machine-binding policy reads lists
+          # exactly the namespace's own allocated networks, and not the one the
+          # locked zone refused.
+          triples() { # ns id...
+            ns=$1; shift
+            for id in "$@"; do
+              echo "vmbr-e2e/$(k -n "$ns" get proxmoxnetworks.proxmox.cozystack.io "$id" -o jsonpath='{.status.vlan}')/$id"
+            done | sort
+          }
+          for pair in "$A $ida1 $ida2" "$B $idb"; do
+            set -- $pair; ns=$1; shift
+            if ann=$(k get ns "$ns" -o jsonpath='{.metadata.annotations.proxmox\.cozystack\.io/networks}'); then
+              got=$(printf '%s\n' "$ann" | tr ',' '\n' | sort)
+              want=$(triples "$ns" "$@")
+              [ "$got" = "$want" ] || bad "namespace $ns lists [$(echo $got)], want [$(echo $want)]"
+            else bad "cannot read namespace $ns"; fi
+          done
+
+          # A claim resolves its pool in its own namespace only: A's pool is
+          # there, and B's namespace has no pool of that name.
+          if k -n $A get inclusterippools.ipam.cluster.x-k8s.io "$ida1" -o name >/dev/null; then
+            if out=$(k -n $B get inclusterippools.ipam.cluster.x-k8s.io "$ida1" --ignore-not-found -o name); then
+              [ -z "$out" ] || bad "tenant B's namespace holds a pool named after tenant A's network"
+            else bad "cannot list pools in $B"; fi
+          else bad "tenant A's pool $ida1 is missing"; fi
+
+          # The zone and network metrics, through the apiserver's service proxy.
+          if m=$(k get --raw "/api/v1/namespaces/cozy-proxmox-network/services/proxmox-network-controller-metrics:8080/proxy/metrics"); then
+            printf '%s\n' "$m" | grep -Eq '^cozy_proxmox_zone_vlans_free\{zone="pxnet-e2e"\} 0$' \
+              || bad "metrics: no cozy_proxmox_zone_vlans_free 0 for zone pxnet-e2e: $(printf '%s\n' "$m" | grep '^cozy_proxmox_zone_vlans_free' | tr '\n' ' ')"
+            printf '%s\n' "$m" | grep -Eq "^cozy_proxmox_network_ready\{.*namespace=\"$A\"" \
+              || bad "metrics: no cozy_proxmox_network_ready series for $A"
+          else bad "cannot read the controller's metrics"; fi
+
+          exit "$fail"
+        check:
+          ($error == null): true
+
+  - name: zone-exhausted
+    try:
+    # A fourth network in a zone with three VLANs waits, visibly.
+    - script:
+        timeout: 3m
+        content: |
+          set -eu
+          cd ../../..
+          timeout -k 10 120 helm upgrade virtualprivatecloud-net packages/apps/vpc \
+            --namespace tenant-e2epxa --values hack/e2e-chainsaw/proxmox-network/vpc-a-extra.yaml --wait=false
+        check:
+          ($error == null): true
+    - assert:
+        resource:
+          apiVersion: proxmox.cozystack.io/v1alpha1
+          kind: ProxmoxNetwork
+          metadata:
+            labels:
+              cozystack.io/subnetName: extra
+          status:
+            (conditions[?type == 'VLANAllocated']):
+            - status: "False"
+              reason: ZoneExhausted
+            (conditions[?type == 'Ready']):
+            - status: "False"
+              reason: ZoneExhausted
+    - assert:
+        resource:
+          apiVersion: proxmox.cozystack.io/v1alpha1
+          kind: ProxmoxNetworkZone
+          metadata:
+            name: pxnet-e2e
+          status:
+            allocatedVLANs: 3
+            freeVLANs: 0
+            networks: 4
+
+  - name: admission
+    try:
+    # Server-side dry runs: nothing is created. A refusal counts only when it
+    # names the policy, and each refusal sits next to an admitted request of
+    # the same shape in the same namespace, so a manifest the apiserver or
+    # another webhook refuses for its own reasons fails the step instead of
+    # passing it. Twelve kubectl calls of at most 35s each.
+    - script:
+        timeout: 8m
+        content: |
+          set -u
+          fail=0
+          k() { timeout -k 5 30 kubectl "$@"; }
+          A=tenant-e2epxa B=tenant-e2epxb
+          ida=$(k -n $A get proxmoxnetworks.proxmox.cozystack.io -l cozystack.io/subnetName=private -o jsonpath='{.items[0].metadata.name}') \
+            && idb=$(k -n $B get proxmoxnetworks.proxmox.cozystack.io -l cozystack.io/subnetName=private -o jsonpath='{.items[0].metadata.name}') \
+            && [ -n "$ida" ] && [ -n "$idb" ] \
+            || { echo "FAIL: cannot read the networks' names" >&2; exit 1; }
+
+          pod() { # annotation-key annotation-value
+            cat <<EOF
+          apiVersion: v1
+          kind: Pod
+          metadata:
+            name: pxnet-attach-probe
+            namespace: $A
+            annotations:
+              $1: '$2'
+          spec:
+            containers:
+            - name: probe
+              image: registry.k8s.io/pause:3.10
+          EOF
+          }
+          vm() { # multus network name
+            cat <<EOF
+          apiVersion: kubevirt.io/v1
+          kind: VirtualMachine
+          metadata:
+            name: pxnet-attach-probe
+            namespace: $A
+          spec:
+            runStrategy: Halted
+            template:
+              spec:
+                domain:
+                  devices:
+                    interfaces:
+                    - name: net1
+                      bridge: {}
+                  resources:
+                    requests:
+                      memory: 64Mi
+                networks:
+                - name: net1
+                  multus:
+                    networkName: $1
+          EOF
+          }
+          admitted() { # description, manifest on stdin
+            if ! out=$(k create --dry-run=server -f - 2>&1); then
+              echo "FAIL: $1: refused: $out" >&2; fail=1
+            fi
+          }
+          refused() { # description policy, manifest on stdin
+            if out=$(k create --dry-run=server -f - 2>&1); then
+              echo "FAIL: $1: admitted" >&2; fail=1
+            elif ! printf '%s' "$out" | grep -q "$2"; then
+              echo "FAIL: $1: refused, but not by $2: $out" >&2; fail=1
+            fi
+          }
+
+          P=proxmox-network-pod-attachments
+          pod k8s.v1.cni.cncf.io/networks "$A/$ida" | admitted "a pod attaches its own namespace's network"
+          pod k8s.v1.cni.cncf.io/networks "$ida"    | admitted "a pod attaches its own network unqualified"
+          pod k8s.v1.cni.cncf.io/networks "$B/$idb" | refused  "a pod attaches tenant B's network" $P
+          pod k8s.v1.cni.cncf.io/networks "[{\"name\":\"$idb\",\"namespace\":\"$B\"}]" \
+                                                    | refused  "a pod attaches tenant B's network in the JSON form" $P
+          pod v1.multus-cni.io/default-network "$A/$ida" | admitted "a pod's multus default network is its own, qualified"
+          pod v1.multus-cni.io/default-network "$ida"    | refused  "a pod's multus default network is unqualified (Multus would look in kube-system)" $P
+          pod ovn.kubernetes.io/logical_switch "$ida"    | refused  "a pod pins its primary NIC to a Proxmox-backed subnet" $P
+          pod ovn.kubernetes.io/logical_switch "$idb"    | refused  "a pod pins its primary NIC to tenant B's subnet" $P
+
+          V=proxmox-network-vm-attachments
+          vm "$A/$ida" | admitted "a VM attaches its own namespace's network"
+          vm "$B/$idb" | refused  "a VM attaches tenant B's network" $V
+
+          exit "$fail"
+        check:
+          ($error == null): true
+
+  - name: release-held-while-in-use
+    try:
+    # An address from B's pool stands in for a VM: the network, its VLAN and
+    # its Subnet must outlive the VPC while the address is allocated.
+    - script:
+        timeout: 2m
+        content: |
+          set -eu
+          id=$(timeout -k 5 30 kubectl -n tenant-e2epxb get proxmoxnetworks.proxmox.cozystack.io \
+            -l cozystack.io/subnetName=private -o jsonpath='{.items[0].metadata.name}')
+          [ -n "$id" ] || { echo "no network in tenant-e2epxb" >&2; exit 1; }
+          timeout -k 5 30 kubectl apply -f - <<EOF
+          apiVersion: ipam.cluster.x-k8s.io/v1beta1
+          kind: IPAddressClaim
+          metadata:
+            name: pxnet-e2e-hold
+            namespace: tenant-e2epxb
+          spec:
+            poolRef:
+              apiGroup: ipam.cluster.x-k8s.io
+              kind: InClusterIPPool
+              name: ${id}
+          EOF
+        check:
+          ($error == null): true
+    - assert:
+        resource:
+          apiVersion: proxmox.cozystack.io/v1alpha1
+          kind: ProxmoxNetwork
+          metadata:
+            namespace: tenant-e2epxb
+            labels:
+              cozystack.io/subnetName: private
+          status:
+            ipPool:
+              used: 1
+    - script:
+        timeout: 3m
+        content: |
+          set -eu
+          timeout -k 10 120 helm uninstall virtualprivatecloud-net --namespace tenant-e2epxb --wait=false
+        check:
+          ($error == null): true
+    - assert:
+        resource:
+          apiVersion: proxmox.cozystack.io/v1alpha1
+          kind: ProxmoxNetwork
+          metadata:
+            namespace: tenant-e2epxb
+            labels:
+              cozystack.io/subnetName: private
+            (deletionTimestamp != null): true
+          status:
+            (conditions[?type == 'Ready']):
+            - status: "False"
+              reason: InUse
+    - assert:
+        resource:
+          apiVersion: kubeovn.io/v1
+          kind: Vlan
+          metadata:
+            labels:
+              proxmox.cozystack.io/network-namespace: tenant-e2epxb
+            (deletionTimestamp == null): true
+          spec:
+            provider: pxe2e
+    - assert:
+        resource:
+          apiVersion: kubeovn.io/v1
+          kind: Subnet
+          metadata:
+            labels:
+              cozystack.io/tenantName: tenant-e2epxb
+              cozystack.io/subnetName: private
+            (deletionTimestamp != null): true
+            (contains(finalizers, 'proxmox.cozystack.io/network')): true
+    # The VLAN is not free while it is held, so A's waiting network still
+    # waits.
+    - assert:
+        resource:
+          apiVersion: proxmox.cozystack.io/v1alpha1
+          kind: ProxmoxNetwork
+          metadata:
+            labels:
+              cozystack.io/subnetName: extra
+          status:
+            (conditions[?type == 'VLANAllocated']):
+            - status: "False"
+              reason: ZoneExhausted
+    - delete:
+        ref:
+          apiVersion: ipam.cluster.x-k8s.io/v1beta1
+          kind: IPAddressClaim
+          namespace: tenant-e2epxb
+          name: pxnet-e2e-hold
+    # Once the address is gone the network finishes deleting, and only after
+    # its Subnet, its HA chassis group record and its Vlan are gone. The 12m
+    # clears the controller's subnet prune timeout (10m), the longest the
+    # release may wait on Kube-OVN to drop the deleted subnet from the Vlan.
+    - error:
+        timeout: 12m
+        resource:
+          apiVersion: proxmox.cozystack.io/v1alpha1
+          kind: ProxmoxNetwork
+          metadata:
+            namespace: tenant-e2epxb
+    - error:
+        timeout: 1m
+        resource:
+          apiVersion: kubeovn.io/v1
+          kind: Vlan
+          metadata:
+            labels:
+              proxmox.cozystack.io/network-namespace: tenant-e2epxb
+    - error:
+        timeout: 2m
+        resource:
+          apiVersion: kubeovn.io/v1
+          kind: Subnet
+          metadata:
+            labels:
+              cozystack.io/tenantName: tenant-e2epxb
+    - error:
+        timeout: 2m
+        resource:
+          apiVersion: ipam.cluster.x-k8s.io/v1alpha2
+          kind: InClusterIPPool
+          metadata:
+            namespace: tenant-e2epxb
+    - error:
+        timeout: 1m
+        resource:
+          apiVersion: ipam.cluster.x-k8s.io/v1beta1
+          kind: IPAddress
+          metadata:
+            namespace: tenant-e2epxb
+    - script:
+        timeout: 1m
+        content: |
+          set -eu
+          ann=$(timeout -k 5 30 kubectl get ns tenant-e2epxb -o jsonpath='{.metadata.annotations.proxmox\.cozystack\.io/networks}')
+          [ -z "$ann" ] || { echo "tenant-e2epxb still lists networks: $ann" >&2; exit 1; }
+        check:
+          ($error == null): true
+
+  - name: released-vlan-is-reused
+    try:
+    # The zone had no other VLAN, so A's waiting network can only have taken
+    # the one B released.
+    - assert:
+        resource:
+          apiVersion: proxmox.cozystack.io/v1alpha1
+          kind: ProxmoxNetwork
+          metadata:
+            labels:
+              cozystack.io/subnetName: extra
+          status:
+            (conditions[?type == 'VLANAllocated']):
+            - status: "True"
+              reason: Allocated
+    - assert:
+        resource:
+          apiVersion: proxmox.cozystack.io/v1alpha1
+          kind: ProxmoxNetworkZone
+          metadata:
+            name: pxnet-e2e
+          status:
+            allocatedVLANs: 3
+            freeVLANs: 0
+            networks: 3
+    - script:
+        timeout: 2m
+        content: |
+          set -eu
+          v() { timeout -k 5 30 kubectl -n tenant-e2epxa get proxmoxnetworks.proxmox.cozystack.io \
+            -l "cozystack.io/subnetName=$1" -o jsonpath='{.items[0].status.vlan}'; }
+          p=$(v private) d=$(v data) e=$(v extra)
+          echo "VLANs: private=$p data=$d extra=$e"
+          [ "$(printf '%s\n' "$p" "$d" "$e" | sort -u | grep -c .)" -eq 3 ] || { echo "A's networks do not hold three distinct VLANs" >&2; exit 1; }
+          for x in "$p" "$d" "$e"; do
+            case $x in 3901|3903|3904) ;; *) echo "VLAN '$x' is outside the zone's allocatable set" >&2; exit 1 ;; esac
+          done
+        check:
+          ($error == null): true
+
+  - name: teardown
+    try:
+    - script:
+        timeout: 3m
+        content: |
+          set -eu
+          timeout -k 10 120 helm uninstall virtualprivatecloud-net --namespace tenant-e2epxa --wait=false
+        check:
+          ($error == null): true
+    # Nothing is held, so everything goes; 12m as in the release step.
+    - error:
+        timeout: 12m
+        resource:
+          apiVersion: proxmox.cozystack.io/v1alpha1
+          kind: ProxmoxNetwork
+          metadata:
+            namespace: tenant-e2epxa
+    - error:
+        timeout: 1m
+        resource:
+          apiVersion: kubeovn.io/v1
+          kind: Vlan
+          metadata:
+            labels:
+              proxmox.cozystack.io/zone: pxnet-e2e
+    - assert:
+        resource:
+          apiVersion: proxmox.cozystack.io/v1alpha1
+          kind: ProxmoxNetworkZone
+          metadata:
+            name: pxnet-e2e
+          status:
+            allocatedVLANs: 0
+            freeVLANs: 3
+            networks: 0
+    - assert:
+        resource:
+          apiVersion: proxmox.cozystack.io/v1alpha1
+          kind: ProxmoxNetworkZone
+          metadata:
+            name: pxnet-e2e-locked
+          status:
+            networks: 0
+    - script:
+        timeout: 1m
+        content: |
+          set -eu
+          ann=$(timeout -k 5 30 kubectl get ns tenant-e2epxa -o jsonpath='{.metadata.annotations.proxmox\.cozystack\.io/networks}')
+          [ -z "$ann" ] || { echo "tenant-e2epxa still lists networks: $ann" >&2; exit 1; }
+        check:
+          ($error == null): true
