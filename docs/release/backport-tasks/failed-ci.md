@@ -6,7 +6,7 @@ CI on the batch pull request runs the line's build and tests against every origi
 
 - The open batch pull request for the line and its failing checks: `gh pr checks <batch>`, and the log of each failing job, `gh run view <run id> --log-failed`.
 - The originals the batch carries, one unit each on its first-parent line: `git log --first-parent --reverse --format='%h %s' origin/<line>..origin/backport-batch/<line>-<yyyymmdd>`. A merged pull request's unit is a merge whose message is the original's merge message, naming its number, and whose `Backported-from:` trailer names its merge commit on `main`; its commits are `git log --reverse --format='%h %an %s' <unit>^1..<unit>^2`. A squash-merged one is one commit whose subject ends in its number. The files a unit changes are `git diff --name-only <unit>^1 <unit>`.
-- The line's own CI on its head, `gh run list --branch <line>`, to tell a failure the batch brought from one the line already had.
+- The line's own baseline, to tell a failure the batch brought from one the line already had: the last [release-line baseline](../nightly-builds.md#release-line-baseline) run before the batch's CI. Its summary names, for each line, the SHA it tested, the artifact and the unit and e2e results; read a red batch against it as that section says.
 
 ### Output
 
@@ -15,7 +15,7 @@ The batch rebuilt without the culprits, by one `backport-batch run --defer` with
 ### Steps
 
 1. Read the failing jobs and name what fails: the job, the package or test, and the first error.
-2. When the same job fails the same way on the line's head, or the failure is the runner's (a timeout pulling an image, a lost runner, a registry error), the batch did not cause it: defer nothing, and comment on the batch pull request with the job and the line's run that shows the same failure.
+2. When the same job fails the same way in the line's baseline at the batch's base, or the failure is the runner's (a timeout pulling an image, a lost runner, a registry error), the batch did not cause it: defer nothing, and comment on the batch pull request with the job and the baseline run that shows the same failure.
 3. Otherwise pin it on originals by their files: the originals that change the failing package, chart or test, or what it builds from. Take the fewest that explain the failure; when no original's files reach the failure, or every original's do, the culprit cannot be pinned from files alone: read the failure further before deferring anything.
 4. Write the reason as one line naming the job and the failure, for example `e2e-apps: postgres never becomes Ready`.
 
