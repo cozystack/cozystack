@@ -222,6 +222,44 @@ func TestReconcileMariaDBRestore_RefusesABackupBeingDeleted(t *testing.T) {
 			f.wantFailed(t, "src-bk", "is gone")
 		})
 	}
+	// The refusal applies only before the operator Restore exists. One
+	// created by an earlier reconcile but not yet in the cache must be
+	// found and followed, or the RestoreJob fails under a running restore
+	// and the cleanup deletes the dump that restore reads.
+	t.Run("an operator Restore the cache has not seen yet is followed", func(t *testing.T) {
+		f := newMariaDBRestoreFixture(t, recordedDump(mdbRestoreDump), present(), creds)
+		ctx := context.Background()
+		live := &backupsv1alpha1.Backup{}
+		if err := f.c.Get(ctx, client.ObjectKeyFromObject(f.backup), live); err != nil {
+			t.Fatal(err)
+		}
+		live.Finalizers = []string{backupFinalizer}
+		if err := f.c.Update(ctx, live); err != nil {
+			t.Fatal(err)
+		}
+		if err := f.c.Delete(ctx, live); err != nil {
+			t.Fatal(err)
+		}
+		if err := f.c.Get(ctx, client.ObjectKeyFromObject(live), live); err != nil || live.DeletionTimestamp.IsZero() {
+			t.Fatalf("Backup not left being deleted: %v", err)
+		}
+		live.ResourceVersion = ""
+		apiServer := newMariaDBStrategyTestClient(t, live, &mariadbtypes.Restore{ObjectMeta: metav1.ObjectMeta{
+			Namespace: "tenant", Name: "rj-abcde",
+			Labels: map[string]string{
+				backupsv1alpha1.OwningJobNameLabel:      "rj",
+				backupsv1alpha1.OwningJobNamespaceLabel: "tenant",
+			},
+		}})
+		f.r.APIReader = apiServer
+		f.reconcile(t)
+		if f.rj.Status.Phase == backupsv1alpha1.RestoreJobPhaseFailed {
+			t.Fatalf("RestoreJob failed under a running restore: %s", f.rj.Status.Message)
+		}
+		if got := f.restores(t); len(got) != 0 {
+			t.Errorf("created %d operator Restores; want the existing one followed", len(got))
+		}
+	})
 	t.Run("a Backup that cannot be read keeps the RestoreJob waiting", func(t *testing.T) {
 		f := newMariaDBRestoreFixture(t, recordedDump(mdbRestoreDump), present(), creds)
 		f.r.APIReader = interceptor.NewClient(f.c.(client.WithWatch), interceptor.Funcs{

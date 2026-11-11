@@ -756,10 +756,12 @@ func (r *RestoreJobReconciler) awaitMariaDBDumpCheck(ctx context.Context, rj *ba
 }
 
 // findMariaDBRestoreForJob returns the k8s.mariadb.com/Restore labelled
-// with the RestoreJob, if a previous reconcile already created one.
+// with the RestoreJob, if a previous reconcile already created one. It is
+// read uncached: one the cache has not caught up with would be created
+// again, or, once its Backup is being deleted, refused while it runs.
 func (r *RestoreJobReconciler) findMariaDBRestoreForJob(ctx context.Context, rj *backupsv1alpha1.RestoreJob) (*mariadbtypes.Restore, error) {
 	list := &mariadbtypes.RestoreList{}
-	if err := r.List(ctx, list,
+	if err := r.apiReader().List(ctx, list,
 		client.InNamespace(rj.Namespace),
 		client.MatchingLabels{
 			backupsv1alpha1.OwningJobNameLabel:      rj.Name,
