@@ -763,6 +763,18 @@ func TestCleanupMariaDBBackup_WaitsForARestoreFromIt(t *testing.T) {
 			}
 		})
 	}
+	// A restore checks that its Backup is not being deleted before it
+	// starts, so one that started first is on the API server before the
+	// delete, though not necessarily in this controller's cache yet.
+	t.Run("a restore the cache has not seen yet holds it", func(t *testing.T) {
+		bucket := &fakeS3Bucket{}
+		r, _ := cleanupReconciler(t, bucket, cleanupOperatorBackup(t), s3CredsSecret("tenant", "creds"), tenantNamespace())
+		r.APIReader = newMariaDBStrategyTestClient(t, restoreJobOf("rj", "bk", backupsv1alpha1.RestoreJobPhaseRunning))
+		res, err := r.cleanupMariaDBBackup(context.Background(), cleanupBackup(cleanupDumpName))
+		if err != nil || !requeues(res) || len(bucket.removed) != 0 {
+			t.Fatalf("got res=%+v err=%v removed=%v, want the Backup held while the restore runs", res, err, bucket.removed)
+		}
+	})
 	t.Run("finished restores and restores of other Backups do not hold it", func(t *testing.T) {
 		bucket := &fakeS3Bucket{}
 		r, _ := cleanupReconciler(t, bucket, cleanupOperatorBackup(t), s3CredsSecret("tenant", "creds"), tenantNamespace(),

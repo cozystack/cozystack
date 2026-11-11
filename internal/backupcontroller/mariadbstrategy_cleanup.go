@@ -200,7 +200,7 @@ func contestedMariaDBDump(ctx context.Context, lister s3ObjectLister, reader cli
 // backup and has not finished, or "".
 func (r *BackupReconciler) activeRestoreOf(ctx context.Context, backup *backupsv1alpha1.Backup) (string, error) {
 	list := &backupsv1alpha1.RestoreJobList{}
-	if err := r.List(ctx, list, client.InNamespace(backup.Namespace)); err != nil {
+	if err := r.apiReader().List(ctx, list, client.InNamespace(backup.Namespace)); err != nil {
 		return "", fmt.Errorf("list RestoreJobs: %w", err)
 	}
 	for i := range list.Items {

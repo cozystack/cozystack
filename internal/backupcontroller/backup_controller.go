@@ -43,6 +43,10 @@ type BackupReconciler struct {
 	// cleanups project them into the Backup's namespace, and the MariaDB
 	// cleanup reads them to reach the platform bucket.
 	CredentialsConfig BackupCredentialsConfig
+	// APIReader is the manager's uncached reader. The MariaDB cleanup lists
+	// the RestoreJobs of a Backup through it: a restore that started before
+	// the delete may not be in the cache yet. Wired in SetupWithManager.
+	APIReader client.Reader
 
 	// newS3ObjectLister and newS3ObjectRemover override the S3 client the
 	// MariaDB cleanup deletes a dump with; nil means a real minio client.
@@ -294,7 +298,18 @@ func (r *BackupReconciler) cleanupCNPGBackup(ctx context.Context, backup *backup
 
 // SetupWithManager registers the BackupReconciler with the Manager.
 func (r *BackupReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	r.APIReader = mgr.GetAPIReader()
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&backupsv1alpha1.Backup{}).
 		Complete(r)
+}
+
+// apiReader returns the uncached reader. Reconcilers built by hand in unit
+// tests have none and fall back to their fake Client, which has no cache to
+// bypass.
+func (r *BackupReconciler) apiReader() client.Reader {
+	if r.APIReader != nil {
+		return r.APIReader
+	}
+	return r.Client
 }
