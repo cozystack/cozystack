@@ -424,7 +424,9 @@ spec:
         {{- end }}
       spec:
         accessModes: [ "ReadWriteOnce" ]
-        storageClassName: {{ $volume.idx.storageClass }}
+        {{- with $volume.idx.storageClass }}
+        storageClassName: {{ . | quote }}
+        {{- end }}
         resources:
           requests:
             storage: {{ $volume.idx.size }}
@@ -440,7 +442,9 @@ spec:
         {{- end }}
       spec:
         accessModes: [ "ReadWriteOnce" ]
-        storageClassName: {{ $volume.logs.storageClass }}
+        {{- with $volume.logs.storageClass }}
+        storageClassName: {{ . | quote }}
+        {{- end }}
         resources:
           requests:
             storage: {{ $volume.logs.size }}
