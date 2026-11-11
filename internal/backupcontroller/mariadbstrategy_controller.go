@@ -674,7 +674,8 @@ func (r *RestoreJobReconciler) mariadbRestoreTargetTime(ctx context.Context, rj 
 	// Deleting a Backup deletes its dump, and the operator restores the
 	// nearest other dump once its own is gone, so a restore must not start
 	// from a Backup being deleted. The copy in hand can predate the delete;
-	// the cleanup holds the Backup only for RestoreJobs it can already see.
+	// the cleanup holds the Backup only for restores that exist when it
+	// lists them.
 	live := &backupsv1alpha1.Backup{}
 	if err := r.apiReader().Get(ctx, client.ObjectKeyFromObject(backup), live); err != nil {
 		if apierrors.IsNotFound(err) {
