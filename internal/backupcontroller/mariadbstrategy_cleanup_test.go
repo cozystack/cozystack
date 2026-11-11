@@ -961,36 +961,69 @@ func TestCleanupMariaDBBackup_PlatformEndpointFallsBackToTheConfiguredOne(t *tes
 	}
 }
 
-// blockingBucket answers only when its context ends, as an unreachable
-// endpoint does.
-type blockingBucket struct{ fakeS3Bucket }
+// blockingBucket lists the dump it holds and answers the call named by
+// blockOn only when its context ends, as an unreachable endpoint does.
+type blockingBucket struct {
+	fakeS3Bucket
+	blockOn string
+	entered chan struct{}
+}
 
-func (b *blockingBucket) RemoveObject(ctx context.Context, _, _ string) error {
+func (b *blockingBucket) block(ctx context.Context, call string) bool {
+	if b.blockOn != call {
+		return false
+	}
+	close(b.entered)
 	<-ctx.Done()
-	return ctx.Err()
+	return true
+}
+
+func (b *blockingBucket) ListObjects(ctx context.Context, bucket, prefix string, recursive bool) ([]s3ObjectInfo, error) {
+	if b.block(ctx, "list") {
+		return nil, ctx.Err()
+	}
+	return b.fakeS3Bucket.ListObjects(ctx, bucket, prefix, recursive)
+}
+
+func (b *blockingBucket) RemoveObject(ctx context.Context, bucket, key string) error {
+	if b.block(ctx, "remove") {
+		return ctx.Err()
+	}
+	return b.fakeS3Bucket.RemoveObject(ctx, bucket, key)
 }
 
 func TestCleanupMariaDBBackup_BoundsAnUnreachableEndpoint(t *testing.T) {
 	prev := mariadbDumpCleanupTimeout
 	mariadbDumpCleanupTimeout = 50 * time.Millisecond
 	t.Cleanup(func() { mariadbDumpCleanupTimeout = prev })
-	bucket := &blockingBucket{}
-	c := newMariaDBStrategyTestClient(t, cleanupOperatorBackup(t), s3CredsSecret("tenant", "creds"), tenantNamespace())
-	r := &BackupReconciler{Client: c, Scheme: c.Scheme(), Recorder: record.NewFakeRecorder(20),
-		newS3ObjectRemover: func(s3Connection) (s3ObjectRemover, error) { return bucket, nil }}
+	for _, call := range []string{"list", "remove"} {
+		t.Run(call, func(t *testing.T) {
+			bucket := &blockingBucket{blockOn: call, entered: make(chan struct{})}
+			bucket.objects = []s3ObjectInfo{{Key: cleanupPrefix + cleanupDumpName, LastModified: cleanupCreated.Add(2 * time.Minute)}}
+			c := newMariaDBStrategyTestClient(t, cleanupOperatorBackup(t), s3CredsSecret("tenant", "creds"), tenantNamespace())
+			r := &BackupReconciler{Client: c, Scheme: c.Scheme(), Recorder: record.NewFakeRecorder(20),
+				newS3ObjectLister:  func(s3Connection) (s3ObjectLister, error) { return bucket, nil },
+				newS3ObjectRemover: func(s3Connection) (s3ObjectRemover, error) { return bucket, nil }}
 
-	done := make(chan ctrl.Result, 1)
-	go func() {
-		res, _ := r.cleanupMariaDBBackup(context.Background(), cleanupBackup(cleanupDumpName))
-		done <- res
-	}()
-	select {
-	case res := <-done:
-		if !requeues(res) {
-			t.Errorf("res = %+v, want the Backup held and retried", res)
-		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("cleanup did not give up on an unreachable endpoint")
+			done := make(chan ctrl.Result, 1)
+			go func() {
+				res, _ := r.cleanupMariaDBBackup(context.Background(), cleanupBackup(cleanupDumpName))
+				done <- res
+			}()
+			select {
+			case res := <-done:
+				select {
+				case <-bucket.entered:
+				default:
+					t.Fatalf("cleanup returned without reaching the blocking %s", call)
+				}
+				if !requeues(res) {
+					t.Errorf("res = %+v, want the Backup held and retried", res)
+				}
+			case <-time.After(5 * time.Second):
+				t.Fatalf("cleanup did not give up on an unreachable endpoint blocking %s", call)
+			}
+		})
 	}
 }
 
