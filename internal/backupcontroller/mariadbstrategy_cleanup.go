@@ -118,8 +118,10 @@ func (r *BackupReconciler) cleanupMariaDBBackup(ctx context.Context, backup *bac
 	if err != nil {
 		return r.retryMariaDBCleanup(ctx, backup, location, fmt.Errorf("build S3 client: %w", err))
 	}
+	absent := false
 	if name != "" {
-		other, err := contestedMariaDBDump(s3ctx, lister, r.Client, op, name)
+		other, found, err := contestedMariaDBDump(s3ctx, lister, r.Client, op, name)
+		absent = !found
 		if err != nil {
 			return r.retryMariaDBCleanup(ctx, backup, location+name, err)
 		}
@@ -158,42 +160,52 @@ func (r *BackupReconciler) cleanupMariaDBBackup(ctx context.Context, backup *bac
 	if err := r.Delete(ctx, op, &client.DeleteOptions{PropagationPolicy: &policy}); err != nil && !apierrors.IsNotFound(err) {
 		return ctrl.Result{}, fmt.Errorf("delete k8s.mariadb.com/Backup %s/%s: %w", op.Namespace, op.Name, err)
 	}
+	if absent {
+		logger.Info("MariaDB dump already absent; deleted its operator Backup", "backup", backup.Name, "dump", location+name, "endpoint", conn.Endpoint, "operatorBackup", opName)
+		if r.Recorder != nil {
+			r.Recorder.Eventf(backup, corev1.EventTypeNormal, "ArtifactAlreadyAbsent",
+				"%s was not found when listed through %s, so it was deleted earlier or never reached that storage; k8s.mariadb.com/Backup %s is deleted",
+				location+name, conn.Endpoint, opName)
+		}
+		return ctrl.Result{}, nil
+	}
 	logger.Info("deleted MariaDB dump and its operator Backup", "backup", backup.Name, "dump", location+name, "operatorBackup", opName)
 	return ctrl.Result{}, nil
 }
 
 // contestedMariaDBDump returns the name of another operator Backup on op's
 // bucket and prefix whose run, finished or not, could have written the dump
-// name, or "" when none could. The size probe that recorded name let only
-// runs finished by then contest it, and a run can upload its dump and prune
-// op's through maxRetention before it completes. A dump no longer in the
-// bucket is contested by nobody: deleting it again removes nothing.
-func contestedMariaDBDump(ctx context.Context, lister s3ObjectLister, reader client.Reader, op *mariadbtypes.Backup, name string) (string, error) {
+// name, or "" when none could, and whether the listing found the dump. The
+// size probe that recorded name let only runs finished by then contest it,
+// and a run can upload its dump and prune op's through maxRetention before
+// it completes. A dump no longer in the bucket is contested by nobody:
+// deleting it again removes nothing.
+func contestedMariaDBDump(ctx context.Context, lister s3ObjectLister, reader client.Reader, op *mariadbtypes.Backup, name string) (string, bool, error) {
 	ts, ok := parseMariaDBLogicalBackupFile(name)
 	if !ok {
-		return "", fmt.Errorf("%q is not the name of a mariadb-operator dump", name)
+		return "", false, fmt.Errorf("%q is not the name of a mariadb-operator dump", name)
 	}
 	s3 := op.Spec.Storage.S3
 	key := mariadbOperatorS3Prefix(s3.Prefix) + name
 	objects, err := lister.ListObjects(ctx, s3.Bucket, key, false)
 	if err != nil {
-		return "", fmt.Errorf("list s3://%s/%s: %w", s3.Bucket, key, err)
+		return "", false, fmt.Errorf("list s3://%s/%s: %w", s3.Bucket, key, err)
 	}
 	i := slices.IndexFunc(objects, func(obj s3ObjectInfo) bool { return obj.Key == key })
 	if i < 0 {
-		return "", nil
+		return "", false, nil
 	}
 	others, err := neighbourMariaDBRuns(ctx, reader, op, true)
 	if err != nil {
-		return "", fmt.Errorf("list operator Backups: %w", err)
+		return "", true, fmt.Errorf("list operator Backups: %w", err)
 	}
 	d := mariadbDump{Key: key, Name: name, Timestamp: ts, LastModified: objects[i].LastModified}
 	for _, other := range others {
 		if other.placesOnEitherClock(d) {
-			return other.name, nil
+			return other.name, true, nil
 		}
 	}
-	return "", nil
+	return "", true, nil
 }
 
 // activeRestoreOf returns the name of a RestoreJob that restores from

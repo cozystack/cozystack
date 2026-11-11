@@ -165,7 +165,7 @@ func assertReleasedUntouched(t *testing.T, r *BackupReconciler, rec *record.Fake
 }
 
 func TestCleanupMariaDBBackup_DeletesRecordedDumpThenOperatorBackup(t *testing.T) {
-	bucket := &fakeS3Bucket{}
+	bucket := &fakeS3Bucket{objects: []s3ObjectInfo{{Key: cleanupPrefix + cleanupDumpName, LastModified: cleanupCreated.Add(2 * time.Minute)}}}
 	r, rec := cleanupReconciler(t, bucket, cleanupOperatorBackup(t), s3CredsSecret("tenant", "creds"), tenantNamespace())
 
 	res, err := r.cleanupMariaDBBackup(context.Background(), cleanupBackup(cleanupDumpName))
@@ -512,7 +512,7 @@ func TestContestedMariaDBDump_RejectsANameWithoutADumpTime(t *testing.T) {
 	name := "backup.not-a-time.sql"
 	bucket := &fakeS3Bucket{objects: []s3ObjectInfo{{Key: cleanupPrefix + name, LastModified: cleanupCreated}}}
 	c := newMariaDBStrategyTestClient(t, op)
-	if _, err := contestedMariaDBDump(context.Background(), bucket, c, op, name); err == nil {
+	if _, _, err := contestedMariaDBDump(context.Background(), bucket, c, op, name); err == nil {
 		t.Fatal("err = nil, want the unreadable dump time reported")
 	}
 }
@@ -534,8 +534,16 @@ func TestCleanupMariaDBBackup_RecordedDumpAlreadyGoneIsNotContested(t *testing.T
 	if operatorBackupExists(t, r.Client) {
 		t.Error("operator Backup kept, want it deleted")
 	}
-	if events := drainEvents(rec); hasEvent(events, "Warning ArtifactNotDeleted") {
+	events := drainEvents(rec)
+	if hasEvent(events, "Warning ArtifactNotDeleted") {
 		t.Errorf("events = %v, want no ArtifactNotDeleted", events)
+	}
+	// The listing may have reached other storage than the dump went to, as
+	// after an endpoint move, so the absence is reported with where it was
+	// looked for rather than logged as a delete.
+	if joined := strings.Join(events, "\n"); !hasEvent(events, "Normal ArtifactAlreadyAbsent") ||
+		!strings.Contains(joined, "s3://bkt/"+cleanupPrefix+cleanupDumpName) || !strings.Contains(joined, "through s3.example:9000") {
+		t.Errorf("events = %v, want a Normal ArtifactAlreadyAbsent naming the key and the endpoint listed", events)
 	}
 }
 
