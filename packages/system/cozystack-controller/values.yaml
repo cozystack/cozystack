@@ -1,5 +1,5 @@
 cozystackController:
-  image: ghcr.io/cozystack/cozystack/cozystack-controller:v1.7.0@sha256:c39fcff5fdb2dbc96df91d082d31e458273f20b8ed04a9f785c7675bd0bf77c7
+  image: ghcr.io/cozystack/cozystack/cozystack-controller:v1.7.1-rc.1@sha256:d3540380a59bb045938a83455b3c6350f6e173953c8c3ce220b4078a96e6e72a
   debug: false
   disableTelemetry: false
   # Base URL of a Prometheus-compatible query API to fetch SeaweedFS bucket
