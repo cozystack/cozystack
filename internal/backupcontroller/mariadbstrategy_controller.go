@@ -598,7 +598,9 @@ func (r *RestoreJobReconciler) reconcileMariaDBRestore(ctx context.Context, rest
 
 	mdbRestore, err := r.findMariaDBRestoreForJob(ctx, restoreJob)
 	if err != nil {
-		return r.markRestoreJobFailed(ctx, restoreJob, fmt.Sprintf("failed to ensure k8s.mariadb.com/Restore: %v", err))
+		// Retried: failing the RestoreJob here could fail it under an
+		// operator Restore that is running.
+		return ctrl.Result{}, fmt.Errorf("find k8s.mariadb.com/Restore of RestoreJob %s/%s: %w", restoreJob.Namespace, restoreJob.Name, err)
 	}
 	// The dump is chosen once, as the operator Restore is created; one that
 	// already exists has made its choice.

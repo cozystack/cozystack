@@ -260,6 +260,28 @@ func TestReconcileMariaDBRestore_RefusesABackupBeingDeleted(t *testing.T) {
 			t.Errorf("created %d operator Restores; want the existing one followed", len(got))
 		}
 	})
+	// A failed lookup says nothing about whether the operator Restore
+	// exists, so the RestoreJob must not be failed under one that runs.
+	t.Run("an operator Restore lookup that fails is retried", func(t *testing.T) {
+		f := newMariaDBRestoreFixture(t, recordedDump(mdbRestoreDump), present(), creds)
+		f.r.APIReader = interceptor.NewClient(f.c.(client.WithWatch), interceptor.Funcs{
+			List: func(ctx context.Context, c client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
+				if _, ok := list.(*mariadbtypes.RestoreList); ok {
+					return errors.New("etcdserver: request timed out")
+				}
+				return c.List(ctx, list, opts...)
+			},
+		})
+		if _, err := f.r.reconcileMariaDBRestore(context.Background(), f.rj, f.backup); err == nil {
+			t.Error("err = nil, want the failed lookup returned for a retry")
+		}
+		if f.rj.Status.Phase == backupsv1alpha1.RestoreJobPhaseFailed {
+			t.Fatalf("RestoreJob failed on a lookup error: %s", f.rj.Status.Message)
+		}
+		if got := f.restores(t); len(got) != 0 {
+			t.Errorf("created %d operator Restores without knowing whether one exists", len(got))
+		}
+	})
 	t.Run("a Backup that cannot be read keeps the RestoreJob waiting", func(t *testing.T) {
 		f := newMariaDBRestoreFixture(t, recordedDump(mdbRestoreDump), present(), creds)
 		f.r.APIReader = interceptor.NewClient(f.c.(client.WithWatch), interceptor.Funcs{
