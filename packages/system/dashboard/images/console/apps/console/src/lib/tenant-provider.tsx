@@ -1,12 +1,30 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react"
+import { useLocation } from "react-router"
 import { useK8sList } from "@cozystack/k8s-client"
 import type { TenantNamespace } from "@cozystack/types"
 import { SELECTED_TENANT_KEY, TENANT_NAMESPACE_PREFIX } from "./constants.ts"
 import { TenantContext, tenantDisplayName, type TenantContextValue } from "./tenant-context.tsx"
 
+function linkedTenant(search: string): string | null {
+  const namespace = new URLSearchParams(search).get("namespace")
+  if (!namespace?.startsWith(TENANT_NAMESPACE_PREFIX)) return null
+  return namespace.slice(TENANT_NAMESPACE_PREFIX.length) || null
+}
+
 export function TenantProvider({ children }: { children: ReactNode }) {
+  const { search } = useLocation()
   const [selectedTenant, setSelectedTenant] = useState<string | null>(() => {
     if (typeof window === "undefined") return null
+    // Only on mount, so a tenant picked in the picker afterwards sticks.
+    const linked = linkedTenant(search)
+    if (linked) {
+      try {
+        window.localStorage.setItem(SELECTED_TENANT_KEY, linked)
+      } catch {
+        // ignore storage quota / private-mode failures
+      }
+      return linked
+    }
     return window.localStorage.getItem(SELECTED_TENANT_KEY)
   })
 
