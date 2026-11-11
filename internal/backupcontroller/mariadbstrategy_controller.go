@@ -669,6 +669,20 @@ func (e mariadbRestoreRefused) Error() string { return string(e) }
 // checked to still exist. A Backup that records no dump is resolved by
 // legacyMariaDBRestoreTargetTime.
 func (r *RestoreJobReconciler) mariadbRestoreTargetTime(ctx context.Context, rj *backupsv1alpha1.RestoreJob, backup *backupsv1alpha1.Backup, src *mariadbtypes.Backup) (string, error) {
+	// Deleting a Backup deletes its dump, and the operator restores the
+	// nearest other dump once its own is gone, so a restore must not start
+	// from a Backup being deleted. The copy in hand can predate the delete;
+	// the cleanup holds the Backup only for RestoreJobs it can already see.
+	live := &backupsv1alpha1.Backup{}
+	if err := r.apiReader().Get(ctx, client.ObjectKeyFromObject(backup), live); err != nil {
+		if apierrors.IsNotFound(err) {
+			return "", mariadbRestoreRefused(fmt.Sprintf("Backup %s/%s is gone, and its dump may be gone with it", backup.Namespace, backup.Name))
+		}
+		return "", fmt.Errorf("read Backup %s/%s: %w", backup.Namespace, backup.Name, err)
+	}
+	if !live.DeletionTimestamp.IsZero() {
+		return "", mariadbRestoreRefused(fmt.Sprintf("Backup %s/%s is being deleted, and its dump with it", backup.Namespace, backup.Name))
+	}
 	// A failed Job is Complete=True too, with reason JobFailed, and a
 	// BackupJob that took Complete=True for success made a Backup of it.
 	if cond := apimeta.FindStatusCondition(src.Status.Conditions, mariadbtypes.ConditionTypeComplete); cond != nil && cond.Reason == mariadbtypes.ConditionReasonJobFailed {
