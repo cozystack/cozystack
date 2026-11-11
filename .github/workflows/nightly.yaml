@@ -22,26 +22,50 @@ name: Nightly
 #     oci://ghcr.io/cozystack/cozystack/cozy-installer --version nightly
 #   (the floating `nightly` tag tracks the latest; each build is also published
 #    under an immutable 0.0.0-nightly.<date>.<run-id>.<attempt> tag for pinning)
+#
+# The same file runs the release-line baseline on a cron of its own: every line
+# the backport batch runs for, unit and full e2e at one pinned head, against
+# that line's own cozystack-packages artifact. See
+# docs/release/nightly-builds.md#release-line-baseline. Each half hangs from
+# one guarded root job, mirror or discover, and neither half's trigger runs the
+# other: the baseline must never republish main, and main's nightly must never
+# wait for the baseline.
 
 on:
   schedule:
     - cron: '0 2 * * *'   # daily 02:00 UTC, after build-main has settled
-  workflow_dispatch: {}
+    # The release-line baseline, early enough to finish before the backport
+    # batch at 06:23 (backport-batch.yaml) on the nights it runs.
+    - cron: '17 22 * * *'
+  workflow_dispatch:
+    inputs:
+      release_baseline:
+        description: Run the release-line baseline instead of main's nightly
+        type: boolean
+        default: false
+
+run-name: ${{ (github.event.schedule == '17 22 * * *' || inputs.release_baseline) && 'Nightly release-line baseline' || 'Nightly' }}
 
 env:
   SRC_REGISTRY: iad.ocir.io/idyksih5sir9/cozystack
   DST_REGISTRY: ghcr.io/cozystack/cozystack
 
+# A group per half, so main's nightly never queues behind a baseline that is
+# still running at 02:00, nor the other way round.
 concurrency:
-  group: nightly
+  group: ${{ (github.event.schedule == '17 22 * * *' || inputs.release_baseline) && 'nightly-release-baseline' || 'nightly' }}
   cancel-in-progress: false
 
 jobs:
   # ── Mirror the latest main build OCIR -> GHCR by digest, re-publish the
   #    packages artifact + installer chart on GHCR. No rebuild.
+  #    The root of main's nightly: build-disk and e2e need it, so this guard
+  #    is theirs too.
   mirror:
     name: Mirror images to GHCR
-    if: vars.NIGHTLY_ENABLED == 'true' || github.event_name == 'workflow_dispatch'
+    if: >-
+      (github.event_name == 'schedule' && github.event.schedule == '0 2 * * *' && vars.NIGHTLY_ENABLED == 'true')
+      || (github.event_name == 'workflow_dispatch' && !inputs.release_baseline)
     runs-on: oracle-vm-4cpu-16gb-x86-64
     timeout-minutes: 60
     permissions:
@@ -431,3 +455,484 @@ jobs:
         run: |
           make -C packages/core/testing SANDBOX_NAME="$SANDBOX_NAME" delete-cluster-container || true
           make -C packages/core/testing SANDBOX_NAME="$SANDBOX_NAME" delete || true
+
+  # ══ Release-line baseline ════════════════════════════════════════════════
+  # Each line the backport batch runs for, unit and full e2e at the head pinned
+  # by discover, against that line's own cozystack-packages artifact, so a red
+  # batch pull request can be told apart from a line that was red already. The
+  # logic is hack/release-baseline.sh, which a maintainer can run by hand. A
+  # red line is a red run and a summary from report; nothing is posted
+  # anywhere, and no pull request is read or touched.
+
+  # ── Pin each line's head and find its artifact. The root of the baseline:
+  #    every job below needs it.
+  discover:
+    name: Discover release lines
+    if: >-
+      (github.event_name == 'schedule' && github.event.schedule == '17 22 * * *' && vars.NIGHTLY_ENABLED == 'true')
+      || (github.event_name == 'workflow_dispatch' && inputs.release_baseline)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    env:
+      # The pipe falls back to direct on any proxy error (hack/common-envs.mk).
+      GOPROXY: "https://proxy.golang.org|direct"
+    outputs:
+      lines:   ${{ steps.discover.outputs.lines }}
+      rebuild: ${{ steps.discover.outputs.rebuild }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          # backport-batch lines reads the release branches and tags, and the
+          # freshness check walks a line's history.
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: Set up skopeo
+        run: command -v skopeo >/dev/null || { sudo apt-get update -qq && sudo apt-get install -y -qq skopeo; }
+
+      # The line list is backport-batch's own, so a line in its rc window joins
+      # and a retired one leaves without an edit here. Empty, malformed or
+      # unresolvable output fails this job, and with it the run.
+      - name: Pin the lines and check their artifacts
+        id: discover
+        run: |
+          set -euo pipefail
+          lines="$(hack/release-baseline.sh discover)"
+          rebuild="$(jq -c '[.[] | select(.state != "fresh") | {line, sha}]' <<<"$lines")"
+          echo "lines=$lines" >> "$GITHUB_OUTPUT"
+          echo "rebuild=$rebuild" >> "$GITHUB_OUTPUT"
+          jq -r '.[] | "\(.line) at \(.sha): cozystack-packages:\(.line) is \(.state) \(.digest)"' <<<"$lines"
+
+  # ── Rebuild a missing or stale line artifact at the pinned head, through
+  #    the line build itself, so it lands exactly as a push to the line would
+  #    publish it and the line's pull requests get its images back too.
+  rebuild:
+    name: Rebuild ${{ matrix.line }}
+    needs: [discover]
+    if: needs.discover.outputs.rebuild != '[]'
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.discover.outputs.rebuild) }}
+    permissions:
+      contents: read
+      packages: write
+    uses: ./.github/workflows/build-release.yaml
+    with:
+      line: ${{ matrix.line }}
+      sha:  ${{ matrix.sha }}
+    secrets:
+      OCIR_USER:  ${{ secrets.OCIR_USER }}
+      OCIR_TOKEN: ${{ secrets.OCIR_TOKEN }}
+
+  # ── The line's own unit lane at the pinned head: the make commands and tool
+  #    pins of its pull-requests.yaml unit job, read from the line's tree.
+  #    e2e does not need this job, so a red unit leg stops nothing else.
+  unit:
+    name: Line baseline unit (${{ matrix.line }})
+    needs: [discover]
+    runs-on: oracle-vm-4cpu-16gb-x86-64
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.discover.outputs.lines) }}
+    defaults:
+      run:
+        working-directory: line
+    steps:
+      - name: Checkout the baseline script
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          path: ci
+          persist-credentials: false
+
+      - name: Checkout ${{ matrix.line }} at the pinned head
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ matrix.sha }}
+          path: line
+          fetch-depth: 0
+          persist-credentials: false
+
+      # A pin the line leaves unset stays unset here, so the runner's own
+      # environment is not overwritten with an empty value.
+      - name: Read the line's tool pins
+        run: |
+          set -o pipefail
+          ../ci/hack/release-baseline.sh toolchain ../ci | grep -v '=$' >> "$GITHUB_ENV"
+
+      # The same install as the line's unit job. A line that pins no Bats runs
+      # its .bats files through hack/cozytest.sh and gets none.
+      - name: Set up test toolchain
+        run: |
+          set -euo pipefail
+          installed="$(helm plugin list 2>/dev/null | awk '$1 == "unittest" { print $2 }' || true)"
+          if [ "$installed" != "$HELM_UNITTEST_VERSION" ]; then
+            [ -z "$installed" ] || helm plugin uninstall unittest
+            helm plugin install https://github.com/helm-unittest/helm-unittest --version "v${HELM_UNITTEST_VERSION}"
+          fi
+          if [ -n "${BATS_VERSION:-}" ]; then
+            # Source archive bytes can change; verify the tag's commit before install.
+            if ! bats --version 2>/dev/null | grep -qx "Bats $BATS_VERSION"; then
+              bats_parent=$(mktemp -d "$RUNNER_TEMP/bats-core.XXXXXX")
+              bats_source="$bats_parent/source"
+              git clone --quiet --depth=1 --branch "v$BATS_VERSION" \
+                https://github.com/bats-core/bats-core.git "$bats_source"
+              test "$(git -C "$bats_source" rev-parse HEAD)" = "$BATS_COMMIT"
+              sudo "$bats_source/install.sh" /usr/local
+            fi
+            bats --version | grep -qx "Bats $BATS_VERSION"
+          fi
+
+      # The retrying download the line's unit job runs before its tests, for a
+      # line that has it.
+      - name: Download Go modules
+        if: hashFiles('line/hack/go-mod-download.sh') != ''
+        run: |
+          for mod in $(git ls-files go.mod '*/go.mod' | xargs -n1 dirname); do
+            (cd "$mod" && "$GITHUB_WORKSPACE/line/hack/go-mod-download.sh")
+          done
+
+      # Every command runs even after one fails, the way -k keeps the goals of
+      # one command going, so a red unit-tests does not hide the controllers.
+      - name: Run the line's unit and controller tests
+        run: |
+          cmds="$(../ci/hack/release-baseline.sh unit-commands)"
+          rc=0
+          while IFS= read -r cmd; do
+            echo "::group::$cmd"
+            # Word-split on purpose: unit-commands passes only make goals,
+            # flags and assignments.
+            $cmd || rc=1
+            echo "::endgroup::"
+          done <<< "$cmds"
+          exit "$rc"
+
+      - name: Upload unit test report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-baseline-unit-report-${{ matrix.line }}
+          path: line/_out/test-reports/
+          if-no-files-found: ignore
+
+      - name: Record the result
+        if: always()
+        env:
+          JOB_STATUS: ${{ job.status }}
+          LINE: ${{ matrix.line }}
+          SHA:  ${{ matrix.sha }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/release-baseline-result"
+          ../ci/hack/release-baseline.sh record "$RUNNER_TEMP/release-baseline-result/unit-$LINE.env" \
+            kind=unit "line=$LINE" "sha=$SHA" "result=$JOB_STATUS"
+
+      - name: Upload the result
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-baseline-result-unit-${{ matrix.line }}
+          path: ${{ runner.temp }}/release-baseline-result/
+          if-no-files-found: error
+
+  # ── Full e2e of the line at the pinned head, through the line's own
+  #    Makefile harness, on its own artifact pinned by digest. The step
+  #    sequence is the e2e job above with the GHCR closure swapped for the
+  #    line's OCIR artifact.
+  e2e-line:
+    name: Line baseline e2e (${{ matrix.line }})
+    needs: [discover, rebuild]
+    # Runs once every rebuild has ended, whatever became of it: a line whose
+    # artifact was fresh is not skipped for another line's failed build, and a
+    # line whose own rebuild failed finds no digest below and goes red.
+    if: ${{ !cancelled() && needs.discover.result == 'success' }}
+    # The sandbox headroom argument of the e2e job above, enforced by
+    # hack/sandbox-runner-headroom.bats.
+    runs-on: oracle-vm-32cpu-128gb-x86-64
+    # The full-suite ceiling of the e2e job above, held to one figure across
+    # every lane that runs the suite. It is a literal because
+    # hack/cozyreport.bats compares it with the Collect report step's own.
+    timeout-minutes: 215
+    permissions:
+      contents: read
+      packages: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.discover.outputs.lines) }}
+    defaults:
+      run:
+        working-directory: line
+    steps:
+      - name: Checkout the baseline script
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          path: ci
+          persist-credentials: false
+
+      - name: Checkout ${{ matrix.line }} at the pinned head
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ matrix.sha }}
+          path: line
+          # verify walks the line's history when the artifact is from a
+          # docs-only ancestor.
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up flux
+        uses: fluxcd/flux2/action@04acaec6161ac4fb1a82ffafa88901c03271d34f # v2.8.6
+        with:
+          version: "2.8.6"
+
+      - name: Set up skopeo and jq
+        run: |
+          missing=''
+          command -v skopeo >/dev/null || missing="$missing skopeo"
+          command -v jq >/dev/null || missing="$missing jq"
+          if [ -n "$missing" ]; then
+            sudo apt-get update -qq
+            # shellcheck disable=SC2086 # one word per package
+            sudo apt-get install -y -qq $missing
+          fi
+
+      - name: Download the rebuilt artifact's digest
+        if: matrix.state != 'fresh'
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: release-baseline-build-${{ matrix.line }}
+          path: ${{ runner.temp }}/release-baseline-build
+
+      # The digest the rebuild produced, or the fresh one discover found, and
+      # never the moving tag: verify refuses it unless it was built from the
+      # pinned head.
+      - name: Resolve the line artifact
+        id: artifact
+        env:
+          STATE: ${{ matrix.state }}
+          FOUND: ${{ matrix.digest }}
+          LINE:  ${{ matrix.line }}
+          SHA:   ${{ matrix.sha }}
+        run: |
+          set -euo pipefail
+          if [ "$STATE" = fresh ]; then
+            digest="$FOUND"
+            echo "rebuilt=false" >> "$GITHUB_OUTPUT"
+          else
+            file="$RUNNER_TEMP/release-baseline-build/packages-digest"
+            if [ ! -s "$file" ]; then
+              echo "::error::no cozystack-packages:$LINE digest after its rebuild"
+              exit 1
+            fi
+            digest="$(cat "$file")"
+            echo "rebuilt=true" >> "$GITHUB_OUTPUT"
+          fi
+          ../ci/hack/release-baseline.sh verify "$digest" "$SHA"
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+
+      - name: Stage the line artifact
+        env:
+          DIGEST: ${{ steps.artifact.outputs.digest }}
+        run: ../ci/hack/release-baseline.sh stage "$DIGEST"
+
+      - name: Set sandbox ID
+        env:
+          LINE: ${{ matrix.line }}
+        run: echo "SANDBOX_NAME=cozy-e2e-sandbox-$(echo "${GITHUB_REPOSITORY}:${GITHUB_WORKFLOW}:${GITHUB_REF}:${LINE}" | sha256sum | cut -c1-10)" >> "$GITHUB_ENV"
+
+      # Why each module, and why failing here is better than an hour later:
+      # the same step in pull-requests.yaml.
+      - name: Prepare container-lane host
+        run: |
+          set -eu
+          for m in openvswitch zfs; do
+            grep -q "^${m} " /proc/modules && continue
+            if [ "${m}" = zfs ]; then
+              sudo apt-get update -qq
+              sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq zfsutils-linux
+            fi
+            sudo modprobe "${m}" || echo "${m}: modprobe failed"
+          done
+          missing=''
+          for m in openvswitch zfs; do
+            grep -q "^${m} " /proc/modules || missing="${missing} ${m}"
+          done
+          if [ -n "${missing}" ]; then
+            echo "::error title=container-lane host::kernel module(s) could not be loaded:${missing}"
+            exit 1
+          fi
+
+      - name: Prepare environment
+        run: |
+          attempt=0
+          until make SANDBOX_NAME="$SANDBOX_NAME" prepare-env-container; do
+            attempt=$((attempt + 1))
+            if [ $attempt -ge 3 ]; then echo "Attempt $attempt failed, exiting..."; exit 1; fi
+            echo "Attempt $attempt failed, retrying..."
+            make -C packages/core/testing SANDBOX_NAME="$SANDBOX_NAME" delete-cluster-container || true
+          done
+
+      - name: Install Cozystack into sandbox
+        env:
+          # No ARP VIP in container mode: .11 is a plain control-plane node.
+          COZY_APISERVER_ENDPOINT: https://192.168.123.11:6443
+          # The nodes share the runner kernel and cannot load DRBD.
+          COZY_LINSTOR_DRBD_ENABLED: "false"
+          COZY_E2E_STORAGE_CLASS: local
+        run: |
+          if ! make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME install-cozystack; then
+            echo "❌ Install failed (no retry — diagnostics below)"
+            echo "::group::HelmRelease status"
+            docker exec "$SANDBOX_NAME" sh -c 'kubectl get hr -A -o wide 2>&1 | tail -100' || true
+            echo "::endgroup::"
+            echo "::group::not-Ready HelmReleases"
+            docker exec "$SANDBOX_NAME" sh -c 'kubectl get hr -A --no-headers 2>/dev/null | awk "\$4 != \"True\" {print \$1\" \"\$2}"' \
+              | while read -r ns name; do
+                  echo "--- $ns/$name ---"
+                  docker exec "$SANDBOX_NAME" sh -c "kubectl describe hr '$name' -n '$ns' 2>&1 | tail -50" || true
+                done
+            echo "::endgroup::"
+            exit 1
+          fi
+
+      - name: Run OpenAPI tests
+        run: |
+          make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME test-openapi
+
+      # Always the full app suite: a baseline has no diff to scope against.
+      - name: Run E2E tests (full suite)
+        env:
+          COZY_E2E_STORAGE_CLASS: local
+        run: |
+          if ! make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME test-chainsaw CHAINSAW_SUITES=""; then
+            echo "❌ Chainsaw E2E failed (see the assertion diffs or LEAKED-PODS lines above and diagnostics below)"
+            echo "::group::Diagnostics: HelmRelease status"
+            docker exec "$SANDBOX_NAME" sh -c 'kubectl get hr -A -o wide 2>&1 | tail -50' || true
+            echo "::endgroup::"
+            echo "::group::Diagnostics: recent events"
+            docker exec "$SANDBOX_NAME" sh -c 'kubectl get events -A --sort-by=.lastTimestamp 2>&1 | tail -30' || true
+            echo "::endgroup::"
+            exit 1
+          fi
+          echo "✅ All E2E tests passed"
+
+      - name: Collect chainsaw report
+        if: always()
+        run: |
+          mkdir -p _out
+          docker cp "$SANDBOX_NAME":/workspace/hack/e2e-chainsaw/chainsaw-report.xml \
+            _out/chainsaw-report.xml || true
+
+      - name: Upload chainsaw report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: chainsaw-report-${{ matrix.line }}
+          path: line/_out/chainsaw-report.xml
+          if-no-files-found: ignore
+
+      # Its own ceiling and continue-on-error for the reasons the e2e job
+      # above gives: diagnostics never decide the result, and an overrun is
+      # still recorded by the next step.
+      - name: Collect report
+        id: collect_report
+        if: always()
+        timeout-minutes: 30
+        continue-on-error: true
+        run: |
+          make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME collect-report || true
+
+      - name: Report collection overran its ceiling
+        if: always() && steps.collect_report.outcome == 'failure'
+        run: |
+          echo "::warning title=cozyreport::Collect report ended non-zero -- its timeout-minutes fired, or the step failed before the collector ran; cozyreport.tgz is missing or partial for this run"
+
+      - name: Upload cozyreport.tgz
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: cozyreport-${{ matrix.line }}
+          path: line/_out/cozyreport.tgz
+          if-no-files-found: warn
+
+      # A pass with no test cases is no pass: report counts them from the
+      # chainsaw report.
+      - name: Record the result
+        if: always()
+        env:
+          JOB_STATUS: ${{ job.status }}
+          LINE:    ${{ matrix.line }}
+          SHA:     ${{ matrix.sha }}
+          DIGEST:  ${{ steps.artifact.outputs.digest }}
+          REBUILT: ${{ steps.artifact.outputs.rebuilt }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/release-baseline-result"
+          ../ci/hack/release-baseline.sh record "$RUNNER_TEMP/release-baseline-result/e2e-$LINE.env" \
+            kind=e2e "line=$LINE" "sha=$SHA" "result=$JOB_STATUS" "digest=$DIGEST" "rebuilt=$REBUILT" \
+            junit=_out/chainsaw-report.xml
+
+      - name: Upload the result
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-baseline-result-e2e-${{ matrix.line }}
+          path: ${{ runner.temp }}/release-baseline-result/
+          if-no-files-found: error
+
+      # The compose project owns the nodes and the zpools outlive it, so both
+      # halves go, in this order.
+      - name: Tear down sandbox
+        if: always()
+        run: |
+          make -C packages/core/testing SANDBOX_NAME="$SANDBOX_NAME" delete-cluster-container || true
+          make -C packages/core/testing SANDBOX_NAME="$SANDBOX_NAME" delete || true
+
+  # ── One summary per line, and the verdict of the run. A line with no unit
+  #    or e2e result, or an e2e with no test case, is red.
+  report:
+    name: Line baseline report
+    needs: [discover, rebuild, unit, e2e-line]
+    if: ${{ always() && needs.discover.result != 'skipped' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - name: Download the results
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: release-baseline-result-*
+          merge-multiple: true
+          path: ${{ runner.temp }}/release-baseline-results
+
+      # Runs when the download found nothing too, so the summary says which
+      # result is missing instead of the run going red without one.
+      - name: Summarise each line
+        if: ${{ !cancelled() }}
+        env:
+          LINES: ${{ needs.discover.outputs.lines }}
+        run: |
+          # An unspecified shell is bash -e without pipefail, under which tee
+          # would turn a red report green.
+          set -o pipefail
+          printf '%s' "$LINES" > "$RUNNER_TEMP/lines.json"
+          mkdir -p "$RUNNER_TEMP/release-baseline-results"
+          hack/release-baseline.sh report "$RUNNER_TEMP/lines.json" "$RUNNER_TEMP/release-baseline-results" \
+            | tee -a "$GITHUB_STEP_SUMMARY"

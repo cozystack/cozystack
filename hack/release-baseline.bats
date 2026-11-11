@@ -1,6 +1,6 @@
 #!/usr/bin/env bats
 # Tests for hack/release-baseline.sh, the nightly baseline of the release
-# lines.
+# lines, and for the jobs of .github/workflows/nightly.yaml that run it.
 #
 # The registry is stubbed through skopeo and flux on PATH: a reference
 # resolves to the file under $STUB_REG named after its tag or digest, a
@@ -16,6 +16,8 @@ load test_helper
 bats_require_minimum_version 1.5.0
 
 SCRIPT="${BATS_TEST_DIRNAME}/release-baseline.sh"
+NIGHTLY="${BATS_TEST_DIRNAME}/../.github/workflows/nightly.yaml"
+BUILD_RELEASE="${BATS_TEST_DIRNAME}/../.github/workflows/build-release.yaml"
 
 setup() {
   strict_setup
@@ -573,4 +575,76 @@ record_all_green() {
     run --separate-stderr "$SCRIPT" report "$BATS_TEST_TMPDIR/matrix.json" "$BATS_TEST_TMPDIR/results"
     [ "$status" -ne 0 ] || { echo "green for matrix '$m'"; false; }
   done
+}
+
+# ── the workflow ──────────────────────────────────────────────────────────
+
+# Prints every job of nightly.yaml with the root it hangs from: mirror for
+# main's nightly, discover for the line baseline.
+roots() {
+  yq -o=json '.jobs | with_entries(.value = ([.value.needs] | flatten | map(select(. != null))))' "$NIGHTLY" \
+    | jq -r '
+        def root($j; $g): if $j == "mirror" or $j == "discover" then [$j]
+          else ([$g[$j][] | root(.; $g)[]] | unique) end;
+        . as $g | keys[] | "\(.) \(root(.; $g) | join(","))"'
+}
+
+@test "every nightly job hangs from exactly one of main's nightly and the line baseline" {
+  run roots
+  [ "$status" -eq 0 ]
+  bad=$(awk '$2 != "mirror" && $2 != "discover"' <<<"$output")
+  [ -z "$bad" ] || { echo "$bad"; false; }
+  # A job that overrides the implicit success() must still check its root.
+  for job in $(yq -r '.jobs | keys | .[]' "$NIGHTLY"); do
+    cond=$(yq -r ".jobs.\"$job\".if // \"\"" "$NIGHTLY")
+    case "$cond" in
+      *always\(\)* | *cancelled\(\)*)
+        root=$(awk -v j="$job" '$1 == j {print $2}' <<<"$output")
+        [[ "$cond" == *"needs.$root.result"* ]] || { echo "$job: $cond"; false; } ;;
+    esac
+  done
+}
+
+@test "each guarded root names the cron it belongs to, and the crons are the workflow's" {
+  crons=$(yq -r '.on.schedule[].cron' "$NIGHTLY" | sort | tr '\n' ' ')
+  [ "$crons" = "0 2 * * * 17 22 * * * " ]
+  [[ "$(yq -r .jobs.mirror.if "$NIGHTLY")" == *"github.event.schedule == '0 2 * * *'"* ]]
+  [[ "$(yq -r .jobs.mirror.if "$NIGHTLY")" == *"!inputs.release_baseline"* ]]
+  [[ "$(yq -r .jobs.discover.if "$NIGHTLY")" == *"github.event.schedule == '17 22 * * *'"* ]]
+  [[ "$(yq -r .jobs.discover.if "$NIGHTLY")" == *"&& inputs.release_baseline"* ]]
+  for root in mirror discover; do
+    [[ "$(yq -r ".jobs.$root.if" "$NIGHTLY")" == *"vars.NIGHTLY_ENABLED == 'true'"* ]]
+  done
+}
+
+@test "the baseline e2e does not wait on the unit legs, and no leg stops its siblings" {
+  needs=$(yq -r '[.jobs.e2e-line.needs[]] | join(" ")' "$NIGHTLY")
+  [[ " $needs " != *" unit "* ]]
+  for job in unit e2e-line rebuild; do
+    [ "$(yq -r ".jobs.\"$job\".strategy.\"fail-fast\"" "$NIGHTLY")" = false ]
+  done
+}
+
+@test "every step that pipes a baseline command into another sets pipefail" {
+  # An unspecified shell is bash -e without pipefail: `report | tee` would read
+  # green on a red report.
+  # A single | anywhere after the call, continuation lines included; || is not
+  # a pipe.
+  piped=$(yq -o=json '[.jobs[].steps[]?] | map(select(.run // "" | test("(?s)release-baseline\\.sh.*[^|][|][^|]")))' "$NIGHTLY")
+  [ "$(jq '[.[].name] | index("Summarise each line") != null and index("Read the line'"'"'s tool pins") != null' <<<"$piped")" = true ]
+  bad=$(jq -r '.[] | select(.run | test("set -(eu)?o pipefail") | not) | .name' <<<"$piped")
+  [ -z "$bad" ] || { echo "$bad"; false; }
+}
+
+@test "a called build-release never cancels a push build, and publishes only the line's head" {
+  [ "$(yq -r '.concurrency."cancel-in-progress"' "$BUILD_RELEASE")" = '${{ !inputs.line }}' ]
+  step=$(yq -r '.jobs.build-line.steps[] | select(.name == "Refuse a commit that is not the line'"'"'s head") | .run' "$BUILD_RELEASE")
+  [[ "$step" == *'git rev-parse "refs/remotes/origin/$LINE"'* ]]
+  [[ "$step" == *'[ "$head" != "$SHA" ]'* ]]
+}
+
+@test "a called build-release keys its concurrency on the line and builds the pinned SHA" {
+  [ "$(yq -r .concurrency.group "$BUILD_RELEASE")" = 'build-release-${{ inputs.line || github.ref_name }}' ]
+  [ "$(yq -r '.jobs.build-line.steps[] | select(.uses // "" | test("^actions/checkout@")) | .with.ref' "$BUILD_RELEASE")" = '${{ inputs.sha }}' ]
+  [ "$(yq -r '.jobs.build-line.steps[] | select(.run == "make build") | .env.IMAGE_TAG' "$BUILD_RELEASE")" = '${{ inputs.line || github.ref_name }}' ]
 }
