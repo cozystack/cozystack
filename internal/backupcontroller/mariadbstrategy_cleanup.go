@@ -231,6 +231,11 @@ func (r *BackupReconciler) activeRestoreOf(ctx context.Context, backup *backupsv
 	}
 	restores := &mariadbtypes.RestoreList{}
 	if err := r.apiReader().List(ctx, restores, client.InNamespace(backup.Namespace)); err != nil {
+		// Without the operator's CRDs no Restore can run; the operator
+		// Backup read that follows releases the Backup.
+		if apimeta.IsNoMatchError(err) {
+			return "", nil
+		}
 		return "", fmt.Errorf("list k8s.mariadb.com/Restores: %w", err)
 	}
 	for i := range restores.Items {

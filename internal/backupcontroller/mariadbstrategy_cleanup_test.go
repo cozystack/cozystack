@@ -1148,6 +1148,9 @@ func TestCleanupMariaDBBackup_BoundsAnUnreachableEndpoint(t *testing.T) {
 	}
 }
 
+// Without the mariadb-operator CRDs every k8s.mariadb.com read fails, the
+// listing of operator Restores included: no Restore can run then, so the
+// Backup is released rather than held for good.
 func TestCleanupMariaDBBackup_ReleasesWhenTheOperatorCRDIsGone(t *testing.T) {
 	bucket := &fakeS3Bucket{}
 	c := interceptor.NewClient(newMariaDBStrategyTestClient(t, tenantNamespace()).(client.WithWatch), interceptor.Funcs{
@@ -1156,6 +1159,12 @@ func TestCleanupMariaDBBackup_ReleasesWhenTheOperatorCRDIsGone(t *testing.T) {
 				return &apimeta.NoKindMatchError{GroupKind: mariadbtypes.GroupVersion.WithKind("Backup").GroupKind()}
 			}
 			return c.Get(ctx, key, obj, opts...)
+		},
+		List: func(ctx context.Context, c client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
+			if _, ok := list.(*mariadbtypes.RestoreList); ok {
+				return &apimeta.NoKindMatchError{GroupKind: mariadbtypes.GroupVersion.WithKind("Restore").GroupKind()}
+			}
+			return c.List(ctx, list, opts...)
 		},
 	})
 	r, rec := cleanupReconcilerWithClient(c, bucket)
