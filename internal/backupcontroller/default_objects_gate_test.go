@@ -2,6 +2,9 @@ package backupcontroller
 
 import (
 	"context"
+	"errors"
+	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -18,6 +21,7 @@ import (
 	k8stesting "k8s.io/client-go/testing"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	backupsv1alpha1 "github.com/cozystack/cozystack/api/backups/v1alpha1"
 )
@@ -110,12 +114,58 @@ func cozyDefaultBackupClass() *backupsv1alpha1.BackupClass {
 	}
 }
 
+// renderedEndpoint is what the chart stamps on every default object for the
+// endpoint sourceSecret carries: the steady state after a render that saw it.
+const renderedEndpoint = "https://s3.example.com"
+
 func strategyObject(kind, name string) *unstructured.Unstructured {
 	u := &unstructured.Unstructured{}
 	u.SetAPIVersion(strategyAPIGroup + "/v1alpha1")
 	u.SetKind(kind)
 	u.SetName(name)
+	u.SetAnnotations(map[string]string{endpointAnnotation: renderedEndpoint})
 	return u
+}
+
+func withEndpoint(u *unstructured.Unstructured, endpoint string) *unstructured.Unstructured {
+	u.SetAnnotations(map[string]string{endpointAnnotation: endpoint})
+	return u
+}
+
+// unannotated is an object rendered by a chart that predates the endpoint
+// annotation.
+func unannotated(u *unstructured.Unstructured) *unstructured.Unstructured {
+	u.SetAnnotations(nil)
+	return u
+}
+
+// allDefaultObjects is every object cozy-default routes to, plus the BSL, as
+// the chart renders them for sourceSecret's endpoint.
+func allDefaultObjects() []runtime.Object {
+	return []runtime.Object{
+		strategyObject("CNPG", "cozy-default-cnpg"),
+		strategyObject("MariaDB", "cozy-default-mariadb"),
+		strategyObject("Etcd", "cozy-default-etcd"),
+		strategyObject("Altinity", "cozy-default-altinity"),
+		strategyObject("Velero", "cozy-default-velero-vminstance"),
+		strategyObject("Velero", "cozy-default-velero-vmdisk"),
+		bslObject(),
+	}
+}
+
+// cosiSecret is the Secret the COSI sidecar writes for the platform bucket's
+// BucketAccess, which user-credentials.yaml renders the credentials Secret
+// from. The BucketInfo document is one read off a live cluster, with the keys
+// and the host replaced.
+func cosiSecret(endpoint string) *corev1.Secret {
+	bucketInfo := `{"metadata": {"name": "bc-b8e30337-1821-418f-a4dd-163e8016aaee", "creationTimestamp": null}, ` +
+		`"spec": {"bucketName": "bucket-1a2b", "authenticationType": "KEY", ` +
+		`"secretS3": {"endpoint": "` + endpoint + `", "region": "", "accessKeyID": "AK", "accessSecretKey": "SK"}, ` +
+		`"secretAzure": null, "protocols": ["s3"]}}`
+	return &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "tenant-root", Name: "bucket-cozy-backups-system"},
+		Data:       map[string][]byte{"BucketInfo": []byte(bucketInfo)},
+	}
 }
 
 func helmReleaseObject() *unstructured.Unstructured {
@@ -163,9 +213,10 @@ func newGate(t *testing.T, ctrlObjs []client.Object, dynObjs ...runtime.Object) 
 			Namespace: "tenant-root",
 			Name:      "bucket-cozy-backups-system",
 		},
-		VeleroNamespace:  "cozy-velero",
-		MinForceInterval: 5 * time.Minute,
-		now:              func() time.Time { return time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC) },
+		CredentialsCOSISecretName: "bucket-cozy-backups-system",
+		VeleroNamespace:           "cozy-velero",
+		MinForceInterval:          5 * time.Minute,
+		now:                       func() time.Time { return time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC) },
 	}
 	g.Interface = dyn
 	g.RESTMapper = gateRESTMapper()
@@ -193,6 +244,7 @@ func bslObject() *unstructured.Unstructured {
 	u.SetKind("BackupStorageLocation")
 	u.SetNamespace("cozy-velero")
 	u.SetName(defaultBackupStorageLocationName)
+	u.SetAnnotations(map[string]string{endpointAnnotation: renderedEndpoint})
 	return u
 }
 
@@ -259,7 +311,7 @@ func TestCheckForcesWhenObjectsMissing(t *testing.T) {
 // the cluster.
 func TestCheckNoopWhenAllPresent(t *testing.T) {
 	g, dyn := newGate(t,
-		[]client.Object{sourceSecret("bucket-1a2b"), cozyDefaultBackupClass()},
+		[]client.Object{sourceSecret("bucket-1a2b"), cosiSecret("https://s3.example.com"), cozyDefaultBackupClass()},
 		helmReleaseObject(),
 		strategyObject("CNPG", "cozy-default-cnpg"),
 		strategyObject("MariaDB", "cozy-default-mariadb"),
@@ -550,10 +602,11 @@ func TestMissingObjectsIgnoresUnmappedKinds(t *testing.T) {
 		bslObject(),
 	)
 
-	missing, err := g.missingObjects(context.Background(), bc)
+	state, err := g.inspectObjects(context.Background(), bc, "")
 	if err != nil {
-		t.Fatalf("missingObjects: %v", err)
+		t.Fatalf("inspectObjects: %v", err)
 	}
+	missing := state.missing
 	if len(missing) != 0 {
 		t.Fatalf("missing = %v, want none (unmapped kind must be ignored)", missing)
 	}
@@ -579,10 +632,11 @@ func TestMissingObjectsSkipsVeleroWhenNamespaceEmpty(t *testing.T) {
 	)
 	g.VeleroNamespace = ""
 
-	missing, err := g.missingObjects(context.Background(), bc)
+	state, err := g.inspectObjects(context.Background(), bc, "")
 	if err != nil {
-		t.Fatalf("missingObjects: %v", err)
+		t.Fatalf("inspectObjects: %v", err)
 	}
+	missing := state.missing
 	if len(missing) != 0 {
 		t.Fatalf("missing = %v, want none when Velero is disabled", missing)
 	}
@@ -630,10 +684,11 @@ func TestMissingObjectsSkipsBSLWhenVeleroAPIAbsent(t *testing.T) {
 	}
 	g.RESTMapper = m
 
-	missing, err := g.missingObjects(context.Background(), bc)
+	state, err := g.inspectObjects(context.Background(), bc, "")
 	if err != nil {
-		t.Fatalf("missingObjects: %v", err)
+		t.Fatalf("inspectObjects: %v", err)
 	}
+	missing := state.missing
 	if len(missing) != 0 {
 		t.Fatalf("missing = %v, want none when the Velero API is absent", missing)
 	}
@@ -742,5 +797,527 @@ func TestCheckToleratesAbsentHelmRelease(t *testing.T) {
 	}
 	if len(missing) == 0 {
 		t.Error("objects should still be reported as missing")
+	}
+}
+
+// TestCheckForcesCredentialsReleaseWhenEndpointStale covers the credentials
+// Secret outliving the endpoint it was rendered from. The COSI sidecar writes
+// BucketInfo once per BucketAccess, so a re-granted BucketAccess (after a
+// publishing.host change) carries the new endpoint while the credentials
+// Secret <bucket>-system rendered earlier keeps the old one: the Secret
+// exists, so the missing-Secret path never fires, and every consumer keeps
+// the dead host.
+func TestCheckForcesCredentialsReleaseWhenEndpointStale(t *testing.T) {
+	objs := append([]runtime.Object{helmReleaseObject(), credentialsHelmReleaseObject()}, allDefaultObjects()...)
+	g, dyn := newGate(t,
+		[]client.Object{sourceSecret("bucket-1a2b"), cosiSecret("https://s3.new.example.com"), cozyDefaultBackupClass()},
+		objs...,
+	)
+
+	missing, forced, err := g.Check(context.Background())
+	if err != nil {
+		t.Fatalf("Check: %v", err)
+	}
+	if !forced {
+		t.Fatal("expected the bucket release forced while its credentials Secret carries a stale endpoint")
+	}
+	if len(missing) != 1 || !strings.HasPrefix(missing[0], "Secret/bucket-cozy-backups-system-credentials") {
+		t.Fatalf("missing = %v, want the credentials Secret", missing)
+	}
+	if ann := credentialsForceAnnotations(t, dyn); ann["reconcile.fluxcd.io/forceAt"] == "" {
+		t.Errorf("bucket release not forced: %v", ann)
+	}
+	// The objects were rendered from the stale Secret and agree with it;
+	// re-rendering them before the Secret is fixed would bake the old
+	// endpoint in again.
+	if ann := forceAnnotations(t, dyn); len(ann) != 0 {
+		t.Errorf("own HelmRelease forced while the credentials Secret is stale: %v", ann)
+	}
+}
+
+// TestCheckCredentialsEndpointComparison pins the comparison against what
+// user-credentials.yaml writes for a given BucketInfo endpoint (the scheme
+// stripped, nothing else), so a Secret the chart rendered from the current
+// BucketInfo never counts as stale and the bucket release is not forced on
+// every throttle window.
+func TestCheckCredentialsEndpointComparison(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		cosi      string
+		wantForce bool
+	}{
+		{"https scheme stripped", "https://s3.example.com", false},
+		{"http scheme stripped", "http://s3.example.com", false},
+		{"bare host", "s3.example.com", false},
+		{"other host", "https://s3.new.example.com", true},
+		{"other port", "https://s3.example.com:8443", true},
+		// A forced render from a BucketInfo with no endpoint would write an
+		// empty endpoint into the Secret every driver reads (or, with the key
+		// absent, fail the bucket release's render), never a working one.
+		{"no endpoint in BucketInfo", "", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			objs := append([]runtime.Object{helmReleaseObject(), credentialsHelmReleaseObject()}, allDefaultObjects()...)
+			g, dyn := newGate(t,
+				[]client.Object{sourceSecret("bucket-1a2b"), cosiSecret(tc.cosi), cozyDefaultBackupClass()},
+				objs...,
+			)
+			if _, _, err := g.Check(context.Background()); err != nil {
+				t.Fatalf("Check: %v", err)
+			}
+			forced := credentialsForceAnnotations(t, dyn)["reconcile.fluxcd.io/forceAt"] != ""
+			if forced != tc.wantForce {
+				t.Fatalf("bucket release forced = %v, want %v", forced, tc.wantForce)
+			}
+		})
+	}
+}
+
+// TestCheckSkipsCredentialsComparisonWithoutCOSISecret covers the window in
+// which the BucketAccess is being re-granted: the COSI Secret is gone and
+// there is nothing to compare against, which is not evidence of staleness.
+func TestCheckSkipsCredentialsComparisonWithoutCOSISecret(t *testing.T) {
+	objs := append([]runtime.Object{helmReleaseObject(), credentialsHelmReleaseObject()}, allDefaultObjects()...)
+	g, dyn := newGate(t,
+		[]client.Object{sourceSecret("bucket-1a2b"), cozyDefaultBackupClass()},
+		objs...,
+	)
+
+	missing, forced, err := g.Check(context.Background())
+	if err != nil || forced || len(missing) != 0 {
+		t.Fatalf("missing = %v, forced = %v, err = %v; want a no-op", missing, forced, err)
+	}
+	if ann := credentialsForceAnnotations(t, dyn); len(ann) != 0 {
+		t.Errorf("bucket release forced with no COSI Secret to compare against: %v", ann)
+	}
+}
+
+// TestCheckSkipsCredentialsComparisonWhenUnconfigured pins both switches that
+// turn the comparison off: no COSI Secret name, and no bucket release (external
+// S3, where the Secret is admin-managed and no BucketInfo backs it).
+func TestCheckSkipsCredentialsComparisonWhenUnconfigured(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		apply func(g *DefaultObjectsGate)
+	}{
+		{"no COSI Secret name", func(g *DefaultObjectsGate) { g.CredentialsCOSISecretName = "" }},
+		{"no bucket release", func(g *DefaultObjectsGate) { g.CredentialsHelmRelease = types.NamespacedName{} }},
+		{"no bucket release name", func(g *DefaultObjectsGate) { g.CredentialsHelmRelease.Name = "" }},
+		{"no bucket release namespace", func(g *DefaultObjectsGate) { g.CredentialsHelmRelease.Namespace = "" }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			objs := append([]runtime.Object{helmReleaseObject(), credentialsHelmReleaseObject()}, allDefaultObjects()...)
+			g, dyn := newGate(t,
+				[]client.Object{sourceSecret("bucket-1a2b"), cosiSecret("https://s3.new.example.com"), cozyDefaultBackupClass()},
+				objs...,
+			)
+			tc.apply(g)
+			// The real API server rejects a Get with an empty name; the fake
+			// answers NotFound, which would hide a lookup of an unset name.
+			g.Client = interceptor.NewClient(g.Client.(client.WithWatch), interceptor.Funcs{
+				Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+					if key.Name == "" {
+						return errors.New("resource name may not be empty")
+					}
+					return c.Get(ctx, key, obj, opts...)
+				},
+			})
+			missing, forced, err := g.Check(context.Background())
+			if err != nil || forced || len(missing) != 0 {
+				t.Fatalf("missing = %v, forced = %v, err = %v; want a no-op", missing, forced, err)
+			}
+			if ann := credentialsForceAnnotations(t, dyn); len(ann) != 0 {
+				t.Errorf("bucket release forced with the comparison disabled: %v", ann)
+			}
+		})
+	}
+}
+
+// TestCheckReportsMalformedCOSISecret pins that a COSI Secret the gate cannot
+// read is an error the check counts, not a silent "not stale".
+func TestCheckReportsMalformedCOSISecret(t *testing.T) {
+	defaultObjectsCheckErrors.Reset()
+	bad := cosiSecret("")
+	bad.Data["BucketInfo"] = []byte("{not json")
+	objs := append([]runtime.Object{helmReleaseObject(), credentialsHelmReleaseObject()}, allDefaultObjects()...)
+	g, _ := newGate(t, []client.Object{sourceSecret("bucket-1a2b"), bad, cozyDefaultBackupClass()}, objs...)
+
+	if _, forced, err := g.Check(context.Background()); err == nil || forced {
+		t.Fatalf("forced = %v, err = %v; want an error", forced, err)
+	}
+	if got := testutil.ToFloat64(defaultObjectsCheckErrors.WithLabelValues("cozy-default")); got != 1 {
+		t.Fatalf("check errors = %v, want 1", got)
+	}
+}
+
+// TestCheckForcesOwnReleaseWhenObjectEndpointStale is the second half of a
+// publishing.host change: the credentials Secret now carries the new
+// endpoint, but the BSL and the default Strategies baked the old one at the
+// last render of this chart and nothing re-renders them, so every backup
+// keeps going to the dead host.
+func TestCheckForcesOwnReleaseWhenObjectEndpointStale(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		stale *unstructured.Unstructured
+		key   string
+	}{
+		{"strategy", strategyObject("CNPG", "cozy-default-cnpg"), "CNPG/cozy-default-cnpg"},
+		{"BSL", bslObject(), "BackupStorageLocation/cozy-default"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var objs []runtime.Object
+			for _, o := range allDefaultObjects() {
+				u := o.(*unstructured.Unstructured)
+				if u.GetKind() == tc.stale.GetKind() && u.GetName() == tc.stale.GetName() {
+					withEndpoint(u, "https://s3.old.example.com")
+				}
+				objs = append(objs, u)
+			}
+			objs = append(objs, helmReleaseObject(), credentialsHelmReleaseObject())
+			g, dyn := newGate(t,
+				[]client.Object{sourceSecret("bucket-1a2b"), cosiSecret("https://s3.example.com"), cozyDefaultBackupClass()},
+				objs...,
+			)
+
+			missing, forced, err := g.Check(context.Background())
+			if err != nil {
+				t.Fatalf("Check: %v", err)
+			}
+			if !forced {
+				t.Fatal("expected this chart's release forced while an object carries a stale endpoint")
+			}
+			if len(missing) != 1 || !strings.HasPrefix(missing[0], tc.key+" ") {
+				t.Fatalf("missing = %v, want only %s", missing, tc.key)
+			}
+			if ann := forceAnnotations(t, dyn); ann["reconcile.fluxcd.io/forceAt"] == "" {
+				t.Errorf("own HelmRelease not forced: %v", ann)
+			}
+			if ann := credentialsForceAnnotations(t, dyn); len(ann) != 0 {
+				t.Errorf("bucket release forced for a stale object: %v", ann)
+			}
+		})
+	}
+}
+
+// TestCheckIgnoresObjectEndpointOnExternalS3 pins that the comparison is off
+// when no bucket release is configured: with provisionBucket=false the chart
+// renders backupStorage.endpoint, not the Secret's, so the two legitimately
+// differ and forcing would loop every MinForceInterval.
+func TestCheckIgnoresObjectEndpointOnExternalS3(t *testing.T) {
+	objs := []runtime.Object{helmReleaseObject()}
+	for _, o := range allDefaultObjects() {
+		objs = append(objs, withEndpoint(o.(*unstructured.Unstructured), "https://minio.example.internal:9000"))
+	}
+	g, dyn := newGate(t, []client.Object{sourceSecret("bucket-1a2b"), cozyDefaultBackupClass()}, objs...)
+	g.CredentialsHelmRelease = types.NamespacedName{}
+
+	missing, forced, err := g.Check(context.Background())
+	if err != nil || forced || len(missing) != 0 {
+		t.Fatalf("missing = %v, forced = %v, err = %v; want a no-op", missing, forced, err)
+	}
+	if ann := forceAnnotations(t, dyn); len(ann) != 0 {
+		t.Errorf("own HelmRelease forced on external S3: %v", ann)
+	}
+}
+
+// TestCheckIgnoresObjectEndpointWithoutSecretEndpoint covers a credentials
+// Secret with no endpoint key: the chart then renders its values fallback,
+// which the gate cannot reproduce, so there is nothing to compare against.
+func TestCheckIgnoresObjectEndpointWithoutSecretEndpoint(t *testing.T) {
+	src := sourceSecret("bucket-1a2b")
+	delete(src.Data, "endpoint")
+	objs := append([]runtime.Object{helmReleaseObject(), credentialsHelmReleaseObject()}, allDefaultObjects()...)
+	g, dyn := newGate(t, []client.Object{src, cozyDefaultBackupClass()}, objs...)
+
+	if _, forced, err := g.Check(context.Background()); err != nil || forced {
+		t.Fatalf("forced = %v, err = %v; want a no-op", forced, err)
+	}
+	if ann := forceAnnotations(t, dyn); len(ann) != 0 {
+		t.Errorf("own HelmRelease forced with no endpoint to compare against: %v", ann)
+	}
+}
+
+// TestCheckKeepsForcingForUnannotatedObjects covers objects rendered by a
+// chart that predates the endpoint annotation. Their endpoint is unknown, so
+// they count as stale until a render stamps the annotation. Having requested
+// a render proves nothing: one that failed leaves them unannotated, and the
+// next unthrottled check must force again rather than fall silent, so the
+// force counter keeps reporting the render that does not land.
+func TestCheckKeepsForcingForUnannotatedObjects(t *testing.T) {
+	base := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	objs := []runtime.Object{helmReleaseObject(), credentialsHelmReleaseObject()}
+	for _, o := range allDefaultObjects() {
+		objs = append(objs, unannotated(o.(*unstructured.Unstructured)))
+	}
+	g, dyn := newGate(t, []client.Object{sourceSecret("bucket-1a2b"), cozyDefaultBackupClass()}, objs...)
+	g.lastForce = base.Add(-time.Minute)
+	g.now = func() time.Time { return base }
+
+	if missing, forced, err := g.Check(context.Background()); err != nil || forced || len(missing) != 7 {
+		t.Fatalf("throttled Check: missing = %v, forced = %v, err = %v; want 7 reported, none forced", missing, forced, err)
+	}
+
+	g.now = func() time.Time { return base.Add(5 * time.Minute) }
+	if _, forced, err := g.Check(context.Background()); err != nil || !forced {
+		t.Fatalf("first unthrottled Check: forced = %v, err = %v; want forced", forced, err)
+	}
+	first := forceAnnotations(t, dyn)["reconcile.fluxcd.io/forceAt"]
+
+	g.now = func() time.Time { return base.Add(time.Hour) }
+	missing, forced, err := g.Check(context.Background())
+	if err != nil || !forced || len(missing) != 7 {
+		t.Fatalf("after a render that left them unannotated: missing = %v, forced = %v, err = %v; want 7 reported and forced again", missing, forced, err)
+	}
+	if again := forceAnnotations(t, dyn)["reconcile.fluxcd.io/forceAt"]; again == first {
+		t.Errorf("not forced again for unannotated objects: forceAt still %q", first)
+	}
+}
+
+// TestRenderedEndpointMatchesTheChart pins renderedEndpointFor to the
+// "backupstrategy-controller.endpoint" helper, which the chart stamps as the
+// annotation: trim, strip a scheme, force https://. Any divergence makes the
+// gate see every object as stale and force this release forever.
+func TestRenderedEndpointMatchesTheChart(t *testing.T) {
+	for _, tc := range []struct{ in, want string }{
+		{"s3.example.com", "https://s3.example.com"},
+		{"s3.example.com\n", "https://s3.example.com"},
+		{" s3.example.com ", "https://s3.example.com"},
+		{"https://s3.example.com", "https://s3.example.com"},
+		{"http://s3.example.com:8333", "https://s3.example.com:8333"},
+		{"s3.example.com/prefix/", "https://s3.example.com/prefix/"},
+		// No endpoint in the Secret: the chart renders its values fallback,
+		// which the gate cannot reproduce, so it compares nothing.
+		{"", ""},
+		// Present but blank: the helper's lookup sees a non-empty value and
+		// renders the bare scheme.
+		{"\n", "https://"},
+	} {
+		if got := renderedEndpointFor([]byte(tc.in)); got != tc.want {
+			t.Errorf("renderedEndpointFor(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
+// TestForcedReleasesForNamesEachRenderingRelease pins the releases the log
+// line names: the credentials Secret, missing or stale, is repaired by the
+// bucket release, everything else by this chart's own, and both are named when
+// one check forced both.
+func TestForcedReleasesForNamesEachRenderingRelease(t *testing.T) {
+	g, _ := newGate(t, nil)
+	creds, own := g.CredentialsHelmRelease.String(), g.HelmRelease.String()
+	for _, tc := range []struct {
+		missing []string
+		want    []string
+	}{
+		{[]string{"Secret/bucket-cozy-backups-system-credentials"}, []string{creds}},
+		{[]string{`Secret/bucket-cozy-backups-system-credentials (endpoint "s3.old", COSI Secret has "s3.new")`}, []string{creds}},
+		{[]string{"Secret/bucket-cozy-backups-system-credentials-other"}, []string{own}},
+		{[]string{`CNPG/cozy-default-cnpg (endpoint "https://s3.old", want "https://s3.new")`, "Etcd/cozy-default-etcd"}, []string{own}},
+		{[]string{`Secret/bucket-cozy-backups-system-credentials (endpoint "s3.old", COSI Secret has "s3.new")`, "CNPG/cozy-default-cnpg"}, []string{creds, own}},
+	} {
+		if got := g.forcedReleasesFor(tc.missing); !slices.Equal(got, tc.want) {
+			t.Errorf("forcedReleasesFor(%v) = %v, want %v", tc.missing, got, tc.want)
+		}
+	}
+	// External S3: no bucket release, so nothing but this chart's own.
+	g.CredentialsHelmRelease = types.NamespacedName{}
+	if got := g.forcedReleasesFor([]string{"Secret/bucket-cozy-backups-system-credentials"}); !slices.Equal(got, []string{own}) {
+		t.Errorf("forcedReleasesFor without a bucket release = %v, want [%s]", got, own)
+	}
+}
+
+// TestCheckSkipsCredentialsComparisonWithoutDerivedSecret covers a
+// systemSecretName the bucket chart does not render: the same name as the COSI
+// Secret (the projector also reads a raw COSI Secret) or a Secret without the
+// endpoint key. Comparing it would report it stale on every tick, or fail the
+// check, and the missing objects would never be repaired.
+func TestCheckSkipsCredentialsComparisonWithoutDerivedSecret(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		apply func(g *DefaultObjectsGate, src *corev1.Secret)
+	}{
+		{"COSI Secret is the source", func(g *DefaultObjectsGate, src *corev1.Secret) {
+			g.CredentialsCOSISecretName = g.Config.SourceSecretName
+			src.Data["BucketInfo"] = cosiSecret("https://s3.new.example.com").Data["BucketInfo"]
+		}},
+		{"source without endpoint", func(_ *DefaultObjectsGate, src *corev1.Secret) {
+			delete(src.Data, "endpoint")
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			src := sourceSecret("bucket-1a2b")
+			var objs []runtime.Object
+			for _, o := range allDefaultObjects() {
+				if u := o.(*unstructured.Unstructured); u.GetName() != "cozy-default-cnpg" {
+					objs = append(objs, u)
+				}
+			}
+			objs = append(objs, helmReleaseObject(), credentialsHelmReleaseObject())
+			g, dyn := newGate(t, nil, objs...)
+			tc.apply(g, src)
+			g.Client = fake.NewClientBuilder().WithScheme(gateScheme()).
+				WithObjects(src, cosiSecret("https://s3.new.example.com"), cozyDefaultBackupClass()).Build()
+
+			missing, forced, err := g.Check(context.Background())
+			if err != nil {
+				t.Fatalf("Check: %v", err)
+			}
+			if !forced || len(missing) != 1 || missing[0] != "CNPG/cozy-default-cnpg" {
+				t.Fatalf("missing = %v, forced = %v; want the missing strategy repaired", missing, forced)
+			}
+			if ann := credentialsForceAnnotations(t, dyn); len(ann) != 0 {
+				t.Errorf("bucket release forced: %v", ann)
+			}
+		})
+	}
+}
+
+// TestCheckRepairsMissingObjectsWhileCredentialsUnresolved pins that a stale
+// or unreadable credentials comparison does not cost the repair of missing
+// objects the gate made before it existed. The comparison only withholds the
+// endpoint check, whose answer would be rendered from the same stale Secret.
+func TestCheckRepairsMissingObjectsWhileCredentialsUnresolved(t *testing.T) {
+	malformed := cosiSecret("")
+	malformed.Data["BucketInfo"] = []byte("{not json")
+	for _, tc := range []struct {
+		name          string
+		cosi          *corev1.Secret
+		credsHR       *unstructured.Unstructured
+		wantErr       bool
+		wantCredsHRAt bool
+	}{
+		{"stale credentials", cosiSecret("https://s3.new.example.com"), credentialsHelmReleaseObject(), false, true},
+		{"stale credentials, bucket release suspended", cosiSecret("https://s3.new.example.com"), suspended(credentialsHelmReleaseObject()), false, false},
+		{"malformed COSI Secret", malformed, credentialsHelmReleaseObject(), true, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			defaultObjectsCheckErrors.Reset()
+			defaultObjectsMissing.Reset()
+			var objs []runtime.Object
+			for _, o := range allDefaultObjects() {
+				if u := o.(*unstructured.Unstructured); u.GetName() != "cozy-default-cnpg" {
+					objs = append(objs, u)
+				}
+			}
+			objs = append(objs, helmReleaseObject(), tc.credsHR)
+			g, dyn := newGate(t, []client.Object{sourceSecret("bucket-1a2b"), tc.cosi, cozyDefaultBackupClass()}, objs...)
+
+			missing, forced, err := g.Check(context.Background())
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("err = %v, want error %v", err, tc.wantErr)
+			}
+			if !forced {
+				t.Error("forced = false, want this chart's release forced for the missing strategy")
+			}
+			if ann := forceAnnotations(t, dyn); ann["reconcile.fluxcd.io/forceAt"] == "" {
+				t.Errorf("own HelmRelease not forced for a missing strategy: %v", ann)
+			}
+			if got := credentialsForceAnnotations(t, dyn)["reconcile.fluxcd.io/forceAt"] != ""; got != tc.wantCredsHRAt {
+				t.Errorf("bucket release forced = %v, want %v", got, tc.wantCredsHRAt)
+			}
+			found := false
+			for _, m := range missing {
+				found = found || m == "CNPG/cozy-default-cnpg"
+			}
+			if !found {
+				t.Errorf("missing = %v, want CNPG/cozy-default-cnpg reported", missing)
+			}
+			if got := testutil.ToFloat64(defaultObjectsMissing.WithLabelValues("cozy-default")); got != 1 {
+				t.Errorf("missing gauge = %v, want 1", got)
+			}
+			wantErrs := 0.0
+			if tc.wantErr {
+				wantErrs = 1
+			}
+			if got := testutil.ToFloat64(defaultObjectsCheckErrors.WithLabelValues("cozy-default")); got != wantErrs {
+				t.Errorf("check errors = %v, want %v", got, wantErrs)
+			}
+		})
+	}
+}
+
+// TestCheckCountsOneErrorPerCheck pins that a check failing in two places is
+// still one check that did not reach a conclusion.
+func TestCheckCountsOneErrorPerCheck(t *testing.T) {
+	defaultObjectsCheckErrors.Reset()
+	bad := cosiSecret("")
+	bad.Data["BucketInfo"] = []byte("{not json")
+	g, _ := newGate(t, []client.Object{sourceSecret("bucket-1a2b"), bad}, helmReleaseObject(), credentialsHelmReleaseObject())
+
+	if _, _, err := g.Check(context.Background()); err == nil {
+		t.Fatal("Check succeeded with a malformed COSI Secret and no BackupClass")
+	}
+	if got := testutil.ToFloat64(defaultObjectsCheckErrors.WithLabelValues("cozy-default")); got != 1 {
+		t.Fatalf("check errors = %v, want 1", got)
+	}
+}
+
+// TestCheckSurfacesCredentialsPatchFailure pins that a failed force of the
+// bucket release is reported, not recorded as done.
+func TestCheckSurfacesCredentialsPatchFailure(t *testing.T) {
+	objs := append([]runtime.Object{helmReleaseObject(), credentialsHelmReleaseObject()}, allDefaultObjects()...)
+	g, dyn := newGate(t,
+		[]client.Object{sourceSecret("bucket-1a2b"), cosiSecret("https://s3.new.example.com"), cozyDefaultBackupClass()},
+		objs...,
+	)
+	dyn.PrependReactor("patch", "helmreleases", func(k8stesting.Action) (bool, runtime.Object, error) {
+		return true, nil, apierrors.NewForbidden(schema.GroupResource{Group: "helm.toolkit.fluxcd.io", Resource: "helmreleases"}, "bucket-cozy-backups-system", nil)
+	})
+
+	if _, forced, err := g.Check(context.Background()); err == nil || forced {
+		t.Fatalf("forced = %v, err = %v; want an error and forced=false", forced, err)
+	}
+	if !g.lastCredentialsForce.IsZero() {
+		t.Error("lastCredentialsForce advanced despite the patch failing")
+	}
+}
+
+// TestCheckForcesStaleCredentialsWhenObjectsUnreadable pins that the
+// credentials comparison needs only the two Secrets: a BackupClass or a routed
+// object the gate cannot read must not keep the stale endpoint in the
+// credentials Secret, which every other driver reads through the projector.
+func TestCheckForcesStaleCredentialsWhenObjectsUnreadable(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		backupClass bool
+		forbidCNPG  bool
+	}{
+		{"BackupClass absent", false, false},
+		{"routed Strategy unreadable", true, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			defaultObjectsCheckErrors.Reset()
+			ctrlObjs := []client.Object{sourceSecret("bucket-1a2b"), cosiSecret("https://s3.new.example.com")}
+			if tc.backupClass {
+				ctrlObjs = append(ctrlObjs, cozyDefaultBackupClass())
+			}
+			objs := append([]runtime.Object{helmReleaseObject(), credentialsHelmReleaseObject()}, allDefaultObjects()...)
+			g, dyn := newGate(t, ctrlObjs, objs...)
+			if tc.forbidCNPG {
+				dyn.PrependReactor("get", "cnpgs", func(k8stesting.Action) (bool, runtime.Object, error) {
+					return true, nil, apierrors.NewForbidden(schema.GroupResource{Group: strategyAPIGroup, Resource: "cnpgs"}, "cozy-default-cnpg", nil)
+				})
+			}
+
+			missing, forced, err := g.Check(context.Background())
+			if err == nil {
+				t.Fatal("Check succeeded although the routed objects could not be evaluated")
+			}
+			if !forced {
+				t.Error("forced = false, want the bucket release forced for its stale credentials Secret")
+			}
+			if ann := credentialsForceAnnotations(t, dyn); ann["reconcile.fluxcd.io/forceAt"] == "" {
+				t.Errorf("bucket release not forced: %v", ann)
+			}
+			if ann := forceAnnotations(t, dyn); len(ann) != 0 {
+				t.Errorf("own HelmRelease forced without a conclusive object check: %v", ann)
+			}
+			if len(missing) != 1 || !strings.HasPrefix(missing[0], "Secret/bucket-cozy-backups-system-credentials") {
+				t.Errorf("missing = %v, want the credentials Secret", missing)
+			}
+			if got := testutil.ToFloat64(defaultObjectsCheckErrors.WithLabelValues("cozy-default")); got != 1 {
+				t.Errorf("check errors = %v, want 1", got)
+			}
+		})
 	}
 }

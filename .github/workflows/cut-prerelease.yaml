@@ -48,8 +48,7 @@ concurrency:
   group: cut-prerelease
   cancel-in-progress: false
 
-# The tag write happens via the app token, not GITHUB_TOKEN, so the job needs
-# only read scope on the default token.
+# Tag and branch writes use the app token so their push events trigger CI.
 permissions:
   contents: read
 
@@ -58,6 +57,9 @@ jobs:
     name: Cut ${{ inputs.tag }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: write
 
     steps:
       # Pure-input validation first — no token minted, no checkout, so a bad tag
@@ -345,13 +347,14 @@ jobs:
       - name: Build the frozen line's packages artifact
         if: steps.freeze.outputs.created == 'true'
         env:
-          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          # workflow_dispatch can trigger a run with GITHUB_TOKEN.
+          GH_TOKEN: ${{ github.token }}
           BRANCH: release-${{ steps.parse.outputs.line }}
         run: |
           if gh workflow run build-release.yaml --ref "$BRANCH"; then
             echo "Dispatched build-release.yaml for $BRANCH; it publishes cozystack-packages:$BRANCH."
           else
-            echo "::warning::Could not dispatch build-release.yaml for $BRANCH (the CI app may lack 'actions: write')."
+            echo "::warning::Could not dispatch build-release.yaml for $BRANCH."
             echo "::warning::Until it runs, cozystack-packages:$BRANCH does not exist, and PRs onto $BRANCH test the image refs committed in the tree rather than the line's own build."
             echo "::warning::Start it by hand: gh workflow run build-release.yaml --ref $BRANCH"
           fi

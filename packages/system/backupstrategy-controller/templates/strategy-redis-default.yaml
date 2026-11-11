@@ -21,6 +21,8 @@ apiVersion: strategy.backups.cozystack.io/v1alpha1
 kind: Redis
 metadata:
   name: cozy-default-redis
+  annotations:
+    backups.cozystack.io/endpoint: {{ include "backupstrategy-controller.endpoint" . | quote }}
 spec:
   template:
     spec:

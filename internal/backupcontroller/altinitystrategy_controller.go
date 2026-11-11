@@ -2,7 +2,9 @@
 package backupcontroller
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"maps"
 	"strings"
@@ -42,6 +44,18 @@ const (
 	// re-render the strategy template with the same parameter values that
 	// were in effect at backup time.
 	altinityParamPrefix = "altinity.strategy.backups.cozystack.io/parameter/"
+
+	// altinityArchiveMetaKey records, on the Backup, the clickhouse-backup
+	// archive its Job wrote, as named by altinityArchiveName. A restore reads
+	// back exactly that archive: the newest one under the release's prefix
+	// may belong to a later Backup.
+	altinityArchiveMetaKey = "altinity.strategy.backups.cozystack.io/archive"
+
+	// altinityArchiveTimeLayout is the UTC timestamp that ends an archive
+	// name. It is fixed-width, so names sharing a prefix sort chronologically
+	// as plain strings, which is what a restore of a Backup that records no
+	// archive relies on.
+	altinityArchiveTimeLayout = "20060102T150405Z"
 
 	// Polling cadence for the Altinity Job lifecycle. Mirrors the CNPG /
 	// Velero strategy cadence so behaviour is uniform across drivers.
@@ -102,14 +116,37 @@ func backupParameters(b *backupsv1alpha1.Backup) map[string]string {
 	return out
 }
 
+// altinityArchiveName mints the archive name for one BackupJob from its
+// persisted StartedAt, so every reconcile and every Pod retry of the Job
+// writes the same archive. It keeps the clickhouse-<release>-<timestamp>
+// shape, because a Backup that records no archive is restored by the
+// timestamp in that shape.
+func altinityArchiveName(j *backupsv1alpha1.BackupJob) string {
+	return fmt.Sprintf("clickhouse-%s-%s", j.Spec.ApplicationRef.Name, j.Status.StartedAt.UTC().Format(altinityArchiveTimeLayout))
+}
+
+// altinityJobCarriesArchive reports whether the Job's Pod was rendered with
+// the archive name. A Job created by a controller that predates archive
+// names, or rendered from a strategy that names its own archives, wrote an
+// archive under another name, and recording this one would point the Backup
+// at an archive that does not exist.
+func altinityJobCarriesArchive(job *batchv1.Job, archive string) bool {
+	spec, err := json.Marshal(job.Spec.Template.Spec)
+	if err != nil {
+		return false
+	}
+	return bytes.Contains(spec, []byte(archive))
+}
+
 // renderAltinityTemplate runs the strategy's PodTemplateSpec through the
 // repository's text/template engine with the same context shape as the CNPG
 // driver: every string field is templated against the application object,
-// the release shorthand, the run mode, and the resolved parameters.
+// the release shorthand, the run mode, the archive name, and the resolved
+// parameters.
 func renderAltinityTemplate(
 	tmpl corev1.PodTemplateSpec,
 	app map[string]any,
-	releaseName, releaseNamespace, mode string,
+	releaseName, releaseNamespace, mode, archiveName string,
 	parameters map[string]string,
 	backup *backupsv1alpha1.Backup,
 ) (*corev1.PodTemplateSpec, error) {
@@ -119,8 +156,9 @@ func renderAltinityTemplate(
 			"Name":      releaseName,
 			"Namespace": releaseNamespace,
 		},
-		"Mode":       mode,
-		"Parameters": parameters,
+		"Mode":        mode,
+		"ArchiveName": archiveName,
+		"Parameters":  parameters,
 	}
 	if backup != nil {
 		// Expose ApplicationRef so restore strategies can reference the
@@ -143,6 +181,9 @@ func renderAltinityTemplate(
 				"Kind":     backup.Spec.ApplicationRef.Kind,
 				"Name":     backup.Spec.ApplicationRef.Name,
 			},
+			// In the archive-name layout, so a strategy can compare it with
+			// the timestamp an archive name ends in.
+			"TakenAt": backup.Spec.TakenAt.UTC().Format(altinityArchiveTimeLayout),
 		}
 	}
 	return template.Template(&tmpl, ctxMap)
@@ -209,12 +250,14 @@ func (r *BackupJobReconciler) reconcileAltinity(ctx context.Context, j *backupsv
 		return ctrl.Result{}, err
 	}
 
+	archive := altinityArchiveName(j)
 	rendered, err := renderAltinityTemplate(
 		strategy.Spec.Template,
 		app,
 		j.Spec.ApplicationRef.Name,
 		j.Namespace,
 		altinityModeBackup,
+		archive,
 		resolved.Parameters,
 		nil,
 	)
@@ -239,7 +282,10 @@ func (r *BackupJobReconciler) reconcileAltinity(ctx context.Context, j *backupsv
 		if j.Status.BackupRef != nil {
 			return ctrl.Result{}, nil
 		}
-		artifact, err := r.createAltinityBackupArtifact(ctx, j, resolved)
+		if !altinityJobCarriesArchive(batchJob, archive) {
+			archive = ""
+		}
+		artifact, err := r.createAltinityBackupArtifact(ctx, j, resolved, archive)
 		if err != nil {
 			return r.markBackupJobFailed(ctx, j, fmt.Sprintf("failed to create Backup artifact: %v", err))
 		}
@@ -411,16 +457,20 @@ func jobFailureMessage(j *batchv1.Job) string {
 }
 
 // createAltinityBackupArtifact materialises a Cozystack Backup carrying the
-// strategy reference and the BackupClassStrategy parameters in effect at
-// backup time. Parameters round-trip via DriverMetadata under
-// altinityParamPrefix so a later RestoreJob can re-render the strategy
-// template against the same values.
+// strategy reference, the archive the Job wrote (when known) and the
+// BackupClassStrategy parameters in effect at backup time. Parameters
+// round-trip via DriverMetadata under altinityParamPrefix so a later
+// RestoreJob can re-render the strategy template against the same values.
 func (r *BackupJobReconciler) createAltinityBackupArtifact(
 	ctx context.Context,
 	j *backupsv1alpha1.BackupJob,
 	resolved *ResolvedBackupConfig,
+	archive string,
 ) (*backupsv1alpha1.Backup, error) {
 	driverMD := map[string]string{}
+	if archive != "" {
+		driverMD[altinityArchiveMetaKey] = archive
+	}
 	for k, v := range resolved.Parameters {
 		driverMD[altinityParamPrefix+k] = v
 	}
@@ -458,6 +508,13 @@ func (r *BackupJobReconciler) createAltinityBackupArtifact(
 		existing := &backupsv1alpha1.Backup{}
 		if getErr := r.Get(ctx, types.NamespacedName{Namespace: backup.Namespace, Name: backup.Name}, existing); getErr != nil {
 			return nil, getErr
+		}
+		// A Backup outlives its BackupJob, so a BackupJob re-created under a
+		// used name meets the earlier run's Backup here. Only one recording
+		// this run's archive was created by an earlier reconcile of this run.
+		if got := existing.Spec.DriverMetadata[altinityArchiveMetaKey]; got != archive {
+			return nil, fmt.Errorf("Backup %s/%s already exists and records archive %q, not %q that this run wrote",
+				backup.Namespace, backup.Name, got, archive)
 		}
 		return existing, nil
 	}
@@ -616,6 +673,7 @@ func (r *RestoreJobReconciler) reconcileAltinityRestore(ctx context.Context, res
 		targetAppName,
 		targetNamespace,
 		altinityModeRestore,
+		backup.Spec.DriverMetadata[altinityArchiveMetaKey],
 		backupParameters(backup),
 		backup,
 	)

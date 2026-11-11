@@ -1,3 +1,54 @@
+# Chainsaw is built from source because v0.2.15 ends an assert on the first API
+# error other than NotFound, so an etcd leader change during a poll fails the
+# step long before its timeout. The patch keeps polling on transient server
+# errors. Go back to the release tarball, dropping this stage, patches/ and
+# chainsaw-transient/, once a chainsaw release carries kyverno/chainsaw#2761.
+# Go 1.26 and -trimpath follow the v0.2.15 release binary (go1.26.0); a newer
+# Go minor is not what that release was tested with.
+FROM --platform=$BUILDPLATFORM golang:1.26.8@sha256:3c3e25a4da13fd0478eed2df1eb35a0e667094a7124d3993a6a1d30f71c17e79 AS chainsaw
+ARG GOPROXY
+ARG CHAINSAW_VERSION=0.2.15
+ARG CHAINSAW_SOURCE_SHA256=04f3fc7dd8e958e4fc7d73383bc22b05827240dd2fe7a8e32ee99d8c0332da2a
+ARG TARGETOS
+ARG TARGETARCH
+ARG BUILDOS
+ARG BUILDARCH
+
+WORKDIR /workspace
+
+RUN curl -fsSL "https://github.com/kyverno/chainsaw/archive/refs/tags/v${CHAINSAW_VERSION}.tar.gz" -o /tmp/chainsaw.tar.gz \
+ && echo "${CHAINSAW_SOURCE_SHA256}  /tmp/chainsaw.tar.gz" | sha256sum -c - \
+ && tar -xzf /tmp/chainsaw.tar.gz --strip=1 \
+ && rm -f /tmp/chainsaw.tar.gz
+
+COPY patches /patches
+RUN git apply /patches/*.patch
+
+# go build never compiles a _test.go, so nothing else runs the tests of the
+# packages the patches touch. The list is read into a variable first: a for
+# loop drops the exit status of a command substitution.
+RUN files=$(git apply --numstat /patches/*.patch) || exit 1; \
+    for dir in $(printf '%s\n' "$files" | cut -f3 | grep '\.go$' | xargs -r -n1 dirname | sort -u); do \
+      (cd "$dir" && go test .) || exit 1; \
+    done
+
+RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath \
+    -ldflags "-s -w -X github.com/kyverno/chainsaw/pkg/version.BuildVersion=${CHAINSAW_VERSION}" \
+    -o /chainsaw .
+
+# The test executes chainsaw, so a cross build tests a host build of the same
+# patched tree instead of the shipped binary. The tests skip without CHAINSAW,
+# and a skip reports ok, so a skip fails the step here.
+COPY chainsaw-transient /chainsaw-transient
+RUN if [ "$TARGETOS/$TARGETARCH" = "$BUILDOS/$BUILDARCH" ]; then \
+      bin=/chainsaw; \
+    else \
+      bin=/tmp/chainsaw-host && CGO_ENABLED=0 go build -o "$bin" . || exit 1; \
+    fi; \
+    cd /chainsaw-transient && out=$(CHAINSAW="$bin" go test -count=1 -v .) || { printf '%s\n' "$out"; exit 1; }; \
+    printf '%s\n' "$out"; \
+    if printf '%s\n' "$out" | grep -q -- '--- SKIP'; then echo "chainsaw-transient skipped its tests" >&2; exit 1; fi
+
 FROM ubuntu:24.04@sha256:008173c23f95b170204355c12626cb5a965d779a7e1283b09e9cffbb1bf33ca3
 
 ARG KUBECTL_VERSION=1.33.13
@@ -5,7 +56,6 @@ ARG TALOSCTL_VERSION=1.13.5
 ARG HELM_VERSION=3.21.2
 ARG COZYHR_VERSION=1.6.1
 ARG CRUST_GATHER_VERSION=v0.15.2
-ARG CHAINSAW_VERSION=0.2.15
 ARG MC_VERSION=RELEASE.2025-08-13T08-35-41Z
 ARG FLUX_VERSION=2.8.6
 
@@ -41,9 +91,7 @@ RUN case "${TARGETARCH}" in \
 # `crust-gather serve`-able from the cozyreport artifact. Installs a static musl
 # binary as crust-gather.
 RUN curl -sSfL "https://github.com/crust-gather/crust-gather/raw/main/install.sh" | sh -s -- --version "${CRUST_GATHER_VERSION}" --bin-dir /usr/local/bin --yes
-RUN curl -sSL "https://github.com/kyverno/chainsaw/releases/download/v${CHAINSAW_VERSION}/chainsaw_${TARGETOS}_${TARGETARCH}.tar.gz" \
- | tar -xz -C /usr/local/bin chainsaw \
- && chmod +x /usr/local/bin/chainsaw
+COPY --from=chainsaw /chainsaw /usr/local/bin/chainsaw
 RUN <<'EOF'
 cat <<'EOT' >> /etc/bash.bashrc
 . /etc/bash_completion
