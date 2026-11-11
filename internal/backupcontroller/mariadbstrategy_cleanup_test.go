@@ -753,6 +753,89 @@ func restoreJobOf(name, backupName string, phase backupsv1alpha1.RestoreJobPhase
 	}
 }
 
+// operatorRestoreOf is a k8s.mariadb.com/Restore reading the dump of the
+// operator Backup backupRef, with the given Complete condition.
+func operatorRestoreOf(name, backupRef string, complete *metav1.Condition) *mariadbtypes.Restore {
+	restore := &mariadbtypes.Restore{ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: name}}
+	if backupRef != "" {
+		restore.Spec.BackupRef = &mariadbtypes.BackupReference{Name: backupRef}
+	}
+	if complete != nil {
+		restore.Status.Conditions = []metav1.Condition{*complete}
+	}
+	return restore
+}
+
+func restoreComplete(status metav1.ConditionStatus, reason string) *metav1.Condition {
+	return &metav1.Condition{Type: mariadbtypes.ConditionTypeComplete, Status: status, Reason: reason, LastTransitionTime: metav1.Now()}
+}
+
+// The RestoreJob's phase is not the restore: one failed on its deadline
+// leaves its operator Restore running, and that Restore still reads the
+// dump. Until the operator marks it Complete, as it does a finished or a
+// failed Job, the dump stays.
+func TestCleanupMariaDBBackup_WaitsForAnOperatorRestoreOfItsDump(t *testing.T) {
+	held := map[string]*metav1.Condition{
+		"running":            restoreComplete(metav1.ConditionFalse, mariadbtypes.ConditionReasonJobRunning),
+		"suspended":          restoreComplete(metav1.ConditionFalse, mariadbtypes.ConditionReasonJobSuspended),
+		"not yet reconciled": nil,
+	}
+	for name, cond := range held {
+		t.Run(name, func(t *testing.T) {
+			bucket := &fakeS3Bucket{}
+			r, rec := cleanupReconciler(t, bucket, cleanupOperatorBackup(t), s3CredsSecret("tenant", "creds"), tenantNamespace(),
+				restoreJobOf("rj", "bk", backupsv1alpha1.RestoreJobPhaseFailed), operatorRestoreOf("rj-abcde", "op-bk", cond))
+			res, err := r.cleanupMariaDBBackup(context.Background(), cleanupBackup(cleanupDumpName))
+			if err != nil || !requeues(res) || len(bucket.removed) != 0 || !operatorBackupExists(t, r.Client) {
+				t.Fatalf("got res=%+v err=%v removed=%v, want the Backup held while the operator Restore runs", res, err, bucket.removed)
+			}
+			if events := drainEvents(rec); !hasEvent(events, "Normal ArtifactCleanupWaiting") || !strings.Contains(strings.Join(events, "\n"), "k8s.mariadb.com/Restore rj-abcde") {
+				t.Errorf("events = %v, want a Normal ArtifactCleanupWaiting naming the operator Restore", events)
+			}
+		})
+	}
+	released := map[string]*mariadbtypes.Restore{
+		"completed":                  operatorRestoreOf("rj-abcde", "op-bk", restoreComplete(metav1.ConditionTrue, mariadbtypes.ConditionReasonJobComplete)),
+		"failed":                     operatorRestoreOf("rj-abcde", "op-bk", restoreComplete(metav1.ConditionTrue, mariadbtypes.ConditionReasonJobFailed)),
+		"of another operator Backup": operatorRestoreOf("rj-abcde", "op-other", nil),
+		"from storage, not a Backup": operatorRestoreOf("rj-abcde", "", nil),
+	}
+	for name, restore := range released {
+		t.Run(name, func(t *testing.T) {
+			bucket := &fakeS3Bucket{}
+			r, _ := cleanupReconciler(t, bucket, cleanupOperatorBackup(t), s3CredsSecret("tenant", "creds"), tenantNamespace(), restore)
+			res, err := r.cleanupMariaDBBackup(context.Background(), cleanupBackup(cleanupDumpName))
+			if err != nil || requeues(res) || len(bucket.removed) != 1 {
+				t.Fatalf("got res=%+v err=%v removed=%v, want the dump deleted", res, err, bucket.removed)
+			}
+		})
+	}
+	t.Run("one the cache has not seen yet", func(t *testing.T) {
+		bucket := &fakeS3Bucket{}
+		r, _ := cleanupReconciler(t, bucket, cleanupOperatorBackup(t), s3CredsSecret("tenant", "creds"), tenantNamespace())
+		r.APIReader = newMariaDBStrategyTestClient(t, operatorRestoreOf("rj-abcde", "op-bk", nil))
+		res, err := r.cleanupMariaDBBackup(context.Background(), cleanupBackup(cleanupDumpName))
+		if err != nil || !requeues(res) || len(bucket.removed) != 0 {
+			t.Fatalf("got res=%+v err=%v removed=%v, want the Backup held", res, err, bucket.removed)
+		}
+	})
+	t.Run("a failed listing deletes nothing", func(t *testing.T) {
+		bucket := &fakeS3Bucket{}
+		r, _ := cleanupReconciler(t, bucket, cleanupOperatorBackup(t), s3CredsSecret("tenant", "creds"), tenantNamespace())
+		r.APIReader = interceptor.NewClient(newMariaDBStrategyTestClient(t).(client.WithWatch), interceptor.Funcs{
+			List: func(ctx context.Context, c client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
+				if _, ok := list.(*mariadbtypes.RestoreList); ok {
+					return errors.New("etcdserver: request timed out")
+				}
+				return c.List(ctx, list, opts...)
+			},
+		})
+		if _, err := r.cleanupMariaDBBackup(context.Background(), cleanupBackup(cleanupDumpName)); err == nil || len(bucket.removed) != 0 {
+			t.Fatalf("err=%v removed=%v, want the error returned and nothing deleted", err, bucket.removed)
+		}
+	})
+}
+
 func TestCleanupMariaDBBackup_WaitsForARestoreFromIt(t *testing.T) {
 	for _, phase := range []backupsv1alpha1.RestoreJobPhase{backupsv1alpha1.RestoreJobPhaseEmpty, backupsv1alpha1.RestoreJobPhasePending, backupsv1alpha1.RestoreJobPhaseRunning} {
 		t.Run(string(phase), func(t *testing.T) {

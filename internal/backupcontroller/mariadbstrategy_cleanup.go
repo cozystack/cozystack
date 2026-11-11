@@ -59,15 +59,15 @@ func (r *BackupReconciler) cleanupMariaDBBackup(ctx context.Context, backup *bac
 
 	// The operator Restore reads the dump through the operator Backup, so
 	// neither may go while a restore from this Backup runs.
-	restore, err := r.activeRestoreOf(ctx, backup)
+	restore, err := r.activeRestoreOf(ctx, backup, opName)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
 	if restore != "" {
-		logger.Debug("holding MariaDB Backup cleanup while a restore from it runs", "backup", backup.Name, "restorejob", restore)
+		logger.Debug("holding MariaDB Backup cleanup while a restore from it runs", "backup", backup.Name, "restore", restore)
 		if r.Recorder != nil {
 			r.Recorder.Eventf(backup, corev1.EventTypeNormal, "ArtifactCleanupWaiting",
-				"RestoreJob %s is restoring from this Backup; its dump is deleted once the restore finishes. Annotate the Backup %s=true to release it now and leave the dump",
+				"%s is restoring from this Backup; its dump is deleted once the restore finishes. Annotate the Backup %s=true to release it now and leave the dump",
 				restore, mariadbSkipArtifactCleanupAnnotation)
 		}
 		return ctrl.Result{RequeueAfter: mariadbCleanupRetryInterval}, nil
@@ -208,9 +208,14 @@ func contestedMariaDBDump(ctx context.Context, lister s3ObjectLister, reader cli
 	return "", true, nil
 }
 
-// activeRestoreOf returns the name of a RestoreJob that restores from
-// backup and has not finished, or "".
-func (r *BackupReconciler) activeRestoreOf(ctx context.Context, backup *backupsv1alpha1.Backup) (string, error) {
+// activeRestoreOf names a restore from backup that has not finished: a
+// RestoreJob of it, or an operator Restore reading the dump of opName, the
+// operator Backup it was made of; "" when there is none. The operator
+// Restore is checked on its own because a RestoreJob can fail, on its
+// deadline, while the Restore it created keeps reading the dump.
+// mariadb-operator marks a Restore Complete=True once its Job has
+// completed or failed.
+func (r *BackupReconciler) activeRestoreOf(ctx context.Context, backup *backupsv1alpha1.Backup, opName string) (string, error) {
 	list := &backupsv1alpha1.RestoreJobList{}
 	if err := r.apiReader().List(ctx, list, client.InNamespace(backup.Namespace)); err != nil {
 		return "", fmt.Errorf("list RestoreJobs: %w", err)
@@ -221,7 +226,20 @@ func (r *BackupReconciler) activeRestoreOf(ctx context.Context, backup *backupsv
 			continue
 		}
 		if rj.Status.Phase != backupsv1alpha1.RestoreJobPhaseSucceeded && rj.Status.Phase != backupsv1alpha1.RestoreJobPhaseFailed {
-			return rj.Name, nil
+			return "RestoreJob " + rj.Name, nil
+		}
+	}
+	restores := &mariadbtypes.RestoreList{}
+	if err := r.apiReader().List(ctx, restores, client.InNamespace(backup.Namespace)); err != nil {
+		return "", fmt.Errorf("list k8s.mariadb.com/Restores: %w", err)
+	}
+	for i := range restores.Items {
+		restore := &restores.Items[i]
+		if restore.Spec.BackupRef == nil || restore.Spec.BackupRef.Name != opName {
+			continue
+		}
+		if !apimeta.IsStatusConditionTrue(restore.Status.Conditions, mariadbtypes.ConditionTypeComplete) {
+			return "k8s.mariadb.com/Restore " + restore.Name, nil
 		}
 	}
 	return "", nil
