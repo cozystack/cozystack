@@ -201,3 +201,27 @@ load test_helper
     fi
   done
 }
+
+@test "the proxmox-network package is enabled for its suite and dropped from every other run" {
+  # It is opt-in in the iaas bundle, so the install has to ask for it; the
+  # selector's complement then takes it out of any run that does not select
+  # the proxmox-network suite, which is what keeps it off the other lanes.
+  manifest=$(hack/e2e-platform-packages.sh)
+  enabled=$(printf '%s\n' "$manifest" | yq '.spec.components.platform.values.bundles.enabledPackages | join(",")')
+  case ",$enabled," in
+    *,cozystack.proxmox-network,*) ;;
+    *) echo "enabledPackages lacks cozystack.proxmox-network: $enabled" >&2; return 1 ;;
+  esac
+
+  other=$(hack/select-install.sh --disabled postgres)
+  case " $other " in
+    *" cozystack.proxmox-network "*) ;;
+    *) echo "a postgres-only run keeps cozystack.proxmox-network installed" >&2; return 1 ;;
+  esac
+  own=$(hack/select-install.sh --disabled proxmox-network)
+  for pkg in cozystack.proxmox-network cozystack.capi-provider-ipam-in-cluster; do
+    case " $own " in
+      *" $pkg "*) echo "the proxmox-network run disables $pkg, which it needs" >&2; return 1 ;;
+    esac
+  done
+}

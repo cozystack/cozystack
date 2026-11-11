@@ -1,0 +1,253 @@
+{{- /*
+Three ValidatingAdmissionPolicies keep Cluster API machines on the platform's
+networks. They judge what the kubernetes and kubernetes-nodes charts render
+from tenant values; tenants have no write access to these kinds themselves.
+
+- proxmox-network-zone-binding, one binding per zone with the zone object as
+  its parameter (paramKind). It covers the zone's own bridge: a NIC on it must
+  be a (bridge, VLAN, pool) triple of a network the namespace owns in that
+  zone, and in a namespace that owns such a network a machine must declare
+  network.default, or the VM keeps the template's NIC. It also keeps the
+  zone's uplink VLAN off every other bridge and every NIC off the zone's
+  uplink bridges. Every binding judges only its zone's bridge, so a namespace
+  with networks in two zones passes both. With the zone object gone, its
+  binding denies every machine (parameterNotFoundAction: Deny): the zone and
+  the binding render from the same table, so this only happens when someone
+  deletes the zone by hand.
+
+- proxmox-network-cluster-pools, from the values: in a namespace that owns a
+  network, a ProxmoxCluster's own ipv4Config may hold nothing but gateways of
+  that namespace's networks. capmox builds a pool from ipv4Config and gives
+  an address from it to any machine without a pool reference, which would
+  undo the platform pool. The kubernetes chart renders exactly that sentinel.
+
+- proxmox-network-raw-networks, from the values, only with rawNetworks Warn
+  or Deny: every machine NIC must sit on a zone bridge with a platform pool.
+  Allow leaves clusters on the raw bridge/vlan path alone (the default, for
+  the migration).
+
+UPDATE is judged only when the network part of the spec changes: capmox
+keeps updating its machines, and the capmox webhook does not refuse a changed
+network on an existing ProxmoxMachine. Objects being deleted are skipped.
+
+Every CEL expression reads capmox's own fields: ProxmoxMachine and
+ProxmoxMachineTemplate spec.network.default and .additionalDevices (bridge,
+vlan, ipv4PoolRef), ProxmoxCluster spec.ipv4Config.addresses.
+*/}}
+{{- define "proxmox-network.specVariables" -}}
+- name: isMachine
+  expression: "request.kind.kind != 'ProxmoxCluster'"
+- name: spec
+  expression: "request.kind.kind == 'ProxmoxMachineTemplate' ? object.spec.template.spec : object.spec"
+- name: oldSpec
+  expression: >-
+    oldObject == null ? {} :
+    (request.kind.kind == 'ProxmoxMachineTemplate' ? oldObject.spec.template.spec : oldObject.spec)
+- name: current
+  expression: >-
+    variables.isMachine
+      ? (has(variables.spec.network) ? variables.spec.network : {})
+      : (has(variables.spec.ipv4Config) ? variables.spec.ipv4Config : {})
+- name: previous
+  expression: >-
+    variables.isMachine
+      ? (has(variables.oldSpec.network) ? variables.oldSpec.network : {})
+      : (has(variables.oldSpec.ipv4Config) ? variables.oldSpec.ipv4Config : {})
+- name: changed
+  expression: "oldObject == null || variables.current != variables.previous"
+- name: nics
+  expression: >-
+    !variables.isMachine || !has(variables.spec.network) ? [] :
+    (has(variables.spec.network.default) ? [variables.spec.network.default] : []) +
+    (has(variables.spec.network.additionalDevices) ? variables.spec.network.additionalDevices : [])
+- name: triples
+  expression: >-
+    variables.nics.map(n,
+      has(n.vlan) && has(n.ipv4PoolRef) && n.ipv4PoolRef.kind == 'InClusterIPPool'
+        ? n.bridge + '/' + string(n.vlan) + '/' + n.ipv4PoolRef.name
+        : (has(n.vlan) ? n.bridge + '/' + string(n.vlan) : n.bridge))
+{{- end }}
+{{- define "proxmox-network.resourceRules" -}}
+resourceRules:
+- apiGroups: ["infrastructure.cluster.x-k8s.io"]
+  apiVersions: ["*"]
+  operations: ["CREATE", "UPDATE"]
+  resources: ["proxmoxmachines", "proxmoxmachinetemplates", "proxmoxclusters"]
+{{- end }}
+{{- define "proxmox-network.notBeingDeleted" -}}
+- name: not-being-deleted
+  expression: "!has(object.metadata.deletionTimestamp)"
+{{- end }}
+{{- if .Values.admission.enabled }}
+{{- $zoneBridges := list }}
+{{- $gateways := dict }}
+{{- range .Values.zones }}
+{{- $zoneBridges = append $zoneBridges .bridge }}
+{{- range .networks }}
+{{- $_ := set $gateways .namespace (append (get $gateways .namespace | default list) .gateway) }}
+{{- end }}
+{{- end }}
+{{- if .Capabilities.APIVersions.Has "proxmox.cozystack.io/v1alpha1/ProxmoxNetworkZone" }}
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: proxmox-network-zone-binding
+spec:
+  failurePolicy: Fail
+  paramKind:
+    apiVersion: proxmox.cozystack.io/v1alpha1
+    kind: ProxmoxNetworkZone
+  matchConstraints:
+    {{- include "proxmox-network.resourceRules" . | nindent 4 }}
+  matchConditions:
+    {{- include "proxmox-network.notBeingDeleted" . | nindent 4 }}
+  variables:
+  {{- include "proxmox-network.specVariables" . | nindent 2 }}
+  - name: zoneNetworks
+    expression: >-
+      has(params.spec.networks)
+        ? params.spec.networks.filter(n, n.namespace == request.namespace) : []
+  - name: owns
+    expression: "variables.zoneNetworks.size() > 0"
+  - name: allowed
+    expression: >-
+      variables.zoneNetworks.map(n, params.spec.bridge + '/' + string(n.vlan) + '/pxnet-' + n.name)
+  validations:
+  - expression: >-
+      !variables.changed || !variables.isMachine || !variables.owns ||
+      (has(variables.spec.network) && has(variables.spec.network.default))
+    messageExpression: >-
+      'namespace ' + request.namespace + ' owns Proxmox networks in zone ' + params.metadata.name +
+      ', so a machine must declare network.default; without it the VM keeps the template NIC, which may sit on an infrastructure bridge'
+  - expression: >-
+      !variables.changed || variables.nics.all(n, n.bridge != params.spec.bridge ||
+        (has(n.vlan) && has(n.ipv4PoolRef) && n.ipv4PoolRef.kind == 'InClusterIPPool' &&
+         (n.bridge + '/' + string(n.vlan) + '/' + n.ipv4PoolRef.name) in variables.allowed))
+    messageExpression: >-
+      'a NIC on ' + params.spec.bridge + ' (Proxmox network zone ' + params.metadata.name +
+      ') must use a network of namespace ' + request.namespace + ' (bridge/vlan/pool one of: ' +
+      (variables.owns ? variables.allowed.join(', ') : 'none') + '); got ' +
+      variables.triples.filter(t, t.startsWith(params.spec.bridge + '/') || t == params.spec.bridge).join(', ')
+  - expression: >-
+      !variables.changed || !has(params.spec.uplinkVLAN) ||
+      variables.nics.all(n, n.bridge == params.spec.bridge || !has(n.vlan) || n.vlan != params.spec.uplinkVLAN)
+    messageExpression: >-
+      'a NIC outside ' + params.spec.bridge + ' may not use VLAN ' + string(params.spec.uplinkVLAN) +
+      ', the uplink of Proxmox network zone ' + params.metadata.name + '; got ' +
+      variables.nics.filter(n, n.bridge != params.spec.bridge && has(n.vlan) && n.vlan == params.spec.uplinkVLAN)
+        .map(n, n.bridge + '/' + string(n.vlan)).join(', ')
+  - expression: >-
+      !variables.changed || !has(params.spec.uplinkBridges) ||
+      variables.nics.all(n, !(n.bridge in params.spec.uplinkBridges))
+    messageExpression: >-
+      'a NIC may not use ' + params.spec.uplinkBridges.join(', ') +
+      ': these bridges enslave the parent device of the uplink of Proxmox network zone ' + params.metadata.name +
+      ', so a machine on them reaches the zone trunk; got ' +
+      variables.nics.filter(n, n.bridge in params.spec.uplinkBridges)
+        .map(n, has(n.vlan) ? n.bridge + '/' + string(n.vlan) : n.bridge).join(', ')
+{{- range .Values.zones }}
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: proxmox-network-zone-binding-{{ .name }}
+spec:
+  policyName: proxmox-network-zone-binding
+  paramRef:
+    name: {{ .name }}
+    parameterNotFoundAction: Deny
+  validationActions:
+    {{- toYaml $.Values.admission.validationActions | nindent 4 }}
+{{- end }}
+{{- end }}
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: proxmox-network-cluster-pools
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+    - apiGroups: ["infrastructure.cluster.x-k8s.io"]
+      apiVersions: ["*"]
+      operations: ["CREATE", "UPDATE"]
+      resources: ["proxmoxclusters"]
+  matchConditions:
+    {{- include "proxmox-network.notBeingDeleted" . | nindent 4 }}
+  variables:
+  {{- include "proxmox-network.specVariables" . | nindent 2 }}
+  - name: gateways
+    expression: {{ $gateways | toJson | quote }}
+  - name: owns
+    expression: "request.namespace in variables.gateways"
+  validations:
+  - expression: >-
+      !variables.changed || !variables.owns ||
+      (has(variables.spec.ipv4Config) && has(variables.spec.ipv4Config.addresses) &&
+       variables.spec.ipv4Config.addresses.all(a, a in variables.gateways[request.namespace]))
+    messageExpression: >-
+      'namespace ' + request.namespace + ' owns Proxmox networks, so the ProxmoxCluster ipv4Config may list only their gateways (' +
+      variables.gateways[request.namespace].join(', ') + '): capmox hands out every other address to machines without a pool reference'
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: proxmox-network-cluster-pools
+spec:
+  policyName: proxmox-network-cluster-pools
+  validationActions:
+    {{- toYaml .Values.admission.validationActions | nindent 4 }}
+{{- $raw := .Values.admission.rawNetworks | default "Allow" }}
+{{- if not (has $raw (list "Allow" "Warn" "Deny")) }}
+{{- fail (printf "admission.rawNetworks must be Allow, Warn or Deny, got %q" $raw) }}
+{{- end }}
+{{- if ne $raw "Allow" }}
+{{- $exempt := concat (list "kube-system" .Release.Namespace) (.Values.admission.exemptNamespaces | default list) | uniq }}
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: proxmox-network-raw-networks
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+    - apiGroups: ["infrastructure.cluster.x-k8s.io"]
+      apiVersions: ["*"]
+      operations: ["CREATE", "UPDATE"]
+      resources: ["proxmoxmachines", "proxmoxmachinetemplates"]
+  matchConditions:
+  - name: not-a-platform-namespace
+    expression: >-
+      !request.namespace.startsWith('cozy-') && !(request.namespace in {{ $exempt | toJson }})
+    {{- include "proxmox-network.notBeingDeleted" . | nindent 2 }}
+  variables:
+  {{- include "proxmox-network.specVariables" . | nindent 2 }}
+  - name: zoneBridges
+    expression: {{ $zoneBridges | toJson | quote }}
+  validations:
+  - expression: >-
+      !variables.changed || variables.nics.all(n, n.bridge in variables.zoneBridges &&
+        has(n.vlan) && has(n.ipv4PoolRef) && n.ipv4PoolRef.kind == 'InClusterIPPool')
+    messageExpression: >-
+      'every machine NIC must be on a Proxmox network zone bridge (' + variables.zoneBridges.join(', ') +
+      ') with a platform IP pool: set proxmox.network.name instead of bridge/vlan; got ' +
+      variables.triples.join(', ')
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: proxmox-network-raw-networks
+spec:
+  policyName: proxmox-network-raw-networks
+  validationActions:
+    {{- if eq $raw "Deny" }}
+    - Deny
+    {{- else }}
+    - Warn
+    - Audit
+    {{- end }}
+{{- end }}
+{{- end }}

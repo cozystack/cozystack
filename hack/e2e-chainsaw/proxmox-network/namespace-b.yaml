@@ -1,0 +1,10 @@
+# Tenant B. Tenant A is the Test's own namespace (spec.namespace), which
+# Chainsaw creates and deletes the same way.
+#
+# Plain namespaces rather than Tenant applications: the package's pools and
+# the admission policies key on the namespace alone, and a Tenant would add
+# its own release to install and tear down.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: tenant-e2epxb
