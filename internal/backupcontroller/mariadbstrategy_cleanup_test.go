@@ -866,6 +866,21 @@ func TestCleanupMariaDBBackup_WaitsForARestoreFromIt(t *testing.T) {
 			t.Fatalf("got res=%+v err=%v removed=%v, want the Backup held while the restore runs", res, err, bucket.removed)
 		}
 	})
+	t.Run("a failed listing deletes nothing", func(t *testing.T) {
+		bucket := &fakeS3Bucket{}
+		r, _ := cleanupReconciler(t, bucket, cleanupOperatorBackup(t), s3CredsSecret("tenant", "creds"), tenantNamespace())
+		r.APIReader = interceptor.NewClient(newMariaDBStrategyTestClient(t).(client.WithWatch), interceptor.Funcs{
+			List: func(ctx context.Context, c client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
+				if _, ok := list.(*backupsv1alpha1.RestoreJobList); ok {
+					return errors.New("etcdserver: request timed out")
+				}
+				return c.List(ctx, list, opts...)
+			},
+		})
+		if _, err := r.cleanupMariaDBBackup(context.Background(), cleanupBackup(cleanupDumpName)); err == nil || len(bucket.removed) != 0 || !operatorBackupExists(t, r.Client) {
+			t.Fatalf("err=%v removed=%v, want the error returned and nothing deleted", err, bucket.removed)
+		}
+	})
 	t.Run("finished restores and restores of other Backups do not hold it", func(t *testing.T) {
 		bucket := &fakeS3Bucket{}
 		r, _ := cleanupReconciler(t, bucket, cleanupOperatorBackup(t), s3CredsSecret("tenant", "creds"), tenantNamespace(),
