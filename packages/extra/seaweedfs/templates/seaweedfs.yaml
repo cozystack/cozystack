@@ -279,7 +279,7 @@ spec:
             type: "persistentVolumeClaim"
             size: "{{ $pool.size | default $.Values.volume.size }}"
             {{- with ($pool.storageClass | default $.Values.volume.storageClass) }}
-            storageClass: "{{ . }}"
+            storageClass: {{ . | quote }}
             {{- end }}
             maxVolumes: 0
           extraArgs:
@@ -295,7 +295,7 @@ spec:
             type: "persistentVolumeClaim"
             size: "{{ $zone.size | default $.Values.volume.size }}"
             {{- with ($zone.storageClass | default $.Values.volume.storageClass) }}
-            storageClass: "{{ . }}"
+            storageClass: {{ . | quote }}
             {{- end }}
             maxVolumes: 0
           nodeSelector: |
@@ -320,7 +320,7 @@ spec:
             type: "persistentVolumeClaim"
             size: "{{ $pool.size | default $zone.size | default $.Values.volume.size }}"
             {{- with ($pool.storageClass | default $zone.storageClass | default $.Values.volume.storageClass) }}
-            storageClass: "{{ . }}"
+            storageClass: {{ . | quote }}
             {{- end }}
             maxVolumes: 0
           nodeSelector: |
