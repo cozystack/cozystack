@@ -39,7 +39,9 @@ type s3ObjectLister interface {
 }
 
 type s3ObjectRemover interface {
-	// RemoveObject deletes key; a key that does not exist is not an error.
+	// RemoveObject deletes key. S3 answers 204 for a key that does not
+	// exist and minio-go takes 204 as success; a backend answering a
+	// missing key with any other status makes it an error.
 	RemoveObject(ctx context.Context, bucket, key string) error
 }
 
