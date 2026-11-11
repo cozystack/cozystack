@@ -207,27 +207,33 @@ func mainMerges(base, mainHead string) ([]*original, []string, error) {
 	var merges []*original
 	var other []string
 	for _, m := range list {
-		// The subject is the first paragraph, its lines joined, as git reads it.
-		msg := strings.TrimRight(msgs[m.oid].message, "\n")
-		subject, body, _ := strings.Cut(msg, "\n\n")
-		subject = strings.ReplaceAll(subject, "\n", " ")
 		o := &original{merge: m.oid, parents: m.parents, merged: msgs[m.oid].committed}
-		if pr := mergePRRE.FindStringSubmatch(subject); pr != nil {
-			o.number, _ = strconv.Atoi(pr[1])
-			body = strings.TrimLeft(body, "\n")
-			o.title, body, _ = strings.Cut(body, "\n")
-		} else if pr := prNumberRE.FindStringSubmatchIndex(subject); pr != nil {
-			o.number, _ = strconv.Atoi(subject[pr[2]:pr[3]])
-			o.title = strings.TrimSpace(subject[:pr[0]])
-		}
+		o.number, o.title, o.body = mergedPR(msgs[m.oid].message)
 		if o.number <= 0 || o.parents > 2 {
 			other = append(other, m.oid)
 			continue
 		}
-		o.body = strings.TrimLeft(body, "\n")
 		merges = append(merges, o)
 	}
 	return merges, other, nil
+}
+
+// mergedPR reads the pull request a commit on main's first-parent line
+// merged from its message, with its title and body; 0 when it names none.
+func mergedPR(message string) (int, string, string) {
+	// The subject is the first paragraph, its lines joined, as git reads it.
+	subject, body, _ := strings.Cut(strings.TrimRight(message, "\n"), "\n\n")
+	subject = strings.ReplaceAll(subject, "\n", " ")
+	number, title := 0, ""
+	if pr := mergePRRE.FindStringSubmatch(subject); pr != nil {
+		number, _ = strconv.Atoi(pr[1])
+		body = strings.TrimLeft(body, "\n")
+		title, body, _ = strings.Cut(body, "\n")
+	} else if pr := prNumberRE.FindStringSubmatchIndex(subject); pr != nil {
+		number, _ = strconv.Atoi(subject[pr[2]:pr[3]])
+		title = strings.TrimSpace(subject[:pr[0]])
+	}
+	return number, title, strings.TrimLeft(body, "\n")
 }
 
 // prCommits lists what an original brings to a line, one pick each: for a

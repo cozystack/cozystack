@@ -70,6 +70,15 @@ func (a *app) notify(args []string) int {
 	if err != nil {
 		return a.fail(err)
 	}
+	// With no batch open there is nothing to report on and nowhere to write,
+	// but a record nobody can read is said all the same.
+	src, err := findLineRecord(a.gh, l, pr)
+	if err != nil {
+		return a.fail(err)
+	}
+	if c := src.closingOpen(); c != nil {
+		return a.fail(fmt.Errorf("batch pull request #%d is being closed; backport-batch run --line %s --push finishes it", c.PR, l.branch()))
+	}
 	if pr == nil {
 		return 0
 	}
@@ -77,9 +86,9 @@ func (a *app) notify(args []string) int {
 	if err != nil {
 		return a.fail(err)
 	}
-	deferred, err := parseDeferred(pr.Body, l)
-	if err != nil {
-		return a.fail(fmt.Errorf("batch pull request #%d: %w", pr.Number, err))
+	deferred := map[int]deferredEntry{}
+	if src.open {
+		deferred = src.rec.deferred()
 	}
 	var conflicts, waiting []int
 	for n, e := range deferred {
@@ -173,6 +182,9 @@ func (a *app) comment(pr *pullRequest, mention string, today time.Time, text []s
 	if err := f.Close(); err != nil {
 		return a.fail(err)
 	}
+	if err := a.stillOpen(pr.Number); err != nil {
+		return a.fail(err)
+	}
 	if ours != nil {
 		err = a.gh.editComment(ours.ID, f.Name())
 	} else {
@@ -198,7 +210,7 @@ func (a *app) lines(args []string) int {
 	if err != nil {
 		return a.fail(err)
 	}
-	pol, err := a.policy(mainHead)
+	pol, _, err := a.policy(mainHead)
 	if err != nil {
 		return a.fail(err)
 	}

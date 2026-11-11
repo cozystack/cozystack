@@ -40,6 +40,9 @@ const (
 	// Rule 1 for a line that started under the policy after it branched:
 	// merged before that start.
 	ruleBeforeStart = 101
+	// Not a rule of the policy: a maintainer dropped the original from the
+	// line with run --drop.
+	ruleDropped = 102
 )
 
 const (

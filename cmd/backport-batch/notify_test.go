@@ -148,7 +148,8 @@ func TestNotifyFindsTheBotsComment(t *testing.T) {
 	ours.User.Login, ours.User.Type = bot, "Bot"
 	other := issueComment{ID: 8, Body: notifyMarker + "\nplanted"}
 	other.User.Login, other.User.Type = "renovate[bot]", "Bot"
-	pr := notifyPR("20261019", "")
+	// The bot writes the record into every body it opens.
+	pr := notifyPR("20261019", deferredBlock(notifyLine, nil, nil, nil))
 	pr.User.Login, pr.User.Type = bot, "Bot"
 	gh := &fakeGH{prs: []pullRequest{pr}, issueComments: []issueComment{ours, other}, bot: bot}
 	if code, stdout, stderr := notifyRun(gh, "--push"); code != 0 || !strings.Contains(stdout, "has been open since") {
@@ -172,7 +173,7 @@ func TestNotifyFailsOnAnUnreadablePermission(t *testing.T) {
 	}
 
 	const bot = "cozystack-ci[bot]"
-	pr := notifyPR("20261019", "")
+	pr := notifyPR("20261019", deferredBlock(notifyLine, nil, nil, nil))
 	pr.User.Login, pr.User.Type = bot, "Bot"
 	ours := issueComment{ID: 7, Body: notifyMarker + "\nearlier"}
 	ours.User.Login, ours.User.Type = "maintainer", "User"
@@ -200,6 +201,32 @@ func TestNotifyRefuses(t *testing.T) {
 	pr.User.Login = "someone"
 	if code, stdout, _ := notifyRun(&fakeGH{prs: []pullRequest{pr}}, "--push"); code != 0 || stdout != "" {
 		t.Errorf("notify on a batch someone untrusted opened = %d, %q; want nothing", code, stdout)
+	}
+}
+
+// notify reads the line's record the way the other commands do, and stays
+// silent with no batch open, but a record it cannot read, or one that says
+// its open batch is being closed, stops it.
+func TestNotifyValidatesTheRecord(t *testing.T) {
+	sha := strings.Repeat("a", 40)
+	closingRecord := strings.Replace(v2(""), `"closing":null`, `"closing":{"pr":91,"branch":"backport-batch/release-1.1-20261002","head":"`+sha+`"}`, 1)
+	block := func(json string) string { return "text\n\n" + deferredFence + "\n" + json + "\n```\n" }
+	for _, tc := range []struct {
+		name  string
+		pr    pullRequest
+		code  int
+		quiet bool
+	}{
+		{"a clean closed record", recordPR(91, "closed", "maintainer", block(v2(""))), 0, true},
+		{"a malformed record", recordPR(91, "closed", "maintainer", block(`{"line":`)), 2, false},
+		{"a closed record that was closing", recordPR(91, "closed", "maintainer", block(closingRecord)), 0, true},
+		{"an open record that is closing", recordPR(91, "open", "maintainer", block(closingRecord)), 2, false},
+	} {
+		gh := &fakeGH{prs: []pullRequest{tc.pr}}
+		code, stdout, stderr := notifyRun(gh, "--push")
+		if code != tc.code || tc.quiet && (stdout != "" || stderr != "") || len(gh.issueComments) != 0 {
+			t.Errorf("%s: notify = %d, %q, %q, %d comments; want %d and nothing written", tc.name, code, stdout, stderr, len(gh.issueComments), tc.code)
+		}
 	}
 }
 
@@ -284,5 +311,26 @@ func TestRunWithNothingToPick(t *testing.T) {
 	}
 	if f.remoteHead(batchBranch1) != "" || len(gh.created) != 0 {
 		t.Errorf("pushed %q and opened %q with nothing picked", f.remoteHead(batchBranch1), gh.created)
+	}
+}
+
+// notify writes its comment only after GitHub says the batch is still open,
+// so a batch closed while notify reads it is not written to, whether the
+// comment would be new or an update of its own.
+func TestNotifyWritesNothingOnABatchClosedMeanwhile(t *testing.T) {
+	for _, update := range []bool{false, true} {
+		t.Run(map[bool]string{false: "a new comment", true: "an update"}[update], func(t *testing.T) {
+			gh := &fakeGH{prs: []pullRequest{notifyPR("20261023", recordBody(5))}}
+			if update {
+				ours := issueComment{ID: 7, Body: notifyMarker + "\nearlier"}
+				ours.User.Login, ours.User.Type = "maintainer", "User"
+				gh.issueComments = []issueComment{ours}
+			}
+			gh.after = map[string]func(){"comments": func() { gh.find(90).State = "closed" }}
+			code, _, stderr := notifyRun(gh, "--push")
+			if code != 2 || !strings.Contains(stderr, "batch pull request #90 is closed now; nothing is written to it") || len(gh.closedWrites) != 0 || update && gh.issueComments[0].Body != notifyMarker+"\nearlier" {
+				t.Errorf("notify = %d, closed writes %q, comments %+v; want 2 and nothing written:\n%s", code, gh.closedWrites, gh.issueComments, stderr)
+			}
+		})
 	}
 }

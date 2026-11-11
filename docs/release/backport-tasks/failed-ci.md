@@ -33,6 +33,8 @@ It rebuilds the branch locally without those originals and prints the new body, 
 
 It replaces the batch branch only if nobody pushed onto it since the rebuild read it, and updates the pull request body. CI runs again on the new head; if it fails again on another original, repeat from step 1.
 
+When the culprits are everything the batch carries, there is no branch left to push: the body printed without `--push` says the batch is closing, and `--push` records the deferrals in the batch pull request, closes it and deletes its branch, still only if nobody pushed onto it since. The next batch tries them again. If it stops part way, the next `run --push` on the line finishes the close, and says so.
+
 ### Never
 
 - Defer an original the failure does not reach, to make the batch green by taking out more than the culprit.

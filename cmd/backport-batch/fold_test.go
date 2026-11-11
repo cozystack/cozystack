@@ -330,3 +330,21 @@ func TestFold(t *testing.T) {
 		}
 	})
 }
+
+// A resolution of an original a maintainer dropped from the line is refused:
+// the drop is the decision that it does not go there.
+func TestFoldRefusesADroppedOriginal(t *testing.T) {
+	w := newFoldWorld(t)
+	sha := strings.Repeat("a", 40)
+	rec := strings.Replace(v2(""), `"dropped":[{"original":8,"merge":"`+sha+`"`, `"dropped":[{"original":5,"merge":"`+w.mc5+`"`, 1)
+	rec = strings.Replace(rec, `"deferred":[{"original":5,"commit":"`+sha+`","files":["app/five.txt"]},`, `"deferred":[`, 1)
+	rec = strings.Replace(rec, `"stale":[9]`, `"stale":[]`, 1)
+	w.gh.prs[0].Body = "text\n\n" + deferredFence + "\n" + rec + "\n```\n"
+	if _, err := parseRecord(w.gh.prs[0].Body, notifyLine); err != nil {
+		t.Fatal(err)
+	}
+	code, stdout, stderr := w.f.exec(w.gh, "fold", "--line", "release-1.1", "--original", "5", "--commit", w.resolution())
+	if code != 1 || !strings.Contains(stdout, "#5 is not one the batch takes: a maintainer's drop, dropped on #90: needs #4") {
+		t.Errorf("fold = %d, %q, %s; want a refusal naming the drop", code, stdout, stderr)
+	}
+}

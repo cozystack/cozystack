@@ -196,6 +196,13 @@ func TestGHCLI(t *testing.T) {
 	if want := "api -X GET repos/{owner}/{repo}/pulls -f state=open -f base=release-1.6 -f per_page=100"; called() != want {
 		t.Errorf("gh %q, want gh %q", called(), want)
 	}
+	write("[]")
+	if _, err := (ghCLI{}).recentPulls("release-1.6", 2); err != nil {
+		t.Fatal(err)
+	}
+	if want := "api -X GET repos/{owner}/{repo}/pulls -f state=all -f base=release-1.6 -f sort=created -f direction=desc -f per_page=100 -f page=2"; called() != want {
+		t.Errorf("gh %q, want gh %q", called(), want)
+	}
 	var page []string
 	for i := range openPullsCap {
 		page = append(page, fmt.Sprintf(`{"number":%d}`, i+1))
@@ -230,11 +237,32 @@ func TestGHCLI(t *testing.T) {
 
 	// A batch pull request carries no label: the release workflows act on a
 	// pull request cozystack-ci[bot] opened only when it has the release label.
-	write("")
-	if err := (ghCLI{}).createPull("release-1.7", batchBranch1, "fix(backport): batch", "/tmp/body.md"); err != nil {
-		t.Fatal(err)
+	write("https://github.com/cozystack/cozystack/pull/5300\n")
+	if n, url, err := (ghCLI{}).createPull("release-1.7", batchBranch1, "fix(backport): batch", "/tmp/body.md"); err != nil || n != 5300 || url != "https://github.com/cozystack/cozystack/pull/5300" {
+		t.Errorf("createPull = %d, %q, %v; want the pull request gh printed", n, url, err)
 	}
 	if want := "pr create --draft --base release-1.7 --head " + batchBranch1 + " --title fix(backport): batch --body-file /tmp/body.md"; called() != want {
+		t.Errorf("gh %q, want gh %q", called(), want)
+	}
+	write("Warning: 1 uncommitted change\n")
+	if _, _, err := (ghCLI{}).createPull("release-1.7", batchBranch1, "fix(backport): batch", "/tmp/body.md"); err == nil {
+		t.Error("createPull took output that is no pull request URL")
+	}
+	write(`{"number":90,"state":"closed","merged_at":"2026-10-26T12:00:00Z","head":{"ref":"x","sha":"y"}}`)
+	if pr, err := (ghCLI{}).pull(90); err != nil || pr.State != "closed" || pr.MergedAt == nil {
+		t.Errorf("pull = %+v, %v; want #90 merged", pr, err)
+	}
+	if want := "api repos/{owner}/{repo}/pulls/90"; called() != want {
+		t.Errorf("gh %q, want gh %q", called(), want)
+	}
+	if _, err := (ghCLI{}).pull(91); err == nil {
+		t.Error("pull took GitHub's answer about another pull request")
+	}
+	write("")
+	if err := (ghCLI{}).closePull(90); err != nil {
+		t.Fatal(err)
+	}
+	if want := "pr close 90"; called() != want {
 		t.Errorf("gh %q, want gh %q", called(), want)
 	}
 	write("")

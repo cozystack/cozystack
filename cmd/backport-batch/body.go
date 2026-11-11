@@ -190,25 +190,11 @@ type deferredRecord struct {
 	Deferred []deferredEntry `json:"deferred"`
 }
 
-// deferredBlock is the machine-readable list of what the batch defers. One
-// line of JSON: encoding/json escapes newlines and <, > and &, so nothing in a
-// file name or a reason can end the fence or open HTML. It leaves bidi and
-// zero-width characters as they are, so file names go through clean first,
-// as the reason does.
+// deferredBlock is a version 1 record, which batches carried before records
+// had a version. encoding/json leaves bidi and zero-width characters as they
+// are, so file names go through clean first, as the reason does.
 func deferredBlock(l line, conflicts, held, waiting []pick) string {
-	rec := deferredRecord{Line: l.branch(), Deferred: []deferredEntry{}}
-	for _, p := range conflicts {
-		files := cleanFiles(p.files[:min(len(p.files), filesKept)])
-		rec.Deferred = append(rec.Deferred, deferredEntry{Original: p.v.o.number, Commit: p.failed, Files: files, More: len(p.files) - len(files) + p.more})
-	}
-	for _, p := range held {
-		rec.Deferred = append(rec.Deferred, deferredEntry{Original: p.v.o.number, Files: []string{}, Reason: capped(oneLine(clean(p.reason, false)), titleLimit)})
-	}
-	for _, p := range waiting {
-		files := cleanFiles(p.files[:min(len(p.files), filesKept)])
-		rec.Deferred = append(rec.Deferred, deferredEntry{Original: p.v.o.number, Files: files, More: len(p.files) - len(files) + p.more, Workflows: true})
-	}
-	data, _ := json.Marshal(rec)
+	data, _ := json.Marshal(deferredRecord{Line: l.branch(), Deferred: deferredEntries(conflicts, held, waiting)})
 	return deferredFence + "\n" + string(data) + "\n```"
 }
 
@@ -220,54 +206,13 @@ func cleanFiles(files []string) []string {
 	return out
 }
 
-// parseDeferred reads what a batch body defers: exactly one block, for this
-// line, naming each original once.
+// parseDeferred reads what a batch body's record defers.
 func parseDeferred(body string, l line) (map[int]deferredEntry, error) {
-	var blocks []string
-	lines := strings.Split(strings.ReplaceAll(body, "\r\n", "\n"), "\n")
-	for i := 0; i < len(lines); i++ {
-		if strings.TrimSpace(lines[i]) != deferredFence {
-			continue
-		}
-		if i+2 >= len(lines) || strings.TrimSpace(lines[i+2]) != "```" {
-			return nil, fmt.Errorf("the %s block is not one line of JSON", deferredFence)
-		}
-		blocks = append(blocks, lines[i+1])
-		i += 2
+	rec, err := parseRecord(body, l)
+	if err != nil {
+		return nil, err
 	}
-	switch len(blocks) {
-	case 0:
-		return map[int]deferredEntry{}, nil
-	case 1:
-	default:
-		return nil, fmt.Errorf("the body holds %d %s blocks", len(blocks), deferredFence)
-	}
-	dec := json.NewDecoder(strings.NewReader(blocks[0]))
-	dec.DisallowUnknownFields()
-	var rec deferredRecord
-	if err := dec.Decode(&rec); err != nil {
-		return nil, fmt.Errorf("reading the %s block: %w", deferredFence, err)
-	}
-	if rec.Line != l.branch() {
-		return nil, fmt.Errorf("the %s block is for %q, not %s", deferredFence, rec.Line, l.branch())
-	}
-	out := map[int]deferredEntry{}
-	for _, d := range rec.Deferred {
-		if d.Original <= 0 {
-			return nil, fmt.Errorf("the %s block names original %d", deferredFence, d.Original)
-		}
-		if d.Commit != "" && checkSHA(d.Commit) != nil {
-			return nil, fmt.Errorf("the %s block names commit %q for #%d", deferredFence, d.Commit, d.Original)
-		}
-		if d.Workflows && (d.Commit != "" || d.Reason != "") {
-			return nil, fmt.Errorf("the %s block has #%d wait for a maintainer and defers it as well", deferredFence, d.Original)
-		}
-		if _, dup := out[d.Original]; dup {
-			return nil, fmt.Errorf("the %s block names #%d twice", deferredFence, d.Original)
-		}
-		out[d.Original] = d
-	}
-	return out, nil
+	return rec.deferred(), nil
 }
 
 // prTitle is built from the line and the date alone, never from carried text.
@@ -276,7 +221,7 @@ func prTitle(l line, date string) string {
 }
 
 // skipRules are the rules a skipped original is reported under, in order.
-var skipRules = []int{ruleBeforeStart, ruleOnLine, ruleType, ruleBreaking, ruleTouches, ruleNewer}
+var skipRules = []int{ruleBeforeStart, ruleOnLine, ruleType, ruleBreaking, ruleTouches, ruleNewer, ruleDropped}
 
 // report is what one run put on the batch branch and what it left out.
 type report struct {
@@ -295,6 +240,41 @@ type report struct {
 	start     time.Time
 	// shapes says, for an original on the branch, what it brought.
 	shapes map[*verdict]string
+	// missing are originals the policy takes that the run neither tried nor
+	// found anywhere.
+	missing []*verdict
+	// opts is how the run was asked to classify, and built what it read.
+	opts  runOptions
+	built builtFrom
+	// blocks are the record and the report the body ends with.
+	blocks string
+	// closing is the close of the open batch this run leaves carrying
+	// nothing.
+	closing *closing
+	// dropped are the maintainers' drops the record keeps.
+	dropped []droppedEntry
+}
+
+// ruleName is how output names what kept an original out: the policy's
+// number for its own rules, and words for what the policy does not number.
+func ruleName(rule int) string {
+	switch rule {
+	case ruleSkipLabel:
+		return labelSkip
+	case ruleBeforeStart:
+		return "rule 1, before the line's start"
+	case ruleDropped:
+		return "a maintainer's drop"
+	}
+	return "rule " + strconv.Itoa(rule)
+}
+
+// listTitle titles the list of what a rule skipped, a drop among them.
+func (r *report) listTitle(rule int) string {
+	if rule == ruleDropped {
+		return "Dropped from " + codeSpan(r.line.branch()) + " by a maintainer"
+	}
+	return r.ruleTitle(rule)
 }
 
 func (r *report) ruleTitle(rule int) string {
@@ -382,7 +362,7 @@ func (r *report) what(details map[int]bool) string {
 		if !details[rule] {
 			left = ", too many to list here; the run's output lists them"
 		}
-		fmt.Fprintf(&b, "- %s: %d%s\n", r.ruleTitle(rule), len(items), left)
+		fmt.Fprintf(&b, "- %s: %d%s\n", r.listTitle(rule), len(items), left)
 	}
 	if r.other > 0 {
 		fmt.Fprintf(&b, "- Commits on `main` that merged no pull request: %d\n", r.other)
@@ -390,20 +370,22 @@ func (r *report) what(details map[int]bool) string {
 	for _, rule := range skipRules {
 		items := r.skipped[rule]
 		if len(items) > 0 && details[rule] {
-			fmt.Fprintf(&b, "\n<details><summary>%s</summary>\n\n", r.ruleTitle(rule))
+			fmt.Fprintf(&b, "\n<details><summary>%s</summary>\n\n", r.listTitle(rule))
 			for _, v := range items {
 				fmt.Fprintf(&b, "- %s %s, %s\n", prLink(v.o.number), titleSpan(v.o.title), titleSpan(v.reason))
 			}
 			b.WriteString("\n</details>\n")
 		}
 	}
-	b.WriteString("\n" + deferredBlock(r.line, r.deferred, r.held, r.waiting) + "\n")
+	b.WriteString("\n" + r.blocks + "\n")
 	return b.String()
 }
 
 // outcome is what became of an original a label overrode.
 func (r *report) outcome(v *verdict) string {
 	switch {
+	case slices.Contains(r.stale, v) && v.rule == ruleDropped:
+		return "dropped, but still on this branch; take it out with `backport-batch run --defer`"
 	case slices.Contains(r.stale, v):
 		return "still on this branch, picked before the label; take it out with `backport-batch run --defer`"
 	case v.label == labelSkip:
@@ -417,7 +399,7 @@ func (r *report) outcome(v *verdict) string {
 	case slices.ContainsFunc(r.waiting, func(p pick) bool { return p.v == v }):
 		return "waiting for a maintainer: it changes " + codeSpan(workflowsDir)
 	case v.rule != 0:
-		return "skipped by rule " + strconv.Itoa(v.rule) + ", " + titleSpan(v.reason)
+		return "skipped by " + ruleName(v.rule) + ", " + titleSpan(v.reason)
 	}
 	return "not picked"
 }

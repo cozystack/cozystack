@@ -34,10 +34,13 @@ Usage:
   backport-batch run   --line release-X.Y [--onto SHA] [--date YYYY-MM-DD] [--no-workflow-files] [--push] [--policy REF]
   backport-batch run   --line release-X.Y --continue [--no-workflow-files] [--push] [--policy REF]
   backport-batch run   --line release-X.Y --defer N[,N] --reason TEXT [--push] [--policy REF]
+  backport-batch run   --line release-X.Y --drop N[,N] --reason TEXT [--push] [--policy REF]
+  backport-batch run   --line release-X.Y --undrop N[,N] [--push] [--policy REF]
   backport-batch check --line release-X.Y [--cut] [--policy REF]
   backport-batch fold  --line release-X.Y --original N --commit SHA [--policy REF]
   backport-batch verify --line release-X.Y [--head SHA]
   backport-batch notify --line release-X.Y [--mention org/team|login] [--push]
+  backport-batch report --pr N [--id ID] [--json]
   backport-batch lines [--policy REF]
 
 run    Builds backport-batch/<line>-<yyyymmdd> in this working tree, off
@@ -53,7 +56,13 @@ run    Builds backport-batch/<line>-<yyyymmdd> in this working tree, off
        --defer rebuilds the open batch off origin/<line> without those
        originals and records them as deferred, for --reason: the batch keeps
        them out, the next one tries them again. --push replaces the branch,
-       leased on the head the rebuild started from.
+       leased on the head the rebuild started from; when nothing is left it
+       closes the batch PR instead, after recording why in it.
+       --drop drops originals from the line for --reason: the line's record
+       keeps them out of this batch and every later one. One the open batch
+       carries is taken off it as --defer would; otherwise only the record
+       changes. --undrop withdraws a drop. Both need an open batch PR whose
+       record they change.
 check  Exits 1 while a change the policy takes is neither on the line nor on
        the open batch PR, 0 when nothing is, 2 when it cannot tell. With --cut,
        the gate before an rc or a patch is cut, it also exits 1 while a change
@@ -69,11 +78,18 @@ notify Prints what waits on the open batch PR for a maintainer: a batch
        open for 3 days or more, its deferred conflicts, and the originals
        that change workflows. --push keeps one comment on the PR that says
        what waits, mentioning --mention.
+report Prints a report batch PR N keeps: the one its body carries, or the
+       one --id names, read from its comments or its body. --json prints the
+       report as it is stored. It writes nothing, so it reads merged and
+       closed batches too.
 lines  Prints the release lines the batch runs for, newest first.
 
 The policy is docs/release/backports.md. run, check, fold and lines read its
 policy block from that page on origin/main, or on --policy REF. Every command
-but notify, which reads only GitHub, fetches origin first.
+but notify and report fetches origin first. notify reads only GitHub; report
+reads GitHub, and for a report that keeps drops also this clone's history,
+which has to hold the main and line heads the report was made from: report
+never fetches on its own.
 
 BACKPORT_BATCH_BOT names the bot the scheduled batch writes as,
 <app>[bot], cozystack-ci[bot] when unset: a batch pull request or a notify
@@ -93,15 +109,18 @@ type app struct {
 	now    func() time.Time
 	// policyRef is where the policy page is read from; origin/main when empty.
 	policyRef string
+	// tool is the commit backport-batch was built from, for the record.
+	tool string
 }
 
 func main() {
-	a := &app{gh: ghCLI{bot: batchBotLogin(os.LookupEnv)}, stdout: os.Stdout, stderr: os.Stderr, now: time.Now}
+	a := &app{gh: ghCLI{bot: batchBotLogin(os.LookupEnv)}, stdout: os.Stdout, stderr: os.Stderr, now: time.Now, tool: toolVersion()}
 	os.Exit(a.main(os.Args[1:]))
 }
 
 func (a *app) main(args []string) int {
 	a.stdout, a.stderr = textWriter{a.stdout}, textWriter{a.stderr}
+	a.gh = &permCache{github: a.gh, perms: map[string]string{}}
 	if len(args) == 0 {
 		fmt.Fprint(a.stderr, usageText)
 		return 2
@@ -120,6 +139,8 @@ func (a *app) main(args []string) int {
 		return a.verify(args[1:])
 	case "notify":
 		return a.notify(args[1:])
+	case "report":
+		return a.report(args[1:])
 	case "lines":
 		return a.lines(args[1:])
 	case "-h", "--help", "help":
@@ -198,11 +219,24 @@ type batch struct {
 	newer    *line
 	lineHead string
 	mainHead string
-	base     string
-	other    []string
-	verdicts []*verdict
-	pr       *pullRequest
-	prHead   string
+	// newerHead is the newer line's head, and policyAt the commit the
+	// policy was read from.
+	newerHead string
+	policyAt  string
+	base      string
+	other     []string
+	verdicts  []*verdict
+	pr        *pullRequest
+	prHead    string
+	// picks is what the open batch pull request carries beyond the line.
+	picks *history
+	// src is the line's record and where it was found, and drops its drops
+	// that name an original of this batch.
+	src   recordSource
+	drops map[int]droppedEntry
+	// lineHist and newerHist are what the line and the newer line carry,
+	// read once for every original judged.
+	lineHist, newerHist *history
 	// start is when the line started under the policy, zero for its fork point.
 	start time.Time
 	// textUntil is the batch-only day: what a commit's text says counts as
@@ -224,18 +258,20 @@ func fetch() error {
 	return err
 }
 
-func (a *app) policy(mainHead string) (*policy, error) {
+// policy reads the policy and says from which commit.
+func (a *app) policy(mainHead string) (*policy, string, error) {
 	at := mainHead
 	if a.policyRef != "" {
 		if strings.HasPrefix(a.policyRef, "-") {
-			return nil, fmt.Errorf("--policy %q is not a ref", a.policyRef)
+			return nil, "", fmt.Errorf("--policy %q is not a ref", a.policyRef)
 		}
 		var err error
 		if at, err = resolve(a.policyRef); err != nil {
-			return nil, err
+			return nil, "", err
 		}
 	}
-	return readPolicy(at)
+	pol, err := readPolicy(at)
+	return pol, at, err
 }
 
 // prepare reads the line, main and the open batch pull request, each pinned to
@@ -246,7 +282,7 @@ func (a *app) prepare(l line) (*batch, error) {
 	if b.mainHead, err = resolve("refs/remotes/" + remote + "/main"); err != nil {
 		return nil, err
 	}
-	pol, err := a.policy(b.mainHead)
+	pol, policyAt, err := a.policy(b.mainHead)
 	if err != nil {
 		return nil, err
 	}
@@ -260,7 +296,7 @@ func (a *app) prepare(l line) (*batch, error) {
 	if b.lineHead, err = resolve("refs/remotes/" + remote + "/" + l.branch()); err != nil {
 		return nil, err
 	}
-	b.start, b.textUntil = pol.starts[l.branch()], pol.batchOnly
+	b.start, b.textUntil, b.policyAt = pol.starts[l.branch()], pol.batchOnly, policyAt
 	out, err := git("merge-base", "--end-of-options", b.mainHead, b.lineHead)
 	if err != nil {
 		return nil, fmt.Errorf("%s shares no history with main: %w", l.branch(), err)
@@ -271,17 +307,14 @@ func (a *app) prepare(l line) (*batch, error) {
 		return nil, err
 	}
 	b.other = other
-	lineHist, err := readHistory(b.lineHead, b.mainHead, b.textUntil)
-	if err != nil {
+	if b.lineHist, err = readHistory(b.lineHead, b.mainHead, b.textUntil); err != nil {
 		return nil, err
 	}
-	var newerHist *history
 	if b.newer != nil {
-		newerHead, err := resolve("refs/remotes/" + remote + "/" + b.newer.branch())
-		if err != nil {
+		if b.newerHead, err = resolve("refs/remotes/" + remote + "/" + b.newer.branch()); err != nil {
 			return nil, err
 		}
-		if newerHist, err = readHistory(newerHead, b.mainHead, b.textUntil); err != nil {
+		if b.newerHist, err = readHistory(b.newerHead, b.mainHead, b.textUntil); err != nil {
 			return nil, err
 		}
 	}
@@ -300,27 +333,43 @@ func (a *app) prepare(l line) (*batch, error) {
 	if err != nil {
 		return nil, err
 	}
-	var prPicks *history
 	if pr != nil {
 		b.pr = pr
 		if b.prHead, err = batchHead(pr); err != nil {
 			return nil, err
 		}
-		if prPicks, err = readPicks(b.prHead, b.lineHead, b.textUntil); err != nil {
+		if b.picks, err = readPicks(b.prHead, b.lineHead, b.textUntil); err != nil {
 			return nil, err
 		}
 	}
+	if b.src, err = findLineRecord(a.gh, l, pr); err != nil {
+		return nil, err
+	}
+	if b.drops, err = b.bindDrops(merges); err != nil {
+		return nil, err
+	}
 	for _, o := range merges {
-		v, err := judge(o, labels[o.number], b.start, lineHist, b.newer, newerHist)
-		if err != nil {
+		v := &verdict{o: o, label: labels[o.number]}
+		if err := b.judge(v, b.drops); err != nil {
 			return nil, err
-		}
-		if v.rule == 0 && prPicks != nil {
-			v.onBatch, _ = prPicks.found(v.o, v.commits)
 		}
 		b.verdicts = append(b.verdicts, v)
 	}
 	return b, nil
+}
+
+// judge judges v again under drops, and finds it on the open batch when the
+// policy takes it.
+func (b *batch) judge(v *verdict, drops map[int]droppedEntry) error {
+	j, err := judge(v.o, v.label, b.start, b.lineHist, b.newer, b.newerHist, drops)
+	if err != nil {
+		return err
+	}
+	*v = *j
+	if v.rule == 0 && b.picks != nil {
+		v.onBatch, _ = b.picks.found(v.o, v.commits)
+	}
+	return nil
 }
 
 // overrides maps each pull request merged into main that carries a backport/
@@ -344,8 +393,9 @@ func overrides(gh github) (map[int]string, error) {
 // started under the policy after it branched takes nothing merged before that
 // start. backport/skip keeps an original out whatever the rules say, and
 // backport/include lifts the start and rules 2 to 4, but not what the line or
-// the newer line carries.
-func judge(o *original, label string, start time.Time, lineHist *history, newer *line, newerHist *history) (*verdict, error) {
+// the newer line carries. A maintainer's drop keeps out what the line does
+// not carry, include or not.
+func judge(o *original, label string, start time.Time, lineHist *history, newer *line, newerHist *history, drops map[int]droppedEntry) (*verdict, error) {
 	v := &verdict{o: o, label: label}
 	if label == labelSkip {
 		v.rule, v.reason = ruleSkipLabel, labelSkip
@@ -386,6 +436,10 @@ func judge(o *original, label string, start time.Time, lineHist *history, newer 
 	}
 	if how != "" {
 		v.rule, v.reason = ruleOnLine, how
+		return v, nil
+	}
+	if d, ok := drops[o.number]; ok {
+		v.rule, v.reason = ruleDropped, fmt.Sprintf("dropped on #%d: %s", d.On, d.Reason)
 		return v, nil
 	}
 	if newer != nil {
