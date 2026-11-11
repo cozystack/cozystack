@@ -49,18 +49,44 @@ on:
   # without having to push an empty commit to the line.
   workflow_dispatch:
 
+  # The nightly line baseline (nightly.yaml) rebuilds a line whose artifact is
+  # missing or older than the head it pinned, from main's copy of this file:
+  # schedules only fire on the default branch, and release-1.6's copy cannot
+  # be dispatched. github.ref_name is then the caller's ref, so the line and
+  # the commit come in as inputs, and the build publishes exactly what a push
+  # of that commit to the line would.
+  workflow_call:
+    inputs:
+      line:
+        description: The release-X.Y line to build
+        type: string
+        required: true
+      sha:
+        description: The commit of that line to build
+        type: string
+        required: true
+    secrets:
+      OCIR_USER:
+        required: true
+      OCIR_TOKEN:
+        required: true
+
 # Per line: a newer push to the same line supersedes an in-flight build, but
-# different lines build independently.
+# different lines build independently. A called build is keyed on its line
+# input, since github.ref_name is the caller's and would put every line into
+# one group. It never cancels: arriving while a push build runs, it waits for
+# it rather than cancel a build of a newer commit, and a push arriving while
+# it runs still cancels it.
 concurrency:
-  group: build-release-${{ github.ref_name }}
-  cancel-in-progress: true
+  group: build-release-${{ inputs.line || github.ref_name }}
+  cancel-in-progress: ${{ !inputs.line }}
 
 permissions:
   contents: read
 
 jobs:
   build-line:
-    name: Build ${{ github.ref_name }} images and packages artifact
+    name: Build ${{ inputs.line || github.ref_name }} images and packages artifact
     runs-on: oracle-vm-24cpu-96gb-x86-64
     timeout-minutes: 120
     permissions:
@@ -83,11 +109,20 @@ jobs:
       # staging branches (release-1.6.1, release-1.6.0-rc.4) would qualify, and
       # those are built by tags.yaml. Fails rather than skips — a skipped job
       # reads in the run list like one that produced the artifact.
+      #
+      # A caller names the line instead, and the commit, which must be a
+      # 40-hex SHA: anything else would flow into the checkout ref.
       - name: Refuse a build for a non-line ref
         env:
-          REF_NAME: ${{ github.ref_name }}
+          REF_NAME: ${{ inputs.line || github.ref_name }}
           REF_TYPE: ${{ github.ref_type }}
+          CALLED_SHA: ${{ inputs.sha }}
+          CALLED_LINE: ${{ inputs.line }}
         run: |
+          if [ -n "$CALLED_LINE" ] && ! printf '%s' "$CALLED_SHA" | grep -qE '^[0-9a-f]{40}$'; then
+            echo "::error::Refusing to build '$CALLED_LINE' at '$CALLED_SHA': the caller must pass a 40-hex commit."
+            exit 1
+          fi
           if [ "$REF_TYPE" != "branch" ] \
             || ! printf '%s' "$REF_NAME" | grep -qE '^release-[0-9]+\.[0-9]+$'; then
             echo "::error::Refusing to build '$REF_NAME' ($REF_TYPE). This workflow publishes cozystack-packages:<ref> and every image tagged <ref>, so it may only run for a maintained release line (release-X.Y)."
@@ -99,12 +134,30 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
+          # Empty on push and dispatch, which keeps the event's own commit.
+          ref: ${{ inputs.sha }}
           fetch-depth: 0
           fetch-tags: true
           # This workflow holds packages:write and an OCIR push token; it never
           # pushes git, so don't leave the checkout's GITHUB_TOKEN in .git/config
           # where a later build step could read it.
           persist-credentials: false
+
+      # The artifact is published under the line's name, so a called build
+      # must be of the line's head. Once the line has moved on, the push of the
+      # newer head builds it, and publishing the older commit now would put
+      # :<line> behind the line.
+      - name: Refuse a commit that is not the line's head
+        if: inputs.line != ''
+        env:
+          LINE: ${{ inputs.line }}
+          SHA: ${{ inputs.sha }}
+        run: |
+          head="$(git rev-parse "refs/remotes/origin/$LINE")"
+          if [ "$head" != "$SHA" ]; then
+            echo "::error::$LINE is at $head, not $SHA; refusing to publish $SHA as cozystack-packages:$LINE."
+            exit 1
+          fi
 
       # Ephemeral runners lack the flux CLI the installer's image-packages step
       # shells out to.
@@ -155,6 +208,39 @@ jobs:
           # Floating per-line handle: images and the packages artifact both land
           # under the branch name (e.g. :release-1.6). Versioned and :latest tags
           # belong to releases (tags.yaml / finalize), never to this workflow.
-          IMAGE_TAG: ${{ github.ref_name }}
+          IMAGE_TAG: ${{ inputs.line || github.ref_name }}
           PUBLISH_VERSIONED: '0'
           PUBLISH_FLOATING: '0'
+
+      # image-packages stamps the digest it pushed into the installer's
+      # values.yaml. A caller tests that exact artifact, so hand it over; as a
+      # file, because the caller runs this for several lines as one matrix job
+      # and a matrix job's outputs keep only the leg that finished last.
+      - name: Record the packages artifact digest for the caller
+        if: inputs.line != ''
+        env:
+          LINE: ${{ inputs.line }}
+        run: |
+          set -eu
+          url="$(yq -r '.cozystackOperator.platformSourceUrl' packages/core/installer/values.yaml)"
+          ref="$(yq -r '.cozystackOperator.platformSourceRef' packages/core/installer/values.yaml)"
+          if [ "$url" != "oci://${REGISTRY}/cozystack-packages" ]; then
+            echo "::error::the installer points at '$url', not at the artifact this build pushed"
+            exit 1
+          fi
+          digest="${ref#digest=}"
+          if ! printf '%s' "$digest" | grep -qE '^sha256:[0-9a-f]{64}$'; then
+            echo "::error::the installer carries '$ref', not the digest of a pushed artifact"
+            exit 1
+          fi
+          mkdir -p "${RUNNER_TEMP}/release-baseline-build"
+          printf '%s\n' "$digest" > "${RUNNER_TEMP}/release-baseline-build/packages-digest"
+          echo "cozystack-packages:${LINE} is @${digest}"
+
+      - name: Upload the packages artifact digest
+        if: inputs.line != ''
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-baseline-build-${{ inputs.line }}
+          path: ${{ runner.temp }}/release-baseline-build/packages-digest
+          if-no-files-found: error

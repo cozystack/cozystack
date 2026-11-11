@@ -315,7 +315,9 @@ load test_helper
     echo "build-release.yaml does not restrict its trigger to release-<major>.<minor>" >&2; exit 1; }
 
   # The artifact and image tag must be the branch, or the overlay cannot find it.
-  printf '%s\n' "$code" | grep -qF 'IMAGE_TAG: ${{ github.ref_name }}' || {
+  # A called build names its line as an input, github.ref_name being the
+  # caller's ref.
+  printf '%s\n' "$code" | grep -qF 'IMAGE_TAG: ${{ inputs.line || github.ref_name }}' || {
     echo "build-release.yaml does not tag images/artifact with the branch name" >&2; exit 1; }
 
   # It must not write the shared mode=max cache: that ref has exactly one
