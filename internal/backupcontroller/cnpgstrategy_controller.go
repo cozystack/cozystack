@@ -2224,9 +2224,12 @@ func buildBarmanPlugin(objectStoreName, serverName string) cnpgtypes.PluginConfi
 // high-water mark on a 38 MB database is 254 MiB, so 128Mi cannot hold it. A
 // tenant that leaves resourceQuotas empty has no LimitRange, and there the
 // sidecar had no requests and no limit at all. 256Mi holds the measured working
-// set and 1Gi is four times the measurement. No CPU limit is set, matching the
-// entityOperator precedent in packages/apps/kafka: a throttled sidecar stalls
-// WAL archiving instead of failing it.
+// set and 1Gi is four times the measurement. The CPU limit is explicit for the
+// same reason: left unset, that LimitRange gives the sidecar its 250m default,
+// so gzip compression of full backups and WAL segments runs on a quarter of a
+// core (a 1.6 GB database took 30 minutes to back up). One core keeps the
+// sidecar from starving the instance while removing that ceiling; it counts
+// against the tenant's limits.cpu budget, one core per instance pod.
 //
 // Checksum: since botocore ~1.36 the default (when_supported) attaches a
 // flexible checksum to every PutObject, which non-AWS S3-compatible backends
@@ -2246,6 +2249,7 @@ func barmanSidecarConfiguration() *cnpgtypes.InstanceSidecarConfiguration {
 				corev1.ResourceMemory: resource.MustParse("256Mi"),
 			},
 			Limits: corev1.ResourceList{
+				corev1.ResourceCPU:    resource.MustParse("1"),
 				corev1.ResourceMemory: resource.MustParse("1Gi"),
 			},
 		},
