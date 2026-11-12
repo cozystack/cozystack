@@ -38,16 +38,6 @@ rules:
       - storagepools
       - storagepools/status
     verbs: [get, list, watch, create, update, patch, delete]
-  {{- /*
-     Read-only, and cluster-wide only because the apiserver reads the
-     passphrase Secret through controller-runtime's default cached client,
-     whose informer lists and watches Secrets at cluster scope. Narrowing
-     this needs the binary to scope its Secret cache to its own namespace;
-     until then a namespaced Role here would leave that informer forbidden
-     and every passphrase read hanging. */}}
-  - apiGroups: [""]
-    resources: [secrets]
-    verbs: [get, list, watch]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
@@ -63,10 +53,13 @@ subjects:
     namespace: {{ .Release.Namespace }}
 ---
 {{- /*
-   Writes to Secrets stay in this namespace: the only Secret the apiserver
-   writes is the encryption passphrase, `encryption create-passphrase` and
-   `modify-passphrase`, and it always lives here. A cluster-wide write
-   grant would let this ServiceAccount rewrite any tenant's credentials. */}}
+   Secrets stay in this namespace: the only Secret the apiserver touches is
+   the encryption passphrase, read on `encryption enter-passphrase` and
+   written on `create-passphrase` / `modify-passphrase`, and it always
+   lives here. It is read past controller-runtime's cache, so no informer
+   lists or watches Secrets and a get here is all the read needs. A
+   cluster-wide grant would let this ServiceAccount read or rewrite any
+   tenant's credentials. */}}
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
@@ -75,7 +68,7 @@ metadata:
 rules:
   - apiGroups: [""]
     resources: [secrets]
-    verbs: [create, update, patch]
+    verbs: [get, create, update, patch]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding

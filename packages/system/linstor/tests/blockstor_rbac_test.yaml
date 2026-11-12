@@ -10,25 +10,23 @@ release:
 set:
   backend: blockstor
 tests:
-  - it: grants Secrets only read access cluster-wide
+  - it: grants no Secret access cluster-wide
     documentSelector:
       path: kind
       value: ClusterRole
     asserts:
-      - contains:
-          path: rules
-          content:
-            apiGroups: [""]
-            resources: [secrets]
-            verbs: [get, list, watch]
       - notContains:
           path: rules
           content:
             apiGroups: [""]
             resources: [secrets]
-            verbs: [get, list, watch, create, update, patch]
+            verbs: [get, list, watch]
+          any: true
+      - lengthEqual:
+          path: rules
+          count: 1
 
-  - it: grants Secret writes in the release namespace only
+  - it: grants Secret reads and writes in the release namespace only
     documentSelector:
       path: kind
       value: Role
@@ -41,7 +39,7 @@ tests:
           content:
             apiGroups: [""]
             resources: [secrets]
-            verbs: [create, update, patch]
+            verbs: [get, create, update, patch]
 
   - it: binds the namespaced Role to the apiserver ServiceAccount
     documentSelector:
