@@ -21,9 +21,10 @@ log_command "kubectl apply -f - (FoundationDB strategy: $STRATEGY_NAME)"
 #     default S3) does not require TLS handshake from in-cluster clients
 #     when reached over the cluster service. region is sourced from
 #     parameters.
-#   - customParameters: --blob_credentials=<path> points the backup_agent
-#     at a JSON file mounted into the backup deployment by the
-#     PodTemplateSpec below.
+#   - FDB_BLOB_CREDENTIALS points the backup_agent at a JSON file mounted
+#     into the backup deployment by the PodTemplateSpec below. It is not a
+#     customParameters entry: the operator prefixes those with "--", so
+#     "--blob_credentials=..." would reach FDB as "----blob_credentials".
 #   - backupDeploymentPodTemplateSpec: mounts <app>-fdb-backup-creds as the
 #     blob_credentials.json file, and an optional ca-cert volume for
 #     self-signed S3 endpoints. The Secret name is templated against the
@@ -45,12 +46,13 @@ spec:
         - "secure_connection={{ .Parameters.secureConnection | default \"0\" }}"
         - "region={{ .Parameters.region | default \"us-east-1\" }}"
     snapshotPeriodSeconds: 3600
-    customParameters:
-      - "--blob_credentials=/var/fdb-blob-credentials/blob_credentials.json"
     backupDeploymentPodTemplateSpec:
       spec:
         containers:
           - name: foundationdb
+            env:
+              - name: FDB_BLOB_CREDENTIALS
+                value: /var/fdb-blob-credentials/blob_credentials.json
             volumeMounts:
               - name: blob-credentials
                 mountPath: /var/fdb-blob-credentials

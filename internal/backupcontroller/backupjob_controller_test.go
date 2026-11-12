@@ -235,16 +235,16 @@ func TestReconcile_SkipsProjection_ForeignAPIGroup(t *testing.T) {
 
 // TestReconcile_NoMatchingStrategy_IsTerminal covers round-8 blocker #2:
 // a BackupJob whose BackupClass does not bind a strategy for the
-// applicationRef Kind (the documented FoundationDB-vs-cozy-default case)
-// must transition to Phase=Failed with a clear message instead of being
-// requeued forever by controller-runtime's default error-handling.
+// applicationRef Kind must transition to Phase=Failed with a clear
+// message instead of being requeued forever by controller-runtime's
+// default error-handling.
 func TestReconcile_NoMatchingStrategy_IsTerminal(t *testing.T) {
 	appsGroup := "apps.cozystack.io"
 	bc := &backupsv1alpha1.BackupClass{
 		ObjectMeta: metav1.ObjectMeta{Name: "cozy-default"},
 		Spec: backupsv1alpha1.BackupClassSpec{
 			Strategies: []backupsv1alpha1.BackupClassStrategy{
-				// Only Postgres is bound — FoundationDB intentionally omitted.
+				// Only Postgres is bound, so FoundationDB has no route.
 				{
 					Application: backupsv1alpha1.ApplicationSelector{APIGroup: &appsGroup, Kind: "Postgres"},
 					StrategyRef: corev1.TypedLocalObjectReference{

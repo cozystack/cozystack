@@ -148,17 +148,13 @@ func (r *BackupReconciler) cleanupOnDelete(ctx context.Context, backup *backupsv
 		// to free the object before the Backup is removed (like Redis / Rabbitmq).
 		return r.cleanupMongoDBBackup(ctx, backup)
 	case strategyv1alpha1.FoundationDBStrategyKind:
-		// Cozystack Backup deletion does NOT delete the operator-side
-		// foundationdb.org/FoundationDBBackup CR. That CR drives a
-		// continuously streaming backup_agent Deployment; its lifecycle
-		// is governed by the next BackupJob's stopOtherFoundationDBBackups
-		// call, by manual operator action, or by
-		// examples/backups/foundationdb/cleanup.sh. Same "we do not own
-		// the archive" contract as Altinity / MariaDB — the explicit
-		// branch guards the seam against a future driver refactor that
-		// might incidentally stamp velero.io/backup-name onto FDB
-		// driverMetadata via a shared helper.
-		return ctrl.Result{}, nil
+		// A directory the driver named per BackupJob is owned like the Redis
+		// and Rabbitmq objects: nothing else prunes it, so a retention-pruned
+		// Plan would grow the bucket unboundedly. This stops and removes the
+		// operator-side FoundationDBBackup, then deletes the directory and
+		// waits for that (see cleanupFoundationDBBackup). A directory the
+		// strategy pinned is shared between runs and left alone.
+		return r.cleanupFoundationDBBackup(ctx, backup)
 	case strategyv1alpha1.RabbitmqStrategyKind:
 		// Unlike the operator-backed drivers above, the Rabbitmq driver
 		// uniquely OWNS its artifact - a plain definitions object it wrote,

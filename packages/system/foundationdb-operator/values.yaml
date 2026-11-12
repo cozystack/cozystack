@@ -2,3 +2,41 @@ fdb-operator:
   globalMode:
     enabled: true
   nodeReadClusterRole: true
+  # The init containers supply the fdbbackup/fdbrestore binaries the operator
+  # runs against the blob store, picked by the cluster's major.minor. FDB sends
+  # TLS SNI only from 7.3.78 / 7.4.6, and SNI-routed S3 endpoints (an ingress
+  # serving several hosts) abort the handshake without it. Keep these tags in
+  # step with minimumAgentVersions in the backupstrategy-controller FoundationDB
+  # strategy, which raises the backup_agent the same way.
+  initContainers:
+    "7.3":
+      image:
+        tag: 7.3.79
+    "7.4":
+      image:
+        tag: 7.4.8
+  # The operator itself runs fdbbackup and fdbrestore against the blob store,
+  # so it needs the same credentials file and CA bundle as the backup_agent.
+  # cozy-backups-creds is projected here by backupstrategy-controller
+  # (backupStorage.systemNamespaces); optional so the operator still starts on
+  # clusters without the backup stack. Overriding extraEnv, volumes or
+  # volumeMounts replaces these lists, so an override must restate them.
+  extraEnv:
+    - name: FDB_BLOB_CREDENTIALS
+      value: /var/fdb-blob-credentials/blob_credentials.json
+    # FDB never loads the OS trust store on its own; without a CA file every
+    # https blob-store handshake fails.
+    - name: FDB_TLS_CA_FILE
+      value: /etc/pki/tls/certs/ca-bundle.crt
+  volumes:
+    - name: blob-credentials
+      secret:
+        secretName: cozy-backups-creds
+        optional: true
+        items:
+          - key: blob_credentials.json
+            path: blob_credentials.json
+  volumeMounts:
+    - name: blob-credentials
+      mountPath: /var/fdb-blob-credentials
+      readOnly: true

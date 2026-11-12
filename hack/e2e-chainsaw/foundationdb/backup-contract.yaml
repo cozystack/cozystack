@@ -1,0 +1,26 @@
+apiVersion: apps.cozystack.io/v1alpha1
+kind: FoundationDB
+metadata:
+  name: backup-contract
+spec:
+  cluster:
+    version: "7.3.63"
+    processCounts:
+      storage: 1
+      stateless: -1
+      cluster_controller: 1
+    redundancyMode: "single"
+    storageEngine: "ssd-2"
+    faultDomain:
+      key: "foundationdb.org/none"
+      valueFrom: "$FDB_ZONE_ID"
+  storage:
+    size: "1Gi"
+    storageClass: ""
+  resourcesPreset: "small"
+  monitoring:
+    enabled: false
+  customParameters:
+    - "knob_disable_posix_kernel_aio=1"
+  imageType: "unified"
+  automaticReplacements: true
