@@ -207,8 +207,8 @@ seaweedfs:
     # weed skip startLanceServer and drops the container port and Service port
     # with it.
     lancePort: 0
-    # patches/s3-grpc-tls.patch adds [grpc.s3] to security.toml, which the s3
-    # pods mount by subPath and so never re-read. This annotation changes the
+    # The chart adds [grpc.s3] to security.toml, which the s3 pods mount by
+    # subPath and so never re-read. This annotation changes the
     # pod template in the release that brings the section, so an upgrade
     # restarts s3 onto it instead of leaving its gRPC in plaintext. The
     # upstream s3 template carries no checksum of that ConfigMap, and adding
