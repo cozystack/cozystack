@@ -3824,6 +3824,23 @@ func TestReconcileCNPG_JobWithoutLatchWaitsForAnotherJobsRollout(t *testing.T) {
 	}
 }
 
+// A job whose own Backup already exists is past every wait before it: it
+// tracks that Backup even while another job's recent attach is still rolling
+// the instances, since waiting would only hold the result of a Backup that
+// runs regardless.
+func TestReconcileCNPG_JobWithItsOwnBackupDoesNotWaitForAnotherJobsRollout(t *testing.T) {
+	cluster := newRolloutCluster(cnpgClusterHealthyPhase, buildBarmanPlugin(rolloutCluster, rolloutCluster))
+	cluster.Annotations = map[string]string{cnpgPluginAttachedAtAnnotation: time.Now().Add(-5 * time.Minute).UTC().Format(time.RFC3339)}
+	f := newCNPGRolloutFixture(t, newRolloutBackupJob(time.Now().Add(-time.Hour)), cluster,
+		newRolloutInstancePod(time.Now().Add(-10*time.Minute).Truncate(time.Second)))
+	f.seedCNPGBackup("bj-cnpg", "bj", rolloutCluster, "running")
+
+	j, _ := f.pass()
+	if ready := apimeta.FindStatusCondition(j.Status.Conditions, "Ready"); ready == nil || ready.Reason != "WaitingForCNPGBackup" {
+		t.Errorf("Ready = %+v, want WaitingForCNPGBackup tracking the job's own Backup", ready)
+	}
+}
+
 // A plugin attached by someone else after the latch, another backup job or
 // the chart re-rendering a restored Cluster outside the platform flow,
 // started the rollout before this job's write, which only finds it there:

@@ -514,3 +514,65 @@ func TestCreateCNPGBackupArtifact_SizeProbeSkipsARecordWithoutCredentials(t *tes
 		t.Errorf("Artifact = %#v, want no size", got.Status.Artifact)
 	}
 }
+
+// probeRecordedBackup runs createCNPGBackupArtifact for a backup recorded as
+// written with credentials Secret recordedSecret, against rendered, and
+// returns the size it measured and the connection it measured through.
+func probeRecordedBackup(t *testing.T, rendered *strategyv1alpha1.CNPGTemplate, recordedSecret *corev1.Secret) (int64, s3Connection) {
+	t.Helper()
+	apiGroup := backupsv1alpha1.DefaultApplicationAPIGroup
+	j := &backupsv1alpha1.BackupJob{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "bj-probe"},
+		Spec: backupsv1alpha1.BackupJobSpec{
+			ApplicationRef: corev1.TypedLocalObjectReference{APIGroup: &apiGroup, Kind: postgresAppKind, Name: "pg"},
+		},
+	}
+	cnpgBk := &cnpgtypes.Backup{ObjectMeta: metav1.ObjectMeta{Name: "cnpg-bk"}, Status: cnpgtypes.BackupStatus{BackupID: "20261021T100000"}}
+	secretName := recordedSecret.Name
+	written := cnpgDestination{DestinationPath: "s3://bkt/tenant/pg/", EndpointURL: "https://s3.example:8443", S3SecretRef: &secretName}
+	l := &fakeS3Lister{objects: []s3ObjectInfo{{Key: "tenant/pg/srv/base/20261021T100000/data.tar.gz", Size: 42}}}
+	r := reconcilerWithLister(t, l)
+	r.Client = newCNPGStrategyTestClient(t, recordedSecret)
+
+	got, err := r.createCNPGBackupArtifact(context.Background(), j, &ResolvedBackupConfig{}, cnpgBk, "postgres-pg", "srv", "postgresql", written, rendered, newPostgresApp("pg", "tenant"))
+	if err != nil {
+		t.Fatalf("createCNPGBackupArtifact: %v", err)
+	}
+	if got.Status.Artifact == nil {
+		t.Fatalf("no artifact")
+	}
+	return got.Status.Artifact.SizeBytes, l.conn
+}
+
+// A strategy that has since dropped its credentials still measures a backup
+// recorded with a Secret, through that Secret and its default keys.
+func TestCreateCNPGBackupArtifact_SizeProbeOfARecordedSecretUnderAStrategyWithoutCredentials(t *testing.T) {
+	store := newSizedBarmanObjectStore()
+	store.S3Credentials = nil
+	size, conn := probeRecordedBackup(t, &strategyv1alpha1.CNPGTemplate{BarmanObjectStore: *store}, s3CredsSecret("tenant", "creds-recorded"))
+	if size != 42 {
+		t.Errorf("SizeBytes = %d, want 42 measured through the recorded Secret", size)
+	}
+	if conn.AccessKey != "AKID" {
+		t.Errorf("probed with access key %q, want the recorded Secret's AKID", conn.AccessKey)
+	}
+}
+
+// The record names the Secret, not its keys: the strategy's key names stay,
+// so a strategy with its own key names still reads the recorded Secret.
+func TestCreateCNPGBackupArtifact_SizeProbeKeepsTheStrategysSecretKeys(t *testing.T) {
+	store := newSizedBarmanObjectStore()
+	store.S3Credentials.AccessKeyIDKey = "id"
+	store.S3Credentials.SecretAccessKeyKey = "key"
+	secret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "creds-recorded"},
+		Data:       map[string][]byte{"id": []byte("CUSTOMID"), "key": []byte("custom-secret")},
+	}
+	size, conn := probeRecordedBackup(t, &strategyv1alpha1.CNPGTemplate{BarmanObjectStore: *store}, secret)
+	if size != 42 {
+		t.Errorf("SizeBytes = %d, want 42 measured with the strategy's key names", size)
+	}
+	if conn.AccessKey != "CUSTOMID" {
+		t.Errorf("probed with access key %q, want CUSTOMID read under the strategy's key name", conn.AccessKey)
+	}
+}
