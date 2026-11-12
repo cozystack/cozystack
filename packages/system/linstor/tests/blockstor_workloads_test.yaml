@@ -119,7 +119,7 @@ tests:
             resources: [leases]
             verbs: [get, list, watch, create, update, patch, delete]
 
-  - it: closes the satellite's unauthenticated ports to the world
+  - it: closes the satellite's ports to the world
     template: templates/blockstor-satellite.yaml
     documentSelector:
       path: kind
@@ -131,9 +131,76 @@ tests:
       - equal:
           path: spec.ingressDeny[0].toPorts[0].ports
           value:
-            - port: "9100"
+            - port: "3372"
             - port: "9101"
             - port: "8080"
+
+  # The snapshot stream runs over mutual TLS: without the Secret mounted and
+  # the three flags the satellite serves no stream at all.
+  - it: gives the satellite the snapshot stream's TLS
+    template: templates/blockstor-satellite.yaml
+    documentSelector:
+      path: kind
+      value: DaemonSet
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --stream-tls-cert-file=/etc/blockstor/stream-tls/tls.crt
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --stream-tls-key-file=/etc/blockstor/stream-tls/tls.key
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --stream-tls-ca-file=/etc/blockstor/stream-tls/ca.crt
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content: {name: stream-tls, mountPath: /etc/blockstor/stream-tls, readOnly: true}
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: stream-tls
+            secret:
+              secretName: blockstor-satellite-stream-tls
+
+  # The stream CA stays apart from the API CA: a stream certificate is a
+  # client certificate the apiserver's mutual-TLS listener would otherwise
+  # accept.
+  - it: issues the satellite stream certificate from its own CA
+    template: templates/blockstor-apiserver-tls.yaml
+    documentSelector:
+      path: metadata.name
+      value: blockstor-satellite-stream
+    asserts:
+      - equal:
+          path: spec.secretName
+          value: blockstor-satellite-stream-tls
+      - equal:
+          path: spec.issuerRef.name
+          value: blockstor-stream-ca
+      - equal:
+          path: spec.dnsNames
+          value: [blockstor-satellite]
+      - contains:
+          path: spec.usages
+          content: server auth
+      - contains:
+          path: spec.usages
+          content: client auth
+
+  - it: roots the stream CA in the bootstrapper, not in the API CA
+    template: templates/blockstor-apiserver-tls.yaml
+    documentSelector:
+      path: spec.commonName
+      value: blockstor-stream-ca
+    asserts:
+      - isKind:
+          of: Certificate
+      - equal:
+          path: spec.isCA
+          value: true
+      - equal:
+          path: spec.issuerRef.name
+          value: ca-bootstrapper
 
   # A kind added to the group later must not be granted by omission, so the
   # roles are pinned whole: a wildcard or a new kind shows up as a diff here.

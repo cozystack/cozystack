@@ -192,6 +192,14 @@ spec:
             {{- /*
                Storage pools come from StoragePool objects, not flags. */}}
             - --health-probe-bind-address=:9101
+            {{- /*
+               Mutual TLS of the snapshot stream between satellites (port
+               3372). Every satellite presents the same certificate, issued
+               by the stream CA in blockstor-apiserver-tls.yaml, and accepts
+               only peers that present one from that CA. */}}
+            - --stream-tls-cert-file=/etc/blockstor/stream-tls/tls.crt
+            - --stream-tls-key-file=/etc/blockstor/stream-tls/tls.key
+            - --stream-tls-ca-file=/etc/blockstor/stream-tls/ca.crt
           env:
             - name: NODE_NAME
               valueFrom: {fieldRef: {fieldPath: spec.nodeName}}
@@ -235,6 +243,7 @@ spec:
               mountPath: /etc/drbd.d/global_common.conf
               subPath: global_common.conf
               readOnly: true
+            - {name: stream-tls, mountPath: /etc/blockstor/stream-tls, readOnly: true}
           resources:
             requests: {cpu: 50m, memory: 64Mi}
             limits: {cpu: 500m, memory: 512Mi}
@@ -251,12 +260,18 @@ spec:
             name: blockstor-satellite-drbd-conf
             items:
               - {key: global_common.conf, path: global_common.conf}
+        {{- /*
+           Read on every stream handshake, so a certificate cert-manager
+           rotates is picked up without a restart. */}}
+        - name: stream-tls
+          secret:
+            secretName: blockstor-satellite-stream-tls
 ---
 {{- /*
-   blockstor-satellite runs on host networking and, in this release, listens
-   on every address without authentication: 9100 serves snapshot streams to
-   other satellites, 9101 its health probes, 8080 controller-runtime's
-   metrics. None of them is for anything outside the cluster, so they are
+   blockstor-satellite runs on host networking and listens on every address:
+   3372 serves snapshot streams to other satellites over mutual TLS, 9101 its
+   health probes and 8080 controller-runtime's metrics, both without
+   authentication. None of them is for anything outside the cluster, so they are
    closed to the world the way restrict-drbd-reactor closes drbd-reactor's. */}}
 apiVersion: cilium.io/v2
 kind: CiliumClusterwideNetworkPolicy
@@ -268,7 +283,7 @@ spec:
     - world
     toPorts:
     - ports:
-      - port: "9100"
+      - port: "3372"
       - port: "9101"
       - port: "8080"
   ingress:
