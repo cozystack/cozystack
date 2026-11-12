@@ -1,8 +1,12 @@
-suite: tenant monitoring ingest (logs and metrics) crosses the tenant boundary
-# A sub-tenant (and the guest clusters inside it) that resolves its monitoring
-# to an ancestor must be able to write both metrics (vminsert) and logs
-# (vlinsert) to that ancestor's ingest endpoints. The egress opens the write
-# hop; the ancestor's ingress must accept it.
+suite: tenant monitoring ingest egress reaches the monitoring owner at any depth
+# A tenant (and the guest clusters inside it) that resolves its monitoring to an
+# ancestor must be able to write both metrics (vminsert) and logs (vlinsert) to
+# that owner's ingest endpoints. The owner is inherited through
+# _namespace.monitoring, so the egress targets the real owner directly rather
+# than walking the namespace prefix (which never reaches tenant-root from below
+# the first level). The ancestor already accepts the ingress via its
+# allow-external-communication policy (fromEntities: cluster), so no extra
+# ingress policy is rendered here.
 templates:
   - templates/networkpolicy.yaml
 release:
@@ -12,13 +16,15 @@ set:
   _cluster:
     bundle-name: paas-full
 tests:
-  - it: lets a sub-tenant egress to the ancestor's vlinsert as well as vminsert
+  - it: egresses to the parent owner's vminsert and vlinsert in one rule
     release:
       name: tenant-sub
       namespace: tenant-ktj
     set:
       _cluster:
         bundle-name: paas-full
+      _namespace:
+        monitoring: tenant-ktj
     documentSelector:
       path: metadata.name
       value: tenant-ktj-sub-egress
@@ -26,41 +32,80 @@ tests:
       - isKind:
           of: CiliumClusterwideNetworkPolicy
       - contains:
-          path: spec.egress[1].toEndpoints
+          path: spec.egress
           content:
-            matchLabels:
-              "k8s:app.kubernetes.io/name": "vminsert"
-              "k8s:io.kubernetes.pod.namespace": tenant-ktj
-      - contains:
-          path: spec.egress[1].toEndpoints
-          content:
-            matchLabels:
-              "k8s:app.kubernetes.io/name": "vlinsert"
-              "k8s:io.kubernetes.pod.namespace": tenant-ktj
+            toEndpoints:
+              - matchLabels:
+                  "k8s:io.kubernetes.pod.namespace": tenant-ktj
+                matchExpressions:
+                  - key: "k8s:app.kubernetes.io/name"
+                    operator: In
+                    values:
+                      - vminsert
+                      - vlinsert
 
-  - it: opens the ancestor's ingress on vlinsert and vminsert for its sub-tenants
+  - it: targets the owning tenant-root even when the owner is not the parent
+    # Common layout: monitoring lives only in tenant-root and every descendant
+    # inherits it. A namespace-prefix walk from tenant-ktj-a would emit
+    # tenant-ktj and tenant-ktj-a and never tenant-root, dropping the traffic.
+    release:
+      name: tenant-b
+      namespace: tenant-ktj-a
+    set:
+      _cluster:
+        bundle-name: paas-full
+      _namespace:
+        monitoring: tenant-root
+    documentSelector:
+      path: metadata.name
+      value: tenant-ktj-a-b-egress
+    asserts:
+      - isKind:
+          of: CiliumClusterwideNetworkPolicy
+      - contains:
+          path: spec.egress
+          content:
+            toEndpoints:
+              - matchLabels:
+                  "k8s:io.kubernetes.pod.namespace": tenant-root
+                matchExpressions:
+                  - key: "k8s:app.kubernetes.io/name"
+                    operator: In
+                    values:
+                      - vminsert
+                      - vlinsert
+
+  - it: renders no monitoring egress rule when the tenant owns its monitoring
+    # Owner resolves to the tenant itself, so writes stay in-namespace (covered
+    # by allow-internal-communication) and no cross-namespace rule is added.
     set:
       monitoring: true
       _cluster:
         bundle-name: paas-full
     documentSelector:
       path: metadata.name
-      value: tenant-ktj-ingress-monitoring
+      value: tenant-ktj-egress
     asserts:
       - isKind:
           of: CiliumClusterwideNetworkPolicy
       - equal:
-          path: spec.endpointSelector.matchExpressions[0].values
+          path: spec.egress
           value:
-            - vlinsert
-            - vminsert
-      - equal:
-          path: spec.ingress[0].fromEndpoints[0].matchLabels["k8s:io.cilium.k8s.namespace.labels.namespace.cozystack.io/monitoring"]
-          value: tenant-ktj
+            - toEndpoints:
+                - matchLabels:
+                    "k8s:io.cilium.k8s.namespace.labels.tenant.cozystack.io/tenant-ktj": ""
+            - toEndpoints:
+                - matchLabels:
+                    "k8s:app.kubernetes.io/instance": "etcd"
+                    "k8s:io.kubernetes.pod.namespace": tenant-root
+            - toEndpoints:
+                - matchLabels:
+                    cozystack.io/service: ingress
+                    "k8s:io.kubernetes.pod.namespace": tenant-root
 
-  - it: does not open the ingest ingress when the tenant has no monitoring
+  - it: does not render the removed ingress-monitoring policy
     set:
-      monitoring: false
+      monitoring: true
       _cluster:
         bundle-name: paas-full
     asserts:
