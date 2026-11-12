@@ -1,0 +1,62 @@
+suite: Talos to Kubernetes support-matrix guard (assertTalosSupportsKubernetes)
+
+# The guard is keyed by Talos minor and consulted twice in nodegroup.yaml: once
+# for talos.version and once for the release osImage resolves to. These cases
+# pin the pairings it has to let through: each one fails if the matrix row loses
+# the Kubernetes version under test.
+#
+# The refusals are in hack/kubernetes-nodes-talos-matrix.bats. The values schema
+# offers only Kubernetes versions the v1.13 row lists, so no schema-valid input
+# reaches a refusal, and helm-unittest always validates the schema; the bats file
+# renders with --skip-schema-validation instead.
+
+templates:
+  - templates/nodegroup.yaml
+
+release:
+  name: kubernetes-nodes-myk8s-md0
+  namespace: tenant-test
+
+set:
+  cluster: myk8s
+  _cluster:
+    cluster-domain: cozy.local
+  minReplicas: 1
+  maxReplicas: 3
+  instanceType: ""
+  diskSize: 20Gi
+  storageClass: replicated
+  roles: [ingress-nginx]
+  resources:
+    cpu: "2"
+    memory: 4Gi
+
+tests:
+  - it: renders the oldest Kubernetes version the schema offers against the default Talos
+    set:
+      version: "v1.31"
+    asserts:
+      - notFailedTemplate: {}
+      - hasDocuments:
+          count: 4
+
+  - it: renders the newest Kubernetes version the schema offers against the default Talos
+    set:
+      version: "v1.35"
+    asserts:
+      - notFailedTemplate: {}
+
+  - it: renders an in-window pairing reached through osImage.factory.version
+    set:
+      version: "v1.31"
+      talos:
+        version: "v1.12.0"
+      osImage:
+        factory:
+          version: "v1.13.0"
+    asserts:
+      - notFailedTemplate: {}
+      - equal:
+          path: spec.template.spec.virtualMachineTemplate.spec.dataVolumeTemplates[0].spec.source.http.url
+          value: https://factory.talos.dev/image/ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515/v1.13.0/openstack-amd64.raw.xz
+        documentSelector: {path: kind, value: KubevirtMachineTemplate}

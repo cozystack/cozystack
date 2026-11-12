@@ -78,19 +78,16 @@ CATALOG_VALUES="$REPO_ROOT/packages/system/kubernetes-worker-image/values.yaml"
 
 # -----------------------------------------------------------------------------
 # Second family of default-drift guards on the same chart: the Talos <-> Kubernetes
-# support matrix. The render guard keyed only on `talos.version`, so a pool could
-# reach a different Talos release through `osImage.builtin.version` /
-# `osImage.factory.version` and boot a kubelet outside its support window with no
-# render failure. The table now lives once in templates/_helpers.tpl and both
-# paths consult it.
+# support matrix. A pool reaches a Talos release through `talos.version` or through
+# `osImage.builtin.version` / `osImage.factory.version`, and the table in
+# templates/_helpers.tpl has to be consulted for whichever one the pool boots.
 #
-# The symmetry is structural, not observable from a render: the matrix ships one
-# row (`v1.13`) whose Kubernetes list is a superset of `values.schema.json`'s
-# `version` enum, so no schema-valid pairing can make either call site fail today.
-# A helm-unittest case would have to put an out-of-enum `version` in, and
-# helm-unittest validates the schema, so it cannot. These two guards cover what a
-# render cannot: that both call sites exist, and that the table still means
-# something for the defaults the chart ships.
+# The matrix ships one row (`v1.13`) whose Kubernetes list is a superset of
+# `values.schema.json`'s `version` enum, so no schema-valid pairing makes either
+# call site fail today. hack/kubernetes-nodes-talos-matrix.bats renders the
+# refusals with the schema skipped; these two guards cover what it does not: that
+# both call sites stay wired, and that the table still means something for the
+# defaults the chart ships.
 
 NODES_TEMPLATE="$REPO_ROOT/packages/apps/kubernetes-nodes/templates/nodegroup.yaml"
 NODES_SCHEMA="$REPO_ROOT/packages/apps/kubernetes-nodes/values.schema.json"
