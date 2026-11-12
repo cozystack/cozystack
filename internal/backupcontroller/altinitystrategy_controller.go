@@ -1135,6 +1135,15 @@ func (r *BackupReconciler) cleanupAltinityBackup(ctx context.Context, backup *ba
 		if wait := altinityCleanupRetryWait(ctx, backup, time.Now()); wait > 0 {
 			return ctrl.Result{RequeueAfter: wait}, nil
 		}
+		// A sidecar that has not taken up the projected credentials yet still
+		// serves the bucket before them and answers "not found" there.
+		wait, werr := credentialsPropagationWait(ctx, r.Client, r.CredentialsConfig.TargetSecretName, backup.Namespace, jobKey.Name)
+		if werr != nil {
+			return ctrl.Result{}, werr
+		}
+		if wait > 0 {
+			return ctrl.Result{RequeueAfter: wait}, nil
+		}
 		desired := buildAltinityCleanupJob(jobKey.Namespace, jobKey.Name, containers[0],
 			strategy.Spec.Template.Spec,
 			fmt.Sprintf("chi-clickhouse-%s-clickhouse-0-0.%s.svc", release, backup.Namespace), authSecret, archive)
