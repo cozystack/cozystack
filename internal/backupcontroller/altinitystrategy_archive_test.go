@@ -370,7 +370,7 @@ func TestBackupReconcile_DeletesTheArchiveOfABackupDeletedAtOnce(t *testing.T) {
 
 // ownCleanupJob is the cleanup Job this Backup's own cleanup would create.
 func ownCleanupJob(b *backupsv1alpha1.Backup) *batchv1.Job {
-	return buildAltinityCleanupJob(b.Namespace, b.Name+"-cleanup", corev1.Container{Image: "img"}, nil, "host", "secret",
+	return buildAltinityCleanupJob(b.Namespace, b.Name+"-cleanup", corev1.Container{Image: "img"}, corev1.PodSpec{}, "host", "secret",
 		b.Spec.DriverMetadata[altinityArchiveMetaKey])
 }
 
@@ -411,7 +411,7 @@ func TestCleanupAltinityBackup_FailedJobIsRetried(t *testing.T) {
 // its Job ran, deleted a different archive: its completion is not this one's.
 func TestCleanupAltinityBackup_StaleJobForAnotherArchiveIsReplaced(t *testing.T) {
 	backup := altinityCleanupBackup("ch-bk")
-	stale := buildAltinityCleanupJob("tenant-test", "ch-bk-cleanup", corev1.Container{Image: "img"}, nil, "host", "secret", "clickhouse-ch-test-earlier")
+	stale := buildAltinityCleanupJob("tenant-test", "ch-bk-cleanup", corev1.Container{Image: "img"}, corev1.PodSpec{}, "host", "secret", "clickhouse-ch-test-earlier")
 	stale.Status.Conditions = []batchv1.JobCondition{{Type: batchv1.JobComplete, Status: corev1.ConditionTrue}}
 	c, s := newAltinityCleanupClient(append(altinityCleanupFixtures(backup), stale)...)
 	r := &BackupReconciler{Client: c, Scheme: s, Recorder: record.NewFakeRecorder(10)}
@@ -897,6 +897,57 @@ func TestCleanupAltinityBackup_CarriesTheStrategyPullSettings(t *testing.T) {
 	}
 	if got := pod.Containers[0].ImagePullPolicy; got != corev1.PullAlways {
 		t.Errorf("imagePullPolicy = %q, want the strategy container's", got)
+	}
+}
+
+// The cleanup Pod lands where the strategy's own Pods are allowed to run: a
+// cluster that keeps backup Pods off tainted nodes, or on nodes that reach the
+// sidecar, would otherwise leave it Pending until its deadline, again and
+// again. The strategy's service account is not carried, since the cleanup Pod
+// only calls the sidecar's HTTP API.
+func TestCleanupAltinityBackup_CarriesTheStrategySchedulingSettings(t *testing.T) {
+	backup := altinityCleanupBackup("ch-bk")
+	objs := altinityCleanupFixtures(backup)
+	nodeSelector := map[string]string{"node-role.example.com/backup": "true"}
+	tolerations := []corev1.Toleration{{Key: "dedicated", Operator: corev1.TolerationOpEqual, Value: "backup", Effect: corev1.TaintEffectNoSchedule}}
+	affinity := &corev1.Affinity{NodeAffinity: &corev1.NodeAffinity{
+		RequiredDuringSchedulingIgnoredDuringExecution: &corev1.NodeSelector{NodeSelectorTerms: []corev1.NodeSelectorTerm{{
+			MatchExpressions: []corev1.NodeSelectorRequirement{{Key: "zone", Operator: corev1.NodeSelectorOpIn, Values: []string{"a"}}},
+		}}},
+	}}
+	for _, o := range objs {
+		if s, ok := o.(*strategyv1alpha1.Altinity); ok {
+			s.Spec.Template.Spec.NodeSelector = nodeSelector
+			s.Spec.Template.Spec.Tolerations = tolerations
+			s.Spec.Template.Spec.Affinity = affinity
+			s.Spec.Template.Spec.PriorityClassName = "backup-priority"
+			s.Spec.Template.Spec.ServiceAccountName = "backup-runner"
+		}
+	}
+	c, s := newAltinityCleanupClient(objs...)
+	r := &BackupReconciler{Client: c, Scheme: s, Recorder: record.NewFakeRecorder(10)}
+	if _, err := r.cleanupOnDelete(context.Background(), backup); err != nil {
+		t.Fatalf("cleanupOnDelete: %v", err)
+	}
+	jobs := listJobs(t, c)
+	if len(jobs) != 1 {
+		t.Fatalf("expected one cleanup Job, got %d", len(jobs))
+	}
+	pod := jobs[0].Spec.Template.Spec
+	if !reflect.DeepEqual(pod.NodeSelector, nodeSelector) {
+		t.Errorf("nodeSelector = %+v, want the strategy's", pod.NodeSelector)
+	}
+	if !reflect.DeepEqual(pod.Tolerations, tolerations) {
+		t.Errorf("tolerations = %+v, want the strategy's", pod.Tolerations)
+	}
+	if !reflect.DeepEqual(pod.Affinity, affinity) {
+		t.Errorf("affinity = %+v, want the strategy's", pod.Affinity)
+	}
+	if pod.PriorityClassName != "backup-priority" {
+		t.Errorf("priorityClassName = %q, want the strategy's", pod.PriorityClassName)
+	}
+	if pod.ServiceAccountName != "" {
+		t.Errorf("serviceAccountName = %q, want none", pod.ServiceAccountName)
 	}
 }
 
