@@ -181,3 +181,66 @@ func TestShutdownEndsOpenStreams(t *testing.T) {
 		t.Fatal("Shutdown left the stream open")
 	}
 }
+
+// blockingWriter holds every write after the first until release is closed.
+type blockingWriter struct {
+	streamWriter
+	writing  chan struct{}
+	release  chan struct{}
+	returned chan struct{}
+}
+
+func (w *blockingWriter) Write(p []byte) (int, error) {
+	if w.String() == "" {
+		return w.streamWriter.Write(p)
+	}
+	select {
+	case w.writing <- struct{}{}:
+	default:
+	}
+	<-w.release
+	return w.streamWriter.Write(p)
+}
+
+// The handler does not return while its pump is still writing: net/http does
+// not allow a write to a response after ServeHTTP has returned.
+func TestStreamWaitsForPumpBeforeReturning(t *testing.T) {
+	s := newTestServer(time.Hour)
+	w := &blockingWriter{
+		streamWriter: streamWriter{header: http.Header{}, okWrites: 100},
+		writing:      make(chan struct{}, 1),
+		release:      make(chan struct{}),
+		returned:     make(chan struct{}),
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	r := httptest.NewRequest(http.MethodGet, "/stream", nil).WithContext(ctx)
+	go func() {
+		s.handleStream(w, r)
+		close(w.returned)
+	}()
+	deadline := time.Now().Add(time.Second)
+	for len(s.snapshotClients()) == 0 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	// Straight onto the client's queue, which only the pump reads: Publish
+	// would also set latest, which the handler itself may still write.
+	s.snapshotClients()[0].ch <- "event"
+	select {
+	case <-w.writing:
+	case <-time.After(time.Second):
+		t.Fatal("the pump never wrote the event")
+	}
+	cancel()
+	select {
+	case <-w.returned:
+		close(w.release)
+		t.Fatal("the handler returned while its pump was writing")
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(w.release)
+	select {
+	case <-w.returned:
+	case <-time.After(time.Second):
+		t.Fatal("the handler did not return once its pump finished")
+	}
+}

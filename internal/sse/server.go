@@ -222,6 +222,7 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
 	case <-pumped:
 	}
 	c.stop()
+	<-pumped
 }
 
 // stop ends the client's pump. Shutdown and the client's own handler both
