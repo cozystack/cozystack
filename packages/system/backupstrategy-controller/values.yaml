@@ -105,10 +105,6 @@ backupStorage:
   endpoint: http://seaweedfs-s3.tenant-root.svc.cozy.local:8333
   # region is re-projected into cozy-backups-creds on the next reconcile
   # (1-minute tick for system namespaces, on-demand for tenant namespaces).
-  # However, charts that consume the region via secretKeyRef in env vars —
-  # the chart-emitted ClickHouse sidecar on `useSystemBucket: true` is the
-  # only such consumer today — only pick up the new value on Pod restart.
-  # Plan a rollout of those Pods when you change this value.
   region: us-east-1
   forcePathStyle: true
   # systemSecretName — the human-friendly Secret produced by the Bucket
@@ -162,10 +158,19 @@ backupStorage:
   # credentials Secret is missing it forces the bucket's <bucket>-system
   # release; once the bucket name resolves it checks that every object
   # cozy-default routes to exists and forces THIS release when any is
-  # missing. Both are throttled, independently, and a no-op in the steady
-  # state. A suspended release is skipped rather than re-stamped forever. The
-  # gate does NOT create the objects itself: their bodies are values-driven
-  # and Helm stays their single owner.
+  # missing. It repairs a stale S3 endpoint the same way: when the
+  # credentials Secret's endpoint differs from the COSI Secret it is rendered
+  # from it forces the bucket's <bucket>-system release (only while
+  # systemSecretName is bucket-<bucketName>-system-credentials, the one
+  # Secret that release renders), and when the
+  # backups.cozystack.io/endpoint annotation on the Velero BSL or a default
+  # Strategy differs from the credentials Secret's endpoint, or is absent, it
+  # forces THIS release. The COSI Secret itself keeps the endpoint it was granted with, so
+  # after a publishing.host change that endpoint follows only once the
+  # BucketAccess is re-granted. Both are throttled, independently, and a no-op
+  # in the steady state. A suspended release is skipped rather than
+  # re-stamped forever. The gate does NOT create the objects itself: their
+  # bodies are values-driven and Helm stays their single owner.
   #
   # Turn this off only if you manage the default Strategy CRs out of band and
   # accept that a missed install-time render is never repaired. Watch
