@@ -1,0 +1,596 @@
+suite: repository refuses to move cozystack-packages while a pre-1.2 Strimzi Kafka lacks KRaft evidence
+# The default variant renders no migration hook, and helm-controller applies the
+# kafka-operator CRDs before any Helm pre-upgrade hook runs. The root platform
+# render is the last point that sees every Kafka before the new chart arrives.
+# A pre-1.2 CRD with no Kafka at all is not covered here: the helm-unittest
+# fake client registers a list kind only from the objects it is given. The
+# empty-list case is covered by the migration 61 tests.
+templates:
+  - templates/repository.yaml
+release:
+  name: cozystack-platform
+  namespace: cozy-system
+scheme: &scheme
+  "source.toolkit.fluxcd.io/v1/OCIRepository":
+    gvr:
+      group: source.toolkit.fluxcd.io
+      version: v1
+      resource: ocirepositories
+    namespaced: true
+  "apiextensions.k8s.io/v1/CustomResourceDefinition":
+    gvr:
+      group: apiextensions.k8s.io
+      version: v1
+      resource: customresourcedefinitions
+    namespaced: false
+  "helm.toolkit.fluxcd.io/v2/HelmRelease":
+    gvr:
+      group: helm.toolkit.fluxcd.io
+      version: v2
+      resource: helmreleases
+    namespaced: true
+  "kafka.strimzi.io/v1beta2/Kafka":
+    gvr:
+      group: kafka.strimzi.io
+      version: v1beta2
+      resource: kafkas
+    namespaced: true
+source: &source
+  kind: OCIRepository
+  apiVersion: source.toolkit.fluxcd.io/v1
+  metadata:
+    name: cozystack-platform
+    namespace: cozy-system
+  spec:
+    url: oci://example.test/cozystack-packages
+crdPre: &crdPre
+  kind: CustomResourceDefinition
+  apiVersion: apiextensions.k8s.io/v1
+  metadata:
+    name: kafkas.kafka.strimzi.io
+  spec:
+    versions:
+      - name: v1
+        served: true
+        storage: true
+      - name: v1beta2
+        served: true
+        storage: false
+crdPost: &crdPost
+  kind: CustomResourceDefinition
+  apiVersion: apiextensions.k8s.io/v1
+  metadata:
+    name: kafkas.kafka.strimzi.io
+  spec:
+    versions:
+      - name: v1
+        served: true
+        storage: true
+crdPreStoredV1beta2: &crdPreStoredV1beta2
+  kind: CustomResourceDefinition
+  apiVersion: apiextensions.k8s.io/v1
+  metadata:
+    name: kafkas.kafka.strimzi.io
+  spec:
+    versions:
+      - name: v1
+        served: true
+        storage: true
+      - name: v1beta2
+        served: true
+        storage: false
+  status:
+    storedVersions: [v1beta2, v1]
+legacyKRaft: &legacyKRaft
+  kind: Kafka
+  apiVersion: kafka.strimzi.io/v1beta2
+  metadata:
+    name: kafka-legacy
+    namespace: tenant-a
+  spec:
+    kafka:
+      version: 3.9.0
+  status:
+    kafkaMetadataState: KRaft
+    kafkaMetadataVersion: 3.9-IV0
+    conditions:
+      - type: Ready
+        status: "True"
+modernKRaft: &modernKRaft
+  kind: Kafka
+  apiVersion: kafka.strimzi.io/v1beta2
+  metadata:
+    name: kafka-modern
+    namespace: tenant-b
+  spec:
+    kafka:
+      version: 4.1.1
+  status:
+    kafkaMetadataVersion: 4.1-IV1
+    conditions:
+      - type: Ready
+        status: "True"
+# The test client lists only the kinds it is given an object of.
+unrelatedRelease: &unrelatedRelease
+  kind: HelmRelease
+  apiVersion: helm.toolkit.fluxcd.io/v2
+  metadata:
+    name: unrelated
+    namespace: tenant-z
+  spec: {}
+kafkaAppRemovedTopicConfig: &kafkaAppRemovedTopicConfig
+  kind: HelmRelease
+  apiVersion: helm.toolkit.fluxcd.io/v2
+  metadata:
+    name: kafka-events
+    namespace: tenant-a
+    labels:
+      apps.cozystack.io/application.kind: Kafka
+      apps.cozystack.io/application.name: events
+  spec:
+    values:
+      topics:
+        - name: clicks
+        - name: orders
+          config:
+            retention.ms: "86400000"
+            message.format.version: 3.0-IV1
+tests:
+  - it: renders the repository when Strimzi is not installed
+    kubernetesProvider:
+      scheme: *scheme
+      objects: [*source]
+    asserts:
+      - containsDocument:
+          apiVersion: source.toolkit.fluxcd.io/v1
+          kind: OCIRepository
+          name: cozystack-packages
+          namespace: cozy-system
+
+  - it: renders the repository when every Kafka proves KRaft, including modern evidence without legacy state
+    kubernetesProvider:
+      scheme: *scheme
+      objects: [*source, *unrelatedRelease, *crdPre, *legacyKRaft, *modernKRaft]
+    asserts:
+      - containsDocument:
+          apiVersion: source.toolkit.fluxcd.io/v1
+          kind: OCIRepository
+          name: cozystack-packages
+          namespace: cozy-system
+
+  # The kafka-operator release replaces these CRDs with v1-only ones, which the
+  # API server refuses while v1beta2 is still stored.
+  - it: fails with migrations disabled while Strimzi still stores v1beta2, even when every Kafka proves KRaft
+    kubernetesProvider:
+      scheme: *scheme
+      objects: [*source, *unrelatedRelease, *crdPreStoredV1beta2, *legacyKRaft, *modernKRaft]
+    asserts:
+      - failedTemplate:
+          errorPattern: "still stores v1beta2"
+      - failedTemplate:
+          errorPattern: "/migrations/61"
+
+  # A partly finished conversion can narrow the Kafka CRD and leave another one
+  # storing v1beta2, which the CRD replace refuses just the same.
+  - it: fails with migrations disabled while any other Strimzi CRD still stores v1beta2
+    kubernetesProvider:
+      scheme: *scheme
+      objects:
+        - *source
+        - *unrelatedRelease
+        - *crdPre
+        - *legacyKRaft
+        - kind: CustomResourceDefinition
+          apiVersion: apiextensions.k8s.io/v1
+          metadata:
+            name: kafkatopics.kafka.strimzi.io
+          spec:
+            versions:
+              - name: v1
+                served: true
+                storage: true
+          status:
+            storedVersions: [v1beta2, v1]
+    asserts:
+      - failedTemplate:
+          errorPattern: "still stores v1beta2 for kafkatopics.kafka.strimzi.io"
+
+  # Migration 61 runs as this upgrade's pre-upgrade hook and narrows the stored
+  # versions itself.
+  - it: renders with migrations enabled while Strimzi still stores v1beta2
+    set:
+      migrations:
+        enabled: true
+    kubernetesProvider:
+      scheme: *scheme
+      objects: [*source, *unrelatedRelease, *crdPreStoredV1beta2, *legacyKRaft, *modernKRaft]
+    asserts:
+      - containsDocument:
+          apiVersion: source.toolkit.fluxcd.io/v1
+          kind: OCIRepository
+          name: cozystack-packages
+          namespace: cozy-system
+
+  - it: fails with migrations disabled and lists every Kafka without KRaft evidence
+    set:
+      migrations:
+        enabled: false
+    kubernetesProvider:
+      scheme: *scheme
+      objects:
+        - *source
+        - *unrelatedRelease
+        - *crdPre
+        - *legacyKRaft
+        - kind: Kafka
+          apiVersion: kafka.strimzi.io/v1beta2
+          metadata:
+            name: kafka-nostatus
+            namespace: tenant-c
+            annotations:
+              meta.helm.sh/release-name: kafka-nostatus
+          spec:
+            kafka:
+              version: 3.9.0
+        - kind: Kafka
+          apiVersion: kafka.strimzi.io/v1beta2
+          metadata:
+            name: kafka-mid
+            namespace: tenant-d
+          spec:
+            kafka:
+              version: 3.9.0
+          status:
+            kafkaMetadataState: KRaftPostMigration
+            kafkaMetadataVersion: 3.9-IV0
+            conditions:
+              - type: Ready
+                status: "True"
+        - kind: Kafka
+          apiVersion: kafka.strimzi.io/v1beta2
+          metadata:
+            name: kafka-zk
+            namespace: tenant-e
+          spec:
+            kafka:
+              version: 3.9.0
+            zookeeper:
+              storage:
+                type: ephemeral
+          status:
+            kafkaMetadataState: KRaft
+    asserts:
+      - failedTemplate:
+          errorPattern: "tenant-c/kafka-nostatus \\(Helm release: tenant-c/kafka-nostatus\\): no status"
+      - failedTemplate:
+          errorPattern: "tenant-d/kafka-mid: metadata state KRaftPostMigration"
+      - failedTemplate:
+          errorPattern: "tenant-e/kafka-zk: ZooKeeper section"
+      - failedTemplate:
+          errorPattern: "created after migration 61 stopped the Strimzi operators"
+      - failedTemplate:
+          errorPattern: "/migrations/61"
+
+  - it: fails with migrations enabled on a NotReady Kafka without a KRaft state while v1beta2 is served
+    set:
+      migrations:
+        enabled: true
+    kubernetesProvider:
+      scheme:
+        <<: *scheme
+        "v1/ConfigMap":
+          gvr:
+            version: v1
+            resource: configmaps
+          namespaced: true
+      objects:
+        - *source
+        - *unrelatedRelease
+        - *crdPre
+        - kind: ConfigMap
+          apiVersion: v1
+          metadata:
+            name: cozystack-version
+            namespace: cozy-system
+          data:
+            version: "62"
+        - kind: Kafka
+          apiVersion: kafka.strimzi.io/v1beta2
+          metadata:
+            name: kafka-notready
+            namespace: tenant-f
+          spec:
+            kafka:
+              version: 4.1.1
+          status:
+            kafkaMetadataVersion: 4.1-IV1
+            conditions:
+              - type: NotReady
+                status: "True"
+    asserts:
+      - failedTemplate:
+          errorPattern: "tenant-f/kafka-notready"
+
+  - it: ignores a NotReady Kafka once only the Strimzi 1.2 v1 API is served
+    kubernetesProvider:
+      scheme: *scheme
+      objects:
+        - *source
+        - *unrelatedRelease
+        - *crdPost
+        - kind: Kafka
+          apiVersion: kafka.strimzi.io/v1beta2
+          metadata:
+            name: kafka-notready
+            namespace: tenant-f
+          spec: {}
+          status:
+            conditions:
+              - type: NotReady
+                status: "True"
+    asserts:
+      - containsDocument:
+          apiVersion: source.toolkit.fluxcd.io/v1
+          kind: OCIRepository
+          name: cozystack-packages
+          namespace: cozy-system
+
+  - it: fails closed on a Kafka CRD that serves neither known version
+    kubernetesProvider:
+      scheme: *scheme
+      objects:
+        - *source
+        - *unrelatedRelease
+        - kind: CustomResourceDefinition
+          apiVersion: apiextensions.k8s.io/v1
+          metadata:
+            name: kafkas.kafka.strimzi.io
+          spec:
+            versions:
+              - name: v1beta1
+                served: true
+                storage: true
+    asserts:
+      - failedTemplate:
+          errorPattern: "kafkas.kafka.strimzi.io serves neither"
+
+  - it: lists a Kafka whose status carries a metadata version but no conditions
+    kubernetesProvider:
+      scheme: *scheme
+      objects:
+        - *source
+        - *unrelatedRelease
+        - *crdPre
+        - kind: Kafka
+          apiVersion: kafka.strimzi.io/v1beta2
+          metadata:
+            name: kafka-noconditions
+            namespace: tenant-g
+          spec:
+            kafka:
+              version: 4.1.1
+          status:
+            kafkaMetadataVersion: 4.1-IV1
+        - kind: Kafka
+          apiVersion: kafka.strimzi.io/v1beta2
+          metadata:
+            name: kafka-emptystatus
+            namespace: tenant-h
+          spec:
+            kafka:
+              version: 4.1.1
+          status: {}
+    asserts:
+      - failedTemplate:
+          errorPattern: "KRaft is not confirmed for these Kafka clusters: .*tenant-g/kafka-noconditions"
+      - failedTemplate:
+          errorPattern: "tenant-h/kafka-emptystatus"
+
+  # KRaft is the final Strimzi metadata state, so with a metadata version it
+  # proves KRaft on its own. The conversion deletes the state; migration 61
+  # records the proof in an annotation first, so a retry accepts the same Kafka.
+  - it: renders when a NotReady Kafka has an explicit KRaft state or the migration's KRaft annotation
+    kubernetesProvider:
+      scheme: *scheme
+      objects:
+        - *source
+        - *unrelatedRelease
+        - *crdPre
+        - kind: Kafka
+          apiVersion: kafka.strimzi.io/v1beta2
+          metadata:
+            name: kafka-kraft-notready
+            namespace: tenant-i
+          spec:
+            kafka:
+              version: 3.9.0
+          status:
+            kafkaMetadataState: KRaft
+            kafkaMetadataVersion: 3.9-IV0
+            conditions:
+              - type: NotReady
+                status: "True"
+        - kind: Kafka
+          apiVersion: kafka.strimzi.io/v1beta2
+          metadata:
+            name: kafka-converted-notready
+            namespace: tenant-l
+            annotations:
+              cozystack.io/kraft-verified: 3.9-IV0
+          spec:
+            kafka:
+              version: 3.9.0
+          status:
+            kafkaMetadataVersion: 3.9-IV0
+            conditions:
+              - type: NotReady
+                status: "True"
+    asserts:
+      - containsDocument:
+          apiVersion: source.toolkit.fluxcd.io/v1
+          kind: OCIRepository
+          name: cozystack-packages
+          namespace: cozy-system
+
+  - it: lists a Kafka without a metadata version, or NotReady without a KRaft state or annotation
+    kubernetesProvider:
+      scheme: *scheme
+      objects:
+        - *source
+        - *unrelatedRelease
+        - *crdPre
+        - kind: Kafka
+          apiVersion: kafka.strimzi.io/v1beta2
+          metadata:
+            name: kafka-kraft-noversion
+            namespace: tenant-j
+            annotations:
+              cozystack.io/kraft-verified: 3.9-IV0
+          spec:
+            kafka:
+              version: 3.9.0
+          status:
+            kafkaMetadataState: KRaft
+            conditions:
+              - type: Ready
+                status: "True"
+        - kind: Kafka
+          apiVersion: kafka.strimzi.io/v1beta2
+          metadata:
+            name: kafka-ready-false
+            namespace: tenant-k
+            annotations:
+              cozystack.io/kraft-verified: ""
+          spec:
+            kafka:
+              version: 4.1.1
+          status:
+            kafkaMetadataVersion: 4.1-IV1
+            conditions:
+              - type: Ready
+                status: "False"
+    asserts:
+      - failedTemplate:
+          errorPattern: "tenant-j/kafka-kraft-noversion: no kafkaMetadataVersion"
+      - failedTemplate:
+          errorPattern: "tenant-k/kafka-ready-false: not Ready"
+
+  # Kafka 4 rejects these topic configs, and the kafka chart refuses to render
+  # them; caught here, they stop the upgrade before any application moves.
+  - it: fails while v1beta2 is served and a Kafka application sets a topic config Kafka 4 removed
+    kubernetesProvider:
+      scheme: *scheme
+      objects: [*source, *unrelatedRelease, *crdPre, *legacyKRaft, *kafkaAppRemovedTopicConfig]
+    asserts:
+      - failedTemplate:
+          errorPattern: "tenant-a/events: topic orders sets message.format.version"
+
+  - it: fails while a Kafka application sets segment.bytes below the Kafka 4 floor
+    kubernetesProvider:
+      scheme: *scheme
+      objects:
+        - *source
+        - *unrelatedRelease
+        - *crdPre
+        - *legacyKRaft
+        - kind: HelmRelease
+          apiVersion: helm.toolkit.fluxcd.io/v2
+          metadata:
+            name: kafka-events
+            namespace: tenant-a
+            labels:
+              apps.cozystack.io/application.kind: Kafka
+              apps.cozystack.io/application.name: events
+          spec:
+            values:
+              topics:
+                # The fake client deep-copies only JSON number types, so the
+                # number is written as a float, as decoded JSON arrives.
+                - name: small
+                  config:
+                    segment.bytes: 524288.0
+                - name: floor
+                  config:
+                    segment.bytes: "1048576"
+    asserts:
+      - failedTemplate:
+          errorPattern: "tenant-a/events: topic small sets segment.bytes=524288, below the Kafka 4 minimum of 1048576"
+
+  - it: renders when no Kafka application sets a removed topic config
+    kubernetesProvider:
+      scheme: *scheme
+      objects:
+        - *source
+        - *unrelatedRelease
+        - *crdPre
+        - *legacyKRaft
+        - kind: HelmRelease
+          apiVersion: helm.toolkit.fluxcd.io/v2
+          metadata:
+            name: kafka-events
+            namespace: tenant-a
+            labels:
+              apps.cozystack.io/application.kind: Kafka
+              apps.cozystack.io/application.name: events
+          spec:
+            values:
+              topics:
+                - name: orders
+                  config:
+                    retention.ms: "86400000"
+        - kind: HelmRelease
+          apiVersion: helm.toolkit.fluxcd.io/v2
+          metadata:
+            name: other
+            namespace: tenant-a
+            labels:
+              apps.cozystack.io/application.kind: Other
+          spec:
+            values:
+              topics:
+                - name: orders
+                  config:
+                    message.format.version: 3.0-IV1
+    asserts:
+      - containsDocument:
+          apiVersion: source.toolkit.fluxcd.io/v1
+          kind: OCIRepository
+          name: cozystack-packages
+          namespace: cozy-system
+
+  - it: ignores a removed topic config once only the Strimzi 1.2 v1 API is served
+    kubernetesProvider:
+      scheme: *scheme
+      objects: [*source, *unrelatedRelease, *crdPost, *kafkaAppRemovedTopicConfig]
+    asserts:
+      - containsDocument:
+          apiVersion: source.toolkit.fluxcd.io/v1
+          kind: OCIRepository
+          name: cozystack-packages
+          namespace: cozy-system
+
+  - it: skips a topic entry that is not a map instead of failing the render
+    kubernetesProvider:
+      scheme: *scheme
+      objects:
+        - *source
+        - *unrelatedRelease
+        - *crdPre
+        - *legacyKRaft
+        - kind: HelmRelease
+          apiVersion: helm.toolkit.fluxcd.io/v2
+          metadata:
+            name: kafka-events
+            namespace: tenant-a
+            labels:
+              apps.cozystack.io/application.kind: Kafka
+              apps.cozystack.io/application.name: events
+          spec:
+            values:
+              topics: ["orders"]
+    asserts:
+      - containsDocument:
+          apiVersion: source.toolkit.fluxcd.io/v1
+          kind: OCIRepository
+          name: cozystack-packages
+          namespace: cozy-system
