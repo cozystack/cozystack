@@ -60,6 +60,7 @@ type Server struct {
 type client struct {
 	ch        chan string
 	closeCh   chan struct{}
+	closeOnce sync.Once
 	flusher   http.Flusher
 	w         http.ResponseWriter
 	req       *http.Request
@@ -122,7 +123,7 @@ func (s *Server) ListenAndServe() error {
 func (s *Server) Shutdown(ctx context.Context) error {
 	s.clientsMu.Lock()
 	for c := range s.clients {
-		close(c.closeCh)
+		c.stop()
 	}
 	s.clientsMu.Unlock()
 	return s.http.Shutdown(ctx)
@@ -206,10 +207,16 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
 	<-r.Context().Done()
 
 	// Unregister client
-	close(c.closeCh)
+	c.stop()
 	s.clientsMu.Lock()
 	delete(s.clients, c)
 	s.clientsMu.Unlock()
+}
+
+// stop ends the client's pump. Shutdown and the client's own handler both
+// stop it, in either order.
+func (c *client) stop() {
+	c.closeOnce.Do(func() { close(c.closeCh) })
 }
 
 func (c *client) pump() {
