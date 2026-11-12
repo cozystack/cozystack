@@ -24,6 +24,7 @@ import (
 	"strings"
 
 	"github.com/cozystack/cozystack/internal/manifestutil"
+	"github.com/fluxcd/pkg/apis/kustomize"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -33,7 +34,7 @@ import (
 // Install installs Flux components using embedded manifests.
 // It extracts the manifests and applies them to the cluster.
 // The namespace is automatically determined from the Namespace object in the manifests.
-func Install(ctx context.Context, k8sClient client.Client, writeEmbeddedManifests func(string) error) error {
+func Install(ctx context.Context, k8sClient client.Client, writeEmbeddedManifests func(string) error, images []kustomize.Image) error {
 	logger := log.FromContext(ctx)
 
 	// Create temporary directory for manifests
@@ -93,6 +94,13 @@ func Install(ctx context.Context, k8sClient client.Client, writeEmbeddedManifest
 	namespace, err := extractNamespace(objects)
 	if err != nil {
 		return fmt.Errorf("failed to extract namespace from manifests: %w", err)
+	}
+
+	if len(images) > 0 {
+		logger.Info("Overriding Flux images", "count", len(images))
+	}
+	if err := applyImageOverrides(objects, images); err != nil {
+		return fmt.Errorf("failed to override Flux images: %w", err)
 	}
 
 	logger.Info("Installing Flux components", "namespace", namespace)
