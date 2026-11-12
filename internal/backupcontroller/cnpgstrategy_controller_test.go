@@ -2643,6 +2643,9 @@ func TestReconcileCNPG_WaitsForAnotherRunningBackupOfTheApp(t *testing.T) {
 		owner       string
 		cluster     string
 		wantWait    bool
+		// wantUntracked expects the hold to name the cnpg.io/Backup rather
+		// than a running BackupJob: nothing the controller tracks owns it.
+		wantUntracked bool
 	}{
 		{name: "another running job with a running Backup holds it", seedJob: true, otherJob: backupsv1alpha1.BackupJobPhaseRunning, otherBackup: "running", wantWait: true},
 		{name: "another running job with a pending Backup holds it", seedJob: true, otherJob: backupsv1alpha1.BackupJobPhaseRunning, otherBackup: "pending", wantWait: true},
@@ -2652,7 +2655,14 @@ func TestReconcileCNPG_WaitsForAnotherRunningBackupOfTheApp(t *testing.T) {
 		{name: "a Backup of a succeeded job does not", seedJob: true, otherJob: backupsv1alpha1.BackupJobPhaseSucceeded, otherBackup: "pending"},
 		{name: "a Backup whose job is gone does not", otherBackup: "pending"},
 		{name: "a Backup of another Cluster does not", seedJob: true, otherJob: backupsv1alpha1.BackupJobPhaseRunning, otherBackup: "running", cluster: "postgres-other"},
-		{name: "a Backup created by hand does not", otherBackup: "running", owner: "-"},
+		{name: "a Backup created by hand that has not started does not", otherBackup: "pending", owner: "-"},
+		{name: "a Backup created by hand that is running holds it", otherBackup: "running", owner: "-", wantWait: true, wantUntracked: true},
+		{name: "a Backup created by hand that has started holds it", otherBackup: "started", owner: "-", wantWait: true, wantUntracked: true},
+		{name: "a Backup created by hand of another Cluster does not", otherBackup: "started", owner: "-", cluster: "postgres-other"},
+		{name: "a running Backup whose job is gone holds it", otherBackup: "started", wantWait: true, wantUntracked: true},
+		{name: "a running Backup of a failed job holds it", seedJob: true, otherJob: backupsv1alpha1.BackupJobPhaseFailed, otherBackup: "started", wantWait: true, wantUntracked: true},
+		{name: "a running Backup of a succeeded job holds it", seedJob: true, otherJob: backupsv1alpha1.BackupJobPhaseSucceeded, otherBackup: "running", wantWait: true, wantUntracked: true},
+		{name: "a Backup created by hand that is finalizing does not", otherBackup: "finalizing", owner: "-"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -2702,8 +2712,15 @@ func TestReconcileCNPG_WaitsForAnotherRunningBackupOfTheApp(t *testing.T) {
 				if ours != 0 {
 					t.Errorf("the waiting job created %d cnpg.io/Backup(s)", ours)
 				}
-				if ready == nil || ready.Status != metav1.ConditionFalse || ready.Reason != "WaitingForOtherBackup" || !strings.Contains(ready.Message, "bj-other") {
-					t.Errorf("Ready = %+v, want False/WaitingForOtherBackup naming bj-other", ready)
+				wantReason, wantNamed := "WaitingForOtherBackup", "BackupJob bj-other "
+				if tc.wantUntracked {
+					wantReason, wantNamed = "WaitingForUntrackedBackup", "cnpg.io/Backup "+rolloutNS+"/bj-other-cnpg "
+				}
+				if ready == nil || ready.Status != metav1.ConditionFalse || ready.Reason != wantReason || !strings.Contains(ready.Message, wantNamed) {
+					t.Errorf("Ready = %+v, want False/%s naming %q", ready, wantReason, wantNamed)
+				}
+				if held := apimeta.FindStatusCondition(j.Status.Conditions, backupCondDestinationWriteHeld); held == nil || held.Status != metav1.ConditionTrue || held.Reason != wantReason {
+					t.Errorf("%s = %+v, want True/%s", backupCondDestinationWriteHeld, held, wantReason)
 				}
 				if res.RequeueAfter == 0 {
 					t.Errorf("a queued job is not requeued, and nothing else wakes it when the holder finishes: %+v", res)
@@ -2728,7 +2745,7 @@ func TestReconcileCNPG_WaitsForAnotherRunningBackupOfTheApp(t *testing.T) {
 				if got := f.liveDestination(); got != "s3://bucket/" {
 					t.Errorf("once the holder finished, destination = %q, want the job's own s3://bucket/", got)
 				}
-				if ready := apimeta.FindStatusCondition(j.Status.Conditions, "Ready"); ready != nil && ready.Reason == "WaitingForOtherBackup" {
+				if ready := apimeta.FindStatusCondition(j.Status.Conditions, "Ready"); ready != nil && (ready.Reason == "WaitingForOtherBackup" || ready.Reason == "WaitingForUntrackedBackup") {
 					t.Errorf("Ready still names the finished holder: %+v", ready)
 				}
 				return
@@ -2736,7 +2753,7 @@ func TestReconcileCNPG_WaitsForAnotherRunningBackupOfTheApp(t *testing.T) {
 			if got := f.liveDestination(); got != "s3://bucket/" {
 				t.Errorf("destination = %q, want the job's own s3://bucket/", got)
 			}
-			if ready != nil && ready.Reason == "WaitingForOtherBackup" {
+			if ready != nil && (ready.Reason == "WaitingForOtherBackup" || ready.Reason == "WaitingForUntrackedBackup") {
 				t.Errorf("Ready = %+v, the job was held", ready)
 			}
 			f.settleDestination()
@@ -3878,16 +3895,29 @@ func TestReconcileCNPG_PluginAttachedByAnotherWriterKeepsTheLatch(t *testing.T) 
 // Waiting for another backup resets the retry budget of the destination
 // write, so the queue does not spend it.
 func TestReconcileCNPG_QueueResetsDestinationRetryBudget(t *testing.T) {
+	for name, owner := range map[string]string{"a running BackupJob's Backup": "bj-other", "an untracked Backup": ""} {
+		t.Run(name, func(t *testing.T) {
+			testQueueResetsDestinationRetryBudget(t, owner)
+		})
+	}
+}
+
+func testQueueResetsDestinationRetryBudget(t *testing.T, owner string) {
 	expired := time.Now().Add(-(cnpgDefaultBackupDeadline + time.Minute))
 	f := newAttachedObjectStoreFixture(t, expired, "s3://other/")
 	f.setJobCondition(metav1.Condition{
 		Type: backupCondDestinationApplied, Status: metav1.ConditionFalse, Reason: "ClusterPluginApplyRetrying",
 		Message: "earlier failure", LastTransitionTime: metav1.NewTime(expired),
 	})
-	f.seedOtherBackupJob("bj-other", backupsv1alpha1.BackupJobPhaseRunning)
-	f.seedCNPGBackup("bj-other-cnpg", "bj-other", rolloutCluster, "running")
+	if owner != "" {
+		f.seedOtherBackupJob(owner, backupsv1alpha1.BackupJobPhaseRunning)
+	}
+	f.seedCNPGBackup("bj-other-cnpg", owner, rolloutCluster, "running")
 
 	j, _ := f.pass()
+	if held := apimeta.FindStatusCondition(j.Status.Conditions, backupCondDestinationWriteHeld); held == nil || held.Status != metav1.ConditionTrue {
+		t.Fatalf("%s = %+v, want the job held", backupCondDestinationWriteHeld, held)
+	}
 	if cond := apimeta.FindStatusCondition(j.Status.Conditions, backupCondDestinationApplied); cond != nil {
 		t.Fatalf("%s = %+v kept while waiting for another backup", backupCondDestinationApplied, cond)
 	}
@@ -6772,5 +6802,93 @@ func TestReconcileCNPG_LooksUpItsOwnBackupOncePerPass(t *testing.T) {
 	}
 	if len(backups) != 1 {
 		t.Fatalf("got %d cnpg.io/Backups, want 1", len(backups))
+	}
+}
+
+// With two untracked Backups running the wait names the same one on every
+// pass, whatever order the cache lists them in, so a waiting job does not
+// rewrite its status each poll.
+func TestReconcileCNPG_UntrackedHoldNamesOneBackupAcrossPasses(t *testing.T) {
+	f := newAttachedObjectStoreFixture(t, time.Now(), "s3://other/")
+	f.seedCNPGBackup("a-cnpg", "", rolloutCluster, "running")
+	f.seedCNPGBackup("z-cnpg", "", rolloutCluster, "started")
+	statusWrites := 0
+	f.r.Client = interceptor.NewClient(f.c.(client.WithWatch), interceptor.Funcs{
+		List: func(ctx context.Context, cl client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
+			if err := cl.List(ctx, list, opts...); err != nil {
+				return err
+			}
+			if backups, ok := list.(*cnpgtypes.BackupList); ok {
+				slices.Reverse(backups.Items)
+			}
+			return nil
+		},
+		SubResourceUpdate: func(ctx context.Context, cl client.Client, sub string, obj client.Object, opts ...client.SubResourceUpdateOption) error {
+			statusWrites++
+			return cl.SubResource(sub).Update(ctx, obj, opts...)
+		},
+	})
+
+	j, _ := f.pass()
+	if ready := apimeta.FindStatusCondition(j.Status.Conditions, "Ready"); ready == nil || ready.Reason != "WaitingForUntrackedBackup" || !strings.Contains(ready.Message, "/a-cnpg ") {
+		t.Fatalf("Ready = %+v, want WaitingForUntrackedBackup naming a-cnpg", ready)
+	}
+	statusWrites = 0
+	f.pass()
+	if statusWrites != 0 {
+		t.Errorf("a second pass with the same two untracked Backups wrote the BackupJob status %d time(s)", statusWrites)
+	}
+}
+
+// An error listing the namespace's Backups is not taken as "nothing runs".
+func TestReconcileCNPG_UntrackedBackupListErrorIsReturned(t *testing.T) {
+	f := newAttachedObjectStoreFixture(t, time.Now(), "s3://other/")
+	f.r.Client = interceptor.NewClient(f.c.(client.WithWatch), interceptor.Funcs{
+		List: func(ctx context.Context, cl client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
+			lo := &client.ListOptions{}
+			lo.ApplyOptions(opts)
+			if _, ok := list.(*cnpgtypes.BackupList); ok && (lo.LabelSelector == nil || lo.LabelSelector.Empty()) {
+				return apierrors.NewServiceUnavailable("cache not synced")
+			}
+			return cl.List(ctx, list, opts...)
+		},
+	})
+	j := &backupsv1alpha1.BackupJob{}
+	if err := f.c.Get(context.Background(), client.ObjectKey{Namespace: rolloutNS, Name: "bj"}, j); err != nil {
+		t.Fatalf("get BackupJob: %v", err)
+	}
+	if _, err := f.r.reconcileCNPG(context.Background(), j, f.resolved); err == nil {
+		t.Fatalf("reconcileCNPG swallowed the error listing untracked Backups")
+	}
+	if got := f.liveDestination(); got != "s3://other/" {
+		t.Errorf("destination written although the running Backups could not be listed: %q", got)
+	}
+}
+
+// A ScheduledBackup labels its Backups with the Cluster but with no
+// BackupJob; such a Backup holds the destination while it runs.
+func TestReconcileCNPG_ScheduledBackupHoldsTheDestination(t *testing.T) {
+	f := newAttachedObjectStoreFixture(t, time.Now(), "s3://other/")
+	b := &cnpgtypes.Backup{
+		ObjectMeta: metav1.ObjectMeta{Namespace: rolloutNS, Name: "nightly-20261112", Labels: map[string]string{
+			cnpgClusterLabel:           rolloutCluster,
+			"cnpg.io/scheduled-backup": "nightly",
+			"cnpg.io/immediateBackup":  "false",
+		}},
+		Spec:   cnpgtypes.BackupSpec{Cluster: cnpgtypes.ClusterReference{Name: rolloutCluster}},
+		Status: cnpgtypes.BackupStatus{Phase: cnpgBackupPhaseStarted},
+	}
+	if err := f.c.Create(context.Background(), b); err != nil {
+		t.Fatalf("seed scheduled cnpg.io/Backup: %v", err)
+	}
+	j, backups := f.pass()
+	if got := f.liveDestination(); got != "s3://other/" {
+		t.Errorf("destination rewritten under a running scheduled backup: %q", got)
+	}
+	if len(backups) != 1 {
+		t.Errorf("got %d cnpg.io/Backups, want only the scheduled one", len(backups))
+	}
+	if ready := apimeta.FindStatusCondition(j.Status.Conditions, "Ready"); ready == nil || ready.Reason != "WaitingForUntrackedBackup" || !strings.Contains(ready.Message, "/nightly-20261112 ") {
+		t.Errorf("Ready = %+v, want WaitingForUntrackedBackup naming nightly-20261112", ready)
 	}
 }
