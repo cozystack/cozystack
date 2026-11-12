@@ -1,0 +1,79 @@
+{{- $host := index .Values._cluster "root-host" }}
+{{- $realm := index .Values._cluster "oidc-realm-name" | default "cozy" }}
+{{- $oidcEnabled := index .Values._cluster "oidc-enabled" }}
+{{- $keycloakInternalUrl := index .Values._cluster "keycloak-internal-url" | default "" }}
+{{- if eq $oidcEnabled "true" }}
+# oauth2-proxy alpha configuration for the OIDC gatekeeper. Provider, upstream,
+# server and header injection live here because only the alpha configuration
+# can pass a query parameter from /oauth2/start through to the IdP login URL.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: incloud-web-gatekeeper-config
+data:
+  alpha-config.yaml: |
+    server:
+      BindAddress: 0.0.0.0:8000
+    upstreamConfig:
+      upstreams:
+        - id: /
+          path: /
+          uri: http://cozy-dashboard-console.{{ .Release.Namespace }}.svc:8080
+          passHostHeader: true
+          proxyWebSockets: true
+          flushInterval: 1s
+          timeout: 30s
+    injectRequestHeaders:
+      - name: X-Forwarded-Groups
+        values: [{claim: groups}]
+      - name: X-Forwarded-User
+        values: [{claim: user}]
+      - name: X-Forwarded-Email
+        values: [{claim: email}]
+      - name: X-Forwarded-Preferred-Username
+        values: [{claim: preferred_username}]
+      - name: X-Forwarded-Access-Token
+        values: [{claim: access_token}]
+      - name: Authorization
+        values: [{claim: id_token, prefix: "Bearer "}]
+    providers:
+      - id: oidc=dashboard
+        provider: oidc
+        clientID: dashboard
+        clientSecretFile: /etc/oauth2-proxy/client/client-secret
+        # No offline_access: that scope makes Keycloak issue an *offline*
+        # refresh token, which is decoupled from the SSO session and is NOT
+        # revoked by logout (end_session). Since oauth2-proxy keeps the
+        # refresh token in the kc-access cookie and silently refreshes it,
+        # a copied cookie would stay valid for the whole offline-session
+        # lifetime (~30d) even after the user logs out. An online refresh
+        # token is bound to the SSO session and is revoked on logout.
+        scope: openid email profile
+        loginURLParameters:
+          - name: approval_prompt
+            default: [force]
+          # A link to /oauth2/start?kc_idp_hint=<alias> sends the user straight
+          # to that Keycloak identity provider instead of the realm login page.
+          - name: kc_idp_hint
+            allow:
+              - pattern: '^[A-Za-z0-9._-]+$'
+        {{- if $keycloakInternalUrl }}
+        loginURL: https://keycloak.{{ $host }}/realms/{{ $realm }}/protocol/openid-connect/auth
+        redeemURL: {{ $keycloakInternalUrl }}/protocol/openid-connect/token
+        validateURL: {{ $keycloakInternalUrl }}/protocol/openid-connect/userinfo
+        backendLogoutURL: {{ $keycloakInternalUrl }}/protocol/openid-connect/logout?id_token_hint={id_token}
+        {{- else }}
+        backendLogoutURL: https://keycloak.{{ $host }}/realms/{{ $realm }}/protocol/openid-connect/logout?id_token_hint={id_token}
+        {{- end }}
+        oidcConfig:
+          issuerURL: https://keycloak.{{ $host }}/realms/{{ $realm }}
+          {{- if $keycloakInternalUrl }}
+          skipDiscovery: true
+          jwksURL: {{ $keycloakInternalUrl }}/protocol/openid-connect/certs
+          {{- end }}
+          emailClaim: email
+          groupsClaim: groups
+          userIDClaim: email
+          audienceClaims: [aud]
+          insecureSkipNonce: true
+{{- end }}
