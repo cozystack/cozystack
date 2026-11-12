@@ -8,8 +8,8 @@
 # backup.enabled=true with placeholder S3 coordinates is deliberate: the
 # sidecar runs `clickhouse-backup server`, which starts its HTTP API without
 # validating S3 (ALLOW_EMPTY_BACKUPS=true, lazy connect — the same reason the
-# platform useSystemBucket flow marks the S3 secret keys optional so the Pod
-# starts before any bucket is projected). So the Pod becomes Ready and the
+# platform useSystemBucket flow can start the Pod before any bucket is
+# projected). So the Pod becomes Ready and the
 # chart<->strategy contract is assertable with no reachable object store. The
 # real S3 backup/restore round-trip lives in clickhouse-2-backup-roundtrip,
 # which runs in tenant-root against the in-cluster SeaweedFS.

@@ -105,10 +105,6 @@ backupStorage:
   endpoint: http://seaweedfs-s3.tenant-root.svc.cozy.local:8333
   # region is re-projected into cozy-backups-creds on the next reconcile
   # (1-minute tick for system namespaces, on-demand for tenant namespaces).
-  # However, charts that consume the region via secretKeyRef in env vars —
-  # the chart-emitted ClickHouse sidecar on `useSystemBucket: true` is the
-  # only such consumer today — only pick up the new value on Pod restart.
-  # Plan a rollout of those Pods when you change this value.
   region: us-east-1
   forcePathStyle: true
   # systemSecretName — the human-friendly Secret produced by the Bucket
