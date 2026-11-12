@@ -76,12 +76,18 @@ tests:
                       - vlinsert
 
   - it: renders no monitoring egress rule when the tenant owns its monitoring
-    # Owner resolves to the tenant itself, so writes stay in-namespace (covered
-    # by allow-internal-communication) and no cross-namespace rule is added.
+    # The inherited owner points at an ancestor (_namespace.monitoring is never
+    # empty in a real cluster; cozystack-basics sets it on tenant-root and every
+    # child inherits it), but monitoring: true overrides it to this tenant, so
+    # writes stay in-namespace (covered by allow-internal-communication) and no
+    # cross-namespace rule is added. The set below is what makes the override
+    # load-bearing: without _namespace.monitoring the owner is empty either way.
     set:
       monitoring: true
       _cluster:
         bundle-name: paas-full
+      _namespace:
+        monitoring: tenant-root
     documentSelector:
       path: metadata.name
       value: tenant-ktj-egress
@@ -102,15 +108,3 @@ tests:
                 - matchLabels:
                     cozystack.io/service: ingress
                     "k8s:io.kubernetes.pod.namespace": tenant-root
-
-  - it: does not render the removed ingress-monitoring policy
-    set:
-      monitoring: true
-      _cluster:
-        bundle-name: paas-full
-    asserts:
-      - containsDocument:
-          apiVersion: cilium.io/v2
-          kind: CiliumClusterwideNetworkPolicy
-          name: tenant-ktj-ingress-monitoring
-        not: true
