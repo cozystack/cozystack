@@ -1,17 +1,16 @@
 {{- /*
   Worker node pool for a managed Kubernetes cluster.
 
-  This chart is the second half of the Kubernetes-app split (cozystack/community#8):
-  the control plane (Cluster / KamajiControlPlane / KubevirtCluster / PKI) lives in
-  the `kubernetes` chart, and each worker pool is a separate `kubernetes-nodes`
-  release. The pool objects (KubevirtMachineTemplate, MachineDeployment,
-  MachineHealthCheck, worker WorkloadMonitor) and the talos-reconcile Job that
-  produces the pool's TalosConfigTemplate are rendered here, wired to the parent
-  cluster `kubernetes-<cluster>` by name convention (see _helpers.tpl). Every
-  reference the monolithic chart made through $.Release.Name is reconstructed here
-  as the parent clusterName so the objects are byte-identical to what the parent
-  rendered for the same group — the KubevirtMachineTemplate is content-hash-named,
-  so any drift would roll every live worker VM.
+  The control plane (Cluster / KamajiControlPlane / KubevirtCluster / PKI) lives
+  in the `kubernetes` chart, and each worker pool is a separate
+  `kubernetes-nodes` release. The pool objects (machine template,
+  MachineDeployment, MachineHealthCheck, worker WorkloadMonitor) and the
+  talos-reconcile Job that produces the pool's TalosConfigTemplate are rendered
+  here, wired to the parent cluster `kubernetes-<cluster>` by name convention
+  (see _helpers.tpl). Every reference to the cluster is built from that
+  clusterName. Pools adopted by migration 56 keep running on objects of exactly
+  these names and this content: the machine template is content-hash-named, so
+  any drift in its text would roll every live worker VM.
 
   Talos -> Kubernetes support matrix, against the pool default. The pool can also
   reach a different Talos release through osImage.builtin.version /
@@ -1066,8 +1065,7 @@ spec:
   {{- /* MHC spec.maxUnhealthy is an IntOrString. CAPI admission accepts a
          bare integer (0, 1, ...) or a percentage string ("0%", "50%"), but
          rejects a quoted plain integer ("0"). Quote only when the operator
-         supplied a percentage; otherwise render the value as a bare int so
-         the admission webhook is happy with the chart-default "0". */}}
+         supplied a percentage; otherwise render the value as a bare int. */}}
   {{- $maxUnhealthy := toString $.Values.maxUnhealthy }}
   {{- $muSource := "maxUnhealthy" }}
   {{- if hasSuffix "%" $maxUnhealthy }}

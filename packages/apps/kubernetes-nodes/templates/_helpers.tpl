@@ -165,10 +165,9 @@ The pool attaches to the parent Kubernetes CR named .Values.cluster, whose
 HelmRelease (and therefore CAPI Cluster / KamajiControlPlane / KubevirtCluster
 and every worker object it owns) is `kubernetes-<cluster>`. This chart does
 NOT use its own .Release.Name for CAPI wiring — the pool lives in a separate
-HelmRelease from the control plane, so every reference that the monolithic
-chart made through $.Release.Name is reconstructed here as kubernetes-<cluster>
-instead. Linkage is by name convention (mirrors vm-instance -> vm-disk), not
-ownerReference or lookup-gated render.
+HelmRelease from the control plane, so every reference to the cluster's objects
+is built from kubernetes-<cluster>. Linkage is by name convention (mirrors
+vm-instance -> vm-disk), not ownerReference or lookup-gated render.
 */}}
 {{- define "kubernetes-nodes.clusterName" -}}
 {{- if not .Values.cluster -}}
@@ -194,9 +193,9 @@ The node-group name for this pool, derived from the release name.
 A KubernetesNodes CR is named <cluster>-<pool> and gets the release prefix
 `kubernetes-nodes-`, so the release name is `kubernetes-nodes-<cluster>-<pool>`.
 The group name is the <pool> suffix. Enforcing the `<cluster>-` segment keeps
-every rendered object named `kubernetes-<cluster>-<pool>` — byte-identical to
-what the monolithic chart rendered for the same group — and prevents two
-clusters in one namespace from colliding on a pool named e.g. `md0`.
+every rendered object named `kubernetes-<cluster>-<pool>` — the names worker
+objects adopted by migration 56 already carry — and prevents two clusters in
+one namespace from colliding on a pool named e.g. `md0`.
 */}}
 {{- define "kubernetes-nodes.groupName" -}}
 {{- $prefix := printf "kubernetes-nodes-%s-" .Values.cluster -}}
@@ -253,8 +252,7 @@ control plane is supported (up to n-3 upstream) and is the normal state during a
 rolling upgrade — the parent Kubernetes CR is bumped first, then each pool. A
 symmetric equality check would flip every pool of a cluster to render-failure the
 moment the parent is bumped, blocking all pool operations until each pool is
-hand-edited, so the check is directional. The split removed the single `version`
-that used to feed both control plane and workers. Looks up the parent
+hand-edited, so the check is directional. Looks up the parent
 KamajiControlPlane (named like the reconstructed clusterName) and compares its
 spec.version minor against .Values.version. Skipped when the lookup is empty
 (helm template / unittest, or the parent not yet present) so it validates only
