@@ -120,3 +120,38 @@ etcd:
     object: {metadata: {generation: 3}, spec: {replicas: 0}, status: {readyMembers: 0, conditions: [{type: Available, status: "False", reason: DeadlineExceeded, observedGeneration: 3}]}}
     want: InProgress
 
+
+vm:
+  - name: absent-status
+    object: {}
+    error: "no such attribute"
+  - name: empty-status
+    object: {status: {}}
+    want: InProgress
+  - name: expanding
+    object: {status: {observedGeneration: 2, updateStatus: expanding}}
+    want: InProgress
+  - name: operational
+    object: {status: {observedGeneration: 2, updateStatus: operational}}
+    want: Current
+  - name: failed
+    object: {status: {observedGeneration: 2, updateStatus: failed}}
+    want: Failed
+  - name: paused
+    object: {spec: {paused: true}, status: {observedGeneration: 2, updateStatus: paused}}
+    want: Failed
+  - name: unknown-status-fails-closed
+    object: {status: {observedGeneration: 2, updateStatus: unexpected}}
+    want: Failed
+  - name: explicit-empty-status-fails-closed
+    object: {status: {observedGeneration: 2, updateStatus: ""}}
+    want: Failed
+  - name: stale-operational
+    object: {status: {observedGeneration: 1, updateStatus: operational}}
+    want: InProgress
+  - name: stale-failure
+    object: {status: {observedGeneration: 1, updateStatus: failed}}
+    want: InProgress
+  - name: stale-paused
+    object: {status: {observedGeneration: 1, updateStatus: paused}}
+    want: InProgress

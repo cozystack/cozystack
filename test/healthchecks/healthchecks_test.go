@@ -79,6 +79,20 @@ func TestRenderedHealthChecks(t *testing.T) {
 			values:   []string{"etcd=true"},
 			families: map[string]string{"etcd-operator.cozystack.io/v1alpha2/EtcdCluster": "etcd"},
 		},
+		{
+			name: "monitoring", path: "packages/extra/monitoring", template: "templates/helmrelease.yaml",
+			families: map[string]string{
+				"operator.victoriametrics.com/v1/VLCluster":           "vm",
+				"operator.victoriametrics.com/v1/VTCluster":           "vm",
+				"operator.victoriametrics.com/v1/VTSingle":            "vm",
+				"operator.victoriametrics.com/v1beta1/VMAuth":         "vm",
+				"operator.victoriametrics.com/v1beta1/VMCluster":      "vm",
+				"operator.victoriametrics.com/v1beta1/VMAgent":        "vm",
+				"operator.victoriametrics.com/v1beta1/VMAlert":        "vm",
+				"operator.victoriametrics.com/v1beta1/VMAlertmanager": "vm",
+				"postgresql.cnpg.io/v1/Cluster":                       "cnpg",
+			},
+		},
 	} {
 		t.Run(chart.name, func(t *testing.T) {
 			hr := renderRelease(t, chart.name, chart.path, chart.template, chart.values)

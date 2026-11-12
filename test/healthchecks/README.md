@@ -10,12 +10,15 @@ This is a separate Go module because the evaluator must match the installed cont
 | --- | --- | --- | --- |
 | CNPG Cluster | Ready=True | No early failure | Every nonready status, including persistent errors, waits until the Helm timeout. |
 | EtcdCluster | Positive replica count, all members ready, current-generation Available=True and Progressing=False/Reconciled | Positive replicas and current-generation Available=False with BootstrapFailed or DeadlineExceeded | Bootstrap, quorum loss, partial membership, stale conditions, unknown conditions and paused/zero replicas wait until the timeout. |
+| VLCluster, VTCluster, VTSingle, VMAuth, VMCluster, VMAgent, VMAlert, VMAlertmanager | updateStatus=operational | Any reported value other than operational or expanding, including failed, paused and unknown values | Absent updateStatus and expanding wait; stale observedGeneration waits even when the old status was failed. |
 
 The evaluator checks top-level `status.observedGeneration` first, then InProgress, Failed and Current in that order; unmatched expressions return InProgress. The etcd gate deliberately has no InProgress expression so partial membership cannot hide terminal failure. Its conditions carry their own observedGeneration, so the gate checks those explicitly. The terminal fixtures include zero ready members and zero broken members: the operator's PVC-backed clusters do not use `brokenMembers` as a terminal-health signal.
 
 Etcd `replicas=0` is an intentional pause, including a fresh cluster that has never bootstrapped and a cluster paused after its bootstrap deadline expires. A fresh terminal condition does not override the zero-replica policy. The gate assumes a tenant dependency requires a serving datastore, so that state does not satisfy readiness. The [operator pause branch](https://github.com/cozystack/etcd-operator/blob/v0.5.6/controllers/etcdcluster_controller.go#L1407) reports Available=False/Paused because an empty cluster cannot serve requests; its [deadline handler](https://github.com/cozystack/etcd-operator/blob/v0.5.6/controllers/etcdcluster_controller.go#L2032) distinguishes terminal failures from recovery.
 
 CNPG's [Ready writer](https://github.com/cloudnative-pg/cloudnative-pg/blob/v1.30.0/pkg/resources/status/transactions.go#L32) uses ClusterIsNotReady for every nonhealthy phase, so a reason cannot tell a persistent error from bootstrap and the gate declares no `failed` expression. The writer does not report a generation with that condition, so the gate cannot distinguish a pre-edit Ready from a fresh Ready; the fixtures record this limitation, and adding a generation requirement would prevent CNPG from ever becoming Current.
+
+VictoriaMetrics [v0.68.4 status metadata](https://github.com/VictoriaMetrics/operator/blob/v0.68.4/api/operator/v1beta1/vmextra_types.go#L1354) supplies top-level observedGeneration, so the fixtures exercise the evaluator's own generation check for that contract.
 
 ## Verification boundary
 
