@@ -1345,6 +1345,10 @@ func altinityCleanupRetryWait(ctx context.Context, backup *backupsv1alpha1.Backu
 		getLogger(ctx).Info("ignoring an unreadable cleanup retry time", "backup", backup.Name, "value", v)
 		return 0
 	}
+	if at.After(now.Add(altinityCleanupRetryMax)) {
+		getLogger(ctx).Info("ignoring a cleanup retry time further ahead than any failure sets", "backup", backup.Name, "value", v)
+		return 0
+	}
 	return at.Sub(now)
 }
 
