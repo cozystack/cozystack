@@ -135,11 +135,11 @@ func (a *app) notify(args []string) int {
 	stalled := days >= stalledAfter
 	var text []string
 	if stalled {
-		fmt.Fprintf(a.stdout, "%s: batch pull request #%d has been open since %s, %d days\n", l.branch(), pr.Number, opened.Format(time.DateOnly), days)
+		_, _ = fmt.Fprintf(a.stdout, "%s: batch pull request #%d has been open since %s, %d days\n", l.branch(), pr.Number, opened.Format(time.DateOnly), days)
 		text = append(text, fmt.Sprintf("This batch has been open since %s, %d days, through at least one scheduled run. Merge it, or close it and the next run starts a new one; until then each run adds what the rules take to it.", opened.Format(time.DateOnly), days))
 	}
 	if len(partial) > 0 {
-		fmt.Fprintf(a.stdout, "%s: %d units on #%d carry only part of their originals\n", l.branch(), len(partial), pr.Number)
+		_, _ = fmt.Fprintf(a.stdout, "%s: %d units on #%d carry only part of their originals\n", l.branch(), len(partial), pr.Number)
 		var b strings.Builder
 		b.WriteString("These are on the batch but carry only part of their originals on this line; take each out with `backport-batch run --defer` before the cut, and port what applies as a pull request of its own:\n")
 		for _, n := range partial {
@@ -148,7 +148,7 @@ func (a *app) notify(args []string) int {
 		text = append(text, b.String())
 	}
 	if len(conflicts) > 0 {
-		fmt.Fprintf(a.stdout, "%s: %d deferred conflicts on #%d wait for a maintainer\n", l.branch(), count(conflicts), pr.Number)
+		_, _ = fmt.Fprintf(a.stdout, "%s: %d deferred conflicts on #%d wait for a maintainer\n", l.branch(), count(conflicts), pr.Number)
 		var b strings.Builder
 		fmt.Fprintf(&b, "These conflicts wait for a maintainer, as [resolving a conflict](%sresolve-conflict.md) describes; unresolved, each goes to the next batch, and so does what waits on one:\n", tasksURL)
 		for _, n := range conflicts {
@@ -158,9 +158,9 @@ func (a *app) notify(args []string) int {
 	}
 	if len(waiting) > 0 {
 		if count(waiting) == len(waiting) {
-			fmt.Fprintf(a.stdout, "%s: %d originals on #%d change %s and wait for a maintainer\n", l.branch(), len(waiting), pr.Number, workflowsDir)
+			_, _ = fmt.Fprintf(a.stdout, "%s: %d originals on #%d change %s and wait for a maintainer\n", l.branch(), len(waiting), pr.Number, workflowsDir)
 		} else {
-			fmt.Fprintf(a.stdout, "%s: %d originals on #%d change %s or wait on one that does\n", l.branch(), len(waiting), pr.Number, workflowsDir)
+			_, _ = fmt.Fprintf(a.stdout, "%s: %d originals on #%d change %s or wait on one that does\n", l.branch(), len(waiting), pr.Number, workflowsDir)
 		}
 		var b strings.Builder
 		fmt.Fprintf(&b, "These change `%s`, which the batch's token may not push, and wait for a maintainer to bring them over, as [changes to workflows](%s#changes-to-workflows) describes, or wait on one that does:\n", workflowsDir, policyURL)
@@ -170,7 +170,7 @@ func (a *app) notify(args []string) int {
 		text = append(text, b.String())
 	}
 	if len(parks) > 0 {
-		fmt.Fprintf(a.stdout, "%s: %d parked originals on #%d, named once\n", l.branch(), len(parks), pr.Number)
+		_, _ = fmt.Fprintf(a.stdout, "%s: %d parked originals on #%d, named once\n", l.branch(), len(parks), pr.Number)
 		var b strings.Builder
 		fmt.Fprintf(&b, "These cannot land on this line whole, so the batch parked them; each is named here once. A maintainer ports what applies as a pull request of its own, as [fixes that exist only on a release line](%s#fixes-that-exist-only-on-a-release-line) describes, or drops the original with `backport-batch run --drop`:\n", policyURL)
 		for _, p := range parks {
@@ -354,7 +354,7 @@ func (a *app) lines(args []string) int {
 		return a.fail(err)
 	}
 	for _, l := range slices.Backward(lines) {
-		fmt.Fprintln(a.stdout, l.branch())
+		_, _ = fmt.Fprintln(a.stdout, l.branch())
 	}
 	return 0
 }
