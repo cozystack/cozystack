@@ -120,7 +120,7 @@ test:
 	make -C packages/core/testing apply
 	make -C packages/core/testing e2e
 
-unit-tests: helm-unit-tests bats-unit-tests bats-posix-compat-tests go-unit-tests go-module-tests rd-presets-check test-check-readiness test-backport-batch migrations-target-check
+unit-tests: helm-unit-tests bats-unit-tests bats-posix-compat-tests go-unit-tests go-module-tests rd-presets-check test-check-readiness migrations-target-check
 
 helm-unit-tests:
 	hack/helm-unit-tests.sh
@@ -196,6 +196,9 @@ test-check-readiness:
 	go test ./test/check-readiness/ -count=1
 
 # ./cmd/... is excluded from go-unit-tests, so the batch tool needs its own target.
+# It is not a prerequisite of unit-tests: the checks job in pull-requests.yaml
+# runs it only when the diff touches a path listed in
+# cmd/backport-batch/test-inputs.txt.
 test-backport-batch:
 	go test ./cmd/backport-batch/... -count=1
 
