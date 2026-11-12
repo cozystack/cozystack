@@ -36,12 +36,13 @@ migrations:
 # Which storage control plane the cluster runs.
 #
 #   linstor   — the default, and what every existing cluster runs.
-#   blockstor — EXPERIMENTAL, for new clusters only. A
+#   blockstor — EXPERIMENTAL, for new clusters. A
 #               LINSTOR-API-compatible control plane serving the same
-#               CSI driver and StorageClasses. Do not switch a cluster
-#               that already holds LINSTOR volumes: the pinned blockstor
-#               release cannot adopt them safely, and nothing converts
-#               LINSTOR's database into blockstor's.
+#               CSI driver and StorageClasses. This value does not move
+#               a cluster that already holds LINSTOR volumes: blockstor
+#               adopts them with its own linstor-migrate runbook, which
+#               this platform does not run:
+#               https://blockstor.org/docs/migration/
 #
 # Anything else fails the render rather than defaulting, so a typo
 # cannot quietly deploy the wrong storage control plane. Changing the
