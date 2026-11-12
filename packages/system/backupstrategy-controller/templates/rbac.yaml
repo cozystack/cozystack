@@ -117,10 +117,12 @@ rules:
 - apiGroups: [""]
   resources: ["namespaces"]
   verbs: ["get", "list", "watch"]
-# Events from Recorder.Event() calls
+# Events from Recorder.Event() calls. list: the CNPG driver reads the events
+# CloudNativePG records on a pending cnpg.io/Backup by UID, uncached, so no
+# watch is needed.
 - apiGroups: [""]
   resources: ["events"]
-  verbs: ["create", "patch"]
+  verbs: ["create", "patch", "list"]
 # Leader election (--leader-elect)
 - apiGroups: ["coordination.k8s.io"]
   resources: ["leases"]
