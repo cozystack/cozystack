@@ -1,0 +1,67 @@
+suite: bucket UI can be switched off
+templates:
+  - templates/deployment.yaml
+  - templates/service.yaml
+  - templates/ingress.yaml
+  - templates/httproute.yaml
+
+release:
+  name: bucket
+  namespace: tenant-root
+
+set:
+  _namespace:
+    host: example.org
+    ingress: tenant-root
+
+tests:
+  - it: renders the UI Deployment, Service and Ingress by default
+    asserts:
+      - template: templates/deployment.yaml
+        hasDocuments:
+          count: 1
+      - template: templates/service.yaml
+        hasDocuments:
+          count: 1
+      - template: templates/ingress.yaml
+        hasDocuments:
+          count: 1
+
+  - it: renders none of the UI objects behind an Ingress when ui is false
+    set:
+      ui: false
+    asserts:
+      - template: templates/deployment.yaml
+        hasDocuments:
+          count: 0
+      - template: templates/service.yaml
+        hasDocuments:
+          count: 0
+      - template: templates/ingress.yaml
+        hasDocuments:
+          count: 0
+
+  - it: renders no HTTPRoute behind a Gateway when ui is false
+    set:
+      ui: false
+      _namespace:
+        gateway: tenant-root
+    asserts:
+      - template: templates/httproute.yaml
+        hasDocuments:
+          count: 0
+
+  # The UI hostname is the only consumer of the tenant apex in this chart, so
+  # a bucket without it must not trip the empty-apex guard.
+  - it: does not require the tenant apex when ui is false
+    set:
+      ui: false
+      _namespace:
+        host: ""
+    asserts:
+      - template: templates/deployment.yaml
+        hasDocuments:
+          count: 0
+      - template: templates/ingress.yaml
+        hasDocuments:
+          count: 0

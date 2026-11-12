@@ -5,3 +5,4 @@ _namespace: {}
 
 bucketName: "cozystack"
 users: {}
+ui: true
