@@ -90,4 +90,14 @@ if grep -qE '^packages/system/seaweedfs/' "$CHANGED"; then
   esac
 fi
 
+#   the kubevirt-csi-node sidecars run on tenant vCPUs and are ISA-checked by
+#   hack/image-smoke.bats in the job that builds kubevirt-csi-driver, so a
+#   kubevirt-csi-node-only diff must still run the kubernetes build.
+if grep -qE '^packages/system/kubevirt-csi-node/' "$CHANGED"; then
+  case " $selected " in
+    *" packages/apps/kubernetes "*) : ;;
+    *) selected="$selected packages/apps/kubernetes" ;;
+  esac
+fi
+
 emit_json "$selected"
