@@ -547,6 +547,33 @@ func TestCleanupMariaDBBackup_RecordedDumpAlreadyGoneIsNotContested(t *testing.T
 	}
 }
 
+// The runs that may own a dump are read from the API server: a run whose
+// operator Backup has not reached the cache yet can already have uploaded
+// its dump, and missing it would delete that dump as this Backup's.
+func TestCleanupMariaDBBackup_ContestsWithRunsTheCacheHasNotSeen(t *testing.T) {
+	started := cleanupCreated.Add(time.Minute)
+	theirs := dumpKey(cleanupPrefix, started.Add(30*time.Second), "gzip")
+	unseen := func() *mariadbtypes.Backup {
+		b := cleanupOperatorBackup(t)
+		b.Name = "op-unseen"
+		b.CreationTimestamp = metav1.NewTime(started)
+		b.Status.Conditions = nil
+		return b
+	}
+	cases := map[string]string{"recorded dump": strings.TrimPrefix(theirs, cleanupPrefix), "legacy Backup": ""}
+	for name, recorded := range cases {
+		t.Run(name, func(t *testing.T) {
+			bucket := &fakeS3Bucket{objects: []s3ObjectInfo{{Key: theirs, LastModified: started.Add(time.Minute)}}}
+			backup := cleanupBackup(recorded)
+			r, rec := cleanupReconciler(t, bucket, backup, cleanupOperatorBackup(t), s3CredsSecret("tenant", "creds"), tenantNamespace())
+			r.APIReader = newMariaDBStrategyTestClient(t, cleanupOperatorBackup(t), unseen())
+
+			res, err := r.cleanupMariaDBBackup(context.Background(), backup)
+			assertReleasedUntouched(t, r, rec, bucket, res, err)
+		})
+	}
+}
+
 // A run started after the recorded dump was uploaded cannot have written it.
 func TestCleanupMariaDBBackup_DeletesItsRecordedDumpDespiteALaterUnfinishedRun(t *testing.T) {
 	key := cleanupPrefix + cleanupDumpName

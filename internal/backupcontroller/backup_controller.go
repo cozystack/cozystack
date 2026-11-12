@@ -44,9 +44,10 @@ type BackupReconciler struct {
 	// cleanup reads them to reach the platform bucket.
 	CredentialsConfig BackupCredentialsConfig
 	// APIReader is the manager's uncached reader. The MariaDB cleanup lists
-	// the RestoreJobs and operator Restores of a Backup through it: a
-	// restore that started before the delete may not be in the cache yet.
-	// Wired in SetupWithManager.
+	// the RestoreJobs and operator Restores of a Backup, and the operator
+	// Backups that may own its dump, through it: a restore that started
+	// before the delete, or a run that has already uploaded its dump, may
+	// not be in the cache yet. Wired in SetupWithManager.
 	APIReader client.Reader
 
 	// newS3ObjectLister and newS3ObjectRemover override the S3 client the

@@ -120,7 +120,7 @@ func (r *BackupReconciler) cleanupMariaDBBackup(ctx context.Context, backup *bac
 	}
 	absent := false
 	if name != "" {
-		other, found, err := contestedMariaDBDump(s3ctx, lister, r.Client, op, name)
+		other, found, err := contestedMariaDBDump(s3ctx, lister, r.apiReader(), op, name)
 		absent = !found
 		if err != nil {
 			return r.retryMariaDBCleanup(ctx, backup, location+name, err)
@@ -130,7 +130,7 @@ func (r *BackupReconciler) cleanupMariaDBBackup(ctx context.Context, backup *bac
 				fmt.Sprintf("the recorded dump also falls in the lifetime of k8s.mariadb.com/Backup %s, which may have written it; the operator Backup is kept", other)), nil
 		}
 	} else {
-		dump, err := findMariaDBDumpWith(s3ctx, lister, r.Client, op, backup.Spec.TakenAt.Time, true)
+		dump, err := findMariaDBDumpWith(s3ctx, lister, r.apiReader(), op, backup.Spec.TakenAt.Time, true)
 		if errors.Is(err, errMariaDBDumpNotFound) || errors.Is(err, errMariaDBDumpAmbiguous) {
 			return r.releaseMariaDBCleanup(ctx, backup, location,
 				fmt.Sprintf("the Backup records no dump and none is proven to be the one k8s.mariadb.com/Backup %s wrote (%v); the operator Backup is kept", opName, err)), nil
