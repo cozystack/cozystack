@@ -19,7 +19,7 @@ package cmd
 import (
 	"context"
 	"fmt"
-	"os"
+	"io"
 	"strings"
 	"text/tabwriter"
 
@@ -78,24 +78,25 @@ Use --components flag to show components on separate lines.`,
 		}
 
 		if listCmdFlags.installed {
-			return listPackages(ctx, k8sClient, listCmdFlags.components)
+			return listPackages(ctx, k8sClient, cmd.OutOrStdout(), listCmdFlags.components)
 		}
-		return listPackageSources(ctx, k8sClient, listCmdFlags.components)
+		return listPackageSources(ctx, k8sClient, cmd.OutOrStdout(), listCmdFlags.components)
 	},
 }
 
-func listPackageSources(ctx context.Context, k8sClient client.Client, showComponents bool) error {
+func listPackageSources(ctx context.Context, k8sClient client.Client, out io.Writer, showComponents bool) error {
 	var psList cozyv1alpha1.PackageSourceList
 	if err := k8sClient.List(ctx, &psList); err != nil {
 		return fmt.Errorf("failed to list PackageSources: %w", err)
 	}
 
 	// Use tabwriter for better column alignment
-	w := tabwriter.NewWriter(os.Stdout, 0, 0, 3, ' ', 0)
-	defer w.Flush()
+	w := tabwriter.NewWriter(out, 0, 0, 3, ' ', 0)
 
 	// Print header
-	fmt.Fprintln(w, "NAME\tVARIANTS\tREADY\tSTATUS")
+	if _, err := fmt.Fprintln(w, "NAME\tVARIANTS\tREADY\tSTATUS"); err != nil {
+		return err
+	}
 
 	// Print rows
 	for _, ps := range psList.Items {
@@ -123,24 +124,26 @@ func listPackageSources(ctx context.Context, k8sClient client.Client, showCompon
 			}
 		}
 
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", ps.Name, variantsStr, ready, status)
+		if _, err := fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", ps.Name, variantsStr, ready, status); err != nil {
+			return err
+		}
 
 		// Show components if requested
 		if showComponents {
 			for _, variant := range ps.Spec.Variants {
 				for _, component := range variant.Components {
-					fmt.Fprintf(w, "  %s\t%s\t\t\n", 
-						fmt.Sprintf("%s.%s", ps.Name, component.Name), 
-						variant.Name)
+					if _, err := fmt.Fprintf(w, "  %s.%s\t%s\t\t\n", ps.Name, component.Name, variant.Name); err != nil {
+						return err
+					}
 				}
 			}
 		}
 	}
 
-	return nil
+	return w.Flush()
 }
 
-func listPackages(ctx context.Context, k8sClient client.Client, showComponents bool) error {
+func listPackages(ctx context.Context, k8sClient client.Client, out io.Writer, showComponents bool) error {
 	var pkgList cozyv1alpha1.PackageList
 	if err := k8sClient.List(ctx, &pkgList); err != nil {
 		return fmt.Errorf("failed to list Packages: %w", err)
@@ -160,11 +163,12 @@ func listPackages(ctx context.Context, k8sClient client.Client, showComponents b
 	}
 
 	// Use tabwriter for better column alignment
-	w := tabwriter.NewWriter(os.Stdout, 0, 0, 3, ' ', 0)
-	defer w.Flush()
+	w := tabwriter.NewWriter(out, 0, 0, 3, ' ', 0)
 
 	// Print header
-	fmt.Fprintln(w, "NAME\tVARIANT\tREADY\tSTATUS")
+	if _, err := fmt.Fprintln(w, "NAME\tVARIANT\tREADY\tSTATUS"); err != nil {
+		return err
+	}
 
 	// Print rows
 	for _, pkg := range pkgList.Items {
@@ -187,7 +191,9 @@ func listPackages(ctx context.Context, k8sClient client.Client, showComponents b
 			}
 		}
 
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", pkg.Name, variant, ready, status)
+		if _, err := fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", pkg.Name, variant, ready, status); err != nil {
+			return err
+		}
 
 		// Show components if requested
 		if showComponents {
@@ -197,9 +203,9 @@ func listPackages(ctx context.Context, k8sClient client.Client, showComponents b
 				for _, v := range ps.Spec.Variants {
 					if v.Name == variant {
 						for _, component := range v.Components {
-							fmt.Fprintf(w, "  %s\t%s\t\t\n", 
-								fmt.Sprintf("%s.%s", pkg.Name, component.Name), 
-								variant)
+							if _, err := fmt.Fprintf(w, "  %s.%s\t%s\t\t\n", pkg.Name, component.Name, variant); err != nil {
+								return err
+							}
 						}
 						break
 					}
@@ -208,7 +214,7 @@ func listPackages(ctx context.Context, k8sClient client.Client, showComponents b
 		}
 	}
 
-	return nil
+	return w.Flush()
 }
 
 func init() {
