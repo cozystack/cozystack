@@ -1103,7 +1103,7 @@ func TestApplyClusterPluginBackup_NotFoundOnMissingCluster(t *testing.T) {
 		},
 	}
 
-	_, err := r.applyClusterPluginBackup(context.Background(), "tenant", "postgres-missing", tmpl, "postgres-missing", true, true)
+	_, err := r.applyClusterPluginBackup(context.Background(), "tenant", "postgres-missing", tmpl, "postgres-missing", true, true, "bj")
 	if err == nil {
 		t.Fatalf("expected NotFound error, got nil")
 	}
@@ -1743,7 +1743,7 @@ func TestApplyClusterPluginBackup_ReadsTheLiveClusterNotTheCache(t *testing.T) {
 		BarmanObjectStore: strategyv1alpha1.BarmanObjectStoreTemplate{DestinationPath: "s3://bucket/x/"},
 	}
 
-	got, err := r.applyClusterPluginBackup(context.Background(), "tenant", "postgres-app", tmpl, "strategy-name", true, true)
+	got, err := r.applyClusterPluginBackup(context.Background(), "tenant", "postgres-app", tmpl, "strategy-name", true, true, "bj")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -1953,7 +1953,7 @@ func TestApplyClusterPluginBackup_PreservesLiveServerName(t *testing.T) {
 				BarmanObjectStore: strategyv1alpha1.BarmanObjectStoreTemplate{DestinationPath: "s3://bucket/x/"},
 			}
 
-			got, err := r.applyClusterPluginBackup(context.Background(), "tenant", "postgres-app", tmpl, "strategy-name", true, true)
+			got, err := r.applyClusterPluginBackup(context.Background(), "tenant", "postgres-app", tmpl, "strategy-name", true, true, "bj")
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
@@ -2122,7 +2122,7 @@ func TestApplyClusterPluginBackup_PatchesExistingCluster(t *testing.T) {
 		},
 	}
 
-	if _, err := r.applyClusterPluginBackup(context.Background(), "tenant", "postgres-app", tmpl, "tenant-app", true, true); err != nil {
+	if _, err := r.applyClusterPluginBackup(context.Background(), "tenant", "postgres-app", tmpl, "tenant-app", true, true, "bj"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -2736,6 +2736,17 @@ func TestReconcileCNPG_WaitsForAnotherRunningBackupOfTheApp(t *testing.T) {
 			if got := f.liveDestination(); got != "s3://bucket/" {
 				t.Errorf("destination = %q, want the job's own s3://bucket/", got)
 			}
+			if ready != nil && ready.Reason == "WaitingForOtherBackup" {
+				t.Errorf("Ready = %+v, the job was held", ready)
+			}
+			f.settleDestination()
+			_, backups = f.pass()
+			ours = 0
+			for _, b := range backups {
+				if b.Labels[backupsv1alpha1.OwningJobNameLabel] == "bj" {
+					ours++
+				}
+			}
 			if ours != 1 {
 				t.Errorf("got %d cnpg.io/Backups for the job, want 1", ours)
 			}
@@ -2819,6 +2830,8 @@ func TestReconcileCNPG_ObjectStoreApplyRecovers(t *testing.T) {
 	}
 
 	failing = false
+	j, _ = f.pass()
+	f.settleDestination()
 	j, backups := f.pass()
 	if len(backups) != 1 {
 		t.Fatalf("got %d cnpg.io/Backups after the write recovered, want 1", len(backups))
@@ -3118,6 +3131,562 @@ func TestReconcileCNPG_AttachRecordOlderThanTheLatchKeepsTheLatch(t *testing.T) 
 	}
 	if j.Status.Phase == backupsv1alpha1.BackupJobPhaseFailed {
 		t.Fatalf("the job failed instead of waiting for the rollout: %s", j.Status.Message)
+	}
+}
+
+func (f *cnpgRolloutFixture) liveObjectStore() *cnpgtypes.ObjectStore {
+	f.t.Helper()
+	store := &cnpgtypes.ObjectStore{}
+	if err := f.c.Get(context.Background(), client.ObjectKey{Namespace: rolloutNS, Name: rolloutCluster}, store); err != nil {
+		f.t.Fatalf("get ObjectStore: %v", err)
+	}
+	return store
+}
+
+// setDestinationStamp rewrites the destination-change record on the live
+// ObjectStore, as a write that long ago, or a corrupt one, would have left it.
+func (f *cnpgRolloutFixture) setDestinationStamp(value string) {
+	f.t.Helper()
+	store := f.liveObjectStore()
+	if store.Annotations == nil {
+		store.Annotations = map[string]string{}
+	}
+	store.Annotations[cnpgDestinationChangedAtAnnotation] = value
+	if err := f.c.Update(context.Background(), store); err != nil {
+		f.t.Fatalf("stamp ObjectStore: %v", err)
+	}
+}
+
+// settleDestination ages the destination-change record, when the ObjectStore
+// carries one, as if the plugin's cache had expired since that write.
+func (f *cnpgRolloutFixture) settleDestination() {
+	f.t.Helper()
+	if _, ok := f.liveObjectStore().Annotations[cnpgDestinationChangedAtAnnotation]; ok {
+		f.setDestinationStamp(time.Now().Add(-time.Minute).UTC().Format(time.RFC3339))
+	}
+}
+
+// addJobWithDestination adds BackupJob name of the same application, resolved
+// to a strategy of its own that writes destination, and returns a function
+// running one pass of it.
+func (f *cnpgRolloutFixture) addJobWithDestination(name, destination string) func() *backupsv1alpha1.BackupJob {
+	f.t.Helper()
+	ctx := context.Background()
+	strategy := &strategyv1alpha1.CNPG{
+		ObjectMeta: metav1.ObjectMeta{Name: "cnpg-strategy-" + name},
+		Spec: strategyv1alpha1.CNPGSpec{Template: strategyv1alpha1.CNPGTemplate{
+			BarmanObjectStore: strategyv1alpha1.BarmanObjectStoreTemplate{DestinationPath: destination},
+		}},
+	}
+	if err := f.c.Create(ctx, strategy); err != nil {
+		f.t.Fatalf("seed strategy: %v", err)
+	}
+	job := newRolloutBackupJob(time.Now().Add(-time.Hour))
+	job.Name = name
+	if err := f.c.Create(ctx, job); err != nil {
+		f.t.Fatalf("seed BackupJob %s: %v", name, err)
+	}
+	group := strategyv1alpha1.GroupVersion.Group
+	resolved := &ResolvedBackupConfig{StrategyRef: corev1.TypedLocalObjectReference{APIGroup: &group, Kind: strategyv1alpha1.CNPGStrategyKind, Name: strategy.Name}}
+	return func() *backupsv1alpha1.BackupJob {
+		f.t.Helper()
+		key := client.ObjectKey{Namespace: rolloutNS, Name: name}
+		j := &backupsv1alpha1.BackupJob{}
+		if err := f.c.Get(ctx, key, j); err != nil {
+			f.t.Fatalf("get BackupJob %s: %v", name, err)
+		}
+		if _, err := f.r.reconcileCNPG(ctx, j, resolved); err != nil {
+			f.t.Fatalf("reconcileCNPG %s: %v", name, err)
+		}
+		if err := f.c.Get(ctx, key, j); err != nil {
+			f.t.Fatalf("get BackupJob %s after reconcile: %v", name, err)
+		}
+		return j
+	}
+}
+
+// Two jobs of the application with different destinations, neither with a
+// Backup yet, would otherwise take turns rewriting the ObjectStore, each
+// write restarting the other's wait for the plugin cache so that neither
+// ever creates one. The job whose write came first holds the destination,
+// by its claim until it has a Backup and by that Backup afterwards, and the
+// other waits for it.
+func TestReconcileCNPG_JobsWithDifferentDestinationsTakeTurns(t *testing.T) {
+	f := newAttachedObjectStoreFixture(t, time.Now().Add(-time.Hour), "s3://third/")
+	pass2 := f.addJobWithDestination("bj2", "s3://other/")
+
+	var j2 *backupsv1alpha1.BackupJob
+	for range 5 {
+		f.pass()
+		f.settleDestination()
+		j2 = pass2()
+		f.settleDestination()
+	}
+	backups := &cnpgtypes.BackupList{}
+	if err := f.c.List(context.Background(), backups, client.InNamespace(rolloutNS)); err != nil {
+		t.Fatalf("list cnpg.io/Backups: %v", err)
+	}
+	if len(backups.Items) != 1 || backups.Items[0].Labels[backupsv1alpha1.OwningJobNameLabel] != "bj" {
+		t.Fatalf("cnpg.io/Backups = %+v, want exactly one, of bj, whose write came first", backups.Items)
+	}
+	if got := f.liveDestination(); got != "s3://bucket/" {
+		t.Errorf("destination = %q, want bj's s3://bucket/ under its running Backup", got)
+	}
+	if ready := apimeta.FindStatusCondition(j2.Status.Conditions, "Ready"); ready == nil || ready.Reason != "WaitingForOtherBackup" || !strings.Contains(ready.Message, "BackupJob bj ") {
+		t.Errorf("bj2 Ready = %+v, want WaitingForOtherBackup naming bj", ready)
+	}
+}
+
+// The claim names the job whose write last reached the ObjectStore, whether
+// it changed the configuration, created the object or left it as it was; the
+// change record is re-sent as it is by a write that changes nothing.
+func TestReconcileCNPG_ClaimNamesTheJobThatWroteTheDestination(t *testing.T) {
+	t.Run("changed", func(t *testing.T) {
+		f := newAttachedObjectStoreFixture(t, time.Now().Add(-time.Hour), "s3://other/")
+		f.pass()
+		if got := f.liveObjectStore().Annotations[cnpgDestinationWrittenByAnnotation]; got != "bj" {
+			t.Errorf("%s = %q, want bj", cnpgDestinationWrittenByAnnotation, got)
+		}
+	})
+	t.Run("created", func(t *testing.T) {
+		f := newCNPGRolloutFixture(t, newRolloutBackupJob(time.Now().Add(-time.Hour)),
+			newRolloutCluster(cnpgClusterHealthyPhase, buildBarmanPlugin(rolloutCluster, rolloutCluster)),
+			newRolloutInstancePod(time.Now().Add(-time.Hour)))
+		f.pass()
+		store := f.liveObjectStore()
+		if got := store.Annotations[cnpgDestinationWrittenByAnnotation]; got != "bj" {
+			t.Errorf("%s = %q, want bj", cnpgDestinationWrittenByAnnotation, got)
+		}
+		if _, ok := store.Annotations[cnpgDestinationChangedAtAnnotation]; ok {
+			t.Errorf("creating the ObjectStore stamped %s, which would hold the Backup for nothing", cnpgDestinationChangedAtAnnotation)
+		}
+	})
+	for name, recorded := range map[string]map[string]string{
+		"unchanged":              {cnpgDestinationWrittenByAnnotation: "bj-old"},
+		"unchanged with a stamp": {cnpgDestinationWrittenByAnnotation: "bj-old", cnpgDestinationChangedAtAnnotation: "2026-01-02T03:04:05Z"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newAttachedObjectStoreFixture(t, time.Now().Add(-time.Hour), "s3://bucket/")
+			store := f.liveObjectStore()
+			store.Annotations = recorded
+			if err := f.c.Update(context.Background(), store); err != nil {
+				t.Fatalf("seed claim: %v", err)
+			}
+			var sent []map[string]string
+			f.r.Client = interceptor.NewClient(f.c.(client.WithWatch), interceptor.Funcs{
+				Patch: func(ctx context.Context, cl client.WithWatch, obj client.Object, patch client.Patch, opts ...client.PatchOption) error {
+					po := &client.PatchOptions{}
+					po.ApplyOptions(opts)
+					if _, ok := obj.(*cnpgtypes.ObjectStore); ok && !slices.Contains(po.DryRun, metav1.DryRunAll) {
+						sent = append(sent, obj.GetAnnotations())
+					}
+					return cl.Patch(ctx, obj, patch, opts...)
+				},
+			})
+			f.pass()
+			if len(sent) != 1 {
+				t.Fatalf("got %d ObjectStore writes, want 1", len(sent))
+			}
+			if got := sent[0][cnpgDestinationWrittenByAnnotation]; got != "bj" {
+				t.Errorf("the write sent %s = %q, want bj, the job that wrote", cnpgDestinationWrittenByAnnotation, got)
+			}
+			if got, want := sent[0][cnpgDestinationChangedAtAnnotation], recorded[cnpgDestinationChangedAtAnnotation]; got != want {
+				t.Errorf("the write sent %s = %q, want the recorded %q", cnpgDestinationChangedAtAnnotation, got, want)
+			}
+		})
+	}
+}
+
+// A claim stops holding the destination once its job has finished or is
+// gone, so the next job writes its own.
+func TestReconcileCNPG_ClaimOfAFinishedJobDoesNotHold(t *testing.T) {
+	for name, phase := range map[string]backupsv1alpha1.BackupJobPhase{
+		"succeeded": backupsv1alpha1.BackupJobPhaseSucceeded,
+		"failed":    backupsv1alpha1.BackupJobPhaseFailed,
+		"gone":      "",
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newAttachedObjectStoreFixture(t, time.Now().Add(-time.Hour), "s3://other/")
+			if name != "gone" {
+				f.seedOtherBackupJob("bj-other", phase)
+			}
+			store := f.liveObjectStore()
+			store.Annotations = map[string]string{cnpgDestinationWrittenByAnnotation: "bj-other"}
+			if err := f.c.Update(context.Background(), store); err != nil {
+				t.Fatalf("seed claim: %v", err)
+			}
+			j, _ := f.pass()
+			if got := f.liveDestination(); got != "s3://bucket/" {
+				t.Errorf("destination = %q, want bj's s3://bucket/", got)
+			}
+			if ready := apimeta.FindStatusCondition(j.Status.Conditions, "Ready"); ready != nil && ready.Reason == "WaitingForOtherBackup" {
+				t.Errorf("Ready = %+v, held by a %s job", ready, name)
+			}
+		})
+	}
+}
+
+// A job that attaches the plugin writes a configuration the ObjectStore may
+// already carry, for instance after a restore re-rendered the Cluster
+// without the plugin. Its write still claims the destination, so a job with
+// another one waits through the rollout instead of switching it.
+func TestReconcileCNPG_UnchangedWriteClaimsTheDestinationForTheRollout(t *testing.T) {
+	f := newCNPGRolloutFixture(t, newRolloutBackupJob(time.Now().Add(-time.Hour)),
+		newRolloutCluster(cnpgClusterHealthyPhase), newRolloutInstancePod(time.Now().Add(-time.Hour)))
+	f.seedOtherBackupJob("bj-old", backupsv1alpha1.BackupJobPhaseSucceeded)
+	store := &cnpgtypes.ObjectStore{
+		ObjectMeta: metav1.ObjectMeta{Namespace: rolloutNS, Name: rolloutCluster,
+			Annotations: map[string]string{cnpgDestinationWrittenByAnnotation: "bj-old"}},
+		Spec: cnpgtypes.ObjectStoreSpec{Configuration: cnpgtypes.BarmanObjectStoreConfiguration{DestinationPath: "s3://bucket/"}},
+	}
+	if err := f.c.Create(context.Background(), store); err != nil {
+		t.Fatalf("seed ObjectStore: %v", err)
+	}
+	pass2 := f.addJobWithDestination("bj2", "s3://other/")
+
+	f.pass() // latch
+	if j, _ := f.pass(); apimeta.FindStatusCondition(j.Status.Conditions, "Ready").Reason != "WaitingForPluginRollout" {
+		t.Fatalf("Ready = %+v, want bj waiting for the rollout of the plugin it attached", apimeta.FindStatusCondition(j.Status.Conditions, "Ready"))
+	}
+	j2 := pass2()
+	if got := f.liveDestination(); got != "s3://bucket/" {
+		t.Errorf("destination = %q, switched during bj's rollout", got)
+	}
+	if ready := apimeta.FindStatusCondition(j2.Status.Conditions, "Ready"); ready == nil || ready.Reason != "WaitingForOtherBackup" || !strings.Contains(ready.Message, "BackupJob bj ") {
+		t.Errorf("bj2 Ready = %+v, want WaitingForOtherBackup naming bj", ready)
+	}
+}
+
+// The claim covers only the window before its job has a Backup the queue
+// can see. Once it has one, the Backup in flight holds the destination, for
+// as long as CloudNativePG runs it, and a Backup that finished does not, even
+// if its job is stuck before it finishes, so that job cannot hold every later
+// backup of the application for as long as it lives.
+func TestReconcileCNPG_ClaimOfAJobWithItsOwnBackupDoesNotHold(t *testing.T) {
+	f := newAttachedObjectStoreFixture(t, time.Now().Add(-time.Hour), "s3://other/")
+	f.seedOtherBackupJob("bj-other", backupsv1alpha1.BackupJobPhaseRunning)
+	f.seedCNPGBackup("bj-other-cnpg", "bj-other", rolloutCluster, cnpgBackupPhaseComplete)
+	store := f.liveObjectStore()
+	store.Annotations = map[string]string{cnpgDestinationWrittenByAnnotation: "bj-other"}
+	if err := f.c.Update(context.Background(), store); err != nil {
+		t.Fatalf("seed claim: %v", err)
+	}
+	j, _ := f.pass()
+	if got := f.liveDestination(); got != "s3://bucket/" {
+		t.Errorf("destination = %q, held by a job whose Backup already finished", got)
+	}
+	if ready := apimeta.FindStatusCondition(j.Status.Conditions, "Ready"); ready != nil && ready.Reason == "WaitingForOtherBackup" {
+		t.Errorf("Ready = %+v, held by a job whose Backup already finished", ready)
+	}
+}
+
+// A claim whose job cannot be read cannot be taken as released: writing over
+// it would let two jobs flip the destination again. The error goes back to
+// the controller for a retry.
+func TestReconcileCNPG_ClaimHolderLookupErrorIsReturned(t *testing.T) {
+	unavailable := apierrors.NewServiceUnavailable("apiserver unavailable")
+	for name, setup := range map[string]func(f *cnpgRolloutFixture){
+		"holder job read fails": func(f *cnpgRolloutFixture) {
+			f.r.Client = interceptor.NewClient(f.c.(client.WithWatch), interceptor.Funcs{
+				Get: func(ctx context.Context, cl client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+					if _, ok := obj.(*backupsv1alpha1.BackupJob); ok && key.Name == "bj-other" {
+						return unavailable
+					}
+					return cl.Get(ctx, key, obj, opts...)
+				},
+			})
+		},
+		"holder Backups list fails": func(f *cnpgRolloutFixture) {
+			holders := labels.Set{backupsv1alpha1.OwningJobNameLabel: "bj-other", backupsv1alpha1.OwningJobNamespaceLabel: rolloutNS}
+			f.r.APIReader = interceptor.NewClient(f.c.(client.WithWatch), interceptor.Funcs{
+				List: func(ctx context.Context, cl client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
+					lo := &client.ListOptions{}
+					lo.ApplyOptions(opts)
+					if _, ok := list.(*cnpgtypes.BackupList); ok && lo.LabelSelector != nil && lo.LabelSelector.Matches(holders) && !lo.LabelSelector.Matches(labels.Set{backupsv1alpha1.OwningJobNameLabel: "bj", backupsv1alpha1.OwningJobNamespaceLabel: rolloutNS}) {
+						return unavailable
+					}
+					return cl.List(ctx, list, opts...)
+				},
+			})
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			assertClaimHolderLookupErrorReturned(t, setup)
+		})
+	}
+}
+
+func assertClaimHolderLookupErrorReturned(t *testing.T, setup func(f *cnpgRolloutFixture)) {
+	t.Helper()
+	f := newAttachedObjectStoreFixture(t, time.Now().Add(-time.Hour), "s3://other/")
+	f.seedOtherBackupJob("bj-other", backupsv1alpha1.BackupJobPhaseRunning)
+	store := f.liveObjectStore()
+	store.Annotations = map[string]string{cnpgDestinationWrittenByAnnotation: "bj-other"}
+	if err := f.c.Update(context.Background(), store); err != nil {
+		t.Fatalf("seed claim: %v", err)
+	}
+	setup(f)
+	j := &backupsv1alpha1.BackupJob{}
+	if err := f.c.Get(context.Background(), client.ObjectKey{Namespace: rolloutNS, Name: "bj"}, j); err != nil {
+		t.Fatalf("get BackupJob: %v", err)
+	}
+	if _, err := f.r.reconcileCNPG(context.Background(), j, f.resolved); err == nil {
+		t.Fatalf("reconcileCNPG swallowed the claim holder lookup error")
+	}
+	if got := f.liveDestination(); got != "s3://other/" {
+		t.Errorf("destination written although the claim holder could not be read: %q", got)
+	}
+}
+
+// A running job that holds the claim keeps the destination while it has no
+// Backup yet, for instance while the plugin it attached rolls the instances.
+func TestReconcileCNPG_ClaimOfARunningJobHolds(t *testing.T) {
+	f := newAttachedObjectStoreFixture(t, time.Now().Add(-time.Hour), "s3://other/")
+	f.seedOtherBackupJob("bj-other", backupsv1alpha1.BackupJobPhaseRunning)
+	store := f.liveObjectStore()
+	store.Annotations = map[string]string{cnpgDestinationWrittenByAnnotation: "bj-other"}
+	if err := f.c.Update(context.Background(), store); err != nil {
+		t.Fatalf("seed claim: %v", err)
+	}
+	j, backups, res := f.passResult()
+	if got := f.liveDestination(); got != "s3://other/" {
+		t.Errorf("destination = %q, rewritten under bj-other's claim", got)
+	}
+	if len(backups) != 0 {
+		t.Errorf("a cnpg.io/Backup was created under another job's claim: %+v", backups)
+	}
+	if ready := apimeta.FindStatusCondition(j.Status.Conditions, "Ready"); ready == nil || ready.Reason != "WaitingForOtherBackup" || !strings.Contains(ready.Message, "bj-other") {
+		t.Errorf("Ready = %+v, want WaitingForOtherBackup naming bj-other", ready)
+	}
+	if res.RequeueAfter == 0 {
+		t.Errorf("a held job is not requeued: %+v", res)
+	}
+}
+
+// The plugin sidecar reads the ObjectStore through a cache that nothing this
+// controller writes invalidates, so a Backup created right after the
+// destination changed can be taken against the previous one. The job holds
+// the Backup until that cache has expired, and creates it afterwards.
+func TestReconcileCNPG_BackupWaitsForThePluginCacheAfterADestinationChange(t *testing.T) {
+	f := newAttachedObjectStoreFixture(t, time.Now().Add(-time.Hour), "s3://other/")
+
+	j, backups, res := f.passResult()
+	if got := f.liveDestination(); got != "s3://bucket/" {
+		t.Fatalf("destination = %q, want the job's s3://bucket/", got)
+	}
+	if len(backups) != 0 {
+		t.Fatalf("a cnpg.io/Backup was created in the pass that changed the destination: %+v", backups)
+	}
+	if ready := apimeta.FindStatusCondition(j.Status.Conditions, "Ready"); ready == nil || ready.Reason != "WaitingForDestinationToSettle" {
+		t.Errorf("Ready = %+v, want WaitingForDestinationToSettle", ready)
+	}
+	if res.RequeueAfter == 0 {
+		t.Errorf("a waiting job is not requeued: %+v", res)
+	}
+	stamp, err := time.Parse(time.RFC3339, f.liveObjectStore().Annotations[cnpgDestinationChangedAtAnnotation])
+	if err != nil || time.Since(stamp) > time.Minute {
+		t.Fatalf("%s = %v (%v), want the time of this write", cnpgDestinationChangedAtAnnotation, stamp, err)
+	}
+
+	if _, backups = f.pass(); len(backups) != 0 {
+		t.Fatalf("a cnpg.io/Backup was created while the plugin cache could still hold the old destination: %+v", backups)
+	}
+
+	f.setDestinationStamp(time.Now().Add(-time.Minute).UTC().Format(time.RFC3339))
+	if j, backups = f.pass(); len(backups) != 1 {
+		t.Fatalf("got %d cnpg.io/Backups once the cache expired, want 1; Ready = %+v", len(backups), apimeta.FindStatusCondition(j.Status.Conditions, "Ready"))
+	}
+}
+
+// A write that leaves the configuration as it was cannot leave a stale
+// cache behind: the Backup is created at once, and the record of the last
+// change is re-sent as it is, since an apply that left it out would delete it.
+func TestReconcileCNPG_UnchangedDestinationDoesNotWait(t *testing.T) {
+	const stamp = "2026-01-02T03:04:05Z"
+	f := newAttachedObjectStoreFixture(t, time.Now().Add(-time.Hour), "s3://bucket/")
+	f.setDestinationStamp(stamp)
+
+	if j, backups := f.pass(); len(backups) != 1 {
+		t.Fatalf("got %d cnpg.io/Backups for an unchanged destination, want 1; Ready = %+v", len(backups), apimeta.FindStatusCondition(j.Status.Conditions, "Ready"))
+	}
+	if got := f.liveObjectStore().Annotations[cnpgDestinationChangedAtAnnotation]; got != stamp {
+		t.Errorf("%s = %q, want the recorded %q", cnpgDestinationChangedAtAnnotation, got, stamp)
+	}
+}
+
+// The apiserver answers an apply with the merged object: fields it defaults,
+// or that another field manager owns, are there although the job never sets
+// them. Judged against what the job sends, every pass would read as a change
+// and the Backup would never be created; judged against the dry run of the
+// same apply, an unchanged configuration stays unchanged.
+func TestReconcileCNPG_FieldsTheJobDoesNotSetAreNotAChange(t *testing.T) {
+	f := newAttachedObjectStoreFixture(t, time.Now().Add(-time.Hour), "s3://bucket/")
+	store := f.liveObjectStore()
+	store.Spec.Configuration.Wal = &cnpgtypes.WalBackupConfiguration{Compression: "gzip"}
+	if err := f.c.Update(context.Background(), store); err != nil {
+		t.Fatalf("seed ObjectStore: %v", err)
+	}
+	f.r.Client = interceptor.NewClient(f.c.(client.WithWatch), interceptor.Funcs{
+		Patch: func(ctx context.Context, cl client.WithWatch, obj client.Object, patch client.Patch, opts ...client.PatchOption) error {
+			po := &client.PatchOptions{}
+			po.ApplyOptions(opts)
+			if os, ok := obj.(*cnpgtypes.ObjectStore); ok && slices.Contains(po.DryRun, metav1.DryRunAll) {
+				os.Spec.Configuration.Wal = &cnpgtypes.WalBackupConfiguration{Compression: "gzip"}
+				return nil
+			}
+			return cl.Patch(ctx, obj, patch, opts...)
+		},
+	})
+
+	if j, backups := f.pass(); len(backups) != 1 {
+		t.Fatalf("got %d cnpg.io/Backups for a configuration only the server filled in, want 1; Ready = %+v", len(backups), apimeta.FindStatusCondition(j.Status.Conditions, "Ready"))
+	}
+	if _, ok := f.liveObjectStore().Annotations[cnpgDestinationChangedAtAnnotation]; ok {
+		t.Errorf("%s was set by a write that changed nothing", cnpgDestinationChangedAtAnnotation)
+	}
+}
+
+// Without the live ObjectStore, or the dry run of the apply, the job cannot
+// tell whether its write changes the destination, and taking the write as
+// unchanged would create the Backup at once against a cache that may still
+// hold the previous one. Either failure is retried like a failed write.
+func TestReconcileCNPG_UnreadableObjectStoreIsRetried(t *testing.T) {
+	unavailable := apierrors.NewServiceUnavailable("apiserver unavailable")
+	for _, tc := range []struct {
+		name  string
+		setup func(f *cnpgRolloutFixture)
+	}{
+		{name: "live read fails", setup: func(f *cnpgRolloutFixture) {
+			f.r.APIReader = interceptor.NewClient(f.c.(client.WithWatch), interceptor.Funcs{
+				Get: func(ctx context.Context, cl client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+					if _, ok := obj.(*cnpgtypes.ObjectStore); ok {
+						return unavailable
+					}
+					return cl.Get(ctx, key, obj, opts...)
+				},
+			})
+		}},
+		{name: "claim read fails", setup: func(f *cnpgRolloutFixture) {
+			reads := 0
+			f.r.APIReader = interceptor.NewClient(f.c.(client.WithWatch), interceptor.Funcs{
+				Get: func(ctx context.Context, cl client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+					if _, ok := obj.(*cnpgtypes.ObjectStore); ok {
+						if reads++; reads == 1 {
+							return unavailable
+						}
+					}
+					return cl.Get(ctx, key, obj, opts...)
+				},
+			})
+		}},
+		{name: "live read at the write fails", setup: func(f *cnpgRolloutFixture) {
+			reads := 0
+			f.r.APIReader = interceptor.NewClient(f.c.(client.WithWatch), interceptor.Funcs{
+				Get: func(ctx context.Context, cl client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+					if _, ok := obj.(*cnpgtypes.ObjectStore); ok {
+						if reads++; reads > 1 {
+							return unavailable
+						}
+					}
+					return cl.Get(ctx, key, obj, opts...)
+				},
+			})
+		}},
+		{name: "dry run fails", setup: func(f *cnpgRolloutFixture) {
+			f.r.Client = interceptor.NewClient(f.c.(client.WithWatch), interceptor.Funcs{
+				Patch: func(ctx context.Context, cl client.WithWatch, obj client.Object, patch client.Patch, opts ...client.PatchOption) error {
+					po := &client.PatchOptions{}
+					po.ApplyOptions(opts)
+					if _, ok := obj.(*cnpgtypes.ObjectStore); ok && slices.Contains(po.DryRun, metav1.DryRunAll) {
+						return unavailable
+					}
+					return cl.Patch(ctx, obj, patch, opts...)
+				},
+			})
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newAttachedObjectStoreFixture(t, time.Now().Add(-time.Hour), "s3://other/")
+			tc.setup(f)
+			assertObjectStoreReadRetried(t, f)
+		})
+	}
+}
+
+// assertObjectStoreReadRetried runs one pass and checks it is retried, either
+// by returning the error to the controller or by waiting with
+// ClusterPluginApplyRetrying, without a Backup, a destination write or a
+// failed job.
+func assertObjectStoreReadRetried(t *testing.T, f *cnpgRolloutFixture) {
+	t.Helper()
+	ctx := context.Background()
+	key := client.ObjectKey{Namespace: rolloutNS, Name: "bj"}
+	j := &backupsv1alpha1.BackupJob{}
+	if err := f.c.Get(ctx, key, j); err != nil {
+		t.Fatalf("get BackupJob: %v", err)
+	}
+	res, reconcileErr := f.r.reconcileCNPG(ctx, j, f.resolved)
+	if err := f.c.Get(ctx, key, j); err != nil {
+		t.Fatalf("get BackupJob after reconcile: %v", err)
+	}
+	backups := &cnpgtypes.BackupList{}
+	if err := f.c.List(ctx, backups, client.InNamespace(rolloutNS)); err != nil {
+		t.Fatalf("list cnpg.io/Backups: %v", err)
+	}
+	if len(backups.Items) != 0 {
+		t.Fatalf("a cnpg.io/Backup was created although the ObjectStore could not be read: %+v", backups.Items)
+	}
+	if got := f.liveDestination(); got != "s3://other/" {
+		t.Errorf("destination = %q, written without knowing whether it changed", got)
+	}
+	if j.Status.Phase == backupsv1alpha1.BackupJobPhaseFailed {
+		t.Fatalf("the job failed on a transient read: %s", j.Status.Message)
+	}
+	if reconcileErr != nil {
+		return
+	}
+	if ready := apimeta.FindStatusCondition(j.Status.Conditions, "Ready"); ready == nil || ready.Reason != "ClusterPluginApplyRetrying" {
+		t.Errorf("Ready = %+v, want ClusterPluginApplyRetrying", ready)
+	}
+	if res.RequeueAfter == 0 {
+		t.Errorf("a retried read is not requeued: %+v", res)
+	}
+}
+
+// A change record that cannot be read, or that lies further ahead than
+// controller clocks drift, says nothing about when the cache expires, so the
+// write replaces it with its own time and the job waits once. It claims the
+// destination for that wait, or another job would write its own meanwhile.
+func TestReconcileCNPG_UnusableDestinationRecordIsReplaced(t *testing.T) {
+	for name, value := range map[string]string{
+		"does not parse": "yesterday",
+		"far ahead":      time.Now().Add(time.Hour).UTC().Format(time.RFC3339),
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newAttachedObjectStoreFixture(t, time.Now().Add(-time.Hour), "s3://bucket/")
+			f.seedOtherBackupJob("bj-old", backupsv1alpha1.BackupJobPhaseSucceeded)
+			store := f.liveObjectStore()
+			store.Annotations = map[string]string{cnpgDestinationWrittenByAnnotation: "bj-old"}
+			if err := f.c.Update(context.Background(), store); err != nil {
+				t.Fatalf("seed claim: %v", err)
+			}
+			f.setDestinationStamp(value)
+
+			j, backups := f.pass()
+			if len(backups) != 0 {
+				t.Fatalf("a cnpg.io/Backup was created with an unusable change record: %+v", backups)
+			}
+			if j.Status.Phase == backupsv1alpha1.BackupJobPhaseFailed {
+				t.Fatalf("the job failed: %s", j.Status.Message)
+			}
+			stamp, err := time.Parse(time.RFC3339, f.liveObjectStore().Annotations[cnpgDestinationChangedAtAnnotation])
+			if err != nil || time.Since(stamp) > time.Minute || time.Until(stamp) > time.Minute {
+				t.Fatalf("%s = %v (%v), want it replaced with the time of this write", cnpgDestinationChangedAtAnnotation, stamp, err)
+			}
+			if got := f.liveObjectStore().Annotations[cnpgDestinationWrittenByAnnotation]; got != "bj" {
+				t.Errorf("%s = %q, want bj, which waits on the replaced record", cnpgDestinationWrittenByAnnotation, got)
+			}
+		})
 	}
 }
 
@@ -5913,9 +6482,11 @@ func TestReconcileCNPG_ArtifactNamesTheDestinationItsBackupWasCreatedWith(t *tes
 	f := newAttachedObjectStoreFixture(t, time.Now(), "s3://other/")
 	f.setStrategyDestination("s3://bucket/", "https://s3.one", "creds-one")
 
+	f.pass()
+	f.settleDestination()
 	j, backups := f.pass()
 	if len(backups) != 1 {
-		t.Fatalf("got %d cnpg.io/Backups after the first pass, want 1; Ready = %+v", len(backups), apimeta.FindStatusCondition(j.Status.Conditions, "Ready"))
+		t.Fatalf("got %d cnpg.io/Backups once the destination settled, want 1; Ready = %+v", len(backups), apimeta.FindStatusCondition(j.Status.Conditions, "Ready"))
 	}
 	if got := f.liveDestination(); got != "s3://bucket/" {
 		t.Fatalf("destination = %q, want s3://bucket/", got)
@@ -6021,7 +6592,7 @@ func TestReconcileCNPG_ArtifactRefusedForAnUnusableDestinationRecord(t *testing.
 		"mistyped endpoint": `{"destinationPath":"s3://bucket/","endpointURL":7}`,
 	} {
 		t.Run(name, func(t *testing.T) {
-			f := newAttachedObjectStoreFixture(t, time.Now(), "s3://other/")
+			f := newAttachedObjectStoreFixture(t, time.Now(), "s3://bucket/")
 			if _, backups := f.pass(); len(backups) != 1 {
 				t.Fatalf("got %d cnpg.io/Backups after the first pass, want 1", len(backups))
 			}
@@ -6175,7 +6746,7 @@ func TestReconcileCNPG_BackupListErrorIsReturned(t *testing.T) {
 // start: a second lookup before the create could only fail, after the write,
 // and fail the job with it.
 func TestReconcileCNPG_LooksUpItsOwnBackupOncePerPass(t *testing.T) {
-	f := newAttachedObjectStoreFixture(t, time.Now(), "s3://other/")
+	f := newAttachedObjectStoreFixture(t, time.Now(), "s3://bucket/")
 	f.failingBackupLists(func(own bool, n int) bool { return own && n > 1 })
 
 	j, backups := f.pass()
