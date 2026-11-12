@@ -151,6 +151,109 @@ func TestReconcileAltinity_BackupJobCarriesTheBucketFlow(t *testing.T) {
 	}
 }
 
+// altinityCredsSecret is the projected credentials Secret the sidecar of a
+// system-bucket application reads its bucket from; an empty bucket leaves the
+// key out.
+func altinityCredsSecret(bucket string) *corev1.Secret {
+	s := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "cozy-backups-creds", Namespace: "tenant-test"}, Data: map[string][]byte{}}
+	if bucket != "" {
+		s.Data["bucketName"] = []byte(bucket)
+	}
+	return s
+}
+
+var altinityTestCredentials = BackupCredentialsConfig{SourceNamespace: "cozy-system", SourceSecretName: "platform-creds", TargetSecretName: "cozy-backups-creds"}
+
+// A Backup records which bucket its archive went to, so that a delete asked
+// of a sidecar that now serves another bucket is not taken for done when that
+// bucket answers "not found". It is read when the backup Job is created, from
+// the Secret the sidecar of a system-bucket application reads.
+func TestReconcileAltinity_BackupJobCarriesTheBucket(t *testing.T) {
+	cases := []struct {
+		name   string
+		system bool
+		secret *corev1.Secret
+		want   string // empty: no bucket recorded
+	}{
+		{name: "system bucket", system: true, secret: altinityCredsSecret("bucket-a"), want: "bucket-a"},
+		{name: "own bucket", system: false, secret: altinityCredsSecret("bucket-a")},
+		{name: "no projected Secret", system: true},
+		{name: "Secret without a bucket", system: true, secret: altinityCredsSecret("")},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			app := withUseSystemBucket(newAltinityClickHouseApp("ch-test", "tenant-test"), tc.system)
+			bj := runningAltinityBackupJob()
+			strategy := newAltinityArchiveStrategy("clickhouse-strategy")
+			objs := []client.Object{bj, strategy}
+			if tc.secret != nil {
+				objs = append(objs, tc.secret)
+			}
+			r, _, _ := newAltinityTestEnv(t, app, clientfake.NewClientBuilder().WithObjects(objs...))
+			r.CredentialsConfig = altinityTestCredentials
+			ctx := context.Background()
+			if _, err := r.reconcileAltinity(ctx, bj, altinityResolved(strategy.Name)); err != nil {
+				t.Fatalf("reconcileAltinity: %v", err)
+			}
+			job := &batchv1.Job{}
+			if err := r.Get(ctx, client.ObjectKey{Namespace: bj.Namespace, Name: jobNameForBackupJob(bj)}, job); err != nil {
+				t.Fatalf("get backup Job: %v", err)
+			}
+			if got, ok := job.Annotations[altinityBucketKey]; got != tc.want || ok != (tc.want != "") {
+				t.Errorf("backup Job bucket = %q (set %v), want %q", got, ok, tc.want)
+			}
+		})
+	}
+}
+
+// On a platform that projects no credentials there is no Secret to read the
+// bucket from; reading one by an empty name, which the API server rejects,
+// would fail every backup of a system-bucket application there.
+func TestReconcileAltinity_RecordsNoBucketWithoutProjectedCredentials(t *testing.T) {
+	app := withUseSystemBucket(newAltinityClickHouseApp("ch-test", "tenant-test"), true)
+	bj := runningAltinityBackupJob()
+	strategy := newAltinityArchiveStrategy("clickhouse-strategy")
+	builder := clientfake.NewClientBuilder().WithObjects(bj, strategy).WithInterceptorFuncs(interceptor.Funcs{
+		Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+			if key.Name == "" {
+				return apierrors.NewBadRequest("resource name may not be empty")
+			}
+			return c.Get(ctx, key, obj, opts...)
+		},
+	})
+	r, _, _ := newAltinityTestEnv(t, app, builder)
+	ctx := context.Background()
+	if _, err := r.reconcileAltinity(ctx, bj, altinityResolved(strategy.Name)); err != nil {
+		t.Fatalf("reconcileAltinity: %v", err)
+	}
+	job := &batchv1.Job{}
+	if err := r.Get(ctx, client.ObjectKey{Namespace: bj.Namespace, Name: jobNameForBackupJob(bj)}, job); err != nil {
+		t.Fatalf("get backup Job: %v", err)
+	}
+	if v, ok := job.Annotations[altinityBucketKey]; ok {
+		t.Errorf("backup Job records bucket %q without projected credentials", v)
+	}
+}
+
+// The bucket recorded on the Backup is the one stamped on the backup Job when
+// it was created; a Job without the stamp records none.
+func TestReconcileAltinity_RecordsTheBucketTheJobStartedWith(t *testing.T) {
+	for _, bucket := range []string{"bucket-a", ""} {
+		app := withUseSystemBucket(newAltinityClickHouseApp("ch-test", "tenant-test"), true)
+		got := completeAltinityBackup(t, app, func(bj *backupsv1alpha1.BackupJob) *batchv1.Job {
+			job := completedAltinityK8sJob(bj)
+			job.Annotations = map[string]string{altinityUseSystemBucketKey: "true"}
+			if bucket != "" {
+				job.Annotations[altinityBucketKey] = bucket
+			}
+			return job
+		})
+		if v, ok := got.Spec.DriverMetadata[altinityBucketKey]; v != bucket || ok != (bucket != "") {
+			t.Errorf("Job stamped %q: Backup records %q (set %v)", bucket, v, ok)
+		}
+	}
+}
+
 func TestReconcileAltinity_FailsOnMalformedUseSystemBucket(t *testing.T) {
 	app := newAltinityClickHouseApp("ch-test", "tenant-test")
 	if err := unstructured.SetNestedField(app.Object, "yes", "spec", "backup", "useSystemBucket"); err != nil {
@@ -986,6 +1089,101 @@ func TestCleanupAltinityBackup_CompletionAfterLeavingTheSystemBucketWarns(t *tes
 			if tc.wantEvent {
 				if ev := <-rec.Events; !strings.Contains(ev, "ArtifactNotDeleted") || !strings.Contains(ev, "clickhouse-ch-test-ch-bk") || !strings.Contains(ev, "may remain") {
 					t.Errorf("event %q must say the named archive may remain", ev)
+				}
+			}
+		})
+	}
+}
+
+// A delete reaches the bucket the sidecar serves now. When the Backup records
+// another bucket, that sidecar would answer "not found" and the delete would
+// count as done while the archive stays where it was written, so the Backup is
+// released with a Warning naming both buckets instead. A Backup that records
+// no bucket, taken before this was recorded, is deleted as before.
+func TestCleanupAltinityBackup_ChecksTheBucketItWasWrittenTo(t *testing.T) {
+	cases := []struct {
+		name      string
+		recorded  string
+		current   *corev1.Secret
+		wantJob   bool
+		wantEvent []string
+	}{
+		{name: "same bucket", recorded: "bucket-a", current: altinityCredsSecret("bucket-a"), wantJob: true},
+		{name: "bucket changed", recorded: "bucket-a", current: altinityCredsSecret("bucket-b"), wantEvent: []string{"ArtifactNotDeleted", "bucket-a", "bucket-b"}},
+		{name: "no projected Secret", recorded: "bucket-a", wantEvent: []string{"ArtifactNotDeleted", "bucket-a"}},
+		{name: "Secret without a bucket", recorded: "bucket-a", current: altinityCredsSecret(""), wantEvent: []string{"ArtifactNotDeleted", "bucket-a"}},
+		{name: "bucket not recorded", current: altinityCredsSecret("bucket-b"), wantJob: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			backup := altinityCleanupBackup("ch-bk")
+			if tc.recorded != "" {
+				backup.Spec.DriverMetadata[altinityBucketKey] = tc.recorded
+			}
+			objs := altinityCleanupFixtures(backup)
+			if tc.current != nil {
+				objs = append(objs, tc.current)
+			}
+			c, s := newAltinityCleanupClient(objs...)
+			rec := record.NewFakeRecorder(10)
+			r := &BackupReconciler{Client: c, Scheme: s, Recorder: rec, CredentialsConfig: altinityTestCredentials}
+			if _, err := r.cleanupOnDelete(context.Background(), backup); err != nil {
+				t.Fatalf("cleanupOnDelete: %v", err)
+			}
+			if jobs := listJobs(t, c); (len(jobs) == 1) != tc.wantJob {
+				t.Fatalf("cleanup Jobs = %d, want a Job = %v", len(jobs), tc.wantJob)
+			}
+			if len(tc.wantEvent) == 0 {
+				if len(rec.Events) != 0 {
+					t.Errorf("unexpected event %q", <-rec.Events)
+				}
+				return
+			}
+			if len(rec.Events) == 0 {
+				t.Fatal("expected a Warning Event naming the archive left")
+			}
+			ev := <-rec.Events
+			for _, want := range tc.wantEvent {
+				if !strings.Contains(ev, want) {
+					t.Errorf("event %q does not mention %q", ev, want)
+				}
+			}
+		})
+	}
+}
+
+// The platform's bucket can change while the delete runs; a sidecar
+// restarted on the new one answers "not found" and the Job completes.
+// Releasing the Backup on that completion must say the archive may remain.
+func TestCleanupAltinityBackup_CompletionAfterTheBucketChangedWarns(t *testing.T) {
+	for name, tc := range map[string]struct {
+		current   string
+		wantEvent bool
+	}{
+		"same bucket":    {current: "bucket-a"},
+		"bucket changed": {current: "bucket-b", wantEvent: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			backup := altinityCleanupBackup("ch-bk")
+			backup.Spec.DriverMetadata[altinityBucketKey] = "bucket-a"
+			done := ownCleanupJob(backup)
+			done.Status.Conditions = []batchv1.JobCondition{{Type: batchv1.JobComplete, Status: corev1.ConditionTrue}}
+			c, s := newAltinityCleanupClient(append(altinityCleanupFixtures(backup), done, altinityCredsSecret(tc.current))...)
+			rec := record.NewFakeRecorder(10)
+			r := &BackupReconciler{Client: c, Scheme: s, Recorder: rec, CredentialsConfig: altinityTestCredentials}
+			res, err := r.cleanupOnDelete(context.Background(), backup)
+			if err != nil {
+				t.Fatalf("cleanupOnDelete: %v", err)
+			}
+			if res.RequeueAfter != 0 || res.Requeue {
+				t.Errorf("expected the Backup released on completion, got %+v", res)
+			}
+			if got := len(rec.Events) > 0; got != tc.wantEvent {
+				t.Fatalf("warning event recorded = %v, want %v", got, tc.wantEvent)
+			}
+			if tc.wantEvent {
+				if ev := <-rec.Events; !strings.Contains(ev, "ArtifactNotDeleted") || !strings.Contains(ev, "may remain") || !strings.Contains(ev, "bucket-a") {
+					t.Errorf("event %q must say the archive may remain in bucket-a", ev)
 				}
 			}
 		})

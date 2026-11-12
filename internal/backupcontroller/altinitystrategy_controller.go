@@ -63,6 +63,13 @@ const (
 	// the sidecar uploads to the bucket it was last restarted with.
 	altinityUseSystemBucketKey = "altinity.strategy.backups.cozystack.io/use-system-bucket"
 
+	// altinityBucketKey records, on the backup Job and then on the Backup,
+	// the system bucket the projected credentials named when the backup Job
+	// was created: the bucket the sidecar of a system-bucket application
+	// reads, so the one its archive went to unless the sidecar had not been
+	// restarted onto it yet.
+	altinityBucketKey = "altinity.strategy.backups.cozystack.io/bucket"
+
 	altinityModeCleanup                   = "cleanup"
 	altinitySkipArtifactCleanupAnnotation = "backups.cozystack.io/skip-artifact-cleanup"
 
@@ -405,6 +412,16 @@ func (r *BackupJobReconciler) reconcileAltinity(ctx context.Context, j *backupsv
 	if err != nil {
 		return r.markBackupJobFailed(ctx, j, fmt.Sprintf("failed to read spec.backup.useSystemBucket: %v", err))
 	}
+	jobAnnotations := map[string]string{altinityUseSystemBucketKey: fmt.Sprint(useSystemBucket)}
+	if useSystemBucket {
+		bucket, berr := altinitySystemBucket(ctx, r.Client, r.CredentialsConfig, j.Namespace)
+		if berr != nil {
+			return ctrl.Result{}, berr
+		}
+		if bucket != "" {
+			jobAnnotations[altinityBucketKey] = bucket
+		}
+	}
 
 	batchJob, err := r.ensureAltinityJob(ctx, j, j.Namespace, jobNameForBackupJob(j),
 		altinityModeBackup,
@@ -412,7 +429,7 @@ func (r *BackupJobReconciler) reconcileAltinity(ctx context.Context, j *backupsv
 			backupsv1alpha1.OwningJobNameLabel:      j.Name,
 			backupsv1alpha1.OwningJobNamespaceLabel: j.Namespace,
 		},
-		map[string]string{altinityUseSystemBucketKey: fmt.Sprint(useSystemBucket)},
+		jobAnnotations,
 		rendered,
 	)
 	if errors.Is(err, errAltinityPredecessorJob) {
@@ -450,7 +467,7 @@ func (r *BackupJobReconciler) reconcileAltinity(ctx context.Context, j *backupsv
 		if !ok {
 			flow = fmt.Sprint(useSystemBucket)
 		}
-		artifact, err := r.createAltinityBackupArtifact(ctx, j, resolved, archive, flow)
+		artifact, err := r.createAltinityBackupArtifact(ctx, j, resolved, archive, flow, batchJob.Annotations[altinityBucketKey])
 		if err != nil {
 			return r.markBackupJobFailed(ctx, j, fmt.Sprintf("failed to create Backup artifact: %v", err))
 		}
@@ -668,11 +685,14 @@ func (r *BackupJobReconciler) createAltinityBackupArtifact(
 	ctx context.Context,
 	j *backupsv1alpha1.BackupJob,
 	resolved *ResolvedBackupConfig,
-	archive, useSystemBucket string,
+	archive, useSystemBucket, bucket string,
 ) (*backupsv1alpha1.Backup, error) {
 	driverMD := map[string]string{altinityUseSystemBucketKey: useSystemBucket}
 	if archive != "" {
 		driverMD[altinityArchiveMetaKey] = archive
+	}
+	if bucket != "" {
+		driverMD[altinityBucketKey] = bucket
 	}
 	for k, v := range resolved.Parameters {
 		driverMD[altinityParamPrefix+k] = v
@@ -1082,6 +1102,12 @@ func (r *BackupReconciler) cleanupAltinityBackup(ctx context.Context, backup *ba
 		if !onSystemBucket {
 			return r.releaseAltinityCleanup(ctx, backup, archive, "the ClickHouse application no longer uses the system bucket"), nil
 		}
+		if recorded, current, changed, berr := r.altinityBucketChange(ctx, backup); berr != nil {
+			return ctrl.Result{}, berr
+		} else if changed {
+			return r.releaseAltinityCleanup(ctx, backup, archive,
+				fmt.Sprintf("the archive was written to bucket %s, but the system bucket is now %s", recorded, altinityBucketName(current))), nil
+		}
 		release := backup.Spec.ApplicationRef.Name
 		authSecret := "clickhouse-" + release + "-backup-api-auth"
 		if serr := r.Get(ctx, types.NamespacedName{Namespace: backup.Namespace, Name: authSecret}, &corev1.Secret{}); serr != nil {
@@ -1129,12 +1155,20 @@ func (r *BackupReconciler) cleanupAltinityBackup(ctx context.Context, backup *ba
 		if aerr != nil {
 			return ctrl.Result{}, aerr
 		}
+		recorded, current, bucketChanged, berr := r.altinityBucketChange(ctx, backup)
+		if berr != nil {
+			return ctrl.Result{}, berr
+		}
 		if derr := r.deleteAltinityCleanupJob(ctx, job); derr != nil {
 			return ctrl.Result{}, derr
 		}
 		if found && !onSystemBucket {
 			return r.releaseAltinityCleanup(ctx, backup, archive,
 				"the ClickHouse application moved to its own bucket while the delete ran, so the archive may remain"), nil
+		}
+		if bucketChanged {
+			return r.releaseAltinityCleanup(ctx, backup, archive,
+				fmt.Sprintf("the system bucket changed from %s to %s while the delete ran, so the archive may remain", recorded, altinityBucketName(current))), nil
 		}
 		logger.Debug("Altinity archive deleted", "backup", backup.Name, "archive", archive)
 		return ctrl.Result{}, nil
@@ -1197,6 +1231,45 @@ func (r *BackupReconciler) altinityAppOnSystemBucket(ctx context.Context, backup
 		return false, true, fmt.Errorf("read spec.backup.useSystemBucket: %w", err)
 	}
 	return v, true, nil
+}
+
+// altinitySystemBucket reads the bucket the projected credentials name in the
+// namespace, the one the sidecar of a system-bucket application reads. It is
+// empty when no credentials are projected there or they name no bucket.
+func altinitySystemBucket(ctx context.Context, c client.Client, cfg BackupCredentialsConfig, namespace string) (string, error) {
+	if !cfg.IsEnabled() {
+		return "", nil
+	}
+	secret := &corev1.Secret{}
+	if err := c.Get(ctx, types.NamespacedName{Namespace: namespace, Name: cfg.TargetSecretName}, secret); err != nil {
+		if apierrors.IsNotFound(err) {
+			return "", nil
+		}
+		return "", err
+	}
+	return string(secret.Data["bucketName"]), nil
+}
+
+// altinityBucketChange compares the bucket a Backup records with the one the
+// projected credentials name now. A Backup that records none, taken before
+// buckets were recorded, reports no change.
+func (r *BackupReconciler) altinityBucketChange(ctx context.Context, backup *backupsv1alpha1.Backup) (recorded, current string, changed bool, err error) {
+	recorded = backup.Spec.DriverMetadata[altinityBucketKey]
+	if recorded == "" {
+		return "", "", false, nil
+	}
+	current, err = altinitySystemBucket(ctx, r.Client, r.CredentialsConfig, backup.Namespace)
+	if err != nil {
+		return "", "", false, err
+	}
+	return recorded, current, current != recorded, nil
+}
+
+func altinityBucketName(bucket string) string {
+	if bucket == "" {
+		return "unknown, as the projected credentials name none"
+	}
+	return bucket
 }
 
 // altinityCleanupFailures reads how many cleanup Jobs of the Backup have
