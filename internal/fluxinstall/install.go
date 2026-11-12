@@ -171,7 +171,7 @@ func extractNamespace(objects []*unstructured.Unstructured) (string, error) {
 		if obj.GetKind() == "Namespace" {
 			namespace := obj.GetName()
 			if namespace == "" {
-				return "", fmt.Errorf("Namespace object has no name")
+				return "", fmt.Errorf("the Namespace object has no name")
 			}
 			return namespace, nil
 		}

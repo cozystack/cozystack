@@ -133,11 +133,11 @@ func (c *OperatorCollector) collect(ctx context.Context) {
 	var metrics strings.Builder
 
 	// Add cluster info metric
-	metrics.WriteString(fmt.Sprintf(
+	fmt.Fprintf(&metrics,
 		"cozy_cluster_info{cozystack_version=\"%s\",kubernetes_version=\"%s\"} 1\n",
 		version.Version,
 		k8sVersion.GitVersion,
-	))
+	)
 
 	// Collect node metrics grouped by OS and kernel
 	nodeOSCount := make(map[string]map[string]int) // os -> kernel -> count
@@ -153,12 +153,12 @@ func (c *OperatorCollector) collect(ctx context.Context) {
 
 	for osKey, kernels := range nodeOSCount {
 		for kernel, count := range kernels {
-			metrics.WriteString(fmt.Sprintf(
+			fmt.Fprintf(&metrics,
 				"cozy_nodes_count{os=\"%s\",kernel=\"%s\"} %d\n",
 				osKey,
 				kernel,
 				count,
-			))
+			)
 		}
 	}
 
@@ -174,11 +174,11 @@ func (c *OperatorCollector) collect(ctx context.Context) {
 	}
 
 	for resourceName, total := range capacityTotals {
-		metrics.WriteString(fmt.Sprintf(
+		fmt.Fprintf(&metrics,
 			"cozy_cluster_capacity{resource=\"%s\"} %d\n",
 			resourceName,
 			total,
-		))
+		)
 	}
 
 	// Collect LoadBalancer services metrics
@@ -192,7 +192,7 @@ func (c *OperatorCollector) collect(ctx context.Context) {
 				lbCount++
 			}
 		}
-		metrics.WriteString(fmt.Sprintf("cozy_loadbalancers_count %d\n", lbCount))
+		fmt.Fprintf(&metrics, "cozy_loadbalancers_count %d\n", lbCount)
 	}
 
 	// Collect PV metrics grouped by driver and size
@@ -224,12 +224,12 @@ func (c *OperatorCollector) collect(ctx context.Context) {
 
 		for size, drivers := range pvMetrics {
 			for driver, count := range drivers {
-				metrics.WriteString(fmt.Sprintf(
+				fmt.Fprintf(&metrics,
 					"cozy_pvs_count{driver=\"%s\",size=\"%s\"} %d\n",
 					driver,
 					size,
 					count,
-				))
+				)
 			}
 		}
 	}
@@ -244,11 +244,11 @@ func (c *OperatorCollector) collect(ctx context.Context) {
 			if variant == "" {
 				variant = "default"
 			}
-			metrics.WriteString(fmt.Sprintf(
+			fmt.Fprintf(&metrics,
 				"cozy_package_info{name=\"%s\",variant=\"%s\"} 1\n",
 				pkg.Name,
 				variant,
-			))
+			)
 		}
 	}
 

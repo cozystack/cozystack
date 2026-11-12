@@ -790,15 +790,6 @@ func scanRecordingClient(scheme *runtime.Scheme, listed *[]string, writes *int, 
 		}).Build()
 }
 
-func listedKind(listed []string, kind string) bool {
-	for _, l := range listed {
-		if strings.Contains(l, kind) {
-			return true
-		}
-	}
-	return false
-}
-
 // The comparison guarding that write has to be semantic rather than structural, or a
 // LimitRange written in a different but equivalent notation would re-apply on every
 // reconcile — invisible in a test that only looked at the resulting object, since every one

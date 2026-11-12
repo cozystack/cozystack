@@ -118,11 +118,11 @@ func (c *Collector) collect(ctx context.Context) {
 
 	// Write application count metrics
 	for kind, count := range appKindCounts {
-		metrics.WriteString(fmt.Sprintf(
+		fmt.Fprintf(&metrics,
 			"cozy_application_count{kind=\"%s\"} %d\n",
 			kind,
 			count,
-		))
+		)
 	}
 
 	// Send metrics only if there's something to send

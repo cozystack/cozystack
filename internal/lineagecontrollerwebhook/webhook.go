@@ -176,7 +176,7 @@ func (h *LineageControllerWebhook) computeLabels(ctx context.Context, obj *unstr
 				return s
 			}
 			s = s[:63]
-			for b := s[62]; !((b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z') || (b >= '0' && b <= '9')); s = s[:len(s)-1] {
+			for b := s[62]; (b < 'a' || b > 'z') && (b < 'A' || b > 'Z') && (b < '0' || b > '9'); s = s[:len(s)-1] {
 				b = s[len(s)-1]
 			}
 			return s
