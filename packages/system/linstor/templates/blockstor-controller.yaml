@@ -92,6 +92,11 @@ spec:
         app.kubernetes.io/component: blockstor-controller
     spec:
       serviceAccountName: blockstor-controller
+      {{- /*
+         The REST server's graceful-shutdown window is derived from its
+         detached rollback budget; this has to outlive it, or a SIGTERM kills
+         a compensation mid-cascade. */}}
+      terminationGracePeriodSeconds: 21
       containers:
         - name: manager
           image: {{ .Values.blockstorController.image.repository }}:{{ .Values.blockstorController.image.tag }}

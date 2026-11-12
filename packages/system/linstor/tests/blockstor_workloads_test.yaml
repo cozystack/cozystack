@@ -281,3 +281,25 @@ tests:
       - matchRegex:
           path: spec.template.metadata.annotations["checksum/drbd-conf"]
           pattern: '^[0-9a-f]{64}$'
+
+  # A SIGTERM must not cut a detached rollback short: the pod outlives the
+  # REST server's shutdown window.
+  - it: gives the controller time to finish a rollback on shutdown
+    template: templates/blockstor-controller.yaml
+    documentSelector:
+      path: kind
+      value: Deployment
+    asserts:
+      - equal:
+          path: spec.template.spec.terminationGracePeriodSeconds
+          value: 21
+
+  - it: gives the apiserver time to finish a rollback on shutdown
+    template: templates/blockstor-apiserver.yaml
+    documentSelector:
+      path: kind
+      value: Deployment
+    asserts:
+      - equal:
+          path: spec.template.spec.terminationGracePeriodSeconds
+          value: 21
