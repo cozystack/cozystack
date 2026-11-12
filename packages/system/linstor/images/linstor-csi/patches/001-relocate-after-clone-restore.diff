@@ -1,38 +1,37 @@
 diff --git a/pkg/client/linstor.go b/pkg/client/linstor.go
-index ac4651d..46d565d 100644
 --- a/pkg/client/linstor.go
 +++ b/pkg/client/linstor.go
-@@ -462,6 +462,14 @@ func (s *Linstor) Clone(ctx context.Context, vol, src *volume.Info, params *volu
+@@ -498,6 +498,14 @@
  		return err
  	}
  
 +	if params.RelocateAfterClone {
 +		logger.Debug("relocate resources to optimal nodes")
 +
-+		if err := s.relocateResources(ctx, vol.ID, rGroup.Name); err != nil {
++		if err := s.relocateResources(ctx, vol.ResourceName, rGroup.Name); err != nil {
 +			logger.WithError(err).Warn("resource relocation failed, volume is still usable")
 +		}
 +	}
 +
  	logger.Debug("reconcile extra properties")
  
- 	err = s.client.ResourceDefinitions.Modify(ctx, vol.ID, lapi.GenericPropsModify{OverrideProps: vol.Properties})
-@@ -1297,6 +1305,14 @@ func (s *Linstor) VolFromSnap(ctx context.Context, snap *volume.Snapshot, vol *v
+ 	err = s.client.ResourceDefinitions.Modify(ctx, vol.ResourceName, lapi.GenericPropsModify{OverrideProps: vol.Properties})
+@@ -1614,6 +1622,14 @@
  		return err
  	}
  
 +	if snapParams != nil && snapParams.RelocateAfterRestore {
 +		logger.Debug("relocate resources to optimal nodes")
 +
-+		if err := s.relocateResources(ctx, vol.ID, rGroup.Name); err != nil {
++		if err := s.relocateResources(ctx, vol.ResourceName, rGroup.Name); err != nil {
 +			logger.WithError(err).Warn("resource relocation failed, volume is still usable")
 +		}
 +	}
 +
  	logger.Debug("reconcile extra properties")
  
- 	err = s.client.ResourceDefinitions.Modify(ctx, vol.ID, lapi.GenericPropsModify{OverrideProps: vol.Properties})
-@@ -1487,9 +1503,8 @@ func (s *Linstor) reconcileSnapshotResources(ctx context.Context, snapshot *volu
+ 	err = s.client.ResourceDefinitions.Modify(ctx, vol.ResourceName, lapi.GenericPropsModify{OverrideProps: vol.Properties})
+@@ -1818,9 +1834,8 @@
  		return fmt.Errorf("snapshot '%s' not deployed on any node", snap.Name)
  	}
  
@@ -44,7 +43,7 @@ index ac4651d..46d565d 100644
  	for _, snapNode := range snap.Nodes {
  		if err := s.NodeAvailable(ctx, snapNode); err != nil {
  			logger.WithField("selected node candidate", snapNode).WithError(err).Debug("node is not available")
-@@ -1497,13 +1512,23 @@ func (s *Linstor) reconcileSnapshotResources(ctx context.Context, snapshot *volu
+@@ -1828,15 +1843,25 @@
  		}
  
  		if slices.Contains(preferredNodes, snapNode) {
@@ -58,8 +57,8 @@ index ac4651d..46d565d 100644
  		}
 +
 +		available = append(available, snapNode)
-+	}
-+
+ 	}
+ 
 +	// Pick a random node from preferred candidates, falling back to any available node.
 +	// Randomization distributes restore load across snapshot nodes, preventing all
 +	// clones of the same source from concentrating on a single node.
@@ -71,13 +70,20 @@ index ac4651d..46d565d 100644
 +	var selectedNode string
 +	if len(candidates) > 0 {
 +		selectedNode = candidates[rand.Intn(len(candidates))]
- 	}
- 
++	}
++
  	if selectedNode == "" {
-@@ -1696,6 +1721,114 @@ func (s *Linstor) reconcileResourcePlacement(ctx context.Context, vol *volume.In
- 	return nil
- }
- 
+ 		return fmt.Errorf("no node [%s] available for snapshot '%s'", strings.Join(snap.Nodes, ","), snap.Name)
+ 	}
+@@ -2030,6 +2055,114 @@
+ 	err = volumeScheduler.Create(ctx, vol.ResourceName, params, topologies)
+ 	if err != nil {
+ 		return err
++	}
++
++	return nil
++}
++
 +const propertyRelocationTriggered = "Aux/csi-relocation-triggered"
 +
 +// relocateResources migrates replicas from their current nodes to the nodes that
@@ -181,19 +187,13 @@ index ac4651d..46d565d 100644
 +			logger.WithError(err).Warn("migrate-disk failed, skipping this pair")
 +			continue
 +		}
-+	}
-+
-+	return nil
-+}
-+
- // FindSnapsByID searches the snapshot in the backend
- func (s *Linstor) FindSnapsByID(ctx context.Context, id string) ([]*volume.Snapshot, error) {
- 	snapshotId, err := volume.ParseSnapshotId(id)
+ 	}
+ 
+ 	return nil
 diff --git a/pkg/volume/parameter.go b/pkg/volume/parameter.go
-index 39acd95..54d1dfb 100644
 --- a/pkg/volume/parameter.go
 +++ b/pkg/volume/parameter.go
-@@ -50,6 +50,7 @@ const (
+@@ -51,6 +51,7 @@
  	nfsservicename
  	nfssquash
  	nfsrecoveryvolumesize
@@ -201,24 +201,24 @@ index 39acd95..54d1dfb 100644
  )
  
  // Parameters configuration for linstor volumes.
-@@ -118,6 +119,8 @@ type Parameters struct {
- 	// NfsRecoveryVolumeSize sets the volume size (in bytes) of the recovery volume used by the NFS server.
- 	// Defaults to 300MiB.
- 	NfsRecoveryVolumeBytes int64
+@@ -122,6 +123,8 @@
+ 	// IOQoSLimits holds the IO QoS limits parsed from the qos.linbit.com/* parameters. They are stored on
+ 	// the LINSTOR resource definition and passed to the nri-volume-qos plugin via VolumeAttachment metadata.
+ 	IOQoSLimits meta.Limits
 +	// RelocateAfterClone triggers asynchronous relocation of replicas to optimal nodes after cloning.
 +	RelocateAfterClone bool
  }
  
  const DefaultDisklessStoragePoolName = "DfltDisklessStorPool"
-@@ -140,6 +143,7 @@ func NewParameters(params map[string]string, topologyPrefix string) (Parameters,
+@@ -144,6 +147,7 @@
  		NfsServiceName:         "linstor-csi-nfs",
  		NfsSquash:              "no_root_squash",
  		NfsRecoveryVolumeBytes: 300 * 1024 * 1024,
 +		RelocateAfterClone:     true,
  	}
  
- 	for k, v := range params {
-@@ -287,6 +291,13 @@ func NewParameters(params map[string]string, topologyPrefix string) (Parameters,
+ 	limits, err := meta.ParseLimits(params)
+@@ -298,6 +302,13 @@
  			}
  
  			p.NfsRecoveryVolumeBytes = s.Value()
@@ -233,10 +233,9 @@ index 39acd95..54d1dfb 100644
  	}
  
 diff --git a/pkg/volume/paramkey_enumer.go b/pkg/volume/paramkey_enumer.go
-index 5474963..2eb8a7c 100644
 --- a/pkg/volume/paramkey_enumer.go
 +++ b/pkg/volume/paramkey_enumer.go
-@@ -7,11 +7,11 @@ import (
+@@ -7,11 +7,11 @@
  	"strings"
  )
  
@@ -251,7 +250,7 @@ index 5474963..2eb8a7c 100644
  
  func (i paramKey) String() string {
  	if i < 0 || i >= paramKey(len(_paramKeyIndex)-1) {
-@@ -50,9 +50,10 @@ func _paramKeyNoOp() {
+@@ -50,9 +50,10 @@
  	_ = x[nfsservicename-(23)]
  	_ = x[nfssquash-(24)]
  	_ = x[nfsrecoveryvolumesize-(25)]
@@ -262,17 +261,24 @@ index 5474963..2eb8a7c 100644
 +var _paramKeyValues = []paramKey{allowremotevolumeaccess, autoplace, clientlist, disklessonremaining, disklessstoragepool, donotplacewithregex, encryption, fsopts, layerlist, mountopts, nodelist, placementcount, placementpolicy, replicasondifferent, replicasonsame, sizekib, storagepool, postmountxfsopts, resourcegroup, usepvcname, overprovision, xreplicasondifferent, nfsconfigtemplate, nfsservicename, nfssquash, nfsrecoveryvolumesize, relocateafterclone}
  
  var _paramKeyNameToValueMap = map[string]paramKey{
- 	_paramKeyName[0:23]:         allowremotevolumeaccess,
-@@ -107,6 +108,8 @@ var _paramKeyNameToValueMap = map[string]paramKey{
+ 	_paramKeyName[0:23]:    allowremotevolumeaccess,
+@@ -81,6 +82,7 @@
+ 	_paramKeyName[310:324]: nfsservicename,
+ 	_paramKeyName[324:333]: nfssquash,
+ 	_paramKeyName[333:354]: nfsrecoveryvolumesize,
++	_paramKeyName[354:372]: relocateafterclone,
+ }
+ 
+ var _paramKeyLowerNameToValueMap = map[string]paramKey{
+@@ -110,6 +112,7 @@
+ 	_paramKeyLowerName[310:324]: nfsservicename,
  	_paramKeyLowerName[324:333]: nfssquash,
- 	_paramKeyName[333:354]:      nfsrecoveryvolumesize,
  	_paramKeyLowerName[333:354]: nfsrecoveryvolumesize,
-+	_paramKeyName[354:372]:      relocateafterclone,
 +	_paramKeyLowerName[354:372]: relocateafterclone,
  }
  
  var _paramKeyNames = []string{
-@@ -136,6 +139,7 @@ var _paramKeyNames = []string{
+@@ -139,6 +142,7 @@
  	_paramKeyName[310:324],
  	_paramKeyName[324:333],
  	_paramKeyName[333:354],
@@ -281,18 +287,17 @@ index 5474963..2eb8a7c 100644
  
  // paramKeyString retrieves an enum value from the enum constants string name.
 diff --git a/pkg/volume/snapshot_params.go b/pkg/volume/snapshot_params.go
-index d167cb8..50b70fb 100644
 --- a/pkg/volume/snapshot_params.go
 +++ b/pkg/volume/snapshot_params.go
-@@ -35,6 +35,7 @@ type SnapshotParameters struct {
- 	LinstorTargetUrl         string       `json:"linstor-target-url,omitempty"`
- 	LinstorTargetClusterID   string       `json:"linstor-target-cluster-id,omitempty"`
- 	LinstorTargetStoragePool string       `json:"linstor-target-storage-pool,omitempty"`
-+	RelocateAfterRestore     bool         `json:"relocate-after-restore,omitempty"`
+@@ -38,6 +38,7 @@
+ 	LinstorTargetUrl         string        `json:"linstor-target-url,omitempty"`
+ 	LinstorTargetClusterID   string        `json:"linstor-target-cluster-id,omitempty"`
+ 	LinstorTargetStoragePool string        `json:"linstor-target-storage-pool,omitempty"`
++	RelocateAfterRestore     bool          `json:"relocate-after-restore,omitempty"`
  }
  
  func NewSnapshotParameters(params, secrets map[string]string) (*SnapshotParameters, error) {
-@@ -91,6 +92,13 @@ func NewSnapshotParameters(params, secrets map[string]string) (*SnapshotParamete
+@@ -116,6 +117,13 @@
  			p.LinstorTargetClusterID = v
  		case "/linstor-target-storage-pool":
  			p.LinstorTargetStoragePool = v
