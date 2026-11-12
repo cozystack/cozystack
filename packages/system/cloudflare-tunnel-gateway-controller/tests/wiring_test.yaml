@@ -49,6 +49,33 @@ tests:
           path: spec.template.spec.containers[0].args
           content: --proxy-token-secret=cozy-cloudflare-tunnel-gateway-controller/cloudflare-tunnel-credentials
 
+  - it: names the credentials namespace used by the standard PackageSource installation
+    template: charts/cloudflare-tunnel-gateway-controller/templates/gatewayclassconfig.yaml
+    asserts:
+      - equal:
+          path: spec.cloudflareCredentialsSecretRef.namespace
+          value: cozy-cloudflare-tunnel-gateway-controller
+
+  - it: defaults credentials to a nonstandard release namespace
+    release:
+      namespace: alternate-tunnel
+    template: charts/cloudflare-tunnel-gateway-controller/templates/gatewayclassconfig.yaml
+    asserts:
+      - equal:
+          path: spec.cloudflareCredentialsSecretRef.namespace
+          value: alternate-tunnel
+
+  - it: preserves an explicit credentials namespace override as a string
+    release:
+      namespace: alternate-tunnel
+    template: charts/cloudflare-tunnel-gateway-controller/templates/gatewayclassconfig.yaml
+    set:
+      cloudflare-tunnel-gateway-controller.gatewayClassConfig.cloudflareCredentialsSecretRef.namespace: "null"
+    asserts:
+      - equal:
+          path: spec.cloudflareCredentialsSecretRef.namespace
+          value: "null"
+
   - it: passes the tunnel ID through to the GatewayClassConfig behind the cloudflare-tunnel class
     asserts:
       - template: charts/cloudflare-tunnel-gateway-controller/templates/gatewayclassconfig.yaml

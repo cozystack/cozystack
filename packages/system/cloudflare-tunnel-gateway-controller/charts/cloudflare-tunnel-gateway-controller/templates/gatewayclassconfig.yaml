@@ -8,9 +8,7 @@ metadata:
 spec:
   cloudflareCredentialsSecretRef:
     name: {{ required "gatewayClassConfig.cloudflareCredentialsSecretRef.name is required" .Values.gatewayClassConfig.cloudflareCredentialsSecretRef.name }}
-    {{- if .Values.gatewayClassConfig.cloudflareCredentialsSecretRef.namespace }}
-    namespace: {{ .Values.gatewayClassConfig.cloudflareCredentialsSecretRef.namespace }}
-    {{- end }}
+    namespace: {{ .Values.gatewayClassConfig.cloudflareCredentialsSecretRef.namespace | default .Release.Namespace | quote }}
     {{- if .Values.gatewayClassConfig.cloudflareCredentialsSecretRef.key }}
     key: {{ .Values.gatewayClassConfig.cloudflareCredentialsSecretRef.key }}
     {{- end }}

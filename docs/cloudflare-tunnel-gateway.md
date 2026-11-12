@@ -24,7 +24,7 @@ The Cloudflare account ID is auto-detected when the API token has access to a si
 
 ## The credentials Secret
 
-Both planes read one Secret, named `cloudflare-tunnel-credentials`, in the package namespace `cozy-cloudflare-tunnel-gateway-controller`. The package pins the Secret name; the `tunnel-token` key is the chart's own default, and a chart test holds both in place across re-vendoring. `api-token` is likewise the controller's default for the credentials key, which the package leaves unset:
+Both planes read one Secret, named `cloudflare-tunnel-credentials`, in the package namespace `cozy-cloudflare-tunnel-gateway-controller`. The rendered `GatewayClassConfig` explicitly names the release namespace for its credentials Secret, matching the controller's default; `gatewayClassConfig.cloudflareCredentialsSecretRef.namespace` can override it. The proxy's Secret reference remains local to its pod namespace. The `tunnel-token` and `api-token` keys use the chart's defaults:
 
 | Key | Read by | Contents |
 | --- | --- | --- |

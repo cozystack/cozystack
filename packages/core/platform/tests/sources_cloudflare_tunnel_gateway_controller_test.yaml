@@ -36,3 +36,6 @@ tests:
       - equal:
           path: spec.variants[0].components[0].install.releaseName
           value: cloudflare-tunnel-gateway-controller
+      - equal:
+          path: spec.variants[0].components[0].install.namespace
+          value: cozy-cloudflare-tunnel-gateway-controller
