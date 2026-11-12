@@ -367,6 +367,48 @@
   # has necessarily been re-reconciled, so Ready here means the whole upgrade
   # converged -- not just the one Deployment this test watched.
   kubectl wait hr/dashboard -n cozy-dashboard --timeout=10m --for=condition=ready
+
+  # The login redirect oauth2-proxy builds from the alpha config: the realm path
+  # must reach the browser-facing auth URL, an allowed kc_idp_hint must be passed
+  # through to Keycloak, and a value outside the allow pattern must be dropped.
+  # Asserted after the port-forward is gone: on failure set -e would skip a kill
+  # placed after the assertion, and a trap would hide the TAP line.
+  pf_log=$(mktemp)
+  kubectl -n cozy-dashboard port-forward deploy/incloud-web-gatekeeper 18000:8000 >"$pf_log" 2>&1 &
+  pf_pid=$!
+  hinted=""
+  rejected=""
+  if timeout 30 sh -ec 'until nc -z localhost 18000; do sleep 0.2; done'; then
+    hinted=$(curl -sS -o /dev/null -w '%{redirect_url}' 'http://localhost:18000/oauth2/start?kc_idp_hint=e2e-idp') || true
+    rejected=$(curl -sS -o /dev/null -w '%{redirect_url}' 'http://localhost:18000/oauth2/start?kc_idp_hint=e2e%26prompt%3Dnone') || true
+  fi
+  kill "$pf_pid" 2>/dev/null || true
+  wait "$pf_pid" 2>/dev/null || true
+
+  case "$hinted" in
+    https://keycloak.example.org/realms/cozy/protocol/openid-connect/auth\?*kc_idp_hint=e2e-idp*) ;;
+    *)
+      echo "=== /oauth2/start?kc_idp_hint=e2e-idp did not redirect to the cozy realm with the hint ==="
+      echo "Location: ${hinted:-<none>}"
+      cat "$pf_log"
+      false
+      ;;
+  esac
+  case "$rejected" in
+    https://keycloak.example.org/realms/cozy/protocol/openid-connect/auth\?*kc_idp_hint*|https://keycloak.example.org/realms/cozy/protocol/openid-connect/auth\?*prompt=none*)
+      echo "=== a kc_idp_hint outside the allow pattern reached the Keycloak URL ==="
+      echo "Location: $rejected"
+      false
+      ;;
+    https://keycloak.example.org/realms/cozy/protocol/openid-connect/auth\?*) ;;
+    *)
+      echo "=== /oauth2/start with a rejected kc_idp_hint did not redirect to Keycloak ==="
+      echo "Location: ${rejected:-<none>}"
+      cat "$pf_log"
+      false
+      ;;
+  esac
+  rm -f "$pf_log"
 }
 
 @test "Aggregated API rejects Tenant name with dashes" {
