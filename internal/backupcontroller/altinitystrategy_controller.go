@@ -1143,6 +1143,7 @@ func (r *BackupReconciler) cleanupAltinityBackup(ctx context.Context, backup *ba
 			return ctrl.Result{}, werr
 		}
 		if wait > 0 {
+			logger.Debug("holding the Altinity archive delete until the projected credentials reach the sidecar", "backup", backup.Name, "wait", wait)
 			return ctrl.Result{RequeueAfter: wait}, nil
 		}
 		// Rendered as for the strategy's own Pods, so the settings taken from

@@ -40,8 +40,9 @@ type BackupReconciler struct {
 	Scheme   *runtime.Scheme
 	Recorder record.EventRecorder
 	// CredentialsConfig locates the platform backup credentials: the Job-based
-	// cleanups project them into the Backup's namespace, and the MariaDB
-	// cleanup reads them to reach the platform bucket.
+	// cleanups project them into the Backup's namespace, the MariaDB cleanup
+	// reads them to reach the platform bucket, and the Altinity cleanup reads
+	// from them the system bucket and when it last changed.
 	CredentialsConfig BackupCredentialsConfig
 	// APIReader is the manager's uncached reader. The MariaDB cleanup lists
 	// the RestoreJobs and operator Restores of a Backup, and the operator
