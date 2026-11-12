@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"maps"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -64,6 +65,17 @@ const (
 
 	altinityModeCleanup                   = "cleanup"
 	altinitySkipArtifactCleanupAnnotation = "backups.cozystack.io/skip-artifact-cleanup"
+
+	// The cleanup Job that failed is deleted to make room for the next one,
+	// so the count of failed attempts and the time the next may start are
+	// kept on the Backup.
+	altinityCleanupFailuresAnnotation   = "altinity.strategy.backups.cozystack.io/cleanup-failures"
+	altinityCleanupRetryAfterAnnotation = "altinity.strategy.backups.cozystack.io/cleanup-retry-after"
+
+	// altinityCleanupRetryBase is the wait after the first failed cleanup
+	// Job; it doubles with each further failure up to altinityCleanupRetryMax.
+	altinityCleanupRetryBase = 30 * time.Second
+	altinityCleanupRetryMax  = 30 * time.Minute
 
 	// altinityArchiveTimeLayout is the UTC timestamp that ends an archive
 	// name. It is fixed-width, so names sharing a prefix sort chronologically
@@ -1079,6 +1091,9 @@ func (r *BackupReconciler) cleanupAltinityBackup(ctx context.Context, backup *ba
 			}
 			return ctrl.Result{}, serr
 		}
+		if wait := altinityCleanupRetryWait(ctx, backup, time.Now()); wait > 0 {
+			return ctrl.Result{RequeueAfter: wait}, nil
+		}
 		desired := buildAltinityCleanupJob(jobKey.Namespace, jobKey.Name, containers[0],
 			strategy.Spec.Template.Spec,
 			fmt.Sprintf("chi-clickhouse-%s-clickhouse-0-0.%s.svc", release, backup.Namespace), authSecret, archive)
@@ -1124,17 +1139,31 @@ func (r *BackupReconciler) cleanupAltinityBackup(ctx context.Context, backup *ba
 		logger.Debug("Altinity archive deleted", "backup", backup.Name, "archive", archive)
 		return ctrl.Result{}, nil
 	case batchv1.JobFailed:
-		logger.Debug("Altinity cleanup Job failed; retrying", "backup", backup.Name, "job", job.Name)
+		failures := altinityCleanupFailures(ctx, backup) + 1
+		delay := altinityCleanupRetryDelay(failures)
+		logger.Debug("Altinity cleanup Job failed; retrying", "backup", backup.Name, "job", job.Name, "failures", failures, "delay", delay)
 		// The Job and its Pod log go with the delete below, so the Event
 		// keeps the only account of why the attempt failed.
 		if c := jobFailedCondition(job); r.Recorder != nil && c != nil {
 			r.Recorder.Eventf(backup, corev1.EventTypeWarning, "ArtifactCleanupFailed",
-				"cleanup Job %s did not delete archive %s (%s: %s); retrying", job.Name, archive, c.Reason, c.Message)
+				"cleanup Job %s did not delete archive %s (%s: %s); retrying in %s", job.Name, archive, c.Reason, c.Message, delay)
+		}
+		// Recorded before the Job goes: should the delete below fail, the next
+		// reconcile counts this failure again and waits longer, rather than
+		// starting the next Job at once.
+		base := backup.DeepCopy()
+		if backup.Annotations == nil {
+			backup.Annotations = map[string]string{}
+		}
+		backup.Annotations[altinityCleanupFailuresAnnotation] = strconv.Itoa(failures)
+		backup.Annotations[altinityCleanupRetryAfterAnnotation] = time.Now().Add(delay).UTC().Format(time.RFC3339)
+		if perr := r.Patch(ctx, backup, client.MergeFrom(base)); perr != nil {
+			return ctrl.Result{}, perr
 		}
 		if derr := r.deleteAltinityCleanupJob(ctx, job); derr != nil {
 			return ctrl.Result{}, derr
 		}
-		return ctrl.Result{RequeueAfter: altinityPollInterval}, nil
+		return ctrl.Result{RequeueAfter: delay}, nil
 	default:
 		return ctrl.Result{RequeueAfter: altinityPollInterval}, nil
 	}
@@ -1168,6 +1197,49 @@ func (r *BackupReconciler) altinityAppOnSystemBucket(ctx context.Context, backup
 		return false, true, fmt.Errorf("read spec.backup.useSystemBucket: %w", err)
 	}
 	return v, true, nil
+}
+
+// altinityCleanupFailures reads how many cleanup Jobs of the Backup have
+// failed. An unreadable count is logged and read as none, so the wait starts
+// over rather than the cleanup stopping.
+func altinityCleanupFailures(ctx context.Context, backup *backupsv1alpha1.Backup) int {
+	v, ok := backup.Annotations[altinityCleanupFailuresAnnotation]
+	if !ok {
+		return 0
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil || n < 0 {
+		getLogger(ctx).Info("ignoring an unreadable cleanup failure count", "backup", backup.Name, "value", v)
+		return 0
+	}
+	return n
+}
+
+// altinityCleanupRetryDelay is the wait after the given number of failed
+// cleanup Jobs: altinityCleanupRetryBase, doubled with each further failure,
+// at most altinityCleanupRetryMax.
+func altinityCleanupRetryDelay(failures int) time.Duration {
+	d := altinityCleanupRetryBase
+	for i := 1; i < failures && d < altinityCleanupRetryMax; i++ {
+		d *= 2
+	}
+	return min(d, altinityCleanupRetryMax)
+}
+
+// altinityCleanupRetryWait is how long the next cleanup Job still has to wait
+// after the last failure. An unreadable time is logged and waits for nothing,
+// so the cleanup goes on.
+func altinityCleanupRetryWait(ctx context.Context, backup *backupsv1alpha1.Backup, now time.Time) time.Duration {
+	v, ok := backup.Annotations[altinityCleanupRetryAfterAnnotation]
+	if !ok {
+		return 0
+	}
+	at, err := time.Parse(time.RFC3339, v)
+	if err != nil {
+		getLogger(ctx).Info("ignoring an unreadable cleanup retry time", "backup", backup.Name, "value", v)
+		return 0
+	}
+	return at.Sub(now)
 }
 
 // isAltinityCleanupJob tells a cleanup Job this controller created from
