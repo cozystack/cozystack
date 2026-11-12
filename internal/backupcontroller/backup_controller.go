@@ -40,7 +40,9 @@ type BackupReconciler struct {
 	Scheme   *runtime.Scheme
 	Recorder record.EventRecorder
 	// CredentialsConfig lets the Rabbitmq cleanup path project cozy-backups-creds
-	// into the Backup's namespace before spawning its best-effort delete Job.
+	// into the Backup's namespace before spawning its best-effort delete Job,
+	// and the Altinity cleanup path read from that Secret the system bucket and
+	// when it last changed.
 	CredentialsConfig BackupCredentialsConfig
 }
 

@@ -1260,13 +1260,8 @@ func TestCleanupAltinityBackup_CarriesTheStrategyPullSettings(t *testing.T) {
 	}
 }
 
-// The cleanup Pod lands where the strategy's own Pods are allowed to run: a
-// cluster that keeps backup Pods off tainted nodes, or on nodes that reach the
-// sidecar, would otherwise leave it Pending until its deadline, again and
-// again. The strategy's service account is not carried, since the cleanup Pod
-// only calls the sidecar's HTTP API. The settings are rendered as for the
-// strategy's own Pods, so a value written as a template reaches the Pod
-// resolved.
+// The settings the cleanup Pod takes from the strategy are rendered as for the
+// strategy's own Pods, so a value written as a template reaches it resolved.
 func TestCleanupAltinityBackup_RendersTheStrategySettings(t *testing.T) {
 	backup := altinityCleanupBackup("ch-bk")
 	objs := altinityCleanupFixtures(backup)
@@ -1294,6 +1289,11 @@ func TestCleanupAltinityBackup_RendersTheStrategySettings(t *testing.T) {
 	}
 }
 
+// The cleanup Pod lands where the strategy's own Pods are allowed to run: a
+// cluster that keeps backup Pods off tainted nodes, or on nodes that reach the
+// sidecar, would otherwise leave it Pending until its deadline, again and
+// again. The strategy's service account is not carried, since the cleanup Pod
+// only calls the sidecar's HTTP API.
 func TestCleanupAltinityBackup_CarriesTheStrategySchedulingSettings(t *testing.T) {
 	backup := altinityCleanupBackup("ch-bk")
 	objs := altinityCleanupFixtures(backup)
