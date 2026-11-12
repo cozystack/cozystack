@@ -130,6 +130,7 @@ func TestReportDedupAndTrust(t *testing.T) {
 	t.Setenv("GITHUB_SERVER_URL", "https://github.com")
 	t.Setenv("GITHUB_REPOSITORY", "cozystack/cozystack")
 	t.Setenv("GITHUB_RUN_ID", "100")
+	t.Setenv("GITHUB_RUN_ATTEMPT", "1")
 
 	// The report the next run makes, read off a run that publishes nothing,
 	// planted by someone the batch does not trust.
