@@ -229,6 +229,18 @@
       "description": "Seed string to generate SMBIOS UUID for the VM.",
       "type": "string",
       "default": ""
+    },
+    "proxmox": {
+      "description": "Proxmox substrate settings.",
+      "type": "object",
+      "default": {},
+      "properties": {
+        "node": {
+          "description": "Proxmox node the machine runs on. Empty takes the node of its first disk, which is where all its disks have to be.",
+          "type": "string",
+          "default": ""
+        }
+      }
     }
   }
 }

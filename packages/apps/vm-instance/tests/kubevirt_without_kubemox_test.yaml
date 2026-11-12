@@ -1,0 +1,48 @@
+suite: vm-instance on kubevirt stays unaffected by the proxmox substrate
+# The default substrate must render as before on a platform without kubemox:
+# the guard against a machine that already runs on Proxmox is gated on that
+# API being served, since a lookup of an unknown kind fails the render.
+release:
+  name: vm-instance-web
+  namespace: tenant-test
+templates:
+  - templates/vm.yaml
+set:
+  fullnameOverride: vm-instance-web
+  instanceType: ""
+  instanceProfile: ""
+  resources:
+    cpu: 1
+    sockets: 1
+    memory: 1Gi
+  _cluster:
+    scheduling:
+      dedicatedNodesForWindowsVMs: "false"
+tests:
+  - it: renders the KubeVirt machine with no kubemox API on the cluster
+    capabilities:
+      apiVersions: []
+    asserts:
+      - isKind:
+          of: VirtualMachine
+      - equal:
+          path: apiVersion
+          value: kubevirt.io/v1
+  - it: refuses substrate kubevirt when the machine already runs on Proxmox
+    capabilities:
+      apiVersions:
+        - proxmox.alperen.cloud/v1alpha1/VirtualMachine
+    kubernetesProvider:
+      scheme:
+        "proxmox.alperen.cloud/v1alpha1/VirtualMachine":
+          gvr: {group: proxmox.alperen.cloud, version: v1alpha1, resource: virtualmachines}
+          namespaced: true
+      objects:
+        - apiVersion: proxmox.alperen.cloud/v1alpha1
+          kind: VirtualMachine
+          metadata:
+            name: vm-instance-web
+            namespace: tenant-test
+    asserts:
+      - failedTemplate:
+          errorPattern: "already runs on Proxmox"

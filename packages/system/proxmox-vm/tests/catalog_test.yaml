@@ -1,0 +1,30 @@
+suite: the catalog ConfigMap carries what the tenant charts read
+templates:
+  - templates/catalog.yaml
+tests:
+  - it: publishes the default network and the realtime cores next to the other keys
+    set:
+      catalog:
+        connection: pve
+        defaultNode: pve1
+        defaultNetwork: tenant
+        realtimeCores:
+          pve1: "4-7"
+    asserts:
+      - equal:
+          path: data.defaultNetwork
+          value: tenant
+      - matchRegex:
+          path: data.realtimeCores
+          pattern: "^pve1: 4-7"
+  - it: ships a profile for every Windows generation and the generic Linux names
+    asserts:
+      - matchRegex:
+          path: data.profiles
+          pattern: "windows.2k12:"
+      - matchRegex:
+          path: data.profiles
+          pattern: "linux.efi:"
+      - matchRegex:
+          path: data.instancetypes
+          pattern: "rt1.medium:"

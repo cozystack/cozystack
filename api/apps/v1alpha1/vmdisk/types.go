@@ -34,6 +34,15 @@ type ConfigSpec struct {
 	// Provision the volume at disk creation instead of waiting for a consumer.
 	// +kubebuilder:default:=true
 	BindImmediately bool `json:"bindImmediately"`
+	// Proxmox substrate settings.
+	// +kubebuilder:default:={}
+	Proxmox Proxmox `json:"proxmox"`
+}
+
+type Proxmox struct {
+	// Proxmox node the volume is created on. A VM can only attach disks that live on its own node. Empty takes the catalog's default node.
+	// +kubebuilder:default:=""
+	Node string `json:"node,omitempty"`
 }
 
 type Source struct {

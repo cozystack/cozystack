@@ -1,0 +1,31 @@
+suite: console config.json vm-substrate wiring
+templates:
+  - templates/configmap.yaml
+
+release:
+  name: dashboard
+  namespace: cozy-dashboard
+
+# The console tabs of a VMInstance pick the KubeVirt or the Proxmox APIs by
+# config.json vmSubstrate, which follows the platform's vmSubstrate. A missing
+# key is kubevirt, so the chart only writes it for proxmox.
+
+tests:
+  - it: omits vmSubstrate on the kubevirt default
+    set:
+      _cluster:
+        root-host: example.org
+    asserts:
+      - notMatchRegex:
+          path: data["config.json"]
+          pattern: vmSubstrate
+
+  - it: writes vmSubstrate proxmox when the platform runs VMs on Proxmox
+    set:
+      _cluster:
+        root-host: example.org
+        vm-substrate: proxmox
+    asserts:
+      - matchRegex:
+          path: data["config.json"]
+          pattern: '"vmSubstrate":"proxmox"'

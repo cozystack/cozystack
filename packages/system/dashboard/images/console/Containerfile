@@ -116,10 +116,14 @@ server {
         proxy_pass https://kubernetes.default.svc:443;
     }
 
-    # /k8s prefix for VNC WebSocket compatibility
+    # /k8s prefix for VNC WebSocket compatibility, and for the image upload of
+    # a vm-disk on the Proxmox substrate: the whole image is one request body,
+    # streamed to the aggregated API rather than spooled or capped here.
     location /k8s/ {
         proxy_http_version 1.1;
         proxy_buffering off;
+        proxy_request_buffering off;
+        client_max_body_size 0;
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection $connection_upgrade;
         proxy_set_header X-Forwarded-Proto $scheme;

@@ -1,0 +1,76 @@
+{{- /*
+  On the proxmox substrate a golden image is a cloneable VirtualMachineVolume
+  in cozy-public, one per node the image is wanted on: a Proxmox volume lives
+  on one node, and a copy of it can only be made there. The volume is copied
+  from the Proxmox volume the image names (a template's disk, or a file on a
+  storage with the import content type); a tenant's vm-disk finds it by the
+  vm-default-images.cozystack.io/name label and its node, and copies it in
+  turn through source.disk. Downloading from `url` is not available on this
+  substrate yet, which is why every image needs proxmox.volume here.
+*/}}
+{{- if eq (include "vm-default-images.substrate" .) "proxmox" }}
+{{- $catalog := include "vm-default-images.proxmoxCatalog" . | fromJson }}
+{{- $allowed := append ($catalog.allowedNodes | default list) $catalog.defaultNode | uniq }}
+{{- $classes := $catalog.storageClasses | default dict }}
+{{- range .Values.images }}
+{{- $image := . }}
+{{- $name := required "A valid .name entry required for each image!" .name }}
+{{- $proxmox := .proxmox | default dict }}
+{{- if not $proxmox.volume }}
+{{-   fail (printf "image %q has no proxmox.volume. On substrate proxmox an image is copied from a Proxmox volume the platform names: the disk of a template (local-zfs:base-9001-disk-0) or a file on a storage with the import content type (local:import/%s.qcow2); downloading it from url is not available on this substrate yet." $name $name) }}
+{{- end }}
+{{- $nodes := $proxmox.nodes | default (list $catalog.defaultNode) }}
+{{- if not (first $nodes) }}
+{{-   fail (printf "image %q names no proxmox.nodes and the platform's catalog has no defaultNode" $name) }}
+{{- end }}
+{{- $class := (.storageClass | default $.Values.storageClass) | toString }}
+{{- $storage := index $classes $class }}
+{{- if not $storage }}
+{{-   fail (printf "image %q: storageClass %q is not in the platform's Proxmox catalog (known: %s). On this substrate a storage class is an entry the platform maps to a Proxmox storage." $name $class (join ", " (keys $classes | sortAlpha))) }}
+{{- end }}
+{{- range $node := $nodes }}
+{{- if not (has $node $allowed) }}
+{{-   fail (printf "image %q: proxmox.nodes names %q, which is not one of the nodes the platform allows (%s)" $name $node (join ", " ($allowed | sortAlpha))) }}
+{{- end }}
+---
+apiVersion: proxmox.alperen.cloud/v1alpha1
+kind: VirtualMachineVolume
+metadata:
+  name: vm-default-images-{{ $name }}-{{ $node }}
+  namespace: cozy-public
+  labels:
+    app.kubernetes.io/managed-by: cozystack
+    vm-default-images.cozystack.io/name: {{ $name | quote }}
+  annotations:
+    vm-default-images.cozystack.io/name: {{ $name | quote }}
+    {{- with $image.os }}
+    {{- with .family }}
+    vm-default-images.cozystack.io/os-family: {{ . | quote }}
+    {{- end }}
+    {{- with .name }}
+    vm-default-images.cozystack.io/os-name: {{ . | quote }}
+    {{- end }}
+    {{- with .version }}
+    vm-default-images.cozystack.io/os-version: {{ . | quote }}
+    {{- end }}
+    {{- end }}
+    {{- with $image.architecture }}
+    vm-default-images.cozystack.io/architecture: {{ . | quote }}
+    {{- end }}
+    {{- with $image.description }}
+    vm-default-images.cozystack.io/description: {{ . | quote }}
+    {{- end }}
+    vm-default-images.cozystack.io/storage-class: {{ $class | quote }}
+spec:
+  connectionRef:
+    name: {{ required "the platform's Proxmox catalog has no connection" $catalog.connection | quote }}
+  nodeName: {{ $node | quote }}
+  storage: {{ $storage.storage | quote }}
+  size: {{ include "vm-default-images.gib" ($image.storage | default "5Gi") }}
+  cloneable: true
+  source:
+    volume: {{ $proxmox.volume | quote }}
+  deletionProtection: false
+{{- end }}
+{{- end }}
+{{- end }}

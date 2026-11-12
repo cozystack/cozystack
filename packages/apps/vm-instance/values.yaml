@@ -122,3 +122,12 @@ netplanDhcp: false
 cloudInitSeed: ""
 ## Example:
 ## cloudInitSeed: "upd1"
+
+## @section Proxmox
+
+## @typedef {struct} ProxmoxInstance - Proxmox substrate settings. Read only when the platform runs virtual machines on Proxmox VE (`vmSubstrate: proxmox` in the platform values).
+## @field {string} [node] - Proxmox node the machine runs on. Empty takes the node of its first disk, which is where all its disks have to be.
+
+## @param {ProxmoxInstance} proxmox - Proxmox substrate settings.
+proxmox:
+  node: ""

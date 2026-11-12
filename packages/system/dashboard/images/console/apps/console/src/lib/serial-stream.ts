@@ -11,6 +11,10 @@
  * dropped, which looks exactly like a dead console.
  */
 
+import { consoleSocketPath, vmConsoleApi, type VMConsoleApi } from "./vm-substrate.ts"
+
+// The Proxmox console proxy of the platform negotiates the same subprotocol
+// and binary frames, so one stream serves both substrates.
 const SUBPROTOCOL = "plain.kubevirt.io"
 
 export interface SerialSocket {
@@ -39,9 +43,10 @@ export function serialConsoleUrl(
   host: string,
   namespace: string,
   vmName: string,
+  api: VMConsoleApi = vmConsoleApi("kubevirt"),
 ): string {
   const scheme = protocol === "https:" ? "wss:" : "ws:"
-  return `${scheme}//${host}/k8s/apis/subresources.kubevirt.io/v1/namespaces/${namespace}/virtualmachineinstances/${vmName}/console`
+  return `${scheme}//${host}${consoleSocketPath(api, namespace, vmName, "console")}`
 }
 
 /**

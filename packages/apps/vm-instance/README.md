@@ -69,6 +69,14 @@ virtctl ssh <user>@<vm>
 | `cloudInitSeed`          | Seed string to generate SMBIOS UUID for the VM.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       | `string`   | `""`        |
 
 
+### Proxmox
+
+| Name           | Description                                                                                                        | Type     | Value |
+| -------------- | ------------------------------------------------------------------------------------------------------------------ | -------- | ----- |
+| `proxmox`      | Proxmox substrate settings.                                                                                        | `object` | `{}`  |
+| `proxmox.node` | Proxmox node the machine runs on. Empty takes the node of its first disk, which is where all its disks have to be. | `string` | `""`  |
+
+
 ## U Series
 
 The U Series is quite neutral and provides resources for

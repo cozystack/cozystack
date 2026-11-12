@@ -71,6 +71,9 @@ type ConfigSpec struct {
 	// Seed string to generate SMBIOS UUID for the VM.
 	// +kubebuilder:default:=""
 	CloudInitSeed string `json:"cloudInitSeed"`
+	// Proxmox substrate settings.
+	// +kubebuilder:default:={}
+	Proxmox ProxmoxInstance `json:"proxmox"`
 }
 
 type Disk struct {
@@ -97,6 +100,12 @@ type GPU struct {
 type Network struct {
 	// Network attachment name.
 	Name string `json:"name,omitempty"`
+}
+
+type ProxmoxInstance struct {
+	// Proxmox node the machine runs on. Empty takes the node of its first disk, which is where all its disks have to be.
+	// +kubebuilder:default:=""
+	Node string `json:"node,omitempty"`
 }
 
 type Resources struct {

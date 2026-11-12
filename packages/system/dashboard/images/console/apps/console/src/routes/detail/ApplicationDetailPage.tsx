@@ -38,6 +38,7 @@ import { VncTab } from "./VncTab.tsx"
 // file, and most of them never touch a VM.
 const SerialTab = lazy(() => import("./SerialTab.tsx").then((m) => ({ default: m.SerialTab })))
 import { VMPowerControls } from "./VMPowerControls.tsx"
+import { VMDiskUpload } from "./VMDiskUpload.tsx"
 import { useResourceBasePath } from "../../lib/portal.ts"
 import { useResourcePresence } from "./use-resource-presence.ts"
 import { useApplicationConfigMaps } from "./use-app-configmaps.ts"
@@ -200,6 +201,7 @@ export function ApplicationDetailPage() {
             {kind === "VMInstance" && (
               <VMPowerControls ad={ad} instance={instance} />
             )}
+            {kind === "VMDisk" && <VMDiskUpload ad={ad} instance={instance} />}
             <Link to={`${base}/edit`}>
               <Button variant="outline" size="sm">
                 <Edit className="size-3.5" /> Edit

@@ -14,9 +14,13 @@ spec:
       dependsOn:
         - cozystack.networking
         - cozystack.kubevirt-cdi
+      libraries:
+        - name: cozy-lib
+          path: library/cozy-lib
       components:
         - name: vm-default-images
           path: system/vm-default-images
+          libraries: ["cozy-lib"]
           install:
             namespace: cozy-system
             releaseName: vm-default-images
@@ -31,3 +35,35 @@ spec:
                 kind: DataVolume
                 failed: "has(status.phase) && status.phase == 'Failed'"
                 current: "has(status.phase) && status.phase == 'Succeeded'"
+    # The same collection on an external Proxmox VE cluster: every image is a
+    # cloneable VirtualMachineVolume in cozy-public, copied from the Proxmox
+    # volume the image names, that a tenant's vm-disk clones in turn. kubemox
+    # and the catalog come from cozystack.proxmox-vm. Selected by
+    # vmDefaultImages.substrate: proxmox on the platform; the images list has
+    # to be overridden there, since the default entries carry only a URL and
+    # downloading one is not available on this substrate yet.
+    - name: proxmox
+      dependsOn:
+        - cozystack.networking
+        - cozystack.proxmox-vm
+      libraries:
+        - name: cozy-lib
+          path: library/cozy-lib
+      components:
+        - name: vm-default-images
+          path: system/vm-default-images
+          libraries: ["cozy-lib"]
+          valuesFiles:
+            - values.yaml
+            - values-proxmox.yaml
+          install:
+            namespace: cozy-system
+            releaseName: vm-default-images
+            # Ready only once every image has been copied onto its holder: a
+            # VirtualMachineVolume is Ready when it sits there, Failed when
+            # Proxmox refused, Pending in between.
+            healthCheckExprs:
+              - apiVersion: proxmox.alperen.cloud/v1alpha1
+                kind: VirtualMachineVolume
+                failed: "has(status.phase) && status.phase == 'Failed'"
+                current: "has(status.phase) && status.phase == 'Ready'"
