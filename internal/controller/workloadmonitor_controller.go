@@ -528,7 +528,7 @@ func (r *WorkloadMonitorReconciler) queryAllBucketMetrics(ctx context.Context, p
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("Prometheus returned status %d", resp.StatusCode)
+		return nil, fmt.Errorf("unexpected status %d from Prometheus", resp.StatusCode)
 	}
 
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
@@ -549,7 +549,7 @@ func (r *WorkloadMonitorReconciler) queryAllBucketMetrics(ctx context.Context, p
 		return nil, fmt.Errorf("parsing Prometheus response: %w", err)
 	}
 	if promResp.Status != "success" {
-		return nil, fmt.Errorf("Prometheus query finished with status %q", promResp.Status)
+		return nil, fmt.Errorf("the Prometheus query finished with status %q", promResp.Status)
 	}
 
 	for _, r := range promResp.Data.Result {
