@@ -669,6 +669,13 @@ gateway:
     - cozy-monitoring
     - cozy-linstor-gui
     - default
+# Platform object storage configuration.
+seaweedfs:
+  # Whether the root tenant (tenant-root) runs SeaweedFS, i.e. Tenant/root
+  # spec.seaweedfs=true. Tenants without their own SeaweedFS take tenant-root
+  # as their S3 only when this is true. Keep it in sync with Tenant/root
+  # spec.seaweedfs, the default true preserves the historical behaviour.
+  rootEnabled: true
 # Platform monitoring configuration.
 monitoring:
   # Whether the root tenant (tenant-root) hosts the platform
