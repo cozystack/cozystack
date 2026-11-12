@@ -850,7 +850,7 @@ func (a *app) postReport(n int, s storedReport) error {
 	if err != nil {
 		return err
 	}
-	defer os.Remove(name)
+	defer func() { _ = os.Remove(name) }()
 	return a.gh.createComment(n, name)
 }
 
@@ -873,12 +873,12 @@ func writeTemp(pattern, content string) (string, error) {
 		return "", err
 	}
 	if _, err := f.WriteString(content); err != nil {
-		f.Close()
-		os.Remove(f.Name())
+		_ = f.Close()
+		_ = os.Remove(f.Name())
 		return "", err
 	}
 	if err := f.Close(); err != nil {
-		os.Remove(f.Name())
+		_ = os.Remove(f.Name())
 		return "", err
 	}
 	return f.Name(), nil

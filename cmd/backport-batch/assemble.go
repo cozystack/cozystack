@@ -727,7 +727,7 @@ func (a *app) publish(b *batch, p publication, rebuilt bool) error {
 	if err != nil {
 		return err
 	}
-	defer os.Remove(name)
+	defer func() { _ = os.Remove(name) }()
 	if b.pr == nil {
 		n, url, err := a.gh.createPull(b.line.branch(), p.branch, p.title, name)
 		if err != nil {
@@ -828,7 +828,7 @@ func (a *app) closeBatch(b *batch, p publication) error {
 	if err != nil {
 		return err
 	}
-	defer os.Remove(name)
+	defer func() { _ = os.Remove(name) }()
 	if err := a.stillOpen(c.PR); err != nil {
 		return err
 	}

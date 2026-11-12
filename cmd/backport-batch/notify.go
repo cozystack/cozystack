@@ -229,7 +229,7 @@ func (a *app) announced(pr *pullRequest, rec *lineRecord, parks []parkedEntry) e
 	if err != nil {
 		return err
 	}
-	defer os.Remove(name)
+	defer func() { _ = os.Remove(name) }()
 	return a.gh.editBody(pr.Number, name)
 }
 
@@ -309,9 +309,9 @@ func (a *app) comment(pr *pullRequest, mention string, today time.Time, text []s
 	if err != nil {
 		return a.fail(err)
 	}
-	defer os.Remove(f.Name())
+	defer func() { _ = os.Remove(f.Name()) }()
 	if _, err := f.WriteString(b.String()); err != nil {
-		f.Close()
+		_ = f.Close()
 		return a.fail(err)
 	}
 	if err := f.Close(); err != nil {

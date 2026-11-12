@@ -99,7 +99,7 @@ func apiSnapshot(commit string) (apigate.Snapshot, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer os.RemoveAll(dir)
+	defer func() { _ = os.RemoveAll(dir) }()
 	for name, blob := range paths {
 		file := filepath.Join(dir, filepath.FromSlash(name))
 		if err := os.MkdirAll(filepath.Dir(file), 0o700); err != nil {
