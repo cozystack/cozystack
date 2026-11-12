@@ -4,7 +4,7 @@ export NAMESPACE=cozy-$(NAME)
 include ../../../hack/common-envs.mk
 include ../../../hack/package.mk
 
-LINSTOR_VERSION ?= 1.33.3
+LINSTOR_VERSION ?= 1.35.3
 # The golden-image clone guard in packages/apps/vm-disk/templates/dv.yaml
 # reads allowRemoteVolumeAccess and layerList the way this release does and
 # has to be re-checked against the new one.
