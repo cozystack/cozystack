@@ -392,7 +392,7 @@ run_script() {
   remote_rows clickhouse-myapp-20260304T040000Z clickhouse-myapp-20260304T050607Z \
     "clickhouse-myapp-20260304T050700Z|broken (can't stat metadata.json)" \
     clickhouse-myapp-20260304T050710Z-copy \
-    clickhouse-myapp-20260304T050720Z-0f3c9a1e-5b7d-4c2a-9e8f-1a2b3c4d5e6f \
+    myapp-20260304050720-0f3c9a1e5b7d \
     clickhouse-myapp-20260304T060000Z > "$tmp/state/remote"
   out=$(run_script "$tmp" 2>&1)
   grep -qxF 'POST http://chi-clickhouse-myapp-clickhouse-0-0.tenant-x.svc:7171/backup/restore_remote/clickhouse-myapp-20260304T050607Z' "$tmp/state/requests"

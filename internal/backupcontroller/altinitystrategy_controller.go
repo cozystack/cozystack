@@ -57,6 +57,12 @@ const (
 	// archive relies on.
 	altinityArchiveTimeLayout = "20060102T150405Z"
 
+	// altinityArchiveRunTimeLayout and altinityArchiveUIDLength shape the
+	// archive name of a run; see altinityArchiveName for why they are this
+	// short.
+	altinityArchiveRunTimeLayout = "20060102150405"
+	altinityArchiveUIDLength     = 12
+
 	// Polling cadence for the Altinity Job lifecycle. Mirrors the CNPG /
 	// Velero strategy cadence so behaviour is uniform across drivers.
 	altinityPollInterval = 5 * time.Second
@@ -122,11 +128,19 @@ func backupParameters(b *backupsv1alpha1.Backup) map[string]string {
 // one-second resolution, and two Plans on one schedule start their runs in
 // the same second; the strategy takes a finished upload of its archive as an
 // earlier attempt of its own run, so a shared name would let one run report
-// the other's archive. The UID goes after the timestamp so names still sort
-// chronologically, and the restore of a Backup that records no archive, which
-// accepts only clickhouse-<release>-<timestamp>, never picks one of these.
+// the other's archive.
+//
+// The name is no longer than altinityArchiveNameBeforeUIDs, because it sits in
+// every object key, a key is capped at 1024 bytes, and the legacy
+// s3PathOverride prefix has no length limit of its own: the UID takes the room
+// that dropping "clickhouse-", "T" and "Z" frees. It goes after the timestamp
+// so names still sort chronologically, and the restore of a Backup that
+// records no archive, which accepts only clickhouse-<release>-<timestamp>,
+// never picks one of these.
 func altinityArchiveName(j *backupsv1alpha1.BackupJob) string {
-	return altinityArchiveNameBeforeUIDs(j) + "-" + string(j.UID)
+	uid := strings.ReplaceAll(string(j.UID), "-", "")
+	uid = uid[:min(len(uid), altinityArchiveUIDLength)]
+	return fmt.Sprintf("%s-%s-%s", j.Spec.ApplicationRef.Name, j.Status.StartedAt.UTC().Format(altinityArchiveRunTimeLayout), uid)
 }
 
 // altinityArchiveNameBeforeUIDs is the name a controller that did not append
