@@ -407,6 +407,128 @@ func TestCleanupAltinityBackup_FailedJobIsRetried(t *testing.T) {
 	}
 }
 
+// A delete that keeps failing, such as one refused for a wrong sidecar
+// password, would otherwise cost a Job, its Pod and a Warning Event every few
+// seconds for as long as it fails. Each failure doubles the wait before the
+// next Job, up to a cap, and the wait is kept on the Backup, since deleting the
+// Job is what starts the next attempt.
+func TestCleanupAltinityBackup_FailedJobBacksOff(t *testing.T) {
+	cases := []struct {
+		name         string
+		failures     string // recorded before this failure; empty for none
+		wantFailures string
+		wantDelay    time.Duration
+	}{
+		{name: "first failure", wantFailures: "1", wantDelay: altinityCleanupRetryBase},
+		{name: "third failure", failures: "2", wantFailures: "3", wantDelay: 4 * altinityCleanupRetryBase},
+		{name: "past the cap", failures: "40", wantFailures: "41", wantDelay: altinityCleanupRetryMax},
+		{name: "far past the cap, where doubling would overflow", failures: "100", wantFailures: "101", wantDelay: altinityCleanupRetryMax},
+		{name: "unreadable count starts over", failures: "many", wantFailures: "1", wantDelay: altinityCleanupRetryBase},
+		{name: "negative count starts over", failures: "-3", wantFailures: "1", wantDelay: altinityCleanupRetryBase},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			backup := altinityCleanupBackup("ch-bk")
+			if tc.failures != "" {
+				backup.Annotations = map[string]string{altinityCleanupFailuresAnnotation: tc.failures}
+			}
+			failed := ownCleanupJob(backup)
+			failed.Status.Conditions = []batchv1.JobCondition{{Type: batchv1.JobFailed, Status: corev1.ConditionTrue, Reason: "BackoffLimitExceeded"}}
+			c, s := newAltinityCleanupClient(append(altinityCleanupFixtures(backup), failed)...)
+			r := &BackupReconciler{Client: c, Scheme: s, Recorder: record.NewFakeRecorder(10)}
+			before := time.Now()
+			res, err := r.cleanupOnDelete(context.Background(), backup)
+			if err != nil {
+				t.Fatalf("cleanupOnDelete: %v", err)
+			}
+			if res.RequeueAfter != tc.wantDelay {
+				t.Errorf("RequeueAfter = %s, want %s", res.RequeueAfter, tc.wantDelay)
+			}
+			got := &backupsv1alpha1.Backup{}
+			if err := c.Get(context.Background(), client.ObjectKeyFromObject(backup), got); err != nil {
+				t.Fatalf("get Backup: %v", err)
+			}
+			if f := got.Annotations[altinityCleanupFailuresAnnotation]; f != tc.wantFailures {
+				t.Errorf("failures = %q, want %q", f, tc.wantFailures)
+			}
+			at, err := time.Parse(time.RFC3339, got.Annotations[altinityCleanupRetryAfterAnnotation])
+			if err != nil {
+				t.Fatalf("retry-after %q: %v", got.Annotations[altinityCleanupRetryAfterAnnotation], err)
+			}
+			if lo, hi := before.Add(tc.wantDelay).Add(-time.Second), time.Now().Add(tc.wantDelay).Add(time.Second); at.Before(lo) || at.After(hi) {
+				t.Errorf("retry-after = %s, want about %s from now", at, tc.wantDelay)
+			}
+		})
+	}
+}
+
+// The wait is recorded before the failed Job is deleted, so a delete that
+// fails leaves the Backup waiting rather than free to start the next Job at
+// once.
+func TestCleanupAltinityBackup_KeepsTheWaitWhenTheFailedJobCannotBeDeleted(t *testing.T) {
+	backup := altinityCleanupBackup("ch-bk")
+	failed := ownCleanupJob(backup)
+	failed.Status.Conditions = []batchv1.JobCondition{{Type: batchv1.JobFailed, Status: corev1.ConditionTrue, Reason: "BackoffLimitExceeded"}}
+	c, s := newAltinityCleanupClientWith(interceptor.Funcs{
+		Delete: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.DeleteOption) error {
+			if _, isJob := obj.(*batchv1.Job); isJob {
+				return apierrors.NewServiceUnavailable("apiserver unavailable")
+			}
+			return c.Delete(ctx, obj, opts...)
+		},
+	}, append(altinityCleanupFixtures(backup), failed)...)
+	r := &BackupReconciler{Client: c, Scheme: s, Recorder: record.NewFakeRecorder(10)}
+	if _, err := r.cleanupOnDelete(context.Background(), backup); err == nil {
+		t.Fatal("cleanupOnDelete succeeded although the failed Job could not be deleted")
+	}
+	got := &backupsv1alpha1.Backup{}
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(backup), got); err != nil {
+		t.Fatalf("get Backup: %v", err)
+	}
+	if got.Annotations[altinityCleanupRetryAfterAnnotation] == "" || got.Annotations[altinityCleanupFailuresAnnotation] != "1" {
+		t.Errorf("annotations = %v, want the failure and the wait recorded", got.Annotations)
+	}
+}
+
+// The next cleanup Job waits for the time the last failure set; a reconcile
+// before it, such as the one the annotation update itself triggers, starts
+// nothing.
+func TestCleanupAltinityBackup_WaitsForTheRetryTime(t *testing.T) {
+	cases := []struct {
+		name    string
+		at      string
+		wantJob bool
+	}{
+		{name: "retry time ahead", at: time.Now().Add(10 * time.Minute).UTC().Format(time.RFC3339)},
+		{name: "retry time passed", at: time.Now().Add(-time.Second).UTC().Format(time.RFC3339), wantJob: true},
+		{name: "unreadable retry time", at: "soon", wantJob: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			backup := altinityCleanupBackup("ch-bk")
+			backup.Annotations = map[string]string{
+				altinityCleanupFailuresAnnotation:   "3",
+				altinityCleanupRetryAfterAnnotation: tc.at,
+			}
+			c, s := newAltinityCleanupClient(altinityCleanupFixtures(backup)...)
+			r := &BackupReconciler{Client: c, Scheme: s, Recorder: record.NewFakeRecorder(10)}
+			res, err := r.cleanupOnDelete(context.Background(), backup)
+			if err != nil {
+				t.Fatalf("cleanupOnDelete: %v", err)
+			}
+			if res.RequeueAfter <= 0 {
+				t.Errorf("RequeueAfter = %s: the Backup must stay until a delete succeeds", res.RequeueAfter)
+			}
+			if jobs := listJobs(t, c); (len(jobs) == 1) != tc.wantJob {
+				t.Fatalf("cleanup Jobs = %d, want a Job = %v", len(jobs), tc.wantJob)
+			}
+			if !tc.wantJob && res.RequeueAfter > 10*time.Minute {
+				t.Errorf("RequeueAfter = %s, want no later than the retry time", res.RequeueAfter)
+			}
+		})
+	}
+}
+
 // A cleanup Job left by an earlier Backup of the same name, released while
 // its Job ran, deleted a different archive: its completion is not this one's.
 func TestCleanupAltinityBackup_StaleJobForAnotherArchiveIsReplaced(t *testing.T) {
