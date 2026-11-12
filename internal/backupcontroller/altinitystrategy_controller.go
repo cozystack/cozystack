@@ -999,8 +999,8 @@ exit 1
 // The cleanup Pod is built here, not rendered from the strategy template: the
 // shipped and the example templates run restore_remote for every mode other
 // than backup, so a template rendered in a delete mode would overwrite live
-// data. Only the strategy container's image, and how to pull it, are taken
-// from the template.
+// data. Only the strategy container's image, how to pull it, and where the
+// strategy's Pods may be scheduled are taken from the template.
 func (r *BackupReconciler) cleanupAltinityBackup(ctx context.Context, backup *backupsv1alpha1.Backup) (ctrl.Result, error) {
 	logger := getLogger(ctx)
 	jobKey := types.NamespacedName{Namespace: backup.Namespace, Name: backup.Name + "-cleanup"}
@@ -1080,7 +1080,7 @@ func (r *BackupReconciler) cleanupAltinityBackup(ctx context.Context, backup *ba
 			return ctrl.Result{}, serr
 		}
 		desired := buildAltinityCleanupJob(jobKey.Namespace, jobKey.Name, containers[0],
-			strategy.Spec.Template.Spec.ImagePullSecrets,
+			strategy.Spec.Template.Spec,
 			fmt.Sprintf("chi-clickhouse-%s-clickhouse-0-0.%s.svc", release, backup.Namespace), authSecret, archive)
 		if cerr := r.Create(ctx, desired); cerr != nil && !apierrors.IsAlreadyExists(cerr) {
 			if apierrors.IsForbidden(cerr) || apierrors.IsInvalid(cerr) {
@@ -1207,8 +1207,10 @@ func (r *BackupReconciler) releaseAltinityCleanup(ctx context.Context, backup *b
 // its lifecycle and it must outlive the Backup being deleted;
 // activeDeadlineSeconds and the TTL are backstops if the controller stops
 // mid-wait. It runs the strategy container's image with that image's pull
-// settings, since only those are known to fetch it.
-func buildAltinityCleanupJob(namespace, name string, strategyContainer corev1.Container, pullSecrets []corev1.LocalObjectReference, apiHost, authSecret, archive string) *batchv1.Job {
+// settings, since only those are known to fetch it, and is placed as the
+// strategy's own Pods are. The strategy's service account is left out: the
+// cleanup Pod only calls the sidecar's HTTP API.
+func buildAltinityCleanupJob(namespace, name string, strategyContainer corev1.Container, strategyPod corev1.PodSpec, apiHost, authSecret, archive string) *batchv1.Job {
 	labels := map[string]string{altinityLabelMode: altinityModeCleanup}
 	backoffLimit := int32(1)
 	activeDeadline := int64(600)
@@ -1228,8 +1230,12 @@ func buildAltinityCleanupJob(namespace, name string, strategyContainer corev1.Co
 			Template: corev1.PodTemplateSpec{
 				ObjectMeta: metav1.ObjectMeta{Labels: labels},
 				Spec: corev1.PodSpec{
-					RestartPolicy:    corev1.RestartPolicyNever,
-					ImagePullSecrets: pullSecrets,
+					RestartPolicy:     corev1.RestartPolicyNever,
+					ImagePullSecrets:  strategyPod.ImagePullSecrets,
+					NodeSelector:      strategyPod.NodeSelector,
+					Tolerations:       strategyPod.Tolerations,
+					Affinity:          strategyPod.Affinity,
+					PriorityClassName: strategyPod.PriorityClassName,
 					Containers: []corev1.Container{{
 						Name:            "ch-backup-cleanup",
 						Image:           strategyContainer.Image,
