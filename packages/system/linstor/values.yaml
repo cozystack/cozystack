@@ -10,10 +10,10 @@
 # linstor-csi build, so the StorageClasses (provisioner
 # linstor.csi.linbit.com) are the same under either.
 #
-# blockstor is for new clusters only. Switching a cluster that already
-# holds LINSTOR volumes is not supported: the pinned blockstor release
-# cannot adopt existing DRBD resources safely, and this chart does not
-# convert LINSTOR's database into blockstor's.
+# blockstor is for new clusters. This chart does not move a cluster that
+# already holds LINSTOR volumes: blockstor adopts them with its own
+# linstor-migrate runbook, which the chart does not run:
+# https://blockstor.org/docs/migration/
 backend: linstor
 
 piraeusServer:
