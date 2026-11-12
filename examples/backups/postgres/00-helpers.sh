@@ -28,6 +28,9 @@ export BACKUPJOB_NAME="${BACKUPJOB_NAME:-pg-src-adhoc}"
 # is the deterministic "WAL past the recovery target is archived" gate for the
 # point-in-time restore (see run-all.sh step 45).
 export BACKUPJOB_POSTMARKER_NAME="${BACKUPJOB_POSTMARKER_NAME:-pg-src-postmarker}"
+# A BackupJob submitted while the source Cluster is fenced, so CloudNativePG
+# keeps its Backup pending until the fence is lifted (see run-all.sh step 26).
+export BACKUPJOB_FENCED_NAME="${BACKUPJOB_FENCED_NAME:-pg-src-fenced}"
 export RESTOREJOB_TOCOPY_NAME="${RESTOREJOB_TOCOPY_NAME:-pg-src-to-pg-target}"
 export RESTOREJOB_PITR_NAME="${RESTOREJOB_PITR_NAME:-pg-src-to-pg-target-pitr}"
 export RESTOREJOB_UNREACHABLE_NAME="${RESTOREJOB_UNREACHABLE_NAME:-pg-src-to-pg-target-unreachable}"
