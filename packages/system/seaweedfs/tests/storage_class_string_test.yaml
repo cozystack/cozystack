@@ -7,6 +7,7 @@ suite: seaweedfs claims keep the storage class a string
 
 templates:
   - charts/seaweedfs/templates/master/master-statefulset.yaml
+  - charts/seaweedfs/templates/master/master-configmap.yaml
   - charts/seaweedfs/templates/filer/filer-statefulset.yaml
   - charts/seaweedfs/templates/volume/volume-statefulset.yaml
   - charts/seaweedfs/templates/admin/admin-statefulset.yaml
@@ -97,6 +98,7 @@ tests:
     template: charts/seaweedfs/templates/admin/admin-statefulset.yaml
     set:
       seaweedfs.admin.enabled: true
+      seaweedfs.admin.secret.existingSecret: seaweedfs-admin-credentials
       seaweedfs.admin.logs: {type: persistentVolumeClaim, size: 1Gi, storageClass: "456"}
     asserts:
       - equal:
@@ -107,6 +109,7 @@ tests:
     template: charts/seaweedfs/templates/admin/admin-statefulset.yaml
     set:
       seaweedfs.admin.enabled: true
+      seaweedfs.admin.secret.existingSecret: seaweedfs-admin-credentials
       seaweedfs.admin.logs: {type: persistentVolumeClaim, size: 1Gi}
     asserts:
       - notExists:
