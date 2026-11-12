@@ -285,3 +285,53 @@ sliced into /24s ever allowed.
 {{- define "cozystack.platform.ciliumPoolRange" -}}
 {{- join ".." (splitList " " (include "cozystack.platform.ciliumPoolBounds" .)) -}}
 {{- end }}
+
+{{/*
+Validated registries.imageOverrides, as a YAML list. It travels to every
+release as _cluster.image-overrides; cozystack-operator and cozystack-api
+refuse to build releases from a table they cannot apply, so a broken table
+fails this render instead, where the error names the value that is wrong.
+The checks match pkg/imageoverrides.Validate.
+*/}}
+{{- define "cozystack.platform.imageOverrides" -}}
+{{- /* Checked before defaulting: default would turn false or 0 into an empty
+list and drop the table without a word. */}}
+{{- $overrides := (.Values.registries | default dict).imageOverrides }}
+{{- if and (not (kindIs "invalid" $overrides)) (not (kindIs "slice" $overrides)) }}
+{{-   fail (printf "registries.imageOverrides must be a list, got %s" (kindOf $overrides)) }}
+{{- end }}
+{{- $overrides = $overrides | default list }}
+{{- $seen := dict }}
+{{- range $i, $o := $overrides }}
+{{-   if not (kindIs "map" $o) }}
+{{-     fail (printf "registries.imageOverrides[%d] must be a map" $i) }}
+{{-   end }}
+{{-   range $k, $v := $o }}
+{{-     if not (has $k (list "name" "newName" "newTag" "digest")) }}
+{{-       fail (printf "registries.imageOverrides[%d]: unknown field %q" $i $k) }}
+{{-     end }}
+{{- /* An unquoted tag such as 1.20 arrives as the number 1.2. */}}
+{{-     if not (kindIs "string" $v) }}
+{{-       fail (printf "registries.imageOverrides[%d].%s must be a string, got %s; quote it" $i $k (kindOf $v)) }}
+{{-     end }}
+{{-   end }}
+{{-   $name := $o.name | default "" | toString }}
+{{-   if not $name }}
+{{-     fail (printf "registries.imageOverrides[%d]: name is required" $i) }}
+{{-   end }}
+{{-   if or (contains "@" $name) (contains ":" (last (splitList "/" $name))) }}
+{{-     fail (printf "registries.imageOverrides[%d]: name %q must not carry a tag or digest" $i $name) }}
+{{-   end }}
+{{-   if not (or $o.newName $o.newTag $o.digest) }}
+{{-     fail (printf "registries.imageOverrides[%d]: %q sets none of newName, newTag, digest" $i $name) }}
+{{-   end }}
+{{-   if and $o.digest (not (regexMatch "^sha256:[0-9a-f]{64}$" (toString $o.digest))) }}
+{{-     fail (printf "registries.imageOverrides[%d]: digest %q is not sha256:<64 hex>" $i (toString $o.digest)) }}
+{{-   end }}
+{{-   if hasKey $seen $name }}
+{{-     fail (printf "registries.imageOverrides[%d]: %q is listed twice" $i $name) }}
+{{-   end }}
+{{-   $_ := set $seen $name true }}
+{{- end }}
+{{- toYaml $overrides }}
+{{- end }}
