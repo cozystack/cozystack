@@ -168,6 +168,18 @@ tests:
           path: spec.upgrade.remediation.retries
           value: -1
 
+  # Grafana readiness is a post-install/post-upgrade hook in the system chart,
+  # so the release must run hooks and outlast the hook's 900s deadline.
+  - it: runs the Grafana readiness hook inside the release timeout
+    asserts:
+      - equal:
+          path: spec.timeout
+          value: 15m
+      - notExists:
+          path: spec.install.disableHooks
+      - notExists:
+          path: spec.upgrade.disableHooks
+
   # The collector a central tenant writes through enforces the rate the
   # platform sets for it, so its image is the platform's. The apps API defaults the
   # Monitoring spec but does not prune keys its schema leaves out, so a key set
