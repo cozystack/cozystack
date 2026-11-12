@@ -56,7 +56,7 @@ tests:
             verbs: [update, patch]
       - lengthEqual:
           path: rules
-          count: 6
+          count: 7
 
   - it: gives the satellite no Secret or Lease access at cluster scope
     template: templates/blockstor-satellite.yaml
@@ -247,6 +247,9 @@ tests:
           path: rules
           value:
             - apiGroups: ['']
+              resources: [events]
+              verbs: [create, patch]
+            - apiGroups: [events.k8s.io]
               resources: [events]
               verbs: [create, patch]
             - apiGroups: ['']
