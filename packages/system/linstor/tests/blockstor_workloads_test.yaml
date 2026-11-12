@@ -77,7 +77,7 @@ tests:
             resources: [leases]
             verbs: [get, list, watch, create, update, patch, delete]
 
-  - it: lets the satellite read Secrets in its own namespace only
+  - it: lets the satellite read only blockstor's Secrets in its own namespace
     template: templates/blockstor-satellite.yaml
     documentSelector:
       path: kind
@@ -91,7 +91,66 @@ tests:
           value:
             - apiGroups: [""]
               resources: [secrets]
+              resourceNames: [blockstor-master-key, blockstor-unlock, linstor-passphrase]
               verbs: [get]
+
+  - it: gives the controller no Secret access at cluster scope
+    template: templates/blockstor-controller.yaml
+    documentSelector:
+      path: kind
+      value: ClusterRole
+    asserts:
+      - notContains:
+          path: rules
+          content:
+            apiGroups: [""]
+            resources: [secrets]
+          any: true
+
+  - it: lets the controller read and write only blockstor's Secrets in its own namespace
+    template: templates/blockstor-controller.yaml
+    documentSelector:
+      path: kind
+      value: Role
+    asserts:
+      - equal:
+          path: metadata.namespace
+          value: cozy-linstor
+      - equal:
+          path: rules
+          value:
+            - apiGroups: [""]
+              resources: [secrets]
+              resourceNames: [blockstor-master-key, blockstor-unlock, linstor-passphrase]
+              verbs: [get, list, watch, update]
+            - apiGroups: [""]
+              resources: [secrets]
+              verbs: [create]
+
+  - it: binds the controller's Secret Role to its ServiceAccount
+    template: templates/blockstor-controller.yaml
+    documentSelector:
+      path: kind
+      value: RoleBinding
+    asserts:
+      - equal:
+          path: roleRef.name
+          value: blockstor-controller-secrets
+      - equal:
+          path: subjects[0].name
+          value: blockstor-controller
+
+  - it: tells the controller its namespace, where the keyring lives
+    template: templates/blockstor-controller.yaml
+    documentSelector:
+      path: kind
+      value: Deployment
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: POD_NAMESPACE
+            valueFrom: {fieldRef: {fieldPath: metadata.namespace}}
 
   - it: binds the satellite's Secret Role to its ServiceAccount
     template: templates/blockstor-satellite.yaml

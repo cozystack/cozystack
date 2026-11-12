@@ -38,16 +38,6 @@ rules:
       - storagepools
       - storagepools/status
     verbs: [get, list, watch, create, update, patch, delete]
-  {{- /*
-     Read-only, and cluster-wide only because the apiserver reads the
-     passphrase Secret through controller-runtime's default cached client,
-     whose informer lists and watches Secrets at cluster scope. Narrowing
-     this needs the binary to scope its Secret cache to its own namespace;
-     until then a namespaced Role here would leave that informer forbidden
-     and every passphrase read hanging. */}}
-  - apiGroups: [""]
-    resources: [secrets]
-    verbs: [get, list, watch]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
@@ -63,10 +53,19 @@ subjects:
     namespace: {{ .Release.Namespace }}
 ---
 {{- /*
-   Writes to Secrets stay in this namespace: the only Secret the apiserver
-   writes is the encryption passphrase, `encryption create-passphrase` and
-   `modify-passphrase`, and it always lives here. A cluster-wide write
-   grant would let this ServiceAccount rewrite any tenant's credentials. */}}
+   The encryption endpoints read and rewrite the keyring (add-, modify-,
+   remove-passphrase), create it and the generated unlock Secret when no
+   passphrase Secret is named, and read the passphrase Secret to unlock.
+   All of it is in this namespace and none of it goes through
+   controller-runtime's cache, which would watch every Secret: the verbs
+   read by name, and the encryption state of the resource view comes from
+   one watch per Secret, selected by metadata.name. get, list, watch and
+   update name the three Secrets, because this namespace is shared with
+   piraeus, whose TLS keys stay unreadable; a list or watch is allowed only
+   when it selects one of them by name. create cannot be limited by name,
+   so it is granted on its own; the ValidatingAdmissionPolicy in
+   blockstor-secrets-policy.yaml holds it to the two Secrets blockstor
+   creates. */}}
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
@@ -75,7 +74,11 @@ metadata:
 rules:
   - apiGroups: [""]
     resources: [secrets]
-    verbs: [create, update, patch]
+    resourceNames: {{ include "blockstor.secretNames" . }}
+    verbs: [get, list, watch, update]
+  - apiGroups: [""]
+    resources: [secrets]
+    verbs: [create]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding

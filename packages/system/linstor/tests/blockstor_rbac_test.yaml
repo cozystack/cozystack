@@ -1,6 +1,7 @@
-# The apiserver writes exactly one Secret, the encryption passphrase, and
-# always in its own namespace. A cluster-wide write grant would reach every
-# tenant's admin kubeconfig and every managed-service credential.
+# The apiserver reads and writes the keyring and the generated unlock Secret
+# and reads the passphrase Secret, always in its own namespace, which it
+# shares with piraeus. A cluster-wide grant would reach every tenant's admin
+# kubeconfig; an unnamed one in the namespace would reach piraeus's TLS keys.
 suite: blockstor apiserver Secret access
 templates:
   - templates/blockstor-apiserver.yaml
@@ -10,25 +11,23 @@ release:
 set:
   backend: blockstor
 tests:
-  - it: grants Secrets only read access cluster-wide
+  - it: grants no Secret access cluster-wide
     documentSelector:
       path: kind
       value: ClusterRole
     asserts:
-      - contains:
-          path: rules
-          content:
-            apiGroups: [""]
-            resources: [secrets]
-            verbs: [get, list, watch]
       - notContains:
           path: rules
           content:
             apiGroups: [""]
             resources: [secrets]
-            verbs: [get, list, watch, create, update, patch]
+            verbs: [get, list, watch]
+          any: true
+      - lengthEqual:
+          path: rules
+          count: 1
 
-  - it: grants Secret writes in the release namespace only
+  - it: grants Secret reads and writes in the release namespace by name only
     documentSelector:
       path: kind
       value: Role
@@ -36,12 +35,34 @@ tests:
       - equal:
           path: metadata.namespace
           value: cozy-linstor
-      - contains:
+      - equal:
           path: rules
-          content:
-            apiGroups: [""]
-            resources: [secrets]
-            verbs: [create, update, patch]
+          value:
+            - apiGroups: [""]
+              resources: [secrets]
+              resourceNames: [blockstor-master-key, blockstor-unlock, linstor-passphrase]
+              verbs: [get, list, watch, update]
+            - apiGroups: [""]
+              resources: [secrets]
+              verbs: [create]
+
+  - it: names the passphrase Secret the chart is told to use
+    set:
+      blockstorPassphraseSecret: my-passphrase
+    documentSelector:
+      path: kind
+      value: Role
+    asserts:
+      - equal:
+          path: rules[0].resourceNames
+          value: [blockstor-master-key, blockstor-unlock, my-passphrase]
+
+  - it: refuses a passphrase Secret name that is not a Secret name
+    set:
+      blockstorPassphraseSecret: ""
+    asserts:
+      - failedTemplate:
+          errorPattern: blockstorPassphraseSecret must be a Secret name
 
   - it: binds the namespaced Role to the apiserver ServiceAccount
     documentSelector:

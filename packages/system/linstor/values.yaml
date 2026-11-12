@@ -36,6 +36,13 @@ blockstorSatellite:
   image:
     repository: ghcr.io/cozystack/blockstor-satellite
     tag: 0.3.0@sha256:abff381da5425fdf7a6abc0d52006727cf7fe13c438acc79aaea192fc8681cb4
+# The Secret, in this namespace, whose MASTER_PASSPHRASE key unlocks the
+# blockstor master key that wraps every LUKS volume password. It is the
+# Secret piraeus reads for LINSTOR, so a cluster migrated from LINSTOR keeps
+# its passphrase. blockstor only reads it; the operator creates it. The
+# chart renders it into ControllerConfig.spec.passphraseSecretRef and into
+# the Secret names the blockstor Roles grant.
+blockstorPassphraseSecret: linstor-passphrase
 # Talos-specific workarounds (disable for generic Linux like Ubuntu/Debian)
 talos:
   enabled: true

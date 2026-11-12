@@ -109,11 +109,13 @@ subjects:
     namespace: {{ .Release.Namespace }}
 ---
 {{- /*
-   The satellite reads one Secret, the LUKS passphrase, in its own
-   namespace, with a direct GET rather than through a cache, so a
-   namespaced get is all it needs. A privileged pod on every node holding
-   a token that reads every Secret in the cluster would hand any node
-   compromise every tenant's credentials. */}}
+   The satellite unlocks the master key itself, from the passphrase Secret
+   and the keyring, to unwrap the password of each LUKS volume it opens. It
+   reads them with a direct GET rather than through a cache, so a get by
+   name is all it needs. Named, because this namespace is shared with
+   piraeus: a privileged pod on every node holding a token that reads
+   piraeus's TLS keys, or every Secret in the cluster, would turn any node
+   compromise into far more than this node's volumes. */}}
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
@@ -122,6 +124,7 @@ metadata:
 rules:
   - apiGroups: [""]
     resources: [secrets]
+    resourceNames: {{ include "blockstor.secretNames" . }}
     verbs: [get]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
