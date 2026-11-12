@@ -1,0 +1,40 @@
+suite: every LINSTOR server container runs the platform image
+
+# piraeus-operator ships its own default for the LINSTOR server image and
+# applies it to every container this package leaves unset. The init
+# containers matter most: run-migration upgrades the LINSTOR database in
+# place, so an operator default newer than the platform build migrates the
+# schema ahead of the controller, which then refuses to start, and the
+# migration cannot be undone. Pinning them to the same image as the main
+# containers makes the database move only together with the controller.
+
+templates:
+  - templates/cluster.yaml
+  - templates/satellites-cozy.yaml
+
+set:
+  piraeusServer:
+    image:
+      repository: registry.example/piraeus-server
+      tag: v0.0.0-test
+
+tests:
+  - it: the controller migration runs the platform image
+    template: templates/cluster.yaml
+    asserts:
+      - equal:
+          path: spec.controller.podTemplate.spec.initContainers[?(@.name=="run-migration")].image
+          value: registry.example/piraeus-server:v0.0.0-test
+      - equal:
+          path: spec.controller.podTemplate.spec.containers[?(@.name=="linstor-controller")].image
+          value: registry.example/piraeus-server:v0.0.0-test
+
+  - it: the satellite LVM setup runs the platform image
+    template: templates/satellites-cozy.yaml
+    asserts:
+      - equal:
+          path: spec.podTemplate.spec.initContainers[?(@.name=="setup-lvm-configuration")].image
+          value: registry.example/piraeus-server:v0.0.0-test
+      - equal:
+          path: spec.podTemplate.spec.containers[?(@.name=="linstor-satellite")].image
+          value: registry.example/piraeus-server:v0.0.0-test
