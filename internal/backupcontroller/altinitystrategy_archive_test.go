@@ -1260,7 +1260,36 @@ func TestCleanupAltinityBackup_CarriesTheStrategyPullSettings(t *testing.T) {
 // cluster that keeps backup Pods off tainted nodes, or on nodes that reach the
 // sidecar, would otherwise leave it Pending until its deadline, again and
 // again. The strategy's service account is not carried, since the cleanup Pod
-// only calls the sidecar's HTTP API.
+// only calls the sidecar's HTTP API. The settings are rendered as for the
+// strategy's own Pods, so a value written as a template reaches the Pod
+// resolved.
+func TestCleanupAltinityBackup_RendersTheStrategySettings(t *testing.T) {
+	backup := altinityCleanupBackup("ch-bk")
+	objs := altinityCleanupFixtures(backup)
+	for _, o := range objs {
+		if s, ok := o.(*strategyv1alpha1.Altinity); ok {
+			s.Spec.Template.Spec.NodeSelector = map[string]string{"backup.example.com/app": "{{ .Release.Name }}"}
+			s.Spec.Template.Spec.Containers[0].Image = "registry.example.com/client:{{ .Release.Namespace }}"
+		}
+	}
+	c, s := newAltinityCleanupClient(objs...)
+	r := &BackupReconciler{Client: c, Scheme: s, Recorder: record.NewFakeRecorder(10)}
+	if _, err := r.cleanupOnDelete(context.Background(), backup); err != nil {
+		t.Fatalf("cleanupOnDelete: %v", err)
+	}
+	jobs := listJobs(t, c)
+	if len(jobs) != 1 {
+		t.Fatalf("expected one cleanup Job, got %d", len(jobs))
+	}
+	pod := jobs[0].Spec.Template.Spec
+	if got := pod.NodeSelector["backup.example.com/app"]; got != "ch-test" {
+		t.Errorf("nodeSelector value = %q, want the rendered %q", got, "ch-test")
+	}
+	if got := pod.Containers[0].Image; got != "registry.example.com/client:tenant-test" {
+		t.Errorf("image = %q, want the rendered one", got)
+	}
+}
+
 func TestCleanupAltinityBackup_CarriesTheStrategySchedulingSettings(t *testing.T) {
 	backup := altinityCleanupBackup("ch-bk")
 	objs := altinityCleanupFixtures(backup)

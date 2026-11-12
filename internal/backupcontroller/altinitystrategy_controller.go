@@ -1047,7 +1047,8 @@ exit 1
 // shipped and the example templates run restore_remote for every mode other
 // than backup, so a template rendered in a delete mode would overwrite live
 // data. Only the strategy container's image, how to pull it, and where the
-// strategy's Pods may be scheduled are taken from the template.
+// strategy's Pods may be scheduled are taken from the template, rendered as
+// for the strategy's own Pods.
 func (r *BackupReconciler) cleanupAltinityBackup(ctx context.Context, backup *backupsv1alpha1.Backup) (ctrl.Result, error) {
 	logger := getLogger(ctx)
 	jobKey := types.NamespacedName{Namespace: backup.Namespace, Name: backup.Name + "-cleanup"}
@@ -1107,7 +1108,7 @@ func (r *BackupReconciler) cleanupAltinityBackup(ctx context.Context, backup *ba
 		// The delete goes through the application's current sidecar. One that
 		// has since moved to its own bucket reports the archive as not found
 		// there, which the script would take for a completed delete.
-		onSystemBucket, found, aerr := r.altinityAppOnSystemBucket(ctx, backup)
+		app, onSystemBucket, found, aerr := r.altinityAppOnSystemBucket(ctx, backup)
 		if aerr != nil {
 			return ctrl.Result{}, aerr
 		}
@@ -1144,8 +1145,15 @@ func (r *BackupReconciler) cleanupAltinityBackup(ctx context.Context, backup *ba
 		if wait > 0 {
 			return ctrl.Result{RequeueAfter: wait}, nil
 		}
-		desired := buildAltinityCleanupJob(jobKey.Namespace, jobKey.Name, containers[0],
-			strategy.Spec.Template.Spec,
+		// Rendered as for the strategy's own Pods, so the settings taken from
+		// it reach the cleanup Pod resolved.
+		rendered, rerr := renderAltinityTemplate(strategy.Spec.Template, app.Object, release, backup.Namespace,
+			altinityModeCleanup, archive, backupParameters(backup), backup)
+		if rerr != nil {
+			return r.releaseAltinityCleanup(ctx, backup, archive, fmt.Sprintf("cannot render the strategy template: %v", rerr)), nil
+		}
+		desired := buildAltinityCleanupJob(jobKey.Namespace, jobKey.Name, rendered.Spec.Containers[0],
+			rendered.Spec,
 			fmt.Sprintf("chi-clickhouse-%s-clickhouse-0-0.%s.svc", release, backup.Namespace), authSecret, archive)
 		if cerr := r.Create(ctx, desired); cerr != nil && !apierrors.IsAlreadyExists(cerr) {
 			if apierrors.IsForbidden(cerr) || apierrors.IsInvalid(cerr) {
@@ -1175,7 +1183,7 @@ func (r *BackupReconciler) cleanupAltinityBackup(ctx context.Context, backup *ba
 	}
 	switch jobConditionState(job) {
 	case batchv1.JobComplete:
-		onSystemBucket, found, aerr := r.altinityAppOnSystemBucket(ctx, backup)
+		_, onSystemBucket, found, aerr := r.altinityAppOnSystemBucket(ctx, backup)
 		if aerr != nil {
 			return ctrl.Result{}, aerr
 		}
@@ -1229,8 +1237,9 @@ func (r *BackupReconciler) cleanupAltinityBackup(ctx context.Context, backup *ba
 
 // altinityAppOnSystemBucket reads the flag live rather than from the Backup:
 // the delete goes through the sidecar the application runs now, and that
-// sidecar answers for the bucket it was started on.
-func (r *BackupReconciler) altinityAppOnSystemBucket(ctx context.Context, backup *backupsv1alpha1.Backup) (onSystemBucket, found bool, err error) {
+// sidecar answers for the bucket it was started on. The application is
+// returned too, for rendering the strategy template against it.
+func (r *BackupReconciler) altinityAppOnSystemBucket(ctx context.Context, backup *backupsv1alpha1.Backup) (app *unstructured.Unstructured, onSystemBucket, found bool, err error) {
 	group := backupsv1alpha1.DefaultApplicationAPIGroup
 	if ref := backup.Spec.ApplicationRef; ref.APIGroup != nil && *ref.APIGroup != "" {
 		group = *ref.APIGroup
@@ -1238,23 +1247,23 @@ func (r *BackupReconciler) altinityAppOnSystemBucket(ctx context.Context, backup
 	mapping, err := r.RESTMapper().RESTMapping(schema.GroupKind{Group: group, Kind: backup.Spec.ApplicationRef.Kind})
 	if err != nil {
 		if apimeta.IsNoMatchError(err) {
-			return false, false, nil
+			return nil, false, false, nil
 		}
-		return false, false, err
+		return nil, false, false, err
 	}
-	app := &unstructured.Unstructured{}
+	app = &unstructured.Unstructured{}
 	app.SetGroupVersionKind(mapping.GroupVersionKind)
 	if err := r.Get(ctx, types.NamespacedName{Namespace: backup.Namespace, Name: backup.Spec.ApplicationRef.Name}, app); err != nil {
 		if apierrors.IsNotFound(err) {
-			return false, false, nil
+			return nil, false, false, nil
 		}
-		return false, false, err
+		return nil, false, false, err
 	}
 	v, _, err := unstructured.NestedBool(app.Object, "spec", "backup", "useSystemBucket")
 	if err != nil {
-		return false, true, fmt.Errorf("read spec.backup.useSystemBucket: %w", err)
+		return app, false, true, fmt.Errorf("read spec.backup.useSystemBucket: %w", err)
 	}
-	return v, true, nil
+	return app, v, true, nil
 }
 
 // altinitySystemBucket reads the bucket the projected credentials name in the
