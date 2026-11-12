@@ -51,6 +51,9 @@ type Server struct {
 
 	clientsMu sync.RWMutex
 	clients   map[*client]struct{}
+	// closing is set by Shutdown under clientsMu, so no stream registers
+	// after the clients it stops.
+	closing bool
 
 	// latest holds the most recent payload (sent to new clients on connect).
 	latestMu sync.RWMutex
@@ -122,6 +125,7 @@ func (s *Server) ListenAndServe() error {
 // Shutdown gracefully stops the server.
 func (s *Server) Shutdown(ctx context.Context) error {
 	s.clientsMu.Lock()
+	s.closing = true
 	for c := range s.clients {
 		c.stop()
 	}
@@ -184,6 +188,11 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
 
 	// Register client
 	s.clientsMu.Lock()
+	if s.closing {
+		s.clientsMu.Unlock()
+		http.Error(w, "server is shutting down", http.StatusServiceUnavailable)
+		return
+	}
 	s.clients[c] = struct{}{}
 	s.clientsMu.Unlock()
 

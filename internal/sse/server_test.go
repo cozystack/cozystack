@@ -244,3 +244,32 @@ func TestStreamWaitsForPumpBeforeReturning(t *testing.T) {
 		t.Fatal("the handler did not return once its pump finished")
 	}
 }
+
+// A stream that opens once Shutdown has run is refused instead of being
+// registered after the clients were stopped, where nothing would end it.
+func TestStreamOpenedDuringShutdownIsRefused(t *testing.T) {
+	s := newTestServer(time.Hour)
+	if err := s.Shutdown(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	rec := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodGet, "/stream", nil).WithContext(ctx)
+	done := make(chan struct{})
+	go func() {
+		s.handleStream(rec, r)
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("a stream opened after Shutdown stayed open")
+	}
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusServiceUnavailable)
+	}
+	if len(s.snapshotClients()) != 0 {
+		t.Error("a stream opened after Shutdown was registered")
+	}
+}
