@@ -27,3 +27,6 @@ update:
 	  echo "ERROR: pulled chart version=$$actual_version but Makefile CHART_VERSION=$(CHART_VERSION). Bump both in lockstep."; \
 	  exit 1; \
 	fi
+	for patch_file in patches/*.diff; do \
+	  patch --directory=charts --strip=1 --batch --forward --fuzz=0 < "$$patch_file" || exit 1; \
+	done

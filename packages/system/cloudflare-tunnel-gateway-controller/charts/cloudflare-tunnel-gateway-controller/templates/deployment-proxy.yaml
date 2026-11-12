@@ -25,6 +25,7 @@ spec:
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
       {{- end }}
+      automountServiceAccountToken: false
       # Drain window + 15s headroom: kubelet must not SIGKILL while cloudflared
       # is still unregistering connectors / draining in-flight requests.
       terminationGracePeriodSeconds: {{ add (int (.Values.proxy.gracePeriodSeconds | default 30)) 15 }}

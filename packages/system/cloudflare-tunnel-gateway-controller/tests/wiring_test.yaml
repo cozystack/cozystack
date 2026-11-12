@@ -25,6 +25,13 @@ set:
       tunnelID: 00000000-0000-4000-8000-000000000000
 
 tests:
+  - it: does not mount a Kubernetes API token in the internet-facing proxy
+    template: charts/cloudflare-tunnel-gateway-controller/templates/deployment-proxy.yaml
+    asserts:
+      - equal:
+          path: spec.template.spec.automountServiceAccountToken
+          value: false
+
   - it: reads the API token and the tunnel token from one operator-created Secret
     asserts:
       - template: charts/cloudflare-tunnel-gateway-controller/templates/gatewayclassconfig.yaml
