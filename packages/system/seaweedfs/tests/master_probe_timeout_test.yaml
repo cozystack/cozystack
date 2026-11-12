@@ -13,6 +13,7 @@ suite: seaweedfs master probe timeouts
 
 templates:
   - charts/seaweedfs/templates/master/master-statefulset.yaml
+  - charts/seaweedfs/templates/master/master-configmap.yaml
 
 release:
   name: seaweedfs
@@ -20,6 +21,7 @@ release:
 
 tests:
   - it: raises both master probe timeouts above the cluster-status backoff
+    template: charts/seaweedfs/templates/master/master-statefulset.yaml
     asserts:
       - equal:
           path: spec.template.spec.containers[0].livenessProbe.timeoutSeconds
@@ -29,6 +31,7 @@ tests:
           value: 30
 
   - it: preserves the other master probe fields through the deep-merge
+    template: charts/seaweedfs/templates/master/master-statefulset.yaml
     asserts:
       # liveness: only timeoutSeconds is overridden, the rest survive
       - equal:

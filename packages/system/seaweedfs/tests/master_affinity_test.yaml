@@ -12,6 +12,7 @@ suite: seaweedfs master anti-affinity
 
 templates:
   - charts/seaweedfs/templates/master/master-statefulset.yaml
+  - charts/seaweedfs/templates/master/master-configmap.yaml
 
 release:
   name: seaweedfs
@@ -19,6 +20,7 @@ release:
 
 tests:
   - it: softens the master hostname anti-affinity to a preference
+    template: charts/seaweedfs/templates/master/master-statefulset.yaml
     asserts:
       - notExists:
           path: spec.template.spec.affinity.podAntiAffinity.requiredDuringSchedulingIgnoredDuringExecution

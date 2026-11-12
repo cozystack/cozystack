@@ -20,9 +20,9 @@
 # source archive of that tag, UPSTREAM_DIGEST from the upstream image of that
 # tag and the builder from upstream's docker/Dockerfile.go_build, and checks
 # that the patches still apply.
-ARG VERSION=4.45
-ARG SOURCE_SHA256=800a91693e2a4e974ef0e2a157b6a04eff9f4df507303b1cff31b0601081fc30
-ARG UPSTREAM_DIGEST=sha256:fc9f76fa993ad69966ffeb2f65d0318fcae39c6f8e20cf68ef7b3a5cb97769e5
+ARG VERSION=4.48
+ARG SOURCE_SHA256=93199495e93a981451d1fefecb5aa71e12aa1692093eed2338bbfe7f08960bfb
+ARG UPSTREAM_DIGEST=sha256:4e61d15fd35994cb1e43e1e553dff106794841fd9a99ade2fc8c8bfce4d7872d
 
 # The Go toolchain of upstream's builder (docker/Dockerfile.go_build), which
 # compiles the upstream weed.
