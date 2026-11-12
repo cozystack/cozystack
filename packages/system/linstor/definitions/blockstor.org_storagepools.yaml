@@ -14,7 +14,26 @@ spec:
     singular: storagepool
   scope: Cluster
   versions:
-  - name: v1alpha1
+  - additionalPrinterColumns:
+    - jsonPath: .spec.nodeName
+      name: Node
+      type: string
+    - jsonPath: .spec.poolName
+      name: Pool
+      type: string
+    - jsonPath: .spec.providerKind
+      name: Provider
+      type: string
+    - jsonPath: .status.freeCapacity
+      name: Free-KiB
+      type: integer
+    - jsonPath: .status.totalCapacity
+      name: Total-KiB
+      type: integer
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
     schema:
       openAPIV3Schema:
         description: |-
@@ -204,6 +223,8 @@ spec:
           optionalOldSelf: true
           rule: oldSelf.hasValue() || self.metadata.name.lowerAscii() == (self.spec.poolName
             + '.' + self.spec.nodeName).lowerAscii()
+    selectableFields:
+    - jsonPath: .spec.nodeName
     served: true
     storage: true
     subresources:

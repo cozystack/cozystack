@@ -14,7 +14,20 @@ spec:
     singular: resourcegroup
   scope: Cluster
   versions:
-  - name: v1alpha1
+  - additionalPrinterColumns:
+    - jsonPath: .spec.selectFilter.placeCount
+      name: Place-Count
+      type: integer
+    - jsonPath: .spec.selectFilter.storagePool
+      name: Storage-Pool
+      type: string
+    - jsonPath: .spec.selectFilter.layerStack
+      name: Layers
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
     schema:
       openAPIV3Schema:
         description: ResourceGroup is the Schema for the resourcegroups API

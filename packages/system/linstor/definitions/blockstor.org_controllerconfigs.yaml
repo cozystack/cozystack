@@ -248,13 +248,19 @@ spec:
                 type: object
               passphraseSecretRef:
                 description: |-
-                  passphraseSecretRef points at the Secret carrying the
-                  cluster-wide LUKS passphrase under the key `passphrase`. The
-                  satellite reads it via the apiserver during reconcile;
-                  passphrase never lands on Spec in plaintext. Replaces
-                  `Props["DrbdOptions/Encryption/passphrase"]` on the legacy
-                  ControllerProps instance.
+                  passphraseSecretRef points at the Secret, in blockstor's own
+                  namespace, whose value unlocks the cluster master key: the shape
+                  piraeus gives LINSTOR (`MASTER_PASSPHRASE`). blockstor only reads
+                  it; every component reads it through the API server, so a changed
+                  Secret takes effect without a restart. Unset, blockstor unlocks
+                  from a passphrase Secret it generates and owns.
                 properties:
+                  key:
+                    default: MASTER_PASSPHRASE
+                    description: |-
+                      key is the data key holding the passphrase. Its bytes are the
+                      passphrase verbatim, a trailing newline included.
+                    type: string
                   name:
                     description: name is the Secret name. Required.
                     type: string

@@ -27,15 +27,15 @@ piraeusServer:
 blockstorController:
   image:
     repository: ghcr.io/cozystack/blockstor-controller
-    tag: 0.1.17@sha256:19b5733565e4bbe9510eecae8d47a181e72e07009b3d565848e8ccf1cd9393e8
+    tag: 0.3.0@sha256:ca5fc964265a1fd9e1153077f0565a9f07532c593bea1182d3b97a38430822ea
 blockstorApiserver:
   image:
     repository: ghcr.io/cozystack/blockstor-apiserver
-    tag: 0.1.17@sha256:102cf8c8d431f3b6714bca53752327ae8bb793b2d5ebed3aae47d51a85805f26
+    tag: 0.3.0@sha256:20cf599f8d0ae85a44b237b9d8ad2ca631a1feff3fd387194ef84636b538dd0b
 blockstorSatellite:
   image:
     repository: ghcr.io/cozystack/blockstor-satellite
-    tag: 0.1.17@sha256:8bd15bca47f33464eaf489884c33fd50ef2574a0ad856ab5ab9b921186a98bea
+    tag: 0.3.0@sha256:abff381da5425fdf7a6abc0d52006727cf7fe13c438acc79aaea192fc8681cb4
 # Talos-specific workarounds (disable for generic Linux like Ubuntu/Debian)
 talos:
   enabled: true
