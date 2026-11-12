@@ -735,8 +735,33 @@ func TestAltinityArchiveName_FromStartedAtInUTC(t *testing.T) {
 		Spec:       backupsv1alpha1.BackupJobSpec{ApplicationRef: newAltinityClickHouseRef("ch-test")},
 		Status:     backupsv1alpha1.BackupJobStatus{StartedAt: &startedAt},
 	}
-	if got, want := altinityArchiveName(j), "clickhouse-ch-test-20260304T050607Z-0f3c9a1e-5b7d-4c2a-9e8f-1a2b3c4d5e6f"; got != want {
+	if got, want := altinityArchiveName(j), "ch-test-20260304050607-0f3c9a1e5b7d"; got != want {
 		t.Errorf("altinityArchiveName = %q, want %q", got, want)
+	}
+}
+
+// TestAltinityArchiveName_NoLongerThanTheNameWithoutUID pins the S3 key
+// budget: the archive name is part of every object key, a key may not exceed
+// 1024 bytes, and the legacy s3PathOverride prefix is unbounded, so a prefix
+// that fit the name without the UID must still fit this one.
+func TestAltinityArchiveName_NoLongerThanTheNameWithoutUID(t *testing.T) {
+	startedAt := metav1.NewTime(time.Date(2026, 3, 4, 5, 6, 7, 0, time.UTC))
+	for n := 1; n <= 63; n++ {
+		j := &backupsv1alpha1.BackupJob{
+			ObjectMeta: metav1.ObjectMeta{UID: "0f3c9a1e-5b7d-4c2a-9e8f-1a2b3c4d5e6f"},
+			Spec:       backupsv1alpha1.BackupJobSpec{ApplicationRef: newAltinityClickHouseRef(strings.Repeat("a", n))},
+			Status:     backupsv1alpha1.BackupJobStatus{StartedAt: &startedAt},
+		}
+		name, legacy := altinityArchiveName(j), altinityArchiveNameBeforeUIDs(j)
+		if len(name) > len(legacy) {
+			t.Errorf("application name of %d characters: archive %q is longer than %q", n, name, legacy)
+		}
+		// The manifest key of a prefix that left the name without the UID
+		// exactly at the limit.
+		prefix := strings.Repeat("p", 1024-len("/"+legacy+"/metadata.json"))
+		if key := prefix + "/" + name + "/metadata.json"; len(key) > 1024 {
+			t.Errorf("application name of %d characters: manifest key is %d bytes", n, len(key))
+		}
 	}
 }
 
@@ -760,7 +785,7 @@ func TestAltinityArchiveName_DistinctForRunsStartedInTheSameSecond(t *testing.T)
 		t.Fatalf("two runs started in the same second share archive %q", daily)
 	}
 	for _, name := range []string{daily, weekly} {
-		if !strings.HasPrefix(name, "clickhouse-ch-test-20260304T050607Z-") {
+		if !strings.HasPrefix(name, "ch-test-20260304050607-") {
 			t.Errorf("archive %q does not start with the application and start time, so names stop sorting chronologically", name)
 		}
 	}
@@ -793,7 +818,7 @@ func TestReconcileAltinity_RecordsTheArchiveTheJobWasGiven(t *testing.T) {
 	}
 	r, _, _ := newAltinityTestEnv(t, app, clientfake.NewClientBuilder().WithObjects(backupJob, strategy))
 	ctx := context.Background()
-	const want = "clickhouse-ch-test-20260304T050607Z-test-bj-uid"
+	const want = "ch-test-20260304050607-testbjuid"
 
 	if _, err := r.reconcileAltinity(ctx, backupJob, resolved); err != nil {
 		t.Fatalf("reconcileAltinity() creating the Job: %v", err)
@@ -844,6 +869,10 @@ func TestReconcileAltinity_RecordsTheArchiveOfAJobNamedBeforeUIDs(t *testing.T) 
 		{name: "the name without the UID", archive: legacy, want: legacy},
 		{name: "a longer name that starts with it", archive: legacy + "-copy", want: ""},
 		{name: "a longer name that ends with it", archive: "copy-" + legacy, want: ""},
+		{name: "a longer name that continues it after a period", archive: legacy + ".copy", want: ""},
+		{name: "a longer name that leads into it with a period", archive: "copy." + legacy, want: ""},
+		{name: "a longer name that continues it after an underscore", archive: legacy + "_copy", want: ""},
+		{name: "a longer name that leads into it with an underscore", archive: "copy_" + legacy, want: ""},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -977,13 +1006,13 @@ func TestReconcileAltinity_RecordsNoArchiveTheJobWasNotGiven(t *testing.T) {
 // A Backup recording this run's own archive is the one an earlier reconcile
 // created before its status write was lost, and is adopted.
 func TestReconcileAltinity_BackupNameAlreadyTaken(t *testing.T) {
-	const thisRun = "clickhouse-ch-test-20260305T050607Z-test-bj-uid"
+	const thisRun = "ch-test-20260305050607-testbjuid"
 	cases := []struct {
 		name          string
 		existing      string // archive the existing Backup records; empty for none
 		wantSucceeded bool
 	}{
-		{name: "earlier run's Backup records another archive", existing: "clickhouse-ch-test-20260304T050607Z-earlier-bj-uid"},
+		{name: "earlier run's Backup records another archive", existing: "ch-test-20260304050607-earlierbjuid"},
 		{name: "earlier run's Backup records no archive", existing: ""},
 		{name: "this run's Backup from a reconcile whose status write was lost", existing: thisRun, wantSucceeded: true},
 	}
