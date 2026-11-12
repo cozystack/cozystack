@@ -1,3 +1,7 @@
 apiVersion: v2
 name: cozy-kafka-operator
 version: 0.0.0 # Placeholder, the actual version will be automatically set during the build process
+dependencies:
+  - name: strimzi-kafka-operator
+    version: "*"
+    repository: file://charts/strimzi-kafka-operator
