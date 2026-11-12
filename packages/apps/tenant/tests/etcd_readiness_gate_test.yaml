@@ -1,0 +1,38 @@
+suite: tenant etcd HelmRelease readiness gate
+
+templates:
+  - templates/etcd.yaml
+
+release:
+  name: tenant-alice
+  namespace: tenant-alice
+
+# CEL outcomes are executed in test/healthchecks. Flux evaluates inProgress
+# before failed, so an inProgress expression would hide BootstrapFailed and
+# DeadlineExceeded.
+tests:
+  - it: gates the etcd child on EtcdCluster status without an inProgress override
+    set:
+      etcd: true
+    asserts:
+      - equal:
+          path: metadata.name
+          value: etcd
+      - equal:
+          path: spec.waitStrategy.name
+          value: poller
+      - lengthEqual:
+          path: spec.healthCheckExprs
+          count: 1
+      - equal:
+          path: spec.healthCheckExprs[0].apiVersion
+          value: etcd-operator.cozystack.io/v1alpha2
+      - equal:
+          path: spec.healthCheckExprs[0].kind
+          value: EtcdCluster
+      - exists:
+          path: spec.healthCheckExprs[0].current
+      - exists:
+          path: spec.healthCheckExprs[0].failed
+      - notExists:
+          path: spec.healthCheckExprs[0].inProgress
