@@ -1640,7 +1640,7 @@ func TestReconcileAltinityRestore_UnreadableHoldStateDoesNotStartTheJob(t *testi
 func TestReconcileAltinity_CredentialsWaitKeepsTheArchiveName(t *testing.T) {
 	startedAt := metav1.NewTime(time.Date(2026, 3, 4, 5, 6, 7, 0, time.UTC))
 	backupJob := &backupsv1alpha1.BackupJob{
-		ObjectMeta: metav1.ObjectMeta{Name: "test-bj", Namespace: "tenant-test"},
+		ObjectMeta: metav1.ObjectMeta{Name: "test-bj", Namespace: "tenant-test", UID: "0f3c9a1e-5b7d-4c2a-9e8f-1a2b3c4d5e6f"},
 		Spec: backupsv1alpha1.BackupJobSpec{
 			ApplicationRef:  newAltinityClickHouseRef("ch-test"),
 			BackupClassName: "clickhouse-backup",
@@ -1659,7 +1659,7 @@ func TestReconcileAltinity_CredentialsWaitKeepsTheArchiveName(t *testing.T) {
 		},
 	}
 	ctx := context.Background()
-	const want = "clickhouse-ch-test-20260304T050607Z"
+	const want = "ch-test-20260304050607-0f3c9a1e5b7d"
 	reconcile := func(step string) {
 		t.Helper()
 		j := &backupsv1alpha1.BackupJob{}
