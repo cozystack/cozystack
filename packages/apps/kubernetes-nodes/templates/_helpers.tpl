@@ -208,13 +208,13 @@ clusters in one namespace from colliding on a pool named e.g. `md0`.
 
 {{/*
 Fail early with a clear message if this pool's MachineDeployment already exists
-under a different Helm release — i.e. the pool name collides with a nodeGroup
-still managed by the parent kubernetes chart (most likely the default `md0`).
+under a different Helm release: a worker pool migration 56 left with the parent
+cluster's release, or another pool whose <cluster>-<pool> split reconstructs
+the same object name (cluster `a` with pool `b-c`, cluster `a-b` with pool `c`).
 Without this guard the collision surfaces as a cryptic Helm "invalid ownership
 metadata" error at install time. Inert under `helm template`/unittest (lookup
-returns nil with no cluster) and a no-op during the Phase 2b adoption
-migration, which re-annotates the MachineDeployment onto this release before
-it reconciles.
+returns nil with no cluster) and a no-op for a pool migration 56 adopted, which
+re-annotates the MachineDeployment onto this release before it reconciles.
 */}}
 {{- define "kubernetes-nodes.assertNoForeignPool" -}}
 {{- $clusterName := include "kubernetes-nodes.clusterName" . -}}
@@ -224,7 +224,7 @@ it reconciles.
 {{- if $existing -}}
 {{- $owner := dig "annotations" "meta.helm.sh/release-name" "" $existing.metadata -}}
 {{- if and $owner (ne $owner .Release.Name) -}}
-{{- fail (printf "kubernetes-nodes: MachineDeployment %q in namespace %q is already managed by release %q, not this pool release %q — the pool name collides with a nodeGroup still managed by the parent kubernetes chart. Rename the pool or remove it from the parent Kubernetes CR's nodeGroups first." $mdName .Release.Namespace $owner .Release.Name) -}}
+{{- fail (printf "kubernetes-nodes: MachineDeployment %q in namespace %q is already managed by release %q, not this pool release %q — two pools cannot share the object name kubernetes-<cluster>-<pool>: give this pool a name whose object name is free, or remove the existing pool from release %q first." $mdName .Release.Namespace $owner .Release.Name $owner) -}}
 {{- end -}}
 {{- /* clusterName-drift guard. The release name kubernetes-nodes-<cluster>-<pool>
        does not encode where <cluster> ends and <pool> begins: for one release
