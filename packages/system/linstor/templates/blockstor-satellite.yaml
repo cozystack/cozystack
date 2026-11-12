@@ -61,6 +61,12 @@ rules:
   - apiGroups: [""]
     resources: [events]
     verbs: [create, patch]
+  {{- /*
+     The same events through events.k8s.io, which the satellite's recorder
+     writes (a LUKS format refused over data). */}}
+  - apiGroups: [events.k8s.io]
+    resources: [events]
+    verbs: [create, patch]
   - apiGroups: [""]
     resources: [nodes]
     verbs: [get, list, watch]
