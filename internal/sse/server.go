@@ -187,8 +187,16 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
 	s.clients[c] = struct{}{}
 	s.clientsMu.Unlock()
 
+	defer func() {
+		s.clientsMu.Lock()
+		delete(s.clients, c)
+		s.clientsMu.Unlock()
+	}()
+
 	// Initial comment to open the stream for some proxies
-	fmt.Fprintf(w, ": connected %s\n\n", time.Now().Format(time.RFC3339))
+	if _, err := fmt.Fprintf(w, ": connected %s\n\n", time.Now().Format(time.RFC3339)); err != nil {
+		return
+	}
 	flusher.Flush()
 
 	// Send latest if any
@@ -196,21 +204,24 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
 	latest := s.latest
 	s.latestMu.RUnlock()
 	if latest != "" {
-		writeSSE(w, latest)
+		if err := writeSSE(w, latest); err != nil {
+			return
+		}
 		flusher.Flush()
 	}
 
-	// Start pump
-	go c.pump()
-
-	// Block until client disconnects
-	<-r.Context().Done()
-
-	// Unregister client
+	// A write the client no longer takes ends the pump; the handler then
+	// gives the client up without waiting for the request to end.
+	pumped := make(chan struct{})
+	go func() {
+		c.pump()
+		close(pumped)
+	}()
+	select {
+	case <-r.Context().Done():
+	case <-pumped:
+	}
 	c.stop()
-	s.clientsMu.Lock()
-	delete(s.clients, c)
-	s.clientsMu.Unlock()
 }
 
 // stop ends the client's pump. Shutdown and the client's own handler both
@@ -227,23 +238,30 @@ func (c *client) pump() {
 		case <-c.closeCh:
 			return
 		case msg := <-c.ch:
-			writeSSE(c.w, msg)
+			if err := writeSSE(c.w, msg); err != nil {
+				return
+			}
 			c.flusher.Flush()
 		case <-t.C:
 			// heartbeat comment (keeps connections alive through proxies)
-			fmt.Fprint(c.w, ": hb\n\n")
+			if _, err := fmt.Fprint(c.w, ": hb\n\n"); err != nil {
+				return
+			}
 			c.flusher.Flush()
 		}
 	}
 }
 
-func writeSSE(w http.ResponseWriter, msg string) {
+func writeSSE(w http.ResponseWriter, msg string) error {
 	// Split on lines; each needs its own "data:" field per the SSE spec
 	lines := strings.SplitSeq(strings.TrimRight(msg, "\n"), "\n")
 	for ln := range lines {
-		fmt.Fprintf(w, "data: %s\n", ln)
+		if _, err := fmt.Fprintf(w, "data: %s\n", ln); err != nil {
+			return err
+		}
 	}
-	fmt.Fprint(w, "\n")
+	_, err := fmt.Fprint(w, "\n")
+	return err
 }
 
 // Minimal index page with live updates

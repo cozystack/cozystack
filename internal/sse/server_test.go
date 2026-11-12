@@ -57,6 +57,37 @@ func (w *streamWriter) String() string {
 	return w.body.String()
 }
 
+// serve runs the stream handler for a client that never disconnects and
+// reports whether the handler gave the client up within a second.
+func serve(t *testing.T, s *Server, w *streamWriter, publish string) bool {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	r := httptest.NewRequest(http.MethodGet, "/stream", nil).WithContext(ctx)
+	done := make(chan struct{})
+	go func() {
+		s.handleStream(w, r)
+		close(done)
+	}()
+	if publish != "" {
+		deadline := time.Now().Add(time.Second)
+		for len(s.snapshotClients()) == 0 && time.Now().Before(deadline) {
+			time.Sleep(time.Millisecond)
+		}
+		// Onto the client's queue, which only the pump reads, so the failing
+		// write is the pump's and not the handler's write of latest.
+		for _, c := range s.snapshotClients() {
+			c.ch <- publish
+		}
+	}
+	select {
+	case <-done:
+		return len(s.snapshotClients()) == 0
+	case <-time.After(time.Second):
+		return false
+	}
+}
+
 func (s *Server) snapshotClients() []*client {
 	s.clientsMu.RLock()
 	defer s.clientsMu.RUnlock()
@@ -71,15 +102,70 @@ func newTestServer(heartbeat time.Duration) *Server {
 	return New(Options{Heartbeat: heartbeat, Logger: log.New(io.Discard, "", 0)})
 }
 
-// A stream still open when the server shuts down ends when its client
-// disconnects, without closing the client a second time.
-func TestShutdownThenDisconnect(t *testing.T) {
+// A client whose connection stops taking writes is dropped at once, at
+// whichever write first fails, instead of holding its handler until the
+// request context ends.
+func TestStreamDropsClientOnWriteFailure(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		okWrites  int
+		latest    string
+		publish   string
+		heartbeat time.Duration
+	}{
+		{name: "connect comment", okWrites: 0, heartbeat: time.Hour},
+		{name: "latest payload", okWrites: 1, latest: "state", heartbeat: time.Hour},
+		{name: "published event", okWrites: 1, publish: "event", heartbeat: time.Hour},
+		{name: "heartbeat", okWrites: 1, heartbeat: 10 * time.Millisecond},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newTestServer(tc.heartbeat)
+			if tc.latest != "" {
+				s.Publish(tc.latest)
+			}
+			if !serve(t, s, &streamWriter{header: http.Header{}, okWrites: tc.okWrites}, tc.publish) {
+				t.Fatal("the handler kept a client whose writes fail")
+			}
+		})
+	}
+}
+
+// Each line of a payload is its own data field, and the event ends with an
+// empty line.
+func TestStreamFramesMultilinePayload(t *testing.T) {
 	s := newTestServer(time.Hour)
+	s.Publish("one\ntwo\n")
+	w := &streamWriter{header: http.Header{}, okWrites: 100}
 	ctx, cancel := context.WithCancel(context.Background())
 	r := httptest.NewRequest(http.MethodGet, "/stream", nil).WithContext(ctx)
 	done := make(chan struct{})
 	go func() {
-		s.handleStream(&streamWriter{header: http.Header{}, okWrites: 100}, r)
+		s.handleStream(w, r)
+		close(done)
+	}()
+	deadline := time.Now().Add(time.Second)
+	for !strings.Contains(w.String(), "data: two\n\n") && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	cancel()
+	<-done
+	if got := w.String(); !strings.Contains(got, "data: one\ndata: two\n\n") {
+		t.Fatalf("stream = %q, want both lines framed as one event", got)
+	}
+	if len(s.snapshotClients()) != 0 {
+		t.Fatal("a disconnected client stayed registered")
+	}
+}
+
+// Shutdown ends every open stream, and the handler that then returns does
+// not close the client a second time.
+func TestShutdownEndsOpenStreams(t *testing.T) {
+	s := newTestServer(time.Hour)
+	w := &streamWriter{header: http.Header{}, okWrites: 100}
+	r := httptest.NewRequest(http.MethodGet, "/stream", nil)
+	done := make(chan struct{})
+	go func() {
+		s.handleStream(w, r)
 		close(done)
 	}()
 	deadline := time.Now().Add(time.Second)
@@ -89,10 +175,9 @@ func TestShutdownThenDisconnect(t *testing.T) {
 	if err := s.Shutdown(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	cancel()
 	select {
 	case <-done:
 	case <-time.After(time.Second):
-		t.Fatal("the stream did not end after its client disconnected")
+		t.Fatal("Shutdown left the stream open")
 	}
 }
