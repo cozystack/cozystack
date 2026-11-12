@@ -345,7 +345,7 @@ spec:
              fails the whole release of a pool whose disks are all on the right class
              and which changed nothing. Only a pool with no disk yet resolves to
              today's default, which is the class its first clone will actually get. */}}
-      {{-   $cloneWorkerSC = .group.storageClass | default $.Values.storageClass | toString }}
+      {{-   $cloneWorkerSC = .group.storageClass | toString }}
       {{-   if and (not $cloneWorkerSC) $poolDiskName }}
       {{-     $poolPVC := lookup "v1" "PersistentVolumeClaim" $.Release.Namespace $poolDiskName }}
       {{-     if $poolPVC }}
@@ -526,12 +526,10 @@ spec:
               Worker VMs live-migrate, so their disks need ReadWriteMany. The
               RWX access mode is supplied by the chosen StorageClass's CDI
               StorageProfile — it is not set on the DataVolume here. linstor-csi
-              rejects RWX volumes that are not on a DRBD-backed StorageClass, so
-              an empty nodeGroup storageClass falls back to the application-level
-              storageClass (a replicated/DRBD class) instead of the cluster
-              default, which may be a non-DRBD class that the CSI driver would
-              reject. Both empty still omits the field so the cluster default
-              applies.
+              rejects RWX volumes that are not on a DRBD-backed StorageClass,
+              which is why the pool's storageClass defaults to a replicated/DRBD
+              class rather than to the cluster default. An empty storageClass
+              omits the field so the cluster default applies.
 
               A builtin pool instead renders the class the guard above resolved for
               it. Omitting the field there would let the disk bind on whatever the
@@ -540,12 +538,12 @@ spec:
               after the pool's earlier disks were bound turns the next clone into a
               host-assisted copy over the pod network, the transfer the guard exists
               to refuse, while the guard reports no drift because it compared the
-              class those earlier disks sit on. With both levels empty and no cluster
-              to resolve against the field is still omitted, so the HTTP path renders
-              exactly as before and the KubevirtMachineTemplate hash named after it
-              does not move.
+              class those earlier disks sit on. With the class empty and no cluster
+              to resolve against the field is still omitted, so the HTTP path does
+              not render one and the KubevirtMachineTemplate hash named after it
+              does not depend on the cluster default.
             */}}
-            {{- with $cloneWorkerSC | default (.group.storageClass | default $.Values.storageClass) }}
+            {{- with $cloneWorkerSC | default .group.storageClass }}
             storageClassName: {{ . | quote }}
             {{- end }}
       template:
@@ -1067,16 +1065,15 @@ spec:
          rejects a quoted plain integer ("0"). Quote only when the operator
          supplied a percentage; otherwise render the value as a bare int. */}}
   {{- $maxUnhealthy := toString $.Values.maxUnhealthy }}
-  {{- $muSource := "maxUnhealthy" }}
   {{- if hasSuffix "%" $maxUnhealthy }}
   {{-   if not (regexMatch "^[0-9]+%$" $maxUnhealthy) }}
-  {{-     fail (printf "%s must be a bare integer (e.g. 0, 1) or an integer percentage (e.g. 50%%), got %q" $muSource $maxUnhealthy) }}
+  {{-     fail (printf "maxUnhealthy must be a bare integer (e.g. 0, 1) or an integer percentage (e.g. 50%%), got %q" $maxUnhealthy) }}
   {{-   end }}
   maxUnhealthy: {{ $maxUnhealthy | quote }}
   {{- else if regexMatch "^[0-9]+$" $maxUnhealthy }}
   maxUnhealthy: {{ $maxUnhealthy | int }}
   {{- else }}
-  {{-   fail (printf "%s must be a bare integer (e.g. 0, 1) or an integer percentage (e.g. 50%%), got %q" $muSource $maxUnhealthy) }}
+  {{-   fail (printf "maxUnhealthy must be a bare integer (e.g. 0, 1) or an integer percentage (e.g. 50%%), got %q" $maxUnhealthy) }}
   {{- end }}
   nodeStartupTimeout: {{ $.Values.nodeStartupTimeout }}
   selector:
