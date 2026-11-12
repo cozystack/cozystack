@@ -158,6 +158,8 @@ When a document could go in either `docs/` or the website, the test is whether a
 
 Documenting a feature's current limitations is useful and belongs with the feature. Documenting the *development process* around it does not: no "What is NOT in Phase N", no "out of scope for this PR", no "this PR" phrasing, no action plans or review negotiation. A merged document describes what the code does now, and states a limitation as a limitation rather than as a roadmap position. Scope, phasing and follow-ups belong in the pull request description or an issue.
 
+An app's README and the field descriptions in its `values.yaml` describe what the app does now, for the person using it: no history ("moves from", "previously", "used to", rollout phase names) and no account of how another chart behaved before. A change users must act on is announced by a `!` in the pull request title and described on the website's per-version upgrade page (`content/en/docs/next/operations/cluster/upgrade-to-vX.Y.md`), so an app README carries no history or breaking-changes section. A description says what the field does, what it accepts and what it refuses, not what it replaced, and does not tell the reader to keep it in sync with another chart; when two charts have to agree, a test says so. A change that touches a README or a description fixes what is wrong in that place while it is there.
+
 A document that names an unmerged pull request or an unreleased dependency needs a tracking issue, because nothing re-checks that claim later and it silently becomes false once the thing ships.
 
 ### Domain references for specific tasks
