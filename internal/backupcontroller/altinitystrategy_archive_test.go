@@ -605,6 +605,10 @@ func TestCleanupAltinityBackup_WaitsForTheRetryTime(t *testing.T) {
 		{name: "retry time ahead", at: time.Now().Add(10 * time.Minute).UTC().Format(time.RFC3339)},
 		{name: "retry time passed", at: time.Now().Add(-time.Second).UTC().Format(time.RFC3339), wantJob: true},
 		{name: "unreadable retry time", at: "soon", wantJob: true},
+		// No failure sets a wait longer than the cap; a time further ahead
+		// comes from a skewed clock or a hand edit and would hold the Backup
+		// with nothing saying why.
+		{name: "retry time past the cap", at: time.Now().Add(altinityCleanupRetryMax + time.Hour).UTC().Format(time.RFC3339), wantJob: true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
