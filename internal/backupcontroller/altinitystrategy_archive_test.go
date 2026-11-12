@@ -1152,6 +1152,42 @@ func TestCleanupAltinityBackup_ChecksTheBucketItWasWrittenTo(t *testing.T) {
 	}
 }
 
+// The sidecar takes up projected credentials only some time after the Secret
+// changes, so right after the platform's bucket moved back to the one a Backup
+// records, the sidecar may still serve the other one, answer "not found" and
+// have the delete counted as done. The cleanup Job waits that time out, as the
+// backup and restore Jobs do.
+func TestCleanupAltinityBackup_WaitsForProjectedCredentialsToReachTheSidecar(t *testing.T) {
+	cases := []struct {
+		name    string
+		updated time.Time
+		wantJob bool
+	}{
+		{name: "just updated", updated: time.Now()},
+		{name: "updated long ago", updated: time.Now().Add(-altinityCredentialsPropagation - time.Second), wantJob: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			backup := altinityCleanupBackup("ch-bk")
+			backup.Spec.DriverMetadata[altinityBucketKey] = "bucket-a"
+			creds := altinityCredsSecret("bucket-a")
+			creds.Annotations = map[string]string{credentialsUpdatedAtAnnotation: tc.updated.UTC().Format(time.RFC3339)}
+			c, s := newAltinityCleanupClient(append(altinityCleanupFixtures(backup), creds)...)
+			r := &BackupReconciler{Client: c, Scheme: s, Recorder: record.NewFakeRecorder(10), CredentialsConfig: altinityTestCredentials}
+			res, err := r.cleanupOnDelete(context.Background(), backup)
+			if err != nil {
+				t.Fatalf("cleanupOnDelete: %v", err)
+			}
+			if res.RequeueAfter <= 0 {
+				t.Errorf("RequeueAfter = %s: the Backup must stay until a delete succeeds", res.RequeueAfter)
+			}
+			if jobs := listJobs(t, c); (len(jobs) == 1) != tc.wantJob {
+				t.Fatalf("cleanup Jobs = %d, want a Job = %v", len(jobs), tc.wantJob)
+			}
+		})
+	}
+}
+
 // The platform's bucket can change while the delete runs; a sidecar
 // restarted on the new one answers "not found" and the Job completes.
 // Releasing the Backup on that completion must say the archive may remain.
