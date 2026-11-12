@@ -12,6 +12,9 @@
              └─> blockstor-api-ca (CA Issuer)
                    ├─> blockstor-apiserver-server  (serving cert, Service DNS SANs)
                    └─> blockstor-apiserver-client   (client cert for in-cluster consumers)
+       └─> blockstor-stream-ca (CA Certificate, 10y, kept apart from the API CA)
+             └─> blockstor-stream-ca (CA Issuer)
+                   └─> blockstor-satellite-stream  (one cert for every satellite's snapshot stream)
 
    The apiserver's TLS listener (RequireAndVerifyClientCert) verifies
    every client cert against ca.crt of the server Secret, and serves
@@ -106,5 +109,69 @@ spec:
     - key encipherment
   issuerRef:
     name: blockstor-api-ca
+    kind: Issuer
+---
+{{- /*
+   The snapshot stream between satellites has a CA of its own. A stream
+   certificate is a client certificate, and one from blockstor-api-ca would
+   also be accepted by the apiserver's mutual-TLS listener; keeping the CAs
+   apart keeps a satellite's stream identity off the REST API. */}}
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: blockstor-stream-ca
+  namespace: {{ .Release.Namespace }}
+spec:
+  commonName: blockstor-stream-ca
+  secretName: blockstor-stream-ca
+  duration: 87600h # 10 years
+  isCA: true
+  privateKey:
+    rotationPolicy: Never
+  usages:
+    - signing
+    - key encipherment
+    - cert sign
+  issuerRef:
+    name: ca-bootstrapper
+    kind: Issuer
+---
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: blockstor-stream-ca
+  namespace: {{ .Release.Namespace }}
+spec:
+  ca:
+    secretName: blockstor-stream-ca
+---
+{{- /*
+   One certificate for every satellite, for both ends of a stream: the
+   satellites dial each other by node address, so the name checked is the
+   fixed blockstor-satellite, not an address. A satellite pod does not
+   start until cert-manager has issued blockstor-satellite-stream-tls. */}}
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: blockstor-satellite-stream
+  namespace: {{ .Release.Namespace }}
+spec:
+  secretName: blockstor-satellite-stream-tls
+  commonName: blockstor-satellite
+  duration: 2160h # 90 days
+  renewBefore: 360h # 15 days
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+    rotationPolicy: Always
+  usages:
+    - server auth
+    - client auth
+    - digital signature
+    - key encipherment
+  dnsNames:
+    - blockstor-satellite
+  issuerRef:
+    name: blockstor-stream-ca
     kind: Issuer
 {{- end }}
