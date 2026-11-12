@@ -14,7 +14,20 @@ spec:
     singular: node
   scope: Cluster
   versions:
-  - name: v1alpha1
+  - additionalPrinterColumns:
+    - jsonPath: .spec.type
+      name: Type
+      type: string
+    - jsonPath: .spec.netInterfaces[0].address
+      name: Address
+      type: string
+    - jsonPath: .status.connectionStatus
+      name: Status
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
     schema:
       openAPIV3Schema:
         description: Node is the Schema for the nodes API

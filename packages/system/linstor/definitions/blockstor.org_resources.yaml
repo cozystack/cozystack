@@ -14,7 +14,32 @@ spec:
     singular: resource
   scope: Cluster
   versions:
-  - name: v1alpha1
+  - additionalPrinterColumns:
+    - jsonPath: .spec.resourceDefinitionName
+      name: Definition
+      type: string
+    - jsonPath: .spec.nodeName
+      name: Node
+      type: string
+    - jsonPath: .spec.storagePool
+      name: Pool
+      type: string
+    - jsonPath: .spec.drbdNodeID
+      name: Node-ID
+      type: integer
+    - jsonPath: .spec.drbdPort
+      name: Port
+      type: integer
+    - jsonPath: .status.drbdState
+      name: State
+      type: string
+    - jsonPath: .status.inUse
+      name: In-Use
+      type: boolean
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
     schema:
       openAPIV3Schema:
         description: |-
@@ -756,6 +781,9 @@ spec:
           optionalOldSelf: true
           rule: oldSelf.hasValue() || self.metadata.name.lowerAscii() == (self.spec.resourceDefinitionName
             + '.' + self.spec.nodeName).lowerAscii()
+    selectableFields:
+    - jsonPath: .spec.nodeName
+    - jsonPath: .spec.resourceDefinitionName
     served: true
     storage: true
     subresources:

@@ -14,7 +14,20 @@ spec:
     singular: snapshot
   scope: Cluster
   versions:
-  - name: v1alpha1
+  - additionalPrinterColumns:
+    - jsonPath: .spec.resourceDefinitionName
+      name: Definition
+      type: string
+    - jsonPath: .spec.snapshotName
+      name: Snapshot
+      type: string
+    - jsonPath: .spec.nodes
+      name: Nodes
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
     schema:
       openAPIV3Schema:
         description: |-
@@ -309,6 +322,8 @@ spec:
           optionalOldSelf: true
           rule: oldSelf.hasValue() || self.metadata.name.lowerAscii() == (self.spec.resourceDefinitionName
             + '.' + self.spec.snapshotName).lowerAscii()
+    selectableFields:
+    - jsonPath: .spec.resourceDefinitionName
     served: true
     storage: true
     subresources:

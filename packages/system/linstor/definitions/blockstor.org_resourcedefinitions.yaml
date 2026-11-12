@@ -14,7 +14,20 @@ spec:
     singular: resourcedefinition
   scope: Cluster
   versions:
-  - name: v1alpha1
+  - additionalPrinterColumns:
+    - jsonPath: .spec.resourceGroupName
+      name: Group
+      type: string
+    - jsonPath: .spec.drbdPort
+      name: Port
+      type: integer
+    - jsonPath: .spec.layerStack
+      name: Layers
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
     schema:
       openAPIV3Schema:
         description: ResourceDefinition is the Schema for the resourcedefinitions
@@ -330,8 +343,10 @@ spec:
                   Order is top-down: the first layer's device is what the
                   consumer Pod mounts, the last is the raw block device the
                   storage provider creates.
-                  Empty = inherits from the parent ResourceGroup; both empty =
-                  `["DRBD","STORAGE"]`.
+                  Empty means not decided yet: the controller fixes it once, from
+                  the parent ResourceGroup's stack for a definition that holds no
+                  data, and the satellite builds nothing until it is set. Once set it
+                  is never emptied. See docs/layer-stack.md.
                 items:
                   type: string
                 type: array
@@ -346,7 +361,22 @@ spec:
                   spawned from (or empty if directly created).
                 type: string
               volumeDefinitions:
-                description: volumeDefinitions are the volume slots inside this RD.
+                description: |-
+                  volumeDefinitions are the volume slots inside this RD.
+
+                  Keyed on volumeNumber rather than atomic, because that is what makes
+                  the size bound below enforceable. Kubernetes ratcheting correlates
+                  per field, and an atomic list is compared whole: any update touching
+                  it re-validates every element, so one volume written before the bound
+                  existed would reject every later write to this definition — the
+                  controller's own included, since it rewrites this list to stamp
+                  drbdMinor. With the list keyed, an untouched element is not
+                  re-validated and the bound applies to what is actually being written.
+
+                  The change was accepted by a running apiserver on the existing CRD, so
+                  it needs no new API version. One shape does become unwritable: an
+                  object carrying two entries with the same volumeNumber, which the
+                  atomic list allowed. Neither writer produces it.
                 items:
                   description: ResourceDefinitionVolume is one volume slot inside
                     an RD.
@@ -392,7 +422,45 @@ spec:
                         type: string
                       type: object
                     sizeKib:
+                      description: |-
+                        sizeKib is the volume size. The bounds are enforced HERE, by the API
+                        server, as well as in pkg/validate: the CLI writes these CRDs
+                        directly and REST has its own path, so a check living in one client
+                        is not a check the data is subject to. The writers give an operator a
+                        readable message; the schema is what holds for kubectl apply, a
+                        GitOps controller, and blockstor's own controller rewriting this
+                        list.
+
+                        The floor is DRBD's own per-device minimum once metadata is
+                        reserved. Below it the satellite does not fail — it loops on
+                        `drbdadm create-md` forever, which is why zero is the one value that
+                        must never reach it, and why an overflowing size parse that lands on
+                        zero has to be refused before it is stored.
+
+                        The ceiling is DRBD 9's documented per-device limit. It was 16 TiB,
+                        which is below what DRBD 9 and upstream LINSTOR handle: linstormigrate
+                        copies sizes verbatim, so a cluster holding a larger volume failed
+                        part-way through its own migration.
+
+                        A bound on an existing field validates on UPDATE as well as on
+                        create, which on an atomic list makes an out-of-range element poison
+                        every later write to the whole object — including writes that never
+                        touch the size, and including the controller's own, since it rewrites
+                        this list to stamp drbdMinor. That is reachable on an in-place
+                        upgrade: the REST spawn handler accepted any positive size until the
+                        gate was added, so a cluster upgrading into this can hold a definition
+                        sized 1..4095 KiB.
+
+                        The answer is the list-type marker on VolumeDefinitions rather than
+                        dropping the bound. Keyed on volumeNumber, the API server correlates
+                        elements across an update and ratcheting applies per element: a
+                        grandfathered volume stays writable, and the bound holds for what is
+                        actually being written. Verified against a running apiserver — an
+                        update appending a second, in-range volume is accepted while volume 0
+                        stays at 1024 KiB, and a fresh definition at 1024 KiB is refused.
                       format: int64
+                      maximum: 1099511627776
+                      minimum: 4096
                       type: integer
                     volumeNumber:
                       format: int32
@@ -402,7 +470,15 @@ spec:
                   - volumeNumber
                   type: object
                 type: array
+                x-kubernetes-list-map-keys:
+                - volumeNumber
+                x-kubernetes-list-type: map
             type: object
+            x-kubernetes-validations:
+            - message: 'layerStack is decided once: it may be set or replaced, never
+                emptied'
+              rule: '!has(oldSelf.layerStack) || size(oldSelf.layerStack) == 0 ||
+                (has(self.layerStack) && size(self.layerStack) > 0)'
           status:
             description: status defines the observed state of ResourceDefinition
             properties:
