@@ -17,6 +17,17 @@ spec:
       kind: ExternalArtifact
       name: cozystack-bucket-application-default-bucket
       namespace: cozy-system
+    # COSI reports readiness as booleans with no conditions, which kstatus reads
+    # as Current on apply. Nothing else in the release waits on COSI: the system
+    # chart reads the credentials Secret through lookup and renders without it.
+    # COSI v1alpha1 status has no error field, so there is no failed expression.
+    healthCheckExprs:
+      - apiVersion: objectstorage.k8s.io/v1alpha1
+        kind: BucketClaim
+        current: "has(status.bucketReady) && status.bucketReady"
+      - apiVersion: objectstorage.k8s.io/v1alpha1
+        kind: BucketAccess
+        current: "has(status.accessGranted) && status.accessGranted"
   dashboard:
     singular: Bucket
     plural: Buckets

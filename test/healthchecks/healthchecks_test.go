@@ -66,6 +66,7 @@ func TestRenderedHealthChecks(t *testing.T) {
 	}
 	for _, chart := range []struct {
 		name, path, template string
+		definition           string
 		values               []string
 		families             map[string]string
 	}{
@@ -93,9 +94,21 @@ func TestRenderedHealthChecks(t *testing.T) {
 				"postgresql.cnpg.io/v1/Cluster":                       "cnpg",
 			},
 		},
+		{
+			name: "bucket", definition: "packages/system/bucket-rd/cozyrds/bucket.yaml",
+			families: map[string]string{
+				"objectstorage.k8s.io/v1alpha1/BucketClaim":  "cosi-claim",
+				"objectstorage.k8s.io/v1alpha1/BucketAccess": "cosi-access",
+			},
+		},
 	} {
 		t.Run(chart.name, func(t *testing.T) {
-			hr := renderRelease(t, chart.name, chart.path, chart.template, chart.values)
+			var hr release
+			if chart.definition != "" {
+				hr = readDefinition(t, chart.definition)
+			} else {
+				hr = renderRelease(t, chart.name, chart.path, chart.template, chart.values)
+			}
 			if hr.Spec.WaitStrategy.Name != "poller" {
 				t.Fatalf("health checks require poller, got %q", hr.Spec.WaitStrategy.Name)
 			}
@@ -204,6 +217,40 @@ func renderRelease(t *testing.T, name, chart, template string, values []string) 
 		t.Fatalf("rendered %d HelmReleases, want 1", len(releases))
 	}
 	return releases[0]
+}
+
+// readDefinition returns what cozystack-api puts into every release of an
+// ApplicationDefinition's kind. The wait strategy is resolved as
+// config.ResolveWaitStrategy does: importing it would pull the API server's
+// dependency graph into this module and move the evaluator pins.
+func readDefinition(t *testing.T, path string) release {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(repoRoot, path))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var def struct {
+		Kind string `json:"kind"`
+		Spec struct {
+			Release struct {
+				WaitStrategy string                        `json:"waitStrategy"`
+				HealthChecks []kustomize.CustomHealthCheck `json:"healthCheckExprs"`
+			} `json:"release"`
+		} `json:"spec"`
+	}
+	if err := yaml.Unmarshal(data, &def); err != nil {
+		t.Fatal(err)
+	}
+	if def.Kind != "ApplicationDefinition" {
+		t.Fatalf("%s: got kind %q, want ApplicationDefinition", path, def.Kind)
+	}
+	var hr release
+	hr.Spec.WaitStrategy.Name = def.Spec.Release.WaitStrategy
+	if hr.Spec.WaitStrategy.Name == "" && len(def.Spec.Release.HealthChecks) > 0 {
+		hr.Spec.WaitStrategy.Name = "poller"
+	}
+	hr.Spec.HealthChecks = def.Spec.Release.HealthChecks
+	return hr
 }
 
 func TestControllerEvaluatorPin(t *testing.T) {

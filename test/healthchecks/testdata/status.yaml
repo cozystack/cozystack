@@ -155,3 +155,37 @@ vm:
   - name: stale-paused
     object: {status: {observedGeneration: 1, updateStatus: paused}}
     want: InProgress
+
+cosi-claim:
+  - name: absent-status
+    object: {}
+    error: "no such attribute"
+  - name: empty-status
+    object: {status: {}}
+    want: InProgress
+  - name: not-ready
+    object: {status: {bucketReady: false}}
+    want: InProgress
+  - name: name-without-ready
+    object: {status: {bucketName: bucket-fixture}}
+    want: InProgress
+  - name: ready
+    object: {status: {bucketReady: true, bucketName: bucket-fixture}}
+    want: Current
+
+cosi-access:
+  - name: absent-status
+    object: {}
+    error: "no such attribute"
+  - name: empty-status
+    object: {status: {}}
+    want: InProgress
+  - name: not-granted
+    object: {status: {accessGranted: false}}
+    want: InProgress
+  - name: account-without-grant
+    object: {status: {accountID: fixture}}
+    want: InProgress
+  - name: granted
+    object: {status: {accessGranted: true, accountID: fixture}}
+    want: Current

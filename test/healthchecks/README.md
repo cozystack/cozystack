@@ -1,6 +1,6 @@
 # Release health checks
 
-`make go-module-tests`, part of `make unit-tests`, runs this module; `go -C test/healthchecks test ./...` runs it alone. It requires Go and Helm, plus dash and jq for the Grafana observer tests. The test renders the HelmReleases that carry `healthCheckExprs`, extracts the expressions they actually render, and executes every matching fixture in `testdata/status.yaml` with Flux's `StatusEvaluator`. `StatusReader` also checks API-group/kind matching. No cluster is contacted.
+`make go-module-tests`, part of `make unit-tests`, runs this module; `go -C test/healthchecks test ./...` runs it alone. It requires Go and Helm, plus dash and jq for the Grafana observer tests. The test renders the HelmReleases that carry `healthCheckExprs`, extracts the expressions they actually render, reads the ones an ApplicationDefinition hands cozystack-api for every release of its kind, and executes every matching fixture in `testdata/status.yaml` with Flux's `StatusEvaluator`. `StatusReader` also checks API-group/kind matching. No cluster is contacted.
 
 This is a separate Go module because the evaluator must match the installed controller rather than the Cozystack API server's dependency graph. The embedded [helm-controller v1.5.0](https://github.com/fluxcd/helm-controller/blob/v1.5.0/go.mod) uses Flux runtime v0.100.2, cli-utils v0.37.1-flux.1 and cel-go v0.26.1. `TestControllerEvaluatorPin` checks the controller image in `internal/fluxinstall/manifests/fluxcd.yaml` and the selected module versions. When updating helm-controller, refresh the pins from its `go.mod` and rerun the fixtures; do not simply update the expected image.
 
@@ -11,6 +11,7 @@ This is a separate Go module because the evaluator must match the installed cont
 | CNPG Cluster | Ready=True | No early failure | Every nonready status, including persistent errors, waits until the Helm timeout. |
 | EtcdCluster | Positive replica count, all members ready, current-generation Available=True and Progressing=False/Reconciled | Positive replicas and current-generation Available=False with BootstrapFailed or DeadlineExceeded | Bootstrap, quorum loss, partial membership, stale conditions, unknown conditions and paused/zero replicas wait until the timeout. |
 | VLCluster, VTCluster, VTSingle, VMAuth, VMCluster, VMAgent, VMAlert, VMAlertmanager | updateStatus=operational | Any reported value other than operational or expanding, including failed, paused and unknown values | Absent updateStatus and expanding wait; stale observedGeneration waits even when the old status was failed. |
+| COSI BucketClaim, BucketAccess | bucketReady=true, accessGranted=true | No early failure: v1alpha1 status has no error field | Absent or false status waits until the timeout. |
 
 The evaluator checks top-level `status.observedGeneration` first, then InProgress, Failed and Current in that order; unmatched expressions return InProgress. The etcd gate deliberately has no InProgress expression so partial membership cannot hide terminal failure. Its conditions carry their own observedGeneration, so the gate checks those explicitly. The terminal fixtures include zero ready members and zero broken members: the operator's PVC-backed clusters do not use `brokenMembers` as a terminal-health signal.
 
@@ -19,6 +20,8 @@ Etcd `replicas=0` is an intentional pause, including a fresh cluster that has ne
 CNPG's [Ready writer](https://github.com/cloudnative-pg/cloudnative-pg/blob/v1.30.0/pkg/resources/status/transactions.go#L32) uses ClusterIsNotReady for every nonhealthy phase, so a reason cannot tell a persistent error from bootstrap and the gate declares no `failed` expression. The writer does not report a generation with that condition, so the gate cannot distinguish a pre-edit Ready from a fresh Ready; the fixtures record this limitation, and adding a generation requirement would prevent CNPG from ever becoming Current.
 
 VictoriaMetrics [v0.68.4 status metadata](https://github.com/VictoriaMetrics/operator/blob/v0.68.4/api/operator/v1beta1/vmextra_types.go#L1354) supplies top-level observedGeneration, so the fixtures exercise the evaluator's own generation check for that contract.
+
+COSI v0.2.2 [BucketClaimStatus](https://github.com/kubernetes-sigs/container-object-storage-interface/blob/v0.2.2/client/apis/objectstorage/v1alpha1/types.go#L164) and [BucketAccessStatus](https://github.com/kubernetes-sigs/container-object-storage-interface/blob/v0.2.2/client/apis/objectstorage/v1alpha1/types.go#L299) carry booleans and no conditions or observedGeneration, so kstatus reads both kinds as Current on apply. A granted BucketAccess proves the provisioner wrote the credentials, not that every S3 gateway accepts the key.
 
 ## Grafana rollout observer
 
