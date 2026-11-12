@@ -18,6 +18,7 @@ package observabilityproxy
 
 import (
 	"bufio"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -413,7 +414,12 @@ func TestServerTailCapsAndIdle(t *testing.T) {
 		closed <- err
 	}()
 	select {
-	case <-closed:
+	case err := <-closed:
+		// The server cuts an idle tail off mid-stream rather than ending the
+		// response, so the client reads an unexpected EOF; a clean end is fine too.
+		if err != nil && !errors.Is(err, io.ErrUnexpectedEOF) {
+			t.Fatalf("idle tail ended with %v, want the stream to end or be cut", err)
+		}
 	case <-time.After(3 * time.Second):
 		t.Fatal("idle tail not closed")
 	}
