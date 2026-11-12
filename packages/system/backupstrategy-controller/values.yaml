@@ -1,5 +1,5 @@
 backupStrategyController:
-  image: "ghcr.io/cozystack/cozystack/backupstrategy-controller:v1.7.0@sha256:990c8ab93b9f14ee7f70473d199558c859fa5e9532d6b1f47a74698f34c07c1b"
+  image: "ghcr.io/cozystack/cozystack/backupstrategy-controller:v1.7.1-rc.2@sha256:f5ebecfe64adb410ed179cdebd7c4f7761800d3ca5c591319ade2b244205a685"
   # chBackupClientImage is rendered into the Altinity strategy Pod, which drives
   # clickhouse-backup's HTTP API with curl + jq. rabbitmqBackupClientImage is
   # rendered into the RabbitMQ strategy Pod, which calls the management API and
@@ -9,14 +9,14 @@ backupStrategyController:
   # release promotion (hack/image-pin-consistency.bats). They are separate keys
   # so either strategy can move to its own image later.
   # DO NOT hand-edit: `make image` stamps both.
-  chBackupClientImage: "ghcr.io/cozystack/cozystack/backup-http-client:v1.6.0"
-  rabbitmqBackupClientImage: "ghcr.io/cozystack/cozystack/backup-http-client:v1.6.0"
+  chBackupClientImage: "ghcr.io/cozystack/cozystack/backup-http-client:v1.7.1-rc.2@sha256:3df21c21f8c82c054e4971426c957302663d438cfd3416aa77b8afb871f1f8ef"
+  rabbitmqBackupClientImage: "ghcr.io/cozystack/cozystack/backup-http-client:v1.7.1-rc.2@sha256:3df21c21f8c82c054e4971426c957302663d438cfd3416aa77b8afb871f1f8ef"
   # redisBackupClientImage is rendered into the Redis strategy Pod. The
   # spotahome operator ships no backup CRD, so the strategy runs a one-shot Job
   # that dumps an RDB snapshot to S3 and, on restore, loads it into a throwaway
   # redis to emit a faithful replay stream. It ships its own image (redis 8 +
   # curl) built from images/redis-backup/; `make image` re-digests this value.
-  redisBackupClientImage: "ghcr.io/cozystack/cozystack/redis-backup:v1.7.0@sha256:11492ac0b1899fc02aea9ff40ea72bab006b8816e426b84030528fa18be45b90"
+  redisBackupClientImage: "ghcr.io/cozystack/cozystack/redis-backup:v1.7.1-rc.2@sha256:11492ac0b1899fc02aea9ff40ea72bab006b8816e426b84030528fa18be45b90"
   # redisBackupActiveDeadlineSeconds bounds one backup/restore Job so a run that
   # wedges (e.g. a --rdb dump blocking on a stalled master) becomes a Failed Job
   # the driver reports, rather than a Running BackupJob a cron Plan stacks behind.
