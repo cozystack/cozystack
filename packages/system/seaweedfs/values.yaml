@@ -303,7 +303,10 @@ seaweedfs:
     # S3 actions for every BucketAccess and ignores the accessPolicy parameter.
     # v0.3.x honours accessPolicy: readonly, so a -readonly BucketAccessClass
     # actually issues read-only (Read,List) credentials instead of read-write.
-    image: "ghcr.io/seaweedfs/seaweedfs-cosi-driver:v0.3.1"
+    # v0.4.0 also writes each grant to the per-identity IAM file: v0.3.1
+    # rewrites only the legacy identity.json, which the S3 gateways migrate
+    # concurrently, so a grant could be lost for good.
+    image: "ghcr.io/seaweedfs/seaweedfs-cosi-driver:v0.4.0"
     podLabels:
       policy.cozystack.io/allow-to-apiserver: "true"
     driverName: "seaweedfs.objectstorage.k8s.io"
