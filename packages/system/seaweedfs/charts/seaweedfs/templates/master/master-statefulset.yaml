@@ -336,7 +336,9 @@ spec:
         {{- end }}
       spec:
         accessModes: [ "ReadWriteOnce" ]
-        storageClassName: {{ .Values.master.data.storageClass }}
+        {{- with .Values.master.data.storageClass }}
+        storageClassName: {{ . | quote }}
+        {{- end }}
         resources:
           requests:
             storage: {{ .Values.master.data.size }}
@@ -352,7 +354,9 @@ spec:
         {{- end }}
       spec:
         accessModes: [ "ReadWriteOnce" ]
-        storageClassName: {{ .Values.master.logs.storageClass }}
+        {{- with .Values.master.logs.storageClass }}
+        storageClassName: {{ . | quote }}
+        {{- end }}
         resources:
           requests:
             storage: {{ .Values.master.logs.size }}

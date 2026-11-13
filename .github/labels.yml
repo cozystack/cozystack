@@ -22,6 +22,7 @@
 #   do-not-merge/ PR merge blockers
 #   security/     security-finding severity and status (Cozystack-specific)
 #   size/         PR size (auto-applied)
+#   backport/     maintainer overrides of the backport batch rules (Cozystack-specific)
 #
 # `aliases:` lets EndBug/label-sync rename existing labels without losing
 # references on already-tagged issues and PRs.
@@ -77,18 +78,6 @@
 - name: kind/breaking-change
   color: 'e11d21'
   description: Indicates the change introduces a breaking API or behaviour change
-
-# kind/backport-previous has no upstream Kubernetes equivalent (k8s has no
-# two-release-line model); it stays under kind/ per the file convention.
-- name: kind/backport
-  color: 'fbca04'
-  description: Categorizes issue or PR as requiring a backport to the current release line
-  aliases: ['backport']
-
-- name: kind/backport-previous
-  color: 'fbd876'
-  description: Categorizes issue or PR as requiring a backport to the previous release line
-  aliases: ['backport-previous']
 
 # ──────────────────────────────────────────────
 # priority/ — urgency
@@ -411,3 +400,17 @@
 - name: security/fixed
   color: '0e8a16'
   description: Fix released
+
+# ──────────────────────────────────────────────
+# backport/ — maintainer overrides of the backport batch rules
+# ──────────────────────────────────────────────
+
+# Read by cmd/backport-batch from the merged pull request on main;
+# docs/release/backports.md describes both.
+- name: backport/include
+  color: 'c2e0c6'
+  description: The backport batch takes this PR though rules 2-4 keep it out; it must still pick and pass CI
+
+- name: backport/skip
+  color: 'f9d0c4'
+  description: The backport batch keeps this PR out although the rules take it
