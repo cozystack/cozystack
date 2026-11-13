@@ -1,4 +1,5 @@
 {{- $ingress := .Values._namespace.ingress }}
+{{- $clusterDomain := (index (.Values._cluster | default dict) "cluster-domain") | default "cozy.local" }}
 {{- $host := include "cozy-lib.ns-host-required" . }}
 {{- $s3Host := .Values.host | default (printf "s3.%s" $host) }}
 {{- if lt (int .Values.replicas) 2 }}
@@ -55,6 +56,7 @@ spec:
     rustfs:
       fullnameOverride: {{ .Release.Name }}
       replicaCount: {{ .Values.replicas }}
+      clusterDomain: {{ $clusterDomain }}
       secret:
         existingSecret: {{ $name }}
       # One drive per node, so `size` is the capacity of a node.
