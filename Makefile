@@ -1,4 +1,4 @@
-.PHONY: manifests assets prepare-env prepare-env-container unit-tests helm-unit-tests bats-unit-tests bats-unit-files-check bats-posix-compat-tests print-bats-unit-files print-bats-posix-compat-files print-bats-jobs rd-presets-check migrations-target-check test test-controllers test-controllers-envtest test-backport-audit preflight
+.PHONY: manifests assets prepare-env prepare-env-container unit-tests helm-unit-tests bats-unit-tests bats-unit-files-check bats-posix-compat-tests print-bats-unit-files print-bats-posix-compat-files print-bats-jobs rd-presets-check migrations-target-check test test-controllers test-controllers-envtest test-backport-batch preflight
 
 include hack/common-envs.mk
 
@@ -17,6 +17,7 @@ build: build-deps
 	make -C packages/system/cozystack-api image
 	make -C packages/system/cozystack-controller image
 	make -C packages/system/backup-controller image
+	make -C packages/system/observability-proxy image
 	make -C packages/system/backupstrategy-controller image
 	make -C packages/system/lineage-controller-webhook image
 	make -C packages/system/migration-controller image
@@ -119,7 +120,7 @@ test:
 	make -C packages/core/testing apply
 	make -C packages/core/testing e2e
 
-unit-tests: helm-unit-tests bats-unit-tests bats-posix-compat-tests go-unit-tests go-module-tests rd-presets-check test-check-readiness test-backport-audit migrations-target-check
+unit-tests: helm-unit-tests bats-unit-tests bats-posix-compat-tests go-unit-tests go-module-tests rd-presets-check test-check-readiness test-backport-batch migrations-target-check
 
 helm-unit-tests:
 	hack/helm-unit-tests.sh
@@ -138,13 +139,14 @@ rd-presets-check:
 migrations-target-check:
 	hack/check-migrations-target.sh
 
-# Scoped go test over the cozystack-api surface that this repo owns. Kept
-# narrow intentionally - running `go test ./...` pulls in generated code
-# round-trip suites whose behavior depends on tool versions outside this
-# repo's control (kubebuilder, openapi-gen, etc.) and is better exercised
-# from their generator workflows.
+# Go tests of the cozystack-api surface and of the standalone packages and
+# commands listed here, whose tests need no cluster. Kept narrow
+# intentionally - running `go test ./...` pulls in generated code round-trip
+# suites whose behavior depends on tool versions outside this repo's control
+# (kubebuilder, openapi-gen, etc.) and is better exercised from their
+# generator workflows.
 go-unit-tests:
-	go test ./pkg/registry/... ./pkg/config/... ./pkg/cmd/server/...
+	go test ./pkg/registry/... ./pkg/config/... ./pkg/cmd/server/... ./pkg/lineage/... ./pkg/ovnstatus/... ./pkg/reservation/... ./cmd/cozypkg/... ./cmd/check-readiness/...
 
 # The nested Go modules (image sources and the published API types) are
 # outside ./... of the root module, so no other target reaches their tests.
@@ -157,9 +159,7 @@ go-module-tests:
 	done
 
 # Go tests for the controllers and supporting packages under ./internal.
-# Excludes ./pkg/... and ./cmd/... — those are run separately by
-# go-unit-tests above (pkg subset) and skipped (cmd) until their tests
-# stabilise. CI schedules this target in the same four-slot make invocation as
+# CI schedules this target in the same four-slot make invocation as
 # unit-tests; locally invoke it directly or chain the two targets.
 test-controllers:
 	go test ./internal/... -count=1
@@ -194,9 +194,10 @@ test-controllers-envtest: $(SETUP_ENVTEST)
 test-check-readiness:
 	go test ./test/check-readiness/ -count=1
 
-# ./cmd/... is excluded from go-unit-tests, so the audit needs its own target.
-test-backport-audit:
-	go test ./cmd/backport-audit/ -count=1
+# The batch tool's suite drives real git repositories for minutes, so it is
+# kept out of go-unit-tests in a target of its own.
+test-backport-batch:
+	go test ./cmd/backport-batch/... -count=1
 
 # Unit discovery is one level deep. Live-cluster files need an invocation in
 # packages/core/testing; hack/bats-runner-coverage.bats checks that boundary.
@@ -294,7 +295,7 @@ bats-posix-compat-tests:
 # own too; hack/unit-lane-no-cluster.bats fails when one is missing.
 NO_CLUSTER_TARGETS := unit-tests test-controllers helm-unit-tests bats-unit-tests \
 	bats-posix-compat-tests go-unit-tests go-module-tests rd-presets-check \
-	test-check-readiness test-backport-audit migrations-target-check
+	test-check-readiness test-backport-batch migrations-target-check
 $(NO_CLUSTER_TARGETS): export KUBECONFIG := /dev/null
 $(NO_CLUSTER_TARGETS): export KUBERNETES_SERVICE_HOST :=
 

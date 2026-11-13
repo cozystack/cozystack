@@ -17,7 +17,7 @@ type Config struct {
 }
 
 type ConfigSpec struct {
-	// Number of Redis replicas.
+	// Number of Redis replicas. Three Sentinels watch them, or a single one when `replicas` is 1, since a lone pod has no replica to fail over to.
 	// +kubebuilder:default:=2
 	Replicas int `json:"replicas"`
 	// Explicit CPU and memory configuration for each Redis replica. When omitted, the preset defined in `resourcesPreset` is applied.
@@ -51,7 +51,15 @@ type ConfigSpec struct {
 	// Redis `min-replicas-max-lag`, in seconds: a replica whose last acknowledgement is older than this does not count towards `minReplicasToWrite`. Unset by default, which leaves the Redis default (10). Has no effect unless `minReplicasToWrite` is set. Must be at least 1 when `minReplicasToWrite` is set: Redis treats 0 as disabling the check, so the chart refuses it.
 	// +kubebuilder:validation:Minimum=0
 	MinReplicasMaxLag *int `json:"minReplicasMaxLag,omitempty"`
-	// Sentinel configuration. When `sentinel.resources` is empty and `sentinel.resourcesPreset` is unset, the three Sentinel pods are sized like the Redis pods (`resources` and `resourcesPreset`). An empty `sentinel.resources` map counts as unset, as an empty top-level `resources` does.
+	// Redis `maxmemory`: the dataset size at which Redis applies `maxmemoryPolicy`. Unset by default, which renders `maxmemory 0` (no limit, the Redis default), so a value set by hand with `CONFIG SET` is reset on the next reconcile. Must be at most 90% of the memory request of each Redis pod (from `resources` or `resourcesPreset`): the operator silently drops a larger value, so the chart refuses it. Leave headroom below that for replication and snapshot buffers.
+	Maxmemory resource.Quantity `json:"maxmemory,omitempty"`
+	// Redis `maxmemory-policy`: what Redis does once `maxmemory` is reached. `noeviction` refuses writes; `allkeys-lru` evicts the least recently used keys, which suits an instance used purely as a cache. Has no effect while `maxmemory` is unset.
+	// +kubebuilder:default:="noeviction"
+	MaxmemoryPolicy MaxmemoryPolicy `json:"maxmemoryPolicy"`
+	// Write RDB snapshots to the persistent volume (the Redis `save` directive, with the Redis default schedule). Set to `false` for an instance used purely as a cache: `save ""` is rendered and the volume is kept, so no further scheduled snapshot is written while replicas still have room for the full-sync RDB they write to disk. An RDB file already on the volume is not removed, and Redis loads it on restart, so turning snapshots off does not by itself empty the dataset. Always off when `size` is empty.
+	// +kubebuilder:default:=true
+	Snapshots bool `json:"snapshots"`
+	// Sentinel configuration. When `sentinel.resources` is empty and `sentinel.resourcesPreset` is unset, the Sentinel pods are sized like the Redis pods (`resources` and `resourcesPreset`). An empty `sentinel.resources` map counts as unset, as an empty top-level `resources` does.
 	// +kubebuilder:default:={}
 	Sentinel Sentinel `json:"sentinel,omitempty"`
 }
@@ -79,6 +87,9 @@ type TLS struct {
 
 // +kubebuilder:validation:Enum="no";"optional";"yes"
 type AuthClients string
+
+// +kubebuilder:validation:Enum="noeviction";"allkeys-lru";"allkeys-lfu";"allkeys-random";"volatile-lru";"volatile-lfu";"volatile-random";"volatile-ttl"
+type MaxmemoryPolicy string
 
 // +kubebuilder:validation:Enum="t1.nano";"t1.micro";"t1.small";"t1.medium";"t1.large";"t1.xlarge";"t1.2xlarge";"t1.4xlarge";"c1.nano";"c1.micro";"c1.small";"c1.medium";"c1.large";"c1.xlarge";"c1.2xlarge";"c1.4xlarge";"s1.nano";"s1.micro";"s1.small";"s1.medium";"s1.large";"s1.xlarge";"s1.2xlarge";"s1.4xlarge";"u1.nano";"u1.micro";"u1.small";"u1.medium";"u1.large";"u1.xlarge";"u1.2xlarge";"u1.4xlarge";"m1.nano";"m1.micro";"m1.small";"m1.medium";"m1.large";"m1.xlarge";"m1.2xlarge";"m1.4xlarge";"nano";"micro";"small";"medium";"large";"xlarge";"2xlarge"
 type ResourcesPreset string

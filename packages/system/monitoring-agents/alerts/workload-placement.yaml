@@ -1,0 +1,81 @@
+apiVersion: operator.victoriametrics.com/v1beta1
+kind: VMRule
+metadata:
+  name: alerts-workload-placement
+spec:
+  groups:
+  - name: workload-placement
+    params: {}
+    rules:
+    - alert: PodReplicasColocated
+      expr: |-
+        count by (cluster, namespace, owner_kind, owner_name, node) (
+          label_replace(
+            label_replace(
+              (
+                max by (cluster, namespace, pod, node, created_by_kind, created_by_name) (
+                  kube_pod_info{job="kube-state-metrics", created_by_kind=~"StatefulSet|ReplicaSet|Cluster|StrimziPodSet"}
+                )
+                or
+                label_replace(
+                  label_replace(
+                    max by (cluster, namespace, pod, node, created_by_kind, created_by_name) (
+                      kube_pod_info{job="kube-state-metrics", created_by_kind="EtcdMember"}
+                    ),
+                    "created_by_name", "$1", "created_by_name", "(.+)-[^-]+"
+                  ),
+                  "created_by_kind", "EtcdCluster", "", ""
+                )
+              )
+              and on (cluster, namespace, pod)
+              kube_pod_status_phase{job="kube-state-metrics", phase="Running"} == 1,
+              "owner_kind", "$1", "created_by_kind", "(.+)"
+            ),
+            "owner_name", "$1", "created_by_name", "(.+)"
+          )
+        ) > 1
+        and on (cluster, namespace, owner_kind, owner_name)
+        count by (cluster, namespace, owner_kind, owner_name) (
+          label_replace(
+            label_replace(
+              (
+                max by (cluster, namespace, pod, node, created_by_kind, created_by_name) (
+                  kube_pod_info{job="kube-state-metrics", created_by_kind=~"StatefulSet|ReplicaSet|Cluster|StrimziPodSet"}
+                )
+                or
+                label_replace(
+                  label_replace(
+                    max by (cluster, namespace, pod, node, created_by_kind, created_by_name) (
+                      kube_pod_info{job="kube-state-metrics", created_by_kind="EtcdMember"}
+                    ),
+                    "created_by_name", "$1", "created_by_name", "(.+)-[^-]+"
+                  ),
+                  "created_by_kind", "EtcdCluster", "", ""
+                )
+              )
+              and on (cluster, namespace, pod)
+              kube_pod_status_phase{job="kube-state-metrics", phase="Running"} == 1,
+              "owner_kind", "$1", "created_by_kind", "(.+)"
+            ),
+            "owner_name", "$1", "created_by_name", "(.+)"
+          )
+        )
+        <= on (cluster) group_left ()
+        count by (cluster) (
+          max by (cluster, node) (kube_node_info{job="kube-state-metrics"})
+          unless on (cluster, node)
+          kube_node_spec_taint{job="kube-state-metrics", effect=~"NoSchedule|NoExecute"}
+        )
+      for: 1h
+      labels:
+        severity: warning
+        exported_instance: '{{ $labels.namespace }}/{{ $labels.owner_name }}'
+        service: workload-placement
+      annotations:
+        summary: Pods of one workload share a node.
+        description: >-
+          {{ $value }} running pods of {{ $labels.owner_kind }} {{ $labels.namespace }}/{{ $labels.owner_name }}
+          are on node {{ $labels.node }} in cluster {{ $labels.cluster }}, although the cluster has a
+          schedulable node for each of its pods. Losing this node stops these pods together, which can cost
+          a quorum-based workload its quorum. The scheduler does not move running pods, so they stay
+          together until they are recreated.

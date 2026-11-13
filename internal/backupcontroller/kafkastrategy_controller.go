@@ -104,10 +104,10 @@ func kafkaClusterName(appName string) string {
 // apps.cozystack.io/Kafka application.
 func validateKafkaApplicationRef(ref corev1.TypedLocalObjectReference) error {
 	if ref.Kind != kafkaApplicationKind {
-		return fmt.Errorf("Kafka strategy only supports applicationRef.kind=%q, got %q", kafkaApplicationKind, ref.Kind)
+		return fmt.Errorf("the Kafka strategy only supports applicationRef.kind=%q, got %q", kafkaApplicationKind, ref.Kind)
 	}
 	if ref.APIGroup != nil && *ref.APIGroup != "" && *ref.APIGroup != backupsv1alpha1.DefaultApplicationAPIGroup {
-		return fmt.Errorf("Kafka strategy only supports applicationRef.apiGroup=%q, got %q", backupsv1alpha1.DefaultApplicationAPIGroup, *ref.APIGroup)
+		return fmt.Errorf("the Kafka strategy only supports applicationRef.apiGroup=%q, got %q", backupsv1alpha1.DefaultApplicationAPIGroup, *ref.APIGroup)
 	}
 	return nil
 }
@@ -528,7 +528,7 @@ func (r *BackupJobReconciler) createKafkaBackupArtifact(
 		// RabbitMQ driver's guard).
 		if existing.Spec.ApplicationRef.Kind != backup.Spec.ApplicationRef.Kind ||
 			existing.Spec.ApplicationRef.Name != backup.Spec.ApplicationRef.Name {
-			return nil, fmt.Errorf("Backup %s/%s already exists for a different application (%s/%s, not %s/%s)",
+			return nil, fmt.Errorf("existing Backup %s/%s belongs to a different application (%s/%s, not %s/%s)",
 				backup.Namespace, backup.Name,
 				existing.Spec.ApplicationRef.Kind, existing.Spec.ApplicationRef.Name,
 				backup.Spec.ApplicationRef.Kind, backup.Spec.ApplicationRef.Name)

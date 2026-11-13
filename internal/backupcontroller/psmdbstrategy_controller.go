@@ -482,14 +482,14 @@ func (r *BackupJobReconciler) reconcileMongoDB(ctx context.Context, j *backupsv1
 			// Opting out (useSystemBucket true→false) stops the injection but
 			// leaves the driver's storage entry on the live cluster: the chart never
 			// owned it and does not prune it, so it stays until removed by hand
-			// (backup-classes.md). A CR minted against it would carry no finalizer
+			// (https://cozystack.io/docs/v1/operations/services/backup-classes/). A CR minted against it would carry no finalizer
 			// and land the dump in the platform bucket as an object nothing owns or
 			// prunes. The injected entry is identified by its credentialsSecret, the
 			// one field on it the driver chose: bucket names collide with an admin's
 			// external bucket and drift when the platform bucket is re-provisioned.
 			if psmdbBackupDeadlineExceeded(j.Status.StartedAt) {
 				return r.markBackupJobFailed(ctx, j, fmt.Sprintf(
-					"psmdb.percona.com/PerconaServerMongoDB %s/%s storage %q is still the entry injected for the system bucket (credentialsSecret %q) while backup.useSystemBucket=false (%s after the job started); delete that storage entry from the PerconaServerMongoDB by hand or set backup.useSystemBucket=true again (see docs/operations/backup-classes.md)",
+					"psmdb.percona.com/PerconaServerMongoDB %s/%s storage %q is still the entry injected for the system bucket (credentialsSecret %q) while backup.useSystemBucket=false (%s after the job started); delete that storage entry from the PerconaServerMongoDB by hand or set backup.useSystemBucket=true again (see https://cozystack.io/docs/v1/operations/services/backup-classes/)",
 					j.Namespace, psmdbName, storageName, cred, psmdbDefaultBackupDeadline))
 			}
 			return r.requeueMongoDBBackupWaiting(ctx, j, "PerconaServerMongoDBStorageStale",
@@ -528,8 +528,8 @@ func (r *BackupJobReconciler) reconcileMongoDB(ctx context.Context, j *backupsv1
 		}
 	}
 
-	switch state := mdbBackup.Status.State; {
-	case state == psmdbtypes.StateReady:
+	switch state := mdbBackup.Status.State; state {
+	case psmdbtypes.StateReady:
 		// Backup completed successfully. Materialise the Cozystack artifact and
 		// finalise the BackupJob. Idempotent: reuse the existing artifact if a
 		// previous reconcile created it and then raced on the status update.
@@ -570,7 +570,7 @@ func (r *BackupJobReconciler) reconcileMongoDB(ctx context.Context, j *backupsv1
 		}
 		return ctrl.Result{}, nil
 
-	case state == psmdbtypes.StateError || state == psmdbtypes.StateRejected:
+	case psmdbtypes.StateError, psmdbtypes.StateRejected:
 		message := mdbBackup.Status.Error
 		// The residual half of the injection race: on the useSystemBucket flow the
 		// operator can latch state=error because it resolved the injected storage
@@ -1376,9 +1376,10 @@ func (r *BackupJobReconciler) createMongoDBBackupArtifact(
 // annotation (honoured before any apiserver read, so it still frees a Backup
 // whose operator CR has become unreadable) and a going-away namespace (the psmdb
 // delete-backup exec cannot run there) each make the driver strip its own
-// finalizer and release, leaving the object for a bucket lifecycle policy. This
-// bounds only what the driver contributes: a Get that fails with something other
-// than NotFound/NoMatchError still requeues (below), and the psmdb operator's own
+// finalizer and release, leaving the object to manual cleanup, or to a
+// lifecycle rule on the bucket where the object store applies one. This bounds
+// only what the driver contributes: a Get that fails with something other than
+// NotFound/NoMatchError still requeues (below), and the psmdb operator's own
 // release-lock finalizer keeps the CR Terminating while the operator is down,
 // whatever the driver strips. A down operator in a live namespace is likewise
 // not auto-released: the Backup stays Terminating as a visible signal until an
@@ -1634,7 +1635,7 @@ func (r *RestoreJobReconciler) reconcileMongoDBRestore(ctx context.Context, rest
 
 	// Point-in-time recovery needs an oplog stream, which the useSystemBucket flow
 	// never captures — the chart leaves spec.backup.pitr unset there (see
-	// backup-classes.md). Refuse a recoveryTime restore of a system-bucket backup
+	// https://cozystack.io/docs/v1/operations/services/backup-classes/). Refuse a recoveryTime restore of a system-bucket backup
 	// with a named error rather than hand the operator a PITR target it cannot
 	// serve. Identify the flow from the flag recorded on the snapshot at backup
 	// time, not from the resolved credentialsSecret: a BackupClass may name any
@@ -1652,7 +1653,7 @@ func (r *RestoreJobReconciler) reconcileMongoDBRestore(ctx context.Context, rest
 		}
 		if snap != nil && snap.UseSystemBucket {
 			return r.markRestoreJobFailed(ctx, restoreJob,
-				"restoreJob.spec.options.recoveryTime is set, but point-in-time recovery is not available for a backup taken on the useSystemBucket flow (no oplog is captured there); omit recoveryTime to restore the backup as taken. See docs/operations/backup-classes.md.")
+				"restoreJob.spec.options.recoveryTime is set, but point-in-time recovery is not available for a backup taken on the useSystemBucket flow (no oplog is captured there); omit recoveryTime to restore the backup as taken. See https://cozystack.io/docs/v1/operations/services/backup-classes/.")
 		}
 	}
 
@@ -1739,8 +1740,8 @@ func (r *RestoreJobReconciler) reconcileMongoDBRestore(ctx context.Context, rest
 		return r.markRestoreJobFailed(ctx, restoreJob, fmt.Sprintf("failed to ensure psmdb.percona.com/PerconaServerMongoDBRestore: %v", err))
 	}
 
-	switch state := mdbRestore.Status.State; {
-	case state == psmdbtypes.StateReady:
+	switch state := mdbRestore.Status.State; state {
+	case psmdbtypes.StateReady:
 		now := metav1.Now()
 		restoreJob.Status.CompletedAt = &now
 		restoreJob.Status.Phase = backupsv1alpha1.RestoreJobPhaseSucceeded
@@ -1755,7 +1756,7 @@ func (r *RestoreJobReconciler) reconcileMongoDBRestore(ctx context.Context, rest
 		}
 		return ctrl.Result{}, nil
 
-	case state == psmdbtypes.StateError || state == psmdbtypes.StateRejected:
+	case psmdbtypes.StateError, psmdbtypes.StateRejected:
 		message := mdbRestore.Status.Error
 		if message == "" {
 			message = fmt.Sprintf("psmdb.percona.com/PerconaServerMongoDBRestore %s/%s reported state=%s", mdbRestore.Namespace, mdbRestore.Name, state)
@@ -1854,7 +1855,7 @@ func (r *RestoreJobReconciler) resolveMongoDBBackupSource(ctx context.Context, b
 	}
 	if destination == "" {
 		return nil, fmt.Errorf(
-			"Backup has no restorable destination (the operator PerconaServerMongoDBBackup was reaped and no snapshot destination is persisted); re-run the BackupJob")
+			"no restorable destination for the Backup (the operator PerconaServerMongoDBBackup was reaped and no snapshot destination is persisted); re-run the BackupJob")
 	}
 	src := &psmdbtypes.BackupSource{
 		Type:        psmdbtypes.BackupTypeLogical,

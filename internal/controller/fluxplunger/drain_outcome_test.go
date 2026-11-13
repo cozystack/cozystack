@@ -65,12 +65,14 @@ func (s captureSink) WithName(string) logr.LogSink { return s }
 func TestRunThenDrain_FencesLeftBehindAreAnErrorNamingThem(t *testing.T) {
 	logger, entries := newCaptureLogger()
 	ctx := log.IntoContext(context.Background(), logger)
-	RunThenDrain(ctx,
+	if err := RunThenDrain(ctx,
 		func(context.Context) error { return nil },
 		func(context.Context) (int, error) {
 			return 1, errors.Join(context.DeadlineExceeded, errors.New("still fenced: tenant-root/vm-disk-0"))
 		},
-		time.Minute)
+		time.Minute); err != nil {
+		t.Fatalf("RunThenDrain = %v, want the run's nil error", err)
+	}
 	for _, e := range *entries {
 		if e.err != nil && strings.Contains(e.err.Error(), "tenant-root/vm-disk-0") {
 			return
@@ -84,10 +86,12 @@ func TestRunThenDrain_FencesLeftBehindAreAnErrorNamingThem(t *testing.T) {
 func TestRunThenDrain_AnUnansweredListingIsNotACountOfMinusOne(t *testing.T) {
 	logger, entries := newCaptureLogger()
 	ctx := log.IntoContext(context.Background(), logger)
-	RunThenDrain(ctx,
+	if err := RunThenDrain(ctx,
 		func(context.Context) error { return nil },
 		func(context.Context) (int, error) { return -1, context.DeadlineExceeded },
-		time.Minute)
+		time.Minute); err != nil {
+		t.Fatalf("RunThenDrain = %v, want the run's nil error", err)
+	}
 	found := false
 	for _, e := range *entries {
 		for i := 0; i+1 < len(e.kv); i += 2 {
@@ -108,10 +112,12 @@ func TestRunThenDrain_AnUnansweredListingIsNotACountOfMinusOne(t *testing.T) {
 func TestRunThenDrain_ACompleteDrainSaysSo(t *testing.T) {
 	logger, entries := newCaptureLogger()
 	ctx := log.IntoContext(context.Background(), logger)
-	RunThenDrain(ctx,
+	if err := RunThenDrain(ctx,
 		func(context.Context) error { return nil },
 		func(context.Context) (int, error) { return 0, nil },
-		time.Minute)
+		time.Minute); err != nil {
+		t.Fatalf("RunThenDrain = %v, want the run's nil error", err)
+	}
 	for _, e := range *entries {
 		if e.err == nil && strings.Contains(e.msg, "Released every uninstall fence") {
 			return

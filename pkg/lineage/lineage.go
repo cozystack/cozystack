@@ -20,6 +20,16 @@ const (
 	HRAPIVersion = "helm.toolkit.fluxcd.io/v2"
 	HRKind       = "HelmRelease"
 	HRLabel      = "helm.toolkit.fluxcd.io/name"
+
+	// KubeVirt VirtualMachines created by the Cluster API KubeVirt provider
+	// (CAPK) for cluster nodes carry no ownerReference: CAPK links them to
+	// their KubevirtMachine through these labels only.
+	VMAPIVersion                  = "kubevirt.io/v1"
+	VMKind                        = "VirtualMachine"
+	KubevirtMachineAPIVersion     = "infrastructure.cluster.x-k8s.io/v1alpha1"
+	KubevirtMachineKind           = "KubevirtMachine"
+	KubevirtMachineNameLabel      = "capk.cluster.x-k8s.io/kubevirt-machine-name"
+	KubevirtMachineNamespaceLabel = "capk.cluster.x-k8s.io/kubevirt-machine-namespace"
 )
 
 // AppMapper maps HelmRelease to application metadata.
@@ -91,36 +101,20 @@ func WalkOwnershipGraph(
 		return
 	}
 
-	// I want "if err1 != nil go to next block, if err2 != nil, go to next block, etc semantics",
-	// like an early return from a function, but if all checks succeed, I don't want to do the rest
-	// of the function, so it's a `for { if err { break } if othererr { break } if allgood { return }
-	for {
-		if obj.GetAPIVersion() != HRAPIVersion || obj.GetKind() != HRKind {
-			break
-		}
-		hr := helmReleaseFromUnstructured(obj)
-		if hr == nil {
-			break
-		}
-		a, k, p, err := appMapper.Map(hr)
+	// A node VM of a Kubernetes cluster has no ownerReference, so without this
+	// step the walk would stop at it and never reach the cluster's application.
+	if name, ok := kubevirtMachineName(obj); ok {
+		ownerObj, err := getUnstructuredObject(ctx, client, mapper, state.cache, KubevirtMachineAPIVersion, KubevirtMachineKind, obj.GetNamespace(), name)
 		if err != nil {
-			l.Error(err, "failed to map HelmRelease to app")
-			break
+			l.Error(err, "couldn't get KubevirtMachine of VirtualMachine", "namespace", obj.GetNamespace(), "virtualMachine", obj.GetName(), "kubevirtMachine", name)
+			return
 		}
-		ownerObj, err := getUnstructuredObject(ctx, client, mapper, state.cache, a, k, obj.GetNamespace(), strings.TrimPrefix(obj.GetName(), p))
-		if err != nil {
-			l.Error(err, "couldn't get unstructured object", "APIVersion", a, "Kind", k, "Name", strings.TrimPrefix(obj.GetName(), p))
-			break
-		}
-		// successfully mapped a HelmRelease to a custom app, no need to continue
-		out = append(out,
-			ObjectID{
-				APIVersion: ownerObj.GetAPIVersion(),
-				Kind:       ownerObj.GetKind(),
-				Namespace:  ownerObj.GetNamespace(),
-				Name:       ownerObj.GetName(),
-			},
-		)
+		out = append(out, WalkOwnershipGraph(ctx, client, mapper, appMapper, ownerObj, state)...)
+		return
+	}
+
+	if app, ok := helmReleaseApp(ctx, client, mapper, appMapper, state.cache, obj); ok {
+		out = append(out, app)
 		return
 	}
 
@@ -136,6 +130,49 @@ func WalkOwnershipGraph(
 	out = append(out, WalkOwnershipGraph(ctx, client, mapper, appMapper, ownerObj, state)...)
 
 	return
+}
+
+// helmReleaseApp resolves a HelmRelease to the application it deploys. When
+// it cannot, the walk goes on through the HelmRelease's own label instead.
+func helmReleaseApp(ctx context.Context, client dynamic.Interface, mapper meta.RESTMapper, appMapper AppMapper, cache *ObjectCache, obj *unstructured.Unstructured) (ObjectID, bool) {
+	hr := helmReleaseFromUnstructured(obj)
+	if hr == nil {
+		return ObjectID{}, false
+	}
+	l := log.FromContext(ctx)
+	a, k, p, err := appMapper.Map(hr)
+	if err != nil {
+		l.Error(err, "failed to map HelmRelease to app")
+		return ObjectID{}, false
+	}
+	name := strings.TrimPrefix(obj.GetName(), p)
+	app, err := getUnstructuredObject(ctx, client, mapper, cache, a, k, obj.GetNamespace(), name)
+	if err != nil {
+		l.Error(err, "couldn't get unstructured object", "APIVersion", a, "Kind", k, "Name", name)
+		return ObjectID{}, false
+	}
+	return ObjectID{
+		APIVersion: app.GetAPIVersion(),
+		Kind:       app.GetKind(),
+		Namespace:  app.GetNamespace(),
+		Name:       app.GetName(),
+	}, true
+}
+
+// kubevirtMachineName returns the KubevirtMachine a CAPK-created
+// VirtualMachine belongs to. It only follows a KubevirtMachine in the VM's own
+// namespace: CAPK can also run against an external infrastructure cluster,
+// where the KubevirtMachine lives elsewhere and is not ours to resolve.
+func kubevirtMachineName(obj *unstructured.Unstructured) (string, bool) {
+	if obj.GetAPIVersion() != VMAPIVersion || obj.GetKind() != VMKind {
+		return "", false
+	}
+	labels := obj.GetLabels()
+	name := labels[KubevirtMachineNameLabel]
+	if name == "" || labels[KubevirtMachineNamespaceLabel] != obj.GetNamespace() {
+		return "", false
+	}
+	return name, true
 }
 
 func parseWalkMemory(memory []interface{}) (*walkState, error) {

@@ -1,8 +1,8 @@
-suite: control-plane-only cluster.yaml render (worker pools moved to kubernetes-nodes)
+suite: control-plane-only cluster.yaml render (worker pools are kubernetes-nodes releases)
 
-# Phase 2 moved the worker node pools (KubevirtMachineTemplate, MachineDeployment,
+# The worker node pools (KubevirtMachineTemplate, MachineDeployment,
 # MachineHealthCheck, worker WorkloadMonitor) and the per-pool talos-reconcile Job
-# into the separate kubernetes-nodes chart. cluster.yaml now renders the control
+# are rendered by the kubernetes-nodes chart. cluster.yaml renders the control
 # plane only, in source order: Cluster (0), KamajiControlPlane (1), the
 # control-plane WorkloadMonitor (2), KubevirtCluster (3). This suite pins that
 # surface so a regression that re-introduces pool objects into the parent chart

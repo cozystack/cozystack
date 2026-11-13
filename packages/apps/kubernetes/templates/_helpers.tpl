@@ -6,24 +6,6 @@ Expand the name of the chart.
 {{- end }}
 
 {{/*
-Create a default fully qualified app name.
-We truncate at 63 chars because some Kubernetes name fields are limited to this (by the DNS naming spec).
-If release name contains chart name it will be used as a full name.
-*/}}
-{{- define "kubernetes.fullname" -}}
-{{- if .Values.fullnameOverride }}
-{{- .Values.fullnameOverride | trunc 63 | trimSuffix "-" }}
-{{- else }}
-{{- $name := default .Chart.Name .Values.nameOverride }}
-{{- if contains $name .Release.Name }}
-{{- .Release.Name | trunc 63 | trimSuffix "-" }}
-{{- else }}
-{{- printf "%s-%s" .Release.Name $name | trunc 63 | trimSuffix "-" }}
-{{- end }}
-{{- end }}
-{{- end }}
-
-{{/*
 Create chart name and version as used by the chart label.
 */}}
 {{- define "kubernetes.chart" -}}
@@ -184,29 +166,6 @@ never boots.
 {{- $ns := .Release.Namespace -}}
 {{- printf "has(claims.groups) && dyn(claims.groups).exists(g, g in [\"%s-view\", \"%s-use\", \"%s-admin\", \"%s-super-admin\"])" $ns $ns $ns $ns -}}
 {{- end }}
-
-{{- /*
-Validates and returns a duration destined for a consumer that does not reject
-a bad value: the cluster-autoscaler parses its annotation with
-time.ParseDuration and silently falls back to its built-in default on a value
-it cannot parse, and the CAPI webhook does not validate unhealthyConditions
-timeouts at all, so a zero or negative one applies and remediates a Machine the
-moment its condition flips. The values schema types these fields as strings and
-stops there, which lets "30" and "-5m" reach the template. The accepted shape
-is narrower than Go's duration grammar on purpose, because that grammar also
-admits a value large enough to overflow the parser -- the silent fallback again
--- and a fraction small enough to round to zero. The first segment must be
-positive; later segments may be zero, so the canonical rendering of a duration
-("20m0s", "1h0m0s" -- what metav1.Duration serializes to) round-trips. Every
-string this admits parses to a positive duration.
-*/ -}}
-{{- define "kubernetes.positiveDuration" -}}
-{{- $value := toString .value -}}
-{{- if not (regexMatch "^[1-9][0-9]{0,4}[smh]([0-9]{1,5}[smh]){0,2}$" $value) -}}
-{{-   fail (printf "%s must be a whole number of s, m or h (e.g. 30m, 1h30m), got %q" .field $value) -}}
-{{- end -}}
-{{- $value -}}
-{{- end -}}
 
 {{/*
   The two kube-apiserver flags the tenant control plane owns that have a

@@ -1,0 +1,154 @@
+suite: observability-proxy Deployment
+# The flags, ports and pod label below are the contract the proxy binary, the
+# Service and the console nginx are written against. A rename on either side
+# breaks routing without failing a render.
+templates:
+  - templates/deployment.yaml
+
+release:
+  name: observability-proxy
+  namespace: cozy-observability-proxy
+
+tests:
+  - it: labels the pods with the name the Service selects on
+    asserts:
+      - isKind:
+          of: Deployment
+      - equal:
+          path: spec.selector.matchLabels
+          value:
+            app.kubernetes.io/name: observability-proxy
+      - equal:
+          path: spec.template.metadata.labels["app.kubernetes.io/name"]
+          value: observability-proxy
+      - equal:
+          path: spec.template.spec.serviceAccountName
+          value: observability-proxy
+
+  - it: passes the listen, probe, root tenant and auth cache flags
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --listen-address=:8080
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --probe-address=:8081
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --root-tenant=tenant-root
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --auth-cache-ttl=10s
+
+  # Envoy behind a Cilium Gateway resets a stream after 300s without data
+  # (envoy.streamIdleTimeoutDurationSeconds), so a silent tail has to be
+  # ended by the proxy first, or the client sees a reset instead of an end.
+  - it: ends a silent tail before the Gateway stream idle timeout
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --tail-idle-timeout=4m30s
+
+  - it: passes the metrics store names and short-term retention
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --metrics-shortterm-store=shortterm
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --metrics-longterm-store=longterm
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --metrics-shortterm-retention=72h
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --metrics-app-lookback=720h
+
+  - it: follows renamed metrics stores
+    set:
+      observabilityProxy.metrics:
+        shorttermStore: fast
+        longtermStore: slow
+        shorttermRetention: 24h
+        appLookback: 48h
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --metrics-shortterm-store=fast
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --metrics-longterm-store=slow
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --metrics-shortterm-retention=24h
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --metrics-app-lookback=48h
+
+  - it: falls back to cozy.local when the platform passes no cluster domain
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --cluster-domain=cozy.local
+
+  - it: passes the platform cluster domain
+    set:
+      _cluster:
+        cluster-domain: cluster.local
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --cluster-domain=cluster.local
+      - notContains:
+          path: spec.template.spec.containers[0].args
+          content: --cluster-domain=cozy.local
+
+  - it: exposes the API and probe ports
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].ports
+          value:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+            - name: probes
+              containerPort: 8081
+              protocol: TCP
+
+  - it: probes /healthz and /readyz on the probe port
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].livenessProbe.httpGet
+          value:
+            path: /healthz
+            port: probes
+      - equal:
+          path: spec.template.spec.containers[0].readinessProbe.httpGet
+          value:
+            path: /readyz
+            port: probes
+
+  - it: runs from the image in values
+    set:
+      observabilityProxy.image: registry.example/observability-proxy:dev@sha256:0000
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: registry.example/observability-proxy:dev@sha256:0000
+
+  - it: satisfies the restricted pod security profile
+    asserts:
+      - equal:
+          path: spec.template.spec.securityContext
+          value:
+            runAsNonRoot: true
+            seccompProfile:
+              type: RuntimeDefault
+      - equal:
+          path: spec.template.spec.containers[0].securityContext
+          value:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL

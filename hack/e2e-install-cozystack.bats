@@ -49,10 +49,10 @@
   # Best-effort: never fail the suite on the band-aid. Remove once tenant workers
   # no longer bulk-pull the OS image from the public internet in CI.
   local sid ver
-  sid=$(yq '.talos.schematicID' packages/apps/kubernetes/values.yaml 2>/dev/null)
-  ver=$(yq '.talos.version' packages/apps/kubernetes/values.yaml 2>/dev/null)
+  sid=$(yq '.talos.schematicID' packages/apps/kubernetes-nodes/values.yaml 2>/dev/null)
+  ver=$(yq '.talos.version' packages/apps/kubernetes-nodes/values.yaml 2>/dev/null)
   if [ -z "$sid" ] || [ "$sid" = "null" ] || [ -z "$ver" ] || [ "$ver" = "null" ]; then
-    echo "WARNING: could not read talos.schematicID/version from values.yaml — skipping mirror (fallback to public factory)"
+    echo "WARNING: could not read talos.schematicID/version from packages/apps/kubernetes-nodes/values.yaml — skipping mirror (fallback to public factory)"
     return 0
   fi
   # The CiliumClusterwideNetworkPolicy in the manifest is intentionally NOT applied
@@ -560,4 +560,41 @@ metadata:
 data:
   version: "${version}"
 EOF
+}
+
+@test "Tenant namespace delete policy refuses a direct delete and keeps the Tenant uninstall" {
+  if ! kubectl api-resources --api-group=admissionregistration.k8s.io \
+       2>/dev/null | grep -qw validatingadmissionpolicies; then
+    skip "ValidatingAdmissionPolicy API not available on this cluster"
+  fi
+  kubectl get validatingadmissionpolicy cozystack-tenant-namespace-delete-policy
+  kubectl get validatingadmissionpolicybinding cozystack-tenant-namespace-delete-policy
+
+  kubectl apply -f - <<EOF
+apiVersion: apps.cozystack.io/v1alpha1
+kind: Tenant
+metadata:
+  name: deleteprobe
+  namespace: tenant-root
+spec: {}
+EOF
+  timeout 60 sh -ec 'until kubectl get hr/tenant-deleteprobe -n tenant-root >/dev/null 2>&1; do sleep 2; done'
+  kubectl wait hr/tenant-deleteprobe -n tenant-root --timeout=1m --for=condition=ready
+
+  local selected output rc still_there
+  selected=$(kubectl get namespaces --selector tenant.cozystack.io/tenant-root --field-selector metadata.name=tenant-deleteprobe -o name)
+  [ "$selected" = "namespace/tenant-deleteprobe" ]
+
+  output=$(kubectl delete namespace tenant-deleteprobe --dry-run=server 2>&1) && rc=0 || rc=$?
+  echo "kubectl delete exit=$rc, output=$output"
+  [ "$rc" -ne 0 ]
+  echo "$output" | grep -qF "ValidatingAdmissionPolicy 'cozystack-tenant-namespace-delete-policy'"
+  echo "$output" | grep -qF 'kubectl delete tenants.apps.cozystack.io deleteprobe --namespace tenant-root.'
+
+  kubectl delete tenants.apps.cozystack.io deleteprobe -n tenant-root --timeout=5m
+  kubectl wait namespace/tenant-deleteprobe --for=delete --timeout=5m
+  if ! still_there=$(kubectl get namespace tenant-deleteprobe --ignore-not-found -o name); then
+    echo "FAIL: reading the tenant-deleteprobe namespace did not answer"; false
+  fi
+  if [ -n "$still_there" ]; then echo "FAIL: deleting the Tenant must remove its namespace"; false; fi
 }

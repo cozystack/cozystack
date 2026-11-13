@@ -1,0 +1,80 @@
+suite: bucket cleanup Job name budget
+
+# The API server copies a Job's name into the job-name label of its pods, and a
+# label value takes 63 characters at most, while a release name may take 53.
+# The ServiceAccount, Role and RoleBinding have no such limit and keep the full
+# name, so a hook that ran before keeps the same objects.
+
+templates:
+  - templates/hooks/cleanup-acme.yaml
+
+set:
+  _namespace:
+    host: example.org
+
+tests:
+  - it: keeps <release>-cleanup-acme for a short release name
+    release:
+      name: my-bucket
+      namespace: tenant-root
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - equal:
+          path: metadata.name
+          value: my-bucket-cleanup-acme
+
+  - it: keeps the name when it lands exactly on 63 characters
+    release:
+      name: bucket-abcdefghijklmnopqrstuvwxyz0123456789abcdefg
+      namespace: tenant-root
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - equal:
+          path: metadata.name
+          value: bucket-abcdefghijklmnopqrstuvwxyz0123456789abcdefg-cleanup-acme
+
+  - it: cuts the name to 63 characters for a 53-character release name
+    release:
+      name: bucket-abcdefghijklmnopqrstuvwxyz0123456789abcdefghij
+      namespace: tenant-root
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - equal:
+          path: metadata.name
+          value: bucket-abcdefghijklmnopqrstuvwxyz0123456789abcdefghij-cleanup-a
+      - matchRegex:
+          path: metadata.name
+          pattern: ^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$
+      - equal:
+          path: spec.template.spec.serviceAccountName
+          value: bucket-abcdefghijklmnopqrstuvwxyz0123456789abcdefghij-cleanup-acme
+
+  - it: leaves the RBAC objects on the full name for a 53-character release name
+    release:
+      name: bucket-abcdefghijklmnopqrstuvwxyz0123456789abcdefghij
+      namespace: tenant-root
+    asserts:
+      - equal:
+          path: metadata.name
+          value: bucket-abcdefghijklmnopqrstuvwxyz0123456789abcdefghij-cleanup-acme
+        documentSelector:
+          path: kind
+          value: ServiceAccount
+      - equal:
+          path: roleRef.name
+          value: bucket-abcdefghijklmnopqrstuvwxyz0123456789abcdefghij-cleanup-acme
+        documentSelector:
+          path: kind
+          value: RoleBinding
+      - equal:
+          path: subjects[0].name
+          value: bucket-abcdefghijklmnopqrstuvwxyz0123456789abcdefghij-cleanup-acme
+        documentSelector:
+          path: kind
+          value: RoleBinding
