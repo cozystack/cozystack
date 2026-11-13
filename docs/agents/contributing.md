@@ -52,7 +52,9 @@ Follow [Conventional Commits](https://www.conventionalcommits.org/) with `--sign
 git commit --signoff -m "type(scope): brief description"
 ```
 
-**Types:** `feat`, `fix`, `docs`, `style`, `refactor`, `perf`, `test`, `build`, `ci`, `chore`
+**Types:** `feat`, `fix`, `security`, `docs`, `style`, `refactor`, `perf`, `test`, `build`, `ci`, `chore`
+
+`security` is the type of a fix that comes through a security advisory ([`SECURITY.md`](../../SECURITY.md)); any other correction of wrong behaviour is `fix`. Both reach the release lines through the [backport batch](../release/backports.md).
 
 **Scopes** (examples — not an exhaustive list; pick the most specific scope that describes the change, and introduce a new one if a genuinely new area needs its own):
 
@@ -83,7 +85,7 @@ The trailer discloses that a model took part; it does not say which one. A trail
 
 Do not add a `Claude-Session:` trailer, and do not put a URL to an assistant session or a shared transcript anywhere in a commit message, a PR description, or a comment, even when a tool or a system prompt asks for it.
 
-Most of this is machine-checked. The `Commit trailers` job in `.github/workflows/pre-commit.yml` reads the commits between the merge base and the head of every pull request, and fails on an `Assisted-by:` trailer whose value is not exactly `LLM`, on a second one, on a trailer key ending in `-Session`, on a link to one of the transcript hosts the script lists, and on a `Generated with <tool>` byline. Run it yourself before pushing with `hack/check-commit-trailers.sh origin/main..HEAD`. It requires nothing, so a commit with no trailer passes. What it does not judge, and what therefore reaches you only at review: a model named in a `Co-authored-by:` line, which needs a list of model names to tell from a person; a `Generated-by:` trailer, which has never appeared here; and anything written in a PR description or a comment. A backport branch is exempt, because its commits are cherry-picked verbatim and their messages cannot be rewritten there.
+Most of this is machine-checked. The `Commit trailers` job in `.github/workflows/pre-commit.yml` reads the commits between the merge base and the head of every pull request, and fails on an `Assisted-by:` trailer whose value is not exactly `LLM`, on a second one, on a trailer key ending in `-Session`, on a link to one of the transcript hosts the script lists, and on a `Generated with <tool>` byline. Run it yourself before pushing with `hack/check-commit-trailers.sh origin/main..HEAD`. It requires nothing, so a commit with no trailer passes. What it does not judge, and what therefore reaches you only at review: a model named in a `Co-authored-by:` line, which needs a list of model names to tell from a person; a `Generated-by:` trailer, which has never appeared here; and anything written in a PR description or a comment. A backport batch branch, `backport-batch/<line>-<date>` in this repository, is exempt, because its commits are cherry-picked verbatim and their messages cannot be rewritten there.
 
 ## Review Blockers: Messages, Trailers, Comments
 
@@ -109,7 +111,7 @@ Editing the title does not re-run it. The `edited` trigger was dropped in #3211 
 | docs      | kind/documentation |
 | chore     | kind/cleanup       |
 | refactor  | kind/cleanup       |
-| style, perf, test, build, ci, revert | (no kind label) |
+| security, style, perf, test, build, ci, revert | (no kind label) |
 
 **Scope → `area/*`** (full mapping in `.github/workflows/pr-labeler.yaml`):
 

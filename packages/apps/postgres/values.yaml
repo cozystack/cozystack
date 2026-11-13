@@ -287,7 +287,7 @@ users: {}
 ## @field {DatabaseRoles} [roles] - Roles assigned to users.
 ## @field {[]string} [extensions] - List of enabled PostgreSQL extensions.
 
-## @param {map[string]Database} databases - Databases configuration map.
+## @param {map[string]Database} databases - Databases configuration map. The PostgreSQL system databases `postgres`, `template0` and `template1` are refused.
 databases: {}
 ## Example:
 ## databases:
