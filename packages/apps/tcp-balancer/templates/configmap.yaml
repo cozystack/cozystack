@@ -11,6 +11,9 @@ default-server observe layer4 error-limit 10 on-error mark-down check send-proxy
 {{- fail (printf "mode %s is not supported" .) }}
 {{- end }}
 {{- end }}
+{{- $resources := include "cozy-lib.resources.defaultingSanitize" (list .Values.resourcesPreset .Values.resources $) | fromYaml }}
+{{- $memoryMi := div (include "cozy-lib.resources.toFloat" $resources.limits.memory | float64 | int64) 1048576 }}
+{{- $cpu := include "cozy-lib.resources.toFloat" $resources.limits.cpu | float64 }}
 
 apiVersion: v1
 kind: ConfigMap
@@ -21,6 +24,10 @@ metadata:
     app.kubernetes.io/managed-by: {{ .Release.Service }}
 data:
   haproxy.cfg: |
+    global
+        fd-hard-limit {{ mul $memoryMi 32 }}
+        thread-hard-limit {{ max (ceil $cpu | int64) 1 }}
+
     defaults
         mode    tcp
         option  dontlognull

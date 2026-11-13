@@ -32,6 +32,13 @@
       "matchStrings": ["clastix/kubectl:(?<currentValue>v[0-9]+\\.[0-9]+(?:\\.[0-9]+)?)@(?<currentDigest>sha256:[a-f0-9]+)"],
       "datasourceTemplate": "docker",
       "depNameTemplate": "docker.io/clastix/kubectl"
+    },
+    {
+      "customType": "regex",
+      "description": "Track the BuildKit SBOM scanner pinned by tag and digest in hack/common-envs.mk. The dockerfile manager does not read Makefiles and the helm-values manager is disabled repo-wide (see enabledManagers above), so without this manager the pin would stay on the syft it was cut with: the floating stable-1 tag it replaced moved to a fixed syft on its own, a digest pin does not. Tag and digest move together here, as the comment above the pin asks.",
+      "managerFilePatterns": ["/^hack/common-envs\\.mk$/"],
+      "matchStrings": ["SBOM_SCANNER \\?= (?<depName>docker\\.io/docker/buildkit-syft-scanner):(?<currentValue>[0-9]+\\.[0-9]+\\.[0-9]+)@(?<currentDigest>sha256:[a-f0-9]+)"],
+      "datasourceTemplate": "docker"
     }
   ],
   "packageRules": [

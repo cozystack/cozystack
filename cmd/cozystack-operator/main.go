@@ -99,6 +99,7 @@ func main() {
 	var platformSourceName string
 	var platformSourceRef string
 	var platformSourceSecret string
+	var platformSourceCertSecret string
 	var systemNamespaceMemoryLimit string
 	var systemNamespaceMemoryRequest string
 
@@ -145,6 +146,7 @@ func main() {
 	flag.StringVar(&platformSourceName, "platform-source-name", "cozystack-platform", "Name for the generated platform source resource and PackageSource")
 	flag.StringVar(&platformSourceRef, "platform-source-ref", "", "Reference specification as key=value pairs (e.g., 'branch=main' or 'digest=sha256:...,tag=v1.0'). For OCI: digest, semver, semverFilter, tag. For Git: branch, tag, semver, name, commit.")
 	flag.StringVar(&platformSourceSecret, "platform-source-secret", "", "Name of the Secret in cozy-system namespace containing credentials for the platform source. Sets spec.secretRef on the generated OCIRepository or GitRepository. Secret type depends on the source kind: kubernetes.io/dockerconfigjson for OCI (oci://...); Opaque with username+password (or bearerToken) for Git over HTTPS; Opaque with identity (PEM private key) and known_hosts for Git over SSH.")
+	flag.StringVar(&platformSourceCertSecret, "platform-source-cert-secret", "", "Name of the Secret in cozy-system namespace holding TLS material for an OCI platform source: ca.crt for a registry behind a private CA, and/or tls.crt+tls.key for client certificate auth. Sets spec.certSecretRef on the generated OCIRepository. Not supported for Git sources, where Flux reads ca.crt from the --platform-source-secret Secret.")
 	flag.StringVar(&cozyValuesSecretName, "cozy-values-secret-name", "cozystack-values", "The name of the secret containing cluster-wide configuration values.")
 	flag.StringVar(&cozyValuesSecretNamespace, "cozy-values-secret-namespace", "cozy-system", "The namespace of the secret containing cluster-wide configuration values.")
 	flag.StringVar(&cozyValuesNamespaceSelector, "cozy-values-namespace-selector", "cozystack.io/system=true", "The label selector for namespaces where the cluster-wide configuration values must be replicated.")
@@ -152,10 +154,10 @@ func main() {
 		"Default container memory limit in eligible system namespaces, including kube-system. "+
 			"Lowering or an oversized request creates a durable hold requiring an administrator's "+
 			"exact-value acknowledgement. Empty or 0 disables and removes managed LimitRanges; "+
-			"safety state is retained. See docs/operations/system-memory-limits.md.")
+			"safety state is retained. See https://cozystack.io/docs/v1/operations/configuration/system-memory-limits/.")
 	flag.StringVar(&systemNamespaceMemoryRequest, "system-namespace-memory-request", DefaultSystemNamespaceMemoryRequest,
 		"Default memory request paired with the system namespace limit. Keep small; 0 is supported. "+
-			"An empty installer value selects the operator default. See docs/operations/system-memory-limits.md.")
+			"An empty installer value selects the operator default. See https://cozystack.io/docs/v1/operations/configuration/system-memory-limits/.")
 
 	opts := zap.Options{
 		Development: true,
@@ -186,6 +188,11 @@ func main() {
 	if err != nil {
 		setupLog.Error(err, "invalid system namespace memory flags",
 			"limit", systemNamespaceMemoryLimit, "request", systemNamespaceMemoryRequest)
+		os.Exit(1)
+	}
+
+	if err := validatePlatformSourceCertSecret(platformSourceURL, platformSourceCertSecret); err != nil {
+		setupLog.Error(err, "invalid platform source flags")
 		os.Exit(1)
 	}
 
@@ -278,12 +285,12 @@ func main() {
 
 	// Generate and install platform source resource if specified
 	if platformSourceURL != "" {
-		setupLog.Info("Generating platform source resource", "url", platformSourceURL, "name", platformSourceName, "ref", platformSourceRef, "secret", platformSourceSecret)
+		setupLog.Info("Generating platform source resource", "url", platformSourceURL, "name", platformSourceName, "ref", platformSourceRef, "secret", platformSourceSecret, "certSecret", platformSourceCertSecret)
 		installCtx, installCancel := context.WithTimeout(mgrCtx, 2*time.Minute)
 		defer installCancel()
 
 		// Use direct client for pre-start operations (cache is not ready yet)
-		if err := installPlatformSourceResource(installCtx, directClient, platformSourceURL, platformSourceName, platformSourceRef, platformSourceSecret); err != nil {
+		if err := installPlatformSourceResource(installCtx, directClient, platformSourceURL, platformSourceName, platformSourceRef, platformSourceSecret, platformSourceCertSecret); err != nil {
 			setupLog.Error(err, "failed to install platform source resource")
 			os.Exit(1)
 		} else {
@@ -414,7 +421,7 @@ func main() {
 
 // installPlatformSourceResource generates and installs a Flux source resource (OCIRepository or GitRepository)
 // based on the platform source URL
-func installPlatformSourceResource(ctx context.Context, k8sClient client.Client, sourceURL, resourceName, refSpec, secretName string) error {
+func installPlatformSourceResource(ctx context.Context, k8sClient client.Client, sourceURL, resourceName, refSpec, secretName, certSecretName string) error {
 	logger := log.FromContext(ctx)
 
 	// Parse the source URL to determine type
@@ -432,11 +439,14 @@ func installPlatformSourceResource(ctx context.Context, k8sClient client.Client,
 	var obj client.Object
 	switch sourceType {
 	case "oci":
-		obj, err = generateOCIRepository(resourceName, repoURL, refMap, secretName)
+		obj, err = generateOCIRepository(resourceName, repoURL, refMap, secretName, certSecretName)
 		if err != nil {
 			return fmt.Errorf("failed to generate OCIRepository: %w", err)
 		}
 	case "git":
+		if err := validatePlatformSourceCertSecret(sourceURL, certSecretName); err != nil {
+			return err
+		}
 		obj, err = generateGitRepository(resourceName, repoURL, refMap, secretName)
 		if err != nil {
 			return fmt.Errorf("failed to generate GitRepository: %w", err)
@@ -530,6 +540,19 @@ func parseSystemNamespaceMemory(rawLimit, rawRequest string) (limit, request res
 			request.String(), limit.String())
 	}
 	return limit, request, nil
+}
+
+// validatePlatformSourceCertSecret rejects --platform-source-cert-secret for a
+// Git source: GitRepository has no certSecretRef, and Flux reads a Git CA from
+// the ca.crt key of the --platform-source-secret Secret instead.
+func validatePlatformSourceCertSecret(sourceURL, certSecretName string) error {
+	if certSecretName == "" {
+		return nil
+	}
+	if sourceType, _, err := parsePlatformSourceURL(sourceURL); err == nil && sourceType == "git" {
+		return fmt.Errorf("--platform-source-cert-secret is only supported for OCI sources; for a Git source put ca.crt into the --platform-source-secret Secret")
+	}
+	return nil
 }
 
 // parsePlatformSourceURL parses the source URL and returns the source type and repository URL.
@@ -650,7 +673,7 @@ func validateGitRef(refMap map[string]string) error {
 }
 
 // generateOCIRepository creates an OCIRepository resource
-func generateOCIRepository(name, repoURL string, refMap map[string]string, secretName string) (*sourcev1.OCIRepository, error) {
+func generateOCIRepository(name, repoURL string, refMap map[string]string, secretName, certSecretName string) (*sourcev1.OCIRepository, error) {
 	if err := validateOCIRef(refMap); err != nil {
 		return nil, err
 	}
@@ -684,6 +707,12 @@ func generateOCIRepository(name, repoURL string, refMap map[string]string, secre
 	if secretName != "" {
 		obj.Spec.SecretRef = &fluxmeta.LocalObjectReference{
 			Name: secretName,
+		}
+	}
+
+	if certSecretName != "" {
+		obj.Spec.CertSecretRef = &fluxmeta.LocalObjectReference{
+			Name: certSecretName,
 		}
 	}
 

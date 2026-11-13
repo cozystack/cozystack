@@ -33,6 +33,14 @@ stringData:
     opensearch-operator:
       manager:
         dnsBase: {{ .Values.networking.clusterDomain | quote }}
+    {{- /*
+      The operator resolves its own MariaDB pods, and the webhook certificate
+      gets its SAN, from CLUSTER_NAME, which the vendored subchart reads from
+      clusterName. Same subchart-key route as above; a package rendered
+      without this Secret falls back to the literal in its values.yaml.
+    */}}
+    mariadb-operator:
+      clusterName: {{ .Values.networking.clusterDomain | quote }}
     _cluster:
       root-host: {{ $rootHost | quote }}
       bundle-name: {{ .Values.bundles.system.variant | quote }}
@@ -253,6 +261,10 @@ stringData:
              null/omitted in custom values. Missing key -> the true default,
              matching the chart values.yaml. */}}
       monitoring-enabled: {{ dig "rootEnabled" true (.Values.monitoring | default dict) | quote }}
+      {{- /* Whether the root tenant runs its own ingress-nginx
+             (Tenant/root spec.ingress). `dig`, as for monitoring-enabled
+             above, so an explicit false survives. */}}
+      ingress-enabled: {{ dig "rootEnabled" true (.Values.ingress | default dict) | quote }}
       {{- /* The rate each shared-central tracing tenant's collector holds it
              to. Only written when set: every release in every tenant reads
              this Secret, and a key appearing would upgrade all of them. */}}
