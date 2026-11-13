@@ -347,3 +347,148 @@ spec:
           set -eu
           cd ../../..
           NAMESPACE="$NAMESPACE" examples/backups/postgres/cleanup.sh
+---
+# A system database that a version before the refusal took over is handed back
+# by the next init-job run, and only what this chart marked changes hands.
+#
+# The helm-unittest and bats suites check the rendered SQL against a fake psql;
+# only a real PostgreSQL can say that the predicates select what they claim. The
+# state an older version left is rebuilt by hand as the superuser, since the
+# chart now refuses to produce it:
+#   * postgres is commented as managed and owned by a postgres_admin role that
+#     carries the cozystack:managed mark, as the chart left it: it must come back
+#     to the superuser, and the role must be dropped;
+#   * template1 is commented as managed, but its template1_admin carries only the
+#     role comment, which a CREATEROLE holder can forge, and not the mark: the
+#     comment must be cleared and everything that role owns or was granted must
+#     stay as it is, in template1 and in a database cloned from it.
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: postgres-3-system-databases
+spec:
+  catch:
+  - events: {}
+  - describe:
+      apiVersion: helm.toolkit.fluxcd.io/v2
+      kind: HelmRelease
+      name: postgres-sysdb
+  - podLogs:
+      selector: job-name=postgres-sysdb-init-job
+      tail: 200
+  steps:
+  - name: create-postgres
+    try:
+    - apply:
+        file: postgres-sysdb.yaml
+    # 11m: above the 600s install timeout cozystack-api gives this release;
+    # see "Sizing an HR-Ready budget" in docs/agents/e2e-testing.md.
+    - assert:
+        timeout: 11m
+        resource:
+          apiVersion: helm.toolkit.fluxcd.io/v2
+          kind: HelmRelease
+          metadata:
+            name: postgres-sysdb
+          status:
+            (conditions[?type == 'Ready']):
+            - status: "True"
+    - assert:
+        timeout: 2m
+        resource:
+          apiVersion: batch/v1
+          kind: Job
+          metadata:
+            name: postgres-sysdb-init-job
+          status:
+            (conditions[?type == 'Complete']):
+            - status: "True"
+
+  - name: rebuild-taken-over-system-databases
+    try:
+    - script:
+        timeout: 3m
+        content: |
+          set -eu
+          pod=$(kubectl -n "$NAMESPACE" get pod \
+            -l cnpg.io/cluster=postgres-sysdb,cnpg.io/instanceRole=primary -o name | head -n1)
+          [ -n "$pod" ] || { echo "no primary pod for postgres-sysdb" >&2; exit 1; }
+          sql() { kubectl -n "$NAMESPACE" exec -i "$pod" -c postgres -- psql -v ON_ERROR_STOP=1 -U postgres -d "$1"; }
+          sql postgres <<'SQL'
+          CREATE ROLE postgres_admin NOLOGIN;
+          COMMENT ON ROLE postgres_admin IS 'role managed by helm';
+          GRANT "cozystack:managed" TO postgres_admin WITH INHERIT FALSE, SET FALSE;
+          COMMENT ON DATABASE postgres IS 'database managed by helm';
+          ALTER DATABASE postgres OWNER TO postgres_admin;
+          CREATE ROLE template1_admin NOLOGIN;
+          COMMENT ON ROLE template1_admin IS 'role managed by helm';
+          CREATE ROLE template1_readonly NOLOGIN;
+          COMMENT ON DATABASE template1 IS 'database managed by helm';
+          ALTER DATABASE template1 OWNER TO template1_admin;
+          SQL
+          sql template1 <<'SQL'
+          ALTER SCHEMA public OWNER TO template1_admin;
+          CREATE TABLE public.kept (id int);
+          ALTER TABLE public.kept OWNER TO template1_admin;
+          GRANT SELECT ON public.kept TO template1_readonly;
+          SQL
+          sql postgres <<'SQL'
+          CREATE DATABASE sysdb_clone TEMPLATE template1;
+          SQL
+          # The next run must be a new Job: remove the completed one so the
+          # assert below cannot match it.
+          kubectl -n "$NAMESPACE" delete job postgres-sysdb-init-job --wait=true
+          # Declaring a user is enough for an upgrade, and runs the init-job.
+          kubectl -n "$NAMESPACE" patch postgres.apps.cozystack.io sysdb --type merge \
+            -p '{"spec":{"users":{"sysdbuser":{},"sysdbprobe":{}}}}'
+        check:
+          ($error == null): true
+    - assert:
+        timeout: 11m
+        resource:
+          apiVersion: batch/v1
+          kind: Job
+          metadata:
+            name: postgres-sysdb-init-job
+          status:
+            (conditions[?type == 'Complete']):
+            - status: "True"
+
+  - name: verify-release
+    try:
+    - script:
+        timeout: 2m
+        content: |
+          set -eu
+          pod=$(kubectl -n "$NAMESPACE" get pod \
+            -l cnpg.io/cluster=postgres-sysdb,cnpg.io/instanceRole=primary -o name | head -n1)
+          q() { kubectl -n "$NAMESPACE" exec "$pod" -c postgres -- psql -v ON_ERROR_STOP=1 -U postgres -tA -d "$1" -c "$2"; }
+          fail=0
+          expect() {
+            got=$(q "$1" "$3")
+            if [ "$got" != "$4" ]; then
+              echo "FAIL: $2: got '$got', want '$4'" >&2
+              fail=1
+            fi
+          }
+          comment="SELECT coalesce(shobj_description(oid, 'pg_database'), '<none>') FROM pg_database WHERE datname = "
+          owner="SELECT pg_get_userbyid(datdba) FROM pg_database WHERE datname = "
+          expect postgres "postgres comment cleared" "$comment'postgres'" '<none>'
+          expect postgres "postgres back to the superuser" "$owner'postgres'" postgres
+          expect postgres "marked postgres_admin dropped" "SELECT count(*) FROM pg_roles WHERE rolname = 'postgres_admin'" 0
+          expect postgres "template1 comment cleared" "$comment'template1'" '<none>'
+          expect postgres "unmarked template1_admin still exists" "SELECT count(*) FROM pg_roles WHERE rolname = 'template1_admin'" 1
+          expect postgres "template1 still owned by the unmarked role" "$owner'template1'" template1_admin
+          for db in template1 sysdb_clone; do
+            expect "$db" "$db public still owned by the unmarked role" \
+              "SELECT pg_get_userbyid(nspowner) FROM pg_namespace WHERE nspname = 'public'" template1_admin
+            expect "$db" "$db kept table still owned by the unmarked role" \
+              "SELECT tableowner FROM pg_tables WHERE schemaname = 'public' AND tablename = 'kept'" template1_admin
+            expect "$db" "$db grant to the unmarked readonly role kept" \
+              "SELECT has_table_privilege('template1_readonly', 'public.kept', 'SELECT')" t
+          done
+          exit "$fail"
+        check:
+          ($error == null): true
+# The Postgres CR was applied by chainsaw; deleting it removes the whole
+# cluster, the databases and roles built above included.
