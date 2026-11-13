@@ -46,6 +46,7 @@ spec:
         - --metrics-longterm-store={{ .Values.observabilityProxy.metrics.longtermStore }}
         - --metrics-shortterm-retention={{ .Values.observabilityProxy.metrics.shorttermRetention }}
         - --metrics-app-lookback={{ .Values.observabilityProxy.metrics.appLookback }}
+        - --metrics-platform-namespace-prefix={{ .Values.observabilityProxy.metrics.platformNamespacePrefix }}
         ports:
         - name: http
           containerPort: 8080

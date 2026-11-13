@@ -101,6 +101,7 @@ func parseFlags(args []string) (options, error) {
 	fs.DurationVar(&o.metrics.App.Lookback, "metrics-app-lookback", 30*24*time.Hour, "how far before the window an application metrics query may read; one reading further back, or by an unknown amount, answers 422")
 	fs.IntVar(&o.metrics.App.MaxPods, "metrics-app-max-pods", 500, "most pods of one application in the lookup window; more answer 422")
 	fs.IntVar(&o.metrics.App.MaxPVCs, "metrics-app-max-pvcs", 500, "most PVCs of one application in the lookup window; more answer 422")
+	fs.StringVar(&o.metrics.PlatformNamespacePrefix, "metrics-platform-namespace-prefix", "cozy-", "namespaces with this prefix run platform exporters, whose exported_namespace label adds series to that namespace's scope; empty disables")
 	fs.IntVar(&o.limiter.MaxConcurrentPerUser, "max-concurrent-per-user", 10, "concurrent non-tail requests per user; 0 disables")
 	fs.Float64Var(&o.limiter.RatePerUser, "rate-limit-per-user", 10, "sustained client requests per second per user; an application metrics request makes three store calls (pod lookup, PVC lookup, query); 0 disables")
 	fs.IntVar(&o.limiter.RateBurst, "rate-limit-burst", 20, "request burst per user")
@@ -120,6 +121,11 @@ func parseFlags(args []string) (options, error) {
 		if errs := validation.IsDNS1123Label("vmselect-" + store); store == "" || len(errs) > 0 {
 			return o, fmt.Errorf("invalid metrics store name %q", store)
 		}
+	}
+	// The prefix is matched literally, so one no namespace name can start
+	// with would turn the exporter branch off without a word.
+	if p := o.metrics.PlatformNamespacePrefix; p != "" && len(validation.IsDNS1123Label(p+"x")) > 0 {
+		return o, fmt.Errorf("invalid metrics platform namespace prefix %q", p)
 	}
 	switch {
 	case o.rootTenant == "":
