@@ -1,0 +1,118 @@
+suite: Redis cache tuning (maxmemory, eviction, snapshots)
+
+# The operator applies customConfig with CONFIG SET and never resets a line
+# that disappears, so every directive here is rendered with an explicit value
+# even at its default: reverting a setting has to reach the running pods.
+
+release:
+  name: my-redis
+  namespace: tenant-test
+
+set:
+  _cluster:
+    cluster-domain: cluster.local
+  _namespace:
+    host: example.com
+
+templates:
+  - templates/redisfailover.yaml
+
+tests:
+  - it: "renders the Redis defaults explicitly"
+    documentSelector:
+      path: kind
+      value: RedisFailover
+    asserts:
+      - contains:
+          path: spec.redis.customConfig
+          content: save 3600 1 300 100 60 10000
+      - contains:
+          path: spec.redis.customConfig
+          content: maxmemory 0
+      - contains:
+          path: spec.redis.customConfig
+          content: maxmemory-policy noeviction
+      - notContains:
+          path: spec.redis.customConfig
+          content: appendonly no
+
+  - it: "disables snapshots while keeping the volume"
+    set:
+      snapshots: false
+    documentSelector:
+      path: kind
+      value: RedisFailover
+    asserts:
+      - contains:
+          path: spec.redis.customConfig
+          content: save ""
+      - notContains:
+          path: spec.redis.customConfig
+          content: save 3600 1 300 100 60 10000
+      - equal:
+          path: spec.redis.storage.persistentVolumeClaim.spec.resources.requests.storage
+          value: 1Gi
+
+  - it: "keeps snapshots off without a volume even when enabled"
+    set:
+      size: null
+      snapshots: true
+    documentSelector:
+      path: kind
+      value: RedisFailover
+    asserts:
+      - contains:
+          path: spec.redis.customConfig
+          content: save ""
+      - contains:
+          path: spec.redis.customConfig
+          content: appendonly no
+      - notExists:
+          path: spec.redis.storage
+
+  - it: "renders maxmemory in bytes with the chosen policy"
+    set:
+      resourcesPreset: t1.large
+      maxmemory: 1Gi
+      maxmemoryPolicy: allkeys-lru
+    documentSelector:
+      path: kind
+      value: RedisFailover
+    asserts:
+      - contains:
+          path: spec.redis.customConfig
+          content: maxmemory 1073741824
+      - contains:
+          path: spec.redis.customConfig
+          content: maxmemory-policy allkeys-lru
+
+  - it: "sizes the maxmemory ceiling from explicit resources"
+    set:
+      resources:
+        memory: 1Gi
+      maxmemory: 900Mi
+    documentSelector:
+      path: kind
+      value: RedisFailover
+    asserts:
+      - contains:
+          path: spec.redis.customConfig
+          content: maxmemory 943718400
+
+  # The operator compares maxmemory with 90% of the pod's memory request and
+  # silently skips a larger line, which would leave Redis unbounded.
+  - it: "refuses maxmemory above 90% of the memory request"
+    set:
+      resources:
+        memory: 1Gi
+      maxmemory: 1000Mi
+    asserts:
+      - failedTemplate:
+          errorPattern: must be at most 90% of the Redis memory request
+
+  - it: "refuses a negative maxmemory"
+    set:
+      maxmemory: -1Mi
+    asserts:
+      - failedTemplate:
+          errorPattern: must not be negative
