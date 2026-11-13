@@ -101,10 +101,9 @@ kubernetesProvider:
       status: {phase: Succeeded}
 
 tests:
-  # Guaranteed NOT to be a clone, and the case an unresolved empty class waved
-  # through: the pool is on an explicit class, the golden is on the cluster
-  # default, and the two differ. CDI would fall back to the host-assisted copy
-  # over the pod network — silently, which is the transfer this feature removes.
+  # A cross-class clone, and the case an unresolved empty class waved through:
+  # the pool is on an explicit class, the golden is on the cluster default, and
+  # the two differ.
   - it: fails when the golden takes a cluster default class the pool does not use
     set:
       storageClass: local
@@ -145,7 +144,7 @@ tests:
 
   # Reading the spec alone would call this golden "on the cluster default", which
   # is `replicated` here, and clone it for a `replicated` pool. Its PVC is on
-  # `local`, so that clone would silently be a host-assisted copy.
+  # `local`, so that clone would cross classes.
   - it: takes a blank-spec golden's class from its PVC, not from today's default
     set:
       storageClass: replicated

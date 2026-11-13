@@ -119,6 +119,54 @@ kubernetesProvider:
           storageClassName: replicated
       status:
         phase: Failed
+    # Goldens whose importer has restarted. CDI leaves an unreachable URL in
+    # progress and restarts the importer instead of reaching Failed, so restarts
+    # plus an importer that is not running now is what marks one as failing.
+    - kind: DataVolume
+      apiVersion: cdi.kubevirt.io/v1beta1
+      metadata: {name: talos-worker-stuck-v1.0.0, namespace: cozy-public}
+      spec: &goldenSpec
+        storage:
+          resources: {requests: {storage: 6Gi}}
+          storageClassName: replicated
+      status:
+        phase: ImportInProgress
+        # A string: helm-unittest's lookup cannot deep-copy an int, and | int takes either.
+        restartCount: "3"
+        conditions:
+          - {type: Running, status: "False", reason: Error}
+    - kind: DataVolume
+      apiVersion: cdi.kubevirt.io/v1beta1
+      metadata: {name: talos-worker-recovered-v1.0.0, namespace: cozy-public}
+      spec: *goldenSpec
+      status:
+        phase: ImportInProgress
+        restartCount: "5"
+        conditions:
+          - {type: Running, status: "True", reason: Pod is running}
+    - kind: DataVolume
+      apiVersion: cdi.kubevirt.io/v1beta1
+      metadata: {name: talos-worker-flaky-v1.0.0, namespace: cozy-public}
+      spec: *goldenSpec
+      status:
+        phase: ImportInProgress
+        restartCount: "2"
+        conditions:
+          - {type: Running, status: "False", reason: Error}
+    - kind: DataVolume
+      apiVersion: cdi.kubevirt.io/v1beta1
+      metadata: {name: talos-worker-done-v1.0.0, namespace: cozy-public}
+      spec: *goldenSpec
+      status:
+        phase: Succeeded
+        restartCount: "4"
+        conditions:
+          - {type: Running, status: "False", reason: Completed}
+    - kind: DataVolume
+      apiVersion: cdi.kubevirt.io/v1beta1
+      metadata: {name: talos-worker-norunning-v1.0.0, namespace: cozy-public}
+      spec: *goldenSpec
+      status: {phase: ImportInProgress, restartCount: "3"}
     # A populated golden that declares no storage request at all. The size guard
     # reads spec.storage.resources.requests.storage, so its presence gate is the
     # branch that decides between comparing and skipping; without a fixture the
@@ -271,8 +319,56 @@ tests:
       - failedTemplate:
           errorPattern: 'golden DataVolume "talos-worker-failed-v1\.0\.0" in cozy-public failed to import \(phase Failed\)'
 
-  # Cross-StorageClass clone: CDI would silently fall back to a host-assisted copy
-  # over the pod network, the exact transfer osImage.builtin exists to avoid.
+  - it: osImage.builtin fails the render when the golden importer keeps failing
+    set:
+      osImage:
+        builtin: {schematicID: stuck, version: v1.0.0}
+    asserts:
+      - failedTemplate:
+          errorPattern: 'golden DataVolume "talos-worker-stuck-v1\.0\.0" in cozy-public keeps failing to import \(3 importer restarts\).*lifts by itself.*a recreated importer pod counts as not running until its container starts'
+
+  - it: osImage.builtin clones a golden whose importer restarted but is running again
+    set:
+      osImage:
+        builtin: {schematicID: recovered, version: v1.0.0}
+    asserts:
+      - equal:
+          path: spec.template.spec.virtualMachineTemplate.spec.dataVolumeTemplates[0].spec.source.pvc.name
+          value: talos-worker-recovered-v1.0.0
+        documentSelector: {path: kind, value: KubevirtMachineTemplate}
+
+  - it: osImage.builtin clones a golden whose importer failed fewer than three times
+    set:
+      osImage:
+        builtin: {schematicID: flaky, version: v1.0.0}
+    asserts:
+      - equal:
+          path: spec.template.spec.virtualMachineTemplate.spec.dataVolumeTemplates[0].spec.source.pvc.name
+          value: talos-worker-flaky-v1.0.0
+        documentSelector: {path: kind, value: KubevirtMachineTemplate}
+
+  - it: osImage.builtin clones a golden that Succeeded after its importer restarted
+    set:
+      osImage:
+        builtin: {schematicID: done, version: v1.0.0}
+    asserts:
+      - equal:
+          path: spec.template.spec.virtualMachineTemplate.spec.dataVolumeTemplates[0].spec.source.pvc.name
+          value: talos-worker-done-v1.0.0
+        documentSelector: {path: kind, value: KubevirtMachineTemplate}
+
+  - it: osImage.builtin clones a golden whose importer restarted and reports no Running condition
+    set:
+      osImage:
+        builtin: {schematicID: norunning, version: v1.0.0}
+    asserts:
+      - equal:
+          path: spec.template.spec.virtualMachineTemplate.spec.dataVolumeTemplates[0].spec.source.pvc.name
+          value: talos-worker-norunning-v1.0.0
+        documentSelector: {path: kind, value: KubevirtMachineTemplate}
+
+  # Cross-StorageClass clone: a host-assisted copy over the pod network, or a
+  # clone left to the CSI driver to support, so the pool is refused.
   - it: osImage.builtin fails when the pool storageClass differs from the golden's
     set:
       storageClass: local

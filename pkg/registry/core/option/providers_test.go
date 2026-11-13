@@ -344,6 +344,41 @@ func TestImageProviderSkipsGoldensWhoseImportFailed(t *testing.T) {
 	}
 }
 
+func TestImageProviderSkipsGoldensWhoseImporterKeepsFailing(t *testing.T) {
+	pvcGVK := gvrPVCs.GroupVersion().WithKind("PersistentVolumeClaim")
+	dvGVK := gvrDataVolumes.GroupVersion().WithKind("DataVolume")
+	dv := func(name, phase string, restarts int64, running string) *unstructured.Unstructured {
+		o := newObj(dvGVK, publicImagesNamespace, name, nil)
+		_ = unstructured.SetNestedField(o.Object, phase, "status", "phase")
+		_ = unstructured.SetNestedField(o.Object, restarts, "status", "restartCount")
+		if running != "" {
+			_ = unstructured.SetNestedSlice(o.Object, []any{
+				map[string]any{"type": "Bound", "status": "True"},
+				map[string]any{"type": "Running", "status": running},
+			}, "status", "conditions")
+		}
+		return o
+	}
+	golden := func(name string) *unstructured.Unstructured {
+		return newObj(pvcGVK, publicImagesNamespace, "vm-default-images-"+name, nil)
+	}
+	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), listKinds(),
+		golden("stuck"), golden("recovered"), golden("flaky"), golden("done"), golden("norunning"),
+		dv("vm-default-images-stuck", "ImportInProgress", 3, "False"),
+		dv("vm-default-images-recovered", "ImportInProgress", 5, "True"),
+		dv("vm-default-images-flaky", "ImportInProgress", 2, "False"),
+		dv("vm-default-images-done", "Succeeded", 4, "False"),
+		dv("vm-default-images-norunning", "ImportInProgress", 3, ""),
+	)
+	items, err := DefaultProviders(dyn)["image"](context.Background(), "")
+	if err != nil {
+		t.Fatalf("image provider: %v", err)
+	}
+	if got := values(items); len(got) != 4 || got[0] != "done" || got[1] != "flaky" || got[2] != "norunning" || got[3] != "recovered" {
+		t.Fatalf("image: got %v, want [done flaky norunning recovered] (stuck golden dropped)", got)
+	}
+}
+
 func TestImageProviderListsGoldensWhenDataVolumesCannotBeRead(t *testing.T) {
 	for name, listErr := range map[string]error{
 		"no CDI":    apierrors.NewNotFound(gvrDataVolumes.GroupResource(), ""),
