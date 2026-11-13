@@ -54,6 +54,8 @@ apiVersion: strategy.backups.cozystack.io/v1alpha1
 kind: MongoDB
 metadata:
   name: cozy-default-mongodb
+  annotations:
+    backups.cozystack.io/endpoint: {{ include "backupstrategy-controller.endpoint" . | quote }}
 spec:
   template:
     storageName: s3-storage
@@ -74,6 +76,6 @@ spec:
       prefix: {{ printf "{{ .Application.metadata.namespace }}/{{ .Application.metadata.name }}" | quote }}
       region: {{ .Values.backupStorage.region | quote }}
       credentialsSecret: cozy-backups-creds
-      forcePathStyle: {{ .Values.backupStorage.forcePathStyle }}
+      forcePathStyle: {{ include "backupstrategy-controller.forcePathStyle" . }}
       insecureSkipTLSVerify: {{ .Values.backupStorage.insecureSkipTLSVerify }}
 {{- end -}}

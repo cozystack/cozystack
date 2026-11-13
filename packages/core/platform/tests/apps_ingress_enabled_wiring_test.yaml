@@ -1,0 +1,35 @@
+suite: apps.yaml ingress.rootEnabled → _cluster wiring
+templates:
+  - templates/apps.yaml
+
+release:
+  name: cozy-platform
+  namespace: cozy-system
+
+# ingress.rootEnabled records whether the root tenant runs its own
+# ingress-nginx (Tenant/root spec.ingress). It reaches cozystack-basics through
+# _cluster.ingress-enabled in the cozystack-values Secret, where it decides
+# whether tenant-root's _namespace.ingress names tenant-root or stays empty.
+
+tests:
+  - it: writes ingress-enabled true by default
+    asserts:
+      - matchRegex:
+          path: stringData["values.yaml"]
+          pattern: '(?m)^\s*ingress-enabled:\s*"true"'
+
+  - it: writes ingress-enabled false when ingress.rootEnabled is disabled
+    set:
+      ingress.rootEnabled: false
+    asserts:
+      - matchRegex:
+          path: stringData["values.yaml"]
+          pattern: '(?m)^\s*ingress-enabled:\s*"false"'
+
+  - it: falls back to true (no panic) when ingress is null
+    set:
+      ingress: null
+    asserts:
+      - matchRegex:
+          path: stringData["values.yaml"]
+          pattern: '(?m)^\s*ingress-enabled:\s*"true"'

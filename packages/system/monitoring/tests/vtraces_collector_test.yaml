@@ -473,11 +473,18 @@ tests:
           path: spec.template.spec.containers[0].securityContext.capabilities.drop
           content: ALL
 
+  # The image name is not asserted: a release build swaps the upstream
+  # collector for the first-party otelcol-tracing one and restamps the tag.
+  # What must hold is that the value goes through cozy-lib.image (the cluster
+  # images-registry lands in front of it) and stays digest-pinned.
   - it: pins the collector image through the cozy-lib.image helper
+    set:
+      _cluster:
+        images-registry: mirror.example.com
     documentSelector:
       path: kind
       value: Deployment
     asserts:
       - matchRegex:
           path: spec.template.spec.containers[0].image
-          pattern: "opentelemetry-collector-contrib:.*@sha256:"
+          pattern: '^mirror\.example\.com/.+@sha256:[0-9a-f]{64}$'

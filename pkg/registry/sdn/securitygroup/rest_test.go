@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"reflect"
 	"sort"
 	"strings"
@@ -1195,16 +1196,53 @@ func TestCreateAcceptsEmptyAttachments(t *testing.T) {
 	}
 }
 
+// specWire returns the backing policy's spec as Cilium decodes it: the CRD and
+// the agent read the wire form, not the Go struct.
+func specWire(t *testing.T, np *CiliumNetworkPolicy) map[string]any {
+	t.Helper()
+	raw, err := json.Marshal(np)
+	if err != nil {
+		t.Fatalf("marshal backing policy: %v", err)
+	}
+	var decoded struct {
+		Spec map[string]any `json:"spec"`
+	}
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		t.Fatalf("unmarshal backing policy: %v", err)
+	}
+	return decoded.Spec
+}
+
+// ciliumAcceptsRuleSections mirrors the first check of Cilium's
+// api.Rule.Sanitize, which marks a policy Valid=False when none of its rule
+// sections has an entry. The CRD anyOf only needs one of the keys to be
+// present, so it admits an empty list that the agent then rejects.
+func ciliumAcceptsRuleSections(spec map[string]any) bool {
+	for _, k := range []string{"ingress", "ingressDeny", "egress", "egressDeny"} {
+		if l, _ := spec[k].([]any); len(l) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+func getBackingPolicy(t *testing.T, r *REST, name string) *CiliumNetworkPolicy {
+	t.Helper()
+	np := &CiliumNetworkPolicy{}
+	if err := r.c.Get(context.Background(), types.NamespacedName{Namespace: testNamespace, Name: name}, np); err != nil {
+		t.Fatalf("backing policy not found: %v", err)
+	}
+	return np
+}
+
 func TestRulesLessSecurityGroupProjectsValidPolicy(t *testing.T) {
 	r := newTestREST(t)
 	// A membership-only SecurityGroup attaches to an application to stamp the
-	// membership label but carries no ingress or egress rules. The backing
-	// CiliumNetworkPolicy CRD still requires at least one rule section to be
-	// present (spec anyOf: ingress|ingressDeny|egress|egressDeny), so a
-	// selector-only spec is rejected synchronously by the cilium.io/v2 API. The
-	// projection must emit an explicit empty ingress list — the CRD's documented
-	// no-op ("if omitted or empty, this rule does not apply at ingress") — so the
-	// policy is schema-valid yet leaves the member pods' connectivity untouched.
+	// membership label but carries no ingress or egress rules. Its backing
+	// policy must be one Cilium accepts and that changes nothing in the
+	// datapath: a rule section with an entry that allows nothing, and default
+	// deny disabled in both directions so that entry does not isolate the
+	// member pods.
 	createSG(t, r, &sdnv1alpha1.SecurityGroup{
 		ObjectMeta: metav1.ObjectMeta{Name: "sg-membership", Namespace: testNamespace},
 		Spec: sdnv1alpha1.SecurityGroupSpec{
@@ -1212,50 +1250,22 @@ func TestRulesLessSecurityGroupProjectsValidPolicy(t *testing.T) {
 		},
 	})
 
-	np := &CiliumNetworkPolicy{}
-	if err := r.c.Get(context.Background(), types.NamespacedName{Namespace: testNamespace, Name: "sg-membership"}, np); err != nil {
-		t.Fatalf("backing policy not found: %v", err)
+	spec := specWire(t, getBackingPolicy(t, r, "sg-membership"))
+	if !ciliumAcceptsRuleSections(spec) {
+		t.Fatalf("rules-less policy has no rule entry, Cilium marks it Valid=False: %v", spec)
+	}
+	if got, want := fmt.Sprint(spec["ingress"]), "[map[]]"; got != want {
+		t.Fatalf("rules-less policy ingress = %s, want %s (one rule that allows nothing)", got, want)
+	}
+	if _, ok := spec["egress"]; ok {
+		t.Fatalf("rules-less policy must not carry an egress key: %v", spec)
+	}
+	if got, want := fmt.Sprint(spec["enableDefaultDeny"]), "map[egress:false ingress:false]"; got != want {
+		t.Fatalf("rules-less policy enableDefaultDeny = %s, want %s", got, want)
 	}
 
-	// The CRD validates the wire form, not the Go struct, so assert on the
-	// marshaled bytes: spec.ingress must be present (an empty list satisfies the
-	// anyOf), and spec.egress must be absent (ingress is the guaranteed-present
-	// carrier; egress is emitted only when there are egress rules).
-	raw, err := json.Marshal(np)
-	if err != nil {
-		t.Fatalf("marshal backing policy: %v", err)
-	}
-	var decoded struct {
-		Spec map[string]json.RawMessage `json:"spec"`
-	}
-	if err := json.Unmarshal(raw, &decoded); err != nil {
-		t.Fatalf("unmarshal backing policy: %v", err)
-	}
-	ing, ok := decoded.Spec["ingress"]
-	if !ok {
-		t.Fatalf("backing policy spec has no ingress key; the CRD anyOf would reject it: %s", raw)
-	}
-	if string(ing) != "[]" {
-		t.Fatalf("rules-less policy ingress = %s, want []", ing)
-	}
-	if _, ok := decoded.Spec["egress"]; ok {
-		t.Fatalf("rules-less policy must not carry an egress key: %s", raw)
-	}
-
-	// The same key must survive the unstructured conversion path (which honors
-	// omitempty independently of json.Marshal), so the empty list cannot be
-	// silently dropped there either.
-	u, err := runtime.DefaultUnstructuredConverter.ToUnstructured(np)
-	if err != nil {
-		t.Fatalf("to unstructured: %v", err)
-	}
-	spec, _ := u["spec"].(map[string]any)
-	if _, ok := spec["ingress"]; !ok {
-		t.Fatalf("unstructured backing policy spec has no ingress key: %v", spec)
-	}
-
-	// On read, the synthetic empty ingress list collapses back to no rules, so a
-	// rules-less SecurityGroup round-trips with neither ingress nor egress.
+	// On read, the placeholder rule is hidden, so a rules-less SecurityGroup
+	// round-trips with neither ingress nor egress.
 	out, err := r.Get(ctxNS(), "sg-membership", &metav1.GetOptions{})
 	if err != nil {
 		t.Fatalf("Get returned error: %v", err)
@@ -1263,6 +1273,43 @@ func TestRulesLessSecurityGroupProjectsValidPolicy(t *testing.T) {
 	got := out.(*sdnv1alpha1.SecurityGroup)
 	if got.Spec.Ingress != nil || got.Spec.Egress != nil {
 		t.Fatalf("rules-less round-trip should carry no ingress/egress, got: %+v", got.Spec)
+	}
+
+	// Adding a rule must drop the default-deny override, or the group's
+	// rules would allow traffic without isolating the member pods.
+	got.Spec.Egress = []sdnv1alpha1.EgressRule{{ToCIDR: []string{"10.0.0.0/8"}}}
+	if _, _, err := r.Update(ctxNS(), "sg-membership", rest.DefaultUpdatedObjectInfo(got), nil, nil, false, &metav1.UpdateOptions{}); err != nil {
+		t.Fatalf("Update returned error: %v", err)
+	}
+	spec = specWire(t, getBackingPolicy(t, r, "sg-membership"))
+	if _, ok := spec["enableDefaultDeny"]; ok {
+		t.Fatalf("policy with rules must not override default deny: %v", spec)
+	}
+	if _, ok := spec["ingress"]; ok {
+		t.Fatalf("egress-only policy must not carry an ingress key: %v", spec)
+	}
+}
+
+func TestEmptyIngressRuleIsNotMembershipOnly(t *testing.T) {
+	r := newTestREST(t)
+	// An explicit empty ingress rule projects to the same rule as the
+	// membership-only placeholder, but it is tenant-authored: it keeps Cilium's
+	// ingress default deny and must stay visible on read.
+	createSG(t, r, &sdnv1alpha1.SecurityGroup{
+		ObjectMeta: metav1.ObjectMeta{Name: "sg-deny-in", Namespace: testNamespace},
+		Spec:       sdnv1alpha1.SecurityGroupSpec{Ingress: []sdnv1alpha1.IngressRule{{}}},
+	})
+
+	spec := specWire(t, getBackingPolicy(t, r, "sg-deny-in"))
+	if _, ok := spec["enableDefaultDeny"]; ok {
+		t.Fatalf("an empty ingress rule must keep default deny: %v", spec)
+	}
+	out, err := r.Get(ctxNS(), "sg-deny-in", &metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("Get returned error: %v", err)
+	}
+	if got := out.(*sdnv1alpha1.SecurityGroup).Spec.Ingress; len(got) != 1 {
+		t.Fatalf("empty ingress rule should round-trip as one rule, got: %+v", got)
 	}
 }
 
