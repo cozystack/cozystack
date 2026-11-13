@@ -128,21 +128,29 @@ spec:
       {{- end }}
       {{- $maxmemory := 0 }}
       {{- if not (kindIs "invalid" .Values.maxmemory) }}
-      {{-   $maxmemory = include "cozy-lib.resources.toFloat" (.Values.maxmemory | toString) | float64 | int64 }}
+      {{-   $maxmemoryBytes := include "cozy-lib.resources.toFloat" (.Values.maxmemory | toString) | float64 }}
+      {{- /* Checked before the int64 cast, which would truncate a sub-byte quantity such
+             as 512m (0.512 bytes) or -512m to 0, and Redis reads 0 as no limit. */}}
+      {{-   if lt $maxmemoryBytes 0.0 }}
+      {{-     fail (printf "maxmemory (%v) must not be negative" .Values.maxmemory) }}
+      {{-   end }}
+      {{-   if ne (floor $maxmemoryBytes) $maxmemoryBytes }}
+      {{-     fail (printf "maxmemory (%v) must be a whole number of bytes, e.g. 512Mi rather than 512m (millibytes)" .Values.maxmemory) }}
+      {{-   end }}
+      {{-   $maxmemory = $maxmemoryBytes | int64 }}
       {{-   $redisResources := include "cozy-lib.resources.defaultingSanitize" (list .Values.resourcesPreset .Values.resources $) | fromYaml }}
       {{-   $memoryRequest := include "cozy-lib.resources.toFloat" (dig "requests" "memory" "0" $redisResources | toString) | float64 }}
       {{- /* The operator compares maxmemory with 90% of the pod's memory request
              (reservedPodMemoryPercent) and silently skips the line when it is larger. */}}
       {{-   $allowed := mulf $memoryRequest 0.9 | int64 }}
-      {{-   if lt $maxmemory 0 }}
-      {{-     fail (printf "maxmemory (%v) must not be negative" .Values.maxmemory) }}
-      {{-   end }}
       {{-   if gt $maxmemory $allowed }}
       {{-     fail (printf "maxmemory (%v, %d bytes) must be at most 90%% of the Redis memory request (%d bytes): the operator ignores a larger value" .Values.maxmemory $maxmemory $allowed) }}
       {{-   end }}
       {{- end }}
-      - maxmemory {{ $maxmemory }}
+      {{- /* The operator sends these in list order, and lowering maxmemory below the
+             dataset evicts at once, so the policy has to be in place first. */}}
       - maxmemory-policy {{ .Values.maxmemoryPolicy | default "noeviction" }}
+      - maxmemory {{ $maxmemory }}
       {{- /* A master with `replicas` pods has replicas-1 replicas, so a requirement of
              `replicas` or more can never be met and the master would refuse every write. */}}
       {{- if and (not (kindIs "invalid" .Values.minReplicasToWrite)) (ge (.Values.minReplicasToWrite | int) (.Values.replicas | int)) }}

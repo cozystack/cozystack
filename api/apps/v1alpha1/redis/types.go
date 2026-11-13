@@ -56,7 +56,7 @@ type ConfigSpec struct {
 	// Redis `maxmemory-policy`: what Redis does once `maxmemory` is reached. `noeviction` refuses writes; `allkeys-lru` evicts the least recently used keys, which suits an instance used purely as a cache. Has no effect while `maxmemory` is unset.
 	// +kubebuilder:default:="noeviction"
 	MaxmemoryPolicy MaxmemoryPolicy `json:"maxmemoryPolicy"`
-	// Write RDB snapshots to the persistent volume (the Redis `save` directive, with the Redis default schedule). Set to `false` for an instance used purely as a cache: `save ""` is rendered and the volume is kept, so the data is lost on restart but replicas still have room for the full-sync RDB they write to disk. Always off when `size` is empty.
+	// Write RDB snapshots to the persistent volume (the Redis `save` directive, with the Redis default schedule). Set to `false` for an instance used purely as a cache: `save ""` is rendered and the volume is kept, so no further scheduled snapshot is written while replicas still have room for the full-sync RDB they write to disk. An RDB file already on the volume is not removed, and Redis loads it on restart, so turning snapshots off does not by itself empty the dataset. Always off when `size` is empty.
 	// +kubebuilder:default:=true
 	Snapshots bool `json:"snapshots"`
 	// Sentinel configuration. When `sentinel.resources` is empty and `sentinel.resourcesPreset` is unset, the Sentinel pods are sized like the Redis pods (`resources` and `resourcesPreset`). An empty `sentinel.resources` map counts as unset, as an empty top-level `resources` does.

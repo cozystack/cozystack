@@ -116,3 +116,35 @@ tests:
     asserts:
       - failedTemplate:
           errorPattern: must not be negative
+
+  # A sub-byte quantity would truncate to maxmemory 0, which Redis reads as no
+  # limit, so the bound the tenant asked for would silently disappear.
+  - it: "refuses a maxmemory that is not a whole number of bytes"
+    set:
+      maxmemory: 512m
+    asserts:
+      - failedTemplate:
+          errorPattern: must be a whole number of bytes
+
+  - it: "refuses a negative sub-byte maxmemory"
+    set:
+      maxmemory: -512m
+    asserts:
+      - failedTemplate:
+          errorPattern: must not be negative
+
+  - it: "applies the eviction policy before the memory bound"
+    set:
+      resourcesPreset: t1.large
+      maxmemory: 1Gi
+      maxmemoryPolicy: allkeys-lru
+    documentSelector:
+      path: kind
+      value: RedisFailover
+    asserts:
+      - equal:
+          path: spec.redis.customConfig[3]
+          value: maxmemory-policy allkeys-lru
+      - equal:
+          path: spec.redis.customConfig[4]
+          value: maxmemory 1073741824
