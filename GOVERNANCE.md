@@ -114,6 +114,18 @@ After several months of working together, maintainers will decide whether to gra
 
 ## Project Decision-making Process
 
-Ideally, all project decisions are resolved by consensus of the maintainers.
-If this is not possible, a vote will be called.
-The voting process is a simple majority in which each maintainer receives one vote.
+We decide things by consensus. Maintainers talk it through, in a pull request, an issue, a community meeting or one-on-one, until everyone can live with the outcome. Most decisions never need more than that.
+
+A vote is the last resort, for when the maintainers have tried and cannot agree. Any maintainer can call one by opening an issue in the [community](https://github.com/cozystack/community) repository with the question. Maintainers vote in comments on that issue. Voting stays open for seven days or until every maintainer has voted, and each maintainer has one vote. A vote counts only if more than half of the maintainers take part.
+
+A proposal passes with a simple majority of the votes cast, and that majority must include maintainers from at least two organisations. A maintainer's organisation is the one listed for them in [MAINTAINERS.md](./MAINTAINERS.md); maintainers without an affiliation count as their own organisation. Maintainers keep that entry current, and a change of employer counts from the moment it is recorded.
+
+## Vendor Neutrality
+
+Cozystack does not belong to any company. No vendor directs its roadmap, governance, brand or releases, as the Vendor Neutrality Manifesto in the [Code of Conduct](./CODE_OF_CONDUCT.md) says. Companies that sell support or services around Cozystack take part on the same terms as everyone else.
+
+Concretely:
+
+* No organisation can win a vote on its own, as described above.
+* The project's website, channels and accounts belong to the project and do not promote one vendor over another. Any provider that offers Cozystack support can ask to be listed, and will be.
+* We want maintainers and reviewers from more organisations, and [MAINTAINERS.md](./MAINTAINERS.md) shows who works where, so anyone can see the balance.
