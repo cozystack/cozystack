@@ -1,0 +1,19 @@
+suite: the BMC namespace holds nothing of the platform
+templates:
+  - templates/bmc-namespace.yaml
+tests:
+  # The fence-agents operator's credential grants and caches are scoped to this
+  # one namespace, so nothing else of the platform may be routed into it; the
+  # system label is what would do that.
+  - it: creates cozy-node-remediation-bmc without the system label
+    asserts:
+      - equal:
+          path: kind
+          value: Namespace
+      - equal:
+          path: metadata.name
+          value: cozy-node-remediation-bmc
+      - notExists:
+          path: metadata.labels["cozystack.io/system"]
+      - notExists:
+          path: metadata.annotations["helm.sh/resource-policy"]
