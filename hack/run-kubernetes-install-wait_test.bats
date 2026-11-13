@@ -1464,9 +1464,10 @@ _kind_creators() {
   # What a creator can be written in, decided here rather than left to whatever
   # the root happens to contain. The rule is pre-emptive: a manifest quoted in
   # prose creates nothing, and a grep over every file reds on an edit to it.
-  # The shape exists in this repository -- docs/oidc-tenant.md carries the kind
-  # in a fenced example -- outside this root rather than in it, which is why
-  # the root is a choice about place and this is a choice about form. A parked
+  # The shape exists in this repository -- hack/testdata/install-wait/
+  # creators-filetypes/example.md carries the kind in a fenced example --
+  # outside this root rather than in it, which is why the root is a choice
+  # about place and this is a choice about form. A parked
   # `.disabled` suite creates nothing either; re-enabling one restores the
   # `.yaml` name the sweep reads, so that exclusion cannot outlive the parking.
   #
@@ -1561,8 +1562,8 @@ EOF
   #
   # The sweep is hack/e2e-chainsaw only, not the repository. Widening it would
   # need an exclusion for hack/testdata/, whose fixtures carry the kind on
-  # purpose, and for docs/, where docs/oidc-tenant.md carries it inside a
-  # fenced example; neither creates a cluster. What the narrow root leaves
+  # purpose, and for any markdown that quotes the manifest in a fenced
+  # example; neither creates a cluster. What the narrow root leaves
   # outside is not only those: `hack/e2e-apps/` is a live lane of its own, and a
   # creator appearing there would pass this case in silence -- nothing there
   # creates this kind today, so it is a risk the root carries rather than a

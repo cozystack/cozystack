@@ -3,8 +3,8 @@
    1. Helm renders this file at chart install time. Anything inside
       `{{ ... }}` is interpreted by Helm.
    2. The strategy controller renders the resulting Strategy CR
-      per-BackupJob, expanding `{{ .Application | .Release | .Mode }}`
-      against the live application object.
+      per-BackupJob, expanding `{{ .Application | .Release | .Mode |
+      .ArchiveName | .Backup }}` against the live application object.
   To emit a literal "{{ .Foo }}" that survives Helm, we pass it as the
   string argument of `printf` — Helm does not interpret inner template
   delimiters inside printf's quoted strings. Do NOT simplify by inlining
@@ -18,6 +18,8 @@ apiVersion: strategy.backups.cozystack.io/v1alpha1
 kind: Altinity
 metadata:
   name: cozy-default-altinity
+  annotations:
+    backups.cozystack.io/endpoint: {{ include "backupstrategy-controller.endpoint" . | quote }}
 spec:
   template:
     spec:
@@ -51,37 +53,133 @@ spec:
               host="chi-clickhouse-{{ printf "{{ .Release.Name }}" }}-clickhouse-0-0.{{ printf "{{ .Release.Namespace }}" }}.svc"
               api="http://${host}:7171"
               auth="-u ${API_USERNAME}:${API_PASSWORD}"
-              for _ in $(seq 1 60); do
-                if curl -fsS ${auth} --max-time 2 "${api}/backup/status" >/dev/null 2>&1; then break; fi
-                sleep 5
-              done
+              # The archive the controller named for this BackupJob and records
+              # on its Backup. The default renders it empty, rather than as
+              # text/template's missing-key marker, when a controller that
+              # predates archive names renders this template during an upgrade.
+              archive="{{ printf `{{ .ArchiveName | default "" }}` }}"
+              # Every request but the POST is retried on failure, every 5s,
+              # for $2 attempts in all: once the operation is accepted, a
+              # dropped poll must not fail the attempt, since the Job retry it
+              # causes cannot tell a lost poll from a lost operation.
+              api_get() {
+                n=0
+                while true; do
+                  if out=$(curl -fsS ${auth} --max-time 10 "${api}$1"); then
+                    printf '%s\n' "${out}"
+                    return 0
+                  fi
+                  n=$((n + 1))
+                  if [ "${n}" -ge "$2" ]; then
+                    echo "GET ${api}$1 failed ${n} times in a row" >&2
+                    return 1
+                  fi
+                  sleep 5
+                done
+              }
+              # The sidecar answers 423 to a new operation while any other is
+              # in progress, so starting before it is idle burns the attempt.
+              # The exception is the operation $1 itself already running, as
+              # left by an earlier attempt of this Job that died: it is taken
+              # over rather than started twice.
+              wait_turn() {
+                for _ in $(seq 1 60); do
+                  if actions=$(curl -fsS ${auth} --max-time 10 "${api}/backup/actions"); then
+                    turn=$(printf '%s\n' "${actions}" | jq -rs --arg cmd "$1" '
+                      if any(.[]; .status == "in progress" and .command == $cmd) then "join"
+                      elif any(.[]; .status == "in progress") then "busy"
+                      else "idle" end') || turn=
+                    case "${turn}" in join|idle) return 0 ;; esac
+                  fi
+                  sleep 5
+                done
+                echo "clickhouse-backup sidecar at ${api} did not become idle" >&2
+                exit 1
+              }
               if [ "{{ printf "{{ .Mode }}" }}" = "backup" ]; then
                 prefix="clickhouse-{{ printf "{{ .Release.Name }}" }}-"
-                target="${prefix}$(date -u +%Y%m%dT%H%M%SZ)"
-                echo "create_remote ${target}"
-                curl -fsS ${auth} -X POST "${api}/backup/create_remote?name=${target}" >/dev/null
-              else
-                prefix="clickhouse-{{ printf "{{ .Backup.ApplicationRef.Name }}" }}-"
-                target=$(curl -fsS ${auth} "${api}/backup/list/remote" \
-                  | jq -rs --arg prefix "${prefix}" \
-                      '[.[] | select((.name // "") | startswith($prefix))] | sort_by(.created // "") | last.name // ""')
-                if [ -z "${target}" ] || [ "${target}" = "null" ]; then
-                  echo "no remote backup found" >&2
-                  exit 1
+                # Only a controller that predates archive names leaves it
+                # empty, and that one records no name on the Backup either.
+                target="${archive:-${prefix}$(date -u +%Y%m%dT%H%M%SZ)}"
+                # A retried Pod gets the same name, so it takes over an attempt
+                # the sidecar is still running, and otherwise asks for resume,
+                # so a local or partial remote backup an earlier attempt left is
+                # resumed rather than refused as existing, whatever
+                # use_resumable_state the sidecar runs with. The sidecar logs
+                # the request as "create_remote --resume <name>". The name is
+                # this BackupJob's alone, so an upload of it that last ended in
+                # success is an earlier attempt's finished result: resuming
+                # over it would upload the archive again and leave it broken if
+                # that upload died halfway.
+                cmd="create_remote --resume ${target}"
+                wait_turn "${cmd}"
+                if [ "${turn}" = "join" ]; then
+                  echo "${cmd} is already running; waiting for it"
+                elif printf '%s\n' "${actions}" | jq -es --arg cmd "${cmd}" \
+                    '[.[] | select(.command == $cmd)] | sort_by(.start) | last | .status == "success"' >/dev/null; then
+                  echo "${cmd} already succeeded in an earlier attempt"
+                else
+                  echo "${cmd}"
+                  curl -fsS ${auth} -X POST "${api}/backup/create_remote?name=${target}&resume=true" >/dev/null
                 fi
-                echo "restore_remote ${target}"
-                curl -fsS ${auth} -X POST "${api}/backup/restore_remote/${target}" >/dev/null
+              else
+                app="{{ printf "{{ .Backup.ApplicationRef.Name }}" }}"
+                backup="{{ printf "{{ .Backup.Name }}" }}"
+                prefix="clickhouse-${app}-"
+                remote=$(api_get /backup/list/remote 60)
+                if [ -n "${archive}" ]; then
+                  if ! printf '%s\n' "${remote}" | jq -es --arg name "${archive}" 'any(.[]; .name == $name)' >/dev/null; then
+                    echo "archive ${archive} recorded on Backup ${backup} is not in remote storage; not restoring any other archive" >&2
+                    exit 1
+                  fi
+                  target="${archive}"
+                else
+                  # takenAt is set after the backup Job finished, so the
+                  # archive that Job wrote is stamped no later than it.
+                  notafter="{{ printf `{{ .Backup.TakenAt | default "" }}` }}"
+                  echo "WARNING: Backup ${backup} records no archive name; restoring the newest archive of ${app} stamped no later than its takenAt (${notafter}), a best-effort choice that may not be the archive this Backup was taken as" >&2
+                  target=$(printf '%s\n' "${remote}" | jq -rs --arg prefix "${prefix}" --arg notafter "${notafter}" '
+                    [.[] | select((.desc // "") | startswith("broken") | not) | .name // ""
+                      | select(startswith($prefix) and (ltrimstr($prefix) | test("^[0-9]{8}T[0-9]{6}Z$")) and ltrimstr($prefix) <= $notafter)]
+                    | sort | last // ""')
+                  if [ -z "${target}" ]; then
+                    echo "no archive of ${app} stamped no later than ${notafter} in remote storage" >&2
+                    exit 1
+                  fi
+                fi
+                # restore_remote drops every table it restores before
+                # recreating it, so a second run discards whatever was written
+                # after the first one finished. Only a running one is taken
+                # over: the action log is never trimmed, and a finished row of
+                # this archive may be left by an earlier RestoreJob.
+                cmd="restore_remote ${target}"
+                wait_turn "${cmd}"
+                if [ "${turn}" = "join" ]; then
+                  echo "${cmd} is already running; waiting for it"
+                else
+                  echo "${cmd}"
+                  curl -fsS ${auth} -X POST "${api}/backup/restore_remote/${target}" >/dev/null
+                fi
               fi
               while true; do
-                row=$(curl -fsS ${auth} "${api}/backup/actions" \
-                  | jq -rs --arg suffix "${target}" \
-                      '[.[] | select((.command // "") | endswith($suffix))] | sort_by(.start) | last')
+                actions=$(api_get /backup/actions 6)
+                row=$(printf '%s\n' "${actions}" \
+                  | jq -rs --arg cmd "${cmd}" \
+                      '[.[] | select(.command == $cmd)] | sort_by(.start) | last')
+                # The sidecar logs the operation before acknowledging the POST
+                # and keeps that log only in memory, so a missing row means it
+                # restarted and the operation is gone; nothing will resume it.
+                if [ "${row}" = "null" ]; then
+                  echo "operation ${target} is no longer in the sidecar action log; the sidecar restarted and dropped it" >&2
+                  exit 1
+                fi
                 status=$(echo "${row}" | jq -r '.status // ""')
                 case "${status}" in
                   success) echo "operation succeeded" ; exit 0 ;;
-                  error)
+                  "in progress") ;;
+                  *)
                     err=$(echo "${row}" | jq -r '.error // "unknown"')
-                    echo "operation failed: ${err}" >&2
+                    echo "operation ended with status ${status}: ${err}" >&2
                     exit 1
                     ;;
                 esac

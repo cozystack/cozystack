@@ -1,0 +1,1 @@
+ghcr.io/sergelogvinov/proxmox-cloud-controller-manager:v0.16.1@sha256:474dbfd3be5c2e0866e520bc6ddb60b7accef554ca7401488eee35252cdf8734
