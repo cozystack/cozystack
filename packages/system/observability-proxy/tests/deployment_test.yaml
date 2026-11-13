@@ -40,6 +40,35 @@ tests:
           path: spec.template.spec.containers[0].args
           content: --auth-cache-ttl=10s
 
+  - it: passes the metrics store names and short-term retention
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --metrics-shortterm-store=shortterm
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --metrics-longterm-store=longterm
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --metrics-shortterm-retention=72h
+
+  - it: follows renamed metrics stores
+    set:
+      observabilityProxy.metrics:
+        shorttermStore: fast
+        longtermStore: slow
+        shorttermRetention: 24h
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --metrics-shortterm-store=fast
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --metrics-longterm-store=slow
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --metrics-shortterm-retention=24h
+
   - it: falls back to cozy.local when the platform passes no cluster domain
     asserts:
       - contains:

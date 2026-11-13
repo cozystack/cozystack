@@ -2,7 +2,7 @@ suite: observability-proxy RBAC
 # The proxy authenticates and authorizes every request through the API server,
 # so a dropped verb here turns every request into an error at runtime rather
 # than a render failure. The tenant role is what lets a namespace viewer pass
-# the SubjectAccessReview the proxy asks for the namespace logs root.
+# the SubjectAccessReview the proxy asks for the namespace logs and metrics roots.
 templates:
   - templates/rbac.yaml
   - templates/tenant-clusterroles.yaml
@@ -50,7 +50,7 @@ tests:
               name: observability-proxy
               namespace: cozy-observability-proxy
 
-  - it: aggregates list on cozystack.io logs into the tenant view role
+  - it: aggregates list on cozystack.io logs and metrics into the tenant view role
     template: templates/tenant-clusterroles.yaml
     asserts:
       - isKind:
@@ -63,5 +63,5 @@ tests:
           path: rules
           value:
             - apiGroups: ["cozystack.io"]
-              resources: ["logs"]
+              resources: ["logs", "metrics"]
               verbs: ["list"]

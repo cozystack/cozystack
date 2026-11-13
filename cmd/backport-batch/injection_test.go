@@ -142,11 +142,11 @@ func TestOptionInjection(t *testing.T) {
 // no bidi override reorders it and no zero-width character hides in it.
 func TestDeferredBlockCleansFileNames(t *testing.T) {
 	l, _ := parseLine("release-1.6")
-	files := []string{"app/‮txt.exe", "app/zero​width.yaml"}
+	files := []string{"app/\u202etxt.exe", "app/zero\u200bwidth.yaml"}
 	conflict := pick{v: &verdict{o: &original{number: 5}}, files: files, failed: strings.Repeat("a", 40)}
 	waiting := pick{v: &verdict{o: &original{number: 6}}, files: files}
 	block := deferredBlock(l, []pick{conflict}, nil, []pick{waiting})
-	if strings.ContainsAny(block, "‮​") {
+	if strings.ContainsAny(block, "\u202e\u200b") {
 		t.Errorf("the block carries format characters: %q", block)
 	}
 	want := []string{"app/txt.exe", "app/zerowidth.yaml"}
@@ -154,7 +154,7 @@ func TestDeferredBlockCleansFileNames(t *testing.T) {
 	if err != nil || !slices.Equal(got[5].Files, want) || !slices.Equal(got[6].Files, want) {
 		t.Errorf("parseDeferred = %+v, %v; want both originals with %q", got, err, want)
 	}
-	if files[0] != "app/‮txt.exe" {
+	if files[0] != "app/\u202etxt.exe" {
 		t.Errorf("deferredBlock rewrote the pick's own file names: %q", files)
 	}
 }
