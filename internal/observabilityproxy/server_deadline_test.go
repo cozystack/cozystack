@@ -428,6 +428,8 @@ func TestServerStalledReviewAnswersInTime(t *testing.T) {
 		{"logs subject access review", logsRoot + "query", false},
 		{"metrics token review", metricsRoot + "api/v1/query", true},
 		{"metrics subject access review", metricsRoot + "api/v1/query", false},
+		{"application logs subject access review", appRoot + "db/log/select/logsql/query", false},
+		{"application metrics subject access review", appRoot + "db/metrics/api/v1/query", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			h := newHarness(t, Config{RequestTimeout: 200 * time.Millisecond}, nil)

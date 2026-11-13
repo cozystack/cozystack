@@ -227,7 +227,7 @@ func TestBuildMetricsParamsCanonicalForms(t *testing.T) {
 	if req.params.Get("end") != "2026-11-04T12:00:00.000Z" || req.params.Get("start") != "2026-11-04T11:55:00.000Z" {
 		t.Errorf("labels window = %s..%s, want the last 5m", req.params.Get("start"), req.params.Get("end"))
 	}
-	if q := buildMetrics(t, "api/v1/query", url.Values{"query": {"up"}}); q.params.Has("time") || !q.start.Equal(testNow.Add(-15*time.Minute-30*time.Second)) {
+	if q := buildMetrics(t, "api/v1/query", url.Values{"query": {"up"}}); q.params.Get("time") != "2026-11-04T12:00:00.000Z" || !q.start.Equal(testNow.Add(-15*time.Minute-2*latencyOffset)) {
 		t.Errorf("instant query without time: params %v, start %v", q.params, q.start)
 	}
 }
@@ -427,5 +427,140 @@ func TestBuildMetricsParamsPointsAsVmselectCounts(t *testing.T) {
 	}
 	if got := metricsStatus("api/v1/query_range", rng(11001)); got != http.StatusUnprocessableEntity {
 		t.Fatalf("11001 points answered %d, want 422", got)
+	}
+}
+
+func TestQueryLookahead(t *testing.T) {
+	tests := []struct {
+		query string
+		want  time.Duration
+	}{
+		{`up`, 0},
+		{`x offset 1h`, 0},
+		{`x offset -1h`, time.Hour},
+		{`x OFFSET - 90m`, 90 * time.Minute},
+		// Each "(" may be an implicit subquery, which vmselect evaluates
+		// up to two steps past its end; here the step is 1m.
+		{`rate(x[5m] offset -30m) offset -1h`, 92 * time.Minute},
+		{`x offset -1h + y offset 2h`, time.Hour},
+		{`node_offset_seconds - 1`, 0},
+		// An escape inside a string literal is only part of a label value.
+		{`x{a=~"a\\.b"}`, 0},
+		{`x{a="\"rollup\\_candlestick\""}`, 0},
+		// metricsql lexes a duration as one token, so a sign with spaces,
+		// or a plus, is an operator after the offset, not part of it.
+		{`x offset 1h+30m`, 0},
+		{`x offset 1h - 30m`, 0},
+		{`x offset -1h + 30m`, time.Hour},
+		{`x offset -1h30m`, 90 * time.Minute},
+	}
+	for _, tt := range tests {
+		t.Run(tt.query, func(t *testing.T) {
+			got, ok := queryLookahead(tt.query, time.Minute)
+			if !ok || got != tt.want {
+				t.Fatalf("queryLookahead = %s, %v; want %s", got, ok, tt.want)
+			}
+		})
+	}
+	for _, q := range []string{
+		`x @ 1700000000`,
+		// The lookback scan cannot bound any @, so the application root
+		// refuses every one; the lookahead does not tell them apart.
+		`x @ end()`,
+		`x @ start() offset -1h`,
+		`x @ (end() - 1h)`,
+		`x{a="a@b"}`,
+		`x offset -5i`,
+		// Compound durations with a negative part (metricsql DurationValue):
+		// -1h-30m is -90m and 1h-2h is -1h, neither of which the scan reads.
+		`x offset -1h-30m`,
+		`x offset - 1h-30m`,
+		`x offset 1h-2h`,
+		`x offset 1h-30m`,
+		// metricsql continues a duration with -1.h or -.5h too, so any minus
+		// right after the duration is refused rather than told apart.
+		`x offset 5m-1.h`,
+		`x offset 5m-.5h`,
+		`x offset 1h-1`,
+		`x offset 5m-y`,
+		// metricsql also reads a trailing $__interval as part of the
+		// duration: -1h$__interval is -(1h + step).
+		`x offset -1h$__interval`,
+		`rate(x[5m]) offset -1h$__interval`,
+		// A subquery step the scan cannot read, an unclosed bracket, and a
+		// sum past the duration range.
+		`rate(x[1h:5i])`,
+		`rate(x[1h:$__interval])`,
+		`rate(x[1h`,
+		`max_over_time(x[1h:100y])`,
+		`rate(x[5m] offset 1h-30m)`,
+		// metricsql unescapes identifiers (unescapeIdent), so an escaped
+		// rollup_candlestick, or any escape outside a string, could hide
+		// what the scan looks for.
+		`rollup\_candlestick(x + y)`,
+		`rollup_candle\stick(x)`,
+		`rollup\x5fcandlestick(x)`,
+		`x offs\et -1h`,
+		// A comment runs to the end of the line, so quotes in it would
+		// confuse the string tracking and brackets in it the scans.
+		"x # '\n+ rollup\\_candlestick(y) # '",
+		"x # \"\n+ rollup\\_candlestick(y) # \"",
+		"rate(x[5m]) # comment",
+		// metricsql lets a backslash escape the closing quote in backquotes
+		// too (scanString), and quoted label names keep such escapes, so
+		// a backquoted string must not end at an escaped backquote.
+		"container_cpu_usage_seconds_total{`\\``=\"\"} or rollup\\_candlestick(container_cpu_usage_seconds_total offset -5m+1h)",
+		"{`\\`a`} or rollup\\_candlestick(container_cpu_usage_seconds_total offset -5m+1h)",
+		// vmselect evaluates rollup_candlestick one step ahead
+		// (evalRollupFuncWithoutAt), whatever the offset.
+		`rollup_candlestick(x)`,
+		`ROLLUP_CANDLESTICK(x[5m])`,
+		`sum(rollup_candlestick(x[1h:5m]))`,
+		`x offset -$__interval`,
+		`with (f(a) = a offset -1h) f(f(x))`,
+	} {
+		if got, ok := queryLookahead(q, time.Minute); ok {
+			t.Errorf("queryLookahead(%q) = %s, want unknown", q, got)
+		}
+	}
+}
+
+// TestQueryLookaheadSubquery: vmselect evaluates a subquery up to its end
+// plus one subquery step, rounded up to the step (evalRollupFuncWithSubquery),
+// and range_last and the other range_* transforms copy the last of those
+// values back onto earlier points, so a series that starts after the
+// evaluation time can reach the answer.
+func TestQueryLookaheadSubquery(t *testing.T) {
+	// One explicit subquery and one "(": two levels of two steps, at the
+	// subquery's step, or at the query's step when the subquery has none.
+	for q, want := range map[string]time.Duration{
+		`max_over_time(x[1h:1h])`: 4 * time.Hour,
+		`max_over_time(x[1h:])`:   4 * time.Minute,
+	} {
+		if got, ok := queryLookahead(q, time.Minute); !ok || got != want {
+			t.Errorf("queryLookahead(%q) = %s, %v; want %s", q, got, ok, want)
+		}
+	}
+	for _, q := range []string{`max_over_time(range_last(x)[1h:1h])`, `max_over_time(keep_next_value(x)[1h:1h])`} {
+		got, ok := queryLookahead(q, time.Minute)
+		if !ok || got < 2*time.Hour {
+			t.Errorf("queryLookahead(%q) = %s, %v; want at least two subquery steps", q, got, ok)
+		}
+	}
+}
+
+// TestBuildMetricsParamsInstantStartCoversLatencyOffset: vmselect evaluates
+// an instant query whose time is within 30s of its clock at that clock
+// minus 30s, anywhere in (time-60s, time], so the earliest read the store
+// choice and the lookup rely on starts from time-60s.
+func TestBuildMetricsParamsInstantStartCoversLatencyOffset(t *testing.T) {
+	at := testNow.Add(29 * time.Second)
+	req := buildMetrics(t, "api/v1/query", url.Values{"query": {"x"}, "time": {at.Format(time.RFC3339)}, "step": {"1s"}})
+	lookback, ok := queryLookback("x", time.Second)
+	if !ok {
+		t.Fatal("lookback of x unknown")
+	}
+	if want := at.Add(-2*latencyOffset - lookback); req.start.After(want) {
+		t.Fatalf("start = %s, want at most %s", req.start, want)
 	}
 }

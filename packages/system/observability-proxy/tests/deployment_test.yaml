@@ -60,6 +60,9 @@ tests:
       - contains:
           path: spec.template.spec.containers[0].args
           content: --metrics-shortterm-retention=72h
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --metrics-app-lookback=720h
 
   - it: follows renamed metrics stores
     set:
@@ -67,6 +70,7 @@ tests:
         shorttermStore: fast
         longtermStore: slow
         shorttermRetention: 24h
+        appLookback: 48h
     asserts:
       - contains:
           path: spec.template.spec.containers[0].args
@@ -77,6 +81,9 @@ tests:
       - contains:
           path: spec.template.spec.containers[0].args
           content: --metrics-shortterm-retention=24h
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --metrics-app-lookback=48h
 
   - it: falls back to cozy.local when the platform passes no cluster domain
     asserts:
