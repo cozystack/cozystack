@@ -8,10 +8,9 @@
   kube-system, which the management cluster can only reach via the
   Kamaji-issued admin kubeconfig stored as <release>-admin-kubeconfig.
 
-  Why a main-phase resource and not a Helm post-install/post-upgrade hook
-  (the earlier shape): the hook is unreliable on the very failure it was
-  meant to cover. This release carries
-  release.cozystack.io/helm-install-disable-wait: "true" (cozystack-api
+  Why a main-phase resource and not a Helm post-install/post-upgrade hook:
+  the hook is unreliable on the very failure it was meant to cover. This
+  release carries release.cozystack.io/helm-install-disable-wait: "true" (cozystack-api
   sets it on both Install.DisableWait and Upgrade.DisableWait), so there
   is NO main-resource wait phase in front of the hooks — a post-install
   hook is not gated on MachineDeployment Ready and does fire on a fresh
@@ -25,9 +24,9 @@
   <release>-admin-kubeconfig (materialised by Kamaji after the
   KamajiControlPlane is applied) is not yet available.
 
-  As an ordinary main-phase resource (mirroring talos-reconcile-job.yaml)
-  the Job is applied on every install and every reconcile regardless of
-  hook phase. It lands together with the KamajiControlPlane and
+  As an ordinary main-phase resource (like talos-reconcile-job.yaml in the
+  kubernetes-nodes chart) the Job is applied on every install and every
+  reconcile regardless of hook phase. It lands together with the KamajiControlPlane and
   talos-secrets; a wait-for-kubeconfig init container holds the Pod until
   Kamaji publishes the admin kubeconfig Secret (the Secret volume is
   optional so kubelet does not FailedMount in the meantime), then the
@@ -40,9 +39,9 @@
   upgrade that lands while the Job is live (or inside
   ttlSecondsAfterFinished) with `spec.template: field is immutable`, and
   RetryOnFailure would loop on it. The Job therefore carries a
-  content-hash name suffix over its whole rendered spec (mirrors
-  talos-reconcile-job.yaml and the KubevirtMachineTemplate idiom in
-  cluster.yaml): an identical render keeps the name and Helm no-ops it;
+  content-hash name suffix over its whole rendered spec (the idiom of
+  talos-reconcile-job.yaml and the KubevirtMachineTemplate name in the
+  kubernetes-nodes chart): an identical render keeps the name and Helm no-ops it;
   any change that flows into the spec — notably a new images/kubectl.tag —
   yields a new name so a fresh Job runs and Helm prunes the old one. The
   hash also folds in the looked-up bootstrap token — both halves,
