@@ -63,7 +63,7 @@ jobs:
     steps:
       - name: Validate tag and resolve release
         id: resolve
-        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         env:
           TAG: ${{ inputs.tag }}
         with:
@@ -145,7 +145,7 @@ jobs:
       # The resolved ref is the digest-pinned staging branch for a prerelease,
       # or the stable tag's pinned merge tree.
       - name: Checkout resolved release tree
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.resolve.outputs.tree_ref }}
           fetch-depth: 1
@@ -283,7 +283,7 @@ jobs:
 
       - name: Upload chainsaw report
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: chainsaw-report-${{ inputs.tag }}
           path: /tmp/${{ env.SANDBOX_NAME }}/_out/chainsaw-report.xml
@@ -328,7 +328,7 @@ jobs:
 
       - name: Upload cozyreport.tgz
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: cozyreport-${{ inputs.tag }}
           path: /tmp/${{ env.SANDBOX_NAME }}/_out/cozyreport.tgz
@@ -382,7 +382,7 @@ jobs:
 
       - name: Upload image list
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: image-list-${{ inputs.tag }}
           path: |
