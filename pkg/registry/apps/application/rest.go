@@ -19,6 +19,7 @@ package application
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"maps"
 	"net/http"
@@ -673,9 +674,20 @@ func (r *REST) Delete(ctx context.Context, name string, deleteValidation rest.Va
 	// Construct HelmRelease name with the configured prefix
 	helmReleaseName := r.releaseConfig.Prefix + name
 
+	// A resourceVersion precondition is judged against the live release, so
+	// read it uncached.
+	var callerRV *string
+	if options != nil && options.Preconditions != nil {
+		callerRV = options.Preconditions.ResourceVersion
+	}
+	reader := client.Reader(r.c)
+	if callerRV != nil {
+		reader = r.w
+	}
+
 	// Retrieve the HelmRelease before attempting to delete
 	helmRelease := &helmv2.HelmRelease{}
-	err = r.c.Get(ctx, client.ObjectKey{Namespace: namespace, Name: helmReleaseName}, helmRelease, &client.GetOptions{Raw: &metav1.GetOptions{}})
+	err = reader.Get(ctx, client.ObjectKey{Namespace: namespace, Name: helmReleaseName}, helmRelease, &client.GetOptions{Raw: &metav1.GetOptions{}})
 	if err != nil {
 		if apierrors.IsNotFound(err) {
 			// If HelmRelease does not exist, return NotFound error for Application
@@ -692,6 +704,15 @@ func (r *REST) Delete(ctx context.Context, name string, deleteValidation rest.Va
 		klog.Errorf("HelmRelease %s does not match the required application labels", helmReleaseName)
 		// Return NotFound error for Application resource
 		return nil, false, apierrors.NewNotFound(r.gvr.GroupResource(), name)
+	}
+
+	if callerRV != nil {
+		if err := r.checkResourceVersion(name, *callerRV, helmRelease.ResourceVersion); err != nil {
+			return nil, false, err
+		}
+		options = options.DeepCopy()
+		liveRV := helmRelease.ResourceVersion
+		options.Preconditions.ResourceVersion = &liveRV
 	}
 
 	// Run the genericapiserver-supplied admission chain (validating webhooks
@@ -721,6 +742,39 @@ func (r *REST) Delete(ctx context.Context, name string, deleteValidation rest.Va
 
 	klog.V(6).Infof("Successfully deleted HelmRelease %s", helmReleaseName)
 	return nil, true, nil
+}
+
+// checkResourceVersion applies a caller's resourceVersion precondition to the
+// live HelmRelease. Every resourceVersion is a revision of the same etcd. An
+// Application carries the version of the release its spec came from or, on a
+// WorkloadMonitor-triggered watch event, a monitor revision, which is newer
+// than that release only when the release was read at or after it. A value
+// newer than the live release therefore names the current spec, and only an
+// older one is a conflict.
+func (r *REST) checkResourceVersion(name, callerRV, liveRV string) error {
+	caller, err := strconv.ParseUint(callerRV, 10, 64)
+	if err != nil {
+		return apierrors.NewBadRequest(fmt.Sprintf("invalid resourceVersion %q: %v", callerRV, err))
+	}
+	live, err := strconv.ParseUint(liveRV, 10, 64)
+	if err != nil {
+		return fmt.Errorf("HelmRelease for %s has an invalid resourceVersion %q: %w", name, liveRV, err)
+	}
+	if caller < live {
+		return apierrors.NewConflict(r.gvr.GroupResource(), name, errors.New("the object has been modified; please apply your changes to the latest version and try again"))
+	}
+	return nil
+}
+
+// newerResourceVersion returns whichever of two numeric resourceVersions is
+// higher, preferring b when either does not parse.
+func newerResourceVersion(a, b string) string {
+	av, aErr := strconv.ParseUint(a, 10, 64)
+	bv, bErr := strconv.ParseUint(b, 10, 64)
+	if aErr != nil || bErr != nil || bv >= av {
+		return b
+	}
+	return a
 }
 
 // Watch sets up a watch on HelmReleases, filters them based on application labels, and converts events to Applications
@@ -871,7 +925,12 @@ func (r *REST) Watch(ctx context.Context, options *metainternalversion.ListOptio
 		// workload whose status flips during the snapshot window (after the
 		// Application ADDED but before the bookmark) and then stops changing
 		// would leave the client with a stale WorkloadsReady forever.
-		var pendingWMEvents []watch.Event
+		type monitorEvent struct {
+			event     watch.Event
+			monitorRV string
+			releaseRV string
+		}
+		var pendingWMEvents []monitorEvent
 
 		// Get the starting resourceVersion from options
 		// If client provides resourceVersion (e.g., from a previous List), we should skip
@@ -895,9 +954,38 @@ func (r *REST) Watch(ctx context.Context, options *metainternalversion.ListOptio
 			}
 		}
 
+		// lastSent holds, per Application, the resourceVersion of the last
+		// event this watch sent.
+		lastSent := map[client.ObjectKey]string{}
+		remember := func(app *appsv1alpha1.Application, eventType watch.EventType) {
+			key := client.ObjectKey{Namespace: app.Namespace, Name: app.Name}
+			if eventType == watch.Deleted {
+				delete(lastSent, key)
+				return
+			}
+			lastSent[key] = app.ResourceVersion
+		}
+
+		// sendMonitorEvent falls back to the monitor's own resourceVersion
+		// when the event might repeat the one the client already holds, which
+		// a shared informer hides from its handlers. Without an entry for the
+		// object, a client resuming this watch may hold any release version,
+		// so the release's own version counts as held. The object the client
+		// caches from a fallback event gets a conflict on a precondition-checked
+		// delete until its next event.
+		sendMonitorEvent := func(me monitorEvent) bool {
+			app := me.event.Object.(*appsv1alpha1.Application)
+			last, known := lastSent[client.ObjectKey{Namespace: app.Namespace, Name: app.Name}]
+			if (known && app.ResourceVersion == last) || (!known && app.ResourceVersion == me.releaseRV) {
+				app.SetResourceVersion(me.monitorRV)
+			}
+			remember(app, me.event.Type)
+			return send(me.event)
+		}
+
 		drainPendingWMEvents := func() bool {
 			for _, ev := range pendingWMEvents {
-				if !send(ev) {
+				if !sendMonitorEvent(ev) {
 					return false
 				}
 			}
@@ -1012,6 +1100,7 @@ func (r *REST) Watch(ctx context.Context, options *metainternalversion.ListOptio
 				// When startingRV == 0, always send ADDED events (client wants full state)
 
 				// Send event to custom watcher
+				remember(&app, event.Type)
 				if !send(watch.Event{Type: event.Type, Object: &app}) {
 					return
 				}
@@ -1070,10 +1159,19 @@ func (r *REST) Watch(ctx context.Context, options *metainternalversion.ListOptio
 				} else if !fieldFilter.MatchesNamespace(hrNS) {
 					continue
 				}
+				// The event's resourceVersion may be the monitor's, which a
+				// Delete precondition accepts as current while the release has
+				// not moved past it. A cached release older than the monitor
+				// revision could pair a stale spec with that version, so only
+				// then is the release read live.
+				hrKey := client.ObjectKey{Namespace: hrNS, Name: hrName}
 				hr := &helmv2.HelmRelease{}
-				if err := r.c.Get(ctx, client.ObjectKey{Namespace: hrNS, Name: hrName}, hr); err != nil {
-					klog.V(4).Infof("Cannot find HelmRelease %s/%s for WorkloadMonitor event: %v", hrNS, hrName, err)
-					continue
+				if err := r.c.Get(ctx, hrKey, hr); err != nil || newerResourceVersion(wm.GetResourceVersion(), hr.GetResourceVersion()) != hr.GetResourceVersion() {
+					hr = &helmv2.HelmRelease{}
+					if err := r.w.Get(ctx, hrKey, hr); err != nil {
+						klog.V(4).Infof("Cannot find HelmRelease %s/%s for WorkloadMonitor event: %v", hrNS, hrName, err)
+						continue
+					}
 				}
 				// Pass the fresh WorkloadMonitor so conversion uses the latest
 				// operational status even if the cache (r.c) has not yet
@@ -1094,10 +1192,8 @@ func (r *REST) Watch(ctx context.Context, options *metainternalversion.ListOptio
 						continue
 					}
 				}
-				// Use the WorkloadMonitor's ResourceVersion for the emitted event
-				// so clients see a monotonically increasing RV and don't skip this update.
-				app.SetResourceVersion(wm.GetResourceVersion())
-				outEvent := watch.Event{Type: watch.Modified, Object: &app}
+				app.SetResourceVersion(newerResourceVersion(wm.GetResourceVersion(), hr.GetResourceVersion()))
+				outEvent := monitorEvent{event: watch.Event{Type: watch.Modified, Object: &app}, monitorRV: wm.GetResourceVersion(), releaseRV: hr.GetResourceVersion()}
 				// Buffer WM-triggered events that arrive before the
 				// initial-events-end bookmark. They will be replayed in order
 				// immediately after the bookmark is emitted.
@@ -1106,7 +1202,7 @@ func (r *REST) Watch(ctx context.Context, options *metainternalversion.ListOptio
 					continue
 				}
 				bookmarker.Observe(wm.GetResourceVersion())
-				if !send(outEvent) {
+				if !sendMonitorEvent(outEvent) {
 					return
 				}
 

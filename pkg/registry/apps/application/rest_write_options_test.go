@@ -58,7 +58,7 @@ func newOptionsTestREST(t *testing.T, funcs interceptor.Funcs, objects ...client
 		WithObjects(objects...).
 		WithInterceptorFuncs(funcs).
 		Build()
-	return NewREST(c, nil, &config.Resource{
+	return NewREST(c, c, &config.Resource{
 		Application: config.ApplicationConfig{
 			Kind:     "PostgreSQL",
 			Plural:   "postgresqls",
@@ -185,7 +185,9 @@ func TestDeletePropagatesWriteOptions(t *testing.T) {
 	grace := int64(3)
 	propagation := metav1.DeletePropagationForeground
 	uid := types.UID("expected-uid")
-	rv := "17"
+	// The version the fake client stamps on seeded objects: a resourceVersion
+	// precondition is checked against the live release.
+	rv := "999"
 	want := &metav1.DeleteOptions{
 		GracePeriodSeconds: &grace,
 		Preconditions:      &metav1.Preconditions{UID: &uid, ResourceVersion: &rv},
