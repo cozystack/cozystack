@@ -284,9 +284,9 @@ func mulQuantity(q, n ref.Val) ref.Val {
 	if !ok {
 		return types.MaybeNoSuchOverloadErr(n)
 	}
-	out := qq.Quantity.DeepCopy()
+	out := qq.DeepCopy()
 	if !out.Mul(int64(nn)) {
-		return types.NewErr("quantity %s * %d overflows", qq.Quantity.String(), int64(nn))
+		return types.NewErr("quantity %s * %d overflows", qq.String(), int64(nn))
 	}
 	return apiservercel.Quantity{Quantity: &out}
 }
@@ -294,7 +294,7 @@ func mulQuantity(q, n ref.Val) ref.Val {
 func toQuantity(v ref.Val) (resource.Quantity, error) {
 	switch t := v.(type) {
 	case apiservercel.Quantity:
-		return t.Quantity.DeepCopy(), nil
+		return t.DeepCopy(), nil
 	case types.Int:
 		return *resource.NewQuantity(int64(t), resource.DecimalSI), nil
 	case types.Uint:

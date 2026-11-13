@@ -66,6 +66,7 @@ func (in *ConfigSpec) DeepCopyInto(out *ConfigSpec) {
 		*out = new(int)
 		**out = **in
 	}
+	out.Maxmemory = in.Maxmemory.DeepCopy()
 	in.Sentinel.DeepCopyInto(&out.Sentinel)
 }
 

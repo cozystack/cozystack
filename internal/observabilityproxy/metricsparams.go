@@ -47,6 +47,7 @@ type MetricsConfig struct {
 	LongTermStore      string
 	ShortTermRetention time.Duration
 	Limits             MetricsLimits
+	App                AppScopeLimits
 	// PlatformNamespacePrefix names the namespaces whose exporters may
 	// attribute a series to another namespace; empty trusts none.
 	PlatformNamespacePrefix string
@@ -81,6 +82,23 @@ type metricsRequest struct {
 	// start is the earliest instant the request reads, for the store choice;
 	// zero when that is unknown, which picks the long-term store.
 	start time.Time
+	// from and to are the window the query is evaluated over, without the
+	// lookback of its expression.
+	from, to time.Time
+	// last is the latest instant the request reads, past to by a negative
+	// offset; zero when that is unknown.
+	last time.Time
+	// scopedMatch is set when match[] holds the scope, not client matchers.
+	scopedMatch bool
+}
+
+// setScope replaces the namespace scope with the given selectors, which
+// vmselect ORs.
+func (req *metricsRequest) setScope(selectors []string) {
+	req.params["extra_filters[]"] = selectors
+	if req.scopedMatch {
+		req.params["match[]"] = selectors
+	}
 }
 
 // namespaceSelector quotes ns the way MetricsQL unquotes a label value
@@ -142,8 +160,11 @@ func BuildMetricsParams(endpoint string, in url.Values, scope []string, now time
 				return req, herr
 			}
 			at = t
-			out.Set("time", formatTime(t))
 		}
+		// The default is forwarded too: the application lookup is sized
+		// for at, and vmselect's own clock reads later, by as long as the
+		// lookups took.
+		out.Set("time", formatTime(at))
 		step := instantDefaultStep
 		if v := in.Get("step"); v != "" {
 			var herr *HTTPError
@@ -152,7 +173,15 @@ func BuildMetricsParams(endpoint string, in url.Values, scope []string, now time
 			}
 			out.Set("step", formatSeconds(step))
 		}
-		req.start = queryStart(out.Get("query"), at.Add(-latencyOffset), step)
+		// vmselect evaluates an instant query whose time is within the
+		// latency offset of its own clock at that clock minus the offset
+		// (queryOffset in prometheus.go), so the evaluation instant lies in
+		// (time-2*offset, time]; the earlier end needs no clock to agree.
+		req.start = queryStart(out.Get("query"), at.Add(-2*latencyOffset), step)
+		req.from, req.to = at, at
+		if ahead, ok := queryLookahead(out.Get("query"), step); ok {
+			req.last = at.Add(ahead)
+		}
 		return req, nil
 
 	case "api/v1/query_range":
@@ -176,6 +205,11 @@ func BuildMetricsParams(endpoint string, in url.Values, scope []string, now time
 			return req, errorf(http.StatusUnprocessableEntity, "%d points per series exceed the limit of %d; raise step", points, lim.MaxPoints)
 		}
 		req.start = queryStart(out.Get("query"), start, step)
+		req.from, req.to = start, end
+		// vmselect rounds end up to a whole step (AdjustStartEnd).
+		if ahead, ok := queryLookahead(out.Get("query"), step); ok {
+			req.last = end.Add(step + ahead)
+		}
 		out.Set("start", formatTime(start))
 		out.Set("end", formatTime(end))
 		out.Set("step", formatSeconds(step))
@@ -198,7 +232,7 @@ func BuildMetricsParams(endpoint string, in url.Values, scope []string, now time
 	if herr != nil {
 		return req, herr
 	}
-	req.start = start
+	req.start, req.from, req.to, req.last = start, start, end, end
 	out.Set("start", formatTime(start))
 	out.Set("end", formatTime(end))
 
@@ -223,6 +257,7 @@ func BuildMetricsParams(endpoint string, in url.Values, scope []string, now time
 		// a cross pair is narrower than one of its halves, so the union is
 		// still the scope.
 		out["match[]"] = slices.Clone(scope)
+		req.scopedMatch = true
 	}
 	return req, nil
 }

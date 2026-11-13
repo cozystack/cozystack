@@ -164,15 +164,16 @@ rules:
 # MariaDB strategy: read the operator-side MariaDB CR to surface "not yet
 # rendered" preconditions, create one-shot k8s.mariadb.com/Backup CRs on
 # the BackupJob path, and create k8s.mariadb.com/Restore CRs on the
-# RestoreJob path. The driver only ever Creates/Lists/Gets these objects -
-# it does not patch or delete them; their lifecycle is owned by
-# mariadb-operator and (for cleanup) by tenants / explicit teardown flows,
-# never by this controller.
+# RestoreJob path. A Backup is deleted once the dump it wrote is, when its
+# Cozystack Backup is deleted; a Restore is never deleted.
 - apiGroups: ["k8s.mariadb.com"]
   resources: ["mariadbs"]
   verbs: ["get", "list", "watch"]
 - apiGroups: ["k8s.mariadb.com"]
-  resources: ["backups", "restores"]
+  resources: ["backups"]
+  verbs: ["get", "list", "watch", "create", "delete"]
+- apiGroups: ["k8s.mariadb.com"]
+  resources: ["restores"]
   verbs: ["get", "list", "watch", "create"]
 # MongoDB strategy: read the operator-side PerconaServerMongoDB CR to gate on
 # the backup preconditions, create one-shot PerconaServerMongoDBBackup CRs on the

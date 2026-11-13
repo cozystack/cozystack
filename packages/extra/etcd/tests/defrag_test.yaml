@@ -41,3 +41,16 @@ tests:
         documentSelector:
           path: kind
           value: EtcdCluster
+
+  - it: asks the tenant quota only for what the defrag client uses
+    template: templates/etcd-defrag.yaml
+    asserts:
+      - equal:
+          path: spec.jobTemplate.spec.template.spec.containers[0].resources
+          value:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+            limits:
+              cpu: 100m
+              memory: 64Mi

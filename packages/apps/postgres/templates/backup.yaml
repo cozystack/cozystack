@@ -23,15 +23,32 @@
   against a Cluster with no backup configuration and fail. This mirrors
   the ClickHouse `useSystemBucket` gates on the chart-managed backup
   resources.
+
+  CNPG parses `schedule` with robfig/cron v1 `Parse`, which takes the first
+  field as seconds and makes day-of-week optional. A standard five-field
+  cron passes its webhook with only a warning and then runs one field off,
+  so `5 * * * *` fires every minute instead of hourly. A five-field value
+  therefore gets a leading `0` seconds field. Six fields and descriptors
+  such as `@daily` pass through as they are, and any other field count
+  fails the render, which CNPG would reject at admission anyway.
 */}}
 {{- if and .Values.backup.enabled .Values.backup.schedule (not .Values.backup.useSystemBucket) }}
+{{- $schedule := .Values.backup.schedule }}
+{{- $fields := regexFindAll `\S+` $schedule -1 }}
+{{- if not (hasPrefix "@" (trim $schedule)) }}
+{{- if eq (len $fields) 5 }}
+{{- $schedule = printf "0 %s" (join " " $fields) }}
+{{- else if ne (len $fields) 6 }}
+{{- fail (printf "postgres: backup.schedule %q is not a cron schedule with 5 or 6 fields (it has %d). Use a standard five-field cron such as \"0 2 * * *\", a six-field cron with leading seconds such as \"0 0 2 * * *\", or a descriptor such as \"@daily\"." $schedule (len $fields)) }}
+{{- end }}
+{{- end }}
 ---
 apiVersion: postgresql.cnpg.io/v1
 kind: ScheduledBackup
 metadata:
   name: {{ .Release.Name }}
 spec:
-  schedule: {{ .Values.backup.schedule | quote }}
+  schedule: {{ $schedule | quote }}
   backupOwnerReference: self
   method: plugin
   pluginConfiguration:

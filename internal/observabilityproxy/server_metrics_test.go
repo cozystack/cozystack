@@ -204,7 +204,7 @@ func TestServerMetricsConcurrency(t *testing.T) {
 }
 
 func TestDefaultMetricsUpstreamURL(t *testing.T) {
-	s := NewServer(Config{ClusterDomain: "cozy.local", Metrics: MetricsConfig{RootTenant: "tenant-root"}}, nil, nil, nil)
+	s := NewServer(Config{ClusterDomain: "cozy.local", Metrics: MetricsConfig{RootTenant: "tenant-root"}}, nil, nil, nil, nil)
 	if got, want := s.cfg.Metrics.UpstreamURL("shortterm"), "http://vmselect-shortterm.tenant-root.svc.cozy.local:8481/select/0/prometheus"; got != want {
 		t.Fatalf("upstream = %s, want %s", got, want)
 	}

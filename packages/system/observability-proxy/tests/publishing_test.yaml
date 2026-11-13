@@ -1,0 +1,196 @@
+suite: observability-proxy public endpoint
+# Clients outside the cluster reach the proxy on its own host with a
+# Kubernetes bearer token, so the route must pass Authorization and the
+# /apis/... path through untouched, and must not end a request before the
+# proxy does: a non-tail request may take up to --request-timeout (1m), and
+# a tail may stay silent up to --tail-idle-timeout (4m30s). Whole objects are
+# compared rather than single keys, so an annotation or a field that should
+# not be there fails the test too.
+templates:
+  - templates/ingress.yaml
+  - templates/httproute.yaml
+
+release:
+  name: observability-proxy
+  namespace: cozy-observability-proxy
+
+tests:
+  - it: publishes nothing without the cluster values
+    asserts:
+      - template: templates/ingress.yaml
+        hasDocuments:
+          count: 0
+      - template: templates/httproute.yaml
+        hasDocuments:
+          count: 0
+
+  - it: publishes nothing while observability-proxy is not in expose-services
+    set:
+      _cluster:
+        root-host: example.org
+        expose-services: "api,dashboard"
+        gateway-enabled: "false"
+    asserts:
+      - template: templates/ingress.yaml
+        hasDocuments:
+          count: 0
+      - template: templates/httproute.yaml
+        hasDocuments:
+          count: 0
+
+  - it: publishes nothing in Gateway mode while observability-proxy is not in expose-services
+    set:
+      _cluster:
+        root-host: example.org
+        expose-services: "api,dashboard"
+        gateway-enabled: "true"
+    asserts:
+      - template: templates/ingress.yaml
+        hasDocuments:
+          count: 0
+      - template: templates/httproute.yaml
+        hasDocuments:
+          count: 0
+
+  - it: renders an Ingress with a per-host certificate when gateway is off
+    set:
+      _cluster:
+        root-host: example.org
+        expose-services: "dashboard,observability-proxy"
+        expose-ingress: tenant-public
+        gateway-enabled: "false"
+    asserts:
+      - template: templates/httproute.yaml
+        hasDocuments:
+          count: 0
+      - template: templates/ingress.yaml
+        isKind:
+          of: Ingress
+      - template: templates/ingress.yaml
+        equal:
+          path: metadata.name
+          value: observability-proxy
+      - template: templates/ingress.yaml
+        equal:
+          path: metadata.annotations
+          value:
+            cert-manager.io/cluster-issuer: letsencrypt-prod
+            acme.cert-manager.io/http01-ingress-ingressclassname: tenant-public
+            nginx.ingress.kubernetes.io/proxy-body-size: 1m
+            nginx.ingress.kubernetes.io/proxy-buffering: "off"
+            nginx.ingress.kubernetes.io/proxy-read-timeout: "360"
+      - template: templates/ingress.yaml
+        equal:
+          path: spec
+          value:
+            ingressClassName: tenant-public
+            rules:
+              - host: observability-proxy.example.org
+                http:
+                  paths:
+                    - path: /
+                      pathType: Prefix
+                      backend:
+                        service:
+                          name: observability-proxy
+                          port:
+                            name: http
+            tls:
+              - hosts:
+                  - observability-proxy.example.org
+                secretName: observability-proxy-tls
+
+  - it: leaves the http01 ingress class out under the dns01 solver
+    set:
+      _cluster:
+        root-host: example.org
+        expose-services: "observability-proxy"
+        gateway-enabled: "false"
+        solver: dns01
+        issuer-name: letsencrypt-stage
+    asserts:
+      - template: templates/ingress.yaml
+        equal:
+          path: metadata.annotations
+          value:
+            cert-manager.io/cluster-issuer: letsencrypt-stage
+            nginx.ingress.kubernetes.io/proxy-body-size: 1m
+            nginx.ingress.kubernetes.io/proxy-buffering: "off"
+            nginx.ingress.kubernetes.io/proxy-read-timeout: "360"
+      - template: templates/ingress.yaml
+        equal:
+          path: spec.ingressClassName
+          value: tenant-root
+
+  - it: relies on the wildcard certificate and keeps the TLS section for the redirect
+    set:
+      _cluster:
+        root-host: example.org
+        expose-services: "observability-proxy"
+        gateway-enabled: "false"
+        wildcard-secret-name: wildcard-tls
+    asserts:
+      - template: templates/ingress.yaml
+        equal:
+          path: metadata.annotations
+          value:
+            nginx.ingress.kubernetes.io/proxy-body-size: 1m
+            nginx.ingress.kubernetes.io/proxy-buffering: "off"
+            nginx.ingress.kubernetes.io/proxy-read-timeout: "360"
+      - template: templates/ingress.yaml
+        equal:
+          path: spec.tls
+          value:
+            - hosts:
+                - observability-proxy.example.org
+
+  - it: renders an HTTPRoute without a route timeout when gateway is on
+    set:
+      _cluster:
+        root-host: example.org
+        expose-services: "observability-proxy"
+        expose-ingress: tenant-public
+        gateway-enabled: "true"
+    asserts:
+      - template: templates/ingress.yaml
+        hasDocuments:
+          count: 0
+      - template: templates/httproute.yaml
+        isKind:
+          of: HTTPRoute
+      - template: templates/httproute.yaml
+        isAPIVersion:
+          of: gateway.networking.k8s.io/v1
+      - template: templates/httproute.yaml
+        equal:
+          path: metadata.name
+          value: observability-proxy
+      - template: templates/httproute.yaml
+        equal:
+          path: spec
+          value:
+            parentRefs:
+              - group: gateway.networking.k8s.io
+                kind: Gateway
+                name: cozystack
+                namespace: tenant-public
+            hostnames:
+              - observability-proxy.example.org
+            rules:
+              - backendRefs:
+                  - name: observability-proxy
+                    port: 80
+                timeouts:
+                  request: 0s
+
+  - it: attaches to the tenant-root Gateway when expose-ingress is unset
+    set:
+      _cluster:
+        root-host: example.org
+        expose-services: "observability-proxy"
+        gateway-enabled: "true"
+    asserts:
+      - template: templates/httproute.yaml
+        equal:
+          path: spec.parentRefs[?(@.name == "cozystack")].namespace
+          value: tenant-root

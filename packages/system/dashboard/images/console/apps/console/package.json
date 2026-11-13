@@ -31,7 +31,8 @@
     "react": "^19.2.4",
     "react-dom": "^19.2.4",
     "react-router": "^7.6.1",
-    "simple-icons": "^16.22.0"
+    "simple-icons": "^16.22.0",
+    "uplot": "^1.6.32"
   },
   "devDependencies": {
     "@tailwindcss/vite": "^4.2.2",
