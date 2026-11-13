@@ -358,7 +358,7 @@ tests:
     # rendered spec, so image is exempt from the annotation-less fallback. The
     # edit is silently reused rather than failed. Not a regression (all edits
     # were previously silent); all disks created by this chart version onward
-    # carry the annotation and are fully guarded. See docs/storage-immutability.md.
+    # carry the annotation and are fully guarded. See https://cozystack.io/docs/v1/operations/storage-class-immutability/.
     set:
       storageClass: replicated
       source: {image: {name: debian}}

@@ -9,3 +9,6 @@ include ../../../hack/package.mk
 
 update: clean capi-operator-update
 	rm -rf charts/cluster-api-operator/charts/
+	# The upstream chart has no value for --sync-period; values.yaml explains
+	# why we set it.
+	patch -p1 < patches/sync-period.diff
