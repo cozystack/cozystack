@@ -37,11 +37,11 @@ metallb:
   controller:
     image:
       repository: ghcr.io/cozystack/cozystack/metallb-controller
-      tag: v1.7.0@sha256:ad13b61e71b9332c6fad4aa78d9ed9857058eb3a165c2512301bbced6ebba764
+      tag: v1.7.1@sha256:ad13b61e71b9332c6fad4aa78d9ed9857058eb3a165c2512301bbced6ebba764
   speaker:
     image:
       repository: ghcr.io/cozystack/cozystack/metallb-speaker
-      tag: v1.7.0@sha256:6325666b9b83d378319ac528ca28256db99dc7e21150afc92168fcd33d28adfd
+      tag: v1.7.1@sha256:6325666b9b83d378319ac528ca28256db99dc7e21150afc92168fcd33d28adfd
     # A memory limit is what sets memory.max on the pod cgroup, and the Talos
     # userspace OOM handler (v1.12+) only ever kills cgroups that lack it. The
     # speaker ran BestEffort, so it was picked as the victim whenever a tenant
