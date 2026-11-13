@@ -57,3 +57,17 @@ When raising issues, please specify the following:
 - A scenario where the issue occurred (with details on how to reproduce it)
 - Errors and log messages that are displayed by the involved software
 - Any other detail that might be useful
+
+## Sign Off Your Commits (DCO)
+
+Cozystack uses the [Developer Certificate of Origin](https://developercertificate.org/) (DCO) instead of a contributor licence agreement. By signing off a commit, you certify that you wrote the change or otherwise have the right to submit it under the project's open source licence.
+
+Every commit in a pull request must carry a `Signed-off-by` trailer whose name and email match the commit author. Git adds it for you with `--signoff` (or `-s`):
+
+```bash
+git commit --signoff -m "fix(postgres): read the live Cluster when deciding the WAL-archive prefix"
+```
+
+If you forgot, add the sign-off to the last commit with `git commit --amend --signoff`, or to every commit on your branch with `git rebase --signoff main`, then force-push the branch.
+
+The `DCO` check verifies this on every pull request and is required to pass before a pull request can be merged into `main`, together with `pre-commit`, `E2E Tests` and `CodeQL`.
