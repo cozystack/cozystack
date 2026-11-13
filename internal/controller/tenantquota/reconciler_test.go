@@ -363,3 +363,36 @@ func TestReconcile_PoolRootWithoutLimitRange(t *testing.T) {
 		t.Fatalf("no LimitRange can be copied from a root that has none")
 	}
 }
+
+// TestReconcile_NoLimitRangeWithoutComputeLimitQuota: the chart renders its
+// LimitRange for any non-empty resourceQuotas, compute or not. A member whose
+// allocated quota bounds neither limits.cpu nor limits.memory is admitted
+// without limits today; copying the root's defaults there would cap or refuse
+// pods (one requesting more than the default memory limit, for instance)
+// that the quota itself never constrains.
+func TestReconcile_NoLimitRangeWithoutComputeLimitQuota(t *testing.T) {
+	stale := &corev1.LimitRange{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      allocatedLimitRangeName,
+			Namespace: "tenant-foo-bar",
+			Labels:    map[string]string{managedByLabel: managedByValue},
+		},
+	}
+	r, c := newReconciler(t,
+		tenantHR("foo", "tenant-root"),
+		tenantHR("bar", "tenant-foo"),
+		ns("tenant-foo"), ns("tenant-foo-bar"),
+		chartQuota("tenant-foo", map[string]string{"services.loadbalancers": "1"}, nil),
+		chartLimitRange("tenant-foo", "250m"),
+		stale,
+	)
+	if _, err := r.Reconcile(context.Background(), sweepKey); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if _, ok := allocatedHard(t, c, "tenant-foo-bar", "services.loadbalancers"); !ok {
+		t.Fatalf("tenant-foo-bar must still get its allocated quota")
+	}
+	if _, ok := getLimitRange(c, "tenant-foo-bar", allocatedLimitRangeName); ok {
+		t.Fatalf("tenant-foo-bar's quota bounds no compute limit; it must carry no LimitRange copy")
+	}
+}
