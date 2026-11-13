@@ -1,0 +1,77 @@
+suite: cluster-wide vmagent stamps application identity on exporter series
+templates:
+  - templates/vmagent.yaml
+release:
+  name: monitoring-agents
+  namespace: cozy-monitoring
+
+# The tenant-resource-metrics proxy scopes a query to one application by
+# apps_cozystack_io_application_{group,kind,name}. The labels are only a
+# boundary if the scraped pod cannot choose them: the class sets all three
+# on every target it covers (a placeholder when the pod has no lineage), so with
+# honorLabels false an exporter's own copy is renamed to exported_* and
+# dropped. The same rules live in the tenant vmagent of the monitoring
+# package and are pinned there by the same assertions.
+tests:
+  - it: every scrape gets the application identity class unless it names another
+    asserts:
+      - equal:
+          path: spec.scrapeClasses[0].name
+          value: application-identity
+      - equal:
+          path: spec.scrapeClasses[0].default
+          value: true
+      - lengthEqual:
+          path: spec.scrapeClasses
+          count: 1
+
+  - it: the identity comes from the scraped pod's lineage labels, with a placeholder when the pod has none
+    asserts:
+      - equal:
+          path: spec.scrapeClasses[0].relabelConfigs
+          value:
+            - targetLabel: apps_cozystack_io_application_group
+              replacement: "-"
+            - sourceLabels: [__meta_kubernetes_pod_label_apps_cozystack_io_application_group]
+              regex: (.+)
+              targetLabel: apps_cozystack_io_application_group
+            - targetLabel: apps_cozystack_io_application_kind
+              replacement: "-"
+            - sourceLabels: [__meta_kubernetes_pod_label_apps_cozystack_io_application_kind]
+              regex: (.+)
+              targetLabel: apps_cozystack_io_application_kind
+            - targetLabel: apps_cozystack_io_application_name
+              replacement: "-"
+            - sourceLabels: [__meta_kubernetes_pod_label_apps_cozystack_io_application_name]
+              regex: (.+)
+              targetLabel: apps_cozystack_io_application_name
+
+  - it: an exporter-supplied identity is dropped
+    asserts:
+      - equal:
+          path: spec.scrapeClasses[0].metricRelabelConfigs
+          value:
+            - action: labeldrop
+              regex: (exported_)+apps_cozystack_io_application_(group|kind|name)
+
+  # vmagent adds up and scrape_* after metric relabeling (VictoriaMetrics
+  # lib/promscrape addAutoMetrics calls addRows with needRelabel false), so a
+  # placeholder removed there would stay on those series of every target
+  # without lineage. The remote-write relabeling sees every series.
+  - it: the placeholder is removed from every series, including up and scrape_*
+    asserts:
+      - equal:
+          path: spec.inlineRelabelConfig
+          value:
+            - sourceLabels: [apps_cozystack_io_application_group]
+              regex: "-"
+              targetLabel: apps_cozystack_io_application_group
+              replacement: ""
+            - sourceLabels: [apps_cozystack_io_application_kind]
+              regex: "-"
+              targetLabel: apps_cozystack_io_application_kind
+              replacement: ""
+            - sourceLabels: [apps_cozystack_io_application_name]
+              regex: "-"
+              targetLabel: apps_cozystack_io_application_name
+              replacement: ""

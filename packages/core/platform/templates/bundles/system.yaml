@@ -344,6 +344,7 @@ variants and opt-in on the slim ones. */}}
 {{include "cozystack.platform.package.full.default" (list "cozystack.metrics-server" $) }}
 {{- $monitoringAgentsComponents := dict "monitoring-agents" (dict "values" (dict "global" (dict "target" "tenant-root"))) -}}
 {{include "cozystack.platform.package.full" (list "cozystack.monitoring-agents" "default" $ $monitoringAgentsComponents) }}
+{{include "cozystack.platform.package.full.default" (list "cozystack.observability-proxy" $) }}
 {{include "cozystack.platform.package.full.default" (list "cozystack.goldpinger" $) }}
 {{include "cozystack.platform.package.default" (list "cozystack.prometheus-operator-crds" $) }}
 {{include "cozystack.platform.package.full.default" (list "cozystack.grafana-operator" $) }}

@@ -14,7 +14,7 @@ migrations:
   # refuses to advance past a migration file missing from the image (exit 1), so
   # a stale pin fails loudly rather than silently skipping the etcd adoption.
   image: ghcr.io/cozystack/cozystack/platform-migrations:v1.6.0@sha256:6777042e3e9c6bad76e7d96fb64baa115061975f39061cb3ede84e21d0e2213f
-  targetVersion: 60
+  targetVersion: 61
   # Adopt legacy etcd clusters onto the v1alpha2 operator WITHOUT the mandatory
   # pre-adoption safety snapshot (migration 50). Leave false unless migration 50
   # has actually refused to proceed and you accept the risk: adoption rewires
@@ -173,7 +173,7 @@ networking:
   #
   # On a running cluster this is set on the `platform` component of the
   # `cozystack.cozystack-platform` Package CR, the same path as backupStorage
-  # (see docs/operations/backup-classes.md). Editing the multus HelmRelease or
+  # (see https://cozystack.io/docs/v1/operations/services/backup-classes/). Editing the multus HelmRelease or
   # the child Package cozystack.multus directly is reverted by the platform
   # reconcile.
   # stageCniPlugins: true
@@ -669,6 +669,19 @@ gateway:
     - cozy-monitoring
     - cozy-linstor-gui
     - default
+# Platform ingress configuration.
+ingress:
+  # Whether the root tenant (tenant-root) runs its own ingress-nginx, i.e.
+  # Tenant/root spec.ingress=true. It decides whether tenant-root's
+  # _namespace.ingress names tenant-root or stays empty, which is what
+  # applications there (SeaweedFS waiting on ingress-nginx-system, the
+  # ingressClassName of their Ingresses) and every tenant inheriting from the
+  # root read. Nothing in the charts sets Tenant/root spec.ingress, so keep
+  # this in sync with it by hand; changing it re-renders cozystack-basics and
+  # the releases reading the cozystack-values Secret. The default is true only
+  # to keep the value existing clusters already render.
+  rootEnabled: true
+
 # Platform monitoring configuration.
 monitoring:
   # Whether the root tenant (tenant-root) hosts the platform
@@ -712,7 +725,7 @@ monitoring:
 # documents every knob: provisionBucket, bucketName, endpoint, region,
 # forcePathStyle, systemSecretName, systemNamespaces, …). Admins set this via
 # spec.components.platform.values.backupStorage on the
-# cozystack.cozystack-platform Package — see docs/operations/backup-classes.md.
+# cozystack.cozystack-platform Package — see https://cozystack.io/docs/v1/operations/services/backup-classes/.
 # Empty (the default) forwards nothing and keeps the child chart defaults.
 backupStorage: {}
 
@@ -768,37 +781,6 @@ scheduling:
 #   loginTheme: acme
 #   loginThemeImage: registry.example.com/acme-keycloak-theme:v1
 branding: {}
-# Container registry mirrors configuration
-#
-# Example:
-# registries:
-#   mirrors:
-#     docker.io:
-#       endpoints:
-#         - http://10.0.0.1:8082
-#     ghcr.io:
-#       endpoints:
-#         - http://10.0.0.1:8083
-#     gcr.io:
-#       endpoints:
-#         - http://10.0.0.1:8084
-#     registry.k8s.io:
-#       endpoints:
-#         - http://10.0.0.1:8085
-#     quay.io:
-#       endpoints:
-#         - http://10.0.0.1:8086
-#     cr.fluentbit.io:
-#       endpoints:
-#         - http://10.0.0.1:8087
-#     docker-registry3.mariadb.com:
-#       endpoints:
-#         - http://10.0.0.1:8088
-#   config:
-#     "10.0.0.1:8082":
-#       tls:
-#         insecureSkipVerify: true
-registries: {}
 # Resource allocation ratios
 resources:
   cpuAllocationRatio: 10
