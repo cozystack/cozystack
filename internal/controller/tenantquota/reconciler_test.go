@@ -351,12 +351,12 @@ func TestReconcile_PoolRootWithoutLimitRange(t *testing.T) {
 		tenantHR("foo", "tenant-root"),
 		tenantHR("bar", "tenant-foo"),
 		ns("tenant-foo"), ns("tenant-foo-bar"),
-		chartQuota("tenant-foo", map[string]string{"cpu": "10"}, nil),
+		chartQuota("tenant-foo", map[string]string{"limits.cpu": "10"}, nil),
 	)
 	if _, err := r.Reconcile(context.Background(), sweepKey); err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}
-	if _, ok := allocatedHard(t, c, "tenant-foo-bar", "cpu"); !ok {
+	if _, ok := allocatedHard(t, c, "tenant-foo-bar", "limits.cpu"); !ok {
 		t.Fatalf("tenant-foo-bar must still get its allocated quota")
 	}
 	if _, ok := getLimitRange(c, "tenant-foo-bar", allocatedLimitRangeName); ok {
