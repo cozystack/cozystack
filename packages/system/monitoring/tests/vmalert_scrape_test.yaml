@@ -1,0 +1,38 @@
+suite: vmalert metrics are scraped
+templates:
+  - templates/vm/vmalert-scrape.yaml
+
+release:
+  name: monitoring
+  namespace: tenant-root
+
+set:
+  _cluster:
+    root-host: example.org
+  _namespace:
+    host: tenant-root.example.org
+    ingress: tenant-root
+  metricsStorages:
+    - name: shortterm
+      retentionPeriod: "3d"
+      deduplicationInterval: "15s"
+    - name: longterm
+      retentionPeriod: "14d"
+      deduplicationInterval: "5m"
+
+tests:
+  - it: selects the Service of the VMAlert the chart renders
+    asserts:
+      - equal:
+          path: spec.selector.matchLabels
+          value:
+            app.kubernetes.io/component: monitoring
+            app.kubernetes.io/instance: vmalert-shortterm
+            app.kubernetes.io/name: vmalert
+
+  - it: renders nothing without metrics storages, like the VMAlert itself
+    set:
+      metricsStorages: []
+    asserts:
+      - hasDocuments:
+          count: 0

@@ -13,10 +13,12 @@ LimitRange, which is cozy-keycloak and any tenant that leaves resourceQuotas
 empty, gave the sidecar no requests and no limit at all, so nothing reserved
 memory for it and nothing bounded it. The same request and limit settle both:
 256Mi holds the measured working set and 1Gi is four times the measurement.
-No CPU limit is set, matching the entityOperator precedent in
-packages/apps/kafka: a throttled sidecar stalls WAL archiving instead of
-failing it. Inside a tenant the limit counts against the ResourceQuota
-limits.memory budget, 1Gi per instance pod.
+The CPU limit is explicit for the same reason: left unset, that LimitRange
+gives the sidecar its 250m default, so gzip compression of full backups and
+WAL segments runs on a quarter of a core (a 1.6 GB database took 30 minutes
+to back up). One core keeps the sidecar from starving the instance while
+removing that ceiling. Inside a tenant both limits count against the
+ResourceQuota budget, one core and 1Gi per instance pod.
 
 Checksum: since botocore ~1.36 (early 2025) the default
 RequestChecksumCalculation is when_supported, which attaches a flexible checksum
@@ -39,6 +41,7 @@ instanceSidecarConfiguration:
       cpu: 100m
       memory: 256Mi
     limits:
+      cpu: "1"
       memory: 1Gi
   env:
     - name: AWS_REQUEST_CHECKSUM_CALCULATION

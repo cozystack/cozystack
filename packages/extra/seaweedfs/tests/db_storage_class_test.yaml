@@ -1,0 +1,30 @@
+suite: seaweedfs metadata database storage class reaches its release as a string
+
+templates:
+  - templates/seaweedfs-db.yaml
+
+release:
+  name: seaweedfs
+  namespace: tenant-root
+
+tests:
+  # A StorageClass name may be all digits; handed on unquoted it reaches the
+  # database release as a number, and a line break in it would open new keys
+  # in that release's values.
+  - it: hands a numeric storage class name on as a string
+    set:
+      db:
+        storageClass: "123"
+    asserts:
+      - equal:
+          path: spec.values.db.storageClass
+          value: "123"
+
+  - it: keeps a storage class with a line break inside its own field
+    set:
+      db:
+        storageClass: "local\n      replicas: 9"
+    asserts:
+      - equal:
+          path: spec.values.db.storageClass
+          value: "local\n      replicas: 9"

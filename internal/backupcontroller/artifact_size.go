@@ -36,6 +36,7 @@ type s3ObjectInfo struct {
 
 type s3ObjectLister interface {
 	ListObjects(ctx context.Context, bucket, prefix string, recursive bool) ([]s3ObjectInfo, error)
+	StatObject(ctx context.Context, bucket, key string) (int64, error)
 }
 
 type s3ObjectRemover interface {
@@ -60,6 +61,9 @@ type s3Connection struct {
 	// what the writer of the backup trusted, no more.
 	CAPEM  []byte
 	CAOnly bool
+	// InsecureSkipVerify mirrors an explicit admin opt-in a strategy
+	// already applies to its own uploads; it is never a fallback.
+	InsecureSkipVerify bool
 }
 
 // objectStore reads back what a backup wrote: the Secrets it was written
@@ -140,14 +144,18 @@ func newMinioObjectClient(conn s3Connection) (*minioObjectLister, error) {
 		Region: conn.Region,
 		Secure: conn.Secure,
 	}
-	if conn.Secure && len(conn.CAPEM) > 0 {
+	if conn.Secure && (len(conn.CAPEM) > 0 || conn.InsecureSkipVerify) {
 		// Start from minio's transport to keep its proxy and timeout settings.
 		tr, err := minio.DefaultTransport(true)
 		if err != nil {
 			return nil, err
 		}
-		if tr.TLSClientConfig.RootCAs, err = endpointTrustPool(conn, tr.TLSClientConfig.RootCAs); err != nil {
-			return nil, err
+		if len(conn.CAPEM) > 0 {
+			if tr.TLSClientConfig.RootCAs, err = endpointTrustPool(conn, tr.TLSClientConfig.RootCAs); err != nil {
+				return nil, err
+			}
+		} else {
+			tr.TLSClientConfig.InsecureSkipVerify = true
 		}
 		opts.Transport = tr
 	}
@@ -182,6 +190,18 @@ func endpointTrustPool(conn s3Connection, system *x509.CertPool) (*x509.CertPool
 
 func (l *minioObjectLister) ListObjects(ctx context.Context, bucket, prefix string, recursive bool) ([]s3ObjectInfo, error) {
 	return collectObjects(ctx, l.client.ListObjects(ctx, bucket, minio.ListObjectsOptions{Prefix: prefix, Recursive: recursive}))
+}
+
+func (l *minioObjectLister) StatObject(ctx context.Context, bucket, key string) (int64, error) {
+	info, err := l.client.StatObject(ctx, bucket, key, minio.StatObjectOptions{})
+	if err != nil {
+		return 0, err
+	}
+	// minio-go reports -1 when the response carries no Content-Length.
+	if info.Size < 0 {
+		return 0, fmt.Errorf("object %s/%s: the endpoint reported no size", bucket, key)
+	}
+	return info.Size, nil
 }
 
 func (l *minioObjectLister) RemoveObject(ctx context.Context, bucket, key string) error {
