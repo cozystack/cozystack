@@ -1,0 +1,107 @@
+name: Backport batch
+
+# Builds the backport batch for each line `backport-batch lines` names, the
+# newest released lines and any line in its rc window, newest line first, as
+# docs/release/backports.md describes. The steps live in
+# hack/backport-batch-scheduled.sh, which a maintainer can also run by hand.
+#
+# The batch runs as the cozystack-ci App, with a token minted for this
+# repository alone with Contents and Pull requests write. It has no
+# workflows permission, so an original that changes .github/workflows/
+# waits on the batch for a maintainer (--no-workflow-files). Its pushes,
+# unlike GITHUB_TOKEN's, start CI on the batch pull request.
+#
+# Repository settings it reads; none is created here:
+#   secret   COZYSTACK_CI_APP_ID, COZYSTACK_CI_PRIVATE_KEY
+#                                  the cozystack-ci App, shared with the
+#                                  release workflows. Required.
+#   variable BACKPORT_ALERT_TEAM   the team or person the batch's comment
+#                                  mentions, org/team or a login.
+#
+# A batch open since the previous run, deferred conflicts and originals that
+# change workflows wait for a maintainer: the batch's comment lists them. A
+# failed batch CI waits too, and shows on the batch pull request's checks.
+
+on:
+  schedule:
+    # Monday and Thursday: each run leaves working days to cut an rc, run its
+    # e2e and promote it before the weekend. 06:23 UTC is after the nightly
+    # and the daily sweeps.
+    - cron: '23 6 * * 1,4'
+  workflow_dispatch: {}
+
+permissions: {}
+
+concurrency:
+  group: backport-batch
+  cancel-in-progress: false
+
+jobs:
+  batch:
+    name: Backport batch
+    if: github.repository == 'cozystack/cozystack'
+    runs-on: ubuntu-latest
+    # The App token lives an hour from its mint, a few minutes in; a run takes
+    # minutes, so the job ends well before the token does.
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    env:
+      # The pipe falls back to direct on any proxy error (hack/common-envs.mk).
+      GOPROXY: "https://proxy.golang.org|direct"
+    steps:
+      - name: Require the cozystack-ci App
+        env:
+          APP_ID: ${{ secrets.COZYSTACK_CI_APP_ID }}
+          APP_KEY: ${{ secrets.COZYSTACK_CI_PRIVATE_KEY }}
+        run: |
+          if [ -z "$APP_ID" ] || [ -z "$APP_KEY" ]; then
+            echo "::error::COZYSTACK_CI_APP_ID or COZYSTACK_CI_PRIVATE_KEY is not set. The batch pushes and opens pull requests as the cozystack-ci App only; see docs/release/backports.md#the-scheduled-run."
+            exit 1
+          fi
+
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: Build backport-batch
+        run: go build -o "$RUNNER_TEMP/backport-batch" ./cmd/backport-batch
+
+      - name: Generate GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547 # v1
+        with:
+          app-id: ${{ secrets.COZYSTACK_CI_APP_ID }}
+          private-key: ${{ secrets.COZYSTACK_CI_PRIVATE_KEY }}
+          owner: cozystack
+          repositories: cozystack
+          permission-contents: write
+          permission-pull-requests: write
+
+      # git pushes through gh, which reads the token from the environment of
+      # each call, so the token is never written into the checkout.
+      - name: Use the App's bot as git identity and credential
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          APP_SLUG: ${{ steps.app-token.outputs.app-slug }}
+        run: |
+          gh auth setup-git
+          id=$(gh api "/users/${APP_SLUG}[bot]" --jq .id)
+          git config --global user.name "${APP_SLUG}[bot]"
+          git config --global user.email "${id}+${APP_SLUG}[bot]@users.noreply.github.com"
+
+      - name: Run the batch
+        env:
+          BACKPORT_BATCH: ${{ runner.temp }}/backport-batch
+          BACKPORT_BATCH_TOKEN: ${{ steps.app-token.outputs.token }}
+          BACKPORT_BATCH_BOT: ${{ steps.app-token.outputs.app-slug }}[bot]
+          BACKPORT_ALERT_TEAM: ${{ vars.BACKPORT_ALERT_TEAM }}
+        run: hack/backport-batch-scheduled.sh --no-workflow-files

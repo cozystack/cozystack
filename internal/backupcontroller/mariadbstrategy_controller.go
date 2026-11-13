@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"time"
 
+	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
@@ -204,7 +205,10 @@ func (r *BackupJobReconciler) reconcileMariaDB(ctx context.Context, j *backupsv1
 	cond := apimeta.FindStatusCondition(mdbBackup.Status.Conditions, mariadbtypes.ConditionTypeComplete)
 
 	switch {
-	case cond != nil && cond.Status == metav1.ConditionTrue:
+	case cond != nil && cond.Reason == mariadbtypes.ConditionReasonJobFailed:
+		return r.markBackupJobFailed(ctx, j, mariadbJobFailedMessage(ctx, r.Client, "Backup", mdbBackup.Namespace, mdbBackup.Name, cond))
+
+	case cond != nil && cond.Status == metav1.ConditionTrue && cond.Reason == mariadbtypes.ConditionReasonJobComplete:
 		// Backup completed successfully. Materialise the Cozystack artifact
 		// and finalise the BackupJob. Idempotent: if the artifact already
 		// exists (a previous reconcile created it and then raced on the
@@ -214,7 +218,7 @@ func (r *BackupJobReconciler) reconcileMariaDB(ctx context.Context, j *backupsv1
 		}
 		artifact, err := r.createMariaDBBackupArtifact(ctx, j, resolved, mdbBackup, rendered)
 		if err != nil {
-			return r.markBackupJobFailed(ctx, j, fmt.Sprintf("failed to create Backup artifact: %v", err))
+			return r.failBackupArtifact(ctx, j, err)
 		}
 		now := metav1.Now()
 		j.Status.BackupRef = &corev1.LocalObjectReference{Name: artifact.Name}
@@ -231,32 +235,52 @@ func (r *BackupJobReconciler) reconcileMariaDB(ctx context.Context, j *backupsv1
 		}
 		return ctrl.Result{}, nil
 
-	case cond != nil && cond.Status == metav1.ConditionFalse && cond.Reason == mariadbtypes.ConditionReasonJobFailed:
-		// Terminal failure. The operator marks Complete=False/JobFailed only
-		// after the underlying Job exhausts its backoff budget, so we can
-		// fail the BackupJob immediately rather than waiting for the
-		// driver-side deadline.
-		message := cond.Message
-		if message == "" {
-			message = "k8s.mariadb.com Backup terminal failure"
-		}
-		return r.markBackupJobFailed(ctx, j, message)
-
 	default:
 		// Still running (Complete=False/JobRunning, Complete=False/JobNotComplete,
-		// JobSuspended, or no Complete condition yet). Apply a wall-clock
-		// deadline so a permanently-stuck Backup eventually fails the
-		// BackupJob instead of pinning it Running forever.
+		// JobSuspended, a reason this driver does not know, or no Complete
+		// condition yet). Apply a wall-clock deadline so a permanently-stuck
+		// Backup eventually fails the BackupJob instead of pinning it Running
+		// forever.
 		if mariadbBackupDeadlineExceeded(j.Status.StartedAt) {
-			detail := "no Complete condition observed"
-			if cond != nil {
-				detail = fmt.Sprintf("Complete=%s/%s", cond.Status, cond.Reason)
-			}
 			return r.markBackupJobFailed(ctx, j, fmt.Sprintf(
-				"k8s.mariadb.com Backup did not complete within %s (%s)", mariadbDefaultBackupDeadline, detail))
+				"k8s.mariadb.com Backup did not complete within %s (%s)", mariadbDefaultBackupDeadline, mariadbCompleteDetail(cond)))
 		}
 		return ctrl.Result{RequeueAfter: mariadbPollInterval}, nil
 	}
+}
+
+// mariadbJobFailedMessage names the operator object whose Job failed and
+// carries that Job's own Failed condition, because the operator's condition
+// message is only "Failed". The operator names the Job after the object.
+func mariadbJobFailedMessage(ctx context.Context, c client.Reader, kind, namespace, name string, cond *metav1.Condition) string {
+	message := fmt.Sprintf("k8s.mariadb.com/%s %s/%s failed (Complete=%s/%s)", kind, namespace, name, cond.Status, cond.Reason)
+	job := &batchv1.Job{}
+	if err := c.Get(ctx, types.NamespacedName{Namespace: namespace, Name: name}, job); err != nil {
+		if apierrors.IsNotFound(err) {
+			return fmt.Sprintf("%s; Job %s/%s not found", message, namespace, name)
+		}
+		return fmt.Sprintf("%s; reading Job %s/%s: %v", message, namespace, name, err)
+	}
+	for _, jc := range job.Status.Conditions {
+		if jc.Type == batchv1.JobFailed && jc.Status == corev1.ConditionTrue {
+			return fmt.Sprintf("%s; Job %s/%s: %s: %s", message, namespace, name, jc.Reason, jc.Message)
+		}
+	}
+	return fmt.Sprintf("%s; Job %s/%s reports no Failed condition", message, namespace, name)
+}
+
+// mariadbCompleteDetail describes the last Complete condition for a deadline
+// failure. The message matters for reason Failed, which the operator sets
+// with its own cause ("Error creating Job", "Backup not complete") rather
+// than from a Job.
+func mariadbCompleteDetail(cond *metav1.Condition) string {
+	if cond == nil {
+		return "no Complete condition observed"
+	}
+	if cond.Message == "" {
+		return fmt.Sprintf("Complete=%s/%s", cond.Status, cond.Reason)
+	}
+	return fmt.Sprintf("Complete=%s/%s: %s", cond.Status, cond.Reason, cond.Message)
 }
 
 // mariadbBackupDeadlineExceeded reports whether enough wall-clock time has
@@ -365,6 +389,10 @@ func (r *BackupJobReconciler) createMariaDBBackupArtifact(
 	mdbBackup *mariadbtypes.Backup,
 	rendered *strategyv1alpha1.MariaDBTemplate,
 ) (*backupsv1alpha1.Backup, error) {
+	existing, probe := r.existingBackup(ctx, j.Namespace, j.Name)
+	if existing != nil {
+		return existing, nil
+	}
 	takenAt := metav1.Now()
 	if cond := apimeta.FindStatusCondition(mdbBackup.Status.Conditions, mariadbtypes.ConditionTypeComplete); cond != nil && !cond.LastTransitionTime.IsZero() {
 		takenAt = cond.LastTransitionTime
@@ -393,6 +421,9 @@ func (r *BackupJobReconciler) createMariaDBBackupArtifact(
 	// no Artifact at all - leave it nil instead.
 	if uri := driverMD[mariadbStorageURIKey]; uri != "" {
 		status.Artifact = &backupsv1alpha1.BackupArtifact{URI: uri}
+		if probe {
+			status.Artifact.SizeBytes = r.mariadbArtifactSizeBytes(ctx, mdbBackup, takenAt.Time)
+		}
 	}
 	backup := &backupsv1alpha1.Backup{
 		ObjectMeta: metav1.ObjectMeta{
@@ -415,8 +446,8 @@ func (r *BackupJobReconciler) createMariaDBBackupArtifact(
 			return nil, err
 		}
 		existing := &backupsv1alpha1.Backup{}
-		if getErr := r.Get(ctx, types.NamespacedName{Namespace: backup.Namespace, Name: backup.Name}, existing); getErr != nil {
-			return nil, getErr
+		if getErr := r.apiReader().Get(ctx, types.NamespacedName{Namespace: backup.Namespace, Name: backup.Name}, existing); getErr != nil {
+			return nil, fmt.Errorf("%w: %v", errBackupNotReadBack, getErr)
 		}
 		return existing, nil
 	}
@@ -570,7 +601,10 @@ func (r *RestoreJobReconciler) reconcileMariaDBRestore(ctx context.Context, rest
 
 	cond := apimeta.FindStatusCondition(mdbRestore.Status.Conditions, mariadbtypes.ConditionTypeComplete)
 	switch {
-	case cond != nil && cond.Status == metav1.ConditionTrue:
+	case cond != nil && cond.Reason == mariadbtypes.ConditionReasonJobFailed:
+		return r.markRestoreJobFailed(ctx, restoreJob, mariadbJobFailedMessage(ctx, r.Client, "Restore", mdbRestore.Namespace, mdbRestore.Name, cond))
+
+	case cond != nil && cond.Status == metav1.ConditionTrue && cond.Reason == mariadbtypes.ConditionReasonJobComplete:
 		now := metav1.Now()
 		restoreJob.Status.CompletedAt = &now
 		restoreJob.Status.Phase = backupsv1alpha1.RestoreJobPhaseSucceeded
@@ -585,23 +619,12 @@ func (r *RestoreJobReconciler) reconcileMariaDBRestore(ctx context.Context, rest
 		}
 		return ctrl.Result{}, nil
 
-	case cond != nil && cond.Status == metav1.ConditionFalse && cond.Reason == mariadbtypes.ConditionReasonJobFailed:
-		message := cond.Message
-		if message == "" {
-			message = fmt.Sprintf("k8s.mariadb.com/Restore %s/%s terminal failure", mdbRestore.Namespace, mdbRestore.Name)
-		}
-		return r.markRestoreJobFailed(ctx, restoreJob, message)
-
 	default:
 		deadline := options.effectiveRestoreDeadline()
 		if restoreJob.Status.StartedAt != nil && time.Since(restoreJob.Status.StartedAt.Time) > deadline {
-			detail := "no Complete condition observed"
-			if cond != nil {
-				detail = fmt.Sprintf("Complete=%s/%s", cond.Status, cond.Reason)
-			}
 			return r.markRestoreJobFailed(ctx, restoreJob, fmt.Sprintf(
 				"k8s.mariadb.com/Restore did not complete within %s (%s; override via spec.options.restoreTimeoutSeconds)",
-				deadline, detail))
+				deadline, mariadbCompleteDetail(cond)))
 		}
 		return ctrl.Result{RequeueAfter: mariadbPollInterval}, nil
 	}

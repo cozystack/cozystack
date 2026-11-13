@@ -155,5 +155,29 @@ hr_generation=$(kubectl -n "$NAMESPACE" get hr vm-disk-backup-src -o jsonpath='{
 wait_for_field hr vm-disk-backup-src '{.status.observedGeneration}' "$hr_generation" "$NAMESPACE" 120
 wait_hr_ready vm-disk-backup-src 180
 
+# The restore deleted the DataVolume, and a restored release matches its chart
+# and values, so Flux does not recreate it: the next Helm upgrade does, usually
+# a platform update long after the restore. Force that upgrade here. CDI must
+# admit a DataVolume over the claim Velero restored and adopt it as populated;
+# refusing it leaves the release failed on every upgrade from then on, and
+# re-importing it would overwrite the restored data.
+log_step "Forcing a Helm upgrade so the restored VMDisk recreates its DataVolume..."
+force_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+kubectl -n "$NAMESPACE" annotate hr vm-disk-backup-src --overwrite \
+    "reconcile.fluxcd.io/requestedAt=${force_at}" "reconcile.fluxcd.io/forceAt=${force_at}"
+wait_for_field hr vm-disk-backup-src '{.status.lastHandledForceAt}' "$force_at" "$NAMESPACE" 180
+wait_hr_ready vm-disk-backup-src 180
+wait_for_field datavolume vm-disk-backup-src '{.status.phase}' Succeeded "$NAMESPACE" 120 Failed
+read -r adopted_uid owner_kind < <(kubectl -n "$NAMESPACE" get pvc "$PVC" \
+    -o jsonpath='{.metadata.uid} {.metadata.ownerReferences[?(@.controller==true)].kind}') || true
+[[ "${adopted_uid:-}" == "$new_uid" ]] || {
+    log_error "PVC $PVC changed uid from $new_uid to '${adopted_uid:-}' — the DataVolume replaced the restored disk instead of adopting it"
+    exit 1
+}
+[[ "${owner_kind:-}" == "DataVolume" ]] || {
+    log_error "PVC $PVC is controlled by '${owner_kind:-nothing}', not by its DataVolume — CDI did not adopt the restored disk"
+    exit 1
+}
+
 kubectl get restorejob vmdisk-restore-in-place -n "$NAMESPACE" -o wide >&2 || true
 log_success "Restore completed; VMDisk 'backup-src' recreated from backup (${restore_label}, uid ${new_uid}), Bound and Ready"

@@ -211,13 +211,13 @@ spec:
     backups.cozystack.io/RestoreJob targeting a fresh Postgres app — the
     backup-controller's CNPG driver SSA-patches the Cluster's
     spec.bootstrap before CNPG sees it. See the BackupClass and Restore
-    flow in docs/operations/backup-classes.md.
+    flow in https://cozystack.io/docs/v1/operations/services/backup-classes/.
 
     Fail fast at chart-render time so tenants see the misconfiguration
     immediately rather than during a Postgres bootstrap pod crash loop.
   */}}
   {{- if and .Values.bootstrap.enabled .Values.backup.useSystemBucket }}
-  {{- fail "postgres: bootstrap.enabled=true is incompatible with backup.useSystemBucket=true. Use a backups.cozystack.io/RestoreJob against the cozy-default BackupClass to restore from the system bucket; see docs/operations/backup-classes.md." }}
+  {{- fail "postgres: bootstrap.enabled=true is incompatible with backup.useSystemBucket=true. Use a backups.cozystack.io/RestoreJob against the cozy-default BackupClass to restore from the system bucket; see https://cozystack.io/docs/v1/operations/services/backup-classes/." }}
   {{- end }}
   {{/*
     The externalClusters bootstrap block below references $credSecretName
