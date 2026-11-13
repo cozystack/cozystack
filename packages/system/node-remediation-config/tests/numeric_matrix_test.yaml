@@ -1,0 +1,76 @@
+# workerMinHealthy against the shapes a value arrives in. The values of a
+# Package travel as JSON, so a number written in YAML reaches the chart as a
+# float64; values.schema.json admits an integer or a percentage string and
+# refuses every other shape under the key, and the helper that reads a legal
+# value turns an integral float into its integer text. Legal shapes render as
+# expected; each refusal names the key. The ports have the same
+# matrix in numeric_matrix_ports_test.yaml, against the template they land in.
+suite: node-remediation-config workerMinHealthy across input shapes
+templates:
+  - templates/nodehealthchecks.yaml
+release:
+  name: node-remediation-config
+  namespace: cozy-node-remediation
+values:
+  - fixtures/shared-secret.yaml
+tests:
+  - it: workerMinHealthy integer renders as a number
+    set:
+      workerMinHealthy: 10
+    documentIndex: 1
+    asserts:
+      - equal:
+          path: spec.minHealthy
+          value: 10
+  - it: workerMinHealthy integral float renders as the integer
+    set:
+      workerMinHealthy: 10.0
+    documentIndex: 1
+    asserts:
+      - equal:
+          path: spec.minHealthy
+          value: 10
+  - it: workerMinHealthy percentage string renders as the string
+    set:
+      workerMinHealthy: 51%
+    documentIndex: 1
+    asserts:
+      - equal:
+          path: spec.minHealthy
+          value: "51%"
+  - it: workerMinHealthy fractional float is refused, not rounded
+    set:
+      workerMinHealthy: 0.51
+    asserts:
+      - failedTemplate:
+          errorPattern: "'/workerMinHealthy': 'oneOf' failed"
+  - it: workerMinHealthy leading zero is refused
+    set:
+      workerMinHealthy: "010"
+    asserts:
+      - failedTemplate:
+          errorPattern: "'/workerMinHealthy': 'oneOf' failed"
+  - it: workerMinHealthy negative is refused
+    set:
+      workerMinHealthy: -1
+    asserts:
+      - failedTemplate:
+          errorPattern: "'/workerMinHealthy': 'oneOf' failed"
+  - it: workerMinHealthy boolean is refused
+    set:
+      workerMinHealthy: true
+    asserts:
+      - failedTemplate:
+          errorPattern: "'/workerMinHealthy': 'oneOf' failed"
+  - it: workerMinHealthy with more than six digits is refused
+    set:
+      workerMinHealthy: 1234567
+    asserts:
+      - failedTemplate:
+          errorPattern: "'/workerMinHealthy': 'oneOf' failed"
+  - it: workerMinHealthy float beyond integer range is refused
+    set:
+      workerMinHealthy: 1.0e20
+    asserts:
+      - failedTemplate:
+          errorPattern: "'/workerMinHealthy': 'oneOf' failed"

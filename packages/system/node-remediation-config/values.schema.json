@@ -1,0 +1,134 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Chart Values",
+  "description": "The nodeRemediation block of the platform values, forwarded whole. Keys outside this list are allowed at the top level only: the platform adds its own there for every release. The same block reaches the node-remediation chart, whose schema types it identically.",
+  "type": "object",
+  "required": [
+    "unhealthyAfter",
+    "stormCooldown",
+    "workerMinHealthy"
+  ],
+  "properties": {
+    "agent": {
+      "description": "The fence agent. Safety-mode verifies the system identity over Redfish, so only fence_redfish exists.",
+      "type": "string",
+      "enum": [
+        "fence_redfish"
+      ]
+    },
+    "unhealthyAfter": {
+      "description": "How long a node stays Ready=Unknown before it is remediated, as a Go duration of hours, minutes and seconds.",
+      "type": "string",
+      "pattern": "^([0-9]+(h|m|s))+$"
+    },
+    "remediateNotReady": {
+      "description": "Remediate Ready=False as well. A boolean, not the word in quotes.",
+      "type": "boolean"
+    },
+    "workerMinHealthy": {
+      "description": "Workers that must stay healthy for a worker to be remediated: a count as an integer, or a percentage string up to 100%.",
+      "oneOf": [
+        {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 999999
+        },
+        {
+          "type": "string",
+          "pattern": "^((100|[0-9]{1,2})%|[1-9][0-9]{0,5}|0)$"
+        }
+      ]
+    },
+    "stormCooldown": {
+      "description": "How long NodeHealthCheck waits after a storm before it remediates again, as a Go duration.",
+      "type": "string",
+      "pattern": "^([0-9]+(h|m|s))+$"
+    },
+    "paused": {
+      "description": "Start no new remediation. A boolean, not the word in quotes.",
+      "type": "boolean"
+    },
+    "bmc": {
+      "description": "The BMCs: the CA they present, the credentials Secret, the ComputerSystem and the port shared by every node, and one entry per Node name.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "caBundle": {
+          "description": "PEM CA certificate(s) the BMCs present on their Redfish endpoint.",
+          "type": "string"
+        },
+        "credentialsSecretName": {
+          "description": "Secret in the BMC namespace with username and password for every node without its own, a DNS-1123 subdomain name.",
+          "type": "string",
+          "pattern": "^$|^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$",
+          "maxLength": 253
+        },
+        "systemsUri": {
+          "description": "The Redfish ComputerSystem member, /redfish/v1/Systems/<id>, for every node without its own.",
+          "type": "string",
+          "pattern": "^(/redfish/v1/Systems/[A-Za-z0-9_~-][A-Za-z0-9._~-]*)?$"
+        },
+        "port": {
+          "description": "The Redfish HTTPS port when it is not 443, as an integer or a string of digits without a leading zero.",
+          "oneOf": [
+            {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 65535
+            },
+            {
+              "type": "string",
+              "pattern": "^([1-9][0-9]{0,4})?$"
+            }
+          ]
+        },
+        "nodes": {
+          "description": "One entry per Node name, each with the BMC address and optional overrides.",
+          "type": "object",
+          "propertyNames": {
+            "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$"
+          },
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "address"
+            ],
+            "properties": {
+              "address": {
+                "description": "The BMC host or IP, without scheme, port or path.",
+                "type": "string",
+                "minLength": 1
+              },
+              "port": {
+                "description": "This node's Redfish HTTPS port, overriding bmc.port.",
+                "oneOf": [
+                  {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 65535
+                  },
+                  {
+                    "type": "string",
+                    "pattern": "^([1-9][0-9]{0,4})?$"
+                  }
+                ]
+              },
+              "systemsUri": {
+                "description": "This node's ComputerSystem member, overriding bmc.systemsUri.",
+                "type": "string",
+                "pattern": "^(/redfish/v1/Systems/[A-Za-z0-9_~-][A-Za-z0-9._~-]*)?$"
+              },
+              "credentialsSecretName": {
+                "description": "This node's own credentials Secret, instead of bmc.credentialsSecretName, a DNS-1123 subdomain name.",
+                "type": "string",
+                "pattern": "^$|^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$",
+                "maxLength": 253
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

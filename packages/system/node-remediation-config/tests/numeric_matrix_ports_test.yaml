@@ -1,0 +1,146 @@
+# bmc.port and a node's port against the shapes a value arrives in; the
+# counterpart of numeric_matrix_test.yaml for the template the ports land in.
+# Legal shapes render as the quoted port the fence agent takes; each refusal
+# names the key the value was written under, the shared one or the node's.
+suite: node-remediation-config ports across input shapes
+templates:
+  - templates/fenceagentsremediationtemplate.yaml
+release:
+  name: node-remediation-config
+  namespace: cozy-node-remediation
+values:
+  - fixtures/shared-secret.yaml
+tests:
+  - it: bmc.port integer renders as the quoted port of every node without its own
+    set:
+      bmc:
+        port: 8443
+    asserts:
+      - equal:
+          path: spec.template.spec.nodeparameters["--ipport"].node1
+          value: "8443"
+  - it: bmc.port integral float renders as the integer
+    set:
+      bmc:
+        port: 8443.0
+    asserts:
+      - equal:
+          path: spec.template.spec.nodeparameters["--ipport"].node1
+          value: "8443"
+  - it: bmc.port fractional float is refused, not rounded
+    set:
+      bmc:
+        port: 443.5
+    asserts:
+      - failedTemplate:
+          errorPattern: "'/bmc/port': 'oneOf' failed"
+  - it: bmc.port leading zero is refused
+    set:
+      bmc:
+        port: "0443"
+    asserts:
+      - failedTemplate:
+          errorPattern: "'/bmc/port': 'oneOf' failed"
+  - it: bmc.port negative is refused
+    set:
+      bmc:
+        port: -1
+    asserts:
+      - failedTemplate:
+          errorPattern: "'/bmc/port': 'oneOf' failed"
+  - it: bmc.port boolean is refused
+    set:
+      bmc:
+        port: true
+    asserts:
+      - failedTemplate:
+          errorPattern: "'/bmc/port': 'oneOf' failed"
+  - it: bmc.port above 65535 is refused
+    set:
+      bmc:
+        port: 70000
+    asserts:
+      - failedTemplate:
+          errorPattern: "'/bmc/port': 'oneOf' failed"
+  - it: bmc.port percentage string is refused
+    set:
+      bmc:
+        port: 51%
+    asserts:
+      - failedTemplate:
+          errorPattern: "'/bmc/port': 'oneOf' failed"
+
+  - it: node port integer renders as that node's quoted port
+    set:
+      bmc:
+        nodes:
+          node1:
+            port: 9443
+    asserts:
+      - equal:
+          path: spec.template.spec.nodeparameters["--ipport"].node1
+          value: "9443"
+  - it: node port integral float renders as the integer
+    set:
+      bmc:
+        nodes:
+          node1:
+            port: 9443.0
+    asserts:
+      - equal:
+          path: spec.template.spec.nodeparameters["--ipport"].node1
+          value: "9443"
+  - it: node port fractional float is refused, not rounded
+    set:
+      bmc:
+        nodes:
+          node1:
+            port: 443.5
+    asserts:
+      - failedTemplate:
+          errorPattern: "'/bmc/nodes/node1/port': 'oneOf' failed"
+  - it: node port leading zero is refused
+    set:
+      bmc:
+        nodes:
+          node1:
+            port: "0443"
+    asserts:
+      - failedTemplate:
+          errorPattern: "'/bmc/nodes/node1/port': 'oneOf' failed"
+  - it: node port negative is refused
+    set:
+      bmc:
+        nodes:
+          node1:
+            port: -1
+    asserts:
+      - failedTemplate:
+          errorPattern: "'/bmc/nodes/node1/port': 'oneOf' failed"
+  - it: node port boolean is refused
+    set:
+      bmc:
+        nodes:
+          node1:
+            port: true
+    asserts:
+      - failedTemplate:
+          errorPattern: "'/bmc/nodes/node1/port': 'oneOf' failed"
+  - it: node port above 65535 is refused
+    set:
+      bmc:
+        nodes:
+          node1:
+            port: 70000
+    asserts:
+      - failedTemplate:
+          errorPattern: "'/bmc/nodes/node1/port': 'oneOf' failed"
+  - it: node port percentage string is refused
+    set:
+      bmc:
+        nodes:
+          node1:
+            port: 51%
+    asserts:
+      - failedTemplate:
+          errorPattern: "'/bmc/nodes/node1/port': 'oneOf' failed"

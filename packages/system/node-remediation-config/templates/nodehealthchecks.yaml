@@ -1,0 +1,50 @@
+{{- include "node-remediation-config.validate" . -}}
+{{- /*
+Two NodeHealthCheck objects with fixed selectors: NodeHealthCheck's webhook
+refuses a selector change while a remediation is open, and a typical cluster
+here runs workloads on its control-plane nodes, so a worker-only selector would
+fence nothing there. Control-plane nodes need a strict majority, which
+NodeHealthCheck rounds up: 2 of 3, 3 of 4, 3 of 5. Ready=Unknown is what a
+dead or partitioned node reports; Ready=False is opt-in (remediateNotReady).
+*/ -}}
+{{- define "node-remediation-config.nhc" -}}
+{{- $root := index . 0 -}}
+{{- $name := index . 1 -}}
+{{- $selector := index . 2 -}}
+{{- $minHealthy := index . 3 -}}
+---
+apiVersion: remediation.medik8s.io/v1alpha1
+kind: NodeHealthCheck
+metadata:
+  name: {{ $name }}
+spec:
+  selector:
+{{ toYaml $selector | indent 4 }}
+  {{- /* An integer count must reach the API as a number: the field is int-or-string, and NodeHealthCheck treats a string without % as an error at reconcile time, after the install went green. */}}
+  {{- if regexMatch "^[0-9]+$" $minHealthy }}
+  minHealthy: {{ $minHealthy }}
+  {{- else }}
+  minHealthy: {{ $minHealthy | quote }}
+  {{- end }}
+  unhealthyConditions:
+    - type: Ready
+      status: Unknown
+      duration: {{ toString $root.Values.unhealthyAfter | quote }}
+    {{- if $root.Values.remediateNotReady }}
+    - type: Ready
+      status: "False"
+      duration: {{ toString $root.Values.unhealthyAfter | quote }}
+    {{- end }}
+  stormCooldownDuration: {{ toString $root.Values.stormCooldown | quote }}
+  remediationTemplate:
+    apiVersion: fence-agents-remediation.medik8s.io/v1alpha1
+    kind: FenceAgentsRemediationTemplate
+    name: redfish-off
+    namespace: cozy-node-remediation-bmc
+  {{- if $root.Values.paused }}
+  pauseRequests:
+    - paused through the platform values, nodeRemediation.paused
+  {{- end }}
+{{ end -}}
+{{ include "node-remediation-config.nhc" (list . "node-remediation-control-plane" (dict "matchExpressions" (list (dict "key" "node-role.kubernetes.io/control-plane" "operator" "Exists"))) "51%") }}
+{{ include "node-remediation-config.nhc" (list . "node-remediation-workers" (dict "matchExpressions" (list (dict "key" "node-role.kubernetes.io/control-plane" "operator" "DoesNotExist") (dict "key" "node-role.kubernetes.io/master" "operator" "DoesNotExist"))) (include "node-remediation-config.scalar" (list .Values "workerMinHealthy"))) }}

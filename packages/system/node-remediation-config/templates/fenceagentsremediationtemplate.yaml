@@ -1,0 +1,60 @@
+{{- include "node-remediation-config.validate" . -}}
+{{- $bmc := .Values.bmc -}}
+{{- $shared := include "node-remediation-config.scalar" (list $bmc "credentialsSecretName") -}}
+---
+# The template every remediation CR is stamped from. It lives next to the
+# credentials, in the one namespace the fence-agents operator reads Secrets
+# from. RedfishOffV1 fixes the action to off and the strategy to the
+# out-of-service taint: the taint releases the node's pods and volumes only
+# after the BMC has confirmed the system is off. The retry budget stays inside
+# the bounds the operator accepts (1-5 attempts, 1-30s apart, 1-60s each):
+# three attempts five seconds apart give a slow BMC a second and a third
+# chance without holding a dead node for long. Node names are map keys here
+# and are quoted: the manifest is read as YAML 1.1, where a bare 010 is 8 and
+# a bare on is true, and a node whose key changed shape has no entry.
+apiVersion: fence-agents-remediation.medik8s.io/v1alpha1
+kind: FenceAgentsRemediationTemplate
+metadata:
+  name: redfish-off
+  namespace: cozy-node-remediation-bmc
+spec:
+  template:
+    spec:
+      safetyPolicy: RedfishOffV1
+      agent: fence_redfish
+      remediationStrategy: OutOfServiceTaint
+      retrycount: 3
+      retryinterval: 5s
+      timeout: 30s
+      {{- if ne $shared "" }}
+      sharedSecretName: {{ $shared | quote }}
+      {{- else }}
+      nodeSecretNames:
+        {{- range $name, $node := $bmc.nodes }}
+        {{ $name | quote }}: {{ include "node-remediation-config.scalar" (list $node "credentialsSecretName") | quote }}
+        {{- end }}
+      {{- end }}
+      sharedparameters:
+        --action: "off"
+      nodeparameters:
+        --ip:
+          {{- range $name, $node := $bmc.nodes }}
+          {{ $name | quote }}: {{ include "node-remediation-config.scalar" (list $node "address") | quote }}
+          {{- end }}
+        --systems-uri:
+          {{- range $name, $node := $bmc.nodes }}
+          {{ $name | quote }}: {{ include "node-remediation-config.systemsUri" (list $node $bmc) | quote }}
+          {{- end }}
+        {{- $ports := dict }}
+        {{- range $name, $node := $bmc.nodes }}
+        {{- $port := include "node-remediation-config.port" (list $node $bmc) }}
+        {{- if ne $port "" }}
+        {{- $_ := set $ports $name $port }}
+        {{- end }}
+        {{- end }}
+        {{- if $ports }}
+        --ipport:
+          {{- range $name, $port := $ports }}
+          {{ $name | quote }}: {{ $port | quote }}
+          {{- end }}
+        {{- end }}

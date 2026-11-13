@@ -1,0 +1,56 @@
+# Node names are map keys in the template, and the API reads the manifest as
+# YAML 1.1: bare, 010 is 8, 1e3 is 1000 and on is true, and a node whose key
+# changed shape has no entry to be fenced with. Its own suite, without the
+# shared fixture, because every node here names its own Secret.
+#
+# helm-unittest reads the render as YAML 1.2, where a bare `on` is already a
+# string, so the `on` assertions below document the case without guarding it;
+# the regression protection comes from `010` and `1e3`, which both parsers
+# read as numbers when unquoted.
+suite: node-remediation-config keeps node names as the strings they are
+templates:
+  - templates/fenceagentsremediationtemplate.yaml
+release:
+  name: node-remediation-config
+  namespace: cozy-node-remediation
+tests:
+  - it: keeps node names that YAML would read as numbers or booleans
+    set:
+      bmc:
+        systemsUri: /redfish/v1/Systems/1
+        nodes:
+          "010":
+            address: 192.0.2.10
+            credentialsSecretName: bmc-010
+          "1e3":
+            address: 192.0.2.13
+            credentialsSecretName: bmc-1e3
+          "on":
+            address: 192.0.2.14
+            credentialsSecretName: bmc-on
+            port: 8443
+    asserts:
+      - equal:
+          path: spec.template.spec.nodeparameters["--ip"]["010"]
+          value: 192.0.2.10
+      - equal:
+          path: spec.template.spec.nodeparameters["--ip"]["1e3"]
+          value: 192.0.2.13
+      - equal:
+          path: spec.template.spec.nodeparameters["--ip"]["on"]
+          value: 192.0.2.14
+      - equal:
+          path: spec.template.spec.nodeparameters["--ipport"]["on"]
+          value: "8443"
+      - equal:
+          path: spec.template.spec.nodeparameters["--systems-uri"]["010"]
+          value: /redfish/v1/Systems/1
+      - equal:
+          path: spec.template.spec.nodeSecretNames["010"]
+          value: bmc-010
+      - equal:
+          path: spec.template.spec.nodeSecretNames["on"]
+          value: bmc-on
+      - equal:
+          path: spec.template.spec.nodeparameters["--systems-uri"]["on"]
+          value: /redfish/v1/Systems/1

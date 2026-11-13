@@ -1,0 +1,353 @@
+# Every key of the nodeRemediation block against a value of the wrong kind.
+# values.schema.json refuses these before any template runs, under the JSON
+# path of the key; a quoted "false" is the case that matters most, since a
+# template reads a non-empty string as true. The same rows run against the
+# operators chart, which receives the same block (tests/values_schema_test.yaml
+# there), and hack/node-remediation-schema.bats pins the two schemas equal.
+suite: node-remediation-config values schema refuses the wrong kind under its key
+templates:
+  - templates/nodehealthchecks.yaml
+release:
+  name: node-remediation-config
+  namespace: cozy-node-remediation
+values:
+  - fixtures/shared-secret.yaml
+tests:
+  - it: accepts the full block beside the keys the platform values Secret adds
+    set:
+      _cluster:
+        name: example
+      keda:
+        clusterDomain: cozy.local
+      agent: fence_redfish
+      unhealthyAfter: 300s
+      remediateNotReady: false
+      workerMinHealthy: 51%
+      stormCooldown: 5m
+      paused: false
+      bmc:
+        caBundle: |
+          -----BEGIN CERTIFICATE-----
+          MIIB
+          -----END CERTIFICATE-----
+        credentialsSecretName: bmc-credentials
+        systemsUri: /redfish/v1/Systems/1
+        port: 8443
+        nodes:
+          node1:
+            address: 192.0.2.11
+            port: 443
+            systemsUri: /redfish/v1/Systems/2
+    asserts:
+      - notFailedTemplate: {}
+  # A null for a key with a chart default drops the key before the schema runs
+  # (the configuration chart: refused as a missing required key); without a
+  # default the null reaches the schema (this chart or that one, depending on
+  # the key) and is refused as the wrong kind. Either way the message names the key.
+  - it: unhealthyAfter as null is refused as a missing key
+    set:
+      unhealthyAfter: null
+    asserts:
+      - failedTemplate:
+          errorPattern: "(missing propert(y|ies) 'unhealthyAfter'|'/unhealthyAfter': got null, want string)"
+  - it: stormCooldown as null is refused as a missing key
+    set:
+      stormCooldown: null
+    asserts:
+      - failedTemplate:
+          errorPattern: "(missing propert(y|ies) 'stormCooldown'|'/stormCooldown': got null, want string)"
+  - it: workerMinHealthy as null is refused as a missing key
+    set:
+      workerMinHealthy: null
+    asserts:
+      - failedTemplate:
+          errorPattern: "(missing propert(y|ies) 'workerMinHealthy'|'/workerMinHealthy': 'oneOf' failed)"
+  - it: remediateNotReady as the string "false" is refused
+    set:
+      remediateNotReady: "false"
+    asserts:
+      - failedTemplate:
+          errorPattern: "'/remediateNotReady': got string, want boolean"
+  - it: remediateNotReady as a number is refused
+    set:
+      remediateNotReady: 0
+    asserts:
+      - failedTemplate:
+          errorPattern: "'/remediateNotReady': got number, want boolean"
+  - it: remediateNotReady as a map is refused
+    set:
+      remediateNotReady: {}
+    asserts:
+      - failedTemplate:
+          errorPattern: "'/remediateNotReady': got object, want boolean"
+  - it: paused as the string "false" is refused
+    set:
+      paused: "false"
+    asserts:
+      - failedTemplate:
+          errorPattern: "'/paused': got string, want boolean"
+  - it: paused as a number is refused
+    set:
+      paused: 1
+    asserts:
+      - failedTemplate:
+          errorPattern: "'/paused': got number, want boolean"
+  - it: unhealthyAfter as a number is refused
+    set:
+      unhealthyAfter: 300
+    asserts:
+      - failedTemplate:
+          errorPattern: "'/unhealthyAfter': got number, want string"
+  - it: unhealthyAfter as a boolean is refused
+    set:
+      unhealthyAfter: true
+    asserts:
+      - failedTemplate:
+          errorPattern: "'/unhealthyAfter': got boolean, want string"
+  - it: unhealthyAfter without a unit is refused
+    set:
+      unhealthyAfter: soon
+    asserts:
+      - failedTemplate:
+          errorPattern: "'/unhealthyAfter': 'soon' does not match pattern"
+  - it: stormCooldown as a number is refused
+    set:
+      stormCooldown: 5
+    asserts:
+      - failedTemplate:
+          errorPattern: "'/stormCooldown': got number, want string"
+  - it: workerMinHealthy as a boolean is refused
+    set:
+      workerMinHealthy: true
+    asserts:
+      - failedTemplate:
+          errorPattern: "'/workerMinHealthy': 'oneOf' failed"
+  - it: workerMinHealthy as a fraction is refused
+    set:
+      workerMinHealthy: 0.51
+    asserts:
+      - failedTemplate:
+          errorPattern: "'/workerMinHealthy': 'oneOf' failed"
+  - it: workerMinHealthy as a map is refused
+    set:
+      workerMinHealthy: {}
+    asserts:
+      - failedTemplate:
+          errorPattern: "'/workerMinHealthy': 'oneOf' failed"
+  - it: agent as a number is refused
+    set:
+      agent: 1
+    asserts:
+      - failedTemplate:
+          errorPattern: "'/agent': got number, want string"
+  - it: another agent is refused
+    set:
+      agent: fence_ipmilan
+    asserts:
+      - failedTemplate:
+          errorPattern: "'/agent': value must be 'fence_redfish'"
+  - it: bmc as a string is refused
+    set:
+      bmc: 192.0.2.11
+    asserts:
+      - failedTemplate:
+          errorPattern: "'/bmc': got string, want object"
+  - it: bmc as a number is refused
+    set:
+      bmc: 1
+    asserts:
+      - failedTemplate:
+          errorPattern: "'/bmc': got number, want object"
+  - it: a key the block does not have is refused under bmc
+    set:
+      bmc:
+        parameters:
+          --ssl-insecure: ""
+    asserts:
+      - failedTemplate:
+          errorPattern: "'/bmc': additional properties 'parameters' not allowed"
+  - it: bmc.caBundle as a number is refused
+    set:
+      bmc:
+        caBundle: 1
+    asserts:
+      - failedTemplate:
+          errorPattern: "'/bmc/caBundle': got number, want string"
+  - it: bmc.credentialsSecretName as a boolean is refused
+    set:
+      bmc:
+        credentialsSecretName: true
+    asserts:
+      - failedTemplate:
+          errorPattern: "'/bmc/credentialsSecretName': got boolean, want string"
+  - it: bmc.credentialsSecretName that is not a DNS-1123 name is refused
+    set:
+      bmc:
+        credentialsSecretName: Bad_Name
+    asserts:
+      - failedTemplate:
+          errorPattern: "'/bmc/credentialsSecretName': 'Bad_Name' does not match pattern"
+  - it: a node credentialsSecretName that is not a DNS-1123 name is refused
+    set:
+      bmc:
+        nodes:
+          node1:
+            address: 192.0.2.11
+            credentialsSecretName: bmc/node1
+    asserts:
+      - failedTemplate:
+          errorPattern: "'/bmc/nodes/node1/credentialsSecretName': 'bmc/node1' does not match pattern"
+  - it: bmc.systemsUri as a number is refused
+    set:
+      bmc:
+        systemsUri: 1
+    asserts:
+      - failedTemplate:
+          errorPattern: "'/bmc/systemsUri': got number, want string"
+  - it: bmc.port as a boolean is refused
+    set:
+      bmc:
+        port: true
+    asserts:
+      - failedTemplate:
+          errorPattern: "'/bmc/port': 'oneOf' failed"
+  - it: bmc.nodes as a string is refused
+    set:
+      bmc:
+        nodes: node1
+    asserts:
+      - failedTemplate:
+          errorPattern: "'/bmc/nodes': got string, want object"
+  - it: bmc.nodes as a list is refused
+    set:
+      bmc:
+        nodes:
+          - node1
+    asserts:
+      - failedTemplate:
+          errorPattern: "'/bmc/nodes': got array, want object"
+  - it: a node that is a string is refused
+    set:
+      bmc:
+        nodes:
+          node1: 192.0.2.11
+    asserts:
+      - failedTemplate:
+          errorPattern: "'/bmc/nodes/node1': got string, want object"
+  - it: a node name that is not a Node name is refused
+    set:
+      bmc:
+        nodes:
+          Node_1:
+            address: 192.0.2.11
+    asserts:
+      - failedTemplate:
+          errorPattern: "invalid propertyName 'Node_1'"
+  - it: a node without an address is refused
+    set:
+      bmc:
+        nodes:
+          node3:
+            port: 443
+    asserts:
+      - failedTemplate:
+          errorPattern: "'/bmc/nodes/node3': missing property 'address'"
+  - it: a node address as a number is refused
+    set:
+      bmc:
+        nodes:
+          node1:
+            address: 192
+    asserts:
+      - failedTemplate:
+          errorPattern: "'/bmc/nodes/node1/address': got number, want string"
+  - it: a node address as a boolean is refused
+    set:
+      bmc:
+        nodes:
+          node1:
+            address: true
+    asserts:
+      - failedTemplate:
+          errorPattern: "'/bmc/nodes/node1/address': got boolean, want string"
+  - it: a node port as a word is refused
+    set:
+      bmc:
+        nodes:
+          node1:
+            address: 192.0.2.11
+            port: https
+    asserts:
+      - failedTemplate:
+          errorPattern: "'/bmc/nodes/node1/port': 'oneOf' failed"
+  - it: a node credentialsSecretName as a number is refused
+    set:
+      bmc:
+        nodes:
+          node1:
+            address: 192.0.2.11
+            credentialsSecretName: 1
+    asserts:
+      - failedTemplate:
+          errorPattern: "'/bmc/nodes/node1/credentialsSecretName': got number, want string"
+  - it: a key a node does not have is refused under the node
+    set:
+      bmc:
+        nodes:
+          node1:
+            address: 192.0.2.11
+            parameters:
+              --power-wait: "10"
+    asserts:
+      - failedTemplate:
+          errorPattern: "'/bmc/nodes/node1': additional properties 'parameters' not allowed"
+  - it: workerMinHealthy above 100% is refused
+    set:
+      workerMinHealthy: 150%
+    asserts:
+      - failedTemplate:
+          errorPattern: "'/workerMinHealthy': 'oneOf' failed"
+  - it: workerMinHealthy with a leading zero is refused
+    set:
+      workerMinHealthy: "010"
+    asserts:
+      - failedTemplate:
+          errorPattern: "'/workerMinHealthy': 'oneOf' failed"
+  - it: bmc.port zero is refused
+    set:
+      bmc:
+        port: 0
+    asserts:
+      - failedTemplate:
+          errorPattern: "'/bmc/port': 'oneOf' failed"
+  - it: bmc.port with a leading zero is refused
+    set:
+      bmc:
+        port: "0443"
+    asserts:
+      - failedTemplate:
+          errorPattern: "'/bmc/port': 'oneOf' failed"
+  - it: bmc.systemsUri that is the Systems collection is refused
+    set:
+      bmc:
+        systemsUri: /redfish/v1/Systems/
+    asserts:
+      - failedTemplate:
+          errorPattern: "'/bmc/systemsUri': '/redfish/v1/Systems/' does not match pattern"
+  - it: bmc.systemsUri that is not a member id is refused
+    set:
+      bmc:
+        systemsUri: /redfish/v1/Systems/..
+    asserts:
+      - failedTemplate:
+          errorPattern: "'/bmc/systemsUri': '/redfish/v1/Systems/..' does not match pattern"
+  - it: a node systemsUri with a trailing slash is refused
+    set:
+      bmc:
+        nodes:
+          node1:
+            address: 192.0.2.11
+            systemsUri: /redfish/v1/Systems/1/
+    asserts:
+      - failedTemplate:
+          errorPattern: "'/bmc/nodes/node1/systemsUri': '/redfish/v1/Systems/1/' does not match pattern"

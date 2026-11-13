@@ -1,0 +1,41 @@
+# The platform forwards the nodeRemediation block of the cozystack-platform
+# Package here as a whole; packages/core/platform/values.yaml documents the
+# keys. The defaults below render nothing useful on their own: bmc.nodes is
+# required, and so is one of bmc.credentialsSecretName or a per-node
+# credentialsSecretName for every node.
+
+# How long a node stays Ready=Unknown before it is remediated; above zero, so
+# that a short partition can clear before the node is powered off.
+unhealthyAfter: 300s
+# Remediate Ready=False as well. Off by default: a node whose runtime or CNI
+# failed reports Ready=False while its workloads keep running, and powering it
+# off trades a degraded node for a restart of everything on it.
+remediateNotReady: false
+# How many worker nodes must stay healthy for a worker to be remediated: a
+# count of nodes as a bare integer, or a percentage of the workers as a
+# string such as 51%, which NodeHealthCheck scales itself. A fraction such as
+# 0.51 is refused, not rounded. 0 disables the threshold: however many workers
+# go unhealthy at once are remediated. Control-plane nodes need a strict
+# majority, which is fixed.
+workerMinHealthy: 51%
+# How long NodeHealthCheck waits after a storm before it remediates again. 0s
+# is legal and means no wait.
+stormCooldown: 5m
+# Stop starting new remediations; used by the documented disable order.
+paused: false
+bmc:
+  # Read by the node-remediation chart: the PEM CA the BMCs present.
+  caBundle: ""
+  # The Secret in cozy-node-remediation-bmc holding username and password for
+  # every node without its own credentialsSecretName. Either this is set and
+  # no node names its own Secret, or every node names one.
+  credentialsSecretName: ""
+  # The Redfish ComputerSystem the fence agent powers off, the same member on
+  # every BMC unless a node overrides it. A collection or a discovered default
+  # is refused, so this is required for every node one way or the other.
+  systemsUri: ""
+  # The Redfish HTTPS port when it is not 443.
+  port: ""
+  # One entry per Node name. address is the BMC host; port, systemsUri and
+  # credentialsSecretName override the shared values above.
+  nodes: {}

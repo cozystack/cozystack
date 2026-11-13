@@ -1,0 +1,136 @@
+# The refusals the fence-agents webhook would make once the release reaches
+# the cluster, as far as the chart can see them, are made at render time,
+# where the message names the values key; the webhook keeps the final word.
+# A value of the wrong kind or shape is refused by values.schema.json first
+# (tests/values_schema_test.yaml); the rules between keys are here.
+suite: node-remediation-config refuses what safety-mode cannot run
+templates:
+  - templates/fenceagentsremediationtemplate.yaml
+release:
+  name: node-remediation-config
+  namespace: cozy-node-remediation
+values:
+  - fixtures/shared-secret.yaml
+tests:
+  - it: refuses an address carrying a scheme or a path
+    set:
+      bmc:
+        nodes:
+          node1:
+            address: https://192.0.2.11/redfish/v1
+    asserts:
+      - failedTemplate:
+          errorPattern: nodes.node1.address .* must be a host or IP only
+
+  - it: refuses a node without a ComputerSystem URI
+    set:
+      bmc:
+        systemsUri: ""
+        nodes:
+          node1:
+            address: 192.0.2.11
+    asserts:
+      - failedTemplate:
+          errorPattern: nodes.node1. systemsUri "" must name one ComputerSystem member
+
+  # The schema bounds an integer port; a port written as a string of digits
+  # passes its pattern and is bounded here.
+  - it: refuses a port string outside 1-65535
+    set:
+      bmc:
+        port: "70000"
+    asserts:
+      - failedTemplate:
+          errorPattern: port "70000" must be an integer between 1 and 65535
+
+  - it: refuses nodes without any Secret
+    set:
+      bmc:
+        credentialsSecretName: ""
+    asserts:
+      - failedTemplate:
+          errorPattern: nodeRemediation.bmc.credentialsSecretName is required, or every node names its own
+
+  - it: refuses a per-node Secret for only some nodes
+    set:
+      bmc:
+        credentialsSecretName: ""
+        nodes:
+          node1:
+            address: 192.0.2.11
+            credentialsSecretName: bmc-node1
+          node2:
+            address: 192.0.2.12
+    asserts:
+      - failedTemplate:
+          errorPattern: or every node names its own credentialsSecretName
+
+  - it: refuses a shared Secret together with a per-node one
+    set:
+      bmc:
+        nodes:
+          node1:
+            address: 192.0.2.11
+            credentialsSecretName: bmc-node1
+    asserts:
+      - failedTemplate:
+          errorPattern: not both
+
+  - it: refuses bmc that is null
+    set:
+      bmc: null
+    asserts:
+      - failedTemplate:
+          errorPattern: nodeRemediation.bmc must be a map
+
+  - it: refuses a zero unhealthyAfter
+    set:
+      unhealthyAfter: 0s
+    asserts:
+      - failedTemplate:
+          errorPattern: nodeRemediation.unhealthyAfter "0s" must be above zero
+
+  - it: refuses an unhealthyAfter that is zero in every unit
+    set:
+      unhealthyAfter: 0h0m0s
+    asserts:
+      - failedTemplate:
+          errorPattern: nodeRemediation.unhealthyAfter "0h0m0s" must be above zero
+
+  - it: refuses an address carrying a port
+    set:
+      bmc:
+        nodes:
+          node1:
+            address: 192.0.2.11:8443
+    asserts:
+      - failedTemplate:
+          errorPattern: nodes.node1.address "192.0.2.11:8443" must not carry a port
+
+  - it: accepts an IPv6 literal as an address
+    set:
+      bmc:
+        nodes:
+          node1:
+            address: 2001:db8::11
+          node2:
+            address: ::ffff:192.0.2.12
+    asserts:
+      - equal:
+          path: spec.template.spec.nodeparameters["--ip"].node1
+          value: 2001:db8::11
+      - equal:
+          path: spec.template.spec.nodeparameters["--ip"].node2
+          value: ::ffff:192.0.2.12
+
+  # One colon after an all-hex host is a port, not an IPv6 literal.
+  - it: refuses a hex host carrying a port
+    set:
+      bmc:
+        nodes:
+          node1:
+            address: cafe:8443
+    asserts:
+      - failedTemplate:
+          errorPattern: nodes.node1.address "cafe:8443" must not carry a port
+

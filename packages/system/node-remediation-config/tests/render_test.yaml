@@ -1,0 +1,252 @@
+suite: node-remediation-config renders the NodeHealthChecks and the Redfish Off template
+templates:
+  - templates/nodehealthchecks.yaml
+  - templates/fenceagentsremediationtemplate.yaml
+release:
+  name: node-remediation-config
+  namespace: cozy-node-remediation
+values:
+  - fixtures/shared-secret.yaml
+tests:
+  - it: renders one NodeHealthCheck per role with fixed selectors
+    template: templates/nodehealthchecks.yaml
+    asserts:
+      - hasDocuments:
+          count: 2
+      - documentIndex: 0
+        equal:
+          path: metadata.name
+          value: node-remediation-control-plane
+      - documentIndex: 0
+        equal:
+          path: spec.selector.matchExpressions
+          value:
+            - key: node-role.kubernetes.io/control-plane
+              operator: Exists
+      - documentIndex: 0
+        equal:
+          path: spec.minHealthy
+          value: "51%"
+      - documentIndex: 1
+        equal:
+          path: metadata.name
+          value: node-remediation-workers
+      - documentIndex: 1
+        equal:
+          path: spec.selector.matchExpressions
+          value:
+            - key: node-role.kubernetes.io/control-plane
+              operator: DoesNotExist
+            - key: node-role.kubernetes.io/master
+              operator: DoesNotExist
+      - documentIndex: 1
+        equal:
+          path: spec.minHealthy
+          value: "51%"
+
+  # Ready=Unknown is what a dead or partitioned node reports. Ready=False is a
+  # node whose runtime failed while its workloads may keep running; fencing it
+  # is a choice the hoster makes, not the default.
+  - it: remediates Ready=Unknown only by default, after unhealthyAfter
+    template: templates/nodehealthchecks.yaml
+    asserts:
+      - equal:
+          path: spec.unhealthyConditions
+          value:
+            - type: Ready
+              status: Unknown
+              duration: 300s
+      - equal:
+          path: spec.stormCooldownDuration
+          value: 5m
+      - notExists:
+          path: spec.pauseRequests
+      - equal:
+          path: spec.remediationTemplate
+          value:
+            apiVersion: fence-agents-remediation.medik8s.io/v1alpha1
+            kind: FenceAgentsRemediationTemplate
+            name: redfish-off
+            namespace: cozy-node-remediation-bmc
+
+  - it: adds Ready=False when remediateNotReady is set
+    template: templates/nodehealthchecks.yaml
+    set:
+      remediateNotReady: true
+      unhealthyAfter: 10m
+    asserts:
+      - equal:
+          path: spec.unhealthyConditions
+          value:
+            - type: Ready
+              status: Unknown
+              duration: 10m
+            - type: Ready
+              status: "False"
+              duration: 10m
+
+  - it: keeps Ready=Unknown alone when remediateNotReady is the boolean false
+    template: templates/nodehealthchecks.yaml
+    set:
+      remediateNotReady: false
+      paused: false
+    asserts:
+      - equal:
+          path: spec.unhealthyConditions
+          value:
+            - type: Ready
+              status: Unknown
+              duration: 300s
+      - notExists:
+          path: spec.pauseRequests
+
+  # A count travels as a number: minHealthy is int-or-string, and NodeHealthCheck
+  # rejects a string without % at reconcile time, after the install went green.
+  - it: takes a worker count as a number and the cooldown from the values
+    template: templates/nodehealthchecks.yaml
+    set:
+      workerMinHealthy: 2
+      stormCooldown: 30m
+    documentIndex: 1
+    asserts:
+      - equal:
+          path: spec.minHealthy
+          value: 2
+      - equal:
+          path: spec.stormCooldownDuration
+          value: 30m
+
+  - it: takes a worker percentage as a string
+    template: templates/nodehealthchecks.yaml
+    set:
+      workerMinHealthy: 34%
+    documentIndex: 1
+    asserts:
+      - equal:
+          path: spec.minHealthy
+          value: "34%"
+
+  - it: takes a worker count of zero as the number zero
+    template: templates/nodehealthchecks.yaml
+    set:
+      workerMinHealthy: "0"
+    documentIndex: 1
+    asserts:
+      - equal:
+          path: spec.minHealthy
+          value: 0
+
+  # The same shapes as values: a BMC host of digits stays the string it was
+  # written as, since the fence agent takes a host, never a number.
+  - it: keeps a scalar value that YAML would read as a number
+    template: templates/fenceagentsremediationtemplate.yaml
+    set:
+      bmc:
+        nodes:
+          node1:
+            address: "010"
+          node2:
+            address: "1e3"
+    asserts:
+      - equal:
+          path: spec.template.spec.nodeparameters["--ip"].node1
+          value: "010"
+      - equal:
+          path: spec.template.spec.nodeparameters["--ip"].node2
+          value: "1e3"
+
+  - it: pauses both NodeHealthChecks when paused
+    template: templates/nodehealthchecks.yaml
+    set:
+      paused: true
+    asserts:
+      - lengthEqual:
+          path: spec.pauseRequests
+          count: 1
+
+  # The template is admitted by the fence-agents webhook only inside the
+  # safety-mode contract: RedfishOffV1, fence_redfish, the out-of-service taint,
+  # an explicit off, retries within bounds, one Secret per node.
+  - it: renders the template in the BMC namespace within the safety-mode contract
+    template: templates/fenceagentsremediationtemplate.yaml
+    asserts:
+      - hasDocuments:
+          count: 1
+      - equal:
+          path: metadata.namespace
+          value: cozy-node-remediation-bmc
+      - equal:
+          path: spec.template.spec.safetyPolicy
+          value: RedfishOffV1
+      - equal:
+          path: spec.template.spec.agent
+          value: fence_redfish
+      - equal:
+          path: spec.template.spec.remediationStrategy
+          value: OutOfServiceTaint
+      - equal:
+          path: spec.template.spec.retrycount
+          value: 3
+      - equal:
+          path: spec.template.spec.sharedparameters
+          value:
+            --action: "off"
+      - equal:
+          path: spec.template.spec.sharedSecretName
+          value: bmc-credentials
+      - notExists:
+          path: spec.template.spec.nodeSecretNames
+      - equal:
+          path: spec.template.spec.nodeparameters
+          value:
+            --ip:
+              node1: 192.0.2.11
+              node2: 192.0.2.12
+            --systems-uri:
+              node1: /redfish/v1/Systems/1
+              node2: /redfish/v1/Systems/System.Embedded.1
+            --ipport:
+              node2: "8443"
+
+  - it: names one Secret per node when every node has its own
+    template: templates/fenceagentsremediationtemplate.yaml
+    set:
+      bmc:
+        credentialsSecretName: ""
+        nodes:
+          node1:
+            address: 192.0.2.11
+            credentialsSecretName: bmc-node1
+          node2:
+            address: 192.0.2.12
+            credentialsSecretName: bmc-node2
+            systemsUri: /redfish/v1/Systems/System.Embedded.1
+            port: 8443
+    asserts:
+      - notExists:
+          path: spec.template.spec.sharedSecretName
+      - equal:
+          path: spec.template.spec.nodeSecretNames
+          value:
+            node1: bmc-node1
+            node2: bmc-node2
+
+  # A shared port reaches every node, and a numeric YAML scalar renders as the
+  # decimal the fence agent expects rather than as a float.
+  - it: applies a shared Redfish port to every node
+    template: templates/fenceagentsremediationtemplate.yaml
+    set:
+      bmc:
+        port: 8443
+        nodes:
+          node1:
+            address: 192.0.2.11
+          node2:
+            address: 192.0.2.12
+            systemsUri: /redfish/v1/Systems/System.Embedded.1
+    asserts:
+      - equal:
+          path: spec.template.spec.nodeparameters["--ipport"]
+          value:
+            node1: "8443"
+            node2: "8443"
