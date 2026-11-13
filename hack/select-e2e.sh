@@ -178,6 +178,8 @@ inert_config_pattern='^(examples/|\.github/|\.claude/|\.gemini/|img/|hack/testda
 # and `-type f` would be too narrow. A chainsaw-test.y*ml counts whatever its
 # type: Chainsaw stats it and fails loudly on a directory, and leaving that
 # suite out would hide the failure instead.
+# The leak guard's allowlist accepts a suite by the same rule, in
+# lg_suite_has_test (hack/e2e-chainsaw/_lib/leak-guard.sh). Change both together.
 #
 # Captured before the sed/sort rather than piped straight into them: a pipeline
 # carries its LAST command's status, so `$(find ... | sed | sort)` would report
