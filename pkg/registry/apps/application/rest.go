@@ -1573,13 +1573,23 @@ func (r *REST) convertHelmReleaseToApplication(ctx context.Context, hr *helmv2.H
 		},
 		Spec: filteredSpec,
 		Status: appsv1alpha1.ApplicationStatus{
-			Version: hr.Status.LastAttemptedRevision,
+			Version:                    hr.Status.LastAttemptedRevision,
+			InstallFailures:            hr.Status.InstallFailures,
+			UpgradeFailures:            hr.Status.UpgradeFailures,
+			LastAttemptedReleaseAction: string(hr.Status.LastAttemptedReleaseAction),
 		},
 	}
 
 	var conditions []metav1.Condition
 	for _, hrCondition := range hr.GetConditions() {
-		if hrCondition.Type == "Ready" || hrCondition.Type == "Released" {
+		// The Application carries no generation, so a client cannot tell a Stalled
+		// left over from the previous spec from one about the current spec. Compare
+		// the condition's own ObservedGeneration, not Status.ObservedGeneration: the
+		// question is which spec this condition describes.
+		if hrCondition.Type == "Stalled" && hrCondition.ObservedGeneration < hr.Generation {
+			continue
+		}
+		if hrCondition.Type == "Ready" || hrCondition.Type == "Released" || hrCondition.Type == "Stalled" {
 			conditions = append(conditions, metav1.Condition{
 				LastTransitionTime: hrCondition.LastTransitionTime,
 				Reason:             hrCondition.Reason,
