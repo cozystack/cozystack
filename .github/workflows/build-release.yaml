@@ -60,6 +60,7 @@ permissions:
 
 jobs:
   build-line:
+    if: github.repository == 'cozystack/cozystack'
     name: Build ${{ github.ref_name }} images and packages artifact
     runs-on: oracle-vm-24cpu-96gb-x86-64
     timeout-minutes: 120

@@ -12,6 +12,7 @@ permissions: read-all
 
 jobs:
   analysis:
+    if: github.repository == 'cozystack/cozystack'
     name: Scorecard analysis
     runs-on: ubuntu-latest
     permissions:
