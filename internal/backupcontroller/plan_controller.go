@@ -24,10 +24,20 @@ const (
 	startingDeadline    = 300 * time.Second
 )
 
+// Condition Type on a Plan whose last due run was held back because a
+// BackupJob the Plan created earlier had not finished. It is removed once the
+// Plan's run for a due tick exists, whether the held run starts late or the
+// run of a later tick starts.
+const planConditionRunSkipped = "RunSkipped"
+
 // PlanReconciler reconciles a Plan object
 type PlanReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
+
+	// now overrides the clock; nil means time.Now. Set by unit tests, which
+	// derive the name of the run due at a given time.
+	now func() time.Time
 }
 
 func (r *PlanReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -45,7 +55,11 @@ func (r *PlanReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 		return ctrl.Result{}, err
 	}
 
-	tCheck := time.Now().Add(-startingDeadline)
+	now := time.Now()
+	if r.now != nil {
+		now = r.now()
+	}
+	tCheck := now.Add(-startingDeadline)
 	sch, err := cron.ParseStandard(p.Spec.Schedule.Cron)
 	if err != nil {
 		errWrapped := fmt.Errorf("could not parse cron %s: %w", p.Spec.Schedule.Cron, err)
@@ -77,28 +91,92 @@ func (r *PlanReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 
 	tNext := sch.Next(tCheck)
 
-	if time.Now().Before(tNext) {
-		return ctrl.Result{RequeueAfter: time.Until(tNext)}, nil
+	if now.Before(tNext) {
+		return ctrl.Result{RequeueAfter: tNext.Sub(now)}, nil
 	}
 
 	job := factory.BackupJob(p, tNext)
-	if err := controllerutil.SetControllerReference(p, job, r.Scheme); err != nil {
+	unfinished, current, err := r.planRuns(ctx, p, job.Name)
+	if err != nil {
 		return ctrl.Result{}, err
 	}
-
-	if err := r.Create(ctx, job); err != nil {
-		if apierrors.IsAlreadyExists(err) {
-			return ctrl.Result{RequeueAfter: startingDeadline}, nil
+	if unfinished != nil {
+		// Held like a CronJob with concurrencyPolicy Forbid: the tick still
+		// runs if no run of the Plan is unfinished by its startingDeadline.
+		state := fmt.Sprintf("phase %s", unfinished.Status.Phase)
+		if unfinished.Status.Phase == backupsv1alpha1.BackupJobPhaseEmpty {
+			// A run with no phase may wait on a missing BackupClass or
+			// strategy, or a driver may not have set one yet; its Ready
+			// condition says which.
+			state = "no phase yet, see its Ready condition"
 		}
-		return ctrl.Result{}, err
+		message := fmt.Sprintf("the run scheduled for %s is held back: BackupJob %s of this Plan has not finished, %s; the run is skipped unless no run of this Plan is unfinished by %s",
+			tNext.UTC().Format(time.RFC3339), unfinished.Name, state, tNext.Add(startingDeadline).UTC().Format(time.RFC3339))
+		if meta.SetStatusCondition(&p.Status.Conditions, metav1.Condition{
+			Type:    planConditionRunSkipped,
+			Status:  metav1.ConditionTrue,
+			Reason:  "PreviousRunActive",
+			Message: message,
+		}) {
+			if err := r.Status().Update(ctx, p); err != nil {
+				return ctrl.Result{}, err
+			}
+		}
+		return ctrl.Result{RequeueAfter: minRequeueDelay}, nil
+	}
+
+	if !current {
+		if err := controllerutil.SetControllerReference(p, job, r.Scheme); err != nil {
+			return ctrl.Result{}, err
+		}
+		if err := r.Create(ctx, job); err != nil && !apierrors.IsAlreadyExists(err) {
+			return ctrl.Result{}, err
+		}
+	}
+	if meta.RemoveStatusCondition(&p.Status.Conditions, planConditionRunSkipped) {
+		if err := r.Status().Update(ctx, p); err != nil {
+			return ctrl.Result{}, err
+		}
 	}
 
 	return ctrl.Result{RequeueAfter: startingDeadline}, nil
+}
+
+// planRuns returns the oldest BackupJob p created that has not finished, and
+// whether the run named current exists. Once it does, nothing is held: that
+// run started, whatever an older one is doing. Only jobs p controls count, so
+// a BackupJob made by hand or by another Plan does not hold p's schedule. The
+// cache lists in no fixed order, so the oldest, ties broken by name, keeps the
+// hold naming one job.
+func (r *PlanReconciler) planRuns(ctx context.Context, p *backupsv1alpha1.Plan, current string) (*backupsv1alpha1.BackupJob, bool, error) {
+	jobs := &backupsv1alpha1.BackupJobList{}
+	if err := r.List(ctx, jobs, client.InNamespace(p.Namespace)); err != nil {
+		return nil, false, err
+	}
+	var unfinished *backupsv1alpha1.BackupJob
+	for i := range jobs.Items {
+		j := &jobs.Items[i]
+		if !metav1.IsControlledBy(j, p) {
+			continue
+		}
+		if j.Name == current {
+			return nil, true, nil
+		}
+		if j.Status.Phase == backupsv1alpha1.BackupJobPhaseSucceeded || j.Status.Phase == backupsv1alpha1.BackupJobPhaseFailed {
+			continue
+		}
+		if unfinished == nil || j.CreationTimestamp.Before(&unfinished.CreationTimestamp) ||
+			(j.CreationTimestamp.Equal(&unfinished.CreationTimestamp) && j.Name < unfinished.Name) {
+			unfinished = j
+		}
+	}
+	return unfinished, false, nil
 }
 
 // SetupWithManager registers our controller with the Manager and sets up watches.
 func (r *PlanReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&backupsv1alpha1.Plan{}).
+		Owns(&backupsv1alpha1.BackupJob{}).
 		Complete(r)
 }
