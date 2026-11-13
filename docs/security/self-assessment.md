@@ -10,7 +10,7 @@ This document is a security self-assessment for [Cozystack](https://github.com/c
 | Software | <https://github.com/cozystack/cozystack> |
 | Security Provider | No. Cozystack is a cloud platform, not a security product; security is a supporting property, not its primary function. |
 | Languages | Go, Helm, shell |
-| SBOM | Not published at this time. Image builds can emit a CycloneDX SBOM attestation (`SBOM=1` in `hack/common-envs.mk`), but this is disabled by default; SBOM generation on release is a planned improvement. |
+| SBOM | Not published at this time. Image builds can emit an SPDX SBOM attestation (`SBOM=1` in `hack/common-envs.mk`), but this is disabled by default; SBOM generation on release is a planned improvement. |
 
 ### Security links
 

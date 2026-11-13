@@ -59,4 +59,22 @@ grep -qE "compare/.*\.\.\.v${VERSION}([^0-9.]|\$)" "$CL" \
 grep -qE '^## ' "$CL" \
   || fail "no '## ' sections — not a complete changelog"
 
+# The two checks below read content rather than shape, and each reports its
+# line numbers inside the one-line reason: the workflows quote the reason into
+# a ::warning:: or ::error:: annotation, which ends at the first newline.
+
+# An ellipsis right before the attribution is a PR text pasted up to a length
+# limit. The tail it lost is where PR authors put what the operator has to do,
+# so the entry is not merely short but wrong.
+truncated="$(grep -nE '(…|\.\.\.)[[:space:]]*\(\[\*\*@' "$CL" | cut -d: -f1 | tr '\n' ' ')"
+[ -z "$truncated" ] \
+  || fail "entries end in an ellipsis before their attribution (line(s) ${truncated% }): a PR text was cut off; rewrite each from the whole release note"
+
+# cozystack.io serves only versioned docs paths and answers /docs/next/ with
+# 404, so a release body must not link it. Anchored on the host, because
+# content/en/docs/next/ in prose names the website's source tree and is fine.
+nextdocs="$(grep -nE 'cozystack\.io/docs/next([^[:alnum:]_.-]|$)' "$CL" | cut -d: -f1 | tr '\n' ' ')"
+[ -z "$nextdocs" ] \
+  || fail "links point at cozystack.io/docs/next/, which the live site does not serve (line(s) ${nextdocs% }): link https://cozystack.io/docs/vX.Y/<path>/ instead"
+
 echo "OK: $CL is publishable as the v${VERSION} release body ($(wc -l < "$CL" | tr -d ' ') lines)"

@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeAll } from "vitest"
-import { screen } from "@testing-library/react"
+import { fireEvent, screen } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
+import { useLocation } from "react-router"
 import {
   K8sClient,
   type K8sList,
@@ -8,6 +9,7 @@ import {
 } from "@cozystack/k8s-client"
 import { TenantsPage } from "./TenantsPage.tsx"
 import { TenantProvider } from "../lib/tenant-provider.tsx"
+import { useTenantContext } from "../lib/tenant-context.tsx"
 import { SELECTED_TENANT_KEY } from "../lib/constants.ts"
 import { renderWithK8sProvider } from "../test-utils/render.tsx"
 
@@ -30,10 +32,19 @@ const VISIBLE = [
   tn("tenant-whmcs-a-b", ["tenant-root", "tenant-whmcs", "tenant-whmcs-a"]),
 ]
 
-function makeClient(): K8sClient {
+function LocationProbe() {
+  const { pathname } = useLocation()
+  return <div data-testid="location">{pathname}</div>
+}
+
+function SelectedTenant() {
+  return <output data-testid="selected-tenant">{useTenantContext().selectedTenant}</output>
+}
+
+function makeClient(tenants: unknown[] = VISIBLE): K8sClient {
   const client = new K8sClient()
   vi.spyOn(client, "list").mockImplementation(async (_g, _v, plural) => {
-    const items = plural === "tenantnamespaces" ? VISIBLE : []
+    const items = plural === "tenantnamespaces" ? tenants : []
     return {
       apiVersion: "v1",
       kind: `${plural}List`,
@@ -89,6 +100,12 @@ describe("TenantsPage tree", () => {
     expect(editButtons).toHaveLength(1)
     expect(screen.getByTitle("Edit tenant whmcs-x")).toBeInTheDocument()
     expect(screen.queryByTitle("Edit tenant whmcs-a-b")).not.toBeInTheDocument()
+
+    // The name links to the detail page, where Delete is, exactly where Edit is
+    // offered: a row whose CR namespace cannot be read stays plain text.
+    expect(screen.getByRole("link", { name: "x" })).toHaveAttribute("href", "/admin/tenants/x")
+    expect(screen.queryByRole("link", { name: "a-b" })).toBeNull()
+    expect(screen.queryByRole("link", { name: "whmcs" })).toBeNull()
   })
 
   it("collapses a subtree via the row toggle", async () => {
@@ -107,5 +124,133 @@ describe("TenantsPage tree", () => {
     expect(screen.queryByText("a-b")).not.toBeInTheDocument()
     await user.click(screen.getByTitle("Expand"))
     expect(await screen.findByText("x")).toBeInTheDocument()
+  })
+})
+
+// Tenants ordered directly in the root are the common case on a normal
+// cluster, and they are the one level the hierarchical namespace naming skips:
+// `acme` created in `tenant-root` owns `tenant-acme`, not `tenant-root-acme`.
+const ROOT_VISIBLE = [
+  tn("tenant-root", []),
+  tn("tenant-acme", ["tenant-root"]),
+  tn("tenant-acme-eu", ["tenant-root", "tenant-acme"]),
+  // A root-level tenant whose own name starts with `root`, which is the case
+  // that makes "strip the parent's prefix" the wrong rule rather than merely
+  // an incomplete one.
+  tn("tenant-root-x", ["tenant-root"]),
+]
+
+function renderTenants(tenants: unknown[], selected: string) {
+  localStorage.setItem(SELECTED_TENANT_KEY, selected)
+  renderWithK8sProvider(
+    <TenantProvider>
+      <TenantsPage />
+      <LocationProbe />
+      <SelectedTenant />
+    </TenantProvider>,
+    { client: makeClient(tenants), initialRoute: "/admin/tenants" },
+  )
+}
+
+describe("TenantsPage under a visible root", () => {
+  it("offers Edit on a tenant ordered directly in the root", async () => {
+    renderTenants(ROOT_VISIBLE, "root")
+
+    await userEvent.click(await screen.findByTitle("Edit tenant acme"))
+
+    expect(screen.getByTestId("location")).toHaveTextContent("/admin/tenants/acme/edit")
+  })
+
+  it("names a nested tenant's CR relative to its parent", async () => {
+    renderTenants(ROOT_VISIBLE, "root")
+
+    await userEvent.click(await screen.findByTitle("Edit tenant acme-eu"))
+
+    expect(screen.getByTestId("location")).toHaveTextContent("/admin/tenants/eu/edit")
+  })
+
+  // `tenant-root-x` is the tenant `root-x`, not the tenant `x`: the row label
+  // and the CR the row opens have to agree on that.
+  it("keeps a root-level tenant named root-x whole", async () => {
+    renderTenants(ROOT_VISIBLE, "root")
+
+    expect(await screen.findByText("root-x")).toBeInTheDocument()
+    await userEvent.click(screen.getByTitle("Edit tenant root-x"))
+
+    expect(screen.getByTestId("location")).toHaveTextContent("/admin/tenants/root-x/edit")
+  })
+})
+
+// A forest root that carries no ancestor labels is self-referential: its CR
+// lives in its own namespace, and deriving the CR name must not subtract the
+// node's own name from itself and leave nothing.
+describe("TenantsPage self-referential root", () => {
+  it("names the CR of a root that is not tenant-root", async () => {
+    renderTenants([tn("tenant-whmcs", [])], "whmcs")
+
+    await userEvent.click(await screen.findByTitle("Edit tenant whmcs"))
+
+    expect(screen.getByTestId("location")).toHaveTextContent("/admin/tenants/whmcs/edit")
+  })
+})
+
+describe("TenantsPage row link", () => {
+  it("links every row whose Tenant CR it can name", async () => {
+    renderTenants(ROOT_VISIBLE, "root")
+
+    // The root's CR is self-referential: `root` inside its own namespace.
+    expect(await screen.findByRole("link", { name: "root" })).toHaveAttribute(
+      "href",
+      "/admin/tenants/root",
+    )
+    expect(screen.getByRole("link", { name: "acme" })).toHaveAttribute("href", "/admin/tenants/acme")
+    expect(screen.getByRole("link", { name: "eu" })).toHaveAttribute("href", "/admin/tenants/eu")
+    expect(screen.getByRole("link", { name: "root-x" })).toHaveAttribute(
+      "href",
+      "/admin/tenants/root-x",
+    )
+  })
+
+  it("links a self-referential root to its own CR", async () => {
+    renderTenants([tn("tenant-whmcs", [])], "whmcs")
+
+    expect(await screen.findByRole("link", { name: "whmcs" })).toHaveAttribute(
+      "href",
+      "/admin/tenants/whmcs",
+    )
+  })
+
+  // The detail page resolves `eu` in the selected tenant's namespace, and eu's
+  // CR lives in acme's, so the click has to land the tab on acme.
+  it("switches to the row's parent and opens the detail page", async () => {
+    renderTenants(ROOT_VISIBLE, "root")
+
+    fireEvent.click(await screen.findByRole("link", { name: "eu" }))
+
+    expect(screen.getByTestId("selected-tenant").textContent).toBe("acme")
+    expect(screen.getByTestId("location")).toHaveTextContent("/admin/tenants/eu")
+  })
+
+  // Edit shares the route with the link, and its form resolves the CR the same
+  // way, so it has to land on the parent too.
+  it("switches to the row's parent before opening the edit form", async () => {
+    renderTenants(ROOT_VISIBLE, "root")
+
+    await userEvent.click(await screen.findByTitle("Edit tenant acme-eu"))
+
+    expect(screen.getByTestId("selected-tenant").textContent).toBe("acme")
+  })
+
+  // A ctrl-click opens a new tab; the tab it happened in stays where it is.
+  it("leaves the current tab alone on a ctrl-click", async () => {
+    renderTenants(ROOT_VISIBLE, "root")
+    const link = await screen.findByRole("link", { name: "eu" })
+    // jsdom cannot open the new tab; the handler under test has run by then.
+    link.addEventListener("click", (e) => e.preventDefault())
+
+    fireEvent.click(link, { ctrlKey: true })
+
+    expect(screen.getByTestId("selected-tenant").textContent).toBe("root")
+    expect(screen.getByTestId("location")).toHaveTextContent(/^\/admin\/tenants$/)
   })
 })

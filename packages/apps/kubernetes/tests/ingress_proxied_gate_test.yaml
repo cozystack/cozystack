@@ -79,3 +79,20 @@ tests:
     asserts:
       - hasDocuments:
           count: 0
+
+  # An empty _namespace.ingress means no ingress-nginx serves this tenant, and
+  # the API rejects the ingressClassName "" the Ingress would carry.
+  - it: renders the Service but no Ingress when the tenant has no ingress
+    set:
+      _namespace:
+        ingress: ""
+      addons:
+        ingressNginx:
+          enabled: true
+          exposeMethod: Proxied
+          hosts: ["app.example.com"]
+    asserts:
+      - hasDocuments:
+          count: 1
+      - isKind:
+          of: Service
