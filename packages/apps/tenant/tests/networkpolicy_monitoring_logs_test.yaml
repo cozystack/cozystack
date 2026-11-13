@@ -1,0 +1,110 @@
+suite: tenant monitoring ingest egress reaches the monitoring owner at any depth
+# A tenant (and the guest clusters inside it) that resolves its monitoring to an
+# ancestor must be able to write both metrics (vminsert) and logs (vlinsert) to
+# that owner's ingest endpoints. The owner is inherited through
+# _namespace.monitoring, so the egress targets the real owner directly rather
+# than walking the namespace prefix (which never reaches tenant-root from below
+# the first level). The ancestor already accepts the ingress via its
+# allow-external-communication policy (fromEntities: cluster), so no extra
+# ingress policy is rendered here.
+templates:
+  - templates/networkpolicy.yaml
+release:
+  name: tenant-ktj
+  namespace: tenant-root
+set:
+  _cluster:
+    bundle-name: paas-full
+tests:
+  - it: egresses to the parent owner's vminsert and vlinsert in one rule
+    release:
+      name: tenant-sub
+      namespace: tenant-ktj
+    set:
+      _cluster:
+        bundle-name: paas-full
+      _namespace:
+        monitoring: tenant-ktj
+    documentSelector:
+      path: metadata.name
+      value: tenant-ktj-sub-egress
+    asserts:
+      - isKind:
+          of: CiliumClusterwideNetworkPolicy
+      - contains:
+          path: spec.egress
+          content:
+            toEndpoints:
+              - matchLabels:
+                  "k8s:io.kubernetes.pod.namespace": tenant-ktj
+                matchExpressions:
+                  - key: "k8s:app.kubernetes.io/name"
+                    operator: In
+                    values:
+                      - vminsert
+                      - vlinsert
+
+  - it: targets the owning tenant-root even when the owner is not the parent
+    # Common layout: monitoring lives only in tenant-root and every descendant
+    # inherits it. A namespace-prefix walk from tenant-ktj-a would emit
+    # tenant-ktj and tenant-ktj-a and never tenant-root, dropping the traffic.
+    release:
+      name: tenant-b
+      namespace: tenant-ktj-a
+    set:
+      _cluster:
+        bundle-name: paas-full
+      _namespace:
+        monitoring: tenant-root
+    documentSelector:
+      path: metadata.name
+      value: tenant-ktj-a-b-egress
+    asserts:
+      - isKind:
+          of: CiliumClusterwideNetworkPolicy
+      - contains:
+          path: spec.egress
+          content:
+            toEndpoints:
+              - matchLabels:
+                  "k8s:io.kubernetes.pod.namespace": tenant-root
+                matchExpressions:
+                  - key: "k8s:app.kubernetes.io/name"
+                    operator: In
+                    values:
+                      - vminsert
+                      - vlinsert
+
+  - it: renders no monitoring egress rule when the tenant owns its monitoring
+    # The inherited owner points at an ancestor (_namespace.monitoring is never
+    # empty in a real cluster; cozystack-basics sets it on tenant-root and every
+    # child inherits it), but monitoring: true overrides it to this tenant, so
+    # writes stay in-namespace (covered by allow-internal-communication) and no
+    # cross-namespace rule is added. The set below is what makes the override
+    # load-bearing: without _namespace.monitoring the owner is empty either way.
+    set:
+      monitoring: true
+      _cluster:
+        bundle-name: paas-full
+      _namespace:
+        monitoring: tenant-root
+    documentSelector:
+      path: metadata.name
+      value: tenant-ktj-egress
+    asserts:
+      - isKind:
+          of: CiliumClusterwideNetworkPolicy
+      - equal:
+          path: spec.egress
+          value:
+            - toEndpoints:
+                - matchLabels:
+                    "k8s:io.cilium.k8s.namespace.labels.tenant.cozystack.io/tenant-ktj": ""
+            - toEndpoints:
+                - matchLabels:
+                    "k8s:app.kubernetes.io/instance": "etcd"
+                    "k8s:io.kubernetes.pod.namespace": tenant-root
+            - toEndpoints:
+                - matchLabels:
+                    cozystack.io/service: ingress
+                    "k8s:io.kubernetes.pod.namespace": tenant-root
