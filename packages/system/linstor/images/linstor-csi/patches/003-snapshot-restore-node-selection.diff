@@ -1,8 +1,8 @@
 diff --git a/cmd/linstor-csi/linstor-csi.go b/cmd/linstor-csi/linstor-csi.go
-index bd28e06..5bed73b 100644
+index e260d7b..2062787 100644
 --- a/cmd/linstor-csi/linstor-csi.go
 +++ b/cmd/linstor-csi/linstor-csi.go
-@@ -135,6 +135,7 @@ func main() {
+@@ -148,6 +148,7 @@ func main() {
  		client.LogOut(logOut),
  		client.PropertyNamespace(*propNs),
  		client.LabelBySP(*labelBySP),
@@ -11,7 +11,7 @@ index bd28e06..5bed73b 100644
  	if err != nil {
  		log.Fatal(err)
 diff --git a/pkg/client/linstor.go b/pkg/client/linstor.go
-index 5d71c37..43129c9 100644
+index 5b52dd4..82f10d0 100644
 --- a/pkg/client/linstor.go
 +++ b/pkg/client/linstor.go
 @@ -46,6 +46,8 @@ import (
@@ -20,10 +20,10 @@ index 5d71c37..43129c9 100644
  	"golang.org/x/sys/unix"
 +	apierrors "k8s.io/apimachinery/pkg/api/errors"
 +	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+ 	"k8s.io/apimachinery/pkg/util/sets"
  	"k8s.io/mount-utils"
  	utilexec "k8s.io/utils/exec"
- 	"k8s.io/utils/ptr"
-@@ -72,6 +74,9 @@ type Linstor struct {
+@@ -73,6 +75,9 @@ type Linstor struct {
  	mounter        mount.Interface
  	resizer        *mount.ResizeFs
  	labelBySP      bool
@@ -33,7 +33,7 @@ index 5d71c37..43129c9 100644
  }
  
  // NewLinstor returns a high-level linstor client for CSI applications to interact with
-@@ -125,6 +130,34 @@ func APIClient(c *lc.HighLevelClient) func(*Linstor) error {
+@@ -126,6 +131,34 @@ func APIClient(c *lc.HighLevelClient) func(*Linstor) error {
  	}
  }
  
@@ -68,7 +68,7 @@ index 5d71c37..43129c9 100644
  // LogOut sets the Linstor client to write logs to the provided io.Writer
  // instead of discarding logs.
  func LogOut(out io.Writer) func(*Linstor) error {
-@@ -1567,34 +1600,29 @@ func (s *Linstor) reconcileSnapshotResources(ctx context.Context, snapshot *volu
+@@ -1834,34 +1867,29 @@ func (s *Linstor) reconcileSnapshotResources(ctx context.Context, snapshot *volu
  		return fmt.Errorf("snapshot '%s' not deployed on any node", snap.Name)
  	}
  
@@ -115,7 +115,7 @@ index 5d71c37..43129c9 100644
  	if selectedNode == "" {
  		return fmt.Errorf("no node [%s] available for snapshot '%s'", strings.Join(snap.Nodes, ","), snap.Name)
  	}
-@@ -1893,6 +1921,43 @@ func (s *Linstor) relocateResources(ctx context.Context, volID, rgName string) e
+@@ -2168,6 +2196,43 @@ func (s *Linstor) relocateResources(ctx context.Context, volID, rgName string) e
  	return nil
  }
  
@@ -160,10 +160,10 @@ index 5d71c37..43129c9 100644
  func (s *Linstor) FindSnapsByID(ctx context.Context, id string) ([]*volume.Snapshot, error) {
  	snapshotId, err := volume.ParseSnapshotId(id)
 diff --git a/pkg/client/linstor_test.go b/pkg/client/linstor_test.go
-index 4f3405b..9dedb3c 100644
+index 54c5242..8da6cad 100644
 --- a/pkg/client/linstor_test.go
 +++ b/pkg/client/linstor_test.go
-@@ -577,3 +577,93 @@ func TestGetSnapshotRemoteAndReadiness(t *testing.T) {
+@@ -994,3 +994,93 @@ func TestReconcileResourceDefinitionRGConflict(t *testing.T) {
  		})
  	}
  }
