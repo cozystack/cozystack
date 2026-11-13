@@ -1,0 +1,82 @@
+suite: bucket publicRead
+templates:
+  - templates/bucketclaim.yaml
+
+release:
+  name: bucket-my-bucket
+  namespace: tenant-root
+
+set:
+  _namespace:
+    seaweedfs: tenant-root
+
+tests:
+  - it: renders no public BucketAccess by default
+    asserts:
+      - hasDocuments:
+          count: 1
+      - isKind:
+          of: BucketClaim
+
+  - it: renders a public-read BucketAccess on the -public class
+    set:
+      publicRead: true
+    documentSelector:
+      path: metadata.name
+      value: bucket-my-bucket-public-read
+    asserts:
+      - isKind:
+          of: BucketAccess
+      - equal:
+          path: spec.bucketAccessClassName
+          value: tenant-root-public
+      - equal:
+          path: spec.bucketClaimName
+          value: bucket-my-bucket
+      - equal:
+          path: spec.credentialsSecretName
+          value: bucket-my-bucket-public-read
+
+  - it: uses the storage pool's -public class
+    set:
+      publicRead: true
+      storagePool: fast
+    documentSelector:
+      path: metadata.name
+      value: bucket-my-bucket-public-read
+    asserts:
+      - equal:
+          path: spec.bucketAccessClassName
+          value: tenant-root-fast-public
+
+  - it: keeps the access class free of -lock on a locked bucket
+    set:
+      publicRead: true
+      locking: true
+    documentSelector:
+      path: metadata.name
+      value: bucket-my-bucket-public-read
+    asserts:
+      - equal:
+          path: spec.bucketAccessClassName
+          value: tenant-root-public
+
+  - it: keeps the users' BucketAccesses next to the public one
+    set:
+      publicRead: true
+      users:
+        app: {}
+        reader:
+          readonly: true
+    asserts:
+      - hasDocuments:
+          count: 4
+
+  - it: refuses a user that would own the public BucketAccess name
+    set:
+      publicRead: true
+      users:
+        public-read: {}
+    asserts:
+      - failedTemplate:
+          errorPattern: user "public-read" already owns

@@ -2,12 +2,9 @@ suite: worker node pool golden render snapshot
 
 # Freezes the full rendered pool (KubevirtMachineTemplate, MachineDeployment,
 # MachineHealthCheck, worker WorkloadMonitor) for a representative node group.
-# In PR-2a this render was proven byte-identical to the monolithic kubernetes
-# chart's output via tests/render-parity.sh; PR-2b removed the pool from the
-# parent, so cross-chart parity can no longer run. This snapshot takes over as
-# the drift guard: any change to the rendered pool objects (which would rename
-# the content-hashed KubevirtMachineTemplate and churn live worker VMs on
-# upgrade) fails here until the snapshot is regenerated deliberately with
+# It is the drift guard for those objects: any change to them (which would
+# rename the content-hashed KubevirtMachineTemplate and churn live worker VMs
+# on upgrade) fails here until the snapshot is regenerated deliberately with
 # `helm unittest -u`.
 #
 # Coverage note: every case sets instanceType: "" with explicit resources,
@@ -44,10 +41,10 @@ tests:
     asserts:
       - matchSnapshot: {}
 
-  # GPU and kubelet-override branches live on in nodegroup.yaml after the split
-  # and are content-hash inputs to the KubevirtMachineTemplate; pin them too so
-  # a change to either branch that would rename the KMT (and roll live GPU or
-  # kubelet-tuned worker VMs) fails here. Value sets mirror the PR-2a parity gate.
+  # The GPU and kubelet-override branches of nodegroup.yaml are content-hash
+  # inputs to the KubevirtMachineTemplate; pin them too so a change to either
+  # branch that would rename the KMT (and roll live GPU or kubelet-tuned worker
+  # VMs) fails here.
   - it: matches the golden render of a GPU pool
     set:
       roles: []

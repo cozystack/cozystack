@@ -67,7 +67,13 @@ if [ -z "$CHANGED" ] || [ "$CHANGED" = "FULL" ]; then
   exit 0
 fi
 
-if grep -qE "$full_rebuild_pattern" "$CHANGED"; then
+# CI-only Go tools that no image builds. Dropped before the full-rebuild check,
+# whose cmd/ would otherwise rebuild everything for an edit no image contains.
+# hack/select-e2e.sh skips the same two, and a diff made only of them and docs/
+# never reaches this script's build jobs (the plan job's `code` is false).
+tooling_pattern='^cmd/(backport-batch|api-gate)/'
+
+if grep -vE "$tooling_pattern" "$CHANGED" | grep -qE "$full_rebuild_pattern"; then
   emit_json "$units"
   exit 0
 fi

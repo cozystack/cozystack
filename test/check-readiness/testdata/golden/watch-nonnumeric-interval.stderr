@@ -22,3 +22,7 @@ Options:
       --no-color            Disable color output (auto-disabled on non-TTY)
   -h, --help                Show this help
 
+Exit status: 0 when everything is ready, 1 when something is not ready or a
+write to stdout fails, 2 on invalid arguments. A closed pipe ends the process
+with SIGPIPE, like other Unix tools.
+

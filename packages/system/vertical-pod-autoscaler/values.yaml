@@ -37,6 +37,18 @@ vertical-pod-autoscaler:
       prometheus-cadvisor-job-name: cadvisor
 
   admissionController:
+    replicaCount: 2
+    pdb:
+      create: true
+    topologySpreadConstraints:
+      - maxSkew: 1
+        topologyKey: kubernetes.io/hostname
+        whenUnsatisfiable: ScheduleAnyway
+        labelSelector:
+          matchLabels:
+            app.kubernetes.io/name: vertical-pod-autoscaler
+            app.kubernetes.io/instance: "{{ .Release.Name }}"
+            app.kubernetes.io/component: admission-controller
     extraArgs:
       # The admission controller registers its mutating webhook for Pod CREATE in every
       # namespace with failurePolicy Ignore and, by default, a 30s timeout. Ignore only

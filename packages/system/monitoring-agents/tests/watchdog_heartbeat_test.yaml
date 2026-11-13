@@ -1,0 +1,29 @@
+suite: Watchdog heartbeat raises an alarm in Alerta when it stops
+templates:
+  - templates/alerts.yaml
+
+release:
+  name: monitoring-agents
+  namespace: cozy-monitoring
+
+tests:
+  - it: gives the heartbeat a severity Alerta reports as an alarm
+    documentSelector:
+      path: metadata.name
+      value: alerts-general.rules
+    asserts:
+      - equal:
+          path: spec.groups[0].rules[?(@.alert == "Watchdog")].labels.severity
+          value: major
+
+  - it: lets the heartbeat go stale within minutes, not a day
+    documentSelector:
+      path: metadata.name
+      value: alerts-general.rules
+    asserts:
+      - equal:
+          path: spec.groups[0].rules[?(@.alert == "Watchdog")].labels.timeout
+          value: "300"
+      - equal:
+          path: spec.groups[0].rules[?(@.alert == "Watchdog")].labels.event
+          value: Heartbeat

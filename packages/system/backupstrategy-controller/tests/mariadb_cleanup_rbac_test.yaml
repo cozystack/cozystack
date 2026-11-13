@@ -1,0 +1,28 @@
+suite: RBAC of the MariaDB dump cleanup
+
+# Deleting a MariaDB Backup deletes its operator Backup once the dump is gone.
+# The Go unit tests run with no authorization, so a missing verb only shows up
+# on a cluster, where every such Backup would stay Terminating.
+
+templates:
+  - templates/rbac.yaml
+
+release:
+  name: backupstrategy-controller
+  namespace: cozy-backup-controller
+
+tests:
+  - it: "ClusterRole can delete operator Backups but not Restores"
+    asserts:
+      - contains:
+          path: rules
+          content:
+            apiGroups: ["k8s.mariadb.com"]
+            resources: ["backups"]
+            verbs: ["get", "list", "watch", "create", "delete"]
+      - contains:
+          path: rules
+          content:
+            apiGroups: ["k8s.mariadb.com"]
+            resources: ["restores"]
+            verbs: ["get", "list", "watch", "create"]

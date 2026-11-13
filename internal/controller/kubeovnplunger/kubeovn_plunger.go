@@ -3,8 +3,10 @@ package kubeovnplunger
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"strings"
 	"time"
 
@@ -153,12 +155,9 @@ func (r *KubeOVNPlunger) SetupWithManager(mgr ctrl.Manager, kubeOVNNamespace, ap
 		Complete(r); err != nil {
 		return err
 	}
-	_ = mgr.Add(manager.RunnableFunc(func(ctx context.Context) error {
-		go srv.ListenAndServe()
-		<-ctx.Done()
-		_ = srv.Shutdown(context.Background())
-		return nil
-	}))
+	if err := mgr.Add(serveStatus(srv)); err != nil {
+		return err
+	}
 	return mgr.Add(manager.RunnableFunc(func(ctx context.Context) error {
 		ticker := time.NewTicker(rescanInterval)
 		defer ticker.Stop()
@@ -178,6 +177,25 @@ func (r *KubeOVNPlunger) SetupWithManager(mgr ctrl.Manager, kubeOVNNamespace, ap
 			}
 		}
 	}))
+}
+
+// serveStatus runs the status stream for as long as the manager does. A server
+// that cannot start fails the manager, as the metrics server does.
+func serveStatus(s *sse.Server) manager.RunnableFunc {
+	return func(ctx context.Context) error {
+		served := make(chan error, 1)
+		go func() { served <- s.ListenAndServe() }()
+		select {
+		case err := <-served:
+			return err
+		case <-ctx.Done():
+		}
+		_ = s.Shutdown(context.Background())
+		if err := <-served; !errors.Is(err, http.ErrServerClosed) {
+			return err
+		}
+		return nil
+	}
 }
 
 type ExecOptions struct {

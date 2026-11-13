@@ -18,6 +18,7 @@ package observabilityproxy
 
 import (
 	"bufio"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -52,13 +53,22 @@ type mapStores map[string]string
 func (m mapStores) Resolve(ns string) (string, error) { return m[ns], nil }
 
 // newHarness wires the proxy to a fake apiserver that knows tokens "good"
-// (alice) and "bob-token" (bob), both allowed list logs in tenant-a only,
-// and to an upstream served by handler.
+// (alice) and "bob-token" (bob), both allowed list logs and metrics in
+// tenant-a only, and to an upstream served by handler.
 func newHarness(t *testing.T, cfg Config, handler http.HandlerFunc) *harness {
+	return newPolicyHarness(t, cfg, handler, func(_ string, a *authorizationv1.ResourceAttributes) bool {
+		return a.Namespace == "tenant-a" && (a.Resource == "logs" || a.Resource == "metrics")
+	}, nil)
+}
+
+// newPolicyHarness is newHarness with the given SubjectAccessReview policy
+// and plural-to-kind mapping; nil kinds knows only postgreses.
+func newPolicyHarness(t *testing.T, cfg Config, handler http.HandlerFunc, allow func(string, *authorizationv1.ResourceAttributes) bool, kinds KindLookup) *harness {
 	h := &harness{t: t}
-	h.kube = newFakeKube(map[string]string{"good": "alice", "bob-token": "bob"}, func(_ string, a *authorizationv1.ResourceAttributes) bool {
-		return a.Namespace == "tenant-a" && a.Resource == "logs"
-	})
+	h.kube = newFakeKube(map[string]string{"good": "alice", "bob-token": "bob", "carol-token": "carol"}, allow)
+	if kinds == nil {
+		kinds = newTestKinds(t, true, appDefinition("postgres", "Postgres", "postgreses"))
+	}
 	h.upstream = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if err := r.ParseForm(); err != nil {
 			t.Errorf("upstream ParseForm: %v", err)
@@ -80,10 +90,20 @@ func newHarness(t *testing.T, cfg Config, handler http.HandlerFunc) *harness {
 		h.mu.Unlock()
 		return h.upstream.URL
 	}
+	cfg.Metrics.UpstreamURL = cfg.UpstreamURL
+	if cfg.Metrics.ShortTermStore == "" {
+		cfg.Metrics.ShortTermStore, cfg.Metrics.LongTermStore, cfg.Metrics.ShortTermRetention = "shortterm", "longterm", 72*time.Hour
+	}
+	if cfg.Metrics.Limits == (MetricsLimits{}) {
+		cfg.Metrics.Limits = testMetricsLimits()
+	}
+	if cfg.Metrics.App == (AppScopeLimits{}) {
+		cfg.Metrics.App = AppScopeLimits{Lookback: 24 * time.Hour, MaxPods: 100, MaxPVCs: 100}
+	}
 	if cfg.Logs == (LogsLimits{}) {
 		cfg.Logs = testLimits()
 	}
-	h.server = NewServer(cfg, NewAuthorizer(h.kube.client, 10*time.Second), mapStores{"tenant-a": "tenant-a-store"}, nil)
+	h.server = NewServer(cfg, NewAuthorizer(h.kube.client, 10*time.Second), mapStores{"tenant-a": "tenant-a-store"}, kinds, nil)
 	h.server.now = func() time.Time { return testNow }
 	h.proxy = httptest.NewServer(h.server)
 	t.Cleanup(h.proxy.Close)
@@ -144,9 +164,11 @@ func TestServerStatusCodes(t *testing.T) {
 		{"other namespace", http.MethodGet, "/apis/cozystack.io/v1alpha1/namespaces/tenant-b/logs/select/logsql/query", "good", http.StatusForbidden},
 		{"invalid namespace", http.MethodGet, "/apis/cozystack.io/v1alpha1/namespaces/Tenant/logs/select/logsql/query", "good", http.StatusBadRequest},
 		{"unknown root", http.MethodGet, "/api/v1/namespaces/tenant-a/pods", "good", http.StatusNotFound},
-		{"namespace metrics not served yet", http.MethodGet, "/apis/cozystack.io/v1alpha1/namespaces/tenant-a/metrics/api/v1/query", "good", http.StatusNotFound},
-		{"application log not served yet", http.MethodGet, "/apis/apps.cozystack.io/v1alpha1/namespaces/tenant-a/postgreses/db/log/select/logsql/query", "good", http.StatusNotFound},
-		{"application metrics not served yet", http.MethodGet, "/apis/apps.cozystack.io/v1alpha1/namespaces/tenant-a/postgreses/db/metrics/api/v1/query", "good", http.StatusNotFound},
+		{"unknown metrics endpoint", http.MethodGet, "/apis/cozystack.io/v1alpha1/namespaces/tenant-a/metrics/api/v1/status/tsdb", "good", http.StatusNotFound},
+		{"metrics in another namespace", http.MethodGet, "/apis/cozystack.io/v1alpha1/namespaces/tenant-b/metrics/api/v1/query?query=up", "good", http.StatusForbidden},
+		{"metrics without token", http.MethodGet, "/apis/cozystack.io/v1alpha1/namespaces/tenant-a/metrics/api/v1/query?query=up", "", http.StatusUnauthorized},
+		{"application log without a grant", http.MethodGet, "/apis/apps.cozystack.io/v1alpha1/namespaces/tenant-a/postgreses/db/log/select/logsql/query", "good", http.StatusForbidden},
+		{"application metrics without a grant", http.MethodGet, "/apis/apps.cozystack.io/v1alpha1/namespaces/tenant-a/postgreses/db/metrics/api/v1/query", "good", http.StatusForbidden},
 		{"tenant_ids not proxied", http.MethodGet, "/apis/cozystack.io/v1alpha1/namespaces/tenant-a/logs/select/tenant_ids", "good", http.StatusNotFound},
 		{"unknown logsql endpoint", http.MethodGet, logsRoot + "stats_query", "good", http.StatusNotFound},
 		{"logs root itself", http.MethodGet, "/apis/cozystack.io/v1alpha1/namespaces/tenant-a/logs/", "good", http.StatusNotFound},
@@ -413,7 +435,12 @@ func TestServerTailCapsAndIdle(t *testing.T) {
 		closed <- err
 	}()
 	select {
-	case <-closed:
+	case err := <-closed:
+		// The server cuts an idle tail off mid-stream rather than ending the
+		// response, so the client reads an unexpected EOF; a clean end is fine too.
+		if err != nil && !errors.Is(err, io.ErrUnexpectedEOF) {
+			t.Fatalf("idle tail ended with %v, want the stream to end or be cut", err)
+		}
 	case <-time.After(3 * time.Second):
 		t.Fatal("idle tail not closed")
 	}

@@ -53,7 +53,7 @@ func emptyBatch(f *fixture, gh *fakeGH, body string) *foldWorld {
 // and every check of the batch's shape takes the old name as the same file:
 // verify, a hand fold, and a rebuild by --defer.
 func TestRenamePickThroughFoldAndVerify(t *testing.T) {
-	f, mc5 := renameWorld(t)
+	f, _ := renameWorld(t)
 	f.pr(6, "fix(app): six", "", map[string]string{"app/six.txt": "6\n"})
 	gh := &fakeGH{}
 	head := openBatch(t, f, gh)
@@ -74,7 +74,7 @@ func TestRenamePickThroughFoldAndVerify(t *testing.T) {
 		t.Errorf("verify after the rebuild = %d\n%s\n%s", code, out, stderr)
 	}
 
-	f, mc5 = renameWorld(t)
+	f, mc5 := renameWorld(t)
 	w := emptyBatch(f, &fakeGH{}, "")
 	pick := w.pick(w.head, f.git("rev-parse", mc5+"^2"), map[string]string{"app/old.txt": strings.Replace(appFile, "three", "THREE", 1)})
 	fold := w.merge(w.head, pick, "fix(app): fix the app file (#5)\n\n"+batchTrailer+": "+mc5)

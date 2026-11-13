@@ -20,6 +20,11 @@
       "type": "boolean",
       "default": true
     },
+    "publicRead": {
+      "description": "Serves the bucket's objects to anyone without credentials at `\u003cendpoint\u003e/\u003cbucket\u003e/\u003ckey\u003e`. Anonymous callers can read objects but cannot list the bucket or write to it.",
+      "type": "boolean",
+      "default": false
+    },
     "users": {
       "description": "Users configuration map.",
       "type": "object",

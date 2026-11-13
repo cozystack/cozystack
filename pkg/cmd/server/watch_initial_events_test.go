@@ -104,7 +104,7 @@ func watchStream(t *testing.T, ts *httptest.Server, cli client.Client, query str
 	if err != nil {
 		t.Fatalf("watch: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("watch: status %d", resp.StatusCode)
 	}
