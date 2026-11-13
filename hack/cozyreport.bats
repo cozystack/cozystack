@@ -966,6 +966,37 @@ STUB
   }
 }
 
+@test "PR E2E jobs clean up between preparation attempts but not after testing" {
+  tmp="$(mktemp -d)"
+  mkdir -p "$tmp/bin"
+  cat >"$tmp/bin/make" <<'STUB'
+#!/bin/sh
+printf '%s\n' "$*" >>"$CLEANUP_CALLS"
+case "$*" in
+  *prepare-env-container*)
+    if [ ! -f "$CLEANUP_ATTEMPT" ]; then
+      touch "$CLEANUP_ATTEMPT"
+      exit 1
+    fi
+    ;;
+esac
+STUB
+  chmod +x "$tmp/bin/make"
+  for wf in pull-requests e2e-fork; do
+    workflow="$HACK_DIR/../.github/workflows/$wf.yaml"
+    yq --unwrapScalar '.jobs.e2e.steps[] | select(.name == "Prepare environment") | .run' "$workflow" >"$tmp/prepare.sh"
+    CLEANUP_CALLS="$tmp/$wf.calls" CLEANUP_ATTEMPT="$tmp/$wf.attempt" SANDBOX_NAME=test PATH="$tmp/bin:$PATH" bash -eu "$tmp/prepare.sh"
+    printf '%s\n' 'SANDBOX_NAME=test prepare-env-container' '-C packages/core/testing SANDBOX_NAME=test delete-cluster-container' 'SANDBOX_NAME=test prepare-env-container' >"$tmp/expected"
+    diff "$tmp/expected" "$tmp/$wf.calls"
+    scripts="$(yq --unwrapScalar '.jobs.e2e.steps[] | select(.name != "Prepare environment") | .run // ""' "$workflow")"
+    if printf '%s\n' "$scripts" | grep -Eq 'delete-cluster-container|docker[[:space:]]+(compose.*down|rm)|zpool[[:space:]]+destroy|make.*[[:space:]]delete([[:space:]]|$)'; then
+      echo "FAIL: $wf destroys runner-local state outside preparation"
+      false
+    fi
+  done
+  rm -rf "$tmp"
+}
+
 @test "the step that runs this collector has a ceiling of its own everywhere" {
   # Every bound inside the script protects one read. None of them protects the
   # STEP: the tarball is written on the collector's last line, the upload is the

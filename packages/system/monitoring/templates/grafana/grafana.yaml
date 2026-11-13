@@ -280,7 +280,7 @@ spec:
                     path: auth.ini
                 {{- end }}
           {{- end }}
-  {{- if ne $gatewayEnabled "true" }}
+  {{- if and (ne $gatewayEnabled "true") $ingress }}
   ingress:
     {{- /* Operator wildcard mode: nginx serves the default SSL cert, so skip per-host ACME. */}}
     {{- if not $wildcardSecret }}
