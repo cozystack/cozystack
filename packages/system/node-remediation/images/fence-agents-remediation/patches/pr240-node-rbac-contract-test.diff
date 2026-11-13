@@ -1,0 +1,340 @@
+# Downstream carry of medik8s/fence-agents-remediation#240, cut from its head
+# 4c028e337395c20070f08551780b28b7448d7246: the RBAC contract test for the unused
+# Node deletion permission. The three RBAC hunks of that PR (the generated role,
+# the CSV and the controller marker) are the same change pr241-identity-bound-redfish-off.diff
+# already carries, so only the test travels here. Retire both patches together.
+diff --git a/pkg/rbaccontract/node_permissions_test.go b/pkg/rbaccontract/node_permissions_test.go
+new file mode 100644
+index 000000000..37e830eed
+--- /dev/null
++++ b/pkg/rbaccontract/node_permissions_test.go
+@@ -0,0 +1,329 @@
++/*
++Copyright 2026.
++
++Licensed under the Apache License, Version 2.0 (the "License");
++you may not use this file except in compliance with the License.
++You may obtain a copy of the License at
++
++    http://www.apache.org/licenses/LICENSE-2.0
++
++Unless required by applicable law or agreed to in writing, software
++distributed under the License is distributed on an "AS IS" BASIS,
++WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++See the License for the specific language governing permissions and
++limitations under the License.
++*/
++
++package rbaccontract
++
++import (
++	"bufio"
++	"bytes"
++	"context"
++	"io"
++	"os"
++	"path/filepath"
++	"slices"
++	"strings"
++	"testing"
++	"time"
++
++	. "github.com/onsi/ginkgo/v2"
++	. "github.com/onsi/gomega"
++
++	appsv1 "k8s.io/api/apps/v1"
++	corev1 "k8s.io/api/core/v1"
++	rbacv1 "k8s.io/api/rbac/v1"
++	apierrors "k8s.io/apimachinery/pkg/api/errors"
++	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
++	"k8s.io/apimachinery/pkg/runtime"
++	"k8s.io/apimachinery/pkg/util/wait"
++	"k8s.io/apimachinery/pkg/util/yaml"
++	"k8s.io/client-go/rest"
++	"sigs.k8s.io/controller-runtime/pkg/client"
++	"sigs.k8s.io/controller-runtime/pkg/envtest"
++)
++
++type bundlePermission struct {
++	Rules              []rbacv1.PolicyRule `json:"rules"`
++	ServiceAccountName string              `json:"serviceAccountName"`
++}
++
++type permissionDocument struct {
++	Kind  string              `json:"kind"`
++	Rules []rbacv1.PolicyRule `json:"rules"`
++	Spec  struct {
++		Install struct {
++			Spec struct {
++				ClusterPermissions []bundlePermission `json:"clusterPermissions"`
++				Deployments        []struct {
++					Name string                `json:"name"`
++					Spec appsv1.DeploymentSpec `json:"spec"`
++				} `json:"deployments"`
++			} `json:"spec"`
++		} `json:"install"`
++	} `json:"spec"`
++}
++
++var bundlePath = filepath.Join("..", "..", "bundle", "manifests", "fence-agents-remediation.clusterserviceversion.yaml")
++var rolePath = filepath.Join("..", "..", "config", "rbac", "role.yaml")
++var requiredNodeVerbs = []string{"get", "list", "update", "watch"}
++
++func readManifest(path string, document any) {
++	GinkgoHelper()
++	data, err := os.ReadFile(path)
++	Expect(err).NotTo(HaveOccurred())
++	Expect(yaml.NewYAMLOrJSONDecoder(bytes.NewReader(data), 4096).Decode(document)).To(Succeed())
++}
++
++func readRules(path string) []rbacv1.PolicyRule {
++	GinkgoHelper()
++	data, err := os.ReadFile(path)
++	Expect(err).NotTo(HaveOccurred())
++	decoder := yaml.NewYAMLOrJSONDecoder(bytes.NewReader(data), 4096)
++	var rules []rbacv1.PolicyRule
++	for {
++		var document permissionDocument
++		err := decoder.Decode(&document)
++		if err == io.EOF {
++			return rules
++		}
++		Expect(err).NotTo(HaveOccurred())
++		if document.Kind == "ClusterRole" {
++			rules = append(rules, document.Rules...)
++		}
++		for _, permission := range document.Spec.Install.Spec.ClusterPermissions {
++			rules = append(rules, permission.Rules...)
++		}
++	}
++}
++
++func markerRules() []rbacv1.PolicyRule {
++	GinkgoHelper()
++	data, err := os.ReadFile(filepath.Join("..", "..", "internal", "controller", "fenceagentsremediation_controller.go"))
++	Expect(err).NotTo(HaveOccurred())
++	var rules []rbacv1.PolicyRule
++	scanner := bufio.NewScanner(bytes.NewReader(data))
++	for scanner.Scan() {
++		line := strings.TrimSpace(scanner.Text())
++		if !strings.HasPrefix(line, "// +kubebuilder:rbac:") {
++			continue
++		}
++		fields := map[string]string{}
++		for _, field := range strings.Split(strings.TrimPrefix(line, "// +kubebuilder:rbac:"), ",") {
++			key, value, found := strings.Cut(field, "=")
++			if found {
++				fields[key] = strings.Trim(value, "\"")
++			}
++		}
++		groups := strings.Split(fields["groups"], ";")
++		for i := range groups {
++			if groups[i] == "core" {
++				groups[i] = ""
++			}
++		}
++		rules = append(rules, rbacv1.PolicyRule{APIGroups: groups, Resources: strings.Split(fields["resources"], ";"), Verbs: strings.Split(fields["verbs"], ";")})
++	}
++	Expect(scanner.Err()).NotTo(HaveOccurred())
++	return rules
++}
++
++func nodeVerbs(rules []rbacv1.PolicyRule) []string {
++	verbs := map[string]bool{}
++	for _, rule := range rules {
++		if (slices.Contains(rule.APIGroups, "") || slices.Contains(rule.APIGroups, "*")) && (slices.Contains(rule.Resources, "nodes") || slices.Contains(rule.Resources, "*")) {
++			for _, verb := range rule.Verbs {
++				verbs[verb] = true
++			}
++		}
++	}
++	result := make([]string, 0, len(verbs))
++	for verb := range verbs {
++		result = append(result, verb)
++	}
++	slices.Sort(result)
++	return result
++}
++
++func controllerAccount(document permissionDocument) string {
++	GinkgoHelper()
++	Expect(document.Spec.Install.Spec.Deployments).To(HaveLen(1))
++	account := document.Spec.Install.Spec.Deployments[0].Spec.Template.Spec.ServiceAccountName
++	Expect(account).NotTo(BeEmpty())
++	return account
++}
++
++func bundleRules(document permissionDocument, account string) []rbacv1.PolicyRule {
++	var rules []rbacv1.PolicyRule
++	for _, permission := range document.Spec.Install.Spec.ClusterPermissions {
++		if account == "" || permission.ServiceAccountName == account {
++			rules = append(rules, permission.Rules...)
++		}
++	}
++	return rules
++}
++
++func unrestrictedNodeVerbs(rules []rbacv1.PolicyRule) []string {
++	var unrestricted []rbacv1.PolicyRule
++	for _, rule := range rules {
++		if len(rule.ResourceNames) == 0 {
++			unrestricted = append(unrestricted, rule)
++		}
++	}
++	return nodeVerbs(unrestricted)
++}
++
++func TestRBACContract(t *testing.T) {
++	RegisterFailHandler(Fail)
++	RunSpecs(t, "Node RBAC Contract Suite")
++}
++
++var _ = Describe("Node permissions", func() {
++	DescribeTable("declaration parity", func(source string) {
++		var rules []rbacv1.PolicyRule
++		switch source {
++		case "marker":
++			rules = markerRules()
++		case "role":
++			rules = readRules(rolePath)
++		case "bundle":
++			rules = readRules(bundlePath)
++		}
++		Expect(nodeVerbs(rules)).To(Equal(requiredNodeVerbs))
++	}, Entry("marker", "marker"), Entry("role", "role"), Entry("bundle", "bundle"))
++
++	DescribeTable("verb matching", func(group, resource, verb string, want []string) {
++		rules := []rbacv1.PolicyRule{{APIGroups: []string{group}, Resources: []string{resource}, Verbs: []string{verb}}}
++		Expect(nodeVerbs(rules)).To(Equal(want))
++	},
++		Entry("core", "", "nodes", "get", []string{"get"}),
++		Entry("group wildcard", "*", "nodes", "delete", []string{"delete"}),
++		Entry("resource wildcard", "", "*", "deletecollection", []string{"deletecollection"}),
++		Entry("verb wildcard", "", "nodes", "*", []string{"*"}),
++		Entry("unrelated group", "apps", "nodes", "delete", []string{}),
++		Entry("unrelated resource", "", "pods", "delete", []string{}),
++		Entry("subresource only", "", "nodes/status", "update", []string{}),
++	)
++
++	It("grants unrestricted Node access to the deployed controller account", func() {
++		var document permissionDocument
++		readManifest(bundlePath, &document)
++		account := controllerAccount(document)
++		data, err := os.ReadFile(filepath.Join("..", "..", "config", "manager", "manager.yaml"))
++		Expect(err).NotTo(HaveOccurred())
++		decoder := yaml.NewYAMLOrJSONDecoder(bytes.NewReader(data), 4096)
++		var deployment appsv1.Deployment
++		for deployment.Kind != "Deployment" {
++			deployment = appsv1.Deployment{}
++			Expect(decoder.Decode(&deployment)).To(Succeed())
++		}
++		var binding rbacv1.ClusterRoleBinding
++		readManifest(filepath.Join("..", "..", "config", "rbac", "role_binding.yaml"), &binding)
++		var serviceAccount corev1.ServiceAccount
++		readManifest(filepath.Join("..", "..", "config", "rbac", "service_account.yaml"), &serviceAccount)
++		var customization struct {
++			NamePrefix string `json:"namePrefix"`
++		}
++		readManifest(filepath.Join("..", "..", "config", "default", "kustomization.yaml"), &customization)
++		Expect(deployment.Spec.Template.Spec.ServiceAccountName).To(Equal(serviceAccount.Name))
++		Expect(binding.Subjects).To(ContainElement(rbacv1.Subject{Kind: "ServiceAccount", Name: serviceAccount.Name, Namespace: serviceAccount.Namespace}))
++		var role rbacv1.ClusterRole
++		readManifest(rolePath, &role)
++		Expect(binding.RoleRef).To(Equal(rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "ClusterRole", Name: role.Name}))
++		Expect(account).To(Equal(customization.NamePrefix + serviceAccount.Name))
++		Expect(document.Spec.Install.Spec.Deployments[0].Name).To(Equal(customization.NamePrefix + deployment.Name))
++		Expect(unrestrictedNodeVerbs(bundleRules(document, account))).To(Equal(requiredNodeVerbs))
++		Expect(unrestrictedNodeVerbs(readRules(rolePath))).To(Equal(requiredNodeVerbs))
++	})
++
++	DescribeTable("does not confuse aggregate grants with controller access", func(mutation string) {
++		var document permissionDocument
++		readManifest(bundlePath, &document)
++		account := controllerAccount(document)
++		for i := range document.Spec.Install.Spec.ClusterPermissions {
++			permission := &document.Spec.Install.Spec.ClusterPermissions[i]
++			if permission.ServiceAccountName != account {
++				continue
++			}
++			if mutation == "account" {
++				permission.ServiceAccountName = "other-controller"
++			} else {
++				for j := range permission.Rules {
++					if len(nodeVerbs(permission.Rules[j:j+1])) != 0 {
++						permission.Rules[j].ResourceNames = []string{"worker-1"}
++					}
++				}
++			}
++		}
++		Expect(nodeVerbs(bundleRules(document, ""))).To(Equal(requiredNodeVerbs))
++		Expect(unrestrictedNodeVerbs(bundleRules(document, account))).To(BeEmpty())
++	}, Entry("another service account", "account"), Entry("restricted Node names", "names"))
++
++	It("detects Node deletion granted to another account", func() {
++		var document permissionDocument
++		readManifest(bundlePath, &document)
++		account := controllerAccount(document)
++		document.Spec.Install.Spec.ClusterPermissions = append(document.Spec.Install.Spec.ClusterPermissions, bundlePermission{
++			ServiceAccountName: "other-controller",
++			Rules:              []rbacv1.PolicyRule{{APIGroups: []string{"*"}, Resources: []string{"*"}, Verbs: []string{"delete"}}},
++		})
++		Expect(unrestrictedNodeVerbs(bundleRules(document, account))).To(Equal(requiredNodeVerbs))
++		Expect(nodeVerbs(bundleRules(document, ""))).To(ContainElement("delete"))
++	})
++
++	It("allows required Node operations but forbids deletion on a local API", func() {
++		value := os.Getenv("USE_EXISTING_CLUSTER")
++		Expect(value == "" || value == "false").To(BeTrue(), "existing cluster use is not allowed")
++		assets, configured := os.LookupEnv("KUBEBUILDER_ASSETS")
++		if !configured {
++			Skip("set KUBEBUILDER_ASSETS to run this test; make test-no-verify supplies envtest assets")
++		}
++		Expect(assets).NotTo(BeEmpty(), "configured KUBEBUILDER_ASSETS must point to envtest binaries")
++		useExisting := false
++		environment := &envtest.Environment{UseExistingCluster: &useExisting}
++		environment.ControlPlane.GetAPIServer().Configure().Set("authorization-mode", "RBAC")
++		DeferCleanup(func() { Expect(environment.Stop()).To(Succeed()) })
++		config, err := environment.Start()
++		Expect(err).NotTo(HaveOccurred())
++		scheme := runtime.NewScheme()
++		Expect(corev1.AddToScheme(scheme)).To(Succeed())
++		Expect(rbacv1.AddToScheme(scheme)).To(Succeed())
++		admin, err := client.New(config, client.Options{Scheme: scheme})
++		Expect(err).NotTo(HaveOccurred())
++		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
++		defer cancel()
++		role := &rbacv1.ClusterRole{ObjectMeta: metav1.ObjectMeta{Name: "node-permission-contract"}, Rules: readRules(rolePath)}
++		Expect(admin.Create(ctx, role)).To(Succeed())
++		var document permissionDocument
++		readManifest(bundlePath, &document)
++		account := controllerAccount(document)
++		namespace := "node-permission-contract"
++		Expect(admin.Create(ctx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: namespace}})).To(Succeed())
++		Expect(admin.Create(ctx, &corev1.ServiceAccount{ObjectMeta: metav1.ObjectMeta{Name: account, Namespace: namespace}})).To(Succeed())
++		binding := &rbacv1.ClusterRoleBinding{ObjectMeta: metav1.ObjectMeta{Name: role.Name}, RoleRef: rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "ClusterRole", Name: role.Name}, Subjects: []rbacv1.Subject{{Kind: "ServiceAccount", Name: account, Namespace: namespace}}}
++		Expect(admin.Create(ctx, binding)).To(Succeed())
++		node := &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "node-permission-contract", Labels: map[string]string{"rbac-contract": "true"}}}
++		Expect(admin.Create(ctx, node)).To(Succeed())
++		impersonated := rest.CopyConfig(config)
++		impersonated.Impersonate.UserName = "system:serviceaccount:" + namespace + ":" + account
++		impersonated.Impersonate.Groups = []string{"system:serviceaccounts", "system:serviceaccounts:" + namespace, "system:authenticated"}
++		restricted, err := client.NewWithWatch(impersonated, client.Options{Scheme: scheme})
++		Expect(err).NotTo(HaveOccurred())
++		err = wait.PollUntilContextTimeout(ctx, 20*time.Millisecond, 5*time.Second, true, func(ctx context.Context) (bool, error) {
++			err := restricted.Get(ctx, client.ObjectKeyFromObject(node), node)
++			if apierrors.IsForbidden(err) {
++				return false, nil
++			}
++			return err == nil, err
++		})
++		Expect(err).NotTo(HaveOccurred())
++		Expect(restricted.List(ctx, &corev1.NodeList{})).To(Succeed())
++		stream, err := restricted.Watch(ctx, &corev1.NodeList{}, client.MatchingFields{"metadata.name": node.Name})
++		Expect(err).NotTo(HaveOccurred())
++		stream.Stop()
++		node.Labels["updated"] = "true"
++		Expect(restricted.Update(ctx, node)).To(Succeed())
++		Expect(apierrors.IsForbidden(restricted.Delete(ctx, node))).To(BeTrue(), "delete must be forbidden")
++		Expect(apierrors.IsForbidden(restricted.DeleteAllOf(ctx, &corev1.Node{}, client.MatchingLabels{"rbac-contract": "true"}))).To(BeTrue(), "deletecollection must be forbidden")
++	})
++})

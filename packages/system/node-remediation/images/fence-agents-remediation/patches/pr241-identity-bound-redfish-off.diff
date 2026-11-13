@@ -1,0 +1,4253 @@
+# Downstream carry of medik8s/fence-agents-remediation#241, the identity-bound
+# Redfish Off safety-mode, cut from that PR head 3eccc785da20e17c66d7a67001a8caceb7f8586e
+# on top of upstream main f3e85bf5d104ea7d96bf95b701ad3d58e3aea3fc, the commit the
+# Containerfile pins as COMMIT_REF. Retire it when a release carrying the PR is pinned here.
+#
+# The vendor/ hunks of the PR are left out: the Containerfile runs `go mod vendor`
+# after applying the patches, which regenerates vendor/ from the patched go.mod.
+# The bundle/ hunks stay although the OLM bundle is not used here: the tests the
+# PR adds compare the bundle with config/, and so does the test pr240 carries.
+diff --git a/ARCHITECTURE.md b/ARCHITECTURE.md
+index 618075a51..1485fcb1d 100644
+--- a/ARCHITECTURE.md
++++ b/ARCHITECTURE.md
+@@ -4,6 +4,8 @@
+ 
+ This document explains **how the FAR operator runs**: startup, **`FenceAgentsRemediation`** reconciliation, **`FenceAgentsRemediationTemplate`** validation, **webhooks**, and the **fence CLI executor**. Read **`docs/overview.md`** first for the product-level picture.
+ 
++The reconcile and CLI flows below describe default mode. [Safety-mode](docs/safety-mode.md) uses the same controllers but a guarded Go Redfish path, immutable NHC-selected identity, pre-effect target snapshots, separately confirmed Off evidence, uncached precondition checks, and UID/resourceVersion-bound taint updates. It rejects generic template sampling and direct pod deletion; its Secret, FAR, and template caches and permissions are scoped to the configured BMC namespace.
++
+ ## API scope
+ 
+ - **Group:** `fence-agents-remediation.medik8s.io`, **`v1alpha1`**
+diff --git a/Makefile b/Makefile
+index 272b9fbdc..1a377eaad 100644
+--- a/Makefile
++++ b/Makefile
+@@ -213,7 +213,7 @@ test: test-no-verify ## Generate and format code, run tests, generate manifests
+ test-no-verify: go-verify manifests generate fmt vet fix-imports envtest ginkgo # Generate and format code, and run tests
+ 	KUBEBUILDER_ASSETS="$(shell $(ENVTEST) use $(ENVTEST_K8S_VERSION) --bin-dir $(ENVTEST_DIR)/$(ENVTEST_VERSION) -p path)" \
+ 	$(GINKGO) -r --keep-going --randomize-all --require-suite --vv --coverprofile cover.out --repeat=$(REPEAT_TIMES) \
+-	./api/... ./pkg/... ./internal/controller/...
++	./api/... ./pkg/... ./internal/controller/... ./internal/safetycontract/... ./cmd/...
+ 
+ .PHONY: bundle-run
+ bundle-run: operator-sdk create-ns ## Run bundle image. Default NS is "openshift-workload-availability", redefine OPERATOR_NAMESPACE to override it.
+diff --git a/README.md b/README.md
+index ab0521936..1074fdb3a 100644
+--- a/README.md
++++ b/README.md
+@@ -4,6 +4,8 @@ fence-agents-remediation (*FAR*) is a Kubernetes operator that uses [well-known
+ 
+ FAR is one of the remediator operators by [Medik8s](https://www.medik8s.io/remediation/remediation/), such as [Self Node Remediation](https://github.com/medik8s/self-node-remediation) and [Machine Deletion Remediation](https://github.com/medik8s/machine-deletion-remediation), that were designed to run with the Node HealthCheck Operator [(NHC)](https://github.com/medik8s/node-healthcheck-operator) which detects an unhealthy node and creates remediation Custom Resource ([CR](https://kubernetes.io/docs/concepts/extend-kubernetes/api-extension/custom-resources/)). It is recommended to use FAR with NHC for an easier and smoother experience by fully automating the remediation process, but it can be used as a standalone remediator for the more experienced user. Moreover, like other Medik8s operators FAR was generated using the [operator-sdk](https://github.com/operator-framework/operator-sdk), and it supports Operator Lifecycle Manager ([OLM](https://olm.operatorframework.io/docs/)).
+ 
++For opt-in identity-bound Redfish Off verification, see [safety-mode](docs/safety-mode.md). That mode requires NHC-stamped Node identity, authenticated TLS, credential-only Secrets, and OOS-only release; it does not execute fence-agent subprocesses. The CLI workflow below describes default mode.
++
+ ## About Fence Agents
+ 
+ FAR uses a fence agent to fence a Kubernetes node. Generally, fencing is the process of taking unresponsive/unhealthy computers into a safe state and isolating the computer. Fence agent is a software "driver" which is able to prevent nodes from destroying data on shared storage, and it aimed for isolating corrupted nodes. The isolation with FAR is mostly power-based fencing which enables power-cycling, resetting, or turning off the computer.
+diff --git a/api/v1alpha1/fenceagentsremediation_params.go b/api/v1alpha1/fenceagentsremediation_params.go
+index e1b2e2bf7..c9e997f83 100644
+--- a/api/v1alpha1/fenceagentsremediation_params.go
++++ b/api/v1alpha1/fenceagentsremediation_params.go
+@@ -75,16 +75,24 @@ type SecretParams struct {
+ // FARValidator implements admission.Validator for FenceAgentsRemediation
+ // +kubebuilder:object:generate=false
+ type FARValidator struct {
+-	Client client.Client
++	Client    client.Client
++	APIReader client.Reader
++	Safety    SafetyConfig
+ }
+ 
+ var _ admission.Validator[*FenceAgentsRemediation] = &FARValidator{}
+ 
+ func (v *FARValidator) ValidateCreate(ctx context.Context, far *FenceAgentsRemediation) (admission.Warnings, error) {
++	if v.Safety.Enabled || far.Spec.SafetyPolicy != "" || far.Spec.NodeBinding != nil {
++		return nil, v.validateSafetyCreate(ctx, far)
++	}
+ 	return validateSpec(ctx, v.Client, &far.Spec, far)
+ }
+ 
+-func (v *FARValidator) ValidateUpdate(ctx context.Context, _, newFAR *FenceAgentsRemediation) (admission.Warnings, error) {
++func (v *FARValidator) ValidateUpdate(ctx context.Context, oldFAR, newFAR *FenceAgentsRemediation) (admission.Warnings, error) {
++	if v.Safety.Enabled || oldFAR.Spec.SafetyPolicy != "" || newFAR.Spec.SafetyPolicy != "" || oldFAR.Spec.NodeBinding != nil || newFAR.Spec.NodeBinding != nil {
++		return nil, v.validateSafetyUpdate(oldFAR, newFAR)
++	}
+ 	return validateSpec(ctx, v.Client, &newFAR.Spec, newFAR)
+ }
+ 
+@@ -96,16 +104,24 @@ func (v *FARValidator) ValidateDelete(ctx context.Context, far *FenceAgentsRemed
+ // FARTemplateValidator implements admission.Validator for FenceAgentsRemediationTemplate
+ // +kubebuilder:object:generate=false
+ type FARTemplateValidator struct {
+-	Client client.Client
++	Client    client.Client
++	APIReader client.Reader
++	Safety    SafetyConfig
+ }
+ 
+ var _ admission.Validator[*FenceAgentsRemediationTemplate] = &FARTemplateValidator{}
+ 
+ func (v *FARTemplateValidator) ValidateCreate(ctx context.Context, tmpl *FenceAgentsRemediationTemplate) (admission.Warnings, error) {
++	if v.Safety.Enabled || tmpl.Spec.Template.Spec.SafetyPolicy != "" || tmpl.Spec.Template.Spec.NodeBinding != nil {
++		return nil, v.validateSafetyTemplate(ctx, tmpl)
++	}
+ 	return validateSpec(ctx, v.Client, &tmpl.Spec.Template.Spec, tmpl)
+ }
+ 
+ func (v *FARTemplateValidator) ValidateUpdate(ctx context.Context, oldTmpl, newTmpl *FenceAgentsRemediationTemplate) (admission.Warnings, error) {
++	if v.Safety.Enabled || oldTmpl.Spec.Template.Spec.SafetyPolicy != "" || newTmpl.Spec.Template.Spec.SafetyPolicy != "" || newTmpl.Spec.Template.Spec.NodeBinding != nil {
++		return nil, v.validateSafetyTemplate(ctx, newTmpl)
++	}
+ 	warnings, err := validateSpec(ctx, v.Client, &newTmpl.Spec.Template.Spec, newTmpl)
+ 	aggregated := utilErrors.NewAggregate([]error{
+ 		err,
+diff --git a/api/v1alpha1/fenceagentsremediation_types.go b/api/v1alpha1/fenceagentsremediation_types.go
+index e80804e6e..791fee97b 100644
+--- a/api/v1alpha1/fenceagentsremediation_types.go
++++ b/api/v1alpha1/fenceagentsremediation_types.go
+@@ -55,6 +55,15 @@ type RemediationStrategyType string
+ 
+ // FenceAgentsRemediationSpec defines the desired state of FenceAgentsRemediation
+ type FenceAgentsRemediationSpec struct {
++	// SafetyPolicy opts into identity-bound Redfish Off verification.
++	// +optional
++	// +kubebuilder:validation:Enum=RedfishOffV1
++	SafetyPolicy string `json:"safetyPolicy,omitempty"`
++
++	// NodeBinding is populated by NHC from the Node selected for remediation, never by a template.
++	// +optional
++	NodeBinding *NodeBinding `json:"nodeBinding,omitempty"`
++
+ 	// Agent is the name of fence agent that will be used.
+ 	// It should have a fence_ prefix.
+ 	// +operator-sdk:csv:customresourcedefinitions:type=spec
+@@ -121,6 +130,23 @@ type FenceAgentsRemediationSpec struct {
+ 
+ // FenceAgentsRemediationStatus defines the observed state of FenceAgentsRemediation
+ type FenceAgentsRemediationStatus struct {
++	// SafetySnapshot fixes the target before any safety-mode effects; it is not Off evidence.
++	// +optional
++	SafetySnapshot *SafetySnapshot `json:"safetySnapshot,omitempty"`
++
++	// OffProof records confirmed same-system Off for the immutable snapshot.
++	// +optional
++	OffProof *OffProof `json:"offProof,omitempty"`
++
++	// SafetyAttempts reserves action attempts before contacting the BMC, including across restarts.
++	// +optional
++	// +kubebuilder:validation:Minimum=0
++	SafetyAttempts int `json:"safetyAttempts,omitempty"`
++
++	// SafetyLastAttempt preserves retry spacing across status events and leader restarts.
++	// +optional
++	SafetyLastAttempt *metav1.Time `json:"safetyLastAttempt,omitempty"`
++
+ 	// INSERT ADDITIONAL STATUS FIELD - define observed state of cluster
+ 	// Important: Run "make" to regenerate code after modifying this file
+ 
+@@ -144,6 +170,9 @@ type FenceAgentsRemediationStatus struct {
+ // +kubebuilder:object:root=true
+ // +kubebuilder:subresource:status
+ // +kubebuilder:resource:shortName=far
++// +kubebuilder:validation:XValidation:rule="!has(self.spec.safetyPolicy) || (has(self.spec.nodeBinding) && self.spec.retrycount >= 1 && self.spec.retrycount <= 5 && self.spec.agent == 'fence_redfish' && self.spec.remediationStrategy == 'OutOfServiceTaint')",message="RedfishOffV1 requires a binding, bounded retries and off-only Redfish OOS remediation"
++// +kubebuilder:validation:XValidation:rule="!has(self.spec.nodeBinding) || has(self.spec.safetyPolicy)",message="nodeBinding requires a safety policy"
++// +kubebuilder:validation:XValidation:rule="!has(oldSelf.spec.safetyPolicy) || self.spec == oldSelf.spec",message="safety-mode spec is immutable"
+ 
+ // +operator-sdk:csv:customresourcedefinitions:resources={{"FenceAgentsRemediation","v1alpha1","fenceagentsremediations"}}
+ // FenceAgentsRemediation is the Schema for the fenceagentsremediations API
+diff --git a/api/v1alpha1/fenceagentsremediationtemplate_types.go b/api/v1alpha1/fenceagentsremediationtemplate_types.go
+index 505f3aafc..f3d9b6833 100644
+--- a/api/v1alpha1/fenceagentsremediationtemplate_types.go
++++ b/api/v1alpha1/fenceagentsremediationtemplate_types.go
+@@ -64,6 +64,7 @@ type FenceAgentsRemediationTemplateStatus struct {
+ // +kubebuilder:object:root=true
+ // +kubebuilder:subresource:status
+ //+kubebuilder:resource:shortName=fartemplate
++// +kubebuilder:validation:XValidation:rule="!has(self.spec.template.spec.nodeBinding)",message="templates must not supply a Node binding"
+ 
+ // FenceAgentsRemediationTemplate is the Schema for the fenceagentsremediationtemplates API
+ // +operator-sdk:csv:customresourcedefinitions:resources={{"FenceAgentsRemediationTemplate","v1alpha1","fenceagentsremediationtemplates"}}
+diff --git a/api/v1alpha1/safety.go b/api/v1alpha1/safety.go
+new file mode 100644
+index 000000000..620b0f86b
+--- /dev/null
++++ b/api/v1alpha1/safety.go
+@@ -0,0 +1,329 @@
++package v1alpha1
++
++import (
++	"bytes"
++	"context"
++	"crypto/sha256"
++	"crypto/x509"
++	"encoding/json"
++	"encoding/pem"
++	"fmt"
++	"net"
++	"net/url"
++	"strconv"
++	"strings"
++	"time"
++
++	commonannotations "github.com/medik8s/common/pkg/annotations"
++
++	corev1 "k8s.io/api/core/v1"
++	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
++	k8svalidation "k8s.io/apimachinery/pkg/util/validation"
++	"sigs.k8s.io/controller-runtime/pkg/client"
++
++	"github.com/medik8s/fence-agents-remediation/v5/pkg/redfish"
++)
++
++const RedfishOffV1 = "RedfishOffV1"
++
++// NodeBinding identifies the Node selected by NHC, independently of later name reuse.
++// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="node binding is immutable"
++type NodeBinding struct {
++	// +kubebuilder:validation:Enum=v1
++	Version string `json:"version"`
++	// +kubebuilder:validation:MinLength=1
++	Name string `json:"name"`
++	// +kubebuilder:validation:MinLength=1
++	UID string `json:"uid"`
++	// +kubebuilder:validation:Pattern="^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
++	SystemUUID string `json:"systemUUID"`
++}
++
++// CredentialVersion invalidates evidence on Secret replacement or content updates.
++type CredentialVersion struct {
++	Namespace       string `json:"namespace"`
++	Name            string `json:"name"`
++	UID             string `json:"uid"`
++	ResourceVersion string `json:"resourceVersion"`
++}
++
++// SafetyTarget contains no credential data or credential-derived digest.
++type SafetyTarget struct {
++	Endpoint    string            `json:"endpoint"`
++	SystemURI   string            `json:"systemURI"`
++	TrustDigest string            `json:"trustDigest"`
++	Credential  CredentialVersion `json:"credential"`
++}
++
++// SafetySnapshot is persisted before action and must match every later effect.
++type SafetySnapshot struct {
++	FARUID     string       `json:"farUID"`
++	Generation int64        `json:"generation"`
++	SpecDigest string       `json:"specDigest"`
++	Binding    NodeBinding  `json:"binding"`
++	Target     SafetyTarget `json:"target"`
++}
++
++// OffProof binds a completed physical-state observation to its selected target.
++type OffProof struct {
++	Snapshot    SafetySnapshot `json:"snapshot"`
++	ConfirmedAt metav1.Time    `json:"confirmedAt"`
++}
++
++// SafetyConfig is operator configuration, never supplied by a remediation CR.
++// +kubebuilder:object:generate=false
++type SafetyConfig struct {
++	Enabled             bool
++	TrustedNHCCreator   string
++	CredentialNamespace string
++	CA                  []byte
++}
++
++// ResolvedSafetyTarget keeps credentials in memory only.
++// +kubebuilder:object:generate=false
++type ResolvedSafetyTarget struct {
++	Target   SafetyTarget
++	Username string
++	Password string
++}
++
++func (c SafetyConfig) Validate() error {
++	parts := strings.Split(c.TrustedNHCCreator, ":")
++	if !c.Enabled || c.CredentialNamespace == "" || len(parts) != 4 || parts[0] != "system" || parts[1] != "serviceaccount" || parts[2] == "" || parts[3] == "" || strings.Contains(c.TrustedNHCCreator, "*") {
++		return fmt.Errorf("safety-mode requires a namespace and an explicit trusted NHC service account")
++	}
++	_, err := publicTrustDigest(c.CA)
++	return err
++}
++
++func publicTrustDigest(ca []byte) (string, error) {
++	var certificates []byte
++	for rest := bytes.TrimSpace(ca); len(rest) > 0; rest = bytes.TrimSpace(rest) {
++		if !bytes.HasPrefix(rest, []byte("-----BEGIN CERTIFICATE-----")) {
++			return "", fmt.Errorf("redfish trust file must contain only public certificates")
++		}
++		block, remaining := pem.Decode(rest)
++		if block == nil || block.Type != "CERTIFICATE" || len(block.Headers) != 0 {
++			return "", fmt.Errorf("invalid public Redfish certificate")
++		}
++		certificate, err := x509.ParseCertificate(block.Bytes)
++		if err != nil {
++			return "", fmt.Errorf("invalid public Redfish certificate")
++		}
++		certificates = append(certificates, certificate.Raw...)
++		rest = remaining
++	}
++	if len(certificates) == 0 {
++		return "", fmt.Errorf("safety-mode requires a trusted Redfish CA")
++	}
++	digest := sha256.Sum256(certificates)
++	return fmt.Sprintf("%x", digest), nil
++}
++
++func (b NodeBinding) Validate() error {
++	if b.Version != "v1" || b.Name == "" || b.UID == "" || !redfish.ValidSystemUUID(b.SystemUUID) || b.SystemUUID != strings.ToLower(b.SystemUUID) {
++		return fmt.Errorf("invalid selected Node binding")
++	}
++	return nil
++}
++
++func (b NodeBinding) Matches(node *corev1.Node) error {
++	if err := b.Validate(); err != nil {
++		return err
++	}
++	if node == nil || node.Name != b.Name || string(node.UID) != b.UID || !redfish.ValidSystemUUID(node.Status.NodeInfo.SystemUUID) || !strings.EqualFold(node.Status.NodeInfo.SystemUUID, b.SystemUUID) {
++		return fmt.Errorf("selected Node identity no longer matches")
++	}
++	return nil
++}
++
++// ReadUniqueBoundNode refuses ambiguity among known Nodes without treating names as identity.
++func ReadUniqueBoundNode(ctx context.Context, reader client.Reader, binding NodeBinding) (*corev1.Node, error) {
++	if err := binding.Validate(); err != nil {
++		return nil, err
++	}
++	if reader == nil {
++		return nil, fmt.Errorf("uncached Node reader required")
++	}
++	nodes := &corev1.NodeList{}
++	if err := reader.List(ctx, nodes); err != nil {
++		return nil, fmt.Errorf("list known Nodes for identity validation: %w", err)
++	}
++	if nodes.Continue != "" || (nodes.RemainingItemCount != nil && *nodes.RemainingItemCount > 0) {
++		return nil, fmt.Errorf("incomplete known Node inventory cannot establish UUID uniqueness")
++	}
++	var selected *corev1.Node
++	matches := 0
++	for i := range nodes.Items {
++		node := &nodes.Items[i]
++		if strings.EqualFold(node.Status.NodeInfo.SystemUUID, binding.SystemUUID) {
++			matches++
++			selected = node
++		}
++	}
++	if matches != 1 {
++		return nil, fmt.Errorf("selected system UUID does not uniquely identify a known Node")
++	}
++	if err := binding.Matches(selected); err != nil {
++		return nil, err
++	}
++	if !selected.DeletionTimestamp.IsZero() {
++		return nil, fmt.Errorf("selected Node is terminating")
++	}
++	return selected.DeepCopy(), nil
++}
++
++// ValidateSafetyFAR also checks the legacy routing hint, without using it as identity.
++func ValidateSafetyFAR(far *FenceAgentsRemediation) error {
++	if err := ValidateSafetySpec(&far.Spec, false); err != nil {
++		return err
++	}
++	if hint, found := far.Annotations[commonannotations.NodeNameAnnotation]; found && hint != far.Spec.NodeBinding.Name {
++		return fmt.Errorf("node-name hint differs from selected binding")
++	}
++	return nil
++}
++
++// ValidateSafetySpec permits templates without a binding, but never a supplied template identity.
++func ValidateSafetySpec(spec *FenceAgentsRemediationSpec, isTemplate bool) error {
++	if spec.SafetyPolicy != RedfishOffV1 || spec.Agent != "fence_redfish" || spec.RemediationStrategy != OutOfServiceTaintRemediationStrategy {
++		return fmt.Errorf("safety-mode supports only RedfishOffV1 with fence_redfish and OutOfServiceTaint")
++	}
++	if spec.RetryCount < 1 || spec.RetryCount > 5 || spec.Timeout.Duration < time.Second || spec.Timeout.Duration > time.Minute || spec.RetryInterval.Duration < time.Second || spec.RetryInterval.Duration > 30*time.Second {
++		return fmt.Errorf("safety-mode retry or timeout exceeds bounds")
++	}
++	if isTemplate {
++		if spec.NodeBinding != nil {
++			return fmt.Errorf("templates must not supply a Node binding")
++		}
++	} else {
++		if spec.NodeBinding == nil {
++			return fmt.Errorf("selected Node binding required")
++		}
++		if err := spec.NodeBinding.Validate(); err != nil {
++			return err
++		}
++	}
++	if spec.SharedSecretName != nil && len(k8svalidation.IsDNS1123Subdomain(*spec.SharedSecretName)) != 0 {
++		return fmt.Errorf("invalid shared credential Secret reference")
++	}
++	for _, name := range spec.NodeSecretNames {
++		if len(k8svalidation.IsDNS1123Subdomain(name)) != 0 {
++			return fmt.Errorf("invalid node credential Secret reference")
++		}
++	}
++	validate := func(key ParameterName, value string) error {
++		switch key {
++		case "--ip", "--ipport", "--systems-uri", "--action":
++		default:
++			return fmt.Errorf("unsupported safety-mode parameter")
++		}
++		if value == "" || strings.Contains(value, "{{") || strings.ContainsAny(value, "\r\n\x00") {
++			return fmt.Errorf("invalid safety-mode parameter")
++		}
++		if key == "--action" && value != "off" {
++			return fmt.Errorf("safety-mode requires explicit off action")
++		}
++		return nil
++	}
++	for key, value := range spec.SharedParameters {
++		if err := validate(key, value); err != nil {
++			return err
++		}
++	}
++	for key, nodes := range spec.NodeParameters {
++		if len(nodes) == 0 {
++			return fmt.Errorf("empty safety-mode node parameter map")
++		}
++		for _, value := range nodes {
++			if err := validate(key, value); err != nil {
++				return err
++			}
++		}
++	}
++	return nil
++}
++
++// ResolveSafetyTarget reads only the configured credential namespace, never arbitrary CLI options.
++func ResolveSafetyTarget(ctx context.Context, reader client.Reader, far *FenceAgentsRemediation, cfg SafetyConfig) (*ResolvedSafetyTarget, error) {
++	if err := cfg.Validate(); err != nil {
++		return nil, err
++	}
++	if err := ValidateSafetyFAR(far); err != nil {
++		return nil, err
++	}
++	if far.Namespace != cfg.CredentialNamespace || reader == nil {
++		return nil, fmt.Errorf("remediation must use the configured BMC namespace")
++	}
++	params := map[ParameterName]string{}
++	for key, value := range far.Spec.SharedParameters {
++		params[key] = value
++	}
++	for key, nodes := range far.Spec.NodeParameters {
++		if value, found := nodes[NodeName(far.Spec.NodeBinding.Name)]; found {
++			params[key] = value
++		}
++	}
++	if params["--action"] != "off" {
++		return nil, fmt.Errorf("explicit off action required")
++	}
++	host := params["--ip"]
++	if host == "" || strings.ContainsAny(host, "/@?#%\\") {
++		return nil, fmt.Errorf("invalid Redfish host")
++	}
++	port := params["--ipport"]
++	if port != "" {
++		value, err := strconv.Atoi(port)
++		if err != nil || value < 1 || value > 65535 {
++			return nil, fmt.Errorf("invalid Redfish port")
++		}
++		host = net.JoinHostPort(host, strconv.Itoa(value))
++	} else if strings.Contains(host, ":") {
++		if net.ParseIP(host) == nil {
++			return nil, fmt.Errorf("redfish port must be explicit")
++		}
++		host = "[" + host + "]"
++	}
++	endpoint := (&url.URL{Scheme: "https", Host: strings.ToLower(host)}).String()
++	uri := params["--systems-uri"]
++	if err := redfish.ValidateTarget(endpoint, uri); err != nil {
++		return nil, err
++	}
++	secretName := ""
++	if far.Spec.SharedSecretName != nil {
++		secretName = *far.Spec.SharedSecretName
++	}
++	if name, found := far.Spec.NodeSecretNames[NodeName(far.Spec.NodeBinding.Name)]; found {
++		if secretName != "" {
++			return nil, fmt.Errorf("one credential Secret per selected target is required")
++		}
++		secretName = name
++	}
++	if secretName == "" {
++		return nil, fmt.Errorf("credential Secret required")
++	}
++	secret := &corev1.Secret{}
++	if err := reader.Get(ctx, client.ObjectKey{Namespace: cfg.CredentialNamespace, Name: secretName}, secret); err != nil {
++		return nil, fmt.Errorf("read selected BMC credentials: %w", err)
++	}
++	if len(secret.Data) != 2 || len(secret.Data["username"]) == 0 || len(secret.Data["password"]) == 0 || secret.UID == "" || secret.ResourceVersion == "" {
++		return nil, fmt.Errorf("credential Secret requires only nonempty username and password and a persisted version")
++	}
++	digest, err := publicTrustDigest(cfg.CA)
++	if err != nil {
++		return nil, err
++	}
++	return &ResolvedSafetyTarget{Target: SafetyTarget{Endpoint: endpoint, SystemURI: uri, TrustDigest: digest, Credential: CredentialVersion{Namespace: cfg.CredentialNamespace, Name: secret.Name, UID: string(secret.UID), ResourceVersion: secret.ResourceVersion}}, Username: string(secret.Data["username"]), Password: string(secret.Data["password"])}, nil
++}
++
++func NewSafetySnapshot(far *FenceAgentsRemediation, target SafetyTarget) (SafetySnapshot, error) {
++	if err := ValidateSafetyFAR(far); err != nil {
++		return SafetySnapshot{}, err
++	}
++	data, err := json.Marshal(far.Spec)
++	if err != nil {
++		return SafetySnapshot{}, fmt.Errorf("encode safety spec: %w", err)
++	}
++	digest := sha256.Sum256(data)
++	return SafetySnapshot{FARUID: string(far.UID), Generation: far.Generation, SpecDigest: fmt.Sprintf("%x", digest), Binding: *far.Spec.NodeBinding, Target: target}, nil
++}
+diff --git a/api/v1alpha1/safety_admission.go b/api/v1alpha1/safety_admission.go
+new file mode 100644
+index 000000000..c82180a9c
+--- /dev/null
++++ b/api/v1alpha1/safety_admission.go
+@@ -0,0 +1,69 @@
++package v1alpha1
++
++import (
++	"context"
++	"fmt"
++	"reflect"
++
++	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
++)
++
++func (v *FARValidator) validateSafetyCreate(ctx context.Context, far *FenceAgentsRemediation) error {
++	if err := v.Safety.Validate(); err != nil {
++		return err
++	}
++	if err := ValidateSafetyFAR(far); err != nil {
++		return err
++	}
++	request, err := admission.RequestFromContext(ctx)
++	if err != nil || request.UserInfo.Username != v.Safety.TrustedNHCCreator || request.Namespace != far.Namespace {
++		return fmt.Errorf("only the configured NHC service account may create safety-mode remediations")
++	}
++	if v.APIReader == nil {
++		return fmt.Errorf("uncached safety admission reader required")
++	}
++	if _, err := ReadUniqueBoundNode(ctx, v.APIReader, *far.Spec.NodeBinding); err != nil {
++		return err
++	}
++	_, err = ResolveSafetyTarget(ctx, v.APIReader, far, v.Safety)
++	return err
++}
++
++func (v *FARValidator) validateSafetyUpdate(oldFAR, newFAR *FenceAgentsRemediation) error {
++	if err := v.Safety.Validate(); err != nil {
++		return err
++	}
++	if err := ValidateSafetyFAR(newFAR); err != nil {
++		return err
++	}
++	if newFAR.Namespace != v.Safety.CredentialNamespace || !reflect.DeepEqual(oldFAR.Spec, newFAR.Spec) {
++		return fmt.Errorf("safety-mode effective spec is immutable")
++	}
++	return nil
++}
++
++func (v *FARTemplateValidator) validateSafetyTemplate(ctx context.Context, tmpl *FenceAgentsRemediationTemplate) error {
++	if err := v.Safety.Validate(); err != nil {
++		return err
++	}
++	if err := ValidateSafetySpec(&tmpl.Spec.Template.Spec, true); err != nil {
++		return err
++	}
++	if sample := tmpl.Spec.StatusValidationSample; sample != nil && sample.String() != "0" && sample.String() != "0%" {
++		return fmt.Errorf("generic template status execution is unsupported in safety-mode")
++	}
++	names := GetNodeNamesFromSpec(&tmpl.Spec.Template.Spec)
++	if len(names) == 0 {
++		names = []string{"template-validation"}
++	}
++	for _, name := range names {
++		far := &FenceAgentsRemediation{}
++		far.Namespace = tmpl.Namespace
++		far.Spec = *tmpl.Spec.Template.Spec.DeepCopy()
++		far.Spec.NodeBinding = &NodeBinding{Version: "v1", Name: name, UID: "template-validation", SystemUUID: "00112233-4455-4677-8899-aabbccddeeff"}
++		if _, err := ResolveSafetyTarget(ctx, v.APIReader, far, v.Safety); err != nil {
++			return err
++		}
++	}
++	return nil
++}
+diff --git a/api/v1alpha1/zz_generated.deepcopy.go b/api/v1alpha1/zz_generated.deepcopy.go
+index 6e45fd67d..27b83731e 100644
+--- a/api/v1alpha1/zz_generated.deepcopy.go
++++ b/api/v1alpha1/zz_generated.deepcopy.go
+@@ -26,6 +26,21 @@ import (
+ 	"k8s.io/apimachinery/pkg/util/intstr"
+ )
+ 
++// DeepCopyInto is an autogenerated deepcopy function, copying the receiver, writing into out. in must be non-nil.
++func (in *CredentialVersion) DeepCopyInto(out *CredentialVersion) {
++	*out = *in
++}
++
++// DeepCopy is an autogenerated deepcopy function, copying the receiver, creating a new CredentialVersion.
++func (in *CredentialVersion) DeepCopy() *CredentialVersion {
++	if in == nil {
++		return nil
++	}
++	out := new(CredentialVersion)
++	in.DeepCopyInto(out)
++	return out
++}
++
+ // DeepCopyInto is an autogenerated deepcopy function, copying the receiver, writing into out. in must be non-nil.
+ func (in *FenceAgentsRemediation) DeepCopyInto(out *FenceAgentsRemediation) {
+ 	*out = *in
+@@ -88,6 +103,11 @@ func (in *FenceAgentsRemediationList) DeepCopyObject() runtime.Object {
+ // DeepCopyInto is an autogenerated deepcopy function, copying the receiver, writing into out. in must be non-nil.
+ func (in *FenceAgentsRemediationSpec) DeepCopyInto(out *FenceAgentsRemediationSpec) {
+ 	*out = *in
++	if in.NodeBinding != nil {
++		in, out := &in.NodeBinding, &out.NodeBinding
++		*out = new(NodeBinding)
++		**out = **in
++	}
+ 	out.RetryInterval = in.RetryInterval
+ 	out.Timeout = in.Timeout
+ 	if in.SharedParameters != nil {
+@@ -142,6 +162,20 @@ func (in *FenceAgentsRemediationSpec) DeepCopy() *FenceAgentsRemediationSpec {
+ // DeepCopyInto is an autogenerated deepcopy function, copying the receiver, writing into out. in must be non-nil.
+ func (in *FenceAgentsRemediationStatus) DeepCopyInto(out *FenceAgentsRemediationStatus) {
+ 	*out = *in
++	if in.SafetySnapshot != nil {
++		in, out := &in.SafetySnapshot, &out.SafetySnapshot
++		*out = new(SafetySnapshot)
++		**out = **in
++	}
++	if in.OffProof != nil {
++		in, out := &in.OffProof, &out.OffProof
++		*out = new(OffProof)
++		(*in).DeepCopyInto(*out)
++	}
++	if in.SafetyLastAttempt != nil {
++		in, out := &in.SafetyLastAttempt, &out.SafetyLastAttempt
++		*out = (*in).DeepCopy()
++	}
+ 	if in.Conditions != nil {
+ 		in, out := &in.Conditions, &out.Conditions
+ 		*out = make([]v1.Condition, len(*in))
+@@ -297,6 +331,71 @@ func (in *FenceAgentsRemediationTemplateStatus) DeepCopy() *FenceAgentsRemediati
+ 	return out
+ }
+ 
++// DeepCopyInto is an autogenerated deepcopy function, copying the receiver, writing into out. in must be non-nil.
++func (in *NodeBinding) DeepCopyInto(out *NodeBinding) {
++	*out = *in
++}
++
++// DeepCopy is an autogenerated deepcopy function, copying the receiver, creating a new NodeBinding.
++func (in *NodeBinding) DeepCopy() *NodeBinding {
++	if in == nil {
++		return nil
++	}
++	out := new(NodeBinding)
++	in.DeepCopyInto(out)
++	return out
++}
++
++// DeepCopyInto is an autogenerated deepcopy function, copying the receiver, writing into out. in must be non-nil.
++func (in *OffProof) DeepCopyInto(out *OffProof) {
++	*out = *in
++	out.Snapshot = in.Snapshot
++	in.ConfirmedAt.DeepCopyInto(&out.ConfirmedAt)
++}
++
++// DeepCopy is an autogenerated deepcopy function, copying the receiver, creating a new OffProof.
++func (in *OffProof) DeepCopy() *OffProof {
++	if in == nil {
++		return nil
++	}
++	out := new(OffProof)
++	in.DeepCopyInto(out)
++	return out
++}
++
++// DeepCopyInto is an autogenerated deepcopy function, copying the receiver, writing into out. in must be non-nil.
++func (in *SafetySnapshot) DeepCopyInto(out *SafetySnapshot) {
++	*out = *in
++	out.Binding = in.Binding
++	out.Target = in.Target
++}
++
++// DeepCopy is an autogenerated deepcopy function, copying the receiver, creating a new SafetySnapshot.
++func (in *SafetySnapshot) DeepCopy() *SafetySnapshot {
++	if in == nil {
++		return nil
++	}
++	out := new(SafetySnapshot)
++	in.DeepCopyInto(out)
++	return out
++}
++
++// DeepCopyInto is an autogenerated deepcopy function, copying the receiver, writing into out. in must be non-nil.
++func (in *SafetyTarget) DeepCopyInto(out *SafetyTarget) {
++	*out = *in
++	out.Credential = in.Credential
++}
++
++// DeepCopy is an autogenerated deepcopy function, copying the receiver, creating a new SafetyTarget.
++func (in *SafetyTarget) DeepCopy() *SafetyTarget {
++	if in == nil {
++		return nil
++	}
++	out := new(SafetyTarget)
++	in.DeepCopyInto(out)
++	return out
++}
++
+ // DeepCopyInto is an autogenerated deepcopy function, copying the receiver, writing into out. in must be non-nil.
+ func (in *SecretParams) DeepCopyInto(out *SecretParams) {
+ 	*out = *in
+diff --git a/bundle/manifests/fence-agents-remediation.clusterserviceversion.yaml b/bundle/manifests/fence-agents-remediation.clusterserviceversion.yaml
+index 47b02078c..76050e112 100644
+--- a/bundle/manifests/fence-agents-remediation.clusterserviceversion.yaml
++++ b/bundle/manifests/fence-agents-remediation.clusterserviceversion.yaml
+@@ -271,7 +271,6 @@ spec:
+           resources:
+           - nodes
+           verbs:
+-          - delete
+           - get
+           - list
+           - update
+diff --git a/bundle/manifests/fence-agents-remediation.medik8s.io_fenceagentsremediations.yaml b/bundle/manifests/fence-agents-remediation.medik8s.io_fenceagentsremediations.yaml
+index 15b434d93..63266116b 100644
+--- a/bundle/manifests/fence-agents-remediation.medik8s.io_fenceagentsremediations.yaml
++++ b/bundle/manifests/fence-agents-remediation.medik8s.io_fenceagentsremediations.yaml
+@@ -50,6 +50,32 @@ spec:
+                   It should have a fence_ prefix.
+                 pattern: fence_.+
+                 type: string
++              nodeBinding:
++                description: NodeBinding is populated by NHC from the Node selected
++                  for remediation, never by a template.
++                properties:
++                  name:
++                    minLength: 1
++                    type: string
++                  systemUUID:
++                    pattern: ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$
++                    type: string
++                  uid:
++                    minLength: 1
++                    type: string
++                  version:
++                    enum:
++                    - v1
++                    type: string
++                required:
++                - name
++                - systemUUID
++                - uid
++                - version
++                type: object
++                x-kubernetes-validations:
++                - message: node binding is immutable
++                  rule: self == oldSelf
+               nodeSecretNames:
+                 additionalProperties:
+                   type: string
+@@ -87,6 +113,11 @@ spec:
+                   execution
+                 pattern: ^([0-9]+(\.[0-9]+)?(ns|us|µs|ms|s|m|h))+$
+                 type: string
++              safetyPolicy:
++                description: SafetyPolicy opts into identity-bound Redfish Off verification.
++                enum:
++                - RedfishOffV1
++                type: string
+               sharedSecretName:
+                 description: |-
+                   SharedSecretName is the name of the Secret which contains shared fence agent parameters.
+@@ -181,8 +212,195 @@ spec:
+                 description: LastUpdateTime is the last time the status was updated.
+                 format: date-time
+                 type: string
++              offProof:
++                description: OffProof records confirmed same-system Off for the immutable
++                  snapshot.
++                properties:
++                  confirmedAt:
++                    format: date-time
++                    type: string
++                  snapshot:
++                    description: SafetySnapshot is persisted before action and must
++                      match every later effect.
++                    properties:
++                      binding:
++                        description: NodeBinding identifies the Node selected by NHC,
++                          independently of later name reuse.
++                        properties:
++                          name:
++                            minLength: 1
++                            type: string
++                          systemUUID:
++                            pattern: ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$
++                            type: string
++                          uid:
++                            minLength: 1
++                            type: string
++                          version:
++                            enum:
++                            - v1
++                            type: string
++                        required:
++                        - name
++                        - systemUUID
++                        - uid
++                        - version
++                        type: object
++                        x-kubernetes-validations:
++                        - message: node binding is immutable
++                          rule: self == oldSelf
++                      farUID:
++                        type: string
++                      generation:
++                        format: int64
++                        type: integer
++                      specDigest:
++                        type: string
++                      target:
++                        description: SafetyTarget contains no credential data or credential-derived
++                          digest.
++                        properties:
++                          credential:
++                            description: CredentialVersion invalidates evidence on
++                              Secret replacement or content updates.
++                            properties:
++                              name:
++                                type: string
++                              namespace:
++                                type: string
++                              resourceVersion:
++                                type: string
++                              uid:
++                                type: string
++                            required:
++                            - name
++                            - namespace
++                            - resourceVersion
++                            - uid
++                            type: object
++                          endpoint:
++                            type: string
++                          systemURI:
++                            type: string
++                          trustDigest:
++                            type: string
++                        required:
++                        - credential
++                        - endpoint
++                        - systemURI
++                        - trustDigest
++                        type: object
++                    required:
++                    - binding
++                    - farUID
++                    - generation
++                    - specDigest
++                    - target
++                    type: object
++                required:
++                - confirmedAt
++                - snapshot
++                type: object
++              safetyAttempts:
++                description: SafetyAttempts reserves action attempts before contacting
++                  the BMC, including across restarts.
++                minimum: 0
++                type: integer
++              safetyLastAttempt:
++                description: SafetyLastAttempt preserves retry spacing across status
++                  events and leader restarts.
++                format: date-time
++                type: string
++              safetySnapshot:
++                description: SafetySnapshot fixes the target before any safety-mode
++                  effects; it is not Off evidence.
++                properties:
++                  binding:
++                    description: NodeBinding identifies the Node selected by NHC,
++                      independently of later name reuse.
++                    properties:
++                      name:
++                        minLength: 1
++                        type: string
++                      systemUUID:
++                        pattern: ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$
++                        type: string
++                      uid:
++                        minLength: 1
++                        type: string
++                      version:
++                        enum:
++                        - v1
++                        type: string
++                    required:
++                    - name
++                    - systemUUID
++                    - uid
++                    - version
++                    type: object
++                    x-kubernetes-validations:
++                    - message: node binding is immutable
++                      rule: self == oldSelf
++                  farUID:
++                    type: string
++                  generation:
++                    format: int64
++                    type: integer
++                  specDigest:
++                    type: string
++                  target:
++                    description: SafetyTarget contains no credential data or credential-derived
++                      digest.
++                    properties:
++                      credential:
++                        description: CredentialVersion invalidates evidence on Secret
++                          replacement or content updates.
++                        properties:
++                          name:
++                            type: string
++                          namespace:
++                            type: string
++                          resourceVersion:
++                            type: string
++                          uid:
++                            type: string
++                        required:
++                        - name
++                        - namespace
++                        - resourceVersion
++                        - uid
++                        type: object
++                      endpoint:
++                        type: string
++                      systemURI:
++                        type: string
++                      trustDigest:
++                        type: string
++                    required:
++                    - credential
++                    - endpoint
++                    - systemURI
++                    - trustDigest
++                    type: object
++                required:
++                - binding
++                - farUID
++                - generation
++                - specDigest
++                - target
++                type: object
+             type: object
+         type: object
++        x-kubernetes-validations:
++        - message: RedfishOffV1 requires a binding, bounded retries and off-only Redfish
++            OOS remediation
++          rule: '!has(self.spec.safetyPolicy) || (has(self.spec.nodeBinding) && self.spec.retrycount
++            >= 1 && self.spec.retrycount <= 5 && self.spec.agent == ''fence_redfish''
++            && self.spec.remediationStrategy == ''OutOfServiceTaint'')'
++        - message: nodeBinding requires a safety policy
++          rule: '!has(self.spec.nodeBinding) || has(self.spec.safetyPolicy)'
++        - message: safety-mode spec is immutable
++          rule: '!has(oldSelf.spec.safetyPolicy) || self.spec == oldSelf.spec'
+     served: true
+     storage: true
+     subresources:
+diff --git a/bundle/manifests/fence-agents-remediation.medik8s.io_fenceagentsremediationtemplates.yaml b/bundle/manifests/fence-agents-remediation.medik8s.io_fenceagentsremediationtemplates.yaml
+index 4dc752227..dac26c9e5 100644
+--- a/bundle/manifests/fence-agents-remediation.medik8s.io_fenceagentsremediationtemplates.yaml
++++ b/bundle/manifests/fence-agents-remediation.medik8s.io_fenceagentsremediationtemplates.yaml
+@@ -71,6 +71,32 @@ spec:
+                           It should have a fence_ prefix.
+                         pattern: fence_.+
+                         type: string
++                      nodeBinding:
++                        description: NodeBinding is populated by NHC from the Node
++                          selected for remediation, never by a template.
++                        properties:
++                          name:
++                            minLength: 1
++                            type: string
++                          systemUUID:
++                            pattern: ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$
++                            type: string
++                          uid:
++                            minLength: 1
++                            type: string
++                          version:
++                            enum:
++                            - v1
++                            type: string
++                        required:
++                        - name
++                        - systemUUID
++                        - uid
++                        - version
++                        type: object
++                        x-kubernetes-validations:
++                        - message: node binding is immutable
++                          rule: self == oldSelf
+                       nodeSecretNames:
+                         additionalProperties:
+                           type: string
+@@ -109,6 +135,12 @@ spec:
+                           agent execution
+                         pattern: ^([0-9]+(\.[0-9]+)?(ns|us|µs|ms|s|m|h))+$
+                         type: string
++                      safetyPolicy:
++                        description: SafetyPolicy opts into identity-bound Redfish
++                          Off verification.
++                        enum:
++                        - RedfishOffV1
++                        type: string
+                       sharedSecretName:
+                         description: |-
+                           SharedSecretName is the name of the Secret which contains shared fence agent parameters.
+@@ -221,6 +253,9 @@ spec:
+                 type: object
+             type: object
+         type: object
++        x-kubernetes-validations:
++        - message: templates must not supply a Node binding
++          rule: '!has(self.spec.template.spec.nodeBinding)'
+     served: true
+     storage: true
+     subresources:
+diff --git a/cmd/main.go b/cmd/main.go
+index 90a8b56f3..ae29b66d1 100644
+--- a/cmd/main.go
++++ b/cmd/main.go
+@@ -88,6 +88,10 @@ func main() {
+ 		probeAddr            string
+ 		enableHTTP2          bool
+ 		webhookOpts          webhook.Options
++		safetyMode           bool
++		trustedNHCCreator    string
++		credentialNamespace  string
++		redfishCAFile        string
+ 	)
+ 	flag.StringVar(&metricsAddr, "metrics-bind-address", ":8443", "The address the metric endpoint binds to.")
+ 	flag.StringVar(&probeAddr, "health-probe-bind-address", ":8081", "The address the probe endpoint binds to.")
+@@ -96,6 +100,11 @@ func main() {
+ 			"Enabling this will ensure there is only one active controller manager.")
+ 	flag.BoolVar(&enableHTTP2, "enable-http2", false, "If HTTP/2 should be enabled for the metrics and webhook servers.")
+ 
++	flag.BoolVar(&safetyMode, "safety-mode", false, "Require identity-bound Redfish Off remediation for all FAR objects.")
++	flag.StringVar(&trustedNHCCreator, "trusted-nhc-creator", "", "Exact NHC service-account username allowed to create safety-mode remediations.")
++	flag.StringVar(&credentialNamespace, "bmc-credential-namespace", "", "Dedicated namespace for safety-mode remediations and credential Secrets.")
++	flag.StringVar(&redfishCAFile, "redfish-ca-file", "", "Trusted PEM CA bundle for authenticated Redfish requests in safety-mode.")
++
+ 	opts := zap.Options{
+ 		Development: true,
+ 		TimeEncoder: zapcore.RFC3339NanoTimeEncoder,
+@@ -105,6 +114,12 @@ func main() {
+ 
+ 	ctrl.SetLogger(zap.New(zap.UseFlagOptions(&opts)))
+ 
++	safety, err := loadSafetyConfig(safetyMode, trustedNHCCreator, credentialNamespace, redfishCAFile)
++	if err != nil {
++		setupLog.Error(err, "invalid safety-mode configuration")
++		os.Exit(1)
++	}
++
+ 	printVersion()
+ 
+ 	configureWebhookOpts(&webhookOpts, enableHTTP2)
+@@ -150,6 +165,7 @@ func main() {
+ 
+ 	mgr, err := ctrl.NewManager(cfg, ctrl.Options{
+ 		Scheme: scheme,
++		Cache:  safetyCacheOptions(safety),
+ 		Metrics: server.Options{
+ 			BindAddress:    metricsAddr,
+ 			SecureServing:  true,
+@@ -175,6 +191,10 @@ func main() {
+ 		setupLog.Info("out-of-service taint is supported on this cluster")
+ 	}
+ 	fenceagentsremediationv1alpha1.SetOutOfServiceTaintSupported(isOutOfServiceTaintSupported)
++	if safety.Enabled && !isOutOfServiceTaintSupported {
++		setupLog.Error(fmt.Errorf("OutOfServiceTaint support required"), "safety-mode cannot start")
++		os.Exit(1)
++	}
+ 
+ 	executer, err := cli.NewExecuter(mgr.GetClient(), mgr.GetEventRecorderFor(farControllerName+"-executer"))
+ 	if err != nil {
+@@ -183,25 +203,28 @@ func main() {
+ 	}
+ 
+ 	if err = (&controller.FenceAgentsRemediationReconciler{
+-		Client:   mgr.GetClient(),
+-		Log:      ctrl.Log.WithName("controller").WithName(farControllerName),
+-		Scheme:   mgr.GetScheme(),
+-		Recorder: mgr.GetEventRecorderFor(farControllerName),
+-		Executor: executer,
++		APIReader: mgr.GetAPIReader(),
++		Safety:    safety,
++		Client:    mgr.GetClient(),
++		Log:       ctrl.Log.WithName("controller").WithName(farControllerName),
++		Scheme:    mgr.GetScheme(),
++		Recorder:  mgr.GetEventRecorderFor(farControllerName),
++		Executor:  executer,
+ 	}).SetupWithManager(mgr); err != nil {
+ 		setupLog.Error(err, "unable to create controller", "controller", farControllerName)
+ 		os.Exit(1)
+ 	}
+ 
+-	if err = webhookv1alpha1.SetupFARWebhookWithManager(mgr); err != nil {
++	if err = webhookv1alpha1.SetupFARWebhookWithManager(mgr, safety); err != nil {
+ 		setupLog.Error(err, "unable to create webhook", "webhook", "FenceAgentsRemediation")
+ 		os.Exit(1)
+ 	}
+-	if err = webhookv1alpha1.SetupFARTemplateWebhookWithManager(mgr); err != nil {
++	if err = webhookv1alpha1.SetupFARTemplateWebhookWithManager(mgr, safety); err != nil {
+ 		setupLog.Error(err, "unable to create webhook", "webhook", "FenceAgentsRemediationTemplate")
+ 		os.Exit(1)
+ 	}
+ 	if err = (&controller.FenceAgentsRemediationTemplateReconciler{
++		Safety:   safety,
+ 		Client:   mgr.GetClient(),
+ 		Log:      ctrl.Log.WithName("controller").WithName(fartControllerName),
+ 		Scheme:   mgr.GetScheme(),
+diff --git a/cmd/safety.go b/cmd/safety.go
+new file mode 100644
+index 000000000..484aa8698
+--- /dev/null
++++ b/cmd/safety.go
+@@ -0,0 +1,39 @@
++package main
++
++import (
++	"fmt"
++	"os"
++
++	corev1 "k8s.io/api/core/v1"
++	"sigs.k8s.io/controller-runtime/pkg/cache"
++	"sigs.k8s.io/controller-runtime/pkg/client"
++
++	farapi "github.com/medik8s/fence-agents-remediation/v5/api/v1alpha1"
++)
++
++func safetyCacheOptions(config farapi.SafetyConfig) cache.Options {
++	if !config.Enabled {
++		return cache.Options{}
++	}
++	objects := map[client.Object]cache.ByObject{}
++	for _, object := range []client.Object{&corev1.Secret{}, &farapi.FenceAgentsRemediation{}, &farapi.FenceAgentsRemediationTemplate{}} {
++		objects[object] = cache.ByObject{Namespaces: map[string]cache.Config{config.CredentialNamespace: {}}}
++	}
++	return cache.Options{ByObject: objects}
++}
++
++func loadSafetyConfig(enabled bool, creator, namespace, caFile string) (farapi.SafetyConfig, error) {
++	config := farapi.SafetyConfig{Enabled: enabled, TrustedNHCCreator: creator, CredentialNamespace: namespace}
++	if !enabled {
++		return config, nil
++	}
++	if caFile == "" {
++		return config, fmt.Errorf("safety-mode requires a Redfish CA file")
++	}
++	ca, err := os.ReadFile(caFile)
++	if err != nil {
++		return config, fmt.Errorf("load Redfish CA: %w", err)
++	}
++	config.CA = ca
++	return config, config.Validate()
++}
+diff --git a/cmd/safety_test.go b/cmd/safety_test.go
+new file mode 100644
+index 000000000..f89c73a14
+--- /dev/null
++++ b/cmd/safety_test.go
+@@ -0,0 +1,178 @@
++package main
++
++import (
++	"context"
++	"encoding/json"
++	"encoding/pem"
++	"net/http"
++	"net/http/httptest"
++	"sync"
++	"testing"
++	"time"
++
++	corev1 "k8s.io/api/core/v1"
++	"k8s.io/apimachinery/pkg/api/meta"
++	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
++	"k8s.io/apimachinery/pkg/runtime/schema"
++	"k8s.io/client-go/rest"
++	"sigs.k8s.io/controller-runtime/pkg/cache"
++	"sigs.k8s.io/controller-runtime/pkg/client"
++
++	farapi "github.com/medik8s/fence-agents-remediation/v5/api/v1alpha1"
++)
++
++func TestDirectCredentialNamespace(t *testing.T) {
++	var mutex sync.Mutex
++	var paths []string
++	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++		mutex.Lock()
++		paths = append(paths, r.URL.Path)
++		mutex.Unlock()
++		w.Header().Set("Content-Type", "application/json")
++		if r.URL.Path != "/api/v1/namespaces/bmc/secrets/credentials" {
++			http.NotFound(w, r)
++			return
++		}
++		_ = json.NewEncoder(w).Encode(map[string]any{"apiVersion": "v1", "kind": "Secret", "metadata": map[string]string{"name": "credentials", "namespace": "bmc", "uid": "secret-a", "resourceVersion": "1"}, "data": map[string][]byte{"username": []byte("user"), "password": []byte("password")}})
++	}))
++	defer server.Close()
++	ca := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: server.Certificate().Raw})
++	mapper := meta.NewDefaultRESTMapper([]schema.GroupVersion{corev1.SchemeGroupVersion})
++	mapper.Add(corev1.SchemeGroupVersion.WithKind("Secret"), meta.RESTScopeNamespace)
++	reader, err := client.New(&rest.Config{Host: server.URL, TLSClientConfig: rest.TLSClientConfig{CAData: ca}}, client.Options{Scheme: scheme, Mapper: mapper})
++	if err != nil {
++		t.Fatal(err)
++	}
++	name := "credentials"
++	far := &farapi.FenceAgentsRemediation{ObjectMeta: metav1.ObjectMeta{Namespace: "bmc"}, Spec: farapi.FenceAgentsRemediationSpec{SafetyPolicy: farapi.RedfishOffV1, NodeBinding: &farapi.NodeBinding{Version: "v1", Name: "worker-a", UID: "node-a", SystemUUID: "00112233-4455-4677-8899-aabbccddeeff"}, Agent: "fence_redfish", RetryCount: 1, RetryInterval: metav1.Duration{Duration: time.Second}, Timeout: metav1.Duration{Duration: time.Second}, RemediationStrategy: farapi.OutOfServiceTaintRemediationStrategy, SharedSecretName: &name, SharedParameters: map[farapi.ParameterName]string{"--action": "off", "--ip": "bmc.example", "--systems-uri": "/redfish/v1/Systems/1"}}}
++	config := farapi.SafetyConfig{Enabled: true, CredentialNamespace: "bmc", TrustedNHCCreator: "system:serviceaccount:operators:nhc", CA: ca}
++	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
++	defer cancel()
++	if _, err := farapi.ResolveSafetyTarget(ctx, reader, far, config); err != nil {
++		t.Fatal(err)
++	}
++	far.Namespace = "foreign"
++	if _, err := farapi.ResolveSafetyTarget(ctx, reader, far, config); err == nil {
++		t.Fatal("foreign namespace accepted")
++	}
++	far.Namespace = "bmc"
++	name = "../foreign/secrets/credentials"
++	if _, err := farapi.ResolveSafetyTarget(ctx, reader, far, config); err == nil {
++		t.Fatal("path-shaped Secret name accepted")
++	}
++	mutex.Lock()
++	defer mutex.Unlock()
++	if len(paths) != 1 || paths[0] != "/api/v1/namespaces/bmc/secrets/credentials" {
++		t.Fatalf("direct reader paths=%v", paths)
++	}
++}
++
++func TestNamespacedResourceCacheScope(t *testing.T) {
++	resources := []struct {
++		plural, kind string
++		version      schema.GroupVersion
++		object       client.Object
++		list         client.ObjectList
++	}{
++		{"secrets", "Secret", corev1.SchemeGroupVersion, &corev1.Secret{}, &corev1.SecretList{}},
++		{"fenceagentsremediations", "FenceAgentsRemediation", farapi.GroupVersion, &farapi.FenceAgentsRemediation{}, &farapi.FenceAgentsRemediationList{}},
++		{"fenceagentsremediationtemplates", "FenceAgentsRemediationTemplate", farapi.GroupVersion, &farapi.FenceAgentsRemediationTemplate{}, &farapi.FenceAgentsRemediationTemplateList{}},
++	}
++	for _, resource := range resources {
++		for _, enabled := range []bool{false, true} {
++			mode := "default"
++			if enabled {
++				mode = "safety"
++			}
++			t.Run(resource.plural+"/"+mode, func(t *testing.T) {
++				base := "/apis/" + resource.version.String()
++				if resource.version.Group == "" {
++					base = "/api/" + resource.version.Version
++				}
++				globalPath := base + "/" + resource.plural
++				scopedPath := base + "/namespaces/bmc/" + resource.plural
++				var mutex sync.Mutex
++				var paths []string
++				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++					mutex.Lock()
++					paths = append(paths, r.URL.Path)
++					mutex.Unlock()
++					w.Header().Set("Content-Type", "application/json")
++					namespace := "foreign"
++					if enabled {
++						namespace = "bmc"
++					}
++					object := map[string]any{"apiVersion": resource.version.String(), "kind": resource.kind, "metadata": map[string]string{"name": "fixture", "namespace": namespace, "resourceVersion": "1"}}
++					if r.URL.Query().Get("watch") == "true" {
++						w.WriteHeader(http.StatusOK)
++						if r.URL.Query().Get("sendInitialEvents") == "true" {
++							encoder := json.NewEncoder(w)
++							_ = encoder.Encode(map[string]any{"type": "ADDED", "object": object})
++							_ = encoder.Encode(map[string]any{"type": "BOOKMARK", "object": map[string]any{"apiVersion": resource.version.String(), "kind": resource.kind, "metadata": map[string]any{"resourceVersion": "2", "annotations": map[string]string{"k8s.io/initial-events-end": "true"}}}})
++						}
++						w.(http.Flusher).Flush()
++						<-r.Context().Done()
++						return
++					}
++					_ = json.NewEncoder(w).Encode(map[string]any{"apiVersion": resource.version.String(), "kind": resource.kind + "List", "metadata": map[string]string{"resourceVersion": "1"}, "items": []any{object}})
++				}))
++				defer server.Close()
++				mapper := meta.NewDefaultRESTMapper([]schema.GroupVersion{corev1.SchemeGroupVersion, farapi.GroupVersion})
++				for _, registered := range resources {
++					mapper.Add(registered.version.WithKind(registered.kind), meta.RESTScopeNamespace)
++					mapper.Add(registered.version.WithKind(registered.kind+"List"), meta.RESTScopeNamespace)
++				}
++				options := safetyCacheOptions(farapi.SafetyConfig{Enabled: enabled, CredentialNamespace: "bmc"})
++				options.Scheme = scheme
++				options.Mapper = mapper
++				actual, err := cache.New(&rest.Config{Host: server.URL}, options)
++				if err != nil {
++					t.Fatal(err)
++				}
++				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
++				defer cancel()
++				if _, err := actual.GetInformer(ctx, resource.object.DeepCopyObject().(client.Object)); err != nil {
++					t.Fatal(err)
++				}
++				done := make(chan error, 1)
++				go func() { done <- actual.Start(ctx) }()
++				if !actual.WaitForCacheSync(ctx) {
++					t.Fatal("cache did not sync")
++				}
++				list := resource.list.DeepCopyObject().(client.ObjectList)
++				if err := actual.List(ctx, list); err != nil {
++					t.Fatal(err)
++				}
++				items, err := meta.ExtractList(list)
++				if err != nil || len(items) != 1 {
++					t.Fatalf("cache control missing: error=%v items=%d", err, len(items))
++				}
++				object := resource.object.DeepCopyObject().(client.Object)
++				err = actual.Get(ctx, client.ObjectKey{Namespace: "foreign", Name: "fixture"}, object)
++				if enabled && err == nil {
++					t.Error("foreign namespace admitted by safety cache")
++				}
++				if !enabled && err != nil {
++					t.Fatalf("default foreign-namespace control: %v", err)
++				}
++				cancel()
++				if err := <-done; err != nil {
++					t.Fatal(err)
++				}
++				mutex.Lock()
++				defer mutex.Unlock()
++				if len(paths) == 0 {
++					t.Fatal("cache issued no requests")
++				}
++				for _, path := range paths {
++					if enabled && path != scopedPath {
++						t.Errorf("safety cache requested %s, want %s", path, scopedPath)
++					}
++				}
++				if !enabled && paths[0] != globalPath {
++					t.Errorf("default cache changed: %v", paths)
++				}
++			})
++		}
++	}
++}
+diff --git a/config/crd/bases/fence-agents-remediation.medik8s.io_fenceagentsremediations.yaml b/config/crd/bases/fence-agents-remediation.medik8s.io_fenceagentsremediations.yaml
+index 425a16b70..91bd2b777 100644
+--- a/config/crd/bases/fence-agents-remediation.medik8s.io_fenceagentsremediations.yaml
++++ b/config/crd/bases/fence-agents-remediation.medik8s.io_fenceagentsremediations.yaml
+@@ -48,6 +48,32 @@ spec:
+                   It should have a fence_ prefix.
+                 pattern: fence_.+
+                 type: string
++              nodeBinding:
++                description: NodeBinding is populated by NHC from the Node selected
++                  for remediation, never by a template.
++                properties:
++                  name:
++                    minLength: 1
++                    type: string
++                  systemUUID:
++                    pattern: ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$
++                    type: string
++                  uid:
++                    minLength: 1
++                    type: string
++                  version:
++                    enum:
++                    - v1
++                    type: string
++                required:
++                - name
++                - systemUUID
++                - uid
++                - version
++                type: object
++                x-kubernetes-validations:
++                - message: node binding is immutable
++                  rule: self == oldSelf
+               nodeSecretNames:
+                 additionalProperties:
+                   type: string
+@@ -85,6 +111,11 @@ spec:
+                   execution
+                 pattern: ^([0-9]+(\.[0-9]+)?(ns|us|µs|ms|s|m|h))+$
+                 type: string
++              safetyPolicy:
++                description: SafetyPolicy opts into identity-bound Redfish Off verification.
++                enum:
++                - RedfishOffV1
++                type: string
+               sharedSecretName:
+                 description: |-
+                   SharedSecretName is the name of the Secret which contains shared fence agent parameters.
+@@ -179,8 +210,195 @@ spec:
+                 description: LastUpdateTime is the last time the status was updated.
+                 format: date-time
+                 type: string
++              offProof:
++                description: OffProof records confirmed same-system Off for the immutable
++                  snapshot.
++                properties:
++                  confirmedAt:
++                    format: date-time
++                    type: string
++                  snapshot:
++                    description: SafetySnapshot is persisted before action and must
++                      match every later effect.
++                    properties:
++                      binding:
++                        description: NodeBinding identifies the Node selected by NHC,
++                          independently of later name reuse.
++                        properties:
++                          name:
++                            minLength: 1
++                            type: string
++                          systemUUID:
++                            pattern: ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$
++                            type: string
++                          uid:
++                            minLength: 1
++                            type: string
++                          version:
++                            enum:
++                            - v1
++                            type: string
++                        required:
++                        - name
++                        - systemUUID
++                        - uid
++                        - version
++                        type: object
++                        x-kubernetes-validations:
++                        - message: node binding is immutable
++                          rule: self == oldSelf
++                      farUID:
++                        type: string
++                      generation:
++                        format: int64
++                        type: integer
++                      specDigest:
++                        type: string
++                      target:
++                        description: SafetyTarget contains no credential data or credential-derived
++                          digest.
++                        properties:
++                          credential:
++                            description: CredentialVersion invalidates evidence on
++                              Secret replacement or content updates.
++                            properties:
++                              name:
++                                type: string
++                              namespace:
++                                type: string
++                              resourceVersion:
++                                type: string
++                              uid:
++                                type: string
++                            required:
++                            - name
++                            - namespace
++                            - resourceVersion
++                            - uid
++                            type: object
++                          endpoint:
++                            type: string
++                          systemURI:
++                            type: string
++                          trustDigest:
++                            type: string
++                        required:
++                        - credential
++                        - endpoint
++                        - systemURI
++                        - trustDigest
++                        type: object
++                    required:
++                    - binding
++                    - farUID
++                    - generation
++                    - specDigest
++                    - target
++                    type: object
++                required:
++                - confirmedAt
++                - snapshot
++                type: object
++              safetyAttempts:
++                description: SafetyAttempts reserves action attempts before contacting
++                  the BMC, including across restarts.
++                minimum: 0
++                type: integer
++              safetyLastAttempt:
++                description: SafetyLastAttempt preserves retry spacing across status
++                  events and leader restarts.
++                format: date-time
++                type: string
++              safetySnapshot:
++                description: SafetySnapshot fixes the target before any safety-mode
++                  effects; it is not Off evidence.
++                properties:
++                  binding:
++                    description: NodeBinding identifies the Node selected by NHC,
++                      independently of later name reuse.
++                    properties:
++                      name:
++                        minLength: 1
++                        type: string
++                      systemUUID:
++                        pattern: ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$
++                        type: string
++                      uid:
++                        minLength: 1
++                        type: string
++                      version:
++                        enum:
++                        - v1
++                        type: string
++                    required:
++                    - name
++                    - systemUUID
++                    - uid
++                    - version
++                    type: object
++                    x-kubernetes-validations:
++                    - message: node binding is immutable
++                      rule: self == oldSelf
++                  farUID:
++                    type: string
++                  generation:
++                    format: int64
++                    type: integer
++                  specDigest:
++                    type: string
++                  target:
++                    description: SafetyTarget contains no credential data or credential-derived
++                      digest.
++                    properties:
++                      credential:
++                        description: CredentialVersion invalidates evidence on Secret
++                          replacement or content updates.
++                        properties:
++                          name:
++                            type: string
++                          namespace:
++                            type: string
++                          resourceVersion:
++                            type: string
++                          uid:
++                            type: string
++                        required:
++                        - name
++                        - namespace
++                        - resourceVersion
++                        - uid
++                        type: object
++                      endpoint:
++                        type: string
++                      systemURI:
++                        type: string
++                      trustDigest:
++                        type: string
++                    required:
++                    - credential
++                    - endpoint
++                    - systemURI
++                    - trustDigest
++                    type: object
++                required:
++                - binding
++                - farUID
++                - generation
++                - specDigest
++                - target
++                type: object
+             type: object
+         type: object
++        x-kubernetes-validations:
++        - message: RedfishOffV1 requires a binding, bounded retries and off-only Redfish
++            OOS remediation
++          rule: '!has(self.spec.safetyPolicy) || (has(self.spec.nodeBinding) && self.spec.retrycount
++            >= 1 && self.spec.retrycount <= 5 && self.spec.agent == ''fence_redfish''
++            && self.spec.remediationStrategy == ''OutOfServiceTaint'')'
++        - message: nodeBinding requires a safety policy
++          rule: '!has(self.spec.nodeBinding) || has(self.spec.safetyPolicy)'
++        - message: safety-mode spec is immutable
++          rule: '!has(oldSelf.spec.safetyPolicy) || self.spec == oldSelf.spec'
+     served: true
+     storage: true
+     subresources:
+diff --git a/config/crd/bases/fence-agents-remediation.medik8s.io_fenceagentsremediationtemplates.yaml b/config/crd/bases/fence-agents-remediation.medik8s.io_fenceagentsremediationtemplates.yaml
+index e3b6149ab..2fd14093a 100644
+--- a/config/crd/bases/fence-agents-remediation.medik8s.io_fenceagentsremediationtemplates.yaml
++++ b/config/crd/bases/fence-agents-remediation.medik8s.io_fenceagentsremediationtemplates.yaml
+@@ -69,6 +69,32 @@ spec:
+                           It should have a fence_ prefix.
+                         pattern: fence_.+
+                         type: string
++                      nodeBinding:
++                        description: NodeBinding is populated by NHC from the Node
++                          selected for remediation, never by a template.
++                        properties:
++                          name:
++                            minLength: 1
++                            type: string
++                          systemUUID:
++                            pattern: ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$
++                            type: string
++                          uid:
++                            minLength: 1
++                            type: string
++                          version:
++                            enum:
++                            - v1
++                            type: string
++                        required:
++                        - name
++                        - systemUUID
++                        - uid
++                        - version
++                        type: object
++                        x-kubernetes-validations:
++                        - message: node binding is immutable
++                          rule: self == oldSelf
+                       nodeSecretNames:
+                         additionalProperties:
+                           type: string
+@@ -107,6 +133,12 @@ spec:
+                           agent execution
+                         pattern: ^([0-9]+(\.[0-9]+)?(ns|us|µs|ms|s|m|h))+$
+                         type: string
++                      safetyPolicy:
++                        description: SafetyPolicy opts into identity-bound Redfish
++                          Off verification.
++                        enum:
++                        - RedfishOffV1
++                        type: string
+                       sharedSecretName:
+                         description: |-
+                           SharedSecretName is the name of the Secret which contains shared fence agent parameters.
+@@ -219,6 +251,9 @@ spec:
+                 type: object
+             type: object
+         type: object
++        x-kubernetes-validations:
++        - message: templates must not supply a Node binding
++          rule: '!has(self.spec.template.spec.nodeBinding)'
+     served: true
+     storage: true
+     subresources:
+diff --git a/config/rbac/role.yaml b/config/rbac/role.yaml
+index 939319207..ac16eee2e 100644
+--- a/config/rbac/role.yaml
++++ b/config/rbac/role.yaml
+@@ -17,7 +17,6 @@ rules:
+   resources:
+   - nodes
+   verbs:
+-  - delete
+   - get
+   - list
+   - update
+diff --git a/config/rbac/safety/cluster_role.yaml b/config/rbac/safety/cluster_role.yaml
+new file mode 100644
+index 000000000..c2857a8e6
+--- /dev/null
++++ b/config/rbac/safety/cluster_role.yaml
+@@ -0,0 +1,11 @@
++apiVersion: rbac.authorization.k8s.io/v1
++kind: ClusterRole
++metadata:
++  name: fence-agents-remediation-safety
++rules:
++  - apiGroups: [""]
++    resources: ["nodes"]
++    verbs: ["get", "list", "watch", "update"]
++  - apiGroups: ["config.openshift.io"]
++    resources: ["apiservers"]
++    verbs: ["get", "list", "watch"]
+diff --git a/config/rbac/safety/credential_role.yaml b/config/rbac/safety/credential_role.yaml
+new file mode 100644
+index 000000000..da985c712
+--- /dev/null
++++ b/config/rbac/safety/credential_role.yaml
+@@ -0,0 +1,15 @@
++apiVersion: rbac.authorization.k8s.io/v1
++kind: Role
++metadata:
++  name: fence-agents-remediation-safety
++  namespace: fence-agents-credentials
++rules:
++  - apiGroups: [""]
++    resources: ["secrets"]
++    verbs: ["get", "list", "watch"]
++  - apiGroups: ["fence-agents-remediation.medik8s.io"]
++    resources: ["fenceagentsremediations", "fenceagentsremediationtemplates"]
++    verbs: ["get", "list", "watch", "update", "patch"]
++  - apiGroups: ["fence-agents-remediation.medik8s.io"]
++    resources: ["fenceagentsremediations/status", "fenceagentsremediationtemplates/status", "fenceagentsremediations/finalizers"]
++    verbs: ["get", "update", "patch"]
+diff --git a/docs/overview.md b/docs/overview.md
+index f9fa8853a..09b86517f 100644
+--- a/docs/overview.md
++++ b/docs/overview.md
+@@ -6,6 +6,8 @@
+ 
+ FAR is a **remediator**: something else (usually **Node Health Check**, NHC) decides the node is unhealthy and creates a **`FenceAgentsRemediation`** object; FAR **runs** the remediation and **reports status** on that object.
+ 
++[Safety-mode](safety-mode.md) is an explicit Redfish-only alternative: only the configured NHC creator may supply an immutable selected-Node binding, and FAR verifies that system's UUID and Off state before OOS release. The steps below describe default CLI mode.
++
+ ## How it works
+ 
+ 1. **Someone creates a FAR object** for a node (often NHC, using a **`FenceAgentsRemediationTemplate`**).
+diff --git a/docs/safety-mode.md b/docs/safety-mode.md
+new file mode 100644
+index 000000000..d3e6099c8
+--- /dev/null
++++ b/docs/safety-mode.md
+@@ -0,0 +1,94 @@
++# Identity-bound Redfish Off remediation
++
++Safety-mode is an explicit alternative to the default fence-agent subprocess path. It requires a selected Node identity, authenticated Redfish, an explicit ComputerSystem URI, and `OutOfServiceTaint`. It does not support IPMI, reboot, direct pod deletion, or manually created remediation CRs. Without safety-mode, existing CLI behavior remains unchanged; adding `safetyPolicy` without configuring safety-mode is refused rather than falling back to the CLI.
++
++## Operator configuration
++
++Start the operator with these flags in addition to its normal leader-election, webhook, health, and metrics configuration:
++
++```text
++--safety-mode=true
++--trusted-nhc-creator=system:serviceaccount:operators:node-healthcheck
++--bmc-credential-namespace=fence-agents-credentials
++--redfish-ca-file=/etc/redfish/ca.crt
++```
++
++The creator must be one exact service-account username. Missing creator, namespace, or trusted PEM CA configuration prevents startup. Configure the webhook with failure policy `Fail`; an owner reference or annotation is not authorization. The dedicated credential namespace also contains the FAR objects and templates. CR admission permits only the configured NHC service account to create safety-mode remediations. Metadata-only updates still permit NHC timeout/deletion and FAR finalizer cleanup; the effective remediation spec cannot change.
++
++The Secret, FenceAgentsRemediation, and FenceAgentsRemediationTemplate caches watch only the configured BMC namespace in safety-mode. Identity and credential checks use the uncached API reader. This is namespace-scoped caching, not removal of those caches. Default-mode cache behavior is separate.
++
++## Template and credential contract
++
++A template selects `spec.template.spec.safetyPolicy: RedfishOffV1`, `agent: fence_redfish`, and `remediationStrategy: OutOfServiceTaint`. It must omit `nodeBinding` and leave generic `statusValidationSample` unset or zero. Safety-mode never runs a generic status subprocess.
++
++Only `--ip`, optional `--ipport`, `--systems-uri`, and explicit `--action: off` are accepted as parameters. Shared parameters and per-node overrides use the existing maps, but parameter aliases, Go templates, inline credentials, and extra CLI options are rejected. The host must not contain a scheme, path, user information, or an embedded port; use `--ipport` for a nondefault port. The ComputerSystem URI must identify one member under `/redfish/v1/Systems/`, not a collection or discovered default.
++
++For each selected node, reference exactly one Secret through either `sharedSecretName` or its `nodeSecretNames` entry. The Secret must contain only nonempty literal keys `username` and `password`. CLI-style keys and target configuration are not accepted in Secrets.
++
++```yaml
++apiVersion: fence-agents-remediation.medik8s.io/v1alpha1
++kind: FenceAgentsRemediationTemplate
++metadata:
++  name: redfish-off
++  namespace: fence-agents-credentials
++spec:
++  template:
++    spec:
++      safetyPolicy: RedfishOffV1
++      agent: fence_redfish
++      remediationStrategy: OutOfServiceTaint
++      retrycount: 3
++      retryinterval: 5s
++      timeout: 30s
++      sharedSecretName: redfish-credentials
++      sharedparameters:
++        --action: off
++        --systems-uri: /redfish/v1/Systems/1
++      nodeparameters:
++        --ip:
++          worker-a: 192.0.2.10
++```
++
++`retrycount` is bounded to 1–5, `retryinterval` to 1–30 seconds, and each guarded verification to 1–60 seconds. Action attempts and their most recent reservation time are persisted before the guarded call, so status events and leader restarts do not reset the budget or retry spacing. The reservation timestamp is rounded forward to the next whole second because its JSON representation has second precision; this can add up to one second to the wait without shortening the configured interval. After the budget is exhausted, a read-only same-system Off observation may still complete verification; no further ForceOff is permitted.
++
++## Node-binding wire contract
++
++For `RedfishOffV1`, NHC injects this typed field into the generated FAR CR, using the same Node object selected by its health decision:
++
++```yaml
++nodeBinding:
++  version: v1
++  name: worker-a
++  uid: <SELECTED_NODE_UID>
++  systemUUID: 00112233-4455-4677-8899-aabbccddeeff
++```
++
++`name` and `uid` identify the selected Kubernetes Node. `systemUUID` is its canonical lowercase `status.nodeInfo.systemUUID`; absent, malformed, all-zero, or all-ones UUIDs are rejected. FAR validates the binding against an uncached Node read. The existing `remediation.medik8s.io/node-name` annotation is only a routing hint and, when present, must equal `nodeBinding.name`. Neither CR name nor annotation can supply a missing binding. A recreated same-name Node requires a new remediation decision and a new CR.
++
++The binding is immutable. CRD transition rules and admission also prevent changes to the effective safety-mode CR spec. Runtime compares that spec and generation with the persisted snapshot before effects; it does not silently refresh an old binding. Legacy CRs without a binding are refused by a safety-mode operator.
++
++Each fresh admission/action/release identity gate makes an uncached, unfiltered List of known Nodes. Exactly one case-normalized matching system UUID must identify the bound Node name and UID. Duplicates, a missing or replaced target, a terminating target, or a failed, forbidden, or incomplete List refuse power actions and OOS release. This costs O(N) over known Nodes at each gate and requires cluster-scoped Node list permission; it does not use the Secret cache. Cleanup remains scoped to the bound UID and resourceVersion rather than adopting a duplicate-UUID Node.
++
++## Verification and release
++
++Before power effects, FAR persists `status.safetySnapshot`, bound to the FAR UID/generation, selected Node binding, effective spec digest, normalized HTTPS endpoint, explicit system URI, public CA digest, and Secret namespace/name/UID/resourceVersion. This snapshot is not Off evidence. It contains no credentials or credential-derived hashes. A changed Secret version, target, trust configuration, or effective spec invalidates the snapshot; the old CR cannot rebind to the new configuration.
++
++The guarded Go Redfish path verifies the server certificate against the configured CA, disables redirects and proxies, and bounds request time and response size. It reads the selected ComputerSystem UUID before accepting its power state. Already-Off requires a matching identity and needs no reset. Otherwise the reset action must address that same system and origin; FAR rechecks the Kubernetes/configuration preconditions and UUID before posting `ForceOff`, then polls the same system until its UUID still matches and `PowerState` is exactly `Off`. HTTP acceptance alone, malformed responses, and unrecognized power states do not establish success.
++
++Only a completed observation produces `status.offProof`, including its snapshot and confirmation time. A restart with an unfinished snapshot must perform verification again. Persisted success conditions alone do not permit release. Before adding OOS, FAR obtains a fresh same-system UUID/Off observation, rechecks the current FAR and Secret version, reads the Node uncached, and updates that matching Node using its current resourceVersion. A conflict requires another full release check, not a name-based refetch-and-update. Completed release does not repeatedly perform BMC operations on its own status events.
++
++Deletion cleanup removes OOS and remediation taints only from the bound Node UID, using the fetched object's resourceVersion. A replacement Node is left untouched. A changed persisted binding or effective spec refuses cleanup rather than adopting a new target.
++
++## RBAC
++
++`config/rbac/safety/cluster_role.yaml` grants cluster-scoped Node identity/taint access and platform TLS-profile reads, without Node deletion, pod deletion, or VolumeAttachment deletion. `config/rbac/safety/credential_role.yaml` is the namespaced safety Role: it grants Secret read/list/watch and FAR/template read/update/status/finalizer access only in the configured BMC namespace. Set its namespace to the configured value and bind both roles to the operator's service account instead of retaining broader default runtime grants. Leader-election and metrics-authentication permissions remain separate and must be retained where required by the deployment. The generated default runtime role also omits the unused Node deletion permission.
++
++The cache configuration and namespace checks are not a replacement for RBAC. Do not grant cluster-scoped Secret access or retain another binding that widens the safety-mode account's permissions.
++
++The default OLM bundle retains legacy-mode permissions and does not install the dedicated safety-mode roles or operator flags. Synchronized bundle CRDs and CSV permissions do not make it a least-privilege safety-mode deployment. Safety-mode activation on that default deployment is unsupported without separately verified configuration and grant replacement through its deployment owner.
++
++## Operational limits
++
++An authenticated BMC UUID response and a Node-reported system UUID are not hardware attestation. The known-Node uniqueness check is a point-in-time observation, not proof that an unregistered physical machine does not share the UUID. Validate canonical equivalence on supported firmware before enrollment. Kubernetes identity/configuration reads and the Redfish POST are separate operations, not a transaction; external actors can change state after the final check. Coordinate Node replacement with remediation. Off is a point-in-time observation: the BMC read and Kubernetes taint update cannot be atomic with an administrator or another controller powering the machine on. Prevent automatic or concurrent power restoration throughout remediation and recovery. FAR does not prove that independent node/resource deletion controllers are quiescent.
++
++OOS is a release trigger for Kubernetes controllers, not proof that pods were deleted, volumes detached, or storage replicas recovered. Local HTTP and API tests validate protocol, identity, versioning, RBAC, and concurrency behavior; they do not establish physical power isolation, firmware correctness, detach completion, or storage safety.
+diff --git a/go.mod b/go.mod
+index 3f1cd28fc..c4acd7edf 100644
+--- a/go.mod
++++ b/go.mod
+@@ -20,6 +20,7 @@ require (
+ 	k8s.io/client-go v0.36.3
+ 	k8s.io/utils v0.0.0-20260707023825-cf1189d6abe3
+ 	sigs.k8s.io/controller-runtime v0.24.1
++	sigs.k8s.io/yaml v1.6.0
+ )
+ 
+ require (
+@@ -115,5 +116,4 @@ require (
+ 	sigs.k8s.io/json v0.0.0-20250730193827-2d320260d730 // indirect
+ 	sigs.k8s.io/randfill v1.0.0 // indirect
+ 	sigs.k8s.io/structured-merge-diff/v6 v6.3.3 // indirect
+-	sigs.k8s.io/yaml v1.6.0 // indirect
+ )
+diff --git a/hack/build.sh b/hack/build.sh
+index b0812053a..bd3ed34c3 100755
+--- a/hack/build.sh
++++ b/hack/build.sh
+@@ -30,4 +30,4 @@ export GOEXPERIMENT="${GOEXPERIMENT}"
+ 
+ # detect target arch from Go toolchain, default to amd64
+ GOARCH=$(go env GOARCH)
+-GOOS=linux GOARCH=${GOARCH:-amd64} go build -o manager cmd/main.go
++GOOS=linux GOARCH=${GOARCH:-amd64} go build -o manager ./cmd
+diff --git a/internal/controller/fenceagentsremediation_controller.go b/internal/controller/fenceagentsremediation_controller.go
+index 482bea4a1..a2ad9eaad 100644
+--- a/internal/controller/fenceagentsremediation_controller.go
++++ b/internal/controller/fenceagentsremediation_controller.go
+@@ -50,10 +50,12 @@ import (
+ // FenceAgentsRemediationReconciler reconciles a FenceAgentsRemediation object
+ type FenceAgentsRemediationReconciler struct {
+ 	client.Client
+-	Log      logr.Logger
+-	Scheme   *runtime.Scheme
+-	Recorder record.EventRecorder
+-	Executor *cli.Executer
++	Log       logr.Logger
++	Scheme    *runtime.Scheme
++	Recorder  record.EventRecorder
++	Executor  *cli.Executer
++	APIReader client.Reader
++	Safety    v1alpha1.SafetyConfig
+ }
+ 
+ // SetupWithManager sets up the controller with the Manager.
+@@ -67,7 +69,7 @@ func (r *FenceAgentsRemediationReconciler) SetupWithManager(mgr ctrl.Manager) er
+ // +kubebuilder:rbac:groups=core,resources=pods/exec,verbs=create
+ // +kubebuilder:rbac:groups=core,resources=pods,verbs=get;list;watch;update;delete;deletecollection
+ // +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch,namespace=system
+-// +kubebuilder:rbac:groups="",resources=nodes,verbs=get;list;watch;update;delete
++// +kubebuilder:rbac:groups="",resources=nodes,verbs=get;list;watch;update
+ // +kubebuilder:rbac:groups="",resources=namespaces,verbs=get;list;watch
+ // +kubebuilder:rbac:groups=fence-agents-remediation.medik8s.io,resources=fenceagentsremediations,verbs=get;list;watch;create;update;patch;delete
+ // +kubebuilder:rbac:groups=fence-agents-remediation.medik8s.io,resources=fenceagentsremediations/status,verbs=get;update;patch
+@@ -102,6 +104,10 @@ func (r *FenceAgentsRemediationReconciler) Reconcile(ctx context.Context, req ct
+ 		return emptyResult, err
+ 	}
+ 
++	if r.Safety.Enabled || far.Spec.SafetyPolicy != "" || far.Spec.NodeBinding != nil || far.Status.SafetySnapshot != nil || far.Status.OffProof != nil {
++		return r.reconcileSafety(ctx, req)
++	}
++
+ 	// At the end of each Reconcile we try to update CR's status
+ 	defer func() {
+ 		if updateErr := r.updateStatus(ctx, far); updateErr != nil {
+diff --git a/internal/controller/fenceagentsremediationtemplate_controller.go b/internal/controller/fenceagentsremediationtemplate_controller.go
+index b9d859e0a..3e7d9c146 100644
+--- a/internal/controller/fenceagentsremediationtemplate_controller.go
++++ b/internal/controller/fenceagentsremediationtemplate_controller.go
+@@ -51,6 +51,7 @@ type FenceAgentsRemediationTemplateReconciler struct {
+ 	Scheme   *runtime.Scheme
+ 	Recorder record.EventRecorder
+ 	Executor *cli.Executer
++	Safety   v1alpha1.SafetyConfig
+ }
+ 
+ // ParameterValidationResult contains the results of parameter validation
+@@ -100,6 +101,18 @@ func (r *FenceAgentsRemediationTemplateReconciler) Reconcile(ctx context.Context
+ 		r.Log.Error(err, "Failed to get FenceAgentsRemediationTemplate CR")
+ 		return ctrl.Result{}, err
+ 	}
++	if r.Safety.Enabled || fart.Spec.Template.Spec.SafetyPolicy != "" || fart.Spec.Template.Spec.NodeBinding != nil {
++		if err := r.Safety.Validate(); err != nil {
++			return ctrl.Result{}, err
++		}
++		if err := v1alpha1.ValidateSafetySpec(&fart.Spec.Template.Spec, true); err != nil {
++			return ctrl.Result{}, err
++		}
++		if sample := fart.Spec.StatusValidationSample; sample != nil && sample.String() != "0" && sample.String() != "0%" {
++			return ctrl.Result{}, fmt.Errorf("generic template status execution is unsupported in safety-mode")
++		}
++		return ctrl.Result{}, nil
++	}
+ 	orig := fart.DeepCopy()
+ 
+ 	// At the end of each Reconcile we try to update CR's status
+diff --git a/internal/controller/safety.go b/internal/controller/safety.go
+new file mode 100644
+index 000000000..f7a140e71
+--- /dev/null
++++ b/internal/controller/safety.go
+@@ -0,0 +1,243 @@
++package controller
++
++import (
++	"context"
++	"fmt"
++	"reflect"
++	"time"
++
++	commonconditions "github.com/medik8s/common/pkg/conditions"
++
++	corev1 "k8s.io/api/core/v1"
++	apierrors "k8s.io/apimachinery/pkg/api/errors"
++	"k8s.io/apimachinery/pkg/api/meta"
++	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
++	ctrl "sigs.k8s.io/controller-runtime"
++	"sigs.k8s.io/controller-runtime/pkg/client"
++	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
++
++	"github.com/medik8s/fence-agents-remediation/v5/api/v1alpha1"
++	"github.com/medik8s/fence-agents-remediation/v5/pkg/redfish"
++	"github.com/medik8s/fence-agents-remediation/v5/pkg/utils"
++)
++
++func (r *FenceAgentsRemediationReconciler) reconcileSafety(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
++	if err := r.Safety.Validate(); err != nil {
++		return ctrl.Result{}, err
++	}
++	if r.APIReader == nil {
++		return ctrl.Result{}, fmt.Errorf("safety-mode requires an uncached API reader")
++	}
++	far := &v1alpha1.FenceAgentsRemediation{}
++	if err := r.APIReader.Get(ctx, req.NamespacedName, far); err != nil {
++		return ctrl.Result{}, client.IgnoreNotFound(err)
++	}
++	if far.Namespace != r.Safety.CredentialNamespace {
++		return ctrl.Result{}, fmt.Errorf("remediation must use the configured BMC namespace")
++	}
++	if err := v1alpha1.ValidateSafetyFAR(far); err != nil {
++		return ctrl.Result{}, err
++	}
++	if !far.DeletionTimestamp.IsZero() {
++		return r.cleanupSafety(ctx, far)
++	}
++	if isTimedOutByNHC(far) {
++		return r.failSafety(ctx, far, fmt.Errorf("remediation stopped by NHC"))
++	}
++	node, err := v1alpha1.ReadUniqueBoundNode(ctx, r.APIReader, *far.Spec.NodeBinding)
++	if err != nil {
++		return r.failSafety(ctx, far, err)
++	}
++	resolved, err := v1alpha1.ResolveSafetyTarget(ctx, r.APIReader, far, r.Safety)
++	if err != nil {
++		return r.failSafety(ctx, far, err)
++	}
++	snapshot, err := v1alpha1.NewSafetySnapshot(far, resolved.Target)
++	if err != nil {
++		return r.failSafety(ctx, far, err)
++	}
++	if far.Status.SafetySnapshot != nil && *far.Status.SafetySnapshot != snapshot {
++		return r.failSafety(ctx, far, fmt.Errorf("bound target, credential version or remediation spec changed"))
++	}
++	if far.Status.SafetyAttempts < 0 || far.Status.SafetyAttempts > far.Spec.RetryCount || (far.Status.SafetyAttempts > 0 && far.Status.SafetyLastAttempt == nil) {
++		return r.failSafety(ctx, far, fmt.Errorf("invalid persisted safety attempt state"))
++	}
++	if !controllerutil.ContainsFinalizer(far, v1alpha1.FARFinalizer) {
++		controllerutil.AddFinalizer(far, v1alpha1.FARFinalizer)
++		if err := r.Update(ctx, far); err != nil {
++			return ctrl.Result{}, fmt.Errorf("add safety finalizer: %w", err)
++		}
++		return ctrl.Result{RequeueAfter: time.Millisecond}, nil
++	}
++	if far.Status.SafetySnapshot == nil {
++		far.Status.SafetySnapshot = &snapshot
++		far.Status.OffProof = nil
++		far.Status.SafetyAttempts = 0
++		setSafetyConditions(far, false, false, "TargetBound")
++		if err := r.Status().Update(ctx, far); err != nil {
++			return ctrl.Result{}, fmt.Errorf("persist selected target: %w", err)
++		}
++		return ctrl.Result{RequeueAfter: time.Millisecond}, nil
++	}
++	remediationTaint := utils.CreateRemediationTaint()
++	if !utils.TaintExists(node.Spec.Taints, &remediationTaint) {
++		node, err = r.checkSafetySnapshot(ctx, far, snapshot)
++		if err != nil {
++			return r.failSafety(ctx, far, err)
++		}
++		if err := utils.UpdateBoundTaints(ctx, r.Client, node, snapshot.Binding, []corev1.Taint{remediationTaint}, nil); err != nil {
++			return ctrl.Result{}, err
++		}
++		return ctrl.Result{RequeueAfter: time.Millisecond}, nil
++	}
++	cfg := redfish.Config{Endpoint: snapshot.Target.Endpoint, SystemURI: snapshot.Target.SystemURI, SystemUUID: snapshot.Binding.SystemUUID, CA: r.Safety.CA, Username: resolved.Username, Password: resolved.Password, Timeout: far.Spec.Timeout.Duration}
++	if far.Status.OffProof == nil {
++		if _, err := r.checkSafetySnapshot(ctx, far, snapshot); err != nil {
++			return r.failSafety(ctx, far, err)
++		}
++		canAct := far.Status.SafetyAttempts < far.Spec.RetryCount
++		if canAct {
++			if previous := far.Status.SafetyLastAttempt; previous != nil {
++				if delay := time.Until(previous.Add(far.Spec.RetryInterval.Duration)); delay > 0 {
++					return ctrl.Result{RequeueAfter: delay}, nil
++				}
++			}
++			far.Status.SafetyAttempts++
++			// metav1.Time JSON drops fractions; round up so persistence cannot shorten retry spacing.
++			now := metav1.NewTime(time.Now().Truncate(time.Second).Add(time.Second))
++			far.Status.SafetyLastAttempt = &now
++			if err := r.Status().Update(ctx, far); err != nil {
++				return ctrl.Result{}, fmt.Errorf("reserve guarded action attempt: %w", err)
++			}
++		}
++		err := redfish.VerifyOff(ctx, cfg, canAct, func(ctx context.Context) error { _, err := r.checkSafetySnapshot(ctx, far, snapshot); return err })
++		if err != nil {
++			_, updateErr := r.failSafety(ctx, far, err)
++			if far.Status.SafetyAttempts < far.Spec.RetryCount && ctx.Err() == nil {
++				if updateErr != nil && updateErr != err {
++					return ctrl.Result{}, updateErr
++				}
++				return ctrl.Result{RequeueAfter: far.Spec.RetryInterval.Duration}, nil
++			}
++			return ctrl.Result{}, updateErr
++		}
++		if _, err := r.checkSafetySnapshot(ctx, far, snapshot); err != nil {
++			return r.failSafety(ctx, far, err)
++		}
++		far.Status.OffProof = &v1alpha1.OffProof{Snapshot: snapshot, ConfirmedAt: metav1.Now()}
++		setSafetyConditions(far, true, false, "RedfishOffVerified")
++		if err := r.Status().Update(ctx, far); err != nil {
++			return ctrl.Result{}, fmt.Errorf("persist bound Off proof: %w", err)
++		}
++		return ctrl.Result{RequeueAfter: time.Millisecond}, nil
++	}
++	if far.Status.OffProof.Snapshot != snapshot || far.Status.OffProof.ConfirmedAt.IsZero() {
++		return r.failSafety(ctx, far, fmt.Errorf("persisted Off proof does not match selected target"))
++	}
++	offTaint := utils.CreateOutOfServiceTaint()
++	if meta.IsStatusConditionTrue(far.Status.Conditions, commonconditions.SucceededType) && utils.TaintExists(node.Spec.Taints, &offTaint) {
++		return ctrl.Result{}, nil
++	}
++	if _, err := r.checkSafetySnapshot(ctx, far, snapshot); err != nil {
++		return r.failSafety(ctx, far, err)
++	}
++	if err := redfish.VerifyOff(ctx, cfg, false, nil); err != nil {
++		return r.failSafety(ctx, far, err)
++	}
++	node, err = r.checkSafetySnapshot(ctx, far, snapshot)
++	if err != nil {
++		return r.failSafety(ctx, far, err)
++	}
++	if err := utils.UpdateBoundTaints(ctx, r.Client, node, snapshot.Binding, []corev1.Taint{utils.CreateOutOfServiceTaint()}, nil); err != nil {
++		return ctrl.Result{}, err
++	}
++	setSafetyConditions(far, true, true, "IdentityBoundRelease")
++	if err := r.Status().Update(ctx, far); err != nil {
++		return ctrl.Result{}, fmt.Errorf("persist identity-bound release: %w", err)
++	}
++	return ctrl.Result{}, nil
++}
++
++func (r *FenceAgentsRemediationReconciler) checkSafetySnapshot(ctx context.Context, original *v1alpha1.FenceAgentsRemediation, expected v1alpha1.SafetySnapshot) (*corev1.Node, error) {
++	current := &v1alpha1.FenceAgentsRemediation{}
++	if err := r.APIReader.Get(ctx, client.ObjectKeyFromObject(original), current); err != nil {
++		return nil, fmt.Errorf("read current remediation: %w", err)
++	}
++	if current.UID != original.UID || !current.DeletionTimestamp.IsZero() || isTimedOutByNHC(current) {
++		return nil, fmt.Errorf("remediation identity or lifecycle changed")
++	}
++	resolved, err := v1alpha1.ResolveSafetyTarget(ctx, r.APIReader, current, r.Safety)
++	if err != nil {
++		return nil, err
++	}
++	snapshot, err := v1alpha1.NewSafetySnapshot(current, resolved.Target)
++	if err != nil {
++		return nil, err
++	}
++	if snapshot != expected || current.Status.SafetySnapshot == nil || *current.Status.SafetySnapshot != expected {
++		return nil, fmt.Errorf("selected target snapshot changed")
++	}
++	return v1alpha1.ReadUniqueBoundNode(ctx, r.APIReader, expected.Binding)
++}
++
++func (r *FenceAgentsRemediationReconciler) failSafety(ctx context.Context, far *v1alpha1.FenceAgentsRemediation, cause error) (ctrl.Result, error) {
++	hadProof := far.Status.OffProof != nil
++	far.Status.OffProof = nil
++	if changed := setSafetyConditions(far, false, false, "SafetyCheckRefused"); changed || hadProof {
++		if err := r.Status().Update(ctx, far); err != nil {
++			return ctrl.Result{}, fmt.Errorf("persist safety refusal: %w", err)
++		}
++	}
++	return ctrl.Result{}, cause
++}
++
++func (r *FenceAgentsRemediationReconciler) cleanupSafety(ctx context.Context, far *v1alpha1.FenceAgentsRemediation) (ctrl.Result, error) {
++	binding := *far.Spec.NodeBinding
++	if far.Status.SafetySnapshot != nil {
++		current, err := v1alpha1.NewSafetySnapshot(far, far.Status.SafetySnapshot.Target)
++		if err != nil {
++			return ctrl.Result{}, err
++		}
++		if current != *far.Status.SafetySnapshot {
++			return ctrl.Result{}, fmt.Errorf("cleanup binding or effective spec differs from persisted target")
++		}
++	}
++	node := &corev1.Node{}
++	err := r.APIReader.Get(ctx, client.ObjectKey{Name: binding.Name}, node)
++	if err != nil && !apierrors.IsNotFound(err) {
++		return ctrl.Result{}, fmt.Errorf("read cleanup Node: %w", err)
++	}
++	if err == nil && string(node.UID) == binding.UID {
++		if err := binding.Matches(node); err != nil {
++			return ctrl.Result{}, err
++		}
++		if err := utils.UpdateBoundTaints(ctx, r.Client, node, binding, nil, []corev1.Taint{utils.CreateOutOfServiceTaint(), utils.CreateRemediationTaint()}); err != nil {
++			return ctrl.Result{}, err
++		}
++	}
++	controllerutil.RemoveFinalizer(far, v1alpha1.FARFinalizer)
++	if err := r.Update(ctx, far); err != nil {
++		return ctrl.Result{}, fmt.Errorf("remove safety finalizer: %w", err)
++	}
++	return ctrl.Result{}, nil
++}
++
++func setSafetyConditions(far *v1alpha1.FenceAgentsRemediation, off, released bool, reason string) bool {
++	previous := append([]metav1.Condition(nil), far.Status.Conditions...)
++	for _, condition := range []struct {
++		kind string
++		yes  bool
++	}{{commonconditions.ProcessingType, !released && reason != "SafetyCheckRefused"}, {utils.FenceAgentActionSucceededType, off}, {commonconditions.SucceededType, released}} {
++		status := metav1.ConditionFalse
++		if condition.yes {
++			status = metav1.ConditionTrue
++		}
++		meta.SetStatusCondition(&far.Status.Conditions, metav1.Condition{Type: condition.kind, Status: status, Reason: reason, Message: "Identity-bound Redfish remediation", ObservedGeneration: far.Generation})
++	}
++	if reflect.DeepEqual(previous, far.Status.Conditions) {
++		return false
++	}
++	now := metav1.Now()
++	far.Status.LastUpdateTime = &now
++	return true
++}
+diff --git a/internal/safetycontract/admission_test.go b/internal/safetycontract/admission_test.go
+new file mode 100644
+index 000000000..3209d64aa
+--- /dev/null
++++ b/internal/safetycontract/admission_test.go
+@@ -0,0 +1,80 @@
++package safetycontract
++
++import (
++	"context"
++	"testing"
++
++	admissionv1 "k8s.io/api/admission/v1"
++	authenticationv1 "k8s.io/api/authentication/v1"
++	corev1 "k8s.io/api/core/v1"
++	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
++	"k8s.io/apimachinery/pkg/runtime"
++	"sigs.k8s.io/controller-runtime/pkg/client/fake"
++	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
++
++	farapi "github.com/medik8s/fence-agents-remediation/v5/api/v1alpha1"
++)
++
++func TestSafetyAdmission(t *testing.T) {
++	for _, tc := range []struct {
++		name                                                                string
++		untrusted, missingConfig, replacement, mutateSpec, templateIdentity bool
++		wantErr                                                             bool
++		duplicate                                                           bool
++	}{
++		{name: "trusted NHC create"},
++		{name: "duplicate known UUID", duplicate: true, wantErr: true},
++		{name: "manual CR denied", untrusted: true, wantErr: true},
++		{name: "missing creator config", missingConfig: true, wantErr: true},
++		{name: "replacement UID", replacement: true, wantErr: true},
++		{name: "immutable effective spec", mutateSpec: true, wantErr: true},
++		{name: "template must omit identity", templateIdentity: true, wantErr: true},
++	} {
++		t.Run(tc.name, func(t *testing.T) {
++			far, config, secret := safetyFixture(t)
++			node := &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: far.Spec.NodeBinding.Name, UID: "node-a"}, Status: corev1.NodeStatus{NodeInfo: corev1.NodeSystemInfo{SystemUUID: systemUUID}}}
++			if tc.replacement {
++				node.UID = "node-b"
++			}
++			if tc.missingConfig {
++				config.TrustedNHCCreator = ""
++			}
++			scheme := runtime.NewScheme()
++			if err := corev1.AddToScheme(scheme); err != nil {
++				t.Fatal(err)
++			}
++			c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(node, secret).Build()
++			if tc.duplicate {
++				other := node.DeepCopy()
++				other.Name = "worker-b"
++				other.UID = "node-b"
++				other.ResourceVersion = ""
++				if err := c.Create(context.Background(), other); err != nil {
++					t.Fatal(err)
++				}
++			}
++			validator := &farapi.FARValidator{Client: c, APIReader: c, Safety: config}
++			username := config.TrustedNHCCreator
++			if tc.untrusted {
++				username = "system:serviceaccount:other:manual"
++			}
++			ctx := admission.NewContextWithRequest(context.Background(), admission.Request{AdmissionRequest: admissionv1.AdmissionRequest{UserInfo: authenticationv1.UserInfo{Username: username}, Namespace: far.Namespace}})
++			var err error
++			switch {
++			case tc.templateIdentity:
++				tmpl := &farapi.FenceAgentsRemediationTemplate{ObjectMeta: far.ObjectMeta}
++				tmpl.Spec.Template.Spec = far.Spec
++				_, err = (&farapi.FARTemplateValidator{Client: c, APIReader: c, Safety: config}).ValidateCreate(ctx, tmpl)
++			case tc.mutateSpec:
++				changed := far.DeepCopy()
++				changed.Spec.SharedParameters = map[farapi.ParameterName]string{"--ip": "other.example"}
++				_, err = validator.ValidateUpdate(ctx, far, changed)
++			default:
++				_, err = validator.ValidateCreate(ctx, far)
++			}
++			if (err != nil) != tc.wantErr {
++				t.Errorf("error=%v wantErr=%t", err, tc.wantErr)
++			}
++		})
++	}
++}
+diff --git a/internal/safetycontract/api_test.go b/internal/safetycontract/api_test.go
+new file mode 100644
+index 000000000..92385f0fc
+--- /dev/null
++++ b/internal/safetycontract/api_test.go
+@@ -0,0 +1,122 @@
++package safetycontract
++
++import (
++	"context"
++	"encoding/pem"
++	"net/http"
++	"net/http/httptest"
++	"testing"
++	"time"
++
++	corev1 "k8s.io/api/core/v1"
++	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
++	"k8s.io/apimachinery/pkg/runtime"
++	"sigs.k8s.io/controller-runtime/pkg/client/fake"
++
++	farapi "github.com/medik8s/fence-agents-remediation/v5/api/v1alpha1"
++)
++
++func safetyFixture(t *testing.T) (*farapi.FenceAgentsRemediation, farapi.SafetyConfig, *corev1.Secret) {
++	t.Helper()
++	server := httptest.NewTLSServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
++	t.Cleanup(server.Close)
++	name := "credentials"
++	return &farapi.FenceAgentsRemediation{ObjectMeta: metav1.ObjectMeta{Name: "worker-a", Namespace: "bmc", UID: "far-a", Generation: 1, Annotations: map[string]string{"remediation.medik8s.io/node-name": "worker-a"}}, Spec: farapi.FenceAgentsRemediationSpec{
++		SafetyPolicy: farapi.RedfishOffV1, NodeBinding: &farapi.NodeBinding{Version: "v1", Name: "worker-a", UID: "node-a", SystemUUID: systemUUID},
++		Agent: "fence_redfish", RetryCount: 1, RetryInterval: metav1.Duration{Duration: time.Second}, Timeout: metav1.Duration{Duration: time.Second}, RemediationStrategy: farapi.OutOfServiceTaintRemediationStrategy,
++		SharedParameters: map[farapi.ParameterName]string{"--action": "off", "--ip": "bmc.example", "--systems-uri": "/redfish/v1/Systems/1"}, SharedSecretName: &name,
++	}}, farapi.SafetyConfig{Enabled: true, CredentialNamespace: "bmc", TrustedNHCCreator: "system:serviceaccount:operators:nhc", CA: pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: server.Certificate().Raw})}, &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "bmc", UID: "secret-a", ResourceVersion: "1"}, Data: map[string][]byte{"username": []byte("user"), "password": []byte("password")}}
++}
++
++func TestSafetyValidation(t *testing.T) {
++	for _, tc := range []struct {
++		name    string
++		mutate  func(*farapi.FenceAgentsRemediation)
++		wantErr bool
++	}{
++		{name: "valid", mutate: func(*farapi.FenceAgentsRemediation) {}},
++		{name: "legacy missing binding", mutate: func(f *farapi.FenceAgentsRemediation) { f.Spec.NodeBinding = nil }, wantErr: true},
++		{name: "unknown policy", mutate: func(f *farapi.FenceAgentsRemediation) { f.Spec.SafetyPolicy = "unknown" }, wantErr: true},
++		{name: "wrong version", mutate: func(f *farapi.FenceAgentsRemediation) { f.Spec.NodeBinding.Version = "v2" }, wantErr: true},
++		{name: "annotation differs", mutate: func(f *farapi.FenceAgentsRemediation) { f.Annotations["remediation.medik8s.io/node-name"] = "worker-b" }, wantErr: true},
++		{name: "retry zero", mutate: func(f *farapi.FenceAgentsRemediation) { f.Spec.RetryCount = 0 }, wantErr: true},
++		{name: "unbounded retries", mutate: func(f *farapi.FenceAgentsRemediation) { f.Spec.RetryCount = 100 }, wantErr: true},
++		{name: "unbounded timeout", mutate: func(f *farapi.FenceAgentsRemediation) { f.Spec.Timeout.Duration = time.Hour }, wantErr: true},
++		{name: "pod deletion", mutate: func(f *farapi.FenceAgentsRemediation) {
++			f.Spec.RemediationStrategy = farapi.ResourceDeletionRemediationStrategy
++		}, wantErr: true},
++		{name: "IPMI", mutate: func(f *farapi.FenceAgentsRemediation) { f.Spec.Agent = "fence_ipmilan" }, wantErr: true},
++		{name: "reboot", mutate: func(f *farapi.FenceAgentsRemediation) { f.Spec.SharedParameters["--action"] = "reboot" }, wantErr: true},
++		{name: "inline password", mutate: func(f *farapi.FenceAgentsRemediation) { f.Spec.SharedParameters["--password"] = "password" }, wantErr: true},
++		{name: "insecure", mutate: func(f *farapi.FenceAgentsRemediation) { f.Spec.SharedParameters["--ssl-insecure"] = "" }, wantErr: true},
++		{name: "help", mutate: func(f *farapi.FenceAgentsRemediation) { f.Spec.SharedParameters["--help"] = "" }, wantErr: true},
++		{name: "empty node option map", mutate: func(f *farapi.FenceAgentsRemediation) {
++			f.Spec.NodeParameters = map[farapi.ParameterName]map[farapi.NodeName]string{"--help": {}}
++		}, wantErr: true},
++	} {
++		t.Run(tc.name, func(t *testing.T) {
++			f, _, _ := safetyFixture(t)
++			tc.mutate(f)
++			if err := farapi.ValidateSafetyFAR(f); (err != nil) != tc.wantErr {
++				t.Errorf("error=%v wantErr=%t", err, tc.wantErr)
++			}
++		})
++	}
++}
++
++func TestSafetySecretsAndTargets(t *testing.T) {
++	for _, tc := range []struct {
++		name    string
++		mutate  func(*farapi.FenceAgentsRemediation, *farapi.SafetyConfig, *corev1.Secret)
++		wantErr bool
++	}{
++		{name: "valid", mutate: func(*farapi.FenceAgentsRemediation, *farapi.SafetyConfig, *corev1.Secret) {}},
++		{name: "secret option", mutate: func(_ *farapi.FenceAgentsRemediation, _ *farapi.SafetyConfig, s *corev1.Secret) {
++			s.Data["--help"] = []byte{}
++		}, wantErr: true},
++		{name: "missing password", mutate: func(_ *farapi.FenceAgentsRemediation, _ *farapi.SafetyConfig, s *corev1.Secret) {
++			delete(s.Data, "password")
++		}, wantErr: true},
++		{name: "foreign namespace", mutate: func(f *farapi.FenceAgentsRemediation, _ *farapi.SafetyConfig, _ *corev1.Secret) {
++			f.Namespace = "foreign"
++		}, wantErr: true},
++		{name: "empty shared reference with node reference", mutate: func(f *farapi.FenceAgentsRemediation, _ *farapi.SafetyConfig, s *corev1.Secret) {
++			empty := ""
++			f.Spec.SharedSecretName = &empty
++			f.Spec.NodeSecretNames = map[farapi.NodeName]string{"worker-a": s.Name}
++		}, wantErr: true},
++		{name: "mixed certificate and private key", mutate: func(_ *farapi.FenceAgentsRemediation, c *farapi.SafetyConfig, _ *corev1.Secret) {
++			c.CA = append(c.CA, pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: []byte("synthetic-key")})...)
++		}, wantErr: true},
++		{name: "missing CA", mutate: func(_ *farapi.FenceAgentsRemediation, c *farapi.SafetyConfig, _ *corev1.Secret) { c.CA = nil }, wantErr: true},
++		{name: "missing creator", mutate: func(_ *farapi.FenceAgentsRemediation, c *farapi.SafetyConfig, _ *corev1.Secret) {
++			c.TrustedNHCCreator = ""
++		}, wantErr: true},
++		{name: "URI discovery", mutate: func(f *farapi.FenceAgentsRemediation, _ *farapi.SafetyConfig, _ *corev1.Secret) {
++			delete(f.Spec.SharedParameters, "--systems-uri")
++		}, wantErr: true},
++		{name: "URI query", mutate: func(f *farapi.FenceAgentsRemediation, _ *farapi.SafetyConfig, _ *corev1.Secret) {
++			f.Spec.SharedParameters["--systems-uri"] = "/redfish/v1/Systems/1?target=2"
++		}, wantErr: true},
++		{name: "endpoint userinfo", mutate: func(f *farapi.FenceAgentsRemediation, _ *farapi.SafetyConfig, _ *corev1.Secret) {
++			f.Spec.SharedParameters["--ip"] = "user@bmc.example"
++		}, wantErr: true},
++	} {
++		t.Run(tc.name, func(t *testing.T) {
++			f, config, secret := safetyFixture(t)
++			tc.mutate(f, &config, secret)
++			scheme := runtime.NewScheme()
++			if err := corev1.AddToScheme(scheme); err != nil {
++				t.Fatal(err)
++			}
++			reader := fake.NewClientBuilder().WithScheme(scheme).WithObjects(secret).Build()
++			resolved, err := farapi.ResolveSafetyTarget(context.Background(), reader, f, config)
++			if (err != nil) != tc.wantErr {
++				t.Fatalf("error=%v wantErr=%t", err, tc.wantErr)
++			}
++			if err == nil && (resolved.Target.Credential.UID != string(secret.UID) || resolved.Target.Credential.ResourceVersion != secret.ResourceVersion || resolved.Username != "user") {
++				t.Fatal("target lost credential version")
++			}
++		})
++	}
++}
+diff --git a/internal/safetycontract/controller_test.go b/internal/safetycontract/controller_test.go
+new file mode 100644
+index 000000000..baa027563
+--- /dev/null
++++ b/internal/safetycontract/controller_test.go
+@@ -0,0 +1,414 @@
++package safetycontract
++
++import (
++	"context"
++	"encoding/json"
++	"encoding/pem"
++	"fmt"
++	"net"
++	"net/http"
++	"net/http/httptest"
++	"net/url"
++	"strings"
++	"sync/atomic"
++	"testing"
++	"time"
++
++	corev1 "k8s.io/api/core/v1"
++	apierrors "k8s.io/apimachinery/pkg/api/errors"
++	"k8s.io/apimachinery/pkg/api/meta"
++	"k8s.io/apimachinery/pkg/runtime/schema"
++	ctrl "sigs.k8s.io/controller-runtime"
++	"sigs.k8s.io/controller-runtime/pkg/client"
++	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
++
++	"github.com/medik8s/fence-agents-remediation/v5/internal/controller"
++	"github.com/medik8s/fence-agents-remediation/v5/pkg/utils"
++)
++
++type updateClient struct {
++	client.Client
++	before func(client.Object) error
++}
++
++func (c updateClient) Update(ctx context.Context, obj client.Object, opts ...client.UpdateOption) error {
++	if err := c.before(obj); err != nil {
++		return err
++	}
++	return c.Client.Update(ctx, obj, opts...)
++}
++
++type identityReader struct {
++	client.Reader
++	mode  string
++	calls *atomic.Int32
++}
++
++func (r identityReader) List(ctx context.Context, list client.ObjectList, opts ...client.ListOption) error {
++	if nodes, ok := list.(*corev1.NodeList); ok {
++		r.calls.Add(1)
++		if len(opts) != 0 {
++			return fmt.Errorf("identity List must not use selectors")
++		}
++		if r.mode == "forbidden" {
++			return apierrors.NewForbidden(schema.GroupResource{Resource: "nodes"}, "", fmt.Errorf("list denied"))
++		}
++		if err := r.Reader.List(ctx, nodes); err != nil {
++			return err
++		}
++		switch r.mode {
++		case "missing":
++			nodes.Items = nil
++		case "partial":
++			nodes.Continue = "remaining-nodes"
++		case "remaining-count":
++			remaining := int64(1)
++			nodes.RemainingItemCount = &remaining
++		case "replacement":
++			for i := range nodes.Items {
++				if nodes.Items[i].Name == "worker-a" {
++					nodes.Items[i].UID = "listed-replacement"
++				}
++			}
++		}
++		return nil
++	}
++	return r.Reader.List(ctx, list, opts...)
++}
++
++func TestRetryIntervalSurvivesRestart(t *testing.T) {
++	h := newHarness(t, 2, nil)
++	far, config, secret := safetyFixture(t)
++	far.Spec.RetryCount = 2
++	var requests atomic.Int32
++	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { requests.Add(1); w.WriteHeader(http.StatusUnauthorized) }))
++	defer server.Close()
++	parsed, err := url.Parse(server.URL)
++	if err != nil {
++		t.Fatal(err)
++	}
++	host, port, err := net.SplitHostPort(parsed.Host)
++	if err != nil {
++		t.Fatal(err)
++	}
++	far.Spec.SharedParameters["--ip"] = host
++	far.Spec.SharedParameters["--ipport"] = port
++	config.CA = pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: server.Certificate().Raw})
++	current := h.getFAR(t)
++	current.Spec = far.Spec
++	if err := h.client.Update(context.Background(), current); err != nil {
++		t.Fatal(err)
++	}
++	secret.ResourceVersion = ""
++	if err := h.client.Create(context.Background(), secret); err != nil {
++		t.Fatal(err)
++	}
++	h.client = interceptor.NewClient(h.client.(client.WithWatch), interceptor.Funcs{
++		SubResourceUpdate: func(ctx context.Context, c client.Client, name string, obj client.Object, opts ...client.SubResourceUpdateOption) error {
++			data, err := json.Marshal(obj)
++			if err != nil {
++				return err
++			}
++			if err := json.Unmarshal(data, obj); err != nil {
++				return err
++			}
++			return c.SubResource(name).Update(ctx, obj, opts...)
++		},
++	})
++	h.reconciler.Client = h.client
++	h.reconciler.Safety = config
++	h.reconciler.APIReader = h.client
++	for range 2 {
++		h.reconcile(t)
++	}
++	time.Sleep(time.Until(time.Now().Truncate(time.Second).Add(time.Second + 900*time.Millisecond)))
++	attemptedAt := time.Now()
++	h.reconcile(t)
++	if h.getFAR(t).Status.SafetyAttempts != 1 || requests.Load() != 1 {
++		t.Fatal("first reserved attempt control failed")
++	}
++	h.reconciler = &controller.FenceAgentsRemediationReconciler{Client: h.client, APIReader: h.client, Safety: config, Log: h.reconciler.Log}
++	req := ctrl.Request{NamespacedName: client.ObjectKeyFromObject(h.far)}
++	result, err := h.reconciler.Reconcile(context.Background(), req)
++	if err != nil {
++		t.Fatal(err)
++	}
++	if result.RequeueAfter <= 0 || requests.Load() != 1 || h.getFAR(t).Status.SafetyAttempts != 1 {
++		t.Fatal("restart ignored persisted retry interval")
++	}
++	if deadline := time.Now().Add(result.RequeueAfter); deadline.Before(attemptedAt.Add(far.Spec.RetryInterval.Duration)) {
++		t.Errorf("serialized retry deadline %s precedes full interval after %s", deadline, attemptedAt)
++	}
++	early := attemptedAt.Truncate(time.Second).Add(far.Spec.RetryInterval.Duration + 50*time.Millisecond)
++	time.Sleep(time.Until(early))
++	if time.Since(attemptedAt) >= far.Spec.RetryInterval.Duration {
++		t.Fatal("early retry control missed its observation window")
++	}
++	result, err = h.reconciler.Reconcile(context.Background(), req)
++	if err != nil || result.RequeueAfter <= 0 || requests.Load() != 1 || h.getFAR(t).Status.SafetyAttempts != 1 {
++		t.Errorf("wire round-trip allowed an early retry: requests=%d attempts=%d error=%v", requests.Load(), h.getFAR(t).Status.SafetyAttempts, err)
++	}
++	next := h.getFAR(t).Status.SafetyLastAttempt.Add(far.Spec.RetryInterval.Duration + 10*time.Millisecond)
++	time.Sleep(time.Until(next))
++	_, err = h.reconciler.Reconcile(context.Background(), req)
++	if err == nil || requests.Load() != 2 || h.getFAR(t).Status.SafetyAttempts != 2 {
++		t.Fatal("elapsed retry interval did not permit the next reserved attempt")
++	}
++}
++
++func TestGuardedController(t *testing.T) {
++	for _, tc := range []struct {
++		name, mutation, nodeList                         string
++		alreadyOff, wrongUUID, stillOn, casRace, restart bool
++		wantRelease                                      bool
++	}{
++		{name: "matching identity Off", wantRelease: true},
++		{name: "unique unfiltered Node list", nodeList: "unique", wantRelease: true},
++		{name: "duplicate known UUID", nodeList: "duplicate"},
++		{name: "duplicate uppercase known UUID", nodeList: "uppercase-duplicate"},
++		{name: "Node list forbidden", nodeList: "forbidden"},
++		{name: "Node list incomplete", nodeList: "partial"},
++		{name: "Node list has remaining items", nodeList: "remaining-count"},
++		{name: "bound target missing from list", nodeList: "missing"},
++		{name: "bound target replaced in list", nodeList: "replacement"},
++		{name: "matching already Off", alreadyOff: true, wantRelease: true},
++		{name: "restart with proof rechecks", restart: true, wantRelease: true},
++		{name: "wrong BMC UUID", wrongUUID: true},
++		{name: "accepted but On", stillOn: true},
++		{name: "Unicode-aliased BMC power", mutation: "unicode-power"},
++		{name: "Node replaced during precheck", mutation: "node-before-reset"},
++		{name: "Node replaced during final identity GET", mutation: "node-during-final-identity"},
++		{name: "duplicate UUID during final identity GET", mutation: "duplicate-during-final-identity"},
++		{name: "duplicate UUID before release", mutation: "duplicate-before-release"},
++		{name: "duplicate UUID during fresh Off", mutation: "duplicate-during-release"},
++		{name: "Node replaced after reset", mutation: "node-after-reset"},
++		{name: "Node replaced before release", mutation: "node-before-release"},
++		{name: "Node replaced during fresh Off", mutation: "node-during-release"},
++		{name: "Secret version changed before reset", mutation: "secret-before-reset"},
++		{name: "Secret version changed before release", mutation: "secret-before-release"},
++		{name: "spec target changed before reset", mutation: "target-before-reset"},
++		{name: "spec target changed before release", mutation: "target-before-release"},
++		{name: "CAS conflicts with replacement", casRace: true},
++	} {
++		t.Run(tc.name, func(t *testing.T) {
++			h := newHarness(t, 1, nil)
++			far, config, secret := safetyFixture(t)
++			var resets, reads atomic.Int32
++			mutate := func(kind string) {
++				switch kind {
++				case "node":
++					node := h.node(t)
++					if node.UID == "node-b" {
++						return
++					}
++					if err := h.client.Delete(context.Background(), node); err != nil {
++						t.Error(err)
++						return
++					}
++					node.UID = "node-b"
++					node.ResourceVersion = ""
++					node.Spec.Taints = nil
++					if err := h.client.Create(context.Background(), node); err != nil {
++						t.Error(err)
++					}
++				case "duplicate":
++					other := h.node(t).DeepCopy()
++					other.Name = "worker-b"
++					other.UID = "node-b"
++					other.ResourceVersion = ""
++					if err := h.client.Create(context.Background(), other); err != nil {
++						t.Error(err)
++					}
++				case "secret":
++					current := &corev1.Secret{}
++					if err := h.client.Get(context.Background(), client.ObjectKeyFromObject(secret), current); err != nil {
++						t.Error(err)
++						return
++					}
++					current.Data["password"] = []byte("changed")
++					if err := h.client.Update(context.Background(), current); err != nil {
++						t.Error(err)
++					}
++				case "target":
++					current := h.getFAR(t)
++					current.Spec.SharedParameters["--ip"] = "other.example"
++					if err := h.client.Update(context.Background(), current); err != nil {
++						t.Error(err)
++					}
++				}
++			}
++			server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++				if r.Method == http.MethodPost {
++					resets.Add(1)
++					if tc.mutation == "node-after-reset" {
++						mutate("node")
++					}
++					w.WriteHeader(http.StatusAccepted)
++					return
++				}
++				count := reads.Add(1)
++				if count == 1 {
++					switch tc.mutation {
++					case "node-before-reset":
++						mutate("node")
++					case "secret-before-reset":
++						mutate("secret")
++					case "target-before-reset":
++						mutate("target")
++					}
++				}
++				if count == 2 && tc.mutation == "node-during-final-identity" {
++					mutate("node")
++				}
++				if count == 2 && tc.mutation == "duplicate-during-final-identity" {
++					mutate("duplicate")
++				}
++				if count == 4 && tc.mutation == "node-during-release" {
++					mutate("node")
++				}
++				if count == 4 && tc.mutation == "duplicate-during-release" {
++					mutate("duplicate")
++				}
++				uuid, power := systemUUID, "On"
++				if tc.wrongUUID {
++					uuid = "aabbccdd-eeff-4011-8233-445566778899"
++				}
++				if tc.alreadyOff || resets.Load() > 0 && !tc.stillOn {
++					power = "Off"
++				}
++				if tc.mutation == "unicode-power" {
++					_, _ = w.Write([]byte(`{"UUID":"` + systemUUID + `","PowerState":"On","Powerſtate":"Off","Actions":{"#ComputerSystem.Reset":{"target":"/redfish/v1/Systems/1/Actions/ComputerSystem.Reset"}}}`))
++					return
++				}
++				_ = json.NewEncoder(w).Encode(map[string]any{"UUID": uuid, "PowerState": power, "Actions": map[string]any{"#ComputerSystem.Reset": map[string]string{"target": "/redfish/v1/Systems/1/Actions/ComputerSystem.Reset"}}})
++			}))
++			defer server.Close()
++			parsed, err := url.Parse(server.URL)
++			if err != nil {
++				t.Fatal(err)
++			}
++			host, port, err := net.SplitHostPort(parsed.Host)
++			if err != nil {
++				t.Fatal(err)
++			}
++			far.Spec.SharedParameters["--ip"] = host
++			far.Spec.SharedParameters["--ipport"] = port
++			config.CA = pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: server.Certificate().Raw})
++			current := h.getFAR(t)
++			current.Spec = far.Spec
++			current.Annotations = far.Annotations
++			if err := h.client.Update(context.Background(), current); err != nil {
++				t.Fatal(err)
++			}
++			secret.ResourceVersion = ""
++			if err := h.client.Create(context.Background(), secret); err != nil {
++				t.Fatal(err)
++			}
++			h.reconciler.Safety = config
++			h.reconciler.APIReader = h.client
++			var listCalls atomic.Int32
++			if tc.nodeList != "" {
++				if tc.nodeList == "duplicate" || tc.nodeList == "uppercase-duplicate" {
++					other := h.node(t).DeepCopy()
++					other.Name = "worker-b"
++					other.UID = "node-b"
++					other.ResourceVersion = ""
++					if tc.nodeList == "uppercase-duplicate" {
++						other.Status.NodeInfo.SystemUUID = strings.ToUpper(systemUUID)
++					}
++					if err := h.client.Create(context.Background(), other); err != nil {
++						t.Fatal(err)
++					}
++				}
++				h.reconciler.APIReader = identityReader{Reader: h.client, mode: tc.nodeList, calls: &listCalls}
++			}
++			if tc.casRace {
++				h.reconciler.Client = updateClient{Client: h.client, before: func(obj client.Object) error {
++					if node, ok := obj.(*corev1.Node); ok && hasOOS(node) {
++						mutate("node")
++						return apierrors.NewConflict(schema.GroupResource{Resource: "nodes"}, node.Name, fmt.Errorf("concurrent replacement"))
++					}
++					return nil
++				}}
++			}
++			var lastErr error
++			for range 8 {
++				_, lastErr = h.reconciler.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(h.far)})
++				state := h.getFAR(t)
++				if state.Status.OffProof != nil && !hasOOS(h.node(t)) {
++					switch tc.mutation {
++					case "node-before-release":
++						mutate("node")
++					case "duplicate-before-release":
++						mutate("duplicate")
++					case "secret-before-release":
++						mutate("secret")
++					case "target-before-release":
++						mutate("target")
++					}
++					if tc.restart {
++						h.reconciler = &controller.FenceAgentsRemediationReconciler{Client: h.client, APIReader: h.client, Safety: config, Log: h.reconciler.Log, Recorder: h.reconciler.Recorder}
++					}
++				}
++				if lastErr != nil || hasOOS(h.node(t)) {
++					break
++				}
++			}
++			if tc.nodeList != "" && listCalls.Load() == 0 {
++				t.Error("identity did not use an uncached unfiltered Node list")
++			}
++			if tc.nodeList != "" && tc.nodeList != "unique" && resets.Load() != 0 {
++				t.Error("ambiguous or unavailable Node inventory permitted a power action")
++			}
++			if hasOOS(h.node(t)) != tc.wantRelease {
++				t.Fatalf("released=%t wanted=%t error=%v reads=%d resets=%d", hasOOS(h.node(t)), tc.wantRelease, lastErr, reads.Load(), resets.Load())
++			}
++			if tc.wantRelease {
++				state := h.getFAR(t)
++				if state.Status.OffProof == nil || state.Status.SafetySnapshot == nil || state.Status.OffProof.Snapshot != *state.Status.SafetySnapshot || !meta.IsStatusConditionTrue(state.Status.Conditions, utils.FenceAgentActionSucceededType) {
++					t.Fatal("release lacks identity-bound proof")
++				}
++				if tc.alreadyOff && resets.Load() != 0 {
++					t.Fatal("already-Off reset")
++				}
++				if tc.restart && reads.Load() < 4 {
++					t.Fatal("restart did not fresh-check BMC")
++				}
++			} else if lastErr == nil {
++				t.Fatal("negative control did not hit refusal")
++			}
++			if tc.mutation == "unicode-power" {
++				if lastErr == nil || !strings.Contains(lastErr.Error(), "ambiguous Redfish response") {
++					t.Errorf("Unicode alias refusal is not a parser rejection: %v", lastErr)
++				}
++				if resets.Load() != 0 {
++					t.Errorf("Unicode alias permitted ForceOff: %d", resets.Load())
++				}
++			}
++			if tc.mutation == "node-before-reset" || tc.mutation == "node-during-final-identity" || tc.mutation == "duplicate-during-final-identity" || tc.mutation == "secret-before-reset" || tc.mutation == "target-before-reset" {
++				if resets.Load() != 0 {
++					t.Error("power action ran after a pre-action identity/configuration change")
++				}
++			}
++			if tc.wantRelease {
++				before := reads.Load()
++				if _, err := h.reconciler.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(h.far)}); err != nil {
++					t.Fatal(err)
++				}
++				if reads.Load() != before {
++					t.Error("terminal success generated another BMC operation")
++				}
++			}
++			if tc.wrongUUID {
++				before := h.getFAR(t).ResourceVersion
++				_, _ = h.reconciler.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(h.far)})
++				if h.getFAR(t).ResourceVersion != before {
++					t.Error("unchanged refusal generated another status event")
++				}
++			}
++			if h.calls.Load() != 0 {
++				t.Fatal("safety mode executed generic subprocess")
++			}
++		})
++	}
++}
+diff --git a/internal/safetycontract/envtest_test.go b/internal/safetycontract/envtest_test.go
+new file mode 100644
+index 000000000..948e14247
+--- /dev/null
++++ b/internal/safetycontract/envtest_test.go
+@@ -0,0 +1,293 @@
++package safetycontract
++
++import (
++	"context"
++	"os"
++	"path/filepath"
++	"testing"
++	"time"
++
++	corev1 "k8s.io/api/core/v1"
++	rbacv1 "k8s.io/api/rbac/v1"
++	apierrors "k8s.io/apimachinery/pkg/api/errors"
++	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
++	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
++	"k8s.io/apimachinery/pkg/runtime"
++	"k8s.io/client-go/rest"
++	"sigs.k8s.io/controller-runtime/pkg/client"
++	"sigs.k8s.io/controller-runtime/pkg/envtest"
++	"sigs.k8s.io/yaml"
++
++	farapi "github.com/medik8s/fence-agents-remediation/v5/api/v1alpha1"
++	"github.com/medik8s/fence-agents-remediation/v5/pkg/utils"
++)
++
++func TestLocalAPISafetySchemaAndRBAC(t *testing.T) {
++	if os.Getenv("KUBEBUILDER_ASSETS") == "" {
++		t.Fatal("explicit local KUBEBUILDER_ASSETS required")
++	}
++	if value := os.Getenv("USE_EXISTING_CLUSTER"); value != "" && value != "false" {
++		t.Fatal("USE_EXISTING_CLUSTER must be unset or false")
++	}
++	useExisting := false
++	environment := &envtest.Environment{UseExistingCluster: &useExisting, CRDDirectoryPaths: []string{filepath.Join("..", "..", "config", "crd", "bases")}, ErrorIfCRDPathMissing: true}
++	environment.ControlPlane.GetAPIServer().Configure().Set("authorization-mode", "RBAC")
++	config, err := environment.Start()
++	if err != nil {
++		t.Fatal(err)
++	}
++	t.Cleanup(func() {
++		if err := environment.Stop(); err != nil {
++			t.Error(err)
++		}
++	})
++	scheme := runtime.NewScheme()
++	for _, add := range []func(*runtime.Scheme) error{corev1.AddToScheme, rbacv1.AddToScheme, farapi.AddToScheme} {
++		if err := add(scheme); err != nil {
++			t.Fatal(err)
++		}
++	}
++	admin, err := client.New(config, client.Options{Scheme: scheme})
++	if err != nil {
++		t.Fatal(err)
++	}
++	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
++	defer cancel()
++	for _, name := range []string{"bmc", "foreign"} {
++		if err := admin.Create(ctx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: name}}); err != nil {
++			t.Fatal(err)
++		}
++	}
++	t.Run("schema without webhooks", func(t *testing.T) {
++		far, _, _ := safetyFixture(t)
++		far.UID = ""
++		far.Generation = 0
++		far.Name = "schema-check"
++		if err := admin.Create(ctx, far); err != nil {
++			t.Fatal(err)
++		}
++		changed := far.DeepCopy()
++		changed.Spec.NodeBinding.UID = "node-b"
++		if err := admin.Update(ctx, changed); !apierrors.IsInvalid(err) {
++			t.Fatalf("binding mutation error=%v", err)
++		}
++		changed = far.DeepCopy()
++		changed.Spec.SharedParameters["--ip"] = "other.example"
++		if err := admin.Update(ctx, changed); !apierrors.IsInvalid(err) {
++			t.Fatalf("target mutation error=%v", err)
++		}
++		changed = far.DeepCopy()
++		changed.Spec.SafetyPolicy = ""
++		changed.Spec.NodeBinding = nil
++		if err := admin.Update(ctx, changed); !apierrors.IsInvalid(err) {
++			t.Fatalf("policy removal error=%v", err)
++		}
++		zero := &unstructured.Unstructured{Object: map[string]any{"apiVersion": farapi.GroupVersion.String(), "kind": "FenceAgentsRemediation", "metadata": map[string]any{"name": "zero-retry", "namespace": "bmc"}}}
++		data, err := runtime.DefaultUnstructuredConverter.ToUnstructured(&far.Spec)
++		if err != nil {
++			t.Fatal(err)
++		}
++		data["retrycount"] = int64(0)
++		zero.Object["spec"] = data
++		if err := admin.Create(ctx, zero); !apierrors.IsInvalid(err) {
++			t.Fatalf("retry zero error=%v", err)
++		}
++		legacy := far.DeepCopy()
++		legacy.Name = "legacy"
++		legacy.ResourceVersion = ""
++		legacy.UID = ""
++		legacy.Spec.SafetyPolicy = ""
++		legacy.Spec.NodeBinding = nil
++		if err := admin.Create(ctx, legacy); err != nil {
++			t.Fatalf("legacy schema changed: %v", err)
++		}
++	})
++	t.Run("known Node UUID uniqueness", func(t *testing.T) {
++		node := &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "unique-target"}}
++		if err := admin.Create(ctx, node); err != nil {
++			t.Fatal(err)
++		}
++		node.Status.NodeInfo.SystemUUID = systemUUID
++		if err := admin.Status().Update(ctx, node); err != nil {
++			t.Fatal(err)
++		}
++		binding := farapi.NodeBinding{Version: "v1", Name: node.Name, UID: string(node.UID), SystemUUID: systemUUID}
++		selected, err := farapi.ReadUniqueBoundNode(ctx, admin, binding)
++		if err != nil || selected.UID != node.UID || selected.ResourceVersion == "" {
++			t.Fatalf("unique target error=%v", err)
++		}
++		other := &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "uuid-duplicate"}}
++		if err := admin.Create(ctx, other); err != nil {
++			t.Fatal(err)
++		}
++		other.Status.NodeInfo.SystemUUID = "00112233-4455-4677-8899-AABBCCDDEEFF"
++		if err := admin.Status().Update(ctx, other); err != nil {
++			t.Fatal(err)
++		}
++		if _, err := farapi.ReadUniqueBoundNode(ctx, admin, binding); err == nil {
++			t.Fatal("real API duplicate UUID accepted")
++		}
++	})
++	t.Run("UID and resourceVersion conditional taints", func(t *testing.T) {
++		for _, removing := range []bool{false, true} {
++			name := "conditional-add"
++			if removing {
++				name = "conditional-cleanup"
++			}
++			old := &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: name}}
++			if removing {
++				old.Spec.Taints = []corev1.Taint{utils.CreateOutOfServiceTaint()}
++			}
++			if err := admin.Create(ctx, old); err != nil {
++				t.Fatal(err)
++			}
++			old.Status.NodeInfo.SystemUUID = systemUUID
++			if err := admin.Status().Update(ctx, old); err != nil {
++				t.Fatal(err)
++			}
++			binding := farapi.NodeBinding{Version: "v1", Name: old.Name, UID: string(old.UID), SystemUUID: systemUUID}
++			if err := admin.Delete(ctx, old); err != nil {
++				t.Fatal(err)
++			}
++			replacement := &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: name}}
++			if removing {
++				replacement.Spec.Taints = []corev1.Taint{utils.CreateOutOfServiceTaint()}
++			}
++			if err := admin.Create(ctx, replacement); err != nil {
++				t.Fatal(err)
++			}
++			replacement.Status.NodeInfo.SystemUUID = systemUUID
++			if err := admin.Status().Update(ctx, replacement); err != nil {
++				t.Fatal(err)
++			}
++			var add, remove []corev1.Taint
++			if removing {
++				remove = []corev1.Taint{utils.CreateOutOfServiceTaint()}
++			} else {
++				add = []corev1.Taint{utils.CreateOutOfServiceTaint()}
++			}
++			err := utils.UpdateBoundTaints(ctx, admin, old, binding, add, remove)
++			if !apierrors.IsConflict(err) && !apierrors.IsInvalid(err) {
++				t.Fatalf("stale Node write error=%v", err)
++			}
++			if err := admin.Get(ctx, client.ObjectKey{Name: name}, replacement); err != nil {
++				t.Fatal(err)
++			}
++			if string(replacement.UID) == binding.UID || hasOOS(replacement) != removing {
++				t.Fatal("stale helper mutated a replacement Node")
++			}
++			binding.UID = string(replacement.UID)
++			if err := utils.UpdateBoundTaints(ctx, admin, replacement, binding, add, remove); err != nil {
++				t.Fatal(err)
++			}
++			if err := admin.Get(ctx, client.ObjectKey{Name: name}, replacement); err != nil {
++				t.Fatal(err)
++			}
++			if hasOOS(replacement) == removing {
++				t.Fatal("fresh matching Node positive control failed")
++			}
++		}
++	})
++	t.Run("namespaced read grants", func(t *testing.T) {
++		var role rbacv1.Role
++		data, err := os.ReadFile(filepath.Join("..", "..", "config", "rbac", "safety", "credential_role.yaml"))
++		if err != nil {
++			t.Fatal(err)
++		}
++		if err := yaml.UnmarshalStrict(data, &role); err != nil {
++			t.Fatal(err)
++		}
++		role.Namespace = "bmc"
++		if err := admin.Create(ctx, &role); err != nil {
++			t.Fatal(err)
++		}
++		var clusterRole rbacv1.ClusterRole
++		data, err = os.ReadFile(filepath.Join("..", "..", "config", "rbac", "safety", "cluster_role.yaml"))
++		if err != nil {
++			t.Fatal(err)
++		}
++		if err := yaml.UnmarshalStrict(data, &clusterRole); err != nil {
++			t.Fatal(err)
++		}
++		if err := admin.Create(ctx, &clusterRole); err != nil {
++			t.Fatal(err)
++		}
++		username := "system:serviceaccount:operators:far"
++		subject := rbacv1.Subject{Kind: "User", APIGroup: rbacv1.GroupName, Name: username}
++		if err := admin.Create(ctx, &rbacv1.RoleBinding{ObjectMeta: metav1.ObjectMeta{Name: "safety", Namespace: "bmc"}, RoleRef: rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "Role", Name: role.Name}, Subjects: []rbacv1.Subject{subject}}); err != nil {
++			t.Fatal(err)
++		}
++		if err := admin.Create(ctx, &rbacv1.ClusterRoleBinding{ObjectMeta: metav1.ObjectMeta{Name: "safety"}, RoleRef: rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "ClusterRole", Name: clusterRole.Name}, Subjects: []rbacv1.Subject{subject}}); err != nil {
++			t.Fatal(err)
++		}
++		for _, ns := range []string{"bmc", "foreign"} {
++			if err := admin.Create(ctx, &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "credentials", Namespace: ns}}); err != nil {
++				t.Fatal(err)
++			}
++		}
++		impersonated := rest.CopyConfig(config)
++		impersonated.Impersonate.UserName = username
++		restricted, err := client.New(impersonated, client.Options{Scheme: scheme})
++		if err != nil {
++			t.Fatal(err)
++		}
++		deadline := time.Now().Add(5 * time.Second)
++		for {
++			err = restricted.Get(ctx, client.ObjectKey{Namespace: "bmc", Name: "credentials"}, &corev1.Secret{})
++			if err == nil {
++				err = restricted.List(ctx, &corev1.NodeList{})
++			}
++			if err == nil {
++				break
++			}
++			if !apierrors.IsForbidden(err) || time.Now().After(deadline) {
++				t.Fatal(err)
++			}
++			time.Sleep(20 * time.Millisecond)
++		}
++		if err := restricted.Get(ctx, client.ObjectKey{Namespace: "foreign", Name: "credentials"}, &corev1.Secret{}); !apierrors.IsForbidden(err) {
++			t.Fatalf("foreign Secret error=%v", err)
++		}
++		if err := restricted.List(ctx, &corev1.SecretList{}); !apierrors.IsForbidden(err) {
++			t.Fatalf("cluster-wide Secret list error=%v", err)
++		}
++		if err := restricted.Delete(ctx, &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "not-present"}}); !apierrors.IsForbidden(err) {
++			t.Fatalf("Node deletion error=%v", err)
++		}
++		for _, namespace := range []string{"bmc", "foreign"} {
++			far, _, _ := safetyFixture(t)
++			far.ObjectMeta = metav1.ObjectMeta{Name: "scope-far", Namespace: namespace}
++			tmpl := &farapi.FenceAgentsRemediationTemplate{ObjectMeta: metav1.ObjectMeta{Name: "scope-template", Namespace: namespace}}
++			tmpl.Spec.Template.Spec = *far.Spec.DeepCopy()
++			tmpl.Spec.Template.Spec.NodeBinding = nil
++			for _, object := range []client.Object{far, tmpl} {
++				if err := admin.Create(ctx, object); err != nil {
++					t.Fatal(err)
++				}
++				allowed := namespace == "bmc"
++				check := func(operation string, err error) {
++					if allowed && err != nil {
++						t.Fatalf("local %T %s error=%v", object, operation, err)
++					}
++					if !allowed && !apierrors.IsForbidden(err) {
++						t.Errorf("foreign %T %s error=%v, want Forbidden", object, operation, err)
++					}
++				}
++				copy := object.DeepCopyObject().(client.Object)
++				check("get", restricted.Get(ctx, client.ObjectKeyFromObject(object), copy))
++				statusCopy := object.DeepCopyObject().(client.Object)
++				check("get status", restricted.SubResource("status").Get(ctx, object, statusCopy))
++				copy.SetLabels(map[string]string{"scope-check": "updated"})
++				check("update", restricted.Update(ctx, copy))
++				condition := metav1.Condition{Type: "ScopeControl", Status: metav1.ConditionTrue, Reason: "ScopeControl", Message: "Namespace permission control", LastTransitionTime: metav1.Now()}
++				switch typed := copy.(type) {
++				case *farapi.FenceAgentsRemediation:
++					typed.Status.Conditions = []metav1.Condition{condition}
++				case *farapi.FenceAgentsRemediationTemplate:
++					typed.Status.Conditions = []metav1.Condition{condition}
++				}
++				check("update status", restricted.Status().Update(ctx, copy))
++			}
++		}
++	})
++}
+diff --git a/internal/safetycontract/runtime_test.go b/internal/safetycontract/runtime_test.go
+new file mode 100644
+index 000000000..c1a574c14
+--- /dev/null
++++ b/internal/safetycontract/runtime_test.go
+@@ -0,0 +1,288 @@
++package safetycontract
++
++import (
++	"context"
++	"errors"
++	"sync/atomic"
++	"testing"
++	"time"
++
++	"github.com/go-logr/logr"
++
++	corev1 "k8s.io/api/core/v1"
++	"k8s.io/apimachinery/pkg/api/meta"
++	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
++	"k8s.io/apimachinery/pkg/runtime"
++	"k8s.io/client-go/tools/record"
++	ctrl "sigs.k8s.io/controller-runtime"
++	"sigs.k8s.io/controller-runtime/pkg/client"
++	"sigs.k8s.io/controller-runtime/pkg/client/fake"
++
++	farapi "github.com/medik8s/fence-agents-remediation/v5/api/v1alpha1"
++	"github.com/medik8s/fence-agents-remediation/v5/internal/controller"
++	"github.com/medik8s/fence-agents-remediation/v5/pkg/cli"
++	"github.com/medik8s/fence-agents-remediation/v5/pkg/utils"
++)
++
++const systemUUID = "00112233-4455-4677-8899-aabbccddeeff"
++
++type harness struct {
++	client     client.Client
++	reconciler *controller.FenceAgentsRemediationReconciler
++	far        *farapi.FenceAgentsRemediation
++	calls      atomic.Int32
++}
++
++func newHarness(t *testing.T, retries int, runnerErr error) *harness {
++	t.Helper()
++	scheme := runtime.NewScheme()
++	for _, add := range []func(*runtime.Scheme) error{corev1.AddToScheme, farapi.AddToScheme} {
++		if err := add(scheme); err != nil {
++			t.Fatal(err)
++		}
++	}
++	node := &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "worker-a", UID: "node-a"}, Status: corev1.NodeStatus{NodeInfo: corev1.NodeSystemInfo{SystemUUID: systemUUID}}}
++	far := &farapi.FenceAgentsRemediation{ObjectMeta: metav1.ObjectMeta{Name: node.Name, Namespace: "bmc", UID: "far-a", Finalizers: []string{farapi.FARFinalizer}}, Spec: farapi.FenceAgentsRemediationSpec{Agent: "fence_redfish", RetryCount: retries, RetryInterval: metav1.Duration{Duration: time.Millisecond}, Timeout: metav1.Duration{Duration: time.Second}, RemediationStrategy: farapi.OutOfServiceTaintRemediationStrategy, SharedParameters: map[farapi.ParameterName]string{"--action": "off"}, NodeParameters: map[farapi.ParameterName]map[farapi.NodeName]string{"--ip": {farapi.NodeName(node.Name): "192.0.2.1"}}}}
++	utils.UpdateConditions(utils.RemediationStarted, far, logr.Discard())
++	c := fake.NewClientBuilder().WithScheme(scheme).WithStatusSubresource(far).WithObjects(node, far).Build()
++	h := &harness{client: c, far: far}
++	recorder := record.NewFakeRecorder(100)
++	executor := cli.NewFakeExecuter(c, func(context.Context, []string) (string, string, error) { h.calls.Add(1); return "", "", runnerErr }, recorder)
++	h.reconciler = &controller.FenceAgentsRemediationReconciler{Client: c, Scheme: scheme, Log: logr.Discard(), Recorder: recorder, Executor: executor}
++	return h
++}
++
++func (h *harness) reconcile(t *testing.T) {
++	t.Helper()
++	if _, err := h.reconciler.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(h.far)}); err != nil {
++		t.Fatal(err)
++	}
++}
++
++func (h *harness) getFAR(t *testing.T) *farapi.FenceAgentsRemediation {
++	t.Helper()
++	far := &farapi.FenceAgentsRemediation{}
++	if err := h.client.Get(context.Background(), client.ObjectKeyFromObject(h.far), far); err != nil {
++		t.Fatal(err)
++	}
++	return far
++}
++
++func (h *harness) node(t *testing.T) *corev1.Node {
++	t.Helper()
++	node := &corev1.Node{}
++	if err := h.client.Get(context.Background(), client.ObjectKey{Name: h.far.Name}, node); err != nil {
++		t.Fatal(err)
++	}
++	return node
++}
++
++func (h *harness) execute(t *testing.T) {
++	t.Helper()
++	h.reconcile(t)
++	deadline := time.Now().Add(3 * time.Second)
++	for time.Now().Before(deadline) {
++		condition := meta.FindStatusCondition(h.getFAR(t).Status.Conditions, utils.FenceAgentActionSucceededType)
++		if condition != nil && condition.Status != metav1.ConditionUnknown {
++			return
++		}
++		time.Sleep(time.Millisecond)
++	}
++	t.Fatal("executor did not finish")
++}
++
++func (h *harness) seedSuccess(t *testing.T) {
++	t.Helper()
++	far := h.getFAR(t)
++	utils.UpdateConditions(utils.FenceAgentSucceeded, far, logr.Discard())
++	if err := h.client.Status().Update(context.Background(), far); err != nil {
++		t.Fatal(err)
++	}
++}
++
++func (h *harness) recreateNode(t *testing.T) {
++	t.Helper()
++	node := h.node(t)
++	if err := h.client.Delete(context.Background(), node); err != nil {
++		t.Fatal(err)
++	}
++	node.ResourceVersion = ""
++	node.UID = "node-b"
++	if err := h.client.Create(context.Background(), node); err != nil {
++		t.Fatal(err)
++	}
++}
++
++func hasOOS(node *corev1.Node) bool {
++	taint := utils.CreateOutOfServiceTaint()
++	return utils.TaintExists(node.Spec.Taints, &taint)
++}
++
++func TestExecutorControls(t *testing.T) {
++	for _, fail := range []bool{false, true} {
++		name := "success"
++		var runnerErr error
++		if fail {
++			name = "failure"
++			runnerErr = errors.New("runner failed")
++		}
++		t.Run(name, func(t *testing.T) {
++			h := newHarness(t, 1, runnerErr)
++			h.execute(t)
++			h.reconcile(t)
++			if h.calls.Load() != 1 || hasOOS(h.node(t)) == fail {
++				t.Fatal("executor control failed")
++			}
++		})
++	}
++}
++
++func enableSafety(t *testing.T, h *harness) {
++	t.Helper()
++	fixture, config, _ := safetyFixture(t)
++	far := h.getFAR(t)
++	far.Spec.SafetyPolicy = fixture.Spec.SafetyPolicy
++	far.Spec.NodeBinding = fixture.Spec.NodeBinding
++	far.Spec.RetryInterval.Duration = time.Second
++	h.reconciler.Safety = config
++	h.reconciler.APIReader = h.client
++	if err := h.client.Update(context.Background(), far); err != nil {
++		t.Fatal(err)
++	}
++}
++
++func TestRetryZeroCannotRelease(t *testing.T) {
++	h := newHarness(t, 0, nil)
++	enableSafety(t, h)
++	if _, err := h.reconciler.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(h.far)}); err == nil {
++		t.Error("invalid retry count accepted")
++	}
++	if h.calls.Load() != 0 {
++		t.Fatal("retry-zero control unexpectedly executed")
++	}
++	if hasOOS(h.node(t)) {
++		t.Error("zero executions released node")
++	}
++}
++
++func TestPersistedSuccessCannotReleaseReplacement(t *testing.T) {
++	h := newHarness(t, 1, nil)
++	enableSafety(t, h)
++	h.seedSuccess(t)
++	h.recreateNode(t)
++	_, _ = h.reconciler.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(h.far)})
++	if h.calls.Load() != 0 {
++		t.Fatal("persisted-success control executed")
++	}
++	if hasOOS(h.node(t)) {
++		t.Error("persisted success released replacement UID")
++	}
++}
++
++func TestCleanupRemainsUIDScopedWithDuplicateUUID(t *testing.T) {
++	h := newHarness(t, 1, nil)
++	enableSafety(t, h)
++	node := h.node(t)
++	node.Spec.Taints = []corev1.Taint{utils.CreateOutOfServiceTaint()}
++	if err := h.client.Update(context.Background(), node); err != nil {
++		t.Fatal(err)
++	}
++	other := node.DeepCopy()
++	other.Name = "worker-b"
++	other.UID = "node-b"
++	other.ResourceVersion = ""
++	if err := h.client.Create(context.Background(), other); err != nil {
++		t.Fatal(err)
++	}
++	if err := h.client.Delete(context.Background(), h.getFAR(t)); err != nil {
++		t.Fatal(err)
++	}
++	h.reconcile(t)
++	if hasOOS(h.node(t)) {
++		t.Fatal("duplicate UUID blocked bound-UID cleanup")
++	}
++	if err := h.client.Get(context.Background(), client.ObjectKey{Name: other.Name}, other); err != nil {
++		t.Fatal(err)
++	}
++	if !hasOOS(other) {
++		t.Fatal("cleanup touched duplicate-UUID Node with a different UID")
++	}
++}
++
++func TestCleanupRejectsForeignNamespace(t *testing.T) {
++	h := newHarness(t, 1, nil)
++	enableSafety(t, h)
++	far := h.getFAR(t)
++	far.Namespace = "foreign"
++	far.ResourceVersion = ""
++	far.UID = "foreign-far"
++	if err := h.client.Create(context.Background(), far); err != nil {
++		t.Fatal(err)
++	}
++	node := h.node(t)
++	node.Spec.Taints = []corev1.Taint{utils.CreateOutOfServiceTaint()}
++	if err := h.client.Update(context.Background(), node); err != nil {
++		t.Fatal(err)
++	}
++	if err := h.client.Delete(context.Background(), far); err != nil {
++		t.Fatal(err)
++	}
++	if _, err := h.reconciler.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(far)}); err == nil {
++		t.Error("foreign namespace cleanup accepted")
++	}
++	if !hasOOS(h.node(t)) {
++		t.Fatal("foreign namespace removed selected Node taint")
++	}
++}
++
++func TestCleanupRejectsMutatedSnapshot(t *testing.T) {
++	h := newHarness(t, 1, nil)
++	enableSafety(t, h)
++	far := h.getFAR(t)
++	snapshot, err := farapi.NewSafetySnapshot(far, farapi.SafetyTarget{})
++	if err != nil {
++		t.Fatal(err)
++	}
++	far.Status.SafetySnapshot = &snapshot
++	if err := h.client.Status().Update(context.Background(), far); err != nil {
++		t.Fatal(err)
++	}
++	far = h.getFAR(t)
++	far.Spec.NodeParameters["--ip"]["worker-a"] = "other.example"
++	if err := h.client.Update(context.Background(), far); err != nil {
++		t.Fatal(err)
++	}
++	node := h.node(t)
++	node.Spec.Taints = []corev1.Taint{utils.CreateOutOfServiceTaint()}
++	if err := h.client.Update(context.Background(), node); err != nil {
++		t.Fatal(err)
++	}
++	if err := h.client.Delete(context.Background(), h.getFAR(t)); err != nil {
++		t.Fatal(err)
++	}
++	if _, err := h.reconciler.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(h.far)}); err == nil {
++		t.Error("cleanup accepted changed effective spec")
++	}
++	if !hasOOS(h.node(t)) {
++		t.Fatal("cleanup changed taints after spec mutation")
++	}
++}
++
++func TestCleanupCannotRemoveReplacementTaint(t *testing.T) {
++	h := newHarness(t, 1, nil)
++	enableSafety(t, h)
++	h.seedSuccess(t)
++	h.recreateNode(t)
++	node := h.node(t)
++	node.Spec.Taints = []corev1.Taint{utils.CreateOutOfServiceTaint()}
++	if err := h.client.Update(context.Background(), node); err != nil {
++		t.Fatal(err)
++	}
++	if err := h.client.Delete(context.Background(), h.getFAR(t)); err != nil {
++		t.Fatal(err)
++	}
++	h.reconcile(t)
++	if !hasOOS(h.node(t)) {
++		t.Error("cleanup removed replacement taint")
++	}
++}
+diff --git a/internal/safetycontract/shipping_test.go b/internal/safetycontract/shipping_test.go
+new file mode 100644
+index 000000000..4eeeea60a
+--- /dev/null
++++ b/internal/safetycontract/shipping_test.go
+@@ -0,0 +1,177 @@
++package safetycontract
++
++import (
++	"bytes"
++	"fmt"
++	"io"
++	"os"
++	"path/filepath"
++	"reflect"
++	"testing"
++
++	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
++	k8syaml "k8s.io/apimachinery/pkg/util/yaml"
++)
++
++func readYAMLObjects(t *testing.T, path string) []map[string]any {
++	t.Helper()
++	data, err := os.ReadFile(path)
++	if err != nil {
++		t.Fatal(err)
++	}
++	decoder := k8syaml.NewYAMLOrJSONDecoder(bytes.NewReader(data), 4096)
++	var objects []map[string]any
++	for {
++		var object map[string]any
++		if err := decoder.Decode(&object); err == io.EOF {
++			break
++		} else if err != nil {
++			t.Fatal(err)
++		}
++		if len(object) > 0 {
++			objects = append(objects, object)
++		}
++	}
++	return objects
++}
++
++func checkCRDCopy(source, bundled map[string]any, template bool) error {
++	normalized := (&unstructured.Unstructured{Object: bundled}).DeepCopy().Object
++	if stamp, found, err := unstructured.NestedFieldNoCopy(normalized, "metadata", "creationTimestamp"); err != nil || (found && stamp != nil) {
++		return fmt.Errorf("unexpected bundled creation timestamp")
++	}
++	unstructured.RemoveNestedField(normalized, "metadata", "creationTimestamp")
++	if labels, found, err := unstructured.NestedStringMap(normalized, "metadata", "labels"); err != nil || (found && !reflect.DeepEqual(labels, map[string]string{"app.kubernetes.io/name": "fence-agents-remediation-operator"})) {
++		return fmt.Errorf("unexpected bundled CRD labels")
++	}
++	unstructured.RemoveNestedField(normalized, "metadata", "labels")
++	if status, found := normalized["status"]; found {
++		if !reflect.DeepEqual(status, map[string]any{"acceptedNames": map[string]any{"kind": "", "plural": ""}, "conditions": nil, "storedVersions": nil}) {
++			return fmt.Errorf("unexpected bundled CRD status")
++		}
++		delete(normalized, "status")
++	}
++	if !reflect.DeepEqual(source, normalized) {
++		return fmt.Errorf("bundled CRD differs from generated runtime schema")
++	}
++	versions, found, err := unstructured.NestedSlice(source, "spec", "versions")
++	if err != nil || !found {
++		return fmt.Errorf("CRD versions missing")
++	}
++	for _, value := range versions {
++		version, ok := value.(map[string]any)
++		if !ok || version["name"] != "v1alpha1" {
++			continue
++		}
++		path := []string{"schema", "openAPIV3Schema", "properties", "spec", "properties"}
++		if template {
++			path = append(path, "template", "properties", "spec", "properties")
++		}
++		path = append(path, "nodeBinding")
++		binding, found, err := unstructured.NestedMap(version, path...)
++		if err != nil || !found || binding["type"] != "object" {
++			return fmt.Errorf("typed Node binding schema missing")
++		}
++		for _, field := range []string{"version", "name", "uid", "systemUUID"} {
++			if _, found, err := unstructured.NestedMap(binding, "properties", field); err != nil || !found {
++				return fmt.Errorf("Node binding property missing")
++			}
++		}
++		return nil
++	}
++	return fmt.Errorf("v1alpha1 CRD schema missing")
++}
++
++func checkNodeDeletionRules(rules []any) error {
++	contains := func(values any, want string) bool {
++		items, ok := values.([]any)
++		if !ok {
++			return false
++		}
++		for _, item := range items {
++			if item == want || item == "*" {
++				return true
++			}
++		}
++		return false
++	}
++	for _, value := range rules {
++		rule, ok := value.(map[string]any)
++		if !ok {
++			return fmt.Errorf("invalid RBAC rule")
++		}
++		if contains(rule["apiGroups"], "") && contains(rule["resources"], "nodes") && (contains(rule["verbs"], "delete") || contains(rule["verbs"], "deletecollection")) {
++			return fmt.Errorf("shipping grant permits Node deletion")
++		}
++	}
++	return nil
++}
++
++func TestShippingSchemasAndNodePermissions(t *testing.T) {
++	root := filepath.Join("..", "..")
++	for _, template := range []bool{false, true} {
++		plural := "fenceagentsremediations"
++		if template {
++			plural = "fenceagentsremediationtemplates"
++		}
++		name := "fence-agents-remediation.medik8s.io_" + plural + ".yaml"
++		source := readYAMLObjects(t, filepath.Join(root, "config", "crd", "bases", name))[0]
++		bundled := readYAMLObjects(t, filepath.Join(root, "bundle", "manifests", name))[0]
++		if err := checkCRDCopy(source, bundled, template); err != nil {
++			t.Errorf("%s: %v", name, err)
++		}
++		mutated := (&unstructured.Unstructured{Object: bundled}).DeepCopy().Object
++		if err := unstructured.SetNestedField(mutated, "Cluster", "spec", "scope"); err != nil {
++			t.Fatal(err)
++		}
++		if err := checkCRDCopy(source, mutated, template); err == nil {
++			t.Fatal("CRD parity check missed fixed-input mutation")
++		}
++	}
++	var paths []string
++	for _, pattern := range []string{filepath.Join(root, "config", "rbac", "*.yaml"), filepath.Join(root, "config", "rbac", "safety", "*.yaml"), filepath.Join(root, "bundle", "manifests", "*.clusterserviceversion.yaml"), filepath.Join(root, "config", "manifests", "bases", "*.clusterserviceversion.yaml")} {
++		matches, err := filepath.Glob(pattern)
++		if err != nil {
++			t.Fatal(err)
++		}
++		if len(matches) == 0 {
++			t.Fatalf("no shipping RBAC/CSV objects matched %s", pattern)
++		}
++		paths = append(paths, matches...)
++	}
++	for _, path := range paths {
++		for _, object := range readYAMLObjects(t, path) {
++			if rules, found, err := unstructured.NestedSlice(object, "rules"); err != nil {
++				t.Fatal(err)
++			} else if found {
++				if err := checkNodeDeletionRules(rules); err != nil {
++					t.Errorf("%s: %v", path, err)
++				}
++			}
++			for _, grant := range []string{"clusterPermissions", "permissions"} {
++				permissions, _, err := unstructured.NestedSlice(object, "spec", "install", "spec", grant)
++				if err != nil {
++					t.Fatal(err)
++				}
++				for _, value := range permissions {
++					permission, ok := value.(map[string]any)
++					if !ok {
++						t.Fatal("invalid CSV permission")
++					}
++					rules, _, err := unstructured.NestedSlice(permission, "rules")
++					if err != nil {
++						t.Fatal(err)
++					}
++					if err := checkNodeDeletionRules(rules); err != nil {
++						t.Errorf("%s: %v", path, err)
++					}
++				}
++			}
++		}
++	}
++	for _, verb := range []string{"delete", "deletecollection", "*"} {
++		if err := checkNodeDeletionRules([]any{map[string]any{"apiGroups": []any{""}, "resources": []any{"nodes"}, "verbs": []any{verb}}}); err == nil {
++			t.Fatal("RBAC guard missed fixed-input deletion mutation")
++		}
++	}
++}
+diff --git a/internal/safetycontract/template_test.go b/internal/safetycontract/template_test.go
+new file mode 100644
+index 000000000..bfe68159e
+--- /dev/null
++++ b/internal/safetycontract/template_test.go
+@@ -0,0 +1,49 @@
++package safetycontract
++
++import (
++	"context"
++	"sync/atomic"
++	"testing"
++
++	"github.com/go-logr/logr"
++
++	corev1 "k8s.io/api/core/v1"
++	"k8s.io/apimachinery/pkg/runtime"
++	"k8s.io/apimachinery/pkg/util/intstr"
++	"k8s.io/client-go/tools/record"
++	ctrl "sigs.k8s.io/controller-runtime"
++	"sigs.k8s.io/controller-runtime/pkg/client"
++	"sigs.k8s.io/controller-runtime/pkg/client/fake"
++
++	farapi "github.com/medik8s/fence-agents-remediation/v5/api/v1alpha1"
++	"github.com/medik8s/fence-agents-remediation/v5/internal/controller"
++	"github.com/medik8s/fence-agents-remediation/v5/pkg/cli"
++)
++
++func TestSafetyTemplateNeverExecutes(t *testing.T) {
++	far, config, secret := safetyFixture(t)
++	tmpl := &farapi.FenceAgentsRemediationTemplate{ObjectMeta: far.ObjectMeta}
++	tmpl.Spec.Template.Spec = far.Spec
++	tmpl.Spec.Template.Spec.NodeBinding = nil
++	tmpl.Spec.Template.Spec.NodeParameters = map[farapi.ParameterName]map[farapi.NodeName]string{"--ip": {"worker-a": "bmc.example"}}
++	sample := intstr.FromInt32(1)
++	tmpl.Spec.StatusValidationSample = &sample
++	scheme := runtime.NewScheme()
++	if err := farapi.AddToScheme(scheme); err != nil {
++		t.Fatal(err)
++	}
++	if err := corev1.AddToScheme(scheme); err != nil {
++		t.Fatal(err)
++	}
++	c := fake.NewClientBuilder().WithScheme(scheme).WithStatusSubresource(tmpl).WithObjects(tmpl, secret).Build()
++	var calls atomic.Int32
++	recorder := record.NewFakeRecorder(10)
++	executor := cli.NewFakeExecuter(c, func(context.Context, []string) (string, string, error) { calls.Add(1); return "ON", "", nil }, recorder)
++	r := &controller.FenceAgentsRemediationTemplateReconciler{Client: c, Log: logr.Discard(), Executor: executor, Recorder: recorder, Safety: config}
++	if _, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(tmpl)}); err == nil {
++		t.Error("unsafe template sampling accepted")
++	}
++	if calls.Load() != 0 {
++		t.Fatal("safety template executed generic agent")
++	}
++}
+diff --git a/internal/webhook/v1alpha1/fenceagentsremediation_webhook.go b/internal/webhook/v1alpha1/fenceagentsremediation_webhook.go
+index b4f3c1308..7fda50d02 100644
+--- a/internal/webhook/v1alpha1/fenceagentsremediation_webhook.go
++++ b/internal/webhook/v1alpha1/fenceagentsremediation_webhook.go
+@@ -32,12 +32,19 @@ var (
+ 	webhookFARLog = logf.Log.WithName("fenceagentsremediation-resource")
+ )
+ 
+-func SetupFARWebhookWithManager(mgr ctrl.Manager) error {
++func SetupFARWebhookWithManager(mgr ctrl.Manager, configs ...remediationv1alpha1.SafetyConfig) error {
++	var safety remediationv1alpha1.SafetyConfig
++	if len(configs) > 0 {
++		safety = configs[0]
++	}
+ 	return ctrl.NewWebhookManagedBy(mgr, &remediationv1alpha1.FenceAgentsRemediation{}).
+ 		WithValidator(&remediationv1alpha1.FARValidator{
+-			Client: mgr.GetClient(),
++			APIReader: mgr.GetAPIReader(),
++			Safety:    safety,
++			Client:    mgr.GetClient(),
+ 		}).
+ 		WithDefaulter(&farDefaulter{
++			Safety: safety.Enabled,
+ 			Client: mgr.GetClient(),
+ 		}).
+ 		Complete()
+@@ -48,11 +55,15 @@ func SetupFARWebhookWithManager(mgr ctrl.Manager) error {
+ 
+ type farDefaulter struct {
+ 	client.Client
++	Safety bool
+ }
+ 
+ var _ admission.Defaulter[*remediationv1alpha1.FenceAgentsRemediation] = &farDefaulter{}
+ 
+ func (d *farDefaulter) Default(ctx context.Context, far *remediationv1alpha1.FenceAgentsRemediation) error {
++	if d.Safety || far.Spec.SafetyPolicy != "" || far.Spec.NodeBinding != nil {
++		return nil
++	}
+ 	webhookFARLog.Info("default", "name", far.Name)
+ 	isCreate := far.CreationTimestamp.IsZero()
+ 	return applySharedSecretDefaultNameToSpec(ctx, d.Client, &far.Spec, far.Namespace, isCreate)
+diff --git a/internal/webhook/v1alpha1/fenceagentsremediationtemplate_webhook.go b/internal/webhook/v1alpha1/fenceagentsremediationtemplate_webhook.go
+index 6f9667b71..8cfb670cf 100644
+--- a/internal/webhook/v1alpha1/fenceagentsremediationtemplate_webhook.go
++++ b/internal/webhook/v1alpha1/fenceagentsremediationtemplate_webhook.go
+@@ -38,12 +38,19 @@ var (
+ 	webhookFARTemplateLog = logf.Log.WithName("fenceagentsremediationtemplate-resource")
+ )
+ 
+-func SetupFARTemplateWebhookWithManager(mgr ctrl.Manager) error {
++func SetupFARTemplateWebhookWithManager(mgr ctrl.Manager, configs ...remediationv1alpha1.SafetyConfig) error {
++	var safety remediationv1alpha1.SafetyConfig
++	if len(configs) > 0 {
++		safety = configs[0]
++	}
+ 	return ctrl.NewWebhookManagedBy(mgr, &remediationv1alpha1.FenceAgentsRemediationTemplate{}).
+ 		WithValidator(&remediationv1alpha1.FARTemplateValidator{
+-			Client: mgr.GetClient(),
++			APIReader: mgr.GetAPIReader(),
++			Safety:    safety,
++			Client:    mgr.GetClient(),
+ 		}).
+ 		WithDefaulter(&farTemplateDefaulter{
++			Safety: safety.Enabled,
+ 			Client: mgr.GetClient(),
+ 		}).
+ 		Complete()
+@@ -54,6 +61,7 @@ func SetupFARTemplateWebhookWithManager(mgr ctrl.Manager) error {
+ 
+ type farTemplateDefaulter struct {
+ 	client.Client
++	Safety bool
+ }
+ 
+ var _ admission.Defaulter[*remediationv1alpha1.FenceAgentsRemediationTemplate] = &farTemplateDefaulter{}
+@@ -66,6 +74,9 @@ func (d *farTemplateDefaulter) Default(ctx context.Context, farTemplate *remedia
+ 	if _, isSameKindAnnotationSet := farTemplate.GetAnnotations()[commonAnnotations.MultipleTemplatesSupportedAnnotation]; !isSameKindAnnotationSet {
+ 		farTemplate.Annotations[commonAnnotations.MultipleTemplatesSupportedAnnotation] = "true"
+ 	}
++	if d.Safety || farTemplate.Spec.Template.Spec.SafetyPolicy != "" || farTemplate.Spec.Template.Spec.NodeBinding != nil {
++		return nil
++	}
+ 	isCreate := farTemplate.CreationTimestamp.IsZero()
+ 	if err := applySharedSecretDefaultNameToSpec(ctx, d.Client, &farTemplate.Spec.Template.Spec, farTemplate.Namespace, isCreate); err != nil {
+ 		return err
+diff --git a/pkg/redfish/redfish.go b/pkg/redfish/redfish.go
+new file mode 100644
+index 000000000..da84ba38b
+--- /dev/null
++++ b/pkg/redfish/redfish.go
+@@ -0,0 +1,275 @@
++package redfish
++
++import (
++	"bytes"
++	"context"
++	"crypto/tls"
++	"crypto/x509"
++	"encoding/json"
++	"fmt"
++	"io"
++	"net/http"
++	"net/url"
++	"regexp"
++	"strings"
++	"time"
++	"unicode"
++)
++
++var uuidPattern = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
++var systemPathPattern = regexp.MustCompile(`^/redfish/v1/Systems/[A-Za-z0-9_~-][A-Za-z0-9._~-]*$`)
++
++// Config fixes the authenticated system endpoint for one bounded verification.
++type Config struct {
++	Endpoint     string
++	SystemURI    string
++	SystemUUID   string
++	CA           []byte
++	Username     string
++	Password     string
++	Timeout      time.Duration
++	PollInterval time.Duration
++}
++
++// ValidSystemUUID rejects absent and uninitialized SMBIOS identifiers.
++func ValidSystemUUID(uuid string) bool {
++	return uuidPattern.MatchString(uuid) && uuid != "00000000-0000-0000-0000-000000000000" && strings.ToLower(uuid) != "ffffffff-ffff-ffff-ffff-ffffffffffff"
++}
++
++// ValidateTarget requires an explicit ComputerSystem, not collection discovery.
++func ValidateTarget(endpoint, systemURI string) error {
++	u, err := url.Parse(endpoint)
++	if err != nil || u.Scheme != "https" || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || u.Opaque != "" || (u.Path != "" && u.Path != "/") || u.RawPath != "" {
++		return fmt.Errorf("invalid HTTPS Redfish endpoint")
++	}
++	if !systemPathPattern.MatchString(systemURI) {
++		return fmt.Errorf("explicit ComputerSystem URI required")
++	}
++	return nil
++}
++
++type computerSystem struct {
++	UUID       string `json:"UUID"`
++	PowerState string `json:"PowerState"`
++	Actions    map[string]struct {
++		Target string `json:"target"`
++	} `json:"Actions"`
++}
++
++// VerifyOff reports only same-system Off; force permits a guarded ForceOff action.
++func VerifyOff(ctx context.Context, cfg Config, force bool, beforeAction func(context.Context) error) error {
++	if err := ValidateTarget(cfg.Endpoint, cfg.SystemURI); err != nil {
++		return err
++	}
++	if !ValidSystemUUID(cfg.SystemUUID) || cfg.Timeout <= 0 || cfg.Timeout > time.Minute {
++		return fmt.Errorf("invalid Redfish identity or timeout")
++	}
++	ctx, cancel := context.WithTimeout(ctx, cfg.Timeout)
++	defer cancel()
++	var roots *x509.CertPool
++	if len(cfg.CA) > 0 {
++		roots = x509.NewCertPool()
++		if !roots.AppendCertsFromPEM(cfg.CA) {
++			return fmt.Errorf("invalid Redfish CA")
++		}
++	}
++	transport := &http.Transport{TLSClientConfig: &tls.Config{RootCAs: roots, MinVersion: tls.VersionTLS12}, Proxy: nil}
++	defer transport.CloseIdleConnections()
++	client := &http.Client{Transport: transport, Timeout: cfg.Timeout, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
++	endpoint := strings.TrimSuffix(cfg.Endpoint, "/")
++	read := func() (*computerSystem, error) {
++		body, err := request(ctx, client, cfg, http.MethodGet, endpoint+cfg.SystemURI, nil)
++		if err != nil {
++			return nil, err
++		}
++		if err := uniqueJSON(body); err != nil {
++			return nil, fmt.Errorf("ambiguous Redfish response")
++		}
++		var fields map[string]json.RawMessage
++		if err := json.Unmarshal(body, &fields); err != nil || fields["UUID"] == nil || fields["PowerState"] == nil {
++			return nil, fmt.Errorf("canonical redfish identity and power fields required")
++		}
++		var uuid, power string
++		if err := json.Unmarshal(fields["UUID"], &uuid); err != nil {
++			return nil, fmt.Errorf("malformed Redfish system UUID")
++		}
++		if err := json.Unmarshal(fields["PowerState"], &power); err != nil {
++			return nil, fmt.Errorf("malformed Redfish power state")
++		}
++		var actions map[string]struct {
++			Target string `json:"target"`
++		}
++		if fields["Actions"] != nil {
++			if err := json.Unmarshal(fields["Actions"], &actions); err != nil {
++				return nil, fmt.Errorf("malformed Redfish actions")
++			}
++		}
++		system := &computerSystem{UUID: uuid, PowerState: power, Actions: actions}
++		if !ValidSystemUUID(system.UUID) || !strings.EqualFold(system.UUID, cfg.SystemUUID) {
++			return nil, fmt.Errorf("redfish system UUID mismatch")
++		}
++		if system.PowerState != "On" && system.PowerState != "Off" {
++			return nil, fmt.Errorf("unknown Redfish power state")
++		}
++		return system, nil
++	}
++	system, err := read()
++	if err != nil {
++		return err
++	}
++	if system.PowerState == "Off" {
++		return nil
++	}
++	if !force {
++		return fmt.Errorf("redfish system is not Off")
++	}
++	action, found := system.Actions["#ComputerSystem.Reset"]
++	if !found {
++		return fmt.Errorf("redfish reset action missing")
++	}
++	allowedAction := cfg.SystemURI + "/Actions/ComputerSystem.Reset"
++	if action.Target != allowedAction && action.Target != endpoint+allowedAction {
++		return fmt.Errorf("redfish reset target differs from bound system")
++	}
++	if beforeAction == nil {
++		return fmt.Errorf("redfish pre-action validation missing")
++	}
++	system, err = read()
++	if err != nil {
++		return err
++	}
++	if system.PowerState == "Off" {
++		return nil
++	}
++	if current, ok := system.Actions["#ComputerSystem.Reset"]; !ok || current.Target != action.Target {
++		return fmt.Errorf("redfish reset target changed")
++	}
++	if err := beforeAction(ctx); err != nil {
++		return err
++	}
++	if _, err := request(ctx, client, cfg, http.MethodPost, endpoint+allowedAction, []byte(`{"ResetType":"ForceOff"}`)); err != nil {
++		return err
++	}
++	interval := cfg.PollInterval
++	if interval <= 0 {
++		interval = 200 * time.Millisecond
++	}
++	for {
++		system, err = read()
++		if err != nil {
++			return err
++		}
++		if system.PowerState == "Off" {
++			return nil
++		}
++		timer := time.NewTimer(interval)
++		select {
++		case <-ctx.Done():
++			timer.Stop()
++			return fmt.Errorf("redfish Off confirmation timed out: %w", ctx.Err())
++		case <-timer.C:
++		}
++	}
++}
++
++func request(ctx context.Context, client *http.Client, cfg Config, method, target string, body []byte) (data []byte, requestErr error) {
++	req, err := http.NewRequestWithContext(ctx, method, target, bytes.NewReader(body))
++	if err != nil {
++		return nil, fmt.Errorf("construct Redfish request")
++	}
++	req.SetBasicAuth(cfg.Username, cfg.Password)
++	req.Header.Set("Accept", "application/json")
++	if body != nil {
++		req.Header.Set("Content-Type", "application/json")
++	}
++	resp, err := client.Do(req)
++	if err != nil {
++		return nil, fmt.Errorf("authenticated Redfish request failed")
++	}
++	defer func() {
++		if err := resp.Body.Close(); err != nil && requestErr == nil {
++			requestErr = fmt.Errorf("close redfish response: %w", err)
++		}
++	}()
++	if method == http.MethodGet && resp.StatusCode != http.StatusOK {
++		return nil, fmt.Errorf("redfish GET rejected: HTTP %d", resp.StatusCode)
++	}
++	if method == http.MethodPost {
++		if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusAccepted && resp.StatusCode != http.StatusNoContent {
++			return nil, fmt.Errorf("redfish reset rejected: HTTP %d", resp.StatusCode)
++		}
++		return nil, nil
++	}
++	data, err = io.ReadAll(io.LimitReader(resp.Body, (1<<20)+1))
++	if err != nil || len(data) > 1<<20 {
++		return nil, fmt.Errorf("invalid Redfish response size")
++	}
++	return data, nil
++}
++
++func foldJSONName(name string) string {
++	var folded strings.Builder
++	folded.Grow(len(name))
++	for _, r := range name {
++		for {
++			next := unicode.SimpleFold(r)
++			if next <= r {
++				folded.WriteRune(next)
++				break
++			}
++			r = next
++		}
++	}
++	return folded.String()
++}
++
++func uniqueJSON(data []byte) error {
++	decoder := json.NewDecoder(bytes.NewReader(data))
++	var visit func(int) error
++	visit = func(depth int) error {
++		if depth > 32 {
++			return fmt.Errorf("JSON nesting limit")
++		}
++		token, err := decoder.Token()
++		if err != nil {
++			return err
++		}
++		switch token {
++		case json.Delim('{'):
++			seen := map[string]bool{}
++			for decoder.More() {
++				key, err := decoder.Token()
++				if err != nil {
++					return err
++				}
++				name, ok := key.(string)
++				name = strings.ToLower(foldJSONName(name))
++				if !ok || seen[name] {
++					return fmt.Errorf("duplicate JSON key")
++				}
++				seen[name] = true
++				if err := visit(depth + 1); err != nil {
++					return err
++				}
++			}
++			_, err = decoder.Token()
++			return err
++		case json.Delim('['):
++			for decoder.More() {
++				if err := visit(depth + 1); err != nil {
++					return err
++				}
++			}
++			_, err = decoder.Token()
++			return err
++		}
++		return nil
++	}
++	if err := visit(0); err != nil {
++		return err
++	}
++	if _, err := decoder.Token(); err != io.EOF {
++		return fmt.Errorf("trailing JSON")
++	}
++	return nil
++}
+diff --git a/pkg/redfish/redfish_test.go b/pkg/redfish/redfish_test.go
+new file mode 100644
+index 000000000..4c69d7ef1
+--- /dev/null
++++ b/pkg/redfish/redfish_test.go
+@@ -0,0 +1,197 @@
++package redfish
++
++import (
++	"context"
++	"encoding/json"
++	"encoding/pem"
++	"errors"
++	"net/http"
++	"net/http/httptest"
++	"strings"
++	"sync/atomic"
++	"testing"
++	"time"
++)
++
++const testUUID = "00112233-4455-4677-8899-aabbccddeeff"
++const testURI = "/redfish/v1/Systems/1"
++
++func TestVerifyOff(t *testing.T) {
++	for _, tc := range []struct {
++		readOnly                                                                             bool
++		noReset                                                                              bool
++		name, uuid, power, target, raw, wantErrText                                          string
++		status                                                                               int
++		acceptedOn, alreadyOff, redirect, untrusted, deny, timeout, changedUUID, blockAction bool
++		wantErr                                                                              bool
++	}{
++		{name: "off after accepted reset", uuid: testUUID, power: "On"},
++		{name: "already off", uuid: testUUID, power: "Off", alreadyOff: true},
++		{name: "wrong UUID", uuid: "aabbccdd-eeff-4011-8233-445566778899", power: "On", wantErr: true},
++		{name: "missing UUID", power: "Off", wantErr: true},
++		{name: "zero UUID", uuid: "00000000-0000-0000-0000-000000000000", power: "Off", wantErr: true},
++		{name: "ones UUID", uuid: "ffffffff-ffff-ffff-ffff-ffffffffffff", power: "Off", wantErr: true},
++		{name: "malformed UUID", uuid: "bad", power: "Off", wantErr: true},
++		{name: "ambiguous UUID", raw: `{"UUID":"00112233-4455-4677-8899-aabbccddeeff","UUID":"00112233-4455-4677-8899-aabbccddeeff","PowerState":"Off"}`, wantErr: true},
++		{name: "case-aliased UUID", raw: `{"UUID":"aabbccdd-eeff-4011-8233-445566778899","uuid":"00112233-4455-4677-8899-aabbccddeeff","PowerState":"Off"}`, wantErr: true},
++		{name: "missing canonical UUID key", raw: `{"uuid":"00112233-4455-4677-8899-aabbccddeeff","PowerState":"Off"}`, wantErr: true},
++		{name: "case-aliased power", raw: `{"UUID":"00112233-4455-4677-8899-aabbccddeeff","PowerState":"On","powerstate":"Off"}`, wantErr: true},
++		{name: "Unicode-aliased power read-only", raw: `{"UUID":"00112233-4455-4677-8899-aabbccddeeff","PowerState":"On","Powerſtate":"Off"}`, readOnly: true, wantErr: true, wantErrText: "ambiguous Redfish response"},
++		{name: "Unicode-aliased power action", raw: `{"UUID":"00112233-4455-4677-8899-aabbccddeeff","PowerState":"On","Powerſtate":"Off","Actions":{"#ComputerSystem.Reset":{"target":"/redfish/v1/Systems/1/Actions/ComputerSystem.Reset"}}}`, wantErr: true, wantErrText: "ambiguous Redfish response", noReset: true},
++		{name: "Unicode-aliased Off read-only", raw: `{"UUID":"00112233-4455-4677-8899-aabbccddeeff","PowerState":"Off","Powerſtate":"On"}`, readOnly: true, wantErr: true, wantErrText: "ambiguous Redfish response"},
++		{name: "malformed response", raw: `{`, wantErr: true},
++		{name: "unknown power", uuid: testUUID, power: "PoweringOff", wantErr: true},
++		{name: "accepted still on", uuid: testUUID, power: "On", acceptedOn: true, wantErr: true},
++		{name: "cross system action", uuid: testUUID, power: "On", target: "/redfish/v1/Systems/2/Actions/ComputerSystem.Reset", wantErr: true},
++		{name: "cross origin action", uuid: testUUID, power: "On", target: "https://other.example/redfish/v1/Systems/1/Actions/ComputerSystem.Reset", wantErr: true},
++		{name: "redirect", redirect: true, wantErr: true},
++		{name: "untrusted TLS", untrusted: true, wantErr: true},
++		{name: "unauthorized", deny: true, wantErr: true},
++		{name: "server error", status: http.StatusServiceUnavailable, wantErr: true},
++		{name: "timeout", timeout: true, wantErr: true},
++		{name: "UUID changed after reset", uuid: testUUID, power: "On", changedUUID: true, wantErr: true},
++		{name: "target changed before reset", uuid: testUUID, power: "On", blockAction: true, wantErr: true},
++	} {
++		t.Run(tc.name, func(t *testing.T) {
++			var resets, redirected atomic.Int32
++			server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++				if r.URL.Path == "/elsewhere" {
++					redirected.Add(1)
++					w.WriteHeader(http.StatusOK)
++					return
++				}
++				if tc.timeout {
++					<-r.Context().Done()
++					return
++				}
++				if tc.redirect {
++					http.Redirect(w, r, "/elsewhere", http.StatusFound)
++					return
++				}
++				user, password, ok := r.BasicAuth()
++				if tc.deny || !ok || user != "user" || password != "password" {
++					w.WriteHeader(http.StatusUnauthorized)
++					return
++				}
++				if tc.status != 0 {
++					w.WriteHeader(tc.status)
++					return
++				}
++				if r.Method == http.MethodPost {
++					if r.URL.Path != testURI+"/Actions/ComputerSystem.Reset" {
++						t.Error("wrong action URI")
++					}
++					var action struct{ ResetType string }
++					if err := json.NewDecoder(r.Body).Decode(&action); err != nil || action.ResetType != "ForceOff" {
++						t.Error("wrong reset action")
++					}
++					resets.Add(1)
++					w.WriteHeader(http.StatusAccepted)
++					return
++				}
++				if r.URL.Path != testURI {
++					t.Error("wrong system URI")
++				}
++				if tc.raw != "" {
++					_, _ = w.Write([]byte(tc.raw))
++					return
++				}
++				uuid, power := tc.uuid, tc.power
++				if resets.Load() > 0 {
++					if !tc.acceptedOn {
++						power = "Off"
++					}
++					if tc.changedUUID {
++						uuid = "aabbccdd-eeff-4011-8233-445566778899"
++					}
++				}
++				target := tc.target
++				if target == "" {
++					target = testURI + "/Actions/ComputerSystem.Reset"
++				}
++				_ = json.NewEncoder(w).Encode(map[string]any{"UUID": uuid, "PowerState": power, "Actions": map[string]any{"#ComputerSystem.Reset": map[string]string{"target": target}}})
++			}))
++			defer server.Close()
++			ca := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: server.Certificate().Raw})
++			if tc.untrusted {
++				ca = nil
++			}
++			cfg := Config{Endpoint: server.URL, SystemURI: testURI, SystemUUID: testUUID, CA: ca, Username: "user", Password: "password", Timeout: 150 * time.Millisecond, PollInterval: time.Millisecond}
++			force := !tc.readOnly
++			var precondition func(context.Context) error
++			if force {
++				precondition = func(context.Context) error {
++					if tc.blockAction {
++						return errors.New("changed target")
++					}
++					return nil
++				}
++			}
++			err := VerifyOff(context.Background(), cfg, force, precondition)
++			if (err != nil) != tc.wantErr {
++				t.Errorf("error = %v, wantErr %t", err, tc.wantErr)
++			}
++			if tc.wantErrText != "" && (err == nil || !strings.Contains(err.Error(), tc.wantErrText)) {
++				t.Errorf("error = %v, want text %q", err, tc.wantErrText)
++			}
++			if tc.noReset && resets.Load() != 0 {
++				t.Errorf("reset issued for ambiguous response: %d", resets.Load())
++			}
++			if tc.alreadyOff && resets.Load() != 0 {
++				t.Error("reset already-off system")
++			}
++			if tc.blockAction && resets.Load() != 0 {
++				t.Error("reset after failed precondition")
++			}
++			if redirected.Load() != 0 {
++				t.Error("followed redirect")
++			}
++		})
++	}
++}
++
++func TestUnavailableOrCanceled(t *testing.T) {
++	for _, canceled := range []bool{false, true} {
++		name := "unavailable"
++		if canceled {
++			name = "canceled"
++		}
++		t.Run(name, func(t *testing.T) {
++			var requests atomic.Int32
++			server := httptest.NewTLSServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { requests.Add(1) }))
++			cfg := Config{Endpoint: server.URL, SystemURI: testURI, SystemUUID: testUUID, CA: pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: server.Certificate().Raw}), Timeout: 100 * time.Millisecond}
++			ctx, cancel := context.WithCancel(context.Background())
++			defer cancel()
++			if canceled {
++				cancel()
++				defer server.Close()
++			} else {
++				server.Close()
++			}
++			if err := VerifyOff(ctx, cfg, true, func(context.Context) error { t.Error("action precondition after transport failure"); return nil }); err == nil {
++				t.Fatal("transport failure accepted")
++			}
++			if requests.Load() != 0 {
++				t.Fatal("transport failure sent BMC request")
++			}
++		})
++	}
++}
++
++func TestReleaseCheckNeverResets(t *testing.T) {
++	var resets atomic.Int32
++	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++		if r.Method != http.MethodGet {
++			resets.Add(1)
++		}
++		_ = json.NewEncoder(w).Encode(map[string]string{"UUID": testUUID, "PowerState": "On"})
++	}))
++	defer server.Close()
++	cfg := Config{Endpoint: server.URL, SystemURI: testURI, SystemUUID: testUUID, CA: pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: server.Certificate().Raw}), Timeout: time.Second}
++	if err := VerifyOff(context.Background(), cfg, false, nil); err == nil {
++		t.Fatal("release accepted On")
++	}
++	if resets.Load() != 0 {
++		t.Fatal("release check issued reset")
++	}
++}
+diff --git a/pkg/utils/taints.go b/pkg/utils/taints.go
+index ac9247f0a..b962dcf23 100644
+--- a/pkg/utils/taints.go
++++ b/pkg/utils/taints.go
+@@ -3,6 +3,7 @@ package utils
+ // Inspired from SNR - https://github.com/medik8s/self-node-remediation/blob/main/pkg/utils/taints.go
+ import (
+ 	"context"
++	"fmt"
+ 
+ 	corev1 "k8s.io/api/core/v1"
+ 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+@@ -89,6 +90,35 @@ func AppendTaint(r client.Client, nodeName string, taint corev1.Taint) (bool, er
+ 	return true, nil
+ }
+ 
++// UpdateBoundTaints uses the caller's verified Node and resourceVersion without name-based rebinding.
++func UpdateBoundTaints(ctx context.Context, writer client.Writer, node *corev1.Node, binding v1alpha1.NodeBinding, add, remove []corev1.Taint) error {
++	if err := binding.Matches(node); err != nil {
++		return err
++	}
++	if node.ResourceVersion == "" {
++		return fmt.Errorf("node resourceVersion required for conditional taint update")
++	}
++	changed := false
++	for _, taint := range remove {
++		var removed bool
++		node.Spec.Taints, removed = deleteTaint(node.Spec.Taints, &taint)
++		changed = changed || removed
++	}
++	for _, taint := range add {
++		if !TaintExists(node.Spec.Taints, &taint) {
++			node.Spec.Taints = append(node.Spec.Taints, taint)
++			changed = true
++		}
++	}
++	if !changed {
++		return nil
++	}
++	if err := writer.Update(ctx, node); err != nil {
++		return fmt.Errorf("update identity-bound Node taints: %w", err)
++	}
++	return nil
++}
++
+ // RemoveTaint removes taint from the taint list when it is existed, and returns error if it fails in the process
+ func RemoveTaint(r client.Client, nodeName string, taint corev1.Taint) error {
+ 	// find node by name
