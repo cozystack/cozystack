@@ -42,6 +42,6 @@ spec:
       resources: {{- include "cozy-lib.resources.defaultingSanitize" (list .Values.db.resourcesPreset .Values.db.resources $) | nindent 8 }}
       size: {{ .Values.db.size }}
       {{- with .Values.db.storageClass }}
-      storageClass: {{ . }}
+      storageClass: {{ . | quote }}
       {{- end }}
 {{- end }}

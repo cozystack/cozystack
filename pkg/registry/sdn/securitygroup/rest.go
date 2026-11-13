@@ -143,11 +143,10 @@ func sgFromSelector(sel metav1.LabelSelector) (string, bool) {
 // projectIngress turns the SecurityGroup ingress rules into Cilium ingress
 // rules: fromApp peers become lineage-label endpointSelectors, fromSG peers
 // become membership-label endpointSelectors, and fromCIDR/toPorts carry over.
-// It always returns a non-nil slice (empty when there are no rules): the backing
-// CiliumNetworkPolicy's ingress section must be present on the wire to satisfy
-// the CRD anyOf, and a non-nil empty slice serializes to an empty list rather
-// than null (which the CRD, having no nullable fields, would reject).
 func projectIngress(rules []sdnv1alpha1.IngressRule) []CiliumIngressRule {
+	if rules == nil {
+		return nil
+	}
 	out := make([]CiliumIngressRule, len(rules))
 	for i := range rules {
 		var eps []metav1.LabelSelector
@@ -195,9 +194,8 @@ func projectEgress(rules []sdnv1alpha1.EgressRule) []CiliumEgressRule {
 // the lineage-label nor the membership-label shape are ignored, so a
 // hand-edited backing policy degrades gracefully rather than erroring.
 func reconstructIngress(rules []CiliumIngressRule) []sdnv1alpha1.IngressRule {
-	// Collapse an empty list to nil so the always-present empty ingress section the
-	// projection emits for a rules-less group (to satisfy the CRD anyOf) is
-	// invisible in the SecurityGroup view, keeping the rules-less round-trip exact.
+	// Collapse an empty list to nil: policies written before membershipOnlySpec
+	// carried an always-present empty ingress section.
 	if len(rules) == 0 {
 		return nil
 	}
@@ -224,8 +222,8 @@ func reconstructIngress(rules []CiliumIngressRule) []sdnv1alpha1.IngressRule {
 
 // reconstructEgress is the egress counterpart of reconstructIngress.
 func reconstructEgress(rules []CiliumEgressRule) []sdnv1alpha1.EgressRule {
-	// Collapse an empty list to nil for the same reason as reconstructIngress, so a
-	// SecurityGroup that carries no egress rules round-trips with egress unset.
+	// Collapse an empty list to nil, so a SecurityGroup that carries no egress
+	// rules round-trips with egress unset.
 	if len(rules) == 0 {
 		return nil
 	}
@@ -409,8 +407,10 @@ func policyToSecurityGroup(np *CiliumNetworkPolicy) *sdnv1alpha1.SecurityGroup {
 			// Attachments live in a storage-owned annotation, not the
 			// endpointSelector (which is the SecurityGroup's own membership label).
 			Attachments: decodeAttachments(np.Annotations[attachmentsAnnotation]),
-			Ingress:     reconstructIngress(spec.Ingress),
-			Egress:      reconstructEgress(spec.Egress),
+		}
+		if !isMembershipOnlySpec(spec) {
+			sg.Spec.Ingress = reconstructIngress(spec.Ingress)
+			sg.Spec.Egress = reconstructEgress(spec.Egress)
 		}
 	}
 	return sg
@@ -485,6 +485,10 @@ func securityGroupToPolicy(sg *sdnv1alpha1.SecurityGroup, cur *CiliumNetworkPoli
 	// label onto the attached applications' pods. Rules project app/SG peers into
 	// endpoint selectors.
 	spec := sg.Spec.DeepCopy()
+	if len(spec.Ingress) == 0 && len(spec.Egress) == 0 {
+		out.Spec = membershipOnlySpec(sg.Name)
+		return &out
+	}
 	out.Spec = &CiliumNetworkPolicySpec{
 		EndpointSelector: buildEndpointSelector(sg.Name),
 		Ingress:          projectIngress(spec.Ingress),
@@ -495,6 +499,41 @@ func securityGroupToPolicy(sg *sdnv1alpha1.SecurityGroup, cur *CiliumNetworkPoli
 	// upper-case enum, so a raw "tcp" would be rejected on the backing write.
 	normalizePortProtocols(out.Spec)
 	return &out
+}
+
+// membershipOnlySpec is the backing spec of a SecurityGroup with no rules. The
+// policy must still exist, since it carries the attachments the
+// securitygroup-controller reconciles, but Cilium rejects a rule with no
+// ingress, ingressDeny, egress or egressDeny entry (api.Rule.Sanitize counts
+// entries, so an empty list is as good as absent) and marks the policy
+// Valid=False. One empty ingress rule satisfies that check and allows nothing,
+// and disabling default deny in both directions keeps that rule from putting
+// the member pods into default-deny, so the policy changes nothing in the
+// datapath. That relies on enable-non-default-deny-policies, which defaults to
+// true; with it off Cilium forces default deny on every policy.
+func membershipOnlySpec(name string) *CiliumNetworkPolicySpec {
+	off := false
+	return &CiliumNetworkPolicySpec{
+		EndpointSelector:  buildEndpointSelector(name),
+		Ingress:           []CiliumIngressRule{{}},
+		EnableDefaultDeny: &CiliumDefaultDeny{Ingress: &off, Egress: &off},
+	}
+}
+
+// isMembershipOnlySpec reports whether spec is what membershipOnlySpec writes,
+// so the reverse projection shows no rules for it. enableDefaultDeny tells it
+// apart from a SecurityGroup whose single ingress rule is genuinely empty,
+// which the projection writes without it, keeping ingress default deny.
+func isMembershipOnlySpec(spec *CiliumNetworkPolicySpec) bool {
+	d := spec.EnableDefaultDeny
+	if d == nil || d.Ingress == nil || *d.Ingress || d.Egress == nil || *d.Egress {
+		return false
+	}
+	if len(spec.Egress) != 0 || len(spec.Ingress) != 1 {
+		return false
+	}
+	in := spec.Ingress[0]
+	return len(in.FromEndpoints) == 0 && len(in.FromCIDR) == 0 && len(in.ToPorts) == 0
 }
 
 // normalizePortProtocols upper-cases every port protocol in place so the value
