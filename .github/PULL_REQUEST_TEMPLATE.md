@@ -5,7 +5,7 @@
     - System components: dashboard, platform, operator, cilium, kube-ovn, linstor, fluxcd, cluster-api
     - Managed apps: postgres, mariadb, redis, kafka, clickhouse, virtual-machine, kubernetes
     - Development and maintenance: api, hack, tests, ci, docs, maintenance
-  - Breaking changes: append `!` after type/scope (`feat(api)!: ...`) or add a `BREAKING CHANGE:` footer
+  - Breaking changes: append `!` after type/scope (`feat(api)!: ...`) or add a `BREAKING CHANGE:` footer, a `fix` included. What counts as breaking: https://github.com/cozystack/cozystack/blob/main/docs/agents/contributing.md#what-counts-as-breaking
 - If it's a work in progress, consider creating this PR as a draft.
 - Don't hesistate to ask for opinion and review in the community chats, even if it's still a draft.
 - Fixes merged to `main` reach the release lines the backport batch runs for automatically, so do not open backport PRs by hand: https://github.com/cozystack/cozystack/blob/main/docs/release/backports.md
