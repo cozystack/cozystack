@@ -1,0 +1,44 @@
+suite: tenant gateway HelmRelease waits for the TenantGateway generation, not its certificates
+
+# A TenantGateway reads Ready=False/ListenersNotReady while any listener's
+# certificate is pending, and kstatus reads that as InProgress, so under the
+# default wait every upgrade of this release times out and retries. The release
+# swaps kstatus for an always-Current expression on that kind. The wait itself
+# must stay on: Flux still holds it while status.observedGeneration lags, and
+# that is the only gate left between the gateway spec and its controller. The
+# list is pinned whole because a `failed` or `inProgress` expression that reads
+# status would wait again, at least until the controller's first status write.
+templates:
+  - templates/gateway.yaml
+
+release:
+  name: tenant-test
+  namespace: tenant-test
+
+tests:
+  - it: reads the TenantGateway through an expression under the poller wait
+    set:
+      gateway: true
+    asserts:
+      # Pins the document first: the notExists checks below pass on an empty render.
+      - equal:
+          path: metadata.name
+          value: gateway
+      - equal:
+          path: spec.waitStrategy.name
+          value: poller
+      - equal:
+          path: spec.healthCheckExprs
+          value:
+            - apiVersion: gateway.cozystack.io/v1alpha1
+              kind: TenantGateway
+              current: "true"
+      - notExists:
+          path: spec.install.disableWait
+      - notExists:
+          path: spec.upgrade.disableWait
+
+  - it: renders no gateway release when the tenant does not own one
+    asserts:
+      - hasDocuments:
+          count: 0

@@ -86,6 +86,9 @@ spec:
         - --leader-elect-retry-period={{ .retryPeriod }}
         {{- end }}
         {{- end }}
+        {{- with .Values.syncPeriod }}
+        - --sync-period={{ . }}
+        {{- end }}
         command:
         - /manager
         {{- with .Values.image.manager }}
