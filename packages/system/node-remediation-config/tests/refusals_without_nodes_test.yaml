@@ -1,0 +1,18 @@
+# This case needs the node map itself to be wrong. helm-unittest merges a
+# test's set into the suite values rather than replacing them, so it cannot
+# start from the shared fixture the other refusals use.
+suite: node-remediation-config refuses an unusable node map
+templates:
+  - templates/fenceagentsremediationtemplate.yaml
+release:
+  name: node-remediation-config
+  namespace: cozy-node-remediation
+tests:
+  - it: refuses an empty node map
+    set:
+      bmc:
+        credentialsSecretName: bmc-credentials
+        systemsUri: /redfish/v1/Systems/1
+    asserts:
+      - failedTemplate:
+          errorPattern: nodeRemediation.bmc.nodes must map every Node name
