@@ -1,0 +1,62 @@
+suite: ingress-nginx series do not carry an application identity
+templates:
+  - templates/nginx-scrape.yaml
+release:
+  name: ingress
+  namespace: tenant-root
+
+# The vmagent scrape class stamps the scraped pod's application identity on
+# every series. Most ingress-nginx series describe the Ingress objects it
+# serves, in whatever namespace they live (honorLabels keeps their
+# namespace), so the controller's identity would misattribute them, and with
+# honorLabels true an exporter-supplied identity would win over the class.
+# The controller's own health series lose that identity too, by design. Both
+# endpoints drop the identity instead: from the target, because vmagent
+# adds up and scrape_* with the target labels after metric relabeling, and
+# from the scraped samples, because an exporter's copy is not renamed.
+tests:
+  - it: drops the identity on every endpoint
+    asserts:
+      - lengthEqual:
+          path: spec.podMetricsEndpoints
+          count: 1
+      - equal:
+          path: spec.podMetricsEndpoints[0].metricRelabelConfigs
+          value:
+            - action: labeldrop
+              regex: apps_cozystack_io_application_(group|kind|name)
+
+  # Endpoint rules run after the scrape class rules, so the drop takes
+  # effect wherever it sits in this list; it is pinned last so that no
+  # later rule can set the identity again.
+  - it: drops the identity from the basic endpoint's target as its last rule
+    documentIndex: 0
+    asserts:
+      - equal:
+          path: spec.podMetricsEndpoints[0].relabelConfigs
+          value:
+            - replacement: nginx-ingress-controller
+              targetLabel: job
+            - sourceLabels: [__meta_kubernetes_pod_node_name]
+              targetLabel: node
+            - targetLabel: tier
+              replacement: cluster
+            - action: labeldrop
+              regex: apps_cozystack_io_application_(group|kind|name)
+
+  - it: drops the identity from the detailed endpoint's target as its last rule
+    documentIndex: 1
+    asserts:
+      - equal:
+          path: spec.podMetricsEndpoints[0].relabelConfigs
+          value:
+            - replacement: nginx-ingress-controller
+              targetLabel: job
+            - sourceLabels: [__meta_kubernetes_pod_node_name]
+              targetLabel: node
+            - sourceLabels: [__meta_kubernetes_pod_label_app_kubernetes_io_name]
+              targetLabel: controller
+            - targetLabel: tier
+              replacement: cluster
+            - action: labeldrop
+              regex: apps_cozystack_io_application_(group|kind|name)

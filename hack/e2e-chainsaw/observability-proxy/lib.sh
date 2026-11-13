@@ -25,7 +25,7 @@ forward() {
 ingest() {
   printf '{"kubernetes_namespace_name":"%s","log":"%s"}\n' "$1" "$2" |
     timeout 15 curl --silent --show-error --fail --data-binary @- \
-      --header "AccountID: ${3:-0}" --header "ProjectID: 0" \
+      --header 'Content-Type: application/json' --header "AccountID: ${3:-0}" --header "ProjectID: 0" \
       "$STORE/insert/jsonline?_stream_fields=kubernetes_namespace_name&_msg_field=log"
 }
 
