@@ -18,6 +18,6 @@ require (
 	github.com/lestrrat-go/option/v2 v2.0.0 // indirect
 	github.com/segmentio/asm v1.2.1 // indirect
 	github.com/valyala/fastjson v1.6.10 // indirect
-	golang.org/x/crypto v0.57.0 // indirect
-	golang.org/x/sys v0.48.0 // indirect
+	golang.org/x/crypto v0.59.0 // indirect
+	golang.org/x/sys v0.50.0 // indirect
 )
