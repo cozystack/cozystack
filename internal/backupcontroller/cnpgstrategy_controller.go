@@ -1785,16 +1785,21 @@ func (r *RestoreJobReconciler) reconcileCNPGRestore(ctx context.Context, restore
 		}
 		if !apiequality.Semantic.DeepEqual(sourceCredentials, rendered.BarmanObjectStore.S3Credentials) ||
 			!apiequality.Semantic.DeepEqual(sourceEndpointCA, rendered.BarmanObjectStore.EndpointCA) {
-			missing, err := r.cnpgArchiveAccessMissing(ctx, target.Namespace, sourceCredentials, sourceEndpointCA)
-			if err != nil {
-				return ctrl.Result{}, err
+			// The postgres chart renders a recovery only with a credentials
+			// Secret, so recorded access without one cannot restore.
+			missing := "it names no credentials Secret"
+			if sourceCredentials != nil && sourceCredentials.SecretRef.Name != "" {
+				missing, err = r.cnpgArchiveAccessMissing(ctx, target.Namespace, sourceCredentials, sourceEndpointCA)
+				if err != nil {
+					return ctrl.Result{}, err
+				}
 			}
 			// The recorded access cannot work without its Secrets. The
 			// strategy's is what a restore used before the record existed, and
 			// credentials wider than one bucket can still read the old one.
 			// Both settings fall back together: once part of what was
-			// recorded is gone, the strategy's pair is the one known to
-			// belong together.
+			// recorded is missing or unusable, the strategy's pair is the
+			// one known to belong together.
 			if missing != "" {
 				r.Recorder.Eventf(restoreJob, corev1.EventTypeWarning, "RecordedArchiveAccessUnavailable",
 					"the access Backup %s/%s was written with is unusable (%s); reaching its archive with the strategy's instead",

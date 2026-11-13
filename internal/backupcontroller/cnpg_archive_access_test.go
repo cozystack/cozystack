@@ -12,6 +12,9 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/client-go/dynamic"
 	dynamicfake "k8s.io/client-go/dynamic/fake"
 	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -102,10 +105,12 @@ func TestCNPGRestoreArchiveAccess_RecordedAccessWins(t *testing.T) {
 	}
 }
 
-// A backup written without credentials or a CA is restored without them,
-// not with the ones the strategy gained since: they belong to another
-// location.
-func TestCNPGRestoreArchiveAccess_RecordedAbsenceWins(t *testing.T) {
+// For a moved archive written without credentials or a CA the record says
+// so: the strategy's, which belong to another location, are not reported
+// as the recorded ones. What the restore uses instead is decided by
+// reconcileCNPGRestore, which takes a record without credentials as
+// unusable.
+func TestCNPGRestoreArchiveAccess_ReportsARecordedAbsence(t *testing.T) {
 	a := archiveStoreA()
 	a.S3Credentials = nil
 	a.EndpointCA = nil
@@ -260,6 +265,8 @@ func TestReconcileCNPGRestore_PatchesTheRecordedAccess(t *testing.T) {
 		rj     *backupsv1alpha1.RestoreJob
 		err    error
 		events []string
+		c      client.Client
+		dyn    dynamic.Interface
 	}
 	restore := func(t *testing.T, md map[string]string, getErr error, objs ...client.Object) outcome {
 		t.Helper()
@@ -301,7 +308,13 @@ func TestReconcileCNPGRestore_PatchesTheRecordedAccess(t *testing.T) {
 			})
 		}
 		recorder := record.NewFakeRecorder(10)
-		r := &RestoreJobReconciler{Client: cl, Interface: dynamicfake.NewSimpleDynamicClient(testCNPGScheme(t)), Recorder: recorder}
+		hr := &unstructured.Unstructured{}
+		hr.SetGroupVersionKind(schema.GroupVersionKind{Group: "helm.toolkit.fluxcd.io", Version: "v2", Kind: "HelmRelease"})
+		hr.SetNamespace(ns)
+		hr.SetName(postgresAppPrefix + appName)
+		_ = unstructured.SetNestedMap(hr.Object, map[string]any{}, "spec")
+		dyn := dynamicfake.NewSimpleDynamicClient(testCNPGScheme(t), hr)
+		r := &RestoreJobReconciler{Client: cl, Interface: dyn, Recorder: recorder}
 		live := &backupsv1alpha1.RestoreJob{}
 		if err := c.Get(ctx, client.ObjectKey{Namespace: ns, Name: "rj"}, live); err != nil {
 			t.Fatalf("get seeded RestoreJob: %v", err)
@@ -318,7 +331,7 @@ func TestReconcileCNPGRestore_PatchesTheRecordedAccess(t *testing.T) {
 		for len(recorder.Events) > 0 {
 			events = append(events, <-recorder.Events)
 		}
-		return outcome{app: app, rj: live, err: reconcileErr, events: events}
+		return outcome{app: app, rj: live, err: reconcileErr, events: events, c: c, dyn: dyn}
 	}
 	recordedCreds := postgresapp.S3CredentialsSecret{Name: "creds-a", AccessKeyIDKey: "id-a", SecretAccessKeyKey: "key-a"}
 	recordedCA := postgresapp.EndpointCA{Name: "ca-a", Key: "ca-a.crt"}
@@ -337,6 +350,33 @@ func TestReconcileCNPGRestore_PatchesTheRecordedAccess(t *testing.T) {
 		}
 		if o.app.Spec.Backup.EndpointCA != wantCA {
 			t.Errorf("endpointCA = %+v, want %+v", o.app.Spec.Backup.EndpointCA, wantCA)
+		}
+	}
+
+	clusterName := cnpgClusterNameForApp(appName)
+	liveTarget := func() []client.Object {
+		return []client.Object{
+			&cnpgtypes.Cluster{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: clusterName}},
+			&corev1.PersistentVolumeClaim{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: clusterName + "-1", Labels: map[string]string{cnpgClusterLabel: clusterName}}},
+		}
+	}
+	// A restore that stops on the access it would use must stop before it
+	// touches the target: the Cluster and its volumes stay, and the
+	// HelmRelease that renders them is not suspended.
+	untouched := func(t *testing.T, o outcome) {
+		t.Helper()
+		if err := o.c.Get(ctx, client.ObjectKey{Namespace: ns, Name: clusterName}, &cnpgtypes.Cluster{}); err != nil {
+			t.Errorf("target Cluster: %v, want it kept", err)
+		}
+		if err := o.c.Get(ctx, client.ObjectKey{Namespace: ns, Name: clusterName + "-1"}, &corev1.PersistentVolumeClaim{}); err != nil {
+			t.Errorf("target PVC: %v, want it kept", err)
+		}
+		hr, err := o.dyn.Resource(helmReleaseGVR).Namespace(ns).Get(ctx, postgresAppPrefix+appName, metav1.GetOptions{})
+		if err != nil {
+			t.Fatalf("get HelmRelease: %v", err)
+		}
+		if suspended, _, _ := unstructured.NestedBool(hr.Object, "spec", "suspend"); suspended {
+			t.Errorf("the target HelmRelease was suspended")
 		}
 	}
 
@@ -395,12 +435,27 @@ func TestReconcileCNPGRestore_PatchesTheRecordedAccess(t *testing.T) {
 		o := restore(t, artifactDriverMetadata(t, a), nil, secret("creds-a", "id-a", "key-a"))
 		patched(t, o, recordedCreds, postgresapp.EndpointCA{})
 	})
-	t.Run("an empty recorded Secret name is no credentials", func(t *testing.T) {
-		a := archiveStoreA()
-		a.S3Credentials.SecretRef.Name = ""
-		o := restore(t, artifactDriverMetadata(t, a), nil, secret("ca-a", "ca-a.crt"))
-		patched(t, o, postgresapp.S3CredentialsSecret{}, recordedCA)
-	})
+	// The postgres chart renders a recovery only with a credentials Secret,
+	// so a moved archive recorded without one is restored with the
+	// strategy's access rather than none.
+	for name, edit := range map[string]func(*strategyv1alpha1.BarmanObjectStoreTemplate){
+		"recorded without credentials":       func(s *strategyv1alpha1.BarmanObjectStoreTemplate) { s.S3Credentials = nil },
+		"recorded with an empty Secret name": func(s *strategyv1alpha1.BarmanObjectStoreTemplate) { s.S3Credentials.SecretRef.Name = "" },
+	} {
+		t.Run("a moved archive "+name+": the strategy's access is patched in", func(t *testing.T) {
+			a := archiveStoreA()
+			edit(&a)
+			o := restore(t, artifactDriverMetadata(t, a), nil, secret("ca-a", "ca-a.crt"))
+			patched(t, o, strategyCreds, strategyCA)
+			found := false
+			for _, ev := range o.events {
+				found = found || strings.Contains(ev, "RecordedArchiveAccessUnavailable")
+			}
+			if !found {
+				t.Errorf("events = %v, want one saying the recorded access was not used", o.events)
+			}
+		})
+	}
 
 	t.Run("recorded credentials alone are checked too", func(t *testing.T) {
 		a := archiveStoreA()
@@ -438,23 +493,25 @@ func TestReconcileCNPGRestore_PatchesTheRecordedAccess(t *testing.T) {
 	})
 
 	t.Run("a Secret read error is returned before the patch", func(t *testing.T) {
-		o := restore(t, artifactDriverMetadata(t, archiveStoreA()), apierrors.NewServiceUnavailable("apiserver unavailable"), recordedSecrets()...)
+		o := restore(t, artifactDriverMetadata(t, archiveStoreA()), apierrors.NewServiceUnavailable("apiserver unavailable"), append(recordedSecrets(), liveTarget()...)...)
 		if o.err == nil {
 			t.Errorf("reconcileCNPGRestore swallowed the Secret read error")
 		}
 		if o.app.Spec.Bootstrap.Enabled {
 			t.Errorf("the target app was patched although the recorded access could not be checked")
 		}
+		untouched(t, o)
 	})
 
 	t.Run("an unreadable record fails the restore before the purge", func(t *testing.T) {
-		o := restore(t, map[string]string{cnpgDestinationPathKey: "s3://bkt-a/tenant/pg/", cnpgArchiveAccessKey: "{"}, nil)
+		o := restore(t, map[string]string{cnpgDestinationPathKey: "s3://bkt-a/tenant/pg/", cnpgArchiveAccessKey: "{"}, nil, liveTarget()...)
 		if o.rj.Status.Phase != backupsv1alpha1.RestoreJobPhaseFailed {
 			t.Errorf("phase = %q, want Failed", o.rj.Status.Phase)
 		}
 		if o.app.Spec.Bootstrap.Enabled {
 			t.Errorf("the target app was patched for recovery from a record that could not be read")
 		}
+		untouched(t, o)
 	})
 }
 
