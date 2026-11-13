@@ -319,7 +319,7 @@ func BuildPostProcessV3(kindSchemas map[string]string) func(*spec3.OpenAPI) (*sp
 		base, ok1 := doc.Components.Schemas[baseRef]
 		list, ok2 := doc.Components.Schemas[baseListRef]
 		stat, ok3 := doc.Components.Schemas[baseStatusRef]
-		if !(ok1 && ok2 && ok3) {
+		if !ok1 || !ok2 || !ok3 {
 			return doc, nil // not the apps GV — nothing to patch
 		}
 
@@ -463,7 +463,7 @@ func BuildPostProcessV2(kindSchemas map[string]string) func(*spec.Swagger) (*spe
 		base, ok1 := defs[baseRef]
 		list, ok2 := defs[baseListRef]
 		stat, ok3 := defs[baseStatusRef]
-		if !(ok1 && ok2 && ok3) {
+		if !ok1 || !ok2 || !ok3 {
 			return sw, nil // not the apps GV — nothing to patch
 		}
 

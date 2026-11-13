@@ -2156,8 +2156,11 @@ func TestApplyClusterPluginBackup_PatchesExistingCluster(t *testing.T) {
 		sc.Resources.Requests.Cpu().MilliValue() != 100 {
 		t.Errorf("ObjectStore leaves Barman subject to undersized tenant resource defaults: %+v", sc.Resources)
 	}
-	if _, ok := sc.Resources.Limits[corev1.ResourceCPU]; ok {
-		t.Errorf("ObjectStore caps sidecar CPU, which throttles WAL archiving instead of failing it: %+v", sc.Resources.Limits)
+	// Without an explicit CPU limit the tenant LimitRange caps the sidecar at
+	// its 250m default, and every backup and WAL upload compresses on a
+	// quarter of a core.
+	if sc.Resources.Limits.Cpu().MilliValue() != 1000 {
+		t.Errorf("ObjectStore leaves the sidecar CPU limit to the tenant LimitRange default: %+v", sc.Resources.Limits)
 	}
 	// The ObjectStore must be owner-referenced to the Cluster so Kubernetes GC
 	// removes it when the Cluster is deleted (no orphan in the platform flow,
@@ -2830,7 +2833,7 @@ func TestReconcileCNPG_ObjectStoreApplyRecovers(t *testing.T) {
 	}
 
 	failing = false
-	j, _ = f.pass()
+	_, _ = f.pass()
 	f.settleDestination()
 	j, backups := f.pass()
 	if len(backups) != 1 {

@@ -30,8 +30,6 @@ import (
 // ---------------------------------------------------------------------------
 
 const (
-	mariadbFieldManager = "cozystack-mariadb-backup-driver"
-
 	// mariadb-operator's MariaDB ApplicationDefinition (release.prefix). The
 	// cozystack mariadb-rd renders the HelmRelease with releaseName =
 	// "mariadb-" + appName (see packages/system/mariadb-rd/cozyrds/mariadb.yaml,

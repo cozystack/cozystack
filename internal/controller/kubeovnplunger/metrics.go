@@ -219,7 +219,7 @@ func (r *KubeOVNPlunger) WriteClusterMetrics(db string, snaps []ovnstatus.Health
 	r.metrics.allAgree.WithLabelValues(db, cid).Set(b2f(ecv.AllAgree))
 	r.metrics.membersExpected.WithLabelValues(db, cid).Set(float64(expectedReplicas))
 	r.metrics.membersObserved.WithLabelValues(db, cid).Set(float64(ecv.MembersCount))
-	r.metrics.ipsExpected.WithLabelValues(db, cid).Set(float64(len(ecv.ConsensusResult.TruthView.Members))) // optional; or len(hints.ExpectedIPs)
+	r.metrics.ipsExpected.WithLabelValues(db, cid).Set(float64(len(ecv.TruthView.Members))) // optional; or len(hints.ExpectedIPs)
 	r.metrics.ipsObserved.WithLabelValues(db, cid).Set(float64(ecv.DistinctIPCount))
 	r.metrics.excessMembers.WithLabelValues(db, cid).Set(float64(ecv.ExpectedExcess))
 	r.metrics.missingMembers.WithLabelValues(db, cid).Set(float64(ecv.ExpectedShortfall))

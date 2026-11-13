@@ -1,0 +1,431 @@
+/*
+Copyright 2026 The Cozystack Authors.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
+package observabilityproxy
+
+import (
+	"net/http"
+	"net/url"
+	"strconv"
+	"strings"
+	"testing"
+	"time"
+)
+
+func testMetricsLimits() MetricsLimits {
+	return MetricsLimits{MaxRange: 30 * 24 * time.Hour, MaxPoints: 11000, MaxTimeout: 30 * time.Second}
+}
+
+const wantMetricsScope = `{namespace="tenant-a"}`
+
+func unix(t time.Time) string { return strconv.FormatInt(t.Unix(), 10) }
+
+func buildMetrics(t *testing.T, endpoint string, in url.Values) metricsRequest {
+	t.Helper()
+	req, err := BuildMetricsParams(endpoint, in, "tenant-a", testNow, testMetricsLimits())
+	if err != nil {
+		t.Fatalf("BuildMetricsParams(%s, %v): %v", endpoint, in, err)
+	}
+	return req
+}
+
+func metricsStatus(endpoint string, in url.Values) int {
+	_, err := BuildMetricsParams(endpoint, in, "tenant-a", testNow, testMetricsLimits())
+	if err == nil {
+		return http.StatusOK
+	}
+	return err.Code
+}
+
+func TestBuildMetricsParamsAllowlist(t *testing.T) {
+	hostile := url.Values{
+		"extra_filters":   {`{namespace=~".+"}`},
+		"extra_filters[]": {`{namespace="tenant-b"}`, `{namespace=~".*"}`},
+		"extra_label":     {"namespace=tenant-b"},
+		"match":           {`{namespace="tenant-b"}`},
+		"nocache":         {"1"},
+		"limit":           {"1"},
+		"AccountID":       {"7"},
+		"latency_offset":  {"1h"},
+		"round_digits":    {"2"},
+	}
+	cases := map[string]url.Values{
+		"api/v1/query":            {"query": {"up"}, "time": {unix(testNow)}, "step": {"30s"}},
+		"api/v1/query_range":      {"query": {"up"}, "start": {unix(testNow.Add(-time.Hour))}, "end": {unix(testNow)}, "step": {"60"}},
+		"api/v1/series":           {"match[]": {"up"}},
+		"api/v1/labels":           {"match[]": {"up"}},
+		"api/v1/label/pod/values": {"match[]": {"up"}},
+	}
+	allowed := map[string]bool{"query": true, "start": true, "end": true, "step": true, "time": true, "match[]": true, "timeout": true, "extra_filters[]": true}
+	for endpoint, in := range cases {
+		t.Run(endpoint, func(t *testing.T) {
+			for k, v := range hostile {
+				in[k] = v
+			}
+			req := buildMetrics(t, endpoint, in)
+			if req.path != endpoint {
+				t.Errorf("path = %q", req.path)
+			}
+			for k := range req.params {
+				if !allowed[k] {
+					t.Errorf("parameter %q forwarded: %v", k, req.params)
+				}
+			}
+			if got := req.params["extra_filters[]"]; len(got) != 1 || got[0] != wantMetricsScope {
+				t.Errorf("extra_filters[] = %q, want exactly [%s]", got, wantMetricsScope)
+			}
+			for _, m := range req.params["match[]"] {
+				if strings.Contains(m, "tenant-b") {
+					t.Errorf("client match without brackets forwarded as match[]: %q", m)
+				}
+			}
+		})
+	}
+}
+
+func TestNamespaceSelectorEscapes(t *testing.T) {
+	for _, ns := range []string{"tenant-a", `a"} or {namespace=~".+`, `back\slash`, "new\nline"} {
+		sel := namespaceSelector(ns)
+		lit, ok := strings.CutPrefix(sel, "{namespace=")
+		lit, ok2 := strings.CutSuffix(lit, "}")
+		if !ok || !ok2 {
+			t.Fatalf("selector %q has the wrong shape", sel)
+		}
+		// MetricsQL reads a double-quoted label value with strconv.Unquote
+		// (metricsql extractStringValue).
+		got, err := strconv.Unquote(lit)
+		if err != nil || got != ns {
+			t.Errorf("selector %q decodes to %q, %v; want %q", sel, got, err, ns)
+		}
+	}
+}
+
+func TestBuildMetricsParamsLabelEndpointsAlwaysMatch(t *testing.T) {
+	for _, endpoint := range []string{"api/v1/labels", "api/v1/label/__name__/values"} {
+		req := buildMetrics(t, endpoint, url.Values{})
+		if got := req.params["match[]"]; len(got) != 1 || got[0] != wantMetricsScope {
+			t.Errorf("%s without match[] sends %q, want the namespace selector", endpoint, got)
+		}
+		req = buildMetrics(t, endpoint, url.Values{"match[]": {"up", `{job="x"}`}})
+		if got := req.params["match[]"]; len(got) != 2 || got[0] != "up" || got[1] != `{job="x"}` {
+			t.Errorf("%s client match[] = %q, want them kept", endpoint, got)
+		}
+	}
+	if got := metricsStatus("api/v1/series", url.Values{}); got != http.StatusBadRequest {
+		t.Errorf("series without match[] = %d, want 400", got)
+	}
+	if got := metricsStatus("api/v1/series", url.Values{"match[]": {""}}); got != http.StatusBadRequest {
+		t.Errorf("empty match[] = %d, want 400", got)
+	}
+	many := url.Values{}
+	for i := range maxMetricsMatchers + 1 {
+		many.Add("match[]", "up"+strconv.Itoa(i))
+	}
+	if got := metricsStatus("api/v1/labels", many); got != http.StatusUnprocessableEntity {
+		t.Errorf("%d match[] = %d, want 422", maxMetricsMatchers+1, got)
+	}
+}
+
+func TestBuildMetricsParamsLimits(t *testing.T) {
+	ago := func(d time.Duration) string { return unix(testNow.Add(-d)) }
+	day := 24 * time.Hour
+	rng := func(start, end, step string) url.Values {
+		return url.Values{"query": {"up"}, "start": {start}, "end": {end}, "step": {step}}
+	}
+	tests := []struct {
+		name     string
+		endpoint string
+		in       url.Values
+		want     int
+	}{
+		{"range at the limit", "api/v1/query_range", rng(ago(30*day), ago(0), "1h"), http.StatusOK},
+		{"range above the limit", "api/v1/query_range", rng(ago(31*day), ago(0), "1h"), http.StatusUnprocessableEntity},
+		{"points at the limit", "api/v1/query_range", rng(ago(10999*time.Minute), ago(0), "1m"), http.StatusOK},
+		{"points above the limit", "api/v1/query_range", rng(ago(11000*time.Minute), ago(0), "1m"), http.StatusUnprocessableEntity},
+		{"points above the limit after rounding the step up", "api/v1/query_range", rng(ago(22*time.Second), ago(0), "0.0019"), http.StatusUnprocessableEntity},
+		// 10.9999s admits 11000 points, but vmselect gets both bounds cut to
+		// the millisecond: 11.000s, 11001 points.
+		{"points above the limit once the bounds are cut to milliseconds", "api/v1/query_range", rng("2026-11-04T11:59:49.0009Z", "2026-11-04T12:00:00.0008Z", "0.001"), http.StatusUnprocessableEntity},
+		{"overflowing step", "api/v1/query_range", rng(ago(time.Hour), ago(0), "2562047h47m16.854775807s"), http.StatusBadRequest},
+		{"overflowing timeout", "api/v1/query", url.Values{"query": {"up"}, "timeout": {"2562047h47m16.854775807s"}}, http.StatusBadRequest},
+		{"step above the range limit", "api/v1/query_range", rng(ago(time.Hour), ago(0), "31d"), http.StatusUnprocessableEntity},
+		{"zero step", "api/v1/query_range", rng(ago(time.Hour), ago(0), "0"), http.StatusBadRequest},
+		{"sub-millisecond step", "api/v1/query_range", rng(ago(time.Hour), ago(0), "0.0001"), http.StatusBadRequest},
+		{"missing step", "api/v1/query_range", url.Values{"query": {"up"}, "start": {ago(time.Hour)}, "end": {ago(0)}}, http.StatusBadRequest},
+		{"missing start", "api/v1/query_range", url.Values{"query": {"up"}, "end": {ago(0)}, "step": {"1m"}}, http.StatusBadRequest},
+		{"missing query", "api/v1/query_range", url.Values{"start": {ago(time.Hour)}, "end": {ago(0)}, "step": {"1m"}}, http.StatusBadRequest},
+		{"inverted range", "api/v1/query_range", rng(ago(0), ago(time.Hour), "1m"), http.StatusBadRequest},
+		{"millisecond timestamp", "api/v1/query_range", rng(ago(time.Hour)+"000", ago(0)+"000", "1m"), http.StatusBadRequest},
+		{"relative time", "api/v1/query_range", rng("-1h", "now", "1m"), http.StatusBadRequest},
+		{"rfc3339", "api/v1/query_range", rng("2026-11-04T11:00:00Z", "2026-11-04T12:00:00.5Z", "15s"), http.StatusOK},
+		{"instant without time", "api/v1/query", url.Values{"query": {"up"}}, http.StatusOK},
+		{"instant step above the range limit", "api/v1/query", url.Values{"query": {"up"}, "step": {"31d"}}, http.StatusUnprocessableEntity},
+		{"instant bad time", "api/v1/query", url.Values{"query": {"up"}, "time": {"yesterday"}}, http.StatusBadRequest},
+		{"negative timeout", "api/v1/query", url.Values{"query": {"up"}, "timeout": {"-1s"}}, http.StatusBadRequest},
+		{"series range above the limit", "api/v1/series", url.Values{"match[]": {"up"}, "start": {ago(31 * day)}}, http.StatusUnprocessableEntity},
+		{"labels inverted range", "api/v1/labels", url.Values{"start": {ago(0)}, "end": {ago(time.Hour)}}, http.StatusBadRequest},
+		{"invalid label name", "api/v1/label/a-b/values", url.Values{}, http.StatusBadRequest},
+		{"unknown endpoint", "api/v1/status/tsdb", url.Values{}, http.StatusNotFound},
+		{"export", "api/v1/export", url.Values{"match[]": {"up"}}, http.StatusNotFound},
+		{"label without values", "api/v1/label/pod", url.Values{}, http.StatusNotFound},
+		{"root", "", url.Values{}, http.StatusNotFound},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := metricsStatus(tt.endpoint, tt.in); got != tt.want {
+				t.Fatalf("status = %d, want %d", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestBuildMetricsParamsCanonicalForms(t *testing.T) {
+	req := buildMetrics(t, "api/v1/query_range", url.Values{
+		"query": {"up"}, "start": {"2026-11-04T11:00:00.25Z"}, "end": {unix(testNow)}, "step": {"1m30s"},
+	})
+	want := url.Values{
+		"query": {"up"}, "start": {"2026-11-04T11:00:00.250Z"}, "end": {"2026-11-04T12:00:00.000Z"}, "step": {"90"},
+		"timeout": {"30"}, "extra_filters[]": {wantMetricsScope},
+	}
+	if req.params.Encode() != want.Encode() {
+		t.Errorf("params = %v\nwant     %v", req.params, want)
+	}
+
+	// vmselect drops a sub-millisecond remainder; the points check has to
+	// see the step it will use.
+	for in, want := range map[string]string{"60.0001": "60.001", "0.0019": "0.002"} {
+		req = buildMetrics(t, "api/v1/query_range", url.Values{"query": {"up"}, "start": {unix(testNow.Add(-20 * time.Second))}, "end": {unix(testNow)}, "step": {in}})
+		if got := req.params.Get("step"); got != want {
+			t.Errorf("step %s forwarded as %q, want %s", in, got, want)
+		}
+	}
+
+	for in, want := range map[string]string{"": "30", "10s": "10", "5m": "30", "1.5": "1.5"} {
+		v := url.Values{"query": {"up"}}
+		if in != "" {
+			v.Set("timeout", in)
+		}
+		if got := buildMetrics(t, "api/v1/query", v).params.Get("timeout"); got != want {
+			t.Errorf("timeout %q forwarded as %q, want %q", in, got, want)
+		}
+	}
+
+	req = buildMetrics(t, "api/v1/labels", url.Values{})
+	if req.params.Get("end") != "2026-11-04T12:00:00.000Z" || req.params.Get("start") != "2026-11-04T11:55:00.000Z" {
+		t.Errorf("labels window = %s..%s, want the last 5m", req.params.Get("start"), req.params.Get("end"))
+	}
+	if q := buildMetrics(t, "api/v1/query", url.Values{"query": {"up"}}); q.params.Has("time") || !q.start.Equal(testNow.Add(-15*time.Minute-30*time.Second)) {
+		t.Errorf("instant query without time: params %v, start %v", q.params, q.start)
+	}
+}
+
+func TestMetricsStoreByRange(t *testing.T) {
+	cfg := MetricsConfig{ShortTermStore: "shortterm", LongTermStore: "longterm", ShortTermRetention: 72 * time.Hour}
+	tests := []struct {
+		name     string
+		endpoint string
+		in       url.Values
+		want     string
+	}{
+		{"instant now", "api/v1/query", url.Values{"query": {"up"}}, "shortterm"},
+		{"instant within retention", "api/v1/query", url.Values{"query": {"up"}, "time": {unix(testNow.Add(-71 * time.Hour))}}, "shortterm"},
+		{"instant past retention", "api/v1/query", url.Values{"query": {"up"}, "time": {unix(testNow.Add(-73 * time.Hour))}}, "longterm"},
+		{"live graph", "api/v1/query_range", url.Values{"query": {"up"}, "start": {unix(testNow.Add(-6 * time.Hour))}, "end": {unix(testNow)}, "step": {"60"}}, "shortterm"},
+		{"range fits with lookback", "api/v1/query_range", url.Values{"query": {"up"}, "start": {unix(testNow.Add(-71 * time.Hour))}, "end": {unix(testNow)}, "step": {"600"}}, "shortterm"},
+		{"range lookback past retention", "api/v1/query_range", url.Values{"query": {"up"}, "start": {unix(testNow.Add(-72 * time.Hour))}, "end": {unix(testNow)}, "step": {"600"}}, "longterm"},
+		{"range past retention", "api/v1/query_range", url.Values{"query": {"up"}, "start": {unix(testNow.Add(-7 * 24 * time.Hour))}, "end": {unix(testNow)}, "step": {"600"}}, "longterm"},
+		{"old window ending long ago", "api/v1/query_range", url.Values{"query": {"up"}, "start": {unix(testNow.Add(-5 * 24 * time.Hour))}, "end": {unix(testNow.Add(-4 * 24 * time.Hour))}, "step": {"600"}}, "longterm"},
+		{"labels default window", "api/v1/labels", url.Values{}, "shortterm"},
+		{"series past retention", "api/v1/series", url.Values{"match[]": {"up"}, "start": {unix(testNow.Add(-4 * 24 * time.Hour))}}, "longterm"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := buildMetrics(t, tt.endpoint, tt.in)
+			if got := cfg.store(req.start, testNow); got != tt.want {
+				t.Fatalf("store = %s, want %s", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestQueryLookback(t *testing.T) {
+	tests := []struct {
+		query string
+		step  time.Duration
+		want  time.Duration
+	}{
+		{`up`, 5 * time.Minute, 15 * time.Minute},
+		{`increase(x[7d])`, 5 * time.Minute, 7*24*time.Hour + 35*time.Minute},
+		{`rate(x[300])`, time.Minute, 20 * time.Minute},
+		{`rate(x[ 1h30m ])`, time.Minute, 105 * time.Minute},
+		{`max_over_time(x[1h:5m])`, time.Minute, 115 * time.Minute},
+		{`max_over_time(x[1h:])`, time.Minute, 83 * time.Minute},
+		{`max_over_time(max_over_time(rate(x[5m])[1h:1m])[1d:1h])`, time.Minute, 42*time.Hour + 35*time.Minute},
+		{`rate(rate(x))`, time.Hour, 2*(3*time.Hour+5*time.Minute) + 2*time.Hour + 5*time.Minute},
+		{`x offset 10d`, 5 * time.Minute, 10*24*time.Hour + 15*time.Minute},
+		{`sum(x OFFSET 2h)`, 5 * time.Minute, 155 * time.Minute},
+		{`rate(x[5m] offset 1h)`, time.Minute, 80 * time.Minute},
+		{`x offset -1h`, 5 * time.Minute, 15 * time.Minute},
+		{`x offset - 1h`, 5 * time.Minute, 15 * time.Minute},
+		{`node_offset_seconds + offset_total + with_x`, 5 * time.Minute, 15 * time.Minute},
+		{`x{a="[1h]"}`, 5 * time.Minute, 75 * time.Minute},
+		{`x{a="]"}[7d]`, 5 * time.Minute, 7*24*time.Hour + 15*time.Minute},
+	}
+	for _, tt := range tests {
+		t.Run(tt.query, func(t *testing.T) {
+			got, ok := queryLookback(tt.query, tt.step)
+			if !ok || got != tt.want {
+				t.Fatalf("queryLookback = %s, %t; want %s, true", got, ok, tt.want)
+			}
+		})
+	}
+}
+
+func TestQueryLookbackUnknown(t *testing.T) {
+	for _, q := range []string{
+		`x @ 123`,
+		`x @ start()`,
+		`x{a="a@b"}`,
+		`rate(x[5i])`,
+		`rate(x[$__interval])`,
+		`x[1h-5m]`,
+		`x[7D]`,
+		`x[1.d]`,
+		`x[]`,
+		`rate(x[7d)`,
+		`x offset`,
+		`x offset w`,
+		`WITH (w = 7d) rate(x[w])`,
+		`x{a="["}`,
+		`x{a="[5m"}[7d]`,
+		`x{path="/offset/1"}`,
+		`x[99999999999y]`,
+		`x offset 99999999999y`,
+		`x offset 3_000_000`,
+		`WITH (f(q) = max_over_time(q[2d:1h])) f(f(x))`,
+		`with (s(m) = m offset 2d) s(s(x))`,
+	} {
+		t.Run(q, func(t *testing.T) {
+			if got, ok := queryLookback(q, 5*time.Minute); ok {
+				t.Fatalf("queryLookback = %s, true; want unknown", got)
+			}
+		})
+	}
+}
+
+func TestMetricsStoreByLookback(t *testing.T) {
+	cfg := MetricsConfig{ShortTermStore: "shortterm", LongTermStore: "longterm", ShortTermRetention: 72 * time.Hour}
+	rangeFrom := func(q string, ago time.Duration, step string) url.Values {
+		return url.Values{"query": {q}, "start": {unix(testNow.Add(-ago))}, "end": {unix(testNow)}, "step": {step}}
+	}
+	tests := []struct {
+		name     string
+		endpoint string
+		in       url.Values
+		want     string
+	}{
+		{"instant short window", "api/v1/query", url.Values{"query": {"rate(x[5m])"}}, "shortterm"},
+		{"instant 7d window", "api/v1/query", url.Values{"query": {"increase(x[7d])"}}, "longterm"},
+		{"instant offset 10d", "api/v1/query", url.Values{"query": {"x offset 10d"}}, "longterm"},
+		{"instant negative offset", "api/v1/query", url.Values{"query": {"x offset -1h"}}, "shortterm"},
+		{"instant at timestamp", "api/v1/query", url.Values{"query": {"x @ 123"}}, "longterm"},
+		{"instant at start", "api/v1/query", url.Values{"query": {"x @ start()"}}, "longterm"},
+		{"instant step window", "api/v1/query", url.Values{"query": {"rate(x[5i])"}}, "longterm"},
+		{"instant step past retention", "api/v1/query", url.Values{"query": {"up"}, "step": {"259200"}}, "longterm"},
+		{"instant latency offset at the edge", "api/v1/query", url.Values{"query": {"x[71h54m59s]"}, "step": {"0.001"}}, "longterm"},
+		{"instant subquery past retention", "api/v1/query", url.Values{"query": {"max_over_time(rate(x[5m])[4d:1h])"}}, "longterm"},
+		{"instant offset with underscores", "api/v1/query", url.Values{"query": {"x offset 3_000_000"}}, "longterm"},
+		{"instant WITH template", "api/v1/query", url.Values{"query": {"WITH (f(q) = max_over_time(q[2d:1h])) f(f(x))"}}, "longterm"},
+		{"instant implicit subqueries", "api/v1/query", url.Values{"query": {"rate(rate(rate(rate(rate(rate(x))))))"}, "step": {"43200"}}, "longterm"},
+		{"quoted at sign", "api/v1/query", url.Values{"query": {`x{a="a@b"}`}}, "longterm"},
+		{"quoted open bracket hides window", "api/v1/query", url.Values{"query": {`rate(x{a="[5m"}[7d])`}}, "longterm"},
+		{"quoted close bracket before window", "api/v1/query", url.Values{"query": {`rate(x{a="]"}[7d])`}}, "longterm"},
+		{"quoted offset before offset", "api/v1/query", url.Values{"query": {`x{a="offset 1m"} offset 10d`}}, "longterm"},
+		{"range short window", "api/v1/query_range", rangeFrom("rate(x[1h])", 6*time.Hour, "60"), "shortterm"},
+		{"range 7d window", "api/v1/query_range", rangeFrom("increase(x[7d])", 6*time.Hour, "60"), "longterm"},
+		{"range offset past retention", "api/v1/query_range", rangeFrom("x offset 3d", time.Hour, "60"), "longterm"},
+		{"range lookback fits", "api/v1/query_range", rangeFrom("rate(x[5m])", 70*time.Hour, "600"), "shortterm"},
+		{"range lookback crosses retention", "api/v1/query_range", rangeFrom("rate(x[5m])", 71*time.Hour+50*time.Minute, "600"), "longterm"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := buildMetrics(t, tt.endpoint, tt.in)
+			if got := cfg.store(req.start, testNow); got != tt.want {
+				t.Fatalf("store = %s, want %s", got, tt.want)
+			}
+			if q := req.params.Get("query"); q != tt.in.Get("query") {
+				t.Fatalf("query forwarded as %q, want it unchanged", q)
+			}
+		})
+	}
+}
+
+// vmselectMillis repeats how vmselect reads a duration argument
+// (httputil.GetDuration in lib/httputil/duration.go, v1.136.22 and
+// v1.139.0): float seconds, multiplied by 1e3 and truncated.
+func vmselectMillis(t *testing.T, v string) int64 {
+	t.Helper()
+	secs, err := strconv.ParseFloat(v, 64)
+	if err != nil {
+		t.Fatalf("vmselect cannot parse %q: %v", v, err)
+	}
+	return int64(secs * 1e3)
+}
+
+// TestFormatSecondsVmselectExact sweeps every step up to 2000s and the
+// large end of the range: vmselect must read back the milliseconds the
+// limits were checked with.
+func TestFormatSecondsVmselectExact(t *testing.T) {
+	check := func(ms int64) {
+		if got := vmselectMillis(t, formatSeconds(time.Duration(ms)*time.Millisecond)); got != ms {
+			t.Fatalf("%dms formatted as %q reaches vmselect as %dms", ms, formatSeconds(time.Duration(ms)*time.Millisecond), got)
+		}
+	}
+	for ms := int64(1); ms <= 2_000_000; ms++ {
+		check(ms)
+	}
+	for ms := maxMetricsDuration.Milliseconds() - 100_000; ms <= maxMetricsDuration.Milliseconds(); ms++ {
+		check(ms)
+	}
+	// A spread of the range in between, on a stride no power of ten divides.
+	for ms := int64(2_000_001); ms < maxMetricsDuration.Milliseconds(); ms += 3_153_599_999 {
+		check(ms)
+	}
+	// Whole seconds keep their plain form.
+	if got := formatSeconds(90 * time.Second); got != "90" {
+		t.Errorf("90s formatted as %q", got)
+	}
+}
+
+// TestBuildMetricsParamsPointsAsVmselectCounts: a 1.001s step is 1001ms
+// to the proxy; vmselect must count the same 11000 points at the limit.
+func TestBuildMetricsParamsPointsAsVmselectCounts(t *testing.T) {
+	end := testNow
+	step := 1001 * time.Millisecond
+	rng := func(points int64) url.Values {
+		start := end.Add(-time.Duration(points-1) * step)
+		return url.Values{"query": {"up"}, "start": {start.Format(time.RFC3339Nano)}, "end": {end.Format(time.RFC3339Nano)}, "step": {"1.001"}}
+	}
+	req := buildMetrics(t, "api/v1/query_range", rng(11000))
+	stepMs := vmselectMillis(t, req.params.Get("step"))
+	startMs, endMs := vmselectTimeMillis(t, req.params.Get("start")), vmselectTimeMillis(t, req.params.Get("end"))
+	if points := (endMs-startMs)/stepMs + 1; stepMs != 1001 || points != 11000 {
+		t.Fatalf("vmselect reads step %dms and %d points, want 1001ms and 11000", stepMs, points)
+	}
+	if got := metricsStatus("api/v1/query_range", rng(11001)); got != http.StatusUnprocessableEntity {
+		t.Fatalf("11001 points answered %d, want 422", got)
+	}
+}

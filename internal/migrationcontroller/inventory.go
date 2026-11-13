@@ -146,7 +146,7 @@ func (c *inventoryClient) VMs(ctx context.Context, providerUID string) ([]invent
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("Forklift inventory returned %s listing VMs", resp.Status)
+		return nil, fmt.Errorf("listing VMs: the Forklift inventory returned %s", resp.Status)
 	}
 
 	var vms []inventoryVMRef
@@ -195,7 +195,7 @@ func (c *inventoryClient) VM(ctx context.Context, providerUID, vmID string) (*in
 	case http.StatusNotFound:
 		return nil, &notFoundError{vmID: vmID}
 	default:
-		return nil, fmt.Errorf("Forklift inventory returned %s for VM %q", resp.Status, vmID)
+		return nil, fmt.Errorf("VM %q: the Forklift inventory returned %s", vmID, resp.Status)
 	}
 
 	vm := &inventoryVM{}

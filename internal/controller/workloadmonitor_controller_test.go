@@ -870,7 +870,7 @@ func TestReconcileNoBucketClaimSkips(t *testing.T) {
 
 func TestQueryAllBucketMetrics(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprint(w, `{"status":"success","data":{"resultType":"vector","result":[
+		_, _ = fmt.Fprint(w, `{"status":"success","data":{"resultType":"vector","result":[
 			{"metric":{"__name__":"SeaweedFS_s3_bucket_size_bytes","bucket":"bucket-aaa"},"value":[1713000000,"10485864"]},
 			{"metric":{"__name__":"SeaweedFS_s3_bucket_physical_size_bytes","bucket":"bucket-aaa"},"value":[1713000000,"20971728"]},
 			{"metric":{"__name__":"SeaweedFS_s3_bucket_size_bytes","bucket":"bucket-bbb"},"value":[1713000000,"0"]}
@@ -909,7 +909,7 @@ func TestQueryAllBucketMetrics(t *testing.T) {
 
 func TestQueryAllBucketMetricsEmpty(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprint(w, `{"status":"success","data":{"resultType":"vector","result":[]}}`)
+		_, _ = fmt.Fprint(w, `{"status":"success","data":{"resultType":"vector","result":[]}}`)
 	}))
 	defer srv.Close()
 
@@ -953,7 +953,7 @@ func TestQueryAllBucketMetricsPathPrefixAndUserinfo(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotPath = r.URL.Path
 		gotUser, gotPass, gotOK = r.BasicAuth()
-		fmt.Fprint(w, `{"status":"success","data":{"resultType":"vector","result":[]}}`)
+		_, _ = fmt.Fprint(w, `{"status":"success","data":{"resultType":"vector","result":[]}}`)
 	}))
 	defer srv.Close()
 
@@ -1219,7 +1219,7 @@ func TestReconcileBucketMetricsFromEndpointOverride(t *testing.T) {
 		if r.URL.Path != "/vm/select/0/prometheus/api/v1/query" {
 			t.Errorf("unexpected query path %q", r.URL.Path)
 		}
-		fmt.Fprint(w, `{"status":"success","data":{"resultType":"vector","result":[
+		_, _ = fmt.Fprint(w, `{"status":"success","data":{"resultType":"vector","result":[
 			{"metric":{"__name__":"SeaweedFS_s3_bucket_size_bytes","bucket":"cosi-abc123"},"value":[1713000000,"4096"]}
 		]}}`)
 	}))
@@ -1331,7 +1331,7 @@ func TestReconcileRetainsLastKnownSizesOnQueryFailure(t *testing.T) {
 
 func TestReconcileRetainsLastKnownSizesWhenBucketMissingFromResult(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprint(w, `{"status":"success","data":{"resultType":"vector","result":[]}}`)
+		_, _ = fmt.Fprint(w, `{"status":"success","data":{"resultType":"vector","result":[]}}`)
 	}))
 	defer srv.Close()
 
