@@ -94,6 +94,25 @@
         "2xlarge"
       ]
     },
+    "affinity": {
+      "description": "Kubernetes affinity configuration for Redis and Sentinel pods.",
+      "type": "object",
+      "default": {},
+      "properties": {
+        "redis": {
+          "description": "Kubernetes Affinity for Redis pods. When set, redis-operator uses it verbatim and does not add its default soft podAntiAffinity; include podAntiAffinity unless replica co-location is intended.",
+          "type": "object",
+          "default": {},
+          "x-kubernetes-preserve-unknown-fields": true
+        },
+        "sentinel": {
+          "description": "Kubernetes Affinity for Sentinel pods. When set, redis-operator uses it verbatim and does not add its default soft podAntiAffinity; include podAntiAffinity unless replica co-location is intended.",
+          "type": "object",
+          "default": {},
+          "x-kubernetes-preserve-unknown-fields": true
+        }
+      }
+    },
     "size": {
       "description": "Persistent Volume Claim size available for application data.",
       "default": "1Gi",
