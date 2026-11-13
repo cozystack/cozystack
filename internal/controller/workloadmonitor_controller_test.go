@@ -14,6 +14,7 @@ import (
 
 	cozyv1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -2431,5 +2432,546 @@ func TestReconcile_PVCOfANotReadyDataVolumeIsNotOperational(t *testing.T) {
 				t.Errorf("PVC Workload Operational = %v, want %v", workload.Status.Operational, tc.want)
 			}
 		})
+	}
+}
+
+func TestBucketWorkloadName(t *testing.T) {
+	for claim, want := range map[string]string{
+		// a Bucket application's claim is named after its bucket- release
+		"bucket-cozy-backups": "bucket-cozy-backups",
+		"my-bucket":           "bucket-my-bucket",
+		"harbor-x-registry":   "bucket-harbor-x-registry",
+	} {
+		if got := bucketWorkloadName(claim); got != want {
+			t.Errorf("bucketWorkloadName(%q) = %q, want %q", claim, got, want)
+		}
+	}
+}
+
+// reconcileBucketApp reconciles a Bucket application named cozy-backups
+// alongside the given existing objects and returns the client.
+func reconcileBucketApp(t *testing.T, existing ...client.Object) client.Client {
+	t.Helper()
+	s := newTestScheme()
+	monitor := &cozyv1alpha1.WorkloadMonitor{
+		ObjectMeta: metav1.ObjectMeta{Name: "bucket-cozy-backups", Namespace: "tenant-demo"},
+		Spec: cozyv1alpha1.WorkloadMonitorSpec{
+			Kind:     "bucket",
+			Type:     "s3",
+			Selector: map[string]string{"app.kubernetes.io/instance": "bucket-cozy-backups"},
+		},
+	}
+	bc := &cosiv1alpha1.BucketClaim{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "bucket-cozy-backups",
+			Namespace: "tenant-demo",
+			UID:       "claim-uid",
+			Labels:    map[string]string{"app.kubernetes.io/instance": "bucket-cozy-backups"},
+		},
+		Spec:   cosiv1alpha1.BucketClaimSpec{BucketClassName: "seaweedfs", Protocols: []cosiv1alpha1.Protocol{cosiv1alpha1.ProtocolS3}},
+		Status: cosiv1alpha1.BucketClaimStatus{BucketReady: true, BucketName: "cosi-abc123"},
+	}
+	c := fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(append([]client.Object{monitor, bc}, existing...)...).
+		WithStatusSubresource(monitor).
+		Build()
+	reconciler := &WorkloadMonitorReconciler{Client: c, Scheme: s}
+	req := reconcile.Request{NamespacedName: types.NamespacedName{Name: monitor.Name, Namespace: monitor.Namespace}}
+	if _, err := reconciler.Reconcile(context.TODO(), req); err != nil {
+		t.Fatalf("Reconcile returned error: %v", err)
+	}
+	return c
+}
+
+func legacyBucketWorkloadOwnedBy(uid types.UID) *cozyv1alpha1.Workload {
+	return &cozyv1alpha1.Workload{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "bucket-bucket-cozy-backups",
+			Namespace: "tenant-demo",
+			OwnerReferences: []metav1.OwnerReference{{
+				APIVersion: "objectstorage.k8s.io/v1alpha1",
+				Kind:       "BucketClaim",
+				Name:       "bucket-cozy-backups",
+				UID:        uid,
+			}},
+		},
+		Status: cozyv1alpha1.WorkloadStatus{
+			Kind: "bucket",
+			Type: "s3",
+			Resources: map[string]resource.Quantity{
+				resourceS3StorageBytes:         resource.MustParse("689Gi"),
+				resourceS3PhysicalStorageBytes: resource.MustParse("1378Gi"),
+			},
+		},
+	}
+}
+
+func TestReconcileBucketApp_NoDoublePrefix(t *testing.T) {
+	c := reconcileBucketApp(t)
+
+	if err := c.Get(context.TODO(), types.NamespacedName{Name: "bucket-cozy-backups", Namespace: "tenant-demo"}, &cozyv1alpha1.Workload{}); err != nil {
+		t.Fatalf("expected Workload bucket-cozy-backups, got error: %v", err)
+	}
+	err := c.Get(context.TODO(), types.NamespacedName{Name: "bucket-bucket-cozy-backups", Namespace: "tenant-demo"}, &cozyv1alpha1.Workload{})
+	if !apierrors.IsNotFound(err) {
+		t.Errorf("expected no Workload bucket-bucket-cozy-backups, got error %v", err)
+	}
+}
+
+func TestReconcileBucketApp_ReplacesLegacyWorkload(t *testing.T) {
+	c := reconcileBucketApp(t, legacyBucketWorkloadOwnedBy("claim-uid"))
+
+	err := c.Get(context.TODO(), types.NamespacedName{Name: "bucket-bucket-cozy-backups", Namespace: "tenant-demo"}, &cozyv1alpha1.Workload{})
+	if !apierrors.IsNotFound(err) {
+		t.Errorf("expected the legacy Workload to be deleted, got error %v", err)
+	}
+	workload := &cozyv1alpha1.Workload{}
+	if err := c.Get(context.TODO(), types.NamespacedName{Name: "bucket-cozy-backups", Namespace: "tenant-demo"}, workload); err != nil {
+		t.Fatalf("expected Workload bucket-cozy-backups, got error: %v", err)
+	}
+	// no metrics endpoint in this test, so the sizes can only come from the legacy Workload
+	for key, size := range map[string]string{resourceS3StorageBytes: "689Gi", resourceS3PhysicalStorageBytes: "1378Gi"} {
+		got := workload.Status.Resources[key]
+		if want := resource.MustParse(size); got.Cmp(want) != 0 {
+			t.Errorf("%s = %s, want %s carried over from the legacy Workload", key, got.String(), want.String())
+		}
+	}
+}
+
+func TestReconcileBucketApp_KeepsLegacyNameOwnedByAnotherClaim(t *testing.T) {
+	c := reconcileBucketApp(t, legacyBucketWorkloadOwnedBy("other-claim-uid"))
+
+	foreign := &cozyv1alpha1.Workload{}
+	if err := c.Get(context.TODO(), types.NamespacedName{Name: "bucket-bucket-cozy-backups", Namespace: "tenant-demo"}, foreign); err != nil {
+		t.Fatalf("expected a Workload owned by another claim to stay, got error: %v", err)
+	}
+	workload := &cozyv1alpha1.Workload{}
+	if err := c.Get(context.TODO(), types.NamespacedName{Name: "bucket-cozy-backups", Namespace: "tenant-demo"}, workload); err != nil {
+		t.Fatalf("expected Workload bucket-cozy-backups, got error: %v", err)
+	}
+	if _, ok := workload.Status.Resources[resourceS3StorageBytes]; ok {
+		t.Errorf("expected no size taken from a Workload owned by another claim, got %v", workload.Status.Resources)
+	}
+}
+
+// Bucket applications "x" and "bucket-x" in one namespace: the legacy name
+// of the first (bucket-bucket-x) is the new name of the second.
+func TestReconcileBucketApps_LegacyNameIsAnotherAppsNewName(t *testing.T) {
+	for _, order := range [][]string{
+		{"bucket-bucket-x", "bucket-x", "bucket-bucket-x"},
+		{"bucket-x", "bucket-bucket-x", "bucket-x"},
+	} {
+		t.Run(order[0]+" first", func(t *testing.T) {
+			s := newTestScheme()
+			monX, claimX := bucketMonitorAndClaim("bucket-x", "uid-x")
+			monBX, claimBX := bucketMonitorAndClaim("bucket-bucket-x", "uid-bx")
+			c := fake.NewClientBuilder().WithScheme(s).
+				WithObjects(monX, claimX, monBX, claimBX,
+					bucketWorkloadWithSize("bucket-bucket-x", "bucket-x", "uid-x", "689Gi"),
+					bucketWorkloadWithSize("bucket-bucket-bucket-x", "bucket-bucket-x", "uid-bx", "100Gi")).
+				WithStatusSubresource(monX, monBX).
+				Build()
+			reconciler := &WorkloadMonitorReconciler{Client: c, Scheme: s}
+			for _, monitor := range order {
+				req := reconcile.Request{NamespacedName: types.NamespacedName{Name: monitor, Namespace: "tenant-demo"}}
+				if _, err := reconciler.Reconcile(context.TODO(), req); err != nil {
+					t.Fatalf("Reconcile(%s) returned error: %v", monitor, err)
+				}
+			}
+
+			for name, want := range map[string]struct {
+				owner types.UID
+				size  string
+			}{
+				"bucket-x":        {"uid-x", "689Gi"},
+				"bucket-bucket-x": {"uid-bx", "100Gi"},
+			} {
+				w := &cozyv1alpha1.Workload{}
+				if err := c.Get(context.TODO(), types.NamespacedName{Name: name, Namespace: "tenant-demo"}, w); err != nil {
+					t.Errorf("Workload %s: %v", name, err)
+					continue
+				}
+				if len(w.OwnerReferences) != 1 || w.OwnerReferences[0].UID != want.owner {
+					t.Errorf("Workload %s owners = %v, want only %s", name, w.OwnerReferences, want.owner)
+				}
+				got := w.Status.Resources[resourceS3StorageBytes]
+				if got.Cmp(resource.MustParse(want.size)) != 0 {
+					t.Errorf("Workload %s size = %s, want %s", name, got.String(), want.size)
+				}
+			}
+			err := c.Get(context.TODO(), types.NamespacedName{Name: "bucket-bucket-bucket-x", Namespace: "tenant-demo"}, &cozyv1alpha1.Workload{})
+			if !apierrors.IsNotFound(err) {
+				t.Errorf("expected legacy bucket-bucket-bucket-x to be deleted, got error %v", err)
+			}
+		})
+	}
+}
+
+// bucketMonitorAndClaim returns a bucket WorkloadMonitor and the claim it
+// selects, both named name.
+func bucketMonitorAndClaim(name string, uid types.UID) (*cozyv1alpha1.WorkloadMonitor, *cosiv1alpha1.BucketClaim) {
+	labels := map[string]string{"app.kubernetes.io/instance": name}
+	return &cozyv1alpha1.WorkloadMonitor{
+			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "tenant-demo"},
+			Spec:       cozyv1alpha1.WorkloadMonitorSpec{Kind: "bucket", Type: "s3", Selector: labels},
+		}, &cosiv1alpha1.BucketClaim{
+			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "tenant-demo", UID: uid, Labels: labels},
+			Spec:       cosiv1alpha1.BucketClaimSpec{BucketClassName: "seaweedfs", Protocols: []cosiv1alpha1.Protocol{cosiv1alpha1.ProtocolS3}},
+			Status:     cosiv1alpha1.BucketClaimStatus{BucketReady: true, BucketName: "cosi-" + string(uid)},
+		}
+}
+
+func bucketWorkloadWithSize(name, owner string, uid types.UID, size string) *cozyv1alpha1.Workload {
+	w := legacyBucketWorkloadOwnedBy(uid)
+	w.Name = name
+	w.OwnerReferences[0].Name = owner
+	w.Status.Resources = map[string]resource.Quantity{resourceS3StorageBytes: resource.MustParse(size)}
+	return w
+}
+
+func workloadSize(t *testing.T, c client.Client, name string) (resource.Quantity, *cozyv1alpha1.Workload) {
+	t.Helper()
+	w := &cozyv1alpha1.Workload{}
+	if err := c.Get(context.TODO(), types.NamespacedName{Name: name, Namespace: "tenant-demo"}, w); err != nil {
+		t.Fatalf("Workload %s: %v", name, err)
+	}
+	return w.Status.Resources[resourceS3StorageBytes], w
+}
+
+// For a claim without the prefix the legacy and the new name coincide, so
+// its own Workload must not be mistaken for a legacy one.
+func TestReconcileBucketClaim_UnprefixedClaimKeepsItsWorkload(t *testing.T) {
+	s := newTestScheme()
+	monitor, claim := bucketMonitorAndClaim("my-bucket", "uid-mine")
+	c := fake.NewClientBuilder().WithScheme(s).
+		WithObjects(monitor, claim, bucketWorkloadWithSize("bucket-my-bucket", "my-bucket", "uid-mine", "50Gi")).
+		WithStatusSubresource(monitor).Build()
+	reconciler := &WorkloadMonitorReconciler{Client: c, Scheme: s}
+	req := reconcile.Request{NamespacedName: types.NamespacedName{Name: "my-bucket", Namespace: "tenant-demo"}}
+	for range 2 {
+		if _, err := reconciler.Reconcile(context.TODO(), req); err != nil {
+			t.Fatalf("Reconcile returned error: %v", err)
+		}
+	}
+	if got, _ := workloadSize(t, c, "bucket-my-bucket"); got.Cmp(resource.MustParse("50Gi")) != 0 {
+		t.Errorf("size = %s, want 50Gi", got.String())
+	}
+}
+
+func TestReconcileBucketApp_RecordedSizeWinsOverLegacy(t *testing.T) {
+	c := reconcileBucketApp(t,
+		legacyBucketWorkloadOwnedBy("claim-uid"),
+		bucketWorkloadWithSize("bucket-cozy-backups", "bucket-cozy-backups", "claim-uid", "700Gi"))
+
+	if got, _ := workloadSize(t, c, "bucket-cozy-backups"); got.Cmp(resource.MustParse("700Gi")) != 0 {
+		t.Errorf("size = %s, want the recorded 700Gi rather than the legacy 689Gi", got.String())
+	}
+}
+
+// Claims "x" and "bucket-x" both map to Workload "bucket-x"; the second one
+// must not take over the first one's Workload.
+func TestReconcileBucketClaim_DoesNotAdoptAnotherClaimsWorkload(t *testing.T) {
+	s := newTestScheme()
+	monitor, claim := bucketMonitorAndClaim("bucket-x", "uid-bx")
+	c := fake.NewClientBuilder().WithScheme(s).
+		WithObjects(monitor, claim, bucketWorkloadWithSize("bucket-x", "x", "uid-x", "10Gi")).
+		WithStatusSubresource(monitor).Build()
+	recorder := record.NewFakeRecorder(10)
+	reconciler := &WorkloadMonitorReconciler{Client: c, Scheme: s, Recorder: recorder}
+	req := reconcile.Request{NamespacedName: types.NamespacedName{Name: "bucket-x", Namespace: "tenant-demo"}}
+	if _, err := reconciler.Reconcile(context.TODO(), req); err != nil {
+		t.Fatalf("Reconcile returned error: %v", err)
+	}
+
+	got, w := workloadSize(t, c, "bucket-x")
+	if len(w.OwnerReferences) != 1 || w.OwnerReferences[0].UID != "uid-x" {
+		t.Errorf("owners = %v, want only uid-x", w.OwnerReferences)
+	}
+	if got.Cmp(resource.MustParse("10Gi")) != 0 {
+		t.Errorf("size = %s, want 10Gi untouched", got.String())
+	}
+	select {
+	case e := <-recorder.Events:
+		if !strings.Contains(e, "BucketWorkloadNameTaken") {
+			t.Errorf("event = %q, want BucketWorkloadNameTaken", e)
+		}
+	default:
+		t.Error("expected a BucketWorkloadNameTaken event")
+	}
+	// the bucket is still metered, under its legacy name
+	if _, own := workloadSize(t, c, "bucket-bucket-x"); len(own.OwnerReferences) != 1 || own.OwnerReferences[0].UID != "uid-bx" {
+		t.Errorf("bucket-bucket-x owners = %v, want only uid-bx", own.OwnerReferences)
+	}
+}
+
+// While the new name is held by another owner, the bucket's legacy Workload
+// keeps being updated rather than freezing at its last size.
+func TestReconcileBucketClaim_KeepsMeteringUnderLegacyNameWhileNewNameIsHeld(t *testing.T) {
+	s := newTestScheme()
+	monitor, claim := bucketMonitorAndClaim("bucket-x", "uid-bx")
+	legacy := bucketWorkloadWithSize("bucket-bucket-x", "bucket-x", "uid-bx", "689Gi")
+	c := fake.NewClientBuilder().WithScheme(s).
+		WithObjects(monitor, claim, legacy, bucketWorkloadWithSize("bucket-x", "x", "uid-x", "10Gi")).
+		WithStatusSubresource(monitor).Build()
+	reconciler := &WorkloadMonitorReconciler{Client: c, Scheme: s}
+	// the second pass has nothing left to change, so nothing masks a delete
+	for range 2 {
+		if err := reconciler.reconcileBucketClaimForMonitor(context.TODO(), monitor, *claim, nil); err != nil {
+			t.Fatalf("reconcileBucketClaimForMonitor returned error: %v", err)
+		}
+	}
+
+	got, w := workloadSize(t, c, "bucket-bucket-x")
+	if w.Labels[workloadMonitorLabel] != "bucket-x" {
+		t.Errorf("legacy Workload not updated: labels = %v", w.Labels)
+	}
+	if got.Cmp(resource.MustParse("689Gi")) != 0 || len(w.OwnerReferences) != 1 || w.OwnerReferences[0].UID != "uid-bx" {
+		t.Errorf("legacy Workload changed: owners=%v size=%s", w.OwnerReferences, got.String())
+	}
+	if foreign, fw := workloadSize(t, c, "bucket-x"); foreign.Cmp(resource.MustParse("10Gi")) != 0 || fw.OwnerReferences[0].UID != "uid-x" {
+		t.Errorf("held Workload bucket-x changed: owners=%v size=%s", fw.OwnerReferences, foreign.String())
+	}
+}
+
+// A claim without the prefix has no other name to fall back to.
+func TestReconcileBucketClaim_UnprefixedClaimWithHeldNameIsSkipped(t *testing.T) {
+	s := newTestScheme()
+	monitor, claim := bucketMonitorAndClaim("my-bucket", "uid-mine")
+	c := fake.NewClientBuilder().WithScheme(s).
+		WithObjects(monitor, claim, bucketWorkloadWithSize("bucket-my-bucket", "bucket-my-bucket", "uid-other", "3Gi")).
+		WithStatusSubresource(monitor).Build()
+	recorder := record.NewFakeRecorder(10)
+	reconciler := &WorkloadMonitorReconciler{Client: c, Scheme: s, Recorder: recorder}
+	if err := reconciler.reconcileBucketClaimForMonitor(context.TODO(), monitor, *claim, nil); err != nil {
+		t.Fatalf("reconcileBucketClaimForMonitor returned error: %v", err)
+	}
+
+	if got, w := workloadSize(t, c, "bucket-my-bucket"); got.Cmp(resource.MustParse("3Gi")) != 0 || w.OwnerReferences[0].UID != "uid-other" {
+		t.Errorf("held Workload changed: owners=%v size=%s", w.OwnerReferences, got.String())
+	}
+	list := &cozyv1alpha1.WorkloadList{}
+	if err := c.List(context.TODO(), list); err != nil {
+		t.Fatal(err)
+	}
+	if len(list.Items) != 1 {
+		t.Errorf("got %d Workloads, want only the held one", len(list.Items))
+	}
+	select {
+	case e := <-recorder.Events:
+		if !strings.Contains(e, "not metered") {
+			t.Errorf("event = %q, want one saying the bucket is not metered", e)
+		}
+	default:
+		t.Error("expected a BucketWorkloadNameTaken event")
+	}
+}
+
+// The legacy Workload can disappear between the lookup and the delete, for
+// example through owner garbage collection; that must not fail the reconcile.
+func TestReconcileBucketApp_LegacyAlreadyGone(t *testing.T) {
+	s := newTestScheme()
+	monitor, claim := bucketMonitorAndClaim("bucket-cozy-backups", "claim-uid")
+	c := fake.NewClientBuilder().WithScheme(s).
+		WithObjects(monitor, claim, legacyBucketWorkloadOwnedBy("claim-uid")).
+		WithStatusSubresource(monitor).
+		WithInterceptorFuncs(interceptor.Funcs{
+			Delete: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.DeleteOption) error {
+				if obj.GetName() == "bucket-bucket-cozy-backups" {
+					if err := c.Delete(ctx, obj, opts...); err != nil {
+						return err
+					}
+					return apierrors.NewNotFound(schema.GroupResource{Group: "cozystack.io", Resource: "workloads"}, obj.GetName())
+				}
+				return c.Delete(ctx, obj, opts...)
+			},
+		}).Build()
+	reconciler := &WorkloadMonitorReconciler{Client: c, Scheme: s}
+	// Reconcile only logs per-claim errors, so check the per-claim result
+	if err := reconciler.reconcileBucketClaimForMonitor(context.TODO(), monitor, *claim, nil); err != nil {
+		t.Fatalf("reconcileBucketClaimForMonitor returned error: %v", err)
+	}
+	if got, _ := workloadSize(t, c, "bucket-cozy-backups"); got.Cmp(resource.MustParse("689Gi")) != 0 {
+		t.Errorf("size = %s, want 689Gi carried over", got.String())
+	}
+}
+
+// A claim's own Workload, with its ownerRef as a live cluster's cache records
+// it (Kind set), must keep being updated rather than look like another claim's.
+func TestReconcileBucketClaim_UpdatesItsOwnWorkload(t *testing.T) {
+	s := newTestScheme()
+	monitor, claim := bucketMonitorAndClaim("bucket-x", "uid-x")
+	own := bucketWorkloadWithSize("bucket-x", "bucket-x", "uid-x", "1Gi")
+	c := fake.NewClientBuilder().WithScheme(s).
+		WithObjects(monitor, claim, own).
+		WithStatusSubresource(monitor).Build()
+	recorder := record.NewFakeRecorder(10)
+	reconciler := &WorkloadMonitorReconciler{Client: c, Scheme: s, Recorder: recorder}
+	req := reconcile.Request{NamespacedName: types.NamespacedName{Name: "bucket-x", Namespace: "tenant-demo"}}
+	if _, err := reconciler.Reconcile(context.TODO(), req); err != nil {
+		t.Fatalf("Reconcile returned error: %v", err)
+	}
+
+	_, w := workloadSize(t, c, "bucket-x")
+	if got := w.Labels[workloadMonitorLabel]; got != "bucket-x" {
+		t.Errorf("monitor label = %q, want the Workload updated by its own claim", got)
+	}
+	select {
+	case e := <-recorder.Events:
+		t.Errorf("unexpected event %q for the claim's own Workload", e)
+	default:
+	}
+}
+
+// A Workload that lost its owner references belongs to nobody, so the claim
+// whose name it carries takes it over instead of being blocked by it forever.
+func TestReconcileBucketClaim_AdoptsOwnerlessWorkload(t *testing.T) {
+	s := newTestScheme()
+	monitor, claim := bucketMonitorAndClaim("bucket-x", "uid-x")
+	orphan := bucketWorkloadWithSize("bucket-x", "bucket-x", "uid-x", "1Gi")
+	orphan.OwnerReferences = nil
+	c := fake.NewClientBuilder().WithScheme(s).
+		WithObjects(monitor, claim, orphan).
+		WithStatusSubresource(monitor).Build()
+	reconciler := &WorkloadMonitorReconciler{Client: c, Scheme: s}
+	req := reconcile.Request{NamespacedName: types.NamespacedName{Name: "bucket-x", Namespace: "tenant-demo"}}
+	if _, err := reconciler.Reconcile(context.TODO(), req); err != nil {
+		t.Fatalf("Reconcile returned error: %v", err)
+	}
+
+	_, w := workloadSize(t, c, "bucket-x")
+	if len(w.OwnerReferences) != 1 || w.OwnerReferences[0].UID != "uid-x" {
+		t.Errorf("owners = %v, want the claim uid-x", w.OwnerReferences)
+	}
+}
+
+// A controller rolled back to the doubled prefix attaches claim bucket-x to
+// bucket-bucket-x, which by then is the Bucket app "bucket-x"'s renamed
+// Workload. On the next upgrade bucket-x must let go of it, not delete it.
+func TestReconcileBucketApp_ReleasesSharedLegacyWorkload(t *testing.T) {
+	s := newTestScheme()
+	monitor, claim := bucketMonitorAndClaim("bucket-x", "uid-x")
+	shared := bucketWorkloadWithSize("bucket-bucket-x", "bucket-bucket-x", "uid-bx", "100Gi")
+	shared.OwnerReferences = append(shared.OwnerReferences, metav1.OwnerReference{
+		APIVersion: "objectstorage.k8s.io/v1alpha1", Kind: "BucketClaim", Name: "bucket-x", UID: "uid-x",
+	})
+	c := fake.NewClientBuilder().WithScheme(s).
+		WithObjects(monitor, claim, shared).
+		WithStatusSubresource(monitor).Build()
+	reconciler := &WorkloadMonitorReconciler{Client: c, Scheme: s}
+	if err := reconciler.reconcileBucketClaimForMonitor(context.TODO(), monitor, *claim, nil); err != nil {
+		t.Fatalf("reconcileBucketClaimForMonitor returned error: %v", err)
+	}
+
+	got, w := workloadSize(t, c, "bucket-bucket-x")
+	if len(w.OwnerReferences) != 1 || w.OwnerReferences[0].UID != "uid-bx" {
+		t.Errorf("bucket-bucket-x owners = %v, want only uid-bx", w.OwnerReferences)
+	}
+	if got.Cmp(resource.MustParse("100Gi")) != 0 {
+		t.Errorf("bucket-bucket-x size = %s, want 100Gi kept", got.String())
+	}
+	if _, own := workloadSize(t, c, "bucket-x"); own.Status.Resources != nil {
+		if _, ok := own.Status.Resources[resourceS3StorageBytes]; ok {
+			t.Errorf("bucket-x took the other bucket's size: %v", own.Status.Resources)
+		}
+	}
+}
+
+// The legacy Workload can be replaced under the same name between the lookup
+// and the delete; the replacement must survive.
+func TestReconcileBucketApp_KeepsWorkloadThatReplacedLegacy(t *testing.T) {
+	s := newTestScheme()
+	monitor, claim := bucketMonitorAndClaim("bucket-cozy-backups", "claim-uid")
+	legacy := legacyBucketWorkloadOwnedBy("claim-uid")
+	legacy.UID = "legacy-uid"
+	c := fake.NewClientBuilder().WithScheme(s).
+		WithObjects(monitor, claim, legacy).
+		WithStatusSubresource(monitor).
+		WithInterceptorFuncs(interceptor.Funcs{
+			Delete: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.DeleteOption) error {
+				if obj.GetName() == "bucket-bucket-cozy-backups" {
+					if err := c.Delete(ctx, obj.DeepCopyObject().(client.Object)); err != nil {
+						return err
+					}
+					replacement := bucketWorkloadWithSize("bucket-bucket-cozy-backups", "bucket-bucket-cozy-backups", "other-uid", "5Gi")
+					replacement.UID = "replacement-uid"
+					if err := c.Create(ctx, replacement); err != nil {
+						return err
+					}
+				}
+				return c.Delete(ctx, obj, opts...)
+			},
+		}).Build()
+	reconciler := &WorkloadMonitorReconciler{Client: c, Scheme: s}
+	if err := reconciler.reconcileBucketClaimForMonitor(context.TODO(), monitor, *claim, nil); err != nil {
+		t.Fatalf("reconcileBucketClaimForMonitor returned error: %v", err)
+	}
+
+	got, w := workloadSize(t, c, "bucket-bucket-cozy-backups")
+	if len(w.OwnerReferences) != 1 || w.OwnerReferences[0].UID != "other-uid" || got.Cmp(resource.MustParse("5Gi")) != 0 {
+		t.Errorf("replacement Workload changed: owners=%v size=%s", w.OwnerReferences, got.String())
+	}
+}
+
+// When both the new and the legacy name are held by other owners, neither is
+// taken over.
+func TestReconcileBucketClaim_BothNamesHeldIsSkipped(t *testing.T) {
+	s := newTestScheme()
+	monitor, claim := bucketMonitorAndClaim("bucket-x", "uid-bx")
+	c := fake.NewClientBuilder().WithScheme(s).
+		WithObjects(monitor, claim,
+			bucketWorkloadWithSize("bucket-x", "x", "uid-x", "10Gi"),
+			bucketWorkloadWithSize("bucket-bucket-x", "other", "uid-other", "20Gi")).
+		WithStatusSubresource(monitor).Build()
+	reconciler := &WorkloadMonitorReconciler{Client: c, Scheme: s}
+	if err := reconciler.reconcileBucketClaimForMonitor(context.TODO(), monitor, *claim, nil); err != nil {
+		t.Fatalf("reconcileBucketClaimForMonitor returned error: %v", err)
+	}
+
+	for name, owner := range map[string]types.UID{"bucket-x": "uid-x", "bucket-bucket-x": "uid-other"} {
+		if _, w := workloadSize(t, c, name); len(w.OwnerReferences) != 1 || w.OwnerReferences[0].UID != owner {
+			t.Errorf("%s owners = %v, want only %s", name, w.OwnerReferences, owner)
+		}
+	}
+}
+
+func orphanedLegacyWorkload(monitor string) *cozyv1alpha1.Workload {
+	w := legacyBucketWorkloadOwnedBy("gone-uid")
+	w.OwnerReferences = nil
+	w.Labels = map[string]string{workloadMonitorLabel: monitor}
+	return w
+}
+
+// A claim deleted with --cascade=orphan and recreated leaves its legacy
+// Workload without owners; it must not be metered next to the new one.
+func TestReconcileBucketApp_RemovesOrphanedLegacyWorkload(t *testing.T) {
+	c := reconcileBucketApp(t, orphanedLegacyWorkload("bucket-cozy-backups"))
+
+	err := c.Get(context.TODO(), types.NamespacedName{Name: "bucket-bucket-cozy-backups", Namespace: "tenant-demo"}, &cozyv1alpha1.Workload{})
+	if !apierrors.IsNotFound(err) {
+		t.Errorf("expected the orphaned legacy Workload to be deleted, got error %v", err)
+	}
+	if _, w := workloadSize(t, c, "bucket-cozy-backups"); len(w.Status.Resources) != 0 {
+		t.Errorf("sizes carried over from an orphaned legacy Workload: %v", w.Status.Resources)
+	}
+}
+
+func TestReconcileBucketApp_KeepsOrphanOfAnotherMonitor(t *testing.T) {
+	c := reconcileBucketApp(t, orphanedLegacyWorkload("some-other-monitor"))
+
+	if err := c.Get(context.TODO(), types.NamespacedName{Name: "bucket-bucket-cozy-backups", Namespace: "tenant-demo"}, &cozyv1alpha1.Workload{}); err != nil {
+		t.Errorf("expected another monitor's orphan to stay, got error %v", err)
+	}
+}
+
+// Sizes recorded on a Workload the claim did not own yet were not written for
+// it, so the legacy Workload's sizes take precedence.
+func TestReconcileBucketApp_LegacySizeWinsOverOwnerlessNewWorkload(t *testing.T) {
+	stale := bucketWorkloadWithSize("bucket-cozy-backups", "bucket-cozy-backups", "claim-uid", "10Gi")
+	stale.OwnerReferences = nil
+	c := reconcileBucketApp(t, legacyBucketWorkloadOwnedBy("claim-uid"), stale)
+
+	if got, _ := workloadSize(t, c, "bucket-cozy-backups"); got.Cmp(resource.MustParse("689Gi")) != 0 {
+		t.Errorf("size = %s, want the legacy 689Gi over the stale 10Gi", got.String())
 	}
 }

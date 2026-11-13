@@ -71,11 +71,10 @@ type KafkaSpec struct {
 	//   - `.Backup` — only on restore: `.Backup.Name`, `.Backup.Namespace` and
 	//     `.Backup.ApplicationRef` describing the source backup.
 	//
-	// Stored schemaless deliberately: the full PodTemplateSpec OpenAPI schema is
-	// ~590 KB, and inlining it here (after Altinity/Job/FoundationDB) would push
-	// the chart's Helm state Secret over the 1 MiB cap. See job_types.go for the
-	// same field carried with its schema, and strategy-kafka-default.yaml for
-	// the rendered pod.
+	// Stored schemaless: the apiserver keeps it as written rather than
+	// checking it against the pod schema, and it is validated when the
+	// driver creates the workload from it. See
+	// strategy-kafka-default.yaml for the rendered pod.
 	//
 	// +kubebuilder:validation:Schemaless
 	// +kubebuilder:pruning:PreserveUnknownFields

@@ -27,6 +27,10 @@ rules:
   - {{ $.Release.Name }}-filer
   - {{ $.Release.Name }}-db
   - {{ $.Release.Name }}-s3
+  {{- if .Values.lifecycle.enabled }}
+  - {{ $.Release.Name }}-admin
+  - {{ $.Release.Name }}-worker
+  {{- end }}
   {{- if eq .Values.topology "Simple" }}
   - {{ $.Release.Name }}-volume
   {{- range $poolName, $pool := .Values.volume.pools }}

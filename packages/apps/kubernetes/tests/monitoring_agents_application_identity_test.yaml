@@ -1,0 +1,38 @@
+suite: guest fluent-bit never ships application identity stream fields
+
+templates:
+  - templates/helmreleases/monitoring-agents.yaml
+
+values:
+  - values/common.yaml
+
+release:
+  name: kubernetes-test
+  namespace: tenant-test
+
+# Pods in a guest cluster are tenant-controlled, so their
+# apps.cozystack.io/application.* labels are not a trustworthy application
+# identity, and the platform must not promote them to the stream fields the
+# parent scopes application logs by. The guest release replaces the
+# monitoring-agents filters and outputs, so it is the guest overrides that keep
+# the parent's label lift out. This does not stop a guest admin who edits the
+# guest's own fluent-bit or writes to the parent's vlinsert directly; that is
+# the write-path control the logs proposal leaves open.
+
+tests:
+  - it: does not lift pod labels or declare lineage stream fields in the guest
+    set:
+      addons.monitoringAgents.enabled: true
+      _namespace.monitoring: tenant-test
+    asserts:
+      - isKind:
+          of: HelmRelease
+      - notMatchRegex:
+          path: spec.values.fluent-bit.config.filters
+          pattern: 'kubernetes_labels|apps_cozystack_io_application_'
+      - notMatchRegex:
+          path: spec.values.fluent-bit.config.outputs
+          pattern: 'apps_cozystack_io_application_'
+      - matchRegex:
+          path: spec.values.fluent-bit.config.outputs
+          pattern: '_stream_fields=stream,kubernetes_pod_name,kubernetes_container_name,kubernetes_namespace_name&'

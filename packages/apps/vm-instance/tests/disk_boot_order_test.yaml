@@ -1,0 +1,128 @@
+suite: vm-instance disk boot order
+
+# The first entry of `disks` is the one callers treat as the system disk, so
+# booting from installer or rescue media must not require moving that media to
+# the front of the list. These cases pin that an explicit bootOrder decides
+# which device the VM boots from while list order stays as given, and that
+# leaving it unset keeps the positional order existing VMs were rendered with.
+release:
+  name: test-vm
+  namespace: tenant-test
+templates:
+  - templates/vm.yaml
+set:
+  fullnameOverride: test-vm
+  instanceType: ""
+  instanceProfile: ""
+  resources:
+    cpu: 1
+    sockets: 1
+    memory: 1Gi
+  _cluster:
+    scheduling:
+      dedicatedNodesForWindowsVMs: "false"
+kubernetesProvider:
+  scheme:
+    "cdi.kubevirt.io/v1beta1/DataVolume":
+      gvr:
+        group: cdi.kubevirt.io
+        version: v1beta1
+        resource: datavolumes
+      namespaced: true
+  objects:
+    - apiVersion: cdi.kubevirt.io/v1beta1
+      kind: DataVolume
+      metadata:
+        name: vm-disk-system
+        namespace: tenant-test
+        annotations: {}
+    - apiVersion: cdi.kubevirt.io/v1beta1
+      kind: DataVolume
+      metadata:
+        name: vm-disk-iso
+        namespace: tenant-test
+        annotations:
+          vm-disk.cozystack.io/optical: "true"
+    - apiVersion: cdi.kubevirt.io/v1beta1
+      kind: DataVolume
+      metadata:
+        name: vm-disk-data
+        namespace: tenant-test
+        annotations: {}
+tests:
+  - it: keeps the positional boot order when no disk sets bootOrder
+    set:
+      disks:
+        - name: system
+        - name: iso
+        - name: data
+    asserts:
+      - equal:
+          path: spec.template.spec.domain.devices.disks
+          value:
+            - name: disk-system
+              disk: {}
+              bootOrder: 1
+            - name: disk-iso
+              cdrom: {}
+              bootOrder: 2
+            - name: disk-data
+              disk: {}
+              bootOrder: 3
+
+  - it: boots from a CD-ROM in second position without reordering the disks
+    set:
+      disks:
+        - name: system
+          bootOrder: 2
+        - name: iso
+          bus: sata
+          bootOrder: 1
+        - name: data
+    asserts:
+      - equal:
+          path: spec.template.spec.domain.devices.disks
+          value:
+            - name: disk-system
+              disk: {}
+              bootOrder: 2
+            - name: disk-iso
+              cdrom:
+                bus: sata
+              bootOrder: 1
+            - name: disk-data
+              disk: {}
+              bootOrder: 3
+      - equal:
+          path: spec.template.spec.volumes[0].dataVolume.name
+          value: vm-disk-system
+
+  - it: refuses an explicit bootOrder that collides with another disk's positional one
+    set:
+      disks:
+        - name: system
+        - name: iso
+          bootOrder: 1
+    asserts:
+      - failedTemplate:
+          errorMessage: 'disks "system" and "iso" both have bootOrder 1; boot orders must be unique'
+
+  - it: refuses two disks given the same explicit bootOrder
+    set:
+      disks:
+        - name: system
+          bootOrder: 3
+        - name: iso
+          bootOrder: 3
+    asserts:
+      - failedTemplate:
+          errorMessage: 'disks "system" and "iso" both have bootOrder 3; boot orders must be unique'
+
+  - it: rejects a bootOrder below 1 through the values schema
+    set:
+      disks:
+        - name: system
+          bootOrder: 0
+    asserts:
+      - failedTemplate:
+          errorPattern: "minimum"

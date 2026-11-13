@@ -240,10 +240,12 @@ exclude_from_kube_ovn() {
   fi
   # A pod that holds a node's current Ingress IP keeps the address after the
   # move, and that node keeps it in its ipcache as reserved:ingress, so the pod
-  # stays unreachable from there until it is recreated.
-  jq -r --argjson cn "$ciliumnodes" '
-    ([$cn.items[] | select(.spec.ingress.ipv4) | {key: .spec.ingress.ipv4, value: .metadata.name}] | from_entries) as $ingress
-    | .[] | select($ingress[.ip]) | "\(.name) \(.ip) \($ingress[.ip])"' <<<"$ipobjects" \
+  # stays unreachable from there until it is recreated. The CiliumNode list goes
+  # in on stdin, because the Node labels Cilium copies onto every CiliumNode take
+  # it past the 128 KiB a single argument may hold within a handful of nodes.
+  jq -rn 'input as $cn
+    | ([$cn.items[] | select(.spec.ingress.ipv4) | {key: .spec.ingress.ipv4, value: .metadata.name}] | from_entries) as $ingress
+    | input[] | select($ingress[.ip]) | "\(.name) \(.ip) \($ingress[.ip])"' <<<"$ciliumnodes"$'\n'"$ipobjects" \
     | while read -r ipname ip node; do
       if ! in_any "$POOL" "$ip"; then
         log "$ipname holds $ip, the Ingress IP of $node before the move. Recreate it once the run is done, $node keeps that address as reserved:ingress"

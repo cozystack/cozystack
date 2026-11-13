@@ -164,7 +164,7 @@
   existing disk is a silent no-op that diverges the CR from the cluster (#2985);
   fail instead. Both are compared against the operator input recorded in an
   annotation at creation (legacy disks fall back to stored spec.source). Full
-  contract + caveats: docs/storage-immutability.md. Size growth: pvc-resize-hook.
+  contract + caveats: https://cozystack.io/docs/v1/operations/storage-class-immutability/. Size growth: pvc-resize-hook.
 */}}
 {{- if $existingDV }}
   {{- $existingAnnotations := $existingDV.metadata.annotations | default dict }}
@@ -184,7 +184,7 @@
     {{- /* Legacy disk (no annotation): compare only chart-producible stored
            shapes; anything else (sourceRef, non-map, foreign source) is left
            alone, never crashed or deadlocked. Vars are declared before the map
-           guards so they stay in scope below. See docs/storage-immutability.md. */}}
+           guards so they stay in scope below. See https://cozystack.io/docs/v1/operations/storage-class-immutability/. */}}
     {{- $storedType := "" }}
     {{- $chartShaped := false }}
     {{- $storedIsImageClone := false }}
@@ -256,6 +256,15 @@ metadata:
     {{ $storageClassAnnotation }}: {{ $requestedSC | quote }}
     {{- end }}
     vm-disk.cozystack.io/optical: "{{ .Values.optical }}"
+    {{- /* A Velero restore deletes the DataVolume and recreates the PVC under
+           its name, so the next Helm upgrade creates this DataVolume over a
+           claim CDI did not make for it. CDI v1.66 accepts that only with this
+           annotation on the DataVolume or with the DataVolumeClaimAdoption
+           feature gate; the same annotation on the PVC is never read. It cannot
+           capture a claim CDI created for this very DataVolume, whose
+           createdForDataVolume is the DataVolume's uid, so a fresh import is
+           unchanged. */}}
+    cdi.kubevirt.io/allowClaimAdoption: "true"
   labels:
     app.kubernetes.io/instance: {{ .Release.Name }}
   name: {{ .Release.Name }}
