@@ -1167,6 +1167,40 @@ spec:
                       rule: '!has(self.source.pvc) || (has(self.source.pvc.subPath)
                         && size(self.source.pvc.subPath) > 0)'
                 type: object
+              clientService:
+                description: |-
+                  ClientService configures the "<cluster>-client" Service the operator
+                  creates for applications. Absent means the operator manages only the
+                  fields it always owns (selector and the client port) and leaves the
+                  rest of the Service alone. Does not affect the headless Service.
+
+                  Unlike the member-level fields above, this is not latched through
+                  status.observed: the Service carries no consensus state, so a change
+                  is applied on the next reconcile.
+                properties:
+                  trafficDistribution:
+                    description: |-
+                      TrafficDistribution sets the client Service's spec.trafficDistribution,
+                      a hint to the Service proxy (kube-proxy, Cilium, ...) on how to route
+                      traffic across the ready etcd members. The common use is a cluster
+                      stretched across zones: "PreferClose" (or "PreferSameZone") keeps
+                      clients talking to a member in their own zone while one is ready.
+                      The values mirror corev1.ServiceSpec.TrafficDistribution.
+
+                      When set, the operator writes it on create and reconciles drift back
+                      to it. When absent, the operator does not touch the field, so a value
+                      set on the Service by hand is preserved.
+
+                      Requires an apiserver that serves the field: Kubernetes 1.31+ for
+                      "PreferClose" (beta, on by default; GA in 1.33), and 1.34+ for
+                      "PreferSameZone" and "PreferSameNode" (PreferSameTrafficDistribution
+                      feature gate, beta and on by default from 1.34).
+                    enum:
+                    - PreferClose
+                    - PreferSameZone
+                    - PreferSameNode
+                    type: string
+                type: object
               imagePullSecrets:
                 description: |-
                   ImagePullSecrets is a list of Secret references in the cluster's
