@@ -1,0 +1,6 @@
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingWebhookConfiguration
+metadata:
+  name: node-healthcheck-validating-webhook-configuration
+  annotations:
+    cert-manager.io/inject-ca-from: cozy-node-remediation/node-healthcheck-serving-cert

@@ -1,0 +1,28 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+# Applied by `make update` from inside the upstream tree, as config/cozystack,
+# next to config/default. The output is filtered there: the CRDs ship from
+# packages/system/node-remediation-crds, the Namespace comes from the
+# PackageSource, and the default manager grants are replaced by the two
+# safety-mode roles (config/rbac/safety), as docs/safety-mode.md in the
+# patched tree requires. kustomize loads only files below this directory, so
+# `make update` copies the cluster half of those roles in as
+# safety-clusterrole.yaml; the namespaced half is a template of the chart.
+namespace: cozy-node-remediation
+resources:
+  - ../default
+  - safety-clusterrole.yaml
+  - safety-clusterrolebinding.yaml
+patches:
+  - path: deployment.yaml
+    target:
+      kind: Deployment
+      name: fence-agents-remediation-controller-manager
+  - path: mutating-webhook-ca.yaml
+    target:
+      kind: MutatingWebhookConfiguration
+      name: fence-agents-remediation-mutating-webhook-configuration
+  - path: validating-webhook-ca.yaml
+    target:
+      kind: ValidatingWebhookConfiguration
+      name: fence-agents-remediation-validating-webhook-configuration

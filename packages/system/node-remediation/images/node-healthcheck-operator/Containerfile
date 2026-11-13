@@ -1,0 +1,46 @@
+FROM --platform=$BUILDPLATFORM golang:1.27@sha256:3680233e3204827fbdc66088528ae6d4b3d034f51d03a99d454f6de034888244 AS builder
+ARG GOPROXY
+
+ARG VERSION=v0.12.0
+# The commit v0.12.0 points at, for the version information the binary reports.
+ARG COMMIT_REF=a49ec14c47c5c1f0e5b81c68bf2880ff17ec4a5f
+
+ARG TARGETOS
+ARG TARGETARCH
+
+WORKDIR /workspace
+
+RUN curl -sSL https://github.com/medik8s/node-healthcheck-operator/archive/refs/tags/${VERSION}.tar.gz | tar -xzf- --strip=1
+
+COPY patches /patches
+RUN git apply /patches/*.diff
+
+# The resources suite the patch touches starts an envtest control plane; the
+# versions are the ones upstream's Makefile pins.
+ARG ENVTEST_VERSION=v0.0.0-20260120065648-aebc15d7c689
+ARG ENVTEST_K8S_VERSION=1.34
+RUN mkdir -p /envtest \
+ && go install sigs.k8s.io/controller-runtime/tools/setup-envtest@${ENVTEST_VERSION} \
+ && /go/bin/setup-envtest use ${ENVTEST_K8S_VERSION} --bin-dir /envtest -p path > /envtest/path
+
+# go build never compiles a _test.go, so nothing else runs the tests of the
+# packages the patches touch. Each package is tested from its own directory:
+# that finds the module it belongs to, and an empty list runs nothing.
+# The list is read into a variable first: a for loop drops the exit status
+# of a command substitution, so a patch git cannot read would leave the list
+# empty and the step green.
+RUN files=$(git apply --numstat /patches/*.diff) || exit 1; \
+    export KUBEBUILDER_ASSETS="$(cat /envtest/path)"; \
+    for dir in $(printf '%s\n' "$files" | cut -f3 | grep '\.go$' | xargs -r -n1 dirname | sort -u); do \
+      (cd "$dir" && go test .) || exit 1; \
+    done
+
+RUN CI_VERSION=${VERSION} CI_COMMIT=${COMMIT_REF} GOOS=${TARGETOS} GOARCH=${TARGETARCH} ./hack/build.sh
+
+# The runtime stage is upstream's Dockerfile at VERSION, base pinned by digest.
+FROM registry.access.redhat.com/ubi9/ubi-micro:latest@sha256:dbd325b96bcd432dd42816d31412bdf1dc0fb973b79ed310344bc23c76c068db
+WORKDIR /
+COPY --from=builder /workspace/bin/manager .
+USER 65532:65532
+
+ENTRYPOINT ["/manager"]

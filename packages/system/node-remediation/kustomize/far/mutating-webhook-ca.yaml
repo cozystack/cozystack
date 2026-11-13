@@ -1,0 +1,6 @@
+apiVersion: admissionregistration.k8s.io/v1
+kind: MutatingWebhookConfiguration
+metadata:
+  name: fence-agents-remediation-mutating-webhook-configuration
+  annotations:
+    cert-manager.io/inject-ca-from: cozy-node-remediation/fence-agents-remediation-serving-cert

@@ -1,0 +1,18 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+# Applied by `make update` from inside the upstream tree, as config/cozystack,
+# next to config/default. The output is filtered there: the CRD ships from
+# packages/system/node-remediation-crds and the Namespace comes from the
+# PackageSource.
+namespace: cozy-node-remediation
+resources:
+  - ../default
+patches:
+  - path: deployment.yaml
+    target:
+      kind: Deployment
+      name: node-healthcheck-controller-manager
+  - path: validating-webhook-ca.yaml
+    target:
+      kind: ValidatingWebhookConfiguration
+      name: node-healthcheck-validating-webhook-configuration

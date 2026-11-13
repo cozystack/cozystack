@@ -1,0 +1,67 @@
+FROM --platform=$BUILDPLATFORM golang:1.27@sha256:3680233e3204827fbdc66088528ae6d4b3d034f51d03a99d454f6de034888244 AS builder
+ARG GOPROXY
+
+# Upstream main as of 2026-10-16 (":books: add agents.md (#223)"), which
+# `git describe --tags` names v0.8.0-38-gf3e85bf. The carried patches build on
+# API that the last release, v0.8.0, does not have, so the pin is a commit
+# rather than a tag until a release carries them.
+ARG COMMIT_REF=f3e85bf5d104ea7d96bf95b701ad3d58e3aea3fc
+ARG UPSTREAM_VERSION=v0.8.0-38-gf3e85bf
+
+ARG TARGETOS
+ARG TARGETARCH
+
+WORKDIR /workspace
+
+RUN curl -sSL https://github.com/medik8s/fence-agents-remediation/archive/${COMMIT_REF}.tar.gz | tar -xzf- --strip=1
+
+COPY patches /patches
+RUN git apply /patches/*.diff
+
+# The patches promote one indirect module to a direct dependency and import
+# test packages of modules go.sum already lists, so vendor/ is regenerated
+# instead of carrying its diff.
+RUN for attempt in 1 2 3; do go mod vendor && break; [ "$attempt" = 3 ] && exit 1; sleep $((attempt * 10)); done
+
+# The controller, webhook and utils suites the patches touch start an envtest
+# control plane; the versions are the ones upstream's Makefile pins.
+ARG ENVTEST_VERSION=v0.24.1
+ARG ENVTEST_K8S_VERSION=1.36
+RUN mkdir -p /envtest \
+ && go install sigs.k8s.io/controller-runtime/tools/setup-envtest@${ENVTEST_VERSION} \
+ && /go/bin/setup-envtest use ${ENVTEST_K8S_VERSION} --bin-dir /envtest -p path > /envtest/path
+
+# go build never compiles a _test.go, so nothing else runs the tests of the
+# packages the patches touch. Each package is tested from its own directory:
+# that finds the module it belongs to, and an empty list runs nothing.
+# The list is read into a variable first: a for loop drops the exit status
+# of a command substitution, so a patch git cannot read would leave the list
+# empty and the step green.
+RUN files=$(git apply --numstat /patches/*.diff) || exit 1; \
+    export KUBEBUILDER_ASSETS="$(cat /envtest/path)"; \
+    for dir in $(printf '%s\n' "$files" | cut -f3 | grep '\.go$' | xargs -r -n1 dirname | sort -u); do \
+      (cd "$dir" && go test .) || exit 1; \
+    done
+
+RUN CI_UPSTREAM_COMMIT=${COMMIT_REF} GOOS=${TARGETOS} GOARCH=${TARGETARCH} ./hack/build.sh
+
+# The runtime stage is upstream's Dockerfile at COMMIT_REF, base pinned by
+# digest: the manager plus the fence-agents packages it can run as subprocesses.
+# Safety-mode speaks Redfish in-process and runs none of them; they stay so
+# that the image is the upstream one and the agent names in a template resolve.
+FROM quay.io/centos/centos:stream9@sha256:280add9b43d478ff06de6ccc6285afa7f1d81d8a0ea0d63e292a2f87f1d5aedf
+
+WORKDIR /
+COPY --from=builder /workspace/manager .
+
+RUN dnf install -y dnf-plugins-core \
+    && dnf --enablerepo=highavailability install -y fence-agents-amt-ws fence-agents-apc-snmp fence-agents-cisco-ucs \
+    fence-agents-eaton-snmp fence-agents-emerson fence-agents-eps fence-agents-ibmblade fence-agents-ifmib fence-agents-ilo2 \
+    fence-agents-intelmodular fence-agents-ipdu fence-agents-ipmilan fence-agents-redfish fence-agents-rhevm \
+    fence-agents-vmware-rest fence-agents-vmware-soap \
+    fence-agents-kubevirt fence-agents-ibm-powervs fence-agents-ibm-vpc \
+    fence-agents-aws fence-agents-azure-arm fence-agents-gce \
+    && dnf clean all -y
+
+USER 65532:65532
+ENTRYPOINT ["/manager"]

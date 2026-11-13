@@ -1,0 +1,44 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: fence-agents-remediation-controller-manager
+spec:
+  template:
+    metadata:
+      annotations:
+        # The operator reads the CA once at startup, so a rotated bundle has to
+        # roll the pods; the Helm expression survives kustomize as a string.
+        checksum/redfish-ca: '{{ .Values.bmc.caBundle | sha256sum }}'
+    spec:
+      containers:
+        - name: manager
+          # A strategic merge replaces the whole args list, so the four upstream
+          # flags are repeated ahead of the safety-mode ones.
+          args:
+            - --health-probe-bind-address=:8081
+            - --metrics-bind-address=:8443
+            - --leader-elect
+            - --enable-http2=false
+            - --safety-mode=true
+            - --trusted-nhc-creator=system:serviceaccount:cozy-node-remediation:node-healthcheck-controller-manager
+            - --bmc-credential-namespace=cozy-node-remediation-bmc
+            - --redfish-ca-file=/etc/redfish/ca.crt
+          ports:
+            - containerPort: 9443
+              name: webhook-server
+              protocol: TCP
+          volumeMounts:
+            - mountPath: /tmp/k8s-webhook-server/serving-certs
+              name: cert
+              readOnly: true
+            - mountPath: /etc/redfish
+              name: redfish-ca
+              readOnly: true
+      volumes:
+        - name: cert
+          secret:
+            defaultMode: 420
+            secretName: fence-agents-remediation-webhook-cert
+        - name: redfish-ca
+          configMap:
+            name: node-remediation-redfish-ca
