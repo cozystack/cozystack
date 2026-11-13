@@ -39,6 +39,10 @@ type BackupJobReconciler struct {
 	// re-reads the BackupJob before dispatching to a driver. Wired in
 	// SetupWithManager.
 	APIReader client.Reader
+
+	// newS3ObjectLister overrides the S3 client used to measure artifact
+	// sizes; nil means a real minio client. Set by unit tests.
+	newS3ObjectLister func(conn s3Connection) (s3ObjectLister, error)
 }
 
 func (r *BackupJobReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -101,7 +105,7 @@ func (r *BackupJobReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		// so the tenant sees the misbinding instead of an infinite
 		// requeue loop with no status signal.
 		if errors.Is(err, ErrNoMatchingStrategy) {
-			return r.markBackupJobFailed(ctx, j, fmt.Sprintf("BackupClass %q does not bind a strategy for Kind %q; see docs/operations/backup-classes.md", j.Spec.BackupClassName, normalizedAppRef.Kind))
+			return r.markBackupJobFailed(ctx, j, fmt.Sprintf("BackupClass %q does not bind a strategy for Kind %q; see https://cozystack.io/docs/v1/operations/services/backup-classes/", j.Spec.BackupClassName, normalizedAppRef.Kind))
 		}
 		// BackupClass not found yet is transient on a fresh install:
 		// during the bootstrap window the cozy-default BackupClass is
@@ -210,6 +214,8 @@ func (r *BackupJobReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		return r.reconcileRedis(ctx, j, resolved)
 	case strategyv1alpha1.KafkaStrategyKind:
 		return r.reconcileKafka(ctx, j, resolved)
+	case strategyv1alpha1.KubernetesStrategyKind:
+		return r.reconcileKubernetes(ctx, j, resolved)
 	default:
 		logger.V(1).Info("BackupJob resolved StrategyRef.Kind not supported, skipping",
 			"backupjob", j.Name,
@@ -236,6 +242,7 @@ func supportedBackupStrategyKinds() []string {
 		strategyv1alpha1.RabbitmqStrategyKind,
 		strategyv1alpha1.RedisStrategyKind,
 		strategyv1alpha1.KafkaStrategyKind,
+		strategyv1alpha1.KubernetesStrategyKind,
 	}
 }
 
@@ -290,7 +297,7 @@ func (r *BackupJobReconciler) handleProjectionError(ctx context.Context, j *back
 	// Tenant-side projection failures must be visible in the same
 	// Prometheus counter as system-side failures so the
 	// "rate(failures_total) > 0 or absent_over_time(successes_total[10m])"
-	// alert in docs/operations/backup-classes.md catches them. The system
+	// alert in https://cozystack.io/docs/v1/operations/services/backup-classes/ catches them. The system
 	// projector reports against system namespaces (cozy-velero etc.);
 	// here we attribute against the BackupJob's tenant namespace.
 	credentialsProjectionFailures.WithLabelValues(j.Namespace, classifyReason(err)).Inc()
@@ -311,14 +318,6 @@ func (r *BackupJobReconciler) handleProjectionError(ctx context.Context, j *back
 }
 
 // markBackupJobFailed records a terminal Failed phase on the BackupJob.
-//
-// Coupling note: a failure that fires before reconcileCNPG's StartedAt block
-// has set backupJob.Status.StartedAt leaves StartedAt nil. The CNPG path's
-// cnpgDefaultBackupDeadline check only fires once StartedAt is set, so an
-// early-failure retry that reaches the StartedAt block restarts the deadline
-// budget from the retry's StartedAt - intentional, since retries are
-// user-driven and a fresh budget is what users expect after correcting the
-// cause of the previous failure.
 func (r *BackupJobReconciler) markBackupJobFailed(ctx context.Context, backupJob *backupsv1alpha1.BackupJob, message string) (ctrl.Result, error) {
 	logger := getLogger(ctx)
 	now := metav1.Now()

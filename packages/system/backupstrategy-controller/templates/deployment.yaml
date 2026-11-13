@@ -47,7 +47,7 @@ spec:
         - name: BACKUP_STORAGE_REGION
           value: {{ .Values.backupStorage.region | quote }}
         - name: BACKUP_STORAGE_FORCE_PATH_STYLE
-          value: {{ .Values.backupStorage.forcePathStyle | quote }}
+          value: {{ include "backupstrategy-controller.forcePathStyle" . | quote }}
         - name: BACKUP_STORAGE_SYSTEM_NAMESPACES
           value: {{ .Values.backupStorage.systemNamespaces | join "," | quote }}
         {{- if .Values.backupStorage.reconcileDefaultObjects }}
@@ -87,6 +87,18 @@ spec:
           value: {{ printf "bucket-%s-system" .Values.backupStorage.bucketName | quote }}
         - name: BACKUP_CREDENTIALS_HELMRELEASE_NAMESPACE
           value: {{ .Values.backupStorage.namespace | quote }}
+        # The COSI Secret that release renders the credentials Secret from
+        # (packages/system/bucket/templates/user-credentials.yaml appends
+        # "-credentials" to its name). The COSI sidecar writes it once per
+        # BucketAccess, so the gate compares the two endpoints and forces the
+        # release when the credentials Secret lags behind. Only the system
+        # user's Secret of this very bucket is rendered by that release; any
+        # other systemSecretName would be forced without ever changing.
+        {{- $cosiSecretName := printf "bucket-%s-system" .Values.backupStorage.bucketName }}
+        {{- if eq .Values.backupStorage.systemSecretName (printf "%s-credentials" $cosiSecretName) }}
+        - name: BACKUP_CREDENTIALS_COSI_SECRET_NAME
+          value: {{ $cosiSecretName | quote }}
+        {{- end }}
         {{- end }}
         {{- if .Values.velero.bslEnabled }}
         - name: BACKUP_DEFAULT_OBJECTS_VELERO_NAMESPACE
