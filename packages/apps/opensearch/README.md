@@ -1,6 +1,6 @@
 # Managed OpenSearch Service
 
-> `storageClass` is annotated as immutable in the chart schema — see [`docs/storage-immutability.md`](../../../docs/storage-immutability.md) for the contract and which consumers enforce it.
+> `storageClass` is annotated as immutable in the chart schema — see [storageClass immutability](https://cozystack.io/docs/v1/operations/storage-class-immutability/) for the contract and which consumers enforce it.
 
 ## TLS and client verification
 
@@ -92,14 +92,6 @@ Every release listed with `EXTERNAL` true was annotated for `opensearch-<name>.<
 | ------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------- | ----- |
 | `tls`        | HTTP-layer TLS configuration. Selects who issues the HTTP server certificate; TLS itself is always served.                                                                                                                                                                                                                                                                                                                                                                              | `object` | `{}`  |
 | `tls.issuer` | Who issues the HTTP server certificate: `operator` uses the CA the opster operator manages itself, `cert-manager` gives the release its own CA, covers the external hostname and publishes a trust anchor the tenant can verify against. Unset follows external: `cert-manager` when it is true, `operator` when it is false. Named for the issuer because TLS is served under both, unlike the similarly-spelled `tls.enabled` in some other charts, which does switch TLS on and off. | `string` | `{}`  |
-
-
-### Image configuration
-
-| Name                | Description                            | Type     | Value |
-| ------------------- | -------------------------------------- | -------- | ----- |
-| `images`            | Container images used by the operator. | `object` | `{}`  |
-| `images.opensearch` | OpenSearch image.                      | `string` | `""`  |
 
 
 ### Node roles configuration

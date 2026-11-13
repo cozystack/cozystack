@@ -1,0 +1,433 @@
+/*
+Copyright 2026 The Cozystack Authors.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
+package main
+
+import (
+	"fmt"
+	"slices"
+	"strings"
+	"testing"
+)
+
+// The records the live batches carried before records had a version, as
+// GitHub returned them on 2026-11-09, read as version 1.
+func TestRecordReadsVersion1(t *testing.T) {
+	for line, block := range map[string]string{
+		"release-1.7": `{"line":"release-1.7","deferred":[{"original":4756,"commit":"647407545d630291cfe2a20880cce45af22edf0c","files":["packages/system/backupstrategy-controller/values.yaml"]},{"original":4867,"commit":"813c6180861efe1896c26d62a7afcbc1ff590ebc","files":[".github/renovate.json"]},{"original":5082,"commit":"e93db8848027450c2e23d21348409efa641cb6f1","files":["pkg/registry/core/tap/rest.go"]},{"original":4888,"files":[".github/workflows/cut-prerelease.yaml"],"workflows":true},{"original":4971,"files":[".github/workflows/e2e-proxmox.yaml"],"workflows":true}]}`,
+		"release-1.6": `{"line":"release-1.6","deferred":[{"original":5071,"commit":"3fa534f3cf6cb5774a183f0202f7f5c13e9ae211","files":["internal/operator/tapmaterializer_reconciler.go","internal/operator/tapmaterializer_reconciler_test.go"]},{"original":5086,"commit":"5265ee662c591db409c8ef1ed8bb457cf29f5c22","files":["packages/apps/tenant/templates/gateway.yaml"]},{"original":5087,"commit":"8d8179f20a2c10de03face1472435d5083cde38d","files":["internal/controller/applicationdefinition_helmreconciler.go","internal/controller/applicationdefinition_helmreconciler_test.go"]},{"original":5142,"files":[".github/workflows/pull-requests-release.yaml",".github/workflows/update-releasenotes.yaml"],"workflows":true}]}`,
+	} {
+		l, _ := parseLine(line)
+		rec, err := parseRecord("## What this PR does\n\ntext\n\n"+deferredFence+"\n"+block+"\n```\n\n### Release note\n", l)
+		if err != nil {
+			t.Fatalf("%s: parseRecord = %v", line, err)
+		}
+		waits, conflicts := 0, 0
+		for _, e := range rec.Deferred {
+			switch {
+			case e.Workflows:
+				waits++
+			case e.Commit != "":
+				conflicts++
+			}
+		}
+		if rec.Version != 1 || rec.Line != line || rec.Closing != nil || len(rec.Dropped) != 0 || waits+conflicts != len(rec.Deferred) || waits == 0 || conflicts == 0 {
+			t.Errorf("%s: record = %+v; want version 1 with its conflicts and waits", line, rec)
+		}
+	}
+}
+
+// v2 is a version 2 record with each value it may hold.
+func v2(extra string) string {
+	sha := strings.Repeat("a", 40)
+	return `{"version":2,"line":"release-1.1","built":{"main":"` + sha + `","line":"` + sha + `","newer":"","policy":"` + sha + `","batch":"` + sha + `","tool":"` + sha + `+dirty","run":"","at":"2026-10-26T06:00:00Z","options":{"noWorkflowFiles":true,"mode":"continue"}},` +
+		`"report":"` + strings.Repeat("b", 64) + `","closing":null,"deferred":[{"original":5,"commit":"` + sha + `","files":["app/five.txt"]},{"original":6,"files":[],"reason":"fails the e2e"},{"original":7,"files":[".github/workflows/x.yaml"],"workflows":true}],` +
+		`"dropped":[{"original":8,"merge":"` + sha + `","reason":"needs #4","on":90,"date":"2026-10-26"}],"stale":[9]` + extra + `}`
+}
+
+// A record is read whole or not at all: anything it cannot vouch for stops
+// the command rather than being half believed.
+func TestRecordRefuses(t *testing.T) {
+	l, _ := parseLine("release-1.1")
+	block := func(json string) string { return "text\n\n" + deferredFence + "\n" + json + "\n```\n" }
+	if rec, err := parseRecord(block(v2("")), l); err != nil || rec.Version != 2 || len(rec.Dropped) != 1 || rec.Built.Options.Mode != "continue" {
+		t.Fatalf("parseRecord of a whole v2 record = %+v, %v", rec, err)
+	}
+	sha := strings.Repeat("a", 40)
+	for name, json := range map[string]string{
+		"version 4":                   strings.Replace(v2(""), `"version":2`, `"version":4`, 1),
+		"trailing data":               v2("") + `{}`,
+		"trailing text":               v2("") + ` x`,
+		"an original listed twice":    strings.Replace(v2(""), `"original":8`, `"original":5`, 1),
+		"a needs entry with a commit": strings.Replace(v2(""), `{"original":6,"files":[],"reason":"fails the e2e"}`, `{"original":6,"commit":"`+sha+`","files":[],"needs":[4]}`, 1),
+		"an empty reason":             strings.Replace(v2(""), `"reason":"fails the e2e"`, `"reason":""`, 1),
+		"an empty drop reason":        strings.Replace(v2(""), `"reason":"needs #4"`, `"reason":" "`, 1),
+		"a bad tool":                  strings.Replace(v2(""), `+dirty"`, `-dirty"`, 1),
+		"an unknown mode":             strings.Replace(v2(""), `"mode":"continue"`, `"mode":"rebase"`, 1),
+		"a reason with a commit":      strings.Replace(v2(""), `"reason":"fails the e2e"`, `"reason":"x","commit":"`+sha+`"`, 1),
+		"a short merge":               strings.Replace(v2(""), `"merge":"`+sha+`"`, `"merge":"abc"`, 1),
+		"a bad date":                  strings.Replace(v2(""), `"date":"2026-10-26"`, `"date":"26.10.2026"`, 1),
+		"a bad time":                  strings.Replace(v2(""), `"at":"2026-10-26T06:00:00Z"`, `"at":"yesterday"`, 1),
+		"a short report":              strings.Replace(v2(""), strings.Repeat("b", 64), "bbbb", 1),
+		"a closing on another line":   strings.Replace(v2(""), `"closing":null`, `"closing":{"pr":90,"branch":"backport-batch/release-1.0-20261026","head":"`+sha+`"}`, 1),
+		"a closing without a head":    strings.Replace(v2(""), `"closing":null`, `"closing":{"pr":90,"branch":"`+batchBranch1+`","head":""}`, 1),
+		"a negative stale":            strings.Replace(v2(""), `"stale":[9]`, `"stale":[-9]`, 1),
+		"an unknown key":              v2(`,"parked":[]`),
+		"an entry of no kind":         strings.Replace(v2(""), `{"original":6,"files":[],"reason":"fails the e2e"}`, `{"original":6,"files":[]}`, 1),
+		"another line":                strings.Replace(v2(""), `"line":"release-1.1"`, `"line":"release-1.0"`, 1),
+		"an escape in a reason":       strings.Replace(v2(""), `"reason":"fails the e2e"`, `"reason":"fails\u001b[2J the e2e"`, 1),
+		"a newline in a reason":       strings.Replace(v2(""), `"reason":"fails the e2e"`, `"reason":"fails\nwarning: forged"`, 1),
+		"an escape in a drop":         strings.Replace(v2(""), `"reason":"needs #4"`, `"reason":"needs\u001b]0;x\u0007 #4"`, 1),
+		"a newline in a drop":         strings.Replace(v2(""), `"reason":"needs #4"`, `"reason":"needs #4\nnote: forged"`, 1),
+		"a reason past its length":    strings.Replace(v2(""), `"reason":"needs #4"`, `"reason":"`+strings.Repeat("x", titleLimit+1)+`"`, 1),
+		"a bidi file name":            strings.Replace(v2(""), `"files":["app/five.txt"]`, `"files":["app/\u202efive.txt"]`, 1),
+	} {
+		if _, err := parseRecord(block(json), l); err == nil {
+			t.Errorf("%s: parseRecord accepted it", name)
+		}
+	}
+	closing := strings.Replace(v2(""), `"closing":null`, `"closing":{"pr":90,"branch":"`+batchBranch1+`","head":"`+sha+`"}`, 1)
+	if rec, err := parseRecord(block(closing), l); err != nil || rec.Closing == nil || rec.Closing.PR != 90 {
+		t.Errorf("a record that is closing = %+v, %v", rec, err)
+	}
+}
+
+// recordPR is a batch pull request on release-1.1 carrying body, numbered n,
+// in state, opened by login.
+func recordPR(n int, state, login, body string) pullRequest {
+	pr := notifyPR("20261026", body)
+	pr.Number, pr.State = n, state
+	pr.Head.Ref = fmt.Sprintf("backport-batch/release-1.1-202610%02d", n%30+1)
+	pr.User.Login = login
+	if strings.HasSuffix(login, "[bot]") {
+		pr.User.Type = "Bot"
+	}
+	return pr
+}
+
+func recordBody(conflict int) string {
+	return "text\n\n" + deferredFence + "\n" + fmt.Sprintf(`{"line":"release-1.1","deferred":[{"original":%d,"commit":"%s","files":["a"]}]}`, conflict, strings.Repeat("a", 40)) + "\n```\n"
+}
+
+// The record is the block of the newest batch pull request that carries one,
+// whatever its state, among those a trusted author opened from a batch branch
+// of this repository; anything that leaves the newest record in doubt stops
+// the command rather than falling back to an older one.
+func TestFindLineRecord(t *testing.T) {
+	const bot = defaultBatchBot
+	other := func(n int) pullRequest {
+		pr := recordPR(n, "closed", "maintainer", "")
+		pr.Head.Ref = fmt.Sprintf("fix-%d", n)
+		return pr
+	}
+	fork := recordPR(92, "closed", "maintainer", recordBody(92))
+	fork.Head.Repo = &struct {
+		FullName string `json:"full_name"`
+	}{"someone/cozystack"}
+	cases := []struct {
+		name    string
+		prs     []pullRequest
+		open    int // the open batch the caller found, or 0
+		bot     string
+		carrier int // 0 for none
+		isOpen  bool
+		refusal string
+		pages   int
+	}{
+		{name: "the open batch first", prs: []pullRequest{recordPR(92, "open", "maintainer", recordBody(92)), recordPR(91, "closed", "maintainer", recordBody(91))}, open: 92, carrier: 92, isOpen: true},
+		{name: "the newest closed record", prs: []pullRequest{recordPR(91, "closed", bot, recordBody(91)), recordPR(90, "closed", bot, recordBody(90))}, bot: bot, carrier: 91},
+		{name: "a person's batch without a block is passed over", prs: []pullRequest{recordPR(92, "closed", "maintainer", "picked by hand"), recordPR(91, "closed", "maintainer", recordBody(91))}, carrier: 91},
+		{name: "the bot's batch without a block", prs: []pullRequest{recordPR(92, "closed", bot, "edited away"), recordPR(91, "closed", bot, recordBody(91))}, bot: bot, refusal: "carries no ```backport-batch block"},
+		{name: "a fork is no batch", prs: []pullRequest{fork, recordPR(91, "closed", "maintainer", recordBody(91))}, carrier: 91},
+		{name: "a newer record by someone untrusted", prs: []pullRequest{recordPR(92, "closed", "someone", recordBody(92)), recordPR(91, "closed", "maintainer", recordBody(91))}, refusal: "#92"},
+		{name: "a closed record newer than the open batch", prs: []pullRequest{recordPR(92, "closed", "maintainer", recordBody(92)), recordPR(91, "open", "maintainer", recordBody(91))}, open: 91, refusal: "newer than the open batch pull request #91"},
+		{name: "a record on the second page", prs: append(func() (out []pullRequest) {
+			for n := 1000; n < 1000+recentPullsPage; n++ {
+				out = append(out, other(n))
+			}
+			return out
+		}(), recordPR(91, "closed", "maintainer", recordBody(91))), carrier: 91, pages: 2},
+		{name: "ten full pages without a record", prs: func() (out []pullRequest) {
+			for n := 1000; n < 1000+10*recentPullsPage+1; n++ {
+				out = append(out, other(n))
+			}
+			return out
+		}(), refusal: "pull requests", pages: 10},
+		{name: "the bot's record when no bot is trusted", prs: []pullRequest{recordPR(91, "closed", bot, recordBody(91))}, refusal: "#91"},
+		{name: "a hand-written open batch beside a closed record", prs: []pullRequest{recordPR(92, "open", "maintainer", "picked by hand"), recordPR(91, "closed", "maintainer", recordBody(91))}, open: 92, carrier: 91},
+		{name: "no batch ever", prs: []pullRequest{other(5)}},
+		{name: "an unreadable record", prs: []pullRequest{recordPR(91, "closed", "maintainer", "text\n\n"+deferredFence+"\n{\n```\n")}, refusal: "#91 (closed)"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			l, _ := parseLine("release-1.1")
+			gh := &fakeGH{prs: tc.prs, bot: tc.bot}
+			var open *pullRequest
+			for i := range tc.prs {
+				if tc.prs[i].Number == tc.open {
+					open = &tc.prs[i]
+				}
+			}
+			src, err := findLineRecord(gh, l, open)
+			switch {
+			case tc.refusal != "":
+				if err == nil || !strings.Contains(err.Error(), tc.refusal) {
+					t.Errorf("findLineRecord = %+v, %v; want a refusal with %q", src, err, tc.refusal)
+				}
+			case err != nil:
+				t.Errorf("findLineRecord: %v", err)
+			case tc.carrier == 0 && (src.carrier != nil || src.rec != nil):
+				t.Errorf("found #%d, want no record", src.carrier.Number)
+			case tc.carrier != 0 && (src.carrier == nil || src.carrier.Number != tc.carrier || src.rec == nil || src.open != tc.isOpen || src.rec.Deferred[0].Original != tc.carrier):
+				t.Errorf("found %+v, want #%d open=%v", src, tc.carrier, tc.isOpen)
+			}
+			if tc.pages != 0 && gh.listed != tc.pages {
+				t.Errorf("read %d pages, want %d", gh.listed, tc.pages)
+			}
+			if tc.open != 0 && src.code != open {
+				t.Errorf("the batch to build on is %+v, want #%d", src.code, tc.open)
+			}
+		})
+	}
+}
+
+// A run that picks nothing while no batch is open writes nothing, since
+// merged and closed batches are never written: it says its classification is
+// not kept, and check still reads the merged batch's record.
+func TestZeroPickRunLeavesNoRecord(t *testing.T) {
+	f := newFixture(t)
+	f.lines()
+	f.onLine("release-1.1", "fix(app): a line-only five", map[string]string{"app/five.txt": "line\n", "app/seven.txt": "line\n"})
+	f.pr(5, "fix(app): five", "", map[string]string{"app/five.txt": "5\n"})
+	f.pr(6, "fix(app): six", "", map[string]string{"app/six.txt": "6\n"})
+	gh := &fakeGH{}
+	openBatch(t, f, gh)
+	mergeBatch(f, gh)
+	f.pr(7, "fix(app): seven", "", map[string]string{"app/seven.txt": "7\n"})
+	edits, comments := len(gh.edited), len(gh.issueComments)
+
+	code, _, stderr := f.exec(gh, "run", "--line", "release-1.1", "--continue", "--push")
+	if code != 0 || !strings.Contains(stderr, "no batch pull request is open on release-1.1; this run's classification is not retained") {
+		t.Errorf("run = %d, want 0 saying nothing is retained:\n%s", code, stderr)
+	}
+	if len(gh.created) != 1 || len(gh.edited) != edits || len(gh.issueComments) != comments || f.remoteHead(batchBranch1) != "" {
+		t.Errorf("created %q, edited %q, %d comments, branch at %q; want nothing written", gh.created, gh.edited, len(gh.issueComments), f.remoteHead(batchBranch1))
+	}
+	f.git("switch", "-q", "main")
+	code, stdout, stderr := f.exec(gh, "check", "--line", "release-1.1")
+	if code != 1 || !strings.Contains(stdout, "/pull/7 ") || strings.Contains(stdout, "/pull/5 ") || !strings.Contains(stderr, "deferred conflict on #90 (merged)") {
+		t.Errorf("check = %d, want 1 for #7 alone and #5 still a deferred conflict:\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+	}
+}
+
+// The open batch's author is asked for once although both the open batch and
+// its record are read.
+func TestRecordAsksForAPermissionOnce(t *testing.T) {
+	f := newFixture(t)
+	f.lines()
+	f.pr(5, "fix(app): five", "", map[string]string{"app/five.txt": "5\n"})
+	gh := &fakeGH{}
+	openBatch(t, f, gh)
+	gh.asked = nil
+	if code, _, stderr := f.exec(gh, "check", "--line", "release-1.1"); code != 0 {
+		t.Fatalf("check = %d\n%s", code, stderr)
+	}
+	if len(gh.asked) != 1 {
+		t.Errorf("asked GitHub for %q, want the author once", gh.asked)
+	}
+}
+
+// The record and the report name what the classification was made of: the
+// heads it read, the policy, the tool, the job, the time and the flags.
+func TestRecordNamesItsInputs(t *testing.T) {
+	f := newFixture(t)
+	f.lines()
+	mc5 := f.pr(5, "fix(app): five", "", map[string]string{"app/five.txt": "5\n"})
+	f.onLine("release-1.1", "fix(app): five\n\n(cherry picked from commit "+mc5+")", map[string]string{"app/five.txt": "5\n"})
+	f.tool = strings.Repeat("c", 40) + "+dirty"
+	t.Setenv("GITHUB_SERVER_URL", "https://github.com")
+	t.Setenv("GITHUB_REPOSITORY", "cozystack/cozystack")
+	t.Setenv("GITHUB_RUN_ID", "123")
+	t.Setenv("GITHUB_RUN_ATTEMPT", "2")
+	gh := &fakeGH{}
+	stdout := mustRun(t, f, gh, "run", "--line", "release-1.0", "--no-workflow-files", "--push")
+	l, _ := parseLine("release-1.0")
+	const branch = "backport-batch/release-1.0-20261026"
+	rec, err := parseRecord(stdout, l)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := builtFrom{Main: f.git("rev-parse", "origin/main"), Line: f.git("rev-parse", "origin/release-1.0"), Newer: f.git("rev-parse", "origin/release-1.1"),
+		Policy: f.git("rev-parse", "origin/main"), Batch: f.remoteHead(branch), Tool: f.tool, Run: "https://github.com/cozystack/cozystack/actions/runs/123/attempts/2",
+		At: "2026-10-26T06:00:00Z", Options: runOptions{NoWorkflowFiles: true, Mode: modeNew}}
+	if rec.Version != recordVersion || *rec.Built != want || bodyReportOf(t, stdout, l).doc.Built != want || rec.Report != bodyReportOf(t, stdout, l).doc.ID {
+		t.Errorf("record = %+v, built %+v; want built %+v and the report it names", rec, rec.Built, want)
+	}
+
+	// A policy from another ref, a run by hand that continues the batch.
+	f.git("push", "-q", "origin", "origin/main:refs/heads/policy-draft")
+	f.git("fetch", "-q", "origin")
+	t.Setenv("GITHUB_RUN_ID", "")
+	gh.prs = []pullRequest{f.batchPR(90, "release-1.0", branch, stdout)}
+	mc6 := f.pr(6, "fix(app): six", "", map[string]string{"app/six.txt": "6\n"})
+	f.onLine("release-1.1", "fix(app): six\n\n(cherry picked from commit "+mc6+")", map[string]string{"app/six.txt": "6\n"})
+	stdout = mustRun(t, f, gh, "run", "--line", "release-1.0", "--continue", "--policy", "origin/policy-draft", "--push")
+	if rec, err = parseRecord(stdout, l); err != nil {
+		t.Fatal(err)
+	}
+	if b := rec.Built; b.Policy != f.git("rev-parse", "origin/policy-draft") || b.Main != f.git("rev-parse", "origin/main") || b.Run != "" || b.Options != (runOptions{Mode: modeContinue}) || b.Batch != f.remoteHead(branch) {
+		t.Errorf("built %+v; want the draft's policy, no job and a continuation without the flag", b)
+	}
+}
+
+// What a run assembled with --no-workflow-files stays saved through the
+// operations that only change the record, which take no such flag: check
+// keeps failing the cut on the wait they leave in place.
+func TestMetadataOperationsKeepTheMode(t *testing.T) {
+	for _, v1 := range []bool{false, true} {
+		t.Run(fmt.Sprintf("an open record of version 1: %v", v1), func(t *testing.T) {
+			f := workflowWorld(t)
+			f.onLine("release-1.1", "fix(app): a line-only nine", map[string]string{"app/nine.txt": "line\n"})
+			f.pr(7, "fix(app): seven", "", map[string]string{"app/seven.txt": "7\n"})
+			f.pr(8, "fix(app): eight", "", map[string]string{"app/eight.txt": "8\n"})
+			f.pr(9, "fix(app): nine", "", map[string]string{"app/nine.txt": "9\n"})
+			gh := &fakeGH{}
+			stdout := mustRun(t, f, gh, "run", "--line", "release-1.1", "--no-workflow-files", "--push")
+			reopen(f, gh)
+			if v1 {
+				waits := []pick{{v: &verdict{o: &original{number: 5}}, files: []string{".github/workflows/five.yaml"}}}
+				gh.prs[0].Body = strings.Replace(stdout, strings.Split(strings.Split(stdout, deferredFence+"\n")[1], "\n")[0], strings.Split(deferredBlock(notifyLine, nil, nil, waits), "\n")[1], 1)
+			} else if rec, err := parseRecord(stdout, notifyLine); err != nil || !rec.Built.Options.NoWorkflowFiles {
+				t.Fatalf("the scheduled run saved %+v, %v", rec, err)
+			}
+			for _, op := range []struct {
+				args []string
+				mode string
+			}{
+				{[]string{"--drop", "9", "--reason", "needs #4"}, modeDrop},
+				{[]string{"--undrop", "9"}, modeUndrop},
+				{[]string{"--defer", "7", "--reason", "fails the e2e"}, modeDefer},
+			} {
+				stdout = mustRun(t, f, gh, append(append([]string{"run", "--line", "release-1.1"}, op.args...), "--push")...)
+				rec, err := parseRecord(stdout, notifyLine)
+				if err != nil || rec.Built.Options != (runOptions{NoWorkflowFiles: true, Mode: op.mode}) {
+					t.Errorf("after %q the record is %+v, %v; want the flag kept", op.args, rec.Built, err)
+				}
+				reopen(f, gh)
+			}
+			var rec *lineRecord
+			var err error
+			reopen(f, gh)
+			if code, stdout, _ := f.exec(gh, "check", "--line", "release-1.1", "--cut"); code != 1 || !strings.Contains(stdout, "#5 changes .github/workflows/") {
+				t.Errorf("check --cut = %d, want #5 still waiting:\n%s", code, stdout)
+			}
+
+			// Deferring the last picks closes the batch, and its record
+			// still says how the batch was assembled.
+			mustRun(t, f, gh, "run", "--line", "release-1.1", "--defer", "6,8", "--reason", "fails the e2e", "--push")
+			rec, err = parseRecord(gh.find(90).Body, notifyLine)
+			if err != nil || gh.find(90).State != "closed" || rec.Closing == nil || rec.Built.Options != (runOptions{NoWorkflowFiles: true, Mode: modeClose}) {
+				t.Errorf("after the close the record is %+v, %v; want the flag kept", rec.Built, err)
+			}
+			if code, stdout, _ := f.exec(gh, "check", "--line", "release-1.1", "--cut"); code != 1 || !strings.Contains(stdout, "/pull/5 ") {
+				t.Errorf("check --cut = %d, want #5 missing once no batch lists it:\n%s", code, stdout)
+			}
+		})
+	}
+}
+
+// A state is named only when it is one GitHub uses; anything else is quoted.
+func TestPRStateNamesOnlyKnownStates(t *testing.T) {
+	at := "2026-10-26T12:00:00Z"
+	for _, tc := range []struct {
+		pr   pullRequest
+		want string
+	}{
+		{pullRequest{State: "open"}, "open"},
+		{pullRequest{State: ""}, "open"},
+		{pullRequest{State: "closed"}, "closed"},
+		{pullRequest{State: "closed", MergedAt: &at}, "merged"},
+		{pullRequest{State: "open\n\x1b[2Jforged"}, `in state "open\n\x1b[2Jforged"`},
+	} {
+		if got := prState(&tc.pr); got != tc.want {
+			t.Errorf("prState(%q) = %q, want %q", tc.pr.State, got, tc.want)
+		}
+	}
+}
+
+// v3 is v2 as version 3, with extra after the stale list.
+func v3(extra string) string {
+	return strings.Replace(v2(extra), `"version":2`, `"version":3`, 1)
+}
+
+// Version 3 adds what is parked and which units do only part of their
+// original, each held to what a run writes, and version 2 has neither.
+func TestRecordVersion3(t *testing.T) {
+	l, _ := parseLine("release-1.1")
+	block := func(json string) string { return "text\n\n" + deferredFence + "\n" + json + "\n```\n" }
+	sha, other := strings.Repeat("a", 40), strings.Repeat("c", 40)
+	parked := `,"parked":[{"original":10,"merge":"` + sha + `","kind":"partial","files":["a","b"]},{"original":11,"merge":"` + sha + `","kind":"dependency","needs":[3,4],"commits":["` + other + `"],"announced":true}],"partial":[9]`
+	waits := strings.Replace(v3(parked), `{"original":6,"files":[],"reason":"fails the e2e"}`, `{"original":6,"files":[],"needs":[3,5]}`, 1)
+	rec, err := parseRecord(block(waits), l)
+	if err != nil || rec.Version != 3 || len(rec.Parked) != 2 || !rec.Parked[1].Announced || !slices.Equal(rec.Partial, []int{9}) || !slices.Equal(rec.deferred()[6].Needs, []int{3, 5}) {
+		t.Fatalf("parseRecord of a whole v3 record = %+v, %v", rec, err)
+	}
+	for name, json := range map[string]string{
+		"version 1 with a wait":        `{"line":"release-1.1","deferred":[{"original":6,"files":[],"needs":[3,5]}]}`,
+		"a wait with files":            strings.Replace(waits, `"files":[],"needs":[3,5]`, `"files":["a"],"needs":[3,5]`, 1),
+		"a wait that is a conflict":    strings.Replace(waits, `"files":[],"needs":[3,5]`, `"commit":"`+sha+`","files":[],"needs":[3,5]`, 1),
+		"a wait on itself":             strings.Replace(waits, `"needs":[3,5]`, `"needs":[3,6]`, 1),
+		"an unsorted wait":             strings.Replace(waits, `"needs":[3,5]`, `"needs":[5,3]`, 1),
+		"a wait on nothing":            strings.Replace(waits, `"needs":[3,5]`, `"needs":[0]`, 1),
+		"a wait cycle":                 strings.Replace(strings.Replace(waits, `"needs":[3,5]`, `"needs":[12]`, 1), `"deferred":[`, `"deferred":[{"original":12,"files":[],"needs":[6]},`, 1),
+		"a wait on a parked one":       strings.Replace(waits, `"needs":[3,5]`, `"needs":[10]`, 1),
+		"a wait on a dropped one":      strings.Replace(waits, `"needs":[3,5]`, `"needs":[8]`, 1),
+		"a park on a deferred one":     strings.Replace(waits, `"needs":[3,4]`, `"needs":[3,5]`, 1),
+		"a partial unit also deferred": strings.Replace(strings.Replace(waits, `"stale":[9]`, `"stale":[9,5]`, 1), `"partial":[9]`, `"partial":[9,5]`, 1),
+		"a changed pick also parked":   v3(parked + `,"changed":[10]`),
+		"a changed pick also deferred": v3(parked + `,"changed":[5]`),
+		"a park on its own merge":      strings.Replace(waits, `"commits":["`+other+`"]`, `"commits":["`+sha+`"]`, 1),
+		"a park cycle":                 strings.Replace(strings.Replace(waits, `"needs":[3,4]`, `"needs":[3,13]`, 1), `"parked":[`, `"parked":[{"original":13,"merge":"`+sha+`","kind":"dependency","needs":[11]},`, 1),
+	} {
+		if _, err := parseRecord(block(json), l); err == nil {
+			t.Errorf("%s: parseRecord accepted it", name)
+		}
+	}
+	for name, json := range map[string]string{
+		"version 2 with a park":           v2(parked),
+		"version 4":                       strings.Replace(v3(""), `"version":3`, `"version":4`, 1),
+		"a park of a deferred original":   v3(strings.Replace(parked, `"original":10`, `"original":5`, 1)),
+		"a park of a dropped original":    v3(strings.Replace(parked, `"original":10`, `"original":8`, 1)),
+		"a partial park with no files":    v3(strings.Replace(parked, `"files":["a","b"]`, `"files":[]`, 1)),
+		"a partial park that needs":       v3(strings.Replace(parked, `"files":["a","b"]`, `"files":["a"],"needs":[3]`, 1)),
+		"unsorted files":                  v3(strings.Replace(parked, `"files":["a","b"]`, `"files":["b","a"]`, 1)),
+		"a file that drives a terminal":   v3(strings.Replace(parked, `"files":["a","b"]`, `"files":["a\u001b[2J"]`, 1)),
+		"a dependency park with no need":  v3(strings.Replace(strings.Replace(parked, `"needs":[3,4],`, ``, 1), `"commits":["`+other+`"],`, ``, 1)),
+		"unsorted needs":                  v3(strings.Replace(parked, `"needs":[3,4]`, `"needs":[4,3]`, 1)),
+		"a park that needs itself":        v3(strings.Replace(parked, `"needs":[3,4]`, `"needs":[3,11]`, 1)),
+		"a short commit":                  v3(strings.Replace(parked, `"commits":["`+other+`"]`, `"commits":["abc"]`, 1)),
+		"a short merge":                   v3(strings.Replace(parked, `"merge":"`+sha+`","kind":"partial"`, `"merge":"abc","kind":"partial"`, 1)),
+		"an unknown kind":                 v3(strings.Replace(parked, `"kind":"partial"`, `"kind":"later"`, 1)),
+		"a partial unit not on the batch": v3(strings.Replace(parked, `"partial":[9]`, `"partial":[10]`, 1)),
+		"a partial unit twice":            v3(strings.Replace(parked, `"partial":[9]`, `"partial":[9,9]`, 1)),
+		"a changed pick twice":            v3(parked + `,"changed":[4,4]`),
+		"a changed pick that is none":     v3(parked + `,"changed":[0]`),
+	} {
+		if _, err := parseRecord(block(json), l); err == nil {
+			t.Errorf("%s: parseRecord accepted it", name)
+		}
+	}
+}

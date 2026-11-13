@@ -40,6 +40,11 @@ spec:
       containers:
         - image: {{ .Values.console.image | quote }}
           imagePullPolicy: IfNotPresent
+          {{- with index .Values._cluster "cluster-domain" }}
+          env:
+            - name: CLUSTER_DOMAIN
+              value: {{ . | quote }}
+          {{- end }}
           livenessProbe:
             failureThreshold: 3
             httpGet:
