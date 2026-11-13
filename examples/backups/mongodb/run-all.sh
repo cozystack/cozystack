@@ -98,8 +98,6 @@ BACKUP_NAME=$(kubectl -n "$NAMESPACE" get backupjobs.backups.cozystack.io "$BACK
 log_success "Backup artefact: ${BACKUP_NAME}"
 
 if [[ "${SKIP_RESTORE:-0}" == "1" ]]; then
-    # hack/e2e-chainsaw/mongodb/ asserts this line to prove the skip really
-    # happened, so rewording it reds that suite with a bare match failure.
     log_warning "SKIP_RESTORE=1: stopping after a successful backup."
     exit 0
 fi
@@ -113,6 +111,8 @@ wait_for_field restorejobs.backups.cozystack.io "$RESTOREJOB_TOCOPY_NAME" \
     '{.status.phase}' Succeeded "$NAMESPACE" 900 Failed
 
 print_header "Step 30 verify: the sentinel round-tripped through S3 into the copy"
+# mongosh_exec logs in with the target's own databaseAdmin, the login a restore
+# that replays the source's system users would break.
 GOT=$(mongosh_exec "$MONGODB_TARGET_CR" \
     "print(db.getSiblingDB('demo').e2e_sentinel.findOne({_id:1}).token)" | tr -d '[:space:]')
 if [[ "$GOT" != "$SENTINEL_TOKEN" ]]; then
@@ -129,4 +129,6 @@ if [[ "$SRC_GOT" != "$SENTINEL_TOKEN" ]]; then
     log_error "source sentinel changed after to-copy restore: source has '${SRC_GOT}', expected '${SENTINEL_TOKEN}'"
     exit 1
 fi
+# hack/e2e-chainsaw/mongodb/ asserts this line to prove the whole round-trip
+# ran, so rewording it fails that suite with a bare match failure.
 log_success "Source '${MONGODB_SRC_NAME}' left untouched by the to-copy restore."
