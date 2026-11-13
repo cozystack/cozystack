@@ -5,7 +5,7 @@
 ARG VERSION=v1.12.3
 ARG COMMIT=067d0d47aedac94a3888a127fa6c65f2f53b9987
 
-FROM --platform=$BUILDPLATFORM node:18.18.0-alpine3.18@sha256:a315556d82ef54561e54fca7d8ee333382de183d4e56841dcefcd05b55310f46 AS source
+FROM --platform=$BUILDPLATFORM node:18.20.3-alpine3.18@sha256:8863523fed890ce945343aebf959daa56e6b089de1851074f4fe22fe86c04399 AS source
 ARG VERSION
 ARG COMMIT
 RUN apk add --no-cache git
@@ -34,7 +34,7 @@ RUN GOOS=${TARGETOS} GOARCH=${TARGETARCH} CGO_ENABLED=0 go build -trimpath \
       -o /out/opt/outline-server/bin/ github.com/Jigsaw-Code/outline-ss-server/cmd/outline-ss-server
 
 # Version and checksums are upstream's, from third_party/Taskfile.yml.
-FROM --platform=$BUILDPLATFORM node:18.18.0-alpine3.18@sha256:a315556d82ef54561e54fca7d8ee333382de183d4e56841dcefcd05b55310f46 AS prometheus
+FROM --platform=$BUILDPLATFORM node:18.20.3-alpine3.18@sha256:8863523fed890ce945343aebf959daa56e6b089de1851074f4fe22fe86c04399 AS prometheus
 ARG TARGETARCH
 ARG PROMETHEUS_VERSION=2.37.1
 RUN case "${TARGETARCH}" in \
@@ -48,7 +48,7 @@ RUN case "${TARGETARCH}" in \
     && mkdir -p /out/opt/outline-server/bin \
     && tar -xzf /tmp/p.tgz -C /out/opt/outline-server/bin --strip-components=1 ${name}/prometheus
 
-FROM node:18.18.0-alpine3.18@sha256:a315556d82ef54561e54fca7d8ee333382de183d4e56841dcefcd05b55310f46
+FROM node:18.20.3-alpine3.18@sha256:8863523fed890ce945343aebf959daa56e6b089de1851074f4fe22fe86c04399
 ARG VERSION
 LABEL shadowbox.github.release=${VERSION}
 # The user management service doesn't quit with SIGTERM.
