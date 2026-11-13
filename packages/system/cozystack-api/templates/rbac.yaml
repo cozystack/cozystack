@@ -76,7 +76,12 @@ rules:
   verbs: ["get", "watch", "list"]
 # The VM picker reads the machine list the migration controller publishes for
 # each source. Read-only, and only ever fetched by a name derived from the
-# source the tenant already chose.
+# source the tenant already chose. The create path also keeps a cache of the
+# ConfigMap cozy-system/cozystack-application-defaults for installation
+# defaults. The cache asks the server for that one object with a metadata.name
+# field selector, which a Role with resourceNames could match, but this rule
+# covers every ConfigMap. Without it every create waits up to five seconds for
+# the cache, then goes on without defaults and returns a warning.
 - apiGroups: [""]
   resources: ["configmaps"]
   verbs: ["get", "watch", "list"]
