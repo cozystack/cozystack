@@ -19,7 +19,7 @@
   are retained as backward-compatibility aliases with their original
   resource values. They are deprecated and will be removed in a future
   release; migrate to instance-type names. See migration table in
-  docs/operations/resource-presets.md.
+  https://cozystack.io/docs/v1/guides/resource-management/.
 */}}
 
 {{- define "cozy-lib.resources.unsanitizedPreset" }}
