@@ -69,7 +69,7 @@ spec:
             - name: S3_REGION
               value: {{ .Values.backupStorage.region | quote }}
             - name: S3_FORCE_PATH_STYLE
-              value: {{ .Values.backupStorage.forcePathStyle | quote }}
+              value: {{ include "backupstrategy-controller.forcePathStyle" . | quote }}
           command: ["/usr/bin/bash", "-c"]
           # The driver script is kept as a standalone shell file and
           # embedded verbatim so hack/kafka-backup-script.bats can execute

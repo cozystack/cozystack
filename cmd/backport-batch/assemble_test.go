@@ -258,8 +258,16 @@ func TestRunPush(t *testing.T) {
 	f.lines()
 	f.pr(5, "fix(app): five", "", map[string]string{"app/five.txt": "5\n"})
 	gh := &fakeGH{}
-	if code, _, stderr := f.exec(gh, "run", "--line", "release-1.1", "--push"); code != 0 {
+	code, stdout, stderr := f.exec(gh, "run", "--line", "release-1.1", "--push")
+	if code != 0 {
 		t.Fatalf("run --push = %d\n%s", code, stderr)
+	}
+	if !strings.Contains(stderr, "opened draft https://github.com/cozystack/cozystack/pull/90\n") {
+		t.Errorf("the run does not print the pull request it opened:\n%s", stderr)
+	}
+	l, _ := parseLine("release-1.1")
+	if _, err := parseDeferred(stdout, l); err != nil || !strings.HasPrefix(stdout, "## What this PR does") || strings.Contains(stdout, "https://github.com/cozystack/cozystack/pull/90") {
+		t.Errorf("stdout is no longer the body alone (%v):\n%s", err, stdout)
 	}
 	head := f.git("rev-parse", "HEAD")
 	if got := f.remoteHead(batchBranch1); got != head {
@@ -272,8 +280,12 @@ func TestRunPush(t *testing.T) {
 	f.git("switch", "-q", "main")
 	f.pr(6, "fix(app): six", "", map[string]string{"app/six.txt": "6\n"})
 	gh.prs = []pullRequest{f.batchPR(90, "release-1.1", batchBranch1, gh.bodies[0])}
-	if code, _, stderr := f.exec(gh, "run", "--line", "release-1.1", "--onto", head, "--push"); code != 0 {
+	code, _, stderr = f.exec(gh, "run", "--line", "release-1.1", "--onto", head, "--push")
+	if code != 0 {
 		t.Fatalf("run --onto --push = %d\n%s", code, stderr)
+	}
+	if !strings.Contains(stderr, "updated https://github.com/cozystack/cozystack/pull/90\n") {
+		t.Errorf("the run does not print the pull request it updated:\n%s", stderr)
 	}
 	if got := f.subjects("origin/release-1.1", f.remoteHead(batchBranch1)); !slices.Equal(got, []string{"fix(app): five (#5)", "fix(app): six (#6)"}) {
 		t.Errorf("the pushed batch carries %q, want #5 then #6", got)

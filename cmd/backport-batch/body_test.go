@@ -286,7 +286,7 @@ func TestBodyFollowsTheTemplate(t *testing.T) {
 	l, _ := parseLine("release-1.6")
 	template := "<!-- tips -->\n\n## What this PR does\n\n\n### Screenshots\n\n<!-- shots -->\n\n### Downstream repositories\n\n- [ ] No downstream repository is affected by this change\n\n### Release note\n\n```release-note\n\n```\n"
 	o := &original{number: 7, title: "fix(x): y", body: "```release-note\nfix(x): note\n```"}
-	r := &report{line: l, onBranch: []*verdict{{o: o}}, skipped: map[int][]*verdict{}}
+	r := &report{line: l, onBranch: []*verdict{{o: o}}, skipped: map[int][]*verdict{}, blocks: deferredBlock(l, nil, nil, nil)}
 	body, _ := r.body(template)
 	for _, want := range []string{"## What this PR does\n\nBackports to", "- [#7](https://github.com/cozystack/cozystack/pull/7) `fix(x): y`", "### Downstream repositories\n\n- [ ] No downstream", "```release-note\nfix(x): note\n```", deferredFence} {
 		if !strings.Contains(body, want) {
@@ -305,7 +305,7 @@ func TestBodyFollowsTheTemplate(t *testing.T) {
 	for i := range 40 {
 		many = append(many, &verdict{o: &original{number: i + 1, title: "fix(x): y", body: "```release-note\n" + long + "\n```"}})
 	}
-	r = &report{line: l, onBranch: many, skipped: map[int][]*verdict{ruleType: many}}
+	r = &report{line: l, onBranch: many, skipped: map[int][]*verdict{ruleType: many}, blocks: deferredBlock(l, nil, nil, nil)}
 	if body, _ := r.body(template); len(body) > bodyLimit || !strings.Contains(body, "truncated") || !strings.Contains(body, deferredFence) {
 		t.Errorf("a body over the limit is %d bytes (limit %d), truncated=%v", len(body), bodyLimit, strings.Contains(body, "truncated"))
 	}
@@ -322,7 +322,7 @@ func TestBodyFollowsTheTemplate(t *testing.T) {
 	for i := range 80 {
 		conflict.files = append(conflict.files, fmt.Sprintf("chart/f%02d.yaml", i))
 	}
-	r = &report{line: l, onBranch: many[:1], deferred: []pick{conflict}, skipped: map[int][]*verdict{ruleType: lots, ruleOnLine: few}}
+	r = &report{line: l, onBranch: many[:1], deferred: []pick{conflict}, skipped: map[int][]*verdict{ruleType: lots, ruleOnLine: few}, blocks: deferredBlock(l, []pick{conflict}, nil, nil)}
 	body, left := r.body(template)
 	if !slices.Equal(left, []int{ruleType}) {
 		t.Errorf("left out the lists of rules %v, want only rule 2", left)
@@ -364,5 +364,19 @@ func TestBodyLinksTaskPagesThatExist(t *testing.T) {
 		if _, err := os.Stat(filepath.Join("..", "..", "docs", "release", "backport-tasks", m[1])); err != nil {
 			t.Errorf("the body links %s, which is not in the tree: %v", m[0], err)
 		}
+	}
+}
+
+// A body that what it has to carry pushes over GitHub's limit is refused
+// before anything is written, the replay of an earlier report included,
+// although the report alone would fit a comment.
+func TestBodyRefusesMandatoryContentOverTheLimit(t *testing.T) {
+	f, gh, head := bigWaits(t, 4)
+	code, _, stderr := f.exec(gh, "run", "--line", "release-1.1", "--continue", "--no-workflow-files", "--push")
+	if code != 2 || !strings.Contains(stderr, "with only what it cannot leave out, over GitHub's 65536") {
+		t.Errorf("run --push = %d, want a refusal of the body:\n%s", code, stderr)
+	}
+	if f.remoteHead(batchBranch1) != head || len(gh.issueComments) != 0 || len(gh.edited) != 0 {
+		t.Errorf("the refused run moved the batch to %.12s, wrote %d comments and edited %q", f.remoteHead(batchBranch1), len(gh.issueComments), gh.edited)
 	}
 }

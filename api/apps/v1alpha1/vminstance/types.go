@@ -74,6 +74,9 @@ type ConfigSpec struct {
 }
 
 type Disk struct {
+	// Boot priority of the disk, 1 being tried first. Unset falls back to the disk's position in `disks` (the first disk gets 1), so set it to boot from a disk other than the first, such as an attached installer or rescue ISO, without reordering the list. Effective boot orders must be unique across disks: when one disk is given a value that another takes from its position, set both.
+	// +kubebuilder:validation:Minimum=1
+	BootOrder *int `json:"bootOrder,omitempty"`
 	// Disk bus type (e.g. "sata").
 	Bus string `json:"bus,omitempty"`
 	// Disk name.
