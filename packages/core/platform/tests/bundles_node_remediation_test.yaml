@@ -1,0 +1,351 @@
+suite: node-remediation optional package (opt-in via enabledPackages)
+templates:
+  - templates/bundles/system.yaml
+release:
+  name: cozystack
+  namespace: cozy-system
+tests:
+  # Powering nodes off is nothing a cluster does because it upgraded; the
+  # package exists only where a hoster listed it.
+  - it: does not emit cozystack.node-remediation by default
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+    asserts:
+      # any: true is REQUIRED inside the matcher for the negative to search the
+      # whole document set; without it containsDocument matches nothing and
+      # `not: true` is a vacuous no-op.
+      - containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.node-remediation
+          any: true
+        not: true
+
+  - it: emits cozystack.node-remediation without a components block when the values are unset
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+        enabledPackages:
+          - cozystack.node-remediation
+    documentSelector:
+      path: metadata.name
+      value: cozystack.node-remediation
+    asserts:
+      - equal:
+          path: kind
+          value: Package
+      - equal:
+          path: spec.variant
+          value: default
+      - equal:
+          path: metadata.annotations["helm.sh/resource-policy"]
+          value: keep
+      - notExists:
+          path: spec.components
+
+  # The block reaches both charts whole: the operators chart reads the CA, the
+  # config chart the rest, and a hoster edits one place.
+  - it: forwards nodeRemediation to the node-remediation and node-remediation-config components
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+        enabledPackages:
+          - cozystack.node-remediation
+      nodeRemediation:
+        unhealthyAfter: 600s
+        bmc:
+          caBundle: not-a-real-certificate
+          credentialsSecretName: bmc-credentials
+          systemsUri: /redfish/v1/Systems/1
+          nodes:
+            node1:
+              address: 192.0.2.11
+    documentSelector:
+      path: metadata.name
+      value: cozystack.node-remediation
+    asserts:
+      - equal:
+          path: spec.components.node-remediation.values.bmc.caBundle
+          value: not-a-real-certificate
+      - equal:
+          path: spec.components.node-remediation-config.values.unhealthyAfter
+          value: 600s
+      - equal:
+          path: spec.components.node-remediation-config.values.bmc.nodes.node1.address
+          value: 192.0.2.11
+
+  # The forward copies the block as written: a quoted "false" is still the
+  # string "false" in the component values, and it is the component chart's
+  # schema that refuses it (tests/values_schema_test.yaml of each chart).
+  - it: forwards a quoted "false" to both components as the string it is
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+        enabledPackages:
+          - cozystack.node-remediation
+      nodeRemediation:
+        paused: "false"
+        remediateNotReady: "false"
+        bmc:
+          nodes:
+            node1:
+              address: 192.0.2.11
+    documentSelector:
+      path: metadata.name
+      value: cozystack.node-remediation
+    asserts:
+      - equal:
+          path: spec.components.node-remediation.values.paused
+          value: "false"
+      - equal:
+          path: spec.components.node-remediation-config.values.paused
+          value: "false"
+      - equal:
+          path: spec.components.node-remediation-config.values.remediateNotReady
+          value: "false"
+
+  # The block is forwarded as the values of two HelmReleases, which take an
+  # object; anything else is refused here, where the message names the key,
+  # instead of by the Package's own schema after the render went through.
+  - it: refuses nodeRemediation that is not a map
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+        enabledPackages:
+          - cozystack.node-remediation
+      nodeRemediation: 300s
+    asserts:
+      - failedTemplate:
+          errorPattern: nodeRemediation must be a map
+
+  - it: honors disabledPackages even when also enabled
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+        enabledPackages:
+          - cozystack.node-remediation
+        disabledPackages:
+          - cozystack.node-remediation
+    asserts:
+      - containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.node-remediation
+          any: true
+        not: true
+
+  # local-ccm's node lifecycle controller deletes a NotReady Node without proof
+  # that it is off. While it can, fencing is refused rather than layered on.
+  - it: refuses the package while the local-ccm Package runs its node lifecycle controller
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+        enabledPackages:
+          - cozystack.node-remediation
+    kubernetesProvider:
+      scheme:
+        "cozystack.io/v1alpha1/Package":
+          gvr:
+            group: cozystack.io
+            version: v1alpha1
+            resource: packages
+          namespaced: false
+      objects:
+        - apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          metadata:
+            name: cozystack.local-ccm
+          spec:
+            variant: default
+    asserts:
+      - failedTemplate:
+          errorPattern: cannot be enabled while the cozystack.local-ccm Package runs its node lifecycle controller
+
+  # system/local-ccm wraps the upstream chart as a subchart, so the knob the
+  # hoster sets sits under a second local-ccm key; the message names that path.
+  - it: emits the package once the local-ccm Package has the node lifecycle controller off
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+        enabledPackages:
+          - cozystack.node-remediation
+    kubernetesProvider:
+      scheme:
+        "cozystack.io/v1alpha1/Package":
+          gvr:
+            group: cozystack.io
+            version: v1alpha1
+            resource: packages
+          namespaced: false
+      objects:
+        - apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          metadata:
+            name: cozystack.local-ccm
+          spec:
+            variant: default
+            components:
+              local-ccm:
+                values:
+                  local-ccm:
+                    nodeLifecycleController:
+                      enabled: false
+    asserts:
+      - containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.node-remediation
+          any: true
+
+  # The same key one level up reaches the wrapper chart and nothing else; the
+  # controller keeps running, so the guard must keep refusing.
+  - it: still refuses when the knob is set at the wrapper level, where the subchart never sees it
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+        enabledPackages:
+          - cozystack.node-remediation
+    kubernetesProvider:
+      scheme:
+        "cozystack.io/v1alpha1/Package":
+          gvr:
+            group: cozystack.io
+            version: v1alpha1
+            resource: packages
+          namespaced: false
+      objects:
+        - apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          metadata:
+            name: cozystack.local-ccm
+          spec:
+            variant: default
+            components:
+              local-ccm:
+                values:
+                  nodeLifecycleController:
+                    enabled: false
+    asserts:
+      - failedTemplate:
+          errorPattern: spec.components.local-ccm.values.local-ccm.nodeLifecycleController.enabled
+
+  # The subchart gates the controller with a bare `if`, so the string "false"
+  # keeps it running; the guard must not take a stringified value for the off
+  # switch.
+  - it: still refuses when the knob is the string "false"
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+        enabledPackages:
+          - cozystack.node-remediation
+    kubernetesProvider:
+      scheme:
+        "cozystack.io/v1alpha1/Package":
+          gvr:
+            group: cozystack.io
+            version: v1alpha1
+            resource: packages
+          namespaced: false
+      objects:
+        - apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          metadata:
+            name: cozystack.local-ccm
+          spec:
+            variant: default
+            components:
+              local-ccm:
+                values:
+                  local-ccm:
+                    nodeLifecycleController:
+                      enabled: "false"
+    asserts:
+      - failedTemplate:
+          errorPattern: cannot be enabled while the cozystack.local-ccm Package runs its node lifecycle controller
+
+  - it: does not run the guard when the package is also disabled
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+        enabledPackages:
+          - cozystack.node-remediation
+        disabledPackages:
+          - cozystack.node-remediation
+    kubernetesProvider:
+      scheme:
+        "cozystack.io/v1alpha1/Package":
+          gvr:
+            group: cozystack.io
+            version: v1alpha1
+            resource: packages
+          namespaced: false
+      objects:
+        - apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          metadata:
+            name: cozystack.local-ccm
+          spec:
+            variant: default
+    asserts:
+      - containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.node-remediation
+          any: true
+        not: true
+      - containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.cozystack-engine
+          any: true
+
+  - it: ignores the local-ccm Package when node remediation is not enabled
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+    kubernetesProvider:
+      scheme:
+        "cozystack.io/v1alpha1/Package":
+          gvr:
+            group: cozystack.io
+            version: v1alpha1
+            resource: packages
+          namespaced: false
+      objects:
+        - apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          metadata:
+            name: cozystack.local-ccm
+          spec:
+            variant: default
+    asserts:
+      - containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.cozystack-engine
+          any: true

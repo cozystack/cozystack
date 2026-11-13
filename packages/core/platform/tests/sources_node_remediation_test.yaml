@@ -1,0 +1,49 @@
+suite: node-remediation PackageSource
+templates:
+  - templates/sources.yaml
+release:
+  name: cozystack
+  namespace: cozy-system
+tests:
+  # Three releases in one namespace, ordered the way cert-manager's are: the
+  # CRDs with the credentials namespace, then the operators whose webhooks need
+  # them and cert-manager, then the objects those webhooks validate.
+  - it: installs three ordered releases into cozy-node-remediation after networking and cert-manager
+    documentSelector:
+      path: metadata.name
+      value: cozystack.node-remediation
+    asserts:
+      - equal:
+          path: kind
+          value: PackageSource
+      - equal:
+          path: spec.variants[0].dependsOn
+          value:
+            - cozystack.networking
+            - cozystack.cert-manager
+      - equal:
+          path: spec.variants[0].components[0].name
+          value: node-remediation-crds
+      - equal:
+          path: spec.variants[0].components[0].path
+          value: system/node-remediation-crds
+      - equal:
+          path: spec.variants[0].components[0].install.namespace
+          value: cozy-node-remediation
+      - notExists:
+          path: spec.variants[0].components[0].install.dependsOn
+      - equal:
+          path: spec.variants[0].components[1].name
+          value: node-remediation
+      - equal:
+          path: spec.variants[0].components[1].install.dependsOn
+          value: [node-remediation-crds]
+      - equal:
+          path: spec.variants[0].components[2].name
+          value: node-remediation-config
+      - equal:
+          path: spec.variants[0].components[2].install.dependsOn
+          value: [node-remediation]
+      - equal:
+          path: spec.variants[0].components[2].install.namespace
+          value: cozy-node-remediation

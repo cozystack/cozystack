@@ -931,3 +931,50 @@ vmImport:
   # top-level `migrations` key above, which is the platform's own schema
   # migrations and has nothing to do with moving virtual machines.
   vddkImage: ""
+
+# Node fencing (opt-in; cozystack.node-remediation in bundles.enabledPackages).
+# Forwarded as a whole to the node-remediation and node-remediation-config
+# charts. A node of this cluster that stays Ready=Unknown is powered off through
+# its BMC over Redfish, and only after the BMC confirms the system is off does
+# the out-of-service taint release its pods and volumes. The fence-agents
+# operator runs in its identity-bound safety-mode: Redfish only, every BMC
+# connection verified against bmc.caBundle, an explicit ComputerSystem per node;
+# there is no IPMI path and no insecure TLS option. The BMC credentials Secrets
+# live in cozy-node-remediation-bmc with exactly the keys username and password,
+# created after the node-remediation-crds release is Ready.
+#
+# A cluster running local-ccm with its node lifecycle controller still able to
+# delete Nodes cannot enable this package: that controller deletes a NotReady
+# Node without proof that it is off, which is the proof fencing exists for.
+# Disable the controller first (spec.components.local-ccm.values.local-ccm.nodeLifecycleController.enabled: false
+# on the cozystack.local-ccm Package); the render refuses a switch in place.
+# Every mode of the controller is refused, its default included, where it
+# deletes only Nodes carrying the autoscaler's ToBeDeletedByClusterAutoscaler
+# taint: such a Node deleted while NotReady releases its pods without proof
+# that it is off just the same.
+#
+# Every key of the block reaches both charts, the operators chart's
+# fenceAgentsRemediation.image and nodeHealthcheck.image included; those are
+# written by the image build and are not meant to be set here.
+#
+# nodeRemediation:
+#   unhealthyAfter: 300s          # Ready=Unknown for this long; above zero
+#   remediateNotReady: false      # also fence Ready=False; a boolean, not "false" in quotes
+#   workerMinHealthy: 51%         # workers: a count of nodes (bare integer) or a percentage string; no remediation below it; 0 disables the threshold; the control plane always needs a strict majority
+#   stormCooldown: 5m             # NodeHealthCheck stormCooldownDuration; 0s means no wait
+#   paused: false                 # true: start no new remediation; disable order only
+#   bmc:
+#     caBundle: |                 # PEM CA the BMCs present on their Redfish endpoint
+#       -----BEGIN CERTIFICATE-----
+#       ...
+#     credentialsSecretName: bmc-credentials   # shared Secret, or a credentialsSecretName on every node
+#     systemsUri: /redfish/v1/Systems/1        # the ComputerSystem member, unless a node overrides it
+#     port: ""                                 # Redfish HTTPS port when not 443
+#     nodes:
+#       node1:
+#         address: 192.0.2.11
+#       node2:
+#         address: 192.0.2.12
+#         systemsUri: /redfish/v1/Systems/System.Embedded.1
+#         credentialsSecretName: bmc-node2
+nodeRemediation: {}
