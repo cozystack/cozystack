@@ -1,0 +1,482 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  labels:
+    app.kubernetes.io/name: node-healthcheck-operator
+  name: node-healthcheck-controller-manager
+  namespace: {{ .Release.Namespace }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  labels:
+    app.kubernetes.io/name: node-healthcheck-operator
+  name: node-healthcheck-leader-election-role
+  namespace: {{ .Release.Namespace }}
+rules:
+  - apiGroups:
+      - ""
+    resources:
+      - configmaps
+    verbs:
+      - get
+      - list
+      - watch
+      - create
+      - update
+      - patch
+      - delete
+  - apiGroups:
+      - coordination.k8s.io
+    resources:
+      - leases
+    verbs:
+      - get
+      - list
+      - watch
+      - create
+      - update
+      - patch
+      - delete
+  - apiGroups:
+      - ""
+    resources:
+      - events
+    verbs:
+      - create
+      - patch
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  labels:
+    app.kubernetes.io/name: node-healthcheck-operator
+    rbac.ext-remediation/aggregate-to-ext-remediation: "true"
+  name: node-healthcheck-manager-role
+rules:
+  - apiGroups:
+      - ""
+    resources:
+      - namespaces
+    verbs:
+      - create
+      - get
+      - patch
+  - apiGroups:
+      - ""
+    resources:
+      - nodes
+      - pods
+    verbs:
+      - get
+      - list
+      - watch
+  - apiGroups:
+      - apps
+    resources:
+      - deployments
+      - replicasets
+    verbs:
+      - get
+      - list
+      - watch
+  - apiGroups:
+      - config.openshift.io
+    resources:
+      - clusterversions
+      - featuregates
+      - infrastructures
+    verbs:
+      - get
+      - list
+      - watch
+  - apiGroups:
+      - console.openshift.io
+    resources:
+      - consoleplugins
+    verbs:
+      - create
+      - delete
+      - get
+      - list
+      - patch
+      - update
+      - watch
+  - apiGroups:
+      - coordination.k8s.io
+    resources:
+      - leases
+    verbs:
+      - create
+      - delete
+      - get
+      - list
+      - patch
+      - update
+      - watch
+  - apiGroups:
+      - machine.openshift.io
+    resources:
+      - machinehealthchecks
+    verbs:
+      - get
+      - list
+      - patch
+      - update
+      - watch
+  - apiGroups:
+      - machine.openshift.io
+    resources:
+      - machinehealthchecks/status
+    verbs:
+      - get
+      - patch
+      - update
+  - apiGroups:
+      - machine.openshift.io
+    resources:
+      - machines
+    verbs:
+      - get
+      - list
+      - watch
+  - apiGroups:
+      - monitoring.coreos.com
+    resources:
+      - servicemonitors
+    verbs:
+      - create
+      - get
+      - list
+      - update
+  - apiGroups:
+      - policy
+    resources:
+      - poddisruptionbudgets
+    verbs:
+      - get
+      - list
+      - watch
+  - apiGroups:
+      - rbac.authorization.k8s.io
+    resources:
+      - clusterrolebindings
+      - clusterroles
+    verbs:
+      - '*'
+  - apiGroups:
+      - remediation.medik8s.io
+    resources:
+      - nodehealthchecks
+    verbs:
+      - create
+      - delete
+      - get
+      - list
+      - patch
+      - update
+      - watch
+  - apiGroups:
+      - remediation.medik8s.io
+    resources:
+      - nodehealthchecks/finalizers
+    verbs:
+      - update
+  - apiGroups:
+      - remediation.medik8s.io
+    resources:
+      - nodehealthchecks/status
+    verbs:
+      - get
+      - patch
+      - update
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  labels:
+    app.kubernetes.io/name: node-healthcheck-operator
+  name: node-healthcheck-metrics-reader
+rules:
+  - nonResourceURLs:
+      - /metrics
+    verbs:
+      - get
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  labels:
+    app.kubernetes.io/name: node-healthcheck-operator
+  name: node-healthcheck-proxy-role
+rules:
+  - apiGroups:
+      - authentication.k8s.io
+    resources:
+      - tokenreviews
+    verbs:
+      - create
+  - apiGroups:
+      - authorization.k8s.io
+    resources:
+      - subjectaccessreviews
+    verbs:
+      - create
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  labels:
+    app.kubernetes.io/name: node-healthcheck-operator
+  name: node-healthcheck-leader-election-rolebinding
+  namespace: {{ .Release.Namespace }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: node-healthcheck-leader-election-role
+subjects:
+  - kind: ServiceAccount
+    name: node-healthcheck-controller-manager
+    namespace: {{ .Release.Namespace }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  labels:
+    app.kubernetes.io/name: node-healthcheck-operator
+  name: node-healthcheck-manager-rolebinding
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: node-healthcheck-manager-role
+subjects:
+  - kind: ServiceAccount
+    name: node-healthcheck-controller-manager
+    namespace: {{ .Release.Namespace }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  labels:
+    app.kubernetes.io/name: node-healthcheck-operator
+  name: node-healthcheck-proxy-rolebinding
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: node-healthcheck-proxy-role
+subjects:
+  - kind: ServiceAccount
+    name: node-healthcheck-controller-manager
+    namespace: {{ .Release.Namespace }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    app.kubernetes.io/component: controller-manager
+    app.kubernetes.io/name: node-healthcheck-operator
+  name: node-healthcheck-controller-manager-metrics-service
+  namespace: {{ .Release.Namespace }}
+spec:
+  ports:
+    - name: https
+      port: 8443
+      targetPort: https
+  selector:
+    app.kubernetes.io/component: controller-manager
+    app.kubernetes.io/name: node-healthcheck-operator
+---
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    app.kubernetes.io/component: controller-manager
+    app.kubernetes.io/name: node-healthcheck-operator
+  name: node-healthcheck-webhook-service
+  namespace: {{ .Release.Namespace }}
+spec:
+  ports:
+    - port: 443
+      protocol: TCP
+      targetPort: 9443
+  selector:
+    app.kubernetes.io/component: controller-manager
+    app.kubernetes.io/name: node-healthcheck-operator
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app.kubernetes.io/component: controller-manager
+    app.kubernetes.io/name: node-healthcheck-operator
+  name: node-healthcheck-controller-manager
+  namespace: {{ .Release.Namespace }}
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: controller-manager
+      app.kubernetes.io/name: node-healthcheck-operator
+  strategy:
+    rollingUpdate:
+      maxSurge: 0
+      maxUnavailable: 1
+    type: RollingUpdate
+  template:
+    metadata:
+      annotations:
+        kubectl.kubernetes.io/default-container: manager
+      labels:
+        app.kubernetes.io/component: controller-manager
+        app.kubernetes.io/name: node-healthcheck-operator
+    spec:
+      affinity:
+        nodeAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - preference:
+                matchExpressions:
+                  - key: node-role.kubernetes.io/infra
+                    operator: Exists
+              weight: 3
+            - preference:
+                matchExpressions:
+                  - key: node-role.kubernetes.io/master
+                    operator: Exists
+              weight: 1
+            - preference:
+                matchExpressions:
+                  - key: node-role.kubernetes.io/control-plane
+                    operator: Exists
+              weight: 1
+      containers:
+        - args:
+            - --health-probe-bind-address=:8081
+            - --metrics-bind-address=0.0.0.0:8443
+            - --leader-elect
+            - --enable-http2=false
+          command:
+            - /manager
+          env:
+            - name: DEPLOYMENT_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+          image: '{{ .Values.nodeHealthcheck.image }}'
+          lifecycle:
+            postStart:
+              exec:
+                command:
+                  - /bin/true
+            preStop:
+              exec:
+                command:
+                  - sleep
+                  - "5"
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8081
+            periodSeconds: 20
+          name: manager
+          ports:
+            - containerPort: 9443
+              name: webhook-server
+              protocol: TCP
+            - containerPort: 8443
+              name: https
+              protocol: TCP
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: 8081
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 100m
+              memory: 20Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+            readOnlyRootFilesystem: true
+          startupProbe:
+            failureThreshold: 12
+            httpGet:
+              path: /healthz
+              port: 8081
+            periodSeconds: 5
+          terminationMessagePolicy: FallbackToLogsOnError
+          volumeMounts:
+            - mountPath: /tmp/k8s-webhook-server/serving-certs
+              name: cert
+              readOnly: true
+      priorityClassName: system-cluster-critical
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      serviceAccountName: node-healthcheck-controller-manager
+      terminationGracePeriodSeconds: 15
+      tolerations:
+        - effect: NoSchedule
+          key: node-role.kubernetes.io/master
+          operator: Exists
+        - effect: NoSchedule
+          key: node-role.kubernetes.io/control-plane
+          operator: Exists
+        - effect: NoSchedule
+          key: node-role.kubernetes.io/infra
+          operator: Exists
+        - effect: NoExecute
+          key: node-role.kubernetes.io/infra
+          operator: Exists
+      topologySpreadConstraints:
+        - labelSelector:
+            matchLabels:
+              app.kubernetes.io/component: controller-manager
+              app.kubernetes.io/name: node-healthcheck-operator
+          maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: DoNotSchedule
+      volumes:
+        - name: cert
+          secret:
+            defaultMode: 420
+            secretName: node-healthcheck-webhook-cert
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingWebhookConfiguration
+metadata:
+  annotations:
+    cert-manager.io/inject-ca-from: {{ .Release.Namespace }}/node-healthcheck-serving-cert
+  labels:
+    app.kubernetes.io/name: node-healthcheck-operator
+  name: node-healthcheck-validating-webhook-configuration
+webhooks:
+  - admissionReviewVersions:
+      - v1
+    clientConfig:
+      service:
+        name: node-healthcheck-webhook-service
+        namespace: {{ .Release.Namespace }}
+        path: /validate-remediation-medik8s-io-v1alpha1-nodehealthcheck
+    failurePolicy: Fail
+    name: vnodehealthcheck.kb.io
+    rules:
+      - apiGroups:
+          - remediation.medik8s.io
+        apiVersions:
+          - v1alpha1
+        operations:
+          - CREATE
+          - UPDATE
+          - DELETE
+        resources:
+          - nodehealthchecks
+    sideEffects: None

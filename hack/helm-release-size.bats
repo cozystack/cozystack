@@ -65,6 +65,7 @@ packages/extra/monitoring
 packages/extra/seaweedfs
 packages/library/cozy-lib
 packages/system/kuberture
+packages/system/node-remediation
 packages/system/telepresence
 packages/tests/cozy-lib-tests
 "

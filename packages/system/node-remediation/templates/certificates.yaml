@@ -1,0 +1,38 @@
+# Upstream leaves the webhook certificates to OLM. Here cert-manager issues
+# them, as the kubebuilder scaffold both operators carry under config/certmanager
+# does: a self-signed Issuer signs one serving certificate per operator, and
+# the webhook configurations rendered from upstream carry the matching
+# cert-manager.io/inject-ca-from annotation.
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: node-remediation-selfsigned
+  namespace: {{ .Release.Namespace }}
+spec:
+  selfSigned: {}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: fence-agents-remediation-serving-cert
+  namespace: {{ .Release.Namespace }}
+spec:
+  secretName: fence-agents-remediation-webhook-cert
+  issuerRef:
+    name: node-remediation-selfsigned
+  dnsNames:
+    - fence-agents-remediation-webhook-service.{{ .Release.Namespace }}.svc
+    - fence-agents-remediation-webhook-service.{{ .Release.Namespace }}.svc.cluster.local
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: node-healthcheck-serving-cert
+  namespace: {{ .Release.Namespace }}
+spec:
+  secretName: node-healthcheck-webhook-cert
+  issuerRef:
+    name: node-remediation-selfsigned
+  dnsNames:
+    - node-healthcheck-webhook-service.{{ .Release.Namespace }}.svc
+    - node-healthcheck-webhook-service.{{ .Release.Namespace }}.svc.cluster.local
