@@ -113,8 +113,8 @@ func (r *Reconciler) Reconcile(ctx context.Context, _ ctrl.Request) (ctrl.Result
 	pools := ComputePools(tenants)
 
 	desired := map[string]corev1.ResourceList{}
-	// limitRangeSource maps each unbounded pool member to the pool root whose
-	// chart LimitRange it must inherit.
+	// limitRangeSource maps each unbounded pool member whose quota bounds a
+	// compute limit to the pool root whose chart LimitRange it must inherit.
 	limitRangeSource := map[string]string{}
 	for _, p := range pools {
 		if over := p.Overcommitted(); len(over) > 0 {
@@ -134,7 +134,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, _ ctrl.Request) (ctrl.Result
 		for _, ns := range p.Members {
 			if existing[ns] {
 				desired[ns] = buffered.EnforcedHard(ns, usedByNS)
-				if ns != p.Root {
+				if ns != p.Root && boundsComputeLimits(desired[ns]) {
 					limitRangeSource[ns] = p.Root
 				}
 			}
@@ -350,6 +350,18 @@ func ownedNamespace(hrNamespace, appName string) string {
 	default:
 		return hrNamespace + "-" + appName
 	}
+}
+
+// boundsComputeLimits reports whether a quota bounds limits.cpu or
+// limits.memory, the only case in which admission rejects a container that
+// omits a limit. The chart renders its LimitRange under any non-empty
+// resourceQuotas, so the root may carry one under a quota that bounds no
+// compute at all; copying it then would impose default limits the quota
+// never asked for.
+func boundsComputeLimits(hard corev1.ResourceList) bool {
+	_, cpu := hard[corev1.ResourceLimitsCPU]
+	_, memory := hard[corev1.ResourceLimitsMemory]
+	return cpu || memory
 }
 
 // maxResourceList returns the per-resource maximum of a and b.
