@@ -48,3 +48,66 @@ tests:
       - equal:
           path: parameters.accessPolicy
           value: public-read
+
+  # A pool named <x>-public would render a readwrite BucketAccessClass
+  # <ns>-<x>-public, the same name as pool <x>'s public-read class; a pool named
+  # public would take <ns>-public, the instance's own public-read class.
+  - it: refuses a pool name ending in -public
+    template: templates/seaweedfs.yaml
+    set:
+      volume:
+        pools:
+          fast:
+            diskType: ssd
+          fast-public:
+            diskType: nvme
+    asserts:
+      - failedTemplate:
+          errorPattern: volume.pools key 'fast-public' must not be 'public' or end with
+
+  - it: refuses a pool named public
+    template: templates/seaweedfs.yaml
+    set:
+      volume:
+        pools:
+          public:
+            diskType: ssd
+    asserts:
+      - failedTemplate:
+          errorPattern: volume.pools key 'public' must not be 'public' or end with
+
+  - it: refuses a zone pool name ending in -public
+    template: templates/seaweedfs.yaml
+    set:
+      topology: MultiZone
+      replicationFactor: 1
+      volume:
+        zones:
+          a:
+            pools:
+              fast-public:
+                diskType: ssd
+    asserts:
+      - failedTemplate:
+          errorPattern: volume.zones.a.pools key 'fast-public' must not be 'public' or end with
+
+  - it: still refuses a pool name ending in -readonly
+    template: templates/seaweedfs.yaml
+    set:
+      volume:
+        pools:
+          fast-readonly:
+            diskType: ssd
+    asserts:
+      - failedTemplate:
+          errorPattern: volume.pools key 'fast-readonly' must not be 'public' or end with
+
+  - it: accepts a pool name that only contains public
+    template: templates/seaweedfs.yaml
+    set:
+      volume:
+        pools:
+          publicfast:
+            diskType: ssd
+    asserts:
+      - notFailedTemplate: {}
