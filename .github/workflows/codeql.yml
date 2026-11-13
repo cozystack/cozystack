@@ -3,8 +3,36 @@ name: CodeQL
 on:
   push:
     branches: [main]
+    # Mirrors hack/code-changed.sh; hack/code-changed_test.bats keeps them equal.
+    paths-ignore:
+      - 'docs/**'
+      - 'img/**'
+      - '.gemini/**'
+      - '.github/ISSUE_TEMPLATE/**'
+      - '.github/CODEOWNERS'
+      - '.github/PULL_REQUEST_TEMPLATE.md'
+      - '.github/labels.yml'
+      - '.github/renovate.json'
+      - '.coderabbit.yaml'
+      - 'security-insights.yml'
+      - 'LICENSE'
+      - '**.md'
   pull_request:
     branches: [main]
+    # Mirrors hack/code-changed.sh; hack/code-changed_test.bats keeps them equal.
+    paths-ignore:
+      - 'docs/**'
+      - 'img/**'
+      - '.gemini/**'
+      - '.github/ISSUE_TEMPLATE/**'
+      - '.github/CODEOWNERS'
+      - '.github/PULL_REQUEST_TEMPLATE.md'
+      - '.github/labels.yml'
+      - '.github/renovate.json'
+      - '.coderabbit.yaml'
+      - 'security-insights.yml'
+      - 'LICENSE'
+      - '**.md'
   schedule:
     # Weekly on Monday 03:27 UTC — off-peak and offset from the other
     # scheduled jobs (scorecard 06:00 Mon, labels 04:17 Mon, stale 04:37

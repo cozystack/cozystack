@@ -57,9 +57,10 @@ permissions:
   contents: read
 
 jobs:
-  # Compute the docs-only gate and the per-package build matrix from the PR
-  # diff. hack/build-matrix.sh parses the root Makefile `build:` target (the
-  # single source of truth) and emits only the units whose package dir changed,
+  # Compute the docs-only gate (hack/code-changed.sh) and the per-package
+  # build matrix from the PR diff. hack/build-matrix.sh parses the root
+  # Makefile `build:` target (the single source of truth) and emits only the
+  # units whose package dir changed,
   # escalating to the full set on a shared-dependency change. talos + installer
   # are handled by dedicated jobs (see build-matrix.sh for why).
   plan:
@@ -167,11 +168,9 @@ jobs:
           # alone here rather than widened by a side effect.
           git diff --name-only --no-renames "origin/${BASE_REF}...HEAD" > /tmp/changed_norenames.txt
           echo "Changed files:"; sed 's/^/  /' /tmp/changed_norenames.txt
-          if grep -qvE '^docs/' /tmp/changed_norenames.txt; then
-            echo "code=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "code=false" >> "$GITHUB_OUTPUT"
-          fi
+          code="$(hack/code-changed.sh /tmp/changed_norenames.txt)"
+          echo "Code changed: $code"
+          echo "code=$code" >> "$GITHUB_OUTPUT"
           matrix="$(hack/build-matrix.sh /tmp/changed.txt)"
           echo "Build matrix: $matrix"
           echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
@@ -1427,7 +1426,7 @@ jobs:
               description = `release packages candidate did not verify (result: ${CANDIDATE_RESULT})`;
             } else if (CODE !== 'true') {
               state = 'success';
-              description = 'docs-only PR — e2e not required';
+              description = 'no code changed (docs/metadata only) — e2e not required';
             } else if (IS_RELEASE === 'true' && IS_FULL_E2E !== 'true') {
               // Release promotion PRs deliberately do not repeat e2e: the rc was
               // already verified against the immutable candidate whose digests
