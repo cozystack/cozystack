@@ -1,0 +1,41 @@
+---
+apiVersion: cozystack.io/v1alpha1
+kind: PackageSource
+metadata:
+  name: cozystack.node-remediation
+spec:
+  sourceRef:
+    kind: OCIRepository
+    name: cozystack-packages
+    namespace: cozy-system
+    path: /
+  variants:
+  - name: default
+    dependsOn:
+    - cozystack.networking
+    - cozystack.cert-manager
+    components:
+    # The CRDs, kept on uninstall, with the BMC credentials namespace and its
+    # admission policy; the operators, whose webhooks need the CRDs and
+    # cert-manager; then the NodeHealthCheck objects and the remediation
+    # template, which the operators' webhooks validate. The same split as
+    # cert-manager-crds / cert-manager / cert-manager-issuers.
+    - name: node-remediation-crds
+      path: system/node-remediation-crds
+      install:
+        namespace: cozy-node-remediation
+        releaseName: node-remediation-crds
+    - name: node-remediation
+      path: system/node-remediation
+      install:
+        namespace: cozy-node-remediation
+        releaseName: node-remediation
+        dependsOn:
+        - node-remediation-crds
+    - name: node-remediation-config
+      path: system/node-remediation-config
+      install:
+        namespace: cozy-node-remediation
+        releaseName: node-remediation-config
+        dependsOn:
+        - node-remediation

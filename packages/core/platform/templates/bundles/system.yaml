@@ -397,5 +397,44 @@ variants and opt-in on the slim ones. */}}
 {{- end }}
 {{include "cozystack.platform.package.optional.default" (list "cozystack.hetzner-robotlb" $) }}
 {{include "cozystack.platform.package.optional.default" (list "cozystack.talos-log-collector" $) }}
+{{- /*
+  Node fencing. The nodeRemediation block is forwarded whole to both charts of
+  the package: node-remediation reads the BMC CA, node-remediation-config the
+  rest. Unset emits a Package without a components block, and the charts then
+  refuse their render until the hoster fills the block in, which is the state
+  an enabled-but-unconfigured package should be in rather than fencing with
+  defaults.
+
+  local-ccm's node lifecycle controller deletes a Node that stays NotReady,
+  releasing its pods without proof that the machine is off, which is the proof
+  fencing exists for. The two cannot run on the same nodes, and nothing in this
+  render can switch the controller off, so a cluster where it is still on is
+  refused. The lookup is a guard of that kind: a repeated render gives the same
+  answer, nothing of the looked-up object is copied into the output, and the
+  branch where it finds nothing (helm template, helm-unittest without a
+  kubernetesProvider mock, a cluster without local-ccm) renders normally.
+*/ -}}
+{{- $nodeRemediationName := "cozystack.node-remediation" -}}
+{{- $nodeRemediationEnabled := and (has $nodeRemediationName (default (list) .Values.bundles.enabledPackages)) (not (has $nodeRemediationName (default (list) .Values.bundles.disabledPackages))) -}}
+{{- if $nodeRemediationEnabled -}}
+{{- $localCcm := lookup "cozystack.io/v1alpha1" "Package" "" "cozystack.local-ccm" -}}
+{{- if $localCcm -}}
+{{- /* system/local-ccm wraps the upstream chart as a subchart, so its values sit under a second local-ccm key. */ -}}
+{{- $nlc := dig "spec" "components" "local-ccm" "values" "local-ccm" "nodeLifecycleController" "enabled" true $localCcm -}}
+{{- /* The subchart gates the controller with a bare `if`, where the string "false" is true; only the boolean switches it off. */ -}}
+{{- if not (and (kindIs "bool" $nlc) (eq $nlc false)) -}}
+{{- fail "cozystack.node-remediation cannot be enabled while the cozystack.local-ccm Package runs its node lifecycle controller: that controller deletes a NotReady Node without proof that the machine is off. Set spec.components.local-ccm.values.local-ccm.nodeLifecycleController.enabled: false on that Package first; a switch in place is not supported. Every mode of the controller is refused, its autoscaler-taint-only default included." -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- $nodeRemediationComponents := dict -}}
+{{- if and .Values.nodeRemediation (not (kindIs "map" .Values.nodeRemediation)) -}}
+{{- fail "nodeRemediation must be a map: it is forwarded as the values of the node-remediation and node-remediation-config releases, which take an object" -}}
+{{- end -}}
+{{- if .Values.nodeRemediation -}}
+{{- $_ := set $nodeRemediationComponents "node-remediation" (dict "values" .Values.nodeRemediation) -}}
+{{- $_ := set $nodeRemediationComponents "node-remediation-config" (dict "values" .Values.nodeRemediation) -}}
+{{- end -}}
+{{include "cozystack.platform.package.optional.default" (list $nodeRemediationName $ $nodeRemediationComponents) }}
 
 {{- end }}
