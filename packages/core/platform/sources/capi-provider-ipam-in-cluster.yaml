@@ -18,6 +18,7 @@ spec:
     dependsOn:
     - cozystack.networking
     - cozystack.capi-operator
+    - cozystack.capi-provider-core
     components:
     - name: capi-providers-ipam-in-cluster
       path: system/capi-providers-ipam-in-cluster
