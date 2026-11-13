@@ -47,6 +47,7 @@ If a package stamps a reference somewhere the two globs do not cover, add that f
 - **A package that stamps a reference is in the root `Makefile` `build:` list.** `build-matrix.sh`, the main build and release preparation all iterate that one list, so a package outside it is never rebuilt by any path and its pin freezes permanently. `hack/build-matrix_test.bats` computes the set of packages whose Makefile runs `docker buildx build` and fails on any the list misses.
 - **Every consumer of references reads all three storage shapes**, via `hack/lib/image-refs.sh`.
 - **Scan wider than you rewrite.** A rewrite is deliberately narrow to avoid corrupting vendored defaults, so the check that follows it must not share that blind spot. `hack/promote-rewrite-tags.sh` rewrites the enumerated files, then greps the whole tree and fails if any reference to the release candidate survives.
+- **A pin can name an index that carries attestation manifests.** An image built with `SBOM=1` is pushed as an index of the image and its attestation manifest, and the ref pins that index, not a single-platform manifest. A consumer that reads a pin's manifest takes the entries with `platform.os == "linux"` as its platforms: an entry whose platform is `unknown/unknown` is an attestation, not a platform. `hack/stitch-multiarch.sh` and `hack/verify-multiarch.sh` read pins this way, and `skopeo copy --multi-arch all`, which the retag and the mirror run, copies the attestation with the image.
 
 ## What each consumer does
 
@@ -58,9 +59,9 @@ If a package stamps a reference somewhere the two globs do not cover, add that f
 | `hack/promote-retag.sh` | all three shapes | copy each digest to its stable tag in the registry |
 | `hack/nightly-mirror.sh` | all three shapes | copy each digest to the public registry, then rewrite hosts in the same file set |
 | `hack/overlay-main-images.sh` | `values.yaml` + `*.tag` | overlay current-main references onto packages a PR did not rebuild |
-| `hack/stitch-multiarch.sh` | all three shapes | join each amd64 image and its `-arm64` twin into one index, repin the tree on it, then fail if any old digest survives |
+| `hack/stitch-multiarch.sh` | all three shapes | join each amd64 image and its `-arm64` twin into one index, each side an image or, built with `SBOM=1`, an index of the image and its attestation that the result keeps, repin the tree on it, then fail if any old digest survives |
 | `hack/retention-packages.sh` | all three shapes, in the published nightly tree | name the GHCR packages the retention workflow prunes (those linked to another repository are then skipped); a ref it cannot see is a package whose nightlies are never pruned |
-| `hack/verify-multiarch.sh` | all three shapes, first- and third-party | fail a release unless every pinned image is an index with `linux/amd64` and `linux/arm64`, bar the repositories in `hack/multiarch-allowlist` |
+| `hack/verify-multiarch.sh` | all three shapes, first- and third-party | fail a release unless every pinned image is an index with `linux/amd64` and `linux/arm64`, attestation entries not counted, bar the repositories in `hack/multiarch-allowlist` |
 
 `hack/multiarch-allowlist` is the only bypass for that gate, and it is for images that cannot exist for arm64, not for images nobody has rebuilt yet. An entry is a repository with no tag or digest, so bumping an allowed image needs no edit, and it must carry a reason after `#` on the same line: the script refuses an entry without one. Allowed refs are still printed, under their own "allowed single-arch" heading, and in tree mode an entry that matches no ref that failed the check is reported as stale without changing the exit status, so it gets removed once the image is multi-arch or gone. `--refs-file` reports no stale entries, since a list of pulled images omits everything the run did not pull.
 

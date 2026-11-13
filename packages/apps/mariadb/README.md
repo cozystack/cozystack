@@ -10,7 +10,7 @@ This managed service is controlled by mariadb-operator, ensuring efficient manag
 - Docs: https://mariadb.com/kb/en/documentation/
 - GitHub: https://github.com/mariadb-operator/mariadb-operator
 
-> `storageClass` is annotated as immutable in the chart schema — see [`docs/storage-immutability.md`](../../../docs/storage-immutability.md) for the contract and which consumers enforce it.
+> `storageClass` is annotated as immutable in the chart schema — see [storageClass immutability](https://cozystack.io/docs/v1/operations/storage-class-immutability/) for the contract and which consumers enforce it.
 
 ## HowTos
 
@@ -246,7 +246,7 @@ This setting is ignored if the corresponding `resources` value is set.
 
 Presets follow a cloud-style `<series>.<size>` naming convention. Five series cover the full CPU-to-memory ratio range (`t1` 1:0.5, `c1` 1:1, `s1` 1:2, `u1` 1:4, `m1` 1:8) and each series ships eight sizes (`nano` through `4xlarge`). The legacy flat names (`nano`, `micro`, `small`, `medium`, `large`, `xlarge`, `2xlarge`) remain accepted as deprecated aliases and keep their original sizes, which do not follow one series: `nano` through `small` equal the `t1` sizes of the same name, while `medium` equals `c1.small` rather than `c1.medium`.
 
-See [`docs/operations/resource-presets.md`](../../../docs/operations/resource-presets.md) for the full size matrix and the legacy-to-instance-type mapping.
+See [Resource management](https://cozystack.io/docs/v1/guides/resource-management/) for the full size matrix and the legacy-to-instance-type mapping.
 
 ### users
 

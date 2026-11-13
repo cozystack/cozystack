@@ -157,12 +157,13 @@ cozypkg validate .
 cozypkg push oci://<registry>/%s:<tag>
 `+"```"+`
 
-## Connect (one command, on a Cozystack cluster)
+## Connect and install (on a Cozystack cluster)
 
 `+"```bash"+`
-cozypkg tap oci://<registry>/%s:<tag>
+cozypkg tap oci://<registry>/%s:<tag>   # connect the repository; installs nothing
+cozypkg add %s                          # install the app
 `+"```"+`
-`, psName, app, app, app, app, app),
+`, psName, app, app, app, app, app, psName),
 		},
 	}
 }
