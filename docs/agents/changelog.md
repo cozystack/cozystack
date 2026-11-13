@@ -235,7 +235,7 @@ Cozystack release may include changes from related repositories. Check and inclu
    RELEASE_END=$(git log -1 --format=%ai v<new_version>)
    
    # Run the script to check all optional repositories
-   ./docs/changelogs/hack/check-optional-repos.sh "$RELEASE_START" "$RELEASE_END"
+   ./hack/check-optional-repos.sh "$RELEASE_START" "$RELEASE_END"
    ```
    
    The script will:
