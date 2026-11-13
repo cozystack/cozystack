@@ -65,7 +65,10 @@ spec:
 apiVersion: apps.cozystack.io/v1alpha1
 kind: KubernetesNodes
 metadata:
-  name: md0
+  # <cluster>-<pool>: kubernetes-nodes refuses to render a release whose name
+  # does not start with kubernetes-nodes-<spec.cluster>-, so a bare "md0" never
+  # creates a Machine and the suite only times out waiting for one.
+  name: k8s-e2e-md0
   namespace: tenant-e2eproxmox
 spec:
   cluster: k8s-e2e

@@ -5,6 +5,8 @@ apiVersion: strategy.backups.cozystack.io/v1alpha1
 kind: CNPG
 metadata:
   name: cozy-default-cnpg
+  annotations:
+    backups.cozystack.io/endpoint: {{ include "backupstrategy-controller.endpoint" . | quote }}
 spec:
   template:
     {{- /*

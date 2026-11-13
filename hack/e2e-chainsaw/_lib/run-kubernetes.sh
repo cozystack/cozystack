@@ -5230,9 +5230,10 @@ _cozy_guard_kubectl() {
 cozy_guard_helmrelease() {
   local _ns="$1"
   local _hr="$2"
-  # Non-empty on a release whose install strategy the cluster is known to set,
-  # which is the parent Application HelmRelease and nothing else here. See the
-  # branch that reads it for why the check cannot be applied to the addons.
+  # Non-empty on a release whose install strategy the cluster is known to set:
+  # the parent Application HelmRelease and the worker pool release, which is an
+  # Application HelmRelease too. See the branch that reads it for why the check
+  # cannot be applied to the addons.
   local _strategy_required="${3:-}"
   local _probe _strategy _history _ready _read_rc
   _cozy_guard_read_bounds
@@ -5334,7 +5335,7 @@ cozy_guard_helmrelease() {
   # are load-bearing for this guard and not only for the chart. The csi they
   # pin is helmreleases/csi.yaml, the KubeVirt driver this suite runs; on the
   # Proxmox substrate the same release comes from csi-proxmox.yaml, which sets
-  # the strategy too and has no such pin.
+  # the strategy too and is pinned by csi_proxmox_install_retry_test.yaml.
   if [ "${_strategy}" = "RetryOnFailure" ]; then
     echo "HelmRelease ${_hr} carries a failed or uninstalled Snapshot, and its install strategy is RetryOnFailure, which retries a failed action in place instead of remediating it. An action on this release failed during the run; the release may have recovered on a retry since, and the failure is still the finding. On the tenant cilium the cause can sit outside the chart: its operator Deployment cannot schedule before a worker registers, so workers arriving more than two 10m install timeouts after the install started leave this Snapshot while still inside the node-join deadline. Compare the Snapshot times below with when the first node turned Ready before looking at the release." >&2
     _cozy_guard_kubectl -n "$_ns" describe hr "${_hr}" >&2
@@ -5437,16 +5438,32 @@ cozy_guard_addon_helmreleases() {
 # keeps the parent's own verdict, which an early return past the addons would
 # drop.
 #
+# The worker pool release of parent kubernetes-<test>. The pool is a
+# KubernetesNodes named <test>-md0 (see the apply in the run), and the
+# aggregated apiserver names its HelmRelease kubernetes-nodes-<test>-md0. That
+# name does not start with the addon prefix kubernetes-<test>-, so the addon
+# listing never selects it, and it is read on its own. Derived from the parent
+# rather than passed in, for the same reason as the addon prefix below.
+cozy_pool_helmrelease_name() {
+  local _parent="$1"
+  printf 'kubernetes-nodes-%s-md0\n' "${_parent#kubernetes-}"
+}
+
 # The addon prefix is derived here rather than passed in, so the parent name and
 # the prefix that selects its children cannot drift apart.
 cozy_guard_all_helmreleases() {
   local _ns="$1"
   local _parent="$2"
   local _failed=0
-  # The parent is asked to prove its install strategy read back non-empty; the
-  # addons are not, because most of them legitimately set none. See the branch
-  # in cozy_guard_helmrelease that reads this argument.
+  # The parent and the pool release are asked to prove their install strategy
+  # read back non-empty: both are Application HelmReleases, which the apiserver
+  # stamps. The addons are not, because most of them legitimately set none. See
+  # the branch in cozy_guard_helmrelease that reads this argument.
   cozy_guard_helmrelease "$_ns" "${_parent}" required || _failed=1
+  # The pool release sits on the node-join path, through the talos-reconcile
+  # Job it renders, so a failed action on it is as much a finding as one on the
+  # parent. By the time this runs the pool has scaled, so the release exists.
+  cozy_guard_helmrelease "$_ns" "$(cozy_pool_helmrelease_name "${_parent}")" required || _failed=1
   cozy_guard_addon_helmreleases "$_ns" "${_parent}-" || _failed=1
   # These releases are now classified, and the same flag the failure-path report
   # uses records it. The two are not alternatives: this call runs before the
@@ -5495,7 +5512,8 @@ _COZY_GUARD_REPORT_DONE=0
 # failing path would replace the caller's own exit status, and the tenant
 # crust-gather snapshot hangs off that exit.
 #
-# Bounded on its own clock, checked before the listing and before each release.
+# Bounded on its own clock, checked before the pool release, before the listing
+# and before each addon release.
 # What comes after this on the exit path is the tenant snapshot, which needs the
 # rest of the op, so a namespace whose apiserver answers slowly must cost a
 # bounded number of seconds here rather than however many releases happen to be
@@ -5515,7 +5533,7 @@ cozy_report_helmrelease_remediation() {
   local _ns="$1"
   local _parent="$2"
   local _label="${3:-}"
-  local _addon_hrs _hr _deadline _budget
+  local _addon_hrs _hr _pool _pool_found _read_rc _deadline _budget
   [ "${_COZY_GUARD_REPORT_DONE}" -eq 0 ] || return 0
   # An empty parent name means the run failed before the release was created, so
   # there is no history anywhere to read yet.
@@ -5541,6 +5559,29 @@ cozy_report_helmrelease_remediation() {
   cozy_diag_phase_has_time "HelmRelease remediation footprint of ${_parent}" || return 0
   echo "=== ${_label}tenant HelmRelease remediation footprint (management cluster, ns ${_ns}) — classification only, this does not decide the run ==="
   cozy_guard_helmrelease "$_ns" "${_parent}" required || true
+  # The pool release is created by a later apply than the parent, and
+  # run_kubernetes_test arms the exit handler between the two, so a run whose
+  # pool apply failed reaches this with none to read. Its absence is then a fact
+  # about where the run stopped, not a failed read, and is reported as such.
+  # Only an exit 0 with empty output means absent: --ignore-not-found makes
+  # NotFound that, so any non-zero exit is a read that failed and is named as
+  # one.
+  _pool=$(cozy_pool_helmrelease_name "${_parent}")
+  cozy_diag_phase_has_time "HelmRelease remediation footprint of ${_pool}" || return 0
+  if [ "$(date +%s)" -ge "${_deadline}" ]; then
+    echo "=== HelmRelease remediation footprint: stopped after ${_budget}s; ${_pool} and the addon releases of ${_parent} were not read, so nothing was observed about any of them ===" >&2
+    return 0
+  fi
+  _cozy_guard_read_bounds
+  _read_rc=0
+  _pool_found=$(_cozy_guard_kubectl get hr -n "$_ns" "${_pool}" --ignore-not-found -o name) || _read_rc=$?
+  if [ "${_read_rc}" -ne 0 ]; then
+    echo "Checking whether ${_pool} exists failed - $(_cozy_guard_read_failure "${_read_rc}"); nothing was observed about it either way." >&2
+  elif [ -z "${_pool_found}" ]; then
+    echo "» ${_pool} does not exist - the run ended before the worker pool was applied, or its HelmRelease was never created; nothing to read"
+  else
+    cozy_guard_helmrelease "$_ns" "${_pool}" required || true
+  fi
   cozy_diag_phase_has_time "the addon HelmRelease listing of ${_parent}" || return 0
   if [ "$(date +%s)" -ge "${_deadline}" ]; then
     echo "=== HelmRelease remediation footprint: stopped after ${_budget}s; the addon releases of ${_parent} were not listed, so nothing was observed about any of them ===" >&2
@@ -5723,6 +5764,28 @@ ${ouroboros_addon}
   version: "${k8s_version}"
 EOF
 
+  # Armed here, at the parent apply, rather than once the tenant answers. The
+  # parent HelmRelease exists from this point on -- the aggregated apiserver
+  # creates it before it answers the apply above -- and everything between here
+  # and the tenant LB is a management-cluster wait on that release or on what it
+  # installs: the KamajiControlPlane, the control-plane Deployments, the
+  # MachineDeployment, the admin-kubeconfig Secret. That window is the one the
+  # guard was written for. An install action that times out while
+  # admin-kubeconfig is still being provisioned leaves the failed Snapshot this
+  # reads, and every one of those waits exits under errexit with no reading at
+  # all if the handler is armed after them.
+  #
+  # Ahead of the pool apply below as well, not after it: a pool apply that fails
+  # exits under errexit too, and armed after it that run would leave the parent
+  # unclassified. Armed here, it is the run the report's "pool release does not
+  # exist" line describes.
+  #
+  # Arming this early costs the snapshot nothing: _tenant_snapshot_on_fail
+  # returns on an unset CURRENT_TENANT_KC, which is assigned where the
+  # kubeconfig becomes usable, so it no-ops until then.
+  CURRENT_TENANT_PARENT_HR="kubernetes-${test_name}"
+  trap '_tenant_failure_on_exit' EXIT
+
   # Worker node pool is a separate KubernetesNodes resource since the Phase 2
   # split. Named "<cluster>-md0" so it produces MachineDeployment
   # kubernetes-${test_name}-md0 — the same object the pre-split
@@ -5781,22 +5844,6 @@ ${talos_block}
   storageClass: "${storage_class}"
   version: "${k8s_version}"
 EOF
-  # Armed here, at the apply, rather than once the tenant answers. The parent
-  # HelmRelease exists from this point on -- the aggregated apiserver renders it
-  # from the CR above -- and everything between here and the tenant LB is a
-  # management-cluster wait on that release or on what it installs: the
-  # KamajiControlPlane, the control-plane Deployments, the MachineDeployment,
-  # the admin-kubeconfig Secret. That window is the one the guard was written
-  # for. An install action that times out while admin-kubeconfig is still being
-  # provisioned leaves the failed Snapshot this reads, and every one of those
-  # waits exits under errexit with no reading at all if the handler is armed
-  # after them.
-  #
-  # Arming this early costs the snapshot nothing: _tenant_snapshot_on_fail
-  # returns on an unset CURRENT_TENANT_KC, which is assigned where the
-  # kubeconfig becomes usable, so it no-ops until then.
-  CURRENT_TENANT_PARENT_HR="kubernetes-${test_name}"
-  trap '_tenant_failure_on_exit' EXIT
   # Wait for the tenant-test namespace to be active
   kubectl wait namespace tenant-test --timeout=20s --for=jsonpath='{.status.phase}'=Active
 

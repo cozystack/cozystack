@@ -1,0 +1,141 @@
+suite: the release uninstalls whatever order its dependencies go in
+
+# Disabling the addon removes this release, the VictoriaMetrics operator and the
+# VPA CRDs together, and Flux deletes them in parallel. When the operator goes
+# first, nothing clears its finalizer on the objects this chart created and the
+# uninstall hangs; when the VPA CRD goes first, a release manifest recording a
+# VPA cannot be built and the uninstall fails.
+release:
+  name: cozy-monitoring-agents
+  namespace: cozy-monitoring
+templates:
+  - templates/vm-cleanup-hook.yaml
+  - templates/vpa.yaml
+tests:
+  - it: runs before Helm deletes anything, bounded and with one attempt
+    template: templates/vm-cleanup-hook.yaml
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - equal:
+          path: metadata.annotations["helm.sh/hook"]
+          value: pre-delete
+      - equal:
+          path: metadata.namespace
+          value: cozy-monitoring
+      - equal:
+          path: spec.activeDeadlineSeconds
+          value: 180
+      - equal:
+          path: spec.backoffLimit
+          value: 0
+      - matchRegex:
+          path: spec.template.spec.containers[0].image
+          pattern: ^docker\.io/clastix/kubectl:v[0-9.]+@sha256:[0-9a-f]{64}$
+
+  - it: its RBAC exists only for the hook and is removed with it
+    template: templates/vm-cleanup-hook.yaml
+    documentSelector:
+      path: kind
+      value: ClusterRole
+    asserts:
+      - equal:
+          path: metadata.annotations["helm.sh/hook"]
+          value: pre-delete
+      - equal:
+          path: metadata.annotations["helm.sh/hook-weight"]
+          value: "-10"
+      - matchRegex:
+          path: metadata.annotations["helm.sh/hook-delete-policy"]
+          pattern: hook-succeeded
+
+  - it: may delete and clear finalizers on every VictoriaMetrics kind the chart renders
+    template: templates/vm-cleanup-hook.yaml
+    documentSelector:
+      path: kind
+      value: ClusterRole
+    asserts:
+      - equal:
+          path: rules[0].apiGroups
+          value: ["operator.victoriametrics.com"]
+      - contains:
+          path: rules[0].resources
+          content: vmagents
+      - contains:
+          path: rules[0].resources
+          content: vmrules
+      - contains:
+          path: rules[0].resources
+          content: vmservicescrapes
+      - contains:
+          path: rules[0].resources
+          content: vmpodscrapes
+      - contains:
+          path: rules[0].resources
+          content: vmnodescrapes
+      - equal:
+          path: rules[0].verbs
+          value: ["get", "list", "delete", "patch"]
+      - lengthEqual:
+          path: rules
+          count: 1
+
+  - it: grants that role to the hook's own service account
+    template: templates/vm-cleanup-hook.yaml
+    documentSelector:
+      path: kind
+      value: ClusterRoleBinding
+    asserts:
+      - equal:
+          path: roleRef.name
+          value: cozy-monitoring-vm-objects-cleanup
+      - equal:
+          path: subjects[0]
+          value:
+            kind: ServiceAccount
+            name: vm-objects-cleanup
+            namespace: cozy-monitoring
+
+  - it: touches only objects this release owns, and clears their finalizers
+    template: templates/vm-cleanup-hook.yaml
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: rel="cozy-monitoring-agents"
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: relns="cozy-monitoring"
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: meta\\\.helm\\\.sh/release-name
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'delete "\$k" "\$n" --wait=false'
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: '"finalizers":null'
+      # A pre-delete hook that fails aborts the uninstall it exists to unblock.
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: exit 0\s*$
+
+  - it: the VPA is rendered when its CRD is served
+    template: templates/vpa.yaml
+    capabilities:
+      apiVersions:
+        - autoscaling.k8s.io/v1/VerticalPodAutoscaler
+    asserts:
+      - hasDocuments:
+          count: 1
+      - isKind:
+          of: VerticalPodAutoscaler
+
+  - it: the VPA stays out of the release manifest when its CRD is not served
+    template: templates/vpa.yaml
+    asserts:
+      - hasDocuments:
+          count: 0

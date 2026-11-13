@@ -1,0 +1,42 @@
+suite: console cluster domain
+# The console nginx names the observability proxy by its fully qualified
+# Service name, because the resolver it uses for a per-request upstream does
+# not apply the pod's search domains. The image defaults to cozy.local; the
+# chart passes the platform cluster domain so a cluster on another domain
+# still reaches the proxy.
+templates:
+  - templates/console.yaml
+  - templates/configmap.yaml
+
+release:
+  name: dashboard
+  namespace: cozy-dashboard
+
+tests:
+  - it: passes the platform cluster domain to the console
+    template: templates/console.yaml
+    set:
+      _cluster:
+        cluster-domain: cluster.local
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: CLUSTER_DOMAIN
+            value: cluster.local
+
+  - it: leaves the image default when the platform passes no cluster domain
+    template: templates/console.yaml
+    asserts:
+      - notExists:
+          path: spec.template.spec.containers[0].env
+
+  # The entrypoint renders the nginx template into /etc/nginx/conf.d at
+  # startup. On a read-only root it logs the failure and starts nginx on the
+  # stock default.conf, which serves no /apis, /api or proxy route at all.
+  - it: keeps the root filesystem writable for the rendered nginx config
+    template: templates/console.yaml
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].securityContext.readOnlyRootFilesystem
+          value: false

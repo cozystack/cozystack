@@ -3,8 +3,8 @@ kind: FoundationDB
 metadata:
   name: test
 spec:
+  version: v7.3
   cluster:
-    version: "7.3.63"
     processCounts:
       storage: 3
       stateless: -1
