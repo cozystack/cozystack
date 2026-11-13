@@ -114,6 +114,23 @@ func mergeMessage(message, merge string) string {
 	return strings.TrimRight(message, " \t\r\n") + "\n\n" + batchTrailer + ": " + merge + "\n"
 }
 
+// pickUnit and replayNext start the next unit only while the run's output is
+// intact: once it was lost no new unit starts, and a unit already in flight
+// still finishes its rollback.
+func (a *app) pickUnit(v *verdict, validate func(base, head string) ([]string, error)) (pick, error) {
+	if err := a.mayAct(); err != nil {
+		return pick{}, err
+	}
+	return pickOriginal(v, validate)
+}
+
+func (a *app) replayNext(u unit) (string, []string, error) {
+	if err := a.mayAct(); err != nil {
+		return "", nil, err
+	}
+	return replayUnit(u)
+}
+
 // commitMerge makes the merge of tip onto base, whose tree is tip's since tip
 // descends from base, and moves the current branch from tip to it.
 func commitMerge(base, tip, message string) (string, error) {

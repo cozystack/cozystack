@@ -102,7 +102,7 @@ func (a *app) reassemble(b *batch, out, hold map[int]string, drops []droppedEntr
 		return a.fail(err)
 	}
 	for _, u := range replay {
-		failed, files, err := replayUnit(u)
+		failed, files, err := a.replayNext(u)
 		switch {
 		case err != nil:
 			return a.fail(err)

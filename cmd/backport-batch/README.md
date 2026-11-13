@@ -27,7 +27,7 @@ Requires `git` and an authenticated `gh` on PATH, and a remote called `origin`. 
 
 Build the binary wherever an exit code matters: `go run` turns any non-zero exit into its own `1`, so under it a check that could not be completed looks the same as one that found something missing.
 
-A command whose output on stdout could not be written exits 2 where it would have exited 0, and says on stderr that the output was lost; anything the run did before that, a push or a published pull request included, has still happened.
+Output is written before a push or a publish. Once a write to stdout or stderr fails, a closed pipe included, the run changes nothing more: no push, no GitHub write, no local branch move, and no new pick; a pick already in flight still finishes its rollback. It exits 2 where it would have exited 0, saying on stderr, while it still can, that the output was lost. A confirmation lost after a push or a publish fails the run the same way.
 
 ### run
 

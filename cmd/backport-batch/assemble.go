@@ -273,7 +273,7 @@ func (a *app) run(args []string) int {
 				continue
 			}
 		}
-		p, err := pickOriginal(v, func(base, head string) ([]string, error) {
+		p, err := a.pickUnit(v, func(base, head string) ([]string, error) {
 			omitted, diag, err := b.omittedEffects(v, base, head)
 			v.addDiag(diag...)
 			return omitted, err
@@ -529,6 +529,9 @@ func cleanTree() error {
 // the move drops commits of and how to get them back: a clean tree says
 // nothing about commits only a local branch has.
 func (a *app) warnReset(branch, start string) error {
+	if err := a.mayAct(); err != nil {
+		return err
+	}
 	old, err := lookup("refs/heads/" + branch)
 	if err != nil || old == "" || old == start {
 		return err
@@ -537,7 +540,11 @@ func (a *app) warnReset(branch, start string) error {
 	if err != nil || kept {
 		return err
 	}
-	_, _ = fmt.Fprintf(a.stderr, "resetting the local %s from %s, dropping commits %.12s does not carry; git branch %s-%.12s %s restores them\n", branch, old, start, branch, old, old)
+	// The hint is the only way back to the dropped commits, so the reset does
+	// not run when it could not be written.
+	if _, err := fmt.Fprintf(a.stderr, "resetting the local %s from %s, dropping commits %.12s does not carry; git branch %s-%.12s %s restores them\n", branch, old, start, branch, old, old); err != nil {
+		return fmt.Errorf("not resetting the local %s: %w", branch, err)
+	}
 	return nil
 }
 
@@ -719,6 +726,9 @@ func (a *app) publish(b *batch, p publication, rebuilt bool) error {
 		}
 	}
 	if pushed != p.head {
+		if err := a.mayAct(); err != nil {
+			return err
+		}
 		if _, err := git(pushArgs(p.branch, p.head, lease)...); err != nil {
 			return err
 		}
@@ -877,6 +887,9 @@ func (a *app) deleteBranch(l line, c closing) error {
 		return nil
 	case h != c.Head:
 		return movedBranch(c, h)
+	}
+	if err := a.mayAct(); err != nil {
+		return err
 	}
 	if _, err := git(deleteArgs(c.Branch, c.Head)...); err != nil {
 		return fmt.Errorf("deleting %s, left by the close of #%d: %w; backport-batch run --line %s --push deletes it", c.Branch, c.PR, err, l.branch())
