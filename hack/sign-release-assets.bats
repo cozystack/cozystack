@@ -161,13 +161,13 @@ cleanup() {
     cleanup
 }
 
-@test "docs/release.md tells users to verify the identity the script verifies" {
+@test "docs/release/signatures-and-sbom.md tells users to verify the identity the script verifies" {
     regexp="$(sed -n "s/^IDENTITY_REGEXP='\(.*\)'\$/\1/p" "$SCRIPT")"
     if [ -z "$regexp" ]; then
         echo "IDENTITY_REGEXP not found in $SCRIPT" >&2
         exit 1
     fi
-    grep -qF -- "--certificate-identity-regexp '$regexp'" "$REPO_ROOT/docs/release.md"
+    grep -qF -- "--certificate-identity-regexp '$regexp'" "$REPO_ROOT/docs/release/signatures-and-sbom.md"
 }
 
 @test "fails when the signature does not verify" {

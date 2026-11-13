@@ -19,7 +19,7 @@ spec:
   accessModes:
   {{- toYaml (.Values.allInOne.data.accessModes | default (list "ReadWriteOnce")) | nindent 4 }}
   {{- if .Values.allInOne.data.storageClass }}
-  storageClassName: {{ .Values.allInOne.data.storageClass }}
+  storageClassName: {{ .Values.allInOne.data.storageClass | quote }}
   {{- end }}
   resources:
     requests:
