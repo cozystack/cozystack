@@ -18,6 +18,7 @@ package main
 
 import (
 	"bytes"
+	"errors"
 	"slices"
 	"strings"
 	"testing"
@@ -333,4 +334,163 @@ func TestNotifyWritesNothingOnABatchClosedMeanwhile(t *testing.T) {
 			}
 		})
 	}
+}
+
+// parkedBody is an open batch body whose version 3 record parks p.
+func parkedBody(p ...parkedEntry) string {
+	sha := strings.Repeat("a", 40)
+	rec := lineRecord{Version: recordVersion, Line: "release-1.1", Report: strings.Repeat("b", 64),
+		Built:    &builtFrom{Main: sha, Line: sha, Policy: sha, Batch: sha, At: "2026-10-26T06:00:00Z", Options: runOptions{Mode: modeContinue}},
+		Deferred: []deferredEntry{}, Dropped: []droppedEntry{}, Stale: []int{}, Parked: p}
+	return "batch\n\n" + recordBlock(rec) + "\n"
+}
+
+// notifyAt runs notify at a time of day, with gh faked.
+func notifyAt(gh *fakeGH, at time.Time, args ...string) (int, string, string) {
+	var stdout, stderr bytes.Buffer
+	a := &app{gh: gh, stdout: &stdout, stderr: &stderr, now: func() time.Time { return at }}
+	code := a.main(append([]string{"notify", "--line", "release-1.1"}, args...))
+	return code, stdout.String(), stderr.String()
+}
+
+// A park is announced once on the open batch: notify names it in its
+// comment and marks it announced in the record; a later notify is silent
+// about it. A mark that fails to land repeats the announcement once, the
+// next day. With no batch open nothing is announced, and the first notify of
+// the next batch does it.
+func TestNotifyAnnouncesAParkOnce(t *testing.T) {
+	park := parkedEntry{Original: 5, Merge: strings.Repeat("c", 40), Kind: parkDependency, Needs: []int{3}}
+	parked := func(gh *fakeGH) []parkedEntry {
+		t.Helper()
+		rec, err := parseRecord(gh.prs[0].Body, notifyLine)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return rec.Parked
+	}
+	gh := &fakeGH{prs: []pullRequest{notifyPR("20261026", parkedBody(park))}}
+	code, stdout, stderr := notifyRun(gh, "--push")
+	if code != 0 || !strings.Contains(stdout, "release-1.1: 1 parked originals on #90, named once") || len(gh.issueComments) != 1 || !strings.Contains(gh.issueComments[0].Body, "- [#5](https://github.com/cozystack/cozystack/pull/5): builds on [#3](") {
+		t.Fatalf("notify = %d, want #5 announced:\n%s\n%s\n%v", code, stdout, stderr, gh.issueComments)
+	}
+	if p := parked(gh); len(p) != 1 || !p[0].Announced {
+		t.Errorf("the record parks %+v, want #5 marked announced", p)
+	}
+	if code, stdout, _ = notifyRun(gh, "--push"); code != 0 || strings.Contains(stdout, "parked") || strings.Contains(gh.issueComments[0].Body, "[#5]") {
+		t.Errorf("notify again = %d, want nothing about #5:\n%s\n%s", code, stdout, gh.issueComments[0].Body)
+	}
+
+	gh = &fakeGH{prs: []pullRequest{notifyPR("20261026", parkedBody(park))}, fail: map[string]error{"editBody": errors.New("HTTP 502")}}
+	if code, _, _ := notifyRun(gh, "--push"); code != 2 || len(gh.issueComments) != 1 || parked(gh)[0].Announced {
+		t.Fatalf("notify with a failing mark = %d, want 2 after the comment, the record unmarked", code)
+	}
+	code, _, stderr = notifyAt(gh, time.Date(2026, 10, 27, 0, 5, 0, 0, time.UTC), "--push")
+	if code != 0 || !strings.Contains(gh.issueComments[0].Body, "[#5](") || !parked(gh)[0].Announced {
+		t.Errorf("notify the next day = %d, want #5 named once more and marked:\n%s\n%s", code, stderr, gh.issueComments[0].Body)
+	}
+
+	// Closed, or rewritten by a run, between the comment and the mark: the
+	// mark is not written, and the next notify names #5 again.
+	gh = &fakeGH{prs: []pullRequest{notifyPR("20261026", parkedBody(park))}}
+	gh.after = map[string]func(){"createComment": func() { gh.prs[0].State = "closed" }}
+	if code, _, _ := notifyRun(gh, "--push"); code != 2 || len(gh.closedWrites) != 0 || parked(gh)[0].Announced {
+		t.Errorf("notify on a batch closed meanwhile = %d, writes %q; want 2 and no mark", code, gh.closedWrites)
+	}
+	gh = &fakeGH{prs: []pullRequest{notifyPR("20261026", parkedBody(park))}}
+	rewritten := parkedBody(park, parkedEntry{Original: 6, Merge: strings.Repeat("d", 40), Kind: parkPartial, Files: []string{"x"}})
+	gh.after = map[string]func(){"createComment": func() { gh.prs[0].Body = rewritten }}
+	if code, _, _ := notifyRun(gh, "--push"); code != 2 || gh.prs[0].Body != rewritten || len(gh.bodies) != 0 {
+		t.Errorf("notify on a body rewritten meanwhile = %d; want 2 and the new body left as it is", code)
+	}
+
+	// A body someone edited on the web comes back with CRLF line ends; the
+	// mark lands all the same.
+	gh = &fakeGH{prs: []pullRequest{notifyPR("20261026", strings.ReplaceAll(parkedBody(park), "\n", "\r\n"))}}
+	if code, _, stderr := notifyRun(gh, "--push"); code != 0 || !parked(gh)[0].Announced {
+		t.Errorf("notify on a CRLF body = %d, want #5 marked:\n%s", code, stderr)
+	}
+
+	closed := notifyPR("20261026", parkedBody(park))
+	at := "2026-10-26T12:00:00Z"
+	closed.State, closed.MergedAt = "closed", &at
+	gh = &fakeGH{prs: []pullRequest{closed}}
+	if code, stdout, _ := notifyRun(gh, "--push"); code != 0 || stdout != "" || len(gh.issueComments) != 0 || len(gh.bodies) != 0 {
+		t.Errorf("notify with no batch open = %d, %q, %d comments, %d edits; want nothing", code, stdout, len(gh.issueComments), len(gh.bodies))
+	}
+	next := notifyPR("20261027", parkedBody(park))
+	next.Number = 91
+	gh.prs = append(gh.prs, next)
+	if code, _, _ := notifyRun(gh, "--push"); code != 0 || len(gh.issueComments) != 1 || !strings.Contains(gh.issueComments[0].Body, "[#5](") {
+		t.Errorf("the next batch's notify = %d, want #5 announced on it: %v", code, gh.issueComments)
+	}
+}
+
+// A park carries its announcement into the next record only while it is
+// the same park: the same merge, kind, prerequisites, commits and files.
+func TestParkEventIdentity(t *testing.T) {
+	a, b := strings.Repeat("a", 40), strings.Repeat("b", 40)
+	was := parkedEntry{Original: 5, Merge: a, Kind: parkDependency, Commits: []string{a}, Announced: true}
+	carrier := &lineRecord{Parked: []parkedEntry{was}}
+	for name, tc := range map[string]struct {
+		now       parkedEntry
+		announced bool
+	}{
+		"the same park":             {parkedEntry{Original: 5, Merge: a, Kind: parkDependency, Commits: []string{a}}, true},
+		"another unnumbered commit": {parkedEntry{Original: 5, Merge: a, Kind: parkDependency, Commits: []string{b}}, false},
+		"another kind":              {parkedEntry{Original: 5, Merge: a, Kind: parkPartial, Files: []string{"x"}}, false},
+		"another prerequisite":      {parkedEntry{Original: 5, Merge: a, Kind: parkDependency, Commits: []string{a}, Needs: []int{3}}, false},
+		"another merge":             {parkedEntry{Original: 5, Merge: b, Kind: parkDependency, Commits: []string{a}}, false},
+		"another original":          {parkedEntry{Original: 6, Merge: a, Kind: parkDependency, Commits: []string{a}}, false},
+	} {
+		got := carryAnnounced([]parkedEntry{tc.now}, carrier)
+		if got[0].Announced != tc.announced {
+			t.Errorf("%s: announced = %v, want %v", name, got[0].Announced, tc.announced)
+		}
+	}
+	if got := carryAnnounced([]parkedEntry{was}, nil); got[0].Announced {
+		t.Error("a park with no carrier came out announced")
+	}
+	unannounced := was
+	unannounced.Announced = false
+	if got := carryAnnounced([]parkedEntry{was}, &lineRecord{Parked: []parkedEntry{unannounced}}); got[0].Announced {
+		t.Error("a park the carrier holds unannounced came out announced")
+	}
+}
+
+// A park keeps its announcement through a continuation and into the next
+// batch, so notify does not name it again.
+func TestRolloverKeepsTheAnnouncement(t *testing.T) {
+	f := featWorld(t)
+	gh := &fakeGH{}
+	openBatch(t, f, gh)
+	if code, _, stderr := f.exec(gh, "notify", "--line", "release-1.1", "--push"); code != 0 || !strings.Contains(notifyComment(gh), "[#5](") {
+		t.Fatalf("notify = %d, want #5 announced:\n%s", code, stderr)
+	}
+	if code, stdout, stderr := f.exec(gh, "run", "--line", "release-1.1", "--continue", "--push"); code != 0 || !strings.Contains(stdout, `"needs":[3],"announced":true`) {
+		t.Fatalf("run --continue = %d, want #5's park still announced:\n%s\n%s", code, stdout, stderr)
+	}
+	f.git("switch", "-q", "main")
+	reopen(f, gh)
+	mergeBatch(f, gh)
+	f.pr(8, "fix(app): eight", "", map[string]string{"app/eight.txt": "8\n"})
+	gh.nextPR = 91
+	f.now = f.now.Add(24 * time.Hour)
+	if code, stdout, stderr := f.exec(gh, "run", "--line", "release-1.1", "--continue", "--push"); code != 0 || !strings.Contains(stdout, `"needs":[3],"announced":true`) {
+		t.Fatalf("the next batch's run = %d, want #5's park announced from the merged batch:\n%s\n%s", code, stdout, stderr)
+	}
+	f.git("switch", "-q", "main")
+	gh.issueComments = nil
+	if code, stdout, _ := f.exec(gh, "notify", "--line", "release-1.1", "--push"); code != 0 || strings.Contains(stdout, "parked") || strings.Contains(notifyComment(gh), "[#5](") {
+		t.Errorf("notify on the next batch = %d, want nothing about #5:\n%s\n%s", code, stdout, notifyComment(gh))
+	}
+}
+
+// notifyComment is the notify comment on the fake, or "".
+func notifyComment(gh *fakeGH) string {
+	for _, c := range slices.Backward(gh.issueComments) {
+		if strings.HasPrefix(c.Body, notifyMarker) {
+			return c.Body
+		}
+	}
+	return ""
 }

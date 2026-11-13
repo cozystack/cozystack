@@ -17,7 +17,6 @@ limitations under the License.
 package main
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -225,7 +224,9 @@ func TestReportPartition(t *testing.T) {
 	}
 	t.Setenv("GIT_COMMITTER_DATE", "2026-01-01T00:00:00Z")
 	f.pr(4, "fix(app): four, before the start", "", map[string]string{"app/four.txt": "4\n"})
-	os.Unsetenv("GIT_COMMITTER_DATE")
+	if err := os.Unsetenv("GIT_COMMITTER_DATE"); err != nil {
+		t.Fatal(err)
+	}
 	f.setPolicy("release-1.0: 2026-06-01\n")
 	f.onLine("release-1.0", "fix(app): a line-only eleven", map[string]string{"app/eleven.txt": "line\n"})
 	pr(5, "fix(app): five", map[string]string{"app/five.txt": "5\n"}, true)
@@ -603,7 +604,63 @@ func TestReportRefusesWhatItCannotVouchFor(t *testing.T) {
 			d.Primary.Deferred = []deferredEntry{{Original: 15, Files: []string{".github/workflows/ci.yaml"}, Workflows: true}}
 		},
 		"a close that still picks": func(d *reportDoc) { d.Built.Options.Mode = modeClose },
-		"a parked original":        func(d *reportDoc) { d.Primary.Parked = []json.RawMessage{json.RawMessage(`{"original":16}`)} },
+		"a park with no merge": func(d *reportDoc) {
+			d.Primary.Parked = []parkedEntry{{Original: 16, Kind: parkPartial, Files: []string{"a"}}}
+		},
+		"a parked original it picks": func(d *reportDoc) {
+			d.Primary.Parked = []parkedEntry{{Original: 5, Merge: strings.Repeat("b", 40), Kind: parkPartial, Files: []string{"a"}}}
+		},
+		"a park of an unknown kind": func(d *reportDoc) {
+			d.Primary.Parked = []parkedEntry{{Original: 16, Merge: strings.Repeat("b", 40), Kind: "later", Files: []string{"a"}}}
+		},
+		"a partial park that needs an original": func(d *reportDoc) {
+			d.Primary.Parked = []parkedEntry{{Original: 16, Merge: strings.Repeat("b", 40), Kind: parkPartial, Files: []string{"a"}, Needs: []int{5}}}
+		},
+		"a partial park of unsorted files": func(d *reportDoc) {
+			d.Primary.Parked = []parkedEntry{{Original: 16, Merge: strings.Repeat("b", 40), Kind: parkPartial, Files: []string{"b", "a"}}}
+		},
+		"a partial park of a file that drives a terminal": func(d *reportDoc) {
+			d.Primary.Parked = []parkedEntry{{Original: 16, Merge: strings.Repeat("b", 40), Kind: parkPartial, Files: []string{"a\x1b[2J"}}}
+		},
+		"a park announced in the report": func(d *reportDoc) {
+			d.Primary.Parked = []parkedEntry{{Original: 16, Merge: strings.Repeat("b", 40), Kind: parkPartial, Files: []string{"a"}, Announced: true}}
+		},
+		"a park for an original it picks": func(d *reportDoc) {
+			d.Primary.Parked = []parkedEntry{{Original: 16, Merge: strings.Repeat("b", 40), Kind: parkDependency, Needs: []int{5}}}
+		},
+		"a park that needs itself": func(d *reportDoc) {
+			d.Primary.Skipped.Type = []int{17}
+			d.Primary.Parked = []parkedEntry{{Original: 16, Merge: strings.Repeat("b", 40), Kind: parkDependency, Needs: []int{16, 17}}}
+		},
+		"a park for a commit that merged a pull request": func(d *reportDoc) {
+			d.Primary.Parked = []parkedEntry{{Original: 16, Merge: strings.Repeat("b", 40), Kind: parkDependency, Commits: []string{strings.Repeat("c", 40)}}}
+		},
+		"a partial unit not on the batch": func(d *reportDoc) { d.Overlays.Partial = []int{5} },
+		"a wait on an original it picks": func(d *reportDoc) {
+			d.Primary.Deferred = []deferredEntry{{Original: 6, Files: []string{}, Needs: []int{5}}}
+		},
+		"a wait on an original it puts nowhere": func(d *reportDoc) {
+			d.Primary.Deferred = []deferredEntry{{Original: 6, Files: []string{}, Needs: []int{19}}}
+		},
+		"a park on its own merge as a commit": func(d *reportDoc) {
+			d.Other = append(d.Other, strings.Repeat("b", 40))
+			d.Primary.Parked = []parkedEntry{{Original: 16, Merge: strings.Repeat("b", 40), Kind: parkDependency, Commits: []string{strings.Repeat("b", 40)}}}
+		},
+		"a park cycle": func(d *reportDoc) {
+			d.Primary.Parked = []parkedEntry{{Original: 16, Merge: strings.Repeat("b", 40), Kind: parkDependency, Needs: []int{18}}, {Original: 18, Merge: strings.Repeat("b", 40), Kind: parkDependency, Needs: []int{16}}}
+		},
+		"a wait cycle": func(d *reportDoc) {
+			d.Primary.Deferred = []deferredEntry{{Original: 6, Files: []string{}, Needs: []int{7}}, {Original: 7, Files: []string{}, Needs: []int{6}}}
+		},
+		"format 1 with a wait": func(d *reportDoc) {
+			d.Format = 1
+			d.Primary.Missing = []int{19}
+			d.Primary.Deferred = []deferredEntry{{Original: 6, Files: []string{}, Needs: []int{19}}}
+		},
+		"format 1 with a park": func(d *reportDoc) {
+			d.Format = 1
+			d.Primary.Parked = []parkedEntry{{Original: 16, Merge: strings.Repeat("b", 40), Kind: parkPartial, Files: []string{"a"}}}
+		},
 	} {
 		s := forged(change)
 		c, _ := reportComment(storedReport{doc: forged(func(*reportDoc) {}).doc, raw: s.raw})
@@ -620,6 +677,22 @@ func TestReportRefusesWhatItCannotVouchFor(t *testing.T) {
 	}
 	if code, stdout, stderr := reportRun(&fakeGH{prs: []pullRequest{notifyPR("20261026", "text\n\n"+reportBlock(forged(func(*reportDoc) {}).raw)+"\n")}}, "--pr", "90"); code != 0 || !strings.Contains(stdout, "#5 picked") {
 		t.Errorf("report of a sound one = %d:\n%s%s", code, stdout, stderr)
+	}
+	// What a run wrote before anything was parked reads as it was written.
+	format1 := forged(func(d *reportDoc) { d.Format, d.Primary.Parked = 1, []parkedEntry{} })
+	if code, stdout, stderr := reportRun(&fakeGH{prs: []pullRequest{notifyPR("20261026", "text\n\n"+reportBlock(format1.raw)+"\n")}}, "--pr", "90"); code != 0 || !strings.Contains(stdout, "#5 picked") {
+		t.Errorf("report of a sound format 1 one = %d:\n%s%s", code, stdout, stderr)
+	}
+	parked := forged(func(d *reportDoc) {
+		d.Primary.Skipped.Type = []int{17}
+		d.Other = append(d.Other, strings.Repeat("c", 40))
+		d.Primary.Parked = []parkedEntry{
+			{Original: 16, Merge: strings.Repeat("b", 40), Kind: parkPartial, Files: []string{"chart/templates/policy.yaml"}},
+			{Original: 18, Merge: strings.Repeat("b", 40), Kind: parkDependency, Needs: []int{16, 17}, Commits: []string{strings.Repeat("c", 40)}},
+		}
+	})
+	if code, stdout, stderr := reportRun(&fakeGH{prs: []pullRequest{notifyPR("20261026", "text\n\n"+reportBlock(parked.raw)+"\n")}}, "--pr", "90"); code != 0 || !strings.Contains(stdout, "#16 parked: only part of it applies") || !strings.Contains(stdout, "#18 parked: builds on #16, #17, cccccccccccc") {
+		t.Errorf("report of sound parks = %d:\n%s%s", code, stdout, stderr)
 	}
 }
 

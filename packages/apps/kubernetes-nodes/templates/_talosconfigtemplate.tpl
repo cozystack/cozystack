@@ -87,7 +87,7 @@
 {{- /* Management cluster DNS domain. Tenant Kubernetes workers run as
        KubeVirt VMs inside the management cluster's pod network and need
        to resolve management-cluster service short names ("<svc>.<ns>.svc")
-       the same way an Ubuntu+kubeadm worker did via cloud-init DHCP. The
+       the same way a pod of the management cluster does. The
        kubevirt-csi NFS mount path is the load-bearing case: kubelet on
        the worker host calls `mount.nfs linstor-csi-nfs.cozy-linstor.svc`
        (no domain suffix), and without searchDomains in /etc/resolv.conf

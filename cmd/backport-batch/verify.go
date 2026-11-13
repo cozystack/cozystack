@@ -66,7 +66,7 @@ func (a *app) verify(args []string) int {
 			return a.fail(err)
 		}
 		if pr == nil {
-			fmt.Fprintf(a.stdout, "%s: no batch pull request is open; nothing to verify\n", l.branch())
+			_, _ = fmt.Fprintf(a.stdout, "%s: no batch pull request is open; nothing to verify\n", l.branch())
 			return 0
 		}
 		if head, err = batchHead(pr); err != nil {
@@ -91,9 +91,18 @@ func (a *app) verify(args []string) int {
 		if why == "" && seen[v] != "" {
 			why = fmt.Sprintf("carries #%d again, which %.12s already carries", v.o.number, seen[v])
 		}
+		if why == "" {
+			omitted, _, err := b.omittedEffects(v, u.parents[0], u.commit)
+			if err != nil {
+				return a.fail(err)
+			}
+			if len(omitted) > 0 {
+				why = leftOut(v, l, omitted)
+			}
+		}
 		if why != "" {
 			refused = append(refused, why)
-			fmt.Fprintf(a.stdout, "refused %.12s: %s\n", u.commit, why)
+			_, _ = fmt.Fprintf(a.stdout, "refused %.12s: %s\n", u.commit, why)
 			continue
 		}
 		seen[v] = u.commit
@@ -101,13 +110,13 @@ func (a *app) verify(args []string) int {
 		if !u.merge() {
 			n = 1
 		}
-		fmt.Fprintf(a.stdout, "ok %.12s #%d, %d %s\n", u.commit, v.o.number, n, plural(n, "commit"))
+		_, _ = fmt.Fprintf(a.stdout, "ok %.12s #%d, %d %s\n", u.commit, v.o.number, n, plural(n, "commit"))
 	}
 	if len(refused) > 0 {
-		fmt.Fprintf(a.stdout, "%s: %d of %d units at %.12s are not originals in the batch's shape\n", l.branch(), len(refused), len(units), head)
+		_, _ = fmt.Fprintf(a.stdout, "%s: %d of %d units at %.12s are not originals in the batch's shape\n", l.branch(), len(refused), len(units), head)
 		return 1
 	}
-	fmt.Fprintf(a.stdout, "%s: %d %s at %.12s, each one original in the batch's shape\n", l.branch(), len(units), plural(len(units), "unit"), head)
+	_, _ = fmt.Fprintf(a.stdout, "%s: %d %s at %.12s, each one original in the batch's shape\n", l.branch(), len(units), plural(len(units), "unit"), head)
 	return 0
 }
 

@@ -16,9 +16,8 @@ suite: MachineHealthCheck timeouts
 #
 # `nodeStartupTimeout` bounds the phase before any of that: it is the window a
 # Machine has to produce a Node at all, and the unhealthyConditions entries are
-# evaluated only once one exists. Its default is pinned here because the parity
-# gate compares this chart against its counterpart, so a default moved in both
-# at once passes there and only fails on this assertion.
+# evaluated only once one exists. Its default is pinned here because a moved
+# default changes every pool that does not set the field.
 
 templates:
   - templates/nodegroup.yaml

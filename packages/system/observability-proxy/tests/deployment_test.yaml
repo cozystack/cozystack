@@ -40,6 +40,51 @@ tests:
           path: spec.template.spec.containers[0].args
           content: --auth-cache-ttl=10s
 
+  # Envoy behind a Cilium Gateway resets a stream after 300s without data
+  # (envoy.streamIdleTimeoutDurationSeconds), so a silent tail has to be
+  # ended by the proxy first, or the client sees a reset instead of an end.
+  - it: ends a silent tail before the Gateway stream idle timeout
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --tail-idle-timeout=4m30s
+
+  - it: passes the metrics store names and short-term retention
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --metrics-shortterm-store=shortterm
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --metrics-longterm-store=longterm
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --metrics-shortterm-retention=72h
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --metrics-app-lookback=720h
+
+  - it: follows renamed metrics stores
+    set:
+      observabilityProxy.metrics:
+        shorttermStore: fast
+        longtermStore: slow
+        shorttermRetention: 24h
+        appLookback: 48h
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --metrics-shortterm-store=fast
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --metrics-longterm-store=slow
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --metrics-shortterm-retention=24h
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --metrics-app-lookback=48h
+
   - it: falls back to cozy.local when the platform passes no cluster domain
     asserts:
       - contains:

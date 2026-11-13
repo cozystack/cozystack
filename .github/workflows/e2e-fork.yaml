@@ -61,7 +61,8 @@ jobs:
   # base-repo PR file list — NOT from the presence/absence of an artifact the
   # fork's own build controls. Fail-closed if the fork build failed or the
   # pr-patch artifact is missing; green-and-stop only for a PR whose file list is
-  # entirely under docs/ (verified against the base-repo API).
+  # entirely under docs/ or the CI-only tools cmd/backport-batch/ and
+  # cmd/api-gate/ (verified against the base-repo API).
   resolve:
     name: Resolve fork PR
     # Only fork PRs: head_repository differs from the base repository. Same-repo
@@ -266,15 +267,21 @@ jobs:
               await decide('failure', 'PR file list hit the 3000-file API cap — cannot verify docs-only');
               return;
             }
+            // Paths with nothing to build and nothing for e2e to install: docs,
+            // and the CI-only Go tools no image builds. pull-requests.yaml's
+            // plan job answers the same question with the same prefixes, and
+            // hack/gate-concurrency-contract.bats holds the two lists equal.
+            //
             // A rename reports the NEW path in `filename` and the old one in
             // `previous_filename`. Checking only `filename` would read a
             // packages/… -> docs/… rename as docs-only, when it in fact removes
-            // a code path. BOTH sides must be under docs/ to count as docs-only.
-            const isDocs = p => typeof p === 'string' && p.startsWith('docs/');
-            const hasNonDocs = files.some(f =>
-              !isDocs(f.filename) || (f.previous_filename && !isDocs(f.previous_filename)));
-            if (!hasNonDocs) {
-              await decide('success', 'docs-only PR (verified via PR file list) — e2e not required');
+            // a code path. BOTH sides must be under these prefixes to count.
+            const noRuntimePrefixes = ['docs/', 'cmd/backport-batch/', 'cmd/api-gate/'];
+            const isNoRuntime = p => typeof p === 'string' && noRuntimePrefixes.some(x => p.startsWith(x));
+            const hasRuntime = files.some(f =>
+              !isNoRuntime(f.filename) || (f.previous_filename && !isNoRuntime(f.previous_filename)));
+            if (!hasRuntime) {
+              await decide('success', 'docs or CI-only tools (verified via PR file list) — e2e not required');
               return;
             }
 
@@ -543,7 +550,7 @@ jobs:
     # Covers a green full suite. It does not cover a tenant-Kubernetes suite
     # running into its node-join deadline, so a red there can end as a
     # cancelled job. Held to one figure across every lane that runs the suite.
-    timeout-minutes: 215
+    timeout-minutes: 265
     permissions:
       contents: read
       packages: read

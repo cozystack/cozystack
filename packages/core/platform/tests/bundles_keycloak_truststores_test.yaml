@@ -1,0 +1,203 @@
+suite: bundles.system Keycloak truststores wiring
+templates:
+  - templates/bundles/system.yaml
+release:
+  name: cozystack
+  namespace: cozy-system
+tests:
+  - it: emits cozystack.keycloak without a components block when keycloakTruststores is unset
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+      authentication:
+        oidc:
+          enabled: true
+    documentSelector:
+      path: metadata.name
+      value: cozystack.keycloak
+    asserts:
+      - equal:
+          path: kind
+          value: Package
+      - equal:
+          path: spec.variant
+          value: default
+      - notExists:
+          path: spec.components
+
+  - it: omits the components block when keycloakTruststores is explicitly empty
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+      authentication:
+        oidc:
+          enabled: true
+          keycloakTruststores: []
+    documentSelector:
+      path: metadata.name
+      value: cozystack.keycloak
+    asserts:
+      - notExists:
+          path: spec.components
+
+  - it: omits the components block when keycloakTruststores is explicitly null
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+      authentication:
+        oidc:
+          enabled: true
+          keycloakTruststores: null
+    documentSelector:
+      path: metadata.name
+      value: cozystack.keycloak
+    asserts:
+      - notExists:
+          path: spec.components
+
+  - it: forwards false so the Keycloak chart can reject it instead of silently removing trust
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+      authentication:
+        oidc:
+          enabled: true
+          keycloakTruststores: false
+    documentSelector:
+      path: metadata.name
+      value: cozystack.keycloak
+    asserts:
+      - equal:
+          path: spec.components.keycloak.values.truststores
+          value: false
+
+  - it: forwards zero so the Keycloak chart can reject it instead of silently removing trust
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+      authentication:
+        oidc:
+          enabled: true
+          keycloakTruststores: 0
+    documentSelector:
+      path: metadata.name
+      value: cozystack.keycloak
+    asserts:
+      - equal:
+          path: spec.components.keycloak.values.truststores
+          value: 0
+
+  - it: forwards an empty string so the Keycloak chart can reject it instead of silently removing trust
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+      authentication:
+        oidc:
+          enabled: true
+          keycloakTruststores: ""
+    documentSelector:
+      path: metadata.name
+      value: cozystack.keycloak
+    asserts:
+      - equal:
+          path: spec.components.keycloak.values.truststores
+          value: ""
+
+  - it: forwards an empty map so the Keycloak chart can reject it instead of silently removing trust
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+      authentication:
+        oidc:
+          enabled: true
+          keycloakTruststores: {}
+    documentSelector:
+      path: metadata.name
+      value: cozystack.keycloak
+    asserts:
+      - equal:
+          path: spec.components.keycloak.values.truststores
+          value: {}
+
+  - it: forwards the complete truststores list without taking over chart defaults
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+      authentication:
+        oidc:
+          enabled: true
+          keycloakTruststores:
+            - configMapName: organization-ca
+            - secretName: partner-ca
+              key: certificates.pem
+            - configMapName: secondary-ca
+              key: chain.pem
+    documentSelector:
+      path: metadata.name
+      value: cozystack.keycloak
+    asserts:
+      - equal:
+          path: spec.components.keycloak.values
+          value:
+            truststores:
+              - configMapName: organization-ca
+              - secretName: partner-ca
+                key: certificates.pem
+              - configMapName: secondary-ca
+                key: chain.pem
+
+  - it: forwards keycloakTruststores on the isp-slim variant too
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-slim
+      authentication:
+        oidc:
+          enabled: true
+          keycloakTruststores:
+            - configMapName: organization-ca
+              key: ca.crt
+    documentSelector:
+      path: metadata.name
+      value: cozystack.keycloak
+    asserts:
+      - equal:
+          path: spec.components.keycloak.values.truststores
+          value:
+            - configMapName: organization-ca
+              key: ca.crt
+
+  - it: does not emit cozystack.keycloak for a malformed false-y value when OIDC is disabled
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+      authentication:
+        oidc:
+          enabled: false
+          keycloakTruststores: false
+    asserts:
+      - containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.keycloak
+          any: true
+        not: true

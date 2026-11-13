@@ -4,6 +4,7 @@ package backupcontroller
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
@@ -30,8 +31,6 @@ import (
 // ---------------------------------------------------------------------------
 
 const (
-	mariadbFieldManager = "cozystack-mariadb-backup-driver"
-
 	// mariadb-operator's MariaDB ApplicationDefinition (release.prefix). The
 	// cozystack mariadb-rd renders the HelmRelease with releaseName =
 	// "mariadb-" + appName (see packages/system/mariadb-rd/cozyrds/mariadb.yaml,
@@ -48,6 +47,15 @@ const (
 	mariadbBackupNamespaceKey = "k8s.mariadb.com/backup-namespace"
 	mariadbStorageURIKey      = "k8s.mariadb.com/storage-uri"
 
+	// The dump the operator Backup wrote: its file name under the storage
+	// prefix, and the RFC3339 timestamp in that name. Every run of an
+	// application writes under the same prefix, so only this name tells its
+	// dump from the others, and a restore asks for exactly that dump.
+	// Recorded only when findMariaDBDump proved the dump belongs to the
+	// operator Backup.
+	mariadbDumpFileKey = "k8s.mariadb.com/dump-file"
+	mariadbDumpTimeKey = "k8s.mariadb.com/dump-time"
+
 	// Polling cadence for the operator Backup/Restore lifecycle.
 	mariadbPollInterval = 5 * time.Second
 
@@ -61,6 +69,12 @@ const (
 	// to terminate. Tenants override via spec.options.restoreTimeoutSeconds.
 	mariadbDefaultRestoreDeadline = 30 * time.Minute
 
+	// Retry cadence while the dump a restore asks for cannot be checked.
+	// Longer than mariadbPollInterval because each attempt can hold the
+	// RestoreJob controller's single worker for
+	// mariadbRestoreDumpCheckTimeout.
+	mariadbDumpCheckRetryInterval = 30 * time.Second
+
 	// mariadbBackupSnapshotKind is the Kind stamped onto the snapshot
 	// persisted in Backup.status.underlyingResources. The same shape carries
 	// the storage descriptor and the rendered strategy parameters used at
@@ -73,6 +87,12 @@ const (
 // Borrows the Cozystack backups group so the field is self-typed within the
 // existing API surface.
 var mariadbBackupSnapshotAPIVersion = backupsv1alpha1.GroupVersion.String()
+
+// mariadbRestoreDumpCheckTimeout bounds the object-store round trips a
+// restore makes before it creates the operator Restore. The RestoreJob
+// controller has a single worker, so an unreachable endpoint stalls every
+// other RestoreJob for this long. A variable so tests can shorten it.
+var mariadbRestoreDumpCheckTimeout = 10 * time.Second
 
 // mariadbNameForApp returns the k8s.mariadb.com/MariaDB CR name for a
 // cozystack MariaDB application instance. The mapping mirrors the mariadb
@@ -422,7 +442,11 @@ func (r *BackupJobReconciler) createMariaDBBackupArtifact(
 	if uri := driverMD[mariadbStorageURIKey]; uri != "" {
 		status.Artifact = &backupsv1alpha1.BackupArtifact{URI: uri}
 		if probe {
-			status.Artifact.SizeBytes = r.mariadbArtifactSizeBytes(ctx, mdbBackup, takenAt.Time)
+			if dump, ok := r.attributedMariaDBDump(ctx, mdbBackup, takenAt.Time); ok {
+				status.Artifact.SizeBytes = dump.Size
+				driverMD[mariadbDumpFileKey] = dump.Name
+				driverMD[mariadbDumpTimeKey] = dump.Timestamp.UTC().Format(time.RFC3339)
+			}
 		}
 	}
 	backup := &backupsv1alpha1.Backup{
@@ -594,9 +618,26 @@ func (r *RestoreJobReconciler) reconcileMariaDBRestore(ctx context.Context, rest
 		return ctrl.Result{}, err
 	}
 
-	mdbRestore, err := r.ensureMariaDBRestore(ctx, restoreJob, sourceBackupName, targetMDBName)
+	mdbRestore, err := r.findMariaDBRestoreForJob(ctx, restoreJob)
 	if err != nil {
-		return r.markRestoreJobFailed(ctx, restoreJob, fmt.Sprintf("failed to ensure k8s.mariadb.com/Restore: %v", err))
+		// Retried: failing the RestoreJob here could fail it under an
+		// operator Restore that is running.
+		return ctrl.Result{}, fmt.Errorf("find k8s.mariadb.com/Restore of RestoreJob %s/%s: %w", restoreJob.Namespace, restoreJob.Name, err)
+	}
+	// The dump is chosen once, as the operator Restore is created; one that
+	// already exists has made its choice.
+	if mdbRestore == nil {
+		targetTime, err := r.mariadbRestoreTargetTime(ctx, restoreJob, backup, srcBackup)
+		var refused mariadbRestoreRefused
+		if errors.As(err, &refused) {
+			return r.markRestoreJobFailed(ctx, restoreJob, refused.Error())
+		}
+		if err != nil {
+			return r.awaitMariaDBDumpCheck(ctx, restoreJob, options, err)
+		}
+		if mdbRestore, err = r.createMariaDBRestore(ctx, restoreJob, sourceBackupName, targetMDBName, targetTime); err != nil {
+			return r.markRestoreJobFailed(ctx, restoreJob, fmt.Sprintf("failed to ensure k8s.mariadb.com/Restore: %v", err))
+		}
 	}
 
 	cond := apimeta.FindStatusCondition(mdbRestore.Status.Conditions, mariadbtypes.ConditionTypeComplete)
@@ -630,12 +671,114 @@ func (r *RestoreJobReconciler) reconcileMariaDBRestore(ctx context.Context, rest
 	}
 }
 
-// ensureMariaDBRestore creates a k8s.mariadb.com/Restore CR labelled with
-// the RestoreJob, or returns the existing one if a previous reconcile
-// already created it.
-func (r *RestoreJobReconciler) ensureMariaDBRestore(ctx context.Context, rj *backupsv1alpha1.RestoreJob, sourceBackupName, targetMariaDBName string) (*mariadbtypes.Restore, error) {
+// mariadbRestoreRefused is why the dump a RestoreJob asks for cannot be
+// restored. It fails the RestoreJob, where any other error from choosing
+// the dump is retried.
+type mariadbRestoreRefused string
+
+func (e mariadbRestoreRefused) Error() string { return string(e) }
+
+// mariadbRestoreTargetTime returns the targetRecoveryTime of the operator
+// Restore for backup: the timestamp in the name of the dump backup
+// records. mariadb-operator restores the dump whose timestamp equals the
+// target and, when there is none, the nearest one, so the dump is first
+// checked to still exist. A Backup that records no dump is resolved by
+// legacyMariaDBRestoreTargetTime.
+func (r *RestoreJobReconciler) mariadbRestoreTargetTime(ctx context.Context, rj *backupsv1alpha1.RestoreJob, backup *backupsv1alpha1.Backup, src *mariadbtypes.Backup) (string, error) {
+	// Deleting a Backup deletes its dump, and the operator restores the
+	// nearest other dump once its own is gone, so a restore must not start
+	// from a Backup being deleted. The copy in hand can predate the delete;
+	// the cleanup holds the Backup only for restores that exist when it
+	// lists them.
+	live := &backupsv1alpha1.Backup{}
+	if err := r.apiReader().Get(ctx, client.ObjectKeyFromObject(backup), live); err != nil {
+		if apierrors.IsNotFound(err) {
+			return "", mariadbRestoreRefused(fmt.Sprintf("Backup %s/%s is gone, and its dump may be gone with it", backup.Namespace, backup.Name))
+		}
+		return "", fmt.Errorf("read Backup %s/%s: %w", backup.Namespace, backup.Name, err)
+	}
+	if !live.DeletionTimestamp.IsZero() {
+		return "", mariadbRestoreRefused(fmt.Sprintf("Backup %s/%s is being deleted, and its dump with it", backup.Namespace, backup.Name))
+	}
+	// A failed Job is Complete=True too, with reason JobFailed, and a
+	// BackupJob that took Complete=True for success made a Backup of it.
+	if cond := apimeta.FindStatusCondition(src.Status.Conditions, mariadbtypes.ConditionTypeComplete); cond != nil && cond.Reason == mariadbtypes.ConditionReasonJobFailed {
+		return "", mariadbRestoreRefused(fmt.Sprintf(
+			"the backup run of k8s.mariadb.com/Backup %s/%s failed (Complete=%s/%s) and left no dump to restore; restoring would bring back another run's dump",
+			src.Namespace, src.Name, cond.Status, cond.Reason))
+	}
+	ctx, cancel := context.WithTimeout(ctx, mariadbRestoreDumpCheckTimeout)
+	defer cancel()
+	name := backup.Spec.DriverMetadata[mariadbDumpFileKey]
+	if name == "" {
+		return r.legacyMariaDBRestoreTargetTime(ctx, rj, backup, src), nil
+	}
+	ts, ok := parseMariaDBLogicalBackupFile(name)
+	if !ok {
+		return "", mariadbRestoreRefused(fmt.Sprintf("Backup driverMetadata %s=%q is not the name of a mariadb-operator dump", mariadbDumpFileKey, name))
+	}
+	exists, err := mariadbDumpExists(ctx, r.objectStore(), src, name)
+	if err != nil {
+		return "", fmt.Errorf("cannot check that dump %s of k8s.mariadb.com/Backup %s/%s still exists in storage: %w", name, src.Namespace, src.Name, err)
+	}
+	if !exists {
+		s3 := src.Spec.Storage.S3
+		return "", mariadbRestoreRefused(fmt.Sprintf(
+			"dump %s of k8s.mariadb.com/Backup %s/%s no longer exists in storage (s3://%s/%s); restoring now would bring back a different dump",
+			name, src.Namespace, src.Name, s3.Bucket, mariadbOperatorS3Prefix(s3.Prefix)))
+	}
+	return ts.UTC().Format(time.RFC3339), nil
+}
+
+// legacyMariaDBRestoreTargetTime chooses the dump of a Backup taken before
+// Backups recorded theirs: the one findMariaDBDump proves belongs to src,
+// with the completion time the size probe was given, which takenAt keeps.
+// When none is proven, for any reason, it returns empty, and the operator
+// restores the newest dump under the prefix as such a restore always did:
+// refusing would leave these Backups unrestorable, and the controller may
+// never have been able to reach their storage. A Warning event says the
+// dump is a best effort.
+func (r *RestoreJobReconciler) legacyMariaDBRestoreTargetTime(ctx context.Context, rj *backupsv1alpha1.RestoreJob, backup *backupsv1alpha1.Backup, src *mariadbtypes.Backup) string {
+	dump, err := findMariaDBDump(ctx, r.objectStore(), src, backup.Spec.TakenAt.Time)
+	if err != nil {
+		getLogger(ctx).Info("no dump proven for a MariaDB Backup that records none; restoring the newest", "restorejob", rj.Name, "backup", backup.Name, "error", err)
+		r.Recorder.Eventf(rj, corev1.EventTypeWarning, "BestEffortDump",
+			"Backup %s records no dump and none in storage could be proven to belong to k8s.mariadb.com/Backup %s/%s (%v); mariadb-operator restores the newest dump under its prefix as a best effort, which may be another backup run's",
+			backup.Name, src.Namespace, src.Name, err)
+		return ""
+	}
+	return dump.Timestamp.UTC().Format(time.RFC3339)
+}
+
+// awaitMariaDBDumpCheck keeps the RestoreJob waiting, with Ready=False
+// saying why, while the dump it asks for cannot be checked, and fails it
+// with the cause once the restore deadline has passed.
+func (r *RestoreJobReconciler) awaitMariaDBDumpCheck(ctx context.Context, rj *backupsv1alpha1.RestoreJob, options MariaDBRestoreOptions, cause error) (ctrl.Result, error) {
+	deadline := options.effectiveRestoreDeadline()
+	if rj.Status.StartedAt != nil && time.Since(rj.Status.StartedAt.Time) > deadline {
+		return r.markRestoreJobFailed(ctx, rj, fmt.Sprintf(
+			"%v; gave up after %s (override via spec.options.restoreTimeoutSeconds)", cause, deadline))
+	}
+	getLogger(ctx).Info("cannot check the MariaDB dump to restore; retrying", "restorejob", rj.Name, "error", cause)
+	apimeta.SetStatusCondition(&rj.Status.Conditions, metav1.Condition{
+		Type:    "Ready",
+		Status:  metav1.ConditionFalse,
+		Reason:  "DumpCheckPending",
+		Message: cause.Error(),
+	})
+	if err := r.Status().Update(ctx, rj); err != nil {
+		return ctrl.Result{}, err
+	}
+	return ctrl.Result{RequeueAfter: mariadbDumpCheckRetryInterval}, nil
+}
+
+// findMariaDBRestoreForJob returns the k8s.mariadb.com/Restore labelled
+// with the RestoreJob, if a previous reconcile already created one. It is
+// read uncached: one the cache has not caught up with would be created
+// again, or, once its Backup is being deleted, refused while it runs.
+func (r *RestoreJobReconciler) findMariaDBRestoreForJob(ctx context.Context, rj *backupsv1alpha1.RestoreJob) (*mariadbtypes.Restore, error) {
 	list := &mariadbtypes.RestoreList{}
-	if err := r.List(ctx, list,
+	if err := r.apiReader().List(ctx, list,
 		client.InNamespace(rj.Namespace),
 		client.MatchingLabels{
 			backupsv1alpha1.OwningJobNameLabel:      rj.Name,
@@ -644,10 +787,15 @@ func (r *RestoreJobReconciler) ensureMariaDBRestore(ctx context.Context, rj *bac
 	); err != nil {
 		return nil, err
 	}
-	if len(list.Items) > 0 {
-		return &list.Items[0], nil
+	if len(list.Items) == 0 {
+		return nil, nil
 	}
+	return &list.Items[0], nil
+}
 
+// createMariaDBRestore creates the k8s.mariadb.com/Restore of the
+// RestoreJob, labelled with it. targetRecoveryTime is RFC3339, or empty.
+func (r *RestoreJobReconciler) createMariaDBRestore(ctx context.Context, rj *backupsv1alpha1.RestoreJob, sourceBackupName, targetMariaDBName, targetRecoveryTime string) (*mariadbtypes.Restore, error) {
 	obj := &mariadbtypes.Restore{
 		ObjectMeta: metav1.ObjectMeta{
 			Namespace:    rj.Namespace,
@@ -663,6 +811,7 @@ func (r *RestoreJobReconciler) ensureMariaDBRestore(ctx context.Context, rj *bac
 				Kind: mariadbtypes.BackupKind,
 				Name: sourceBackupName,
 			},
+			TargetRecoveryTime: targetRecoveryTime,
 		},
 	}
 	if err := r.Create(ctx, obj); err != nil {

@@ -57,6 +57,36 @@ tests:
           path: spec.template.spec.containers[0].command[2]
           pattern: '-admin=seaweedfs-admin\.tenant-root:23646\.33646 '
 
+  # Both are the weed binary under a fixed memory limit the parent chart does
+  # not set, so their GOMEMLIMIT is pinned here rather than derived: without
+  # one the heap has no ceiling and a large lifecycle pass grows it past the
+  # limit.
+  - it: caps the admin heap below its memory limit
+    template: charts/seaweedfs/templates/admin/admin-statefulset.yaml
+    set: *enabled
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].resources.limits.memory
+          value: 256Mi
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: GOMEMLIMIT
+            value: 192MiB
+
+  - it: caps the worker heap below its memory limit
+    template: charts/seaweedfs/templates/worker/worker-deployment.yaml
+    set: *enabled
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].resources.limits.memory
+          value: 512Mi
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: GOMEMLIMIT
+            value: 384MiB
+
   # The worker executes every job type it registers for. Lifecycle is the only
   # one this release asks for: vacuum, balance and erasure coding move data and
   # are not something enabling lifecycle should start doing as a side effect.

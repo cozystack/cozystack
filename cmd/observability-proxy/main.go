@@ -14,9 +14,10 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-// Command observability-proxy serves tenant logs from the VictoriaLogs
-// stores behind a Kubernetes TokenReview and SubjectAccessReview, with the
-// tenant's namespace scope forced into every upstream request.
+// Command observability-proxy serves tenant logs and metrics from the
+// VictoriaLogs and VictoriaMetrics stores behind a Kubernetes TokenReview
+// and SubjectAccessReview, with the tenant's namespace scope forced into
+// every upstream request.
 package main
 
 import (
@@ -37,6 +38,9 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/collectors"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"k8s.io/apimachinery/pkg/util/validation"
+	"k8s.io/client-go/dynamic"
+	"k8s.io/client-go/dynamic/dynamicinformer"
 	"k8s.io/client-go/informers"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/cache"
@@ -56,6 +60,7 @@ type options struct {
 	tailIdleTimeout time.Duration
 	shutdownTimeout time.Duration
 	logs            observabilityproxy.LogsLimits
+	metrics         observabilityproxy.MetricsConfig
 	limiter         observabilityproxy.LimiterConfig
 }
 
@@ -81,8 +86,23 @@ func parseFlags(args []string) (options, error) {
 	fs.IntVar(&o.logs.DefaultLimit, "logs-default-limit", 1000, "entries returned when a request sets no limit")
 	fs.IntVar(&o.logs.MaxLimit, "logs-max-limit", 10000, "largest limit a request may set")
 	fs.DurationVar(&o.logs.MaxTailResume, "logs-max-tail-resume", 15*time.Minute, "how far back a tail may resume with since or start_offset")
+	// Store names and retention follow metricsStorages in
+	// packages/system/monitoring/values.yaml.
+	fs.StringVar(&o.metrics.ShortTermStore, "metrics-shortterm-store", "shortterm", "VMCluster name of the short-term metrics store of the root tenant")
+	fs.StringVar(&o.metrics.LongTermStore, "metrics-longterm-store", "longterm", "VMCluster name of the long-term metrics store of the root tenant")
+	fs.DurationVar(&o.metrics.ShortTermRetention, "metrics-shortterm-retention", 72*time.Hour, "retention of the short-term store; older windows are read from the long-term one")
+	fs.DurationVar(&o.metrics.Limits.MaxRange, "metrics-max-range", 30*24*time.Hour, "longest [start, end] and step a metrics request may use")
+	fs.IntVar(&o.metrics.Limits.MaxPoints, "metrics-max-points", 11000, "most points per series a range query may return")
+	fs.DurationVar(&o.metrics.Limits.MaxTimeout, "metrics-max-timeout", 30*time.Second, "timeout forwarded to vmselect; a longer client timeout is clamped; must be below --request-timeout when that is set")
+	// Only the refusal threshold: the lookup itself spans the window the
+	// query reads, and that estimate is a loose upper bound (every "("
+	// counts as an implicit subquery), so the default is long enough to
+	// serve month-long panels at a dashboard step.
+	fs.DurationVar(&o.metrics.App.Lookback, "metrics-app-lookback", 30*24*time.Hour, "how far before the window an application metrics query may read; one reading further back, or by an unknown amount, answers 422")
+	fs.IntVar(&o.metrics.App.MaxPods, "metrics-app-max-pods", 500, "most pods of one application in the lookup window; more answer 422")
+	fs.IntVar(&o.metrics.App.MaxPVCs, "metrics-app-max-pvcs", 500, "most PVCs of one application in the lookup window; more answer 422")
 	fs.IntVar(&o.limiter.MaxConcurrentPerUser, "max-concurrent-per-user", 10, "concurrent non-tail requests per user; 0 disables")
-	fs.Float64Var(&o.limiter.RatePerUser, "rate-limit-per-user", 10, "sustained requests per second per user; 0 disables")
+	fs.Float64Var(&o.limiter.RatePerUser, "rate-limit-per-user", 10, "sustained client requests per second per user; an application metrics request makes three store calls (pod lookup, PVC lookup, query); 0 disables")
 	fs.IntVar(&o.limiter.RateBurst, "rate-limit-burst", 20, "request burst per user")
 	fs.IntVar(&o.limiter.MaxTailsPerUser, "max-tails-per-user", 5, "open tails per user; 0 disables")
 	fs.IntVar(&o.limiter.MaxTails, "max-tails", 200, "open tails in total; 0 disables")
@@ -93,6 +113,13 @@ func parseFlags(args []string) (options, error) {
 	// be dropped silently.
 	if fs.NArg() > 0 {
 		return o, fmt.Errorf("unexpected argument %q", fs.Arg(0))
+	}
+	o.metrics.RootTenant = o.rootTenant
+	for _, store := range []string{o.metrics.ShortTermStore, o.metrics.LongTermStore} {
+		// The name becomes part of a Service host name.
+		if errs := validation.IsDNS1123Label("vmselect-" + store); store == "" || len(errs) > 0 {
+			return o, fmt.Errorf("invalid metrics store name %q", store)
+		}
 	}
 	switch {
 	case o.rootTenant == "":
@@ -110,8 +137,19 @@ func parseFlags(args []string) (options, error) {
 		return o, errors.New("--logs-max-range must be at least 3s")
 	case o.logs.DefaultLimit <= 0 || o.logs.MaxLimit < o.logs.DefaultLimit:
 		return o, errors.New("--logs-default-limit must be positive and not above --logs-max-limit")
+	case o.metrics.ShortTermRetention <= 0 || o.metrics.Limits.MaxRange <= 0 || o.metrics.Limits.MaxTimeout <= 0:
+		return o, errors.New("--metrics-shortterm-retention, --metrics-max-range and --metrics-max-timeout must be positive")
+	case o.metrics.Limits.MaxPoints < 2:
+		return o, errors.New("--metrics-max-points must be at least 2")
+	case o.metrics.App.Lookback <= 0 || o.metrics.App.MaxPods < 1 || o.metrics.App.MaxPVCs < 1:
+		return o, errors.New("--metrics-app-lookback, --metrics-app-max-pods and --metrics-app-max-pvcs must be positive")
 	case o.logs.MaxTailResume < 0:
 		return o, errors.New("--logs-max-tail-resume must not be negative")
+	// The proxy's deadline starts before the request reaches vmselect, so
+	// at an equal or longer timeout it cuts a query vmselect is still
+	// allowed to run and answers 504 for a store that is within its time.
+	case o.requestTimeout > 0 && o.metrics.Limits.MaxTimeout >= o.requestTimeout:
+		return o, errors.New("--metrics-max-timeout must be below --request-timeout")
 	case o.requestTimeout < 0 || o.tailIdleTimeout < 0 || o.authCacheTTL < 0 || o.shutdownTimeout < 0:
 		return o, errors.New("timeouts and the auth cache TTL must not be negative")
 	// NaN passes every comparison and +Inf never empties a bucket; either
@@ -151,13 +189,24 @@ func run(o options) error {
 		return fmt.Errorf("building client: %w", err)
 	}
 
+	dynClient, err := dynamic.NewForConfig(restConfig)
+	if err != nil {
+		return fmt.Errorf("building dynamic client: %w", err)
+	}
+
 	factory := informers.NewSharedInformerFactory(client, 0)
 	namespaces := factory.Core().V1().Namespaces()
 	lister := namespaces.Lister()
+	appDefs := dynamicinformer.NewDynamicSharedInformerFactory(dynClient, 0).
+		ForResource(observabilityproxy.ApplicationDefinitionsResource).Informer()
+	if err := appDefs.AddIndexers(observabilityproxy.ApplicationPluralIndexers()); err != nil {
+		return fmt.Errorf("indexing application definitions: %w", err)
+	}
 	factory.Start(ctx.Done())
+	go appDefs.Run(ctx.Done())
 	var ready atomic.Bool
 	go func() {
-		if cache.WaitForCacheSync(ctx.Done(), namespaces.Informer().HasSynced) {
+		if cache.WaitForCacheSync(ctx.Done(), namespaces.Informer().HasSynced, appDefs.HasSynced) {
 			ready.Store(true)
 		}
 	}()
@@ -167,16 +216,18 @@ func run(o options) error {
 	proxy := observabilityproxy.NewServer(observabilityproxy.Config{
 		ClusterDomain:   o.clusterDomain,
 		Logs:            o.logs,
+		Metrics:         o.metrics,
 		Limiter:         o.limiter,
 		RequestTimeout:  o.requestTimeout,
 		TailIdleTimeout: o.tailIdleTimeout,
-	}, observabilityproxy.NewAuthorizer(client, o.authCacheTTL), observabilityproxy.NewStoreResolver(lister, namespaces.Informer().HasSynced, o.rootTenant), reg)
+	}, observabilityproxy.NewAuthorizer(client, o.authCacheTTL), observabilityproxy.NewStoreResolver(lister, namespaces.Informer().HasSynced, o.rootTenant),
+		observabilityproxy.NewApplicationKinds(appDefs.GetIndexer(), appDefs.HasSynced), reg)
 
 	probes := http.NewServeMux()
 	probes.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) { _, _ = io.WriteString(w, "ok") })
 	probes.HandleFunc("/readyz", func(w http.ResponseWriter, _ *http.Request) {
 		if !ready.Load() {
-			http.Error(w, "namespace cache not synced", http.StatusServiceUnavailable)
+			http.Error(w, "namespace or application definition cache not synced", http.StatusServiceUnavailable)
 			return
 		}
 		_, _ = io.WriteString(w, "ok")
