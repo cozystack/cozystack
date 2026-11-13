@@ -1,0 +1,73 @@
+suite: scheduler Deployment (cozystack)
+
+templates:
+  - charts/linstor-scheduler/templates/deployment.yaml
+  - charts/linstor-scheduler/templates/admission-deployment.yaml
+
+release:
+  name: linstor-scheduler
+
+tests:
+  # The extender reads its LINSTOR client certificate from env vars resolved
+  # at container start. Reloader must watch the very secret those env vars
+  # reference, or a pod older than the certificate lifetime loses the LINSTOR
+  # API (EOF on every new TLS handshake) and the scheduler stops placing pods
+  # next to their replicas.
+  - it: Reloader watches the secret the extender takes its client certificate from
+    template: charts/linstor-scheduler/templates/deployment.yaml
+    asserts:
+      - equal:
+          path: metadata.annotations["secret.reloader.stakater.com/reload"]
+          value: linstor-client-tls
+      - contains:
+          path: spec.template.spec.containers[1].env
+          content:
+            name: LS_USER_CERTIFICATE
+            valueFrom:
+              secretKeyRef:
+                name: linstor-client-tls
+                key: tls.crt
+      - contains:
+          path: spec.template.spec.containers[1].env
+          content:
+            name: LS_USER_KEY
+            valueFrom:
+              secretKeyRef:
+                name: linstor-client-tls
+                key: tls.key
+
+  - it: the Reloader annotation follows linstor.clientSecret
+    template: charts/linstor-scheduler/templates/deployment.yaml
+    set:
+      linstor-scheduler.linstor.clientSecret: other-client-tls
+    asserts:
+      - equal:
+          path: metadata.annotations["secret.reloader.stakater.com/reload"]
+          value: other-client-tls
+      - contains:
+          path: spec.template.spec.containers[1].env
+          content:
+            name: LS_USER_CERTIFICATE
+            valueFrom:
+              secretKeyRef:
+                name: other-client-tls
+                key: tls.crt
+      - contains:
+          path: spec.template.spec.containers[1].env
+          content:
+            name: LS_USER_KEY
+            valueFrom:
+              secretKeyRef:
+                name: other-client-tls
+                key: tls.key
+
+  # The admission webhook does not use the LINSTOR client secret; rolling it
+  # on that secret's rotation would only restart it for nothing.
+  - it: the admission Deployment is not rolled on LINSTOR client secret rotation
+    template: charts/linstor-scheduler/templates/admission-deployment.yaml
+    asserts:
+      - notExists:
+          path: spec.template.metadata.annotations["secret.reloader.stakater.com/reload"]
+      - notEqual:
+          path: metadata.annotations["secret.reloader.stakater.com/reload"]
+          value: linstor-client-tls
