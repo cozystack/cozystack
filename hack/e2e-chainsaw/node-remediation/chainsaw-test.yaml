@@ -1,0 +1,351 @@
+# The node-remediation package on virtual nodes without a BMC.
+#
+# What this can prove: the package installs from the platform values (three
+# ordered releases, the CRDs kept, the credentials namespace and its admission
+# policy, both operators with their webhooks served through cert-manager), the
+# NodeHealthCheck objects watch Ready=Unknown only, and the fence-agents
+# webhook refuses a remediation whose creator is not NodeHealthCheck or whose
+# Node identity no known Node carries. The refusal is the gate a real
+# remediation passes through before any power action, and this suite ends
+# there: no CR is admitted, so no BMC is contacted and no node is tainted.
+#
+# What it cannot prove: the success path. The sandbox nodes report one system
+# UUID each that nothing on the wire can confirm, and safety-mode refuses a
+# UUID that is not unique among the known Nodes, so a remediation NodeHealthCheck
+# itself creates for an unhealthy sandbox node ends at the same gate as the one
+# this suite creates by hand. Making a node unhealthy on purpose would also
+# leave the CNI and storage DaemonSets of the sandbox with a dead member for
+# the suites after this one. An unhealthy node, a BMC that answers, and the
+# out-of-service taint that follows are not exercised here; they wait for a
+# bare-metal run outside CI.
+#
+# The platform Package is patched in place, as hack/e2e-install-cozystack.bats
+# does for OIDC, and the cleanup of the first step, which Chainsaw runs at the
+# end of the test whether it passed or failed, takes the change back out:
+# enabledPackages goes back to what it was, minus this package (an absent key
+# stays absent), the nodeRemediation block is removed, the Package is deleted
+# and its releases waited out, so the leak guard sees the operators gone before
+# the next suite. A cluster that had the package enabled or the block set
+# before the suite ran does not get them back. The original enabledPackages
+# value is kept in a file between the two scripts, since they run in separate
+# shells.
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: node-remediation-refusal
+spec:
+  # Nothing here lives in the default tenant-test namespace; the operators sit
+  # in cozy-node-remediation and the template in cozy-node-remediation-bmc.
+  catch:
+  - events:
+      namespace: cozy-node-remediation
+  - events:
+      namespace: cozy-node-remediation-bmc
+  - get:
+      apiVersion: helm.toolkit.fluxcd.io/v2
+      kind: HelmRelease
+      namespace: cozy-node-remediation
+  - podLogs:
+      namespace: cozy-node-remediation
+      selector: app.kubernetes.io/name=fence-agents-remediation-operator
+      tail: 100
+  - podLogs:
+      namespace: cozy-node-remediation
+      selector: app.kubernetes.io/name=node-healthcheck-operator
+      tail: 100
+  steps:
+  - name: enable-the-package
+    try:
+    # The BMC addresses are documentation-range addresses no suite reaches: the
+    # refusal below happens before any connection. The CA is a public
+    # certificate generated for this suite; the operator refuses to start
+    # without one and verifies every Redfish connection against it.
+    - script:
+        timeout: 2m
+        content: |
+          set -eu
+          state="${TMPDIR:-/tmp}/node-remediation-e2e.enabled-packages"
+          ca=$(cat redfish-ca.pem)
+          nodes='{}'
+          i=10
+          for node in $(kubectl get nodes -o name | sed 's#^node/##'); do
+            i=$((i + 1))
+            nodes=$(printf '%s' "$nodes" | jq --arg n "$node" --arg a "192.0.2.$i" '. + {($n): {address: $a}}')
+          done
+          current=$(kubectl get package cozystack.cozystack-platform -o jsonpath='{.spec.components.platform.values.bundles.enabledPackages}')
+          # The cleanup puts this value back, minus this package; an absent key stays absent.
+          printf '%s' "${current:-absent}" > "$state"
+          enabled=$(printf '%s' "${current:-[]}" | jq -c '. + ["cozystack.node-remediation"] | unique')
+          patch=$(jq -n --argjson enabled "$enabled" --argjson nodes "$nodes" --arg ca "$ca" \
+            '{spec: {components: {platform: {values: {
+                bundles: {enabledPackages: $enabled},
+                nodeRemediation: {bmc: {caBundle: $ca, credentialsSecretName: "bmc-credentials", systemsUri: "/redfish/v1/Systems/1", nodes: $nodes}}
+            }}}}}')
+          kubectl patch package cozystack.cozystack-platform --type merge -p "$patch"
+        check:
+          ($error == null): true
+    - assert:
+        timeout: 5m
+        resource:
+          apiVersion: helm.toolkit.fluxcd.io/v2
+          kind: HelmRelease
+          metadata:
+            name: node-remediation-crds
+            namespace: cozy-node-remediation
+          status:
+            (conditions[?type == 'Ready']):
+            - status: "True"
+    # The documented disable order, minus the pause, since no remediation is
+    # open: out of enabledPackages first, so the platform render stops emitting
+    # the Package, then the Package itself, whose deletion removes the three
+    # releases. The CRDs stay by design; the credentials namespace goes with
+    # the first release, and the Secret applied below with it. Every wait is
+    # guarded by an existence check, because this also runs after a failure
+    # that left some of the objects uncreated; without the state file, which
+    # the enable script writes before it patches anything, enabledPackages was
+    # never changed and is left alone. The op budget sits above the sum of the
+    # three inner waits, as .chainsaw.yaml asks, so a slow uninstall fails on
+    # the wait that timed out rather than on a killed shell.
+    cleanup:
+    - script:
+        timeout: 16m
+        content: |
+          set -eu
+          state="${TMPDIR:-/tmp}/node-remediation-e2e.enabled-packages"
+          if [ -f "$state" ]; then
+            original=$(cat "$state")
+            if [ "$original" = absent ]; then
+              enabled=null
+            else
+              enabled=$(printf '%s' "$original" | jq -c 'map(select(. != "cozystack.node-remediation"))')
+            fi
+            patch=$(jq -n --argjson enabled "$enabled" '{spec: {components: {platform: {values: {bundles: {enabledPackages: $enabled}, nodeRemediation: null}}}}}')
+          else
+            patch='{"spec":{"components":{"platform":{"values":{"nodeRemediation":null}}}}}'
+          fi
+          kubectl patch package cozystack.cozystack-platform --type merge -p "$patch"
+          kubectl delete package cozystack.node-remediation --ignore-not-found --timeout=5m
+          if [ -n "$(kubectl -n cozy-node-remediation get helmrelease -o name 2>/dev/null)" ]; then
+            kubectl -n cozy-node-remediation wait --for=delete helmrelease --all --timeout=5m
+          fi
+          if kubectl get namespace cozy-node-remediation-bmc >/dev/null 2>&1; then
+            kubectl wait --for=delete namespace/cozy-node-remediation-bmc --timeout=5m
+          fi
+          rm -f "$state"
+
+  # The credentials come after the first release: its admission policy sees
+  # only Secrets written after it exists, and the remediation template of the
+  # third release is admitted only once the Secret it names exists. The
+  # operators of the second release take longer than this to come up, so the
+  # Secret is in place before the template is ever tried.
+  - name: credentials-after-the-policy
+    try:
+    - apply:
+        resource:
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: bmc-credentials
+            namespace: cozy-node-remediation-bmc
+          stringData:
+            username: e2e
+            password: e2e-not-a-real-bmc
+    # The apiserver starts enforcing a new ValidatingAdmissionPolicy and its
+    # binding once its informer has seen them, a moment after the release is
+    # Ready. The loop waits for that consistency, as an assert waits on a
+    # condition; a refusal with any other message is a defect and fails at
+    # once. A probe that got in during the window is removed.
+    - script:
+        timeout: 1m
+        content: |
+          set -eu
+          # Bounded by time, under the step's 1m, so that a policy that never
+          # enforces ends on this message and not on the step timeout. Chainsaw
+          # runs this with sh, dash in the sandbox, which has no SECONDS.
+          deadline=$(( $(date +%s) + 50 ))
+          attempt=0
+          while [ "$(date +%s)" -lt "$deadline" ]; do
+            attempt=$((attempt + 1))
+            out=$(kubectl -n cozy-node-remediation-bmc create secret generic bmc-probe \
+              --from-literal=username=e2e --from-literal=password=e2e --from-literal=--ip=192.0.2.99 2>&1) && rc=0 || rc=$?
+            echo "attempt=$attempt rc=$rc out=$out"
+            if [ "$rc" -ne 0 ]; then
+              echo "$out" | grep -q "exactly the keys username and password"
+              exit 0
+            fi
+            kubectl -n cozy-node-remediation-bmc delete secret bmc-probe --ignore-not-found
+            sleep 2
+          done
+          echo "the credentials policy never refused the probe within 50s"
+          exit 1
+        check:
+          ($error == null): true
+
+  - name: operators-and-configuration-ready
+    try:
+    # The operators pull two images and wait for cert-manager to issue their
+    # serving certificates; the default install timeout of a release here is
+    # 15m, so the budget clears it with the start margin.
+    - assert:
+        timeout: 16m
+        resource:
+          apiVersion: helm.toolkit.fluxcd.io/v2
+          kind: HelmRelease
+          metadata:
+            name: node-remediation
+            namespace: cozy-node-remediation
+          status:
+            (conditions[?type == 'Ready']):
+            - status: "True"
+    - assert:
+        timeout: 16m
+        resource:
+          apiVersion: helm.toolkit.fluxcd.io/v2
+          kind: HelmRelease
+          metadata:
+            name: node-remediation-config
+            namespace: cozy-node-remediation
+          status:
+            (conditions[?type == 'Ready']):
+            - status: "True"
+    - assert:
+        timeout: 2m
+        resource:
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: fence-agents-remediation-controller-manager
+            namespace: cozy-node-remediation
+          status:
+            (conditions[?type == 'Available']):
+            - status: "True"
+    - assert:
+        timeout: 2m
+        resource:
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: node-healthcheck-controller-manager
+            namespace: cozy-node-remediation
+          status:
+            (conditions[?type == 'Available']):
+            - status: "True"
+    - assert:
+        resource:
+          apiVersion: apiextensions.k8s.io/v1
+          kind: CustomResourceDefinition
+          metadata:
+            name: fenceagentsremediations.fence-agents-remediation.medik8s.io
+            annotations:
+              helm.sh/resource-policy: keep
+    - assert:
+        resource:
+          apiVersion: remediation.medik8s.io/v1alpha1
+          kind: NodeHealthCheck
+          metadata:
+            name: node-remediation-control-plane
+          spec:
+            minHealthy: "51%"
+            unhealthyConditions:
+            - type: Ready
+              status: Unknown
+              duration: 300s
+            remediationTemplate:
+              kind: FenceAgentsRemediationTemplate
+              name: redfish-off
+              namespace: cozy-node-remediation-bmc
+    - assert:
+        resource:
+          apiVersion: remediation.medik8s.io/v1alpha1
+          kind: NodeHealthCheck
+          metadata:
+            name: node-remediation-workers
+          spec:
+            unhealthyConditions:
+            - type: Ready
+              status: Unknown
+              duration: 300s
+    - assert:
+        resource:
+          apiVersion: fence-agents-remediation.medik8s.io/v1alpha1
+          kind: FenceAgentsRemediationTemplate
+          metadata:
+            name: redfish-off
+            namespace: cozy-node-remediation-bmc
+          spec:
+            template:
+              spec:
+                safetyPolicy: RedfishOffV1
+                agent: fence_redfish
+                remediationStrategy: OutOfServiceTaint
+                sharedSecretName: bmc-credentials
+
+  # The webhook's identity gate. A remediation is admitted only from the
+  # NodeHealthCheck service account and only for a binding that exactly one
+  # known Node carries; both requests are refused, and the second script then
+  # checks that no CR exists and no node carries the out-of-service taint.
+  - name: webhook-refuses-what-it-cannot-bind
+    try:
+    - script:
+        timeout: 2m
+        content: |
+          set -eu
+          node=$(kubectl get nodes -o jsonpath='{.items[0].metadata.name}')
+          uid=$(kubectl get node "$node" -o jsonpath='{.metadata.uid}')
+          far() {
+            cat <<EOF
+          apiVersion: fence-agents-remediation.medik8s.io/v1alpha1
+          kind: FenceAgentsRemediation
+          metadata:
+            name: $node
+            namespace: cozy-node-remediation-bmc
+          spec:
+            safetyPolicy: RedfishOffV1
+            agent: fence_redfish
+            remediationStrategy: OutOfServiceTaint
+            retrycount: 3
+            retryinterval: 5s
+            timeout: 30s
+            sharedSecretName: bmc-credentials
+            sharedparameters:
+              --action: "off"
+              --systems-uri: /redfish/v1/Systems/1
+            nodeparameters:
+              --ip:
+                $node: 192.0.2.11
+            nodeBinding:
+              version: v1
+              name: $node
+              uid: $uid
+              systemUUID: 0f0e0d0c-0b0a-4908-8706-050403020100
+          EOF
+          }
+          # The runner is not NodeHealthCheck: refused by the creator check,
+          # before any Node is read. The runner's own identity is used so the
+          # request passes RBAC and reaches admission at all.
+          out=$(far | kubectl create -f - 2>&1) && rc=0 || rc=$?
+          echo "creator rc=$rc out=$out"
+          [ "$rc" -ne 0 ]
+          echo "$out" | grep -q "only the configured NHC service account"
+          # NodeHealthCheck itself, with a system UUID no known Node reports.
+          out=$(far | kubectl --as="system:serviceaccount:cozy-node-remediation:node-healthcheck-controller-manager" \
+                              --as-group=system:serviceaccounts \
+                              --as-group=system:serviceaccounts:cozy-node-remediation \
+                              create -f - 2>&1) && rc=0 || rc=$?
+          echo "identity rc=$rc out=$out"
+          [ "$rc" -ne 0 ]
+          echo "$out" | grep -q "does not uniquely identify a known Node"
+        check:
+          ($error == null): true
+    - script:
+        timeout: 1m
+        content: |
+          set -eu
+          count=$(kubectl get fenceagentsremediations -A -o name | wc -l | tr -d ' ')
+          echo "remediation CRs: $count"
+          [ "$count" -eq 0 ]
+          tainted=$(kubectl get nodes -o json | jq -r '[.items[] | select(any(.spec.taints[]?; .key == "node.kubernetes.io/out-of-service")) | .metadata.name] | join(" ")')
+          echo "nodes with the out-of-service taint: '$tainted'"
+          [ -z "$tainted" ]
+        check:
+          ($error == null): true
