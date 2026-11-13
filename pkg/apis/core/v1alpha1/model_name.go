@@ -118,3 +118,7 @@ func (in TapSource) OpenAPIModelName() string {
 func (in TapPackage) OpenAPIModelName() string {
 	return "com.github.cozystack.cozystack.pkg.apis.core.v1alpha1.TapPackage"
 }
+
+func (in TapVerify) OpenAPIModelName() string {
+	return "com.github.cozystack.cozystack.pkg.apis.core.v1alpha1.TapVerify"
+}

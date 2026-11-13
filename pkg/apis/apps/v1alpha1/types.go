@@ -55,6 +55,23 @@ type ApplicationStatus struct {
 	// ExternalIPsCount holds the number of LoadBalancer services with assigned external IPs for Tenant applications.
 	// +optional
 	ExternalIPsCount int32 `json:"externalIPsCount,omitempty"`
+	// InstallFailures is the install failure count of the underlying HelmRelease.
+	// It counts only attempts that recorded a Helm release, so a failure before
+	// Helm records one, such as a chart that fails to render, shows only as
+	// Ready=False; a failure to apply the rendered resources is counted. It
+	// resets when the desired state (generation, chart version, values) changes,
+	// and on success only under the RetryOnFailure strategy, so a Ready release
+	// may carry it.
+	// +optional
+	InstallFailures int64 `json:"installFailures,omitempty"`
+	// UpgradeFailures is the upgrade failure count of the underlying HelmRelease,
+	// with the same counting and reset rules as InstallFailures.
+	// +optional
+	UpgradeFailures int64 `json:"upgradeFailures,omitempty"`
+	// LastAttemptedReleaseAction is the last release action (install or upgrade)
+	// the underlying HelmRelease attempted.
+	// +optional
+	LastAttemptedReleaseAction string `json:"lastAttemptedReleaseAction,omitempty"`
 }
 
 // SchedulingClass returns the scheduling class requested by this Application.

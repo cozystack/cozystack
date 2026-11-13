@@ -92,7 +92,16 @@ spec:
           {{- end }}
           {{- end }}
           disks:
+          {{- /* KubeVirt rejects two devices sharing a bootOrder, so a clash is
+                 reported here with the disk names rather than surfacing as a
+                 webhook denial on the VirtualMachine. */}}
+          {{- $bootOrderOwners := dict }}
           {{- range $i, $disk := .Values.disks }}
+          {{- $bootOrder := int ($disk.bootOrder | default (add $i 1)) }}
+          {{- with get $bootOrderOwners (toString $bootOrder) }}
+          {{-   fail (printf "disks %q and %q both have bootOrder %d; boot orders must be unique" . $disk.name $bootOrder) }}
+          {{- end }}
+          {{- $_ := set $bootOrderOwners (toString $bootOrder) $disk.name }}
           - name: disk-{{ $disk.name }}
             {{- $dv := lookup "cdi.kubevirt.io/v1beta1" "DataVolume" $.Release.Namespace (printf "vm-disk-%s" $disk.name) }}
             {{- if $dv }}
@@ -104,7 +113,7 @@ spec:
             {{- else }}
             {{ $deviceKey }}: {}
             {{- end }}
-            bootOrder: {{ add $i 1 }}
+            bootOrder: {{ $bootOrder }}
             {{- else }}
             {{-   fail (printf "Specified disk not exists in cluster: %s" .name) }}
             {{- end }}

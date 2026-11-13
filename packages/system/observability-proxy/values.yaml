@@ -1,0 +1,16 @@
+# Injected by the platform from the cozystack-values Secret. The empty
+# default keeps the chart renderable on its own, outside a cluster.
+_cluster: {}
+
+observabilityProxy:
+  image: "ghcr.io/cozystack/cozystack/observability-proxy:v0.0.0"
+  replicas: 2
+  rootTenant: tenant-root
+  authCacheTTL: 10s
+  resources:
+    requests:
+      cpu: 10m
+      memory: 64Mi
+    limits:
+      cpu: 500m
+      memory: 256Mi
