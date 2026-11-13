@@ -42,6 +42,7 @@ metadata:
     apps.cozystack.io/application.group: apps.cozystack.io
     apps.cozystack.io/application.name: computeplane
 spec:
+  {{- include "cozy-lib.postRenderers" (list (list) $) | nindent 2 }}
   # No spec.releaseName — the aggregated API rebuilds HelmRelease specs
   # without it, so the release name must equal the object name (as in every
   # other tenant module). The cluster HelmRelease this module renders is the

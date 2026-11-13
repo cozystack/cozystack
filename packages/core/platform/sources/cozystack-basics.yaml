@@ -35,9 +35,13 @@ spec:
     # gateway-api-crds, so they cannot close a loop here.)
     - cozystack.cozystack-engine
     - cozystack.gateway-api-crds
+    libraries:
+    - name: cozy-lib
+      path: library/cozy-lib
     components:
     - name: cozystack-basics
       path: system/cozystack-basics
+      libraries: ["cozy-lib"]
       install:
         namespace: cozy-system
         releaseName: cozystack-basics

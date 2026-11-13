@@ -18,6 +18,7 @@ metadata:
     cozystack.io/target-cluster-name: {{ .Release.Name }}
     sharding.fluxcd.io/key: tenants
 spec:
+  {{- include "cozy-lib.postRenderers" (list (list) $) | nindent 2 }}
   releaseName: cert-manager
   chartRef:
     kind: ExternalArtifact

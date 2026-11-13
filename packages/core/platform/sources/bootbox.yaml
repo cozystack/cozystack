@@ -14,9 +14,13 @@ spec:
     dependsOn:
     - cozystack.networking
     - cozystack.bootbox-application
+    libraries:
+    - name: cozy-lib
+      path: library/cozy-lib
     components:
     - name: bootbox
       path: system/bootbox
+      libraries: ["cozy-lib"]
       install:
         privileged: true
         namespace: cozy-bootbox

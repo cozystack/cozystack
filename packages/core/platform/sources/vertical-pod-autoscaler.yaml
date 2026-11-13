@@ -25,6 +25,9 @@ spec:
     # and cozystack.gateway-api-crds, neither of which touches VPA.
     - cozystack.networking
     - cozystack.cert-manager
+    libraries:
+    - name: cozy-lib
+      path: library/cozy-lib
     components:
     - name: vertical-pod-autoscaler-crds
       path: system/vertical-pod-autoscaler-crds
@@ -34,8 +37,10 @@ spec:
         releaseName: vertical-pod-autoscaler-crds
     - name: vpa-for-vpa
       path: system/vertical-pod-autoscaler
+      libraries: ["cozy-lib"]
     - name: vertical-pod-autoscaler
       path: system/vertical-pod-autoscaler
+      libraries: ["cozy-lib"]
       install:
         privileged: true
         namespace: cozy-vertical-pod-autoscaler
