@@ -160,7 +160,7 @@ See:
 
 - <https://cloudnative-pg.io/documentation/1.15/rolling_update/#manual-updates-supervised>
 
-> `storageClass` is annotated as immutable in the chart schema — see [`docs/storage-immutability.md`](../../../docs/storage-immutability.md) for the contract and which consumers enforce it.
+> `storageClass` is annotated as immutable in the chart schema — see [storageClass immutability](https://cozystack.io/docs/v1/operations/storage-class-immutability/) for the contract and which consumers enforce it.
 
 ### TLS for server connections
 
@@ -279,13 +279,13 @@ For `sslmode=verify-full` to work, the CA bundle retrieved above must be saved t
 
 ### Databases configuration
 
-| Name                             | Description                              | Type                | Value |
-| -------------------------------- | ---------------------------------------- | ------------------- | ----- |
-| `databases`                      | Databases configuration map.             | `map[string]object` | `{}`  |
-| `databases[name].roles`          | Roles assigned to users.                 | `object`            | `{}`  |
-| `databases[name].roles.admin`    | List of users with admin privileges.     | `[]string`          | `[]`  |
-| `databases[name].roles.readonly` | List of users with read-only privileges. | `[]string`          | `[]`  |
-| `databases[name].extensions`     | List of enabled PostgreSQL extensions.   | `[]string`          | `[]`  |
+| Name                             | Description                                                                                                       | Type                | Value |
+| -------------------------------- | ----------------------------------------------------------------------------------------------------------------- | ------------------- | ----- |
+| `databases`                      | Databases configuration map. The PostgreSQL system databases `postgres`, `template0` and `template1` are refused. | `map[string]object` | `{}`  |
+| `databases[name].roles`          | Roles assigned to users.                                                                                          | `object`            | `{}`  |
+| `databases[name].roles.admin`    | List of users with admin privileges.                                                                              | `[]string`          | `[]`  |
+| `databases[name].roles.readonly` | List of users with read-only privileges.                                                                          | `[]string`          | `[]`  |
+| `databases[name].extensions`     | List of enabled PostgreSQL extensions.                                                                            | `[]string`          | `[]`  |
 
 
 ### Backup parameters
@@ -341,7 +341,7 @@ This setting is ignored if the corresponding `resources` value is set.
 
 Presets follow a cloud-style `<series>.<size>` naming convention. Five series cover the full CPU-to-memory ratio range (`t1` 1:0.5, `c1` 1:1, `s1` 1:2, `u1` 1:4, `m1` 1:8) and each series ships eight sizes (`nano` through `4xlarge`). The legacy flat names (`nano`, `micro`, `small`, `medium`, `large`, `xlarge`, `2xlarge`) remain accepted as deprecated aliases and keep their original sizes, which do not follow one series: `nano` through `small` equal the `t1` sizes of the same name, while `medium` equals `c1.small` rather than `c1.medium`.
 
-See [`docs/operations/resource-presets.md`](../../../docs/operations/resource-presets.md) for the full size matrix and the legacy-to-instance-type mapping.
+See [Resource management](https://cozystack.io/docs/v1/guides/resource-management/) for the full size matrix and the legacy-to-instance-type mapping.
 
 ### users
 

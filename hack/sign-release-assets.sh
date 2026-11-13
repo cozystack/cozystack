@@ -26,8 +26,9 @@
 # copies along with its other assets, and a stable release gets its own.
 #
 # The bundle is verified before the script returns, with the same certificate
-# identity users are told to check in docs/release.md, so a release whose
-# signature that check would reject fails here instead of being uploaded.
+# identity users are told to check in docs/release/signatures-and-sbom.md, so a
+# release whose signature that check would reject fails here instead of being
+# uploaded.
 #
 # Needs syft and cosign on PATH, and `id-token: write` in the job.
 set -euo pipefail
@@ -39,7 +40,7 @@ BUNDLE=cozystack-checksums.txt.sigstore.json
 # The workflows that publish releases, at the refs they run from: tags.yaml for a
 # pre-release, on a v* tag push, and promote-rc.yaml for a stable one, dispatched
 # from main only. A run from any other ref signs, but fails the check below.
-# docs/release.md shows users the same pattern.
+# docs/release/signatures-and-sbom.md shows users the same pattern.
 IDENTITY_REGEXP='^https://github\.com/cozystack/cozystack/\.github/workflows/(tags\.yaml@refs/tags/v|promote-rc\.yaml@refs/heads/main$)'
 OIDC_ISSUER=https://token.actions.githubusercontent.com
 
