@@ -345,6 +345,52 @@ func TestGoldenImageHelmReleasesWaitForImport(t *testing.T) {
 	}
 }
 
+// TestCertManagerIssuersReleaseIgnoresACMEReadiness builds the HelmRelease spec
+// from the shipped cert-manager source. A ClusterIssuer turns Ready only after
+// cert-manager has registered an account with the CA, and every package behind
+// cozystack.cert-manager dependsOn this release, so a kstatus wait on the
+// issuers would let one unreachable CA hold the whole platform rollout.
+func TestCertManagerIssuersReleaseIgnoresACMEReadiness(t *testing.T) {
+	want := []kustomize.CustomHealthCheck{{
+		APIVersion: "cert-manager.io/v1",
+		Kind:       "ClusterIssuer",
+		HealthCheckExpressions: kustomize.HealthCheckExpressions{
+			Current: "true",
+		},
+	}}
+
+	path := filepath.Join("..", "..", "packages", "core", "platform", "sources", "cert-manager.yaml")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+	var ps cozyv1alpha1.PackageSource
+	if err := yaml.Unmarshal(data, &ps); err != nil {
+		t.Fatalf("unmarshal %s: %v", path, err)
+	}
+
+	var install *cozyv1alpha1.ComponentInstall
+	for _, v := range ps.Spec.Variants {
+		for _, c := range v.Components {
+			if c.Name == "cert-manager-issuers" {
+				install = c.Install
+			}
+		}
+	}
+	if install == nil {
+		t.Fatalf("%s: component cert-manager-issuers has no install block", path)
+	}
+
+	spec := (&PackageReconciler{}).buildHelmReleaseSpec(install, "x")
+
+	if !reflect.DeepEqual(spec.HealthCheckExprs, want) {
+		t.Errorf("HealthCheckExprs = %+v, want %+v", spec.HealthCheckExprs, want)
+	}
+	if spec.WaitStrategy == nil || spec.WaitStrategy.Name != helmv2.WaitStrategyPoller {
+		t.Errorf("WaitStrategy = %+v, want poller: the expressions are not evaluated under any other strategy", spec.WaitStrategy)
+	}
+}
+
 // Memory policy state lives on a Namespace, which fake clients do not create
 // implicitly when a namespaced fixture is added.
 func memoryTestClientBuilder(scheme *runtime.Scheme) *fake.ClientBuilder {
