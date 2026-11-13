@@ -467,6 +467,12 @@ func TestWarnRemovedKubernetesFields(t *testing.T) {
 			wantKeys: []string{"nodeGroups", "nodeHealthCheck", "maxNodeProvisionTime"},
 		},
 		{
+			name:     "kubernetes with a stored talos block warns",
+			kindName: "Kubernetes",
+			specJSON: `{"version":"v1.35","talos":{"version":"v1.13.6"}}`,
+			wantKeys: []string{"talos"},
+		},
+		{
 			name:     "kubernetes without removed fields does not warn",
 			kindName: "Kubernetes",
 			specJSON: `{"version":"v1.35","host":"example.com"}`,
