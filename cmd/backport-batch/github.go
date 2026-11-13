@@ -127,12 +127,62 @@ type github interface {
 	// createPull opens the draft and returns its number and URL.
 	createPull(base, head, title, bodyFile string) (int, string, error)
 	editPull(number int, title, bodyFile string) error
+	// editBody replaces the body of pull request number and nothing else.
+	editBody(number int, bodyFile string) error
 	closePull(number int) error
 	comments(number int) ([]issueComment, error)
 	createComment(number int, bodyFile string) error
 	editComment(id int64, bodyFile string) error
 	// batchBot is the bot the batch writes as, from batchBotEnv, or "".
 	batchBot() string
+}
+
+// guardedGitHub refuses every GitHub write once the run's output was lost.
+type guardedGitHub struct {
+	github
+	a *app
+}
+
+func (g guardedGitHub) createPull(base, head, title, bodyFile string) (int, string, error) {
+	if err := g.a.mayAct(); err != nil {
+		return 0, "", err
+	}
+	return g.github.createPull(base, head, title, bodyFile)
+}
+
+func (g guardedGitHub) editPull(number int, title, bodyFile string) error {
+	if err := g.a.mayAct(); err != nil {
+		return err
+	}
+	return g.github.editPull(number, title, bodyFile)
+}
+
+func (g guardedGitHub) editBody(number int, bodyFile string) error {
+	if err := g.a.mayAct(); err != nil {
+		return err
+	}
+	return g.github.editBody(number, bodyFile)
+}
+
+func (g guardedGitHub) closePull(number int) error {
+	if err := g.a.mayAct(); err != nil {
+		return err
+	}
+	return g.github.closePull(number)
+}
+
+func (g guardedGitHub) createComment(number int, bodyFile string) error {
+	if err := g.a.mayAct(); err != nil {
+		return err
+	}
+	return g.github.createComment(number, bodyFile)
+}
+
+func (g guardedGitHub) editComment(id int64, bodyFile string) error {
+	if err := g.a.mayAct(); err != nil {
+		return err
+	}
+	return g.github.editComment(id, bodyFile)
 }
 
 type ghCLI struct{ bot string }
@@ -257,6 +307,11 @@ func (ghCLI) createPull(base, head, title, bodyFile string) (int, string, error)
 
 func (ghCLI) editPull(number int, title, bodyFile string) error {
 	_, err := capture("gh", "pr", "edit", strconv.Itoa(number), "--title", title, "--body-file", bodyFile)
+	return err
+}
+
+func (ghCLI) editBody(number int, bodyFile string) error {
+	_, err := capture("gh", "pr", "edit", strconv.Itoa(number), "--body-file", bodyFile)
 	return err
 }
 

@@ -9,6 +9,10 @@ load test_helper
 # scope: they are re-vendored by `make update`, so a bad severity there is
 # fixed upstream or in patches/, not by editing the label.
 ALERT_SEVERITY_ALLOWED=" security critical major minor warning indeterminate informational normal ok cleared debug trace unknown "
+# The alerts that exist only to be dropped, the one place `none` is right.
+# InfoInhibitor is the source side of an Alertmanager inhibit rule, which the
+# platform config does not have, so delivering it at any severity is noise.
+ALERT_SEVERITY_BLACKHOLED=" InfoInhibitor "
 
 helm_actions_stripped() {
   awk '
@@ -104,6 +108,14 @@ alert_severity_contract() {
         break
       fi
     done
+    if [ "$severity" = "none" ]; then
+      for blackholed in $ALERT_SEVERITY_BLACKHOLED; do
+        if [ "$blackholed" = "$alert" ]; then
+          accepted=1
+          break
+        fi
+      done
+    fi
     if [ "$accepted" -eq 0 ]; then
       echo "$file: $alert -> '$severity'" >&2
       bad=$((bad + 1))
@@ -126,6 +138,83 @@ alert_severity_contract() {
 
 @test "every alert rule carries a severity the alert sink accepts" {
   alert_severity_contract
+}
+
+@test "InfoInhibitor is labelled for the blackhole route" {
+  rows=$(mktemp) || return 1
+  if ! alert_severity_rows > "$rows"; then
+    rm -f "$rows"
+    return 1
+  fi
+  tab=$(printf '\t')
+  found=$(grep -c "${tab}InfoInhibitor${tab}" "$rows" || true)
+  delivered=$(grep "${tab}InfoInhibitor${tab}" "$rows" | grep -vc "${tab}none\$" || true)
+  rm -f "$rows"
+  [ "$found" -gt 0 ]
+  [ "$delivered" -eq 0 ]
+}
+
+@test "severity none passes only on an alert that exists to be dropped" {
+  fixture=$(mktemp -d)
+  mkdir -p "$fixture/packages/system/example/alerts"
+  printf '%s\n' \
+    'apiVersion: operator.victoriametrics.com/v1beta1' \
+    'kind: VMRule' \
+    'spec:' \
+    '  groups:' \
+    '  - name: general' \
+    '    rules:' \
+    '    - alert: InfoInhibitor' \
+    '      labels:' \
+    '        severity: none' \
+    > "$fixture/packages/system/example/alerts/00-inhibitor.yaml"
+  git -C "$fixture" init -q
+  git -C "$fixture" add packages/system/example/alerts/00-inhibitor.yaml
+
+  inhibitor_succeeded=0
+  ALERT_SEVERITY_ROOT="$fixture" alert_severity_contract >/dev/null 2>&1 || inhibitor_succeeded=$?
+
+  printf '%s\n' \
+    'apiVersion: operator.victoriametrics.com/v1beta1' \
+    'kind: VMRule' \
+    'spec:' \
+    '  groups:' \
+    '  - name: silent' \
+    '    rules:' \
+    '    - alert: SilentAlert' \
+    '      labels:' \
+    '        severity: none' \
+    > "$fixture/packages/system/example/alerts/01-silent.yaml"
+  git -C "$fixture" add packages/system/example/alerts/01-silent.yaml
+
+  silent_succeeded=0
+  ALERT_SEVERITY_ROOT="$fixture" alert_severity_contract >/dev/null 2>&1 || silent_succeeded=$?
+  rm -rf "$fixture"
+  [ "$inhibitor_succeeded" -eq 0 ]
+  [ "$silent_succeeded" -ne 0 ]
+}
+
+@test "an alert that exists to be dropped still fails on a refused severity" {
+  fixture=$(mktemp -d)
+  mkdir -p "$fixture/packages/system/example/alerts"
+  printf '%s\n' \
+    'apiVersion: operator.victoriametrics.com/v1beta1' \
+    'kind: VMRule' \
+    'spec:' \
+    '  groups:' \
+    '  - name: general' \
+    '    rules:' \
+    '    - alert: InfoInhibitor' \
+    '      labels:' \
+    '        severity: info' \
+    > "$fixture/packages/system/example/alerts/00-inhibitor.yaml"
+  git -C "$fixture" init -q
+  git -C "$fixture" add packages/system/example/alerts/00-inhibitor.yaml
+
+  contract_succeeded=0
+  ALERT_SEVERITY_ROOT="$fixture" alert_severity_contract >/dev/null 2>&1 || contract_succeeded=$?
+  rm -rf "$fixture"
+  [ "$contract_succeeded" -ne 0 ]
 }
 
 @test "a parser failure cannot leave the contract green" {

@@ -513,7 +513,7 @@ func (r *BackupJobReconciler) createRabbitmqBackupArtifact(
 		// this run's success while describing something else.
 		if existing.Spec.ApplicationRef.Kind != backup.Spec.ApplicationRef.Kind ||
 			existing.Spec.ApplicationRef.Name != backup.Spec.ApplicationRef.Name {
-			return nil, fmt.Errorf("Backup %s/%s already exists for a different application (%s/%s, not %s/%s)",
+			return nil, fmt.Errorf("existing Backup %s/%s belongs to a different application (%s/%s, not %s/%s)",
 				backup.Namespace, backup.Name,
 				existing.Spec.ApplicationRef.Kind, existing.Spec.ApplicationRef.Name,
 				backup.Spec.ApplicationRef.Kind, backup.Spec.ApplicationRef.Name)

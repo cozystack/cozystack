@@ -176,6 +176,9 @@ type deferredEntry struct {
 	More      int      `json:"more,omitempty"`
 	Reason    string   `json:"reason,omitempty"`
 	Workflows bool     `json:"workflows,omitempty"`
+	// Needs, from version 3, are the originals still to come that it waits
+	// on, those of the kind that decides the wait.
+	Needs []int `json:"needs,omitempty"`
 }
 
 // How many conflicting files of one original the body names, in the list and
@@ -194,7 +197,7 @@ type deferredRecord struct {
 // had a version. encoding/json leaves bidi and zero-width characters as they
 // are, so file names go through clean first, as the reason does.
 func deferredBlock(l line, conflicts, held, waiting []pick) string {
-	data, _ := json.Marshal(deferredRecord{Line: l.branch(), Deferred: deferredEntries(conflicts, held, waiting)})
+	data, _ := json.Marshal(deferredRecord{Line: l.branch(), Deferred: deferredEntries(conflicts, held, waiting, nil)})
 	return deferredFence + "\n" + string(data) + "\n```"
 }
 
@@ -231,6 +234,7 @@ type report struct {
 	deferred []pick     // conflicts
 	held     []pick     // what --defer took out, with the reason
 	waiting  []pick     // what changes workflows, left to a maintainer
+	needs    []pick     // what waits on other originals still to come
 	skipped  map[int][]*verdict
 	other    int
 	// overrides are the originals a backport/ label kept out or let in, and
@@ -238,8 +242,10 @@ type report struct {
 	overrides []*verdict
 	stale     []*verdict
 	start     time.Time
-	// shapes says, for an original on the branch, what it brought.
-	shapes map[*verdict]string
+	// shapes says, for an original on the branch, what it brought, and
+	// partialFiles what a partial unit leaves without effect.
+	shapes       map[*verdict]unitShape
+	partialFiles map[*verdict][]string
 	// missing are originals the policy takes that the run neither tried nor
 	// found anywhere.
 	missing []*verdict
@@ -253,6 +259,14 @@ type report struct {
 	closing *closing
 	// dropped are the maintainers' drops the record keeps.
 	dropped []droppedEntry
+	// parked are what the batch leaves out because it cannot land whole,
+	// each with its park, and partial the originals on the branch whose unit
+	// does only part of what they do on main.
+	parked  []*verdict
+	partial []*verdict
+	// carried is the line's record this run found, whose announcements the
+	// parks that did not change keep.
+	carried *lineRecord
 }
 
 // ruleName is how output names what kept an original out: the policy's
@@ -299,16 +313,16 @@ func (r *report) ruleTitle(rule int) string {
 // in details written out.
 func (r *report) what(details map[int]bool) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "Backports to %s from `main`, picked by the rules of the [backport policy](%s) in merge order. A merged pull request comes as its own commits, picked with `git cherry-pick -x` so each keeps its author, message and sign-offs, and a merge commit that carries the original's merge message with a `%s:` trailer naming it; a squash-merged one comes as one pick. `backport-batch verify` checks that shape. A pick listed as changed differs from the commit it came from; `git range-diff <merge>^1..<merge>^2 <batch merge>^1..<batch merge>^2` shows how. A conflict or a failing check here is a [backport task](%sREADME.md).\n\n", codeSpan(r.line.branch()), policyURL, batchTrailer, tasksURL)
+	fmt.Fprintf(&b, "Backports to %s from `main`, picked by the rules of the [backport policy](%s) in merge order. A merged pull request comes as its own commits, picked with `git cherry-pick -x` so each keeps its author, message and sign-offs, and a merge commit that carries the original's merge message with a `%s:` trailer naming it; a squash-merged one comes as one pick. `backport-batch verify` checks that shape. A pick listed as changed differs from the commit it came from, and its release note waits under Check these notes. A conflict or a failing check here is a [backport task](%sREADME.md).\n\n", codeSpan(r.line.branch()), policyURL, batchTrailer, tasksURL)
 	if len(r.onBranch) == 0 {
 		b.WriteString("Nothing is picked yet.\n")
 	}
 	for _, v := range r.onBranch {
 		shape := ""
-		if s := r.shapes[v]; s != "" {
-			shape = ", " + s
+		if s, ok := r.shapes[v]; ok {
+			shape = ", " + s.String()
 		}
-		fmt.Fprintf(&b, "- %s %s%s\n", prLink(v.o.number), titleSpan(v.o.title), shape)
+		fmt.Fprintf(&b, "- %s %s%s\n%s", prLink(v.o.number), titleSpan(v.o.title), shape, diagItems(v))
 	}
 	if len(r.deferred) > 0 {
 		fmt.Fprintf(&b, "\n### Deferred conflicts\n\nThese do not pick cleanly onto this branch. Each names the first of its commits that conflicted and the files it conflicted in, and nothing of it is on the branch. Each moves to the next batch, unless a resolution checked with `backport-batch fold` is pushed here first, as [resolving a conflict](%sresolve-conflict.md) describes.\n\n", tasksURL)
@@ -324,13 +338,13 @@ func (r *report) what(details map[int]bool) string {
 			if p.failed != "" {
 				at = " at " + codeSpan(p.failed[:12])
 			}
-			fmt.Fprintf(&b, "- %s %s%s: %s\n", prLink(p.v.o.number), titleSpan(p.v.o.title), at, strings.Join(files, ", "))
+			fmt.Fprintf(&b, "- %s %s%s: %s\n%s", prLink(p.v.o.number), titleSpan(p.v.o.title), at, strings.Join(files, ", "), diagItems(p.v))
 		}
 	}
 	if len(r.held) > 0 {
 		b.WriteString("\n### Deferred to the next batch\n\nTaken out of this batch with `backport-batch run --defer`, each for the reason given. This pull request keeps them out; the next batch picks them again.\n\n")
 		for _, p := range r.held {
-			fmt.Fprintf(&b, "- %s %s: %s\n", prLink(p.v.o.number), titleSpan(p.v.o.title), titleSpan(p.reason))
+			fmt.Fprintf(&b, "- %s %s: %s\n%s", prLink(p.v.o.number), titleSpan(p.v.o.title), titleSpan(p.reason), diagItems(p.v))
 		}
 	}
 	if len(r.waiting) > 0 {
@@ -343,7 +357,41 @@ func (r *report) what(details map[int]bool) string {
 			if more := len(p.files) - len(files) + p.more; more > 0 {
 				files = append(files, fmt.Sprintf("%d more", more))
 			}
-			fmt.Fprintf(&b, "- %s %s: %s\n", prLink(p.v.o.number), titleSpan(p.v.o.title), strings.Join(files, ", "))
+			fmt.Fprintf(&b, "- %s %s: %s\n%s", prLink(p.v.o.number), titleSpan(p.v.o.title), strings.Join(files, ", "), diagItems(p.v))
+		}
+	}
+	if changed := r.changed(); len(changed) > 0 {
+		b.WriteString("\n### Check these notes\n\nThese picks differ from their originals, so their release notes are left out of the release-note block until someone checks that each still holds for this line. Each comes with what to compare: every pick that differs against the commit it came from, and the original's change against the unit's.\n")
+		for _, v := range changed {
+			s := r.shapes[v]
+			fmt.Fprintf(&b, "\n%s %s, carried by %s:\n\n", prLink(v.o.number), titleSpan(v.o.title), codeSpan(s.unit[:12]))
+			if n := releaseNote(v.o.body); n != "" {
+				fmt.Fprintf(&b, "```text\n%s\n```\n\n", neutralNote(n))
+			} else {
+				b.WriteString("It has no release note.\n\n")
+			}
+			for _, p := range s.pairs {
+				fmt.Fprintf(&b, "- %s\n", codeSpan(fmt.Sprintf("git range-diff --creation-factor=999 %s^! %s^!", p.source[:12], p.pick[:12])))
+			}
+			fmt.Fprintf(&b, "- %s\n- %s\n", codeSpan(fmt.Sprintf("git diff %s^1 %s", v.o.merge[:12], v.o.merge[:12])), codeSpan(fmt.Sprintf("git diff %s^1 %s", s.unit[:12], s.unit[:12])))
+		}
+	}
+	if len(r.partial) > 0 {
+		fmt.Fprintf(&b, "\n### Still on this branch: only part of it applies\n\nEach of these is on this branch but leaves files of its original as they were on %s, so it carries only part of what it does on `main`. Take each out with `backport-batch run --defer` before the cut; what applies of it goes as a pull request of its own.\n\n", codeSpan(r.line.branch()))
+		for _, v := range r.partial {
+			fmt.Fprintf(&b, "- %s %s: leaves %s without effect\n", prLink(v.o.number), titleSpan(v.o.title), fileSpans(r.partialFiles[v]))
+		}
+	}
+	if len(r.parked) > 0 {
+		fmt.Fprintf(&b, "\n### Parked\n\nThese cannot land on %s whole, so the batch does not pick them: each would leave part of it without effect there, or builds on a change that never reaches the line. A maintainer ports what applies as a pull request of its own, or drops the original with `backport-batch run --drop`; `backport/include` does not lift a park.\n\n", codeSpan(r.line.branch()))
+		for _, v := range r.parked {
+			fmt.Fprintf(&b, "- %s %s: %s\n%s", prLink(v.o.number), titleSpan(v.o.title), parkReason(*v.park), diagItems(v))
+		}
+	}
+	if len(r.needs) > 0 {
+		fmt.Fprintf(&b, "\n### Waiting on another original\n\nThese build on another original that has not reached %s yet, so the batch does not try them; each names the one it waits on, and the batch tries it again once that one is there.\n\n", codeSpan(r.line.branch()))
+		for _, p := range r.needs {
+			fmt.Fprintf(&b, "- %s %s: after %s\n%s", prLink(p.v.o.number), titleSpan(p.v.o.title), prLinks(p.needs), diagItems(p.v))
 		}
 	}
 	if len(r.overrides) > 0 {
@@ -384,6 +432,8 @@ func (r *report) what(details map[int]bool) string {
 // outcome is what became of an original a label overrode.
 func (r *report) outcome(v *verdict) string {
 	switch {
+	case slices.Contains(r.partial, v):
+		return "still on this branch, but only part of it applies; take it out with `backport-batch run --defer`"
 	case slices.Contains(r.stale, v) && v.rule == ruleDropped:
 		return "dropped, but still on this branch; take it out with `backport-batch run --defer`"
 	case slices.Contains(r.stale, v):
@@ -398,15 +448,83 @@ func (r *report) outcome(v *verdict) string {
 		return "deferred to the next batch"
 	case slices.ContainsFunc(r.waiting, func(p pick) bool { return p.v == v }):
 		return "waiting for a maintainer: it changes " + codeSpan(workflowsDir)
+	case slices.Contains(r.parked, v):
+		return "parked: " + parkReason(*v.park)
+	case slices.ContainsFunc(r.needs, func(p pick) bool { return p.v == v }):
+		i := slices.IndexFunc(r.needs, func(p pick) bool { return p.v == v })
+		return "waiting on " + prLinks(r.needs[i].needs)
 	case v.rule != 0:
 		return "skipped by " + ruleName(v.rule) + ", " + titleSpan(v.reason)
 	}
 	return "not picked"
 }
 
+// diagItems lists, under an original's line, what could not be judged about
+// it or what it was seen to build on, each as a code span.
+func diagItems(v *verdict) string {
+	var b strings.Builder
+	for _, d := range v.diag {
+		fmt.Fprintf(&b, "  - %s\n", titleSpan(d))
+	}
+	return b.String()
+}
+
+// fileSpans lists files as code spans, the first few of them.
+func fileSpans(files []string) string {
+	var out []string
+	for _, f := range files[:min(len(files), filesListed)] {
+		out = append(out, codeSpan(f))
+	}
+	if more := len(files) - len(out); more > 0 {
+		out = append(out, fmt.Sprintf("%d more", more))
+	}
+	return strings.Join(out, ", ")
+}
+
+// prLinks links to pull requests by number.
+func prLinks(numbers []int) string {
+	var out []string
+	for _, n := range numbers {
+		out = append(out, prLink(n))
+	}
+	return strings.Join(out, ", ")
+}
+
+// parkReason says why a park leaves its original out, for the body.
+func parkReason(p parkedEntry) string {
+	if p.Kind == parkPartial {
+		return "only part of it applies; it would leave " + fileSpans(p.Files) + " without effect"
+	}
+	var needs []string
+	for _, n := range p.Needs {
+		needs = append(needs, prLink(n))
+	}
+	for _, c := range p.Commits {
+		needs = append(needs, codeSpan(c[:12]))
+	}
+	return "builds on " + strings.Join(needs, ", ") + ", which never reaches this line"
+}
+
+// changed lists the originals on the branch whose unit differs from them, in
+// merge order.
+func (r *report) changed() []*verdict {
+	var out []*verdict
+	for _, v := range r.onBranch {
+		if s, ok := r.shapes[v]; ok && s.changed() {
+			out = append(out, v)
+		}
+	}
+	return out
+}
+
+// notes are the release notes of what the branch carries as its originals
+// made it; a changed pick's note waits under Check these notes.
 func (r *report) notes() string {
 	var notes []string
 	for _, v := range r.onBranch {
+		if s, ok := r.shapes[v]; ok && s.changed() {
+			continue
+		}
 		if n := releaseNote(v.o.body); n != "" {
 			notes = append(notes, neutralNote(n))
 		}

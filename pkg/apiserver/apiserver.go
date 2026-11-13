@@ -78,7 +78,7 @@ func init() {
 
 	// Register HelmRelease types.
 	if err := helmv2.AddToScheme(mgrScheme); err != nil {
-		panic(fmt.Errorf("Failed to add HelmRelease types to scheme: %w", err))
+		panic(fmt.Errorf("failed to add HelmRelease types to scheme: %w", err))
 	}
 
 	// Register the in-tree CiliumNetworkPolicy mirror backing SecurityGroup.
@@ -87,10 +87,10 @@ func init() {
 	}
 
 	if err := corev1.AddToScheme(mgrScheme); err != nil {
-		panic(fmt.Errorf("Failed to add core types to scheme: %w", err))
+		panic(fmt.Errorf("failed to add core types to scheme: %w", err))
 	}
 	if err := rbacv1.AddToScheme(mgrScheme); err != nil {
-		panic(fmt.Errorf("Failed to add RBAC types to scheme: %w", err))
+		panic(fmt.Errorf("failed to add RBAC types to scheme: %w", err))
 	}
 
 	// Register Cozystack types for WorkloadMonitor queries.

@@ -2,6 +2,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: {{ include "piraeus-operator.fullname" . }}-webhook-service
+  namespace: {{ .Release.Namespace }}
   labels:
     {{- include "piraeus-operator.labels" . | nindent 4 }}
 spec:

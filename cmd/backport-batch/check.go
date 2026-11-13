@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"slices"
 	"strconv"
+	"strings"
 )
 
 // check says whether every original the policy takes is on the line, on the
@@ -50,7 +51,13 @@ func (a *app) check(args []string) int {
 	if err := a.warnLeftBranch(b); err != nil {
 		return a.fail(err)
 	}
-	disp, err := b.dispositions(*cut)
+	// The scheduled run's mode, as the open batch saved it; with none open,
+	// the scheduled run's, which is what the next batch is built in.
+	mode := analysisMode{noWorkflowFiles: true}
+	if b.src.open {
+		mode.noWorkflowFiles = b.src.savedNoWorkflowFiles()
+	}
+	disp, err := b.dispositions(mode, *cut)
 	if err != nil {
 		return a.fail(err)
 	}
@@ -66,14 +73,14 @@ func (a *app) check(args []string) int {
 		case d.kind == outcomeWarning:
 			a.warn("%s", d.text)
 		case d.kind == outcomeNote:
-			fmt.Fprintf(a.stderr, "note: %s\n", d.text)
+			_, _ = fmt.Fprintf(a.stderr, "note: %s\n", d.text)
 		}
 	}
 	if len(missing)+len(failing) == 0 {
 		if *cut {
-			fmt.Fprintf(a.stdout, "%s: no change the policy takes is missing before the cut\n", l.branch())
+			_, _ = fmt.Fprintf(a.stdout, "%s: no change the policy takes is missing before the cut\n", l.branch())
 		} else {
-			fmt.Fprintf(a.stdout, "%s: every change the policy takes is on the line or on the batch\n", l.branch())
+			_, _ = fmt.Fprintf(a.stdout, "%s: every change the policy takes is on the line or on the batch\n", l.branch())
 		}
 		return 0
 	}
@@ -82,13 +89,13 @@ func (a *app) check(args []string) int {
 		where = "nor on batch pull request #" + strconv.Itoa(b.pr.Number)
 	}
 	if len(missing) > 0 {
-		fmt.Fprintf(a.stdout, "%s: %d changes the policy takes are not on the line, %s:\n", l.branch(), len(missing), where)
+		_, _ = fmt.Fprintf(a.stdout, "%s: %d changes the policy takes are not on the line, %s:\n", l.branch(), len(missing), where)
 		for _, text := range missing {
-			fmt.Fprintf(a.stdout, "  %s\n", text)
+			_, _ = fmt.Fprintf(a.stdout, "  %s\n", text)
 		}
 	}
 	for _, text := range failing {
-		fmt.Fprintf(a.stdout, "%s: %s\n", l.branch(), text)
+		_, _ = fmt.Fprintf(a.stdout, "%s: %s\n", l.branch(), text)
 	}
 	return 1
 }
@@ -137,8 +144,11 @@ type disposition struct {
 
 // dispositions says what check reports about each original that needs a line
 // of its own; the others pass in silence. The text is what follows the line's
-// name, or the original alone for one that is missing.
-func (b *batch) dispositions(cut bool) (map[*verdict]disposition, error) {
+// name, or the original alone for one that is missing. Originals are taken in
+// merge order, each by the first of: a unit on the batch that does only part
+// of it, a reason a person deferred it for, a park, a wait for a maintainer
+// or on other originals, and what the record says of it.
+func (b *batch) dispositions(mode analysisMode, cut bool) (map[*verdict]disposition, error) {
 	if c := b.src.closingOpen(); c != nil {
 		return nil, fmt.Errorf("batch pull request #%d is being closed; backport-batch run --line %s --push finishes it", c.PR, b.line.branch())
 	}
@@ -158,11 +168,45 @@ func (b *batch) dispositions(cut bool) (map[*verdict]disposition, error) {
 			on += " (" + prState(c) + ")"
 		}
 	}
+	if err := b.analyze(); err != nil {
+		return nil, err
+	}
+	if b.pr != nil {
+		if err := b.keepRecordedPartials(b.prHead); err != nil {
+			return nil, err
+		}
+	}
+	held := map[int]string{}
+	for n, e := range deferred {
+		if e.Reason != "" {
+			held[n] = e.Reason
+		}
+	}
+	states, err := b.classify(mode, held, deferred, b.src.open)
+	if err != nil {
+		return nil, err
+	}
+	// waitsOn names what an original waits on, as check says it.
+	waitsOn := func(s *state) string {
+		var names []string
+		for _, f := range s.needs {
+			names = append(names, fmt.Sprintf("#%d", f.o.number))
+		}
+		return strings.Join(names, " and ")
+	}
 	out := map[*verdict]disposition{}
 	for _, v := range b.verdicts {
 		named := v.o.url() + " " + terminalSafe(v.o.title)
 		e, isDeferred := deferred[v.o.number]
+		s := states[v]
+		if s == nil {
+			s = &state{kind: stOwn}
+		}
 		switch {
+		case b.partialUnits[v] != nil && cut:
+			out[v] = disposition{outcomeUnmerged, fmt.Sprintf("#%d is on batch #%d, but only part of it applies to %s: it leaves %s without effect; take it out with backport-batch run --defer before the cut: %s", v.o.number, b.pr.Number, b.line.branch(), quotedFiles(b.partialUnits[v]), named)}
+		case b.partialUnits[v] != nil:
+			out[v] = disposition{outcomeWarning, fmt.Sprintf("#%d is on batch #%d, but only part of it applies to %s: it leaves %s without effect; take it out with backport-batch run --defer: %s", v.o.number, b.pr.Number, b.line.branch(), quotedFiles(b.partialUnits[v]), named)}
 		case slices.Contains(stale, v):
 			out[v] = disposition{outcomeWarning, fmt.Sprintf("#%d is still on batch #%d; take it out with backport-batch run --defer: %s", v.o.number, b.pr.Number, named)}
 		case v.rule == ruleDropped:
@@ -173,21 +217,71 @@ func (b *batch) dispositions(cut bool) (map[*verdict]disposition, error) {
 			if cut {
 				out[v] = disposition{outcomeUnmerged, fmt.Sprintf("#%d is only on open batch PR #%d, merge it before the cut: %s", v.o.number, b.pr.Number, named)}
 			}
+		case s.kind == stHeld:
+			out[v] = disposition{outcomeWarning, fmt.Sprintf("deferred on %s to the next batch: %s (%s)", on, named, terminalSafe(e.Reason))}
+		case s.kind == stPartial:
+			out[v] = disposition{outcomeNote, fmt.Sprintf("#%d is parked: only part of it applies to %s, which would leave %s without effect; port what applies as a pull request of its own: %s", v.o.number, b.line.branch(), quotedFiles(v.park.Files), named)}
+		case s.kind == stWorkflowPrimary && s.class == edgeMissing:
+			out[v] = disposition{outcomeMissing, named}
+		case s.kind == stParked:
+			out[v] = disposition{outcomeNote, fmt.Sprintf("#%d is parked: it builds on %s, which never reaches %s; port what applies as a pull request of its own, or drop it: %s", v.o.number, parkNames(*v.park), b.line.branch(), named)}
+		case s.kind == stNeeds && s.wait == edgeMissing:
+			out[v] = disposition{outcomeMissing, fmt.Sprintf("%s (it waits on %s, which is not on the line either)", named, waitsOn(s))}
+		case s.kind == stNeeds && s.wait == edgeWorkflow && cut:
+			out[v] = disposition{outcomeWaiting, fmt.Sprintf("#%d waits on %s, which changes %s and waits on batch PR %s for a maintainer; bring it over, or defer both, before the cut: %s", v.o.number, waitsOn(s), workflowsDir, on, named)}
+		case s.kind == stNeeds && s.wait == edgeWorkflow:
+			out[v] = disposition{outcomeWarning, fmt.Sprintf("#%d waits on %s, which waits on %s for a maintainer: %s", v.o.number, waitsOn(s), on, named)}
+		case s.kind == stNeeds && s.wait == edgeDeferred:
+			what := "a deferred conflict on " + on
+			if f := s.needs[0]; deferred[f.o.number].Reason != "" {
+				what = "deferred on " + on + " to the next batch"
+			} else if states[f] != nil && states[f].kind == stNeeds {
+				what = "which waits itself"
+			}
+			out[v] = disposition{outcomeWarning, fmt.Sprintf("#%d waits on %s, %s: %s", v.o.number, waitsOn(s), what, named)}
+		case s.kind == stNeeds:
+			newer := "the newer line"
+			if b.newer != nil {
+				newer = b.newer.branch()
+			}
+			out[v] = disposition{outcomeNote, fmt.Sprintf("#%d waits on %s, which is not on %s yet: %s", v.o.number, waitsOn(s), newer, named)}
 		case isDeferred && e.Workflows && !b.src.open:
 			out[v] = disposition{outcomeMissing, named}
 		case isDeferred && e.Workflows && cut:
 			out[v] = disposition{outcomeWaiting, fmt.Sprintf("#%d changes %s and waits on batch PR %s for a maintainer, bring it over or defer it before the cut: %s", v.o.number, workflowsDir, on, named)}
 		case isDeferred && e.Workflows:
 			out[v] = disposition{outcomeWarning, fmt.Sprintf("waiting on %s for a maintainer, since it changes %s: %s", on, workflowsDir, named)}
-		case isDeferred && e.Reason != "":
-			out[v] = disposition{outcomeWarning, fmt.Sprintf("deferred on %s to the next batch: %s (%s)", on, named, terminalSafe(e.Reason))}
-		case isDeferred:
+		case isDeferred && len(e.Needs) == 0:
 			out[v] = disposition{outcomeWarning, fmt.Sprintf("deferred conflict on %s: %s", on, named)}
 		default:
 			out[v] = disposition{outcomeMissing, named}
 		}
 	}
 	return out, nil
+}
+
+// parkNames names what a park waits on for a terminal.
+func parkNames(p parkedEntry) string {
+	var out []string
+	for _, n := range p.Needs {
+		out = append(out, fmt.Sprintf("#%d", n))
+	}
+	for _, c := range p.Commits {
+		out = append(out, c[:12])
+	}
+	return strings.Join(out, ", ")
+}
+
+// quotedFiles names files for a terminal, each quoted, the first few of them.
+func quotedFiles(files []string) string {
+	var out []string
+	for _, f := range files[:min(len(files), filesListed)] {
+		out = append(out, strconv.Quote(f))
+	}
+	if more := len(files) - len(out); more > 0 {
+		out = append(out, fmt.Sprintf("%d more", more))
+	}
+	return strings.Join(out, ", ")
 }
 
 // terminalSafe keeps a title from carrying escape sequences into a terminal.
@@ -232,10 +326,10 @@ func (a *app) fold(args []string) int {
 		return a.fail(err)
 	}
 	if why != "" {
-		fmt.Fprintf(a.stdout, "refused: %s\n", why)
+		_, _ = fmt.Fprintf(a.stdout, "refused: %s\n", why)
 		return 1
 	}
-	fmt.Fprintln(a.stdout, "ok")
+	_, _ = fmt.Fprintln(a.stdout, "ok")
 	return 0
 }
 
@@ -289,5 +383,9 @@ func refuseFold(b *batch, n int, commit string) (string, error) {
 	case carried != v:
 		return fmt.Sprintf("%.12s carries #%d, not #%d", commit, carried.o.number, n), nil
 	}
-	return "", nil
+	omitted, _, err := b.omittedEffects(v, u.parents[0], u.commit)
+	if err != nil || len(omitted) == 0 {
+		return "", err
+	}
+	return leftOut(v, b.line, omitted), nil
 }
