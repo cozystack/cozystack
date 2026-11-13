@@ -76,8 +76,15 @@ while [ "$#" -gt 0 ]; do
     --tag) tags="$tags $2"; shift 2 ;;
     *)
       d="${1##*@}"
-      arch="$(jq -r .arch "$MOCK_REG/blobs/${d#sha256:}")"
-      entries="$entries${entries:+,}{\"digest\":\"$d\",\"platform\":{\"os\":\"linux\",\"architecture\":\"$arch\"}}"
+      f="$MOCK_REG/blobs/${d#sha256:}"
+      # A source index contributes its entries, attestation manifests included,
+      # as buildx does; a plain image contributes itself.
+      if jq -e '.manifests' "$f" >/dev/null 2>&1; then
+        entries="$entries${entries:+,}$(jq -r '[.manifests[] | tojson] | join(",")' "$f")"
+      else
+        arch="$(jq -r .arch "$f")"
+        entries="$entries${entries:+,}{\"digest\":\"$d\",\"platform\":{\"os\":\"linux\",\"architecture\":\"$arch\"}}"
+      fi
       shift ;;
   esac
 done
@@ -103,6 +110,44 @@ _push() {
 
 _tag() {
   awk -v r="$1" -v t="$2" '$1 == r && $2 == t { d = $3 } END { printf "%s", d }' "$MOCK_REG/tags"
+}
+
+# _push_sbom <repo> <tag> <arch>... stores the index an image built with SBOM=1
+# pushes, one linux image per arch beside an attestation manifest, tags it, and
+# prints its digest.
+_push_sbom() {
+  _ps_repo="$1"
+  _ps_tag="$2"
+  shift 2
+  _ps_entries=""
+  for _ps_arch in "$@"; do
+    _ps_img="{\"mediaType\":\"application/vnd.oci.image.manifest.v1+json\",\"config\":{\"mediaType\":\"application/vnd.oci.image.config.v1+json\"},\"arch\":\"$_ps_arch\",\"name\":\"$_ps_repo:$_ps_tag\"}"
+    _ps_hex="$(printf '%s' "$_ps_img" | sha256sum | cut -d' ' -f1)"
+    printf '%s' "$_ps_img" >"$MOCK_REG/blobs/$_ps_hex"
+    _ps_entries="$_ps_entries${_ps_entries:+,}{\"digest\":\"sha256:$_ps_hex\",\"platform\":{\"os\":\"linux\",\"architecture\":\"$_ps_arch\"}}"
+  done
+  _ps_att="{\"mediaType\":\"application/vnd.oci.image.manifest.v1+json\",\"attestation\":true,\"name\":\"$_ps_repo:$_ps_tag\"}"
+  _ps_hex="$(printf '%s' "$_ps_att" | sha256sum | cut -d' ' -f1)"
+  printf '%s' "$_ps_att" >"$MOCK_REG/blobs/$_ps_hex"
+  _ps_entries="$_ps_entries,{\"digest\":\"sha256:$_ps_hex\",\"platform\":{\"os\":\"unknown\",\"architecture\":\"unknown\"},\"annotations\":{\"vnd.docker.reference.type\":\"attestation-manifest\"}}"
+  _ps_body="{\"mediaType\":\"application/vnd.oci.image.index.v1+json\",\"manifests\":[$_ps_entries]}"
+  _ps_hex="$(printf '%s' "$_ps_body" | sha256sum | cut -d' ' -f1)"
+  printf '%s' "$_ps_body" >"$MOCK_REG/blobs/$_ps_hex"
+  printf '%s %s sha256:%s\n' "$_ps_repo" "$_ps_tag" "$_ps_hex" >>"$MOCK_REG/tags"
+  printf 'sha256:%s' "$_ps_hex"
+}
+
+# A tree stamped by an amd64 build with SBOM=1: api pinned on the index of its
+# amd64 image and attestation manifest, with the arm64 leg's twin. Sets A_api
+# and B_api.
+_make_sbom_world() {
+  mkdir -p "$1/tree/system/api"
+  A_api=$(_push_sbom "$REG/api" main amd64)
+  B_api=$(_push_sbom "$REG/api" main-arm64 arm64)
+  PUSHED_TAGS_LOG="$1/pushed-tags"
+  export PUSHED_TAGS_LOG
+  printf '%s/api:main\n' "$REG" >"$PUSHED_TAGS_LOG"
+  printf 'image: %s/api:main@%s\n' "$REG" "$A_api" >"$1/tree/system/api/values.yaml"
 }
 
 # A tree stamped by an amd64 build with IMAGE_TAG=main, one image per storage
@@ -383,24 +428,98 @@ _make_world() {
   [ "$(yq -r '.jobs.prepare-release.steps[] | select(.name == "Set up flux") | .with.version' "$wf")" = "$want" ]
 }
 
-@test "the amd64 release job rebuilds matchbox as a two-arch index before it captures the tree" {
-  # matchbox has no arm64 twin to stitch, so this rebuild is the only thing
-  # that makes the ref the gate checks an index. It needs a builder that can
-  # push an index while make build stays on the default docker driver.
+@test "the amd64 release job builds every image on a docker-container builder, with an SBOM, before it captures the tree" {
+  # An SBOM attestation needs the docker-container driver, and so does the
+  # matchbox rebuild as a two-arch index: matchbox has no arm64 twin to stitch,
+  # so that rebuild is the only thing that makes the ref the gate checks an
+  # index.
   wf=.github/workflows/tags.yaml
   steps=$(yq -r '.jobs.build-amd64.steps[].name' "$wf")
   pos() { echo "$steps" | grep -nxF "$1" | cut -d: -f1; }
-  bx=$(pos 'Set up Buildx for matchbox (docker-container driver)')
+  bx=$(pos 'Set up Buildx (docker-container driver, docker.io mirror)')
   build=$(pos 'Build')
   capture=$(pos 'Capture the stamped tree')
   [ -n "$bx" ] && [ -n "$build" ] && [ -n "$capture" ]
   [ "$bx" -lt "$build" ] && [ "$build" -lt "$capture" ]
-  sel='.jobs.build-amd64.steps[] | select(.id == "matchbox_buildx")'
+  sel='.jobs.build-amd64.steps[] | select(.id == "buildx")'
   [ "$(yq -r "$sel | .with.driver" "$wf")" = docker-container ]
+  [ "$(yq -r "$sel | .with.\"buildkitd-config\"" "$wf")" = hack/buildkitd.toml ]
   [ "$(yq -r "$sel | .with.use" "$wf")" = false ]
-  run_=$(yq -r '.jobs.build-amd64.steps[] | select(.name == "Build") | .run' "$wf")
-  echo "$run_" | grep -qxE '[[:space:]]*make -C packages/core/talos image-matchbox PLATFORM=linux/amd64,linux/arm64 BUILDER="\$MATCHBOX_BUILDER"'
-  [ "$(yq -r '.jobs.build-amd64.steps[] | select(.name == "Build") | .env.MATCHBOX_BUILDER' "$wf")" = '${{ steps.matchbox_buildx.outputs.name }}' ]
+  build_sel='.jobs.build-amd64.steps[] | select(.name == "Build")'
+  [ "$(yq -r "$build_sel | .env.BUILDER" "$wf")" = '${{ steps.buildx.outputs.name }}' ]
+  [ "$(yq -r "$build_sel | .env.SBOM" "$wf")" = 1 ]
+  run_=$(yq -r "$build_sel | .run" "$wf")
+  echo "$run_" | grep -qxE '[[:space:]]*make -C packages/core/talos image-matchbox PLATFORM=linux/amd64,linux/arm64'
+}
+
+@test "the arm64 release leg attaches an SBOM on its docker-container builder" {
+  wf=.github/workflows/tags.yaml
+  sel='.jobs.build-arm64.steps[] | select(.name == "Build arm64 images")'
+  [ "$(yq -r "$sel | .env.SBOM" "$wf")" = 1 ]
+  [ "$(yq -r "$sel | .env.BUILDER" "$wf")" = '${{ steps.buildx.outputs.name }}' ]
+  [ "$(yq -r '.jobs.build-arm64.steps[] | select(.id == "buildx") | .with.driver' "$wf")" = docker-container ]
+}
+
+@test "images built with an SBOM are stitched into one index that keeps both attestations" {
+  tmp=$(mktemp -d)
+  _stub_registry "$tmp/reg"
+  _make_sbom_world "$tmp"
+  t="$tmp/tree"
+
+  PATH="$MOCK_REG/bin:$PATH" hack/stitch-multiarch.sh "$t" "$REG" main >"$tmp/out" 2>"$tmp/err"
+
+  i="$(_tag "$REG/api" main)"
+  [ "$i" != "$A_api" ]
+  # Two linux images, the ones the two builds pushed, and both attestations.
+  a_child=$(jq -r '.manifests[] | select(.platform.os == "linux") | .digest' "$MOCK_REG/blobs/${A_api#sha256:}")
+  b_child=$(jq -r '.manifests[] | select(.platform.os == "linux") | .digest' "$MOCK_REG/blobs/${B_api#sha256:}")
+  jq -e --arg a "$a_child" --arg b "$b_child" '
+    ([.manifests[] | select(.platform.os == "linux") | .platform.architecture] | sort) == ["amd64", "arm64"]
+    and ([.manifests[] | select(.platform.os == "unknown")] | length) == 2
+    and any(.manifests[]; .digest == $a) and any(.manifests[]; .digest == $b)' \
+    "$MOCK_REG/blobs/${i#sha256:}" >/dev/null
+  grep -q "api:main@$i\$" "$t/system/api/values.yaml"
+  if grep -rq "$A_api" "$t"; then echo "FAIL: api still pinned on its amd64 index"; false; fi
+  grep -q '^stitch: 1 stitched (api); 0 skipped ()$' "$tmp/out"
+  rm -rf "$tmp"
+}
+
+@test "a rerun after a stitch of SBOM images repins on the existing index" {
+  # The stitched index lists the linux images of the two builds, not the amd64
+  # index the tree pins, so the rerun has to look through the pinned one.
+  tmp=$(mktemp -d)
+  _stub_registry "$tmp/reg"
+  _make_sbom_world "$tmp"
+  cp -R "$tmp/tree" "$tmp/stamped"
+  PATH="$MOCK_REG/bin:$PATH" hack/stitch-multiarch.sh "$tmp/tree" "$REG" main >/dev/null 2>&1
+  i="$(_tag "$REG/api" main)"
+
+  rm -rf "$tmp/tree"
+  cp -R "$tmp/stamped" "$tmp/tree"
+  PATH="$MOCK_REG/bin:$PATH" hack/stitch-multiarch.sh "$tmp/tree" "$REG" main >"$tmp/out" 2>"$tmp/err"
+
+  [ "$(_tag "$REG/api" main)" = "$i" ]
+  grep -q "api:main@$i\$" "$tmp/tree/system/api/values.yaml"
+  [ "$(grep -c 'imagetools create' "$MOCK_REG/log")" -eq 1 ]
+  grep -q '^stitch: 1 stitched (api); 0 skipped ()$' "$tmp/out"
+  rm -rf "$tmp"
+}
+
+@test "an index of two linux images is skipped, not stitched" {
+  # A multi-arch build in one go has no twin to join.
+  tmp=$(mktemp -d)
+  _stub_registry "$tmp/reg"
+  _make_sbom_world "$tmp"
+  both=$(_push_sbom "$REG/api" main amd64 arm64)
+  printf 'image: %s/api:main@%s\n' "$REG" "$both" >"$tmp/tree/system/api/values.yaml"
+
+  PATH="$MOCK_REG/bin:$PATH" hack/stitch-multiarch.sh "$tmp/tree" "$REG" main >"$tmp/out" 2>"$tmp/err"
+
+  [ "$(_tag "$REG/api" main)" = "$both" ]
+  grep -q "$both" "$tmp/tree/system/api/values.yaml"
+  grep -q 'skipping api: main and main-arm64 are not one amd64 and one arm64 image' "$tmp/err"
+  if grep -q 'imagetools create' "$MOCK_REG/log"; then echo "FAIL: a skipped ref was pushed"; false; fi
+  rm -rf "$tmp"
 }
 
 @test "an arm64 tag that holds no arm64 image is skipped, not stitched" {

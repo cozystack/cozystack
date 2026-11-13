@@ -6,16 +6,17 @@ kube-state-metrics:
   # 322 pods and roughly 25.6k series, which is the smallest cluster we run. The
   # request sits above the 176Mi mean rather than at the peak, and the limit
   # carries wide headroom on purpose: this component's memory scales with the
-  # number of objects in the cluster, and --metric-labels-allowlist below widens
-  # every pod and deployment series further, so a cluster larger than the one
-  # measured will land well above the peak seen here.
+  # number of objects in the cluster, and --metric-labels-allowlist below copies
+  # every label of each pod, deployment and PVC onto its kube_*_labels series,
+  # so a cluster larger than the one measured will land well above the peak
+  # seen here.
   # 2Gi is 6.7x that peak, so scaling linearly with object count it stays a
   # ceiling rather than a bound up to roughly 2100 pods and 170k series.
   #
   # A memory limit is what sets memory.max on the pod cgroup, and the Talos
   # userspace OOM handler only ever selects cgroups that lack one, so running
   # this without a limit leaves it an eviction candidate on every node. See
-  # docs/operations/system-memory-limits.md.
+  # https://cozystack.io/docs/v1/operations/configuration/system-memory-limits/.
   #
   # No CPU limit: it is irrelevant to that OOM ranking, and a ceiling that binds
   # only buys CFS throttling, which for a metrics scraper turns into scrape
@@ -27,7 +28,12 @@ kube-state-metrics:
     limits:
       memory: 2Gi
   extraArgs:
-    - --metric-labels-allowlist=pods=[*],deployments=[*]
+    # PVCs are listed so the tenant metrics API can find an application's PVCs
+    # in kube_persistentvolumeclaim_labels by their apps.cozystack.io/application.*
+    # lineage labels. kube-state-metrics emits that metric only for resources on
+    # this list, one series per PVC; naming only the lineage keys would emit the
+    # same number of series.
+    - --metric-labels-allowlist=pods=[*],deployments=[*],persistentvolumeclaims=[*]
   rbac:
     extraRules:
       - apiGroups:
@@ -405,7 +411,7 @@ fluent-bit:
           Host vlinsert-generic.{{ .Values.global.target }}.svc
           port 9481
           compress gzip
-          uri /insert/jsonline?_stream_fields=log_source,stream,kubernetes_pod_name,kubernetes_container_name,kubernetes_namespace_name&_msg_field=log&_time_field=date
+          uri /insert/jsonline?_stream_fields=log_source,stream,kubernetes_pod_name,kubernetes_container_name,kubernetes_namespace_name,apps_cozystack_io_application_group,apps_cozystack_io_application_kind,apps_cozystack_io_application_name&_msg_field=log&_time_field=date
           format json_lines
           json_date_format iso8601
           header AccountID 0
@@ -439,7 +445,7 @@ fluent-bit:
           Host vlinsert-generic.{{ $target }}.svc
           port 9481
           compress gzip
-          uri /insert/jsonline?_stream_fields=log_source,stream,kubernetes_pod_name,kubernetes_container_name,kubernetes_namespace_name&_msg_field=log&_time_field=date
+          uri /insert/jsonline?_stream_fields=log_source,stream,kubernetes_pod_name,kubernetes_container_name,kubernetes_namespace_name,apps_cozystack_io_application_group,apps_cozystack_io_application_kind,apps_cozystack_io_application_name&_msg_field=log&_time_field=date
           format json_lines
           json_date_format iso8601
           header AccountID 0
@@ -450,6 +456,7 @@ fluent-bit:
           Name kubernetes
           Match kube.*
           Merge_Log On
+          Merge_Log_Key log_processed
           Keep_Log On
           K8S-Logging.Parser On
           K8S-Logging.Exclude On
@@ -460,6 +467,19 @@ fluent-bit:
           Operation lift
           Nested_under kubernetes
           Add_prefix   kubernetes_
+      {{- /*
+        The pod's lineage labels name the application it belongs to. lift
+        cannot pick keys, so every label comes up; all but these three keep
+        the kubernetes_ prefix and fall to Remove_wildcard below. An absent
+        label stays absent, and VictoriaLogs builds _stream from the stream
+        fields that are present, so an unlabelled pod keeps its stream.
+      */}}
+      [FILTER]
+          Name nest
+          Match kube.*
+          Operation lift
+          Nested_under kubernetes_labels
+          Add_prefix kubernetes_labels_
       [FILTER]
           Name modify
           Match kube.*
@@ -500,6 +520,9 @@ fluent-bit:
           Rename kubernetes_pod_name keep_kubernetes_pod_name
           Rename kubernetes_namespace_name keep_kubernetes_namespace_name
           Rename kubernetes_container_name keep_kubernetes_container_name
+          Rename kubernetes_labels_apps.cozystack.io/application.group apps_cozystack_io_application_group
+          Rename kubernetes_labels_apps.cozystack.io/application.kind apps_cozystack_io_application_kind
+          Rename kubernetes_labels_apps.cozystack.io/application.name apps_cozystack_io_application_name
       [FILTER]
           Name modify
           Match kube.*
@@ -552,3 +575,15 @@ prometheus-node-exporter:
       memory: 32Mi
     limits:
       memory: 256Mi
+
+# Image for the pre-delete hook that releases the VictoriaMetrics objects (see
+# templates/vm-cleanup-hook.yaml). Only needs a kubectl binary. Digest-pinned so
+# an upstream retag does not change what runs across the fleet; refresh with
+# `docker manifest inspect docker.io/clastix/kubectl:v1.32`. Same pin as the
+# etcd-operator hook.
+# renovate: datasource=docker depName=docker.io/clastix/kubectl
+kubectlImage:
+  repository: docker.io/clastix/kubectl
+  tag: v1.32
+  digest: sha256:b9ef7d8dbe65bcc81a46c09b8dc7543103055021c4f43287bf59e92a8f4fe05c
+  pullPolicy: IfNotPresent

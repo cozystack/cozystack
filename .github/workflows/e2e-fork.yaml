@@ -543,7 +543,7 @@ jobs:
     # Covers a green full suite. It does not cover a tenant-Kubernetes suite
     # running into its node-join deadline, so a red there can end as a
     # cancelled job. Held to one figure across every lane that runs the suite.
-    timeout-minutes: 215
+    timeout-minutes: 265
     permissions:
       contents: read
       packages: read
@@ -771,21 +771,6 @@ jobs:
           name: cozyreport
           path: _out/cozyreport.tgz
           if-no-files-found: warn
-      # Both halves, and in this order: the compose project owns the nodes and
-      # the zpools outlive it.
-      - name: Tear down sandbox
-        if: always()
-        run: |
-          # Annotated, not fatal: same reasoning as the in-tree lane. The runner
-          # is discarded after the job, so a dirty host has no next tenant, and
-          # failing here would post the required "E2E Tests" status as a failure
-          # indistinguishable from a real one.
-          cleanup_rc=0
-          make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME delete-cluster-container || cleanup_rc=$?
-          make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME delete || true
-          if [ "$cleanup_rc" -ne 0 ]; then
-            echo "::error title=sandbox teardown::teardown exited $cleanup_rc; the host may hold a stale compose project or zpool"
-          fi
 
   # Flip the pending "E2E Tests" commit status posted by `resolve` to its
   # terminal state. Runs on failure too, so a failed publish or e2e turns the

@@ -313,7 +313,7 @@
       }
     },
     "databases": {
-      "description": "Databases configuration map.",
+      "description": "Databases configuration map. The PostgreSQL system databases `postgres`, `template0` and `template1` are refused.",
       "type": "object",
       "default": {},
       "additionalProperties": {

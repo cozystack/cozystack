@@ -26,6 +26,8 @@
 #   1. open-pr survives a failed changelog job (the non-blocking guarantee).
 #   2. The AI step is the ONLY thing allowed to fail silently.
 #   3. finalize reads the changelog file as the release body.
+#   3b. finalize and update-releasenotes share the 100000-byte body limit, and
+#      the sync fires on the release notes too.
 #   4. finalize refuses whitespace-only content rather than blanking the notes.
 #   5. The generator is pointed at a checkout state docs/agents/changelog.md
 #      actually permits.
@@ -85,6 +87,7 @@ GENERATE="$REPO_ROOT/.github/workflows/changelog-generate.yaml"
 RC_WRAPPER="$REPO_ROOT/.github/workflows/changelog-rc.yaml"
 FINALIZE="$REPO_ROOT/.github/workflows/pull-requests-release.yaml"
 TAGS="$REPO_ROOT/.github/workflows/tags.yaml"
+SYNC="$REPO_ROOT/.github/workflows/update-releasenotes.yaml"
 CHANGELOG_DOC="$REPO_ROOT/docs/agents/changelog.md"
 
 # Body of a single top-level job block in a workflow file, from `  <name>:` up to
@@ -205,6 +208,31 @@ code_lines() { grep -vE '^[[:space:]]*#'; }
     echo "finalize's updateRelease call no longer conditionally spreads { body }." >&2
     exit 1
   }
+}
+
+# 3b. finalize publishes a link in place of a body over the limit, because the
+#     tags exist by then; the sync leaves such a body alone. Both read the same
+#     constant, and what each does with it is executed in
+#     hack/release-changelog-behaviour.bats. The sync must also fire when only
+#     the release notes change, or editing them on main reaches no release.
+@test "finalize and update-releasenotes share the 100000-byte body limit, and the sync fires on the release notes" {
+  for f in "$FINALIZE" "$SYNC"; do
+    grep -qE '^[[:space:]]*const MAX_BODY_BYTES = 100000;' "$f" || {
+      echo "$(basename "$f") no longer declares const MAX_BODY_BYTES = 100000 on a code line." >&2
+      exit 1
+    }
+    if grep -q 'release-body\.sh' "$f"; then
+      echo "$(basename "$f") mentions hack/release-body.sh, which no longer exists." >&2
+      false
+    fi
+  done
+  paths="$(yq '.on.push.paths[]' "$SYNC")"
+  for p in 'docs/changelogs/v*.md' 'docs/releasenotes/v*.md'; do
+    printf '%s\n' "$paths" | grep -qxF "$p" || {
+      echo "update-releasenotes no longer fires on pushes touching $p." >&2
+      exit 1
+    }
+  done
 }
 
 # 4. A whitespace-only file is worse than no file: it would blank the release
@@ -542,10 +570,11 @@ code_lines() { grep -vE '^[[:space:]]*#'; }
     exit 1
   }
 
-  # changelog.md sends the agent to run the docs/release.md checks and the
-  # validator on its own output, by their working-tree paths. Without these two
-  # copies it runs the rc tag's versions, which predate every check added since.
-  for f in docs/release.md hack/validate-changelog.sh; do
+  # changelog.md sends the agent to run the docs/release/changelogs.md checks
+  # and the validator on its own output, by their working-tree paths. Without
+  # these two copies it runs the rc tag's versions, which predate every check
+  # added since.
+  for f in docs/release/changelogs.md hack/validate-changelog.sh; do
     printf '%s\n' "$overlay" | code_lines | grep -qF "cp .release-tooling/$f $f" || {
       echo "The refresh step does not overlay $f from the tooling checkout, so the" >&2
       echo "agent following docs/agents/changelog.md section 9 runs the rc tag's copy." >&2
@@ -553,23 +582,26 @@ code_lines() { grep -vE '^[[:space:]]*#'; }
     }
   done
 
-  # docs/release.md sits under neither sparse-checkout path. It reaches
-  # .release-tooling only because cone mode also checks out the files of every
-  # parent directory of a listed one; without it the copy above fails the job.
+  # An rc tagged before the release docs were split has no docs/release/
+  # directory, and cp does not create one.
+  printf '%s\n' "$overlay" | code_lines | grep -qE '^[[:space:]]+mkdir -p docs/release$' || {
+    echo "The refresh step does not create docs/release before copying into it, so" >&2
+    echo "the copy fails on every rc tagged before the release docs were split." >&2
+    exit 1
+  }
+
+  # The tooling checkout has to list both directories the copies read from.
   tooling="$(printf '%s\n' "$block" | awk '
     /^      - name: Checkout release tooling from the dispatch ref$/ { inside = 1; next }
     /^      - name: / { inside = 0 }
     inside' | code_lines)"
-  printf '%s\n' "$tooling" | grep -qE '^[[:space:]]+docs/agents$' || {
-    echo "The tooling checkout no longer lists docs/agents, which is what carries" >&2
-    echo "docs/release.md into .release-tooling." >&2
-    exit 1
-  }
-  if printf '%s\n' "$tooling" | grep -qE 'sparse-checkout-cone-mode:[[:space:]]*false'; then
-    echo "The tooling checkout turned cone mode off, which drops docs/release.md" >&2
-    echo "from .release-tooling and fails the refresh step's copy." >&2
-    exit 1
-  fi
+  for d in docs/agents docs/release; do
+    printf '%s\n' "$tooling" | grep -qE "^[[:space:]]+$d\$" || {
+      echo "The tooling checkout no longer lists $d, so .release-tooling lacks the" >&2
+      echo "file the refresh step copies from it." >&2
+      exit 1
+    }
+  done
 
   # Every job that runs release tooling against an older checkout must source it
   # from the dispatch ref. A script fetched by a script that is itself missing
