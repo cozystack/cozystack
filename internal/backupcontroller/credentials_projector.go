@@ -1,11 +1,14 @@
 package backupcontroller
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -15,6 +18,8 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/yaml"
 )
 
 // CredentialsProjectionRequeue is the backoff between reconcile attempts
@@ -73,9 +78,8 @@ func IsTransient(err error) bool {
 // BackupCredentialsConfig describes the platform-managed source Secret
 // produced by the cozy-backups Bucket, the per-tenant projection target
 // Secret name, and the bucket coordinates (endpoint used to format the
-// FDB blob_credentials account-host key, region carried verbatim for
-// drivers like clickhouse-backup that wire it through env, forcePathStyle
-// projected as a flat key so the chart-emitted ClickHouse sidecar can read
+// FDB blob_credentials account-host key, region carried verbatim,
+// forcePathStyle projected so the chart-emitted ClickHouse sidecar can read
 // a platform value it cannot see directly). Values are wired from
 // environment variables in main() and the deployment chart populates them
 // from .Values.backupStorage.
@@ -85,11 +89,11 @@ type BackupCredentialsConfig struct {
 	TargetSecretName string
 	Endpoint         string
 	Region           string
-	// ForcePathStyle is the string "true"/"false" from
-	// backupStorage.forcePathStyle, projected into the credentials Secret
-	// under the forcePathStyle key. The app charts cannot read
-	// backupStorage.* directly, so the ClickHouse sidecar consumes it via
-	// an optional secretKeyRef as S3_FORCE_PATH_STYLE.
+	// ForcePathStyle is backupStorage.forcePathStyle as the chart
+	// normalises it ("true", "false", or "" when unset), projected into the credentials Secret
+	// under the forcePathStyle key and into clickhouse-backup.yml. The app
+	// charts cannot read backupStorage.* directly, so the ClickHouse
+	// sidecar takes it from there.
 	ForcePathStyle string
 }
 
@@ -107,10 +111,11 @@ func (c BackupCredentialsConfig) IsEnabled() bool {
 // the data so every default Strategy CR can consume the same Secret:
 //
 //   - AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY — CNPG, MariaDB, Etcd.
-//   - accessKey / secretKey + bucketName / endpoint / region — ClickHouse
-//     sidecar.
+//   - accessKey / secretKey + bucketName / endpoint / region — Redis
+//     strategy, and ClickHouse sidecars rendered before clickhouse-backup.yml.
 //   - cloud — Velero credentials file ([default] section).
 //   - blob_credentials.json — FoundationDB backup_agent.
+//   - clickhouse-backup.yml — ClickHouse sidecar, mounted as its config file.
 //
 // The source Secret is read in two formats:
 //
@@ -156,8 +161,8 @@ func ProjectBackupCredentials(ctx context.Context, c client.Client, cfg BackupCr
 	if creds.endpoint == "" {
 		// Scheme-strip the env-var fallback to match the source-Secret path
 		// (parseSourceSecret strips there). The projected `endpoint` key is
-		// consumed verbatim as S3_ENDPOINT by the ClickHouse sidecar, which
-		// expects a bare host:port — see https://cozystack.io/docs/v1/operations/services/backup-classes/.
+		// a bare host:port and each consumer adds its own scheme — see
+		// https://cozystack.io/docs/v1/operations/services/backup-classes/.
 		creds.endpoint = stripScheme(cfg.Endpoint)
 	}
 	if creds.endpoint == "" {
@@ -177,6 +182,20 @@ func ProjectBackupCredentials(ctx context.Context, c client.Client, cfg BackupCr
 	}
 
 	cloud := buildVeleroCredentialsFile(creds.accessKey, creds.secretKey)
+	clickHouseConfig, pathStyleErr, err := buildClickHouseBackupConfig(creds, cfg.ForcePathStyle)
+	if pathStyleErr != nil {
+		// The chart refuses such a value at render time, so only an env set
+		// around it gets here. It concerns the ClickHouse file alone, and
+		// failing the projection would take every other driver's
+		// credentials down with it.
+		log.FromContext(ctx).Error(pathStyleErr, "left force_path_style out of "+clickHouseBackupConfigKey, "namespace", targetNamespace)
+	}
+	if err != nil {
+		return &ProjectionError{
+			Reason:  ReasonSourceMalformed,
+			Message: fmt.Sprintf("build %s: %v", clickHouseBackupConfigKey, err),
+		}
+	}
 	blob, err := buildFDBBlobCredentials(creds.endpoint, creds.accessKey, creds.secretKey)
 	if err != nil {
 		return &ProjectionError{
@@ -231,28 +250,36 @@ func ProjectBackupCredentials(ctx context.Context, c client.Client, cfg BackupCr
 		if target.Data == nil {
 			target.Data = map[string][]byte{}
 		}
+		before := maps.Clone(target.Data)
 		target.Data["AWS_ACCESS_KEY_ID"] = []byte(creds.accessKey)
 		target.Data["AWS_SECRET_ACCESS_KEY"] = []byte(creds.secretKey)
-		// Mirror under the legacy bucket-controller key names so
-		// chart-emitted sidecars (clickhouse-backup) can consume the
-		// same Secret without a separate field map.
+		// Mirror under the legacy bucket-controller key names so the Redis
+		// strategy and older ClickHouse charts can consume the same Secret
+		// without a separate field map.
 		target.Data["accessKey"] = []byte(creds.accessKey)
 		target.Data["secretKey"] = []byte(creds.secretKey)
 		target.Data["cloud"] = []byte(cloud)
 		target.Data["blob_credentials.json"] = blob
+		target.Data[clickHouseBackupConfigKey] = clickHouseConfig
 		// Always overwrite endpoint/bucket/region (delete if empty in
 		// source) so a re-projection cannot leave stale values lingering
-		// after the bucket-controller rotates the source. Consumers
-		// (ClickHouse sidecar via secretKeyRef) must see exactly what the
-		// source carries, not a half-stale Secret.
+		// after the bucket-controller rotates the source. Consumers must
+		// see exactly what the source carries, not a half-stale Secret.
 		setOrDelete(target.Data, "endpoint", creds.endpoint)
 		setOrDelete(target.Data, "bucketName", creds.bucket)
 		setOrDelete(target.Data, "region", creds.region)
 		// forcePathStyle comes from the platform config (backupStorage.
-		// forcePathStyle), not the source Secret: the ClickHouse sidecar
-		// reads it as S3_FORCE_PATH_STYLE because the app chart cannot see
+		// forcePathStyle), not the source Secret: ClickHouse sidecars
+		// rendered before clickhouse-backup.yml read it as
+		// S3_FORCE_PATH_STYLE because the app chart cannot see
 		// backupStorage.* directly.
 		setOrDelete(target.Data, "forcePathStyle", cfg.ForcePathStyle)
+		if !maps.EqualFunc(before, target.Data, bytes.Equal) {
+			if target.Annotations == nil {
+				target.Annotations = map[string]string{}
+			}
+			target.Annotations[credentialsUpdatedAtAnnotation] = time.Now().UTC().Format(time.RFC3339)
+		}
 		return nil
 	}); err != nil {
 		// If the mutator refused to overwrite an unowned Secret, surface
@@ -412,6 +439,48 @@ func buildFDBBlobCredentials(endpoint, accessKey, secretKey string) ([]byte, err
 		},
 	}
 	return json.Marshal(doc)
+}
+
+// credentialsUpdatedAtAnnotation records when the projected content last
+// changed. A consumer that mounts the Secret as a volume sees a change only
+// once kubelet rewrites the volume, so it uses this to tell how fresh its
+// copy can be.
+const credentialsUpdatedAtAnnotation = "backups.cozystack.io/credentials-updated-at"
+
+// clickHouseBackupConfigKey holds the s3 section of a clickhouse-backup
+// config. The ClickHouse chart mounts it as the sidecar's config file
+// instead of passing the values as environment: clickhouse-backup reloads
+// the file in each API handler that reaches S3, among them the
+// create_remote, restore_remote and list calls the strategy makes, and
+// kubelet rewrites a mounted Secret in place, so credentials projected
+// after the pod started, or rotated since, reach a running sidecar.
+const clickHouseBackupConfigKey = "clickhouse-backup.yml"
+
+// buildClickHouseBackupConfig renders that file. The projected endpoint is
+// a bare host, and clickhouse-backup's S3 client rejects one without a
+// scheme. A forcePathStyle that is not a boolean is left out of the file
+// and reported in pathStyleErr; err is a failure to render the file at all.
+func buildClickHouseBackupConfig(creds parsedCreds, forcePathStyle string) (config []byte, pathStyleErr, err error) {
+	s3 := map[string]any{
+		"bucket":     creds.bucket,
+		"endpoint":   "https://" + creds.endpoint,
+		"access_key": creds.accessKey,
+		"secret_key": creds.secretKey,
+	}
+	// An empty region in the file would override clickhouse-backup's own
+	// us-east-1 default instead of leaving it in place.
+	if creds.region != "" {
+		s3["region"] = creds.region
+	}
+	if forcePathStyle != "" {
+		if pathStyle, perr := strconv.ParseBool(forcePathStyle); perr != nil {
+			pathStyleErr = fmt.Errorf("forcePathStyle %q is not a boolean", forcePathStyle)
+		} else {
+			s3["force_path_style"] = pathStyle
+		}
+	}
+	config, err = yaml.Marshal(map[string]any{"s3": s3})
+	return config, pathStyleErr, err
 }
 
 // stripScheme returns the endpoint stripped of any leading scheme prefix

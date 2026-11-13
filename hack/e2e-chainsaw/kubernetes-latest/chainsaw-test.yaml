@@ -80,7 +80,8 @@ spec:
         # wait, all on the passing path. Raising the ceiling to cover them is not
         # available -- the guard in hack/run-kubernetes-serial-console_test.bats
         # holds COZY_OP_CEILING equal to BOTH suites' `timeout:`, and two suites
-        # at 79m plus their 22m teardowns exceed the job's own 215-minute cap.
+        # at 79m plus their 22m teardowns take 202m, which with the install and
+        # the rest of a full run does not fit the job's own 265-minute cap.
         # What is available is a measurement: on the green run of this branch
         # (33724179053) the whole Test took 569.72s against this 4020s op, with
         # kubernetes-previous, which carries no OIDC fold, at 470.19s. The
