@@ -1,0 +1,174 @@
+{{- $tls := .Values.tls | default dict -}}
+{{- $tlsEnabled := $tls.enabled | default false -}}
+{{- if and $tlsEnabled .Values.mtls.enabled -}}
+{{- fail "tls.enabled and mtls.enabled are mutually exclusive; use ingress TLS for public access to an mTLS backend" -}}
+{{- end -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "rustfs.fullname" . }}-config
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- toYaml .Values.commonLabels | nindent 4 }}
+data:
+  {{- with .Values.config.rustfs }}
+  RUSTFS_ADDRESS: {{ .address | quote }}
+  RUSTFS_CONSOLE_ADDRESS: {{ .console_address | quote }}
+  RUSTFS_CONSOLE_ENABLE: {{ .console_enable | quote }}
+  RUSTFS_OBS_LOG_DIRECTORY: {{ .obs_log_directory | quote }}
+  RUSTFS_OBS_LOGGER_LEVEL: {{ .log_level | quote }}
+  RUSTFS_OBS_ENVIRONMENT: {{ .obs_environment | quote }}
+  {{- if .region }}
+  RUSTFS_REGION: {{ .region | quote }}
+  {{- end }}
+  {{- if .domains }}
+  RUSTFS_SERVER_DOMAINS: {{ include "rustfs.serverDomains" $ | quote }}
+  {{- end }}
+  {{- if .ec.storage_class_standard }}
+  RUSTFS_STORAGE_CLASS_STANDARD: {{ .ec.storage_class_standard | quote }}
+  {{- end }}
+  {{- with .log_rotation }}
+    {{- if .size }}
+  RUSTFS_OBS_LOG_ROTATION_SIZE_MB: {{ .size | quote }}
+    {{- end }}
+    {{- if .time }}
+  RUSTFS_OBS_LOG_ROTATION_TIME: {{ .time | quote }}
+    {{- end }}
+    {{- if .keep_files }}
+  RUSTFS_OBS_LOG_KEEP_FILES: {{ .keep_files | quote }}
+    {{- end }}
+  {{- end }}
+  {{- end }}
+  {{- if .Values.mode.distributed.enabled }}
+  RUSTFS_VOLUMES: {{ .Values.config.rustfs.volumes | default (include "rustfs.volumes" .) | quote }}
+  {{- else }}
+  RUSTFS_VOLUMES: "/data"
+  {{- end }}
+  {{- if .Values.mtls.enabled }}
+  RUSTFS_SERVER_MTLS_ENABLE: "1"
+  {{- end }}
+  {{- if or .Values.mtls.enabled $tlsEnabled }}
+  RUSTFS_TLS_KEYLOG: "0"
+  RUSTFS_TLS_PATH: "/opt/tls"
+  RUSTFS_TLS_RELOAD_ENABLE: "1"
+  RUSTFS_TLS_RELOAD_INTERVAL: {{ $tls.reloadInterval | default 30 | quote }}
+  {{- end }}
+  {{- if .Values.config.rustfs.obs_endpoint.enabled }}
+  RUSTFS_OBS_ENDPOINT: {{ .Values.config.rustfs.obs_endpoint.base_endpoint | quote }}
+  RUSTFS_OBS_USE_STDOUT: {{ .Values.config.rustfs.obs_endpoint.use_stdout | quote }}
+  {{- with .Values.config.rustfs.obs_endpoint }}
+    {{- if .metrics.enabled }}
+  RUSTFS_OBS_METRIC_ENDPOINT: {{ .metrics.endpoint | quote }}
+    {{- else }}
+  RUSTFS_OBS_METRIC_ENDPOINT: ""
+  RUSTFS_OBS_METRICS_EXPORT_ENABLED: "false"
+    {{- end }}
+    {{- if .trace.enabled }}
+  RUSTFS_OBS_TRACE_ENDPOINT: {{ .trace.endpoint | quote }}
+    {{- else }}
+  RUSTFS_OBS_TRACE_ENDPOINT: ""
+  RUSTFS_OBS_TRACES_EXPORT_ENABLED: "false"
+    {{- end }}
+    {{- if .logs.enabled }}
+  RUSTFS_OBS_LOG_ENDPOINT: {{ .logs.endpoint | quote }}
+    {{- else }}
+  RUSTFS_OBS_LOG_ENDPOINT: ""
+  RUSTFS_OBS_LOGS_EXPORT_ENABLED: "false"
+    {{- end }}
+    {{- if .profiling.enabled }}
+  RUSTFS_OBS_PROFILING_ENDPOINT: {{ .profiling.endpoint | quote }}
+  RUSTFS_OBS_PROFILING_EXPORT_ENABLED: "true"
+    {{- else }}
+  RUSTFS_OBS_PROFILING_ENDPOINT: ""
+  RUSTFS_OBS_PROFILING_EXPORT_ENABLED: "false"
+    {{- end }}
+  {{- end }}
+  {{- end }}
+  {{- with .Values.config.rustfs.scanner }}
+    {{- if ne (toString .speed) "" }}
+  RUSTFS_SCANNER_SPEED: {{ .speed | quote }}
+    {{- end }}
+    {{- if ne (toString .delay) "" }}
+  RUSTFS_SCANNER_DELAY: {{ .delay | quote }}
+    {{- end }}
+    {{- if ne (toString .max_wait_secs) "" }}
+  RUSTFS_SCANNER_MAX_WAIT_SECS: {{ .max_wait_secs | quote }}
+    {{- end }}
+    {{- if ne (toString .cycle_secs) "" }}
+  RUSTFS_SCANNER_CYCLE: {{ .cycle_secs | quote }}
+    {{- end }}
+    {{- if ne (toString .start_delay_secs) "" }}
+  RUSTFS_SCANNER_START_DELAY_SECS: {{ .start_delay_secs | quote }}
+    {{- end }}
+    {{- if ne (toString .cycle_max_duration_secs) "" }}
+  RUSTFS_SCANNER_CYCLE_MAX_DURATION_SECS: {{ .cycle_max_duration_secs | quote }}
+    {{- end }}
+    {{- if ne (toString .cycle_max_objects) "" }}
+  RUSTFS_SCANNER_CYCLE_MAX_OBJECTS: {{ .cycle_max_objects | quote }}
+    {{- end }}
+    {{- if ne (toString .cycle_max_directories) "" }}
+  RUSTFS_SCANNER_CYCLE_MAX_DIRECTORIES: {{ .cycle_max_directories | quote }}
+    {{- end }}
+    {{- if ne (toString .bitrot_cycle_secs) "" }}
+  RUSTFS_SCANNER_BITROT_CYCLE_SECS: {{ .bitrot_cycle_secs | quote }}
+    {{- end }}
+    {{- if ne (toString .idle_mode) "" }}
+  RUSTFS_SCANNER_IDLE_MODE: {{ .idle_mode | quote }}
+    {{- end }}
+    {{- if ne (toString .cache_save_timeout_secs) "" }}
+  RUSTFS_SCANNER_CACHE_SAVE_TIMEOUT_SECS: {{ .cache_save_timeout_secs | quote }}
+    {{- end }}
+    {{- if ne (toString .recovery_backoff_cap_secs) "" }}
+  RUSTFS_SCANNER_RECOVERY_BACKOFF_CAP_SECS: {{ .recovery_backoff_cap_secs | quote }}
+    {{- end }}
+    {{- if ne (toString .max_concurrent_set_scans) "" }}
+  RUSTFS_SCANNER_MAX_CONCURRENT_SET_SCANS: {{ .max_concurrent_set_scans | quote }}
+    {{- end }}
+    {{- if ne (toString .max_concurrent_disk_scans) "" }}
+  RUSTFS_SCANNER_MAX_CONCURRENT_DISK_SCANS: {{ .max_concurrent_disk_scans | quote }}
+    {{- end }}
+    {{- if ne (toString .walkers_per_disk) "" }}
+  RUSTFS_SCANNER_WALKERS_PER_DISK: {{ .walkers_per_disk | quote }}
+    {{- end }}
+    {{- if ne (toString .disk_io_budget_iops) "" }}
+  RUSTFS_SCANNER_DISK_IO_BUDGET_IOPS: {{ .disk_io_budget_iops | quote }}
+    {{- end }}
+    {{- if ne (toString .disk_io_budget_bytes_per_sec) "" }}
+  RUSTFS_SCANNER_DISK_IO_BUDGET_BYTES_PER_SEC: {{ .disk_io_budget_bytes_per_sec | quote }}
+    {{- end }}
+    {{- if ne (toString .yield_every_n_objects) "" }}
+  RUSTFS_SCANNER_YIELD_EVERY_N_OBJECTS: {{ .yield_every_n_objects | quote }}
+    {{- end }}
+    {{- if ne (toString .alert_excess_versions) "" }}
+  RUSTFS_SCANNER_ALERT_EXCESS_VERSIONS: {{ .alert_excess_versions | quote }}
+    {{- end }}
+    {{- if ne (toString .alert_excess_version_size) "" }}
+  RUSTFS_SCANNER_ALERT_EXCESS_VERSION_SIZE: {{ .alert_excess_version_size | quote }}
+    {{- end }}
+    {{- if ne (toString .alert_excess_folders) "" }}
+  RUSTFS_SCANNER_ALERT_EXCESS_FOLDERS: {{ .alert_excess_folders | quote }}
+    {{- end }}
+  {{- end }}
+  {{- if .Values.config.rustfs.timeout_profile }}
+  RUSTFS_DRIVE_TIMEOUT_PROFILE: {{ .Values.config.rustfs.timeout_profile | quote }}
+  {{- end }}
+  {{- if .Values.config.rustfs.kms.enabled }}
+    {{- if eq .Values.config.rustfs.kms.type "vault" }}
+      {{- with .Values.config.rustfs.kms.vault }}
+  RUSTFS_KMS_ENABLE: "true"
+  RUSTFS_KMS_BACKEND: {{ .vault_backend | quote }}
+  RUSTFS_KMS_VAULT_ADDRESS: {{ .vault_address | quote }}
+  {{- /* RUSTFS_KMS_VAULT_TOKEN is a credential and is rendered into the KMS Secret
+         (templates/secret.yaml), never into this ConfigMap. */}}
+  RUSTFS_KMS_DEFAULT_KEY_ID: {{ .default_key | quote }}
+        {{- if eq .vault_backend "vault-transit" }}
+  RUSTFS_KMS_VAULT_MOUNT_PATH: {{ .vault_mount_path | quote }}
+        {{- else if .vault_mount_path }}
+  {{- /* The KV2 backend never calls the Transit engine: its mount is the KV2
+         one, under a different variable. Emitted only when set, so an unset
+         value keeps falling back to the "secret" default. */}}
+  RUSTFS_KMS_VAULT_KV_MOUNT: {{ .vault_mount_path | quote }}
+        {{- end }}
+      {{- end }}
+    {{- end }}
+  {{- end }}

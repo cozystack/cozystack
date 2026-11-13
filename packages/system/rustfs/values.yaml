@@ -1,0 +1,7 @@
+rustfs:
+  # The app chart sets the real values; these only make a bare render succeed.
+  replicaCount: 4
+  secret:
+    existingSecret: rustfs-credentials
+  ingress:
+    enabled: false

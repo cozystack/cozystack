@@ -296,6 +296,7 @@
 {{include "cozystack.platform.package.default" (list "cozystack.ingress-application" $) }}
 {{include "cozystack.platform.package.default" (list "cozystack.gateway-application" $) }}
 {{include "cozystack.platform.package.full.default" (list "cozystack.seaweedfs-application" $) }}
+{{include "cozystack.platform.package.optional.default" (list "cozystack.rustfs-application" $) }}
 {{include "cozystack.platform.package.default" (list "cozystack.info-application" $) }}
 {{- /* Variant selection mirrors cozystack-engine above: `oidc` when
        platform-level OIDC is on (extra dependsOn on

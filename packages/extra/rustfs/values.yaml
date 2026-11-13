@@ -1,0 +1,34 @@
+##
+## @section Common parameters
+##
+
+## @param {string} [host] - The hostname used to access the S3 endpoint externally (defaults to 's3' subdomain for the tenant host).
+host: ""
+
+## @param {int} replicas - Number of RustFS nodes. Distributed mode needs at least 2; the node count cannot be changed after the first deployment.
+replicas: 4
+
+## @param {quantity} size - Persistent Volume size of each node.
+size: 10Gi
+
+## @param {string} [storageClass] - StorageClass used to store the data.
+storageClass: ""
+
+## @typedef {struct} Resources - Resource configuration.
+## @field {quantity} [cpu] - Number of CPU cores allocated.
+## @field {quantity} [memory] - Amount of memory allocated.
+
+## @enum {string} ResourcesPreset - Default sizing preset.
+## @value nano
+## @value micro
+## @value small
+## @value medium
+## @value large
+## @value xlarge
+## @value 2xlarge
+
+## @param {Resources} [resources] - Explicit CPU and memory configuration of each node. When omitted, the preset defined in `resourcesPreset` is applied.
+resources: {}
+
+## @param {ResourcesPreset} resourcesPreset="small" - Default sizing preset used when `resources` is omitted.
+resourcesPreset: "small"

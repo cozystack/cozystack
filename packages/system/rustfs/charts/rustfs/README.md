@@ -1,0 +1,518 @@
+# RustFS Helm Mode
+
+RustFS helm chart supports **standalone** and **distributed** mode.
+
+- **Standalone mode**: one pod with one PVC (single node, single disk).
+- **Distributed mode** (**default**): multiple pods with multiple PVCs (multiple nodes, multiple disks).
+
+## Distributed topology
+
+The distributed topology is defined by two parameters:
+
+- `replicaCount` — number of pods (nodes) in the StatefulSet.
+- `drivesPerNode` — number of data PVCs mounted on each pod.
+
+Total drives in the cluster = `replicaCount * drivesPerNode`.
+
+When `drivesPerNode` is left unset, the chart automatically infers a
+backward-compatible value from each pool's replica count (with pools
+disabled there is a single pool driven by the top-level `replicaCount`):
+
+| `replicaCount` | Inferred `drivesPerNode` | Legacy equivalent |
+|----------------|--------------------------|-------------------|
+| 4              | 4                        | old default 4×4   |
+| anything else  | 1                        | old 16×1, etc.    |
+
+You can override the inference by setting `drivesPerNode` explicitly, e.g.
+`--set drivesPerNode=2` for an 8×2 cluster.
+
+**IMPORTANT**: Kubernetes does **not** allow changes to
+`volumeClaimTemplates` in an existing StatefulSet. If you want to change
+`drivesPerNode` after installation you must delete the StatefulSet
+(with `--cascade=orphan` to keep pods and PVCs) and recreate it, or perform a
+full reinstall.
+
+## Bring-your-own drives (JBOD)
+
+By default every drive is a PersistentVolumeClaim sized by
+`storageclass.dataStorageSize`. To use disks that you provide yourself, such as
+JBOD `hostPath` or local volumes, set `storageclass.dataStorageSize` to an empty
+string. The chart then renders no data PVCs (no data `volumeClaimTemplates` in
+distributed mode, no data PVC in standalone mode) and no data `volumeMounts`,
+and you supply the drives through `extraVolumes` and `extraVolumeMounts`:
+
+```yaml
+replicaCount: 3
+drivesPerNode: 4
+storageclass:
+  dataStorageSize: ""
+extraVolumes:
+  - name: disk0
+    hostPath: {path: /mnt/disk0, type: Directory}
+  # ... disk1 to disk3
+extraVolumeMounts:
+  - name: disk0
+    mountPath: /data/rustfs0
+  # ... /data/rustfs1 to /data/rustfs3
+```
+
+Mount the drives at `/data/rustfs0` … `/data/rustfs<drivesPerNode-1>` when
+`drivesPerNode` is greater than 1, otherwise at `/data`, so they match the
+generated `RUSTFS_VOLUMES`. The logs PVC is unaffected; set
+`config.rustfs.obs_log_directory` to an empty string to drop it as well. Each
+entry of `pools.list` may override `storageclass.dataStorageSize`
+independently. In standalone mode, `mode.standalone.existingClaim.dataClaim`
+still mounts the named claim as `data`.
+
+Switching `storageclass.dataStorageSize` between empty and non-empty changes
+`volumeClaimTemplates`, so the same StatefulSet recreation rules as for
+`drivesPerNode` apply.
+
+---
+
+## Upgrade notes
+
+Upgrading from chart versions that did **not** have `drivesPerNode` is safe
+without manual intervention:
+
+- Existing 4×4 deployments (default `replicaCount=4`) continue to receive 4
+  drives per node because the chart infers `drivesPerNode=4`.
+- Existing 16×1 deployments (`replicaCount=16`) continue to receive 1 drive
+  per node because the chart infers `drivesPerNode=1`.
+
+If you previously set `replicaCount=16` and now want a different topology,
+set both `replicaCount` and `drivesPerNode` explicitly.
+
+For distributed deployments that use the chart-generated
+`RUSTFS_VOLUMES`, `localEndpointHost.autoInject` defaults to automatic
+selection. Without `secret.existingSecret`, the chart injects a private
+Downward API variable, `RUSTFS_CHART_POD_NAME`, and uses it to build the pod's
+fully qualified hostname in
+`RUSTFS_LOCAL_ENDPOINT_HOST`. RustFS can then identify local drives without
+waiting for every peer's DNS record or TCP listener. A user-defined `POD_NAME`
+is preserved and does not interfere with the private chart variable. Setting
+`RUSTFS_STARTUP_TOPOLOGY_WAIT_MODE` explicitly to `bounded`, `fail-fast`,
+`failfast`, or `strict` also keeps legacy DNS-based locality discovery. A
+dynamically sourced wait mode keeps the legacy path because its value cannot be
+validated while rendering. Otherwise, Kubernetes auto-detection selects
+orchestrated startup when RustFS consumes the generated anchor.
+
+An existing Secret is opaque to the chart and may historically contain more
+than credentials, so the chart does not inject an anchor whenever
+`secret.existingSecret` is set. In Kubernetes auto/orchestrated mode, RustFS
+then derives a DNS-free identity from the kernel hostname when exactly one
+domain endpoint at the server port has the same full hostname or first label.
+All-IP topologies retain direct IP locality detection. A domain topology with
+zero matches retains legacy DNS locality discovery; implicit auto mode bounds
+that compatibility path by `RUSTFS_STARTUP_TOPOLOGY_WAIT_TIMEOUT` (180 seconds
+by default). Multiple matching candidates remain an error. Set
+`RUSTFS_LOCAL_ENDPOINT_HOST` explicitly to avoid DNS discovery. For a
+credentials-only Secret, set
+`localEndpointHost.autoInject=true` to add the chart anchor without changing
+the historical ConfigMap-then-Secret `envFrom` precedence. If injection is
+explicitly enabled with an incompatible hidden `RUSTFS_VOLUMES`,
+`RUSTFS_ADDRESS`, or `RUSTFS_STARTUP_TOPOLOGY_WAIT_MODE`, RustFS also fails
+during endpoint construction; it does not silently fall back to a different
+topology.
+
+When `config.rustfs.volumes` is set explicitly, the chart does not infer a
+local endpoint identity. RustFS applies the same kernel-hostname inference to
+custom domain topologies in Kubernetes auto/orchestrated mode; aliases that do
+not match the Pod hostname retain legacy DNS locality, with the bounded auto
+fallback described above. They may provide `RUSTFS_LOCAL_ENDPOINT_HOST`
+through `extraEnv` for DNS-free startup. An explicit `RUSTFS_VOLUMES`, explicit
+`RUSTFS_LOCAL_ENDPOINT_HOST`, bounded/dynamic or unrecognized startup mode, or
+`localEndpointHost.autoInject=false`, also disables chart injection. A
+`RUSTFS_ADDRESS` override alone does not disable it; the effective address and
+generated topology must agree on the endpoint port. Custom anchor-based
+configurations must resolve to `orchestrated` startup mode and must not receive
+a conflicting mode from an `envFrom` source.
+`startupWaitTimeoutSeconds` is retained for values-file compatibility but is
+deprecated and ignored.
+Historical `RUSTFS_STARTUP_TOPOLOGY_RETRY_MAX_DELAY` values of `0` or `0ms`
+are replaced with the safe default retry cap instead of causing a busy loop or
+blocking a direct upgrade.
+
+Upgrade the chart and RustFS image together. An older image that does not
+recognize `RUSTFS_LOCAL_ENDPOINT_HOST` retains its previous DNS-based startup
+behavior.
+
+---
+
+# Parameters Overview
+
+| Parameter | Type | Default value | Description |
+|-----|------|---------|-------------|
+| affinity.nodeAffinity | object | `{}` |  |
+| affinity.podAntiAffinity.enabled | bool | `true` |  |
+| affinity.podAntiAffinity.topologyKey | string | `"kubernetes.io/hostname"` |  |
+| clusterDomain | string | `"cluster.local"` | Kubernetes cluster DNS domain used to build in-cluster FQDNs for `RUSTFS_VOLUMES` (distributed mode) and mTLS server certificate SANs. Override for clusters not using the default `cluster.local`. Provide the DNS root only, without a `svc.` prefix or leading/trailing dots. |
+| localEndpointHost.autoInject | bool or null | `null` | Automatically inject `RUSTFS_LOCAL_ENDPOINT_HOST` for chart-generated distributed topologies unless `secret.existingSecret` is set. Use `true` for a credentials-only existing Secret or `false` to preserve legacy DNS locality explicitly. |
+| commonLabels | object | `{}` | Labels to add to all deployed objects. |
+| config.rustfs.address | string | `":9000"` |  |
+| config.rustfs.console_address | string | `":9001"` |  |
+| config.rustfs.console_enable | string | `"true"` |  |
+| config.rustfs.domains | string | `""` | Enable virtual host mode. |
+| config.rustfs.log_level | string | `"info"` |  |
+| config.rustfs.obs_environment | string | `"development"` |  |
+| config.rustfs.obs_log_directory | string | `"/logs"` | Log directory inside the RustFS container. Set to `""` to disable log PVCs and mounts. |
+| config.rustfs.region | string | `"us-east-1"` |  |
+| config.rustfs.volumes | string | `""` | Explicit distributed volume topology. When empty, the chart generates the topology and normally injects `RUSTFS_LOCAL_ENDPOINT_HOST`; custom topologies must configure local endpoint identity explicitly when needed. |
+| config.rustfs.log_rotation.size | int | `"100"` | Default log rotation size mb for rustfs. |
+| config.rustfs.log_rotation.time | string | `"hour"` | Default log rotation time for rustfs. |
+| config.rustfs.log_rotation.keep_files | int | `"30"` | Default log keep files for rustfs.  |
+| config.rustfs.metrics.enabled | bool | `false` | Toggle metrics export. |
+| config.rustfs.metrics.endpoint | string | `""` | Dedicated metrics endpoint. |
+| config.rustfs.scanner.speed | string | `""` | Scanner speed preset: `fastest`, `fast`, `default`, `slow`, `slowest`. |
+| config.rustfs.scanner.delay | string | `""` | Override scanner sleep multiplier with `RUSTFS_SCANNER_DELAY` (`0` through `10000`). |
+| config.rustfs.scanner.max_wait_secs | string | `""` | Override maximum scanner sleep in seconds with `RUSTFS_SCANNER_MAX_WAIT_SECS`. |
+| config.rustfs.scanner.cycle_secs | string | `""` | Override scanner cycle interval in seconds with `RUSTFS_SCANNER_CYCLE`. |
+| config.rustfs.scanner.start_delay_secs | string | `""` | Override scanner cycle interval in seconds with `RUSTFS_SCANNER_START_DELAY_SECS`. |
+| config.rustfs.scanner.cycle_max_duration_secs | string | `""` | Cap one scanner cycle's runtime in seconds with `RUSTFS_SCANNER_CYCLE_MAX_DURATION_SECS` (`0` disables). |
+| config.rustfs.scanner.cycle_max_objects | string | `""` | Cap objects processed by one scanner cycle with `RUSTFS_SCANNER_CYCLE_MAX_OBJECTS` (`0` disables). |
+| config.rustfs.scanner.cycle_max_directories | string | `""` | Cap directories entered by one scanner cycle with `RUSTFS_SCANNER_CYCLE_MAX_DIRECTORIES` (`0` disables). |
+| config.rustfs.scanner.bitrot_cycle_secs | string | `""` | Override periodic deep bitrot cycle with `RUSTFS_SCANNER_BITROT_CYCLE_SECS`; `false`, `off`, `no`, or `disabled` disables it. |
+| config.rustfs.scanner.idle_mode | string | `""` | Override scanner idle throttling flag (`RUSTFS_SCANNER_IDLE_MODE`). |
+| config.rustfs.scanner.cache_save_timeout_secs | string | `""` | Override scanner cache save timeout in seconds with `RUSTFS_SCANNER_CACHE_SAVE_TIMEOUT_SECS` (minimum `1`). |
+| config.rustfs.scanner.recovery_backoff_cap_secs | string | `""` | Cap the wait between automatic scanner startup recovery retries in seconds with `RUSTFS_SCANNER_RECOVERY_BACKOFF_CAP_SECS` (positive integer; default `600`). |
+| config.rustfs.scanner.max_concurrent_set_scans | string | `""` | Cap concurrent scanner set tasks with `RUSTFS_SCANNER_MAX_CONCURRENT_SET_SCANS` (`0` keeps topology-derived concurrency). |
+| config.rustfs.scanner.max_concurrent_disk_scans | string | `""` | Cap concurrent scanner disk bucket walks per set with `RUSTFS_SCANNER_MAX_CONCURRENT_DISK_SCANS` (`0` keeps disk-count-derived concurrency). |
+| config.rustfs.scanner.walkers_per_disk | string | `""` | Bucket walkers per local disk with `RUSTFS_SCANNER_WALKERS_PER_DISK` (`1` to `16`; the default `1` keeps one bucket walk per disk, raise it on flash so one disk walks several buckets concurrently). |
+| config.rustfs.scanner.disk_io_budget_iops | string | `""` | Per-local-disk ceiling on scanner metadata operations per second with `RUSTFS_SCANNER_DISK_IO_BUDGET_IOPS` (`auto` picks the media default, `off` removes the cap, a number is an explicit rate). |
+| config.rustfs.scanner.disk_io_budget_bytes_per_sec | string | `""` | Per-local-disk ceiling on scanner metadata bytes per second with `RUSTFS_SCANNER_DISK_IO_BUDGET_BYTES_PER_SEC` (`auto` picks the media default, `off` removes the cap, a number is an explicit rate). |
+| config.rustfs.scanner.yield_every_n_objects | string | `""` | Yield to the async runtime every N scanned objects with `RUSTFS_SCANNER_YIELD_EVERY_N_OBJECTS` (`0` disables extra yield). |
+| config.rustfs.scanner.alert_excess_versions | string | `""` | Set version count threshold for scanner alerts with `RUSTFS_SCANNER_ALERT_EXCESS_VERSIONS`. |
+| config.rustfs.scanner.alert_excess_version_size | string | `""` | Set retained version byte threshold for scanner alerts with `RUSTFS_SCANNER_ALERT_EXCESS_VERSION_SIZE`. |
+| config.rustfs.scanner.alert_excess_folders | string | `""` | Set direct subfolder threshold for scanner alerts with `RUSTFS_SCANNER_ALERT_EXCESS_FOLDERS`. |
+| config.rustfs.obs_endpoint.enabled | bool | `false` | Whether to send metrics/logs/traces/profilings to remote endpoint, eg, OLTP. |
+| config.rustfs.obs_endpoint.base_endpoint | string | `""` | Root OTLP/HTTP endpoint, e.g. http://otel-collector:4318. |
+| config.rustfs.obs_endpoint.use_stdout | bool | `false` | Whether to output logs to stdout in addition the OLTP. |
+| config.rustfs.obs_endpoint.metrics.enabled | bool | `false` | Whether to send metrics to remote endpoint. |
+| config.rustfs.obs_endpoint.metrics.endpoint | string | `""` | Remote endpoint url for metrics. |
+| config.rustfs.obs_endpoint.trace.enabled | bool | `false` | Whether to send trace to remote endpoint. |
+| config.rustfs.obs_endpoint.trace.endpoint | string | `""` | Remote endpoint url for trace. |
+| config.rustfs.obs_endpoint.logs.enabled | bool | `false` | Whether to send logs to remote endpoint. |
+| config.rustfs.obs_endpoint.logs.endpoint | string | `""` | Remote endpoint url for logs. |
+| config.rustfs.obs_endpoint.profiling.enabled | bool | `false` | Whether to send profiling to remote endpoint. |
+| config.rustfs.obs_endpoint.profiling.endpoint | string | `""` | Remote endpoint url for profiling. |
+| config.rustfs.kms.enabled | bool | `false`| Whether to enable kms. |
+| config.rustfs.kms.type | string | `vault`| The kms type that RustFS supported. |
+| config.rustfs.kms.vault.vault_backend | string | `""`| The vault backend, `vault-kv2` or `vault-transit`. |
+| config.rustfs.kms.vault.vault_address | string | `""`| The vault address. |
+| config.rustfs.kms.vault.vault_token | string | `""`| The vault token. Rendered into a dedicated Secret (`<fullname>-kms-secret`), never into the ConfigMap. |
+| config.rustfs.kms.vault.vault_mount_path | string | `"transit"`| The vault mount path. Rendered as `RUSTFS_KMS_VAULT_MOUNT_PATH` for `vault-transit`, and as `RUSTFS_KMS_VAULT_KV_MOUNT` for `vault-kv2` (only when set; unset keeps the `secret` default). |
+| config.rustfs.kms.vault.default_key | string | `"transit"`| The master key id for RustFS. |
+| extraEnv | list | `[]` | Extra environment variables for the RustFS container. An explicit `RUSTFS_LOCAL_ENDPOINT_HOST` or `RUSTFS_VOLUMES`, or a bounded, dynamic, or unrecognized startup mode, disables generated anchor injection. `POD_NAME` and `RUSTFS_ADDRESS` remain independent overrides. |
+| extraVolumes | list | `[]` | Extra volumes to add to the pod spec. Supported in both standalone (Deployment) and distributed (StatefulSet) modes. |
+| extraVolumeMounts | list | `[]` | Extra volume mounts to add to the RustFS container. Supported in both standalone (Deployment) and distributed (StatefulSet) modes. |
+| containerSecurityContext.capabilities.drop[0] | string | `"ALL"` |  |
+| containerSecurityContext.readOnlyRootFilesystem | bool | `true` |  |
+| containerSecurityContext.runAsNonRoot | bool | `true` |  |
+| priorityClassName | string | `""` |  |
+| enableServiceLinks | bool | `false` |  |
+| extraManifests | list | `[]` | List of additional k8s manifests. |
+| fullnameOverride | string | `""` |  |
+| image.rustfs.pullPolicy | string | `"IfNotPresent"` |  |
+| image.rustfs.repository | string | `"rustfs/rustfs"` | RustFS docker image repository. |
+| image.rustfs.tag | string | `""` | Chart appVersion default if unset. |
+| imagePullSecrets | list | `[]` | A List of secrets to pull image from private registry. |
+| imageRegistryCredentials.email | string | `""` | The email to pull rustfs image from private registry.  |
+| imageRegistryCredentials.enabled | bool | `false` | To indicate whether pull image from private registry.  |
+| imageRegistryCredentials.password | string | `""` | The password to pull rustfs image from private registry.  |
+| imageRegistryCredentials.registry | string | `""` | Private registry url to pull rustfs image. |
+| imageRegistryCredentials.username | string | `""` | The username to pull rustfs image from private registry. |
+| ingress.className | string | `"nginx"` | Specify the ingress class, traefik or nginx. |
+| ingress.enabled | bool | `true` |  |
+| ingress.hosts[0].host | string | `"example.rustfs.com"` |  |
+| ingress.hosts[0].paths[0].path | string | `"/"` |  |
+| ingress.hosts[0].paths[0].pathType | string | `"ImplementationSpecific"` |  |
+| ingress.nginxAnnotations."nginx.ingress.kubernetes.io/affinity" | string | `"cookie"` |  |
+| ingress.nginxAnnotations."nginx.ingress.kubernetes.io/session-cookie-expires" | string | `"3600"` |  |
+| ingress.nginxAnnotations."nginx.ingress.kubernetes.io/session-cookie-hash" | string | `"sha1"` |  |
+| ingress.nginxAnnotations."nginx.ingress.kubernetes.io/session-cookie-max-age" | string | `"3600"` |  |
+| ingress.nginxAnnotations."nginx.ingress.kubernetes.io/session-cookie-name" | string | `"rustfs"` |  |
+| ingress.customAnnotations | dict | `{}` | Additional custom annotations, merged with class-specific stickiness annotations. |
+| ingress.traefikAnnotations."traefik.ingress.kubernetes.io/service.sticky.cookie" | string | `"true"` |  |
+| ingress.traefikAnnotations."traefik.ingress.kubernetes.io/service.sticky.cookie.httponly" | string | `"true"` |  |
+| ingress.traefikAnnotations."traefik.ingress.kubernetes.io/service.sticky.cookie.name" | string | `"rustfs"` |  |
+| ingress.traefikAnnotations."traefik.ingress.kubernetes.io/service.sticky.cookie.samesite" | string | `"none"` |  |
+| ingress.traefikAnnotations."traefik.ingress.kubernetes.io/service.sticky.cookie.secure" | string | `"true"` |  |
+| ingress.tls.enabled | bool | `false` | Enable tls and access rustfs via https. |
+| ingress.tls.certManager.enabled | string | `false` | Enable cert manager support to generate certificate automatically. |
+| ingress.tls.crt | string | "" | The content of certificate file. |
+| ingress.tls.key | string | "" | The content of key file. |
+| livenessProbe.failureThreshold | int | `3` |  |
+| livenessProbe.httpGet.path | string | `"/health"` |  |
+| livenessProbe.httpGet.port | string | `"endpoint"` |  |
+| livenessProbe.initialDelaySeconds | int | `10` |  |
+| livenessProbe.periodSeconds | int | `5` |  |
+| livenessProbe.successThreshold | int | `1` |  |
+| livenessProbe.timeoutSeconds | int | `3` |  |
+| minReadySeconds | int | `45` | Seconds a replaced pod must stay Ready before the rolling update moves to the next pod. Covers the platform DNS TTL and survivor re-admission window after a restart (see `docs/operations/rolling-restart.md`). `0` disables. |
+| mode.distributed.enabled | bool | `true` | RustFS distributed mode support, namely multiple pod multiple pvc. |
+| mode.standalone.enabled | bool | `false` | RustFS standalone mode support, namely one pod one pvc.  |
+| mode.standalone.existingClaim.dataClaim |string |`""` |Whether to use existing pvc claim for data storage. |
+| mode.standalone.existingClaim.logsClaim |string |`""` |Whether to use existing pvc claim for logs storage. |
+| mtls.enabled | bool | `false` | Enable mtls betweens pods. |
+| mtls.clientCertPath | string | `/opt/tls/client_cert.pem` | The path for client cert. |
+| mtls.clientKeyPath | string | `/opt/tls/client_key.pem` | The path for client key. |
+| mtls.existingIssuerRef.enabled | bool | `false` | Enable to use external/existing certificate issuer.|
+| mtls.existingIssuerRef.name | string | `""` | The name of external/existing certificate issuer. |
+| mtls.existingIssuerRef.kind | string | `""` | The kind of external/existing certificate iss
+uer. `ClusterIssuer` or `Issuer`. |
+| mtls.existingIssuerRef.group | string | `""` | The group of external/existing certificate issuer. |
+| nameOverride | string | `""` |  |
+| nodeSelector | object | `{}` |  |
+| pdb.create | bool | `false` | Enable/disable a Pod Disruption Budget creation |
+| pdb.maxUnavailable | string | `1` |  |
+| pdb.minAvailable | string | `""` |  |
+| podAnnotations | object | `{}` |  |
+| pools.enabled | bool | `false` | Enable multiple server pools (capacity expansion, distributed mode only). |
+| pools.list | list | `[]` | One entry per pool; entries may set `replicaCount` (>= 2) and `storageclass`, omitted fields inherit top-level values. Append-only. |
+| podLabels | object | `{}` |  |
+| podSecurityContext.fsGroup | int | `10001` |  |
+| podSecurityContext.runAsGroup | int | `10001` |  |
+| podSecurityContext.runAsUser | int | `10001` |  |
+| readinessProbe.failureThreshold | int | `3` |  |
+| readinessProbe.httpGet.path | string | `"/health/ready"` |  |
+| readinessProbe.httpGet.port | string | `"endpoint"` |  |
+| readinessProbe.initialDelaySeconds | int | `30` |  |
+| readinessProbe.periodSeconds | int | `5` |  |
+| readinessProbe.successThreshold | int | `1` |  |
+| readinessProbe.timeoutSeconds | int | `3` |  |
+| replicaCount | int | `4` | Number of cluster nodes. Distributed mode requires >= 2. |
+| drivesPerNode | int | `null` | Number of data PVCs per pod. Inferred from replicaCount when unset (see Distributed topology above). |
+| resources.limits.cpu | string | `"200m"` |  |
+| resources.limits.memory | string | `"512Mi"` |  |
+| resources.requests.cpu | string | `"100m"` |  |
+| resources.requests.memory | string | `"128Mi"` |  |
+| secret.existingSecret | string | `""` | Use an existing Secret. Automatic endpoint-anchor injection is disabled because the Secret is opaque; set `localEndpointHost.autoInject=true` only after confirming it contains credentials rather than runtime topology, address, or startup-mode overrides. |
+| secret.rustfs.access_key | string | `"rustfsadmin"` | RustFS Access Key ID |
+| secret.rustfs.secret_key | string | `"rustfsadmin"` | RustFS Secret Key ID |
+| service.type | string | `"ClusterIP"` |  |
+| service.console.nodePort | int | `32001` |  |
+| service.console.port | int | `9001` |  |
+| service.endpoint.nodePort | int | `32000` |  |
+| service.endpoint.port | int | `9000` |  |
+| serviceAccount.annotations | object | `{}` |  |
+| serviceAccount.automount | bool | `true` |  |
+| serviceAccount.create | bool | `true` |  |
+| serviceAccount.name | string | `""` |  |
+| startupWaitTimeoutSeconds | int | `300` | Deprecated and ignored; retained for values-file compatibility. |
+| storageclass.dataStorageSize | string | `"256Mi"` | The storage size for data PVC. |
+| storageclass.logStorageSize | string | `"256Mi"` | The storage size for logs PVC. |
+| storageclass.name | string | `"local-path"` | The name for StorageClass. |
+| storageclass.pvcAnnotations.data | map | `{}` | Data pvc customized annotations. |
+| storageclass.pvcAnnotations.logs | map | `{}` | Logs pvc customized annotations. |
+| tolerations | list | `[]` |  |
+| topologySpreadConstraints.enabled | bool | `false` | Enable custom topology spread constraints on distributed-mode StatefulSet pods. |
+| topologySpreadConstraints.constraints | list | `[]` | Raw `spec.template.spec.topologySpreadConstraints` entries applied to the distributed StatefulSet when enabled. |
+| gatewayApi.enabled | bool | `false` | To enable/disable gateway api support. |
+| gatewayApi.gatewayClass | string | `traefik` | Gateway class implementation (traefik, contour, istio). |
+| gatewayApi.httpToHttpsRedirect | bool | `true` | To enable/disable the redirect httproute. |
+| gatewayApi.listeners.http.name | string | `web` | Gateway API http listener name. |
+| gatewayApi.listeners.http.port| int | `8000` | Gateway API http listener port. |
+| gatewayApi.listeners.https.name | string | `websecure` | Gateway API https listener name. |
+| gatewayApi.listeners.https.port| int | `8443` | Gateway API https listener port. |
+| gatewayApi.listeners.tls.enabled | bool | `false` | Enable a TLS passthrough listener and generate a TLSRoute. |
+| gatewayApi.listeners.tls.name | string | `tls` | Gateway API TLS passthrough listener name. |
+| gatewayApi.listeners.tls.port | int | `443` | Gateway API TLS passthrough listener port. |
+| gatewayApi.listeners.tls.backendPort | int | `null` | Backend service port that terminates TLS; defaults to the console port. |
+| gatewayApi.hostname | string | `example.rustfs.com` | Console hostname for Gateway API. |
+| gatewayApi.endpointHostname | string | `""` | Optional separate S3 endpoint hostname; empty disables the S3 HTTPRoute. |
+| gatewayApi.secretName | string | Secret tls to via RustFS using HTTPS. |
+| gatewayApi.existingGateway.name | string | `""` |  The existing gateway name, instead of creating a new one. |
+| gatewayApi.existingGateway.namespace | string | `""` |  The namespace of the existing gateway, if not the local namespace. |
+
+Scanner values map directly to scanner environment variables. For tuning
+workflow and `/v3/scanner/status` interpretation, see
+[Scanner Runtime Controls](../docs/operations/scanner-runtime-controls.md). For
+repeatable scanner-pressure validation, see
+[Scanner Benchmark Runbook](../docs/operations/scanner-benchmark-runbook.md).
+
+---
+
+**NOTE**:
+
+The chart pulls the rustfs image from Docker Hub by default. For private registries, provide either:
+
+- **Existing secrets**: Set `imagePullSecrets` with an array of secret names
+  ```yaml
+  imagePullSecrets:
+    - name: my-existing-secret
+  ```
+
+- **Auto-generated secret**: Enable `imageRegistryCredentials.enabled: true` and specify credentials plus your image details
+  ```yaml
+  imageRegistryCredentials:
+    enabled: true
+    registry: myregistry.com
+    username: myuser
+    password: mypass
+    email: user@example.com
+  ```
+
+Both approaches support pulling from private registries seamlessly and you can also combine them.
+
+- The chart default pull rustfs image from dockerhub, if your rustfs image stores in private registry, you can use either existing image Pull secrets with parameter `imagePullSecrets` or create one setting `imageRegistryCredentials.enabled` to `true`,and then specify the `imageRegistryCredentials.registry/username/password/email` as well as `image.rustfs.repository`,`image.rustfs.tag` to pull rustfs image from your private registry.
+
+- The default storageclass is [`local-path`](https://github.com/rancher/local-path-provisioner),if you want to specify your own storageclass, try to set parameter `storageclass.name`.
+
+- The default size for data and logs dir is **256Mi** which must satisfy the production usage,you should specify `storageclass.dataStorageSize` and `storageclass.logStorageSize` to change the size, for example, 1Ti for data and  1Gi for logs.
+
+# Server pools (capacity expansion)
+
+In distributed mode the chart can run multiple **server pools** — independent
+StatefulSets whose drives together form one cluster, the same expansion model
+the RustFS server already supports via space-separated `RUSTFS_VOLUMES`
+expressions (`rc admin pool ls` / `expand` / `rebalance` / `decommission`).
+
+With `pools.enabled=false` (default) the chart behaves exactly as before:
+one StatefulSet driven by the top-level `replicaCount`/`storageclass`.
+
+To expand an existing deployment, enable pools and describe the current
+layout as pool 0 plus your new capacity:
+
+```yaml
+pools:
+  enabled: true
+  list:
+    - {}                  # pool 0: inherits top-level values and keeps the
+                          # existing StatefulSet/pod/PVC names and data
+    - replicaCount: 4     # pool 1: new capacity
+      storageclass:
+        dataStorageSize: 10Gi
+```
+
+Each entry may set `replicaCount` (>= 2) and/or a `storageclass` block;
+omitted fields inherit the top-level values. Additional pools render as
+`<fullname>-pool<N>` StatefulSets; all pools share the headless service,
+the main service, the configuration and the credentials.
+
+Notes:
+
+* **Pools are append-only.** The list index determines the StatefulSet name —
+  never remove or reorder entries. Retire a pool with
+  `rc admin decommission` before removing it from the list.
+* With chart-generated volumes, each pod receives an explicit local endpoint
+  identity. An unavailable peer no longer blocks a pod from reaching RustFS's
+  own startup and quorum checks.
+* After the cluster converges, run `rc admin rebalance start <alias>` to
+  spread existing objects across the new pool.
+* Pod anti-affinity in pool mode is scoped per pool and **preferred**
+  (soft), not required: two pools can share nodes, and each pool's own pods
+  spread across distinct nodes when capacity allows. Preferred affinity keeps
+  additional pools schedulable when the cluster has fewer nodes than total
+  pods. Single-pool deployments (`pools.enabled=false`) keep the chart's
+  existing required anti-affinity unchanged.
+* The PodDisruptionBudget spans all pools: with the default
+  `pdb.maxUnavailable: 1`, at most one pod of the whole cluster may be
+  evicted at a time. This is deliberately conservative — quorum safety
+  matters across the union of all pools.
+
+# Installation
+
+## Requirement
+
+* Helm V3
+* The RustFS image from the same release as the chart. If `image.rustfs.tag`
+  is overridden, that image must support `RUSTFS_LOCAL_ENDPOINT_HOST`.
+
+Due to the traefik and ingress has different session sticky/affinity annotations, and rustfs support both those two controller, you should specify parameter `ingress.className` to select the right one which suits for you.
+
+## Installation with traefik controller
+
+If your ingress class is `traefik`, running the command:
+
+```
+helm install rustfs -n rustfs --create-namespace ./ --set ingress.className="traefik"
+```
+
+## Installation with nginx controller
+
+If your ingress class is `nginx`, running the command:
+
+```
+helm install rustfs -n rustfs --create-namespace ./ --set ingress.className="nginx"
+```
+
+# Installation check and rustfs login
+
+Check the pod status
+
+```
+kubectl -n rustfs get pods -w
+NAME       READY   STATUS    RESTARTS        AGE
+rustfs-0   1/1     Running   0               2m27s
+rustfs-1   1/1     Running   0               2m27s
+rustfs-2   1/1     Running   0               2m27s
+rustfs-3   1/1     Running   0               2m27s
+```
+
+Check the ingress status
+
+```
+kubectl -n rustfs get ing
+NAME     CLASS   HOSTS            ADDRESS         PORTS     AGE
+rustfs   nginx   example.rustfs.com   10.43.237.152   80, 443   29m
+```
+
+Access the rustfs cluster via `https://example.rustfs.com` with the default username and password `rustfsadmin`.
+
+> Replace the `example.rustfs.com` with your own domain as well as the certificates.
+
+# TLS configuration
+
+By default, tls is not enabled. If you want to enable tls(recommendated),you can follow below steps:
+
+* Step 1: Certification generation
+
+You can request cert and key from CA or use the self-signed cert(**not recommendated on prod**), and put those two files(eg, `tls.crt` and `tls.key`) under some directory on server, for example `tls` directory.
+
+* Step 2: Certification specifying
+
+You should use `--set-file` parameter when running `helm install` command, for example, running the below command can enable ingress tls and generate tls secret:
+
+```
+helm install rustfs rustfs/rustfs -n rustfs --set tls.enabled=true,--set-file tls.crt=./tls.crt,--set-file tls.key=./tls.key
+```
+
+# Gateway API support (alpha)
+
+Due to [ingress nginx retirement](https://kubernetes.io/blog/2025/11/11/ingress-nginx-retirement/) in March 2026, so RustFS adds support for [gateway api](https://gateway-api.sigs.k8s.io/). Currently, RustFS supports traefik, contour, and istio as gateway classes. If you want to enable gateway api, specify `gatewayApi.enabled` to `true` while specify `ingress.enabled` to `false`. After installation, you can find the `Gateway` and `HttpRoute` resources,
+
+```
+$ kubectl -n rustfs get gateway
+NAME             CLASS     ADDRESS   PROGRAMMED   AGE
+rustfs-gateway   traefik             True         169m
+
+$ kubectl -n rustfs get httproute
+NAME           HOSTNAMES            AGE
+rustfs-route   ["example.rustfs.com"]   172m
+```
+
+Access the console at `https://example.rustfs.com`; HTTP redirects to HTTPS by default. HTTPRoutes reference the chart's Kubernetes Service directly and do not require the TraefikService CRD or Traefik's Kubernetes CRD provider. The former TraefikService cookie stickiness is no longer configured by this chart.
+
+To expose the S3 endpoint alongside the console, set a different `gatewayApi.endpointHostname`:
+
+```yaml
+gatewayApi:
+  enabled: true
+  hostname: console.example.com
+  endpointHostname: s3.example.com
+  existingGateway:
+    name: shared-gateway
+    namespace: gateway-system
+```
+
+The console route uses `service.console.port` (9001 by default), and the optional S3 route uses `service.endpoint.port` (9000 by default). Both attach to the configured HTTPS listener and preserve request paths. Configure DNS and the Gateway's TLS certificate for both hostnames. When using a Gateway in another namespace, its listener must allow routes from the RustFS namespace. Leaving `endpointHostname` empty preserves the console-only behavior.
+
+For end-to-end encryption, set `gatewayApi.listeners.tls.enabled` to `true`. The chart then adds a `TLS` listener with `tls.mode: Passthrough` to the `Gateway` and generates a `TLSRoute` that forwards the encrypted stream to the RustFS service, where TLS is terminated on the backend side. Note that backend TLS termination must be configured on RustFS itself (for example `RUSTFS_TLS_PATH` pointing to server certificates), and the installed Gateway API CRDs must include `TLSRoute`.
+
+# Uninstall
+
+Uninstalling the rustfs installation with command,
+
+```
+helm uninstall rustfs -n rustfs
+```
