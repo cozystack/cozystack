@@ -206,17 +206,17 @@ spec:
           # gap — fail hard.
           # Capture the status rather than branching on `mc` directly: an `if`
           # suspends `set -e`, so a `timeout` firing here (exit 124) would be
-          # indistinguishable from the access-denied non-zero this probe expects,
-          # and a 45s hang on the deny path would read as a passed check. This is
-          # the first `ro-user` write in the step — no earlier call exercised it —
-          # so its health is not established elsewhere. Success (exit 0) is the
-          # readonly regression; 124 is a timed-out probe; both fail. Any other
-          # non-zero is the expected denial.
+          # indistinguishable from a denial, and a 45s hang on the deny path
+          # would read as a passed check. Success (exit 0) is the readonly
+          # regression and 124 is a timed-out probe; both fail. Any other
+          # non-zero passes only when mc's output carries the S3 AccessDenied
+          # error: a refused connection, a gateway 5xx or a TLS failure exits
+          # non-zero too and says nothing about accessPolicy.
           echo "readonly test" > "$workdir/ro-test.txt"
           ro_status=0
           # Same 45s write budget as the readwrite PUT above, bypassing the 15s
           # mc() wrapper; a 124 here is still a timed-out probe (handled below).
-          timeout 45 mc cp --insecure "$workdir/ro-test.txt" "ro-user/$BUCKET_NAME/ro-test.txt" || ro_status=$?
+          timeout 45 mc cp --insecure "$workdir/ro-test.txt" "ro-user/$BUCKET_NAME/ro-test.txt" > "$workdir/ro-cp.log" 2>&1 || ro_status=$?
           if [ "$ro_status" -eq 0 ]; then
             echo "FAIL: read-only user must NOT be able to upload (accessPolicy=readonly regression; enforced since cosi-driver v0.3.1, #1921)" >&2
             # Drop the object the viewer should not have been able to create
@@ -228,6 +228,12 @@ spec:
             echo "FAIL: read-only upload probe timed out at its 45s cap; the deny path is not proven healthy, so it cannot pass" >&2
             exit 1
           fi
+          if ! grep -Eiq 'access ?denied' "$workdir/ro-cp.log"; then
+            echo "FAIL: read-only upload failed (exit $ro_status) without an S3 AccessDenied, so the denial is not proven; mc said:" >&2
+            cat "$workdir/ro-cp.log" >&2
+            exit 1
+          fi
+          cat "$workdir/ro-cp.log"
 
           # Remove the test object so bucket cleanup is not blocked
           mc rm --insecure "rw-user/$BUCKET_NAME/rw-test.txt"
