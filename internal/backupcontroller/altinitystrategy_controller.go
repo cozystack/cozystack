@@ -2,11 +2,11 @@
 package backupcontroller
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"maps"
+	"regexp"
 	"strings"
 	"time"
 
@@ -56,6 +56,12 @@ const (
 	// as plain strings, which is what a restore of a Backup that records no
 	// archive relies on.
 	altinityArchiveTimeLayout = "20060102T150405Z"
+
+	// altinityArchiveRunTimeLayout and altinityArchiveUIDLength shape the
+	// archive name of a run; see altinityArchiveName for why they are this
+	// short.
+	altinityArchiveRunTimeLayout = "20060102150405"
+	altinityArchiveUIDLength     = 12
 
 	// Polling cadence for the Altinity Job lifecycle. Mirrors the CNPG /
 	// Velero strategy cadence so behaviour is uniform across drivers.
@@ -187,11 +193,30 @@ func backupParameters(b *backupsv1alpha1.Backup) map[string]string {
 }
 
 // altinityArchiveName mints the archive name for one BackupJob from its
-// persisted StartedAt, so every reconcile and every Pod retry of the Job
-// writes the same archive. It keeps the clickhouse-<release>-<timestamp>
-// shape, because a Backup that records no archive is restored by the
-// timestamp in that shape.
+// persisted StartedAt and its UID, so every reconcile and every Pod retry of
+// the Job writes the same archive and no other run writes it. StartedAt has
+// one-second resolution, and two Plans on one schedule start their runs in
+// the same second; the strategy takes a finished upload of its archive as an
+// earlier attempt of its own run, so a shared name would let one run report
+// the other's archive.
+//
+// The name is no longer than altinityArchiveNameBeforeUIDs, because it sits in
+// every object key, a key is capped at 1024 bytes, and the legacy
+// s3PathOverride prefix has no length limit of its own: the UID takes the room
+// that dropping "clickhouse-", "T" and "Z" frees. It goes after the timestamp
+// so names still sort chronologically, and the restore of a Backup that
+// records no archive, which accepts only clickhouse-<release>-<timestamp>,
+// never picks one of these.
 func altinityArchiveName(j *backupsv1alpha1.BackupJob) string {
+	uid := strings.ReplaceAll(string(j.UID), "-", "")
+	uid = uid[:min(len(uid), altinityArchiveUIDLength)]
+	return fmt.Sprintf("%s-%s-%s", j.Spec.ApplicationRef.Name, j.Status.StartedAt.UTC().Format(altinityArchiveRunTimeLayout), uid)
+}
+
+// altinityArchiveNameBeforeUIDs is the name a controller that did not append
+// the UID gave the same BackupJob, which a Job it created before an upgrade
+// still writes.
+func altinityArchiveNameBeforeUIDs(j *backupsv1alpha1.BackupJob) string {
 	return fmt.Sprintf("clickhouse-%s-%s", j.Spec.ApplicationRef.Name, j.Status.StartedAt.UTC().Format(altinityArchiveTimeLayout))
 }
 
@@ -199,13 +224,16 @@ func altinityArchiveName(j *backupsv1alpha1.BackupJob) string {
 // the archive name. A Job created by a controller that predates archive
 // names, or rendered from a strategy that names its own archives, wrote an
 // archive under another name, and recording this one would point the Backup
-// at an archive that does not exist.
+// at an archive that does not exist. The name has to stand on its own: the
+// name without the UID starts the name with it, and a strategy may append to
+// either.
 func altinityJobCarriesArchive(job *batchv1.Job, archive string) bool {
 	spec, err := json.Marshal(job.Spec.Template.Spec)
 	if err != nil {
 		return false
 	}
-	return bytes.Contains(spec, []byte(archive))
+	whole := regexp.MustCompile(`(^|[^A-Za-z0-9._-])` + regexp.QuoteMeta(archive) + `($|[^A-Za-z0-9._-])`)
+	return whole.Match(spec)
 }
 
 // renderAltinityTemplate runs the strategy's PodTemplateSpec through the
@@ -365,7 +393,10 @@ func (r *BackupJobReconciler) reconcileAltinity(ctx context.Context, j *backupsv
 			return ctrl.Result{}, nil
 		}
 		if !altinityJobCarriesArchive(batchJob, archive) {
-			archive = ""
+			archive = altinityArchiveNameBeforeUIDs(j)
+			if !altinityJobCarriesArchive(batchJob, archive) {
+				archive = ""
+			}
 		}
 		artifact, err := r.createAltinityBackupArtifact(ctx, j, resolved, archive)
 		if err != nil {
