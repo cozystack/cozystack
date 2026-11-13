@@ -302,8 +302,8 @@
        (internal/operator/package_reconciler.go:197-201 skips
        components without `install:` before ever reaching the
        hr.Spec.Values assignment). Server-level GrafanaAdmin
-       promotion is out of scope for Phase 1; see
-       docs/oidc-grafana.md. */}}
+       promotion is not implemented; see
+       https://cozystack.io/docs/v1.6/operations/services/monitoring/oidc-authentication/. */}}
 {{- if .Values.authentication.oidc.enabled }}
 {{include "cozystack.platform.package.full" (list "cozystack.monitoring-application" "oidc" $) }}
 {{- else }}
@@ -344,6 +344,7 @@ variants and opt-in on the slim ones. */}}
 {{include "cozystack.platform.package.full.default" (list "cozystack.metrics-server" $) }}
 {{- $monitoringAgentsComponents := dict "monitoring-agents" (dict "values" (dict "global" (dict "target" "tenant-root"))) -}}
 {{include "cozystack.platform.package.full" (list "cozystack.monitoring-agents" "default" $ $monitoringAgentsComponents) }}
+{{include "cozystack.platform.package.full.default" (list "cozystack.observability-proxy" $) }}
 {{include "cozystack.platform.package.full.default" (list "cozystack.goldpinger" $) }}
 {{include "cozystack.platform.package.default" (list "cozystack.prometheus-operator-crds" $) }}
 {{include "cozystack.platform.package.full.default" (list "cozystack.grafana-operator" $) }}

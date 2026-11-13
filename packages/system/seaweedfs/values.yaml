@@ -232,6 +232,14 @@ seaweedfs:
     # weed skip startLanceServer and drops the container port and Service port
     # with it.
     lancePort: 0
+    # patches/s3-grpc-tls.patch adds [grpc.s3] to security.toml, which the s3
+    # pods mount by subPath and so never re-read. This annotation changes the
+    # pod template in the release that brings the section, so an upgrade
+    # restarts s3 onto it instead of leaving its gRPC in plaintext. The
+    # upstream s3 template carries no checksum of that ConfigMap, and adding
+    # one would be another vendored patch for a change made once.
+    podAnnotations:
+      seaweedfs.cozystack.io/grpc-s3-tls: "true"
     # Keep S3 traffic on same-zone endpoints. Native chart support landed in 4.12
     # (replaces the former s3-traffic-distribution.patch); the chart gates the
     # field on Kubernetes >=1.31 and auto-converts to PreferSameZone on >=1.35.
@@ -328,7 +336,10 @@ seaweedfs:
     # S3 actions for every BucketAccess and ignores the accessPolicy parameter.
     # v0.3.x honours accessPolicy: readonly, so a -readonly BucketAccessClass
     # actually issues read-only (Read,List) credentials instead of read-write.
-    image: "ghcr.io/seaweedfs/seaweedfs-cosi-driver:v0.3.1"
+    # v0.4.0 also writes each grant to the per-identity IAM file: v0.3.1
+    # rewrites only the legacy identity.json, which the S3 gateways migrate
+    # concurrently, so a grant could be lost for good.
+    image: "ghcr.io/seaweedfs/seaweedfs-cosi-driver:v0.4.0"
     podLabels:
       policy.cozystack.io/allow-to-apiserver: "true"
     driverName: "seaweedfs.objectstorage.k8s.io"
@@ -336,6 +347,62 @@ seaweedfs:
     region: ""
     sidecar:
       image: "ghcr.io/cozystack/cozystack/objectstorage-sidecar:v1.6.0@sha256:4d665becd3399c2fe1e8a66e15d14d16e4a5a75395fb0ae65cff46679a8989f1"
+  # A bucket lifecycle rule is stored on PUT and acted on only by the
+  # s3_lifecycle job of the plugin worker, scheduled by the admin server once a
+  # day (weed/worker/tasks/s3_lifecycle/handler.go at 4.45). The parent chart
+  # sends both enabled flags from its lifecycle.enabled, together with the
+  # admin password below; off here, so a render without the parent never
+  # starts an admin without one.
+  admin:
+    enabled: false
+    # Without a password weed admin serves its UI unauthenticated, and a tenant
+    # namespace admits ingress from the whole cluster. The parent chart names
+    # the Secret it keeps; these are the keys it writes.
+    secret:
+      userKey: adminUser
+      pwKey: adminPassword
+    # Job state and anything changed in the admin UI live in -dataDir.
+    data:
+      type: "persistentVolumeClaim"
+      size: "1Gi"
+    logs:
+      type: ""
+    resources:
+      requests:
+        cpu: "50m"
+        memory: "64Mi"
+      limits:
+        cpu: "500m"
+        memory: "256Mi"
+  worker:
+    enabled: false
+    # Vacuum, balance and erasure coding move data; enabling lifecycle must
+    # not start them.
+    jobType: "s3_lifecycle"
+    # The subchart's hard hostname anti-affinity keeps the surge pod of a
+    # rollout off the node the running worker holds, so on a single-node
+    # cluster any change to the worker template never finishes rolling out.
+    # Only required -> preferred, as for the master above.
+    affinity: |
+      podAntiAffinity:
+        preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchLabels:
+                  app.kubernetes.io/name: {{ template "seaweedfs.name" . }}
+                  app.kubernetes.io/instance: {{ .Release.Name }}
+                  app.kubernetes.io/component: worker
+              topologyKey: kubernetes.io/hostname
+    logs:
+      type: ""
+    resources:
+      requests:
+        cpu: "50m"
+        memory: "64Mi"
+      limits:
+        cpu: "1"
+        memory: "512Mi"
   certificates:
     commonName: "SeaweedFS CA"
     ipAddresses: []

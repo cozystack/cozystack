@@ -1,4 +1,12 @@
 cluster-api-operator:
+  # A restarted v0.19 operator ignores the provider Deployments it finds
+  # running (kubernetes-sigs/cluster-api-operator#1031), so a stale
+  # Ready=False on a provider clears only at the first informer resync,
+  # two periods after the restart: ~20 min at the 10m default, ~2 min at
+  # 1m (both measured). A resync is served from the cache and changes
+  # nothing when providers are in sync, so the short period costs no API
+  # writes. Applied through patches/sync-period.diff.
+  syncPeriod: 1m
   resources:
     manager:
       limits:
