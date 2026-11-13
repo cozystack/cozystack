@@ -165,7 +165,7 @@ notify --line release-1.6 --push" ]
   # The App token covers this repository alone, with Contents and Pull
   # requests and nothing else: no workflows, no packages.
   mint='.jobs.batch.steps[] | select(.id == "app-token")'
-  [ "$(yq -r "$mint | .uses" "$WF")" = "actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547" ]
+  [ "$(yq -r "$mint | .uses" "$WF")" = "actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1" ]
   [ "$(yq -r "$mint | .with.owner" "$WF")" = "cozystack" ]
   [ "$(yq -r "$mint | .with.repositories" "$WF")" = "cozystack" ]
   [ "$(yq -r "$mint | .with | to_entries | map(select(.key | test(\"^permission-\"))) | map(.key + \"=\" + .value) | join(\",\")" "$WF")" = "permission-contents=write,permission-pull-requests=write" ]

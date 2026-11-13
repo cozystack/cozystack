@@ -33,7 +33,7 @@ JOB='.jobs.backport-batch-verify'
 }
 
 @test "main is checked out, without credentials, and the head only fetched" {
-  [ "$(yq -r "$JOB.steps[0].uses" "$WF")" = "actions/checkout@11d5960a326750d5838078e36cf38b85af677262" ]
+  [ "$(yq -r "$JOB.steps[0].uses" "$WF")" = "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1" ]
   [ "$(yq -r "$JOB.steps[0].with.ref" "$WF")" = "main" ]
   [ "$(yq -r "$JOB.steps[0].with.persist-credentials" "$WF")" = "false" ]
   [ "$(yq -r "[$JOB.steps[] | select(.uses == \"actions/checkout*\")] | length" "$WF")" -eq 1 ]
