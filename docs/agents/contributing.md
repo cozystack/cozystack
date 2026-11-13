@@ -42,14 +42,14 @@ After every change, verify the relevant artifacts before opening the PR:
 - **Helm templates changed:** `make show` in the package directory renders cleanly.
 - **Go code changed:** `make generate && make manifests` at the repo root, then commit the regenerated files.
 - **`values.yaml` annotations changed:** `make generate` in the package; review the `values.schema.json` diff.
-- **Migration scripts:** confirm what data actually exists first with `kubectl get <resource> -A -o jsonpath='{...}'` on a dev cluster before writing the logic.
+- **Migration scripts:** when the task supplies a kubeconfig, export its path as `KUBECONFIG`. Set `KUBE_CONTEXT` to the human-approved dev-cluster context and confirm the existing data with `kubectl --context "${KUBE_CONTEXT:?}" get <resource> --all-namespaces --output=jsonpath='{...}'` before writing the logic.
 
 ## Commit Format
 
 Follow [Conventional Commits](https://www.conventionalcommits.org/) with `--signoff`:
 
 ```bash
-git commit --signoff -m "type(scope): brief description"
+git commit --signoff --message "type(scope): brief description"
 ```
 
 **Types:** `feat`, `fix`, `security`, `docs`, `style`, `refactor`, `perf`, `test`, `build`, `ci`, `chore`
@@ -67,11 +67,22 @@ Breaking changes: append `!` after type/scope (`feat(api)!: ...`) or add a `BREA
 The subject is imperative and specific; `fix`, `wip` and `update` are not subjects. The body, when there is one, explains why the change is made and only that: the diff already shows what changed and how. Write for a reader who has only `git log`, so no review-iteration or planning vocabulary (`address review comments`, `pass 2`, `batch 1`, `as discussed`) and no bare issue or ticket number in place of the explanation.
 
 **Examples:**
+
 ```bash
-git commit --signoff -m "feat(dashboard): add config hash annotations to restart pods on config changes"
-git commit --signoff -m "fix(postgres): update operator to version 1.2.3"
-git commit --signoff -m "docs(contributing): add installation guide"
+git commit --signoff --message "feat(dashboard): add config hash annotations to restart pods on config changes"
+git commit --signoff --message "fix(postgres): update operator to version 1.2.3"
+git commit --signoff --message "docs(contributing): add installation guide"
 ```
+
+### One Commit, One Logical Change
+
+A commit is the unit a backport cherry-picks and a revert undoes, so it carries exactly one logical change: one fix, one feature, one refactor, together with the regenerated files and tests that belong to it. When the content of a commit changes during review, rewrite that commit (`git commit --amend`, or a `fixup` in `git rebase --interactive`) rather than stacking a correction on top; the branch should read as if each change had been right the first time. If another commit in the series names the rewritten commit in a `Fixes:` trailer, update that reference to its new hash and subject.
+
+### References to Commits and Issues
+
+A commit that fixes a defect introduced by an earlier commit carries a kernel-style `Fixes:` trailer with at least 12 characters of the hash and the full subject, on one unbroken line, which `git log --max-count=1 --abbrev=12 --format='Fixes: %h ("%s")' <sha>` prints. `Fixes: #N` is not used, so that the `Fixes:` trailer always points at a commit.
+
+Use `Closes: #N` only when the change fully resolves the issue. For partial work, use a non-closing reference such as `Refs: #N`; a closing commit trailer can close the issue when it reaches the default branch even if the PR body uses a non-closing link. For an issue in another repository, qualify the reference as `owner/repository#N`, including in a closing trailer (`Closes: owner/repository#N`). Reference trailers go after the body and before `Assisted-by:` and `Signed-off-by:`.
 
 ### AI Agent Attribution
 
@@ -104,13 +115,13 @@ Editing the title does not re-run it. The `edited` trigger was dropped in #3211 
 
 **Type → `kind/*`:**
 
-| type      | label              |
-| --------- | ------------------ |
-| feat      | kind/feature       |
-| fix       | kind/bug           |
-| docs      | kind/documentation |
-| chore     | kind/cleanup       |
-| refactor  | kind/cleanup       |
+| type | label |
+| --- | --- |
+| feat | kind/feature |
+| fix | kind/bug |
+| docs | kind/documentation |
+| chore | kind/cleanup |
+| refactor | kind/cleanup |
 | security, style, perf, test, build, ci, revert | (no kind label) |
 
 **Scope → `area/*`** (full mapping in `.github/workflows/pr-labeler.yaml`):
@@ -150,12 +161,16 @@ If the branch has extra commits, clean it up:
 git fetch upstream
 git checkout -b my-feature upstream/main
 git cherry-pick <your-commit-hash>
-git push -f origin my-feature
+git push --force origin my-feature
 ```
 
 ## Pull Request Body
 
 Fill in the template at [`.github/PULL_REQUEST_TEMPLATE.md`](../../.github/PULL_REQUEST_TEMPLATE.md). It includes the required `release-note` block and the [Downstream Repositories](#downstream-repositories) checklist.
+
+Link the issues the PR addresses in its body. Use `Closes #N` when it fully resolves an issue, or `Closes owner/repository#N` for another repository; link partial work without a closing keyword. A closing keyword in a commit can close the issue on merge into the default branch, but does not create the PR's linked-issue entry. Put the reference in the PR body even when the commit already carries it.
+
+GitHub interprets closing keywords in a PR description only when it targets the default branch. For a release-branch PR, use a non-closing reference and have a maintainer with write access link the issue manually and close it separately when appropriate. See [GitHub's issue-linking rules](https://docs.github.com/en/issues/tracking-your-work-with-issues/using-issues/linking-a-pull-request-to-an-issue).
 
 Create the PR with `gh pr create --title "type(scope): brief description" --body-file <file>`.
 
@@ -166,6 +181,14 @@ cp .github/PULL_REQUEST_TEMPLATE.md /tmp/pr-body.md
 # fill in /tmp/pr-body.md, then:
 gh pr create --draft --title "type(scope): brief description" --body-file /tmp/pr-body.md
 ```
+
+### What Goes in the Commit, What Goes in the PR Body
+
+The commit message is the permanent record: a reader of `git log` or `git blame` years later has it and nothing else. It carries what broke or was missing and for whom, the exact error string verbatim when there is one, so that `git log --grep` finds it, why this design and not the obvious alternative, why it is safe where the diff does not show that, and one line on how it was tested, including the failure path when the change adds one.
+
+The PR body is read once, next to those commits, so it does not repeat them. Its first screen says what is broken or missing, where, and what that costs. After that come one sentence per commit and only what no single commit can carry: results that need the whole series, the environment they came from, decisions the reviewer has to make across commits. Questions to reviewers and open doubts belong in the PR body and never in a commit, where they go stale the day it merges. A fact that fits both goes in the commit.
+
+Size a commit body against accepted commits touching the same files, not against a fixed line cap, which cuts the answers before the narrative. After shortening any of these texts, check that every must-keep fact survived, that every number still sits next to the version or setup it was measured on, that nothing new was added, and that a claim about a set ("every caller", "never happens") is backed by a grep or rewritten as a mechanism.
 
 ## Downstream Repositories
 
@@ -292,60 +315,17 @@ The release process keeps a **separate** list of repositories, in [`changelog.md
 
 - A bug-fix PR should include a behavioural regression test, not just a single field assertion — prove the bug can no longer recur.
 - Keep the PR description aligned with the template: `## What this PR does` plus the `release-note` block.
+- Before posting a claim about a set ("all callers", "the only user", "never happens"), grep for the counterexample, or state the mechanism instead.
+- Disagreement carries a mechanism: a code path, a number, a spec clause, a failing test. Time spent and urgency are not arguments.
+- Answer the point directly and explain why it is accepted or declined. Read brief feedback literally rather than inferring tone, and avoid unnecessary notifications. Follow the [prose guidance](../../AGENTS.md#working-principles).
 
-## Fetching Unresolved Review Comments
+## Collecting Review Feedback
 
-Cozystack uses GitHub review threads with resolution status. Only unresolved threads are actionable — resolved threads are already handled.
+Read the feedback from these sources, including existing replies:
 
-The REST endpoint `/pulls/{pr}/reviews` returns review summaries, not individual review comments. Use the GraphQL API to access `reviewThreads` with `isResolved` status:
+- Unresolved inline review threads.
+- Review submission bodies, even when the review also has inline comments.
+- General PR conversation comments.
+- Comments posted directly on the PR's commits.
 
-```bash
-gh api graphql -F owner=cozystack -F repo=cozystack -F pr=<PR_NUMBER> -f query='
-query($owner: String!, $repo: String!, $pr: Int!) {
-  repository(owner: $owner, name: $repo) {
-    pullRequest(number: $pr) {
-      reviewThreads(first: 100) {
-        nodes {
-          isResolved
-          comments(first: 100) {
-            nodes {
-              id
-              path
-              line
-              author { login }
-              bodyText
-              url
-              createdAt
-            }
-          }
-        }
-      }
-    }
-  }
-}' --jq '.data.repository.pullRequest.reviewThreads.nodes[] | select(.isResolved == false) | .comments.nodes[]'
-```
-
-Compact one-line variant:
-
-```bash
-gh api graphql -F owner=cozystack -F repo=cozystack -F pr=<PR_NUMBER> -f query='
-query($owner: String!, $repo: String!, $pr: Int!) {
-  repository(owner: $owner, name: $repo) {
-    pullRequest(number: $pr) {
-      reviewThreads(first: 100) {
-        nodes {
-          isResolved
-          comments(first: 100) {
-            nodes {
-              path
-              line
-              author { login }
-              bodyText
-            }
-          }
-        }
-      }
-    }
-  }
-}' --jq '.data.repository.pullRequest.reviewThreads.nodes[] | select(.isResolved == false) | .comments.nodes[] | "\(.path):\(.line // "N/A") - \(.author.login): \(.bodyText[:150])"'
-```
+Verify each human or automated finding against the current code before deciding whether it needs a change. Do not post a duplicate answer to a point already addressed.
