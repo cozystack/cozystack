@@ -69,7 +69,8 @@ spec:
   topologySpreadConstraints:
   - maxSkew: 1
     topologyKey: "kubernetes.io/hostname"
-    whenUnsatisfiable: ScheduleAnyway
+    whenUnsatisfiable: DoNotSchedule
+    nodeTaintsPolicy: Ignore
     labelSelector:
       matchLabels:
         app.kubernetes.io/instance: etcd
@@ -78,11 +79,15 @@ spec:
   affinity:
     {{- toYaml . | nindent 4 }}
   {{- else }}
-  # Soft anti-affinity: spread etcd members across nodes on a best-effort
-  # basis so a single node failure is unlikely to take out more than one
-  # member. Preferred (not required) because a hard rule would leave a member
-  # Pending when replicas exceed schedulable nodes, or when node-local storage
-  # pins a member to a node. Override via .Values.affinity for a hard rule.
+  # Soft anti-affinity, a preference on top of the spread constraint above,
+  # which by default is the hard rule that keeps two members off one node
+  # while another node has none. Preferred, not required, because a required
+  # rule also forbids two members on one node when every node already has
+  # one, so an etcd with more members than schedulable nodes could not start
+  # all of them. With node-local storage a recreated member Pod can only
+  # return to its own node, and the default spread keeps it Pending there
+  # while that node holds another member and some other node holds none.
+  # Override via .Values.affinity for a hard rule.
   affinity:
     podAntiAffinity:
       preferredDuringSchedulingIgnoredDuringExecution:

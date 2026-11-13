@@ -16,6 +16,15 @@
 # seaweedfs/seaweedfs#11674 after 4.48; drop the patch on the first vendored
 # release that carries it.
 #
+# patches/volume-layout-crowded-lock.diff makes SetVolumeCrowded take the write
+# lock of the volume layout. Upstream 4.45 mutates the crowded map under the
+# read lock, while Assign reads it under the same read lock through
+# GetWritableVolumeCount, so under a steady stream of writes the master dies on
+# a fatal "concurrent map read and map write", which recover cannot catch, and
+# S3 answers 500 until it is back. Backport of seaweedfs/seaweedfs#11216,
+# released in 4.46; drop the patch on the first vendored release that carries
+# it.
+#
 # `make update` re-pins VERSION from the vendored chart, SOURCE_SHA256 from the
 # source archive of that tag, UPSTREAM_DIGEST from the upstream image of that
 # tag and the builder from upstream's docker/Dockerfile.go_build, and checks

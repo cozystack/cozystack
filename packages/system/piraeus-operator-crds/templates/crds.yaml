@@ -151,13 +151,17 @@ spec:
                       *SecretName using the issuer configured here.
                     properties:
                       group:
-                        description: Group of the resource being referred to.
+                        description: |-
+                          Group of the issuer being referred to.
+                          Defaults to 'cert-manager.io'.
                         type: string
                       kind:
-                        description: Kind of the resource being referred to.
+                        description: |-
+                          Kind of the issuer being referred to.
+                          Defaults to 'Issuer'.
                         type: string
                       name:
-                        description: Name of the resource being referred to.
+                        description: Name of the issuer being referred to.
                         type: string
                     required:
                     - name
@@ -201,6 +205,11 @@ spec:
                     type: object
                     x-kubernetes-map-type: atomic
                     x-kubernetes-preserve-unknown-fields: true
+                  replicas:
+                    description: Number of desired pods. Defaults to 1.
+                    format: int32
+                    minimum: 0
+                    type: integer
                 type: object
               csiController:
                 description: CSIController controls the deployment of the CSI Controller
@@ -320,13 +329,17 @@ spec:
                       issuer configured here.
                     properties:
                       group:
-                        description: Group of the resource being referred to.
+                        description: |-
+                          Group of the issuer being referred to.
+                          Defaults to 'cert-manager.io'.
                         type: string
                       kind:
-                        description: Kind of the resource being referred to.
+                        description: |-
+                          Kind of the issuer being referred to.
+                          Defaults to 'Issuer'.
                         type: string
                       name:
-                        description: Name of the resource being referred to.
+                        description: Name of the issuer being referred to.
                         type: string
                     required:
                     - name
@@ -345,6 +358,18 @@ spec:
                   * Store credentials for accessing remotes for backups.
                   See https://linbit.com/drbd-user-guide/linstor-guide-1_0-en/#s-encrypt_commands for more information.
                 type: string
+              maxConcurrentEvacuations:
+                description: |-
+                  MaxConcurrentEvacuations limits how many Satellites are evacuated at the same time when using the
+                  "Evacuate" deletion policy.
+
+                  This applies both to Satellites removed because their node no longer matches the cluster, and to nodes
+                  removed through ClusterAPI. While the limit is reached, additional Satellites wait for a free slot before
+                  their volumes are moved and, for ClusterAPI managed nodes, before the node is allowed to drain.
+                  A value of 0 (the default) places no limit on the number of concurrent evacuations.
+                format: int32
+                minimum: 0
+                type: integer
               nfsServer:
                 description: NFSServer controls the deployment of the LINSTOR CSI
                   NFS Server DaemonSet.
@@ -568,9 +593,10 @@ spec:
                     operator:
                       description: |-
                         Operator represents a key's relationship to the value.
-                        Valid operators are Exists and Equal. Defaults to Equal.
+                        Valid operators are Exists, Equal, Lt, and Gt. Defaults to Equal.
                         Exists is equivalent to wildcard for value, so that a pod can
                         tolerate all taints of a particular category.
+                        Lt and Gt perform numeric comparisons (requires feature gate TaintTolerationComparisonOperators).
                       type: string
                     tolerationSeconds:
                       description: |-
@@ -1054,13 +1080,17 @@ spec:
                       issuer configured here.
                     properties:
                       group:
-                        description: Group of the resource being referred to.
+                        description: |-
+                          Group of the issuer being referred to.
+                          Defaults to 'cert-manager.io'.
                         type: string
                       kind:
-                        description: Kind of the resource being referred to.
+                        description: |-
+                          Kind of the issuer being referred to.
+                          Defaults to 'Issuer'.
                         type: string
                       name:
-                        description: Name of the resource being referred to.
+                        description: Name of the issuer being referred to.
                         type: string
                     required:
                     - name
@@ -1321,6 +1351,15 @@ spec:
                 x-kubernetes-list-map-keys:
                 - name
                 x-kubernetes-list-type: map
+              resourceNameSuffixSeparator:
+                description: |-
+                  ResourceNameSuffixSeparator is inserted between the base resource name and the Satellite name.
+
+                  Defaults to ".".
+                enum:
+                - .
+                - '-'
+                type: string
               storagePools:
                 description: StoragePools is a list of storage pools to configure
                   on the node.
@@ -1347,18 +1386,66 @@ spec:
                     lvmPool:
                       description: Configures a LVM Volume Group as storage pool.
                       properties:
-                        volumeGroup:
+                        externalLocking:
+                          description: |-
+                            ExternalLocking skips LINSTOR's internal locking for the shared VG, relying on an external
+                            lock manager such as lvmlockd on the hosts instead.
+                          type: boolean
+                        physicalVolumeCreateArguments:
+                          description: |-
+                            PhysicalVolumeCreateArguments are arguments to pass to "pvcreate".
+                            This has no effect on an existing VG, it only applies when the VG initially gets created.
+                          items:
+                            type: string
+                          type: array
+                        sharedSpace:
+                          description: |-
+                            SharedSpace marks the VG as shared between multiple nodes, identified by the given name.
+                            All storage pools backed by the same physical storage must use the same shared space name.
+                            A shared VG must be set up manually on the hosts, it cannot be created from source devices.
                           type: string
+                        volumeGroup:
+                          description: VolumeGroup is the name of the Volume Group
+                            (VG) to use.
+                          type: string
+                        volumeGroupCreateArguments:
+                          description: |-
+                            VolumeGroupCreateArguments are arguments to pass to "vgcreate".
+                            This has no effect on an existing VG, it only applies when the VG initially gets created.
+                          items:
+                            type: string
+                          type: array
                       type: object
                     lvmThinPool:
                       description: Configures a LVM Thin Pool as storage pool.
                       properties:
+                        logicalVolumeCreateArguments:
+                          description: |-
+                            LogicalVolumeCreateArguments are arguments to pass to "lvcreate".
+                            This has no effect on an existing thinpool, it only applies when the thinpool initially gets created.
+                          items:
+                            type: string
+                          type: array
+                        physicalVolumeCreateArguments:
+                          description: |-
+                            PhysicalVolumeCreateArguments are arguments to pass to "pvcreate".
+                            This has no effect on an existing VG, it only applies when the VG initially gets created.
+                          items:
+                            type: string
+                          type: array
                         thinPool:
                           description: ThinPool is the name of the thinpool LV (without
                             VG prefix).
                           type: string
                         volumeGroup:
                           type: string
+                        volumeGroupCreateArguments:
+                          description: |-
+                            VolumeGroupCreateArguments are arguments to pass to "vgcreate".
+                            This has no effect on an existing VG, it only applies when the VG initially gets created.
+                          items:
+                            type: string
+                          type: array
                       type: object
                     name:
                       description: Name of the storage pool in linstor.
@@ -1447,6 +1534,16 @@ spec:
                         zPool:
                           description: ZPool is the name of the ZFS zpool.
                           type: string
+                        zpoolCreateArguments:
+                          description: |-
+                            ZpoolCreateArguments are arguments to pass to "zpool create".
+                            This has no effect on an existing zpool, it only applies when the zpool initially gets created.
+
+                            If not set, "-o failmode=continue" is automatically added to ensure a failed zpool does not stop replication
+                            to and from other nodes in the cluster.
+                          items:
+                            type: string
+                          type: array
                       type: object
                     zfsThinPool:
                       description: Configures a ZFS system based storage pool, allocating
@@ -1455,6 +1552,16 @@ spec:
                         zPool:
                           description: ZPool is the name of the ZFS zpool.
                           type: string
+                        zpoolCreateArguments:
+                          description: |-
+                            ZpoolCreateArguments are arguments to pass to "zpool create".
+                            This has no effect on an existing zpool, it only applies when the zpool initially gets created.
+
+                            If not set, "-o failmode=continue" is automatically added to ensure a failed zpool does not stop replication
+                            to and from other nodes in the cluster.
+                          items:
+                            type: string
+                          type: array
                       type: object
                   required:
                   - name
@@ -1762,13 +1869,17 @@ spec:
                       issuer configured here.
                     properties:
                       group:
-                        description: Group of the resource being referred to.
+                        description: |-
+                          Group of the issuer being referred to.
+                          Defaults to 'cert-manager.io'.
                         type: string
                       kind:
-                        description: Kind of the resource being referred to.
+                        description: |-
+                          Kind of the issuer being referred to.
+                          Defaults to 'Issuer'.
                         type: string
                       name:
-                        description: Name of the resource being referred to.
+                        description: Name of the issuer being referred to.
                         type: string
                     required:
                     - name
@@ -1925,6 +2036,15 @@ spec:
               repository:
                 description: Repository used to pull workload images.
                 type: string
+              resourceNameSuffixSeparator:
+                description: |-
+                  ResourceNameSuffixSeparator is inserted between the base resource name and the Satellite name.
+
+                  Defaults to ".".
+                enum:
+                - .
+                - '-'
+                type: string
               storagePools:
                 description: StoragePools is a list of storage pools to configure
                   on the node.
@@ -1951,18 +2071,66 @@ spec:
                     lvmPool:
                       description: Configures a LVM Volume Group as storage pool.
                       properties:
-                        volumeGroup:
+                        externalLocking:
+                          description: |-
+                            ExternalLocking skips LINSTOR's internal locking for the shared VG, relying on an external
+                            lock manager such as lvmlockd on the hosts instead.
+                          type: boolean
+                        physicalVolumeCreateArguments:
+                          description: |-
+                            PhysicalVolumeCreateArguments are arguments to pass to "pvcreate".
+                            This has no effect on an existing VG, it only applies when the VG initially gets created.
+                          items:
+                            type: string
+                          type: array
+                        sharedSpace:
+                          description: |-
+                            SharedSpace marks the VG as shared between multiple nodes, identified by the given name.
+                            All storage pools backed by the same physical storage must use the same shared space name.
+                            A shared VG must be set up manually on the hosts, it cannot be created from source devices.
                           type: string
+                        volumeGroup:
+                          description: VolumeGroup is the name of the Volume Group
+                            (VG) to use.
+                          type: string
+                        volumeGroupCreateArguments:
+                          description: |-
+                            VolumeGroupCreateArguments are arguments to pass to "vgcreate".
+                            This has no effect on an existing VG, it only applies when the VG initially gets created.
+                          items:
+                            type: string
+                          type: array
                       type: object
                     lvmThinPool:
                       description: Configures a LVM Thin Pool as storage pool.
                       properties:
+                        logicalVolumeCreateArguments:
+                          description: |-
+                            LogicalVolumeCreateArguments are arguments to pass to "lvcreate".
+                            This has no effect on an existing thinpool, it only applies when the thinpool initially gets created.
+                          items:
+                            type: string
+                          type: array
+                        physicalVolumeCreateArguments:
+                          description: |-
+                            PhysicalVolumeCreateArguments are arguments to pass to "pvcreate".
+                            This has no effect on an existing VG, it only applies when the VG initially gets created.
+                          items:
+                            type: string
+                          type: array
                         thinPool:
                           description: ThinPool is the name of the thinpool LV (without
                             VG prefix).
                           type: string
                         volumeGroup:
                           type: string
+                        volumeGroupCreateArguments:
+                          description: |-
+                            VolumeGroupCreateArguments are arguments to pass to "vgcreate".
+                            This has no effect on an existing VG, it only applies when the VG initially gets created.
+                          items:
+                            type: string
+                          type: array
                       type: object
                     name:
                       description: Name of the storage pool in linstor.
@@ -2051,6 +2219,16 @@ spec:
                         zPool:
                           description: ZPool is the name of the ZFS zpool.
                           type: string
+                        zpoolCreateArguments:
+                          description: |-
+                            ZpoolCreateArguments are arguments to pass to "zpool create".
+                            This has no effect on an existing zpool, it only applies when the zpool initially gets created.
+
+                            If not set, "-o failmode=continue" is automatically added to ensure a failed zpool does not stop replication
+                            to and from other nodes in the cluster.
+                          items:
+                            type: string
+                          type: array
                       type: object
                     zfsThinPool:
                       description: Configures a ZFS system based storage pool, allocating
@@ -2059,6 +2237,16 @@ spec:
                         zPool:
                           description: ZPool is the name of the ZFS zpool.
                           type: string
+                        zpoolCreateArguments:
+                          description: |-
+                            ZpoolCreateArguments are arguments to pass to "zpool create".
+                            This has no effect on an existing zpool, it only applies when the zpool initially gets created.
+
+                            If not set, "-o failmode=continue" is automatically added to ensure a failed zpool does not stop replication
+                            to and from other nodes in the cluster.
+                          items:
+                            type: string
+                          type: array
                       type: object
                   required:
                   - name
