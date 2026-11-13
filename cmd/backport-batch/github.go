@@ -21,11 +21,20 @@ import (
 	"fmt"
 	"regexp"
 	"strconv"
+	"strings"
 )
 
 // openPullsCap is the page size of the open pull request listing. The REST
 // listing stops at it in silence, so a full page is an error, not an answer.
 const openPullsCap = 100
+
+// recentPullsPage is the page size of the listing of every pull request
+// against a line, newest first, and recentPullsPages how many pages of it a
+// search for the line's record reads.
+const (
+	recentPullsPage  = 100
+	recentPullsPages = 10
+)
 
 // searchResultCap is the most results GitHub search returns for one query,
 // however far it is paginated. gh pr list answers a --label filter through
@@ -43,6 +52,7 @@ var (
 	batchBranchRE = regexp.MustCompile(`^backport-batch/(release-\d+\.\d+)-(\d{8})$`)
 	loginRE       = regexp.MustCompile(`^[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?$`)
 	botLoginRE    = regexp.MustCompile(`^[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?\[bot\]$`)
+	pullURLRE     = regexp.MustCompile(`^https://[^/\s]+/[^/\s]+/[^/\s]+/pull/([1-9][0-9]{0,8})$`)
 )
 
 // batchBotEnv names the GitHub App bot the scheduled batch opens its pull
@@ -66,10 +76,12 @@ func batchBotLogin(lookup func(string) (string, bool)) string {
 // pullRequest is the REST view of a pull request: unlike gh pr list, it
 // carries the author's association with the repository.
 type pullRequest struct {
-	Number            int    `json:"number"`
-	HTMLURL           string `json:"html_url"`
-	Body              string `json:"body"`
-	AuthorAssociation string `json:"author_association"`
+	Number            int     `json:"number"`
+	HTMLURL           string  `json:"html_url"`
+	Body              string  `json:"body"`
+	State             string  `json:"state"`
+	MergedAt          *string `json:"merged_at"`
+	AuthorAssociation string  `json:"author_association"`
 	User              struct {
 		Login string `json:"login"`
 		Type  string `json:"type"`
@@ -102,13 +114,22 @@ type issueComment struct {
 // github is the part of GitHub the tool talks to: gh outside tests.
 type github interface {
 	openPulls(base string) ([]pullRequest, error)
+	// recentPulls is one page of every pull request against base, open,
+	// merged or closed, newest first.
+	recentPulls(base string, page int) ([]pullRequest, error)
 	// permission is login's permission on the repository as GitHub's
 	// legacy field gives it: admin, write, read or none.
 	permission(login string) (string, error)
 	// labelled lists the pull requests merged into main that carry label.
 	labelled(label string) ([]int, error)
-	createPull(base, head, title, bodyFile string) error
+	// pull reads one pull request as it is now.
+	pull(number int) (pullRequest, error)
+	// createPull opens the draft and returns its number and URL.
+	createPull(base, head, title, bodyFile string) (int, string, error)
 	editPull(number int, title, bodyFile string) error
+	// editBody replaces the body of pull request number and nothing else.
+	editBody(number int, bodyFile string) error
+	closePull(number int) error
 	comments(number int) ([]issueComment, error)
 	createComment(number int, bodyFile string) error
 	editComment(id int64, bodyFile string) error
@@ -134,6 +155,38 @@ func (ghCLI) openPulls(base string) ([]pullRequest, error) {
 		return nil, fmt.Errorf("the open pull requests on %s fill a page of %d, so the list may be truncated", base, openPullsCap)
 	}
 	return prs, nil
+}
+
+func (ghCLI) recentPulls(base string, page int) ([]pullRequest, error) {
+	out, err := capture("gh", "api", "-X", "GET", "repos/{owner}/{repo}/pulls",
+		"-f", "state=all", "-f", "base="+base, "-f", "sort=created", "-f", "direction=desc",
+		"-f", "per_page="+strconv.Itoa(recentPullsPage), "-f", "page="+strconv.Itoa(page))
+	if err != nil {
+		return nil, err
+	}
+	var prs []pullRequest
+	if err := json.Unmarshal([]byte(out), &prs); err != nil {
+		return nil, fmt.Errorf("reading the pull requests against %s: %w", base, err)
+	}
+	return prs, nil
+}
+
+// permCache asks GitHub for a login's permission once per command: the open
+// batch's author is asked when it is chosen and again when its record is.
+type permCache struct {
+	github
+	perms map[string]string
+}
+
+func (c *permCache) permission(login string) (string, error) {
+	if p, ok := c.perms[login]; ok {
+		return p, nil
+	}
+	p, err := c.github.permission(login)
+	if err == nil {
+		c.perms[login] = p
+	}
+	return p, err
 }
 
 func (ghCLI) permission(login string) (string, error) {
@@ -175,13 +228,47 @@ func (ghCLI) labelled(label string) ([]int, error) {
 	return numbers, nil
 }
 
-func (ghCLI) createPull(base, head, title, bodyFile string) error {
-	_, err := capture("gh", "pr", "create", "--draft", "--base", base, "--head", head, "--title", title, "--body-file", bodyFile)
-	return err
+func (ghCLI) pull(number int) (pullRequest, error) {
+	var pr pullRequest
+	out, err := capture("gh", "api", "repos/{owner}/{repo}/pulls/"+strconv.Itoa(number))
+	if err != nil {
+		return pr, err
+	}
+	if err := json.Unmarshal([]byte(out), &pr); err != nil {
+		return pr, fmt.Errorf("reading pull request #%d: %w", number, err)
+	}
+	if pr.Number != number {
+		return pr, fmt.Errorf("asked for pull request #%d, GitHub answered with #%d", number, pr.Number)
+	}
+	return pr, nil
+}
+
+func (ghCLI) createPull(base, head, title, bodyFile string) (int, string, error) {
+	out, err := capture("gh", "pr", "create", "--draft", "--base", base, "--head", head, "--title", title, "--body-file", bodyFile)
+	if err != nil {
+		return 0, "", err
+	}
+	url := strings.TrimSpace(out)
+	m := pullURLRE.FindStringSubmatch(url)
+	if m == nil {
+		return 0, "", fmt.Errorf("gh pr create printed %q, not the URL of a pull request", url)
+	}
+	n, err := strconv.Atoi(m[1])
+	return n, url, err
 }
 
 func (ghCLI) editPull(number int, title, bodyFile string) error {
 	_, err := capture("gh", "pr", "edit", strconv.Itoa(number), "--title", title, "--body-file", bodyFile)
+	return err
+}
+
+func (ghCLI) editBody(number int, bodyFile string) error {
+	_, err := capture("gh", "pr", "edit", strconv.Itoa(number), "--body-file", bodyFile)
+	return err
+}
+
+func (ghCLI) closePull(number int) error {
+	_, err := capture("gh", "pr", "close", strconv.Itoa(number))
 	return err
 }
 

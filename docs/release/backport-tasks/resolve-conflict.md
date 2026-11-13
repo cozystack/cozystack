@@ -4,7 +4,7 @@ The batch carries a pull request merged into `main` as its own commits, each pic
 
 ### Inputs
 
-- The open batch pull request for the line, its branch `backport-batch/<line>-<yyyymmdd>` and its head commit, as GitHub shows them: `gh pr view <batch> --json headRefName,headRefOid`.
+- The open batch pull request for the line, its branch `backport-batch/<line>-<yyyymmdd>` and its head commit, as GitHub shows them: `gh pr view <batch> --json headRefName,headRefOid`. The resolution lands on that batch, so without an open batch pull request there is nothing to resolve onto: wait for the next batch, which lists the conflict again, or port the change as a pull request of its own against the line, as [fixes that exist only on a release line](../backports.md#fixes-that-exist-only-on-a-release-line) describes, and drop the original from the line.
 - The original's number `N` from the **Deferred conflicts** list, and its merge commit on `main`: `gh pr view N --json mergeCommit --jq .mergeCommit.oid`. It has two parents when the pull request was merged, one when it was squashed.
 - For a merged pull request, its own commits, oldest first, without the merges that brought `main` into its branch: `git rev-list --reverse --topo-order --no-merges <merge commit>^1..<merge commit>^2`.
 - The files the original changes, `git diff --name-only <merge commit>^1 <merge commit>`, which are the only files the resolution may touch.
@@ -34,7 +34,7 @@ git add <resolved files>
 git -c core.hooksPath=/dev/null cherry-pick --continue --no-edit
 ```
 
-When the original builds on something the line does not have, a helper, a value or another pull request, the resolution would have to bring that along, which this task does not allow: abort with `git cherry-pick --abort`, go back with `git switch --detach "$base"`, and comment on the batch pull request which change the original depends on; it stays deferred until that change is on the line. A commit whose change the line already has stops the pick as empty; skip it with `git cherry-pick --skip`.
+When the original builds on something the line does not have, a helper, a value or another pull request, the resolution would have to bring that along, which this task does not allow: abort with `git cherry-pick --abort`, go back with `git switch --detach "$base"`, and comment on the batch pull request which change the original depends on; it stays deferred until that change is on the line. An original the batch parked because it builds on such a change is the same task, and lands only as a complete adaptation: every file it changes changed, unless the line already has that file as the original makes it. When that change will never reach the line, drop the original there instead, with `backport-batch run --line <line> --drop N --reason "<builds on …>" --push`, so later batches stop trying it. A commit whose change the line already has stops the pick as empty; skip it with `git cherry-pick --skip`. A resolution that ports only what the line has and leaves a file of the original as it was, one the line does not have for instance, is refused by `fold`: such a port goes to the line as a pull request of its own, as [fixes that exist only on a release line](../backports.md#fixes-that-exist-only-on-a-release-line) describes, and the original is dropped there.
 
 For a merged pull request, join the picks to the batch head with the merge commit:
 

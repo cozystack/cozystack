@@ -110,7 +110,8 @@ func TestWorkflowChangesWaitUntilOnTheLine(t *testing.T) {
 	if code != 0 || !strings.Contains(stdout, "1 originals on #90 change .github/workflows/ and wait for a maintainer") || strings.Contains(stdout, "deferred conflicts") {
 		t.Errorf("notify = %d, %q; want #5 for a maintainer and no conflict\n%s", code, stdout, stderr)
 	}
-	if len(gh.issueComments) != 1 || !strings.Contains(gh.issueComments[0].Body, "[#5](") || !strings.Contains(gh.issueComments[0].Body, "#changes-to-workflows") || strings.Contains(gh.issueComments[0].Body, "These conflicts") {
+	notes := slices.DeleteFunc(slices.Clone(gh.issueComments), func(c issueComment) bool { return !strings.HasPrefix(c.Body, notifyMarker) })
+	if len(notes) != 1 || !strings.Contains(notes[0].Body, "[#5](") || !strings.Contains(notes[0].Body, "#changes-to-workflows") || strings.Contains(notes[0].Body, "These conflicts") {
 		t.Errorf("the comment does not list #5 for a maintainer: %+v", gh.issueComments)
 	}
 
@@ -173,8 +174,12 @@ func TestDeferKeepsWorkflowChangesWaiting(t *testing.T) {
 	}
 	f.git("switch", "-q", "main")
 	reopen(f, gh)
-	if code, stdout, _ := f.exec(gh, "check", "--line", "release-1.1", "--cut"); strings.Contains(stdout, "#5 changes") {
-		t.Errorf("check --cut = %d, %q; a deferred #5 still stops the cut as waiting", code, stdout)
+	// #6 and #7 are still only on the batch, which fails the cut; #5 does not.
+	if code, stdout, _ := f.exec(gh, "check", "--line", "release-1.1", "--cut"); code != 1 || strings.Contains(stdout, "#5 changes") || !strings.Contains(stdout, "#6 is only on open batch PR #90") {
+		t.Errorf("check --cut = %d, %q; want 1 for #6 and #7 alone, a deferred #5 no longer waiting", code, stdout)
+	}
+	if code, _, stderr := f.exec(gh, "check", "--line", "release-1.1"); code != 0 || !strings.Contains(stderr, "deferred on #90 to the next batch: https://github.com/cozystack/cozystack/pull/5 ") {
+		t.Errorf("check = %d, want 0 with a warning about #5:\n%s", code, stderr)
 	}
 }
 

@@ -205,6 +205,9 @@ type history struct {
 	picks     []pickRef
 	batches   map[string]string
 	backports map[int]string
+	// trees caches what a net merge of an original onto head writes, by its
+	// merge commit: "" for a conflict.
+	trees map[string]string
 }
 
 func readHistory(head, base string, textUntil time.Time) (*history, error) {
@@ -225,7 +228,7 @@ func readHistory(head, base string, textUntil time.Time) (*history, error) {
 // readPicks reads only the messages of head's commits outside base, which is
 // all a batch branch is asked about; textUntil is the batch-only day.
 func readPicks(head, base string, textUntil time.Time) (*history, error) {
-	h := &history{head: head, reachable: map[string]bool{}, appended: map[string]string{}, batches: map[string]string{}, backports: map[int]string{}}
+	h := &history{head: head, reachable: map[string]bool{}, appended: map[string]string{}, batches: map[string]string{}, backports: map[int]string{}, trees: map[string]string{}}
 	oids, err := revList("--end-of-options", head, "^"+base)
 	if err != nil {
 		return nil, err
@@ -332,34 +335,54 @@ func (h *history) carries(o *original, commits []string) (string, error) {
 	if c, ok := h.backports[o.number]; ok {
 		return `named by "Backport of" in ` + c[:12], nil
 	}
-	noop, err := noopPick(h.head, o)
+	tree, err := h.netTree(o)
 	if err != nil {
 		return "", err
 	}
-	if noop {
+	headTree, err := resolveTree(h.head)
+	if err != nil {
+		return "", err
+	}
+	if tree == headTree {
 		return "a pick would change nothing", nil
 	}
 	return "", nil
 }
 
-// noopPick reports whether cherry-picking the original onto head would leave
-// head's tree as it is: the content is there, whatever names it.
-func noopPick(head string, o *original) (bool, error) {
+// netTree is noopPick's tree for o onto the branch's head, read once.
+func (h *history) netTree(o *original) (string, error) {
+	if tree, ok := h.trees[o.merge]; ok {
+		return tree, nil
+	}
+	tree, _, err := noopPick(h.head, o)
+	if err == nil {
+		h.trees[o.merge] = tree
+	}
+	return tree, err
+}
+
+// noopPick merges the original onto head as one change and returns the tree
+// that writes for a clean merge, "" for a conflict, and whether the tree is
+// head's own: the content is there, whatever names it.
+func noopPick(head string, o *original) (string, bool, error) {
 	stdout, stderr, code, err := gitStatus("merge-tree", "--write-tree", "--no-messages", "--merge-base="+o.merge+"^1", "--end-of-options", head, o.merge)
 	switch {
 	case err != nil:
-		return false, err
+		return "", false, err
 	case code == 1:
-		return false, nil
+		return "", false, nil
 	case code != 0:
-		return false, fmt.Errorf("git merge-tree for #%d: exit %d: %s", o.number, code, strings.TrimSpace(stderr))
+		return "", false, fmt.Errorf("git merge-tree for #%d: exit %d: %s", o.number, code, strings.TrimSpace(stderr))
 	}
 	tree, _, _ := strings.Cut(stdout, "\n")
+	if err := checkSHA(tree); err != nil {
+		return "", false, fmt.Errorf("git merge-tree for #%d: %w", o.number, err)
+	}
 	headTree, err := resolveTree(head)
 	if err != nil {
-		return false, err
+		return "", false, err
 	}
-	return tree == headTree, nil
+	return tree, tree == headTree, nil
 }
 
 func resolveTree(commit string) (string, error) {
