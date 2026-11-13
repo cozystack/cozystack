@@ -7,6 +7,13 @@ observabilityProxy:
   replicas: 2
   rootTenant: tenant-root
   authCacheTTL: 10s
+  # Names and retention of the root tenant's metricsStorages
+  # (packages/system/monitoring/values.yaml). The retention is a Go
+  # duration: 3d is written 72h.
+  metrics:
+    shorttermStore: shortterm
+    longtermStore: longterm
+    shorttermRetention: 72h
   resources:
     requests:
       cpu: 10m
