@@ -11,7 +11,7 @@ index bd28e06..5bed73b 100644
  	if err != nil {
  		log.Fatal(err)
 diff --git a/pkg/client/linstor.go b/pkg/client/linstor.go
-index 5d71c37..e8e67ec 100644
+index 5d71c37..43129c9 100644
 --- a/pkg/client/linstor.go
 +++ b/pkg/client/linstor.go
 @@ -46,6 +46,8 @@ import (
@@ -115,7 +115,7 @@ index 5d71c37..e8e67ec 100644
  	if selectedNode == "" {
  		return fmt.Errorf("no node [%s] available for snapshot '%s'", strings.Join(snap.Nodes, ","), snap.Name)
  	}
-@@ -1893,6 +1921,39 @@ func (s *Linstor) relocateResources(ctx context.Context, volID, rgName string) e
+@@ -1893,6 +1921,43 @@ func (s *Linstor) relocateResources(ctx context.Context, volID, rgName string) e
  	return nil
  }
  
@@ -128,17 +128,21 @@ index 5d71c37..e8e67ec 100644
 +//     Cordoned nodes are skipped as long as another node holds the snapshot: a pod can never be scheduled on
 +//     them, so a volume restored there stays unusable until the node is uncordoned.
 +//
-+// Only nodes that are also in preferredNodes are considered, unless none is.
++// Nodes in preferredNodes come first, but a schedulable node outside them wins over a cordoned one inside them.
 +func selectRestoreNode(available, preferredNodes []string, schedulable func(node string) bool) string {
-+	candidates := slices.DeleteFunc(slices.Clone(available), func(node string) bool {
-+		return !slices.Contains(preferredNodes, node)
-+	})
-+	if len(candidates) == 0 {
-+		candidates = available
++	isPreferred := func(node string) bool { return slices.Contains(preferredNodes, node) }
++	both := func(node string) bool { return isPreferred(node) && schedulable(node) }
++
++	var candidates []string
++	for _, keep := range []func(string) bool{both, schedulable, isPreferred} {
++		candidates = slices.DeleteFunc(slices.Clone(available), func(node string) bool { return !keep(node) })
++		if len(candidates) > 0 {
++			break
++		}
 +	}
 +
-+	if usable := slices.DeleteFunc(slices.Clone(candidates), func(node string) bool { return !schedulable(node) }); len(usable) > 0 {
-+		candidates = usable
++	if len(candidates) == 0 {
++		candidates = available
 +	}
 +
 +	if len(candidates) == 0 {
@@ -156,10 +160,10 @@ index 5d71c37..e8e67ec 100644
  func (s *Linstor) FindSnapsByID(ctx context.Context, id string) ([]*volume.Snapshot, error) {
  	snapshotId, err := volume.ParseSnapshotId(id)
 diff --git a/pkg/client/linstor_test.go b/pkg/client/linstor_test.go
-index 4f3405b..84cfca2 100644
+index 4f3405b..9dedb3c 100644
 --- a/pkg/client/linstor_test.go
 +++ b/pkg/client/linstor_test.go
-@@ -577,3 +577,87 @@ func TestGetSnapshotRemoteAndReadiness(t *testing.T) {
+@@ -577,3 +577,93 @@ func TestGetSnapshotRemoteAndReadiness(t *testing.T) {
  		})
  	}
  }
@@ -222,6 +226,12 @@ index 4f3405b..84cfca2 100644
 +	t.Run("selected node is cordoned", func(t *testing.T) {
 +		for range 20 {
 +			assert.NotEqual(t, "node-3", selectRestoreNode([]string{"node-1", "node-3"}, []string{"node-3", "node-1"}, notNode3))
++		}
++	})
++
++	t.Run("schedulable node outside the preferred nodes wins over a cordoned preferred node", func(t *testing.T) {
++		for range 20 {
++			assert.Equal(t, "node-2", selectRestoreNode([]string{"node-3", "node-2"}, []string{"node-3"}, notNode3))
 +		}
 +	})
 +
