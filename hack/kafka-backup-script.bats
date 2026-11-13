@@ -106,7 +106,19 @@ if [ "\$mode" = describe ]; then
   [ -n "\${CFG_FAIL:-}" ] && exit 3
   cat "$STATE/cfg.\$name" 2>/dev/null || true; exit 0
 fi
-if [ "\$mode" = alter ]; then echo "\$name \$add" >> "$STATE/configs_applied"; exit 0; fi
+if [ "\$mode" = alter ]; then
+  # Topic configs a Kafka 4 broker no longer knows.
+  case "\${add%%=*}" in
+    message.downconversion.enable|message.format.version|message.timestamp.difference.max.ms)
+      echo "InvalidConfigurationException: Unknown topic config name: \${add%%=*}" >&2; exit 1 ;;
+  esac
+  # Kafka 4 raised the segment.bytes floor to 1 MiB.
+  case "\$add" in
+    segment.bytes=*)
+      [ "\${add#*=}" -ge 1048576 ] || { echo "InvalidConfigurationException: Invalid value \${add#*=} for configuration segment.bytes: Value must be at least 1048576" >&2; exit 1; } ;;
+  esac
+  echo "\$name \$add" >> "$STATE/configs_applied"; exit 0
+fi
 exit 0
 STUB
 
@@ -241,6 +253,46 @@ write_backup_object() {
   grep -qxF "create orders 3" "$STATE/actions"
   # comma value must be bracket-grouped so kafka-configs does not split it.
   grep -qxF "orders cleanup.policy=[compact,delete]" "$STATE/configs_applied"
+}
+
+@test "restore of a Kafka 3.x backup skips the topic configs Kafka 4 removed and restores the rest" {
+  init_stubs
+  {
+    printf 'T\torders\t3\t1\n'
+    printf 'C\torders\tmessage.format.version\t3.0-IV1\n'
+    printf 'C\torders\tmessage.downconversion.enable\ttrue\n'
+    printf 'C\torders\tmessage.timestamp.difference.max.ms\t60000\n'
+    printf 'C\torders\tretention.ms\t86400000\n'
+    printf 'T\tpayments\t2\t1\n'
+    printf 'C\tpayments\tcleanup.policy\tcompact\n'
+  } > "$STATE/s3_object"
+  : > "$STATE/topics"
+  out=$(MODE=restore S3_ENDPOINT="https://s3.example.org" bash "$SCRIPT" 2>&1)
+  grep -qxF "orders retention.ms=86400000" "$STATE/configs_applied"
+  grep -qxF "create payments 2" "$STATE/actions"
+  grep -qxF "payments cleanup.policy=compact" "$STATE/configs_applied"
+  for k in message.format.version message.downconversion.enable message.timestamp.difference.max.ms; do
+    printf '%s\n' "$out" | grep -qF "orders: skipping $k"
+  done
+}
+
+@test "restore of a Kafka 3.x backup raises segment.bytes below the Kafka 4 floor and restores the rest" {
+  init_stubs
+  {
+    printf 'T\torders\t3\t1\n'
+    printf 'C\torders\tretention.ms\t86400000\n'
+    printf 'C\torders\tsegment.bytes\t524288\n'
+    printf 'T\tpayments\t2\t1\n'
+    printf 'C\tpayments\tsegment.bytes\t1048576\n'
+  } > "$STATE/s3_object"
+  : > "$STATE/topics"
+  out=$(MODE=restore S3_ENDPOINT="https://s3.example.org" bash "$SCRIPT" 2>&1)
+  grep -qxF "orders retention.ms=86400000" "$STATE/configs_applied"
+  grep -qxF "orders segment.bytes=1048576" "$STATE/configs_applied"
+  grep -qxF "create payments 2" "$STATE/actions"
+  grep -qxF "payments segment.bytes=1048576" "$STATE/configs_applied"
+  printf '%s\n' "$out" | grep -qF "orders: raising segment.bytes from 524288 to 1048576"
+  if printf '%s\n' "$out" | grep -qF "payments: raising"; then echo "warned about a value at the floor" >&2; return 1; fi
 }
 
 @test "restore fails loudly on a replication-factor mismatch" {
