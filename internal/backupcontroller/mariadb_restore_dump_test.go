@@ -14,6 +14,7 @@ import (
 	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	backupsv1alpha1 "github.com/cozystack/cozystack/api/backups/v1alpha1"
 	"github.com/cozystack/cozystack/internal/backupcontroller/mariadbapp"
@@ -182,6 +183,117 @@ func (f *mariadbRestoreFixture) wantRestore(t *testing.T, targetTime string) {
 
 func recordedDump(name string) map[string]string {
 	return map[string]string{mariadbDumpFileKey: name, mariadbDumpTimeKey: mdbRestoreTime}
+}
+
+// A Backup being deleted is deleting its dump, so a restore that starts
+// now can find it gone once the operator reads it, and the operator then
+// restores the nearest other dump. The Backup is read from the API server,
+// since the copy the reconcile was handed can predate the delete.
+func TestReconcileMariaDBRestore_RefusesABackupBeingDeleted(t *testing.T) {
+	creds := s3CredsSecret("tenant", "creds")
+	present := func() *fakeS3Lister {
+		return &fakeS3Lister{objects: []s3ObjectInfo{{Key: mdbRestorePrefix + mdbRestoreDump, LastModified: mdbRestoreT0.Add(20 * time.Second)}}}
+	}
+	cases := map[string]map[string]string{"recorded dump": recordedDump(mdbRestoreDump), "legacy Backup": nil}
+	for name, md := range cases {
+		t.Run(name+", being deleted", func(t *testing.T) {
+			f := newMariaDBRestoreFixture(t, md, present(), creds)
+			ctx := context.Background()
+			live := &backupsv1alpha1.Backup{}
+			if err := f.c.Get(ctx, client.ObjectKeyFromObject(f.backup), live); err != nil {
+				t.Fatal(err)
+			}
+			live.Finalizers = []string{backupFinalizer}
+			if err := f.c.Update(ctx, live); err != nil {
+				t.Fatal(err)
+			}
+			if err := f.c.Delete(ctx, live); err != nil {
+				t.Fatal(err)
+			}
+			f.reconcile(t)
+			f.wantFailed(t, "src-bk", "being deleted")
+		})
+		t.Run(name+", already gone", func(t *testing.T) {
+			f := newMariaDBRestoreFixture(t, md, present(), creds)
+			if err := f.c.Delete(context.Background(), f.backup.DeepCopy()); err != nil {
+				t.Fatal(err)
+			}
+			f.reconcile(t)
+			f.wantFailed(t, "src-bk", "is gone")
+		})
+	}
+	// The refusal applies only before the operator Restore exists. One
+	// created by an earlier reconcile but not yet in the cache must be
+	// found and followed, or the RestoreJob fails under a running restore
+	// and the cleanup deletes the dump that restore reads.
+	t.Run("an operator Restore the cache has not seen yet is followed", func(t *testing.T) {
+		f := newMariaDBRestoreFixture(t, recordedDump(mdbRestoreDump), present(), creds)
+		ctx := context.Background()
+		live := &backupsv1alpha1.Backup{}
+		if err := f.c.Get(ctx, client.ObjectKeyFromObject(f.backup), live); err != nil {
+			t.Fatal(err)
+		}
+		live.Finalizers = []string{backupFinalizer}
+		if err := f.c.Update(ctx, live); err != nil {
+			t.Fatal(err)
+		}
+		if err := f.c.Delete(ctx, live); err != nil {
+			t.Fatal(err)
+		}
+		if err := f.c.Get(ctx, client.ObjectKeyFromObject(live), live); err != nil || live.DeletionTimestamp.IsZero() {
+			t.Fatalf("Backup not left being deleted: %v", err)
+		}
+		live.ResourceVersion = ""
+		apiServer := newMariaDBStrategyTestClient(t, live, &mariadbtypes.Restore{ObjectMeta: metav1.ObjectMeta{
+			Namespace: "tenant", Name: "rj-abcde",
+			Labels: map[string]string{
+				backupsv1alpha1.OwningJobNameLabel:      "rj",
+				backupsv1alpha1.OwningJobNamespaceLabel: "tenant",
+			},
+		}})
+		f.r.APIReader = apiServer
+		f.reconcile(t)
+		if f.rj.Status.Phase == backupsv1alpha1.RestoreJobPhaseFailed {
+			t.Fatalf("RestoreJob failed under a running restore: %s", f.rj.Status.Message)
+		}
+		if got := f.restores(t); len(got) != 0 {
+			t.Errorf("created %d operator Restores; want the existing one followed", len(got))
+		}
+	})
+	// A failed lookup says nothing about whether the operator Restore
+	// exists, so the RestoreJob must not be failed under one that runs.
+	t.Run("an operator Restore lookup that fails is retried", func(t *testing.T) {
+		f := newMariaDBRestoreFixture(t, recordedDump(mdbRestoreDump), present(), creds)
+		f.r.APIReader = interceptor.NewClient(f.c.(client.WithWatch), interceptor.Funcs{
+			List: func(ctx context.Context, c client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
+				if _, ok := list.(*mariadbtypes.RestoreList); ok {
+					return errors.New("etcdserver: request timed out")
+				}
+				return c.List(ctx, list, opts...)
+			},
+		})
+		if _, err := f.r.reconcileMariaDBRestore(context.Background(), f.rj, f.backup); err == nil {
+			t.Error("err = nil, want the failed lookup returned for a retry")
+		}
+		if f.rj.Status.Phase == backupsv1alpha1.RestoreJobPhaseFailed {
+			t.Fatalf("RestoreJob failed on a lookup error: %s", f.rj.Status.Message)
+		}
+		if got := f.restores(t); len(got) != 0 {
+			t.Errorf("created %d operator Restores without knowing whether one exists", len(got))
+		}
+	})
+	t.Run("a Backup that cannot be read keeps the RestoreJob waiting", func(t *testing.T) {
+		f := newMariaDBRestoreFixture(t, recordedDump(mdbRestoreDump), present(), creds)
+		f.r.APIReader = interceptor.NewClient(f.c.(client.WithWatch), interceptor.Funcs{
+			Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+				if _, ok := obj.(*backupsv1alpha1.Backup); ok {
+					return errors.New("apiserver unavailable")
+				}
+				return c.Get(ctx, key, obj, opts...)
+			},
+		})
+		f.wantWaiting(t, f.reconcile(t), "src-bk", "apiserver unavailable")
+	})
 }
 
 func TestReconcileMariaDBRestore_RecordedDump(t *testing.T) {

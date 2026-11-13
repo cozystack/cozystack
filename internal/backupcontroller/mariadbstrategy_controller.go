@@ -598,7 +598,9 @@ func (r *RestoreJobReconciler) reconcileMariaDBRestore(ctx context.Context, rest
 
 	mdbRestore, err := r.findMariaDBRestoreForJob(ctx, restoreJob)
 	if err != nil {
-		return r.markRestoreJobFailed(ctx, restoreJob, fmt.Sprintf("failed to ensure k8s.mariadb.com/Restore: %v", err))
+		// Retried: failing the RestoreJob here could fail it under an
+		// operator Restore that is running.
+		return ctrl.Result{}, fmt.Errorf("find k8s.mariadb.com/Restore of RestoreJob %s/%s: %w", restoreJob.Namespace, restoreJob.Name, err)
 	}
 	// The dump is chosen once, as the operator Restore is created; one that
 	// already exists has made its choice.
@@ -669,6 +671,21 @@ func (e mariadbRestoreRefused) Error() string { return string(e) }
 // checked to still exist. A Backup that records no dump is resolved by
 // legacyMariaDBRestoreTargetTime.
 func (r *RestoreJobReconciler) mariadbRestoreTargetTime(ctx context.Context, rj *backupsv1alpha1.RestoreJob, backup *backupsv1alpha1.Backup, src *mariadbtypes.Backup) (string, error) {
+	// Deleting a Backup deletes its dump, and the operator restores the
+	// nearest other dump once its own is gone, so a restore must not start
+	// from a Backup being deleted. The copy in hand can predate the delete;
+	// the cleanup holds the Backup only for restores that exist when it
+	// lists them.
+	live := &backupsv1alpha1.Backup{}
+	if err := r.apiReader().Get(ctx, client.ObjectKeyFromObject(backup), live); err != nil {
+		if apierrors.IsNotFound(err) {
+			return "", mariadbRestoreRefused(fmt.Sprintf("Backup %s/%s is gone, and its dump may be gone with it", backup.Namespace, backup.Name))
+		}
+		return "", fmt.Errorf("read Backup %s/%s: %w", backup.Namespace, backup.Name, err)
+	}
+	if !live.DeletionTimestamp.IsZero() {
+		return "", mariadbRestoreRefused(fmt.Sprintf("Backup %s/%s is being deleted, and its dump with it", backup.Namespace, backup.Name))
+	}
 	// A failed Job is Complete=True too, with reason JobFailed, and a
 	// BackupJob that took Complete=True for success made a Backup of it.
 	if cond := apimeta.FindStatusCondition(src.Status.Conditions, mariadbtypes.ConditionTypeComplete); cond != nil && cond.Reason == mariadbtypes.ConditionReasonJobFailed {
@@ -742,10 +759,12 @@ func (r *RestoreJobReconciler) awaitMariaDBDumpCheck(ctx context.Context, rj *ba
 }
 
 // findMariaDBRestoreForJob returns the k8s.mariadb.com/Restore labelled
-// with the RestoreJob, if a previous reconcile already created one.
+// with the RestoreJob, if a previous reconcile already created one. It is
+// read uncached: one the cache has not caught up with would be created
+// again, or, once its Backup is being deleted, refused while it runs.
 func (r *RestoreJobReconciler) findMariaDBRestoreForJob(ctx context.Context, rj *backupsv1alpha1.RestoreJob) (*mariadbtypes.Restore, error) {
 	list := &mariadbtypes.RestoreList{}
-	if err := r.List(ctx, list,
+	if err := r.apiReader().List(ctx, list,
 		client.InNamespace(rj.Namespace),
 		client.MatchingLabels{
 			backupsv1alpha1.OwningJobNameLabel:      rj.Name,
