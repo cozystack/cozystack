@@ -1,0 +1,12 @@
+fenceAgentsRemediation:
+  image: ghcr.io/cozystack/cozystack/fence-agents-remediation:v0.8.0-38-gf3e85bf-cozystack.0
+nodeHealthcheck:
+  image: ghcr.io/cozystack/cozystack/node-healthcheck-operator:v0.12.0-cozystack.0
+
+# Forwarded by the platform from the nodeRemediation block of the
+# cozystack-platform Package. Only bmc.caBundle is read here: the PEM CA
+# certificate(s) the BMCs present on their Redfish endpoint. The fence-agents
+# operator verifies every BMC connection against it and refuses to start
+# without it; there is no insecure mode.
+bmc:
+  caBundle: ""

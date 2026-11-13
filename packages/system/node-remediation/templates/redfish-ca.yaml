@@ -1,0 +1,17 @@
+{{- /* The schema types bmc as a map, but a null drops the key before validation; the missing map is caught here, under its key. */ -}}
+{{- if not (kindIs "map" .Values.bmc) }}
+{{- fail "nodeRemediation.bmc must be a map: caBundle lives under it, next to the keys the configuration chart reads" }}
+{{- end }}
+{{- $ca := toString (default "" .Values.bmc.caBundle) -}}
+{{- if not (contains "-----BEGIN CERTIFICATE-----" $ca) }}
+{{- fail "nodeRemediation.bmc.caBundle must hold the PEM CA certificate(s) the BMCs present on their Redfish endpoint: the fence-agents operator verifies every BMC connection against it and has no insecure mode" }}
+{{- end }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: node-remediation-redfish-ca
+  namespace: {{ .Release.Namespace }}
+data:
+  ca.crt: |
+{{ $ca | indent 4 }}

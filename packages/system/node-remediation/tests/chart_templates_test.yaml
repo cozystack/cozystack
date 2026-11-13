@@ -1,0 +1,154 @@
+suite: the chart's own templates around the rendered operators
+templates:
+  - templates/certificates.yaml
+  - templates/redfish-ca.yaml
+  - templates/fence-agents-remediation-credential-rbac.yaml
+release:
+  name: node-remediation
+  namespace: cozy-node-remediation
+set:
+  bmc:
+    caBundle: |
+      -----BEGIN CERTIFICATE-----
+      MIIB
+      -----END CERTIFICATE-----
+tests:
+  # Each operator mounts the Secret its Certificate writes, and the webhook
+  # configurations name the Certificate in their inject-ca-from annotation; the
+  # three names have to agree or admission fails closed.
+  - it: issues one serving certificate per operator from a self-signed issuer
+    template: templates/certificates.yaml
+    asserts:
+      - hasDocuments:
+          count: 3
+      - documentIndex: 0
+        equal:
+          path: kind
+          value: Issuer
+      - documentIndex: 0
+        equal:
+          path: spec.selfSigned
+          value: {}
+      - documentIndex: 1
+        equal:
+          path: metadata.name
+          value: fence-agents-remediation-serving-cert
+      - documentIndex: 1
+        equal:
+          path: spec.secretName
+          value: fence-agents-remediation-webhook-cert
+      - documentIndex: 1
+        contains:
+          path: spec.dnsNames
+          content: fence-agents-remediation-webhook-service.cozy-node-remediation.svc
+      - documentIndex: 2
+        equal:
+          path: metadata.name
+          value: node-healthcheck-serving-cert
+      - documentIndex: 2
+        equal:
+          path: spec.secretName
+          value: node-healthcheck-webhook-cert
+      - documentIndex: 2
+        contains:
+          path: spec.dnsNames
+          content: node-healthcheck-webhook-service.cozy-node-remediation.svc
+
+  - it: mounts the BMC CA the operator verifies Redfish against
+    template: templates/redfish-ca.yaml
+    asserts:
+      - equal:
+          path: kind
+          value: ConfigMap
+      - equal:
+          path: metadata.name
+          value: node-remediation-redfish-ca
+      - matchRegex:
+          path: data["ca.crt"]
+          pattern: ^-----BEGIN CERTIFICATE-----
+
+  # The operator cannot start without a CA and has no insecure mode; a chart
+  # that rendered an empty file would move that failure into the pod log.
+  # A null drops the key before the schema sees it, so the missing map is
+  # caught in the template, under its key.
+  - it: refuses bmc that is null
+    template: templates/redfish-ca.yaml
+    set:
+      bmc: null
+    asserts:
+      - failedTemplate:
+          errorPattern: nodeRemediation.bmc must be a map
+
+  - it: refuses an empty CA bundle
+    template: templates/redfish-ca.yaml
+    set:
+      bmc:
+        caBundle: ""
+    asserts:
+      - failedTemplate:
+          errorPattern: nodeRemediation.bmc.caBundle must hold the PEM CA certificate
+
+  - it: refuses a CA bundle that is not a PEM certificate
+    template: templates/redfish-ca.yaml
+    set:
+      bmc:
+        caBundle: /etc/ssl/certs/ca.crt
+    asserts:
+      - failedTemplate:
+          errorPattern: nodeRemediation.bmc.caBundle must hold the PEM CA certificate
+
+  - it: grants the operator Secrets and remediation objects in the BMC namespace only
+    template: templates/fence-agents-remediation-credential-rbac.yaml
+    asserts:
+      - hasDocuments:
+          count: 2
+      - documentIndex: 0
+        equal:
+          path: kind
+          value: Role
+      - documentIndex: 0
+        equal:
+          path: metadata.namespace
+          value: cozy-node-remediation-bmc
+      - documentIndex: 0
+        contains:
+          path: rules
+          content:
+            apiGroups: [""]
+            resources: [secrets]
+            verbs: [get, list, watch]
+      - documentIndex: 0
+        lengthEqual:
+          path: rules
+          count: 4
+      - documentIndex: 0
+        notContains:
+          path: rules[0].verbs
+          content: delete
+      - documentIndex: 0
+        notContains:
+          path: rules[1].verbs
+          content: delete
+      - documentIndex: 0
+        notContains:
+          path: rules[2].verbs
+          content: delete
+      - documentIndex: 0
+        notContains:
+          path: rules[3].verbs
+          content: delete
+      - documentIndex: 1
+        equal:
+          path: kind
+          value: RoleBinding
+      - documentIndex: 1
+        equal:
+          path: metadata.namespace
+          value: cozy-node-remediation-bmc
+      - documentIndex: 1
+        equal:
+          path: subjects[0]
+          value:
+            kind: ServiceAccount
+            name: fence-agents-remediation-controller-manager
+            namespace: cozy-node-remediation

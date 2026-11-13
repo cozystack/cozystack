@@ -1,0 +1,218 @@
+# templates/fence-agents-remediation.yaml is written by `make update` from
+# upstream's kustomize config through kustomize/far. These cases pin what the
+# overlay and the filter in the Makefile are for, so a refill from a newer
+# upstream tree that loses one of them fails here rather than in the cluster.
+suite: fence-agents operator runs in safety-mode with the safety-mode grants
+templates:
+  - templates/fence-agents-remediation.yaml
+release:
+  name: node-remediation
+  namespace: cozy-node-remediation
+set:
+  bmc:
+    caBundle: |
+      -----BEGIN CERTIFICATE-----
+      MIIB
+      -----END CERTIFICATE-----
+tests:
+  - it: starts the manager in safety-mode against the BMC namespace and the Redfish CA
+    documentSelector:
+      path: kind
+      value: Deployment
+    set:
+      fenceAgentsRemediation:
+        image: registry.example/fence-agents-remediation:test
+    asserts:
+      - equal:
+          path: metadata.name
+          value: fence-agents-remediation-controller-manager
+      - equal:
+          path: spec.replicas
+          value: 2
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: registry.example/fence-agents-remediation:test
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --safety-mode=true
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --trusted-nhc-creator=system:serviceaccount:cozy-node-remediation:node-healthcheck-controller-manager
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --bmc-credential-namespace=cozy-node-remediation-bmc
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --redfish-ca-file=/etc/redfish/ca.crt
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content:
+            mountPath: /etc/redfish
+            name: redfish-ca
+            readOnly: true
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content:
+            mountPath: /tmp/k8s-webhook-server/serving-certs
+            name: cert
+            readOnly: true
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: redfish-ca
+            configMap:
+              name: node-remediation-redfish-ca
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: cert
+            secret:
+              defaultMode: 420
+              secretName: fence-agents-remediation-webhook-cert
+      - contains:
+          path: spec.template.spec.containers[0].ports
+          content:
+            containerPort: 9443
+            name: webhook-server
+            protocol: TCP
+
+  # The operator reads the CA file once at startup; without this annotation a
+  # rotated bundle would update the ConfigMap and roll nothing, and every
+  # fence would fail TLS verification until the pods happened to restart.
+  - it: rolls the manager when the Redfish CA bundle changes
+    documentSelector:
+      path: kind
+      value: Deployment
+    asserts:
+      - equal:
+          path: spec.template.metadata.annotations["checksum/redfish-ca"]
+          value: 8010bfcee1842b2a4ce8f67c3e9455f0188f7a15bf39ec61a26feb75cd785821
+
+  - it: stamps a different checksum for a different CA bundle
+    set:
+      bmc:
+        caBundle: |
+          -----BEGIN CERTIFICATE-----
+          MIIC
+          -----END CERTIFICATE-----
+    documentSelector:
+      path: kind
+      value: Deployment
+    asserts:
+      - equal:
+          path: spec.template.metadata.annotations["checksum/redfish-ca"]
+          value: f0b30b964b3b3aff7b4df8ad94104be38aa3f4ab7a2046d64a0ae662c433bb07
+
+  # The default manager grants delete Nodes, pods and VolumeAttachments
+  # cluster-wide and read Secrets in the operator's namespace; safety-mode needs
+  # none of that, so they are dropped and only the two safety roles remain.
+  - it: binds the operator to the safety ClusterRole and not to the default manager grants
+    asserts:
+      - containsDocument:
+          apiVersion: rbac.authorization.k8s.io/v1
+          kind: ClusterRole
+          name: fence-agents-remediation-safety
+          any: true
+      - containsDocument:
+          apiVersion: rbac.authorization.k8s.io/v1
+          kind: ClusterRoleBinding
+          name: fence-agents-remediation-safety
+          any: true
+      - containsDocument:
+          apiVersion: rbac.authorization.k8s.io/v1
+          kind: ClusterRole
+          name: fence-agents-remediation-manager-role
+          any: true
+        not: true
+      - containsDocument:
+          apiVersion: rbac.authorization.k8s.io/v1
+          kind: ClusterRoleBinding
+          name: fence-agents-remediation-manager-rolebinding
+          any: true
+        not: true
+      - containsDocument:
+          apiVersion: rbac.authorization.k8s.io/v1
+          kind: Role
+          name: fence-agents-remediation-manager-role
+          any: true
+        not: true
+      - containsDocument:
+          apiVersion: rbac.authorization.k8s.io/v1
+          kind: RoleBinding
+          name: fence-agents-remediation-manager-rolebinding
+          any: true
+        not: true
+
+  # Selected by its first rule rather than by name, which the binding shares.
+  - it: grants the safety ClusterRole Node taints but no deletion of anything
+    documentSelector:
+      path: rules[0].resources[0]
+      value: nodes
+    asserts:
+      - equal:
+          path: kind
+          value: ClusterRole
+      - equal:
+          path: metadata.name
+          value: fence-agents-remediation-safety
+      - lengthEqual:
+          path: rules
+          count: 2
+      - equal:
+          path: rules[0].verbs
+          value: [get, list, watch, update]
+      - notContains:
+          path: rules[1].verbs
+          content: delete
+
+  - it: binds the safety ClusterRole to the operator's service account
+    documentSelector:
+      path: kind
+      value: ClusterRoleBinding
+      matchMany: true
+    asserts:
+      - matchRegex:
+          path: subjects[0].namespace
+          pattern: ^cozy-node-remediation$
+
+  # The CRDs ship from node-remediation-crds and the namespace from the
+  # PackageSource; rendering either here would make two owners of one object.
+  - it: renders neither CRDs nor a Namespace
+    asserts:
+      - containsDocument:
+          apiVersion: apiextensions.k8s.io/v1
+          kind: CustomResourceDefinition
+          any: true
+        not: true
+      - containsDocument:
+          apiVersion: v1
+          kind: Namespace
+          any: true
+        not: true
+
+  - it: lets cert-manager inject the serving CA into both webhook configurations
+    documentSelector:
+      path: metadata.annotations["cert-manager.io/inject-ca-from"]
+      value: cozy-node-remediation/fence-agents-remediation-serving-cert
+      matchMany: true
+    asserts:
+      - matchRegex:
+          path: kind
+          pattern: ^(Mutating|Validating)WebhookConfiguration$
+      - equal:
+          path: webhooks[0].clientConfig.service.namespace
+          value: cozy-node-remediation
+      - equal:
+          path: webhooks[0].failurePolicy
+          value: Fail
+
+  # NodeHealthCheck reaches the remediation CRs through role aggregation: this
+  # ClusterRole carries the label its aggregated role selects.
+  - it: keeps the aggregation ClusterRole NodeHealthCheck selects
+    documentSelector:
+      path: metadata.name
+      value: fence-agents-remediation-ext-remediation
+    asserts:
+      - equal:
+          path: metadata.labels["rbac.ext-remediation/aggregate-to-ext-remediation"]
+          value: "true"

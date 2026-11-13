@@ -48,6 +48,7 @@ build: build-deps
 	make -C packages/system/velero image
 	make -C packages/system/opensearch-operator image
 	make -C packages/system/keycloak-operator image
+	make -C packages/system/node-remediation image
 	make -C packages/core/testing image
 	make -C packages/core/talos image
 	make -C packages/core/platform image
