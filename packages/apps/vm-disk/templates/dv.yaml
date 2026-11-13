@@ -164,7 +164,7 @@
   existing disk is a silent no-op that diverges the CR from the cluster (#2985);
   fail instead. Both are compared against the operator input recorded in an
   annotation at creation (legacy disks fall back to stored spec.source). Full
-  contract + caveats: docs/storage-immutability.md. Size growth: pvc-resize-hook.
+  contract + caveats: https://cozystack.io/docs/v1/operations/storage-class-immutability/. Size growth: pvc-resize-hook.
 */}}
 {{- if $existingDV }}
   {{- $existingAnnotations := $existingDV.metadata.annotations | default dict }}
@@ -184,7 +184,7 @@
     {{- /* Legacy disk (no annotation): compare only chart-producible stored
            shapes; anything else (sourceRef, non-map, foreign source) is left
            alone, never crashed or deadlocked. Vars are declared before the map
-           guards so they stay in scope below. See docs/storage-immutability.md. */}}
+           guards so they stay in scope below. See https://cozystack.io/docs/v1/operations/storage-class-immutability/. */}}
     {{- $storedType := "" }}
     {{- $chartShaped := false }}
     {{- $storedIsImageClone := false }}

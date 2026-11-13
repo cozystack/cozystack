@@ -1,0 +1,40 @@
+suite: grafana ingress needs an ingress class to name
+templates:
+  - templates/grafana/grafana.yaml
+
+release:
+  name: monitoring
+  namespace: tenant-root
+
+# An empty _namespace.ingress means no ingress-nginx serves this tenant, and
+# the API rejects the ingressClassName "" the operator would put on the
+# Ingress it creates from spec.ingress.
+
+tests:
+  - it: leaves spec.ingress out when the tenant has no ingress
+    set:
+      _cluster:
+        issuer-name: letsencrypt-prod
+        gateway-enabled: "false"
+      _namespace:
+        host: example.org
+        ingress: ""
+    asserts:
+      - equal:
+          path: kind
+          value: Grafana
+      - notExists:
+          path: spec.ingress
+
+  - it: keeps spec.ingress when the tenant has an ingress
+    set:
+      _cluster:
+        issuer-name: letsencrypt-prod
+        gateway-enabled: "false"
+      _namespace:
+        host: example.org
+        ingress: tenant-root
+    asserts:
+      - equal:
+          path: spec.ingress.spec.ingressClassName
+          value: tenant-root
