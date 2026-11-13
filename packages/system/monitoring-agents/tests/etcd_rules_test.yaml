@@ -1,0 +1,20 @@
+suite: tenant peer RTT is evaluated once
+
+templates:
+  - templates/alerts.yaml
+
+tests:
+  - it: leaves tenant peer RTT to the tenant rules
+    documentSelector:
+      path: metadata.name
+      value: alerts-etcd
+    asserts:
+      - matchRegex:
+          path: spec.groups[0].rules[7].expr
+          pattern: 'job!~"tenant-\.\*/etcd-pod-scrape"'
+      - notMatchRegex:
+          path: spec.groups[0].rules[9].expr
+          pattern: 'job!~'
+      - notMatchRegex:
+          path: spec.groups[0].rules[10].expr
+          pattern: 'job!~'
