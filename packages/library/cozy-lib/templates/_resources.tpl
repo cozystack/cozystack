@@ -202,6 +202,26 @@
 {{-   printf `-Xms%dm -Xmx%dm` $xmsMi $xmxMi }}
 {{- end }}
 
+{{- /*
+    goMemLimit takes a sanitized .Values.resources and returns a GOMEMLIMIT
+    value set to 75% of the memory limit. Without it the Go runtime collects
+    on a relative target (GOGC) with no absolute ceiling, so a burst of
+    allocation grows the heap past the cgroup limit and the kernel kills the
+    container. The 25% headroom covers what GOMEMLIMIT does not account for:
+    goroutine stacks and any mmap'd region. Accepts only sanitized resource
+    maps.
+*/}}
+{{- define "cozy-lib.resources.goMemLimit" }}
+{{-   $memoryLimitInt := include "cozy-lib.resources.toFloat" .limits.memory | float64 | int64 }}
+{{- /* 4194304 is 4Mi */}}
+{{-   $limitMiB := div (mul $memoryLimitInt 3) 4194304 }}
+{{- /* Go accepts 0, and then collects almost without pause. */}}
+{{-   if lt $limitMiB 1 }}
+{{-     fail (printf "ERROR: a memory limit of %s leaves no room for a Go heap; GOMEMLIMIT needs a limit of at least 1398102 bytes (4/3 Mi) to come out at 1MiB." .limits.memory) }}
+{{-   end }}
+{{-   printf `%dMiB` $limitMiB }}
+{{- end }}
+
 {{- define "cozy-lib.resources.flatten" -}}
 {{-   $out := dict -}}
 {{-   $res := include "cozy-lib.resources.sanitize" . | fromYaml -}}
