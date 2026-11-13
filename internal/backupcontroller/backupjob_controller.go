@@ -315,14 +315,6 @@ func (r *BackupJobReconciler) handleProjectionError(ctx context.Context, j *back
 }
 
 // markBackupJobFailed records a terminal Failed phase on the BackupJob.
-//
-// Coupling note: a failure that fires before reconcileCNPG's StartedAt block
-// has set backupJob.Status.StartedAt leaves StartedAt nil. The CNPG path's
-// cnpgDefaultBackupDeadline check only fires once StartedAt is set, so an
-// early-failure retry that reaches the StartedAt block restarts the deadline
-// budget from the retry's StartedAt - intentional, since retries are
-// user-driven and a fresh budget is what users expect after correcting the
-// cause of the previous failure.
 func (r *BackupJobReconciler) markBackupJobFailed(ctx context.Context, backupJob *backupsv1alpha1.BackupJob, message string) (ctrl.Result, error) {
 	logger := getLogger(ctx)
 	now := metav1.Now()
