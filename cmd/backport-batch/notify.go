@@ -87,20 +87,48 @@ func (a *app) notify(args []string) int {
 		return a.fail(err)
 	}
 	deferred := map[int]deferredEntry{}
+	var partial []int
+	var parks []parkedEntry
 	if src.open {
-		deferred = src.rec.deferred()
+		deferred, partial = src.rec.deferred(), src.rec.Partial
+		for _, p := range src.rec.Parked {
+			if !p.Announced {
+				parks = append(parks, p)
+			}
+		}
 	}
+	// An original that waits on others is listed once, after what decides
+	// its wait, where that one is listed.
 	var conflicts, waiting []int
+	after := map[int][]int{}
 	for n, e := range deferred {
-		switch {
-		case e.Workflows:
+		switch place := placement(deferred, n, map[int]bool{}); {
+		case place == "workflow":
 			waiting = append(waiting, n)
-		case e.Reason == "":
+		case place == "conflict":
 			conflicts = append(conflicts, n)
+		}
+		if len(e.Needs) > 0 {
+			after[n] = e.Needs
 		}
 	}
 	slices.Sort(conflicts)
 	slices.Sort(waiting)
+	item := func(n int) string {
+		if needs := after[n]; len(needs) > 0 {
+			return fmt.Sprintf("\n- %s, after %s", prLink(n), prLinks(needs))
+		}
+		return "\n- " + prLink(n)
+	}
+	count := func(ns []int) int {
+		c := 0
+		for _, n := range ns {
+			if len(after[n]) == 0 {
+				c++
+			}
+		}
+		return c
+	}
 
 	today := a.now().UTC().Truncate(24 * time.Hour)
 	days := int(today.Sub(opened).Hours() / 24)
@@ -110,28 +138,135 @@ func (a *app) notify(args []string) int {
 		fmt.Fprintf(a.stdout, "%s: batch pull request #%d has been open since %s, %d days\n", l.branch(), pr.Number, opened.Format(time.DateOnly), days)
 		text = append(text, fmt.Sprintf("This batch has been open since %s, %d days, through at least one scheduled run. Merge it, or close it and the next run starts a new one; until then each run adds what the rules take to it.", opened.Format(time.DateOnly), days))
 	}
-	if len(conflicts) > 0 {
-		fmt.Fprintf(a.stdout, "%s: %d deferred conflicts on #%d wait for a maintainer\n", l.branch(), len(conflicts), pr.Number)
+	if len(partial) > 0 {
+		fmt.Fprintf(a.stdout, "%s: %d units on #%d carry only part of their originals\n", l.branch(), len(partial), pr.Number)
 		var b strings.Builder
-		fmt.Fprintf(&b, "These conflicts wait for a maintainer, as [resolving a conflict](%sresolve-conflict.md) describes; unresolved, each goes to the next batch:\n", tasksURL)
+		b.WriteString("These are on the batch but carry only part of their originals on this line; take each out with `backport-batch run --defer` before the cut, and port what applies as a pull request of its own:\n")
+		for _, n := range partial {
+			b.WriteString(item(n))
+		}
+		text = append(text, b.String())
+	}
+	if len(conflicts) > 0 {
+		fmt.Fprintf(a.stdout, "%s: %d deferred conflicts on #%d wait for a maintainer\n", l.branch(), count(conflicts), pr.Number)
+		var b strings.Builder
+		fmt.Fprintf(&b, "These conflicts wait for a maintainer, as [resolving a conflict](%sresolve-conflict.md) describes; unresolved, each goes to the next batch, and so does what waits on one:\n", tasksURL)
 		for _, n := range conflicts {
-			fmt.Fprintf(&b, "\n- %s", prLink(n))
+			b.WriteString(item(n))
 		}
 		text = append(text, b.String())
 	}
 	if len(waiting) > 0 {
-		fmt.Fprintf(a.stdout, "%s: %d originals on #%d change %s and wait for a maintainer\n", l.branch(), len(waiting), pr.Number, workflowsDir)
+		if count(waiting) == len(waiting) {
+			fmt.Fprintf(a.stdout, "%s: %d originals on #%d change %s and wait for a maintainer\n", l.branch(), len(waiting), pr.Number, workflowsDir)
+		} else {
+			fmt.Fprintf(a.stdout, "%s: %d originals on #%d change %s or wait on one that does\n", l.branch(), len(waiting), pr.Number, workflowsDir)
+		}
 		var b strings.Builder
-		fmt.Fprintf(&b, "These change `%s`, which the batch's token may not push, and wait for a maintainer to bring them over, as [changes to workflows](%s#changes-to-workflows) describes:\n", workflowsDir, policyURL)
+		fmt.Fprintf(&b, "These change `%s`, which the batch's token may not push, and wait for a maintainer to bring them over, as [changes to workflows](%s#changes-to-workflows) describes, or wait on one that does:\n", workflowsDir, policyURL)
 		for _, n := range waiting {
-			fmt.Fprintf(&b, "\n- %s", prLink(n))
+			b.WriteString(item(n))
+		}
+		text = append(text, b.String())
+	}
+	if len(parks) > 0 {
+		fmt.Fprintf(a.stdout, "%s: %d parked originals on #%d, named once\n", l.branch(), len(parks), pr.Number)
+		var b strings.Builder
+		fmt.Fprintf(&b, "These cannot land on this line whole, so the batch parked them; each is named here once. A maintainer ports what applies as a pull request of its own, as [fixes that exist only on a release line](%s#fixes-that-exist-only-on-a-release-line) describes, or drops the original with `backport-batch run --drop`:\n", policyURL)
+		for _, p := range parks {
+			fmt.Fprintf(&b, "\n- %s: %s", prLink(p.Original), parkReason(p))
 		}
 		text = append(text, b.String())
 	}
 	if !*push {
 		return 0
 	}
-	return a.comment(pr, *mention, today, text)
+	if code := a.comment(pr, *mention, today, text); code != 0 || len(parks) == 0 {
+		return code
+	}
+	if err := a.announced(pr, src.rec, parks); err != nil {
+		return a.fail(fmt.Errorf("%w; the next notify names them again", err))
+	}
+	return 0
+}
+
+// announced marks parks as named in the record of the open batch pull
+// request, which the comment just named: only while it is open and its body
+// still carries the record notify read, so a run that rewrote the body
+// meanwhile loses nothing; the next notify names those parks again.
+func (a *app) announced(pr *pullRequest, rec *lineRecord, parks []parkedEntry) error {
+	marked := *rec
+	marked.Parked = slices.Clone(rec.Parked)
+	for i, p := range marked.Parked {
+		if slices.ContainsFunc(parks, func(q parkedEntry) bool { return q.Original == p.Original && parkEvent(q) == parkEvent(p) }) {
+			marked.Parked[i].Announced = true
+		}
+	}
+	now, err := a.gh.pull(pr.Number)
+	if err != nil {
+		return err
+	}
+	if st := prState(&now); st != "open" {
+		return fmt.Errorf("batch pull request #%d is %s now; nothing is written to it", pr.Number, st)
+	}
+	lines, err := fencedLines(now.Body, deferredFence)
+	if err != nil || len(lines) != 1 {
+		return fmt.Errorf("batch pull request #%d no longer carries the record notify read", pr.Number)
+	}
+	read, err := parseRecord(now.Body, notifyLineOf(rec))
+	if err != nil || recordBlock(*read) != recordBlock(*rec) {
+		return fmt.Errorf("batch pull request #%d no longer carries the record notify read", pr.Number)
+	}
+	// GitHub keeps the CRLF line ends a body edited on the web has; the
+	// record is found, and the body written back, with LF ones.
+	body := strings.ReplaceAll(now.Body, "\r\n", "\n")
+	block := deferredFence + "\n" + lines[0] + "\n```"
+	if strings.Count(body, block) != 1 {
+		return fmt.Errorf("batch pull request #%d carries the record notify read, but not as one block it can mark", pr.Number)
+	}
+	body = strings.Replace(body, block, recordBlock(marked), 1)
+	name, err := writeTemp("backport-batch-body-*.md", body)
+	if err != nil {
+		return err
+	}
+	defer os.Remove(name)
+	return a.gh.editBody(pr.Number, name)
+}
+
+// notifyLineOf is the line a record is for, which it was read against.
+func notifyLineOf(rec *lineRecord) line {
+	l, _ := parseLine(rec.Line)
+	return l
+}
+
+// placement says under which list notify names original n of the record:
+// workflow for a wait for a maintainer, conflict for a deferred conflict, ""
+// for neither, a deferral for a reason among them. One that waits on others
+// goes where what decides its wait goes, followed down the record; one that
+// is not in the record is held by rule 6 or missing, and waits on nobody.
+func placement(deferred map[int]deferredEntry, n int, seen map[int]bool) string {
+	e, ok := deferred[n]
+	switch {
+	case !ok || seen[n]:
+		return ""
+	case e.Workflows:
+		return "workflow"
+	case e.Reason != "":
+		return ""
+	case len(e.Needs) == 0:
+		return "conflict"
+	}
+	seen[n] = true
+	place := ""
+	for _, f := range e.Needs {
+		switch p := placement(deferred, f, seen); {
+		case p == "workflow":
+			return p
+		case p == "conflict":
+			place = p
+		}
+	}
+	return place
 }
 
 // comment writes what waits into the one notify comment on the batch pull

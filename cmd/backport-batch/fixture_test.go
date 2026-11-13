@@ -33,7 +33,7 @@ import (
 // main and release lines shaped the way GitHub leaves them: every pull request
 // lands as a merge commit whose message is its title, its number and its body.
 type fixture struct {
-	t      *testing.T
+	t      testing.TB
 	dir    string
 	remote string
 	now    time.Time
@@ -41,7 +41,7 @@ type fixture struct {
 	tool string
 }
 
-func newFixture(t *testing.T) *fixture {
+func newFixture(t testing.TB) *fixture {
 	t.Helper()
 	// A hook or an outer repository can export these into the test process.
 	for _, key := range []string{"GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR", "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES"} {
@@ -454,6 +454,22 @@ func (g *fakeGH) editPull(number int, title, bodyFile string) error {
 	}
 	if f := g.after["editPull"]; f != nil {
 		f()
+	}
+	return nil
+}
+
+func (g *fakeGH) editBody(number int, bodyFile string) error {
+	if err := g.write(number, "a body edit"); err != nil {
+		return err
+	}
+	if err := g.inject("editBody"); err != nil {
+		return err
+	}
+	if err := g.readBody(bodyFile); err != nil {
+		return err
+	}
+	if pr := g.find(number); pr != nil {
+		pr.Body = g.bodies[len(g.bodies)-1]
 	}
 	return nil
 }

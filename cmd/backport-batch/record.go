@@ -21,6 +21,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"regexp"
 	"slices"
 	"strings"
@@ -34,7 +35,8 @@ import (
 // carries a record of its own.
 
 // lineRecord is the one line of JSON in the block. Version 1, the block
-// before it had a version, holds only line and deferred.
+// before it had a version, holds only line and deferred; version 3 adds what
+// is parked and which units on the batch do only part of their original.
 type lineRecord struct {
 	Version  int             `json:"version"`
 	Line     string          `json:"line"`
@@ -44,6 +46,115 @@ type lineRecord struct {
 	Deferred []deferredEntry `json:"deferred"`
 	Dropped  []droppedEntry  `json:"dropped"`
 	Stale    []int           `json:"stale"`
+	Parked   []parkedEntry   `json:"parked,omitempty"`
+	Partial  []int           `json:"partial,omitempty"`
+	// Changed are the picks that differ from their originals.
+	Changed []int `json:"changed,omitempty"`
+}
+
+// recordVersion is the version a run writes.
+const recordVersion = 3
+
+// lineRecordV2 is version 2, which has none of version 3's keys.
+type lineRecordV2 struct {
+	Version  int             `json:"version"`
+	Line     string          `json:"line"`
+	Built    *builtFrom      `json:"built,omitempty"`
+	Report   string          `json:"report,omitempty"`
+	Closing  *closing        `json:"closing"`
+	Deferred []deferredEntry `json:"deferred"`
+	Dropped  []droppedEntry  `json:"dropped"`
+	Stale    []int           `json:"stale"`
+}
+
+// The kinds of park: an original that builds on what never reaches the
+// line, and one whose clean pick would leave part of it without effect.
+const (
+	parkDependency = "dependency"
+	parkPartial    = "partial"
+)
+
+// parkedEntry is an original the batch leaves out because it cannot land on
+// the line whole: what it needs that never comes, or the paths it would
+// leave without effect. announced says notify has named it on the open
+// batch, for exactly this entry.
+type parkedEntry struct {
+	Original  int      `json:"original"`
+	Merge     string   `json:"merge"`
+	Kind      string   `json:"kind"`
+	Needs     []int    `json:"needs,omitempty"`
+	Commits   []string `json:"commits,omitempty"`
+	Files     []string `json:"files,omitempty"`
+	Announced bool     `json:"announced,omitempty"`
+}
+
+// parkEvent is what makes a park the same park from one record to the
+// next: its merge, kind, prerequisites, commits and files. A park whose
+// event changed is news, and notify names it again.
+func parkEvent(p parkedEntry) string {
+	data, _ := json.Marshal(struct {
+		Merge   string   `json:"merge"`
+		Kind    string   `json:"kind"`
+		Needs   []int    `json:"needs"`
+		Commits []string `json:"commits"`
+		Files   []string `json:"files"`
+	}{p.Merge, p.Kind, p.Needs, p.Commits, p.Files})
+	return string(data)
+}
+
+// carryAnnounced marks each park announced that the carrier's record holds
+// announced as the same event, a closed carrier's too, so a new batch does
+// not name again what an earlier one named.
+func carryAnnounced(parked []parkedEntry, carrier *lineRecord) []parkedEntry {
+	out := slices.Clone(parked)
+	for i := range out {
+		out[i].Announced = false
+	}
+	if carrier == nil {
+		return out
+	}
+	for i := range out {
+		out[i].Announced = slices.ContainsFunc(carrier.Parked, func(c parkedEntry) bool {
+			return c.Announced && c.Original == out[i].Original && parkEvent(c) == parkEvent(out[i])
+		})
+	}
+	return out
+}
+
+// validate holds a parked entry to what a run writes. Its errors read after
+// "the block" or "report <id>".
+func (p parkedEntry) validate() error {
+	sortedUnique := func(n int, less func(i int) bool) bool {
+		for i := 1; i < n; i++ {
+			if !less(i) {
+				return false
+			}
+		}
+		return true
+	}
+	switch {
+	case checkSHA(p.Merge) != nil:
+		return fmt.Errorf("parks #%d by merge %q", p.Original, p.Merge)
+	case !sortedUnique(len(p.Needs), func(i int) bool { return p.Needs[i-1] < p.Needs[i] }) || slices.ContainsFunc(p.Needs, func(n int) bool { return n <= 0 || n == p.Original }):
+		return fmt.Errorf("parks #%d for originals %v, which are not what a run writes", p.Original, p.Needs)
+	case !sortedUnique(len(p.Commits), func(i int) bool { return p.Commits[i-1] < p.Commits[i] }) || slices.ContainsFunc(p.Commits, func(c string) bool { return checkSHA(c) != nil }):
+		return fmt.Errorf("parks #%d for commits %q, which are not what a run writes", p.Original, p.Commits)
+	case !sortedUnique(len(p.Files), func(i int) bool { return p.Files[i-1] < p.Files[i] }) || !slices.Equal(p.Files, cleanFiles(p.Files)):
+		return fmt.Errorf("parks #%d for files %q, which are not what a run writes", p.Original, p.Files)
+	}
+	switch p.Kind {
+	case parkPartial:
+		if len(p.Files) == 0 || len(p.Needs)+len(p.Commits) > 0 {
+			return fmt.Errorf("parks #%d as partial with no files it leaves without effect, or with what it needs", p.Original)
+		}
+	case parkDependency:
+		if len(p.Needs)+len(p.Commits) == 0 || len(p.Files) > 0 {
+			return fmt.Errorf("parks #%d for a dependency it does not name, or with files", p.Original)
+		}
+	default:
+		return fmt.Errorf("parks #%d as %q, which is no kind of park", p.Original, p.Kind)
+	}
+	return nil
 }
 
 // builtFrom is what a classification was made of; batch is the head it
@@ -173,9 +284,16 @@ func parseRecord(body string, l line) (*lineRecord, error) {
 		err = decodeStrict(blocks[0], &v1)
 		rec = lineRecord{Version: 1, Line: v1.Line, Deferred: v1.Deferred}
 	case 2:
+		var v2 lineRecordV2
+		err = decodeStrict(blocks[0], &v2)
+		rec = lineRecordWithout(v2)
+	case 3:
 		err = decodeStrict(blocks[0], &rec)
 	default:
-		return nil, fmt.Errorf("the %s block is version %d, which this backport-batch does not read; it reads 1 and 2", deferredFence, version)
+		return nil, fmt.Errorf("the %s block is version %d, which this backport-batch does not read; it reads 1 to %d", deferredFence, version, recordVersion)
+	}
+	if err == nil && version < 3 && slices.ContainsFunc(rec.Deferred, func(d deferredEntry) bool { return d.Needs != nil }) {
+		err = fmt.Errorf("version %d has no waits on other originals", version)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("reading the %s block: %w", deferredFence, err)
@@ -213,7 +331,7 @@ func (rec *lineRecord) validate(l line) error {
 		// A conflict names the commit that failed and its files, a deferral
 		// its reason, and a wait its workflow files.
 		kinds := 0
-		for _, is := range []bool{d.Commit != "" || len(d.Files) > 0 && !d.Workflows && d.Reason == "", d.Reason != "", d.Workflows} {
+		for _, is := range []bool{d.Commit != "" || len(d.Files) > 0 && !d.Workflows && d.Reason == "" && len(d.Needs) == 0, d.Reason != "", d.Workflows, len(d.Needs) > 0} {
 			if is {
 				kinds++
 			}
@@ -231,6 +349,13 @@ func (rec *lineRecord) validate(l line) error {
 			return fmt.Errorf("names files of #%d that are not as a run writes them: %q", d.Original, d.Files)
 		case d.More < 0:
 			return fmt.Errorf("counts %d more files for #%d", d.More, d.Original)
+		case len(d.Needs) > 0 && (len(d.Files) > 0 || d.More != 0):
+			return fmt.Errorf("has #%d wait on other originals with files of its own", d.Original)
+		}
+		for i, n := range d.Needs {
+			if n <= 0 || n == d.Original || i > 0 && d.Needs[i-1] >= n {
+				return fmt.Errorf("has #%d wait on %v, which is not what a run writes", d.Original, d.Needs)
+			}
 		}
 	}
 	for _, d := range rec.Dropped {
@@ -244,12 +369,56 @@ func (rec *lineRecord) validate(l line) error {
 			return fmt.Errorf("drops #%d for %q, which is no reason a run writes", d.Original, d.Reason)
 		}
 	}
+	for _, p := range rec.Parked {
+		if err := once(p.Original); err != nil {
+			return err
+		}
+		if err := p.validate(); err != nil {
+			return err
+		}
+	}
 	staleSeen := map[int]bool{}
 	for _, n := range rec.Stale {
 		if n <= 0 || staleSeen[n] {
 			return fmt.Errorf("lists %d as still on the batch more than once or not at all", n)
 		}
 		staleSeen[n] = true
+	}
+	changedSeen := map[int]bool{}
+	for _, n := range rec.Changed {
+		if n <= 0 || changedSeen[n] {
+			return fmt.Errorf("lists %d as a changed pick more than once or not at all", n)
+		}
+		changedSeen[n] = true
+	}
+	if err := rec.waitsHold(); err != nil {
+		return err
+	}
+	// What is on the batch is neither deferred nor parked.
+	left := map[int]bool{}
+	for _, d := range rec.Deferred {
+		left[d.Original] = true
+	}
+	for _, p := range rec.Parked {
+		left[p.Original] = true
+		if slices.Contains(p.Commits, p.Merge) {
+			return fmt.Errorf("parks #%d for its own merge", p.Original)
+		}
+	}
+	for _, list := range [][]int{rec.Partial, rec.Changed} {
+		for _, n := range list {
+			if left[n] {
+				return fmt.Errorf("has #%d on the batch and left off it at once", n)
+			}
+		}
+	}
+	partialSeen := map[int]bool{}
+	for _, n := range rec.Partial {
+		// A unit that does only part of its original is still on the batch.
+		if !staleSeen[n] || partialSeen[n] {
+			return fmt.Errorf("lists #%d as a partial unit more than once, or not as still on the batch", n)
+		}
+		partialSeen[n] = true
 	}
 	if rec.Version < 2 {
 		return nil
@@ -296,6 +465,79 @@ func (b *builtFrom) validate() error {
 }
 
 var runURLRE = regexp.MustCompile(`^https://[^/\s]+/[^/\s]+/[^/\s]+/actions/runs/[0-9]+(/attempts/[0-9]+)?$`)
+
+// waitsHold holds what waits and parks need to what the record says of the
+// originals they need: a wait needs ones still to come, so none parked or
+// dropped, a park ones that never come, so none deferred, and no wait ends
+// up waiting on itself. Its errors read after "the block".
+func (rec *lineRecord) waitsHold() error {
+	deferred, never := map[int][]int{}, map[int]bool{}
+	for _, d := range rec.Deferred {
+		deferred[d.Original] = d.Needs
+	}
+	for _, p := range rec.Parked {
+		never[p.Original] = true
+	}
+	for _, d := range rec.Dropped {
+		never[d.Original] = true
+	}
+	for _, d := range rec.Deferred {
+		for _, n := range d.Needs {
+			if never[n] {
+				return fmt.Errorf("has #%d wait on #%d, which never comes", d.Original, n)
+			}
+		}
+	}
+	for _, p := range rec.Parked {
+		for _, n := range p.Needs {
+			if _, ok := deferred[n]; ok {
+				return fmt.Errorf("parks #%d for #%d, which is still to come", p.Original, n)
+			}
+		}
+	}
+	needs := map[int][]int{}
+	for _, d := range rec.Deferred {
+		needs[d.Original] = d.Needs
+	}
+	for _, p := range rec.Parked {
+		needs[p.Original] = p.Needs
+	}
+	return waitCycle(needs)
+}
+
+// waitCycle refuses waits that lead back to where they started, which no
+// run writes: a prerequisite merged before what needs it.
+func waitCycle(needs map[int][]int) error {
+	state := map[int]int{} // 1 on the path, 2 done
+	var visit func(n int) error
+	visit = func(n int) error {
+		switch state[n] {
+		case 1:
+			return fmt.Errorf("has #%d wait on itself through what it waits on", n)
+		case 2:
+			return nil
+		}
+		state[n] = 1
+		for _, f := range needs[n] {
+			if err := visit(f); err != nil {
+				return err
+			}
+		}
+		state[n] = 2
+		return nil
+	}
+	for _, n := range slices.Sorted(maps.Keys(needs)) {
+		if err := visit(n); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// lineRecordWithout is a version 2 record as the newest version holds it.
+func lineRecordWithout(v2 lineRecordV2) lineRecord {
+	return lineRecord{Version: v2.Version, Line: v2.Line, Built: v2.Built, Report: v2.Report, Closing: v2.Closing, Deferred: v2.Deferred, Dropped: v2.Dropped, Stale: v2.Stale}
+}
 
 // recordBlock is the block that holds rec. One line of JSON: encoding/json
 // escapes newlines and <, > and &, so nothing in a file name or a reason can

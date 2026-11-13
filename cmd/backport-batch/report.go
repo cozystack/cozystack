@@ -23,6 +23,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"regexp"
 	"runtime/debug"
@@ -43,7 +44,9 @@ import (
 const (
 	reportFence  = "```backport-batch-report"
 	reportMarker = "<!-- backport-batch:report "
-	reportFormat = 1
+	// reportFormat is the format a run writes. Format 2 adds parked
+	// originals and partial units; format 1, which has neither, is read too.
+	reportFormat = 2
 	// reportLimit keeps a report comment well inside GitHub's 65536.
 	reportLimit = 60000
 )
@@ -67,11 +70,11 @@ type reportOverrides struct {
 
 // reportPrimary puts every original in exactly one place.
 type reportPrimary struct {
-	Picked   []int             `json:"picked"`
-	Missing  []int             `json:"missing"`
-	Deferred []deferredEntry   `json:"deferred"`
-	Parked   []json.RawMessage `json:"parked"`
-	Skipped  reportSkipped     `json:"skipped"`
+	Picked   []int           `json:"picked"`
+	Missing  []int           `json:"missing"`
+	Deferred []deferredEntry `json:"deferred"`
+	Parked   []parkedEntry   `json:"parked"`
+	Skipped  reportSkipped   `json:"skipped"`
 }
 
 type reportSkipped struct {
@@ -86,12 +89,15 @@ type reportSkipped struct {
 }
 
 // reportOverlays mark originals that are also something else: stale ones
-// are excluded but still on the batch, and each drop is the record's entry,
-// with the merge commit it is bound to and its reason.
+// are excluded, or applied only in part, but still on the batch, partial
+// ones those whose unit there leaves part of them without effect, and each
+// drop is the record's entry, with the merge commit it is bound to and its
+// reason.
 type reportOverlays struct {
 	Dropped []droppedEntry `json:"dropped"`
 	Stale   []int          `json:"stale"`
 	Changed []int          `json:"changed"`
+	Partial []int          `json:"partial,omitempty"`
 }
 
 func (s *reportSkipped) list(rule int) *[]int {
@@ -139,7 +145,7 @@ func numbers(vs []*verdict) []int {
 
 // deferredEntries is what the record and the report say about the conflicts,
 // the deferrals and the waits of a run.
-func deferredEntries(conflicts, held, waiting []pick) []deferredEntry {
+func deferredEntries(conflicts, held, waiting, needs []pick) []deferredEntry {
 	out := []deferredEntry{}
 	for _, p := range conflicts {
 		files := cleanFiles(p.files[:min(len(p.files), filesKept)])
@@ -151,6 +157,21 @@ func deferredEntries(conflicts, held, waiting []pick) []deferredEntry {
 	for _, p := range waiting {
 		files := cleanFiles(p.files[:min(len(p.files), filesKept)])
 		out = append(out, deferredEntry{Original: p.v.o.number, Files: files, More: len(p.files) - len(files) + p.more, Workflows: true})
+	}
+	for _, p := range needs {
+		out = append(out, deferredEntry{Original: p.v.o.number, Files: []string{}, Needs: slices.Sorted(slices.Values(p.needs))})
+	}
+	return out
+}
+
+// parkedEntries is what the record and the report say about what a run
+// parked; whether notify named it is the record's alone.
+func parkedEntries(vs []*verdict) []parkedEntry {
+	out := []parkedEntry{}
+	for _, v := range vs {
+		p := *v.park
+		p.Announced = false
+		out = append(out, p)
 	}
 	return out
 }
@@ -170,7 +191,7 @@ func buildReport(b *batch, r *report) (reportDoc, error) {
 			doc.Overrides.Skip = append(doc.Overrides.Skip, v.o.number)
 		}
 	}
-	doc.Primary = reportPrimary{Picked: numbers(r.onBranch), Missing: numbers(r.missing), Deferred: deferredEntries(r.deferred, r.held, r.waiting), Parked: []json.RawMessage{}}
+	doc.Primary = reportPrimary{Picked: numbers(r.onBranch), Missing: numbers(r.missing), Deferred: deferredEntries(r.deferred, r.held, r.waiting, r.needs), Parked: parkedEntries(r.parked)}
 	for _, l := range doc.Primary.Skipped.lists() {
 		*l.list = []int{}
 	}
@@ -181,7 +202,15 @@ func buildReport(b *batch, r *report) (reportDoc, error) {
 		}
 		*list = append(*list, numbers(vs)...)
 	}
-	doc.Overlays = reportOverlays{Dropped: []droppedEntry{}, Stale: numbers(r.stale), Changed: []int{}}
+	doc.Overlays = reportOverlays{Dropped: []droppedEntry{}, Stale: numbers(r.stale), Changed: numbers(r.changed())}
+	if len(r.partial) > 0 {
+		doc.Overlays.Partial = numbers(r.partial)
+	}
+	for _, v := range b.verdicts {
+		if len(v.diag) > 0 {
+			doc.Diag[strconv.Itoa(v.o.number)] = slices.Clone(v.diag)
+		}
+	}
 	doc.Overlays.Dropped = append(doc.Overlays.Dropped, r.dropped...)
 	doc.canonical()
 	where, err := doc.categories()
@@ -203,7 +232,7 @@ func buildReport(b *batch, r *report) (reportDoc, error) {
 
 // canonical sorts every list, so equal classifications are equal bytes.
 func (d *reportDoc) canonical() {
-	lists := []*[]int{&d.Primary.Picked, &d.Primary.Missing, &d.Overrides.Include, &d.Overrides.Skip, &d.Overlays.Stale, &d.Overlays.Changed}
+	lists := []*[]int{&d.Primary.Picked, &d.Primary.Missing, &d.Overrides.Include, &d.Overrides.Skip, &d.Overlays.Stale, &d.Overlays.Changed, &d.Overlays.Partial}
 	for _, l := range d.Primary.Skipped.lists() {
 		lists = append(lists, l.list)
 	}
@@ -211,6 +240,7 @@ func (d *reportDoc) canonical() {
 		slices.Sort(*l)
 	}
 	slices.SortFunc(d.Primary.Deferred, func(a, b deferredEntry) int { return cmp.Compare(a.Original, b.Original) })
+	slices.SortFunc(d.Primary.Parked, func(a, b parkedEntry) int { return cmp.Compare(a.Original, b.Original) })
 	slices.SortFunc(d.Overlays.Dropped, func(a, b droppedEntry) int { return cmp.Compare(a.Original, b.Original) })
 	slices.Sort(d.Other)
 }
@@ -241,6 +271,11 @@ func (d *reportDoc) categories() (map[int]string, error) {
 	}
 	for _, e := range d.Primary.Deferred {
 		if err := put(e.Original, "deferred"); err != nil {
+			return nil, err
+		}
+	}
+	for _, e := range d.Primary.Parked {
+		if err := put(e.Original, "parked"); err != nil {
 			return nil, err
 		}
 	}
@@ -285,7 +320,7 @@ func parseReport(raw string, l line) (reportDoc, error) {
 	if err := decodeStrict(raw, &doc); err != nil {
 		return doc, fmt.Errorf("reading the report: %w", err)
 	}
-	if doc.Format != reportFormat {
+	if doc.Format != 1 && doc.Format != reportFormat {
 		return doc, fmt.Errorf("the report is format %d, which this backport-batch does not read", doc.Format)
 	}
 	if !reportIDRE.MatchString(doc.ID) || reportID(doc) != doc.ID {
@@ -333,7 +368,20 @@ func (d *reportDoc) validate(l line) error {
 			}
 		}
 	}
-	for _, list := range [][]int{d.Overrides.Include, d.Overrides.Skip, d.Overlays.Stale, d.Overlays.Changed} {
+	for _, p := range d.Primary.Parked {
+		if p.Original <= 0 {
+			return fmt.Errorf("names original %d", p.Original)
+		}
+		if err := p.validate(); err != nil {
+			return err
+		}
+		// Whether notify named it is the record's to say, not the
+		// classification's.
+		if p.Announced {
+			return fmt.Errorf("has #%d announced", p.Original)
+		}
+	}
+	for _, list := range [][]int{d.Overrides.Include, d.Overrides.Skip, d.Overlays.Stale, d.Overlays.Changed, d.Overlays.Partial} {
 		for _, n := range list {
 			if n <= 0 {
 				return fmt.Errorf("names original %d", n)
@@ -351,9 +399,43 @@ func (d *reportDoc) links() error {
 	if err != nil {
 		return err
 	}
-	// PR B gives parked originals a shape; until then none is written.
-	if len(d.Primary.Parked) > 0 {
-		return errors.New("parks originals, which this backport-batch does not do")
+	// Format 1 was written before anything was parked.
+	if d.Format == 1 && len(d.Primary.Parked)+len(d.Overlays.Partial) > 0 {
+		return errors.New("parks originals, which format 1 does not")
+	}
+	// What a dependency park needs never reaches the line: it is excluded
+	// by a rule, a label, a drop or a park of its own, or a commit on main
+	// that merged no pull request.
+	other := map[string]bool{}
+	for _, sha := range d.Other {
+		other[sha] = true
+	}
+	for _, p := range d.Primary.Parked {
+		for _, n := range p.Needs {
+			switch c := where[n]; c {
+			case "parked", "skipped.before-start", "skipped.type", "skipped.breaking", "skipped.touches", "skipped.skip-label", "skipped.dropped":
+			default:
+				return fmt.Errorf("parks #%d for #%d, which it has %s", p.Original, n, or(c, "nowhere"))
+			}
+		}
+		if other[p.Merge] || slices.Contains(p.Commits, p.Merge) {
+			return fmt.Errorf("parks #%d by a merge it counts as no pull request's, or for its own merge", p.Original)
+		}
+		for _, c := range p.Commits {
+			if !other[c] {
+				return fmt.Errorf("parks #%d for %.12s, which it does not count among main's commits that merged no pull request", p.Original, c)
+			}
+		}
+	}
+	// A partial unit is still on the batch.
+	stale := map[int]bool{}
+	for _, n := range d.Overlays.Stale {
+		stale[n] = true
+	}
+	for _, n := range d.Overlays.Partial {
+		if !stale[n] {
+			return fmt.Errorf("marks #%d partial on the batch, but not still on it", n)
+		}
 	}
 	drops := map[int]bool{}
 	for _, e := range d.Overlays.Dropped {
@@ -364,15 +446,15 @@ func (d *reportDoc) links() error {
 			return fmt.Errorf("has #%d dropped, but keeps no drop of it", n)
 		}
 	}
-	// Stale and changed mark something a run took or excluded.
-	for _, o := range []struct {
-		name string
-		list []int
-	}{{"stale", d.Overlays.Stale}, {"changed", d.Overlays.Changed}} {
-		for _, n := range o.list {
-			if c := where[n]; c != "picked" && !strings.HasPrefix(c, "skipped.") {
-				return fmt.Errorf("marks #%d %s, which it has %s", n, o.name, or(c, "nowhere"))
-			}
+	// Stale marks something a run took or excluded, and changed a pick.
+	for _, n := range d.Overlays.Stale {
+		if c := where[n]; c != "picked" && !strings.HasPrefix(c, "skipped.") {
+			return fmt.Errorf("marks #%d stale, which it has %s", n, or(c, "nowhere"))
+		}
+	}
+	for _, n := range d.Overlays.Changed {
+		if c := where[n]; c != "picked" {
+			return fmt.Errorf("marks #%d changed, which it has %s", n, or(c, "nowhere"))
 		}
 	}
 	// backport/skip decides before any rule, and backport/include lifts
@@ -404,6 +486,28 @@ func (d *reportDoc) links() error {
 		if e.Workflows && !d.Built.Options.NoWorkflowFiles {
 			return fmt.Errorf("has #%d waiting for its workflow files, but was made bringing them over", e.Original)
 		}
+		// What a wait waits on is still to come: not on the line, deferred,
+		// or held by rule 6.
+		for _, n := range e.Needs {
+			switch c := where[n]; c {
+			case "missing", "deferred", "skipped.newer":
+			default:
+				return fmt.Errorf("has #%d wait on #%d, which it has %s", e.Original, n, or(c, "nowhere"))
+			}
+		}
+		if d.Format == 1 && len(e.Needs) > 0 {
+			return fmt.Errorf("has #%d wait on other originals, which format 1 does not", e.Original)
+		}
+	}
+	needs := map[int][]int{}
+	for _, e := range d.Primary.Deferred {
+		needs[e.Original] = e.Needs
+	}
+	for _, p := range d.Primary.Parked {
+		needs[p.Original] = p.Needs
+	}
+	if err := waitCycle(needs); err != nil {
+		return err
 	}
 	if d.Built.Options.Mode == modeClose && len(d.Primary.Picked)+len(d.Overlays.Stale) > 0 {
 		return errors.New("closes the batch, but still has originals on it")
@@ -658,6 +762,12 @@ func (a *app) printReport(pr *pullRequest, s storedReport, inBody *storedReport,
 		switch {
 		case e.Workflows:
 			text += "waits for a maintainer, changes " + strings.Join(e.Files, ", ")
+		case len(e.Needs) > 0:
+			var needs []string
+			for _, n := range e.Needs {
+				needs = append(needs, "#"+strconv.Itoa(n))
+			}
+			text += "waits on " + strings.Join(needs, ", ")
 		case e.Reason != "":
 			text += e.Reason
 		default:
@@ -665,6 +775,23 @@ func (a *app) printReport(pr *pullRequest, s storedReport, inBody *storedReport,
 		}
 		if e.More > 0 {
 			text += fmt.Sprintf(" and %d more", e.More)
+		}
+		lines = append(lines, line{e.Original, text})
+	}
+	for _, e := range d.Primary.Parked {
+		text := "parked: "
+		switch {
+		case e.Kind == parkPartial:
+			text += "only part of it applies, it would leave " + strings.Join(e.Files, ", ") + " without effect"
+		default:
+			var needs []string
+			for _, n := range e.Needs {
+				needs = append(needs, "#"+strconv.Itoa(n))
+			}
+			for _, c := range e.Commits {
+				needs = append(needs, c[:12])
+			}
+			text += "builds on " + strings.Join(needs, ", ") + ", which never reaches the line"
 		}
 		lines = append(lines, line{e.Original, text})
 	}
@@ -683,10 +810,16 @@ func (a *app) printReport(pr *pullRequest, s storedReport, inBody *storedReport,
 		}
 	}
 	overlay("stale, still on the batch", d.Overlays.Stale)
+	overlay("only part of it applies, still on the batch", d.Overlays.Partial)
 	for _, e := range d.Overlays.Dropped {
 		fmt.Fprintf(a.stdout, "dropped: #%d, merged as %.12s, on #%d: %s\n", e.Original, terminalSafe(e.Merge), e.On, terminalSafe(e.Reason))
 	}
 	overlay("changed in the pick", d.Overlays.Changed)
+	for _, n := range slices.Sorted(maps.Keys(d.Diag)) {
+		for _, ln := range d.Diag[n] {
+			fmt.Fprintf(a.stdout, "#%s: %s\n", terminalSafe(n), terminalSafe(ln))
+		}
+	}
 	if len(d.Other) > 0 {
 		other := make([]string, len(d.Other))
 		for i, sha := range d.Other {

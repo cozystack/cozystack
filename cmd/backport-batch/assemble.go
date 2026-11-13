@@ -33,6 +33,8 @@ type pick struct {
 	files  []string
 	// failed is the commit whose pick conflicted.
 	failed string
+	// needs are the originals still to come it waits on.
+	needs []int
 	// more counts the conflicting files a recorded conflict no longer names.
 	more   int
 	reason string
@@ -138,6 +140,7 @@ func (a *app) run(args []string) int {
 	if err := fetch(); err != nil {
 		return a.fail(err)
 	}
+	started := time.Now()
 	b, err := a.prepare(l)
 	if err != nil {
 		return a.fail(err)
@@ -145,6 +148,12 @@ func (a *app) run(args []string) int {
 	if goOn, code := a.resumeClose(b, *push, deferred != nil || drops != nil); !goOn {
 		return code
 	}
+	if err := b.analyze(); err != nil {
+		return a.fail(err)
+	}
+	// The scheduled job has half an hour for every line; this says where it
+	// goes.
+	fmt.Fprintf(a.stderr, "prepared %s in %s, %s of it judging partial units and what originals build on\n", l.branch(), time.Since(started).Round(time.Millisecond), b.detecting.Round(time.Millisecond))
 	if drops != nil {
 		return a.redrop(b, drops, reason, *undropArg != "", *push)
 	}
@@ -197,18 +206,61 @@ func (a *app) run(args []string) int {
 			return a.fail(err)
 		}
 	}
+	// cls is what each original became in this run, to an original that
+	// builds on it; the rules decide the rest.
+	mode := analysisMode{noWorkflowFiles: *noWorkflows}
+	cls := map[*verdict]edgeClass{}
+	classOf := func(f *verdict) edgeClass {
+		if c, ok := b.ruleClass(f); ok {
+			return c
+		}
+		if c, ok := cls[f]; ok {
+			return c
+		}
+		return edgeMissing
+	}
 	for _, v := range b.qualifying() {
+		on := false
+		if carried != nil {
+			if on, err = b.onBranch(carried, v); err != nil {
+				return a.fail(err)
+			}
+		}
 		switch {
-		case carried != nil && found(carried, v):
+		case on:
 			r.onBranch = append(r.onBranch, v)
+			cls[v] = edgeSatisfied
 			continue
 		case held[v.o.number].Reason != "":
 			r.held = append(r.held, pick{v: v, status: "held", reason: held[v.o.number].Reason})
+			cls[v] = edgeDeferred
 			continue
 		case v.onBatch != "":
 			v.rule, v.reason = ruleOnLine, fmt.Sprintf("on the open batch pull request #%d", b.pr.Number)
 			r.skipped[ruleOnLine] = append(r.skipped[ruleOnLine], v)
 			continue
+		}
+		if v.partial != nil {
+			// Judged at the line's head; what the batch picked since may
+			// supply what it lacked there.
+			if err := a.partialAtHead(b, v); err != nil {
+				return a.fail(err)
+			}
+			if v.partial != nil {
+				r.parked = append(r.parked, v)
+				cls[v] = edgeNever
+				continue
+			}
+		}
+		if len(v.deps) > 0 {
+			kind, err := a.dependsAt(b, r, v, mode, classOf)
+			if err != nil {
+				return a.fail(err)
+			}
+			if kind != edgeSatisfied {
+				cls[v] = kind
+				continue
+			}
 		}
 		if *noWorkflows {
 			files, err := workflowFiles(v.commits)
@@ -217,18 +269,30 @@ func (a *app) run(args []string) int {
 			}
 			if len(files) > 0 {
 				r.waiting = append(r.waiting, pick{v: v, status: "waiting", files: files})
+				cls[v] = edgeWorkflow
 				continue
 			}
 		}
-		p, err := pickOriginal(v)
+		p, err := pickOriginal(v, func(base, head string) ([]string, error) {
+			omitted, diag, err := b.omittedEffects(v, base, head)
+			v.addDiag(diag...)
+			return omitted, err
+		})
 		if err != nil {
 			return a.fail(err)
 		}
 		switch p.status {
+		case "partial":
+			v.partial = p.files
+			v.park = &parkedEntry{Original: v.o.number, Merge: v.o.merge, Kind: parkPartial, Files: sortedClean(p.files)}
+			r.parked = append(r.parked, v)
+			cls[v] = edgeNever
 		case "picked":
 			r.onBranch = append(r.onBranch, v)
+			cls[v] = edgeSatisfied
 		case "conflict":
 			r.deferred = append(r.deferred, p)
+			cls[v] = edgeDeferred
 		case "empty":
 			v.rule, v.reason = ruleOnLine, "the earlier picks already carry it"
 			r.skipped[ruleOnLine] = append(r.skipped[ruleOnLine], v)
@@ -246,8 +310,65 @@ func (a *app) run(args []string) int {
 		if !descends {
 			return a.fail(fmt.Errorf("%.12s does not descend from --onto %.12s", head, *onto))
 		}
+		if err := b.markPartial(r, carried.head); err != nil {
+			return a.fail(err)
+		}
 	}
 	return a.finish(b, r, branch, date, *push, false)
+}
+
+// dependsAt decides, from what v builds on that the branch lacks, whether
+// the run leaves it out: waiting for a maintainer in the scheduled mode
+// when only tests or docs build on what never comes, parked when anything
+// else never comes, or waiting on prerequisites still to come. What is
+// there, the line's, the batch's, or what this run picked or found empty,
+// counts for nothing; once earlier picks moved the branch, v is judged at
+// its head. It returns what v became to an original that builds on it,
+// edgeSatisfied when the run goes on to pick it.
+func (a *app) dependsAt(b *batch, r *report, v *verdict, mode analysisMode, classOf func(*verdict) edgeClass) (edgeClass, error) {
+	deps := v.deps
+	head, err := resolve("HEAD")
+	if err != nil {
+		return 0, err
+	}
+	if head != b.lineHead {
+		if deps, err = b.depsAt(v, head); err != nil {
+			return 0, err
+		}
+	}
+	never, pending := edges(deps, classOf)
+	primary, err := workflowPrimary(mode, v, never, pending)
+	switch {
+	case err != nil:
+		return 0, err
+	case primary:
+		files, err := workflowFiles(v.commits)
+		if err != nil {
+			return 0, err
+		}
+		v.addDiag(testsOnly(v, never, b.line))
+		r.waiting = append(r.waiting, pick{v: v, status: "waiting", files: files})
+		return edgeWorkflow, nil
+	case len(never) > 0:
+		v.park = dependencyPark(v, never)
+		r.parked = append(r.parked, v)
+		return edgeNever, nil
+	case len(pending) > 0:
+		class, needs := strongest(pending)
+		r.needs = append(r.needs, pick{v: v, status: "waiting", needs: numbers(needs)})
+		return class, nil
+	}
+	return edgeSatisfied, nil
+}
+
+// partialAtHead judges v again where the run has got to, when earlier picks
+// moved the branch past the line's head.
+func (a *app) partialAtHead(b *batch, v *verdict) error {
+	head, err := resolve("HEAD")
+	if err != nil || head == b.lineHead {
+		return err
+	}
+	return b.partialAt(v, head)
 }
 
 // keptOut lists the originals with backport/skip, or dropped, that the batch
@@ -261,7 +382,11 @@ func keptOut(b *batch, carried *history) ([]*verdict, error) {
 		if err := b.load(v); err != nil {
 			return nil, err
 		}
-		if found(carried, v) {
+		on, err := b.onBranch(carried, v)
+		if err != nil {
+			return nil, err
+		}
+		if on {
 			out = append(out, v)
 		}
 	}
@@ -276,7 +401,7 @@ func found(h *history, v *verdict) bool {
 // newReport starts the report of a run with what the rules left out and what
 // the labels overrode.
 func newReport(b *batch) *report {
-	r := &report{line: b.line, newer: b.newer, skipped: map[int][]*verdict{}, other: len(b.other), start: b.start}
+	r := &report{line: b.line, newer: b.newer, skipped: map[int][]*verdict{}, other: len(b.other), start: b.start, carried: b.src.rec}
 	for _, v := range b.verdicts {
 		if v.rule != 0 {
 			r.skipped[v.rule] = append(r.skipped[v.rule], v)
@@ -365,7 +490,8 @@ func (r *report) lineRecord(doc reportDoc) lineRecord {
 		dropped = []droppedEntry{}
 	}
 	slices.SortFunc(dropped, func(a, b droppedEntry) int { return a.Original - b.Original })
-	return lineRecord{Version: 2, Line: doc.Line, Built: &built, Report: doc.ID, Closing: r.closing, Deferred: slices.Clone(doc.Primary.Deferred), Dropped: dropped, Stale: slices.Clone(doc.Overlays.Stale)}
+	return lineRecord{Version: recordVersion, Line: doc.Line, Built: &built, Report: doc.ID, Closing: r.closing, Deferred: slices.Clone(doc.Primary.Deferred), Dropped: dropped, Stale: slices.Clone(doc.Overlays.Stale),
+		Parked: carryAnnounced(doc.Primary.Parked, r.carried), Partial: slices.Clone(doc.Overlays.Partial), Changed: slices.Clone(doc.Overlays.Changed)}
 }
 
 // branchDate is the date a batch branch was opened under.

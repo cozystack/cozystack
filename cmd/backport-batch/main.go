@@ -207,10 +207,22 @@ type verdict struct {
 	// and by load for anything else.
 	commits []string
 	changes []fileChange
-	// onBatch is the commit of the open batch pull request that picks it.
+	// onBatch is the commit of the open batch pull request that picks it,
+	// and batched the unit of the open batch that carries it whatever the
+	// rules now say of it.
 	onBatch string
+	batched string
 	// label is the maintainer override the original carries, if any.
 	label string
+	// partial lists what its clean net merge onto the line would leave
+	// without effect, and park why the batch leaves it out, if it does.
+	partial []string
+	park    *parkedEntry
+	// deps is what it builds on that the line lacks.
+	deps []dependency
+	// diag is what could not be judged about it, shown whatever became of
+	// it.
+	diag []string
 }
 
 // batch is everything read about a line before anything is written.
@@ -242,6 +254,27 @@ type batch struct {
 	// textUntil is the batch-only day: what a commit's text says counts as
 	// evidence only on commits from before it.
 	textUntil time.Time
+	// partialUnits are the originals whose unit on the open batch leaves
+	// what it lists without effect.
+	partialUnits map[*verdict][]string
+	// What one command read once and asks again: renames by commit pair,
+	// units by batch head, and how often git merge-file ran.
+	renameCache map[string]renameSet
+	unitCache   map[string]map[*verdict]string
+	mergeFiles  int
+	// renameLimit is the -l rename detection runs with; 0, git's widest.
+	renameLimit int
+	// brought maps main's commits since the fork point to the first-parent
+	// commit that brought each, and ancestors says which commits blame
+	// named are older than the fork point.
+	brought   map[string]string
+	ancestors map[string]bool
+	// detecting is how long judging partial units and dependencies took.
+	detecting time.Duration
+	depCache  map[string][]dependency
+	// lineCarries says, for a prerequisite the rules keep out, whether the
+	// line carries it all the same.
+	lineCarries map[*verdict]bool
 }
 
 // fetch moves to the top of the working tree first: every path the batch
@@ -348,12 +381,18 @@ func (a *app) prepare(l line) (*batch, error) {
 	if b.drops, err = b.bindDrops(merges); err != nil {
 		return nil, err
 	}
+	if err := b.waitOrder(merges); err != nil {
+		return nil, err
+	}
 	for _, o := range merges {
 		v := &verdict{o: o, label: labels[o.number]}
 		if err := b.judge(v, b.drops); err != nil {
 			return nil, err
 		}
 		b.verdicts = append(b.verdicts, v)
+	}
+	if err := b.partialStates(); err != nil {
+		return nil, err
 	}
 	return b, nil
 }
