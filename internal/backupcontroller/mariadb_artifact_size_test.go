@@ -464,7 +464,7 @@ func TestMariaDBArtifactSizeBytes_MinioClient(t *testing.T) {
 		gotPath, gotPrefix, gotAuth = req.URL.Path, req.URL.Query().Get("prefix"), req.Header.Get("Authorization")
 		gotDelimiter = req.URL.Query().Get("delimiter")
 		w.Header().Set("Content-Type", "application/xml")
-		fmt.Fprintf(w, `<?xml version="1.0" encoding="UTF-8"?>
+		_, _ = fmt.Fprintf(w, `<?xml version="1.0" encoding="UTF-8"?>
 <ListBucketResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">
   <Name>bkt</Name><Prefix>tenant/db/</Prefix><KeyCount>1</KeyCount><MaxKeys>1000</MaxKeys><IsTruncated>false</IsTruncated>
   <Contents><Key>%s</Key><Size>31337</Size><ETag>"x"</ETag><LastModified>2026-10-21T10:01:00.000Z</LastModified></Contents>

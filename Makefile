@@ -139,13 +139,14 @@ rd-presets-check:
 migrations-target-check:
 	hack/check-migrations-target.sh
 
-# Scoped go test over the cozystack-api surface that this repo owns. Kept
-# narrow intentionally - running `go test ./...` pulls in generated code
-# round-trip suites whose behavior depends on tool versions outside this
-# repo's control (kubebuilder, openapi-gen, etc.) and is better exercised
-# from their generator workflows.
+# Go tests of the cozystack-api surface and of the standalone packages and
+# commands listed here, whose tests need no cluster. Kept narrow
+# intentionally - running `go test ./...` pulls in generated code round-trip
+# suites whose behavior depends on tool versions outside this repo's control
+# (kubebuilder, openapi-gen, etc.) and is better exercised from their
+# generator workflows.
 go-unit-tests:
-	go test ./pkg/registry/... ./pkg/config/... ./pkg/cmd/server/...
+	go test ./pkg/registry/... ./pkg/config/... ./pkg/cmd/server/... ./pkg/lineage/... ./pkg/ovnstatus/... ./pkg/reservation/... ./cmd/cozypkg/... ./cmd/check-readiness/...
 
 # The nested Go modules (image sources and the published API types) are
 # outside ./... of the root module, so no other target reaches their tests.
@@ -158,9 +159,7 @@ go-module-tests:
 	done
 
 # Go tests for the controllers and supporting packages under ./internal.
-# Excludes ./pkg/... and ./cmd/... — those are run separately by
-# go-unit-tests above (pkg subset) and skipped (cmd) until their tests
-# stabilise. CI schedules this target in the same four-slot make invocation as
+# CI schedules this target in the same four-slot make invocation as
 # unit-tests; locally invoke it directly or chain the two targets.
 test-controllers:
 	go test ./internal/... -count=1
@@ -195,7 +194,8 @@ test-controllers-envtest: $(SETUP_ENVTEST)
 test-check-readiness:
 	go test ./test/check-readiness/ -count=1
 
-# ./cmd/... is excluded from go-unit-tests, so the batch tool needs its own target.
+# The batch tool's suite drives real git repositories for minutes, so it is
+# kept out of go-unit-tests in a target of its own.
 test-backport-batch:
 	go test ./cmd/backport-batch/... -count=1
 

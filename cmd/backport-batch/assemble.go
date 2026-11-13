@@ -153,7 +153,7 @@ func (a *app) run(args []string) int {
 	}
 	// The scheduled job has half an hour for every line; this says where it
 	// goes.
-	fmt.Fprintf(a.stderr, "prepared %s in %s, %s of it judging partial units and what originals build on\n", l.branch(), time.Since(started).Round(time.Millisecond), b.detecting.Round(time.Millisecond))
+	_, _ = fmt.Fprintf(a.stderr, "prepared %s in %s, %s of it judging partial units and what originals build on\n", l.branch(), time.Since(started).Round(time.Millisecond), b.detecting.Round(time.Millisecond))
 	if drops != nil {
 		return a.redrop(b, drops, reason, *undropArg != "", *push)
 	}
@@ -273,7 +273,7 @@ func (a *app) run(args []string) int {
 				continue
 			}
 		}
-		p, err := pickOriginal(v, func(base, head string) ([]string, error) {
+		p, err := a.pickUnit(v, func(base, head string) ([]string, error) {
 			omitted, diag, err := b.omittedEffects(v, base, head)
 			v.addDiag(diag...)
 			return omitted, err
@@ -449,20 +449,20 @@ func (a *app) finish(b *batch, r *report, branch string, date time.Time, push, r
 	}
 	body, left := r.body(template)
 	p.body = body
-	fmt.Fprint(a.stdout, body)
+	_, _ = fmt.Fprint(a.stdout, body)
 	skipped := 0
 	for _, items := range r.skipped {
 		skipped += len(items)
 	}
 	for _, rule := range left {
 		for _, v := range r.skipped[rule] {
-			fmt.Fprintf(a.stderr, "skipped by %s: %s %s (%s)\n", ruleName(rule), v.o.url(), terminalSafe(v.o.title), terminalSafe(v.reason))
+			_, _ = fmt.Fprintf(a.stderr, "skipped by %s: %s %s (%s)\n", ruleName(rule), v.o.url(), terminalSafe(v.o.title), terminalSafe(v.reason))
 		}
 	}
 	for _, p := range r.waiting {
-		fmt.Fprintf(a.stderr, "waiting for a maintainer: %s %s changes %s\n", p.v.o.url(), terminalSafe(p.v.o.title), terminalSafe(strings.Join(p.files, ", ")))
+		_, _ = fmt.Fprintf(a.stderr, "waiting for a maintainer: %s %s changes %s\n", p.v.o.url(), terminalSafe(p.v.o.title), terminalSafe(strings.Join(p.files, ", ")))
 	}
-	fmt.Fprintf(a.stderr, "%s at %.12s: %d on the branch, %d deferred, %d waiting for a maintainer, %d skipped\ntitle: %s\nreport: %s\n",
+	_, _ = fmt.Fprintf(a.stderr, "%s at %.12s: %d on the branch, %d deferred, %d waiting for a maintainer, %d skipped\ntitle: %s\nreport: %s\n",
 		branch, head, len(r.onBranch), len(r.deferred)+len(r.held), len(r.waiting), skipped, p.title, doc.ID)
 	if !push {
 		return 0
@@ -471,8 +471,8 @@ func (a *app) finish(b *batch, r *report, branch string, date time.Time, push, r
 		// Picking nothing is not a failure of the run; check still reports
 		// whatever the line lacks. Merged and closed batches are never
 		// written, so there is nowhere to keep what the run found.
-		fmt.Fprintf(a.stderr, "%s carries nothing beyond %s; nothing to push\n", branch, b.line.branch())
-		fmt.Fprintf(a.stderr, "no batch pull request is open on %s; this run's classification is not retained\n", b.line.branch())
+		_, _ = fmt.Fprintf(a.stderr, "%s carries nothing beyond %s; nothing to push\n", branch, b.line.branch())
+		_, _ = fmt.Fprintf(a.stderr, "no batch pull request is open on %s; this run's classification is not retained\n", b.line.branch())
 		return 0
 	}
 	if err := a.publish(b, p, rebuilt); err != nil {
@@ -529,6 +529,9 @@ func cleanTree() error {
 // the move drops commits of and how to get them back: a clean tree says
 // nothing about commits only a local branch has.
 func (a *app) warnReset(branch, start string) error {
+	if err := a.mayAct(); err != nil {
+		return err
+	}
 	old, err := lookup("refs/heads/" + branch)
 	if err != nil || old == "" || old == start {
 		return err
@@ -537,7 +540,11 @@ func (a *app) warnReset(branch, start string) error {
 	if err != nil || kept {
 		return err
 	}
-	fmt.Fprintf(a.stderr, "resetting the local %s from %s, dropping commits %.12s does not carry; git branch %s-%.12s %s restores them\n", branch, old, start, branch, old, old)
+	// The hint is the only way back to the dropped commits, so the reset does
+	// not run when it could not be written.
+	if _, err := fmt.Fprintf(a.stderr, "resetting the local %s from %s, dropping commits %.12s does not carry; git branch %s-%.12s %s restores them\n", branch, old, start, branch, old, old); err != nil {
+		return fmt.Errorf("not resetting the local %s: %w", branch, err)
+	}
 	return nil
 }
 
@@ -719,6 +726,9 @@ func (a *app) publish(b *batch, p publication, rebuilt bool) error {
 		}
 	}
 	if pushed != p.head {
+		if err := a.mayAct(); err != nil {
+			return err
+		}
 		if _, err := git(pushArgs(p.branch, p.head, lease)...); err != nil {
 			return err
 		}
@@ -727,13 +737,13 @@ func (a *app) publish(b *batch, p publication, rebuilt bool) error {
 	if err != nil {
 		return err
 	}
-	defer os.Remove(name)
+	defer func() { _ = os.Remove(name) }()
 	if b.pr == nil {
 		n, url, err := a.gh.createPull(b.line.branch(), p.branch, p.title, name)
 		if err != nil {
 			return err
 		}
-		fmt.Fprintf(a.stderr, "opened draft %s\n", url)
+		_, _ = fmt.Fprintf(a.stderr, "opened draft %s\n", url)
 		if err := a.postReport(n, p.report); err != nil {
 			return fmt.Errorf("posting report %.12s on #%d: %w; the body keeps it, and the next run --push posts it", p.report.doc.ID, n, err)
 		}
@@ -745,7 +755,7 @@ func (a *app) publish(b *batch, p publication, rebuilt bool) error {
 	if err := a.gh.editPull(b.pr.Number, p.title, name); err != nil {
 		return err
 	}
-	fmt.Fprintf(a.stderr, "updated %s\n", pullURL(b.pr))
+	_, _ = fmt.Fprintf(a.stderr, "updated %s\n", pullURL(b.pr))
 	return nil
 }
 
@@ -828,7 +838,7 @@ func (a *app) closeBatch(b *batch, p publication) error {
 	if err != nil {
 		return err
 	}
-	defer os.Remove(name)
+	defer func() { _ = os.Remove(name) }()
 	if err := a.stillOpen(c.PR); err != nil {
 		return err
 	}
@@ -861,7 +871,7 @@ func (a *app) finishClose(l line, url string, c closing) error {
 	if err := a.deleteBranch(l, c); err != nil {
 		return err
 	}
-	fmt.Fprintf(a.stderr, "closed %s: without what is deferred it carries nothing beyond %s; the next batch tries them again\n", url, l.branch())
+	_, _ = fmt.Fprintf(a.stderr, "closed %s: without what is deferred it carries nothing beyond %s; the next batch tries them again\n", url, l.branch())
 	return nil
 }
 
@@ -877,6 +887,9 @@ func (a *app) deleteBranch(l line, c closing) error {
 		return nil
 	case h != c.Head:
 		return movedBranch(c, h)
+	}
+	if err := a.mayAct(); err != nil {
+		return err
 	}
 	if _, err := git(deleteArgs(c.Branch, c.Head)...); err != nil {
 		return fmt.Errorf("deleting %s, left by the close of #%d: %w; backport-batch run --line %s --push deletes it", c.Branch, c.PR, err, l.branch())
@@ -933,7 +946,7 @@ func (a *app) resumeClose(b *batch, push, changing bool) (bool, int) {
 	if err := a.deleteBranch(b.line, c); err != nil {
 		return false, a.fail(err)
 	}
-	fmt.Fprintf(a.stderr, "deleted %s, which the close of #%d left\n", c.Branch, c.PR)
+	_, _ = fmt.Fprintf(a.stderr, "deleted %s, which the close of #%d left\n", c.Branch, c.PR)
 	return false, a.finished(c, changing)
 }
 

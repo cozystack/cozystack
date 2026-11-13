@@ -28,7 +28,7 @@ import (
 	"k8s.io/client-go/tools/record"
 	"k8s.io/client-go/util/retry"
 	"k8s.io/client-go/util/workqueue"
-	"k8s.io/utils/pointer"
+	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -423,8 +423,8 @@ func updateOwnerReferences(obj metav1.Object, monitor client.Object) {
 			Name:       monitor.GetName(),
 			UID:        monitor.GetUID(),
 			// Set Controller to false to avoid conflict as multiple controllers are not allowed
-			Controller:         pointer.BoolPtr(false),
-			BlockOwnerDeletion: pointer.BoolPtr(true),
+			Controller:         ptr.To(false),
+			BlockOwnerDeletion: ptr.To(true),
 		}
 		owners = append(owners, newOwnerRef)
 	}
@@ -525,10 +525,10 @@ func (r *WorkloadMonitorReconciler) queryAllBucketMetrics(ctx context.Context, p
 	if err != nil {
 		return nil, fmt.Errorf("querying Prometheus: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("Prometheus returned status %d", resp.StatusCode)
+		return nil, fmt.Errorf("unexpected status %d from Prometheus", resp.StatusCode)
 	}
 
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
@@ -549,7 +549,7 @@ func (r *WorkloadMonitorReconciler) queryAllBucketMetrics(ctx context.Context, p
 		return nil, fmt.Errorf("parsing Prometheus response: %w", err)
 	}
 	if promResp.Status != "success" {
-		return nil, fmt.Errorf("Prometheus query finished with status %q", promResp.Status)
+		return nil, fmt.Errorf("the Prometheus query finished with status %q", promResp.Status)
 	}
 
 	for _, r := range promResp.Data.Result {
@@ -1174,9 +1174,9 @@ func (r *WorkloadMonitorReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		// Default to operational = true, but check MinReplicas if set.
 		// Use fresh.Spec to avoid making decisions based on a stale cached copy
 		// when the spec was updated between the initial read and this retry.
-		fresh.Status.Operational = pointer.Bool(true)
+		fresh.Status.Operational = ptr.To(true)
 		if fresh.Spec.MinReplicas != nil && availableReplicas < *fresh.Spec.MinReplicas {
-			fresh.Status.Operational = pointer.Bool(false)
+			fresh.Status.Operational = ptr.To(false)
 		}
 		// Only the DataVolume check writes Message and Reason, so the stored ones
 		// are the last DataVolume verdict: kept while no reader is installed yet, so a
@@ -1189,7 +1189,7 @@ func (r *WorkloadMonitorReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 			}
 		}
 		if fresh.Status.Message != "" {
-			fresh.Status.Operational = pointer.Bool(false)
+			fresh.Status.Operational = ptr.To(false)
 		}
 		if equality.Semantic.DeepEqual(stored, &fresh.Status) {
 			return nil

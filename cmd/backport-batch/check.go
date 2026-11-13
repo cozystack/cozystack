@@ -73,14 +73,14 @@ func (a *app) check(args []string) int {
 		case d.kind == outcomeWarning:
 			a.warn("%s", d.text)
 		case d.kind == outcomeNote:
-			fmt.Fprintf(a.stderr, "note: %s\n", d.text)
+			_, _ = fmt.Fprintf(a.stderr, "note: %s\n", d.text)
 		}
 	}
 	if len(missing)+len(failing) == 0 {
 		if *cut {
-			fmt.Fprintf(a.stdout, "%s: no change the policy takes is missing before the cut\n", l.branch())
+			_, _ = fmt.Fprintf(a.stdout, "%s: no change the policy takes is missing before the cut\n", l.branch())
 		} else {
-			fmt.Fprintf(a.stdout, "%s: every change the policy takes is on the line or on the batch\n", l.branch())
+			_, _ = fmt.Fprintf(a.stdout, "%s: every change the policy takes is on the line or on the batch\n", l.branch())
 		}
 		return 0
 	}
@@ -89,13 +89,13 @@ func (a *app) check(args []string) int {
 		where = "nor on batch pull request #" + strconv.Itoa(b.pr.Number)
 	}
 	if len(missing) > 0 {
-		fmt.Fprintf(a.stdout, "%s: %d changes the policy takes are not on the line, %s:\n", l.branch(), len(missing), where)
+		_, _ = fmt.Fprintf(a.stdout, "%s: %d changes the policy takes are not on the line, %s:\n", l.branch(), len(missing), where)
 		for _, text := range missing {
-			fmt.Fprintf(a.stdout, "  %s\n", text)
+			_, _ = fmt.Fprintf(a.stdout, "  %s\n", text)
 		}
 	}
 	for _, text := range failing {
-		fmt.Fprintf(a.stdout, "%s: %s\n", l.branch(), text)
+		_, _ = fmt.Fprintf(a.stdout, "%s: %s\n", l.branch(), text)
 	}
 	return 1
 }
@@ -326,10 +326,10 @@ func (a *app) fold(args []string) int {
 		return a.fail(err)
 	}
 	if why != "" {
-		fmt.Fprintf(a.stdout, "refused: %s\n", why)
+		_, _ = fmt.Fprintf(a.stdout, "refused: %s\n", why)
 		return 1
 	}
-	fmt.Fprintln(a.stdout, "ok")
+	_, _ = fmt.Fprintln(a.stdout, "ok")
 	return 0
 }
 
