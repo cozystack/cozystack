@@ -32,6 +32,20 @@ func TestParseFlagsDefaults(t *testing.T) {
 	if o.authCacheTTL != 10*time.Second || o.logs.MaxTailResume != 15*time.Minute || o.logs.MaxRange != 7*24*time.Hour {
 		t.Errorf("limit defaults changed: %+v", o)
 	}
+	// Retention and store names of packages/system/monitoring/values.yaml.
+	m := o.metrics
+	if m.ShortTermStore != "shortterm" || m.LongTermStore != "longterm" || m.ShortTermRetention != 72*time.Hour {
+		t.Errorf("metrics store defaults changed: %+v", m)
+	}
+	if m.Limits.MaxRange != 30*24*time.Hour || m.Limits.MaxPoints != 11000 || m.Limits.MaxTimeout != 30*time.Second {
+		t.Errorf("metrics limit defaults changed: %+v", m.Limits)
+	}
+	if m.App.Lookback != 30*24*time.Hour || m.App.MaxPods != 500 || m.App.MaxPVCs != 500 {
+		t.Errorf("application scope defaults changed: %+v", m.App)
+	}
+	if m.RootTenant != o.rootTenant {
+		t.Errorf("metrics root tenant = %q, want --root-tenant", m.RootTenant)
+	}
 }
 
 func TestParseFlagsOverrides(t *testing.T) {
@@ -45,6 +59,23 @@ func TestParseFlagsOverrides(t *testing.T) {
 	// The smallest bucket count and range the step cap can satisfy.
 	if _, err := parseFlags([]string{"--logs-max-buckets=4", "--logs-max-range=3s", "--logs-default-range=1s"}); err != nil {
 		t.Errorf("smallest satisfiable step cap refused: %v", err)
+	}
+}
+
+func TestParseFlagsMetricsOverrides(t *testing.T) {
+	o, err := parseFlags([]string{
+		"--root-tenant=tenant-x", "--metrics-shortterm-store=fast", "--metrics-longterm-store=slow",
+		"--metrics-shortterm-retention=24h", "--metrics-max-range=168h", "--metrics-max-points=500", "--metrics-max-timeout=10s",
+		"--metrics-app-lookback=2h", "--metrics-app-max-pods=7", "--metrics-app-max-pvcs=3",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := o.metrics
+	if m.RootTenant != "tenant-x" || m.ShortTermStore != "fast" || m.LongTermStore != "slow" || m.ShortTermRetention != 24*time.Hour ||
+		m.Limits.MaxRange != 168*time.Hour || m.Limits.MaxPoints != 500 || m.Limits.MaxTimeout != 10*time.Second ||
+		m.App.Lookback != 2*time.Hour || m.App.MaxPods != 7 || m.App.MaxPVCs != 3 {
+		t.Errorf("overrides not applied: %+v", m)
 	}
 }
 
@@ -69,11 +100,40 @@ func TestParseFlagsInvalid(t *testing.T) {
 		{"--max-concurrent-per-user=-1"},
 		{"--max-tails-per-user=-1"},
 		{"--max-tails=-1"},
+		{"--metrics-shortterm-store="},
+		{"--metrics-longterm-store=Long.Term"},
+		{"--metrics-shortterm-retention=0s"},
+		{"--metrics-max-range=0s"},
+		{"--metrics-max-points=1"},
+		{"--metrics-max-timeout=0s"},
+		{"--metrics-app-lookback=-1h"},
+		// Every query reads some time before its window, so a zero lookback
+		// would refuse every application metrics query.
+		{"--metrics-app-lookback=0s"},
+		{"--metrics-app-max-pods=0"},
+		{"--metrics-app-max-pvcs=0"},
 		{"--unknown"},
+		// The proxy would cut the request while vmselect is still within
+		// the timeout it was given.
+		{"--request-timeout=10s", "--metrics-max-timeout=30s"},
+		{"--request-timeout=30s", "--metrics-max-timeout=30s"},
 		{"unexpected", "--root-tenant=tenant-x"},
 	} {
 		if _, err := parseFlags(args); err == nil {
 			t.Errorf("parseFlags(%v) accepted", args)
+		}
+	}
+}
+
+// The vmselect timeout must stay strictly below a request timeout, and is
+// free when the request has none.
+func TestParseFlagsTimeoutPairs(t *testing.T) {
+	for _, args := range [][]string{
+		{"--request-timeout=31s", "--metrics-max-timeout=30s"},
+		{"--request-timeout=0", "--metrics-max-timeout=10m"},
+	} {
+		if _, err := parseFlags(args); err != nil {
+			t.Errorf("parseFlags(%v) refused: %v", args, err)
 		}
 	}
 }

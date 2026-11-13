@@ -45,14 +45,14 @@ var nullChartCases = []nullChartCase{
 	{name: "nullable schema default", schema: `{"type":"object","required":["name"],"properties":{"name":{"type":"string","nullable":true,"default":"example"}}}`, values: `{"name":"example"}`, input: `{"name":null}`},
 	{name: "item schema defaults", schema: `{"type":"object","properties":{"entries":{"type":"object","additionalProperties":{"type":"object","required":["name"],"properties":{"name":{"type":"string","default":"example"}}}},"items":{"type":"array","items":{"type":"object","required":["name"],"properties":{"name":{"type":"string","default":"example"}}}}}}`, values: `{"entries":{},"items":[{"name":"chart-default"}]}`, input: `{"entries":{"mine":{"name":null}},"items":[{"name":null}]}`},
 
-	{name: "nested defaults", chart: "apps/kubernetes", rd: "kubernetes", input: `{"talos":{"registryMirrors":null,"version":null},"controlPlane":{"replicas":null,"apiServer":{"resourcesPreset":null}},"nodeGroups":{"legacy":{"instanceType":null}}}`, want: `{"talos":{},"controlPlane":{"apiServer":{}},"nodeGroups":{"legacy":{"instanceType":null}}}`, paths: []string{"controlPlane.apiServer.resourcesPreset", "controlPlane.replicas", "talos.registryMirrors", "talos.version"}},
+	{name: "nested defaults", chart: "apps/kubernetes", rd: "kubernetes", input: `{"oidc":{"mode":null},"addons":{"cilium":{"valuesOverride":null}},"controlPlane":{"replicas":null,"apiServer":{"resourcesPreset":null}},"nodeGroups":{"legacy":{"instanceType":null}}}`, want: `{"oidc":{},"addons":{"cilium":{}},"controlPlane":{"apiServer":{}},"nodeGroups":{"legacy":{"instanceType":null}}}`, paths: []string{"addons.cilium.valuesOverride", "controlPlane.apiServer.resourcesPreset", "controlPlane.replicas", "oidc.mode"}},
 	{name: "mariadb users", chart: "apps/mariadb", rd: "mariadb", input: `{"users":{"alice":{"password":null,"maxUserConnections":null},"blank":null}}`},
 	{name: "rabbitmq vhosts", chart: "apps/rabbitmq", rd: "rabbitmq", input: `{"vhosts":{"vh1":{"roles":null},"blank":null}}`},
 	{name: "seaweedfs pools", chart: "extra/seaweedfs", rd: "seaweedfs", input: `{"volume":{"pools":{"ssd":{"diskType":null},"blank":null}}}`},
 	{name: "vm source http", chart: "apps/vm-disk", rd: "vm-disk", input: `{"source":{"http":{"url":null}}}`},
 	{name: "vm source disk", chart: "apps/vm-disk", rd: "vm-disk", input: `{"source":{"disk":{"name":null}}}`},
 	{name: "vm source image", chart: "apps/vm-disk", rd: "vm-disk", input: `{"source":{"image":{"name":null}}}`},
-	{name: "optional section", chart: "apps/kubernetes", rd: "kubernetes", input: `{"talos":null,"storageClass":null}`},
+	{name: "optional section", chart: "apps/kubernetes", rd: "kubernetes", input: `{"oidc":null,"storageClass":null}`},
 }
 
 func chartSpecSchema(t *testing.T, rd string) *structuralschema.Structural {

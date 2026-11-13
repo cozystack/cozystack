@@ -113,36 +113,8 @@ func WalkOwnershipGraph(
 		return
 	}
 
-	// I want "if err1 != nil go to next block, if err2 != nil, go to next block, etc semantics",
-	// like an early return from a function, but if all checks succeed, I don't want to do the rest
-	// of the function, so it's a `for { if err { break } if othererr { break } if allgood { return }
-	for {
-		if obj.GetAPIVersion() != HRAPIVersion || obj.GetKind() != HRKind {
-			break
-		}
-		hr := helmReleaseFromUnstructured(obj)
-		if hr == nil {
-			break
-		}
-		a, k, p, err := appMapper.Map(hr)
-		if err != nil {
-			l.Error(err, "failed to map HelmRelease to app")
-			break
-		}
-		ownerObj, err := getUnstructuredObject(ctx, client, mapper, state.cache, a, k, obj.GetNamespace(), strings.TrimPrefix(obj.GetName(), p))
-		if err != nil {
-			l.Error(err, "couldn't get unstructured object", "APIVersion", a, "Kind", k, "Name", strings.TrimPrefix(obj.GetName(), p))
-			break
-		}
-		// successfully mapped a HelmRelease to a custom app, no need to continue
-		out = append(out,
-			ObjectID{
-				APIVersion: ownerObj.GetAPIVersion(),
-				Kind:       ownerObj.GetKind(),
-				Namespace:  ownerObj.GetNamespace(),
-				Name:       ownerObj.GetName(),
-			},
-		)
+	if app, ok := helmReleaseApp(ctx, client, mapper, appMapper, state.cache, obj); ok {
+		out = append(out, app)
 		return
 	}
 
@@ -158,6 +130,33 @@ func WalkOwnershipGraph(
 	out = append(out, WalkOwnershipGraph(ctx, client, mapper, appMapper, ownerObj, state)...)
 
 	return
+}
+
+// helmReleaseApp resolves a HelmRelease to the application it deploys. When
+// it cannot, the walk goes on through the HelmRelease's own label instead.
+func helmReleaseApp(ctx context.Context, client dynamic.Interface, mapper meta.RESTMapper, appMapper AppMapper, cache *ObjectCache, obj *unstructured.Unstructured) (ObjectID, bool) {
+	hr := helmReleaseFromUnstructured(obj)
+	if hr == nil {
+		return ObjectID{}, false
+	}
+	l := log.FromContext(ctx)
+	a, k, p, err := appMapper.Map(hr)
+	if err != nil {
+		l.Error(err, "failed to map HelmRelease to app")
+		return ObjectID{}, false
+	}
+	name := strings.TrimPrefix(obj.GetName(), p)
+	app, err := getUnstructuredObject(ctx, client, mapper, cache, a, k, obj.GetNamespace(), name)
+	if err != nil {
+		l.Error(err, "couldn't get unstructured object", "APIVersion", a, "Kind", k, "Name", name)
+		return ObjectID{}, false
+	}
+	return ObjectID{
+		APIVersion: app.GetAPIVersion(),
+		Kind:       app.GetKind(),
+		Namespace:  app.GetNamespace(),
+		Name:       app.GetName(),
+	}, true
 }
 
 // kubevirtMachineName returns the KubevirtMachine a CAPK-created

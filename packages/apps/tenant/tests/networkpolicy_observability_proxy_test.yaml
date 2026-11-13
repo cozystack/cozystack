@@ -1,0 +1,64 @@
+suite: tenant egress to the observability proxy
+# The observability-proxy Ingress in cozy-observability-proxy is served by
+# the ingress controller running in tenant-root. Tenant egress is
+# default-deny plus explicit allow-to-* policies, so without this one the
+# controller reaches neither the proxy nor the ACME HTTP-01 solver pod that
+# cert-manager starts in the same namespace; hence the whole namespace, as
+# allow-to-linstor-gui does.
+templates:
+  - templates/networkpolicy.yaml
+tests:
+  - it: lets every pod of the root tenant reach the proxy namespace
+    release:
+      name: tenant-root
+      namespace: tenant-root
+    asserts:
+      - documentSelector:
+          path: metadata.name
+          value: allow-to-observability-proxy
+        isKind:
+          of: CiliumNetworkPolicy
+      - documentSelector:
+          path: metadata.name
+          value: allow-to-observability-proxy
+        equal:
+          path: metadata.namespace
+          value: tenant-root
+      - documentSelector:
+          path: metadata.name
+          value: allow-to-observability-proxy
+        equal:
+          path: spec
+          value:
+            endpointSelector: {}
+            egress:
+              - toEndpoints:
+                  - matchLabels:
+                      "k8s:io.kubernetes.pod.namespace": cozy-observability-proxy
+
+  - it: renders in a nested tenant with every module off
+    release:
+      name: tenant-bar
+      namespace: tenant-foo
+    set:
+      monitoring: false
+      ingress: false
+      etcd: false
+    asserts:
+      - documentSelector:
+          path: metadata.name
+          value: allow-to-observability-proxy
+        equal:
+          path: metadata.namespace
+          value: tenant-foo-bar
+
+  - it: renders nothing where the tenant Cilium policies are off
+    release:
+      name: tenant-root
+      namespace: tenant-root
+    set:
+      _cluster:
+        bundle-name: isp-hosted
+    asserts:
+      - hasDocuments:
+          count: 0

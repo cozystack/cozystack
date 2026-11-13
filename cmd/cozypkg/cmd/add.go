@@ -390,7 +390,7 @@ func createPackageFromFile(ctx context.Context, k8sClient client.Client, filePat
 		}
 	}
 
-	return fmt.Errorf("Package %s not found in file", packageName)
+	return fmt.Errorf("no Package %s in file", packageName)
 }
 
 func installPackage(ctx context.Context, k8sClient client.Client, packageSourceName string) error {

@@ -19,5 +19,5 @@ controlPlane:
     server:
       resources: {}
       resourcesPreset: "micro"
-# Worker pools are managed via KubernetesNodes resources since the Phase 2 split;
-# the kubernetes chart renders the control plane only.
+# Worker pools are KubernetesNodes resources; the kubernetes chart renders the
+# control plane only.

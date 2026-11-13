@@ -75,6 +75,8 @@ jobs:
       statuses: write
     outputs:
       code: ${{ steps.p.outputs.code }}
+      docs: ${{ steps.p.outputs.docs }}
+      backport_batch: ${{ steps.p.outputs.backport_batch }}
       matrix: ${{ steps.p.outputs.matrix }}
       any: ${{ steps.p.outputs.any }}
       touched: ${{ steps.p.outputs.touched }}
@@ -167,11 +169,27 @@ jobs:
           # alone here rather than widened by a side effect.
           git diff --name-only --no-renames "origin/${BASE_REF}...HEAD" > /tmp/changed_norenames.txt
           echo "Changed files:"; sed 's/^/  /' /tmp/changed_norenames.txt
-          if grep -qvE '^docs/' /tmp/changed_norenames.txt; then
+          # `code` is false when every path is under docs/ or in a CI-only Go
+          # tool that no image builds (cmd/backport-batch, cmd/api-gate): there
+          # is nothing to build and nothing for e2e to install. e2e-fork.yaml
+          # answers the same question from the PR file list with the same
+          # prefixes, and hack/gate-concurrency-contract.bats holds the two lists
+          # equal.
+          if grep -qvE '^(docs/|cmd/backport-batch/|cmd/api-gate/)' /tmp/changed_norenames.txt; then
             echo "code=true" >> "$GITHUB_OUTPUT"
           else
             echo "code=false" >> "$GITHUB_OUTPUT"
           fi
+          # The Bats contracts read docs, so a docs change runs them even when
+          # `code` is false; a change confined to the CI-only tools does not.
+          if grep -qE '^docs/' /tmp/changed_norenames.txt; then
+            echo "docs=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "docs=false" >> "$GITHUB_OUTPUT"
+          fi
+          backport_batch="$(hack/backport-batch-tests-needed.sh /tmp/changed_norenames.txt)"
+          echo "backport-batch tests needed: $backport_batch"
+          echo "backport_batch=$backport_batch" >> "$GITHUB_OUTPUT"
           matrix="$(hack/build-matrix.sh /tmp/changed.txt)"
           echo "Build matrix: $matrix"
           echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
@@ -293,9 +311,11 @@ jobs:
       contents: read
     needs: ["plan"]
     # Unit contracts read both code and documentation. Run this job for every
-    # non-release PR: code changes take the complete unit path, while docs-only
-    # changes run the Bats lane that owns those cross-tree contracts. Builds and
-    # E2E remain gated on `code` below.
+    # non-release PR: code changes take the complete unit path, docs changes run
+    # the Bats lane that owns those cross-tree contracts, and the backport-batch
+    # tests run whenever one of their inputs changed and at no other time. A
+    # change confined to the CI-only tools runs no other lane. Builds and E2E
+    # remain gated on `code` below.
     if: |
       !contains(github.event.pull_request.labels.*.name, 'release')
     steps:
@@ -306,20 +326,21 @@ jobs:
       # The module cache is restored from the key build-main.yaml writes on
       # main, which every PR run can read, so a PR's first run starts warm. The
       # download fetches whatever the cache lacks, the whole set on a miss. The
-      # Go steps are for code changes only: a docs-only run is the Bats lane alone.
+      # Go steps are for code changes and the backport-batch tests only: a
+      # docs-only run is the Bats lane alone.
       - name: Locate Go module cache
-        if: needs.plan.outputs.code == 'true'
+        if: needs.plan.outputs.code == 'true' || needs.plan.outputs.backport_batch == 'true'
         id: gomodcache
         run: echo "dir=$(go env GOMODCACHE)" >> "$GITHUB_OUTPUT"
       - name: Cache Go modules
-        if: needs.plan.outputs.code == 'true'
+        if: needs.plan.outputs.code == 'true' || needs.plan.outputs.backport_batch == 'true'
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ steps.gomodcache.outputs.dir }}
           key: go-mod-${{ runner.os }}-${{ hashFiles('**/go.sum') }}
           restore-keys: go-mod-${{ runner.os }}-
       - name: Download Go modules
-        if: needs.plan.outputs.code == 'true'
+        if: needs.plan.outputs.code == 'true' || needs.plan.outputs.backport_batch == 'true'
         run: |
           for mod in $(git ls-files go.mod '*/go.mod' | xargs -n1 dirname); do
             (cd "$mod" && "$GITHUB_WORKSPACE/hack/go-mod-download.sh")
@@ -327,8 +348,9 @@ jobs:
       # Ephemeral runners don't carry the helm-unittest plugin the persistent
       # self-hosted runner accreted. The plugin embeds its own Helm, so its
       # version is pinned: a plugin release must not change test results. Bats is
-      # installed on every run, docs-only ones included.
+      # installed whenever a Bats lane runs, docs-only ones included.
       - name: Set up test toolchain
+        if: needs.plan.outputs.code == 'true' || needs.plan.outputs.docs == 'true'
         env:
           CODE_CHANGED: ${{ needs.plan.outputs.code }}
           HELM_UNITTEST_VERSION: "1.1.2"
@@ -374,8 +396,15 @@ jobs:
         if: needs.plan.outputs.code == 'true'
         run: make unit-tests test-controllers test-controllers-envtest -j4 -k --output-sync=target
       - name: Run Bats unit tests for docs-only changes
-        if: needs.plan.outputs.code == 'false'
+        if: needs.plan.outputs.code == 'false' && needs.plan.outputs.docs == 'true'
         run: make bats-unit-tests
+      # Not part of `make unit-tests`: hack/backport-batch-tests-needed.sh
+      # decides from cmd/backport-batch/test-inputs.txt, whatever `code` is.
+      # `!cancelled()` for the reason the unit lane runs with -k: a red step
+      # above must not hide this suite's own result.
+      - name: Run backport-batch tests
+        if: ${{ !cancelled() && needs.plan.outputs.backport_batch == 'true' }}
+        run: make test-backport-batch
       - name: Check new Helm document indices
         if: ${{ !cancelled() }}
         env:
@@ -1432,7 +1461,7 @@ jobs:
               description = `release packages candidate did not verify (result: ${CANDIDATE_RESULT})`;
             } else if (CODE !== 'true') {
               state = 'success';
-              description = 'docs-only PR — e2e not required';
+              description = 'docs or CI-only tools — e2e not required';
             } else if (IS_RELEASE === 'true' && IS_FULL_E2E !== 'true') {
               // Release promotion PRs deliberately do not repeat e2e: the rc was
               // already verified against the immutable candidate whose digests

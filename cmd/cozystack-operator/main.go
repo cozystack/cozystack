@@ -663,7 +663,7 @@ func validateGitRef(refMap map[string]string) error {
 			return fmt.Errorf("commit SHA should be at least 7 characters, got: %s", commit)
 		}
 		for _, c := range commit {
-			if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')) {
+			if (c < '0' || c > '9') && (c < 'a' || c > 'f') && (c < 'A' || c > 'F') {
 				return fmt.Errorf("commit SHA should be a hexadecimal string, got: %s", commit)
 			}
 		}

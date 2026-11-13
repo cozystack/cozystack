@@ -25,6 +25,7 @@ import (
 	"log/slog"
 	"math"
 	"net/http"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -56,6 +57,7 @@ type Config struct {
 	// means the in-cluster Service of the "generic" logs storage.
 	UpstreamURL     func(store string) string
 	Logs            LogsLimits
+	Metrics         MetricsConfig
 	Limiter         LimiterConfig
 	RequestTimeout  time.Duration
 	TailIdleTimeout time.Duration
@@ -71,23 +73,31 @@ type Server struct {
 	cfg      Config
 	auth     *Authorizer
 	stores   StoreLookup
+	kinds    KindLookup
 	client   *http.Client
 	limits   *limiter
 	now      func() time.Time
 	requests *prometheus.CounterVec
 }
 
-func NewServer(cfg Config, auth *Authorizer, stores StoreLookup, reg prometheus.Registerer) *Server {
+func NewServer(cfg Config, auth *Authorizer, stores StoreLookup, kinds KindLookup, reg prometheus.Registerer) *Server {
 	if cfg.UpstreamURL == nil {
 		domain := cfg.ClusterDomain
 		cfg.UpstreamURL = func(store string) string {
 			return fmt.Sprintf("http://vlselect-generic.%s.svc.%s:9471", store, domain)
 		}
 	}
+	if cfg.Metrics.UpstreamURL == nil {
+		domain, root := cfg.ClusterDomain, cfg.Metrics.RootTenant
+		cfg.Metrics.UpstreamURL = func(store string) string {
+			return fmt.Sprintf("http://vmselect-%s.%s.svc.%s:8481/select/0/prometheus", store, root, domain)
+		}
+	}
 	s := &Server{
 		cfg:    cfg,
 		auth:   auth,
 		stores: stores,
+		kinds:  kinds,
 		// No client timeout: it would cut live tails. Non-tail requests are
 		// bounded by a context deadline instead.
 		client: &http.Client{Transport: http.DefaultTransport.(*http.Transport).Clone()},
@@ -164,12 +174,7 @@ func writeError(w http.ResponseWriter, e *HTTPError) {
 	http.Error(w, e.Message, e.Code)
 }
 
-// serve answers a root it has no handler for before authenticating, so an
-// unknown path costs no review calls.
 func (s *Server) serve(w http.ResponseWriter, r *http.Request, route Route) *HTTPError {
-	if route.Kind != NamespaceLogs {
-		return errorf(http.StatusNotFound, "not found")
-	}
 	user, herr := s.authorize(r, route)
 	if herr != nil {
 		return herr
@@ -181,6 +186,15 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, route Route) *HTT
 	if wait, ok := s.limits.allowRate(user); !ok {
 		w.Header().Set("Retry-After", strconv.FormatInt(int64(math.Ceil(wait.Seconds())), 10))
 		return errorf(http.StatusTooManyRequests, "request rate limit exceeded")
+	}
+	var kind string
+	if route.Kind == ApplicationLog || route.Kind == ApplicationMetrics {
+		if kind, herr = s.applicationKind(route.Plural); herr != nil {
+			return herr
+		}
+	}
+	if route.Kind == NamespaceMetrics || route.Kind == ApplicationMetrics {
+		return s.serveMetrics(w, r, route, user, kind)
 	}
 	endpoint, ok := strings.CutPrefix(route.Endpoint, "select/logsql/")
 	if !ok {
@@ -202,6 +216,9 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, route Route) *HTT
 	params, herr := BuildLogsParams(endpoint, r.Form, route.Namespace, s.now(), s.cfg.Logs)
 	if herr != nil {
 		return herr
+	}
+	if kind != "" {
+		params.Add("extra_stream_filters", applicationStreamFilter(kind, route.Name))
 	}
 
 	store, err := s.stores.Resolve(route.Namespace)
@@ -226,29 +243,17 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, route Route) *HTT
 		ctx, stop = context.WithTimeout(ctx, limit)
 		defer stop()
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
-		s.cfg.UpstreamURL(store)+"/select/logsql/"+endpoint, strings.NewReader(params.Encode()))
-	if err != nil {
-		return errorf(http.StatusInternalServerError, "building upstream request: %v", err)
-	}
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	req.Header.Set("AccountID", "0")
-	req.Header.Set("ProjectID", "0")
+	tenant := http.Header{}
+	tenant.Set("AccountID", "0")
+	tenant.Set("ProjectID", "0")
 	if tail {
 		// vlselect holds even the headers of a gzip-encoded tail until the
 		// first line; an explicit value stops the transport from asking for gzip.
-		req.Header.Set("Accept-Encoding", "identity")
+		tenant.Set("Accept-Encoding", "identity")
 	}
-	resp, err := s.client.Do(req)
-	switch {
-	case err == nil:
-	case r.Context().Err() != nil:
-		return errorf(http.StatusBadGateway, "client went away")
-	case errors.Is(context.Cause(ctx), context.DeadlineExceeded):
-		return errorf(http.StatusGatewayTimeout, "log store did not answer within %s", limit)
-	default:
-		slog.Warn("log store unreachable", "store", store, "error", err)
-		return errorf(http.StatusBadGateway, "log store unreachable")
+	resp, herr := s.post(ctx, r, s.cfg.UpstreamURL(store)+"/select/logsql/"+endpoint, params, "log store", tenant)
+	if herr != nil {
+		return herr
 	}
 	defer func() { _ = resp.Body.Close() }()
 
@@ -278,6 +283,104 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, route Route) *HTT
 		return errAborted
 	}
 	return nil
+}
+
+// serveMetrics scopes to the namespace, or with kind set to the application
+// route.Name of that kind within it.
+func (s *Server) serveMetrics(w http.ResponseWriter, r *http.Request, route Route, user, kind string) *HTTPError {
+	release, ok := s.limits.acquire(user)
+	if !ok {
+		return tooManyConcurrent(w)
+	}
+	defer release()
+	if herr := s.readForm(w, r); herr != nil {
+		return herr
+	}
+	now := s.now()
+	req, herr := BuildMetricsParams(route.Endpoint, r.Form, route.Namespace, now, s.cfg.Metrics.Limits)
+	if herr != nil {
+		return herr
+	}
+
+	ctx := r.Context()
+	if s.cfg.RequestTimeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, s.cfg.RequestTimeout)
+		defer cancel()
+	}
+	store := s.cfg.Metrics.store(req.start, now)
+	if kind != "" {
+		selectors, herr := s.applicationScope(ctx, r, store, req, route.Namespace, kind, route.Name)
+		if herr != nil {
+			return herr
+		}
+		req.setScope(selectors)
+	}
+	resp, herr := s.post(ctx, r, s.cfg.Metrics.UpstreamURL(store)+"/"+req.path, req.params, "metrics store", nil)
+	if herr != nil {
+		return herr
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if ct := resp.Header.Get("Content-Type"); ct != "" {
+		w.Header().Set("Content-Type", ct)
+	}
+	// As for a bounded logs answer: the client must take it by the request
+	// deadline, and a break-off cuts the connection.
+	if deadline, ok := ctx.Deadline(); ok {
+		_ = http.NewResponseController(w).SetWriteDeadline(deadline)
+	}
+	w.WriteHeader(resp.StatusCode)
+	if _, err := io.Copy(w, resp.Body); err != nil {
+		slog.Debug("copying upstream response", "error", err)
+		return errAborted
+	}
+	return nil
+}
+
+func (s *Server) applicationKind(plural string) (string, *HTTPError) {
+	kind, err := s.kinds.Kind(plural)
+	if err != nil {
+		slog.Error("mapping application plural to kind", "plural", plural, "error", err)
+		return "", errorf(http.StatusServiceUnavailable, "cannot resolve the application kind")
+	}
+	if kind == "" {
+		return "", errorf(http.StatusNotFound, "unknown application resource %q", plural)
+	}
+	return kind, nil
+}
+
+// applicationStreamFilter selects the streams Fluent Bit labels with the
+// pod's lineage. vlselect ANDs each extra_stream_filters value into the
+// query and every subquery (Query.AddExtraFilters in lib/logstorage), so
+// it narrows the namespace filter sent next to it.
+func applicationStreamFilter(kind, name string) string {
+	return "{apps_cozystack_io_application_kind=" + strconv.Quote(kind) + ",apps_cozystack_io_application_name=" + strconv.Quote(name) + "}"
+}
+
+// post sends params as a form with only the given headers, so nothing the
+// client sent reaches the store, and tells an unreachable store (502) from
+// one that missed its deadline or, for a tail, its idle timeout (504).
+func (s *Server) post(ctx context.Context, r *http.Request, target string, params url.Values, what string, header http.Header) (*http.Response, *HTTPError) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, target, strings.NewReader(params.Encode()))
+	if err != nil {
+		return nil, errorf(http.StatusInternalServerError, "building upstream request: %v", err)
+	}
+	for k, v := range header {
+		req.Header[k] = v
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	resp, err := s.client.Do(req)
+	switch {
+	case err == nil:
+		return resp, nil
+	case r.Context().Err() != nil:
+		return nil, errorf(http.StatusBadGateway, "client went away")
+	case errors.Is(context.Cause(ctx), context.DeadlineExceeded):
+		return nil, errorf(http.StatusGatewayTimeout, "%s did not answer in time", what)
+	default:
+		slog.Warn(what+" unreachable", "url", target, "error", err)
+		return nil, errorf(http.StatusBadGateway, "%s unreachable", what)
+	}
 }
 
 // concurrencyRetryAfter is a hint only: a slot frees when another request
@@ -348,13 +451,15 @@ func (s *Server) authorize(r *http.Request, route Route) (string, *HTTPError) {
 		slog.Error("token review failed", "error", err)
 		return "", errorf(http.StatusServiceUnavailable, "authentication unavailable")
 	}
-	allowed, err := s.auth.Authorize(ctx, user, route.ResourceAttributes())
-	if err != nil {
-		slog.Error("subject access review failed", "error", err)
-		return "", errorf(http.StatusServiceUnavailable, "authorization unavailable")
-	}
-	if !allowed {
-		return "", errorf(http.StatusForbidden, "forbidden")
+	for _, attrs := range route.Reviews() {
+		allowed, err := s.auth.Authorize(ctx, user, attrs)
+		if err != nil {
+			slog.Error("subject access review failed", "error", err)
+			return "", errorf(http.StatusServiceUnavailable, "authorization unavailable")
+		}
+		if !allowed {
+			return "", errorf(http.StatusForbidden, "forbidden")
+		}
 	}
 	return user.Username, nil
 }

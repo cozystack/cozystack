@@ -708,7 +708,7 @@ func (a *app) report(args []string) int {
 		return a.fail(fmt.Errorf("batch pull request #%d keeps no report %.12s", pr.Number, *id))
 	}
 	if *asJSON {
-		fmt.Fprintln(a.stdout, s.raw)
+		_, _ = fmt.Fprintln(a.stdout, s.raw)
 		return 0
 	}
 	a.printReport(&pr, s, inBody, inComment)
@@ -721,29 +721,29 @@ func (a *app) report(args []string) int {
 func (a *app) printReport(pr *pullRequest, s storedReport, inBody *storedReport, inComment bool) {
 	d, b := s.doc, s.doc.Built
 	safe := terminalSafe
-	fmt.Fprintf(a.stdout, "report %s for %s, made %s by a %s run", safe(d.ID), safe(d.Line), safe(b.At), safe(b.Options.Mode))
+	_, _ = fmt.Fprintf(a.stdout, "report %s for %s, made %s by a %s run", safe(d.ID), safe(d.Line), safe(b.At), safe(b.Options.Mode))
 	if b.Options.NoWorkflowFiles {
-		fmt.Fprint(a.stdout, " with --no-workflow-files")
+		_, _ = fmt.Fprint(a.stdout, " with --no-workflow-files")
 	}
-	fmt.Fprintln(a.stdout)
-	fmt.Fprintf(a.stdout, "  main %s, line %s, newer line %s, policy %s\n  batch %s, tool %s, run %s\n", safe(b.Main), safe(b.Line), safe(or(b.Newer, "none")), safe(b.Policy), safe(b.Batch), safe(or(b.Tool, "unknown")), safe(or(b.Run, "none")))
+	_, _ = fmt.Fprintln(a.stdout)
+	_, _ = fmt.Fprintf(a.stdout, "  main %s, line %s, newer line %s, policy %s\n  batch %s, tool %s, run %s\n", safe(b.Main), safe(b.Line), safe(or(b.Newer, "none")), safe(b.Policy), safe(b.Batch), safe(or(b.Tool, "unknown")), safe(or(b.Run, "none")))
 	current := "none"
 	if inBody != nil {
 		current = safe(inBody.doc.ID)
 	}
 	switch {
 	case inBody != nil && inBody.doc.ID == d.ID:
-		fmt.Fprintf(a.stdout, "  #%d's body carries this report\n", pr.Number)
+		_, _ = fmt.Fprintf(a.stdout, "  #%d's body carries this report\n", pr.Number)
 	case pr.Head.SHA == b.Batch:
-		fmt.Fprintf(a.stdout, "  #%d's head is %.12s, the batch this report describes, but its body carries report %.12s\n", pr.Number, safe(b.Batch), current)
+		_, _ = fmt.Fprintf(a.stdout, "  #%d's head is %.12s, the batch this report describes, but its body carries report %.12s\n", pr.Number, safe(b.Batch), current)
 	default:
-		fmt.Fprintf(a.stdout, "  publication unconfirmed: #%d's head is %.12s, not %.12s, and its body carries report %.12s\n", pr.Number, safe(pr.Head.SHA), safe(b.Batch), current)
+		_, _ = fmt.Fprintf(a.stdout, "  publication unconfirmed: #%d's head is %.12s, not %.12s, and its body carries report %.12s\n", pr.Number, safe(pr.Head.SHA), safe(b.Batch), current)
 	}
 	if !inComment {
 		if prState(pr) == "open" {
-			fmt.Fprintln(a.stdout, "  comment not posted; the next backport-batch run --push posts it")
+			_, _ = fmt.Fprintln(a.stdout, "  comment not posted; the next backport-batch run --push posts it")
 		} else {
-			fmt.Fprintf(a.stdout, "  comment not posted; kept in the body only, since nothing is written to a %s pull request\n", prState(pr))
+			_, _ = fmt.Fprintf(a.stdout, "  comment not posted; kept in the body only, since nothing is written to a %s pull request\n", prState(pr))
 		}
 	}
 	type line struct {
@@ -780,8 +780,8 @@ func (a *app) printReport(pr *pullRequest, s storedReport, inBody *storedReport,
 	}
 	for _, e := range d.Primary.Parked {
 		text := "parked: "
-		switch {
-		case e.Kind == parkPartial:
+		switch e.Kind {
+		case parkPartial:
 			text += "only part of it applies, it would leave " + strings.Join(e.Files, ", ") + " without effect"
 		default:
 			var needs []string
@@ -802,22 +802,22 @@ func (a *app) printReport(pr *pullRequest, s storedReport, inBody *storedReport,
 	}
 	slices.SortFunc(lines, func(x, y line) int { return cmp.Compare(x.n, y.n) })
 	for _, l := range lines {
-		fmt.Fprintf(a.stdout, "#%d %s\n", l.n, terminalSafe(l.text))
+		_, _ = fmt.Fprintf(a.stdout, "#%d %s\n", l.n, terminalSafe(l.text))
 	}
 	overlay := func(name string, list []int) {
 		if len(list) > 0 {
-			fmt.Fprintf(a.stdout, "%s: %s\n", name, strings.Trim(fmt.Sprint(list), "[]"))
+			_, _ = fmt.Fprintf(a.stdout, "%s: %s\n", name, strings.Trim(fmt.Sprint(list), "[]"))
 		}
 	}
 	overlay("stale, still on the batch", d.Overlays.Stale)
 	overlay("only part of it applies, still on the batch", d.Overlays.Partial)
 	for _, e := range d.Overlays.Dropped {
-		fmt.Fprintf(a.stdout, "dropped: #%d, merged as %.12s, on #%d: %s\n", e.Original, terminalSafe(e.Merge), e.On, terminalSafe(e.Reason))
+		_, _ = fmt.Fprintf(a.stdout, "dropped: #%d, merged as %.12s, on #%d: %s\n", e.Original, terminalSafe(e.Merge), e.On, terminalSafe(e.Reason))
 	}
 	overlay("changed in the pick", d.Overlays.Changed)
 	for _, n := range slices.Sorted(maps.Keys(d.Diag)) {
 		for _, ln := range d.Diag[n] {
-			fmt.Fprintf(a.stdout, "#%s: %s\n", terminalSafe(n), terminalSafe(ln))
+			_, _ = fmt.Fprintf(a.stdout, "#%s: %s\n", terminalSafe(n), terminalSafe(ln))
 		}
 	}
 	if len(d.Other) > 0 {
@@ -825,7 +825,7 @@ func (a *app) printReport(pr *pullRequest, s storedReport, inBody *storedReport,
 		for i, sha := range d.Other {
 			other[i] = safe(sha)
 		}
-		fmt.Fprintf(a.stdout, "commits on main that merged no pull request: %s\n", strings.Join(other, ", "))
+		_, _ = fmt.Fprintf(a.stdout, "commits on main that merged no pull request: %s\n", strings.Join(other, ", "))
 	}
 }
 
@@ -850,7 +850,7 @@ func (a *app) postReport(n int, s storedReport) error {
 	if err != nil {
 		return err
 	}
-	defer os.Remove(name)
+	defer func() { _ = os.Remove(name) }()
 	return a.gh.createComment(n, name)
 }
 
@@ -873,12 +873,12 @@ func writeTemp(pattern, content string) (string, error) {
 		return "", err
 	}
 	if _, err := f.WriteString(content); err != nil {
-		f.Close()
-		os.Remove(f.Name())
+		_ = f.Close()
+		_ = os.Remove(f.Name())
 		return "", err
 	}
 	if err := f.Close(); err != nil {
-		os.Remove(f.Name())
+		_ = os.Remove(f.Name())
 		return "", err
 	}
 	return f.Name(), nil

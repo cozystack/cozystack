@@ -97,6 +97,23 @@ load test_helper
   rm -f "$tmp"
 }
 
+@test "the CI-only tools do not force the full matrix" {
+  tmp=$(mktemp)
+  # No image builds cmd/backport-batch or cmd/api-gate, so they select nothing
+  # and leave the rest of the diff to its own rules.
+  printf '%s\n' cmd/backport-batch/report_test.go cmd/api-gate/main.go > "$tmp"
+  out=$(hack/build-matrix.sh "$tmp")
+  [ "$out" = '[]' ]
+  printf '%s\n' cmd/backport-batch/main.go packages/apps/mariadb/Makefile > "$tmp"
+  out=$(hack/build-matrix.sh "$tmp")
+  [ "$out" = '["packages/apps/mariadb"]' ]
+  # Every other cmd/ directory is a shipped binary and still rebuilds all.
+  printf '%s\n' cmd/backport-batch/main.go cmd/cozystack-api/main.go > "$tmp"
+  out=$(hack/build-matrix.sh "$tmp")
+  [ "$out" = "$(hack/build-matrix.sh)" ]
+  rm -f "$tmp"
+}
+
 @test "a package with no image target selects nothing" {
   tmp=$(mktemp)
   # postgres ships no in-repo image build, so it is not a build unit.
