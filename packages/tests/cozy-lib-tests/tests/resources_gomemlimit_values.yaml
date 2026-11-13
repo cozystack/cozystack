@@ -11,6 +11,6 @@ sanitizedResources:
   bareBytes:
     limits:
       memory: "1073741824"
-  twoMiB:
+  smallestUsable:
     limits:
-      memory: "2Mi"
+      memory: "1398102"

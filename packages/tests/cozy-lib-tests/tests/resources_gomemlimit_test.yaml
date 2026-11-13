@@ -39,15 +39,16 @@ tests:
           path: data.bareBytes
           value: "768MiB"
 
-      # The smallest limit that still yields a usable value: 75% of 2Mi
-      # floors to 1MiB.
+      # The smallest limit that still yields a usable value: 75% of
+      # 1398102 bytes (4/3 Mi, rounded up) floors to 1MiB.
       - equal:
-          path: data.twoMiB
+          path: data.smallestUsable
           value: "1MiB"
 
-  # Integer division floors, so a limit under 2Mi comes out at 0MiB. Go
-  # accepts that and then collects almost without pause, slowing the
-  # component instead of protecting it, so the render stops instead.
+  # Integer division floors, so a limit one byte under 4/3 Mi comes out
+  # at 0MiB. Go accepts that and then collects almost without pause,
+  # slowing the component instead of protecting it, so the render stops
+  # instead.
   - it: refuses a limit too small to leave a Go heap
     values:
       - resources_gomemlimit_values.yaml
@@ -55,7 +56,7 @@ tests:
       sanitizedResources:
         belowOneMiB:
           limits:
-            memory: "1Mi"
+            memory: "1398101"
     asserts:
       - failedTemplate:
           errorPattern: "leaves no room for a Go heap"
