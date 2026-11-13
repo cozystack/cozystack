@@ -1,0 +1,12 @@
+# The namespace that holds the BMC credentials, the FenceAgentsRemediationTemplate
+# and the remediation CRs. It carries no cozystack.io/system label on purpose:
+# nothing else of the platform may land in it, because the fence-agents
+# operator's credential Role and its namespaced caches are scoped to exactly
+# this namespace. Uninstalling this release takes it away together with the
+# credentials; the CRDs next to it stay.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: cozy-node-remediation-bmc
+  labels:
+    pod-security.kubernetes.io/enforce: restricted

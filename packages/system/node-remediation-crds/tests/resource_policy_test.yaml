@@ -1,0 +1,45 @@
+# The CRDs carry helm.sh/resource-policy: keep so that uninstalling this
+# release never deletes them and, with them, every NodeHealthCheck,
+# FenceAgentsRemediationTemplate and open remediation in the cluster. The
+# templates are refilled by `make -C ../node-remediation update`; the wildcard
+# case covers a CRD that arrives with the next refill without being listed.
+suite: node-remediation CRDs survive a release uninstall
+templates:
+  - templates/crd-*.yaml
+tests:
+  - it: annotates every CustomResourceDefinition the chart renders
+    asserts:
+      - equal:
+          path: kind
+          value: CustomResourceDefinition
+      - equal:
+          path: metadata.annotations["helm.sh/resource-policy"]
+          value: keep
+
+  - it: ships the NodeHealthCheck CRD
+    template: templates/crd-remediation.medik8s.io_nodehealthchecks.yaml
+    asserts:
+      - equal:
+          path: metadata.name
+          value: nodehealthchecks.remediation.medik8s.io
+
+  # The binding is what ties a remediation to the Node NHC selected; a refill
+  # from a tree without the carried patches would drop it silently otherwise.
+  - it: ships the FenceAgentsRemediation CRD with the identity binding
+    template: templates/crd-fence-agents-remediation.medik8s.io_fenceagentsremediations.yaml
+    asserts:
+      - equal:
+          path: metadata.name
+          value: fenceagentsremediations.fence-agents-remediation.medik8s.io
+      - exists:
+          path: spec.versions[0].schema.openAPIV3Schema.properties.spec.properties.nodeBinding
+      - equal:
+          path: spec.versions[0].schema.openAPIV3Schema.properties.spec.properties.safetyPolicy.enum
+          value: [RedfishOffV1]
+
+  - it: ships the FenceAgentsRemediationTemplate CRD
+    template: templates/crd-fence-agents-remediation.medik8s.io_fenceagentsremediationtemplates.yaml
+    asserts:
+      - equal:
+          path: metadata.name
+          value: fenceagentsremediationtemplates.fence-agents-remediation.medik8s.io

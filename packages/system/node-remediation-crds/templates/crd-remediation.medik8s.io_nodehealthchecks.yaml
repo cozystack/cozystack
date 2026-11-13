@@ -1,0 +1,524 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.20.1
+    helm.sh/resource-policy: keep
+  name: nodehealthchecks.remediation.medik8s.io
+spec:
+  group: remediation.medik8s.io
+  names:
+    kind: NodeHealthCheck
+    listKind: NodeHealthCheckList
+    plural: nodehealthchecks
+    shortNames:
+      - nhc
+    singular: nodehealthcheck
+  scope: Cluster
+  versions:
+    - name: v1alpha1
+      schema:
+        openAPIV3Schema:
+          description: NodeHealthCheck is the Schema for the nodehealthchecks API
+          properties:
+            apiVersion:
+              description: |-
+                APIVersion defines the versioned schema of this representation of an object.
+                Servers should convert recognized schemas to the latest internal value, and
+                may reject unrecognized values.
+                More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+              type: string
+            kind:
+              description: |-
+                Kind is a string value representing the REST resource this object represents.
+                Servers may infer this from the endpoint the client submits requests to.
+                Cannot be updated.
+                In CamelCase.
+                More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+              type: string
+            metadata:
+              type: object
+            spec:
+              description: NodeHealthCheckSpec defines the desired state of NodeHealthCheck
+              properties:
+                escalatingRemediations:
+                  description: |-
+                    EscalatingRemediations contain a list of ordered remediation templates with a timeout.
+                    The remediation templates will be used one after another, until the unhealthy node
+                    gets healthy within the timeout of the currently processed remediation. The order of
+                    remediation is defined by the "order" field of each "escalatingRemediation".
+
+                    Mutually exclusive with RemediationTemplate
+                  items:
+                    description: EscalatingRemediation defines a remediation template with order and timeout
+                    properties:
+                      order:
+                        description: |-
+                          Order defines the order for this remediation.
+                          Remediations with lower order will be used before remediations with higher order.
+                          Remediations must not have the same order.
+                        type: integer
+                      remediationTemplate:
+                        description: |-
+                          RemediationTemplate is a reference to a remediation template
+                          provided by a remediation provider.
+
+                          If a node needs remediation the controller will create an object from this template
+                          and then it should be picked up by a remediation provider.
+                        properties:
+                          apiVersion:
+                            description: API version of the referent.
+                            type: string
+                          fieldPath:
+                            description: |-
+                              If referring to a piece of an object instead of an entire object, this string
+                              should contain a valid JSON/Go field access statement, such as desiredState.manifest.containers[2].
+                              For example, if the object reference is to a container within a pod, this would take on a value like:
+                              "spec.containers{name}" (where "name" refers to the name of the container that triggered
+                              the event) or if no container name is specified "spec.containers[2]" (container with
+                              index 2 in this pod). This syntax is chosen only to have some well-defined way of
+                              referencing a part of an object.
+                            type: string
+                          kind:
+                            description: |-
+                              Kind of the referent.
+                              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+                            type: string
+                          name:
+                            description: |-
+                              Name of the referent.
+                              More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                            type: string
+                          namespace:
+                            description: |-
+                              Namespace of the referent.
+                              More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/namespaces/
+                            type: string
+                          resourceVersion:
+                            description: |-
+                              Specific resourceVersion to which this reference is made, if any.
+                              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#concurrency-control-and-consistency
+                            type: string
+                          uid:
+                            description: |-
+                              UID of the referent.
+                              More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#uids
+                            type: string
+                        type: object
+                        x-kubernetes-map-type: atomic
+                      timeout:
+                        description: |-
+                          Timeout defines how long NHC will wait for the node getting healthy
+                          before the next remediation (if any) will be used. When the last remediation times out,
+                          the overall remediation is considered as failed.
+                          As a safeguard for preventing parallel remediations, a minimum of 60s is enforced.
+
+                          Expects a string of decimal numbers each with optional
+                          fraction and a unit suffix, eg "300ms", "1.5h" or "2h45m".
+                          Valid time units are "ns", "us" (or "µs"), "ms", "s", "m", "h".
+                        pattern: ^([0-9]+(\.[0-9]+)?(ns|us|µs|ms|s|m|h))+$
+                        type: string
+                    required:
+                      - order
+                      - remediationTemplate
+                      - timeout
+                    type: object
+                  type: array
+                healthyDelay:
+                  description: |-
+                    HealthyDelay is the time before NHC would allow a node to be healthy again.
+                    A negative value means that NHC will never consider the node healthy and a manual intervention is expected
+                  pattern: ^-?([0-9]+(\.[0-9]+)?(ns|us|µs|ms|s|m|h))+$
+                  type: string
+                maxUnhealthy:
+                  anyOf:
+                    - type: integer
+                    - type: string
+                  description: |-
+                    Remediation is allowed if no more than "MaxUnhealthy" nodes selected by "selector" are not healthy.
+                    Expects either a non-negative integer value or a percentage value.
+                    Percentage values must be positive whole numbers and are capped at 100%.
+                    0% is valid and will block all remediation.
+                    MaxUnhealthy should not be used with remediators that delete nodes (e.g. MachineDeletionRemediation),
+                    as this breaks the logic for counting healthy and unhealthy nodes.
+                    MinHealthy and MaxUnhealthy are configuring the same aspect,
+                    and they cannot be used at the same time.
+                  pattern: ^((100|[0-9]{1,2})%|[0-9]+)$
+                  x-kubernetes-int-or-string: true
+                minHealthy:
+                  anyOf:
+                    - type: integer
+                    - type: string
+                  description: |-
+                    Remediation is allowed if at least "MinHealthy" nodes selected by "selector" are healthy.
+                    Expects either a non-negative integer value or a percentage value.
+                    Percentage values must be positive whole numbers and are capped at 100%.
+                    100% is valid and will block all remediation.
+                    MinHealthy and MaxUnhealthy are configuring the same aspect,
+                    and they cannot be used at the same time.
+                  pattern: ^((100|[0-9]{1,2})%|[0-9]+)$
+                  x-kubernetes-int-or-string: true
+                pauseRequests:
+                  description: |-
+                    PauseRequests will prevent any new remediation to start, while in-flight remediations
+                    keep running. Each entry is free form, and ideally represents the requested party reason
+                    for this pausing - i.e:
+                        "imaginary-cluster-upgrade-manager-operator"
+                  items:
+                    type: string
+                  type: array
+                remediationTemplate:
+                  description: |-
+                    RemediationTemplate is a reference to a remediation template
+                    provided by an infrastructure provider.
+
+                    If a node needs remediation the controller will create an object from this template
+                    and then it should be picked up by a remediation provider.
+
+                    Mutually exclusive with EscalatingRemediations
+                  properties:
+                    apiVersion:
+                      description: API version of the referent.
+                      type: string
+                    fieldPath:
+                      description: |-
+                        If referring to a piece of an object instead of an entire object, this string
+                        should contain a valid JSON/Go field access statement, such as desiredState.manifest.containers[2].
+                        For example, if the object reference is to a container within a pod, this would take on a value like:
+                        "spec.containers{name}" (where "name" refers to the name of the container that triggered
+                        the event) or if no container name is specified "spec.containers[2]" (container with
+                        index 2 in this pod). This syntax is chosen only to have some well-defined way of
+                        referencing a part of an object.
+                      type: string
+                    kind:
+                      description: |-
+                        Kind of the referent.
+                        More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+                      type: string
+                    name:
+                      description: |-
+                        Name of the referent.
+                        More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                      type: string
+                    namespace:
+                      description: |-
+                        Namespace of the referent.
+                        More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/namespaces/
+                      type: string
+                    resourceVersion:
+                      description: |-
+                        Specific resourceVersion to which this reference is made, if any.
+                        More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#concurrency-control-and-consistency
+                      type: string
+                    uid:
+                      description: |-
+                        UID of the referent.
+                        More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#uids
+                      type: string
+                  type: object
+                  x-kubernetes-map-type: atomic
+                selector:
+                  description: |-
+                    Label selector to match nodes whose health will be exercised.
+
+                    Selecting both control-plane and worker nodes in one NHC CR is
+                    highly discouraged and can result in undesired behaviour.
+
+                    Note: mandatory now for above reason, but for backwards compatibility existing
+                    CRs will continue to work with an empty selector, which matches all nodes.
+                  properties:
+                    matchExpressions:
+                      description: matchExpressions is a list of label selector requirements. The requirements are ANDed.
+                      items:
+                        description: |-
+                          A label selector requirement is a selector that contains values, a key, and an operator that
+                          relates the key and values.
+                        properties:
+                          key:
+                            description: key is the label key that the selector applies to.
+                            type: string
+                          operator:
+                            description: |-
+                              operator represents a key's relationship to a set of values.
+                              Valid operators are In, NotIn, Exists and DoesNotExist.
+                            type: string
+                          values:
+                            description: |-
+                              values is an array of string values. If the operator is In or NotIn,
+                              the values array must be non-empty. If the operator is Exists or DoesNotExist,
+                              the values array must be empty. This array is replaced during a strategic
+                              merge patch.
+                            items:
+                              type: string
+                            type: array
+                            x-kubernetes-list-type: atomic
+                        required:
+                          - key
+                          - operator
+                        type: object
+                      type: array
+                      x-kubernetes-list-type: atomic
+                    matchLabels:
+                      additionalProperties:
+                        type: string
+                      description: |-
+                        matchLabels is a map of {key,value} pairs. A single {key,value} in the matchLabels
+                        map is equivalent to an element of matchExpressions, whose key field is "key", the
+                        operator is "In", and the values array contains only "value". The requirements are ANDed.
+                      type: object
+                  type: object
+                  x-kubernetes-map-type: atomic
+                stormCooldownDuration:
+                  description: |-
+                    StormCooldownDuration defines the duration of an optional cooldown phase after a storm.
+                    A "storm" happens when the number of (un)healthy nodes exceeds the threshold defined by minHealthy or maxUnhealthy.
+                    Sometimes this is triggered by a single root cause.
+                    When that cause is fixed, there is a risk to remediate healthy nodes:
+                    the async nature of node status updates would result in only some nodes being detected as healthy by NHC in a first round of updates,
+                    which results in minHealthy or maxUnhealthy threshold being fulfilled (the storm ends) and triggering unneeded new remediation.
+                    The storm cooldown phase will prevent creation of new remediation for the given duration by giving NHC some time to get the latest node statuses.
+
+                    Expects a string of decimal numbers each with optional fraction and a unit
+                    suffix, e.g. "300ms", "1.5h" or "2h45m". Valid time units are "ns", "us"
+                    (or "µs"), "ms", "s", "m", "h".
+                  pattern: ^([0-9]+(\.[0-9]+)?(ns|us|µs|ms|s|m|h))+$
+                  type: string
+                unhealthyConditions:
+                  default:
+                    - duration: 300s
+                      status: "False"
+                      type: Ready
+                    - duration: 300s
+                      status: Unknown
+                      type: Ready
+                  description: |-
+                    UnhealthyConditions contains a list of the conditions that determine
+                    whether a node is considered unhealthy.  The conditions are combined in a
+                    logical OR, i.e. if any of the conditions is met, the node is unhealthy.
+                  items:
+                    description: |-
+                      UnhealthyCondition represents a Node condition type and value with a
+                      specified duration. When the named condition has been in the given
+                      status for at least the duration value a node is considered unhealthy.
+                    properties:
+                      duration:
+                        description: |-
+                          Duration of the condition specified when a node is considered unhealthy.
+
+                          Expects a string of decimal numbers each with optional
+                          fraction and a unit suffix, eg "300ms", "1.5h" or "2h45m".
+                          Valid time units are "ns", "us" (or "µs"), "ms", "s", "m", "h".
+                        pattern: ^([0-9]+(\.[0-9]+)?(ns|us|µs|ms|s|m|h))+$
+                        type: string
+                      status:
+                        description: |-
+                          The condition status in the node's status to watch for.
+                          Typically False, True or Unknown.
+                        minLength: 1
+                        type: string
+                      type:
+                        description: The condition type in the node's status to watch for.
+                        minLength: 1
+                        type: string
+                    required:
+                      - duration
+                      - status
+                      - type
+                    type: object
+                  type: array
+                  x-kubernetes-list-map-keys:
+                    - type
+                    - status
+                  x-kubernetes-list-type: map
+              type: object
+            status:
+              description: NodeHealthCheckStatus defines the observed state of NodeHealthCheck
+              properties:
+                conditions:
+                  description: |-
+                    Represents the observations of a NodeHealthCheck's current state.
+                    Known .status.conditions.type are: "Disabled"
+                  items:
+                    description: Condition contains details for one aspect of the current state of this API Resource.
+                    properties:
+                      lastTransitionTime:
+                        description: |-
+                          lastTransitionTime is the last time the condition transitioned from one status to another.
+                          This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                        format: date-time
+                        type: string
+                      message:
+                        description: |-
+                          message is a human readable message indicating details about the transition.
+                          This may be an empty string.
+                        maxLength: 32768
+                        type: string
+                      observedGeneration:
+                        description: |-
+                          observedGeneration represents the .metadata.generation that the condition was set based upon.
+                          For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                          with respect to the current state of the instance.
+                        format: int64
+                        minimum: 0
+                        type: integer
+                      reason:
+                        description: |-
+                          reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                          Producers of specific condition types may define expected values and meanings for this field,
+                          and whether the values are considered a guaranteed API.
+                          The value should be a CamelCase string.
+                          This field may not be empty.
+                        maxLength: 1024
+                        minLength: 1
+                        pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                        type: string
+                      status:
+                        description: status of the condition, one of True, False, Unknown.
+                        enum:
+                          - "True"
+                          - "False"
+                          - Unknown
+                        type: string
+                      type:
+                        description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                        maxLength: 316
+                        pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                        type: string
+                    required:
+                      - lastTransitionTime
+                      - message
+                      - reason
+                      - status
+                      - type
+                    type: object
+                  type: array
+                  x-kubernetes-list-map-keys:
+                    - type
+                  x-kubernetes-list-type: map
+                healthyNodes:
+                  description: HealthyNodes specified the number of healthy nodes observed
+                  type: integer
+                inFlightRemediations:
+                  additionalProperties:
+                    format: date-time
+                    type: string
+                  description: |-
+                    InFlightRemediations records the timestamp when remediation triggered per node.
+                    Deprecated in favour of UnhealthyNodes.
+                  type: object
+                lastUpdateTime:
+                  description: LastUpdateTime is the last time the status was updated.
+                  format: date-time
+                  type: string
+                observedNodes:
+                  description: ObservedNodes specified the number of nodes observed by using the NHC spec.selector
+                  type: integer
+                phase:
+                  description: |-
+                    Phase represents the current phase of this Config.
+                    Known phases are Disabled, Paused, Remediating and Enabled, based on:\n
+                    - the status of the Disabled condition\n
+                    - the value of PauseRequests\n
+                    - the value of InFlightRemediations
+                  type: string
+                reason:
+                  description: Reason explains the current phase in more detail.
+                  type: string
+                unhealthyNodes:
+                  description: UnhealthyNodes tracks currently unhealthy nodes and their remediations.
+                  items:
+                    description: UnhealthyNode defines an unhealthy node and its remediations
+                    properties:
+                      conditionsHealthyTimestamp:
+                        description: |-
+                          ConditionsHealthyTimestamp is RFC 3339 date and time at which the unhealthy conditions didn't match anymore.
+                          The remediation CR will be deleted at that time, but the node will still be tracked as unhealthy until all
+                          remediation CRs are actually deleted, when remediators finished cleanup and removed their finalizers.
+                        format: date-time
+                        type: string
+                      healthyDelayed:
+                        description: HealthyDelayed notes whether a node should be considered healthy, but isn't due to NodeHealthCheckSpec.HealthyDelay configuration.
+                        type: boolean
+                      name:
+                        description: Name is the name of the unhealthy node
+                        type: string
+                      remediations:
+                        description: Remediations tracks the remediations created for this node
+                        items:
+                          description: Remediation defines a remediation which was created for a node
+                          properties:
+                            resource:
+                              description: Resource is the reference to the remediation CR which was created
+                              properties:
+                                apiVersion:
+                                  description: API version of the referent.
+                                  type: string
+                                fieldPath:
+                                  description: |-
+                                    If referring to a piece of an object instead of an entire object, this string
+                                    should contain a valid JSON/Go field access statement, such as desiredState.manifest.containers[2].
+                                    For example, if the object reference is to a container within a pod, this would take on a value like:
+                                    "spec.containers{name}" (where "name" refers to the name of the container that triggered
+                                    the event) or if no container name is specified "spec.containers[2]" (container with
+                                    index 2 in this pod). This syntax is chosen only to have some well-defined way of
+                                    referencing a part of an object.
+                                  type: string
+                                kind:
+                                  description: |-
+                                    Kind of the referent.
+                                    More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+                                  type: string
+                                name:
+                                  description: |-
+                                    Name of the referent.
+                                    More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                                  type: string
+                                namespace:
+                                  description: |-
+                                    Namespace of the referent.
+                                    More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/namespaces/
+                                  type: string
+                                resourceVersion:
+                                  description: |-
+                                    Specific resourceVersion to which this reference is made, if any.
+                                    More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#concurrency-control-and-consistency
+                                  type: string
+                                uid:
+                                  description: |-
+                                    UID of the referent.
+                                    More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#uids
+                                  type: string
+                              type: object
+                              x-kubernetes-map-type: atomic
+                            started:
+                              description: Started is the creation time of the remediation CR
+                              format: date-time
+                              type: string
+                            templateName:
+                              description: TemplateName is required when using several templates of the same kind
+                              type: string
+                            timedOut:
+                              description: |-
+                                TimedOut is the time when the remediation timed out.
+                                Applicable for escalating remediations only.
+                              format: date-time
+                              type: string
+                          required:
+                            - resource
+                            - started
+                          type: object
+                        type: array
+                    required:
+                      - name
+                    type: object
+                  type: array
+                  x-kubernetes-list-map-keys:
+                    - name
+                  x-kubernetes-list-type: map
+              type: object
+          type: object
+      served: true
+      storage: true
+      subresources:
+        status: {}
