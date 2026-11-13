@@ -9,6 +9,7 @@ metadata:
     app.kubernetes.io/instance: {{ .Release.Name }}-system
     app.kubernetes.io/managed-by: {{ .Release.Service }}
 spec:
+  {{- include "cozy-lib.postRenderers" (list (list) $) | nindent 2 }}
   chartRef:
     kind: ExternalArtifact
     name: cozystack-external-dns-application-default-external-dns-system

@@ -1,0 +1,85 @@
+suite: cozy-lib.postRenderers carries the image override table into chart-rendered HelmReleases
+
+templates:
+  - templates/tests/postrenderers.yaml
+
+# A HelmRelease a chart renders is built by no Go code, so this helper is the
+# only way the platform's image overrides reach the images that release
+# installs. It must render nothing when there is nothing to add, keep the
+# release's own post-renderers ahead of the override, and leave a release
+# without overrides exactly as its own post-renderers describe it.
+
+tests:
+  - it: renders no postRenderers when there are neither overrides nor own renderers
+    asserts:
+      - notExists: {path: spec.postRenderers}
+
+  - it: renders no postRenderers for an empty table
+    set:
+      _cluster:
+        image-overrides: []
+    asserts:
+      - notExists: {path: spec.postRenderers}
+
+  - it: renders the override table as a kustomize images post-renderer
+    set:
+      _cluster:
+        image-overrides:
+          - name: registry.k8s.io/sig-storage/csi-attacher
+            newName: registry.example.org/os/external-attacher
+            newTag: "4.10.0"
+            digest: sha256:f80b60d4523dcdecb225c3113bcbd0eedc45b4d2b46f87c0ccf4f14d09a4a35f
+    asserts:
+      - equal:
+          path: spec.postRenderers
+          value:
+            - kustomize:
+                images:
+                  - name: registry.k8s.io/sig-storage/csi-attacher
+                    newName: registry.example.org/os/external-attacher
+                    newTag: "4.10.0"
+                    digest: sha256:f80b60d4523dcdecb225c3113bcbd0eedc45b4d2b46f87c0ccf4f14d09a4a35f
+
+  - it: keeps the release's own post-renderers ahead of the override
+    set:
+      ownPostRenderers:
+        - kustomize:
+            patches:
+              - patch: own
+      _cluster:
+        image-overrides:
+          - name: a/b
+            newName: c/d
+    asserts:
+      - equal:
+          path: spec.postRenderers
+          value:
+            - kustomize:
+                patches:
+                  - patch: own
+            - kustomize:
+                images:
+                  - name: a/b
+                    newName: c/d
+
+  - it: renders only the release's own post-renderers when there are no overrides
+    set:
+      ownPostRenderers:
+        - kustomize:
+            patches:
+              - patch: own
+    asserts:
+      - equal:
+          path: spec.postRenderers
+          value:
+            - kustomize:
+                patches:
+                  - patch: own
+
+  - it: refuses own post-renderers that are not a list
+    set:
+      ownPostRenderers:
+        kustomize: {}
+    asserts:
+      - failedTemplate:
+          errorPattern: "own post-renderers must be a list"

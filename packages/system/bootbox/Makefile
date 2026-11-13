@@ -14,3 +14,6 @@ update:
 	mkdir -p charts/smee/crds
 	mv charts/tink/crds/hardware-crd.yaml charts/smee/crds
 	rm -rf charts/tink
+	# cozy-lib is a link into the tree rather than a vendored chart, and the
+	# rm -rf above took it with the rest of charts/.
+	ln -sfn ../../../library/cozy-lib charts/cozy-lib

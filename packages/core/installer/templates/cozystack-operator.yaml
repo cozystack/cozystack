@@ -203,6 +203,10 @@ spec:
         {{- if .Values.cozystackOperator.platformSourceCertSecret }}
         - --platform-source-cert-secret={{ .Values.cozystackOperator.platformSourceCertSecret }}
         {{- end }}
+        {{- if .Values.cozystackOperator.fluxImageOverrides }}
+        - >-
+          --flux-image-overrides={{ .Values.cozystackOperator.fluxImageOverrides | toJson }}
+        {{- end }}
         {{- $hasEndpointEnv := or (eq .Values.cozystackOperator.variant "talos") (eq .Values.cozystackOperator.variant "generic") }}
         {{- if or .Values.cozystackOperator.platformVersion $hasEndpointEnv }}
         env:
