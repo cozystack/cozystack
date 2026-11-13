@@ -217,7 +217,7 @@
 {{-   $limitMiB := div (mul $memoryLimitInt 3) 4194304 }}
 {{- /* Go accepts 0, and then collects almost without pause. */}}
 {{-   if lt $limitMiB 1 }}
-{{-     fail (printf "ERROR: a memory limit of %s leaves no room for a Go heap; GOMEMLIMIT needs at least 2Mi." .limits.memory) }}
+{{-     fail (printf "ERROR: a memory limit of %s leaves no room for a Go heap; GOMEMLIMIT needs a limit of at least 1398102 bytes (4/3 Mi) to come out at 1MiB." .limits.memory) }}
 {{-   end }}
 {{-   printf `%dMiB` $limitMiB }}
 {{- end }}
