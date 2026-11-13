@@ -279,13 +279,13 @@ For `sslmode=verify-full` to work, the CA bundle retrieved above must be saved t
 
 ### Databases configuration
 
-| Name                             | Description                              | Type                | Value |
-| -------------------------------- | ---------------------------------------- | ------------------- | ----- |
-| `databases`                      | Databases configuration map.             | `map[string]object` | `{}`  |
-| `databases[name].roles`          | Roles assigned to users.                 | `object`            | `{}`  |
-| `databases[name].roles.admin`    | List of users with admin privileges.     | `[]string`          | `[]`  |
-| `databases[name].roles.readonly` | List of users with read-only privileges. | `[]string`          | `[]`  |
-| `databases[name].extensions`     | List of enabled PostgreSQL extensions.   | `[]string`          | `[]`  |
+| Name                             | Description                                                                                                       | Type                | Value |
+| -------------------------------- | ----------------------------------------------------------------------------------------------------------------- | ------------------- | ----- |
+| `databases`                      | Databases configuration map. The PostgreSQL system databases `postgres`, `template0` and `template1` are refused. | `map[string]object` | `{}`  |
+| `databases[name].roles`          | Roles assigned to users.                                                                                          | `object`            | `{}`  |
+| `databases[name].roles.admin`    | List of users with admin privileges.                                                                              | `[]string`          | `[]`  |
+| `databases[name].roles.readonly` | List of users with read-only privileges.                                                                          | `[]string`          | `[]`  |
+| `databases[name].extensions`     | List of enabled PostgreSQL extensions.                                                                            | `[]string`          | `[]`  |
 
 
 ### Backup parameters

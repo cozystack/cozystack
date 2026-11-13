@@ -17,7 +17,7 @@ type Config struct {
 }
 
 type ConfigSpec struct {
-	// Number of Redis replicas.
+	// Number of Redis replicas. Three Sentinels watch them, or a single one when `replicas` is 1, since a lone pod has no replica to fail over to.
 	// +kubebuilder:default:=2
 	Replicas int `json:"replicas"`
 	// Explicit CPU and memory configuration for each Redis replica. When omitted, the preset defined in `resourcesPreset` is applied.
@@ -51,7 +51,7 @@ type ConfigSpec struct {
 	// Redis `min-replicas-max-lag`, in seconds: a replica whose last acknowledgement is older than this does not count towards `minReplicasToWrite`. Unset by default, which leaves the Redis default (10). Has no effect unless `minReplicasToWrite` is set. Must be at least 1 when `minReplicasToWrite` is set: Redis treats 0 as disabling the check, so the chart refuses it.
 	// +kubebuilder:validation:Minimum=0
 	MinReplicasMaxLag *int `json:"minReplicasMaxLag,omitempty"`
-	// Sentinel configuration. When `sentinel.resources` is empty and `sentinel.resourcesPreset` is unset, the three Sentinel pods are sized like the Redis pods (`resources` and `resourcesPreset`). An empty `sentinel.resources` map counts as unset, as an empty top-level `resources` does.
+	// Sentinel configuration. When `sentinel.resources` is empty and `sentinel.resourcesPreset` is unset, the Sentinel pods are sized like the Redis pods (`resources` and `resourcesPreset`). An empty `sentinel.resources` map counts as unset, as an empty top-level `resources` does.
 	// +kubebuilder:default:={}
 	Sentinel Sentinel `json:"sentinel,omitempty"`
 }

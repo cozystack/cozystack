@@ -1,0 +1,70 @@
+suite: vm-instance external Service ports
+
+# The API server rejects a Service without ports, so an external PortList VM
+# whose port list was emptied could not be upgraded at all. The placeholder
+# must be SCTP: cozy-proxy only admits TCP and UDP ports into its filter, so
+# any TCP or UDP placeholder would open that port on the VM.
+release:
+  name: test-vm
+  namespace: tenant-test
+templates:
+  - templates/service.yaml
+set:
+  fullnameOverride: test-vm
+  external: true
+
+tests:
+  - it: renders an SCTP placeholder for PortList with no ports
+    set:
+      externalMethod: PortList
+      externalPorts: []
+    asserts:
+      - equal:
+          path: spec.type
+          value: LoadBalancer
+      - equal:
+          path: metadata.annotations["networking.cozystack.io/wholeIP"]
+          value: "false"
+      - lengthEqual:
+          path: spec.ports
+          count: 1
+      - equal:
+          path: spec.ports[0]
+          value:
+            name: no-ports
+            port: 65535
+            protocol: SCTP
+
+  - it: renders the listed ports for PortList
+    set:
+      externalMethod: PortList
+      externalPorts: [22, 443]
+    asserts:
+      - lengthEqual:
+          path: spec.ports
+          count: 2
+      - equal:
+          path: spec.ports[0]
+          value:
+            name: port-22
+            port: 22
+            targetPort: 22
+      - notContains:
+          path: spec.ports
+          content:
+            name: no-ports
+            port: 65535
+            protocol: SCTP
+
+  - it: keeps the WholeIP placeholder when no ports are listed
+    set:
+      externalMethod: WholeIP
+      externalPorts: []
+    asserts:
+      - equal:
+          path: metadata.annotations["networking.cozystack.io/wholeIP"]
+          value: "true"
+      - equal:
+          path: spec.ports
+          value:
+            - port: 65535
