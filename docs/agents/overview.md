@@ -124,6 +124,12 @@ A `lookup` is fine when a repeated render gives the same output and carries noth
 
 To use a fact about the cluster instead, read it from values: `_cluster` and `_namespace` in the `cozystack-values` Secret, or `valuesFrom` on a specific Secret, whose content change is a values change and so upgrades the release. Ask whether an API is served with `.Capabilities.APIVersions.Has`, since a `lookup` on an unserved group aborts the whole render. Otherwise check at run time in a hook or Job, or let a controller own the object.
 
+**No helper in `cozy-lib` that one chart uses or that knows one application.** `cozy-lib` is copied into every chart that declares it, so any change to it re-releases all of them. Catalogs outside this repository vendor copies of it too, so whatever is in it becomes interface the platform has to keep. Helpers of this kind already in the library are technical debt, not precedent, and move to their callers when refactored. To tell whether a helper is one of them, count its callers outside `packages/tests/cozy-lib-tests`.
+
+A helper belongs in `cozy-lib` when two or more packages need it and it knows no single application: tenant RBAC subjects, resource presets and sanitizing, image references through the cluster registry, reads of `_cluster` and `_namespace` with their guards.
+
+Put any other helper into the chart's own `templates/_helpers.tpl`, under the chart's prefix. Move it to `cozy-lib` when a second package needs it, in a separate commit, with a test in `packages/tests/cozy-lib-tests`. Don't add an accessor for a `_cluster` key until a chart reads it. A change to an existing helper changes output of every caller, so it comes with a test in `packages/tests/cozy-lib-tests` and a render of the callers. Don't change a helper's behaviour for one caller, keep that variant in the caller's chart.
+
 ### Go Code
 - Follow standard **Go conventions** and idioms
 - Use **controller-runtime** patterns for Kubernetes controllers
