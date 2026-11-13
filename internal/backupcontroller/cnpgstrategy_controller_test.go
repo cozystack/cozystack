@@ -2830,7 +2830,7 @@ func TestReconcileCNPG_ObjectStoreApplyRecovers(t *testing.T) {
 	}
 
 	failing = false
-	j, _ = f.pass()
+	_, _ = f.pass()
 	f.settleDestination()
 	j, backups := f.pass()
 	if len(backups) != 1 {

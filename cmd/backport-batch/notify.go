@@ -102,10 +102,10 @@ func (a *app) notify(args []string) int {
 	var conflicts, waiting []int
 	after := map[int][]int{}
 	for n, e := range deferred {
-		switch place := placement(deferred, n, map[int]bool{}); {
-		case place == "workflow":
+		switch placement(deferred, n, map[int]bool{}) {
+		case "workflow":
 			waiting = append(waiting, n)
-		case place == "conflict":
+		case "conflict":
 			conflicts = append(conflicts, n)
 		}
 		if len(e.Needs) > 0 {
@@ -259,10 +259,10 @@ func placement(deferred map[int]deferredEntry, n int, seen map[int]bool) string 
 	seen[n] = true
 	place := ""
 	for _, f := range e.Needs {
-		switch p := placement(deferred, f, seen); {
-		case p == "workflow":
+		switch p := placement(deferred, f, seen); p {
+		case "workflow":
 			return p
-		case p == "conflict":
+		case "conflict":
 			place = p
 		}
 	}

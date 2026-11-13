@@ -780,8 +780,8 @@ func (a *app) printReport(pr *pullRequest, s storedReport, inBody *storedReport,
 	}
 	for _, e := range d.Primary.Parked {
 		text := "parked: "
-		switch {
-		case e.Kind == parkPartial:
+		switch e.Kind {
+		case parkPartial:
 			text += "only part of it applies, it would leave " + strings.Join(e.Files, ", ") + " without effect"
 		default:
 			var needs []string
