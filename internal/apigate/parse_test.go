@@ -190,6 +190,7 @@ metadata:
 func TestParseAPIServerStorages(t *testing.T) {
 	src := `
 	coreV1alpha1Storage["tenantsecrets"] = cozyregistry.RESTInPeace(x)
+	coreV1alpha1Storage["credentials/mint"] = credentialstorage.NewMintREST(w)
 	sdnV1alpha1Storage["securitygroups"] = cozyregistry.RESTInPeace(y)
 	appsV1alpha1Storage[resConfig.Application.Plural] = cozyregistry.RESTInPeace(z)
 	`
@@ -203,6 +204,9 @@ func TestParseAPIServerStorages(t *testing.T) {
 	}
 	if got["securitygroups"] != "sdn.cozystack.io" {
 		t.Fatalf("expected sdn securitygroups, got %v", got)
+	}
+	if got["credentials/mint"] != "core.cozystack.io" {
+		t.Fatalf("expected the subresource registration to be gated, got %v", got)
 	}
 	if _, leaked := got["Plural"]; leaked {
 		t.Fatalf("apps dynamic registration must not be captured: %v", got)
