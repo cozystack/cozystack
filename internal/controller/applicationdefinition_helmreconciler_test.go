@@ -2,6 +2,8 @@ package controller
 
 import (
 	"context"
+	"errors"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -9,11 +11,15 @@ import (
 	cozyv1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
 	"github.com/cozystack/cozystack/pkg/config"
 	helmv2 "github.com/fluxcd/helm-controller/api/v2"
+	"github.com/fluxcd/pkg/apis/kustomize"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 )
 
@@ -659,5 +665,297 @@ func TestAppDefHelm_SameKindRequests(t *testing.T) {
 	}
 	if !names["harbor"] || !names["tap-harbor"] || names["pg"] || len(reqs) != 2 {
 		t.Fatalf("requests = %v (%d), want harbor and tap-harbor once each", names, len(reqs))
+	}
+}
+
+// dataVolumeCurrent is the expression the vm-disk definition carries, so that a
+// disk CDI is still importing does not hold its release's wait.
+var dataVolumeCurrent = kustomize.CustomHealthCheck{
+	APIVersion:             "cdi.kubevirt.io/v1beta1",
+	Kind:                   "DataVolume",
+	HealthCheckExpressions: kustomize.HealthCheckExpressions{Current: "true"},
+}
+
+// vmDiskRelease builds a VMDisk HelmRelease the way cozystack-api wrote it
+// before the definition declared any expression: chartRef and valuesFrom in
+// sync, no healthCheckExprs, no waitStrategy.
+func vmDiskRelease() *helmv2.HelmRelease {
+	return &helmv2.HelmRelease{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "vm-disk-data",
+			Namespace: "tenant-foo",
+			Labels: map[string]string{
+				"apps.cozystack.io/application.kind":  "VMDisk",
+				"apps.cozystack.io/application.group": "apps.cozystack.io",
+			},
+		},
+		Spec: helmv2.HelmReleaseSpec{
+			ChartRef: &helmv2.CrossNamespaceSourceReference{
+				Kind:      "ExternalArtifact",
+				Name:      "cozystack-vm-disk-application-kubevirt-vm-disk",
+				Namespace: "cozy-system",
+			},
+			ValuesFrom: expectedValuesFrom(),
+		},
+	}
+}
+
+// vmDiskAppDef builds the VMDisk ApplicationDefinition with the given wait
+// strategy and expressions.
+func vmDiskAppDef(waitStrategy string, exprs ...kustomize.CustomHealthCheck) *cozyv1alpha1.ApplicationDefinition {
+	return &cozyv1alpha1.ApplicationDefinition{
+		ObjectMeta: metav1.ObjectMeta{Name: "vm-disk"},
+		Spec: cozyv1alpha1.ApplicationDefinitionSpec{
+			Application: cozyv1alpha1.ApplicationDefinitionApplication{Kind: "VMDisk"},
+			Release: cozyv1alpha1.ApplicationDefinitionRelease{
+				ChartRef: &helmv2.CrossNamespaceSourceReference{
+					Kind:      "ExternalArtifact",
+					Name:      "cozystack-vm-disk-application-kubevirt-vm-disk",
+					Namespace: "cozy-system",
+				},
+				WaitStrategy:     waitStrategy,
+				HealthCheckExprs: exprs,
+			},
+		},
+	}
+}
+
+// TestAppDefHelm_HealthCheckExprsApplied pins the drift behind #4409:
+// cozystack-api writes healthCheckExprs only when it builds a release, so a
+// disk created before the definition exempted its DataVolume kept waiting on
+// it at every upgrade, and one CDI never finished importing failed its upgrade
+// for good. The expressions must land, with the poller strategy that is the
+// only one evaluating them.
+func TestAppDefHelm_HealthCheckExprsApplied(t *testing.T) {
+	got := reconcileVMInstance(t, vmDiskAppDef("", dataVolumeCurrent), vmDiskRelease())
+
+	if want := []kustomize.CustomHealthCheck{dataVolumeCurrent}; !reflect.DeepEqual(got.Spec.HealthCheckExprs, want) {
+		t.Fatalf("expected HealthCheckExprs %+v, got %+v", want, got.Spec.HealthCheckExprs)
+	}
+	if got.Spec.WaitStrategy == nil || got.Spec.WaitStrategy.Name != helmv2.WaitStrategyPoller {
+		t.Fatalf("expected WaitStrategy poller, got %+v", got.Spec.WaitStrategy)
+	}
+}
+
+// TestAppDefHelm_HealthCheckExprsRemoved pins the other direction: the API
+// rebuilds the whole spec on every write, so a release left carrying what the
+// definition dropped would differ from one written a moment later.
+func TestAppDefHelm_HealthCheckExprsRemoved(t *testing.T) {
+	hr := vmDiskRelease()
+	hr.Spec.HealthCheckExprs = []kustomize.CustomHealthCheck{dataVolumeCurrent}
+	hr.Spec.WaitStrategy = &helmv2.WaitStrategy{Name: helmv2.WaitStrategyPoller}
+
+	got := reconcileVMInstance(t, vmDiskAppDef(""), hr)
+
+	if len(got.Spec.HealthCheckExprs) != 0 {
+		t.Fatalf("expected HealthCheckExprs removed, got %+v", got.Spec.HealthCheckExprs)
+	}
+	if got.Spec.WaitStrategy != nil {
+		t.Fatalf("expected WaitStrategy removed, got %+v", got.Spec.WaitStrategy)
+	}
+}
+
+// TestAppDefHelm_WaitStrategyWithoutExprsApplied pins that an explicit strategy
+// is carried on its own, not only as the default the expressions imply.
+func TestAppDefHelm_WaitStrategyWithoutExprsApplied(t *testing.T) {
+	got := reconcileVMInstance(t, vmDiskAppDef("legacy"), vmDiskRelease())
+
+	if got.Spec.WaitStrategy == nil || got.Spec.WaitStrategy.Name != helmv2.WaitStrategyLegacy {
+		t.Fatalf("expected WaitStrategy legacy, got %+v", got.Spec.WaitStrategy)
+	}
+	if len(got.Spec.HealthCheckExprs) != 0 {
+		t.Fatalf("expected no HealthCheckExprs, got %+v", got.Spec.HealthCheckExprs)
+	}
+}
+
+// TestAppDefHelm_HealthCheckExprsInSyncSkipsUpdate pins idempotence, like
+// TestAppDefHelm_DisableWaitInSyncSkipsUpdate. A definition read with
+// healthCheckExprs: [] decodes to an empty slice, while a release built without
+// expressions carries none at all; comparing the two as different would
+// rewrite every release of the kind on every reconcile. The fake client drops
+// an empty slice on its JSON round trip, so the objects are handed to
+// updateHelmReleaseChart directly.
+func TestAppDefHelm_HealthCheckExprsInSyncSkipsUpdate(t *testing.T) {
+	cases := []struct {
+		name       string
+		defExprs   []kustomize.CustomHealthCheck
+		hrExprs    []kustomize.CustomHealthCheck
+		hrStrategy *helmv2.WaitStrategy
+	}{
+		{
+			name:       "expressions and poller already set",
+			defExprs:   []kustomize.CustomHealthCheck{dataVolumeCurrent},
+			hrExprs:    []kustomize.CustomHealthCheck{dataVolumeCurrent},
+			hrStrategy: &helmv2.WaitStrategy{Name: helmv2.WaitStrategyPoller},
+		},
+		{
+			name:     "empty on the definition, absent on the release",
+			defExprs: []kustomize.CustomHealthCheck{},
+		},
+		{
+			name:    "absent on the definition, empty on the release",
+			hrExprs: []kustomize.CustomHealthCheck{},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			stored := vmDiskRelease()
+			stored.Spec.HealthCheckExprs = tc.hrExprs
+			stored.Spec.WaitStrategy = tc.hrStrategy
+
+			scheme := newAppDefHelmScheme(t)
+			fakeClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(stored).Build()
+
+			before := &helmv2.HelmRelease{}
+			if err := fakeClient.Get(context.TODO(), types.NamespacedName{Name: stored.Name, Namespace: stored.Namespace}, before); err != nil {
+				t.Fatalf("get HR: %v", err)
+			}
+			hr := before.DeepCopy()
+			hr.Spec.HealthCheckExprs = tc.hrExprs
+
+			r := &ApplicationDefinitionHelmReconciler{Client: fakeClient, Scheme: scheme}
+			if err := r.updateHelmReleaseChart(context.TODO(), hr, vmDiskAppDef("", tc.defExprs...)); err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+
+			after := &helmv2.HelmRelease{}
+			if err := fakeClient.Get(context.TODO(), types.NamespacedName{Name: stored.Name, Namespace: stored.Namespace}, after); err != nil {
+				t.Fatalf("get HR after update: %v", err)
+			}
+			if after.ResourceVersion != before.ResourceVersion {
+				t.Fatalf("release rewritten with nothing to change: %q -> %q", before.ResourceVersion, after.ResourceVersion)
+			}
+		})
+	}
+}
+
+// TestAppDefHelm_HealthCheckExprsLeaveRenderedReleaseAlone pins the scope of
+// the sync. The tenant chart renders an Etcd HelmRelease carrying the same kind
+// labels as one the API builds, and it sets that release's wait gate itself;
+// rewriting it from the definition would strip the chart's gate until the
+// parent's next upgrade put it back. Its chartRef still follows the definition.
+func TestAppDefHelm_HealthCheckExprsLeaveRenderedReleaseAlone(t *testing.T) {
+	chartGate := kustomize.CustomHealthCheck{
+		APIVersion:             "etcd-operator.cozystack.io/v1alpha2",
+		Kind:                   "EtcdCluster",
+		HealthCheckExpressions: kustomize.HealthCheckExpressions{Current: "status.readyMembers == spec.replicas"},
+	}
+	hr := &helmv2.HelmRelease{
+		ObjectMeta: metav1.ObjectMeta{Name: "etcd", Namespace: "tenant-foo", Labels: map[string]string{
+			"apps.cozystack.io/application.kind":  "Etcd",
+			"apps.cozystack.io/application.group": "apps.cozystack.io",
+			"helm.toolkit.fluxcd.io/name":         "tenant-foo",
+		}},
+		Spec: helmv2.HelmReleaseSpec{
+			ChartRef:         &helmv2.CrossNamespaceSourceReference{Kind: "ExternalArtifact", Name: "stale", Namespace: "cozy-system"},
+			ValuesFrom:       expectedValuesFrom(),
+			HealthCheckExprs: []kustomize.CustomHealthCheck{chartGate},
+			WaitStrategy:     &helmv2.WaitStrategy{Name: helmv2.WaitStrategyPoller},
+		},
+	}
+	appDef := &cozyv1alpha1.ApplicationDefinition{
+		ObjectMeta: metav1.ObjectMeta{Name: "etcd"},
+		Spec: cozyv1alpha1.ApplicationDefinitionSpec{
+			Application: cozyv1alpha1.ApplicationDefinitionApplication{Kind: "Etcd"},
+			Release: cozyv1alpha1.ApplicationDefinitionRelease{
+				ChartRef: &helmv2.CrossNamespaceSourceReference{Kind: "ExternalArtifact", Name: "cozystack-etcd-application-default-etcd", Namespace: "cozy-system"},
+			},
+		},
+	}
+
+	got := reconcileVMInstance(t, appDef, hr)
+
+	if got.Spec.ChartRef == nil || got.Spec.ChartRef.Name != "cozystack-etcd-application-default-etcd" {
+		t.Fatalf("expected ChartRef synced from the definition, got %+v", got.Spec.ChartRef)
+	}
+	if want := []kustomize.CustomHealthCheck{chartGate}; !reflect.DeepEqual(got.Spec.HealthCheckExprs, want) {
+		t.Fatalf("expected the chart's HealthCheckExprs %+v kept, got %+v", want, got.Spec.HealthCheckExprs)
+	}
+	if got.Spec.WaitStrategy == nil || got.Spec.WaitStrategy.Name != helmv2.WaitStrategyPoller {
+		t.Fatalf("expected the chart's WaitStrategy poller kept, got %+v", got.Spec.WaitStrategy)
+	}
+}
+
+// TestAppDefHelm_HealthCheckExprsScopedToKind pins the kind label in the
+// selector: a release of another kind must not pick up the VMDisk expressions.
+func TestAppDefHelm_HealthCheckExprsScopedToKind(t *testing.T) {
+	disk := vmDiskRelease()
+	other := vmDiskRelease()
+	other.Name = "harbor-registry"
+	other.Labels["apps.cozystack.io/application.kind"] = "Harbor"
+
+	scheme := newAppDefHelmScheme(t)
+	appDef := vmDiskAppDef("", dataVolumeCurrent)
+	fakeClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(appDef, disk, other).Build()
+
+	r := &ApplicationDefinitionHelmReconciler{Client: fakeClient, Scheme: scheme}
+	if _, err := r.Reconcile(context.TODO(), reconcile.Request{
+		NamespacedName: types.NamespacedName{Name: appDef.Name},
+	}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	gotDisk := &helmv2.HelmRelease{}
+	if err := fakeClient.Get(context.TODO(), types.NamespacedName{Name: disk.Name, Namespace: disk.Namespace}, gotDisk); err != nil {
+		t.Fatalf("get VMDisk HR: %v", err)
+	}
+	if len(gotDisk.Spec.HealthCheckExprs) != 1 {
+		t.Fatalf("expected VMDisk HealthCheckExprs synced, got %+v", gotDisk.Spec.HealthCheckExprs)
+	}
+
+	gotOther := &helmv2.HelmRelease{}
+	if err := fakeClient.Get(context.TODO(), types.NamespacedName{Name: other.Name, Namespace: other.Namespace}, gotOther); err != nil {
+		t.Fatalf("get Harbor HR: %v", err)
+	}
+	if len(gotOther.Spec.HealthCheckExprs) != 0 {
+		t.Fatalf("expected Harbor HealthCheckExprs untouched, got %+v", gotOther.Spec.HealthCheckExprs)
+	}
+	if gotOther.Spec.WaitStrategy != nil {
+		t.Fatalf("expected Harbor WaitStrategy untouched, got %+v", gotOther.Spec.WaitStrategy)
+	}
+}
+
+// TestAppDefHelm_UpdateFailureRequeues pins that a failed write is returned
+// rather than logged and dropped: nothing else re-enqueues the definition for
+// hours, so a release that lost a conflict to helm-controller would keep its
+// old wait until then. The releases after it are still written.
+func TestAppDefHelm_UpdateFailureRequeues(t *testing.T) {
+	first := vmDiskRelease()
+	second := vmDiskRelease()
+	second.Name = "vm-disk-logs"
+
+	failed := ""
+	scheme := newAppDefHelmScheme(t)
+	appDef := vmDiskAppDef("", dataVolumeCurrent)
+	fakeClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(appDef, first, second).
+		WithInterceptorFuncs(interceptor.Funcs{
+			Update: func(ctx context.Context, cl client.WithWatch, obj client.Object, opts ...client.UpdateOption) error {
+				// Fail whichever release is written first, so the assertion
+				// below does not depend on the order List returns them in.
+				if failed == "" {
+					failed = obj.GetName()
+					return apierrors.NewConflict(helmv2.GroupVersion.WithResource("helmreleases").GroupResource(), obj.GetName(), errors.New("the object has been modified"))
+				}
+				return cl.Update(ctx, obj, opts...)
+			},
+		}).Build()
+
+	r := &ApplicationDefinitionHelmReconciler{Client: fakeClient, Scheme: scheme}
+	if _, err := r.Reconcile(context.TODO(), reconcile.Request{
+		NamespacedName: types.NamespacedName{Name: appDef.Name},
+	}); !apierrors.IsConflict(err) {
+		t.Fatalf("expected the conflict returned so the definition is requeued, got %v", err)
+	}
+
+	written := first.Name
+	if failed == first.Name {
+		written = second.Name
+	}
+	got := &helmv2.HelmRelease{}
+	if err := fakeClient.Get(context.TODO(), types.NamespacedName{Name: written, Namespace: "tenant-foo"}, got); err != nil {
+		t.Fatalf("get HR: %v", err)
+	}
+	if len(got.Spec.HealthCheckExprs) != 1 {
+		t.Fatalf("expected %s synced past the failed %s, got %+v", written, failed, got.Spec.HealthCheckExprs)
 	}
 }
