@@ -38,6 +38,10 @@ spec:
         - --cluster-domain={{ $clusterDomain }}
         - --root-tenant={{ .Values.observabilityProxy.rootTenant }}
         - --auth-cache-ttl={{ .Values.observabilityProxy.authCacheTTL }}
+        {{- /* Below the 300s stream idle timeout of a Cilium Gateway, so a
+               published tail that stops sending lines is ended by the proxy,
+               not reset by Envoy. */}}
+        - --tail-idle-timeout=4m30s
         - --metrics-shortterm-store={{ .Values.observabilityProxy.metrics.shorttermStore }}
         - --metrics-longterm-store={{ .Values.observabilityProxy.metrics.longtermStore }}
         - --metrics-shortterm-retention={{ .Values.observabilityProxy.metrics.shorttermRetention }}
