@@ -1368,3 +1368,12 @@ func TestMinioObjectRemover_ReturnsTheServersError(t *testing.T) {
 		t.Fatal("RemoveObject = nil, want the AccessDenied error")
 	}
 }
+
+func (f *fakeS3Bucket) StatObject(_ context.Context, _, key string) (int64, error) {
+	for _, o := range f.objects {
+		if o.Key == key {
+			return o.Size, nil
+		}
+	}
+	return 0, errors.New("not found")
+}
