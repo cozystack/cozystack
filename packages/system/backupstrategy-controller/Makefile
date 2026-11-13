@@ -6,9 +6,9 @@ include ../../../hack/package.mk
 
 # PHONY so a stray file/dir named `image` cannot mark the aggregate up to date
 # and skip both builds.
-.PHONY: image image-backupstrategy-controller image-redis-backup image-backup-http-client
+.PHONY: image image-backupstrategy-controller image-redis-backup image-backup-http-client image-kubernetes-backup
 
-image: image-backupstrategy-controller image-redis-backup image-backup-http-client
+image: image-backupstrategy-controller image-redis-backup image-backup-http-client image-kubernetes-backup
 
 image-backupstrategy-controller:
 	docker buildx build -f images/backupstrategy-controller/Dockerfile ../../.. \
@@ -45,6 +45,17 @@ image-backup-http-client: image-redis-backup
 	IMAGE="$(REGISTRY)/backup-http-client:$(IMAGE_TAG)@$$(yq e '."containerimage.digest"' images/backup-http-client.json -o json -r)" \
 		yq -i '.backupStrategyController.chBackupClientImage = strenv(IMAGE) | .backupStrategyController.rabbitmqBackupClientImage = strenv(IMAGE)' values.yaml
 	rm -f images/backup-http-client.json
+
+# Chained after image-backup-http-client: one `yq -i` writer at a time.
+image-kubernetes-backup: image-backup-http-client
+	docker buildx build -f images/kubernetes-backup/Dockerfile images/kubernetes-backup \
+		$(call image-tags,kubernetes-backup,v$(COZYSTACK_VERSION)) \
+		$(call cache-args,kubernetes-backup) \
+		--metadata-file images/kubernetes-backup.json \
+		$(BUILDX_ARGS)
+	IMAGE="$(REGISTRY)/kubernetes-backup:$(IMAGE_TAG)@$$(yq e '."containerimage.digest"' images/kubernetes-backup.json -o json -r)" \
+		yq -i '.backupStrategyController.kubernetesBackupClientImage = strenv(IMAGE)' values.yaml
+	rm -f images/kubernetes-backup.json
 
 test:
 	helm unittest .
