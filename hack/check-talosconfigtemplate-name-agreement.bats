@@ -167,3 +167,21 @@ assert_agreement() {
   fi
   rm -rf "$TMP"
 }
+
+@test "sysctl additions changes and removal keep Job RBAC and bootstrap references in agreement" {
+  TMP=$(mktemp -d)
+  render_pool "$TMP/r.yaml"
+  baseline=$(job_tct_name "$TMP/r.yaml")
+  render_pool "$TMP/r.yaml" --set-string 'talos.sysctls.user\.max_user_namespaces=11255'
+  assert_agreement "$TMP" "sysctls enabled"
+  enabled=$(job_tct_name "$TMP/r.yaml")
+  [ "$enabled" != "$baseline" ]
+  render_pool "$TMP/r.yaml" --set-string 'talos.sysctls.user\.max_user_namespaces=0'
+  assert_agreement "$TMP" "explicit zero sysctl"
+  [ "$(job_tct_name "$TMP/r.yaml")" != "$enabled" ]
+  [ "$(job_tct_name "$TMP/r.yaml")" != "$baseline" ]
+  render_pool "$TMP/r.yaml" --set-json 'talos.sysctls={}'
+  assert_agreement "$TMP" "sysctls removed"
+  [ "$(job_tct_name "$TMP/r.yaml")" = "$baseline" ]
+  rm -rf "$TMP"
+}
