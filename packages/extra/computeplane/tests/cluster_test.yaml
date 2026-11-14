@@ -280,6 +280,93 @@ tests:
       - notExists:
           path: spec.values.nameOverride
 
+  # kubernetes-nodes drains a worker only once its replacement is up; a pool
+  # without room for one extra VM needs maxUnavailable 1 to finish a rollout,
+  # so the allowlist must forward it.
+  - it: forwards maxUnavailable to the pool chart
+    documentSelector:
+      path: metadata.name
+      value: kubernetes-nodes-computeplane-cluster-md0
+    set:
+      nodeGroups:
+        md0:
+          minReplicas: 1
+          maxReplicas: 3
+          instanceType: u1.large
+          diskSize: 32Gi
+          roles: ["ingress-nginx"]
+          maxUnavailable: 1
+    asserts:
+      - equal:
+          path: spec.values.maxUnavailable
+          value: 1
+
+  # An explicit 0 must reach the pool chart: there it overrides the 1 a GPU
+  # pool gets by default, so dropping it as empty would change the strategy.
+  - it: forwards an explicit maxUnavailable of 0 to the pool chart
+    documentSelector:
+      path: metadata.name
+      value: kubernetes-nodes-computeplane-cluster-md0
+    set:
+      nodeGroups:
+        md0:
+          minReplicas: 1
+          maxReplicas: 3
+          instanceType: u1.large
+          diskSize: 32Gi
+          roles: ["ingress-nginx"]
+          maxUnavailable: 0
+    asserts:
+      - equal:
+          path: spec.values.maxUnavailable
+          value: 0
+
+  - it: forwards the int32 maximum to the pool chart
+    documentSelector:
+      path: metadata.name
+      value: kubernetes-nodes-computeplane-cluster-md0
+    set:
+      nodeGroups:
+        md0:
+          minReplicas: 1
+          maxReplicas: 3
+          instanceType: u1.large
+          diskSize: 32Gi
+          roles: ["ingress-nginx"]
+          maxUnavailable: 2147483647
+    asserts:
+      - equal:
+          path: spec.values.maxUnavailable
+          value: 2147483647
+
+  - it: refuses a maxUnavailable above the int32 range CAPI decodes
+    set:
+      nodeGroups:
+        md0:
+          minReplicas: 1
+          maxReplicas: 3
+          instanceType: u1.large
+          diskSize: 32Gi
+          roles: ["ingress-nginx"]
+          maxUnavailable: 2147483648
+    asserts:
+      - failedTemplate:
+          errorPattern: "maxUnavailable"
+
+  - it: refuses a negative maxUnavailable
+    set:
+      nodeGroups:
+        md0:
+          minReplicas: 1
+          maxReplicas: 3
+          instanceType: u1.large
+          diskSize: 32Gi
+          roles: ["ingress-nginx"]
+          maxUnavailable: -1
+    asserts:
+      - failedTemplate:
+          errorPattern: "maxUnavailable"
+
   # Helm caps a HelmRelease name at 53 chars and each pool renders a 38-char fixed
   # prefix, so a pool key over 15 chars would create a release the apiserver
   # accepts but Flux never reconciles. The render must refuse instead (the same

@@ -67,6 +67,11 @@ func (in *ConfigSpec) DeepCopyInto(out *ConfigSpec) {
 		*out = make([]GPU, len(*in))
 		copy(*out, *in)
 	}
+	if in.MaxUnavailable != nil {
+		in, out := &in.MaxUnavailable, &out.MaxUnavailable
+		*out = new(int)
+		**out = **in
+	}
 	if in.KernelModules != nil {
 		in, out := &in.KernelModules, &out.KernelModules
 		*out = make([]KernelModule, len(*in))
