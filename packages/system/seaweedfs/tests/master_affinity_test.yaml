@@ -31,3 +31,49 @@ tests:
       - equal:
           path: spec.template.spec.affinity.podAntiAffinity.preferredDuringSchedulingIgnoredDuringExecution[0].podAffinityTerm.labelSelector.matchLabels["app.kubernetes.io/component"]
           value: master
+
+  # The preference above lets a master that a drain recreates share a node
+  # with another one for good, since both other nodes of a three-node cluster
+  # already run one. The spread constraint is what keeps them apart. Each
+  # field carries the guarantee. A larger maxSkew or ScheduleAnyway lets the
+  # replacement pile up, and Honor drops the cordoned node from the count.
+  - it: keeps the masters one per node through a drain
+    template: charts/seaweedfs/templates/master/master-statefulset.yaml
+    asserts:
+      - lengthEqual:
+          path: spec.template.spec.topologySpreadConstraints
+          count: 1
+      - equal:
+          path: spec.template.spec.topologySpreadConstraints[0]
+          value:
+            maxSkew: 1
+            topologyKey: kubernetes.io/hostname
+            whenUnsatisfiable: DoNotSchedule
+            nodeTaintsPolicy: Ignore
+            labelSelector:
+              matchLabels:
+                app.kubernetes.io/name: seaweedfs
+                app.kubernetes.io/instance: seaweedfs
+                app.kubernetes.io/component: master
+
+  # A selector that misses the master Pods counts nothing, and the constraint
+  # then spreads nothing while still rendering. Installs run this chart as
+  # <name>-system, so check the selector against the Pods of that release.
+  - it: counts the masters of its own release
+    template: charts/seaweedfs/templates/master/master-statefulset.yaml
+    release:
+      name: seaweedfs-system
+      namespace: tenant-root
+    asserts:
+      - equal:
+          path: spec.template.spec.topologySpreadConstraints[0].labelSelector.matchLabels
+          value:
+            app.kubernetes.io/name: seaweedfs
+            app.kubernetes.io/instance: seaweedfs-system
+            app.kubernetes.io/component: master
+      - isSubset:
+          path: spec.template.metadata.labels
+          content:
+            app.kubernetes.io/name: seaweedfs
+            app.kubernetes.io/instance: seaweedfs-system
+            app.kubernetes.io/component: master
