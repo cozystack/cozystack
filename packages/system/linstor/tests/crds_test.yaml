@@ -1,0 +1,31 @@
+# Blockstor keeps its entire control-plane state in objects of these CRDs.
+# They render from templates/, so an upgrade that stops rendering them, a
+# switch of the backend back to linstor, would delete them and every object
+# with them. helm.sh/resource-policy: keep is what stops that.
+#
+# The kind assertion catches a non-CRD document carrying the annotation,
+# which the annotation assertion alone would accept.
+suite: blockstor CRDs survive a switch back to linstor
+templates:
+  - templates/crds/crds.yaml
+tests:
+  - it: annotates every CRD the blockstor backend renders
+    set:
+      backend: blockstor
+    asserts:
+      - hasDocuments:
+          count: 8
+      - equal:
+          path: kind
+          value: CustomResourceDefinition
+      - equal:
+          path: metadata.annotations["helm.sh/resource-policy"]
+          value: keep
+      - equal:
+          path: metadata.annotations["controller-gen.kubebuilder.io/version"]
+          value: v0.20.1
+
+  - it: renders no CRD under the linstor backend
+    asserts:
+      - hasDocuments:
+          count: 0

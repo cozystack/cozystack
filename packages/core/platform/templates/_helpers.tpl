@@ -11,6 +11,9 @@
 {{- if eq $name "cozystack.networking" -}}
 {{- include "cozystack.platform.networking.variantGuard" (list $root $variant) -}}
 {{- end }}
+{{- if eq $name "cozystack.linstor" -}}
+{{- include "cozystack.platform.storage.backendGuard" $root -}}
+{{- end }}
 ---
 apiVersion: cozystack.io/v1alpha1
 kind: Package
@@ -46,6 +49,31 @@ Call as (list $ <variant about to be rendered>).
 {{- $ack := dig "acknowledgeVariantChange" "" ($root.Values.networking | default dict) | toString -}}
 {{- if and (ne $liveVariant $variant) (ne $ack $variant) -}}
 {{- fail (printf "the live cozystack.networking Package runs variant %q and this render would switch it to %q (bundles.system.variant: %s). The operator then deletes any HelmRelease of that Package the new variant does not install (none if it installs everything the current one does): isp-full to isp-hosted removes Cilium and Kube-OVN and leaves every pod without networking, isp-full to isp-slim removes Kube-OVN. Either restore the previous spec.variant of the cozystack.cozystack-platform Package, or, once the cluster has another CNI or no longer needs the removed one, set networking.acknowledgeVariantChange: %q in its spec.components.platform.values to confirm this exact switch. If the live variant was set by hand and has to stay, add cozystack.networking to bundles.disabledPackages: acknowledging lets this render replace it." $liveVariant $variant $root.Values.bundles.system.variant $variant) -}}
+{{- end -}}
+{{- end -}}
+{{- end }}
+
+{{/*
+Refuses to change the storage backend of a live cozystack.linstor Package.
+The two backends keep their state in different places, so a switch leaves
+linstor-csi talking to a control plane that knows none of the existing
+volumes, and blockstor-satellite's startup cleanup downs the DRBD resources it
+does not consider healthy, whoever owns them. A live Package without a backend
+value runs linstor, the chart default. As with the networking guard, the
+acknowledgement names the target, and the guard is inert where lookup returns
+nothing: helm template, client-side dry-run, first install.
+*/}}
+{{- define "cozystack.platform.storage.backendGuard" -}}
+{{- $live := lookup "cozystack.io/v1alpha1" "Package" "" "cozystack.linstor" -}}
+{{- if $live -}}
+{{- $liveBackend := dig "spec" "components" "linstor" "values" "backend" "linstor" $live | toString -}}
+{{- $backend := include "cozystack.platform.storage.backend" . -}}
+{{- $ack := "" -}}
+{{- if kindIs "map" .Values.storage -}}
+{{- $ack = dig "acknowledgeBackendChange" "" .Values.storage | toString -}}
+{{- end -}}
+{{- if and (ne $liveBackend $backend) (ne $ack $backend) -}}
+{{- fail (printf "the live cozystack.linstor Package runs the %q storage backend and this render would switch it to %q. The volumes this cluster already has are known only to the current backend: after the switch the CSI driver cannot attach, resize, snapshot or delete them. Restore storage.backend: %q, or, if the cluster holds no volumes, set storage.acknowledgeBackendChange: %q to confirm this exact switch." $liveBackend $backend $liveBackend $backend) -}}
 {{- end -}}
 {{- end -}}
 {{- end }}
@@ -226,7 +254,12 @@ cozystack-scheduler (emitted with its own variant in both branches)
 {{include "cozystack.platform.package.full.default" (list "cozystack.cozy-proxy" $root) }}
 {{include "cozystack.platform.package.full.default" (list "cozystack.metallb" $root) }}
 {{include "cozystack.platform.package.default" (list "cozystack.reloader" $root) }}
+{{- if eq (include "cozystack.platform.storage.backend" $root) "blockstor" }}
+{{- $schedulerComponents := dict "linstor-scheduler" (dict "values" (dict "linstor-scheduler" (dict "linstor" (include "cozystack.platform.storage.linstorApiClient" $root | fromYaml)))) -}}
+{{include "cozystack.platform.package" (list "cozystack.linstor-scheduler" "default" $root $schedulerComponents) }}
+{{- else }}
 {{include "cozystack.platform.package.default" (list "cozystack.linstor-scheduler" $root) }}
+{{- end }}
 {{include "cozystack.platform.package.default" (list "cozystack.snapshot-controller" $root) }}
 {{- /* securitygroup-controller maintains membership labels for CiliumNetworkPolicy-backed
        SecurityGroups, so it only makes sense where Cilium runs. Keeping it here with the
@@ -235,6 +268,47 @@ cozystack-scheduler (emitted with its own variant in both branches)
        common-packages and has no cilium.io CRD for the controller to watch. */ -}}
 {{include "cozystack.platform.package.default" (list "cozystack.securitygroup-controller" $root) }}
 {{- end }}
+
+{{- /*
+Resolve the storage backend for the linstor package.
+
+Defaults to `linstor`, which is what every existing cluster runs, and only
+when the key is absent. `blockstor` is experimental and must be asked for
+explicitly. Any value present but not one of the two strings fails the render,
+empty ones included: `default` would map "", false or 0 to linstor, and on a
+blockstor cluster that switches the control plane back. A null is the one
+spelling the template cannot see, because Helm removes a key set to null
+before rendering, so it reads as absent.
+*/ -}}
+{{- define "cozystack.platform.storage.backend" -}}
+{{- $backend := "linstor" -}}
+{{- if hasKey .Values "storage" -}}
+{{- if not (kindIs "map" .Values.storage) -}}
+{{- fail (printf "storage must be a map with a backend key, got %v" .Values.storage) -}}
+{{- end -}}
+{{- if hasKey .Values.storage "backend" -}}
+{{- $backend = .Values.storage.backend -}}
+{{- end -}}
+{{- end -}}
+{{- if not (and (kindIs "string" $backend) (has $backend (list "linstor" "blockstor"))) -}}
+{{- fail (printf "storage.backend must be \"linstor\" or \"blockstor\", got %#v" $backend) -}}
+{{- end -}}
+{{- $backend -}}
+{{- end -}}
+
+{{- /*
+Where the LINSTOR API consumers outside the linstor package (linstor-scheduler,
+linstor-gui) reach the API under the blockstor backend, and with which client
+certificate. Under linstor they keep their own defaults, linstor-controller and
+linstor-client-tls, which piraeus-operator creates and owns. The blockstor
+backend serves the API from blockstor-apiserver and issues the client cert
+itself, so the consumers are pointed there instead of the linstor package
+rendering objects under piraeus's names, which Helm refuses to adopt.
+*/ -}}
+{{- define "cozystack.platform.storage.linstorApiClient" -}}
+endpoint: https://blockstor-apiserver.cozy-linstor.svc:3371
+clientSecret: blockstor-apiserver-client-tls
+{{- end -}}
 
 {{/*
 The block Cilium takes its own addresses from on the kube-ovn variants, the

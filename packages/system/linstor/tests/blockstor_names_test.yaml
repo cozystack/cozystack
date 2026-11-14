@@ -1,0 +1,61 @@
+# piraeus-operator creates and owns Service/linstor-controller and
+# Certificate/linstor-client-tls. Rendering either name from this chart puts
+# it in Helm's create set on a switch to blockstor, Helm refuses to adopt an
+# object it does not own, and the upgrade aborts before anything applies, the
+# LinstorCluster change that would prune piraeus's copies included.
+suite: the blockstor backend renders no name piraeus-operator owns
+templates:
+  - templates/*.yaml
+release:
+  name: linstor
+  namespace: cozy-linstor
+set:
+  backend: blockstor
+tests:
+  - it: renders no linstor-controller Service
+    documentSelector:
+      path: metadata.name
+      value: linstor-controller
+      skipEmptyTemplates: true
+    asserts:
+      - notEqual:
+          path: kind
+          value: Service
+
+  - it: renders no linstor-client-tls Certificate
+    documentSelector:
+      path: metadata.name
+      value: linstor-client-tls
+      skipEmptyTemplates: true
+    asserts:
+      - notEqual:
+          path: kind
+          value: Certificate
+
+  # The apiserver Service is the mTLS listener only. The plain-HTTP listener
+  # on :3370 is for kubectl port-forward to a pod and must not be reachable
+  # through the Service.
+  - it: exposes only the mutual-TLS port on the apiserver Service
+    template: templates/blockstor-apiserver.yaml
+    documentSelector:
+      path: kind
+      value: Service
+    asserts:
+      - equal:
+          path: spec.ports
+          value:
+            - {name: rest-tls, port: 3371, targetPort: 3371}
+
+  - it: serves the apiserver certificate for its own Service only
+    template: templates/blockstor-apiserver-tls.yaml
+    documentSelector:
+      path: metadata.name
+      value: blockstor-apiserver-server
+    asserts:
+      - equal:
+          path: spec.dnsNames
+          value:
+            - blockstor-apiserver
+            - blockstor-apiserver.cozy-linstor
+            - blockstor-apiserver.cozy-linstor.svc
+            - blockstor-apiserver.cozy-linstor.svc.cluster.local

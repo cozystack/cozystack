@@ -1,7 +1,41 @@
+# Which storage control plane this package deploys.
+#
+#   linstor   — the Java linstor-controller driven by piraeus-operator
+#               (the default, and what every existing cluster runs).
+#   blockstor — blockstor's controller/apiserver/satellite, with
+#               piraeus-operator in EXTERNAL mode so it only drives
+#               linstor-csi. EXPERIMENTAL.
+#
+# Both backends serve the same CSI wire shape through the same
+# linstor-csi build, so the StorageClasses (provisioner
+# linstor.csi.linbit.com) are the same under either.
+#
+# blockstor is for new clusters. This chart does not move a cluster that
+# already holds LINSTOR volumes: blockstor adopts them with its own
+# linstor-migrate runbook, which the chart does not run:
+# https://blockstor.org/docs/migration/
+backend: linstor
+
 piraeusServer:
   image:
     repository: ghcr.io/cozystack/cozystack/piraeus-server
     tag: v1.6.0@sha256:70ddd1a66fbc1ea58078f4645fc572ab8e2e189dbb4d9a5f9ca43d5663106483
+
+# Blockstor images are component-versioned: they are released from the
+# blockstor repository and carry ITS version, so a cozystack release
+# must not retag them to the cozystack version.
+blockstorController:
+  image:
+    repository: ghcr.io/cozystack/blockstor-controller
+    tag: 0.2.1@sha256:5346d74e5ffb8e7cd920c9beb784d074bd56ceedc860a54d5feecabe874aebba
+blockstorApiserver:
+  image:
+    repository: ghcr.io/cozystack/blockstor-apiserver
+    tag: 0.2.1@sha256:0e0215243915b9398eb1edea924f7d41f694f25ecb26f820a94dbb8ff9637be9
+blockstorSatellite:
+  image:
+    repository: ghcr.io/cozystack/blockstor-satellite
+    tag: 0.2.1@sha256:76b93b7ad2f8d8a0f3c3b20d321bdcb45a2b112e66c35d7fac3f2e818f3b66db
 # Talos-specific workarounds (disable for generic Linux like Ubuntu/Debian)
 talos:
   enabled: true
@@ -59,6 +93,9 @@ linstor:
     enabled: true
     minutes: 30
     allowCleanup: true
+# linstor-csi is REUSED unchanged — blockstor serves the same CSI
+# wire-shape, so the existing StorageClasses (provisioner
+# linstor.csi.linbit.com) keep working.
 linstorCSI:
   ## Constrain provisioning to the node the scheduler actually picked.
   ##
