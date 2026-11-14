@@ -5,10 +5,10 @@ metadata:
 spec:
   # https://github.com/ionos-cloud/cluster-api-provider-proxmox
   #
-  # Pinned to the v0.7 series: from v0.8 capmox declares the v1beta2 Cluster API
-  # contract, while the core provider shipped here is v1.10.1, which serves
-  # v1beta1. Bump this together with capi-providers-core, not on its own.
-  version: v0.7.7-infraprovider-proxmox
+  # v0.9 declares the v1beta2 Cluster API contract and is built against Cluster
+  # API v1.12, so it needs capi-providers-core >= v1.12 and the in-cluster IPAM
+  # provider >= v1.1.0. Bump this together with those, not on its own.
+  version: v0.9.2-infraprovider-proxmox
   configSecret:
     name: {{ .Values.credentialsSecretName | quote }}
     namespace: {{ .Release.Namespace }}
@@ -22,7 +22,11 @@ spec:
       resources:
         limits:
           cpu: 500m
-          memory: 256Mi
+          # capmox caches every Secret in the cluster once it provisions a
+          # machine; 256Mi was OOMKilled with 1236 Secrets (87 MB as JSON).
+          # Can come back down once a capmox release includes
+          # https://github.com/ionos-cloud/cluster-api-provider-proxmox/pull/958
+          memory: 512Mi
         requests:
           cpu: 10m
           memory: 64Mi

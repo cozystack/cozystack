@@ -30,6 +30,9 @@ tests:
           content: cozystack.capi-operator
       - contains:
           path: spec.variants[0].dependsOn
+          content: cozystack.capi-provider-core
+      - contains:
+          path: spec.variants[0].dependsOn
           content: cozystack.networking
       - notContains:
           path: spec.variants[0].dependsOn
@@ -55,6 +58,9 @@ tests:
       - contains:
           path: spec.variants[0].dependsOn
           content: cozystack.capi-operator
+      - contains:
+          path: spec.variants[0].dependsOn
+          content: cozystack.capi-provider-core
       - notContains:
           path: spec.variants[0].dependsOn
           content: cozystack.capi-provider-infra-proxmox
