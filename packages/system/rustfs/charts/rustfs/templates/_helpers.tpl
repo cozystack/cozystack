@@ -1,0 +1,396 @@
+{{/*
+Expand the name of the chart.
+*/}}
+{{- define "rustfs.name" -}}
+{{- default .Chart.Name .Values.nameOverride | trunc 63 | trimSuffix "-" }}
+{{- end }}
+
+{{/*
+Create a default fully qualified app name.
+We truncate at 63 chars because some Kubernetes name fields are limited to this (by the DNS naming spec).
+If release name contains chart name it will be used as a full name.
+*/}}
+{{- define "rustfs.fullname" -}}
+{{- if .Values.fullnameOverride }}
+{{- .Values.fullnameOverride | trunc 63 | trimSuffix "-" }}
+{{- else }}
+{{- $name := default .Chart.Name .Values.nameOverride }}
+{{- if contains $name .Release.Name }}
+{{- .Release.Name | trunc 63 | trimSuffix "-" }}
+{{- else }}
+{{- printf "%s-%s" .Release.Name $name | trunc 63 | trimSuffix "-" }}
+{{- end }}
+{{- end }}
+{{- end }}
+
+{{/*
+Create chart name and version as used by the chart label.
+*/}}
+{{- define "rustfs.chart" -}}
+{{- printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" | trunc 63 | trimSuffix "-" }}
+{{- end }}
+
+{{/*
+Common labels
+*/}}
+{{- define "rustfs.labels" -}}
+helm.sh/chart: {{ include "rustfs.chart" . }}
+{{ include "rustfs.selectorLabels" . }}
+{{- if .Chart.AppVersion }}
+app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
+{{- end }}
+app.kubernetes.io/managed-by: {{ .Release.Service }}
+{{- end }}
+
+{{/*
+Render extra labels for the main Service resource.
+Merges (in order of increasing precedence):
+  - commonLabels
+  - service.labels
+*/}}
+{{- define "rustfs.serviceLabels" -}}
+{{- $labels := mergeOverwrite (dict) (default (dict) .Values.commonLabels) (default (dict) .Values.service.labels) }}
+{{- if $labels }}
+{{- toYaml $labels }}
+{{- end }}
+{{- end }}
+
+{{/*
+Selector labels
+*/}}
+{{- define "rustfs.selectorLabels" -}}
+app.kubernetes.io/name: {{ include "rustfs.name" . }}
+app.kubernetes.io/instance: {{ .Release.Name }}
+{{- end }}
+
+{{/*
+Create the name of the service account to use
+*/}}
+{{- define "rustfs.serviceAccountName" -}}
+{{- if .Values.serviceAccount.create }}
+{{- default (include "rustfs.fullname" .) .Values.serviceAccount.name }}
+{{- else }}
+{{- default "default" .Values.serviceAccount.name }}
+{{- end }}
+{{- end }}
+
+{{/*
+Return the secret name
+*/}}
+{{- define "rustfs.secretName" -}}
+{{- if .Values.secret.existingSecret }}
+{{- .Values.secret.existingSecret }}
+{{- else }}
+{{- printf "%s-secret" (include "rustfs.fullname" .) }}
+{{- end }}
+{{- end }}
+
+{{/*
+Return the name of the Secret holding the Vault KMS token.
+The token is a credential, so it never belongs in the config ConfigMap. It also lives in
+its own Secret rather than in "rustfs.secretName", which may point at an operator-owned
+existingSecret that the chart must not assume contains a KMS key.
+*/}}
+{{- define "rustfs.kmsSecretName" -}}
+{{- printf "%s-kms-secret" (include "rustfs.fullname" .) }}
+{{- end }}
+
+{{/*
+Return the configured Vault KMS token, or the empty string when KMS is disabled, uses a
+different backend type, or no token was supplied. Callers use emptiness to decide whether
+the KMS Secret is rendered and mounted.
+*/}}
+{{- define "rustfs.kmsVaultToken" -}}
+{{- if and .Values.config.rustfs.kms.enabled (eq .Values.config.rustfs.kms.type "vault") -}}
+{{- .Values.config.rustfs.kms.vault.vault_token | default "" -}}
+{{- end -}}
+{{- end }}
+
+{{/*
+Return image pull secret content
+*/}}
+{{- define "imagePullSecret" }}
+{{- with .Values.imageRegistryCredentials }}
+{{- printf "{\"auths\":{\"%s\":{\"username\":\"%s\",\"password\":\"%s\",\"email\":\"%s\",\"auth\":\"%s\"}}}" .registry .username .password .email (printf "%s:%s" .username .password | b64enc) | b64enc }}
+{{- end }}
+{{- end }}
+
+{{/*
+Return the default imagePullSecret name
+*/}}
+{{- define "rustfs.imagePullSecret.name" -}}
+{{- printf "%s-registry-secret" (include "rustfs.fullname" .) }}
+{{- end }}
+
+{{/*
+Render imagePullSecrets for workloads - appends registry secret
+*/}}
+{{- define "chart.imagePullSecrets" -}}
+{{- $secrets := .Values.imagePullSecrets | default list }}
+{{- if .Values.imageRegistryCredentials.enabled }}
+{{- $secrets = append $secrets (dict "name" (include "rustfs.imagePullSecret.name" .)) }}
+{{- end }}
+{{- toYaml $secrets }}
+{{- end }}
+
+{{/*
+Render annotations for the main Service resource.
+Merges (in order of increasing precedence):
+  - service.traefikAnnotations  (when ingress.className=traefik)
+  - ingress.traefikAnnotations  (when ingress.className=traefik, backwards-compat alias)
+  - service.annotations
+*/}}
+{{- define "rustfs.serviceAnnotations" -}}
+{{- $annotations := dict }}
+{{- if and .Values.mode.distributed.enabled (eq .Values.ingress.className "traefik") }}
+{{- $annotations = merge $annotations (default (dict) .Values.service.traefikAnnotations) }}
+{{- $annotations = merge $annotations (default (dict) .Values.ingress.traefikAnnotations) }}
+{{- end }}
+{{- $annotations = merge $annotations (default (dict) .Values.service.annotations) }}
+{{- if and .Values.mode.distributed.enabled .Values.mtls.enabled (eq .Values.ingress.className "traefik") }}
+{{- $mtls := dict
+  "traefik.ingress.kubernetes.io/service.serversscheme" "https"
+  "traefik.ingress.kubernetes.io/service.serverstransport" (printf "%s-%s-transport@kubernetescrd" .Release.Namespace (include "rustfs.fullname" .))
+}}
+{{- $annotations = merge $annotations $mtls }}
+{{- end }}
+{{- $tls := .Values.tls | default dict -}}
+{{- if and ($tls.enabled | default false) (eq .Values.ingress.className "traefik") -}}
+{{- $_ := set $annotations "traefik.ingress.kubernetes.io/service.serversscheme" "https" -}}
+{{- end -}}
+{{- if $annotations }}
+{{- toYaml $annotations }}
+{{- end }}
+{{- end }}
+
+{{/*
+Render annotations for the headless Service resource.
+Merges:
+  - service.headlessAnnotations
+*/}}
+{{- define "rustfs.headlessServiceAnnotations" -}}
+{{- $annotations := default (dict) .Values.service.headlessAnnotations }}
+{{- if $annotations }}
+{{- toYaml $annotations }}
+{{- end }}
+{{- end }}
+
+{{/*
+Render annotations for the Ingress resource.
+Merges (in order of increasing precedence):
+  - ingress.nginxAnnotations    (when ingress.className=nginx)
+  - ingress.traefikAnnotations  (when ingress.className=traefik)
+  - ingress.customAnnotations   (backwards-compat)
+  - ingress.annotations
+*/}}
+{{- define "rustfs.ingressAnnotations" -}}
+{{- $annotations := dict }}
+{{- if eq .Values.ingress.className "nginx" }}
+{{- $annotations = merge $annotations (default (dict) .Values.ingress.nginxAnnotations) }}
+{{- else if eq .Values.ingress.className "traefik" }}
+{{- $annotations = merge $annotations (default (dict) .Values.ingress.traefikAnnotations) }}
+{{- end }}
+{{- $annotations = merge $annotations (default (dict) .Values.ingress.customAnnotations) }}
+{{- $annotations = merge $annotations (default (dict) .Values.ingress.annotations) }}
+{{- $tls := .Values.tls | default dict -}}
+{{- if and ($tls.enabled | default false) (eq .Values.ingress.className "nginx") -}}
+{{- $_ := set $annotations "nginx.ingress.kubernetes.io/backend-protocol" "HTTPS" -}}
+{{- end -}}
+{{- if $annotations }}
+{{- toYaml $annotations }}
+{{- end }}
+{{- end }}
+
+{{/*
+Resolve the Kubernetes cluster DNS domain (defaults to cluster.local).
+Trims any leading/trailing dots so callers can safely append it after `svc.`,
+falling back to cluster.local when the value is empty or only dots.
+*/}}
+{{- define "rustfs.clusterDomain" -}}
+{{- .Values.clusterDomain | default "cluster.local" | trimAll "." | default "cluster.local" -}}
+{{- end -}}
+
+{{/*
+Return the fully qualified name of a server pool.
+Pool 0 keeps the legacy single-pool name so that existing deployments can be
+expanded in place without renaming their StatefulSet, pods or PVCs.
+Expects a dict with keys "root" (the chart root context) and "index".
+*/}}
+{{- define "rustfs.poolFullname" -}}
+{{- if eq (int .index) 0 -}}
+{{- include "rustfs.fullname" .root -}}
+{{- else -}}
+{{- /* Truncate the base name, not the suffix: the pool index must survive
+       truncation or two long-named pools could collide. */ -}}
+{{- $suffix := printf "-pool%d" (int .index) -}}
+{{- printf "%s%s" (include "rustfs.fullname" .root | trunc (int (sub 63 (len $suffix))) | trimSuffix "-") $suffix -}}
+{{- end -}}
+{{- end }}
+
+{{/*
+Return the number of data drives (PVCs) per pod for a pool.
+When .Values.drivesPerNode is set it applies to every pool. When unset the
+value is inferred per pool from its replica count so that rendered output
+stays identical to the pre-drivesPerNode chart: 4 replicas keep the legacy
+4-drive layout, everything else (16x1 and any new topology) gets one drive.
+Expects a dict with keys "root" (the chart root context) and "replicas".
+*/}}
+{{- define "rustfs.poolDrives" -}}
+{{- if kindIs "invalid" .root.Values.drivesPerNode -}}
+{{- if eq (int .replicas) 4 -}}
+4
+{{- else -}}
+1
+{{- end -}}
+{{- else -}}
+{{- $d := int .root.Values.drivesPerNode -}}
+{{- if lt $d 1 -}}
+{{- fail "drivesPerNode must be >= 1 when set" -}}
+{{- end -}}
+{{- $d -}}
+{{- end -}}
+{{- end }}
+
+{{/*
+Return the normalized list of server pools as JSON.
+With pools disabled this is a single pool built from the top-level
+replicaCount/storageclass values, which keeps all rendered output identical
+to the previous single-pool chart. With pools enabled, each entry of
+pools.list becomes one pool; omitted fields inherit the top-level values.
+Pools are strictly append-only: the index determines the StatefulSet name,
+so entries must never be removed or reordered.
+*/}}
+{{- define "rustfs.pools" -}}
+{{- $pools := list -}}
+{{- if and .Values.pools .Values.pools.enabled -}}
+{{- if not .Values.mode.distributed.enabled -}}
+{{- fail "pools.enabled requires mode.distributed.enabled=true" -}}
+{{- end -}}
+{{- if not .Values.pools.list -}}
+{{- fail "pools.enabled is true but pools.list is empty" -}}
+{{- end -}}
+{{- range $i, $p := .Values.pools.list -}}
+{{- $p = default (dict) $p -}}
+{{- $replicas := int (default $.Values.replicaCount $p.replicaCount) -}}
+{{- if lt $replicas 2 -}}
+{{- fail (printf "pools.list[%d].replicaCount must be >= 2, got %d" $i $replicas) -}}
+{{- end -}}
+{{- $sc := mergeOverwrite (deepCopy $.Values.storageclass) (default (dict) $p.storageclass) -}}
+{{- $drives := int (include "rustfs.poolDrives" (dict "root" $ "replicas" $replicas)) -}}
+{{- $pools = append $pools (dict "index" $i "fullname" (include "rustfs.poolFullname" (dict "root" $ "index" $i)) "replicaCount" $replicas "drives" $drives "storageclass" $sc) -}}
+{{- end -}}
+{{- else -}}
+{{- $drives := int (include "rustfs.poolDrives" (dict "root" $ "replicas" (int .Values.replicaCount))) -}}
+{{- $pools = append $pools (dict "index" 0 "fullname" (include "rustfs.fullname" .) "replicaCount" (int .Values.replicaCount) "drives" $drives "storageclass" .Values.storageclass) -}}
+{{- end -}}
+{{- toJson $pools -}}
+{{- end }}
+
+{{/*
+Render RUSTFS_VOLUMES
+One volume expression per server pool, joined with spaces (the server splits
+RUSTFS_VOLUMES on spaces, one pool per expression).
+*/}}
+{{- define "rustfs.volumes" -}}
+{{- $protocol := "http" -}}
+{{- $tls := .Values.tls | default dict -}}
+{{- if or .Values.mtls.enabled ($tls.enabled | default false) -}}
+  {{- $protocol = "https" -}}
+{{- end -}}
+{{- $headless := printf "%s-headless" (include "rustfs.fullname" .) -}}
+{{- $ns := .Release.Namespace -}}
+{{- $domain := include "rustfs.clusterDomain" . -}}
+{{- $port := .Values.service.endpoint.port | int -}}
+{{- $exprs := list -}}
+{{- range $pool := include "rustfs.pools" . | fromJsonArray -}}
+{{- $n := int $pool.replicaCount -}}
+{{- $d := int $pool.drives -}}
+{{- if gt $d 1 -}}
+{{- $exprs = append $exprs (printf "%s://%s-{0...%d}.%s.%s.svc.%s:%d/data/rustfs{0...%d}" $protocol $pool.fullname (sub $n 1) $headless $ns $domain $port (sub $d 1)) -}}
+{{- else -}}
+{{- $exprs = append $exprs (printf "%s://%s-{0...%d}.%s.%s.svc.%s:%d/data" $protocol $pool.fullname (sub $n 1) $headless $ns $domain $port) -}}
+{{- end -}}
+{{- end -}}
+{{- join " " $exprs -}}
+{{- end }}
+
+{{/*
+Render RUSTFS_SERVER_DOMAINS
+*/}}
+
+{{- define "rustfs.serverDomains" -}}
+{{- $domains := list .Values.config.rustfs.domains -}}
+{{- $headless := printf "%s-headless" (include "rustfs.fullname" .) -}}
+{{- $servicePort := .Values.service.endpoint.port | default 9000 -}}
+{{- range $pool := include "rustfs.pools" . | fromJsonArray -}}
+{{- range $i := until (int $pool.replicaCount) -}}
+  {{- $podDomain := printf "%s-%d.%s:%d" $pool.fullname $i $headless (int $servicePort) -}}
+  {{- $domains = append $domains $podDomain -}}
+{{- end -}}
+{{- end -}}
+{{- join "," $domains -}}
+{{- end -}}
+
+{{/* Render an mTLS probe command
+*/}}
+
+{{- define "rustfs.probeCommand" -}}
+{{- $root := .root -}}
+{{- $endpointPath := .endpointPath -}}
+{{- $endpoint_port := $root.Values.service.endpoint.port | default 9000 -}}
+{{- $console_port := $root.Values.service.console.port | default 9001 -}}
+{{- $args := "-skf" -}}
+
+{{- if and $root.Values.mtls.enabled -}}
+  {{- $args = printf "%s --cert %s --key %s" $args $root.Values.mtls.clientCertPath $root.Values.mtls.clientKeyPath -}}
+{{- end -}}
+- /bin/sh
+- -c
+- |
+  curl {{ $args }} https://127.0.0.1:{{ $endpoint_port }}{{ $endpointPath }} && \
+  curl {{ $args }} https://127.0.0.1:{{ $console_port }}/rustfs/console/health
+{{- end -}}
+
+{{/*
+Render liveness and readiness probe for http and https
+*/}}
+
+{{- define "rustfs.probes" -}}
+{{- $tls := .Values.tls | default dict -}}
+{{- if .Values.livenessProbe.enabled }}
+livenessProbe:
+  {{- if or .Values.mtls.enabled ($tls.enabled | default false) }}
+  tcpSocket:
+    port: {{ .Values.service.endpoint.port | default 9000 }}
+  {{- else }}
+  httpGet:
+    path: /health
+    port: {{ .Values.service.endpoint.port | default 9000 }}
+    scheme: {{ if or .Values.mtls.enabled ($tls.enabled | default false) }}HTTPS{{ else }}HTTP{{ end }}
+  {{- end }}
+  initialDelaySeconds: {{ .Values.livenessProbe.initialDelaySeconds | default 60 }}
+  periodSeconds: {{ .Values.livenessProbe.periodSeconds | default 5 }}
+  timeoutSeconds: {{ .Values.livenessProbe.timeoutSeconds | default 3 }}
+  successThreshold: {{ .Values.livenessProbe.successThreshold | default 1 }}
+  failureThreshold: {{ .Values.livenessProbe.failureThreshold | default 3 }}
+{{- end }}
+
+{{- if .Values.readinessProbe.enabled }}
+readinessProbe:
+  {{- if .Values.mtls.enabled }}
+  exec:
+    command:
+{{ include "rustfs.probeCommand" (dict "root" . "endpointPath" "/health/ready") | nindent 6 }}
+  {{- else }}
+  httpGet:
+    path: /health/ready
+    port: {{ .Values.service.endpoint.port | default 9000 }}
+    scheme: {{ if or .Values.mtls.enabled ($tls.enabled | default false) }}HTTPS{{ else }}HTTP{{ end }}
+  {{- end }}
+  initialDelaySeconds: {{ .Values.readinessProbe.initialDelaySeconds | default 60 }}
+  periodSeconds: {{ .Values.readinessProbe.periodSeconds | default 5 }}
+  timeoutSeconds: {{ .Values.readinessProbe.timeoutSeconds | default 3 }}
+  successThreshold: {{ .Values.readinessProbe.successThreshold | default 1 }}
+  failureThreshold: {{ .Values.readinessProbe.failureThreshold | default 3 }}
+{{- end }}
+{{- end -}}

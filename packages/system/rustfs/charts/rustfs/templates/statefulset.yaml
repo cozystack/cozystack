@@ -1,0 +1,370 @@
+{{- $tls := .Values.tls | default dict -}}
+{{- $tlsEnabled := $tls.enabled | default false -}}
+{{- $logDir := .Values.config.rustfs.obs_log_directory }}
+{{- $logDirEnabled := ne $logDir "" }}
+{{- $poolsEnabled := and .Values.pools .Values.pools.enabled }}
+{{- $generatedVolumes := empty .Values.config.rustfs.volumes }}
+{{- $localEndpointHostAutoInject := empty .Values.secret.existingSecret }}
+{{- with .Values.localEndpointHost }}
+{{- if and (hasKey . "autoInject") (ne .autoInject nil) }}
+{{- if not (kindIs "bool" .autoInject) }}
+{{- fail "localEndpointHost.autoInject must be a boolean or null" }}
+{{- end }}
+{{- $localEndpointHostAutoInject = .autoInject }}
+{{- end }}
+{{- end }}
+{{- $injectLocalEndpointHost := and $generatedVolumes $localEndpointHostAutoInject }}
+{{- range $env := .Values.extraEnv -}}
+{{- $name := default "" $env.name -}}
+{{- if eq $name "RUSTFS_VOLUMES" -}}
+{{- $injectLocalEndpointHost = false -}}
+{{- else if eq $name "RUSTFS_LOCAL_ENDPOINT_HOST" -}}
+{{- $injectLocalEndpointHost = false -}}
+{{- else if eq $name "RUSTFS_STARTUP_TOPOLOGY_WAIT_MODE" -}}
+{{- if hasKey $env "value" -}}
+{{- $mode := lower (trim (toString $env.value)) -}}
+{{- if and (ne $mode "") (ne $mode "auto") (ne $mode "orchestrated") -}}
+{{- $injectLocalEndpointHost = false -}}
+{{- end -}}
+{{- else -}}
+{{- $injectLocalEndpointHost = false -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- if and .Values.mode.distributed.enabled (le (int .Values.replicaCount) 1) -}}
+{{- fail "Distributed mode requires replicaCount >= 2" -}}
+{{- end -}}
+
+{{- if .Values.mode.distributed.enabled }}
+{{- $pools := include "rustfs.pools" . | fromJsonArray }}
+{{- range $pool := $pools }}
+{{- $drivesPerNode := int $pool.drives }}
+{{- /* An empty storageclass.dataStorageSize means the data volumes are supplied
+       through extraVolumes/extraVolumeMounts (for example JBOD hostPath disks),
+       so the chart renders no data PVC templates and no data mounts. */}}
+{{- $dataPvcEnabled := not (empty $pool.storageclass.dataStorageSize) }}
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ $pool.fullname }}
+  namespace: {{ $.Release.Namespace }}
+  labels:
+    {{- include "rustfs.labels" $ | nindent 4 }}
+    {{- if $poolsEnabled }}
+    rustfs.com/pool: {{ $pool.index | quote }}
+    {{- end }}
+    {{- with $.Values.commonLabels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  serviceName: {{ include "rustfs.fullname" $ }}-headless
+  replicas: {{ $pool.replicaCount }}
+  podManagementPolicy: Parallel
+  {{- if gt (int $.Values.minReadySeconds) 0 }}
+  {{- /* A replaced pod reports Ready from its own view before surviving
+         peers have re-dialed its new IP (platform DNS TTL) and re-admitted
+         its drives. Hold the rollout so the next pod is not stopped while
+         survivors still count the previous one as unavailable (#8669). */}}
+  minReadySeconds: {{ int $.Values.minReadySeconds }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "rustfs.selectorLabels" $ | nindent 6 }}
+      {{- if gt (int $pool.index) 0 }}
+      {{- /* Pool 0 keeps the legacy selector: it is immutable on existing
+             StatefulSets and must not change when pools are enabled. */}}
+      rustfs.com/pool: {{ $pool.index | quote }}
+      {{- end }}
+  template:
+    metadata:
+      labels:
+        {{- include "rustfs.selectorLabels" $ | nindent 8 }}
+        {{- if $poolsEnabled }}
+        rustfs.com/pool: {{ $pool.index | quote }}
+        {{- end }}
+        {{- with $.Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- with $.Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      serviceAccountName: {{ include "rustfs.serviceAccountName" $ }}
+      enableServiceLinks: {{ $.Values.enableServiceLinks }}
+      {{- with include "chart.imagePullSecrets" $ }}
+      imagePullSecrets:
+        {{- . | nindent 8 }}
+      {{- end }}
+      {{- if and $.Values.nodeSelector (not $.Values.affinity.nodeAffinity) }}
+      nodeSelector:
+        {{- toYaml $.Values.nodeSelector | nindent 8 }}
+      {{- end }}
+      {{- if $.Values.affinity }}
+      affinity:
+        nodeAffinity:
+        {{- if $.Values.affinity.nodeAffinity }}
+          {{- toYaml $.Values.affinity.nodeAffinity | nindent 10 }}
+        {{- else }}
+          {}
+        {{- end }}
+        {{- if $.Values.affinity.podAntiAffinity.enabled }}
+        podAntiAffinity:
+          {{- if $poolsEnabled }}
+          {{- /* Pool-scoped and PREFERRED, not required: additional pools
+                 must remain schedulable when the cluster has fewer nodes
+                 than total pods. The scheduler still spreads them when
+                 capacity allows. */}}
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchExpressions:
+                    - key: app.kubernetes.io/name
+                      operator: In
+                      values:
+                        - {{ include "rustfs.name" $ }}
+                    - key: rustfs.com/pool
+                      operator: In
+                      values:
+                        - {{ $pool.index | quote }}
+                topologyKey: {{ $.Values.affinity.podAntiAffinity.topologyKey }}
+          {{- else }}
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchExpressions:
+                  - key: app.kubernetes.io/name
+                    operator: In
+                    values:
+                      - {{ include "rustfs.name" $ }}
+              topologyKey: {{ $.Values.affinity.podAntiAffinity.topologyKey }}
+          {{- end }}
+        {{- end }}
+      {{- end }}
+      {{- if $.Values.tolerations }}
+      tolerations:
+        {{- toYaml $.Values.tolerations | nindent 8 }}
+      {{- end }}
+      {{- if and $.Values.topologySpreadConstraints.enabled $.Values.topologySpreadConstraints.constraints }}
+      topologySpreadConstraints:
+        {{- toYaml $.Values.topologySpreadConstraints.constraints | nindent 8 }}
+      {{- end }}
+      priorityClassName: {{ $.Values.priorityClassName }}
+      securityContext:
+        {{- toYaml $.Values.podSecurityContext | nindent 8 }}
+      {{- if or $dataPvcEnabled $logDirEnabled }}
+      initContainers:
+        - name: init-step
+          image: "{{ $.Values.image.initImage.repository }}:{{ $.Values.image.initImage.tag }}"
+          imagePullPolicy: {{ $.Values.image.initImage.pullPolicy }}
+          securityContext:
+            {{- toYaml $.Values.containerSecurityContext | nindent 12 }}
+          {{- if $dataPvcEnabled }}
+          env:
+            - name: DRIVES_PER_NODE
+              value: {{ $drivesPerNode | quote }}
+          {{- end }}
+          command:
+            - sh
+            - -c
+            - |
+              {{- if $dataPvcEnabled }}
+              if [ "$DRIVES_PER_NODE" -gt 1 ]; then
+                for i in $(seq 0 $(($DRIVES_PER_NODE - 1))); do
+                  mkdir -p /data/rustfs$i
+                done
+              else
+                mkdir -p /data
+              fi
+              {{- end }}
+              {{- if $logDirEnabled }}
+              mkdir -p /mnt/rustfs/logs
+              chmod 755 /mnt/rustfs/logs
+              {{- end }}
+          volumeMounts:
+            {{- if $dataPvcEnabled }}
+            {{- if gt $drivesPerNode 1 }}
+            {{- range $i := until $drivesPerNode }}
+            - name: data-rustfs-{{ $i }}
+              mountPath: /data/rustfs{{ $i }}
+            {{- end }}
+            {{- else }}
+            - name: data
+              mountPath: /data
+            {{- end }}
+            {{- end }}
+            {{- if $logDirEnabled }}
+            - name: logs
+              mountPath: /mnt/rustfs
+            {{- end }}
+      {{- end }}
+      containers:
+        - name: {{ $.Chart.Name }}
+          image: "{{ $.Values.image.rustfs.repository }}:{{ $.Values.image.rustfs.tag | default $.Chart.AppVersion }}"
+          command: ["/usr/bin/rustfs"]
+          imagePullPolicy: {{ $.Values.image.rustfs.pullPolicy }}
+          securityContext:
+            {{- toYaml $.Values.containerSecurityContext | nindent 12 }}
+          ports:
+            - name: endpoint
+              containerPort: {{ $.Values.service.endpoint.port }}
+            - name: console
+              containerPort: {{ $.Values.service.console.port }}
+          {{- if or $injectLocalEndpointHost (not (empty $.Values.extraEnv)) }}
+          env:
+            {{- if $injectLocalEndpointHost }}
+            - name: RUSTFS_CHART_POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: RUSTFS_LOCAL_ENDPOINT_HOST
+              value: {{ printf "$(RUSTFS_CHART_POD_NAME).%s-headless.%s.svc.%s" (include "rustfs.fullname" $) $.Release.Namespace (include "rustfs.clusterDomain" $) | quote }}
+            {{- end }}
+            {{- with $.Values.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          {{- end }}
+          envFrom:
+            - configMapRef:
+                name: {{ include "rustfs.fullname" $ }}-config
+            - secretRef:
+                name: {{ include "rustfs.secretName" $ }}
+            {{- if include "rustfs.kmsVaultToken" $ }}
+            - secretRef:
+                name: {{ include "rustfs.kmsSecretName" $ }}
+            {{- end }}
+          resources:
+            {{- toYaml $.Values.resources | nindent 12 }}
+          {{- include "rustfs.probes" $ | nindent 10 }}
+          volumeMounts:
+            {{- if or $.Values.mtls.enabled $tlsEnabled }}
+            - name: tls-material
+              mountPath: /opt/tls
+              readOnly: true
+            {{- end }}
+            {{- with $.Values.extraVolumeMounts }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+            {{- if $logDirEnabled }}
+            - name: logs
+              mountPath: {{ $logDir }}
+              subPath: logs
+            {{- end }}
+            {{- if $dataPvcEnabled }}
+            {{- if gt $drivesPerNode 1 }}
+            {{- range $i := until $drivesPerNode }}
+            - name: data-rustfs-{{ $i }}
+              mountPath: /data/rustfs{{ $i }}
+            {{- end }}
+            {{- else }}
+            - name: data
+              mountPath: /data
+            {{- end }}
+            {{- end }}
+      {{- if or $.Values.mtls.enabled $tlsEnabled $.Values.extraVolumes }}
+      volumes:
+        {{- if or $.Values.mtls.enabled $tlsEnabled }}
+        - name: tls-material
+          projected:
+            defaultMode: 0440
+            sources:
+              - secret:
+                  name: {{ if $.Values.mtls.enabled }}{{ include "rustfs.fullname" $ }}-server-tls{{ else }}{{ required "tls.existingSecret is required when tls.enabled=true" $tls.existingSecret }}{{ end }}
+                  items:
+                    - key: tls.crt
+                      path: rustfs_cert.pem
+                    - key: tls.key
+                      path: rustfs_key.pem
+                    {{- if $.Values.mtls.enabled }}
+                    - key: ca.crt
+                      path: ca.crt
+                    {{- end }}
+              {{- if $.Values.mtls.enabled }}
+              - secret:
+                  name: {{ include "rustfs.fullname" $ }}-client-tls
+                  items:
+                    - key: tls.crt
+                      path: client_cert.pem
+                    - key: tls.key
+                      path: client_key.pem
+                    - key: ca.crt
+                      path: client_ca.crt
+              {{- end }}
+              {{- if and $tlsEnabled $tls.trustSecret }}
+              - secret:
+                  name: {{ $tls.trustSecret }}
+                  items:
+                    - key: ca.crt
+                      path: public.crt
+              {{- end }}
+        {{- end }}
+        {{- with $.Values.extraVolumes }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- end }}
+  {{- if or $logDirEnabled $dataPvcEnabled }}
+  volumeClaimTemplates:
+    {{- if $logDirEnabled }}
+    - apiVersion: v1
+      kind: PersistentVolumeClaim
+      metadata:
+        name: logs
+        labels:
+          {{- toYaml $.Values.commonLabels | nindent 10 }}
+        {{- $logAnn := (default (dict) $pool.storageclass.pvcAnnotations).logs | default (dict) -}}
+        {{- if gt (len $logAnn) 0 }}
+        annotations:
+          {{- toYaml $logAnn | nindent 10 }}
+        {{- end }}
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        storageClassName: {{ $pool.storageclass.name }}
+        resources:
+          requests:
+            storage: {{ $pool.storageclass.logStorageSize }}
+    {{- end }}
+    {{- if $dataPvcEnabled }}
+    {{- if gt $drivesPerNode 1 }}
+    {{- range $i := until $drivesPerNode }}
+    - apiVersion: v1
+      kind: PersistentVolumeClaim
+      metadata:
+        name: data-rustfs-{{ $i }}
+        labels:
+          {{- toYaml $.Values.commonLabels | nindent 10 }}
+        {{- $dataAnn := (default (dict) $pool.storageclass.pvcAnnotations).data | default (dict) -}}
+        {{- if gt (len $dataAnn) 0 }}
+        annotations:
+          {{- toYaml $dataAnn | nindent 10 }}
+        {{- end }}
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        storageClassName: {{ $pool.storageclass.name }}
+        resources:
+          requests:
+            storage: {{ $pool.storageclass.dataStorageSize }}
+    {{- end }}
+    {{- else }}
+    - apiVersion: v1
+      kind: PersistentVolumeClaim
+      metadata:
+        name: data
+        labels:
+          {{- toYaml $.Values.commonLabels | nindent 10 }}
+        {{- $dataAnn := (default (dict) $pool.storageclass.pvcAnnotations).data | default (dict) -}}
+        {{- if gt (len $dataAnn) 0 }}
+        annotations:
+          {{- toYaml $dataAnn | nindent 10 }}
+        {{- end }}
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        storageClassName: {{ $pool.storageclass.name }}
+        resources:
+          requests:
+            storage: {{ $pool.storageclass.dataStorageSize }}
+    {{- end }}
+    {{- end }}
+  {{- end }}
+{{- end }}
+{{- end }}

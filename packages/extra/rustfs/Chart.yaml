@@ -1,0 +1,7 @@
+apiVersion: v2
+name: rustfs
+description: RustFS
+icon: /logos/rustfs.svg
+type: application
+version: 0.0.0 # Placeholder, the actual version will be automatically set during the build process
+appVersion: "1.0.5"

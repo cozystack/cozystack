@@ -1,0 +1,211 @@
+{{- $tls := .Values.tls | default dict -}}
+{{- $tlsEnabled := $tls.enabled | default false -}}
+{{- $logDir := .Values.config.rustfs.obs_log_directory }}
+{{- $logDirEnabled := ne $logDir "" }}
+{{- /* With an empty storageclass.dataStorageSize and no existingClaim.dataClaim,
+       the data volume is supplied through extraVolumes/extraVolumeMounts. */}}
+{{- $dataVolumeEnabled := or .Values.mode.standalone.existingClaim.dataClaim (not (empty .Values.storageclass.dataStorageSize)) }}
+
+{{- if .Values.mode.standalone.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "rustfs.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "rustfs.labels" . | nindent 4 }}
+    {{- with .Values.commonLabels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  replicas: {{ min 1 .Values.replicaCount }}
+  {{- with .Values.mode.standalone.strategy }}
+  {{- $type := default "RollingUpdate" .type }}
+  strategy:
+    type: {{ $type }}
+    {{- if and (eq $type "RollingUpdate") .rollingUpdate }}
+    rollingUpdate:
+      {{- toYaml .rollingUpdate | nindent 6 }}
+    {{- end }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "rustfs.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "rustfs.selectorLabels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      serviceAccountName: {{ include "rustfs.serviceAccountName" . }}
+      {{- with include "chart.imagePullSecrets" . }}
+      imagePullSecrets:
+        {{- . | nindent 8 }}
+      {{- end }}
+      {{- if and .Values.nodeSelector (not .Values.affinity.nodeAffinity) }}
+      nodeSelector:
+        {{- toYaml .Values.nodeSelector | nindent 8 }}
+      {{- end }}
+      {{- if .Values.affinity }}
+      affinity:
+        {{- if .Values.affinity.nodeAffinity }}
+        nodeAffinity:
+        {{- toYaml .Values.affinity.nodeAffinity | nindent 10 }}
+        {{- if .Values.affinity.podAntiAffinity.enabled }}
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchExpressions:
+                  - key: app.kubernetes.io/name
+                    operator: In
+                    values:
+                      - {{ include "rustfs.name" . }}
+              topologyKey: {{ .Values.affinity.podAntiAffinity.topologyKey }}
+        {{- end }}
+        {{- end }}
+      {{- end }}
+      {{- if .Values.tolerations }}
+      tolerations:
+        {{- toYaml .Values.tolerations | nindent 8 }}
+      {{- end }}
+      priorityClassName: {{ .Values.priorityClassName }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      {{- if or $dataVolumeEnabled $logDirEnabled }}
+      initContainers:
+        - name: init-step
+          image: "{{ .Values.image.initImage.repository }}:{{ .Values.image.initImage.tag }}"
+          imagePullPolicy: {{ .Values.image.initImage.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.containerSecurityContext | nindent 12 }}
+          command:
+            - sh
+            - -c
+            - |
+              {{- if $dataVolumeEnabled }}
+              mkdir -p /data
+              {{- end }}
+              {{- if $logDirEnabled }}
+              mkdir -p /mnt/rustfs/logs
+              chmod 755 /mnt/rustfs/logs
+              {{- end }}
+          volumeMounts:
+            {{- if $dataVolumeEnabled }}
+            - name: data
+              mountPath: /data
+            {{- end }}
+            {{- if $logDirEnabled }}
+            - name: logs
+              mountPath: /mnt/rustfs
+            {{- end }}
+      {{- end }}
+      containers:
+        - name: {{ .Chart.Name }}
+          image: "{{ .Values.image.rustfs.repository }}:{{ .Values.image.rustfs.tag | default .Chart.AppVersion }}"
+          command: ["/usr/bin/rustfs"]
+          imagePullPolicy: {{ .Values.image.rustfs.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.containerSecurityContext | nindent 12 }}
+          ports:
+            - name: endpoint
+              containerPort: {{ .Values.service.endpoint.port }}
+            - name: console
+              containerPort: {{ .Values.service.console.port }}
+          {{- with .Values.extraEnv }}
+          env:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          envFrom:
+            - configMapRef:
+                name: {{ include "rustfs.fullname" . }}-config
+            - secretRef:
+                name: {{ include "rustfs.secretName" . }}
+            {{- if include "rustfs.kmsVaultToken" . }}
+            - secretRef:
+                name: {{ include "rustfs.kmsSecretName" . }}
+            {{- end }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          {{- include "rustfs.probes" . | nindent 10 }}
+          volumeMounts:
+            {{- if or .Values.mtls.enabled $tlsEnabled }}
+            - name: tls-material
+              mountPath: /opt/tls
+              readOnly: true
+            {{- end }}
+            {{- with .Values.extraVolumeMounts }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+            {{- if $logDirEnabled }}
+            - name: logs
+              mountPath: {{ $logDir }}
+              subPath: logs
+            {{- end }}
+            {{- if $dataVolumeEnabled }}
+            - name: data
+              mountPath: /data
+            {{- end }}
+      volumes:
+      {{- with .Values.extraVolumes }}
+      {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- if or .Values.mtls.enabled $tlsEnabled }}
+        - name: tls-material
+          projected:
+            defaultMode: 0440
+            sources:
+              - secret:
+                  name: {{ if .Values.mtls.enabled }}{{ include "rustfs.fullname" . }}-server-tls{{ else }}{{ required "tls.existingSecret is required when tls.enabled=true" $tls.existingSecret }}{{ end }}
+                  items:
+                    - key: tls.crt
+                      path: rustfs_cert.pem
+                    - key: tls.key
+                      path: rustfs_key.pem
+                    {{- if .Values.mtls.enabled }}
+                    - key: ca.crt
+                      path: ca.crt
+                    {{- end }}
+              {{- if .Values.mtls.enabled }}
+              - secret:
+                  name: {{ include "rustfs.fullname" . }}-client-tls
+                  items:
+                    - key: tls.crt
+                      path: client_cert.pem
+                    - key: tls.key
+                      path: client_key.pem
+                    - key: ca.crt
+                      path: client_ca.crt
+              {{- end }}
+              {{- if and $tlsEnabled $tls.trustSecret }}
+              - secret:
+                  name: {{ $tls.trustSecret }}
+                  items:
+                    - key: ca.crt
+                      path: public.crt
+              {{- end }}
+      {{- end }}
+      {{- if $logDirEnabled }}
+        - name: logs
+          persistentVolumeClaim:
+            {{- if .Values.mode.standalone.existingClaim.logsClaim }}
+            claimName: {{ .Values.mode.standalone.existingClaim.logsClaim }}
+            {{- else }}
+            claimName: {{ include "rustfs.fullname" $ }}-logs
+            {{- end }}
+      {{- end }}
+      {{- if $dataVolumeEnabled }}
+        - name: data
+          persistentVolumeClaim:
+            {{- if .Values.mode.standalone.existingClaim.dataClaim }}
+            claimName: {{ .Values.mode.standalone.existingClaim.dataClaim }}
+            {{- else }}
+            claimName: {{ include "rustfs.fullname" $ }}-data
+            {{- end }}
+      {{- end }}
+{{- end }}
