@@ -1,0 +1,29 @@
+---
+apiVersion: cozystack.io/v1alpha1
+kind: PackageSource
+metadata:
+  name: cozystack.opencost
+spec:
+  sourceRef:
+    kind: OCIRepository
+    name: cozystack-packages
+    namespace: cozy-system
+    path: /
+  variants:
+  - name: default
+    # Install-order dependencies only. victoria-metrics-operator provides the
+    # VMServiceScrape CRD the chart ships. OpenCost reads from the tenant-root
+    # vmselect at runtime, which is not a package and so cannot be listed here.
+    #
+    # OpenCost is OPTIONAL (enabled via bundles.enabledPackages) and must never
+    # appear in a default package's dependsOn, or the platform HelmRelease would
+    # stay DependenciesNotReady whenever it is not enabled.
+    dependsOn:
+    - cozystack.networking
+    - cozystack.victoria-metrics-operator
+    components:
+    - name: opencost
+      path: system/opencost
+      install:
+        namespace: cozy-opencost
+        releaseName: opencost
