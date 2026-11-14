@@ -1,0 +1,35 @@
+grafana:
+  apiVersion: grafana.integreatly.org/v1beta1
+  kind: Grafana
+  metadata: {name: grafana, namespace: tenant-root, uid: grafana-uid, generation: 3}
+  spec:
+    deployment:
+      spec:
+        template:
+          metadata:
+            annotations: {monitoring.cozystack.io/grafana-spec-hash: replaced-by-rendered-hash}
+  status: {stage: complete, stageStatus: success}
+deployment:
+  apiVersion: apps/v1
+  kind: Deployment
+  metadata:
+    name: grafana-deployment
+    namespace: tenant-root
+    uid: deployment-uid
+    generation: 7
+    ownerReferences:
+      - {apiVersion: grafana.integreatly.org/v1beta1, kind: Grafana, name: grafana, uid: grafana-uid, controller: true}
+  spec:
+    replicas: 2
+    template:
+      metadata:
+        annotations: {monitoring.cozystack.io/grafana-spec-hash: replaced-by-rendered-hash}
+  status:
+    observedGeneration: 7
+    replicas: 2
+    updatedReplicas: 2
+    readyReplicas: 2
+    availableReplicas: 2
+    conditions:
+      - {type: Available, status: "True"}
+      - {type: Progressing, status: "True", reason: NewReplicaSetAvailable}

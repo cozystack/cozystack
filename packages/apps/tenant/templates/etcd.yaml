@@ -64,6 +64,29 @@ spec:
       retryInterval: 30s
     remediation:
       retries: -1
+  # The operator can recover quorum loss, but stops at BootstrapFailed and
+  # DeadlineExceeded until intervention. Do not mask these terminal states
+  # with an inProgress predicate: Flux evaluates it before failed.
+  # Fresh conditions and full membership are required; a paused (replicas=0)
+  # cluster cannot serve tenant control planes and waits until the timeout.
+  waitStrategy:
+    name: poller
+  healthCheckExprs:
+    - apiVersion: etcd-operator.cozystack.io/v1alpha2
+      kind: EtcdCluster
+      failed: >-
+        spec.replicas > 0 && has(status.conditions) && status.conditions.exists(e,
+          e.type == 'Available' && e.status == 'False' &&
+          has(e.observedGeneration) && e.observedGeneration == metadata.generation &&
+          e.reason in ['BootstrapFailed', 'DeadlineExceeded'])
+      current: >-
+        spec.replicas > 0 && has(status.readyMembers) && status.readyMembers == spec.replicas &&
+        has(status.conditions) && status.conditions.exists(e,
+          e.type == 'Available' && e.status == 'True' &&
+          has(e.observedGeneration) && e.observedGeneration == metadata.generation) &&
+        status.conditions.exists(e,
+          e.type == 'Progressing' && e.status == 'False' && e.reason == 'Reconciled' &&
+          has(e.observedGeneration) && e.observedGeneration == metadata.generation)
   valuesFrom:
   - kind: Secret
     name: cozystack-values
