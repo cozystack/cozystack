@@ -52,6 +52,17 @@ const (
 	// whenever it is below the chart quota, without the controller fighting Flux
 	// over the chart-owned object.
 	allocatedQuotaName = "tenant-quota-allocated"
+	// chartLimitRangeName is the LimitRange the tenant chart renders next to
+	// chartQuotaName, giving containers default requests and limits. The chart
+	// renders both only for a tenant that declares resourceQuotas.
+	chartLimitRangeName = "tenant-range-limits"
+	// allocatedLimitRangeName is the controller-owned copy of the pool root's
+	// chart LimitRange, written into every unbounded pool member. Those members
+	// render no chart LimitRange, yet carry an allocated quota; without
+	// container defaults, any pod omitting a limit the quota bounds is rejected
+	// at admission. A distinct name keeps the copy from colliding with the
+	// chart-owned object if the member later declares its own quota.
+	allocatedLimitRangeName = "tenant-range-limits-allocated"
 	// managedByLabel marks the controller-owned ResourceQuotas so they can be
 	// listed and garbage-collected.
 	managedByLabel = "quota.cozystack.io/managed-by"
@@ -102,6 +113,9 @@ func (r *Reconciler) Reconcile(ctx context.Context, _ ctrl.Request) (ctrl.Result
 	pools := ComputePools(tenants)
 
 	desired := map[string]corev1.ResourceList{}
+	// limitRangeSource maps each unbounded pool member whose quota bounds a
+	// compute limit to the pool root whose chart LimitRange it must inherit.
+	limitRangeSource := map[string]string{}
 	for _, p := range pools {
 		if over := p.Overcommitted(); len(over) > 0 {
 			logger.Info("tenant quota pool is overcommitted by sub-tenant carve-outs", "pool", p.Root, "overcommit", over)
@@ -120,6 +134,9 @@ func (r *Reconciler) Reconcile(ctx context.Context, _ ctrl.Request) (ctrl.Result
 		for _, ns := range p.Members {
 			if existing[ns] {
 				desired[ns] = buffered.EnforcedHard(ns, usedByNS)
+				if ns != p.Root && boundsComputeLimits(desired[ns]) {
+					limitRangeSource[ns] = p.Root
+				}
 			}
 		}
 	}
@@ -132,6 +149,22 @@ func (r *Reconciler) Reconcile(ctx context.Context, _ ctrl.Request) (ctrl.Result
 	}
 	if err := r.gcAllocatedQuotas(ctx, desired); err != nil {
 		logger.Error(err, "failed to garbage-collect stale allocated quotas")
+	}
+
+	written := map[string]bool{}
+	for ns, root := range limitRangeSource {
+		ok, err := r.upsertAllocatedLimitRange(ctx, ns, root)
+		if err != nil {
+			logger.Error(err, "failed to apply allocated limit range", "namespace", ns, "poolRoot", root)
+		}
+		// Keep the existing copy on a transient error rather than dropping the
+		// defaults the namespace's pods rely on.
+		if ok || err != nil {
+			written[ns] = true
+		}
+	}
+	if err := r.gcAllocatedLimitRanges(ctx, written); err != nil {
+		logger.Error(err, "failed to garbage-collect stale allocated limit ranges")
 	}
 
 	return ctrl.Result{RequeueAfter: resyncInterval}, nil
@@ -224,6 +257,50 @@ func (r *Reconciler) gcAllocatedQuotas(ctx context.Context, desired map[string]c
 	return nil
 }
 
+// upsertAllocatedLimitRange copies the pool root's chart LimitRange into an
+// unbounded member namespace. It reports false, without error, when the root
+// has no chart LimitRange to copy.
+func (r *Reconciler) upsertAllocatedLimitRange(ctx context.Context, namespace, poolRoot string) (bool, error) {
+	source := &corev1.LimitRange{}
+	if err := r.Get(ctx, types.NamespacedName{Namespace: poolRoot, Name: chartLimitRangeName}, source); err != nil {
+		if apierrors.IsNotFound(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	lr := &corev1.LimitRange{ObjectMeta: metav1.ObjectMeta{Name: allocatedLimitRangeName, Namespace: namespace}}
+	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, lr, func() error {
+		if lr.Labels == nil {
+			lr.Labels = map[string]string{}
+		}
+		lr.Labels[managedByLabel] = managedByValue
+		lr.Labels["internal.cozystack.io/managed-by-cozystack"] = ""
+		lr.Spec = *source.Spec.DeepCopy()
+		return nil
+	})
+	return err == nil, err
+}
+
+// gcAllocatedLimitRanges deletes controller-owned LimitRanges in namespaces
+// that are no longer unbounded pool members (e.g. the tenant gained its own
+// quota and now renders the chart LimitRange, or was deleted).
+func (r *Reconciler) gcAllocatedLimitRanges(ctx context.Context, keep map[string]bool) error {
+	managed := &corev1.LimitRangeList{}
+	if err := r.List(ctx, managed, client.MatchingLabels{managedByLabel: managedByValue}); err != nil {
+		return err
+	}
+	for i := range managed.Items {
+		m := &managed.Items[i]
+		if keep[m.Namespace] {
+			continue
+		}
+		if err := r.Delete(ctx, m); err != nil && !apierrors.IsNotFound(err) {
+			return err
+		}
+	}
+	return nil
+}
+
 func (r *Reconciler) recordOvercommit(ctx context.Context, rootNamespace string, over corev1.ResourceList) {
 	if r.Recorder == nil {
 		return
@@ -237,8 +314,8 @@ func (r *Reconciler) recordOvercommit(ctx context.Context, rootNamespace string,
 }
 
 // SetupWithManager wires the controller. Every relevant change (a tenant
-// HelmRelease, a namespace, or a tenant ResourceQuota whose usage moved)
-// coalesces into one full-tree sweep.
+// HelmRelease, a namespace, a tenant ResourceQuota whose usage moved, or a
+// tenant LimitRange) coalesces into one full-tree sweep.
 func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 	toSweep := handler.EnqueueRequestsFromMapFunc(func(context.Context, client.Object) []reconcile.Request {
 		return []reconcile.Request{sweepKey}
@@ -249,11 +326,15 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 	tenantQuotas := predicate.NewPredicateFuncs(func(o client.Object) bool {
 		return o.GetName() == chartQuotaName || o.GetName() == allocatedQuotaName
 	})
+	tenantLimitRanges := predicate.NewPredicateFuncs(func(o client.Object) bool {
+		return o.GetName() == chartLimitRangeName || o.GetName() == allocatedLimitRangeName
+	})
 	return ctrl.NewControllerManagedBy(mgr).
 		Named("tenantquota-controller").
 		Watches(&helmv2.HelmRelease{}, toSweep, builder.WithPredicates(tenantReleases)).
 		Watches(&corev1.Namespace{}, toSweep).
 		Watches(&corev1.ResourceQuota{}, toSweep, builder.WithPredicates(tenantQuotas)).
+		Watches(&corev1.LimitRange{}, toSweep, builder.WithPredicates(tenantLimitRanges)).
 		Complete(r)
 }
 
@@ -269,6 +350,18 @@ func ownedNamespace(hrNamespace, appName string) string {
 	default:
 		return hrNamespace + "-" + appName
 	}
+}
+
+// boundsComputeLimits reports whether a quota bounds limits.cpu or
+// limits.memory, the only case in which admission rejects a container that
+// omits a limit. The chart renders its LimitRange under any non-empty
+// resourceQuotas, so the root may carry one under a quota that bounds no
+// compute at all; copying it then would impose default limits the quota
+// never asked for.
+func boundsComputeLimits(hard corev1.ResourceList) bool {
+	_, cpu := hard[corev1.ResourceLimitsCPU]
+	_, memory := hard[corev1.ResourceLimitsMemory]
+	return cpu || memory
 }
 
 // maxResourceList returns the per-resource maximum of a and b.
