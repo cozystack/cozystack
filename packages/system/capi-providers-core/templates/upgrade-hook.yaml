@@ -1,0 +1,151 @@
+{{- $bridge := required "intermediate provider version is missing" (.Files.Get "files/bridge-version" | trim) -}}
+{{- $name := printf "%s-upgrade" .Release.Name -}}
+{{- $timeout := 480 -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $name }}
+  annotations:
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-weight: "-20"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+data:
+  upgrade-providers.sh: |
+    {{- required "provider upgrade script is missing" (.Files.Get "files/upgrade-providers.sh") | nindent 4 }}
+  kubeconfig: |
+    apiVersion: v1
+    kind: Config
+    current-context: capi-upgrade
+    clusters:
+      - name: in-cluster
+        cluster:
+          server: https://kubernetes.default.svc
+          certificate-authority: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+    contexts:
+      - name: capi-upgrade
+        context:
+          cluster: in-cluster
+          user: upgrade
+    users:
+      - name: upgrade
+        user:
+          tokenFile: /var/run/secrets/kubernetes.io/serviceaccount/token
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ $name }}
+  annotations:
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-weight: "-10"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $name }}
+  annotations:
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-weight: "-10"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+rules:
+  - apiGroups: [operator.cluster.x-k8s.io]
+    resources: [coreproviders]
+    resourceNames: [cluster-api]
+    verbs: [get, patch]
+  - apiGroups: [operator.cluster.x-k8s.io]
+    resources: [bootstrapproviders]
+    resourceNames: [kubeadm]
+    verbs: [get, patch]
+  - apiGroups: [apps]
+    resources: [deployments]
+    resourceNames: [capi-controller-manager, capi-kubeadm-bootstrap-controller-manager]
+    verbs: [get]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $name }}
+  annotations:
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-weight: "-10"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ $name }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ $name }}
+    namespace: {{ .Release.Namespace | quote }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ $name }}
+  annotations:
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-weight: "0"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: {{ add $timeout 60 }}
+  template:
+    metadata:
+      labels:
+        policy.cozystack.io/allow-to-apiserver: "true"
+    spec:
+      serviceAccountName: {{ $name }}
+      restartPolicy: Never
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: upgrade
+          image: {{ .Values.upgrade.image | quote }}
+          command: [bash, /scripts/upgrade-providers.sh]
+          env:
+            - name: HOME
+              value: /tmp
+            - name: KUBECONFIG
+              value: /scripts/kubeconfig
+            - name: KUBE_CONTEXT
+              value: capi-upgrade
+            - name: NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: BRIDGE_VERSION
+              value: {{ $bridge | quote }}
+            - name: TARGET_VERSION
+              value: {{ .Chart.AppVersion | quote }}
+            - name: CAPI_UPGRADE_TIMEOUT_SECONDS
+              value: {{ $timeout | quote }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          resources:
+            requests:
+              cpu: 10m
+              memory: 64Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+          volumeMounts:
+            - name: scripts
+              mountPath: /scripts
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: scripts
+          configMap:
+            name: {{ $name }}
+        - name: tmp
+          emptyDir: {}

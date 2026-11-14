@@ -1,0 +1,30 @@
+--- a/charts/cluster-api-operator/templates/core.yaml
++++ b/charts/cluster-api-operator/templates/core.yaml
+@@ -32,1 +32,1 @@
+-{{- if or $coreVersion $.Values.configSecret.name $core.manager $core.deployment (($core).configSecret).name }}
++{{- if or $coreVersion $.Values.configSecret.name $core.manager $core.deployment (($core).configSecret).name $core.fetchConfig $core.manifestPatches $core.additionalManifests }}
+--- a/charts/cluster-api-operator/templates/bootstrap.yaml
++++ b/charts/cluster-api-operator/templates/bootstrap.yaml
+@@ -31,1 +31,1 @@
+-{{- if or $bootstrapVersion $.Values.configSecret.name $bootstrap.manager $bootstrap.deployment (($bootstrap).configSecret).name }}
++{{- if or $bootstrapVersion $.Values.configSecret.name $bootstrap.manager $bootstrap.deployment (($bootstrap).configSecret).name $bootstrap.fetchConfig $bootstrap.manifestPatches $bootstrap.additionalManifests }}
+--- a/charts/cluster-api-operator/templates/control-plane.yaml
++++ b/charts/cluster-api-operator/templates/control-plane.yaml
+@@ -32,1 +32,1 @@
+-{{- if or $controlPlaneVersion $.Values.configSecret.name $controlPlane.manager $controlPlane.deployment (($controlPlane).configSecret).name }}
++{{- if or $controlPlaneVersion $.Values.configSecret.name $controlPlane.manager $controlPlane.deployment (($controlPlane).configSecret).name $controlPlane.fetchConfig $controlPlane.manifestPatches $controlPlane.additionalManifests }}
+--- a/charts/cluster-api-operator/templates/infra.yaml
++++ b/charts/cluster-api-operator/templates/infra.yaml
+@@ -32,1 +32,1 @@
+-{{- if or $infrastructureVersion $.Values.configSecret.name $infra.manager $infra.deployment $.Values.additionalDeployments (($infra).configSecret).name }}
++{{- if or $infrastructureVersion $.Values.configSecret.name $infra.manager $infra.deployment $.Values.additionalDeployments (($infra).configSecret).name $infra.fetchConfig $infra.patches $infra.manifestPatches $infra.additionalManifests (and (kindIs "map" $.Values.fetchConfig) (hasKey $.Values.fetchConfig $infrastructureName)) }}
+--- a/charts/cluster-api-operator/templates/ipam.yaml
++++ b/charts/cluster-api-operator/templates/ipam.yaml
+@@ -32,1 +32,1 @@
+-{{- if or $ipamVersion $.Values.configSecret.name $ipam.manager $ipam.deployment $.Values.additionalDeployments (($ipam).configSecret).name }}
++{{- if or $ipamVersion $.Values.configSecret.name $ipam.manager $ipam.deployment $.Values.additionalDeployments (($ipam).configSecret).name $ipam.fetchConfig $ipam.manifestPatches $ipam.additionalManifests (and (kindIs "map" $.Values.fetchConfig) (hasKey $.Values.fetchConfig $ipamName)) }}
+--- a/charts/cluster-api-operator/templates/addon.yaml
++++ b/charts/cluster-api-operator/templates/addon.yaml
+@@ -31,1 +31,1 @@
+-{{- if or $addonVersion $.Values.secretName $.Values.configSecret.name $addon.manager $addon.deployment (($addon).configSecret).name }}
++{{- if or $addonVersion $.Values.secretName $.Values.secretNamespace $.Values.configSecret.name $addon.manager $addon.deployment (($addon).configSecret).name $addon.fetchConfig $addon.manifestPatches $addon.additionalManifests }}

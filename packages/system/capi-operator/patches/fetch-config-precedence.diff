@@ -1,0 +1,10 @@
+--- a/charts/cluster-api-operator/templates/infra.yaml
++++ b/charts/cluster-api-operator/templates/infra.yaml
+@@ -59,1 +59,1 @@
+-{{- if and (kindIs "map" $.Values.fetchConfig) (hasKey $.Values.fetchConfig $infrastructureName) }}
++{{- if and (not $infra.fetchConfig) (kindIs "map" $.Values.fetchConfig) (hasKey $.Values.fetchConfig $infrastructureName) }}
+--- a/charts/cluster-api-operator/templates/ipam.yaml
++++ b/charts/cluster-api-operator/templates/ipam.yaml
+@@ -59,1 +59,1 @@
+-{{- if and (kindIs "map" $.Values.fetchConfig) (hasKey $.Values.fetchConfig $ipamName) }}
++{{- if and (not $ipam.fetchConfig) (kindIs "map" $.Values.fetchConfig) (hasKey $.Values.fetchConfig $ipamName) }}

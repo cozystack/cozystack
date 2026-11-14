@@ -1,0 +1,135 @@
+#!/usr/bin/env python3
+import copy
+import json
+import os
+import sys
+import time
+from pathlib import Path
+
+state_path = Path(os.environ["CAPI_TEST_STATE"])
+log_path = Path(os.environ["CAPI_TEST_LOG"])
+state = json.loads(state_path.read_text())
+args = sys.argv[1:]
+expected = ["--context", "fixture", "--namespace", "test-capi", "--request-timeout=10s"]
+if args[:len(expected)] != expected:
+    sys.exit("unexpected kubectl context or namespace")
+args = args[len(expected):]
+verb, resource, name = args[:3]
+resources = {
+    "coreproviders.operator.cluster.x-k8s.io": "providers",
+    "bootstrapproviders.operator.cluster.x-k8s.io": "providers",
+    "deployments.apps": "deployments",
+}
+if resource not in resources or name not in (
+    "cluster-api", "kubeadm", "capi-controller-manager", "capi-kubeadm-bootstrap-controller-manager"
+):
+    sys.exit("unexpected resource")
+entry = {"verb": verb, "resource": resource, "name": name}
+
+
+def save():
+    state_path.write_text(json.dumps(state))
+
+
+def log():
+    with log_path.open("a") as stream:
+        stream.write(json.dumps(entry) + "\n")
+
+
+if verb == "get":
+    log()
+    time.sleep(state.get("readDelay", 0))
+    if state.get("readDelay"):
+        state["delayedReadCompleted"] = True
+        save()
+    if state.get("failGet") == name:
+        sys.exit("API unavailable")
+    obj = state[resources[resource]].get(name)
+    if obj is None:
+        if "--ignore-not-found" not in args:
+            sys.exit("NotFound")
+        sys.exit(0)
+    if resource != "deployments.apps" and name in state.get("pending", {}):
+        pending = state["pending"][name]
+        if pending > 0:
+            state["pending"][name] -= 1
+        elif not state.get("stalled") and obj["spec"].get("fetchConfig", {}).get("selector", {}).get("matchLabels", {}).get("provider.cluster.x-k8s.io/version") == obj["spec"]["version"]:
+            obj["status"]["installedVersion"] = obj["spec"]["version"]
+            obj["status"]["observedGeneration"] = obj["metadata"]["generation"]
+            obj["status"]["conditions"] = [{"type": "Ready", "status": "True"}]
+            deployment_name = "capi-controller-manager" if name == "cluster-api" else "capi-kubeadm-bootstrap-controller-manager"
+            deployment = state["deployments"][deployment_name]
+            deployment["metadata"]["generation"] += 1
+            deployment["status"]["observedGeneration"] = deployment["metadata"]["generation"]
+            deployment["status"]["updatedReplicas"] = 1
+            deployment["status"]["replicas"] = 1
+            deployment["status"]["readyReplicas"] = 0 if state.get("lagRollout") else 1
+            deployment["status"]["availableReplicas"] = deployment["status"]["readyReplicas"]
+            if state.get("lagRollout"):
+                state.setdefault("rolloutReads", {})[deployment_name] = 1
+            del state["pending"][name]
+    if resource == "deployments.apps" and name in state.get("rolloutReads", {}):
+        if state["rolloutReads"][name] > 0:
+            state["rolloutReads"][name] -= 1
+        else:
+            obj["status"]["readyReplicas"] = 1
+            obj["status"]["availableReplicas"] = 1
+            del state["rolloutReads"][name]
+    save()
+    print(json.dumps(obj))
+elif verb == "patch":
+    if resource == "deployments.apps" or "--type=json" not in args:
+        sys.exit("unexpected write")
+    patch = json.loads(args[args.index("--patch") + 1])
+    entry["patch"] = patch
+    if state.get("failPatch") == name:
+        log()
+        sys.exit("patch refused")
+    obj = state["providers"][name]
+    if state.get("replaceUIDOnPatch") == name:
+        obj["metadata"]["uid"] = "replacement"
+        save()
+    if state.get("replaceVersionOnPatch") == name:
+        obj["spec"]["version"] = "v1.12.4-core"
+        save()
+    if state.get("replaceFetchConfigOnPatch") == name:
+        obj["spec"]["fetchConfig"] = {"selector": {"matchLabels": {"competing": "repository"}}}
+        save()
+    if state.get("statusOnlyOnPatch") == name:
+        obj["metadata"]["resourceVersion"] = "2"
+        obj["status"]["conditions"] = [{"type": "Ready", "status": "False"}]
+        save()
+    candidate = copy.deepcopy(obj)
+    for operation in patch:
+        keys = [key.replace("~1", "/").replace("~0", "~") for key in operation["path"].strip("/").split("/")]
+        parent = candidate
+        for key in keys[:-1]:
+            parent = parent[key]
+        key = keys[-1]
+        if operation["op"] == "test":
+            if key not in parent or parent[key] != operation["value"]:
+                log()
+                sys.exit("JSON patch test failed")
+        elif operation["op"] in ("replace", "add") and operation["path"] in ("/spec/version", "/spec/fetchConfig"):
+            if operation["op"] == "replace" and key not in parent:
+                sys.exit("JSON patch replace target missing")
+            if name == "kubeadm":
+                core = state["providers"]["cluster-api"]
+                deployment = state["deployments"]["capi-controller-manager"]
+                if core["status"]["installedVersion"] == "v1.10.1-core" or deployment["status"]["readyReplicas"] != 1:
+                    log()
+                    sys.exit("bootstrap upgrade started before core was ready")
+            parent[key] = operation["value"]
+        else:
+            sys.exit("unexpected patch operation")
+    obj = candidate
+    state["providers"][name] = obj
+    obj["metadata"]["generation"] += 1
+    obj["status"]["conditions"] = [{"type": "Ready", "status": "False"}]
+    state.setdefault("pending", {})[name] = 1
+    entry["accepted"] = True
+    save()
+    log()
+    print(json.dumps(obj))
+else:
+    sys.exit("unexpected kubectl operation")

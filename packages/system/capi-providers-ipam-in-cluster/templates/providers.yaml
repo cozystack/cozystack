@@ -8,8 +8,9 @@ spec:
   # Who needs this, and why it is not in a KubeVirt install: see the dependsOn
   # edge in packages/core/platform/sources/capi-provider-infra-proxmox.yaml.
   #
-  # v1.0.x, not v1.1.0: both serve InClusterIPPool v1alpha2, but the v1.0 series
-  # declares the v1beta1 contract that matches capi-providers-core v1.10.1.
+  # v1.0.x, not v1.1: both serve InClusterIPPool v1alpha2, but v1.1 moves to the
+  # v1beta2 contract and its IPAddressClaim API, while capmox v0.7, the only
+  # consumer here, is a v1beta1-contract provider. Move the two together.
   version: v1.0.3-ipam-in-cluster
   fetchConfig:
     selector:

@@ -1,0 +1,141 @@
+suite: kubeadm provider upgrade window
+templates:
+  - templates/providers.yaml
+release:
+  name: capi-providers-bootstrap
+  namespace: test-capi
+capabilities:
+  majorVersion: 1
+  minorVersion: 33
+  apiVersions:
+    - operator.cluster.x-k8s.io/v1alpha2
+tests:
+  - it: allows a fresh installation
+    kubernetesProvider:
+      scheme: &scheme
+        operator.cluster.x-k8s.io/v1alpha2/BootstrapProvider:
+          gvr:
+            group: operator.cluster.x-k8s.io
+            version: v1alpha2
+            resource: bootstrapproviders
+          namespaced: true
+      objects:
+        - &other
+          apiVersion: operator.cluster.x-k8s.io/v1alpha2
+          kind: BootstrapProvider
+          metadata:
+            name: other
+            namespace: other
+    documentSelector:
+      path: metadata.name
+      value: kubeadm
+    asserts:
+      - isKind:
+          of: BootstrapProvider
+
+  - it: rejects the legacy installed version before the core migration
+    kubernetesProvider:
+      scheme: *scheme
+      objects:
+        - &legacy
+          apiVersion: operator.cluster.x-k8s.io/v1alpha2
+          kind: BootstrapProvider
+          metadata:
+            name: kubeadm
+            namespace: test-capi
+          spec:
+            version: v1.10.1-bootstrap
+          status:
+            installedVersion: v1.10.1-bootstrap
+    asserts:
+      - failedTemplate:
+          errorPattern: "upgrade the core provider package first"
+
+  - it: does not confuse a requested bridge version with an installed one
+    kubernetesProvider:
+      scheme: *scheme
+      objects:
+        - <<: *legacy
+          spec:
+            version: v1.13.8-bootstrap
+    asserts:
+      - failedTemplate:
+          errorPattern: "upgrade the core provider package first"
+
+  - it: accepts the installed intermediate release
+    kubernetesProvider:
+      scheme: *scheme
+      objects:
+        - <<: *legacy
+          spec:
+            version: v1.13.8-bootstrap
+          status:
+            installedVersion: v1.13.8-bootstrap
+    documentSelector:
+      path: metadata.name
+      value: kubeadm
+    asserts:
+      - isKind:
+          of: BootstrapProvider
+
+  - it: accepts the oldest supported minor despite the provider suffix
+    kubernetesProvider:
+      scheme: *scheme
+      objects:
+        - <<: *legacy
+          spec:
+            version: v1.11.0-bootstrap
+          status:
+            installedVersion: v1.11.0-bootstrap
+    documentSelector:
+      path: metadata.name
+      value: kubeadm
+    asserts:
+      - isKind:
+          of: BootstrapProvider
+
+  - it: refuses an existing provider without an installed version
+    kubernetesProvider:
+      scheme: *scheme
+      objects:
+        - <<: *legacy
+          status: {}
+    asserts:
+      - failedTemplate:
+          errorPattern: "installed version is not recorded"
+
+  - it: refuses a downgrade
+    kubernetesProvider:
+      scheme: *scheme
+      objects:
+        - <<: *legacy
+          spec:
+            version: v1.15.0-bootstrap
+          status:
+            installedVersion: v1.15.0-bootstrap
+    asserts:
+      - failedTemplate:
+          errorPattern: "downgrades are not supported"
+
+  - it: refuses a patch downgrade
+    kubernetesProvider:
+      scheme: *scheme
+      objects:
+        - <<: *legacy
+          spec:
+            version: v1.14.5-bootstrap
+          status:
+            installedVersion: v1.14.5-bootstrap
+    asserts:
+      - failedTemplate:
+          errorPattern: "downgrades are not supported"
+
+  - it: renders offline when the provider API is not served
+    capabilities:
+      apiVersions: []
+    documentSelector:
+      path: metadata.name
+      value: kubeadm
+    asserts:
+      - isKind:
+          of: BootstrapProvider

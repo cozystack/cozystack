@@ -61,14 +61,11 @@ metadata:
     "argocd.argoproj.io/sync-wave": "2"
 {{- with .Values.configSecret }}
 spec:
-{{- if $.Values.manager }}
-{{- if and $.Values.manager.featureGates $.Values.manager.featureGates.kubeadm }}
+{{- $controlPlane := dict }}
+{{- include "cozystack.capi-operator.legacyFeatureGates" (dict "root" $ "provider" $controlPlane "key" "kubeadm") }}
+{{- with $controlPlane.manager }}
   manager:
-    featureGates:
-    {{- range $key, $value := $.Values.manager.featureGates.kubeadm }}
-      {{ $key }}: {{ $value }}
-    {{- end }}
-{{- end }}
+    {{- toYaml . | nindent 4 }}
 {{- end }}
   configSecret:
     name: {{ .name }}
