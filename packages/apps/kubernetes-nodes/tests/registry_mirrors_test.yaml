@@ -1,11 +1,12 @@
-suite: worker registry mirrors (talos.registryMirrors)
+suite: worker registry mirrors and their TLS settings (talos.registryMirrors, talos.registryConfig)
 
-# The kubernetes-nodes worker pool pulls the same ghcr.io/siderolabs/kubelet image
-# as the parent kubernetes chart and its talos values are kept in sync with it, so
-# it carries the same talos.registryMirrors knob rendered into the worker
-# TalosConfigTemplate's machine.registries.mirrors. Empty by default (byte-identical
-# render); a set value routes worker image pulls through a mirror. Free-form
-# tenant-facing input is shell-escaped because it is emitted into the reconcile-Job's
+# A worker pool pulls its images through mirrors set on the pool (talos.registryMirrors),
+# and trusts a mirror endpoint through talos.registryConfig, which carries the TLS
+# settings keyed by endpoint host. Both reach Talos as RegistryMirrorConfig and
+# RegistryTLSConfig documents appended to the worker machine config, never as the
+# deprecated machine.registries section, and nothing is rendered while both are empty,
+# so a pool without mirrors keeps the machine config, and the template name, it had.
+# Free-form input is shell-escaped because it is emitted into the reconcile-Job's
 # unquoted `cat <<EOF | kubectl apply` heredoc. See cozystack/cozystack#3513.
 
 templates:
@@ -30,8 +31,14 @@ set:
     memory: 4Gi
 
 tests:
-  - it: default renders no machine-level mirrors block
+  - it: renders no registry configuration by default
     asserts:
+      - notMatchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'kind: Registry'
+        documentSelector:
+          path: kind
+          value: Job
       - notMatchRegex:
           path: spec.template.spec.containers[0].command[2]
           pattern: 'mirrors:'
@@ -39,7 +46,26 @@ tests:
           path: kind
           value: Job
 
-  - it: talos.registryMirrors renders machine.registries.mirrors into the worker TalosConfigTemplate
+  - it: renders nothing for empty registryMirrors and registryConfig
+    set:
+      talos:
+        registryMirrors: {}
+        registryConfig: {}
+    asserts:
+      - notMatchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'kind: Registry'
+        documentSelector:
+          path: kind
+          value: Job
+      - notMatchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'mirrors:'
+        documentSelector:
+          path: kind
+          value: Job
+
+  - it: talos.registryMirrors becomes a RegistryMirrorConfig document, not machine.registries
     set:
       talos:
         registryMirrors:
@@ -49,34 +75,610 @@ tests:
     asserts:
       - matchRegex:
           path: spec.template.spec.containers[0].command[2]
+          pattern: '(?m)^\s+---\n\s+apiVersion: v1alpha1\n\s+endpoints:\n\s+- url: http://ghcr-mirror\.kube-system\.svc\n\s+kind: RegistryMirrorConfig\n\s+name: ghcr\.io\n'
+        documentSelector:
+          path: kind
+          value: Job
+      - notMatchRegex:
+          path: spec.template.spec.containers[0].command[2]
           pattern: 'mirrors:'
         documentSelector:
           path: kind
           value: Job
+
+  - it: skipFallback and overridePath are carried onto the document and its endpoints
+    set:
+      talos:
+        registryMirrors:
+          registry.k8s.io:
+            endpoints:
+              - http://harbor.example.org/v2/registry-k8s-io/
+              - https://second.example.org
+            overridePath: true
+            skipFallback: true
+    asserts:
       - matchRegex:
           path: spec.template.spec.containers[0].command[2]
-          pattern: 'ghcr\.io:'
-        documentSelector:
-          path: kind
-          value: Job
-      - matchRegex:
-          path: spec.template.spec.containers[0].command[2]
-          pattern: 'http://ghcr-mirror\.kube-system\.svc'
+          pattern: '- overridePath: true\n\s+url: http://harbor\.example\.org/v2/registry-k8s-io/\n\s+- overridePath: true\n\s+url: https://second\.example\.org\n\s+kind: RegistryMirrorConfig\n\s+name: registry\.k8s\.io\n\s+skipFallback: true'
         documentSelector:
           path: kind
           value: Job
 
-  - it: registryMirrors values are shell-escaped so they cannot execute in the reconcile-Job heredoc
+  - it: one document per mirror host, in a stable order
+    set:
+      talos:
+        registryMirrors:
+          quay.io:
+            endpoints: [http://q.example.org]
+          docker.io:
+            endpoints: [http://d.example.org]
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'name: docker\.io\n(.|\n)*kind: RegistryMirrorConfig\n\s+name: quay\.io'
+        documentSelector:
+          path: kind
+          value: Job
+
+  # Talos reads the text as one YAML stream. Without the separator two mirrors are a
+  # single mapping with duplicate keys, which the loader refuses and no node boots.
+  - it: documents are separated by a --- line, mirrors and tls settings alike
+    set:
+      talos:
+        registryMirrors:
+          quay.io:
+            endpoints: [http://q.example.org]
+          docker.io:
+            endpoints: [http://d.example.org]
+        registryConfig:
+          mirror.example.org:
+            tls:
+              insecureSkipVerify: true
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'name: docker\.io\n\s+---\n\s+apiVersion: v1alpha1\n\s+endpoints:\n\s+- url: http://q\.example\.org\n\s+kind: RegistryMirrorConfig\n\s+name: quay\.io\n\s+---\n\s+apiVersion: v1alpha1\n\s+insecureSkipVerify: true\n\s+kind: RegistryTLSConfig\n\s+name: mirror\.example\.org\n'
+        documentSelector:
+          path: kind
+          value: Job
+
+  - it: a mirror carries neither skipFallback nor overridePath unless it sets them
+    set:
+      talos:
+        registryMirrors:
+          ghcr.io:
+            endpoints: [http://g.example.org]
+    asserts:
+      - notMatchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'skipFallback|overridePath'
+        documentSelector:
+          path: kind
+          value: Job
+
+  # A quoted false is a non-empty string. Read by truthiness it would switch the
+  # setting on, and for insecureSkipVerify that is TLS verification turned off by a
+  # value written to keep it on.
+  - it: a quoted false leaves skipFallback, overridePath and insecureSkipVerify off
+    set:
+      talos:
+        registryMirrors:
+          ghcr.io:
+            endpoints: [http://g.example.org]
+            skipFallback: "false"
+            overridePath: "false"
+        registryConfig:
+          mirror.example.org:
+            tls:
+              insecureSkipVerify: "false"
+    asserts:
+      - notMatchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'skipFallback|overridePath|insecureSkipVerify|kind: RegistryTLSConfig'
+        documentSelector:
+          path: kind
+          value: Job
+
+  - it: registryConfig renders a RegistryTLSConfig document named by the endpoint host and port
+    set:
+      talos:
+        registryMirrors:
+          docker.io:
+            endpoints:
+              - http://10.0.0.1:8082
+        registryConfig:
+          "10.0.0.1:8082":
+            tls:
+              insecureSkipVerify: true
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'insecureSkipVerify: true\n\s+kind: RegistryTLSConfig\n\s+name: 10\.0\.0\.1:8082'
+        documentSelector:
+          path: kind
+          value: Job
+
+  - it: a multi-line CA renders as a block scalar inside the document
+    set:
+      talos:
+        registryConfig:
+          mirror.example.org:
+            tls:
+              ca: "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----"
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'ca: \|-\n\s+-----BEGIN CERTIFICATE-----\n\s+MIIB\n\s+-----END CERTIFICATE-----\n\s+kind: RegistryTLSConfig\n\s+name: mirror\.example\.org'
+        documentSelector:
+          path: kind
+          value: Job
+
+  - it: a tls entry that sets nothing renders no document
+    set:
+      talos:
+        registryConfig:
+          mirror.example.org:
+            tls: {}
+    asserts:
+      - notMatchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'kind: Registry'
+        documentSelector:
+          path: kind
+          value: Job
+
+  - it: mirror values are shell-escaped so they cannot execute in the reconcile-Job heredoc
     set:
       talos:
         registryMirrors:
           ghcr.io:
             endpoints:
-              - http://mirror$(id)
+              - http://mirror$(id)`id`\.example.org
     asserts:
       - matchRegex:
           path: spec.template.spec.containers[0].command[2]
-          pattern: 'http://mirror\\\$\(id\)'
+          pattern: 'http://mirror\\\$\(id\)\\`id\\`\\\\\.example\.org'
+        documentSelector:
+          path: kind
+          value: Job
+
+  - it: a registryConfig endpoint name is shell-escaped
+    set:
+      talos:
+        registryConfig:
+          "mirror$(id).example.org":
+            tls:
+              insecureSkipVerify: true
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'name: mirror\\\$\(id\)\.example\.org'
+        documentSelector:
+          path: kind
+          value: Job
+
+  - it: a registryConfig ca that is not a plain certificate is refused, so it never reaches the heredoc
+    set:
+      talos:
+        registryConfig:
+          mirror.example.org:
+            tls:
+              ca: "-----BEGIN CERTIFICATE-----\nMIIB$(id)\n-----END CERTIFICATE-----"
+    asserts:
+      - failedTemplate:
+          errorPattern: 'talos\.registryConfig\["mirror\.example\.org"\]\.tls\.ca must contain a complete PEM certificate block'
+
+  # The rendered text is stored in a machine config readable in the tenant namespace.
+  - it: private key material in a registryConfig ca is refused
+    set:
+      talos:
+        registryConfig:
+          mirror.example.org:
+            tls:
+              ca: "-----BEGIN PRIVATE KEY-----\nMIIB\n-----END PRIVATE KEY-----"
+    asserts:
+      - failedTemplate:
+          errorPattern: 'must not contain private key material'
+
+  - it: a registryConfig ca that is not a string is refused
+    set:
+      talos:
+        registryConfig:
+          mirror.example.org:
+            tls:
+              ca: 123
+    asserts:
+      - failedTemplate:
+          errorPattern: 'registry config "mirror\.example\.org": tls\.ca must be a PEM string'
+
+  - it: a mirror that is not a map is refused
+    set:
+      talos:
+        registryMirrors:
+          ghcr.io: https://mirror.example.org
+    asserts:
+      - failedTemplate:
+          errorPattern: 'registry mirror "ghcr\.io" must be a map with an endpoints list'
+
+  - it: a mirror key the chart does not read is refused instead of dropped
+    set:
+      talos:
+        registryMirrors:
+          ghcr.io:
+            endpoints: [http://g.example.org]
+            skipfallback: true
+    asserts:
+      - failedTemplate:
+          errorPattern: 'registry mirror "ghcr\.io": skipfallback is not supported'
+
+  - it: a mirror without endpoints is refused
+    set:
+      talos:
+        registryMirrors:
+          ghcr.io:
+            skipFallback: true
+    asserts:
+      - failedTemplate:
+          errorPattern: 'registry mirror "ghcr\.io" has no endpoints'
+
+  - it: a non-string endpoint is refused
+    set:
+      talos:
+        registryMirrors:
+          ghcr.io:
+            endpoints:
+              - url: http://mirror.example.org
+    asserts:
+      - failedTemplate:
+          errorPattern: 'registry mirror "ghcr\.io": every endpoint must be a URL string'
+
+  - it: a registryConfig entry that is not a map is refused
+    set:
+      talos:
+        registryConfig:
+          mirror.example.org: insecure
+    asserts:
+      - failedTemplate:
+          errorPattern: 'registry config "mirror\.example\.org" must be a map with a tls block'
+
+  # This value ends up in a machine config readable in the tenant namespace, so a
+  # credential is not accepted. Dropping it silently would look like it worked.
+  - it: credentials in a registryConfig entry are refused instead of dropped
+    set:
+      talos:
+        registryConfig:
+          mirror.example.org:
+            tls:
+              ca: "PEM"
+            auth:
+              password: secret-password
+    asserts:
+      - failedTemplate:
+          errorPattern: 'registry config "mirror\.example\.org": auth is not supported, only tls is read'
+
+  - it: a client identity in a tls block is refused instead of dropped
+    set:
+      talos:
+        registryConfig:
+          mirror.example.org:
+            tls:
+              clientIdentity:
+                key: secret-key
+    asserts:
+      - failedTemplate:
+          errorPattern: 'registry config "mirror\.example\.org": tls\.clientIdentity is not supported, only ca and insecureSkipVerify are read'
+
+  - it: endpoints that are not a list are refused and name the mirror
+    set:
+      talos:
+        registryMirrors:
+          ghcr.io:
+            endpoints: http://mirror.example.org
+    asserts:
+      - failedTemplate:
+          errorPattern: 'registry mirror "ghcr\.io": endpoints must be a list of URL strings'
+
+  - it: an empty endpoint is refused
+    set:
+      talos:
+        registryMirrors:
+          ghcr.io:
+            endpoints: [""]
+    asserts:
+      - failedTemplate:
+          errorPattern: 'registry mirror "ghcr\.io": an endpoint must not be empty'
+
+  - it: an empty registry host is refused
+    set:
+      talos:
+        registryMirrors:
+          "":
+            endpoints: [http://mirror.example.org]
+    asserts:
+      - failedTemplate:
+          errorPattern: 'registry mirror: a registry host must not be empty'
+
+  - it: a registryConfig tls that is not a map is refused
+    set:
+      talos:
+        registryConfig:
+          mirror.example.org:
+            tls: "x"
+    asserts:
+      - failedTemplate:
+          errorPattern: 'registry config "mirror\.example\.org": tls must be a map'
+
+  # `default dict` turns false, 0, "" and [] into an empty map, so a tls block the
+  # operator wrote would be dropped without a word and the worker would fail on x509
+  # at the node. Only an absent or null tls means nothing is set.
+  - it: a registryConfig tls that is false is refused, not read as empty
+    set:
+      talos:
+        registryConfig:
+          mirror.example.org:
+            tls: false
+    asserts:
+      - failedTemplate:
+          errorPattern: 'registry config "mirror\.example\.org": tls must be a map'
+
+  - it: a registryConfig tls that is zero is refused, not read as empty
+    set:
+      talos:
+        registryConfig:
+          mirror.example.org:
+            tls: 0
+    asserts:
+      - failedTemplate:
+          errorPattern: 'registry config "mirror\.example\.org": tls must be a map'
+
+  - it: a registryConfig tls that is an empty string is refused, not read as empty
+    set:
+      talos:
+        registryConfig:
+          mirror.example.org:
+            tls: ""
+    asserts:
+      - failedTemplate:
+          errorPattern: 'registry config "mirror\.example\.org": tls must be a map'
+
+  - it: a registryConfig tls that is an empty list is refused, not read as empty
+    set:
+      talos:
+        registryConfig:
+          mirror.example.org:
+            tls: []
+    asserts:
+      - failedTemplate:
+          errorPattern: 'registry config "mirror\.example\.org": tls must be a map'
+
+  - it: a registryConfig entry without a tls block, or with a null one, renders no document
+    set:
+      talos:
+        registryConfig:
+          mirror.example.org: {}
+          other.example.org:
+            tls: null
+    asserts:
+      - notMatchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'kind: Registry'
+        documentSelector:
+          path: kind
+          value: Job
+
+  # Talos matches the document name against the host a pull goes to, so a URL as the
+  # name never matches and the mirror or its CA is silently not used.
+  - it: a registry mirror host that is a URL is refused
+    set:
+      talos:
+        registryMirrors:
+          "https://ghcr.io":
+            endpoints: [http://mirror.example.org]
+    asserts:
+      - failedTemplate:
+          errorPattern: 'registry mirror "https://ghcr\.io": the host must be a registry host with an optional port, not a URL'
+
+  - it: a registryConfig endpoint that is a URL is refused
+    set:
+      talos:
+        registryConfig:
+          "https://mirror.example.org":
+            tls:
+              insecureSkipVerify: true
+    asserts:
+      - failedTemplate:
+          errorPattern: 'registry config "https://mirror\.example\.org": the endpoint must be a registry host with an optional port, not a URL'
+
+  - it: a registry host with a port and a wildcard host stay accepted
+    set:
+      talos:
+        registryMirrors:
+          "*":
+            endpoints: [http://mirror.example.org]
+        registryConfig:
+          "my-mirror.local:5000":
+            tls:
+              insecureSkipVerify: true
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'name: my-mirror\.local:5000'
+        documentSelector:
+          path: kind
+          value: Job
+
+  # A value that looks accepted and does nothing is the failure this chart refuses
+  # elsewhere: with skipFallback the operator would believe the upstream registry is
+  # blocked when it is not.
+  - it: a switch that is neither true nor false is refused, whatever its spelling
+    set:
+      talos:
+        registryMirrors:
+          ghcr.io:
+            endpoints: [http://g.example.org]
+            skipFallback: "yes"
+    asserts:
+      - failedTemplate:
+          errorPattern: 'registry mirror "ghcr\.io": skipFallback must be true or false, got yes'
+
+  - it: overridePath given as a number is refused
+    set:
+      talos:
+        registryMirrors:
+          ghcr.io:
+            endpoints: [http://g.example.org]
+            overridePath: 1
+    asserts:
+      - failedTemplate:
+          errorPattern: 'registry mirror "ghcr\.io": overridePath must be true or false'
+
+  - it: insecureSkipVerify spelled True is refused instead of left off
+    set:
+      talos:
+        registryConfig:
+          mirror.example.org:
+            tls:
+              insecureSkipVerify: "True"
+    asserts:
+      - failedTemplate:
+          errorPattern: 'registry config "mirror\.example\.org": tls\.insecureSkipVerify must be true or false'
+
+  - it: the strings true and false are accepted as switches
+    set:
+      talos:
+        registryMirrors:
+          ghcr.io:
+            endpoints: [http://g.example.org]
+            skipFallback: "true"
+            overridePath: "false"
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'kind: RegistryMirrorConfig\n\s+name: ghcr\.io\n\s+skipFallback: true'
+        documentSelector:
+          path: kind
+          value: Job
+
+  # RegistryMirrorConfig and RegistryTLSConfig exist from Talos 1.12. An older node
+  # rejects the whole config on an unknown document, so the render says so instead.
+  - it: registry configuration for a pool that resolves below Talos 1.12 is refused
+    set:
+      talos:
+        version: v1.11.5
+        registryMirrors:
+          ghcr.io:
+            endpoints:
+              - http://mirror.example.org
+    asserts:
+      - failedTemplate:
+          errorPattern: 'nodeGroup "md0": registry mirrors and registry TLS settings .* which Talos has only since 1.12, and this pool resolves to Talos v1\.11\.5'
+
+  - it: tls settings alone are refused for a pool that resolves below Talos 1.12
+    set:
+      talos:
+        version: v1.11.5
+        registryConfig:
+          mirror.example.org:
+            tls:
+              insecureSkipVerify: true
+    asserts:
+      - failedTemplate:
+          errorPattern: 'which Talos has only since 1.12'
+
+  # An entry that sets neither ca nor insecureSkipVerify renders no document, so a pool
+  # that uses no mirror keeps rendering on an older Talos.
+  - it: a pool below Talos 1.12 renders when no registryConfig entry produces a document
+    set:
+      talos:
+        version: v1.11.5
+        registryConfig:
+          mirror.example.org:
+            tls: {}
+          other.example.org:
+            tls:
+              insecureSkipVerify: false
+    asserts:
+      - notMatchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'kind: Registry'
+        documentSelector:
+          path: kind
+          value: Job
+
+  - it: a pool below Talos 1.12 that sets no registry configuration renders
+    set:
+      talos:
+        version: v1.11.5
+    asserts:
+      - notMatchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'kind: Registry'
+        documentSelector:
+          path: kind
+          value: Job
+
+  - it: the gate follows the version the pool resolves to through osImage, not talos.version alone
+    set:
+      talos:
+        version: v1.13.6
+        registryMirrors:
+          ghcr.io:
+            endpoints:
+              - http://mirror.example.org
+      osImage:
+        factory:
+          version: v1.11.5
+    asserts:
+      - failedTemplate:
+          errorPattern: 'nodeGroup "md0": registry mirrors and registry TLS settings .* this pool resolves to Talos v1\.11\.5'
+
+  - it: a pool whose osImage resolves to Talos 1.12 or newer renders mirrors although talos.version is older
+    set:
+      talos:
+        version: v1.11.5
+        registryMirrors:
+          ghcr.io:
+            endpoints:
+              - http://mirror.example.org
+      osImage:
+        factory:
+          version: v1.13.2
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'kind: RegistryMirrorConfig'
+        documentSelector:
+          path: kind
+          value: Job
+
+  - it: a pool on Talos 1.12.0 renders registry documents
+    set:
+      talos:
+        version: v1.12.0
+        registryMirrors:
+          ghcr.io:
+            endpoints:
+              - http://mirror.example.org
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'kind: RegistryMirrorConfig'
+        documentSelector:
+          path: kind
+          value: Job
+
+  - it: a pre-release of Talos 1.12 is accepted
+    set:
+      talos:
+        version: v1.12.0-beta.1
+        registryMirrors:
+          ghcr.io:
+            endpoints:
+              - http://mirror.example.org
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'kind: RegistryMirrorConfig'
         documentSelector:
           path: kind
           value: Job
