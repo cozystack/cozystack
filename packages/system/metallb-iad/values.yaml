@@ -1,0 +1,26 @@
+metallb-iad:
+  # Cozystack runs MetalLB in cozy-metallb, not the chart's upstream default of
+  # metallb-system; classes name their IPAddressPool in this namespace.
+  metallbNamespace: cozy-metallb
+  # Same digest pin as packages/system/address-controller; bump in lockstep
+  # with METALLB_IAD_REF in the Makefile.
+  image: ghcr.io/cozystack/metallb-iad:main-1faf937@sha256:a2a8b05a887f9f28927d75f8b57e264be40e8770d0177798b4f06a0f69c3e793
+  # Reserve MetalLB's pool, pin and sharing inputs on tenant Services to the
+  # driver. A tenant that could set them could steer MetalLB at an address
+  # reserved for someone else. Every tenant namespace, tenant-root included,
+  # and nothing else carries namespace.cozystack.io/host, so platform
+  # components that set these fields in cozy-* namespaces are unaffected.
+  admissionPolicy:
+    enabled: true
+    namespaceSelector:
+      matchExpressions:
+      - key: namespace.cozystack.io/host
+        operator: Exists
+    # An admission policy binds every principal, RBAC notwithstanding, so
+    # admins are exempt only when listed. Restates the chart's two defaults,
+    # since a values list replaces rather than extends them, and adds the
+    # group Cozystack's OIDC administrators authenticate as.
+    allowedGroups:
+    - system:masters
+    - kubeadm:cluster-admins
+    - cozystack-cluster-admin

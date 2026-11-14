@@ -1,0 +1,61 @@
+# Container image for the core controller.
+image: ghcr.io/cozystack/address-controller:main
+imagePullPolicy: IfNotPresent
+imagePullSecrets: []
+
+controller:
+  replicas: 1
+  # Leader election matters once replicas > 1, but is on by default so scaling
+  # up is safe without a config change.
+  leaderElect: true
+  # ":8443" (HTTPS) or ":8080" (HTTP) to expose controller-runtime metrics;
+  # "0" disables the endpoint.
+  metricsBindAddress: "0"
+  priorityClassName: ""
+  resources:
+    requests:
+      cpu: 10m
+      memory: 64Mi
+    limits:
+      memory: 128Mi
+
+metrics:
+  # Serve controller-runtime and inventory metrics (address_controller_*)
+  # over HTTPS on 8443, behind the Service address-controller-metrics.
+  # Requests are authenticated and authorized against the API server, so a
+  # scraper needs GET on the /metrics non-resource URL: bind its identity
+  # to the address-controller-metrics-reader ClusterRole. Overrides
+  # controller.metricsBindAddress.
+  enabled: false
+  serviceMonitor:
+    # A monitoring.coreos.com ServiceMonitor for the Service; rendered only
+    # where that API exists. The scraping Prometheus's ServiceAccount still
+    # needs a ClusterRoleBinding to address-controller-metrics-reader, which
+    # the chart cannot create without knowing that ServiceAccount.
+    enabled: false
+    # Extra labels on the ServiceMonitor, e.g. to match a Prometheus
+    # serviceMonitorSelector.
+    labels: {}
+  prometheusRule:
+    # Alerts on Conflict and Lost addresses and on long-Pending claims;
+    # rendered only where monitoring.coreos.com exists.
+    enabled: false
+
+# Optional ValidatingAdmissionPolicy reserving IPAddressClaim.spec.addressName,
+# which binds one specific Available address of a class, to the principals
+# below. Writes that leave the field as it was are always admitted. In a
+# brokered deployment, allowlist the machinery that moves addresses between
+# namespaces.
+admissionPolicy:
+  enabled: false
+  # [Deny], or e.g. [Warn, Audit] to observe what would be denied first.
+  validationActions: [Deny]
+  # Namespaces the policy applies to; scope it to tenant namespaces.
+  namespaceSelector: {}
+  # Admission policies bind system:masters too, so cluster admins must be
+  # listed; kubeadm since 1.29 issues admin credentials in
+  # kubeadm:cluster-admins instead.
+  allowedUsernames: []
+  allowedGroups:
+    - system:masters
+    - kubeadm:cluster-admins

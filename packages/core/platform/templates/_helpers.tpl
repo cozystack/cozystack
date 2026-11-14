@@ -224,7 +224,21 @@ cozystack-scheduler (emitted with its own variant in both branches)
 {{include "cozystack.platform.package.default" (list "cozystack.kubeovn-plunger" $root) }}
 {{- end }}
 {{include "cozystack.platform.package.full.default" (list "cozystack.cozy-proxy" $root) }}
-{{include "cozystack.platform.package.full.default" (list "cozystack.metallb" $root) }}
+{{- $metallb := include "cozystack.platform.package.full.default" (list "cozystack.metallb" $root) }}
+{{ $metallb }}
+{{- /* The MetalLB IP Allocation Driver hard-depends on cozystack.metallb and on
+       cozystack.address-controller, and a Package for it without both beside
+       it sits DependenciesNotReady for good. MetalLB is absent on isp-hosted
+       (which never calls this helper), on a slim variant that did not opt
+       into it, and wherever disabledPackages names it; the core is opt-in
+       everywhere. So the driver is gated on each dependency's own include
+       having rendered a Package rather than on a restatement of those rules.
+       The core is rendered here only to be tested: bundles/system.yaml emits
+       it. */ -}}
+{{- $addressController := include "cozystack.platform.package.optional.default" (list "cozystack.address-controller" $root) }}
+{{- if and (trim $metallb) (trim $addressController) }}
+{{include "cozystack.platform.package.optional.default" (list "cozystack.metallb-iad" $root) }}
+{{- end }}
 {{include "cozystack.platform.package.default" (list "cozystack.reloader" $root) }}
 {{include "cozystack.platform.package.default" (list "cozystack.linstor-scheduler" $root) }}
 {{include "cozystack.platform.package.default" (list "cozystack.snapshot-controller" $root) }}
