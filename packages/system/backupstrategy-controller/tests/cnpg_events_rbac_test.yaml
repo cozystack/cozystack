@@ -1,0 +1,23 @@
+suite: RBAC of the CNPG pending-Backup reason
+
+# The CNPG driver reads the events CloudNativePG records on a pending
+# cnpg.io/Backup, the only place it says why the Backup is held. The read
+# lists by the Backup's UID through the uncached reader, so the grant is list
+# without watch, and the Go unit tests run with no authorization.
+
+templates:
+  - templates/rbac.yaml
+
+release:
+  name: backupstrategy-controller
+  namespace: cozy-backup-controller
+
+tests:
+  - it: "ClusterRole can list events without watching them"
+    asserts:
+      - contains:
+          path: rules
+          content:
+            apiGroups: [""]
+            resources: ["events"]
+            verbs: ["create", "patch", "list"]

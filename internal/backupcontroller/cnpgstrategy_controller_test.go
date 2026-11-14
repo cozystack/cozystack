@@ -5960,6 +5960,9 @@ func newCNPGStrategyTestClient(t *testing.T, objs ...client.Object) client.Clien
 		WithScheme(s).
 		WithObjects(objs...).
 		WithStatusSubresource(&backupsv1alpha1.BackupJob{}, &backupsv1alpha1.RestoreJob{}, &backupsv1alpha1.Backup{}).
+		WithIndex(&corev1.Event{}, cnpgEventInvolvedUIDField, func(o client.Object) []string {
+			return []string{string(o.(*corev1.Event).InvolvedObject.UID)}
+		}).
 		Build()
 }
 
