@@ -525,7 +525,8 @@ load test_helper
   if grep -q 'prefix:' "$w/packages/system/proxy/values.yaml"; then
     echo "FAIL: a config line was taken from the artifact" >&2; exit 1
   fi
-  grep -q 'bare ref in packages/system/proxy/values.yaml -> current-main' "$w/out.txt"
+  grep -q 'bare first-party ref in packages/system/proxy/values.yaml -> current-main' "$w/out.txt"
+  grep -q '::warning title=Image overlay bare refs::1 drifted package(s) .*: system/proxy$' "$w/out.txt"
   grep -q 'bare-refs=1' "$w/out.txt"
   rm -rf "$w"
 }
@@ -560,15 +561,45 @@ load test_helper
 }
 
 @test "a bare ref is kept when the artifact carries no digest for it either" {
-  # A ref build-main does not stamp (third-party, or not built yet) has no
-  # digest in the artifact, so there is nothing more pullable to take.
+  # A ref build-main does not stamp has no digest in the artifact, so there is
+  # nothing more pullable to take.
   root=$(pwd)
   w=$(mktemp -d)
-  mkdir -p "$w/packages/system/tp" "$w/main/system/tp"
-  printf 'tuning: old\nimage: docker.io/library/busybox:1.37.0\n' > "$w/packages/system/tp/values.yaml"
-  printf 'tuning: new\nimage: docker.io/library/busybox:1.38.0\n' > "$w/main/system/tp/values.yaml"
+  mkdir -p "$w/packages/system/nd" "$w/main/system/nd"
+  printf 'tuning: old\nimage: ghcr.io/cozystack/cozystack/nd:v0.0.0\n' > "$w/packages/system/nd/values.yaml"
+  printf 'tuning: new\nimage: iad.ocir.io/x/cozystack/nd:main\n' > "$w/main/system/nd/values.yaml"
   ( cd "$w" && "$root/hack/overlay-main-images.sh" main '[]' ) > "$w/out.txt"
-  grep -q '^image: docker.io/library/busybox:1.37.0$' "$w/packages/system/tp/values.yaml"
+  grep -q '^image: ghcr.io/cozystack/cozystack/nd:v0.0.0$' "$w/packages/system/nd/values.yaml"
+  grep -q 'bare-refs=0' "$w/out.txt"
+  rm -rf "$w"
+}
+
+@test "a bare third-party ref in a drifted file is kept even when main pins one" {
+  # Main can bump a third-party image together with its config in one file. A
+  # PR behind it has the older pair, which is the one known to work together;
+  # taking main's image alone would run it with the config it replaced.
+  root=$(pwd)
+  w=$(mktemp -d)
+  mkdir -p "$w/packages/system/kc" "$w/main/system/kc"
+  printf 'features: old\nimage: quay.io/keycloak/keycloak:26.6.3\n' > "$w/packages/system/kc/values.yaml"
+  printf 'features: new\nimage: quay.io/keycloak/keycloak:27.0.0@sha256:abcd\n' > "$w/main/system/kc/values.yaml"
+  ( cd "$w" && "$root/hack/overlay-main-images.sh" main '[]' ) > "$w/out.txt"
+  grep -q '^image: quay.io/keycloak/keycloak:26.6.3$' "$w/packages/system/kc/values.yaml"
+  grep -q 'bare-refs=0' "$w/out.txt"
+  if grep -q 'Image overlay bare refs' "$w/out.txt"; then
+    echo "FAIL: a bare-refs annotation with nothing replaced" >&2; exit 1
+  fi
+  rm -rf "$w"
+}
+
+@test "a bare first-party ref is not replaced by a third-party image of the same name" {
+  root=$(pwd)
+  w=$(mktemp -d)
+  mkdir -p "$w/packages/system/same" "$w/main/system/same"
+  printf 'tuning: old\nimage: ghcr.io/cozystack/cozystack/redis:v0.0.0\n' > "$w/packages/system/same/values.yaml"
+  printf 'tuning: new\nimage: docker.io/library/redis:8.0@sha256:abcd\n' > "$w/main/system/same/values.yaml"
+  ( cd "$w" && "$root/hack/overlay-main-images.sh" main '[]' ) > "$w/out.txt"
+  grep -q '^image: ghcr.io/cozystack/cozystack/redis:v0.0.0$' "$w/packages/system/same/values.yaml"
   grep -q 'bare-refs=0' "$w/out.txt"
   rm -rf "$w"
 }
