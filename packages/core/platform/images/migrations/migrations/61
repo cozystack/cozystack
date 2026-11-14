@@ -1,0 +1,175 @@
+#!/bin/sh
+# Migration 61 --> 62
+# Hand the snapshot CRDs over to the snapshot-controller release as templates,
+# and clear the v1alpha1 VolumeGroupSnapshot CRDs out of the way.
+#
+# The snapshot-controller chart used to ship its six CRDs in crds/, which Helm
+# creates on install and never touches again, so the live CRDs carry no Helm
+# ownership metadata. The chart now renders them from a template, and renders a
+# CRD only when it is absent or already carries this release's ownership
+# metadata (patches/skip-foreign-crds.diff in the package). The CRDs the release
+# installed are annotated for adoption here, so they stay in its manifest; any
+# other CRD stays out of it, and the upgrade neither takes it over nor rewrites
+# it.
+#
+# The three groupsnapshot.storage.k8s.io CRDs cannot be adopted that way. The
+# old chart served them as v1alpha1 only, the new one serves v1beta1, v1beta2
+# and v1, and the apiserver rejects an update that drops a version still listed
+# in status.storedVersions. The old snapshot-controller ran without the
+# CSIVolumeGroupSnapshot gate, so no v1alpha1 object was ever acted on, and an
+# empty CRD is deleted here. A CRD that still holds objects is left alone and
+# recorded on the cozystack-version ConfigMap: deleting it would delete them.
+# It carries no Helm ownership metadata, so the chart leaves it out of the
+# release, which upgrades with that group snapshot API still at v1alpha1.
+#
+# The deleted CRDs are created again right away from the v1beta2 copies baked
+# into the image (see image-migrations in the platform Makefile), already
+# carrying the release's ownership metadata. Every HelmRelease waits for this
+# hook, so the linstor release, which renders its group snapshot gate and
+# VolumeGroupSnapshotClass only when the v1beta2 API is served, renders against
+# it even when it upgrades before snapshot-controller. When a CRD was kept, none
+# is created here, the release creates the missing ones, and linstor renders
+# the gate off. Recovery is by hand, since nothing renders either release again
+# once the CRD is gone, and RECOVERY below spells it out: delete the objects and
+# the CRD, force a snapshot-controller upgrade so the chart creates it at
+# v1beta2, restart snapshot-controller, which sets up its group snapshot
+# watches only when it starts, then force a linstor upgrade.
+#
+# Only CRDs labelled by helm-controller as installed by
+# cozy-snapshot-controller/snapshot-controller are touched, so a cluster whose
+# distribution ships its own snapshot CRDs keeps them as they are, here and in
+# the release.
+#
+# Whether the release is installed is read from its HelmRelease, not from those
+# labels: a retry after a failed create finds the group CRDs it deleted gone,
+# and their labels with them. Without the HelmRelease nothing would render the
+# CRDs again, so nothing is changed.
+#
+# This runs as a pre-upgrade hook, before the release renders the new chart. The
+# old chart does not render the CRDs, so the adoption metadata and the deletion
+# hold until then.
+#
+# Idempotent: a CRD already owned by the release, or a groupsnapshot CRD that
+# already serves v1beta2, is left alone. Fail-closed on any read or write error
+# (exit 1 before the stamp), since migrations never re-run.
+
+set -euo pipefail
+
+# shellcheck source=lib/cozystack-version.sh
+. "$(dirname "$0")/lib/cozystack-version.sh"
+
+RELEASE_NAME="snapshot-controller"
+RELEASE_NS="cozy-snapshot-controller"
+
+SNAPSHOT_CRDS="volumesnapshotclasses volumesnapshotcontents volumesnapshots"
+GROUP_SNAPSHOT_CRDS="volumegroupsnapshotclasses volumegroupsnapshotcontents volumegroupsnapshots"
+
+GROUP_CRD_DIR="${GROUP_CRD_DIR:-/snapshot-controller-crds}"
+
+RECOVERY="once its objects are deleted, delete the CRD, run 'flux reconcile helmrelease --namespace $RELEASE_NS $RELEASE_NAME --force' so the chart creates it at v1beta2, 'kubectl rollout restart --namespace $RELEASE_NS deployment/snapshot-controller', then 'flux reconcile helmrelease --namespace cozy-linstor linstor --force' to enable group snapshots"
+
+LEFTOVERS=""
+CREATE=""
+
+# Assigned on its own line: inside a test, a failed read would not abort.
+hr=$(kubectl get helmreleases.helm.toolkit.fluxcd.io --namespace "$RELEASE_NS" "$RELEASE_NAME" --ignore-not-found -o name)
+if [ -z "$hr" ]; then
+  echo "HelmRelease $RELEASE_NS/$RELEASE_NAME not found; leaving the snapshot CRDs alone"
+  stamp_cozystack_version 62
+  exit 0
+fi
+
+# installed_by_release <crd json>
+installed_by_release() {
+  printf '%s' "$1" | jq -e --arg name "$RELEASE_NAME" --arg ns "$RELEASE_NS" '
+    .metadata.labels["helm.toolkit.fluxcd.io/name"] == $name
+    and .metadata.labels["helm.toolkit.fluxcd.io/namespace"] == $ns' >/dev/null
+}
+
+adopt() {
+  crd="$1"
+  if [ "$(printf '%s' "$2" | jq -r '.metadata.annotations["meta.helm.sh/release-name"] // ""')" = "$RELEASE_NAME" ]; then
+    echo "CRD $crd already belongs to $RELEASE_NS/$RELEASE_NAME"
+    return 0
+  fi
+  echo "Adopting CRD $crd into $RELEASE_NS/$RELEASE_NAME"
+  kubectl annotate customresourcedefinitions.apiextensions.k8s.io "$crd" \
+    meta.helm.sh/release-name="$RELEASE_NAME" \
+    meta.helm.sh/release-namespace="$RELEASE_NS" \
+    helm.sh/resource-policy=keep \
+    --overwrite >/dev/null
+  kubectl label customresourcedefinitions.apiextensions.k8s.io "$crd" \
+    app.kubernetes.io/managed-by=Helm \
+    --overwrite >/dev/null
+}
+
+for plural in $SNAPSHOT_CRDS; do
+  crd="${plural}.snapshot.storage.k8s.io"
+  # --ignore-not-found turns only NotFound into empty output; any other error
+  # aborts under set -e rather than reading as an absent CRD.
+  obj=$(kubectl get customresourcedefinitions.apiextensions.k8s.io "$crd" --ignore-not-found -o json)
+  if [ -z "$obj" ]; then
+    echo "CRD $crd not found; nothing to adopt"
+    continue
+  fi
+  if ! installed_by_release "$obj"; then
+    echo "CRD $crd was not installed by $RELEASE_NS/$RELEASE_NAME; leaving it alone"
+    continue
+  fi
+  adopt "$crd" "$obj"
+done
+
+for plural in $GROUP_SNAPSHOT_CRDS; do
+  crd="${plural}.groupsnapshot.storage.k8s.io"
+  obj=$(kubectl get customresourcedefinitions.apiextensions.k8s.io "$crd" --ignore-not-found -o json)
+  if [ -z "$obj" ]; then
+    CREATE="$CREATE $crd"
+    continue
+  fi
+  if ! installed_by_release "$obj"; then
+    echo "CRD $crd was not installed by $RELEASE_NS/$RELEASE_NAME; leaving it alone"
+    continue
+  fi
+  if printf '%s' "$obj" | jq -e '[.spec.versions[].name] | index("v1beta2")' >/dev/null; then
+    # The chart drops v1alpha1 from spec.versions, which the apiserver refuses
+    # while v1alpha1 is still a stored version, so such a CRD is left to an
+    # operator rather than adopted into an upgrade that cannot apply.
+    if printf '%s' "$obj" | jq -e '.status.storedVersions // [] | index("v1alpha1")' >/dev/null; then
+      echo "WARN: CRD $crd serves v1beta2 but still stores v1alpha1; it stays out of $RELEASE_NS/$RELEASE_NAME and group snapshots stay off: $RECOVERY" >&2
+      LEFTOVERS="${LEFTOVERS}${LEFTOVERS:+,}${crd}=stored-v1alpha1"
+      continue
+    fi
+    adopt "$crd" "$obj"
+    continue
+  fi
+  count=$(kubectl get "$crd" --all-namespaces -o json | jq '.items | length')
+  if [ "$count" -gt 0 ]; then
+    echo "WARN: CRD $crd still holds $count v1alpha1 object(s); it stays out of $RELEASE_NS/$RELEASE_NAME and group snapshots stay off: $RECOVERY" >&2
+    LEFTOVERS="${LEFTOVERS}${LEFTOVERS:+,}${crd}=${count}"
+    continue
+  fi
+  echo "Deleting empty v1alpha1 CRD $crd"
+  kubectl delete customresourcedefinitions.apiextensions.k8s.io "$crd" --wait=true
+  CREATE="$CREATE $crd"
+done
+
+# A CRD missing next to a kept one is left to the release. A retry after a
+# failed create finds the deleted CRDs missing, so it creates them here too.
+if [ -z "$LEFTOVERS" ]; then
+  for crd in $CREATE; do
+    echo "Creating CRD $crd at v1beta2 for $RELEASE_NS/$RELEASE_NAME"
+    kubectl create -f "$GROUP_CRD_DIR/$crd.yaml" >/dev/null
+    kubectl wait --for=condition=Established --timeout=60s \
+      "customresourcedefinitions.apiextensions.k8s.io/$crd" >/dev/null
+  done
+fi
+
+# The record is a diagnostic aid, so failing to write it must not block the
+# upgrade.
+if [ -n "$LEFTOVERS" ]; then
+  kubectl annotate configmap --namespace "${NAMESPACE:-cozy-system}" cozystack-version \
+    "cozystack.io/migration-61-needs-attention=$LEFTOVERS" --overwrite >/dev/null \
+    || echo "WARN: failed to record the CRDs needing attention on cozystack-version" >&2
+fi
+
+stamp_cozystack_version 62

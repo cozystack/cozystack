@@ -1,0 +1,121 @@
+#!/bin/sh
+# Fake kubectl for hack/migration-61-snapshot-crds.bats. It serves only the
+# calls migration 61 and lib/cozystack-version.sh make, and logs each one to
+# $FAKE_CMDLOG.
+#
+# The CRDs live in $FAKE_STATE/crds.json and every annotate, label and delete
+# is applied to that file, so a second run of the migration reads what the
+# first one wrote. $FAKE_STATE/objects.json maps a CRD name to the number of
+# objects it holds. The snapshot-controller HelmRelease exists while
+# $FAKE_STATE/helmrelease does.
+#
+#   FAKE_CMDLOG      file to append a one-line record of each call to
+#   FAKE_STATE       directory holding crds.json and objects.json
+#   FAKE_HR_FAIL     non-empty => reading the HelmRelease exits 1 with this stderr
+#   FAKE_CRD_FAIL    non-empty => reading a CRD exits 1 with this stderr
+#   FAKE_DELETE_FAIL non-empty => deleting a CRD exits 1 with this stderr
+#   FAKE_RECORD_FAIL non-empty => annotating cozystack-version exits 1 with this stderr
+#   FAKE_CREATE_FAIL non-empty => creating a CRD exits 1 with this stderr
+#
+# The CRD files the migration creates from are JSON, which kubectl reads as
+# well as YAML, so the fake can load them with jq.
+set -u
+
+log() { [ -n "${FAKE_CMDLOG:-}" ] && printf '%s\n' "$*" >> "$FAKE_CMDLOG"; }
+log "KUBECTL $*"
+
+CRDS="$FAKE_STATE/crds.json"
+
+# set_meta <field> <crd> <key=value>...
+set_meta() {
+  field="$1"; crd="$2"; shift 2
+  for kv in "$@"; do
+    case "$kv" in
+      --*) continue ;;
+    esac
+    k="${kv%%=*}"; v="${kv#*=}"
+    jq --arg n "$crd" --arg f "$field" --arg k "$k" --arg v "$v" \
+      '.items |= map(if .metadata.name == $n then .metadata[$f][$k] = $v else . end)' \
+      "$CRDS" > "$CRDS.new" && mv "$CRDS.new" "$CRDS"
+  done
+}
+
+case "$*" in
+  *"apply --filename -"*|*"apply -f -"*)
+    manifest=$(cat)
+    case "$manifest" in
+      *"kind: ConfigMap"*)
+        v=$(printf '%s\n' "$manifest" | sed -n 's/^  version: "\{0,1\}\([0-9]\{1,\}\)"\{0,1\}$/\1/p' | head -1)
+        log "STAMP ${v:-unknown}"
+        exit 0
+        ;;
+    esac
+    printf 'fake kubectl: unmodelled apply\n' >&2
+    exit 1
+    ;;
+
+  "get helmreleases.helm.toolkit.fluxcd.io --namespace cozy-snapshot-controller snapshot-controller --ignore-not-found -o name")
+    if [ -n "${FAKE_HR_FAIL:-}" ]; then printf '%s\n' "$FAKE_HR_FAIL" >&2; exit 1; fi
+    [ -e "$FAKE_STATE/helmrelease" ] && echo "helmrelease.helm.toolkit.fluxcd.io/snapshot-controller"
+    exit 0
+    ;;
+
+  "get customresourcedefinitions.apiextensions.k8s.io "*)
+    if [ -n "${FAKE_CRD_FAIL:-}" ]; then printf '%s\n' "$FAKE_CRD_FAIL" >&2; exit 1; fi
+    jq --arg n "$3" '.items[] | select(.metadata.name == $n)' "$CRDS"
+    exit 0
+    ;;
+
+  "annotate customresourcedefinitions.apiextensions.k8s.io "*)
+    crd="$3"; shift 3
+    log "ANNOTATE $crd $*"
+    set_meta annotations "$crd" "$@"
+    exit 0
+    ;;
+
+  "label customresourcedefinitions.apiextensions.k8s.io "*)
+    crd="$3"; shift 3
+    log "LABEL $crd $*"
+    set_meta labels "$crd" "$@"
+    exit 0
+    ;;
+
+  "delete customresourcedefinitions.apiextensions.k8s.io "*)
+    if [ -n "${FAKE_DELETE_FAIL:-}" ]; then printf '%s\n' "$FAKE_DELETE_FAIL" >&2; exit 1; fi
+    log "DELETE $3"
+    jq --arg n "$3" '.items |= map(select(.metadata.name != $n))' "$CRDS" > "$CRDS.new" && mv "$CRDS.new" "$CRDS"
+    exit 0
+    ;;
+
+  "create -f "*)
+    if [ -n "${FAKE_CREATE_FAIL:-}" ]; then printf '%s\n' "$FAKE_CREATE_FAIL" >&2; exit 1; fi
+    name=$(jq -r '.metadata.name' "$3") || exit 1
+    if jq -e --arg n "$name" '.items[] | select(.metadata.name == $n)' "$CRDS" >/dev/null; then
+      printf 'Error from server (AlreadyExists): %s already exists\n' "$name" >&2
+      exit 1
+    fi
+    log "CREATE $name"
+    jq --slurpfile crd "$3" '.items += $crd' "$CRDS" > "$CRDS.new" && mv "$CRDS.new" "$CRDS"
+    exit 0
+    ;;
+
+  "wait --for=condition=Established "*)
+    exit 0
+    ;;
+
+  "annotate configmap "*)
+    if [ -n "${FAKE_RECORD_FAIL:-}" ]; then printf '%s\n' "$FAKE_RECORD_FAIL" >&2; exit 1; fi
+    log "RECORD $*"
+    exit 0
+    ;;
+
+  "get "*".groupsnapshot.storage.k8s.io --all-namespaces -o json")
+    n=$(jq --arg n "$2" '.[$n] // 0' "$FAKE_STATE/objects.json")
+    jq -n --argjson n "$n" '{apiVersion: "v1", kind: "List", items: [range($n) | {}]}'
+    exit 0
+    ;;
+esac
+
+log "UNMODELLED $*"
+printf 'fake kubectl: unmodelled call: %s\n' "$*" >&2
+exit 1

@@ -61,10 +61,16 @@ Create the name of the service account to use
 {{- end -}}
 
 {{/*
+###############################
+# Snapshot Conversion Webhook #
+###############################
+*/}}
+
+{{/*
 Expand the name of the chart.
 */}}
-{{- define "snapshot-validation-webhook.name" -}}
-{{- "snapshot-validation-webhook" | trunc 63 | trimSuffix "-" }}
+{{- define "conversion-webhook.name" -}}
+{{- "conversion-webhook" | trunc 63 | trimSuffix "-" }}
 {{- end }}
 
 {{/*
@@ -72,14 +78,14 @@ Create a default fully qualified app name.
 We truncate at 63 chars because some Kubernetes name fields are limited to this (by the DNS naming spec).
 If release name contains chart name it will be used as a full name.
 */}}
-{{- define "snapshot-validation-webhook.fullname" -}}
+{{- define "conversion-webhook.fullname" -}}
 {{- if .Values.webhook.fullnameOverride -}}
 {{- .Values.webhook.fullnameOverride | trunc 63 | trimSuffix "-" -}}
 {{- else -}}
-{{- if contains .Chart.Name .Release.Name }}
-{{- "snapshot-validation-webhook" }}
+{{- if contains "conversion-webhook" .Release.Name }}
+{{- .Release.Name | trunc 63 | trimSuffix "-" }}
 {{- else }}
-{{- printf "%s-%s" .Release.Name "snapshot-validation-webhook" | trunc 63 | trimSuffix "-" }}
+{{- printf "%s-%s" .Release.Name "conversion-webhook" | trunc 63 | trimSuffix "-" }}
 {{- end }}
 {{- end }}
 {{- end }}
@@ -87,16 +93,16 @@ If release name contains chart name it will be used as a full name.
 {{/*
 Create chart name and version as used by the chart label.
 */}}
-{{- define "snapshot-validation-webhook.chart" -}}
-{{- printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" | trunc 63 | trimSuffix "-" }}
+{{- define "conversion-webhook.chart" -}}
+{{- printf "%s-%s" "conversion-webhook" .Chart.Version | replace "+" "_" | trunc 63 | trimSuffix "-" }}
 {{- end }}
 
 {{/*
 Common labels
 */}}
-{{- define "snapshot-validation-webhook.labels" -}}
-helm.sh/chart: {{ include "snapshot-validation-webhook.chart" . }}
-{{ include "snapshot-validation-webhook.selectorLabels" . }}
+{{- define "conversion-webhook.labels" -}}
+helm.sh/chart: {{ include "conversion-webhook.chart" . }}
+{{ include "conversion-webhook.selectorLabels" . }}
 {{- if .Chart.AppVersion }}
 app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
 {{- end }}
@@ -106,17 +112,17 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{/*
 Selector labels
 */}}
-{{- define "snapshot-validation-webhook.selectorLabels" -}}
-app.kubernetes.io/name: {{ include "snapshot-validation-webhook.name" . }}
+{{- define "conversion-webhook.selectorLabels" -}}
+app.kubernetes.io/name: {{ include "conversion-webhook.name" . }}
 app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end }}
 
 {{/*
 Create the name of the service account to use
 */}}
-{{- define "snapshot-validation-webhook.serviceAccountName" -}}
+{{- define "conversion-webhook.serviceAccountName" -}}
 {{- if .Values.webhook.serviceAccount.create -}}
-    {{ default (include "snapshot-validation-webhook.fullname" .) .Values.webhook.serviceAccount.name }}
+    {{ default (include "conversion-webhook.fullname" .) .Values.webhook.serviceAccount.name }}
 {{- else -}}
     {{ default "default" .Values.webhook.serviceAccount.name }}
 {{- end -}}
@@ -125,10 +131,10 @@ Create the name of the service account to use
 {{/*
 Certificate secret name
 */}}
-{{- define "snapshot-validation-webhook.certifcateName" -}}
+{{- define "conversion-webhook.certifcateName" -}}
 {{- if .Values.webhook.tls.certificateSecret }}
 {{- .Values.webhook.tls.certificateSecret }}
 {{- else }}
-{{- include "snapshot-validation-webhook.fullname" . }}-tls
+{{- include "conversion-webhook.fullname" . }}
 {{- end }}
 {{- end }}

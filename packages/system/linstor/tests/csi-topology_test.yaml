@@ -55,7 +55,10 @@ tests:
     asserts:
       - lengthEqual:
           path: spec.csiController.podTemplate.spec.containers
-          count: 1
+          count: 2
       - equal:
           path: spec.csiController.podTemplate.spec.containers[0].name
           value: linstor-csi
+      - equal:
+          path: spec.csiController.podTemplate.spec.containers[1].name
+          value: csi-snapshotter

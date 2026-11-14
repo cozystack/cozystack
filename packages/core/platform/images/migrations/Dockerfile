@@ -35,6 +35,9 @@ COPY migrations /migrations
 # the etcd-operator-crds HelmRelease (which only reconciles after the migration
 # pre-upgrade hook completes).
 COPY etcd-operator-crds /etcd-operator-crds
+# v1beta2 group snapshot CRDs, rendered by `make image-migrations`; migration 61
+# creates them before the snapshot-controller HelmRelease upgrades.
+COPY snapshot-controller-crds /snapshot-controller-crds
 COPY run-migrations.sh /usr/bin/run-migrations.sh
 
 WORKDIR /migrations
