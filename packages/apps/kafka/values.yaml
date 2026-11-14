@@ -15,11 +15,11 @@ external: false
 tls: {}
 
 ## @enum {string} Version - Kafka version to deploy.
-## @value v3.9
-## @value v3.8
+## @value v4.3
+## @value v4.2
 
-## @param {Version} version - Kafka version to deploy. Upgrade-only: once a cluster's KRaft metadata is at a given version, Strimzi refuses an in-place downgrade, so lowering this on a running cluster (e.g. v3.9 back to v3.8) leaves the Kafka CR stuck in a reconcile error. Pick the target version at creation and only ever raise it.
-version: "v3.9"
+## @param {Version} version - Kafka version to deploy. Upgrade-only: once a cluster's KRaft metadata is at a given version, Strimzi refuses an in-place downgrade, so lowering this on a running cluster (e.g. v4.3 back to v4.2) leaves the Kafka CR stuck in a reconcile error. Pick the target version at creation and only ever raise it.
+version: "v4.3"
 
 ##
 ## @section Application-specific parameters
@@ -114,7 +114,7 @@ topics: []
 ## @field {string} storageClass - StorageClass used to store the Kafka data.
 ## @immutable
 ## @x-cozystack-options {source: storageclass}
-## @field {quantity} [controllerStorageSize] - Persistent Volume size for KRaft controller metadata (used during ZK-to-KRaft migration).
+## @field {quantity} [controllerStorageSize] - Persistent Volume size for KRaft controller metadata.
 
 ## @param {Kafka} kafka - Kafka configuration.
 kafka:

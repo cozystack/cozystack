@@ -24,12 +24,12 @@
       }
     },
     "version": {
-      "description": "Kafka version to deploy. Upgrade-only: once a cluster's KRaft metadata is at a given version, Strimzi refuses an in-place downgrade, so lowering this on a running cluster (e.g. v3.9 back to v3.8) leaves the Kafka CR stuck in a reconcile error. Pick the target version at creation and only ever raise it.",
+      "description": "Kafka version to deploy. Upgrade-only: once a cluster's KRaft metadata is at a given version, Strimzi refuses an in-place downgrade, so lowering this on a running cluster (e.g. v4.3 back to v4.2) leaves the Kafka CR stuck in a reconcile error. Pick the target version at creation and only ever raise it.",
       "type": "string",
-      "default": "v3.9",
+      "default": "v4.3",
       "enum": [
-        "v3.9",
-        "v3.8"
+        "v4.3",
+        "v4.2"
       ]
     },
     "topics": {
@@ -76,7 +76,7 @@
       ],
       "properties": {
         "controllerStorageSize": {
-          "description": "Persistent Volume size for KRaft controller metadata (used during ZK-to-KRaft migration).",
+          "description": "Persistent Volume size for KRaft controller metadata.",
           "default": "5Gi",
           "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
           "anyOf": [

@@ -1,6 +1,27 @@
+{{- /*
+  Topic configs Kafka 3.x accepted and Kafka 4.2/4.3 reject. A KafkaTopic
+  carrying one stays NotReady while the release reports Ready, and a broker
+  whose log holds a segment.bytes below the floor does not start. The same
+  limits are in packages/core/platform/templates/_helpers.tpl,
+  packages/core/platform/images/migrations/migrations/61 and
+  packages/system/backupstrategy-controller/files/kafka-backup.sh.
+*/}}
+{{- $segmentBytesMin := 1048576 }}
 {{- range $topic := .Values.topics }}
+{{- $config := $topic.config | default dict }}
+{{- range $key := list "message.downconversion.enable" "message.format.version" "message.timestamp.difference.max.ms" }}
+{{- if hasKey $config $key }}
+{{- fail (printf "topic %q sets %s, which Kafka 4 removed: delete it from the topic's config" $topic.name $key) }}
+{{- end }}
+{{- end }}
+{{- $segmentBytes := get $config "segment.bytes" }}
+{{- if or (kindIs "float64" $segmentBytes) (kindIs "int64" $segmentBytes) (kindIs "int" $segmentBytes) (and (kindIs "string" $segmentBytes) (regexMatch "^-?[0-9]+$" (toString $segmentBytes))) }}
+{{- if lt (int64 $segmentBytes) (int64 $segmentBytesMin) }}
+{{- fail (printf "topic %q sets segment.bytes=%d, below the Kafka 4 minimum of %d: raise it" $topic.name (int64 $segmentBytes) $segmentBytesMin) }}
+{{- end }}
+{{- end }}
 ---
-apiVersion: kafka.strimzi.io/v1beta2
+apiVersion: kafka.strimzi.io/v1
 kind: KafkaTopic
 metadata:
   name: "{{ $.Release.Name }}-{{ kebabcase $topic.name }}"

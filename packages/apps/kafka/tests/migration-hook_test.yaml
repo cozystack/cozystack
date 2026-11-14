@@ -63,85 +63,9 @@ tests:
           value: test-kafka-kafka-migration
         documentIndex: 3
 
-  - it: grants permission to patch kafkas and kafkanodepools
-    release:
-      name: test-kafka
-      namespace: tenant-test
-    asserts:
-      - contains:
-          path: rules[0].apiGroups
-          content: kafka.strimzi.io
-        documentIndex: 1
-      - contains:
-          path: rules[0].resources
-          content: kafkas
-        documentIndex: 1
-      - contains:
-          path: rules[0].resources
-          content: kafkanodepools
-        documentIndex: 1
-      - contains:
-          path: rules[0].verbs
-          content: patch
-        documentIndex: 1
-      - contains:
-          path: rules[0].verbs
-          content: create
-        documentIndex: 1
-      # Name-freeing needs to drive rebalances, delete the drained pool, and
-      # clean up its PVCs.
-      - contains:
-          path: rules[0].resources
-          content: kafkarebalances
-        documentIndex: 1
-      - contains:
-          path: rules[0].verbs
-          content: delete
-        documentIndex: 1
-      - contains:
-          path: rules[1].resources
-          content: persistentvolumeclaims
-        documentIndex: 1
-
-  # When it holds the shared "kafka" pool and other ZooKeeper clusters remain,
-  # the hook drains all data onto its own "b-<hash>" pool via a Cruise Control
-  # KafkaRebalance and only then deletes the "kafka" pool — so the name frees for
-  # the next cluster without losing data.
-  - it: frees the kafka pool name by draining via a rebalance
-    release:
-      name: test-kafka
-      namespace: tenant-test
-    asserts:
-      - matchRegex:
-          path: spec.template.spec.containers[0].args[0]
-          pattern: 'other ZooKeeper Kafka cluster'
-        documentIndex: 3
-      - matchRegex:
-          path: spec.template.spec.containers[0].args[0]
-          pattern: 'kind: KafkaRebalance'
-        documentIndex: 3
-      - matchRegex:
-          path: spec.template.spec.containers[0].args[0]
-          pattern: 'mode: remove-brokers'
-        documentIndex: 3
-      # A mandatory broker evacuation must not be blocked by capacity hard goals.
-      - matchRegex:
-          path: spec.template.spec.containers[0].args[0]
-          pattern: 'skipHardGoalCheck: true'
-        documentIndex: 3
-      - matchRegex:
-          path: spec.template.spec.containers[0].args[0]
-          pattern: 'next-node-ids: "\[1000-1099\]"'
-        documentIndex: 3
-      # The pool is deleted only after the rebalance is Ready — never before.
-      - matchRegex:
-          path: spec.template.spec.containers[0].args[0]
-          pattern: 'Rebalance complete[\s\S]*delete "\$np" kafka'
-        documentIndex: 3
-
   # The hook creates the broker pool under the render-resolved name
-  # (kafka.brokerPoolName): "kafka" for a migrating ZooKeeper cluster, "b-<hash>"
-  # for a fresh one. The manifest references the shell var so both resolve here.
+  # (kafka.brokerPoolName): "kafka" for a cluster migrated from ZooKeeper,
+  # "b-<hash>" otherwise. The manifest references the shell var so both resolve here.
   - it: creates the broker node pool under the resolved pool name
     release:
       name: test-kafka
@@ -167,73 +91,6 @@ tests:
           path: spec.template.spec.containers[0].args[0]
           pattern: 'brokerPool="b-[0-9a-f]{8}"'
         documentIndex: 3
-
-  # CRITICAL adoption invariant: a cluster migrating from ZooKeeper (an existing
-  # Kafka CR without kraft=enabled) must resolve the broker pool to exactly
-  # "kafka" so Strimzi reuses the existing <cluster>-kafka-N brokers and PVCs.
-  - it: resolves the broker pool to kafka for a migrating ZooKeeper cluster
-    release:
-      name: test-kafka
-      namespace: tenant-test
-    kubernetesProvider:
-      scheme:
-        "kafka.strimzi.io/v1beta2/Kafka":
-          gvr:
-            group: kafka.strimzi.io
-            version: v1beta2
-            resource: kafkas
-          namespaced: true
-      objects:
-        - apiVersion: kafka.strimzi.io/v1beta2
-          kind: Kafka
-          metadata:
-            name: test-kafka
-            namespace: tenant-test
-    asserts:
-      - matchRegex:
-          path: spec.template.spec.containers[0].args[0]
-          pattern: 'brokerPool="kafka"'
-        documentIndex: 3
-
-  # Render-time serialization of co-namespaced migrations: while a "kafka" pool is
-  # owned by a DIFFERENT cluster that is migrating first, kafka.brokerPoolName
-  # fails this ZooKeeper cluster's render so its HelmRelease retries until the
-  # first cluster drains off the shared pool and frees the name (the hook's
-  # runtime create-CAS is the second line of defense).
-  - it: fails the render when a foreign cluster still owns the kafka pool
-    release:
-      name: test-kafka
-      namespace: tenant-test
-    kubernetesProvider:
-      scheme:
-        "kafka.strimzi.io/v1beta2/Kafka":
-          gvr:
-            group: kafka.strimzi.io
-            version: v1beta2
-            resource: kafkas
-          namespaced: true
-        "kafka.strimzi.io/v1beta2/KafkaNodePool":
-          gvr:
-            group: kafka.strimzi.io
-            version: v1beta2
-            resource: kafkanodepools
-          namespaced: true
-      objects:
-        - apiVersion: kafka.strimzi.io/v1beta2
-          kind: Kafka
-          metadata:
-            name: test-kafka
-            namespace: tenant-test
-        - apiVersion: kafka.strimzi.io/v1beta2
-          kind: KafkaNodePool
-          metadata:
-            name: kafka
-            namespace: tenant-test
-            labels:
-              strimzi.io/cluster: other-cluster
-    asserts:
-      - failedTemplate:
-          errorPattern: "broker pool owned by cluster .* migrating first"
 
   # The controller pool the hook creates must use the short hashed name
   # kafka.controllerPoolName, in lockstep with every selector helper.
@@ -266,133 +123,6 @@ tests:
       - matchRegex:
           path: spec.template.spec.containers[0].args[0]
           pattern: 'strimzi.io/next-node-ids: "\[3-999\]"'
-        documentIndex: 3
-
-  # The migration Job must never apply strimzi.io/kraft=enabled unless the
-  # cluster actually reached KRaftPostMigration — flipping it earlier is unsafe
-  # and irreversible. Guard the finalize step behind an explicit readiness flag
-  # that aborts (exit 1) on timeout, so Helm fails and the next reconcile retries.
-  - it: guards the KRaft finalize step behind a reached-safe-state check
-    release:
-      name: test-kafka
-      namespace: tenant-test
-    asserts:
-      - matchRegex:
-          path: spec.template.spec.containers[0].args[0]
-          pattern: "migration_ready=false"
-        documentIndex: 3
-      - matchRegex:
-          path: spec.template.spec.containers[0].args[0]
-          pattern: 'if \[ "\$migration_ready" != "true" \]; then'
-        documentIndex: 3
-      - matchRegex:
-          path: spec.template.spec.containers[0].args[0]
-          pattern: "Refusing to apply strimzi.io/kraft=enabled in an unsafe state"
-        documentIndex: 3
-
-  # Fail closed: a real read error (non-zero from the --ignore-not-found get)
-  # must abort, never be mistaken for a fresh install.
-  - it: fails closed on non-NotFound errors reading the Kafka CR
-    release:
-      name: test-kafka
-      namespace: tenant-test
-    asserts:
-      - matchRegex:
-          path: spec.template.spec.containers[0].args[0]
-          pattern: 'if ! found=\$\(kubectl .* --ignore-not-found -o name'
-        documentIndex: 3
-      - matchRegex:
-          path: spec.template.spec.containers[0].args[0]
-          pattern: "ERROR: reading Kafka CR failed"
-        documentIndex: 3
-
-  # Idempotent: on a retry the cluster may already be past ZooKeeper; do not
-  # re-issue kraft=migration (an invalid backward transition Strimzi rejects).
-  - it: does not re-issue kraft=migration once past the ZooKeeper phase
-    release:
-      name: test-kafka
-      namespace: tenant-test
-    asserts:
-      - matchRegex:
-          path: spec.template.spec.containers[0].args[0]
-          pattern: "KRaftMigration\\|KRaftDualWriting\\|KRaftPostMigration\\|PreKRaft\\|KRaft\\)"
-        documentIndex: 3
-      - matchRegex:
-          path: spec.template.spec.containers[0].args[0]
-          pattern: "not re-issuing kraft=migration"
-        documentIndex: 3
-
-  # ATOMIC one-migration-per-namespace guard: an absent "kafka" pool is created
-  # via `kubectl create` (the atomic arbiter of a concurrent race), and a "kafka"
-  # pool owned by another cluster is refused.
-  - it: guards the shared kafka pool name atomically via create, refusing a foreign owner
-    release:
-      name: test-kafka
-      namespace: tenant-test
-    asserts:
-      - matchRegex:
-          path: spec.template.spec.containers[0].args[0]
-          pattern: 'if \[ "\$brokerPool" = "kafka" \]; then'
-        documentIndex: 3
-      - matchRegex:
-          path: spec.template.spec.containers[0].args[0]
-          pattern: 'kubectl create -f -'
-        documentIndex: 3
-      - matchRegex:
-          path: spec.template.spec.containers[0].args[0]
-          pattern: "already belongs to cluster"
-        documentIndex: 3
-
-  # The bare plural "kafkas" is ambiguous (also apps.cozystack.io); the hook must
-  # fully qualify the Strimzi resource or it can hit the tenant kind and Forbidden.
-  - it: fully qualifies the Strimzi Kafka and KafkaNodePool resources
-    release:
-      name: test-kafka
-      namespace: tenant-test
-    asserts:
-      - matchRegex:
-          path: spec.template.spec.containers[0].args[0]
-          pattern: "kafka=kafkas\\.kafka\\.strimzi\\.io"
-        documentIndex: 3
-      - matchRegex:
-          path: spec.template.spec.containers[0].args[0]
-          pattern: "np=kafkanodepools\\.kafka\\.strimzi\\.io"
-        documentIndex: 3
-      - notMatchRegex:
-          path: spec.template.spec.containers[0].args[0]
-          pattern: 'annotate kafka "'
-        documentIndex: 3
-
-  # NotFound must be structural (--ignore-not-found), never a stderr substring
-  # match that a stray "... not found" error could trip into skipping a live ZK.
-  - it: classifies NotFound structurally, not by stderr substring
-    release:
-      name: test-kafka
-      namespace: tenant-test
-    asserts:
-      - matchRegex:
-          path: spec.template.spec.containers[0].args[0]
-          pattern: "--ignore-not-found"
-        documentIndex: 3
-      - notMatchRegex:
-          path: spec.template.spec.containers[0].args[0]
-          pattern: "grep -qiE.*not.*found"
-        documentIndex: 3
-
-  # A KRaft-native / already-migrated CR (kraft=enabled) must be a no-op, never
-  # driven backwards into kraft=migration.
-  - it: treats a kraft=enabled cluster as done
-    release:
-      name: test-kafka
-      namespace: tenant-test
-    asserts:
-      - matchRegex:
-          path: spec.template.spec.containers[0].args[0]
-          pattern: 'if \[ "\$kraft" != "enabled" \] && \[ "\$state" != "KRaft" \]'
-        documentIndex: 3
-      - matchRegex:
-          path: spec.template.spec.containers[0].args[0]
-          pattern: "Kafka is already KRaft"
         documentIndex: 3
 
   # Preserve failed-Job logs for a post-mortem: only before-hook-creation, never
@@ -459,4 +189,83 @@ tests:
           pattern: "kubectl[^|\\n]* apply (-f|--filename|--server-side)"
       - matchRegex:
           path: spec.template.spec.containers[0].args[0]
-          pattern: "echo \"\\$broker_manifest\" \\| kubectl apply --openapi-patch=false -f -\\n[\\s\\S]*echo \"\\$controller_manifest\" \\| kubectl apply --openapi-patch=false -f -\\n[\\s\\S]*<<POOL \\| kubectl apply --openapi-patch=false -f -\\n[\\s\\S]*<<REB \\| kubectl apply --openapi-patch=false -f -\\n"
+          pattern: "echo \"\\$broker_manifest\" \\| kubectl apply --openapi-patch=false -f -\\n[\\s\\S]*echo \"\\$controller_manifest\" \\| kubectl apply --openapi-patch=false -f -\\n"
+
+  # The hook only applies the two pools; it needs nothing beyond that.
+  - it: grants only what applying the node pools needs
+    release:
+      name: test-kafka
+      namespace: tenant-test
+    documentIndex: 1
+    asserts:
+      - equal:
+          path: rules
+          value:
+            - apiGroups: ["kafka.strimzi.io"]
+              resources: ["kafkanodepools"]
+              verbs: ["get", "create", "patch"]
+
+  - it: applies both node pools through the v1 API
+    release:
+      name: test-kafka
+      namespace: tenant-test
+    documentIndex: 3
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].args[0]
+          pattern: "apiVersion: kafka.strimzi.io/v1\\n *kind: KafkaNodePool[\\s\\S]*roles:\\n +- broker[\\s\\S]*apiVersion: kafka.strimzi.io/v1\\n *kind: KafkaNodePool[\\s\\S]*roles:\\n +- controller"
+      - notMatchRegex:
+          path: spec.template.spec.containers[0].args[0]
+          pattern: "v1beta2|strimzi.io/kraft|KafkaRebalance"
+
+  - it: keeps the kafka broker pool of a cluster migrated from ZooKeeper
+    release:
+      name: test-kafka
+      namespace: tenant-test
+    documentIndex: 3
+    kubernetesProvider:
+      scheme:
+        "kafka.strimzi.io/v1/KafkaNodePool":
+          gvr:
+            group: kafka.strimzi.io
+            version: v1
+            resource: kafkanodepools
+          namespaced: true
+      objects:
+        - apiVersion: kafka.strimzi.io/v1
+          kind: KafkaNodePool
+          metadata:
+            name: kafka
+            namespace: tenant-test
+            labels:
+              strimzi.io/cluster: test-kafka
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].args[0]
+          pattern: 'brokerPool="kafka"'
+
+  - it: does not take a kafka broker pool that belongs to another cluster
+    release:
+      name: test-kafka
+      namespace: tenant-test
+    documentIndex: 3
+    kubernetesProvider:
+      scheme:
+        "kafka.strimzi.io/v1/KafkaNodePool":
+          gvr:
+            group: kafka.strimzi.io
+            version: v1
+            resource: kafkanodepools
+          namespaced: true
+      objects:
+        - apiVersion: kafka.strimzi.io/v1
+          kind: KafkaNodePool
+          metadata:
+            name: kafka
+            namespace: tenant-test
+            labels:
+              strimzi.io/cluster: other-kafka
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].args[0]
+          pattern: 'brokerPool="b-[0-9a-f]{8}"'

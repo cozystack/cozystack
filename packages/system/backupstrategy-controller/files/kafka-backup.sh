@@ -5,6 +5,8 @@ set -euo pipefail
 # kafka-topics.sh / kafka-configs.sh; the Job never sets it.
 BIN="${BIN:-/opt/kafka/bin}"
 TAB=$(printf '\t')
+# Kafka 4 rejects a smaller topic segment.bytes; Kafka 3.x accepted down to 14.
+SEGMENT_BYTES_MIN=1048576
 # Overridable for the same reason as BIN: hack/kafka-backup-script.bats points it
 # at a per-test path so runs cannot read back a previous test's records. The Job
 # never sets it.
@@ -197,6 +199,23 @@ else
       ;;
     C)
       t=$a; k=$b; v=$c
+      # A backup taken on Kafka 3.x can carry topic configs Kafka 4.2/4.3
+      # reject, which would stop the restore halfway. The same limits are in
+      # packages/apps/kafka/templates/topics.yaml,
+      # packages/core/platform/templates/_helpers.tpl and
+      # packages/core/platform/images/migrations/migrations/61.
+      case "${k}" in
+        message.downconversion.enable|message.format.version|message.timestamp.difference.max.ms)
+          echo "    config ${t}: skipping ${k}, removed in Kafka 4" >&2
+          continue
+          ;;
+        segment.bytes)
+          if [[ "${v}" =~ ^-?[0-9]+$ ]] && [ "${v}" -lt "${SEGMENT_BYTES_MIN}" ]; then
+            echo "    config ${t}: raising segment.bytes from ${v} to ${SEGMENT_BYTES_MIN}, the Kafka 4 minimum" >&2
+            v=${SEGMENT_BYTES_MIN}
+          fi
+          ;;
+      esac
       # Bracket-group only when the value contains a comma, so kafka-configs
       # does not split it into bogus key=val tokens.
       case "${v}" in

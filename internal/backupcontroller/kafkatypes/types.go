@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-// Package kafkatypes declares the minimum subset of the kafka.strimzi.io/v1beta2
+// Package kafkatypes declares the minimum subset of the kafka.strimzi.io/v1
 // Kafka cluster CR the backupstrategy controller reads: the Ready condition,
 // used only as a readiness precondition before the Kafka metadata backup/restore
 // Job runs. Modelled as a partial (no spec) so we avoid pulling the full Strimzi
@@ -8,7 +8,7 @@
 // The driver never writes this CR.
 //
 // +groupName=kafka.strimzi.io
-// +versionName=v1beta2
+// +versionName=v1
 // +kubebuilder:object:generate=true
 package kafkatypes
 
@@ -20,12 +20,11 @@ import (
 
 const (
 	GroupName = "kafka.strimzi.io"
-	Version   = "v1beta2"
+	Version   = "v1"
 
 	// ConditionTypeReady is the Strimzi cluster-operator condition that turns
-	// True once the Kafka cluster (brokers, and in ZooKeeper mode ZooKeeper) is
-	// up and serving. The Admin API the backup Job talks to is only reachable
-	// then.
+	// True once the Kafka cluster is up and serving. The Admin API the backup
+	// Job talks to is only reachable then.
 	ConditionTypeReady = "Ready"
 )
 

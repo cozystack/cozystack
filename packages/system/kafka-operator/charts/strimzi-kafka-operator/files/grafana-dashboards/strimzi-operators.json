@@ -154,7 +154,7 @@
               "options": {
                 "match": "null",
                 "result": {
-                  "text": "0"
+                  "text": "N/A"
                 }
               },
               "type": "special"
@@ -226,7 +226,7 @@
               "options": {
                 "match": "null",
                 "result": {
-                  "text": "0"
+                  "text": "N/A"
                 }
               },
               "type": "special"
@@ -298,7 +298,7 @@
               "options": {
                 "match": "null",
                 "result": {
-                  "text": "0"
+                  "text": "N/A"
                 }
               },
               "type": "special"
@@ -370,7 +370,7 @@
               "options": {
                 "match": "null",
                 "result": {
-                  "text": "0"
+                  "text": "N/A"
                 }
               },
               "type": "special"
@@ -442,7 +442,7 @@
               "options": {
                 "match": "null",
                 "result": {
-                  "text": "0"
+                  "text": "N/A"
                 }
               },
               "type": "special"
@@ -493,13 +493,13 @@
       "targets": [
         {
           "datasource": "${DS_PROMETHEUS}",
-          "expr": "sum(strimzi_resources{kind=\"KafkaMirrorMaker\"})",
+          "expr": "sum(strimzi_resources{kind=\"KafkaNodePool\"})",
           "format": "time_series",
           "intervalFactor": 1,
           "refId": "A"
         }
       ],
-      "title": "Mirror Maker CRs",
+      "title": "Node Pool CRs",
       "type": "stat"
     },
     {
@@ -514,7 +514,7 @@
               "options": {
                 "match": "null",
                 "result": {
-                  "text": "0"
+                  "text": "N/A"
                 }
               },
               "type": "special"
@@ -586,7 +586,7 @@
               "options": {
                 "match": "null",
                 "result": {
-                  "text": "0"
+                  "text": "N/A"
                 }
               },
               "type": "special"
@@ -658,7 +658,7 @@
               "options": {
                 "match": "null",
                 "result": {
-                  "text": "0"
+                  "text": "N/A"
                 }
               },
               "type": "special"
@@ -1771,6 +1771,7 @@
   },
   "timezone": "",
   "title": "Strimzi Operators",
+  "uid": "31545fecf446bf88",
   "version": 6,
   "weekStart": ""
 }

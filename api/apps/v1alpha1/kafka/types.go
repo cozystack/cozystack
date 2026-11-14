@@ -24,8 +24,8 @@ type ConfigSpec struct {
 	// TLS configuration. Strimzi manages the cluster PKI automatically (no cert-manager is involved for this chart): the operator auto-creates `<release>-cluster-ca-cert` and `<release>-clients-ca-cert` secrets, both exposed for client trust setup. The internal TLS listener on 9093 is always on; this toggle only controls the external listener on 9094.
 	// +kubebuilder:default:={}
 	Tls TLS `json:"tls"`
-	// Kafka version to deploy. Upgrade-only: once a cluster's KRaft metadata is at a given version, Strimzi refuses an in-place downgrade, so lowering this on a running cluster (e.g. v3.9 back to v3.8) leaves the Kafka CR stuck in a reconcile error. Pick the target version at creation and only ever raise it.
-	// +kubebuilder:default:="v3.9"
+	// Kafka version to deploy. Upgrade-only: once a cluster's KRaft metadata is at a given version, Strimzi refuses an in-place downgrade, so lowering this on a running cluster (e.g. v4.3 back to v4.2) leaves the Kafka CR stuck in a reconcile error. Pick the target version at creation and only ever raise it.
+	// +kubebuilder:default:="v4.3"
 	Version Version `json:"version"`
 	// Topics configuration.
 	// +kubebuilder:default:={}
@@ -36,7 +36,7 @@ type ConfigSpec struct {
 }
 
 type Kafka struct {
-	// Persistent Volume size for KRaft controller metadata (used during ZK-to-KRaft migration).
+	// Persistent Volume size for KRaft controller metadata.
 	// +kubebuilder:default:="5Gi"
 	ControllerStorageSize resource.Quantity `json:"controllerStorageSize,omitempty"`
 	// Number of Kafka replicas.
@@ -83,5 +83,5 @@ type Topic struct {
 // +kubebuilder:validation:Enum="t1.nano";"t1.micro";"t1.small";"t1.medium";"t1.large";"t1.xlarge";"t1.2xlarge";"t1.4xlarge";"c1.nano";"c1.micro";"c1.small";"c1.medium";"c1.large";"c1.xlarge";"c1.2xlarge";"c1.4xlarge";"s1.nano";"s1.micro";"s1.small";"s1.medium";"s1.large";"s1.xlarge";"s1.2xlarge";"s1.4xlarge";"u1.nano";"u1.micro";"u1.small";"u1.medium";"u1.large";"u1.xlarge";"u1.2xlarge";"u1.4xlarge";"m1.nano";"m1.micro";"m1.small";"m1.medium";"m1.large";"m1.xlarge";"m1.2xlarge";"m1.4xlarge";"nano";"micro";"small";"medium";"large";"xlarge";"2xlarge"
 type ResourcesPreset string
 
-// +kubebuilder:validation:Enum="v3.9";"v3.8"
+// +kubebuilder:validation:Enum="v4.3";"v4.2"
 type Version string

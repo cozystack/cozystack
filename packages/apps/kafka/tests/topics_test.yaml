@@ -37,6 +37,9 @@ tests:
       - isKind:
           of: KafkaTopic
         documentIndex: 1
+      - isAPIVersion:
+          of: kafka.strimzi.io/v1
+        documentIndex: 0
 
   - it: sets topic name and cluster label
     release:
@@ -96,3 +99,103 @@ tests:
           value: test-topic
       - notExists:
           path: spec.config
+
+  - it: refuses a topic config Kafka 4 removed
+    release:
+      name: test-kafka
+      namespace: tenant-test
+    set:
+      topics:
+        - name: orders
+          partitions: 3
+          replicas: 1
+          config:
+            retention.ms: "86400000"
+            message.format.version: 3.0-IV1
+    asserts:
+      - failedTemplate:
+          errorPattern: "topic \"orders\" sets message.format.version, which Kafka 4 removed"
+
+  - it: refuses message.downconversion.enable
+    release:
+      name: test-kafka
+      namespace: tenant-test
+    set:
+      topics:
+        - name: orders
+          partitions: 3
+          replicas: 1
+          config:
+            message.downconversion.enable: true
+    asserts:
+      - failedTemplate:
+          errorPattern: "topic \"orders\" sets message.downconversion.enable"
+
+  - it: refuses message.timestamp.difference.max.ms
+    release:
+      name: test-kafka
+      namespace: tenant-test
+    set:
+      topics:
+        - name: events
+          partitions: 3
+          replicas: 1
+          config:
+            message.timestamp.difference.max.ms: 60000
+    asserts:
+      - failedTemplate:
+          errorPattern: "topic \"events\" sets message.timestamp.difference.max.ms"
+
+  - it: refuses segment.bytes below the Kafka 4 floor
+    release:
+      name: test-kafka
+      namespace: tenant-test
+    set:
+      topics:
+        - name: small
+          partitions: 1
+          replicas: 1
+          config:
+            segment.bytes: 524288
+    asserts:
+      - failedTemplate:
+          errorPattern: "topic \"small\" sets segment.bytes=524288, below the Kafka 4 minimum of 1048576"
+
+  - it: refuses segment.bytes below the floor given as a string
+    release:
+      name: test-kafka
+      namespace: tenant-test
+    set:
+      topics:
+        - name: small
+          partitions: 1
+          replicas: 1
+          config:
+            segment.bytes: "1048575"
+    asserts:
+      - failedTemplate:
+          errorPattern: "topic \"small\" sets segment.bytes=1048575"
+
+  - it: accepts segment.bytes at and above the floor
+    release:
+      name: test-kafka
+      namespace: tenant-test
+    set:
+      topics:
+        - name: floor
+          partitions: 1
+          replicas: 1
+          config:
+            segment.bytes: 1048576
+        - name: big
+          partitions: 1
+          replicas: 1
+          config:
+            segment.bytes: 1073741824
+    asserts:
+      - hasDocuments:
+          count: 2
+      - equal:
+          path: spec.config["segment.bytes"]
+          value: 1073741824
+        documentIndex: 1

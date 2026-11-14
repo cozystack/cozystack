@@ -16,23 +16,17 @@
   deterministic token — a role letter plus an 8-hex digest of the release — which
   is unique within the namespace (each release hashes differently) and adds a
   fixed ~10 characters regardless of release length. The broker pool of a
-  MIGRATED cluster is the one exception: it stays exactly "kafka" to adopt the
-  existing <cluster>-kafka-N brokers and their data (see kafka.brokerPoolName).
+  cluster migrated from ZooKeeper is the one exception: it stays exactly "kafka",
+  the pool that adopted its <cluster>-kafka-N brokers (see kafka.brokerPoolName).
 */ -}}
 {{- define "kafka.poolHash" -}}
 {{- substr 0 8 (sha256sum .Release.Name) -}}
 {{- end -}}
 
 {{- /*
-  The controller pool name is a pure function of the release — no adoption/
-  self-ownership lookup like kafka.brokerPoolName has, on purpose. A KRaft
-  controller pool is ALWAYS created new: a fresh install makes one, and a
-  ZooKeeper cluster has no controller pool to adopt (KRaft controllers do not
-  exist under ZooKeeper). So there is never a pre-existing, differently-named
-  controller pool for this name to preserve — the broker's "kafka"-adoption
-  branch has no controller analogue because the underlying situation it handles
-  (live brokers to reuse in place) has no controller counterpart. No released
-  chart ships a controller pool under any other name, so no upgrade renames one.
+  The controller pool name is a pure function of the release, with no ownership
+  lookup like kafka.brokerPoolName has: no released chart ships a controller
+  pool under any other name, so no upgrade renames one.
 */ -}}
 {{- define "kafka.controllerPoolName" -}}
 {{- printf "c-%s" (include "kafka.poolHash" .) -}}
@@ -41,7 +35,7 @@
 {{- /*
   KRaft controller quorum — fixed at creation, never re-derived on a day-2 edit.
 
-  The quorum must be static: Strimzi 0.45 cannot scale a controller node pool, so
+  The quorum must be static: this chart does not resize a live KRaft quorum, so
   flipping it (e.g. because a tenant raised kafka.replicas from 1 to 3) would wedge
   the reconcile or lose the metadata quorum. So the size is pinned once: if the
   controller pool already exists, keep its current replica count; only on first
@@ -57,81 +51,30 @@
   applied — either way, computing the initial value is correct.
 */ -}}
 {{- define "kafka.controllerReplicas" -}}
-{{- $existing := lookup "kafka.strimzi.io/v1beta2" "KafkaNodePool" .Release.Namespace (include "kafka.controllerPoolName" .) -}}
+{{- $existing := lookup "kafka.strimzi.io/v1" "KafkaNodePool" .Release.Namespace (include "kafka.controllerPoolName" .) -}}
 {{- $pinned := dig "spec" "replicas" 0 ($existing | default dict) -}}
 {{- if $pinned -}}{{ int $pinned }}{{- else if le (int .Values.kafka.replicas) 1 -}}1{{- else -}}3{{- end -}}
 {{- end -}}
 
 {{- /*
-  Broker KafkaNodePool name — a short release-hashed token for fresh installs so
-  several Kafka clusters can coexist in one namespace, but exactly "kafka" for a
-  cluster being migrated from ZooKeeper.
+  Broker KafkaNodePool name: "kafka" for a cluster migrated from ZooKeeper, whose
+  pool of that name adopted its <cluster>-kafka-N brokers and their PVCs, and
+  the release-hashed "b-<hash>" for every other cluster.
 
-  Strimzi derives node and PVC names as <cluster>-<pool>-<id>. A fresh KRaft
-  cluster has no prior state to preserve, so its broker pool is named "b-<hash>"
-  — unique within the namespace (each release hashes differently), letting
-  multiple fresh clusters live side by side without doubling the release name
-  into every pod hostname. A pre-node-pool ZooKeeper cluster, however, has
-  brokers "<cluster>-kafka-N", and only a pool named exactly "kafka" adopts those
-  brokers (and their PVCs) in place during migration.
-
-  Resolution (lookup runs at render time, before the pre-upgrade migration Job):
-   - this cluster already owns a "kafka" pool          -> "kafka"    (migrated, steady state)
-   - this cluster already owns a "b-<hash>" pool       -> "b-<hash>" (fresh, steady state)
-   - an existing non-KRaft CR with no release pool yet -> "kafka"    (classic ZK about to migrate)
-   - nothing exists                                    -> "b-<hash>" (fresh install)
-
-  Safety of the lookup: Helm propagates any non-NotFound read error and fails the
-  whole render (pkg/engine/lookup_func.go returns an empty result only on
-  apierrors.IsNotFound), so a transient apiserver/RBAC miss makes the reconcile
-  retry — it never silently resolves a live migrated cluster to "b-<hash>" and
-  lets a later upgrade prune the "kafka" pool. An empty lookup means genuine
-  absence: a real fresh install, or a client-side render (helm template/unittest)
-  that is never applied.
-
-  Because "kafka" is a fixed, namespace-unique name, co-namespaced ZooKeeper->KRaft
-  migrations run one at a time: while another cluster owns the "kafka" pool, this
-  cluster's render fails closed and its HelmRelease retries. The migration hook
-  drains the first cluster off the shared pool with a Cruise Control rebalance and
-  frees the name, then the waiting cluster retries into it — so every co-namespaced
-  Kafka reaches KRaft, not just the first (strimzi/strimzi-kafka-operator
-  discussions/11120). Fresh KRaft clusters are never affected. lookup returns
-  nothing during `helm template`, so unit tests resolve to the fresh "b-<hash>"
-  default.
+  An empty lookup means genuine absence: Helm propagates any non-NotFound read
+  error and fails the render (pkg/engine/lookup_func.go returns an empty result
+  only on apierrors.IsNotFound), so a transient apiserver/RBAC miss never
+  resolves a migrated cluster to "b-<hash>", which would make the hook create a
+  second, empty broker pool. lookup returns nothing during `helm template`, so
+  unit tests resolve to "b-<hash>".
 */ -}}
 {{- define "kafka.brokerPoolName" -}}
-{{- $release := .Release.Name -}}
-{{- $ns := .Release.Namespace -}}
-{{- $brokerFresh := printf "b-%s" (include "kafka.poolHash" .) -}}
-{{- $name := $brokerFresh -}}
-{{- $kp := lookup "kafka.strimzi.io/v1beta2" "KafkaNodePool" $ns "kafka" -}}
-{{- $kpOwner := "" -}}
-{{- if $kp -}}{{- $kpOwner = dig "metadata" "labels" "strimzi.io/cluster" "" $kp -}}{{- end -}}
-{{- if and $kp (eq $kpOwner $release) -}}
-  {{- /* Migrated, steady state: this cluster owns the adopted "kafka" pool. */ -}}
-  {{- $name = "kafka" -}}
+{{- $kp := lookup "kafka.strimzi.io/v1" "KafkaNodePool" .Release.Namespace "kafka" -}}
+{{- if and $kp (eq (dig "metadata" "labels" "strimzi.io/cluster" "" $kp) .Release.Name) -}}
+kafka
 {{- else -}}
-  {{- $existingCR := lookup "kafka.strimzi.io/v1beta2" "Kafka" $ns $release -}}
-  {{- $ownBrokerPool := lookup "kafka.strimzi.io/v1beta2" "KafkaNodePool" $ns $brokerFresh -}}
-  {{- $kraftAnn := "" -}}
-  {{- if $existingCR -}}{{- $kraftAnn = dig "metadata" "annotations" "strimzi.io/kraft" "" $existingCR -}}{{- end -}}
-  {{- if $ownBrokerPool -}}
-    {{- /* Fresh KRaft cluster, steady state: it already owns its "b-<hash>" pool. */ -}}
-    {{- $name = $brokerFresh -}}
-  {{- else if and $existingCR (ne $kraftAnn "enabled") -}}
-    {{- /* Classic ZooKeeper cluster about to migrate: adopt its brokers as "kafka". */ -}}
-    {{- if and $kp (ne $kpOwner "") (ne $kpOwner $release) -}}
-      {{- fail (printf "Kafka %q is waiting to migrate: namespace %q still has the shared \"kafka\" broker pool owned by cluster %q, which is migrating first. Strimzi node pool names are namespace-unique, so co-namespaced ZooKeeper->KRaft migrations run one at a time (see strimzi/strimzi-kafka-operator discussions/11120): %q drains off the shared pool and frees the name, then this HelmRelease retries into it automatically — no manual action needed. Fresh KRaft clusters are unaffected." $release $ns $kpOwner $kpOwner) -}}
-    {{- end -}}
-    {{- $name = "kafka" -}}
-  {{- end -}}
-  {{- /* else: fresh install (no CR, no own pool) -> "b-<hash>". A transient read
-         error can't reach here silently: Helm propagates every non-NotFound error
-         and fails the render, so an empty lookup means genuine absence (a real
-         fresh install, or a client-side helm-template render that is never
-         applied), never a flaked read of a live migrated cluster's "kafka" pool. */ -}}
+{{- printf "b-%s" (include "kafka.poolHash" .) -}}
 {{- end -}}
-{{- $name -}}
 {{- end -}}
 
 {{- /*

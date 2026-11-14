@@ -154,7 +154,27 @@ tests:
         documentIndex: 2
       - lengthEqual:
           path: rules
-          count: 2
+          count: 3
+        documentIndex: 2
+
+  - it: deletes release-scoped StrimziPodSets after the KafkaNodePools
+    asserts:
+      # After an upgrade from Strimzi 0.x, kube-controller-manager's garbage
+      # collector still tracks each StrimziPodSet under v1beta2, a version no
+      # longer served, and never deletes it when its pool goes
+      # (kubernetes/kubernetes#102641). The brokers keep running until
+      # kube-controller-manager restarts, so the hook deletes the sets itself.
+      # Same selector and no wait, as for the pools.
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: "(?s)delete kafkanodepools\\.kafka\\.strimzi\\.io .*delete strimzipodsets\\.core\\.strimzi\\.io \\\\\\s+-l 'strimzi\\.io/cluster=kafka-test' \\\\\\s+--ignore-not-found=true \\\\\\s+--wait=false"
+        documentIndex: 0
+      - contains:
+          path: rules
+          content:
+            apiGroups: ["core.strimzi.io"]
+            resources: ["strimzipodsets"]
+            verbs: ["list", "delete"]
         documentIndex: 2
 
   - it: prefixes the hook image with the cluster images registry when set
