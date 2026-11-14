@@ -42,9 +42,13 @@
 # a change: `yq -i`, which every `make image` uses to stamp the ref, drops one.
 # If any OTHER line differs — the PR branched from a
 # main whose config for that file differs from the artifact's base — the file is
-# left on its committed ref (safe degradation, logged, never fatal). CI checks
-# out the pull_request merge commit (current main + PR), so for an unbuilt file
-# the config already matches current main and only ref lines differ.
+# left on its committed ref (safe degradation, logged, never fatal), except
+# that a bare digest-less ref in it, which no registry serves, still takes the
+# artifact's ref (see replace_bare_refs). CI checks out the pull_request merge
+# commit (main + PR), so for an unbuilt file the config matches main as of
+# that merge commit. It is fixed when the run starts, so a rerun, or a PR not
+# pushed to since, can be older than the artifact and drift on files it never
+# touched.
 #
 # Usage: hack/overlay-main-images.sh <mainpkgs-dir> <built-matrix-json> [touched-pkg-dirs]
 #        <mainpkgs-dir>     = extracted cozystack-packages:main tree; its root holds
@@ -123,8 +127,76 @@ img_line='(@sha256:|^[[:space:]]*(- )?(image|repository|registry|tag|digest):|^[
 # match branch for this same shape and for this same reason.
 bare_ref_line='^[^[:space:]#][^[:space:]]*/[^[:space:]]+$'
 
+# A drifted file keeps its committed refs. For a ref pinned by digest that is a
+# pullable older image, which is the safe answer. A bare `<repo>:<tag>` with no
+# digest is different: it is the first commit of a new image
+# (docs/agents/image-refs.md), its tag was never pushed, and keeping it makes the
+# component fail to pull instead of run an older image. The merge commit CI
+# checks out is fixed when the run starts, so a PR whose merge commit predates a
+# config change to such a file drifts on it, and every new image is exposed
+# until a release stamps its ref (#5328).
+#
+# replace_bare_refs <cur> <new> rewrites, in <cur> only, each line whose value is
+# such a bare ref under an image key, taking the line from <new> that has the
+# same key and indentation, the same image name and an @sha256: digest. Exactly
+# one such line must exist; two are ambiguous and none means build-main did not
+# stamp it, so there is nothing more pullable to take. Every other line of <cur>
+# stays as the PR has it. The current image may expect configuration the PR's
+# older chart lacks, but the committed ref cannot run at all. Prints the number
+# of lines replaced.
+replace_bare_refs() {
+  tmp="$1.overlay-bare.$$"
+  n=$(awk -v newf="$2" -v out="$tmp" '
+    function key_prefix(s) {
+      if (match(s, /^[[:space:]]*(- )?([A-Za-z]+[Ii]mage|image):[[:space:]]*/)) return substr(s, 1, RLENGTH)
+      return ""
+    }
+    function ref_value(s, p,   v) {
+      v = substr(s, length(p) + 1)
+      sub(/[[:space:]]+$/, "", v)
+      gsub(/"/, "", v)
+      return v
+    }
+    function image_name(v) {
+      sub(/@.*/, "", v)
+      sub(/.*\//, "", v)
+      sub(/:.*/, "", v)
+      return v
+    }
+    BEGIN {
+      while ((getline l < newf) > 0) {
+        p = key_prefix(l)
+        if (p == "" || index(l, "@sha256:") == 0) continue
+        k = p SUBSEP image_name(ref_value(l, p))
+        cnt[k]++
+        line[k] = l
+      }
+      close(newf)
+    }
+    {
+      p = key_prefix($0)
+      if (p != "") {
+        v = ref_value($0, p)
+        if (v ~ /^[^@[:space:]]+\/[^@[:space:]\/]+:[^@[:space:]\/]+$/) {
+          k = p SUBSEP image_name(v)
+          if (cnt[k] == 1) { print line[k] > out; r++; next }
+        }
+      }
+      print > out
+    }
+    END { close(out); print r + 0 }
+  ' "$1")
+  if [ "$n" -gt 0 ]; then
+    mv "$tmp" "$1"
+  else
+    rm -f "$tmp"
+  fi
+  echo "$n"
+}
+
 overlaid=0
 same=0
+bare=0
 skipped=0
 drift=0
 drift_files=""
@@ -164,6 +236,15 @@ for new in $(find "$MAINPKGS" -type d -name charts -prune -o \
       | grep -vE '^[[:space:]]*$' | grep -qvE "$line_pat"; then
     echo "drift (non-ref change) in $cur -> keeping committed ref"
     drift=$((drift + 1))
+    case "$cur" in
+      *.yaml)
+        r=$(replace_bare_refs "$cur" "$new") || r=0
+        if [ "$r" -gt 0 ]; then
+          echo "bare ref in $cur -> current-main ($r line(s))"
+          bare=$((bare + r))
+        fi
+        ;;
+    esac
     # Name the PACKAGE, not the directory the file happens to sit in: an
     # images/*.tag drift would otherwise read as "<pkg>/images", which is not
     # something anyone can go and look at.
@@ -181,7 +262,7 @@ for new in $(find "$MAINPKGS" -type d -name charts -prune -o \
   fi
 done
 
-echo "Overlay current-main images: overlaid=$overlaid same=$same skipped(rebuilt/owned/edited)=$skipped drift=$drift failed=$failed"
+echo "Overlay current-main images: overlaid=$overlaid same=$same skipped(rebuilt/owned/edited)=$skipped drift=$drift bare-refs=$bare failed=$failed"
 
 # Keeping the committed ref is the safe answer to a config that does not match
 # the artifact, but it is not a neutral one: that component then runs its last
