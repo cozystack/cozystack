@@ -405,6 +405,11 @@ jobs:
       - name: Run backport-batch tests
         if: ${{ !cancelled() && needs.plan.outputs.backport_batch == 'true' }}
         run: make test-backport-batch
+      - name: Check new Helm document indices
+        if: ${{ !cancelled() }}
+        env:
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+        run: python3 hack/check-helm-document-indices.py "$(git merge-base HEAD "origin/$BASE_REF")"
       - name: Upload unit test report
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

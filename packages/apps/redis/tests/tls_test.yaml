@@ -557,7 +557,9 @@ tests:
       external: false
       tls:
         enabled: true
-    documentIndex: 3
+    documentSelector:
+      path: metadata.name
+      value: my-redis-tls
     asserts:
       - notContains:
           path: spec.dnsNames
@@ -840,7 +842,9 @@ tests:
       external: false
       tls:
         enabled: true
-    documentIndex: 3
+    documentSelector:
+      path: metadata.name
+      value: my-redis-tls
     asserts:
       - notContains:
           path: spec.dnsNames

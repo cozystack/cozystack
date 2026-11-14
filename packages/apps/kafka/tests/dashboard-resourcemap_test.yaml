@@ -137,11 +137,13 @@ tests:
     release:
       name: test-kafka
       namespace: tenant-test
+    documentSelector:
+      path: kind
+      value: Role
     asserts:
       - notContains:
           path: rules[2].resourceNames
           content: test-kafka-zookeeper
-        documentIndex: 0
 
   # External bootstrap service absent when external=false, regardless of tls.enabled
   - it: does not grant access to external bootstrap service when tls.enabled=true and external=false
