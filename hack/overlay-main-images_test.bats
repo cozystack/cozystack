@@ -502,3 +502,88 @@ load test_helper
   cd "$root"
   rm -rf "$w"
 }
+
+# A drifted file keeps its committed refs, and for a digest-pinned ref that is
+# a pullable older image. A bare <repo>:<tag> is the first commit of a new image
+# (docs/agents/image-refs.md) and names a tag no registry serves, so keeping it
+# turns drift into ImagePullBackOff. That hit every fork PR whose merge commit
+# predated a config change to observability-proxy's values.yaml (#5328). Only
+# such a bare line takes the artifact's ref; the rest of the file stays as the
+# PR has it.
+@test "a drifted file still takes the artifact ref for a bare (digest-less) ref line" {
+  root=$(pwd)
+  w=$(mktemp -d)
+  mkdir -p "$w/packages/system/proxy" "$w/main/system/proxy"
+  printf 'proxy:\n  image: "ghcr.io/cozystack/cozystack/proxy:v0.0.0"\n  lookback: 1h\n' \
+    > "$w/packages/system/proxy/values.yaml"
+  printf 'proxy:\n  image: "iad.ocir.io/x/cozystack/proxy:main@sha256:bbbb"\n  lookback: 1h\n  prefix: cozy-\n' \
+    > "$w/main/system/proxy/values.yaml"
+  ( cd "$w" && "$root/hack/overlay-main-images.sh" main '[]' ) > "$w/out.txt"
+  grep -q 'drift (non-ref change) in packages/system/proxy/values.yaml' "$w/out.txt"
+  grep -q '  image: "iad.ocir.io/x/cozystack/proxy:main@sha256:bbbb"' "$w/packages/system/proxy/values.yaml"
+  # The config stays the PR's: the new key is not introduced.
+  if grep -q 'prefix:' "$w/packages/system/proxy/values.yaml"; then
+    echo "FAIL: a config line was taken from the artifact" >&2; exit 1
+  fi
+  grep -q 'bare ref in packages/system/proxy/values.yaml -> current-main' "$w/out.txt"
+  grep -q 'bare-refs=1' "$w/out.txt"
+  rm -rf "$w"
+}
+
+@test "a drifted file replaces only its bare ref, not a digest-pinned sibling" {
+  root=$(pwd)
+  w=$(mktemp -d)
+  mkdir -p "$w/packages/system/pair" "$w/main/system/pair"
+  printf 'tuning: old\nimage: ghcr.io/cozystack/cozystack/pair:v1.5.0@sha256:aaaa\nclientImage: ghcr.io/cozystack/cozystack/pair-client:latest\n' \
+    > "$w/packages/system/pair/values.yaml"
+  printf 'tuning: new\nimage: iad.ocir.io/x/cozystack/pair:main@sha256:bbbb\nclientImage: iad.ocir.io/x/cozystack/pair-client:main@sha256:cccc\n' \
+    > "$w/main/system/pair/values.yaml"
+  ( cd "$w" && "$root/hack/overlay-main-images.sh" main '[]' ) > "$w/out.txt"
+  grep -q '^image: ghcr.io/cozystack/cozystack/pair:v1.5.0@sha256:aaaa$' "$w/packages/system/pair/values.yaml"
+  grep -q '^clientImage: iad.ocir.io/x/cozystack/pair-client:main@sha256:cccc$' "$w/packages/system/pair/values.yaml"
+  grep -q '^tuning: old$' "$w/packages/system/pair/values.yaml"
+  rm -rf "$w"
+}
+
+@test "a bare ref is not replaced by an artifact line for a different image" {
+  # The same key can hold another image in the artifact, e.g. after a rename.
+  # Matching on the key alone would swap in an image the chart never asked for.
+  root=$(pwd)
+  w=$(mktemp -d)
+  mkdir -p "$w/packages/system/ren" "$w/main/system/ren"
+  printf 'tuning: old\nimage: ghcr.io/cozystack/cozystack/old-name:v0.0.0\n' > "$w/packages/system/ren/values.yaml"
+  printf 'tuning: new\nimage: iad.ocir.io/x/cozystack/new-name:main@sha256:bbbb\n' > "$w/main/system/ren/values.yaml"
+  ( cd "$w" && "$root/hack/overlay-main-images.sh" main '[]' ) > "$w/out.txt"
+  grep -q '^image: ghcr.io/cozystack/cozystack/old-name:v0.0.0$' "$w/packages/system/ren/values.yaml"
+  grep -q 'bare-refs=0' "$w/out.txt"
+  rm -rf "$w"
+}
+
+@test "a bare ref is kept when the artifact carries no digest for it either" {
+  # A ref build-main does not stamp (third-party, or not built yet) has no
+  # digest in the artifact, so there is nothing more pullable to take.
+  root=$(pwd)
+  w=$(mktemp -d)
+  mkdir -p "$w/packages/system/tp" "$w/main/system/tp"
+  printf 'tuning: old\nimage: docker.io/library/busybox:1.37.0\n' > "$w/packages/system/tp/values.yaml"
+  printf 'tuning: new\nimage: docker.io/library/busybox:1.38.0\n' > "$w/main/system/tp/values.yaml"
+  ( cd "$w" && "$root/hack/overlay-main-images.sh" main '[]' ) > "$w/out.txt"
+  grep -q '^image: docker.io/library/busybox:1.37.0$' "$w/packages/system/tp/values.yaml"
+  grep -q 'bare-refs=0' "$w/out.txt"
+  rm -rf "$w"
+}
+
+@test "a bare ref is kept when the artifact has two candidate lines for it" {
+  # Two lines with the same key and image name (e.g. one per component in a
+  # list) cannot be told apart, so neither is taken.
+  root=$(pwd)
+  w=$(mktemp -d)
+  mkdir -p "$w/packages/system/dup" "$w/main/system/dup"
+  printf 'tuning: old\na:\n  image: ghcr.io/cozystack/cozystack/dup:v0.0.0\n' > "$w/packages/system/dup/values.yaml"
+  printf 'tuning: new\na:\n  image: iad.ocir.io/x/cozystack/dup:main@sha256:bbbb\nb:\n  image: iad.ocir.io/x/cozystack/dup:main@sha256:cccc\n' \
+    > "$w/main/system/dup/values.yaml"
+  ( cd "$w" && "$root/hack/overlay-main-images.sh" main '[]' ) > "$w/out.txt"
+  grep -q '^  image: ghcr.io/cozystack/cozystack/dup:v0.0.0$' "$w/packages/system/dup/values.yaml"
+  grep -q 'bare-refs=0' "$w/out.txt"
+  rm -rf "$w"
+}
