@@ -51,6 +51,7 @@ bundles:
     - cozystack.rabbitmq-operator
     - cozystack.redis-application
     - cozystack.redis-operator
+    - cozystack.rustfs-application
     - cozystack.securitygroup-controller
     - cozystack.talos-log-collector
     - cozystack.tcp-balancer-application

@@ -13,6 +13,8 @@ spec:
     - name: default
       dependsOn:
         - cozystack.networking
+        # rustfs-rd ships an ApplicationDefinition, a CRD of cozystack-engine.
+        - cozystack.cozystack-engine
       libraries:
         - name: cozy-lib
           path: library/cozy-lib

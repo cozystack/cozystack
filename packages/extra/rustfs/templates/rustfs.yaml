@@ -1,4 +1,4 @@
-{{- $ingress := .Values._namespace.ingress }}
+{{- $ingress := (.Values._namespace | default dict).ingress }}
 {{- $clusterDomain := (index (.Values._cluster | default dict) "cluster-domain") | default "cozy.local" }}
 {{- $host := include "cozy-lib.ns-host-required" . }}
 {{- $s3Host := .Values.host | default (printf "s3.%s" $host) }}
