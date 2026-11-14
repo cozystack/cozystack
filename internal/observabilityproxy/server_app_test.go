@@ -177,7 +177,9 @@ func TestServerApplicationMetricsScope(t *testing.T) {
 		if got := r.form["match[]"]; len(got) != 1 || got[0] != lookups[r.path] {
 			t.Errorf("%s match[] = %q", r.path, got)
 		}
-		if got := r.form["extra_filters[]"]; !slices.Equal(got, []string{wantMetricsScope}) {
+		// lookupNames filters by the namespace selector alone, not by the
+		// namespace root's scope.
+		if got := r.form["extra_filters[]"]; !slices.Equal(got, []string{`{namespace="tenant-a"}`}) {
 			t.Errorf("%s extra_filters[] = %q", r.path, got)
 		}
 		// The query's own lookback is known and shorter than the 24h cap.

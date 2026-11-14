@@ -36,7 +36,7 @@ This file provides structured guidance for AI coding assistants and agents worki
 
 - **E2E tests and E2E CI** (e.g., "write/fix an e2e test", "stabilize a flaky test", "add a bats test", "change the e2e workflow", "why did e2e fail")
   - Read: [`e2e-testing.md`](./docs/agents/e2e-testing.md)
-  - Action: Read the entire file and follow the conventions exactly — no new retries on deterministic steps, event-driven backstops before every `kubectl wait`, no test-level `EXIT`/`RETURN` traps (a self-contained one inside a Chainsaw `script` step or an explicit subshell is fine — see the doc), no assertion beginning with `!` (errexit exempts an inverted status, so it cannot fail — write `if cmd; then echo "FAIL: …"; false; fi`), fail-fast on HelmRelease readiness
+  - Action: Read the entire file and follow the conventions exactly — no new retries on deterministic steps, event-driven backstops before every `kubectl wait`, no test-level `EXIT`/`RETURN` traps (a self-contained one inside a Chainsaw `script` step or an explicit subshell is fine — see the doc), no assertion beginning with `!` (errexit exempts an inverted status, so it can be silently ignored — write `if cmd; then echo "FAIL: …"; false; fi`), fail-fast on HelmRelease readiness
 
 - **General questions about contributing**
   - Read: [`contributing.md`](./docs/agents/contributing.md)
@@ -51,9 +51,21 @@ This file provides structured guidance for AI coding assistants and agents worki
   - PR titles: a Conventional Commits header (`type(scope): description`, types from [`contributing.md`](./docs/agents/contributing.md)) auto-applies `kind/*` and `area/*` via `.github/workflows/pr-labeler.yaml`. Append `!` (or add a `BREAKING CHANGE:` footer) to apply `kind/breaking-change`
 
 **Important rules:**
+
 - **Match scope, then read first.** Load a process file only when the task genuinely falls in its scope, and load it before starting work — not midway through. Tasks outside a file's scope should not pull it into context.
 - **Follow it exactly.** Do not assume you already know the process, and do not skip steps (`changelog.md` especially). Where the documentation and your instinct disagree, the documentation wins.
 - **[`overview.md`](./docs/agents/overview.md) is the standing reference** for structure and conventions, useful even when no route above points at it.
+
+## Working Principles
+
+These hold for every task, whichever document the routes above point at.
+
+- **A causal claim needs a mechanism.** A failure that appeared after a commit, a bump or a rerun was not thereby caused by it, and matching symptoms prove nothing either: unrelated faults often look identical from outside. Back a root cause with a log line, a reproducer, a bisect, or a ruled-out alternative; without one, name at least two hypotheses and what would tell them apart. Before tying a problem to a change, check whether it predates the change (an older run, a condition's `lastTransitionTime`, `git blame`). Close a hypothesis when evidence rules it out. Missing evidence means inconclusive, not coincidence: record that limit, stop treating the hypothesis as a cause, and revisit it only with new evidence or a concrete discriminating check.
+- **Verify, do not recall.** Versions, CLI flags, API fields and defaults drift faster than a model's training data. Check the upstream source, the documentation at the pinned version, or `--help` before writing code or advice that depends on them. When a problem is not solved after two attempts, stop and research it instead of trying a third variation.
+- **Long flag names.** New and changed commands in docs, scripts, CI and PR text spell options out (`--namespace`, `--output`, `--filename`, `--message`), so that a reader does not need to know what `-f` means to this particular tool. An option with no long form is the only exception.
+- **Name the cluster.** Management and tenant clusters are different targets. Every `kubectl` call, including reads, carries `--context`; cluster-facing Helm commands carry `--kube-context`. Use the human-approved target and the task's kubeconfig where one was supplied, not the ambient current context. Before running wrappers or cluster-facing tests, verify that they propagate the chosen target. Tests that need no cluster must not inherit live cluster credentials.
+- **Respect the reader's time.** Lead with the answer or decision; prefer direct wording over formalities, filler and repeated conclusions. Put necessary detail after a short summary or in a linked document.
+- **Public text.** Everything that reaches GitHub (commits, PR and issue bodies, review comments, code comments) is in English. It names no private infrastructure (cluster, customer or internal namespace names) and none of an agent's private tooling (custom skills, slash commands). Nothing is published on someone's behalf without their approval, unless they have delegated it.
 
 ## Project Overview
 
@@ -62,6 +74,7 @@ This file provides structured guidance for AI coding assistants and agents worki
 ## Quick Reference
 
 ### Code Structure
+
 - `packages/core/` - Core platform charts (installer, platform)
 - `packages/system/` - System components (CSI, CNI, operators)
 - `packages/apps/` - User-facing applications in catalog
@@ -70,6 +83,7 @@ This file provides structured guidance for AI coding assistants and agents worki
 - `api/` - Kubernetes CRDs
 
 ### Conventions
+
 - **Helm Charts**: Umbrella pattern, vendored upstream charts in `charts/`
 - **Go Code**: Controller-runtime patterns, kubebuilder style
 - **Git Commits**: Conventional Commits (`type(scope): description`) with `--signoff`; an agent-assisted commit adds one `Assisted-by: LLM` trailer
@@ -77,6 +91,7 @@ This file provides structured guidance for AI coding assistants and agents worki
 - **Prose**: One continuous line per paragraph — see [Prose Formatting](#prose-formatting)
 
 ### What NOT to Do
+
 - ❌ Edit `/vendor/`, `zz_generated.*.go`, upstream charts directly
 - ❌ Modify `go.mod`/`go.sum` manually (use `go get`)
 - ❌ Force push to main/master
