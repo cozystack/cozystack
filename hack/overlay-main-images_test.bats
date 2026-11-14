@@ -618,3 +618,23 @@ load test_helper
   grep -q 'bare-refs=0' "$w/out.txt"
   rm -rf "$w"
 }
+
+@test "a bare-ref rewrite that cannot write the file is counted as failed, not replaced" {
+  # Mode bits do not stop root from writing, and the POSIX runner has no
+  # `skip`, so there is nothing to observe as root.
+  if [ "$(id -u)" -eq 0 ]; then return 0; fi
+  root=$(pwd)
+  w=$(mktemp -d)
+  mkdir -p "$w/packages/system/ro" "$w/main/system/ro"
+  printf 'tuning: old\nimage: ghcr.io/cozystack/cozystack/ro:v0.0.0\n' > "$w/packages/system/ro/values.yaml"
+  printf 'tuning: new\nimage: iad.ocir.io/x/cozystack/ro:main@sha256:bbbb\n' > "$w/main/system/ro/values.yaml"
+  chmod a-w "$w/packages/system/ro"
+  ( cd "$w" && "$root/hack/overlay-main-images.sh" main '[]' ) > "$w/out.txt" 2>&1
+  chmod u+w "$w/packages/system/ro"
+  grep -q '^image: ghcr.io/cozystack/cozystack/ro:v0.0.0$' "$w/packages/system/ro/values.yaml"
+  grep -q 'bare-refs=0 failed=1' "$w/out.txt"
+  if ls "$w/packages/system/ro" | grep -q 'overlay-bare'; then
+    echo "FAIL: temp file left behind" >&2; exit 1
+  fi
+  rm -rf "$w"
+}

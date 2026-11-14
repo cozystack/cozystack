@@ -151,7 +151,10 @@ bare_ref_line='^[^[:space:]#][^[:space:]]*/[^[:space:]]+$'
 # alternative is a ref that may not pull at all. Third-party refs are never
 # touched: main can bump one alongside its config, and the committed pair is
 # the one known to work together. The split shape (`repository:` + `tag:`
-# without `digest:`) is not handled; no package uses it for a bare ref today.
+# without `digest:`) is not handled, nor is a single-quoted value or one
+# followed by a `# comment`; such a line stays as committed, and no package
+# writes a bare first-party ref that way today. Prints nothing and fails when
+# the file could not be rewritten, so the caller counts it as failed.
 #
 # Prints the number of lines replaced.
 replace_bare_refs() {
@@ -199,11 +202,11 @@ replace_bare_refs() {
     }
     END { close(out); print r + 0 }
   ' "$1")
-  if [ "$n" -gt 0 ]; then
-    mv "$tmp" "$1"
-  else
-    rm -f "$tmp"
-  fi
+  case "$n" in
+    ''|*[!0-9]*) rm -f "$tmp"; return 1 ;;
+    0) rm -f "$tmp" ;;
+    *) mv "$tmp" "$1" || { rm -f "$tmp"; return 1; } ;;
+  esac
   echo "$n"
 }
 
@@ -248,19 +251,26 @@ for new in $(find "$MAINPKGS" -type d -name charts -prune -o \
 
   if diff "$cur" "$new" | sed -n 's/^[<>] //p' \
       | grep -vE '^[[:space:]]*$' | grep -qvE "$line_pat"; then
-    echo "drift (non-ref change) in $cur -> keeping committed ref"
     drift=$((drift + 1))
+    r=0
     case "$cur" in
       *.yaml)
-        r=$(replace_bare_refs "$cur" "$new") || r=0
-        if [ "$r" -gt 0 ]; then
-          echo "bare first-party ref in $cur -> current-main ($r line(s)); its other refs stay committed"
-          bare=$((bare + r))
-          d=$(dirname "${cur#packages/}")
-          bare_files="$bare_files $d"
+        if ! r=$(replace_bare_refs "$cur" "$new"); then
+          echo "WARN: rewriting bare refs failed for $cur (keeping committed refs)"
+          failed=$((failed + 1))
+          r=0
         fi
         ;;
     esac
+    if [ "$r" -eq 0 ]; then
+      echo "drift (non-ref change) in $cur -> keeping committed ref"
+    else
+      echo "drift (non-ref change) in $cur -> keeping committed refs except bare first-party ones"
+      echo "bare first-party ref in $cur -> current-main ($r line(s)); its other refs stay committed"
+      bare=$((bare + r))
+      d=$(dirname "${cur#packages/}")
+      bare_files="$bare_files $d"
+    fi
     # Name the PACKAGE, not the directory the file happens to sit in: an
     # images/*.tag drift would otherwise read as "<pkg>/images", which is not
     # something anyone can go and look at.
