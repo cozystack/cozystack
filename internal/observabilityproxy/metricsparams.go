@@ -22,6 +22,7 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -46,6 +47,10 @@ type MetricsConfig struct {
 	LongTermStore      string
 	ShortTermRetention time.Duration
 	Limits             MetricsLimits
+	App                AppScopeLimits
+	// PlatformNamespacePrefix names the namespaces whose exporters may
+	// attribute a series to another namespace; empty trusts none.
+	PlatformNamespacePrefix string
 	// UpstreamURL maps a store name to its Prometheus API base URL, without
 	// a trailing slash; nil means the in-cluster vmselect Service.
 	UpstreamURL func(store string) string
@@ -77,6 +82,23 @@ type metricsRequest struct {
 	// start is the earliest instant the request reads, for the store choice;
 	// zero when that is unknown, which picks the long-term store.
 	start time.Time
+	// from and to are the window the query is evaluated over, without the
+	// lookback of its expression.
+	from, to time.Time
+	// last is the latest instant the request reads, past to by a negative
+	// offset; zero when that is unknown.
+	last time.Time
+	// scopedMatch is set when match[] holds the scope, not client matchers.
+	scopedMatch bool
+}
+
+// setScope replaces the namespace scope with the given selectors, which
+// vmselect ORs.
+func (req *metricsRequest) setScope(selectors []string) {
+	req.params["extra_filters[]"] = selectors
+	if req.scopedMatch {
+		req.params["match[]"] = selectors
+	}
 }
 
 // namespaceSelector quotes ns the way MetricsQL unquotes a label value
@@ -85,15 +107,37 @@ func namespaceSelector(ns string) string {
 	return "{namespace=" + strconv.Quote(ns) + "}"
 }
 
+// namespaceScope selects the series of namespace ns. Besides its own, it
+// takes the series an exporter in a platform namespace attributes to ns:
+// vmagent sets namespace to the scraped target's and, without honorLabels,
+// moves the exporter's own namespace label to exported_namespace. Any pod
+// can write that label, so it is trusted only where the platform's vmagent
+// set namespace to one with the platform prefix, in which tenants cannot run
+// pods or scrape objects. Series remote-written from a tenant's nested
+// cluster carry whatever namespace that cluster chose, so they are outside
+// this guarantee for both values alike.
+func (c MetricsConfig) namespaceScope(ns string) []string {
+	scope := []string{namespaceSelector(ns)}
+	if c.PlatformNamespacePrefix != "" {
+		// MetricsQL anchors =~ at both ends.
+		platform := strconv.Quote(regexp.QuoteMeta(c.PlatformNamespacePrefix) + ".*")
+		scope = append(scope, "{namespace=~"+platform+",exported_namespace="+strconv.Quote(ns)+"}")
+	}
+	return scope
+}
+
 // BuildMetricsParams rebuilds the upstream parameters from an allowlist and
-// adds the namespace scope as the only extra_filters[] value. vmselect ORs
-// repeated extra_filters, so a client value would widen the scope; it ANDs
-// the single one into every selector of the query and every match[], which
-// is what lets the query pass through unparsed.
-func BuildMetricsParams(endpoint string, in url.Values, namespace string, now time.Time, lim MetricsLimits) (metricsRequest, *HTTPError) {
+// sends scope as the only extra_filters[] values. vmselect ORs repeated
+// extra_filters, so a client value would widen the scope; it ANDs each into
+// every selector of the query and every match[], which is what lets the
+// query pass through unparsed.
+func BuildMetricsParams(endpoint string, in url.Values, scope []string, now time.Time, lim MetricsLimits) (metricsRequest, *HTTPError) {
 	req := metricsRequest{path: endpoint, params: url.Values{}}
+	if len(scope) == 0 {
+		return req, errorf(http.StatusInternalServerError, "no metrics scope")
+	}
 	out := req.params
-	out.Set("extra_filters[]", namespaceSelector(namespace))
+	out["extra_filters[]"] = slices.Clone(scope)
 	timeout := lim.MaxTimeout
 	if v := in.Get("timeout"); v != "" {
 		d, herr := parseMetricsDuration("timeout", v)
@@ -116,8 +160,11 @@ func BuildMetricsParams(endpoint string, in url.Values, namespace string, now ti
 				return req, herr
 			}
 			at = t
-			out.Set("time", formatTime(t))
 		}
+		// The default is forwarded too: the application lookup is sized
+		// for at, and vmselect's own clock reads later, by as long as the
+		// lookups took.
+		out.Set("time", formatTime(at))
 		step := instantDefaultStep
 		if v := in.Get("step"); v != "" {
 			var herr *HTTPError
@@ -126,7 +173,15 @@ func BuildMetricsParams(endpoint string, in url.Values, namespace string, now ti
 			}
 			out.Set("step", formatSeconds(step))
 		}
-		req.start = queryStart(out.Get("query"), at.Add(-latencyOffset), step)
+		// vmselect evaluates an instant query whose time is within the
+		// latency offset of its own clock at that clock minus the offset
+		// (queryOffset in prometheus.go), so the evaluation instant lies in
+		// (time-2*offset, time]; the earlier end needs no clock to agree.
+		req.start = queryStart(out.Get("query"), at.Add(-2*latencyOffset), step)
+		req.from, req.to = at, at
+		if ahead, ok := queryLookahead(out.Get("query"), step); ok {
+			req.last = at.Add(ahead)
+		}
 		return req, nil
 
 	case "api/v1/query_range":
@@ -150,6 +205,11 @@ func BuildMetricsParams(endpoint string, in url.Values, namespace string, now ti
 			return req, errorf(http.StatusUnprocessableEntity, "%d points per series exceed the limit of %d; raise step", points, lim.MaxPoints)
 		}
 		req.start = queryStart(out.Get("query"), start, step)
+		req.from, req.to = start, end
+		// vmselect rounds end up to a whole step (AdjustStartEnd).
+		if ahead, ok := queryLookahead(out.Get("query"), step); ok {
+			req.last = end.Add(step + ahead)
+		}
 		out.Set("start", formatTime(start))
 		out.Set("end", formatTime(end))
 		out.Set("step", formatSeconds(step))
@@ -172,7 +232,7 @@ func BuildMetricsParams(endpoint string, in url.Values, namespace string, now ti
 	if herr != nil {
 		return req, herr
 	}
-	req.start = start
+	req.start, req.from, req.to, req.last = start, start, end, end
 	out.Set("start", formatTime(start))
 	out.Set("end", formatTime(end))
 
@@ -192,8 +252,12 @@ func BuildMetricsParams(endpoint string, in url.Values, namespace string, now ti
 		}
 		// vmselect started with -search.ignoreExtraFiltersAtLabelsAPI drops
 		// extra_filters[] on the label APIs unless a match[] is present
-		// (getCommonParamsInternal), so the scope is repeated here.
-		out.Set("match[]", namespaceSelector(namespace))
+		// (getCommonParamsInternal), so the scope is repeated here. Where both
+		// are sent, vmselect ANDs every match[] with every extra_filters[];
+		// a cross pair is narrower than one of its halves, so the union is
+		// still the scope.
+		out["match[]"] = slices.Clone(scope)
+		req.scopedMatch = true
 	}
 	return req, nil
 }

@@ -202,6 +202,23 @@ assert_full_suite() {
     rm -rf "$tmp"
 }
 
+@test "the CI-only tools select nothing and do not escalate the rest" {
+    tmp=$(mktemp -d)
+    cp -r packages/core/platform/sources "$tmp/sources"
+    printf '%s\n' cmd/backport-batch/report_test.go cmd/api-gate/main.go > "$tmp/diff"
+    output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources")
+    [ -z "$output" ]
+    # Beside a package, the package alone decides the selection.
+    printf '%s\n' cmd/backport-batch/main.go packages/apps/postgres/values.yaml > "$tmp/diff"
+    output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources")
+    assert_selection "a CI-only tool must not widen a package selection" "$output" "postgres"
+    # Any other cmd/ directory is a shipped binary and still escalates.
+    echo "cmd/cozystack-api/main.go" > "$tmp/diff"
+    output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources" 2>/dev/null)
+    assert_full_suite "$output"
+    rm -rf "$tmp"
+}
+
 @test "kubernetes-application maps to the two kubernetes suites" {
     tmp=$(mktemp -d)
     cp -r packages/core/platform/sources "$tmp/sources"

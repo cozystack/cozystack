@@ -57,6 +57,11 @@ type RestoreJobReconciler struct {
 	// see a peer's StartedAt before the cache does. Wired in
 	// SetupWithManager.
 	APIReader client.Reader
+
+	// newS3ObjectLister overrides the S3 client used to check that a
+	// backup's object still exists; nil means a real minio client. Set by
+	// unit tests.
+	newS3ObjectLister func(conn s3Connection) (s3ObjectLister, error)
 }
 
 func (r *RestoreJobReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {

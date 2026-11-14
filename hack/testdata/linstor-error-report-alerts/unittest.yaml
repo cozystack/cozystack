@@ -1,0 +1,198 @@
+rule_files:
+  - rules.yaml
+
+evaluation_interval: 15s
+
+tests:
+  - name: controller pod moves to another node
+    interval: 30s
+    input_series:
+      - series: 'up{job="linstor-controller", instance="10.0.0.1:3370", controller_node="node-a"}'
+        values: '1x38 0 stale'
+      - series: 'linstor_error_reports_count{job="linstor-controller", instance="10.0.0.1:3370", controller_node="node-a", hostname="node-a", module="SATELLITE"}'
+        values: '1x38 stale'
+      - series: 'linstor_error_reports_count{job="linstor-controller", instance="10.0.0.1:3370", controller_node="node-a", hostname="node-b", module="SATELLITE"}'
+        values: '2x38 stale'
+      - series: 'up{job="linstor-controller", instance="10.0.0.2:3370", controller_node="node-b"}'
+        values: '_x41 1x79'
+      - series: 'linstor_error_reports_count{job="linstor-controller", instance="10.0.0.2:3370", controller_node="node-b", hostname="node-a", module="SATELLITE"}'
+        values: '_x41 1x58 2x20'
+      - series: 'linstor_error_reports_count{job="linstor-controller", instance="10.0.0.2:3370", controller_node="node-b", hostname="node-b", module="SATELLITE"}'
+        values: '_x41 2x79'
+    alert_rule_test:
+      - eval_time: 21m
+        groupname: linstor.rules
+        alertname: linstorSatelliteErrorRate
+      - eval_time: 28m
+        groupname: linstor.rules
+        alertname: linstorSatelliteErrorRate
+      - eval_time: 35m
+        groupname: linstor.rules
+        alertname: linstorSatelliteErrorRate
+      - eval_time: 45m
+        groupname: linstor.rules
+        alertname: linstorSatelliteErrorRate
+      - eval_time: 51m
+        groupname: linstor.rules
+        alertname: linstorSatelliteErrorRate
+        exp_alerts:
+          - exp_labels:
+              hostname: node-a
+              severity: warning
+            exp_annotations:
+              description: |
+                LINSTOR Satellite "node-a" reports 1 errors in the last 15 minutes.
+                Use "linstor error-reports list --nodes node-a" to inspect the reports.
+
+  - name: an external label of the scrape changes
+    interval: 30s
+    input_series:
+      - series: 'up{job="linstor-controller", instance="10.0.0.1:3370", cluster="cozystack"}'
+        values: '1x39 stale'
+      - series: 'linstor_error_reports_count{job="linstor-controller", instance="10.0.0.1:3370", cluster="cozystack", hostname="node-a", module="SATELLITE"}'
+        values: '1x39 stale'
+      - series: 'linstor_error_reports_count{job="linstor-controller", instance="10.0.0.1:3370", cluster="cozystack", hostname="linstor-controller-abc", module="CONTROLLER"}'
+        values: '1x39 stale'
+      - series: 'up{job="linstor-controller", instance="10.0.0.1:3370", cluster="cluster-a"}'
+        values: '_x41 1x79'
+      - series: 'linstor_error_reports_count{job="linstor-controller", instance="10.0.0.1:3370", cluster="cluster-a", hostname="node-a", module="SATELLITE"}'
+        values: '_x41 1x79'
+      - series: 'linstor_error_reports_count{job="linstor-controller", instance="10.0.0.1:3370", cluster="cluster-a", hostname="linstor-controller-abc", module="CONTROLLER"}'
+        values: '_x41 1x79'
+    alert_rule_test:
+      - eval_time: 21m
+        groupname: linstor.rules
+        alertname: linstorSatelliteErrorRate
+      - eval_time: 30m
+        groupname: linstor.rules
+        alertname: linstorSatelliteErrorRate
+      - eval_time: 21m
+        groupname: linstor.rules
+        alertname: linstorControllerErrorRate
+      - eval_time: 30m
+        groupname: linstor.rules
+        alertname: linstorControllerErrorRate
+
+  - name: a satellite drops out of the metric while it is disconnected
+    interval: 30s
+    input_series:
+      - series: 'up{job="linstor-controller", instance="10.0.0.1:3370"}'
+        values: '1x220'
+      - series: 'linstor_error_reports_count{job="linstor-controller", instance="10.0.0.1:3370", hostname="node-a", module="SATELLITE"}'
+        values: '1x38 stale _x80 1x100'
+      - series: 'linstor_error_reports_count{job="linstor-controller", instance="10.0.0.1:3370", hostname="node-b", module="SATELLITE"}'
+        values: '2x220'
+      - series: 'linstor_error_reports_count{job="linstor-controller", instance="10.0.0.1:3370", hostname="node-c", module="SATELLITE"}'
+        values: '1x38 stale _x80 2x100'
+    alert_rule_test:
+      - eval_time: 61m
+        groupname: linstor.rules
+        alertname: linstorSatelliteErrorRate
+        exp_alerts:
+          - exp_labels:
+              hostname: node-c
+              severity: warning
+            exp_annotations:
+              description: |
+                LINSTOR Satellite "node-c" reports 1 errors in the last 15 minutes.
+                Use "linstor error-reports list --nodes node-c" to inspect the reports.
+      - eval_time: 70m
+        groupname: linstor.rules
+        alertname: linstorSatelliteErrorRate
+        exp_alerts:
+          - exp_labels:
+              hostname: node-c
+              severity: warning
+            exp_annotations:
+              description: |
+                LINSTOR Satellite "node-c" reports 1 errors in the last 15 minutes.
+                Use "linstor error-reports list --nodes node-c" to inspect the reports.
+      - eval_time: 76m
+        groupname: linstor.rules
+        alertname: linstorSatelliteErrorRate
+
+  - name: a new report fires for the 15 minute window
+    interval: 30s
+    input_series:
+      - series: 'up{job="linstor-controller", instance="10.0.0.1:3370"}'
+        values: '1x120'
+      - series: 'linstor_error_reports_count{job="linstor-controller", instance="10.0.0.1:3370", hostname="node-a", module="SATELLITE"}'
+        values: '1x39 2x80'
+      - series: 'linstor_error_reports_count{job="linstor-controller", instance="10.0.0.1:3370", hostname="node-b", module="SATELLITE"}'
+        values: '2x120'
+      - series: 'linstor_error_reports_count{job="linstor-controller", instance="10.0.0.1:3370", hostname="node-c", module="SATELLITE"}'
+        values: '0x39 1x80'
+      - series: 'linstor_error_reports_count{job="linstor-controller", instance="10.0.0.1:3370", hostname="linstor-controller-abc", module="CONTROLLER"}'
+        values: '0x39 1x80'
+    alert_rule_test:
+      - eval_time: 21m
+        groupname: linstor.rules
+        alertname: linstorSatelliteErrorRate
+        exp_alerts:
+          - exp_labels:
+              hostname: node-a
+              severity: warning
+            exp_annotations:
+              description: |
+                LINSTOR Satellite "node-a" reports 1 errors in the last 15 minutes.
+                Use "linstor error-reports list --nodes node-a" to inspect the reports.
+          - exp_labels:
+              hostname: node-c
+              severity: warning
+            exp_annotations:
+              description: |
+                LINSTOR Satellite "node-c" reports 1 errors in the last 15 minutes.
+                Use "linstor error-reports list --nodes node-c" to inspect the reports.
+      - eval_time: 34m
+        groupname: linstor.rules
+        alertname: linstorSatelliteErrorRate
+        exp_alerts:
+          - exp_labels:
+              hostname: node-a
+              severity: warning
+            exp_annotations:
+              description: |
+                LINSTOR Satellite "node-a" reports 1 errors in the last 15 minutes.
+                Use "linstor error-reports list --nodes node-a" to inspect the reports.
+          - exp_labels:
+              hostname: node-c
+              severity: warning
+            exp_annotations:
+              description: |
+                LINSTOR Satellite "node-c" reports 1 errors in the last 15 minutes.
+                Use "linstor error-reports list --nodes node-c" to inspect the reports.
+      - eval_time: 36m
+        groupname: linstor.rules
+        alertname: linstorSatelliteErrorRate
+      - eval_time: 21m
+        groupname: linstor.rules
+        alertname: linstorControllerErrorRate
+        exp_alerts:
+          - exp_labels:
+              hostname: linstor-controller-abc
+              severity: warning
+            exp_annotations:
+              description: |
+                LINSTOR Controller reports 1 errors in the last 15 minutes.
+                Use "linstor error-reports list --since 15minutes" to see them.
+      - eval_time: 36m
+        groupname: linstor.rules
+        alertname: linstorControllerErrorRate
+
+  - name: a failed controller scrape still holds the alert back
+    interval: 30s
+    input_series:
+      - series: 'up{job="linstor-controller", instance="10.0.0.1:3370"}'
+        values: '1x19 0x140 1x60'
+      - series: 'linstor_error_reports_count{job="linstor-controller", instance="10.0.0.1:3370", hostname="node-a", module="SATELLITE"}'
+        values: '1x19 stale _x140 1x60'
+    alert_rule_test:
+      - eval_time: 85m
+        groupname: linstor.rules
+        alertname: linstorSatelliteErrorRate
+      - eval_time: 93m
+        groupname: linstor.rules
+        alertname: linstorSatelliteErrorRate
+      - eval_time: 100m
+        groupname: linstor.rules
+        alertname: linstorSatelliteErrorRate

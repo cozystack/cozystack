@@ -39,6 +39,10 @@ type WorkloadMonitorSpec struct {
 // that is not operational because a DataVolume it selects is not ready.
 const WorkloadMonitorReasonDataVolumeNotReady = "DataVolumeNotReady"
 
+// WorkloadMonitorReasonBucketClaimNotReady is the status Reason of a monitor
+// that is not operational because a BucketClaim it selects is not provisioned.
+const WorkloadMonitorReasonBucketClaimNotReady = "BucketClaimNotReady"
+
 // WorkloadMonitorStatus defines the observed state of WorkloadMonitor
 type WorkloadMonitorStatus struct {
 	// Operational indicates if the workload meets all operational requirements

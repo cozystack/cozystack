@@ -20,6 +20,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -75,7 +76,7 @@ func TestServerMetricsRebuildsUpstreamRequest(t *testing.T) {
 		if r.path != "/api/v1/query_range" {
 			t.Errorf("upstream path = %s", r.path)
 		}
-		if got := r.form["extra_filters[]"]; len(got) != 1 || got[0] != wantMetricsScope {
+		if got := r.form["extra_filters[]"]; !slices.Equal(got, wantMetricsScope) {
 			t.Errorf("extra_filters[] = %q", got)
 		}
 		if r.form.Has("extra_filters") || r.form.Has("extra_label") || r.form.Has("nocache") {
@@ -105,7 +106,7 @@ func TestServerMetricsStoreByRange(t *testing.T) {
 	if want := []string{"shortterm", "longterm", "shortterm"}; len(h.stores) != 3 || h.stores[0] != want[0] || h.stores[1] != want[1] || h.stores[2] != want[2] {
 		t.Fatalf("stores = %v, want %v", h.stores, want)
 	}
-	if r := h.got[2]; r.path != "/api/v1/label/pod/values" || r.form.Get("match[]") != wantMetricsScope {
+	if r := h.got[2]; r.path != "/api/v1/label/pod/values" || !slices.Equal(r.form["match[]"], wantMetricsScope) {
 		t.Fatalf("label values upstream = %s %v", r.path, r.form)
 	}
 }
@@ -203,7 +204,7 @@ func TestServerMetricsConcurrency(t *testing.T) {
 }
 
 func TestDefaultMetricsUpstreamURL(t *testing.T) {
-	s := NewServer(Config{ClusterDomain: "cozy.local", Metrics: MetricsConfig{RootTenant: "tenant-root"}}, nil, nil, nil)
+	s := NewServer(Config{ClusterDomain: "cozy.local", Metrics: MetricsConfig{RootTenant: "tenant-root"}}, nil, nil, nil, nil)
 	if got, want := s.cfg.Metrics.UpstreamURL("shortterm"), "http://vmselect-shortterm.tenant-root.svc.cozy.local:8481/select/0/prometheus"; got != want {
 		t.Fatalf("upstream = %s, want %s", got, want)
 	}
