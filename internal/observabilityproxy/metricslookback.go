@@ -41,13 +41,19 @@ const latencyOffset = 30 * time.Second
 
 // queryDurationPart is the subset of the MetricsQL duration grammar
 // (scanSingleDuration in metricsql) the scan understands. Step multiples
-// (5i, $__interval), negative parts and upper-case units are left out on
-// purpose: anything else makes the bound unknown.
+// (5i, $__interval) and negative parts are left out on purpose: anything
+// else makes the bound unknown. Offsets are scanned lower-cased, as
+// metricsql reads units in any case; windows and steps in brackets are
+// not, so an upper-case unit there is unknown.
 var (
 	queryDurationPart = regexp.MustCompile(`(\d+(?:\.\d+)?)(ms|s|m|h|d|w|y)`)
 	queryDuration     = regexp.MustCompile(`^(?:\d+(?:\.\d+)?(?:ms|s|m|h|d|w|y))+$`)
 	querySeconds      = regexp.MustCompile(`^\d+(?:\.\d+)?$`)
 )
+
+// offsetTerminators may follow an offset's duration: whitespace, a
+// closing bracket or separator, or a binary operator other than minus.
+const offsetTerminators = " \t\n\r)]},+*/^%<>=!"
 
 var queryDurationUnits = map[string]time.Duration{
 	"ms": time.Millisecond, "s": time.Second, "m": time.Minute, "h": time.Hour,
@@ -113,10 +119,88 @@ func queryLookback(query string, step time.Duration) (time.Duration, bool) {
 		sum += d
 	}
 	lower := strings.ToLower(query)
+	back, _, ok := scanOffsets(lower)
+	if !ok {
+		return 0, false
+	}
+	sum += back
+	if hasKeyword(lower, "with") {
+		return 0, false
+	}
+	n := float64(subqueries + strings.Count(query, "("))
+	sum += (2+3*n)*maxStep + (1+n)*float64(silenceInterval)
+	if sum > float64(maxMetricsDuration) {
+		return 0, false
+	}
+	return time.Duration(sum), true
+}
+
+// queryLookahead is an upper bound on how far after its evaluation window
+// a query reads, from the same lexical scan, with step the query's step.
+// A negative offset reads forward; the negative offsets are summed, which
+// covers nesting. vmselect also evaluates a subquery up to its end plus
+// its step, rounded up to the step (evalRollupFuncWithSubquery), and
+// range_* transforms and keep_next_value carry those later values back
+// onto earlier points, so each subquery level adds two steps; as for the
+// lookback, every "(" counts as a possible implicit subquery and each
+// term uses the largest step seen. Any @ makes the bound unknown, as it
+// does for queryLookback, and so does WITH, which can apply one offset
+// several times, and a backslash or a comment outside a string, which can
+// hide what the scan looks for. vmselect also evaluates
+// rollup_candlestick one step ahead of the evaluation time
+// (evalRollupFuncWithoutAt), so it makes the bound unknown too.
+func queryLookahead(query string, step time.Duration) (time.Duration, bool) {
+	if strings.Contains(query, "@") || unscannableOutsideString(query) {
+		return 0, false
+	}
+	lower := strings.ToLower(query)
+	if hasKeyword(lower, "rollup_candlestick") {
+		return 0, false
+	}
+	_, ahead, ok := scanOffsets(lower)
+	if !ok || ahead > 0 && hasKeyword(lower, "with") {
+		return 0, false
+	}
+	subqueries := 0
+	maxStep := float64(step)
+	for rest := query; ; {
+		open := strings.IndexByte(rest, '[')
+		if open < 0 {
+			break
+		}
+		closing := strings.IndexByte(rest[open:], ']')
+		if closing < 0 {
+			return 0, false
+		}
+		_, subStep, isSubquery := strings.Cut(rest[open+1:open+closing], ":")
+		rest = rest[open+closing+1:]
+		if !isSubquery {
+			continue
+		}
+		subqueries++
+		if strings.TrimSpace(subStep) != "" {
+			d, ok := parseQueryDuration(subStep)
+			if !ok {
+				return 0, false
+			}
+			maxStep = max(maxStep, d)
+		}
+	}
+	ahead += 2 * float64(subqueries+strings.Count(query, "(")) * maxStep
+	if ahead > float64(maxMetricsDuration) {
+		return 0, false
+	}
+	return time.Duration(ahead), true
+}
+
+// scanOffsets sums every offset of the lowercased query, the positive ones
+// into back and the negative ones into ahead, in nanoseconds; ok is false
+// when one is not a plain duration.
+func scanOffsets(lower string) (back, ahead float64, ok bool) {
 	for i := 0; ; {
 		k := strings.Index(lower[i:], "offset")
 		if k < 0 {
-			break
+			return back, ahead, true
 		}
 		k += i
 		i = k + len("offset")
@@ -132,23 +216,53 @@ func queryLookback(query string, step time.Duration) (time.Duration, bool) {
 		if end < 0 {
 			end = len(arg)
 		}
+		// metricsql lexes 1h-30m as one duration whose parts after the
+		// first negative one all subtract (DurationValue), so -1h-30m is
+		// -90m and 1h-2h is -1h; the scan does not read such compounds.
+		// metricsql continues a duration token in more forms than the scan
+		// reads: after a minus (-30m, -1.h, -.5h) and with a trailing
+		// $__interval, all summed by DurationValue. Only what certainly
+		// ends the token is accepted after the duration.
+		if end < len(arg) && !strings.ContainsRune(offsetTerminators, rune(arg[end])) {
+			return 0, 0, false
+		}
 		d, ok := parseQueryDuration(arg[:end])
 		if !ok {
-			return 0, false
+			return 0, 0, false
 		}
-		if !negative {
-			sum += d
+		if negative {
+			ahead += d
+		} else {
+			back += d
 		}
 	}
-	if hasKeyword(lower, "with") {
-		return 0, false
+}
+
+// unscannableOutsideString reports a backslash or a "#" outside a string
+// literal. metricsql unescapes identifiers (unescapeIdent), so
+// rollup\_candlestick or offs\et name what the lexical scan looks for
+// without its spelling; "#" starts a comment to the end of the line, and
+// quotes or brackets inside one would mislead the string tracking here and
+// the bracket and offset scans. Inside any of the three quotes a backslash
+// skips the next character, as metricsql's scanString does: an escaped
+// closing quote does not end the string, backquotes included (a quoted
+// label name keeps such an escape).
+func unscannableOutsideString(query string) bool {
+	var quote byte
+	for i := 0; i < len(query); i++ {
+		c := query[i]
+		switch {
+		case quote == 0 && (c == '\\' || c == '#'):
+			return true
+		case quote == 0 && (c == '"' || c == '\'' || c == '`'):
+			quote = c
+		case quote != 0 && c == '\\':
+			i++
+		case quote != 0 && c == quote:
+			quote = 0
+		}
 	}
-	n := float64(subqueries + strings.Count(query, "("))
-	sum += (2+3*n)*maxStep + (1+n)*float64(silenceInterval)
-	if sum > float64(maxMetricsDuration) {
-		return 0, false
-	}
-	return time.Duration(sum), true
+	return false
 }
 
 // isKeyword reports whether lower[start:end] stands on its own rather than

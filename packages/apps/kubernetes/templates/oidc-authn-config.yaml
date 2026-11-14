@@ -6,8 +6,8 @@
   /etc/kubernetes/authentication-config/config.yaml and consumed via
   --authentication-config=. Compared to the legacy `--oidc-*` flags,
   the file form supports multiple issuers (the `jwt` block is a list)
-  and inline private-CA PEM, so future BYO and Phase-2 issuers extend
-  the same Secret instead of fighting the chart shape.
+  and inline private-CA PEM, so further issuers extend the same Secret
+  instead of fighting the chart shape.
 
   System mode:
     Single JWT entry built from `_cluster.root-host` (the cozy realm

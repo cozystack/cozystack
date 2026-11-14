@@ -12,7 +12,7 @@ release:
   namespace: cozy-observability-proxy
 
 tests:
-  - it: lets the proxy review tokens and access, and list and watch namespaces
+  - it: lets the proxy review tokens and access, and list and watch namespaces and application definitions
     template: templates/rbac.yaml
     documentSelector:
       path: kind
@@ -29,6 +29,9 @@ tests:
               verbs: ["create"]
             - apiGroups: [""]
               resources: ["namespaces"]
+              verbs: ["list", "watch"]
+            - apiGroups: ["cozystack.io"]
+              resources: ["applicationdefinitions"]
               verbs: ["list", "watch"]
 
   - it: binds the proxy role to the proxy ServiceAccount in the release namespace

@@ -40,8 +40,15 @@ func TestParseFlagsDefaults(t *testing.T) {
 	if m.Limits.MaxRange != 30*24*time.Hour || m.Limits.MaxPoints != 11000 || m.Limits.MaxTimeout != 30*time.Second {
 		t.Errorf("metrics limit defaults changed: %+v", m.Limits)
 	}
+	if m.App.Lookback != 30*24*time.Hour || m.App.MaxPods != 500 || m.App.MaxPVCs != 500 {
+		t.Errorf("application scope defaults changed: %+v", m.App)
+	}
 	if m.RootTenant != o.rootTenant {
 		t.Errorf("metrics root tenant = %q, want --root-tenant", m.RootTenant)
+	}
+	// The prefix every platform namespace carries.
+	if m.PlatformNamespacePrefix != "cozy-" {
+		t.Errorf("platform namespace prefix = %q, want cozy-", m.PlatformNamespacePrefix)
 	}
 }
 
@@ -63,14 +70,23 @@ func TestParseFlagsMetricsOverrides(t *testing.T) {
 	o, err := parseFlags([]string{
 		"--root-tenant=tenant-x", "--metrics-shortterm-store=fast", "--metrics-longterm-store=slow",
 		"--metrics-shortterm-retention=24h", "--metrics-max-range=168h", "--metrics-max-points=500", "--metrics-max-timeout=10s",
+		"--metrics-app-lookback=2h", "--metrics-app-max-pods=7", "--metrics-app-max-pvcs=3",
+		"--metrics-platform-namespace-prefix=sys-",
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	m := o.metrics
 	if m.RootTenant != "tenant-x" || m.ShortTermStore != "fast" || m.LongTermStore != "slow" || m.ShortTermRetention != 24*time.Hour ||
-		m.Limits.MaxRange != 168*time.Hour || m.Limits.MaxPoints != 500 || m.Limits.MaxTimeout != 10*time.Second {
+		m.Limits.MaxRange != 168*time.Hour || m.Limits.MaxPoints != 500 || m.Limits.MaxTimeout != 10*time.Second ||
+		m.App.Lookback != 2*time.Hour || m.App.MaxPods != 7 || m.App.MaxPVCs != 3 ||
+		m.PlatformNamespacePrefix != "sys-" {
 		t.Errorf("overrides not applied: %+v", m)
+	}
+	// An empty prefix switches the exporter branch of the scope off.
+	o, err = parseFlags([]string{"--metrics-platform-namespace-prefix="})
+	if err != nil || o.metrics.PlatformNamespacePrefix != "" {
+		t.Errorf("empty platform namespace prefix: %q, %v", o.metrics.PlatformNamespacePrefix, err)
 	}
 }
 
@@ -101,6 +117,16 @@ func TestParseFlagsInvalid(t *testing.T) {
 		{"--metrics-max-range=0s"},
 		{"--metrics-max-points=1"},
 		{"--metrics-max-timeout=0s"},
+		{"--metrics-app-lookback=-1h"},
+		// Every query reads some time before its window, so a zero lookback
+		// would refuse every application metrics query.
+		{"--metrics-app-lookback=0s"},
+		{"--metrics-app-max-pods=0"},
+		{"--metrics-app-max-pvcs=0"},
+		// No namespace name starts with these, so they would match nothing.
+		{"--metrics-platform-namespace-prefix=Cozy-"},
+		{"--metrics-platform-namespace-prefix=cozy.*"},
+		{"--metrics-platform-namespace-prefix=-"},
 		{"--unknown"},
 		// The proxy would cut the request while vmselect is still within
 		// the timeout it was given.

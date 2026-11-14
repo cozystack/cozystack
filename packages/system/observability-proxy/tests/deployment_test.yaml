@@ -40,6 +40,15 @@ tests:
           path: spec.template.spec.containers[0].args
           content: --auth-cache-ttl=10s
 
+  # Envoy behind a Cilium Gateway resets a stream after 300s without data
+  # (envoy.streamIdleTimeoutDurationSeconds), so a silent tail has to be
+  # ended by the proxy first, or the client sees a reset instead of an end.
+  - it: ends a silent tail before the Gateway stream idle timeout
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --tail-idle-timeout=4m30s
+
   - it: passes the metrics store names and short-term retention
     asserts:
       - contains:
@@ -51,6 +60,12 @@ tests:
       - contains:
           path: spec.template.spec.containers[0].args
           content: --metrics-shortterm-retention=72h
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --metrics-app-lookback=720h
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --metrics-platform-namespace-prefix=cozy-
 
   - it: follows renamed metrics stores
     set:
@@ -58,6 +73,7 @@ tests:
         shorttermStore: fast
         longtermStore: slow
         shorttermRetention: 24h
+        appLookback: 48h
     asserts:
       - contains:
           path: spec.template.spec.containers[0].args
@@ -68,6 +84,22 @@ tests:
       - contains:
           path: spec.template.spec.containers[0].args
           content: --metrics-shortterm-retention=24h
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --metrics-app-lookback=48h
+
+  # An empty value must reach the binary as an explicit empty flag; a
+  # dropped flag would fall back to the cozy- default.
+  - it: passes an empty platform namespace prefix through
+    set:
+      observabilityProxy.metrics.platformNamespacePrefix: ""
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --metrics-platform-namespace-prefix=
+      - notContains:
+          path: spec.template.spec.containers[0].args
+          content: --metrics-platform-namespace-prefix=cozy-
 
   - it: falls back to cozy.local when the platform passes no cluster domain
     asserts:

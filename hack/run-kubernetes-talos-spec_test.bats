@@ -2,7 +2,7 @@
 # -----------------------------------------------------------------------------
 # Unit tests for talos_spec_block in hack/e2e-chainsaw/_lib/run-kubernetes.sh
 #
-# It is the composition point for the tenant Kubernetes CR's `spec.talos`: the
+# It is the composition point for the tenant KubernetesNodes CR's `spec.talos`: the
 # Talos OS image cache contributes imageFactoryURL when available. The result is
 # spliced into an unquoted heredoc directly under `spec:`, so an indentation slip
 # does not fail this function -- it produces a CR the API rejects, and every
@@ -32,7 +32,7 @@ load test_helper
 # Splice a talos_spec_block result under `spec:` of a minimal CR and print the
 # document, so yq can be asked what the tenant apiserver would see.
 spec_doc() {
-    printf 'apiVersion: apps.cozystack.io/v1alpha1\nkind: Kubernetes\nmetadata:\n  name: t\nspec:\n%s\n  host: ""\n' "$1"
+    printf 'apiVersion: apps.cozystack.io/v1alpha1\nkind: KubernetesNodes\nmetadata:\n  name: t\nspec:\n%s\n  cluster: t\n' "$1"
 }
 
 @test "no Talos image cache renders nothing, so the chart default applies" {
@@ -59,6 +59,6 @@ spec_doc() {
     # talos_spec_block writes imageFactoryURL by hand. If the chart ever renames
     # it, the CR would be rejected only at e2e time, and this file is the cheapest
     # place to notice.
-    yq -e '.talos | has("imageFactoryURL")' packages/apps/kubernetes/values.yaml >/dev/null \
-        || { echo "packages/apps/kubernetes/values.yaml has no talos.imageFactoryURL; talos_spec_block would emit a key the chart rejects" >&2; exit 1; }
+    yq -e '.talos | has("imageFactoryURL")' packages/apps/kubernetes-nodes/values.yaml >/dev/null \
+        || { echo "packages/apps/kubernetes-nodes/values.yaml has no talos.imageFactoryURL; talos_spec_block would emit a key the pool chart ignores" >&2; exit 1; }
 }
