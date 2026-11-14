@@ -141,7 +141,9 @@ bare_ref_line='^[^[:space:]#][^[:space:]]*/[^[:space:]]+$'
 # under an image key, taking the line from <new> that has the same key and
 # indentation, an @sha256: digest and the same first-party image, i.e. a path
 # ending in /cozystack/<name>. Exactly one such line must exist; two are
-# ambiguous and none means build-main did not stamp it. Every other line of
+# ambiguous, and none means build-main did not stamp it, or the key moved
+# (another indentation or parent) or the image was renamed on main since the
+# PR's merge commit. Every other line of
 # <cur> stays as the PR has it.
 #
 # The trade-off is deliberate. A bare first-party ref that does exist (an older
@@ -299,8 +301,10 @@ echo "Overlay current-main images: overlaid=$overlaid same=$same skipped(rebuilt
 # cost three unrelated PRs, one round each.
 if [ "$drift" -gt 0 ]; then
   drift_pkgs=$(echo "$drift_files" | tr ' ' '\n' | grep -v '^$' | sort -u)
-  printf '::warning title=Image overlay drift::%s package(s) kept committed release refs, so they run release images in this lane rather than current main: %s\n' \
-    "$(printf '%s\n' "$drift_pkgs" | wc -l | tr -d ' ')" \
+  except=""
+  [ "$bare" -eq 0 ] || except=" (bare first-party refs excepted, see Image overlay bare refs)"
+  printf '::warning title=Image overlay drift::%s package(s) kept committed release refs%s, so they run release images in this lane rather than current main: %s\n' \
+    "$(printf '%s\n' "$drift_pkgs" | wc -l | tr -d ' ')" "$except" \
     "$(printf '%s' "$drift_pkgs" | tr '\n' ' ' | sed 's/ $//')"
 fi
 # Among those, a package whose bare first-party ref took main's image runs that
