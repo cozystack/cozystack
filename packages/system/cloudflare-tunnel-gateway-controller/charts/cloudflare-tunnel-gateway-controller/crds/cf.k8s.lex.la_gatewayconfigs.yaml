@@ -1,0 +1,332 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.21.0
+  name: gatewayconfigs.cf.k8s.lex.la
+spec:
+  group: cf.k8s.lex.la
+  names:
+    kind: GatewayConfig
+    listKind: GatewayConfigList
+    plural: gatewayconfigs
+    shortNames:
+    - gwconfig
+    singular: gatewayconfig
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.tunnelTokenSecretRef.name
+      name: Tunnel Token Secret
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: |-
+          GatewayConfig is the Schema for the gatewayconfigs API: the per-Gateway
+          data-plane configuration referenced by
+          Gateway.spec.infrastructure.parametersRef. Its presence opts the Gateway
+          into hard data-plane isolation — a dedicated proxy Deployment and a
+          dedicated Cloudflare Tunnel.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: |-
+              GatewayConfigSpec configures a DEDICATED data plane for one Gateway: its
+              own proxy Deployment and its own Cloudflare Tunnel, instead of the shared
+              chart-deployed proxy pool serving every Gateway of the class. Referenced
+              from Gateway.spec.infrastructure.parametersRef
+              (group=cf.k8s.lex.la, kind=GatewayConfig, same namespace). A Gateway
+              without a parametersRef keeps the shared data plane unchanged.
+
+              The tunnel identity (tunnel ID and account) is PARSED from the connector
+              token — there is deliberately no separate tunnelID field, which would
+              invite token/ID mismatch bugs.
+            properties:
+              authTokenSecretRef:
+                description: |-
+                  AuthTokenSecretRef optionally references a Secret (same namespace) with
+                  a bearer token (key "auth-token" or Key) protecting this Gateway's proxy
+                  config API; the controller authenticates its config pushes with it.
+                properties:
+                  key:
+                    description: |-
+                      Key in the Secret. Defaults depend on context: "tunnel-token" for
+                      tunnelTokenSecretRef, "auth-token" for authTokenSecretRef, "api-token"
+                      for cloudflareCredentialsSecretRef.
+                    type: string
+                  name:
+                    description: Name of the Secret.
+                    minLength: 1
+                    type: string
+                required:
+                - name
+                type: object
+              autoscaling:
+                description: |-
+                  Autoscaling renders a HorizontalPodAutoscaler for the proxy Deployment
+                  instead of a fixed replica count.
+                properties:
+                  maxReplicas:
+                    description: |-
+                      MaxReplicas is the upper bound. Capped at 100: replica counts are
+                      tenant-controlled input on a shared cluster, and an unbounded value is
+                      a noisy-neighbour attack. Aggregate resource usage still needs a
+                      per-namespace ResourceQuota — the cap bounds one Gateway, not a tenant.
+                    format: int32
+                    maximum: 100
+                    minimum: 1
+                    type: integer
+                  metricName:
+                    description: |-
+                      MetricName overrides the Pods-type custom metric the HPA consumes.
+                      Defaults to the proxy's in-flight gauge.
+                    type: string
+                  minReplicas:
+                    description: |-
+                      MinReplicas is the lower bound. Defaults to 2 — the HA floor for
+                      tunnel connectors.
+                    format: int32
+                    maximum: 100
+                    minimum: 1
+                    type: integer
+                  targetInflightPerPod:
+                    description: |-
+                      TargetInflightPerPod is the average in-flight request count per pod the
+                      HPA aims for.
+                    format: int32
+                    minimum: 1
+                    type: integer
+                required:
+                - maxReplicas
+                - targetInflightPerPod
+                type: object
+                x-kubernetes-validations:
+                - message: maxReplicas must be >= minReplicas (minReplicas defaults
+                    to 2 when unset)
+                  rule: 'has(self.minReplicas) ? self.maxReplicas >= self.minReplicas
+                    : self.maxReplicas >= 2'
+              cloudflareCredentialsSecretRef:
+                description: |-
+                  CloudflareCredentialsSecretRef optionally overrides the API credentials
+                  used to write this Gateway's tunnel ingress document, from a Secret in
+                  the SAME namespace under the "api-token" key (or Key). Defaults to the
+                  credentials resolved from the Gateway's GatewayClass → GatewayClassConfig
+                  (class defaults, Gateway overrides). Namespace-local like every other
+                  reference here — a cross-namespace option would let a tenant point the
+                  controller at another tenant's credentials.
+                properties:
+                  key:
+                    description: |-
+                      Key in the Secret. Defaults depend on context: "tunnel-token" for
+                      tunnelTokenSecretRef, "auth-token" for authTokenSecretRef, "api-token"
+                      for cloudflareCredentialsSecretRef.
+                    type: string
+                  name:
+                    description: Name of the Secret.
+                    minLength: 1
+                    type: string
+                required:
+                - name
+                type: object
+              image:
+                description: |-
+                  Image overrides the proxy container image for this Gateway. Defaults to
+                  the controller's --proxy-image flag (set by the Helm chart to the
+                  release's proxy image). The pattern is a permissive image-reference sanity
+                  check (registry[:port]/repo[:tag][@digest]) — it rejects empty, leading
+                  junk, and whitespace at admission rather than letting a garbage value fail
+                  only at pod-pull time, far from the Gateway's status.
+                minLength: 1
+                pattern: ^[a-zA-Z0-9][a-zA-Z0-9._/:@-]*$
+                type: string
+              replicas:
+                description: |-
+                  Replicas is the fixed proxy replica count. Defaults to 2 (the HA floor
+                  for tunnel connectors). Mutually exclusive with autoscaling. Capped at
+                  100 — see Autoscaling.MaxReplicas for the rationale.
+                format: int32
+                maximum: 100
+                minimum: 1
+                type: integer
+              resources:
+                description: |-
+                  Resources sets the proxy container's resource requests and limits.
+                  Defaults to the controller's built-in proxy defaults when unset.
+                properties:
+                  claims:
+                    description: |-
+                      Claims lists the names of resources, defined in spec.resourceClaims,
+                      that are used by this container.
+
+                      This field depends on the
+                      DynamicResourceAllocation feature gate.
+
+                      This field is immutable. It can only be set for containers.
+                    items:
+                      description: ResourceClaim references one entry in PodSpec.ResourceClaims.
+                      properties:
+                        name:
+                          description: |-
+                            Name must match the name of one entry in pod.spec.resourceClaims of
+                            the Pod where this field is used. It makes that resource available
+                            inside a container.
+                          type: string
+                        request:
+                          description: |-
+                            Request is the name chosen for a request in the referenced claim.
+                            If empty, everything from the claim is made available, otherwise
+                            only the result of this request.
+                          type: string
+                      required:
+                      - name
+                      type: object
+                    type: array
+                    x-kubernetes-list-map-keys:
+                    - name
+                    x-kubernetes-list-type: map
+                  limits:
+                    additionalProperties:
+                      anyOf:
+                      - type: integer
+                      - type: string
+                      pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                      x-kubernetes-int-or-string: true
+                    description: |-
+                      Limits describes the maximum amount of compute resources allowed.
+                      More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
+                    type: object
+                  requests:
+                    additionalProperties:
+                      anyOf:
+                      - type: integer
+                      - type: string
+                      pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                      x-kubernetes-int-or-string: true
+                    description: |-
+                      Requests describes the minimum amount of compute resources required.
+                      If Requests is omitted for a container, it defaults to Limits if that is explicitly specified,
+                      otherwise to an implementation-defined value. Requests cannot exceed Limits.
+                      More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
+                    type: object
+                type: object
+              tunnelTokenSecretRef:
+                description: |-
+                  TunnelTokenSecretRef references the Secret (same namespace) holding the
+                  Cloudflare Tunnel connector token under the "tunnel-token" key (or Key).
+                  The token determines the tunnel this Gateway's data plane serves.
+                properties:
+                  key:
+                    description: |-
+                      Key in the Secret. Defaults depend on context: "tunnel-token" for
+                      tunnelTokenSecretRef, "auth-token" for authTokenSecretRef, "api-token"
+                      for cloudflareCredentialsSecretRef.
+                    type: string
+                  name:
+                    description: Name of the Secret.
+                    minLength: 1
+                    type: string
+                required:
+                - name
+                type: object
+            required:
+            - tunnelTokenSecretRef
+            type: object
+            x-kubernetes-validations:
+            - message: 'replicas and autoscaling are mutually exclusive: the HPA owns
+                the replica count when autoscaling is set'
+              rule: '!(has(self.replicas) && has(self.autoscaling))'
+          status:
+            description: |-
+              GatewayConfigStatus defines the observed state of GatewayConfig. Reserved:
+              the controller does not write it today (config problems surface on the
+              REFERENCING Gateway as Accepted=False/InvalidParameters, the actionable
+              place), and its RBAC deliberately grants no status write. The subresource
+              exists so adding conditions later is not a breaking CRD change.
+            properties:
+              conditions:
+                description: Conditions describe the current state of the GatewayConfig.
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - type
+                x-kubernetes-list-type: map
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

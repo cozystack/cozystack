@@ -1,0 +1,20 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "cf-tunnel-gw-ctrl.proxyHeadlessName" . }}
+  labels:
+    {{- include "cf-tunnel-gw-ctrl.proxyLabels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  clusterIP: None
+  # Publish endpoints even when pods are not ready.
+  # The controller pushes config to proxy pods via this service;
+  # proxy readiness depends on receiving config, creating a circular dependency.
+  publishNotReadyAddresses: true
+  ports:
+    - name: config-api
+      port: {{ .Values.proxy.configAPIPort }}
+      targetPort: config-api
+      protocol: TCP
+  selector:
+    {{- include "cf-tunnel-gw-ctrl.proxySelectorLabels" . | nindent 4 }}

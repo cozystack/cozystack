@@ -8,6 +8,7 @@ bundles:
     - cozystack.capi-provider-ipam-in-cluster
     - cozystack.clickhouse-application
     - cozystack.clickhouse-operator
+    - cozystack.cloudflare-tunnel-gateway-controller
     - cozystack.cluster-autoscaler-azure
     - cozystack.cluster-autoscaler-hetzner
     - cozystack.clustersecret-operator
