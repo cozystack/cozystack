@@ -527,6 +527,7 @@ load test_helper
   fi
   grep -q 'bare first-party ref in packages/system/proxy/values.yaml -> current-main' "$w/out.txt"
   grep -q '::warning title=Image overlay bare refs::1 drifted package(s) .*: system/proxy$' "$w/out.txt"
+  grep -q '::warning title=Image overlay drift::1 package(s) kept committed release refs (bare first-party refs excepted, see Image overlay bare refs), .*: system/proxy$' "$w/out.txt"
   grep -q 'bare-refs=1' "$w/out.txt"
   rm -rf "$w"
 }
