@@ -23,6 +23,8 @@ apiVersion: strategy.backups.cozystack.io/v1alpha1
 kind: Kafka
 metadata:
   name: cozy-default-kafka
+  annotations:
+    backups.cozystack.io/endpoint: {{ include "backupstrategy-controller.endpoint" . | quote }}
 spec:
   artifactURITemplate: {{ printf "s3://%s/{{ .Release.Namespace }}/{{ .Release.Name }}/{{ .BackupName }}/kafka-metadata.txt" $bucketName | quote }}
   template:
@@ -67,7 +69,7 @@ spec:
             - name: S3_REGION
               value: {{ .Values.backupStorage.region | quote }}
             - name: S3_FORCE_PATH_STYLE
-              value: {{ .Values.backupStorage.forcePathStyle | quote }}
+              value: {{ include "backupstrategy-controller.forcePathStyle" . | quote }}
           command: ["/usr/bin/bash", "-c"]
           # The driver script is kept as a standalone shell file and
           # embedded verbatim so hack/kafka-backup-script.bats can execute

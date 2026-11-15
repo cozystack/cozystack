@@ -1,0 +1,259 @@
+diff --git a/cmd/linstor-csi/linstor-csi.go b/cmd/linstor-csi/linstor-csi.go
+index e260d7b..2062787 100644
+--- a/cmd/linstor-csi/linstor-csi.go
++++ b/cmd/linstor-csi/linstor-csi.go
+@@ -148,6 +148,7 @@ func main() {
+ 		client.LogOut(logOut),
+ 		client.PropertyNamespace(*propNs),
+ 		client.LabelBySP(*labelBySP),
++		client.ConfigureKubernetesIfAvailable(),
+ 	)
+ 	if err != nil {
+ 		log.Fatal(err)
+diff --git a/pkg/client/linstor.go b/pkg/client/linstor.go
+index 5b52dd4..82f10d0 100644
+--- a/pkg/client/linstor.go
++++ b/pkg/client/linstor.go
+@@ -46,6 +46,8 @@ import (
+ 	"github.com/pborman/uuid"
+ 	"github.com/sirupsen/logrus"
+ 	"golang.org/x/sys/unix"
++	apierrors "k8s.io/apimachinery/pkg/api/errors"
++	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+ 	"k8s.io/apimachinery/pkg/util/sets"
+ 	"k8s.io/mount-utils"
+ 	utilexec "k8s.io/utils/exec"
+@@ -73,6 +75,9 @@ type Linstor struct {
+ 	mounter        mount.Interface
+ 	resizer        *mount.ResizeFs
+ 	labelBySP      bool
++	// nodeSchedulable reports whether new pods can be scheduled on a node.
++	// It is nil when not running in Kubernetes: every node then counts as schedulable.
++	nodeSchedulable func(ctx context.Context, node string) (bool, error)
+ }
+ 
+ // NewLinstor returns a high-level linstor client for CSI applications to interact with
+@@ -126,6 +131,34 @@ func APIClient(c *lc.HighLevelClient) func(*Linstor) error {
+ 	}
+ }
+ 
++// ConfigureKubernetesIfAvailable lets the client read Kubernetes Node objects, so that a snapshot is
++// not restored on a cordoned node when another node holds it. Outside of Kubernetes it does nothing.
++func ConfigureKubernetesIfAvailable() func(*Linstor) error {
++	return func(l *Linstor) error {
++		cl, _, err := utils.KubernetesClient()
++		if err != nil {
++			// Not running in kubernetes
++			return nil
++		}
++
++		l.nodeSchedulable = func(ctx context.Context, node string) (bool, error) {
++			n, err := cl.CoreV1().Nodes().Get(ctx, node, metav1.GetOptions{})
++			if err != nil {
++				if apierrors.IsNotFound(err) {
++					// A LINSTOR node without a Kubernetes Node: nothing says it is cordoned.
++					return true, nil
++				}
++
++				return true, err
++			}
++
++			return !n.Spec.Unschedulable, nil
++		}
++
++		return nil
++	}
++}
++
+ // LogOut sets the Linstor client to write logs to the provided io.Writer
+ // instead of discarding logs.
+ func LogOut(out io.Writer) func(*Linstor) error {
+@@ -1834,34 +1867,29 @@ func (s *Linstor) reconcileSnapshotResources(ctx context.Context, snapshot *volu
+ 		return fmt.Errorf("snapshot '%s' not deployed on any node", snap.Name)
+ 	}
+ 
+-	// Collect available snapshot nodes, preferring those matching the topology hints.
+-	var preferred, available []string
++	// Collect the snapshot nodes LINSTOR can restore on, and whether Kubernetes can schedule pods there.
++	var available []string
++	schedulable := make(map[string]bool, len(snap.Nodes))
+ 	for _, snapNode := range snap.Nodes {
+ 		if err := s.NodeAvailable(ctx, snapNode); err != nil {
+ 			logger.WithField("selected node candidate", snapNode).WithError(err).Debug("node is not available")
+ 			continue
+ 		}
+ 
+-		if slices.Contains(preferredNodes, snapNode) {
+-			preferred = append(preferred, snapNode)
+-		}
+-
+ 		available = append(available, snapNode)
+-	}
++		schedulable[snapNode] = true
+ 
+-	// Pick a random node from preferred candidates, falling back to any available node.
+-	// Randomization distributes restore load across snapshot nodes, preventing all
+-	// clones of the same source from concentrating on a single node.
+-	candidates := preferred
+-	if len(candidates) == 0 {
+-		candidates = available
+-	}
++		if s.nodeSchedulable != nil {
++			ok, err := s.nodeSchedulable(ctx, snapNode)
++			if err != nil {
++				logger.WithField("selected node candidate", snapNode).WithError(err).Warn("could not check if node is cordoned, assuming it is not")
++			}
+ 
+-	var selectedNode string
+-	if len(candidates) > 0 {
+-		selectedNode = candidates[rand.Intn(len(candidates))]
++			schedulable[snapNode] = ok
++		}
+ 	}
+ 
++	selectedNode := selectRestoreNode(available, preferredNodes, func(node string) bool { return schedulable[node] })
+ 	if selectedNode == "" {
+ 		return fmt.Errorf("no node [%s] available for snapshot '%s'", strings.Join(snap.Nodes, ","), snap.Name)
+ 	}
+@@ -2168,6 +2196,43 @@ func (s *Linstor) relocateResources(ctx context.Context, volID, rgName string) e
+ 	return nil
+ }
+ 
++// selectRestoreNode picks the node a snapshot is restored on, among the available nodes holding it.
++//
++// The restored volume is pinned to that node, so the consumer pod has to run there:
++//   - preferredNodes[0] is the node the scheduler selected for a WaitForFirstConsumer volume. If it holds the
++//     snapshot, restoring there lets the pod start without another scheduling round.
++//   - Otherwise a random node is picked, which spreads restores of the same source across its snapshot nodes.
++//     Cordoned nodes are skipped as long as another node holds the snapshot: a pod can never be scheduled on
++//     them, so a volume restored there stays unusable until the node is uncordoned.
++//
++// Nodes in preferredNodes come first, but a schedulable node outside them wins over a cordoned one inside them.
++func selectRestoreNode(available, preferredNodes []string, schedulable func(node string) bool) string {
++	isPreferred := func(node string) bool { return slices.Contains(preferredNodes, node) }
++	both := func(node string) bool { return isPreferred(node) && schedulable(node) }
++
++	var candidates []string
++	for _, keep := range []func(string) bool{both, schedulable, isPreferred} {
++		candidates = slices.DeleteFunc(slices.Clone(available), func(node string) bool { return !keep(node) })
++		if len(candidates) > 0 {
++			break
++		}
++	}
++
++	if len(candidates) == 0 {
++		candidates = available
++	}
++
++	if len(candidates) == 0 {
++		return ""
++	}
++
++	if len(preferredNodes) > 0 && slices.Contains(candidates, preferredNodes[0]) {
++		return preferredNodes[0]
++	}
++
++	return candidates[rand.Intn(len(candidates))]
++}
++
+ // FindSnapsByID searches the snapshot in the backend
+ func (s *Linstor) FindSnapsByID(ctx context.Context, id string) ([]*volume.Snapshot, error) {
+ 	snapshotId, err := volume.ParseSnapshotId(id)
+diff --git a/pkg/client/linstor_test.go b/pkg/client/linstor_test.go
+index 54c5242..8da6cad 100644
+--- a/pkg/client/linstor_test.go
++++ b/pkg/client/linstor_test.go
+@@ -994,3 +994,93 @@ func TestReconcileResourceDefinitionRGConflict(t *testing.T) {
+ 		})
+ 	}
+ }
++
++func TestLinstor_reconcileSnapshotResourcesSkipsCordonedNodes(t *testing.T) {
++	// A replicated volume has a snapshot on three nodes, one of them cordoned. The scheduler selected a node
++	// without the snapshot. Restoring on the cordoned node pins the new volume to a node no pod can be scheduled
++	// on, so the restore must always go to one of the other two.
++	const (
++		sourceRD = "pvc-source"
++		snapName = "snapshot-1"
++		targetRD = "pvc-target"
++		cordoned = "node-3"
++	)
++
++	snapNodes := []string{"node-1", "node-2", cordoned}
++	preferred := []string{"node-9", "node-1", "node-2", cordoned}
++
++	restoredOn := map[string]int{}
++
++	for range 50 {
++		res := mocks.ResourceProvider{}
++		res.On("GetAll", mock.Anything, targetRD).Return([]lapi.Resource{}, nil)
++		res.On("GetSnapshot", mock.Anything, sourceRD, snapName).Return(lapi.Snapshot{Name: snapName, Nodes: snapNodes}, nil)
++		res.On("RestoreSnapshot", mock.Anything, sourceRD, snapName, mock.Anything).Run(func(args mock.Arguments) {
++			restoredOn[args.Get(3).(lapi.SnapshotRestore).Nodes[0]]++
++		}).Return(nil)
++
++		nodes := mocks.NodeProvider{}
++		for _, n := range snapNodes {
++			nodes.On("Get", mock.Anything, n).Return(lapi.Node{Name: n, ConnectionStatus: "ONLINE"}, nil)
++		}
++
++		cl := Linstor{
++			client: &lc.HighLevelClient{Client: &lapi.Client{Resources: &res, Nodes: &nodes}},
++			log:    logrus.WithField("test", t.Name()),
++			nodeSchedulable: func(_ context.Context, node string) (bool, error) {
++				return node != cordoned, nil
++			},
++		}
++
++		snap := &volume.Snapshot{SnapshotId: volume.SnapshotId{SourceName: sourceRD, SnapshotName: snapName}}
++		assert.NoError(t, cl.reconcileSnapshotResources(context.Background(), snap, targetRD, preferred))
++	}
++
++	assert.Zero(t, restoredOn[cordoned], "restored on the cordoned node: %v", restoredOn)
++	assert.Equal(t, 50, restoredOn["node-1"]+restoredOn["node-2"])
++}
++
++func TestSelectRestoreNode(t *testing.T) {
++	all := func(string) bool { return true }
++	notNode3 := func(n string) bool { return n != "node-3" }
++
++	t.Run("selected node holds the snapshot", func(t *testing.T) {
++		for range 20 {
++			assert.Equal(t, "node-2", selectRestoreNode([]string{"node-1", "node-2", "node-3"}, []string{"node-2", "node-1", "node-3"}, all))
++		}
++	})
++
++	t.Run("selected node is cordoned", func(t *testing.T) {
++		for range 20 {
++			assert.NotEqual(t, "node-3", selectRestoreNode([]string{"node-1", "node-3"}, []string{"node-3", "node-1"}, notNode3))
++		}
++	})
++
++	t.Run("schedulable node outside the preferred nodes wins over a cordoned preferred node", func(t *testing.T) {
++		for range 20 {
++			assert.Equal(t, "node-2", selectRestoreNode([]string{"node-3", "node-2"}, []string{"node-3"}, notNode3))
++		}
++	})
++
++	t.Run("only cordoned nodes hold the snapshot", func(t *testing.T) {
++		assert.Equal(t, "node-3", selectRestoreNode([]string{"node-3"}, []string{"node-1", "node-3"}, notNode3))
++	})
++
++	t.Run("snapshot nodes outside the preferred nodes are a fallback", func(t *testing.T) {
++		assert.Equal(t, "node-2", selectRestoreNode([]string{"node-1", "node-2"}, []string{"node-2"}, all))
++		assert.Equal(t, "node-1", selectRestoreNode([]string{"node-1"}, []string{"node-2"}, all))
++	})
++
++	t.Run("no available node", func(t *testing.T) {
++		assert.Empty(t, selectRestoreNode(nil, []string{"node-1"}, all))
++	})
++
++	t.Run("restores are spread when the selected node lacks the snapshot", func(t *testing.T) {
++		seen := map[string]bool{}
++		for range 200 {
++			seen[selectRestoreNode([]string{"node-1", "node-2"}, []string{"node-9", "node-1", "node-2"}, all)] = true
++		}
++
++		assert.Equal(t, map[string]bool{"node-1": true, "node-2": true}, seen)
++	})
++}

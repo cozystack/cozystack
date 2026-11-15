@@ -59,6 +59,8 @@ vi.mock("./EventsTab.tsx", () => ({ EventsTab: () => null }))
 vi.mock("./VncTab.tsx", () => ({ VncTab: () => null }))
 vi.mock("./SerialTab.tsx", () => ({ SerialTab: () => null }))
 vi.mock("./VMPowerControls.tsx", () => ({ VMPowerControls: () => null }))
+vi.mock("./MetricsTab.tsx", () => ({ MetricsTab: () => null }))
+vi.mock("./LogsTab.tsx", () => ({ LogsTab: () => null }))
 
 const { ApplicationDetailPage } = await import("./ApplicationDetailPage.tsx")
 
@@ -111,8 +113,37 @@ describe("ApplicationDetailPage tabs for a virtual machine", () => {
       "VNC",
       "Workloads",
       "Services",
+      "Metrics",
+      "Logs",
       "Events",
     ])
+  })
+})
+
+describe("ApplicationDetailPage observability tabs", () => {
+  function showKind(kind: string, plural: string) {
+    h.appKind = kind
+    h.appPlural = plural
+    h.get = {
+      data: { kind, metadata: { name: "demo", namespace: "tenant-test" } },
+      isLoading: false,
+      error: undefined,
+    }
+    h.configMaps = []
+    h.configMapsError = undefined
+    h.tabLabels = []
+    renderPage()
+  }
+
+  it("offers Metrics and Logs on any application kind, ahead of Events", () => {
+    showKind("Postgres", "postgreses")
+    expect(h.tabLabels.slice(-4)).toEqual(["Secrets", "Metrics", "Logs", "Events"])
+  })
+
+  it("leaves Metrics and Logs off a VM disk, which runs no containers", () => {
+    showKind("VMDisk", "vmdisks")
+    expect(h.tabLabels).not.toContain("Metrics")
+    expect(h.tabLabels).not.toContain("Logs")
   })
 })
 

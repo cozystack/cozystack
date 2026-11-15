@@ -133,3 +133,39 @@ $tpl: $obj does not gate on crdEstablished for $crd"
 
   rm -rf "$tmp"
 }
+
+# The controller's DefaultObjectsGate tells an object rendered with a stale S3
+# endpoint (publishing.host changed after the render) by the
+# backups.cozystack.io/endpoint annotation, because the endpoint itself sits at
+# a different path in every kind. An object the chart renders without it
+# counts as stale on every check, so a new template that forgets it would
+# force this release every MinForceInterval forever.
+@test "every rendered Strategy CR and the Velero BSL carry the rendered endpoint annotation" {
+  tmp=$(mktemp -d)
+
+  helm template t "$CHART" -n cozy-backup-controller \
+    --set backupStorage.bucketNameOverride=ext-bucket \
+    --set backupStorage.endpoint=https://s3.example.org \
+    --output-dir "$tmp/open" >/dev/null
+
+  objs=$(find "$tmp/open" -name '*.yaml' | sort | while read -r f; do
+    yq eval-all "select((.apiVersion // \"\" | test(\"^${STRATEGY_API}\")) or .kind == \"BackupStorageLocation\") | .kind + \"/\" + .metadata.name + \" \" + (.metadata.annotations[\"backups.cozystack.io/endpoint\"] // \"<none>\")" "$f" \
+      | sed "s#^#$(basename "$f") #"
+  done)
+  if ! echo "$objs" | grep -q " BackupStorageLocation/"; then
+    echo "render produced no BSL; nothing was checked for it" >&2
+    false
+  fi
+  if ! echo "$objs" | grep -q " CNPG/"; then
+    echo "render produced no Strategy CR; nothing was checked" >&2
+    false
+  fi
+  bad=$(echo "$objs" | awk '$3 != "https://s3.example.org"')
+  if [ -n "$bad" ]; then
+    echo "objects without the rendered endpoint in backups.cozystack.io/endpoint:" >&2
+    echo "$bad" >&2
+    false
+  fi
+
+  rm -rf "$tmp"
+}

@@ -1,0 +1,70 @@
+suite: observability-proxy RBAC
+# The proxy authenticates and authorizes every request through the API server,
+# so a dropped verb here turns every request into an error at runtime rather
+# than a render failure. The tenant role is what lets a namespace viewer pass
+# the SubjectAccessReview the proxy asks for the namespace logs and metrics roots.
+templates:
+  - templates/rbac.yaml
+  - templates/tenant-clusterroles.yaml
+
+release:
+  name: observability-proxy
+  namespace: cozy-observability-proxy
+
+tests:
+  - it: lets the proxy review tokens and access, and list and watch namespaces and application definitions
+    template: templates/rbac.yaml
+    documentSelector:
+      path: kind
+      value: ClusterRole
+    asserts:
+      - equal:
+          path: rules
+          value:
+            - apiGroups: ["authentication.k8s.io"]
+              resources: ["tokenreviews"]
+              verbs: ["create"]
+            - apiGroups: ["authorization.k8s.io"]
+              resources: ["subjectaccessreviews"]
+              verbs: ["create"]
+            - apiGroups: [""]
+              resources: ["namespaces"]
+              verbs: ["list", "watch"]
+            - apiGroups: ["cozystack.io"]
+              resources: ["applicationdefinitions"]
+              verbs: ["list", "watch"]
+
+  - it: binds the proxy role to the proxy ServiceAccount in the release namespace
+    template: templates/rbac.yaml
+    documentSelector:
+      path: kind
+      value: ClusterRoleBinding
+    asserts:
+      - equal:
+          path: roleRef
+          value:
+            apiGroup: rbac.authorization.k8s.io
+            kind: ClusterRole
+            name: cozy:observability-proxy
+      - equal:
+          path: subjects
+          value:
+            - kind: ServiceAccount
+              name: observability-proxy
+              namespace: cozy-observability-proxy
+
+  - it: aggregates list on cozystack.io logs and metrics into the tenant view role
+    template: templates/tenant-clusterroles.yaml
+    asserts:
+      - isKind:
+          of: ClusterRole
+      - equal:
+          path: metadata.labels
+          value:
+            rbac.cozystack.io/aggregate-to-tenant-view: "true"
+      - equal:
+          path: rules
+          value:
+            - apiGroups: ["cozystack.io"]
+              resources: ["logs", "metrics"]
+              verbs: ["list"]

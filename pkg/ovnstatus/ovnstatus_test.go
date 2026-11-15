@@ -28,9 +28,7 @@ var expectedServersBlock = `` +
 
 func TestExtractServersBlock(t *testing.T) {
 	if actual := extractServersBlock(testStdout); actual != expectedServersBlock {
-		fmt.Println([]byte(actual))
-		fmt.Println([]byte(expectedServersBlock))
-		t.Errorf("error extracting servers block from following string:\n%s\nexpected:\n%s\ngot:\n%s\n", testStdout, expectedServersBlock, actual)
+		t.Errorf("error extracting servers block from following string:\n%s\nexpected:\n%q\ngot:\n%q\n", testStdout, expectedServersBlock, actual)
 	}
 }
 
