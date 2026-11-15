@@ -173,6 +173,7 @@ STUB
     tar -C "$rwork/sbom" -czf cozystack-images-sbom.tar.gz .
     echo bundle >cozystack-checksums.txt.sigstore.json
     sha256sum cozystack-images.txt cozystack-images-sbom.tar.gz >cozystack-checksums.txt
+    [ -z "${DROP_CHECKSUM:-}" ] || sed -i "/$DROP_CHECKSUM/d" cozystack-checksums.txt
     PATH="$rwork/stub:$PATH" RWORK="$rwork" bash "$rwork/recipe.sh" </dev/null >"$rwork/out" 2>"$rwork/err"
     return $?
 }
@@ -195,6 +196,20 @@ STUB
     fi
     cd /
     rm -rf "$rwork"
+}
+
+@test "the verify recipe fails when the signed checksums omit an image asset" {
+    for drop in 'images\.txt' 'images-sbom'; do
+        DROP_CHECKSUM="$drop"
+        export DROP_CHECKSUM
+        if verify_recipe; then
+            echo "expected the recipe to fail without the $drop checksum" >&2
+            exit 1
+        fi
+        [ ! -e "$rwork/rel/image-sboms" ]
+        cd /
+        rm -rf "$rwork"
+    done
 }
 
 @test "fails when a signature does not verify after signing" {

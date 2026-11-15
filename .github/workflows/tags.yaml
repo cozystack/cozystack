@@ -502,40 +502,6 @@ jobs:
       # tag is cut by pull-requests-release.yaml finalize, at the stable tag's
       # merge commit (#2677 goal 3).
 
-      # Create or reuse draft release
-      - name: Create / reuse draft release
-        if: needs.build-amd64.outputs.release_exists == 'false'
-        id: release
-        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
-        with:
-          script: |
-            const tag      = '${{ needs.build-amd64.outputs.tag }}';
-            const isRc     = ${{ needs.build-amd64.outputs.is_rc }};
-            // Paginate: the default page is 30, and promote-created stable drafts
-            // plus accreting rc releases can push an in-flight draft off it.
-            const releases = await github.paginate(github.rest.repos.listReleases, {
-              owner: context.repo.owner,
-              repo:  context.repo.repo,
-              per_page: 100
-            });
-
-            let rel = releases.find(r => r.tag_name === tag);
-            if (!rel) {
-              rel = await github.rest.repos.createRelease({
-                owner: context.repo.owner,
-                repo:  context.repo.repo,
-                tag_name:   tag,
-                name:       tag,
-                draft:      true,
-                prerelease: isRc               // no make_latest for drafts
-              });
-              console.log(`Draft release created for ${tag}`);
-            } else {
-              console.log(`Re-using existing release ${tag}`);
-            }
-
-            core.setOutput('upload_url', rel.upload_url);
-
       # hack/upload-assets.sh writes the release SBOM with syft and signs the
       # checksums of every asset with cosign, keylessly, as this job. syft is
       # the release tarball checked against a committed SHA-256, for the reason
@@ -581,6 +547,43 @@ jobs:
         env:
           DOCKER_CONFIG: ${{ runner.temp }}/.docker
           REGISTRY: ghcr.io/cozystack/cozystack
+
+      # Create or reuse draft release
+      # Created only after the images are signed and their SBOMs collected: a
+      # draft left by a run that failed before that makes the re-run see an
+      # existing release and skip the whole preparation, leaving the rc unpublished.
+      - name: Create / reuse draft release
+        if: needs.build-amd64.outputs.release_exists == 'false'
+        id: release
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
+        with:
+          script: |
+            const tag      = '${{ needs.build-amd64.outputs.tag }}';
+            const isRc     = ${{ needs.build-amd64.outputs.is_rc }};
+            // Paginate: the default page is 30, and promote-created stable drafts
+            // plus accreting rc releases can push an in-flight draft off it.
+            const releases = await github.paginate(github.rest.repos.listReleases, {
+              owner: context.repo.owner,
+              repo:  context.repo.repo,
+              per_page: 100
+            });
+
+            let rel = releases.find(r => r.tag_name === tag);
+            if (!rel) {
+              rel = await github.rest.repos.createRelease({
+                owner: context.repo.owner,
+                repo:  context.repo.repo,
+                tag_name:   tag,
+                name:       tag,
+                draft:      true,
+                prerelease: isRc               // no make_latest for drafts
+              });
+              console.log(`Draft release created for ${tag}`);
+            } else {
+              console.log(`Re-using existing release ${tag}`);
+            }
+
+            core.setOutput('upload_url', rel.upload_url);
 
       # The assets were built by build-amd64; the operator manifests are
       # rendered here, from the tree pinned on the index digests.
