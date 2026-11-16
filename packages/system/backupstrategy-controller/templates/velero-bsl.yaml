@@ -12,6 +12,8 @@ kind: BackupStorageLocation
 metadata:
   name: cozy-default
   namespace: {{ .Values.velero.namespace }}
+  annotations:
+    backups.cozystack.io/endpoint: {{ include "backupstrategy-controller.endpoint" . | quote }}
 spec:
   provider: aws
   # default=false: do not silently displace an admin-provisioned default
@@ -29,7 +31,7 @@ spec:
     key: cloud
   config:
     region: {{ .Values.backupStorage.region | quote }}
-    s3ForcePathStyle: {{ .Values.backupStorage.forcePathStyle | quote }}
+    s3ForcePathStyle: {{ include "backupstrategy-controller.forcePathStyle" . | quote }}
     s3Url: {{ include "backupstrategy-controller.endpoint" . | quote }}
 {{- end }}
 {{- end }}

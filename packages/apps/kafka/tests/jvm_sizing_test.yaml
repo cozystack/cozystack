@@ -27,7 +27,9 @@ tests:
   # kafka-run-class.sh then drops its G1 settings.
   - it: leaves the node pool JVM options to Strimzi and Kafka
     template: templates/migration-hook.yaml
-    documentIndex: 3
+    documentSelector:
+      path: kind
+      value: Job
     asserts:
       - notMatchRegex:
           path: spec.template.spec.containers[0].args[0]

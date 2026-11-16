@@ -3,6 +3,7 @@ package backupcontroller
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"maps"
 	"strings"
@@ -366,9 +367,9 @@ func (r *BackupJobReconciler) reconcileRedis(ctx context.Context, j *backupsv1al
 		if j.Status.BackupRef != nil {
 			return ctrl.Result{}, nil
 		}
-		artifact, err := r.createRedisBackupArtifact(ctx, j, resolved, objectKey)
+		artifact, err := r.createRedisBackupArtifact(ctx, j, resolved, objectKey, &batchJob.Spec.Template.Spec)
 		if err != nil {
-			return r.markBackupJobFailed(ctx, j, fmt.Sprintf("failed to create Backup artifact: %v", err))
+			return r.failBackupArtifact(ctx, j, err)
 		}
 		now := metav1.Now()
 		j.Status.BackupRef = &corev1.LocalObjectReference{Name: artifact.Name}
@@ -471,7 +472,12 @@ func (r *BackupJobReconciler) createRedisBackupArtifact(
 	j *backupsv1alpha1.BackupJob,
 	resolved *ResolvedBackupConfig,
 	objectKey string,
+	podSpec *corev1.PodSpec,
 ) (*backupsv1alpha1.Backup, error) {
+	existing, probe := r.existingBackup(ctx, j.Namespace, j.Name)
+	if existing != nil {
+		return existing, nil
+	}
 	driverMD := map[string]string{redisObjectMetaKey: objectKey}
 	for k, v := range resolved.Parameters {
 		driverMD[redisParamPrefix+k] = v
@@ -492,6 +498,19 @@ func (r *BackupJobReconciler) createRedisBackupArtifact(
 			Phase: backupsv1alpha1.BackupPhaseReady,
 		},
 	}
+	unmeasured := "whether the Backup already exists could not be checked"
+	if probe {
+		artifact, err := r.redisArtifact(ctx, j.Namespace, objectKey, podSpec)
+		unmeasured = ""
+		if err != nil {
+			getLogger(ctx).Info("leaving the Redis backup artifact unset", "backupjob", j.Name, "objectKey", objectKey, "error", err)
+			var probeErr *artifactProbeError
+			if errors.As(err, &probeErr) {
+				unmeasured = probeErr.reason
+			}
+		}
+		backup.Status.Artifact = artifact
+	}
 	if j.Spec.PlanRef != nil {
 		backup.Spec.PlanRef = j.Spec.PlanRef
 	}
@@ -500,10 +519,22 @@ func (r *BackupJobReconciler) createRedisBackupArtifact(
 			return nil, err
 		}
 		existing := &backupsv1alpha1.Backup{}
-		if getErr := r.Get(ctx, types.NamespacedName{Namespace: backup.Namespace, Name: backup.Name}, existing); getErr != nil {
-			return nil, getErr
+		if getErr := r.apiReader().Get(ctx, types.NamespacedName{Namespace: backup.Namespace, Name: backup.Name}, existing); getErr != nil {
+			return nil, fmt.Errorf("%w: %v", errBackupNotReadBack, getErr)
 		}
 		return existing, nil
+	}
+	// Only once the Backup exists: a terminal Create error fails the
+	// BackupJob, and a collision returns a Backup another pass measured.
+	if r.Recorder != nil {
+		switch {
+		case unmeasured != "":
+			r.Recorder.Eventf(j, corev1.EventTypeNormal, "ArtifactNotMeasured", "The backup succeeded, but its location and size were not recorded: %s", unmeasured)
+		case backup.Status.Artifact != nil && backup.Status.Artifact.SizeBytes == 0:
+			// sizeBytes is omitempty, so a 0 reads as "not measured" on the
+			// Backup; a valid RDB snapshot always carries a header.
+			r.Recorder.Event(j, corev1.EventTypeWarning, "EmptySnapshot", "The backup's RDB snapshot is empty (0 bytes); a valid snapshot is never empty, so this backup is likely broken.")
+		}
 	}
 	return backup, nil
 }

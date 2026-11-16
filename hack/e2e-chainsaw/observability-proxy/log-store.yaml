@@ -1,0 +1,71 @@
+# A single-node VictoriaLogs under the name the proxy dials for a namespace
+# whose logs belong to the root tenant: vlselect-generic.tenant-root, port
+# 9471. The e2e install leaves root monitoring off, so the real one does not
+# exist; the suite seeds this one itself instead of waiting for Fluent Bit,
+# which keeps the test about the proxy's scope rather than log collection.
+# The version is the one victoria-metrics-operator v0.68.4 deploys.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: e2e-observability-log-store
+  namespace: tenant-root
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: e2e-observability-log-store
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: e2e-observability-log-store
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+      - name: victoria-logs
+        image: docker.io/victoriametrics/victoria-logs:v1.47.0
+        args:
+        - -httpListenAddr=:9471
+        - -storageDataPath=/storage
+        - -retentionPeriod=1d
+        ports:
+        - name: http
+          containerPort: 9471
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: http
+        resources:
+          requests:
+            cpu: 50m
+            memory: 128Mi
+          limits:
+            cpu: 500m
+            memory: 256Mi
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop: ["ALL"]
+        volumeMounts:
+        - name: storage
+          mountPath: /storage
+      volumes:
+      - name: storage
+        emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: vlselect-generic
+  namespace: tenant-root
+spec:
+  selector:
+    app.kubernetes.io/name: e2e-observability-log-store
+  ports:
+  - name: http
+    port: 9471
+    targetPort: http

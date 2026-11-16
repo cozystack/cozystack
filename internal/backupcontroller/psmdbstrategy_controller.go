@@ -528,8 +528,8 @@ func (r *BackupJobReconciler) reconcileMongoDB(ctx context.Context, j *backupsv1
 		}
 	}
 
-	switch state := mdbBackup.Status.State; {
-	case state == psmdbtypes.StateReady:
+	switch state := mdbBackup.Status.State; state {
+	case psmdbtypes.StateReady:
 		// Backup completed successfully. Materialise the Cozystack artifact and
 		// finalise the BackupJob. Idempotent: reuse the existing artifact if a
 		// previous reconcile created it and then raced on the status update.
@@ -570,7 +570,7 @@ func (r *BackupJobReconciler) reconcileMongoDB(ctx context.Context, j *backupsv1
 		}
 		return ctrl.Result{}, nil
 
-	case state == psmdbtypes.StateError || state == psmdbtypes.StateRejected:
+	case psmdbtypes.StateError, psmdbtypes.StateRejected:
 		message := mdbBackup.Status.Error
 		// The residual half of the injection race: on the useSystemBucket flow the
 		// operator can latch state=error because it resolved the injected storage
@@ -1376,9 +1376,10 @@ func (r *BackupJobReconciler) createMongoDBBackupArtifact(
 // annotation (honoured before any apiserver read, so it still frees a Backup
 // whose operator CR has become unreadable) and a going-away namespace (the psmdb
 // delete-backup exec cannot run there) each make the driver strip its own
-// finalizer and release, leaving the object for a bucket lifecycle policy. This
-// bounds only what the driver contributes: a Get that fails with something other
-// than NotFound/NoMatchError still requeues (below), and the psmdb operator's own
+// finalizer and release, leaving the object to manual cleanup, or to a
+// lifecycle rule on the bucket where the object store applies one. This bounds
+// only what the driver contributes: a Get that fails with something other than
+// NotFound/NoMatchError still requeues (below), and the psmdb operator's own
 // release-lock finalizer keeps the CR Terminating while the operator is down,
 // whatever the driver strips. A down operator in a live namespace is likewise
 // not auto-released: the Backup stays Terminating as a visible signal until an
@@ -1739,8 +1740,8 @@ func (r *RestoreJobReconciler) reconcileMongoDBRestore(ctx context.Context, rest
 		return r.markRestoreJobFailed(ctx, restoreJob, fmt.Sprintf("failed to ensure psmdb.percona.com/PerconaServerMongoDBRestore: %v", err))
 	}
 
-	switch state := mdbRestore.Status.State; {
-	case state == psmdbtypes.StateReady:
+	switch state := mdbRestore.Status.State; state {
+	case psmdbtypes.StateReady:
 		now := metav1.Now()
 		restoreJob.Status.CompletedAt = &now
 		restoreJob.Status.Phase = backupsv1alpha1.RestoreJobPhaseSucceeded
@@ -1755,7 +1756,7 @@ func (r *RestoreJobReconciler) reconcileMongoDBRestore(ctx context.Context, rest
 		}
 		return ctrl.Result{}, nil
 
-	case state == psmdbtypes.StateError || state == psmdbtypes.StateRejected:
+	case psmdbtypes.StateError, psmdbtypes.StateRejected:
 		message := mdbRestore.Status.Error
 		if message == "" {
 			message = fmt.Sprintf("psmdb.percona.com/PerconaServerMongoDBRestore %s/%s reported state=%s", mdbRestore.Namespace, mdbRestore.Name, state)
@@ -1854,7 +1855,7 @@ func (r *RestoreJobReconciler) resolveMongoDBBackupSource(ctx context.Context, b
 	}
 	if destination == "" {
 		return nil, fmt.Errorf(
-			"Backup has no restorable destination (the operator PerconaServerMongoDBBackup was reaped and no snapshot destination is persisted); re-run the BackupJob")
+			"no restorable destination for the Backup (the operator PerconaServerMongoDBBackup was reaped and no snapshot destination is persisted); re-run the BackupJob")
 	}
 	src := &psmdbtypes.BackupSource{
 		Type:        psmdbtypes.BackupTypeLogical,

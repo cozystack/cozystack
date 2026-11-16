@@ -1,0 +1,25 @@
+suite: vendored COSI classes include public-read
+templates:
+  - charts/seaweedfs/templates/cosi/cosi-bucket-class.yaml
+
+release:
+  name: seaweedfs-system
+  namespace: tenant-root
+
+tests:
+  - it: renders a -public BucketAccessClass with the public-read policy
+    set:
+      seaweedfs:
+        cosi:
+          enabled: true
+          bucketClassName: tenant-root
+          driverName: tenant-root.seaweedfs.objectstorage.k8s.io
+    documentSelector:
+      path: metadata.name
+      value: tenant-root-public
+    asserts:
+      - isKind:
+          of: BucketAccessClass
+      - equal:
+          path: parameters.accessPolicy
+          value: public-read

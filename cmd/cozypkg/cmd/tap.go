@@ -18,6 +18,7 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"regexp"
@@ -402,9 +403,8 @@ runs its charts in your management cluster: tap only sources you trust.`,
 				return err
 			}
 			if rep.HasErrors() {
-				printReport(rep, cmd.OutOrStdout())
 				errs, _, _ := rep.Counts()
-				return fmt.Errorf("refusing to tap: artifact failed validation with %d error(s) (use --skip-validate to override)", errs)
+				return errors.Join(fmt.Errorf("refusing to tap: artifact failed validation with %d error(s) (use --skip-validate to override)", errs), printReport(rep, cmd.OutOrStdout()))
 			}
 		}
 
@@ -487,17 +487,27 @@ runs its charts in your management cluster: tap only sources you trust.`,
 			_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "warning: could not reset materialization state on OCIRepository/%s: %v\n", srcName, err)
 		}
 
-		fmt.Fprintf(cmd.OutOrStdout(), "Tapped %s\n  OCIRepository/%s\n", fullRef, srcName)
-		for _, n := range names {
-			fmt.Fprintf(cmd.OutOrStdout(), "  PackageSource/%s\n", n)
-		}
-		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Tapping installs nothing. Install an app with:\n")
-		for _, n := range names {
-			fmt.Fprintf(cmd.OutOrStdout(), "  cozypkg add %s\n", n)
-		}
-		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "A privileged install component is not installed until you confirm it with 'cozypkg add --allow-privileged'.\n")
-		return nil
+		return writeTapSummary(cmd.OutOrStdout(), fullRef, srcName, names)
 	},
+}
+
+// writeTapSummary reports what a tap created. The tap is applied by then, so a
+// summary that cannot be written fails the command while saying so.
+func writeTapSummary(w io.Writer, fullRef, srcName string, names []string) error {
+	var b strings.Builder
+	fmt.Fprintf(&b, "Tapped %s\n  OCIRepository/%s\n", fullRef, srcName)
+	for _, n := range names {
+		fmt.Fprintf(&b, "  PackageSource/%s\n", n)
+	}
+	b.WriteString("Tapping installs nothing. Install an app with:\n")
+	for _, n := range names {
+		fmt.Fprintf(&b, "  cozypkg add %s\n", n)
+	}
+	b.WriteString("A privileged install component is not installed until you confirm it with 'cozypkg add --allow-privileged'.\n")
+	if _, err := io.WriteString(w, b.String()); err != nil {
+		return fmt.Errorf("tap applied, but writing its summary failed: %w", err)
+	}
+	return nil
 }
 
 var untapCmd = &cobra.Command{
