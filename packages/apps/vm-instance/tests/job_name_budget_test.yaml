@@ -1,0 +1,107 @@
+suite: vm-instance update Job name budget
+
+# The API server copies a Job's name into the job-name label of its pods, and a
+# label value takes 63 characters at most, while a release name may take 53.
+# The pod's own app label carries the same name and is held to the same limit.
+# The hook renders only when an existing VM or Service needs reconciling, so
+# each release below gets a Service of the wrong type to look up. The
+# ServiceAccount, Role and RoleBinding have no such limit and keep the full
+# name, so the ones an earlier update left behind are replaced, not orphaned.
+
+templates:
+  - templates/vm-update-hook.yaml
+
+set:
+  external: false
+
+kubernetesProvider:
+  scheme:
+    "v1/Service":
+      gvr:
+        group: ""
+        version: "v1"
+        resource: "services"
+      namespaced: true
+  objects:
+    - kind: Service
+      apiVersion: v1
+      metadata:
+        name: vm-instance-test
+        namespace: tenant-test
+      spec:
+        type: LoadBalancer
+    - kind: Service
+      apiVersion: v1
+      metadata:
+        name: vm-instance-abcdefghijklmnopqrstuvwxyz0123456789abc
+        namespace: tenant-test
+      spec:
+        type: LoadBalancer
+    - kind: Service
+      apiVersion: v1
+      metadata:
+        name: vm-instance-abcdefghijklmnopqrstuvwxyz0123456789abcde
+        namespace: tenant-test
+      spec:
+        type: LoadBalancer
+
+tests:
+  - it: keeps <release>-update-hook for a short release name
+    release:
+      name: vm-instance-test
+      namespace: tenant-test
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - equal:
+          path: metadata.name
+          value: vm-instance-test-update-hook
+      - equal:
+          path: spec.template.metadata.labels.app
+          value: vm-instance-test-update-hook
+
+  - it: keeps the name when it lands exactly on 63 characters
+    release:
+      name: vm-instance-abcdefghijklmnopqrstuvwxyz0123456789abc
+      namespace: tenant-test
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - equal:
+          path: metadata.name
+          value: vm-instance-abcdefghijklmnopqrstuvwxyz0123456789abc-update-hook
+
+  - it: cuts the Job name and the app label to 63 characters for a 53-character release name
+    release:
+      name: vm-instance-abcdefghijklmnopqrstuvwxyz0123456789abcde
+      namespace: tenant-test
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - equal:
+          path: metadata.name
+          value: vm-instance-abcdefghijklmnopqrstuvwxyz0123456789abcde-update-ho
+      - matchRegex:
+          path: metadata.name
+          pattern: ^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$
+      - equal:
+          path: spec.template.metadata.labels.app
+          value: vm-instance-abcdefghijklmnopqrstuvwxyz0123456789abcde-update-ho
+      - equal:
+          path: spec.template.spec.serviceAccountName
+          value: vm-instance-abcdefghijklmnopqrstuvwxyz0123456789abcde-update-hook
+
+  - it: leaves the ServiceAccount on the full name for a 53-character release name
+    release:
+      name: vm-instance-abcdefghijklmnopqrstuvwxyz0123456789abcde
+      namespace: tenant-test
+    documentSelector:
+      path: kind
+      value: ServiceAccount
+    asserts:
+      - equal:
+          path: metadata.name
+          value: vm-instance-abcdefghijklmnopqrstuvwxyz0123456789abcde-update-hook

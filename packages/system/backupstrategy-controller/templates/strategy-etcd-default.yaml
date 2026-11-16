@@ -5,6 +5,8 @@ apiVersion: strategy.backups.cozystack.io/v1alpha1
 kind: Etcd
 metadata:
   name: cozy-default-etcd
+  annotations:
+    backups.cozystack.io/endpoint: {{ include "backupstrategy-controller.endpoint" . | quote }}
 spec:
   template:
     destination:
@@ -13,7 +15,7 @@ spec:
         endpoint: {{ include "backupstrategy-controller.endpoint" . | quote }}
         key: {{ printf "{{ .Application.metadata.namespace }}/{{ .Application.metadata.name }}/" | quote }}
         region: {{ .Values.backupStorage.region | quote }}
-        forcePathStyle: {{ .Values.backupStorage.forcePathStyle }}
+        forcePathStyle: {{ include "backupstrategy-controller.forcePathStyle" . }}
         # The etcd-operator reads AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY
         # from this Secret by default (no explicit key fields like the
         # MariaDB strategy's *SecretKeyRef). The projector writes exactly

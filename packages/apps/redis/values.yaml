@@ -55,7 +55,7 @@
 ## @value xlarge
 ## @value 2xlarge
 
-## @param {int} replicas - Number of Redis replicas.
+## @param {int} replicas - Number of Redis replicas. Three Sentinels watch them, or a single one when `replicas` is 1, since a lone pod has no replica to fail over to.
 replicas: 2
 
 ## @param {Resources} [resources] - Explicit CPU and memory configuration for each Redis replica. When omitted, the preset defined in `resourcesPreset` is applied.
@@ -119,6 +119,24 @@ authEnabled: true
 ## @param {*int} [minReplicasMaxLag] - Redis `min-replicas-max-lag`, in seconds: a replica whose last acknowledgement is older than this does not count towards `minReplicasToWrite`. Unset by default, which leaves the Redis default (10). Has no effect unless `minReplicasToWrite` is set. Must be at least 1 when `minReplicasToWrite` is set: Redis treats 0 as disabling the check, so the chart refuses it.
 ## @minimum 0
 
+## @param {quantity} [maxmemory] - Redis `maxmemory`: the dataset size at which Redis applies `maxmemoryPolicy`. Unset by default, which renders `maxmemory 0` (no limit, the Redis default), so a value set by hand with `CONFIG SET` is reset on the next reconcile. Must be at most 90% of the memory request of each Redis pod (from `resources` or `resourcesPreset`): the operator silently drops a larger value, so the chart refuses it. Leave headroom below that for replication and snapshot buffers.
+
+## @enum {string} MaxmemoryPolicy - Values accepted by the Redis `maxmemory-policy` directive.
+## @value noeviction
+## @value allkeys-lru
+## @value allkeys-lfu
+## @value allkeys-random
+## @value volatile-lru
+## @value volatile-lfu
+## @value volatile-random
+## @value volatile-ttl
+
+## @param {MaxmemoryPolicy} maxmemoryPolicy="noeviction" - Redis `maxmemory-policy`: what Redis does once `maxmemory` is reached. `noeviction` refuses writes; `allkeys-lru` evicts the least recently used keys, which suits an instance used purely as a cache. Has no effect while `maxmemory` is unset.
+maxmemoryPolicy: "noeviction"
+
+## @param {bool} snapshots - Write RDB snapshots to the persistent volume (the Redis `save` directive, with the Redis default schedule). Set to `false` for an instance used purely as a cache: `save ""` is rendered and the volume is kept, so no further scheduled snapshot is written while replicas still have room for the full-sync RDB they write to disk. An RDB file already on the volume is not removed, and Redis loads it on restart, so turning snapshots off does not by itself empty the dataset. Always off when `size` is empty.
+snapshots: true
+
 ##
 ## @section Sentinel parameters
 ##
@@ -127,5 +145,5 @@ authEnabled: true
 ## @field {Resources} [resources] - Explicit CPU and memory configuration for each Sentinel pod. Keys left out are filled from the preset in `sentinel.resourcesPreset`.
 ## @field {ResourcesPreset} [resourcesPreset] - Sizing preset for the Sentinel pods. Defaults to `resourcesPreset`.
 
-## @param {Sentinel} [sentinel] - Sentinel configuration. When `sentinel.resources` is empty and `sentinel.resourcesPreset` is unset, the three Sentinel pods are sized like the Redis pods (`resources` and `resourcesPreset`). An empty `sentinel.resources` map counts as unset, as an empty top-level `resources` does.
+## @param {Sentinel} [sentinel] - Sentinel configuration. When `sentinel.resources` is empty and `sentinel.resourcesPreset` is unset, the Sentinel pods are sized like the Redis pods (`resources` and `resourcesPreset`). An empty `sentinel.resources` map counts as unset, as an empty top-level `resources` does.
 sentinel: {}

@@ -165,10 +165,9 @@ The pool attaches to the parent Kubernetes CR named .Values.cluster, whose
 HelmRelease (and therefore CAPI Cluster / KamajiControlPlane / KubevirtCluster
 and every worker object it owns) is `kubernetes-<cluster>`. This chart does
 NOT use its own .Release.Name for CAPI wiring — the pool lives in a separate
-HelmRelease from the control plane, so every reference that the monolithic
-chart made through $.Release.Name is reconstructed here as kubernetes-<cluster>
-instead. Linkage is by name convention (mirrors vm-instance -> vm-disk), not
-ownerReference or lookup-gated render.
+HelmRelease from the control plane, so every reference to the cluster's objects
+is built from kubernetes-<cluster>. Linkage is by name convention (mirrors
+vm-instance -> vm-disk), not ownerReference or lookup-gated render.
 */}}
 {{- define "kubernetes-nodes.clusterName" -}}
 {{- if not .Values.cluster -}}
@@ -194,9 +193,9 @@ The node-group name for this pool, derived from the release name.
 A KubernetesNodes CR is named <cluster>-<pool> and gets the release prefix
 `kubernetes-nodes-`, so the release name is `kubernetes-nodes-<cluster>-<pool>`.
 The group name is the <pool> suffix. Enforcing the `<cluster>-` segment keeps
-every rendered object named `kubernetes-<cluster>-<pool>` — byte-identical to
-what the monolithic chart rendered for the same group — and prevents two
-clusters in one namespace from colliding on a pool named e.g. `md0`.
+every rendered object named `kubernetes-<cluster>-<pool>` — the names worker
+objects adopted by migration 56 already carry — and prevents two clusters in
+one namespace from colliding on a pool named e.g. `md0`.
 */}}
 {{- define "kubernetes-nodes.groupName" -}}
 {{- $prefix := printf "kubernetes-nodes-%s-" .Values.cluster -}}
@@ -208,13 +207,13 @@ clusters in one namespace from colliding on a pool named e.g. `md0`.
 
 {{/*
 Fail early with a clear message if this pool's MachineDeployment already exists
-under a different Helm release — i.e. the pool name collides with a nodeGroup
-still managed by the parent kubernetes chart (most likely the default `md0`).
+under a different Helm release: a worker pool migration 56 left with the parent
+cluster's release, or another pool whose <cluster>-<pool> split reconstructs
+the same object name (cluster `a` with pool `b-c`, cluster `a-b` with pool `c`).
 Without this guard the collision surfaces as a cryptic Helm "invalid ownership
 metadata" error at install time. Inert under `helm template`/unittest (lookup
-returns nil with no cluster) and a no-op during the Phase 2b adoption
-migration, which re-annotates the MachineDeployment onto this release before
-it reconciles.
+returns nil with no cluster) and a no-op for a pool migration 56 adopted, which
+re-annotates the MachineDeployment onto this release before it reconciles.
 */}}
 {{- define "kubernetes-nodes.assertNoForeignPool" -}}
 {{- $clusterName := include "kubernetes-nodes.clusterName" . -}}
@@ -224,14 +223,14 @@ it reconciles.
 {{- if $existing -}}
 {{- $owner := dig "annotations" "meta.helm.sh/release-name" "" $existing.metadata -}}
 {{- if and $owner (ne $owner .Release.Name) -}}
-{{- fail (printf "kubernetes-nodes: MachineDeployment %q in namespace %q is already managed by release %q, not this pool release %q — the pool name collides with a nodeGroup still managed by the parent kubernetes chart. Rename the pool or remove it from the parent Kubernetes CR's nodeGroups first." $mdName .Release.Namespace $owner .Release.Name) -}}
+{{- fail (printf "kubernetes-nodes: MachineDeployment %q in namespace %q is already managed by release %q, not this pool release %q — two pools cannot share the object name kubernetes-<cluster>-<pool>: give this pool a name whose object name is free, or remove the existing pool from release %q first." $mdName .Release.Namespace $owner .Release.Name $owner) -}}
 {{- end -}}
 {{- /* clusterName-drift guard. The release name kubernetes-nodes-<cluster>-<pool>
        does not encode where <cluster> ends and <pool> begins: for one release
        name several (.Values.cluster, pool) splits reconstruct the SAME object
        name kubernetes-<cluster>-<pool>, so an operator who edits spec.cluster to
        another such value (its immutability is enforced only by the dashboard,
-       not the aggregated apiserver, see docs/storage-immutability.md) does not
+       not the aggregated apiserver, see https://cozystack.io/docs/v1/operations/storage-class-immutability/) does not
        prune or delete a single worker VM, but silently flips spec.clusterName
        and the pool WorkloadMonitor selector. CAPI rejects the immutable
        MachineDeployment.spec.clusterName Update loudly; the WorkloadMonitor
@@ -253,8 +252,7 @@ control plane is supported (up to n-3 upstream) and is the normal state during a
 rolling upgrade — the parent Kubernetes CR is bumped first, then each pool. A
 symmetric equality check would flip every pool of a cluster to render-failure the
 moment the parent is bumped, blocking all pool operations until each pool is
-hand-edited, so the check is directional. The split removed the single `version`
-that used to feed both control plane and workers. Looks up the parent
+hand-edited, so the check is directional. Looks up the parent
 KamajiControlPlane (named like the reconstructed clusterName) and compares its
 spec.version minor against .Values.version. Skipped when the lookup is empty
 (helm template / unittest, or the parent not yet present) so it validates only

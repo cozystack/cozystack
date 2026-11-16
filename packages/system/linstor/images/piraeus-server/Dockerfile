@@ -1,9 +1,10 @@
-ARG DISTRO=bookworm@sha256:f37a335e82bca302e955fa39f9dfe28f1be618f016f8a2b56318e5a5111afc26
+# LINSTOR 1.35 builds and runs on Java 21, which bookworm does not ship.
+ARG DISTRO=trixie@sha256:9c6e381421d0f48d1b8133e573f33c185ee16cbf505eda9c4a8a4791b25ea8a6
 ARG LINSTOR_VERSION
 
 # ------------------------------------------------------------------------------
 # Build linstor-server from source
-FROM --platform=$BUILDPLATFORM debian:bookworm@sha256:f37a335e82bca302e955fa39f9dfe28f1be618f016f8a2b56318e5a5111afc26 AS builder
+FROM --platform=$BUILDPLATFORM debian:trixie@sha256:9c6e381421d0f48d1b8133e573f33c185ee16cbf505eda9c4a8a4791b25ea8a6 AS builder
 
 ARG LINSTOR_VERSION
 ARG VERSION=${LINSTOR_VERSION}
@@ -13,10 +14,10 @@ ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update \
  && apt-get -y upgrade \
  && apt-get -y install build-essential git default-jdk-headless python3-all debhelper wget unzip && \
-    wget https://services.gradle.org/distributions/gradle-8.9-bin.zip -O /tmp/gradle.zip && \
+    wget https://services.gradle.org/distributions/gradle-8.14.2-bin.zip -O /tmp/gradle.zip && \
     unzip -d /opt /tmp/gradle.zip && \
     rm /tmp/gradle.zip && \
-    ln -s /opt/gradle-8.9/bin/gradle /usr/local/bin/gradle
+    ln -s /opt/gradle-8.14.2/bin/gradle /usr/local/bin/gradle
 
 RUN git clone https://github.com/LINBIT/linstor-server.git /linstor-server
 WORKDIR /linstor-server

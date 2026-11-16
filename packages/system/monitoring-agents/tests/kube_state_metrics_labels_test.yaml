@@ -1,0 +1,15 @@
+suite: kube-state-metrics exports the labels of pods, deployments and PVCs
+# The tenant metrics API scopes a query to one application by looking up the
+# application's pods and PVCs in kube_pod_labels and
+# kube_persistentvolumeclaim_labels by their apps.cozystack.io/application.*
+# lineage labels. kube-state-metrics emits no kube_*_labels series at all for
+# a resource missing from this allowlist, so dropping persistentvolumeclaims
+# silently empties the PVC branch of that lookup.
+templates:
+  - charts/kube-state-metrics/templates/deployment.yaml
+tests:
+  - it: allowlists all labels of pods, deployments and persistentvolumeclaims
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --metric-labels-allowlist=pods=[*],deployments=[*],persistentvolumeclaims=[*]

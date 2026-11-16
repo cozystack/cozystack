@@ -520,3 +520,17 @@ EOF
     fi
     cleanup
 }
+
+# The workflow skips this check on backport branches, whose commits are picked
+# verbatim. A fork can name a branch backport-batch/anything, so the batch's
+# exemption holds only for a branch of this repository.
+@test "the workflow exempts a batch branch only from this repository" {
+    cond="$(yq -r '.jobs.commit-trailers.if' "$REPO_ROOT/.github/workflows/pre-commit.yml")"
+    case "$cond" in
+        *"!(startsWith(github.head_ref, 'backport-batch/') && github.event.pull_request.head.repo.full_name == github.repository)"*) ;;
+        *)
+            echo "the batch exemption is not bound to this repository: $cond" >&2
+            exit 1
+            ;;
+    esac
+}

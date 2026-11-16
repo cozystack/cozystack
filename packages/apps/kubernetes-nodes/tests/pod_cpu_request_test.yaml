@@ -1,7 +1,6 @@
 suite: worker pool pod CPU request
 
-# Mirror of the parent kubernetes chart's suite, on the pool-shaped values of
-# this chart. `podCpuRequest` is the only knob that sets
+# `podCpuRequest` is the only knob that sets
 # `domain.resources.requests.cpu` on a worker VM, and it is the other half of
 # `podCpuLimit`: KubeVirt copies a declared CPU limit into the request when the
 # VM declares none, so without this field the ceiling and the scheduler
@@ -100,8 +99,7 @@ tests:
     asserts:
       # Absent, not empty: the KubevirtMachineTemplate is content-hash named, so
       # a `cpu:` key rendered for a pool that asked for nothing would rename the
-      # template and roll every live worker VM of the pool on upgrade. The
-      # render-parity gate compares those bytes against the parent chart.
+      # template and roll every live worker VM of the pool on upgrade.
       - notExists:
           path: spec.template.spec.virtualMachineTemplate.spec.template.spec.domain.resources.requests.cpu
       - equal:
