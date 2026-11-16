@@ -18,7 +18,7 @@ setup() {
   export BASH_ENV="$REPO_ROOT/hack/testdata/capi-upgrade/clock.bash"
   export CAPI_TEST_STATE="$BATS_TEST_TMPDIR/state.json" CAPI_TEST_LOG="$BATS_TEST_TMPDIR/calls.jsonl"
   : > "$CAPI_TEST_LOG"
-  jq --null-input '
+  jq --null-input --argjson bridge "$(rendered_configmaps capi-operator templates/upgrade-bundles.yaml)" '
     def provider($name; $suffix): {
       metadata: {name: $name, uid: $name, generation: 1},
       spec: {version: ("v1.10.1-" + $suffix), fetchConfig: {selector: {matchLabels: ({($suffix + "-components"): "cozy"} + if $suffix == "bootstrap" then {"bootstrap-provider": "kubeadm"} else {} end)}}},
@@ -30,8 +30,18 @@ setup() {
     };
     {
       providers: {"cluster-api": provider("cluster-api"; "core"), kubeadm: provider("kubeadm"; "bootstrap")},
-      deployments: {"capi-controller-manager": deployment, "capi-kubeadm-bootstrap-controller-manager": deployment}
+      deployments: {"capi-controller-manager": deployment, "capi-kubeadm-bootstrap-controller-manager": deployment},
+      configmaps: ([
+        {name: "v1.10.1-core", labels: {"core-components": "cozy"}},
+        {name: "v1.10.1-bootstrap", labels: {"bootstrap-components": "cozy", "bootstrap-provider": "kubeadm"}}
+      ] + $bridge)
     }' > "$CAPI_TEST_STATE"
+}
+
+rendered_configmaps() {
+  helm template "$1" "$REPO_ROOT/packages/system/$1" --namespace test-capi --kube-version 1.33.0 --show-only "$2" |
+    yq --output-format=json --no-doc 'select(.kind == "ConfigMap") | {"name": .metadata.name, "labels": .metadata.labels}' |
+    jq --slurp --compact-output '.'
 }
 
 fixture() {
@@ -80,11 +90,26 @@ accepted_patches() {
 }
 
 @test "a final core upgrade already in progress is not reset to the bridge" {
+  fixture ".configmaps += $(rendered_configmaps capi-providers-core templates/configmaps.yaml)"
   fixture '.providers["cluster-api"].spec.version = "v1.14.4-core" | .providers["cluster-api"].status.installedVersion = "v1.13.8-core" | .pending = {"cluster-api": 2} | .providers["cluster-api"].spec.fetchConfig.selector.matchLabels["provider.cluster.x-k8s.io/version"] = "v1.14.4-core"'
   run bash "$UPGRADE_SCRIPT"
   [ "$status" -eq 0 ]
   [ "$(accepted_patches)" = '[{"name":"kubeadm","version":"v1.13.8-bootstrap"}]' ]
   [ "$(jq --raw-output '.providers["cluster-api"].status.installedVersion' "$CAPI_TEST_STATE")" = v1.14.4-core ]
+}
+
+@test "a core upgrade stalls while another installed provider selects two repositories" {
+  fixture '.configmaps += [{name: "v1.10.2-bootstrap", labels: {"bootstrap-components": "cozy", "bootstrap-provider": "kubeadm"}}]'
+  export CAPI_TEST_CLOCK_JUMP=61
+  run bash "$UPGRADE_SCRIPT"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"cluster-api timed out"* ]]
+  [ "$(accepted_patches)" = '[{"name":"cluster-api","version":"v1.13.8-core"}]' ]
+}
+
+@test "the live legacy kubeadm selector matches only its own repository during the core step" {
+  jq --exit-status '.providers.kubeadm.spec.fetchConfig.selector.matchLabels as $s |
+    [.configmaps[] | select(.labels as $l | $s | to_entries | all(.[]; $l[.key] == .value))] | map(.name) == ["v1.10.1-bootstrap"]' "$CAPI_TEST_STATE"
 }
 
 @test "an API process cannot outlive the upgrade deadline" {

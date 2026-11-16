@@ -27,6 +27,23 @@ if resource not in resources or name not in (
 entry = {"verb": verb, "resource": resource, "name": name}
 
 
+def selected(selector):
+    return [cm for cm in state.get("configmaps", []) if all(cm["labels"].get(k) == v for k, v in selector.items())]
+
+
+def repository_ready(name, obj):
+    own = selected(obj["spec"].get("fetchConfig", {}).get("selector", {}).get("matchLabels", {}))
+    if len(own) != 1 or own[0]["labels"].get("provider.cluster.x-k8s.io/version", own[0]["name"]) != obj["spec"]["version"]:
+        return False
+    # A version change makes cluster-api-operator resolve the repository of every
+    # other installed provider, refusing a selector that matches more than one ConfigMap.
+    return obj["status"].get("installedVersion") == obj["spec"]["version"] or all(
+        len(selected(other["spec"].get("fetchConfig", {}).get("selector", {}).get("matchLabels", {}))) == 1
+        for other_name, other in state["providers"].items()
+        if other_name != name and other["status"].get("installedVersion")
+    )
+
+
 def save():
     state_path.write_text(json.dumps(state))
 
@@ -53,7 +70,7 @@ if verb == "get":
         pending = state["pending"][name]
         if pending > 0:
             state["pending"][name] -= 1
-        elif not state.get("stalled") and obj["spec"].get("fetchConfig", {}).get("selector", {}).get("matchLabels", {}).get("provider.cluster.x-k8s.io/version") == obj["spec"]["version"]:
+        elif not state.get("stalled") and repository_ready(name, obj):
             obj["status"]["installedVersion"] = obj["spec"]["version"]
             obj["status"]["observedGeneration"] = obj["metadata"]["generation"]
             obj["status"]["conditions"] = [{"type": "Ready", "status": "True"}]
