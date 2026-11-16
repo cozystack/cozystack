@@ -148,7 +148,7 @@ migrations-target-check:
 # repo's control (kubebuilder, openapi-gen, etc.) and is better exercised
 # from their generator workflows.
 go-unit-tests:
-	go test ./pkg/registry/... ./pkg/config/... ./pkg/cmd/server/... ./api/workers/v1alpha1 ./cmd/kubernetes-worker-controller
+	go test ./pkg/registry/... ./pkg/config/... ./pkg/cmd/server/... ./api/workers/v1alpha1 ./cmd/kubernetes-worker-controller ./cmd/workerclass-restore
 
 # The nested Go modules (image sources and the published API types) are
 # outside ./... of the root module, so no other target reaches their tests.
@@ -323,3 +323,9 @@ generate:
 
 upload_assets: manifests
 	hack/upload-assets.sh
+
+.PHONY: test-worker-class-admission
+# The timeout has to cover the restore build deadline, the shared apiserver
+# budget of TestProductionPackage and the other tests in the package.
+test-worker-class-admission:
+	RUN_WORKERCLASS_INTEGRATION=1 KUBE_FEATURE_WatchListClient=false go test -tags=integration -timeout=15m -count=1 -v ./internal/kubernetesworker/integration/
