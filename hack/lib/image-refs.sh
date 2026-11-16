@@ -3,9 +3,9 @@
 #
 # Sourced by hack/promote-rewrite-tags.sh, hack/promote-retag.sh,
 # hack/nightly-mirror.sh, hack/verify-promoted-packages.sh,
-# hack/stitch-multiarch.sh, hack/verify-multiarch.sh and
-# hack/retention-packages.sh. It exists because the
-# first three call sites each grew their own idea of where a ref can live, and
+# hack/stitch-multiarch.sh, hack/verify-multiarch.sh,
+# hack/retention-packages.sh and hack/overlay-main-images.sh. It exists
+# because the first three call sites each grew their own idea of where a ref can live, and
 # drifted: promote-retag and nightly-mirror scanned only the depth-2
 # values.yaml, while the promote workflow's tag rewrite scanned those plus
 # packages/apps/kubernetes/images/*.tag alone. Every ref stored in any OTHER
@@ -39,10 +39,11 @@
 # regenerates. An entry here is a deliberate statement that some package's
 # `image:` target sed's a ref into a file it vendors from upstream.
 #
-# system/multus is the only one today: its templates/ is the upstream
+# system/multus is the vendored case: its templates/ is the upstream
 # multus-daemonset-thick.yml fetched by `make update`, and multus's Makefile
 # `image:` target sed's the built ref into every `multus-cni` `image:` line
-# inside it.
+# inside it. The Kairos bootstrap provider's readable copy is listed too, and
+# its consumed gzip is paired with it in IMAGE_REF_GZIP_COPIES below.
 #
 # KNOWN GAP, deliberately not listed: system/capi-providers-cpprovider stamps
 # its kamaji ref into files/control-plane-components.yaml AND into the
@@ -55,15 +56,19 @@
 # images/cluster-api-control-plane-provider-kamaji.tag, which carries the same
 # repo@digest. The residual is that a nightly's kamaji ConfigMap keeps the
 # private build-registry host, since the mirror's host rewrite cannot reach
-# inside a gzip. Fixing it means decompress/rewrite/recompress with `gzip -n`
-# to stay reproducible — see docs/agents/image-refs.md.
+# inside a gzip. The fix is to declare both copies the way the Kairos
+# provider's are — see docs/agents/image-refs.md.
 # Assigned unconditionally rather than via ${VAR:-default}: this list is
 # safety-critical for the retag and the mirror, neither of which has a
 # postcondition that would notice it being wrong. An inherited environment
 # variable able to silently NARROW it is a hazard with no matching use case.
 # Word splitting is intended (the list is whitespace-separated), which also
 # means a path containing whitespace cannot be represented here.
-IMAGE_REF_EXTRA_FILES="system/multus/templates/multus-daemonset-thick.yml"
+IMAGE_REF_EXTRA_FILES="system/multus/templates/multus-daemonset-thick.yml
+system/capi-providers-bootstrap/files/bootstrap-components-kairos.yaml"
+
+# Compressed install payloads must receive the same rewrite as their readable source.
+IMAGE_REF_GZIP_COPIES="system/capi-providers-bootstrap/files/components-kairos.gz=system/capi-providers-bootstrap/files/bootstrap-components-kairos.yaml"
 
 # Emit every ref-bearing file under <root>, one per line.
 #
@@ -189,6 +194,12 @@ collect_image_refs() {
   for _ir_f in $IMAGE_REF_EXTRA_FILES; do
     [ -f "$_ir_root/$_ir_f" ] || continue
     grep -Eo "[^[:space:]\"']+@sha256:[0-9a-f]{64}" "$_ir_root/$_ir_f" 2>/dev/null || true
+  done
+
+  for _ir_pair in $IMAGE_REF_GZIP_COPIES; do
+    _ir_gz="$_ir_root/${_ir_pair%%=*}"
+    [ -f "$_ir_gz" ] || continue
+    gzip --decompress --stdout "$_ir_gz" | grep -Eo "[^[:space:]\"']+@sha256:[0-9a-f]{64}" || true
   done
 
   return 0

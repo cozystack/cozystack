@@ -62,7 +62,8 @@ jobs:
   build-line:
     name: Build ${{ github.ref_name }} images and packages artifact
     runs-on: oracle-vm-24cpu-96gb-x86-64
-    timeout-minutes: 120
+    # Includes the Kairos worker disks, which build-kairos-worker budgets at 90m.
+    timeout-minutes: 210
     permissions:
       contents: read
       packages: write
@@ -71,8 +72,8 @@ jobs:
       # workflow_dispatch takes ANY ref, and the "Run workflow" ref selector
       # preselects the default branch — which is exactly where the recovery
       # advice above, and cut-prerelease.yaml's warning, send an operator. Since
-      # IMAGE_TAG below is github.ref_name, a dispatch from 'main' spends two
-      # hours republishing cozystack-packages:main and every main image tag while
+      # IMAGE_TAG below is github.ref_name, a dispatch from 'main' spends hours
+      # republishing cozystack-packages:main and every main image tag while
       # build-main.yaml may be writing the same ones: the 409 tag-collision class
       # #2711 fixed. Nothing is mislabeled (the content really is that ref), but
       # a runner and a cache generation are gone.

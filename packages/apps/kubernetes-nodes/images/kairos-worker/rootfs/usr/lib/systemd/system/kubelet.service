@@ -1,0 +1,23 @@
+[Unit]
+Description=Kubernetes kubelet
+Documentation=https://kubernetes.io/docs/reference/setup-tools/kubeadm/kubeadm-init/#kubelet-drop-in
+Wants=network-online.target containerd.service
+After=network-online.target containerd.service
+# Until `kubeadm join` writes /var/lib/kubelet/config.yaml kubelet exits and
+# is restarted, as with the upstream kubeadm packages; it must not give up.
+StartLimitIntervalSec=0
+
+[Service]
+# The layout of the upstream 10-kubeadm.conf: kubeadm writes kubeadm-flags.env;
+# /etc/sysconfig/kubelet is for the operator, and unlike /etc/default it
+# survives a reboot on Kairos.
+Environment="KUBELET_KUBECONFIG_ARGS=--bootstrap-kubeconfig=/etc/kubernetes/bootstrap-kubelet.conf --kubeconfig=/etc/kubernetes/kubelet.conf"
+Environment="KUBELET_CONFIG_ARGS=--config=/var/lib/kubelet/config.yaml"
+EnvironmentFile=-/var/lib/kubelet/kubeadm-flags.env
+EnvironmentFile=-/etc/sysconfig/kubelet
+ExecStart=/usr/bin/kubelet $KUBELET_KUBECONFIG_ARGS $KUBELET_CONFIG_ARGS $KUBELET_KUBEADM_ARGS $KUBELET_EXTRA_ARGS
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

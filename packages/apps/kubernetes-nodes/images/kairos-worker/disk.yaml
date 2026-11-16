@@ -1,0 +1,27 @@
+#cloud-config
+# Baked into the raw disk by AuroraBoot, which adds its own /oem/01_reset.yaml:
+# the first boot comes up in recovery and resets into the active system
+# unattended. Everything else, the user included, comes from the bootstrap
+# provider's cloud-config.
+#
+# Nobody watches a worker VM's console, so a recovery boot forwards the
+# journal there: a reset that fails leaves the reason in the serial log. The
+# reset runs in the network stage, whose service waits for the network to come
+# online; nothing else orders it after this boot stage, so if the network were
+# up before journald restarts, the first lines of the reset would miss the
+# console. The drop-in lives in the recovery system's tmpfs /etc and is gone
+# once the active system boots, whose console stays quiet.
+stages:
+  boot.before:
+    - name: forward the journal to the serial console on a recovery boot
+      if: '[ -f /run/cos/recovery_mode ]'
+      files:
+        - path: /etc/systemd/journald.conf.d/90-serial-console.conf
+          permissions: 0644
+          content: |
+            [Journal]
+            ForwardToConsole=yes
+            TTYPath=/dev/ttyS0
+            MaxLevelConsole=info
+      commands:
+        - systemctl restart systemd-journald
