@@ -7,3 +7,18 @@ any other way, a hand-set component value for one, is checked here too.
 {{- if not (has .Values.backend (list "linstor" "blockstor")) }}
 {{- fail (printf "linstor: backend must be \"linstor\" or \"blockstor\", got %q" (toString .Values.backend)) }}
 {{- end }}
+{{- /*
+blockstor's three images are one release: the controller, apiserver and
+satellite share a wire protocol and the CRDs under definitions/, which
+`make update-blockstor-crds` fetches for the controller's tag. Pinning one
+of them to another release still renders, and only fails on a cluster.
+*/ -}}
+{{- if eq .Values.backend "blockstor" }}
+{{- $versions := dict }}
+{{- range $component := list "blockstorController" "blockstorApiserver" "blockstorSatellite" }}
+{{- $_ := set $versions $component (index $.Values $component "image" "tag" | toString | splitList "@" | first) }}
+{{- end }}
+{{- if ne 1 (values $versions | uniq | len) }}
+{{- fail (printf "linstor: the blockstor images must share one release, got controller %q, apiserver %q, satellite %q" $versions.blockstorController $versions.blockstorApiserver $versions.blockstorSatellite) }}
+{{- end }}
+{{- end }}
