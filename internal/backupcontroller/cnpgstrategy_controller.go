@@ -44,6 +44,8 @@ const (
 	cnpgClusterLabel        = "cnpg.io/cluster"
 	cnpgBackupPhaseComplete = "completed"
 	cnpgBackupPhaseFailed   = "failed"
+	cnpgBackupPhaseStarted  = "started"
+	cnpgBackupPhaseRunning  = "running"
 
 	// barmanObjectNameParam / barmanServerNameParam are the barman-cloud plugin
 	// parameter keys on a Cluster's spec.plugins entry. barmanObjectName points
@@ -388,9 +390,10 @@ func (r *BackupJobReconciler) reconcileCNPG(ctx context.Context, j *backupsv1alp
 
 	// The ObjectStore is the Cluster's WAL archive destination, shared by
 	// every backup of the app, so it is written only before this job's
-	// Backup exists, and only while no other job's Backup is in flight and
-	// no other running job without a Backup yet holds the destination it
-	// last wrote.
+	// Backup exists, and only while no other job's Backup is in flight, no
+	// other running job without a Backup yet holds the destination it last
+	// wrote, and CloudNativePG runs no Backup of the Cluster that no running
+	// job tracks.
 	writeDestination := existingBackup == nil
 	if writeDestination {
 		// The gate in Reconcile sees only a job that has not started, and
@@ -420,6 +423,17 @@ func (r *BackupJobReconciler) reconcileCNPG(ctx context.Context, j *backupsv1alp
 			apimeta.SetStatusCondition(&j.Status.Conditions, cnpgDestinationWriteHeld("WaitingForOtherBackup"))
 			return r.waitCNPGBackupJob(ctx, j, "WaitingForOtherBackup", fmt.Sprintf(
 				"waiting for BackupJob %s of the same application to finish its backup, which writes to the shared WAL archive destination", holder))
+		}
+		untracked, err := r.untrackedCNPGBackupExecuting(ctx, j, clusterName)
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+		if untracked != "" {
+			apimeta.RemoveStatusCondition(&j.Status.Conditions, backupCondDestinationApplied)
+			apimeta.SetStatusCondition(&j.Status.Conditions, cnpgDestinationWriteHeld("WaitingForUntrackedBackup"))
+			return r.waitCNPGBackupJob(ctx, j, "WaitingForUntrackedBackup", fmt.Sprintf(
+				"waiting for cnpg.io/Backup %s/%s of cnpg.io/Cluster %s/%s, which no running BackupJob tracks, to finish: CloudNativePG is running it against the shared WAL archive destination",
+				j.Namespace, untracked, j.Namespace, clusterName))
 		}
 		if apimeta.FindStatusCondition(j.Status.Conditions, backupCondDestinationWriteHeld) != nil {
 			apimeta.SetStatusCondition(&j.Status.Conditions, metav1.Condition{
@@ -1162,8 +1176,9 @@ func (r *BackupJobReconciler) findCNPGBackupForJob(ctx context.Context, j *backu
 
 // otherCNPGBackupInFlight returns the name of another BackupJob that is still
 // running and whose cnpg.io/Backup of clusterName has not finished, or "" when
-// there is none. A Backup left behind by a finished or deleted job does not
-// hold the queue.
+// there is none. A Backup left behind by a finished or deleted job is not
+// counted here; untrackedCNPGBackupExecuting holds for it while
+// CloudNativePG executes it.
 //
 // The Backups are read from the apiserver, not the cache, which can still
 // miss a Backup another job's earlier pass created. Only the ones this
@@ -1204,6 +1219,51 @@ func (r *BackupJobReconciler) otherCNPGBackupInFlight(ctx context.Context, j *ba
 	}
 	sort.Strings(holders)
 	return holders[0], nil
+}
+
+// untrackedCNPGBackupExecuting returns the name of a cnpg.io/Backup of
+// clusterName that CloudNativePG is running, whoever created it. It is
+// asked after otherCNPGBackupInFlight and destinationClaimHolder found no
+// running BackupJob to wait for, so what it finds is a Backup no running
+// job tracks: one created by hand or by a ScheduledBackup, or one whose
+// BackupJob was deleted or finished first. Its base backup goes to the
+// destination it started with, so a rewrite now would send the WAL it
+// needs elsewhere.
+//
+// Only the phases BackupStatus.IsExecuting reports hold, the ones in which
+// CloudNativePG's BackupList.CanExecuteBackup lets no other Backup of the
+// Cluster start, so the wait never outlasts CloudNativePG's own queue. A pending
+// Backup, even one that ran before and was sent back to pending, starts
+// its base backup over against the destination current then.
+//
+// A Backup created by hand need carry no label at all, and CloudNativePG
+// labels only the ones a ScheduledBackup creates, so they are matched by
+// spec.cluster.name in a list of the whole namespace. That list comes from
+// the cache rather than the apiserver, which every waiting job would
+// otherwise ask for the namespace's whole Backup history on each poll. The
+// cache can miss a Backup that started moments ago, the same race that
+// already lies between this check and the write that follows it, which a
+// read from the apiserver would not close either.
+func (r *BackupJobReconciler) untrackedCNPGBackupExecuting(ctx context.Context, j *backupsv1alpha1.BackupJob, clusterName string) (string, error) {
+	list := &cnpgtypes.BackupList{}
+	if err := r.List(ctx, list, client.InNamespace(j.Namespace)); err != nil {
+		return "", fmt.Errorf("list cnpg.io/Backups in %s: %w", j.Namespace, err)
+	}
+	var executing []string
+	for i := range list.Items {
+		b := &list.Items[i]
+		if b.Spec.Cluster.Name != clusterName {
+			continue
+		}
+		if b.Status.Phase == cnpgBackupPhaseStarted || b.Status.Phase == cnpgBackupPhaseRunning {
+			executing = append(executing, b.Name)
+		}
+	}
+	if len(executing) == 0 {
+		return "", nil
+	}
+	sort.Strings(executing)
+	return executing[0], nil
 }
 
 func cnpgDestinationWriteHeld(reason string) metav1.Condition {
