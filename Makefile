@@ -324,3 +324,9 @@ generate:
 
 upload_assets: manifests
 	hack/upload-assets.sh
+
+.PHONY: test-worker-class-admission
+# The timeout has to cover the restore build deadline, the shared apiserver
+# budget of TestProductionPackage and the other tests in the package.
+test-worker-class-admission:
+	RUN_WORKERCLASS_INTEGRATION=1 KUBE_FEATURE_WatchListClient=false go test -tags=integration -timeout=15m -count=1 -v ./internal/kubernetesworker/integration/

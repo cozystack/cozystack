@@ -1,0 +1,19 @@
+{
+  "builtin default modules": "9fb3451336431a73d32b16250ce1836176a6900d78978632ff6dc77ca919dd8d",
+  "builtin module opt-out": "9fb3451336431a73d32b16250ce1836176a6900d78978632ff6dc77ca919dd8d",
+  "factory automatic GPU modules": "18bc2d30014a4997816bd73a591ccd00f6c6c070e9fbf974ec6fba57e2c06201",
+  "factory defaults": "1e7c9edf5497d60d5702c8c1462fe0ea2eba83dad65947ae76ee7b7a26f669df",
+  "factory explicit module parameters": "70a336d41f00fe51f81053a13c72722212d8f761ed5055c8cc8fb1cad22bd71d",
+  "factory in a VPC": "2c9a0bb3c3c8153d4af97599294a4d672ef35fef4090329b0d8c58938a790482",
+  "factory in a VPC with a route table": "96659bcfdf08964d04cdc60226398442b5b75bcc0fd091989be6fe5527b2319f",
+  "factory module opt-out on GPU": "b3c36fa5f17b91c3bfd4c4ed26819575a68ad331fab48b1051a9afadf990a00f",
+  "factory selected image overrides": "4c99c5fa94be7ac02b5797cfce99fec606efb2d6986fcba7eaa0f2ac7df4670f",
+  "factory stored v1.13.12 defaults": "1e7c9edf5497d60d5702c8c1462fe0ea2eba83dad65947ae76ee7b7a26f669df",
+  "factory stored v1.13.6 defaults": "87d96d9f0844569272185ffa7fd570733c1c59af647558ec1b156f31effa9317",
+  "proxmox absent modules": "71dc6456ea4acad2ff5b2b962c9fb80d26ac913395d6e67dc7bf2098378ab1d2",
+  "proxmox empty modules with registry mirrors": "d22f6620a03b98e80166b5d41b7bd94596a86b980d60b8110888d59e384261a6",
+  "proxmox explicit modules": "5c6283622da12b4884bf72f3495b2f1b3f1ca9d6179d7bd55398dd9648f82d14",
+  "proxmox stored v1.13.12 defaults": "f5b19113b094f4136288e7cff74591305ab6ae512b41455ee58ef95af831d075",
+  "proxmox stored v1.13.6 defaults": "dc718d147ee712c7b4115e97236c046b612f3931eb73d9a355575916e2e0c58c",
+  "separate mirror import trust installer reachability": "464a1319a77d327fff24a5a44b7d713598c52de537f1565bf1fac126bd913ed3"
+}
