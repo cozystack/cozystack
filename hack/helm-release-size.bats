@@ -64,6 +64,7 @@ packages/extra/ingress
 packages/extra/monitoring
 packages/extra/seaweedfs
 packages/library/cozy-lib
+packages/system/cloudflare-tunnel-gateway-controller
 packages/system/kuberture
 packages/system/telepresence
 packages/tests/cozy-lib-tests

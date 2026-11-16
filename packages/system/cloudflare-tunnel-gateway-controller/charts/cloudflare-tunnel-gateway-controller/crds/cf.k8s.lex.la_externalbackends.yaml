@@ -1,0 +1,109 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.21.0
+  name: externalbackends.cf.k8s.lex.la
+spec:
+  group: cf.k8s.lex.la
+  names:
+    kind: ExternalBackend
+    listKind: ExternalBackendList
+    plural: externalbackends
+    shortNames:
+    - extbackend
+    singular: externalbackend
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.scheme
+      name: Scheme
+      type: string
+    - jsonPath: .spec.host
+      name: Host
+      type: string
+    - jsonPath: .spec.port
+      name: Port
+      type: integer
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: |-
+          ExternalBackend is the Schema for the externalbackends API. It is a
+          namespaced, spec-only resource (no status): a route referencing a missing or
+          malformed ExternalBackend surfaces the failure on the route's own
+          ResolvedRefs condition, mirroring how an unresolvable Service backendRef is
+          reported.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: |-
+              ExternalBackendSpec defines an out-of-cluster HTTP(S) endpoint that an
+              HTTPRoute or GRPCRoute may target as a backendRef. It exists because the
+              in-process L7 proxy ultimately just dials a URL, so a route can point at an
+              arbitrary external origin without a Service standing in for it. Unlike a
+              Service of type ExternalName (which only carries a DNS name and infers the
+              scheme from the port), this type makes the scheme explicit and lets the host
+              be an address that is not a valid Service name.
+            properties:
+              host:
+                description: |-
+                  Host is the backend hostname or IP address (no scheme, port, or path).
+                  IPv6 literals must be bracketed (e.g. "[2001:db8::1]"). The controller
+                  performs a final URL parse; this pattern only rejects obvious mistakes
+                  such as embedding a scheme or path.
+                maxLength: 253
+                minLength: 1
+                pattern: ^[a-zA-Z0-9._:\[\]-]+$
+                type: string
+              path:
+                description: |-
+                  Path is an optional base path prepended to the request path when the
+                  proxy dials the backend. Must begin with "/". It may include a query
+                  string (e.g. "/v1?token=abc"); those query parameters are merged into
+                  every dialed request, with the request's own parameters taking
+                  precedence on a key conflict.
+                pattern: ^/.*$
+                type: string
+              port:
+                description: Port is the backend TCP port.
+                format: int32
+                maximum: 65535
+                minimum: 1
+                type: integer
+              scheme:
+                description: 'Scheme is the protocol used to dial the backend: "http"
+                  or "https".'
+                enum:
+                - http
+                - https
+                type: string
+            required:
+            - host
+            - port
+            - scheme
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources: {}

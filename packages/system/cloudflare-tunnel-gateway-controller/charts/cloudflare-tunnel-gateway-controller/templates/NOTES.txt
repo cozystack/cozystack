@@ -1,0 +1,103 @@
+✅ Cloudflare Tunnel Gateway Controller installed successfully!
+
+Release: {{ .Release.Name }}
+Namespace: {{ .Release.Namespace }}
+Chart Version: {{ .Chart.Version }}
+App Version: {{ .Chart.AppVersion }}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+📋 Next Steps:
+
+1. Verify deployment status:
+   kubectl get pods -n {{ .Release.Namespace }} -l app.kubernetes.io/instance={{ .Release.Name }}
+
+2. Check controller logs:
+   kubectl logs -n {{ .Release.Namespace }} -l app.kubernetes.io/name={{ include "cf-tunnel-gw-ctrl.name" . }} --follow
+
+3. Verify GatewayClass is created:
+   kubectl get gatewayclass {{ .Values.controller.gatewayClassName }}
+
+4. Create a Gateway resource:
+   cat <<EOF | kubectl apply -f -
+   apiVersion: gateway.networking.k8s.io/v1
+   kind: Gateway
+   metadata:
+     name: cloudflare-gateway
+     namespace: {{ .Release.Namespace }}
+   spec:
+     gatewayClassName: {{ .Values.controller.gatewayClassName }}
+     listeners:
+       - name: https
+         protocol: HTTPS
+         port: 443
+   EOF
+
+5. Create an HTTPRoute to expose your service:
+   cat <<EOF | kubectl apply -f -
+   apiVersion: gateway.networking.k8s.io/v1
+   kind: HTTPRoute
+   metadata:
+     name: my-app
+     namespace: {{ .Release.Namespace }}
+   spec:
+     parentRefs:
+       - name: cloudflare-gateway
+     hostnames:
+       - "app.example.com"
+     rules:
+       - backendRefs:
+           - name: my-app-service
+             port: 80
+   EOF
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+⚠️  Important Notes:
+
+{{- if .Values.gatewayClassConfig.create }}
+
+  📋 GatewayClassConfig: Configuration is managed via GatewayClassConfig CRD.
+     Ensure your Cloudflare credentials Secret exists:
+       kubectl get secret {{ .Values.gatewayClassConfig.cloudflareCredentialsSecretRef.name }} -n {{ .Release.Namespace }}
+{{- end }}
+
+{{- if and (gt (.Values.replicaCount | int) 1) (not .Values.podDisruptionBudget.enabled) }}
+
+  ⚡ High Availability: You are running {{ .Values.replicaCount }} replicas without PodDisruptionBudget.
+     Enable PDB for better availability during cluster maintenance:
+       podDisruptionBudget:
+         enabled: true
+         minAvailable: 1
+{{- end }}
+
+{{- if and .Values.podDisruptionBudget.enabled (eq (.Values.replicaCount | int) 1) }}
+
+  ⚠️  Warning: PodDisruptionBudget is enabled with replicaCount=1.
+     This may block pod evictions during maintenance.
+     Consider increasing replicaCount to 2+ for HA.
+{{- end }}
+
+{{- if not .Values.networkPolicy.enabled }}
+
+  🔒 Network Security: NetworkPolicy is disabled.
+     For production, enable NetworkPolicy to restrict traffic:
+       networkPolicy:
+         enabled: true
+         ingress:
+           from:
+             - namespaceSelector:
+                 matchLabels:
+                   name: monitoring
+{{- end }}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+📚 Resources:
+
+  Documentation: https://github.com/lexfrei/cloudflare-tunnel-gateway-controller
+  Examples: https://github.com/lexfrei/cloudflare-tunnel-gateway-controller/tree/master/charts/cloudflare-tunnel-gateway-controller/examples
+  Troubleshooting: https://cf.k8s.lex.la/latest/operations/troubleshooting/
+  Issues: https://github.com/lexfrei/cloudflare-tunnel-gateway-controller/issues
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

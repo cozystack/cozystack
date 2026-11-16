@@ -1,0 +1,146 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "cf-tunnel-gw-ctrl.fullname" . }}
+  labels:
+    {{- include "cf-tunnel-gw-ctrl.labels" . | nindent 4 }}
+rules:
+  # GatewayClass: read plus update/patch on the main resource -- the
+  # controller manages the spec-defined gateway-exists finalizer (added while
+  # any Gateway uses the class, removed when none do), which is a metadata
+  # write outside the status subresource.
+  - apiGroups: ["gateway.networking.k8s.io"]
+    resources: ["gatewayclasses"]
+    verbs: ["get", "list", "watch", "update", "patch"]
+  - apiGroups: ["gateway.networking.k8s.io"]
+    resources: ["gateways"]
+    verbs: ["get", "list", "watch", "update", "patch"]
+  - apiGroups: ["gateway.networking.k8s.io"]
+    resources: ["httproutes"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["gateway.networking.k8s.io"]
+    resources: ["grpcroutes"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["gateway.networking.k8s.io"]
+    resources: ["referencegrants"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["gateway.networking.k8s.io"]
+    resources: ["backendtlspolicies"]
+    verbs: ["get", "list", "watch"]
+  # ServiceImport (multicluster.x-k8s.io): a backendRef may target an imported
+  # multicluster Service. The controller reads spec.ports to validate the
+  # requested port and resolves a clusterset.local backend URL. Read-only.
+  - apiGroups: ["multicluster.x-k8s.io"]
+    resources: ["serviceimports"]
+    verbs: ["get", "list", "watch"]
+  # ListenerSet: the ListenerSetReconciler watches ListenerSet resources,
+  # validates them against the parent Gateway's allowedListeners filter, and
+  # surfaces Accepted / Programmed / per-entry conditions. Read-only on the
+  # spec; status writes go through the status subresource below.
+  - apiGroups: ["gateway.networking.k8s.io"]
+    resources: ["listenersets"]
+    verbs: ["get", "list", "watch"]
+  # Gateway API status subresources - write access for status updates only
+  - apiGroups: ["gateway.networking.k8s.io"]
+    resources: ["gatewayclasses/status", "gateways/status", "httproutes/status", "grpcroutes/status", "backendtlspolicies/status", "listenersets/status"]
+    verbs: ["get", "update", "patch"]
+  # CustomResourceDefinitions: the GatewayClass reconciler reads the installed
+  # Gateway API CRD's bundle-version annotation to set the SupportedVersion
+  # condition. A single uncached Get by name -- no informer, so only get is
+  # needed and the controller never mutates CRDs.
+  - apiGroups: ["apiextensions.k8s.io"]
+    resources: ["customresourcedefinitions"]
+    verbs: ["get"]
+  - apiGroups: [""]
+    resources: ["namespaces"]
+    verbs: ["get", "list", "watch"]
+  # Services: read everywhere (backend resolution) plus full write for the
+  # per-Gateway data planes — the controller renders a headless config
+  # Service per opted-in Gateway (issue #479). Rendered objects are
+  # controller-owned via ownerReferences and deleted only when owned.
+  - apiGroups: [""]
+    resources: ["services"]
+    verbs: ["get", "list", "watch", "create", "update", "delete"]
+  # EndpointSlice: the ProxyEndpointReconciler watches EndpointSlices owned
+  # by the proxy headless Service so that a newly-joined proxy pod gets
+  # the cached config pushed to it immediately, rather than waiting for
+  # the next HTTPRoute reconcile. Read-only.
+  - apiGroups: ["discovery.k8s.io"]
+    resources: ["endpointslices"]
+    verbs: ["get", "list", "watch"]
+  # Deployments: the ProxySecretReconciler patches the proxy Deployment's
+  # pod-template annotation when the tunnel-token Secret rotates (issue
+  # #114), and the per-Gateway data planes (issue #479) render a dedicated
+  # proxy Deployment per opted-in Gateway — full write, cluster-wide,
+  # because Gateways live in arbitrary namespaces. Rendered objects are
+  # controller-owned via ownerReferences and deleted only when owned.
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    # patch IS used here (unlike services/HPA/NetworkPolicy): the proxy Secret
+    # reconciler merge-patches the SHARED proxy Deployment's pod-template
+    # annotation to roll it on tunnel-token rotation.
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # HorizontalPodAutoscalers: rendered per opted-in Gateway when its
+  # GatewayConfig requests autoscaling (issue #479).
+  - apiGroups: ["autoscaling"]
+    resources: ["horizontalpodautoscalers"]
+    verbs: ["get", "list", "watch", "create", "update", "delete"]
+  # NetworkPolicies: rendered per opted-in Gateway to lock the proxy's
+  # config-API port to the controller (+ monitoring) namespaces — network-layer
+  # defense-in-depth on the tenant config API. Controller-owned, GC'd by
+  # ownerReference.
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["networkpolicies"]
+    # No patch: written via CreateOrUpdate + Delete only (see deployments).
+    verbs: ["get", "list", "watch", "create", "update", "delete"]
+  # Secrets: mostly read-only (Cloudflare credentials, TLS certificate refs,
+  # BackendTLSPolicy CA bundles). create is for the generated config-API auth
+  # Secret, both planes: the per-Gateway one (#479, ownerRef GC'd with the
+  # Gateway) and the shared plane's (proxy.authTokenSecretRef.name empty,
+  # namespaced to the release, never GC'd since there is no owning object --
+  # see internal/controller/proxy_auth_secret.go). Either way a data plane
+  # without an explicit authTokenSecretRef gets a controller-generated bearer
+  # token rather than an unauthenticated config API. No update/delete — the
+  # token is never rotated.
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get", "list", "watch", "create"]
+  # ConfigMaps: BackendTLSPolicy can reference a ConfigMap holding the CA
+  # bundle (internal/controller/backendtlspolicy_controller.go). Read-only.
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get", "list", "watch"]
+  # Events: the route reconcilers emit Kubernetes Events for benign config
+  # overrides via controller-runtime's EventRecorder. The new (events.k8s.io)
+  # recorder writes to events.k8s.io/v1; the legacy broadcaster that
+  # controller-runtime also starts writes core v1 events. Grant both so
+  # neither path is denied.
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["create", "patch"]
+  - apiGroups: ["events.k8s.io"]
+    resources: ["events"]
+    verbs: ["create", "patch"]
+  # GatewayClassConfig CRD
+  - apiGroups: ["cf.k8s.lex.la"]
+    resources: ["gatewayclassconfigs"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["cf.k8s.lex.la"]
+    resources: ["gatewayclassconfigs/status"]
+    verbs: ["get", "update", "patch"]
+  # GatewayConfig CRD: per-Gateway data-plane parameters referenced from
+  # Gateway.spec.infrastructure.parametersRef. Read-only: the controller
+  # consumes the spec and writes no GatewayConfig status.
+  - apiGroups: ["cf.k8s.lex.la"]
+    resources: ["gatewayconfigs"]
+    verbs: ["get", "list", "watch"]
+  # ExternalBackend CRD: a backendRef may target an out-of-cluster HTTP(S)
+  # endpoint declared by an ExternalBackend. The controller reads its spec to
+  # resolve the backend URL. Read-only.
+  - apiGroups: ["cf.k8s.lex.la"]
+    resources: ["externalbackends"]
+    verbs: ["get", "list", "watch"]
+  # Leader election
+  - apiGroups: ["coordination.k8s.io"]
+    resources: ["leases"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]

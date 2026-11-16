@@ -133,6 +133,7 @@ jobs:
               'kilo':                'area/networking',
               'hetzner-robotlb':     'area/networking',
               'ouroboros':           'area/networking',
+              'cloudflare-tunnel':   'area/networking',
 
               // area/cilium
               'cilium':              'area/cilium',

@@ -1,0 +1,166 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.21.0
+  name: gatewayclassconfigs.cf.k8s.lex.la
+spec:
+  group: cf.k8s.lex.la
+  names:
+    kind: GatewayClassConfig
+    listKind: GatewayClassConfigList
+    plural: gatewayclassconfigs
+    shortNames:
+    - gcconfig
+    singular: gatewayclassconfig
+  scope: Cluster
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.tunnelID
+      name: Tunnel ID
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: |-
+          GatewayClassConfig is the Schema for the gatewayclassconfigs API.
+          It provides configuration for Cloudflare Tunnel Gateway API implementation.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: GatewayClassConfigSpec defines the desired state of GatewayClassConfig.
+            properties:
+              accountId:
+                description: |-
+                  AccountID is the Cloudflare account ID. Optional - if not specified, it will be
+                  read from the credentials secret ("account-id" key) or auto-detected if the API token
+                  has access to only one account.
+
+                  When set, must be a 32-character lowercase hexadecimal string -- the format
+                  Cloudflare uses for account IDs. Validated server-side via a CRD-level CEL
+                  rule (Kubernetes >= 1.25) so an invalid value is rejected at admission time,
+                  before the controller has to reconcile it. Empty string passes through
+                  because the field is optional.
+                type: string
+                x-kubernetes-validations:
+                - message: accountID must be a 32-character lowercase hexadecimal
+                    string (Cloudflare account ID format)
+                  rule: self == '' || self.matches('^[a-f0-9]{32}$')
+              cloudflareCredentialsSecretRef:
+                description: |-
+                  CloudflareCredentialsSecretRef references a Secret containing Cloudflare API credentials.
+                  The Secret must contain an "api-token" key with a valid Cloudflare API token.
+                properties:
+                  key:
+                    description: |-
+                      Key in the Secret. Defaults depend on context:
+                      - For cloudflareCredentialsSecretRef: "api-token"
+                    type: string
+                  name:
+                    description: Name of the Secret.
+                    minLength: 1
+                    type: string
+                  namespace:
+                    description: Namespace of the Secret. Defaults to the namespace
+                      of the referencing resource.
+                    type: string
+                required:
+                - name
+                type: object
+              tunnelID:
+                description: TunnelID is the Cloudflare Tunnel UUID.
+                pattern: ^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$
+                type: string
+            required:
+            - cloudflareCredentialsSecretRef
+            - tunnelID
+            type: object
+          status:
+            description: GatewayClassConfigStatus defines the observed state of GatewayClassConfig.
+            properties:
+              conditions:
+                description: Conditions describe the current state of the GatewayClassConfig.
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - type
+                x-kubernetes-list-type: map
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}
