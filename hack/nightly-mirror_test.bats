@@ -392,3 +392,92 @@ _stub_registry() {
   fi
   rm -rf "$tmp"
 }
+
+@test "the Kairos provider source and consumed gzip use the mirrored host" {
+  tmp=$(mktemp -d)
+  _make_tree "$tmp/tree"
+  _stub_registry "$tmp/bin"
+  carrier="$tmp/tree/system/capi-providers-bootstrap/files"
+  mkdir -p "$carrier"
+  printf 'image: iad.ocir.io/idyksih5sir9/cozystack/cluster-api-provider-kairos:v0.2.1@sha256:%s\nregistry: "iad.ocir.io/idyksih5sir9/cozystack"\n' "$D" > "$carrier/bootstrap-components-kairos.yaml"
+  gzip --no-name --stdout "$carrier/bootstrap-components-kairos.yaml" > "$carrier/components-kairos.gz"
+  mkdir -p "$tmp/tree/system/capi-providers-bootstrap/images"
+  printf 'iad.ocir.io/idyksih5sir9/cozystack/cluster-api-provider-kairos:v0.2.1@sha256:%s\n' "$D" > "$tmp/tree/system/capi-providers-bootstrap/images/cluster-api-provider-kairos.tag"
+
+  PATH="$tmp/bin:$PATH" hack/nightly-mirror.sh 0.0.0-nightly.test "$tmp/tree" > "$tmp/out"
+
+  grep -q '/cluster-api-provider-kairos .*ghcr.io/cozystack/cozystack/cluster-api-provider-kairos' "$tmp/out"
+  grep -q '^image: ghcr.io/cozystack/cozystack/cluster-api-provider-kairos:v0.2.1@sha256:' "$carrier/bootstrap-components-kairos.yaml"
+  grep -q '^registry: "ghcr.io/cozystack/cozystack"$' "$carrier/bootstrap-components-kairos.yaml"
+  gzip --decompress --stdout "$carrier/components-kairos.gz" > "$tmp/consumed.yaml"
+  cmp "$carrier/bootstrap-components-kairos.yaml" "$tmp/consumed.yaml"
+  if grep -q 'iad.ocir.io' "$tmp/consumed.yaml"; then
+    echo "FAIL: consumed Kairos manifest retains the build registry"
+    false
+  fi
+  rm -rf "$tmp"
+}
+
+@test "dry-run names the Kairos gzip it would recompress and leaves it alone" {
+  tmp=$(mktemp -d)
+  _make_tree "$tmp/tree"
+  _kairos_carrier "$tmp/tree"
+  gzip --no-name --stdout "$carrier/bootstrap-components-kairos.yaml" > "$carrier/components-kairos.gz"
+  cp "$carrier/components-kairos.gz" "$tmp/before.gz"
+
+  hack/nightly-mirror.sh 0.0.0-nightly.test "$tmp/tree" --dry-run > "$tmp/out"
+
+  grep -q "^DRY-RUN recompress $carrier/components-kairos.gz from its rewritten system/capi-providers-bootstrap/files/bootstrap-components-kairos.yaml$" "$tmp/out"
+  cmp "$tmp/before.gz" "$carrier/components-kairos.gz"
+  rm -rf "$tmp"
+}
+
+_kairos_carrier() {
+  carrier="$1/system/capi-providers-bootstrap/files"
+  mkdir -p "$carrier" "$1/system/capi-providers-bootstrap/images"
+  printf 'image: iad.ocir.io/idyksih5sir9/cozystack/cluster-api-provider-kairos:v0.2.1@sha256:%s\n' "$D" > "$carrier/bootstrap-components-kairos.yaml"
+  printf 'iad.ocir.io/idyksih5sir9/cozystack/cluster-api-provider-kairos:v0.2.1@sha256:%s\n' "$D" > "$1/system/capi-providers-bootstrap/images/cluster-api-provider-kairos.tag"
+}
+
+@test "a Kairos gzip that differs from its readable copy fails the mirror and is left as it was" {
+  tmp=$(mktemp -d)
+  _make_tree "$tmp/tree"
+  _stub_registry "$tmp/bin"
+  _kairos_carrier "$tmp/tree"
+  printf 'image: iad.ocir.io/idyksih5sir9/cozystack/other:v1@sha256:%s\n' "$D" | gzip --no-name > "$carrier/components-kairos.gz"
+  cp "$carrier/components-kairos.gz" "$tmp/before.gz"
+  rc=0
+  PATH="$tmp/bin:$PATH" hack/nightly-mirror.sh 0.0.0-nightly.test "$tmp/tree" > "$tmp/out" 2>&1 || rc=$?
+  [ "$rc" -ne 0 ]
+  grep -q 'bootstrap-components-kairos.yaml differ' "$tmp/out"
+  cmp "$tmp/before.gz" "$carrier/components-kairos.gz"
+  rm -rf "$tmp"
+}
+
+@test "a truncated Kairos gzip fails the mirror before any registry call" {
+  tmp=$(mktemp -d)
+  _make_tree "$tmp/tree"
+  _stub_registry "$tmp/bin"
+  printf '#!/bin/sh\necho "$*" >> "%s/skopeo-calls"\nexit 0\n' "$tmp" > "$tmp/bin/skopeo"
+  _kairos_carrier "$tmp/tree"
+  gzip --no-name --stdout "$carrier/bootstrap-components-kairos.yaml" | head -c 20 > "$carrier/components-kairos.gz"
+  rc=0
+  PATH="$tmp/bin:$PATH" hack/nightly-mirror.sh 0.0.0-nightly.test "$tmp/tree" > "$tmp/out" 2>&1 || rc=$?
+  [ "$rc" -ne 0 ]
+  [ ! -e "$tmp/skopeo-calls" ]
+  rm -rf "$tmp"
+}
+
+@test "a build-registry host the rewrite cannot reach in the Kairos gzip fails the mirror" {
+  tmp=$(mktemp -d)
+  _make_tree "$tmp/tree"
+  _stub_registry "$tmp/bin"
+  _kairos_carrier "$tmp/tree"
+  printf 'registries: ["iad.ocir.io/idyksih5sir9/cozystack", "mirror.example.com"]\n' >> "$carrier/bootstrap-components-kairos.yaml"
+  gzip --no-name --stdout "$carrier/bootstrap-components-kairos.yaml" > "$carrier/components-kairos.gz"
+  rc=0
+  PATH="$tmp/bin:$PATH" hack/nightly-mirror.sh 0.0.0-nightly.test "$tmp/tree" > "$tmp/out" 2>&1 || rc=$?
+  [ "$rc" -ne 0 ]
+  grep -qF "unrewritten image host in $carrier/components-kairos.gz" "$tmp/out"
+  rm -rf "$tmp"
+}

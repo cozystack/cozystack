@@ -1,0 +1,27 @@
+Select the provider pods by the provider label, so the webhook Service and the
+Deployment match only this provider in a namespace shared with other providers.
+Upstream report: https://github.com/kairos-io/kairos/issues/5815
+
+--- a/bootstrap-components-kairos.yaml
++++ b/bootstrap-components-kairos.yaml
+@@ -2614,6 +2614,7 @@
+     protocol: TCP
+     targetPort: 9443
+   selector:
++    cluster.x-k8s.io/provider: bootstrap-kairos-io
+     control-plane: controller-manager
+ ---
+ apiVersion: apps/v1
+@@ -2629,10 +2630,12 @@
+   replicas: 1
+   selector:
+     matchLabels:
++      cluster.x-k8s.io/provider: bootstrap-kairos-io
+       control-plane: controller-manager
+   template:
+     metadata:
+       labels:
++        cluster.x-k8s.io/provider: bootstrap-kairos-io
+         control-plane: controller-manager
+     spec:
+       containers:

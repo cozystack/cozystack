@@ -117,9 +117,12 @@ comma := ,
 
 # oci-output <image-name> — when OCI_EXPORT_DIR is set, expands to a per-image
 # `--output type=oci,dest=<dir>/<name>.oci.tar`; empty otherwise. EVERY buildx
-# call reachable from a fork build must include this — via image-tags, or
-# directly for recipes that bypass image-tags (#3257). A missing archive is
-# caught loudly by the fork build's `if-no-files-found: error` upload.
+# call reachable from a fork build that produces a published image must include
+# this — via image-tags, or directly for recipes that bypass image-tags (#3257).
+# A missing archive is caught loudly by the fork build's `if-no-files-found:
+# error` upload. A build whose result never leaves the runner must not: the
+# fork e2e pushes every archive it finds as an image. The Kairos worker test
+# stage and the OS image loaded for AuroraBoot are such builds.
 oci-output = $(if $(strip $(OCI_EXPORT_DIR)), --output type=oci$(comma)dest=$(OCI_EXPORT_DIR)/$(subst /,-,$(1)).oci.tar)
 
 # image-tags <image-name> [<versioned-tag>] — the --tag/--output flags for one

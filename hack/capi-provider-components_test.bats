@@ -33,7 +33,8 @@ check_pair() {
     if [ "$blob" = components.gz ] && grep -q '^components:' "$REPO_ROOT/packages/system/$pkg/Makefile" 2>/dev/null; then
       echo "run: make -C packages/system/$pkg components" >&2
     else
-      echo "regenerate: gzip -9 -n -c files/$yaml > files/$blob" >&2
+      regenerate=$(grep -F "> files/$blob" "$REPO_ROOT/packages/system/$pkg/Makefile" 2>/dev/null | head -1 | sed 's/^[[:space:]]*//')
+      echo "regenerate: ${regenerate:-gzip -9 -n -c files/$yaml > files/$blob}" >&2
     fi
     head -40 "$work/decompressed.yaml" > "$work/a"
     head -40 "$dir/$yaml" > "$work/b"
@@ -186,8 +187,8 @@ check_patched_sums() {
   check_version capi-providers-core CAPI_VERSION
 }
 
-# capi-providers-bootstrap ships two providers, kubeadm and Talos, each with its
-# own ConfigMap and BootstrapProvider, so the single-provider check above does
+# capi-providers-bootstrap ships several providers, each with its own
+# ConfigMap and BootstrapProvider, so the single-provider check above does
 # not fit it. This asserts that the ConfigMap and the provider object for one of
 # them both carry <Makefile version>-<suffix>.
 check_bootstrap_version() {
@@ -202,6 +203,7 @@ check_bootstrap_version() {
   case "$suffix" in
     bootstrap) provider=kubeadm ;;
     bootstrap-talos) provider=talos ;;
+    bootstrap-kairos) provider=kairos ;;
     *) return 1 ;;
   esac
   helm template provider "$dir" --kube-version 1.33.0 > "$rendered"
@@ -248,6 +250,78 @@ check_bootstrap_version() {
   while IFS= read -r account; do
     [ "$account" = cabpt-manager ]
   done <<< "$accounts"
+}
+
+@test "Kairos bootstrap ships the version its Makefile vendored" {
+  check_bootstrap_version KAIROS_COMPONENT_VERSION bootstrap-kairos
+}
+
+# The upstream manager role also serves the KairosControlPlane path, which
+# mints ServiceAccount tokens and writes Roles; patches/kairos/0002 drops what
+# a worker-only platform never calls.
+@test "the Kairos bootstrap manager role grants no token minting and no Role writes" {
+  role=$(yq --output-format=json 'select(.kind == "ClusterRole" and .metadata.name == "capi-kairos-bootstrap-bootstrap-manager-role") | .rules' \
+    "$REPO_ROOT/packages/system/capi-providers-bootstrap/files/bootstrap-components-kairos.yaml")
+  [ -n "$role" ] && [ "$role" != null ] || { echo "no capi-kairos-bootstrap-bootstrap-manager-role ClusterRole in the manifest" >&2; false; }
+  jq --exit-status 'all(.[]; (.resources | index("serviceaccounts") or index("serviceaccounts/token") or index("virtualmachineinstances")) | not)' <<< "$role" >/dev/null || { echo "the manager role still names serviceaccounts or VMIs: $role" >&2; false; }
+  jq --exit-status 'all(.[] | select(.apiGroups | index("rbac.authorization.k8s.io")); (.resources | index("rolebindings") | not) and .verbs == ["list"])' <<< "$role" >/dev/null || { echo "the manager role still writes Roles or RoleBindings: $role" >&2; false; }
+}
+
+@test "Kairos bootstrap components-kairos.gz matches the vendored bootstrap-components-kairos.yaml" {
+  check_pair capi-providers-bootstrap bootstrap-components-kairos.yaml components-kairos.gz
+}
+
+# capi-operator resolves a provider's version to the one ConfigMap its selector
+# matches, reading the version label and falling back to the ConfigMap name.
+@test "every bootstrap provider selects exactly one ConfigMap at its requested version" {
+  helm template provider "$REPO_ROOT/packages/system/capi-providers-bootstrap" --kube-version 1.33.0 \
+    | yq --output-format=json --no-doc '.' \
+    | jq --slurp --exit-status '. as $objects | [.[] | select(.kind == "BootstrapProvider")] |
+        (map(.metadata.name) | sort) == ["kairos", "kubeadm", "talos"] and all(.[]; . as $provider |
+          [$objects[] | select(.kind == "ConfigMap") | select(.metadata.labels as $labels |
+            $provider.spec.fetchConfig.selector.matchLabels | to_entries | all(.[]; $labels[.key] == .value))] |
+          length == 1 and ((.[0].metadata.labels["provider.cluster.x-k8s.io/version"] // .[0].metadata.name) == $provider.spec.version))'
+}
+
+# The Kairos manifests are rendered from the upstream release the image is
+# built from, and the component version names that release. A bump of one
+# without the others ships manifests of one release running the code of another.
+@test "Kairos bootstrap version names the upstream release its image is built from" {
+  local dir="$REPO_ROOT/packages/system/capi-providers-bootstrap"
+  local release version
+  release="$(sed -n 's/^ARG VERSION=//p' "$dir/images/cluster-api-provider-kairos/Dockerfile")"
+  version="$(sed -n 's/^KAIROS_COMPONENT_VERSION *= *//p' "$dir/Makefile")"
+  [[ "$release" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "Dockerfile pins no upstream release tag: '$release'" >&2; return 1; }
+  case "$version" in
+    "$release"-cozystack.[0-9]*) ;;
+    *) echo "KAIROS_COMPONENT_VERSION '$version' is not $release-cozystack.N" >&2; return 1 ;;
+  esac
+}
+
+# clusterctl maps a provider version to its contract through the release
+# series in the metadata, and refuses a version whose minor has no series.
+@test "Kairos bootstrap metadata declares the release series of the version it ships" {
+  local dir="$REPO_ROOT/packages/system/capi-providers-bootstrap"
+  local version major minor
+  version="$(sed -n 's/^KAIROS_COMPONENT_VERSION *= *//p' "$dir/Makefile")"
+  [[ "$version" =~ ^v([0-9]+)\.([0-9]+)\. ]] || { echo "unparseable version '$version'" >&2; return 1; }
+  major="${BASH_REMATCH[1]}" minor="${BASH_REMATCH[2]}"
+  [ "$(yq -r ".releaseSeries[] | select(.major == $major and .minor == $minor) | .contract" "$dir/files/metadata-kairos.yaml")" = v1beta2 ] \
+    || { echo "files/metadata-kairos.yaml has no v1beta2 series for $major.$minor" >&2; return 1; }
+}
+
+@test "Kairos bootstrap manifests run the manager image this package builds" {
+  local dir="$REPO_ROOT/packages/system/capi-providers-bootstrap"
+  local tag version
+  tag="$(cat "$dir/images/cluster-api-provider-kairos.tag")"
+  version="$(sed -n 's/^KAIROS_COMPONENT_VERSION *= *//p' "$dir/Makefile")"
+  # Bare until the first build of a new version stamps its digest.
+  [[ "$tag" =~ /cluster-api-provider-kairos:${version//./\\.}(@sha256:[0-9a-f]{64})?$ ]] \
+    || { echo "images/cluster-api-provider-kairos.tag '$tag' is not $version" >&2; return 1; }
+  local images
+  images="$(sed -n 's/^ *image: //p' "$dir/files/bootstrap-components-kairos.yaml" | sort -u)"
+  [ "$images" = "$tag" ] \
+    || { echo "bootstrap-components-kairos.yaml runs '$images', the package builds '$tag'" >&2; return 1; }
 }
 
 @test "kubeadm bootstrap components.gz matches the vendored bootstrap-components.yaml" {
@@ -316,4 +390,54 @@ check_bootstrap_version() {
     [ -n "$probe" ]
     jq --exit-status '.httpGet.path == "/healthz" and .httpGet.port == "healthz" and .failureThreshold * .periodSeconds >= 300' <<< "$probe"
   done
+}
+
+# capi-operator installs every provider into one namespace, so a selector that
+# only names labels the providers share (control-plane: controller-manager)
+# spreads over every provider's pods: a Service sends a webhook call to a
+# foreign pod, which fails TLS, and a Deployment selector overlaps the others'.
+# Each Service and each Deployment has to select the pods of exactly one
+# Deployment across every provider the platform ships.
+@test "every provider selector selects the pods of exactly one provider Deployment" {
+  local work; work="$(mktemp -d)"
+  local f
+  for f in "$REPO_ROOT"/packages/system/capi-providers-*/files/*.gz; do
+    gzip -dc "$f" | yq -o=json -I=0 'select(.kind == "Deployment") | {"name": .metadata.name, "labels": .spec.template.metadata.labels}' >> "$work/deployments"
+    gzip -dc "$f" | yq -o=json -I=0 'select(.kind == "Service" and .spec.selector != null) | {"name": "Service " + .metadata.name, "selector": .spec.selector}' >> "$work/selectors"
+    gzip -dc "$f" | yq -o=json -I=0 'select(.kind == "Deployment") | {"name": "Deployment " + .metadata.name, "selector": .spec.selector.matchLabels}' >> "$work/selectors"
+  done
+  [ -s "$work/selectors" ] || { echo "no provider selector found" >&2; return 1; }
+  local sel name count
+  while IFS= read -r sel; do
+    name="$(jq -r .name <<<"$sel")"
+    count="$(jq -s --argjson s "$(jq -c .selector <<<"$sel")" \
+      '[.[] | select(.labels as $l | $s | to_entries | all(.key as $k | .value as $v | $l[$k] == $v))] | length' "$work/deployments")"
+    if [ "$count" -ne 1 ]; then
+      echo "$name selects the pods of $count provider Deployments, want 1" >&2
+      rm -rf "$work"
+      return 1
+    fi
+  done < "$work/selectors"
+  rm -rf "$work"
+}
+
+@test "the Kairos provider source is checked against a pinned digest before it is unpacked" {
+  dockerfile="$REPO_ROOT/packages/system/capi-providers-bootstrap/images/cluster-api-provider-kairos/Dockerfile"
+  grep -qE '^ARG SOURCE_SHA256=[0-9a-f]{64}$' "$dockerfile"
+  grep -qF 'echo "${SOURCE_SHA256}  /tmp/source.tar.gz" | sha256sum -c -' "$dockerfile"
+  if grep -qE 'curl [^|]*\| *tar' "$dockerfile"; then
+    echo "the provider source is unpacked straight from curl" >&2
+    false
+  fi
+}
+
+@test "update-kairos renders the manifests from the source the image is built from" {
+  out=$(make -n -C "$REPO_ROOT/packages/system/capi-providers-bootstrap" update-kairos COZYSTACK_VERSION=0)
+  sum=$(sed -n 's/^ARG SOURCE_SHA256=//p' "$REPO_ROOT/packages/system/capi-providers-bootstrap/images/cluster-api-provider-kairos/Dockerfile")
+  [ -n "$sum" ]
+  printf '%s\n' "$out" | grep -qF "echo \"$sum  .update-kairos-tmp/source.tar.gz\" | sha256sum -c -"
+  if printf '%s\n' "$out" | grep -qE 'curl [^|]*\| *tar'; then
+    echo "update-kairos unpacks the source straight from curl" >&2
+    false
+  fi
 }
