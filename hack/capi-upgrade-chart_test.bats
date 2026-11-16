@@ -56,6 +56,12 @@ setup() {
   [ "$mirrored" = "registry.example.test/$image" ]
 }
 
+@test "the packaged chart ships the cozy-lib subchart its templates include" {
+  local source="$REPO_ROOT/packages/core/platform/sources/capi-provider-core.yaml"
+  [ "$(yq '.spec.variants[] | select(.name == "default") | .libraries[] | select(.name == "cozy-lib") | .path' "$source")" = library/cozy-lib ]
+  [ "$(yq '.spec.variants[] | select(.name == "default") | .components[] | select(.name == "capi-providers-core") | .libraries[] | select(. == "cozy-lib")' "$source")" = cozy-lib ]
+}
+
 @test "the hook has no cluster-wide or secret permissions" {
   local roles
   roles="$(yq --output-format=json --no-doc 'select(.kind == "Role") | .rules' "$RENDERED")"
