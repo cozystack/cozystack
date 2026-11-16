@@ -43,6 +43,12 @@ blockstorSatellite:
 # chart renders it into ControllerConfig.spec.passphraseSecretRef and into
 # the Secret names the blockstor Roles grant.
 blockstorPassphraseSecret: linstor-passphrase
+# Runs the hook Job that writes blockstorPassphraseSecret into
+# ControllerConfig/default. The same pin the other cozystack hook Jobs use.
+kubectl:
+  image:
+    repository: docker.io/alpine/k8s
+    tag: 1.33.4@sha256:b0523f0a244ddc4c8e055aa335c040d3d78b3ead5528f4544395f7f9f69c7b68
 # Talos-specific workarounds (disable for generic Linux like Ubuntu/Debian)
 talos:
   enabled: true

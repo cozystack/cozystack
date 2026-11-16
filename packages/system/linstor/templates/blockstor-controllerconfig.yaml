@@ -1,0 +1,115 @@
+{{- if eq .Values.backend "blockstor" }}
+{{- $_ := include "blockstor.secretNames" . }}
+{{- $hook := dict "helm.sh/hook" "post-install,post-upgrade" "helm.sh/hook-delete-policy" "before-hook-creation,hook-succeeded" }}
+{{- /*
+   Points ControllerConfig/default at the passphrase Secret, which is how
+   every blockstor component finds the Secret that unlocks the master key.
+
+   A Job rather than a ControllerConfig in the release, for two reasons.
+   The CRD is a template of this same release, and Helm resolves every
+   kind in a release before it applies any, so a ControllerConfig here
+   fails the first install of the blockstor backend on a kind that does not
+   exist yet. And blockstor writes the same object at runtime (controller
+   properties, node connections) and creates it on first use, so the chart
+   owns one field, not the object: a server-side apply under its own field
+   manager sets passphraseSecretRef and leaves the rest alone, on a
+   ControllerConfig blockstor or linstor-migrate created as well as on a
+   missing one. --force-conflicts makes the value authoritative over a ref
+   set by hand.
+
+   The controller may start before this runs. That costs nothing: with no
+   ref it unlocks nothing and creates no keyring, and it picks the ref up
+   when it changes. */}}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: blockstor-controllerconfig
+  namespace: {{ .Release.Namespace }}
+  annotations:
+    {{- toYaml $hook | nindent 4 }}
+    helm.sh/hook-weight: "-1"
+---
+{{- /*
+   An apply that finds no object creates it, which needs create, and create
+   cannot be limited by name. ControllerConfig is a singleton named
+   default; blockstor reads no other. */}}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: blockstor-controllerconfig
+  annotations:
+    {{- toYaml $hook | nindent 4 }}
+    helm.sh/hook-weight: "-1"
+rules:
+  - apiGroups: [blockstor.org]
+    resources: [controllerconfigs]
+    resourceNames: [default]
+    verbs: [get, patch]
+  - apiGroups: [blockstor.org]
+    resources: [controllerconfigs]
+    verbs: [create]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: blockstor-controllerconfig
+  annotations:
+    {{- toYaml $hook | nindent 4 }}
+    helm.sh/hook-weight: "-1"
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: blockstor-controllerconfig
+subjects:
+  - kind: ServiceAccount
+    name: blockstor-controllerconfig
+    namespace: {{ .Release.Namespace }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: blockstor-controllerconfig
+  namespace: {{ .Release.Namespace }}
+  annotations:
+    {{- toYaml $hook | nindent 4 }}
+spec:
+  {{- /* The CRD can take a moment to be served after a first install. */}}
+  backoffLimit: 6
+  activeDeadlineSeconds: 300
+  template:
+    spec:
+      serviceAccountName: blockstor-controllerconfig
+      restartPolicy: Never
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        runAsGroup: 65534
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: apply
+          image: {{ .Values.kubectl.image.repository }}:{{ .Values.kubectl.image.tag }}
+          imagePullPolicy: IfNotPresent
+          command: [sh, -ec, 'printf "%s\n" "$MANIFEST" | kubectl apply --server-side --field-manager=cozystack-linstor --force-conflicts -f -']
+          env:
+            - name: HOME
+              value: /tmp
+            - name: MANIFEST
+              value: |
+                apiVersion: blockstor.org/v1alpha1
+                kind: ControllerConfig
+                metadata:
+                  name: default
+                spec:
+                  passphraseSecretRef:
+                    name: {{ .Values.blockstorPassphraseSecret }}
+                    key: MASTER_PASSPHRASE
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          volumeMounts:
+            - {name: tmp, mountPath: /tmp}
+      volumes:
+        - {name: tmp, emptyDir: {}}
+{{- end }}
