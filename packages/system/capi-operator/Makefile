@@ -27,6 +27,7 @@ update: clean capi-operator-update
 
 .PHONY: bridge-components
 bridge-components:
+	rm -rf .bridge-tmp
 	mkdir .bridge-tmp
 	curl --fail --location --output .bridge-tmp/core-components.yaml $(CAPI_BRIDGE_URL)/core-components.yaml
 	curl --fail --location --output .bridge-tmp/bootstrap-components.yaml $(CAPI_BRIDGE_URL)/bootstrap-components.yaml
