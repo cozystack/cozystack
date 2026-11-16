@@ -12,7 +12,7 @@ spec:
       for: 30m
       labels:
         severity: warning
-        exported_instance: '{{ $labels.namespace }}'
+        exported_instance: '{{ $labels.cluster }}/{{ $labels.namespace }}'
         service: namespace-deletion
       annotations:
         summary: A namespace has been terminating for more than 30 minutes.

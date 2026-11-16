@@ -23,7 +23,7 @@ tests:
               cluster: cozystack
               namespace: tenant-a
               severity: warning
-              exported_instance: tenant-a
+              exported_instance: cozystack/tenant-a
               service: namespace-deletion
             exp_annotations:
               summary: A namespace has been terminating for more than 30 minutes.
@@ -89,7 +89,7 @@ tests:
               cluster: cozystack
               namespace: tenant-a
               severity: warning
-              exported_instance: tenant-a
+              exported_instance: cozystack/tenant-a
               service: namespace-deletion
             exp_annotations:
               summary: A namespace has been terminating for more than 30 minutes.
@@ -119,7 +119,7 @@ tests:
               cluster: cozystack
               namespace: tenant-a
               severity: warning
-              exported_instance: tenant-a
+              exported_instance: cozystack/tenant-a
               service: namespace-deletion
             exp_annotations:
               summary: A namespace has been terminating for more than 30 minutes.
@@ -136,7 +136,7 @@ tests:
               cluster: cozystack
               namespace: tenant-a
               severity: warning
-              exported_instance: tenant-a
+              exported_instance: cozystack/tenant-a
               service: namespace-deletion
             exp_annotations:
               summary: A namespace has been terminating for more than 30 minutes.
@@ -149,7 +149,7 @@ tests:
               cluster: kubernetes-example
               namespace: tenant-a
               severity: warning
-              exported_instance: tenant-a
+              exported_instance: kubernetes-example/tenant-a
               service: namespace-deletion
             exp_annotations:
               summary: A namespace has been terminating for more than 30 minutes.
