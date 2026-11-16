@@ -448,3 +448,11 @@ sliced into /24s ever allowed.
 {{- end -}}
 {{- end -}}
 {{- end }}
+
+{{/*
+"true" while either managed Kubernetes application package is enabled; the
+worker class package is required then. Takes the disabled package list.
+*/}}
+{{- define "cozystack.platform.managedKubernetes" -}}
+{{- or (not (has "cozystack.kubernetes-application" .)) (not (has "cozystack.kubernetes-nodes-application" .)) | toString -}}
+{{- end -}}

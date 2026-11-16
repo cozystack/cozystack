@@ -177,6 +177,7 @@ load test_helper
   echo "hack/build-digest.sh" > "$tmp"
   out=$(hack/build-matrix.sh "$tmp")
   echo "$out" | grep -q '"packages/system/capi-providers-bootstrap"'
+  echo "$out" | grep -q '"packages/system/kubernetes-worker-classes"'
   rm -f "$tmp"
 }
 

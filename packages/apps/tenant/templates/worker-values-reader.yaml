@@ -1,0 +1,29 @@
+{{- if eq (toString (index (.Values._cluster | default dict) "worker-classes-enabled" | default false)) "true" }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: cozy:worker-values-reader
+  namespace: {{ include "tenant.name" . }}
+rules:
+  {{- /* The controller reads a pool's values only to learn workerClassName,
+         and an Application's HelmRelease takes them from this one Secret.
+         A pool whose values come from other objects needs its own grant. */}}
+  - apiGroups: [""]
+    resources: [secrets]
+    resourceNames: [cozystack-values]
+    verbs: [get]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: cozy:worker-values-reader
+  namespace: {{ include "tenant.name" . }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: cozy:worker-values-reader
+subjects:
+  - kind: ServiceAccount
+    name: kubernetes-worker-classes
+    namespace: cozy-system
+{{- end }}

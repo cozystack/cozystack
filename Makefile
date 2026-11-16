@@ -14,6 +14,7 @@ build: build-deps
 	make -C packages/apps/clickhouse image
 	make -C packages/apps/kubernetes image
 	make -C packages/apps/kubernetes-nodes image
+	make -C packages/system/kubernetes-worker-classes image
 	make -C packages/apps/vpn image
 	make -C packages/system/cozystack-api image
 	make -C packages/system/cozystack-controller image
@@ -147,7 +148,7 @@ migrations-target-check:
 # ./internal/... runs in test-controllers; ./test/... and cmd/backport-batch
 # run in targets of their own.
 go-unit-tests:
-	go test -count=1 ./pkg/... $(patsubst %,./%/...,$(filter-out cmd/backport-batch,$(wildcard cmd/*)))
+	go test -count=1 ./pkg/... $(patsubst %,./%/...,$(filter-out cmd/backport-batch,$(wildcard cmd/*))) ./api/workers/v1alpha1
 
 # The nested Go modules (image sources and the published API types) are
 # outside ./... of the root module, so no other target reaches their tests.

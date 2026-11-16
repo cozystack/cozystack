@@ -1,0 +1,4 @@
+apiVersion: v2
+name: cozy-kubernetes-worker-classes-crds
+type: application
+version: 0.0.0

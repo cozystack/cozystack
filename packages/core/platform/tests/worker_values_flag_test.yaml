@@ -1,0 +1,40 @@
+suite: tenant worker values grants follow optional package activation
+templates:
+  - templates/apps.yaml
+tests:
+  - it: enables tenant grants for a managed Kubernetes platform
+    set:
+      bundles.system.enabled: true
+      bundles.system.variant: isp-full
+      bundles.iaas.enabled: true
+    asserts:
+      - matchRegex:
+          path: stringData["values.yaml"]
+          pattern: 'worker-classes-enabled: "true"'
+  - it: leaves grants off without iaas even when the CRD might remain
+    set:
+      bundles.iaas.enabled: false
+    asserts:
+      - matchRegex:
+          path: stringData["values.yaml"]
+          pattern: 'worker-classes-enabled: "false"'
+  - it: removes grants when both managed Kubernetes applications are disabled
+    set:
+      bundles.system.enabled: true
+      bundles.system.variant: isp-full-generic
+      bundles.iaas.enabled: true
+      bundles.disabledPackages: [cozystack.kubernetes-application, cozystack.kubernetes-nodes-application]
+    asserts:
+      - matchRegex:
+          path: stringData["values.yaml"]
+          pattern: 'worker-classes-enabled: "false"'
+  - it: keeps grants while one managed Kubernetes application remains
+    set:
+      bundles.system.enabled: true
+      bundles.system.variant: isp-full
+      bundles.iaas.enabled: true
+      bundles.disabledPackages: [cozystack.kubernetes-nodes-application]
+    asserts:
+      - matchRegex:
+          path: stringData["values.yaml"]
+          pattern: 'worker-classes-enabled: "true"'
