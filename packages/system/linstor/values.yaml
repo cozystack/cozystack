@@ -27,15 +27,15 @@ piraeusServer:
 blockstorController:
   image:
     repository: ghcr.io/cozystack/blockstor-controller
-    tag: 0.2.1@sha256:5346d74e5ffb8e7cd920c9beb784d074bd56ceedc860a54d5feecabe874aebba
+    tag: 0.3.0@sha256:ca5fc964265a1fd9e1153077f0565a9f07532c593bea1182d3b97a38430822ea
 blockstorApiserver:
   image:
     repository: ghcr.io/cozystack/blockstor-apiserver
-    tag: 0.2.1@sha256:0e0215243915b9398eb1edea924f7d41f694f25ecb26f820a94dbb8ff9637be9
+    tag: 0.3.0@sha256:20cf599f8d0ae85a44b237b9d8ad2ca631a1feff3fd387194ef84636b538dd0b
 blockstorSatellite:
   image:
     repository: ghcr.io/cozystack/blockstor-satellite
-    tag: 0.2.1@sha256:76b93b7ad2f8d8a0f3c3b20d321bdcb45a2b112e66c35d7fac3f2e818f3b66db
+    tag: 0.3.0@sha256:abff381da5425fdf7a6abc0d52006727cf7fe13c438acc79aaea192fc8681cb4
 # The Secret, in this namespace, whose MASTER_PASSPHRASE key unlocks the
 # blockstor master key that wraps every LUKS volume password. It is the
 # Secret piraeus reads for LINSTOR, so a cluster migrated from LINSTOR keeps

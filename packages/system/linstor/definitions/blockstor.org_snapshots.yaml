@@ -122,6 +122,53 @@ spec:
                   makes progress instead of hanging on a missing denominator.
                 format: int32
                 type: integer
+              luksKeys:
+                description: |-
+                  luksKeys are the wrapped LUKS passwords of the source replicas,
+                  copied when the snapshot is created: a snapshot's bytes are
+                  encrypted under the password of the replica they were taken from,
+                  and that replica may be gone by the time the snapshot is restored.
+                items:
+                  description: SnapshotLUKSKey is the wrapped password of one source
+                    replica's volume.
+                  properties:
+                    keyID:
+                      description: |-
+                        keyID is the public ID of the master key the password is wrapped
+                        under.
+                      pattern: ^[0-9a-f]{16}$
+                      type: string
+                    nodeName:
+                      description: nodeName is the CR name of the node the replica
+                        is on.
+                      type: string
+                    origin:
+                      description: origin says where the password came from.
+                      enum:
+                      - Generated
+                      - LinstorImport
+                      type: string
+                    volumeNumber:
+                      description: volumeNumber is the volume within the replica.
+                      format: int32
+                      type: integer
+                    wrapped:
+                      description: wrapped is nonce || AES-256-GCM ciphertext || tag.
+                      minLength: 1
+                      pattern: ^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$
+                      type: string
+                  required:
+                  - keyID
+                  - nodeName
+                  - origin
+                  - volumeNumber
+                  - wrapped
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - nodeName
+                - volumeNumber
+                x-kubernetes-list-type: map
               nodes:
                 description: |-
                   nodes are the satellites the snapshot should live on. Empty means
@@ -202,6 +249,10 @@ spec:
             - resourceDefinitionName
             - snapshotName
             type: object
+            x-kubernetes-validations:
+            - message: luksKeys is set once, when the snapshot is created
+              rule: '!has(oldSelf.luksKeys) || (has(self.luksKeys) && self.luksKeys
+                == oldSelf.luksKeys)'
           status:
             description: status defines the observed state of Snapshot
             properties:
