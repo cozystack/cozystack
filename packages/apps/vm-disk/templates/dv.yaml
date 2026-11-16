@@ -146,6 +146,26 @@
           {{- fail (printf "source.image %q: golden image %q lives in StorageClass %q, and a clone into StorageClass %q of the same provisioner gets no host-assisted fallback from CDI. LINSTOR creates the clone next to the source data, and StorageClass %q does not allow remote volume access from every node, so the clone may never bind. Set storageClass to %q, or ask the platform administrator to set cloneStrategyOverride to copy in the kubevirt-cdi package." .Values.source.image.name $desiredSource.pvc.name $goldenSC $targetSC $targetSC $goldenSC) }}
         {{- end }}
       {{- end }}
+      {{- /* CDI v1.66.1 refuses to clone a Block source PVC into a smaller
+             request before it creates the claim (validateClone in
+             pkg/controller/datavolume/pvc-clone-controller.go), and the
+             DataVolume then waits forever. It raises the request to the target
+             StorageProfile's minimumSupportedPvcSize before comparing. A
+             Filesystem source is not compared, as CDI sizes that clone from
+             the image inside it or with a filesystem overhead the chart does
+             not reproduce. */}}
+      {{- $goldenSize := dig "spec" "resources" "requests" "storage" "" ($goldenPVC | default dict) | toString }}
+      {{- if and .Values.storage $goldenSize (eq (dig "spec" "volumeMode" "" ($goldenPVC | default dict) | toString) "Block") }}
+        {{- $goldenBytes := include "cozy-lib.resources.toFloat" $goldenSize | float64 }}
+        {{- $diskBytes := include "cozy-lib.resources.toFloat" (.Values.storage | toString) | float64 }}
+        {{- if and (lt $diskBytes $goldenBytes) $targetSC }}
+          {{- $minimum := dig "metadata" "annotations" "cdi.kubevirt.io/minimumSupportedPvcSize" "" (lookup "cdi.kubevirt.io/v1beta1" "StorageProfile" "" $targetSC | default dict) | toString }}
+          {{- $diskBytes = maxf $diskBytes (include "cozy-lib.resources.toFloat" $minimum | float64) }}
+        {{- end }}
+        {{- if lt $diskBytes $goldenBytes }}
+          {{- fail (printf "storage %s is smaller than golden image %q (%s), so CDI refuses to clone it and the disk would stay pending forever. Set storage to %s or more." (.Values.storage | toString) $desiredSource.pvc.name $goldenSize $goldenSize) }}
+        {{- end }}
+      {{- end }}
     {{- end }}
   {{- else if hasKey .Values.source "http" }}
     {{- $desiredSource = dict "http" (dict "url" (required "A valid .Values.source.http.url entry required!" .Values.source.http.url)) }}
