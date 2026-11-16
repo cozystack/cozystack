@@ -137,7 +137,9 @@ seaweedfs:
     # Honor would leave the cordoned node out of the count and let the
     # replacement pile up again. The price is that a node the masters never
     # run on, such as a tainted control plane, counts as empty too, so with
-    # one in the cluster the masters need three nodes they can run on.
+    # one in the cluster the masters need three nodes they can run on. The
+    # app's master.topologySpreadPolicy soft sends this as empty for such a
+    # cluster, and only the preference above is left.
     topologySpreadConstraints: |
       - maxSkew: 1
         topologyKey: kubernetes.io/hostname

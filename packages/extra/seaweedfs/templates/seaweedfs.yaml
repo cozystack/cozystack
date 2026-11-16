@@ -245,6 +245,9 @@ spec:
         defaultReplicaPlacement: "{{ sub .Values.replicationFactor 1 }}00"
         {{- end }}
         replicas: {{ .Values.master.replicas }}
+        {{- if eq (.Values.master.topologySpreadPolicy | default "hard") "soft" }}
+        topologySpreadConstraints: ""
+        {{- end }}
         {{- /* An explicit null is dropped before schema validation, so neither
                bound sees it, and the master exits on the empty flag it renders. */}}
         volumeSizeLimitMB: {{ required "master.volumeSizeLimitMB must be set" .Values.master.volumeSizeLimitMB }}

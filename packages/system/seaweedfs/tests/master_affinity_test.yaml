@@ -77,3 +77,19 @@ tests:
             app.kubernetes.io/name: seaweedfs
             app.kubernetes.io/instance: seaweedfs-system
             app.kubernetes.io/component: master
+
+  # The app's master.topologySpreadPolicy soft sends an empty constraint, for
+  # clusters with fewer usable nodes than masters. Then only the preferred
+  # anti-affinity above is left.
+  - it: renders no spread constraint when the app sends an empty one
+    template: charts/seaweedfs/templates/master/master-statefulset.yaml
+    set:
+      seaweedfs:
+        master:
+          topologySpreadConstraints: ""
+    asserts:
+      - notExists:
+          path: spec.template.spec.topologySpreadConstraints
+      - equal:
+          path: spec.template.spec.affinity.podAntiAffinity.preferredDuringSchedulingIgnoredDuringExecution[0].weight
+          value: 100
