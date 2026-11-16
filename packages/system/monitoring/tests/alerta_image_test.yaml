@@ -18,23 +18,23 @@ set:
 tests:
   - it: renders alerta.image as the container image
     set:
-      alerta.image: ghcr.io/cozystack/cozystack/alerta:v9.1.0-cozystack.0@sha256:0000000000000000000000000000000000000000000000000000000000000000
+      alerta.image: registry.example.com/alerta:v9.1.0-cozystack.0@sha256:0000000000000000000000000000000000000000000000000000000000000000
     documentSelector:
       path: kind
       value: Deployment
     asserts:
       - equal:
           path: spec.template.spec.containers[0].image
-          value: ghcr.io/cozystack/cozystack/alerta:v9.1.0-cozystack.0@sha256:0000000000000000000000000000000000000000000000000000000000000000
+          value: registry.example.com/alerta:v9.1.0-cozystack.0@sha256:0000000000000000000000000000000000000000000000000000000000000000
 
   - it: prefixes the image with the cluster images-registry when set
     set:
       _cluster.images-registry: mirror.example.com
-      alerta.image: ghcr.io/cozystack/cozystack/alerta:v9.1.0-cozystack.0@sha256:0000000000000000000000000000000000000000000000000000000000000000
+      alerta.image: registry.example.com/alerta:v9.1.0-cozystack.0@sha256:0000000000000000000000000000000000000000000000000000000000000000
     documentSelector:
       path: kind
       value: Deployment
     asserts:
       - equal:
           path: spec.template.spec.containers[0].image
-          value: mirror.example.com/ghcr.io/cozystack/cozystack/alerta:v9.1.0-cozystack.0@sha256:0000000000000000000000000000000000000000000000000000000000000000
+          value: mirror.example.com/registry.example.com/alerta:v9.1.0-cozystack.0@sha256:0000000000000000000000000000000000000000000000000000000000000000
