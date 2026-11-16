@@ -13,7 +13,7 @@ set:
     s3CredentialsSecret:
       name: postgres-backup
 tests:
-  - it: sets resources for native backup without inheriting the tenant 128Mi limit
+  - it: sets resources for native backup without inheriting the tenant 128Mi and 250m limits
     set:
       backup.enabled: true
     asserts:
@@ -24,12 +24,8 @@ tests:
               cpu: 100m
               memory: 256Mi
             limits:
+              cpu: "1"
               memory: 1Gi
-        documentSelector:
-          path: kind
-          value: ObjectStore
-      - notExists:
-          path: spec.instanceSidecarConfiguration.resources.limits.cpu
         documentSelector:
           path: kind
           value: ObjectStore
