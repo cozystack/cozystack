@@ -1,0 +1,3 @@
+{{- with .Values.etcdClusterTest }}
+{{ include "cozy-lib.etcd.cluster" (dict "name" "kubernetes-demo-etcd" "values" (dict "version" "3.6.11" "replicas" 3 "size" "4Gi") "root" $ "labels" .labels "annotations" .annotations) }}
+{{- end }}
