@@ -443,17 +443,18 @@ spec:
           NAMESPACE="$NAMESPACE" examples/backups/mongodb/cleanup.sh
         check:
           ($error == null): true
-    # The 48m budget covers what this step drives, bucket provisioning, a
+    # The 53m budget covers what this step drives, bucket provisioning, a
     # single-replica source MongoDB coming up (psmdb reconcile, PVC bind, image
     # pull, pbm-agent sidecars), the logical dump to S3, an empty target
     # MongoDB, and the to-copy restore with its verify (convention 6, justified
     # in-line). That is the 30m this round-trip had before the bucket, source
     # and target HR waits in run-all.sh went from 300s to 660s, grown by the 6m
-    # each of them gained. run-all.sh fails fast on terminal BackupJob and
-    # RestoreJob phases and on stalled HelmReleases rather than polling out the
-    # budget.
+    # each of them gained, plus the 5m the restore leg needs to keep the
+    # 1200s the suite reserves after the three 660s waits (3180 - 3*660).
+    # run-all.sh fails fast on terminal BackupJob and RestoreJob phases and on
+    # stalled HelmReleases rather than polling out the budget.
     - script:
-        timeout: 48m
+        timeout: 53m
         content: |
           set -eu
           cd ../../..
