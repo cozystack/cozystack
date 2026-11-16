@@ -39,16 +39,23 @@ target_minor="$(minor_version "$TARGET_VERSION")"
 
 core="$(kube get coreproviders.operator.cluster.x-k8s.io cluster-api --ignore-not-found --output json)"
 bootstrap="$(kube get bootstrapproviders.operator.cluster.x-k8s.io kubeadm --ignore-not-found --output json)"
-if [[ -z "$core" ]]; then
-  [[ -z "$bootstrap" ]] || fail "kubeadm exists without a core provider"
+# cluster-api-operator installs a provider with no installed version from
+# scratch at whatever version it requests, so it needs no intermediate step.
+installed_version() {
+  jq --raw-output '.status.installedVersion // empty' <<< "$1"
+}
+if [[ -n "$bootstrap" && -z "$(installed_version "$bootstrap")" ]]; then
+  bootstrap=""
+fi
+if [[ -z "$core" || -z "$(installed_version "$core")" ]]; then
+  [[ -z "$bootstrap" ]] || fail "kubeadm is installed without an installed core provider"
   printf 'No installed providers need an intermediate upgrade.\n'
   exit 0
 fi
 
 validate_provider() {
   local object="$1" suffix="$2" installed requested uid minor requested_minor newer
-  installed="$(jq --raw-output '.status.installedVersion // empty' <<< "$object")"
-  [[ -n "$installed" ]] || fail "$suffix installed version is not recorded"
+  installed="$(installed_version "$object")"
   minor="$(minor_version "$installed")"
   newer="$(jq --null-input --arg installed "$installed" --arg target "$TARGET_VERSION" '
     def base: ltrimstr("v") | split("-")[0] | split("+")[0] | split(".") | map(tonumber);

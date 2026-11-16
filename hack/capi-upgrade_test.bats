@@ -193,11 +193,26 @@ accepted_patches() {
   [ "$(accepted_patches)" = '[]' ]
 }
 
-@test "an uninitialised provider is not mistaken for a fresh installation" {
+@test "providers that never finished installing take the fresh installation path" {
+  fixture 'del(.providers[].status.installedVersion)'
+  run bash "$UPGRADE_SCRIPT"
+  [ "$status" -eq 0 ]
+  [ "$(accepted_patches)" = '[]' ]
+}
+
+@test "a kubeadm provider that never finished installing is left to the final manifests" {
+  fixture 'del(.providers.kubeadm.status.installedVersion)'
+  run bash "$UPGRADE_SCRIPT"
+  [ "$status" -eq 0 ]
+  [ "$(accepted_patches)" = '[{"name":"cluster-api","version":"v1.13.8-core"}]' ]
+  [ "$(jq --raw-output '.providers.kubeadm.spec.version' "$CAPI_TEST_STATE")" = v1.10.1-bootstrap ]
+}
+
+@test "an installed kubeadm without an installed core provider is refused" {
   fixture 'del(.providers["cluster-api"].status.installedVersion)'
   run bash "$UPGRADE_SCRIPT"
   [ "$status" -ne 0 ]
-  [[ "$output" == *"installed version is not recorded"* ]]
+  [[ "$output" == *"kubeadm is installed without an installed core provider"* ]]
   [ "$(accepted_patches)" = '[]' ]
 }
 

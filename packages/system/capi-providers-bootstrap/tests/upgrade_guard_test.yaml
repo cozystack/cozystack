@@ -94,15 +94,18 @@ tests:
       - isKind:
           of: BootstrapProvider
 
-  - it: refuses an existing provider without an installed version
+  - it: treats a provider that never finished installing as a fresh installation
     kubernetesProvider:
       scheme: *scheme
       objects:
         - <<: *legacy
           status: {}
+    documentSelector:
+      path: metadata.name
+      value: kubeadm
     asserts:
-      - failedTemplate:
-          errorPattern: "installed version is not recorded"
+      - isKind:
+          of: BootstrapProvider
 
   - it: refuses a downgrade
     kubernetesProvider:

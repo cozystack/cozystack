@@ -1,12 +1,8 @@
 {{- define "capi-providers-bootstrap.assertUpgradeWindow" -}}
 {{- if .Capabilities.APIVersions.Has "operator.cluster.x-k8s.io/v1alpha2" -}}
 {{- $provider := lookup "operator.cluster.x-k8s.io/v1alpha2" "BootstrapProvider" .Release.Namespace "kubeadm" -}}
-{{- if $provider -}}
-{{- $status := get $provider "status" | default dict -}}
-{{- $installed := get $status "installedVersion" -}}
-{{- if or (not (kindIs "string" $installed)) (eq $installed "") -}}
-{{- fail "kubeadm provider installed version is not recorded; wait for the existing installation before upgrading" -}}
-{{- end -}}
+{{- $installed := dig "status" "installedVersion" "" ($provider | default dict) -}}
+{{- if and (kindIs "string" $installed) (ne $installed "") -}}
 {{- $current := semver $installed -}}
 {{- $target := semver .Chart.AppVersion -}}
 {{- if or (gt $current.Major $target.Major) (and (eq $current.Major $target.Major) (gt $current.Minor $target.Minor)) (and (eq $current.Major $target.Major) (eq $current.Minor $target.Minor) (gt $current.Patch $target.Patch)) -}}
