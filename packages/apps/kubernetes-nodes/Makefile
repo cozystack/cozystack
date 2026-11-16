@@ -11,9 +11,8 @@ generate:
 	../../../hack/update-crd.sh
 	go run ../../../hack/update-worker-resource.go --input ../../system/kubernetes-nodes-rd/cozyrds/kubernetes-nodes.yaml --go-output ../../../internal/kubernetesworker/config/resource.json --chart-output ../../system/kubernetes-worker-classes/files/pool-resource.json
 
-# Keep the worker-image inputs (Talos<->Kubernetes support matrix and the
-# kubectl.tag used by the talos-reconcile Job) in lockstep with the parent
-# kubernetes chart. They are copied, not symlinked, so `helm package` bundles
+# Keep the worker inputs (the Kubernetes version map and the kubectl.tag the
+# reconcile Jobs use) in lockstep with the parent kubernetes chart. They are copied, not symlinked, so `helm package` bundles
 # them; run this after the parent chart's `make update`.
 #
 # _talosconfigtemplate.tpl is not copied from anywhere: the parent chart no
@@ -27,12 +26,12 @@ update:
 	cp ../kubernetes/images/kubectl.tag images/kubectl.tag
 	$(MAKE) generate
 
-# Kairos worker disks, one per Kubernetes minor
+# Worker disks for pools on a Kairos WorkerClass, one per Kubernetes minor
 # in files/versions.yaml, each with kubelet and kubeadm of that minor's patch.
 # images/kairos-worker builds the OS, AuroraBoot turns it into a raw EFI disk
 # per architecture, and images/kairos-worker-disk wraps the disks into the
 # container disk CDI imports. The ref of each lands in
-# images/kairos-worker-<minor>.tag.
+# images/kairos-worker-<minor>.tag, which the chart reads for its default.
 #
 # The OS image itself is published as kairos-worker-base-<minor>, pinned in
 # images/kairos-worker-base-<minor>.tag, so an operator can build a worker

@@ -1,0 +1,257 @@
+suite: WorkerClass resolution failures
+# Only nodegroup.yaml: every template that resolves the class does it through
+# the same helper, and the render stops at whichever fails first.
+templates:
+  - templates/nodegroup.yaml
+release:
+  name: kubernetes-nodes-myk8s-md0
+  namespace: tenant-test
+set:
+  cluster: myk8s
+  _cluster:
+    cluster-domain: cozy.local
+  version: "v1.35"
+  instanceType: ""
+  resources:
+    cpu: "2"
+    memory: 4Gi
+tests:
+  - it: rejects a factory URL without an authority
+    set:
+      talos:
+        imageFactoryURL: https:///
+    asserts:
+      - failedTemplate:
+          errorPattern: 'nodeGroup "md0": imageFactoryURL'
+
+  - it: rejects a factory URL with a port but no hostname
+    set:
+      talos:
+        imageFactoryURL: https://:443
+    asserts:
+      - failedTemplate:
+          errorPattern: imageFactoryURL
+
+  - it: rejects an empty Talos fallback when the factory source does not override it
+    set:
+      workerClassName: talos
+      talos:
+        version: ""
+      osImage:
+        factory: {}
+    asserts:
+      - failedTemplate:
+          errorPattern: 'Talos version "" is not a vMAJOR.MINOR.PATCH release'
+
+  - it: rejects an empty Talos fallback when the builtin source does not override it
+    set:
+      workerClassName: talos
+      talos:
+        version: ""
+      osImage:
+        builtin: {}
+    asserts:
+      - failedTemplate:
+          errorPattern: 'Talos version "" is not a vMAJOR.MINOR.PATCH release'
+
+  - it: names the pool when it sets the empty Talos version on Proxmox itself
+    set:
+      workerClassName: talos
+      substrate: proxmox
+      talos:
+        version: ""
+      proxmox:
+        templateTags: [talos-worker]
+    asserts:
+      - failedTemplate:
+          errorPattern: 'pool: talos.version "" must be a full Talos release; it overrides WorkerClass "talos"'
+
+  - it: names the class when the empty Talos version on Proxmox is the class's own
+    set:
+      workerClassName: acme-empty-version
+      substrate: proxmox
+      proxmox:
+        templateTags: [talos-worker]
+    kubernetesProvider:
+      scheme:
+        "cozystack.io/v1alpha1/WorkerClass":
+          gvr: {group: "cozystack.io", version: "v1alpha1", resource: "workerclasses"}
+          namespaced: false
+      objects:
+        - kind: WorkerClass
+          apiVersion: cozystack.io/v1alpha1
+          metadata:
+            name: acme-empty-version
+          spec:
+            bootstrap: talos
+            talos:
+              version: ""
+    asserts:
+      - failedTemplate:
+          errorPattern: 'WorkerClass "acme-empty-version": talos.version "" must be a full Talos version'
+
+  - it: names the class when the pool stores only the legacy default Talos version
+    set:
+      workerClassName: acme-empty-version
+      substrate: proxmox
+      talos:
+        version: v1.13.6
+      proxmox:
+        templateTags: [talos-worker]
+    kubernetesProvider:
+      scheme:
+        "cozystack.io/v1alpha1/WorkerClass":
+          gvr: {group: "cozystack.io", version: "v1alpha1", resource: "workerclasses"}
+          namespaced: false
+      objects:
+        - kind: WorkerClass
+          apiVersion: cozystack.io/v1alpha1
+          metadata:
+            name: acme-empty-version
+          spec:
+            bootstrap: talos
+            talos:
+              version: ""
+    asserts:
+      - failedTemplate:
+          errorPattern: 'WorkerClass "acme-empty-version": talos.version "" must be a full Talos version'
+
+  - it: fails the render naming a class that does not exist
+    set:
+      workerClassName: acme-missing
+    kubernetesProvider:
+      scheme: &scheme
+        "cozystack.io/v1alpha1/WorkerClass":
+          gvr: {group: "cozystack.io", version: "v1alpha1", resource: "workerclasses"}
+          namespaced: false
+      objects: []
+    asserts:
+      - failedTemplate:
+          errorPattern: 'workerClassName "acme-missing": no WorkerClass of that name exists, or the render has no cluster to look it up \(helm template\)'
+
+  - it: does not claim a missing class when the render has no cluster to look it up
+    set:
+      workerClassName: acme-custom
+    asserts:
+      - failedTemplate:
+          errorPattern: 'workerClassName "acme-custom": no WorkerClass of that name exists, or the render has no cluster to look it up \(helm template\)'
+
+  - it: refuses a class whose Kubernetes minor differs from the pool's version
+    set:
+      workerClassName: acme-kairos
+      version: "v1.34"
+    kubernetesProvider:
+      scheme: *scheme
+      objects:
+        - kind: WorkerClass
+          apiVersion: cozystack.io/v1alpha1
+          metadata:
+            name: acme-kairos
+          spec:
+            bootstrap: kairos
+            image:
+              kubernetesVersion: v1.35.2
+              reference: registry.example.com/kairos/worker:v1.35.2@sha256:2222222222222222222222222222222222222222222222222222222222222222
+    asserts:
+      - failedTemplate:
+          errorPattern: 'WorkerClass "acme-kairos" carries Kubernetes v1\.35\.2, whose minor differs from the pool''s version v1\.34'
+
+
+  - it: refuses a class whose bootstrap the chart does not support
+    set:
+      workerClassName: acme-flatcar
+    kubernetesProvider:
+      scheme: *scheme
+      objects:
+        - kind: WorkerClass
+          apiVersion: cozystack.io/v1alpha1
+          metadata:
+            name: acme-flatcar
+          spec:
+            bootstrap: flatcar
+    asserts:
+      - failedTemplate:
+          errorPattern: 'WorkerClass "acme-flatcar" has bootstrap "flatcar"; this chart supports talos and kairos'
+
+  - it: rejects a source version that contradicts a fixed class even with an unused empty fallback
+    set:
+      workerClassName: acme-fixed
+      talos:
+        version: ""
+      osImage:
+        builtin:
+          version: v1.13.7
+          schematicID: fixed123
+    kubernetesProvider:
+      scheme: *scheme
+      objects:
+        - kind: WorkerClass
+          apiVersion: cozystack.io/v1alpha1
+          metadata:
+            name: acme-fixed
+          spec:
+            bootstrap: talos
+            substrates:
+              kubevirt:
+                osImage:
+                  builtin:
+                    version: v1.13.6
+                    schematicID: fixed123
+    asserts:
+      - failedTemplate:
+          errorPattern: 'WorkerClass "acme-fixed": osImage conflicts with the fixed builtin image/version/schematic contract'
+
+  - it: refuses an image on a Talos class, which boots no Kairos disk
+    set:
+      workerClassName: acme-talos
+    kubernetesProvider:
+      scheme: *scheme
+      objects:
+        - kind: WorkerClass
+          apiVersion: cozystack.io/v1alpha1
+          metadata:
+            name: acme-talos
+          spec:
+            bootstrap: talos
+            image:
+              kubernetesVersion: v1.35.2
+              reference: registry.example.com/kairos/worker:v1.35.2@sha256:3333333333333333333333333333333333333333333333333333333333333333
+    asserts:
+      - failedTemplate:
+          errorPattern: 'WorkerClass "acme-talos": image requires bootstrap kairos'
+
+  - it: refuses Proxmox template tags that differ from the class's fixed template
+    set:
+      workerClassName: acme-proxmox
+      substrate: proxmox
+      proxmox:
+        templateTags: [capmox-template, talos-v1.13.6]
+        network:
+          bridge: vmbr0
+        dnsServers: ["192.0.2.53"]
+    kubernetesProvider:
+      scheme: *scheme
+      objects:
+        - kind: WorkerClass
+          apiVersion: cozystack.io/v1alpha1
+          metadata:
+            name: acme-proxmox
+          spec:
+            bootstrap: talos
+            # The pool's own Talos, so that only the tags differ.
+            talos:
+              version: v1.13.6
+              schematicID: ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515
+            substrates:
+              proxmox:
+                templateTags: [capmox-template, acme-golden]
+    asserts:
+      - failedTemplate:
+          errorPattern: 'WorkerClass "acme-proxmox": proxmox.templateTags or talos version/schematic conflicts with the fixed template contract'
+
+  - it: names a classless pool as legacy when refusing its SSH keys
+    set:
+      sshKeys: ["ssh-ed25519 AAAA"]
+    asserts:
+      - failedTemplate:
+          errorPattern: '^.*legacy pool: sshKeys is unsupported because Talos has no SSH server'

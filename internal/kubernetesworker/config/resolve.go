@@ -79,7 +79,7 @@ func ClassName(pool map[string]any) (string, error) {
 	if !ok {
 		return "", nil
 	}
-	// A null cannot mean "keep the class": it is refused, not read as unset.
+	// The values schema refuses it, so a null cannot mean "keep the class".
 	if v == nil {
 		return "", fmt.Errorf("%s: got null, want string", ClassField)
 	}
@@ -387,8 +387,10 @@ func validatePoolScalarTypes(pool map[string]any) error {
 			}
 		}
 	}
-	// Checked here rather than where a path reads the field, so a null is
-	// refused on the paths that ignore the field too.
+	// For the null forms checked here Go is no more lenient than the chart's
+	// values schema: a null it admitted would leave a pool that does not
+	// render. Checked here rather than where a path reads the field, so the
+	// paths that ignore the field refuse it too.
 	if value, present := pool["kernelModules"]; present && value == nil {
 		return fmt.Errorf("kernelModules: got null, want array")
 	}
@@ -399,6 +401,8 @@ func validatePoolScalarTypes(pool map[string]any) error {
 		}
 	}
 	talos := asMap(pool["talos"])
+	// Only registryMirrors and imageFactoryCA have chart defaults that make
+	// Helm drop a null; the schema refuses a null anywhere else in talos.
 	for _, name := range []string{"version", "schematicID", "imageFactoryURL", "installerRepository"} {
 		if value, present := talos[name]; present && value == nil {
 			return fmt.Errorf("talos.%s: got null, want string", name)
@@ -465,7 +469,8 @@ func asMap(v any) map[string]any {
 	return m
 }
 
-// allEmpty reports a map whose every member is empty.
+// allEmpty reports a map whose every member is empty, as the chart defaults
+// leave talos on a pool that sets none of it.
 func allEmpty(v any) bool {
 	for _, member := range asMap(v) {
 		if nonempty(member) {
