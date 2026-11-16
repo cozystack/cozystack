@@ -28,7 +28,7 @@ import (
 	"k8s.io/client-go/tools/record"
 	"k8s.io/client-go/util/retry"
 	"k8s.io/client-go/util/workqueue"
-	"k8s.io/utils/pointer"
+	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -374,6 +374,25 @@ func (r *WorkloadMonitorReconciler) isBucketClaimReady(bc *cosiv1alpha1.BucketCl
 	return bc.Status.BucketReady
 }
 
+// bucketClaimsMessage names every BucketClaim that has not been provisioned,
+// with its bucket class, and is empty when there is none.
+func (r *WorkloadMonitorReconciler) bucketClaimsMessage(claims []cosiv1alpha1.BucketClaim) string {
+	var pending []string
+	for i := range claims {
+		bc := &claims[i]
+		if r.isBucketClaimReady(bc) {
+			continue
+		}
+		entry := fmt.Sprintf("BucketClaim %s is not provisioned", bc.Name)
+		if bc.Spec.BucketClassName != "" {
+			entry = fmt.Sprintf("BucketClaim %s of bucket class %s is not provisioned", bc.Name, bc.Spec.BucketClassName)
+		}
+		pending = append(pending, entry)
+	}
+	sort.Strings(pending)
+	return strings.Join(pending, "; ")
+}
+
 // isServiceReady checks if the service has an external IP bound
 func (r *WorkloadMonitorReconciler) isServiceReady(svc *corev1.Service) bool {
 	return len(svc.Status.LoadBalancer.Ingress) > 0
@@ -423,8 +442,8 @@ func updateOwnerReferences(obj metav1.Object, monitor client.Object) {
 			Name:       monitor.GetName(),
 			UID:        monitor.GetUID(),
 			// Set Controller to false to avoid conflict as multiple controllers are not allowed
-			Controller:         pointer.BoolPtr(false),
-			BlockOwnerDeletion: pointer.BoolPtr(true),
+			Controller:         ptr.To(false),
+			BlockOwnerDeletion: ptr.To(true),
 		}
 		owners = append(owners, newOwnerRef)
 	}
@@ -525,10 +544,10 @@ func (r *WorkloadMonitorReconciler) queryAllBucketMetrics(ctx context.Context, p
 	if err != nil {
 		return nil, fmt.Errorf("querying Prometheus: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("Prometheus returned status %d", resp.StatusCode)
+		return nil, fmt.Errorf("unexpected status %d from Prometheus", resp.StatusCode)
 	}
 
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
@@ -549,7 +568,7 @@ func (r *WorkloadMonitorReconciler) queryAllBucketMetrics(ctx context.Context, p
 		return nil, fmt.Errorf("parsing Prometheus response: %w", err)
 	}
 	if promResp.Status != "success" {
-		return nil, fmt.Errorf("Prometheus query finished with status %q", promResp.Status)
+		return nil, fmt.Errorf("the Prometheus query finished with status %q", promResp.Status)
 	}
 
 	for _, r := range promResp.Data.Result {
@@ -1157,6 +1176,8 @@ func (r *WorkloadMonitorReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		}
 	}
 
+	bucketsMessage := r.bucketClaimsMessage(bucketClaimList.Items)
+
 	// Update WorkloadMonitor status based on observed pods
 	monitor.Status.ObservedReplicas = observedReplicas
 	monitor.Status.AvailableReplicas = availableReplicas
@@ -1174,22 +1195,30 @@ func (r *WorkloadMonitorReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		// Default to operational = true, but check MinReplicas if set.
 		// Use fresh.Spec to avoid making decisions based on a stale cached copy
 		// when the spec was updated between the initial read and this retry.
-		fresh.Status.Operational = pointer.Bool(true)
+		fresh.Status.Operational = ptr.To(true)
 		if fresh.Spec.MinReplicas != nil && availableReplicas < *fresh.Spec.MinReplicas {
-			fresh.Status.Operational = pointer.Bool(false)
+			fresh.Status.Operational = ptr.To(false)
 		}
-		// Only the DataVolume check writes Message and Reason, so the stored ones
-		// are the last DataVolume verdict: kept while no reader is installed yet, so a
-		// controller restart does not report a stuck disk as ready.
+		// A stored DataVolume verdict is the last one: kept while no reader is
+		// installed yet, so a controller restart does not report a stuck disk as
+		// ready. BucketClaims are listed on every pass, so their verdict is
+		// recomputed and only fills fields no DataVolume verdict holds.
 		if dataVolumesRead {
 			fresh.Status.Message = dataVolumesMessage
 			fresh.Status.Reason = ""
 			if dataVolumesMessage != "" {
 				fresh.Status.Reason = cozyv1alpha1.WorkloadMonitorReasonDataVolumeNotReady
 			}
+		} else if fresh.Status.Reason == cozyv1alpha1.WorkloadMonitorReasonBucketClaimNotReady {
+			fresh.Status.Message = ""
+			fresh.Status.Reason = ""
+		}
+		if fresh.Status.Message == "" && bucketsMessage != "" {
+			fresh.Status.Message = bucketsMessage
+			fresh.Status.Reason = cozyv1alpha1.WorkloadMonitorReasonBucketClaimNotReady
 		}
 		if fresh.Status.Message != "" {
-			fresh.Status.Operational = pointer.Bool(false)
+			fresh.Status.Operational = ptr.To(false)
 		}
 		if equality.Semantic.DeepEqual(stored, &fresh.Status) {
 			return nil

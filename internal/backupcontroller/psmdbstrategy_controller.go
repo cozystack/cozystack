@@ -543,8 +543,8 @@ func (r *BackupJobReconciler) reconcileMongoDB(ctx context.Context, j *backupsv1
 		}
 	}
 
-	switch state := mdbBackup.Status.State; {
-	case state == psmdbtypes.StateReady:
+	switch state := mdbBackup.Status.State; state {
+	case psmdbtypes.StateReady:
 		// Backup completed successfully. Materialise the Cozystack artifact and
 		// finalise the BackupJob. Idempotent: reuse the existing artifact if a
 		// previous reconcile created it and then raced on the status update.
@@ -585,7 +585,7 @@ func (r *BackupJobReconciler) reconcileMongoDB(ctx context.Context, j *backupsv1
 		}
 		return ctrl.Result{}, nil
 
-	case state == psmdbtypes.StateError || state == psmdbtypes.StateRejected:
+	case psmdbtypes.StateError, psmdbtypes.StateRejected:
 		message := mdbBackup.Status.Error
 		// The residual half of the injection race: on the useSystemBucket flow the
 		// operator can latch state=error because it resolved the injected storage
@@ -1798,11 +1798,11 @@ func (r *RestoreJobReconciler) reconcileMongoDBRestore(ctx context.Context, rest
 		}
 	}
 
-	switch state := mdbRestore.Status.State; {
-	case state == psmdbtypes.StateReady:
+	switch state := mdbRestore.Status.State; state {
+	case psmdbtypes.StateReady:
 		return r.awaitMongoDBTargetReady(ctx, restoreJob, mdbRestore, targetCluster, options)
 
-	case state == psmdbtypes.StateError || state == psmdbtypes.StateRejected:
+	case psmdbtypes.StateError, psmdbtypes.StateRejected:
 		message := mdbRestore.Status.Error
 		if message == "" {
 			message = fmt.Sprintf("psmdb.percona.com/PerconaServerMongoDBRestore %s/%s reported state=%s", mdbRestore.Namespace, mdbRestore.Name, state)
@@ -2003,7 +2003,7 @@ func (r *RestoreJobReconciler) resolveMongoDBBackupSource(ctx context.Context, b
 	}
 	if destination == "" {
 		return nil, fmt.Errorf(
-			"Backup has no restorable destination (the operator PerconaServerMongoDBBackup was reaped and no snapshot destination is persisted); re-run the BackupJob")
+			"no restorable destination for the Backup (the operator PerconaServerMongoDBBackup was reaped and no snapshot destination is persisted); re-run the BackupJob")
 	}
 	src := &psmdbtypes.BackupSource{
 		Type:        psmdbtypes.BackupTypeLogical,

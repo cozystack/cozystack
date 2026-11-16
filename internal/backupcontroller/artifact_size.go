@@ -39,6 +39,13 @@ type s3ObjectLister interface {
 	StatObject(ctx context.Context, bucket, key string) (int64, error)
 }
 
+type s3ObjectRemover interface {
+	// RemoveObject deletes key. S3 answers 204 for a key that does not
+	// exist and minio-go takes 204 as success; a backend answering a
+	// missing key with any other status makes it an error.
+	RemoveObject(ctx context.Context, bucket, key string) error
+}
+
 // s3Connection is what a driver resolves from its rendered strategy to
 // read the bucket with the same identity the backup was written with.
 type s3Connection struct {
@@ -67,8 +74,10 @@ type objectStore struct {
 	// reader reads Secrets, which the manager's client fetches uncached,
 	// and lists operator Backups, which it serves from the cache.
 	reader client.Reader
-	// newLister overrides the S3 client; nil means a real minio client.
-	newLister func(conn s3Connection) (s3ObjectLister, error)
+	// newLister and newRemover override the S3 client; nil means a real
+	// minio client.
+	newLister  func(conn s3Connection) (s3ObjectLister, error)
+	newRemover func(conn s3Connection) (s3ObjectRemover, error)
 }
 
 func (s objectStore) lister(conn s3Connection) (s3ObjectLister, error) {
@@ -76,6 +85,17 @@ func (s objectStore) lister(conn s3Connection) (s3ObjectLister, error) {
 		return s.newLister(conn)
 	}
 	return newMinioObjectLister(conn)
+}
+
+func (s objectStore) remover(conn s3Connection) (s3ObjectRemover, error) {
+	if s.newRemover != nil {
+		return s.newRemover(conn)
+	}
+	c, err := newMinioObjectClient(conn)
+	if err != nil {
+		return nil, err
+	}
+	return c, nil
 }
 
 func (s objectStore) secretValue(ctx context.Context, namespace, name, key string) (string, error) {
@@ -94,6 +114,14 @@ func (r *BackupJobReconciler) objectStore() objectStore {
 	return objectStore{reader: r.Client, newLister: r.newS3ObjectLister}
 }
 
+func (r *RestoreJobReconciler) objectStore() objectStore {
+	return objectStore{reader: r.Client, newLister: r.newS3ObjectLister}
+}
+
+func (r *BackupReconciler) objectStore() objectStore {
+	return objectStore{reader: r.Client, newLister: r.newS3ObjectLister, newRemover: r.newS3ObjectRemover}
+}
+
 func (r *BackupJobReconciler) s3Lister(conn s3Connection) (s3ObjectLister, error) {
 	return r.objectStore().lister(conn)
 }
@@ -103,6 +131,14 @@ type minioObjectLister struct {
 }
 
 func newMinioObjectLister(conn s3Connection) (s3ObjectLister, error) {
+	c, err := newMinioObjectClient(conn)
+	if err != nil {
+		return nil, err
+	}
+	return c, nil
+}
+
+func newMinioObjectClient(conn s3Connection) (*minioObjectLister, error) {
 	opts := &minio.Options{
 		Creds:  credentials.NewStaticV4(conn.AccessKey, conn.SecretKey, conn.SessionToken),
 		Region: conn.Region,
@@ -166,6 +202,10 @@ func (l *minioObjectLister) StatObject(ctx context.Context, bucket, key string) 
 		return 0, fmt.Errorf("object %s/%s: the endpoint reported no size", bucket, key)
 	}
 	return info.Size, nil
+}
+
+func (l *minioObjectLister) RemoveObject(ctx context.Context, bucket, key string) error {
+	return l.client.RemoveObject(ctx, bucket, key, minio.RemoveObjectOptions{})
 }
 
 // collectObjects drains a minio listing. minio-go ends a listing whose

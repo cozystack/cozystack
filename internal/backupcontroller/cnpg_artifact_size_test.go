@@ -222,13 +222,13 @@ func cnpgListStub(prefix string, seen func(*http.Request)) http.HandlerFunc {
 	return func(w http.ResponseWriter, req *http.Request) {
 		w.Header().Set("Content-Type", "application/xml")
 		if _, ok := req.URL.Query()["location"]; ok {
-			fmt.Fprint(w, `<?xml version="1.0" encoding="UTF-8"?><LocationConstraint xmlns="http://s3.amazonaws.com/doc/2006-03-01/"></LocationConstraint>`)
+			_, _ = fmt.Fprint(w, `<?xml version="1.0" encoding="UTF-8"?><LocationConstraint xmlns="http://s3.amazonaws.com/doc/2006-03-01/"></LocationConstraint>`)
 			return
 		}
 		if seen != nil {
 			seen(req)
 		}
-		fmt.Fprintf(w, `<?xml version="1.0" encoding="UTF-8"?>
+		_, _ = fmt.Fprintf(w, `<?xml version="1.0" encoding="UTF-8"?>
 <ListBucketResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">
   <Name>bkt</Name><Prefix>%[1]s</Prefix><KeyCount>2</KeyCount><MaxKeys>1000</MaxKeys><IsTruncated>false</IsTruncated>
   <Contents><Key>%[1]sbackup.info</Key><Size>7</Size><ETag>"a"</ETag><LastModified>2026-10-21T10:01:00.000Z</LastModified></Contents>

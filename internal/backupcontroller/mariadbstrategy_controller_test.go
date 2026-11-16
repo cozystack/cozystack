@@ -317,7 +317,7 @@ func TestEnsureMariaDBBackup_IdempotentByLabel(t *testing.T) {
 // Restore-side ensure idempotency + target rewrite
 // ---------------------------------------------------------------------------
 
-func TestEnsureMariaDBRestore_IdempotentByLabel(t *testing.T) {
+func TestFindMariaDBRestoreForJob_FindsTheCreatedRestore(t *testing.T) {
 	c := newMariaDBStrategyTestClient(t)
 	r := &RestoreJobReconciler{Client: c, Scheme: c.Scheme()}
 	rj := newMariaDBRestoreJob("rj-1", "tenant")
@@ -325,16 +325,16 @@ func TestEnsureMariaDBRestore_IdempotentByLabel(t *testing.T) {
 		t.Fatalf("seed RestoreJob: %v", err)
 	}
 
-	first, err := r.ensureMariaDBRestore(context.Background(), rj, "src-backup", "mariadb-target")
-	if err != nil {
-		t.Fatalf("first ensureMariaDBRestore: %v", err)
+	if none, err := r.findMariaDBRestoreForJob(context.Background(), rj); err != nil || none != nil {
+		t.Fatalf("findMariaDBRestoreForJob before create = %v, %v; want none", none, err)
 	}
-	second, err := r.ensureMariaDBRestore(context.Background(), rj, "src-backup", "mariadb-target")
+	created, err := r.createMariaDBRestore(context.Background(), rj, "src-backup", "mariadb-target", "2026-10-21T10:00:05Z")
 	if err != nil {
-		t.Fatalf("second ensureMariaDBRestore: %v", err)
+		t.Fatalf("createMariaDBRestore: %v", err)
 	}
-	if first.Name != second.Name {
-		t.Errorf("expected idempotent reuse: first=%q second=%q", first.Name, second.Name)
+	found, err := r.findMariaDBRestoreForJob(context.Background(), rj)
+	if err != nil || found == nil || found.Name != created.Name {
+		t.Fatalf("findMariaDBRestoreForJob = %v, %v; want the Restore just created", found, err)
 	}
 	list := &mariadbtypes.RestoreList{}
 	if err := c.List(context.Background(), list, client.InNamespace("tenant")); err != nil {
@@ -349,6 +349,9 @@ func TestEnsureMariaDBRestore_IdempotentByLabel(t *testing.T) {
 	}
 	if got.Spec.BackupRef == nil || got.Spec.BackupRef.Name != "src-backup" || got.Spec.BackupRef.Kind != mariadbtypes.BackupKind {
 		t.Errorf("BackupRef mismatch: %#v", got.Spec.BackupRef)
+	}
+	if got.Spec.TargetRecoveryTime != "2026-10-21T10:00:05Z" {
+		t.Errorf("TargetRecoveryTime: got %q want 2026-10-21T10:00:05Z", got.Spec.TargetRecoveryTime)
 	}
 }
 

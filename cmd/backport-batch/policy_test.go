@@ -176,7 +176,7 @@ func TestPolicyPageMatchesCode(t *testing.T) {
 		t.Errorf("the page's block gives %d released lines, want 2 written out", pol.released)
 	}
 
-	rule2 := regexp.MustCompile("(?m)^2\\. Its title type is (.*)$").FindStringSubmatch(page)
+	rule2 := regexp.MustCompile(`(?m)^2\. Its title type is (.*)$`).FindStringSubmatch(page)
 	if rule2 == nil {
 		t.Fatal("the page has no rule 2")
 	}
@@ -187,7 +187,7 @@ func TestPolicyPageMatchesCode(t *testing.T) {
 	if !slices.Equal(types, takenTypes) {
 		t.Errorf("rule 2 on the page takes %v, the code %v", types, takenTypes)
 	}
-	never := regexp.MustCompile("(?m)^### What waits for the next minor\\n\\n(.*)$").FindStringSubmatch(page)
+	never := regexp.MustCompile(`(?m)^### What waits for the next minor\n\n(.*)$`).FindStringSubmatch(page)
 	if never == nil {
 		t.Fatal("the page has no list of what never goes into a patch release")
 	}

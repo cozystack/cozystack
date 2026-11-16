@@ -24,7 +24,9 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -111,18 +113,42 @@ type app struct {
 	policyRef string
 	// tool is the commit backport-batch was built from, for the record.
 	tool string
+	// unwritten is the first error writing to stdout or stderr. Output goes
+	// out before a push or a publish, so a run that lost it acts on nothing,
+	// and one that lost a confirmation afterwards fails.
+	unwritten error
 }
 
 func main() {
+	catchSIGPIPE()
 	a := &app{gh: ghCLI{bot: batchBotLogin(os.LookupEnv)}, stdout: os.Stdout, stderr: os.Stderr, now: time.Now, tool: toolVersion()}
 	os.Exit(a.main(os.Args[1:]))
 }
 
+// catchSIGPIPE makes a write to a closed stdout or stderr fail with EPIPE like
+// any other write, so the run stops before it pushes or publishes and says
+// why, instead of dying silently. signal.Ignore would do the same here but
+// would also leave SIGPIPE ignored in the git and gh children, across exec.
+func catchSIGPIPE() {
+	signal.Notify(make(chan os.Signal, 1), syscall.SIGPIPE)
+}
+
 func (a *app) main(args []string) int {
-	a.stdout, a.stderr = textWriter{a.stdout}, textWriter{a.stderr}
-	a.gh = &permCache{github: a.gh, perms: map[string]string{}}
+	a.stdout, a.stderr = textWriter{w: a.stdout, failed: &a.unwritten}, textWriter{w: a.stderr, failed: &a.unwritten}
+	code := a.command(args)
+	if a.unwritten != nil {
+		_, _ = fmt.Fprintf(a.stderr, "backport-batch: output was lost: %v\n", a.unwritten)
+		if code == 0 {
+			code = 2
+		}
+	}
+	return code
+}
+
+func (a *app) command(args []string) int {
+	a.gh = guardedGitHub{github: &permCache{github: a.gh, perms: map[string]string{}}, a: a}
 	if len(args) == 0 {
-		fmt.Fprint(a.stderr, usageText)
+		_, _ = fmt.Fprint(a.stderr, usageText)
 		return 2
 	}
 	if bot := a.gh.batchBot(); bot != "" && !botLoginRE.MatchString(bot) {
@@ -144,20 +170,26 @@ func (a *app) main(args []string) int {
 	case "lines":
 		return a.lines(args[1:])
 	case "-h", "--help", "help":
-		fmt.Fprint(a.stdout, usageText)
+		_, _ = fmt.Fprint(a.stdout, usageText)
 		return 0
 	}
-	fmt.Fprintf(a.stderr, "unknown command %q\n\n%s", args[0], usageText)
+	_, _ = fmt.Fprintf(a.stderr, "unknown command %q\n\n%s", args[0], usageText)
 	return 2
 }
 
 // textWriter keeps output fit for a terminal. Titles, file names and the
 // messages git relays come from other people, and a control sequence among
 // them would move the cursor or rewrite what was printed before.
-type textWriter struct{ w io.Writer }
+type textWriter struct {
+	w      io.Writer
+	failed *error
+}
 
 func (t textWriter) Write(p []byte) (int, error) {
 	if _, err := io.WriteString(t.w, clean(string(p), true)); err != nil {
+		if t.failed != nil && *t.failed == nil {
+			*t.failed = err
+		}
 		return 0, err
 	}
 	return len(p), nil
@@ -166,7 +198,7 @@ func (t textWriter) Write(p []byte) (int, error) {
 func (a *app) flags(name string) *flag.FlagSet {
 	fs := flag.NewFlagSet(name, flag.ContinueOnError)
 	fs.SetOutput(a.stderr)
-	fs.Usage = func() { fmt.Fprint(a.stderr, usageText) }
+	fs.Usage = func() { _, _ = fmt.Fprint(a.stderr, usageText) }
 	return fs
 }
 
@@ -188,13 +220,24 @@ func parse(fs *flag.FlagSet, args []string) error {
 	return nil
 }
 
+// mayAct refuses any further change once output was lost: the run would act
+// on what it printed while nobody read it. Every push and every move of a
+// local batch branch go through it, and every GitHub write through
+// guardedGitHub.
+func (a *app) mayAct() error {
+	if a.unwritten != nil {
+		return fmt.Errorf("output was lost: %w; nothing more is pushed or written to GitHub", a.unwritten)
+	}
+	return nil
+}
+
 func (a *app) fail(err error) int {
-	fmt.Fprintf(a.stderr, "backport-batch: %v\n", err)
+	_, _ = fmt.Fprintf(a.stderr, "backport-batch: %v\n", err)
 	return 2
 }
 
 func (a *app) warn(format string, args ...any) {
-	fmt.Fprintf(a.stderr, "warning: "+format+"\n", args...)
+	_, _ = fmt.Fprintf(a.stderr, "warning: "+format+"\n", args...)
 }
 
 // verdict is what the policy says about one original for the line.

@@ -39,19 +39,19 @@ type mariadbDump struct {
 	LastModified time.Time
 }
 
-// mariadbArtifactSizeBytes measures the dump mariadb-operator uploaded for
-// mdbBackup. Returns 0 - leaving Artifact.SizeBytes absent - when the dump
-// cannot be found or told apart: an unknown size must not be reported as a
-// measured one.
-func (r *BackupJobReconciler) mariadbArtifactSizeBytes(ctx context.Context, mdbBackup *mariadbtypes.Backup, completedAt time.Time) int64 {
+// attributedMariaDBDump returns the dump mariadb-operator uploaded for
+// mdbBackup. ok is false when the dump cannot be found or told apart, and
+// the Backup then reports neither a size nor a dump: an unknown dump must
+// not be reported as a measured one.
+func (r *BackupJobReconciler) attributedMariaDBDump(ctx context.Context, mdbBackup *mariadbtypes.Backup, completedAt time.Time) (dump mariadbDump, ok bool) {
 	ctx, cancel := context.WithTimeout(ctx, artifactSizeProbeTimeout)
 	defer cancel()
 	dump, err := findMariaDBDump(ctx, r.objectStore(), mdbBackup, completedAt)
 	if err != nil {
-		getLogger(ctx).Info("MariaDB backup size not measured; leaving it unset", "backup", mdbBackup.Name, "error", err)
-		return 0
+		getLogger(ctx).Info("MariaDB dump not attributed; leaving its size and name unset", "backup", mdbBackup.Name, "error", err)
+		return mariadbDump{}, false
 	}
-	return dump.Size
+	return dump, true
 }
 
 // findMariaDBDump lists the bucket mdbBackup wrote to and returns the one
@@ -60,21 +60,25 @@ func (r *BackupJobReconciler) mariadbArtifactSizeBytes(ctx context.Context, mdbB
 // from can have been edited since, and pointing at another bucket now says
 // nothing about where this dump went.
 func findMariaDBDump(ctx context.Context, store objectStore, mdbBackup *mariadbtypes.Backup, completedAt time.Time) (mariadbDump, error) {
+	lister, _, err := mariadbStorage(ctx, store, mdbBackup)
+	if err != nil {
+		return mariadbDump{}, err
+	}
+	return findMariaDBDumpWith(ctx, lister, store.reader, mdbBackup, completedAt, false)
+}
+
+// findMariaDBDumpWith is findMariaDBDump reading the bucket through lister,
+// for a caller that reaches the bucket by another endpoint than the one
+// mdbBackup names. withUnfinished lets runs that have not completed contest
+// the dump too, as neighbourMariaDBRuns describes.
+func findMariaDBDumpWith(ctx context.Context, lister s3ObjectLister, reader client.Reader, mdbBackup *mariadbtypes.Backup, completedAt time.Time, withUnfinished bool) (mariadbDump, error) {
 	s3 := mdbBackup.Spec.Storage.S3
 	if s3 == nil {
 		return mariadbDump{}, errors.New("the operator Backup does not store to S3")
 	}
-	others, err := finishedMariaDBRuns(ctx, store.reader, mdbBackup)
+	others, err := neighbourMariaDBRuns(ctx, reader, mdbBackup, withUnfinished)
 	if err != nil {
 		return mariadbDump{}, fmt.Errorf("list operator Backups: %w", err)
-	}
-	conn, err := mariadbS3Connection(ctx, store, mdbBackup.Namespace, s3)
-	if err != nil {
-		return mariadbDump{}, fmt.Errorf("resolve S3 credentials: %w", err)
-	}
-	lister, err := store.lister(conn)
-	if err != nil {
-		return mariadbDump{}, fmt.Errorf("build S3 client: %w", err)
 	}
 	// Non-recursive, as mariadb-operator lists it: the default prefix is also
 	// the default CNPG destinationPath, so an app of each kind with the same
@@ -88,12 +92,54 @@ func findMariaDBDump(ctx context.Context, store objectStore, mdbBackup *mariadbt
 	return matchMariaDBDump(objects, prefix, own, others)
 }
 
+// mariadbDumpExists reports whether the dump file name is still in the
+// storage mdbBackup wrote to.
+func mariadbDumpExists(ctx context.Context, store objectStore, mdbBackup *mariadbtypes.Backup, name string) (bool, error) {
+	lister, s3, err := mariadbStorage(ctx, store, mdbBackup)
+	if err != nil {
+		return false, err
+	}
+	key := mariadbOperatorS3Prefix(s3.Prefix) + name
+	objects, err := lister.ListObjects(ctx, s3.Bucket, key, false)
+	if err != nil {
+		return false, fmt.Errorf("list s3://%s/%s: %w", s3.Bucket, key, err)
+	}
+	for _, obj := range objects {
+		if obj.Key == key {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// mariadbStorage opens the bucket mdbBackup wrote to, with the credentials
+// its own spec names.
+func mariadbStorage(ctx context.Context, store objectStore, mdbBackup *mariadbtypes.Backup) (s3ObjectLister, *mariadbtypes.S3Storage, error) {
+	s3 := mdbBackup.Spec.Storage.S3
+	if s3 == nil {
+		return nil, nil, errors.New("the operator Backup does not store to S3")
+	}
+	conn, err := mariadbS3Connection(ctx, store, mdbBackup.Namespace, s3)
+	if err != nil {
+		return nil, nil, fmt.Errorf("resolve S3 credentials: %w", err)
+	}
+	lister, err := store.lister(conn)
+	if err != nil {
+		return nil, nil, fmt.Errorf("build S3 client: %w", err)
+	}
+	return lister, s3, nil
+}
+
 // mariadbRun is the span in which an operator Backup can have written its
 // dump: its lifetime, widened by mariadbSizeProbeClockSkew on each side.
 type mariadbRun struct {
 	name         string
 	lower, upper time.Time
 }
+
+// mariadbUnfinishedRunEnd closes the window of a run that has not completed,
+// which can still write its dump at any time.
+var mariadbUnfinishedRunEnd = time.Date(9999, time.December, 31, 0, 0, 0, 0, time.UTC)
 
 func newMariaDBRun(b *mariadbtypes.Backup, created, completed time.Time) mariadbRun {
 	return mariadbRun{
@@ -120,8 +166,8 @@ func (r mariadbRun) placesOnEitherClock(d mariadbDump) bool {
 // dump in the window on one clock only may be this run's own, misplaced by
 // a skewed clock, which leaves any other candidate unproven. A neighbour's
 // dump is still taken if this run's own is missing from the listing, or
-// misplaced on both clocks, and the neighbour's operator Backup is gone or
-// has not completed.
+// misplaced on both clocks, and the neighbour's operator Backup is gone or,
+// unless others includes unfinished runs, has not completed.
 func matchMariaDBDump(objects []s3ObjectInfo, prefix string, own mariadbRun, others []mariadbRun) (mariadbDump, error) {
 	var near []mariadbDump
 	for _, obj := range objects {
@@ -153,14 +199,17 @@ func matchMariaDBDump(objects []s3ObjectInfo, prefix string, own mariadbRun, oth
 	return d, nil
 }
 
-// finishedMariaDBRuns returns the runs of the other operator Backups that
+// neighbourMariaDBRuns returns the runs of the other operator Backups that
 // write under the same bucket and prefix as b and have completed, whether
-// their Job succeeded or failed. One still running is left out: its window
-// has no end yet, and an operator Backup stuck short of Complete, as one
-// whose Job pod never starts is, would otherwise contest every later run of
-// the application for good. The endpoint is not compared, since one has
-// several spellings, and a false neighbour only leaves a size unset.
-func finishedMariaDBRuns(ctx context.Context, reader client.Reader, b *mariadbtypes.Backup) ([]mariadbRun, error) {
+// their Job succeeded or failed. One still running is left out unless
+// withUnfinished is set: its window has no end yet, and an operator Backup
+// stuck short of Complete, as one whose Job pod never starts is, would
+// otherwise contest every later run of the application for good. That is
+// the price of deleting a dump, since a run can upload its dump and prune
+// older ones through maxRetention before it completes. The endpoint is not
+// compared, since one has several spellings, and a false neighbour only
+// keeps a dump unattributed.
+func neighbourMariaDBRuns(ctx context.Context, reader client.Reader, b *mariadbtypes.Backup, withUnfinished bool) ([]mariadbRun, error) {
 	list := &mariadbtypes.BackupList{}
 	if err := reader.List(ctx, list); err != nil {
 		return nil, err
@@ -177,6 +226,9 @@ func finishedMariaDBRuns(ctx context.Context, reader client.Reader, b *mariadbty
 		}
 		cond := apimeta.FindStatusCondition(other.Status.Conditions, mariadbtypes.ConditionTypeComplete)
 		if cond == nil || cond.Status != metav1.ConditionTrue {
+			if withUnfinished {
+				runs = append(runs, newMariaDBRun(other, other.CreationTimestamp.Time, mariadbUnfinishedRunEnd))
+			}
 			continue
 		}
 		runs = append(runs, newMariaDBRun(other, other.CreationTimestamp.Time, cond.LastTransitionTime.Time))

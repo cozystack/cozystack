@@ -486,11 +486,12 @@ func ownsSuspensionManagedFields(hr *helmv2.HelmRelease) bool {
 // fieldsManageSuspend reports whether a managed-fields set includes spec.suspend,
 // encoded by the apiserver as {"f:spec":{"f:suspend":{}}}.
 func fieldsManageSuspend(fs *metav1.FieldsV1) bool {
-	if fs == nil || len(fs.Raw) == 0 {
+	raw := fs.GetRawBytes()
+	if len(raw) == 0 {
 		return false
 	}
 	var top map[string]json.RawMessage
-	if err := json.Unmarshal(fs.Raw, &top); err != nil {
+	if err := json.Unmarshal(raw, &top); err != nil {
 		return false
 	}
 	specRaw, ok := top["f:spec"]

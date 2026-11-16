@@ -522,15 +522,6 @@ func (f *fixture) batchPR(n int, base, branch, body string) pullRequest {
 	return pr
 }
 
-// botBatchPR is batchPR opened by the bot the scheduled batch runs as.
-func (f *fixture) botBatchPR(gh *fakeGH, n int, base, branch, body string) pullRequest {
-	f.t.Helper()
-	gh.bot = defaultBatchBot
-	pr := f.batchPR(n, base, branch, body)
-	pr.User.Login, pr.User.Type, pr.AuthorAssociation = defaultBatchBot, "Bot", "CONTRIBUTOR"
-	return pr
-}
-
 // mergeBatch merges the open batch into release-1.1 with a merge commit, as
 // GitHub does, and deletes its branch, as the repository's
 // delete_branch_on_merge does. The pull request stays, merged, with its body
