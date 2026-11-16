@@ -3,6 +3,7 @@ package application
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strconv"
 	"testing"
 	"time"
@@ -37,6 +38,15 @@ type rvWatchFixture struct {
 	// watch goroutine and the test both update it; receiving an event from
 	// the watch orders the watch's updates before the test's next access.
 	liveReleaseGets int
+	// liveReleaseErrs are returned by the next live HelmRelease reads, one
+	// per read, before reads reach the store again.
+	liveReleaseErrs []error
+	// liveReleaseHang makes live HelmRelease reads block until their context
+	// ends, like a request to an API server that never answers.
+	liveReleaseHang bool
+	// cacheStore is the store behind cache, for tests that leave the cache
+	// without the release.
+	cacheStore client.WithWatch
 }
 
 var rvReleaseKey = client.ObjectKey{Namespace: "default", Name: "postgresql-mydb"}
@@ -71,6 +81,15 @@ func newRVWatchFixture(t *testing.T) *rvWatchFixture {
 		Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
 			if _, ok := obj.(*helmv2.HelmRelease); ok {
 				f.liveReleaseGets++
+				if f.liveReleaseHang {
+					<-ctx.Done()
+					return ctx.Err()
+				}
+				if len(f.liveReleaseErrs) > 0 {
+					err := f.liveReleaseErrs[0]
+					f.liveReleaseErrs = f.liveReleaseErrs[1:]
+					return err
+				}
 			}
 			return c.Get(ctx, key, obj, opts...)
 		},
@@ -81,7 +100,8 @@ func newRVWatchFixture(t *testing.T) *rvWatchFixture {
 			return f.hrW, nil
 		},
 	})
-	f.cache = interceptor.NewClient(fake.NewClientBuilder().WithScheme(scheme).WithObjects(release()).Build(), interceptor.Funcs{
+	f.cacheStore = fake.NewClientBuilder().WithScheme(scheme).WithObjects(release()).Build()
+	f.cache = interceptor.NewClient(f.cacheStore, interceptor.Funcs{
 		Delete: func(ctx context.Context, _ client.WithWatch, obj client.Object, opts ...client.DeleteOption) error {
 			return liveStore.Delete(ctx, obj, opts...)
 		},
@@ -309,6 +329,167 @@ func TestWatchMonitorEventCarriesReleaseAfterFallback(t *testing.T) {
 	f.monitorEvent("2")
 	if rv := nextApplication(t, w).ResourceVersion; rv != live.ResourceVersion {
 		t.Fatalf("second monitor event resourceVersion %q, want the release's %q", rv, live.ResourceVersion)
+	}
+}
+
+// expectNoApplication fails if the watch delivers anything within the wait,
+// then sends a release event and receives it so that the watch goroutine's
+// earlier bookkeeping is ordered before the caller's next read of it.
+func expectNoApplication(t *testing.T, f *rvWatchFixture, w watch.Interface, release *helmv2.HelmRelease) {
+	t.Helper()
+	select {
+	case ev := <-w.ResultChan():
+		t.Fatalf("unexpected %s event", ev.Type)
+	case <-time.After((liveReleaseReadAttempts + 2) * liveReleaseReadRetryDelay):
+	}
+	f.hrW.Modify(release)
+	nextApplication(t, w)
+}
+
+// A transient failure of the live read must not cost the client the monitor
+// change: nothing replays it, so the read is retried.
+func TestWatchMonitorEventRetriesLiveRead(t *testing.T) {
+	f := newRVWatchFixture(t)
+	_, w := startRVWatch(t, f)
+	live := f.advanceLive(t, "live")
+	readsBefore := f.liveReleaseGets
+	timeout := errors.New("etcdserver: request timed out")
+	f.liveReleaseErrs = []error{timeout, timeout}
+
+	f.monitorEvent(live.ResourceVersion)
+	app := nextApplication(t, w)
+	if got := f.liveReleaseGets - readsBefore; got != 3 {
+		t.Fatalf("live release reads %d, want two failed attempts and one success", got)
+	}
+	if got := specMarker(t, app); got != "live" {
+		t.Fatalf("spec marker %q, want the live spec", got)
+	}
+	if app.ResourceVersion != live.ResourceVersion {
+		t.Fatalf("resourceVersion %q, want the live release's %q", app.ResourceVersion, live.ResourceVersion)
+	}
+}
+
+// A read that keeps failing is given up after the last attempt, so a broken
+// apiserver cannot hold the watch goroutine.
+func TestWatchMonitorEventGivesUpAfterRetries(t *testing.T) {
+	f := newRVWatchFixture(t)
+	_, w := startRVWatch(t, f)
+	live := f.advanceLive(t, "live")
+	readsBefore := f.liveReleaseGets
+	timeout := errors.New("etcdserver: request timed out")
+	for range liveReleaseReadAttempts {
+		f.liveReleaseErrs = append(f.liveReleaseErrs, timeout)
+	}
+
+	f.monitorEvent(live.ResourceVersion)
+	expectNoApplication(t, f, w, live)
+	if got := f.liveReleaseGets - readsBefore; got != liveReleaseReadAttempts {
+		t.Fatalf("live release reads %d, want %d attempts and no more", got, liveReleaseReadAttempts)
+	}
+}
+
+// stopDuringLiveReadRetry queues a failure for every attempt, sends a monitor
+// event and calls stop while the watch waits between attempts. The watch must
+// close after the one read made before the stop.
+func stopDuringLiveReadRetry(t *testing.T, f *rvWatchFixture, w watch.Interface, stop func()) {
+	t.Helper()
+	live := f.advanceLive(t, "live")
+	readsBefore := f.liveReleaseGets
+	timeout := errors.New("etcdserver: request timed out")
+	for range liveReleaseReadAttempts {
+		f.liveReleaseErrs = append(f.liveReleaseErrs, timeout)
+	}
+
+	f.monitorEvent(live.ResourceVersion)
+	stop()
+	select {
+	case ev, ok := <-w.ResultChan():
+		if ok {
+			t.Fatalf("unexpected %s event", ev.Type)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("watch still open")
+	}
+	if got := f.liveReleaseGets - readsBefore; got != 1 {
+		t.Fatalf("live release reads %d, want the one before the stop", got)
+	}
+}
+
+func TestWatchStopEndsLiveReadRetry(t *testing.T) {
+	f := newRVWatchFixture(t)
+	_, w := startRVWatch(t, f)
+	stopDuringLiveReadRetry(t, f, w, w.Stop)
+}
+
+func TestWatchContextCancelEndsLiveReadRetry(t *testing.T) {
+	f := newRVWatchFixture(t)
+	ctx, cancel := context.WithCancel(request.WithNamespace(context.Background(), "default"))
+	t.Cleanup(cancel)
+	w, err := f.rest.Watch(ctx, &metainternalversion.ListOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(w.Stop)
+	stopDuringLiveReadRetry(t, f, w, cancel)
+}
+
+// A live read that never answers must not outlive the watch: Stop cancels
+// the read's context, and the watch closes.
+func TestWatchStopCancelsHungLiveRead(t *testing.T) {
+	f := newRVWatchFixture(t)
+	_, w := startRVWatch(t, f)
+	live := f.advanceLive(t, "live")
+	f.liveReleaseHang = true
+
+	f.monitorEvent(live.ResourceVersion)
+	w.Stop()
+	select {
+	case ev, ok := <-w.ResultChan():
+		if ok {
+			t.Fatalf("unexpected %s event", ev.Type)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("watch still open while a live read hangs")
+	}
+}
+
+// A release that is gone is final: the event is dropped after one read,
+// without retries that would delay the next event.
+func TestWatchMonitorEventDroppedWhenReleaseIsGone(t *testing.T) {
+	f := newRVWatchFixture(t)
+	_, w := startRVWatch(t, f)
+	release := f.liveRelease(t)
+	for _, c := range []client.Client{f.cacheStore, f.live} {
+		if err := c.Delete(context.Background(), release.DeepCopy()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	readsBefore := f.liveReleaseGets
+
+	f.monitorEvent(strconv.FormatUint(rvNumber(t, release.ResourceVersion)+1, 10))
+	expectNoApplication(t, f, w, release)
+	if got := f.liveReleaseGets - readsBefore; got != 1 {
+		t.Fatalf("live release reads %d, want a single read", got)
+	}
+}
+
+// A release the cache has not seen yet is read live and delivered.
+func TestWatchMonitorEventReadsReleaseMissingFromCache(t *testing.T) {
+	f := newRVWatchFixture(t)
+	_, w := startRVWatch(t, f)
+	live := f.advanceLive(t, "live")
+	if err := f.cacheStore.Delete(context.Background(), live.DeepCopy()); err != nil {
+		t.Fatal(err)
+	}
+	readsBefore := f.liveReleaseGets
+
+	f.monitorEvent(live.ResourceVersion)
+	app := nextApplication(t, w)
+	if got := f.liveReleaseGets - readsBefore; got != 1 {
+		t.Fatalf("live release reads %d, want one", got)
+	}
+	if got := specMarker(t, app); got != "live" {
+		t.Fatalf("spec marker %q, want the live spec", got)
 	}
 }
 

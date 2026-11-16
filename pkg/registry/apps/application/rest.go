@@ -796,6 +796,13 @@ func newerResourceVersion(a, b string) string {
 	return a
 }
 
+// Bounded so that an apiserver outage drops the monitor event instead of
+// holding the watch goroutine.
+const (
+	liveReleaseReadAttempts   = 3
+	liveReleaseReadRetryDelay = 100 * time.Millisecond
+)
+
 // Watch sets up a watch on HelmReleases, filters them based on application labels, and converts events to Applications
 func (r *REST) Watch(ctx context.Context, options *metainternalversion.ListOptions) (watch.Interface, error) {
 	namespace, err := r.getNamespace(ctx)
@@ -935,6 +942,17 @@ func (r *REST) Watch(ctx context.Context, options *metainternalversion.ListOptio
 		if wmWatcherForCleanup != nil {
 			defer wmWatcherForCleanup.Stop()
 		}
+		// Live reads use a context that Stop cancels, so a stopped watch
+		// never waits on the API server.
+		readCtx, cancelReads := context.WithCancel(ctx)
+		defer cancelReads()
+		go func() {
+			select {
+			case <-customW.stopChan:
+				cancelReads()
+			case <-readCtx.Done():
+			}
+		}()
 
 		// Buffer of WorkloadMonitor events that arrived before the initial
 		// snapshot finished. The watch-list contract requires the stream to
@@ -1187,8 +1205,20 @@ func (r *REST) Watch(ctx context.Context, options *metainternalversion.ListOptio
 				hr := &helmv2.HelmRelease{}
 				if err := r.c.Get(ctx, hrKey, hr); err != nil || newerResourceVersion(wm.GetResourceVersion(), hr.GetResourceVersion()) != hr.GetResourceVersion() {
 					hr = &helmv2.HelmRelease{}
-					if err := r.w.Get(ctx, hrKey, hr); err != nil {
-						klog.V(4).Infof("Cannot find HelmRelease %s/%s for WorkloadMonitor event: %v", hrNS, hrName, err)
+					// Nothing replays a monitor event this watch drops, so a
+					// transient failure of the live read is retried briefly.
+					// A missing release is final.
+					liveErr := r.w.Get(readCtx, hrKey, hr)
+					for attempt := 1; liveErr != nil && !apierrors.IsNotFound(liveErr) && attempt < liveReleaseReadAttempts; attempt++ {
+						select {
+						case <-readCtx.Done():
+							return
+						case <-time.After(liveReleaseReadRetryDelay):
+						}
+						liveErr = r.w.Get(readCtx, hrKey, hr)
+					}
+					if liveErr != nil {
+						klog.V(4).Infof("Cannot find HelmRelease %s/%s for WorkloadMonitor event: %v", hrNS, hrName, liveErr)
 						continue
 					}
 				}
