@@ -1,10 +1,10 @@
 #!/usr/bin/env bats
-# The operator's resync period is what bounds the stale-Ready window after an
-# operator restart (kubernetes-sigs/cluster-api-operator#1031): about two
-# periods. It reaches the manager only through patches/sync-period.diff, which
-# `make update` has to reapply on every re-vendor, and through the value in
-# values.yaml. Losing either silently returns the window to about 20 minutes,
-# so this checks the argument the rendered Deployment actually carries.
+# values.yaml keeps a one-minute resync period until restart recovery on the
+# current operator is measured; the v0.19 operator needed it for
+# kubernetes-sigs/cluster-api-operator#1031. It reaches the manager only through
+# patches/sync-period.diff, which `make update` has to reapply on every
+# re-vendor, and through the value in values.yaml. Losing either drops the
+# setting silently, so this checks the argument the rendered Deployment carries.
 
 load test_helper
 
