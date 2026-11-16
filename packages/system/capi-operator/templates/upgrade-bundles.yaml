@@ -1,12 +1,13 @@
 {{- $bridge := required "intermediate provider version is missing" (.Files.Get "files/bridge-version" | trim) -}}
-{{/* Keep repositories available for providers left at the intermediate version. */}}
+{{/* Keep repositories available for providers left at the intermediate version.
+Only the version label: a live v1.10 selector has none, and the operator fails every
+provider upgrade while any installed provider's selector matches two ConfigMaps. */}}
 apiVersion: v1
 kind: ConfigMap
 metadata:
   name: {{ $bridge }}-core
   labels:
     provider.cluster.x-k8s.io/version: {{ $bridge }}-core
-    core-components: cozy
   annotations:
     provider.cluster.x-k8s.io/compressed: "true"
     helm.sh/resource-policy: keep
@@ -21,8 +22,6 @@ metadata:
   name: {{ $bridge }}-bootstrap
   labels:
     provider.cluster.x-k8s.io/version: {{ $bridge }}-bootstrap
-    bootstrap-components: cozy
-    bootstrap-provider: kubeadm
   annotations:
     provider.cluster.x-k8s.io/compressed: "true"
     helm.sh/resource-policy: keep

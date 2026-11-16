@@ -76,7 +76,7 @@ fi
 bridge_selector_needs_repair() {
   jq --exit-status --arg version "$BRIDGE_VERSION-$2" '
     .spec.version == $version and
-    .spec.fetchConfig.selector.matchLabels["provider.cluster.x-k8s.io/version"] != $version' <<< "$1" >/dev/null
+    .spec.fetchConfig.selector.matchLabels != {"provider.cluster.x-k8s.io/version": $version}' <<< "$1" >/dev/null
 }
 
 if ((target_minor - core_minor <= 3 && target_minor - bootstrap_minor <= 3)) &&
@@ -136,13 +136,11 @@ stage_provider() {
     expected="$BRIDGE_VERSION-$suffix"
   fi
   if [[ "$requested" != "$expected" ]] || bridge_selector_needs_repair "$object" "$suffix"; then
-    patch="$(jq --compact-output --arg uid "$uid" --arg old "$requested" --arg next "$expected" --arg suffix "$suffix" '
+    # The bridge bundles carry only the version label, so a selector keeping a
+    # legacy label would match nothing.
+    patch="$(jq --compact-output --arg uid "$uid" --arg old "$requested" --arg next "$expected" '
       .spec as $spec |
-      (if $spec.fetchConfig == null then
-        {selector: {matchLabels: {($suffix + "-components"): "cozy"}}} |
-        if $suffix == "bootstrap" then .selector.matchLabels["bootstrap-provider"] = "kubeadm" else . end
-      else $spec.fetchConfig end |
-        .selector.matchLabels["provider.cluster.x-k8s.io/version"] = $next) as $fetch |
+      ($spec.fetchConfig // {} | .selector = {matchLabels: {"provider.cluster.x-k8s.io/version": $next}}) as $fetch |
       [
         {op: "test", path: "/metadata/uid", value: $uid},
         {op: "test", path: "/spec/version", value: $old},

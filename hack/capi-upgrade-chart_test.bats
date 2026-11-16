@@ -35,6 +35,13 @@ setup() {
   done
 }
 
+@test "intermediate bundles carry no label a legacy version-less selector matches" {
+  local rendered="$BATS_TEST_TMPDIR/operator.yaml"
+  helm template capi-operator "$REPO_ROOT/packages/system/capi-operator" --namespace test-capi > "$rendered"
+  yq --output-format=json --no-doc 'select(.kind == "ConfigMap" and .metadata.annotations."helm.sh/resource-policy" == "keep")' "$rendered" |
+    jq --slurp --exit-status 'length == 2 and all(.[]; .metadata.labels == {"provider.cluster.x-k8s.io/version": .metadata.name})'
+}
+
 @test "the hook has no cluster-wide or secret permissions" {
   local roles
   roles="$(yq --output-format=json --no-doc 'select(.kind == "Role") | .rules' "$RENDERED")"
@@ -125,7 +132,7 @@ repository_matches_request() {
   bridge="$(< "$CORE/files/bridge-version")"
   jq --arg bridge "$bridge" 'map(if .kind == "CoreProvider" or (.kind == "BootstrapProvider" and .metadata.name == "kubeadm") then
     .spec.version = ($bridge + (if .kind == "CoreProvider" then "-core" else "-bootstrap" end)) |
-    .spec.fetchConfig.selector.matchLabels["provider.cluster.x-k8s.io/version"] = .spec.version
+    .spec.fetchConfig.selector.matchLabels = {"provider.cluster.x-k8s.io/version": .spec.version}
     else . end)' "$BATS_TEST_TMPDIR/repositories.json" > "$BATS_TEST_TMPDIR/bridge.json"
   mv "$BATS_TEST_TMPDIR/bridge.json" "$BATS_TEST_TMPDIR/repositories.json"
   repository_matches_request

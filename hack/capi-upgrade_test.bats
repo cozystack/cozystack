@@ -21,7 +21,7 @@ setup() {
   jq --null-input '
     def provider($name; $suffix): {
       metadata: {name: $name, uid: $name, generation: 1},
-      spec: {version: ("v1.10.1-" + $suffix), fetchConfig: {selector: {matchLabels: {($suffix + "-components"): "cozy"}}}},
+      spec: {version: ("v1.10.1-" + $suffix), fetchConfig: {selector: {matchLabels: ({($suffix + "-components"): "cozy"} + if $suffix == "bootstrap" then {"bootstrap-provider": "kubeadm"} else {} end)}}},
       status: {installedVersion: ("v1.10.1-" + $suffix), observedGeneration: 1, conditions: [{type: "Ready", status: "True"}]}
     };
     def deployment: {
@@ -73,7 +73,7 @@ accepted_patches() {
 }
 
 @test "an interrupted transition resumes without downgrading core" {
-  fixture '.providers["cluster-api"].spec.version = "v1.13.8-core" | .providers["cluster-api"].spec.fetchConfig.selector.matchLabels["provider.cluster.x-k8s.io/version"] = "v1.13.8-core" | .providers["cluster-api"].status.installedVersion = "v1.13.8-core"'
+  fixture '.providers["cluster-api"].spec.version = "v1.13.8-core" | .providers["cluster-api"].spec.fetchConfig.selector.matchLabels = {"provider.cluster.x-k8s.io/version": "v1.13.8-core"} | .providers["cluster-api"].status.installedVersion = "v1.13.8-core"'
   run bash "$UPGRADE_SCRIPT"
   [ "$status" -eq 0 ]
   [ "$(accepted_patches)" = '[{"name":"kubeadm","version":"v1.13.8-bootstrap"}]' ]
@@ -209,27 +209,34 @@ accepted_patches() {
     any(.patch[]; .op == "test" and .path == "/spec/version") and
     any(.patch[]; .op == "test" and .path == "/spec/fetchConfig") and
     any(.patch[]; .path == "/spec/fetchConfig" and .op == "replace" and
-      .value.selector.matchLabels["provider.cluster.x-k8s.io/version"] ==
-        (if $call.name == "cluster-api" then "v1.13.8-core" else "v1.13.8-bootstrap" end)))' "$CAPI_TEST_LOG"
+      .value.selector.matchLabels == {"provider.cluster.x-k8s.io/version":
+        (if $call.name == "cluster-api" then "v1.13.8-core" else "v1.13.8-bootstrap" end)}))' "$CAPI_TEST_LOG"
 }
 
 @test "already selected bridges repair stale selectors inside the supported window" {
   fixture '.providers |= with_entries(.value.spec.version = ("v1.13.8-" + (if .key == "cluster-api" then "core" else "bootstrap" end)) | .value.status.installedVersion = .value.spec.version)'
   run bash "$UPGRADE_SCRIPT"
   [ "$status" -eq 0 ]
-  jq --exit-status 'all(.providers[]; .spec.fetchConfig.selector.matchLabels["provider.cluster.x-k8s.io/version"] == .spec.version)' "$CAPI_TEST_STATE"
+  jq --exit-status 'all(.providers[]; .spec.fetchConfig.selector.matchLabels == {"provider.cluster.x-k8s.io/version": .spec.version})' "$CAPI_TEST_STATE"
+}
+
+@test "a bridge selector that keeps legacy labels is narrowed to the version label" {
+  fixture '.providers |= with_entries(.value.spec.version = ("v1.13.8-" + (if .key == "cluster-api" then "core" else "bootstrap" end)) | .value.status.installedVersion = .value.spec.version | .value.spec.fetchConfig.selector.matchLabels["provider.cluster.x-k8s.io/version"] = .value.spec.version)'
+  run bash "$UPGRADE_SCRIPT"
+  [ "$status" -eq 0 ]
+  jq --exit-status 'all(.providers[]; .spec.fetchConfig.selector.matchLabels == {"provider.cluster.x-k8s.io/version": .spec.version})' "$CAPI_TEST_STATE"
 }
 
 @test "already selected bridges repair missing fetchConfig without changing other spec fields" {
   fixture '.providers |= with_entries(.value.spec.version = ("v1.13.8-" + (if .key == "cluster-api" then "core" else "bootstrap" end)) | .value.status.installedVersion = .value.spec.version | .value.spec.deployment = {replicas: 2} | del(.value.spec.fetchConfig))'
   run bash "$UPGRADE_SCRIPT"
   [ "$status" -eq 0 ]
-  jq --exit-status 'all(.providers[]; .spec.deployment.replicas == 2 and .spec.fetchConfig.selector.matchLabels["provider.cluster.x-k8s.io/version"] == .spec.version)' "$CAPI_TEST_STATE"
+  jq --exit-status 'all(.providers[]; .spec.deployment.replicas == 2 and .spec.fetchConfig.selector.matchLabels == {"provider.cluster.x-k8s.io/version": .spec.version})' "$CAPI_TEST_STATE"
   jq --slurp --exit-status 'all(.[] | select(.accepted); any(.patch[]; .op == "test" and .path == "/spec") and any(.patch[]; .op == "add" and .path == "/spec/fetchConfig"))' "$CAPI_TEST_LOG"
 }
 
 @test "a matching bridge selector is an idempotent no-op" {
-  fixture '.providers |= with_entries(.value.spec.version = ("v1.13.8-" + (if .key == "cluster-api" then "core" else "bootstrap" end)) | .value.status.installedVersion = .value.spec.version | .value.spec.fetchConfig.selector.matchLabels["provider.cluster.x-k8s.io/version"] = .value.spec.version)'
+  fixture '.providers |= with_entries(.value.spec.version = ("v1.13.8-" + (if .key == "cluster-api" then "core" else "bootstrap" end)) | .value.status.installedVersion = .value.spec.version | .value.spec.fetchConfig.selector.matchLabels = {"provider.cluster.x-k8s.io/version": .value.spec.version})'
   run bash "$UPGRADE_SCRIPT"
   [ "$status" -eq 0 ]
   [ "$(accepted_patches)" = '[]' ]
