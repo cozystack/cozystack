@@ -22,7 +22,9 @@ set:
 tests:
   - it: "issues the client certificate the operator is pointed at, from the blockstor CA"
     template: templates/blockstor-apiserver-tls.yaml
-    documentIndex: 3
+    documentSelector:
+      path: metadata.name
+      value: blockstor-apiserver-client
     asserts:
       - isKind:
           of: Certificate
@@ -46,7 +48,9 @@ tests:
 
   - it: "serves from the same CA the client certificate validates against"
     template: templates/blockstor-apiserver-tls.yaml
-    documentIndex: 2
+    documentSelector:
+      path: metadata.name
+      value: blockstor-apiserver-server
     asserts:
       - isKind:
           of: Certificate

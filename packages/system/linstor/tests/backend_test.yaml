@@ -68,9 +68,11 @@ tests:
       - hasDocuments:
           count: 2
       - equal:
+          path: spec.ca.secretName
+          value: linstor-internal-ca
+        documentSelector:
           path: kind
           value: Issuer
-        documentIndex: 1
 
   # The plunger runs drbdadm against the node's DRBD resources on its own
   # schedule. Under blockstor those belong to blockstor-satellite alone, so the
