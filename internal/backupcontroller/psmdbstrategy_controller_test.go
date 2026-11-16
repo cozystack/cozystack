@@ -4560,3 +4560,86 @@ func TestPsmdbStorageEntrySettled(t *testing.T) {
 		}
 	}
 }
+
+// A to-copy restore checks its selective options only before it creates the
+// operator restore. If the restore found at the start of a pass is gone by the
+// time it is followed, the pass must not create a full one in its place, which
+// would replace the target's users.
+func TestReconcileMongoDBRestore_ToCopyFollowsTheRestoreItFound(t *testing.T) {
+	backup, rj, objs := mongodbToCopyFixture(t, `{"demo":{}}`)
+	inflight := &psmdbtypes.PerconaServerMongoDBRestore{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace: "tenant", Name: "rj-copy-abc",
+			Labels: map[string]string{
+				backupsv1alpha1.OwningJobNameLabel:      rj.Name,
+				backupsv1alpha1.OwningJobNamespaceLabel: rj.Namespace,
+			},
+		},
+		Spec:   psmdbtypes.PerconaServerMongoDBRestoreSpec{ClusterName: mongodbNameForApp("mongodb-target"), Selective: &psmdbtypes.SelectiveRestoreOpts{Namespaces: []string{"demo.*"}}},
+		Status: psmdbtypes.PerconaServerMongoDBRestoreStatus{State: psmdbtypes.StateRunning},
+	}
+	s := newMongoDBStrategyTestClient(t).Scheme()
+	lists, created := 0, 0
+	c := clientfake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(append(objs, inflight)...).
+		WithStatusSubresource(&backupsv1alpha1.BackupJob{}, &backupsv1alpha1.RestoreJob{}, &backupsv1alpha1.Backup{}, &batchv1.Job{}).
+		WithInterceptorFuncs(interceptor.Funcs{
+			List: func(ctx context.Context, cl client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
+				if _, ok := list.(*psmdbtypes.PerconaServerMongoDBRestoreList); ok {
+					lists++
+					if lists > 1 {
+						return nil // deleted after the first lookup
+					}
+				}
+				return cl.List(ctx, list, opts...)
+			},
+			Create: func(ctx context.Context, cl client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
+				if _, ok := obj.(*psmdbtypes.PerconaServerMongoDBRestore); ok {
+					created++
+				}
+				return cl.Create(ctx, obj, opts...)
+			},
+		}).
+		Build()
+	r := &RestoreJobReconciler{Client: c, Scheme: s, Recorder: record.NewFakeRecorder(10)}
+
+	if _, err := r.reconcileMongoDBRestore(context.Background(), rj.DeepCopy(), backup); err != nil {
+		t.Fatalf("reconcileMongoDBRestore: %v", err)
+	}
+	if created != 0 {
+		t.Fatalf("a pass that found an operator restore must not create another one, created %d", created)
+	}
+}
+
+// The replay latch is what keeps a deleted operator restore from being
+// created again, and its transition time anchors the grace window. A pass
+// that latches it and then fails must still leave it saved.
+func TestReconcileMongoDBRestore_ReplayLatchIsSavedBeforeTheHealthCheck(t *testing.T) {
+	selective := &psmdbtypes.SelectiveRestoreOpts{Namespaces: []string{"demo.*"}}
+	h := newMongoDBGateHarness(t, psmdbtypes.StateReady, "", selective)
+	cluster := &psmdbtypes.PerconaServerMongoDB{}
+	if err := h.c.Get(context.Background(), types.NamespacedName{Namespace: "tenant", Name: mongodbNameForApp("mongodb-target")}, cluster); err != nil {
+		t.Fatal(err)
+	}
+	cluster.Spec.Image = "" // the health check cannot be set up
+	if err := h.c.Update(context.Background(), cluster); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := h.r.reconcileMongoDBRestore(context.Background(), h.job(t), h.backup); err == nil {
+		t.Fatal("expected the health check setup to fail")
+	}
+	first := apimeta.FindStatusCondition(h.job(t).Status.Conditions, psmdbRestoreCondReplayed)
+	if first == nil || first.Status != metav1.ConditionTrue {
+		t.Fatalf("the replay must be latched on the stored job before the health check, got %+v", first)
+	}
+	h.age(t, 5*time.Minute, 5*time.Minute)
+	aged := apimeta.FindStatusCondition(h.job(t).Status.Conditions, psmdbRestoreCondReplayed).LastTransitionTime
+
+	_, _ = h.r.reconcileMongoDBRestore(context.Background(), h.job(t), h.backup)
+	again := apimeta.FindStatusCondition(h.job(t).Status.Conditions, psmdbRestoreCondReplayed)
+	if again == nil || !again.LastTransitionTime.Equal(&aged) {
+		t.Fatalf("a retry must keep the latched transition time %v, got %+v", aged, again)
+	}
+}

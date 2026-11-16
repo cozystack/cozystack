@@ -1788,9 +1788,14 @@ func (r *RestoreJobReconciler) reconcileMongoDBRestore(ctx context.Context, rest
 		}
 	}
 
-	mdbRestore, err := r.ensureMongoDBRestore(ctx, restoreJob, targetPSMDBName, source, pitr, selective)
-	if err != nil {
-		return r.markRestoreJobFailed(ctx, restoreJob, fmt.Sprintf("failed to ensure psmdb.percona.com/PerconaServerMongoDBRestore: %v", err))
+	// The restore found above is the one followed. Looking it up again could
+	// miss it if it was deleted since, and then create a restore without the
+	// selective options, which were checked only for a new one.
+	mdbRestore := existingRestore
+	if mdbRestore == nil {
+		if mdbRestore, err = r.ensureMongoDBRestore(ctx, restoreJob, targetPSMDBName, source, pitr, selective); err != nil {
+			return r.markRestoreJobFailed(ctx, restoreJob, fmt.Sprintf("failed to ensure psmdb.percona.com/PerconaServerMongoDBRestore: %v", err))
+		}
 	}
 
 	switch state := mdbRestore.Status.State; {
@@ -1861,6 +1866,12 @@ func (r *RestoreJobReconciler) awaitMongoDBTargetReady(ctx context.Context, rj *
 			Reason:  reason,
 			Message: fmt.Sprintf("psmdb.percona.com/PerconaServerMongoDBRestore %s/%s completed%s", mdbRestore.Namespace, mdbRestore.Name, note),
 		})
+		// Saved before anything below can fail. Unsaved, a retry would set a
+		// new transition time and move the grace window, and a deleted operator
+		// restore would no longer read as replayed.
+		if err := r.Status().Update(ctx, rj); err != nil {
+			return ctrl.Result{}, err
+		}
 	}
 	replayed := apimeta.FindStatusCondition(rj.Status.Conditions, psmdbRestoreCondReplayed)
 
