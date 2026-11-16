@@ -349,14 +349,17 @@ cozy_tenant_drained() {
   return 0
 }
 
-# Keep only PVC resource names that belong to one Kubernetes worker pool. The
+# Keep only PVC resource names that belong to the worker pools of one test
+# cluster: md0 and the Kairos pool run-kubernetes-kairos.sh adds. The
 # worker-disk PVCs carry no cluster label, but CDI preserves the owning
-# MachineDeployment name inside every one of their generated names.
+# MachineDeployment name (<cluster>-<pool>, nodegroup.yaml) inside every one
+# of their generated names.
 cozy_filter_cluster_pvcs() {
   local test_name="$1"
   local capture="$2"
   printf '%s\n' "${capture}" |
-    awk -v cluster="kubernetes-${test_name}-md0" 'index($0, cluster) != 0'
+    awk -v md0="kubernetes-${test_name}-md0-" -v kairos="kubernetes-${test_name}-${KAIROS_POOL_SUFFIX:-kairos}-" \
+      'index($0, md0) != 0 || index($0, kairos) != 0'
 }
 
 # Block until one tenant cluster's KubeVirt compute and storage are actually
@@ -1350,16 +1353,22 @@ _cozy_guest_kubelet_image_timing() {
 # capture file says which of them happened.
 #
 # The Pod list is namespace-wide rather than scoped to one release. The two
-# virt-launcher captures immediately above the call site already select that
-# way, and suites run one at a time. Below the cap a Pod that does not belong
+# virt-launcher captures just before the node-join call site already select
+# that way, and suites run one at a time. Below the cap a Pod that does not belong
 # to this test costs one extra file named after itself and nothing else; at
 # the cap it can displace one of this suite's own, since kubectl returns the
-# list name-sorted. COLLECTION-TRUNCATED.txt is what keeps that visible.
+# list name-sorted. COLLECTION-TRUNCATED.txt is what keeps that visible. A
+# caller that wants only its own VMs passes a substring of their Pod names as
+# the third argument: only matching Pods have their console read, and none
+# matching is a failed capture with a note, not another VM's console under this
+# caller's context. The start-time and Pod-state reads stay namespace-wide.
 #
-# Takes the context it was called in, because it is called from both paths and
-# both write here. On the failure path the console is the evidence; on the
-# passing path it is the baseline that evidence is read against, and the two are
-# the same files in the same directory. Which one a tarball holds is otherwise
+# Takes the context it was called in, because a suite calls it from both paths
+# and both write here; another failure path that calls it runs under a
+# COZY_SNAPSHOT_NAME of its own so that it does not land on top of them. On the
+# failure path the console is the evidence; on the passing path it is the
+# baseline that evidence is read against, and the two are the same files in
+# the same directory. Which one a tarball holds is otherwise
 # recoverable only from the run's verdict somewhere else entirely, so the
 # capture states it.
 cozy_capture_tenant_serial_console() {
@@ -1375,6 +1384,7 @@ cozy_capture_tenant_serial_console() {
   # is the same measurement as ten -- and the cap that fires records what it
   # dropped either way.
   local max_pods="$2"
+  local only="${3:-}"
   local report_dir="${COZY_REPORT_DIR:-/workspace/_out/cozyreport}/snapshots/${COZY_SNAPSHOT_NAME:-kubernetes}/tenant-serial-console"
   local pods pod rc
   local list_rc=0
@@ -1423,6 +1433,15 @@ cozy_capture_tenant_serial_console() {
     return 1
   fi
 
+  if [ -n "${only}" ]; then
+    pods=$(printf '%s\n' ${pods} | grep -F -- "${only}" || true)
+    if [ -z "${pods}" ]; then
+      echo "no virt-launcher Pod matching ${only} found for serial console capture" >&2
+      printf '%s\n' "no virt-launcher Pod matching ${only} in namespace tenant-test" \
+        >"${err_log}"
+      return 1
+    fi
+  fi
   # Cap the walk, at the number the caller asked for. Every read here is bounded,
   # but the pool can reach maxReplicas, so
   # an uncapped loop is a term whose size the cluster sets rather than this file --
