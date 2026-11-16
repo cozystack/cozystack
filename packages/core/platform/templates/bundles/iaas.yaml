@@ -19,10 +19,25 @@
 {{- end -}}
 {{- /*
   When cozystack.gpu-operator is enabled the platform mirrors the variant
-  into the KubeVirt CR: the HostDevices feature gate plus a starter
-  permittedHostDevices block. Without this the admission webhook rejects
-  any VM that references a host-device GPU by resourceName. See
-  docs/gpu-vgpu.md for the user-facing knobs.
+  into the KubeVirt CR: the HostDevices feature gate, without which the
+  admission webhook rejects any VM that references a host-device GPU by
+  resourceName, plus a permittedHostDevices block assembled per variant.
+  The platform's own tables are the passthrough one in the default
+  variant and the mdev one in vgpu behind gpu.vgpuDeviceManager.enabled;
+  gpu.replaceDefaults drops whichever would apply, and the operator's own
+  .gpu entries are appended on top (see the per-key comment below for
+  which key each variant reads). A vgpu cluster at stock values therefore
+  gets the gate and no device table. See docs/gpu-vgpu.md for the
+  user-facing knobs.
+
+  Both pieces are VM-facing and are emitted only for the two variants
+  that hand a GPU resource to a VM: default (the whole card, rebound to
+  vfio-pci) and vgpu (mdev profiles or SR-IOV VFs carved out by the host
+  vGPU driver). The container variant serves GPUs to ordinary pods
+  through the device plugin and runs no VM-facing GPU stack at all —
+  sandboxWorkloads and vfioManager are both off — so the gate would
+  advertise a capability the node cannot serve and the device table
+  would list resources no plugin ever registers there.
 */ -}}
 {{- /*
   Mirror the cozystack.platform.package.optional helper's enable/disable
@@ -35,16 +50,21 @@
 {{- $gpuEnabled := and (has $gpuName (default (list) .Values.bundles.enabledPackages)) (not (has $gpuName (default (list) .Values.bundles.disabledPackages))) -}}
 {{- $gpuVariant := .Values.bundles.iaas.gpuOperatorVariant | default "default" -}}
 {{- /*
-  Validate the variant up front, not behind $gpuEnabled — a typo like
+  The accepted set is the variant list of the cozystack.gpu-operator
+  PackageSource in sources/gpu-operator.yaml — default, vgpu, container.
+  A variant added there needs adding here too, or the bundle rejects a
+  value the package ships.
+
+  Validate up front, not behind $gpuEnabled — a typo like
   gpuOperatorVariant: passthrough (instead of "default") would otherwise
   render fine until someone flips gpu-operator into enabledPackages, at
   which point the bundle breaks. Failing fast here surfaces the typo on
   the first render after the values file changes.
 */ -}}
-{{- if not (or (eq $gpuVariant "default") (eq $gpuVariant "vgpu")) -}}
-{{- fail (printf "bundles.iaas.gpuOperatorVariant must be \"default\" or \"vgpu\", got %q" $gpuVariant) -}}
+{{- if not (or (eq $gpuVariant "default") (eq $gpuVariant "vgpu") (eq $gpuVariant "container")) -}}
+{{- fail (printf "bundles.iaas.gpuOperatorVariant must be \"default\", \"vgpu\" or \"container\", got %q" $gpuVariant) -}}
 {{- end -}}
-{{- if $gpuEnabled }}
+{{- if and $gpuEnabled (ne $gpuVariant "container") }}
 {{- $_ := set $kubevirtValues "extraFeatureGates" (list "HostDevices") -}}
 {{- /*
   Each .Values.gpu access is fully parenthesized — (((.Values.gpu).x).y) —
@@ -63,9 +83,10 @@
 {{- $userMdevConfig := default (dict) (.Values.gpu).mediatedDevicesConfiguration -}}
 {{- $replace := default false (.Values.gpu).replaceDefaults -}}
 {{- /*
-  pciHostDevices applies in both variants — passthrough (vfio-pci, whole
-  GPU) and post-kubevirt#16890 SR-IOV vGPU VFs (Ada Lovelace / Blackwell
-  with the vGPU 17/20 driver branch) both advertise via pciHostDevices.
+  pciHostDevices applies in both VM variants — passthrough (vfio-pci,
+  whole GPU) and post-kubevirt#16890 SR-IOV vGPU VFs (Ada Lovelace /
+  Blackwell with the vGPU 17/20 driver branch) both advertise via
+  pciHostDevices. The container variant never reaches this block.
   mediatedDevices is vgpu-only: it EXPOSES, by stable profile name
   (mdevNameSelector), the mdev devices the GPU Operator's vGPU Device
   Manager creates on the node. Emitting it in the passthrough variant

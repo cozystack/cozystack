@@ -1,0 +1,169 @@
+diff --git a/server/src/main/java/com/linbit/linstor/dbdrivers/k8s/K8sCachingClient.java b/server/src/main/java/com/linbit/linstor/dbdrivers/k8s/K8sCachingClient.java
+index 5ae6a95fa..533e41541 100644
+--- a/server/src/main/java/com/linbit/linstor/dbdrivers/k8s/K8sCachingClient.java
++++ b/server/src/main/java/com/linbit/linstor/dbdrivers/k8s/K8sCachingClient.java
+@@ -2,6 +2,7 @@ package com.linbit.linstor.dbdrivers.k8s;
+ 
+ import com.linbit.linstor.annotation.Nullable;
+ 
++import java.net.HttpURLConnection;
+ import java.util.ArrayList;
+ import java.util.List;
+ import java.util.concurrent.ConcurrentHashMap;
+@@ -9,6 +10,7 @@ import java.util.concurrent.ConcurrentHashMap;
+ import io.fabric8.kubernetes.api.model.HasMetadata;
+ import io.fabric8.kubernetes.api.model.KubernetesResourceList;
+ import io.fabric8.kubernetes.api.model.StatusDetails;
++import io.fabric8.kubernetes.client.KubernetesClientException;
+ import io.fabric8.kubernetes.client.dsl.MixedOperation;
+ import io.fabric8.kubernetes.client.dsl.Resource;
+ 
+@@ -47,7 +49,29 @@ public class K8sCachingClient<T extends HasMetadata, L extends KubernetesResourc
+     @Override
+     public T create(T item)
+     {
+-        T updated = client.create(item);
++        T updated;
++        try
++        {
++            updated = client.create(item);
++        }
++        catch (KubernetesClientException exc)
++        {
++            /*
++             * The HTTP client retries a POST after a 5xx or a dropped connection, so a create that the apiserver
++             * already persisted comes back as 409. Since we are the only writer, the existing object is ours.
++             */
++            if (exc.getCode() != HttpURLConnection.HTTP_CONFLICT)
++            {
++                throw exc;
++            }
++            T live = client.withName(item.getMetadata().getName()).get();
++            if (live == null)
++            {
++                throw exc;
++            }
++            item.getMetadata().setResourceVersion(live.getMetadata().getResourceVersion());
++            updated = client.replace(item);
++        }
+         cache.put(updated.getMetadata().getName(), updated);
+         return updated;
+     }
+diff --git a/src/test/java/com/linbit/linstor/dbdrivers/k8s/K8sCachingClientTest.java b/src/test/java/com/linbit/linstor/dbdrivers/k8s/K8sCachingClientTest.java
+new file mode 100644
+index 000000000..6eb20fd06
+--- /dev/null
++++ b/src/test/java/com/linbit/linstor/dbdrivers/k8s/K8sCachingClientTest.java
+@@ -0,0 +1,112 @@
++package com.linbit.linstor.dbdrivers.k8s;
++
++import java.net.HttpURLConnection;
++import java.util.Collections;
++
++import io.fabric8.kubernetes.api.model.ConfigMap;
++import io.fabric8.kubernetes.api.model.ConfigMapBuilder;
++import io.fabric8.kubernetes.api.model.ConfigMapList;
++import io.fabric8.kubernetes.client.KubernetesClientException;
++import io.fabric8.kubernetes.client.dsl.MixedOperation;
++import io.fabric8.kubernetes.client.dsl.Resource;
++import org.junit.Before;
++import org.junit.Test;
++
++import static org.junit.Assert.assertEquals;
++import static org.junit.Assert.assertSame;
++import static org.junit.Assert.fail;
++import static org.mockito.ArgumentMatchers.any;
++import static org.mockito.Mockito.mock;
++import static org.mockito.Mockito.never;
++import static org.mockito.Mockito.verify;
++import static org.mockito.Mockito.when;
++
++public class K8sCachingClientTest
++{
++    private static final String NAME = "d5719b801db29e976a14ca6a354cc17460452b0b126b0630f12ef9e1aa22552a";
++
++    private MixedOperation<ConfigMap, ConfigMapList, Resource<ConfigMap>> client;
++    private Resource<ConfigMap> resource;
++    private K8sCachingClient<ConfigMap, ConfigMapList, Resource<ConfigMap>> cachingClient;
++
++    @SuppressWarnings("unchecked")
++    @Before
++    public void setUp()
++    {
++        client = mock(MixedOperation.class);
++        resource = mock(Resource.class);
++        ConfigMapList emptyList = new ConfigMapList();
++        emptyList.setItems(Collections.emptyList());
++        when(client.list()).thenReturn(emptyList);
++        when(client.withName(NAME)).thenReturn(resource);
++        cachingClient = new K8sCachingClient<>(client);
++    }
++
++    private static ConfigMap item(String resourceVersion)
++    {
++        return new ConfigMapBuilder()
++            .withNewMetadata().withName(NAME).withResourceVersion(resourceVersion).endMetadata()
++            .addToData("value", "false")
++            .build();
++    }
++
++    private static KubernetesClientException httpError(int code)
++    {
++        return new KubernetesClientException("error " + code, code, null);
++    }
++
++    @Test
++    public void createAdoptsObjectPersistedByRetriedRequest()
++    {
++        ConfigMap wanted = item(null);
++        ConfigMap replaced = item("43");
++        when(client.create(wanted)).thenThrow(httpError(HttpURLConnection.HTTP_CONFLICT));
++        when(resource.get()).thenReturn(item("42"));
++        when(client.replace(wanted)).thenReturn(replaced);
++
++        assertSame(replaced, cachingClient.create(wanted));
++        assertEquals("42", wanted.getMetadata().getResourceVersion());
++        assertSame(replaced, cachingClient.get(NAME));
++    }
++
++    @Test
++    public void createRethrowsConflictWhenObjectIsGone()
++    {
++        ConfigMap wanted = item(null);
++        KubernetesClientException conflict = httpError(HttpURLConnection.HTTP_CONFLICT);
++        when(client.create(wanted)).thenThrow(conflict);
++        when(resource.get()).thenReturn(null);
++
++        try
++        {
++            cachingClient.create(wanted);
++            fail("expected the original conflict");
++        }
++        catch (KubernetesClientException exc)
++        {
++            assertSame(conflict, exc);
++        }
++        verify(client, never()).replace(any());
++        assertEquals(null, cachingClient.get(NAME));
++    }
++
++    @Test
++    public void createRethrowsOtherErrorsUnchanged()
++    {
++        ConfigMap wanted = item(null);
++        KubernetesClientException serverError = httpError(HttpURLConnection.HTTP_INTERNAL_ERROR);
++        when(client.create(wanted)).thenThrow(serverError);
++
++        try
++        {
++            cachingClient.create(wanted);
++            fail("expected the original error");
++        }
++        catch (KubernetesClientException exc)
++        {
++            assertSame(serverError, exc);
++        }
++        verify(client, never()).withName(any());
++        verify(client, never()).replace(any());
++    }
++}

@@ -42,14 +42,21 @@ bundles:
     enabled: false
     # gpu-operator variant selector — applies when cozystack.gpu-operator is
     # in bundles.enabledPackages. "default" runs the vfio-pci passthrough
-    # stack (whole GPU → one VM); "vgpu" runs the vGPU Manager stack. The
-    # platform mirrors this into the KubeVirt CR: passthrough auto-wires the
-    # HostDevices feature gate plus a default permittedHostDevices.pciHostDevices
-    # table covering common NVIDIA datacenter GPUs (vendor 10DE); vgpu
-    # auto-wires permittedHostDevices.mediatedDevices plus a starter
-    # mediatedDevicesConfiguration. Operators with additional or non-NVIDIA
-    # cards extend the defaults via gpu.permittedHostDevices /
-    # gpu.mediatedDevicesConfiguration / gpu.replaceDefaults below.
+    # stack (whole GPU → one VM); "vgpu" runs the vGPU Manager stack;
+    # "container" serves GPUs to ordinary pods through the device plugin on
+    # hosts that already provide the NVIDIA driver and container toolkit.
+    # The platform mirrors the two VM variants into the KubeVirt CR: both
+    # get the HostDevices feature gate; passthrough also gets a default
+    # permittedHostDevices.pciHostDevices table covering common NVIDIA
+    # datacenter GPUs (vendor 10DE), and vgpu gets
+    # permittedHostDevices.mediatedDevices when
+    # gpu.vgpuDeviceManager.enabled is true. No mediatedDevicesConfiguration
+    # default ships in either variant — see the gpu block below for why.
+    # "container" gets none of that wiring: it keeps the host driver bound,
+    # so no GPU is available for VM passthrough.
+    # Operators with additional or non-NVIDIA cards extend the defaults via
+    # gpu.permittedHostDevices / gpu.mediatedDevicesConfiguration /
+    # gpu.replaceDefaults below — read by the two VM variants only.
     gpuOperatorVariant: default
   paas:
     enabled: false
@@ -523,10 +530,15 @@ kubevirt:
   # Passed to spec.configuration.migrations on the KubeVirt CR.
   # Empty keeps KubeVirt's defaults. bandwidthPerMigration is bytes/second.
   migrations: {}
-# GPU host-device wiring for VirtualMachine workloads. Auto-injected into the
-# KubeVirt CR's permittedHostDevices when bundles.enabledPackages contains
-# cozystack.gpu-operator. Without it the admission webhook rejects any VM
-# that references a GPU host-device by resourceName.
+# GPU host-device wiring for VirtualMachine workloads. Merged into the KubeVirt
+# CR's permittedHostDevices when bundles.enabledPackages contains
+# cozystack.gpu-operator and bundles.iaas.gpuOperatorVariant is one of the two
+# VM variants, default or vgpu. The platform's own defaults join it there: the
+# passthrough table in the default variant, the mdev table in vgpu only when
+# gpu.vgpuDeviceManager.enabled is true, and neither when replaceDefaults below
+# is true. So a stock vgpu cluster that sets nothing here gets the HostDevices
+# gate and no device table at all. The container variant serves GPUs to pods
+# and never to VMs, so nothing in this block reaches the KubeVirt CR under it.
 gpu:
   # When false (default), the lists below are appended to the platform's
   # NVIDIA defaults. When true, the user lists fully replace the defaults
@@ -534,11 +546,12 @@ gpu:
   # strictly curated allowlist is required.
   replaceDefaults: false
   permittedHostDevices:
-    # PCI passthrough devices. Always rendered when non-empty regardless of
-    # gpuOperatorVariant — pciHostDevices covers both the vfio-pci passthrough
-    # path (default variant) and the post-kubevirt#16890 SR-IOV vGPU path
+    # PCI passthrough devices. Rendered when non-empty under either VM
+    # variant — pciHostDevices covers both the vfio-pci passthrough path
+    # (default variant) and the post-kubevirt#16890 SR-IOV vGPU path
     # (vgpu variant on Ada Lovelace / Blackwell, where VFs are advertised
-    # via pciHostDevices, not via mediatedDevices). Default-table coverage:
+    # via pciHostDevices, not via mediatedDevices). The container variant
+    # renders neither list. Default-table coverage:
     # H100, H200, A100 PCIe/SXM, A40, A30, A10, L40, L40S, L4, T4, V100,
     # V100S (PCI vendor 10DE). Item shape matches KubeVirt's pciHostDevices:
     #   - pciVendorSelector: "10DE:2335"

@@ -38,6 +38,14 @@ map $http_upgrade $connection_upgrade {
     '' close;
 }
 
+# An OIDC access token with many group claims pushes the Cookie header past the
+# 8k default, and a header field must fit in a single buffer. Kept here rather
+# than inside the server block: a field read before the Host header has selected
+# the virtual server is measured against the default server's buffers, so the
+# same lines inside a server block cover this one only while it stays default.
+client_header_buffer_size 16k;
+large_client_header_buffers 4 16k;
+
 server {
     listen       8080 default_server;
     listen       [::]:8080 default_server;

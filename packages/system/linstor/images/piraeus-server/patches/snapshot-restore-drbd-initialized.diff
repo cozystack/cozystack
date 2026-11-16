@@ -1,0 +1,67 @@
+diff --git a/controller/src/main/java/com/linbit/linstor/core/apicallhandler/controller/CtrlSnapshotRestoreApiCallHandler.java b/controller/src/main/java/com/linbit/linstor/core/apicallhandler/controller/CtrlSnapshotRestoreApiCallHandler.java
+index a639c27cc..4dabc1a83 100644
+--- a/controller/src/main/java/com/linbit/linstor/core/apicallhandler/controller/CtrlSnapshotRestoreApiCallHandler.java
++++ b/controller/src/main/java/com/linbit/linstor/core/apicallhandler/controller/CtrlSnapshotRestoreApiCallHandler.java
+@@ -434,26 +434,39 @@ public class CtrlSnapshotRestoreApiCallHandler
+         }
+     }
+ 
+-    /*
+-     * When a snapshot was received as a backup, it is marked to re-create its local metadata. Before the
+-     * snapshot was sent the new DRBD_INITIALIZED flag and the VlmDfn property InitialUpToDateOn were
++    /**
++     * <p>Sets the {@value InternalApiConsts#KEY_LINSTOR_DRBD_INITIAL_UPTODATE_ON} property to the nodeName
++     * of the first Snapshot (which has to have a disk) of the given SnapshotDefinition.</p>
++     *
++     * <p>If this SnapshotDefinition is a backup, we also unset the {@link VolumeDefinition.Flags#DRBD_INITIALIZED}
++     * flag. Otherwise we ensure the same flag is set.</p>
++     *
++     * <p>Backup path: When a snapshot was received as a backup, it is marked to re-create its local metadata.
++     * Before the snapshot was sent the new DRBD_INITIALIZED flag and the VlmDfn property InitialUpToDateOn were
+      * cleared. If DRBD_INITIALZED would be set, no peer would even read the property (on purpose).
+      * Without the property, no peer would think of itself as a winner, thus the DRBD resource would never
+      * become UpToDate.
+      * To avoid this, this method sets the InitialUpToDateOn property to let the first resource win the
+-     * race, so it can become UpToDate and therefore also pull the other peers eventually into UpToDate state.
++     * race, so it can become UpToDate and therefore also pull the other peers eventually into UpToDate state. </p>
+      *
+-     * If the given SnapDfn had also non-backup snapshots, those should be able to keep their metadata.
++     * <p>If the given SnapDfn had also non-backup snapshots, those should be able to keep their metadata.
+      * In that case we do not have to do anything. If however all snapshots are descendants from backups
+      * we must pick one and decide the UpToDate race upfront so that the winner can set its local DRBD
+-     * as UpToDate, which also triggers the controller to set the DRBD_INITIALZED flag eventually.
++     * as UpToDate, which also triggers the controller to set the DRBD_INITIALZED flag eventually.</p>
++     *
++     * <p>Non-Backup path: When a regular snapshot (i.e. not from a backup) is restored, we can or even should
++     * assume that the backing snapshot LVs have correct metadata which do not need be be initialized. When
++     * a SnapshotVolumeDefinition is created it unfortunately does not properly store the VolumeDefinition's flags,
++     * therefore the restored VolumeDefinition will also not have the DRBD_INITIALIZED flag set, although it
++     * refers to a device with healthy and UpToDate metadata. To fix this issue we simply set the flag in this case.</p>
+      */
+     private void checkDrbdInitializedState(ResourceDefinition rscDfnRef) throws AccessDeniedException
+     {
+         AccessContext accCtx = peerAccCtx.get();
+-        if (DrbdLayerUtils.isForceInitialSyncSet(accCtx, rscDfnRef) && rscDfnRef.getDiskfulCount(accCtx) > 0)
++        if (rscDfnRef.getDiskfulCount(accCtx) > 0)
+         {
+             String winnerNodeName = rscDfnRef.getDiskfulResources(accCtx).get(0).getNode().getName().value;
++            boolean uninitializeDrbd = DrbdLayerUtils.isForceInitialSyncSet(accCtx, rscDfnRef);
+             Iterator<VolumeDefinition> vlmDfnIt = rscDfnRef.iterateVolumeDfn(accCtx);
+             while (vlmDfnIt.hasNext())
+             {
+@@ -462,7 +475,14 @@ public class CtrlSnapshotRestoreApiCallHandler
+                 {
+                     vlmDfn.getProps(accCtx)
+                         .setProp(InternalApiConsts.KEY_LINSTOR_DRBD_INITIAL_UPTODATE_ON, winnerNodeName);
+-                    vlmDfn.getFlags().disableFlags(accCtx, VolumeDefinition.Flags.DRBD_INITIALIZED);
++                    if (uninitializeDrbd)
++                    {
++                        vlmDfn.getFlags().disableFlags(accCtx, VolumeDefinition.Flags.DRBD_INITIALIZED);
++                    }
++                    else
++                    {
++                        vlmDfn.getFlags().enableFlags(accCtx, VolumeDefinition.Flags.DRBD_INITIALIZED);
++                    }
+                 }
+                 catch (InvalidKeyException | InvalidValueException exc)
+                 {

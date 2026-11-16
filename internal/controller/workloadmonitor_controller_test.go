@@ -14,6 +14,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/utils/ptr"
 	cosiv1alpha1 "sigs.k8s.io/container-object-storage-interface-api/apis/objectstorage/v1alpha1"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
@@ -1236,6 +1237,65 @@ func TestGetWorkloadMetadata(t *testing.T) {
 				if gv, ok := got[k]; !ok || gv != v {
 					t.Errorf("expected label %q=%q, got %q", k, v, gv)
 				}
+			}
+		})
+	}
+}
+
+func TestReconcile_PVCStorageClassResourceKey(t *testing.T) {
+	cases := []struct {
+		name         string
+		storageClass *string
+		wantKey      string
+	}{
+		{"unset falls back to default", nil, "default.storageclass.storage.k8s.io/requests.storage"},
+		{"empty falls back to default", ptr.To(""), "default.storageclass.storage.k8s.io/requests.storage"},
+		{"explicit class is kept", ptr.To("replicated"), "replicated.storageclass.storage.k8s.io/requests.storage"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			scheme := newTestScheme()
+			monitor := &cozyv1alpha1.WorkloadMonitor{
+				ObjectMeta: metav1.ObjectMeta{Name: "test-monitor", Namespace: "default"},
+				Spec: cozyv1alpha1.WorkloadMonitorSpec{
+					Selector: map[string]string{"app": "test"},
+					Kind:     "postgres",
+					Type:     "postgres",
+				},
+			}
+			pvc := &corev1.PersistentVolumeClaim{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "data",
+					Namespace: "default",
+					Labels:    map[string]string{"app": "test"},
+				},
+				Spec: corev1.PersistentVolumeClaimSpec{StorageClassName: tc.storageClass},
+				Status: corev1.PersistentVolumeClaimStatus{
+					Phase:    corev1.ClaimBound,
+					Capacity: corev1.ResourceList{corev1.ResourceStorage: resource.MustParse("10Gi")},
+				},
+			}
+			fakeClient := fake.NewClientBuilder().
+				WithScheme(scheme).
+				WithObjects(monitor, pvc).
+				WithStatusSubresource(monitor).
+				Build()
+
+			reconciler := &WorkloadMonitorReconciler{Client: fakeClient, Scheme: scheme}
+			req := reconcile.Request{NamespacedName: types.NamespacedName{Name: "test-monitor", Namespace: "default"}}
+			if _, err := reconciler.Reconcile(context.TODO(), req); err != nil {
+				t.Fatalf("Reconcile returned error: %v", err)
+			}
+
+			workload := &cozyv1alpha1.Workload{}
+			if err := fakeClient.Get(context.TODO(), types.NamespacedName{Name: "pvc-data", Namespace: "default"}, workload); err != nil {
+				t.Fatalf("Failed to get Workload: %v", err)
+			}
+			if len(workload.Status.Resources) != 1 {
+				t.Fatalf("expected one resource entry, got %v", workload.Status.Resources)
+			}
+			if _, ok := workload.Status.Resources[tc.wantKey]; !ok {
+				t.Errorf("expected resource key %q, got %v", tc.wantKey, workload.Status.Resources)
 			}
 		})
 	}

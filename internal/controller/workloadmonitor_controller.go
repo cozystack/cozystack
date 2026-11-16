@@ -454,7 +454,7 @@ func (r *WorkloadMonitorReconciler) reconcilePVCForMonitor(
 
 	for resourceName, resourceQuantity := range pvc.Status.Capacity {
 		storageClass := "default"
-		if pvc.Spec.StorageClassName != nil || *pvc.Spec.StorageClassName == "" {
+		if pvc.Spec.StorageClassName != nil && *pvc.Spec.StorageClassName != "" {
 			storageClass = *pvc.Spec.StorageClassName
 		}
 		resourceLabel := fmt.Sprintf("%s.storageclass.storage.k8s.io/requests.%s", storageClass, resourceName.String())

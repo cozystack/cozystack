@@ -12,6 +12,9 @@ Custom patches for piraeus-server (linstor-server) v1.33.3.
   - Source PR/comment: [#472](https://github.com/LINBIT/linstor-server/pull/472), [maintainer note](https://github.com/LINBIT/linstor-server/pull/472#issuecomment-3949687603)
   - Backported from commits: [`ccc85fbd2`](https://github.com/LINBIT/linstor-server/commit/ccc85fbd2c65f0b97c52403fa80f1efdb886ec4e), [`71b601554`](https://github.com/LINBIT/linstor-server/commit/71b601554f41bcb50cd5bd06989c5b0d3a814acd)
   - Note: upstream commit [`3d0402a0c`](https://github.com/LINBIT/linstor-server/commit/3d0402a0c25f0a4b57b380321f10e89982f26e7a) is already included in `v1.33.1`
+- **fix-k8s-create-already-exists.diff** — Adopt the existing object when a create in the Kubernetes CRD backend returns 409 AlreadyExists. The HTTP client retries a POST after a 5xx or a dropped connection, so a create the apiserver already persisted comes back as 409; a single-object transaction has no rollback entry, the key is dropped from memory while the CR stays, and every later write of that key fails until the controller restarts. Seen as a PV stuck in `Released` because linstor-csi could not set `BalanceResourcesEnabled` on the resource definition.
+  - Source PR: [#531](https://github.com/LINBIT/linstor-server/pull/531)
+  - Backported from commit: [`8badf8f05`](https://github.com/lexfrei/linstor-server/commit/8badf8f0526ff3b1b391857e4a046ed46b95a79c)
 - **retry-adjust-after-stale-bitmap.diff** — Retry `drbdadm adjust` after detaching a stale local bitmap state
   - Source PR: [#491](https://github.com/LINBIT/linstor-server/pull/491)
   - Backported from commit: [`51ae50a84`](https://github.com/kvaps/linstor-server/commit/51ae50a84dcb98093f543b819652c750a94d96c9)
@@ -22,3 +25,9 @@ Custom patches for piraeus-server (linstor-server) v1.33.3.
 - **fix-min-io-probe-device-wait.diff** — Wait for temporary probe devices before reading pool I/O properties; retry failures and fall back to a probe when ZFS volumes have no usable device path.
   - Source PR: [#528](https://github.com/LINBIT/linstor-server/pull/528), fixes [#527](https://github.com/LINBIT/linstor-server/issues/527)
   - Adapted for v1.33.3; inactive LVM volumes retain the existing no-probe behavior.
+
+- **snapshot-restore-drbd-initialized.diff** — Mark the volume definitions of a restored snapshot as DRBD-initialized, unless the restored resource definition carries `DrbdOptions/ForceInitialSyncPermanent`, which keeps the existing path that recreates metadata, as for a backup. Without the flag the initial UpToDate race is still open on a restored volume, and `Linstor/Drbd/InitialUptoDateOn`, copied from the source volume through the snapshot, names whichever node won it for the source. When linstor-csi autoplaces a replica on that node, the empty new volume wins the race, gets mkfs and goes StandAlone against the restored replica, so a pod attached there sees an empty filesystem. With the flag set, nothing wins the race, and an autoplaced replica resyncs from the restored one like any replica added to an existing volume.
+  - Backported from upstream commit: [`9d8cdf511`](https://github.com/LINBIT/linstor-server/commit/9d8cdf5118338fc72a34bb99799e452e031ea8f6), first released in v1.34.0; the `CHANGELOG.md` hunk is left out
+  - Drop when LINSTOR is upgraded to v1.34.0 or later
+  - On ZFS and thin pools the autoplaced replicas still skip the initial sync and rely on the source volume's day0 UUID being in the restored replica's history, upstream included; if it is not, DRBD reports unrelated data and goes StandAlone rather than syncing
+  - Fixes [cozystack/cozystack#4862](https://github.com/cozystack/cozystack/issues/4862)

@@ -8,6 +8,37 @@ metadata:
     "helm.sh/hook-delete-policy": hook-succeeded,before-hook-creation
   name: {{ .Release.Name }}-pre-cleanup
 spec:
+  # One attempt. restartPolicy Never turns the default of 6 into seven pods in
+  # series, each restarting the script from Step 1 and each paying its own image
+  # pull, which outlives the uninstall budget: helm then times out on its own
+  # instead of reporting which step failed.
+  #
+  # Zero and not one, because a second attempt does not fit. Both waits below
+  # are guarded, so an attempt can spend all of its budget without failing and a
+  # retry starts from Step 1 with the clock already there; on a nodeless tenant
+  # it also re-pays Step 4, since attempt one leaves the TenantControlPlane
+  # terminating. The failure a retry would cover is an eviction (this pod
+  # tolerates control-plane taints), which is not bounded in time and costs most
+  # when it arrives late. The price is that such an eviction fails the whole
+  # attempt and flux repeats it on its own interval — slower, and predictable.
+  backoffLimit: 0
+  # No activeDeadlineSeconds, for arithmetic rather than oversight. A deadline
+  # has to sit above the sum of the waits below, or it cuts runs that were going
+  # to finish, and far enough under helm-controller's uninstall budget to be
+  # what helm reports rather than what it waits through. Those two bounds do not
+  # currently leave a gap, and the image pull comes from Docker Hub with no
+  # mirror in front of it.
+  #
+  # Note that the sum is a whole-Job figure only while backoffLimit is 0:
+  # activeDeadlineSeconds runs from status.startTime and a retry does not reset
+  # it, so allowing retries means the deadline has to clear all of them.
+  #
+  # Room comes from raising spec.uninstall.timeout on the generated HelmRelease,
+  # not from squeezing the waits further.
+  # packages/apps/bucket/templates/hooks/cleanup-acme.yaml is the shape to copy
+  # then: same image, with the deadline and the retry budget set together, and
+  # --request-timeout on each call so an unresponsive apiserver is bounded too,
+  # which --wait=false below does not cover.
   template:
     metadata:
       labels:
@@ -90,8 +121,21 @@ spec:
               fi
 
               echo "Step 3: Deleting KamajiControlPlane {{ .Release.Name }}"
+              # --wait is spelled out because kubectl defaults it to true, and a
+              # --timeout it does not carry defaults to 0, which kubectl reads
+              # as "wait forever" and turns into a week.
+              #
+              # false rather than a bound, because there is nothing here worth
+              # waiting for. What matters downstream is the TenantControlPlane,
+              # and Step 4 deletes that one directly and waits for it; blocking
+              # on the KamajiControlPlane first only adds a second place for a
+              # CAPI finalizer to stall the hook. Not waiting also keeps this
+              # step under `set -e` with no guard: with no timeout to expire,
+              # every remaining non-zero exit is a real failure — the API
+              # rejecting the request, discovery breaking, RBAC being wrong —
+              # and none of those should be reported as a cleanup that happened.
               kubectl -n {{ .Release.Namespace }} delete kamajicontrolplanes.controlplane.cluster.x-k8s.io {{ .Release.Name }} \
-                --ignore-not-found=true
+                --ignore-not-found=true --wait=false
 
               echo "Step 4: Deleting TenantControlPlane {{ .Release.Name }} and waiting for it to be removed"
               # --wait=true blocks until the TenantControlPlane object is fully
@@ -137,16 +181,24 @@ spec:
                 echo "  Secret {{ .Release.Name }}-datastore-config not present; nothing to do"
               fi
 
+              # Steps 5 and 6 do not wait. Both defaulted to --wait=true with no
+              # --timeout, so either one parked this hook for a week on a single
+              # stuck finalizer: a DataVolume held by a CDI importer or a PVC
+              # finalizer is the reachable case. Waiting buys nothing here.
+              # Nothing after these steps reads their result, and the DELETE has
+              # already been accepted either way — an expired wait and
+              # --wait=false leave the same cluster state, with the same objects
+              # finalizing in the background once the hook has moved on.
               echo "Step 5: Cleaning up DataVolumes"
               kubectl -n {{ .Release.Namespace }} delete datavolumes \
                 -l "cluster.x-k8s.io/cluster-name={{ .Release.Name }}" \
-                --ignore-not-found=true
+                --ignore-not-found=true --wait=false
 
               echo "Step 6: Cleaning up LoadBalancer Services"
               kubectl -n {{ .Release.Namespace }} delete services \
                 -l "cluster.x-k8s.io/cluster-name={{ .Release.Name }}" \
                 --field-selector spec.type=LoadBalancer \
-                --ignore-not-found=true
+                --ignore-not-found=true --wait=false
 
               echo "Cleanup completed successfully"
           volumeMounts:
@@ -184,6 +236,9 @@ rules:
       - watch
       - patch
       - delete
+  # watch is granted only where a delete still waits: Step 2 on helmreleases and
+  # Step 4 on tenantcontrolplanes. The other three deletes pass --wait=false, so
+  # kubectl never opens a watch for them and the verb would be unexercised.
   - apiGroups:
       - "controlplane.cluster.x-k8s.io"
     resources:
@@ -191,7 +246,6 @@ rules:
     verbs:
       - get
       - list
-      - watch
       - delete
   - apiGroups:
       - "kamaji.clastix.io"
@@ -209,7 +263,6 @@ rules:
     verbs:
       - get
       - list
-      - watch
       - delete
   - apiGroups:
       - ""
@@ -218,7 +271,6 @@ rules:
     verbs:
       - get
       - list
-      - watch
       - delete
   # Scoped to the single Kamaji datastore connection Secret so Step 4b can
   # strip the leftover finalizer.kamaji.clastix.io/datastore-secret finalizer

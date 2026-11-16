@@ -220,12 +220,12 @@ tests:
           variant: isp-full
         iaas:
           enabled: true
-          gpuOperatorVariant: container
+          gpuOperatorVariant: sriov
         enabledPackages:
         - cozystack.gpu-operator
     asserts:
       - failedTemplate:
-          errorMessage: 'bundles.iaas.gpuOperatorVariant must be "default" or "vgpu", got "container"'
+          errorMessage: 'bundles.iaas.gpuOperatorVariant must be "default", "vgpu" or "container", got "sriov"'
 
   - it: rejects an invalid gpuOperatorVariant even when gpu-operator is not enabled so the typo is caught at edit time, not at gpu-enable time
     set:
@@ -239,7 +239,92 @@ tests:
         enabledPackages: []
     asserts:
       - failedTemplate:
-          errorMessage: 'bundles.iaas.gpuOperatorVariant must be "default" or "vgpu", got "passthrough"'
+          errorMessage: 'bundles.iaas.gpuOperatorVariant must be "default", "vgpu" or "container", got "passthrough"'
+
+  # The container variant is the third variant the cozystack.gpu-operator
+  # PackageSource ships (values.yaml + values-container.yaml). The bundle
+  # guard rejected it for its first release, which made a shipped and tested
+  # variant unselectable from platform values.
+  - it: emits the gpu-operator Package at the container variant so the third shipped variant is selectable from platform values
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+        iaas:
+          enabled: true
+          gpuOperatorVariant: container
+        enabledPackages:
+        - cozystack.gpu-operator
+      # Both legs of the vgpu forwarding block are armed on purpose. It is
+      # the only writer of spec.components on this Package and container
+      # newly reaches its gate; with these unset the block yields an empty
+      # dict either way, so the notExists below would hold even if the gate
+      # admitted container.
+      gpu:
+        vgpuManager:
+          imagePullSecrets:
+          - nvidia-registry-secret
+        vgpuDeviceManager:
+          enabled: true
+    documentSelector:
+      path: metadata.name
+      value: cozystack.gpu-operator
+    asserts:
+      - equal:
+          path: kind
+          value: Package
+      - equal:
+          path: spec.variant
+          value: container
+      - notExists:
+          path: spec.components
+
+  # The container variant keeps the host NVIDIA driver bound and pins
+  # vfioManager off, so no GPU can be detached for a VM. Emitting the
+  # HostDevices gate would advertise a KubeVirt capability the node cannot
+  # serve, and the pciHostDevices table would name resources that no
+  # sandbox device plugin ever registers.
+  - it: leaves the KubeVirt host-device wiring out entirely in the container variant, even with gpu.* overrides set
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+        iaas:
+          enabled: true
+          gpuOperatorVariant: container
+        enabledPackages:
+        - cozystack.gpu-operator
+      gpu:
+        permittedHostDevices:
+          pciHostDevices:
+          - pciVendorSelector: "1002:744C"
+            resourceName: amd.com/MI300X
+            externalResourceProvider: true
+          mediatedDevices:
+          - mdevNameSelector: NVIDIA A100-40C
+            resourceName: nvidia.com/A100-40C
+            externalResourceProvider: true
+        mediatedDevicesConfiguration:
+          mediatedDeviceTypes:
+          - nvidia-559
+    documentSelector:
+      path: metadata.name
+      value: cozystack.kubevirt
+    asserts:
+      - notExists:
+          path: spec.components.kubevirt.values.extraFeatureGates
+      - notExists:
+          path: spec.components.kubevirt.values.permittedHostDevices
+      - notExists:
+          path: spec.components.kubevirt.values.mediatedDevicesConfiguration
+      # The rest of the kubevirt component values are untouched by the
+      # variant — this pins that the container branch skips only the GPU
+      # wiring, not the whole component block.
+      - equal:
+          path: spec.components.kubevirt.values.cpuAllocationRatio
+          value: 10
 
   - it: emits the gpu-operator Package without component overrides for the passthrough variant so vfio-pci defaults from the chart apply unchanged
     set:
