@@ -30,8 +30,8 @@ import (
 )
 
 var (
-	NoAncestors       = errors.New("no managed apps found in lineage")
-	AncestryAmbiguous = errors.New("object ancestry is ambiguous")
+	ErrNoAncestors       = errors.New("no managed apps found in lineage")
+	ErrAncestryAmbiguous = errors.New("object ancestry is ambiguous")
 )
 
 const (
@@ -115,9 +115,9 @@ func (h *LineageControllerWebhook) Handle(ctx context.Context, req admission.Req
 
 	owner, err := h.getOwner(ctx, obj)
 	switch {
-	case err != nil && errors.Is(err, AncestryAmbiguous):
+	case err != nil && errors.Is(err, ErrAncestryAmbiguous):
 		warn = append(warn, "object ancestry ambiguous, using first ancestor found")
-	case err != nil && errors.Is(err, NoAncestors):
+	case err != nil && errors.Is(err, ErrNoAncestors):
 		// not a problem, mark object as unmanaged
 	case err != nil:
 		logger.Error(err, "error computing lineage labels")
@@ -147,14 +147,14 @@ func (h *LineageControllerWebhook) Handle(ctx context.Context, req admission.Req
 func (h *LineageControllerWebhook) getOwner(ctx context.Context, o *unstructured.Unstructured) (*unstructured.Unstructured, error) {
 	owners := lineage.WalkOwnershipGraphWithCache(ctx, h.dynClient, h.mapper, h, h.ownerCache, o)
 	if len(owners) == 0 {
-		return nil, NoAncestors
+		return nil, ErrNoAncestors
 	}
 	obj, err := owners[0].GetUnstructuredCached(ctx, h.dynClient, h.mapper, h.ownerCache)
 	if err != nil {
 		return nil, err
 	}
 	if len(owners) > 1 {
-		err = AncestryAmbiguous
+		err = ErrAncestryAmbiguous
 	}
 	return obj, err
 }
@@ -176,7 +176,7 @@ func (h *LineageControllerWebhook) computeLabels(ctx context.Context, obj *unstr
 				return s
 			}
 			s = s[:63]
-			for b := s[62]; !((b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z') || (b >= '0' && b <= '9')); s = s[:len(s)-1] {
+			for b := s[62]; (b < 'a' || b > 'z') && (b < 'A' || b > 'Z') && (b < '0' || b > '9'); s = s[:len(s)-1] {
 				b = s[len(s)-1]
 			}
 			return s

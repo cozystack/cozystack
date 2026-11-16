@@ -5,6 +5,7 @@ package tap
 
 import (
 	"context"
+	"regexp"
 	"testing"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -240,8 +241,27 @@ func TestParseConnectURL(t *testing.T) {
 	if _, err := parseConnectURL("ghcr.io/foo/bar", ""); err == nil {
 		t.Error("expected error for non-oci url")
 	}
+	// A malformed digest (not sha256:<64 hex>) is rejected.
 	if _, err := parseConnectURL("oci://ghcr.io/foo/bar@sha256:abc", ""); err == nil {
-		t.Error("expected error for digest ref")
+		t.Error("expected error for malformed digest ref")
+	}
+	// A valid digest pins the content: the tag is left empty (not defaulted to
+	// latest), mirroring the CLI's parseOCIRef.
+	const digest = "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+	d, err := parseConnectURL("oci://ghcr.io/foo/bar@"+digest, "")
+	if err != nil {
+		t.Fatalf("digest ref err: %v", err)
+	}
+	if d.URL != "oci://ghcr.io/foo/bar" || d.Tag != "" || d.Digest != digest || d.FluxSourceName != "tap-foo-bar" {
+		t.Fatalf("unexpected digest parse: %+v", d)
+	}
+	// A tag may precede the digest and is then informational.
+	td, err := parseConnectURL("oci://ghcr.io/foo/bar:v1@"+digest, "")
+	if err != nil {
+		t.Fatalf("tag+digest ref err: %v", err)
+	}
+	if td.Tag != "v1" || td.Digest != digest {
+		t.Fatalf("unexpected tag+digest parse: %+v", td)
 	}
 }
 
@@ -287,6 +307,144 @@ func TestCreateRepeatPreservesFinalizerAndForcesRematerialize(t *testing.T) {
 	}
 	if u.GetAnnotations()["apps.cozystack.io/tap-name"] != "tap-foo-bar" {
 		t.Error("repeat connect did not set the tap-name annotation")
+	}
+}
+
+func TestCreatePinsExplicitDigest(t *testing.T) {
+	const digest = "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+	r := fakeREST()
+	in := &corev1alpha1.Tap{Spec: corev1alpha1.TapSpec{URL: "oci://ghcr.io/foo/bar@" + digest}}
+	if _, err := r.Create(context.Background(), in, nil, nil); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	u, err := r.dyn.Resource(gvrOCIRepos).Namespace("cozy-system").Get(context.Background(), "tap-foo-bar", metav1.GetOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, _, _ := unstructured.NestedString(u.Object, "spec", "ref", "digest"); got != digest {
+		t.Errorf("explicit digest not pinned on the source: got %q", got)
+	}
+	// A digest-only connect must not also follow a tag.
+	if tag, found, _ := unstructured.NestedString(u.Object, "spec", "ref", "tag"); found && tag != "" {
+		t.Errorf("digest connect must not set a tag, got %q", tag)
+	}
+}
+
+func TestCreateRepeatPreservesVerifyAndResetsPin(t *testing.T) {
+	// A source connected earlier, pinned by the operator to a digest, with a
+	// signature-verification policy added by an admin. A repeat connect at a new
+	// tag must: preserve spec.verify (never silently downgrade trust), drop the
+	// operator's digest pin so the new tag re-resolves, and clear the pin and
+	// materialized-revision annotations so the operator re-pins and re-materializes.
+	const oldDigest = "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+	existing := ociRepoObj("tap-foo-bar")
+	_ = unstructured.SetNestedField(existing.Object, "oci://ghcr.io/foo/bar", "spec", "url")
+	_ = unstructured.SetNestedField(existing.Object, oldDigest, "spec", "ref", "digest")
+	_ = unstructured.SetNestedField(existing.Object, "v1", "spec", "ref", "tag")
+	_ = unstructured.SetNestedMap(existing.Object, map[string]any{
+		"provider":          "cosign",
+		"matchOIDCIdentity": []any{map[string]any{"issuer": "https://token.actions.githubusercontent.com", "subject": "https://github.com/org/repo/.github/workflows/release.yml@refs/tags/v1"}},
+	}, "spec", "verify")
+	_ = unstructured.SetNestedMap(existing.Object, map[string]any{"name": "pull-creds"}, "spec", "secretRef")
+	existing.SetFinalizers([]string{"apps.cozystack.io/tap-materializer"})
+	existing.SetAnnotations(map[string]string{
+		"apps.cozystack.io/materialized-revision": "v1@" + oldDigest,
+		"apps.cozystack.io/tap-pinned-digest":     oldDigest,
+	})
+	r := fakeREST(existing)
+
+	in := &corev1alpha1.Tap{Spec: corev1alpha1.TapSpec{URL: "oci://ghcr.io/foo/bar:v2"}}
+	if _, err := r.Create(context.Background(), in, nil, nil); err != nil {
+		t.Fatalf("repeat create: %v", err)
+	}
+	u, err := r.dyn.Resource(gvrOCIRepos).Namespace("cozy-system").Get(context.Background(), "tap-foo-bar", metav1.GetOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if prov, _, _ := unstructured.NestedString(u.Object, "spec", "verify", "provider"); prov != "cosign" {
+		t.Errorf("spec.verify was dropped on repeat connect: %+v", u.Object["spec"])
+	}
+	if name, _, _ := unstructured.NestedString(u.Object, "spec", "secretRef", "name"); name != "pull-creds" {
+		t.Errorf("spec.secretRef must be preserved on a repeat connect that omits a secret, got %q", name)
+	}
+	if tag, _, _ := unstructured.NestedString(u.Object, "spec", "ref", "tag"); tag != "v2" {
+		t.Errorf("tag not updated to v2, got %q", tag)
+	}
+	if d, found, _ := unstructured.NestedString(u.Object, "spec", "ref", "digest"); found && d != "" {
+		t.Errorf("operator digest pin must be dropped so the new tag re-resolves, got %q", d)
+	}
+	if _, ok := u.GetAnnotations()["apps.cozystack.io/tap-pinned-digest"]; ok {
+		t.Error("pinned-digest annotation must be cleared on re-connect")
+	}
+	if _, ok := u.GetAnnotations()["apps.cozystack.io/materialized-revision"]; ok {
+		t.Error("materialized-revision annotation must be cleared on re-connect")
+	}
+}
+
+func TestCreateSetsVerify(t *testing.T) {
+	r := fakeREST()
+	in := &corev1alpha1.Tap{Spec: corev1alpha1.TapSpec{
+		URL: "oci://ghcr.io/foo/bar:v1",
+		Verify: &corev1alpha1.TapVerify{
+			Issuer:  "https://token.actions.githubusercontent.com",
+			Subject: "https://github.com/org/repo/.github/workflows/release.yml@refs/tags/v1",
+		},
+	}}
+	if _, err := r.Create(context.Background(), in, nil, nil); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	u, err := r.dyn.Resource(gvrOCIRepos).Namespace("cozy-system").Get(context.Background(), "tap-foo-bar", metav1.GetOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if prov, _, _ := unstructured.NestedString(u.Object, "spec", "verify", "provider"); prov != "cosign" {
+		t.Errorf("verify.provider = %q, want cosign", prov)
+	}
+	ids, _, _ := unstructured.NestedSlice(u.Object, "spec", "verify", "matchOIDCIdentity")
+	if len(ids) != 1 {
+		t.Fatalf("expected one matchOIDCIdentity, got %v", ids)
+	}
+	id := ids[0].(map[string]any)
+	issuer, _ := id["issuer"].(string)
+	subject, _ := id["subject"].(string)
+	if issuer == "" || subject == "" {
+		t.Fatalf("identity matcher not set: %v", id)
+	}
+	// Flux evaluates these as regexps; they must be anchored exact matches so a
+	// superstring identity (e.g. a moved tag v10) is rejected.
+	wantIssuer := "https://token.actions.githubusercontent.com"
+	wantSubject := "https://github.com/org/repo/.github/workflows/release.yml@refs/tags/v1"
+	if ir := regexp.MustCompile(issuer); !ir.MatchString(wantIssuer) || ir.MatchString(wantIssuer+"x") {
+		t.Errorf("issuer must be an anchored exact match, got %q", issuer)
+	}
+	if sr := regexp.MustCompile(subject); !sr.MatchString(wantSubject) || sr.MatchString(wantSubject+"0") {
+		t.Errorf("subject must be an anchored exact match, got %q", subject)
+	}
+}
+
+func TestCreateVerifyRequiresBothIdentityFields(t *testing.T) {
+	r := fakeREST()
+	in := &corev1alpha1.Tap{Spec: corev1alpha1.TapSpec{
+		URL:    "oci://ghcr.io/foo/bar:v1",
+		Verify: &corev1alpha1.TapVerify{Issuer: "https://token.actions.githubusercontent.com"},
+	}}
+	if _, err := r.Create(context.Background(), in, nil, nil); !apierrors.IsBadRequest(err) {
+		t.Errorf("a keyless verify with only an issuer must be BadRequest, got %v", err)
+	}
+}
+
+func TestCreateVerifyRejectsNonCosignProvider(t *testing.T) {
+	r := fakeREST()
+	in := &corev1alpha1.Tap{Spec: corev1alpha1.TapSpec{
+		URL: "oci://ghcr.io/foo/bar:v1",
+		Verify: &corev1alpha1.TapVerify{
+			Provider: "notation",
+			Issuer:   "https://token.actions.githubusercontent.com",
+			Subject:  "https://github.com/org/repo/.github/workflows/release.yml@refs/tags/v1",
+		},
+	}}
+	if _, err := r.Create(context.Background(), in, nil, nil); !apierrors.IsBadRequest(err) {
+		t.Errorf("a non-cosign provider must be BadRequest (matchOIDCIdentity is cosign-only), got %v", err)
 	}
 }
 

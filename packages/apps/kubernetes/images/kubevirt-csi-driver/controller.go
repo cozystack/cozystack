@@ -424,7 +424,8 @@ func (w *WrappedControllerService) ControllerUnpublishVolume(ctx context.Context
 	pvc, err := w.infraClient.CoreV1().PersistentVolumeClaims(w.infraNamespace).Get(ctx, dvName, metav1.GetOptions{})
 	if err != nil {
 		if errors.IsNotFound(err) {
-			return &csi.ControllerUnpublishVolumeResponse{}, nil
+			// A failed PVC creation can still leave a hotplug entry in the VM.
+			return w.ControllerService.ControllerUnpublishVolume(ctx, req)
 		}
 		return nil, err
 	}

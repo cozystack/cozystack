@@ -23,6 +23,7 @@ import (
 
 	cozyv1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
 	"github.com/cozystack/cozystack/internal/marketplace/tapconst"
+	sourcev1 "github.com/fluxcd/source-controller/api/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -534,7 +535,7 @@ func TestValidateGitRef(t *testing.T) {
 
 func TestGenerateOCIRepository(t *testing.T) {
 	refMap := map[string]string{"tag": "v1.0", "digest": "sha256:abc123"}
-	obj, err := generateOCIRepository("my-repo", "oci://registry.example.com/repo", refMap, "")
+	obj, err := generateOCIRepository("my-repo", "oci://registry.example.com/repo", refMap, "", "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -560,10 +561,13 @@ func TestGenerateOCIRepository(t *testing.T) {
 	if obj.Spec.SecretRef != nil {
 		t.Errorf("expected SecretRef to be nil when secretName is empty, got %+v", obj.Spec.SecretRef)
 	}
+	if obj.Spec.CertSecretRef != nil {
+		t.Errorf("expected CertSecretRef to be nil when certSecretName is empty, got %+v", obj.Spec.CertSecretRef)
+	}
 }
 
 func TestGenerateOCIRepository_NoRef(t *testing.T) {
-	obj, err := generateOCIRepository("my-repo", "oci://registry.example.com/repo", map[string]string{}, "")
+	obj, err := generateOCIRepository("my-repo", "oci://registry.example.com/repo", map[string]string{}, "", "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -573,14 +577,14 @@ func TestGenerateOCIRepository_NoRef(t *testing.T) {
 }
 
 func TestGenerateOCIRepository_InvalidRef(t *testing.T) {
-	_, err := generateOCIRepository("my-repo", "oci://registry.example.com/repo", map[string]string{"branch": "main"}, "")
+	_, err := generateOCIRepository("my-repo", "oci://registry.example.com/repo", map[string]string{"branch": "main"}, "", "")
 	if err == nil {
 		t.Fatal("expected error for invalid OCI ref key, got nil")
 	}
 }
 
 func TestGenerateOCIRepository_WithSecret(t *testing.T) {
-	obj, err := generateOCIRepository("my-repo", "oci://registry.example.com/repo", map[string]string{"tag": "v1.0"}, "my-registry-creds")
+	obj, err := generateOCIRepository("my-repo", "oci://registry.example.com/repo", map[string]string{"tag": "v1.0"}, "my-registry-creds", "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -589,6 +593,147 @@ func TestGenerateOCIRepository_WithSecret(t *testing.T) {
 	}
 	if obj.Spec.SecretRef.Name != "my-registry-creds" {
 		t.Errorf("expected SecretRef.Name %q, got %q", "my-registry-creds", obj.Spec.SecretRef.Name)
+	}
+}
+
+func TestGenerateOCIRepository_WithCertSecret(t *testing.T) {
+	obj, err := generateOCIRepository("my-repo", "oci://registry.example.com/repo", map[string]string{"tag": "v1.0"}, "", "registry-ca")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if obj.Spec.CertSecretRef == nil {
+		t.Fatal("expected CertSecretRef to be set when certSecretName is non-empty")
+	}
+	if obj.Spec.CertSecretRef.Name != "registry-ca" {
+		t.Errorf("expected CertSecretRef.Name %q, got %q", "registry-ca", obj.Spec.CertSecretRef.Name)
+	}
+	if obj.Spec.SecretRef != nil {
+		t.Errorf("expected SecretRef to stay nil when only certSecretName is set, got %+v", obj.Spec.SecretRef)
+	}
+}
+
+func newSourceTestClient(t *testing.T, objs ...client.Object) client.Client {
+	t.Helper()
+	scheme := newTestScheme()
+	if err := sourcev1.AddToScheme(scheme); err != nil {
+		t.Fatalf("add source scheme: %v", err)
+	}
+	return fake.NewClientBuilder().WithScheme(scheme).WithObjects(objs...).Build()
+}
+
+// The operator rewrites the whole platform OCIRepository on every start, so a
+// certSecretRef patched onto the live object by hand is lost on the next
+// restart and source-controller then fails TLS against a registry behind a
+// private CA. The CA has to come from the operator's own arguments and survive
+// that update path, including a rename of the Secret when the CA is rotated.
+func TestInstallPlatformSourceResource_UpdateKeepsCertSecret(t *testing.T) {
+	existing := &sourcev1.OCIRepository{
+		ObjectMeta: metav1.ObjectMeta{Name: "cozystack-platform", Namespace: "cozy-system"},
+		Spec:       sourcev1.OCIRepositorySpec{URL: "oci://ghcr.io/cozystack/cozystack/cozystack-packages"},
+	}
+	k8sClient := newSourceTestClient(t, existing)
+
+	for _, certSecret := range []string{"registry-ca", "registry-ca-next"} {
+		if err := installPlatformSourceResource(context.Background(), k8sClient,
+			"oci://registry.internal:8083/cozystack/cozystack/cozystack-packages", "cozystack-platform",
+			"digest=sha256:abc123", "registry-creds", certSecret); err != nil {
+			t.Fatalf("installPlatformSourceResource: %v", err)
+		}
+	}
+
+	got := &sourcev1.OCIRepository{}
+	if err := k8sClient.Get(context.Background(), client.ObjectKey{Namespace: "cozy-system", Name: "cozystack-platform"}, got); err != nil {
+		t.Fatalf("get OCIRepository: %v", err)
+	}
+	if got.Spec.CertSecretRef == nil || got.Spec.CertSecretRef.Name != "registry-ca-next" {
+		t.Errorf("expected CertSecretRef registry-ca-next after update, got %+v", got.Spec.CertSecretRef)
+	}
+	if got.Spec.SecretRef == nil || got.Spec.SecretRef.Name != "registry-creds" {
+		t.Errorf("expected SecretRef registry-creds after update, got %+v", got.Spec.SecretRef)
+	}
+	if got.Spec.URL != "oci://registry.internal:8083/cozystack/cozystack/cozystack-packages" {
+		t.Errorf("expected URL to be repointed, got %q", got.Spec.URL)
+	}
+}
+
+// GitRepository has no certSecretRef: Flux reads a Git CA from the ca.crt key
+// of the secretRef Secret. Accepting the flag for a Git source would silently
+// drop the CA, so it must fail before anything is written.
+func TestInstallPlatformSourceResource_GitRejectsCertSecret(t *testing.T) {
+	k8sClient := newSourceTestClient(t)
+
+	err := installPlatformSourceResource(context.Background(), k8sClient,
+		"https://git.internal/cozystack/cozystack", "cozystack-platform", "branch=main", "git-creds", "git-ca")
+	if err == nil {
+		t.Fatal("expected an error for a cert secret on a Git platform source, got nil")
+	}
+	if !strings.Contains(err.Error(), "ca.crt") {
+		t.Errorf("expected the error to point at the ca.crt key of the source secret, got: %v", err)
+	}
+
+	list := &sourcev1.GitRepositoryList{}
+	if err := k8sClient.List(context.Background(), list); err != nil {
+		t.Fatalf("list GitRepositories: %v", err)
+	}
+	if len(list.Items) != 0 {
+		t.Errorf("expected no GitRepository to be written, got %d", len(list.Items))
+	}
+}
+
+// The Git guard runs on every start; one that misfires without a cert secret
+// would crash-loop the operator for every Git platform source.
+func TestInstallPlatformSourceResource_GitWithoutCertSecret(t *testing.T) {
+	for _, sourceURL := range []string{
+		"https://git.internal/cozystack/cozystack",
+		"ssh://git@git.internal/cozystack/cozystack",
+	} {
+		t.Run(sourceURL, func(t *testing.T) {
+			k8sClient := newSourceTestClient(t)
+
+			if err := installPlatformSourceResource(context.Background(), k8sClient,
+				sourceURL, "cozystack-platform", "branch=main", "git-creds", ""); err != nil {
+				t.Fatalf("installPlatformSourceResource: %v", err)
+			}
+
+			got := &sourcev1.GitRepository{}
+			if err := k8sClient.Get(context.Background(), client.ObjectKey{Namespace: "cozy-system", Name: "cozystack-platform"}, got); err != nil {
+				t.Fatalf("get GitRepository: %v", err)
+			}
+			if got.Spec.URL != sourceURL {
+				t.Errorf("expected URL %q, got %q", sourceURL, got.Spec.URL)
+			}
+			if got.Spec.SecretRef == nil || got.Spec.SecretRef.Name != "git-creds" {
+				t.Errorf("expected SecretRef git-creds, got %+v", got.Spec.SecretRef)
+			}
+		})
+	}
+}
+
+// Checked right after flag parsing: CRDs and Flux are installed before the
+// platform source, so a combination rejected only there would exit after a
+// partial install.
+func TestValidatePlatformSourceCertSecret(t *testing.T) {
+	tests := []struct {
+		name       string
+		sourceURL  string
+		certSecret string
+		wantErr    bool
+	}{
+		{name: "oci with cert secret", sourceURL: "oci://registry.internal:8083/cozystack-packages", certSecret: "registry-ca"},
+		{name: "oci without cert secret", sourceURL: "oci://registry.internal:8083/cozystack-packages"},
+		{name: "https git without cert secret", sourceURL: "https://git.internal/cozystack/cozystack"},
+		{name: "ssh git without cert secret", sourceURL: "ssh://git@git.internal/cozystack/cozystack"},
+		{name: "no source url", certSecret: "registry-ca"},
+		{name: "https git with cert secret", sourceURL: "https://git.internal/cozystack/cozystack", certSecret: "git-ca", wantErr: true},
+		{name: "ssh git with cert secret", sourceURL: "ssh://git@git.internal/cozystack/cozystack", certSecret: "git-ca", wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validatePlatformSourceCertSecret(tt.sourceURL, tt.certSecret)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("validatePlatformSourceCertSecret(%q, %q) error = %v, wantErr %v", tt.sourceURL, tt.certSecret, err, tt.wantErr)
+			}
+		})
 	}
 }
 

@@ -17,6 +17,7 @@ limitations under the License.
 package cmd
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -106,10 +107,13 @@ published. Source URL and revision are derived from git when not given.`,
 			if err != nil {
 				return err
 			}
-			printReport(rep, cmd.OutOrStdout())
+			printErr := printReport(rep, cmd.OutOrStdout())
 			if rep.HasErrors() {
 				errs, _, _ := rep.Counts()
-				return fmt.Errorf("refusing to push: validation failed with %d error(s) (use --skip-validate to override)", errs)
+				return errors.Join(fmt.Errorf("refusing to push: validation failed with %d error(s) (use --skip-validate to override)", errs), printErr)
+			}
+			if printErr != nil {
+				return fmt.Errorf("nothing was pushed: writing the validation report failed: %w", printErr)
 			}
 		}
 
@@ -129,7 +133,9 @@ published. Source URL and revision are derived from git when not given.`,
 		}
 
 		fluxArgs := buildFluxPushArgs(ref, packagesDir, source, revision, pushCmdFlags.reproducible)
-		fmt.Fprintf(cmd.OutOrStdout(), "Pushing %s (source=%s revision=%s)\n", ref, source, revision)
+		if _, err := fmt.Fprintf(cmd.OutOrStdout(), "Pushing %s (source=%s revision=%s)\n", ref, source, revision); err != nil {
+			return fmt.Errorf("nothing was pushed: writing the push status failed: %w", err)
+		}
 		flux := exec.Command("flux", fluxArgs...)
 		flux.Stdout = cmd.OutOrStdout()
 		flux.Stderr = cmd.ErrOrStderr()

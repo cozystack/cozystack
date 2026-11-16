@@ -32,13 +32,13 @@ const ConditionReasonRestoreInProgress = "RestoreInProgress"
 //
 // A backup must not start against an application a restore is rewriting. It
 // would capture a half-restored state at best, and on the CNPG path it does
-// worse: every BackupJob reconcile re-applies the Cluster's barman plugin, and
-// one landing between the restore re-rendering the Cluster with its new
-// serverName and the plugin being attached can put the restored cluster back
-// on the source's WAL prefix, where its recovery fails with "Expected empty
-// archive". Plan-created runs are the ones that hit this, since nothing else
-// looks at restores before creating a BackupJob.
-func activeRestoreTargeting(ctx context.Context, c client.Client, namespace string, app corev1.TypedLocalObjectReference) (string, error) {
+// worse: a BackupJob applies the Cluster's barman plugin before it creates
+// its Backup, and an apply landing between the restore re-rendering the
+// Cluster with its new serverName and the plugin being attached can put the
+// restored cluster back on the source's WAL prefix, where its recovery fails
+// with "Expected empty archive". Plan-created runs are the ones that hit
+// this, since nothing else looks at restores before creating a BackupJob.
+func activeRestoreTargeting(ctx context.Context, c client.Reader, namespace string, app corev1.TypedLocalObjectReference) (string, error) {
 	app = NormalizeApplicationRef(app)
 	list := &backupsv1alpha1.RestoreJobList{}
 	if err := c.List(ctx, list, client.InNamespace(namespace)); err != nil {
@@ -80,7 +80,7 @@ func activeRestoreTargeting(ctx context.Context, c client.Client, namespace stri
 // reads options.targetNamespace, so the option is looked at only when the
 // Backup's strategy is Velero — the CNPG and Job-based drivers ignore it and
 // restore in place.
-func restoreJobTarget(ctx context.Context, c client.Client, rj *backupsv1alpha1.RestoreJob) (corev1.TypedLocalObjectReference, bool, error) {
+func restoreJobTarget(ctx context.Context, c client.Reader, rj *backupsv1alpha1.RestoreJob) (corev1.TypedLocalObjectReference, bool, error) {
 	backup := &backupsv1alpha1.Backup{}
 	if err := c.Get(ctx, client.ObjectKey{Namespace: rj.Namespace, Name: rj.Spec.BackupRef.Name}, backup); err != nil {
 		if client.IgnoreNotFound(err) == nil {
@@ -130,13 +130,14 @@ func ptrString(s *string) string {
 	return *s
 }
 
-// holdForRestore keeps a BackupJob that has not started yet waiting while a
-// restore writes into its application. It stays non-terminal, so a scheduled
-// run still happens once the restore ends, only later than its slot.
+// holdForRestore keeps a BackupJob waiting while a restore writes into its
+// application: one that has not started yet, or a CNPG one about to write
+// its WAL archive destination. It stays non-terminal, so a scheduled run
+// still happens once the restore ends, only later than its slot.
 //
 // A failed status write is returned so the manager retries it with backoff.
-// The job is held either way, since nothing past the gate ran, but a hold
-// nobody can see reads as a run stuck for no reason.
+// The job is held either way, since it writes nothing past the hold, but a
+// hold nobody can see reads as a run stuck for no reason.
 func (r *BackupJobReconciler) holdForRestore(ctx context.Context, j *backupsv1alpha1.BackupJob, restore string) (ctrl.Result, error) {
 	if j.Status.Phase == backupsv1alpha1.BackupJobPhaseEmpty {
 		j.Status.Phase = backupsv1alpha1.BackupJobPhasePending

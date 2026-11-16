@@ -18,6 +18,7 @@ package operator
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	fluxmeta "github.com/fluxcd/pkg/apis/meta"
@@ -299,24 +300,6 @@ func TestDeleteRegistrationPackageLosesRaceToHandover(t *testing.T) {
 	}
 }
 
-func TestHasDefaultVariant(t *testing.T) {
-	with := &cozyv1alpha1.PackageSource{Spec: cozyv1alpha1.PackageSourceSpec{
-		Variants: []cozyv1alpha1.Variant{{Name: "big"}, {Name: "default"}},
-	}}
-	if !hasDefaultVariant(with) {
-		t.Error("expected a default variant to be detected")
-	}
-	without := &cozyv1alpha1.PackageSource{Spec: cozyv1alpha1.PackageSourceSpec{
-		Variants: []cozyv1alpha1.Variant{{Name: "only"}, {Name: "second"}},
-	}}
-	if hasDefaultVariant(without) {
-		t.Error("expected no default variant")
-	}
-	if hasDefaultVariant(&cozyv1alpha1.PackageSource{}) {
-		t.Error("expected no default variant for an empty source")
-	}
-}
-
 func TestPrivilegedInstallComponents(t *testing.T) {
 	ps := &cozyv1alpha1.PackageSource{Spec: cozyv1alpha1.PackageSourceSpec{
 		Variants: []cozyv1alpha1.Variant{{
@@ -337,18 +320,20 @@ func TestPrivilegedInstallComponents(t *testing.T) {
 	}
 }
 
-// TestReconcileRegistersApps asserts the happy path: a materialized tap creates
-// a tap-managed registration Package so the repository's apps register in the
-// catalog on connect, without a manual `cozypkg add`.
-func TestReconcileRegistersApps(t *testing.T) {
+// TestReconcileCreatesNoPackageOnConnect asserts that connecting a repository
+// materializes its PackageSource and nothing else: no Package (and so no
+// HelmRelease or ApplicationDefinition) is created on connect. Auto-registering
+// on connect ran a publisher's install chart under Flux's cluster-admin account
+// with no operator step (issue #4978); installing is now explicit via
+// `cozypkg add`.
+func TestReconcileCreatesNoPackageOnConnect(t *testing.T) {
 	scheme := tapScheme(t)
 	data, digest := tarGz(t, map[string]string{
 		// samplePS declares PackageSource "example.hello" with a default variant.
 		"packages/core/platform/sources/hello.yaml": samplePS,
 	})
-	repo := tapRepo(true)
 	cl := fake.NewClientBuilder().WithScheme(scheme).
-		WithObjects(repo).
+		WithObjects(tapRepo(true)).
 		WithStatusSubresource(&sourcev1.OCIRepository{}).
 		Build()
 
@@ -374,25 +359,57 @@ func TestReconcileRegistersApps(t *testing.T) {
 	if err := cl.Get(context.Background(), client.ObjectKey{Name: "example.hello"}, &cozyv1alpha1.PackageSource{}); err != nil {
 		t.Fatalf("PackageSource not materialized: %v", err)
 	}
-	// A tap-managed registration Package was created for it.
+	// No Package is created: connect installs nothing.
 	var pkg cozyv1alpha1.Package
-	if err := cl.Get(context.Background(), client.ObjectKey{Name: "example.hello"}, &pkg); err != nil {
-		t.Fatalf("registration Package not created: %v", err)
+	if err := cl.Get(context.Background(), client.ObjectKey{Name: "example.hello"}, &pkg); !apierrors.IsNotFound(err) {
+		t.Fatalf("connect must create no Package, got err=%v pkg=%+v", err, pkg)
 	}
-	if pkg.GetLabels()[tapconst.Label] != "true" {
-		t.Errorf("registration Package must be tap-managed (labelled), got %v", pkg.GetLabels())
+}
+
+// TestReconcileDoesNotRecreateDeletedPackage asserts that a Package the admin
+// removed (e.g. with `cozypkg del`) stays removed across a new source revision.
+// Auto-registration used to re-create it on every revision (the second effect in
+// issue #4978); with it gone the materializer never creates a Package at all.
+func TestReconcileDoesNotRecreateDeletedPackage(t *testing.T) {
+	scheme := tapScheme(t)
+	data, digest := tarGz(t, map[string]string{
+		"packages/core/platform/sources/hello.yaml": samplePS,
+	})
+	cur := data
+	cl := fake.NewClientBuilder().WithScheme(scheme).
+		WithObjects(tapRepo(true)).
+		WithStatusSubresource(&sourcev1.OCIRepository{}).
+		Build()
+	r := materializerFor(scheme, cl, record.NewFakeRecorder(10), &cur)
+
+	// Connect (rev1): materializes the PackageSource, creates no Package.
+	setArtifact(t, cl, digest, "rev1")
+	if _, err := r.Reconcile(context.Background(), req()); err != nil {
+		t.Fatalf("reconcile rev1: %v", err)
 	}
-	if pkg.GetAnnotations()[tapconst.SourceAnnotation] != repo.Name {
-		t.Errorf("registration Package must record its source, got %v", pkg.GetAnnotations())
+
+	// Admin installs then removes the app: a plain user Package appears and is
+	// then deleted with `cozypkg del`.
+	userPkg := &cozyv1alpha1.Package{ObjectMeta: metav1.ObjectMeta{Name: "example.hello"}}
+	if err := cl.Create(context.Background(), userPkg); err != nil {
+		t.Fatalf("create user Package: %v", err)
 	}
-	// Variant is left empty so the Package reconciler resolves it to "default"
-	// deterministically, rather than pinning whichever variant was listed first.
-	if pkg.Spec.Variant != "" {
-		t.Errorf("registration Package must leave Variant empty, got %q", pkg.Spec.Variant)
+	if err := cl.Delete(context.Background(), userPkg); err != nil {
+		t.Fatalf("delete user Package: %v", err)
 	}
-	// Owned by its PackageSource so a direct delete of the PackageSource GCs it.
-	if len(pkg.OwnerReferences) != 1 || pkg.OwnerReferences[0].Kind != "PackageSource" || pkg.OwnerReferences[0].Name != "example.hello" {
-		t.Errorf("registration Package must own-ref its PackageSource, got %+v", pkg.OwnerReferences)
+
+	// A new revision must not resurrect the deleted Package.
+	data2, digest2 := tarGz(t, map[string]string{
+		"packages/core/platform/sources/hello.yaml": samplePS,
+	})
+	cur = data2
+	setArtifact(t, cl, digest2, "rev2")
+	if _, err := r.Reconcile(context.Background(), req()); err != nil {
+		t.Fatalf("reconcile rev2: %v", err)
+	}
+	var pkg cozyv1alpha1.Package
+	if err := cl.Get(context.Background(), client.ObjectKey{Name: "example.hello"}, &pkg); !apierrors.IsNotFound(err) {
+		t.Fatalf("a removed Package must stay removed across revisions, got err=%v pkg=%+v", err, pkg)
 	}
 }
 
@@ -422,10 +439,10 @@ func setArtifact(t *testing.T, cl client.Client, digest, rev string) {
 }
 
 // TestReconcileLeavesUnmarkedPackage: an unmarked Package of the same name (a
-// user's `cozypkg add`, or one from before this version) means registration is
-// already satisfied. The reconcile must NOT error (which would hot-loop the whole
-// tap and re-pull the artifact every backoff), NOT adopt it, and NOT delete it;
-// the revision is stamped so the loop does not recur.
+// user's `cozypkg add`, or one from before this version) must be left untouched
+// by materialization. The reconcile must NOT error (which would hot-loop the
+// whole tap and re-pull the artifact every backoff), NOT adopt it, and NOT delete
+// it; the revision is stamped so the loop does not recur.
 func TestReconcileLeavesUnmarkedPackage(t *testing.T) {
 	scheme := tapScheme(t)
 	data, digest := tarGz(t, map[string]string{"packages/core/platform/sources/hello.yaml": samplePS})
@@ -517,5 +534,222 @@ func TestReconcileBlocksNameCollision(t *testing.T) {
 	}
 	if ps.GetLabels()[tapconst.Label] == "true" {
 		t.Error("the collision check must not overwrite the foreign PackageSource")
+	}
+}
+
+// A tag-following tap source must be pinned to the digest Flux resolved, so it
+// stops following a moved tag. The manifest digest is the part of the artifact
+// revision after '@' (source-controller formats an OCI tag revision as
+// '<tag>@<digest>').
+func TestReconcilePinsDigestFromTagRevision(t *testing.T) {
+	scheme := tapScheme(t)
+	data, digest := tarGz(t, map[string]string{"packages/core/platform/sources/hello.yaml": samplePS})
+	manifest := "sha256:" + strings.Repeat("a", 64)
+	repo := tapRepo(true)
+	repo.Spec.Reference = &sourcev1.OCIRepositoryRef{Tag: "v1"}
+	cl := fake.NewClientBuilder().WithScheme(scheme).
+		WithObjects(repo).
+		WithStatusSubresource(&sourcev1.OCIRepository{}).
+		Build()
+	setArtifact(t, cl, digest, "v1@"+manifest)
+
+	r := materializerFor(scheme, cl, record.NewFakeRecorder(10), &data)
+	if _, err := r.Reconcile(context.Background(), req()); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	var got sourcev1.OCIRepository
+	if err := cl.Get(context.Background(), req().NamespacedName, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Spec.Reference == nil || got.Spec.Reference.Digest != manifest {
+		t.Fatalf("expected ref.digest pinned to %q, got %+v", manifest, got.Spec.Reference)
+	}
+	if got.Spec.Reference.Tag != "v1" {
+		t.Errorf("tag must stay informational, got %q", got.Spec.Reference.Tag)
+	}
+	if got.Annotations[tapconst.PinnedDigestAnnotation] != manifest {
+		t.Errorf("expected pinned-digest annotation %q, got %v", manifest, got.Annotations)
+	}
+}
+
+// A user-supplied explicit digest (ref.digest set with no operator pin
+// annotation) must never be rewritten by the operator: the operator pins only
+// tag-following sources.
+func TestReconcileDoesNotRepinUserDigest(t *testing.T) {
+	scheme := tapScheme(t)
+	data, digest := tarGz(t, map[string]string{"packages/core/platform/sources/hello.yaml": samplePS})
+	userDigest := "sha256:" + strings.Repeat("c", 64)
+	repo := tapRepo(true)
+	repo.Spec.Reference = &sourcev1.OCIRepositoryRef{Digest: userDigest}
+	cl := fake.NewClientBuilder().WithScheme(scheme).
+		WithObjects(repo).
+		WithStatusSubresource(&sourcev1.OCIRepository{}).
+		Build()
+	// A digest-pinned source reports its revision as the bare digest.
+	setArtifact(t, cl, digest, userDigest)
+
+	r := materializerFor(scheme, cl, record.NewFakeRecorder(10), &data)
+	if _, err := r.Reconcile(context.Background(), req()); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	var got sourcev1.OCIRepository
+	if err := cl.Get(context.Background(), req().NamespacedName, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Spec.Reference.Digest != userDigest {
+		t.Errorf("a user-supplied digest must be left as is, got %q", got.Spec.Reference.Digest)
+	}
+	if got.Annotations[tapconst.PinnedDigestAnnotation] != "" {
+		t.Errorf("the operator must not claim a user-supplied digest as its own pin, got %v", got.Annotations)
+	}
+}
+
+// Once pinned, the source reports its revision as the bare digest; a further
+// reconcile must keep the same pin rather than thrash it.
+func TestReconcilePinIsIdempotent(t *testing.T) {
+	scheme := tapScheme(t)
+	data, digest := tarGz(t, map[string]string{"packages/core/platform/sources/hello.yaml": samplePS})
+	manifest := "sha256:" + strings.Repeat("a", 64)
+	repo := tapRepo(true)
+	repo.Spec.Reference = &sourcev1.OCIRepositoryRef{Tag: "v1"}
+	cl := fake.NewClientBuilder().WithScheme(scheme).
+		WithObjects(repo).
+		WithStatusSubresource(&sourcev1.OCIRepository{}).
+		Build()
+	setArtifact(t, cl, digest, "v1@"+manifest)
+	r := materializerFor(scheme, cl, record.NewFakeRecorder(10), &data)
+	if _, err := r.Reconcile(context.Background(), req()); err != nil {
+		t.Fatalf("first reconcile: %v", err)
+	}
+	// Flux re-resolves by digest now and reports the bare-digest revision.
+	setArtifact(t, cl, digest, manifest)
+	if _, err := r.Reconcile(context.Background(), req()); err != nil {
+		t.Fatalf("second reconcile: %v", err)
+	}
+
+	var got sourcev1.OCIRepository
+	if err := cl.Get(context.Background(), req().NamespacedName, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Spec.Reference.Digest != manifest {
+		t.Errorf("pin must be stable, got %q", got.Spec.Reference.Digest)
+	}
+	if got.Annotations[tapconst.MaterializedRevisionAnnotation] != manifest {
+		t.Errorf("expected materialized revision stamped to the bare digest, got %q", got.Annotations[tapconst.MaterializedRevisionAnnotation])
+	}
+}
+
+// On a re-connect to a new tag, status.artifact still describes the previous
+// tag's content until source-controller re-resolves. The reconciler must not
+// materialize and pin that stale revision (issue #4979): spec.ref.Tag is v2 but
+// the revision is still v1@<digest>, so nothing is pinned until the revision
+// belongs to the tag now followed.
+func TestReconcileDoesNotPinStaleArtifactOnReconnect(t *testing.T) {
+	scheme := tapScheme(t)
+	data, digest := tarGz(t, map[string]string{"packages/core/platform/sources/hello.yaml": samplePS})
+	oldManifest := "sha256:" + strings.Repeat("a", 64)
+	repo := tapRepo(true)
+	repo.Spec.Reference = &sourcev1.OCIRepositoryRef{Tag: "v2"} // re-connect cleared the pin, requested v2
+	cl := fake.NewClientBuilder().WithScheme(scheme).
+		WithObjects(repo).
+		WithStatusSubresource(&sourcev1.OCIRepository{}).
+		Build()
+	setArtifact(t, cl, digest, "v1@"+oldManifest) // still the old tag's revision
+
+	r := materializerFor(scheme, cl, record.NewFakeRecorder(10), &data)
+	if _, err := r.Reconcile(context.Background(), req()); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	var got sourcev1.OCIRepository
+	if err := cl.Get(context.Background(), req().NamespacedName, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Spec.Reference.Digest != "" {
+		t.Errorf("must not pin the previous tag's digest while the artifact is stale, got %q", got.Spec.Reference.Digest)
+	}
+	if got.Annotations[tapconst.PinnedDigestAnnotation] != "" {
+		t.Errorf("must not record a pin from a stale artifact, got %v", got.Annotations)
+	}
+	if got.Annotations[tapconst.MaterializedRevisionAnnotation] != "" {
+		t.Errorf("must not stamp a revision from a stale artifact, got %v", got.Annotations)
+	}
+}
+
+// A tap materialized before digest pinning existed already has its
+// materialized-revision equal to the artifact revision, so Reconcile would
+// short-circuit. It must still pin the current digest before that early return,
+// so moving the tag upstream does not pull new content on the next revision
+// (issue #4979).
+func TestReconcilePinsPreUpgradeTapBeforeEarlyReturn(t *testing.T) {
+	scheme := tapScheme(t)
+	data, digest := tarGz(t, map[string]string{"packages/core/platform/sources/hello.yaml": samplePS})
+	manifest := "sha256:" + strings.Repeat("b", 64)
+	repo := tapRepo(true)
+	repo.Spec.Reference = &sourcev1.OCIRepositoryRef{Tag: "v1"} // tag-only, never pinned
+	repo.Annotations = map[string]string{tapconst.MaterializedRevisionAnnotation: "v1@" + manifest}
+	cl := fake.NewClientBuilder().WithScheme(scheme).
+		WithObjects(repo).
+		WithStatusSubresource(&sourcev1.OCIRepository{}).
+		Build()
+	setArtifact(t, cl, digest, "v1@"+manifest)
+
+	r := materializerFor(scheme, cl, record.NewFakeRecorder(10), &data)
+	if _, err := r.Reconcile(context.Background(), req()); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	var got sourcev1.OCIRepository
+	if err := cl.Get(context.Background(), req().NamespacedName, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Spec.Reference == nil || got.Spec.Reference.Digest != manifest {
+		t.Fatalf("a pre-upgrade tap must be pinned to the current digest, got %+v", got.Spec.Reference)
+	}
+	if got.Annotations[tapconst.PinnedDigestAnnotation] != manifest {
+		t.Errorf("expected pinned-digest annotation %q, got %v", manifest, got.Annotations)
+	}
+}
+
+// artifactReady must also wait when status.observedGeneration lags
+// metadata.generation: the artifact may still describe the spec from before the
+// current re-connect, so pinning from it would pin stale content even when the
+// revision happens to match the tag. This isolates the generation conjunct of the
+// gate (the revision here matches the tag, so only the generation check can block).
+func TestReconcileWaitsWhenObservedGenerationLags(t *testing.T) {
+	scheme := tapScheme(t)
+	data, digest := tarGz(t, map[string]string{"packages/core/platform/sources/hello.yaml": samplePS})
+	manifest := "sha256:" + strings.Repeat("d", 64)
+	repo := tapRepo(true)
+	repo.Generation = 2 // spec advanced by a re-connect
+	repo.Spec.Reference = &sourcev1.OCIRepositoryRef{Tag: "v1"}
+	cl := fake.NewClientBuilder().WithScheme(scheme).
+		WithObjects(repo).
+		WithStatusSubresource(&sourcev1.OCIRepository{}).
+		Build()
+
+	var live sourcev1.OCIRepository
+	if err := cl.Get(context.Background(), req().NamespacedName, &live); err != nil {
+		t.Fatal(err)
+	}
+	live.Status.Artifact = &fluxmeta.Artifact{URL: "http://example.com/a.tar.gz", Digest: digest, Revision: "v1@" + manifest}
+	live.Status.ObservedGeneration = 1 // source-controller has not caught up to generation 2
+	if err := cl.Status().Update(context.Background(), &live); err != nil {
+		t.Fatal(err)
+	}
+
+	r := materializerFor(scheme, cl, record.NewFakeRecorder(10), &data)
+	if _, err := r.Reconcile(context.Background(), req()); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	var got sourcev1.OCIRepository
+	if err := cl.Get(context.Background(), req().NamespacedName, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Spec.Reference.Digest != "" {
+		t.Errorf("must not pin while observedGeneration lags generation, got %q", got.Spec.Reference.Digest)
+	}
+	if got.Annotations[tapconst.PinnedDigestAnnotation] != "" {
+		t.Errorf("must not record a pin while observedGeneration lags, got %v", got.Annotations)
 	}
 }

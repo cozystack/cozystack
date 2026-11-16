@@ -83,7 +83,7 @@ func suspendManagedFields(manager string, op metav1.ManagedFieldsOperationType) 
 		Operation:  op,
 		APIVersion: helmv2.GroupVersion.String(),
 		FieldsType: "FieldsV1",
-		FieldsV1:   &metav1.FieldsV1{Raw: []byte(`{"f:spec":{"f:suspend":{}}}`)},
+		FieldsV1:   metav1.NewFieldsV1(`{"f:spec":{"f:suspend":{}}}`),
 	}}
 }
 
@@ -286,7 +286,7 @@ func TestOwnsSuspensionManagedFields(t *testing.T) {
 		{"no managed fields", nil, false},
 		{"plunger apply of other fields", []metav1.ManagedFieldsEntry{{
 			Manager: suspendFieldManager, Operation: metav1.ManagedFieldsOperationApply,
-			FieldsType: "FieldsV1", FieldsV1: &metav1.FieldsV1{Raw: []byte(`{"f:spec":{"f:chart":{}}}`)},
+			FieldsType: "FieldsV1", FieldsV1: metav1.NewFieldsV1(`{"f:spec":{"f:chart":{}}}`),
 		}}, false},
 	}
 	for _, tc := range cases {

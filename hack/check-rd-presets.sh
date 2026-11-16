@@ -73,7 +73,7 @@ legacy_hits=$(grep -rEn 'defaultingSanitize.*\(list "(nano|micro|small|medium|la
 if [ -n "$legacy_hits" ]; then
   echo "FAIL: hardcoded legacy preset literals in chart templates:" >&2
   echo "$legacy_hits" >&2
-  echo "Replace with the instance-type form from docs/operations/resource-presets.md." >&2
+  echo "Replace with the instance-type form from https://cozystack.io/docs/v1/guides/resource-management/." >&2
   exit 1
 fi
 echo "No hardcoded legacy preset literals in chart templates."
