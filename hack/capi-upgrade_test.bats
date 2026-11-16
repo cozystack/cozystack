@@ -283,6 +283,13 @@ accepted_patches() {
   jq --exit-status 'all(.providers[]; .spec.fetchConfig.selector.matchLabels == {"provider.cluster.x-k8s.io/version": .spec.version})' "$CAPI_TEST_STATE"
 }
 
+@test "a bridge selector with extra expressions is narrowed to the version label" {
+  fixture '.providers |= with_entries(.value.spec.version = ("v1.13.8-" + (if .key == "cluster-api" then "core" else "bootstrap" end)) | .value.status.installedVersion = .value.spec.version | .value.spec.fetchConfig.selector = {matchLabels: {"provider.cluster.x-k8s.io/version": .value.spec.version}, matchExpressions: [{key: "core-components", operator: "Exists"}]})'
+  run bash "$UPGRADE_SCRIPT"
+  [ "$status" -eq 0 ]
+  jq --exit-status 'all(.providers[]; .spec.fetchConfig.selector == {matchLabels: {"provider.cluster.x-k8s.io/version": .spec.version}})' "$CAPI_TEST_STATE"
+}
+
 @test "already selected bridges repair missing fetchConfig without changing other spec fields" {
   fixture '.providers |= with_entries(.value.spec.version = ("v1.13.8-" + (if .key == "cluster-api" then "core" else "bootstrap" end)) | .value.status.installedVersion = .value.spec.version | .value.spec.deployment = {replicas: 2} | del(.value.spec.fetchConfig))'
   run bash "$UPGRADE_SCRIPT"

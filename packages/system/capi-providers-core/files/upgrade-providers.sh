@@ -83,7 +83,7 @@ fi
 bridge_selector_needs_repair() {
   jq --exit-status --arg version "$BRIDGE_VERSION-$2" '
     .spec.version == $version and
-    .spec.fetchConfig.selector.matchLabels != {"provider.cluster.x-k8s.io/version": $version}' <<< "$1" >/dev/null
+    .spec.fetchConfig.selector != {matchLabels: {"provider.cluster.x-k8s.io/version": $version}}' <<< "$1" >/dev/null
 }
 
 if ((target_minor - core_minor <= 3 && target_minor - bootstrap_minor <= 3)) &&
