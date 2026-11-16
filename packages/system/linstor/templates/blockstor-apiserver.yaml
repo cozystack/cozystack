@@ -53,13 +53,15 @@ subjects:
     namespace: {{ .Release.Namespace }}
 ---
 {{- /*
-   Secrets stay in this namespace: the only Secret the apiserver touches is
-   the encryption passphrase, read on `encryption enter-passphrase` and
-   written on `create-passphrase` / `modify-passphrase`, and it always
-   lives here. It is read past controller-runtime's cache, so no informer
-   lists or watches Secrets and a get here is all the read needs. A
-   cluster-wide grant would let this ServiceAccount read or rewrite any
-   tenant's credentials. */}}
+   The encryption endpoints read and rewrite the keyring (add-, modify-,
+   remove-passphrase), create it and the generated unlock Secret when no
+   passphrase Secret is named, and read the passphrase Secret to unlock.
+   All of it is in this namespace and read past controller-runtime's cache,
+   so no informer lists or watches Secrets. get and update name the three
+   Secrets, because this namespace is shared with piraeus, whose TLS keys
+   stay unreadable. create cannot be limited by name, so it is granted on
+   its own; the ValidatingAdmissionPolicy in blockstor-secrets-policy.yaml
+   holds it to the two Secrets blockstor creates. */}}
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
@@ -68,7 +70,11 @@ metadata:
 rules:
   - apiGroups: [""]
     resources: [secrets]
-    verbs: [get, create, update, patch]
+    resourceNames: {{ include "blockstor.secretNames" . }}
+    verbs: [get, update]
+  - apiGroups: [""]
+    resources: [secrets]
+    verbs: [create]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding

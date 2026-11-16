@@ -68,6 +68,42 @@ subjects:
     name: blockstor-controller
     namespace: {{ .Release.Namespace }}
 ---
+{{- /*
+   On its first pass the controller creates the keyring from the passphrase
+   Secret, and later drops superseded slots from it, so it reads both and
+   writes the keyring, past the cache. get and update name the three Secrets
+   blockstor uses, because this namespace is shared with piraeus, whose TLS
+   keys stay unreadable. create cannot be limited by name, so it is granted
+   on its own; the ValidatingAdmissionPolicy in blockstor-secrets-policy.yaml
+   holds it to the two Secrets blockstor creates. */}}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: blockstor-controller-secrets
+  namespace: {{ .Release.Namespace }}
+rules:
+  - apiGroups: [""]
+    resources: [secrets]
+    resourceNames: {{ include "blockstor.secretNames" . }}
+    verbs: [get, update]
+  - apiGroups: [""]
+    resources: [secrets]
+    verbs: [create]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: blockstor-controller-secrets
+  namespace: {{ .Release.Namespace }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: blockstor-controller-secrets
+subjects:
+  - kind: ServiceAccount
+    name: blockstor-controller
+    namespace: {{ .Release.Namespace }}
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -109,6 +145,13 @@ spec:
             - --health-probe-bind-address=:8081
             - --metrics-bind-address=0
             - --leader-elect=false
+          {{- /*
+             The keyring and the passphrase Secret are looked up in the
+             controller's namespace, which otherwise defaults to
+             blockstor-system. */}}
+          env:
+            - name: POD_NAMESPACE
+              valueFrom: {fieldRef: {fieldPath: metadata.namespace}}
           ports:
             - {name: health, containerPort: 8081}
           readinessProbe:
