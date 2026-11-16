@@ -119,9 +119,10 @@ evictionSoftMemory: {{ $evictionSoftMemory | quote }}
 {{- /* Resolve this pool's worker image (schematicID, version) from .Values.osImage
        — the same selection templates/nodegroup.yaml uses for the boot disk — so the
        in-guest Talos installer image matches the OS this pool actually booted.
-       Defaults to the pool's talos.*; a pool with osImage.builtin / osImage.factory
-       pins its own flavor and version so an in-guest upgrade does not flip it back to
-       the pool default. */}}
+       Defaults to the resolved talos.*, the WorkerClass's merged under the pool's; an
+       osImage.builtin / osImage.factory source, the pool's or its WorkerClass's, pins
+       its own flavor and version so an in-guest upgrade does not flip it back to that
+       default. */}}
 {{- /* Shared with nodegroup.yaml's boot-disk source rather than mirrored here:
        a disk booted from one Talos flavor and an installer pinned to another is
        the silently-broken pairing this chart's support matrix was factored out
@@ -132,6 +133,7 @@ evictionSoftMemory: {{ $evictionSoftMemory | quote }}
 {{- include "kubernetes-nodes.resolveOsImage" (dict
       "osImage" $group.osImage
       "talos" $root.Values.talos
+      "substrate" ($root.Values.substrate | default "kubevirt")
       "out" $resolvedImage
       "groupName" (include "kubernetes-nodes.groupName" $root)) }}
 {{- $talosSchematicID := $resolvedImage.schematicID }}

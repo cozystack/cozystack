@@ -58,3 +58,15 @@ tests:
           path: spec.template.spec.containers[0].command[2]
           pattern: 'image: factory\.talos\.dev/installer/cafebabe:v1\.15\.0'
         documentSelector: {path: kind, value: Job}
+
+  - it: talos.installerRepository is shell-escaped so it cannot execute in the reconcile-Job heredoc
+    set:
+      talos:
+        installerRepository: 'registry.example/a$(id)b`id`c\d'
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'image: registry\.example/a\\\$\(id\)b\\`id\\`c\\\\d/'
+        documentSelector:
+          path: kind
+          value: Job

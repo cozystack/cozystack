@@ -36,3 +36,16 @@ tests:
         documentSelector:
           path: kind
           value: Job
+
+  - it: keeps the pool's overrides on a pool that names a Talos WorkerClass
+    set:
+      workerClassName: talos
+      talos.sysctls:
+        user.max_user_namespaces: "11255"
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: '\n {10}sysctls:\n {12}"user.max_user_namespaces": "11255"\n {10}network:'
+        documentSelector:
+          path: kind
+          value: Job

@@ -80,6 +80,8 @@ tests:
       network:
         name: myvpc
       substrate: proxmox
+      proxmox:
+        templateTags: [capmox-template, talos]
     asserts:
       - failedTemplate:
           errorPattern: 'substrate proxmox workers are not'
@@ -248,6 +250,8 @@ tests:
     set:
       routeTable: to-internet
       substrate: proxmox
+      proxmox:
+        templateTags: [capmox-template, talos]
     asserts:
       - failedTemplate:
           errorPattern: 'routeTable "to-internet" applies to kubevirt workers'

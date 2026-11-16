@@ -9,9 +9,9 @@ load test_helper
 
 REPO_ROOT="$(cd "$(dirname "${BATS_TEST_FILENAME:-$0}")/.." && pwd)"
 SCRIPT="$REPO_ROOT/hack/proxmox-talos-template.sh"
-VALUES="$REPO_ROOT/packages/apps/kubernetes-nodes/values.yaml"
+VALUES="$REPO_ROOT/packages/apps/kubernetes-nodes/files/worker-defaults.json"
 
-chart() { sed -n "/^talos:/,/^[^ #]/s/^  $1: \"\(.*\)\"$/\1/p" "$VALUES"; }
+chart() { yq --unwrapScalar ".talos.$1" "$VALUES"; }
 
 # Stubs for the hypervisor side of the program. Each call to qm and curl is
 # logged, so a test can tell what ran and, as importantly, what did not.

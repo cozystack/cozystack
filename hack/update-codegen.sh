@@ -54,6 +54,7 @@ BACKUPS_CORE_CRDDIR=packages/system/backup-controller/definitions
 BACKUPSTRATEGY_CRDDIR=packages/system/backupstrategy-controller/definitions
 MIGRATION_CRDDIR=packages/system/migration-controller/definitions
 WORKER_CRDDIR=packages/system/kubernetes-worker-classes-crds/definitions
+cp internal/kubernetesworker/config/defaults.json packages/apps/kubernetes-nodes/files/worker-defaults.json
 
 trap 'rm -rf ${TMPDIR}' EXIT
 

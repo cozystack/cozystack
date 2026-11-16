@@ -347,3 +347,61 @@ func TestChartPoolResourceEqualsTheEmbeddedDescriptor(t *testing.T) {
 		t.Fatalf("packages/system/kubernetes-worker-classes/files/pool-resource.json differs from resource.json; run make -C packages/apps/kubernetes-nodes generate")
 	}
 }
+
+func TestPoolSchemaPreservesClassAndFamilyPresence(t *testing.T) {
+	raw, err := os.ReadFile("../../../packages/apps/kubernetes-nodes/values.schema.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var schema map[string]any
+	if err = json.Unmarshal(raw, &schema); err != nil {
+		t.Fatal(err)
+	}
+	properties := schema["properties"].(map[string]any)
+	for _, field := range []string{"workerClassName", "talos", "osImage"} {
+		property, exists := properties[field].(map[string]any)
+		if !exists {
+			t.Fatalf("schema has no %s", field)
+		}
+		if def, hasDefault := property["default"]; hasDefault && (field == "workerClassName" || !reflect.DeepEqual(def, map[string]any{})) {
+			t.Errorf("%s has a schema default that destroys presence", field)
+		}
+	}
+	proxmox := properties["proxmox"].(map[string]any)["properties"].(map[string]any)
+	if def, hasDefault := proxmox["templateTags"].(map[string]any)["default"]; hasDefault && !reflect.DeepEqual(def, []any{}) {
+		t.Errorf("proxmox.templateTags has a schema default that destroys presence")
+	}
+	// The API fills these in on every read, so a client writing a pool back
+	// stores them; only values that already mean "not set" may appear here.
+	defaults := map[string]any{}
+	for field, raw := range properties["talos"].(map[string]any)["properties"].(map[string]any) {
+		if def, hasDefault := raw.(map[string]any)["default"]; hasDefault {
+			defaults[field] = def
+		}
+	}
+	if want := map[string]any{"registryMirrors": map[string]any{}, "imageFactoryCA": "", "sysctls": map[string]any{}}; !reflect.DeepEqual(defaults, want) {
+		t.Fatalf("talos defaults %v, want only %v", defaults, want)
+	}
+	talosClass := &workers.WorkerClassSpec{}
+	if err = json.Unmarshal([]byte(`{"bootstrap":"talos","talos":{"registryMirrors":{"ghcr.io":{"endpoints":["https://baseline.example.com"]}}}}`), talosClass); err != nil {
+		t.Fatal(err)
+	}
+	for _, class := range []*workers.WorkerClassSpec{nil, talosClass, {Bootstrap: workers.BootstrapKairos}} {
+		pool := map[string]any{}
+		if class != nil {
+			pool["workerClassName"] = "custom"
+		}
+		want, err := Resolve(class, pool)
+		if err != nil {
+			t.Fatal(err)
+		}
+		pool["talos"], pool["osImage"] = defaults, map[string]any{}
+		got, err := Resolve(class, pool)
+		if err != nil {
+			t.Fatalf("with the read defaults: %v", err)
+		}
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("with the read defaults resolved %+v, want %+v", got, want)
+		}
+	}
+}

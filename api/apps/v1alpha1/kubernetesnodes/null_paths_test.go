@@ -10,7 +10,7 @@ import (
 
 // A client built on these types writes every field it does not omit. The
 // paths it writes as null are listed in testdata/null-paths.json, which the
-// pool admission tests read as the inputs that must mean "not set";
+// pool admission and chart tests read as the inputs that must mean "not set";
 // a new null here fails until they cover it too.
 func TestTypedClientWritesOnlyTheListedNulls(t *testing.T) {
 	raw, err := os.ReadFile("testdata/null-paths.json")

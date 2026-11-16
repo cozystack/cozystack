@@ -59,6 +59,6 @@ spec_doc() {
     # talos_spec_block writes imageFactoryURL by hand. If the chart ever renames
     # it, the CR would be rejected only at e2e time, and this file is the cheapest
     # place to notice.
-    yq -e '.talos | has("imageFactoryURL")' packages/apps/kubernetes-nodes/values.yaml >/dev/null \
-        || { echo "packages/apps/kubernetes-nodes/values.yaml has no talos.imageFactoryURL; talos_spec_block would emit a key the pool chart ignores" >&2; exit 1; }
+    yq -e '.properties.talos.properties | has("imageFactoryURL")' packages/apps/kubernetes-nodes/values.schema.json >/dev/null \
+        || { echo "packages/apps/kubernetes-nodes/values.schema.json declares no talos.imageFactoryURL; talos_spec_block would emit a key the pool chart ignores" >&2; exit 1; }
 }

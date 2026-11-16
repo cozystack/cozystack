@@ -142,8 +142,9 @@ func TestMovingOffAGoneClassIsDeniedWithItsReason(t *testing.T) {
 	}
 }
 
-// A null talos member from the typed client or a stored legacy null means
-// "not set", and admission must not refuse it.
+// The validating webhook sees a write after the API's null normalisation,
+// which leaves these optional members in place: a null from the typed client
+// or a stored legacy null must be admitted as not set.
 func TestNullTalosMembersAreAdmittedAsUnset(t *testing.T) {
 	v := &Validator{Reader: reader(t)}
 	for _, tc := range []struct {

@@ -49,10 +49,10 @@
   # Best-effort: never fail the suite on the band-aid. Remove once tenant workers
   # no longer bulk-pull the OS image from the public internet in CI.
   local sid ver
-  sid=$(yq '.talos.schematicID' packages/apps/kubernetes-nodes/values.yaml 2>/dev/null)
-  ver=$(yq '.talos.version' packages/apps/kubernetes-nodes/values.yaml 2>/dev/null)
+  sid=$(yq --input-format=json --output-format=yaml --unwrapScalar '.talos.schematicID' packages/apps/kubernetes-nodes/files/worker-defaults.json 2>/dev/null)
+  ver=$(yq --input-format=json --output-format=yaml --unwrapScalar '.talos.version' packages/apps/kubernetes-nodes/files/worker-defaults.json 2>/dev/null)
   if [ -z "$sid" ] || [ "$sid" = "null" ] || [ -z "$ver" ] || [ "$ver" = "null" ]; then
-    echo "WARNING: could not read talos.schematicID/version from packages/apps/kubernetes-nodes/values.yaml — skipping mirror (fallback to public factory)"
+    echo "WARNING: could not read talos.schematicID/version from packages/apps/kubernetes-nodes/files/worker-defaults.json — skipping mirror (fallback to public factory)"
     return 0
   fi
   # The CiliumClusterwideNetworkPolicy in the manifest is intentionally NOT applied

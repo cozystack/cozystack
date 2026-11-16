@@ -45,6 +45,8 @@ type Reconciler struct {
 }
 
 func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+	// The chart resolves built-in names without reading the object, so deleting
+	// one breaks no render and they get no finalizer.
 	if config.Builtin(req.Name) {
 		return ctrl.Result{}, nil
 	}
