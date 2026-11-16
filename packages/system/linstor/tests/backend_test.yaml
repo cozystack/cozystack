@@ -149,6 +149,40 @@ tests:
       - hasDocuments:
           count: 0
 
+  - it: fails the render when one blockstor image is pinned to another release
+    templates:
+      - templates/backend-guard.yaml
+    set:
+      backend: blockstor
+      blockstorController.image.tag: 0.2.1@sha256:0000000000000000000000000000000000000000000000000000000000000000
+      blockstorApiserver.image.tag: 9.9.9@sha256:0000000000000000000000000000000000000000000000000000000000000000
+      blockstorSatellite.image.tag: 9.9.9@sha256:0000000000000000000000000000000000000000000000000000000000000000
+    asserts:
+      - failedTemplate:
+          errorMessage: 'linstor: the blockstor images must share one release, got controller "0.2.1", apiserver "9.9.9", satellite "9.9.9"'
+
+  # Each component image has its own digest; only the release tag is shared.
+  - it: accepts blockstor images of one release with distinct digests
+    templates:
+      - templates/backend-guard.yaml
+    set:
+      backend: blockstor
+      blockstorController.image.tag: 0.3.0@sha256:1111111111111111111111111111111111111111111111111111111111111111
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  # The LINSTOR backend renders none of these images.
+  - it: does not check the blockstor image release under the LINSTOR backend
+    templates:
+      - templates/backend-guard.yaml
+    set:
+      backend: linstor
+      blockstorController.image.tag: 0.2.1
+    asserts:
+      - hasDocuments:
+          count: 0
+
   # drbd-reactor in the piraeus satellite pod reads DRBD state from the kernel,
   # which is the same under either control plane, so its metrics and the alerts
   # built on them stay. The controller scrape targets the Java controller, which
