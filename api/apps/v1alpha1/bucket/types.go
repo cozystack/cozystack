@@ -25,6 +25,9 @@ type ConfigSpec struct {
 	// Deploys the web UI (s3manager) with its Service and its Ingress or HTTPRoute at `<bucket>.<tenant host>`. Set to `false` to run the bucket without them.
 	// +kubebuilder:default:=true
 	Ui bool `json:"ui"`
+	// Serves the bucket's objects to anyone without credentials at `<endpoint>/<bucket>/<key>`. Anonymous callers can read objects but cannot list the bucket or write to it.
+	// +kubebuilder:default:=false
+	PublicRead bool `json:"publicRead"`
 	// Users configuration map.
 	// +kubebuilder:default:={}
 	Users map[string]User `json:"users,omitempty"`

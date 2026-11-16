@@ -9,6 +9,16 @@
   top-level resources falls back to resourcesPreset.
 */}}
 {{- $sentinel := .Values.sentinel | default dict -}}
+{{- /*
+  A lone Redis pod has no replica to promote, so three Sentinels would only
+  watch it. One Sentinel still lets the operator find the master (its quorum is
+  replicas/2+1, so 1). The operator gives the Sentinel Deployment a PDB with
+  minAvailable 1 whenever Redis has two replicas or fewer, which on a single
+  Sentinel would block every node drain, so that PDB is dropped with it; the
+  operator does not delete a PDB it stops managing, hence
+  hooks/sentinel-pdb.yaml.
+*/}}
+{{- $sentinelReplicas := include "redis.sentinelReplicas" . | int -}}
 {{- $sentinelPreset := $sentinel.resourcesPreset | default .Values.resourcesPreset -}}
 {{- $sentinelResources := .Values.resources -}}
 {{- if or $sentinel.resources $sentinel.resourcesPreset -}}
@@ -65,7 +75,10 @@ spec:
     # pods they keep no RDB, only a sentinel.conf the init container rewrites
     # on every start, so a chart rollback to an older engine is safe here.
     image: {{ $redisImage | quote }}
-    replicas: 3
+    replicas: {{ $sentinelReplicas }}
+    {{- if eq $sentinelReplicas 1 }}
+    disablePodDisruptionBudget: true
+    {{- end }}
     resources: {{- include "cozy-lib.resources.defaultingSanitize" (list $sentinelPreset $sentinelResources $) | nindent 6 }}
   redis:
     image: {{ $redisImage | quote }}
@@ -103,8 +116,41 @@ spec:
       - loglevel notice
       {{- if not .Values.size }}
       - appendonly no
+      {{- end }}
+      {{- /* The operator applies these lines with CONFIG SET on every reconcile and never
+             resets a line that disappears, so each one is always rendered with an explicit
+             value: switching back to the default must reach the running pods too. The
+             schedule is the Redis 7 and 8 default. */}}
+      {{- if and .Values.size .Values.snapshots }}
+      - save 3600 1 300 100 60 10000
+      {{- else }}
       - save ""
       {{- end }}
+      {{- $maxmemory := 0 }}
+      {{- if not (kindIs "invalid" .Values.maxmemory) }}
+      {{-   $maxmemoryBytes := include "cozy-lib.resources.toFloat" (.Values.maxmemory | toString) | float64 }}
+      {{- /* Checked before the int64 cast, which would truncate a sub-byte quantity such
+             as 512m (0.512 bytes) or -512m to 0, and Redis reads 0 as no limit. */}}
+      {{-   if lt $maxmemoryBytes 0.0 }}
+      {{-     fail (printf "maxmemory (%v) must not be negative" .Values.maxmemory) }}
+      {{-   end }}
+      {{-   if ne (floor $maxmemoryBytes) $maxmemoryBytes }}
+      {{-     fail (printf "maxmemory (%v) must be a whole number of bytes, e.g. 512Mi rather than 512m (millibytes)" .Values.maxmemory) }}
+      {{-   end }}
+      {{-   $maxmemory = $maxmemoryBytes | int64 }}
+      {{-   $redisResources := include "cozy-lib.resources.defaultingSanitize" (list .Values.resourcesPreset .Values.resources $) | fromYaml }}
+      {{-   $memoryRequest := include "cozy-lib.resources.toFloat" (dig "requests" "memory" "0" $redisResources | toString) | float64 }}
+      {{- /* The operator compares maxmemory with 90% of the pod's memory request
+             (reservedPodMemoryPercent) and silently skips the line when it is larger. */}}
+      {{-   $allowed := mulf $memoryRequest 0.9 | int64 }}
+      {{-   if gt $maxmemory $allowed }}
+      {{-     fail (printf "maxmemory (%v, %d bytes) must be at most 90%% of the Redis memory request (%d bytes): the operator ignores a larger value" .Values.maxmemory $maxmemory $allowed) }}
+      {{-   end }}
+      {{- end }}
+      {{- /* The operator sends these in list order, and lowering maxmemory below the
+             dataset evicts at once, so the policy has to be in place first. */}}
+      - maxmemory-policy {{ .Values.maxmemoryPolicy | default "noeviction" }}
+      - maxmemory {{ $maxmemory }}
       {{- /* A master with `replicas` pods has replicas-1 replicas, so a requirement of
              `replicas` or more can never be met and the master would refuse every write. */}}
       {{- if and (not (kindIs "invalid" .Values.minReplicasToWrite)) (ge (.Values.minReplicasToWrite | int) (.Values.replicas | int)) }}
@@ -152,8 +198,8 @@ metadata:
   labels:
     workloads.cozystack.io/resource-preset: {{ $sentinelPreset | quote }}
 spec:
-  minReplicas: 2
-  replicas: 3
+  minReplicas: {{ ternary 1 2 (eq $sentinelReplicas 1) }}
+  replicas: {{ $sentinelReplicas }}
   kind: redis
   type: sentinel
   selector:

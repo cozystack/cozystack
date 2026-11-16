@@ -35,7 +35,7 @@ Similarly, never propose edits to:
 
 Each commit must follow [Conventional Commits](https://www.conventionalcommits.org/) format: `type(scope): brief description`.
 
-Valid types: `feat`, `fix`, `docs`, `style`, `refactor`, `perf`, `test`, `build`, `ci`, `chore`.
+Valid types: `feat`, `fix`, `security` (a fix that comes through a security advisory), `docs`, `style`, `refactor`, `perf`, `test`, `build`, `ci`, `chore`.
 
 Valid scopes:
 

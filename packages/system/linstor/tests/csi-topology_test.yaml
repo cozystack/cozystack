@@ -34,7 +34,7 @@ tests:
   # Until there is, the re-check on a bump is a human obligation, stated in
   # templates/cluster.yaml beside the list.
   #
-  # The list was last verified complete against piraeus-operator v2.10.2:
+  # The list was last verified complete against piraeus-operator v2.12.1:
   # eleven upstream flags plus --strict-topology.
   - it: the restated argument list is complete
     template: templates/cluster.yaml

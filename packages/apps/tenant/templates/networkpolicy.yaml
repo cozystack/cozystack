@@ -259,6 +259,20 @@ spec:
     - ports:
       - port: "8443"
         protocol: TCP
+---
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  # The whole namespace, as for linstor-gui: the ingress controller also
+  # has to reach the ACME HTTP-01 solver pods cert-manager starts there.
+  name: allow-to-observability-proxy
+  namespace: {{ include "tenant.name" . }}
+spec:
+  endpointSelector: {}
+  egress:
+  - toEndpoints:
+      - matchLabels:
+          "k8s:io.kubernetes.pod.namespace": cozy-observability-proxy
 {{- if .Values.monitoring }}
 ---
 apiVersion: cilium.io/v2
