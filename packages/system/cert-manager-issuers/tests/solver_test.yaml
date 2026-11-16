@@ -228,10 +228,14 @@ tests:
         gateway-class-name: "  cloudflare-tunnel  "
         gateway-edge-classes: cloudflare-tunnel
     asserts:
-      - documentIndex: 0
+      - documentSelector:
+          path: metadata.name
+          value: letsencrypt-prod
         notExists:
           path: spec.acme.solvers[0].http01.gatewayHTTPRoute.parentRefs[0].sectionName
-      - documentIndex: 1
+      - documentSelector:
+          path: metadata.name
+          value: letsencrypt-stage
         notExists:
           path: spec.acme.solvers[0].http01.gatewayHTTPRoute.parentRefs[0].sectionName
 

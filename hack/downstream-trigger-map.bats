@@ -35,8 +35,9 @@
 # a human's job, and reviewers should not assume CI did it for them.
 #
 # A docs-only PR skips builds and E2E, but the `checks` job still runs the Bats
-# lane. Otherwise editing this map, or another document audited by a unit
-# contract, would exempt the changed input from its own guard.
+# lane whenever a docs/ path changed. Otherwise editing this map, or another
+# document audited by a unit contract, would exempt the changed input from its
+# own guard.
 
 load test_helper
 
@@ -117,9 +118,18 @@ map_section() {
 
   [ "$job_if" = "!contains(github.event.pull_request.labels.*.name, 'release')" ]
   [ "$code_if" = "needs.plan.outputs.code == 'true'" ]
-  [ "$docs_if" = "needs.plan.outputs.code == 'false'" ]
+  [ "$docs_if" = "needs.plan.outputs.code == 'false' && needs.plan.outputs.docs == 'true'" ]
   [ "$docs_run" = 'make bats-unit-tests' ]
   [ "$code_run" = 'make unit-tests test-controllers test-controllers-envtest -j4 -k --output-sync=target' ]
+
+  # `code` is false for the CI-only tools too, so the docs lane is keyed on a
+  # docs/ path being present, not on `code` alone. Pin that the output means
+  # exactly that and that Bats gets installed for it.
+  plan_run=$(yq -r '.jobs.plan.steps[] | select(.id == "p") | .run' "$WORKFLOW")
+  printf '%s\n' "$plan_run" | grep -qF "if grep -qE '^docs/' /tmp/changed_norenames.txt; then"
+  [ "$(yq -r '.jobs.plan.outputs.docs' "$WORKFLOW")" = '${{ steps.p.outputs.docs }}' ]
+  toolchain_if=$(yq -r '.jobs.checks.steps[] | select(.name == "Set up test toolchain") | .if' "$WORKFLOW")
+  [ "$toolchain_if" = "needs.plan.outputs.code == 'true' || needs.plan.outputs.docs == 'true'" ]
 }
 
 @test "the trigger map and the PR-template checklist list the same repositories" {

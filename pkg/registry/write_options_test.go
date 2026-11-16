@@ -17,7 +17,9 @@ limitations under the License.
 package registry
 
 import (
+	"encoding/json"
 	"reflect"
+	"strings"
 	"testing"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -26,7 +28,6 @@ import (
 
 func TestClientWriteOptionsPreserveAPISemantics(t *testing.T) {
 	grace := int64(7)
-	orphan := true
 	propagation := metav1.DeletePropagationForeground
 	uid := types.UID("expected-uid")
 	rv := "42"
@@ -74,10 +75,19 @@ func TestClientWriteOptionsPreserveAPISemantics(t *testing.T) {
 		t.Fatalf("conversion mutated API options: create=%#v update=%#v delete=%#v", create, update, deleteOptions)
 	}
 
-	orphanDelete := &metav1.DeleteOptions{OrphanDependents: &orphan, DryRun: []string{metav1.DryRunAll}}
+	// orphanDependents is deprecated in Go but still accepted on the wire,
+	// which is how a raw-only option reaches the registry.
+	orphanDelete := &metav1.DeleteOptions{}
+	if err := json.Unmarshal([]byte(`{"orphanDependents":true,"dryRun":["All"]}`), orphanDelete); err != nil {
+		t.Fatal(err)
+	}
 	orphanExpected := orphanDelete.DeepCopy()
-	if got := ClientDeleteOptions(orphanDelete).AsDeleteOptions(); !reflect.DeepEqual(got, orphanExpected) {
+	got := ClientDeleteOptions(orphanDelete).AsDeleteOptions()
+	if !reflect.DeepEqual(got, orphanExpected) {
 		t.Fatalf("raw-only delete option lost: got %#v, want %#v", got, orphanExpected)
+	}
+	if wire, err := json.Marshal(got); err != nil || !strings.Contains(string(wire), `"orphanDependents":true`) {
+		t.Fatalf("converted delete options = %s (%v), want orphanDependents kept", wire, err)
 	}
 	if !reflect.DeepEqual(orphanDelete, orphanExpected) {
 		t.Fatalf("raw-only delete conversion mutated input: got %#v, want %#v", orphanDelete, orphanExpected)

@@ -1,0 +1,80 @@
+suite: chart-managed scheduled backup takes five-field and six-field cron
+
+# CNPG parses the ScheduledBackup schedule with robfig/cron v1 Parse, which
+# takes the first field as seconds and accepts five fields with only a
+# warning, so an unconverted "5 * * * *" would run every minute.
+
+templates:
+  - templates/backup.yaml
+
+release:
+  name: pg-test
+  namespace: tenant-test
+
+tests:
+  - it: prepends a zero seconds field to a standard five-field schedule
+    set:
+      backup:
+        enabled: true
+        schedule: "5 * * * *"
+    asserts:
+      - equal:
+          path: spec.schedule
+          value: "0 5 * * * *"
+
+  - it: joins the fields of a five-field schedule with single spaces
+    set:
+      backup:
+        enabled: true
+        schedule: " 0  2 * *\t* "
+    asserts:
+      - equal:
+          path: spec.schedule
+          value: "0 0 2 * * *"
+
+  - it: passes a six-field schedule through unchanged
+    set:
+      backup:
+        enabled: true
+        schedule: "0 5 * * * *"
+    asserts:
+      - equal:
+          path: spec.schedule
+          value: "0 5 * * * *"
+
+  - it: passes a descriptor through unchanged
+    set:
+      backup:
+        enabled: true
+        schedule: "@every 6h"
+    asserts:
+      - equal:
+          path: spec.schedule
+          value: "@every 6h"
+
+  - it: refuses a schedule with four fields
+    set:
+      backup:
+        enabled: true
+        schedule: "5 * * *"
+    asserts:
+      - failedTemplate:
+          errorMessage: 'postgres: backup.schedule "5 * * *" is not a cron schedule with 5 or 6 fields (it has 4). Use a standard five-field cron such as "0 2 * * *", a six-field cron with leading seconds such as "0 0 2 * * *", or a descriptor such as "@daily".'
+
+  - it: refuses a schedule with seven fields
+    set:
+      backup:
+        enabled: true
+        schedule: "0 0 2 * * * 2026"
+    asserts:
+      - failedTemplate:
+          errorMessage: 'postgres: backup.schedule "0 0 2 * * * 2026" is not a cron schedule with 5 or 6 fields (it has 7). Use a standard five-field cron such as "0 2 * * *", a six-field cron with leading seconds such as "0 0 2 * * *", or a descriptor such as "@daily".'
+
+  - it: refuses a schedule of only spaces
+    set:
+      backup:
+        enabled: true
+        schedule: "   "
+    asserts:
+      - failedTemplate:
+          errorMessage: 'postgres: backup.schedule "   " is not a cron schedule with 5 or 6 fields (it has 0). Use a standard five-field cron such as "0 2 * * *", a six-field cron with leading seconds such as "0 0 2 * * *", or a descriptor such as "@daily".'

@@ -9,6 +9,7 @@ apiVersion: cert-manager.io/v1
 kind: Certificate
 metadata:
   name: {{ include "piraeus-operator.fullname" . }}
+  namespace: {{ .Release.Namespace }}
   labels:
   {{- include "piraeus-operator.labels" . | nindent 4 }}
 spec:
@@ -36,6 +37,7 @@ apiVersion: v1
 kind: Secret
 metadata:
   name: {{ include "piraeus-operator.certifcateName" . }}
+  namespace: {{ .Release.Namespace }}
   labels:
     {{- include "piraeus-operator.labels" . | nindent 4 }}
 type: kubernetes.io/tls
