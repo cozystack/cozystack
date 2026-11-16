@@ -1,0 +1,42 @@
+suite: admission deployment
+release:
+  name: kubernetes-worker-classes
+  namespace: cozy-system
+templates:
+  - templates/deployment.yaml
+tests:
+  - it: refuses a default class the controller would reject at startup
+    set:
+      defaultWorkerClass: Bad/Class
+    asserts:
+      - failedTemplate:
+          errorPattern: 'defaultWorkerClass "Bad/Class" must name a WorkerClass'
+  - it: passes a valid default class through
+    set:
+      defaultWorkerClass: acme-talos
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --default-worker-class=acme-talos
+  - it: spreads the replicas across nodes so one node failure leaves admission serving
+    asserts:
+      - equal:
+          path: spec.template.spec.affinity.podAntiAffinity.preferredDuringSchedulingIgnoredDuringExecution[0].podAffinityTerm
+          value:
+            topologyKey: kubernetes.io/hostname
+            labelSelector:
+              matchLabels:
+                app.kubernetes.io/name: kubernetes-worker-classes
+  - it: accepts a default class name of the longest allowed length
+    set:
+      defaultWorkerClass: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --default-worker-class=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+  - it: refuses a default class name longer than Kubernetes allows
+    set:
+      defaultWorkerClass: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaab
+    asserts:
+      - failedTemplate:
+          errorPattern: 'must name a WorkerClass'

@@ -30,6 +30,7 @@ bundles:
     - cozystack.kubeovn-webhook
     - cozystack.kubernetes-application
     - cozystack.kubernetes-nodes-application
+    - cozystack.kubernetes-worker-classes
     - cozystack.kubernetes-worker-image
     - cozystack.kuberture
     - cozystack.linstor-gui

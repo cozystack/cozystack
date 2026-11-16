@@ -1,0 +1,15 @@
+suite: WorkerClass CRD survives package removal
+templates:
+  - templates/crds.yaml
+tests:
+  - it: retains the CRD and custom classes
+    asserts:
+      - equal:
+          path: kind
+          value: CustomResourceDefinition
+      - equal:
+          path: metadata.name
+          value: workerclasses.cozystack.io
+      - equal:
+          path: metadata.annotations["helm.sh/resource-policy"]
+          value: keep

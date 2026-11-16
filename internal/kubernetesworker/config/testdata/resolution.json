@@ -1,0 +1,1165 @@
+[
+  {
+    "name": "legacy factory defaults",
+    "pool": {
+      "version": "v1.35"
+    },
+    "version": "v1.13.6",
+    "schematicID": "ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515",
+    "source": "factory",
+    "modules": []
+  },
+  {
+    "name": "baseline and partial tenant scalar",
+    "class": {
+      "bootstrap": "talos",
+      "talos": {
+        "version": "v1.13.7",
+        "imageFactoryURL": "https://baseline.example.com"
+      }
+    },
+    "pool": {
+      "workerClassName": "custom",
+      "version": "v1.35",
+      "talos": {
+        "schematicID": "tenant123"
+      }
+    },
+    "version": "v1.13.7",
+    "schematicID": "tenant123",
+    "source": "factory",
+    "modules": []
+  },
+  {
+    "name": "explicit empty scalar rejected",
+    "class": {
+      "bootstrap": "talos",
+      "talos": {
+        "version": "v1.13.7"
+      }
+    },
+    "pool": {
+      "workerClassName": "custom",
+      "talos": {
+        "version": ""
+      }
+    },
+    "error": "version \"\""
+  },
+  {
+    "name": "uppercase pre-release rejected as the render rejects it",
+    "class": {
+      "bootstrap": "talos",
+      "talos": {
+        "version": "v1.13.6-RC1"
+      }
+    },
+    "pool": {
+      "workerClassName": "custom"
+    },
+    "error": "version \"v1.13.6-RC1\""
+  },
+  {
+    "name": "module baseline cleared",
+    "class": {
+      "bootstrap": "talos",
+      "kernelModules": [
+        {
+          "name": "nvme_tcp"
+        }
+      ]
+    },
+    "pool": {
+      "workerClassName": "custom",
+      "kernelModules": []
+    },
+    "version": "v1.13.6",
+    "schematicID": "ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515",
+    "source": "factory",
+    "modules": []
+  },
+  {
+    "name": "pool modules replace the class list without inheriting its parameters",
+    "class": {
+      "bootstrap": "talos",
+      "kernelModules": [
+        {
+          "name": "nvidia",
+          "parameters": [
+            "NVreg_NvLinkDisable=1"
+          ]
+        }
+      ]
+    },
+    "pool": {
+      "workerClassName": "custom",
+      "kernelModules": [
+        {
+          "name": "i915"
+        }
+      ]
+    },
+    "version": "v1.13.6",
+    "schematicID": "ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515",
+    "source": "factory",
+    "modules": [
+      "i915"
+    ],
+    "moduleParameters": {}
+  },
+  {
+    "name": "automatic NVIDIA when lists absent",
+    "class": {
+      "bootstrap": "talos"
+    },
+    "pool": {
+      "workerClassName": "custom",
+      "gpus": [
+        {
+          "name": "nvidia.com/GH200"
+        }
+      ]
+    },
+    "version": "v1.13.6",
+    "schematicID": "ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515",
+    "source": "factory",
+    "modules": [
+      "nvidia",
+      "nvidia_uvm",
+      "nvidia_drm",
+      "nvidia_modeset"
+    ],
+    "moduleParameters": {
+      "nvidia": [
+        "NVreg_NvLinkDisable=1"
+      ]
+    }
+  },
+  {
+    "name": "an empty osImage keeps the class builtin",
+    "class": {
+      "bootstrap": "talos",
+      "substrates": {
+        "kubevirt": {
+          "osImage": {
+            "builtin": {
+              "version": "v1.13.6",
+              "schematicID": "fixed123"
+            }
+          }
+        }
+      }
+    },
+    "pool": {
+      "workerClassName": "custom",
+      "osImage": {}
+    },
+    "version": "v1.13.6",
+    "schematicID": "fixed123",
+    "source": "builtin",
+    "modules": []
+  },
+  {
+    "name": "fixed builtin matching empty overrides",
+    "class": {
+      "bootstrap": "talos",
+      "substrates": {
+        "kubevirt": {
+          "osImage": {
+            "builtin": {
+              "version": "v1.13.6",
+              "schematicID": "fixed123"
+            }
+          }
+        }
+      }
+    },
+    "pool": {
+      "workerClassName": "custom",
+      "talos": {
+        "schematicID": "fixed123"
+      },
+      "osImage": {
+        "builtin": {}
+      }
+    },
+    "version": "v1.13.6",
+    "schematicID": "fixed123",
+    "source": "builtin",
+    "modules": []
+  },
+  {
+    "name": "fixed builtin version conflict",
+    "class": {
+      "bootstrap": "talos",
+      "substrates": {
+        "kubevirt": {
+          "osImage": {
+            "builtin": {
+              "version": "v1.13.6",
+              "schematicID": "fixed123"
+            }
+          }
+        }
+      }
+    },
+    "pool": {
+      "workerClassName": "custom",
+      "osImage": {
+        "builtin": {
+          "version": "v1.13.7"
+        }
+      }
+    },
+    "error": "osImage conflicts with the fixed builtin image/version/schematic contract"
+  },
+  {
+    "name": "fixed builtin schematic conflict",
+    "class": {
+      "bootstrap": "talos",
+      "substrates": {
+        "kubevirt": {
+          "osImage": {
+            "builtin": {
+              "version": "v1.13.6",
+              "schematicID": "fixed123"
+            }
+          }
+        }
+      }
+    },
+    "pool": {
+      "workerClassName": "custom",
+      "osImage": {
+        "builtin": {
+          "schematicID": "other456"
+        }
+      }
+    },
+    "error": "osImage conflicts with the fixed builtin image/version/schematic contract"
+  },
+  {
+    "name": "factory source override fallback",
+    "class": {
+      "bootstrap": "talos",
+      "talos": {
+        "version": "v1.13.7",
+        "schematicID": "class123"
+      },
+      "substrates": {
+        "kubevirt": {
+          "osImage": {
+            "factory": {
+              "version": "v1.13.8"
+            }
+          }
+        }
+      }
+    },
+    "pool": {
+      "workerClassName": "custom",
+      "osImage": {
+        "factory": {
+          "version": "",
+          "schematicID": "",
+          "imageFactoryURL": "https://tenant.example.com"
+        }
+      }
+    },
+    "version": "v1.13.7",
+    "schematicID": "class123",
+    "source": "factory",
+    "modules": []
+  },
+  {
+    "name": "proxmox fixed matching",
+    "class": {
+      "bootstrap": "talos",
+      "talos": {
+        "version": "v1.13.6",
+        "schematicID": "fixed123"
+      },
+      "substrates": {
+        "proxmox": {
+          "templateTags": [
+            "template"
+          ]
+        }
+      }
+    },
+    "pool": {
+      "workerClassName": "custom",
+      "substrate": "proxmox"
+    },
+    "version": "v1.13.6",
+    "schematicID": "fixed123",
+    "source": "proxmox",
+    "modules": []
+  },
+  {
+    "name": "proxmox template override conflict",
+    "class": {
+      "bootstrap": "talos",
+      "talos": {
+        "version": "v1.13.6",
+        "schematicID": "fixed123"
+      },
+      "substrates": {
+        "proxmox": {
+          "templateTags": [
+            "template"
+          ]
+        }
+      }
+    },
+    "pool": {
+      "workerClassName": "custom",
+      "substrate": "proxmox",
+      "proxmox": {
+        "templateTags": [
+          "other"
+        ]
+      }
+    },
+    "error": "proxmox.templateTags or talos version/schematic conflicts with"
+  },
+  {
+    "name": "proxmox fixed template talos version conflict",
+    "class": {
+      "bootstrap": "talos",
+      "talos": {
+        "version": "v1.13.6",
+        "schematicID": "fixed123"
+      },
+      "substrates": {
+        "proxmox": {
+          "templateTags": [
+            "template"
+          ]
+        }
+      }
+    },
+    "pool": {
+      "workerClassName": "custom",
+      "substrate": "proxmox",
+      "proxmox": {
+        "templateTags": [
+          "template"
+        ]
+      },
+      "talos": {
+        "version": "v1.13.7"
+      }
+    },
+    "error": "proxmox.templateTags or talos version/schematic conflicts with"
+  },
+  {
+    "name": "proxmox fixed template schematic conflict",
+    "class": {
+      "bootstrap": "talos",
+      "talos": {
+        "version": "v1.13.6",
+        "schematicID": "fixed123"
+      },
+      "substrates": {
+        "proxmox": {
+          "templateTags": [
+            "template"
+          ]
+        }
+      }
+    },
+    "pool": {
+      "workerClassName": "custom",
+      "substrate": "proxmox",
+      "proxmox": {
+        "templateTags": [
+          "template"
+        ]
+      },
+      "talos": {
+        "schematicID": "other456"
+      }
+    },
+    "error": "proxmox.templateTags or talos version/schematic conflicts with"
+  },
+  {
+    "name": "talos SSH keys rejected",
+    "class": {
+      "bootstrap": "talos"
+    },
+    "pool": {
+      "workerClassName": "custom",
+      "sshKeys": [
+        "ssh-ed25519 AAAA"
+      ]
+    },
+    "error": "Talos has no SSH server"
+  },
+  {
+    "name": "kairos ignores no manufactured Talos defaults",
+    "class": {
+      "bootstrap": "kairos"
+    },
+    "pool": {
+      "workerClassName": "custom",
+      "version": "v1.35",
+      "sshKeys": [
+        "ssh-ed25519 AAAA"
+      ]
+    },
+    "source": "kairos",
+    "modules": []
+  },
+  {
+    "name": "kairos refuses Talos settings",
+    "class": {
+      "bootstrap": "kairos"
+    },
+    "pool": {
+      "workerClassName": "custom",
+      "talos": {
+        "version": "v1.13.6"
+      }
+    },
+    "error": "talos is Talos-specific and unsupported on Kairos"
+  },
+  {
+    "name": "kairos refuses multiple keys",
+    "class": {
+      "bootstrap": "kairos"
+    },
+    "pool": {
+      "workerClassName": "custom",
+      "sshKeys": [
+        "one",
+        "two"
+      ]
+    },
+    "error": "the Kairos bootstrap provider authorizes a single key"
+  },
+  {
+    "name": "kairos fixed minor conflict",
+    "class": {
+      "bootstrap": "kairos",
+      "image": {
+        "kubernetesVersion": "v1.34.9",
+        "reference": "registry.example.com/worker@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+      }
+    },
+    "pool": {
+      "workerClassName": "custom",
+      "version": "v1.35"
+    },
+    "error": "minor differs from the pool's version v1.35"
+  },
+  {
+    "name": "an empty registryMirrors keeps the class mirrors",
+    "class": {
+      "bootstrap": "talos",
+      "talos": {
+        "registryMirrors": {
+          "ghcr.io": {
+            "endpoints": [
+              "https://baseline.example.com"
+            ]
+          }
+        }
+      }
+    },
+    "pool": {
+      "workerClassName": "custom",
+      "talos": {
+        "registryMirrors": {}
+      }
+    },
+    "version": "v1.13.6",
+    "schematicID": "ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515",
+    "source": "factory",
+    "modules": [],
+    "mirrors": {
+      "ghcr.io": {
+        "endpoints": [
+          "https://baseline.example.com"
+        ]
+      }
+    }
+  },
+  {
+    "name": "both source branches refused",
+    "class": {
+      "bootstrap": "talos"
+    },
+    "pool": {
+      "workerClassName": "custom",
+      "osImage": {
+        "factory": {},
+        "builtin": {}
+      }
+    },
+    "error": "set only one of osImage.builtin or osImage.factory"
+  },
+  {
+    "name": "module name validation",
+    "class": {
+      "bootstrap": "talos"
+    },
+    "pool": {
+      "workerClassName": "custom",
+      "kernelModules": [
+        {
+          "name": "nvme$(id)"
+        }
+      ]
+    },
+    "error": "invalid kernelModules name \"nvme"
+  },
+  {
+    "name": "module parameter validation",
+    "class": {
+      "bootstrap": "talos"
+    },
+    "pool": {
+      "workerClassName": "custom",
+      "kernelModules": [
+        {
+          "name": "nvme_tcp",
+          "parameters": [
+            "bad$(id)"
+          ]
+        }
+      ]
+    },
+    "error": "invalid kernelModules parameter \"bad"
+  },
+  {
+    "name": "legacy static HTTP schematic alias",
+    "pool": {
+      "version": "v1.35",
+      "talos": {
+        "version": "v1.13.6",
+        "schematicID": "custom-id",
+        "imageFactoryURL": "https://factory.example.com",
+        "installerRepository": "registry.example.com/installer"
+      }
+    },
+    "version": "v1.13.6",
+    "schematicID": "custom-id",
+    "source": "factory",
+    "modules": []
+  },
+  {
+    "name": "classified static HTTP schematic alias",
+    "class": {
+      "bootstrap": "talos"
+    },
+    "pool": {
+      "workerClassName": "talos",
+      "version": "v1.35",
+      "talos": {
+        "version": "v1.13.6",
+        "schematicID": "custom-id",
+        "imageFactoryURL": "https://factory.example.com",
+        "installerRepository": "registry.example.com/installer"
+      }
+    },
+    "version": "v1.13.6",
+    "schematicID": "custom-id",
+    "source": "factory",
+    "modules": []
+  },
+  {
+    "name": "source version supersedes an unused empty fallback",
+    "class": {
+      "bootstrap": "talos"
+    },
+    "pool": {
+      "workerClassName": "talos",
+      "version": "v1.35",
+      "talos": {
+        "version": ""
+      },
+      "osImage": {
+        "factory": {
+          "version": "v1.13.6"
+        }
+      }
+    },
+    "version": "v1.13.6",
+    "schematicID": "ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515",
+    "source": "factory",
+    "modules": []
+  },
+  {
+    "name": "source schematic supersedes an unused invalid fallback",
+    "pool": {
+      "version": "v1.35",
+      "talos": {
+        "schematicID": "../unused"
+      },
+      "osImage": {
+        "factory": {
+          "schematicID": "custom-id"
+        }
+      }
+    },
+    "version": "v1.13.6",
+    "schematicID": "custom-id",
+    "source": "factory",
+    "modules": []
+  },
+  {
+    "name": "factory URL requires a hostname",
+    "pool": {
+      "version": "v1.35",
+      "talos": {
+        "imageFactoryURL": "https:///"
+      }
+    },
+    "error": "imageFactoryURL \"https:///\""
+  },
+  {
+    "name": "factory URL refuses unquoted path whitespace",
+    "pool": {
+      "version": "v1.35",
+      "talos": {
+        "imageFactoryURL": "https://factory.example.com/a b"
+      }
+    },
+    "error": "imageFactoryURL \"https://factory.example.com/a b\""
+  },
+  {
+    "name": "builtin ignores an unused empty HTTP URL",
+    "pool": {
+      "version": "v1.35",
+      "talos": {
+        "imageFactoryURL": ""
+      },
+      "osImage": {
+        "builtin": {}
+      }
+    },
+    "version": "v1.13.6",
+    "schematicID": "ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515",
+    "source": "builtin",
+    "modules": []
+  },
+  {
+    "name": "Proxmox has no HTTP import consumer",
+    "pool": {
+      "version": "v1.35",
+      "substrate": "proxmox",
+      "proxmox": {
+        "templateTags": [
+          "template"
+        ]
+      },
+      "talos": {
+        "imageFactoryURL": ""
+      }
+    },
+    "version": "v1.13.6",
+    "schematicID": "ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515",
+    "source": "proxmox",
+    "modules": []
+  },
+  {
+    "name": "unknown bootstrap refused",
+    "class": {
+      "bootstrap": "flatcar"
+    },
+    "pool": {
+      "workerClassName": "custom"
+    },
+    "error": "bootstrap \"flatcar\""
+  },
+  {
+    "name": "a stored empty imageFactoryCA, the chart default, keeps the class CA",
+    "class": {
+      "bootstrap": "talos",
+      "talos": {
+        "imageFactoryCA": "-----BEGIN CERTIFICATE-----\nMIIBkDCCATWgAwIBAgIUYQvjA+rtcpuJZ414ETcZjPLYYHEwCgYIKoZIzj0EAwIw\nHDEaMBgGA1UEAwwRY296eXN0YWNrLXRlc3QtY2EwIBcNMjYwODEzMTQzNTM4WhgP\nMjEyNjA3MjAxNDM1MzhaMBwxGjAYBgNVBAMMEWNvenlzdGFjay10ZXN0LWNhMFkw\nEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEkYVY3hFc1GJaDFRqOkUoZV6IqFW6GsbI\nqoQgvEq3KYAZcmrb2ZbP2LsCyCojMOEzoF5d1RJc41lQeXv9eS4ERKNTMFEwHQYD\nVR0OBBYEFKbTnhLk/2Bb2jRjDyZic0F1ZYSPMB8GA1UdIwQYMBaAFKbTnhLk/2Bb\n2jRjDyZic0F1ZYSPMA8GA1UdEwEB/wQFMAMBAf8wCgYIKoZIzj0EAwIDSQAwRgIh\nANa5qSwy8bEa4lCFsYEgmtNm4EJ3wWlwzqLrotemRkILAiEAjH8pB4pNvmyRTkI0\nuDdynL2YtgHPfcQVfBb98CKq7yI=\n-----END CERTIFICATE-----"
+      }
+    },
+    "pool": {
+      "workerClassName": "custom",
+      "talos": {
+        "imageFactoryCA": ""
+      }
+    },
+    "version": "v1.13.6",
+    "schematicID": "ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515",
+    "source": "factory",
+    "modules": [],
+    "imageFactoryCA": "-----BEGIN CERTIFICATE-----\nMIIBkDCCATWgAwIBAgIUYQvjA+rtcpuJZ414ETcZjPLYYHEwCgYIKoZIzj0EAwIw\nHDEaMBgGA1UEAwwRY296eXN0YWNrLXRlc3QtY2EwIBcNMjYwODEzMTQzNTM4WhgP\nMjEyNjA3MjAxNDM1MzhaMBwxGjAYBgNVBAMMEWNvenlzdGFjay10ZXN0LWNhMFkw\nEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEkYVY3hFc1GJaDFRqOkUoZV6IqFW6GsbI\nqoQgvEq3KYAZcmrb2ZbP2LsCyCojMOEzoF5d1RJc41lQeXv9eS4ERKNTMFEwHQYD\nVR0OBBYEFKbTnhLk/2Bb2jRjDyZic0F1ZYSPMB8GA1UdIwQYMBaAFKbTnhLk/2Bb\n2jRjDyZic0F1ZYSPMA8GA1UdEwEB/wQFMAMBAf8wCgYIKoZIzj0EAwIDSQAwRgIh\nANa5qSwy8bEa4lCFsYEgmtNm4EJ3wWlwzqLrotemRkILAiEAjH8pB4pNvmyRTkI0\nuDdynL2YtgHPfcQVfBb98CKq7yI=\n-----END CERTIFICATE-----"
+  },
+  {
+    "name": "a legacy pool with the stored empty imageFactoryCA keeps none",
+    "pool": {
+      "talos": {
+        "imageFactoryCA": ""
+      }
+    },
+    "version": "v1.13.6",
+    "schematicID": "ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515",
+    "source": "factory",
+    "modules": [],
+    "imageFactoryCA": ""
+  },
+  {
+    "name": "a stored legacy talos.version default yields to the class",
+    "class": {
+      "bootstrap": "talos",
+      "talos": {
+        "version": "v1.13.7"
+      }
+    },
+    "pool": {
+      "workerClassName": "custom",
+      "talos": {
+        "version": "v1.13.6",
+        "schematicID": "ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515",
+        "imageFactoryURL": "https://factory.talos.dev",
+        "installerRepository": "factory.talos.dev/installer",
+        "registryMirrors": {},
+        "imageFactoryCA": ""
+      },
+      "osImage": {}
+    },
+    "version": "v1.13.7",
+    "schematicID": "ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515",
+    "source": "factory",
+    "modules": []
+  },
+  {
+    "name": "a stored legacy talos.schematicID default yields to the class",
+    "class": {
+      "bootstrap": "talos",
+      "talos": {
+        "schematicID": "abc123"
+      }
+    },
+    "pool": {
+      "workerClassName": "custom",
+      "talos": {
+        "version": "v1.13.6",
+        "schematicID": "ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515",
+        "imageFactoryURL": "https://factory.talos.dev",
+        "installerRepository": "factory.talos.dev/installer",
+        "registryMirrors": {},
+        "imageFactoryCA": ""
+      },
+      "osImage": {}
+    },
+    "version": "v1.13.6",
+    "schematicID": "abc123",
+    "source": "factory",
+    "modules": []
+  },
+  {
+    "name": "a stored legacy imageFactoryURL default yields to the class",
+    "class": {
+      "bootstrap": "talos",
+      "talos": {
+        "imageFactoryURL": "https://factory.example.com"
+      }
+    },
+    "pool": {
+      "workerClassName": "custom",
+      "talos": {
+        "version": "v1.13.6",
+        "schematicID": "ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515",
+        "imageFactoryURL": "https://factory.talos.dev",
+        "installerRepository": "factory.talos.dev/installer",
+        "registryMirrors": {},
+        "imageFactoryCA": ""
+      },
+      "osImage": {}
+    },
+    "version": "v1.13.6",
+    "schematicID": "ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515",
+    "source": "factory",
+    "modules": [],
+    "imageFactoryURL": "https://factory.example.com"
+  },
+  {
+    "name": "a stored legacy installerRepository default yields to the class",
+    "class": {
+      "bootstrap": "talos",
+      "talos": {
+        "installerRepository": "registry.example.com/installer"
+      }
+    },
+    "pool": {
+      "workerClassName": "custom",
+      "talos": {
+        "version": "v1.13.6",
+        "schematicID": "ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515",
+        "imageFactoryURL": "https://factory.talos.dev",
+        "installerRepository": "factory.talos.dev/installer",
+        "registryMirrors": {},
+        "imageFactoryCA": ""
+      },
+      "osImage": {}
+    },
+    "version": "v1.13.6",
+    "schematicID": "ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515",
+    "source": "factory",
+    "modules": [],
+    "installerRepository": "registry.example.com/installer"
+  },
+  {
+    "name": "a stored legacy empty registryMirrors yields to the class",
+    "class": {
+      "bootstrap": "talos",
+      "talos": {
+        "registryMirrors": {
+          "ghcr.io": {
+            "endpoints": [
+              "https://mirror.example.com"
+            ]
+          }
+        }
+      }
+    },
+    "pool": {
+      "workerClassName": "custom",
+      "talos": {
+        "version": "v1.13.6",
+        "schematicID": "ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515",
+        "imageFactoryURL": "https://factory.talos.dev",
+        "installerRepository": "factory.talos.dev/installer",
+        "registryMirrors": {},
+        "imageFactoryCA": ""
+      },
+      "osImage": {}
+    },
+    "version": "v1.13.6",
+    "schematicID": "ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515",
+    "source": "factory",
+    "modules": [],
+    "mirrors": {
+      "ghcr.io": {
+        "endpoints": [
+          "https://mirror.example.com"
+        ]
+      }
+    }
+  },
+  {
+    "name": "a stored legacy empty osImage yields to the class source",
+    "class": {
+      "bootstrap": "talos",
+      "substrates": {
+        "kubevirt": {
+          "osImage": {
+            "builtin": {
+              "version": "v1.13.6",
+              "schematicID": "fixed123"
+            }
+          }
+        }
+      }
+    },
+    "pool": {
+      "workerClassName": "custom",
+      "talos": {
+        "version": "v1.13.6",
+        "schematicID": "ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515",
+        "imageFactoryURL": "https://factory.talos.dev",
+        "installerRepository": "factory.talos.dev/installer",
+        "registryMirrors": {},
+        "imageFactoryCA": ""
+      },
+      "osImage": {}
+    },
+    "version": "v1.13.6",
+    "schematicID": "fixed123",
+    "source": "builtin",
+    "modules": []
+  },
+  {
+    "name": "a stored legacy empty proxmox.templateTags yields to the class",
+    "class": {
+      "bootstrap": "talos",
+      "talos": {
+        "version": "v1.13.6",
+        "schematicID": "ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515"
+      },
+      "substrates": {
+        "proxmox": {
+          "templateTags": [
+            "template"
+          ]
+        }
+      }
+    },
+    "pool": {
+      "workerClassName": "custom",
+      "substrate": "proxmox",
+      "talos": {
+        "version": "v1.13.6",
+        "schematicID": "ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515",
+        "imageFactoryURL": "https://factory.talos.dev",
+        "installerRepository": "factory.talos.dev/installer",
+        "registryMirrors": {},
+        "imageFactoryCA": ""
+      },
+      "proxmox": {
+        "templateTags": [],
+        "network": {
+          "bridge": "vmbr0"
+        },
+        "dnsServers": [
+          "192.0.2.53"
+        ]
+      }
+    },
+    "version": "v1.13.6",
+    "schematicID": "ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515",
+    "source": "proxmox",
+    "modules": []
+  },
+  {
+    "name": "a legacy pool keeps every stored default",
+    "class": null,
+    "pool": {
+      "talos": {
+        "version": "v1.13.6",
+        "schematicID": "ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515",
+        "imageFactoryURL": "https://factory.talos.dev",
+        "installerRepository": "factory.talos.dev/installer",
+        "registryMirrors": {},
+        "imageFactoryCA": ""
+      },
+      "osImage": {}
+    },
+    "version": "v1.13.6",
+    "schematicID": "ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515",
+    "source": "factory",
+    "modules": [],
+    "imageFactoryURL": "https://factory.talos.dev"
+  },
+  {
+    "name": "a fixed Proxmox template without a class Talos release is refused as a contract conflict",
+    "class": {
+      "bootstrap": "talos",
+      "substrates": {
+        "proxmox": {
+          "templateTags": [
+            "template"
+          ]
+        }
+      }
+    },
+    "pool": {
+      "workerClassName": "custom",
+      "substrate": "proxmox",
+      "proxmox": {
+        "templateTags": [
+          "template"
+        ],
+        "network": {
+          "bridge": "vmbr0"
+        },
+        "dnsServers": [
+          "192.0.2.53"
+        ]
+      }
+    },
+    "error": "proxmox.templateTags or talos version/schematic conflicts with"
+  },
+  {
+    "name": "kairos refuses GPUs until a driver path exists",
+    "class": {
+      "bootstrap": "kairos"
+    },
+    "pool": {
+      "workerClassName": "custom",
+      "gpus": [
+        {
+          "name": "nvidia.com/GH200"
+        }
+      ]
+    },
+    "error": "gpus: Kairos workers have no NVIDIA driver path"
+  },
+  {
+    "name": "kairos accepts the empty GPU list the API stores",
+    "class": {
+      "bootstrap": "kairos"
+    },
+    "pool": {
+      "workerClassName": "custom",
+      "gpus": []
+    },
+    "source": "kairos",
+    "modules": []
+  },
+  {
+    "name": "an SSH key spanning lines is refused",
+    "class": {
+      "bootstrap": "kairos"
+    },
+    "pool": {
+      "workerClassName": "custom",
+      "sshKeys": [
+        "ssh-ed25519 AAAA\nruncmd: [touch /pwned]"
+      ]
+    },
+    "error": "sshKeys: a key must be a single non-empty line"
+  },
+  {
+    "name": "an empty SSH key is refused",
+    "class": {
+      "bootstrap": "kairos"
+    },
+    "pool": {
+      "workerClassName": "custom",
+      "sshKeys": [
+        ""
+      ]
+    },
+    "error": "sshKeys: a key must be a single non-empty line"
+  },
+  {
+    "name": "an SSH key with options and a comment is accepted",
+    "class": {
+      "bootstrap": "kairos"
+    },
+    "pool": {
+      "workerClassName": "custom",
+      "sshKeys": [
+        "no-pty,from=\"192.0.2.0/24\" ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExample user@example.com"
+      ]
+    },
+    "source": "kairos",
+    "modules": []
+  },
+  {
+    "name": "a null registryMirrors, as the typed client sends it, keeps the class mirrors",
+    "class": {
+      "bootstrap": "talos",
+      "talos": {
+        "registryMirrors": {
+          "ghcr.io": {
+            "endpoints": [
+              "https://baseline.example.com"
+            ]
+          }
+        }
+      }
+    },
+    "pool": {
+      "workerClassName": "custom",
+      "talos": {
+        "registryMirrors": null
+      }
+    },
+    "version": "v1.13.6",
+    "schematicID": "ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515",
+    "source": "factory",
+    "modules": [],
+    "mirrors": {
+      "ghcr.io": {
+        "endpoints": [
+          "https://baseline.example.com"
+        ]
+      }
+    }
+  },
+  {
+    "name": "a null imageFactoryCA takes the empty default",
+    "class": {
+      "bootstrap": "talos",
+      "talos": {
+        "registryMirrors": {
+          "ghcr.io": {
+            "endpoints": [
+              "https://baseline.example.com"
+            ]
+          }
+        }
+      }
+    },
+    "pool": {
+      "workerClassName": "custom",
+      "talos": {
+        "imageFactoryCA": null
+      }
+    },
+    "version": "v1.13.6",
+    "schematicID": "ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515",
+    "source": "factory",
+    "modules": [],
+    "mirrors": {
+      "ghcr.io": {
+        "endpoints": [
+          "https://baseline.example.com"
+        ]
+      }
+    },
+    "imageFactoryCA": ""
+  },
+  {
+    "name": "a null osImage.builtin is refused",
+    "class": {
+      "bootstrap": "talos"
+    },
+    "pool": {
+      "workerClassName": "custom",
+      "osImage": {
+        "builtin": null
+      }
+    },
+    "error": "got null, want object"
+  },
+  {
+    "name": "a null osImage.factory member is refused",
+    "class": {
+      "bootstrap": "talos"
+    },
+    "pool": {
+      "workerClassName": "custom",
+      "osImage": {
+        "factory": {
+          "version": null
+        }
+      }
+    },
+    "error": "got null, want string"
+  },
+  {
+    "name": "a null kernelModules is refused on a Kairos pool",
+    "class": {
+      "bootstrap": "kairos"
+    },
+    "pool": {
+      "workerClassName": "custom",
+      "kernelModules": null
+    },
+    "error": "got null, want array"
+  },
+  {
+    "name": "an empty talos.version the pool sets on Proxmox names the pool",
+    "class": {
+      "bootstrap": "talos",
+      "talos": {
+        "version": "v1.13.7"
+      }
+    },
+    "pool": {
+      "workerClassName": "custom",
+      "substrate": "proxmox",
+      "talos": {
+        "version": ""
+      },
+      "proxmox": {
+        "templateTags": [
+          "talos-worker"
+        ]
+      }
+    },
+    "error": "pool: talos.version \"\" must be a full Talos release"
+  }
+]
