@@ -1157,8 +1157,7 @@ func (r *BackupReconciler) cleanupAltinityBackup(ctx context.Context, backup *ba
 			rendered.Spec,
 			fmt.Sprintf("chi-clickhouse-%s-clickhouse-0-0.%s.svc", release, backup.Namespace), authSecret, archive)
 		if cerr := r.Create(ctx, desired); cerr != nil && !apierrors.IsAlreadyExists(cerr) {
-			// ResourceQuota also returns Forbidden. Once a Job slot frees up the same cleanup can run.
-			if apierrors.IsForbidden(cerr) && strings.Contains(cerr.Error(), "exceeded quota: ") {
+			if altinityQuotaRefusal(cerr) {
 				return ctrl.Result{}, cerr
 			}
 			if apierrors.IsForbidden(cerr) || apierrors.IsInvalid(cerr) {
@@ -1269,6 +1268,19 @@ func (r *BackupReconciler) altinityAppOnSystemBucket(ctx context.Context, backup
 		return app, false, true, fmt.Errorf("read spec.backup.useSystemBucket: %w", err)
 	}
 	return app, v, true, nil
+}
+
+// altinityQuotaRefusal tells the Forbidden a namespace ResourceQuota returns
+// while it is used up or its usage is not yet known, by the messages of the
+// ResourceQuota admission plugin in k8s.io/apiserver. It clears once other
+// Jobs go or the quota controller has computed the usage, so the create is
+// retried instead of the Backup being released.
+func altinityQuotaRefusal(err error) bool {
+	if !apierrors.IsForbidden(err) {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "exceeded quota:") || strings.Contains(msg, "status unknown for quota:")
 }
 
 // altinitySystemBucket reads the bucket the projected credentials name in the

@@ -21,6 +21,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/util/validation/field"
 	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -1374,6 +1375,9 @@ func TestCleanupAltinityBackup_ReleasesWhenTheJobIsRefused(t *testing.T) {
 	for name, refuse := range map[string]error{
 		"invalid":   apierrors.NewInvalid(batchv1.SchemeGroupVersion.WithKind("Job").GroupKind(), "ch-bk-cleanup", nil),
 		"forbidden": apierrors.NewForbidden(batchv1.Resource("jobs"), "ch-bk-cleanup", errors.New("service account cannot create jobs")),
+		// Only a Forbidden is a quota refusal, whatever an Invalid's text says.
+		"invalid naming a quota": apierrors.NewInvalid(batchv1.SchemeGroupVersion.WithKind("Job").GroupKind(), "ch-bk-cleanup",
+			field.ErrorList{field.Invalid(field.NewPath("metadata", "name"), "ch-bk-cleanup", "exceeded quota: jobs-quota")}),
 	} {
 		t.Run(name, func(t *testing.T) {
 			backup := altinityCleanupBackup("ch-bk")
@@ -1399,6 +1403,39 @@ func TestCleanupAltinityBackup_ReleasesWhenTheJobIsRefused(t *testing.T) {
 			}
 			if ev := <-rec.Events; !strings.Contains(ev, "ArtifactNotDeleted") || !strings.Contains(ev, "clickhouse-ch-test-ch-bk") {
 				t.Errorf("event %q must name the archive left behind", ev)
+			}
+		})
+	}
+}
+
+// A namespace ResourceQuota on Jobs refuses the cleanup Job with Forbidden while
+// the quota is used up, or before its usage is known. That clears once other
+// Jobs go or the quota controller has computed the usage, and releasing the
+// Backup on it would leave the archive for good, so the Backup is held and the
+// create retried. The messages are the ones the ResourceQuota admission plugin
+// of k8s.io/apiserver returns.
+func TestCleanupAltinityBackup_RetriesAJobRefusedByAQuota(t *testing.T) {
+	for name, msg := range map[string]string{
+		"quota used up":       "exceeded quota: jobs-quota, requested: count/jobs.batch=1, used: count/jobs.batch=5, limited: count/jobs.batch=5",
+		"quota usage unknown": "status unknown for quota: jobs-quota, resources: count/jobs.batch",
+	} {
+		t.Run(name, func(t *testing.T) {
+			backup := altinityCleanupBackup("ch-bk")
+			c, s := newAltinityCleanupClientWith(interceptor.Funcs{
+				Create: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
+					if _, ok := obj.(*batchv1.Job); ok {
+						return apierrors.NewForbidden(batchv1.Resource("jobs"), "ch-bk-cleanup", errors.New(msg))
+					}
+					return c.Create(ctx, obj, opts...)
+				},
+			}, altinityCleanupFixtures(backup)...)
+			rec := record.NewFakeRecorder(10)
+			r := &BackupReconciler{Client: c, Scheme: s, Recorder: rec}
+			if _, err := r.cleanupOnDelete(context.Background(), backup); err == nil {
+				t.Fatal("a cleanup Job refused by a quota must go back to the work queue with the Backup held, not release it")
+			}
+			if len(rec.Events) != 0 {
+				t.Errorf("unexpected event %q: the Backup is not released", <-rec.Events)
 			}
 		})
 	}
