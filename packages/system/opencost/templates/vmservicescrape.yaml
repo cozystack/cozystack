@@ -6,6 +6,20 @@ spec:
   endpoints:
     - port: http
       path: /metrics
+      # Cost metrics carry the namespace/pod of the measured workload, not of
+      # the exporter; without honorLabels they all collapse onto cozy-opencost.
+      honorLabels: true
+      # OpenCost 1.120 re-exports kube-state-metrics series (EMIT_KSM_V1_METRICS).
+      # With honorLabels they differ from cozy-monitoring's copies only by job, so
+      # any sum without a job filter, the GPU recording rules among them, doubles.
+      # Drop the names kube-state-metrics also stores; OpenCost reads those back
+      # from VictoriaMetrics. Its v1 *_cpu_cores/*_memory_bytes node series and
+      # kube_namespace_labels/kube_node_labels have no kube-state-metrics copy
+      # here and OpenCost queries them, so they stay.
+      metricRelabelConfigs:
+        - action: drop
+          sourceLabels: [__name__]
+          regex: (kube_deployment_spec_replicas|kube_deployment_status_replicas_available|kube_job_status_failed|kube_node_status_allocatable|kube_node_status_capacity|kube_node_status_condition|kube_persistentvolume_capacity_bytes|kube_persistentvolume_status_phase|kube_persistentvolumeclaim_info|kube_persistentvolumeclaim_resource_requests_storage_bytes|kube_pod_container_resource_limits|kube_pod_container_resource_requests|kube_pod_container_status_restarts_total|kube_pod_container_status_running|kube_pod_container_status_terminated_reason|kube_pod_labels|kube_pod_owner|kube_pod_status_phase)
   selector:
     matchLabels:
       app.kubernetes.io/instance: opencost
