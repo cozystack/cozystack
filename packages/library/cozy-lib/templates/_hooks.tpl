@@ -69,8 +69,7 @@ a failure there leaves the Secrets in place.
        name matches a key this app would otherwise create. */ -}}
 {{- $wildcardSecret := index ($root.Values._cluster | default dict) "wildcard-secret-name" | default "" -}}
 {{- $secrets = without $secrets $wildcardSecret -}}
-{{- $certificates = without $certificates $wildcardSecret -}}
-{{- if $secrets -}}
+{{- if or $secrets $certificates -}}
 {{- /* A Job name goes into the job-name label of its pods, which takes at
        most 63 characters, while the apps API admits release names of up to
        53. Cutting the suffix keeps the whole release name, so the name stays
@@ -99,12 +98,14 @@ metadata:
     "helm.sh/hook-weight": "5"
     "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
 rules:
+{{- if $secrets }}
   - apiGroups: [""]
     resources: ["secrets"]
     verbs: ["get", "delete"]
     resourceNames:
 {{- range $secrets }}
       - {{ . | quote }}
+{{- end }}
 {{- end }}
 {{- if $certificates }}
   - apiGroups: ["cert-manager.io"]
@@ -194,12 +195,24 @@ spec:
               # and its log stay in the namespace instead of being collected
               # by hook-succeeded. An already missing object is not a failure.
               {{- if $certificates }}
+              {{- if $wildcardSecret }}
+              for certificate in {{ range $certificates }} {{ . | quote }}{{ end }}; do
+                if ! target=$(kubectl get certificates.cert-manager.io "$certificate" --namespace {{ $root.Release.Namespace }} --ignore-not-found -o jsonpath='{.spec.secretName}'); then
+                  echo "ERROR: cannot inspect Certificate $certificate" >&2
+                  exit 1
+                fi
+                [ "$target" != {{ $wildcardSecret | quote }} ] || continue
+                kubectl delete certificates.cert-manager.io --namespace {{ $root.Release.Namespace }} --ignore-not-found "$certificate" || exit 1
+              done
+              {{- else }}
               echo "Deleting Certificates {{ join " " $certificates }} of {{ $root.Release.Name }} before their Secrets"
               if ! kubectl delete certificates.cert-manager.io --namespace {{ $root.Release.Namespace }} --ignore-not-found{{ range $certificates }} {{ . | quote }}{{ end }}; then
                 echo "ERROR: failed to delete Certificates of {{ $root.Release.Name }} in {{ $root.Release.Namespace }}, so their Secrets are left in place" >&2
                 exit 1
               fi
               {{- end }}
+              {{- end }}
+              {{- if $secrets }}
               echo "Deleting Secrets {{ join " " $secrets }} left by {{ $root.Release.Name }}"
               if kubectl delete secret --namespace {{ $root.Release.Namespace }} --ignore-not-found{{ range $secrets }} {{ . | quote }}{{ end }}; then
                 echo "Secret cleanup complete."
@@ -207,6 +220,7 @@ spec:
                 echo "ERROR: failed to delete Secrets of {{ $root.Release.Name }} in {{ $root.Release.Namespace }}, key material may remain" >&2
                 exit 1
               fi
+              {{- end }}
           volumeMounts:
             - name: tmp
               mountPath: /tmp
@@ -214,4 +228,34 @@ spec:
         - name: tmp
           emptyDir: {}
 {{- end -}}
+{{- end -}}
+
+{{- define "cozy-lib.hooks.deleteIngressTLS" -}}
+cleanup_ingress_tls() {
+  key={{ .key | quote }}
+  host={{ .host | quote }}
+  if ! target=$(kubectl get certificate "$key" -n {{ .namespace }} --ignore-not-found -o jsonpath='{.spec.secretName}{"|"}{.spec.dnsNames[*]}'); then
+    return 1
+  fi
+  case "$target" in
+    ""|"$key|$host") ;;
+    *) echo "ERROR: refusing to delete unrelated Certificate $key" >&2; return 1 ;;
+  esac
+  if ! kubectl delete certificate "$key" -n {{ .namespace }} --ignore-not-found --wait=true --timeout=20s; then
+    echo "ERROR: failed to delete Certificate {{ .namespace }}/$key, so its Secret is left as well" >&2
+    return 1
+  fi
+  if ! metadata=$(kubectl get secret "$key" -n {{ .namespace }} --ignore-not-found -o jsonpath='{.type}{"|"}{.metadata.annotations.cert-manager\.io/certificate-name}{"|"}{.metadata.annotations.cert-manager\.io/alt-names}'); then
+    return 1
+  fi
+  case "$metadata" in
+    "") return 0 ;;
+    "kubernetes.io/tls|$key|$host") ;;
+    *) echo "ERROR: refusing to delete unrelated Secret $key" >&2; return 1 ;;
+  esac
+  if ! kubectl delete secret "$key" -n {{ .namespace }} --ignore-not-found --wait=false; then
+    echo "ERROR: failed to delete Secret $key in {{ .namespace }}" >&2
+    return 1
+  fi
+}
 {{- end -}}

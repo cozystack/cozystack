@@ -66,7 +66,7 @@ tests:
     asserts:
       - matchRegex:
           path: spec.template.spec.containers[0].command[2]
-          pattern: "kubectl delete certificate my-bucket-ui-tls -n tenant-root"
+          pattern: 'kubectl delete certificate "\$key" -n tenant-root'
       # Orders are removed by the Certificate cascade and Challenges by the
       # host-scoped dnsName sweep. cert-manager puts no usable label on either
       # (Challenges are unlabeled; certificate-name is an annotation on Orders),
@@ -111,7 +111,7 @@ tests:
       # issued again.
       - matchRegex:
           path: spec.template.spec.containers[0].command[2]
-          pattern: 'if kubectl delete certificate my-bucket-ui-tls -n tenant-root --ignore-not-found --wait=false; then[\s\S]*if ! kubectl delete secret my-bucket-ui-tls -n tenant-root --ignore-not-found --wait=false; then[\s\S]*key_left=1[\s\S]*else\s+echo "ERROR: cert-manager cleanup failed for my-bucket, so Secret my-bucket-ui-tls is left as well[^"]*" >&2\s+key_left=1'
+          pattern: 'if ! kubectl delete certificate "\$key"[^\n]*; then[\s\S]*return 1[\s\S]*if ! kubectl delete secret "\$key"'
       # Leftover ACME objects only warn, but a Secret that may still hold the
       # private key fails the Job, after the sweeps, so its log is kept.
       - matchRegex:
@@ -155,7 +155,7 @@ tests:
           content:
             apiGroups: ["cert-manager.io"]
             resources: ["certificates"]
-            verbs: ["get", "list", "delete"]
+            verbs: ["get", "list", "watch", "delete"]
       - contains:
           path: rules
           content:

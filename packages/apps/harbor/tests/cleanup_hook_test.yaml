@@ -306,7 +306,7 @@ tests:
       # the Certificate delete, and the failure branch reports both.
       - matchRegex:
           path: spec.template.spec.containers[0].command[2]
-          pattern: 'if kubectl delete certificate -n tenant-root \\\s+harbor-test-ingress-tls --ignore-not-found; then[\s\S]*kubectl delete secret -n tenant-root \\\s+harbor-test-ingress-tls --ignore-not-found[\s\S]*else\s+fail "failed to delete Certificate tenant-root/harbor-test-ingress-tls, so its Secret is left as well'
+          pattern: 'if ! kubectl delete certificate "\$key"[^\n]*; then[\s\S]*return 1[\s\S]*if ! kubectl delete secret "\$key"'
 
   - it: binds the Role to the cleanup ServiceAccount
     documentSelector:

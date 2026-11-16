@@ -81,7 +81,7 @@ skip=0
 for a in "$@"; do
   if [ "$skip" = 1 ]; then skip=0; continue; fi
   case "$a" in
-    -n|-l) skip=1 ;;
+    -n|--namespace|-l|-o) skip=1 ;;
     -*) ;;
     *) obj=$a ;;
   esac
@@ -92,6 +92,21 @@ if [ "$verb" = get ]; then
     *" $kind "*) echo "error: the server could not list $kind" >&2; exit 1 ;;
   esac
   case "$kind" in
+    certificate|certificates.cert-manager.io)
+      case " ${EXISTING:-} " in *" $obj "*)
+        target=${CERT_TARGET:-$obj}
+        case "$*" in *dnsNames*)
+          host=${obj%-ingress-tls}; host=${host%-ui-tls}
+          printf '%s|%s.example.org' "$target" "$host" ;;
+          *) printf '%s' "$target" ;;
+        esac ;;
+      esac ;;
+    secret)
+      case " ${EXISTING:-} " in *" $obj "*)
+        host=${obj%-ingress-tls}; host=${host%-ui-tls}
+        printf '%s' "${SECRET_META:-kubernetes.io/tls|$obj|$host.example.org}"
+        ;;
+      esac ;;
     pvc) printf '%s' "${PVC_LIST:-}" ;;
     challenge) printf '%s' "${CHALLENGE_LIST:-}" ;;
     ingress) printf '%s' "${SOLVER_LIST:-}" ;;
@@ -347,7 +362,7 @@ persistentvolumeclaim/db-qdrant-test-0'
   fi
   # The Certificate delete is the one that actually reaches a NotFound here, so
   # it has to have been attempted for this test to mean anything.
-  if ! grep -q 'delete certificate .*harbor-test-ingress-tls' "$tmp/calls"; then
+  if ! grep -q 'delete certificate harbor-test-ingress-tls' "$tmp/calls"; then
     echo "FAIL: the Certificate delete was never attempted"
     cat "$tmp/calls"
     false
@@ -548,8 +563,8 @@ line_of() {
     cat "$tmp/out" "$tmp/err"
     false
   fi
-  cert=$(line_of "$tmp/calls" 'delete certificate .*harbor-test-ingress-tls')
-  secret=$(line_of "$tmp/calls" 'delete secret .*harbor-test-ingress-tls')
+  cert=$(line_of "$tmp/calls" 'delete certificate harbor-test-ingress-tls')
+  secret=$(line_of "$tmp/calls" 'delete secret harbor-test-ingress-tls')
   if [ -z "$secret" ]; then
     echo "FAIL: the TLS Secret of the Ingress Certificate was never deleted"
     cat "$tmp/calls"
@@ -614,7 +629,7 @@ line_of() {
     cat "$tmp/out" "$tmp/err"
     false
   fi
-  if ! grep -q '^ERROR: .*Secret tenant-test/harbor-test-ingress-tls' "$tmp/err"; then
+  if ! grep -q '^ERROR: .*Secret harbor-test-ingress-tls in tenant-test' "$tmp/err"; then
     echo "FAIL: the failed Secret delete was not reported by name"
     cat "$tmp/err"
     false
@@ -932,10 +947,48 @@ line_of() {
   export KLOG="$tmp/calls" EXISTING='myapp-ca myapp-tls'
   PATH="$tmp:$PATH" sh "$tmp/hook.sh"
   grep -q 'delete secret .*myapp-ca' "$tmp/calls"
-  if grep -q 'myapp-tls' "$tmp/calls"; then
+  if grep -q 'delete secret .*myapp-tls' "$tmp/calls"; then
     echo 'FAIL: the helper touched the shared wildcard key'
     cat "$tmp/calls"
     false
   fi
+  rm -rf "$tmp"
+}
+
+@test "ingress TLS cleanup preserves unrelated keys and Certificates" {
+  for app in harbor bucket; do
+    tmp=$(mktemp -d)
+    write_fake_kubectl "$tmp"
+    suffix=ingress-tls job=harbor-test-cleanup
+    if [ "$app" = bucket ]; then suffix=ui-tls job=bucket-test-cleanup-acme; fi
+    key="$app-test-$suffix"
+    render_hook "packages/apps/$app" "$app-test" tenant-root "$job" "$tmp/hook.sh" --set _namespace.host=example.org --set _cluster.solver=http01
+    export KLOG="$tmp/calls" EXISTING="$key" SECRET_META='Opaque||'
+    if PATH="$tmp:$PATH" sh "$tmp/hook.sh"; then echo 'FAIL: accepted unrelated Secret'; false; fi
+    if grep -q 'delete secret' "$KLOG"; then echo 'FAIL: deleted unrelated Secret'; false; fi
+    unset SECRET_META
+    : > "$KLOG"
+    export CERT_TARGET=shared-tls
+    if PATH="$tmp:$PATH" sh "$tmp/hook.sh"; then echo 'FAIL: accepted unrelated Certificate'; false; fi
+    if grep -q 'delete certificate' "$KLOG"; then echo 'FAIL: deleted unrelated Certificate'; false; fi
+    unset CERT_TARGET
+    rm -rf "$tmp"
+  done
+}
+
+@test "Certificate cleanup uses spec.secretName and survives an empty filtered Secret list" {
+  tmp=$(mktemp -d)
+  write_fake_kubectl "$tmp"
+  render_hook packages/tests/cozy-lib-tests myapp tenant-root myapp-secrets-cleanup "$tmp/hook.sh" \
+    --set _cluster.wildcard-secret-name=shared-tls --set 'deleteSecrets.secrets={shared-tls}' \
+    --set 'deleteSecrets.certificates={app-certificate}' --set field=caCert --set _namespace.host=example.org -f packages/tests/cozy-lib-tests/tests/tls_cacert_values.yaml
+  export KLOG="$tmp/calls" EXISTING=app-certificate CERT_TARGET=shared-tls
+  PATH="$tmp:$PATH" sh "$tmp/hook.sh"
+  if grep -q 'delete ' "$KLOG"; then echo 'FAIL: deleted shared Certificate'; false; fi
+  : > "$KLOG"
+  export CERT_TARGET=app-tls
+  PATH="$tmp:$PATH" sh "$tmp/hook.sh"
+  grep -q 'delete certificates.cert-manager.io .*app-certificate' "$KLOG"
+  if grep -q 'delete secret' "$KLOG"; then echo 'FAIL: unscoped Secret delete'; false; fi
   rm -rf "$tmp"
 }
