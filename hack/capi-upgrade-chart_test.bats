@@ -47,6 +47,15 @@ setup() {
     jq --slurp --exit-status 'length == 2 and all(.[]; .metadata.labels == {"provider.cluster.x-k8s.io/version": .metadata.name})'
 }
 
+@test "the hook image follows the cluster images registry" {
+  local image mirrored
+  image="$(yq --no-doc 'select(.kind == "Job") | .spec.template.spec.containers[0].image' "$RENDERED")"
+  [ "$image" = "$(yq '.upgrade.image' "$CORE/values.yaml")" ]
+  mirrored="$(helm template capi-providers-core "$CORE" --namespace test-capi --kube-version 1.33.0 --set-string '_cluster.images-registry=registry.example.test' |
+    yq --no-doc 'select(.kind == "Job") | .spec.template.spec.containers[0].image')"
+  [ "$mirrored" = "registry.example.test/$image" ]
+}
+
 @test "the hook has no cluster-wide or secret permissions" {
   local roles
   roles="$(yq --output-format=json --no-doc 'select(.kind == "Role") | .rules' "$RENDERED")"

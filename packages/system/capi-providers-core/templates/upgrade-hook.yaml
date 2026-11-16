@@ -106,7 +106,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: upgrade
-          image: {{ .Values.upgrade.image | quote }}
+          image: {{ include "cozy-lib.image" (list .Values.upgrade.image $) | quote }}
           command: [bash, /scripts/upgrade-providers.sh]
           env:
             - name: HOME
