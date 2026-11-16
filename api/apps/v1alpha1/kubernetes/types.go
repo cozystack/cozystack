@@ -32,6 +32,9 @@ type ConfigSpec struct {
 	// +kubebuilder:default:="kubevirt"
 	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="substrate is immutable"
 	Substrate string `json:"substrate"`
+	// Runs the whole cluster inside a cozyplane VPC: the control plane, its etcd, and, through the same value on each KubernetesNodes pool, the worker VMs. Set it when the cluster is created; it cannot be changed afterwards. Requires the cozyplane networking variant, `substrate: kubevirt` and the cluster's own etcd.
+	// +kubebuilder:default:={}
+	Network Network `json:"network,omitempty"`
 	// Proxmox substrate settings.
 	// +kubebuilder:default:={}
 	Proxmox Proxmox `json:"proxmox"`
@@ -232,6 +235,11 @@ type MonitoringAgentsAddon struct {
 	// Custom Helm values overrides.
 	// +kubebuilder:default:={}
 	ValuesOverride k8sRuntime.RawExtension `json:"valuesOverride"`
+}
+
+type Network struct {
+	// Name of the VirtualPrivateCloud (without the "virtualprivatecloud-" prefix) in this namespace
+	Name string `json:"name,omitempty"`
 }
 
 type OIDC struct {

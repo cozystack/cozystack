@@ -42,6 +42,11 @@
 {{- $clusterName := include "kubernetes-nodes.clusterName" . }}
 {{- $groupName := include "kubernetes-nodes.groupName" . }}
 {{- $dnsDomain := include "kubernetes.tenantClusterDomain" $ }}
+{{- $vpc := "" }}
+{{- with dig "name" "" ($.Values.network | default dict) }}
+{{- $vpc = printf "virtualprivatecloud-%s" . }}
+{{- end }}
+{{- $probeName := printf "%s-%s-vip-probe" $clusterName $groupName | trunc 63 | trimSuffix "-" }}
 {{- /* The TalosConfigTemplate spec is immutable, so it can only ever be
        created — never updated — and its name therefore carries a hash of the
        machine config it holds (see _talosconfigtemplate.tpl). nodegroup.yaml
@@ -114,6 +119,16 @@ rules:
     resources: ["talosconfigtemplates"]
     resourceNames: [{{ $tctName | quote }}]
     verbs: ["delete"]
+  {{- if $vpc }}
+  {{- /* The VIP probe: one named pod the Job creates, reads back and deletes. */}}
+  - apiGroups: [""]
+    resources: ["pods"]
+    resourceNames: [{{ $probeName | quote }}]
+    verbs: ["get", "delete"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["create"]
+  {{- end }}
 ---
 {{- /* The tenant-root chart installs a default-deny egress policy on every
        pod in the tenant namespace; without an explicit allow, this Job
@@ -281,6 +296,78 @@ spec:
                 exit 1
               fi
               echo "[$(date -u +%H:%M:%S)] inputs ready (svc=${SVC_IP} coredns=${COREDNS_IP})"
+              {{- if .vpc }}
+
+              {{- /* Inside the VPC the ClusterIP is unreachable. The workers'
+                     host entry and the tenant's own kubernetes endpoint (Kamaji's
+                     advertise address) need the VIP the VPC knows the apiserver
+                     Service by, and only a pod inside the VPC can learn it, from
+                     the VPC resolver. The probe resolves the Service name and
+                     reports the answer as its termination message. */}}
+              echo "[$(date -u +%H:%M:%S)] resolving the apiserver VIP from inside VPC {{ .vpc }}"
+              kubectl -n "$NS" delete pod {{ .probeName | quote }} --ignore-not-found --wait=true
+              kubectl -n "$NS" apply -f - <<'YAML'
+              apiVersion: v1
+              kind: Pod
+              metadata:
+                name: {{ .probeName | quote }}
+                namespace: {{ $.Release.Namespace | quote }}
+                annotations:
+                  sdn.cozystack.io/vpc: {{ .vpc | quote }}
+              spec:
+                restartPolicy: Never
+                automountServiceAccountToken: false
+                securityContext:
+                  runAsNonRoot: true
+                  runAsUser: 65532
+                  seccompProfile:
+                    type: RuntimeDefault
+                containers:
+                  - name: resolve
+                    image: "{{ .kubectlImage }}"
+                    command:
+                      - sh
+                      - -c
+                      - |
+                        for i in $(seq 1 60); do
+                          ip=$(getent hosts {{ printf "%s.%s.svc.%s" .clusterName $.Release.Namespace .mgmtClusterDomain }} | awk 'NR == 1 { print $1 }')
+                          if [ -n "$ip" ]; then printf '%s' "$ip" > /dev/termination-log; exit 0; fi
+                          sleep 5
+                        done
+                        exit 1
+                    resources:
+                      requests:
+                        cpu: 10m
+                        memory: 16Mi
+                      limits:
+                        cpu: 50m
+                        memory: 32Mi
+                    securityContext:
+                      allowPrivilegeEscalation: false
+                      capabilities:
+                        drop:
+                          - ALL
+                      readOnlyRootFilesystem: true
+              YAML
+              PROBE_PHASE=""
+              for i in $(seq 1 90); do
+                PROBE_PHASE=$(kubectl -n "$NS" get pod {{ .probeName | quote }} -o jsonpath='{.status.phase}' 2>/dev/null || true)
+                case "$PROBE_PHASE" in Succeeded|Failed) break ;; esac
+                sleep 5
+              done
+              VIP=$(kubectl -n "$NS" get pod {{ .probeName | quote }} -o jsonpath='{.status.containerStatuses[0].state.terminated.message}' 2>/dev/null || true)
+              kubectl -n "$NS" delete pod {{ .probeName | quote }} --ignore-not-found --wait=false
+              if [ "$PROBE_PHASE" != "Succeeded" ] || [ -z "$VIP" ]; then
+                echo "[$(date -u +%H:%M:%S)] the VPC resolver did not answer for the apiserver Service (probe phase '${PROBE_PHASE}'): is the Service attached to {{ .vpc }}, and is the VPC Ready?"
+                exit 1
+              fi
+              SVC_IP="$VIP"
+              # Kamaji passes the advertise address to --advertise-address, the
+              # tenant's kubernetes endpoints and the konnectivity agents, and
+              # adds it to the apiserver certificate itself.
+              kubectl -n "$NS" patch kamajicontrolplane "$RELEASE" --type=merge --patch "{\"spec\":{\"network\":{\"advertiseAddress\":\"${SVC_IP}\"}}}"
+              echo "[$(date -u +%H:%M:%S)] advertising the apiserver VIP ${SVC_IP}"
+              {{- end }}
 
               # Patch KamajiControlPlane.spec.network.certSANs so the apiserver
               # TLS cert covers the live Service ClusterIP that Talos workers
@@ -386,6 +473,9 @@ spec:
 {{- $_ := set $jobContext "dnsDomain" $dnsDomain }}
 {{- $_ := set $jobContext "tctName" $tctName }}
 {{- $_ := set $jobContext "tctSpec" $tctSpec }}
+{{- $_ := set $jobContext "vpc" $vpc }}
+{{- $_ := set $jobContext "probeName" $probeName }}
+{{- $_ := set $jobContext "mgmtClusterDomain" ((index ($.Values._cluster | default dict) "cluster-domain") | default "cozy.local") }}
 {{- $_ := set $jobContext "kubectlImage" (include "cozy-lib.image" (list ($.Files.Get "images/kubectl.tag" | trim) $)) }}
 {{- $jobSpec := include "kubernetes-nodes.talos-reconcile-job-spec" $jobContext }}
 {{- $jobHash := $jobSpec | sha256sum | trunc 6 }}

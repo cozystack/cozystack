@@ -1,0 +1,42 @@
+suite: the cluster's etcd follows its control plane into the VPC
+
+templates:
+  - templates/etcd.yaml
+
+values:
+  - values/common.yaml
+
+release:
+  name: test
+  namespace: tenant-test
+
+capabilities:
+  apiVersions:
+    - sdn.cozystack.io/v1alpha1/VPC
+
+tests:
+  # The operator copies additionalMetadata onto the member Pods and both etcd
+  # Services, so this one annotation is what lets the apiserver reach its
+  # DataStore from inside the VPC.
+  - it: stamps the VPC on the EtcdCluster's additionalMetadata
+    set:
+      network:
+        name: myvpc
+    documentSelector:
+      path: kind
+      value: EtcdCluster
+    asserts:
+      - equal:
+          path: spec.additionalMetadata.annotations["sdn.cozystack.io/vpc"]
+          value: virtualprivatecloud-myvpc
+      - equal:
+          path: spec.additionalMetadata.labels["cozystack.io/service"]
+          value: kubernetes-etcd
+
+  - it: adds no annotations on the default network
+    documentSelector:
+      path: kind
+      value: EtcdCluster
+    asserts:
+      - notExists:
+          path: spec.additionalMetadata.annotations

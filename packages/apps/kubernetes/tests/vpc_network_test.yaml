@@ -1,0 +1,161 @@
+suite: control plane inside a cozyplane VPC
+
+templates:
+  - templates/cluster.yaml
+
+values:
+  - values/common.yaml
+
+release:
+  name: test
+  namespace: tenant-test
+
+# In cluster.yaml the KamajiControlPlane is document index 1.
+
+kubernetesProvider:
+  scheme:
+    "controlplane.cluster.x-k8s.io/v1alpha1/KamajiControlPlane":
+      gvr: {group: controlplane.cluster.x-k8s.io, version: v1alpha1, resource: kamajicontrolplanes}
+      namespaced: true
+
+tests:
+  - it: puts the apiserver pods in the VPC and attaches their Service
+    capabilities:
+      apiVersions:
+        - sdn.cozystack.io/v1alpha1/VPC
+    set:
+      network:
+        name: myvpc
+    asserts:
+      - equal:
+          path: spec.deployment.podAdditionalMetadata.annotations["sdn.cozystack.io/vpc"]
+          value: virtualprivatecloud-myvpc
+        documentIndex: 1
+      - equal:
+          path: spec.network.serviceAnnotations["sdn.cozystack.io/vpc"]
+          value: virtualprivatecloud-myvpc
+        documentIndex: 1
+      # Host-side consumers keep dialing the ClusterIP; the VPC side gets a VIP.
+      - equal:
+          path: spec.network.serviceType
+          value: ClusterIP
+        documentIndex: 1
+
+  - it: carries no VPC metadata on the default network
+    capabilities:
+      apiVersions:
+        - sdn.cozystack.io/v1alpha1/VPC
+    asserts:
+      - notExists:
+          path: spec.deployment.podAdditionalMetadata.annotations
+        documentIndex: 1
+      - notExists:
+          path: spec.network.serviceAnnotations
+        documentIndex: 1
+
+  - it: refuses a VPC where sdn.cozystack.io is not served
+    set:
+      network:
+        name: myvpc
+    asserts:
+      - failedTemplate:
+          errorPattern: 'cozyplane networking variant is required'
+
+  - it: refuses a VPC on the proxmox substrate
+    capabilities:
+      apiVersions:
+        - sdn.cozystack.io/v1alpha1/VPC
+    set:
+      network:
+        name: myvpc
+      substrate: proxmox
+    asserts:
+      - failedTemplate:
+          errorPattern: 'substrate proxmox workers are not'
+
+  # A VPC refuses cluster-internal destinations, the tenant's shared etcd
+  # included.
+  - it: refuses a VPC for a cluster still on the shared DataStore
+    capabilities:
+      apiVersions:
+        - sdn.cozystack.io/v1alpha1/VPC
+    set:
+      network:
+        name: myvpc
+    kubernetesProvider:
+      objects:
+        - apiVersion: controlplane.cluster.x-k8s.io/v1alpha1
+          kind: KamajiControlPlane
+          metadata: {name: test, namespace: tenant-test}
+          spec:
+            dataStoreName: tenant-root
+            deployment:
+              podAdditionalMetadata:
+                annotations:
+                  sdn.cozystack.io/vpc: virtualprivatecloud-myvpc
+    asserts:
+      - failedTemplate:
+          errorPattern: 'cannot reach the shared DataStore "tenant-root"'
+
+  # etcd-operator never re-stamps a running member, so moving a live cluster
+  # would leave its etcd on the other network.
+  - it: refuses to move a running cluster into a VPC
+    capabilities:
+      apiVersions:
+        - sdn.cozystack.io/v1alpha1/VPC
+    set:
+      network:
+        name: myvpc
+    kubernetesProvider:
+      objects:
+        - apiVersion: controlplane.cluster.x-k8s.io/v1alpha1
+          kind: KamajiControlPlane
+          metadata: {name: test, namespace: tenant-test}
+          spec:
+            dataStoreName: tenant-test.test
+    asserts:
+      - failedTemplate:
+          errorPattern: 'can only be set when the cluster is created'
+
+  - it: refuses to take a running cluster out of its VPC
+    capabilities:
+      apiVersions:
+        - sdn.cozystack.io/v1alpha1/VPC
+    kubernetesProvider:
+      objects:
+        - apiVersion: controlplane.cluster.x-k8s.io/v1alpha1
+          kind: KamajiControlPlane
+          metadata: {name: test, namespace: tenant-test}
+          spec:
+            dataStoreName: tenant-test.test
+            deployment:
+              podAdditionalMetadata:
+                annotations:
+                  sdn.cozystack.io/vpc: virtualprivatecloud-myvpc
+    asserts:
+      - failedTemplate:
+          errorPattern: 'can only be set when the cluster is created'
+
+  - it: keeps rendering a running cluster in its VPC
+    capabilities:
+      apiVersions:
+        - sdn.cozystack.io/v1alpha1/VPC
+    set:
+      network:
+        name: myvpc
+    kubernetesProvider:
+      objects:
+        - apiVersion: controlplane.cluster.x-k8s.io/v1alpha1
+          kind: KamajiControlPlane
+          metadata: {name: test, namespace: tenant-test}
+          spec:
+            dataStoreName: tenant-test.test
+            deployment:
+              podAdditionalMetadata:
+                annotations:
+                  sdn.cozystack.io/vpc: virtualprivatecloud-myvpc
+    asserts:
+      - equal:
+          path: spec.deployment.podAdditionalMetadata.annotations["sdn.cozystack.io/vpc"]
+          value: virtualprivatecloud-myvpc
+        documentIndex: 1

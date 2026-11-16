@@ -327,3 +327,14 @@ default StorageClass.
 {{- index (.Values._cluster | default dict) "etcd-storage-class-local" | default "" -}}
 {{- end -}}
 {{- end }}
+
+{{/*
+The cozyplane VPC this cluster runs in, as the release name of its
+VirtualPrivateCloud (the value of the sdn.cozystack.io/vpc annotation), or
+empty when the cluster runs on the default network.
+*/}}
+{{- define "kubernetes.vpc" -}}
+{{- with dig "name" "" (.Values.network | default dict) -}}
+{{- printf "virtualprivatecloud-%s" . -}}
+{{- end -}}
+{{- end }}

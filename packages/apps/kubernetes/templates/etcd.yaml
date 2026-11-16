@@ -25,7 +25,14 @@
 {{- $etcd := dict "name" $name "values" $values "root" $ }}
 {{- $clientLabels := dict "policy.cozystack.io/allow-to-etcd-cluster" $name }}
 ---
-{{ include "cozy-lib.etcd.cluster" (merge (dict "labels" (dict "cozystack.io/service" "kubernetes-etcd")) $etcd) }}
+{{- /* The operator merges additionalMetadata onto the member Pods and both
+       etcd Services, so one annotation puts the members in the control
+       plane's VPC and attaches the Services the apiserver dials. */}}
+{{- $etcdMetadata := dict "labels" (dict "cozystack.io/service" "kubernetes-etcd") }}
+{{- with include "kubernetes.vpc" . }}
+{{- $_ := set $etcdMetadata "annotations" (dict "sdn.cozystack.io/vpc" .) }}
+{{- end }}
+{{ include "cozy-lib.etcd.cluster" (merge $etcdMetadata $etcd) }}
 ---
 {{ include "cozy-lib.etcd.certificates" (merge (dict "extraDNSNames" (list (printf "%s-client" $name) (printf "%s-client.%s.svc" $name .Release.Namespace))) $etcd) }}
 ---

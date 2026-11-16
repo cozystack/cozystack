@@ -89,6 +89,12 @@ host: ""
 ## @immutable
 substrate: kubevirt
 
+## @typedef {struct} Network - The cozyplane VPC this cluster runs in
+## @field {string} [name] - Name of the VirtualPrivateCloud (without the "virtualprivatecloud-" prefix) in this namespace
+
+## @param {Network} [network] - Runs the whole cluster inside a cozyplane VPC: the control plane, its etcd, and, through the same value on each KubernetesNodes pool, the worker VMs. Set it when the cluster is created; it cannot be changed afterwards. Requires the cozyplane networking variant, `substrate: kubevirt` and the cluster's own etcd.
+network: {}
+
 ## @typedef {struct} ProxmoxIPv4 - Address range capmox allocates worker addresses from.
 ## @field {[]string} addresses - Ranges or CIDRs, e.g. `["10.0.0.120-10.0.0.170"]`. capmox turns these into an InClusterIPPool, so they must not overlap any DHCP range on the same L2 or two workers will answer to one address.
 ## @field {string} gateway - Default gateway for the workers.
