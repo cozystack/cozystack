@@ -22,6 +22,11 @@ setup() {
   [ "$provider" = "$target-core" ]
 }
 
+@test "the upgrade Job is kept until the next attempt, after a success too" {
+  [ "$(yq --no-doc 'select(.kind == "Job") | .metadata.annotations."helm.sh/hook-delete-policy"' "$RENDERED")" = before-hook-creation ]
+  [ "$(yq --no-doc 'select(.kind != "Job" and .metadata.annotations."helm.sh/hook" != null) | .metadata.annotations."helm.sh/hook-delete-policy"' "$RENDERED" | sort --unique)" = before-hook-creation,hook-succeeded ]
+}
+
 @test "the operator retains intermediate bundles independently of migration hooks" {
   local name bridge policy rendered="$BATS_TEST_TMPDIR/operator.yaml"
   bridge="$(< "$CORE/files/bridge-version")"
