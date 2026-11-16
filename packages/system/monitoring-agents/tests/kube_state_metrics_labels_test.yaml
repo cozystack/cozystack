@@ -8,8 +8,8 @@ suite: kube-state-metrics exports the labels of pods, deployments and PVCs
 templates:
   - charts/kube-state-metrics/templates/deployment.yaml
 tests:
-  - it: allowlists all labels of pods, deployments and persistentvolumeclaims
+  - it: allowlists all labels of pods, deployments and persistentvolumeclaims, and the credentials-migration incomplete key on configmaps
     asserts:
       - contains:
           path: spec.template.spec.containers[0].args
-          content: --metric-labels-allowlist=pods=[*],deployments=[*],persistentvolumeclaims=[*]
+          content: --metric-labels-allowlist=pods=[*],deployments=[*],persistentvolumeclaims=[*],configmaps=[credentials.cozystack.io/incomplete]

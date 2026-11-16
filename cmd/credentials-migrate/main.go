@@ -45,6 +45,12 @@ var errUnresolvable = errors.New("accounts cannot be resolved")
 const (
 	reasonSkipped = "CredentialsMigrationSkipped"
 	defaultActor  = "system:serviceaccount:cozy-system:cozystack-migration-hook"
+	// incompleteLabel on the state ConfigMap is the durable signal behind the
+	// CredentialsMigrationIncomplete alert: the ConfigMap outlives the finish
+	// Job, so an alert keyed on this label fires until the conversion is
+	// finished, not only for the Job's TTL. "true" while any release is left
+	// out, "false" once none is.
+	incompleteLabel = "credentials.cozystack.io/incomplete"
 )
 
 // options is the kind's credentials block and the migration's identity, as
@@ -515,6 +521,14 @@ func (m *migrator) saveState(ctx context.Context, st *state) error {
 			cm.Data = map[string]string{}
 		}
 		cm.Data["state"] = string(raw)
+		if cm.Labels == nil {
+			cm.Labels = map[string]string{}
+		}
+		if len(st.Skipped) > 0 {
+			cm.Labels[incompleteLabel] = "true"
+		} else {
+			cm.Labels[incompleteLabel] = "false"
+		}
 		return nil
 	})
 	return err

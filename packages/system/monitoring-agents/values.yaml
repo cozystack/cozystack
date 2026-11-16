@@ -33,7 +33,14 @@ kube-state-metrics:
     # lineage labels. kube-state-metrics emits that metric only for resources on
     # this list, one series per PVC; naming only the lineage keys would emit the
     # same number of series.
-    - --metric-labels-allowlist=pods=[*],deployments=[*],persistentvolumeclaims=[*]
+    #
+    # configmaps names only the credentials.cozystack.io/incomplete key, which
+    # the credentials migration sets on its state ConfigMap: that ConfigMap
+    # outlives the finish Job, so the CredentialsMigrationIncomplete alert keys
+    # on kube_configmap_labels and fires until the conversion is finished, not
+    # only for the Job's TTL. Only the one key is named, so this adds a single
+    # series per credentials-migration ConfigMap, not one per ConfigMap label.
+    - --metric-labels-allowlist=pods=[*],deployments=[*],persistentvolumeclaims=[*],configmaps=[credentials.cozystack.io/incomplete]
   rbac:
     extraRules:
       - apiGroups:

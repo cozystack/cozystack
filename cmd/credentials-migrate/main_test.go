@@ -353,3 +353,33 @@ func (m *migrator) switchChart(t *testing.T, version string, ready bool) {
 		t.Fatal(err)
 	}
 }
+
+func TestSaveStateLabelsIncompleteForTheAlert(t *testing.T) {
+	ctx := context.Background()
+	m := newMigrator(t)
+
+	readLabel := func() string {
+		cm := &corev1.ConfigMap{}
+		if err := m.c.Get(ctx, types.NamespacedName{Namespace: "cozy-system", Name: m.o.stateName()}, cm); err != nil {
+			t.Fatalf("get state ConfigMap: %v", err)
+		}
+		return cm.Labels[incompleteLabel]
+	}
+
+	// A release left out marks the conversion incomplete, so the durable
+	// CredentialsMigrationIncomplete alert fires on the ConfigMap label.
+	if err := m.saveState(ctx, &state{Releases: map[string]*releaseState{}, Skipped: map[string]string{"tenant-foo/postgres-orders": "left out at 2026-10-14T12:00:00Z"}}); err != nil {
+		t.Fatal(err)
+	}
+	if got := readLabel(); got != "true" {
+		t.Fatalf("%s = %q, want true while a release is skipped", incompleteLabel, got)
+	}
+
+	// None left out clears the label, so the alert resolves.
+	if err := m.saveState(ctx, &state{Releases: map[string]*releaseState{}, Skipped: map[string]string{}}); err != nil {
+		t.Fatal(err)
+	}
+	if got := readLabel(); got != "false" {
+		t.Fatalf("%s = %q, want false once none is skipped", incompleteLabel, got)
+	}
+}
