@@ -216,6 +216,22 @@ accepted_patches() {
   [ "$(accepted_patches)" = '[]' ]
 }
 
+@test "a malformed requested version is reported as the requested one" {
+  fixture '.providers["cluster-api"].spec.version = "invalid"'
+  run bash "$UPGRADE_SCRIPT"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"invalid requested version: invalid"* ]]
+  [ "$(accepted_patches)" = '[]' ]
+}
+
+@test "a malformed target release is not reported as an installed version" {
+  export TARGET_VERSION=invalid
+  run bash "$UPGRADE_SCRIPT"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"invalid target version: invalid"* ]]
+  [ "$(accepted_patches)" = '[]' ]
+}
+
 @test "versions outside the intermediate upgrade window are rejected" {
   fixture '.providers["cluster-api"].status.installedVersion = "v1.9.0-core" | .providers["cluster-api"].spec.version = "v1.9.0-core"'
   run bash "$UPGRADE_SCRIPT"

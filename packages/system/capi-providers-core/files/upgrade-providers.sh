@@ -17,12 +17,12 @@ kube() {
 }
 
 minor_version() {
-  local version="$1"
+  local version="$1" kind="$2"
   if [[ ! "$version" =~ ^v?1\.([0-9]+)\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$ ]]; then
-    fail "invalid installed version: $version"
+    fail "invalid $kind version: $version"
   fi
   local minor="${BASH_REMATCH[1]}"
-  [[ "$minor" =~ ^(0|[1-9][0-9]?)$ ]] || fail "invalid installed version: $version"
+  [[ "$minor" =~ ^(0|[1-9][0-9]?)$ ]] || fail "invalid $kind version: $version"
   printf '%s\n' "$minor"
 }
 
@@ -33,8 +33,8 @@ timeout_seconds="${CAPI_UPGRADE_TIMEOUT_SECONDS:-480}"
 deadline=$((SECONDS + timeout_seconds))
 poll_seconds="${CAPI_UPGRADE_POLL_SECONDS:-2}"
 [[ "$poll_seconds" =~ ^[0-9]+$ ]] || fail "invalid poll interval"
-bridge_minor="$(minor_version "$BRIDGE_VERSION")"
-target_minor="$(minor_version "$TARGET_VERSION")"
+bridge_minor="$(minor_version "$BRIDGE_VERSION" intermediate)"
+target_minor="$(minor_version "$TARGET_VERSION" target)"
 ((target_minor >= bridge_minor && target_minor - bridge_minor <= 3)) || fail "invalid intermediate release"
 
 core="$(kube get coreproviders.operator.cluster.x-k8s.io cluster-api --ignore-not-found --output json)"
@@ -56,14 +56,14 @@ fi
 validate_provider() {
   local object="$1" suffix="$2" installed requested uid minor requested_minor newer
   installed="$(installed_version "$object")"
-  minor="$(minor_version "$installed")"
+  minor="$(minor_version "$installed" installed)"
   newer="$(jq --null-input --arg installed "$installed" --arg target "$TARGET_VERSION" '
     def base: ltrimstr("v") | split("-")[0] | split("+")[0] | split(".") | map(tonumber);
     ($installed | base) > ($target | base)')"
   [[ "$newer" == false ]] || fail "$suffix provider downgrades are not supported"
   ((bridge_minor - minor <= 3)) || fail "$suffix is outside the intermediate upgrade window"
   requested="$(jq --raw-output '.spec.version // empty' <<< "$object")"
-  requested_minor="$(minor_version "$requested")"
+  requested_minor="$(minor_version "$requested" requested)"
   uid="$(jq --raw-output '.metadata.uid // empty' <<< "$object")"
   [[ -n "$uid" ]] || fail "$suffix provider UID is missing"
   if [[ "$requested" != "$installed" && "$requested" != "$BRIDGE_VERSION-$suffix" && "$requested" != "$TARGET_VERSION-$suffix" ]]; then
@@ -74,11 +74,11 @@ validate_provider() {
 }
 
 validate_provider "$core" core
-core_minor="$(minor_version "$(jq --raw-output '.status.installedVersion' <<< "$core")")"
+core_minor="$(minor_version "$(jq --raw-output '.status.installedVersion' <<< "$core")" installed)"
 bootstrap_minor="$target_minor"
 if [[ -n "$bootstrap" ]]; then
   validate_provider "$bootstrap" bootstrap
-  bootstrap_minor="$(minor_version "$(jq --raw-output '.status.installedVersion' <<< "$bootstrap")")"
+  bootstrap_minor="$(minor_version "$(jq --raw-output '.status.installedVersion' <<< "$bootstrap")" installed)"
 fi
 bridge_selector_needs_repair() {
   jq --exit-status --arg version "$BRIDGE_VERSION-$2" '
@@ -132,8 +132,8 @@ stage_provider() {
   installed="$(jq --raw-output '.status.installedVersion' <<< "$object")"
   requested="$(jq --raw-output '.spec.version' <<< "$object")"
   uid="$(jq --raw-output '.metadata.uid' <<< "$object")"
-  minor="$(minor_version "$installed")"
-  requested_minor="$(minor_version "$requested")"
+  minor="$(minor_version "$installed" installed)"
+  requested_minor="$(minor_version "$requested" requested)"
   expected="$requested"
   if ((minor < bridge_minor)); then
     if [[ "$requested" == "$installed" || "$requested" == "$BRIDGE_VERSION-$suffix" ]] || ((target_minor - minor > 3)); then
