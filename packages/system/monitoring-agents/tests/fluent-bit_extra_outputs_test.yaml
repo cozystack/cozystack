@@ -37,3 +37,19 @@ tests:
       - matchRegex:
           path: data["fluent-bit.conf"]
           pattern: '\n\[OUTPUT\]\n    Name forward\n    Match audit\.\*\n    Host siem\.example\.org\n    Port 24224\n'
+
+  - it: renders template expressions in extraOutputs with the subchart context
+    set:
+      fluent-bit:
+        extraOutputs: |
+          [OUTPUT]
+              Name forward
+              Match audit.*
+              Host siem.{{ .Release.Namespace }}.svc
+    asserts:
+      - matchRegex:
+          path: data["fluent-bit.conf"]
+          pattern: '\n    Host siem\.cozy-monitoring\.svc\n'
+      - notMatchRegex:
+          path: data["fluent-bit.conf"]
+          pattern: 'Release\.Namespace'
