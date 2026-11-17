@@ -24,7 +24,11 @@
 {{- $pgMajor := atoi (trimPrefix "v" .Values.version) -}}
 {{- $derived := dict -}}
 {{- range $database, $d := .Values.databases -}}
-  {{- $_ := set $derived (printf "%s_admin" $database) $database -}}
+  {{- $adminRole := printf "%s_admin" $database -}}
+  {{- if or (hasPrefix "pg_" $adminRole) (hasPrefix "cnpg_" $adminRole) -}}
+    {{- fail (printf "database %q is reserved: its roles %s_admin and %s_readonly would start with pg_ or cnpg_, which PostgreSQL and CloudNativePG reserve and the CloudNativePG webhook rejects; rename the database" $database $database $database) -}}
+  {{- end -}}
+  {{- $_ := set $derived $adminRole $database -}}
   {{- $_ := set $derived (printf "%s_readonly" $database) $database -}}
 {{- end -}}
 {{- $seen := dict -}}

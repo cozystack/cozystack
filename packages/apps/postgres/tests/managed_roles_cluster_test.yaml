@@ -200,3 +200,42 @@ tests:
     asserts:
       - failedTemplate:
           errorMessage: 'user "shop_admin" is the name of a role of database "shop"; rename the user'
+
+  - it: refuses a database whose derived roles PostgreSQL reserves
+    set:
+      databases:
+        pg_stat: {}
+    asserts:
+      - failedTemplate:
+          errorMessage: 'database "pg_stat" is reserved: its roles pg_stat_admin and pg_stat_readonly would start with pg_ or cnpg_, which PostgreSQL and CloudNativePG reserve and the CloudNativePG webhook rejects; rename the database'
+
+  - it: refuses a database whose derived roles CloudNativePG reserves
+    set:
+      databases:
+        cnpg_x: {}
+    asserts:
+      - failedTemplate:
+          errorMessage: 'database "cnpg_x" is reserved: its roles cnpg_x_admin and cnpg_x_readonly would start with pg_ or cnpg_, which PostgreSQL and CloudNativePG reserve and the CloudNativePG webhook rejects; rename the database'
+
+  - it: refuses a database named pg because pg_admin is reserved
+    set:
+      databases:
+        pg: {}
+    asserts:
+      - failedTemplate:
+          errorMessage: 'database "pg" is reserved: its roles pg_admin and pg_readonly would start with pg_ or cnpg_, which PostgreSQL and CloudNativePG reserve and the CloudNativePG webhook rejects; rename the database'
+
+  - it: refuses a database named cnpg because cnpg_admin is reserved
+    set:
+      databases:
+        cnpg: {}
+    asserts:
+      - failedTemplate:
+          errorMessage: 'database "cnpg" is reserved: its roles cnpg_admin and cnpg_readonly would start with pg_ or cnpg_, which PostgreSQL and CloudNativePG reserve and the CloudNativePG webhook rejects; rename the database'
+
+  - it: allows a database whose name merely begins with pg
+    set:
+      databases:
+        pgdata: {}
+    asserts:
+      - notFailedTemplate: {}
