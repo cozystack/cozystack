@@ -355,6 +355,13 @@ func (m *migrator) seedRelease(ctx context.Context, hr *helmv2.HelmRelease) erro
 			fmt.Printf("%s/%s: no password for %q in %s%s; the account gets a Secret at its first mint\n", hr.Namespace, hr.Name, acc.Username, hr.Name, m.o.sourceSuffix)
 			continue
 		}
+		if !format.CarriesOver(m.o.formatName, string(plaintext)) {
+			// A verifier built from this password would not authenticate it
+			// after the engine's login-time normalization, so the account is
+			// re-minted instead of carried over with a Secret nobody can use.
+			fmt.Printf("%s/%s: the password for %q in %s%s does not carry into a %s verifier unchanged; the account gets a Secret at its first mint\n", hr.Namespace, hr.Name, acc.Username, hr.Name, m.o.sourceSuffix, m.o.formatName)
+			continue
+		}
 		stored, err := format.Encode(m.o.formatName, string(plaintext))
 		if err != nil {
 			return err

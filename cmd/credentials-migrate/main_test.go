@@ -335,6 +335,28 @@ func TestSeedReplacesAForeignSecretAndSkipsAMissingPlaintext(t *testing.T) {
 	}
 }
 
+func TestSeedSkipsAPasswordThatDoesNotCarryOver(t *testing.T) {
+	ctx := context.Background()
+	// PostgreSQL runs SASLprep on the presented password at login, and it
+	// removes a soft hyphen (U+00AD), so a SCRAM verifier built here from the
+	// raw bytes would never authenticate the password. The account is left to
+	// its first mint rather than stored as a verifier nobody can log in with.
+	m := newMigrator(t, release(`{"users":{"ascii":{},"weird":{}}}`, "0.1.0", true), sourceSecret(map[string]string{"ascii": "hunter2", "weird": "I­X"}))
+	if err := m.seed(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := m.secret(t, "postgres-orders.ascii.account"); !ok {
+		t.Fatal("a printable-ASCII password must carry over")
+	}
+	if _, ok := m.secret(t, "postgres-orders.weird.account"); ok {
+		t.Fatal("a password SASLprep would rewrite must be left to its first mint, not stored")
+	}
+	st, _ := m.loadState(ctx)
+	if st.Releases["tenant-foo/postgres-orders"] == nil || len(st.Skipped) != 0 {
+		t.Fatalf("the release is recorded and not skipped: %+v", st)
+	}
+}
+
 // switchChart moves the release to another chart version, Ready or not.
 func (m *migrator) switchChart(t *testing.T, version string, ready bool) {
 	t.Helper()
