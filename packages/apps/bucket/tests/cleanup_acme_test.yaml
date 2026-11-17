@@ -104,7 +104,9 @@ tests:
           pattern: "delete .*-l acme.cert-manager.io/http01-solver=true"
 
   - it: deletes the TLS Secret of the UI Certificate only once that Certificate is deleted
-    documentIndex: 0
+    documentSelector:
+      path: kind
+      value: Job
     asserts:
       # cert-manager writes the Secret with no owner reference, so nothing else
       # reclaims it, and a Secret deleted while its Certificate still exists is
