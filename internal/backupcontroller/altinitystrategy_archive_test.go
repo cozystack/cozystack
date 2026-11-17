@@ -1434,8 +1434,13 @@ func TestCleanupAltinityBackup_RetriesAJobRefusedByAQuota(t *testing.T) {
 			if _, err := r.cleanupOnDelete(context.Background(), backup); err == nil {
 				t.Fatal("a cleanup Job refused by a quota must go back to the work queue with the Backup held, not release it")
 			}
-			if len(rec.Events) != 0 {
-				t.Errorf("unexpected event %q: the Backup is not released", <-rec.Events)
+			// The Backup stays terminating, so the refusal is named on it
+			// rather than only in the controller log.
+			if len(rec.Events) == 0 {
+				t.Fatal("a cleanup Job refused by a quota must surface as a Warning Event")
+			}
+			if ev := <-rec.Events; !strings.Contains(ev, "Warning ArtifactCleanupFailed") || !strings.Contains(ev, "quota") || strings.Contains(ev, "ArtifactNotDeleted") {
+				t.Errorf("event %q must be an ArtifactCleanupFailed Warning naming the quota", ev)
 			}
 		})
 	}

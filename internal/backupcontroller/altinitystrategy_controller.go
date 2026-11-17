@@ -1158,6 +1158,10 @@ func (r *BackupReconciler) cleanupAltinityBackup(ctx context.Context, backup *ba
 			fmt.Sprintf("chi-clickhouse-%s-clickhouse-0-0.%s.svc", release, backup.Namespace), authSecret, archive)
 		if cerr := r.Create(ctx, desired); cerr != nil && !apierrors.IsAlreadyExists(cerr) {
 			if altinityQuotaRefusal(cerr) {
+				if r.Recorder != nil {
+					r.Recorder.Eventf(backup, corev1.EventTypeWarning, "ArtifactCleanupFailed",
+						"cleanup Job %s for archive %s was refused by a ResourceQuota (%v); retrying", jobKey.Name, archive, cerr)
+				}
 				return ctrl.Result{}, cerr
 			}
 			if apierrors.IsForbidden(cerr) || apierrors.IsInvalid(cerr) {
