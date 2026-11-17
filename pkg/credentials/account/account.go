@@ -112,6 +112,19 @@ func Validate(c *cozyv1alpha1.ApplicationDefinitionCredentials) error {
 	if c.ValuesPath != "" && !strings.HasPrefix(c.ValuesPath, "_") {
 		return fmt.Errorf("valuesPath %q must start with \"_\"", c.ValuesPath)
 	}
+	// Labels copies secretLabels over the account marker and the application
+	// identity labels, which store.List, store.Prune and the Credential view
+	// select the account Secrets by. A block that sets one of them would make
+	// those Secrets unreachable, so refuse it rather than lose the selector.
+	for k := range c.SecretLabels {
+		switch k {
+		case AccountLabel,
+			appsv1alpha1.ApplicationGroupLabel,
+			appsv1alpha1.ApplicationKindLabel,
+			appsv1alpha1.ApplicationNameLabel:
+			return fmt.Errorf("secretLabels key %q is reserved: it is the account marker or an application identity label the account Secrets are selected by", k)
+		}
+	}
 	if len(c.Accounts) == 0 {
 		return errors.New("accounts is empty")
 	}

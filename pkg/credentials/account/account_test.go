@@ -12,6 +12,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	cozyv1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
+	appsv1alpha1 "github.com/cozystack/cozystack/pkg/apis/apps/v1alpha1"
 	corev1alpha1 "github.com/cozystack/cozystack/pkg/apis/core/v1alpha1"
 )
 
@@ -78,12 +79,23 @@ func static(name, when string, owner cozyv1alpha1.CredentialAccountOwner) cozyv1
 	return cozyv1alpha1.CredentialAccountSource{Kind: cozyv1alpha1.CredentialAccountsStatic, Name: name, When: when, Owner: owner}
 }
 
+func withSecretLabel(key string) *cozyv1alpha1.ApplicationDefinitionCredentials {
+	b := block(valuesMap("users"))
+	b.SecretLabels = map[string]string{key: "x"}
+	return b
+}
+
 func TestValidate(t *testing.T) {
 	if err := Validate(nil); err != nil {
 		t.Errorf("nil block: %v", err)
 	}
 	if err := Validate(block(valuesMap("users"))); err != nil {
 		t.Errorf("valid block: %v", err)
+	}
+	withLabels := block(valuesMap("users"))
+	withLabels.SecretLabels = map[string]string{"cnpg.io/reload": "true"}
+	if err := Validate(withLabels); err != nil {
+		t.Errorf("block with a non-reserved secretLabel: %v", err)
 	}
 
 	notBuilt := []*cozyv1alpha1.ApplicationDefinitionCredentials{
@@ -106,6 +118,8 @@ func TestValidate(t *testing.T) {
 		block(cozyv1alpha1.CredentialAccountSource{Kind: cozyv1alpha1.CredentialAccountsValuesMap}),
 		block(cozyv1alpha1.CredentialAccountSource{Kind: cozyv1alpha1.CredentialAccountsStatic}),
 		block(static("x", "", "nobody")),
+		withSecretLabel(AccountLabel),
+		withSecretLabel(appsv1alpha1.ApplicationNameLabel),
 	}
 	for i, b := range invalid {
 		if err := Validate(b); err == nil || errors.Is(err, ErrNotBuilt) {
