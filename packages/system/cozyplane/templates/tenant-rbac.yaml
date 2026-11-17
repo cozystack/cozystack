@@ -23,6 +23,9 @@ rules:
       - vpcpeerings
       - securitygroups
       - floatingips
+      - natgateways
+      - routetables
+      - routes
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
   - apiGroups: ["sdn.cozystack.io"]
     resources:
@@ -31,6 +34,9 @@ rules:
       - vpcpeerings/status
       - securitygroups/status
       - floatingips/status
+      - natgateways/status
+      - routetables/status
+      - routes/status
     verbs: ["get"]
 
   {{- /* Granting the virtual verbs in an aggregated edit role is not an
@@ -61,4 +67,7 @@ rules:
       - vpcpeerings
       - securitygroups
       - floatingips
+      - natgateways
+      - routetables
+      - routes
     verbs: ["get", "list", "watch"]
