@@ -566,6 +566,101 @@ func TestCleanupAltinityBackup_FailedJobBacksOff(t *testing.T) {
 	}
 }
 
+// Recording the failure updates the Backup, which starts the next reconcile
+// at once, and the Job cache can still hold the failed Job the controller has
+// just deleted. That Job is counted once: seen again, it is deleted without a
+// second Event and without doubling the wait.
+func TestCleanupAltinityBackup_CountsAFailedJobOnce(t *testing.T) {
+	backup := altinityCleanupBackup("ch-bk")
+	retryAt := time.Now().Add(altinityCleanupRetryBase).UTC().Format(time.RFC3339)
+	backup.Annotations = map[string]string{
+		altinityCleanupFailuresAnnotation:   "1",
+		altinityCleanupRetryAfterAnnotation: retryAt,
+		altinityCleanupFailedJobAnnotation:  "failed-job-uid",
+	}
+	failed := ownCleanupJob(backup)
+	failed.UID = "failed-job-uid"
+	failed.Status.Conditions = []batchv1.JobCondition{{Type: batchv1.JobFailed, Status: corev1.ConditionTrue, Reason: "BackoffLimitExceeded"}}
+	c, s := newAltinityCleanupClient(append(altinityCleanupFixtures(backup), failed)...)
+	rec := record.NewFakeRecorder(10)
+	r := &BackupReconciler{Client: c, Scheme: s, Recorder: rec}
+	res, err := r.cleanupOnDelete(context.Background(), backup)
+	if err != nil {
+		t.Fatalf("cleanupOnDelete: %v", err)
+	}
+	if res.RequeueAfter <= 0 || res.RequeueAfter > altinityCleanupRetryBase {
+		t.Errorf("RequeueAfter = %s, want what is left of the wait already set", res.RequeueAfter)
+	}
+	got := &backupsv1alpha1.Backup{}
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(backup), got); err != nil {
+		t.Fatalf("get Backup: %v", err)
+	}
+	if f := got.Annotations[altinityCleanupFailuresAnnotation]; f != "1" {
+		t.Errorf("failures = %q, want the one failure counted once", f)
+	}
+	if at := got.Annotations[altinityCleanupRetryAfterAnnotation]; at != retryAt {
+		t.Errorf("retry-after = %q, want the one already set, %q", at, retryAt)
+	}
+	if len(rec.Events) != 0 {
+		t.Errorf("unexpected event %q for a failure already reported", <-rec.Events)
+	}
+	if left := listJobs(t, c); len(left) != 0 {
+		t.Errorf("expected the failed Job collected, %d left", len(left))
+	}
+}
+
+// A counted Job seen again after its wait has run out still holds the Backup:
+// releasing it there would drop the finalizer with the archive undeleted.
+func TestCleanupAltinityBackup_KeepsTheBackupWhenACountedJobOutlivesItsWait(t *testing.T) {
+	backup := altinityCleanupBackup("ch-bk")
+	backup.Annotations = map[string]string{
+		altinityCleanupFailuresAnnotation:   "1",
+		altinityCleanupRetryAfterAnnotation: time.Now().Add(-time.Minute).UTC().Format(time.RFC3339),
+		altinityCleanupFailedJobAnnotation:  "failed-job-uid",
+	}
+	failed := ownCleanupJob(backup)
+	failed.UID = "failed-job-uid"
+	failed.Status.Conditions = []batchv1.JobCondition{{Type: batchv1.JobFailed, Status: corev1.ConditionTrue, Reason: "BackoffLimitExceeded"}}
+	c, s := newAltinityCleanupClient(append(altinityCleanupFixtures(backup), failed)...)
+	r := &BackupReconciler{Client: c, Scheme: s, Recorder: record.NewFakeRecorder(10)}
+	res, err := r.cleanupOnDelete(context.Background(), backup)
+	if err != nil {
+		t.Fatalf("cleanupOnDelete: %v", err)
+	}
+	if res.RequeueAfter <= 0 {
+		t.Errorf("RequeueAfter = %s: the Backup must stay until a delete succeeds", res.RequeueAfter)
+	}
+}
+
+// A new failed Job, under the same name, is counted even when an earlier one
+// was: its UID is not the one recorded.
+func TestCleanupAltinityBackup_CountsANewFailedJob(t *testing.T) {
+	backup := altinityCleanupBackup("ch-bk")
+	backup.Annotations = map[string]string{
+		altinityCleanupFailuresAnnotation:  "1",
+		altinityCleanupFailedJobAnnotation: "earlier-job-uid",
+	}
+	failed := ownCleanupJob(backup)
+	failed.UID = "new-job-uid"
+	failed.Status.Conditions = []batchv1.JobCondition{{Type: batchv1.JobFailed, Status: corev1.ConditionTrue, Reason: "BackoffLimitExceeded"}}
+	c, s := newAltinityCleanupClient(append(altinityCleanupFixtures(backup), failed)...)
+	rec := record.NewFakeRecorder(10)
+	r := &BackupReconciler{Client: c, Scheme: s, Recorder: rec}
+	if _, err := r.cleanupOnDelete(context.Background(), backup); err != nil {
+		t.Fatalf("cleanupOnDelete: %v", err)
+	}
+	got := &backupsv1alpha1.Backup{}
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(backup), got); err != nil {
+		t.Fatalf("get Backup: %v", err)
+	}
+	if f, j := got.Annotations[altinityCleanupFailuresAnnotation], got.Annotations[altinityCleanupFailedJobAnnotation]; f != "2" || j != "new-job-uid" {
+		t.Errorf("failures = %q, counted Job = %q; want 2 and new-job-uid", f, j)
+	}
+	if len(rec.Events) != 1 {
+		t.Errorf("events = %d, want one for the new failure", len(rec.Events))
+	}
+}
+
 // The wait is recorded before the failed Job is deleted, so a delete that
 // fails leaves the Backup waiting rather than free to start the next Job at
 // once.
