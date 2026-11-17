@@ -40,7 +40,8 @@ type rvWatchFixture struct {
 	liveReleaseGets int
 	// liveReleaseErrs are returned by the next live HelmRelease reads, one
 	// per read, before reads reach the store again.
-	liveReleaseErrs []error
+	liveReleaseErrs    []error
+	onLiveReleaseError func(context.Context)
 	// liveReleaseHang makes live HelmRelease reads block until their context
 	// ends, like a request to an API server that never answers.
 	liveReleaseHang bool
@@ -88,6 +89,10 @@ func newRVWatchFixture(t *testing.T) *rvWatchFixture {
 				if len(f.liveReleaseErrs) > 0 {
 					err := f.liveReleaseErrs[0]
 					f.liveReleaseErrs = f.liveReleaseErrs[1:]
+					if hook := f.onLiveReleaseError; hook != nil {
+						f.onLiveReleaseError = nil
+						hook(ctx)
+					}
 					return err
 				}
 			}
@@ -388,10 +393,9 @@ func TestWatchMonitorEventGivesUpAfterRetries(t *testing.T) {
 	}
 }
 
-// stopDuringLiveReadRetry queues a failure for every attempt, sends a monitor
-// event and calls stop while the watch waits between attempts. The watch must
-// close after the one read made before the stop.
-func stopDuringLiveReadRetry(t *testing.T, f *rvWatchFixture, w watch.Interface, stop func()) {
+// Cancel before the first failed Get returns: a send to FakeWatcher only
+// orders event receipt, so cancelling after the send can lose the retry window.
+func stopAtFailedLiveRead(t *testing.T, f *rvWatchFixture, w watch.Interface, stop func()) {
 	t.Helper()
 	live := f.advanceLive(t, "live")
 	readsBefore := f.liveReleaseGets
@@ -400,8 +404,15 @@ func stopDuringLiveReadRetry(t *testing.T, f *rvWatchFixture, w watch.Interface,
 		f.liveReleaseErrs = append(f.liveReleaseErrs, timeout)
 	}
 
+	f.onLiveReleaseError = func(ctx context.Context) {
+		stop()
+		select {
+		case <-ctx.Done():
+		case <-time.After(5 * time.Second):
+			t.Error("live read context still open after cancellation")
+		}
+	}
 	f.monitorEvent(live.ResourceVersion)
-	stop()
 	select {
 	case ev, ok := <-w.ResultChan():
 		if ok {
@@ -415,13 +426,13 @@ func stopDuringLiveReadRetry(t *testing.T, f *rvWatchFixture, w watch.Interface,
 	}
 }
 
-func TestWatchStopEndsLiveReadRetry(t *testing.T) {
+func TestWatchStopAtFailedLiveReadPreventsRetry(t *testing.T) {
 	f := newRVWatchFixture(t)
 	_, w := startRVWatch(t, f)
-	stopDuringLiveReadRetry(t, f, w, w.Stop)
+	stopAtFailedLiveRead(t, f, w, w.Stop)
 }
 
-func TestWatchContextCancelEndsLiveReadRetry(t *testing.T) {
+func TestWatchContextCancelAtFailedLiveReadPreventsRetry(t *testing.T) {
 	f := newRVWatchFixture(t)
 	ctx, cancel := context.WithCancel(request.WithNamespace(context.Background(), "default"))
 	t.Cleanup(cancel)
@@ -430,7 +441,7 @@ func TestWatchContextCancelEndsLiveReadRetry(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(w.Stop)
-	stopDuringLiveReadRetry(t, f, w, cancel)
+	stopAtFailedLiveRead(t, f, w, cancel)
 }
 
 // A live read that never answers must not outlive the watch: Stop cancels
