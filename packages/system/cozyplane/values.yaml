@@ -2,7 +2,7 @@
 # Digest-pinned (no floating tag). Built and published by .github/workflows/
 # release.yml on every push to main; see docs/packaging.md for how the digest is
 # refreshed and why pinning it does not change it.
-image: ghcr.io/lllamnyp/cozyplane@sha256:55132be06a41a1edf4a57f2120d02996f3c6ffb98ab553f4c1dda581fec257d4
+image: ghcr.io/lllamnyp/cozyplane@sha256:25c209e247a65ee3d430b0a1ba4f10ca2cf066d64c2bef10fdaa9f6c0266e48a
 imagePullPolicy: IfNotPresent
 imagePullSecrets: []
 

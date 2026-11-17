@@ -71,6 +71,18 @@ rules:
   - apiGroups: ["local.sdn.cozystack.io"]
     resources: ["fabricips"]
     verbs: ["get", "list", "watch", "create", "delete", "deletecollection"]
+  # NAT gateways, route tables and routes: the agent programs vpc_routes,
+  # port_rt and the NAT maps from them (docs/vpc-egress.md §6).
+  - apiGroups: ["sdn.cozystack.io"]
+    resources: ["natgateways", "routetables", "routes"]
+    verbs: ["get", "list", "watch"]
+  # NATPortBlock leases: the agent claims, releases and acks them (§4.3).
+  - apiGroups: ["local.sdn.cozystack.io"]
+    resources: ["natportblocks"]
+    verbs: ["get", "list", "watch", "create", "delete"]
+  - apiGroups: ["local.sdn.cozystack.io"]
+    resources: ["natportblocks/status"]
+    verbs: ["get", "patch"]
   # HostFirewalls: the agent compiles the objects selecting its node into the
   # hf_allow map and arms enforcement (docs/host-firewall.md).
   - apiGroups: ["sdn.cozystack.io"]

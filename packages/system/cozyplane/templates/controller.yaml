@@ -116,6 +116,25 @@ rules:
   - apiGroups: ["local.sdn.cozystack.io"]
     resources: ["fabricips"]
     verbs: ["get", "list", "watch", "delete"]
+  # NAT gateways, route tables and routes (docs/vpc-egress.md): the controller
+  # allocates their ids, resolves routes, owns each NAT gateway's LoadBalancer
+  # Services, and creates the objects a VPCGateway's nat.enabled asks for (§7).
+  - apiGroups: ["sdn.cozystack.io"]
+    resources: ["natgateways", "routetables", "routes"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["sdn.cozystack.io"]
+    resources: ["natgateways/status", "routetables/status", "routes/status"]
+    verbs: ["get", "update", "patch"]
+  # NATPortBlock leases: the controller deletes those of gone nodes and of
+  # deleted NAT gateways, and counts them into NATGateway status (§4.3).
+  - apiGroups: ["local.sdn.cozystack.io"]
+    resources: ["natportblocks"]
+    verbs: ["get", "list", "watch", "delete"]
+  # IPAddressClaims (the address-controller): read a named claim's addresses to
+  # choose the families of the Service that attaches it (§2.1). Never written.
+  - apiGroups: ["local.sdn.cozystack.io"]
+    resources: ["ipaddressclaims"]
+    verbs: ["get"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding

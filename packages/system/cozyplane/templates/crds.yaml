@@ -104,4 +104,136 @@ spec:
     served: true
     storage: true
     subresources: {}
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.19.0
+  name: natportblocks.local.sdn.cozystack.io
+spec:
+  group: local.sdn.cozystack.io
+  names:
+    kind: NATPortBlock
+    listKind: NATPortBlockList
+    plural: natportblocks
+    singular: natportblock
+  scope: Cluster
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.natGatewayRef.name
+      name: NATGateway
+      type: string
+    - jsonPath: .spec.natGatewayRef.namespace
+      name: Namespace
+      type: string
+    - jsonPath: .spec.block
+      name: Block
+      type: integer
+    - jsonPath: .spec.node
+      name: Node
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: |-
+          NATPortBlock is one node's lease on one block of one NAT gateway's port space
+          (docs/vpc-egress.md §2.5, §4.3).
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: NATPortBlockSpec records which node holds which block of
+              which NAT gateway.
+            properties:
+              block:
+                description: 'Block is the block number: ports 1024+Block*blockSize
+                  up to the next block.'
+                format: int32
+                type: integer
+              natGatewayRef:
+                description: NATGatewayRef is the NAT gateway whose port space the
+                  block belongs to.
+                properties:
+                  name:
+                    type: string
+                  namespace:
+                    type: string
+                  uid:
+                    description: |-
+                      UID is a type that holds unique ID values, including UUIDs.  Because we
+                      don't ONLY use UUIDs, this is an alias to string.  Being a type captures
+                      intent and helps make sure that UIDs and names do not get conflated.
+                    type: string
+                required:
+                - name
+                - namespace
+                - uid
+                type: object
+              node:
+                description: Node is the node that holds the block.
+                type: string
+            required:
+            - block
+            - natGatewayRef
+            - node
+            type: object
+          status:
+            description: NATPortBlockStatus carries the per-node acknowledgements.
+            properties:
+              acks:
+                description: |-
+                  Acks lists the nodes whose agent has programmed this block's owner. The
+                  holder allocates from the block only once every Ready node is listed.
+                  Each agent server-side-applies its own entry.
+                items:
+                  description: NATPortBlockAck records that one node's agent has programmed
+                    this block's owner.
+                  properties:
+                    bootID:
+                      description: |-
+                        BootID is the acking node's boot ID (Node.status.nodeInfo.bootID). The
+                        datapath state an ack vouches for does not survive a reboot, so an ack
+                        counts only while the node's boot ID still matches.
+                      type: string
+                    node:
+                      type: string
+                  required:
+                  - node
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - node
+                x-kubernetes-list-type: map
+              active:
+                description: |-
+                  Active is set by the holder the first time every Ready node has acked.
+                  Once active a block stays active: a node that reboots and has not
+                  re-acked yet is kept from attracting the NAT gateway's address instead
+                  (docs/vpc-egress.md §4.3).
+                type: boolean
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}
 {{- end }}
