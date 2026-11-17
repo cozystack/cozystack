@@ -189,7 +189,7 @@ tests:
         documentSelector: {path: kind, value: KubevirtMachineTemplate}
       # And the disk binds on the class the guard just compared. Leaving the field
       # out here passed the guard and then bound the next disk on `fast-nvme`, one
-      # class away from the golden, which is the host-assisted copy the guard is
+      # class away from the golden, which is the cross-class clone the guard is
       # there to refuse.
       - equal:
           path: spec.template.spec.virtualMachineTemplate.spec.dataVolumeTemplates[0].spec.storage.storageClassName
@@ -243,7 +243,7 @@ tests:
           version: v1.13.6
     asserts:
       - failedTemplate:
-          errorPattern: 'An empty storageClass was resolved to the cluster default StorageClass "fast-nvme"'
+          errorPattern: 'An empty storageClass was resolved to "fast-nvme", the class CDI binds a disk that names none on\.'
 
   # With both sides explicit nothing was resolved from the default, and the
   # sentence is absent rather than reporting an empty lookup. The two sentences
@@ -257,7 +257,7 @@ tests:
           version: v1.13.6
     asserts:
       - failedTemplate:
-          errorPattern: 'host-assisted copy over the pod network\. Neither side can be moved in place'
+          errorPattern: 'to the CSI driver\. Neither side can be moved in place'
 
   # The size floor reads the PVC when the DataVolume spec omits a size, so a
   # golden it could size no longer slips past unmeasured.
