@@ -72,6 +72,10 @@ type CozyServerOptions struct {
 	HelmReleaseInstallTimeout string
 	HelmReleaseUpgradeTimeout string
 	HelmReleaseMaxHistory     int
+
+	// ServeSDN installs the sdn.cozystack.io group; off where another
+	// aggregated server owns it.
+	ServeSDN bool
 }
 
 // NewCozyServerOptions returns a new instance of CozyServerOptions
@@ -94,6 +98,7 @@ func NewCozyServerOptions(out, errOut io.Writer) *CozyServerOptions {
 		HelmReleaseInstallTimeout: "10m",
 		HelmReleaseUpgradeTimeout: "10m",
 		HelmReleaseMaxHistory:     5,
+		ServeSDN:                  true,
 	}
 	o.RecommendedOptions.Etcd = nil
 	disableUnsyncableAdmissionPlugins(o.RecommendedOptions.Admission)
@@ -169,6 +174,9 @@ func NewCommandStartCozyServer(ctx context.Context, defaults *CozyServerOptions)
 	flags.IntVar(&o.HelmReleaseMaxHistory, "helmrelease-max-history", o.HelmReleaseMaxHistory,
 		"Number of release revisions Helm keeps for HelmReleases generated from Application "+
 			"resources (Spec.MaxHistory). 0 means unlimited; 5 matches Helm's default.")
+
+	flags.BoolVar(&o.ServeSDN, "serve-sdn", o.ServeSDN,
+		"Serve the sdn.cozystack.io API group. Turn off where another aggregated API server owns the group.")
 
 	// Note: KEP-4330 component versioning functionality (k8s.io/apiserver/pkg/util/version)
 	// is not available in Kubernetes v0.34.1. The component versioning code has been removed.
@@ -469,6 +477,7 @@ func (o *CozyServerOptions) Config() (*apiserver.Config, error) {
 	config := &apiserver.Config{
 		GenericConfig:  serverConfig,
 		ResourceConfig: o.ResourceConfig,
+		ServeSDN:       o.ServeSDN,
 	}
 	return config, nil
 }
