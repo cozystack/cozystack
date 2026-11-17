@@ -4,7 +4,10 @@ templates:
   - charts/kube-ovn/templates/vpc-nat-config.yaml
 
 tests:
-  - it: uses the image produced by this package
+  - it: uses the NAT gateway repository with an explicit build tag
+    set:
+      global.registry.address: ghcr.io/cozystack/cozystack
+      global.images.natgateway.tag: dev
     documentSelector:
       path: metadata.name
       value: ovn-vpc-nat-config

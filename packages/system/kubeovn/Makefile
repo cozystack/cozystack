@@ -54,7 +54,7 @@ image:
 		--metadata-file images/vpc-nat-gateway.json \
 		$(BUILDX_ARGS)
 	REPOSITORY="vpc-nat-gateway" \
-		yq -i '.global.images.natgateway.repository = strenv(REPOSITORY)' values.yaml
-	TAG="$(IMAGE_TAG)@$$(yq e '."containerimage.digest"' images/vpc-nat-gateway.json -o json -r)" \
-		yq -i '.global.images.natgateway.tag = strenv(TAG)' values.yaml
+		yq --inplace '.global.images.natgateway.repository = strenv(REPOSITORY)' values.yaml
+	TAG="$(IMAGE_TAG)@$$(yq eval '."containerimage.digest"' images/vpc-nat-gateway.json --output-format=json --unwrapScalar)" \
+		yq --inplace '.global.images.natgateway.tag = strenv(TAG)' values.yaml
 	rm -f images/vpc-nat-gateway.json
