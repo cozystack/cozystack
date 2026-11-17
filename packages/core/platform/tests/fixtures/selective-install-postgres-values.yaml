@@ -46,6 +46,7 @@ bundles:
     - cozystack.nfs-driver
     - cozystack.observability-proxy
     - cozystack.openbao-application
+    - cozystack.opencost
     - cozystack.opensearch-application
     - cozystack.opensearch-operator
     - cozystack.qdrant-application
