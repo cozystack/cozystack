@@ -83,7 +83,7 @@ func TestEnsureSeedsAndKeepsTheirs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(written) != 1 || written[0] != "postgres-orders.web.account" {
+	if len(written) != 1 || written[0].Name != "postgres-orders.web.account" {
 		t.Fatalf("written = %v", written)
 	}
 	sec := getSecret(t, c, "postgres-orders.web.account")
@@ -113,7 +113,7 @@ func TestEnsureSeedsAndKeepsTheirs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(written) != 1 || written[0] != "postgres-orders.api.account" {
+	if len(written) != 1 || written[0].Name != "postgres-orders.api.account" {
 		t.Fatalf("an update seeds only the added account, written = %v", written)
 	}
 	sec = getSecret(t, c, "postgres-orders.web.account")

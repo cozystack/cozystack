@@ -84,7 +84,7 @@ func (r *REST) direct() client.Client {
 // HelmRelease exists, or for removal if the HelmRelease is not created.
 // An existing release fails the create before any Secret is touched, since
 // its own Secrets would otherwise be replaced.
-func (r *REST) seedBeforeCreate(ctx context.Context, app *appsv1alpha1.Application, hr *helmv2.HelmRelease, accounts []account.Account, dryRun bool) ([]string, error) {
+func (r *REST) seedBeforeCreate(ctx context.Context, app *appsv1alpha1.Application, hr *helmv2.HelmRelease, accounts []account.Account, dryRun bool) ([]store.Seeded, error) {
 	if r.credentials == nil {
 		return nil, nil
 	}
@@ -102,7 +102,7 @@ func (r *REST) seedBeforeCreate(ctx context.Context, app *appsv1alpha1.Applicati
 	}
 	written, err := store.Ensure(ctx, r.direct(), r.storeApp(app.Namespace, app.Name), accounts, nil, metav1.Now(), actor(ctx))
 	if err != nil {
-		r.unseed(ctx, app.Namespace, written)
+		r.unseed(ctx, app.Namespace, hr.Name, written)
 		if errors.Is(err, store.ErrLiveOwner) {
 			return nil, apierrors.NewAlreadyExists(r.gvr.GroupResource(), app.Name)
 		}
@@ -112,13 +112,38 @@ func (r *REST) seedBeforeCreate(ctx context.Context, app *appsv1alpha1.Applicati
 }
 
 // unseed removes the Secrets a create wrote before its HelmRelease failed, so
-// a retry starts clean. Best effort: a retry replaces a leftover in any case.
-func (r *REST) unseed(ctx context.Context, namespace string, names []string) {
-	for _, name := range names {
-		sec := &corev1.Secret{}
-		sec.Namespace, sec.Name = namespace, name
-		if err := r.direct().Delete(ctx, sec); err != nil && !apierrors.IsNotFound(err) {
-			klog.Warningf("failed to remove account Secret %s/%s after a failed create: %v", namespace, name, err)
+// a retry starts clean. Ownership of an application's account Secrets follows
+// its HelmRelease, not a Secret's identity: once a release exists, a concurrent
+// create won it and owns the Secrets, and may have adopted by name the very one
+// this create seeded, so unseed deletes nothing. A create that lost the race
+// reaches here only after its own create failed with AlreadyExists, by when
+// that release provably exists, and the read is uncached so it is seen. Only a
+// create that left no release behind deletes its orphaned seed, and then only
+// the exact object it wrote, so a concurrent retry's fresh Secret survives.
+func (r *REST) unseed(ctx context.Context, namespace, release string, seeded []store.Seeded) {
+	hr := &helmv2.HelmRelease{}
+	switch err := r.direct().Get(ctx, client.ObjectKey{Namespace: namespace, Name: release}, hr); {
+	case err == nil:
+		return
+	case !apierrors.IsNotFound(err):
+		klog.Warningf("failed to check HelmRelease %s/%s before cleaning up a failed create; leaving its account Secrets: %v", namespace, release, err)
+		return
+	}
+	for _, s := range seeded {
+		cur := &corev1.Secret{}
+		if err := r.direct().Get(ctx, client.ObjectKey{Namespace: namespace, Name: s.Name}, cur); err != nil {
+			if !apierrors.IsNotFound(err) {
+				klog.Warningf("failed to read account Secret %s/%s before removing it after a failed create: %v", namespace, s.Name, err)
+			}
+			continue
+		}
+		if cur.UID != s.UID {
+			continue
+		}
+		rv := cur.ResourceVersion
+		if err := r.direct().Delete(ctx, cur, client.Preconditions{UID: &s.UID, ResourceVersion: &rv}); err != nil &&
+			!apierrors.IsNotFound(err) && !apierrors.IsConflict(err) {
+			klog.Warningf("failed to remove account Secret %s/%s after a failed create: %v", namespace, s.Name, err)
 		}
 	}
 }
@@ -126,11 +151,11 @@ func (r *REST) unseed(ctx context.Context, namespace string, names []string) {
 // ownSeeded gives the created HelmRelease the account Secrets seeded before
 // it. The application exists by now, so a failure is reported as a warning
 // rather than an error.
-func (r *REST) ownSeeded(ctx context.Context, hr *helmv2.HelmRelease, names []string) {
-	if len(names) == 0 {
+func (r *REST) ownSeeded(ctx context.Context, hr *helmv2.HelmRelease, seeded []store.Seeded) {
+	if len(seeded) == 0 {
 		return
 	}
-	if err := store.SetOwner(ctx, r.direct(), hr.Namespace, names, store.OwnerReference(hr)); err != nil {
+	if err := store.SetOwner(ctx, r.direct(), hr.Namespace, seeded, store.OwnerReference(hr)); err != nil {
 		klog.Errorf("failed to own account Secrets of %s/%s: %v", hr.Namespace, hr.Name, err)
 		warning.AddWarning(ctx, "", fmt.Sprintf("account Secrets were written but not yet owned by the release: %v", err))
 	}

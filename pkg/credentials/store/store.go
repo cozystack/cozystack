@@ -91,6 +91,15 @@ func SeedSecret(app App, acc account.Account, owner *metav1.OwnerReference, now 
 // already, and its Secrets must not be touched.
 var ErrLiveOwner = errors.New("account Secret is owned by a live HelmRelease")
 
+// Seeded is an account Secret a create wrote: its name, and the UID it got on
+// creation. A failed create's cleanup deletes only the exact object it seeded,
+// so it carries the UID to tell its own Secret from one a concurrent create of
+// the same application has since replaced at the same name.
+type Seeded struct {
+	Name string
+	UID  types.UID
+}
+
 // Theirs reports whether an existing Secret is the application's own account
 // Secret: the account marker, the same username, and owned by owner.
 func Theirs(sec *corev1.Secret, acc account.Account, owner *metav1.OwnerReference) bool {
@@ -135,8 +144,8 @@ func liveOwner(ctx context.Context, c client.Reader, sec *corev1.Secret) (bool, 
 // Secret at an account's name is a leftover and is replaced, so the account
 // gets a new identity and the Secret is among those to be owned; one a live
 // HelmRelease owns stops the create with ErrLiveOwner.
-func Ensure(ctx context.Context, c client.Client, app App, accounts []account.Account, owner *metav1.OwnerReference, now metav1.Time, by string) ([]string, error) {
-	var written []string
+func Ensure(ctx context.Context, c client.Client, app App, accounts []account.Account, owner *metav1.OwnerReference, now metav1.Time, by string) ([]Seeded, error) {
+	var written []Seeded
 	for _, acc := range accounts {
 		name := account.SecretName(app.Release, acc.Mapped)
 		cur := &corev1.Secret{}
@@ -167,7 +176,7 @@ func Ensure(ctx context.Context, c client.Client, app App, accounts []account.Ac
 		if err := c.Create(ctx, sec); err != nil {
 			return written, fmt.Errorf("create account Secret %s: %w", name, err)
 		}
-		written = append(written, name)
+		written = append(written, Seeded{Name: name, UID: sec.UID})
 	}
 	return written, nil
 }
@@ -189,8 +198,9 @@ func Added(prev, next []account.Account) []account.Account {
 
 // SetOwner adds the HelmRelease as owner of the named account Secrets. It is
 // the second half of a create, once the HelmRelease exists.
-func SetOwner(ctx context.Context, c client.Client, namespace string, names []string, owner metav1.OwnerReference) error {
-	for _, name := range names {
+func SetOwner(ctx context.Context, c client.Client, namespace string, seeded []Seeded, owner metav1.OwnerReference) error {
+	for _, s := range seeded {
+		name := s.Name
 		sec := &corev1.Secret{}
 		if err := c.Get(ctx, types.NamespacedName{Namespace: namespace, Name: name}, sec); err != nil {
 			return fmt.Errorf("read account Secret %s: %w", name, err)

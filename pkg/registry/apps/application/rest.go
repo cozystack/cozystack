@@ -265,7 +265,7 @@ func (r *REST) Create(ctx context.Context, obj runtime.Object, createValidation 
 	err = r.c.Create(ctx, helmRelease, registry.ClientCreateOptions(options))
 	if err != nil {
 		klog.Errorf("Failed to create HelmRelease %s: %v", helmRelease.Name, err)
-		r.unseed(ctx, app.Namespace, seeded)
+		r.unseed(ctx, app.Namespace, helmRelease.Name, seeded)
 		return nil, registry.WrapPreservingStatus("failed to create HelmRelease", err, r.gvr.GroupResource(), app.Name)
 	}
 	r.ownSeeded(ctx, helmRelease, seeded)

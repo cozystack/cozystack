@@ -329,3 +329,145 @@ func TestUpdateSeedsOnlyAddedAccounts(t *testing.T) {
 		t.Fatalf("secrets = %v, want api seeded and web left alone", keys(got))
 	}
 }
+
+// Two creates of one application race. The interceptor runs the second create
+// in full at the moment the first is about to write its HelmRelease: the
+// second seeds over the first's unowned Secret, creates the release, and
+// adopts the Secret. The first then fails AlreadyExists, and its cleanup must
+// leave the Secret the live release now owns. Without the release check and
+// the UID check in unseed the live release ends with no account Secret.
+func TestConcurrentCreateKeepsLiveSecret(t *testing.T) {
+	scheme := runtime.NewScheme()
+	if err := helmv2.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	if err := corev1.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	cfg := &config.Resource{
+		Application: config.ApplicationConfig{Kind: postgresKind, Singular: "postgres", Plural: "postgreses", OpenAPISchema: credentialsSchema},
+		Release:     config.ReleaseConfig{Prefix: "postgres-"},
+		Credentials: credentialsBlock(),
+	}
+	if err := appsv1alpha1.RegisterDynamicTypes(scheme, &config.ResourceConfig{Resources: []config.Resource{*cfg}}); err != nil {
+		t.Fatal(err)
+	}
+
+	var r *REST
+	var raced atomic.Bool
+	var uids atomic.Int64
+	c := fake.NewClientBuilder().WithScheme(scheme).WithInterceptorFuncs(interceptor.Funcs{
+		Create: func(ctx context.Context, cl client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
+			// When the first create is about to write its HelmRelease, let a
+			// second create of the same application run to completion first, so
+			// it wins the release and adopts the account Secret the first one
+			// seeded.
+			if _, ok := obj.(*helmv2.HelmRelease); ok && raced.CompareAndSwap(false, true) {
+				if _, err := r.Create(credentialsCtx(), postgresApp(`{"users":{"web":{}}}`), nil, &metav1.CreateOptions{}); err != nil {
+					return fmt.Errorf("concurrent create: %w", err)
+				}
+			}
+			if obj.GetUID() == "" {
+				obj.SetUID(types.UID(fmt.Sprintf("uid-%d", uids.Add(1))))
+			}
+			return cl.Create(ctx, obj, opts...)
+		},
+		Update: func(ctx context.Context, cl client.WithWatch, obj client.Object, opts ...client.UpdateOption) error {
+			if obj.GetUID() == "" {
+				cur := obj.DeepCopyObject().(client.Object)
+				if err := cl.Get(ctx, client.ObjectKeyFromObject(obj), cur); err == nil {
+					obj.SetUID(cur.GetUID())
+				}
+			}
+			return cl.Update(ctx, obj, opts...)
+		},
+	}).Build()
+	r = NewREST(c, c, cfg)
+
+	// The create that loses the race.
+	if _, err := r.Create(credentialsCtx(), postgresApp(`{"users":{"web":{}}}`), nil, &metav1.CreateOptions{}); !apierrors.IsAlreadyExists(err) {
+		t.Fatalf("the create that lost the race: %v, want AlreadyExists", err)
+	}
+
+	hr := getRelease(t, c)
+	sec := accountSecrets(t, c)["postgres-orders.web.account"]
+	if sec == nil {
+		t.Fatal("the live release lost its account Secret to the losing create's cleanup")
+	}
+	if len(sec.OwnerReferences) != 1 || sec.OwnerReferences[0].UID != hr.UID {
+		t.Fatalf("surviving Secret owners = %v, want the live release", sec.OwnerReferences)
+	}
+}
+
+// A concurrent create of the same application can replace a seeded Secret and
+// win the release, but not yet have adopted the replacement when the losing
+// create's cleanup runs: the replacement is still unowned. unseed must leave
+// it, because its UID is not the one this create seeded. Deleting by name, or
+// only skipping an owned Secret, would take it and leave the live release with
+// no account Secret.
+func TestUnseedLeavesAReplacedSecret(t *testing.T) {
+	r, c := newCredentialsREST(t)
+	ctx := credentialsCtx()
+	const name = "postgres-orders.web.account"
+	replacement := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "tenant-foo", UID: "uid-winner",
+			Labels: map[string]string{account.AccountLabel: "true"}},
+	}
+	if err := c.Create(ctx, replacement); err != nil {
+		t.Fatal(err)
+	}
+	// This create seeded an object that the winner has since replaced, so the
+	// UID it recorded is gone and the live Secret carries the winner's UID. No
+	// release exists here, so the UID guard alone must keep the replacement.
+	r.unseed(ctx, "tenant-foo", "postgres-orders", []store.Seeded{{Name: name, UID: "uid-loser"}})
+	sec := accountSecrets(t, c)[name]
+	if sec == nil || sec.UID != "uid-winner" {
+		t.Fatalf("unseed deleted a Secret this create did not seed: %+v", sec)
+	}
+}
+
+// With no HelmRelease for the application, a failed create's seed is a genuine
+// orphan and unseed deletes the exact object it wrote.
+func TestUnseedDeletesOrphanWhenNoRelease(t *testing.T) {
+	r, c := newCredentialsREST(t)
+	ctx := credentialsCtx()
+	const name = "postgres-orders.web.account"
+	orphan := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "tenant-foo", UID: "uid-mine",
+			Labels: map[string]string{account.AccountLabel: "true"}},
+	}
+	if err := c.Create(ctx, orphan); err != nil {
+		t.Fatal(err)
+	}
+	r.unseed(ctx, "tenant-foo", "postgres-orders", []store.Seeded{{Name: name, UID: "uid-mine"}})
+	if accountSecrets(t, c)[name] != nil {
+		t.Fatal("unseed must delete its own orphaned seed when no release exists")
+	}
+}
+
+// Once a HelmRelease for the application exists, a concurrent create won it and
+// owns the account Secrets, even one it adopted that this create had seeded, so
+// unseed deletes nothing although the UID still matches.
+func TestUnseedLeavesSecretsWhenReleaseExists(t *testing.T) {
+	r, c := newCredentialsREST(t)
+	ctx := credentialsCtx()
+	const name = "postgres-orders.web.account"
+	hr := &helmv2.HelmRelease{ObjectMeta: metav1.ObjectMeta{Name: "postgres-orders", Namespace: "tenant-foo", UID: "hr-winner"}}
+	if err := c.Create(ctx, hr); err != nil {
+		t.Fatal(err)
+	}
+	adopted := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "tenant-foo", UID: "uid-seeded",
+			Labels:          map[string]string{account.AccountLabel: "true"},
+			OwnerReferences: []metav1.OwnerReference{{APIVersion: helmv2.GroupVersion.String(), Kind: helmv2.HelmReleaseKind, Name: "postgres-orders", UID: "hr-winner"}}},
+	}
+	if err := c.Create(ctx, adopted); err != nil {
+		t.Fatal(err)
+	}
+	// This create seeded the object the winner then adopted, so the UID matches;
+	// the live release is what must keep unseed from deleting it.
+	r.unseed(ctx, "tenant-foo", "postgres-orders", []store.Seeded{{Name: name, UID: "uid-seeded"}})
+	if accountSecrets(t, c)[name] == nil {
+		t.Fatal("unseed deleted an account Secret while the application's release exists")
+	}
+}
