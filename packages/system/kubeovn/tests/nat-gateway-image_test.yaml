@@ -1,0 +1,29 @@
+suite: NAT gateway image
+
+templates:
+  - charts/kube-ovn/templates/vpc-nat-config.yaml
+
+tests:
+  - it: uses the NAT gateway repository with an explicit build tag
+    set:
+      global.registry.address: registry.example.com/cozystack
+      global.images.natgateway.tag: dev
+    documentSelector:
+      path: metadata.name
+      value: ovn-vpc-nat-config
+    asserts:
+      - equal:
+          path: data.image
+          value: registry.example.com/cozystack/vpc-nat-gateway:dev
+  - it: uses the stamped NAT gateway digest independently of the controller
+    set:
+      global.registry.address: registry.example.com/cozystack
+      global.images.kubeovn.tag: controller-build
+      global.images.natgateway.tag: gateway-build@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+    documentSelector:
+      path: metadata.name
+      value: ovn-vpc-nat-config
+    asserts:
+      - equal:
+          path: data.image
+          value: registry.example.com/cozystack/vpc-nat-gateway:gateway-build@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa

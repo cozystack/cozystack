@@ -1,0 +1,2 @@
+ARG VERSION
+FROM docker.io/kubeovn/vpc-nat-gateway:${VERSION}

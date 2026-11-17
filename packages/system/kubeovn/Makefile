@@ -45,3 +45,16 @@ image:
 	TAG="$(IMAGE_TAG)@$$(yq e '."containerimage.digest"' images/kubeovn.json -o json -r)" \
 		yq -i '.global.images.kubeovn.tag = strenv(TAG)' values.yaml
 	rm -f images/kubeovn.json
+
+	docker buildx build images/vpc-nat-gateway \
+		--file images/vpc-nat-gateway/Containerfile \
+		--build-arg VERSION=v$(KUBEOVN_TAG) \
+		$(call image-tags,vpc-nat-gateway,v$(KUBEOVN_TAG)) \
+		$(call cache-args,vpc-nat-gateway) \
+		--metadata-file images/vpc-nat-gateway.json \
+		$(BUILDX_ARGS)
+	REPOSITORY="vpc-nat-gateway" \
+		yq --inplace '.global.images.natgateway.repository = strenv(REPOSITORY)' values.yaml
+	TAG="$(IMAGE_TAG)@$$(yq eval '."containerimage.digest"' images/vpc-nat-gateway.json --output-format=json --unwrapScalar)" \
+		yq --inplace '.global.images.natgateway.tag = strenv(TAG)' values.yaml
+	rm -f images/vpc-nat-gateway.json
