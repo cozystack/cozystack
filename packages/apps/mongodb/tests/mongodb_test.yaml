@@ -558,6 +558,55 @@ tests:
           value: mydb
         documentIndex: 0
 
+  - it: renders a database declared without roles next to one with roles
+    release:
+      name: test-mongodb
+      namespace: tenant-test
+    set:
+      _cluster:
+        cluster-domain: cozy.local
+      users:
+        appuser: {}
+      databases:
+        archive: {}
+        mydb:
+          roles:
+            admin:
+              - appuser
+    asserts:
+      - equal:
+          path: spec.users[0].roles
+          value:
+            - name: readWrite
+              db: mydb
+            - name: dbAdmin
+              db: mydb
+        documentIndex: 0
+
+  - it: renders a database whose roles name no users
+    release:
+      name: test-mongodb
+      namespace: tenant-test
+    set:
+      _cluster:
+        cluster-domain: cozy.local
+      users:
+        reader: {}
+      databases:
+        archive:
+          roles: {}
+        mydb:
+          roles:
+            readonly:
+              - reader
+    asserts:
+      - equal:
+          path: spec.users[0].roles
+          value:
+            - name: read
+              db: mydb
+        documentIndex: 0
+
   - it: fails when user is not assigned to any database role
     release:
       name: test-mongodb
@@ -673,9 +722,85 @@ tests:
         s3SecretKey: "secret"
     asserts:
       - equal:
+          path: spec.backup.tasks[0].retention
+          value:
+            type: count
+            count: 30
+            deleteFromStorage: true
+        documentSelector:
+          path: kind
+          value: PerconaServerMongoDB
+      - notExists:
           path: spec.backup.tasks[0].keep
-          value: 30
-        documentIndex: 0
+        documentSelector:
+          path: kind
+          value: PerconaServerMongoDB
+
+  - it: reads a retentionPolicy without the d suffix as the same count
+    release:
+      name: test-mongodb
+      namespace: tenant-test
+    set:
+      _cluster:
+        cluster-domain: cozy.local
+      backup:
+        enabled: true
+        retentionPolicy: "48"
+        destinationPath: "s3://bucket/path/"
+        endpointURL: "http://minio:9000"
+        s3AccessKey: "access"
+        s3SecretKey: "secret"
+    asserts:
+      - equal:
+          path: spec.backup.tasks[0].retention.count
+          value: 48
+        documentSelector:
+          path: kind
+          value: PerconaServerMongoDB
+
+  - it: keeps every backup with a retentionPolicy of 0
+    release:
+      name: test-mongodb
+      namespace: tenant-test
+    set:
+      _cluster:
+        cluster-domain: cozy.local
+      backup:
+        enabled: true
+        retentionPolicy: "0"
+        destinationPath: "s3://bucket/path/"
+        endpointURL: "http://minio:9000"
+        s3AccessKey: "access"
+        s3SecretKey: "secret"
+    asserts:
+      - equal:
+          path: spec.backup.tasks[0].retention.count
+          value: 0
+        documentSelector:
+          path: kind
+          value: PerconaServerMongoDB
+
+  - it: clamps a negative retentionPolicy to 0, which the crd accepts
+    release:
+      name: test-mongodb
+      namespace: tenant-test
+    set:
+      _cluster:
+        cluster-domain: cozy.local
+      backup:
+        enabled: true
+        retentionPolicy: "-1d"
+        destinationPath: "s3://bucket/path/"
+        endpointURL: "http://minio:9000"
+        s3AccessKey: "access"
+        s3SecretKey: "secret"
+    asserts:
+      - equal:
+          path: spec.backup.tasks[0].retention.count
+          value: 0
+        documentSelector:
+          path: kind
+          value: PerconaServerMongoDB
 
   - it: sets backup schedule
     release:
