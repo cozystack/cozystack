@@ -30,7 +30,7 @@ func (r *RestoreJobReconciler) ensureMongoDBHealthCheck(ctx context.Context, rj 
 	users := "internal-" + cluster.Name + "-users"
 	pod := &corev1.PodTemplateSpec{Spec: corev1.PodSpec{
 		AutomountServiceAccountToken: ptr.To(false),
-		ActiveDeadlineSeconds:        ptr.To(int64(timeout.Seconds())),
+		ActiveDeadlineSeconds:        ptr.To(max(int64(1), int64(timeout.Seconds()))),
 		Containers: []corev1.Container{{
 			Name: "check", Image: cluster.Spec.Image,
 			Command: []string{"/bin/bash", "-ec"},

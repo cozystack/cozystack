@@ -1715,7 +1715,9 @@ func (r *RestoreJobReconciler) reconcileMongoDBRestore(ctx context.Context, rest
 		return r.awaitMongoDBTargetReady(ctx, restoreJob, nil, targetCluster, options)
 	}
 	// Percona can fail the restore permanently if PBM has not reported its version yet.
-	if existingRestore == nil && (targetCluster.Status.State != psmdbtypes.StateReady || targetCluster.Status.BackupVersion == "") {
+	toCopy := target.AppName != backup.Spec.ApplicationRef.Name
+	recoverInPlace := !toCopy && targetCluster.Status.State == psmdbtypes.StateError
+	if existingRestore == nil && (targetCluster.Status.BackupVersion == "" || (targetCluster.Status.State != psmdbtypes.StateReady && !recoverInPlace)) {
 		msg := fmt.Sprintf("target psmdb.percona.com/PerconaServerMongoDB %s/%s is not ready for restore (state=%q, backupVersion=%q); waiting for the database and its backup agents",
 			target.Namespace, targetPSMDBName, targetCluster.Status.State, targetCluster.Status.BackupVersion)
 		deadline := options.effectiveRestoreDeadline()
@@ -1772,7 +1774,7 @@ func (r *RestoreJobReconciler) reconcileMongoDBRestore(ctx context.Context, rest
 	// An in-place restore puts the cluster back as the backup has it, users
 	// included. A to-copy restore must not, see mongodbToCopySelective.
 	var selective *psmdbtypes.SelectiveRestoreOpts
-	if existingRestore == nil && target.AppName != backup.Spec.ApplicationRef.Name {
+	if existingRestore == nil && toCopy {
 		app := &mongodbapp.MongoDB{}
 		if err := r.Get(ctx, types.NamespacedName{Namespace: target.Namespace, Name: target.AppName}, app); err != nil {
 			if !apierrors.IsNotFound(err) {

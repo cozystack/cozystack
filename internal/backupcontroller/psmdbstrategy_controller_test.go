@@ -2922,20 +2922,27 @@ func TestReconcileMongoDBRestore_ToCopyRestoresDeclaredDatabasesWithoutUsers(t *
 // included, and does not depend on what the application declares.
 func TestReconcileMongoDBRestore_InPlaceStaysFullRestore(t *testing.T) {
 	apps := mongodbapp.GroupName
-	for name, targetRef := range map[string]*corev1.TypedLocalObjectReference{
-		"no targetApplicationRef":               nil,
-		"targetApplicationRef names the source": {Kind: "MongoDB", Name: "mongodb-src", APIGroup: &apps},
+	sameSource := &corev1.TypedLocalObjectReference{Kind: "MongoDB", Name: "mongodb-src", APIGroup: &apps}
+	for _, tc := range []struct {
+		name      string
+		state     string
+		targetRef *corev1.TypedLocalObjectReference
+	}{
+		{"no targetApplicationRef", psmdbtypes.StateReady, nil},
+		{"targetApplicationRef names the source", psmdbtypes.StateReady, sameSource},
+		{"recover the original database", psmdbtypes.StateError, nil},
+		{"explicitly recover the original database", psmdbtypes.StateError, sameSource},
 	} {
-		t.Run(name, func(t *testing.T) {
+		t.Run(tc.name, func(t *testing.T) {
 			backup, rj, _ := mongodbToCopyFixture(t, "")
-			rj.Spec.TargetApplicationRef = targetRef
+			rj.Spec.TargetApplicationRef = tc.targetRef
 			cluster := &psmdbtypes.PerconaServerMongoDB{
 				ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: mongodbNameForApp("mongodb-src")},
 				Spec: psmdbtypes.PerconaServerMongoDBSpec{Backup: psmdbtypes.PerconaServerMongoDBBackupConfig{
 					Enabled:  true,
 					Storages: map[string]runtime.RawExtension{"s3-storage": {Raw: []byte(`{"type":"s3","s3":{"bucket":"bkt","credentialsSecret":"mongodb-mongodb-src-s3-creds"}}`)}},
 				}},
-				Status: psmdbtypes.PerconaServerMongoDBStatus{State: psmdbtypes.StateReady, BackupVersion: "2.11.0"},
+				Status: psmdbtypes.PerconaServerMongoDBStatus{State: tc.state, BackupVersion: "2.11.0"},
 			}
 			secret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "mongodb-mongodb-src-s3-creds"}}
 			// No application object at all, so a read of it would fail the job.
@@ -3145,6 +3152,26 @@ func (h *mongodbGateHarness) completeHealthCheck(t *testing.T) {
 	job.Status.Conditions = []batchv1.JobCondition{{Type: batchv1.JobComplete, Status: corev1.ConditionTrue}}
 	if err := h.c.Status().Update(context.Background(), job); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestMongoDBHealthCheckSubsecondDeadline(t *testing.T) {
+	h := newMongoDBGateHarness(t, psmdbtypes.StateReady, "", nil)
+	cluster := &psmdbtypes.PerconaServerMongoDB{}
+	ctx := context.Background()
+	if err := h.c.Get(ctx, client.ObjectKey{Namespace: "tenant", Name: mongodbNameForApp("mongodb-target")}, cluster); err != nil {
+		t.Fatal(err)
+	}
+	job, err := h.r.ensureMongoDBHealthCheck(ctx, h.job(t), cluster, 500*time.Millisecond)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seconds := job.Spec.Template.Spec.ActiveDeadlineSeconds
+	if seconds == nil {
+		t.Fatal("health-check deadline is missing")
+	}
+	if *seconds != 1 {
+		t.Errorf("expected a one-second health-check deadline, got %d", *seconds)
 	}
 }
 
