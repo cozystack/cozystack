@@ -6,7 +6,7 @@ templates:
 tests:
   - it: uses the NAT gateway repository with an explicit build tag
     set:
-      global.registry.address: ghcr.io/cozystack/cozystack
+      global.registry.address: registry.example.com/cozystack
       global.images.natgateway.tag: dev
     documentSelector:
       path: metadata.name
@@ -14,7 +14,7 @@ tests:
     asserts:
       - equal:
           path: data.image
-          value: ghcr.io/cozystack/cozystack/vpc-nat-gateway:dev
+          value: registry.example.com/cozystack/vpc-nat-gateway:dev
   - it: uses the stamped NAT gateway digest independently of the controller
     set:
       global.registry.address: registry.example.com/cozystack
