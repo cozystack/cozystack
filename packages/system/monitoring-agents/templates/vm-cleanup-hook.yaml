@@ -1,0 +1,166 @@
+{{- /*
+  The VictoriaMetrics operator puts its finalizer on the objects this chart
+  creates and is the only thing that ever removes it. The operator ships as a
+  separate release that is gated on the same addon flag, so disabling the addon
+  removes both at once and Flux does not order deletions: when the operator goes
+  first, every one of these objects stays Terminating and the uninstall never
+  finishes.
+
+  So delete them before Helm does, give a live operator a bounded chance to
+  finalize them itself, and only then clear the finalizers by hand. The VMAgent's
+  Deployment, Service and Secrets carry owner references and are garbage
+  collected once it is gone.
+
+  Cluster-scoped RBAC because the objects span two namespaces, and a Role in the
+  operator's namespace could not be created if that namespace were already
+  gone. The hook always exits 0: a cleanup that cannot complete must not be what
+  keeps the release from uninstalling.
+*/ -}}
+{{- $name := "vm-objects-cleanup" }}
+{{- $img := printf "%s:%s" .Values.kubectlImage.repository .Values.kubectlImage.tag }}
+{{- with .Values.kubectlImage.digest }}{{- $img = printf "%s@%s" $img . }}{{- end }}
+{{- $kinds := list "vmagents" "vmrules" "vmservicescrapes" "vmpodscrapes" "vmnodescrapes" }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ $name }}
+  namespace: {{ .Release.Namespace }}
+  annotations:
+    helm.sh/hook: pre-delete
+    helm.sh/hook-weight: "-10"
+    helm.sh/hook-delete-policy: hook-succeeded,hook-failed,before-hook-creation
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ .Release.Namespace }}-{{ $name }}
+  annotations:
+    helm.sh/hook: pre-delete
+    helm.sh/hook-weight: "-10"
+    helm.sh/hook-delete-policy: hook-succeeded,hook-failed,before-hook-creation
+rules:
+  - apiGroups: ["operator.victoriametrics.com"]
+    resources:
+      {{- toYaml $kinds | nindent 6 }}
+    verbs: ["get", "list", "delete", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ .Release.Namespace }}-{{ $name }}
+  annotations:
+    helm.sh/hook: pre-delete
+    helm.sh/hook-weight: "-10"
+    helm.sh/hook-delete-policy: hook-succeeded,hook-failed,before-hook-creation
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ .Release.Namespace }}-{{ $name }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ $name }}
+    namespace: {{ .Release.Namespace }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ $name }}
+  namespace: {{ .Release.Namespace }}
+  annotations:
+    helm.sh/hook: pre-delete
+    helm.sh/hook-weight: "0"
+    helm.sh/hook-delete-policy: hook-succeeded,before-hook-creation
+spec:
+  # Bounds every kubectl call as well: --request-timeout would make kubectl
+  # skip the in-cluster credentials (hack/check-hook-request-timeout.bats).
+  # Well inside the HelmRelease's 10m uninstall budget, and above the 60s
+  # wait plus one call per object on either side of it.
+  activeDeadlineSeconds: 180
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 600
+  template:
+    spec:
+      serviceAccountName: {{ $name }}
+      restartPolicy: Never
+      securityContext:
+        runAsNonRoot: true
+        # The image user is the non-numeric `nonroot`, which the kubelet cannot
+        # check against runAsNonRoot.
+        runAsUser: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      volumes:
+        - name: home
+          emptyDir: {}
+      containers:
+        - name: cleanup
+          image: {{ $img | quote }}
+          imagePullPolicy: {{ .Values.kubectlImage.pullPolicy }}
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+            limits:
+              cpu: 100m
+              memory: 64Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          # kubectl writes its discovery cache under $HOME.
+          env:
+            - name: HOME
+              value: /tmp
+          volumeMounts:
+            - name: home
+              mountPath: /tmp
+          command:
+            - /bin/sh
+            - -c
+            - |
+              rel={{ .Release.Name | quote }}
+              relns={{ .Release.Namespace | quote }}
+              kinds={{ join " " $kinds | quote }}
+
+              # Selected by Helm's ownership annotations rather than by name, so
+              # the alert rules added under alerts/ are covered without a list
+              # to keep in step. A kind whose CRD is gone just prints an error.
+              owned() {
+                for k in $kinds; do
+                  kubectl get "$k.operator.victoriametrics.com" -A \
+                    -o jsonpath='{range .items[*]}{.metadata.annotations.meta\.helm\.sh/release-name}{"|"}{.metadata.annotations.meta\.helm\.sh/release-namespace}{"|"}{.metadata.namespace}{"|"}{.metadata.name}{"\n"}{end}' |
+                  while IFS='|' read -r r rns ns n; do
+                    if [ "$r" = "$rel" ] && [ "$rns" = "$relns" ]; then
+                      echo "$k.operator.victoriametrics.com $ns $n"
+                    fi
+                  done
+                done
+              }
+
+              objs=$(owned)
+              if [ -z "$objs" ]; then
+                echo "no VictoriaMetrics objects left for $relns/$rel"
+                exit 0
+              fi
+
+              echo "$objs" | while read -r k ns n; do
+                kubectl -n "$ns" delete "$k" "$n" --wait=false
+              done
+
+              deadline=$(( $(date +%s) + 60 ))
+              while [ "$(date +%s)" -lt "$deadline" ]; do
+                sleep 2
+                objs=$(owned)
+                if [ -z "$objs" ]; then
+                  echo "the operator finalized every object"
+                  exit 0
+                fi
+              done
+
+              echo "finalizers still held after 60s; clearing them by hand"
+              echo "$objs" | while read -r k ns n; do
+                kubectl -n "$ns" patch "$k" "$n" --type=merge \
+                  -p '{"metadata":{"finalizers":null}}'
+              done
+              exit 0
