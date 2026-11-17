@@ -132,7 +132,20 @@
 {{- $disks := list -}}
 {{- $node := "" -}}
 {{- $counters := dict "scsi" 0 "virtio" 0 "sata" 0 "ide" 0 -}}
+{{- /* kubemox boots the disks in the order of vmSpec.disk, so the disks are
+       sorted by bootOrder (unset: position + 1, as on kubevirt) and numbered
+       after sorting; a clash fails the same way the kubevirt side does. */ -}}
+{{- $byOrder := dict -}}
 {{- range $i, $disk := $root.Values.disks -}}
+{{- $bootOrder := int ($disk.bootOrder | default (add $i 1)) -}}
+{{- $key := printf "%09d" $bootOrder -}}
+{{- with get $byOrder $key -}}
+{{- fail (printf "disks %q and %q both have bootOrder %d; boot orders must be unique" .name $disk.name $bootOrder) -}}
+{{- end -}}
+{{- $_ := set $byOrder $key $disk -}}
+{{- end -}}
+{{- range $key := keys $byOrder | sortAlpha -}}
+{{- $disk := get $byOrder $key -}}
 {{- $volName := printf "vm-disk-%s" $disk.name -}}
 {{- $vol := lookup "proxmox.alperen.cloud/v1alpha1" "VirtualMachineVolume" $root.Release.Namespace $volName -}}
 {{- if not $vol -}}

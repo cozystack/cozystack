@@ -484,3 +484,32 @@ tests:
     asserts:
       - failedTemplate:
           errorPattern: "substrate is a platform setting now"
+  - it: puts the disk with the lowest bootOrder first and numbers devices in that order
+    template: templates/proxmox-vm.yaml
+    set:
+      disks:
+        - name: web-system
+          bootOrder: 2
+        - name: installer
+          bootOrder: 1
+    documentIndex: 2
+    asserts:
+      - equal:
+          path: spec.vmSpec.disk
+          value:
+            - device: ide0
+              volumeRef:
+                name: vm-disk-installer
+            - device: scsi0
+              volumeRef:
+                name: vm-disk-web-system
+  - it: refuses two disks with the same bootOrder, as on kubevirt
+    template: templates/proxmox-vm.yaml
+    set:
+      disks:
+        - name: web-system
+        - name: installer
+          bootOrder: 1
+    asserts:
+      - failedTemplate:
+          errorPattern: 'disks "web-system" and "installer" both have bootOrder 1'
