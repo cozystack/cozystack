@@ -1,0 +1,142 @@
+# The tenant addon HelmRelease that ships this chart remediates a failed
+# install by uninstalling the release, and an uninstall deletes whatever the
+# chart rendered. Deleting a CRD makes the API server garbage-collect every
+# custom resource of that kind, so an unannotated CRD here costs the cluster
+# every ServiceMonitor, PodMonitor, PrometheusRule and ScrapeConfig it holds.
+#
+# The CRDs come from a vendored subchart that `make update` re-pulls, so the
+# annotation is set through values rather than by editing the templates. The
+# first case scopes to no template at all, so it holds every document the
+# chart renders, including a CRD the subchart starts shipping later. The named
+# cases pin the document count and the CRD name, so an assertion cannot pass
+# against a document it was not meant to inspect.
+suite: Prometheus Operator CRDs survive a release uninstall
+tests:
+  - it: annotates every CustomResourceDefinition the chart renders
+    asserts:
+      - equal:
+          path: kind
+          value: CustomResourceDefinition
+      - equal:
+          path: metadata.annotations["helm.sh/resource-policy"]
+          value: keep
+
+  - it: keeps the alertmanagerconfigs CRD
+    template: charts/prometheus-operator-crds/charts/crds/templates/crd-alertmanagerconfigs.yaml
+    asserts:
+      - hasDocuments:
+          count: 1
+      - equal:
+          path: metadata.name
+          value: alertmanagerconfigs.monitoring.coreos.com
+      - equal:
+          path: metadata.annotations["helm.sh/resource-policy"]
+          value: keep
+
+  - it: keeps the alertmanagers CRD
+    template: charts/prometheus-operator-crds/charts/crds/templates/crd-alertmanagers.yaml
+    asserts:
+      - hasDocuments:
+          count: 1
+      - equal:
+          path: metadata.name
+          value: alertmanagers.monitoring.coreos.com
+      - equal:
+          path: metadata.annotations["helm.sh/resource-policy"]
+          value: keep
+
+  - it: keeps the podmonitors CRD
+    template: charts/prometheus-operator-crds/charts/crds/templates/crd-podmonitors.yaml
+    asserts:
+      - hasDocuments:
+          count: 1
+      - equal:
+          path: metadata.name
+          value: podmonitors.monitoring.coreos.com
+      - equal:
+          path: metadata.annotations["helm.sh/resource-policy"]
+          value: keep
+
+  - it: keeps the probes CRD
+    template: charts/prometheus-operator-crds/charts/crds/templates/crd-probes.yaml
+    asserts:
+      - hasDocuments:
+          count: 1
+      - equal:
+          path: metadata.name
+          value: probes.monitoring.coreos.com
+      - equal:
+          path: metadata.annotations["helm.sh/resource-policy"]
+          value: keep
+
+  - it: keeps the prometheusagents CRD
+    template: charts/prometheus-operator-crds/charts/crds/templates/crd-prometheusagents.yaml
+    asserts:
+      - hasDocuments:
+          count: 1
+      - equal:
+          path: metadata.name
+          value: prometheusagents.monitoring.coreos.com
+      - equal:
+          path: metadata.annotations["helm.sh/resource-policy"]
+          value: keep
+
+  - it: keeps the prometheuses CRD
+    template: charts/prometheus-operator-crds/charts/crds/templates/crd-prometheuses.yaml
+    asserts:
+      - hasDocuments:
+          count: 1
+      - equal:
+          path: metadata.name
+          value: prometheuses.monitoring.coreos.com
+      - equal:
+          path: metadata.annotations["helm.sh/resource-policy"]
+          value: keep
+
+  - it: keeps the prometheusrules CRD
+    template: charts/prometheus-operator-crds/charts/crds/templates/crd-prometheusrules.yaml
+    asserts:
+      - hasDocuments:
+          count: 1
+      - equal:
+          path: metadata.name
+          value: prometheusrules.monitoring.coreos.com
+      - equal:
+          path: metadata.annotations["helm.sh/resource-policy"]
+          value: keep
+
+  - it: keeps the scrapeconfigs CRD
+    template: charts/prometheus-operator-crds/charts/crds/templates/crd-scrapeconfigs.yaml
+    asserts:
+      - hasDocuments:
+          count: 1
+      - equal:
+          path: metadata.name
+          value: scrapeconfigs.monitoring.coreos.com
+      - equal:
+          path: metadata.annotations["helm.sh/resource-policy"]
+          value: keep
+
+  - it: keeps the servicemonitors CRD
+    template: charts/prometheus-operator-crds/charts/crds/templates/crd-servicemonitors.yaml
+    asserts:
+      - hasDocuments:
+          count: 1
+      - equal:
+          path: metadata.name
+          value: servicemonitors.monitoring.coreos.com
+      - equal:
+          path: metadata.annotations["helm.sh/resource-policy"]
+          value: keep
+
+  - it: keeps the thanosrulers CRD
+    template: charts/prometheus-operator-crds/charts/crds/templates/crd-thanosrulers.yaml
+    asserts:
+      - hasDocuments:
+          count: 1
+      - equal:
+          path: metadata.name
+          value: thanosrulers.monitoring.coreos.com
+      - equal:
+          path: metadata.annotations["helm.sh/resource-policy"]
+          value: keep
