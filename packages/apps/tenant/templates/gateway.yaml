@@ -50,6 +50,23 @@ spec:
       retryInterval: 30s
     remediation:
       retries: -1
+  {{- /* Listener certificates depend on ACME or DNS and, under HTTP-01, on
+         routes other releases own, so the TenantGateway sits at
+         Ready=False/ListenersNotReady while any of them is pending, which
+         kstatus reads as InProgress until the wait runs out. The expression
+         replaces kstatus for this kind only. Flux still reads InProgress
+         while status.observedGeneration lags the generation, before any
+         expression runs, so the release still waits for the controller to
+         observe the current TenantGateway spec, never for listener or
+         certificate health. The strategy is pinned because expressions are
+         read only under poller, and the UseHelm3Defaults gate turns the
+         default to legacy. */}}
+  waitStrategy:
+    name: poller
+  healthCheckExprs:
+  - apiVersion: gateway.cozystack.io/v1alpha1
+    kind: TenantGateway
+    current: "true"
   {{- /* A tenant-selected class overrides the platform default. Rendered
          only when set, so a tenant that does not choose one leaves the
          gateway chart reading _cluster.gateway-class-name, and the key

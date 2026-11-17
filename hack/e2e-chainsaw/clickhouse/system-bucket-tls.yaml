@@ -1,0 +1,42 @@
+# Certificate and probe Pod for the clickhouse-3-system-bucket-roundtrip Test.
+#
+# The certificate is signed by the SeaweedFS CA already present in tenant-root,
+# so its Secret carries that CA as ca.crt: the ClickHouse release trusts it via
+# backup.endpointCA, and the round-trip script copies the same key pair under
+# the name the platform's S3 Ingress serves for s3.example.org.
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: e2e-system-bucket-s3
+spec:
+  secretName: e2e-system-bucket-s3-tls
+  dnsNames:
+  - s3.example.org
+  issuerRef:
+    kind: Issuer
+    name: seaweedfs-ca-issuer
+---
+# Resolves and fetches s3.example.org from inside tenant-root, where the
+# ClickHouse sidecar runs, so the script can prove the DNS rewrite and the
+# served certificate before it spends minutes on a BackupJob. The image is the
+# one hack/e2e-install-cozystack.bats pre-pulls; it carries curl but no openssl.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: e2e-system-bucket-probe
+spec:
+  restartPolicy: Never
+  terminationGracePeriodSeconds: 0
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 65534
+    seccompProfile:
+      type: RuntimeDefault
+  containers:
+  - name: probe
+    image: docker.io/alpine/k8s:1.36.2@sha256:44ef4942e171939b9c665a4a84beb80e2dcdb9a24330d4651cfdfd2e9deecc47
+    command: [sleep, "3600"]
+    securityContext:
+      allowPrivilegeEscalation: false
+      capabilities:
+        drop: [ALL]

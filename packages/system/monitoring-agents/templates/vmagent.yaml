@@ -10,7 +10,7 @@ spec:
   shardCount: 1
   externalLabels:
     cluster: {{ .Values.vmagent.externalLabels.cluster }}
-    tenant: {{ .Values.global.target }}
+    tenant: {{ .Values.vmagent.externalLabels.tenant | default .Values.global.target | quote }}
   extraArgs:
     {{- toYaml (deepCopy .Values.vmagent.extraArgs | mergeOverwrite (fromYaml (include "monitoring-agents.vmagent.defaultExtraArgs" .))) | nindent 4 }}
   remoteWrite:
@@ -20,6 +20,39 @@ spec:
 
   scrapeInterval: 30s
   selectAllByDefault: true
+  # The class sets all three identity labels on every target it covers, "-"
+  # when the pod has no lineage ("-" is not a valid Kubernetes label value,
+  # so it never collides with a real one). Under honorLabels false every
+  # exporter-supplied copy then collides, is renamed to exported_* and
+  # dropped. Under honorLabels true the exporter's copy wins, so such a
+  # scrape must drop these labels itself. A scrape object's own relabel
+  # rules run after these: they may drop the labels but must never set them.
+  # Not covered: VMProbe (operator v0.68.4 takes only auth from a class) and
+  # raw scrape configs. The placeholder is removed by the remote-write
+  # relabeling below.
+  scrapeClasses:
+  - name: application-identity
+    default: true
+    relabelConfigs:
+    {{- range list "group" "kind" "name" }}
+    - targetLabel: apps_cozystack_io_application_{{ . }}
+      replacement: "-"
+    - sourceLabels: [__meta_kubernetes_pod_label_apps_cozystack_io_application_{{ . }}]
+      regex: (.+)
+      targetLabel: apps_cozystack_io_application_{{ . }}
+    {{- end }}
+    metricRelabelConfigs:
+    - action: labeldrop
+      regex: (exported_)+apps_cozystack_io_application_(group|kind|name)
+  # Not in metricRelabelConfigs: vmagent adds up and scrape_* after metric
+  # relabeling, so the placeholder would stay on those series.
+  inlineRelabelConfig:
+  {{- range list "group" "kind" "name" }}
+  - sourceLabels: [apps_cozystack_io_application_{{ . }}]
+    regex: "-"
+    targetLabel: apps_cozystack_io_application_{{ . }}
+    replacement: ""
+  {{- end }}
   additionalScrapeConfigs:
     name: additional-scrape-configs
     key: prometheus-additional.yaml

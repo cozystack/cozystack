@@ -76,14 +76,9 @@ type RedisSpec struct {
 	//     and `.Backup.ApplicationRef` describing the source backup, so a
 	//     to-copy restore reads the SOURCE release's object-storage prefix.
 	//
-	// Stored schemaless (content preserved, not validated by the apiserver): the
-	// driver renders and validates the pod spec, and generating the full
-	// PodTemplateSpec OpenAPI schema here would add ~590 KB to this CRD. The
-	// backupstrategy-controller chart inlines every definitions/*.yaml into one
-	// Helm release whose state Secret is capped at 1 MiB, so a full
-	// PodTemplateSpec schema here (a fifth after Altinity, Job, FoundationDB and
-	// Redis's own siblings) pushes that Secret over the cap and fails install.
-	// Same reason as rabbitmq_types.go.
+	// Stored schemaless: the apiserver keeps it as written rather than
+	// checking it against the pod schema, and it is validated when the
+	// driver creates the workload from it.
 	//
 	// +kubebuilder:validation:Schemaless
 	// +kubebuilder:pruning:PreserveUnknownFields

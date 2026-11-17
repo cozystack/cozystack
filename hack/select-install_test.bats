@@ -177,7 +177,7 @@ assert_output_graph_error() {
 }
 
 @test "backup suites keep the APIs used by their roundtrip examples" {
-    for suite in clickhouse etcd kafka kafka-metadata mariadb mongodb postgres rabbitmq redis valkey; do
+    for suite in clickhouse etcd kafka kafka-metadata mariadb mongodb postgres rabbitmq redis valkey vminstance; do
         keep=$(hack/select-install.sh "$suite")
         drop=$(hack/select-install.sh --disabled "$suite")
         for required in cozystack.backupstrategy-controller cozystack.backup-controller \

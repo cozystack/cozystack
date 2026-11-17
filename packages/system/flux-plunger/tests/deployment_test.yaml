@@ -56,3 +56,12 @@ tests:
     asserts:
       - failedTemplate:
           errorPattern: shutdownGracePeriodSeconds must be between 40 and 140
+
+  # A whole number of a million or more prints in exponent form, which the
+  # whole-number check would misread as a fraction.
+  - it: names the range, not the fraction, for a whole number far above it
+    set:
+      shutdownGracePeriodSeconds: 1000000
+    asserts:
+      - failedTemplate:
+          errorPattern: shutdownGracePeriodSeconds must be between 40 and 140

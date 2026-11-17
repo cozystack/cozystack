@@ -68,7 +68,7 @@ spec:
             cluster reads the Secret into a tmpfs volume, and nothing carries it
             into the tenant. */}}
       - name: build-cloud-config
-        image: "{{ default (.Files.Get "images/busybox.tag" | trim) .Values.images.waitForKubeconfig }}"
+        image: {{ include "cozy-lib.image" (list (.Files.Get "images/busybox.tag" | trim) $) | quote }}
         command:
         - sh
         - -c
@@ -112,7 +112,7 @@ spec:
           readOnlyRootFilesystem: true
       containers:
         - name: csi-driver
-          image: ghcr.io/sergelogvinov/proxmox-csi-controller:v0.20.0
+          image: "{{ $.Files.Get "images/proxmox-csi-controller.tag" | trim }}"
           args:
             - "-v=4"
             - "--csi-address=unix:///csi/csi.sock"

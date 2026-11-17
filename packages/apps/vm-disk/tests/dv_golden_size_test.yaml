@@ -1,0 +1,252 @@
+suite: vm-disk refuses a disk smaller than the golden image it clones
+release:
+  name: test-vm-disk
+  namespace: tenant-test
+templates:
+  - templates/dv.yaml
+tests:
+  - it: refuses a new disk at the chart default size from a larger Block golden
+    set:
+      source: {image: {name: ubuntu}}
+    kubernetesProvider:
+      scheme: &scheme
+        "cdi.kubevirt.io/v1beta1/DataVolume":
+          gvr: {group: cdi.kubevirt.io, version: v1beta1, resource: datavolumes}
+          namespaced: true
+        "cdi.kubevirt.io/v1beta1/StorageProfile":
+          gvr: {group: cdi.kubevirt.io, version: v1beta1, resource: storageprofiles}
+          namespaced: false
+        "v1/Namespace":
+          gvr: {group: "", version: v1, resource: namespaces}
+          namespaced: false
+        "v1/PersistentVolumeClaim":
+          gvr: {group: "", version: v1, resource: persistentvolumeclaims}
+          namespaced: true
+        "storage.k8s.io/v1/StorageClass":
+          gvr: {group: storage.k8s.io, version: v1, resource: storageclasses}
+          namespaced: false
+      objects:
+        - &namespace
+          kind: Namespace
+          apiVersion: v1
+          metadata: {name: tenant-test}
+        - &goldenPVC
+          kind: PersistentVolumeClaim
+          apiVersion: v1
+          metadata: {name: vm-default-images-ubuntu, namespace: cozy-public}
+          spec:
+            storageClassName: replicated
+            volumeMode: Block
+            resources: {requests: {storage: 20Gi}}
+    asserts:
+      - failedTemplate:
+          errorPattern: 'storage 5Gi is smaller than golden image "vm-default-images-ubuntu" \(20Gi\), so CDI refuses to clone it and the disk would stay pending forever\. Set storage to 20Gi or more\.'
+
+  - it: clones into a disk the size of the golden
+    set:
+      source: {image: {name: ubuntu}}
+      storage: 20Gi
+    kubernetesProvider:
+      scheme: *scheme
+      objects:
+        - *namespace
+        - *goldenPVC
+    asserts:
+      - equal:
+          path: spec.storage.resources.requests.storage
+          value: 20Gi
+
+  - it: clones into a disk larger than the golden
+    set:
+      source: {image: {name: ubuntu}}
+      storage: 25Gi
+    kubernetesProvider:
+      scheme: *scheme
+      objects:
+        - *namespace
+        - *goldenPVC
+    asserts:
+      - equal:
+          path: spec.storage.resources.requests.storage
+          value: 25Gi
+
+  - it: compares bytes, so 21G is smaller than a 20Gi golden
+    set:
+      source: {image: {name: ubuntu}}
+      storage: 21G
+    kubernetesProvider:
+      scheme: *scheme
+      objects:
+        - *namespace
+        - *goldenPVC
+    asserts:
+      - failedTemplate:
+          errorPattern: 'storage 21G is smaller than golden image "vm-default-images-ubuntu" \(20Gi\)'
+
+  - it: compares bytes, so 20480Mi is the size of a 20Gi golden
+    set:
+      source: {image: {name: ubuntu}}
+      storage: 20480Mi
+    kubernetesProvider:
+      scheme: *scheme
+      objects:
+        - *namespace
+        - *goldenPVC
+    asserts:
+      - equal:
+          path: spec.storage.resources.requests.storage
+          value: 20480Mi
+
+  - it: clones when the target StorageProfile's minimum PVC size covers the golden
+    set:
+      source: {image: {name: ubuntu}}
+    kubernetesProvider:
+      scheme: *scheme
+      objects:
+        - *namespace
+        - *goldenPVC
+        - kind: StorageProfile
+          apiVersion: cdi.kubevirt.io/v1beta1
+          metadata:
+            name: replicated
+            annotations: {cdi.kubevirt.io/minimumSupportedPvcSize: 20Gi}
+    asserts:
+      - notFailedTemplate: {}
+
+  - it: refuses when the target StorageProfile's minimum PVC size is still below the golden
+    set:
+      source: {image: {name: ubuntu}}
+    kubernetesProvider:
+      scheme: *scheme
+      objects:
+        - *namespace
+        - *goldenPVC
+        - kind: StorageProfile
+          apiVersion: cdi.kubevirt.io/v1beta1
+          metadata:
+            name: replicated
+            annotations: {cdi.kubevirt.io/minimumSupportedPvcSize: 10Gi}
+    asserts:
+      - failedTemplate:
+          errorPattern: 'storage 5Gi is smaller than golden image "vm-default-images-ubuntu" \(20Gi\)'
+
+  - it: reads the minimum PVC size of the default class for an empty storageClass
+    set:
+      source: {image: {name: ubuntu}}
+      storageClass: ""
+    kubernetesProvider:
+      scheme: *scheme
+      objects:
+        - *namespace
+        - *goldenPVC
+        - kind: StorageClass
+          apiVersion: storage.k8s.io/v1
+          metadata:
+            name: replicated
+            annotations: {storageclass.kubernetes.io/is-default-class: "true"}
+          provisioner: linstor.csi.linbit.com
+        - kind: StorageProfile
+          apiVersion: cdi.kubevirt.io/v1beta1
+          metadata:
+            name: replicated
+            annotations: {cdi.kubevirt.io/minimumSupportedPvcSize: 20Gi}
+    asserts:
+      - notFailedTemplate: {}
+
+  - it: does not compare sizes for a Filesystem golden
+    set:
+      source: {image: {name: ubuntu}}
+    kubernetesProvider:
+      scheme: *scheme
+      objects:
+        - *namespace
+        - kind: PersistentVolumeClaim
+          apiVersion: v1
+          metadata: {name: vm-default-images-ubuntu, namespace: cozy-public}
+          spec:
+            storageClassName: replicated
+            volumeMode: Filesystem
+            resources: {requests: {storage: 20Gi}}
+    asserts:
+      - notFailedTemplate: {}
+
+  - it: renders without a cluster to look the golden up in
+    set:
+      source: {image: {name: ubuntu}}
+    asserts:
+      - equal:
+          path: spec.storage.resources.requests.storage
+          value: 5Gi
+
+  - it: clones a golden whose PVC does not exist yet
+    set:
+      source: {image: {name: ubuntu}}
+    kubernetesProvider:
+      scheme: *scheme
+      objects:
+        - *namespace
+        - kind: DataVolume
+          apiVersion: cdi.kubevirt.io/v1beta1
+          metadata: {name: vm-default-images-ubuntu, namespace: cozy-public}
+          status: {phase: ImportScheduled}
+    asserts:
+      - notFailedTemplate: {}
+
+  - it: leaves a disk without a size to CDI, which takes the golden's
+    set:
+      source: {image: {name: ubuntu}}
+      storage: null
+    kubernetesProvider:
+      scheme: *scheme
+      objects:
+        - *namespace
+        - *goldenPVC
+    asserts:
+      - notFailedTemplate: {}
+
+  - it: leaves an existing disk alone
+    set:
+      source: {image: {name: ubuntu}}
+      storage: 25Gi
+    kubernetesProvider:
+      scheme: *scheme
+      objects:
+        - *namespace
+        - *goldenPVC
+        - kind: DataVolume
+          apiVersion: cdi.kubevirt.io/v1beta1
+          metadata:
+            name: test-vm-disk
+            namespace: tenant-test
+            annotations:
+              vm-disk.cozystack.io/source: '{"image":{"name":"ubuntu"}}'
+              vm-disk.cozystack.io/storage-class: replicated
+          spec:
+            source: {pvc: {name: vm-default-images-ubuntu, namespace: cozy-public}}
+            storage: {resources: {requests: {storage: 10Gi}}, storageClassName: replicated}
+    asserts:
+      - notFailedTemplate: {}
+
+  - it: does not compare sizes for an http source
+    set:
+      source: {http: {url: "https://example.com/disk.img"}}
+      storage: 1Gi
+    kubernetesProvider:
+      scheme: *scheme
+      objects:
+        - *namespace
+        - *goldenPVC
+    asserts:
+      - notFailedTemplate: {}
+
+  - it: does not compare sizes for an upload source
+    set:
+      source: {upload: {}}
+      storage: 1Gi
+    kubernetesProvider:
+      scheme: *scheme
+      objects:
+        - *namespace
+        - *goldenPVC
+    asserts:
+      - notFailedTemplate: {}

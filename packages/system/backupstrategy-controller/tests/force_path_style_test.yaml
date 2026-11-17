@@ -1,0 +1,501 @@
+suite: forcePathStyle — one normalised boolean for every consumer
+
+# backupStorage.forcePathStyle reaches drivers that read it differently: the
+# controller and Velero parse it with strconv.ParseBool, the etcd and MongoDB
+# strategies write it into a boolean field Helm decodes as YAML 1.1, and the
+# Kafka and RabbitMQ scripts compare the string with "false". The chart accepts
+# the spellings of both strconv.ParseBool and YAML 1.1, hands each consumer
+# "true" or "false", and refuses anything else, so a spelling cannot mean path
+# style to one driver and not to another.
+
+templates:
+  - templates/deployment.yaml
+  - templates/strategy-etcd-default.yaml
+  - templates/strategy-mongodb-default.yaml
+  - templates/strategy-kafka-default.yaml
+  - templates/strategy-rabbitmq-default.yaml
+  - templates/velero-bsl.yaml
+
+release:
+  name: t
+  namespace: cozy-backup-controller
+
+set:
+  backupStorage.bucketNameOverride: test-bucket
+
+tests:
+  - it: "forcePathStyle '1' reaches the controller as true"
+    set:
+      backupStorage.forcePathStyle: "1"
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: BACKUP_STORAGE_FORCE_PATH_STYLE
+            value: "true"
+        template: templates/deployment.yaml
+
+  - it: "forcePathStyle 't' reaches the controller as true"
+    set:
+      backupStorage.forcePathStyle: "t"
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: BACKUP_STORAGE_FORCE_PATH_STYLE
+            value: "true"
+        template: templates/deployment.yaml
+
+  - it: "forcePathStyle 'T' reaches every consumer as true"
+    set:
+      backupStorage.forcePathStyle: "T"
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: BACKUP_STORAGE_FORCE_PATH_STYLE
+            value: "true"
+        template: templates/deployment.yaml
+      - equal:
+          path: spec.template.destination.s3.forcePathStyle
+          value: true
+        template: templates/strategy-etcd-default.yaml
+      - equal:
+          path: spec.template.s3.forcePathStyle
+          value: true
+        template: templates/strategy-mongodb-default.yaml
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: S3_FORCE_PATH_STYLE
+            value: "true"
+        template: templates/strategy-kafka-default.yaml
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: S3_FORCE_PATH_STYLE
+            value: "true"
+        template: templates/strategy-rabbitmq-default.yaml
+      - equal:
+          path: spec.config.s3ForcePathStyle
+          value: "true"
+        template: templates/velero-bsl.yaml
+
+  - it: "forcePathStyle 'true' reaches the controller as true"
+    set:
+      backupStorage.forcePathStyle: "true"
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: BACKUP_STORAGE_FORCE_PATH_STYLE
+            value: "true"
+        template: templates/deployment.yaml
+
+  - it: "forcePathStyle 'True' reaches the controller as true"
+    set:
+      backupStorage.forcePathStyle: "True"
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: BACKUP_STORAGE_FORCE_PATH_STYLE
+            value: "true"
+        template: templates/deployment.yaml
+
+  - it: "forcePathStyle 'TRUE' reaches the controller as true"
+    set:
+      backupStorage.forcePathStyle: "TRUE"
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: BACKUP_STORAGE_FORCE_PATH_STYLE
+            value: "true"
+        template: templates/deployment.yaml
+
+  - it: "forcePathStyle 'y' reaches the controller as true"
+    set:
+      backupStorage.forcePathStyle: "y"
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: BACKUP_STORAGE_FORCE_PATH_STYLE
+            value: "true"
+        template: templates/deployment.yaml
+
+  - it: "forcePathStyle 'Y' reaches the controller as true"
+    set:
+      backupStorage.forcePathStyle: "Y"
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: BACKUP_STORAGE_FORCE_PATH_STYLE
+            value: "true"
+        template: templates/deployment.yaml
+
+  - it: "forcePathStyle 'yes' reaches every consumer as true"
+    set:
+      backupStorage.forcePathStyle: "yes"
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: BACKUP_STORAGE_FORCE_PATH_STYLE
+            value: "true"
+        template: templates/deployment.yaml
+      - equal:
+          path: spec.template.destination.s3.forcePathStyle
+          value: true
+        template: templates/strategy-etcd-default.yaml
+      - equal:
+          path: spec.template.s3.forcePathStyle
+          value: true
+        template: templates/strategy-mongodb-default.yaml
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: S3_FORCE_PATH_STYLE
+            value: "true"
+        template: templates/strategy-kafka-default.yaml
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: S3_FORCE_PATH_STYLE
+            value: "true"
+        template: templates/strategy-rabbitmq-default.yaml
+      - equal:
+          path: spec.config.s3ForcePathStyle
+          value: "true"
+        template: templates/velero-bsl.yaml
+
+  - it: "forcePathStyle 'Yes' reaches the controller as true"
+    set:
+      backupStorage.forcePathStyle: "Yes"
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: BACKUP_STORAGE_FORCE_PATH_STYLE
+            value: "true"
+        template: templates/deployment.yaml
+
+  - it: "forcePathStyle 'YES' reaches the controller as true"
+    set:
+      backupStorage.forcePathStyle: "YES"
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: BACKUP_STORAGE_FORCE_PATH_STYLE
+            value: "true"
+        template: templates/deployment.yaml
+
+  - it: "forcePathStyle 'on' reaches the controller as true"
+    set:
+      backupStorage.forcePathStyle: "on"
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: BACKUP_STORAGE_FORCE_PATH_STYLE
+            value: "true"
+        template: templates/deployment.yaml
+
+  - it: "forcePathStyle 'On' reaches the controller as true"
+    set:
+      backupStorage.forcePathStyle: "On"
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: BACKUP_STORAGE_FORCE_PATH_STYLE
+            value: "true"
+        template: templates/deployment.yaml
+
+  - it: "forcePathStyle 'ON' reaches the controller as true"
+    set:
+      backupStorage.forcePathStyle: "ON"
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: BACKUP_STORAGE_FORCE_PATH_STYLE
+            value: "true"
+        template: templates/deployment.yaml
+
+  - it: "forcePathStyle '0' reaches the controller as false"
+    set:
+      backupStorage.forcePathStyle: "0"
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: BACKUP_STORAGE_FORCE_PATH_STYLE
+            value: "false"
+        template: templates/deployment.yaml
+
+  - it: "forcePathStyle 'f' reaches the controller as false"
+    set:
+      backupStorage.forcePathStyle: "f"
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: BACKUP_STORAGE_FORCE_PATH_STYLE
+            value: "false"
+        template: templates/deployment.yaml
+
+  - it: "forcePathStyle 'F' reaches the controller as false"
+    set:
+      backupStorage.forcePathStyle: "F"
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: BACKUP_STORAGE_FORCE_PATH_STYLE
+            value: "false"
+        template: templates/deployment.yaml
+
+  - it: "forcePathStyle 'false' reaches the controller as false"
+    set:
+      backupStorage.forcePathStyle: "false"
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: BACKUP_STORAGE_FORCE_PATH_STYLE
+            value: "false"
+        template: templates/deployment.yaml
+
+  - it: "forcePathStyle 'False' reaches every consumer as false"
+    set:
+      backupStorage.forcePathStyle: "False"
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: BACKUP_STORAGE_FORCE_PATH_STYLE
+            value: "false"
+        template: templates/deployment.yaml
+      - equal:
+          path: spec.template.destination.s3.forcePathStyle
+          value: false
+        template: templates/strategy-etcd-default.yaml
+      - equal:
+          path: spec.template.s3.forcePathStyle
+          value: false
+        template: templates/strategy-mongodb-default.yaml
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: S3_FORCE_PATH_STYLE
+            value: "false"
+        template: templates/strategy-kafka-default.yaml
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: S3_FORCE_PATH_STYLE
+            value: "false"
+        template: templates/strategy-rabbitmq-default.yaml
+      - equal:
+          path: spec.config.s3ForcePathStyle
+          value: "false"
+        template: templates/velero-bsl.yaml
+
+  - it: "forcePathStyle 'FALSE' reaches the controller as false"
+    set:
+      backupStorage.forcePathStyle: "FALSE"
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: BACKUP_STORAGE_FORCE_PATH_STYLE
+            value: "false"
+        template: templates/deployment.yaml
+
+  - it: "forcePathStyle 'n' reaches the controller as false"
+    set:
+      backupStorage.forcePathStyle: "n"
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: BACKUP_STORAGE_FORCE_PATH_STYLE
+            value: "false"
+        template: templates/deployment.yaml
+
+  - it: "forcePathStyle 'N' reaches the controller as false"
+    set:
+      backupStorage.forcePathStyle: "N"
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: BACKUP_STORAGE_FORCE_PATH_STYLE
+            value: "false"
+        template: templates/deployment.yaml
+
+  - it: "forcePathStyle 'no' reaches the controller as false"
+    set:
+      backupStorage.forcePathStyle: "no"
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: BACKUP_STORAGE_FORCE_PATH_STYLE
+            value: "false"
+        template: templates/deployment.yaml
+
+  - it: "forcePathStyle 'No' reaches the controller as false"
+    set:
+      backupStorage.forcePathStyle: "No"
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: BACKUP_STORAGE_FORCE_PATH_STYLE
+            value: "false"
+        template: templates/deployment.yaml
+
+  - it: "forcePathStyle 'NO' reaches the controller as false"
+    set:
+      backupStorage.forcePathStyle: "NO"
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: BACKUP_STORAGE_FORCE_PATH_STYLE
+            value: "false"
+        template: templates/deployment.yaml
+
+  - it: "forcePathStyle 'off' reaches every consumer as false"
+    set:
+      backupStorage.forcePathStyle: "off"
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: BACKUP_STORAGE_FORCE_PATH_STYLE
+            value: "false"
+        template: templates/deployment.yaml
+      - equal:
+          path: spec.template.destination.s3.forcePathStyle
+          value: false
+        template: templates/strategy-etcd-default.yaml
+      - equal:
+          path: spec.template.s3.forcePathStyle
+          value: false
+        template: templates/strategy-mongodb-default.yaml
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: S3_FORCE_PATH_STYLE
+            value: "false"
+        template: templates/strategy-kafka-default.yaml
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: S3_FORCE_PATH_STYLE
+            value: "false"
+        template: templates/strategy-rabbitmq-default.yaml
+      - equal:
+          path: spec.config.s3ForcePathStyle
+          value: "false"
+        template: templates/velero-bsl.yaml
+
+  - it: "forcePathStyle 'Off' reaches the controller as false"
+    set:
+      backupStorage.forcePathStyle: "Off"
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: BACKUP_STORAGE_FORCE_PATH_STYLE
+            value: "false"
+        template: templates/deployment.yaml
+
+  - it: "forcePathStyle 'OFF' reaches the controller as false"
+    set:
+      backupStorage.forcePathStyle: "OFF"
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: BACKUP_STORAGE_FORCE_PATH_STYLE
+            value: "false"
+        template: templates/deployment.yaml
+
+  - it: "forcePathStyle as a YAML boolean (the default) reaches every consumer as true"
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: BACKUP_STORAGE_FORCE_PATH_STYLE
+            value: "true"
+        template: templates/deployment.yaml
+      - equal:
+          path: spec.template.destination.s3.forcePathStyle
+          value: true
+        template: templates/strategy-etcd-default.yaml
+
+  - it: "forcePathStyle as a YAML boolean false reaches the scripts as false"
+    set:
+      backupStorage.forcePathStyle: false
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: S3_FORCE_PATH_STYLE
+            value: "false"
+        template: templates/strategy-kafka-default.yaml
+      - equal:
+          path: spec.template.s3.forcePathStyle
+          value: false
+        template: templates/strategy-mongodb-default.yaml
+
+  - it: "forcePathStyle as the number 1 reaches the boolean fields as true"
+    set:
+      backupStorage.forcePathStyle: 1
+    asserts:
+      - equal:
+          path: spec.template.destination.s3.forcePathStyle
+          value: true
+        template: templates/strategy-etcd-default.yaml
+
+  # Unset leaves each driver its own default, as before.
+  - it: "forcePathStyle null stays unset for every consumer"
+    set:
+      backupStorage.forcePathStyle: null
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: BACKUP_STORAGE_FORCE_PATH_STYLE
+            value: ""
+        template: templates/deployment.yaml
+      - equal:
+          path: spec.template.destination.s3.forcePathStyle
+          value: null
+        template: templates/strategy-etcd-default.yaml
+      - equal:
+          path: spec.template.s3.forcePathStyle
+          value: null
+        template: templates/strategy-mongodb-default.yaml
+
+  - it: "forcePathStyle empty stays unset for every consumer"
+    set:
+      backupStorage.forcePathStyle: ""
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: BACKUP_STORAGE_FORCE_PATH_STYLE
+            value: ""
+        template: templates/deployment.yaml
+      - equal:
+          path: spec.template.destination.s3.forcePathStyle
+          value: null
+        template: templates/strategy-etcd-default.yaml

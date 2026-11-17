@@ -117,6 +117,8 @@ while IFS= read -r ref; do
   try=1
   while :; do
     if raw="$(skopeo inspect --raw "docker://${target}" 2>"$err")"; then
+      # An attestation manifest (SBOM=1) is an index entry with platform
+      # unknown/unknown, which selecting os == linux leaves out.
       missing="$(printf '%s' "$raw" | jq -r '
         if .manifests then
           [.manifests[].platform | select(.os == "linux") | .architecture] as $a

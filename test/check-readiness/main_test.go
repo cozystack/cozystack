@@ -13,6 +13,7 @@ package checkreadiness_test
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"flag"
 	"fmt"
@@ -23,6 +24,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 )
 
 var update = flag.Bool("update", false, "regenerate golden files")
@@ -334,4 +336,81 @@ func repoRoot(t *testing.T) string {
 		t.Fatalf("locate repo root: %v", err)
 	}
 	return root
+}
+
+// A result that never reaches stdout fails the run, whatever the cluster's
+// state, and the watch loop stops instead of refreshing into the void. stdout
+// is a read-only descriptor, so every write fails without a SIGPIPE.
+func TestUnwritableStdoutFails(t *testing.T) {
+	root := repoRoot(t)
+	fakeBin := filepath.Join(root, "test", "check-readiness", "fakekubectl")
+	base := filepath.Join(root, "test", "check-readiness", "testdata", "fixtures", "_base")
+	for _, tc := range []struct {
+		name string
+		args []string
+	}{
+		{name: "once", args: []string{"--no-color"}},
+		{name: "wait", args: []string{"--wait", "--no-color"}},
+		{name: "watch", args: []string{"-w", "1", "--no-color"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			stdout, err := os.Open(os.DevNull)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = stdout.Close() })
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			t.Cleanup(cancel)
+			argv := subjectArgv(tc.args)
+			cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
+			cmd.Env = testEnv(fakeBin, base, base, filepath.Join(t.TempDir(), "kubectl.log"))
+			var stderr bytes.Buffer
+			cmd.Stdout, cmd.Stderr = stdout, &stderr
+			runErr := cmd.Run()
+			if ctx.Err() != nil {
+				t.Fatalf("still running after its output failed\nstderr:\n%s", stderr.String())
+			}
+			if code := exitCode(t, runErr); code != 1 {
+				t.Errorf("exit code = %d, want 1\nstderr:\n%s", code, stderr.String())
+			}
+			if !strings.Contains(stderr.String(), "writing output") {
+				t.Errorf("stderr does not say the output was lost:\n%s", stderr.String())
+			}
+		})
+	}
+}
+
+// A wait that times out ends with its verdict: the table comes first and the
+// timeout line last, also when the table could not be written.
+func TestWaitTimeoutVerdictComesLast(t *testing.T) {
+	root := repoRoot(t)
+	fakeBin := filepath.Join(root, "test", "check-readiness", "fakekubectl")
+	fixtures := filepath.Join(root, "test", "check-readiness", "testdata", "fixtures")
+	args := []string{"-w", "1", "--wait", "--timeout", "1s", "--no-color"}
+	for _, unwritable := range []bool{false, true} {
+		t.Run(fmt.Sprintf("unwritable=%v", unwritable), func(t *testing.T) {
+			cmd := scriptCommand(args)
+			cmd.Env = testEnv(fakeBin, filepath.Join(fixtures, "helmrelease-not-ready"), filepath.Join(fixtures, "_base"), filepath.Join(t.TempDir(), "kubectl.log"))
+			var combined bytes.Buffer
+			cmd.Stdout, cmd.Stderr = &combined, &combined
+			if unwritable {
+				stdout, err := os.Open(os.DevNull)
+				if err != nil {
+					t.Fatal(err)
+				}
+				t.Cleanup(func() { _ = stdout.Close() })
+				cmd.Stdout = stdout
+			}
+			if code := exitCode(t, cmd.Run()); code != 1 {
+				t.Errorf("exit code = %d, want 1\n%s", code, combined.String())
+			}
+			lines := strings.Split(strings.TrimRight(combined.String(), "\n"), "\n")
+			if last := lines[len(lines)-1]; !strings.HasPrefix(last, "Timeout after") {
+				t.Errorf("last line = %q, want the timeout verdict\n%s", last, combined.String())
+			}
+			if unwritable && !strings.Contains(combined.String(), "writing output") {
+				t.Errorf("stderr does not say the table was lost:\n%s", combined.String())
+			}
+		})
+	}
 }

@@ -868,6 +868,25 @@
           ]
         }
       }
+    },
+    "lifecycle": {
+      "description": "S3 bucket lifecycle configuration.",
+      "type": "object",
+      "default": {},
+      "properties": {
+        "enabled": {
+          "description": "Run the SeaweedFS admin server and a worker that applies bucket lifecycle rules, once a day. When disabled, rules are still accepted and stored, but not applied. Ignored with the Client topology, whose rules are enforced by the instance it connects to. Rules stored before enabling are applied on the first pass, minutes after the switch. While on, in a bucket without versioning enabled, an object overwritten between the daily listing and its expiry delete can be deleted although it is new.",
+          "type": "boolean",
+          "default": false
+        },
+        "storageClass": {
+          "description": "StorageClass of the admin server's 1Gi job-state volume. Empty uses the cluster default; `volume.storageClass` is not used, because in MultiZone it can be local to one zone. Prefer a replicated class: on a node-local one, losing the node stops lifecycle enforcement. Set it before enabling lifecycle: the class is part of the admin StatefulSet's volume claim template, which cannot change, so changing it while lifecycle is on makes every upgrade of the instance fail until it is reverted. To move the volume, disable lifecycle, delete the `admin-data-seaweedfs-admin-0` PVC of the instance, change the class and enable lifecycle again.",
+          "type": "string",
+          "default": "",
+          "maxLength": 253,
+          "pattern": "^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*)?$"
+        }
+      }
     }
   }
 }

@@ -48,7 +48,7 @@ cozystackOperator:
   # Lowering or an oversized request creates a durable hold. A cluster administrator
   # must acknowledge its exact target before defaulting resumes; disabling retains holds.
   # Explicit container limits and foreign namespace memory policies are preserved.
-  # See docs/operations/system-memory-limits.md for sizing, exclusions and acknowledgement.
+  # See https://cozystack.io/docs/v1/operations/configuration/system-memory-limits/ for sizing, exclusions and acknowledgement.
   systemNamespaceMemoryLimit: ""
   # Default memory request paired with the limit. Empty selects 32Mi; 0 is supported.
   # Keep small to avoid reserving the full limit for every previously limitless container.
@@ -63,6 +63,16 @@ cozystackOperator:
   # otherwise source-controller will report a failed condition until it is created.
   # See FluxCD source-controller docs for the exact key layout per scheme.
   platformSourceSecret: ''
+  # Name of the Secret in cozy-system namespace with TLS material for an OCI
+  # platform source: `ca.crt` for a registry whose certificate is issued by a
+  # private CA, and/or `tls.crt`+`tls.key` for client certificate auth. A
+  # CA-only Secret must be type Opaque: kubernetes.io/tls requires `tls.crt`
+  # and `tls.key`. When non-empty, sets spec.certSecretRef on the
+  # generated OCIRepository; the operator rewrites that object on every start,
+  # so a certSecretRef patched onto it by hand does not survive a restart.
+  # The cozystack-packages source copies the spec, so it inherits the CA too.
+  # OCI only: for a Git source put `ca.crt` into the platformSourceSecret Secret.
+  platformSourceCertSecret: ''
 # Generic variant configuration (only used when cozystackOperator.variant=generic)
 cozystack:
   # Kubernetes API server host (IP only, no protocol/port)

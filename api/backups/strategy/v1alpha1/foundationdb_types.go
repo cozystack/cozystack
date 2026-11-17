@@ -108,7 +108,14 @@ type FoundationDBTemplate struct {
 	// Admins use it to mount credentials, CA bundles, or any other
 	// per-tenant secrets the backup_agent needs. Templating is supported
 	// on every string field.
+	//
+	// Stored schemaless: the apiserver keeps it as written rather than
+	// checking it against the pod schema, and it is validated when the
+	// driver creates the workload from it.
+	//
 	// +optional
+	// +kubebuilder:validation:Schemaless
+	// +kubebuilder:pruning:PreserveUnknownFields
 	BackupDeploymentPodTemplateSpec *corev1.PodTemplateSpec `json:"backupDeploymentPodTemplateSpec,omitempty"`
 }
 

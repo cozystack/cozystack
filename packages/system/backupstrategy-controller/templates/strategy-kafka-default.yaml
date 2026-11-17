@@ -14,7 +14,7 @@
   on the target they are unmanaged (no KafkaTopic CR) — and for a topic that IS
   owned by a KafkaTopic CR, the Strimzi Topic Operator reconciles its configs
   from the CR, so an in-place config restore of such a topic is transient. See
-  docs/operations/backup-classes.md and the example README.
+  https://cozystack.io/docs/v1/operations/services/backup-classes/ and the example README.
 */}}
 {{- $bucketName := include "backupstrategy-controller.bucketName" . -}}
 {{- $crdEstablished := include "backupstrategy-controller.crdEstablished" (dict "root" . "crd" "kafkas.strategy.backups.cozystack.io") -}}
@@ -23,6 +23,8 @@ apiVersion: strategy.backups.cozystack.io/v1alpha1
 kind: Kafka
 metadata:
   name: cozy-default-kafka
+  annotations:
+    backups.cozystack.io/endpoint: {{ include "backupstrategy-controller.endpoint" . | quote }}
 spec:
   artifactURITemplate: {{ printf "s3://%s/{{ .Release.Namespace }}/{{ .Release.Name }}/{{ .BackupName }}/kafka-metadata.txt" $bucketName | quote }}
   template:
@@ -67,7 +69,7 @@ spec:
             - name: S3_REGION
               value: {{ .Values.backupStorage.region | quote }}
             - name: S3_FORCE_PATH_STYLE
-              value: {{ .Values.backupStorage.forcePathStyle | quote }}
+              value: {{ include "backupstrategy-controller.forcePathStyle" . | quote }}
           command: ["/usr/bin/bash", "-c"]
           # The driver script is kept as a standalone shell file and
           # embedded verbatim so hack/kafka-backup-script.bats can execute

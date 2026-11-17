@@ -21,6 +21,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -535,16 +536,19 @@ func pullOCIArtifact(ref string) (string, func(), error) {
 	return dir, cleanup, nil
 }
 
-func printReport(r *Report, w io.Writer) {
+func printReport(r *Report, w io.Writer) error {
 	for _, f := range r.Findings {
 		loc := f.Location
 		if loc == "" {
 			loc = "-"
 		}
-		fmt.Fprintf(w, "[%s] %s (%s): %s\n", f.Severity, loc, f.Code, f.Message)
+		if _, err := fmt.Fprintf(w, "[%s] %s (%s): %s\n", f.Severity, loc, f.Code, f.Message); err != nil {
+			return err
+		}
 	}
 	errs, warns, infos := r.Counts()
-	fmt.Fprintf(w, "\nSummary: %d error(s), %d warning(s), %d info\n", errs, warns, infos)
+	_, err := fmt.Fprintf(w, "\nSummary: %d error(s), %d warning(s), %d info\n", errs, warns, infos)
+	return err
 }
 
 var validateCmdFlags struct {
@@ -663,10 +667,13 @@ runs "helm lint" on every component chart.`,
 		if err != nil {
 			return err
 		}
-		printReport(rep, cmd.OutOrStdout())
+		printErr := printReport(rep, cmd.OutOrStdout())
 		if rep.HasErrors() {
 			errs, _, _ := rep.Counts()
-			return fmt.Errorf("validation failed: %d error(s)", errs)
+			return errors.Join(fmt.Errorf("validation failed: %d error(s)", errs), printErr)
+		}
+		if printErr != nil {
+			return fmt.Errorf("writing the validation report failed: %w", printErr)
 		}
 		return nil
 	},
