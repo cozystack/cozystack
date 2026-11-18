@@ -62,6 +62,75 @@ spec:
                 - plural
                 - singular
                 type: object
+              consumption:
+                description: |-
+                  Consumption declares what an application of this kind reserves from
+                  its tenant's quota budget, computed from its values. Unset means the
+                  kind has not declared it, which is not the same as consuming nothing:
+                  a kind that consumes nothing sets exempt.
+                properties:
+                  exempt:
+                    description: Exempt declares that the kind consumes nothing from
+                      a tenant's budget.
+                    type: boolean
+                  let:
+                    description: |-
+                      Let binds intermediate expressions, evaluated in order. A binding
+                      reads only the bindings before it; a resources expression reads them
+                      all. The list is replaced as a whole, since a binding left behind by a
+                      partial update could refer to one that is gone.
+                    items:
+                      description: ApplicationDefinitionConsumptionBinding names one
+                        intermediate expression.
+                      properties:
+                        expression:
+                          minLength: 1
+                          type: string
+                        name:
+                          description: |-
+                            Name is how later expressions refer to the binding. `values` is taken
+                            by the application's values, and CEL's reserved words cannot name a
+                            variable.
+                          maxLength: 63
+                          pattern: ^[a-zA-Z_][a-zA-Z0-9_]*$
+                          type: string
+                          x-kubernetes-validations:
+                          - message: the name is reserved
+                            rule: '!(self in [''values'', ''true'', ''false'', ''null'',
+                              ''in'', ''as'', ''break'', ''const'', ''continue'',
+                              ''else'', ''for'', ''function'', ''if'', ''import'',
+                              ''let'', ''loop'', ''package'', ''namespace'', ''return'',
+                              ''var'', ''void'', ''while''])'
+                      required:
+                      - expression
+                      - name
+                      type: object
+                    maxItems: 64
+                    type: array
+                    x-kubernetes-list-type: atomic
+                    x-kubernetes-validations:
+                    - message: binding names must be unique
+                      rule: self.all(b, self.exists_one(c, c.name == b.name))
+                  resources:
+                    additionalProperties:
+                      type: string
+                    description: |-
+                      Resources maps a quota key, as a Tenant's resourceQuotas spells it,
+                      to the expression computing how much of it the application reserves.
+                    maxProperties: 64
+                    type: object
+                    x-kubernetes-validations:
+                    - message: a quota key must not be empty
+                      rule: self.all(k, size(k) > 0)
+                type: object
+                x-kubernetes-map-type: atomic
+                x-kubernetes-validations:
+                - message: an exempt declaration carries neither let nor resources
+                  rule: '!(has(self.exempt) && self.exempt) || (!has(self.__let__)
+                    && !has(self.resources))'
+                - message: a declaration either is exempt or names at least one resource
+                  rule: (has(self.exempt) && self.exempt) || (has(self.resources)
+                    && size(self.resources) > 0)
               dashboard:
                 description: Dashboard configuration for this resource
                 properties:
