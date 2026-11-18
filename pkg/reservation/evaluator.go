@@ -99,6 +99,13 @@ func Compile(decl *Declaration, schema *structuralschema.Structural) (*Evaluator
 		cel.Function(presetFunc,
 			cel.Overload("preset_string", []*cel.Type{cel.StringType}, cel.MapType(cel.StringType, cel.DynType),
 				cel.LateFunctionBinding())),
+		// fail refuses a spec the kind's chart would refuse to render, with
+		// the declaration's reason, rather than reserving for it.
+		cel.Function("fail",
+			cel.Overload("fail_string", []*cel.Type{cel.StringType}, cel.DynType,
+				cel.UnaryBinding(func(msg ref.Val) ref.Val {
+					return types.NewErr("%s", msg.(types.String))
+				}))),
 		cel.Function("quantity",
 			cel.Overload("quantity_int", []*cel.Type{cel.IntType}, apiservercel.QuantityType,
 				cel.UnaryBinding(func(v ref.Val) ref.Val {

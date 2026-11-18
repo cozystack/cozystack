@@ -19,6 +19,7 @@ package reservation
 import (
 	"errors"
 	"os"
+	"strings"
 	"sync"
 	"testing"
 
@@ -493,6 +494,32 @@ func TestEvaluateMulKeepsExactProducts(t *testing.T) {
 			assertList(t, name, got, rl("x", tc.want))
 		})
 	}
+}
+
+// A declaration states a spec its chart refuses to render with fail(), so
+// that the refusal carries the declaration's own reason.
+func TestEvaluateFail(t *testing.T) {
+	env := testEnvironment(t)
+	// Keys evaluate in sorted order, so cpu succeeds before memory fails.
+	ev, err := Compile(&Declaration{Resources: map[string]string{
+		"cpu":    `quantity('1')`,
+		"memory": `has(values.memory) ? quantity(values.memory) : fail('memory is required')`,
+	}}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := ev.Evaluate(map[string]any{}, env)
+	if err == nil || !strings.Contains(err.Error(), "memory is required") {
+		t.Errorf("got %v, want an error carrying the declared reason", err)
+	}
+	if got != nil {
+		t.Errorf("a failed evaluation returned a partial reservation %v", got)
+	}
+	got, err = ev.Evaluate(map[string]any{"memory": "1Gi"}, env)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertList(t, "branch not taken", got, rl("cpu", "1", "memory", "1Gi"))
 }
 
 // A null is absent to Helm, which deletes the key it nulls, so it must be
