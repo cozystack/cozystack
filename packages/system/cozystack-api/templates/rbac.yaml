@@ -90,3 +90,10 @@ rules:
 - apiGroups: ["cilium.io"]
   resources: ["ciliumnetworkpolicies"]
   verbs: ["get", "watch", "list", "create", "update", "patch", "delete"]
+# The per-application credential lock (a Lease in cozy-system) serializes a
+# create's or update's account-Secret seeding and pruning across the API
+# server's replicas, so two concurrent writes cannot interleave into deleting a
+# Secret the other reused.
+- apiGroups: ["coordination.k8s.io"]
+  resources: ["leases"]
+  verbs: ["get", "create", "update", "delete"]

@@ -23,6 +23,7 @@ import (
 
 	cozyv1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
 	helmv2 "github.com/fluxcd/helm-controller/api/v2"
+	coordinationv1 "k8s.io/api/coordination/v1"
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -92,6 +93,10 @@ func init() {
 	}
 	if err := rbacv1.AddToScheme(mgrScheme); err != nil {
 		panic(fmt.Errorf("failed to add RBAC types to scheme: %w", err))
+	}
+	// Register Lease types for the per-application credential lock.
+	if err := coordinationv1.AddToScheme(mgrScheme); err != nil {
+		panic(fmt.Errorf("failed to add coordination types to scheme: %w", err))
 	}
 
 	// Register Cozystack types for WorkloadMonitor queries.

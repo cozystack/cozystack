@@ -56,6 +56,7 @@ import (
 	appsv1alpha1 "github.com/cozystack/cozystack/pkg/apis/apps/v1alpha1"
 	"github.com/cozystack/cozystack/pkg/apis/apps/validation"
 	"github.com/cozystack/cozystack/pkg/config"
+	"github.com/cozystack/cozystack/pkg/credentials/applock"
 	"github.com/cozystack/cozystack/pkg/registry"
 	fieldfilter "github.com/cozystack/cozystack/pkg/registry/fields"
 	"github.com/cozystack/cozystack/pkg/registry/sorting"
@@ -105,6 +106,10 @@ type REST struct {
 	// credentials is the kind's credentials block, nil for a kind whose
 	// passwords the chart still generates.
 	credentials *cozyv1alpha1.ApplicationDefinitionCredentials
+	// lock serializes one application's credential seeding and pruning across
+	// the API server's replicas, so two concurrent writes cannot interleave
+	// into deleting a Secret the other has just reused.
+	lock *applock.Locker
 }
 
 // buildSpecSchema parses an OpenAPI-v3 JSON schema string into the
@@ -126,6 +131,13 @@ func NewREST(c client.Client, w client.WithWatch, config *config.Resource) *REST
 			config.Application.Kind, appsv1alpha1.NameSchemaExtension, config.Application.Kind, nameSchemaErr)
 	}
 
+	// The lock reads and writes its Leases uncached, and in cozy-system, which
+	// tenants cannot write.
+	lockClient := client.Client(w)
+	if lockClient == nil {
+		lockClient = c
+	}
+
 	return &REST{
 		c: c,
 		w: w,
@@ -145,6 +157,7 @@ func NewREST(c client.Client, w client.WithWatch, config *config.Resource) *REST
 		nameSchema:    nameSchema,
 		nameSchemaErr: nameSchemaErr,
 		credentials:   config.Credentials,
+		lock:          applock.New(lockClient, "cozy-system"),
 	}
 }
 
@@ -251,6 +264,14 @@ func (r *REST) Create(ctx context.Context, obj runtime.Object, createValidation 
 	helmRelease.Labels[ApplicationGroupLabel] = r.gvk.Group
 	helmRelease.Labels[ApplicationNameLabel] = app.Name
 	// Note: Annotations from config are not handled as r.releaseConfig.Annotations is undefined
+
+	// Hold the application's credential lock across the seed, the release write
+	// and the owning, so a concurrent write cannot interleave with them.
+	unlock, err := r.lockCredentials(ctx, app)
+	if err != nil {
+		return nil, err
+	}
+	defer unlock()
 
 	// The account Secrets exist before the release that reads them, and the
 	// release owns them as soon as it exists.
@@ -601,6 +622,15 @@ func (r *REST) Update(ctx context.Context, name string, objInfo rest.UpdatedObje
 		klog.Errorf("Conversion error: %v", err)
 		return nil, false, fmt.Errorf("conversion error: %v", err)
 	}
+
+	// Hold the application's credential lock across the read of the live
+	// release, the seed, the release write and the prune, so a concurrent write
+	// cannot re-add an account and have this request prune the Secret it reused.
+	unlock, err := r.lockCredentials(ctx, app)
+	if err != nil {
+		return nil, false, err
+	}
+	defer unlock()
 
 	cur := &helmv2.HelmRelease{}
 	if err := r.c.Get(ctx, client.ObjectKey{Namespace: helmRelease.Namespace, Name: helmRelease.Name}, cur, &client.GetOptions{Raw: &metav1.GetOptions{}}); err != nil {

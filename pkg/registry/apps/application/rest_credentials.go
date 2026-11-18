@@ -22,6 +22,7 @@ import (
 	cozyv1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
 	appsv1alpha1 "github.com/cozystack/cozystack/pkg/apis/apps/v1alpha1"
 	"github.com/cozystack/cozystack/pkg/credentials/account"
+	"github.com/cozystack/cozystack/pkg/credentials/applock"
 	"github.com/cozystack/cozystack/pkg/credentials/store"
 )
 
@@ -76,6 +77,27 @@ func (r *REST) direct() client.Client {
 		return r.w
 	}
 	return r.c
+}
+
+// lockCredentials takes the per-application lock so this request's seeding and
+// pruning do not interleave with a concurrent write to the same application. It
+// returns a release function the caller defers. A lock another request holds is
+// a retryable Conflict; a lock store that cannot be reached is logged and the
+// request proceeds without it, since the lock only guards a rare race and its
+// store being unreachable is no worse than not having it.
+func (r *REST) lockCredentials(ctx context.Context, app *appsv1alpha1.Application) (func(), error) {
+	if r.credentials == nil || r.lock == nil {
+		return func() {}, nil
+	}
+	unlock, err := r.lock.Acquire(ctx, app.Namespace, r.storeApp(app.Namespace, app.Name).Release)
+	switch {
+	case errors.Is(err, applock.ErrHeld):
+		return nil, apierrors.NewConflict(r.gvr.GroupResource(), app.Name, errors.New("another change to this application's credentials is in progress; retry"))
+	case err != nil:
+		klog.Warningf("credential lock unavailable for %s/%s, proceeding without it: %v", app.Namespace, app.Name, err)
+		return func() {}, nil
+	}
+	return unlock, nil
 }
 
 // seedBeforeCreate writes the account Secrets of a new application, with no

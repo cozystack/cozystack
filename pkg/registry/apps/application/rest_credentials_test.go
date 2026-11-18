@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	helmv2 "github.com/fluxcd/helm-controller/api/v2"
+	coordinationv1 "k8s.io/api/coordination/v1"
 	corev1 "k8s.io/api/core/v1"
 	apiextv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -53,6 +54,9 @@ func newCredentialsREST(t *testing.T, objects ...client.Object) (*REST, client.C
 		t.Fatal(err)
 	}
 	if err := corev1.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	if err := coordinationv1.AddToScheme(scheme); err != nil {
 		t.Fatal(err)
 	}
 	cfg := &config.Resource{
@@ -449,6 +453,80 @@ func TestConcurrentCreateKeepsLiveSecret(t *testing.T) {
 // it, because its UID is not the one this create seeded. Deleting by name, or
 // only skipping an owned Secret, would take it and leave the live release with
 // no account Secret.
+// A concurrent write to one application's credentials is refused while another
+// holds the lock, so the two cannot interleave into deleting a Secret the other
+// reused. Request A adds api; while A holds the lock and writes its release, the
+// interceptor runs request B (which would remove web and prune its Secret). B
+// is refused with Conflict, so web's Secret is untouched.
+func TestConcurrentUpdateRefusedByCredentialLock(t *testing.T) {
+	scheme := runtime.NewScheme()
+	if err := helmv2.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	if err := corev1.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	if err := coordinationv1.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	cfg := &config.Resource{
+		Application: config.ApplicationConfig{Kind: postgresKind, Singular: "postgres", Plural: "postgreses", OpenAPISchema: credentialsSchema},
+		Release:     config.ReleaseConfig{Prefix: "postgres-"},
+		Credentials: credentialsBlock(),
+	}
+	if err := appsv1alpha1.RegisterDynamicTypes(scheme, &config.ResourceConfig{Resources: []config.Resource{*cfg}}); err != nil {
+		t.Fatal(err)
+	}
+
+	var r *REST
+	var raced atomic.Bool
+	var bErr error
+	var uids atomic.Int64
+	c := fake.NewClientBuilder().WithScheme(scheme).WithInterceptorFuncs(interceptor.Funcs{
+		Create: func(ctx context.Context, cl client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
+			if obj.GetUID() == "" {
+				obj.SetUID(types.UID(fmt.Sprintf("uid-%d", uids.Add(1))))
+			}
+			return cl.Create(ctx, obj, opts...)
+		},
+		Update: func(ctx context.Context, cl client.WithWatch, obj client.Object, opts ...client.UpdateOption) error {
+			// Request A is writing its HelmRelease, so A holds the lock: a second
+			// update of the same application must be refused now.
+			if _, ok := obj.(*helmv2.HelmRelease); ok && raced.CompareAndSwap(false, true) {
+				_, _, bErr = r.Update(credentialsCtx(), "orders", newDefaultUpdatedObjectInfo(postgresApp(`{"users":{}}`)), nil, nil, false, &metav1.UpdateOptions{})
+			}
+			if obj.GetUID() == "" {
+				cur := obj.DeepCopyObject().(client.Object)
+				if err := cl.Get(ctx, client.ObjectKeyFromObject(obj), cur); err == nil {
+					obj.SetUID(cur.GetUID())
+				}
+			}
+			return cl.Update(ctx, obj, opts...)
+		},
+	}).Build()
+	r = NewREST(c, c, cfg)
+	ctx := credentialsCtx()
+
+	if _, err := r.Create(ctx, postgresApp(`{"users":{"web":{}}}`), nil, &metav1.CreateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	webBefore := accountSecrets(t, c)["postgres-orders.web.account"]
+
+	if _, _, err := r.Update(ctx, "orders", newDefaultUpdatedObjectInfo(postgresApp(`{"users":{"web":{},"api":{}}}`)), nil, nil, false, &metav1.UpdateOptions{}); err != nil {
+		t.Fatalf("request A: %v", err)
+	}
+	if !apierrors.IsConflict(bErr) {
+		t.Fatalf("a concurrent credential write must be refused with Conflict, got %v", bErr)
+	}
+	after := accountSecrets(t, c)["postgres-orders.web.account"]
+	if after == nil || after.UID != webBefore.UID {
+		t.Fatal("the refused concurrent update must not have pruned web's Secret")
+	}
+	if accountSecrets(t, c)["postgres-orders.api.account"] == nil {
+		t.Fatal("request A must have seeded api")
+	}
+}
+
 func TestUnseedLeavesAReplacedSecret(t *testing.T) {
 	r, c := newCredentialsREST(t)
 	ctx := credentialsCtx()
