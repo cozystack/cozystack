@@ -495,6 +495,24 @@ func TestEvaluateMulKeepsExactProducts(t *testing.T) {
 	}
 }
 
+// A null is absent to Helm, which deletes the key it nulls, so it must be
+// absent to an expression too, including where the schema has no default to
+// put in its place.
+func TestEvaluateTreatsNullAsAbsent(t *testing.T) {
+	env := testEnvironment(t)
+	ev, err := Compile(&Declaration{Resources: map[string]string{
+		"cpu": `has(values.r.cpu) ? 1 : 2`,
+	}}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := ev.Evaluate(map[string]any{"r": map[string]any{"cpu": nil}}, env)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertList(t, "null", got, rl("cpu", "2"))
+}
+
 func TestEvaluateIsConcurrencySafe(t *testing.T) {
 	env := testEnvironment(t)
 	vm := mustCompile(t, vmInstanceDecl, "vm-instance")

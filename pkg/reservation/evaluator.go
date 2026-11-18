@@ -194,6 +194,10 @@ func (e *Evaluator) Evaluate(values map[string]any, env Environment) (ResourceLi
 	if err := defaulting.Apply(&defaulted, e.schema); err != nil {
 		return nil, fmt.Errorf("default values: %w", err)
 	}
+	// Helm deletes a key its values set to null, so an expression must see
+	// it as absent; defaulting replaces only the nulls the schema has a
+	// default for.
+	dropNulls(defaulted)
 
 	// The environment differs per call, so instanceType and preset are
 	// declared with a late binding and bound here, per program; cel.Functions
@@ -469,5 +473,24 @@ func normalizeNumbers(v any) any {
 		return int64(t)
 	default:
 		return v
+	}
+}
+
+// dropNulls removes, in place, every null-valued key of m and of the objects
+// nested in it, lists included.
+func dropNulls(v any) {
+	switch t := v.(type) {
+	case map[string]any:
+		for k, vv := range t {
+			if vv == nil {
+				delete(t, k)
+				continue
+			}
+			dropNulls(vv)
+		}
+	case []any:
+		for _, vv := range t {
+			dropNulls(vv)
+		}
 	}
 }
