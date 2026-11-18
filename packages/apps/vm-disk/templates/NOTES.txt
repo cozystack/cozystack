@@ -1,5 +1,5 @@
 {{- if and .Values.source (hasKey .Values.source "upload") }}
 To upload your disk run:
 
-virtctl image-upload dv -n {{ .Release.Namespace }} {{ .Release.Name }} --image-path <path_to_image>
+virtctl image-upload dv {{ .Release.Name }} --no-create --namespace {{ .Release.Namespace }} --image-path <path_to_image>
 {{- end }}
