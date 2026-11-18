@@ -46,3 +46,40 @@ spec:
   services:
     exclude: []
     include: []
+  consumption:
+    let:
+      # The cluster-autoscaler scales the MachineDeployment without writing the
+      # pool, so its ceiling is what is reserved, or its floor where that is
+      # higher, since CAPI seeds the pool from the floor. Proxmox workers and
+      # their disks live on the external hypervisor.
+      - name: count
+        expression: "values.substrate == 'proxmox' ? 0 : values.minReplicas > values.maxReplicas ? values.minReplicas : values.maxReplicas"
+      # On KubeVirt a cpu other than a bare numeric zero becomes the worker's
+      # uint32 core count, so the chart refuses anything but a whole number.
+      # Proxmox rounds a fraction up to whole cores.
+      - name: checkCores
+        expression: "values.substrate != 'proxmox' && has(values.resources.cpu) && !(type(values.resources.cpu) == int && values.resources.cpu == 0)"
+      - name: cores
+        expression: "!checkCores ? 0.0 : type(values.resources.cpu) == int ? double(values.resources.cpu) : values.resources.cpu.matches('^[-+]?([0-9]+[.]?[0-9]*|[.][0-9]+)([eE][-+]?[0-9]+)?$') ? double(values.resources.cpu) : -1.0"
+      - name: coresValid
+        expression: "!checkCores || (cores > 0.0 && cores < 4294967296.0 && double(int(cores)) == cores)"
+      # The chart reads cpu and memory by truth: a bare numeric zero or an
+      # empty string is unset, anything else, a quoted "0" included, is set.
+      # It sizes the worker from resources when both are set and from its
+      # instance type when neither is, and refuses one without the other.
+      - name: cpuSet
+        expression: "has(values.resources.cpu) && !(type(values.resources.cpu) == int && values.resources.cpu == 0) && !(type(values.resources.cpu) == string && values.resources.cpu == '')"
+      - name: memorySet
+        expression: "has(values.resources.memory) && !(type(values.resources.memory) == int && values.resources.memory == 0) && !(type(values.resources.memory) == string && values.resources.memory == '')"
+      - name: sized
+        expression: cpuSet && memorySet
+    resources:
+      cpu: "values.substrate == 'proxmox' && !(cpuSet && memorySet) ? fail('substrate proxmox requires resources.cpu and resources.memory') : !coresValid ? fail('resources.cpu must be a whole number of cores between 1 and 4294967295') : cpuSet != memorySet ? fail('resources must set cpu and memory together, or neither') : count == 0 ? quantity(0) : (sized ? quantity(values.resources.cpu) : instanceType(values.instanceType).cpu).mul(count)"
+      dedicated-cpu: "count == 0 || sized ? quantity(0) : instanceType(values.instanceType)['dedicated-cpu'].mul(count)"
+      memory: "count == 0 ? quantity(0) : (sized ? quantity(values.resources.memory) : instanceType(values.instanceType).memory).mul(count)"
+      hugepages-2Mi: "count == 0 || sized ? quantity(0) : instanceType(values.instanceType)['hugepages-2Mi'].mul(count)"
+      hugepages-1Gi: "count == 0 || sized ? quantity(0) : instanceType(values.instanceType)['hugepages-1Gi'].mul(count)"
+      overcommitted-memory: "count == 0 || sized ? quantity(0) : instanceType(values.instanceType)['overcommitted-memory'].mul(count)"
+      # The chart takes 20Gi for an absent or empty diskSize, as Helm's
+      # default does.
+      storage: "count == 0 ? quantity(0) : (!has(values.diskSize) || (type(values.diskSize) == int && values.diskSize == 0) || (type(values.diskSize) == string && values.diskSize == '') ? quantity('20Gi') : quantity(values.diskSize)).mul(count)"
