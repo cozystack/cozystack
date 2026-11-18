@@ -193,6 +193,10 @@ func (r *REST) Create(ctx context.Context, obj runtime.Object, createValidation 
 		}
 	}
 
+	if err := r.validateWorkloadMemory(app, nil); err != nil {
+		return nil, err
+	}
+
 	// Validate that values don't contain reserved keys (starting with "_")
 	if err := validateNoInternalKeys(app.Spec); err != nil {
 		return nil, apierrors.NewBadRequest(err.Error())
@@ -517,6 +521,7 @@ func (r *REST) Update(ctx context.Context, name string, objInfo rest.UpdatedObje
 		return nil, false, err
 	}
 
+	previousValues := oldObj.(*appsv1alpha1.Application).Spec.DeepCopy()
 	previousFinalizers := slices.Clone(oldObj.(*appsv1alpha1.Application).Finalizers)
 
 	// Update the Application object
@@ -538,6 +543,10 @@ func (r *REST) Update(ctx context.Context, name string, objInfo rest.UpdatedObje
 	// Note: name validation (DNS-1035 format + length) is intentionally skipped on
 	// Update because Kubernetes names are immutable. Validating here would block
 	// updates to pre-existing resources whose names don't conform to the new rules.
+
+	if err := r.validateWorkloadMemory(app, previousValues); err != nil {
+		return nil, false, err
+	}
 
 	// Validate that values don't contain reserved keys (starting with "_")
 	if err := validateNoInternalKeys(app.Spec); err != nil {
