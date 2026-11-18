@@ -37,6 +37,7 @@ var gateGVKs = []schema.GroupVersionKind{
 	{Group: strategyAPIGroup, Version: "v1alpha1", Kind: "Etcd"},
 	{Group: strategyAPIGroup, Version: "v1alpha1", Kind: "Altinity"},
 	{Group: strategyAPIGroup, Version: "v1alpha1", Kind: "Velero"},
+	{Group: strategyAPIGroup, Version: "v1alpha1", Kind: "Kubernetes"},
 	{Group: "velero.io", Version: "v1", Kind: "BackupStorageLocation"},
 	{Group: "helm.toolkit.fluxcd.io", Version: "v2", Kind: "HelmRelease"},
 }
@@ -109,6 +110,7 @@ func cozyDefaultBackupClass() *backupsv1alpha1.BackupClass {
 				ref("Altinity", "cozy-default-altinity"),
 				ref("Velero", "cozy-default-velero-vminstance"),
 				ref("Velero", "cozy-default-velero-vmdisk"),
+				ref("Kubernetes", "cozy-default-kubernetes"),
 			},
 		},
 	}
@@ -149,6 +151,7 @@ func allDefaultObjects() []runtime.Object {
 		strategyObject("Altinity", "cozy-default-altinity"),
 		strategyObject("Velero", "cozy-default-velero-vminstance"),
 		strategyObject("Velero", "cozy-default-velero-vmdisk"),
+		strategyObject("Kubernetes", "cozy-default-kubernetes"),
 		bslObject(),
 	}
 }
@@ -288,8 +291,8 @@ func TestCheckForcesWhenObjectsMissing(t *testing.T) {
 		t.Fatal("expected a forced Helm upgrade when default objects are missing")
 	}
 	// 6 strategyRefs (Velero twice under different names) + the BSL.
-	if len(missing) != 7 {
-		t.Fatalf("missing = %v, want 7 entries", missing)
+	if len(missing) != 8 {
+		t.Fatalf("missing = %v, want 8 entries", missing)
 	}
 	ann := forceAnnotations(t, dyn)
 	forceAt, ok := ann["reconcile.fluxcd.io/forceAt"]
@@ -319,6 +322,7 @@ func TestCheckNoopWhenAllPresent(t *testing.T) {
 		strategyObject("Altinity", "cozy-default-altinity"),
 		strategyObject("Velero", "cozy-default-velero-vminstance"),
 		strategyObject("Velero", "cozy-default-velero-vmdisk"),
+		strategyObject("Kubernetes", "cozy-default-kubernetes"),
 		bslObject(),
 	)
 
@@ -454,8 +458,8 @@ func TestCheckThrottlesTheTwoReleasesIndependently(t *testing.T) {
 	if !forced {
 		t.Fatal("objects release throttled by the earlier credentials force")
 	}
-	if len(missing) != 7 {
-		t.Fatalf("missing = %v, want the 6 strategies + the BSL", missing)
+	if len(missing) != 8 {
+		t.Fatalf("missing = %v, want the 7 strategies + the BSL", missing)
 	}
 	if ann := forceAnnotations(t, dyn); ann["reconcile.fluxcd.io/forceAt"] == "" {
 		t.Errorf("own HelmRelease not forced: %v", ann)
@@ -482,7 +486,7 @@ func TestForceSkipsSuspendedHelmRelease(t *testing.T) {
 	if forced {
 		t.Error("forced reported true for a suspended HelmRelease that ignores the annotations")
 	}
-	if len(missing) != 7 {
+	if len(missing) != 8 {
 		t.Fatalf("missing = %v, want the objects still reported", missing)
 	}
 	if ann := forceAnnotations(t, dyn); len(ann) != 0 {
@@ -599,6 +603,7 @@ func TestMissingObjectsIgnoresUnmappedKinds(t *testing.T) {
 		strategyObject("Altinity", "cozy-default-altinity"),
 		strategyObject("Velero", "cozy-default-velero-vminstance"),
 		strategyObject("Velero", "cozy-default-velero-vmdisk"),
+		strategyObject("Kubernetes", "cozy-default-kubernetes"),
 		bslObject(),
 	)
 
@@ -658,6 +663,7 @@ func TestMissingObjectsSkipsBSLWhenVeleroAPIAbsent(t *testing.T) {
 		strategyObject("Altinity", "cozy-default-altinity"),
 		strategyObject("Velero", "cozy-default-velero-vminstance"),
 		strategyObject("Velero", "cozy-default-velero-vmdisk"),
+		strategyObject("Kubernetes", "cozy-default-kubernetes"),
 	)
 	// Rebuild the RESTMapper without BackupStorageLocation: the velero.io API
 	// is not served on this cluster.
@@ -1053,8 +1059,8 @@ func TestCheckKeepsForcingForUnannotatedObjects(t *testing.T) {
 	g.lastForce = base.Add(-time.Minute)
 	g.now = func() time.Time { return base }
 
-	if missing, forced, err := g.Check(context.Background()); err != nil || forced || len(missing) != 7 {
-		t.Fatalf("throttled Check: missing = %v, forced = %v, err = %v; want 7 reported, none forced", missing, forced, err)
+	if missing, forced, err := g.Check(context.Background()); err != nil || forced || len(missing) != len(allDefaultObjects()) {
+		t.Fatalf("throttled Check: missing = %v, forced = %v, err = %v; want %d reported, none forced", missing, forced, err, len(allDefaultObjects()))
 	}
 
 	g.now = func() time.Time { return base.Add(5 * time.Minute) }
@@ -1065,8 +1071,8 @@ func TestCheckKeepsForcingForUnannotatedObjects(t *testing.T) {
 
 	g.now = func() time.Time { return base.Add(time.Hour) }
 	missing, forced, err := g.Check(context.Background())
-	if err != nil || !forced || len(missing) != 7 {
-		t.Fatalf("after a render that left them unannotated: missing = %v, forced = %v, err = %v; want 7 reported and forced again", missing, forced, err)
+	if err != nil || !forced || len(missing) != len(allDefaultObjects()) {
+		t.Fatalf("after a render that left them unannotated: missing = %v, forced = %v, err = %v; want %d reported and forced again", missing, forced, err, len(allDefaultObjects()))
 	}
 	if again := forceAnnotations(t, dyn)["reconcile.fluxcd.io/forceAt"]; again == first {
 		t.Errorf("not forced again for unannotated objects: forceAt still %q", first)

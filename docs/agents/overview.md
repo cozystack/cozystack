@@ -16,7 +16,7 @@ The platform exposes infrastructure services via the Kubernetes API with ready-m
 
 ## Code Layout
 
-```
+```text
 .
 ├── packages/               # Main directory for cozystack packages
 │   ├── core/              # Core platform logic charts (installer, platform)
@@ -50,7 +50,7 @@ The platform exposes infrastructure services via the Kubernetes API with ready-m
 
 Every package is a Helm chart following the umbrella chart pattern:
 
-```
+```text
 packages/<category>/<package-name>/
 ├── Chart.yaml                           # Chart definition and parameter docs
 ├── Makefile                             # Development workflow targets
@@ -106,17 +106,39 @@ A chart also declares the limits on its own resource name there, with `## @name 
 
 ## Testing
 
-- **Helm and BATS unit tests:** `make helm-unit-tests` runs `hack/helm-unit-tests.sh` over every package that defines a `test` target. A `test` target is expected to run helm-unittest: the sweep fails a package whose run reports no suite, because exiting 0 having asserted nothing is indistinguishable from passing. A target that drives something else belongs under another name, as `packages/core/testing` already does with its sandbox flow. `make bats-unit-tests` requires bats-core 1.5 or newer; GNU parallel is optional and the target runs serially without it. Run the complete local BATS and POSIX-compatibility pass with `pre-commit run bats-unit-tests --hook-stage manual --all-files`; pull-request CI runs both lanes for code changes and the BATS contracts for docs-only changes. On a host whose `/bin/sh` differs from CI, `make BATS_POSIX_SHELL=dash bats-posix-compat-tests` selects the same interpreter explicitly. `make unit-tests` runs the full unit suite — Helm, BATS, the targeted POSIX-shell compatibility pass, Go, and the preset/readiness checks. It does not include the controller tests under `./internal/...`; run `make test-controllers` as well. CI invokes both targets together.
+- **Helm and BATS unit tests:** `make helm-unit-tests` runs `hack/helm-unit-tests.sh` over every package that defines a `test` target. A `test` target is expected to run helm-unittest: the sweep fails a package whose run reports no suite, because exiting 0 having asserted nothing is indistinguishable from passing. A target that drives something else belongs under another name, as `packages/core/testing` already does with its sandbox flow. `make bats-unit-tests` requires bats-core 1.5 or newer; GNU parallel is optional and the target runs serially without it. Run the complete local BATS and POSIX-compatibility pass with `pre-commit run bats-unit-tests --hook-stage manual --all-files`; pull-request CI runs both lanes for code changes and the BATS contracts for docs-only changes. On a host whose `/bin/sh` differs from CI, `make BATS_POSIX_SHELL=dash bats-posix-compat-tests` selects the same interpreter explicitly. `make unit-tests` runs the full unit suite — Helm, BATS, the targeted POSIX-shell compatibility pass, Go, and the preset/readiness checks. It does not include the controller tests under `./internal/...`; run `make test-controllers` as well. CI invokes both targets together. The backport-batch tests are not part of it: run `make test-backport-batch` after changing anything listed in `cmd/backport-batch/test-inputs.txt`, which is also what CI keys them on.
 - **E2E tests:** Kyverno Chainsaw suites in `hack/e2e-chainsaw/` (one directory per app), run with `chainsaw test`. Cluster bootstrap (`hack/e2e-install-cozystack.bats`) and the OpenAPI checks (`hack/e2e-test-openapi.bats`) remain BATS. Conventions for writing and stabilising them — and the CI that runs them — live in [`e2e-testing.md`](./e2e-testing.md).
 - **Go tests:** standard `go test`, with Ginkgo/Gomega for controllers.
+
+### Test first, failure path first
+
+These rules apply to changes with testable behavior. Documentation-only edits and unmodified upstream updates need the relevant checks, not an artificial failing test. First-party adaptations made during a dependency bump remain covered by these rules.
+
+1. Write the test before changing the implementation and watch it fail for the intended reason, not on a typo or a missing fixture. Then make it green, then refactor under it.
+2. Cover relevant failure paths before the happy path: empty or null values, invalid input, a number where a string is expected, a missing resource, a timeout or an API error. Assert the resulting message, exit status and post-failure state required by the operation's contract.
+3. Fix regressions in the implementation. Do not skip, weaken or delete a test, or silence a linter, merely to get a green run. When the intended contract changes, update or replace the obsolete assertions and retain coverage of applicable failure cases.
+4. A stub needs a failing test for the intended behavior during development. Finish that behavior and make the test pass before merge; do not make the test accept an unintended not-implemented result just to get green CI.
+5. A bug found along the way that is out of the PR's scope gets an issue and a test pinning the current broken behaviour, marked `FIXME(#N)`. The PR that fixes the bug flips the test to pin the fixed behaviour.
+
+Do not negate a BATS assertion with `!`: it can silently pass. Bats catches a failing negation only when it is the last command in the test body; `hack/cozytest.sh` appends a successful return and misses it there too. See [§11 of `e2e-testing.md`](./e2e-testing.md#11-never-negate-a-bats-assertion-with-).
+
+### Linters
+
+Fix every linter finding before pushing, the cosmetic ones included. When a rule genuinely conflicts with the project, change the linter configuration and state the reason there, instead of suppressing the finding inline.
+
+Markdown follows these markdownlint rules: every code fence names a language (`text` when nothing else fits), table separators have spaces around the pipes (`| --- |`), and there is a blank line before and after every list and after every heading. Line length (MD013) is the exception: prose stays one line per paragraph, as [Prose Formatting](../../AGENTS.md#prose-formatting) explains.
 
 ## Conventions
 
 ### Helm Charts
+
 - Follow **umbrella chart** pattern for system components
 - Include upstream charts in `charts/` directory (vendored, not referenced)
 - Override configuration in root `values.yaml`
 - Use `values.schema.json` for input validation and dashboard UI rendering
+- An unquoted numeric value (`name: 123`) reaches a template as a number: `len` on it aborts the render with `len of type float64` (`int64` for a value given with `--set`) before any `fail` message is reached, and `if not $v` treats `0` as unset. For fields validated as text that permit numeric inputs, reject missing or null values with `kindIs "invalid"`, then coerce with `printf "%v"` and check emptiness with `eq $v ""`. Coercing null first produces the non-empty string `<nil>`.
+- For integer fields, keep string inputs on their lexical validation path. Validate numeric inputs for type, integrality and bounds before conversion, then format the validated integer in decimal. Generic `printf "%v"` can emit exponent notation for a float (`4200000000` becomes `4.2e+09`), so it is not integer normalization.
+- For nested values, validate or normalize each parent map before reading its children; checking only the leaf cannot prevent a nil-pointer error from a missing or null parent.
 
 **No `lookup` that copies another object into the render.** A `lookup` reads cluster state at render time, and nothing re-renders the HelmRelease when that state changes, so whatever it copied into the output (a bucket name, an endpoint, a CA, a list of StorageClasses) stays stale until something unrelated upgrades the release. Lookups of this kind already in the charts have caused failures, and several have since been moved to values, so they are not precedent: do not add one of this kind unless a maintainer has authorized that specific one.
 
@@ -124,7 +146,18 @@ A `lookup` is fine when a repeated render gives the same output and carries noth
 
 To use a fact about the cluster instead, read it from values: `_cluster` and `_namespace` in the `cozystack-values` Secret, or `valuesFrom` on a specific Secret, whose content change is a values change and so upgrades the release. Ask whether an API is served with `.Capabilities.APIVersions.Has`, since a `lookup` on an unserved group aborts the whole render. Otherwise check at run time in a hook or Job, or let a controller own the object.
 
+### Container images
+
+For a new container image built from source maintained in this repository, name the build definition `Containerfile` and pass it to `docker buildx build` with `--file` in the package `Makefile`. Keep existing `Dockerfile`s and vendored build definitions unchanged.
+
+### Examples and fixtures
+
+Illustrative addresses and names in docs, examples and test fixtures come from the reserved documentation ranges, never from a routable value that merely looks realistic: IPv4 from RFC 5737 (`192.0.2.0/24`, `198.51.100.0/24`, `203.0.113.0/24`), IPv6 from RFC 3849 (`2001:db8::/32`), domains from RFC 2606 and RFC 6761 (`example.com`, `.example`, `.test`, `.invalid`), ASNs from RFC 5398 (`64496`–`64511`, `65536`–`65551`), MAC addresses from RFC 7042 (`00:00:5E:00:53:00`–`00:00:5E:00:53:FF`). Where no reserved range exists, use an obviously synthetic placeholder such as `<NODE_IP>`.
+
+When a test depends on a protocol-defined address's behavior, use that value, such as `127.0.0.1` or `localhost` for a local test server. Keep network tests isolated; this exception does not permit arbitrary live endpoints.
+
 ### Go Code
+
 - Follow standard **Go conventions** and idioms
 - Use **controller-runtime** patterns for Kubernetes controllers
 - Prefer **kubebuilder** for API definitions and controllers
@@ -158,6 +191,8 @@ When a document could go in either `docs/` or the website, the test is whether a
 
 Documenting a feature's current limitations is useful and belongs with the feature. Documenting the *development process* around it does not: no "What is NOT in Phase N", no "out of scope for this PR", no "this PR" phrasing, no action plans or review negotiation. A merged document describes what the code does now, and states a limitation as a limitation rather than as a roadmap position. Scope, phasing and follow-ups belong in the pull request description or an issue.
 
+An app's README and the field descriptions in its `values.yaml` describe what the app does now, for the person using it: no history ("moves from", "previously", "used to", rollout phase names) and no account of how another chart behaved before. A change users must act on is announced by a `!` in the pull request title and described on the website's per-version upgrade page (`content/en/docs/next/operations/cluster/upgrade-to-vX.Y.md`), so an app README carries no history or breaking-changes section. A description says what the field does, what it accepts and what it refuses, not what it replaced, and does not tell the reader to keep it in sync with another chart; when two charts have to agree, a test says so. A change that touches a README or a description fixes what is wrong in that place while it is there.
+
 A document that names an unmerged pull request or an unreleased dependency needs a tracking issue, because nothing re-checks that claim later and it silently becomes false once the thing ships.
 
 ### Domain references for specific tasks
@@ -170,6 +205,7 @@ Before working on these areas, read the relevant doc first:
 ## Things Agents Should Not Do
 
 ### Never Edit These
+
 - Do not modify files in `/vendor/` (Go dependencies)
 - Do not edit generated files: `zz_generated.*.go`
 - Do not change `go.mod`/`go.sum` manually (use `go get`)
@@ -177,13 +213,16 @@ Before working on these areas, read the relevant doc first:
 - Do not modify image digests in `values.yaml` (generated by build)
 
 ### Version Control
+
 - Do not commit built artifacts from `_out`
 - Do not commit test artifacts or temporary files
 
 ### Git Operations
+
 - Do not force push to main/master
 - Do not update git config
 - Do not perform destructive operations without explicit request
 
 ### Core Components
+
 - Do not modify `packages/core/platform/` without understanding migration impact

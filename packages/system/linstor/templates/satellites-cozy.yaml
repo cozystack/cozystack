@@ -11,6 +11,9 @@ spec:
     spec:
       # host-network is recommended by Piraeus while it is not default in the upstream
       hostNetwork: true
+      initContainers:
+      - name: setup-lvm-configuration
+        image: {{ .Values.piraeusServer.image.repository }}:{{ .Values.piraeusServer.image.tag }}
       containers:
       - name: linstor-satellite
         image: {{ .Values.piraeusServer.image.repository }}:{{ .Values.piraeusServer.image.tag }}

@@ -22,6 +22,7 @@ package main
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"strconv"
@@ -57,6 +58,10 @@ Options:
   -l, --selector SELECTOR   kubectl label selector to apply to every query
       --no-color            Disable color output (auto-disabled on non-TTY)
   -h, --help                Show this help
+
+Exit status: 0 when everything is ready, 1 when something is not ready or a
+write to stdout fails, 2 on invalid arguments. A closed pipe ends the process
+with SIGPIPE, like other Unix tools.
 
 `
 
@@ -181,10 +186,16 @@ func run(args []string) int {
 			cfg.coreOnly = true
 			i++
 		case "-h", "--help":
-			fmt.Fprint(os.Stdout, usageText)
+			if _, err := fmt.Fprint(os.Stdout, usageText); err != nil {
+				fmt.Fprintf(os.Stderr, "writing usage: %v\n", err)
+				return 1
+			}
 			return 0
 		case "--version":
-			fmt.Fprintln(os.Stdout, Version)
+			if _, err := fmt.Fprintln(os.Stdout, Version); err != nil {
+				fmt.Fprintf(os.Stderr, "writing version: %v\n", err)
+				return 1
+			}
 			return 0
 		default:
 			fmt.Fprintf(os.Stderr, "Unknown argument: %s\n", a)
@@ -213,14 +224,14 @@ func run(args []string) int {
 	cfg.timeoutS = sec
 
 	if cfg.waitMode {
-		return cfg.runWait()
+		return cfg.runWait(os.Stdout)
 	}
 	if cfg.watch {
-		cfg.runWatch()
-		return 0
+		return cfg.runWatch(os.Stdout)
 	}
-	out := cfg.runOnce()
-	fmt.Print(out)
+	if writeOutput(os.Stdout, cfg.runOnce()) != nil {
+		return 1
+	}
 	if cfg.foundIssues {
 		return 1
 	}
@@ -281,18 +292,31 @@ func parseTimeout(raw string) (int, bool) {
 	return 0, false
 }
 
-func (cfg *config) runWait() int {
+// writeOutput prints a result. A result its reader never got fails the run,
+// whatever the resources' state, since the exit code alone would vouch for it.
+func writeOutput(w io.Writer, parts ...string) error {
+	for _, part := range parts {
+		if _, err := io.WriteString(w, part); err != nil {
+			fmt.Fprintf(os.Stderr, "writing output: %v\n", err)
+			return err
+		}
+	}
+	return nil
+}
+
+func (cfg *config) runWait(w io.Writer) int {
 	start := time.Now()
 	for {
 		output := cfg.runOnce()
 		elapsed := int(time.Since(start).Seconds())
 		if strings.Contains(output, "All resources are ready.") {
-			fmt.Print(output)
-			fmt.Printf("%sReady after %ds.%s\n", cfg.green, elapsed, cfg.reset)
+			if writeOutput(w, output, fmt.Sprintf("%sReady after %ds.%s\n", cfg.green, elapsed, cfg.reset)) != nil {
+				return 1
+			}
 			return 0
 		}
 		if elapsed >= cfg.timeoutS {
-			fmt.Print(output)
+			_ = writeOutput(w, output)
 			fmt.Fprintf(os.Stderr, "%s%sTimeout after %ds — resources still not ready.%s\n", cfg.red, cfg.bold, cfg.timeoutS, cfg.reset)
 			return 1
 		}
@@ -300,13 +324,14 @@ func (cfg *config) runWait() int {
 	}
 }
 
-func (cfg *config) runWatch() {
+func (cfg *config) runWatch(w io.Writer) int {
 	for {
 		output := cfg.runOnce()
 		// Smooth clear is cosmetic and untested; just reprint.
-		fmt.Printf("%sLast updated: %s  (refreshing every %ds, Ctrl+C to stop)%s\n", cfg.bold, time.Now().Format(time.UnixDate), cfg.interval, cfg.reset)
-		fmt.Println()
-		fmt.Print(output)
+		header := fmt.Sprintf("%sLast updated: %s  (refreshing every %ds, Ctrl+C to stop)%s\n\n", cfg.bold, time.Now().Format(time.UnixDate), cfg.interval, cfg.reset)
+		if writeOutput(w, header, output) != nil {
+			return 1
+		}
 		time.Sleep(time.Duration(cfg.interval) * time.Second)
 	}
 }

@@ -98,7 +98,7 @@ spec:
             - name: S3_REGION
               value: {{ .Values.backupStorage.region | quote }}
             - name: S3_FORCE_PATH_STYLE
-              value: {{ .Values.backupStorage.forcePathStyle | quote }}
+              value: {{ include "backupstrategy-controller.forcePathStyle" . | quote }}
           command: ["/bin/sh", "-c"]
           args:
             - |

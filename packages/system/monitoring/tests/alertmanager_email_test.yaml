@@ -1149,3 +1149,70 @@ tests:
     asserts:
       - failedTemplate:
           errorMessage: "alerta.alerts.email.from must be one address, such as alerts@example.org or Alerts <alerts@example.org>, got \"alerts@[IPv6:2001:db8::25]\""
+
+  # alerta.alerts.email.template carries an Alertmanager template file. It is
+  # stored in a ConfigMap and listed in VMAlertmanager spec.templates, so
+  # Alertmanager parses it while loading its configuration, and the definitions
+  # it holds can replace email.default.subject and email.default.html.
+  - it: mounts no email template when template is empty
+    set:
+      alerta:
+        alerts:
+          email:
+            to: "oncall@example.org"
+            from: "alerts@example.org"
+            smarthost: "smtp.example.org:465"
+    asserts:
+      - containsDocument:
+          apiVersion: v1
+          kind: ConfigMap
+          name: alertmanager-email-template
+          any: true
+        not: true
+      - documentSelector:
+          path: kind
+          value: VMAlertmanager
+        notExists:
+          path: spec.templates
+
+  - it: stores the template text verbatim and lists it among the Alertmanager templates
+    set:
+      alerta:
+        alerts:
+          email:
+            to: "oncall@example.org"
+            from: "alerts@example.org"
+            smarthost: "smtp.example.org:465"
+            authUsername: "mailer@example.org"
+            template: |
+              {{ define "email.default.subject" }}[prod] {{ if eq .Status "resolved" }}✅ resolved{{ else }}🔴 {{ .CommonLabels.alertname }}{{ end }}{{ end }}
+              {{ define "email.default.html" }}<p style="color:#c0392b">{{ .CommonAnnotations.summary }}, проверка "кавычек" и \ слеша</p>{{ end }}
+    asserts:
+      - containsDocument:
+          apiVersion: v1
+          kind: ConfigMap
+          name: alertmanager-email-template
+          any: true
+      - documentSelector:
+          path: metadata.name
+          value: alertmanager-email-template
+        equal:
+          path: data["email.tmpl"]
+          value: |
+            {{ define "email.default.subject" }}[prod] {{ if eq .Status "resolved" }}✅ resolved{{ else }}🔴 {{ .CommonLabels.alertname }}{{ end }}{{ end }}
+            {{ define "email.default.html" }}<p style="color:#c0392b">{{ .CommonAnnotations.summary }}, проверка "кавычек" и \ слеша</p>{{ end }}
+      - documentSelector:
+          path: kind
+          value: VMAlertmanager
+        equal:
+          path: spec.templates
+          value:
+            - name: alertmanager-email-template
+              key: email.tmpl
+      - documentSelector:
+          path: kind
+          value: VMAlertmanager
+        equal:
+          path: spec.secrets
+          value:
+            - alertmanager-email-password

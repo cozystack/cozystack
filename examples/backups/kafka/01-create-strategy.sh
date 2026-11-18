@@ -324,7 +324,7 @@ spec:
                     if [ "\${n}" -gt 0 ]; then
                       "\${BIN}"/kafka-console-consumer.sh --bootstrap-server "\${BOOT}" \
                         --topic "\${t}" --partition "\${p}" --offset "\${begin}" --max-messages "\${n}" \
-                        --timeout-ms 120000 --property print.key=true --property print.timestamp=false \
+                        --timeout-ms 120000 --formatter-property print.key=true --formatter-property print.timestamp=false \
                         > "\${WORK}/data-\${t}-\${p}.tsv"
                       # kafka-console-consumer exits 0 even on a short read: a
                       # --timeout-ms expiry is swallowed inside ConsoleConsumer,
@@ -509,7 +509,7 @@ spec:
                     [ "\${mt}" = "\${t}" ] || continue
                     [ "\${me}" -gt "\${mb}" ] || continue
                     "\${BIN}"/kafka-console-producer.sh --bootstrap-server "\${BOOT}" \
-                      --topic "\${t}" --property parse.key=true < "\${WORK}/data-\${t}-\${mp}.tsv"
+                      --topic "\${t}" --reader-property parse.key=true < "\${WORK}/data-\${t}-\${mp}.tsv"
                   done < "\${WORK}/manifest.txt"
                   echo "  \${t}: replayed"
                 done

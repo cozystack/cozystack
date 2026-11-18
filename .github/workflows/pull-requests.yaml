@@ -75,6 +75,8 @@ jobs:
       statuses: write
     outputs:
       code: ${{ steps.p.outputs.code }}
+      docs: ${{ steps.p.outputs.docs }}
+      backport_batch: ${{ steps.p.outputs.backport_batch }}
       matrix: ${{ steps.p.outputs.matrix }}
       any: ${{ steps.p.outputs.any }}
       touched: ${{ steps.p.outputs.touched }}
@@ -111,7 +113,7 @@ jobs:
         # still gets posted by `e2e-report`, and a run that dies before that
         # leaves the merge blocked either way.
         continue-on-error: true
-        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         env:
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
@@ -127,7 +129,7 @@ jobs:
               description: 'e2e in progress — this run has not reported yet',
               target_url: RUN_URL,
             });
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
       # e2e-fork.yaml pushes a fork's images only under names the base tree
@@ -167,11 +169,27 @@ jobs:
           # alone here rather than widened by a side effect.
           git diff --name-only --no-renames "origin/${BASE_REF}...HEAD" > /tmp/changed_norenames.txt
           echo "Changed files:"; sed 's/^/  /' /tmp/changed_norenames.txt
-          if grep -qvE '^docs/' /tmp/changed_norenames.txt; then
+          # `code` is false when every path is under docs/ or in a CI-only Go
+          # tool that no image builds (cmd/backport-batch, cmd/api-gate): there
+          # is nothing to build and nothing for e2e to install. e2e-fork.yaml
+          # answers the same question from the PR file list with the same
+          # prefixes, and hack/gate-concurrency-contract.bats holds the two lists
+          # equal.
+          if grep -qvE '^(docs/|cmd/backport-batch/|cmd/api-gate/)' /tmp/changed_norenames.txt; then
             echo "code=true" >> "$GITHUB_OUTPUT"
           else
             echo "code=false" >> "$GITHUB_OUTPUT"
           fi
+          # The Bats contracts read docs, so a docs change runs them even when
+          # `code` is false; a change confined to the CI-only tools does not.
+          if grep -qE '^docs/' /tmp/changed_norenames.txt; then
+            echo "docs=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "docs=false" >> "$GITHUB_OUTPUT"
+          fi
+          backport_batch="$(hack/backport-batch-tests-needed.sh /tmp/changed_norenames.txt)"
+          echo "backport-batch tests needed: $backport_batch"
+          echo "backport_batch=$backport_batch" >> "$GITHUB_OUTPUT"
           matrix="$(hack/build-matrix.sh /tmp/changed.txt)"
           echo "Build matrix: $matrix"
           echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
@@ -222,14 +240,14 @@ jobs:
       # The default pull_request checkout is GitHub's prospective merge commit,
       # not just the head branch. That makes base-branch package drift visible.
       - name: Checkout prospective merge
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
 
       # Execute the verifier from the trusted base SHA. An older rc-derived head
       # may not contain it, and a PR must not be able to weaken its own guard.
       - name: Checkout release tooling from base
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.pull_request.base.sha }}
           path: .release-tooling
@@ -263,7 +281,7 @@ jobs:
           fi
 
       - name: Login to registry (GHCR)
-        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           username: ${{ github.repository_owner }}
           password: ${{ secrets.GITHUB_TOKEN }}
@@ -293,33 +311,36 @@ jobs:
       contents: read
     needs: ["plan"]
     # Unit contracts read both code and documentation. Run this job for every
-    # non-release PR: code changes take the complete unit path, while docs-only
-    # changes run the Bats lane that owns those cross-tree contracts. Builds and
-    # E2E remain gated on `code` below.
+    # non-release PR: code changes take the complete unit path, docs changes run
+    # the Bats lane that owns those cross-tree contracts, and the backport-batch
+    # tests run whenever one of their inputs changed and at no other time. A
+    # change confined to the CI-only tools runs no other lane. Builds and E2E
+    # remain gated on `code` below.
     if: |
       !contains(github.event.pull_request.labels.*.name, 'release')
     steps:
       - name: Checkout code
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
       # The module cache is restored from the key build-main.yaml writes on
       # main, which every PR run can read, so a PR's first run starts warm. The
       # download fetches whatever the cache lacks, the whole set on a miss. The
-      # Go steps are for code changes only: a docs-only run is the Bats lane alone.
+      # Go steps are for code changes and the backport-batch tests only: a
+      # docs-only run is the Bats lane alone.
       - name: Locate Go module cache
-        if: needs.plan.outputs.code == 'true'
+        if: needs.plan.outputs.code == 'true' || needs.plan.outputs.backport_batch == 'true'
         id: gomodcache
         run: echo "dir=$(go env GOMODCACHE)" >> "$GITHUB_OUTPUT"
       - name: Cache Go modules
-        if: needs.plan.outputs.code == 'true'
+        if: needs.plan.outputs.code == 'true' || needs.plan.outputs.backport_batch == 'true'
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ steps.gomodcache.outputs.dir }}
           key: go-mod-${{ runner.os }}-${{ hashFiles('**/go.sum') }}
           restore-keys: go-mod-${{ runner.os }}-
       - name: Download Go modules
-        if: needs.plan.outputs.code == 'true'
+        if: needs.plan.outputs.code == 'true' || needs.plan.outputs.backport_batch == 'true'
         run: |
           for mod in $(git ls-files go.mod '*/go.mod' | xargs -n1 dirname); do
             (cd "$mod" && "$GITHUB_WORKSPACE/hack/go-mod-download.sh")
@@ -327,8 +348,9 @@ jobs:
       # Ephemeral runners don't carry the helm-unittest plugin the persistent
       # self-hosted runner accreted. The plugin embeds its own Helm, so its
       # version is pinned: a plugin release must not change test results. Bats is
-      # installed on every run, docs-only ones included.
+      # installed whenever a Bats lane runs, docs-only ones included.
       - name: Set up test toolchain
+        if: needs.plan.outputs.code == 'true' || needs.plan.outputs.docs == 'true'
         env:
           CODE_CHANGED: ${{ needs.plan.outputs.code }}
           HELM_UNITTEST_VERSION: "1.1.2"
@@ -374,11 +396,23 @@ jobs:
         if: needs.plan.outputs.code == 'true'
         run: make unit-tests test-controllers test-controllers-envtest -j4 -k --output-sync=target
       - name: Run Bats unit tests for docs-only changes
-        if: needs.plan.outputs.code == 'false'
+        if: needs.plan.outputs.code == 'false' && needs.plan.outputs.docs == 'true'
         run: make bats-unit-tests
+      # Not part of `make unit-tests`: hack/backport-batch-tests-needed.sh
+      # decides from cmd/backport-batch/test-inputs.txt, whatever `code` is.
+      # `!cancelled()` for the reason the unit lane runs with -k: a red step
+      # above must not hide this suite's own result.
+      - name: Run backport-batch tests
+        if: ${{ !cancelled() && needs.plan.outputs.backport_batch == 'true' }}
+        run: make test-backport-batch
+      - name: Check new Helm document indices
+        if: ${{ !cancelled() }}
+        env:
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+        run: python3 hack/check-helm-document-indices.py "$(git merge-base HEAD "origin/$BASE_REF")"
       - name: Upload unit test report
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: bats-unit-report
           path: _out/test-reports/
@@ -406,7 +440,7 @@ jobs:
         pkg: ${{ fromJSON(needs.plan.outputs.matrix) }}
     steps:
       - name: Checkout code
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
           fetch-tags: true
@@ -423,7 +457,7 @@ jobs:
           fi
       - name: Login to GitHub Container Registry
         if: ${{ !github.event.pull_request.head.repo.fork }}
-        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           username: ${{ secrets.OCIR_USER }}
           password: ${{ secrets.OCIR_TOKEN }}
@@ -442,12 +476,14 @@ jobs:
       # OCIR auth) so buildx forwards push/cache auth to the container builder.
       - name: Set up Buildx (docker-container driver, docker.io mirror)
         id: buildx
-        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
         with:
           driver: docker-container
           buildkitd-config: hack/buildkitd.toml
         env:
           DOCKER_CONFIG: ${{ runner.temp }}/.docker
+      - name: Record image references before the build
+        run: sh -c '. hack/lib/image-refs.sh; collect_image_refs packages' | sort -u > "$RUNNER_TEMP/image-refs-before"
       - name: Build ${{ matrix.pkg }}
         run: |
           mkdir -p _out/oci
@@ -477,6 +513,18 @@ jobs:
           # against the package dir — the archive would land in <pkg>/_out/oci and
           # miss the repo-root _out/oci the upload reads.
           OCI_EXPORT_DIR: ${{ github.event.pull_request.head.repo.fork && format('{0}/_out/oci', github.workspace) || '' }}
+      # Fork PR images exist only as OCI archives at this point, so there is
+      # nothing to pull.
+      - name: Smoke-test the images this job built
+        if: ${{ !github.event.pull_request.head.repo.fork }}
+        env:
+          DOCKER_CONFIG: ${{ runner.temp }}/.docker
+          COZYTEST_TRACE: '0'
+        run: |
+          sh -c '. hack/lib/image-refs.sh; collect_image_refs packages' | sort -u > "$RUNNER_TEMP/image-refs-after"
+          comm -13 "$RUNNER_TEMP/image-refs-before" "$RUNNER_TEMP/image-refs-after" > "$RUNNER_TEMP/image-refs-built"
+          cat "$RUNNER_TEMP/image-refs-built"
+          IMAGE_SMOKE_REFS_FILE="$RUNNER_TEMP/image-refs-built" hack/cozytest.sh hack/image-smoke.bats
       - name: Capture digest patch fragment
         id: frag
         env:
@@ -491,7 +539,7 @@ jobs:
           echo "safe=${safe}" >> "$GITHUB_OUTPUT"
           echo "Fragment for ${PKG}:"; git --no-pager diff --stat HEAD
       - name: Upload patch fragment
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: pr-patch-fragment-${{ steps.frag.outputs.safe }}
           path: _out/fragments/${{ steps.frag.outputs.safe }}.patch
@@ -500,7 +548,7 @@ jobs:
       # (OCI_EXPORT_DIR above). Upload them for e2e-fork.yaml to push by digest.
       - name: Upload OCI image archives (fork PR)
         if: ${{ github.event.pull_request.head.repo.fork }}
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: pr-oci-${{ steps.frag.outputs.safe }}
           path: _out/oci/*.oci.tar
@@ -539,7 +587,7 @@ jobs:
       contents: read
     steps:
       - name: Checkout code
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
           fetch-tags: true
@@ -550,7 +598,7 @@ jobs:
           fi
       - name: Login to GitHub Container Registry
         if: ${{ !github.event.pull_request.head.repo.fork }}
-        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           username: ${{ secrets.OCIR_USER }}
           password: ${{ secrets.OCIR_TOKEN }}
@@ -562,7 +610,7 @@ jobs:
       # anonymous-pull rate limit; see the build job for the full rationale.
       - name: Set up Buildx (docker-container driver, docker.io mirror)
         id: buildx
-        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
         with:
           driver: docker-container
           buildkitd-config: hack/buildkitd.toml
@@ -590,7 +638,7 @@ jobs:
           git diff --binary HEAD > _out/fragments/talos.patch
           echo "Talos fragment:"; git --no-pager diff --stat HEAD
       - name: Upload Talos patch fragment
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: pr-patch-fragment-talos
           path: _out/fragments/talos.patch
@@ -598,7 +646,7 @@ jobs:
       # Fork PR only: upload the Talos image OCI archive for e2e-fork.yaml.
       - name: Upload Talos OCI image archive (fork PR)
         if: ${{ github.event.pull_request.head.repo.fork }}
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: pr-oci-talos
           path: _out/oci/*.oci.tar
@@ -629,7 +677,7 @@ jobs:
       contents: read
     steps:
       - name: Checkout code
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
           fetch-tags: true
@@ -638,7 +686,7 @@ jobs:
         with:
           version: "2.8.6"
       - name: Download patch fragments
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           pattern: pr-patch-fragment-*
           merge-multiple: true
@@ -665,7 +713,7 @@ jobs:
           fi
       - name: Login to GitHub Container Registry
         if: ${{ !github.event.pull_request.head.repo.fork }}
-        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           username: ${{ secrets.OCIR_USER }}
           password: ${{ secrets.OCIR_TOKEN }}
@@ -785,7 +833,7 @@ jobs:
       # anonymous-pull rate limit; see the build job for the full rationale.
       - name: Set up Buildx (docker-container driver, docker.io mirror)
         id: buildx
-        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
         with:
           driver: docker-container
           buildkitd-config: hack/buildkitd.toml
@@ -819,7 +867,7 @@ jobs:
       # Fork PR only: upload the operator image OCI archive for e2e-fork.yaml.
       - name: Upload installer OCI image archive (fork PR)
         if: ${{ github.event.pull_request.head.repo.fork }}
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: pr-oci-installer
           path: _out/oci/*.oci.tar
@@ -832,7 +880,7 @@ jobs:
           git diff --binary HEAD > _out/assets/pr.patch
           echo "Final pr.patch:"; git --no-pager diff --stat HEAD
       - name: Upload git diff patch
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: pr-patch
           path: _out/assets/pr.patch
@@ -860,7 +908,7 @@ jobs:
     steps:
       - name: Generate GitHub App token
         id: app-token
-        uses: actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547 # v1
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
           app-id: ${{ secrets.COZYSTACK_CI_APP_ID }}
           private-key: ${{ secrets.COZYSTACK_CI_PRIVATE_KEY }}
@@ -870,7 +918,7 @@ jobs:
 
       - name: Checkout code
         if: contains(github.event.pull_request.labels.*.name, 'release')
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
           fetch-tags: true
@@ -878,7 +926,7 @@ jobs:
       - name: Extract tag from PR branch (release PR)
         if: contains(github.event.pull_request.labels.*.name, 'release')
         id: get_tag
-        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         with:
           script: |
             const branch = context.payload.pull_request.head.ref;
@@ -897,7 +945,7 @@ jobs:
       # asset's presence is still checked in e2e-tag.yaml and promote-rc.yaml.
       - name: Verify draft release exists (release PR)
         if: contains(github.event.pull_request.labels.*.name, 'release')
-        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         with:
           github-token: ${{ steps.app-token.outputs.token }}
           script: |
@@ -953,7 +1001,7 @@ jobs:
     # Covers a green full suite. It does not cover a tenant-Kubernetes suite
     # running into its node-join deadline, so a red there can end as a
     # cancelled job. Held to one figure across every lane that runs the suite.
-    timeout-minutes: 215
+    timeout-minutes: 265
     permissions:
       contents: read
       packages: read
@@ -986,7 +1034,7 @@ jobs:
       # fetch-depth: 0 is required by the "Select E2E tests" step so that
       # `git diff origin/${BASE_REF}...HEAD` can resolve the base ref.
       - name: Checkout code
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
 
@@ -995,7 +1043,7 @@ jobs:
       #   lane consumes no nocloud asset and waits on no Talos build.
       - name: Download PR patch
         if: "!contains(github.event.pull_request.labels.*.name, 'release')"
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: pr-patch
           path: _out/assets
@@ -1216,7 +1264,7 @@ jobs:
 
       - name: Upload chainsaw report
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: chainsaw-report
           path: _out/chainsaw-report.xml
@@ -1224,7 +1272,7 @@ jobs:
 
       # ▸ Collect debug information (always runs)
       #
-      #   A ceiling of its own, not the job's 215 minutes. `Upload
+      #   A ceiling of its own, not the job's 265 minutes. `Upload
       #   cozyreport.tgz` is the next step and the collector writes its tarball
       #   at the very end of its run, so a read that never returns spends what
       #   is left of the job budget, the job is cancelled, and the upload never
@@ -1235,7 +1283,7 @@ jobs:
       #   30 minutes is measured against the step: it takes 3-42s across sampled
       #   runs, on failed e2e jobs as well as green ones. It RESERVES nothing --
       #   `timeout-minutes` caps a step, it does not carve budget out of the job,
-      #   so a suite that has already burned 210 of the 215 leaves this step five
+      #   so a suite that has already burned 260 of the 265 leaves this step five
       #   minutes and the upload is cancelled with everything else. What the cap
       #   buys is that a hung read cannot be the reason.
       #   `continue-on-error` because the ceiling must not change what the job
@@ -1269,7 +1317,7 @@ jobs:
 
       - name: Upload cozyreport.tgz
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: cozyreport
           path: _out/cozyreport.tgz
@@ -1281,7 +1329,7 @@ jobs:
 
       - name: Upload image list
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: image-list
           path: _out/images.txt
@@ -1405,7 +1453,7 @@ jobs:
       statuses: write
     steps:
       - name: Report "E2E Tests" commit status
-        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         env:
           PLAN_RESULT: ${{ needs.plan.result }}
           CODE: ${{ needs.plan.outputs.code }}
@@ -1427,7 +1475,7 @@ jobs:
               description = `release packages candidate did not verify (result: ${CANDIDATE_RESULT})`;
             } else if (CODE !== 'true') {
               state = 'success';
-              description = 'docs-only PR — e2e not required';
+              description = 'docs or CI-only tools — e2e not required';
             } else if (IS_RELEASE === 'true' && IS_FULL_E2E !== 'true') {
               // Release promotion PRs deliberately do not repeat e2e: the rc was
               // already verified against the immutable candidate whose digests

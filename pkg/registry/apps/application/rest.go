@@ -2155,7 +2155,7 @@ const kubernetesKind = "Kubernetes"
 // upgraded cluster keeps them in its values until re-edited, and the adoption
 // migration deliberately leaves them in place rather than rewriting parent
 // values mid-upgrade -- but they no longer render anything on the Kubernetes CR.
-var removedKubernetesFields = []string{"nodeGroups", "nodeHealthCheck", "maxNodeProvisionTime"}
+var removedKubernetesFields = []string{"nodeGroups", "nodeHealthCheck", "maxNodeProvisionTime", "talos"}
 
 // warnRemovedKubernetesFields emits a client-facing admission warning for each
 // Phase 2-removed field still present in a Kubernetes CR's values, so an

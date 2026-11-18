@@ -33,7 +33,7 @@ import (
 // main and release lines shaped the way GitHub leaves them: every pull request
 // lands as a merge commit whose message is its title, its number and its body.
 type fixture struct {
-	t      *testing.T
+	t      testing.TB
 	dir    string
 	remote string
 	now    time.Time
@@ -41,7 +41,7 @@ type fixture struct {
 	tool string
 }
 
-func newFixture(t *testing.T) *fixture {
+func newFixture(t testing.TB) *fixture {
 	t.Helper()
 	// A hook or an outer repository can export these into the test process.
 	for _, key := range []string{"GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR", "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES"} {
@@ -458,6 +458,22 @@ func (g *fakeGH) editPull(number int, title, bodyFile string) error {
 	return nil
 }
 
+func (g *fakeGH) editBody(number int, bodyFile string) error {
+	if err := g.write(number, "a body edit"); err != nil {
+		return err
+	}
+	if err := g.inject("editBody"); err != nil {
+		return err
+	}
+	if err := g.readBody(bodyFile); err != nil {
+		return err
+	}
+	if pr := g.find(number); pr != nil {
+		pr.Body = g.bodies[len(g.bodies)-1]
+	}
+	return nil
+}
+
 func (g *fakeGH) closePull(number int) error {
 	if err := g.write(number, "a close"); err != nil {
 		return err
@@ -503,15 +519,6 @@ func (f *fixture) batchPR(n int, base, branch, body string) pullRequest {
 	}{upstreamRepo}
 	pr.Base.Ref, pr.Base.Repo.FullName = base, upstreamRepo
 	pr.State = "open"
-	return pr
-}
-
-// botBatchPR is batchPR opened by the bot the scheduled batch runs as.
-func (f *fixture) botBatchPR(gh *fakeGH, n int, base, branch, body string) pullRequest {
-	f.t.Helper()
-	gh.bot = defaultBatchBot
-	pr := f.batchPR(n, base, branch, body)
-	pr.User.Login, pr.User.Type, pr.AuthorAssociation = defaultBatchBot, "Bot", "CONTRIBUTOR"
 	return pr
 }
 

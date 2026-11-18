@@ -18,6 +18,7 @@ package observabilityproxy
 
 import (
 	"net/http"
+	"slices"
 	"testing"
 
 	authorizationv1 "k8s.io/api/authorization/v1"
@@ -127,6 +128,29 @@ func TestRouteResourceAttributes(t *testing.T) {
 	for _, tt := range tests {
 		if got := tt.route.ResourceAttributes(); got != tt.want {
 			t.Errorf("%v.ResourceAttributes() = %+v, want %+v", tt.route.Kind, got, tt.want)
+		}
+	}
+}
+
+func TestRouteReviews(t *testing.T) {
+	nsLogs := authorizationv1.ResourceAttributes{Verb: "list", Group: "cozystack.io", Resource: "logs", Namespace: "a"}
+	nsMetrics := authorizationv1.ResourceAttributes{Verb: "list", Group: "cozystack.io", Resource: "metrics", Namespace: "a"}
+	tests := []struct {
+		route Route
+		want  []authorizationv1.ResourceAttributes
+	}{
+		{Route{Kind: NamespaceLogs, Namespace: "a"}, []authorizationv1.ResourceAttributes{nsLogs}},
+		{Route{Kind: NamespaceMetrics, Namespace: "a"}, []authorizationv1.ResourceAttributes{nsMetrics}},
+		{Route{Kind: ApplicationLog, Namespace: "a", Plural: "postgreses", Name: "db"}, []authorizationv1.ResourceAttributes{
+			nsLogs, {Verb: "get", Group: "apps.cozystack.io", Resource: "postgreses", Subresource: "log", Name: "db", Namespace: "a"},
+		}},
+		{Route{Kind: ApplicationMetrics, Namespace: "a", Plural: "postgreses", Name: "db"}, []authorizationv1.ResourceAttributes{
+			nsMetrics, {Verb: "get", Group: "apps.cozystack.io", Resource: "postgreses", Subresource: "metrics", Name: "db", Namespace: "a"},
+		}},
+	}
+	for _, tt := range tests {
+		if got := tt.route.Reviews(); !slices.Equal(got, tt.want) {
+			t.Errorf("%v.Reviews() = %+v, want %+v", tt.route.Kind, got, tt.want)
 		}
 	}
 }

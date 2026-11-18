@@ -190,3 +190,28 @@ true
 {{- end -}}
 {{- end -}}
 {{- end -}}
+
+{{/*
+  backupStorage.forcePathStyle as "true", "false", or "" when unset. Its
+  consumers read it differently: the controller and Velero parse it with
+  strconv.ParseBool, the etcd and MongoDB strategies write it into a boolean
+  field that Helm decodes as YAML 1.1 (so "yes" or "off" is a boolean there),
+  and the Kafka and RabbitMQ scripts compare the string with "false".
+  Normalising it here means a spelling cannot mean path style to some drivers
+  and not to others. The spellings accepted are those of strconv.ParseBool and
+  of YAML 1.1 booleans, a superset of the boolean spellings the etcd and
+  MongoDB strategies accepted; any other value fails the render.
+*/}}
+{{- define "backupstrategy-controller.forcePathStyle" -}}
+{{- $value := .Values.backupStorage.forcePathStyle -}}
+{{- if not (kindIs "invalid" $value) -}}
+{{- $raw := toString $value -}}
+{{- if has $raw (list "1" "t" "T" "true" "True" "TRUE" "y" "Y" "yes" "Yes" "YES" "on" "On" "ON") -}}
+true
+{{- else if has $raw (list "0" "f" "F" "false" "False" "FALSE" "n" "N" "no" "No" "NO" "off" "Off" "OFF") -}}
+false
+{{- else if ne $raw "" -}}
+{{- fail (printf "backupStorage.forcePathStyle must be a boolean or unset, got %q" $raw) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
