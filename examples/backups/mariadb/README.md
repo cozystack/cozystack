@@ -5,7 +5,7 @@
 > the system bucket `cozy-backups`. Tenants reference `cozy-default`
 > directly from BackupJob / Plan / RestoreJob without provisioning a
 > Bucket or supplying S3 credentials. See
-> [Backup Classes](../../../docs/operations/backup-classes.md).
+> [Backup Classes](https://cozystack.io/docs/v1/operations/services/backup-classes/).
 > The walk-through below covers the **legacy** path that wires a
 > per-app Bucket and bespoke BackupClass — useful for tuned non-default
 > policies (custom retention, encryption, secondary buckets).

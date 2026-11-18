@@ -10,7 +10,9 @@
 #                    image as <image-tag>-arm64
 #
 # The amd64 build and the arm64 leg run on separate native runners, so each
-# pushes a single-platform image. For every ref <registry>/<repo>[:<t>]@A in
+# pushes a single-platform image. Built with SBOM=1 that image is an index of
+# itself and its attestation manifest, and the index made below carries both
+# attestations. For every ref <registry>/<repo>[:<t>]@A in
 # the tree, whatever tag <t> it carries, with <tag> the <image-tag>:
 #
 #   1. B is the digest of <repo>:<tag>-arm64. No such image is not an error:
@@ -109,10 +111,18 @@ manifest_digest() {
 }
 
 # image_arch <repo@digest> prints the architecture of a single-platform image,
-# or nothing for an index or a non-image artifact. A registry error returns
-# non-zero, like manifest_digest.
+# or nothing for an index of several platforms or a non-image artifact. An
+# image built with SBOM=1 is an index of one linux image and its attestation
+# manifest, and counts as that image. A registry error returns non-zero, like
+# manifest_digest.
 image_arch() {
   _ia_raw="$(sk inspect --raw "docker://$1")" || return 1
+  _ia_plat="$(printf '%s' "$_ia_raw" | jq -r '
+    if .manifests then
+      [.manifests[] | select(.platform.os == "linux") | .platform.architecture]
+      | if length == 1 then .[0] else empty end
+    else empty end')"
+  if [ -n "$_ia_plat" ]; then printf '%s\n' "$_ia_plat"; return 0; fi
   printf '%s' "$_ia_raw" | jq -r '.config.mediaType // empty' \
     | grep -qE 'image\.config|container\.image' || return 0
   _ia_cfg="$(sk inspect --config "docker://$1")" || return 1
@@ -232,10 +242,15 @@ while read -r repo a reftags <&3; do
   else
     [ -n "$cur" ] || { echo "::error::${repo}:${tag} does not exist, though the tree pins it" >&2; exit 1; }
     raw="$(sk inspect --raw "docker://${repo}@${cur}")"
+    # An A built with SBOM=1 is itself an index, and the stitched one lists its
+    # linux image rather than A.
+    a_raw="$(sk inspect --raw "docker://${repo}@${a}")"
+    a_members="$(printf '%s' "$a_raw" | jq -c --arg a "$a" \
+      'if .manifests then [.manifests[] | select(.platform.os == "linux") | .digest] else [$a] end')"
     # Its arm64 half need not be this run's B: a rerun rebuilds the arm64
     # image, which need not reproduce it byte for byte.
-    if ! printf '%s' "$raw" | jq -e --arg a "$a" \
-      '(.manifests // []) as $m | any($m[]; .digest == $a) and any($m[]; .platform.architecture == "arm64")' >/dev/null; then
+    if ! printf '%s' "$raw" | jq -e --argjson ms "$a_members" \
+      '(.manifests // []) as $m | ($ms | length) > 0 and all($ms[]; . as $d | any($m[]; .digest == $d)) and any($m[]; .platform.architecture == "arm64")' >/dev/null; then
       echo "::error::${repo}:${tag} points at ${cur}, which is neither the digest the tree pins (${a}) nor an index of it and an arm64 image" >&2
       exit 1
     fi

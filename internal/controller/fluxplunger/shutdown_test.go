@@ -177,6 +177,21 @@ func TestApplyShutdownTimings_TheLeaseOutlastsTheStopAndTheDrain(t *testing.T) {
 	}
 }
 
+// A drain deadline that is not positive is already spent when the drain starts,
+// so every fence would be left behind without one listing.
+func TestValidateShutdownDrainTimeout_RefusesADeadlineThatLeavesNoTime(t *testing.T) {
+	for _, d := range []time.Duration{0, -5 * time.Second} {
+		if err := ValidateShutdownDrainTimeout(d); err == nil {
+			t.Errorf("drain timeout %v accepted", d)
+		}
+	}
+	for _, d := range []time.Duration{time.Second, 65 * time.Second} {
+		if err := ValidateShutdownDrainTimeout(d); err != nil {
+			t.Errorf("drain timeout %v refused: %v", d, err)
+		}
+	}
+}
+
 // controller-runtime reports a stop that overran GracefulShutdownTimeout as an
 // error from Start. A reconcile slow to notice its cancelled context must not
 // cost the drain the fence exists for; the exit stays non-zero.

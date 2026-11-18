@@ -141,7 +141,7 @@ suite_to_source() {
 # would also change reverse test selection.
 suite_runtime_sources() {
   case "$1" in
-    clickhouse|etcd|kafka|kafka-metadata|mariadb|mongodb|postgres|rabbitmq|redis|valkey)
+    clickhouse|etcd|kafka|kafka-metadata|mariadb|mongodb|postgres|rabbitmq|redis|valkey|vminstance)
       echo cozystack.backupstrategy-controller ;;
     gateway) echo cozystack.kubeovn-webhook ;;
   esac

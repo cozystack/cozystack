@@ -4,8 +4,6 @@ suite: MachineHealthCheck maxUnhealthy int-vs-percent rendering
 # but rejects a bare numeric STRING ("0"): a percentage must be a quoted string
 # and a count must be an unquoted int. nodegroup.yaml renders it as
 #   maxUnhealthy: {{ if hasSuffix "%" ... }}{{ . | quote }}{{ else }}{{ . | int }}{{ end }}
-# Ported from the parent chart's mhc_rendering_test after the pool moved to
-# kubernetes-nodes.
 
 templates:
   - templates/nodegroup.yaml

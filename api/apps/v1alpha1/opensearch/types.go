@@ -45,9 +45,6 @@ type ConfigSpec struct {
 	// HTTP-layer TLS configuration. Selects who issues the HTTP server certificate; TLS itself is always served.
 	// +kubebuilder:default:={}
 	Tls TLS `json:"tls"`
-	// Container images used by the operator.
-	// +kubebuilder:default:={}
-	Images Images `json:"images"`
 	// Node roles configuration.
 	// +kubebuilder:default:={}
 	NodeRoles NodeRoles `json:"nodeRoles"`
@@ -72,12 +69,6 @@ type Dashboards struct {
 	// Default sizing preset for Dashboards.
 	// +kubebuilder:default:="c1.small"
 	ResourcesPreset ResourcesPreset `json:"resourcesPreset"`
-}
-
-type Images struct {
-	// OpenSearch image.
-	// +kubebuilder:default:=""
-	Opensearch string `json:"opensearch"`
 }
 
 type NodeRoles struct {

@@ -9,11 +9,11 @@ The service utilizes official RabbitMQ operator. This ensures the reliability an
 - Github: https://github.com/rabbitmq/cluster-operator/
 - Docs: https://www.rabbitmq.com/kubernetes/operator/operator-overview.html
 
-> `storageClass` is annotated as immutable in the chart schema — see [`docs/storage-immutability.md`](../../../docs/storage-immutability.md) for the contract and which consumers enforce it.
+> `storageClass` is annotated as immutable in the chart schema — see [storageClass immutability](https://cozystack.io/docs/v1/operations/storage-class-immutability/) for the contract and which consumers enforce it.
 
 ## Backups
 
-RabbitMQ is bound out-of-the-box by the platform `cozy-default` BackupClass, so a `Plan` or an ad-hoc `BackupJob` referencing `cozy-default` backs the instance up with no per-release wiring — see [Backup Classes](../../../docs/operations/backup-classes.md).
+RabbitMQ is bound out-of-the-box by the platform `cozy-default` BackupClass, so a `Plan` or an ad-hoc `BackupJob` referencing `cozy-default` backs the instance up with no per-release wiring — see [Backup Classes](https://cozystack.io/docs/v1/operations/services/backup-classes/).
 
 The scope is **definitions only** — vhosts, users, permissions, queues, exchanges, bindings, policies and parameters, exported through the management API. **Message payloads are not included**, and there is no point-in-time recovery; back up the messages on disk with a Velero volume snapshot instead if you need them. Restore is a **merge**, not a reset: importing definitions creates or updates what the backup contains and never deletes, so anything created after the backup survives a restore, and a to-copy restore into a separate instance imports the source's users (with their password hashes) into the target.
 
@@ -31,6 +31,7 @@ The scope is **definitions only** — vhosts, users, permissions, queues, exchan
 | `size`                       | Persistent Volume Claim size available for application data.                                                                                                                                                                                                                                                                                              | `quantity` | `10Gi`    |
 | `storageClass`               | StorageClass used to store the data.                                                                                                                                                                                                                                                                                                                      | `string`   | `""`      |
 | `external`                   | Enable external access from outside the cluster.                                                                                                                                                                                                                                                                                                          | `bool`     | `false`   |
+| `affinity`                   | Pod affinity applied to RabbitMQ pods (standard Kubernetes corev1.Affinity). Use podAntiAffinity with topologyKey `kubernetes.io/hostname` to spread RabbitMQ pods across nodes.                                                                                                                                                                          | `*object`  | `{}`      |
 | `tls`                        | TLS configuration. TLS is off unless `tls.enabled` is set to true.                                                                                                                                                                                                                                                                                        | `object`   | `{}`      |
 | `tls.enabled`                | Enable TLS for AMQPS (5671) and Management HTTPS (15671). Applies whether or not `external` is set. Plaintext AMQP (5672) and management (15672) keep serving unless `disableNonTLSListeners` is set as well. Moves the `port` key of the `<release>-default-user` Secret from 5672 to 5671, and the metrics port from 15692 to 15691. Defaults to false. | `bool`     | `false`   |
 | `tls.disableNonTLSListeners` | Close the plaintext AMQP (5672) and management (15672) listeners. This is a broker-level switch: it drops in-cluster clients as well as external ones, and it cannot be combined with `users` or `vhosts`. Erlang distribution (25672) and epmd (4369) stay plaintext regardless. Defaults to false.                                                      | `bool`     | `false`   |
@@ -141,5 +142,5 @@ This setting is ignored if the corresponding `resources` value is set.
 
 Presets follow a cloud-style `<series>.<size>` naming convention. Five series cover the full CPU-to-memory ratio range (`t1` 1:0.5, `c1` 1:1, `s1` 1:2, `u1` 1:4, `m1` 1:8) and each series ships eight sizes (`nano` through `4xlarge`). The legacy flat names (`nano`, `micro`, `small`, `medium`, `large`, `xlarge`, `2xlarge`) remain accepted as deprecated aliases and keep their original sizes, which do not follow one series: `nano` through `small` equal the `t1` sizes of the same name, while `medium` equals `c1.small` rather than `c1.medium`.
 
-See [`docs/operations/resource-presets.md`](../../../docs/operations/resource-presets.md) for the full size matrix and the legacy-to-instance-type mapping.
+See [Resource management](https://cozystack.io/docs/v1/guides/resource-management/) for the full size matrix and the legacy-to-instance-type mapping.
 
