@@ -42,6 +42,24 @@
 {{- define "kubernetes.talosConfigTemplateSpec" -}}
 {{- $root := .root }}
 {{- $group := .group }}
+{{- $sysctls := $root.Values.talos.sysctls }}
+{{- if not (kindIs "invalid" $sysctls) }}
+{{- if not (kindIs "map" $sysctls) }}
+{{- fail "talos.sysctls must be a map of strings" }}
+{{- end }}
+{{- range $key, $value := $sysctls }}
+{{- if not (kindIs "string" $value) }}
+{{- fail (printf "talos.sysctls[%q] must be a string" $key) }}
+{{- end }}
+{{- /* JSON replaces invalid UTF-8 with replacement runes. Comparing the
+      round-trip detects raw --set-file bytes that quote would change into
+      different Unicode characters in the machine config. */}}
+{{- $roundTrip := dict "value" $value | toJson | fromJson }}
+{{- if ne $value $roundTrip.value }}
+{{- fail (printf "talos.sysctls[%q] must be valid UTF-8" $key) }}
+{{- end }}
+{{- end }}
+{{- end }}
 {{- $kubeletVersion := include "kubernetes.versionMap" $root | trim }}
 {{- /* Resolve this pool's worker image (schematicID, version) from .Values.osImage
        — the same selection templates/nodegroup.yaml uses for the boot disk — so the
@@ -69,7 +87,7 @@
 {{- /* Management cluster DNS domain. Tenant Kubernetes workers run as
        KubeVirt VMs inside the management cluster's pod network and need
        to resolve management-cluster service short names ("<svc>.<ns>.svc")
-       the same way an Ubuntu+kubeadm worker did via cloud-init DHCP. The
+       the same way a pod of the management cluster does. The
        kubevirt-csi NFS mount path is the load-bearing case: kubelet on
        the worker host calls `mount.nfs linstor-csi-nfs.cozy-linstor.svc`
        (no domain suffix), and without searchDomains in /etc/resolv.conf
@@ -140,6 +158,17 @@ spec:
         machine:
           type: worker
           token: ${TALOS_TOKEN}
+          {{- if $sysctls }}
+          sysctls:
+            {{- /* Quote each scalar before shell-escaping it: unlike toYaml's
+                  multiline scalars, quote keeps tenant line breaks (including
+                  Unicode separators) out of the Job's command block and EOF
+                  delimiter. The unquoted heredoc must preserve both names and
+                  values literally; see the INVARIANT above. */}}
+            {{- range $key, $value := $sysctls }}
+            {{ $key | quote | replace "\\" "\\\\" | replace "$" "\\$" | replace "`" "\\`" }}: {{ $value | quote | replace "\\" "\\\\" | replace "$" "\\$" | replace "`" "\\`" }}
+            {{- end }}
+          {{- end }}
           network:
             # Management CoreDNS as the worker's host
             # resolver, plus management cluster search

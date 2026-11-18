@@ -1,0 +1,123 @@
+suite: seaweedfs claims keep the storage class a string
+
+# A StorageClass name may be all digits. Emitted unquoted it renders as a
+# number, which the claim rejects; and an empty storageClassName disables
+# dynamic provisioning, so with no class named the field has to stay out for
+# the cluster default to apply.
+
+templates:
+  - charts/seaweedfs/templates/master/master-statefulset.yaml
+  - charts/seaweedfs/templates/filer/filer-statefulset.yaml
+  - charts/seaweedfs/templates/volume/volume-statefulset.yaml
+  - charts/seaweedfs/templates/admin/admin-statefulset.yaml
+  - charts/seaweedfs/templates/all-in-one/all-in-one-pvc.yaml
+  # filer-statefulset includes it for its checksum annotation.
+  - charts/seaweedfs/templates/s3/s3-secret.yaml
+
+release:
+  name: seaweedfs-system
+  namespace: tenant-root
+
+tests:
+  - it: keeps numeric master data and logs storage class names strings
+    template: charts/seaweedfs/templates/master/master-statefulset.yaml
+    set:
+      seaweedfs.master.data: {type: persistentVolumeClaim, size: 1Gi, storageClass: "123"}
+      seaweedfs.master.logs: {type: persistentVolumeClaim, size: 1Gi, storageClass: "456"}
+    asserts:
+      - equal:
+          path: spec.volumeClaimTemplates[?(@.metadata.name == "data-tenant-root")].spec.storageClassName
+          value: "123"
+      - equal:
+          path: spec.volumeClaimTemplates[?(@.metadata.name == "seaweedfs-master-log-volume")].spec.storageClassName
+          value: "456"
+
+  - it: leaves the master claims on the cluster default when no class is named
+    template: charts/seaweedfs/templates/master/master-statefulset.yaml
+    set:
+      seaweedfs.master.data: {type: persistentVolumeClaim, size: 1Gi}
+      seaweedfs.master.logs: {type: persistentVolumeClaim, size: 1Gi}
+    asserts:
+      - notExists:
+          path: spec.volumeClaimTemplates[0].spec.storageClassName
+      - notExists:
+          path: spec.volumeClaimTemplates[1].spec.storageClassName
+
+  - it: keeps numeric filer data and logs storage class names strings
+    template: charts/seaweedfs/templates/filer/filer-statefulset.yaml
+    set:
+      seaweedfs.filer.data: {type: persistentVolumeClaim, size: 1Gi, storageClass: "123"}
+      seaweedfs.filer.logs: {type: persistentVolumeClaim, size: 1Gi, storageClass: "456"}
+    asserts:
+      - equal:
+          path: spec.volumeClaimTemplates[0].spec.storageClassName
+          value: "123"
+      - equal:
+          path: spec.volumeClaimTemplates[1].spec.storageClassName
+          value: "456"
+
+  - it: leaves the filer claims on the cluster default when no class is named
+    template: charts/seaweedfs/templates/filer/filer-statefulset.yaml
+    set:
+      seaweedfs.filer.data: {type: persistentVolumeClaim, size: 1Gi}
+      seaweedfs.filer.logs: {type: persistentVolumeClaim, size: 1Gi}
+    asserts:
+      - notExists:
+          path: spec.volumeClaimTemplates[0].spec.storageClassName
+      - notExists:
+          path: spec.volumeClaimTemplates[1].spec.storageClassName
+
+  - it: keeps numeric volume idx and logs storage class names strings
+    template: charts/seaweedfs/templates/volume/volume-statefulset.yaml
+    set:
+      seaweedfs.volume.dataDirs: []
+      seaweedfs.volume.idx: {type: persistentVolumeClaim, size: 1Gi, storageClass: "123"}
+      seaweedfs.volume.logs: {type: persistentVolumeClaim, size: 1Gi, storageClass: "456"}
+    asserts:
+      - equal:
+          path: spec.volumeClaimTemplates[0].spec.storageClassName
+          value: "123"
+      - equal:
+          path: spec.volumeClaimTemplates[1].spec.storageClassName
+          value: "456"
+
+  - it: leaves the volume idx and logs claims on the cluster default when no class is named
+    template: charts/seaweedfs/templates/volume/volume-statefulset.yaml
+    set:
+      seaweedfs.volume.dataDirs: []
+      seaweedfs.volume.idx: {type: persistentVolumeClaim, size: 1Gi}
+      seaweedfs.volume.logs: {type: persistentVolumeClaim, size: 1Gi}
+    asserts:
+      - notExists:
+          path: spec.volumeClaimTemplates[0].spec.storageClassName
+      - notExists:
+          path: spec.volumeClaimTemplates[1].spec.storageClassName
+
+  - it: keeps a numeric admin logs storage class name a string
+    template: charts/seaweedfs/templates/admin/admin-statefulset.yaml
+    set:
+      seaweedfs.admin.enabled: true
+      seaweedfs.admin.logs: {type: persistentVolumeClaim, size: 1Gi, storageClass: "456"}
+    asserts:
+      - equal:
+          path: spec.volumeClaimTemplates[1].spec.storageClassName
+          value: "456"
+
+  - it: leaves the admin logs claim on the cluster default when no class is named
+    template: charts/seaweedfs/templates/admin/admin-statefulset.yaml
+    set:
+      seaweedfs.admin.enabled: true
+      seaweedfs.admin.logs: {type: persistentVolumeClaim, size: 1Gi}
+    asserts:
+      - notExists:
+          path: spec.volumeClaimTemplates[1].spec.storageClassName
+
+  - it: keeps a numeric all-in-one storage class name a string
+    template: charts/seaweedfs/templates/all-in-one/all-in-one-pvc.yaml
+    set:
+      seaweedfs.allInOne.enabled: true
+      seaweedfs.allInOne.data: {type: persistentVolumeClaim, size: 1Gi, storageClass: "123"}
+    asserts:
+      - equal:
+          path: spec.storageClassName
+          value: "123"

@@ -1,0 +1,59 @@
+{{- if .Capabilities.APIVersions.Has "admissionregistration.k8s.io/v1/ValidatingAdmissionPolicy" }}
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: cozystack-tenant-namespace-delete-policy
+  labels:
+    internal.cozystack.io/managed-by-cozystack: ""
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+    - apiGroups: [""]
+      apiVersions: ["v1"]
+      operations: ["DELETE"]
+      resources: ["namespaces"]
+  variables:
+  - name: platformCaller
+    expression: >-
+      has(request.userInfo.groups) && request.userInfo.groups.exists(g,
+        g == "system:serviceaccounts:cozy-fluxcd" ||
+        g == "system:serviceaccounts:kube-system")
+  - name: name
+    expression: oldObject.metadata.name
+  - name: cut
+    expression: variables.name.lastIndexOf("-")
+  - name: tenant
+    expression: variables.name.substring(variables.cut + 1)
+  - name: parentNamespace
+    expression: >-
+      variables.cut > 0 && variables.name.substring(0, variables.cut) != "tenant"
+        ? variables.name.substring(0, variables.cut)
+        : "tenant-root"
+  validations:
+  - expression: variables.platformCaller
+    messageExpression: >-
+      "Namespace " + variables.name + " belongs to the Tenant " + variables.tenant +
+      " in " + variables.parentNamespace + ". Delete the Tenant instead with kubectl delete tenants.apps.cozystack.io " +
+      variables.tenant + " --namespace " + variables.parentNamespace +
+      ". Deleting the namespace directly can remove the tenant etcd before the Kubernetes clusters that use it and leave the namespace stuck in Terminating." +
+      " If the Tenant is already gone, remove the label first with kubectl label namespace " + variables.name +
+      " tenant.cozystack.io/tenant-root-"
+    reason: Forbidden
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: cozystack-tenant-namespace-delete-policy
+  labels:
+    internal.cozystack.io/managed-by-cozystack: ""
+spec:
+  policyName: cozystack-tenant-namespace-delete-policy
+  validationActions: [Deny]
+  matchResources:
+    objectSelector:
+      matchExpressions:
+      - key: tenant.cozystack.io/tenant-root
+        operator: Exists
+{{- end }}

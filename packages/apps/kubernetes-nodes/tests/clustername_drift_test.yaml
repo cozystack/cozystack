@@ -1,7 +1,7 @@
 suite: worker pool clusterName-drift guard (assertNoForeignPool)
 
 # assertNoForeignPool reconstructs the pool MachineDeployment name
-# kubernetes-<cluster>-<pool> and looks it up. Beyond the pre-existing
+# kubernetes-<cluster>-<pool> and looks it up. Beyond the
 # foreign-owner branch, it refuses the render when a live MD of that name is
 # owned by this release but its spec.clusterName disagrees with the clusterName
 # this pool renders: that is the fingerprint of a post-create .Values.cluster
@@ -126,3 +126,28 @@ tests:
           value: MachineDeployment
         exists:
           path: metadata.name
+
+  # The other branch of the same guard: a live MachineDeployment of this name
+  # that another release owns, here the cluster's own release, which is what a
+  # pool migration 56 did not adopt still carries. The message has to point at
+  # a remedy the operator can act on; the cluster's Kubernetes CR renders no
+  # worker pool, so editing it cannot clear the conflict.
+  - it: refuses to render over a MachineDeployment another release owns
+    kubernetesProvider:
+      scheme: *scheme
+      objects:
+        - *kcp
+        - *schemeMachineSet
+        - *schemeKmt
+        - kind: MachineDeployment
+          apiVersion: cluster.x-k8s.io/v1beta1
+          metadata:
+            name: kubernetes-myk8s-md0
+            namespace: tenant-test
+            annotations:
+              meta.helm.sh/release-name: kubernetes-myk8s
+          spec:
+            clusterName: kubernetes-myk8s
+    asserts:
+      - failedTemplate:
+          errorPattern: 'already managed by release "kubernetes-myk8s", not this pool release "kubernetes-nodes-myk8s-md0" — two pools cannot share the object name kubernetes-<cluster>-<pool>: give this pool a name whose object name is free, or remove the existing pool from release "kubernetes-myk8s" first\.'

@@ -15,7 +15,6 @@ rules:
     - events
     - persistentvolumes
     - pods
-    - secrets
     - serviceaccounts
     - services
   verbs:
@@ -60,6 +59,13 @@ rules:
   verbs:
     - create
 - apiGroups:
+    - ""
+  resources:
+    - pods/exec
+  verbs:
+    - create
+    - get
+- apiGroups:
     - apiextensions.k8s.io
   resources:
     - customresourcedefinitions
@@ -71,6 +77,12 @@ rules:
     - patch
     - update
     - watch
+- apiGroups:
+    - apiextensions.k8s.io
+  resources:
+    - customresourcedefinitions/status
+  verbs:
+    - patch
 - apiGroups:
     - apps
   resources:
@@ -235,7 +247,6 @@ rules:
     - snapshot.storage.k8s.io
   resources:
     - volumesnapshotclasses
-    - volumesnapshots
   verbs:
     - get
     - list
@@ -257,6 +268,15 @@ rules:
   verbs:
     - patch
     - update
+- apiGroups:
+    - snapshot.storage.k8s.io
+  resources:
+    - volumesnapshots
+  verbs:
+    - get
+    - list
+    - update
+    - watch
 - apiGroups:
     - storage.k8s.io
   resources:
@@ -283,6 +303,7 @@ rules:
     - storage.k8s.io
   resources:
     - storageclasses
+    - volumeattributesclasses
   verbs:
     - get
     - list
@@ -307,7 +328,29 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
+  name: {{ include "piraeus-operator.fullname" . }}-controller-manager
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "piraeus-operator.labels" . | nindent 4 }}
+rules:
+- apiGroups:
+    - ""
+  resources:
+    - secrets
+  verbs:
+    - create
+    - delete
+    - get
+    - list
+    - patch
+    - update
+    - watch
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
   name: {{ include "piraeus-operator.fullname" . }}-leader-election
+  namespace: {{ .Release.Namespace }}
   labels:
     {{- include "piraeus-operator.labels" . | nindent 4 }}
 rules:

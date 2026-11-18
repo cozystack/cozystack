@@ -1,0 +1,85 @@
+{{- /* Optional admission layer (design doc §8): only the driver and allowlisted
+       principals may set, change or remove the Service fields that steer
+       MetalLB at a specific address or pool, or the driver's own markers.
+       Writes that leave those fields as they were are always admitted. */ -}}
+{{- if .Values.admissionPolicy.enabled }}
+{{- $users := append .Values.admissionPolicy.allowedUsernames (printf "system:serviceaccount:%s:metallb-iad" .Release.Namespace) }}
+{{- $groups := .Values.admissionPolicy.allowedGroups }}
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: metallb-iad-service-pins
+  labels:
+    {{- include "metallb-iad.labels" . | nindent 4 }}
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["services"]
+  matchConditions:
+    - name: not-allowlisted
+      expression: >-
+        !(request.userInfo.username in {{ toJson $users }}) &&
+        !(has(request.userInfo.groups) &&
+          request.userInfo.groups.exists(g, g in {{ toJson $groups }}))
+  variables:
+    - name: protectedKeys
+      expression: >-
+        [
+          "metallb.io/loadBalancerIPs",
+          "metallb.io/address-pool",
+          "metallb.io/allow-shared-ip",
+          "metallb.universe.tf/loadBalancerIPs",
+          "metallb.universe.tf/address-pool",
+          "metallb.universe.tf/allow-shared-ip",
+          "metallb.drivers.local.sdn.cozystack.io/pinned"
+        ]
+    - name: oldAnnotations
+      expression: >-
+        request.operation == "UPDATE" && has(oldObject.metadata.annotations)
+          ? oldObject.metadata.annotations : {}
+    - name: newAnnotations
+      expression: >-
+        has(object.metadata.annotations) ? object.metadata.annotations : {}
+    - name: changedKeys
+      expression: >-
+        variables.protectedKeys.filter(k,
+          (k in variables.newAnnotations) != (k in variables.oldAnnotations) ||
+          (k in variables.newAnnotations && variables.newAnnotations[k] != variables.oldAnnotations[k]))
+    - name: oldLoadBalancerIP
+      expression: >-
+        request.operation == "UPDATE" && has(oldObject.spec.loadBalancerIP)
+          ? oldObject.spec.loadBalancerIP : ""
+    - name: newLoadBalancerIP
+      expression: >-
+        has(object.spec.loadBalancerIP) ? object.spec.loadBalancerIP : ""
+  validations:
+    - expression: size(variables.changedKeys) == 0
+      messageExpression: >-
+        "Service annotations " + variables.changedKeys.join(", ") +
+        " are reserved to the address driver; reserve an IPAddressClaim and name it" +
+        " with local.sdn.cozystack.io/ip-address-claim instead"
+      reason: Forbidden
+    - expression: variables.newLoadBalancerIP == variables.oldLoadBalancerIP
+      message: >-
+        spec.loadBalancerIP is reserved to the address driver; reserve an
+        IPAddressClaim and name it with local.sdn.cozystack.io/ip-address-claim instead
+      reason: Forbidden
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: metallb-iad-service-pins
+  labels:
+    {{- include "metallb-iad.labels" . | nindent 4 }}
+spec:
+  policyName: metallb-iad-service-pins
+  validationActions: {{ toJson .Values.admissionPolicy.validationActions }}
+  matchResources:
+    namespaceSelector:
+      {{- toYaml .Values.admissionPolicy.namespaceSelector | nindent 6 }}
+{{- end }}

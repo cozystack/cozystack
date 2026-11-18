@@ -1,0 +1,73 @@
+suite: Redis and Sentinel affinity
+
+release:
+  name: my-redis
+  namespace: tenant-test
+
+templates:
+  - templates/redisfailover.yaml
+
+tests:
+  - it: omits affinity by default
+    documentSelector:
+      path: kind
+      value: RedisFailover
+    asserts:
+      - notExists:
+          path: spec.redis.affinity
+      - notExists:
+          path: spec.sentinel.affinity
+
+  - it: omits affinity when parent is null
+    set:
+      affinity: null
+    documentSelector:
+      path: kind
+      value: RedisFailover
+    asserts:
+      - notExists:
+          path: spec.redis.affinity
+      - notExists:
+          path: spec.sentinel.affinity
+
+  - it: keeps Redis and Sentinel affinity independent
+    set:
+      affinity:
+        redis:
+          nodeAffinity:
+            requiredDuringSchedulingIgnoredDuringExecution:
+              nodeSelectorTerms:
+                - matchExpressions:
+                    - key: topology.kubernetes.io/zone
+                      operator: In
+                      values: [zone-a]
+        sentinel:
+          podAntiAffinity:
+            requiredDuringSchedulingIgnoredDuringExecution:
+              - labelSelector:
+                  matchLabels:
+                    app.kubernetes.io/component: sentinel
+                topologyKey: kubernetes.io/hostname
+    documentSelector:
+      path: kind
+      value: RedisFailover
+    asserts:
+      - equal:
+          path: spec.redis.affinity
+          value:
+            nodeAffinity:
+              requiredDuringSchedulingIgnoredDuringExecution:
+                nodeSelectorTerms:
+                  - matchExpressions:
+                      - key: topology.kubernetes.io/zone
+                        operator: In
+                        values: [zone-a]
+      - equal:
+          path: spec.sentinel.affinity
+          value:
+            podAntiAffinity:
+              requiredDuringSchedulingIgnoredDuringExecution:
+                - labelSelector:
+                    matchLabels:
+                      app.kubernetes.io/component: sentinel
+                  topologyKey: kubernetes.io/hostname

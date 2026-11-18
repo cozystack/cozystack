@@ -1,0 +1,20 @@
+suite: foundationdb-operator applies CRD updates on upgrade
+# The fdb-operator v2.30.0 CRDs add fields the v2.13.0 ones lack, among them
+# status.backupDetails.restorable on FoundationDBBackup. Helm never upgrades
+# CRDs shipped in crds/, so without CreateReplace a cluster installed before
+# v1.6.0 keeps the v2.13.0 CRDs and the apiserver prunes those fields on every
+# write. Pin the policy so an upgrade cannot silently regress.
+templates:
+  - templates/sources.yaml
+release:
+  name: cozystack
+  namespace: cozy-system
+tests:
+  - it: foundationdb-operator PackageSource sets upgradeCRDs to CreateReplace
+    documentSelector:
+      path: metadata.name
+      value: cozystack.foundationdb-operator
+    asserts:
+      - equal:
+          path: spec.variants[0].components[0].install.upgradeCRDs
+          value: CreateReplace

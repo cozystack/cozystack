@@ -1,0 +1,67 @@
+suite: cozystack-operator platform source arguments
+
+# Each flag must follow its own value: a pull-through cache behind a private CA
+# often needs the CA without credentials, so a cert flag keyed on the wrong
+# value would bring back the TLS failure while every other case stays green.
+
+templates:
+  - templates/cozystack-operator.yaml
+
+tests:
+  - it: passes platformSourceCertSecret alone, without credentials
+    set:
+      cozystackOperator.platformSourceCertSecret: registry-ca
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --platform-source-cert-secret=registry-ca
+        documentSelector:
+          path: kind
+          value: Deployment
+      - notExists:
+          path: spec.template.spec.containers[0].args[?(@ =~ /^--platform-source-secret=/)]
+        documentSelector:
+          path: kind
+          value: Deployment
+
+  - it: passes platformSourceSecret alone, without the cert flag
+    set:
+      cozystackOperator.platformSourceSecret: registry-creds
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --platform-source-secret=registry-creds
+        documentSelector:
+          path: kind
+          value: Deployment
+      - notExists:
+          path: spec.template.spec.containers[0].args[?(@ =~ /^--platform-source-cert-secret=/)]
+        documentSelector:
+          path: kind
+          value: Deployment
+
+  - it: passes both secrets together
+    set:
+      cozystackOperator.platformSourceSecret: registry-creds
+      cozystackOperator.platformSourceCertSecret: registry-ca
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --platform-source-cert-secret=registry-ca
+        documentSelector:
+          path: kind
+          value: Deployment
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --platform-source-secret=registry-creds
+        documentSelector:
+          path: kind
+          value: Deployment
+
+  - it: omits the cert secret flag by default
+    asserts:
+      - notExists:
+          path: spec.template.spec.containers[0].args[?(@ =~ /^--platform-source-cert-secret=/)]
+        documentSelector:
+          path: kind
+          value: Deployment

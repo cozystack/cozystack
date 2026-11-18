@@ -6,7 +6,7 @@ name: Cut Pre-release Tag
 # This is the single entry point for creating a pre-release. Stable vX.Y.Z tags
 # are never cut here (or by hand) — they are created write-once by
 # pull-requests-release.yaml finalize at a promote PR's merge commit. See
-# docs/release.md and #2677.
+# docs/release/stable-tags.md and #2677.
 #
 # Dispatch from the branch the tag belongs to: `main` for a new minor's
 # pre-release (vX.Y.0-rc.N), or `release-X.Y` for a patch line (vX.Y.Z-rc.N).

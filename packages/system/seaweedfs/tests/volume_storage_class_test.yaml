@@ -1,0 +1,42 @@
+suite: seaweedfs volume claims keep the storage class a string
+
+templates:
+  - charts/seaweedfs/templates/volume/volume-statefulset.yaml
+
+release:
+  name: seaweedfs-system
+  namespace: tenant-root
+
+tests:
+  # The parent hands volume.storageClass on as a string, and a class name may
+  # be all digits; emitted unquoted it turns back into a number the claim
+  # rejects.
+  - it: keeps a numeric volume storage class name a string
+    set:
+      seaweedfs:
+        volume:
+          dataDirs:
+            - name: data1
+              type: persistentVolumeClaim
+              size: 10Gi
+              storageClass: "123"
+              maxVolumes: 0
+    asserts:
+      - equal:
+          path: spec.volumeClaimTemplates[0].spec.storageClassName
+          value: "123"
+
+  # An empty storageClassName disables dynamic provisioning; with no class
+  # named, the claim must leave the field out so the cluster default applies.
+  - it: leaves the volume claim on the cluster default when no class is named
+    set:
+      seaweedfs:
+        volume:
+          dataDirs:
+            - name: data1
+              type: persistentVolumeClaim
+              size: 10Gi
+              maxVolumes: 0
+    asserts:
+      - notExists:
+          path: spec.volumeClaimTemplates[0].spec.storageClassName

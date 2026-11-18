@@ -42,9 +42,13 @@
 # a change: `yq -i`, which every `make image` uses to stamp the ref, drops one.
 # If any OTHER line differs — the PR branched from a
 # main whose config for that file differs from the artifact's base — the file is
-# left on its committed ref (safe degradation, logged, never fatal). CI checks
-# out the pull_request merge commit (current main + PR), so for an unbuilt file
-# the config already matches current main and only ref lines differ.
+# left on its committed ref (safe degradation, logged, never fatal), except
+# that a bare first-party ref in it, one with no digest, still takes the
+# artifact's ref (see replace_bare_refs). CI checks out the pull_request merge
+# commit (main + PR), so for an unbuilt file the config matches main as of
+# that merge commit. It is fixed when the run starts, so a rerun, or a PR not
+# pushed to since, can be older than the artifact and drift on files it never
+# touched.
 #
 # Usage: hack/overlay-main-images.sh <mainpkgs-dir> <built-matrix-json> [touched-pkg-dirs]
 #        <mainpkgs-dir>     = extracted cozystack-packages:main tree; its root holds
@@ -123,8 +127,95 @@ img_line='(@sha256:|^[[:space:]]*(- )?(image|repository|registry|tag|digest):|^[
 # match branch for this same shape and for this same reason.
 bare_ref_line='^[^[:space:]#][^[:space:]]*/[^[:space:]]+$'
 
+# A drifted file keeps its committed refs. For a ref pinned by digest that is an
+# older image which pulls and matches the PR's config, so it is the safe answer.
+# A first-party ref with no digest is not: docs/agents/image-refs.md forbids it
+# except as the first commit of a new image, whose tag was never pushed, and
+# keeping that makes the component fail to pull. The merge commit CI checks out
+# is fixed when the run starts, so a PR whose merge commit predates a config
+# change to such a file drifts on it, and a new image fails every such PR until
+# a release stamps its ref (#5328).
+#
+# replace_bare_refs <cur> <new> rewrites, in <cur> only, each line whose value is
+# a bare first-party ref (ghcr.io/cozystack/cozystack/<name>:<tag>, no digest)
+# under an image key, taking the line from <new> that has the same key and
+# indentation, an @sha256: digest and the same first-party image, i.e. a path
+# ending in /cozystack/<name>. Exactly one such line must exist; two are
+# ambiguous, and none means build-main did not stamp it, or the key moved
+# (another indentation or parent) or the image was renamed on main since the
+# PR's merge commit. Every other line of
+# <cur> stays as the PR has it.
+#
+# The trade-off is deliberate. A bare first-party ref that does exist (an older
+# release tag or a moving `latest`, #4264) also takes main's image, so it runs
+# with the PR's older config rather than as committed. It is the same component
+# built from the tree, and a digest-less ref is not reproducible anyway; the
+# alternative is a ref that may not pull at all. Third-party refs are never
+# touched: main can bump one alongside its config, and the committed pair is
+# the one known to work together. The split shape (`repository:` + `tag:`
+# without `digest:`) is not handled, nor is a single-quoted value or one
+# followed by a `# comment`; such a line stays as committed, and no package
+# writes a bare first-party ref that way today. Prints nothing and fails when
+# the file could not be rewritten, so the caller counts it as failed.
+#
+# Prints the number of lines replaced.
+replace_bare_refs() {
+  tmp="$1.overlay-bare.$$"
+  n=$(awk -v newf="$2" -v out="$tmp" '
+    function key_prefix(s) {
+      if (match(s, /^[[:space:]]*(- )?([A-Za-z]+[Ii]mage|image):[[:space:]]*/)) return substr(s, 1, RLENGTH)
+      return ""
+    }
+    function ref_value(s, p,   v) {
+      v = substr(s, length(p) + 1)
+      sub(/[[:space:]]+$/, "", v)
+      gsub(/"/, "", v)
+      return v
+    }
+    function image_name(v) {
+      sub(/@.*/, "", v)
+      sub(/.*\//, "", v)
+      sub(/:.*/, "", v)
+      return v
+    }
+    BEGIN {
+      while ((getline l < newf) > 0) {
+        p = key_prefix(l)
+        if (p == "" || index(l, "@sha256:") == 0) continue
+        v = ref_value(l, p)
+        name = image_name(v)
+        if (index(v, "/cozystack/" name ":") == 0) continue
+        k = p SUBSEP name
+        cnt[k]++
+        line[k] = l
+      }
+      close(newf)
+    }
+    {
+      p = key_prefix($0)
+      if (p != "") {
+        v = ref_value($0, p)
+        if (v ~ /^ghcr\.io\/cozystack\/cozystack\/[^@[:space:]\/]+:[^@[:space:]\/]+$/) {
+          k = p SUBSEP image_name(v)
+          if (cnt[k] == 1) { print line[k] > out; r++; next }
+        }
+      }
+      print > out
+    }
+    END { close(out); print r + 0 }
+  ' "$1")
+  case "$n" in
+    ''|*[!0-9]*) rm -f "$tmp"; return 1 ;;
+    0) rm -f "$tmp" ;;
+    *) mv "$tmp" "$1" || { rm -f "$tmp"; return 1; } ;;
+  esac
+  echo "$n"
+}
+
 overlaid=0
 same=0
+bare=0
+bare_files=""
 skipped=0
 drift=0
 drift_files=""
@@ -162,8 +253,26 @@ for new in $(find "$MAINPKGS" -type d -name charts -prune -o \
 
   if diff "$cur" "$new" | sed -n 's/^[<>] //p' \
       | grep -vE '^[[:space:]]*$' | grep -qvE "$line_pat"; then
-    echo "drift (non-ref change) in $cur -> keeping committed ref"
     drift=$((drift + 1))
+    r=0
+    case "$cur" in
+      *.yaml)
+        if ! r=$(replace_bare_refs "$cur" "$new"); then
+          echo "WARN: rewriting bare refs failed for $cur (keeping committed refs)"
+          failed=$((failed + 1))
+          r=0
+        fi
+        ;;
+    esac
+    if [ "$r" -eq 0 ]; then
+      echo "drift (non-ref change) in $cur -> keeping committed ref"
+    else
+      echo "drift (non-ref change) in $cur -> keeping committed refs except bare first-party ones"
+      echo "bare first-party ref in $cur -> current-main ($r line(s)); its other refs stay committed"
+      bare=$((bare + r))
+      d=$(dirname "${cur#packages/}")
+      bare_files="$bare_files $d"
+    fi
     # Name the PACKAGE, not the directory the file happens to sit in: an
     # images/*.tag drift would otherwise read as "<pkg>/images", which is not
     # something anyone can go and look at.
@@ -181,7 +290,7 @@ for new in $(find "$MAINPKGS" -type d -name charts -prune -o \
   fi
 done
 
-echo "Overlay current-main images: overlaid=$overlaid same=$same skipped(rebuilt/owned/edited)=$skipped drift=$drift failed=$failed"
+echo "Overlay current-main images: overlaid=$overlaid same=$same skipped(rebuilt/owned/edited)=$skipped drift=$drift bare-refs=$bare failed=$failed"
 
 # Keeping the committed ref is the safe answer to a config that does not match
 # the artifact, but it is not a neutral one: that component then runs its last
@@ -192,7 +301,18 @@ echo "Overlay current-main images: overlaid=$overlaid same=$same skipped(rebuilt
 # cost three unrelated PRs, one round each.
 if [ "$drift" -gt 0 ]; then
   drift_pkgs=$(echo "$drift_files" | tr ' ' '\n' | grep -v '^$' | sort -u)
-  printf '::warning title=Image overlay drift::%s package(s) kept committed release refs, so they run release images in this lane rather than current main: %s\n' \
-    "$(printf '%s\n' "$drift_pkgs" | wc -l | tr -d ' ')" \
+  except=""
+  [ "$bare" -eq 0 ] || except=" (bare first-party refs excepted, see Image overlay bare refs)"
+  printf '::warning title=Image overlay drift::%s package(s) kept committed release refs%s, so they run release images in this lane rather than current main: %s\n' \
+    "$(printf '%s\n' "$drift_pkgs" | wc -l | tr -d ' ')" "$except" \
     "$(printf '%s' "$drift_pkgs" | tr '\n' ' ' | sed 's/ $//')"
+fi
+# Among those, a package whose bare first-party ref took main's image runs that
+# image with the PR's older config, not its committed ref; name it separately
+# so the warning above does not read as the whole story for it.
+if [ "$bare" -gt 0 ]; then
+  bare_pkgs=$(echo "$bare_files" | tr ' ' '\n' | grep -v '^$' | sort -u)
+  printf '::warning title=Image overlay bare refs::%s drifted package(s) took current-main images for bare first-party refs, with the config committed in this PR: %s\n' \
+    "$(printf '%s\n' "$bare_pkgs" | wc -l | tr -d ' ')" \
+    "$(printf '%s' "$bare_pkgs" | tr '\n' ' ' | sed 's/ $//')"
 fi
