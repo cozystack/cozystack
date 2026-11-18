@@ -153,10 +153,16 @@ spec:
   md0 with roles: [ingress-nginx]; that default is gone with the split, so the
   module materialises the same md0 here, otherwise the pinned ingress-nginx
   addon would have no node to schedule onto and stay Pending forever.
+
+  The default md0 carries its whole size, not only what differs from the pool
+  chart's defaults: those defaults live in the pool's schema and are never
+  written into a release rendered here, so without them the release would not
+  say what the pool can grow to, and a reservation read from it would have to
+  know another chart's defaults.
 */}}
 {{- $pools := .Values.nodeGroups }}
 {{- if not $pools }}
-{{- $pools = dict "md0" (dict "roles" (list "ingress-nginx") "minReplicas" 0) }}
+{{- $pools = dict "md0" (dict "roles" (list "ingress-nginx") "minReplicas" 0 "maxReplicas" 10 "instanceType" "u1.medium" "diskSize" "20Gi") }}
 {{- end }}
 {{- range $pool, $group := $pools }}
 ---
