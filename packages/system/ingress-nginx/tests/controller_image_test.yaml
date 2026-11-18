@@ -1,0 +1,17 @@
+suite: ingress-nginx controller image
+release:
+  name: ingress-nginx
+  namespace: cozy-ingress-nginx
+templates:
+  - charts/ingress-nginx/templates/controller-deployment.yaml
+tests:
+  - it: runs the controller rebuild with the patched nginx, pinned by digest
+    # Upstream v1.11.6 ships nginx 1.25.5 without the fixes for
+    # CVE-2026-123633 and CVE-2026-123007, and kubernetes/ingress-nginx is
+    # archived, so no fixed upstream image will come. The -cozystack.N tags of
+    # cozystack/ingress-nginx-with-protobuf-exporter carry the rebuilt nginx;
+    # a bare upstream tag here means a vulnerable controller.
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].image
+          pattern: ^ghcr\.io/cozystack/ingress-nginx-with-protobuf-exporter/controller:v1\.11\.6-cozystack\.[0-9]+@sha256:[0-9a-f]{64}$
