@@ -285,9 +285,11 @@ func mulQuantity(q, n ref.Val) ref.Val {
 		return types.MaybeNoSuchOverloadErr(n)
 	}
 	out := qq.DeepCopy()
-	if !out.Mul(int64(nn)) {
-		return types.NewErr("quantity %s * %d overflows", qq.String(), int64(nn))
-	}
+	// Mul reports whether the product still fits an int64 coefficient, not
+	// whether it is exact: past that it carries on in arbitrary precision,
+	// which a fractional binary quantity such as 20.5Gi reaches at any size
+	// worth reserving.
+	out.Mul(int64(nn))
 	return apiservercel.Quantity{Quantity: &out}
 }
 

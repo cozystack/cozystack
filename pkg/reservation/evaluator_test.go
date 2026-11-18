@@ -467,6 +467,34 @@ func TestEvaluateQuantityArithmetic(t *testing.T) {
 	}
 }
 
+// A fractional binary quantity is stored at a scale whose coefficient leaves
+// int64 well before its value does, which is where resource.Quantity.Mul
+// reports an inexact int64 for a product it still holds exactly.
+func TestEvaluateMulKeepsExactProducts(t *testing.T) {
+	env := testEnvironment(t)
+	cases := map[string]struct {
+		expr string
+		want string
+	}{
+		"fractional Gi": {`quantity('20.5Gi').mul(3)`, "62976Mi"},
+		"fractional Ti": {`quantity('1.5Ti').mul(3)`, "4608Gi"},
+		"after a sum":   {`quantity('8.5Gi').add(quantity('1Gi')).mul(2)`, "19Gi"},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			ev, err := Compile(&Declaration{Resources: map[string]string{"x": tc.expr}}, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			got, err := ev.Evaluate(map[string]any{}, env)
+			if err != nil {
+				t.Fatal(err)
+			}
+			assertList(t, name, got, rl("x", tc.want))
+		})
+	}
+}
+
 func TestEvaluateIsConcurrencySafe(t *testing.T) {
 	env := testEnvironment(t)
 	vm := mustCompile(t, vmInstanceDecl, "vm-instance")
