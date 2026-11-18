@@ -1,8 +1,8 @@
-FROM --platform=$BUILDPLATFORM golang:1.27@sha256:3680233e3204827fbdc66088528ae6d4b3d034f51d03a99d454f6de034888244 AS builder
+FROM --platform=$BUILDPLATFORM golang:1.27@sha256:e432b43af23a9328d56a7c499be0476810aa344acbcf65fc7c455d4ff5a40602 AS builder
 ARG GOPROXY
 
-ARG VERSION=v1.11.2
-ARG LINSTOR_WAIT_UNTIL_VERSION=v0.3.1
+ARG VERSION=v1.13.2
+ARG LINSTOR_WAIT_UNTIL_VERSION=v1.0.1
 ARG TARGETARCH
 ARG TARGETOS
 
@@ -14,13 +14,6 @@ COPY patches /patches
 RUN git apply /patches/*.diff
 
 RUN for attempt in 1 2 3; do go mod download && break; [ "$attempt" = 3 ] && exit 1; sleep $((attempt * 10)); done
-
-# Upstream pins grpc v1.81.0, which uses http2.TrailerPrefix; on Go 1.27
-# golang.org/x/net builds http2 on top of net/http and no longer defines it.
-# v1.83.2 also carries the fix for GO-2026-6443, a server panic reachable
-# through the CSI gRPC endpoint.
-RUN go get google.golang.org/grpc@v1.83.2 && \
-    go mod tidy
 
 # go build never compiles a _test.go, so nothing else runs the tests of the
 # packages the patches touch. Each package is tested from its own directory:
@@ -42,7 +35,7 @@ RUN GOOS=$TARGETOS GOARCH=$TARGETARCH CGO_ENABLED=0 \
 
 RUN curl -fsSL https://github.com/LINBIT/linstor-wait-until/releases/download/$LINSTOR_WAIT_UNTIL_VERSION/linstor-wait-until-$LINSTOR_WAIT_UNTIL_VERSION-$TARGETOS-$TARGETARCH.tar.gz | tar xvzC /
 
-FROM debian:trixie-slim@sha256:a99cfc517144bc59b1978475ec53b46ecabec7e43635402ee5b77cc54cd1b20a
+FROM debian:trixie-slim@sha256:a29215f6a35e51e22adffa17f89e9d2ef06214e64a2bad10d765c46aea49f11f
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
       xfsprogs e2fsprogs nfs-common \

@@ -277,33 +277,6 @@ func defaultRunner(ctx context.Context, bin string, args ...string) (string, err
 	return out, nil
 }
 
-/************** Helpers **************/
-
-func parseClusterStatusJSON(out string) (ClusterStatus, bool) {
-	var cs ClusterStatus
-	if json.Unmarshal([]byte(out), &cs) == nil && len(cs.Servers) > 0 {
-		return cs, true
-	}
-	var wrap struct {
-		Data ClusterStatus `json:"data"`
-	}
-	if json.Unmarshal([]byte(out), &wrap) == nil && len(wrap.Data.Servers) > 0 {
-		return wrap.Data, true
-	}
-	return ClusterStatus{}, false
-}
-
-func portOf(db DB) string {
-	switch db {
-	case DBNorthbound:
-		return "6641"
-	case DBSouthbound:
-		return "6642"
-	default:
-		return "0"
-	}
-}
-
 /************** Minimal text fallback for "Servers" **************/
 
 // Accepts variants like:

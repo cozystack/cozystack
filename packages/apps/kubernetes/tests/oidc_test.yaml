@@ -1,12 +1,11 @@
-suite: tenant kube-apiserver OIDC (Phase 1)
+suite: tenant kube-apiserver OIDC
 
 values:
   - values/common.yaml
 
 # In cluster.yaml the KamajiControlPlane is document index 1
-# (0: Cluster, 1: KamajiControlPlane, 2: WorkloadMonitor, 3: KubevirtCluster, ...).
-# Documents at higher indices are KubevirtMachineTemplate, MachineDeployment,
-# MachineHealthCheck, WorkloadMonitor per node group.
+# (0: Cluster, 1: KamajiControlPlane, 2: WorkloadMonitor, 3: KubevirtCluster);
+# tests/control_plane_only_test.yaml pins that there are no others.
 
 tests:
   ###############################################

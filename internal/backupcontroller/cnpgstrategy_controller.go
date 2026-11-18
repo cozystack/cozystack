@@ -44,6 +44,8 @@ const (
 	cnpgClusterLabel        = "cnpg.io/cluster"
 	cnpgBackupPhaseComplete = "completed"
 	cnpgBackupPhaseFailed   = "failed"
+	cnpgBackupPhaseStarted  = "started"
+	cnpgBackupPhaseRunning  = "running"
 
 	// barmanObjectNameParam / barmanServerNameParam are the barman-cloud plugin
 	// parameter keys on a Cluster's spec.plugins entry. barmanObjectName points
@@ -69,6 +71,7 @@ const (
 	cnpgClusterNameKey     = "cnpg.io/cluster-name"
 	cnpgS3SecretRefKey     = "cnpg.io/s3-secret-ref"
 	cnpgMajorVersionKey    = "cnpg.io/major-version"
+	cnpgArchiveAccessKey   = "cnpg.io/archive-access"
 
 	// Annotation the postgres chart renders on the Cluster from
 	// bootstrap.newServerName.
@@ -388,9 +391,10 @@ func (r *BackupJobReconciler) reconcileCNPG(ctx context.Context, j *backupsv1alp
 
 	// The ObjectStore is the Cluster's WAL archive destination, shared by
 	// every backup of the app, so it is written only before this job's
-	// Backup exists, and only while no other job's Backup is in flight and
-	// no other running job without a Backup yet holds the destination it
-	// last wrote.
+	// Backup exists, and only while no other job's Backup is in flight, no
+	// other running job without a Backup yet holds the destination it last
+	// wrote, and CloudNativePG runs no Backup of the Cluster that no running
+	// job tracks.
 	writeDestination := existingBackup == nil
 	if writeDestination {
 		// The gate in Reconcile sees only a job that has not started, and
@@ -420,6 +424,17 @@ func (r *BackupJobReconciler) reconcileCNPG(ctx context.Context, j *backupsv1alp
 			apimeta.SetStatusCondition(&j.Status.Conditions, cnpgDestinationWriteHeld("WaitingForOtherBackup"))
 			return r.waitCNPGBackupJob(ctx, j, "WaitingForOtherBackup", fmt.Sprintf(
 				"waiting for BackupJob %s of the same application to finish its backup, which writes to the shared WAL archive destination", holder))
+		}
+		untracked, err := r.untrackedCNPGBackupExecuting(ctx, j, clusterName)
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+		if untracked != "" {
+			apimeta.RemoveStatusCondition(&j.Status.Conditions, backupCondDestinationApplied)
+			apimeta.SetStatusCondition(&j.Status.Conditions, cnpgDestinationWriteHeld("WaitingForUntrackedBackup"))
+			return r.waitCNPGBackupJob(ctx, j, "WaitingForUntrackedBackup", fmt.Sprintf(
+				"waiting for cnpg.io/Backup %s/%s of cnpg.io/Cluster %s/%s, which no running BackupJob tracks, to finish: CloudNativePG is running it against the shared WAL archive destination",
+				j.Namespace, untracked, j.Namespace, clusterName))
 		}
 		if apimeta.FindStatusCondition(j.Status.Conditions, backupCondDestinationWriteHeld) != nil {
 			apimeta.SetStatusCondition(&j.Status.Conditions, metav1.Condition{
@@ -1162,8 +1177,9 @@ func (r *BackupJobReconciler) findCNPGBackupForJob(ctx context.Context, j *backu
 
 // otherCNPGBackupInFlight returns the name of another BackupJob that is still
 // running and whose cnpg.io/Backup of clusterName has not finished, or "" when
-// there is none. A Backup left behind by a finished or deleted job does not
-// hold the queue.
+// there is none. A Backup left behind by a finished or deleted job is not
+// counted here; untrackedCNPGBackupExecuting holds for it while
+// CloudNativePG executes it.
 //
 // The Backups are read from the apiserver, not the cache, which can still
 // miss a Backup another job's earlier pass created. Only the ones this
@@ -1206,6 +1222,51 @@ func (r *BackupJobReconciler) otherCNPGBackupInFlight(ctx context.Context, j *ba
 	return holders[0], nil
 }
 
+// untrackedCNPGBackupExecuting returns the name of a cnpg.io/Backup of
+// clusterName that CloudNativePG is running, whoever created it. It is
+// asked after otherCNPGBackupInFlight and destinationClaimHolder found no
+// running BackupJob to wait for, so what it finds is a Backup no running
+// job tracks: one created by hand or by a ScheduledBackup, or one whose
+// BackupJob was deleted or finished first. Its base backup goes to the
+// destination it started with, so a rewrite now would send the WAL it
+// needs elsewhere.
+//
+// Only the phases BackupStatus.IsExecuting reports hold, the ones in which
+// CloudNativePG's BackupList.CanExecuteBackup lets no other Backup of the
+// Cluster start, so the wait never outlasts CloudNativePG's own queue. A pending
+// Backup, even one that ran before and was sent back to pending, starts
+// its base backup over against the destination current then.
+//
+// A Backup created by hand need carry no label at all, and CloudNativePG
+// labels only the ones a ScheduledBackup creates, so they are matched by
+// spec.cluster.name in a list of the whole namespace. That list comes from
+// the cache rather than the apiserver, which every waiting job would
+// otherwise ask for the namespace's whole Backup history on each poll. The
+// cache can miss a Backup that started moments ago, the same race that
+// already lies between this check and the write that follows it, which a
+// read from the apiserver would not close either.
+func (r *BackupJobReconciler) untrackedCNPGBackupExecuting(ctx context.Context, j *backupsv1alpha1.BackupJob, clusterName string) (string, error) {
+	list := &cnpgtypes.BackupList{}
+	if err := r.List(ctx, list, client.InNamespace(j.Namespace)); err != nil {
+		return "", fmt.Errorf("list cnpg.io/Backups in %s: %w", j.Namespace, err)
+	}
+	var executing []string
+	for i := range list.Items {
+		b := &list.Items[i]
+		if b.Spec.Cluster.Name != clusterName {
+			continue
+		}
+		if b.Status.Phase == cnpgBackupPhaseStarted || b.Status.Phase == cnpgBackupPhaseRunning {
+			executing = append(executing, b.Name)
+		}
+	}
+	if len(executing) == 0 {
+		return "", nil
+	}
+	sort.Strings(executing)
+	return executing[0], nil
+}
+
 func cnpgDestinationWriteHeld(reason string) metav1.Condition {
 	return metav1.Condition{
 		Type:    backupCondDestinationWriteHeld,
@@ -1233,25 +1294,157 @@ func (r *BackupJobReconciler) waitCNPGBackupJob(ctx context.Context, j *backupsv
 
 // cnpgDestination is the WAL archive destination recorded in
 // cnpgWrittenDestinationAnnotation. S3SecretRef is nil when the strategy
-// names no credentials Secret. ServerName is empty in a record written
-// before it carried one.
+// names no credentials Secret. ServerName is empty, and Access nil, in a
+// record written before it carried them.
 type cnpgDestination struct {
-	DestinationPath string  `json:"destinationPath"`
-	EndpointURL     string  `json:"endpointURL,omitempty"`
-	S3SecretRef     *string `json:"s3SecretRef,omitempty"`
-	ServerName      string  `json:"serverName,omitempty"`
+	DestinationPath string             `json:"destinationPath"`
+	EndpointURL     string             `json:"endpointURL,omitempty"`
+	S3SecretRef     *string            `json:"s3SecretRef,omitempty"`
+	ServerName      string             `json:"serverName,omitempty"`
+	Access          *cnpgArchiveAccess `json:"access,omitempty"`
+}
+
+// cnpgArchiveAccess is how the Secret in S3SecretRef and the endpoint CA
+// were read when the archive was written. Empty key names are the chart's
+// defaults; a nil EndpointCA is the system trust store.
+type cnpgArchiveAccess struct {
+	AccessKeyIDKey     string                          `json:"accessKeyIDKey,omitempty"`
+	SecretAccessKeyKey string                          `json:"secretAccessKeyKey,omitempty"`
+	EndpointCA         *strategyv1alpha1.EndpointCARef `json:"endpointCA,omitempty"`
 }
 
 func cnpgDestinationOf(t *strategyv1alpha1.CNPGTemplate) cnpgDestination {
 	d := cnpgDestination{
 		DestinationPath: t.BarmanObjectStore.DestinationPath,
 		EndpointURL:     t.BarmanObjectStore.EndpointURL,
+		Access:          &cnpgArchiveAccess{},
 	}
-	if t.BarmanObjectStore.S3Credentials != nil {
-		name := t.BarmanObjectStore.S3Credentials.SecretRef.Name
+	if creds := t.BarmanObjectStore.S3Credentials; creds != nil {
+		name := creds.SecretRef.Name
 		d.S3SecretRef = &name
+		d.Access.AccessKeyIDKey = creds.AccessKeyIDKey
+		d.Access.SecretAccessKeyKey = creds.SecretAccessKeyKey
+	}
+	if ca := t.BarmanObjectStore.EndpointCA; ca != nil {
+		d.Access.EndpointCA = ca.DeepCopy()
 	}
 	return d
+}
+
+// archiveStore returns the credentials and the endpoint CA the archive
+// was written with. Without a recorded Access the record names only the
+// Secret, so the key names and the CA come from fallback.
+func (d cnpgDestination) archiveStore(fallback *strategyv1alpha1.BarmanObjectStoreTemplate) (*strategyv1alpha1.S3CredentialsTemplate, *strategyv1alpha1.EndpointCARef) {
+	if d.Access != nil {
+		var creds *strategyv1alpha1.S3CredentialsTemplate
+		if d.S3SecretRef != nil {
+			creds = &strategyv1alpha1.S3CredentialsTemplate{
+				SecretRef:          corev1.LocalObjectReference{Name: *d.S3SecretRef},
+				AccessKeyIDKey:     d.Access.AccessKeyIDKey,
+				SecretAccessKeyKey: d.Access.SecretAccessKeyKey,
+			}
+		}
+		return creds, d.Access.EndpointCA.DeepCopy()
+	}
+	var creds *strategyv1alpha1.S3CredentialsTemplate
+	if d.S3SecretRef != nil {
+		creds = &strategyv1alpha1.S3CredentialsTemplate{}
+		if fallback.S3Credentials != nil {
+			creds = fallback.S3Credentials.DeepCopy()
+		}
+		creds.SecretRef.Name = *d.S3SecretRef
+	}
+	return creds, fallback.EndpointCA.DeepCopy()
+}
+
+// cnpgRestoreArchiveAccess returns the credentials and the endpoint CA a
+// restore reaches the archive of an artifact with. While the strategy
+// rendered now still points at the archive's endpoint and bucket, they are
+// the strategy's: WAL archiving keeps proving them against that archive,
+// and they carry any rotation since the backup, after which the recorded
+// ones may be revoked. Once the strategy points elsewhere, they are the
+// ones recorded with the artifact; an artifact from a controller that
+// recorded only the Secret, or nothing, takes the rest from the strategy.
+// An unreadable record is an error rather than a fallback.
+func cnpgRestoreArchiveAccess(md map[string]string, rendered *strategyv1alpha1.BarmanObjectStoreTemplate) (*strategyv1alpha1.S3CredentialsTemplate, *strategyv1alpha1.EndpointCARef, error) {
+	raw, recorded := md[cnpgArchiveAccessKey]
+	secret, hasSecret := md[cnpgS3SecretRefKey]
+	d := cnpgDestination{}
+	if recorded {
+		d.Access = &cnpgArchiveAccess{}
+		if err := json.Unmarshal([]byte(raw), d.Access); err != nil {
+			return nil, nil, fmt.Errorf("read driverMetadata[%s]: %w", cnpgArchiveAccessKey, err)
+		}
+	}
+	if (!recorded && !hasSecret) || cnpgSameArchive(md[cnpgDestinationPathKey], md[cnpgEndpointURLKey], rendered) {
+		return rendered.S3Credentials.DeepCopy(), rendered.EndpointCA.DeepCopy(), nil
+	}
+	if hasSecret {
+		d.S3SecretRef = &secret
+	}
+	creds, ca := d.archiveStore(rendered)
+	return creds, ca, nil
+}
+
+// cnpgArchiveAccessMissing returns what of creds and ca is missing from
+// namespace, a Secret or a key it is read under, or "" when nothing is. A
+// reference without a Secret name is no reference, as the backup and the
+// restore patch treat it, so there is nothing of it to miss.
+func (r *RestoreJobReconciler) cnpgArchiveAccessMissing(ctx context.Context, namespace string, creds *strategyv1alpha1.S3CredentialsTemplate, ca *strategyv1alpha1.EndpointCARef) (string, error) {
+	type secretKeys struct {
+		name string
+		keys []string
+	}
+	var wanted []secretKeys
+	if creds != nil && creds.SecretRef.Name != "" {
+		accessKeyKey, secretKeyKey := creds.AccessKeyIDKey, creds.SecretAccessKeyKey
+		if accessKeyKey == "" {
+			accessKeyKey = defaultS3AccessKeyIDKey
+		}
+		if secretKeyKey == "" {
+			secretKeyKey = defaultS3SecretAccessKeyKey
+		}
+		wanted = append(wanted, secretKeys{creds.SecretRef.Name, []string{accessKeyKey, secretKeyKey}})
+	}
+	if ca != nil && ca.SecretRef.Name != "" {
+		key := ca.Key
+		if key == "" {
+			key = defaultEndpointCAKey
+		}
+		wanted = append(wanted, secretKeys{ca.SecretRef.Name, []string{key}})
+	}
+	for _, w := range wanted {
+		secret := &corev1.Secret{}
+		if err := r.Get(ctx, client.ObjectKey{Namespace: namespace, Name: w.name}, secret); err != nil {
+			if apierrors.IsNotFound(err) {
+				return fmt.Sprintf("Secret %s/%s does not exist", namespace, w.name), nil
+			}
+			return "", fmt.Errorf("read Secret %s/%s: %w", namespace, w.name, err)
+		}
+		for _, key := range w.keys {
+			if len(secret.Data[key]) == 0 {
+				return fmt.Sprintf("Secret %s/%s has no value under key %s", namespace, w.name, key), nil
+			}
+		}
+	}
+	return "", nil
+}
+
+// cnpgSameArchive reports whether store reaches the S3 bucket at the
+// endpoint an artifact recorded. The prefix within the bucket does not
+// count: access is taken to be granted per bucket, as a Bucket grants it.
+// A destination that is not an s3:// URL is never the same: what scopes
+// its access is not known here.
+func cnpgSameArchive(destinationPath, endpointURL string, store *strategyv1alpha1.BarmanObjectStoreTemplate) bool {
+	if strings.TrimSuffix(endpointURL, "/") != strings.TrimSuffix(store.EndpointURL, "/") {
+		return false
+	}
+	bucket, _, err := parseBarmanS3DestinationPath(destinationPath)
+	if err != nil {
+		return false
+	}
+	current, _, err := parseBarmanS3DestinationPath(store.DestinationPath)
+	return err == nil && bucket == current
 }
 
 // cnpgArtifactDestination returns the destination the artifact of b names:
@@ -1274,23 +1467,16 @@ func cnpgArtifactDestination(b *cnpgtypes.Backup, rendered *strategyv1alpha1.CNP
 	return d, nil
 }
 
-// cnpgProbeStore is the object store the size probe reads: the location
-// and the credentials Secret recorded for the backup, with the Secret keys
-// and the endpoint CA the record does not carry taken from the strategy.
-// After a strategy edit those may not fit the recorded location; the probe
-// then reports no size rather than measuring somewhere else.
+// cnpgProbeStore is the object store the size probe reads: the one
+// recorded for the backup. A record without Access takes the Secret keys
+// and the endpoint CA from the strategy; after a strategy edit those may
+// not fit the recorded location, and the probe then reports no size
+// rather than measuring somewhere else.
 func cnpgProbeStore(rendered *strategyv1alpha1.BarmanObjectStoreTemplate, destination cnpgDestination) *strategyv1alpha1.BarmanObjectStoreTemplate {
 	store := rendered.DeepCopy()
 	store.DestinationPath = destination.DestinationPath
 	store.EndpointURL = destination.EndpointURL
-	if destination.S3SecretRef == nil {
-		store.S3Credentials = nil
-	} else {
-		if store.S3Credentials == nil {
-			store.S3Credentials = &strategyv1alpha1.S3CredentialsTemplate{}
-		}
-		store.S3Credentials.SecretRef.Name = *destination.S3SecretRef
-	}
+	store.S3Credentials, store.EndpointCA = destination.archiveStore(rendered)
 	return store
 }
 
@@ -1327,6 +1513,13 @@ func (r *BackupJobReconciler) createCNPGBackupArtifact(
 	}
 	if destination.S3SecretRef != nil {
 		driverMD[cnpgS3SecretRefKey] = *destination.S3SecretRef
+	}
+	if destination.Access != nil {
+		access, err := json.Marshal(destination.Access)
+		if err != nil {
+			return nil, fmt.Errorf("encode the archive access settings: %w", err)
+		}
+		driverMD[cnpgArchiveAccessKey] = string(access)
 	}
 	// Copied rather than read back at restore time: barman retention deletes
 	// the cnpg.io/Backup while the artifact can still be restored from.
@@ -1506,6 +1699,10 @@ func (r *RestoreJobReconciler) reconcileCNPGRestore(ctx context.Context, restore
 	if err != nil {
 		return r.markRestoreJobFailed(ctx, restoreJob, fmt.Sprintf("failed to template CNPG strategy: %v", err))
 	}
+	sourceCredentials, sourceEndpointCA, err := cnpgRestoreArchiveAccess(backup.Spec.DriverMetadata, &rendered.BarmanObjectStore)
+	if err != nil {
+		return r.markRestoreJobFailed(ctx, restoreJob, fmt.Sprintf("Backup %s/%s does not say how to reach its archive: %v", backup.Namespace, backup.Name, err))
+	}
 
 	clusterName := cnpgClusterNameForApp(target.AppName)
 
@@ -1646,6 +1843,30 @@ func (r *RestoreJobReconciler) reconcileCNPGRestore(ctx context.Context, restore
 			logger.Info("restore does not pin its base backup; the barman-cloud plugin picks one from the catalog",
 				"backup", backup.Name, "recoveryTime", options.RecoveryTime)
 		}
+		if !apiequality.Semantic.DeepEqual(sourceCredentials, rendered.BarmanObjectStore.S3Credentials) ||
+			!apiequality.Semantic.DeepEqual(sourceEndpointCA, rendered.BarmanObjectStore.EndpointCA) {
+			// The postgres chart renders a recovery only with a credentials
+			// Secret, so recorded access without one cannot restore.
+			missing := "it names no credentials Secret"
+			if sourceCredentials != nil && sourceCredentials.SecretRef.Name != "" {
+				missing, err = r.cnpgArchiveAccessMissing(ctx, target.Namespace, sourceCredentials, sourceEndpointCA)
+				if err != nil {
+					return ctrl.Result{}, err
+				}
+			}
+			// The recorded access cannot work without its Secrets. The
+			// strategy's is what a restore used before the record existed, and
+			// credentials wider than one bucket can still read the old one.
+			// Both settings fall back together: once part of what was
+			// recorded is missing or unusable, the strategy's pair is the
+			// one known to belong together.
+			if missing != "" {
+				r.Recorder.Eventf(restoreJob, corev1.EventTypeWarning, "RecordedArchiveAccessUnavailable",
+					"the access Backup %s/%s was written with is unusable (%s); reaching its archive with the strategy's instead",
+					backup.Namespace, backup.Name, missing)
+				sourceCredentials, sourceEndpointCA = rendered.BarmanObjectStore.S3Credentials, rendered.BarmanObjectStore.EndpointCA
+			}
+		}
 		hrName := postgresAppPrefix + target.AppName
 		if err := r.setCNPGRestoreHRSuspended(ctx, target.Namespace, hrName, true); err != nil {
 			return ctrl.Result{}, err
@@ -1659,7 +1880,7 @@ func (r *RestoreJobReconciler) reconcileCNPGRestore(ctx context.Context, restore
 			logger.Info("restored WAL-archive serverName collided with the recovery source",
 				"cluster", clusterName, "serverName", newServerName)
 		}
-		if err := r.patchPostgresAppForRestore(ctx, targetApp, sourceServerName, newServerName, sourceDestinationPath, sourceEndpointURL, options.RecoveryTime, backupID, rendered.BarmanObjectStore.S3Credentials, rendered.BarmanObjectStore.EndpointCA, sourceDatabases, sourceUsers); err != nil {
+		if err := r.patchPostgresAppForRestore(ctx, targetApp, sourceServerName, newServerName, sourceDestinationPath, sourceEndpointURL, options.RecoveryTime, backupID, sourceCredentials, sourceEndpointCA, sourceDatabases, sourceUsers); err != nil {
 			// Resume HR before terminal failure so an operator deleting
 			// the failed RestoreJob does not leave the HR stuck.
 			_ = r.setCNPGRestoreHRSuspended(ctx, target.Namespace, hrName, false)
@@ -2718,9 +2939,12 @@ func buildBarmanPlugin(objectStoreName, serverName string) cnpgtypes.PluginConfi
 // high-water mark on a 38 MB database is 254 MiB, so 128Mi cannot hold it. A
 // tenant that leaves resourceQuotas empty has no LimitRange, and there the
 // sidecar had no requests and no limit at all. 256Mi holds the measured working
-// set and 1Gi is four times the measurement. No CPU limit is set, matching the
-// entityOperator precedent in packages/apps/kafka: a throttled sidecar stalls
-// WAL archiving instead of failing it.
+// set and 1Gi is four times the measurement. The CPU limit is explicit for the
+// same reason: left unset, that LimitRange gives the sidecar its 250m default,
+// so gzip compression of full backups and WAL segments runs on a quarter of a
+// core (a 1.6 GB database took 30 minutes to back up). One core keeps the
+// sidecar from starving the instance while removing that ceiling; it counts
+// against the tenant's limits.cpu budget, one core per instance pod.
 //
 // Checksum: since botocore ~1.36 the default (when_supported) attaches a
 // flexible checksum to every PutObject, which non-AWS S3-compatible backends
@@ -2740,6 +2964,7 @@ func barmanSidecarConfiguration() *cnpgtypes.InstanceSidecarConfiguration {
 				corev1.ResourceMemory: resource.MustParse("256Mi"),
 			},
 			Limits: corev1.ResourceList{
+				corev1.ResourceCPU:    resource.MustParse("1"),
 				corev1.ResourceMemory: resource.MustParse("1Gi"),
 			},
 		},

@@ -56,7 +56,9 @@ func shippedInstancetypes(t *testing.T) []map[string]any {
 				out = append(out, obj)
 			}
 		}
-		fh.Close()
+		if err := fh.Close(); err != nil {
+			t.Fatalf("%s: %v", f, err)
+		}
 	}
 	return out
 }

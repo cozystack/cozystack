@@ -224,7 +224,9 @@ func TestReportPartition(t *testing.T) {
 	}
 	t.Setenv("GIT_COMMITTER_DATE", "2026-01-01T00:00:00Z")
 	f.pr(4, "fix(app): four, before the start", "", map[string]string{"app/four.txt": "4\n"})
-	os.Unsetenv("GIT_COMMITTER_DATE")
+	if err := os.Unsetenv("GIT_COMMITTER_DATE"); err != nil {
+		t.Fatal(err)
+	}
 	f.setPolicy("release-1.0: 2026-06-01\n")
 	f.onLine("release-1.0", "fix(app): a line-only eleven", map[string]string{"app/eleven.txt": "line\n"})
 	pr(5, "fix(app): five", map[string]string{"app/five.txt": "5\n"}, true)

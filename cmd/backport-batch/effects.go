@@ -367,7 +367,7 @@ func (b *batch) alreadyApplied(pre, cur, post string) (applied, unsupported bool
 	if err != nil {
 		return false, false, err
 	}
-	defer os.RemoveAll(dir)
+	defer func() { _ = os.RemoveAll(dir) }()
 	names := map[string]string{}
 	for _, f := range []struct{ name, oid string }{{"cur", cur}, {"pre", pre}, {"post", post}} {
 		names[f.name] = filepath.Join(dir, f.name)

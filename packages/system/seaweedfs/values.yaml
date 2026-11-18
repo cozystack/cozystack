@@ -340,13 +340,20 @@ seaweedfs:
     # actually issues read-only (Read,List) credentials instead of read-write.
     # v0.4.0 also writes each grant to the per-identity IAM file: v0.3.1
     # rewrites only the legacy identity.json, which the S3 gateways migrate
-    # concurrently, so a grant could be lost for good.
-    image: "ghcr.io/seaweedfs/seaweedfs-cosi-driver:v0.4.0"
+    # concurrently, so a grant could be lost for good. v0.5.0 adds the
+    # public-read accessPolicy the -public BucketAccessClass relies on.
+    image: "ghcr.io/seaweedfs/seaweedfs-cosi-driver:v0.5.0"
     podLabels:
       policy.cozystack.io/allow-to-apiserver: "true"
     driverName: "seaweedfs.objectstorage.k8s.io"
     bucketClassName: "seaweedfs"
     region: ""
+    # What the post-install/post-upgrade hook does with identity files no BucketAccess
+    # carries (files/orphan-identities.sh): "delete" removes them, anything
+    # else only reports them. extra/seaweedfs sets it from its
+    # cosi.orphanIdentities value.
+    orphanIdentities:
+      mode: report
     sidecar:
       image: "ghcr.io/cozystack/cozystack/objectstorage-sidecar:v1.6.0@sha256:4d665becd3399c2fe1e8a66e15d14d16e4a5a75395fb0ae65cff46679a8989f1"
   # A bucket lifecycle rule is stored on PUT and acted on only by the
@@ -376,6 +383,11 @@ seaweedfs:
       limits:
         cpu: "500m"
         memory: "256Mi"
+    # 75% of the limit above, as cozy-lib.resources.goMemLimit derives it for
+    # the components whose resources the parent chart sets. Without it the
+    # heap has no absolute ceiling and grows past the limit.
+    extraEnvironmentVars:
+      GOMEMLIMIT: "192MiB"
   worker:
     enabled: false
     # Vacuum, balance and erasure coding move data; enabling lifecycle must
@@ -405,6 +417,9 @@ seaweedfs:
       limits:
         cpu: "1"
         memory: "512Mi"
+    # 75% of the limit above; see admin.extraEnvironmentVars.
+    extraEnvironmentVars:
+      GOMEMLIMIT: "384MiB"
   certificates:
     commonName: "SeaweedFS CA"
     ipAddresses: []

@@ -97,6 +97,23 @@ load test_helper
   rm -f "$tmp"
 }
 
+@test "the CI-only tools do not force the full matrix" {
+  tmp=$(mktemp)
+  # No image builds cmd/backport-batch or cmd/api-gate, so they select nothing
+  # and leave the rest of the diff to its own rules.
+  printf '%s\n' cmd/backport-batch/report_test.go cmd/api-gate/main.go > "$tmp"
+  out=$(hack/build-matrix.sh "$tmp")
+  [ "$out" = '[]' ]
+  printf '%s\n' cmd/backport-batch/main.go packages/apps/mariadb/Makefile > "$tmp"
+  out=$(hack/build-matrix.sh "$tmp")
+  [ "$out" = '["packages/apps/mariadb"]' ]
+  # Every other cmd/ directory is a shipped binary and still rebuilds all.
+  printf '%s\n' cmd/backport-batch/main.go cmd/cozystack-api/main.go > "$tmp"
+  out=$(hack/build-matrix.sh "$tmp")
+  [ "$out" = "$(hack/build-matrix.sh)" ]
+  rm -f "$tmp"
+}
+
 @test "a package with no image target selects nothing" {
   tmp=$(mktemp)
   # postgres ships no in-repo image build, so it is not a build unit.
@@ -119,6 +136,22 @@ load test_helper
   printf 'packages/system/seaweedfs/values.yaml\npackages/system/objectstorage-controller/values.yaml\n' > "$tmp"
   out=$(hack/build-matrix.sh "$tmp")
   [ "$out" = '["packages/system/seaweedfs","packages/system/objectstorage-controller"]' ]
+  rm -f "$tmp"
+}
+
+@test "kubevirt-csi-node change fans out to the kubernetes build" {
+  tmp=$(mktemp)
+  echo "packages/system/kubevirt-csi-node/templates/deploy.yaml" > "$tmp"
+  out=$(hack/build-matrix.sh "$tmp")
+  [ "$out" = '["packages/apps/kubernetes"]' ]
+  rm -f "$tmp"
+}
+
+@test "kubevirt-csi-node change does not duplicate an already-selected kubernetes build" {
+  tmp=$(mktemp)
+  printf 'packages/system/kubevirt-csi-node/templates/deploy.yaml\npackages/apps/kubernetes/values.yaml\n' > "$tmp"
+  out=$(hack/build-matrix.sh "$tmp")
+  [ "$out" = '["packages/apps/kubernetes"]' ]
   rm -f "$tmp"
 }
 

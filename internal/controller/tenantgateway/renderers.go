@@ -912,7 +912,7 @@ func (r *Reconciler) renderWildcardCertificate(tgw *gatewayv1alpha1.TenantGatewa
 		},
 		Spec: cmv1.CertificateSpec{
 			SecretName: gatewayCertificateName(tgw),
-			IssuerRef: cmmetav1.ObjectReference{
+			IssuerRef: cmmetav1.IssuerReference{
 				Kind: "Issuer",
 				Name: gatewayIssuerName(tgw),
 			},
@@ -1057,7 +1057,7 @@ func (r *Reconciler) renderPerListenerCertificate(tgw *gatewayv1alpha1.TenantGat
 		},
 		Spec: cmv1.CertificateSpec{
 			SecretName: name,
-			IssuerRef: cmmetav1.ObjectReference{
+			IssuerRef: cmmetav1.IssuerReference{
 				Kind: "Issuer",
 				Name: gatewayIssuerName(tgw),
 			},

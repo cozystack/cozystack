@@ -41,12 +41,12 @@ func TestOntoContinues(t *testing.T) {
 	f.lines()
 	head := pushed(t, f)
 	f.pr(6, "fix(app): six", "", map[string]string{"app/six.txt": "6\n"})
-	code, stdout, stderr := f.exec(&fakeGH{}, "run", "--line", "release-1.1", "--onto", head, "--date", "2026-10-29")
+	code, _, stderr := f.exec(&fakeGH{}, "run", "--line", "release-1.1", "--onto", head, "--date", "2026-10-29")
 	if code != 2 || !strings.Contains(stderr, "not the head of backport-batch/release-1.1-20261029") {
 		t.Errorf("--onto with another date = %d (%s), want a refusal", code, stderr)
 	}
 	f.now = f.now.AddDate(0, 0, 3)
-	code, stdout, stderr = f.exec(&fakeGH{}, "run", "--line", "release-1.1", "--onto", head)
+	code, stdout, stderr := f.exec(&fakeGH{}, "run", "--line", "release-1.1", "--onto", head)
 	if code != 0 {
 		t.Fatalf("run --onto = %d\n%s", code, stderr)
 	}

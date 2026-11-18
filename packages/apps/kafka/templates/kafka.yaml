@@ -17,16 +17,13 @@
 {{- $showExternal := .Values.external -}}
 {{- $kafkaVersion := include "kafka.versionMap" . -}}
 {{- $entityOperatorMemory := "512Mi" -}}
-apiVersion: kafka.strimzi.io/v1beta2
+apiVersion: kafka.strimzi.io/v1
 kind: Kafka
 metadata:
   name: {{ .Release.Name }}
   labels:
     app.kubernetes.io/instance: {{ .Release.Name }}
     app.kubernetes.io/managed-by: {{ .Release.Service }}
-  annotations:
-    strimzi.io/node-pools: enabled
-    strimzi.io/kraft: enabled
 spec:
   kafka:
     version: {{ $kafkaVersion }}
@@ -65,6 +62,13 @@ spec:
       default.replication.factor: 3
       min.insync.replicas: 2
       {{- end }}
+    template:
+      pod:
+        metadata:
+          labels:
+            # The nodes read their certificates from Secrets through the
+            # Kubernetes API (Strimzi's strimzisecrets config provider).
+            policy.cozystack.io/allow-to-apiserver: "true"
     metricsConfig:
       type: jmxPrometheusExporter
       valueFrom:
@@ -76,8 +80,7 @@ spec:
     # The topic-operator and user-operator are JVM processes and OOMKill at
     # that default, leaving the entity-operator in CrashLoopBackOff so
     # KafkaTopics/KafkaUsers never reconcile. Set explicit resources so they
-    # don't inherit the namespace default. JAVA_TOOL_OPTIONS: see
-    # kafka.javaToolOptions.
+    # don't inherit the namespace default.
     topicOperator:
       resources:
         requests:
@@ -103,11 +106,3 @@ spec:
           labels:
             policy.cozystack.io/allow-to-apiserver: "true"
         enableServiceLinks: false
-      topicOperatorContainer:
-        env:
-          - name: JAVA_TOOL_OPTIONS
-            value: {{ include "kafka.javaToolOptions" (dict "memory" $entityOperatorMemory) | quote }}
-      userOperatorContainer:
-        env:
-          - name: JAVA_TOOL_OPTIONS
-            value: {{ include "kafka.javaToolOptions" (dict "memory" $entityOperatorMemory) | quote }}

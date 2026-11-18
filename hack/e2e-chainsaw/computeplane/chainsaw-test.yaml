@@ -102,7 +102,9 @@ spec:
     #
     # nameOverride is outside the module's per-pool allowlist. The ComputePlane
     # schema accepts it, so it reaches the module and the pool check below can
-    # see whether the module dropped it.
+    # see whether the module dropped it. maxUnavailable is set to 0 because a
+    # zero lost anywhere on the way would let a GPU pool fall back to the
+    # chart's default of 1; only this path crosses the aggregated API.
     - script:
         timeout: 3m
         content: |
@@ -118,6 +120,7 @@ spec:
                 diskSize: 20Gi
                 instanceType: u1.medium
                 logSerialConsole: true
+                maxUnavailable: 0
                 minReplicas: 2
                 maxReplicas: 2
                 podCpuLimit: 2
@@ -175,8 +178,9 @@ spec:
                   enabled: true
                   exposeMethod: Proxied
 
-    # The pool takes the patched shape, and the nameOverride the patch sent
-    # does not reach it, nor does any other key outside the allowlist.
+    # The pool takes the patched shape, the explicit maxUnavailable of 0
+    # included, and the nameOverride the patch sent does not reach it, nor does
+    # any other key outside the allowlist.
     - script:
         timeout: 1m
         content: |
@@ -186,8 +190,8 @@ spec:
           sc=$(cozy_e2e_storage_class)
           values=$(timeout -k 5 30 kubectl -n tenant-cplane get helmrelease kubernetes-nodes-computeplane-cluster-md0 -o json | jq -c '.spec.values')
           echo "pool values: $values"
-          echo "$values" | jq -e --arg sc "$sc" '.storageClass == $sc and .minReplicas == 2 and .cluster == "computeplane-cluster" and .clusterReleaseName == "computeplane-cluster"'
-          extra=$(echo "$values" | jq -r 'keys - ["cluster","clusterReleaseName","minReplicas","maxReplicas","instanceType","diskSize","storageClass","roles","resources","gpus","kubelet","logSerialConsole","maxUnhealthy","nodeStartupTimeout","readyUnknownTimeout","readyFalseTimeout","podCpuLimit","podCpuRequest","maxNodeProvisionTime"] | .[]')
+          echo "$values" | jq -e --arg sc "$sc" '.storageClass == $sc and .minReplicas == 2 and .maxUnavailable == 0 and .cluster == "computeplane-cluster" and .clusterReleaseName == "computeplane-cluster"'
+          extra=$(echo "$values" | jq -r 'keys - ["cluster","clusterReleaseName","minReplicas","maxReplicas","instanceType","diskSize","storageClass","roles","resources","gpus","kubelet","logSerialConsole","maxUnhealthy","nodeStartupTimeout","readyUnknownTimeout","readyFalseTimeout","podCpuLimit","podCpuRequest","maxNodeProvisionTime","maxUnavailable"] | .[]')
           if [ -n "$extra" ]; then
             echo "pool HelmRelease carries keys outside the module allowlist: $extra" >&2
             exit 1

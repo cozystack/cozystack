@@ -14,7 +14,7 @@ migrations:
   # refuses to advance past a migration file missing from the image (exit 1), so
   # a stale pin fails loudly rather than silently skipping the etcd adoption.
   image: ghcr.io/cozystack/cozystack/platform-migrations:v1.6.0@sha256:6777042e3e9c6bad76e7d96fb64baa115061975f39061cb3ede84e21d0e2213f
-  targetVersion: 61
+  targetVersion: 62
   # Adopt legacy etcd clusters onto the v1alpha2 operator WITHOUT the mandatory
   # pre-adoption safety snapshot (migration 50). Leave false unless migration 50
   # has actually refused to proceed and you accept the risk: adoption rewires
@@ -549,6 +549,19 @@ authentication:
     # OIDC discovery; any other value -> used verbatim. An explicit value is not rewritten, so a
     # custom realm paired with an explicit URL must name the same realm.
     keycloakInternalUrl: null
+    # Additional CA trust anchors for the bundled Keycloak server (LDAPS,
+    # external IdPs, SMTP). Each entry selects one key from an existing Secret
+    # or ConfigMap in cozy-keycloak; key defaults to ca.crt. Trust applies to
+    # the entire server across all realms. See packages/system/keycloak/values.yaml
+    # for supported formats, incoming-client-mTLS scope and rotation behavior.
+    # Ignored when oidc.enabled is false: no Keycloak Package is emitted. An
+    # existing Package and its rendered truststores remain on the cluster
+    # (helm.sh/resource-policy: keep).
+    keycloakTruststores: []
+    # - configMapName: organization-ca
+    #   key: ca.crt
+    # - secretName: partner-ca
+    #   key: certificates.pem
 # Gateway API configuration
 gateway:
   # Enable Gateway API support across the platform. When true:
@@ -668,6 +681,7 @@ gateway:
     - cozy-kubevirt-cdi
     - cozy-monitoring
     - cozy-linstor-gui
+    - cozy-observability-proxy
     - default
 # Platform ingress configuration.
 ingress:
@@ -751,10 +765,10 @@ backupStrategyController: {}
 # cozystack.kubernetes-worker-image to bundles.enabledPackages -- the package is
 # opt-in and this key alone does not enable it. The two knobs that decide
 # whether the feature is usable at all are imageFactoryURL (an air-gapped or
-# rate-limited cluster must repoint the single import) and storageClass (CDI
-# cannot clone across StorageClasses, so a cluster whose worker pools are not on
-# `replicated` must move the golden onto their class). Empty (the default)
-# forwards nothing and keeps the child chart defaults.
+# rate-limited cluster must repoint the single import) and storageClass (a
+# worker pool refuses a golden on another StorageClass, so a cluster whose
+# worker pools are not on `replicated` must move the golden onto their class).
+# Empty (the default) forwards nothing and keeps the child chart defaults.
 kubernetesWorkerImage: {}
 # Pod scheduling configuration
 scheduling:
