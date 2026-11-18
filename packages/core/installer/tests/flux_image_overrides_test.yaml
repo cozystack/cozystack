@@ -1,0 +1,74 @@
+suite: cozystack-operator --flux-image-overrides rendering
+
+# The operator parses this flag strictly and refuses to start on anything but
+# one JSON list, so the chart has to hand the list over as JSON, intact, or
+# not at all: an empty list must not render the flag, and a value carrying
+# YAML-significant characters must reach the operator unchanged.
+
+templates:
+  - templates/cozystack-operator.yaml
+
+tests:
+  - it: no overrides renders no flag
+    asserts:
+      - notExists:
+          path: spec.template.spec.containers[0].args[?(@ =~ /^--flux-image-overrides=/)]
+        documentSelector:
+          path: kind
+          value: Deployment
+
+  - it: an empty list renders no flag
+    set:
+      cozystackOperator.fluxImageOverrides: []
+    asserts:
+      - notExists:
+          path: spec.template.spec.containers[0].args[?(@ =~ /^--flux-image-overrides=/)]
+        documentSelector:
+          path: kind
+          value: Deployment
+
+  - it: an entry is passed as a JSON list
+    set:
+      cozystackOperator.fluxImageOverrides:
+        - name: ghcr.io/fluxcd/source-controller
+          newName: registry.example.org/flux/source-controller
+          newTag: "1.8.0"
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: '--flux-image-overrides=[{"name":"ghcr.io/fluxcd/source-controller","newName":"registry.example.org/flux/source-controller","newTag":"1.8.0"}]'
+        documentSelector:
+          path: kind
+          value: Deployment
+
+  - it: every entry is passed, in order
+    set:
+      cozystackOperator.fluxImageOverrides:
+        - name: ghcr.io/fluxcd/source-controller
+          newTag: "1.8.0"
+        - name: ghcr.io/fluxcd/helm-controller
+          newTag: "1.5.0"
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: '--flux-image-overrides=[{"name":"ghcr.io/fluxcd/source-controller","newTag":"1.8.0"},{"name":"ghcr.io/fluxcd/helm-controller","newTag":"1.5.0"}]'
+        documentSelector:
+          path: kind
+          value: Deployment
+
+  # A registry port, a digest and " #" are all YAML-significant once
+  # unquoted; " #" would start a comment and cut the argument short.
+  - it: a value with YAML-significant characters reaches the flag whole
+    set:
+      cozystackOperator.fluxImageOverrides:
+        - name: registry.local:5000/fluxcd/source-controller
+          newTag: "v1.8.0 #1"
+          digest: sha256:0000000000000000000000000000000000000000000000000000000000000001
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: '--flux-image-overrides=[{"digest":"sha256:0000000000000000000000000000000000000000000000000000000000000001","name":"registry.local:5000/fluxcd/source-controller","newTag":"v1.8.0 #1"}]'
+        documentSelector:
+          path: kind
+          value: Deployment
+

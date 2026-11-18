@@ -8,7 +8,9 @@ import (
 	cozyv1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
 	"github.com/cozystack/cozystack/internal/shared/appdefowner"
 	"github.com/cozystack/cozystack/pkg/config"
+	"github.com/cozystack/cozystack/pkg/imageoverrides"
 	helmv2 "github.com/fluxcd/helm-controller/api/v2"
+	"github.com/fluxcd/pkg/apis/kustomize"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
@@ -34,6 +36,12 @@ type ApplicationDefinitionHelmReconciler struct {
 	client.Client
 	Scheme   *runtime.Scheme
 	Recorder record.EventRecorder
+	// ImageOverrides reads the platform's image override table, which every
+	// Application release carries as a post-renderer. cozystack-api applies it
+	// on each write; this reconciler brings releases written before the table
+	// changed in line. Nil, or a missing values Secret, leaves their
+	// post-renderers alone.
+	ImageOverrides func(context.Context) ([]kustomize.Image, bool, error)
 }
 
 func (r *ApplicationDefinitionHelmReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -78,12 +86,31 @@ func (r *ApplicationDefinitionHelmReconciler) SetupWithManager(mgr ctrl.Manager)
 	return ctrl.NewControllerManagedBy(mgr).
 		Named("applicationdefinition-helm-reconciler").
 		Watches(&cozyv1alpha1.ApplicationDefinition{}, handler.EnqueueRequestsFromMapFunc(r.sameKindRequests)).
+		// A change to the image override table has to reach every Application
+		// release, and they are reconciled per definition.
+		Watches(&corev1.Secret{}, handler.EnqueueRequestsFromMapFunc(r.allDefinitionsOnOverridesChange)).
 		Complete(r)
 }
 
 // sameKindRequests enqueues every definition declaring the same kind as obj,
 // obj included, so that when the owner of a kind is deleted or changes kind the
 // next owner reconciles its releases without waiting for a change of its own.
+func (r *ApplicationDefinitionHelmReconciler) allDefinitionsOnOverridesChange(ctx context.Context, obj client.Object) []reconcile.Request {
+	if obj.GetNamespace() != imageoverrides.DefaultSecret.Namespace || obj.GetName() != imageoverrides.DefaultSecret.Name {
+		return nil
+	}
+	defs := &cozyv1alpha1.ApplicationDefinitionList{}
+	if err := r.List(ctx, defs); err != nil {
+		log.FromContext(ctx).Error(err, "failed to list ApplicationDefinitions for image override fan-out")
+		return nil
+	}
+	reqs := make([]reconcile.Request, 0, len(defs.Items))
+	for i := range defs.Items {
+		reqs = append(reqs, reconcile.Request{NamespacedName: types.NamespacedName{Name: defs.Items[i].Name}})
+	}
+	return reqs
+}
+
 func (r *ApplicationDefinitionHelmReconciler) sameKindRequests(ctx context.Context, obj client.Object) []reconcile.Request {
 	reqs := []reconcile.Request{{NamespacedName: types.NamespacedName{Name: obj.GetName()}}}
 	appDef, ok := obj.(*cozyv1alpha1.ApplicationDefinition)
@@ -126,6 +153,15 @@ func (r *ApplicationDefinitionHelmReconciler) updateHelmReleasesForAppDef(ctx co
 		"apps.cozystack.io/application.group": applicationGroup,
 	}
 
+	var imageOverrides []kustomize.Image
+	var syncOverrides bool
+	if r.ImageOverrides != nil {
+		var err error
+		if imageOverrides, syncOverrides, err = r.ImageOverrides(ctx); err != nil {
+			return fmt.Errorf("loading image overrides: %w", err)
+		}
+	}
+
 	// List all HelmReleases with matching labels
 	hrList := &helmv2.HelmReleaseList{}
 	if err := r.List(ctx, hrList, labelSelector); err != nil {
@@ -142,7 +178,7 @@ func (r *ApplicationDefinitionHelmReconciler) updateHelmReleasesForAppDef(ctx co
 	var errs []error
 	for i := range hrList.Items {
 		hr := &hrList.Items[i]
-		if err := r.updateHelmReleaseChart(ctx, hr, appDef); err != nil {
+		if err := r.updateHelmReleaseChart(ctx, hr, appDef, imageOverrides, syncOverrides); err != nil {
 			logger.Error(err, "failed to update HelmRelease", "name", hr.Name, "namespace", hr.Namespace)
 			errs = append(errs, err)
 		}
@@ -179,7 +215,7 @@ func valuesFromEqual(a, b []helmv2.ValuesReference) bool {
 }
 
 // updateHelmReleaseChart updates the chart and valuesFrom in HelmRelease based on ApplicationDefinition
-func (r *ApplicationDefinitionHelmReconciler) updateHelmReleaseChart(ctx context.Context, hr *helmv2.HelmRelease, appDef *cozyv1alpha1.ApplicationDefinition) error {
+func (r *ApplicationDefinitionHelmReconciler) updateHelmReleaseChart(ctx context.Context, hr *helmv2.HelmRelease, appDef *cozyv1alpha1.ApplicationDefinition, imageOverrides []kustomize.Image, syncOverrides bool) error {
 	logger := log.FromContext(ctx)
 	hrCopy := hr.DeepCopy()
 	updated := false
@@ -277,6 +313,18 @@ func (r *ApplicationDefinitionHelmReconciler) updateHelmReleaseChart(ctx context
 		if !equality.Semantic.DeepEqual(hrCopy.Spec.WaitStrategy, waitStrategy) {
 			logger.V(4).Info("Updating HelmRelease waitStrategy", "name", hr.Name, "namespace", hr.Namespace, "waitStrategy", waitStrategy)
 			hrCopy.Spec.WaitStrategy = waitStrategy
+			updated = true
+		}
+	}
+
+	// The selector above also matches releases a parent chart renders with the
+	// application labels, which may carry post-renderers of their own, so the
+	// override renderer is merged in rather than set.
+	if syncOverrides {
+		postRenderers := imageoverrides.Merge(hrCopy.Spec.PostRenderers, imageOverrides)
+		if !equality.Semantic.DeepEqual(hrCopy.Spec.PostRenderers, postRenderers) {
+			logger.V(4).Info("Updating HelmRelease image overrides", "name", hr.Name, "namespace", hr.Namespace)
+			hrCopy.Spec.PostRenderers = postRenderers
 			updated = true
 		}
 	}
