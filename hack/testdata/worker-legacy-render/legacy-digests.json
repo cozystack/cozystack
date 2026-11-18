@@ -1,10 +1,10 @@
 {
   "builtin default modules": "33119a62276af3a16a5b60feacdbaee0bdc7b87964b99b5adf838d6c9688a389",
   "builtin module opt-out": "33119a62276af3a16a5b60feacdbaee0bdc7b87964b99b5adf838d6c9688a389",
-  "factory automatic GPU modules": "3b9f3d0bb8e94ebfcec29ab165d05ee5f883fa19fca6cb7ef2fd6f131e23a1f0",
+  "factory automatic GPU modules": "c95c4cd564f8514b5c4de65c8c80049f542419d5309bd338548844e9304e43b7",
   "factory defaults": "9c420c123cd2c2bb4235d335603c434f34902452c1095d3aacc9e5b4212bd04e",
   "factory explicit module parameters": "794185499f198bc3c1cdc0e2c3b3420ff2d924b03609c55d094de8689dd7e158",
-  "factory module opt-out on GPU": "1dd4b060347ace0a7441e0e7f050f3d103f085a73562fb4d1ab03e92ca68ff35",
+  "factory module opt-out on GPU": "54f18e5f1d47ee8a88dbf0d654fa90d862d6e3cdff893a9f2499b00d037a43ee",
   "factory selected image overrides": "be43399f9669cb5574f5211b9245e9280cdb30975e91377c4477a3218af8c551",
   "proxmox absent modules": "c31799e73b864ba569b6c68a0baa6d53046384d8c16cc9b07d238307d825fb4f",
   "proxmox empty modules with registry mirrors": "0ae3ee913ac549e1d759a8d60d170ad60b7459466d137c01dd3226feff0682df",
