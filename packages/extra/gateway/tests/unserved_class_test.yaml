@@ -1,0 +1,73 @@
+suite: a tenant Gateway refuses a class nothing serves
+templates:
+  - templates/tenantgateway.yaml
+
+# On the cozyplane networking variant no controller serves the bundled cilium
+# class, and the platform says so in _cluster.gateway-unserved-classes. The
+# check runs on the resolved class, so it holds whether the tenant chose it or
+# inherited the platform default, and whatever the platform's own gateway flag.
+release:
+  name: gateway
+  namespace: tenant-alice
+
+tests:
+  - it: refuses an inherited default class nothing serves
+    set:
+      _cluster:
+        solver: http01
+        expose-ingress: tenant-root
+        issuer-name: letsencrypt-prod
+        gateway-class-name: cilium
+        gateway-unserved-classes: cilium
+      _namespace:
+        host: alice.example.org
+    asserts:
+      - failedTemplate:
+          errorPattern: 'GatewayClass "cilium" has no controller on this cluster'
+
+  - it: refuses a tenant-chosen class nothing serves
+    set:
+      _cluster:
+        solver: http01
+        expose-ingress: tenant-root
+        issuer-name: letsencrypt-prod
+        gateway-class-name: envoy
+        gateway-tenant-classes: cilium
+        gateway-unserved-classes: cilium
+      _namespace:
+        host: alice.example.org
+      gatewayClassName: cilium
+    asserts:
+      - failedTemplate:
+          errorPattern: 'GatewayClass "cilium" has no controller on this cluster'
+
+  - it: lets a tenant select a served class while the default is unserved
+    set:
+      _cluster:
+        solver: http01
+        expose-ingress: tenant-root
+        issuer-name: letsencrypt-prod
+        gateway-class-name: cilium
+        gateway-tenant-classes: envoy
+        gateway-unserved-classes: cilium
+      _namespace:
+        host: alice.example.org
+      gatewayClassName: envoy
+    asserts:
+      - equal:
+          path: spec.gatewayClassName
+          value: envoy
+
+  - it: renders the cilium class where nothing marks it unserved
+    set:
+      _cluster:
+        solver: http01
+        expose-ingress: tenant-root
+        issuer-name: letsencrypt-prod
+        gateway-class-name: cilium
+      _namespace:
+        host: alice.example.org
+    asserts:
+      - equal:
+          path: spec.gatewayClassName
+          value: cilium

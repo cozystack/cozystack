@@ -11,8 +11,12 @@
 {{- end -}}
 {{- /* The default gateway.className is the Cilium class, and no Cilium runs on
        the cozyplane variant — every tenant Gateway would sit unserved with
-       nothing reporting why. */ -}}
-{{- if and (eq $nv "cozyplane") .Values.gateway.enabled (eq .Values.gateway.className "cilium") -}}
+       nothing reporting why. Compared after the normalization apps.yaml
+       applies before handing the class to tenants, so an empty or padded
+       value cannot slip past. A tenant enabling its own Gateway is refused in
+       the gateway chart, through _cluster.gateway-unserved-classes. */ -}}
+{{- $resolvedGatewayClass := .Values.gateway.className | default "" | toString | trim | default "cilium" -}}
+{{- if and (eq $nv "cozyplane") .Values.gateway.enabled (eq $resolvedGatewayClass "cilium") -}}
 {{- fail "gateway.enabled needs a gateway.className another implementation serves on the cozyplane networking variant: nothing serves the \"cilium\" class there" -}}
 {{- end -}}
 {{- if .Values.bundles.system.enabled }}

@@ -249,6 +249,10 @@ stringData:
       {{- end }}
       gateway-edge-classes: {{ $edgeClasses | join "," | quote }}
       gateway-tenant-classes: {{ $tenantClasses | join "," | quote }}
+      {{- /* GatewayClasses no controller on this cluster serves. The bundled
+             cilium class has none on the cozyplane networking variant, and a
+             tenant Gateway on it would never program. */}}
+      gateway-unserved-classes: {{ ternary "cilium" "" (eq (.Values.bundles.system.networkingVariant | default "kubeovn-cilium") "cozyplane") | quote }}
       {{- /* Whether the root tenant hosts the platform monitoring stack
              (Tenant/root spec.monitoring). cozystack-basics gates the
              cozy-monitoring -> tenant-root vlinsert/vminsert ExternalName
