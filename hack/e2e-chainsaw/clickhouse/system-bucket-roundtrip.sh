@@ -39,6 +39,12 @@ PROBE_TIMEOUT=240
 # Each covers the driver's 2m hold after the credentials change plus the
 # strategy Job itself.
 JOB_TIMEOUT=480
+# The cleanup Job plus one failed attempt and its 30s retry wait.
+BACKUP_DELETE_TIMEOUT=300
+LIST_TIMEOUT=60
+SIDECAR_API="http://chi-clickhouse-${CLICKHOUSE_NAME}-clickhouse-0-0.${NAMESPACE}.svc:7171"
+API_AUTH_SECRET="clickhouse-${CLICKHOUSE_NAME}-backup-api-auth"
+ARCHIVE_KEY=altinity.strategy.backups.cozystack.io/archive
 
 workdir=$(mktemp -d)
 
@@ -172,3 +178,43 @@ sidecar_after=$(sidecar_identity)
 [ "$sidecar_after" = "$sidecar_before" ] \
     || { log_error "the ClickHouse Pod or its clickhouse-backup container restarted during the round-trip (uid restarts: '${sidecar_before}' then '${sidecar_after}')"; exit 1; }
 log_success "System-bucket round-trip verified: sentinel row ${sentinel} restored"
+
+# Prints the names of the archives the sidecar lists in the system bucket, one
+# per line. The credentials go over stdin to stay out of the probe's argv.
+list_remote_archives() {
+    local auth out deadline=$((SECONDS + LIST_TIMEOUT))
+    auth="$(kubectl -n "$NAMESPACE" get secret "$API_AUTH_SECRET" -o jsonpath='{.data.username}' | base64 -d):$(kubectl -n "$NAMESPACE" get secret "$API_AUTH_SECRET" -o jsonpath='{.data.password}' | base64 -d)"
+    until out=$(printf '%s' "$auth" | timeout 30 kubectl -n "$NAMESPACE" exec -i "$PROBE_POD" -- sh -c \
+            "curl -fsS --max-time 20 -u \"\$(cat)\" ${SIDECAR_API}/backup/list/remote" 2>"$workdir/list.err"); do
+        if [ "$SECONDS" -ge "$deadline" ]; then
+            log_error "the clickhouse-backup sidecar did not list the remote archives within ${LIST_TIMEOUT}s: $(cat "$workdir/list.err")"
+            return 1
+        fi
+        sleep 5
+    done
+    printf '%s' "$out" | jq -rs '.[].name // empty'
+}
+
+# The archive lives in the system bucket only while the Backup does: deleting
+# the Backup has to delete it, and the delete goes to S3 through the rewrite
+# and certificate the EXIT trap removes, so it runs before the trap.
+archive=$(kubectl -n "$NAMESPACE" get backup "$backup_ref" -o json | jq -r --arg k "$ARCHIVE_KEY" '.spec.driverMetadata[$k] // ""')
+[ -n "$archive" ] || { log_error "Backup ${backup_ref} records no archive under ${ARCHIVE_KEY}"; exit 1; }
+list_remote_archives >"$workdir/before.txt"
+grep -qxF "$archive" "$workdir/before.txt" \
+    || { log_error "archive ${archive} of Backup ${backup_ref} is not in the system bucket: $(tr '\n' ' ' <"$workdir/before.txt")"; exit 1; }
+
+log_step "Deleting Backup ${backup_ref} and its archive ${archive}"
+if ! kubectl -n "$NAMESPACE" delete backup "$backup_ref" --wait=true --timeout="${BACKUP_DELETE_TIMEOUT}s"; then
+    log_error "Backup ${backup_ref} was not deleted within ${BACKUP_DELETE_TIMEOUT}s"
+    kubectl -n "$NAMESPACE" describe backup "$backup_ref" >&2 || true
+    kubectl -n "$NAMESPACE" logs "job/${backup_ref}-cleanup" --all-containers >&2 || true
+    exit 1
+fi
+list_remote_archives >"$workdir/after.txt"
+if grep -qxF "$archive" "$workdir/after.txt"; then
+    log_error "Backup ${backup_ref} is gone but its archive ${archive} is still in the system bucket"
+    kubectl -n "$NAMESPACE" get events --field-selector "involvedObject.name=${backup_ref}" >&2 || true
+    exit 1
+fi
+log_success "Deleting Backup ${backup_ref} removed its archive ${archive} from the system bucket"
