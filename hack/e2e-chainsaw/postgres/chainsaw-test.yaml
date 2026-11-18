@@ -198,12 +198,21 @@ spec:
           esac
           refuse "the account Secret" "$stored"
 
-          refuse "an Event" "$(kubectl -n "$NAMESPACE" get events -o json)"
-          refuse "the application" "$(kubectl -n "$NAMESPACE" get postgreses.apps.cozystack.io test -o json)"
+          # Capture each read in an assignment first: under set -e a failing
+          # command substitution in an argument does not stop the script (the
+          # argument just comes out empty and the check passes without reading).
+          events=$(kubectl -n "$NAMESPACE" get events -o json)
+          refuse "an Event" "$events"
+          application=$(kubectl -n "$NAMESPACE" get postgreses.apps.cozystack.io test -o json)
+          refuse "the application" "$application"
           # Every revision of the release, decoded: Helm stores each as base64
-          # of gzipped JSON inside the Secret's base64.
-          for rel in $(kubectl -n "$NAMESPACE" get secret -l owner=helm,name=postgres-test -o name); do
-            refuse "Helm release $rel" "$(kubectl -n "$NAMESPACE" get "$rel" -o jsonpath='{.data.release}' | base64 -d | base64 -d | gunzip)"
+          # of gzipped JSON inside the Secret's base64. Require at least one, so
+          # an empty match cannot pass the check without reading anything.
+          rels=$(kubectl -n "$NAMESPACE" get secret -l owner=helm,name=postgres-test -o name)
+          [ -n "$rels" ] || { echo "no Helm release Secret for postgres-test to inspect" >&2; exit 1; }
+          for rel in $rels; do
+            decoded=$(kubectl -n "$NAMESPACE" get "$rel" -o jsonpath='{.data.release}' | base64 -d | base64 -d | gunzip)
+            refuse "Helm release $rel" "$decoded"
           done
           # Everything the tenant's own super-admins can read through
           # tenantsecrets, decoded; the account Secret is not among it.
@@ -211,7 +220,8 @@ spec:
           if printf '%s' "$visible" | jq -r '.items[].metadata.name' | grep -Fqx "$cred.account"; then
             echo "the account Secret is listed through tenantsecrets" >&2; exit 1
           fi
-          refuse "tenantsecrets" "$(printf '%s' "$visible" | jq -r '.items[].data // {} | .[] | @base64d')"
+          decoded_visible=$(printf '%s' "$visible" | jq -r '.items[].data // {} | .[] | @base64d')
+          refuse "tenantsecrets" "$decoded_visible"
           # can-i exits 1 when it answers no, so the answer is read from its
           # output; anything but a plain "no" fails, an error included.
           answer=$(kubectl -n "$NAMESPACE" auth can-i get "secret/$cred.account" $as 2>&1) || true
