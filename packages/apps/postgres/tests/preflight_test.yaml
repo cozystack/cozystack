@@ -188,3 +188,38 @@ tests:
       - equal:
           path: spec.template.spec.containers[0].env[2].value
           value: pg-test-rw
+
+  - it: creates and marks each absent declared database role as the superuser on pg16+
+    release:
+      upgrade: true
+    set:
+      version: v18
+      databases:
+        shop: {}
+    documentSelector:
+      path: metadata.name
+      value: pg-test-preflight-script
+    asserts:
+      - matchRegex:
+          path: data["preflight.sh"]
+          pattern: "if \\[ \"\\$kind\" = database \\]; then"
+      - matchRegex:
+          path: data["preflight.sh"]
+          pattern: "EXECUTE format\\('CREATE ROLE %I NOINHERIT', :'role'\\);"
+      - matchRegex:
+          path: data["preflight.sh"]
+          pattern: "EXECUTE format\\('GRANT %I TO %I WITH INHERIT FALSE, SET FALSE', 'cozystack:managed', :'role'\\);"
+  - it: marks a hook-created database role without the pg16 options on older PostgreSQL
+    release:
+      upgrade: true
+    set:
+      version: v15
+      databases:
+        shop: {}
+    documentSelector:
+      path: metadata.name
+      value: pg-test-preflight-script
+    asserts:
+      - matchRegex:
+          path: data["preflight.sh"]
+          pattern: "EXECUTE format\\('GRANT %I TO %I', 'cozystack:managed', :'role'\\);"
