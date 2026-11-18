@@ -779,11 +779,11 @@ func newerResourceVersion(a, b string) string {
 	return a
 }
 
-// Bounded so that an apiserver outage drops the monitor event instead of
-// holding the watch goroutine.
+// Watches bypass the API server's default one-minute request timeout.
 const (
 	liveReleaseReadAttempts   = 3
 	liveReleaseReadRetryDelay = 100 * time.Millisecond
+	liveReleaseReadTimeout    = time.Minute
 )
 
 // Watch sets up a watch on HelmReleases, filters them based on application labels, and converts events to Applications
@@ -1191,14 +1191,22 @@ func (r *REST) Watch(ctx context.Context, options *metainternalversion.ListOptio
 					// Nothing replays a monitor event this watch drops, so a
 					// transient failure of the live read is retried briefly.
 					// A missing release is final.
-					liveErr := r.w.Get(readCtx, hrKey, hr)
+					liveCtx, cancelLiveRead := context.WithTimeout(readCtx, liveReleaseReadTimeout)
+					liveErr := r.w.Get(liveCtx, hrKey, hr)
 					for attempt := 1; liveErr != nil && !apierrors.IsNotFound(liveErr) && attempt < liveReleaseReadAttempts; attempt++ {
 						select {
-						case <-readCtx.Done():
-							return
+						case <-liveCtx.Done():
 						case <-time.After(liveReleaseReadRetryDelay):
 						}
-						liveErr = r.w.Get(readCtx, hrKey, hr)
+						if liveCtx.Err() != nil {
+							break
+						}
+						liveErr = r.w.Get(liveCtx, hrKey, hr)
+					}
+					readEnded := liveCtx.Err() != nil
+					cancelLiveRead()
+					if readEnded {
+						return
 					}
 					if liveErr != nil {
 						klog.V(4).Infof("Cannot find HelmRelease %s/%s for WorkloadMonitor event: %v", hrNS, hrName, liveErr)
