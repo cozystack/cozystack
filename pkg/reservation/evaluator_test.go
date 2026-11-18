@@ -437,6 +437,36 @@ func TestCompile(t *testing.T) {
 	}
 }
 
+// The Kubernetes quantity library returns a pointer from add and sub, where
+// quantity() and mul return a value; a declaration summing several components
+// mixes both.
+func TestEvaluateQuantityArithmetic(t *testing.T) {
+	env := testEnvironment(t)
+	cases := map[string]struct {
+		expr string
+		want string
+	}{
+		"add":           {`quantity('1').add(quantity('500m'))`, "1500m"},
+		"add an int":    {`quantity('1').add(2)`, "3"},
+		"sub":           {`quantity('2Gi').sub(quantity('512Mi'))`, "1536Mi"},
+		"mul after add": {`preset('t1.micro').cpu.add(preset('t1.nano').cpu).mul(2)`, "1500m"},
+		"add after mul": {`quantity('1Gi').mul(2).add(quantity('1Gi'))`, "3Gi"},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			ev, err := Compile(&Declaration{Resources: map[string]string{"x": tc.expr}}, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			got, err := ev.Evaluate(map[string]any{}, env)
+			if err != nil {
+				t.Fatal(err)
+			}
+			assertList(t, name, got, rl("x", tc.want))
+		})
+	}
+}
+
 func TestEvaluateIsConcurrencySafe(t *testing.T) {
 	env := testEnvironment(t)
 	vm := mustCompile(t, vmInstanceDecl, "vm-instance")

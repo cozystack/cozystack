@@ -276,7 +276,7 @@ func lookup(resolve func(string) (ResourceList, error), zeroKeys []string) funct
 }
 
 func mulQuantity(q, n ref.Val) ref.Val {
-	qq, ok := q.(apiservercel.Quantity)
+	qq, ok := asQuantity(q)
 	if !ok {
 		return types.MaybeNoSuchOverloadErr(q)
 	}
@@ -291,10 +291,28 @@ func mulQuantity(q, n ref.Val) ref.Val {
 	return apiservercel.Quantity{Quantity: &out}
 }
 
-func toQuantity(v ref.Val) (resource.Quantity, error) {
+// asQuantity reads a CEL quantity whichever form it takes: the Kubernetes
+// library returns a pointer from add and sub, and a value from quantity().
+// It matches the types rather than calling Value(), which would first
+// materialize any other result, a list included, outside the cost limit.
+func asQuantity(v ref.Val) (*resource.Quantity, bool) {
 	switch t := v.(type) {
 	case apiservercel.Quantity:
-		return t.DeepCopy(), nil
+		return t.Quantity, t.Quantity != nil
+	case *apiservercel.Quantity:
+		if t == nil || t.Quantity == nil {
+			return nil, false
+		}
+		return t.Quantity, true
+	}
+	return nil, false
+}
+
+func toQuantity(v ref.Val) (resource.Quantity, error) {
+	if q, ok := asQuantity(v); ok {
+		return q.DeepCopy(), nil
+	}
+	switch t := v.(type) {
 	case types.Int:
 		return *resource.NewQuantity(int64(t), resource.DecimalSI), nil
 	case types.Uint:
