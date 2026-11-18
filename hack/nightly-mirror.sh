@@ -64,6 +64,11 @@ yq --version 2>&1 | grep -q mikefarah || { echo "yq (mikefarah) is required" >&2
 # shellcheck source=hack/lib/image-refs.sh
 . "$(dirname "$0")/lib/image-refs.sh"
 
+for pair in $IMAGE_REF_GZIP_COPIES; do
+  [ -f "$TREE/${pair%%=*}" ] || continue
+  gzip --test "$TREE/${pair%%=*}"
+done
+
 collect_refs() { collect_image_refs "$TREE"; }
 
 # Split a "<repo>[:<tag>]@sha256:<digest>" ref into repo and digest, stripping
@@ -137,11 +142,28 @@ done
 # platformSourceUrl (oci://SRC/cozystack-packages -> oci://DST/cozystack-packages);
 # its digest (platformSourceRef) is reset by the caller after the GHCR re-push.
 SRC_ESC=$(printf '%s' "$SRC_REGISTRY" | sed -e 's/[].[^$*/\\]/\\&/g')
+# Both host shapes described below, for a plain file and for the readable
+# copy of a declared gzip alike.
+# `\{0,1\}` rather than the `\?` optional-quantifier: `\?` is a GNU BRE
+# extension that BSD sed reads as a literal `?`, turning each `["']\?` into
+# "a quote followed by a literal ?". On macOS that makes the whole expression
+# dead -- it matches neither a bare host nor a quoted one, not just the bare
+# case. `\{0,1\}` is POSIX BRE and behaves the same on both.
+rewrite_hosts() {
+  sed \
+    -e "s|${SRC_ESC}/|${DST_REGISTRY}/|g" \
+    -e "s|\(:[[:space:]]*[\"']\{0,1\}\)${SRC_ESC}\([\"']\{0,1\}\)[[:space:]]*$|\1${DST_REGISTRY}\2|"
+}
 if [ "$DRY_RUN" -eq 1 ]; then
   # Name the rewrite by intent, not by the `sed -i` idiom the real path stopped
   # using, and report both expressions it applies: the `<host>/` prefix and the
   # bare-host scalar. Naming one expression understates what the run touches.
   echo "DRY-RUN rewrite image host ${SRC_REGISTRY}/ -> ${DST_REGISTRY}/ (and a bare ${SRC_REGISTRY} host scalar -> ${DST_REGISTRY}) over $(image_ref_files "$TREE" | wc -l | tr -d ' ') ref-bearing files under ${TREE}"
+  for pair in $IMAGE_REF_GZIP_COPIES; do
+    if [ -f "$TREE/${pair%%=*}" ]; then
+      echo "DRY-RUN recompress $TREE/${pair%%=*} from its rewritten ${pair#*=}"
+    fi
+  done
 else
   # Exactly the files collect_refs scanned, via the same enumeration: the set
   # whose hosts are rewritten must equal the set scanned for images to mirror.
@@ -170,18 +192,29 @@ else
   # not; that is the lesser evil against `mv` stamping mktemp's 0600 onto every
   # rewritten file in the tree.
   image_ref_files "$TREE" | while IFS= read -r f; do
-    # `\{0,1\}` rather than the `\?` optional-quantifier: `\?` is a GNU BRE
-    # extension that BSD sed reads as a literal `?`, turning each `["']\?` into
-    # "a quote followed by a literal ?". On macOS that makes the whole expression
-    # dead -- it matches neither a bare host nor a quoted one, not just the bare
-    # case. `\{0,1\}` is POSIX BRE and behaves the same on both.
     tmp_f=$(mktemp)
-    sed \
-      -e "s|${SRC_ESC}/|${DST_REGISTRY}/|g" \
-      -e "s|\(:[[:space:]]*[\"']\{0,1\}\)${SRC_ESC}\([\"']\{0,1\}\)[[:space:]]*$|\1${DST_REGISTRY}\2|" \
-      "$f" > "$tmp_f"
+    rewrite_hosts < "$f" > "$tmp_f"
     cat "$tmp_f" > "$f"
     rm -f "$tmp_f"
+  done
+  for pair in $IMAGE_REF_GZIP_COPIES; do
+    f="$TREE/${pair%%=*}"
+    [ -f "$f" ] || continue
+    tmp_plain=$(mktemp)
+    tmp_rewritten=$(mktemp)
+    tmp_gz=$(mktemp)
+    gzip --decompress --stdout "$f" > "$tmp_plain"
+    rewrite_hosts < "$tmp_plain" > "$tmp_rewritten"
+    # The host in any other shape survives rewrite_hosts; the payload must not
+    # ship it.
+    if grep -F "${SRC_REGISTRY}" "$tmp_rewritten"; then
+      echo "unrewritten image host in $f" >&2
+      exit 1
+    fi
+    cmp "$tmp_rewritten" "$TREE/${pair#*=}"
+    gzip --no-name --stdout "$tmp_rewritten" > "$tmp_gz"
+    cat "$tmp_gz" > "$f"
+    rm -f "$tmp_plain" "$tmp_rewritten" "$tmp_gz"
   done
 fi
 

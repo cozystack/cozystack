@@ -1,0 +1,40 @@
+{
+  "title": "Chart Values",
+  "type": "object",
+  "properties": {
+    "defaultWorkerClass": {
+      "description": "Platform-selected class assigned to new standalone worker pools. Changing it does not classify legacy pools or move an existing pool.",
+      "type": "string",
+      "default": "talos"
+    },
+    "valuesNamespaces": {
+      "description": "Existing non-tenant namespaces whose Secret and ConfigMap values the controller may GET. Managed tenant namespaces receive separate grants from their tenant chart. Empty grants no additional namespaces.",
+      "type": "array",
+      "default": [],
+      "items": {
+        "type": "string"
+      }
+    },
+    "replicas": {
+      "description": "Admission replicas. Controllers use leader election. Admission fails closed, so with one replica a node drain evicts the only webhook pod and every pool write fails until it runs again.",
+      "type": "integer",
+      "default": 2,
+      "minimum": 1
+    },
+    "resources": {
+      "description": "Controller and webhook resource requests and limits.",
+      "type": "object",
+      "default": {
+        "limits": {
+          "cpu": "500m",
+          "memory": "256Mi"
+        },
+        "requests": {
+          "cpu": "10m",
+          "memory": "64Mi"
+        }
+      },
+      "x-kubernetes-preserve-unknown-fields": true
+    }
+  }
+}

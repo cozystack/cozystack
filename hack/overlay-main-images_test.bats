@@ -4,8 +4,7 @@
 # cozystack-packages:main artifact.
 #
 # Run from the repo root with `make bats-unit-tests`, or directly with
-# `bats hack/overlay-main-images_test.bats`. The legacy `hack/cozytest.sh`
-# runner remains a supported compatibility path.
+# `bats hack/overlay-main-images_test.bats`.
 #
 # Each fixture test builds a throwaway tree: a `packages/` tree on release
 # (ghcr/v1.5.0) refs, and a `main/` dir standing in for the extracted
@@ -17,6 +16,151 @@
 # Leave the fixture directory before deleting it so the shell retains a cwd.
 
 load test_helper
+
+provider_overlay_fixture() {
+  root=$PWD
+  w=$BATS_TEST_TMPDIR
+  pkg=system/capi-providers-bootstrap
+  mkdir --parents "$w/packages/$pkg/files" "$w/packages/$pkg/images" "$w/main/$pkg/files" "$w/main/$pkg/images"
+  old='ghcr.io/cozystack/cozystack/cluster-api-bootstrap-provider-kairos:v0.2.1@sha256:aaaa'
+  new='registry.example.com/cluster-api-bootstrap-provider-kairos:main@sha256:bbbb'
+  printf 'kind: Deployment\nmetadata:\n  name: kairos\nspec:\n  image: %s\n' "$old" > "$w/packages/$pkg/files/bootstrap-components-kairos.yaml"
+  printf 'kind: Deployment\nmetadata:\n  name: kairos\nspec:\n  image: %s\n' "$new" > "$w/main/$pkg/files/bootstrap-components-kairos.yaml"
+  printf '%s\n' "$old" > "$w/packages/$pkg/images/kairos.tag"
+  printf '%s\n' "$new" > "$w/main/$pkg/images/kairos.tag"
+  gzip --no-name --stdout "$w/packages/$pkg/files/bootstrap-components-kairos.yaml" > "$w/packages/$pkg/files/components-kairos.gz"
+  gzip --no-name --stdout "$w/main/$pkg/files/bootstrap-components-kairos.yaml" > "$w/main/$pkg/files/components-kairos.gz"
+  cd "$w"
+}
+
+@test "overlays the consumed provider plain gzip and tag as one unit" {
+  provider_overlay_fixture
+  "$root/hack/overlay-main-images.sh" main '[]'
+  grep --fixed-strings --quiet "$new" "packages/$pkg/files/bootstrap-components-kairos.yaml"
+  gzip --decompress --stdout "packages/$pkg/files/components-kairos.gz" | grep --fixed-strings --quiet "$new"
+  [ "$(cat "packages/$pkg/images/kairos.tag")" = "$new" ]
+}
+
+@test "rebuilt provider payloads remain authoritative" {
+  provider_overlay_fixture
+  "$root/hack/overlay-main-images.sh" main '["packages/system/capi-providers-bootstrap"]'
+  grep --fixed-strings --quiet "$old" "packages/$pkg/files/bootstrap-components-kairos.yaml"
+  gzip --decompress --stdout "packages/$pkg/files/components-kairos.gz" | grep --fixed-strings --quiet "$old"
+  [ "$(cat "packages/$pkg/images/kairos.tag")" = "$old" ]
+}
+
+@test "touched provider payloads remain authoritative" {
+  provider_overlay_fixture
+  "$root/hack/overlay-main-images.sh" main '[]' "packages/$pkg"
+  grep --fixed-strings --quiet "$old" "packages/$pkg/files/bootstrap-components-kairos.yaml"
+  gzip --decompress --stdout "packages/$pkg/files/components-kairos.gz" | grep --fixed-strings --quiet "$old"
+  [ "$(cat "packages/$pkg/images/kairos.tag")" = "$old" ]
+}
+
+@test "non-ref provider drift keeps plain gzip and tag together" {
+  provider_overlay_fixture
+  printf '\nreplicas: 2\n' >> "main/$pkg/files/bootstrap-components-kairos.yaml"
+  gzip --no-name --stdout "main/$pkg/files/bootstrap-components-kairos.yaml" > "main/$pkg/files/components-kairos.gz"
+  "$root/hack/overlay-main-images.sh" main '[]'
+  grep --fixed-strings --quiet "$old" "packages/$pkg/files/bootstrap-components-kairos.yaml"
+  gzip --decompress --stdout "packages/$pkg/files/components-kairos.gz" | grep --fixed-strings --quiet "$old"
+  [ "$(cat "packages/$pkg/images/kairos.tag")" = "$old" ]
+}
+
+@test "a base artifact that predates the provider payload keeps the committed refs" {
+  provider_overlay_fixture
+  rm "main/$pkg/files/components-kairos.gz" "main/$pkg/files/bootstrap-components-kairos.yaml" "main/$pkg/images/kairos.tag"
+  "$root/hack/overlay-main-images.sh" main '[]'
+  grep --fixed-strings --quiet "$old" "packages/$pkg/files/bootstrap-components-kairos.yaml"
+  gzip --decompress --stdout "packages/$pkg/files/components-kairos.gz" | grep --fixed-strings --quiet "$old"
+  [ "$(cat "packages/$pkg/images/kairos.tag")" = "$old" ]
+}
+
+# A broken base artifact is main's defect: it keeps the package on its
+# committed refs instead of failing every pull request that finalizes.
+@test "a base artifact missing half of the provider payload keeps the committed refs" {
+  provider_overlay_fixture
+  mv "main/$pkg/files/components-kairos.gz" "$w/held.gz"
+  run "$root/hack/overlay-main-images.sh" main '[]'
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"::warning::"*"bootstrap-components-kairos.yaml"* ]]
+  grep --fixed-strings --quiet "$old" "packages/$pkg/files/bootstrap-components-kairos.yaml"
+  gzip --decompress --stdout "packages/$pkg/files/components-kairos.gz" | grep --fixed-strings --quiet "$old"
+  [ "$(cat "packages/$pkg/images/kairos.tag")" = "$old" ]
+}
+
+@test "mismatched main provider plain and gzip keep the committed refs" {
+  provider_overlay_fixture
+  cp "packages/$pkg/files/components-kairos.gz" "main/$pkg/files/components-kairos.gz"
+  run "$root/hack/overlay-main-images.sh" main '[]'
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"::warning::"*"bootstrap-components-kairos.yaml"* ]]
+  grep --fixed-strings --quiet "$old" "packages/$pkg/files/bootstrap-components-kairos.yaml"
+  gzip --decompress --stdout "packages/$pkg/files/components-kairos.gz" | grep --fixed-strings --quiet "$old"
+  [ "$(cat "packages/$pkg/images/kairos.tag")" = "$old" ]
+}
+
+@test "a main provider tag absent from its payload keeps the committed refs" {
+  provider_overlay_fixture
+  printf '%s\n' 'registry.example.com/cluster-api-bootstrap-provider-kairos:other@sha256:cccc' > "main/$pkg/images/kairos.tag"
+  run "$root/hack/overlay-main-images.sh" main '[]'
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"::warning::"*"kairos.tag"* ]]
+  grep --fixed-strings --quiet "$old" "packages/$pkg/files/bootstrap-components-kairos.yaml"
+  [ "$(cat "packages/$pkg/images/kairos.tag")" = "$old" ]
+}
+
+@test "a pull request provider tag absent from its own payload refuses overlay" {
+  provider_overlay_fixture
+  printf '%s\n' 'ghcr.io/cozystack/cozystack/cluster-api-bootstrap-provider-kairos:v0.2.2@sha256:cccc' > "packages/$pkg/images/kairos.tag"
+  run "$root/hack/overlay-main-images.sh" main '[]'
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"image tag does not match consumed payload"* ]]
+}
+
+@test "mismatched pull request provider plain and gzip refuse overlay" {
+  provider_overlay_fixture
+  cp "main/$pkg/files/components-kairos.gz" "packages/$pkg/files/components-kairos.gz"
+  run "$root/hack/overlay-main-images.sh" main '[]'
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"incomplete or mismatched image payload"* ]]
+}
+
+@test "another image of the provider package does not have to be in the payload" {
+  provider_overlay_fixture
+  printf '%s\n' 'ghcr.io/cozystack/cozystack/other-provider:v1@sha256:dddd' > "packages/$pkg/images/other.tag"
+  printf '%s\n' 'registry.example.com/other-provider:main@sha256:eeee' > "main/$pkg/images/other.tag"
+  "$root/hack/overlay-main-images.sh" main '[]'
+  [ "$(cat "packages/$pkg/images/kairos.tag")" = "$new" ]
+}
+
+@test "an invalid current provider gzip refuses overlay" {
+  provider_overlay_fixture
+  printf 'invalid gzip\n' > "packages/$pkg/files/components-kairos.gz"
+  run "$root/hack/overlay-main-images.sh" main '[]'
+  [ "$status" -ne 0 ]
+  [ "$(cat "packages/$pkg/images/kairos.tag")" = "$old" ]
+}
+
+@test "provider tag drift prevents overlay of its consumed payload" {
+  provider_overlay_fixture
+  printf '# source contract changed\n%s\n' "$new" > "main/$pkg/images/kairos.tag"
+  "$root/hack/overlay-main-images.sh" main '[]'
+  gzip --decompress --stdout "packages/$pkg/files/components-kairos.gz" | grep --fixed-strings --quiet "$old"
+  [ "$(cat "packages/$pkg/images/kairos.tag")" = "$old" ]
+}
+
+@test "finalize does not publish after an image payload integrity failure" {
+  root=$PWD
+  step=$(yq '.jobs.finalize.steps[] | select(.name == "Overlay base-branch refs for unbuilt packages").run' .github/workflows/pull-requests.yaml)
+  [ -n "$step" ]
+  mkdir "$BATS_TEST_TMPDIR/hack"
+  printf '#!/bin/sh\nexit 1\n' > "$BATS_TEST_TMPDIR/hack/overlay-main-images.sh"
+  chmod +x "$BATS_TEST_TMPDIR/hack/overlay-main-images.sh"
+  cd "$BATS_TEST_TMPDIR"
+  run env BUILD_MATRIX='[]' TALOS_RESULT=skipped KAIROS_WORKER_RESULT=skipped PR_TOUCHED='' bash -c "$step"
+  [ "$status" -ne 0 ]
+}
 
 @test "overlays an unbuilt unit (.tag) to current-main and reports it" {
   root=$(pwd)
@@ -80,6 +224,18 @@ load test_helper
   grep -q 'sha256:bbbb' packages/system/split/values.yaml
   cd "$root"
   rm -rf "$w"
+}
+
+@test "overlays an image reference in a shared declared extra file" {
+  root=$PWD
+  w=$BATS_TEST_TMPDIR
+  rel=system/multus/templates/multus-daemonset-thick.yml
+  mkdir --parents "$w/packages/system/multus/templates" "$w/main/system/multus/templates"
+  printf 'kind: DaemonSet\nimage: ghcr.io/cozystack/cozystack/multus:old@sha256:aaaa\n' > "$w/packages/$rel"
+  printf 'kind: DaemonSet\nimage: registry.example.com/multus:main@sha256:bbbb\n' > "$w/main/$rel"
+  cd "$w"
+  "$root/hack/overlay-main-images.sh" main '[]'
+  cmp --silent "packages/$rel" "main/$rel"
 }
 
 @test "overlays an extra/* unit (outside the per-package build matrix)" {
@@ -473,6 +629,31 @@ load test_helper
   fi
   if printf '%s\n' "$ann" | grep -q 'omega/images'; then
     echo "FAIL: the annotation named a directory instead of the package" >&2
+    printf '%s\n' "$ann" >&2
+    exit 1
+  fi
+  cd "$root"
+  rm -rf "$w"
+}
+
+@test "a declared templates/ file drifting with values.yaml is one package, named as the package" {
+  root=$(pwd)
+  w=$(mktemp -d)
+  mkdir -p "$w/packages/system/multus/templates" "$w/main/system/multus/templates"
+  printf 'image: ghcr.io/cozystack/cozystack/multus:v1.5.0@sha256:aaaa\nreplicas: 1\n' \
+    > "$w/packages/system/multus/values.yaml"
+  printf 'image: iad.ocir.io/x/cozystack/multus:main@sha256:bbbb\nreplicas: 2\n' \
+    > "$w/main/system/multus/values.yaml"
+  printf 'image: ghcr.io/cozystack/cozystack/multus:v1.5.0@sha256:aaaa\nhostNetwork: false\n' \
+    > "$w/packages/system/multus/templates/multus-daemonset-thick.yml"
+  printf 'image: iad.ocir.io/x/cozystack/multus:main@sha256:bbbb\nhostNetwork: true\n' \
+    > "$w/main/system/multus/templates/multus-daemonset-thick.yml"
+  cd "$w"
+  "$root/hack/overlay-main-images.sh" main '[]' > out.txt
+  grep -q 'drift (non-ref change) in packages/system/multus/templates/multus-daemonset-thick.yml' out.txt
+  ann=$(grep '::warning title=Image overlay drift' out.txt)
+  if ! printf '%s\n' "$ann" | grep -q '1 package(s).*system/multus$'; then
+    echo "FAIL: the two drifted files were not named as the one package system/multus" >&2
     printf '%s\n' "$ann" >&2
     exit 1
   fi

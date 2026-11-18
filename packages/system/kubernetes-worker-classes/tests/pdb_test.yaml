@@ -1,0 +1,21 @@
+suite: admission disruption budget
+release:
+  name: kubernetes-worker-classes
+  namespace: cozy-system
+templates:
+  - templates/pdb.yaml
+tests:
+  - it: lets a single replica be evicted so a node drain completes
+    set:
+      replicas: 1
+    asserts:
+      - equal:
+          path: spec.maxUnavailable
+          value: 1
+      - notExists:
+          path: spec.minAvailable
+  - it: keeps one of two replicas serving while the other is evicted
+    asserts:
+      - equal:
+          path: spec.maxUnavailable
+          value: 1

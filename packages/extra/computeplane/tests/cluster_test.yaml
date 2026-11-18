@@ -125,6 +125,8 @@ tests:
       - equal:
           path: spec.values.roles[0]
           value: ingress-nginx
+      - notExists:
+          path: spec.values.workerClassName
       # canonical KubernetesNodes pool shape (mirrors rest.go): RetryOnFailure
       # strategy + disableWait, not the parent module's remediation style.
       - equal:
@@ -251,6 +253,8 @@ tests:
           version: v1.31
           images:
             kubectl: evil.example.com/kubectl:latest
+          # the worker OS is the module's choice, not the tenant's
+          workerClassName: acme-kairos
           # platform-injected object (cluster-domain/oidc/dns01/proxy) delivered via
           # the cozystack-values Secret: a tenant key must NOT reach the pool values
           # (the allowlist splice drops anything it does not name — regression guard
@@ -279,6 +283,8 @@ tests:
           path: spec.values._cluster
       - notExists:
           path: spec.values.nameOverride
+      - notExists:
+          path: spec.values.workerClassName
 
   # Helm caps a HelmRelease name at 53 chars and each pool renders a 38-char fixed
   # prefix, so a pool key over 15 chars would create a release the apiserver

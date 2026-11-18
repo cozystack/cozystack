@@ -1,3 +1,4 @@
+---
 suite: worker pool clusterName-drift guard (assertNoForeignPool)
 
 # assertNoForeignPool reconstructs the pool MachineDeployment name
@@ -36,7 +37,9 @@ set:
     cpu: "2"
     memory: 4Gi
 tests:
-  - it: refuses to render when the live MachineDeployment clusterName drifts from this pool
+  - it: >-
+      refuses to render when the live MachineDeployment clusterName
+      drifts from this pool
     kubernetesProvider:
       scheme: &scheme
         "controlplane.cluster.x-k8s.io/v1alpha1/KamajiControlPlane":
@@ -103,6 +106,27 @@ tests:
     asserts:
       - failedTemplate:
           errorPattern: "spec.clusterName"
+
+  - it: >-
+      refuses a live pool owned by another release even when its cluster matches
+    kubernetesProvider:
+      scheme: *scheme
+      objects:
+        - *kcp
+        - *schemeMachineSet
+        - *schemeKmt
+        - kind: MachineDeployment
+          apiVersion: cluster.x-k8s.io/v1beta1
+          metadata:
+            name: kubernetes-myk8s-md0
+            namespace: tenant-test
+            annotations:
+              meta.helm.sh/release-name: kubernetes-parent
+          spec:
+            clusterName: kubernetes-myk8s
+    asserts:
+      - failedTemplate:
+          errorPattern: 'already managed by release "kubernetes-parent"'
 
   - it: renders when the live MachineDeployment clusterName matches this pool
     kubernetesProvider:

@@ -208,7 +208,7 @@ _cozy_on_exit() {
       # capture would read as a complete one listing fewer crash-loops than
       # actually occurred. This handler's whole worst case is ~1350s (330 + 390
       # + 630, each leg including its 30s kill grace) against a job capped at
-      # 215 minutes with no per-step timeout —
+      # 255 minutes with no per-step timeout —
       # deliberate, for the same reason recorded in hack/e2e-chainsaw/.chainsaw.yaml:
       # a bounded, honest wait beats a kill that collects nothing.
       if [ "$_prev_rc" -ne 0 ]; then

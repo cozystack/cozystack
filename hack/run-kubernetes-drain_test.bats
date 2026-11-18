@@ -97,6 +97,36 @@ load test_helper
     }
 }
 
+# The Kairos pool of the kubernetes-latest suite runs on the same cluster as
+# md0; its disk must hold the barrier like md0's, a pool of another name must
+# not, including one whose name only starts with md0 or with the Kairos pool's.
+@test "PVC filtering keeps the Kairos pool disk and drops other pools of the cluster" {
+    . hack/e2e-chainsaw/_lib/run-kubernetes.sh
+    pvcs=$(printf '%s\n' \
+        'persistentvolumeclaim/disk-system-kubernetes-test-latest-version-kairos-abcde-xyz12' \
+        'persistentvolumeclaim/disk-system-kubernetes-test-latest-version-custom-abcde-xyz12' \
+        'persistentvolumeclaim/disk-system-kubernetes-test-latest-version-md01-abcde-xyz12' \
+        'persistentvolumeclaim/disk-system-kubernetes-test-latest-version-kairos2-abcde-xyz12' \
+        'persistentvolumeclaim/disk-system-kubernetes-test-latest-version-md0-abcde-xyz12')
+    got=$(cozy_filter_cluster_pvcs test-latest-version "$pvcs")
+    expected=$(printf '%s\n' \
+        'persistentvolumeclaim/disk-system-kubernetes-test-latest-version-kairos-abcde-xyz12' \
+        'persistentvolumeclaim/disk-system-kubernetes-test-latest-version-md0-abcde-xyz12')
+    [ "$got" = "$expected" ] || {
+        echo "PVC filter did not keep exactly md0 and the Kairos pool: [$got]" >&2
+        exit 1
+    }
+    if cozy_tenant_drained "" "" "$(cozy_filter_cluster_pvcs test-latest-version 'persistentvolumeclaim/disk-system-kubernetes-test-latest-version-kairos-abcde-xyz12')"; then
+        echo "a remaining Kairos pool disk read as drained" >&2
+        exit 1
+    fi
+    kairos_suffix=$(sed -n 's/^KAIROS_POOL_SUFFIX=//p' hack/e2e-chainsaw/_lib/run-kubernetes-kairos.sh)
+    [ "$kairos_suffix" = kairos ] || {
+        echo "the filter's default Kairos pool name drifted from run-kubernetes-kairos.sh ($kairos_suffix)" >&2
+        exit 1
+    }
+}
+
 @test "scoped drain queries the CAPI label and ignores unrelated PVCs" {
     . hack/e2e-chainsaw/_lib/run-kubernetes.sh
     calls=$(mktemp)

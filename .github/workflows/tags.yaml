@@ -31,7 +31,8 @@ jobs:
     if: contains(github.ref_name, '-')
     runs-on: oracle-vm-24cpu-96gb-arm64
     # Starts from build-amd64's budget; re-measure after the first runs.
-    timeout-minutes: 120
+    # Includes the Kairos worker disks, which build-kairos-worker budgets at 90m.
+    timeout-minutes: 210
     permissions:
       contents: read
       packages: write
@@ -116,6 +117,7 @@ jobs:
           for unit in $units; do
             make -C "$unit" image
           done
+          make -C packages/apps/kubernetes-nodes image
           make -C packages/core/installer image-operator
         env:
           DOCKER_CONFIG: ${{ runner.temp }}/.docker
@@ -147,7 +149,8 @@ jobs:
     runs-on: oracle-vm-24cpu-96gb-x86-64
     # The budget prepare-release had while it also built; the stitch and the
     # uploads it no longer runs moved to prepare-release with their own.
-    timeout-minutes: 120
+    # Includes the Kairos worker disks, which build-kairos-worker budgets at 90m.
+    timeout-minutes: 210
     env:
       # The pipe falls back to direct on any proxy error (hack/common-envs.mk).
       GOPROXY: "https://proxy.golang.org|direct"

@@ -1,0 +1,58 @@
+Drop the manager rules that only the KairosControlPlane path uses, so a
+platform that runs Kairos workers only does not grant the bootstrap manager
+ServiceAccount tokens, Role and RoleBinding writes, or VMI reads.
+In cluster-api-provider-kairos v0.2.1 the ManagementEndpointResolver creates
+the ServiceAccount, its token, the Role (granting virtualmachineinstances get)
+and the RoleBinding (internal/controllers/bootstrap/management_endpoint_resolver.go:143,160,219,234),
+and render.go:216 calls it only for role == "control-plane". The startup
+NodePushRoleMigrator lists Roles through mgr.GetAPIReader(), an uncached
+reader (main.go:441, rbac_migrator.go:72), so list alone keeps that read; it
+patches only node-push Roles, which the control-plane path creates. The
+KairosConfig controller watches no Role, ServiceAccount or VMI
+(kairosconfig_controller.go:1492-1518).
+
+--- a/bootstrap-components-kairos.yaml
++++ b/bootstrap-components-kairos.yaml
+@@ -2439,18 +2439,6 @@
+   verbs:
+   - create
+   - delete
+-  - get
+-  - list
+-  - patch
+-  - update
+-  - watch
+-- apiGroups:
+-  - ""
+-  resources:
+-  - serviceaccounts
+-  - serviceaccounts/token
+-  verbs:
+-  - create
+   - get
+   - list
+   - patch
+@@ -2546,23 +2534,11 @@
+   - list
+   - watch
+ - apiGroups:
+-  - kubevirt.io
+-  resources:
+-  - virtualmachineinstances
+-  verbs:
+-  - get
+-- apiGroups:
+   - rbac.authorization.k8s.io
+   resources:
+-  - rolebindings
+   - roles
+   verbs:
+-  - create
+-  - get
+   - list
+-  - patch
+-  - update
+-  - watch
+ ---
+ apiVersion: rbac.authorization.k8s.io/v1
+ kind: RoleBinding

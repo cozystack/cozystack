@@ -1,0 +1,164 @@
+---
+suite: Worker consumer scheduling and capacity presence
+templates:
+  - templates/nodegroup.yaml
+release:
+  name: kubernetes-nodes-k-md0
+  namespace: tenant-test
+set:
+  cluster: k
+  version: v1.35
+  instanceType: ""
+  resources:
+    cpu: "2"
+    memory: 4Gi
+  _cluster:
+    cluster-domain: cozy.local
+  kubelet:
+    systemReservedCpu: 100m
+    kubeReservedCpu: 100m
+    systemReservedMemory: 256Mi
+    kubeReservedMemory: 256Mi
+    evictionHardMemory: 256Mi
+    evictionSoftMemory: 512Mi
+tests:
+  - it: omits global topology constraints when scheduling input is absent
+    documentSelector:
+      path: kind
+      value: KubevirtMachineTemplate
+    asserts:
+      - notExists:
+          path: "spec.template.spec.virtualMachineTemplate.spec.\
+            template.spec.topologySpreadConstraints"
+
+  - it: binds supplied topology constraints to the actual parent cluster
+    set:
+      _cluster:
+        scheduling:
+          globalAppTopologySpreadConstraints: |
+            topologySpreadConstraints:
+              - maxSkew: 1
+                topologyKey: topology.kubernetes.io/zone
+                whenUnsatisfiable: DoNotSchedule
+    documentSelector:
+      path: kind
+      value: KubevirtMachineTemplate
+    asserts:
+      - equal:
+          path: "spec.template.spec.virtualMachineTemplate.spec.\
+            template.spec.topologySpreadConstraints[0]"
+          value:
+            maxSkew: 1
+            topologyKey: topology.kubernetes.io/zone
+            whenUnsatisfiable: DoNotSchedule
+            labelSelector:
+              matchLabels:
+                cluster.x-k8s.io/cluster-name: kubernetes-k
+
+  - it: emits exact allocatable capacity for explicit Talos sizing
+    set:
+      workerClassName: talos
+    documentSelector:
+      path: kind
+      value: MachineDeployment
+    asserts:
+      - equal:
+          path: "metadata.annotations[\
+            \"capacity.cluster-autoscaler.kubernetes.io/cpu\"]"
+          value: 1800m
+      - equal:
+          path: "metadata.annotations[\
+            \"capacity.cluster-autoscaler.kubernetes.io/memory\"]"
+          value: 3328Mi
+
+  - it: emits exact allocatable capacity for an available instancetype
+    set:
+      instanceType: u1.medium
+      resources: null
+    kubernetesProvider:
+      scheme:
+        cluster.x-k8s.io/v1beta1/MachineDeployment:
+          gvr:
+            group: cluster.x-k8s.io
+            version: v1beta1
+            resource: machinedeployments
+          namespaced: true
+        cluster.x-k8s.io/v1beta1/MachineSet:
+          gvr:
+            group: cluster.x-k8s.io
+            version: v1beta1
+            resource: machinesets
+          namespaced: true
+        infrastructure.cluster.x-k8s.io/v1alpha1/KubevirtMachineTemplate:
+          gvr:
+            group: infrastructure.cluster.x-k8s.io
+            version: v1alpha1
+            resource: kubevirtmachinetemplates
+          namespaced: true
+        instancetype.kubevirt.io/v1beta1/VirtualMachineClusterInstancetype:
+          gvr:
+            group: instancetype.kubevirt.io
+            version: v1beta1
+            resource: virtualmachineclusterinstancetypes
+          namespaced: false
+      objects:
+        - apiVersion: instancetype.kubevirt.io/v1beta1
+          kind: VirtualMachineClusterInstancetype
+          metadata:
+            name: u1.medium
+          spec:
+            cpu:
+              guest: 2.0
+            memory:
+              guest: 4Gi
+        - apiVersion: cluster.x-k8s.io/v1beta1
+          kind: MachineSet
+          metadata:
+            name: scheme-only
+            namespace: scheme-only
+          spec: {}
+        - apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
+          kind: KubevirtMachineTemplate
+          metadata:
+            name: scheme-only
+            namespace: scheme-only
+          spec: {}
+    documentSelector:
+      path: kind
+      value: MachineDeployment
+    asserts:
+      - equal:
+          path: "metadata.annotations[\
+            \"capacity.cluster-autoscaler.kubernetes.io/cpu\"]"
+          value: 1800m
+      - equal:
+          path: "metadata.annotations[\
+            \"capacity.cluster-autoscaler.kubernetes.io/memory\"]"
+          value: 3328Mi
+
+  - it: rejects a pool with neither explicit resources nor an instancetype
+    set:
+      resources: null
+      kubelet: null
+    asserts:
+      - failedTemplate:
+          errorMessage: >-
+            nodeGroup md0: set instanceType, or both resources.cpu and
+            resources.memory: with neither the worker VM has no size, and
+            KubeVirt refuses a VirtualMachine that declares no memory
+
+  - it: keeps the same capacity budget for explicit Kairos sizing
+    set:
+      workerClassName: kairos
+    documentSelector:
+      path: kind
+      value: MachineDeployment
+    asserts:
+      - equal:
+          path: "metadata.annotations[\
+            \"capacity.cluster-autoscaler.kubernetes.io/cpu\"]"
+          value: 1800m
+      - equal:
+          path: "metadata.annotations[\
+            \"capacity.cluster-autoscaler.kubernetes.io/memory\"]"
+          value: 3328Mi

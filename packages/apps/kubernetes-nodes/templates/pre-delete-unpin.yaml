@@ -1,3 +1,4 @@
+{{- include "kubernetes-nodes.workerContext" . -}}
 {{- /* Migration 56 adopts pre-split worker objects into this release and pins
        them with helm.sh/resource-policy=keep so the parent kubernetes chart's
        control-plane-only re-render does not prune them during the transition.

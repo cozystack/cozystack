@@ -44,6 +44,11 @@ stringData:
     _cluster:
       root-host: {{ $rootHost | quote }}
       bundle-name: {{ .Values.bundles.system.variant | quote }}
+      {{- $disabled := .Values.bundles.disabledPackages | default list }}
+      {{- $managedKubernetes := eq (include "cozystack.platform.managedKubernetes" $disabled) "true" }}
+      {{- /* bundles/iaas.yaml refuses iaas without the system bundle of a full
+             variant, and managed Kubernetes without the worker package. */}}
+      worker-classes-enabled: {{ and .Values.bundles.iaas.enabled $managedKubernetes | toString | quote }}
       solver: {{ .Values.publishing.certificates.solver | quote }}
       issuer-name: {{ .Values.publishing.certificates.issuerName | quote }}
       {{- /*

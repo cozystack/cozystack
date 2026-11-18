@@ -1,0 +1,58 @@
+suite: explicit non-tenant values namespaces
+release:
+  name: kubernetes-worker-classes
+  namespace: cozy-system
+templates:
+  - templates/values-namespaces.yaml
+tests:
+  - it: grants no non-tenant namespaces by default
+    asserts:
+      - hasDocuments:
+          count: 0
+  - it: grants only GET in an explicitly opted-in existing namespace
+    set:
+      valuesNamespaces: [worker-pools]
+    asserts:
+      - hasDocuments:
+          count: 2
+      - equal:
+          path: metadata.namespace
+          value: worker-pools
+      - equal:
+          path: rules
+          value:
+            - apiGroups: [""]
+              resources: [secrets, configmaps]
+              verbs: [get]
+        documentIndex: 0
+      - equal:
+          path: subjects
+          value:
+            - kind: ServiceAccount
+              name: kubernetes-worker-classes
+              namespace: cozy-system
+        documentIndex: 1
+  - it: refuses wildcard namespace grants
+    set:
+      valuesNamespaces: ["*"]
+    asserts:
+      - failedTemplate:
+          errorPattern: valuesNamespaces entries must be literal Kubernetes namespace names
+  - it: removes grants when the explicit list is cleared
+    set:
+      valuesNamespaces: []
+    asserts:
+      - hasDocuments:
+          count: 0
+  - it: grants a namespace listed twice once
+    set:
+      valuesNamespaces: [worker-pools, worker-pools]
+    asserts:
+      - hasDocuments:
+          count: 2
+  - it: refuses a namespace name longer than Kubernetes allows
+    set:
+      valuesNamespaces: [aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa]
+    asserts:
+      - failedTemplate:
+          errorPattern: 'valuesNamespaces entries must be literal Kubernetes namespace names'

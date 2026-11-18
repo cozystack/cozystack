@@ -1,0 +1,6 @@
+{
+  "group": "apps.cozystack.io",
+  "version": "v1alpha1",
+  "kind": "KubernetesNodes",
+  "resource": "kubernetesnodeses"
+}

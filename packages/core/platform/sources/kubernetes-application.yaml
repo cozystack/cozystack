@@ -12,6 +12,7 @@ spec:
   variants:
     - name: kubevirt
       dependsOn:
+        - cozystack.kubernetes-worker-classes
         - cozystack.networking
         - cozystack.capi-operator
         - cozystack.capi-provider-bootstrap-kubeadm

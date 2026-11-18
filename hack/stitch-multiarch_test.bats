@@ -158,7 +158,8 @@ _make_world() {
   mkdir -p "$t/system/api" "$t/system/cil" "$t/system/lin" "$t/system/ovn" \
            "$t/apps/kube/images" "$t/system/multus/templates" "$t/core/testing" \
            "$t/core/installer" "$t/system/capi-providers-cpprovider/images" \
-           "$t/system/capi-providers-cpprovider/files" "$t/system/stray/files" "$t/system/zipped/files" \
+           "$t/system/capi-providers-cpprovider/files" "$t/system/capi-providers-bootstrap/files" \
+           "$t/system/stray/files" "$t/system/zipped/files" \
            "$t/system/third" "$t/system/api/charts/up"
   for n in api cil lin ovn signer multus; do
     eval "A_$n=\$(_push $REG/$n main amd64)"
@@ -173,12 +174,12 @@ _make_world() {
     "$REG/api" "$A_api" "$REG/api" "$A_api" "$REG/api" "$A_api" >>"$MOCK_REG/tags"
   PUSHED_TAGS_LOG="$1/pushed-tags"
   export PUSHED_TAGS_LOG
-  for n in api cil lin ovn signer multus kamaji; do
+  for n in api cil lin ovn signer multus kamaji kairos; do
     printf '%s/%s:main\n' "$REG" "$n" >>"$PUSHED_TAGS_LOG"
   done
   printf '%s/api:v9.9.9\n' "$REG" >>"$PUSHED_TAGS_LOG"
   A_sandbox=$(_push "$REG/sandbox" main amd64)
-  for n in kamaji stray zipped; do
+  for n in kamaji kairos stray zipped; do
     eval "A_$n=\$(_push $REG/$n main amd64)"
     _push "$REG/$n" main-arm64 arm64 >/dev/null
   done
@@ -210,6 +211,9 @@ _make_world() {
   printf '%s/kamaji:v0.1.0-cozystack.0@%s\n' "$REG" "$A_kamaji" >"$cpp/images/kamaji.tag"
   printf 'kind: Deployment\nimage: %s/kamaji:v0.1.0-cozystack.0@%s\n' "$REG" "$A_kamaji" >"$cpp/files/control-plane-components.yaml"
   gzip -nc "$cpp/files/control-plane-components.yaml" >"$cpp/files/components.gz"
+  boot="$t/system/capi-providers-bootstrap"
+  printf 'kind: Deployment\nimage: %s/kairos:v0.2.0@%s\n' "$REG" "$A_kairos" >"$boot/files/bootstrap-components-kairos.yaml"
+  gzip -nc "$boot/files/bootstrap-components-kairos.yaml" >"$boot/files/components-kairos.gz"
   # the digest also sits in a file, or a gzip, the rewrite does not reach
   printf '%s/stray:main@%s\n' "$REG" "$A_stray" >"$t/apps/kube/images/stray.tag"
   printf 'image: %s/stray:main@%s\n' "$REG" "$A_stray" >"$t/system/stray/files/copy.yaml"
@@ -261,6 +265,10 @@ _make_world() {
   gzip -dc "$cpp/files/components.gz" | grep -q "kamaji:v0.1.0-cozystack.0@$i\$"
   if gzip -dc "$cpp/files/components.gz" | grep -q "$A_kamaji"; then echo "FAIL: the gzip still pins the amd64 digest"; false; fi
   gzip -nc "$cpp/files/control-plane-components.yaml" | cmp - "$cpp/files/components.gz"
+  i="$(_tag "$REG/kairos" main)"
+  [ "$i" != "$A_kairos" ]
+  gzip -dc "$boot/files/components-kairos.gz" | grep -q "kairos:v0.2.0@$i\$"
+  gzip -nc "$boot/files/bootstrap-components-kairos.yaml" | cmp - "$boot/files/components-kairos.gz"
 
   # skipped: no arm64 twin, and a digest pinned outside the enumerated files
   [ "$(_tag "$REG/sandbox" main)" = "$A_sandbox" ]
@@ -282,7 +290,7 @@ _make_world() {
   grep -q "busybox:1@$THIRD" "$t/system/third/values.yaml"
 
   [ "$(wc -l <"$tmp/out" | tr -d ' ')" -eq 1 ]
-  grep -q '^stitch: 7 stitched (.*kamaji.*); 3 skipped (.*stray.*zipped.*)$' "$tmp/out"
+  grep -q '^stitch: 8 stitched (.*kamaji.*); 3 skipped (.*stray.*zipped.*)$' "$tmp/out"
   grep -q 'skipped (.*sandbox.*)$' "$tmp/out"
   rm -rf "$tmp"
 }
@@ -316,8 +324,9 @@ _make_world() {
   rc=0
   PATH="$MOCK_REG/bin:$PATH" hack/stitch-multiarch.sh "$tmp/tree" "$REG" main >"$tmp/out" 2>"$tmp/err" || rc=$?
   [ "$rc" -ne 0 ]
-  grep -q "${A_kamaji} is still pinned after the rewrite, in: .*components.gz" "$tmp/err"
-  if grep -q "is still pinned after the rewrite, in: .*control-plane-components.yaml" "$tmp/err"; then echo "FAIL: the plain copy was not rewritten"; false; fi
+  grep -q "${A_kamaji} is still pinned after the rewrite, in: .*components\.gz" "$tmp/err"
+  grep -q "${A_kairos} is still pinned after the rewrite, in: .*components-kairos\.gz" "$tmp/err"
+  if grep -Eq "is still pinned after the rewrite, in: .*(control-plane-components|bootstrap-components-kairos)\.yaml" "$tmp/err"; then echo "FAIL: the plain copy was not rewritten"; false; fi
   rm -rf "$tmp"
 }
 
@@ -562,15 +571,15 @@ _make_world() {
   PATH="$MOCK_REG/bin:$PATH" hack/stitch-multiarch.sh "$tmp/tree" "$REG" main >"$tmp/out" 2>"$tmp/err"
   [ "$(_tag "$REG/api" v9.9.9)" = "$(_tag "$REG/api" main)" ]
 
-  for n in api cil lin ovn signer multus kamaji; do
+  for n in api cil lin ovn signer multus kamaji kairos; do
     eval "a=\$A_$n"
     i="$(_tag "$REG/$n" main)"
     [ "$i" != "$a" ]
     if grep -rq --exclude-dir=charts "$a" "$tmp/tree"; then echo "FAIL: $n still pinned on its amd64 digest"; false; fi
     grep -rqF "$i" "$tmp/tree"
   done
-  grep -q '^stitch: 7 stitched ' "$tmp/out"
-  if grep -q 'no longer points\|skipping \(api\|cil\|lin\|ovn\|signer\|multus\|kamaji\)' "$tmp/err"; then
+  grep -q '^stitch: 8 stitched ' "$tmp/out"
+  if grep -q 'no longer points\|skipping \(api\|cil\|lin\|ovn\|signer\|multus\|kamaji\|kairos\)' "$tmp/err"; then
     echo "FAIL: the rerun skipped an image"; false
   fi
 
@@ -610,7 +619,7 @@ _make_world() {
   PATH="$MOCK_REG/bin:$PATH" hack/stitch-multiarch.sh "$tmp/tree" "$REG" main >/dev/null 2>&1
   first="$(_tag "$REG/api" main)"
 
-  for n in api cil lin ovn signer multus kamaji; do
+  for n in api cil lin ovn signer multus kamaji kairos; do
     _push "$REG/$n" main-arm64 arm64 application/vnd.docker.container.image.v1+json >/dev/null
   done
   rm -rf "$tmp/tree"
@@ -619,7 +628,7 @@ _make_world() {
 
   [ "$(_tag "$REG/api" main)" = "$first" ]
   grep -q "api:main@$first\$" "$tmp/tree/system/api/values.yaml"
-  grep -q '^stitch: 7 stitched ' "$tmp/out"
+  grep -q '^stitch: 8 stitched ' "$tmp/out"
   rm -rf "$tmp"
 }
 
@@ -711,7 +720,7 @@ _make_world() {
     MOCK_ERR="Error: reading manifest main-arm64: received unexpected HTTP status: 503 Service Unavailable" \
     hack/stitch-multiarch.sh "$tmp/tree" "$REG" main >"$tmp/out" 2>"$tmp/err"
   [ "$(wc -l <"$MOCK_REG/twin-calls" | tr -d ' ')" -eq 2 ]
-  grep -q '^stitch: 7 stitched (api, ' "$tmp/out"
+  grep -q '^stitch: 8 stitched (api, ' "$tmp/out"
 
   # A tag log that was asked for and never written.
   rm -rf "$tmp/tree"
@@ -741,6 +750,6 @@ _make_world() {
   PATH="$MOCK_REG/bin:$PATH" MOCK_TWIN="$REG/api:main-arm64" STITCH_RETRY_DELAY=0 \
     hack/stitch-multiarch.sh "$tmp/tree" "$REG" main >"$tmp/out" 2>"$tmp/err"
   [ "$(cat "$MOCK_REG/refused")" -eq 2 ]
-  grep -q '^stitch: 7 stitched (api, ' "$tmp/out"
+  grep -q '^stitch: 8 stitched (api, ' "$tmp/out"
   rm -rf "$tmp"
 }

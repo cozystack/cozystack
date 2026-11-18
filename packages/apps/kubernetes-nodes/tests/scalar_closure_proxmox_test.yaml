@@ -1,0 +1,58 @@
+---
+suite: Proxmox rejects KubeVirt-only scalar controls
+templates:
+  - templates/nodegroup.yaml
+release:
+  name: kubernetes-nodes-k-md0
+  namespace: tenant-test
+set:
+  cluster: k
+  _cluster:
+    cluster-domain: cozy.local
+  version: v1.35
+  instanceType: ""
+  resources:
+    cpu: "2"
+    memory: 4Gi
+  substrate: proxmox
+  proxmox:
+    templateTags: [talos-worker]
+    network:
+      bridge: vmbr0
+    dnsServers: [192.0.2.53]
+tests:
+  - it: accepts an empty GPU list with no Pod CPU overrides
+    set:
+      gpus: []
+    documentSelector:
+      path: kind
+      value: ProxmoxMachineTemplate
+    asserts:
+      - isKind:
+          of: ProxmoxMachineTemplate
+
+  - it: refuses a nonempty GPU list rather than silently ignoring it
+    set:
+      gpus:
+        - name: nvidia.com/device
+    asserts:
+      - failedTemplate:
+          errorPattern: gpus is a kubevirt-only field
+
+  - it: refuses an explicitly zero Pod CPU limit on Proxmox
+    set:
+      podCpuLimit: 0
+    asserts:
+      - failedTemplate:
+          errorPattern: >-
+            podCpuLimit/podCpuRequest size the virt-launcher pod
+            and are kubevirt-only
+
+  - it: refuses an explicitly zero Pod CPU request on Proxmox
+    set:
+      podCpuRequest: 0
+    asserts:
+      - failedTemplate:
+          errorPattern: >-
+            podCpuLimit/podCpuRequest size the virt-launcher pod
+            and are kubevirt-only

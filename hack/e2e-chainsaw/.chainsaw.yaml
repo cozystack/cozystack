@@ -66,14 +66,14 @@ spec:
   # script: it SIGKILLs the shell alone, orphaned children hold the pipe open,
   # and the op overruns (#4268 measured 606s under a 300s ceiling), so the
   # nominal ~5m was a figure a busy catch could exceed, not a cap. Tests run
-  # sequentially, and the E2E job is capped at 215 timeout-minutes. A cascade
+  # sequentially, and the E2E job is capped at 255 timeout-minutes. A cascade
   # reddening many suites can therefore spend a large share of the job in
   # diagnostics. That is deliberate — the old ceiling
   # bought its speed by collecting nothing at all — and it is bounded: both legs
   # only approach their ceilings on a genuinely degraded cluster, a systemic
   # failure usually reds the install gate and skips the E2E step entirely, and
   # the report-upload steps are `if: always()`. That last point does NOT extend
-  # to a job timeout: a 215-minute cap ends the job `cancelled`, and the ~4m48s
+  # to a job timeout: a 255-minute cap ends the job `cancelled`, and the ~4m48s
   # grace window is consumed by the earlier `Collect report` step, so both
   # cozyreport.tgz and the job log are lost (measured on runs 29557003429 and
   # 29568562337). If this ever does start truncating runs, bound the number of

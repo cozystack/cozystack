@@ -13,6 +13,8 @@ build: build-deps
 	make -C packages/apps/mariadb image
 	make -C packages/apps/clickhouse image
 	make -C packages/apps/kubernetes image
+	make -C packages/apps/kubernetes-nodes image
+	make -C packages/system/kubernetes-worker-classes image
 	make -C packages/apps/vpn image
 	make -C packages/system/cozystack-api image
 	make -C packages/system/cozystack-controller image
@@ -35,6 +37,7 @@ build: build-deps
 	make -C packages/system/talos-log-collector image
 	make -C packages/system/kamaji image
 	make -C packages/system/capi-providers-cpprovider image
+	make -C packages/system/capi-providers-bootstrap image
 	make -C packages/system/capi-providers-infraprovider image
 	make -C packages/system/multus image
 	make -C packages/system/bucket image
@@ -139,13 +142,13 @@ rd-presets-check:
 migrations-target-check:
 	hack/check-migrations-target.sh
 
-# Scoped go test over the cozystack-api surface that this repo owns. Kept
-# narrow intentionally - running `go test ./...` pulls in generated code
-# round-trip suites whose behavior depends on tool versions outside this
+# Scoped go test over the cozystack-api surface and the worker packages this
+# repo owns. Kept narrow intentionally - running `go test ./...` pulls in
+# generated code round-trip suites whose behavior depends on tool versions outside this
 # repo's control (kubebuilder, openapi-gen, etc.) and is better exercised
 # from their generator workflows.
 go-unit-tests:
-	go test ./pkg/registry/... ./pkg/config/... ./pkg/cmd/server/...
+	go test ./pkg/registry/... ./pkg/config/... ./pkg/cmd/server/... ./api/workers/v1alpha1 ./cmd/kubernetes-worker-controller ./cmd/workerclass-restore
 
 # The nested Go modules (image sources and the published API types) are
 # outside ./... of the root module, so no other target reaches their tests.
@@ -158,10 +161,10 @@ go-module-tests:
 	done
 
 # Go tests for the controllers and supporting packages under ./internal.
-# Excludes ./pkg/... and ./cmd/... — those are run separately by
-# go-unit-tests above (pkg subset) and skipped (cmd) until their tests
-# stabilise. CI schedules this target in the same four-slot make invocation as
-# unit-tests; locally invoke it directly or chain the two targets.
+# Excludes ./pkg/... and ./cmd/... — go-unit-tests above runs the pkg subset
+# and the cmd packages it names; the rest of ./cmd/... stays skipped until
+# its tests stabilise. CI schedules this target in the same four-slot make
+# invocation as unit-tests; locally invoke it directly or chain the two targets.
 test-controllers:
 	go test ./internal/... -count=1
 
@@ -195,7 +198,7 @@ test-controllers-envtest: $(SETUP_ENVTEST)
 test-check-readiness:
 	go test ./test/check-readiness/ -count=1
 
-# ./cmd/... is excluded from go-unit-tests, so the batch tool needs its own target.
+# go-unit-tests names its ./cmd packages one by one, so the batch tool needs its own target.
 test-backport-batch:
 	go test ./cmd/backport-batch/... -count=1
 
@@ -320,3 +323,9 @@ generate:
 
 upload_assets: manifests
 	hack/upload-assets.sh
+
+.PHONY: test-worker-class-admission
+# The timeout has to cover the restore build deadline, the shared apiserver
+# budget of TestProductionPackage and the other tests in the package.
+test-worker-class-admission:
+	RUN_WORKERCLASS_INTEGRATION=1 KUBE_FEATURE_WatchListClient=false go test -tags=integration -timeout=15m -count=1 -v ./internal/kubernetesworker/integration/
