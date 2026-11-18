@@ -540,6 +540,31 @@ func TestEvaluateTreatsNullAsAbsent(t *testing.T) {
 	assertList(t, "null", got, rl("cpu", "2"))
 }
 
+// Helm deletes a nulled key from the chart's defaults as well, so a null must
+// not be replaced by the schema default either.
+func TestEvaluateNullOverridesDefault(t *testing.T) {
+	env := testEnvironment(t)
+	ev := mustCompile(t, &Declaration{Resources: map[string]string{
+		"cpu": `has(values.instanceType) ? 1 : 2`,
+	}}, "vm-instance")
+	for name, tc := range map[string]struct {
+		values string
+		want   string
+	}{
+		"omitted takes the default": {`{}`, "1"},
+		"null deletes the default":  {`{"instanceType": null}`, "2"},
+		"nested null":               {`{"resources": null}`, "1"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			got, err := ev.EvaluateJSON([]byte(tc.values), env)
+			if err != nil {
+				t.Fatal(err)
+			}
+			assertList(t, name, got, rl("cpu", tc.want))
+		})
+	}
+}
+
 func TestEvaluateIsConcurrencySafe(t *testing.T) {
 	env := testEnvironment(t)
 	vm := mustCompile(t, vmInstanceDecl, "vm-instance")

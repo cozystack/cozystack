@@ -198,12 +198,18 @@ func (e *Evaluator) Evaluate(values map[string]any, env Environment) (ResourceLi
 	if err := checkTypes(defaulted, e.schema, ""); err != nil {
 		return nil, err
 	}
+	// Helm deletes a key its values set to null, the chart's own default
+	// included, so a nulled scalar is kept out after defaulting. A nulled
+	// object or list keeps its default: charts read those through
+	// `default dict` and `default list`, which renders the same as the empty
+	// default the schema puts back.
+	nulled := takeNulls(defaulted, nil)
 	if err := defaulting.Apply(&defaulted, e.schema); err != nil {
 		return nil, fmt.Errorf("default values: %w", err)
 	}
-	// Helm deletes a key its values set to null, so an expression must see
-	// it as absent; defaulting replaces only the nulls the schema has a
-	// default for.
+	for _, path := range nulled {
+		deleteScalarAt(defaulted, path)
+	}
 	dropNulls(defaulted)
 
 	// The environment differs per call, so instanceType and preset are
@@ -481,6 +487,41 @@ func normalizeNumbers(v any) any {
 	default:
 		return v
 	}
+}
+
+// takeNulls removes, in place, every null-valued key of the objects nested in
+// m through objects, and returns their paths.
+func takeNulls(m map[string]any, prefix []string) [][]string {
+	var paths [][]string
+	for k, v := range m {
+		path := append(append([]string(nil), prefix...), k)
+		switch t := v.(type) {
+		case nil:
+			delete(m, k)
+			paths = append(paths, path)
+		case map[string]any:
+			paths = append(paths, takeNulls(t, path)...)
+		}
+	}
+	return paths
+}
+
+// deleteScalarAt removes the key at path when it holds neither an object nor
+// a list, if every object on the way exists.
+func deleteScalarAt(m map[string]any, path []string) {
+	for _, k := range path[:len(path)-1] {
+		next, ok := m[k].(map[string]any)
+		if !ok {
+			return
+		}
+		m = next
+	}
+	last := path[len(path)-1]
+	switch m[last].(type) {
+	case map[string]any, []any:
+		return
+	}
+	delete(m, last)
 }
 
 // dropNulls removes, in place, every null-valued key of m and of the objects
