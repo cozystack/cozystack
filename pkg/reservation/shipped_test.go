@@ -17,7 +17,11 @@ limitations under the License.
 package reservation
 
 import (
+	"bufio"
+	"bytes"
 	"errors"
+	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -25,6 +29,7 @@ import (
 	"testing"
 
 	"k8s.io/apimachinery/pkg/api/resource"
+	utilyaml "k8s.io/apimachinery/pkg/util/yaml"
 	"sigs.k8s.io/yaml"
 
 	cozyv1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
@@ -52,19 +57,14 @@ func shippedDefinitions(t *testing.T) map[string]*cozyv1alpha1.ApplicationDefini
 		if err != nil {
 			t.Fatal(err)
 		}
-		// Helm renders every document of the file, while a strict decode
-		// reads only the first, so a second one would go unchecked.
-		if docs := strings.Split(string(raw), "\n---"); len(docs) > 1 {
-			for _, d := range docs[1:] {
-				if strings.TrimSpace(d) != "" {
-					t.Fatalf("%s: holds more than one YAML document", f)
-				}
-			}
+		doc, err := singleDocument(raw)
+		if err != nil {
+			t.Fatalf("%s: %v", f, err)
 		}
 		def := &cozyv1alpha1.ApplicationDefinition{}
 		// Strict, so that a misspelled field in a hand-written declaration
 		// fails here instead of being pruned by the API server.
-		if err := yaml.UnmarshalStrict(raw, def); err != nil {
+		if err := yaml.UnmarshalStrict(doc, def); err != nil {
 			t.Fatalf("%s: %v", f, err)
 		}
 		// A later file would replace an earlier one of the same name, and the
@@ -76,6 +76,67 @@ func shippedDefinitions(t *testing.T) map[string]*cozyv1alpha1.ApplicationDefini
 		out[def.Name] = def
 	}
 	return out
+}
+
+// singleDocument returns the one YAML document raw holds. Helm renders every
+// document of the file, while a strict decode reads only the first, so a
+// second one would go unchecked. A document holding only comments counts as
+// none.
+func singleDocument(raw []byte) ([]byte, error) {
+	reader := utilyaml.NewYAMLReader(bufio.NewReader(bytes.NewReader(raw)))
+	var found []byte
+	for {
+		doc, err := reader.Read()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			return nil, err
+		}
+		if !hasContent(doc) {
+			continue
+		}
+		if found != nil {
+			return nil, fmt.Errorf("holds more than one YAML document")
+		}
+		found = doc
+	}
+	if found == nil {
+		return nil, fmt.Errorf("holds no YAML document")
+	}
+	return found, nil
+}
+
+func hasContent(doc []byte) bool {
+	for _, line := range strings.Split(string(doc), "\n") {
+		line = strings.TrimSpace(line)
+		if line != "" && line != "---" && !strings.HasPrefix(line, "#") {
+			return true
+		}
+	}
+	return false
+}
+
+func TestSingleDocument(t *testing.T) {
+	def := "kind: ApplicationDefinition\nmetadata:\n  name: x\n"
+	for name, tc := range map[string]struct {
+		raw string
+		ok  bool
+	}{
+		"bare":                           {def, true},
+		"leading marker":                 {"---\n" + def, true},
+		"comment before the marker":      {"# owned by the chart\n---\n" + def, true},
+		"trailing empty document":        {def + "---\n", true},
+		"trailing comment-only document": {def + "---\n# nothing here\n", true},
+		"second document":                {def + "---\n" + def, false},
+		"empty":                          {"# nothing\n", false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := singleDocument([]byte(tc.raw)); (err == nil) != tc.ok {
+				t.Fatalf("got %v, want ok=%v", err, tc.ok)
+			}
+		})
+	}
 }
 
 // presetRow matches one row of the dict literals in _resourcepresets.tpl;
@@ -238,6 +299,13 @@ func TestShippedDeclarations(t *testing.T) {
 			kind: "vm-instance", name: "null cpu and sockets are absent",
 			values: `{"instanceType": "u1.small", "resources": {"cpu": null, "sockets": null}}`,
 			want:   rl("cpu", "1", "memory", "2Gi"),
+		},
+		{
+			// Helm deletes a nulled key, chart default included, so only the
+			// resources block can size this VM.
+			kind: "vm-instance", name: "null instance type beside complete resources",
+			values: `{"instanceType": null, "resources": {"cpu": 2, "sockets": 1, "memory": "1Gi"}}`,
+			want:   rl("cpu", "2", "memory", "1Gi"),
 		},
 		{
 			kind: "vm-instance", name: "external",
@@ -420,6 +488,9 @@ func TestShippedDeclarationsFailClosed(t *testing.T) {
 	cases := []struct {
 		kind, name, values string
 		notFound           bool
+		// reason, when set, must appear in the error, for a case that more
+		// than one rule would refuse.
+		reason string
 	}{
 		{kind: "vm-instance", name: "unknown instance type", values: `{"instanceType": "u9.huge"}`, notFound: true},
 		{kind: "vm-instance", name: "no sizing at all", values: `{"instanceType": ""}`, notFound: true},
@@ -436,7 +507,8 @@ func TestShippedDeclarationsFailClosed(t *testing.T) {
 		{kind: "vm-instance", name: "cpu and sockets without memory", values: `{"instanceType": "u1.small", "resources": {"cpu": 2, "sockets": 1}}`},
 		{kind: "vm-instance", name: "zero memory", values: `{"resources": {"cpu": 2, "sockets": 1, "memory": 0}}`},
 		{kind: "vm-instance", name: "memory below 1M", values: `{"resources": {"cpu": 2, "sockets": 1, "memory": "999k"}}`},
-		{kind: "vm-instance", name: "memory below 1M beside an instance type", values: `{"instanceType": "u1.small", "resources": {"memory": "512k"}}`},
+		{kind: "vm-instance", name: "memory below 1M beside an instance type", values: `{"instanceType": "u1.small", "resources": {"memory": "512k"}}`, reason: "resources.memory at least 1M"},
+		{kind: "vm-instance", name: "null instance type without resources", values: `{"instanceType": null}`},
 		{kind: "vm-disk", name: "unparseable size", values: `{"storage": "lots"}`},
 		{kind: "kubernetes", name: "unknown preset", values: `{"controlPlane": {"apiServer": {"resourcesPreset": "x9.huge"}}}`, notFound: true},
 		{kind: "kubernetes-nodes", name: "unknown instance type", values: `{"instanceType": "u9.huge"}`, notFound: true},
@@ -445,6 +517,9 @@ func TestShippedDeclarationsFailClosed(t *testing.T) {
 		{kind: "kubernetes-nodes", name: "millicore cpu on kubevirt", values: `{"maxReplicas": 3, "resources": {"cpu": "500m", "memory": "4Gi"}}`},
 		{kind: "kubernetes-nodes", name: "quoted zero cpu on kubevirt", values: `{"maxReplicas": 3, "resources": {"cpu": "0", "memory": "4Gi"}}`},
 		{kind: "kubernetes-nodes", name: "fractional cpu on kubevirt", values: `{"maxReplicas": 3, "resources": {"cpu": "1.5", "memory": "4Gi"}}`},
+		{kind: "kubernetes-nodes", name: "quoted zero memory without cpu", values: `{"maxReplicas": 3, "resources": {"memory": "0"}}`, reason: "cpu and memory together"},
+		{kind: "kubernetes-nodes", name: "proxmox without resources", values: `{"substrate": "proxmox"}`, reason: "substrate proxmox requires"},
+		{kind: "kubernetes-nodes", name: "proxmox with only cpu", values: `{"substrate": "proxmox", "resources": {"cpu": 4}}`, reason: "substrate proxmox requires"},
 		{kind: "kubernetes-nodes", name: "memory without cpu", values: `{"maxReplicas": 3, "resources": {"cpu": 0, "memory": "4Gi"}}`},
 	}
 	for _, tc := range cases {
@@ -455,6 +530,9 @@ func TestShippedDeclarationsFailClosed(t *testing.T) {
 			}
 			if tc.notFound && !errors.Is(err, ErrNotFound) {
 				t.Fatalf("expected ErrNotFound, got %v", err)
+			}
+			if tc.reason != "" && !strings.Contains(err.Error(), tc.reason) {
+				t.Fatalf("expected an error carrying %q, got %v", tc.reason, err)
 			}
 		})
 	}
