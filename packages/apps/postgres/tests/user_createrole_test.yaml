@@ -233,3 +233,31 @@ tests:
       - matchRegex:
           path: stringData["init.sh"]
           pattern: "SELECT 'ALTER ROLE \"app\" RESET createrole_self_grant;'\\nWHERE EXISTS \\(SELECT FROM pg_catalog.pg_roles WHERE rolname = 'app'\\)\\\\gexec"
+
+  - it: "fails the hook when a declared createRole user is still absent after the wait"
+    set:
+      version: v18
+      users:
+        migrator:
+          createRole: true
+    template: templates/init-script.yaml
+    documentSelector:
+      path: metadata.name
+      value: pg-test-init-script
+    asserts:
+      - matchRegex:
+          path: stringData["init.sh"]
+          pattern: "(?s)if \\[ -n \"\\$missing\" \\]; then\\n.*createRole users still absent after the wait.*\\n.*exit 1"
+  - it: "does not fail the wait when no user holds createRole"
+    set:
+      version: v18
+      users:
+        app: {}
+    template: templates/init-script.yaml
+    documentSelector:
+      path: metadata.name
+      value: pg-test-init-script
+    asserts:
+      - notMatchRegex:
+          path: stringData["init.sh"]
+          pattern: "createRole users still absent"
