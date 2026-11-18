@@ -17,7 +17,6 @@ limitations under the License.
 package reservation
 
 import (
-	"bufio"
 	"bytes"
 	"errors"
 	"fmt"
@@ -28,8 +27,8 @@ import (
 	"strings"
 	"testing"
 
+	yamlv3 "go.yaml.in/yaml/v3"
 	"k8s.io/apimachinery/pkg/api/resource"
-	utilyaml "k8s.io/apimachinery/pkg/util/yaml"
 	"sigs.k8s.io/yaml"
 
 	cozyv1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
@@ -78,43 +77,36 @@ func shippedDefinitions(t *testing.T) map[string]*cozyv1alpha1.ApplicationDefini
 	return out
 }
 
-// singleDocument returns the one YAML document raw holds. Helm renders every
-// document of the file, while a strict decode reads only the first, so a
-// second one would go unchecked. A document holding only comments counts as
-// none.
+// singleDocument checks that raw holds exactly one YAML document and returns
+// it. Helm renders every document of the file, while a strict decode reads
+// only the first, so a second one would go unchecked. Documents are counted
+// by a YAML parser, so any line ending and a comment before the first
+// marker are read as YAML reads them, and a document holding only comments
+// counts as none.
 func singleDocument(raw []byte) ([]byte, error) {
-	reader := utilyaml.NewYAMLReader(bufio.NewReader(bytes.NewReader(raw)))
-	var found []byte
+	dec := yamlv3.NewDecoder(bytes.NewReader(raw))
+	count := 0
 	for {
-		doc, err := reader.Read()
+		var node yamlv3.Node
+		err := dec.Decode(&node)
 		if errors.Is(err, io.EOF) {
 			break
 		}
 		if err != nil {
 			return nil, err
 		}
-		if !hasContent(doc) {
+		if len(node.Content) == 0 || (node.Content[0].Kind == yamlv3.ScalarNode && node.Content[0].Tag == "!!null") {
 			continue
 		}
-		if found != nil {
-			return nil, fmt.Errorf("holds more than one YAML document")
-		}
-		found = doc
+		count++
 	}
-	if found == nil {
+	switch count {
+	case 0:
 		return nil, fmt.Errorf("holds no YAML document")
+	case 1:
+		return raw, nil
 	}
-	return found, nil
-}
-
-func hasContent(doc []byte) bool {
-	for _, line := range strings.Split(string(doc), "\n") {
-		line = strings.TrimSpace(line)
-		if line != "" && line != "---" && !strings.HasPrefix(line, "#") {
-			return true
-		}
-	}
-	return false
+	return nil, fmt.Errorf("holds %d YAML documents, expected one", count)
 }
 
 func TestSingleDocument(t *testing.T) {
@@ -123,13 +115,15 @@ func TestSingleDocument(t *testing.T) {
 		raw string
 		ok  bool
 	}{
-		"bare":                           {def, true},
-		"leading marker":                 {"---\n" + def, true},
-		"comment before the marker":      {"# owned by the chart\n---\n" + def, true},
-		"trailing empty document":        {def + "---\n", true},
-		"trailing comment-only document": {def + "---\n# nothing here\n", true},
-		"second document":                {def + "---\n" + def, false},
-		"empty":                          {"# nothing\n", false},
+		"bare":                             {def, true},
+		"leading marker":                   {"---\n" + def, true},
+		"comment before the marker":        {"# owned by the chart\n---\n" + def, true},
+		"trailing empty document":          {def + "---\n", true},
+		"trailing comment-only document":   {def + "---\n# nothing here\n", true},
+		"second document":                  {def + "---\n" + def, false},
+		"empty":                            {"# nothing\n", false},
+		"second document, CR line endings": {strings.ReplaceAll(def+"---\n"+def, "\n", "\r"), false},
+		"single document, CR line endings": {strings.ReplaceAll(def, "\n", "\r"), true},
 	} {
 		t.Run(name, func(t *testing.T) {
 			if _, err := singleDocument([]byte(tc.raw)); (err == nil) != tc.ok {
