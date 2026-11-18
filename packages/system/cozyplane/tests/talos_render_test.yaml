@@ -5,9 +5,9 @@ suite: cozyplane CNI renders with the Talos overlay
 # lllamnyp/cozyplane, so keep assertions to the contract the platform relies
 # on, not to chart internals.
 templates:
-  - templates/agent.yaml
-  - templates/controller.yaml
-  - templates/crds.yaml
+  - charts/cozyplane/templates/agent.yaml
+  - charts/cozyplane/templates/controller.yaml
+  - charts/cozyplane/templates/crds.yaml
 release:
   name: cozyplane
   namespace: cozy-cozyplane
@@ -19,7 +19,7 @@ tests:
   # against a real endpoint. On Talos that is KubePrism on localhost:7445;
   # without these env vars the agent deadlocks against the unserved VIP.
   - it: dials KubePrism instead of the unserved ClusterIP
-    templates: [templates/agent.yaml]
+    templates: [charts/cozyplane/templates/agent.yaml]
     documentSelector:
       path: kind
       value: DaemonSet
@@ -38,7 +38,7 @@ tests:
   # 00- sorts before any co-installed CNI's conflist (Cilium ships 05-), so
   # the kubelet keeps cozyplane as the primary CNI.
   - it: writes the primary conflist under the 00- prefix
-    templates: [templates/agent.yaml]
+    templates: [charts/cozyplane/templates/agent.yaml]
     documentSelector:
       path: kind
       value: DaemonSet
@@ -48,7 +48,7 @@ tests:
           content: "--cni-conf-name=00-cozyplane.conflist"
 
   - it: renders the controller
-    templates: [templates/controller.yaml]
+    templates: [charts/cozyplane/templates/controller.yaml]
     documentSelector:
       path: kind
       value: Deployment
@@ -60,7 +60,7 @@ tests:
   # served by the aggregated apiserver alone, and a CRD for them would break
   # the group's OpenAPI (docs/api-groups.md upstream).
   - it: ships only local.sdn.cozystack.io CRDs
-    templates: [templates/crds.yaml]
+    templates: [charts/cozyplane/templates/crds.yaml]
     asserts:
       - matchRegex:
           path: spec.group

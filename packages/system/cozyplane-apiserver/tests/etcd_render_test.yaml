@@ -5,14 +5,14 @@ suite: cozyplane-apiserver etcd wiring
 # operator's Service — never per-pod endpoints, which the operator names
 # randomly (getting that wrong looks exactly like a dead etcd).
 templates:
-  - templates/etcd-cluster.yaml
-  - templates/apiserver.yaml
+  - charts/cozyplane-apiserver/templates/etcd-cluster.yaml
+  - charts/cozyplane-apiserver/templates/apiserver.yaml
 release:
   name: cozyplane-apiserver
   namespace: cozy-cozyplane
 tests:
   - it: renders a PVC-backed v1alpha2 EtcdCluster by default
-    templates: [templates/etcd-cluster.yaml]
+    templates: [charts/cozyplane-apiserver/templates/etcd-cluster.yaml]
     documentSelector:
       path: kind
       value: EtcdCluster
@@ -23,9 +23,11 @@ tests:
       - equal:
           path: spec.storage.medium
           value: ""
+      # The wrapper's class: the EtcdCluster field is immutable, so the class
+      # must be the one a fresh install can bind.
       - equal:
           path: spec.storage.storageClassName
-          value: replicated
+          value: local
       # certManager-mode TLS: exactly one of certManager/secretRef per surface
       # (a CRD CEL rule); the platform supplies the issuers.
       - exists:
@@ -38,11 +40,12 @@ tests:
   # tmpfs is the no-storage-layer escape hatch; spec.storage.medium is
   # immutable post-create, so this must come out right the first time.
   - it: renders a memory-backed member when persistence is off
-    templates: [templates/etcd-cluster.yaml]
+    templates: [charts/cozyplane-apiserver/templates/etcd-cluster.yaml]
     set:
-      etcd:
-        operator:
-          persistent: false
+      cozyplane-apiserver:
+        etcd:
+          operator:
+            persistent: false
     documentSelector:
       path: kind
       value: EtcdCluster
@@ -52,7 +55,7 @@ tests:
           value: Memory
 
   - it: dials the operator's etcd Service, not per-pod endpoints
-    templates: [templates/apiserver.yaml]
+    templates: [charts/cozyplane-apiserver/templates/apiserver.yaml]
     documentSelector:
       path: kind
       value: Deployment
@@ -63,10 +66,21 @@ tests:
 
   - it: falls back to the built-in single-pod etcd when the operator is off
     set:
-      etcd:
-        operator:
-          enabled: false
+      cozyplane-apiserver:
+        etcd:
+          operator:
+            enabled: false
     asserts:
       - hasDocuments:
           count: 0
-        template: templates/etcd-cluster.yaml
+        template: charts/cozyplane-apiserver/templates/etcd-cluster.yaml
+
+  - it: runs two apiserver replicas
+    templates: [charts/cozyplane-apiserver/templates/apiserver.yaml]
+    documentSelector:
+      path: kind
+      value: Deployment
+    asserts:
+      - equal:
+          path: spec.replicas
+          value: 2

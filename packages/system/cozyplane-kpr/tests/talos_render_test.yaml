@@ -3,7 +3,7 @@ suite: cozyplane-kpr renders with the Talos overlay
 # platform relies on (the bootstrap endpoint, the node identity, the DSR
 # default), not chart internals.
 templates:
-  - templates/daemonset.yaml
+  - charts/cozyplane-kpr/templates/daemonset.yaml
 release:
   name: cozyplane-kpr
   namespace: cozy-cozyplane

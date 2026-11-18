@@ -4,24 +4,16 @@ export NAMESPACE=cozy-cozyplane
 include ../../../hack/common-envs.mk
 include ../../../hack/package.mk
 
-# Vendored from github.com/lllamnyp/cozyplane (chart/cozyplane-apiserver),
-# adapted for Cozystack's etcd-operator (etcd-operator.cozystack.io/v1alpha2,
-# memory-backed). The image is built and published from that repo; there is no
-# image build target here.
+# The lllamnyp/cozyplane ref charts/cozyplane-apiserver is vendored from, verbatim. Keep the
+# three cozyplane packages on the same ref; Cozystack's settings live in this
+# wrapper, never in the vendored chart.
+COZYPLANE_REF=a0f32e272640c6ac99d863622570bdf9677bf7ab
 
 test:
-	helm lint .
 	helm unittest .
 
-# The vendoring ref in lllamnyp/cozyplane (a release tag once upstream cuts
-# them; keep the three cozyplane packages on the same ref). Makefile and
-# tests/ are Cozystack-side and survive the vendor, and so does the version
-# stanza below: Cozystack owns the chart version, upstream keeps 0.0.0.
-COZYPLANE_REF=a0f32e272640c6ac99d863622570bdf9677bf7ab
-CHART_VERSION=0.0.1
-
 update:
-	find . -mindepth 1 -maxdepth 1 ! -name Makefile ! -name tests -exec rm -rf {} +
-	curl -sSL https://github.com/lllamnyp/cozyplane/archive/$(COZYPLANE_REF).tar.gz | \
-	tar -xzf - --strip-components=3 cozyplane-$(COZYPLANE_REF)/chart/cozyplane-apiserver
-	sed -i -e '/# Unused as a release coordinate/,/^version: 0.0.0/c\# Placeholder; the real version is stamped by the build/release pipeline.\nversion: $(CHART_VERSION)' Chart.yaml
+	tmp=$$(mktemp -d) && \
+	curl -fsSL https://github.com/lllamnyp/cozyplane/archive/$(COZYPLANE_REF).tar.gz | \
+	  tar -xzf - -C "$$tmp" --strip-components=3 cozyplane-$(COZYPLANE_REF)/chart/cozyplane-apiserver && \
+	rm -rf charts/cozyplane-apiserver && mkdir -p charts && mv "$$tmp" charts/cozyplane-apiserver
