@@ -73,6 +73,7 @@ alerta:
       repeatInterval: ""
       alertnames: []
       severities: []
+      template: ""
 grafana:
   db:
     size: 10Gi
