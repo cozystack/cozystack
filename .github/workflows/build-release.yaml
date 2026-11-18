@@ -33,21 +33,25 @@ on:
     # those would be pure waste, since their images are built by tags.yaml.
     branches: ['release-[0-9]+.[0-9]+']
     # Mirrors hack/code-changed.sh; hack/code-changed_test.bats keeps them equal.
-    paths-ignore:
-      - 'docs/**'
-      - 'cmd/backport-batch/**'
-      - 'cmd/api-gate/**'
-      - 'img/**'
-      - '.gemini/**'
-      - '.github/ISSUE_TEMPLATE/**'
-      - '.github/CODEOWNERS'
-      - '.github/PULL_REQUEST_TEMPLATE.md'
-      - '.github/labels.yml'
-      - '.github/renovate.json'
-      - '.coderabbit.yaml'
-      - 'security-insights.yml'
-      - 'LICENSE'
-      - '**.md'
+    # `paths`, not `paths-ignore`: Markdown under packages/ is code (Go tests
+    # read chart READMEs), and only `paths` documents re-including after `!`.
+    paths:
+      - '**'
+      - '!docs/**'
+      - '!cmd/backport-batch/**'
+      - '!cmd/api-gate/**'
+      - '!img/**'
+      - '!.gemini/**'
+      - '!.github/ISSUE_TEMPLATE/**'
+      - '!.github/CODEOWNERS'
+      - '!.github/PULL_REQUEST_TEMPLATE.md'
+      - '!.github/labels.yml'
+      - '!.github/renovate.json'
+      - '!.coderabbit.yaml'
+      - '!security-insights.yml'
+      - '!LICENSE'
+      - '!**.md'
+      - 'packages/**.md'
 
   # Run against a line on request. The push trigger above cannot cover the moment
   # a line is BORN: cut-prerelease.yaml creates release-X.Y at a commit that is
