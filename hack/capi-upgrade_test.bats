@@ -200,12 +200,68 @@ accepted_patches() {
   [ "$(accepted_patches)" = '[]' ]
 }
 
-@test "a kubeadm provider that never finished installing is left to the final manifests" {
+@test "a kubeadm installation completing during the core upgrade is staged to the bridge" {
+  fixture '.bootstrapAfterCore = .providers.kubeadm | del(.providers.kubeadm.status.installedVersion)'
+  run bash "$UPGRADE_SCRIPT"
+  [ "$status" -eq 0 ]
+  [ "$(accepted_patches)" = '[{"name":"cluster-api","version":"v1.13.8-core"},{"name":"kubeadm","version":"v1.13.8-bootstrap"}]' ]
+  [ "$(jq --raw-output '.providers.kubeadm.status.installedVersion' "$CAPI_TEST_STATE")" = v1.13.8-bootstrap ]
+}
+
+@test "an unfinished kubeadm installation at an old requested version is staged to the bridge" {
   fixture 'del(.providers.kubeadm.status.installedVersion)'
   run bash "$UPGRADE_SCRIPT"
   [ "$status" -eq 0 ]
+  [ "$(accepted_patches)" = '[{"name":"cluster-api","version":"v1.13.8-core"},{"name":"kubeadm","version":"v1.13.8-bootstrap"}]' ]
+  [ "$(jq --raw-output '.providers.kubeadm.status.installedVersion' "$CAPI_TEST_STATE")" = v1.13.8-bootstrap ]
+}
+
+@test "an unfinished kubeadm target request does not wait for the final bootstrap chart" {
+  fixture 'del(.providers.kubeadm.status.installedVersion) | .providers.kubeadm.spec.version = "v1.14.4-bootstrap" | .providers.kubeadm.spec.fetchConfig.selector.matchLabels = {"provider.cluster.x-k8s.io/version": "v1.14.4-bootstrap"}'
+  run bash "$UPGRADE_SCRIPT"
+  [ "$status" -eq 0 ]
   [ "$(accepted_patches)" = '[{"name":"cluster-api","version":"v1.13.8-core"}]' ]
-  [ "$(jq --raw-output '.providers.kubeadm.spec.version' "$CAPI_TEST_STATE")" = v1.10.1-bootstrap ]
+  jq --exit-status '.providers.kubeadm | .spec.version == "v1.14.4-bootstrap" and (.status | has("installedVersion") | not)' "$CAPI_TEST_STATE"
+}
+
+@test "an unfinished kubeadm request within the upgrade window is left to the final manifests" {
+  fixture 'del(.providers.kubeadm.status.installedVersion) | .providers.kubeadm.spec.version = "v1.13.7-bootstrap"'
+  run bash "$UPGRADE_SCRIPT"
+  [ "$status" -eq 0 ]
+  [ "$(accepted_patches)" = '[{"name":"cluster-api","version":"v1.13.8-core"}]' ]
+  jq --exit-status '.providers.kubeadm | .spec.version == "v1.13.7-bootstrap" and (.status | has("installedVersion") | not)' "$CAPI_TEST_STATE"
+}
+
+@test "an unfinished kubeadm installation with a malformed request is rejected" {
+  fixture 'del(.providers.kubeadm.status.installedVersion) | .providers.kubeadm.spec.version = "invalid"'
+  run bash "$UPGRADE_SCRIPT"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"invalid requested version: invalid"* ]]
+  [ "$(accepted_patches)" = '[]' ]
+}
+
+@test "an unfinished kubeadm installation with no requested version is rejected" {
+  fixture 'del(.providers.kubeadm.status.installedVersion, .providers.kubeadm.spec.version)'
+  run bash "$UPGRADE_SCRIPT"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"invalid requested version:"* ]]
+  [ "$(accepted_patches)" = '[]' ]
+}
+
+@test "a kubeadm replacement during the core upgrade is not adopted" {
+  fixture '.bootstrapAfterCore = (.providers.kubeadm | .metadata.uid = "replacement") | del(.providers.kubeadm.status.installedVersion)'
+  run bash "$UPGRADE_SCRIPT"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"kubeadm was replaced during the upgrade"* ]]
+  [ "$(accepted_patches)" = '[{"name":"cluster-api","version":"v1.13.8-core"}]' ]
+}
+
+@test "a kubeadm version installed during the core upgrade is revalidated" {
+  fixture '.bootstrapAfterCore = (.providers.kubeadm | .status.installedVersion = "v1.14.5-bootstrap") | del(.providers.kubeadm.status.installedVersion)'
+  run bash "$UPGRADE_SCRIPT"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"bootstrap provider downgrades are not supported"* ]]
+  [ "$(accepted_patches)" = '[{"name":"cluster-api","version":"v1.13.8-core"}]' ]
 }
 
 @test "an installed kubeadm without an installed core provider is refused" {

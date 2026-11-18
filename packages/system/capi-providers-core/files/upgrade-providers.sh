@@ -39,31 +39,31 @@ target_minor="$(minor_version "$TARGET_VERSION" target)"
 
 core="$(kube get coreproviders.operator.cluster.x-k8s.io cluster-api --ignore-not-found --output json)"
 bootstrap="$(kube get bootstrapproviders.operator.cluster.x-k8s.io kubeadm --ignore-not-found --output json)"
-# cluster-api-operator installs a provider with no installed version from
-# scratch at whatever version it requests, so it needs no intermediate step.
 installed_version() {
   jq --raw-output '.status.installedVersion // empty' <<< "$1"
 }
-if [[ -n "$bootstrap" && -z "$(installed_version "$bootstrap")" ]]; then
-  bootstrap=""
-fi
 if [[ -z "$core" || -z "$(installed_version "$core")" ]]; then
-  [[ -z "$bootstrap" ]] || fail "kubeadm is installed without an installed core provider"
+  [[ -z "$bootstrap" || -z "$(installed_version "$bootstrap")" ]] || fail "kubeadm is installed without an installed core provider"
   printf 'No installed providers need an intermediate upgrade.\n'
   exit 0
 fi
 
+upgrade_version() {
+  # An unfinished install can complete at its old requested version while core upgrades.
+  jq --raw-output '(.status.installedVersion | select(. != null and . != "")) // .spec.version // empty' <<< "$1"
+}
+
 validate_provider() {
   local object="$1" suffix="$2" installed requested uid minor requested_minor newer
-  installed="$(installed_version "$object")"
+  requested="$(jq --raw-output '.spec.version // empty' <<< "$object")"
+  requested_minor="$(minor_version "$requested" requested)"
+  installed="$(upgrade_version "$object")"
   minor="$(minor_version "$installed" installed)"
   newer="$(jq --null-input --arg installed "$installed" --arg target "$TARGET_VERSION" '
     def base: ltrimstr("v") | split("-")[0] | split("+")[0] | split(".") | map(tonumber);
     ($installed | base) > ($target | base)')"
   [[ "$newer" == false ]] || fail "$suffix provider downgrades are not supported"
   ((bridge_minor - minor <= 3)) || fail "$suffix is outside the intermediate upgrade window"
-  requested="$(jq --raw-output '.spec.version // empty' <<< "$object")"
-  requested_minor="$(minor_version "$requested" requested)"
   uid="$(jq --raw-output '.metadata.uid // empty' <<< "$object")"
   [[ -n "$uid" ]] || fail "$suffix provider UID is missing"
   if [[ "$requested" != "$installed" && "$requested" != "$BRIDGE_VERSION-$suffix" && "$requested" != "$TARGET_VERSION-$suffix" ]]; then
@@ -78,7 +78,7 @@ core_minor="$(minor_version "$(jq --raw-output '.status.installedVersion' <<< "$
 bootstrap_minor="$target_minor"
 if [[ -n "$bootstrap" ]]; then
   validate_provider "$bootstrap" bootstrap
-  bootstrap_minor="$(minor_version "$(jq --raw-output '.status.installedVersion' <<< "$bootstrap")" installed)"
+  bootstrap_minor="$(minor_version "$(upgrade_version "$bootstrap")" installed)"
 fi
 bridge_selector_needs_repair() {
   jq --exit-status --arg version "$BRIDGE_VERSION-$2" '
@@ -129,7 +129,7 @@ wait_provider() {
 stage_provider() {
   local resource="$1" name="$2" deployment="$3" suffix="$4" object="$5"
   local installed requested uid minor requested_minor expected patch
-  installed="$(jq --raw-output '.status.installedVersion' <<< "$object")"
+  installed="$(upgrade_version "$object")"
   requested="$(jq --raw-output '.spec.version' <<< "$object")"
   uid="$(jq --raw-output '.metadata.uid' <<< "$object")"
   minor="$(minor_version "$installed" installed)"
@@ -165,7 +165,17 @@ stage_provider() {
 }
 
 stage_provider coreproviders.operator.cluster.x-k8s.io cluster-api capi-controller-manager core "$core"
+bootstrap_uid="$(jq --raw-output '.metadata.uid // empty' <<< "$bootstrap")"
+bootstrap="$(kube get bootstrapproviders.operator.cluster.x-k8s.io kubeadm --ignore-not-found --output json)"
+if [[ -n "$bootstrap_uid" ]]; then
+  [[ "$(jq --raw-output '.metadata.uid // empty' <<< "$bootstrap")" == "$bootstrap_uid" ]] || fail "kubeadm was replaced during the upgrade"
+fi
 if [[ -n "$bootstrap" ]]; then
-  stage_provider bootstrapproviders.operator.cluster.x-k8s.io kubeadm capi-kubeadm-bootstrap-controller-manager bootstrap "$bootstrap"
+  validate_provider "$bootstrap" bootstrap
+  bootstrap_minor="$(minor_version "$(upgrade_version "$bootstrap")" requested)"
+  # Unfinished supported requests may need repositories from the dependent bootstrap chart.
+  if [[ -n "$(installed_version "$bootstrap")" ]] || ((target_minor - bootstrap_minor > 3)); then
+    stage_provider bootstrapproviders.operator.cluster.x-k8s.io kubeadm capi-kubeadm-bootstrap-controller-manager bootstrap "$bootstrap"
+  fi
 fi
 printf 'Intermediate provider upgrade completed.\n'

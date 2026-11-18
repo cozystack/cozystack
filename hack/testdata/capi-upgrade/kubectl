@@ -92,6 +92,8 @@ if verb == "get":
             obj["status"]["readyReplicas"] = 1
             obj["status"]["availableReplicas"] = 1
             del state["rolloutReads"][name]
+    if name == "capi-controller-manager" and "bootstrapAfterCore" in state and obj["status"]["readyReplicas"] == 1:
+        state["providers"]["kubeadm"] = state.pop("bootstrapAfterCore")
     save()
     print(json.dumps(obj))
 elif verb == "patch":
