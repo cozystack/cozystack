@@ -32,6 +32,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -10058,7 +10059,7 @@ func TestReconcile_FatalRouteStatusWriteFailsTheReconcile(t *testing.T) {
 		WithInterceptorFuncs(interceptor.Funcs{
 			SubResourceUpdate: func(ctx context.Context, cl client.Client, subResourceName string, obj client.Object, opts ...client.SubResourceUpdateOption) error {
 				if route, isRoute := obj.(*gatewayv1.HTTPRoute); isRoute && route.Name == "stuck" {
-					return apierrors.NewInvalid(gatewayv1.SchemeGroupVersion.WithKind("HTTPRoute").GroupKind(), route.Name, nil)
+					return apierrors.NewInvalid(schema.GroupKind{Group: gatewayv1.GroupName, Kind: "HTTPRoute"}, route.Name, nil)
 				}
 				return cl.SubResource(subResourceName).Update(ctx, obj, opts...)
 			},
