@@ -24,8 +24,12 @@
 package fluxcontract
 
 import (
+	"bufio"
+	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -34,13 +38,19 @@ import (
 	"testing"
 
 	helmv2 "github.com/fluxcd/helm-controller/api/v2"
+	utilyaml "k8s.io/apimachinery/pkg/util/yaml"
 	"k8s.io/client-go/util/jsonpath"
+	"sigs.k8s.io/yaml"
 )
 
 const (
 	// The shell library that owns the expression, and the script that runs it.
 	guardLibrary = "../../hack/e2e-chainsaw/_lib/remediation-guard.sh"
 	guardCaller  = "../../hack/e2e-chainsaw/_lib/run-kubernetes.sh"
+
+	// The Chainsaw suites, one directory each, which may call the guard from a
+	// script step.
+	chainsawSuites = "../../hack/e2e-chainsaw"
 
 	sharedName = "HELMRELEASE_HISTORY_JSONPATH"
 )
@@ -73,17 +83,21 @@ var nameFollowedByEquals = regexp.MustCompile(regexp.QuoteMeta(sharedName) + `=`
 // free, because this script mixes forms that behave identically. Each is a
 // case in the accept table below.
 //
-// The reach is one named caller and calls that pass a local. A second script
-// calling the guard, or this one passing a substitution written out in the
-// argument, is outside what this sees. Neither exists today, and the rule for
-// authors is prose rather than a pattern: docs/agents/e2e-testing.md tells them
-// to take the expression from the shared name.
+// The reach is one named caller, the Chainsaw suites, and calls that pass a
+// local. Any other script that reads history for the guard, or a caller passing
+// a substitution written out in the argument, is outside what this sees. Neither
+// exists today (the bats tests hand the guard literal input and read no
+// history), and the rule for authors is prose rather than a pattern:
+// docs/agents/e2e-testing.md tells them to take the expression from the shared
+// name.
 var guardConsumers = regexp.MustCompile(
 	`(?m)^[ \t]*(?:if[ \t]+)?(?:![ \t]*)?helmrelease_has_remediation_cycle[ \t]+"?\$\{?([A-Za-z_][A-Za-z0-9_]*)`)
 
 // sharedReadBy builds the read that fills one named local: a line-starting
 // assignment to that exact name, taking its value from a kubectl call that
-// passes the expansion of the shared name as its jsonpath.
+// passes the expansion of the shared name as its jsonpath. The call may go
+// through _cozy_guard_kubectl, the caller's bounded wrapper, which hands its
+// arguments to kubectl unchanged.
 //
 // The `$` is load-bearing rather than decorative. Matching the bare name would
 // accept `jsonpath=HELMRELEASE_HISTORY_JSONPATH`, which kubectl reads as a
@@ -93,9 +107,16 @@ var guardConsumers = regexp.MustCompile(
 // arriving with the pin green over it.
 //
 // The spelling of `-o` and the quoting of the substitution are left free, for
-// the reason above; each is a case in the accept table below, so that "free"
-// is enforced rather than announced. A spelling absent from that table is one
-// nobody checked, not one known to be rejected.
+// the reason above. So is a `timeout` bound in front of kubectl, which limits
+// how long the read may hang and not what it reads. Each is a case in the
+// accept table below, so that "free" is enforced rather than announced. The
+// bound is spelled out rather than admitted as any text before kubectl,
+// because `$(echo kubectl ...)` names the expansion without running it and
+// hands the guard the command line as text. Nor is it admitted in front of the
+// wrapper: timeout runs a program, the wrapper is a shell function, and that
+// read fails every time. The name ends at a blank, so a command that only
+// starts with either name is not taken for it. A spelling absent from that
+// table is one nobody checked, not one known to be rejected.
 //
 // A form this pattern does not cover reddens rather than passing: the caller
 // test fails with the pattern printed. So the list is a record of what was
@@ -126,7 +147,7 @@ var guardConsumers = regexp.MustCompile(
 // unterminated is how a later rewrite reopens the other one.
 func sharedReadBy(local string) *regexp.Regexp {
 	return regexp.MustCompile(`(?m)^[ \t]*` + regexp.QuoteMeta(local) +
-		`="?\$\(kubectl[^)]*jsonpath=[^)]*\$\{?` + sharedName + `\b`)
+		`="?\$\((?:(?:timeout[ \t]+(?:-k[ \t]+[0-9]+[smhd]?[ \t]+)?[0-9]+[smhd]?[ \t]+)?kubectl|_cozy_guard_kubectl)[ \t][^)]*jsonpath=[^)]*\$\{?` + sharedName + `\b`)
 }
 
 // localFollowedByEquals counts occurrences of one named local followed by an
@@ -371,7 +392,7 @@ func TestGuardExpressionReadsUpstreamHistoryStatuses(t *testing.T) {
 func TestGuardCallerReferencesTheSharedExpansion(t *testing.T) {
 	t.Run("the call", func(t *testing.T) {
 		for _, tc := range []struct{ spelling, line, local string }{
-			{"shipped form", `  if helmrelease_has_remediation_cycle "${history_statuses}"; then`, "history_statuses"},
+			{"in an if", `  if helmrelease_has_remediation_cycle "${history_statuses}"; then`, "history_statuses"},
 			{"negated", `  if ! helmrelease_has_remediation_cycle "${history_statuses}"; then`, "history_statuses"},
 			{"bare call", `  helmrelease_has_remediation_cycle "${hr_history}"`, "hr_history"},
 			{"braceless expansion", `  if helmrelease_has_remediation_cycle "$history_statuses"; then`, "history_statuses"},
@@ -404,6 +425,11 @@ func TestGuardCallerReferencesTheSharedExpansion(t *testing.T) {
 				{"another local carries the shared read", "history_statuses", `  example=$(kubectl get hr -o"jsonpath=${HELMRELEASE_HISTORY_JSONPATH}")`},
 				{"a longer name starting with the shared one", "history_statuses", `  history_statuses=$(kubectl get hr -o"jsonpath=$HELMRELEASE_HISTORY_JSONPATH_OLD")`},
 				{"the same, braced", "history_statuses", `  history_statuses=$(kubectl get hr -o"jsonpath=${HELMRELEASE_HISTORY_JSONPATH_OLD}")`},
+				{"kubectl only an argument", "history_statuses", `  history_statuses=$(echo kubectl get hr -o"jsonpath=${HELMRELEASE_HISTORY_JSONPATH}")`},
+				{"the same, behind a timeout", "history_statuses", `  history_statuses=$(timeout 30 echo kubectl get hr -o"jsonpath=${HELMRELEASE_HISTORY_JSONPATH}")`},
+				{"a timeout in front of the wrapper, which it cannot run", "_history", `  _history=$(timeout 30 _cozy_guard_kubectl get hr -o"jsonpath=${HELMRELEASE_HISTORY_JSONPATH}")`},
+				{"a command whose name only starts with kubectl", "history_statuses", `  history_statuses=$(kubectlx get hr -o"jsonpath=${HELMRELEASE_HISTORY_JSONPATH}")`},
+				{"a function whose name only starts with the wrapper's", "_history", `  _history=$(_cozy_guard_kubectl_v2 get hr -o"jsonpath=${HELMRELEASE_HISTORY_JSONPATH}")`},
 			} {
 				t.Run(tc.flaw, func(t *testing.T) {
 					if sharedReadBy(tc.local).MatchString(tc.line) {
@@ -418,11 +444,14 @@ func TestGuardCallerReferencesTheSharedExpansion(t *testing.T) {
 		// there would pin the pattern's narrowness as though it were the intent.
 		t.Run("accepts", func(t *testing.T) {
 			for _, tc := range []struct{ spelling, local, line string }{
-				{"shipped form", "history_statuses", `  history_statuses=$(kubectl get hr -o"jsonpath=${HELMRELEASE_HISTORY_JSONPATH}")`},
+				{"plain kubectl", "history_statuses", `  history_statuses=$(kubectl get hr -o"jsonpath=${HELMRELEASE_HISTORY_JSONPATH}")`},
 				{"quoted substitution", "history_statuses", `  history_statuses="$(kubectl get hr -ojsonpath="${HELMRELEASE_HISTORY_JSONPATH}")"`},
 				{"local renamed", "hr_history", `  hr_history=$(kubectl get hr -o"jsonpath=${HELMRELEASE_HISTORY_JSONPATH}")`},
 				{"spaced -o", "history_statuses", `  history_statuses=$(kubectl get hr -o jsonpath="${HELMRELEASE_HISTORY_JSONPATH}")`},
 				{"braceless expansion", "history_statuses", `  history_statuses=$(kubectl get hr -o"jsonpath=$HELMRELEASE_HISTORY_JSONPATH")`},
+				{"shipped form: through the bounded wrapper, continued", "_history", "  _history=$(_cozy_guard_kubectl get hr -n \"$_ns\" \"${_hr}\" \\\n    -o\"jsonpath=${HELMRELEASE_HISTORY_JSONPATH}\") || _read_rc=$?"},
+				{"bounded by timeout", "statuses", `  statuses=$(timeout 30 kubectl get hr -o jsonpath="$HELMRELEASE_HISTORY_JSONPATH")`},
+				{"bounded with a kill grace", "statuses", `  statuses=$(timeout -k 5 30s kubectl get hr -o jsonpath="$HELMRELEASE_HISTORY_JSONPATH")`},
 			} {
 				t.Run(tc.spelling, func(t *testing.T) {
 					if !sharedReadBy(tc.local).MatchString(tc.line) {
@@ -432,7 +461,7 @@ func TestGuardCallerReferencesTheSharedExpansion(t *testing.T) {
 			}
 		})
 
-		// The case the shared-read pattern cannot answer on its own: the shipped
+		// The case the shared-read pattern cannot answer on its own: a legitimate
 		// read, then a second one filling the same local with a literal the
 		// shell hands the guard. Matching a read says the file contains one;
 		// counting occurrences is what says the one it contains is the one that
@@ -442,7 +471,7 @@ func TestGuardCallerReferencesTheSharedExpansion(t *testing.T) {
 		// an anchored count sees none of them and reports the single occurrence
 		// it was going to report anyway.
 		t.Run("a second assignment is not hidden by the first", func(t *testing.T) {
-			const shipped = "  history_statuses=$(kubectl get hr -o\"jsonpath=${HELMRELEASE_HISTORY_JSONPATH}\")\n"
+			const first = "  history_statuses=$(kubectl get hr -o\"jsonpath=${HELMRELEASE_HISTORY_JSONPATH}\")\n"
 			for _, tc := range []struct{ spelling, second string }{
 				{"on its own line", "  history_statuses=$(kubectl get hr -o\"jsonpath={.statusz}\")\n"},
 				{"export prefix", "  export history_statuses=$(kubectl get hr -o\"jsonpath={.statusz}\")\n"},
@@ -450,9 +479,9 @@ func TestGuardCallerReferencesTheSharedExpansion(t *testing.T) {
 				{"after a semicolon", "  : ; history_statuses=$(kubectl get hr -o\"jsonpath={.statusz}\")\n"},
 			} {
 				t.Run(tc.spelling, func(t *testing.T) {
-					overwritten := []byte(shipped + tc.second)
+					overwritten := []byte(first + tc.second)
 					if !sharedReadBy("history_statuses").Match(overwritten) {
-						t.Fatal("the shipped form stopped matching, so this case no longer shows what it was written for")
+						t.Fatal("the legitimate first read stopped matching, so this case no longer shows what it was written for")
 					}
 					if n := len(localFollowedByEquals("history_statuses").FindAll(overwritten, -1)); n != 2 {
 						t.Errorf("counted %d occurrences of the consumed local followed by =, want 2", n)
@@ -471,31 +500,230 @@ func TestGuardCallerReferencesTheSharedExpansion(t *testing.T) {
 
 	src := readGuardFile(t, guardCaller)
 
-	consumers := guardConsumers.FindAllSubmatch(src, -1)
+	consumers := guardConsumers.FindAllSubmatchIndex(src, -1)
 	if len(consumers) == 0 {
 		t.Fatalf("%s never calls helmrelease_has_remediation_cycle with an expanded local, so there "+
 			"is no read for this pin to follow. Either the caller stopped running the guard, or it "+
 			"calls it in a shape %s cannot see.", guardCaller, guardConsumers)
 	}
 
+	assertConsumedLocalsTakeTheSharedRead(t, guardCaller, src, consumers)
+}
+
+func assertConsumedLocalsTakeTheSharedRead(t testing.TB, path string, src []byte, consumers [][]int) {
+	t.Helper()
 	for _, m := range consumers {
-		local := string(m[1])
+		local := string(src[m[2]:m[3]])
 		n := len(localFollowedByEquals(local).FindAll(src, -1))
 		if n != 1 {
 			t.Errorf("%s writes %s, the local it hands the guard, followed by = %d times; want "+
 				"exactly one. The count is of occurrences, so a comment mentioning one counts too; "+
 				"what it looks for is a second assignment, which the shell would take instead of "+
 				"the one this pin matched, putting an unpinned expression in front of the guard.",
-				guardCaller, local, n)
+				path, local, n)
 			continue
 		}
 		if !sharedReadBy(local).Match(src) {
 			t.Errorf("%s fills %s, the local it hands the guard, in a shape that does not take its "+
 				"expression from %s. The pattern is the exact form accepted: %s. Either the read "+
 				"stopped using the shared assignment, or it uses it in a shape the pattern cannot "+
-				"see.", guardCaller, local, sharedName, sharedReadBy(local))
+				"see.", path, local, sharedName, sharedReadBy(local))
+			continue
+		}
+		if !sharedReadPrecedes(src, m) {
+			t.Errorf("%s fills %s from %s only after handing it to the guard, so the guard runs "+
+				"on whatever the local held before the read.", path, local, sharedName)
 		}
 	}
+}
+
+// sharedReadPrecedes reports whether the shared read of the local consumed by
+// the guard call m starts before that call. m holds the call's offsets as
+// FindAllSubmatchIndex returns them, so the call is placed where it matched and
+// not wherever its text first appears, a comment included. Text order stands
+// in for run order, which holds for a read and a call in one straight-line
+// block, as in every caller this file reads today.
+func sharedReadPrecedes(src []byte, m []int) bool {
+	read := sharedReadBy(string(src[m[2]:m[3]])).FindIndex(src)
+	return read != nil && read[0] < m[0]
+}
+
+// A Chainsaw suite that sources the guard library from a script step is a
+// caller too, and one this file would otherwise never read: the pin above names
+// one script, so a suite writing the jsonpath out as a literal runs an
+// expression nothing here checked.
+//
+// Every suite is read rather than a named one, because the next suite to adopt
+// the guard is the likeliest place for a copied literal and naming suites here
+// would need the same edit that introduces it. A suite cannot assign the shared
+// name either: its script sources the library first, so its own assignment
+// lands afterwards and replaces the value the upstream test resolved.
+//
+// Both sets are asserted non-empty. A glob that stops matching, or suites that
+// all stop calling the guard, leave the loop with nothing to check, and that
+// reads exactly like a pass.
+func TestChainsawSuitesReadHistoryThroughTheSharedName(t *testing.T) {
+	var suites []string
+	for _, pattern := range []string{"chainsaw-test.yaml", "chainsaw-test.yml"} {
+		found, err := filepath.Glob(filepath.Join(chainsawSuites, "*", pattern))
+		if err != nil {
+			t.Fatalf("globbing the Chainsaw suites: %v", err)
+		}
+		suites = append(suites, found...)
+	}
+	if len(suites) == 0 {
+		t.Fatalf("no Chainsaw suites found under %s, so this test asserted nothing", chainsawSuites)
+	}
+
+	// Each script step runs in a shell of its own, so the read the guard sees is
+	// the one in its own step. Checked against the whole file, a read in one
+	// step would satisfy a call in another, and an unrelated assignment of the
+	// same local elsewhere would fail a correct one.
+	t.Run("a read in another step does not count", func(t *testing.T) {
+		steps := scriptSteps(t, "fixture", []byte(`spec:
+  steps:
+  - try:
+    - script:
+        content: |
+          statuses=$(kubectl get hr -o "jsonpath=${HELMRELEASE_HISTORY_JSONPATH}")
+--- # a separator may carry a comment
+spec:
+  steps:
+  - try:
+    - script:
+        content: |
+          helmrelease_has_remediation_cycle "$statuses"
+`))
+		if len(steps) != 2 {
+			t.Fatalf("split the fixture into %d script steps, want 2", len(steps))
+		}
+		rec := &errorRecorder{TB: t}
+		if n := checkSuiteSteps(rec, "fixture", steps); n != 1 {
+			t.Fatalf("counted %d guard callers in the fixture, want 1", n)
+		}
+		if len(rec.errs) == 0 {
+			t.Error("a guard call whose only read sits in another step passed the check")
+		}
+	})
+
+	// The read has to come before the call: one after it fills the local only
+	// once the guard has already run, on an empty or unset value.
+	t.Run("a read after the guard call does not count", func(t *testing.T) {
+		const read = "statuses=$(kubectl get hr -o \"jsonpath=${HELMRELEASE_HISTORY_JSONPATH}\")\n"
+		const call = "helmrelease_has_remediation_cycle \"$statuses\"\n"
+		for _, tc := range []struct {
+			name, step string
+			want       bool
+		}{
+			{"read first", read + call, true},
+			{"call first", call + read, false},
+			// The call's own text in a comment above the read is not the call.
+			{"call text in a comment first", "# then " + call + read + call, true},
+		} {
+			ms := guardConsumers.FindAllSubmatchIndex([]byte(tc.step), -1)
+			if len(ms) != 1 {
+				t.Fatalf("%s: found %d guard calls, want 1", tc.name, len(ms))
+			}
+			m := ms[0]
+			if got := sharedReadPrecedes([]byte(tc.step), m); got != tc.want {
+				t.Errorf("%s: sharedReadPrecedes = %v, want %v", tc.name, got, tc.want)
+			}
+			// The same step through the suite check, so the order test is
+			// one the check runs and not only a property of the helper.
+			rec := &errorRecorder{TB: t}
+			checkSuiteSteps(rec, "fixture", []string{tc.step})
+			if refused := len(rec.errs) > 0; refused == tc.want {
+				t.Errorf("%s: the suite check refused the step = %v, want %v: %v", tc.name, refused, !tc.want, rec.errs)
+			}
+		}
+	})
+
+	callers := 0
+	for _, path := range suites {
+		src := readGuardFile(t, path)
+		if n := len(nameFollowedByEquals.FindAll(src, -1)); n != 0 {
+			t.Errorf("%s writes %s followed by = %d times; only %s may assign it. A suite sources "+
+				"the library before its own lines run, so its assignment replaces the value the "+
+				"upstream test checked.", path, sharedName, n, guardLibrary)
+		}
+		callers += checkSuiteSteps(t, path, scriptSteps(t, path, src))
+	}
+	if callers == 0 {
+		t.Fatalf("no Chainsaw suite under %s calls helmrelease_has_remediation_cycle with an "+
+			"expanded local, so this test asserted nothing. If no suite runs the guard any more, "+
+			"this test goes with it.", chainsawSuites)
+	}
+}
+
+// The content of every script step in a Chainsaw file, wherever it sits: try,
+// catch, finally, or a nested operation.
+func scriptSteps(t testing.TB, path string, src []byte) []string {
+	t.Helper()
+	var steps []string
+	var walk func(any)
+	walk = func(node any) {
+		switch v := node.(type) {
+		case map[string]any:
+			if script, ok := v["script"].(map[string]any); ok {
+				if content, ok := script["content"].(string); ok {
+					steps = append(steps, content)
+				}
+			}
+			for _, child := range v {
+				walk(child)
+			}
+		case []any:
+			for _, child := range v {
+				walk(child)
+			}
+		}
+	}
+	// The reader splits on a separator line that carries a comment too, which a
+	// pattern for a bare `---` would leave inside one document, and Unmarshal
+	// reads only the first document it is given.
+	docs := utilyaml.NewYAMLReader(bufio.NewReader(bytes.NewReader(src)))
+	for {
+		doc, err := docs.Read()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			t.Fatalf("splitting %s into documents: %v", path, err)
+		}
+		var tree any
+		if err := yaml.Unmarshal(doc, &tree); err != nil {
+			t.Fatalf("parsing %s: %v", path, err)
+		}
+		walk(tree)
+	}
+	return steps
+}
+
+// checkSuiteSteps holds each script step that calls the guard to its own read,
+// since every step runs in a shell of its own, and returns how many did.
+func checkSuiteSteps(t testing.TB, path string, steps []string) int {
+	t.Helper()
+	callers := 0
+	for _, step := range steps {
+		consumers := guardConsumers.FindAllSubmatchIndex([]byte(step), -1)
+		if len(consumers) == 0 {
+			continue
+		}
+		callers++
+		assertConsumedLocalsTakeTheSharedRead(t, path, []byte(step), consumers)
+	}
+	return callers
+}
+
+// errorRecorder collects Errorf calls instead of failing, so a subtest can
+// assert that a check reports a fixture it must refuse.
+type errorRecorder struct {
+	testing.TB
+	errs []string
+}
+
+func (r *errorRecorder) Errorf(format string, args ...any) {
+	r.errs = append(r.errs, fmt.Sprintf(format, args...))
 }
 
 // No shell library but the one that owns the name assigns it. Sourcing the

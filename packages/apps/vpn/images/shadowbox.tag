@@ -1,0 +1,1 @@
+quay.io/outline/shadowbox:v1.12.3@sha256:545c6f7c7261bb30ae1dffe24a6fca5f8512f5d17c72cfb9e410e7e655444e62

@@ -73,6 +73,8 @@
 # no `$status`.
 # -----------------------------------------------------------------------------
 
+load test_helper
+
 REPO_ROOT="$(cd "$(dirname "${BATS_TEST_FILENAME:-$0}")/.." && pwd)"
 
 @test "every package shipping a helm-unittest suite answers the sweep probe" {

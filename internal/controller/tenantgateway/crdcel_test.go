@@ -210,16 +210,14 @@ func TestSpecCELMatchesControllerValidation(t *testing.T) {
 			certMode:  gatewayv1alpha1.CertModeHTTP01,
 		},
 		{
-			name:       "dns01 refuses a passthrough listener",
-			listeners:  []listener{{"postgres", 5432, "postgres.foo.example.com"}},
-			certMode:   gatewayv1alpha1.CertModeDNS01,
-			wantReject: true,
+			name:      "dns01 accepts a passthrough listener",
+			listeners: []listener{{"postgres", 5432, "postgres.foo.example.com"}},
+			certMode:  gatewayv1alpha1.CertModeDNS01,
 		},
 		{
-			name:       "existingSecret refuses a passthrough listener",
-			listeners:  []listener{{"postgres", 5432, "postgres.foo.example.com"}},
-			certMode:   gatewayv1alpha1.CertModeExistingSecret,
-			wantReject: true,
+			name:      "existingSecret accepts a passthrough listener",
+			listeners: []listener{{"postgres", 5432, "postgres.foo.example.com"}},
+			certMode:  gatewayv1alpha1.CertModeExistingSecret,
 		},
 		{
 			name:       "edge refuses a passthrough listener",
@@ -390,16 +388,14 @@ func TestSpecCELMatchesControllerValidation(t *testing.T) {
 // Ready.
 func TestEveryCertModeIsJudgedOnPassthroughListeners(t *testing.T) {
 	// true means the mode renders TLS listeners a passthrough entry can
-	// sit beside. Only http01 does: it publishes one terminate listener
-	// per attached hostname, so a passthrough hostname is a name no
-	// terminate listener answers. dns01 and existingSecret serve the
-	// whole apex off one wildcard terminate listener that SNI-intersects
-	// every entry this field can hold, and edge renders no TLS listener
-	// at all.
+	// sit beside. The entry has a port of its own, so the wildcard
+	// terminate listener of dns01 and existingSecret on 443 SNI-overlaps
+	// it without sharing a port, which Gateway API treats as compatible.
+	// edge renders no TLS listener at all.
 	verdicts := map[gatewayv1alpha1.CertMode]bool{
 		gatewayv1alpha1.CertModeHTTP01:         true,
-		gatewayv1alpha1.CertModeDNS01:          false,
-		gatewayv1alpha1.CertModeExistingSecret: false,
+		gatewayv1alpha1.CertModeDNS01:          true,
+		gatewayv1alpha1.CertModeExistingSecret: true,
 		gatewayv1alpha1.CertModeEdge:           false,
 	}
 
@@ -511,7 +507,7 @@ func TestCRDPassesInstallTimeValidation(t *testing.T) {
 // list-type semantics only when the stored object passes them, for the
 // object as a whole. That is read from
 // pkg/registry/customresource/strategy.go in apiextensions-apiserver
-// v0.35.0, the version go.mod pins. So a stored duplicate does not block writes, it
+// v0.37.1, the version go.mod pins. So a stored duplicate does not block writes, it
 // stops every list on the resource from being checked. The duplicate
 // row below therefore stays admissible whether or not the field carries
 // a marker, which is why the marker's absence is pinned by the schema
@@ -556,7 +552,7 @@ func TestTightenedConstraintsOnExistingObjects(t *testing.T) {
 	// guard is reproduced here rather than exercised. Dropping it would
 	// model an apiserver that refuses writes it accepts. Reproduced
 	// means it does not track upstream, so a bump of
-	// apiextensions-apiserver past the pinned v0.35.0 is where to
+	// apiextensions-apiserver past the pinned v0.37.1 is where to
 	// re-read strategy.go and confirm the shape still holds.
 	rejectsUpdate := func(newSpec, oldSpec map[string]any) bool {
 		if errs := apiservervalidation.ValidateCustomResourceUpdate(
@@ -633,9 +629,9 @@ func TestTightenedConstraintsOnExistingObjects(t *testing.T) {
 // write. It would not: customresource.ValidateUpdate validates the
 // incoming object's list-type semantics only when the stored object
 // passes them, so a duplicate already in etcd is ratcheted through.
-// Byte-identical across apiextensions-apiserver v0.31.1, the pinned
-// v0.35.0 and v0.36.3, so it is settled behaviour rather than a version
-// quirk, but it is upstream's to change. The
+// That guard is byte-identical across apiextensions-apiserver v0.31.1,
+// v0.35.0, v0.36.3 and the pinned v0.37.1, so it is settled behaviour
+// rather than a version quirk, but it is upstream's to change. The
 // reason is the grain of that ratchet. It is taken over the whole
 // object, not per field, so one stored duplicate stops list-type
 // validation for every list on the resource, silently and with nothing

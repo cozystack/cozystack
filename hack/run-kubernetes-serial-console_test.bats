@@ -10,6 +10,8 @@
 # property, because a capture that grew an in-guest dependency would still look
 # healthy while being blind to exactly the runs it was written for.
 
+load test_helper
+
 kubectl_calls=/dev/null
 kubectl_pod_names=
 kubectl_list_rc=0
@@ -125,23 +127,6 @@ assert_file_contains() {
   esac
   printf 'expected %s to contain: %s\n' "${file}" "${needle}" >&2
   return 1
-}
-
-assert_file_lacks_pattern() {
-  local pattern="$1"
-  local file="$2"
-
-  # A missing file must fail rather than vacuously pass: awk exits 2 on an
-  # unreadable path, which is indistinguishable from "no line matched" once the
-  # status is folded into an if.
-  if [ ! -f "${file}" ]; then
-    printf 'expected %s to exist so it could be checked for: %s\n' "${file}" "${pattern}" >&2
-    return 1
-  fi
-  if awk -v pattern="${pattern}" '$0 ~ pattern { found = 1 } END { exit found ? 0 : 1 }' "${file}"; then
-    printf 'expected %s not to match: %s\n' "${file}" "${pattern}" >&2
-    return 1
-  fi
 }
 
 # The function under test redirects a command's stderr into a report file and
@@ -1012,7 +997,14 @@ run_capture() {
   fi
   # Anchored on the LAST functional assertion in the function, not a
   # mid-file one, or everything between it and the gate is unprotected.
-  last=$(grep -n 'helmrelease_has_remediation_cycle "${history_statuses}"' "$lib" | tail -n 1 | cut -d: -f1)
+  #
+  # On the call rather than on the text of its arguments. The arguments name
+  # local variables of the library, which a refactor there is free to rename
+  # without touching what this test asserts; an anchor that spells them out
+  # stops matching on that rename, and the failure lands on whoever rebases
+  # second rather than on either author. The call is what the ordering is
+  # about, so it is what the anchor reads.
+  last=$(grep -n '^ *cozy_guard_all_helmreleases ' "$lib" | tail -n 1 | cut -d: -f1)
   if [ -z "$last" ]; then
     echo "expected to find the HelmRelease remediation guard in $lib" >&2
     return 1

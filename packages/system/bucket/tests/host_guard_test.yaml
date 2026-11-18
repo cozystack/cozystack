@@ -1,0 +1,40 @@
+suite: bucket ingress fails on an empty apex
+
+templates:
+  - templates/ingress.yaml
+
+release:
+  name: bucket
+  namespace: tenant-root
+
+# The bucket Ingress host is <bucketName>.<_namespace.host>. This chart has no
+# per-app host override, so cozy-lib.ns-host-required requires the apex whenever
+# the Ingress renders (gated on an empty _namespace.gateway).
+
+tests:
+  - it: fails when the apex is empty
+    set:
+      _namespace:
+        host: ""
+        ingress: tenant-root
+        gateway: ""
+      _cluster:
+        issuer-name: letsencrypt-prod
+        solver: http01
+    asserts:
+      - failedTemplate:
+          errorMessage: "the tenant apex (_namespace.host) is empty and this app sets no host override, so its ingress hostname would be malformed. Set tenant.spec.host on this tenant, inherit it from a parent that has host set, or set this app's host value."
+
+  - it: renders the ingress when the apex is set
+    set:
+      _namespace:
+        host: example.org
+        ingress: tenant-root
+        gateway: ""
+      _cluster:
+        issuer-name: letsencrypt-prod
+        solver: http01
+    asserts:
+      - equal:
+          path: kind
+          value: Ingress

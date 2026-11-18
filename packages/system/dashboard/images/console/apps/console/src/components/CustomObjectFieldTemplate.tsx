@@ -6,12 +6,16 @@ import type {
   FormContextType,
 } from "@rjsf/utils"
 
-function isSimpleField(schema: any): boolean {
+type CozystackSchema = RJSFSchema & {
+  "x-cozystack-no-enable-switch"?: boolean
+}
+
+function isSimpleField(schema: RJSFSchema | undefined): boolean {
   if (!schema) return true
   const type = schema.type
   if (type === "object") return false
   if (type === "array") {
-    const itemType = schema.items?.type
+    const itemType = (schema.items as RJSFSchema | undefined)?.type
     return itemType === "integer" || itemType === "string" || itemType === "number"
   }
   if (schema.anyOf || schema.oneOf || schema.allOf) {
@@ -23,14 +27,14 @@ function isSimpleField(schema: any): boolean {
 
 function groupByComplexity(
   properties: ObjectFieldTemplatePropertyType[],
-  parentSchema: any,
+  parentSchema: StrictRJSFSchema,
 ) {
   type Group = { simple: boolean; items: ObjectFieldTemplatePropertyType[] }
   const groups: Group[] = []
   let current: Group | null = null
 
   for (const prop of properties) {
-    const fieldSchema = parentSchema?.properties?.[prop.name]
+    const fieldSchema = parentSchema?.properties?.[prop.name] as RJSFSchema | undefined
     const simple = isSimpleField(fieldSchema)
     if (!current || current.simple !== simple) {
       current = { simple, items: [] }
@@ -42,9 +46,9 @@ function groupByComplexity(
 }
 
 export function CustomObjectFieldTemplate<
-  T = any,
+  T = unknown,
   S extends StrictRJSFSchema = RJSFSchema,
-  F extends FormContextType = any,
+  F extends FormContextType = FormContextType,
 >(props: ObjectFieldTemplateProps<T, S, F>) {
   const { formData } = props
 
@@ -53,8 +57,34 @@ export function CustomObjectFieldTemplate<
   const hasOtherFields = props.properties.some((p) => p.name !== "enabled")
   const isAddon = hasEnabledField && hasOtherFields
 
+  // This must be declared by schema rather than inferred from the current
+  // fields: an unrelated valuesOverride-only object must not inherit addon
+  // copy, and adding another config field must not silently remove the notice.
+  const hasNoToggle =
+    !hasEnabledField &&
+    (props.schema as CozystackSchema)["x-cozystack-no-enable-switch"] === true
+
+  if (hasNoToggle) {
+    return (
+      <fieldset id={props.idSchema.$id} className="border border-slate-200 rounded-lg p-3 mb-3">
+        {props.title && (
+          <legend className="text-xs font-semibold text-slate-700 px-1">{props.title}</legend>
+        )}
+        <p className="text-xs text-slate-500 mb-2">
+          No enable switch. Adding an enabled field in YAML has no effect.
+        </p>
+        {props.description && (
+          <p className="field-description text-xs text-slate-400 mb-2">{props.description}</p>
+        )}
+        {props.properties.map((prop) => (
+          <div key={prop.name}>{prop.content}</div>
+        ))}
+      </fieldset>
+    )
+  }
+
   if (isAddon) {
-    const isEnabled = (formData as any)?.enabled === true
+    const isEnabled = (formData as { enabled?: unknown } | undefined)?.enabled === true
     const enabledProp = props.properties.find((p) => p.name === "enabled")
     const otherProps = props.properties.filter((p) => p.name !== "enabled")
     const groups = groupByComplexity(otherProps, props.schema)

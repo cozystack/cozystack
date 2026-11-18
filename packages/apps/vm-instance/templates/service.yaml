@@ -30,6 +30,13 @@ spec:
 {{- if .Values.external }}
     {{- if and (eq .Values.externalMethod "WholeIP") (not .Values.externalPorts) }}
     - port: 65535
+    {{- else if not .Values.externalPorts }}
+    {{- /* A Service needs at least one port. cozy-proxy only admits TCP and
+    UDP ports into its PortList filter, so an SCTP placeholder keeps the
+    external IP while every inbound TCP and UDP packet is dropped. */}}
+    - name: no-ports
+      port: 65535
+      protocol: SCTP
     {{- else }}
     {{- range .Values.externalPorts }}
     - name: port-{{ . }}

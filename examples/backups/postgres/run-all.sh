@@ -38,7 +38,9 @@ subst() {
 
 print_header "Step 00: Provision Bucket '${BUCKET_NAME}' in ${NAMESPACE}"
 kubectl -n "$NAMESPACE" apply -f "$SCRIPT_DIR/00-bucket.yaml"
-wait_hr_ready "bucket-${BUCKET_NAME}" 300
+# 660s, above this generated release's 600s install timeout; see "Sizing an
+# HR-Ready budget" in docs/agents/e2e-testing.md.
+wait_hr_ready "bucket-${BUCKET_NAME}" 660
 wait_for_field bucketclaims.objectstorage.k8s.io "bucket-${BUCKET_NAME}" \
     '{.status.bucketReady}' true "$NAMESPACE" 300
 wait_for_field bucketaccesses.objectstorage.k8s.io "bucket-${BUCKET_NAME}-backup" \
@@ -123,7 +125,9 @@ materialise_backup_secrets "$PG_SRC_NAME"
 
 print_header "Step 05b: Deploy source Postgres '${PG_SRC_NAME}' and wait for it to be healthy"
 subst 05-postgres-src.yaml | kubectl -n "$NAMESPACE" apply -f -
-wait_hr_ready "postgres-${PG_SRC_NAME}" 360
+# 660s, above this generated release's 600s install timeout; see "Sizing an
+# HR-Ready budget" in docs/agents/e2e-testing.md.
+wait_hr_ready "postgres-${PG_SRC_NAME}" 660
 wait_for_field clusters.postgresql.cnpg.io "$PG_SRC_CLUSTER" \
     '{.status.phase}' 'Cluster in healthy state' "$NAMESPACE" 360
 # The 'demo' database and 'app' user are created by the chart's init Job, not
@@ -167,7 +171,8 @@ materialise_backup_secrets "$PG_TARGET_NAME"
 kubectl -n "$NAMESPACE" apply -f "$SCRIPT_DIR/30-postgres-target.yaml"
 # Let the target's first install settle before the RestoreJob driver suspends
 # its HelmRelease — suspending an HR mid-install races helm-controller.
-wait_hr_ready "postgres-${PG_TARGET_NAME}" 360
+# 660s, as for the source above.
+wait_hr_ready "postgres-${PG_TARGET_NAME}" 660
 kubectl -n "$NAMESPACE" apply -f "$SCRIPT_DIR/40-restorejob-to-copy.yaml"
 wait_for_field restorejobs.backups.cozystack.io "$RESTOREJOB_TOCOPY_NAME" \
     '{.status.phase}' Succeeded "$NAMESPACE" 1200 Failed

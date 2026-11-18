@@ -12,7 +12,16 @@ global:
     image:
       # if repository is set, it overrides the namespace part of image.name
       repository: ""
+      # chrislusf/seaweedfs-enterprise for the enterprise edition
       name: chrislusf/seaweedfs
+    # Enterprise license file, held in a Secret in the release namespace and
+    # mounted read-only on the components that run a master. A renewed Secret
+    # reaches the running master without a restart. SEAWEED_LICENSE is reserved
+    # while this is set: an extraEnvironmentVars entry of that name is dropped.
+    license:
+      existingSecret: ""
+      secretKey: seaweed-license.json
+      mountPath: /etc/seaweedfs/license
     imagePullPolicy: IfNotPresent
     restartPolicy: Always
     loggingLevel: 1
@@ -26,6 +35,13 @@ global:
         volumeRead: false
         filerWrite: false
         filerRead: false
+        # Positive values override SeaweedFS token lifetime defaults.
+        # Zero keeps the runtime defaults: 10s for writes and 60s for reads.
+        expiresAfterSeconds:
+          volumeWrite: 0
+          volumeRead: 0
+          filerWrite: 0
+          filerRead: 0
     # we will use this serviceAccountName for all ClusterRoles/ClusterRoleBindings
     serviceAccountName: "seaweedfs"
     serviceAccountAnnotations: {}
@@ -118,7 +134,7 @@ master:
   #    annotations:
   #      "key": "value"
   #
-  # You may also spacify an existing claim:
+  # You may also specify an existing claim:
   #  data:
   #    type: "existingClaim"
   #    claimName: "my-pvc"
@@ -126,8 +142,13 @@ master:
   # You can also use emptyDir storage:
   #  data:
   #    type: "emptyDir"
+  # -mdir holds the Raft log and snapshots, and with them the cluster's
+  # identity (its topology UUID). A hostPath does not follow a rescheduled pod,
+  # so prefer type "persistentVolumeClaim" for new installs. The default stays
+  # hostPath so existing releases keep upgrading; see the README to switch one.
   data:
     type: "hostPath"
+    size: "1Gi"
     storageClass: ""
     hostPathPrefix: /ssd
 
@@ -220,6 +241,10 @@ master:
   # used to assign priority to master pods
   # ref: https://kubernetes.io/docs/concepts/configuration/pod-priority-preemption/
   priorityClassName: ""
+
+  # used to specify a custom scheduler for master pods
+  # ref: https://kubernetes.io/docs/concepts/scheduling-eviction/kube-scheduler/
+  schedulerName: ""
 
   # used to assign a service account.
   # ref: https://kubernetes.io/docs/tasks/configure-pod-container/configure-service-account/
@@ -344,7 +369,7 @@ volume:
   #      "key": "value"
   #     maxVolumes: 0  # If set to zero on non-windows OS, the limit will be auto configured. (default "7")
   #
-  # You may also spacify an existing claim:
+  # You may also specify an existing claim:
   #   - name: data
   #     type: "existingClaim"
   #     claimName: "my-pvc"
@@ -378,7 +403,7 @@ volume:
     enabled: true
     image: alpine/k8s:1.28.4
 
-  # idx can be defined by:
+  # idx (the volume index) may use a separate PERSISTENT volume:
   #
   # idx:
   #  type: "hostPath"
@@ -397,13 +422,14 @@ volume:
   #   type: "existingClaim"
   #   claimName: "myClaim"
   #
-  # or
+  # "emptyDir" is rejected for idx (the chart fails to render): an ephemeral
+  # index is wiped on every restart while the data persists, forcing a full
+  # rebuild each start (a fatal crash on older versions). "logs" may still use
+  # any of the above or emptyDir.
   #
-  # idx:
-  #  type: "emptyDir"
-
-  # same applies to "logs"
-
+  # Default {} keeps the index next to the data, so it persists with the data and
+  # needs no separate volume. Recommended unless you must split the index onto
+  # its own persistent storage.
   idx: {}
 
   # Resource requests, limits, etc. for the vol-move-idx initContainer. This
@@ -512,6 +538,10 @@ volume:
   # used to assign priority to server pods
   # ref: https://kubernetes.io/docs/concepts/configuration/pod-priority-preemption/
   priorityClassName: ""
+
+  # used to specify a custom scheduler for volume pods
+  # ref: https://kubernetes.io/docs/concepts/scheduling-eviction/kube-scheduler/
+  schedulerName: ""
 
   # used to assign a service account.
   # ref: https://kubernetes.io/docs/tasks/configure-pod-container/configure-service-account/
@@ -793,6 +823,10 @@ filer:
   # ref: https://kubernetes.io/docs/concepts/configuration/pod-priority-preemption/
   priorityClassName: ""
 
+  # used to specify a custom scheduler for filer pods
+  # ref: https://kubernetes.io/docs/concepts/scheduling-eviction/kube-scheduler/
+  schedulerName: ""
+
   # used to assign a service account.
   # ref: https://kubernetes.io/docs/tasks/configure-pod-container/configure-service-account/
   serviceAccountName: ""
@@ -816,33 +850,54 @@ filer:
   #   allowPrivilegeEscalation: false
   containerSecurityContext: {}
 
-  ingress:
-    enabled: false
-    className: ""
-    # host: false for "*" hostname
-    host: "seaweedfs.cluster.local"
-    path: "/sw-filer/?(.*)"
-    pathType: ImplementationSpecific
-    annotations: {}
-      # nginx.ingress.kubernetes.io/backend-protocol: GRPC
-      # nginx.ingress.kubernetes.io/auth-type: "basic"
-      # nginx.ingress.kubernetes.io/auth-secret: "default/ingress-basic-auth-secret"
-      # nginx.ingress.kubernetes.io/auth-realm: 'Authentication Required - SW-Filer'
-      # nginx.ingress.kubernetes.io/service-upstream: "true"
-      # nginx.ingress.kubernetes.io/rewrite-target: /$1
-      # nginx.ingress.kubernetes.io/use-regex: "true"
-      # nginx.ingress.kubernetes.io/enable-rewrite-log: "true"
-      # nginx.ingress.kubernetes.io/ssl-redirect: "false"
-      # nginx.ingress.kubernetes.io/force-ssl-redirect: "false"
-      # nginx.ingress.kubernetes.io/configuration-snippet: |
-      #   sub_filter '<head>' '<head> <base href="/sw-filer/">'; #add base url
-      #   sub_filter '="/' '="./';                               #make absolute paths to relative
-      #   sub_filter '=/' '=./';
-      #   sub_filter '/seaweedfsstatic' './seaweedfsstatic';
-      #   sub_filter_once off;
+  ingresses:
+    http:
+      enabled: false
+      className: ""
+      # host: false for "*" hostname
+      host: "seaweedfs.cluster.local"
+      path: "/sw-filer/?(.*)"
+      pathType: ImplementationSpecific
+      annotations: {}
+        # nginx.ingress.kubernetes.io/backend-protocol: GRPC
+        # nginx.ingress.kubernetes.io/auth-type: "basic"
+        # nginx.ingress.kubernetes.io/auth-secret: "default/ingress-basic-auth-secret"
+        # nginx.ingress.kubernetes.io/auth-realm: 'Authentication Required - SW-Filer'
+        # nginx.ingress.kubernetes.io/service-upstream: "true"
+        # nginx.ingress.kubernetes.io/rewrite-target: /$1
+        # nginx.ingress.kubernetes.io/use-regex: "true"
+        # nginx.ingress.kubernetes.io/enable-rewrite-log: "true"
+        # nginx.ingress.kubernetes.io/ssl-redirect: "false"
+        # nginx.ingress.kubernetes.io/force-ssl-redirect: "false"
+        # nginx.ingress.kubernetes.io/configuration-snippet: |
+        #   sub_filter '<head>' '<head> <base href="/sw-filer/">'; #add base url
+        #   sub_filter '="/' '="./';                               #make absolute paths to relative
+        #   sub_filter '=/' '=./';
+        #   sub_filter '/seaweedfsstatic' './seaweedfsstatic';
+        #   sub_filter_once off;
+      tls: []
+    grpc:
+      enabled: false
+      className: ""
+      host: "seaweedfs.cluster.local"
+      # gRPC methods are called at /<package>.<Service>/<Method>, so route the
+      # whole host, not the HTTP UI's regex path.
+      path: "/"
+      pathType: Prefix
+      annotations:
+        # Ingress terminates TLS and re-originates gRPC (HTTP/2) to the filer.
+        nginx.ingress.kubernetes.io/backend-protocol: "GRPC"
+        # For end-to-end mTLS (the filer's own TLS reaches the client, not
+        # terminated at the edge), drop backend-protocol above and use TLS
+        # passthrough instead:
+        #   nginx.ingress.kubernetes.io/ssl-passthrough: "true"
+        # Passthrough routes by SNI (set `host` above), ignores `path`, and
+        # requires ingress-nginx to run with --enable-ssl-passthrough.
+      tls: []
 
   # extraEnvVars is a list of extra environment variables to set with the stateful set.
   extraEnvironmentVars:
+    # the WEED_MYSQL_* keys and the db credential secret only render while this is "true"
     WEED_MYSQL_ENABLED: "false"
     WEED_MYSQL_HOSTNAME: "mysql-db-host"
     WEED_MYSQL_PORT: "3306"
@@ -919,7 +974,7 @@ filer:
     # Buckets may be exposed publicly by setting `anonymousRead` to `true`
     # ttl format: [1-255][m|h|d|w|M|y] (e.g., 7d)
     # objectLock enables S3 Object Lock (irreversible, forces versioning)
-    # versioning: Enabled or Suspended (or true to enable)
+    # versioning: Enabled or Suspended (or bool true/false)
     # createBuckets:
     #   - name: bucket-a
     #     anonymousRead: true
@@ -951,6 +1006,9 @@ s3:
   # Iceberg catalog REST port (Apache Iceberg REST Catalog API)
   # Set to a port number to enable, or 0/null to disable
   icebergPort: null
+  # Lance Namespace port; weed serves 9101 by default, 0 disables it
+  # (and, unless worker.namespaceUrl points elsewhere, the worker's Lance container)
+  lancePort: 9101
   loggingOverrideLevel: null
   # enable user & permission to s3 (need to inject to all services)
   enableAuth: false
@@ -960,19 +1018,30 @@ s3:
   # Optionally provide explicit credentials for the S3 gateway.
   # When set, these are used in the generated s3 secret instead of
   # auto-generating random credentials.
+  # An identity may instead name an existing Secret to read its keys from. The
+  # generated config then references the keys through environment variables, so
+  # nothing is looked up at render time and a dry run renders what an install
+  # applies. Note the COSI driver parses the config itself and does not resolve
+  # those references.
   # credentials:
   #   admin:
   #     accessKey: ""
   #     secretKey: ""
+  #     existingSecret: ""
+  #     accessKeyKey: admin_access_key_id
+  #     secretKeyKey: admin_secret_access_key
   #   read:
   #     accessKey: ""
   #     secretKey: ""
+  #     existingSecret: ""
+  #     accessKeyKey: read_access_key_id
+  #     secretKeyKey: read_secret_access_key
   auditLogConfig: {}
   # You may specify buckets to be created during the install or upgrade process.
   # Buckets may be exposed publicly by setting `anonymousRead` to `true`
   # ttl format: [1-255][m|h|d|w|M|y] (e.g., 7d)
   # objectLock enables S3 Object Lock (irreversible, forces versioning)
-  # versioning: Enabled or Suspended (or true to enable)
+  # versioning: Enabled or Suspended (or bool true/false)
   # createBuckets:
   #   - name: bucket-a
   #     anonymousRead: true
@@ -1031,6 +1100,10 @@ s3:
   # used to assign priority to server pods
   # ref: https://kubernetes.io/docs/concepts/configuration/pod-priority-preemption/
   priorityClassName: ""
+
+  # used to assign a custom scheduler to server pods
+  # ref: https://kubernetes.io/docs/tasks/extend-kubernetes/configure-multiple-schedulers/
+  schedulerName: ""
 
   # used to assign a service account.
   # ref: https://kubernetes.io/docs/tasks/configure-pod-container/configure-service-account/
@@ -1114,11 +1187,31 @@ s3:
   # Service settings
   service:
     type: ClusterIP
+    # used only when type is LoadBalancer
+    loadBalancerClass: ""
+    loadBalancerIP: ""
+    loadBalancerSourceRanges: []
+    # fixed nodePorts, used only when type is NodePort or LoadBalancer
+    nodePorts:
+      http: null
+      https: null
+      iceberg: null
+      lance: null
+      metrics: null
 
   icebergIngress:
     enabled: false
     className: ""
     host: "seaweedfs-iceberg.cluster.local"
+    path: "/"
+    pathType: Prefix
+    annotations: {}
+    tls: []
+
+  lanceIngress:
+    enabled: false
+    className: ""
+    host: "seaweedfs-lance.cluster.local"
     path: "/"
     pathType: Prefix
     annotations: {}
@@ -1136,9 +1229,9 @@ sftp:
   loggingOverrideLevel: null
 
   # SSH server configuration
-  sshPrivateKey: "/etc/sw/seaweedfs_sftp_ssh_private_key"  # Path to the SSH private key file for host authentication
+  sshPrivateKey: ""  # Optional path to a single SSH host key file; the server fails to start if set but missing. Host keys come from hostKeysFolder by default.
   hostKeysFolder: "/etc/sw/ssh"  # path to folder containing SSH private key files for host authentication
-  authMethods: "password,publickey"  # Comma-separated list of allowed auth methods: password, publickey, keyboard-interactive
+  authMethods: "password,publickey"  # Comma-separated list of allowed auth methods: password, publickey, certificate
   maxAuthTries: 6  # Maximum number of authentication attempts per connection
   bannerMessage: "SeaweedFS SFTP Server"  # Message displayed before authentication
   loginGraceTime: "2m"  # Timeout for authentication
@@ -1155,6 +1248,18 @@ sftp:
   # Set to the name of an existing kubernetes Secret with the list of ssh private keys for sftp
   existingSshConfigSecret: null
 
+  # SSH user-certificate authentication (CA-signed user certs). Mirrors
+  # OpenSSH `TrustedUserCAKeys` and MinIO `--sftp=trusted-user-ca-key`.
+  # Add "certificate" to `authMethods` to activate; when active, plain
+  # public keys are rejected on the public-key channel.
+  #
+  # Inline CA public keys in OpenSSH authorized_keys format (one per
+  # line). Ignored when `existingCAKeysSecret` is set.
+  trustedUserCAKeys: ""
+  # Set to the name of an existing kubernetes Secret carrying the CA
+  # public keys under data key `ca_user.pub`.
+  existingCAKeysSecret: null
+
   # Additional resources
   sidecars: []
   initContainers: ""
@@ -1167,6 +1272,7 @@ sftp:
   tolerations: ""
   nodeSelector: ""
   priorityClassName: ""
+  schedulerName: ""
   serviceAccountName: ""
   podSecurityContext: {}
   containerSecurityContext: {}
@@ -1199,6 +1305,14 @@ sftp:
   # Service settings
   service:
     type: ClusterIP
+    # used only when type is LoadBalancer
+    loadBalancerClass: ""
+    loadBalancerIP: ""
+    loadBalancerSourceRanges: []
+    # fixed nodePorts, used only when type is NodePort or LoadBalancer
+    nodePorts:
+      sftp: null
+      metrics: null
 
 admin:
   enabled: false
@@ -1287,6 +1401,7 @@ admin:
   tolerations: ""
   nodeSelector: ""
   priorityClassName: ""
+  schedulerName: ""
   serviceAccountName: ""
   podSecurityContext: {}
   containerSecurityContext: {}
@@ -1336,6 +1451,14 @@ admin:
   service:
     type: ClusterIP
     annotations: {}
+    # used only when type is LoadBalancer
+    loadBalancerClass: ""
+    loadBalancerIP: ""
+    loadBalancerSourceRanges: []
+    # fixed nodePorts, used only when type is NodePort or LoadBalancer
+    nodePorts:
+      http: null
+      grpc: null
 
   # ServiceMonitor annotations (separate from pod/deployment annotations)
   serviceMonitor:
@@ -1349,6 +1472,15 @@ worker:
   loggingOverrideLevel: null
   metricsPort: 9327
   metricsIp: ""  # If empty, defaults to 0.0.0.0
+
+  # The lance_* jobs run in their own container, /usr/bin/weed-worker.
+  # amd64/arm64 only; pin mixed clusters with worker.affinity/nodeSelector.
+
+  # Lance namespace URL override; empty derives it from s3.lancePort.
+  namespaceUrl: ""
+
+  # Metrics port for the Lance worker container; the Go worker keeps metricsPort
+  lanceMetricsPort: 9328
 
   # Admin server to connect to
   adminServer: ""
@@ -1425,6 +1557,7 @@ worker:
   tolerations: ""
   nodeSelector: ""
   priorityClassName: ""
+  schedulerName: ""
   serviceAccountName: ""
   podSecurityContext: {}
   containerSecurityContext: {}
@@ -1514,7 +1647,7 @@ allInOne:
     # Buckets may be exposed publicly by setting `anonymousRead` to `true`
     # ttl format: [1-255][m|h|d|w|M|y] (e.g., 7d)
     # objectLock enables S3 Object Lock (irreversible, forces versioning)
-    # versioning: Enabled or Suspended (or true to enable)
+    # versioning: Enabled or Suspended (or bool true/false)
     # createBuckets:
     #   - name: bucket-a
     #     anonymousRead: true
@@ -1545,12 +1678,32 @@ allInOne:
     existingConfigSecret: null
     # Set to the name of an existing kubernetes Secret with the SSH keys
     existingSshConfigSecret: null
+    # SSH user-certificate authentication. See sftp.trustedUserCAKeys above.
+    # (null on either field inherits from the top-level sftp.* setting.)
+    trustedUserCAKeys: null
+    existingCAKeysSecret: null
 
   # Service settings
   service:
     annotations: {}  # Annotations for the service
     type: ClusterIP  # Service type (ClusterIP, NodePort, LoadBalancer)
     internalTrafficPolicy: Cluster  # Internal traffic policy
+    # used only when type is LoadBalancer
+    loadBalancerClass: ""
+    loadBalancerIP: ""
+    loadBalancerSourceRanges: []
+    # fixed nodePorts, used only when type is NodePort or LoadBalancer
+    nodePorts:
+      master: null
+      masterGrpc: null
+      volume: null
+      volumeGrpc: null
+      filer: null
+      filerGrpc: null
+      s3: null
+      s3Https: null
+      sftp: null
+      metrics: null
 
   # Note: For ingress in all-in-one mode, use the standard s3.ingress and
   # filer.ingress settings. The templates automatically detect all-in-one mode
@@ -1648,6 +1801,10 @@ allInOne:
   # ref: https://kubernetes.io/docs/concepts/configuration/pod-priority-preemption/
   priorityClassName: ""
 
+  # Used to assign a custom scheduler to pods
+  # ref: https://kubernetes.io/docs/tasks/extend-kubernetes/configure-multiple-schedulers/
+  schedulerName: ""
+
   # Used to assign a service account.
   # ref: https://kubernetes.io/docs/tasks/configure-pod-container/configure-service-account/
   serviceAccountName: ""
@@ -1710,6 +1867,10 @@ cosi:
   podSecurityContext: {}
   containerSecurityContext: {}
 
+  # used to assign a custom scheduler to cosi pods
+  # ref: https://kubernetes.io/docs/tasks/extend-kubernetes/configure-multiple-schedulers/
+  schedulerName: ""
+
   extraVolumes: ""
   extraVolumeMounts: ""
 
@@ -1721,6 +1882,7 @@ cosi:
 
 certificates:
   commonName: "SeaweedFS CA"
+  dnsNames: []
   ipAddresses: []
   keyAlgorithm: RSA
   keySize: 2048
@@ -1739,3 +1901,140 @@ certificates:
 podLabels: {}
 # Annotations to be added to all the created pods
 podAnnotations: {}
+
+networkPolicy:
+  # Opt-in. While false the chart renders no NetworkPolicy objects at all and
+  # the cluster default (usually allow-all) applies. Turn this on for a
+  # namespace with a default-deny policy, where the components otherwise
+  # cannot reach each other and the install hangs.
+  #
+  # This alone covers a default-deny that only restricts ingress. If yours has
+  # Egress in its policyTypes as well - the usual baseline - the components
+  # still cannot resolve DNS or reach each other, and you need egress.enabled
+  # below too, together with an extraEgress entry for the filer store.
+  enabled: false
+
+  # One policy is rendered per component, selecting its pods by the standard
+  # app.kubernetes.io/{name,instance,component} labels. Each policy admits
+  # traffic from any pod of this release, on the ports that component listens
+  # on - the same values the containerPorts are taken from, so changing a port
+  # does not leave the policy behind. Everything else is denied.
+  #
+  # Traffic from outside the release has to be added here. Rules are plain
+  # NetworkPolicyIngressRule entries, appended to every component's policy.
+  #
+  # The metrics ports are covered by the same rule as everything else, so with
+  # global.seaweedfs.monitoring.enabled the ServiceMonitors keep pointing at
+  # ports a Prometheus outside the release can no longer reach. Nothing reports
+  # that - the targets just go down - so add the scraper here:
+  #
+  #   extraIngress:
+  #     # an ingress controller reaching filer/s3/admin
+  #     - from:
+  #         - namespaceSelector:
+  #             matchLabels:
+  #               kubernetes.io/metadata.name: ingress-nginx
+  #       ports:
+  #         - protocol: TCP
+  #           port: 8888
+  #         - protocol: TCP
+  #           port: 8333
+  #     # Prometheus scraping the metrics ports
+  #     - from:
+  #         - namespaceSelector:
+  #             matchLabels:
+  #               kubernetes.io/metadata.name: monitoring
+  #       ports:
+  #         - protocol: TCP
+  #           port: 9327
+  #
+  # An ingress controller running on the host network is not a pod as far as
+  # the policy is concerned; select it with an ipBlock of the node addresses
+  # instead of a namespaceSelector.
+  #
+  # Kubelet probes are not covered by these rules. Node-to-pod traffic is
+  # outside NetworkPolicy in the CNIs that come up without host endpoints
+  # (Calico, Cilium); if yours polices it, allow the node addresses here.
+  extraIngress: []
+
+  egress:
+    # Egress is a separate opt-in: the chart knows the addresses of its own
+    # components, but not where your filer store (MySQL, Postgres, Redis,
+    # ...), notification sink or remote tier lives. Enabling this without
+    # listing those under extraEgress will cut the filer off from its store.
+    #
+    # It cannot be on by default either. In a namespace with no default-deny,
+    # egress rules would take the components from "may reach anything" down to
+    # "may reach the peers listed here", which is the same breakage from the
+    # other direction. Required if your default-deny covers egress.
+    enabled: false
+
+    # Every component resolves its peers by DNS name, so this is required
+    # for the release to function at all.
+    #
+    # The defaults below are CoreDNS as kubeadm, kind and the managed offerings
+    # from AWS, Google and Azure install it. OpenShift runs its resolver
+    # elsewhere and needs both overridden:
+    #   dnsNamespaceSelector:
+    #     matchLabels:
+    #       kubernetes.io/metadata.name: openshift-dns
+    #   dnsPodSelector:
+    #     matchLabels:
+    #       dns.operator.openshift.io/daemonset-dns: default
+    # A node-local DNS cache is not a pod peer at all - the resolver address is
+    # a link-local IP - so name it with an ipBlock in extraEgress instead.
+    allowDNS: true
+    dnsNamespaceSelector:
+      matchLabels:
+        kubernetes.io/metadata.name: kube-system
+    dnsPodSelector:
+      matchLabels:
+        k8s-app: kube-dns
+
+    # The COSI sidecar watches the COSI custom resources and the volume resize
+    # hook shells out to kubectl. Only those two get this rule - no seaweedfs
+    # component itself speaks to the Kubernetes API. The resize hook's policy,
+    # and with it this requirement, only appears on an upgrade that actually
+    # grows a volume PVC.
+    kubeApiServer:
+      enabled: true
+      # The API server cannot be selected by label, so its address has to be
+      # given here - there is no sane default, and 0.0.0.0/0 would defeat the
+      # point. Rendering fails with a pointer to this value if a component
+      # needs the API server and this is empty.
+      #
+      # Use the endpoint behind the kubernetes service, not its ClusterIP:
+      # kube-proxy rewrites the destination before the packet is matched.
+      #   kubectl get endpointslice kubernetes -o jsonpath='{.endpoints[*].addresses[*]}'
+      cidrs: []
+      ports: [443, 6443]
+
+    # Plain NetworkPolicyEgressRule entries, appended to every component's
+    # policy. This is where the filer store and the notification sinks go:
+    #
+    #   extraEgress:
+    #     - to:
+    #         - podSelector:
+    #             matchLabels:
+    #               app.kubernetes.io/name: mysql
+    #       ports:
+    #         - protocol: TCP
+    #           port: 3306
+    extraEgress: []
+
+  # Per-component additions, keyed by the component's app.kubernetes.io/component
+  # label value, for rules that should not apply to the whole release. The keys
+  # are master, filer, s3, sftp, admin, worker, bucket-hook,
+  # volume-resize-hook, objectstorage-provisioner, seaweedfs-all-in-one, and
+  # volume (plus volume-<name> for every entry under `volumes`):
+  #
+  #   components:
+  #     filer:
+  #       extraEgress:
+  #         - to:
+  #             - ipBlock:
+  #                 cidr: 10.0.0.5/32
+  #           ports:
+  #             - protocol: TCP
+  #               port: 5432
+  components: {}

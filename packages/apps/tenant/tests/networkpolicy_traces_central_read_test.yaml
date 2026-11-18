@@ -1,0 +1,66 @@
+suite: tenant Grafana egress to the shared-central traces vmauth
+# A central tenant reads its spans through the vmauth that fronts the shared
+# store in tenant-root. Only the tenant's Grafana pods may make that hop, and
+# only to vmauth's port, never to vtselect itself, which would accept any
+# account a client names.
+templates:
+  - templates/networkpolicy-traces-central-read.yaml
+release:
+  name: tenant-deep
+  namespace: tenant-ktj
+set:
+  tracingCentral: true
+  monitoring: true
+tests:
+  - it: scopes the read egress to only the Grafana pods
+    documentSelector:
+      path: metadata.name
+      value: tenant-ktj-deep-egress-traces-central-read
+    asserts:
+      - isKind:
+          of: CiliumClusterwideNetworkPolicy
+      - equal:
+          path: spec.endpointSelector.matchLabels
+          value:
+            "k8s:io.kubernetes.pod.namespace": tenant-ktj-deep
+            "k8s:app": grafana
+
+  - it: allows only the tenant-root vmauth port, at any tenant depth
+    documentSelector:
+      path: metadata.name
+      value: tenant-ktj-deep-egress-traces-central-read
+    asserts:
+      - equal:
+          path: spec.egress
+          value:
+            - toEndpoints:
+                - matchLabels:
+                    "k8s:app.kubernetes.io/name": vmauth
+                    "k8s:app.kubernetes.io/instance": traces-central
+                    "k8s:io.kubernetes.pod.namespace": tenant-root
+              toPorts:
+                - ports:
+                    - port: "8427"
+                      protocol: TCP
+
+  - it: does not render by default (tracingCentral unset)
+    set:
+      tracingCentral: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: does not render when monitoring is off (no Grafana to grant it to)
+    set:
+      monitoring: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: never renders for tenant-root, which hosts the shared store
+    release:
+      name: tenant-root
+      namespace: tenant-root
+    asserts:
+      - hasDocuments:
+          count: 0

@@ -2,9 +2,11 @@
 # Shared enumeration of where cozystack vendors its image references.
 #
 # Sourced by hack/promote-rewrite-tags.sh, hack/promote-retag.sh,
-# hack/nightly-mirror.sh and hack/verify-promoted-packages.sh. It exists because
-# the first three call sites each grew their own idea of where a ref can live,
-# and drifted: promote-retag and nightly-mirror scanned only the depth-2
+# hack/nightly-mirror.sh, hack/verify-promoted-packages.sh,
+# hack/stitch-multiarch.sh, hack/verify-multiarch.sh and
+# hack/retention-packages.sh. It exists because the
+# first three call sites each grew their own idea of where a ref can live, and
+# drifted: promote-retag and nightly-mirror scanned only the depth-2
 # values.yaml, while the promote workflow's tag rewrite scanned those plus
 # packages/apps/kubernetes/images/*.tag alone. Every ref stored in any OTHER
 # images/*.tag file was therefore invisible to all three — never retagged to
@@ -18,7 +20,7 @@
 #
 # Three storage shapes exist, and all are first-class:
 #
-#   1. <root>/<group>/<pkg>/values.yaml     — five YAML sub-shapes, below
+#   1. <root>/<group>/<pkg>/values.yaml     — the YAML sub-shapes listed below
 #   2. <root>/<group>/<pkg>/images/*.tag    — a plain file holding one ref
 #   3. an explicitly declared file (IMAGE_REF_EXTRA_FILES) whose producer sed's
 #      a ref straight into it because the package is not values-driven
@@ -96,13 +98,15 @@ image_ref_files() {
 #   1. single string  <repo>:<tag>@sha256:<digest>   (e.g. .cozystackAPI.image)
 #   2. split map      {[registry,] repository, tag, digest}   (e.g. .cilium.image)
 #   3. split map      {[registry,] repository, tag: <tag>@sha256:<digest>}
-#                     (e.g. .linstorCSI.image; .keycloak-operator.image adds registry)
+#                     (e.g. .linstorCSI.image)
 #   4. chart-global   global.registry.address + global.images.<n>.{repository, tag}
 #                     (kube-ovn's wrapper chart)
 #   5. OCI artifact   {platformSourceUrl: oci://<repo>, platformSourceRef: digest=sha256:<digest>}
+#   6. split map      {[registry,] image, [tag,] digest}
+#                     (upstream ingress-nginx's layout, e.g. its .controller.image)
 #
-# The optional `registry` sibling in shapes 2/3 and the whole of shape 4 exist
-# because the host does not always live inside `repository`. When it does not,
+# The optional `registry` sibling in shapes 2/3/6 and the whole of shape 4 exist
+# because the host does not always live inside the repository key. When it does not,
 # the rule must rejoin it: a host-less ref reaches the caller's ownership
 # filter looking third-party and is dropped, which is the silent-skip failure
 # the shape-3 rule was added to fix.
@@ -209,5 +213,9 @@ _collect_yaml_shapes() {
     yq -r '(.global.registry.address // "") as $reg | select($reg != "") | select($reg | tag == "!!str") | .global.images[] | select(tag == "!!map") | select(has("repository") and has("tag")) | select(.tag | tag == "!!str") | select(.tag | test("@sha256:[0-9a-f]{64}")) | select(.repository | tag == "!!str") | $reg + "/" + .repository + "@" + (.tag | sub(".*@"; ""))' "$_ir_f" 2>/dev/null || true
     # shape 5
     yq -r '.. | select(tag == "!!map") | select(has("platformSourceUrl") and has("platformSourceRef")) | (.platformSourceUrl | sub("^oci://"; "")) + "@" + (.platformSourceRef | sub("^digest="; ""))' "$_ir_f" 2>/dev/null || true
+    # shape 6. Requiring a whole digest, not just the key, is what keeps
+    # upstream's unpinned default (`digest: ""`) from emitting "<image>@". The
+    # `!!str` guard on digest has to come before test(), as in shape 3.
+    yq -r '.. | select(tag == "!!map") | select(.image | tag == "!!str") | select(.digest | tag == "!!str") | select(.digest | test("^sha256:[0-9a-f]{64}$")) | select((.registry // "") | tag == "!!str") | (((.registry // "") + "/" + .image) | sub("^/"; "")) + "@" + .digest' "$_ir_f" 2>/dev/null || true
     return 0
 }

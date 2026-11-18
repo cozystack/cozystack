@@ -63,7 +63,7 @@ export CA_MOUNT_DIR="${CA_MOUNT_DIR:-/etc/ssl/kafka-backup-ca}"
 # the target broker's own image at reconcile time and renders it as the
 # strategy's .ClientImage. Override this only to match your operator's image if
 # the CLI it carries differs.
-export KAFKA_IMAGE="${KAFKA_IMAGE:-quay.io/strimzi/kafka:0.45.1-rc1-kafka-3.9.1@sha256:ba52ed046b1dccdbd96f4e68057ce014d862a7c9c1fc670760c023b9aa09f23f}"
+export KAFKA_IMAGE="${KAFKA_IMAGE:-quay.io/strimzi/kafka:1.2.0-kafka-4.3.1@sha256:fef34b5438e8556cc08c01f3e254e47346f061b53a4e38d4289853777e0ea7f1}"
 export KAFKA_BIN="${KAFKA_BIN:-/opt/kafka/bin}"
 # Name of that long-lived CLI Pod; cleanup.sh removes it.
 export KAFKA_CLI_POD="${KAFKA_CLI_POD:-kafka-cli}"
@@ -134,65 +134,10 @@ provision_demo_strategy() {
     kubectl apply -f "$SCRIPT_DIR/03-backupclass.yaml" >&2
 }
 
-# Wait until a JSONPath value on a resource matches the desired string. Optional
-# 7th arg is a TERMINAL failure value: once the field reaches it the wait returns
-# 1 immediately instead of polling to the timeout.
-wait_for_field() {
-    local resource_type="$1" resource_name="$2" jsonpath="$3" desired="$4"
-    local namespace="${5:-}" timeout="${6:-300}" fail_value="${7:-}"
-
-    log_substep "Waiting for $resource_type/$resource_name $jsonpath to become '$desired'..."
-    local elapsed=0
-    local ns_flag=()
-    [[ -n "$namespace" ]] && ns_flag=(-n "$namespace")
-
-    while true; do
-        local current
-        current=$(kubectl get "$resource_type" "$resource_name" "${ns_flag[@]}" -o jsonpath="$jsonpath" 2>/dev/null || true)
-        if [[ "$current" == "$desired" ]]; then
-            log_success "$resource_type/$resource_name reached '$desired'"
-            return 0
-        fi
-        if [[ -n "$fail_value" && "$current" == "$fail_value" ]]; then
-            log_error "$resource_type/$resource_name reached terminal '$current' (expected '$desired')"
-            return 1
-        fi
-        if [[ $elapsed -ge $timeout ]]; then
-            log_error "Timeout waiting for $resource_type/$resource_name (current: '$current', expected: '$desired')"
-            return 1
-        fi
-        sleep 5
-        elapsed=$((elapsed + 5))
-    done
-}
-
-# Wait for a HelmRelease to become Ready, with an existence backstop and a
-# fail-fast on Stalled=True.
-wait_hr_ready() {
-    local name="$1" timeout="${2:-300}" elapsed=0
-    log_substep "Waiting for HelmRelease/$name to become Ready..."
-    while true; do
-        if kubectl -n "$NAMESPACE" get hr "$name" >/dev/null 2>&1; then
-            local ready stalled
-            ready=$(kubectl -n "$NAMESPACE" get hr "$name" -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null || true)
-            if [[ "$ready" == "True" ]]; then
-                log_success "HelmRelease/$name is Ready"
-                return 0
-            fi
-            stalled=$(kubectl -n "$NAMESPACE" get hr "$name" -o jsonpath='{.status.conditions[?(@.type=="Stalled")].status}' 2>/dev/null || true)
-            if [[ "$stalled" == "True" ]]; then
-                log_error "HelmRelease/$name is Stalled: $(kubectl -n "$NAMESPACE" get hr "$name" -o jsonpath='{.status.conditions[?(@.type=="Ready")].message}' 2>/dev/null)"
-                return 1
-            fi
-        fi
-        if [[ $elapsed -ge $timeout ]]; then
-            log_error "Timeout waiting for HelmRelease/$name to become Ready"
-            return 1
-        fi
-        sleep 5
-        elapsed=$((elapsed + 5))
-    done
-}
+# wait_for_field, wait_hr_ready and wait_deleted live in one file shared by
+# every backup walkthrough, so a fix to one reaches all of them.
+# shellcheck source-path=SCRIPTDIR source=../_lib/wait-helpers.sh
+source "$(dirname "${BASH_SOURCE[0]}")/../_lib/wait-helpers.sh"
 
 # Wait until the Strimzi Kafka cluster kafka-<app> reports Ready=True — the same
 # precondition the driver gates on.
@@ -205,21 +150,36 @@ kafka_wait_ready() {
 # Ensure the long-lived kafka-cli Pod exists and is Ready, so kafka_run can exec
 # into it. Idempotent: a Ready Pod this demo owns is reused across calls and
 # across the numbered demo scripts; a leftover in a terminal phase (Succeeded /
-# Failed) is replaced rather than waited on; and a same-named Pod this demo does
-# not own is refused rather than hijacked or deleted. cleanup.sh removes it.
+# Failed) is replaced rather than waited on, and so is one started before the
+# Pod ran under the restricted profile, since a Pod's securityContext cannot be
+# changed in place; and a same-named Pod this demo does not own is refused
+# rather than hijacked or deleted. cleanup.sh removes it.
+# Every step returns on failure explicitly: this runs as the left side of
+# `|| return 1`, and some callers also wrap it in $(...), so errexit never
+# applies inside it and a bare failure would carry on to the next step.
 kafka_cli_pod() {
-    local phase owner
-    phase=$(kubectl -n "$NAMESPACE" get pod "$KAFKA_CLI_POD" -o jsonpath='{.status.phase}' 2>/dev/null || true)
-    owner=$(kubectl -n "$NAMESPACE" get pod "$KAFKA_CLI_POD" -o jsonpath='{.metadata.labels.cozystack\.io/backup-demo}' 2>/dev/null || true)
+    local phase owner nonroot overrides
+    phase=$(kubectl -n "$NAMESPACE" get pod "$KAFKA_CLI_POD" --ignore-not-found -o jsonpath='{.status.phase}') || return 1
+    owner=$(kubectl -n "$NAMESPACE" get pod "$KAFKA_CLI_POD" --ignore-not-found -o jsonpath='{.metadata.labels.cozystack\.io/backup-demo}') || return 1
     if [ -n "$phase" ] && [ "$owner" != "kafka-metadata" ]; then
         log_error "Pod $NAMESPACE/$KAFKA_CLI_POD exists but this demo does not own it; refusing to use or delete it"
         return 1
     fi
-    if [ "$phase" != "Running" ] && [ "$phase" != "Pending" ]; then
-        kubectl -n "$NAMESPACE" delete pod "$KAFKA_CLI_POD" --grace-period=1 --ignore-not-found >/dev/null
+    # Only this helper creates the Pod, and it sets every restricted field at
+    # once, so one of them tells a current Pod from an older one.
+    nonroot=$(kubectl -n "$NAMESPACE" get pod "$KAFKA_CLI_POD" --ignore-not-found -o jsonpath='{.spec.securityContext.runAsNonRoot}') || return 1
+    if { [ "$phase" != "Running" ] && [ "$phase" != "Pending" ]; } || [ "$nonroot" != "true" ]; then
+        # The Strimzi image runs as non-root UID 1001, so runAsNonRoot and
+        # seccomp at the Pod level plus allowPrivilegeEscalation=false and
+        # drop-ALL on the container satisfy PSA "restricted" without pinning a
+        # runAsUser specific to this image tag. The add-only JSON patch leaves
+        # the run-generated Pod's image, command and args untouched.
+        overrides='[{"op":"add","path":"/spec/securityContext","value":{"runAsNonRoot":true,"seccompProfile":{"type":"RuntimeDefault"}}},{"op":"add","path":"/spec/containers/0/securityContext","value":{"allowPrivilegeEscalation":false,"capabilities":{"drop":["ALL"]}}}]'
+        kubectl -n "$NAMESPACE" delete pod "$KAFKA_CLI_POD" --grace-period=1 --ignore-not-found >/dev/null || return 1
         kubectl -n "$NAMESPACE" run "$KAFKA_CLI_POD" --image="$KAFKA_IMAGE" \
             --labels=cozystack.io/backup-demo=kafka-metadata \
-            --restart=Never --command -- sleep infinity >/dev/null
+            --override-type=json --overrides="$overrides" \
+            --restart=Never --command -- sleep infinity >/dev/null || return 1
     fi
     kubectl -n "$NAMESPACE" wait --for=condition=Ready "pod/$KAFKA_CLI_POD" \
         --timeout=5m >/dev/null
@@ -240,7 +200,7 @@ kafka_run() {
     local app="$1"; shift
     local snippet="$1"
     local boot="kafka-${app}-kafka-bootstrap.${NAMESPACE}.svc:9092"
-    kafka_cli_pod
+    kafka_cli_pod || return 1
     kubectl -n "$NAMESPACE" exec -i "$KAFKA_CLI_POD" -- bash -c "set -eu
 BOOT=$(printf %q "$boot")
 BIN=$(printf %q "$KAFKA_BIN")

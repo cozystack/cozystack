@@ -5,7 +5,7 @@ release:
   name: foundationdb-example
   namespace: tenant-example
 tests:
-  - it: grants read access only to this cluster configuration
+  - it: grants read access only to this cluster configuration and resource map
     documentSelector: &role
       path: kind
       value: Role
@@ -15,7 +15,7 @@ tests:
           value:
             - apiGroups: [""]
               resources: [configmaps]
-              resourceNames: [foundationdb-example-config]
+              resourceNames: [foundationdb-example-config, foundationdb-example-resourcemap]
               verbs: [get, list, watch]
 
   - it: keeps configuration accessible with monitoring disabled
@@ -77,9 +77,9 @@ tests:
       - hasDocuments:
           count: 3
 
-  - it: renders only the access objects with monitoring disabled
+  - it: keeps the resource map available with monitoring disabled
     set:
       monitoring.enabled: false
     asserts:
       - hasDocuments:
-          count: 2
+          count: 3

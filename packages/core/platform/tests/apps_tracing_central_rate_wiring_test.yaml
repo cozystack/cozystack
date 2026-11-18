@@ -1,0 +1,140 @@
+suite: apps.yaml monitoring.tracingCentralTenantBytesPerSecond → _cluster wiring
+templates:
+  - templates/apps.yaml
+
+release:
+  name: cozy-platform
+  namespace: cozy-system
+
+# The rate each shared-central tracing tenant may write reaches every tenant's
+# collector through _cluster in the cozystack-values Secret. A change there
+# changes the values every monitoring HelmRelease reads, so Flux upgrades each
+# of them; a rate read with lookup at render time never would.
+
+tests:
+  # Helm reads a number from values as a float64, which prints a million as
+  # 1e+06: the rate must still come out as plain digits for the collector.
+  - it: writes a rate of a million as plain digits
+    set:
+      monitoring.tracingCentralTenantBytesPerSecond: 1000000
+    asserts:
+      - matchRegex:
+          path: stringData["values.yaml"]
+          pattern: '(?m)^\s*tracing-central-tenant-bytes-per-second:\s*"1000000"$'
+
+  - it: writes a rate given as a string of digits
+    set:
+      monitoring.tracingCentralTenantBytesPerSecond: "500000"
+    asserts:
+      - matchRegex:
+          path: stringData["values.yaml"]
+          pattern: '(?m)^\s*tracing-central-tenant-bytes-per-second:\s*"500000"$'
+
+  - it: writes the rate when monitoring.tracingCentralTenantBytesPerSecond is set
+    set:
+      monitoring.tracingCentralTenantBytesPerSecond: 500000
+    asserts:
+      - matchRegex:
+          path: stringData["values.yaml"]
+          pattern: '(?m)^\s*tracing-central-tenant-bytes-per-second:\s*"500000"$'
+
+  # Every release in every tenant reads this Secret, so a key written while
+  # nobody set a rate would upgrade all of them on the platform upgrade.
+  - it: writes no rate by default
+    asserts:
+      - notMatchRegex:
+          path: stringData["values.yaml"]
+          pattern: "tracing-central-tenant-bytes-per-second"
+
+  - it: writes no rate for an explicit zero
+    set:
+      monitoring.tracingCentralTenantBytesPerSecond: 0
+    asserts:
+      - notMatchRegex:
+          path: stringData["values.yaml"]
+          pattern: "tracing-central-tenant-bytes-per-second"
+
+  # Anything but a whole number of bytes per second is refused rather than read
+  # as the default, which would leave the operator's limit silently unapplied.
+  - it: refuses a negative value
+    set:
+      monitoring.tracingCentralTenantBytesPerSecond: -1
+    asserts:
+      - failedTemplate:
+          errorPattern: "monitoring.tracingCentralTenantBytesPerSecond must be a whole number of bytes per second"
+
+  - it: refuses a quantity with a unit
+    set:
+      monitoring.tracingCentralTenantBytesPerSecond: "1Mi"
+    asserts:
+      - failedTemplate:
+          errorPattern: "monitoring.tracingCentralTenantBytesPerSecond must be a whole number of bytes per second"
+
+  - it: refuses a string in exponent notation
+    set:
+      monitoring.tracingCentralTenantBytesPerSecond: "1e6"
+    asserts:
+      - failedTemplate:
+          errorPattern: "monitoring.tracingCentralTenantBytesPerSecond must be a whole number of bytes per second"
+
+  - it: refuses a fractional value
+    set:
+      monitoring.tracingCentralTenantBytesPerSecond: 1.5
+    asserts:
+      - failedTemplate:
+          errorPattern: "monitoring.tracingCentralTenantBytesPerSecond must be a whole number of bytes per second"
+
+  # Sprig's int64 reads a string with a leading zero as octal ("0100" is 64)
+  # and returns 0 on a parse error, which would write no key.
+  - it: refuses a string with a leading zero
+    set:
+      monitoring.tracingCentralTenantBytesPerSecond: "0100"
+    asserts:
+      - failedTemplate:
+          errorPattern: "monitoring.tracingCentralTenantBytesPerSecond must be a whole number of bytes per second"
+
+  - it: refuses a string that is not a valid octal number
+    set:
+      monitoring.tracingCentralTenantBytesPerSecond: "08"
+    asserts:
+      - failedTemplate:
+          errorPattern: "monitoring.tracingCentralTenantBytesPerSecond must be a whole number of bytes per second"
+
+  # Each collector adds its replica count to the rate before splitting it, and
+  # an int64 conversion of a float beyond int64 differs by CPU architecture.
+  - it: refuses a string of digits beyond the ceiling
+    set:
+      monitoring.tracingCentralTenantBytesPerSecond: "99999999999999999999"
+    asserts:
+      - failedTemplate:
+          errorPattern: "monitoring.tracingCentralTenantBytesPerSecond must be a whole number of bytes per second, at most 1099511627776"
+
+  - it: refuses a number beyond the ceiling
+    set:
+      monitoring.tracingCentralTenantBytesPerSecond: 1e19
+    asserts:
+      - failedTemplate:
+          errorPattern: "monitoring.tracingCentralTenantBytesPerSecond must be a whole number of bytes per second, at most 1099511627776"
+
+  - it: refuses one byte above the ceiling
+    set:
+      monitoring.tracingCentralTenantBytesPerSecond: 1099511627777
+    asserts:
+      - failedTemplate:
+          errorPattern: "monitoring.tracingCentralTenantBytesPerSecond must be a whole number of bytes per second, at most 1099511627776"
+
+  - it: writes a rate at the ceiling
+    set:
+      monitoring.tracingCentralTenantBytesPerSecond: 1099511627776
+    asserts:
+      - matchRegex:
+          path: stringData["values.yaml"]
+          pattern: '(?m)^\s*tracing-central-tenant-bytes-per-second:\s*"1099511627776"$'
+
+  - it: writes a string rate at the ceiling
+    set:
+      monitoring.tracingCentralTenantBytesPerSecond: "1099511627776"
+    asserts:
+      - matchRegex:
+          path: stringData["values.yaml"]
+          pattern: '(?m)^\s*tracing-central-tenant-bytes-per-second:\s*"1099511627776"$'

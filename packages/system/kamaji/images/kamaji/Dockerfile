@@ -1,5 +1,6 @@
 # Build the manager binary
-FROM golang:1.27@sha256:3680233e3204827fbdc66088528ae6d4b3d034f51d03a99d454f6de034888244 AS builder
+FROM --platform=$BUILDPLATFORM golang:1.27@sha256:3680233e3204827fbdc66088528ae6d4b3d034f51d03a99d454f6de034888244 AS builder
+ARG GOPROXY
 
 ARG VERSION=26.9.4-edge
 ARG TARGETOS
@@ -11,6 +12,17 @@ RUN curl -sSL https://github.com/clastix/kamaji/archive/refs/tags/${VERSION}.tar
 
 COPY patches /patches
 RUN git apply /patches/*.diff
+
+# go build never compiles a _test.go, so nothing else runs the tests of the
+# packages the patches touch. Each package is tested from its own directory:
+# that finds the module it belongs to, and an empty list runs nothing.
+# The list is read into a variable first: a for loop drops the exit status
+# of a command substitution, so a patch git cannot read would leave the list
+# empty and the step green.
+RUN files=$(git apply --numstat /patches/*.diff) || exit 1; \
+    for dir in $(printf '%s\n' "$files" | cut -f3 | grep '\.go$' | xargs -r -n1 dirname | sort -u); do \
+      (cd "$dir" && go test .) || exit 1; \
+    done
 
 RUN GOOS=$TARGETOS GOARCH=$TARGETARCH CGO_ENABLED=0 go build \
     -ldflags "-X github.com/clastix/kamaji/internal.GitRepo=$GIT_REPO -X github.com/clastix/kamaji/internal.GitTag=$GIT_LAST_TAG -X github.com/clastix/kamaji/internal.GitCommit=$GIT_HEAD_COMMIT -X github.com/clastix/kamaji/internal.GitDirty=$GIT_MODIFIED -X github.com/clastix/kamaji/internal.BuildTime=$BUILD_DATE" \

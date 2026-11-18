@@ -4,6 +4,8 @@ Two restore variants are supported. Both append: the strategy recreates a
 topic only if it is absent and then replays every record, so it refuses a
 target topic that already holds data.
 
+The user's own action in both variants, at the tenant admin level, is the `RestoreJob`, plus the second `Kafka` in variant B. The scripts as written need admin access: variant A deletes and checks the topic through a CLI Pod and reads the refused restore's Pod log, and variant B checks the topic the same way, creates the target's Secret and waits on its `HelmRelease` and Strimzi `Kafka`, none of which a tenant role allows. The README's step table has the details.
+
 ## A. In-place restore
 
 Restore back into the same Kafka application.
@@ -69,9 +71,6 @@ The script:
   had already replayed. The Pod log names each topic before its replay and
   again once it landed; empty or delete every topic it shows as started, not
   only the one the refusal names, then re-run.
-- The tarball in object storage is not managed by the Cozystack `Backup`
-  lifecycle: deleting the `Backup` CR removes the reference but leaves the S3
-  object in place. Tenants who need to reclaim space should delete the object
-  (or set a bucket lifecycle policy).
+- The tarball in object storage is not managed by the Cozystack `Backup` lifecycle: deleting the `Backup` CR removes the reference but leaves the S3 object in place. Tenants who need to reclaim space should delete the object, or set a lifecycle rule on the bucket. A Simple or MultiZone Cozystack SeaweedFS applies such rules once a day only while its `lifecycle.enabled` is on, which is not the default; a Client instance applies none itself, so the SeaweedFS it connects to must have `lifecycle.enabled` on. Another object store applies them only if it implements bucket lifecycle.
 - Consumer-group offsets, topic configs, ACLs and users are not part of the
   backup; consumers start from the restored topic's fresh offsets.

@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"maps"
 	"net/http"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -49,6 +50,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	fluxshard "github.com/cozystack/cozystack/internal/fluxshardoperator"
+	"github.com/cozystack/cozystack/pkg/apis/apps/defaulting"
 	"github.com/cozystack/cozystack/pkg/apis/apps/presets"
 	appsv1alpha1 "github.com/cozystack/cozystack/pkg/apis/apps/v1alpha1"
 	"github.com/cozystack/cozystack/pkg/apis/apps/validation"
@@ -56,7 +58,6 @@ import (
 	"github.com/cozystack/cozystack/pkg/registry"
 	fieldfilter "github.com/cozystack/cozystack/pkg/registry/fields"
 	"github.com/cozystack/cozystack/pkg/registry/sorting"
-	internalapiext "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions"
 	apiextv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	structuralschema "k8s.io/apiextensions-apiserver/pkg/apiserver/schema"
 
@@ -109,26 +110,7 @@ type REST struct {
 // errors — callers can decide whether to log-and-continue (NewREST does)
 // or fail hard (tests do).
 func buildSpecSchema(raw string) (*structuralschema.Structural, error) {
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
-		return nil, nil
-	}
-	var v1js apiextv1.JSONSchemaProps
-	if err := json.Unmarshal([]byte(raw), &v1js); err != nil {
-		return nil, fmt.Errorf("unmarshal v1 OpenAPI schema: %w", err)
-	}
-	scheme := runtime.NewScheme()
-	_ = internalapiext.AddToScheme(scheme)
-	_ = apiextv1.AddToScheme(scheme)
-	var ijs internalapiext.JSONSchemaProps
-	if err := scheme.Convert(&v1js, &ijs, nil); err != nil {
-		return nil, fmt.Errorf("convert v1->internal JSONSchemaProps: %w", err)
-	}
-	s, err := structuralschema.NewStructural(&ijs)
-	if err != nil {
-		return nil, fmt.Errorf("build structural schema: %w", err)
-	}
-	return s, nil
+	return defaulting.BuildSchema(raw)
 }
 
 // NewREST creates a new REST storage for Application with specific configuration
@@ -183,6 +165,8 @@ func (r *REST) Create(ctx context.Context, obj runtime.Object, createValidation 
 		return nil, fmt.Errorf("expected *appsv1alpha1.Application object, got %T", obj)
 	}
 
+	app = app.DeepCopy()
+
 	// Validate Application name format (DNS-1035 plus any kind-specific rules)
 	if errs := r.validateNameFormat(app.Name); len(errs) > 0 {
 		return nil, apierrors.NewInvalid(r.gvk.GroupKind(), app.Name, errs)
@@ -214,6 +198,16 @@ func (r *REST) Create(ctx context.Context, obj runtime.Object, createValidation 
 		return nil, apierrors.NewBadRequest(err.Error())
 	}
 
+	// Omission permits a chart default; explicit null suppresses it in Helm.
+	// Normalize only repairable fields before admission and persistence.
+	emptied, err := r.normalizeSpecNulls(app)
+	if err != nil {
+		return nil, apierrors.NewBadRequest(fmt.Sprintf("failed to normalize spec: %v", err))
+	}
+	if len(emptied) > 0 {
+		warning.AddWarning(ctx, "", emptyFieldsWarning(emptied))
+	}
+
 	r.warnLegacyPresets(app)
 	r.warnRemovedKubernetesFields(ctx, app)
 	r.warnRemovedUserPasswords(ctx, app)
@@ -227,7 +221,7 @@ func (r *REST) Create(ctx context.Context, obj runtime.Object, createValidation 
 	// this hook explicitly — unlike genericregistry.Store, which
 	// wires it automatically.
 	if createValidation != nil {
-		if err := createValidation(ctx, obj); err != nil {
+		if err := createValidation(ctx, app); err != nil {
 			return nil, err
 		}
 	}
@@ -523,19 +517,13 @@ func (r *REST) Update(ctx context.Context, name string, objInfo rest.UpdatedObje
 		return nil, false, err
 	}
 
+	previousFinalizers := slices.Clone(oldObj.(*appsv1alpha1.Application).Finalizers)
+
 	// Update the Application object
 	newObj, err := objInfo.UpdatedObject(ctx, oldObj)
 	if err != nil {
 		klog.Errorf("Failed to get updated object: %v", err)
 		return nil, false, err
-	}
-
-	// Validate the update if a validation function is provided
-	if updateValidation != nil {
-		if err := updateValidation(ctx, newObj, oldObj); err != nil {
-			klog.Errorf("Update validation failed for Application %s: %v", name, err)
-			return nil, false, err
-		}
 	}
 
 	// Assert the new object is of type Application
@@ -545,6 +533,8 @@ func (r *REST) Update(ctx context.Context, name string, objInfo rest.UpdatedObje
 		return nil, false, fmt.Errorf("expected *appsv1alpha1.Application object, got %T", newObj)
 	}
 
+	app = app.DeepCopy()
+
 	// Note: name validation (DNS-1035 format + length) is intentionally skipped on
 	// Update because Kubernetes names are immutable. Validating here would block
 	// updates to pre-existing resources whose names don't conform to the new rules.
@@ -552,6 +542,23 @@ func (r *REST) Update(ctx context.Context, name string, objInfo rest.UpdatedObje
 	// Validate that values don't contain reserved keys (starting with "_")
 	if err := validateNoInternalKeys(app.Spec); err != nil {
 		return nil, false, apierrors.NewBadRequest(err.Error())
+	}
+
+	// Admission must validate the same normalized values that will be stored.
+	emptied, err := r.normalizeSpecNulls(app)
+	if err != nil {
+		return nil, false, apierrors.NewBadRequest(fmt.Sprintf("failed to normalize spec: %v", err))
+	}
+	if len(emptied) > 0 {
+		warning.AddWarning(ctx, "", emptyFieldsWarning(emptied))
+	}
+
+	// Validate the update if a validation function is provided
+	if updateValidation != nil {
+		if err := updateValidation(ctx, app, oldObj); err != nil {
+			klog.Errorf("Update validation failed for Application %s: %v", name, err)
+			return nil, false, err
+		}
 	}
 
 	// Enforce hierarchical quota allocation on quota changes too: raising a
@@ -575,9 +582,11 @@ func (r *REST) Update(ctx context.Context, name string, objInfo rest.UpdatedObje
 		return nil, false, fmt.Errorf("conversion error: %v", err)
 	}
 
-	// Fetch the live HelmRelease: it backs the ResourceVersion when the
-	// converted object carries none, and runtime-managed labels and the
-	// suspension are carried over from it below.
+	// Keep the conversion output pristine: the metadata assembly below reads the
+	// live object, so a conflict retry has to redo it from this copy rather than
+	// re-apply it on top of its own previous result.
+	converted := helmRelease.DeepCopy()
+
 	cur := &helmv2.HelmRelease{}
 	if err := r.c.Get(ctx, client.ObjectKey{Namespace: helmRelease.Namespace, Name: helmRelease.Name}, cur, &client.GetOptions{Raw: &metav1.GetOptions{}}); err != nil {
 		return nil, false, registry.WrapPreservingStatus("failed to fetch current HelmRelease", err, r.gvr.GroupResource(), name)
@@ -585,28 +594,7 @@ func (r *REST) Update(ctx context.Context, name string, objInfo rest.UpdatedObje
 	if helmRelease.ResourceVersion == "" {
 		helmRelease.SetResourceVersion(cur.GetResourceVersion())
 	}
-
-	// Merge system labels (from config) directly
-	helmRelease.Labels = mergeMaps(r.releaseConfig.Labels, helmRelease.Labels)
-	// Merge user labels with prefix
-	helmRelease.Labels = mergeMaps(helmRelease.Labels, addPrefixedMap(app.Labels, LabelPrefix))
-	// Add application metadata labels
-	if helmRelease.Labels == nil {
-		helmRelease.Labels = make(map[string]string)
-	}
-	helmRelease.Labels[ApplicationKindLabel] = r.kindName
-	helmRelease.Labels[ApplicationGroupLabel] = r.gvk.Group
-	helmRelease.Labels[ApplicationNameLabel] = app.Name
-	// Note: Annotations from config are not handled as r.releaseConfig.Annotations is undefined
-
-	// The flux-shard-operator assigns each tenant HelmRelease to a
-	// helm-controller shard by rewriting this label at runtime. Rebuilding
-	// the object from the Application reverts it to the ApplicationDefinition
-	// default, which would bounce the HelmRelease off its shard on every
-	// update, so the live value wins.
-	if shard, ok := cur.Labels[fluxshard.ShardKeyLabel]; ok {
-		helmRelease.Labels[fluxshard.ShardKeyLabel] = shard
-	}
+	r.applyLiveMetadata(helmRelease, cur, app, previousFinalizers)
 
 	// Suspension is not part of the Application, so the rebuilt object always
 	// says suspend=false, and sending it as is resumes a release that an
@@ -632,6 +620,13 @@ func (r *REST) Update(ctx context.Context, name string, objInfo rest.UpdatedObje
 	// is never a real spec conflict here: refresh the resourceVersion from the
 	// live object and retry. Suspend is refreshed with it, because the write
 	// that caused the conflict may be the one that suspended the release.
+	//
+	// The carried-over metadata is not derived from the Application, though, and
+	// the writer that caused the conflict is usually the controller that owns it
+	// — helm-controller re-adding finalizers.fluxcd.io is the case this whole
+	// carry-over exists for. Keeping the copy read before the conflict would put
+	// the stale metadata back and undo that write, so rebuild from the
+	// conversion output against the object just read.
 	err = retry.RetryOnConflict(retry.DefaultBackoff, func() error {
 		updateErr := r.c.Update(ctx, helmRelease, registry.ClientUpdateOptions(options))
 		if apierrors.IsConflict(updateErr) {
@@ -639,6 +634,8 @@ func (r *REST) Update(ctx context.Context, name string, objInfo rest.UpdatedObje
 			if getErr := r.c.Get(ctx, client.ObjectKey{Namespace: helmRelease.Namespace, Name: helmRelease.Name}, cur, &client.GetOptions{Raw: &metav1.GetOptions{}}); getErr != nil {
 				return getErr
 			}
+			helmRelease = converted.DeepCopy()
+			r.applyLiveMetadata(helmRelease, cur, app, previousFinalizers)
 			helmRelease.SetResourceVersion(cur.GetResourceVersion())
 			helmRelease.Spec.Suspend = cur.Spec.Suspend
 		}
@@ -799,12 +796,12 @@ func (r *REST) Watch(ctx context.Context, options *metainternalversion.ListOptio
 	}
 	helmLabelSelector = labels.NewSelector().Add(labelRequirements...)
 
-	// Honor SendInitialEvents (WatchList): the client expects all existing
+	// Honor a WatchList request: the client expects all existing
 	// objects as ADDED events, then a Bookmark annotated with
 	// metav1.InitialEventsAnnotationKey. controller-runtime's cache already
 	// replays the ADDED events, so we just emit the terminating bookmark.
-	sendInitialEvents := options.SendInitialEvents != nil && *options.SendInitialEvents
-	bookmarker := registry.NewInitialEventsBookmarker(sendInitialEvents, options.ResourceVersion, func() runtime.Object {
+	initialEventsEnd := registry.InitialEventsEndBookmarkRequested(options)
+	bookmarker := registry.NewInitialEventsBookmarker(initialEventsEnd, options.ResourceVersion, func() runtime.Object {
 		app := &appsv1alpha1.Application{}
 		app.TypeMeta = metav1.TypeMeta{
 			APIVersion: appsv1alpha1.SchemeGroupVersion.String(),
@@ -826,10 +823,10 @@ func (r *REST) Watch(ctx context.Context, options *metainternalversion.ListOptio
 	helmWatcher, err := r.w.Watch(ctx, hrList, &client.ListOptions{
 		Namespace:     namespace,
 		LabelSelector: helmLabelSelector,
-		// Ask the backing watch for bookmarks on a WatchList request; the
-		// apiserver omits them by default, leaving the terminating
-		// initial-events-end bookmark with no reliable trigger.
-		Raw: &metav1.ListOptions{AllowWatchBookmarks: sendInitialEvents},
+		// Backing bookmarks are forwarded to the client, so ask for them only
+		// when the client did; a WatchList client always does, which keeps
+		// the terminating bookmark's trigger.
+		Raw: &metav1.ListOptions{AllowWatchBookmarks: options.AllowWatchBookmarks},
 	})
 	if err != nil {
 		klog.Errorf("Error setting up watch for HelmReleases: %v", err)
@@ -1190,15 +1187,13 @@ func (r *REST) hasRequiredApplicationLabelsWithName(hr *helmv2.HelmRelease, appN
 }
 
 // mergeMaps combines two maps of labels or annotations
+// mergeMaps merges b over a into a freshly allocated map. It never returns
+// either input: callers mutate the result in place, and a may be a long-lived
+// shared map (e.g. r.releaseConfig.Labels) that concurrent requests must not
+// write to.
 func mergeMaps(a, b map[string]string) map[string]string {
 	if a == nil && b == nil {
 		return nil
-	}
-	if a == nil {
-		return b
-	}
-	if b == nil {
-		return a
 	}
 	merged := make(map[string]string, len(a)+len(b))
 	maps.Copy(merged, a)
@@ -1227,6 +1222,95 @@ func filterPrefixedMap(original map[string]string, prefix string) map[string]str
 	for k, v := range original {
 		if key, ok := strings.CutPrefix(k, prefix); ok {
 			processed[key] = v
+		}
+	}
+	return processed
+}
+
+func garbageCollectionFinalizers(finalizers []string) []string {
+	var result []string
+	for _, finalizer := range finalizers {
+		if finalizer == metav1.FinalizerDeleteDependents || finalizer == metav1.FinalizerOrphanDependents {
+			result = append(result, finalizer)
+		}
+	}
+	return result
+}
+
+func mergeGarbageCollectionFinalizers(current, previous, desired []string) []string {
+	result := slices.Clone(current)
+	for _, finalizer := range []string{metav1.FinalizerDeleteDependents, metav1.FinalizerOrphanDependents} {
+		before, after := slices.Contains(previous, finalizer), slices.Contains(desired, finalizer)
+		if before == after {
+			continue
+		}
+		if !after {
+			result = slices.DeleteFunc(result, func(f string) bool { return f == finalizer })
+		} else if !slices.Contains(result, finalizer) {
+			result = append(result, finalizer)
+		}
+	}
+	return result
+}
+
+// applyLiveMetadata assembles the metadata of a HelmRelease rebuilt from an
+// Application, given the live object it is about to replace. The PUT is a full
+// replace, so anything not restated here is dropped:
+//   - controller finalizers: helm-controller's finalizers.fluxcd.io guarantees
+//     `helm uninstall` runs on deletion. Stripping it lets a subsequent delete
+//     remove the HelmRelease instantly, orphaning every resource of the release.
+//   - ownerReferences: garbage collection and lineage.
+//   - labels/annotations outside the apps.cozystack.io- prefix: set directly on
+//     the HelmRelease by Flux or other controllers. Keys under the prefix are
+//     owned by this API and recomputed from the Application, so stale ones are
+//     dropped and a deletion on the Application propagates.
+//
+// hr must be a fresh conversion output: the function overlays the live metadata
+// and is not idempotent against its own result.
+func (r *REST) applyLiveMetadata(hr, cur *helmv2.HelmRelease, app *appsv1alpha1.Application, previousFinalizers []string) {
+	hr.Finalizers = mergeGarbageCollectionFinalizers(cur.Finalizers, previousFinalizers, app.Finalizers)
+	hr.DeletionTimestamp = cur.DeletionTimestamp.DeepCopy()
+	hr.DeletionGracePeriodSeconds = cur.DeletionGracePeriodSeconds
+	hr.OwnerReferences = cur.OwnerReferences
+	hr.Labels = mergeMaps(omitPrefixedMap(cur.Labels, LabelPrefix), hr.Labels)
+	hr.Annotations = mergeMaps(omitPrefixedMap(cur.Annotations, AnnotationPrefix), hr.Annotations)
+
+	// Merge system labels (from config) directly
+	hr.Labels = mergeMaps(r.releaseConfig.Labels, hr.Labels)
+	// Merge user labels with prefix
+	hr.Labels = mergeMaps(hr.Labels, addPrefixedMap(app.Labels, LabelPrefix))
+	// Add application metadata labels
+	if hr.Labels == nil {
+		hr.Labels = make(map[string]string)
+	}
+	hr.Labels[ApplicationKindLabel] = r.kindName
+	hr.Labels[ApplicationGroupLabel] = r.gvk.Group
+	hr.Labels[ApplicationNameLabel] = app.Name
+	// Note: Annotations from config are not handled as r.releaseConfig.Annotations is undefined
+
+	// The flux-shard-operator assigns each tenant HelmRelease to a
+	// helm-controller shard by rewriting this label at runtime. Rebuilding
+	// the object from the Application reverts it to the ApplicationDefinition
+	// default, which would bounce the HelmRelease off its shard on every
+	// update, so the live value wins.
+	if shard, ok := cur.Labels[fluxshard.ShardKeyLabel]; ok {
+		hr.Labels[fluxshard.ShardKeyLabel] = shard
+	}
+}
+
+// omitPrefixedMap returns the entries of a map whose keys do NOT carry the
+// predefined prefix, keeping the keys as-is. It is the complement of
+// filterPrefixedMap: prefixed keys are owned by this API and recomputed from
+// the Application on every write, while the remaining keys belong to other
+// controllers and must be preserved.
+func omitPrefixedMap(original map[string]string, prefix string) map[string]string {
+	if original == nil {
+		return nil
+	}
+	processed := make(map[string]string)
+	for k, v := range original {
+		if !strings.HasPrefix(k, prefix) {
+			processed[k] = v
 		}
 	}
 	return processed
@@ -1464,18 +1548,29 @@ func (r *REST) convertHelmReleaseToApplication(ctx context.Context, hr *helmv2.H
 			ResourceVersion:   hr.GetResourceVersion(),
 			CreationTimestamp: hr.CreationTimestamp,
 			DeletionTimestamp: hr.DeletionTimestamp,
+			Finalizers:        garbageCollectionFinalizers(hr.Finalizers),
 			Labels:            filterPrefixedMap(hr.Labels, LabelPrefix),
 			Annotations:       filterPrefixedMap(hr.Annotations, AnnotationPrefix),
 		},
 		Spec: filteredSpec,
 		Status: appsv1alpha1.ApplicationStatus{
-			Version: hr.Status.LastAttemptedRevision,
+			Version:                    hr.Status.LastAttemptedRevision,
+			InstallFailures:            hr.Status.InstallFailures,
+			UpgradeFailures:            hr.Status.UpgradeFailures,
+			LastAttemptedReleaseAction: string(hr.Status.LastAttemptedReleaseAction),
 		},
 	}
 
 	var conditions []metav1.Condition
 	for _, hrCondition := range hr.GetConditions() {
-		if hrCondition.Type == "Ready" || hrCondition.Type == "Released" {
+		// The Application carries no generation, so a client cannot tell a Stalled
+		// left over from the previous spec from one about the current spec. Compare
+		// the condition's own ObservedGeneration, not Status.ObservedGeneration: the
+		// question is which spec this condition describes.
+		if hrCondition.Type == "Stalled" && hrCondition.ObservedGeneration < hr.Generation {
+			continue
+		}
+		if hrCondition.Type == "Ready" || hrCondition.Type == "Released" || hrCondition.Type == "Stalled" {
 			conditions = append(conditions, metav1.Condition{
 				LastTransitionTime: hrCondition.LastTransitionTime,
 				Reason:             hrCondition.Reason,
@@ -1535,6 +1630,12 @@ func (r *REST) convertHelmReleaseToApplication(ctx context.Context, hr *helmv2.H
 			// Concrete failure takes priority over unknown/pending state
 			workloadsCondition.Status = metav1.ConditionFalse
 			workloadsCondition.Message = "One or more workloads are not operational"
+			if len(ws.messages) > 0 {
+				workloadsCondition.Message = strings.Join(ws.messages, "; ")
+			}
+			if ws.reason != "" {
+				workloadsCondition.Reason = ws.reason
+			}
 		case ws.unknown:
 			workloadsCondition.Status = metav1.ConditionUnknown
 			workloadsCondition.Reason = "Pending"
@@ -1577,6 +1678,12 @@ type workloadsStatus struct {
 	operational bool
 	found       bool
 	unknown     bool // true when at least one monitor has nil Operational (not yet reconciled)
+	// messages are the non-empty status messages of the monitors that are not
+	// operational, sorted so repeated conversions produce identical content.
+	messages []string
+	// reason is the status Reason of a monitor that is not operational and
+	// names its cause, such as DataVolumeNotReady; empty when none does.
+	reason string
 	// transitionTime is the most recent metadata update time across the
 	// matching monitors. Used as WorkloadsReady.LastTransitionTime so that
 	// repeated conversions for the same underlying state produce stable
@@ -1623,19 +1730,32 @@ func (r *REST) getWorkloadsOperational(ctx context.Context, namespace, appName s
 	}
 	operational := true
 	unknown := false
+	var messages, reasons []string
 	var latest metav1.Time
 	for _, m := range monitors.Items {
 		if m.Status.Operational == nil {
 			unknown = true
 		} else if !*m.Status.Operational {
 			operational = false
+			if m.Status.Message != "" {
+				messages = append(messages, m.Status.Message)
+			}
+			if m.Status.Reason != "" {
+				reasons = append(reasons, m.Status.Reason)
+			}
 		}
 		// Pick the most recent monitor mtime as a stable transition time.
 		if t := latestMonitorTime(&m); t.After(latest.Time) {
 			latest = t
 		}
 	}
-	return workloadsStatus{operational: operational, found: true, unknown: unknown, transitionTime: latest}, nil
+	sort.Strings(messages)
+	sort.Strings(reasons)
+	var reason string
+	if len(reasons) > 0 {
+		reason = reasons[0]
+	}
+	return workloadsStatus{operational: operational, found: true, unknown: unknown, messages: messages, reason: reason, transitionTime: latest}, nil
 }
 
 // latestMonitorTime returns the most recent timestamp associated with a
@@ -1660,8 +1780,9 @@ func latestMonitorTime(m *cozyv1alpha1.WorkloadMonitor) metav1.Time {
 // from Spec.Interval — the previous coupling caused failed installs to
 // retry only every 5m, exceeding E2E budgets.
 func (r *REST) convertApplicationToHelmRelease(app *appsv1alpha1.Application) (*helmv2.HelmRelease, error) {
-	// Per-Application annotation overrides win over the global defaults
-	// (HelmReleaseInstallTimeout / HelmReleaseUpgradeTimeout):
+	// Kind-wide annotation overrides from this kind's ApplicationDefinition
+	// win over the global defaults (HelmReleaseInstallTimeout /
+	// HelmReleaseUpgradeTimeout):
 	//   - HelmInstallTimeout (release.cozystack.io/helm-install-timeout)
 	//     sets both Install.Timeout and Upgrade.Timeout;
 	//   - HelmUpgradeTimeout (release.cozystack.io/helm-upgrade-timeout)
@@ -1695,6 +1816,7 @@ func (r *REST) convertApplicationToHelmRelease(app *appsv1alpha1.Application) (*
 			Annotations:     addPrefixedMap(app.Annotations, AnnotationPrefix),
 			ResourceVersion: app.ResourceVersion,
 			UID:             app.UID,
+			Finalizers:      garbageCollectionFinalizers(app.Finalizers),
 		},
 		Spec: helmv2.HelmReleaseSpec{
 			ChartRef: &helmv2.CrossNamespaceSourceReference{
@@ -1822,6 +1944,7 @@ func (r *REST) buildTableFromApplications(apps []appsv1alpha1.Application) metav
 		ColumnDefinitions: []metav1.TableColumnDefinition{
 			{Name: "NAME", Type: "string", Description: "Name of the Application", Priority: 0},
 			{Name: "READY", Type: "string", Description: "Ready status of the Application", Priority: 0},
+			{Name: "WORKLOADS", Type: "string", Description: "Status of the WorkloadsReady condition, <none> when the Application has no WorkloadMonitor", Priority: 0},
 			{Name: "AGE", Type: "string", Description: "Age of the Application", Priority: 0},
 			{Name: "VERSION", Type: "string", Description: "Version of the Application", Priority: 0},
 		},
@@ -1832,7 +1955,7 @@ func (r *REST) buildTableFromApplications(apps []appsv1alpha1.Application) metav
 	for i := range apps {
 		app := &apps[i]
 		row := metav1.TableRow{
-			Cells:  []any{app.GetName(), getReadyStatus(app.Status.Conditions), computeAge(app.GetCreationTimestamp().Time, now), getVersion(app.Status.Version)},
+			Cells:  []any{app.GetName(), conditionStatus(app.Status.Conditions, "Ready", "Unknown"), conditionStatus(app.Status.Conditions, "WorkloadsReady", "<none>"), computeAge(app.GetCreationTimestamp().Time, now), getVersion(app.Status.Version)},
 			Object: runtime.RawExtension{Object: app},
 		}
 		table.Rows = append(table.Rows, row)
@@ -1847,6 +1970,7 @@ func (r *REST) buildTableFromApplication(app appsv1alpha1.Application) metav1.Ta
 		ColumnDefinitions: []metav1.TableColumnDefinition{
 			{Name: "NAME", Type: "string", Description: "Name of the Application", Priority: 0},
 			{Name: "READY", Type: "string", Description: "Ready status of the Application", Priority: 0},
+			{Name: "WORKLOADS", Type: "string", Description: "Status of the WorkloadsReady condition, <none> when the Application has no WorkloadMonitor", Priority: 0},
 			{Name: "AGE", Type: "string", Description: "Age of the Application", Priority: 0},
 			{Name: "VERSION", Type: "string", Description: "Version of the Application", Priority: 0},
 		},
@@ -1856,7 +1980,7 @@ func (r *REST) buildTableFromApplication(app appsv1alpha1.Application) metav1.Ta
 
 	a := app
 	row := metav1.TableRow{
-		Cells:  []any{app.GetName(), getReadyStatus(app.Status.Conditions), computeAge(app.GetCreationTimestamp().Time, now), getVersion(app.Status.Version)},
+		Cells:  []any{app.GetName(), conditionStatus(app.Status.Conditions, "Ready", "Unknown"), conditionStatus(app.Status.Conditions, "WorkloadsReady", "<none>"), computeAge(app.GetCreationTimestamp().Time, now), getVersion(app.Status.Version)},
 		Object: runtime.RawExtension{Object: &a},
 	}
 	table.Rows = append(table.Rows, row)
@@ -1886,10 +2010,11 @@ func computeAge(creationTime, currentTime time.Time) string {
 	return duration.HumanDuration(ageDuration)
 }
 
-// getReadyStatus returns the ready status based on conditions
-func getReadyStatus(conditions []metav1.Condition) string {
+// conditionStatus returns the status of the condition of the given type, or
+// absent when there is none.
+func conditionStatus(conditions []metav1.Condition, conditionType, absent string) string {
 	for _, condition := range conditions {
-		if condition.Type == "Ready" {
+		if condition.Type == conditionType {
 			switch condition.Status {
 			case metav1.ConditionTrue:
 				return "True"
@@ -1900,7 +2025,7 @@ func getReadyStatus(conditions []metav1.Condition) string {
 			}
 		}
 	}
-	return "Unknown"
+	return absent
 }
 
 // computeTenantNamespace computes the namespace for a Tenant application based on the specified logic
@@ -2030,7 +2155,7 @@ const kubernetesKind = "Kubernetes"
 // upgraded cluster keeps them in its values until re-edited, and the adoption
 // migration deliberately leaves them in place rather than rewriting parent
 // values mid-upgrade -- but they no longer render anything on the Kubernetes CR.
-var removedKubernetesFields = []string{"nodeGroups", "nodeHealthCheck", "maxNodeProvisionTime"}
+var removedKubernetesFields = []string{"nodeGroups", "nodeHealthCheck", "maxNodeProvisionTime", "talos"}
 
 // warnRemovedKubernetesFields emits a client-facing admission warning for each
 // Phase 2-removed field still present in a Kubernetes CR's values, so an

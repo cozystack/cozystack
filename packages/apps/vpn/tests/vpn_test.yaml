@@ -16,11 +16,13 @@ set:
     host: example.com
 
 tests:
-  - it: renders a Deployment with the default replicas and image
+  - it: renders a Deployment with the default replicas and the image from images/shadowbox.tag
     template: templates/deployment.yaml
     asserts:
       - hasDocuments:
           count: 1
+      - isNotNullOrEmpty:
+          path: spec.template.spec.containers[0].image
       - isKind:
           of: Deployment
       - equal:
@@ -29,9 +31,6 @@ tests:
       - equal:
           path: spec.replicas
           value: 2
-      - equal:
-          path: spec.template.spec.containers[0].image
-          value: "quay.io/outline/shadowbox:stable"
       - equal:
           path: spec.template.spec.containers[0].ports[0].containerPort
           value: 40000

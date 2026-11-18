@@ -110,6 +110,30 @@ Usage: {{ include "cozy-lib.ns-host" . }}
 {{- end }}
 
 {{/*
+Get the host for this namespace, requiring a usable apex.
+Returns the same value as cozy-lib.ns-host, but fails the render when
+the platform has injected _namespace and its host is empty AND this app
+sets no host override (.Values.host), instead of silently composing a
+malformed "<sub>." hostname into an Ingress, HTTPRoute or Certificate
+dnsName. The guard is scoped to the injected state on purpose: a
+standalone render (helm lint / helm template with no _namespace) has no
+apex by design and must stay renderable, so an absent _namespace never
+fails. Call it only at a site that actually emits a hostname, so a
+tenant with no apex and no public exposure is unaffected. This mirrors
+the gateway path (packages/extra/gateway/templates/tenantgateway.yaml),
+which fails on an empty apex only when a Gateway is actually rendered.
+Usage: {{ include "cozy-lib.ns-host-required" . }}
+*/}}
+{{- define "cozy-lib.ns-host-required" -}}
+{{- $ns := .Values._namespace -}}
+{{- $apex := ($ns | default dict).host | default "" -}}
+{{- if and $ns (not (.Values.host | default "")) (not $apex) -}}
+{{- fail "the tenant apex (_namespace.host) is empty and this app sets no host override, so its ingress hostname would be malformed. Set tenant.spec.host on this tenant, inherit it from a parent that has host set, or set this app's host value." -}}
+{{- end -}}
+{{- $apex -}}
+{{- end }}
+
+{{/*
 Get the etcd namespace reference.
 Usage: {{ include "cozy-lib.ns-etcd" . }}
 */}}

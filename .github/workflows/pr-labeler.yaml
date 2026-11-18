@@ -24,7 +24,7 @@ jobs:
         with:
           script: |
             // Conventional Commits types accepted by Cozystack (per docs/agents/contributing.md):
-            //   feat, fix, docs, style, refactor, perf, test, build, ci, chore, revert
+            //   feat, fix, security, docs, style, refactor, perf, test, build, ci, chore, revert
             // Mapping below maps a subset to kind/* — types not listed do not produce a kind/*.
             const typeToKind = {
               feat:     'kind/feature',
@@ -32,7 +32,7 @@ jobs:
               docs:     'kind/documentation',
               chore:    'kind/cleanup',
               refactor: 'kind/cleanup',
-              // style, perf, test, build, ci, revert — no kind mapping
+              // security, style, perf, test, build, ci, revert — no kind mapping
             };
 
             // scope -> area/* mapping. Keys are the scopes observed in cozystack issues
@@ -41,6 +41,7 @@ jobs:
               // area/api
               'api':                 'area/api',
               'cozystack-api':       'area/api',
+              'registry':            'area/api',
 
               // area/ai
               'agents':              'area/ai',
@@ -51,14 +52,24 @@ jobs:
 
               // area/ci
               'ci':                  'area/ci',
+              'workflows':           'area/ci',
+              'labeler':             'area/ci',
 
               // area/dependencies — Renovate uses scope `deps` (see .github/renovate.json)
               'deps':                'area/dependencies',
+              'dependencies':        'area/dependencies',
+              'renovate':            'area/dependencies',
+
+              // area/dx — developer tooling: hack/, package Makefiles, cozypkg
+              'dx':                  'area/dx',
+              'hack':                'area/dx',
+              'cozypkg':             'area/dx',
 
               // area/dashboard
               'dashboard':           'area/dashboard',
               'cozystack-ui':        'area/dashboard',
               'console':             'area/dashboard',
+              'dashboard-controller': 'area/dashboard',
 
               // area/database
               'postgres':            'area/database',
@@ -75,6 +86,10 @@ jobs:
               'nats':                'area/database',
               'qdrant':              'area/database',
               'foundationdb':        'area/database',
+              'database':            'area/database',
+              'etcd-operator':       'area/database',
+              'opensearch':          'area/database',
+              'opensearch-operator': 'area/database',
 
               // area/extra
               'extra':               'area/extra',
@@ -84,6 +99,7 @@ jobs:
 
               // area/keycloak
               'keycloak':            'area/keycloak',
+              'keycloak-configure':  'area/keycloak',
 
               // area/kubernetes
               'kubernetes':          'area/kubernetes',
@@ -97,6 +113,7 @@ jobs:
               'vmstack':             'area/monitoring',
               'grafana':             'area/monitoring',
               'workloadmonitor':     'area/monitoring',
+              'monitoring-agents':   'area/monitoring',
 
               // area/networking
               'ingress':             'area/networking',
@@ -110,9 +127,19 @@ jobs:
               'tcp-balancer':        'area/networking',
               'securitygroups':      'area/networking',
               'cozy-proxy':          'area/networking',
+              'networking':          'area/networking',
+              'kubeovn':             'area/networking',
+              'multus':              'area/networking',
+              'kilo':                'area/networking',
+              'hetzner-robotlb':     'area/networking',
+              'ouroboros':           'area/networking',
 
               // area/cilium
               'cilium':              'area/cilium',
+
+              // area/openbao
+              'openbao':             'area/openbao',
+              'openbao-central':     'area/openbao',
 
               // area/platform
               'platform':            'area/platform',
@@ -127,10 +154,24 @@ jobs:
               'cozyctl':             'area/platform',
               'cozystack-engine':    'area/platform',
               'cozy-lib':            'area/platform',
+              'operator':            'area/platform',
+              'cozystack-operator':  'area/platform',
+              'controller':          'area/platform',
+              'cozystack-controller': 'area/platform',
+              'cozystack-basics':    'area/platform',
+              'flux-shard-operator': 'area/platform',
+              'lineage':             'area/platform',
+              'migrations':          'area/platform',
+              'scheduler':           'area/platform',
+              'cozystack-scheduler': 'area/platform',
+              'reloader':            'area/platform',
+              'bootbox':             'area/platform',
 
               // area/release
               'backport':            'area/release',
               'release':             'area/release',
+              'changelog':           'area/release',
+              'changelogs':          'area/release',
 
               // area/storage
               'seaweedfs':           'area/storage',
@@ -142,6 +183,10 @@ jobs:
               'harbor':              'area/storage',
               'backups':             'area/storage',
               'csi':                 'area/storage',
+              'storage':             'area/storage',
+              'piraeus-operator':    'area/storage',
+              'backupstrategy-controller': 'area/storage',
+              'local-storage':       'area/storage',
 
               // area/tenant
               'tenant':              'area/tenant',
@@ -149,6 +194,7 @@ jobs:
               // area/testing
               'tests':               'area/testing',
               'e2e':                 'area/testing',
+              'testing':             'area/testing',
 
               // area/virtualization
               'kubevirt':            'area/virtualization',
@@ -161,6 +207,11 @@ jobs:
               'virtual-machine':     'area/virtualization',
               'hami':                'area/virtualization',
               'gpu-operator':        'area/virtualization',
+              'virtualization':      'area/virtualization',
+              'vm':                  'area/virtualization',
+              'kubevirt-operator':   'area/virtualization',
+              'kubevirt-cdi':        'area/virtualization',
+              'kubevirt-instancetypes': 'area/virtualization',
             };
 
             const pr = context.payload.pull_request;
@@ -169,10 +220,10 @@ jobs:
             const existing = new Set((pr.labels || []).map(l => l.name));
             const toAdd = new Set();
 
-            // 1. Strip "[Backport release-1.x]" prefix if present.
-            const backportMatch = title.match(/^\[Backport ([^\]]+)\]\s+(.+)$/);
-            const cleanTitle = backportMatch ? backportMatch[2] : title;
-            if (backportMatch) {
+            // 1. Strip every leading "[Backport release-1.x]" prefix: a backport of
+            // a backport carries two, and a leftover one would be parsed as the scope.
+            const cleanTitle = title.replace(/^(?:\[Backport [^\]]+\]\s+)+/, '');
+            if (cleanTitle !== title) {
               toAdd.add('area/release');
             }
 
@@ -198,7 +249,9 @@ jobs:
 
             // 5. Apply kind/* from type.
             if (type) {
-              if (typeToKind[type]) {
+              // Object.hasOwn: a title typed or scoped `constructor` would otherwise
+              // resolve to an Object.prototype member instead of to nothing.
+              if (Object.hasOwn(typeToKind, type)) {
                 toAdd.add(typeToKind[type]);
               } else {
                 core.warning(`type "${type}" has no kind/* mapping — typo or new type? See .github/workflows/pr-labeler.yaml typeToKind`);
@@ -211,7 +264,7 @@ jobs:
               .map(s => s.trim())
               .filter(Boolean);
             for (const s of scopes) {
-              if (scopeToArea[s]) {
+              if (Object.hasOwn(scopeToArea, s)) {
                 toAdd.add(scopeToArea[s]);
               } else {
                 core.warning(`scope "${s}" has no area/* mapping — consider extending scopeToArea in .github/workflows/pr-labeler.yaml if it recurs`);
@@ -243,3 +296,82 @@ jobs:
               labels: newLabels,
             });
             core.info(`Applied labels: ${newLabels.join(', ')}`);
+
+  # Backports are automatic (docs/release/backports.md), so a pull request
+  # against a release branch from outside the team is closed with a pointer to
+  # the policy. Only when it is opened: a maintainer keeps a fix that exists
+  # only on a release line by reopening it.
+  #
+  # pull_request_target hands a write token to a fork's pull request, so this
+  # job never touches the head: actions/checkout takes the event's own ref,
+  # which is the base repository, the script reads only the event JSON and the
+  # author's permission on the repository, and no `${{ }}` expression reaches
+  # the shell. The permission read needs repository metadata read access, which
+  # a GITHUB_TOKEN always carries and `permissions:` has no key for.
+  close-manual-backport:
+    if: >-
+      github.event.action == 'opened' &&
+      startsWith(github.event.pull_request.base.ref, 'release-')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read        # check out hack/ from the base repository
+      pull-requests: write  # close the pull request with a comment
+    steps:
+      - name: Check out the base repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+          sparse-checkout: hack
+      - name: Close a backport opened by hand from outside the team
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: hack/close-manual-backport.sh "$GITHUB_EVENT_PATH"
+
+  # A batch pull request carries each original in the shape cmd/backport-batch
+  # gives it. fold checks one resolution, and only when whoever resolved the
+  # conflict runs it; this checks every original on the batch on each push.
+  #
+  # pull_request_target takes the workflow from main for a pull request into
+  # any branch, so the check reaches release-* lines, which do not carry it; a
+  # pull_request job would run the line's own workflows. The tool is built from
+  # main, since the lines do not carry it either. Nothing from the pull request
+  # is checked out or run: its head is fetched as data and read with git, and
+  # no `${{ }}` expression reaches the shell. Only a branch of this repository
+  # named like a batch is checked.
+  backport-batch-verify:
+    name: Backport batch shape
+    if: >-
+      startsWith(github.event.pull_request.base.ref, 'release-') &&
+      startsWith(github.event.pull_request.head.ref, 'backport-batch/') &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    env:
+      # The pipe falls back to direct on any proxy error (hack/common-envs.mk).
+      GOPROXY: "https://proxy.golang.org|direct"
+    steps:
+      - name: Check out main
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Set up Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Build backport-batch from main
+        run: go build -o "$RUNNER_TEMP/backport-batch" ./cmd/backport-batch
+      - name: Fetch the batch head as data
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: git fetch --no-tags --quiet origin "$HEAD_SHA"
+      - name: Verify every original on the batch
+        env:
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: '"$RUNNER_TEMP/backport-batch" verify --line "$BASE_REF" --head "$HEAD_SHA"'

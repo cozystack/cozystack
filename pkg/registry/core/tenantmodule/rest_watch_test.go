@@ -16,6 +16,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	corev1alpha1 "github.com/cozystack/cozystack/pkg/apis/core/v1alpha1"
+	"github.com/cozystack/cozystack/pkg/registry/registrytest"
 )
 
 const testNamespace = "tenant-foo"
@@ -59,7 +60,7 @@ func TestWatch_SendInitialEvents_EmitsInitialEventsEndBookmark(t *testing.T) {
 	defer cancel()
 
 	sendInitialEvents := true
-	w, err := r.Watch(ctx, &metainternalversion.ListOptions{SendInitialEvents: &sendInitialEvents})
+	w, err := r.Watch(ctx, &metainternalversion.ListOptions{SendInitialEvents: &sendInitialEvents, AllowWatchBookmarks: true})
 	if err != nil {
 		t.Fatalf("Watch returned error: %v", err)
 	}
@@ -114,5 +115,98 @@ func TestWatch_SendInitialEvents_EmitsInitialEventsEndBookmark(t *testing.T) {
 
 	if evs[2].Type != watch.Modified {
 		t.Fatalf("event[2]: expected Modified after bookmark, got %s", evs[2].Type)
+	}
+}
+
+// TestWatch_BackingBookmarksFollowTheClient pins that the backing watch asks for
+// bookmarks only when the client did: every backing bookmark is forwarded, and
+// the fake client never sends one, so the event stream alone cannot show it.
+func TestWatch_BackingBookmarksFollowTheClient(t *testing.T) {
+	yes := true
+	for _, tc := range []struct {
+		name string
+		opts metainternalversion.ListOptions
+		want bool
+	}{
+		{"plain watch defaulted by the apiserver", metainternalversion.ListOptions{SendInitialEvents: &yes}, false},
+		{"watch list", metainternalversion.ListOptions{SendInitialEvents: &yes, AllowWatchBookmarks: true}, true},
+		{"bookmarks only", metainternalversion.ListOptions{AllowWatchBookmarks: true}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			scheme := runtime.NewScheme()
+			if err := helmv2.AddToScheme(scheme); err != nil {
+				t.Fatalf("add helmv2 to scheme: %v", err)
+			}
+			fc := fake.NewClientBuilder().WithScheme(scheme).Build()
+			spy := &registrytest.RawRecordingWatch{WithWatch: fc}
+			r := NewREST(fc, spy)
+			ctx, cancel := context.WithCancel(request.WithNamespace(context.Background(), testNamespace))
+			defer cancel()
+
+			w, err := r.Watch(ctx, &tc.opts)
+			if err != nil {
+				t.Fatalf("Watch returned error: %v", err)
+			}
+			defer w.Stop()
+
+			raw := spy.RawFor(&helmv2.HelmReleaseList{})
+			if raw == nil {
+				t.Fatal("backing watch was called without raw options")
+			}
+			if raw.AllowWatchBookmarks != tc.want {
+				t.Fatalf("backing AllowWatchBookmarks = %v, want %v", raw.AllowWatchBookmarks, tc.want)
+			}
+		})
+	}
+}
+
+// TestWatch_PlainWatch_EmitsNoInitialEventsEndBookmark covers a watch with no
+// resourceVersion: the apiserver defaults SendInitialEvents on for it but leaves
+// bookmarks off, so the client never asked for the terminating bookmark.
+func TestWatch_PlainWatch_EmitsNoInitialEventsEndBookmark(t *testing.T) {
+	scheme := runtime.NewScheme()
+	if err := helmv2.AddToScheme(scheme); err != nil {
+		t.Fatalf("add helmv2 to scheme: %v", err)
+	}
+	fc := fake.NewClientBuilder().WithScheme(scheme).Build()
+	r := NewREST(fc, fc)
+
+	ctx, cancel := context.WithCancel(request.WithNamespace(context.Background(), testNamespace))
+	defer cancel()
+
+	sendInitialEvents := true
+	w, err := r.Watch(ctx, &metainternalversion.ListOptions{SendInitialEvents: &sendInitialEvents})
+	if err != nil {
+		t.Fatalf("Watch returned error: %v", err)
+	}
+	defer w.Stop()
+
+	hr := &helmv2.HelmRelease{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "module-a",
+			Namespace: testNamespace,
+			Labels: map[string]string{
+				TenantModuleLabelKey: TenantModuleLabelValue,
+			},
+		},
+	}
+	if err := r.c.Create(ctx, hr); err != nil {
+		t.Fatalf("create HelmRelease: %v", err)
+	}
+	hr.Annotations = map[string]string{"touched": "1"}
+	if err := r.c.Update(ctx, hr); err != nil {
+		t.Fatalf("update HelmRelease: %v", err)
+	}
+
+	evs := collectEvents(t, w, 3, 2*time.Second)
+	var types []watch.EventType
+	for _, ev := range evs {
+		types = append(types, ev.Type)
+		if ev.Type == watch.Bookmark {
+			t.Fatalf("unrequested bookmark on a plain watch: %+v", ev.Object)
+		}
+	}
+	if len(types) != 2 || types[0] != watch.Added || types[1] != watch.Modified {
+		t.Fatalf("expected [ADDED MODIFIED], got %v", types)
 	}
 }

@@ -24,13 +24,13 @@ import (
 	"net/http"
 	neturl "net/url"
 	"os"
+	"regexp"
 	"strings"
 	"time"
 
 	sourcev1 "github.com/fluxcd/source-controller/api/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
@@ -105,7 +105,24 @@ func (r *TapMaterializerReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		// fail-closed on the integrity check.
 		return ctrl.Result{RequeueAfter: tapWaitRequeue}, nil
 	}
+	// Act only on an artifact that reflects the current spec. After a re-connect
+	// changes spec.ref, source-controller must re-resolve before status.artifact
+	// describes the new reference; acting early would materialize and pin the
+	// previous revision (issue #4979).
+	if !r.artifactReady(&repo, art.Revision) {
+		return ctrl.Result{RequeueAfter: tapWaitRequeue}, nil
+	}
 	if repo.Annotations[tapconst.MaterializedRevisionAnnotation] == art.Revision {
+		// Already materialized at this revision. A tap connected before digest
+		// pinning existed still follows its tag (no digest on spec.ref); pin the
+		// current digest now so moving the tag upstream cannot pull new content on
+		// the next revision. A source that already carries a digest needs nothing.
+		if ref := repo.Spec.Reference; ref == nil || ref.Digest == "" {
+			pinTapDigest(&repo, art.Revision)
+			if err := r.Update(ctx, &repo); err != nil {
+				return ctrl.Result{}, err
+			}
+		}
 		return ctrl.Result{}, nil
 	}
 
@@ -165,22 +182,14 @@ func (r *TapMaterializerReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		if err := r.Patch(ctx, ps, client.Apply, client.FieldOwner(tapFieldOwner), client.ForceOwnership); err != nil {
 			return ctrl.Result{}, fmt.Errorf("materialize PackageSource %s: %w", ps.GetName(), err)
 		}
-		// Register the repository's apps on connect (not on a later `cozypkg
-		// add`) via a tap-managed Package whose install-marked components (the
-		// ApplicationDefinition registrations) deploy so the apps appear in the
-		// catalog, mirroring how the platform ships a Package per built-in app.
-		// The app components carry no install block and are instantiated per user
-		// resource. Privileged install components are refused for a tap-labelled
-		// (unconfirmed) Package on several best-effort layers: the Package
-		// reconciler skips their HelmRelease and prunes a lingering one at the
-		// install site, and the PackageSource reconciler withholds their
-		// ExternalArtifact (collision.PrivilegedConfirmed). A benign component
-		// flipped to privileged in a new revision can still be materialised by
-		// source-watcher before these observe the flip; fully closing that race
-		// needs the catalog registration decoupled from install (issue #4359).
-		if err := r.ensureRegistration(ctx, ps, &repo); err != nil {
-			return ctrl.Result{}, fmt.Errorf("register apps for %s: %w", ps.GetName(), err)
-		}
+		// Connecting a repository materializes its PackageSources and nothing
+		// else: no Package, HelmRelease or ApplicationDefinition is created here.
+		// Auto-registering on connect (removed) created a tap-managed Package whose
+		// install-marked components Flux deployed under its cluster-admin service
+		// account, so a publisher's install chart ran on connect with no operator
+		// step (issue #4978). Installing is now explicit: `cozypkg add` creates the
+		// Package. Populating the catalog from PackageSource metadata without an
+		// install is the long-term shape in issue #4359.
 		applied[ps.GetName()] = true
 		logger.Info("materialized PackageSource from tap", "name", ps.GetName(), "tap", repo.Name)
 	}
@@ -198,6 +207,13 @@ func (r *TapMaterializerReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		return ctrl.Result{}, err
 	}
 
+	// Pin the resolved digest so the source stops following a mutable tag: the
+	// tag may move upstream, but the cluster keeps pulling this exact content
+	// until an explicit re-connect. This runs only after verifyAndExtract
+	// accepted the artifact, so the digest pinned is the digest of verified
+	// content. A user-supplied explicit digest is never rewritten.
+	pinTapDigest(&repo, art.Revision)
+
 	// Stamp the revision so an unchanged artifact is not re-pulled every resync.
 	if repo.Annotations == nil {
 		repo.Annotations = map[string]string{}
@@ -207,6 +223,63 @@ func (r *TapMaterializerReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		return ctrl.Result{}, err
 	}
 	return ctrl.Result{}, nil
+}
+
+// artifactReady reports whether status.artifact reflects the current spec
+// generation and, for a tag-only source, the tag the source now follows. It
+// gates materialization and pinning so a re-connect's new spec is never acted on
+// with the previous revision's artifact. source-controller formats a tag
+// revision as '<tag>@<digest>', so a tag-only ref requires that prefix; a source
+// pinned to a digest reports a bare digest revision and needs only the
+// generation check.
+func (r *TapMaterializerReconciler) artifactReady(repo *sourcev1.OCIRepository, revision string) bool {
+	if repo.Status.ObservedGeneration != repo.Generation {
+		return false
+	}
+	if ref := repo.Spec.Reference; ref != nil && ref.Tag != "" && ref.Digest == "" {
+		return strings.HasPrefix(revision, ref.Tag+"@")
+	}
+	return true
+}
+
+// manifestDigestRe matches a full OCI manifest digest (sha256:<64 hex>).
+var manifestDigestRe = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
+
+// pinTapDigest pins a tag-following tap source to the digest Flux resolved for
+// the current artifact, so moving the tag upstream no longer changes what the
+// cluster pulls. source-controller formats an OCI tag revision as
+// '<tag>@<digest>' and a digest revision as the bare '<digest>', so the
+// manifest digest is the segment after the last '@'.
+//
+// A user-supplied explicit digest (ref.digest set without the operator's pin
+// annotation) is left untouched: the operator pins only what a tag resolved to,
+// or re-pins its own prior pin. A revision without a well-formed digest leaves
+// the source following its tag rather than writing a malformed reference (the
+// caller requires a non-empty art.Digest, so this is defensive).
+func pinTapDigest(repo *sourcev1.OCIRepository, revision string) {
+	parts := strings.Split(revision, "@")
+	digest := parts[len(parts)-1]
+	if !manifestDigestRe.MatchString(digest) {
+		return
+	}
+	ref := repo.Spec.Reference
+	// A user-supplied explicit digest carries no matching operator pin
+	// annotation; never rewrite it.
+	if ref != nil && ref.Digest != "" && repo.Annotations[tapconst.PinnedDigestAnnotation] != ref.Digest {
+		return
+	}
+	if ref != nil && ref.Digest == digest && repo.Annotations[tapconst.PinnedDigestAnnotation] == digest {
+		return // already pinned to this digest
+	}
+	if ref == nil {
+		ref = &sourcev1.OCIRepositoryRef{}
+		repo.Spec.Reference = ref
+	}
+	ref.Digest = digest
+	if repo.Annotations == nil {
+		repo.Annotations = map[string]string{}
+	}
+	repo.Annotations[tapconst.PinnedDigestAnnotation] = digest
 }
 
 // failMaterialize records a materialization failure (e.g. a name collision with
@@ -228,52 +301,6 @@ func (r *TapMaterializerReconciler) failMaterialize(ctx context.Context, repo *s
 	}
 	log.FromContext(ctx).Info("tap materialization blocked", "tap", repo.Name, "reason", cause.Error())
 	return ctrl.Result{}, nil
-}
-
-// registrationOwnerRef builds the ownerReference from a registration Package to
-// its PackageSource, so the Package is garbage-collected if the PackageSource is
-// deleted directly.
-func registrationOwnerRef(ps *cozyv1alpha1.PackageSource) metav1.OwnerReference {
-	return metav1.OwnerReference{
-		APIVersion: cozyv1alpha1.GroupVersion.String(),
-		Kind:       "PackageSource",
-		Name:       ps.GetName(),
-		UID:        ps.GetUID(),
-	}
-}
-
-// autoRegisterSkipReason returns why a PackageSource's apps cannot be
-// auto-registered on connect, or "" when they can. Only a source with no
-// "default" variant is skipped (nothing to register by default). Privileged
-// components are NOT a reason to skip: the source is registered and its
-// privileged components are refused at install time (collision.PrivilegedConfirmed)
-// until the operator confirms with 'cozypkg add --allow-privileged'.
-func autoRegisterSkipReason(ps *cozyv1alpha1.PackageSource) string {
-	if !hasDefaultVariant(ps) {
-		return `it declares no "default" variant; register it manually with 'cozypkg add'`
-	}
-	return ""
-}
-
-// warnNotAutoRegistered records on the source, as a Warning Event, that a
-// materialized PackageSource's apps were not auto-registered, with the reason.
-// This Event is the immediate, human-facing signal.
-func (r *TapMaterializerReconciler) warnNotAutoRegistered(repo *sourcev1.OCIRepository, ps *cozyv1alpha1.PackageSource, reason string) {
-	if r.Recorder != nil {
-		r.Recorder.Event(repo, corev1.EventTypeWarning, "AppsNotAutoRegistered",
-			fmt.Sprintf("PackageSource %s: %s", ps.GetName(), reason))
-	}
-}
-
-// hasDefaultVariant reports whether the PackageSource declares a variant named
-// "default".
-func hasDefaultVariant(ps *cozyv1alpha1.PackageSource) bool {
-	for i := range ps.Spec.Variants {
-		if ps.Spec.Variants[i].Name == "default" {
-			return true
-		}
-	}
-	return false
 }
 
 // deleteMaterialized removes every PackageSource materialized from the given tap
@@ -444,30 +471,4 @@ func (r *TapMaterializerReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Named("cozystack-tap-materializer").
 		For(&sourcev1.OCIRepository{}, builder.WithPredicates(isTap)).
 		Complete(r)
-}
-
-// ensureRegistration creates the tap-managed registration Package for a
-// materialized PackageSource so its apps appear in the catalog, unless the source
-// has no "default" variant (nothing to register), in which case a Warning Event
-// says why. Privileged components are not gated here: the Package reconciler
-// refuses them for an unconfirmed tap Package at the install site. The Package is
-// created only when absent; an existing registration, or a user's own or pinned
-// Package, is left as is.
-func (r *TapMaterializerReconciler) ensureRegistration(ctx context.Context, ps *cozyv1alpha1.PackageSource, repo *sourcev1.OCIRepository) error {
-	if skip := autoRegisterSkipReason(ps); skip != "" {
-		r.warnNotAutoRegistered(repo, ps, "not auto-registered because "+skip)
-		return nil
-	}
-	pkg := &cozyv1alpha1.Package{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:            ps.GetName(),
-			Labels:          map[string]string{tapconst.Label: "true"},
-			Annotations:     map[string]string{tapconst.SourceAnnotation: repo.Name},
-			OwnerReferences: []metav1.OwnerReference{registrationOwnerRef(ps)},
-		},
-	}
-	if err := r.Create(ctx, pkg); err != nil && !apierrors.IsAlreadyExists(err) {
-		return err
-	}
-	return nil
 }

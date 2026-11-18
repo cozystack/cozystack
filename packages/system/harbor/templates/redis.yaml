@@ -61,7 +61,7 @@ spec:
           {{- end }}
     exporter:
       enabled: true
-      image: oliver006/redis_exporter:v1.55.0-alpine
+      image: oliver006/redis_exporter:v1.55.0@sha256:d82625bda93823fb40de881ffbb45b65aca772a39c30141387f92314c258da5d
       args:
         - --web.telemetry-path
         - /metrics

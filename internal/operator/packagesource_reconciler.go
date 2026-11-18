@@ -83,6 +83,10 @@ const (
 	annotationFluxRequestedAt  = "reconcile.fluxcd.io/requestedAt"
 	annotationRecoveryAttempts = "cozystack.io/source-watcher-recovery-attempts"
 	annotationLastRecoveryAt   = "cozystack.io/source-watcher-last-recovery-at"
+	// annotationVerifiedGeneration records the last AG generation for which a
+	// rebuild was forced after source-watcher first reported it Ready; see
+	// verifyArtifactGeneratorGeneration.
+	annotationVerifiedGeneration = "cozystack.io/source-watcher-verified-generation"
 
 	reasonAwaitingRecovery = "AwaitingSourceWatcherRecovery"
 	reasonSourceWatcherBad = "SourceWatcherStalled"
@@ -571,6 +575,10 @@ func (r *PackageSourceReconciler) updateStatus(ctx context.Context, packageSourc
 		return ctrl.Result{RequeueAfter: agFollowUpDelay(ag.CreationTimestamp.Time, now)}, r.Status().Update(ctx, packageSource)
 	}
 
+	if needsGenerationVerification(ag, readyCondition) {
+		return r.verifyArtifactGeneratorGeneration(ctx, packageSource, ag, now)
+	}
+
 	// Copy Ready condition from ArtifactGenerator to PackageSource
 	meta.SetStatusCondition(&packageSource.Status.Conditions, metav1.Condition{
 		Type:               "Ready",
@@ -616,6 +624,63 @@ func agFollowUpDelay(transitionOrCreation time.Time, now time.Time) time.Duratio
 	return remaining
 }
 
+// needsGenerationVerification reports whether source-watcher has just claimed
+// a successful build of an AG generation this operator has not yet verified.
+//
+// source-watcher builds from the spec it read when its reconcile started, but
+// its final status patch re-reads the live object and stamps Ready with the
+// live generation (fluxcd/source-watcher#384). When this operator changes the
+// spec mid-build, the AG ends up Ready on the new generation with artifacts
+// from the old one, and detectDrift never rebuilds it. Nothing in the AG
+// status tells the two apart, so every generation that reaches Ready=True is
+// rebuilt once. An unchanged spec rebuilds to the same digest, leaving the
+// ExternalArtifacts and their HelmReleases untouched.
+//
+// Generation 1 is exempt: the race needs a spec change during a build.
+//
+// TODO(remove once fluxcd/source-watcher#384 is fixed and rolled out).
+func needsGenerationVerification(ag *sourcewatcherv1beta1.ArtifactGenerator, ready *metav1.Condition) bool {
+	if ag.Generation <= 1 || ready.Status != metav1.ConditionTrue || ready.ObservedGeneration != ag.Generation {
+		return false
+	}
+	return ag.Annotations[annotationVerifiedGeneration] != strconv.FormatInt(ag.Generation, 10)
+}
+
+// verifyArtifactGeneratorGeneration forces the one rebuild described on
+// needsGenerationVerification through the fluxcd/pkg#934 force-drift path, so
+// the follow-up reconciles are driven by maybeRecoverArtifactGenerator and the
+// synthetic Ready=False never reaches the PackageSource. It starts a fresh
+// attempt budget, since a counter left by an earlier stall may have survived
+// the best-effort clearRecoveryTracking. The verified generation is recorded
+// after the force: if that write fails, the next Ready=True costs one more
+// rebuild rather than a skipped one.
+func (r *PackageSourceReconciler) verifyArtifactGeneratorGeneration(ctx context.Context, packageSource *cozyv1alpha1.PackageSource, ag *sourcewatcherv1beta1.ArtifactGenerator, now time.Time) (ctrl.Result, error) {
+	if err := r.forceArtifactGeneratorDrift(ctx, ag, now, 1); err != nil {
+		return ctrl.Result{}, fmt.Errorf("failed to force ArtifactGenerator rebuild: %w", err)
+	}
+	patchBase := ag.DeepCopy()
+	ag.Annotations[annotationVerifiedGeneration] = strconv.FormatInt(ag.Generation, 10)
+	if err := r.Patch(ctx, ag, client.MergeFrom(patchBase)); err != nil {
+		return ctrl.Result{}, fmt.Errorf("failed to record verified ArtifactGenerator generation: %w", err)
+	}
+	meta.SetStatusCondition(&packageSource.Status.Conditions, metav1.Condition{
+		Type:   "Ready",
+		Status: metav1.ConditionUnknown,
+		Reason: reasonAwaitingRecovery,
+		Message: fmt.Sprintf(
+			"rebuilding ArtifactGenerator generation %d once, since source-watcher may have built it from the previous spec (fluxcd/source-watcher#384).",
+			ag.Generation,
+		),
+		ObservedGeneration: packageSource.Generation,
+	})
+	if err := r.Status().Update(ctx, packageSource); err != nil {
+		return ctrl.Result{}, err
+	}
+	log.FromContext(ctx).Info("forced ArtifactGenerator rebuild to verify generation",
+		"packageSource", packageSource.Name, "artifactGenerator", ag.Name, "generation", ag.Generation)
+	return ctrl.Result{RequeueAfter: backoffFor(1)}, nil
+}
+
 // maybeRecoverArtifactGenerator advances the bounded-recovery schedule for an
 // AG whose Ready condition is stuck in the fluxcd/pkg#934 window (Inventory
 // and ObservedSourcesDigest persisted on the current spec generation, Ready
@@ -658,11 +723,10 @@ func agFollowUpDelay(transitionOrCreation time.Time, now time.Time) time.Duratio
 // source-watcher lands a definitive Ready=True or Ready=False with a
 // real upstream reason.
 //
-// TODO(remove once fluxcd/pkg#934 lands and is rolled out): once source-watcher
-// consumes a patch.Helper that either serialises or transactionally combines
-// the .status / .status.conditions writes, this whole recovery driver can be
-// deleted and updateStatus can copy the AG's Ready condition through
-// unconditionally.
+// TODO(remove once fluxcd/pkg#934 and fluxcd/source-watcher#384 are both
+// fixed and rolled out): verifyArtifactGeneratorGeneration drives its rebuild
+// through this driver, so it goes only together with that verification. Then
+// updateStatus can copy the AG's Ready condition through unconditionally.
 func (r *PackageSourceReconciler) maybeRecoverArtifactGenerator(ctx context.Context, packageSource *cozyv1alpha1.PackageSource, ag *sourcewatcherv1beta1.ArtifactGenerator, ready *metav1.Condition, now time.Time) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
 
@@ -689,8 +753,8 @@ func (r *PackageSourceReconciler) maybeRecoverArtifactGenerator(ctx context.Cont
 	switch decision.action {
 	case recoveryActionGiveUp:
 		message := fmt.Sprintf(
-			"ArtifactGenerator %s/%s has been stuck with a lost Ready condition through %d force-drift attempts; "+
-				"source-watcher is not recovering. See https://github.com/fluxcd/pkg/issues/934. "+
+			"ArtifactGenerator %s/%s has not been rebuilt through %d force-drift attempts; "+
+				"source-watcher is not recovering (see fluxcd/pkg#934 and fluxcd/source-watcher#384). "+
 				"An operator must restart source-watcher or manually inspect the ArtifactGenerator.",
 			ag.Namespace, ag.Name, maxRecoveryAttempts,
 		)
@@ -711,8 +775,7 @@ func (r *PackageSourceReconciler) maybeRecoverArtifactGenerator(ctx context.Cont
 			Status: metav1.ConditionUnknown,
 			Reason: reasonAwaitingRecovery,
 			Message: fmt.Sprintf(
-				"ArtifactGenerator Ready condition lost to fluxcd/pkg#934 patch.Helper race; "+
-					"force-drift %d/%d issued, waiting for source-watcher to rebuild.",
+				"force-drift %d/%d issued, waiting for source-watcher to rebuild the ArtifactGenerator.",
 				attempts, maxRecoveryAttempts,
 			),
 			ObservedGeneration: packageSource.Generation,
@@ -732,8 +795,7 @@ func (r *PackageSourceReconciler) maybeRecoverArtifactGenerator(ctx context.Cont
 			Status: metav1.ConditionUnknown,
 			Reason: reasonAwaitingRecovery,
 			Message: fmt.Sprintf(
-				"ArtifactGenerator Ready condition lost to fluxcd/pkg#934 patch.Helper race; "+
-					"forced drift on AG.status.conditions[Ready]=False (attempt %d/%d) so source-watcher rebuilds.",
+				"forced drift on AG.status.conditions[Ready]=False (attempt %d/%d) so source-watcher rebuilds.",
 				nextAttempt, maxRecoveryAttempts,
 			),
 			ObservedGeneration: packageSource.Generation,
@@ -911,7 +973,7 @@ func (r *PackageSourceReconciler) forceArtifactGeneratorDrift(ctx context.Contex
 		Type:               "Ready",
 		Status:             metav1.ConditionFalse,
 		Reason:             reasonRecoveryForced,
-		Message:            "cozystack-operator forced drift after fluxcd/pkg#934 stall; source-watcher will rebuild",
+		Message:            "cozystack-operator forced drift; source-watcher will rebuild",
 		ObservedGeneration: ag.Generation,
 	})
 	if err := r.Status().Patch(ctx, ag, client.MergeFrom(statusBase)); err != nil {

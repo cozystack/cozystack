@@ -64,7 +64,11 @@
   A sanitized resource map is a dict with resource-name to resource-quantity.
   All resources are returned with equal **requests** and **limits**, except for
   **cpu**, whose *request* is reduced by the CPU-allocation ratio obtained from
-  `cozy-lib.resources.cpuAllocationRatio`.
+  `cozy-lib.resources.cpuAllocationRatio` and then rounded **up** to a whole
+  number of milli-CPUs (a CPU quantity finer than 1m is invalid for the VPA
+  admission webhook and meaningless for the scheduler).
+
+  A memory below 1Mi fails the render, see cozy-lib.resources.checkMemory.
 
   The template now expects **one flat map** as input (no nested `requests:` /
   `limits:` sections).  Each value in that map is taken as the *limit* for the
@@ -90,6 +94,31 @@
     devices.com/nvidia: "1"   # = limit
 */}}
 {{- define "cozy-lib.resources.sanitize" }}
+{{-   include "cozy-lib.resources.checkMemory" (index . 0) }}
+{{-   include "cozy-lib.resources.requestsAndLimits" . }}
+{{- end }}
+
+{{- /*
+  A quantity without a unit counts bytes, so a memory of `8` typed for 8Gi
+  sizes the container at 8 bytes and nothing else refuses it. Every preset is
+  128Mi or more, so a floor of 1Mi only stops that kind of slip.
+*/}}
+{{- define "cozy-lib.resources.checkMemory" }}
+{{-   if hasKey . "memory" }}
+{{-     $memory := index . "memory" }}
+{{-     if not (kindIs "invalid" $memory) }}
+{{-       if lt (include "cozy-lib.resources.toFloat" $memory | float64) (include "cozy-lib.resources.toFloat" "1Mi" | float64) }}
+{{-         fail (printf "memory (%v) must be at least 1Mi. A value without a unit is read as bytes, so add the unit, such as 512Mi or 8Gi." $memory) }}
+{{-       end }}
+{{-     end }}
+{{-   end }}
+{{- end }}
+
+{{- /*
+  sanitize without the memory floor. flatten renders a ResourceQuota with it,
+  where a memory of 0 is a valid quota that allows none.
+*/}}
+{{- define "cozy-lib.resources.requestsAndLimits" }}
 {{-   $cpuAllocationRatio := include "cozy-lib.resources.cpuAllocationRatio" . | float64 }}
 {{-   $memoryAllocationRatio := include "cozy-lib.resources.memoryAllocationRatio" . | float64 }}
 {{-   $ephemeralStorageAllocationRatio := include "cozy-lib.resources.ephemeralStorageAllocationRatio" . | float64 }}
@@ -102,7 +131,29 @@
 {{-     if eq $k "cpu" }}
 {{-       $vcpuRequestF64 := (include "cozy-lib.resources.toFloat" $v) | float64 }}
 {{-       $cpuRequestF64 := divf $vcpuRequestF64 $cpuAllocationRatio }}
-{{-       $_ := set $output.requests $k ($cpuRequestF64 | toString) }}
+{{- /*
+        A CPU quantity must be a whole number of milli-CPUs: the VPA admission
+        webhook rejects anything finer ("minAllowed: CPU [62500u] must be a
+        whole number of milli CPUs"), and a sub-milli request is meaningless
+        anyway. A ratio that does not divide the value evenly produces one:
+        250m / 4 = 62.5m. Round the request up to the next whole milli-CPU so
+        every allocation ratio renders a valid quantity, never below the
+        intended fraction of the limit. A request whose shortest decimal form
+        is already whole-milli keeps that form, so the default ratio of 10
+        renders exactly as it did before.
+        The comparison needs no tolerance: sprig's divf/mulf run on
+        shopspring/decimal rather than float64, so 250m / 10 * 1000 is exactly
+        25 and not 25.000000000000004. A tolerance would in fact reintroduce
+        the bug it looks like it prevents, by accepting a value such as
+        100.0000004m as whole-milli and rendering it verbatim.
+*/}}
+{{-       $cpuRequestMilli := mulf $cpuRequestF64 1000.0 | float64 }}
+{{-       $cpuRequestMilliCeil := ceil $cpuRequestMilli }}
+{{-       if eq $cpuRequestMilli $cpuRequestMilliCeil }}
+{{-         $_ := set $output.requests $k ($cpuRequestF64 | toString) }}
+{{-       else }}
+{{-         $_ := set $output.requests $k (printf "%dm" (int64 $cpuRequestMilliCeil)) }}
+{{-       end }}
 {{-       $_ := set $output.limits $k ($v | toString) }}
 {{-     else if eq $k "memory" }}
 {{-       $vMemoryRequestF64 := (include "cozy-lib.resources.toFloat" $v) | float64 }}
@@ -178,9 +229,29 @@
 {{-   printf `-Xms%dm -Xmx%dm` $xmsMi $xmxMi }}
 {{- end }}
 
+{{- /*
+    goMemLimit takes a sanitized .Values.resources and returns a GOMEMLIMIT
+    value set to 75% of the memory limit. Without it the Go runtime collects
+    on a relative target (GOGC) with no absolute ceiling, so a burst of
+    allocation grows the heap past the cgroup limit and the kernel kills the
+    container. The 25% headroom covers what GOMEMLIMIT does not account for:
+    goroutine stacks and any mmap'd region. Accepts only sanitized resource
+    maps.
+*/}}
+{{- define "cozy-lib.resources.goMemLimit" }}
+{{-   $memoryLimitInt := include "cozy-lib.resources.toFloat" .limits.memory | float64 | int64 }}
+{{- /* 4194304 is 4Mi */}}
+{{-   $limitMiB := div (mul $memoryLimitInt 3) 4194304 }}
+{{- /* Go accepts 0, and then collects almost without pause. */}}
+{{-   if lt $limitMiB 1 }}
+{{-     fail (printf "ERROR: a memory limit of %s leaves no room for a Go heap; GOMEMLIMIT needs a limit of at least 1398102 bytes (4/3 Mi) to come out at 1MiB." .limits.memory) }}
+{{-   end }}
+{{-   printf `%dMiB` $limitMiB }}
+{{- end }}
+
 {{- define "cozy-lib.resources.flatten" -}}
 {{-   $out := dict -}}
-{{-   $res := include "cozy-lib.resources.sanitize" . | fromYaml -}}
+{{-   $res := include "cozy-lib.resources.requestsAndLimits" . | fromYaml -}}
 {{-   range $section, $values := $res }}
 {{-     range $k, $v := $values }}
 {{-       with include "cozy-lib.resources.flattenResource" (list $section $k) }}
@@ -214,6 +285,12 @@
 {{-   $type := index . 1 }}
 {{-   $out := "" }}
 {{-   if and (eq $section "limits") (eq $type "storage") }}
+{{-     $out = "" }}
+{{- /*
+      A ResourceQuota accepts hugepages only as requests.hugepages-<size>,
+      limits.hugepages-<size> is rejected and the whole quota with it.
+*/}}
+{{-   else if and (eq $section "limits") (hasPrefix "hugepages-" $type) }}
 {{-     $out = "" }}
 {{-   else if and (eq $section "limits") (has $type $rawQuotaKeys) }}
 {{-     $out = $type }}

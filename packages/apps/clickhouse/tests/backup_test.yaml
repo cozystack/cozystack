@@ -2,10 +2,12 @@ suite: backup sidecar S3 wiring (useSystemBucket vs legacy, path-override guard)
 
 # Locks in the clickhouse-backup sidecar S3 wiring this PR introduced on the
 # ClickHouseInstallation PodTemplate:
-#   - useSystemBucket=true points every S3_* env at the platform-projected
-#     cozy-backups-creds Secret with optional:true (the Pod starts before the
-#     first projection) and scopes S3_PATH to <namespace>/<release>; the
-#     chart-managed <release>-backup-s3 / <release>-backup Secrets are skipped;
+#   - useSystemBucket=true mounts the clickhouse-backup.yml key of the
+#     platform-projected cozy-backups-creds Secret as the sidecar's config
+#     file with optional:true (the Pod starts before the first projection),
+#     sets no other S3 setting in the environment, and scopes S3_PATH to
+#     <namespace>/<release>; the chart-managed <release>-backup-s3 /
+#     <release>-backup Secrets are skipped;
 #   - the legacy flow keeps the chart-emitted <release>-backup-s3 Secret and a
 #     strict (non-optional) secretKeyRef;
 #   - s3PathOverride + useSystemBucket fails fast at render time.
@@ -25,7 +27,7 @@ set:
   _cluster: {}
 
 tests:
-  - it: "useSystemBucket=true: sidecar reads cozy-backups-creds (optional) and scopes S3_PATH"
+  - it: "useSystemBucket=true: sidecar reads its S3 settings from the projected config file and scopes S3_PATH"
     template: templates/clickhouse.yaml
     documentSelector:
       path: kind
@@ -45,28 +47,30 @@ tests:
       - equal:
           path: spec.templates.podTemplates[0].spec.containers[?(@.name=="clickhouse-backup")].env[?(@.name=="S3_PATH")].value
           value: tenant-test/ch-test
+      # clickhouse-backup reloads this file in each API handler that reaches
+      # S3 and kubelet rewrites the mounted Secret in place, so credentials
+      # projected after the Pod started, or rotated since, reach the running
+      # sidecar.
       - equal:
-          path: spec.templates.podTemplates[0].spec.containers[?(@.name=="clickhouse-backup")].env[?(@.name=="S3_BUCKET")].valueFrom.secretKeyRef.name
-          value: cozy-backups-creds
+          path: spec.templates.podTemplates[0].spec.containers[?(@.name=="clickhouse-backup")].env[?(@.name=="CLICKHOUSE_BACKUP_CONFIG")].value
+          value: /etc/clickhouse-backup-s3/config.yml
       - equal:
-          path: spec.templates.podTemplates[0].spec.containers[?(@.name=="clickhouse-backup")].env[?(@.name=="S3_BUCKET")].valueFrom.secretKeyRef.optional
+          path: spec.templates.podTemplates[0].spec.containers[?(@.name=="clickhouse-backup")].volumeMounts[?(@.name=="backup-s3-config")].mountPath
+          value: /etc/clickhouse-backup-s3
+      - equal:
+          path: spec.templates.podTemplates[0].spec.containers[?(@.name=="clickhouse-backup")].volumeMounts[?(@.name=="backup-s3-config")].readOnly
           value: true
       - equal:
-          path: spec.templates.podTemplates[0].spec.containers[?(@.name=="clickhouse-backup")].env[?(@.name=="S3_SECRET_KEY")].valueFrom.secretKeyRef.name
-          value: cozy-backups-creds
-      # The projected endpoint is a bare host; clickhouse-backup needs a URI, so
-      # the chart prepends https:// via env-var expansion on this flow.
-      - equal:
-          path: spec.templates.podTemplates[0].spec.containers[?(@.name=="clickhouse-backup")].env[?(@.name=="S3_ENDPOINT_HOST")].valueFrom.secretKeyRef.name
-          value: cozy-backups-creds
-      - equal:
-          path: spec.templates.podTemplates[0].spec.containers[?(@.name=="clickhouse-backup")].env[?(@.name=="S3_ENDPOINT_HOST")].valueFrom.secretKeyRef.key
-          value: endpoint
-      - equal:
-          path: spec.templates.podTemplates[0].spec.containers[?(@.name=="clickhouse-backup")].env[?(@.name=="S3_ENDPOINT")].value
-          value: https://$(S3_ENDPOINT_HOST)
+          path: spec.templates.podTemplates[0].spec.volumes[?(@.name=="backup-s3-config")].secret
+          value:
+            secretName: cozy-backups-creds
+            # The Pod starts before the first projection.
+            optional: true
+            items:
+              - key: clickhouse-backup.yml
+                path: config.yml
 
-  - it: "useSystemBucket=true: S3_FORCE_PATH_STYLE is sourced from cozy-backups-creds, not hardcoded"
+  - it: "useSystemBucket=true: no S3 setting is fixed in the sidecar environment"
     template: templates/clickhouse.yaml
     documentSelector:
       path: kind
@@ -76,18 +80,21 @@ tests:
         enabled: true
         useSystemBucket: true
     asserts:
-      - equal:
-          path: spec.templates.podTemplates[0].spec.containers[?(@.name=="clickhouse-backup")].env[?(@.name=="S3_FORCE_PATH_STYLE")].valueFrom.secretKeyRef.name
-          value: cozy-backups-creds
-      - equal:
-          path: spec.templates.podTemplates[0].spec.containers[?(@.name=="clickhouse-backup")].env[?(@.name=="S3_FORCE_PATH_STYLE")].valueFrom.secretKeyRef.key
-          value: forcePathStyle
-      - equal:
-          path: spec.templates.podTemplates[0].spec.containers[?(@.name=="clickhouse-backup")].env[?(@.name=="S3_FORCE_PATH_STYLE")].valueFrom.secretKeyRef.optional
-          value: true
+      # Environment overrides the config file and is read only at start.
       - notExists:
-          # must no longer be the hardcoded literal value: "true"
-          path: spec.templates.podTemplates[0].spec.containers[?(@.name=="clickhouse-backup")].env[?(@.name=="S3_FORCE_PATH_STYLE")].value
+          path: spec.templates.podTemplates[0].spec.containers[?(@.name=="clickhouse-backup")].env[?(@.name=="S3_BUCKET")]
+      - notExists:
+          path: spec.templates.podTemplates[0].spec.containers[?(@.name=="clickhouse-backup")].env[?(@.name=="S3_ENDPOINT")]
+      - notExists:
+          path: spec.templates.podTemplates[0].spec.containers[?(@.name=="clickhouse-backup")].env[?(@.name=="S3_ENDPOINT_HOST")]
+      - notExists:
+          path: spec.templates.podTemplates[0].spec.containers[?(@.name=="clickhouse-backup")].env[?(@.name=="S3_REGION")]
+      - notExists:
+          path: spec.templates.podTemplates[0].spec.containers[?(@.name=="clickhouse-backup")].env[?(@.name=="S3_ACCESS_KEY")]
+      - notExists:
+          path: spec.templates.podTemplates[0].spec.containers[?(@.name=="clickhouse-backup")].env[?(@.name=="S3_SECRET_KEY")]
+      - notExists:
+          path: spec.templates.podTemplates[0].spec.containers[?(@.name=="clickhouse-backup")].env[?(@.name=="S3_FORCE_PATH_STYLE")]
 
   - it: "useSystemBucket=true: chart-managed backup Secrets are skipped"
     set:
@@ -240,7 +247,10 @@ tests:
           path: spec.templates.podTemplates[0].spec.containers[?(@.name=="clickhouse-backup")].env[?(@.name=="SSL_CERT_DIR")].value
           value: /etc/ssl/cozy-s3-ca:/etc/ssl/certs
       - equal:
-          path: spec.templates.podTemplates[0].spec.containers[?(@.name=="clickhouse-backup")].env[?(@.name=="S3_BUCKET")].valueFrom.secretKeyRef.name
+          path: spec.templates.podTemplates[0].spec.volumes[?(@.name=="backup-s3-ca")].secret.secretName
+          value: my-s3-ca
+      - equal:
+          path: spec.templates.podTemplates[0].spec.volumes[?(@.name=="backup-s3-config")].secret.secretName
           value: cozy-backups-creds
 
   # backup.enabled=false renders no sidecar at all, so the CA must not leak a
@@ -292,3 +302,42 @@ tests:
       - notMatchRegex:
           path: stringData["backup.sh"]
           pattern: 'echo DB_LIST='
+
+  # A strategy attempt that fails mid-upload leaves its local backup behind,
+  # and with the upstream defaults the sidecar would keep it forever and push
+  # it to the bucket on its next start as an archive no Backup refers to. The
+  # sidecar must neither resume uploads at start nor keep local copies once an
+  # upload succeeds, on either S3 flow.
+  - it: "sidecar drops local backups after upload and does not resume uploads at start"
+    template: templates/clickhouse.yaml
+    documentSelector:
+      path: kind
+      value: ClickHouseInstallation
+    set:
+      backup:
+        enabled: true
+        useSystemBucket: true
+    asserts:
+      - equal:
+          path: spec.templates.podTemplates[0].spec.containers[?(@.name=="clickhouse-backup")].env[?(@.name=="BACKUPS_TO_KEEP_LOCAL")].value
+          value: "-1"
+      - equal:
+          path: spec.templates.podTemplates[0].spec.containers[?(@.name=="clickhouse-backup")].env[?(@.name=="API_COMPLETE_RESUMABLE_AFTER_RESTART")].value
+          value: "false"
+
+  - it: "legacy flow: sidecar drops local backups after upload and does not resume uploads at start"
+    template: templates/clickhouse.yaml
+    documentSelector:
+      path: kind
+      value: ClickHouseInstallation
+    set:
+      backup:
+        enabled: true
+        useSystemBucket: false
+    asserts:
+      - equal:
+          path: spec.templates.podTemplates[0].spec.containers[?(@.name=="clickhouse-backup")].env[?(@.name=="BACKUPS_TO_KEEP_LOCAL")].value
+          value: "-1"
+      - equal:
+          path: spec.templates.podTemplates[0].spec.containers[?(@.name=="clickhouse-backup")].env[?(@.name=="API_COMPLETE_RESUMABLE_AFTER_RESTART")].value
+          value: "false"

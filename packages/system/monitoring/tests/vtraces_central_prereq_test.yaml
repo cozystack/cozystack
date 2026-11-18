@@ -1,0 +1,75 @@
+suite: shared-central tracing needs the tenant-root store
+templates:
+  - templates/vtraces/vmuser.yaml
+
+# Without the tenant-root VMAuth every export fails while every object reports
+# Ready, so a live render refuses central mode until it exists. An offline
+# render cannot see the cluster and is not refused.
+release:
+  name: monitoring
+  namespace: tenant-foo
+
+tests:
+  - it: refuses central mode on a live cluster with no shared store in tenant-root
+    set:
+      _namespace:
+        tracingCentral: true
+    kubernetesProvider:
+      scheme: &scheme
+        "v1/Namespace":
+          gvr:
+            version: "v1"
+            resource: "namespaces"
+          namespaced: false
+        "operator.victoriametrics.com/v1beta1/VMAuth":
+          gvr:
+            group: "operator.victoriametrics.com"
+            version: "v1beta1"
+            resource: "vmauths"
+          namespaced: true
+      objects:
+        - &ns
+          kind: Namespace
+          apiVersion: v1
+          metadata:
+            name: tenant-foo
+            uid: 3f0e7a1c-5b2d-4c8e-9a6f-1d2e3c4b5a69
+    asserts:
+      - failedTemplate:
+          errorMessage: 'monitoring: shared-central tracing is on for this tenant, but tenant-root does not host a shared traces store (VMAuth tenant-root/traces-central is missing), so every span would be dropped. In the tenant-root Monitoring set tracingCentralHost: true with a tracingStorages entry named "generic" in cluster mode, or turn tracingCentral off for this tenant.'
+
+  - it: renders central mode once the shared store exists
+    set:
+      _namespace:
+        tracingCentral: true
+    kubernetesProvider:
+      scheme: *scheme
+      objects:
+        - *ns
+        - kind: VMAuth
+          apiVersion: operator.victoriametrics.com/v1beta1
+          metadata:
+            name: traces-central
+            namespace: tenant-root
+    asserts:
+      # The write and the read-only login.
+      - hasDocuments:
+          count: 2
+
+  - it: does not refuse an offline render, which cannot see the cluster
+    set:
+      _namespace:
+        tracingCentral: true
+    asserts:
+      # The write and the read-only login.
+      - hasDocuments:
+          count: 2
+
+  - it: does not look for the shared store in local mode
+    kubernetesProvider:
+      scheme: *scheme
+      objects:
+        - *ns
+    asserts:
+      - hasDocuments:
+          count: 0

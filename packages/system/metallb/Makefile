@@ -17,7 +17,6 @@ image-controller image-speaker:
 	$(eval TARGET := $(subst image-,,$@))
 	$(eval VERSION := $(shell yq '.appVersion' charts/metallb/Chart.yaml))
 	docker buildx build images/metallb \
-		--platform=linux/amd64 \
 		--target $(TARGET) \
 		--build-arg VERSION=$(VERSION) \
 		$(call image-tags,metallb-$(TARGET),$(VERSION)) \

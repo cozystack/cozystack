@@ -212,6 +212,11 @@ func main() {
 		}
 	}
 
+	if err := mgr.Add(&backupcontroller.LegacyPasswordScrubber{Client: mgr.GetClient()}); err != nil {
+		setupLog.Error(err, "unable to add LegacyPasswordScrubber runnable")
+		os.Exit(1)
+	}
+
 	// The default Strategy CRs and the Velero BSL are Helm-templated behind
 	// a lookup of the BucketClaim the same chart creates, so a fresh install
 	// renders them empty — permanently, because helm-controller does not
@@ -238,6 +243,7 @@ func main() {
 				Namespace: os.Getenv("BACKUP_CREDENTIALS_HELMRELEASE_NAMESPACE"),
 				Name:      os.Getenv("BACKUP_CREDENTIALS_HELMRELEASE_NAME"),
 			},
+			CredentialsCOSISecretName: os.Getenv("BACKUP_CREDENTIALS_COSI_SECRET_NAME"),
 		}
 		if err := gate.SetupWithManager(mgr); err != nil {
 			setupLog.Error(err, "unable to add DefaultObjectsGate runnable")

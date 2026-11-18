@@ -75,7 +75,8 @@ jobs:
       statuses: write
     outputs:
       code: ${{ steps.p.outputs.code }}
-      trigger_map: ${{ steps.p.outputs.trigger_map }}
+      docs: ${{ steps.p.outputs.docs }}
+      backport_batch: ${{ steps.p.outputs.backport_batch }}
       matrix: ${{ steps.p.outputs.matrix }}
       any: ${{ steps.p.outputs.any }}
       touched: ${{ steps.p.outputs.touched }}
@@ -131,6 +132,16 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
+      # e2e-fork.yaml pushes a fork's images only under names the base tree
+      # already exports, so an image the PR adds is refused there after the
+      # whole build. Refuse it here instead, before anything builds. The push
+      # check stays the boundary; a fork can edit this step away.
+      - name: Refuse images the base branch does not build (fork PR)
+        if: ${{ github.event.pull_request.head.repo.fork }}
+        run: |
+          bt="$(mktemp -d)/basetree"
+          git worktree add --quiet --detach "$bt" HEAD^1
+          hack/fork-new-images.sh "$bt" .
       - name: Compute changed files and build matrix
         id: p
         env:
@@ -158,28 +169,27 @@ jobs:
           # alone here rather than widened by a side effect.
           git diff --name-only --no-renames "origin/${BASE_REF}...HEAD" > /tmp/changed_norenames.txt
           echo "Changed files:"; sed 's/^/  /' /tmp/changed_norenames.txt
-          if grep -qvE '^docs/' /tmp/changed_norenames.txt; then
+          # `code` is false when every path is under docs/ or in a CI-only Go
+          # tool that no image builds (cmd/backport-batch, cmd/api-gate): there
+          # is nothing to build and nothing for e2e to install. e2e-fork.yaml
+          # answers the same question from the PR file list with the same
+          # prefixes, and hack/gate-concurrency-contract.bats holds the two lists
+          # equal.
+          if grep -qvE '^(docs/|cmd/backport-batch/|cmd/api-gate/)' /tmp/changed_norenames.txt; then
             echo "code=true" >> "$GITHUB_OUTPUT"
           else
             echo "code=false" >> "$GITHUB_OUTPUT"
           fi
-          # docs/agents/contributing.md carries the downstream trigger map, which
-          # hack/downstream-trigger-map.bats asserts against: every path the map
-          # cites still exists, and its repository list still matches the PR
-          # template. Editing the map alone is a docs-only PR, which would skip the
-          # unit tests and exempt the map from its own guard. This flag lets the
-          # unit-test job opt back in, and only that job: it deliberately does not
-          # feed `code`, so a docs PR still builds nothing.
-          #
-          # Detect the map by its old path too, which is why this reads the
-          # rename-blind list above: a PR that moves the map would otherwise skip
-          # the very test that pins the literal below to it, and break for
-          # whoever pushes next.
-          if grep -qxF 'docs/agents/contributing.md' /tmp/changed_norenames.txt; then
-            echo "trigger_map=true" >> "$GITHUB_OUTPUT"
+          # The Bats contracts read docs, so a docs change runs them even when
+          # `code` is false; a change confined to the CI-only tools does not.
+          if grep -qE '^docs/' /tmp/changed_norenames.txt; then
+            echo "docs=true" >> "$GITHUB_OUTPUT"
           else
-            echo "trigger_map=false" >> "$GITHUB_OUTPUT"
+            echo "docs=false" >> "$GITHUB_OUTPUT"
           fi
+          backport_batch="$(hack/backport-batch-tests-needed.sh /tmp/changed_norenames.txt)"
+          echo "backport-batch tests needed: $backport_batch"
+          echo "backport_batch=$backport_batch" >> "$GITHUB_OUTPUT"
           matrix="$(hack/build-matrix.sh /tmp/changed.txt)"
           echo "Build matrix: $matrix"
           echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
@@ -249,22 +259,18 @@ jobs:
       # resolves to whatever mikefarah shipped this morning, and a yq that changed
       # how it emits or compares a value turns a release gate into a moving one.
       # The version tracks packages/core/testing/images/e2e-sandbox/Dockerfile.
-      # yq is additionally pinned by content; the Flux installer is not, because
-      # it checksums the binary it fetches and the mutable part is its own
-      # bootstrap script. promote-rc.yaml's copy of this step carries the full
-      # reasoning for both.
-      - name: Set up promotion toolchain (flux, yq)
+      # yq is additionally pinned by content; flux comes from the commit-pinned
+      # upstream setup action, which checksums the release tarball.
+      # promote-rc.yaml's copy of this step carries the full reasoning for both.
+      - name: Set up flux
+        uses: fluxcd/flux2/action@04acaec6161ac4fb1a82ffafa88901c03271d34f # v2.8.6
+        with:
+          version: "2.8.6"
+      - name: Set up promotion toolchain (yq)
         env:
-          FLUX_VERSION: "2.8.6"
           YQ_VERSION: "4.53.3"
           YQ_SHA256: "fa52a4e758c63d38299163fbdd1edfb4c4963247918bf9c1c5d31d84789eded4"
         run: |
-          if ! flux version --client 2>/dev/null | grep -qx "flux: v${FLUX_VERSION}"; then
-            install_script="$(mktemp)"
-            curl -fsSL https://fluxcd.io/install.sh -o "$install_script"
-            sudo env "FLUX_VERSION=$FLUX_VERSION" bash "$install_script"
-            rm -f "$install_script"
-          fi
           if ! yq --version 2>/dev/null | grep -q "mikefarah.* version v${YQ_VERSION}\$"; then
             yq_bin="$(mktemp)"
             curl -fsSL -o "$yq_bin" \
@@ -298,32 +304,119 @@ jobs:
     name: Unit & controller tests
     runs-on: oracle-vm-4cpu-16gb-x86-64
     timeout-minutes: 30
+    env:
+      # The pipe falls back to direct on any proxy error (hack/common-envs.mk).
+      GOPROXY: "https://proxy.golang.org|direct"
     permissions:
       contents: read
     needs: ["plan"]
-    # trigger_map opts a docs-only PR back in when it edits the downstream trigger
-    # map, so hack/downstream-trigger-map.bats still guards it. No other job reads
-    # that flag: a docs PR runs the unit tests and nothing heavier.
+    # Unit contracts read both code and documentation. Run this job for every
+    # non-release PR: code changes take the complete unit path, docs changes run
+    # the Bats lane that owns those cross-tree contracts, and the backport-batch
+    # tests run whenever one of their inputs changed and at no other time. A
+    # change confined to the CI-only tools runs no other lane. Builds and E2E
+    # remain gated on `code` below.
     if: |
-      (needs.plan.outputs.code == 'true' || needs.plan.outputs.trigger_map == 'true')
-      && !contains(github.event.pull_request.labels.*.name, 'release')
+      !contains(github.event.pull_request.labels.*.name, 'release')
     steps:
       - name: Checkout code
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
-      # Ephemeral runners don't carry the helm-unittest plugin the persistent
-      # self-hosted runner accreted. Install if absent (idempotent).
-      - name: Set up test toolchain
+      # The module cache is restored from the key build-main.yaml writes on
+      # main, which every PR run can read, so a PR's first run starts warm. The
+      # download fetches whatever the cache lacks, the whole set on a miss. The
+      # Go steps are for code changes and the backport-batch tests only: a
+      # docs-only run is the Bats lane alone.
+      - name: Locate Go module cache
+        if: needs.plan.outputs.code == 'true' || needs.plan.outputs.backport_batch == 'true'
+        id: gomodcache
+        run: echo "dir=$(go env GOMODCACHE)" >> "$GITHUB_OUTPUT"
+      - name: Cache Go modules
+        if: needs.plan.outputs.code == 'true' || needs.plan.outputs.backport_batch == 'true'
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ steps.gomodcache.outputs.dir }}
+          key: go-mod-${{ runner.os }}-${{ hashFiles('**/go.sum') }}
+          restore-keys: go-mod-${{ runner.os }}-
+      - name: Download Go modules
+        if: needs.plan.outputs.code == 'true' || needs.plan.outputs.backport_batch == 'true'
         run: |
-          helm plugin list 2>/dev/null | grep -q unittest \
-            || helm plugin install https://github.com/helm-unittest/helm-unittest
-      # One make process owns all four runner CPUs. Each BATS file is a separate
-      # prerequisite, so the long tail no longer runs as one nine-minute shell
-      # loop; Helm and Go targets share the same bounded pool. Output stays
-      # grouped by target instead of four test logs interleaving.
+          for mod in $(git ls-files go.mod '*/go.mod' | xargs -n1 dirname); do
+            (cd "$mod" && "$GITHUB_WORKSPACE/hack/go-mod-download.sh")
+          done
+      # Ephemeral runners don't carry the helm-unittest plugin the persistent
+      # self-hosted runner accreted. The plugin embeds its own Helm, so its
+      # version is pinned: a plugin release must not change test results. Bats is
+      # installed whenever a Bats lane runs, docs-only ones included.
+      - name: Set up test toolchain
+        if: needs.plan.outputs.code == 'true' || needs.plan.outputs.docs == 'true'
+        env:
+          CODE_CHANGED: ${{ needs.plan.outputs.code }}
+          HELM_UNITTEST_VERSION: "1.1.2"
+          BATS_VERSION: "1.14.0"
+          BATS_COMMIT: eb7f42f8d608ac693d7a4b67474f6714ea68cfc5
+        run: |
+          set -euo pipefail
+          if [ "$CODE_CHANGED" = true ]; then
+            installed="$(helm plugin list 2>/dev/null | awk '$1 == "unittest" { print $2 }' || true)"
+            if [ "$installed" != "$HELM_UNITTEST_VERSION" ]; then
+              [ -z "$installed" ] || helm plugin uninstall unittest
+              helm plugin install https://github.com/helm-unittest/helm-unittest --version "v${HELM_UNITTEST_VERSION}"
+            fi
+          fi
+          # Source archive bytes can change; verify the tag's commit before install.
+          if ! bats --version 2>/dev/null | grep -qx "Bats $BATS_VERSION"; then
+            bats_parent=$(mktemp -d "$RUNNER_TEMP/bats-core.XXXXXX")
+            bats_source="$bats_parent/source"
+            git clone --quiet --depth=1 --branch "v$BATS_VERSION" \
+              https://github.com/bats-core/bats-core.git "$bats_source"
+            test "$(git -C "$bats_source" rev-parse HEAD)" = "$BATS_COMMIT"
+            sudo "$bats_source/install.sh" /usr/local
+          fi
+          bats --version | grep -qx "Bats $BATS_VERSION"
+      # setup-envtest and the kube-apiserver and etcd it fetches, so a pull
+      # request downloads them only when the versions pinned in the Makefile
+      # change, and an outage at their sources cannot fail unrelated changes.
+      # The envtest target runs the controller suites a fake client cannot
+      # stand in for.
+      - name: Cache envtest binaries
+        if: needs.plan.outputs.code == 'true'
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: _out/envtest
+          key: envtest-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Makefile') }}
+      # -k is required, not cosmetic: unit-tests and test-controllers are two
+      # independent goals on the same command line, and without -k make stops
+      # handing out new work the moment any unit-tests prerequisite fails —
+      # test-controllers then never starts and reports nothing, so a red BATS
+      # file hides the entire Go controller suite. -k lets already-schedulable
+      # goals keep running; the job still fails overall on any red target.
       - name: Run unit and controller tests
-        run: make unit-tests test-controllers -j4 --output-sync=target
+        if: needs.plan.outputs.code == 'true'
+        run: make unit-tests test-controllers test-controllers-envtest -j4 -k --output-sync=target
+      - name: Run Bats unit tests for docs-only changes
+        if: needs.plan.outputs.code == 'false' && needs.plan.outputs.docs == 'true'
+        run: make bats-unit-tests
+      # Not part of `make unit-tests`: hack/backport-batch-tests-needed.sh
+      # decides from cmd/backport-batch/test-inputs.txt, whatever `code` is.
+      # `!cancelled()` for the reason the unit lane runs with -k: a red step
+      # above must not hide this suite's own result.
+      - name: Run backport-batch tests
+        if: ${{ !cancelled() && needs.plan.outputs.backport_batch == 'true' }}
+        run: make test-backport-batch
+      - name: Check new Helm document indices
+        if: ${{ !cancelled() }}
+        env:
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+        run: python3 hack/check-helm-document-indices.py "$(git merge-base HEAD "origin/$BASE_REF")"
+      - name: Upload unit test report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: bats-unit-report
+          path: _out/test-reports/
+          if-no-files-found: ignore
 
   # One image (package) per job, fanned out across the ephemeral pool. Each job
   # gets its own buildx (docker-container driver) so the shared-buildkit
@@ -341,7 +434,6 @@ jobs:
     timeout-minutes: 30
     permissions:
       contents: read
-      packages: write
     strategy:
       fail-fast: false
       matrix:
@@ -353,15 +445,11 @@ jobs:
           fetch-depth: 0
           fetch-tags: true
       # installer is built in finalize, but some package image targets shell out
-      # to flux; install it if absent (idempotent, cheap).
-      - name: Set up build toolchain
-        run: |
-          if ! command -v flux >/dev/null; then
-            install_script="$(mktemp)"
-            curl -fsSL https://fluxcd.io/install.sh -o "$install_script"
-            sudo bash "$install_script"
-            rm -f "$install_script"
-          fi
+      # to flux.
+      - name: Set up flux
+        uses: fluxcd/flux2/action@04acaec6161ac4fb1a82ffafa88901c03271d34f # v2.8.6
+        with:
+          version: "2.8.6"
       - name: Set up Docker config
         run: |
           if [ -d ~/.docker ]; then
@@ -405,6 +493,10 @@ jobs:
           # pulls go through the docker.io mirror (BUILDX_ARGS adds
           # --builder=$(BUILDER)).
           BUILDER: ${{ steps.buildx.outputs.name }}
+          # common-envs.mk defaults to amd64+arm64. Nothing here sets up QEMU,
+          # and on this x86-64 runner the arm64 half would be emulated anyway;
+          # CI builds amd64 until arm64 has a native leg of its own.
+          PLATFORM: linux/amd64
           # Unique per (PR, commit) so concurrent PR builds never push the same
           # tag. PR images are consumed by digest; :latest belongs to releases.
           IMAGE_TAG: pr-${{ github.event.pull_request.number }}-${{ github.event.pull_request.head.sha }}
@@ -479,7 +571,6 @@ jobs:
     timeout-minutes: 40
     permissions:
       contents: read
-      packages: write
     steps:
       - name: Checkout code
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -518,6 +609,10 @@ jobs:
         env:
           DOCKER_CONFIG: ${{ runner.temp }}/.docker
           BUILDER: ${{ steps.buildx.outputs.name }}
+          # amd64 only, as in the build job. The arm64 installer needs no QEMU,
+          # but nothing a PR runs boots it. matchbox still gets the arm64 kernel
+          # and initramfs.
+          PLATFORM: linux/amd64
           IMAGE_TAG: pr-${{ github.event.pull_request.number }}-${{ github.event.pull_request.head.sha }}
           PUBLISH_VERSIONED: '0'
           PUBLISH_FLOATING: '0'
@@ -566,21 +661,16 @@ jobs:
     timeout-minutes: 30
     permissions:
       contents: read
-      packages: write
     steps:
       - name: Checkout code
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
           fetch-tags: true
-      - name: Set up build toolchain
-        run: |
-          if ! command -v flux >/dev/null; then
-            install_script="$(mktemp)"
-            curl -fsSL https://fluxcd.io/install.sh -o "$install_script"
-            sudo bash "$install_script"
-            rm -f "$install_script"
-          fi
+      - name: Set up flux
+        uses: fluxcd/flux2/action@04acaec6161ac4fb1a82ffafa88901c03271d34f # v2.8.6
+        with:
+          version: "2.8.6"
       - name: Download patch fragments
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
@@ -642,9 +732,13 @@ jobs:
       # A base that is neither main nor a line (a stacked PR's feature branch) has
       # no artifact, and a `/` in it is not even a valid OCI tag. It reads the
       # artifact of whichever of main and the lines it has the fewest commits on
-      # top of. A tie goes to main, so a stack on a line keeps that line's
-      # generation only once the line has a commit of its own: a line fresh off
-      # main is topologically the same as main at that commit.
+      # top of. A tie goes to main. A line with no commit of its own yet is, in
+      # the graph, main at the cut commit, so a stack on it ties and reads the
+      # artifact built from main's tip. That artifact carries newer images than
+      # the line once main moves past the cut. The stack keeps reading it until
+      # it contains a commit of the line's own. Breaking the tie towards the
+      # line instead would misroute the far more common branch forked from main
+      # before the cut, which ties the same way.
       #
       # A missing artifact stays a no-op (packages keep their committed refs), which
       # also covers a line whose first build-release run has not landed yet.
@@ -749,6 +843,8 @@ jobs:
         env:
           DOCKER_CONFIG: ${{ runner.temp }}/.docker
           BUILDER: ${{ steps.buildx.outputs.name }}
+          # amd64 only, as in the build job.
+          PLATFORM: linux/amd64
           IMAGE_TAG: pr-${{ github.event.pull_request.number }}-${{ github.event.pull_request.head.sha }}
           PUBLISH_VERSIONED: '0'
           PUBLISH_FLOATING: '0'
@@ -832,7 +928,7 @@ jobs:
       # nocloud disk asset and export its id; the container lane boots no disk,
       # so nothing in this workflow reads that id any more and resolving it only
       # added a way to fail a release PR over an asset it does not use. The
-      # asset is still resolved where it is still consumed, in e2e-tag.yaml.
+      # asset's presence is still checked in e2e-tag.yaml and promote-rc.yaml.
       - name: Verify draft release exists (release PR)
         if: contains(github.event.pull_request.labels.*.name, 'release')
         uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
@@ -852,15 +948,11 @@ jobs:
             }
 
 
-  # In-tree e2e for SAME-REPO PRs, on Talos nodes running as CONTAINERS. The
-  # QEMU substrate this lane used to boot is off the per-PR path only: it is
-  # still wired into nightly.yaml and e2e-tag.yaml, both of which run `make
-  # prepare-env` -> `make -C packages/core/testing prepare-cluster`. That target
-  # and hack/e2e-prepare-cluster.bats are therefore live code, not leftovers,
-  # and deleting them takes nightly and every release-candidate run with them.
-  # They carry the coverage containers cannot: DRBD, and with it the
-  # `replicated` StorageClass, its Immediate binding mode and the tenant
-  # StorageClass propagation that only applies to remotely-accessible classes.
+  # In-tree e2e for SAME-REPO PRs, on Talos nodes running as CONTAINERS, like
+  # every other e2e lane. What containers cannot carry has no lane at all:
+  # DRBD, and with it the `replicated` StorageClass, its Immediate binding mode
+  # and the tenant StorageClass propagation that only applies to
+  # remotely-accessible classes.
   #
   # Deliberately NOT named "E2E Tests": the
   # required "E2E Tests" context is a commit status posted by the `e2e-report`
@@ -892,9 +984,10 @@ jobs:
     # scheduler and not what a pod reads from /proc, so a workload that sizes
     # itself from /proc/cpuinfo or /proc/meminfo is configured for the whole host.
     runs-on: oracle-vm-32cpu-128gb-x86-64
-    # Sized above what the tenant-Kubernetes pair can spend on a failing run, and
-    # held to one figure across every lane that runs the suite.
-    timeout-minutes: 215
+    # Covers a green full suite. It does not cover a tenant-Kubernetes suite
+    # running into its node-join deadline, so a red there can end as a
+    # cancelled job. Held to one figure across every lane that runs the suite.
+    timeout-minutes: 265
     permissions:
       contents: read
       packages: read
@@ -1012,38 +1105,6 @@ jobs:
           done
           echo "Prepare environment completed after $((attempt + 1)) attempts"
 
-      # ▸ Install Cozystack
-      - name: Install Cozystack into sandbox
-        env:
-          # This lane has no ARP VIP: .11 is a plain control-plane node standing
-          # in for the QEMU lane's 192.168.123.10.
-          COZY_APISERVER_ENDPOINT: https://192.168.123.11:6443
-          # Talos containers share the runner kernel and cannot load DRBD, so the
-          # harness suppresses DRBD-dependent chart content, registers the host's
-          # pre-created zpools and keeps LINSTOR's local ZFS path.
-          COZY_LINSTOR_DRBD_ENABLED: "false"
-          # Root monitoring is the one install-time workload whose chart selects
-          # `replicated` explicitly instead of inheriting the default class.
-          COZY_E2E_STORAGE_CLASS: local
-        run: |
-          if ! make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME install-cozystack; then
-            echo "❌ Install failed (no retry — see diagnostics below)"
-            echo "::group::Diagnostics: HelmRelease status"
-            docker exec "$SANDBOX_NAME" sh -c 'kubectl get hr -A -o wide 2>&1 | tail -100' || true
-            echo "::endgroup::"
-            echo "::group::Diagnostics: not-Ready HelmReleases (describe)"
-            docker exec "$SANDBOX_NAME" sh -c 'kubectl get hr -A --no-headers 2>/dev/null | awk "\$4 != \"True\" {print \$1\" \"\$2}"' \
-              | while read -r ns name; do
-                  echo "--- $ns/$name ---"
-                  docker exec "$SANDBOX_NAME" sh -c "kubectl describe hr '$name' -n '$ns' 2>&1 | tail -50" || true
-                done
-            echo "::endgroup::"
-            echo "::group::Diagnostics: recent events"
-            docker exec "$SANDBOX_NAME" sh -c 'kubectl get events -A --sort-by=.lastTimestamp 2>&1 | tail -50' || true
-            echo "::endgroup::"
-            exit 1
-          fi
-
       # Test Impact Analysis (TIA): walk the PackageSource graph for the PR
       # diff and select only the Chainsaw suites affected. Runs by default; opt
       # out via the `full-e2e` label to run the full suite.
@@ -1073,6 +1134,51 @@ jobs:
             echo "skip=true" >> $GITHUB_OUTPUT
           else
             echo "skip=false" >> $GITHUB_OUTPUT
+          fi
+          # The complement of what the selected suites need, for a reduced
+          # install. An empty selection installs everything as before.
+          disabled=""
+          if [ -n "${apps}" ]; then
+            disabled="$(./hack/select-install.sh --disabled "${apps}")"
+          fi
+          echo "Disabled packages: ${disabled:-<none>}"
+          echo "disabled=${disabled}" >> $GITHUB_OUTPUT
+
+      # ▸ Install Cozystack
+      - name: Install Cozystack into sandbox
+        env:
+          # This lane has no ARP VIP: .11 is a plain control-plane node standing
+          # in for the QEMU lane's 192.168.123.10.
+          COZY_APISERVER_ENDPOINT: https://192.168.123.11:6443
+          # Talos containers share the runner kernel and cannot load DRBD, so the
+          # harness suppresses DRBD-dependent chart content, registers the host's
+          # pre-created zpools and keeps LINSTOR's local ZFS path.
+          COZY_LINSTOR_DRBD_ENABLED: "false"
+          # Root monitoring is the one root-tenant workload whose chart selects
+          # `replicated` explicitly instead of inheriting the default class. The
+          # install leaves it off but still seeds its local-storage override, so
+          # a run that turns it on does not create a replicated PVC.
+          COZY_E2E_STORAGE_CLASS: local
+          # Empty on the full-e2e label and on an empty selection, which keeps
+          # the full install.
+          COZY_DISABLED_PACKAGES: ${{ steps.select.outputs.disabled }}
+        run: |
+          if ! make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME install-cozystack; then
+            echo "❌ Install failed (no retry — see diagnostics below)"
+            echo "::group::Diagnostics: HelmRelease status"
+            docker exec "$SANDBOX_NAME" sh -c 'kubectl get hr -A -o wide 2>&1 | tail -100' || true
+            echo "::endgroup::"
+            echo "::group::Diagnostics: not-Ready HelmReleases (describe)"
+            docker exec "$SANDBOX_NAME" sh -c 'kubectl get hr -A --no-headers 2>/dev/null | awk "\$4 != \"True\" {print \$1\" \"\$2}"' \
+              | while read -r ns name; do
+                  echo "--- $ns/$name ---"
+                  docker exec "$SANDBOX_NAME" sh -c "kubectl describe hr '$name' -n '$ns' 2>&1 | tail -50" || true
+                done
+            echo "::endgroup::"
+            echo "::group::Diagnostics: recent events"
+            docker exec "$SANDBOX_NAME" sh -c 'kubectl get events -A --sort-by=.lastTimestamp 2>&1 | tail -50' || true
+            echo "::endgroup::"
+            exit 1
           fi
 
       - name: Run OpenAPI tests
@@ -1113,7 +1219,7 @@ jobs:
             echo "Running selected chainsaw suites: $suites"
           fi
           if ! make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME test-chainsaw CHAINSAW_SUITES="$suites"; then
-            echo "❌ Chainsaw E2E failed (see the assertion diffs above and diagnostics below)"
+            echo "❌ Chainsaw E2E failed (see the assertion diffs or LEAKED-PODS lines above and diagnostics below)"
             echo "::group::Diagnostics: HelmRelease status"
             docker exec "$SANDBOX_NAME" sh -c 'kubectl get hr -A -o wide 2>&1 | tail -50' || true
             echo "::endgroup::"
@@ -1152,7 +1258,7 @@ jobs:
 
       # ▸ Collect debug information (always runs)
       #
-      #   A ceiling of its own, not the job's 215 minutes. `Upload
+      #   A ceiling of its own, not the job's 265 minutes. `Upload
       #   cozyreport.tgz` is the next step and the collector writes its tarball
       #   at the very end of its run, so a read that never returns spends what
       #   is left of the job budget, the job is cancelled, and the upload never
@@ -1163,7 +1269,7 @@ jobs:
       #   30 minutes is measured against the step: it takes 3-42s across sampled
       #   runs, on failed e2e jobs as well as green ones. It RESERVES nothing --
       #   `timeout-minutes` caps a step, it does not carve budget out of the job,
-      #   so a suite that has already burned 210 of the 215 leaves this step five
+      #   so a suite that has already burned 260 of the 265 leaves this step five
       #   minutes and the upload is cancelled with everything else. What the cap
       #   buys is that a hung read cannot be the reason.
       #   `continue-on-error` because the ceiling must not change what the job
@@ -1276,28 +1382,6 @@ jobs:
             Resume from inside: `breakpoint resume`. Otherwise the breakpoint
             exits 10 minutes after the last SSH session disconnects.
 
-      # ▸ Tear down environment (always runs)
-      #
-      #   Both halves, and in this order: the compose project owns the nodes and
-      #   the zpools outlive it. A leftover pool makes the next run on a reused
-      #   host adopt storage that already carries a dead cluster's volumes.
-      - name: Tear down sandbox
-        if: always()
-        run: |
-          # Loud, but never the job's verdict. A failed teardown means a dirty
-          # host, and this runner is discarded after the job, so there is no next
-          # run to protect -- while failing the job here posts the required
-          # "E2E Tests" status as a failure that no reader can tell apart from a
-          # real one. The annotation is what a reused host (a developer machine)
-          # needs; `delete-cluster-container` returning non-zero is not evidence
-          # about the product.
-          cleanup_rc=0
-          make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME delete-cluster-container || cleanup_rc=$?
-          make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME delete || true
-          if [ "$cleanup_rc" -ne 0 ]; then
-            echo "::error title=sandbox teardown::teardown exited $cleanup_rc; the host may hold a stale compose project or zpool"
-          fi
-
   # Report the required "E2E Tests" gate as a commit status rather than relying
   # on a job named "E2E Tests". A required *job* that is skipped counts
   # as PASSED by branch protection — desired for docs-only PRs, but the exact
@@ -1377,7 +1461,7 @@ jobs:
               description = `release packages candidate did not verify (result: ${CANDIDATE_RESULT})`;
             } else if (CODE !== 'true') {
               state = 'success';
-              description = 'docs-only PR — e2e not required';
+              description = 'docs or CI-only tools — e2e not required';
             } else if (IS_RELEASE === 'true' && IS_FULL_E2E !== 'true') {
               // Release promotion PRs deliberately do not repeat e2e: the rc was
               // already verified against the immutable candidate whose digests

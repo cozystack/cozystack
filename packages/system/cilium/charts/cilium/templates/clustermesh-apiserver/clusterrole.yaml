@@ -5,6 +5,7 @@ metadata:
   name: clustermesh-apiserver
   labels:
     app.kubernetes.io/part-of: cilium
+    helm.sh/chart: {{ include "cilium.chart" . }}
     {{- with .Values.commonLabels }}
     {{- toYaml . | nindent 4 }}
     {{- end }}
@@ -35,7 +36,6 @@ rules:
 - apiGroups:
   - ""
   resources:
-  - endpoints
   - namespaces
   - services
   verbs:
@@ -50,7 +50,7 @@ rules:
   - get
   - list
   - watch
-{{- if or .Values.clustermesh.mcsapi.enabled .Values.clustermesh.enableMCSAPISupport }}
+{{- if .Values.clustermesh.mcsapi.enabled }}
 - apiGroups:
   - multicluster.x-k8s.io
   resources:

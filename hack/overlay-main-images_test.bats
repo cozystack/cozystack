@@ -1,20 +1,26 @@
 #!/usr/bin/env bats
-# EXIT-TRAP DEBT: 11 -- see hack/bats-no-exit-trap.bats; lower it as the traps go, delete it at zero.
 # Unit tests for hack/overlay-main-images.sh — the PR-finalize step that points
 # packages a PR did NOT rebuild at the current-main images from the
 # cozystack-packages:main artifact.
 #
-# Run from the repo root:  bats hack/overlay-main-images_test.bats
-# (CI runs it via hack/cozytest.sh through `make unit-tests`.)
+# Run from the repo root with `make bats-unit-tests`, or directly with
+# `bats hack/overlay-main-images_test.bats`. The legacy `hack/cozytest.sh`
+# runner remains a supported compatibility path.
 #
-# Each test builds a throwaway tree: a `packages/` tree on release (ghcr/v1.5.0)
-# refs, and a `main/` dir standing in for the extracted cozystack-packages:main
-# artifact (root = contents of packages/) on current-main (OCIR/:main) refs.
-# $root is the real repo, captured before cd.
+# Each fixture test builds a throwaway tree: a `packages/` tree on release
+# (ghcr/v1.5.0) refs, and a `main/` dir standing in for the extracted
+# cozystack-packages:main artifact (root = contents of packages/) on current-main
+# (OCIR/:main) refs. $root is the real repo, captured before cd.
+#
+# Test-level EXIT traps replace Bats' own handler and hide failing TAP results.
+# Cleanup follows aborting assertions; see docs/agents/e2e-testing.md.
+# Leave the fixture directory before deleting it so the shell retains a cwd.
+
+load test_helper
 
 @test "overlays an unbuilt unit (.tag) to current-main and reports it" {
   root=$(pwd)
-  w=$(mktemp -d); trap 'rm -rf "$w"' EXIT
+  w=$(mktemp -d)
   mkdir -p "$w/packages/apps/foo/images" "$w/main/apps/foo/images"
   echo 'ghcr.io/cozystack/cozystack/foo:v1.5.0@sha256:aaaa' > "$w/packages/apps/foo/images/foo.tag"
   echo 'iad.ocir.io/x/cozystack/foo:main@sha256:bbbb'       > "$w/main/apps/foo/images/foo.tag"
@@ -22,6 +28,8 @@
   out=$("$root/hack/overlay-main-images.sh" main '[]')
   grep -q 'foo:main@sha256:bbbb' packages/apps/foo/images/foo.tag
   echo "$out" | grep -q 'overlaid=1'
+  cd "$root"
+  rm -rf "$w"
 }
 
 @test "overlays an UNSTAMPED .tag placeholder (bare ref, no key and no digest)" {
@@ -29,7 +37,7 @@
   # build has stamped it. Its one line carries no YAML key and no @sha256, so the
   # generic classifier reads it as a non-ref change and the drift guard keeps it,
   # leaving in the tree a reference no registry serves, for every later PR that
-  # does not rebuild that package. No EXIT trap here: see the debt note at the
+  # does not rebuild that package. No EXIT trap here: see the cleanup note at the
   # top of this file; on failure the scratch dir survives for inspection.
   root=$(pwd)
   w=$(mktemp -d)
@@ -61,7 +69,7 @@
 
 @test "overlays a split-form ref (repository/tag/digest, no @sha256 on those lines)" {
   root=$(pwd)
-  w=$(mktemp -d); trap 'rm -rf "$w"' EXIT
+  w=$(mktemp -d)
   mkdir -p "$w/packages/system/split" "$w/main/system/split"
   printf 'image:\n  repository: ghcr.io/cozystack/cozystack/split\n  tag: v1.5.0\n  digest: "sha256:aaaa"\n' > "$w/packages/system/split/values.yaml"
   printf 'image:\n  repository: iad.ocir.io/x/cozystack/split\n  tag: main\n  digest: "sha256:bbbb"\n'      > "$w/main/system/split/values.yaml"
@@ -70,33 +78,39 @@
   grep -q 'repository: iad.ocir.io/x/cozystack/split' packages/system/split/values.yaml
   grep -q 'tag: main' packages/system/split/values.yaml
   grep -q 'sha256:bbbb' packages/system/split/values.yaml
+  cd "$root"
+  rm -rf "$w"
 }
 
 @test "overlays an extra/* unit (outside the per-package build matrix)" {
   root=$(pwd)
-  w=$(mktemp -d); trap 'rm -rf "$w"' EXIT
+  w=$(mktemp -d)
   mkdir -p "$w/packages/extra/seaweedfs/images" "$w/main/extra/seaweedfs/images"
   echo 'ghcr.io/cozystack/cozystack/objectstorage-sidecar:v1.5.0@sha256:aaaa' > "$w/packages/extra/seaweedfs/images/objectstorage-sidecar.tag"
   echo 'iad.ocir.io/x/cozystack/objectstorage-sidecar:main@sha256:bbbb'       > "$w/main/extra/seaweedfs/images/objectstorage-sidecar.tag"
   cd "$w"
   "$root/hack/overlay-main-images.sh" main '[]'
   grep -q 'objectstorage-sidecar:main@sha256:bbbb' packages/extra/seaweedfs/images/objectstorage-sidecar.tag
+  cd "$root"
+  rm -rf "$w"
 }
 
 @test "skips a unit the PR rebuilt (its pr-<N>-<sha> ref wins)" {
   root=$(pwd)
-  w=$(mktemp -d); trap 'rm -rf "$w"' EXIT
+  w=$(mktemp -d)
   mkdir -p "$w/packages/apps/foo" "$w/main/apps/foo"
   echo 'image: ghcr.io/cozystack/cozystack/foo:v1.5.0@sha256:aaaa' > "$w/packages/apps/foo/values.yaml"
   echo 'image: iad.ocir.io/x/cozystack/foo:main@sha256:bbbb'       > "$w/main/apps/foo/values.yaml"
   cd "$w"
   "$root/hack/overlay-main-images.sh" main '["packages/apps/foo"]'
   grep -q 'foo:v1.5.0@sha256:aaaa' packages/apps/foo/values.yaml
+  cd "$root"
+  rm -rf "$w"
 }
 
 @test "never overlays core/talos or core/installer (owned by dedicated jobs)" {
   root=$(pwd)
-  w=$(mktemp -d); trap 'rm -rf "$w"' EXIT
+  w=$(mktemp -d)
   mkdir -p "$w/packages/core/installer" "$w/main/core/installer" "$w/packages/core/talos" "$w/main/core/talos"
   echo 'image: ghcr.io/cozystack/cozystack/cozystack-operator:v1.5.0@sha256:aaaa' > "$w/packages/core/installer/values.yaml"
   echo 'image: iad.ocir.io/x/cozystack/cozystack-operator:main@sha256:bbbb'       > "$w/main/core/installer/values.yaml"
@@ -106,22 +120,26 @@
   "$root/hack/overlay-main-images.sh" main '[]'
   grep -q 'cozystack-operator:v1.5.0@sha256:aaaa' packages/core/installer/values.yaml
   grep -q 'talos:v1.5.0@sha256:cccc' packages/core/talos/values.yaml
+  cd "$root"
+  rm -rf "$w"
 }
 
 @test "does not descend into vendored charts/ subtrees" {
   root=$(pwd)
-  w=$(mktemp -d); trap 'rm -rf "$w"' EXIT
+  w=$(mktemp -d)
   mkdir -p "$w/packages/system/bar/charts/sub" "$w/main/system/bar/charts/sub"
   echo 'image: ghcr.io/cozystack/cozystack/sub:v1.5.0@sha256:aaaa' > "$w/packages/system/bar/charts/sub/values.yaml"
   echo 'image: iad.ocir.io/x/cozystack/sub:main@sha256:bbbb'       > "$w/main/system/bar/charts/sub/values.yaml"
   cd "$w"
   "$root/hack/overlay-main-images.sh" main '[]'
   grep -q 'sub:v1.5.0@sha256:aaaa' packages/system/bar/charts/sub/values.yaml
+  cd "$root"
+  rm -rf "$w"
 }
 
 @test "keeps the committed ref when a non-ref line differs (drift)" {
   root=$(pwd)
-  w=$(mktemp -d); trap 'rm -rf "$w"' EXIT
+  w=$(mktemp -d)
   mkdir -p "$w/packages/system/drift" "$w/main/system/drift"
   printf 'tuning: old\nimage: ghcr.io/cozystack/cozystack/drift:v1.5.0@sha256:aaaa\n' > "$w/packages/system/drift/values.yaml"
   printf 'tuning: new\nimage: iad.ocir.io/x/cozystack/drift:main@sha256:bbbb\n'        > "$w/main/system/drift/values.yaml"
@@ -129,21 +147,25 @@
   "$root/hack/overlay-main-images.sh" main '[]'
   grep -q 'drift:v1.5.0@sha256:aaaa' packages/system/drift/values.yaml
   grep -q 'tuning: old' packages/system/drift/values.yaml
+  cd "$root"
+  rm -rf "$w"
 }
 
 @test "missing artifact directory is a no-op and exits 0" {
   root=$(pwd)
-  w=$(mktemp -d); trap 'rm -rf "$w"' EXIT
+  w=$(mktemp -d)
   mkdir -p "$w/packages/apps/foo"
   echo 'image: ghcr.io/cozystack/cozystack/foo:v1.5.0@sha256:aaaa' > "$w/packages/apps/foo/values.yaml"
   cd "$w"
   "$root/hack/overlay-main-images.sh" does-not-exist '[]'
   grep -q 'foo:v1.5.0@sha256:aaaa' packages/apps/foo/values.yaml
+  cd "$root"
+  rm -rf "$w"
 }
 
 @test "preserves a PR-edited non-rebuilt package ref (passed via the touched arg)" {
   root=$(pwd)
-  w=$(mktemp -d); trap 'rm -rf "$w"' EXIT
+  w=$(mktemp -d)
   mkdir -p "$w/packages/system/keycloak" "$w/main/system/keycloak"
   # The PR bumps an upstream image in keycloak. keycloak is NOT a build unit, so
   # it is absent from BUILD_MATRIX; only its image line differs from the artifact.
@@ -155,11 +177,13 @@
   # The PR's edit wins; the overlay must not touch it.
   grep -q 'keycloak:26.7.0' packages/system/keycloak/values.yaml
   echo "$out" | grep -q 'overlaid=0'
+  cd "$root"
+  rm -rf "$w"
 }
 
 @test "recognizes a --…-image= arg line (no @sha256, no image key) as an image ref" {
   root=$(pwd)
-  w=$(mktemp -d); trap 'rm -rf "$w"' EXIT
+  w=$(mktemp -d)
   mkdir -p "$w/packages/system/argimg" "$w/main/system/argimg"
   # The only differing line is a `--…-image=` arg with neither @sha256 nor an
   # image/tag/repository key — it must still count as image-reference-bearing.
@@ -168,11 +192,13 @@
   cd "$w"
   "$root/hack/overlay-main-images.sh" main '[]'
   grep -q 'x:main' packages/system/argimg/values.yaml
+  cd "$root"
+  rm -rf "$w"
 }
 
 @test "does not introduce a file present in the artifact but absent in the PR tree" {
   root=$(pwd)
-  w=$(mktemp -d); trap 'rm -rf "$w"' EXIT
+  w=$(mktemp -d)
   mkdir -p "$w/packages/apps/present/images" "$w/main/apps/present/images" "$w/main/apps/ghost/images"
   echo 'ghcr.io/cozystack/cozystack/present:v1.5.0@sha256:aaaa' > "$w/packages/apps/present/images/present.tag"
   echo 'iad.ocir.io/x/cozystack/present:main@sha256:bbbb'       > "$w/main/apps/present/images/present.tag"
@@ -182,6 +208,8 @@
   "$root/hack/overlay-main-images.sh" main '[]'
   grep -q 'present:main@sha256:bbbb' packages/apps/present/images/present.tag
   [ ! -e packages/apps/ghost/images/ghost.tag ]
+  cd "$root"
+  rm -rf "$w"
 }
 
 # ── workflow wiring ─────────────────────────────────────────────────────────
@@ -472,5 +500,142 @@
     exit 1
   fi
   cd "$root"
+  rm -rf "$w"
+}
+
+# A drifted file keeps its committed refs, and for a digest-pinned ref that is
+# a pullable older image. A bare <repo>:<tag> is the first commit of a new image
+# (docs/agents/image-refs.md) and names a tag no registry serves, so keeping it
+# turns drift into ImagePullBackOff. That hit every fork PR whose merge commit
+# predated a config change to observability-proxy's values.yaml (#5328). Only
+# such a bare line takes the artifact's ref; the rest of the file stays as the
+# PR has it.
+@test "a drifted file still takes the artifact ref for a bare (digest-less) ref line" {
+  root=$(pwd)
+  w=$(mktemp -d)
+  mkdir -p "$w/packages/system/proxy" "$w/main/system/proxy"
+  printf 'proxy:\n  image: "ghcr.io/cozystack/cozystack/proxy:v0.0.0"\n  lookback: 1h\n' \
+    > "$w/packages/system/proxy/values.yaml"
+  printf 'proxy:\n  image: "iad.ocir.io/x/cozystack/proxy:main@sha256:bbbb"\n  lookback: 1h\n  prefix: cozy-\n' \
+    > "$w/main/system/proxy/values.yaml"
+  ( cd "$w" && "$root/hack/overlay-main-images.sh" main '[]' ) > "$w/out.txt"
+  grep -q 'drift (non-ref change) in packages/system/proxy/values.yaml' "$w/out.txt"
+  grep -q '  image: "iad.ocir.io/x/cozystack/proxy:main@sha256:bbbb"' "$w/packages/system/proxy/values.yaml"
+  # The config stays the PR's: the new key is not introduced.
+  if grep -q 'prefix:' "$w/packages/system/proxy/values.yaml"; then
+    echo "FAIL: a config line was taken from the artifact" >&2; exit 1
+  fi
+  grep -q 'bare first-party ref in packages/system/proxy/values.yaml -> current-main' "$w/out.txt"
+  grep -q '::warning title=Image overlay bare refs::1 drifted package(s) .*: system/proxy$' "$w/out.txt"
+  grep -q '::warning title=Image overlay drift::1 package(s) kept committed release refs (bare first-party refs excepted, see Image overlay bare refs), .*: system/proxy$' "$w/out.txt"
+  grep -q 'bare-refs=1' "$w/out.txt"
+  rm -rf "$w"
+}
+
+@test "a drifted file replaces only its bare ref, not a digest-pinned sibling" {
+  root=$(pwd)
+  w=$(mktemp -d)
+  mkdir -p "$w/packages/system/pair" "$w/main/system/pair"
+  printf 'tuning: old\nimage: ghcr.io/cozystack/cozystack/pair:v1.5.0@sha256:aaaa\nclientImage: ghcr.io/cozystack/cozystack/pair-client:latest\n' \
+    > "$w/packages/system/pair/values.yaml"
+  printf 'tuning: new\nimage: iad.ocir.io/x/cozystack/pair:main@sha256:bbbb\nclientImage: iad.ocir.io/x/cozystack/pair-client:main@sha256:cccc\n' \
+    > "$w/main/system/pair/values.yaml"
+  ( cd "$w" && "$root/hack/overlay-main-images.sh" main '[]' ) > "$w/out.txt"
+  grep -q '^image: ghcr.io/cozystack/cozystack/pair:v1.5.0@sha256:aaaa$' "$w/packages/system/pair/values.yaml"
+  grep -q '^clientImage: iad.ocir.io/x/cozystack/pair-client:main@sha256:cccc$' "$w/packages/system/pair/values.yaml"
+  grep -q '^tuning: old$' "$w/packages/system/pair/values.yaml"
+  rm -rf "$w"
+}
+
+@test "a bare ref is not replaced by an artifact line for a different image" {
+  # The same key can hold another image in the artifact, e.g. after a rename.
+  # Matching on the key alone would swap in an image the chart never asked for.
+  root=$(pwd)
+  w=$(mktemp -d)
+  mkdir -p "$w/packages/system/ren" "$w/main/system/ren"
+  printf 'tuning: old\nimage: ghcr.io/cozystack/cozystack/old-name:v0.0.0\n' > "$w/packages/system/ren/values.yaml"
+  printf 'tuning: new\nimage: iad.ocir.io/x/cozystack/new-name:main@sha256:bbbb\n' > "$w/main/system/ren/values.yaml"
+  ( cd "$w" && "$root/hack/overlay-main-images.sh" main '[]' ) > "$w/out.txt"
+  grep -q '^image: ghcr.io/cozystack/cozystack/old-name:v0.0.0$' "$w/packages/system/ren/values.yaml"
+  grep -q 'bare-refs=0' "$w/out.txt"
+  rm -rf "$w"
+}
+
+@test "a bare ref is kept when the artifact carries no digest for it either" {
+  # A ref build-main does not stamp has no digest in the artifact, so there is
+  # nothing more pullable to take.
+  root=$(pwd)
+  w=$(mktemp -d)
+  mkdir -p "$w/packages/system/nd" "$w/main/system/nd"
+  printf 'tuning: old\nimage: ghcr.io/cozystack/cozystack/nd:v0.0.0\n' > "$w/packages/system/nd/values.yaml"
+  printf 'tuning: new\nimage: iad.ocir.io/x/cozystack/nd:main\n' > "$w/main/system/nd/values.yaml"
+  ( cd "$w" && "$root/hack/overlay-main-images.sh" main '[]' ) > "$w/out.txt"
+  grep -q '^image: ghcr.io/cozystack/cozystack/nd:v0.0.0$' "$w/packages/system/nd/values.yaml"
+  grep -q 'bare-refs=0' "$w/out.txt"
+  rm -rf "$w"
+}
+
+@test "a bare third-party ref in a drifted file is kept even when main pins one" {
+  # Main can bump a third-party image together with its config in one file. A
+  # PR behind it has the older pair, which is the one known to work together;
+  # taking main's image alone would run it with the config it replaced.
+  root=$(pwd)
+  w=$(mktemp -d)
+  mkdir -p "$w/packages/system/kc" "$w/main/system/kc"
+  printf 'features: old\nimage: quay.io/keycloak/keycloak:26.6.3\n' > "$w/packages/system/kc/values.yaml"
+  printf 'features: new\nimage: quay.io/keycloak/keycloak:27.0.0@sha256:abcd\n' > "$w/main/system/kc/values.yaml"
+  ( cd "$w" && "$root/hack/overlay-main-images.sh" main '[]' ) > "$w/out.txt"
+  grep -q '^image: quay.io/keycloak/keycloak:26.6.3$' "$w/packages/system/kc/values.yaml"
+  grep -q 'bare-refs=0' "$w/out.txt"
+  if grep -q 'Image overlay bare refs' "$w/out.txt"; then
+    echo "FAIL: a bare-refs annotation with nothing replaced" >&2; exit 1
+  fi
+  rm -rf "$w"
+}
+
+@test "a bare first-party ref is not replaced by a third-party image of the same name" {
+  root=$(pwd)
+  w=$(mktemp -d)
+  mkdir -p "$w/packages/system/same" "$w/main/system/same"
+  printf 'tuning: old\nimage: ghcr.io/cozystack/cozystack/redis:v0.0.0\n' > "$w/packages/system/same/values.yaml"
+  printf 'tuning: new\nimage: docker.io/library/redis:8.0@sha256:abcd\n' > "$w/main/system/same/values.yaml"
+  ( cd "$w" && "$root/hack/overlay-main-images.sh" main '[]' ) > "$w/out.txt"
+  grep -q '^image: ghcr.io/cozystack/cozystack/redis:v0.0.0$' "$w/packages/system/same/values.yaml"
+  grep -q 'bare-refs=0' "$w/out.txt"
+  rm -rf "$w"
+}
+
+@test "a bare ref is kept when the artifact has two candidate lines for it" {
+  # Two lines with the same key and image name (e.g. one per component in a
+  # list) cannot be told apart, so neither is taken.
+  root=$(pwd)
+  w=$(mktemp -d)
+  mkdir -p "$w/packages/system/dup" "$w/main/system/dup"
+  printf 'tuning: old\na:\n  image: ghcr.io/cozystack/cozystack/dup:v0.0.0\n' > "$w/packages/system/dup/values.yaml"
+  printf 'tuning: new\na:\n  image: iad.ocir.io/x/cozystack/dup:main@sha256:bbbb\nb:\n  image: iad.ocir.io/x/cozystack/dup:main@sha256:cccc\n' \
+    > "$w/main/system/dup/values.yaml"
+  ( cd "$w" && "$root/hack/overlay-main-images.sh" main '[]' ) > "$w/out.txt"
+  grep -q '^  image: ghcr.io/cozystack/cozystack/dup:v0.0.0$' "$w/packages/system/dup/values.yaml"
+  grep -q 'bare-refs=0' "$w/out.txt"
+  rm -rf "$w"
+}
+
+@test "a bare-ref rewrite that cannot write the file is counted as failed, not replaced" {
+  # Mode bits do not stop root from writing, and the POSIX runner has no
+  # `skip`, so there is nothing to observe as root.
+  if [ "$(id -u)" -eq 0 ]; then return 0; fi
+  root=$(pwd)
+  w=$(mktemp -d)
+  mkdir -p "$w/packages/system/ro" "$w/main/system/ro"
+  printf 'tuning: old\nimage: ghcr.io/cozystack/cozystack/ro:v0.0.0\n' > "$w/packages/system/ro/values.yaml"
+  printf 'tuning: new\nimage: iad.ocir.io/x/cozystack/ro:main@sha256:bbbb\n' > "$w/main/system/ro/values.yaml"
+  chmod a-w "$w/packages/system/ro"
+  ( cd "$w" && "$root/hack/overlay-main-images.sh" main '[]' ) > "$w/out.txt" 2>&1
+  chmod u+w "$w/packages/system/ro"
+  grep -q '^image: ghcr.io/cozystack/cozystack/ro:v0.0.0$' "$w/packages/system/ro/values.yaml"
+  grep -q 'bare-refs=0 failed=1' "$w/out.txt"
+  if ls "$w/packages/system/ro" | grep -q 'overlay-bare'; then
+    echo "FAIL: temp file left behind" >&2; exit 1
+  fi
   rm -rf "$w"
 }

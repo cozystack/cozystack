@@ -1,0 +1,111 @@
+name: Build arm64 (nightly)
+
+# Builds main's images for arm64 once a day, the same way the pre-release leg
+# in tags.yaml does, so an arm64 break surfaces here rather than on the next
+# rc, which fails with its arm64 build. The images are pushed under
+# nightly-arm64 only because buildx needs somewhere to put them; nothing
+# consumes them. This run also owns the arm64 build cache the rc leg reads.
+#
+# It first prints which refs main pins that are not amd64+arm64 indexes. The
+# rc gate fails on every one of them that the stitch does not turn into an
+# index, so the list is the work left before the next rc can ship.
+
+on:
+  schedule:
+    - cron: '0 3 * * *'   # daily 03:00 UTC
+  workflow_dispatch:
+
+concurrency:
+  group: build-arm64-nightly
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build-arm64:
+    name: Build main arm64 images
+    runs-on: oracle-vm-24cpu-96gb-arm64
+    # Starts from the rc leg's budget; re-measure after the first runs.
+    timeout-minutes: 120
+    permissions:
+      contents: read
+
+    steps:
+      # A dispatch from another ref would overwrite main's arm64 cache.
+      - name: Refuse a build for a ref other than main
+        env:
+          REF: ${{ github.ref }}
+        run: |
+          if [ "$REF" != refs/heads/main ]; then
+            echo "::error::Refusing to build '$REF'; only main is built here."
+            exit 1
+          fi
+
+      - name: Checkout code
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+          persist-credentials: false
+
+      - name: Set up build toolchain
+        run: |
+          command -v skopeo >/dev/null \
+            || { sudo apt-get update -qq && sudo apt-get install -y -qq skopeo; }
+          command -V docker jq yq skopeo
+          yq --version | grep -q mikefarah
+
+      # Before the build, which stamps the tree with this run's digests.
+      - name: Report refs that are not multi-arch
+        run: hack/verify-multiarch.sh --report packages
+
+      - name: Set up Docker config
+        run: |
+          if [ -d ~/.docker ]; then
+            cp -r ~/.docker "${{ runner.temp }}/.docker"
+          fi
+
+      - name: Login to OCIR
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          username: ${{ secrets.OCIR_USER }}
+          password: ${{ secrets.OCIR_TOKEN }}
+          registry: iad.ocir.io
+        env:
+          DOCKER_CONFIG: ${{ runner.temp }}/.docker
+
+      # docker.io pulls go through the mirror in hack/buildkitd.toml, as the
+      # PR builds' do: anonymous Docker Hub pulls from these runners are rate
+      # limited.
+      - name: Set up Buildx (docker-container driver, docker.io mirror)
+        id: buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+        with:
+          driver: docker-container
+          buildkitd-config: hack/buildkitd.toml
+        env:
+          DOCKER_CONFIG: ${{ runner.temp }}/.docker
+
+      - name: Build arm64 images
+        run: |
+          set -euo pipefail
+          # Checked first, for the reason given in tags.yaml's build-arm64.
+          units="$(MATRIX_ARCH=arm64 hack/build-matrix.sh | jq -r '.[]')"
+          [ -n "$units" ]
+          for unit in $units; do
+            make -C "$unit" image
+          done
+          make -C packages/core/installer image-operator
+        env:
+          DOCKER_CONFIG: ${{ runner.temp }}/.docker
+          BUILDER: ${{ steps.buildx.outputs.name }}
+          PLATFORM: linux/arm64
+          REGISTRY: iad.ocir.io/idyksih5sir9/cozystack
+          # The only writer of the arm64 cache, as build-main.yaml is of the
+          # amd64 one, so no two builds race on the cache manifest.
+          CACHE_TAG: buildcache-arm64
+          WRITE_CACHE: '1'
+          IMAGE_TAG: nightly-arm64
+          PUBLISH_VERSIONED: '0'
+          PUBLISH_FLOATING: '0'

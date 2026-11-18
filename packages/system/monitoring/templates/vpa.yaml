@@ -285,3 +285,26 @@ spec:
           memory: 8Gi
 {{- end }}
 {{- end }}
+{{- if include "monitoring.tracingCentralStore" . }}
+---
+apiVersion: autoscaling.k8s.io/v1
+kind: VerticalPodAutoscaler
+metadata:
+  name: vpa-vmauth-traces-central
+spec:
+  targetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: vmauth-traces-central
+  updatePolicy:
+    updateMode: Initial
+  resourcePolicy:
+    containerPolicies:
+      - containerName: vmauth
+        minAllowed:
+          cpu: 25m
+          memory: 64Mi
+        maxAllowed:
+          cpu: 2000m
+          memory: 2Gi
+{{- end }}

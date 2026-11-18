@@ -48,6 +48,13 @@
   class. The platform default is always allowed: every tenant that chooses
   nothing already lands on it.
 */}}
+{{- /* expose-ingress is overloaded: it is both an ingressClassName and
+       the publishing namespace, and the two coincide only in the default
+       deployment (see the NOTE in the wildcardsecret controller's
+       readConfig). A deployment that splits them makes the checks below
+       compare against the wrong namespace, so they stop protecting the
+       tenant they are meant to. */}}
+{{- $publishingNS := (index .Values._cluster "expose-ingress") | default "tenant-root" }}
 {{- if .Values.gatewayClassName }}
   {{- $allowed := list $defaultClass }}
   {{- range splitList "," ((index .Values._cluster "gateway-tenant-classes") | default "") }}
@@ -70,13 +77,6 @@
     nothing in any status saying why. Refuse it here, where the operator
     is looking, rather than in the certificate that silently never renews.
   */}}
-  {{- /* expose-ingress is overloaded: it is both an ingressClassName and
-         the publishing namespace, and the two coincide only in the default
-         deployment (see the NOTE in the wildcardsecret controller's
-         readConfig). A deployment that splits them makes this guard compare
-         against the wrong namespace, so it stops protecting the tenant it
-         is meant to. */}}
-  {{- $publishingNS := (index .Values._cluster "expose-ingress") | default "tenant-root" }}
   {{- if eq .Release.Namespace $publishingNS }}
     {{- $defaultAtEdge := has $defaultClass $edgeClasses }}
     {{- $selectedAtEdge := has $className $edgeClasses }}
@@ -190,10 +190,22 @@ spec:
     - {{ . | quote }}
     {{- end }}
   {{- end }}
-  {{- /* Not written at all in edge mode: the controller renders no TLS
-         listener for these, so an object advertising them would send an
-         operator looking for endpoints that are not published. */}}
-  {{- with (ternary (list) .Values.tlsPassthroughServices (eq $tlsTermination "edge")) }}
+  {{- /* Only where a platform TLSRoute can attach: the packages owning
+         these services render one per name in expose-services while
+         gateway-enabled is on, always parented to the publishing tenant's
+         Gateway. Anywhere else the listener would be routeless and would
+         still reserve its name, taking it from the tenant's own HTTPRoutes.
+         None in edge mode: the controller renders no TLS listener there. */}}
+  {{- $exposed := splitList "," ((index .Values._cluster "expose-services") | default "") }}
+  {{- $passthrough := list }}
+  {{- if and (ne $tlsTermination "edge") (eq .Release.Namespace $publishingNS) (eq (toString ((index .Values._cluster "gateway-enabled") | default "false")) "true") }}
+    {{- range .Values.tlsPassthroughServices }}
+      {{- if has . $exposed }}
+        {{- $passthrough = append $passthrough . }}
+      {{- end }}
+    {{- end }}
+  {{- end }}
+  {{- with $passthrough }}
   tlsPassthroughServices:
     {{- range . }}
     - {{ . | quote }}

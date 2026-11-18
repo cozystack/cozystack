@@ -1,32 +1,30 @@
 {{- /*
-Render-time signal for the one value in this chart that two other packages
-depend on and that fails OPEN when it is lost.
+Render-time signal for a required Cozystack networking invariant.
 
-packages/system/ingress-nginx and packages/system/kubeovn-webhook each deny pod
-egress to their admission webhook by naming the webhook's BACKEND port only.
-That covers a pod dialling the Service ClusterIP because Cilium translates a
-service to its backends before it enforces egress policy -- which is true only
-while Cilium is the thing performing the DNAT, and only kubeProxyReplacement
-makes it so. Turn it off and the ClusterIP path to both webhooks reopens while
-the backend deny keeps working: nothing fails, nothing is logged, and the
-rendered policies look exactly as they did.
+Cozystack supports this chart only with kubeProxyReplacement: true. The
+platform does not supply a supported alternative owner for ClusterIP
+translation when it is false; in the kube-ovn management topology kube-proxy
+is absent and packages/system/kubeovn/values.yaml explicitly disables the OVN
+service load balancer. A false value can therefore break Service connectivity.
 
-A ConfigMap rather than `fail`, deliberately. Whether Cilium without
-kube-proxy replacement is a supported cozystack configuration is a platform
-decision, and refusing to render the CNI is not ours to make -- it would take
-the cluster's networking down over a weakened defence-in-depth control. This
-follows the user-visible status beacon the kubernetes chart already uses for
-the same reason (packages/apps/kubernetes/templates/cluster.yaml, the
-`-awaiting-etcd` ConfigMap): emit something an operator and an alert can both
-see, and let the install proceed.
+It also removes the pre-policy translation that the source-side webhook denies
+in packages/system/ingress-nginx and packages/system/kubeovn-webhook rely on.
+That does not make either webhook fail open: both policies also carry a
+target-side ingressDeny evaluated after any translation. Even a second,
+unsupported change that introduced another service load balancer would still
+meet that deny.
+
+A ConfigMap rather than `fail`, deliberately. A field override may already be
+running, and this guard keeps the unsupported state visible without turning
+every reconciliation into a render failure. The beacon is diagnostic, not an
+opt-in compatibility mode; the repair is always to restore the required value.
 
 `.Values.cilium.kubeProxyReplacement` reads the coalesced value, so this fires
 both on an explicit flip to false and on the umbrella key being deleted, which
 falls back to the vendored chart's own "false" default.
 
 tests/kube_proxy_replacement_test.yaml pins the value itself and carries the
-full argument, including why a target-side ingressDeny is not available as a
-fallback for the two policies.
+full service-routing and policy argument.
 */}}
 {{- $cilium := index .Values "cilium" | default dict }}
 {{- $kpr := dig "kubeProxyReplacement" "" $cilium }}
@@ -47,20 +45,15 @@ data:
   message: |
     cilium.kubeProxyReplacement is {{ toString $kpr | quote }}, not "true".
 
-    Cilium no longer performs the ClusterIP DNAT ahead of its own egress hook,
-    so the admission-webhook deny policies shipped by
-    packages/system/ingress-nginx and packages/system/kubeovn-webhook no longer
-    cover traffic addressed to the webhook Service ClusterIP. Both policies name
-    the webhook backend port only and run with default-deny disabled, so a pod
-    dialling <webhook>.<namespace>.svc:443 falls out of the deny and is allowed.
-    Direct access to the backend port stays denied.
+    Cozystack supports this chart only when cilium.kubeProxyReplacement is "true".
+    The current platform topology has no supported replacement for Cilium's
+    ClusterIP translation; on kube-ovn, kube-proxy is absent and the OVN service
+    load balancer is disabled. Service connectivity may fail in this state.
 
-    Nothing else reports this: the policies still render, still install, and
-    still deny what they name.
+    The source-side admission-webhook denies also lose their pre-DNAT match, but
+    both policies retain a target-side ingressDeny. This override does not imply
+    that either webhook is reachable through its Service.
 
-    Either set cilium.kubeProxyReplacement back to true, or accept that pods can
-    reach both admission webhooks through their Services and remove this beacon
-    by setting the policies' own values explicitly
-    (ingress-nginx admissionWebhookPolicy.enabled, kubeovn-webhook
-    webhookPolicy.enabled), so the posture is recorded rather than assumed.
+    Restore cilium.kubeProxyReplacement to true. Disabling the webhook policies
+    does not make this networking configuration supported.
 {{- end }}

@@ -204,11 +204,11 @@ func TestConvertApplicationToHelmRelease_ZeroMaxHistory(t *testing.T) {
 	}
 }
 
-// HelmInstallTimeout (the per-Application annotation override) wins over the
-// global HelmReleaseInstallTimeout / HelmReleaseUpgradeTimeout defaults. This
-// is the contract that lets ApplicationDefinitions like Kubernetes (with its
-// long Kamaji bootstrap) opt out of the global default without operators
-// having to widen the global flag for every kind.
+// HelmInstallTimeout (the kind-wide ApplicationDefinition annotation override)
+// wins over the global HelmReleaseInstallTimeout / HelmReleaseUpgradeTimeout
+// defaults. This is the contract that lets ApplicationDefinitions like
+// Kubernetes (with its long Kamaji bootstrap) opt out of the global default
+// without operators having to widen the global flag for every kind.
 //
 // The asymmetric-globals case pins that the override wipes both install and
 // upgrade timeouts to the same value, even when the globals differ — a

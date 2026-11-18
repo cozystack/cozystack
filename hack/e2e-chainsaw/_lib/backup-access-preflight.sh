@@ -21,6 +21,8 @@ cozy_backup_access_preflight() (
   deadline=''
   attempt=''
   stage=''
+  put_rc=''
+  rm_rc=''
   object=''
 
   case "${timeout_seconds}:${local_port}" in
@@ -39,6 +41,17 @@ cozy_backup_access_preflight() (
   cleanup() {
     rc=$?
     trap - 0
+    # Before the port-forward goes: the delete travels through it.
+    if [ "${uploaded}" = true ]; then
+      rm_rc=0
+      timeout 15 mc rm --insecure "backup-preflight/${bucket}/${object}" >"${workdir}/cleanup.log" 2>&1 || rm_rc=$?
+      if [ "${rm_rc}" -ne 0 ]; then
+        # A delete killed by its bound usually wrote nothing to say why.
+        [ "${rm_rc}" -ne 124 ] || echo "mc rm timed out after 15s" >>"${workdir}/cleanup.log"
+        echo "WARNING: could not remove failed S3 preflight object ${bucket}/${object}:" >&2
+        sed 's/^/  s3-cleanup: /' "${workdir}/cleanup.log" >&2
+      fi
+    fi
     if [ -n "${pf_pid}" ] && kill -0 "${pf_pid}" 2>/dev/null; then
       if ! kill "${pf_pid}" 2>/dev/null; then
         echo "WARNING: could not stop S3 preflight port-forward process ${pf_pid}" >&2
@@ -47,11 +60,6 @@ cozy_backup_access_preflight() (
       # the expected port-forward shutdown, not a preflight failure.
       if ! wait "${pf_pid}" 2>/dev/null; then
         :
-      fi
-    fi
-    if [ "${uploaded}" = true ]; then
-      if ! timeout 15 mc rm --insecure "backup-preflight/${bucket}/${object}" >/dev/null 2>&1; then
-        echo "WARNING: could not remove failed S3 preflight object ${bucket}/${object}" >&2
       fi
     fi
     rm -rf -- "${workdir}"
@@ -94,6 +102,7 @@ cozy_backup_access_preflight() (
   if ! mc alias set backup-preflight "https://127.0.0.1:${local_port}" \
       "${access_key}" "${secret_key}" --insecure >/dev/null; then
     echo "failed to configure S3 client for BucketAccess ${namespace}/${access_name}" >&2
+    sed 's/^/  port-forward: /' "${workdir}/port-forward.log" >&2
     return 1
   fi
 
@@ -104,9 +113,15 @@ cozy_backup_access_preflight() (
   while :; do
     attempt=$(( attempt + 1 ))
     stage=PUT
-    if timeout 15 mc cp --insecure "${workdir}/source" \
-        "backup-preflight/${bucket}/${object}" >>"${workdir}/mc.log" 2>&1; then
+    put_rc=0
+    timeout 15 mc cp --insecure "${workdir}/source" \
+      "backup-preflight/${bucket}/${object}" >>"${workdir}/mc.log" 2>&1 || put_rc=$?
+    # A PUT cut off by its time bound (124) may have landed all the same. One
+    # the server refused did not, and deleting it would only fail again.
+    if [ "${put_rc}" -eq 0 ] || [ "${put_rc}" -eq 124 ]; then
       uploaded=true
+    fi
+    if [ "${put_rc}" -eq 0 ]; then
       stage=GET
       if timeout 15 mc cp --insecure "backup-preflight/${bucket}/${object}" \
           "${workdir}/download" >>"${workdir}/mc.log" 2>&1; then

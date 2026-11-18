@@ -29,11 +29,15 @@ import (
 // precondition passes) and a spec so tests can assert templates read the live
 // object via .Application.
 func newRedisApp(name, namespace string) *unstructured.Unstructured {
+	return newRedisAppOfKind(redisAppKind, name, namespace)
+}
+
+func newRedisAppOfKind(kind, name, namespace string) *unstructured.Unstructured {
 	u := &unstructured.Unstructured{}
 	u.SetGroupVersionKind(schema.GroupVersionKind{
 		Group:   backupsv1alpha1.DefaultApplicationAPIGroup,
 		Version: "v1alpha1",
-		Kind:    redisAppKind,
+		Kind:    kind,
 	})
 	u.SetName(name)
 	u.SetNamespace(namespace)
@@ -47,15 +51,19 @@ func newRedisApp(name, namespace string) *unstructured.Unstructured {
 }
 
 func newRedisAppRef(name string) corev1.TypedLocalObjectReference {
+	return newRedisAppRefOfKind(redisAppKind, name)
+}
+
+func newRedisAppRefOfKind(kind, name string) corev1.TypedLocalObjectReference {
 	return corev1.TypedLocalObjectReference{
 		APIGroup: new(backupsv1alpha1.DefaultApplicationAPIGroup),
-		Kind:     redisAppKind,
+		Kind:     kind,
 		Name:     name,
 	}
 }
 
-// newRedisTestEnv mirrors newJobStrategyTestEnv but for the apps.cozystack.io/Redis
-// kind. The dynamic fake matches GVR exactly, so the mapping must agree.
+// newRedisTestEnv mirrors newJobStrategyTestEnv but for the app's Redis or
+// Valkey kind. The dynamic fake matches GVR exactly, so the mapping must agree.
 func newRedisTestEnv(t *testing.T, app *unstructured.Unstructured, builder *clientfake.ClientBuilder) (*BackupJobReconciler, *RestoreJobReconciler) {
 	t.Helper()
 
@@ -67,13 +75,17 @@ func newRedisTestEnv(t *testing.T, app *unstructured.Unstructured, builder *clie
 	gvr := schema.GroupVersionResource{
 		Group:    backupsv1alpha1.DefaultApplicationAPIGroup,
 		Version:  "v1alpha1",
-		Resource: "redises",
+		Resource: map[string]string{"Redis": "redises", "Valkey": "valkeys"}[app.GetKind()],
 	}
 	dynamicClient := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(
 		testScheme,
-		map[schema.GroupVersionResource]string{gvr: redisAppKind + "List"},
-		app,
+		map[schema.GroupVersionResource]string{gvr: app.GetKind() + "List"},
 	)
+	// Seed under the explicit GVR: the fake's kind-to-resource guess turns
+	// Valkey into "valkeies", not the CRD's "valkeys".
+	if err := dynamicClient.Tracker().Create(gvr, app, app.GetNamespace()); err != nil {
+		t.Fatalf("seed application: %v", err)
+	}
 	mapping := &meta.RESTMapping{
 		Resource:         gvr,
 		GroupVersionKind: app.GroupVersionKind(),
@@ -103,7 +115,9 @@ func newRedisTestEnv(t *testing.T, app *unstructured.Unstructured, builder *clie
 // newRedisStrategy returns a Redis strategy whose template exercises every key
 // the driver exposes: .Release, .Mode, .ObjectKey, .Parameters, and
 // .Application. --key pins the object-key plumbing (unique per backup, read
-// back on restore) so a regression that stopped rendering it is caught.
+// back on restore) so a regression that stopped rendering it is caught;
+// --prefix pins the per-kind chart prefix the shipped template builds the
+// sentinel and Secret names from.
 func newRedisStrategy(name string) *strategyv1alpha1.Redis {
 	return &strategyv1alpha1.Redis{
 		ObjectMeta: metav1.ObjectMeta{Name: name},
@@ -120,6 +134,7 @@ func newRedisStrategy(name string) *strategyv1alpha1.Redis {
 							"--bucket={{ .Parameters.bucketName }}",
 							"--replicas={{ .Application.spec.replicas }}",
 							"--key={{ .ObjectKey }}",
+							"--prefix={{ .Release.Prefix }}",
 						},
 					}},
 				},
@@ -149,6 +164,7 @@ func TestValidateRedisApplicationRef(t *testing.T) {
 	}{
 		{"redis empty group", corev1.TypedLocalObjectReference{Kind: "Redis"}, false},
 		{"redis default group", corev1.TypedLocalObjectReference{APIGroup: &group, Kind: "Redis"}, false},
+		{"valkey default group", corev1.TypedLocalObjectReference{APIGroup: &group, Kind: "Valkey"}, false},
 		{"wrong kind", corev1.TypedLocalObjectReference{Kind: "Postgres"}, true},
 		{"wrong group", corev1.TypedLocalObjectReference{APIGroup: &other, Kind: "Redis"}, true},
 	}
@@ -248,7 +264,7 @@ func TestReconcileRedis_CreatesBatchJob(t *testing.T) {
 	args := k8sJob.Spec.Template.Spec.Containers[0].Args
 	// --key pins that the per-BackupJob object key reaches the rendered Job;
 	// without it a Plan's history would collapse onto one object.
-	want := []string{"--app=cache", "--mode=backup", "--bucket=redis-bucket", "--replicas=3", "--key=tenant-test/cache/test-bj.rdb"}
+	want := []string{"--app=cache", "--mode=backup", "--bucket=redis-bucket", "--replicas=3", "--key=tenant-test/cache/test-bj.rdb", "--prefix=redis-"}
 	for i, w := range want {
 		if i >= len(args) || args[i] != w {
 			t.Errorf("rendered args[%d]: want %q, got %q", i, w, args)
@@ -794,5 +810,95 @@ func TestReconcileRedisRestore_FailsOnUnmappableTargetKind(t *testing.T) {
 	}
 	if want := "kind not registered"; !strings.Contains(updated.Status.Message, want) {
 		t.Errorf("expected message to contain %q, got %q", want, updated.Status.Message)
+	}
+}
+
+// Valkey runs on the same RedisFailover operator as Redis but its chart names
+// every resource valkey-<app>; a template that kept the redis- prefix would
+// look up a sentinel Service that does not exist.
+func TestReconcileRedis_ValkeyRendersValkeyPrefix(t *testing.T) {
+	app := newRedisAppOfKind("Valkey", "cache", "tenant-test")
+	strategy := newRedisStrategy("redis-strategy")
+	backupJob := &backupsv1alpha1.BackupJob{
+		ObjectMeta: metav1.ObjectMeta{Name: "test-bj", Namespace: "tenant-test"},
+		Spec: backupsv1alpha1.BackupJobSpec{
+			ApplicationRef:  newRedisAppRefOfKind("Valkey", "cache"),
+			BackupClassName: "cozy-default",
+		},
+	}
+	resolved := newRedisResolved("redis-strategy", map[string]string{"bucketName": "redis-bucket"})
+
+	r, _ := newRedisTestEnv(t, app, clientfake.NewClientBuilder().WithObjects(backupJob, strategy))
+	ctx := context.Background()
+
+	if _, err := r.reconcileRedis(ctx, backupJob, resolved); err != nil {
+		t.Fatalf("reconcileRedis() first call: %v", err)
+	}
+	if err := r.Get(ctx, client.ObjectKeyFromObject(backupJob), backupJob); err != nil {
+		t.Fatalf("refresh BackupJob: %v", err)
+	}
+	if _, err := r.reconcileRedis(ctx, backupJob, resolved); err != nil {
+		t.Fatalf("reconcileRedis() second call: %v", err)
+	}
+
+	jobs := &batchv1.JobList{}
+	if err := r.List(ctx, jobs, client.InNamespace("tenant-test")); err != nil {
+		t.Fatalf("list batch jobs: %v", err)
+	}
+	if len(jobs.Items) != 1 {
+		t.Fatalf("expected 1 batch/v1.Job, got %d", len(jobs.Items))
+	}
+	args := jobs.Items[0].Spec.Template.Spec.Containers[0].Args
+	if got, want := args[len(args)-1], "--prefix=valkey-"; got != want {
+		t.Errorf("rendered prefix arg: want %q, got %q", want, got)
+	}
+}
+
+func TestReconcileRedisRestore_RejectsCrossKindTarget(t *testing.T) {
+	targetApp := newRedisAppOfKind("Valkey", "cache-copy", "tenant-test")
+	strategy := newRedisStrategy("redis-strategy")
+	now := metav1.Now()
+	backup := &backupsv1alpha1.Backup{
+		ObjectMeta: metav1.ObjectMeta{Name: "redis-backup", Namespace: "tenant-test"},
+		Spec: backupsv1alpha1.BackupSpec{
+			ApplicationRef: newRedisAppRef("cache"),
+			StrategyRef: corev1.TypedLocalObjectReference{
+				APIGroup: new(strategyv1alpha1.GroupVersion.Group),
+				Kind:     strategyv1alpha1.RedisStrategyKind,
+				Name:     "redis-strategy",
+			},
+			TakenAt: now,
+		},
+	}
+	target := newRedisAppRefOfKind("Valkey", "cache-copy")
+	restoreJob := &backupsv1alpha1.RestoreJob{
+		ObjectMeta: metav1.ObjectMeta{Name: "test-rj", Namespace: "tenant-test"},
+		Spec: backupsv1alpha1.RestoreJobSpec{
+			BackupRef:            corev1.LocalObjectReference{Name: backup.Name},
+			TargetApplicationRef: &target,
+		},
+		Status: backupsv1alpha1.RestoreJobStatus{StartedAt: &now, Phase: backupsv1alpha1.RestoreJobPhaseRunning},
+	}
+
+	_, rr := newRedisTestEnv(t, targetApp, clientfake.NewClientBuilder().WithObjects(strategy, backup, restoreJob))
+	ctx := context.Background()
+
+	if _, err := rr.reconcileRedisRestore(ctx, restoreJob, backup); err != nil {
+		t.Fatalf("reconcileRedisRestore() error = %v", err)
+	}
+
+	updated := &backupsv1alpha1.RestoreJob{}
+	if err := rr.Get(ctx, client.ObjectKeyFromObject(restoreJob), updated); err != nil {
+		t.Fatalf("get restorejob: %v", err)
+	}
+	if updated.Status.Phase != backupsv1alpha1.RestoreJobPhaseFailed {
+		t.Errorf("expected phase Failed for a Redis backup restored into Valkey, got %q", updated.Status.Phase)
+	}
+	jobs := &batchv1.JobList{}
+	if err := rr.List(ctx, jobs, client.InNamespace("tenant-test")); err != nil {
+		t.Fatalf("list batch jobs: %v", err)
+	}
+	if len(jobs.Items) != 0 {
+		t.Errorf("expected no restore Job for a cross-kind target, got %d", len(jobs.Items))
 	}
 }

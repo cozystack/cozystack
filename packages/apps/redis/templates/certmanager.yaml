@@ -111,6 +111,12 @@ spec:
     {{- $extHost := index (.Values._namespace | default dict) "host" | default "" }}
     {{- if $extHost }}
     - {{ printf "%s.%s" .Release.Name $extHost | quote }}
+    {{- /* The per-engine name, meant for SNI routing through a
+           TLS-passthrough listener on the tenant Gateway (*.redis.<apex>).
+           Issued next to the flat name so that a later move between the two
+           hostname schemes reissues no certificate and changes no client's
+           trust anchor; clients still change the host they dial. */}}
+    - {{ printf "%s.redis.%s" .Release.Name $extHost | quote }}
     {{- end }}
     {{- end }}
   ipAddresses:

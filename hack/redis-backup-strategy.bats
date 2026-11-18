@@ -11,10 +11,9 @@
 # the live master. Blanking the object key or breaking the rfs-redis- sentinel
 # prefix is caught the same way — by what the stubs are actually called with.
 #
-# Run via hack/cozytest.sh from the repo root (make bats-unit-tests); relative
-# paths resolve against that cwd. Each @test builds its own fixture; a
-# load-bearing assertion is never the last line (cozytest.sh rewrites a lone
-# `}` into `return 0` + `}`, which would swallow the final command's status).
+# Run from the repo root with make bats-unit-tests. To retain compatibility
+# with cozytest, assertions precede inline cleanup: its translator would
+# replace a final assertion's status with return 0 at a lone closing brace.
 #
 # The rendered script is run with `bash`, not `sh`: it opens `set -euo
 # pipefail`, which the production image's busybox ash supports but the CI
@@ -22,21 +21,25 @@
 # semantics; same reason hack/migration-50-etcd-adopt.bats runs its script
 # with bash.
 
+load test_helper
+
 CHART=packages/system/backupstrategy-controller
 
-# Render the shipped strategy's in-Pod script into $1, substitute the three
-# controller-render placeholders (Mode, Release.Name, ObjectKey) with the given
-# values ($2 mode, $3 app, $4 object key), and rebind every absolute path it
-# touches into $5 so it runs unprivileged. An empty render is an early failure,
-# and no real /etc or /tmp path may survive the rebinding — these tests EXECUTE
-# the script.
+# Render the shipped strategy's in-Pod script into $1, substitute the
+# controller-render placeholders (Mode, Release.Name, ObjectKey, Release.Prefix)
+# with the given values ($2 mode, $3 app, $4 object key, $6 chart prefix,
+# redis- by default), and rebind every absolute path it touches into $5 so it
+# runs unprivileged. An empty render is an early failure, as is a placeholder
+# left unsubstituted, and no real /etc or /tmp path may survive the rebinding —
+# these tests EXECUTE the script.
 render_script() {
-  out=$1; mode=$2; app=$3; key=$4; sandbox=$5
+  out=$1; mode=$2; app=$3; key=$4; sandbox=$5; prefix=${6:-redis-}
   mkdir -p "$sandbox/redis-ca" "$sandbox/s3-ca" "$sandbox/restore"
   helm template t "$CHART" -n cozy-backup-controller \
     --set backupStorage.bucketNameOverride=test-bucket 2>/dev/null \
     | yq eval 'select(.kind == "Redis") | .spec.template.spec.containers[0].args[0]' - \
     | sed -e "s#{{ .Mode }}#${mode}#g" \
+          -e "s#{{ .Release.Prefix | default \"redis-\" }}#${prefix}#g" \
           -e "s#{{ .Release.Name }}#${app}#g" \
           -e "s#{{ .ObjectKey }}#${key}#g" \
           -e "s#/etc/redis-ca#${sandbox}/redis-ca#g" \
@@ -44,6 +47,10 @@ render_script() {
           -e "s#/tmp/restore#${sandbox}/restore#g" \
           -e "s#/tmp/dump.rdb#${sandbox}/dump.rdb#g" > "$out"
   [ -s "$out" ] || return 1
+  if grep -q '{{' "$out"; then
+    echo "rendered script still holds a controller placeholder" >&2
+    return 1
+  fi
   # The exact absolute paths the rebinding above replaces; a survivor means the
   # script grew a new one and the test would touch the real filesystem. Matched
   # literally (not a bare /tmp/, which the sandbox itself lives under in CI).
@@ -107,9 +114,9 @@ s3_env() {
   grep -q 'tenant-x/myapp/bkp-42.rdb' "$tmp/curl.log"
   # The destructive branch must be unreachable in cleanup: no FLUSHALL, no
   # --pipe, and in fact no Redis contact at all. This is the assertion the
-  # round's cleanup arm exists to hold; it must not be the last line.
-  ! grep -qi 'FLUSHALL' "$tmp/rc.log"
-  ! grep -q -- '--pipe' "$tmp/rc.log"
+  # round's cleanup arm exists to hold.
+  if grep -qi 'FLUSHALL' "$tmp/rc.log"; then echo "FAIL: cleanup must not flush the master"; false; fi
+  if grep -q -- '--pipe' "$tmp/rc.log"; then echo "FAIL: cleanup must not pipe a restore into the master"; false; fi
   [ ! -s "$tmp/rc.log" ]
 }
 
@@ -127,7 +134,18 @@ s3_env() {
   grep -q -- '-X PUT' "$tmp/curl.log"
   grep -q 'tenant-x/myapp/bkp-42.rdb' "$tmp/curl.log"
   # Backup must never wipe the source.
-  ! grep -qi 'FLUSHALL' "$tmp/rc.log"
+  if grep -qi 'FLUSHALL' "$tmp/rc.log"; then echo "FAIL: backup must not flush the source"; false; fi
+}
+
+@test "a Valkey backup resolves rfs-valkey-<app>, the valkey chart's sentinel" {
+  tmp=$(mktemp -d)
+  make_stubs "$tmp/bin" "$tmp/rc.log" "$tmp/curl.log"
+  render_script "$tmp/s.sh" backup myapp "tenant-x/myapp/bkp-42.rdb" "$tmp/sb" valkey-
+  s3_env
+  PATH="$tmp/bin:$PATH" bash "$tmp/s.sh"
+  grep -q -- '-h rfs-valkey-myapp -p 26379' "$tmp/rc.log"
+  grep -q -- '-X PUT' "$tmp/curl.log"
+  if grep -q 'rfs-redis-' "$tmp/rc.log"; then echo "FAIL: a Valkey backup must not query the redis sentinel"; false; fi
 }
 
 @test "an unrecognised mode exits non-zero without touching the master" {
@@ -141,6 +159,6 @@ s3_env() {
     false
   fi
   # The unknown mode must fail closed, never reaching the restore FLUSHALL.
-  ! grep -qi 'FLUSHALL' "$tmp/rc.log"
+  if grep -qi 'FLUSHALL' "$tmp/rc.log"; then echo "FAIL: an unrecognised mode must not reach the restore flush"; false; fi
   [ -f "$tmp/rc.log" ]
 }

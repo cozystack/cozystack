@@ -14,19 +14,18 @@ rules:
 - apiGroups: ["gateway.networking.k8s.io"]
   resources: ["gateways/status", "httproutes/status", "tlsroutes/status"]
   verbs: ["get", "update", "patch"]
-# Read-only, to answer whether a TLSRoute forwards anywhere before a
-# hostname is taken from an HTTPS-terminate listener.
+# Read-only, to report a class whose supportedFeatures leave out a
+# route kind the tenant Gateway renders listeners for.
 - apiGroups: ["gateway.networking.k8s.io"]
-  resources: ["referencegrants"]
-  verbs: ["get", "list", "watch"]
-- apiGroups: [""]
-  resources: ["services"]
+  resources: ["gatewayclasses"]
   verbs: ["get", "list", "watch"]
 # TenantGatewayReconciler renders the per-tenant Issuer and the
 # wildcard / per-listener Certificates the Gateway listeners reference.
 - apiGroups: ["cert-manager.io"]
   resources: ["issuers", "certificates"]
   verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+# TenantLogRoutingReconciler patches the forced-upgrade request annotations on
+# cozy-monitoring/monitoring-agents when a namespace monitoring label changes.
 - apiGroups: ["helm.toolkit.fluxcd.io"]
   resources: ["helmreleases"]
   verbs: ["get", "list", "watch", "patch", "update"]
@@ -50,10 +49,12 @@ rules:
   resources: ["namespaces"]
   verbs: ["get", "list", "watch", "patch", "update"]
 # TenantQuotaReconciler manages the per-namespace "tenant-quota-allocated"
-# ResourceQuota that enforces each tenant's share of its parent pool, and emits
-# events on the tenant namespace when sub-tenant quotas overcommit the budget.
+# ResourceQuota that enforces each tenant's share of its parent pool, copies the
+# pool root's "tenant-range-limits" LimitRange into unbounded members as
+# "tenant-range-limits-allocated", and emits events on the tenant namespace when
+# sub-tenant quotas overcommit the budget.
 - apiGroups: [""]
-  resources: ["resourcequotas"]
+  resources: ["resourcequotas", "limitranges"]
   verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
 - apiGroups: [""]
   resources: ["events"]
@@ -68,6 +69,9 @@ rules:
 - apiGroups: [""]
   resources: ["secrets"]
   verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+# Leader election (--leader-elect) is granted by a namespaced Role in cozy-system
+# (see leader-election-role.yaml): the Lease lives in the controller's own
+# namespace, so the write does not need to reach every namespace.
 - apiGroups: ['*']
   resources: ['*']
   verbs: ["get", "list", "watch"]

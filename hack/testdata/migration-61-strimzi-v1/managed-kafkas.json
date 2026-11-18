@@ -1,0 +1,54 @@
+{
+ "items": [
+  {
+   "metadata": {
+    "namespace": "tenant-a",
+    "name": "kafka-one",
+    "managedFields": [
+     {
+      "manager": "helm-controller",
+      "operation": "Apply",
+      "apiVersion": "kafka.strimzi.io/v1beta2",
+      "fieldsType": "FieldsV1",
+      "fieldsV1": {
+       "f:spec": {
+        "f:kafka": {
+         "f:version": {}
+        }
+       }
+      }
+     },
+     {
+      "manager": "strimzi-cluster-operator",
+      "operation": "Update",
+      "apiVersion": "kafka.strimzi.io/v1beta2",
+      "subresource": "status",
+      "fieldsType": "FieldsV1",
+      "fieldsV1": {
+       "f:status": {}
+      }
+     }
+    ],
+    "resourceVersion": "100"
+   }
+  },
+  {
+   "metadata": {
+    "namespace": "tenant-b",
+    "name": "kafka-two",
+    "managedFields": [
+     {
+      "manager": "helm-controller",
+      "operation": "Apply",
+      "apiVersion": "kafka.strimzi.io/v1",
+      "fieldsType": "FieldsV1",
+      "fieldsV1": {
+       "f:spec": {}
+      }
+     }
+    ],
+    "resourceVersion": "101"
+   }
+  }
+ ]
+}

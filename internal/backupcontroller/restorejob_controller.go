@@ -19,6 +19,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/apiutil"
+	"sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
@@ -49,6 +50,18 @@ type RestoreJobReconciler struct {
 	// (missing pods/log RBAC) branch - is unit-testable without a live cluster.
 	readPodLog        func(ctx context.Context, namespace, podName, container string) (string, error)
 	CredentialsConfig BackupCredentialsConfig
+	// APIReader is the manager's uncached reader. Reconcile re-reads the
+	// RestoreJob through it before dispatching to a driver, the
+	// keepOriginalPVC rename reads back objects it has just written, which
+	// the cache may not have seen yet, and the concurrent-restore gate must
+	// see a peer's StartedAt before the cache does. Wired in
+	// SetupWithManager.
+	APIReader client.Reader
+
+	// newS3ObjectLister overrides the S3 client used to check that a
+	// backup's object still exists; nil means a real minio client. Set by
+	// unit tests.
+	newS3ObjectLister func(conn s3Connection) (s3ObjectLister, error)
 }
 
 func (r *RestoreJobReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -100,6 +113,22 @@ func (r *RestoreJobReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		return ctrl.Result{}, nil
 	}
 
+	// Re-read past the cache for the reason BackupJobReconciler.Reconcile
+	// gives. Here the step retried for a job already over can be destructive:
+	// halting the VM, renaming its PVCs, deleting the Postgres cluster.
+	if err := r.apiReader().Get(ctx, req.NamespacedName, restoreJob); err != nil {
+		if apierrors.IsNotFound(err) {
+			return ctrl.Result{}, nil
+		}
+		logger.Error(err, "failed to re-read RestoreJob")
+		return ctrl.Result{}, err
+	}
+	if restoreJob.Status.Phase == backupsv1alpha1.RestoreJobPhaseSucceeded ||
+		restoreJob.Status.Phase == backupsv1alpha1.RestoreJobPhaseFailed {
+		logger.V(1).Info("RestoreJob terminal on the apiserver ahead of the cache, skipping", "phase", restoreJob.Status.Phase)
+		return ctrl.Result{}, nil
+	}
+
 	// Step 1: Fetch the referenced Backup
 	backup := &backupsv1alpha1.Backup{}
 	backupKey := types.NamespacedName{Namespace: req.Namespace, Name: restoreJob.Spec.BackupRef.Name}
@@ -130,6 +159,19 @@ func (r *RestoreJobReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		supported := slices.Contains(supportedBackupStrategyKinds(), backup.Spec.StrategyRef.Kind)
 		if !supported {
 			return r.markRestoreJobFailed(ctx, restoreJob, fmt.Sprintf("StrategyRef.Kind not supported: %s", backup.Spec.StrategyRef.Kind))
+		}
+	}
+
+	// Only a job that has not started yet is refused, so a restore already
+	// rewriting the application is never failed by one created after it.
+	if !restoreJobStarted(restoreJob) {
+		ahead, err := restoreAhead(ctx, r.apiReader(), r.Client, restoreJob)
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+		if ahead != "" {
+			return r.markRestoreJobFailedReason(ctx, restoreJob, ConditionReasonConcurrentRestore, fmt.Sprintf(
+				"RestoreJob %s is already restoring the same application; wait for it to finish, then create a new RestoreJob", ahead))
 		}
 	}
 
@@ -167,6 +209,8 @@ func (r *RestoreJobReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		return r.reconcileRedisRestore(ctx, restoreJob, backup)
 	case strategyv1alpha1.KafkaStrategyKind:
 		return r.reconcileKafkaRestore(ctx, restoreJob, backup)
+	case strategyv1alpha1.KubernetesStrategyKind:
+		return r.reconcileKubernetesRestore(ctx, restoreJob, backup)
 	default:
 		return r.markRestoreJobFailed(ctx, restoreJob, fmt.Sprintf("StrategyRef.Kind not supported: %s", backup.Spec.StrategyRef.Kind))
 	}
@@ -174,6 +218,7 @@ func (r *RestoreJobReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 
 // SetupWithManager registers our controller with the Manager and sets up watches.
 func (r *RestoreJobReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	r.APIReader = mgr.GetAPIReader()
 	cfg := mgr.GetConfig()
 	var err error
 	if r.Interface, err = dynamic.NewForConfig(cfg); err != nil {
@@ -191,7 +236,21 @@ func (r *RestoreJobReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	}
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&backupsv1alpha1.RestoreJob{}).
+		// One worker: restoreAhead lets exactly one of two concurrent restores
+		// through only because a peer's StartedAt, written by an earlier
+		// reconcile, is already on the API server when the next one reads.
+		WithOptions(controller.Options{MaxConcurrentReconciles: 1}).
 		Complete(r)
+}
+
+// apiReader returns the uncached reader. Reconcilers built by hand in unit
+// tests have none and fall back to their fake Client, which has no cache to
+// bypass.
+func (r *RestoreJobReconciler) apiReader() client.Reader {
+	if r.APIReader != nil {
+		return r.APIReader
+	}
+	return r.Client
 }
 
 // handleProjectionError classifies a credentials-projection error as
@@ -329,6 +388,12 @@ func (r *RestoreJobReconciler) cleanupOnDelete(ctx context.Context, restoreJob *
 	switch kind {
 	case strategyv1alpha1.VeleroStrategyKind:
 		r.cleanupVeleroRestore(ctx, restoreJob)
+
+	case strategyv1alpha1.KubernetesStrategyKind:
+		// Its Velero Restores are labelled like the Velero driver's, so the
+		// same cleanup reaps them; a live cluster it stopped is resumed.
+		r.cleanupVeleroRestore(ctx, restoreJob)
+		r.cleanupKubernetesRestore(ctx, restoreJob)
 
 	case strategyv1alpha1.CNPGStrategyKind, strategyv1alpha1.JobStrategyKind, strategyv1alpha1.AltinityStrategyKind, strategyv1alpha1.MariaDBStrategyKind, strategyv1alpha1.MongoDBStrategyKind, strategyv1alpha1.FoundationDBStrategyKind, strategyv1alpha1.EtcdStrategyKind, strategyv1alpha1.RabbitmqStrategyKind, strategyv1alpha1.RedisStrategyKind, strategyv1alpha1.KafkaStrategyKind:
 		// Nothing to clean up: these drivers don't materialise namespaced

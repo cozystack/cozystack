@@ -6,6 +6,8 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"slices"
+	"sort"
 	"strings"
 	"time"
 
@@ -18,6 +20,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/client-go/util/retry"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
@@ -50,6 +53,14 @@ const (
 	defaultActiveJobPollingInterval     = defaultRequeueAfter
 	defaultRestoreRequeueAfter          = 5 * time.Second
 	defaultActiveRestorePollingInterval = defaultRestoreRequeueAfter
+
+	// Condition recorded on a RestoreJob before prepareForRestore first changes
+	// the target. From then on a failure has to say what preparation left
+	// behind, and its LastTransitionTime starts the preparation deadline.
+	restoreCondPreparationStarted = "PreparationStarted"
+	// How long preparation may wait (VM shutdown, Pods releasing the disks, the
+	// DataVolume and a recreated PVC going away) before the RestoreJob fails.
+	restorePreparationDeadline = 30 * time.Minute
 	// Velero requires API objects and secrets to be in the cozy-velero namespace
 	veleroNamespace                  = "cozy-velero"
 	veleroBackupNameMetadataKey      = "velero.io/backup-name"
@@ -57,6 +68,17 @@ const (
 
 	// Annotation key for persisting underlying resources on the Velero Backup object
 	underlyingResourcesAnnotation = "backups.cozystack.io/underlying-resources"
+
+	// keepOriginalPVC moves a disk's PV to Retain so it survives the deletion
+	// of its PVC. The policy it had is kept here, on the PV and on the
+	// <name>-orig-<hash> PVC, because nothing in the controller restores it:
+	// whoever deletes the -orig PVC must set it back first, or a PV that was
+	// Delete stays Retain and its volume is never reclaimed.
+	originalReclaimPolicyAnnotation = "backups.cozystack.io/original-reclaim-policy"
+	// The -orig suffix hashes the RestoreJob name, and a name can be reused
+	// once the previous RestoreJob is deleted, leaving its -orig PVC behind.
+	// The UID tells a rename this RestoreJob started apart from that one.
+	origPVCRestoreJobUIDAnnotation = "backups.cozystack.io/restore-job-uid"
 
 	// VM-specific constants
 	vmInstanceKind        = "VMInstance"
@@ -93,12 +115,13 @@ type CommonRestoreOptions struct {
 
 // RestoreOptions is the typed representation of RestoreJob.Spec.Options for the
 // Velero driver. The struct is deserialized from runtime.RawExtension and used
-// for all application kinds. VMInstance-specific fields (KeepOriginalPVC,
-// KeepOriginalIpAndMac) are only effective when the application kind is VMInstance.
+// for all application kinds. KeepOriginalPVC applies to VMInstance and VMDisk
+// targets; KeepOriginalIpAndMac only to VMInstance.
 type RestoreOptions struct {
 	CommonRestoreOptions `json:",inline"`
-	// KeepOriginalPVC renames the original PVC to <name>-orig-<hash> before restore.
-	// Only effective for in-place VMInstance restore (no targetNamespace). Defaults to true when omitted.
+	// KeepOriginalPVC renames the original PVC to <name>-orig-<hash> before restore;
+	// when false, the original PVC is deleted so that Velero recreates it.
+	// Only effective for an in-place VMInstance or VMDisk restore (no targetNamespace). Defaults to true when omitted.
 	KeepOriginalPVC *bool `json:"keepOriginalPVC,omitempty"`
 	// KeepOriginalIpAndMac preserves the original IP and MAC address via OVN
 	// annotations. Only effective for VMInstance restores. Defaults to true when omitted.
@@ -350,13 +373,29 @@ func (r *BackupJobReconciler) reconcileVelero(ctx context.Context, j *backupsv1a
 // Returns nil if the application type has no underlying resources to collect.
 func (r *BackupJobReconciler) collectUnderlyingResources(ctx context.Context, app *unstructured.Unstructured, appKind, ns string) (*runtime.RawExtension, error) {
 	logger := getLogger(ctx)
+	appName := app.GetName()
 
-	if appKind != vmInstanceKind {
-		logger.Debug("application is not a VMInstance, skipping underlying resource collection", "kind", appKind)
-		return nil, nil
+	// A standalone VMDisk is its own underlying disk. Capturing it lets the
+	// restore controller prepare it as it prepares a VMInstance's disks: keep
+	// the live PVC aside and delete the DataVolume, so the restored PVC is
+	// created fresh under the original name. The HelmRelease is suspended only
+	// until Velero restores it; Flux then recreates the DataVolume and CDI
+	// adopts the restored PVC because the vm-disk chart sets allowClaimAdoption
+	// on that DataVolume. A standalone VMDisk has no VM, so there is no IP/MAC
+	// to collect.
+	if appKind == vmDiskAppKind {
+		return marshalUnderlyingResources(vmInstanceResources{
+			DataVolumes: []backupsv1alpha1.DataVolumeResource{{
+				DataVolumeName:  vmDiskNamePrefix + appName,
+				ApplicationName: appName,
+			}},
+		})
 	}
 
-	appName := app.GetName()
+	if appKind != vmInstanceKind {
+		logger.Debug("application has no underlying resources to collect", "kind", appKind)
+		return nil, nil
+	}
 
 	// Extract disk names from VMInstance spec.disks[].name
 	disks, found, err := unstructured.NestedSlice(app.Object, "spec", "disks")
@@ -449,8 +488,11 @@ func (r *BackupJobReconciler) createVeleroBackup(ctx context.Context, backupJob 
 		return err
 	}
 
-	// Add label selectors for underlying VMDisk HelmReleases
-	if vmRes := getVMInstanceResources(underlyingResources); vmRes != nil {
+	// Add label selectors for a VMInstance's VMDisk HelmReleases. A VMDisk's own
+	// strategy already selects the disk, and Velero rejects a spec that carries
+	// both labelSelector and orLabelSelectors, so a VMDisk strategy written with
+	// labelSelector must be left as it is.
+	if vmRes := getVMInstanceResources(underlyingResources); vmRes != nil && backupJob.Spec.ApplicationRef.Kind == vmInstanceKind {
 		for _, dv := range vmRes.DataVolumes {
 			veleroBackupSpec.OrLabelSelectors = append(veleroBackupSpec.OrLabelSelectors, &metav1.LabelSelector{
 				MatchLabels: map[string]string{
@@ -516,7 +558,9 @@ func (r *BackupJobReconciler) createBackupResource(ctx context.Context, backupJo
 		veleroBackupNamespaceMetadataKey: veleroBackup.Namespace,
 	}
 
-	// Create a basic artifact referencing the Velero backup
+	// SizeBytes stays unset: data lands in a content-addressed kopia
+	// repository shared across backups, so there is no per-backup stored
+	// size, and DataUpload totalBytes counts bytes read, not bytes stored.
 	artifact := &backupsv1alpha1.BackupArtifact{
 		URI: fmt.Sprintf("velero://%s/%s", veleroBackup.Namespace, veleroBackup.Name),
 	}
@@ -685,15 +729,42 @@ func (r *RestoreJobReconciler) reconcileVeleroRestore(ctx context.Context, resto
 			}
 		}
 
+		// The Backup artifact outlives the Velero Backup it points to, which
+		// Velero garbage-collects once its TTL expires. Checked on every pass
+		// before prepareForRestore halts the application and deletes its disks,
+		// so a restore that cannot run leaves them in place, or, when preparation
+		// already started, names what it left behind.
+		veleroBackup, unrestorable, err := r.veleroBackupForRestore(ctx, veleroBackupName)
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+
 		// Resolve underlying resources once; prefer Backup status, fall back to Velero annotation.
-		ur := r.resolveUnderlyingResourcesForRestore(ctx, backup, veleroBackupName)
+		ur := resolveUnderlyingResourcesForRestore(backup, veleroBackup)
+
+		// Preparation spans several passes. Once it has changed the target, a
+		// failure must name what it left behind instead of claiming nothing changed.
+		failBeforeRestore := func(msg string) (ctrl.Result, error) {
+			if meta.IsStatusConditionTrue(restoreJob.Status.Conditions, restoreCondPreparationStarted) {
+				return r.markPreparedRestoreFailed(ctx, restoreJob, msg+r.preparedRestoreLeftovers(ctx, restoreJob, backup, ur, target, restoreOpts))
+			}
+			return r.markRestoreJobFailed(ctx, restoreJob, msg+"; nothing was changed")
+		}
+
+		if unrestorable != "" {
+			return failBeforeRestore(unrestorable)
+		}
 
 		// Pre-restore: graceful shutdown, suspend HRs, rename PVCs (skipped for copy)
 		ready, result, err := r.prepareForRestore(ctx, restoreJob, backup, ur, target, restoreOpts)
 		if err != nil {
-			return r.markRestoreJobFailed(ctx, restoreJob, fmt.Sprintf("pre-restore preparation failed: %v", err))
+			return failBeforeRestore(fmt.Sprintf("pre-restore preparation failed: %v", err))
 		}
 		if !ready {
+			if cond := meta.FindStatusCondition(restoreJob.Status.Conditions, restoreCondPreparationStarted); cond != nil &&
+				cond.Status == metav1.ConditionTrue && time.Since(cond.LastTransitionTime.Time) > restorePreparationDeadline {
+				return failBeforeRestore(fmt.Sprintf("pre-restore preparation did not finish within %s; see the RestoreJob events for what it was waiting on", restorePreparationDeadline))
+			}
 			logger.Debug("pre-restore preparation in progress, requeuing")
 			return result, nil
 		}
@@ -702,7 +773,8 @@ func (r *RestoreJobReconciler) reconcileVeleroRestore(ctx context.Context, resto
 		logger.Debug("Velero Restore not found, creating new one")
 		if err := r.createVeleroRestore(ctx, restoreJob, backup, veleroStrategy, veleroBackupName, ur, target, restoreOpts); err != nil {
 			logger.Error(err, "failed to create Velero Restore")
-			return r.markRestoreJobFailed(ctx, restoreJob, fmt.Sprintf("failed to create Velero Restore: %v", err))
+			return r.markPreparedRestoreFailed(ctx, restoreJob, fmt.Sprintf("failed to create Velero Restore: %v", err)+
+				r.preparedRestoreLeftovers(ctx, restoreJob, backup, ur, target, restoreOpts))
 		}
 		logger.Debug("created Velero Restore, requeuing")
 		// Requeue to check status
@@ -711,7 +783,8 @@ func (r *RestoreJobReconciler) reconcileVeleroRestore(ctx context.Context, resto
 
 	if len(veleroRestoreList.Items) > 1 {
 		logger.Error(fmt.Errorf("too many Velero restores for RestoreJob"), "found more than one Velero Restore referencing a single RestoreJob as owner")
-		return r.markRestoreJobFailed(ctx, restoreJob, "found multiple Velero Restores for this RestoreJob")
+		return r.markPreparedRestoreFailed(ctx, restoreJob, "found multiple Velero Restores for this RestoreJob"+
+			r.preparedRestoreLeftovers(ctx, restoreJob, backup, r.restoredUnderlyingResources(ctx, backup, veleroBackupName), target, restoreOpts))
 	}
 
 	veleroRestore := veleroRestoreList.Items[0].DeepCopy()
@@ -749,14 +822,21 @@ func (r *RestoreJobReconciler) reconcileVeleroRestore(ctx context.Context, resto
 		return ctrl.Result{}, nil
 	}
 
-	// Step 5: On failure
-	if phase == "Failed" || phase == "PartiallyFailed" {
+	// Step 5: On failure. FailedValidation is terminal too; left to the polling
+	// branch below it would keep a target that preparation already took apart
+	// Running forever.
+	if phase == string(velerov1.RestorePhaseFailed) || phase == string(velerov1.RestorePhasePartiallyFailed) ||
+		phase == string(velerov1.RestorePhaseFailedValidation) {
 		r.cleanupResourceModifierConfigMaps(ctx, restoreJob)
 		message := fmt.Sprintf("Velero Restore failed with phase: %s", phase)
 		if veleroRestore.Status.FailureReason != "" {
 			message = fmt.Sprintf("%s: %s", message, veleroRestore.Status.FailureReason)
 		}
-		return r.markRestoreJobFailed(ctx, restoreJob, message)
+		if len(veleroRestore.Status.ValidationErrors) > 0 {
+			message = fmt.Sprintf("%s: %s", message, strings.Join(veleroRestore.Status.ValidationErrors, "; "))
+		}
+		return r.markPreparedRestoreFailed(ctx, restoreJob, message+
+			r.preparedRestoreLeftovers(ctx, restoreJob, backup, r.restoredUnderlyingResources(ctx, backup, veleroBackupName), target, restoreOpts))
 	}
 
 	// Still in progress (InProgress, New, etc.)
@@ -804,8 +884,11 @@ func marshalPatchData(v any) (string, error) {
 
 // createResourceModifiersConfigMap creates a Velero resource modifiers ConfigMap
 // that patches VM resources during restore:
-//   - PVC adoption: always adds cdi.kubevirt.io/allowClaimAdoption=true to all
-//     restored PVCs so CDI can adopt them when a HelmRelease of VMDisk recreates a DV.
+//   - PVC adoption: adds cdi.kubevirt.io/allowClaimAdoption=true to all
+//     restored PVCs. CDI v1.66 does not read it there, only on the DataVolume,
+//     so adoption of a restored PVC rests on the vm-disk chart annotating the
+//     DataVolume it recreates. Without it, CDI refuses that DataVolume unless
+//     the DataVolumeClaimAdoption feature gate is on.
 //   - OVN IP/MAC: sets OVN annotations on the VirtualMachine for correct ssh access to restored VM.
 func (r *RestoreJobReconciler) createResourceModifiersConfigMap(ctx context.Context, restoreJob *backupsv1alpha1.RestoreJob, backup *backupsv1alpha1.Backup, ur *runtime.RawExtension, target restoreTarget, opts RestoreOptions) (*corev1.ConfigMap, error) {
 	logger := getLogger(ctx)
@@ -814,7 +897,7 @@ func (r *RestoreJobReconciler) createResourceModifiersConfigMap(ctx context.Cont
 
 	var rules []resourceModifierRule
 
-	// PVC adoption: allow CDI to adopt restored PVCs when the HelmRelease recreates a DV.
+	// Inert for CDI, which reads allowClaimAdoption only on the DataVolume.
 	pvcPatch, err := marshalPatchData(map[string]any{
 		"metadata": map[string]any{
 			"annotations": map[string]string{
@@ -948,12 +1031,8 @@ func (r *RestoreJobReconciler) createResourceModifiersConfigMap(ctx context.Cont
 // resolveUnderlyingResourcesForRestore returns underlying resources for symmetric
 // restore label selectors. Velero Backup annotation is used when Backup.status was empty
 // (e.g. CRD without underlyingResources in schema).
-func (r *RestoreJobReconciler) resolveUnderlyingResourcesForRestore(ctx context.Context, backup *backupsv1alpha1.Backup, veleroBackupName string) *runtime.RawExtension {
+func resolveUnderlyingResourcesForRestore(backup *backupsv1alpha1.Backup, vb *velerov1.Backup) *runtime.RawExtension {
 	if backup.Status.UnderlyingResources != nil && len(backup.Status.UnderlyingResources.Raw) > 0 {
-		return backup.Status.UnderlyingResources
-	}
-	vb := &velerov1.Backup{}
-	if err := r.Get(ctx, client.ObjectKey{Namespace: veleroNamespace, Name: veleroBackupName}, vb); err != nil {
 		return backup.Status.UnderlyingResources
 	}
 	if urJSON, ok := vb.Annotations[underlyingResourcesAnnotation]; ok && urJSON != "" {
@@ -1024,8 +1103,13 @@ func shortHash(input string) string {
 //  5. Renames existing PVCs to <name>-orig-<hash> so Velero can create fresh
 //     ones via Data Movement.
 //
-// Failures in individual steps are non-fatal: missing resources are expected
-// (e.g. restore requested when app was already deleted). Each action emits
+// Missing resources are expected (e.g. restore requested when app was already
+// deleted), and a failure to suspend or halt is non-fatal. A failed rename
+// holds the restore back and is retried, since the DataVolume deletion after
+// it would hand a disk that was not kept to the restore, as
+// keepOriginalPVC=false does, and an -orig name another PVC holds fails the
+// restore. A DataVolume or a replaced PVC that cannot be deleted fails the
+// restore, since Velero would skip the claim left in place. Each action emits
 // a Kubernetes Event on the RestoreJob for observability.
 //
 // postRestoreRename renames VMInstance HelmRelease after Velero Restore completes.
@@ -1116,9 +1200,76 @@ func (r *RestoreJobReconciler) prepareForRestore(ctx context.Context, restoreJob
 	appName := backup.Spec.ApplicationRef.Name
 	appKind := backup.Spec.ApplicationRef.Kind
 	origSuffix := "-orig-" + shortHash(restoreJob.Name)
+	vmRes := restoreDisks(backup, ur)
+
+	// A VMInstance is halted below, which releases its disks; a VMDisk target is
+	// not. Renaming a PVC that a running VM still mounts leaves the original
+	// Terminating behind pvc-protection, and Velero skips restoring a PVC that
+	// still exists, so the restore would report success having moved nothing
+	// while the VM loses its disk on the next restart. Refuse before changing
+	// anything.
+	if appKind != vmInstanceKind && vmRes != nil {
+		inUse, leaving, err := r.podsMountingDisks(ctx, ns, vmRes.DataVolumes)
+		if err != nil {
+			r.Recorder.Event(restoreJob, corev1.EventTypeWarning, "PrepareForRestore",
+				fmt.Sprintf("Failed to check whether the disk is in use: %v", err))
+			return false, ctrl.Result{RequeueAfter: defaultRestoreRequeueAfter}, nil
+		}
+		if len(inUse) > 0 {
+			return false, ctrl.Result{}, fmt.Errorf(
+				"the disk is in use by %s; stop the VM that uses it, or restore that VMInstance instead, then create a new RestoreJob",
+				strings.Join(inUse, ", "))
+		}
+		if len(leaving) > 0 {
+			// Not covered by the preparation deadline, which starts once
+			// preparation changes the target; a Pod stuck terminating on a lost
+			// node would otherwise keep the job Running forever.
+			if started := restoreJob.Status.StartedAt; started != nil && time.Since(started.Time) > restorePreparationDeadline {
+				return false, ctrl.Result{}, fmt.Errorf("%s still held the disk %s after the RestoreJob started",
+					strings.Join(leaving, ", "), restorePreparationDeadline)
+			}
+			r.Recorder.Event(restoreJob, corev1.EventTypeNormal, "PrepareForRestore",
+				fmt.Sprintf("Waiting for %s to release the disk", strings.Join(leaving, ", ")))
+			return false, ctrl.Result{RequeueAfter: defaultRestoreRequeueAfter}, nil
+		}
+	}
+
+	// Refuse a taken -orig name before anything is halted or deleted, rather
+	// than fail halfway through a multi-disk rename.
+	if opts.GetKeepOriginalPVC() && vmRes != nil {
+		for _, dv := range vmRes.DataVolumes {
+			origPVC, err := r.getOrigPVC(ctx, ns, dv.DataVolumeName+origSuffix)
+			if err != nil {
+				r.Recorder.Event(restoreJob, corev1.EventTypeWarning, "PrepareForRestore",
+					fmt.Sprintf("Failed to check PVC %s: %v", dv.DataVolumeName+origSuffix, err))
+				return false, ctrl.Result{RequeueAfter: defaultRestoreRequeueAfter}, nil
+			}
+			if err := foreignOrigPVC(origPVC, restoreJob); err != nil {
+				return false, ctrl.Result{}, err
+			}
+		}
+	}
+
+	if !meta.IsStatusConditionTrue(restoreJob.Status.Conditions, restoreCondPreparationStarted) {
+		before := restoreJob.DeepCopy()
+		meta.SetStatusCondition(&restoreJob.Status.Conditions, metav1.Condition{
+			Type:    restoreCondPreparationStarted,
+			Status:  metav1.ConditionTrue,
+			Reason:  "Preparing",
+			Message: "suspending the target's HelmReleases and keeping its disks aside",
+		})
+		// Nothing has been changed yet: on a failed patch drop the in-memory
+		// condition and retry, or the failure path would report leftovers that
+		// preparation never made.
+		if err := r.Status().Patch(ctx, restoreJob, client.MergeFrom(before)); err != nil {
+			restoreJob.Status.Conditions = before.Status.Conditions
+			r.Recorder.Event(restoreJob, corev1.EventTypeWarning, "PrepareForRestore",
+				fmt.Sprintf("Failed to record that preparation started: %v", err))
+			return false, ctrl.Result{RequeueAfter: defaultRestoreRequeueAfter}, nil
+		}
+	}
 
 	// --- Step 1: Suspend HelmReleases ---
-	vmRes := getVMInstanceResources(ur)
 	hrNames := []string{}
 	if appKind == vmInstanceKind {
 		hrNames = append(hrNames, vmNamePrefix+appName)
@@ -1128,24 +1279,28 @@ func (r *RestoreJobReconciler) prepareForRestore(ctx context.Context, restoreJob
 			hrNames = append(hrNames, dv.DataVolumeName)
 		}
 	}
+	// A HelmRelease left running would have Flux and CDI recreate the
+	// DataVolume and PVC under the data mover, so a failed suspend stops here.
 	for _, hrName := range hrNames {
 		if err := r.suspendHelmRelease(ctx, ns, hrName); err != nil {
 			r.Recorder.Event(restoreJob, corev1.EventTypeWarning, "PrepareForRestore",
 				fmt.Sprintf("Failed to suspend HelmRelease %s: %v", hrName, err))
-		} else {
-			r.Recorder.Event(restoreJob, corev1.EventTypeNormal, "PrepareForRestore",
-				fmt.Sprintf("Suspended HelmRelease %s", hrName))
+			return false, ctrl.Result{RequeueAfter: defaultRestoreRequeueAfter}, nil
 		}
+		r.Recorder.Event(restoreJob, corev1.EventTypeNormal, "PrepareForRestore",
+			fmt.Sprintf("Suspended HelmRelease %s", hrName))
 	}
 
 	// --- Step 2: Halt VM and wait for shutdown ---
 	if appKind == vmInstanceKind {
 		vmName := vmNamePrefix + appName
+		// haltVirtualMachine reports a missing VM as halted, so an error here is
+		// a VM that may still be running on the disks.
 		halted, err := r.haltVirtualMachine(ctx, ns, vmName)
 		if err != nil {
 			r.Recorder.Event(restoreJob, corev1.EventTypeWarning, "PrepareForRestore",
 				fmt.Sprintf("Failed to halt VM %s: %v", vmName, err))
-			// Non-fatal: proceed even if halting fails (VM might not exist)
+			return false, ctrl.Result{RequeueAfter: defaultRestoreRequeueAfter}, nil
 		} else if !halted {
 			r.Recorder.Event(restoreJob, corev1.EventTypeNormal, "PrepareForRestore",
 				fmt.Sprintf("Waiting for VM %s to shut down", vmName))
@@ -1153,6 +1308,21 @@ func (r *RestoreJobReconciler) prepareForRestore(ctx context.Context, restoreJob
 		} else {
 			r.Recorder.Event(restoreJob, corev1.EventTypeNormal, "PrepareForRestore",
 				fmt.Sprintf("VM %s is halted", vmName))
+		}
+		// The VMI is gone before its launcher Pod is; renaming a PVC that Pod still
+		// mounts would leave it Terminating behind pvc-protection.
+		if vmRes != nil {
+			inUse, leaving, err := r.podsMountingDisks(ctx, ns, vmRes.DataVolumes)
+			if err != nil {
+				r.Recorder.Event(restoreJob, corev1.EventTypeWarning, "PrepareForRestore",
+					fmt.Sprintf("Failed to check whether the disks are in use: %v", err))
+				return false, ctrl.Result{RequeueAfter: defaultRestoreRequeueAfter}, nil
+			}
+			if holders := append(inUse, leaving...); len(holders) > 0 {
+				r.Recorder.Event(restoreJob, corev1.EventTypeNormal, "PrepareForRestore",
+					fmt.Sprintf("Waiting for %s to release the disks", strings.Join(holders, ", ")))
+				return false, ctrl.Result{RequeueAfter: defaultRestoreRequeueAfter}, nil
+			}
 		}
 	}
 
@@ -1165,25 +1335,246 @@ func (r *RestoreJobReconciler) prepareForRestore(ctx context.Context, restoreJob
 			if err := r.renamePVC(ctx, restoreJob, ns, dv.DataVolumeName, dv.DataVolumeName+origSuffix); err != nil {
 				r.Recorder.Event(restoreJob, corev1.EventTypeWarning, "PrepareForRestore",
 					fmt.Sprintf("Failed to keep old PVC %s: %v", dv.DataVolumeName, err))
+				return false, ctrl.Result{RequeueAfter: defaultRestoreRequeueAfter}, nil
 			}
 		}
 	}
 
 	// --- Step 4: Delete DataVolumes so CDI doesn't recreate PVCs ---
+	// A DataVolume still present makes CDI recreate its claim under the original
+	// name, which Velero then skips as an existing PVC: the restore would end
+	// Succeeded on a freshly imported disk, so nothing goes further until every
+	// DataVolume is gone.
 	if vmRes != nil {
+		var terminating []string
 		for _, dv := range vmRes.DataVolumes {
-			if err := r.deleteDataVolume(ctx, ns, dv.DataVolumeName); err != nil {
+			gone, err := r.deleteDataVolume(ctx, ns, dv.DataVolumeName)
+			if err != nil {
+				return false, ctrl.Result{}, fmt.Errorf("failed to delete DataVolume %s: %w", dv.DataVolumeName, err)
+			}
+			if !gone {
+				terminating = append(terminating, dv.DataVolumeName)
+				continue
+			}
+			r.Recorder.Event(restoreJob, corev1.EventTypeNormal, "PrepareForRestore",
+				fmt.Sprintf("Deleted DataVolume %s", dv.DataVolumeName))
+		}
+		if len(terminating) > 0 {
+			r.Recorder.Event(restoreJob, corev1.EventTypeNormal, "PrepareForRestore",
+				fmt.Sprintf("Waiting for DataVolumes %s to be deleted", strings.Join(terminating, ", ")))
+			return false, ctrl.Result{RequeueAfter: defaultRestoreRequeueAfter}, nil
+		}
+	}
+
+	// --- Step 5: Delete the PVCs a restore without keepOriginalPVC replaces ---
+	// Velero restores a PVC only by creating it: its CSI restore action skips the
+	// data mover for a PVC that already exists, and existingResourcePolicy=update
+	// cannot patch the immutable spec of a bound claim. A PVC left in place keeps
+	// its old data, and, orphaned from its DataVolume in step 4 and without the
+	// cdi.kubevirt.io/storage.populatedFor the backed-up copy carries, it makes
+	// CDI refuse the DataVolume the resumed HelmRelease creates.
+	if !opts.GetKeepOriginalPVC() && vmRes != nil {
+		var terminating []string
+		for _, dv := range vmRes.DataVolumes {
+			gone, err := r.deletePVC(ctx, ns, dv.DataVolumeName)
+			if err != nil {
+				return false, ctrl.Result{}, fmt.Errorf("failed to delete PVC %s: %w", dv.DataVolumeName, err)
+			}
+			if !gone {
+				terminating = append(terminating, dv.DataVolumeName)
+			}
+		}
+		if len(terminating) > 0 {
+			r.Recorder.Event(restoreJob, corev1.EventTypeNormal, "PrepareForRestore",
+				fmt.Sprintf("Waiting for PVCs %s to be deleted", strings.Join(terminating, ", ")))
+			return false, ctrl.Result{RequeueAfter: defaultRestoreRequeueAfter}, nil
+		}
+	}
+
+	// --- Step 6: Clear a PVC CDI recreated under the original name ---
+	// Between the rename and the DataVolume delete, CDI can recreate an empty PVC
+	// for the still-present DataVolume. Velero skips restoring a PVC that exists,
+	// so the restore would report success and leave the disk blank. The original
+	// is kept under its -orig name by now, so a PVC under the original name is
+	// such a copy and holds no data.
+	if opts.GetKeepOriginalPVC() && vmRes != nil {
+		for _, dv := range vmRes.DataVolumes {
+			clear, err := r.clearRecreatedPVC(ctx, restoreJob, ns, dv.DataVolumeName)
+			if err != nil {
 				r.Recorder.Event(restoreJob, corev1.EventTypeWarning, "PrepareForRestore",
-					fmt.Sprintf("Failed to delete DataVolume %s: %v", dv.DataVolumeName, err))
-			} else {
-				r.Recorder.Event(restoreJob, corev1.EventTypeNormal, "PrepareForRestore",
-					fmt.Sprintf("Deleted DataVolume %s", dv.DataVolumeName))
+					fmt.Sprintf("Failed to clear PVC %s: %v", dv.DataVolumeName, err))
+			}
+			if err != nil || !clear {
+				return false, ctrl.Result{RequeueAfter: defaultRestoreRequeueAfter}, nil
 			}
 		}
 	}
 
 	r.Recorder.Event(restoreJob, corev1.EventTypeNormal, "PrepareForRestore", "Pre-restore preparation complete")
 	return true, ctrl.Result{}, nil
+}
+
+// clearRecreatedPVC reports whether the original name of a kept disk is free
+// for Velero to restore into, and deletes a PVC found under the name; the
+// caller requeues until it is gone. Step 4 has already waited for the
+// DataVolume to be gone, so CDI cannot recreate the PVC again.
+func (r *RestoreJobReconciler) clearRecreatedPVC(ctx context.Context, restoreJob *backupsv1alpha1.RestoreJob, ns, name string) (bool, error) {
+	// Uncached: the cache can still hold the original PVC the rename just deleted.
+	pvc := &corev1.PersistentVolumeClaim{}
+	if err := r.apiReader().Get(ctx, client.ObjectKey{Namespace: ns, Name: name}, pvc); err != nil {
+		if errors.IsNotFound(err) {
+			return true, nil
+		}
+		return false, err
+	}
+	if !pvc.DeletionTimestamp.IsZero() {
+		return false, nil
+	}
+	if err := r.Delete(ctx, pvc); err != nil && !errors.IsNotFound(err) {
+		return false, err
+	}
+	r.Recorder.Event(restoreJob, corev1.EventTypeNormal, "PrepareForRestore",
+		fmt.Sprintf("Deleted PVC %s that CDI recreated after the original was kept aside", name))
+	return false, nil
+}
+
+// markPreparedRestoreFailed fails a RestoreJob whose target was already
+// prepared, and repeats the message as a Warning event, since recovering the
+// target is left to the user.
+func (r *RestoreJobReconciler) markPreparedRestoreFailed(ctx context.Context, restoreJob *backupsv1alpha1.RestoreJob, message string) (ctrl.Result, error) {
+	r.Recorder.Event(restoreJob, corev1.EventTypeWarning, "RestoreFailed", message)
+	return r.markRestoreJobFailed(ctx, restoreJob, message)
+}
+
+// restoreDisks returns the disks an in-place restore prepares. A VMDisk Backup
+// taken before its underlying resources were recorded has none, but its only
+// disk is the VMDisk itself, named as collectUnderlyingResources names it.
+func restoreDisks(backup *backupsv1alpha1.Backup, ur *runtime.RawExtension) *vmInstanceResources {
+	if vmRes := getVMInstanceResources(ur); vmRes != nil {
+		return vmRes
+	}
+	if backup.Spec.ApplicationRef.Kind != vmDiskAppKind {
+		return nil
+	}
+	name := backup.Spec.ApplicationRef.Name
+	return &vmInstanceResources{DataVolumes: []backupsv1alpha1.DataVolumeResource{{
+		DataVolumeName:  vmDiskNamePrefix + name,
+		ApplicationName: name,
+	}}}
+}
+
+// preparedRestoreLeftovers describes, for the failure message of an in-place
+// restore that fails after prepareForRestore ran, what preparation left behind.
+// Nothing is rolled back automatically: resuming a disk's HelmRelease while its
+// PVC is renamed and its DataVolume deleted would have CDI import a fresh disk
+// under the original name, which looks healthy and hides that the data sits in
+// the -orig- PVC. Preparation can fail before it reaches every step, so only a
+// HelmRelease that is suspended and an -orig- PVC that exists are named; one
+// that cannot be read is named anyway rather than hidden.
+func (r *RestoreJobReconciler) preparedRestoreLeftovers(ctx context.Context, restoreJob *backupsv1alpha1.RestoreJob, backup *backupsv1alpha1.Backup, ur *runtime.RawExtension, target restoreTarget, opts RestoreOptions) string {
+	if target.IsCopy {
+		return ""
+	}
+	vmRes := restoreDisks(backup, ur)
+	var hrs, kept []string
+	if backup.Spec.ApplicationRef.Kind == vmInstanceKind {
+		hrs = append(hrs, vmNamePrefix+backup.Spec.ApplicationRef.Name)
+	}
+	if vmRes != nil {
+		for _, dv := range vmRes.DataVolumes {
+			hrs = append(hrs, dv.DataVolumeName)
+			if opts.GetKeepOriginalPVC() {
+				kept = append(kept, dv.DataVolumeName+"-orig-"+shortHash(restoreJob.Name))
+			}
+		}
+	}
+	ns := target.Namespace
+	hrs = slices.DeleteFunc(hrs, func(name string) bool {
+		hr, err := r.Resource(helmReleaseGVR).Namespace(ns).Get(ctx, name, metav1.GetOptions{})
+		if err != nil {
+			return errors.IsNotFound(err)
+		}
+		suspended, _, _ := unstructured.NestedBool(hr.Object, "spec", "suspend")
+		return !suspended
+	})
+	kept = slices.DeleteFunc(kept, func(name string) bool {
+		err := r.apiReader().Get(ctx, client.ObjectKey{Namespace: ns, Name: name}, &corev1.PersistentVolumeClaim{})
+		return errors.IsNotFound(err)
+	})
+	if len(hrs) == 0 && len(kept) == 0 {
+		return ""
+	}
+	var parts []string
+	if len(hrs) > 0 {
+		parts = append(parts, fmt.Sprintf("suspended HelmRelease %s", strings.Join(hrs, ", ")))
+	}
+	if len(kept) > 0 {
+		parts = append(parts, fmt.Sprintf("kept the original data in PVC %s", strings.Join(kept, ", ")))
+	}
+	return "; preparation " + strings.Join(parts, " and ") + "; if Velero restored the HelmRelease it is resumed and the disk may have been recreated, so check what the disk holds before relying on it"
+}
+
+// podsMountingDisks returns "pod/<pod> (PVC <claim>)" for every Pod in ns that
+// has not terminated and mounts one of the disks' PVCs, split into Pods that
+// are running and Pods already being deleted. A terminated Pod no longer holds
+// pvc-protection, so it does not count.
+func (r *RestoreJobReconciler) podsMountingDisks(ctx context.Context, ns string, disks []backupsv1alpha1.DataVolumeResource) (inUse, leaving []string, err error) {
+	claims := make(map[string]bool, len(disks))
+	for _, dv := range disks {
+		claims[dv.DataVolumeName] = true
+	}
+	pods := &corev1.PodList{}
+	if err := r.List(ctx, pods, client.InNamespace(ns)); err != nil {
+		return nil, nil, err
+	}
+	for i := range pods.Items {
+		pod := &pods.Items[i]
+		if pod.Status.Phase == corev1.PodSucceeded || pod.Status.Phase == corev1.PodFailed {
+			continue
+		}
+		for _, v := range pod.Spec.Volumes {
+			if v.PersistentVolumeClaim == nil || !claims[v.PersistentVolumeClaim.ClaimName] {
+				continue
+			}
+			holder := fmt.Sprintf("pod/%s (PVC %s)", pod.Name, v.PersistentVolumeClaim.ClaimName)
+			if pod.DeletionTimestamp.IsZero() {
+				inUse = append(inUse, holder)
+			} else {
+				leaving = append(leaving, holder)
+			}
+		}
+	}
+	sort.Strings(inUse)
+	sort.Strings(leaving)
+	return inUse, leaving, nil
+}
+
+// veleroBackupForRestore returns the named Velero Backup and why it cannot be
+// restored, or "" when it can. Only a Completed Backup is restored: Velero
+// itself validates only that the Backup exists and its storage location is
+// usable, so a Restore from one in another phase would take the target apart
+// for nothing. A Backup that is gone comes back empty rather than nil.
+func (r *RestoreJobReconciler) veleroBackupForRestore(ctx context.Context, name string) (*velerov1.Backup, string, error) {
+	vb := &velerov1.Backup{}
+	if err := r.Get(ctx, client.ObjectKey{Namespace: veleroNamespace, Name: name}, vb); err != nil {
+		if errors.IsNotFound(err) {
+			return &velerov1.Backup{}, fmt.Sprintf("Velero Backup %s/%s not found; it may have expired", veleroNamespace, name), nil
+		}
+		return nil, "", fmt.Errorf("failed to get Velero Backup %s: %w", name, err)
+	}
+	if vb.Status.Phase != velerov1.BackupPhaseCompleted {
+		return vb, fmt.Sprintf("Velero Backup %s/%s is %q, not %q", veleroNamespace, name, vb.Status.Phase, velerov1.BackupPhaseCompleted), nil
+	}
+	return vb, "", nil
+}
+
+// restoredUnderlyingResources resolves the underlying resources of a restore
+// whose Velero Restore already exists, for naming what preparation left
+// behind. A Velero Backup that cannot be read leaves the Backup status.
+func (r *RestoreJobReconciler) restoredUnderlyingResources(ctx context.Context, backup *backupsv1alpha1.Backup, name string) *runtime.RawExtension {
+	vb := &velerov1.Backup{}
+	_ = r.Get(ctx, client.ObjectKey{Namespace: veleroNamespace, Name: name}, vb)
+	return resolveUnderlyingResourcesForRestore(backup, vb)
 }
 
 // suspendHelmRelease sets spec.suspend=true on a HelmRelease.
@@ -1239,101 +1630,201 @@ func (r *RestoreJobReconciler) haltVirtualMachine(ctx context.Context, ns, vmNam
 	return false, nil
 }
 
-// deleteDataVolume deletes a DataVolume so CDI doesn't recreate the PVC after rename.
-// Uses Orphan propagation to avoid cascade-deleting the PVC that the DV owns via
-// ownerReference. Without this, keepOriginalPVC=false would silently destroy the
-// original PVC through garbage collection instead of leaving it for Velero to overwrite.
-func (r *RestoreJobReconciler) deleteDataVolume(ctx context.Context, ns, name string) error {
-	orphan := metav1.DeletePropagationOrphan
-	err := r.Resource(dataVolumeGVR).Namespace(ns).Delete(ctx, name, metav1.DeleteOptions{
-		PropagationPolicy: &orphan,
-	})
-	if err != nil && !errors.IsNotFound(err) {
-		return err
+// deleteDataVolume deletes a DataVolume so CDI doesn't recreate the PVC after
+// rename, and reports whether it is gone. Orphan propagation holds the DV behind
+// the orphan finalizer until garbage collection has released its PVC, and leaves
+// that PVC to prepareForRestore, which waits for its deletion, rather than to
+// background garbage collection, which nothing waits for before the Velero
+// Restore starts.
+func (r *RestoreJobReconciler) deleteDataVolume(ctx context.Context, ns, name string) (bool, error) {
+	dvClient := r.Resource(dataVolumeGVR).Namespace(ns)
+	dv, err := dvClient.Get(ctx, name, metav1.GetOptions{})
+	if err != nil {
+		if errors.IsNotFound(err) {
+			return true, nil
+		}
+		return false, err
 	}
-	return nil
+	if dv.GetDeletionTimestamp() == nil {
+		orphan := metav1.DeletePropagationOrphan
+		err := dvClient.Delete(ctx, name, metav1.DeleteOptions{PropagationPolicy: &orphan})
+		if err != nil && !errors.IsNotFound(err) {
+			return false, err
+		}
+	}
+	if _, err := dvClient.Get(ctx, name, metav1.GetOptions{}); err != nil {
+		if errors.IsNotFound(err) {
+			return true, nil
+		}
+		return false, err
+	}
+	return false, nil
+}
+
+// getOrigPVC returns the PVC named name, or nil when there is none. It reads
+// past the cache: a retried rename must see the -orig PVC it created, not
+// take the name for free and fail to create it again.
+func (r *RestoreJobReconciler) getOrigPVC(ctx context.Context, ns, name string) (*corev1.PersistentVolumeClaim, error) {
+	pvc := &corev1.PersistentVolumeClaim{}
+	if err := r.apiReader().Get(ctx, client.ObjectKey{Namespace: ns, Name: name}, pvc); err != nil {
+		return nil, client.IgnoreNotFound(err)
+	}
+	return pvc, nil
+}
+
+// foreignOrigPVC fails when pvc exists and restoreJob did not create it.
+// Proceeding would hand the live disk to the restore under its own name, as
+// keepOriginalPVC=false does, while the -orig name holds some other disk.
+func foreignOrigPVC(pvc *corev1.PersistentVolumeClaim, restoreJob *backupsv1alpha1.RestoreJob) error {
+	if pvc == nil || pvc.Annotations[origPVCRestoreJobUIDAnnotation] == string(restoreJob.UID) {
+		return nil
+	}
+	return fmt.Errorf("PVC %s/%s already exists and was not created by this RestoreJob, so the current disk cannot be kept under that name: "+
+		"remove that PVC or create the RestoreJob under another name", pvc.Namespace, pvc.Name)
+}
+
+// deletePVC deletes a PVC and reports whether it is gone. A claim still mounted
+// stays Terminating behind kubernetes.io/pvc-protection, and Velero would find
+// it still there.
+func (r *RestoreJobReconciler) deletePVC(ctx context.Context, ns, name string) (bool, error) {
+	key := client.ObjectKey{Namespace: ns, Name: name}
+	pvc := &corev1.PersistentVolumeClaim{}
+	if err := r.Get(ctx, key, pvc); err != nil {
+		if errors.IsNotFound(err) {
+			return true, nil
+		}
+		return false, err
+	}
+	if pvc.DeletionTimestamp == nil {
+		if err := r.Delete(ctx, pvc); err != nil && !errors.IsNotFound(err) {
+			return false, err
+		}
+	}
+	if err := r.Get(ctx, key, pvc); err != nil {
+		if errors.IsNotFound(err) {
+			return true, nil
+		}
+		return false, err
+	}
+	return false, nil
 }
 
 // renamePVC preserves an existing PVC by rebinding it under a new name.
 // The original PVC is deleted and a new one pointing to the same PV is created.
-// Missing resources are silently skipped (non-fatal).
+// Missing resources are silently skipped (non-fatal). Each step can be
+// resumed, so a rename interrupted by a controller restart completes on the
+// next reconcile.
 func (r *RestoreJobReconciler) renamePVC(ctx context.Context, restoreJob *backupsv1alpha1.RestoreJob, ns, oldName, newName string) error {
 	logger := getLogger(ctx)
 
-	// Check if already renamed
-	existingNew := &corev1.PersistentVolumeClaim{}
-	if err := r.Get(ctx, client.ObjectKey{Namespace: ns, Name: newName}, existingNew); err == nil {
-		return nil
-	}
-
-	// Get the original PVC
-	oldPVC := &corev1.PersistentVolumeClaim{}
-	if err := r.Get(ctx, client.ObjectKey{Namespace: ns, Name: oldName}, oldPVC); err != nil {
-		if errors.IsNotFound(err) {
-			return nil // nothing to rename
-		}
+	newPVC, err := r.getOrigPVC(ctx, ns, newName)
+	if err != nil {
 		return err
 	}
+	if err := foreignOrigPVC(newPVC, restoreJob); err != nil {
+		return err
+	}
+	resuming := newPVC != nil
 
-	pvName := oldPVC.Spec.VolumeName
-	if pvName == "" {
+	oldPVC := &corev1.PersistentVolumeClaim{}
+	if err := r.apiReader().Get(ctx, client.ObjectKey{Namespace: ns, Name: oldName}, oldPVC); err != nil {
+		if !errors.IsNotFound(err) {
+			return err
+		}
+		oldPVC = nil
+	}
+
+	pv := &corev1.PersistentVolume{}
+	var pvName string
+	switch {
+	case resuming:
+		pvName = newPVC.Spec.VolumeName
+	case oldPVC == nil:
+		return nil // nothing to rename
+	case oldPVC.Spec.VolumeName == "":
 		logger.Debug("PVC not bound, deleting", "name", oldName)
 		return r.Delete(ctx, oldPVC)
-	}
+	default:
+		pvName = oldPVC.Spec.VolumeName
 
-	// Patch PV reclaim policy to Retain so it survives PVC deletion
-	pv := &corev1.PersistentVolume{}
-	if err := r.Get(ctx, client.ObjectKey{Name: pvName}, pv); err != nil {
-		return fmt.Errorf("failed to get PV %s: %w", pvName, err)
-	}
-	if pv.Spec.PersistentVolumeReclaimPolicy != corev1.PersistentVolumeReclaimRetain {
-		pv.Spec.PersistentVolumeReclaimPolicy = corev1.PersistentVolumeReclaimRetain
-		if err := r.Update(ctx, pv); err != nil {
-			return fmt.Errorf("failed to set Retain policy on PV %s: %w", pvName, err)
+		// Patch PV reclaim policy to Retain so it survives PVC deletion.
+		// A policy already recorded is the one from before any rename.
+		if err := r.apiReader().Get(ctx, client.ObjectKey{Name: pvName}, pv); err != nil {
+			return fmt.Errorf("failed to get PV %s: %w", pvName, err)
+		}
+		originalPolicy, recorded := pv.Annotations[originalReclaimPolicyAnnotation]
+		if !recorded {
+			originalPolicy = string(pv.Spec.PersistentVolumeReclaimPolicy)
+			metav1.SetMetaDataAnnotation(&pv.ObjectMeta, originalReclaimPolicyAnnotation, originalPolicy)
+		}
+		if !recorded || pv.Spec.PersistentVolumeReclaimPolicy != corev1.PersistentVolumeReclaimRetain {
+			pv.Spec.PersistentVolumeReclaimPolicy = corev1.PersistentVolumeReclaimRetain
+			if err := r.Update(ctx, pv); err != nil {
+				return fmt.Errorf("failed to set Retain policy on PV %s: %w", pvName, err)
+			}
+		}
+
+		// Create the new -orig PVC first (unbound, just the object)
+		newPVC = &corev1.PersistentVolumeClaim{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      newName,
+				Namespace: ns,
+				Annotations: map[string]string{
+					originalReclaimPolicyAnnotation: originalPolicy,
+					origPVCRestoreJobUIDAnnotation:  string(restoreJob.UID),
+				},
+			},
+			Spec: corev1.PersistentVolumeClaimSpec{
+				AccessModes:      oldPVC.Spec.AccessModes,
+				Resources:        oldPVC.Spec.Resources,
+				StorageClassName: oldPVC.Spec.StorageClassName,
+				VolumeMode:       oldPVC.Spec.VolumeMode,
+				VolumeName:       pvName,
+			},
+		}
+		// Create fills in the UID the claimRef needs. Reading the PVC back
+		// through the cache can miss it, as it is this reconcile's own write.
+		if err := r.Create(ctx, newPVC); err != nil {
+			return fmt.Errorf("failed to create -orig PVC %s: %w", newName, err)
 		}
 	}
 
-	// Create the new -orig PVC first (unbound, just the object)
-	newPVC := &corev1.PersistentVolumeClaim{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      newName,
-			Namespace: ns,
-		},
-		Spec: corev1.PersistentVolumeClaimSpec{
-			AccessModes:      oldPVC.Spec.AccessModes,
-			Resources:        oldPVC.Spec.Resources,
-			StorageClassName: oldPVC.Spec.StorageClassName,
-			VolumeMode:       oldPVC.Spec.VolumeMode,
-			VolumeName:       pvName,
-		},
-	}
-	if err := r.Create(ctx, newPVC); err != nil && !errors.IsAlreadyExists(err) {
-		return fmt.Errorf("failed to create -orig PVC %s: %w", newName, err)
-	}
-	// Re-read to get UID for the claimRef
-	if err := r.Get(ctx, client.ObjectKey{Namespace: ns, Name: newName}, newPVC); err != nil {
-		return fmt.Errorf("failed to get -orig PVC %s: %w", newName, err)
-	}
-
-	// Delete the original PVC
-	if err := r.Delete(ctx, oldPVC); err != nil && !errors.IsNotFound(err) {
-		return fmt.Errorf("failed to delete PVC %s: %w", oldName, err)
+	// Delete the original PVC. Only while it still claims the kept PV: after
+	// an interrupted rename, CDI may have recreated an empty one under the old
+	// name, and that one is left to the restore.
+	if oldPVC != nil && oldPVC.Spec.VolumeName == pvName {
+		if err := r.Delete(ctx, oldPVC); err != nil && !errors.IsNotFound(err) {
+			return fmt.Errorf("failed to delete PVC %s: %w", oldName, err)
+		}
 	}
 
 	// Point the PV's claimRef directly to the new -orig PVC.
 	// This is atomic — no window where the PV is Available for other PVCs to grab.
-	if err := r.Get(ctx, client.ObjectKey{Name: pvName}, pv); err != nil {
-		return fmt.Errorf("failed to re-fetch PV %s: %w", pvName, err)
-	}
-	pv.Spec.ClaimRef = &corev1.ObjectReference{
-		APIVersion: "v1",
-		Kind:       "PersistentVolumeClaim",
-		Namespace:  ns,
-		Name:       newName,
-		UID:        newPVC.UID,
-	}
-	if err := r.Update(ctx, pv); err != nil {
+	// The PV controller writes the PV too once the original PVC is gone, so
+	// the read is uncached and a conflict is retried.
+	rebound := false
+	err = retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		if err := r.apiReader().Get(ctx, client.ObjectKey{Name: pvName}, pv); err != nil {
+			return err
+		}
+		if ref := pv.Spec.ClaimRef; ref != nil && ref.Namespace == ns && ref.Name == newName && ref.UID == newPVC.UID {
+			return nil
+		}
+		pv.Spec.ClaimRef = &corev1.ObjectReference{
+			APIVersion: "v1",
+			Kind:       "PersistentVolumeClaim",
+			Namespace:  ns,
+			Name:       newName,
+			UID:        newPVC.UID,
+		}
+		rebound = true
+		return r.Update(ctx, pv)
+	})
+	if err != nil {
 		return fmt.Errorf("failed to rebind PV %s to %s: %w", pvName, newName, err)
+	}
+	if !rebound {
+		return nil
 	}
 
 	r.Recorder.Event(restoreJob, corev1.EventTypeNormal, "PrepareForRestore",
@@ -1390,7 +1881,7 @@ func (r *RestoreJobReconciler) createVeleroRestore(ctx context.Context, restoreJ
 
 	// Match backup: add OR selectors for each underlying VMDisk so restore applies the same
 	// scope as the intended backup (see createVeleroBackup).
-	if vmRes := getVMInstanceResources(ur); vmRes != nil {
+	if vmRes := getVMInstanceResources(ur); vmRes != nil && backup.Spec.ApplicationRef.Kind == vmInstanceKind {
 		for _, dv := range vmRes.DataVolumes {
 			veleroRestoreSpec.OrLabelSelectors = append(veleroRestoreSpec.OrLabelSelectors, &metav1.LabelSelector{
 				MatchLabels: map[string]string{

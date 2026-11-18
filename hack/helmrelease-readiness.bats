@@ -1,6 +1,8 @@
 #!/usr/bin/env bats
 # Unit coverage for the single post-install HelmRelease readiness gate.
 
+load test_helper
+
 helmrelease_snapshot() {
     count="$1"
     not_ready="${2:-0}"

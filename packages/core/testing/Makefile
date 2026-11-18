@@ -19,8 +19,15 @@ COMPOSE_PROJECT ?= cozy-e2e
 COMPOSE_FILE ?= $(ROOT_DIR)hack/e2e-compose.yaml
 ZPOOL_BACKING_DIR ?= /var/lib/cozy-e2e-zpools
 
-include ../../../hack/common-envs.mk
+# The e2e sandbox image is pinned to amd64 as a whole: its VM lane boots the
+# amd64 Talos disk under qemu-system-x86_64 with KVM
+# (hack/e2e-prepare-cluster.bats), which an arm64 sandbox cannot run.
+# `override` beats any PLATFORM given on the command line, an explicit
+# linux/arm64 as much as one passed to a whole `make build`. It must precede
+# the include: common-envs.mk expands BUILDX_ARGS immediately.
+override PLATFORM := linux/amd64
 
+include ../../../hack/common-envs.mk
 
 help: ## Show this help.
 	@awk 'BEGIN {FS = ":.*?## "} /^[a-zA-Z_-]+:.*?## / {sub("\\\\n",sprintf("\n%22c"," "), $$2);printf "\033[36m%-20s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -149,22 +156,27 @@ delete-cluster-container:
 # not reach the manifest generator or root-tenant setup. Empty values retain the
 # QEMU defaults; the container lane supplies its node endpoint, disables DRBD,
 # and selects local storage because its Talos nodes share one kernel.
+# COZY_DISABLED_PACKAGES is the space-separated output of
+# hack/select-install.sh --disabled; empty installs the whole platform.
 install-cozystack:
-	docker exec -e COZY_APISERVER_ENDPOINT="${COZY_APISERVER_ENDPOINT}" -e COZY_LINSTOR_DRBD_ENABLED="${COZY_LINSTOR_DRBD_ENABLED}" -e COZY_E2E_STORAGE_CLASS="${COZY_E2E_STORAGE_CLASS}" "${SANDBOX_NAME}" sh -c 'cd /workspace && hack/cozytest.sh hack/e2e-install-cozystack.bats'
+	docker exec -e COZY_APISERVER_ENDPOINT="${COZY_APISERVER_ENDPOINT}" -e COZY_LINSTOR_DRBD_ENABLED="${COZY_LINSTOR_DRBD_ENABLED}" -e COZY_E2E_STORAGE_CLASS="${COZY_E2E_STORAGE_CLASS}" -e COZY_DISABLED_PACKAGES="${COZY_DISABLED_PACKAGES}" "${SANDBOX_NAME}" sh -c 'cd /workspace && hack/cozytest.sh hack/e2e-install-cozystack.bats'
 
 test-openapi:
 	docker exec "${SANDBOX_NAME}" sh -c 'cd /workspace && hack/cozytest.sh hack/e2e-test-openapi.bats'
 
 # Run the Chainsaw E2E app suite. Chainsaw loads .chainsaw.yaml from the cwd,
-# discovers every chainsaw-test.yaml under hack/e2e-chainsaw/, polls each
+# discovers each Test in or below a suite dir of hack/e2e-chainsaw/, polls each
 # assertion to its own timeout, and writes a JUnit chainsaw-report.xml the CI
 # job uploads. CHAINSAW_SUITES restricts the run to the named suite dirs
 # (space-separated, e.g. "postgres bucket"); empty runs the whole suite. The
 # CI Test-Impact-Analysis step (hack/select-e2e.sh) sets it from the PR diff.
+# hack/e2e-chainsaw-run.sh runs one `chainsaw test` per suite directory, so it
+# can fail the suite whose pods outlive its cleanup, and merges the per-suite
+# reports into that same chainsaw-report.xml.
 # COZY_E2E_STORAGE_CLASS is passed both to script operations and as a Chainsaw
 # value for templated resource files; empty keeps the QEMU default, replicated.
 test-chainsaw:
-	docker exec -e COZY_E2E_STORAGE_CLASS="${COZY_E2E_STORAGE_CLASS}" "${SANDBOX_NAME}" sh -c 'cd /workspace/hack/e2e-chainsaw && chainsaw test --set-string storageClass="$${COZY_E2E_STORAGE_CLASS:-replicated}" ${CHAINSAW_SUITES}'
+	docker exec -e COZY_E2E_STORAGE_CLASS="${COZY_E2E_STORAGE_CLASS}" "${SANDBOX_NAME}" sh -c 'cd /workspace/hack/e2e-chainsaw && ../e2e-chainsaw-run.sh --set-string storageClass="$${COZY_E2E_STORAGE_CLASS:-replicated}" ${CHAINSAW_SUITES}'
 
 collect-report: ## Collect the test report from the sandbox.
 	docker exec "${SANDBOX_NAME}" sh -c 'cd /workspace && hack/cozyreport.sh cozyreport'
@@ -175,6 +187,14 @@ collect-images: ## Collect the list of images used in the sandbox.
 	docker exec "${SANDBOX_NAME}" sh -c 'cd /workspace && hack/collect-images.sh'
 	mkdir -p ../../../_out
 	docker cp "${SANDBOX_NAME}":/workspace/images.txt ../../../_out/images.txt
+	docker cp "${SANDBOX_NAME}":/workspace/image-refs.txt ../../../_out/image-refs.txt
+
+# Install for the isp-hosted lane (.github/workflows/e2e-isp-hosted.yaml): the
+# hosted installer variant and the isp-hosted platform variant, on a kind
+# cluster the workflow attaches the sandbox to. Nothing to pass in, unlike
+# install-cozystack: the endpoint and storage belong to the cluster.
+install-cozystack-hosted:
+	docker exec "${SANDBOX_NAME}" sh -c 'cd /workspace && hack/cozytest.sh hack/e2e-install-cozystack-hosted.bats'
 
 delete: ## Remove sandbox from existing Kubernetes cluster.
 	docker rm -f "${SANDBOX_NAME}" || true

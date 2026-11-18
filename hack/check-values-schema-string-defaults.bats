@@ -24,6 +24,8 @@
 # Runs under hack/cozytest.sh, which is POSIX /bin/sh — no process
 # substitution, no arrays, no bats `run`.
 
+load test_helper
+
 REPO_ROOT="$(cd "$(dirname "${BATS_TEST_FILENAME:-$0}")/.." && pwd)"
 
 @test "no values.schema.json declares a non-string default on a string-typed property" {

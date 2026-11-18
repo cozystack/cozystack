@@ -82,7 +82,7 @@ spec:
               value: "{{ .Release.Namespace }}"
             - name: MODE
               value: "{{ .Mode }}"
-            # S3 coordinates from the tenant-provided <release>-backup-s3 Secret
+            # S3 coordinates from the demo-provided <release>-backup-s3 Secret
             # (created by create_s3_secret in 00-helpers.sh from the Bucket).
             - name: AWS_ACCESS_KEY_ID
               valueFrom:
@@ -169,7 +169,7 @@ spec:
 
               # curl --aws-sigv4 signs the request (SigV4) so no separate S3
               # client image is needed. The certificate is verified: against the
-              # CA projected from the Secret when the tenant supplied one, else
+              # CA projected from the Secret when it carries one, else
               # against the image's trust store. \${CA_OPT} and \${CONNECT_TO}
               # are deliberately unquoted so an empty value expands to no
               # argument.
@@ -324,7 +324,7 @@ spec:
                     if [ "\${n}" -gt 0 ]; then
                       "\${BIN}"/kafka-console-consumer.sh --bootstrap-server "\${BOOT}" \
                         --topic "\${t}" --partition "\${p}" --offset "\${begin}" --max-messages "\${n}" \
-                        --timeout-ms 120000 --property print.key=true --property print.timestamp=false \
+                        --timeout-ms 120000 --formatter-property print.key=true --formatter-property print.timestamp=false \
                         > "\${WORK}/data-\${t}-\${p}.tsv"
                       # kafka-console-consumer exits 0 even on a short read: a
                       # --timeout-ms expiry is swallowed inside ConsoleConsumer,
@@ -509,7 +509,7 @@ spec:
                     [ "\${mt}" = "\${t}" ] || continue
                     [ "\${me}" -gt "\${mb}" ] || continue
                     "\${BIN}"/kafka-console-producer.sh --bootstrap-server "\${BOOT}" \
-                      --topic "\${t}" --property parse.key=true < "\${WORK}/data-\${t}-\${mp}.tsv"
+                      --topic "\${t}" --reader-property parse.key=true < "\${WORK}/data-\${t}-\${mp}.tsv"
                   done < "\${WORK}/manifest.txt"
                   echo "  \${t}: replayed"
                 done

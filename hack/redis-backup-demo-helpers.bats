@@ -13,6 +13,8 @@
 # rewrites a column-0 `}` into `return 0`, which would mask run_redis_cmd's
 # exit status.
 
+load test_helper
+
 make_stubs() {
     stub=$(mktemp -d)
     cat > "$stub/kubectl" <<'EOF'

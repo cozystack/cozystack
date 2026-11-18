@@ -6,6 +6,8 @@
 # absent (omitempty *bool) rather than an explicit null, and the template
 # detects that via `kindIs "invalid"`.
 
+load test_helper
+
 REPO_ROOT="$(cd "$(dirname "${BATS_TEST_FILENAME:-$0}")/.." && pwd)"
 COZYRDS="$REPO_ROOT/packages/system/kafka-rd/cozyrds/kafka.yaml"
 

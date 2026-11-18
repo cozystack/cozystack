@@ -14,16 +14,17 @@ seaweedfs: true
 
 Without object storage in the tenant chain, Harbor cannot provision its registry bucket: the `<release>-registry` `BucketClaim`/`BucketAccess` never produces the `<release>-registry-bucket` credentials secret, so the Harbor `HelmRelease` stays unreconciled, waiting on `BucketInfo`.
 
-> `storageClass` is annotated as immutable in the chart schema — see [`docs/storage-immutability.md`](../../../docs/storage-immutability.md) for the contract and which consumers enforce it.
+> `storageClass` is annotated as immutable in the chart schema — see [storageClass immutability](https://cozystack.io/docs/v1/operations/storage-class-immutability/) for the contract and which consumers enforce it.
 
 ## Parameters
 
 ### Common parameters
 
-| Name           | Description                                                                                  | Type     | Value |
-| -------------- | -------------------------------------------------------------------------------------------- | -------- | ----- |
-| `host`         | Hostname for external access to Harbor (defaults to 'harbor' subdomain for the tenant host). | `string` | `""`  |
-| `storageClass` | StorageClass used to store the data.                                                         | `string` | `""`  |
+| Name                  | Description                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  | Type       | Value |
+| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ---------- | ----- |
+| `host`                | Hostname for external access to Harbor (defaults to 'harbor' subdomain for the tenant host).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 | `string`   | `""`  |
+| `managementWhitelist` | IP addresses or CIDR ranges allowed to reach the Harbor web portal and API. `/v2/` and `/service/token`, which `docker login`, image pulls and pushes use, are not restricted by this list. For the portal and API it replaces the tenant ingress `whitelist` rather than narrowing it, and it is matched against the client address the ingress controller sees, which is a proxy or a forwarded header rather than the real client when something in front of the controller rewrites it. Empty allows every address. Requires Ingress publishing; rejected when the tenant publishes through Gateway API. | `[]string` | `[]`  |
+| `storageClass`        | StorageClass used to store the data.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         | `string`   | `""`  |
 
 
 ### Component configuration

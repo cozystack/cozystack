@@ -3,6 +3,8 @@
 # Sourcing run-kubernetes.sh only defines functions; every kubectl interaction
 # below is replaced with a shell stub, so this file needs no cluster.
 
+load test_helper
+
 @test "HelmRelease upgrade wait rejects stale Ready and stale observedGeneration" {
     . hack/e2e-chainsaw/_lib/run-kubernetes.sh
     state_file=$(mktemp)

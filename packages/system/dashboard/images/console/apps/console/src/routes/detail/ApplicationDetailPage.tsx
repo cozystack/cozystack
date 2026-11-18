@@ -37,9 +37,14 @@ import { VncTab } from "./VncTab.tsx"
 // fetched only when a VM's console is opened. Every dashboard page reaches this
 // file, and most of them never touch a VM.
 const SerialTab = lazy(() => import("./SerialTab.tsx").then((m) => ({ default: m.SerialTab })))
+// Same for the charting library behind the Metrics tab.
+const MetricsTab = lazy(() => import("./MetricsTab.tsx").then((m) => ({ default: m.MetricsTab })))
 import { VMPowerControls } from "./VMPowerControls.tsx"
 import { useResourceBasePath } from "../../lib/portal.ts"
 import { useResourcePresence } from "./use-resource-presence.ts"
+import { useApplicationConfigMaps } from "./use-app-configmaps.ts"
+import { ConfigMapsTab } from "./ConfigMapsTab.tsx"
+import { LogsTab } from "./LogsTab.tsx"
 
 export function ApplicationDetailPage() {
   const { plural, name } = useParams<{ plural: string; name: string }>()
@@ -76,6 +81,7 @@ export function ApplicationDetailPage() {
   })
 
   const presence = useResourcePresence(ad, instance)
+  const configMaps = useApplicationConfigMaps(ad, instance, tenantNamespace ?? undefined)
 
   if (!plural || !name) return <Navigate to="/console" replace />
   // Check the fetch error before the loading guard: on a failed GET, isLoading
@@ -140,6 +146,8 @@ export function ApplicationDetailPage() {
       { to: `${base}/vnc`, label: "VNC", end: false },
       { to: `${base}/workloads`, label: "Workloads", end: false },
       { to: `${base}/services`, label: "Services", end: false },
+      { to: `${base}/metrics`, label: "Metrics", end: false },
+      { to: `${base}/logs`, label: "Logs", end: false },
       { to: `${base}/events`, label: "Events", end: false },
     )
   } else {
@@ -155,8 +163,13 @@ export function ApplicationDetailPage() {
     if (presence.ingresses) {
       tabs.push({ to: `${base}/ingresses`, label: "Ingresses", end: false })
     }
+    if (configMaps.names.length > 0 || configMaps.error) {
+      tabs.push({ to: `${base}/configmaps`, label: "ConfigMaps", end: false })
+    }
     tabs.push(
       { to: `${base}/secrets`, label: "Secrets", end: false },
+      { to: `${base}/metrics`, label: "Metrics", end: false },
+      { to: `${base}/logs`, label: "Logs", end: false },
       { to: `${base}/events`, label: "Events", end: false },
     )
   }
@@ -230,6 +243,10 @@ export function ApplicationDetailPage() {
             element={<IngressesTab ad={ad} instance={instance} />}
           />
           <Route
+            path="configmaps"
+            element={<ConfigMapsTab namespace={tenantNamespace ?? ""} names={configMaps.names} error={configMaps.error} />}
+          />
+          <Route
             path="secrets"
             element={<SecretsTab ad={ad} instance={instance} />}
           />
@@ -252,6 +269,15 @@ export function ApplicationDetailPage() {
             }
           />
           <Route path="vnc" element={<VncTab ad={ad} instance={instance} />} />
+          <Route
+            path="metrics"
+            element={
+              <Suspense fallback={<Spinner />}>
+                <MetricsTab ad={ad} name={name} />
+              </Suspense>
+            }
+          />
+          <Route path="logs" element={<LogsTab ad={ad} name={name} />} />
         </Routes>
       </div>
     </div>

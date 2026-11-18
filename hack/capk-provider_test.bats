@@ -6,6 +6,8 @@
 # declared because the ratchet is exact in both directions: it fails if a
 # test-level trap is added here, and it fails if one of these is removed.
 
+load test_helper
+
 _capk_fixture() {
   mkdir -p "$1/packages/system" "$1/hack" "$1/bin" "$1/oci"
   cp -R packages/system/capi-providers-infraprovider "$1/packages/system/"

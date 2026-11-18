@@ -158,6 +158,8 @@
 # happens under bats at all -- which is why running this by hand can look green
 # while CI reds, which is why both are kept green.
 
+load test_helper
+
 REPO_ROOT="$(cd "$(dirname "${BATS_TEST_FILENAME:-$0}")/.." && pwd)"
 TENANT_SCRIPT="${TENANT_SCRIPT:-$REPO_ROOT/hack/e2e-chainsaw/_lib/run-kubernetes.sh}"
 
@@ -1462,9 +1464,10 @@ _kind_creators() {
   # What a creator can be written in, decided here rather than left to whatever
   # the root happens to contain. The rule is pre-emptive: a manifest quoted in
   # prose creates nothing, and a grep over every file reds on an edit to it.
-  # The shape exists in this repository -- docs/oidc-tenant.md carries the kind
-  # in a fenced example -- outside this root rather than in it, which is why
-  # the root is a choice about place and this is a choice about form. A parked
+  # The shape exists in this repository -- hack/testdata/install-wait/
+  # creators-filetypes/example.md carries the kind in a fenced example --
+  # outside this root rather than in it, which is why the root is a choice
+  # about place and this is a choice about form. A parked
   # `.disabled` suite creates nothing either; re-enabling one restores the
   # `.yaml` name the sweep reads, so that exclusion cannot outlive the parking.
   #
@@ -1559,8 +1562,8 @@ EOF
   #
   # The sweep is hack/e2e-chainsaw only, not the repository. Widening it would
   # need an exclusion for hack/testdata/, whose fixtures carry the kind on
-  # purpose, and for docs/, where docs/oidc-tenant.md carries it inside a
-  # fenced example; neither creates a cluster. What the narrow root leaves
+  # purpose, and for any markdown that quotes the manifest in a fenced
+  # example; neither creates a cluster. What the narrow root leaves
   # outside is not only those: `hack/e2e-apps/` is a live lane of its own, and a
   # creator appearing there would pass this case in silence -- nothing there
   # creates this kind today, so it is a risk the root carries rather than a
@@ -1569,9 +1572,16 @@ EOF
   # not a filter by itself either: what a creator can be
   # written in is decided beside the sweep, so that prose acquiring a fenced
   # manifest reds nothing here.
+  #
+  # The Proxmox fixture is the second entry and is deliberately not governed by
+  # the rules above: those read run-kubernetes.sh's shell, and this one is a
+  # declarative manifest a chainsaw `apply:` block applies. It creates a cluster
+  # all the same, which is why it is named here rather than excluded — a reader
+  # asking "what creates a tenant cluster in this tree" gets both answers. The
+  # suite that applies it ships `.disabled`, so nothing runs it in CI today.
   found="$(_kind_creators "$REPO_ROOT/hack/e2e-chainsaw" \
     | sed "s|^$REPO_ROOT/||" | tr '\n' ' ')"
-  want="hack/e2e-chainsaw/_lib/run-kubernetes.sh "
+  want="hack/e2e-chainsaw/_lib/run-kubernetes.sh hack/e2e-chainsaw/kubernetes-proxmox/tenant.yaml "
   if [ "$found" != "$want" ]; then
     echo "scripts under hack/e2e-chainsaw creating a Kubernetes CR: [$found]" >&2
     echo "Check first whether the new file APPLIES the kind or only asserts on" >&2

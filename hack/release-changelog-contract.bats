@@ -1,5 +1,4 @@
 #!/usr/bin/env bats
-# EXIT-TRAP DEBT: 1 -- see hack/bats-no-exit-trap.bats; lower it as the traps go, delete it at zero.
 # Guards the contract that makes a release publish WITH its changelog.
 #
 # The release body is no longer written by hand or synced after the fact: it is
@@ -27,6 +26,8 @@
 #   1. open-pr survives a failed changelog job (the non-blocking guarantee).
 #   2. The AI step is the ONLY thing allowed to fail silently.
 #   3. finalize reads the changelog file as the release body.
+#   3b. finalize and update-releasenotes share the 100000-byte body limit, and
+#      the sync fires on the release notes too.
 #   4. finalize refuses whitespace-only content rather than blanking the notes.
 #   5. The generator is pointed at a checkout state docs/agents/changelog.md
 #      actually permits.
@@ -36,9 +37,12 @@
 #      trip over.
 #   9-11. The validator accepts every changelog of the current era (both header
 #      conventions, including a 19-line patch release) and rejects unusable output.
+#   11b. It also rejects an entry cut off with an ellipsis and a link to
+#      cozystack.io/docs/next/, and nothing that merely resembles either.
 #   12. The workflow calls the validator script rather than reimplementing it.
-#   13. The agent instructions and the validator are overlaid from the dispatch
-#      ref, because the rc tag's copies predate this workflow.
+#   13. The agent instructions, the release checks they send the agent to and the
+#      validator are overlaid from the dispatch ref, because the rc tag's copies
+#      predate this workflow.
 #   14. open-pr survives an artifact transfer failure and keys off the file on disk.
 #   15. A pre-existing changelog is validated, not merely non-empty.
 #   16. promote-rc parses the rc tag ONCE in a cheap `parse` job that rejects
@@ -71,6 +75,11 @@
 #     needs a change in that repo first, and nothing here would catch its absence.
 #   * Whether the release body ACTUALLY lands. That is one API call at publish
 #     time, on a path no unit test reaches.
+#
+# Test-level EXIT traps replace Bats' own handler and hide failing TAP results.
+# Cleanup follows aborting assertions; see docs/agents/e2e-testing.md.
+
+load test_helper
 
 REPO_ROOT="$(cd "$(dirname "${BATS_TEST_FILENAME:-$0}")/.." && pwd)"
 PROMOTE="$REPO_ROOT/.github/workflows/promote-rc.yaml"
@@ -78,6 +87,7 @@ GENERATE="$REPO_ROOT/.github/workflows/changelog-generate.yaml"
 RC_WRAPPER="$REPO_ROOT/.github/workflows/changelog-rc.yaml"
 FINALIZE="$REPO_ROOT/.github/workflows/pull-requests-release.yaml"
 TAGS="$REPO_ROOT/.github/workflows/tags.yaml"
+SYNC="$REPO_ROOT/.github/workflows/update-releasenotes.yaml"
 CHANGELOG_DOC="$REPO_ROOT/docs/agents/changelog.md"
 
 # Body of a single top-level job block in a workflow file, from `  <name>:` up to
@@ -198,6 +208,31 @@ code_lines() { grep -vE '^[[:space:]]*#'; }
     echo "finalize's updateRelease call no longer conditionally spreads { body }." >&2
     exit 1
   }
+}
+
+# 3b. finalize publishes a link in place of a body over the limit, because the
+#     tags exist by then; the sync leaves such a body alone. Both read the same
+#     constant, and what each does with it is executed in
+#     hack/release-changelog-behaviour.bats. The sync must also fire when only
+#     the release notes change, or editing them on main reaches no release.
+@test "finalize and update-releasenotes share the 100000-byte body limit, and the sync fires on the release notes" {
+  for f in "$FINALIZE" "$SYNC"; do
+    grep -qE '^[[:space:]]*const MAX_BODY_BYTES = 100000;' "$f" || {
+      echo "$(basename "$f") no longer declares const MAX_BODY_BYTES = 100000 on a code line." >&2
+      exit 1
+    }
+    if grep -q 'release-body\.sh' "$f"; then
+      echo "$(basename "$f") mentions hack/release-body.sh, which no longer exists." >&2
+      false
+    fi
+  done
+  paths="$(yq '.on.push.paths[]' "$SYNC")"
+  for p in 'docs/changelogs/v*.md' 'docs/releasenotes/v*.md'; do
+    printf '%s\n' "$paths" | grep -qxF "$p" || {
+      echo "update-releasenotes no longer fires on pushes touching $p." >&2
+      exit 1
+    }
+  done
 }
 
 # 4. A whitespace-only file is worse than no file: it would blank the release
@@ -396,37 +431,94 @@ code_lines() { grep -vE '^[[:space:]]*#'; }
 #     validator could degenerate to `exit 0` and tests 9 and 10 would still pass.
 @test "the changelog validator rejects unusable output" {
   tmp="$(mktemp -d)"
-  # shellcheck disable=SC2064
-  trap "rm -rf '$tmp'" EXIT
 
   printf '   \n\n  \n' > "$tmp/whitespace.md"
-  ! "$REPO_ROOT/hack/validate-changelog.sh" "$tmp/whitespace.md" 1.6.0 >/dev/null 2>&1 || {
+  if "$REPO_ROOT/hack/validate-changelog.sh" "$tmp/whitespace.md" 1.6.0 >/dev/null 2>&1; then
     echo "Validator accepted a whitespace-only file — it would publish as blank release notes." >&2
     exit 1
-  }
+  fi
 
   : > "$tmp/empty.md"
-  ! "$REPO_ROOT/hack/validate-changelog.sh" "$tmp/empty.md" 1.6.0 >/dev/null 2>&1 || {
-    echo "Validator accepted an empty file." >&2; exit 1; }
+  if "$REPO_ROOT/hack/validate-changelog.sh" "$tmp/empty.md" 1.6.0 >/dev/null 2>&1; then
+    echo "Validator accepted an empty file." >&2; exit 1; fi
 
-  ! "$REPO_ROOT/hack/validate-changelog.sh" "$tmp/absent.md" 1.6.0 >/dev/null 2>&1 || {
-    echo "Validator accepted a nonexistent file." >&2; exit 1; }
+  if "$REPO_ROOT/hack/validate-changelog.sh" "$tmp/absent.md" 1.6.0 >/dev/null 2>&1; then
+    echo "Validator accepted a nonexistent file." >&2; exit 1; fi
 
   # Truncated mid-stream: head intact, tail (the compare link) lost. This is the
   # realistic AI failure — a timeout or quota cutoff partway through the write.
   head -8 "$REPO_ROOT/docs/changelogs/v1.5.1.md" > "$tmp/truncated.md"
-  ! "$REPO_ROOT/hack/validate-changelog.sh" "$tmp/truncated.md" 1.5.1 >/dev/null 2>&1 || {
+  if "$REPO_ROOT/hack/validate-changelog.sh" "$tmp/truncated.md" 1.5.1 >/dev/null 2>&1; then
     echo "Validator accepted a truncated changelog — a fragment would be published" >&2
     echo "verbatim as the release body." >&2
     exit 1
-  }
+  fi
 
   # Right shape, wrong version: a stale file left by a previous promotion, or a
   # changelog generated against the rc tag instead of the stable one.
-  ! "$REPO_ROOT/hack/validate-changelog.sh" "$REPO_ROOT/docs/changelogs/v1.5.1.md" 1.6.0 >/dev/null 2>&1 || {
+  if "$REPO_ROOT/hack/validate-changelog.sh" "$REPO_ROOT/docs/changelogs/v1.5.1.md" 1.6.0 >/dev/null 2>&1; then
     echo "Validator accepted v1.5.1's changelog as v1.6.0's release body." >&2
     exit 1
+  fi
+  rm -rf "$tmp"
+}
+
+# 11b. Two content defects that reached a generated release body: an entry cut
+#      off with an ellipsis before its attribution, which loses the operator
+#      action PR authors put at the end of a release note, and a link to
+#      cozystack.io/docs/next/, which the live site answers with 404. Each is
+#      planted in a shipped changelog, so a rejection cannot come from broken
+#      structure instead, and the reason must name the line and fit on one
+#      line, since the workflows quote it into a ::warning:: or ::error::
+#      annotation, which ends at the first newline. The near misses at the end
+#      are shapes shipped changelogs carry.
+@test "the changelog validator rejects truncated entries and docs/next links, and only those" {
+  base="$REPO_ROOT/docs/changelogs/v1.5.1.md"
+  [ -f "$base" ] || { echo "fixture $base is gone; pick another shipped changelog" >&2; exit 1; }
+  tmp="$(mktemp -d)"
+  line=$(( $(wc -l < "$base") + 1 ))
+
+  for bad in \
+    'ellipsis|* **fix(app): restore the bucket**: The restore now carries the bucket, and the… ([**@someone**](https://github.com/someone) in #1)' \
+    'ellipsis|* **fix(app): restore the bucket**: The restore now carries the bucket, and the... ([**@someone**](https://github.com/someone) in #1)' \
+    'docs/next|Learn more in the [documentation](https://cozystack.io/docs/next/).' \
+    'docs/next|Learn more in the [documentation](https://cozystack.io/docs/next).'
+  do
+    want="${bad%%|*}"; text="${bad#*|}"
+    { cat "$base"; printf '%s\n' "$text"; } > "$tmp/bad.md"
+    if "$REPO_ROOT/hack/validate-changelog.sh" "$tmp/bad.md" 1.5.1 >/dev/null 2>&1; then
+      echo "Validator accepted a changelog carrying: $text" >&2
+      exit 1
+    fi
+    reason="$("$REPO_ROOT/hack/validate-changelog.sh" "$tmp/bad.md" 1.5.1 2>&1 || true)"
+    case "$reason" in
+      *"$want"*"(line(s) $line)"*) ;;
+      *) echo "Rejected '$text' without naming '$want' and line $line: $reason" >&2; exit 1 ;;
+    esac
+    [ "$(printf '%s\n' "$reason" | wc -l)" -eq 1 ] || {
+      echo "The reason spans several lines, so a workflow annotation would carry only the first:" >&2
+      printf '%s\n' "$reason" | sed 's/^/    /' >&2
+      exit 1
+    }
+  done
+
+  # The website source tree named in prose (v1.3.0), an ellipsis inside a
+  # sentence (v1.4.0), a list closed with "..." right before the attribution,
+  # and a versioned docs link.
+  {
+    cat "$base"
+    printf '%s\n' \
+      '* **[website] Trunk docs**: keeps a permanent `content/en/docs/next/` trunk ([**@someone**](https://github.com/someone) in cozystack/website#1)' \
+      '* **feat(app): sizes**: the legacy names (`nano` … `2xlarge`) stay as aliases ([**@someone**](https://github.com/someone) in #2)' \
+      '* **feat(app): plugins**: stages the reference plugins (bridge, macvlan, ...) ([**@someone**](https://github.com/someone) in #3)' \
+      'Learn more in the [documentation](https://cozystack.io/docs/v1.5/operations/).'
+  } > "$tmp/near.md"
+  "$REPO_ROOT/hack/validate-changelog.sh" "$tmp/near.md" 1.5.1 >/dev/null 2>&1 || {
+    echo "Validator rejected text that only resembles a truncated entry or a docs/next link:" >&2
+    "$REPO_ROOT/hack/validate-changelog.sh" "$tmp/near.md" 1.5.1 2>&1 >/dev/null | sed 's/^/    /' >&2
+    exit 1
   }
+  rm -rf "$tmp"
 }
 
 # 12. The workflow must actually call the script. Keeping the predicates in a
@@ -477,6 +569,39 @@ code_lines() { grep -vE '^[[:space:]]*#'; }
     echo "tooling checkout." >&2
     exit 1
   }
+
+  # changelog.md sends the agent to run the docs/release/changelogs.md checks
+  # and the validator on its own output, by their working-tree paths. Without
+  # these two copies it runs the rc tag's versions, which predate every check
+  # added since.
+  for f in docs/release/changelogs.md hack/validate-changelog.sh; do
+    printf '%s\n' "$overlay" | code_lines | grep -qF "cp .release-tooling/$f $f" || {
+      echo "The refresh step does not overlay $f from the tooling checkout, so the" >&2
+      echo "agent following docs/agents/changelog.md section 9 runs the rc tag's copy." >&2
+      exit 1
+    }
+  done
+
+  # An rc tagged before the release docs were split has no docs/release/
+  # directory, and cp does not create one.
+  printf '%s\n' "$overlay" | code_lines | grep -qE '^[[:space:]]+mkdir -p docs/release$' || {
+    echo "The refresh step does not create docs/release before copying into it, so" >&2
+    echo "the copy fails on every rc tagged before the release docs were split." >&2
+    exit 1
+  }
+
+  # The tooling checkout has to list both directories the copies read from.
+  tooling="$(printf '%s\n' "$block" | awk '
+    /^      - name: Checkout release tooling from the dispatch ref$/ { inside = 1; next }
+    /^      - name: / { inside = 0 }
+    inside' | code_lines)"
+  for d in docs/agents docs/release; do
+    printf '%s\n' "$tooling" | grep -qE "^[[:space:]]+$d\$" || {
+      echo "The tooling checkout no longer lists $d, so .release-tooling lacks the" >&2
+      echo "file the refresh step copies from it." >&2
+      exit 1
+    }
+  done
 
   # Every job that runs release tooling against an older checkout must source it
   # from the dispatch ref. A script fetched by a script that is itself missing

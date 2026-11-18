@@ -13,6 +13,10 @@
 #                              cozy-lib / the build macros / go.mod / the build
 #                              workflows can affect any image, so rebuild all).
 #
+# MATRIX_ARCH=arm64 also drops packages/core/testing, which pins linux/amd64
+# (an x86 KVM sandbox): an arm64 leg building it would push a second amd64
+# image under its -arm64 tag.
+#
 # Output: a JSON array of package dirs on stdout, e.g.
 #   ["packages/apps/mariadb","packages/system/dashboard"]
 # An empty selection prints `[]` -> the matrix produces zero build jobs.
@@ -41,7 +45,8 @@ all_units() {
   sed -n '/^build:/,/^[^[:space:]]/p' "$MAKEFILE" \
     | grep -oE 'make -C packages/[A-Za-z0-9._/-]+ image' \
     | sed -E 's/^make -C (packages[^ ]+) image$/\1/' \
-    | grep -vxE 'packages/core/(talos|installer)'
+    | grep -vxE 'packages/core/(talos|installer)' \
+    | if [ "${MATRIX_ARCH:-}" = arm64 ]; then grep -vxF packages/core/testing; else cat; fi
 }
 
 emit_json() {
@@ -62,7 +67,13 @@ if [ -z "$CHANGED" ] || [ "$CHANGED" = "FULL" ]; then
   exit 0
 fi
 
-if grep -qE "$full_rebuild_pattern" "$CHANGED"; then
+# CI-only Go tools that no image builds. Dropped before the full-rebuild check,
+# whose cmd/ would otherwise rebuild everything for an edit no image contains.
+# hack/select-e2e.sh skips the same two, and a diff made only of them and docs/
+# never reaches this script's build jobs (the plan job's `code` is false).
+tooling_pattern='^cmd/(backport-batch|api-gate)/'
+
+if grep -vE "$tooling_pattern" "$CHANGED" | grep -qE "$full_rebuild_pattern"; then
   emit_json "$units"
   exit 0
 fi

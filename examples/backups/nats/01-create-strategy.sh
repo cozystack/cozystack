@@ -64,7 +64,7 @@ spec:
               value: "{{ if .Backup }}{{ .Backup.ApplicationRef.Name }}{{ end }}"
             - name: MODE
               value: "{{ .Mode }}"
-            # S3 coordinates from the tenant-provided <release>-backup-s3 Secret
+            # S3 coordinates from the demo-provided <release>-backup-s3 Secret
             # (created by create_s3_secret in 00-helpers.sh from the Bucket).
             - name: AWS_ACCESS_KEY_ID
               valueFrom:

@@ -1,0 +1,146 @@
+{{- if .Values.serviceAccount.create -}}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "localpv.serviceAccountName" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "localpv.labels" . | nindent 4 }}
+    {{- if .Values.extraLabels -}}
+      {{- toYaml .Values.extraLabels | nindent 4 }}
+    {{- end }}
+  {{- with .Values.serviceAccount.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+{{- end }}
+{{- if .Values.rbac.create }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ template "localpv.fullname" . }}
+  {{- with .Values.localpv.annotations }}
+  annotations: {{ toYaml . | nindent 4 }}
+  {{- end }}
+  labels:
+    {{- include "localpv.labels" . | nindent 4 }}
+    {{- if .Values.extraLabels -}}
+      {{- toYaml .Values.extraLabels | nindent 4 }}
+    {{- end }}
+rules:
+- apiGroups: [""]
+  resources: ["nodes"]
+  verbs: ["get", "list"]
+- apiGroups: [""]
+  resources: ["persistentvolumeclaims"]
+  verbs: ["get", "list", "watch", "update"]
+- apiGroups: [""]
+  resources: ["persistentvolumes"]
+  verbs: ["get", "list", "watch", "create", "delete", "patch"]
+- apiGroups: ["storage.k8s.io"]
+  resources: ["storageclasses"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: [""]
+  resources: ["events"]
+  verbs: ["create", "update", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ template "localpv.fullname" . }}
+  {{- with .Values.localpv.annotations }}
+  annotations: {{ toYaml . | nindent 4 }}
+  {{- end }}
+  labels:
+    {{- include "localpv.labels" . | nindent 4 }}
+    {{- if .Values.extraLabels -}}
+      {{- toYaml .Values.extraLabels | nindent 4 }}
+    {{- end }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ template "localpv.fullname" . }}
+subjects:
+- kind: ServiceAccount
+  name: {{ template "localpv.serviceAccountName" . }}
+  namespace: {{ .Release.Namespace }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ template "localpv.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "localpv.labels" . | nindent 4 }}
+# Helpers operate on host paths but their API objects stay in the release namespace.
+rules:
+- apiGroups: [""]
+  resources: ["pods"]
+  verbs: ["get", "create", "delete"]
+- apiGroups: ["coordination.k8s.io"]
+  resources: ["leases"]
+  verbs: ["get", "create", "update"]
+- apiGroups: [""]
+  resources: ["configmaps"]
+  verbs: ["get", "create", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ template "localpv.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "localpv.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ template "localpv.fullname" . }}
+subjects:
+- kind: ServiceAccount
+  name: {{ template "localpv.serviceAccountName" . }}
+  namespace: {{ .Release.Namespace }}
+{{- if .Values.rbac.pspEnabled }}
+---
+kind: ClusterRole
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  name: {{ template "localpv.fullname" . }}-psp
+  {{- with .Values.localpv.annotations }}
+  annotations: {{ toYaml . | nindent 4 }}
+  {{- end }}
+  labels:
+    {{- include "localpv.labels" . | nindent 4 }}
+    {{- if .Values.extraLabels -}}
+      {{- toYaml .Values.extraLabels | nindent 4 }}
+    {{- end }}
+rules:
+- apiGroups: ['policy']
+  resources: ['podsecuritypolicies']
+  verbs:     ['use']
+  resourceNames:
+  - {{ template "localpv.fullname" . }}-psp
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ template "localpv.fullname" . }}-psp
+  {{- with .Values.localpv.annotations }}
+  annotations: {{ toYaml . | nindent 4 }}
+  {{- end }}
+  labels:
+    {{- include "localpv.labels" . | nindent 4 }}
+    {{- if .Values.extraLabels -}}
+      {{- toYaml .Values.extraLabels | nindent 4 }}
+    {{- end }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ template "localpv.fullname" . }}-psp
+subjects:
+  - kind: ServiceAccount
+    name: {{ template "localpv.serviceAccountName" . }}
+    namespace: {{ $.Release.Namespace }}
+{{- end }}
+{{- end }}
+

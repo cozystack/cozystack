@@ -1,4 +1,4 @@
-{{- $host := .Values._namespace.host }}
+{{- $host := include "cozy-lib.ns-host-required" . }}
 {{- $harborHost := .Values.host | default (printf "%s.%s" .Release.Name $host) }}
 
 {{- $existingSecret := lookup "v1" "Secret" .Release.Namespace (printf "%s-credentials" .Release.Name) }}

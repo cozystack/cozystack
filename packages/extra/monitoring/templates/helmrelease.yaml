@@ -63,7 +63,11 @@ spec:
     release inventory. "Ready with no trace store" is intentional and harmless:
     nothing produces spans until the collector ships, so no data is dropped
     (hence no fail-on-empty guard yet, unlike the logs #3181 guard which fires
-    because fluent-bit ships logs unconditionally).
+    because fluent-bit ships logs unconditionally). Shared-central mode
+    (_namespace.tracingCentral) keeps the local stores still listed, so the
+    exprs gate those; the shared store itself is tenant-root's to gate, and
+    its VMAuth, which every central tenant writes and reads through, is gated
+    the same way, inert outside a hosting tenant-root.
   */}}
   healthCheckExprs:
     - apiVersion: operator.victoriametrics.com/v1
@@ -81,7 +85,20 @@ spec:
       inProgress: has(status.updateStatus) && status.updateStatus == 'expanding'
       failed:     has(status.updateStatus) && status.updateStatus != 'operational' && status.updateStatus != 'expanding'
       current:    has(status.updateStatus) && status.updateStatus == 'operational'
+    - apiVersion: operator.victoriametrics.com/v1beta1
+      kind: VMAuth
+      inProgress: has(status.updateStatus) && status.updateStatus == 'expanding'
+      failed:     has(status.updateStatus) && status.updateStatus != 'operational' && status.updateStatus != 'expanding'
+      current:    has(status.updateStatus) && status.updateStatus == 'operational'
   valuesFrom:
   - kind: Secret
     name: cozystack-values
-  values: {{- .Values | toYaml | nindent 4 }}
+  {{- /* The apps API does not prune keys the Monitoring schema leaves out, and
+         a central tenant's collector enforces the platform's rate on it, so its
+         image stays the platform's. So does Grafana's: its pod may reach a
+         central tenant's vmauth and mounts the Secret the tenant names in
+         oidc.customConfig.secretRef. */}}
+  {{- $values := deepCopy .Values }}
+  {{- $_ := unset $values.tracingCollector "image" }}
+  {{- $_ := unset $values.grafana "image" }}
+  values: {{- $values | toYaml | nindent 4 }}

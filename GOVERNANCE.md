@@ -29,15 +29,13 @@ The Cozystack maintainers are maintainers of every sub-project by default (see [
 
 **Project infrastructure** carries no shipped code: [website](https://github.com/cozystack/website), [community](https://github.com/cozystack/community) (design proposals and meeting notes), [external-apps-example](https://github.com/cozystack/external-apps-example) (the reference third-party application catalogues are built from), [ccp](https://github.com/cozystack/ccp), [.github](https://github.com/cozystack/.github) and [.project](https://github.com/cozystack/.project) (CNCF project metadata).
 
-**Forks of upstream projects** are held for contributing changes back, or were held for that purpose and have since been archived. One is load-bearing and is called out below; the rest are not built into the distribution, which takes those components from their upstreams directly.
+**Forks of upstream projects** are held for contributing changes back, or were held for that purpose and have since been archived. None is built into the distribution, which takes those components from their upstreams directly.
 
-Three things about this organisation are worth stating plainly rather than leaving to be discovered.
-
-**One fork is compiled into the product.** [cozystack/apimachinery](https://github.com/cozystack/apimachinery) is a fork of `kubernetes/apimachinery` carrying a single 34-line patch to `pkg/runtime/scheme.go` on top of the released `v0.35.0` tree, applied through a `replace` directive in `go.mod`. The same fix is proposed upstream as [kubernetes/kubernetes#135537](https://github.com/kubernetes/kubernetes/pull/135537); the fork exists only until that merges, and is pinned to a branch tracking the upstream release rather than to the fork's own trunk.
+Two things about this organisation are worth stating plainly rather than leaving to be discovered.
 
 **Four repositories are private**, and none of them contributes to the distribution: `security-scanner` (automated CVE monitoring, private because it holds pre-disclosure vulnerability state), `infrastructure` (the organisation's own CI infrastructure-as-code, private because it holds cloud credentials and account topology), one GitHub-created security-advisory workspace, and `talos-preboot-iso`, an archived prototype. Nothing an adopter installs is built from a repository they cannot read.
 
-**Telemetry is received by a component adopters do not install.** [cozystack-telemetry-server](https://github.com/cozystack/cozystack-telemetry-server) runs as project infrastructure, but clusters report to it by default, so it is named here rather than omitted as out-of-scope. What is collected, why, and how to turn it off is documented on the [Telemetry](https://cozystack.io/docs/operations/configuration/telemetry/) page.
+**Telemetry is received by a component adopters do not install.** [cozystack-telemetry-server](https://github.com/cozystack/cozystack-telemetry-server) runs as project infrastructure, but clusters report to it by default, so it is named here rather than omitted as out-of-scope. What is collected, why, and how to turn it off is documented on the [Telemetry](https://cozystack.io/docs/v1.6/operations/configuration/telemetry/) page.
 
 ## Third-party Dependencies
 
@@ -86,10 +84,21 @@ Cozystack maintainers are expected to:
   and CNCF Slack workspaces, Telegram groups, and help out when possible.
 * Rapidly respond to any time-sensitive security release processes.
 * Attend Cozystack community meetings.
+* Be familiar with the Linux Foundation guidance on [OFAC sanctions and open source](https://bestpractices.linuxfoundation.org/regulatory/ofac/) and raise any related questions privately with the other maintainers.
 
 If a maintainer is no longer interested in or cannot perform the duties
 listed above, they should move themselves to emeritus status.
 If necessary, this can also occur through the decision-making process outlined below.
+
+### Welcoming new contributors
+
+A first contribution is often the moment someone decides whether to stay. When a new contributor opens an issue or a pull request:
+
+* Aim to respond within two working days, even if only to say who will review it and when.
+* Point to the contributing guide and help with the mechanics. If the DCO check fails, explain how to fix it: `git commit --amend --signoff` for the last commit, or `git rebase --signoff main` for several.
+* Before approving a CI run for an external contributor, read the diff and make sure it does not touch workflows, secrets or release tooling in a way that could run untrusted code with project credentials. This applies to every approval, not only the first one.
+* Review against the same standards as any other change, and explain the reason behind each requested change. If the change is not going to be accepted, say so early and say why, rather than leaving it open.
+* Suggest a good next step: a `good first issue`, a related bug, or a documentation gap.
 
 ### Becoming a Maintainer
 

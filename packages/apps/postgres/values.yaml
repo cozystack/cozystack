@@ -88,11 +88,20 @@ external: false
 version: v18
 
 ##
+## @enum {string} Flavor
+## @value postgresql
+## @value postgis
+
+## @param {Flavor} flavor - PostgreSQL image flavor, fixed when the cluster is created. `postgresql` uses the CloudNativePG PostgreSQL image. `postgis` uses the CloudNativePG PostGIS image, which adds postgis, postgis_raster, postgis_topology, postgis_sfcgal, postgis_tiger_geocoder and address_standardizer; enable them per database in `databases.<name>.extensions`. Changing the flavor of an existing cluster is refused, and a backup restores only into a cluster of the flavor it was taken from: to change flavor, create a new cluster and move the data with a logical dump (pg_dump / pg_restore).
+flavor: postgresql
+
+##
 ## @section TLS configuration
 ##
 
 ## @typedef {struct} TLS - TLS configuration for PostgreSQL server connections.
-## @field {*bool} enabled - Tri-state switch controlling whether the chart injects the external hostname into the operator-managed CNPG cert via spec.certificates.serverAltDNSNames. When omitted, the chart injects the SAN if `external: true` and skips it otherwise. Set explicitly to `true` to inject regardless of `external` (no-op when `external: false` since there is no external hostname to add). Set to `false` to skip injection. Note that CNPG keeps its built-in TLS on the wire regardless of this flag — this toggle only controls the chart-side SAN injection; to disable PostgreSQL TLS entirely set `postgresql.parameters.ssl = "off"` at the CNPG layer.
+## @field {*bool} enabled - Tri-state switch controlling whether the chart injects the external hostnames into the operator-managed CNPG cert via spec.certificates.serverAltDNSNames. When omitted, the chart injects them if `external: true` and skips them otherwise. Set explicitly to `true` to inject regardless of `external` (no-op when `external: false` since there is no external hostname to add). Set to `false` to skip injection. Note that CNPG keeps its built-in TLS on the wire regardless of this flag — this toggle only controls the chart-side SAN injection; to disable PostgreSQL TLS entirely set `postgresql.parameters.ssl = "off"` at the CNPG layer.
+## @field {*bool} required - Tri-state switch controlling whether the server refuses sessions that are not encrypted. When omitted, it is on if `external: true` and off otherwise. When on, the chart renders `spec.postgresql.pg_hba` with `hostssl all all all scram-sha-256` (`md5` on PostgreSQL 13, matching CloudNativePG's default rule) followed by `host all all all reject`, so a client that connects with `sslmode=disable` is refused instead of getting a plaintext session; in-cluster clients are held to the same rule, since the pod network cannot be told apart from an external client. Set to `false` to keep accepting plaintext sessions on an external instance, or to `true` to require TLS on an in-cluster one. Rendering fails if `postgresql.parameters.ssl` is off while this is in effect.
 
 ## @param {TLS} tls - TLS configuration for server connections.
 tls: {}
@@ -100,7 +109,15 @@ tls: {}
 ## @section Application-specific parameters
 ##
 
+##
+## @enum {string} PreloadLibrary
+## @value pg_stat_statements
+## @value auto_explain
+## @value pgaudit
+## @value pg_prewarm
+
 ## @typedef {struct} PostgreSQL - PostgreSQL server configuration.
+## @field {[]PreloadLibrary} [sharedPreloadLibraries] - Libraries loaded at server start, restricted to an allowlist of modules already shipped in the PostgreSQL image. CloudNativePG also preloads `pg_stat_statements`, `auto_explain` and `pgaudit` by itself whenever `parameters` sets a key under their prefix (e.g. `pg_stat_statements.track`), so removing one of them from this list does not unload it while such a key is set; `pg_prewarm` is preloaded only through this list. Changing the list restarts PostgreSQL on every instance, the primary included, so writes pause briefly.
 ## @field {map[string]intOrString} [parameters] - PostgreSQL server parameters. Values may be strings or integers; integers are coerced to strings by the template (e.g. both `max_connections: 100` and `max_connections: "100"` are accepted). BLOCKED (enable arbitrary code execution): archive_command, restore_command, ssl_passphrase_command, archive_cleanup_command, recovery_end_command, dynamic_library_path, local_preload_libraries, session_preload_libraries, shared_preload_libraries. Do NOT override CloudNativePG-managed parameters: archive_mode, primary_conninfo, wal_level, max_replication_slots.
 
 ## @param {PostgreSQL} postgresql - PostgreSQL server configuration.
@@ -120,12 +137,23 @@ postgresql:
 ##   dynamic_library_path, local_preload_libraries, session_preload_libraries,
 ##   shared_preload_libraries (arbitrary .so loading)
 ##
+## To preload a module, use the `sharedPreloadLibraries` allowlist instead of the
+## blocked `shared_preload_libraries` parameter:
+##   sharedPreloadLibraries:
+##     - pg_stat_statements
+##     - auto_explain
+##
 ## IMPORTANT: Do NOT override CloudNativePG-managed parameters:
 ##   archive_mode, primary_conninfo, wal_level, max_replication_slots
 ##
 ## NOTE: Some parameters require pod restart (not just reload):
 ##   shared_buffers, max_connections, max_prepared_transactions,
 ##   wal_buffers, max_wal_senders
+##
+## When shared_buffers is not set and the memory limit is below 512Mi, the
+## chart sets it to a quarter of the limit with a 16MB floor, capped at the
+## memory request rounded down to whole MiB. Larger limits keep the
+## PostgreSQL default of 128MB.
 
 ##
 ## @section Quorum-based synchronous replication
@@ -175,7 +203,7 @@ quorum:
 ## CNPG webhook rejects under quorum, and — worse — under server-side apply the phase-2
 ## omit prunes the field whenever KEDA has not yet written /scale (e.g. a cluster idle at
 ## its floor), collapsing it to 1 and decommissioning every replica PVC (see community
-## design proposal §Upgrade "Implementation update 2026-09-02"; validated live on dev9).
+## design proposal §Upgrade "Implementation update 2026-09-02"; validated live on a test cluster).
 ## Seeding max(replicas, effectiveMin) — rather than effectiveMin alone — keeps the active
 ## branch equal to the disabled/dryRun/transition branch (which renders `instances:
 ## replicas`) whenever `replicas` sits at or above the floor, so enabling, dry-running, or
@@ -231,6 +259,8 @@ autoscaling:
 
 ## @typedef {struct} User - User configuration.
 ## @field {bool} [replication] - Whether the user has replication privileges.
+## @field {bool} [createRole] - Whether the user can create and manage roles (CREATEROLE). Requires PostgreSQL 16 or newer. Setting it back to `false` withdraws the attribute only: the roles the user created, and its ADMIN and SET memberships in them, stay. Once any user has held it, the chart no longer adopts an existing role it did not create, so a user or database declared later under the name of such a role fails the init job until a platform administrator drops that role.
+## @field {bool} [bypassRls] - Whether the user can bypass row-level security policies (BYPASSRLS). A role can only create other roles carrying BYPASSRLS if it holds the attribute itself, so this is required alongside `createRole` to provision a privileged service role.
 
 ## @param {map[string]User} users - Users configuration map. Passwords are always auto-generated and stored in the `<release>-credentials` Secret; they cannot be set from values — read a user's password from that Secret. A `password` left over in values from before the field was removed is ignored by the render and draws an admission warning, but it is not inert on an upgraded release: the chart preserves whatever password is already in the Secret, which on the first upgrade is the value that was set before removal, so that value stays the live credential until it is rotated (dedicated rotation is tracked in cozystack/community#72). The live password lives only in the Secret.
 users: {}
@@ -241,6 +271,9 @@ users: {}
 ##   airflow: {}
 ##   debezium:
 ##     replication: true
+##   migrator:
+##     createRole: true
+##     bypassRls: true
 
 ##
 ## @section Databases configuration
@@ -254,7 +287,7 @@ users: {}
 ## @field {DatabaseRoles} [roles] - Roles assigned to users.
 ## @field {[]string} [extensions] - List of enabled PostgreSQL extensions.
 
-## @param {map[string]Database} databases - Databases configuration map.
+## @param {map[string]Database} databases - Databases configuration map. The PostgreSQL system databases `postgres`, `template0` and `template1` are refused.
 databases: {}
 ## Example:
 ## databases:
@@ -288,7 +321,7 @@ databases: {}
 ## @typedef {struct} Backup - Backup configuration.
 ## @field {bool} enabled - Enable regular backups.
 ## @field {bool} [useSystemBucket] - Opt-in: when true, the chart-emitted `<release>-s3-creds` Secret is skipped AND `spec.plugins` (plus the barman-cloud ObjectStore) is left UNSET in the chart-rendered Cluster — the cozy-default BackupClass driver SSA-applies an ObjectStore (carrying destinationPath/endpointURL/credentials) and patches `spec.plugins` on the live Cluster when the first BackupJob runs. Consequence: plugin WAL archiving is NOT active until that first BackupJob fires; WAL accumulates on the PVC in the meantime, so fire an ad-hoc BackupJob immediately after enabling the flag on existing releases. Use together with the platform `cozy-default` BackupClass — tenants do not need to fill `s3AccessKey`/`s3SecretKey` or `destinationPath`/`endpointURL`. The destination path automatically scopes to `s3://cozy-backups/<namespace>/<release>/`.
-## @field {string} [schedule] - Legacy. Cron schedule (CNPG 6-field format) for the chart-emitted ScheduledBackup. Empty means no chart-managed schedule, which is the recommended setup when a `BackupClass` from `backups.cozystack.io` already drives backup orchestration. In the legacy chart-managed flow `spec.plugins` plus the barman-cloud ObjectStore is rendered when `backup.enabled=true` AND `useSystemBucket=false` AND `destinationPath` is non-empty AND inline-or-external creds are supplied; in the platform `useSystemBucket=true` flow the chart skips emitting `spec.plugins` and the CNPG driver SSA-applies the ObjectStore and patches `spec.plugins` onto the live Cluster at first BackupJob time.
+## @field {string} [schedule] - Legacy. Cron schedule for the chart-emitted ScheduledBackup, either a standard five-field cron such as `0 2 * * *` for every day at 02:00, or six fields with leading seconds such as `0 0 2 * * *` for the same time. Empty means no chart-managed schedule, which is the recommended setup when a `BackupClass` from `backups.cozystack.io` already drives backup orchestration. In the legacy chart-managed flow `spec.plugins` plus the barman-cloud ObjectStore is rendered when `backup.enabled=true` AND `useSystemBucket=false` AND `destinationPath` is non-empty AND inline-or-external creds are supplied; in the platform `useSystemBucket=true` flow the chart skips emitting `spec.plugins` and the CNPG driver SSA-applies the ObjectStore and patches `spec.plugins` onto the live Cluster at first BackupJob time.
 ## @field {string} [retentionPolicy] - Retention policy (e.g. "30d").
 ## @field {string} [destinationPath] - DEPRECATED. Per-tenant S3 configuration is superseded by the platform-managed `cozy-default` BackupClass and the `cozy-backups` system bucket. Leave empty for new installations; the BackupClass driver picks up the system-managed coordinates. Kept for in-place upgrade compatibility.
 ## @field {string} [endpointURL] - DEPRECATED. See `destinationPath`.
@@ -345,6 +378,7 @@ backup:
 ## @typedef {struct} Bootstrap - Bootstrap configuration for restoring a database cluster from a backup.
 ## @field {bool} enabled - Whether to restore from a backup.
 ## @field {string} [recoveryTime] - Timestamp (RFC3339) for point-in-time recovery; empty means latest.
+## @field {string} [backupID] - Barman ID of the base backup to recover from, passed as `recoveryTarget.backupID`. Empty lets the barman-cloud plugin pick one: the newest backup when `recoveryTime` is empty, otherwise the newest one ending at or before it, on any timeline. The CNPG backup driver sets this on restore.
 ## @field {string} oldName - Previous cluster name before deletion.
 ## @field {string} [serverName] - Server name (S3 path prefix) used by the original cluster when writing backups; passed to the barman-cloud plugin via `externalClusters[].plugin.parameters.serverName`. Defaults to `bootstrap.oldName`. Set this only when the original cluster wrote backups under an explicit server name that differed from its Kubernetes resource name.
 ## @field {string} [newServerName] - WAL-archive server name (S3 path prefix) the RESTORED cluster writes to. Must differ from `serverName` (the recovery source) so a restored cluster archives to a fresh, empty prefix and barman-cloud-check-wal-archive passes while it recovers from the source's prefix. The CNPG backup driver sets this on restore; empty means the cluster archives under its own name.
@@ -354,6 +388,7 @@ bootstrap:
   enabled: false
   # example: 2020-11-26 15:22:00.00000+00
   recoveryTime: ""
+  backupID: ""
   oldName: ""
   serverName: ""
   newServerName: ""

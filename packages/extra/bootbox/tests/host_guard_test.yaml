@@ -1,0 +1,37 @@
+suite: bootbox ingress fails on an empty apex
+
+templates:
+  - templates/matchbox/ingress.yaml
+
+release:
+  name: bootbox
+  namespace: tenant-root
+
+# The matchbox Ingress host is bootbox.<_namespace.host>. cozy-lib.ns-host-required
+# guards the apex, so an empty apex fails the render.
+
+tests:
+  - it: fails when the apex is empty and no host override
+    set:
+      _namespace:
+        host: ""
+        ingress: tenant-root
+      _cluster:
+        issuer-name: letsencrypt-prod
+        solver: http01
+    asserts:
+      - failedTemplate:
+          errorMessage: "the tenant apex (_namespace.host) is empty and this app sets no host override, so its ingress hostname would be malformed. Set tenant.spec.host on this tenant, inherit it from a parent that has host set, or set this app's host value."
+
+  - it: renders the ingress when the apex is set
+    set:
+      _namespace:
+        host: example.org
+        ingress: tenant-root
+      _cluster:
+        issuer-name: letsencrypt-prod
+        solver: http01
+    asserts:
+      - equal:
+          path: kind
+          value: Ingress

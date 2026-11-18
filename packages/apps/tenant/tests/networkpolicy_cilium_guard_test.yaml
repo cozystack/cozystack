@@ -1,0 +1,102 @@
+suite: tenant Cilium policies follow the platform variant's CNI
+templates:
+  - templates/networkpolicy.yaml
+  - templates/networkpolicy-traces-central.yaml
+  - templates/networkpolicy-traces-central-read.yaml
+release:
+  name: tenant-ktj
+  namespace: tenant-root
+tests:
+  - it: renders no Cilium objects on isp-hosted without the cilium.io API
+    set:
+      _cluster:
+        bundle-name: isp-hosted
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: renders no Cilium objects on isp-hosted-slim without the cilium.io API
+    set:
+      _cluster:
+        bundle-name: isp-hosted-slim
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: renders no Cilium objects on isp-hosted when only one Cilium kind is served
+    set:
+      _cluster:
+        bundle-name: isp-hosted
+    capabilities:
+      apiVersions:
+        - cilium.io/v2/CiliumNetworkPolicy
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: renders the Cilium policies on isp-hosted when the host runs Cilium
+    set:
+      _cluster:
+        bundle-name: isp-hosted
+    capabilities:
+      apiVersions:
+        - cilium.io/v2/CiliumNetworkPolicy
+        - cilium.io/v2/CiliumClusterwideNetworkPolicy
+    asserts: &policiesRendered
+      - template: templates/networkpolicy.yaml
+        documentSelector:
+          path: metadata.name
+          value: allow-internal-communication
+        isKind:
+          of: CiliumNetworkPolicy
+      - template: templates/networkpolicy.yaml
+        documentSelector:
+          path: metadata.name
+          value: tenant-ktj-ingress
+        isKind:
+          of: CiliumClusterwideNetworkPolicy
+
+  - it: renders the Cilium policies on a Cilium variant even when the API is not discoverable
+    set:
+      _cluster:
+        bundle-name: isp-full
+    asserts: *policiesRendered
+
+  - it: renders the Cilium policies when the platform injected no _cluster
+    asserts: *policiesRendered
+
+  - it: renders no shared-central tracing egress on isp-hosted without the cilium.io API
+    set:
+      _cluster:
+        bundle-name: isp-hosted
+      tracingCentral: true
+      monitoring: true
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: renders the shared-central tracing egress on isp-hosted when the host runs Cilium
+    set:
+      _cluster:
+        bundle-name: isp-hosted
+      tracingCentral: true
+      monitoring: true
+    capabilities:
+      apiVersions:
+        - cilium.io/v2/CiliumNetworkPolicy
+        - cilium.io/v2/CiliumClusterwideNetworkPolicy
+    asserts: &tracingRendered
+      - template: templates/networkpolicy-traces-central.yaml
+        isKind:
+          of: CiliumClusterwideNetworkPolicy
+      - template: templates/networkpolicy-traces-central-read.yaml
+        isKind:
+          of: CiliumClusterwideNetworkPolicy
+
+  - it: renders the shared-central tracing egress on a Cilium variant
+    set:
+      _cluster:
+        bundle-name: isp-full
+      tracingCentral: true
+      monitoring: true
+    asserts: *tracingRendered

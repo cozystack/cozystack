@@ -47,3 +47,37 @@ function buildUi(node: unknown, ui: Record<string, unknown> = {}): Record<string
 export function addDynamicOptionWidgets(schema: RJSFSchema, uiSchema: UiSchema = {}): UiSchema {
   return buildUi(schema, uiSchema as Record<string, unknown>) as UiSchema
 }
+
+/**
+ * Resolves `{path.to.field}` placeholders in an option source against the whole
+ * form, so a dropdown can be scoped by a choice made elsewhere in it.
+ *
+ * Returns null when a placeholder has no value yet — the field it depends on is
+ * still empty, and asking the server for `vmimportvm.` would only 404.
+ */
+export function resolveSource(
+  source: string | undefined,
+  root: unknown,
+): { name: string | null; parameterised: boolean } {
+  if (!source) return { name: null, parameterised: false }
+  if (!source.includes("{")) return { name: source, parameterised: false }
+
+  let missing = false
+  const name = source.replace(/\{([^}]+)\}/g, (_, path: string) => {
+    const resolved = path
+      .split(".")
+      .reduce<unknown>(
+        (acc, key) =>
+          acc && typeof acc === "object"
+            ? (acc as Record<string, unknown>)[key]
+            : undefined,
+        root,
+      )
+    if (typeof resolved !== "string" || resolved === "") {
+      missing = true
+      return ""
+    }
+    return resolved
+  })
+  return { name: missing ? null : name, parameterised: true }
+}

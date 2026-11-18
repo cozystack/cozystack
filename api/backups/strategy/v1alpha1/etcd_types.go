@@ -107,8 +107,8 @@ type EtcdTemplate struct {
 // Until the upstream gains symmetric semantics (or surfaces the final
 // file path via the equivalent of BackupSnapshot.URI for PVC), this
 // driver intentionally narrows the API contract to S3 only. The S3
-// path is fully exercised end-to-end on dev7 and covered by unit +
-// e2e tests.
+// path is fully exercised end-to-end on a test cluster and covered by
+// unit + e2e tests.
 // +kubebuilder:validation:XValidation:rule="has(self.s3)",message="s3 destination is required (PVC is intentionally not supported by this strategy until upstream restore-agent reads the same path the backup-agent writes; see the strategy comments)"
 type EtcdDestinationTemplate struct {
 	// S3 configures an S3-compatible storage target. Templating is

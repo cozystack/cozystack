@@ -32,6 +32,8 @@ Implications:
 - **RJSF** (`@rjsf/core` + `validator-ajv8`) for application config forms.
 - **Vitest + jsdom + @testing-library/react** for tests.
 - **Monaco** for YAML view, **noVNC** for the VM console tab.
+- **uPlot** for the Metrics tab charts, lazy-loaded with that tab.
+- Metrics and logs come from the observability proxy, not kube-apiserver: `lib/observability/proxy.ts` reads its native Prometheus JSON and VictoriaLogs NDJSON through `K8sClient.raw`, under the paths nginx routes to it ahead of `/apis`.
 
 ## Dev loop
 
@@ -79,6 +81,7 @@ the apiserver checks that user's RBAC.
    to a chunked-encoding WATCH against the same `resourceVersion`. Don't
    poll. Don't add `refetchInterval`. If you need a one-shot, pass
    `{ watch: false }`.
+   The one exception is the metrics panels in `components/observability`: the observability proxy serves the Prometheus query API, which has no watch, so they refresh on a fixed interval instead. Log lines stream through the tail endpoint and are not polled.
 4. **Tenant scoping.** Most resources live in `tenant-<name>` namespaces.
    Pull the active tenant from `useTenantContext()` — never read the
    namespace from a URL param or guess it.
@@ -100,6 +103,7 @@ schema). The pipeline in `apps/console/src/components/SchemaForm.tsx`:
 3. A chain of `addXxxWidgets(schema, uiSchema)` walks the schema and binds
    widgets:
    - any field carrying the `x-cozystack-options` schema keyword → `DynamicOptionsWidget`, a runtime dropdown populated from the cluster's `Option` resource (`core.cozystack.io`) keyed by the keyword's `source`; `addDynamicOptionWidgets` (`lib/dynamic-options.ts`) recurses into `properties`, array `items` and `additionalProperties`, and replaces the former field-name-bound `StorageClassWidget` / `BackupClassWidget` / `VMDiskWidget`.
+   - object carrying `x-cozystack-no-enable-switch: true` → rendered by `CustomObjectFieldTemplate` as a fieldset saying it has no enable switch and that an `enabled` field in YAML does nothing. Declared in `values.yaml` as `## @x-cozystack-no-enable-switch true` on the `@field` line it belongs to, and generated through to `values.schema.json` and the ApplicationDefinition. Must be declared rather than inferred from the object's fields: an unrelated `valuesOverride`-only object would otherwise inherit the copy, and adding a second field would silently drop it.
    - object with `additionalProperties: <schema>` → `AdditionalPropertiesField`
    - credential-shaped fields (`password`, `*token`, `*accessKey`, …) →
      `SensitiveStringWidget` — see `lib/sensitive-fields.ts` and its tests for

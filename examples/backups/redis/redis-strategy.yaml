@@ -28,7 +28,7 @@ spec:
         # presence — mirrors the shipped strategy.
         - name: redis-ca
           secret:
-            secretName: "redis-{{ .Release.Name }}.ca-cert"
+            secretName: '{{ .Release.Prefix | default "redis-" }}{{ .Release.Name }}.ca-cert'
             optional: true
         - name: s3-ca
           secret:
@@ -51,7 +51,7 @@ spec:
             - name: REDIS_PASSWORD
               valueFrom:
                 secretKeyRef:
-                  name: "redis-{{ .Release.Name }}-auth"
+                  name: '{{ .Release.Prefix | default "redis-" }}{{ .Release.Name }}-auth'
                   key: password
                   optional: true
             # S3 coordinates come from this demo's Bucket: the access keys are
@@ -137,7 +137,7 @@ spec:
                 RTLS="--tls --cacert /etc/redis-ca/ca.crt"
               fi
 
-              SENTINEL="rfs-redis-{{ .Release.Name }}"
+              SENTINEL="rfs-{{ .Release.Prefix | default "redis-" }}{{ .Release.Name }}"
               addr=$(redis-cli ${RTLS} -h "${SENTINEL}" -p 26379 sentinel get-master-addr-by-name mymaster)
               MHOST=$(echo "${addr}" | sed -n '1p')
               MPORT=$(echo "${addr}" | sed -n '2p')

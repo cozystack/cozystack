@@ -184,9 +184,10 @@ type TLSPassthroughListener struct {
 	// native port (e.g. 5432 for PostgreSQL). Must be 1..65535, unique
 	// across the list, and neither 80 nor 443 — the Gateway's own http
 	// (80) and TLS-terminate (443) listeners already own those ports.
-	// It is not an access boundary: on the Cilium version this
-	// platform pins, the backend answers this listener's SNI on every
-	// port the Gateway exposes, so the hostname is what gates reach.
+	// It is not an access boundary: an implementation may serve every
+	// port of the Gateway from one proxy listener matched by SNI alone,
+	// and Cilium does so until the Gateway carries a configuration that
+	// splits it per port, so the hostname is what gates reach.
 	// +kubebuilder:validation:Minimum=1
 	// +kubebuilder:validation:Maximum=65535
 	// +required
@@ -246,7 +247,7 @@ type TLSPassthroughListener struct {
 // +kubebuilder:validation:XValidation:rule="!has(self.tlsPassthroughListeners) || self.tlsPassthroughListeners.all(l, self.tlsPassthroughListeners.filter(o, o.port == l.port).size() == 1)",message="tlsPassthroughListeners: each listener must occupy a distinct port"
 // +kubebuilder:validation:XValidation:rule="!has(self.tlsPassthroughListeners) || self.tlsPassthroughListeners.all(l, l.hostname == self.apex || l.hostname.endsWith('.' + self.apex))",message="tlsPassthroughListeners: hostname must equal the tenant apex or be a subdomain of it"
 // +kubebuilder:validation:XValidation:rule="!has(self.tlsPassthroughListeners) || !has(self.tlsPassthroughServices) || self.tlsPassthroughListeners.all(l, !(l.name in self.tlsPassthroughServices))",message="tlsPassthroughListeners: name collides with a tlsPassthroughServices entry; both render a tls-<name> Gateway listener"
-// +kubebuilder:validation:XValidation:rule="!has(self.tlsPassthroughListeners) || size(self.tlsPassthroughListeners) == 0 || !has(self.certMode) || self.certMode == 'http01'",message="tlsPassthroughListeners: supported with certMode http01 only; dns01 and existingSecret serve the tenant from one wildcard terminate listener that the pinned Cilium cannot keep apart from a passthrough listener under the same apex, and edge terminates TLS upstream and renders no TLS listener to sit beside"
+// +kubebuilder:validation:XValidation:rule="!has(self.tlsPassthroughListeners) || size(self.tlsPassthroughListeners) == 0 || !has(self.certMode) || self.certMode != 'edge'",message="tlsPassthroughListeners: unsupported with certMode edge, which terminates TLS upstream and renders no TLS listener to sit beside"
 type TenantGatewaySpec struct {
 	// MaxLength is the DNS ceiling, so it rejects nothing resolvable,
 	// and it is not cosmetic: it is one of the three bounds the
@@ -376,10 +377,10 @@ type TenantGatewaySpec struct {
 	// for the listener's Hostname — a passthrough listener never
 	// terminates TLS, so the Gateway neither holds nor issues that
 	// certificate. Until such a route attaches and its backend
-	// resolves, the entry publishes the port and answers nothing on it:
-	// a passthrough listener carrying no forwarding route contributes
-	// no filter chain, so a hostname an HTTPS-terminate listener
-	// already serves goes on being served there.
+	// resolves, the entry publishes the port and answers nothing on it.
+	// Under certMode http01 its hostname is reserved from the moment it
+	// is declared: no HTTPS-terminate listener or certificate is
+	// rendered for it on 443, route or no route.
 	// +optional
 	// +listType=map
 	// +listMapKey=name

@@ -18,17 +18,15 @@
 # ceiling and an arm that ran to the end are three different things, and only
 # the last of them is a rate.
 #
-# Run with: hack/cozytest.sh hack/run-kubernetes-runner-canary_test.bats
+# Run with: bats hack/run-kubernetes-runner-canary_test.bats
 #
-# cozytest.sh is the canonical runner and the CI path: it runs this file under
-# `sh` with `set -eu`, and in CI that `sh` is dash, which is what the collector
-# meets in the sandbox image. `bats` runs the same file under bash without those
-# flags, so it is a convenience rather than an equal alternative: the guards
-# here that exist for dash semantics do not fire under it. Spelling the capture
-# truncation `: >` again -- the regression the guard below is written for --
-# leaves bats green, and leaves cozytest green too wherever /bin/sh is not dash,
-# which includes macOS, where it is bash in POSIX mode. Run `dash
-# hack/cozytest.sh` to exercise those guards off CI.
+# CI runs this file under Bats through `make bats-unit-tests`; nounset comes from
+# test_helper. The collector itself runs under dash in the sandbox image, so the
+# failed-open behavior below is paired with a structural assertion that pins
+# the safe `true >` spelling. Replacing it with the POSIX special builtin `: >`
+# can exit dash before the caller handles the status even when Bash stays green.
+
+load test_helper
 
 timeout_calls=/dev/null
 timeout_rc_override=
@@ -67,37 +65,6 @@ assert_file_contains() {
   printf 'expected %s to contain: %s\n' "${file}" "${needle}" >&2
   cat "${file}" >&2
   return 1
-}
-
-assert_file_lacks_pattern() {
-  local pattern="$1"
-  local file="$2"
-
-  # A missing file must fail rather than vacuously pass: a bare `! grep -q`
-  # succeeds on an unreadable path, which is indistinguishable from "the file
-  # exists and does not carry the label".
-  if [ ! -f "${file}" ]; then
-    printf 'expected %s to exist so it could be checked for: %s\n' "${file}" "${pattern}" >&2
-    return 1
-  fi
-  # Branched on awk's exact status. awk exits 1 for "no line matched" and 2 for
-  # "I could not evaluate this"; folded together, a negative assertion is
-  # satisfied by its own matcher giving up, which is the direction that goes
-  # green and stays green.
-  local _rc=0
-  awk -v pattern="${pattern}" '$0 ~ pattern { found = 1 } END { exit found ? 0 : 1 }' "${file}" || _rc=$?
-  case "${_rc}" in
-    0)
-      printf 'expected %s not to match: %s\n' "${file}" "${pattern}" >&2
-      cat "${file}" >&2
-      return 1
-      ;;
-    1) return 0 ;;
-    *)
-      printf 'awk could not evaluate pattern %s against %s\n' "${pattern}" "${file}" >&2
-      return 1
-      ;;
-  esac
 }
 
 # The clock the arms are timed by, replaced by a scripted sequence.
@@ -1324,6 +1291,20 @@ STUB
   rm -rf "$tmp"
 }
 
+@test "capture truncation avoids a POSIX special builtin under dash" {
+  source_file=hack/e2e-chainsaw/_lib/run-kubernetes.sh
+  body=$(awk '
+    /^cozy_capture_runner_canary\(\) \{/ { inside = 1 }
+    inside { print }
+    inside && /^}$/ { exit }
+  ' "$source_file")
+
+  if ! printf '%s\n' "$body" | grep -Fq 'if ! true >"${capture}"; then'; then
+    echo "FAIL: runner canary no longer opens its capture through non-special true" >&2
+    return 1
+  fi
+}
+
 @test "a capture file that cannot be opened reaches the job log rather than ending the shell" {
   . hack/e2e-chainsaw/_lib/run-kubernetes.sh
   tmp=$(mktemp -d)
@@ -1568,12 +1549,11 @@ STUB
   green=$(awk -v w="$wait_line" 'NR > w && /cozy_capture_runner_canary 2/ { print NR; exit }' "$lib")
   tail_line=$(grep -n '^  versions=\$(kubectl --kubeconfig' "$lib" | head -n 1 | cut -d: -f1)
   console_line=$(grep -n "cozy_capture_tenant_serial_console 'node-join failed" "$lib" | head -n 1 | cut -d: -f1)
-  # The signal is a separate word from the keyword, the way the fixtures in
-  # hack/bats-no-exit-trap.bats assemble theirs: that guard matches the pair
-  # lexically, so a pattern naming both would be counted here as an installed
-  # trap this file would then have to declare as debt.
-  armed_sig=EXIT
-  armed_line=$(grep -n "^  trap '_tenant_snapshot_on_fail' ${armed_sig}" "$lib" | head -n 1 | cut -d: -f1)
+  # Anchored on the line that hands the failure handler the tenant kubeconfig,
+  # which is where the tenant becomes reachable. The handler itself is armed
+  # earlier, at the CR apply, and a bound there would admit a sample taken
+  # during the management-cluster waits that precede the tenant.
+  armed_line=$(grep -n '^  CURRENT_TENANT_KC=' "$lib" | head -n 1 | cut -d: -f1)
   red=$(awk -v w="$wait_line" 'NR < w && /cozy_capture_runner_canary 2/ { line = NR } END { if (line) print line }' "$lib")
   pairs_first=''
   pairs_green=''
@@ -1648,7 +1628,7 @@ STUB
   # bracket the whole test instead, and the sentence would be false about the
   # artifact it is printed into.
   if [ "$first" -le "$armed_line" ]; then
-    echo "the canary sample before the wait (line $first) is taken at or before the tenant snapshot trap is armed (line $armed_line), so it describes the run before the cluster it is meant to characterise exists" >&2
+    echo "the canary sample before the wait (line $first) is taken at or before the tenant kubeconfig is handed to the failure handler (line $armed_line), so it describes the run before the cluster it is meant to characterise exists" >&2
     return 1
   fi
 }

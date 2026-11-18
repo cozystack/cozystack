@@ -104,6 +104,191 @@ tests:
       - hasDocuments:
           count: 0
 
+  # Central mode keeps the local stores and turning it off exports to them
+  # again, so the one-store limit holds in both modes: checked at the switch
+  # on, not first discovered when the parent turns central off.
+  - it: refuses more than one local entry in central mode too
+    release:
+      namespace: tenant-foo
+    set:
+      _namespace:
+        tracingCentral: true
+      tracingStorages:
+        - name: generic
+          mode: cluster
+          retentionPeriod: "14d"
+          storage: 10Gi
+        - name: audit
+          mode: single
+          retentionPeriod: "7d"
+          storage: 10Gi
+    asserts:
+      - failedTemplate:
+          errorMessage: "monitoring: tracingCollector fronts a single traces backend, but tracingStorages has more than one entry: once shared-central tracing is turned off, the collector would export to the first and leave the rest empty. Reduce tracingStorages to one entry or set tracingCollector.enabled=false."
+
+  - it: exports through the tenant-root vmauth and stamps the tenant in central mode
+    release:
+      namespace: tenant-foo
+    set:
+      _namespace:
+        tracingCentral: true
+      tracingCollector:
+        enabled: true
+      tracingStorages: []
+    documentSelector:
+      path: kind
+      value: ConfigMap
+    asserts:
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: "traces_endpoint: http://vmauth-traces-central\\.tenant-root\\.svc:8427/insert/opentelemetry/v1/traces\\n"
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: "key: cozystack.tenant\\n        value: tenant-foo\\n"
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: "processors: \\[memory_limiter, ratelimit/tenant, probabilistic_sampler, resource/tenant, batch\\]"
+
+  - it: stamps each tenant with its own namespace
+    release:
+      namespace: tenant-bar
+    set:
+      _namespace:
+        tracingCentral: true
+      tracingStorages: []
+    documentSelector:
+      path: kind
+      value: ConfigMap
+    asserts:
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: "key: cozystack.tenant\\n        value: tenant-bar\\n"
+
+  - it: authenticates the central export with the VMUser credentials
+    release:
+      namespace: tenant-foo
+    set:
+      _namespace:
+        tracingCentral: true
+      tracingCollector:
+        enabled: true
+      tracingStorages: []
+    documentSelector:
+      path: kind
+      value: ConfigMap
+    asserts:
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: "(?s)otlphttp/victoriatraces:\\n    traces_endpoint: \\S+\\n    auth:\\n      authenticator: basicauth/vmauth\\n"
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: "basicauth/vmauth:\\n    client_auth:\\n      username: \\$\\{env:VMAUTH_USERNAME\\}\\n      password: \\$\\{env:VMAUTH_PASSWORD\\}\\n"
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: "extensions: \\[health_check, basicauth/vmauth\\]"
+      # Writes must fit under the VMUser's request limit and leave room for the
+      # tenant's Grafana reads, which share it.
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: "(?s)otlphttp/victoriatraces:\\n.*    sending_queue:\\n      num_consumers: 2\\n"
+      - notMatchRegex:
+          path: data["config.yaml"]
+          pattern: "AccountID|ProjectID|include_metadata|headers_setter"
+
+  - it: reads the VMUser credentials from the chart-owned Secret
+    release:
+      namespace: tenant-foo
+    set:
+      _namespace:
+        tracingCentral: true
+      tracingCollector:
+        enabled: true
+      tracingStorages: []
+    documentSelector:
+      path: kind
+      value: Deployment
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].env
+          value:
+            - name: VMAUTH_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: traces-central-credentials
+                  key: username
+            - name: VMAUTH_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: traces-central-credentials
+                  key: password
+
+  # The collector reads its login at start, so a changed password must roll it.
+  # Expected: sha256("preserved-password"), computed outside helm.
+  - it: rolls the collector when its credentials change
+    release:
+      namespace: tenant-foo
+    set:
+      _namespace:
+        tracingCentral: true
+      tracingStorages: []
+    kubernetesProvider:
+      scheme:
+        "v1/Secret":
+          gvr:
+            version: "v1"
+            resource: "secrets"
+          namespaced: true
+      objects:
+        - kind: Secret
+          apiVersion: v1
+          metadata:
+            name: traces-central-credentials
+            namespace: tenant-foo
+          data:
+            username: dGVuYW50LWZvbw==
+            password: cHJlc2VydmVkLXBhc3N3b3Jk
+    documentSelector:
+      path: kind
+      value: Deployment
+    asserts:
+      - equal:
+          path: spec.template.metadata.annotations["checksum/credentials"]
+          value: 4a7b30942acd20b646228ac2775efdab90761871e054986f9b28279d3e03959d
+
+  - it: sends no credentials or account headers to a local backend
+    release:
+      namespace: tenant-foo
+    asserts:
+      - notMatchRegex:
+          path: data["config.yaml"]
+          pattern: "AccountID|ProjectID|basicauth|vmauth"
+        documentSelector:
+          path: kind
+          value: ConfigMap
+      - notExists:
+          path: spec.template.spec.containers[0].env
+        documentSelector:
+          path: kind
+          value: Deployment
+      - notExists:
+          path: spec.template.metadata.annotations["checksum/credentials"]
+        documentSelector:
+          path: kind
+          value: Deployment
+
+  - it: renders the collector in central mode with no local tracingStorages
+    release:
+      namespace: tenant-foo
+    set:
+      _namespace:
+        tracingCentral: true
+      tracingCollector:
+        enabled: true
+      tracingStorages: []
+    asserts:
+      - hasDocuments:
+          count: 3
+
   - it: honours the configured replica count
     set:
       tracingCollector:
@@ -288,11 +473,18 @@ tests:
           path: spec.template.spec.containers[0].securityContext.capabilities.drop
           content: ALL
 
+  # The image name is not asserted: a release build swaps the upstream
+  # collector for the first-party otelcol-tracing one and restamps the tag.
+  # What must hold is that the value goes through cozy-lib.image (the cluster
+  # images-registry lands in front of it) and stays digest-pinned.
   - it: pins the collector image through the cozy-lib.image helper
+    set:
+      _cluster:
+        images-registry: mirror.example.com
     documentSelector:
       path: kind
       value: Deployment
     asserts:
       - matchRegex:
           path: spec.template.spec.containers[0].image
-          pattern: "opentelemetry-collector-contrib:.*@sha256:"
+          pattern: '^mirror\.example\.com/.+@sha256:[0-9a-f]{64}$'

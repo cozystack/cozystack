@@ -27,12 +27,13 @@ kubectl -n "$NAMESPACE" delete secret "${KAFKA_NAME}-backup-s3" --ignore-not-fou
 kubectl -n "$NAMESPACE" delete kafka.apps.cozystack.io "$KAFKA_RESTORE_NAME" --ignore-not-found
 kubectl -n "$NAMESPACE" delete kafka.apps.cozystack.io "$KAFKA_NAME" --ignore-not-found
 kubectl -n "$NAMESPACE" delete bucket.apps.cozystack.io "$BUCKET_NAME" --ignore-not-found
+kubectl -n "$NAMESPACE" delete pod -l cozystack.io/backup-demo=kafka --grace-period=1 --ignore-not-found
 rm -f "$SCRIPT_DIR/.bucket-info.env" "$SCRIPT_DIR/.source-dump.txt" "$SCRIPT_DIR/.backup-name.env"
 kubectl delete backupclass.backups.cozystack.io "$BACKUPCLASS_NAME" --ignore-not-found
 kubectl delete job.strategy.backups.cozystack.io "$STRATEGY_NAME" --ignore-not-found
 
 # `kubectl delete` returns as soon as deletionTimestamp is set, while the
-# HelmRelease uninstall behind each Kafka app (two StatefulSets, ZooKeeper and
+# HelmRelease uninstall behind each Kafka app (its broker and controller pods and
 # their PVCs) is still draining. Returning here lets the next suite start into a
 # namespace whose predecessor is still uninstalling - the neighbouring
 # chainsaw/kafka Test's PVC-reclaim step contends with exactly that. Wait for

@@ -35,6 +35,14 @@ type BackupJobReconciler struct {
 	Scheme            *runtime.Scheme
 	Recorder          record.EventRecorder
 	CredentialsConfig BackupCredentialsConfig
+	// APIReader is the manager's uncached reader, through which Reconcile
+	// re-reads the BackupJob before dispatching to a driver. Wired in
+	// SetupWithManager.
+	APIReader client.Reader
+
+	// newS3ObjectLister overrides the S3 client used to measure artifact
+	// sizes; nil means a real minio client. Set by unit tests.
+	newS3ObjectLister func(conn s3Connection) (s3ObjectLister, error)
 }
 
 func (r *BackupJobReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -62,6 +70,24 @@ func (r *BackupJobReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		return ctrl.Result{}, nil
 	}
 
+	// The cache can trail this reconciler's own writes. A pass that stamps
+	// StartedAt and then fails the job has already requeued it through the
+	// first write, so the next pass can start before the informer has seen
+	// Failed, retry the step that failed, and create a driver object for a
+	// job that is over and that nothing will track. Re-read the job past the
+	// cache; the check above only spares finished jobs the extra request.
+	if err := r.apiReader().Get(ctx, req.NamespacedName, j); err != nil {
+		if apierrors.IsNotFound(err) {
+			return ctrl.Result{}, nil
+		}
+		logger.Error(err, "failed to re-read BackupJob")
+		return ctrl.Result{}, err
+	}
+	if j.Status.Phase == backupsv1alpha1.BackupJobPhaseSucceeded || j.Status.Phase == backupsv1alpha1.BackupJobPhaseFailed {
+		logger.V(1).Info("BackupJob terminal on the apiserver ahead of the cache, skipping", "phase", j.Status.Phase)
+		return ctrl.Result{}, nil
+	}
+
 	// Normalize ApplicationRef (default apiGroup if not specified)
 	normalizedAppRef := NormalizeApplicationRef(j.Spec.ApplicationRef)
 
@@ -79,7 +105,7 @@ func (r *BackupJobReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		// so the tenant sees the misbinding instead of an infinite
 		// requeue loop with no status signal.
 		if errors.Is(err, ErrNoMatchingStrategy) {
-			return r.markBackupJobFailed(ctx, j, fmt.Sprintf("BackupClass %q does not bind a strategy for Kind %q; see docs/operations/backup-classes.md", j.Spec.BackupClassName, normalizedAppRef.Kind))
+			return r.markBackupJobFailed(ctx, j, fmt.Sprintf("BackupClass %q does not bind a strategy for Kind %q; see https://cozystack.io/docs/v1/operations/services/backup-classes/", j.Spec.BackupClassName, normalizedAppRef.Kind))
 		}
 		// BackupClass not found yet is transient on a fresh install:
 		// during the bootstrap window the cozy-default BackupClass is
@@ -130,6 +156,23 @@ func (r *BackupJobReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		return r.markBackupJobFailed(ctx, j, fmt.Sprintf("strategy Kind %q is not supported by this controller (supported: %s)", strategyRef.Kind, strings.Join(supportedBackupStrategyKinds(), ", ")))
 	}
 
+	// Hold a run that has not started while a restore writes into its
+	// application. Only before StartedAt: every driver stamps it on its
+	// first pass, and a run already moving data is not interrupted here.
+	if j.Status.StartedAt == nil {
+		restore, err := activeRestoreTargeting(ctx, r.Client, j.Namespace, normalizedAppRef)
+		if err != nil {
+			logger.Error(err, "failed to check for a restore in progress")
+			return ctrl.Result{}, err
+		}
+		if restore != "" {
+			return r.holdForRestore(ctx, j, restore)
+		}
+		if err := r.releaseRestoreHold(ctx, j); err != nil {
+			return ctrl.Result{}, err
+		}
+	}
+
 	// Now project the platform-managed S3 credentials into the tenant
 	// namespace so default Strategy CRs can reference a deterministic
 	// Secret name. The projection is idempotent and silently skipped on
@@ -171,6 +214,8 @@ func (r *BackupJobReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		return r.reconcileRedis(ctx, j, resolved)
 	case strategyv1alpha1.KafkaStrategyKind:
 		return r.reconcileKafka(ctx, j, resolved)
+	case strategyv1alpha1.KubernetesStrategyKind:
+		return r.reconcileKubernetes(ctx, j, resolved)
 	default:
 		logger.V(1).Info("BackupJob resolved StrategyRef.Kind not supported, skipping",
 			"backupjob", j.Name,
@@ -197,6 +242,7 @@ func supportedBackupStrategyKinds() []string {
 		strategyv1alpha1.RabbitmqStrategyKind,
 		strategyv1alpha1.RedisStrategyKind,
 		strategyv1alpha1.KafkaStrategyKind,
+		strategyv1alpha1.KubernetesStrategyKind,
 	}
 }
 
@@ -213,6 +259,7 @@ func (r *BackupJobReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		return err
 	}
 
+	r.APIReader = mgr.GetAPIReader()
 	cfg := mgr.GetConfig()
 	var err error
 	if r.Interface, err = dynamic.NewForConfig(cfg); err != nil {
@@ -230,6 +277,16 @@ func (r *BackupJobReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Complete(r)
 }
 
+// apiReader returns the uncached reader. Reconcilers built by hand in unit
+// tests have none and fall back to their fake Client, which has no cache to
+// bypass.
+func (r *BackupJobReconciler) apiReader() client.Reader {
+	if r.APIReader != nil {
+		return r.APIReader
+	}
+	return r.Client
+}
+
 // handleProjectionError classifies a credentials-projection error as
 // transient (requeue) or terminal (mark Failed). Transient errors record
 // a Ready=False condition without setting Phase=Failed so the BackupJob
@@ -240,7 +297,7 @@ func (r *BackupJobReconciler) handleProjectionError(ctx context.Context, j *back
 	// Tenant-side projection failures must be visible in the same
 	// Prometheus counter as system-side failures so the
 	// "rate(failures_total) > 0 or absent_over_time(successes_total[10m])"
-	// alert in docs/operations/backup-classes.md catches them. The system
+	// alert in https://cozystack.io/docs/v1/operations/services/backup-classes/ catches them. The system
 	// projector reports against system namespaces (cozy-velero etc.);
 	// here we attribute against the BackupJob's tenant namespace.
 	credentialsProjectionFailures.WithLabelValues(j.Namespace, classifyReason(err)).Inc()
@@ -261,14 +318,6 @@ func (r *BackupJobReconciler) handleProjectionError(ctx context.Context, j *back
 }
 
 // markBackupJobFailed records a terminal Failed phase on the BackupJob.
-//
-// Coupling note: a failure that fires before reconcileCNPG's StartedAt block
-// has set backupJob.Status.StartedAt leaves StartedAt nil. The CNPG path's
-// cnpgDefaultBackupDeadline check only fires once StartedAt is set, so an
-// early-failure retry that reaches the StartedAt block restarts the deadline
-// budget from the retry's StartedAt - intentional, since retries are
-// user-driven and a fresh budget is what users expect after correcting the
-// cause of the previous failure.
 func (r *BackupJobReconciler) markBackupJobFailed(ctx context.Context, backupJob *backupsv1alpha1.BackupJob, message string) (ctrl.Result, error) {
 	logger := getLogger(ctx)
 	now := metav1.Now()

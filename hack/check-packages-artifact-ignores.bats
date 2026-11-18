@@ -12,6 +12,8 @@
 #
 # Requires: make. flux is optional and only used to re-check the defaults.
 
+load test_helper
+
 REPO_ROOT="$(cd "$(dirname "${BATS_TEST_FILENAME:-$0}")/.." && pwd)"
 INSTALLER_MAKEFILE="$REPO_ROOT/packages/core/installer/Makefile"
 

@@ -61,7 +61,8 @@ jobs:
   # base-repo PR file list — NOT from the presence/absence of an artifact the
   # fork's own build controls. Fail-closed if the fork build failed or the
   # pr-patch artifact is missing; green-and-stop only for a PR whose file list is
-  # entirely under docs/ (verified against the base-repo API).
+  # entirely under docs/ or the CI-only tools cmd/backport-batch/ and
+  # cmd/api-gate/ (verified against the base-repo API).
   resolve:
     name: Resolve fork PR
     # Only fork PRs: head_repository differs from the base repository. Same-repo
@@ -266,15 +267,21 @@ jobs:
               await decide('failure', 'PR file list hit the 3000-file API cap — cannot verify docs-only');
               return;
             }
+            // Paths with nothing to build and nothing for e2e to install: docs,
+            // and the CI-only Go tools no image builds. pull-requests.yaml's
+            // plan job answers the same question with the same prefixes, and
+            // hack/gate-concurrency-contract.bats holds the two lists equal.
+            //
             // A rename reports the NEW path in `filename` and the old one in
             // `previous_filename`. Checking only `filename` would read a
             // packages/… -> docs/… rename as docs-only, when it in fact removes
-            // a code path. BOTH sides must be under docs/ to count as docs-only.
-            const isDocs = p => typeof p === 'string' && p.startsWith('docs/');
-            const hasNonDocs = files.some(f =>
-              !isDocs(f.filename) || (f.previous_filename && !isDocs(f.previous_filename)));
-            if (!hasNonDocs) {
-              await decide('success', 'docs-only PR (verified via PR file list) — e2e not required');
+            // a code path. BOTH sides must be under these prefixes to count.
+            const noRuntimePrefixes = ['docs/', 'cmd/backport-batch/', 'cmd/api-gate/'];
+            const isNoRuntime = p => typeof p === 'string' && noRuntimePrefixes.some(x => p.startsWith(x));
+            const hasRuntime = files.some(f =>
+              !isNoRuntime(f.filename) || (f.previous_filename && !isNoRuntime(f.previous_filename)));
+            if (!hasRuntime) {
+              await decide('success', 'docs or CI-only tools (verified via PR file list) — e2e not required');
               return;
             }
 
@@ -349,22 +356,13 @@ jobs:
     outputs:
       packages_digest: ${{ steps.push.outputs.packages_digest }}
     steps:
-      - name: Set up toolchain (skopeo, flux)
-        env:
-          # Pin the flux CLI instead of install.sh's rolling latest. This is the
-          # one privileged job that runs a remote installer as root right before
-          # the OCIR token is loaded, so it pins where the rest of CI does not;
-          # keep it in step with the flux distro cozystack ships
-          # (packages/system/fluxcd, 2.8.x).
-          FLUX_VERSION: "2.8.6"
+      - name: Set up flux
+        uses: fluxcd/flux2/action@04acaec6161ac4fb1a82ffafa88901c03271d34f # v2.8.6
+        with:
+          version: "2.8.6"
+      - name: Set up toolchain (skopeo)
         run: |
           command -v skopeo >/dev/null || { sudo apt-get update -qq && sudo apt-get install -y -qq skopeo; }
-          if ! command -v flux >/dev/null; then
-            s="$(mktemp)"
-            curl -fsSL https://fluxcd.io/install.sh -o "$s"
-            sudo env "FLUX_VERSION=$FLUX_VERSION" bash "$s"
-            rm -f "$s"
-          fi
       # The base repo's own merge ref — safe to fetch, not fork-controlled code
       # execution. pr.patch is applied as DATA below; nothing from the tree runs.
       - name: Checkout PR merge ref
@@ -373,6 +371,11 @@ jobs:
           ref: refs/pull/${{ needs.resolve.outputs.pr_number }}/merge
           fetch-depth: 0
           persist-credentials: false
+          # checkout v4.4.0 and later refuse a fork's code under workflow_run
+          # without this opt-in. The boundary is the one the header describes:
+          # no fork-authored script runs in `publish`, and `e2e` holds no push
+          # token.
+          allow-unsafe-pr-checkout: true
       # Guard against a TOCTOU race: the status is stamped on the SHA `resolve`
       # saw, but refs/pull/N/merge tracks the live PR head. If the fork pushed
       # again between resolve and here, HEAD^2 (the merge ref's PR-head parent)
@@ -544,9 +547,10 @@ jobs:
     # per-node 8 CPU / 24 GiB in hack/e2e-compose.yaml is why the class is this
     # one. See the `e2e` job there for the full sizing note.
     runs-on: oracle-vm-32cpu-128gb-x86-64
-    # Sized above what the tenant-Kubernetes pair can spend on a failing run, and
-    # held to one figure across every lane that runs the suite.
-    timeout-minutes: 215
+    # Covers a green full suite. It does not cover a tenant-Kubernetes suite
+    # running into its node-join deadline, so a red there can end as a
+    # cancelled job. Held to one figure across every lane that runs the suite.
+    timeout-minutes: 265
     permissions:
       contents: read
       packages: read
@@ -566,6 +570,7 @@ jobs:
           ref: refs/pull/${{ needs.resolve.outputs.pr_number }}/merge
           fetch-depth: 0
           persist-credentials: false
+          allow-unsafe-pr-checkout: true
       # Same TOCTOU guard as `publish`: refuse to test a merge ref that moved off
       # the SHA the status is stamped on (see the publish job for the rationale).
       - name: Assert checkout matches resolved head SHA
@@ -575,8 +580,18 @@ jobs:
           got="$(git rev-parse HEAD^2)"
           [ "$got" = "$EXPECTED_SHA" ] || { echo "::error::merge ref moved: HEAD^2=$got != resolved $EXPECTED_SHA"; exit 1; }
       - name: Set up toolchain (yq)
+        env:
+          YQ_VERSION: "4.53.3"
+          YQ_SHA256: "fa52a4e758c63d38299163fbdd1edfb4c4963247918bf9c1c5d31d84789eded4"
         run: |
-          command -v yq >/dev/null || { sudo curl -sSL -o /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64 && sudo chmod +x /usr/local/bin/yq; }
+          if ! yq --version 2>/dev/null | grep -q "mikefarah.* version v${YQ_VERSION}\$"; then
+            yq_bin="$(mktemp)"
+            curl -fsSL -o "$yq_bin" \
+              "https://github.com/mikefarah/yq/releases/download/v${YQ_VERSION}/yq_linux_amd64"
+            printf '%s  %s\n' "$YQ_SHA256" "$yq_bin" | sha256sum -c -
+            sudo install -m 0755 "$yq_bin" /usr/local/bin/yq
+            rm -f "$yq_bin"
+          fi
       - name: Download pr.patch
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
@@ -633,29 +648,6 @@ jobs:
             echo "Attempt $attempt failed, retrying..."
             make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME delete-cluster-container || true
           done
-      - name: Install Cozystack into sandbox
-        env:
-          COZY_APISERVER_ENDPOINT: https://192.168.123.11:6443
-          COZY_LINSTOR_DRBD_ENABLED: "false"
-          COZY_E2E_STORAGE_CLASS: local
-        run: |
-          if ! make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME install-cozystack; then
-            echo "❌ Install failed (no retry — diagnostics below)"
-            echo "::group::HelmRelease status"
-            docker exec "$SANDBOX_NAME" sh -c 'kubectl get hr -A -o wide 2>&1 | tail -100' || true
-            echo "::endgroup::"
-            echo "::group::not-Ready HelmReleases"
-            docker exec "$SANDBOX_NAME" sh -c 'kubectl get hr -A --no-headers 2>/dev/null | awk "\$4 != \"True\" {print \$1\" \"\$2}"' \
-              | while read -r ns name; do
-                  echo "--- $ns/$name ---"
-                  docker exec "$SANDBOX_NAME" sh -c "kubectl describe hr '$name' -n '$ns' 2>&1 | tail -50" || true
-                done
-            echo "::endgroup::"
-            exit 1
-          fi
-      - name: Run OpenAPI tests
-        run: |
-          make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME test-openapi
       # Test-Impact Analysis: select only the Chainsaw suites the PR diff
       # affects. The changed-file list is resolve's TRUSTED base-repo listFiles
       # (base64 through the job output), NOT a git diff on the fork-controlled
@@ -689,10 +681,43 @@ jobs:
           else
             echo "skip=false" >> "$GITHUB_OUTPUT"
           fi
-      # Single `chainsaw test` invocation, no per-app retry loop (e2e-testing.md
-      # §1) — Chainsaw polls each assertion to its own timeout. Full suite only
-      # when the full-e2e label skipped selection: if `select` ran and came back
-      # empty it set skip=true and this step never starts.
+          # The complement of what the selected suites need, for a reduced
+          # install. An empty selection installs everything as before.
+          disabled=""
+          if [ -n "${apps}" ]; then
+            disabled="$(./hack/select-install.sh --disabled "${apps}")"
+          fi
+          echo "Disabled packages: ${disabled:-<none>}"
+          echo "disabled=${disabled}" >> "$GITHUB_OUTPUT"
+      - name: Install Cozystack into sandbox
+        env:
+          COZY_APISERVER_ENDPOINT: https://192.168.123.11:6443
+          COZY_LINSTOR_DRBD_ENABLED: "false"
+          COZY_E2E_STORAGE_CLASS: local
+          COZY_DISABLED_PACKAGES: ${{ steps.select.outputs.disabled }}
+        run: |
+          if ! make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME install-cozystack; then
+            echo "❌ Install failed (no retry — diagnostics below)"
+            echo "::group::HelmRelease status"
+            docker exec "$SANDBOX_NAME" sh -c 'kubectl get hr -A -o wide 2>&1 | tail -100' || true
+            echo "::endgroup::"
+            echo "::group::not-Ready HelmReleases"
+            docker exec "$SANDBOX_NAME" sh -c 'kubectl get hr -A --no-headers 2>/dev/null | awk "\$4 != \"True\" {print \$1\" \"\$2}"' \
+              | while read -r ns name; do
+                  echo "--- $ns/$name ---"
+                  docker exec "$SANDBOX_NAME" sh -c "kubectl describe hr '$name' -n '$ns' 2>&1 | tail -50" || true
+                done
+            echo "::endgroup::"
+            exit 1
+          fi
+      - name: Run OpenAPI tests
+        run: |
+          make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME test-openapi
+      # Each suite runs once, one `chainsaw test` per suite directory, with no
+      # retry loop (e2e-testing.md §1) — Chainsaw polls each assertion to its own
+      # timeout. Full suite only when the full-e2e label skipped selection: if
+      # `select` ran and came back empty it set skip=true and this step never
+      # starts.
       - name: Run E2E tests
         id: e2e_tests
         if: ${{ steps.select.outputs.skip != 'true' }}
@@ -712,7 +737,7 @@ jobs:
             echo "Running selected chainsaw suites: $suites"
           fi
           if ! make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME test-chainsaw CHAINSAW_SUITES="$suites"; then
-            echo "❌ Chainsaw E2E failed (see the assertion diffs above and diagnostics below)"
+            echo "❌ Chainsaw E2E failed (see the assertion diffs or LEAKED-PODS lines above and diagnostics below)"
             echo "::group::Diagnostics: HelmRelease status"
             docker exec "$SANDBOX_NAME" sh -c 'kubectl get hr -A -o wide 2>&1 | tail -50' || true
             echo "::endgroup::"
@@ -753,21 +778,6 @@ jobs:
           name: cozyreport
           path: _out/cozyreport.tgz
           if-no-files-found: warn
-      # Both halves, and in this order: the compose project owns the nodes and
-      # the zpools outlive it.
-      - name: Tear down sandbox
-        if: always()
-        run: |
-          # Annotated, not fatal: same reasoning as the in-tree lane. The runner
-          # is discarded after the job, so a dirty host has no next tenant, and
-          # failing here would post the required "E2E Tests" status as a failure
-          # indistinguishable from a real one.
-          cleanup_rc=0
-          make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME delete-cluster-container || cleanup_rc=$?
-          make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME delete || true
-          if [ "$cleanup_rc" -ne 0 ]; then
-            echo "::error title=sandbox teardown::teardown exited $cleanup_rc; the host may hold a stale compose project or zpool"
-          fi
 
   # Flip the pending "E2E Tests" commit status posted by `resolve` to its
   # terminal state. Runs on failure too, so a failed publish or e2e turns the

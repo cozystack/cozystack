@@ -3,21 +3,27 @@ import { tenantDisplayName, useTenantContext } from "../lib/tenant-context.tsx"
 
 /**
  * Subtitle bar that sits under the header and surfaces the active tenant.
- * In cozyportal-ui this is where the account/project selectors live; for
- * Cozystack we only need the tenant picker.
  */
 export function Breadcrumb() {
   const { tenants, selectedTenant, selectTenant, isLoading } = useTenantContext()
 
   if (isLoading && !tenants.length) {
-    return <span className="text-slate-400">Loading tenants…</span>
+    return (
+      <span data-testid="tenant-picker" className="text-slate-400">
+        Loading tenants…
+      </span>
+    )
   }
   if (!tenants.length) {
-    return <span className="text-amber-600">No tenants found</span>
+    return (
+      <span data-testid="tenant-picker" className="text-amber-600">
+        No tenants found
+      </span>
+    )
   }
 
   return (
-    <span className="inline-flex items-center gap-1.5">
+    <span data-testid="tenant-picker" className="inline-flex items-center gap-1.5">
       <span className="text-slate-400">Tenant</span>
       <span className="text-slate-400">/</span>
       {tenants.length > 1 ? (

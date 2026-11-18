@@ -6,24 +6,6 @@ Expand the name of the chart.
 {{- end }}
 
 {{/*
-Create a default fully qualified app name.
-We truncate at 63 chars because some Kubernetes name fields are limited to this (by the DNS naming spec).
-If release name contains chart name it will be used as a full name.
-*/}}
-{{- define "kubernetes.fullname" -}}
-{{- if .Values.fullnameOverride }}
-{{- .Values.fullnameOverride | trunc 63 | trimSuffix "-" }}
-{{- else }}
-{{- $name := default .Chart.Name .Values.nameOverride }}
-{{- if contains $name .Release.Name }}
-{{- .Release.Name | trunc 63 | trimSuffix "-" }}
-{{- else }}
-{{- printf "%s-%s" .Release.Name $name | trunc 63 | trimSuffix "-" }}
-{{- end }}
-{{- end }}
-{{- end }}
-
-{{/*
 Create chart name and version as used by the chart label.
 */}}
 {{- define "kubernetes.chart" -}}
@@ -80,20 +62,17 @@ release.cozystack.io/helm-install-timeout annotation on the cozyrds
 entry) so the CrashLoopBackOff surfaces before flux remediation fires and uninstalls
 the Cluster CR.
 
-The default image lives in images/busybox.tag and points directly at
-docker.io by digest (not mirrored to ghcr.io like the other .tag files
-here): the payload is a one-shot sh loop and the digest pin makes the
-pull immutable. Operators in air-gapped or rate-limited environments
-can override it via .Values.images.waitForKubeconfig (any registry
-reference kubelet can pull). When the value is empty the chart falls
-back to the bundled digest pin, preserving the prior default.
+The image lives in images/busybox.tag and points directly at docker.io
+by digest (not mirrored to ghcr.io like the other .tag files here): the
+payload is a one-shot sh loop and the digest pin makes the pull
+immutable.
 
 Call site owns the surrounding volumes block; the kubeconfig volume
 must exist on the pod and mount at /etc/kubernetes/kubeconfig.
 */}}
 {{- define "kubernetes.waitForAdminKubeconfig" -}}
 - name: wait-for-kubeconfig
-  image: "{{ default (.Files.Get "images/busybox.tag" | trim) .Values.images.waitForKubeconfig }}"
+  image: {{ include "cozy-lib.image" (list (.Files.Get "images/busybox.tag" | trim) $) | quote }}
   command:
   - sh
   - -c
@@ -188,29 +167,6 @@ never boots.
 {{- printf "has(claims.groups) && dyn(claims.groups).exists(g, g in [\"%s-view\", \"%s-use\", \"%s-admin\", \"%s-super-admin\"])" $ns $ns $ns $ns -}}
 {{- end }}
 
-{{- /*
-Validates and returns a duration destined for a consumer that does not reject
-a bad value: the cluster-autoscaler parses its annotation with
-time.ParseDuration and silently falls back to its built-in default on a value
-it cannot parse, and the CAPI webhook does not validate unhealthyConditions
-timeouts at all, so a zero or negative one applies and remediates a Machine the
-moment its condition flips. The values schema types these fields as strings and
-stops there, which lets "30" and "-5m" reach the template. The accepted shape
-is narrower than Go's duration grammar on purpose, because that grammar also
-admits a value large enough to overflow the parser -- the silent fallback again
--- and a fraction small enough to round to zero. The first segment must be
-positive; later segments may be zero, so the canonical rendering of a duration
-("20m0s", "1h0m0s" -- what metav1.Duration serializes to) round-trips. Every
-string this admits parses to a positive duration.
-*/ -}}
-{{- define "kubernetes.positiveDuration" -}}
-{{- $value := toString .value -}}
-{{- if not (regexMatch "^[1-9][0-9]{0,4}[smh]([0-9]{1,5}[smh]){0,2}$" $value) -}}
-{{-   fail (printf "%s must be a whole number of s, m or h (e.g. 30m, 1h30m), got %q" .field $value) -}}
-{{- end -}}
-{{- $value -}}
-{{- end -}}
-
 {{/*
   The two kube-apiserver flags the tenant control plane owns that have a
   KamajiControlPlane field it renders them from, keyed to that field.
@@ -286,4 +242,24 @@ string this admits parses to a positive duration.
 {{- fail (printf "kubernetes: cluster %q already runs on %s and substrate is now %q, which renders a %s. Switching the substrate of a live cluster removes the cloud-controller-manager, the CSI controller and the in-tenant CSI HelmRelease, so Flux uninstalls the driver behind every existing PVC. Create a new cluster on the other substrate and migrate the workloads instead." .Release.Name $liveKind (.Values.substrate | default "kubevirt") $wantKind) -}}
 {{- end -}}
 {{- end -}}
+{{- end -}}
+
+{{- /*
+  A per-cluster owner id for the volumes this tenant's CSI controller creates.
+
+  The driver names every volume vm-<controllerVmID>-pvc-<uuid> and defaults that
+  id to 9999, so on shared storage all tenants' volumes carry one owner: an
+  operator looking at leftovers cannot tell whose they are, and a VM-level ACL
+  cannot separate them. Deriving it from the release name gives each tenant its
+  own, which is what makes both of those possible.
+
+  The range starts at 100000, above the ids Proxmox hands out to real guests in
+  practice and well above the driver's own minimum of 100, and is 800000 wide so
+  two tenants colliding takes a birthday collision rather than a near miss. It
+  is derived, not stored: the same release always produces the same id, and a
+  cluster that is deleted and recreated under the same name adopts its own old
+  volumes rather than orphaning them.
+*/ -}}
+{{- define "kubernetes.proxmoxControllerVmID" -}}
+{{- add 100000 (mod (atoi (adler32sum (printf "%s/%s" .Release.Namespace .Release.Name))) 800000) -}}
 {{- end -}}

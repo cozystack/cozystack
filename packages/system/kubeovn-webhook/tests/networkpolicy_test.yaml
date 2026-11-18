@@ -84,7 +84,7 @@ tests:
   # would deny the API server on a fail-closed webhook -- and both still render
   # as a plausible-looking ingressDeny. A CRD-sourced fromEndpoints cannot do
   # that: Cilium rewrites it to also require the pod-namespace label to exist
-  # (pkg/k8s/apis/cilium.io/utils/utils.go:120-154, v1.19.5), which no reserved
+  # (pkg/k8s/apis/cilium.io/utils/utils.go:120-157, v1.20.2), which no reserved
   # identity carries. Both substitutions are asserted against here, and both
   # were made and watched go red.
   - it: keeps a target-side pod deny whose peer cannot reach reserved identities

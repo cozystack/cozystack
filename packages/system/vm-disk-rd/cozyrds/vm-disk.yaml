@@ -17,6 +17,11 @@ spec:
       kind: ExternalArtifact
       name: cozystack-vm-disk-application-kubevirt-vm-disk
       namespace: cozy-system
+    # kstatus would otherwise wait on the DataVolume's Ready (checkReadyCondition); the WorkloadMonitor reports whether CDI populated it.
+    healthCheckExprs:
+      - apiVersion: cdi.kubevirt.io/v1beta1
+        kind: DataVolume
+        current: "true"
   dashboard:
     category: IaaS
     singular: VM Disk

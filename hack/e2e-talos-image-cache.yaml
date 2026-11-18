@@ -14,7 +14,7 @@
 # This Deployment fetches the image ONCE at e2e-install time with an aggressive
 # curl retry loop (decoupling the one flaky external fetch from the many
 # per-worker imports), then serves it locally over plain HTTP with range support.
-# Tenant `Kubernetes` CRs point `spec.talos.imageFactoryURL` at this Service
+# Tenant `KubernetesNodes` CRs point `spec.talos.imageFactoryURL` at this Service
 # (see hack/e2e-chainsaw/_lib/run-kubernetes.sh) so every worker imports from the
 # warm local copy instead of the public internet. Tenant namespaces run under a
 # default-deny Cilium egress installed by the tenant chart, whose allow rules cover
@@ -28,7 +28,7 @@
 # mirror can only help, never make CI worse.
 #
 # The __SCHEMATIC_ID__ / __TALOS_VERSION__ placeholders are substituted at apply
-# time by hack/e2e-install-cozystack.bats from packages/apps/kubernetes/values.yaml.
+# time by hack/e2e-install-cozystack.bats from packages/apps/kubernetes-nodes/values.yaml.
 #
 # CI band-aid, not a product artifact. The durable fix is the overridable
 # `talos.imageFactoryURL` chart value this manifest exercises; a self-hosted
@@ -286,8 +286,9 @@ spec:
   # No toPorts: the allow is already scoped to a single kube-system pod identity
   # (CI-only, torn down with the sandbox), so an L4 port restriction adds no
   # meaningful blast-radius reduction — only risk. With kube-proxy-less Cilium the
-  # importer's connect to the Service ClusterIP is socket-LB translated to the
-  # backend pod port BEFORE egress policy is evaluated, so a port literal here
+  # importer's connection to the Service ClusterIP is translated to the backend
+  # pod port per packet in bpf_lxc.c (the chart forces bpf-lb-sock-hostns-only
+  # while Gateway API is on) BEFORE egress policy is evaluated, so a port literal here
   # would have to track the container port (8080), not the Service port (80); a
   # wrong guess silently drops the traffic and reintroduces the exact public-factory
   # fallback this policy exists to prevent.

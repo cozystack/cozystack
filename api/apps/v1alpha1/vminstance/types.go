@@ -65,12 +65,18 @@ type ConfigSpec struct {
 	// Cloud-init user data.
 	// +kubebuilder:default:=""
 	CloudInit string `json:"cloudInit"`
+	// Supply cloud-init network-data that requests DHCP on every `en*` and `eth*` interface and keeps the DNS search domains DHCP offers. Needed for a netplan guest (Ubuntu, Debian) to address a secondary network such as a VPC subnet. Leave it off for a guest rendered by anything other than netplan, which would lose DHCP on every interface, and for a guest that configures an interface statically through netplan, which this configuration would shadow. Turning it on for a VM that has neither `cloudInit` nor `sshKeys` adds a cloud-init disk, and the guest's next boot is then treated as a first boot.
+	// +kubebuilder:default:=false
+	NetplanDhcp bool `json:"netplanDhcp"`
 	// Seed string to generate SMBIOS UUID for the VM.
 	// +kubebuilder:default:=""
 	CloudInitSeed string `json:"cloudInitSeed"`
 }
 
 type Disk struct {
+	// Boot priority of the disk, 1 being tried first. Unset falls back to the disk's position in `disks` (the first disk gets 1), so set it to boot from a disk other than the first, such as an attached installer or rescue ISO, without reordering the list. Effective boot orders must be unique across disks: when one disk is given a value that another takes from its position, set both.
+	// +kubebuilder:validation:Minimum=1
+	BootOrder *int `json:"bootOrder,omitempty"`
 	// Disk bus type (e.g. "sata").
 	Bus string `json:"bus,omitempty"`
 	// Disk name.
@@ -80,7 +86,7 @@ type Disk struct {
 type Firmware struct {
 	// Bootloader to boot the VM with: "uefi" (OVMF) or "bios" (SeaBIOS). Empty inherits the instanceProfile default.
 	Bootloader string `json:"bootloader,omitempty"`
-	// Persist EFI NVRAM (e.g. enrolled Secure Boot keys, such as an updated Microsoft UEFI CA) across reboots. Only applies when bootloader is "uefi". On default RWO storage the VM is node-pinned (no live-migration).
+	// Persist EFI NVRAM (e.g. enrolled Secure Boot keys, such as an updated Microsoft UEFI CA) across reboots. Only applies when bootloader is "uefi".
 	EfiPersistent bool `json:"efiPersistent,omitempty"`
 	// Enable UEFI Secure Boot. Only applies when bootloader is "uefi".
 	SecureBoot bool `json:"secureBoot,omitempty"`
@@ -97,11 +103,11 @@ type Network struct {
 }
 
 type Resources struct {
-	// Number of CPU cores allocated, as a positive whole number such as `2`. Millicore and fractional quantities are rejected at render time, because the value becomes the VM's integer `domain.cpu.cores`.
+	// Number of CPU cores allocated, as a positive whole number such as `2`. Millicore or other unit-suffixed, fractional, zero, negative, above 4294967295 and quoted leading-zero values are rejected at render time, because the value becomes the VM's unsigned integer `domain.cpu.cores`.
 	Cpu resource.Quantity `json:"cpu,omitempty"`
-	// Amount of memory allocated, as a positive quantity such as `8Gi`.
+	// Amount of memory allocated, as a quantity of at least `1M` such as `8Gi`. Less than 1M is rejected at render time, because KubeVirt refuses a non-zero amount below 1M and a zero or negative amount sizes nothing.
 	Memory resource.Quantity `json:"memory,omitempty"`
-	// Number of CPU sockets (vCPU topology), as a positive whole number such as `1`. Millicore and fractional quantities are rejected at render time, because the value becomes the VM's integer `domain.cpu.sockets`.
+	// Number of CPU sockets (vCPU topology), as a positive whole number such as `1`. Millicore or other unit-suffixed, fractional, zero, negative, above 4294967295 and quoted leading-zero values are rejected at render time, because the value becomes the VM's unsigned integer `domain.cpu.sockets`.
 	Sockets resource.Quantity `json:"sockets,omitempty"`
 }
 

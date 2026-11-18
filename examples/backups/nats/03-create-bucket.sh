@@ -1,7 +1,7 @@
 #!/bin/bash
 # Step 03: Provision an in-cluster Bucket and cache its S3 coordinates. Unlike
 # the ClickHouse demo - where the chart emits the backup Secret from
-# spec.backup.* - the generic Job strategy has no chart support, so the tenant
+# spec.backup.* - the generic Job strategy has no chart support, so the demo
 # materialises the "<app>-backup-s3" Secret itself. This step only caches the
 # coordinates; create_s3_secret (00-helpers.sh) turns them into per-app Secrets
 # in steps 04 and 07.

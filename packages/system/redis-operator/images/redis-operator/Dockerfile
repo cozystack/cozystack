@@ -1,4 +1,5 @@
-FROM golang:1.27@sha256:3680233e3204827fbdc66088528ae6d4b3d034f51d03a99d454f6de034888244 AS builder
+FROM --platform=$BUILDPLATFORM golang:1.27@sha256:3680233e3204827fbdc66088528ae6d4b3d034f51d03a99d454f6de034888244 AS builder
+ARG GOPROXY
 
 ARG VERSION=v3.3.5
 
@@ -16,6 +17,20 @@ RUN rm -rf manifests charts example .github
 
 COPY patches /patches
 RUN git apply /patches/*.diff
+
+# go build never compiles a _test.go, so nothing else runs the tests of the
+# packages the patches touch. Each package is tested from its own directory:
+# that finds the module it belongs to, and an empty list runs nothing.
+# The list is read into a variable first: a for loop drops the exit status
+# of a command substitution, so a patch git cannot read would leave the list
+# empty and the step green.
+# Upstream's integration tests sit behind the integration build tag and need a
+# cluster, so go test compiles none of them; go vet with the tag type-checks
+# them in whichever of these directories they live.
+RUN files=$(git apply --numstat /patches/*.diff) || exit 1; \
+    for dir in $(printf '%s\n' "$files" | cut -f3 | grep '\.go$' | xargs -r -n1 dirname | sort -u); do \
+      (cd "$dir" && go test . && go vet -tags integration .) || exit 1; \
+    done
 
 RUN GOOS=$TARGETOS GOARCH=$TARGETARCH VERSION=$VERSION ./scripts/build.sh
 

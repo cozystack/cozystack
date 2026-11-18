@@ -115,22 +115,20 @@ jobs:
       # this morning. The version tracks
       # packages/core/testing/images/e2e-sandbox/Dockerfile. yq is additionally
       # pinned by content — it stamps the chart's platformVersion, and this step
-      # is the last one before write-once names exist. The Flux installer is not,
-      # because it checksums the binary it fetches and the mutable part is its
-      # own bootstrap script. promote-rc.yaml's copy carries the full reasoning.
-      - name: Set up promotion toolchain (flux, skopeo, yq, helm)
+      # is the last one before write-once names exist. flux comes from the
+      # commit-pinned upstream setup action, which checksums the release
+      # tarball. promote-rc.yaml's copy carries the full reasoning.
+      - name: Set up flux
+        if: ${{ !contains(steps.get_tag.outputs.tag, '-') }}
+        uses: fluxcd/flux2/action@04acaec6161ac4fb1a82ffafa88901c03271d34f # v2.8.6
+        with:
+          version: "2.8.6"
+      - name: Set up promotion toolchain (skopeo, yq, helm)
         if: ${{ !contains(steps.get_tag.outputs.tag, '-') }}
         env:
-          FLUX_VERSION: "2.8.6"
           YQ_VERSION: "4.53.3"
           YQ_SHA256: "fa52a4e758c63d38299163fbdd1edfb4c4963247918bf9c1c5d31d84789eded4"
         run: |
-          if ! flux version --client 2>/dev/null | grep -qx "flux: v${FLUX_VERSION}"; then
-            install_script="$(mktemp)"
-            curl -fsSL https://fluxcd.io/install.sh -o "$install_script"
-            sudo env "FLUX_VERSION=$FLUX_VERSION" bash "$install_script"
-            rm -f "$install_script"
-          fi
           if ! yq --version 2>/dev/null | grep -q "mikefarah.* version v${YQ_VERSION}\$"; then
             yq_bin="$(mktemp)"
             curl -fsSL -o "$yq_bin" \
@@ -421,24 +419,51 @@ jobs:
             // Reading the file here is both race-free and branch-agnostic;
             // update-releasenotes.yaml remains for later maintainer edits and
             // manual re-syncs.
+            //
+            // docs/releasenotes/${tag}.md, a short hand-written summary for a
+            // release whose changelog is too long to read on the release page,
+            // is the body when it has content; the changelog otherwise.
+            //
+            // The tags above already exist, so a body GitHub refuses would
+            // strand a half-promoted release. GitHub's web UI cut the
+            // v1.7.0-rc.2 changelog at about 125000 characters. MAX_BODY_BYTES
+            // counts bytes, which are never fewer than characters, and sits 25
+            // percent under that figure, so neither the difference nor an
+            // imprecise limit matters, and GitHub's answer to an oversized
+            // body is never relied on. update-releasenotes.yaml uses the same
+            // constant.
             const fs = require('fs');
+            const MAX_BODY_BYTES = 100000;
             const changelogPath = `docs/changelogs/${tag}.md`;
-            let body;
-            if (fs.existsSync(changelogPath)) {
-              const raw = fs.readFileSync(changelogPath, 'utf8');
+            let sourcePath;
+            let raw;
+            for (const candidate of [`docs/releasenotes/${tag}.md`, changelogPath]) {
+              if (!fs.existsSync(candidate)) continue;
+              raw = fs.readFileSync(candidate, 'utf8');
               // Last line of defence before the body becomes public and
               // immutable-by-convention. promote-rc.yaml validates the changelog
               // structurally, but it can also arrive by hand-commit, and an
               // empty or whitespace-only file here would blank the release notes
               // more thoroughly than publishing the draft's body would.
               if (raw.trim().length === 0) {
-                console.log(`::warning::${changelogPath} is empty or whitespace-only — refusing to use it as the release body for ${tag}. Publishing with the draft's existing body instead.`);
+                console.log(`::warning::${candidate} is empty or whitespace-only — not using it as the release body for ${tag}.`);
+                continue;
+              }
+              sourcePath = candidate;
+              break;
+            }
+            let body;
+            if (!sourcePath) {
+              console.log(`::warning::No usable docs/releasenotes/${tag}.md or ${changelogPath} in the merge commit — publishing ${tag} with the draft's existing body. Add the changelog and re-run 'Update Release Notes' to backfill it.`);
+            } else {
+              const bytes = Buffer.byteLength(raw, 'utf8');
+              if (bytes > MAX_BODY_BYTES) {
+                body = `The release notes for ${tag} are too long for a GitHub release description; the full changelog is [${changelogPath}](https://github.com/${context.repo.owner}/${context.repo.repo}/blob/${tag}/${changelogPath}).`;
+                console.log(`::warning::${sourcePath} is ${bytes} bytes, over MAX_BODY_BYTES (${MAX_BODY_BYTES}) — publishing ${tag} with a link to ${changelogPath} instead.`);
               } else {
                 body = raw;
-                console.log(`📝 Release body from ${changelogPath} (${body.length} bytes)`);
+                console.log(`📝 Release body from ${sourcePath} (${bytes} bytes)`);
               }
-            } else {
-              console.log(`::warning::${changelogPath} not found in the merge commit — publishing ${tag} with the draft's existing body. Add the changelog and re-run 'Update Release Notes' to backfill it.`);
             }
 
             // Publish the release

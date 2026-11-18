@@ -48,6 +48,217 @@ tests:
           path: spec.selector["app.kubernetes.io/name"]
           value: otel-traces
 
+  - it: renders a WorkloadMonitor for the collector in central mode (no local backend)
+    template: templates/workloadmonitors.yaml
+    release:
+      namespace: tenant-foo
+    set:
+      _namespace:
+        tracingCentral: true
+      tracingCollector:
+        enabled: true
+        replicas: 1
+        samplingPercentage: 10
+      tracingStorages: []
+    documentSelector:
+      path: metadata.name
+      value: otel-traces
+    asserts:
+      - equal:
+          path: spec.type
+          value: otel-collector
+
+  - it: accounts for no central collector in tenant-root, which never exports centrally
+    template: templates/workloadmonitors.yaml
+    release:
+      namespace: tenant-root
+    set:
+      _namespace:
+        tracingCentral: true
+      tracingCollector:
+        enabled: true
+        replicas: 1
+        samplingPercentage: 10
+      tracingStorages: []
+    documentSelector:
+      path: metadata.name
+      value: otel-traces
+      skipEmptyTemplates: true
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: treats a tracingCentral string other than true as off
+    template: templates/workloadmonitors.yaml
+    release:
+      namespace: tenant-foo
+    set:
+      _namespace:
+        tracingCentral: "false"
+      tracingCollector:
+        enabled: true
+        replicas: 1
+        samplingPercentage: 10
+      tracingStorages: []
+    documentSelector:
+      path: metadata.name
+      value: otel-traces
+      skipEmptyTemplates: true
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: whitelists the central collector's WorkloadMonitor with no local backend
+    template: templates/dashboard-resourcemap.yaml
+    release:
+      namespace: tenant-foo
+    set:
+      _namespace:
+        tracingCentral: true
+      tracingCollector:
+        enabled: true
+        replicas: 1
+        samplingPercentage: 10
+      tracingStorages: []
+    documentSelector:
+      path: kind
+      value: Role
+    asserts:
+      - contains:
+          path: rules[3].resourceNames
+          content: otel-traces
+
+  - it: accounts for the shared-store vmauth where tenant-root hosts it
+    template: templates/workloadmonitors.yaml
+    release:
+      namespace: tenant-root
+    set:
+      tracingCentralHost: true
+      tracingStorages:
+        - name: generic
+          mode: cluster
+          retentionPeriod: "14d"
+          storage: 10Gi
+          storageClassName: replicated
+    documentSelector:
+      path: metadata.name
+      value: vmauth-traces-central
+    asserts:
+      - equal:
+          path: spec
+          value:
+            replicas: 2
+            minReplicas: 1
+            kind: monitoring
+            type: vmauth
+            selector:
+              app.kubernetes.io/instance: traces-central
+              app.kubernetes.io/name: vmauth
+            version: 0.0.0
+
+  - it: accounts for no vmauth where tenant-root does not host
+    template: templates/workloadmonitors.yaml
+    release:
+      namespace: tenant-root
+    set:
+      tracingStorages:
+        - name: generic
+          mode: cluster
+          retentionPeriod: "14d"
+          storage: 10Gi
+          storageClassName: replicated
+    documentSelector:
+      path: metadata.name
+      value: vmauth-traces-central
+      skipEmptyTemplates: true
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: accounts for no vmauth outside tenant-root, the flag notwithstanding
+    template: templates/workloadmonitors.yaml
+    release:
+      namespace: tenant-foo
+    set:
+      tracingCentralHost: true
+      tracingStorages:
+        - name: generic
+          mode: cluster
+          retentionPeriod: "14d"
+          storage: 10Gi
+          storageClassName: replicated
+    documentSelector:
+      path: metadata.name
+      value: vmauth-traces-central
+      skipEmptyTemplates: true
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: accounts for no vmauth without a cluster-mode store named generic
+    template: templates/workloadmonitors.yaml
+    release:
+      namespace: tenant-root
+    set:
+      tracingCentralHost: true
+      tracingStorages:
+        - name: generic
+          mode: single
+          retentionPeriod: "14d"
+          storage: 10Gi
+          storageClassName: replicated
+        - name: other
+          mode: cluster
+          retentionPeriod: "14d"
+          storage: 10Gi
+          storageClassName: replicated
+    documentSelector:
+      path: metadata.name
+      value: vmauth-traces-central
+      skipEmptyTemplates: true
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: whitelists the shared-store vmauth WorkloadMonitor in the dashboard-resources Role
+    template: templates/dashboard-resourcemap.yaml
+    release:
+      namespace: tenant-root
+    set:
+      tracingCentralHost: true
+      tracingStorages:
+        - name: generic
+          mode: cluster
+          retentionPeriod: "14d"
+          storage: 10Gi
+          storageClassName: replicated
+    documentSelector:
+      path: kind
+      value: Role
+    asserts:
+      - contains:
+          path: rules[3].resourceNames
+          content: vmauth-traces-central
+
+  - it: whitelists no vmauth WorkloadMonitor where tenant-root does not host
+    template: templates/dashboard-resourcemap.yaml
+    release:
+      namespace: tenant-root
+    set:
+      tracingStorages:
+        - name: generic
+          mode: cluster
+          retentionPeriod: "14d"
+          storage: 10Gi
+          storageClassName: replicated
+    documentSelector:
+      path: kind
+      value: Role
+    asserts:
+      - notContains:
+          path: rules[3].resourceNames
+          content: vmauth-traces-central
+
   - it: whitelists the collector WorkloadMonitor in the dashboard-resources Role
     template: templates/dashboard-resourcemap.yaml
     set:

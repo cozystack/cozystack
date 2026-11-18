@@ -32,10 +32,13 @@ gpu-operator:
 # true this wrapper chart renders the ConfigMap into the release
 # namespace so the params actually land. The driver entrypoint reads
 # ${base}/nvidia.conf and appends each line to the nvidia modprobe
-# options. Used by tenant Kubernetes clusters to set
-# NVreg_NvLinkDisable=1 (see packages/apps/kubernetes gpu-operator
-# HelmRelease defaults); off by default for host-level passthrough/vgpu
-# variants where the in-host driver is disabled.
+# options, so it only does anything when driver.enabled is true.
+#
+# Tenant Kubernetes clusters run this chart with the driver container off
+# and take module parameters from the worker pool's kernelModules in the
+# KubernetesNodes app (packages/apps/kubernetes-nodes). An operator who
+# re-enables the driver container through valuesOverride also has to set
+# create: true here.
 kernelModuleConfig:
   create: false
   name: nvidia-kernel-module-params

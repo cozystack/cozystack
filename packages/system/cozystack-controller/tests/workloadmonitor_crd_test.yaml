@@ -1,0 +1,15 @@
+suite: WorkloadMonitor CRD
+templates:
+  - templates/crds/crds.yaml
+
+# An empty selector matches every object of each watched kind in the
+# namespace, DataVolumes included, so the API refuses one.
+tests:
+  - it: requires at least one selector label
+    documentSelector:
+      path: metadata.name
+      value: workloadmonitors.cozystack.io
+    asserts:
+      - equal:
+          path: spec.versions[0].schema.openAPIV3Schema.properties.spec.properties.selector.minProperties
+          value: 1

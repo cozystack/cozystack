@@ -5,8 +5,8 @@ ingress-nginx:
     image:
       registry: ghcr.io
       image: cozystack/ingress-nginx-with-protobuf-exporter/controller
-      tag: v1.11.5
-      digest: sha256:f51c7ee0968ad542d4b77854fc57f68e17b2f6e498bcd168cd5f42b409bf54e6
+      tag: v1.11.6
+      digest: sha256:a8ddcee59b63f6cbf93f4d3c9ffa1d1dda3c1d39497748d4484655356c68b3f6
     allowSnippetAnnotations: true
     replicaCount: 2
     admissionWebhooks:
@@ -16,7 +16,7 @@ ingress-nginx:
       enabled: true
     extraContainers:
     - name: protobuf-exporter
-      image: ghcr.io/cozystack/ingress-nginx-with-protobuf-exporter/protobuf-exporter:v1.11.5@sha256:0f981014415e00cfee3bf38f7ca084e6774150d6a57774e73da04acd8b346335
+      image: ghcr.io/cozystack/ingress-nginx-with-protobuf-exporter/protobuf-exporter:v1.11.6@sha256:9b4789965f0efa11eb6345745708480be47ce3a4c751223d07a9d5a19e91174f
       args:
       - --server.telemetry-address=0.0.0.0:9090
       - --server.exporter-address=0.0.0.0:9091
@@ -47,6 +47,13 @@ ingress-nginx:
       upstream-keepalive-timeout: "60"
       upstream-keepalive-connections: "320"
       ssl-session-tickets: "true"
+      # Client-side keepalive_time has no ConfigMap key, so nginx keeps its
+      # 1h default and sends GOAWAY to any HTTP/2 connection older than that.
+      # A long S3 operation (kopia maintenance behind Velero) multiplexes its
+      # requests over one connection, and the in-flight object listing fails
+      # instead of being retried. Idle connections still close after
+      # keep-alive (75s).
+      http-snippet: "keepalive_time 12h;"
     resources:
       limits:
         cpu: "1"
@@ -94,6 +101,13 @@ ingress-nginx:
 
   defaultBackend:
     enabled: true
+    # The chart default, defaultbackend-amd64, has no arm64 build. This image
+    # is the upstream multi-arch replacement: 404 on :8080, /healthz for probes.
+    image:
+      registry: registry.k8s.io
+      image: ingress-nginx/custom-error-pages
+      tag: v1.2.9
+      digest: sha256:203d3020005dbdd735c1ad51f238d8663b9851399b52cc0c9c9e3f7273b6b299
     resources:
       limits:
         cpu: 10m
@@ -116,22 +130,20 @@ ingress-nginx:
 #
 # The policy denies the webhook's backend port only, which covers a pod dialling
 # the Service ClusterIP because Cilium translates a service to its backends
-# before it enforces egress policy. That depends on Cilium owning service
-# load-balancing -- packages/system/cilium/values.yaml kubeProxyReplacement,
-# true there against an upstream default of "false". It is pinned by
-# packages/system/cilium/tests/kube_proxy_replacement_test.yaml, which carries
-# the argument; flip it and the ClusterIP path to this webhook reopens while the
-# backend deny keeps working. The target-side rule in the same policy does not
-# depend on that value at all -- it is evaluated on the webhook's own ingress
-# path, after whatever DNAT already happened -- so the two together degrade
-# rather than fail open.
+# before it enforces egress policy. Cozystack supports this only with
+# packages/system/cilium/values.yaml kubeProxyReplacement set to true and does
+# not provide a supported fallback service load balancer for false. Such an
+# override can break ClusterIP routing; it does not by itself make the webhook
+# reachable. If another unsupported change supplied a different translator, the
+# source-side rule would lose the pre-DNAT path but the target-side rule would
+# still deny pods after translation.
 #
 # Residual risk worth stating: no test in this repo can observe a live cluster's
 # Cilium values, so an operator setting kubeProxyReplacement: false in the field
 # is caught only by the status ConfigMap that
 # packages/system/cilium/templates/kube-proxy-replacement-beacon.yaml renders,
 # and inside a tenant Kubernetes cluster only by the equivalent beacon in
-# packages/apps/kubernetes. Whether that configuration is supported at all is a
-# platform question this chart does not answer.
+# packages/apps/kubernetes. Those beacons identify an unsupported networking
+# configuration; disabling this policy does not make it supported.
 admissionWebhookPolicy:
   enabled: true

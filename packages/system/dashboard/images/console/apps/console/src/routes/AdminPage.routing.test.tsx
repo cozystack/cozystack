@@ -8,7 +8,7 @@ import {
   type SelfSubjectAccessReview,
 } from "@cozystack/k8s-client"
 import { AdminPage } from "./AdminPage.tsx"
-import { TenantProvider } from "../lib/tenant-context.tsx"
+import { TenantProvider } from "../lib/tenant-provider.tsx"
 import { renderWithK8sProvider } from "../test-utils/render.tsx"
 
 // Minimal Info ApplicationDefinition so InfoRedirect can resolve the default

@@ -142,6 +142,10 @@ machine:
     - name: drbd
       parameters:
         - usermode_helper=disabled
+    # Talos v1.14 kernels have an empty modprobe path
+    # (siderolabs/pkgs#1565), so DRBD's request_module() for its transport
+    # on the first new-peer no longer loads anything.
+    - name: drbd_transport_tcp
     - name: zfs
     - name: spl
   registries:
@@ -149,27 +153,6 @@ machine:
       docker.io:
         endpoints:
         - https://mirror.gcr.io
-      #docker.io:
-      #  endpoints:
-      #  - https://dockerio.nexus.aenix.org
-      #cr.fluentbit.io:
-      #  endpoints:
-      #  - https://fluentbit.nexus.aenix.org
-      #docker-registry3.mariadb.com:
-      #  endpoints:
-      #  - https://mariadb.nexus.aenix.org
-      #gcr.io:
-      #  endpoints:
-      #  - https://gcr.nexus.aenix.org
-      #ghcr.io:
-      #  endpoints:
-      #  - https://ghcr.nexus.aenix.org
-      #quay.io:
-      #  endpoints:
-      #  - https://quay.nexus.aenix.org
-      #registry.k8s.io:
-      #  endpoints:
-      #  - https://k8s.nexus.aenix.org
   files:
   - content: |
       [plugins]

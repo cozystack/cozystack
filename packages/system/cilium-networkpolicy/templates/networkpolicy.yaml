@@ -11,6 +11,7 @@ spec:
     - ports:
       - port: "2379"  # etcd
       - port: "2380"  # etcd
+      - port: "2383"  # etcd HTTP endpoints, split off 2379 in Talos v1.14
       - port: "3367"  # linstor
       # metallb speaker memberlist gossip is bound on both TCP and UDP on
       # host-network. Cilium PortProtocol matches all transport protocols

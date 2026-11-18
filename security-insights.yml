@@ -1,0 +1,163 @@
+# OpenSSF Security Insights, schema: https://github.com/ossf/security-insights/blob/main/spec/schema.cue
+# Bump header.last-updated with every edit, and header.last-reviewed whenever the
+# facts below are re-checked, including a Security Champion rotation (SECURITY.md).
+header:
+  schema-version: 2.2.0
+  last-updated: '2026-10-11'
+  last-reviewed: '2026-10-11'
+  url: https://raw.githubusercontent.com/cozystack/cozystack/main/security-insights.yml
+
+project:
+  name: Cozystack
+  homepage: https://cozystack.io
+  roadmap: https://github.com/cozystack/cozystack/blob/main/ROADMAP.md
+  # Every person holding admin on this repository; the thelinuxfoundation service account is left out.
+  administrators:
+    - name: Andrei Kvapil
+      social: https://github.com/kvaps
+      affiliation: Ænix
+      primary: true
+    - name: Timofei Larkin
+      social: https://github.com/lllamnyp
+      affiliation: Ænix
+      primary: false
+    - name: Timur Tukaev
+      social: https://github.com/tym83
+      affiliation: Ænix
+      primary: false
+    - name: Aleksei Sviridkin
+      social: https://github.com/lexfrei
+      affiliation: Ænix
+      primary: false
+    - name: Daniil Miasnikov
+      social: https://github.com/myasnikovdaniil
+      affiliation: Ænix
+      primary: false
+    - name: Ivan Okhotnikov
+      social: https://github.com/IvanHunters
+      affiliation: Ænix
+      primary: false
+  repositories:
+    - name: cozystack
+      url: https://github.com/cozystack/cozystack
+      comment: The platform itself, its operator, packages, Talos image, and release automation.
+    - name: website
+      url: https://github.com/cozystack/website
+      comment: Source of the cozystack.io documentation site.
+  vulnerability-reporting:
+    reports-accepted: true
+    bug-bounty-available: false
+    policy: https://github.com/cozystack/cozystack/blob/main/SECURITY.md
+    comment: Report privately through GitHub Private Vulnerability Reporting at https://github.com/cozystack/cozystack/security/advisories/new. SECURITY.md lists the fallback channels, response targets and the 90-day disclosure window.
+  documentation:
+    detailed-guide: https://cozystack.io/docs/
+    quickstart-guide: https://cozystack.io/docs/v1.6/getting-started/
+    code-of-conduct: https://github.com/cozystack/cozystack/blob/main/CODE_OF_CONDUCT.md
+    release-process: https://github.com/cozystack/cozystack/blob/main/docs/release.md
+    support-policy: https://github.com/cozystack/cozystack/blob/main/SECURITY.md#supported-versions
+
+repository:
+  url: https://github.com/cozystack/cozystack
+  status: active
+  accepts-change-request: true
+  accepts-automated-change-request: true
+  core-team:
+    - name: Andrei Kvapil
+      social: https://github.com/kvaps
+      affiliation: Ænix
+      primary: true
+    - name: Kingdon Barrett
+      social: https://github.com/kingdonb
+      affiliation: Urmanac
+      primary: false
+    - name: Timofei Larkin
+      social: https://github.com/lllamnyp
+      affiliation: Ænix
+      primary: false
+    - name: Timur Tukaev
+      social: https://github.com/tym83
+      affiliation: Ænix
+      primary: false
+    - name: Matthieu Robin
+      social: https://github.com/matthieu-robin
+      affiliation: Hidora
+      primary: false
+    - name: Mattia Eleuteri
+      social: https://github.com/mattia-eleuteri
+      affiliation: Hidora
+      primary: false
+    - name: Aleksei Sviridkin
+      social: https://github.com/lexfrei
+      affiliation: Ænix
+      primary: false
+    - name: Daniil Miasnikov
+      social: https://github.com/myasnikovdaniil
+      affiliation: Ænix
+      primary: false
+    - name: Ivan Okhotnikov
+      social: https://github.com/IvanHunters
+      affiliation: Ænix
+      primary: false
+  license:
+    expression: Apache-2.0
+    url: https://github.com/cozystack/cozystack/blob/main/LICENSE
+  documentation:
+    contributing-guide: https://github.com/cozystack/cozystack/blob/main/CONTRIBUTING.md
+    dependency-management-policy: https://github.com/cozystack/cozystack/blob/main/GENERAL_TECHNICAL_REVIEW.md#dependencies
+    governance: https://github.com/cozystack/cozystack/blob/main/GOVERNANCE.md
+    security-policy: https://github.com/cozystack/cozystack/blob/main/SECURITY.md
+  release:
+    automated-pipeline: true
+    distribution-points:
+      - uri: https://github.com/cozystack/cozystack/releases
+        comment: Operator manifests, CRDs, cozypkg binaries and Talos images are attached to each release.
+      - uri: ghcr.io/cozystack/cozystack
+        comment: Container images and the packages OCI artifact.
+    changelog: https://github.com/cozystack/cozystack/blob/main/docs/changelogs/v{version}.md
+  security:
+    assessments:
+      self:
+        name: Cozystack Self-assessment
+        comment: Security self-assessment prepared by the maintainers for the CNCF Incubation application.
+        evidence: https://github.com/cozystack/cozystack/blob/main/docs/security/self-assessment.md
+    champions:
+      - name: Timur Tukaev
+        social: https://github.com/tym83
+        primary: true
+    tools:
+      - name: CodeQL
+        type: SAST
+        rulesets: [default]
+        integration:
+          adhoc: true
+          ci: true
+          release: false
+        results: {}
+        comment: Runs on every pull request to main, on push to main, and weekly.
+      - name: zizmor
+        type: SAST
+        rulesets: [default]
+        integration:
+          adhoc: true
+          ci: true
+          release: false
+        results: {}
+        comment: Audits the GitHub Actions workflows; part of the required pre-commit check, scoped by .github/zizmor.yml.
+      - name: OpenSSF Scorecard
+        type: other
+        rulesets: [default]
+        integration:
+          adhoc: true
+          ci: false
+          release: false
+        results: {}
+        comment: Runs weekly and publishes to https://scorecard.dev/viewer/?uri=github.com/cozystack/cozystack.
+      - name: Trivy
+        type: SCA
+        rulesets: [default]
+        integration:
+          adhoc: true
+          ci: false
+          release: false
+        results: {}
+        comment: Organization-wide scan of Go modules, base images and packaged container images; CRITICAL every 6 hours, the rest weekly. Aggregate reports are published under docs/security/reports/.

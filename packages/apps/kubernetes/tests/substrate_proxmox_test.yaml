@@ -14,6 +14,7 @@ release:
 set:
   _namespace:
     etcd: etcd-test
+    host: example.org
   _cluster:
     cluster-domain: cozy.local
   version: "v1.35"

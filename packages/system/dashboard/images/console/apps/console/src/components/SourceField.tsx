@@ -1,22 +1,16 @@
 import { useState } from "react"
 import type { FieldProps } from "@rjsf/utils"
 import { useK8sList } from "@cozystack/k8s-client"
+import { RJSF_ID_SEPARATOR } from "../lib/rjsf-ids.ts"
 import { APPS_GROUP, APPS_VERSION } from "@cozystack/types"
 import { useTenantContext } from "../lib/tenant-context.tsx"
-
-const IMAGE_PVC_PREFIX = "vm-default-images-"
+import type { OptionObject } from "./DynamicOptionsWidget.tsx"
 
 interface VMDisk {
   apiVersion: string
   kind: string
   metadata: { name: string; namespace: string }
   spec: { storage: string }
-}
-
-interface PVC {
-  apiVersion: string
-  kind: string
-  metadata: { name: string; namespace: string }
 }
 
 function useVMDiskOptions(tenantNamespace: string | null | undefined) {
@@ -29,26 +23,38 @@ function useVMDiskOptions(tenantNamespace: string | null | undefined) {
   return { disks: data?.items ?? [], isLoading }
 }
 
-function useImageOptions() {
-  const { data, isLoading } = useK8sList<PVC>({
-    apiGroup: "",
-    apiVersion: "v1",
-    plural: "persistentvolumeclaims",
-    namespace: "cozy-public",
-  })
-  const images = (data?.items ?? [])
-    .filter((pvc) => pvc.metadata.name.startsWith(IMAGE_PVC_PREFIX))
-    .map((pvc) => pvc.metadata.name.slice(IMAGE_PVC_PREFIX.length))
+// Not a raw PVC listing: a golden whose import failed still has its PVC.
+function useImageOptions(tenantNamespace: string | null | undefined) {
+  const { data, isLoading } = useK8sList<OptionObject>(
+    {
+      apiGroup: "core.cozystack.io",
+      apiVersion: "v1alpha1",
+      plural: "options",
+      namespace: tenantNamespace ?? undefined,
+    },
+    { enabled: !!tenantNamespace },
+  )
+  const images = (
+    data?.items?.find((o) => o.metadata.name === "image")?.spec?.items ?? []
+  ).map((it) => it.value)
   return { images, isLoading }
+}
+
+interface SourceOptionSchema {
+  type?: unknown
+  title?: string
+  description?: string
+  required?: string[]
+  properties?: Record<string, SourceOptionSchema>
 }
 
 export function SourceField(props: FieldProps) {
   const { schema, formData, onChange, name, required, idSchema } = props
-  const properties = (schema as any).properties || {}
+  const properties = (schema.properties || {}) as Record<string, SourceOptionSchema | undefined>
   const options = Object.keys(properties)
   const { tenantNamespace } = useTenantContext()
   const { disks, isLoading: disksLoading } = useVMDiskOptions(tenantNamespace)
-  const { images, isLoading: imagesLoading } = useImageOptions()
+  const { images, isLoading: imagesLoading } = useImageOptions(tenantNamespace)
 
   // Determine which option is currently selected
   const currentOption = formData
@@ -77,7 +83,7 @@ export function SourceField(props: FieldProps) {
   }
 
   const renderFieldInput = (option: string) => {
-    const prop = properties[option] as any
+    const prop = properties[option]
     if (!prop || typeof prop !== "object") return null
 
     // If it's an empty object marker (like upload: {}), show confirmation message
@@ -103,7 +109,7 @@ export function SourceField(props: FieldProps) {
     const subProps = prop.properties || {}
     return (
       <div className="ml-6 mt-2 space-y-2">
-        {Object.entries(subProps).map(([key, subProp]: [string, any]) => {
+        {Object.entries(subProps).map(([key, subProp]) => {
           const currentValue = (formData?.[option] as Record<string, string>)?.[key] || ""
           const handleChange = (val: string) => {
             onChange({
@@ -116,10 +122,14 @@ export function SourceField(props: FieldProps) {
 
           const isDiskName = option === "disk" && key === "name"
           const isImageName = option === "image" && key === "name"
+          // RJSF's id for this control. Its required sub-fields are what
+          // validation reports (source.http.url, not source), so the focus
+          // helper resolves the field by this id and finds nothing without it.
+          const fieldId = [idSchema.$id, option, key].join(RJSF_ID_SEPARATOR)
 
           return (
             <div key={key} className="flex flex-col gap-1">
-              <label className="text-sm font-medium text-slate-700">
+              <label htmlFor={fieldId} className="text-sm font-medium text-slate-700">
                 {subProp.title || key}
                 {prop.required?.includes(key) && <span className="text-red-500 ml-1">*</span>}
               </label>
@@ -128,6 +138,7 @@ export function SourceField(props: FieldProps) {
               )}
               {isDiskName ? (
                 <select
+                  id={fieldId}
                   value={currentValue}
                   onChange={(e) => handleChange(e.target.value)}
                   disabled={disksLoading}
@@ -148,6 +159,7 @@ export function SourceField(props: FieldProps) {
                 </select>
               ) : isImageName ? (
                 <select
+                  id={fieldId}
                   value={currentValue}
                   onChange={(e) => handleChange(e.target.value)}
                   disabled={imagesLoading}
@@ -166,6 +178,7 @@ export function SourceField(props: FieldProps) {
                 </select>
               ) : (
                 <input
+                  id={fieldId}
                   type="text"
                   value={currentValue}
                   onChange={(e) => handleChange(e.target.value)}
@@ -190,7 +203,7 @@ export function SourceField(props: FieldProps) {
 
       <div className="space-y-2">
         {options.map((option: string) => {
-          const prop = properties[option] as any
+          const prop = properties[option]
           const optionDescription =
             typeof prop === "object" && prop ? prop.description : undefined
           const isSelected = selected === option

@@ -10,6 +10,8 @@
 # The package path is relative because both runners invoke these from the
 # repository root, as the neighbouring render tests assume too.
 
+load test_helper
+
 @test "kamaji CRD templates render their schema" {
   rendered=$(helm template kamaji packages/system/kamaji --namespace cozy-kamaji)
 

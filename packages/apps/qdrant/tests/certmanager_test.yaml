@@ -532,7 +532,9 @@ tests:
       - notContains:
           path: spec.dnsNames
           content: test-qdrant.example.cozystack.io
-        documentIndex: 3
+        documentSelector:
+          path: metadata.name
+          value: test-qdrant-tls
 
   #######################################################
   # SAN — per-replica short-form hostnames (issue D)    #
@@ -641,7 +643,9 @@ tests:
       - notContains:
           path: spec.dnsNames
           content: "test-qdrant-1.test-qdrant-headless"
-        documentIndex: 3
+        documentSelector:
+          path: metadata.name
+          value: test-qdrant-tls
 
   #######################################################
   # ECDSA P-256 private keys (issue ECDSA)              #

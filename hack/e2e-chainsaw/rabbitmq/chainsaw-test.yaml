@@ -13,9 +13,17 @@ spec:
       apiVersion: rabbitmq.com/v1beta1
       kind: RabbitmqCluster
       name: rabbitmq-test
+  - describe:
+      apiVersion: rabbitmq.com/v1beta1
+      kind: User
+      name: rabbitmq-test-app
   - podLogs:
       selector: app.kubernetes.io/instance=rabbitmq-test
       tail: 50
+  - podLogs:
+      namespace: cozy-rabbitmq-operator
+      selector: app.kubernetes.io/name=messaging-topology-operator
+      tail: 100
   steps:
   - name: create-rabbitmq
     try:
@@ -23,8 +31,10 @@ spec:
         file: rabbitmq.yaml
   - name: wait-ready
     try:
+    # 11m: above the 600s install timeout cozystack-api gives this release;
+    # see "Sizing an HR-Ready budget" in docs/agents/e2e-testing.md.
     - assert:
-        timeout: 6m
+        timeout: 11m
         resource:
           apiVersion: helm.toolkit.fluxcd.io/v2
           kind: HelmRelease
@@ -70,6 +80,21 @@ spec:
           kind: Service
           metadata:
             name: rabbitmq-test
+  - name: verify-user
+    try:
+    # messaging-topology-operator >= 1.20 only sees credentials Secrets labelled
+    # rabbitmq.com/topology-operator=true: the User reaching Ready is what
+    # proves the chart's Secret passed the admission webhook and the cache.
+    - assert:
+        timeout: 3m
+        resource:
+          apiVersion: rabbitmq.com/v1beta1
+          kind: User
+          metadata:
+            name: rabbitmq-test-app
+          status:
+            (conditions[?type == 'Ready']):
+            - status: "True"
 ---
 apiVersion: chainsaw.kyverno.io/v1alpha1
 kind: Test
@@ -127,10 +152,10 @@ spec:
           ($error == null): true
     # Honest round-trip: seed a sentinel definition, back it up through
     # cozy-default, drop it, restore in place, then restore into a copy -
-    # asserting the sentinel survives object storage each time. 42m: sized
+    # asserting the sentinel survives object storage each time. 48m: sized
     # with the 660s HR waits in run-all.sh (convention 6: justified in-line).
     - script:
-        timeout: 42m
+        timeout: 48m
         content: |
           set -eu
           cd ../../..

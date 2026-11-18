@@ -1,4 +1,4 @@
-# Maps Kind=Redis to this demo's Redis strategy. BackupClass is cluster-scoped,
+# Maps Kind=Redis and Kind=Valkey to this demo's Redis strategy. BackupClass is cluster-scoped,
 # so a single instance covers every namespace. Named redis-default so it does
 # not collide with the platform cozy-default class, which routes Redis to the
 # shipped cozy-default-redis strategy.
@@ -12,6 +12,13 @@ spec:
     - application:
         apiGroup: apps.cozystack.io
         kind: Redis
+      strategyRef:
+        apiGroup: strategy.backups.cozystack.io
+        kind: Redis
+        name: redis-strategy-default
+    - application:
+        apiGroup: apps.cozystack.io
+        kind: Valkey
       strategyRef:
         apiGroup: strategy.backups.cozystack.io
         kind: Redis

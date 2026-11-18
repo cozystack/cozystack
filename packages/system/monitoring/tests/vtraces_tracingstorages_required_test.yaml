@@ -123,6 +123,70 @@ tests:
           path: spec.retentionMaxDiskSpaceUsageBytes
           value: "4GB"
 
+  # The design requires every traces backend to be disk-bounded, not only
+  # age-bounded, so a full PVC cannot block ingest. Without an explicit byte cap
+  # the store drops its oldest day once its filesystem is 80% full. The two
+  # flags are mutually exclusive: VictoriaTraces refuses to start with both.
+  - it: bounds a cluster-mode store at 80% of its filesystem without a byte cap
+    templates:
+      - templates/vtraces/vtraces.yaml
+    set:
+      tracingStorages:
+        - name: generic
+          mode: cluster
+          retentionPeriod: "14d"
+          storage: 10Gi
+    asserts:
+      - equal:
+          path: spec.storage.extraArgs["retention.maxDiskUsagePercent"]
+          value: "80"
+      - notExists:
+          path: spec.storage.retentionMaxDiskSpaceUsageBytes
+
+  - it: bounds a single-mode store at 80% of its filesystem without a byte cap
+    templates:
+      - templates/vtraces/vtraces.yaml
+    set:
+      tracingStorages:
+        - name: generic
+          mode: single
+          retentionPeriod: "14d"
+          storage: 10Gi
+    asserts:
+      - equal:
+          path: spec.extraArgs["retention.maxDiskUsagePercent"]
+          value: "80"
+      - notExists:
+          path: spec.retentionMaxDiskSpaceUsageBytes
+
+  - it: sets no percentage cap on a cluster-mode store that has a byte cap
+    templates:
+      - templates/vtraces/vtraces.yaml
+    set:
+      tracingStorages:
+        - name: generic
+          mode: cluster
+          retentionPeriod: "14d"
+          storage: 10Gi
+          retentionDiskUsageBytes: "8GB"
+    asserts:
+      - notExists:
+          path: spec.storage.extraArgs
+
+  - it: sets no percentage cap on a single-mode store that has a byte cap
+    templates:
+      - templates/vtraces/vtraces.yaml
+    set:
+      tracingStorages:
+        - name: generic
+          mode: single
+          retentionPeriod: "14d"
+          storage: 10Gi
+          retentionDiskUsageBytes: "4GB"
+    asserts:
+      - notExists:
+          path: spec.extraArgs
+
   - it: renders a Jaeger-typed Grafana datasource at vtselect:10471 for cluster mode
     templates:
       - templates/vtraces/grafana-datasource.yaml
@@ -157,6 +221,96 @@ tests:
       - equal:
           path: spec.datasource.url
           value: http://vtsingle-generic.tenant-root.svc:10428/select/jaeger
+
+  # tracingCentral is set by the parent tenant's admin, the stores by this
+  # tenant: switching must not delete them, and a single-mode store's PVC goes
+  # with its VTSingle. They stay until this tenant removes the entries.
+  - it: keeps the tenant's local stores in central mode
+    templates:
+      - templates/vtraces/vtraces.yaml
+    release:
+      namespace: tenant-foo
+    set:
+      _namespace:
+        tracingCentral: true
+      tracingStorages:
+        - name: generic
+          mode: cluster
+          retentionPeriod: "14d"
+          storage: 10Gi
+        - name: edge
+          mode: single
+          retentionPeriod: "7d"
+          storage: 10Gi
+    asserts:
+      - containsDocument:
+          apiVersion: operator.victoriametrics.com/v1
+          kind: VTCluster
+          name: generic
+          any: true
+      - containsDocument:
+          apiVersion: operator.victoriametrics.com/v1
+          kind: VTSingle
+          name: edge
+          any: true
+
+  - it: keeps the local datasources next to the central one, so kept stores stay readable
+    templates:
+      - templates/vtraces/grafana-datasource.yaml
+    release:
+      namespace: tenant-foo
+    set:
+      _namespace:
+        tracingCentral: true
+      tracingStorages:
+        - name: generic
+          mode: cluster
+          retentionPeriod: "14d"
+          storage: 10Gi
+        - name: edge
+          mode: single
+          retentionPeriod: "7d"
+          storage: 10Gi
+    asserts:
+      - hasDocuments:
+          count: 3
+      - containsDocument:
+          apiVersion: grafana.integreatly.org/v1beta1
+          kind: GrafanaDatasource
+          name: vtraces-generic
+          any: true
+      - containsDocument:
+          apiVersion: grafana.integreatly.org/v1beta1
+          kind: GrafanaDatasource
+          name: traces-central
+          any: true
+
+  # Local datasources are named vtraces-<entry>; the shared one must not be a
+  # name an entry can take, or one silently replaces the other.
+  - it: keeps the shared datasource apart from a local store named central
+    templates:
+      - templates/vtraces/grafana-datasource.yaml
+    release:
+      namespace: tenant-foo
+    set:
+      _namespace:
+        tracingCentral: true
+      tracingStorages:
+        - name: central
+          mode: cluster
+          retentionPeriod: "14d"
+          storage: 10Gi
+    asserts:
+      - containsDocument:
+          apiVersion: grafana.integreatly.org/v1beta1
+          kind: GrafanaDatasource
+          name: vtraces-central
+          any: true
+      - containsDocument:
+          apiVersion: grafana.integreatly.org/v1beta1
+          kind: GrafanaDatasource
+          name: traces-central
+          any: true
 
   - it: fails the render when mode is neither cluster nor single
     templates:

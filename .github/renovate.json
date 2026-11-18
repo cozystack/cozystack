@@ -32,6 +32,13 @@
       "matchStrings": ["clastix/kubectl:(?<currentValue>v[0-9]+\\.[0-9]+(?:\\.[0-9]+)?)@(?<currentDigest>sha256:[a-f0-9]+)"],
       "datasourceTemplate": "docker",
       "depNameTemplate": "docker.io/clastix/kubectl"
+    },
+    {
+      "customType": "regex",
+      "description": "Track the BuildKit SBOM scanner pinned by tag and digest in hack/common-envs.mk. The dockerfile manager does not read Makefiles and the helm-values manager is disabled repo-wide (see enabledManagers above), so without this manager the pin would stay on the syft it was cut with: the floating stable-1 tag it replaced moved to a fixed syft on its own, a digest pin does not. Tag and digest move together here, as the comment above the pin asks.",
+      "managerFilePatterns": ["/^hack/common-envs\\.mk$/"],
+      "matchStrings": ["SBOM_SCANNER \\?= (?<depName>docker\\.io/docker/buildkit-syft-scanner):(?<currentValue>[0-9]+\\.[0-9]+\\.[0-9]+)@(?<currentDigest>sha256:[a-f0-9]+)"],
+      "datasourceTemplate": "docker"
     }
   ],
   "packageRules": [
@@ -73,15 +80,43 @@
       "schedule": ["before 6am on monday"]
     },
     {
-      "description": "kubevirt.io/csi-driver is pinned to an untagged pseudo-version commit and publishes no release tags, so Renovate's go datasource returns no-result and the lookup failure lingers on the Dependency Dashboard. Disable it; this module is advanced deliberately alongside the kubevirt-csi-driver image build.",
-      "matchManagers": ["gomod"],
-      "matchPackageNames": ["kubevirt.io/csi-driver"],
+      "description": "The Harbor rebuilds reproduce one upstream release, so their build bases follow upstream's Makefile at that tag (GOBUILDIMAGE, NODEBUILDIMAGE) rather than the newest image. A golang tag bump builds Harbor with a toolchain upstream never shipped it with, and a node major breaks the Angular portal build. Tag bumps are disabled here; digest refreshes of the same tag still arrive through the digest group above. Move the tags by hand with HARBOR_VERSION.",
+      "matchManagers": ["dockerfile"],
+      "matchFileNames": ["packages/system/harbor/images/**"],
+      "matchUpdateTypes": ["major", "minor", "patch"],
       "enabled": false
     },
     {
-      "description": "k8s.io/apimachinery is replaced by the cozystack/apimachinery fork at a pseudo-version cut from a rebased branch that carries the ConvertToVersion patch. The fork's release tags are stale upstream mirrors, so Renovate proposes one of them as an 'update' that is in fact a downgrade dropping the patch. Advance the replace by hand whenever the fork is rebased onto a new Kubernetes line.",
+      "description": "The cilium-operator rebuild compiles one upstream release with the Go toolchain upstream's builder image pins at that tag, and `make update` in packages/system/cilium re-pins the builder line from there. A Renovate bump, by tag or by digest, builds with a toolchain upstream never shipped the release with, and the next `make update` silently reverts it. The operator-generic base stage and its VERSION and UPSTREAM_DIGEST args are pinned by the same recipe, and VERSION also selects the source archive SOURCE_SHA256 checks. Updates are disabled here; all of them move with the Cilium version.",
+      "matchManagers": ["dockerfile"],
+      "matchFileNames": ["packages/system/cilium/images/cilium-operator/**"],
+      "enabled": false
+    },
+    {
+      "description": "Split golang patch from minor updates for the e2e sandbox builder, so the rule below can drop the minor bump without taking the patch bump with it. By default both land in one non-major bucket and only the newest release is proposed.",
+      "matchManagers": ["dockerfile"],
+      "matchFileNames": ["packages/core/testing/images/e2e-sandbox/**"],
+      "matchPackageNames": ["golang"],
+      "separateMinorPatch": true
+    },
+    {
+      "description": "The e2e sandbox builds a patched chainsaw release with the Go minor upstream shipped that release with. A golang minor or major bump builds it with a toolchain upstream never shipped it with. Patch and digest updates of the same minor still arrive; move the minor by hand together with CHAINSAW_VERSION.",
+      "matchManagers": ["dockerfile"],
+      "matchFileNames": ["packages/core/testing/images/e2e-sandbox/**"],
+      "matchPackageNames": ["golang"],
+      "matchUpdateTypes": ["major", "minor"],
+      "enabled": false
+    },
+    {
+      "description": "The seaweedfs rebuild compiles one upstream release with the Go toolchain upstream's docker/Dockerfile.go_build uses at that tag, lays it over the upstream image of that tag, and `make update` in packages/system/seaweedfs re-pins the builder, the base image digest and the source checksum from there. A Renovate bump of any of them builds a combination upstream never shipped, and the next `make update` silently reverts it. Updates are disabled here; all of them move with the SeaweedFS version.",
+      "matchManagers": ["dockerfile"],
+      "matchFileNames": ["packages/system/seaweedfs/images/seaweedfs/**"],
+      "enabled": false
+    },
+    {
+      "description": "kubevirt.io/csi-driver is pinned to an untagged pseudo-version commit and publishes no release tags, so Renovate's go datasource returns no-result and the lookup failure lingers on the Dependency Dashboard. Disable it; this module is advanced deliberately alongside the kubevirt-csi-driver image build.",
       "matchManagers": ["gomod"],
-      "matchPackageNames": ["github.com/cozystack/apimachinery"],
+      "matchPackageNames": ["kubevirt.io/csi-driver"],
       "enabled": false
     }
   ]

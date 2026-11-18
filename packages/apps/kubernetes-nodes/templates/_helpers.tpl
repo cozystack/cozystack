@@ -47,16 +47,127 @@ cluster.local
 {{- end }}
 
 {{/*
+Effective Talos `machine.kernel.modules` list for this worker pool.
+
+Takes a context carrying .group and .groupName, returns a YAML list (empty
+output when there is nothing to load, so the caller can gate the whole
+`kernel:` block on it).
+
+A Talos system extension ships a kernel module but does not load it — that is
+`machine.kernel.modules`' job. The NVIDIA extensions are the case that made
+this surface necessary: without the modules the driver never initialises, and
+the failure is silent all the way down (the VM has the PCI device, the node
+advertises no GPU, nothing logs an error).
+
+Three-state contract on the pool's `kernelModules`:
+
+  unset      the chart decides. A pool holding at least one `nvidia.com/*`
+             GPU gets the NVIDIA set below; anything else gets nothing.
+  non-empty  taken verbatim, replacing whatever the chart would have picked.
+  []         explicit opt-out — emit no `kernel` block even on a GPU pool.
+
+The `[]` state is why the field has no entry in values.yaml at all: a default
+of `[]` there would collapse "unset" into "opted out" on every pool and make
+the automatic NVIDIA set unreachable, and a bare `kernelModules:` (null) fails
+values.schema.json validation under helm-unittest, which sees the null before
+Helm's coalescing drops it.
+
+`NVreg_NvLinkDisable=1` on the `nvidia` module mirrors what the platform already
+does for tenant clusters through the gpu-operator driver container, which
+writes exactly that one line into the `nvidia-kernel-module-params` ConfigMap
+(packages/system/gpu-operator, kernelModuleConfig.content). Cozystack passes
+individual GPUs into worker VMs WITHOUT the NVSwitches, so the driver would
+otherwise wait forever for an NVLink fabric that can never come up, leaving
+Fabric State "In Progress" and failing every CUDA call with "system not yet
+initialized". On Talos the driver comes from a system extension instead, and the
+operator's driver container has to be turned off or the two clash. Once it is
+off, nothing mounts that ConfigMap and the machine config is the only place left
+to carry the parameter. A no-op on a PCIe card with no NVLink.
+
+Module order is the order Talos' own NVIDIA documentation prescribes and the
+order validated against a production GB202 passthrough node: `nvidia` first
+(the others depend on it), then `nvidia_uvm` (CUDA unified memory, needed by
+any workload using the CUDA runtime), then `nvidia_drm` and `nvidia_modeset`.
+Talos loads them in list order, so this is not cosmetic.
+
+This only covers loading a module the OS already carries. Which extension
+supplies it is the pool's schematic (kubernetes-nodes.resolveOsImage) and is
+not derivable from the pool — on Blackwell (GB202) specifically it has to be
+the open-kernel-modules extension, since the proprietary one loads, creates
+`/dev/nvidia0`, and then finds no devices.
+*/}}
+{{- define "kubernetes-nodes.kernelModules" -}}
+{{- $group := .group -}}
+{{- $groupName := .groupName -}}
+{{- $modules := list -}}
+{{- if kindIs "slice" $group.kernelModules -}}
+{{- /* The emitted list is REBUILT from validated fields rather than passed through
+         from the user's dict. Validating `.name` and `.parameters` and then emitting
+         the raw item would let any other key ride along: `- {name: dummy, evil: "$(...)"}`
+         reached the heredoc verbatim, because `toYaml` copies whatever is there and
+         nothing upstream prunes it — `items` in values.schema.json carries no
+         `additionalProperties: false`, and the aggregated apiserver wires that schema
+         into defaulting only (pkg/registry/apps/application/rest_defaulting.go), with
+         no pruning or validation on Create/Update. Allowlisting by construction closes
+         that whole class instead of enumerating the fields it happens to know about.
+
+         Why any of this is needed: the machine config is written through the reconcile
+         Job's `cat <<EOF` heredoc with an UNQUOTED delimiter, which the script needs so
+         ${RELEASE} and friends expand, and which therefore expands everything else in
+         the block too. A module name of `nvidia$(id)` would run `id` inside the
+         talos-reconcile pod, whose ServiceAccount can write TalosConfigTemplates and
+         read Talos secrets. The values come from a tenant-facing CR, so this render is
+         the last gate.
+
+         Only the USER-SUPPLIED list is checked; the automatic NVIDIA set below is valid
+         by construction. */}}
+{{-   range $group.kernelModules -}}
+{{-     $name := .name | default "" | toString -}}
+{{-     if not (regexMatch `^[a-z0-9_-]+$` $name) -}}
+{{-       fail (printf "nodeGroup %q: invalid kernelModules name %q — must be a kernel module name matching ^[a-z0-9_-]+$ (e.g. nvidia_uvm)" $groupName $name) -}}
+{{-     end -}}
+{{-     $params := list -}}
+{{-     range .parameters | default list -}}
+{{-       $param := . | toString -}}
+{{- /* Two checks, because RE2's `\s` and `[:cntrl:]` are ASCII-only: a deny class
+         built from them lets U+2028 and U+2029 through, `toYaml` writes either raw,
+         and Helm's YAML parser reads it as a line break that ends the Job's
+         `command` block scalar early. `[:graph:]` pins the parameter to printable
+         ASCII, which closes every non-ASCII break at once; the second check then
+         removes what the heredoc would expand. */ -}}
+{{-       if not (and (regexMatch `^[[:graph:]]+$` $param) (regexMatch `^[^$\x60\\'\"]+$` $param)) -}}
+{{-         fail (printf "nodeGroup %q: invalid kernelModules parameter %q on module %q — must be printable ASCII with no whitespace, and must not contain $, a backtick, a backslash or quotes (e.g. NVreg_EnableGpuFirmware=1, or the semicolon-separated NVreg_RegistryDwords=PowerMizerEnable=0x1;PerfLevelSrc=0x2222)" $groupName $param $name) -}}
+{{-       end -}}
+{{-       $params = append $params $param -}}
+{{-     end -}}
+{{-     $module := dict "name" $name -}}
+{{-     if $params -}}
+{{-       $_ := set $module "parameters" $params -}}
+{{-     end -}}
+{{-     $modules = append $modules $module -}}
+{{-   end -}}
+{{- else -}}
+{{-   range $group.gpus | default list -}}
+{{-     if hasPrefix "nvidia.com/" (.name | default "") -}}
+{{-       $modules = list (dict "name" "nvidia" "parameters" (list "NVreg_NvLinkDisable=1")) (dict "name" "nvidia_uvm") (dict "name" "nvidia_drm") (dict "name" "nvidia_modeset") -}}
+{{-     end -}}
+{{-   end -}}
+{{- end -}}
+{{- if $modules -}}
+{{ toYaml $modules }}
+{{- end -}}
+{{- end }}
+
+{{/*
 Reconstruct the parent CAPI cluster name from the linkage value.
 
 The pool attaches to the parent Kubernetes CR named .Values.cluster, whose
 HelmRelease (and therefore CAPI Cluster / KamajiControlPlane / KubevirtCluster
 and every worker object it owns) is `kubernetes-<cluster>`. This chart does
 NOT use its own .Release.Name for CAPI wiring — the pool lives in a separate
-HelmRelease from the control plane, so every reference that the monolithic
-chart made through $.Release.Name is reconstructed here as kubernetes-<cluster>
-instead. Linkage is by name convention (mirrors vm-instance -> vm-disk), not
-ownerReference or lookup-gated render.
+HelmRelease from the control plane, so every reference to the cluster's objects
+is built from kubernetes-<cluster>. Linkage is by name convention (mirrors
+vm-instance -> vm-disk), not ownerReference or lookup-gated render.
 */}}
 {{- define "kubernetes-nodes.clusterName" -}}
 {{- if not .Values.cluster -}}
@@ -82,9 +193,9 @@ The node-group name for this pool, derived from the release name.
 A KubernetesNodes CR is named <cluster>-<pool> and gets the release prefix
 `kubernetes-nodes-`, so the release name is `kubernetes-nodes-<cluster>-<pool>`.
 The group name is the <pool> suffix. Enforcing the `<cluster>-` segment keeps
-every rendered object named `kubernetes-<cluster>-<pool>` — byte-identical to
-what the monolithic chart rendered for the same group — and prevents two
-clusters in one namespace from colliding on a pool named e.g. `md0`.
+every rendered object named `kubernetes-<cluster>-<pool>` — the names worker
+objects adopted by migration 56 already carry — and prevents two clusters in
+one namespace from colliding on a pool named e.g. `md0`.
 */}}
 {{- define "kubernetes-nodes.groupName" -}}
 {{- $prefix := printf "kubernetes-nodes-%s-" .Values.cluster -}}
@@ -96,13 +207,13 @@ clusters in one namespace from colliding on a pool named e.g. `md0`.
 
 {{/*
 Fail early with a clear message if this pool's MachineDeployment already exists
-under a different Helm release — i.e. the pool name collides with a nodeGroup
-still managed by the parent kubernetes chart (most likely the default `md0`).
+under a different Helm release: a worker pool migration 56 left with the parent
+cluster's release, or another pool whose <cluster>-<pool> split reconstructs
+the same object name (cluster `a` with pool `b-c`, cluster `a-b` with pool `c`).
 Without this guard the collision surfaces as a cryptic Helm "invalid ownership
 metadata" error at install time. Inert under `helm template`/unittest (lookup
-returns nil with no cluster) and a no-op during the Phase 2b adoption
-migration, which re-annotates the MachineDeployment onto this release before
-it reconciles.
+returns nil with no cluster) and a no-op for a pool migration 56 adopted, which
+re-annotates the MachineDeployment onto this release before it reconciles.
 */}}
 {{- define "kubernetes-nodes.assertNoForeignPool" -}}
 {{- $clusterName := include "kubernetes-nodes.clusterName" . -}}
@@ -112,14 +223,14 @@ it reconciles.
 {{- if $existing -}}
 {{- $owner := dig "annotations" "meta.helm.sh/release-name" "" $existing.metadata -}}
 {{- if and $owner (ne $owner .Release.Name) -}}
-{{- fail (printf "kubernetes-nodes: MachineDeployment %q in namespace %q is already managed by release %q, not this pool release %q — the pool name collides with a nodeGroup still managed by the parent kubernetes chart. Rename the pool or remove it from the parent Kubernetes CR's nodeGroups first." $mdName .Release.Namespace $owner .Release.Name) -}}
+{{- fail (printf "kubernetes-nodes: MachineDeployment %q in namespace %q is already managed by release %q, not this pool release %q — two pools cannot share the object name kubernetes-<cluster>-<pool>: give this pool a name whose object name is free, or remove the existing pool from release %q first." $mdName .Release.Namespace $owner .Release.Name $owner) -}}
 {{- end -}}
 {{- /* clusterName-drift guard. The release name kubernetes-nodes-<cluster>-<pool>
        does not encode where <cluster> ends and <pool> begins: for one release
        name several (.Values.cluster, pool) splits reconstruct the SAME object
        name kubernetes-<cluster>-<pool>, so an operator who edits spec.cluster to
        another such value (its immutability is enforced only by the dashboard,
-       not the aggregated apiserver, see docs/storage-immutability.md) does not
+       not the aggregated apiserver, see https://cozystack.io/docs/v1/operations/storage-class-immutability/) does not
        prune or delete a single worker VM, but silently flips spec.clusterName
        and the pool WorkloadMonitor selector. CAPI rejects the immutable
        MachineDeployment.spec.clusterName Update loudly; the WorkloadMonitor
@@ -141,8 +252,7 @@ control plane is supported (up to n-3 upstream) and is the normal state during a
 rolling upgrade — the parent Kubernetes CR is bumped first, then each pool. A
 symmetric equality check would flip every pool of a cluster to render-failure the
 moment the parent is bumped, blocking all pool operations until each pool is
-hand-edited, so the check is directional. The split removed the single `version`
-that used to feed both control plane and workers. Looks up the parent
+hand-edited, so the check is directional. Looks up the parent
 KamajiControlPlane (named like the reconstructed clusterName) and compares its
 spec.version minor against .Values.version. Skipped when the lookup is empty
 (helm template / unittest, or the parent not yet present) so it validates only
@@ -290,19 +400,66 @@ dict the result is written into), groupName (named in every error message).
 {{- $_ := set .out "clone" $clone -}}
 {{- end -}}
 
+{{/*
+Name of the ConfigMap carrying the CA bundle CDI verifies the Talos Image
+Factory against. Shared by the ConfigMap itself (templates/image-factory-ca.yaml)
+and the DataVolume that references it through source.http.certConfigMap
+(templates/nodegroup.yaml), so the two cannot drift.
+
+Deliberately free of a content hash: CDI resolves certConfigMap by name at
+import time, so a stable name lets a CA rotation land by updating the object
+in place. A hashed name would instead require the DataVolume — and therefore
+the whole KubevirtMachineTemplate, which is immutable — to be rebuilt.
+*/}}
+{{- define "kubernetes-nodes.talosImageFactoryCAConfigMapName" -}}
+{{- printf "%s-talos-factory-ca" .Release.Name | trunc 63 | trimSuffix "-" }}
+{{- end }}
+
+{{/*
+Validated .Values.talos.imageFactoryCA: renders the trimmed PEM when the value
+is set, and nothing at all when it is empty. Callers therefore gate on it with
+`if`, and an unset value leaves the render byte-for-byte as before — required,
+because the DataVolume source it joins is hashed into the
+KubevirtMachineTemplate name.
+
+The PEM guards live in cozy-lib.tls.validateCACert: the value is emitted
+verbatim into a ConfigMap readable by anything that can read the namespace, so
+it must be complete certificate blocks and nothing else, and must never carry
+a private key.
+
+Note what neither side does: a Helm template has no x509 parser, so a body
+spelled in base64 characters passes however meaningless. CDI reports such a
+bundle at import time — AppendCertsFromPEM simply adds nothing and verification
+still fails.
+*/}}
+{{- define "kubernetes-nodes.talosImageFactoryCA" -}}
+{{- $ca := printf "%v" (default "" .Values.talos.imageFactoryCA) -}}
+{{- if ne (trim $ca) "" -}}
+{{-   include "cozy-lib.tls.validateCACert" (dict "caCert" $ca "field" "talos.imageFactoryCA") -}}
+{{-   trim $ca -}}
+{{- end -}}
+{{- end }}
+
 {{- /*
-Name of the cluster's default StorageClass, or the empty string when there is
-none (and always under `helm template`, which has no cluster to read).
+Name of the StorageClass CDI binds a kubevirt-content DataVolume on when it
+names no class, or the empty string when there is none (and always under `helm
+template`, which has no cluster to read). CDI takes a class annotated
+storageclass.kubevirt.io/is-default-virt-class first and only then the
+Kubernetes default (GetStorageClassByNameWithVirtFallback in CDI's
+pkg/controller/common/util.go), and both the goldens and the worker disks are
+kubevirt content.
 
 An empty storageClass is a documented, schema-valid setting on both a worker pool
 and a worker image catalog entry, and it means "the cluster default". Without
 resolving it the golden-versus-pool StorageClass comparison simply skips whenever
-either side is empty, which is the one corner where skipping is worst: CDI then
-falls back to a host-assisted copy over the pod network, silently, and that copy
-is the transfer the clone path exists to remove.
+either side is empty, and lets a cross-class clone through unchecked.
 
-Both the current annotation and its beta predecessor count, because clusters
-provisioned years apart carry different ones and Kubernetes still honours both.
+The beta predecessor of the Kubernetes annotation is read last, only when no
+class carries the current one. CDI does not read it: with neither of the other
+two defaults it creates no claim at all for a DataVolume that names no class
+and no access modes (pvcFromStorage, ErrStorageClassNotFound). Read here, it
+still gives a pool on such a cluster a class, written onto the worker disk
+explicitly.
 
 More than one class may carry the annotation at once. Kubernetes permits that --
 it is the normal state midway through swapping a cluster's default -- and
@@ -313,16 +470,21 @@ that is actually in force. Timestamps are RFC3339 in UTC, so comparing them as
 strings is comparing them chronologically.
 */ -}}
 {{- define "kubernetes-nodes.defaultStorageClassName" -}}
-{{- $classes := lookup "storage.k8s.io/v1" "StorageClass" "" "" -}}
+{{- $classes := dig "items" (list) ((lookup "storage.k8s.io/v1" "StorageClass" "" "") | default dict) -}}
 {{- $name := "" -}}
-{{- $createdAt := "" -}}
-{{- range (dig "items" (list) ($classes | default dict)) -}}
-{{-   $annotations := dig "metadata" "annotations" (dict) . -}}
-{{-   if or (eq (dig "storageclass.kubernetes.io/is-default-class" "" $annotations | toString) "true") (eq (dig "storageclass.beta.kubernetes.io/is-default-class" "" $annotations | toString) "true") -}}
-{{-     $at := dig "metadata" "creationTimestamp" "" . | toString -}}
-{{-     if or (not $name) (gt $at $createdAt) -}}
-{{-       $name = dig "metadata" "name" "" . | toString -}}
-{{-       $createdAt = $at -}}
+{{- range list "storageclass.kubevirt.io/is-default-virt-class" "storageclass.kubernetes.io/is-default-class" "storageclass.beta.kubernetes.io/is-default-class" -}}
+{{-   $key := . -}}
+{{-   $createdAt := "" -}}
+{{-   if not $name -}}
+{{-     range $classes -}}
+{{-       $annotations := dig "metadata" "annotations" (dict) . -}}
+{{-       if eq (dig $key "" $annotations | toString) "true" -}}
+{{-         $at := dig "metadata" "creationTimestamp" "" . | toString -}}
+{{-         if or (not $name) (gt $at $createdAt) -}}
+{{-           $name = dig "metadata" "name" "" . | toString -}}
+{{-           $createdAt = $at -}}
+{{-         end -}}
+{{-       end -}}
 {{-     end -}}
 {{-   end -}}
 {{- end -}}
@@ -417,4 +579,53 @@ string this admits parses to a positive duration.
 {{- fail (printf "kubernetes-nodes: pool %q is set to substrate %q but its parent cluster %q runs on %s. A pool's substrate must match its cluster's: its machines would be owned by no infrastructure cluster and its workers would never join." $groupName (.Values.substrate | default "kubevirt") $clusterName $parentKind) -}}
 {{- end -}}
 {{- end -}}
+{{- end -}}
+
+{{/*
+This pool's node group — the SINGLE assembly of the dict that feeds every
+consumer in this chart:
+
+  * nodegroup.yaml, which renders the KubevirtMachineTemplate and the
+    MachineDeployment (and hashes the former into its name);
+  * talos-reconcile-job.yaml, which renders the TalosConfigTemplate spec and
+    hashes it into the name the Job applies it under.
+
+Emitted as YAML and read back with `fromYaml` at each call site. A Helm
+template cannot return a dict and a Helm variable cannot cross a file
+boundary, so this round-trip is what lets one assembly serve two files.
+
+Why it has to be one assembly. The TalosConfigTemplate name is a hash of the
+spec this dict renders, and two templates have to agree on that name: the Job
+creates the object, the MachineDeployment's bootstrap.configRef points at it.
+Assembling the dict twice makes them agree only by coincidence of the keys the
+spec helper happens to read — drop a key on one side (`gpus`, say) and the two
+names diverge, CAPI blocks on "templates do not exist" forever and no worker is
+ever created. Sharing the *rendering* is not enough; the input has to be shared
+too. Every value the pool exposes belongs here, or the consumer that reads
+it hashes a different group than the one that does not.
+
+kernelModules carries no entry in values.yaml, so the key is absent unless the
+operator set it, and `dict` keeps it nil. It survives the round-trip as null,
+which kubernetes-nodes.kernelModules reads as "unset", as opposed to an explicit
+empty list that opts the pool out. Defaulting it to `list` here would collapse
+the two.
+*/}}
+{{- define "kubernetes-nodes.group" -}}
+{{- dict
+      "minReplicas" .Values.minReplicas
+      "maxReplicas" .Values.maxReplicas
+      "instanceType" .Values.instanceType
+      "diskSize" .Values.diskSize
+      "storageClass" .Values.storageClass
+      "osImage" .Values.osImage
+      "roles" .Values.roles
+      "resources" .Values.resources
+      "gpus" .Values.gpus
+      "kubelet" .Values.kubelet
+      "logSerialConsole" .Values.logSerialConsole
+      "podCpuLimit" .Values.podCpuLimit
+      "podCpuRequest" .Values.podCpuRequest
+      "kernelModules" .Values.kernelModules
+      "proxmox" .Values.proxmox
+    | toYaml -}}
 {{- end -}}

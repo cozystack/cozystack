@@ -28,10 +28,36 @@ tests:
     asserts:
       - equal:
           path: spec.template.spec.containers[?(@.name=="cilium-agent")].resources.limits.memory
-          value: 4Gi
+          value: 24Gi
       - equal:
           path: spec.template.spec.containers[?(@.name=="cilium-agent")].resources.requests.memory
           value: 256Mi
+
+  # Pinning a map size or changing the ratio resizes these maps on most nodes,
+  # and the agent recreates a map whose size changed, dropping its conntrack
+  # and NAT state; a pinned size also caps connection capacity on large nodes.
+  # The neighbor size is also the one cilium does not reject above
+  # LimitTableMax, so pinning it can push the maps past the ceiling the agent
+  # memory limit is sized for.
+  - it: BPF CT, NAT, neighbor and socket rev-NAT map sizes are left to the dynamic ratio
+    template: charts/cilium/templates/cilium-configmap.yaml
+    documentSelector:
+      path: metadata.name
+      value: cilium-config
+    asserts:
+      - equal:
+          path: data["bpf-map-dynamic-size-ratio"]
+          value: "0.0025"
+      - notExists:
+          path: data["bpf-ct-global-tcp-max"]
+      - notExists:
+          path: data["bpf-ct-global-any-max"]
+      - notExists:
+          path: data["bpf-nat-global-max"]
+      - notExists:
+          path: data["bpf-neigh-global-max"]
+      - notExists:
+          path: data["bpf-sock-rev-map-max"]
 
   # Asserted one container at a time. A negated matcher over the init container
   # list reads as if it covers them all but passes vacuously, so each limit is

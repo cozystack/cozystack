@@ -2,6 +2,8 @@
 
 Two restore variants are supported.
 
+The user's own action in both variants, at the tenant admin level, is the `RestoreJob`, plus the second `NATS` in variant B. The scripts as written need admin access: variant A deletes and checks the stream through a CLI Pod, and variant B checks the stream the same way, creates the target's Secret and waits on its `HelmRelease` and `StatefulSet`, none of which a tenant role allows. The README's step table has the details.
+
 ## A. In-place restore
 
 Restore back into the same NATS application.
@@ -53,9 +55,6 @@ The script:
 
 - Both flows rely on the strategy template branching on `.Mode`. See
   `01-create-strategy.sh`.
-- The tarball in object storage is not managed by the Cozystack `Backup`
-  lifecycle: deleting the `Backup` CR removes the reference but leaves the S3
-  object in place. Tenants who need to reclaim space should delete the object
-  (or set a bucket lifecycle policy).
+- The tarball in object storage is not managed by the Cozystack `Backup` lifecycle: deleting the `Backup` CR removes the reference but leaves the S3 object in place. Tenants who need to reclaim space should delete the object, or set a lifecycle rule on the bucket. A Simple or MultiZone Cozystack SeaweedFS applies such rules once a day only while its `lifecycle.enabled` is on, which is not the default; a Client instance applies none itself, so the SeaweedFS it connects to must have `lifecycle.enabled` on. Another object store applies them only if it implements bucket lifecycle.
 - `nats stream restore` recreates the stream's configuration from the snapshot;
   consumers are restored as captured at backup time.

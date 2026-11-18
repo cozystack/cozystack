@@ -8,18 +8,17 @@
 # cannot push to aborted the whole promotion. The selector must emit only
 # cozystack-owned ($REGISTRY/...) refs.
 #
-# Harness note: the CI path is hack/cozytest.sh, NOT real bats. cozytest.sh's
-# awk parser recognizes only @test blocks and a bare `}` on its own line; there
-# is no `run`, `$status`, `$output`, `skip`, or setup()/teardown(). Each test
-# runs as a shell function under `set -eu -x`, so a non-zero exit aborts the
-# test (that is the exit-0 assertion) and other expectations are direct shell
-# tests. A test that expects a non-zero exit must capture it with `|| rc=$?`
-# so the harness's `set -e` does not abort first. mikefarah yq is assumed
-# present (provided by the test toolchain, like the other yq-using bats here).
+# Harness compatibility note: CI runs this file under Bats through
+# `make bats-unit-tests`. It also remains compatible with the narrower legacy
+# `hack/cozytest.sh` translator, whose awk parser recognizes only @test blocks
+# and a bare `}` on its own line. The tests therefore avoid `run`, `$status`,
+# `$output`, `skip`, and setup()/teardown(), and capture expected non-zero exits
+# with `|| rc=$?`. mikefarah yq is assumed present (provided by the test
+# toolchain, like the other yq-using Bats files here).
 #
-# Run with: hack/cozytest.sh hack/promote-retag_test.bats
-#           (or `bats hack/promote-retag_test.bats` if the bats binary is
-#           installed; cozytest.sh is the CI path.)
+# Run with: bats hack/promote-retag_test.bats
+
+load test_helper
 
 _make_registry_mocks() {
   t="$1"
@@ -131,14 +130,12 @@ EOF
     grep -q "docker://ghcr.io/cozystack/cozystack/${owned}@sha256:" "$tmp/out"
   done
 
-  # Images whose host is NOT inside `repository` must be selected too. Both are
-  # built and pushed to $REGISTRY by cozystack, both carry the digest in `tag`,
-  # and both were dropped by the ownership filter for looking host-less — so
-  # neither has ever received a 1.x release tag (on GHCR keycloak-operator has
-  # only `latest`, and kubeovn's newest cozystack-versioned tag predates 1.0).
-  # keycloak-operator splits the host into a sibling `registry` key; kubeovn
-  # keeps it in the document-level global.registry.address, written by the
-  # cozystack/kubeovn-chart wrapper's own `make image`.
+  # Both images are built and pushed to $REGISTRY by cozystack and carry the
+  # digest in `tag`, and neither has ever received a 1.x release tag (on GHCR
+  # keycloak-operator has only `latest`, and kubeovn's newest cozystack-versioned
+  # tag predates 1.0), so they get one only if the ownership filter counts them
+  # as ours. kubeovn keeps its host in global.registry.address, apart from
+  # `repository`.
   for owned in keycloak-operator kubeovn; do
     grep -q "docker://ghcr.io/cozystack/cozystack/${owned}@sha256:" "$tmp/out"
   done
@@ -170,7 +167,7 @@ EOF
   # The stable tag is in the copy plan...
   grep -qE 'docker://ghcr\.io/cozystack/cozystack/[^ ]*:v9\.9\.9' "$tmp/out"
   # ...but nothing moves :latest.
-  ! grep -qE 'docker://[^ ]+:latest' "$tmp/out"
+  if grep -qE 'docker://[^ ]+:latest' "$tmp/out"; then echo "FAIL: no :latest tag must have been planned"; false; fi
   rm -rf "$tmp"
 }
 
@@ -256,7 +253,7 @@ EOF
 
   grep -q "already at ${digest}; skipping stable copy" "$tmp/out"
   [ "$(grep -c '^inspect --raw ' "$tmp/skopeo.log")" -eq 2 ]
-  ! grep -q '^copy ' "$tmp/skopeo.log"
+  if grep -q '^copy ' "$tmp/skopeo.log"; then echo "FAIL: no image must have been copied"; false; fi
   rm -rf "$tmp"
 }
 
@@ -329,7 +326,7 @@ EOF
   [ "$rc" -ne 0 ]
   grep -q "already exists at '${published_digest}'; refusing to move it to '${rc_digest}'" "$tmp/err"
   # The refusal must happen BEFORE any write.
-  ! grep -q '^copy ' "$tmp/skopeo.log"
+  if grep -q '^copy ' "$tmp/skopeo.log"; then echo "FAIL: no image must have been copied"; false; fi
   [ "$(grep -c '^inspect --raw ' "$tmp/skopeo.log")" -eq 1 ]
   rm -rf "$tmp"
 }
@@ -355,10 +352,10 @@ EOF
   # an overwrite of a published stable tag.
   [ "$rc" -ne 0 ]
   grep -q 'returned no manifest bytes' "$tmp/err"
-  ! grep -q '^copy ' "$tmp/skopeo.log"
+  if grep -q '^copy ' "$tmp/skopeo.log"; then echo "FAIL: no image must have been copied"; false; fi
   [ "$(grep -c '^inspect --raw ' "$tmp/skopeo.log")" -eq 1 ]
   # The empty-input hash must never appear: that is the guard being absent.
-  ! grep -q 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855' "$tmp/err"
+  if grep -q 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855' "$tmp/err"; then echo "FAIL: the empty-manifest digest must not reach the diagnostic"; false; fi
   rm -rf "$tmp"
 }
 
@@ -384,6 +381,6 @@ EOF
   [ "$rc" -ne 0 ]
   grep -q 'cannot be treated as unpublished' "$tmp/err"
   grep -q '429' "$tmp/err"
-  ! grep -q '^copy ' "$tmp/skopeo.log"
+  if grep -q '^copy ' "$tmp/skopeo.log"; then echo "FAIL: no image must have been copied"; false; fi
   rm -rf "$tmp"
 }

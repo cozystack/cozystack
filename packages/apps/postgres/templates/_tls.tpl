@@ -15,3 +15,16 @@ Tri-state semantics:
   {{- .Values.tls.enabled | toString -}}
 {{- end -}}
 {{- end -}}
+
+{{/*
+postgres.tls.required resolves the tri-state tls.required field to "true" or
+"false". Unset follows external, so an externally published instance refuses
+plaintext sessions by default. Set explicitly, it wins in either direction.
+*/}}
+{{- define "postgres.tls.required" -}}
+{{- if kindIs "invalid" .Values.tls.required -}}
+  {{- .Values.external | default false | toString -}}
+{{- else -}}
+  {{- .Values.tls.required | toString -}}
+{{- end -}}
+{{- end -}}

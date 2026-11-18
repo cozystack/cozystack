@@ -6,7 +6,7 @@ import {
   type APIGroupList,
 } from "@cozystack/k8s-client"
 import { ConsolePage } from "./ConsolePage.tsx"
-import { TenantProvider } from "../lib/tenant-context.tsx"
+import { TenantProvider } from "../lib/tenant-provider.tsx"
 import { renderWithK8sProvider } from "../test-utils/render.tsx"
 
 function makeClient(): K8sClient {
@@ -69,5 +69,55 @@ describe("ConsolePage routing", () => {
     // the Cluster Usage page's unique subtitle must not appear.
     await waitFor(() => expect(client.list).toHaveBeenCalled())
     expect(screen.queryByText(/Cluster-scoped capacity/i)).toBeNull()
+  })
+
+  it("serves the tenant logs page under the reserved -/ segment", async () => {
+    renderWithK8sProvider(
+      <TenantProvider>
+        <ConsolePage />
+      </TenantProvider>,
+      { client: makeClient(), initialRoute: "/-/observability/logs" },
+    )
+
+    expect(await screen.findByText(/^Every application in/)).toBeInTheDocument()
+  })
+
+  it("leaves /logs to an application kind whose plural is logs", async () => {
+    const client = makeClient()
+    renderWithK8sProvider(
+      <TenantProvider>
+        <ConsolePage />
+      </TenantProvider>,
+      { client, initialRoute: "/logs" },
+    )
+
+    await waitFor(() => expect(client.list).toHaveBeenCalled())
+    expect(screen.queryByText(/^Every application in/)).toBeNull()
+  })
+
+  // No ApplicationDefinition plural or application name can be "-", so only
+  // routes under it are safe from shadowing an application's own pages.
+  it("leaves /observability/logs to an application named logs of kind observability", async () => {
+    const client = makeClient()
+    vi.mocked(client.list).mockImplementation(async (_g, _v, plural) => ({
+      apiVersion: "v1",
+      kind: `${plural}List`,
+      metadata: {},
+      items:
+        plural === "tenantnamespaces"
+          ? [{ apiVersion: "core.cozystack.io/v1alpha1", kind: "TenantNamespace", metadata: { name: "tenant-root" } }]
+          : [],
+    }) as K8sList<unknown>)
+    const get = vi.spyOn(client, "get").mockRejectedValue(new Error("not found"))
+    renderWithK8sProvider(
+      <TenantProvider>
+        <ConsolePage />
+      </TenantProvider>,
+      { client, initialRoute: "/observability/logs" },
+    )
+
+    expect(await screen.findByText(/^Application/)).toHaveTextContent("Application logs not found.")
+    expect(get).toHaveBeenCalledWith(expect.anything(), expect.anything(), "observability", "logs", expect.anything())
+    expect(screen.queryByText(/^Every application in/)).toBeNull()
   })
 })

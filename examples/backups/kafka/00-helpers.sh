@@ -92,11 +92,15 @@ resolve_kafka_image() {
     # is being assumed. On an air-gapped or operator-less cluster - the persona
     # the README's override note is for - that literal is unreachable, so the
     # run must set KAFKA_IMAGE to an image the nodes can actually pull.
-    echo "! could not read STRIMZI_KAFKA_IMAGES from deploy/strimzi-cluster-operator in cozy-kafka-operator; assuming quay.io/strimzi/kafka:0.45.1-rc1-kafka-3.9.1. Set KAFKA_IMAGE explicitly if that image is wrong or unreachable (e.g. air-gapped)." >&2
-    echo "quay.io/strimzi/kafka:0.45.1-rc1-kafka-3.9.1"
+    echo "! could not read STRIMZI_KAFKA_IMAGES from deploy/strimzi-cluster-operator in cozy-kafka-operator; assuming quay.io/strimzi/kafka:1.2.0-kafka-4.3.1. Set KAFKA_IMAGE explicitly if that image is wrong or unreachable (e.g. air-gapped)." >&2
+    echo "quay.io/strimzi/kafka:1.2.0-kafka-4.3.1"
 }
 export KAFKA_IMAGE="${KAFKA_IMAGE:-$(resolve_kafka_image)}"
 export KAFKA_BIN="${KAFKA_BIN:-/opt/kafka/bin}"
+# Name of the long-lived CLI Pod kafka_run execs into; cleanup.sh removes it.
+# A variable of its own, not the kafka-metadata demo's KAFKA_CLI_POD: the two
+# demos may share a namespace, and one setting must not move the other's Pod.
+export KAFKA_TOPIC_CLI_POD="${KAFKA_TOPIC_CLI_POD:-kafka-topic-cli}"
 
 log_info()    { echo -e "${BLUE}i${NC} $*" >&2; }
 log_success() { echo -e "${GREEN}OK${NC} $*" >&2; }
@@ -115,158 +119,10 @@ print_header() {
     echo -e "\n${MAGENTA}${BOLD}== $title ==${NC}\n" >&2
 }
 
-# Wait until a JSONPath value on a resource matches the desired string.
-# Optional 7th arg is a TERMINAL failure value: once the field reaches it the
-# wait returns 1 immediately instead of polling to the timeout. BackupJob and
-# RestoreJob settle on a terminal phase=Failed that never becomes Succeeded (the
-# strategy Job exhausts its backoffLimit), so failing fast on it keeps
-# wall-clock - and the strategy Pod's log - in reach instead of burning the full
-# timeout and then mislabelling a deterministic failure as "Timeout".
-wait_for_field() {
-    local resource_type="$1"
-    local resource_name="$2"
-    local jsonpath="$3"
-    local desired="$4"
-    local namespace="${5:-}"
-    local timeout="${6:-300}"
-    local fail_value="${7:-}"
-
-    log_substep "Waiting for $resource_type/$resource_name $jsonpath to become '$desired'..."
-    local elapsed=0
-    local ns_flag=()
-    [[ -n "$namespace" ]] && ns_flag=(-n "$namespace")
-
-    while true; do
-        local current
-        current=$(kubectl get "$resource_type" "$resource_name" "${ns_flag[@]}" -o jsonpath="$jsonpath" 2>/dev/null || true)
-        if [[ "$current" == "$desired" ]]; then
-            log_success "$resource_type/$resource_name reached '$desired'"
-            return 0
-        fi
-        if [[ -n "$fail_value" && "$current" == "$fail_value" ]]; then
-            log_error "$resource_type/$resource_name reached terminal '$current' (expected '$desired')"
-            return 1
-        fi
-        if [[ $elapsed -ge $timeout ]]; then
-            log_error "Timeout waiting for $resource_type/$resource_name (current: '$current', expected: '$desired')"
-            return 1
-        fi
-        sleep 5
-        elapsed=$((elapsed + 5))
-    done
-}
-
-# Wait for a HelmRelease to become Ready, with an existence backstop (the apps
-# controller creates the HR asynchronously, so a bare `kubectl wait` right after
-# `kubectl apply` races it) and a fail-fast on Stalled=True - a stalled HR has
-# exhausted its remediation retries and will never turn Ready, so polling to the
-# timeout only hides the real error.
-wait_hr_ready() {
-    local name="$1"
-    local timeout="${2:-300}"
-    local elapsed=0
-    local lookup state seen=0
-
-    log_substep "Waiting for HelmRelease/$name to become Ready..."
-    while true; do
-        # --ignore-not-found makes an absent release exit 0, so a non-zero exit
-        # is kubectl failing to answer. Presence is read off the name line,
-        # because a warning on stderr lands in the same string.
-        if ! lookup=$(kubectl -n "$NAMESPACE" get hr "$name" --ignore-not-found -o name 2>&1); then
-            state=error
-        elif [[ $'\n'"$lookup"$'\n' != *"/$name"$'\n'* ]]; then
-            state=absent
-        else
-            state=present
-            seen=1
-            local ready stalled
-            ready=$(kubectl -n "$NAMESPACE" get hr "$name" \
-                -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}' || true)
-            if [[ "$ready" == "True" ]]; then
-                log_success "HelmRelease/$name is Ready"
-                return 0
-            fi
-            stalled=$(kubectl -n "$NAMESPACE" get hr "$name" \
-                -o jsonpath='{.status.conditions[?(@.type=="Stalled")].status}' || true)
-            if [[ "$stalled" == "True" ]]; then
-                log_error "HelmRelease/$name is Stalled (terminal):"
-                break
-            fi
-        fi
-        if [[ $elapsed -ge $timeout ]]; then
-            log_error "Timeout waiting for HelmRelease/$name to become Ready:"
-            case "$state" in
-                error)
-                    echo "  could not look up HelmRelease/$name: $lookup" >&2
-                    # Seen earlier: the reads below may answer where this lookup
-                    # did not.
-                    [[ $seen -eq 1 ]] || return 1
-                    ;;
-                absent)
-                    if [[ $seen -eq 1 ]]; then
-                        echo "  HelmRelease/$name was deleted from $NAMESPACE while waiting" >&2
-                    else
-                        echo "  HelmRelease/$name never appeared in $NAMESPACE" >&2
-                    fi
-                    return 1
-                    ;;
-            esac
-            break
-        fi
-        sleep 5
-        elapsed=$((elapsed + 5))
-    done
-    # Reached on Stalled or on timeout. Conditions and history rather than the
-    # Ready message alone: a failed install is retried on an interval, so Ready
-    # may describe the retry rather than the failure behind it.
-    kubectl -n "$NAMESPACE" get hr "$name" \
-        -o jsonpath='{range .status.conditions[*]}  {.type}={.status} ({.reason}): {.message}{"\n"}{end}' >&2 || true
-    local hist
-    if ! hist=$(kubectl -n "$NAMESPACE" get hr "$name" \
-        -o jsonpath='{range .status.history[*]}  history: {.status} {.chartVersion} {.lastDeployed}{"\n"}{end}'); then
-        echo "  history: kubectl could not read it" >&2
-    elif [[ -n "${hist//[[:space:]]/}" ]]; then
-        printf '%s\n' "$hist" >&2
-    else
-        # A release with no history prints nothing and exits 0; say so,
-        # because a blank in a failure dump reads as a dump that broke.
-        echo "  history: (none recorded)" >&2
-    fi
-    return 1
-}
-
-# Wait until a namespaced resource is really gone.
-#
-# `kubectl wait --for=delete` is not used: it errors when the resource is
-# already absent, the normal case on a clean namespace (cleanup.sh is
-# idempotent and runs as a pre-clean too), and swallowing that error would also
-# swallow a genuine failure. Polling `get --ignore-not-found` treats "already
-# gone" and "gone now" alike (empty output, exit 0), while a retrieval failure -
-# RBAC, API-server, transport - is a non-zero exit that must NOT be read as
-# deletion, or the teardown settles on a false success and leaves
-# half-uninstalled resources for the next run.
-wait_deleted() {
-    local resource_type="$1"
-    local resource_name="$2"
-    local timeout="${3:-300}"
-    local elapsed=0
-    local got
-
-    while true; do
-        if got=$(kubectl -n "$NAMESPACE" get "$resource_type" "$resource_name" --ignore-not-found 2>/dev/null) && [[ -z "$got" ]]; then
-            [[ $elapsed -gt 0 ]] && log_success "$resource_type/$resource_name is gone"
-            return 0
-        fi
-        if [[ $elapsed -ge $timeout ]]; then
-            log_error "Timeout waiting for $resource_type/$resource_name to be deleted; still present after ${timeout}s:"
-            kubectl -n "$NAMESPACE" get "$resource_type" "$resource_name" -o wide >&2 || true
-            return 1
-        fi
-        [[ $elapsed -eq 0 ]] && log_substep "Waiting for $resource_type/$resource_name to be deleted..."
-        sleep 5
-        elapsed=$((elapsed + 5))
-    done
-}
+# wait_for_field, wait_hr_ready and wait_deleted live in one file shared by
+# every backup walkthrough, so a fix to one reaches all of them.
+# shellcheck source-path=SCRIPTDIR source=../_lib/wait-helpers.sh
+source "$(dirname "${BASH_SOURCE[0]}")/../_lib/wait-helpers.sh"
 
 # In-cluster bootstrap address for a Kafka application instance. The Cozystack
 # chart names the Strimzi Kafka cluster "kafka-<app>", and Strimzi names the
@@ -278,7 +134,41 @@ kafka_bootstrap() {
     echo "kafka-${app}-kafka-bootstrap.${NAMESPACE}.svc:9092"
 }
 
-# Run a bash snippet in a throwaway Strimzi Kafka Pod. The snippet runs with
+# Ensure the long-lived CLI Pod exists and is Ready, so kafka_run can exec into
+# it. A Ready Pod this demo owns is reused across calls and across the numbered
+# scripts; a leftover in a terminal phase is replaced; a same-named Pod the demo
+# does not own is refused rather than hijacked or deleted.
+# Every step returns on failure explicitly: this runs as the left side of
+# `|| return 1`, and some callers also wrap it in $(...), so errexit never
+# applies inside it and a bare failure would carry on to the next step.
+kafka_cli_pod() {
+    local phase owner overrides
+    phase=$(kubectl -n "$NAMESPACE" get pod "$KAFKA_TOPIC_CLI_POD" --ignore-not-found -o jsonpath='{.status.phase}') || return 1
+    owner=$(kubectl -n "$NAMESPACE" get pod "$KAFKA_TOPIC_CLI_POD" --ignore-not-found -o jsonpath='{.metadata.labels.cozystack\.io/backup-demo}') || return 1
+    if [ -n "$phase" ] && [ "$owner" != "kafka" ]; then
+        log_error "Pod $NAMESPACE/$KAFKA_TOPIC_CLI_POD exists but this demo does not own it; refusing to use or delete it"
+        return 1
+    fi
+    if [ "$phase" != "Running" ] && [ "$phase" != "Pending" ]; then
+        # restricted-clean Pod. The Strimzi image runs as a non-root numeric
+        # UID (1001), so runAsNonRoot/seccomp at the Pod level plus the
+        # container's allowPrivilegeEscalation=false and drop-ALL satisfy PSA
+        # "restricted" without pinning runAsUser to a value specific to this
+        # image tag. An add-only JSON patch layers these onto the run-generated
+        # Pod's sole container (index 0), leaving image, command and args
+        # untouched.
+        overrides='[{"op":"add","path":"/spec/securityContext","value":{"runAsNonRoot":true,"seccompProfile":{"type":"RuntimeDefault"}}},{"op":"add","path":"/spec/containers/0/securityContext","value":{"allowPrivilegeEscalation":false,"capabilities":{"drop":["ALL"]}}}]'
+        kubectl -n "$NAMESPACE" delete pod "$KAFKA_TOPIC_CLI_POD" --grace-period=1 --ignore-not-found >/dev/null || return 1
+        kubectl -n "$NAMESPACE" run "$KAFKA_TOPIC_CLI_POD" --image="$KAFKA_IMAGE" \
+            --labels=cozystack.io/backup-demo=kafka \
+            --override-type=json --overrides="$overrides" \
+            --restart=Never --command -- sleep infinity >/dev/null || return 1
+    fi
+    kubectl -n "$NAMESPACE" wait --for=condition=Ready "pod/$KAFKA_TOPIC_CLI_POD" \
+        --timeout=5m >/dev/null
+}
+
+# Run a bash snippet in the demo's Strimzi Kafka CLI Pod. The snippet runs with
 # these variables pre-set, so it needs no nested shell quoting of its own:
 #   $BOOT  - the target app's plaintext bootstrap (host:port)
 #   $BIN   - the kafka CLI directory
@@ -286,25 +176,19 @@ kafka_bootstrap() {
 # This is the host-side analogue of the strategy Pod: same stock image, same
 # tools, no purpose-built backup container. Pass the snippet single-quoted so
 # its own $VAR references reach the Pod's bash unexpanded.
+#
+# The snippet runs by `kubectl exec`, not in a throwaway `kubectl run -i` Pod.
+# That Pod's stdout comes back over an attach carrying only what the container
+# writes after the attach registers, so a CLI that finishes first reads as an
+# empty reply with exit 0. An exec'd process owns its pipes, so its output
+# cannot be missed that way.
 kafka_run() {
     local app="$1"; shift
     local snippet="$1"
-    local boot pod
+    local boot
     boot="$(kafka_bootstrap "$app")"
-    pod="kafka-cli-$RANDOM"
-    # restricted-clean throwaway Pod. The Strimzi image runs as a non-root
-    # numeric UID (1001), so runAsNonRoot/seccomp at the Pod level plus the
-    # container's allowPrivilegeEscalation=false and drop-ALL satisfy PSA
-    # "restricted" without pinning runAsUser to a value specific to this image
-    # tag. An add-only JSON patch layers these onto the run-generated Pod's sole
-    # container (index 0), leaving image, command and args untouched.
-    local overrides
-    overrides='[{"op":"add","path":"/spec/securityContext","value":{"runAsNonRoot":true,"seccompProfile":{"type":"RuntimeDefault"}}},{"op":"add","path":"/spec/containers/0/securityContext","value":{"allowPrivilegeEscalation":false,"capabilities":{"drop":["ALL"]}}}]'
-    kubectl -n "$NAMESPACE" run "$pod" \
-        --image="$KAFKA_IMAGE" --restart=Never --rm -i --quiet \
-        --pod-running-timeout=5m \
-        --override-type=json --overrides="$overrides" \
-        --command -- bash -c "set -eu
+    kafka_cli_pod || return 1
+    kubectl -n "$NAMESPACE" exec -i "$KAFKA_TOPIC_CLI_POD" -- bash -c "set -eu
 BOOT=$(printf %q "$boot")
 BIN=$(printf %q "$KAFKA_BIN")
 TOPIC=$(printf %q "$TOPIC")
@@ -331,7 +215,7 @@ seed_topic() {
             printf "k-%s\torder-%s\n" "$i" "$i"
             i=$((i + 1))
         done | "$BIN"/kafka-console-producer.sh --bootstrap-server "$BOOT" \
-            --topic "$TOPIC" --property parse.key=true
+            --topic "$TOPIC" --reader-property parse.key=true
     '
 }
 
@@ -347,7 +231,7 @@ seed_decoy_topic() {
             printf "d-%s\tdecoy-%s\n" "$i" "$i"
             i=$((i + 1))
         done | "$BIN"/kafka-console-producer.sh --bootstrap-server "$BOOT" \
-            --topic "$DECOY_TOPIC" --property parse.key=true
+            --topic "$DECOY_TOPIC" --reader-property parse.key=true
     '
 }
 
@@ -403,7 +287,7 @@ topic_dump() {
             [ "${end:-0}" -gt 0 ] || continue
             "$BIN"/kafka-console-consumer.sh --bootstrap-server "$BOOT" --topic "$TOPIC" \
                 --partition "$p" --offset 0 --max-messages "$end" --timeout-ms 60000 \
-                --property print.key=true --property print.timestamp=false \
+                --formatter-property print.key=true --formatter-property print.timestamp=false \
                 | sed "s/^/$p\t/"
         done
     '
@@ -425,7 +309,7 @@ topic_replication_factor() {
 # Create the "<app>-backup-s3" Secret the Job strategy Pod consumes, from the
 # bucket coordinates cached by 03-create-bucket.sh. The generic Job strategy -
 # unlike the app-specific drivers - has no chart support to emit this Secret,
-# so the tenant provides it. Called for the source app (step 04) and the
+# so the demo provides it. Called for the source app (step 04) and the
 # restore target (step 07). The S3 endpoint's CA, when 03-create-bucket.sh
 # cached one, rides along as ca.crt: the strategy Pod mounts that key and
 # verifies the endpoint against it instead of disabling verification.

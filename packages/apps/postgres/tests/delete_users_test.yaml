@@ -28,7 +28,7 @@ tests:
     asserts:
       - matchRegex:
           path: stringData["init.sh"]
-          pattern: "MANAGED_USERS=\\$\\(psql -v ON_ERROR_STOP=1 -t -A -c \"SELECT r.rolname FROM pg_roles r JOIN pg_shdescription s ON s.objoid = r.oid AND s.classoid = 'pg_authid'::regclass WHERE s.description = 'user managed by helm'\"\\)"
+          pattern: "MANAGED_USERS=\\$\\(psql -v ON_ERROR_STOP=1 -t -A -c \"SELECT r.rolname FROM pg_roles r JOIN pg_shdescription s ON s.objoid = r.oid AND s.classoid = 'pg_authid'::regclass WHERE s.description = 'user managed by helm' AND r.oid IN \\(SELECT m.member FROM pg_auth_members m JOIN pg_roles g ON g.oid = m.roleid WHERE g.rolname = 'cozystack:managed'\\)\"\\)"
       - notMatchRegex:
           path: stringData["init.sh"]
           pattern: 'du\+'
@@ -84,4 +84,62 @@ tests:
           pattern: "ALL_DBS=\\$\\(psql -v ON_ERROR_STOP=1 -t -A -c \"SELECT datname FROM pg_database WHERE datallowconn AND NOT datistemplate\"\\)"
       - matchRegex:
           path: stringData["init.sh"]
-          pattern: 'for db in \$ALL_DBS; do\npsql -v ON_ERROR_STOP=1 --echo-all --dbname "\$db" <<EOT\nREASSIGN OWNED BY "\$user" TO postgres;\nDROP OWNED BY "\$user";\nEOT\ndone\npsql -v ON_ERROR_STOP=1 --echo-all -c "DROP USER \\"\$user\\";"'
+          pattern: 'for db in \$ALL_DBS; do\npsql -v ON_ERROR_STOP=1 --echo-queries --dbname "\$db" -v user="\$user" <<\\EOT\nREASSIGN OWNED BY :"user" TO "cozystack:orphaned";\nDROP OWNED BY :"user";\nEOT\ndone\npsql -v ON_ERROR_STOP=1 --echo-queries -v user="\$user" <<\\EOT\nDROP USER :"user";\nEOT\n'
+
+  # What a tenant role created must not become superuser-owned when the role is
+  # dropped, so its objects go to an inert role instead of postgres.
+  - it: hands a dropped role's objects to an unprivileged role, not the superuser
+    set:
+      users:
+        app: {}
+    documentSelector:
+      path: metadata.name
+      value: pg-test-init-script
+    asserts:
+      - matchRegex:
+          path: stringData["init.sh"]
+          pattern: 'SELECT ''CREATE ROLE "cozystack:orphaned" NOLOGIN NOINHERIT''\nWHERE NOT EXISTS \(SELECT FROM pg_catalog\.pg_roles WHERE rolname = ''cozystack:orphaned''\)\\gexec'
+      - matchRegex:
+          path: stringData["init.sh"]
+          pattern: 'ALTER ROLE "cozystack:orphaned" NOLOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;'
+      - matchRegex:
+          path: stringData["init.sh"]
+          pattern: 'REASSIGN OWNED BY :"role" TO "cozystack:orphaned";'
+      - notMatchRegex:
+          path: stringData["init.sh"]
+          pattern: 'REASSIGN OWNED BY .* TO postgres'
+
+  # Every dropped role's objects share the one receiving role, so it must hold no
+  # memberships in either direction, and functions it ends up owning must run with
+  # the caller's rights rather than its own.
+  - it: keeps the receiving role free of memberships and its functions invoker-rights
+    set:
+      users:
+        app: {}
+    documentSelector:
+      path: metadata.name
+      value: pg-test-init-script
+    asserts:
+      - matchRegex:
+          path: stringData["init.sh"]
+          pattern: 'SELECT format\(''REVOKE %I FROM %I'', r\.rolname, m\.rolname\) FROM .* WHERE ''cozystack:orphaned'' IN \(r\.rolname, m\.rolname\)\\gexec\nALTER ROLE "cozystack:orphaned"'
+      - matchRegex:
+          path: stringData["init.sh"]
+          pattern: 'for db in \$ALL_DBS; do\npsql -v ON_ERROR_STOP=1 --echo-queries --dbname "\$db" <<\\EOT\nSELECT format\(''ALTER %s %s SECURITY INVOKER'', .*\) FROM pg_proc p WHERE p\.proowner = ''"cozystack:orphaned"''::regrole AND p\.prosecdef\\gexec\nSELECT format\(''ALTER VIEW %s SET \(security_invoker = true\)'', c\.oid::regclass\) FROM pg_class c WHERE c\.relowner = ''"cozystack:orphaned"''::regrole AND c\.relkind = ''v'' AND current_setting\(''server_version_num''\)::int >= 150000 .*\\gexec\nEOT\ndone'
+
+  # An orphaned role's name comes from the catalog, so it reaches SQL only as a
+  # psql variable in a quoted heredoc, never spliced in by the shell.
+  - it: passes an orphaned role's name to SQL as a psql variable
+    set:
+      users:
+        app: {}
+    documentSelector:
+      path: metadata.name
+      value: pg-test-init-script
+    asserts:
+      - matchRegex:
+          path: stringData["init.sh"]
+          pattern: 'DELETE_ROLES=\$\(.*\)\nALL_DBS=\$\(psql -v ON_ERROR_STOP=1 -t -A -c "SELECT datname FROM pg_database WHERE datallowconn AND NOT datistemplate"\)\n\necho "roles to delete: \$DELETE_ROLES"\nfor role in \$DELETE_ROLES; do\npsql -v ON_ERROR_STOP=1 --echo-queries -v role="\$role" <<\\EOT\nSELECT format\(''REVOKE %I FROM %I'', r\.rolname, m\.rolname\) FROM .* WHERE r\.rolname = :''role''\\gexec\nEOT\nfor db in \$ALL_DBS; do\npsql -v ON_ERROR_STOP=1 --echo-queries --dbname "\$db" -v role="\$role" <<\\EOT\nREASSIGN OWNED BY :"role" TO "cozystack:orphaned";\nDROP OWNED BY :"role";\nEOT\ndone\npsql -v ON_ERROR_STOP=1 --echo-queries -v role="\$role" <<\\EOT\nDROP ROLE IF EXISTS :"role";\nEOT'
+      - notMatchRegex:
+          path: stringData["init.sh"]
+          pattern: '[A-Z] "\$role"|''\$role'''

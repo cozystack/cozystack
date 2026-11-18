@@ -69,6 +69,9 @@ spec:
       {{- if .Values.admin.priorityClassName }}
       priorityClassName: {{ .Values.admin.priorityClassName | quote }}
       {{- end }}
+      {{- if .Values.admin.schedulerName }}
+      schedulerName: {{ .Values.admin.schedulerName | quote }}
+      {{- end }}
       enableServiceLinks: false
       {{- if .Values.admin.serviceAccountName }}
       serviceAccountName: {{ .Values.admin.serviceAccountName | quote }}
@@ -327,7 +330,9 @@ spec:
         {{- end }}
       spec:
         accessModes: [ "ReadWriteOnce" ]
-        storageClassName: {{ .Values.admin.data.storageClass }}
+        {{- with .Values.admin.data.storageClass }}
+        storageClassName: {{ . | quote }}
+        {{- end }}
         resources:
           requests:
             storage: {{ .Values.admin.data.size }}
@@ -341,7 +346,9 @@ spec:
         {{- end }}
       spec:
         accessModes: [ "ReadWriteOnce" ]
-        storageClassName: {{ .Values.admin.logs.storageClass }}
+        {{- with .Values.admin.logs.storageClass }}
+        storageClassName: {{ . | quote }}
+        {{- end }}
         resources:
           requests:
             storage: {{ .Values.admin.logs.size }}

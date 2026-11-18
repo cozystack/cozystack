@@ -1,0 +1,63 @@
+suite: postgres external cert fails on an empty apex, but only when external
+
+templates:
+  - templates/db.yaml
+
+release:
+  name: pg-test
+  namespace: tenant-test
+
+# db.yaml appends the external SAN <release>.<_namespace.host> only under
+# `if and $tlsEnabled .Values.external`. cozy-lib.ns-host-required guards that
+# line, so an empty apex fails the render when TLS and external are on, and is a
+# non-issue when external is off.
+
+tests:
+  - it: fails when tls and external are on and the apex is empty
+    set:
+      external: true
+      tls:
+        enabled: true
+      _namespace:
+        host: ""
+      _cluster:
+        scheduling: {}
+        cluster-domain: cozy.local
+    asserts:
+      - failedTemplate:
+          errorMessage: "the tenant apex (_namespace.host) is empty and this app sets no host override, so its ingress hostname would be malformed. Set tenant.spec.host on this tenant, inherit it from a parent that has host set, or set this app's host value."
+
+  - it: still renders when external is off even though the apex is empty
+    set:
+      external: false
+      tls:
+        enabled: true
+      _namespace:
+        host: ""
+      _cluster:
+        scheduling: {}
+        cluster-domain: cozy.local
+    documentSelector:
+      path: kind
+      value: Cluster
+    asserts:
+      - isNull:
+          path: spec.certificates
+
+  - it: renders the external cert SAN from the apex when it is set
+    set:
+      external: true
+      tls:
+        enabled: true
+      _namespace:
+        host: example.org
+      _cluster:
+        scheduling: {}
+        cluster-domain: cozy.local
+    documentSelector:
+      path: kind
+      value: Cluster
+    asserts:
+      - equal:
+          path: spec.certificates.serverAltDNSNames[0]
+          value: pg-test.example.org

@@ -30,8 +30,8 @@ import (
 )
 
 var (
-	NoAncestors       = errors.New("no managed apps found in lineage")
-	AncestryAmbiguous = errors.New("object ancestry is ambiguous")
+	ErrNoAncestors       = errors.New("no managed apps found in lineage")
+	ErrAncestryAmbiguous = errors.New("object ancestry is ambiguous")
 )
 
 const (
@@ -75,6 +75,8 @@ func (h *LineageControllerWebhook) SetupWithManagerAsWebhook(mgr ctrl.Manager) e
 		return err
 	}
 
+	h.ownerCache = lineage.NewObjectCache(ownerCacheTTL)
+
 	h.initConfig()
 	// Register HTTP path -> handler.
 	mgr.GetWebhookServer().Register("/mutate-lineage", &admission.Webhook{Handler: h})
@@ -103,11 +105,19 @@ func (h *LineageControllerWebhook) Handle(ctx context.Context, req admission.Req
 		return admission.Errored(400, fmt.Errorf("decode object: %w", err))
 	}
 
+	// The objectSelector skips objects carrying the managed label, but on UPDATE
+	// it matches if either the old or the new object does. Pods go on, since
+	// every Pod admission also needs applySchedulingClass.
+	if obj.GetKind() != "Pod" && hasAllLineageLabels(obj) {
+		logger.V(1).Info("object already carries lineage labels, skipping owner walk")
+		return admission.Allowed("lineage labels already present")
+	}
+
 	owner, err := h.getOwner(ctx, obj)
 	switch {
-	case err != nil && errors.Is(err, AncestryAmbiguous):
+	case err != nil && errors.Is(err, ErrAncestryAmbiguous):
 		warn = append(warn, "object ancestry ambiguous, using first ancestor found")
-	case err != nil && errors.Is(err, NoAncestors):
+	case err != nil && errors.Is(err, ErrNoAncestors):
 		// not a problem, mark object as unmanaged
 	case err != nil:
 		logger.Error(err, "error computing lineage labels")
@@ -135,16 +145,16 @@ func (h *LineageControllerWebhook) Handle(ctx context.Context, req admission.Req
 }
 
 func (h *LineageControllerWebhook) getOwner(ctx context.Context, o *unstructured.Unstructured) (*unstructured.Unstructured, error) {
-	owners := lineage.WalkOwnershipGraph(ctx, h.dynClient, h.mapper, h, o)
+	owners := lineage.WalkOwnershipGraphWithCache(ctx, h.dynClient, h.mapper, h, h.ownerCache, o)
 	if len(owners) == 0 {
-		return nil, NoAncestors
+		return nil, ErrNoAncestors
 	}
-	obj, err := owners[0].GetUnstructured(ctx, h.dynClient, h.mapper)
+	obj, err := owners[0].GetUnstructuredCached(ctx, h.dynClient, h.mapper, h.ownerCache)
 	if err != nil {
 		return nil, err
 	}
 	if len(owners) > 1 {
-		err = AncestryAmbiguous
+		err = ErrAncestryAmbiguous
 	}
 	return obj, err
 }
@@ -166,7 +176,7 @@ func (h *LineageControllerWebhook) computeLabels(ctx context.Context, obj *unstr
 				return s
 			}
 			s = s[:63]
-			for b := s[62]; !((b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z') || (b >= '0' && b <= '9')); s = s[:len(s)-1] {
+			for b := s[62]; (b < 'a' || b > 'z') && (b < 'A' || b > 'Z') && (b < '0' || b > '9'); s = s[:len(s)-1] {
 				b = s[len(s)-1]
 			}
 			return s
@@ -201,8 +211,33 @@ func (h *LineageControllerWebhook) applyLabels(o *unstructured.Unstructured, lab
 	o.SetLabels(existing)
 }
 
-// applySchedulingClass injects schedulerName and scheduling-class annotation
-// into Pods whose namespace carries the scheduler.cozystack.io/scheduling-class label.
+// hasAllLineageLabels needs every key computeLabels writes, not just
+// ManagedObjectKey: an UPDATE can carry a partial set written by another client,
+// and the tenantsecret registry filters on TenantResourceLabelKey.
+func hasAllLineageLabels(o *unstructured.Unstructured) bool {
+	labels := o.GetLabels()
+	if labels == nil {
+		return false
+	}
+	if labels[ManagedObjectKey] != "true" {
+		return false
+	}
+	for _, k := range []string{ManagerGroupKey, ManagerKindKey, ManagerNameKey, corev1alpha1.TenantResourceLabelKey} {
+		if _, ok := labels[k]; !ok {
+			return false
+		}
+	}
+	return true
+}
+
+// applySchedulingClass injects schedulerName, scheduling-class annotation, and
+// scheduling-class label into Pods whose namespace carries the
+// scheduler.cozystack.io/scheduling-class label.
+//
+// The label (in addition to the annotation) lets SchedulingClass authors write
+// podAffinity rules whose labelSelector matches pods across applications that
+// share the same class.
+//
 // If the referenced SchedulingClass CR does not exist (e.g. the scheduler
 // package is not installed), the injection is silently skipped so that pods
 // are not left Pending.
@@ -253,6 +288,13 @@ func (h *LineageControllerWebhook) applySchedulingClass(ctx context.Context, obj
 	}
 	annotations[schedulerapi.SchedulingClassAnnotation] = schedulingClass
 	obj.SetAnnotations(annotations)
+
+	podLabels := obj.GetLabels()
+	if podLabels == nil {
+		podLabels = make(map[string]string)
+	}
+	podLabels[schedulerapi.SchedulingClassLabel] = schedulingClass
+	obj.SetLabels(podLabels)
 
 	return nil
 }

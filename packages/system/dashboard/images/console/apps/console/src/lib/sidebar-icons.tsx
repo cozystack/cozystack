@@ -69,7 +69,7 @@ const ICON_BY_SLUG: Record<string, SimpleIconData> = Object.fromEntries(
 
 /**
  * Lucide fallbacks for kinds that don't have a canonical brand logo in
- * Simple Icons. These use the same pack as cozyportal-ui.
+ * Simple Icons.
  */
 const KIND_TO_LUCIDE_ICON: Record<string, LucideIcon | ComponentType<{ className?: string }>> = {
   BootBox: Server,

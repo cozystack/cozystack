@@ -33,6 +33,14 @@ stringData:
     opensearch-operator:
       manager:
         dnsBase: {{ .Values.networking.clusterDomain | quote }}
+    {{- /*
+      The operator resolves its own MariaDB pods, and the webhook certificate
+      gets its SAN, from CLUSTER_NAME, which the vendored subchart reads from
+      clusterName. Same subchart-key route as above; a package rendered
+      without this Secret falls back to the literal in its values.yaml.
+    */}}
+    mariadb-operator:
+      clusterName: {{ .Values.networking.clusterDomain | quote }}
     _cluster:
       root-host: {{ $rootHost | quote }}
       bundle-name: {{ .Values.bundles.system.variant | quote }}
@@ -253,8 +261,39 @@ stringData:
              null/omitted in custom values. Missing key -> the true default,
              matching the chart values.yaml. */}}
       monitoring-enabled: {{ dig "rootEnabled" true (.Values.monitoring | default dict) | quote }}
+      {{- /* Whether the root tenant runs its own ingress-nginx
+             (Tenant/root spec.ingress). `dig`, as for monitoring-enabled
+             above, so an explicit false survives. */}}
+      ingress-enabled: {{ dig "rootEnabled" true (.Values.ingress | default dict) | quote }}
+      {{- /* The rate each shared-central tracing tenant's collector holds it
+             to. Only written when set: every release in every tenant reads
+             this Secret, and a key appearing would upgrade all of them. */}}
+      {{- /* Helm reads a number from values as a float64, so a whole number
+             is checked as one and written back as int64 digits. Sprig's int64
+             reads a leading zero as octal and returns 0 on a parse error, so a
+             string is converted only once it is plain decimal digits. The
+             ceiling (1 TiB/s) keeps every value exact as a float64 and keeps
+             the collector's per-replica split clear of int64 overflow. */}}
+      {{- $tracingMax := 1099511627776 }}
+      {{- $tracingRaw := dig "tracingCentralTenantBytesPerSecond" 0 (.Values.monitoring | default dict) }}
+      {{- $tracingRate := -1 }}
+      {{- if kindIs "string" $tracingRaw }}
+      {{-   if regexMatch "^(0|[1-9][0-9]{0,12})$" $tracingRaw }}{{ $tracingRate = int64 $tracingRaw }}{{ end }}
+      {{- else if or (kindIs "float64" $tracingRaw) (kindIs "int64" $tracingRaw) (kindIs "int" $tracingRaw) }}
+      {{-   $f := float64 $tracingRaw }}
+      {{-   if eq (floor $f) $f }}{{ $tracingRate = int64 $tracingRaw }}{{ end }}
+      {{- end }}
+      {{- if or (lt (int64 $tracingRate) 0) (gt (int64 $tracingRate) (int64 $tracingMax)) }}
+      {{-   fail (printf "monitoring.tracingCentralTenantBytesPerSecond must be a whole number of bytes per second, at most %d, or 0 for the default; got %v" $tracingMax $tracingRaw) }}
+      {{- end }}
+      {{- if gt (int64 $tracingRate) 0 }}
+      tracing-central-tenant-bytes-per-second: {{ int64 $tracingRate | quote }}
+      {{- end }}
       cluster-domain: {{ .Values.networking.clusterDomain | quote }}
       api-server-endpoint: {{ .Values.publishing.apiServerEndpoint | quote }}
+      {{- /* Display-only DNS suffix for the dashboard's Services tab
+             (<service>.<suffix>). Empty -> the console shows no hostname. */}}
+      service-domain: {{ .Values.publishing.serviceDomain | default "" | toString | trimAll "." | quote }}
       {{- with .Values.branding }}
       branding:
         {{- . | toYaml | nindent 8 }}

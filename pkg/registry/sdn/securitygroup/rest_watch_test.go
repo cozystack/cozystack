@@ -15,6 +15,7 @@ import (
 	"k8s.io/apimachinery/pkg/watch"
 
 	sdnv1alpha1 "github.com/cozystack/cozystack/pkg/apis/sdn/v1alpha1"
+	"github.com/cozystack/cozystack/pkg/registry/registrytest"
 )
 
 // collectEvents drains up to n events from the watch, or returns early if the
@@ -109,13 +110,88 @@ func TestWatchDeletedEventPassesThrough(t *testing.T) {
 	}
 }
 
-func TestWatchSendInitialEventsEmitsBookmark(t *testing.T) {
+// TestWatchPlainWatchEmitsNoInitialEventsEndBookmark covers a watch with no
+// resourceVersion: the apiserver defaults SendInitialEvents on for it but leaves
+// bookmarks off, so the client never asked for the terminating bookmark.
+func TestWatchPlainWatchEmitsNoInitialEventsEndBookmark(t *testing.T) {
 	r := newTestREST(t)
 	ctx, cancel := context.WithCancel(ctxNS())
 	defer cancel()
 
 	sendInitialEvents := true
 	w, err := r.Watch(ctx, &metainternal.ListOptions{SendInitialEvents: &sendInitialEvents})
+	if err != nil {
+		t.Fatalf("Watch returned error: %v", err)
+	}
+	defer w.Stop()
+
+	np := markedPolicy("sg-db")
+	if err := r.c.Create(ctx, np); err != nil {
+		t.Fatalf("create marked: %v", err)
+	}
+	np.Annotations = map[string]string{"touched": "1"}
+	if err := r.c.Update(ctx, np); err != nil {
+		t.Fatalf("update marked: %v", err)
+	}
+
+	evs := collectEvents(t, w, 3, 2*time.Second)
+	var types []watch.EventType
+	for _, ev := range evs {
+		types = append(types, ev.Type)
+		if ev.Type == watch.Bookmark {
+			t.Fatalf("unrequested bookmark on a plain watch: %+v", ev.Object)
+		}
+	}
+	if len(types) != 2 || types[0] != watch.Added || types[1] != watch.Modified {
+		t.Fatalf("expected [ADDED MODIFIED], got %v", types)
+	}
+}
+
+// TestWatchBackingBookmarksFollowTheClient pins that the backing watch asks for
+// bookmarks only when the client did: every backing bookmark is forwarded, and
+// the fake client never sends one, so the event stream alone cannot show it.
+func TestWatchBackingBookmarksFollowTheClient(t *testing.T) {
+	yes := true
+	for _, tc := range []struct {
+		name string
+		opts metainternal.ListOptions
+		want bool
+	}{
+		{"plain watch defaulted by the apiserver", metainternal.ListOptions{SendInitialEvents: &yes}, false},
+		{"watch list", metainternal.ListOptions{SendInitialEvents: &yes, AllowWatchBookmarks: true}, true},
+		{"bookmarks only", metainternal.ListOptions{AllowWatchBookmarks: true}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := newTestREST(t)
+			spy := &registrytest.RawRecordingWatch{WithWatch: r.w}
+			r.w = spy
+			ctx, cancel := context.WithCancel(ctxNS())
+			defer cancel()
+
+			w, err := r.Watch(ctx, &tc.opts)
+			if err != nil {
+				t.Fatalf("Watch returned error: %v", err)
+			}
+			defer w.Stop()
+
+			raw := spy.RawFor(&CiliumNetworkPolicyList{})
+			if raw == nil {
+				t.Fatal("backing watch was called without raw options")
+			}
+			if raw.AllowWatchBookmarks != tc.want {
+				t.Fatalf("backing AllowWatchBookmarks = %v, want %v", raw.AllowWatchBookmarks, tc.want)
+			}
+		})
+	}
+}
+
+func TestWatchSendInitialEventsEmitsBookmark(t *testing.T) {
+	r := newTestREST(t)
+	ctx, cancel := context.WithCancel(ctxNS())
+	defer cancel()
+
+	sendInitialEvents := true
+	w, err := r.Watch(ctx, &metainternal.ListOptions{SendInitialEvents: &sendInitialEvents, AllowWatchBookmarks: true})
 	if err != nil {
 		t.Fatalf("Watch returned error: %v", err)
 	}

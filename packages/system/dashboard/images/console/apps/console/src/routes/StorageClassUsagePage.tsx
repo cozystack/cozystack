@@ -1,7 +1,7 @@
 import { useMemo } from "react"
 import { Link, useParams } from "react-router"
 import { Section, Spinner } from "@cozystack/ui"
-import { useK8sList } from "@cozystack/k8s-client"
+import { useK8sList, K8sApiError } from "@cozystack/k8s-client"
 import { ChevronLeft } from "lucide-react"
 import { parseQuantity, humanizeBytes } from "../lib/k8s-quantity.ts"
 import { workloadOwner } from "../lib/workload.ts"
@@ -76,7 +76,9 @@ export function StorageClassUsagePage() {
       ) : error ? (
         <Section>
           <div className="px-2 py-4 text-sm text-red-700">
-            Failed to load persistent volume claims: {error.message}
+            {error instanceof K8sApiError && error.status === 403
+              ? "You do not have permission to view persistent volume claims."
+              : `Failed to load persistent volume claims: ${error.message}`}
           </div>
         </Section>
       ) : rows.length === 0 ? (

@@ -19,7 +19,7 @@ metadata:
 spec:
   applicationRef:
     apiGroup: apps.cozystack.io
-    kind: Redis
+    kind: ${APP_KIND}
     name: ${REDIS_NAME}
   backupClassName: ${BACKUPCLASS_NAME}
 EOF

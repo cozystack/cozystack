@@ -1,0 +1,44 @@
+suite: grafana OIDC client (grafanaHost helper) guards an empty apex in isolation
+templates:
+  - templates/grafana/oidc-keycloak.yaml
+
+release:
+  name: monitoring
+  namespace: tenant-root
+
+capabilities:
+  apiVersions:
+    - v1.edp.epam.com/v1
+
+tests:
+  - it: fails when mode is System and the apex is empty with no host override
+    set:
+      oidc:
+        mode: System
+      _cluster:
+        oidc-enabled: "true"
+        root-host: example.org
+      _namespace:
+        host: ""
+        ingress: tenant-root
+    asserts:
+      - failedTemplate:
+          errorMessage: "the tenant apex (_namespace.host) is empty and this app sets no host override, so its ingress hostname would be malformed. Set tenant.spec.host on this tenant, inherit it from a parent that has host set, or set this app's host value."
+
+  - it: renders the KeycloakClient webUrl from the apex when it is set
+    set:
+      oidc:
+        mode: System
+      _cluster:
+        oidc-enabled: "true"
+        root-host: example.org
+      _namespace:
+        host: example.org
+        ingress: tenant-root
+    documentSelector:
+      path: kind
+      value: KeycloakClient
+    asserts:
+      - equal:
+          path: spec.webUrl
+          value: https://grafana.example.org

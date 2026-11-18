@@ -19,7 +19,7 @@ LINE='----------------------------------------------------------------'
 # the fail handler prints all of it, so quiet mode drops the output of passing
 # tests only -- which by definition did not establish the result. On the unit
 # lane that is a ~40x cut (1338 tests: 239k lines/15M of which 98% was trace),
-# and it is why the Makefile's bats-unit-tests target sets it.
+# and it is why the Makefile's bats-posix-compat-tests target sets it.
 #
 # One exception, stated because it is the whole exposure quiet mode adds: the
 # fail handler runs only after the pipeline returns, and there is no INT/TERM
@@ -208,7 +208,7 @@ _cozy_on_exit() {
       # capture would read as a complete one listing fewer crash-loops than
       # actually occurred. This handler's whole worst case is ~1350s (330 + 390
       # + 630, each leg including its 30s kill grace) against a job capped at
-      # 215 minutes with no per-step timeout —
+      # 265 minutes with no per-step timeout —
       # deliberate, for the same reason recorded in hack/e2e-chainsaw/.chainsaw.yaml:
       # a bounded, honest wait beats a kill that collects nothing.
       if [ "$_prev_rc" -ne 0 ]; then
@@ -265,7 +265,7 @@ _cozy_on_exit() {
     if [ "$_cozy_cluster_captures" -eq 1 ] && command -v kubectl >/dev/null 2>&1 && [ -x "$(dirname "$0")/e2e-capture-dataplane.sh" ]; then
       echo "» capturing host->pod data-plane for NotReady pods -> $_snap/dataplane"
       _dp_rc=0
-      timeout -k 30 600 "$(dirname "$0")/e2e-capture-dataplane.sh" "$_snap/dataplane" 2>&1 || _dp_rc=$?
+      COZY_DATAPLANE_BUDGET=570 timeout -k 30 600 "$(dirname "$0")/e2e-capture-dataplane.sh" "$_snap/dataplane" 2>&1 || _dp_rc=$?
       # Read, not propagated: the status still cannot change the job's outcome,
       # it only gets a line. The collector names every read of its own that it
       # could not finish, which leaves this backstop as the one remaining way
@@ -314,6 +314,16 @@ LC_ALL=C awk '
 ' "$TEST_FILE" > "$TMP_SH"
 
 [ -f "$TMP_SH" ] || { echo "Failed to generate test functions" >&2; exit 1; }
+
+# Compatibility with unit files shared with Bats. Only adjacent .bash helpers
+# are supported; cozytest already enables nounset when it runs a test body.
+load() {
+  _lib="$(dirname "$TEST_FILE")/$1.bash"
+  [ -f "$_lib" ] || { echo "load: no such helper: $_lib" >&2; return 1; }
+  # shellcheck disable=SC1090
+  . "$_lib"
+}
+
 # shellcheck disable=SC1090
 . "$TMP_SH"
 

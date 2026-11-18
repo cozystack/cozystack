@@ -90,7 +90,7 @@ spec:
 
   myCnfConfigMapKeyRef:
     name: {{ .Release.Name }}-my-cnf
-    key: config
+    key: my.cnf
 
   service:
     metadata:

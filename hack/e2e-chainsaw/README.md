@@ -2,7 +2,7 @@
 
 The Cozystack E2E app suite, written for [Kyverno Chainsaw](https://github.com/kyverno/chainsaw) — a declarative, Kubernetes-native E2E test framework (CNCF, part of the Kyverno project; successor to KUTTL).
 
-This directory replaces the per-app BATS suite that used to live in `hack/e2e-apps/*.bats`. The CI `e2e` job runs `chainsaw test hack/e2e-chainsaw/` after `make install-cozystack`; cluster bootstrap (`hack/e2e-prepare-cluster.bats`, `hack/e2e-install-cozystack.bats`) and the OpenAPI checks (`hack/e2e-test-openapi.bats`) remain BATS.
+This directory replaces the per-app BATS suite that used to live in `hack/e2e-apps/*.bats`. The CI `e2e` job runs every suite under `hack/e2e-chainsaw/` through `hack/e2e-chainsaw-run.sh` after `make install-cozystack`; cluster bootstrap (`hack/e2e-prepare-cluster-container.bats`, `hack/e2e-install-cozystack.bats`) and the OpenAPI checks (`hack/e2e-test-openapi.bats`) remain BATS.
 
 ## Layout
 
@@ -18,7 +18,15 @@ hack/e2e-chainsaw/
 └── ...
 ```
 
-Suites: `postgres`, `bucket`, `mariadb`, `mongodb`, `redis`, `valkey`, `qdrant`, `clickhouse`, `kafka`, `rabbitmq`, `etcd`, `openbao`, `harbor`, `foundationdb`, `external-dns`, `kuberture`, `vminstance`, `gateway`, `opensearch`, `kubernetes-latest`, `kubernetes-previous`, `securitygroup`.
+A suite is a directory directly under `hack/e2e-chainsaw/` in or below which Chainsaw finds a Test. Three layouts do that, and the selector (`hack/select-e2e.sh`) and the leak-guard allowlist both recognise the same three:
+
+- `chainsaw-test.yaml`, the usual one, or `chainsaw-test.yml` when the `.yaml` is absent;
+- numbered step files such as `01-install.yaml`, which Chainsaw turns into a Test on its own when neither of the above exists;
+- either of those in a subdirectory of the suite, since Chainsaw walks every subdirectory of the directory it is handed.
+
+A parked `chainsaw-test.yaml.disabled` is none of these: the directory is then not a suite, is selected by nothing and cannot be allowlisted.
+
+Suites: `postgres`, `bucket`, `mariadb`, `mongodb`, `redis`, `valkey`, `qdrant`, `clickhouse`, `kafka`, `kafka-metadata`, `rabbitmq`, `etcd`, `openbao`, `harbor`, `foundationdb`, `external-dns`, `kuberture`, `vminstance`, `gateway`, `opensearch`, `monitoring`, `kubernetes-latest`, `kubernetes-previous`, `securitygroup`, `seaweedfs`, `computeplane`, `observability-proxy`. `kubernetes-proxmox` is parked as `chainsaw-test.yaml.disabled` and runs only in `.github/workflows/e2e-proxmox.yaml`, which needs a Proxmox hypervisor.
 
 ## What Chainsaw buys over the BATS suite
 
@@ -30,12 +38,13 @@ Suites: `postgres`, `bucket`, `mariadb`, `mongodb`, `redis`, `valkey`, `qdrant`,
 
 ## Test anatomy
 
-Each suite is a directory with a `chainsaw-test.yaml` (one or more `Test` docs) plus the manifests it applies. A step has `try` (operations: `apply`, `assert`, `error`, `script`, `delete`, …), optional `catch` (diagnostics on failure), and optional `finally` (teardown regardless of outcome).
+Each suite is a directory with one or more `Test` docs (in one of the layouts above, usually a `chainsaw-test.yaml`) plus the manifests it applies. A step has `try` (operations: `apply`, `assert`, `error`, `script`, `delete`, …), optional `catch` (diagnostics on failure), and optional `finally` (teardown regardless of outcome).
 
 Declarative suites assert on `status.conditions` and concrete fields. Inherently imperative suites keep their logic in `script` steps:
 
 - **openbao** — `bao operator init`/`unseal` via `kubectl exec`.
 - **kuberture** — `jq` on Service annotations + external-dns split-horizon log assertions.
+- **vminstance** — a server-side dry-run eviction of the VM's launcher pod, checked against the VMI's `LiveMigratable` condition.
 - **gateway** — admission-rejection cases that need `kubectl --as` impersonation or error-message greps; the tenant apex is read from the namespace `namespace.cozystack.io/host` label at runtime so they pass on any host.
 - **kubernetes-latest/previous** — wrap `_lib/run-kubernetes.sh` (Kamaji bringup, port-forward, LB/NFS/ouroboros). The script `cd`s to the repo root (the test dir is `hack/e2e-chainsaw/<suite>`, so repo root is `../../..`).
 
@@ -54,7 +63,7 @@ Declarative suites assert on `status.conditions` and concrete fields. Inherently
 
 ## Running locally
 
-Requires a cluster with Cozystack installed and a `tenant-test` namespace (the environment `hack/e2e-install-cozystack.bats` produces). `bucket` additionally needs `mc`, `nc`, and `jq` on the host; `kuberture`/`openbao`/`harbor` need `jq`.
+Requires a cluster with Cozystack installed and a `tenant-test` namespace (the environment `hack/e2e-install-cozystack.bats` produces). `bucket` and `seaweedfs` additionally need `mc`, `nc`, and `jq` on the host; `kuberture`/`openbao`/`foundationdb`/`securitygroup`/`computeplane`/`kubernetes-latest`/`kubernetes-previous`/`vminstance` need `jq`; `observability-proxy` needs `curl` and `nc`.
 
 ```bash
 # install chainsaw
@@ -72,4 +81,4 @@ chainsaw test postgres/
 
 ## CI integration
 
-The `e2e` job in `.github/workflows/pull-requests.yaml` runs `make -C packages/core/testing test-chainsaw` (which execs `chainsaw test hack/e2e-chainsaw/` inside the e2e sandbox) and uploads `chainsaw-report.xml`. The sandbox image (`packages/core/testing/images/e2e-sandbox/Dockerfile`) ships the `chainsaw` binary alongside `kubectl`/`helm`/`mc`/`jq`/`nc`.
+The `e2e` job in `.github/workflows/pull-requests.yaml` runs `make -C packages/core/testing test-chainsaw` (which execs `hack/e2e-chainsaw-run.sh` inside the e2e sandbox) and uploads `chainsaw-report.xml`. The runner calls `chainsaw test` once per suite directory, fails a suite whose pods outlive its cleanup by more than the default `timeouts.cleanup` (`LEAKED-PODS suite=<dir>` in the log; see `docs/agents/e2e-testing.md` §8 and `_lib/leak-allowlist.txt` for known, filed leaks), and merges the per-suite reports into that one file. A local `chainsaw test` as shown above runs the same tests without the leak check. The sandbox image (`packages/core/testing/images/e2e-sandbox/Dockerfile`) ships the `chainsaw` binary alongside `kubectl`/`helm`/`mc`/`jq`/`nc`, built from source with a patch that keeps an assert polling through transient API errors such as an etcd leader change; a released `chainsaw` run locally fails the assert on the first such error instead.

@@ -1,0 +1,115 @@
+suite: fluent-bit routes tenant logs by the namespace monitoring label
+
+# The node fluent-bit sends a namespace's container logs to the VictoriaLogs
+# named by its namespace.cozystack.io/monitoring label, when that label names a
+# tenant other than global.target. These cases pin which namespaces get a rule
+# and an output, which are skipped, and that a routed record is labelled with
+# the tenant it lands in rather than with global.target.
+templates:
+  - charts/fluent-bit/templates/configmap.yaml
+release:
+  name: monitoring-agents
+  namespace: cozy-monitoring
+set:
+  global:
+    target: tenant-root
+kubernetesProvider:
+  scheme:
+    "v1/Namespace":
+      gvr:
+        version: v1
+        resource: namespaces
+      namespaced: false
+  objects:
+    - kind: Namespace
+      apiVersion: v1
+      metadata:
+        name: cozy-system
+    - kind: Namespace
+      apiVersion: v1
+      metadata:
+        name: tenant-empty
+        labels:
+          namespace.cozystack.io/monitoring: ""
+    - kind: Namespace
+      apiVersion: v1
+      metadata:
+        name: tenant-root
+        labels:
+          namespace.cozystack.io/monitoring: tenant-root
+    - kind: Namespace
+      apiVersion: v1
+      metadata:
+        name: tenant-inherits-root
+        labels:
+          namespace.cozystack.io/monitoring: tenant-root
+    - kind: Namespace
+      apiVersion: v1
+      metadata:
+        name: tenant-a
+        labels:
+          namespace.cozystack.io/monitoring: tenant-a
+    - kind: Namespace
+      apiVersion: v1
+      metadata:
+        name: tenant-a-child
+        labels:
+          namespace.cozystack.io/monitoring: tenant-a
+    - kind: Namespace
+      apiVersion: v1
+      metadata:
+        name: tenant-b
+        labels:
+          namespace.cozystack.io/monitoring: tenant-b
+tests:
+  - it: routes every namespace of a monitored tenant through one rewrite_tag filter
+    asserts:
+      - matchRegex:
+          path: data["fluent-bit.conf"]
+          pattern: 'Name rewrite_tag\n\s+Match kube\.\*\n\s+Rule \$kubernetes_namespace_name \^\(tenant-a\|tenant-a-child\)\$ tenant\.tenant-a\.\$TAG false\n\s+Rule \$kubernetes_namespace_name \^\(tenant-b\)\$ tenant\.tenant-b\.\$TAG false\n'
+
+  - it: writes one output per monitored tenant, to that tenant's vlinsert
+    asserts:
+      - matchRegex:
+          path: data["fluent-bit.conf"]
+          pattern: 'Match tenant\.tenant-a\.\*\n\s+Host vlinsert-generic\.tenant-a\.svc'
+      - matchRegex:
+          path: data["fluent-bit.conf"]
+          pattern: 'Match tenant\.tenant-b\.\*\n\s+Host vlinsert-generic\.tenant-b\.svc'
+
+  - it: labels a routed record with the tenant it is sent to
+    asserts:
+      - matchRegex:
+          path: data["fluent-bit.conf"]
+          pattern: 'Match tenant\.tenant-a\.\*\n\s+Set tenant tenant-a\n'
+      - matchRegex:
+          path: data["fluent-bit.conf"]
+          pattern: 'Match tenant\.tenant-b\.\*\n\s+Set tenant tenant-b\n'
+
+  - it: leaves unlabelled, empty-labelled and global.target namespaces on the default outputs
+    asserts:
+      - notMatchRegex:
+          path: data["fluent-bit.conf"]
+          pattern: 'cozy-system|tenant-empty|tenant-inherits-root'
+      - notMatchRegex:
+          path: data["fluent-bit.conf"]
+          pattern: 'tenant\.tenant-root\.|\(tenant-root\)|Host vlinsert-generic\.\.svc|tenant\.\.'
+
+  - it: keeps global.target on the default outputs
+    asserts:
+      - matchRegex:
+          path: data["fluent-bit.conf"]
+          pattern: 'Match kube\.\*\n\s+Host vlinsert-generic\.tenant-root\.svc'
+
+  - it: follows global.target when it names a tenant that is otherwise routed
+    set:
+      global:
+        target: tenant-a
+    asserts:
+      - notMatchRegex:
+          path: data["fluent-bit.conf"]
+          pattern: 'tenant\.tenant-a\.'
+      - matchRegex:
+          path: data["fluent-bit.conf"]
+          pattern: 'Rule \$kubernetes_namespace_name \^\(tenant-inherits-root\|tenant-root\)\$ tenant\.tenant-root\.\$TAG false'
+

@@ -2,11 +2,14 @@
 {{- $endpointHost := $endpoint | trimPrefix "https://" | trimPrefix "http://" -}}
 {{- $secureConn := ternary "1" "0" (hasPrefix "https://" $endpoint) -}}
 {{- $bucketName := include "backupstrategy-controller.bucketName" . -}}
-{{- if $bucketName -}}
+{{- $crdEstablished := include "backupstrategy-controller.crdEstablished" (dict "root" . "crd" "foundationdbs.strategy.backups.cozystack.io") -}}
+{{- if and $bucketName $crdEstablished -}}
 apiVersion: strategy.backups.cozystack.io/v1alpha1
 kind: FoundationDB
 metadata:
   name: cozy-default-foundationdb
+  annotations:
+    backups.cozystack.io/endpoint: {{ include "backupstrategy-controller.endpoint" . | quote }}
 spec:
   template:
     blobStoreConfiguration:

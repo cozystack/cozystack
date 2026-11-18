@@ -1,0 +1,44 @@
+suite: console config.json service-domain wiring
+templates:
+  - templates/configmap.yaml
+
+release:
+  name: dashboard
+  namespace: cozy-dashboard
+
+# The console reads config.json once at startup and treats a missing
+# serviceDomain as "show no hostname". The chart therefore omits
+# the key when _cluster.service-domain is unset or empty, and copies the value
+# verbatim when set. Pin all three, next to the existing branding merge, so a
+# refactor of the $config assembly cannot drop the key or start shipping an
+# empty string the console would have to special-case.
+
+tests:
+  - it: omits serviceDomain when service-domain is unset
+    set:
+      _cluster:
+        root-host: example.org
+    asserts:
+      - notMatchRegex:
+          path: data["config.json"]
+          pattern: serviceDomain
+
+  - it: omits serviceDomain when service-domain is empty
+    set:
+      _cluster:
+        root-host: example.org
+        service-domain: ""
+    asserts:
+      - notMatchRegex:
+          path: data["config.json"]
+          pattern: serviceDomain
+
+  - it: writes serviceDomain when service-domain is set
+    set:
+      _cluster:
+        root-host: example.org
+        service-domain: svc.example.org
+    asserts:
+      - matchRegex:
+          path: data["config.json"]
+          pattern: '"serviceDomain":"svc\.example\.org"'

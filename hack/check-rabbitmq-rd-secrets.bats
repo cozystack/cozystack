@@ -26,6 +26,8 @@
 # templating of the name, or by a label selector that happens to match it -- all
 # of which grant a private key while the guard stays green.
 
+load test_helper
+
 REPO_ROOT="$(cd "$(dirname "${BATS_TEST_FILENAME:-$0}")/.." && pwd)"
 COZYRDS="$REPO_ROOT/packages/system/rabbitmq-rd/cozyrds/rabbitmq.yaml"
 CHART="$REPO_ROOT/packages/apps/rabbitmq"

@@ -12,6 +12,8 @@
 # inspection, which is what a failed test wants anyway. See
 # docs/agents/e2e-testing.md and hack/bats-no-exit-trap.bats.
 
+load test_helper
+
 kubectl_calls=/dev/null
 kubectl_manifest=/dev/null
 kubectl_exec_rc=0
@@ -110,16 +112,6 @@ assert_file_contains() {
   esac
   printf 'expected %s to contain: %s\n' "${file}" "${needle}" >&2
   return 1
-}
-
-assert_file_lacks_pattern() {
-  local pattern="$1"
-  local file="$2"
-
-  if awk -v pattern="${pattern}" '$0 ~ pattern { found = 1 } END { exit found ? 0 : 1 }' "${file}"; then
-    printf 'expected %s not to match: %s\n' "${file}" "${pattern}" >&2
-    return 1
-  fi
 }
 
 @test "worker VMI rows retain names whose default interface has no IP" {
@@ -468,6 +460,7 @@ assert_file_lacks_pattern() {
 
 @test "cleanup deletes diagnostic Certificate before its Pod and Secret" {
   . hack/e2e-chainsaw/_lib/run-kubernetes.sh
+  cozy_wait_linstor_pool_baseline() { return 0; }
   tmp=$(mktemp -d)
   kubectl_calls="$tmp/kubectl.calls"
 

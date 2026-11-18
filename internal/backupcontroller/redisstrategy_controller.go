@@ -3,6 +3,7 @@ package backupcontroller
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"maps"
 	"strings"
@@ -28,6 +29,16 @@ import (
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
+
+// redisAppPrefixes maps each application Kind this driver serves to the
+// resource-name prefix its chart puts in front of the app name (RedisFailover,
+// sentinel Service, auth and CA Secrets). Valkey runs on the same RedisFailover
+// operator, so the one strategy dumps and restores both; the template reads the
+// prefix as .Release.Prefix.
+var redisAppPrefixes = map[string]string{
+	"Redis":  "redis-",
+	"Valkey": "valkey-",
+}
 
 const (
 	redisAppKind = "Redis"
@@ -72,15 +83,15 @@ const (
 	redisDefaultBackupDeadline = 20 * time.Minute
 )
 
-// validateRedisApplicationRef rejects ApplicationRefs that are not
-// apps.cozystack.io/Redis. Without this gate the dispatcher would route
-// non-Redis refs to the Redis driver and the templated redis-dump invocation
-// would fail with confusing runtime errors. Mirrors
+// validateRedisApplicationRef rejects ApplicationRefs that are not one of the
+// apps.cozystack.io kinds in redisAppPrefixes. Without this gate the dispatcher
+// would route other refs to the Redis driver and the templated redis-cli
+// invocation would fail with confusing runtime errors. Mirrors
 // validateAltinityApplicationRef; empty APIGroup is accepted and treated as
 // the default (apps.cozystack.io).
 func validateRedisApplicationRef(ref corev1.TypedLocalObjectReference) error {
-	if ref.Kind != redisAppKind {
-		return fmt.Errorf("redis strategy supports applicationRef.kind=%q, got %q", redisAppKind, ref.Kind)
+	if _, ok := redisAppPrefixes[ref.Kind]; !ok {
+		return fmt.Errorf("redis strategy supports applicationRef.kind Redis or Valkey, got %q", ref.Kind)
 	}
 	apiGroup := ""
 	if ref.APIGroup != nil {
@@ -187,15 +198,20 @@ func redisRestoreObjectKey(b *backupsv1alpha1.Backup) string {
 func renderRedisTemplate(
 	tmpl corev1.PodTemplateSpec,
 	app map[string]any,
-	releaseName, releaseNamespace, mode, objectKey string,
+	appKind, releaseName, releaseNamespace, mode, objectKey string,
 	parameters map[string]string,
 	backup *backupsv1alpha1.Backup,
 ) (*corev1.PodTemplateSpec, error) {
+	prefix, ok := redisAppPrefixes[appKind]
+	if !ok {
+		return nil, fmt.Errorf("no resource-name prefix for application kind %q", appKind)
+	}
 	ctxMap := map[string]any{
 		"Application": app,
 		"Release": map[string]string{
 			"Name":      releaseName,
 			"Namespace": releaseNamespace,
+			"Prefix":    prefix,
 		},
 		"Mode":       mode,
 		"ObjectKey":  objectKey,
@@ -279,7 +295,7 @@ func (r *BackupJobReconciler) reconcileRedis(ctx context.Context, j *backupsv1al
 	app, err := r.getApplicationUnstructured(ctx, j.Namespace, j.Spec.ApplicationRef)
 	if err != nil {
 		if apierrors.IsNotFound(err) || apimeta.IsNoMatchError(err) {
-			return r.markBackupJobFailed(ctx, j, fmt.Sprintf("Redis application not found or kind not registered: %s/%s", j.Namespace, j.Spec.ApplicationRef.Name))
+			return r.markBackupJobFailed(ctx, j, fmt.Sprintf("%s application not found or kind not registered: %s/%s", j.Spec.ApplicationRef.Kind, j.Namespace, j.Spec.ApplicationRef.Name))
 		}
 		return ctrl.Result{}, err
 	}
@@ -300,14 +316,14 @@ func (r *BackupJobReconciler) reconcileRedis(ctx context.Context, j *backupsv1al
 		if proceed, reason, message := redisAppReady(app); !proceed {
 			if redisBackupDeadlineExceeded(j.Status.StartedAt) {
 				return r.markBackupJobFailed(ctx, j, fmt.Sprintf(
-					"Redis application %s/%s not ready within %s (%s: %s)",
-					j.Namespace, j.Spec.ApplicationRef.Name, redisDefaultBackupDeadline, reason, message))
+					"%s application %s/%s not ready within %s (%s: %s)",
+					j.Spec.ApplicationRef.Kind, j.Namespace, j.Spec.ApplicationRef.Name, redisDefaultBackupDeadline, reason, message))
 			}
 			apimeta.SetStatusCondition(&j.Status.Conditions, metav1.Condition{
 				Type:    "Ready",
 				Status:  metav1.ConditionFalse,
 				Reason:  "ApplicationNotReady",
-				Message: fmt.Sprintf("Redis application %s/%s is not ready (%s: %s)", j.Namespace, j.Spec.ApplicationRef.Name, reason, message),
+				Message: fmt.Sprintf("%s application %s/%s is not ready (%s: %s)", j.Spec.ApplicationRef.Kind, j.Namespace, j.Spec.ApplicationRef.Name, reason, message),
 			})
 			if updateErr := r.Status().Update(ctx, j); updateErr != nil {
 				return ctrl.Result{}, updateErr
@@ -322,6 +338,7 @@ func (r *BackupJobReconciler) reconcileRedis(ctx context.Context, j *backupsv1al
 	rendered, err := renderRedisTemplate(
 		strategy.Spec.Template,
 		app,
+		j.Spec.ApplicationRef.Kind,
 		j.Spec.ApplicationRef.Name,
 		j.Namespace,
 		redisModeBackup,
@@ -350,9 +367,9 @@ func (r *BackupJobReconciler) reconcileRedis(ctx context.Context, j *backupsv1al
 		if j.Status.BackupRef != nil {
 			return ctrl.Result{}, nil
 		}
-		artifact, err := r.createRedisBackupArtifact(ctx, j, resolved, objectKey)
+		artifact, err := r.createRedisBackupArtifact(ctx, j, resolved, objectKey, &batchJob.Spec.Template.Spec)
 		if err != nil {
-			return r.markBackupJobFailed(ctx, j, fmt.Sprintf("failed to create Backup artifact: %v", err))
+			return r.failBackupArtifact(ctx, j, err)
 		}
 		now := metav1.Now()
 		j.Status.BackupRef = &corev1.LocalObjectReference{Name: artifact.Name}
@@ -455,7 +472,12 @@ func (r *BackupJobReconciler) createRedisBackupArtifact(
 	j *backupsv1alpha1.BackupJob,
 	resolved *ResolvedBackupConfig,
 	objectKey string,
+	podSpec *corev1.PodSpec,
 ) (*backupsv1alpha1.Backup, error) {
+	existing, probe := r.existingBackup(ctx, j.Namespace, j.Name)
+	if existing != nil {
+		return existing, nil
+	}
 	driverMD := map[string]string{redisObjectMetaKey: objectKey}
 	for k, v := range resolved.Parameters {
 		driverMD[redisParamPrefix+k] = v
@@ -476,6 +498,19 @@ func (r *BackupJobReconciler) createRedisBackupArtifact(
 			Phase: backupsv1alpha1.BackupPhaseReady,
 		},
 	}
+	unmeasured := "whether the Backup already exists could not be checked"
+	if probe {
+		artifact, err := r.redisArtifact(ctx, j.Namespace, objectKey, podSpec)
+		unmeasured = ""
+		if err != nil {
+			getLogger(ctx).Info("leaving the Redis backup artifact unset", "backupjob", j.Name, "objectKey", objectKey, "error", err)
+			var probeErr *artifactProbeError
+			if errors.As(err, &probeErr) {
+				unmeasured = probeErr.reason
+			}
+		}
+		backup.Status.Artifact = artifact
+	}
 	if j.Spec.PlanRef != nil {
 		backup.Spec.PlanRef = j.Spec.PlanRef
 	}
@@ -484,10 +519,22 @@ func (r *BackupJobReconciler) createRedisBackupArtifact(
 			return nil, err
 		}
 		existing := &backupsv1alpha1.Backup{}
-		if getErr := r.Get(ctx, types.NamespacedName{Namespace: backup.Namespace, Name: backup.Name}, existing); getErr != nil {
-			return nil, getErr
+		if getErr := r.apiReader().Get(ctx, types.NamespacedName{Namespace: backup.Namespace, Name: backup.Name}, existing); getErr != nil {
+			return nil, fmt.Errorf("%w: %v", errBackupNotReadBack, getErr)
 		}
 		return existing, nil
+	}
+	// Only once the Backup exists: a terminal Create error fails the
+	// BackupJob, and a collision returns a Backup another pass measured.
+	if r.Recorder != nil {
+		switch {
+		case unmeasured != "":
+			r.Recorder.Eventf(j, corev1.EventTypeNormal, "ArtifactNotMeasured", "The backup succeeded, but its location and size were not recorded: %s", unmeasured)
+		case backup.Status.Artifact != nil && backup.Status.Artifact.SizeBytes == 0:
+			// sizeBytes is omitempty, so a 0 reads as "not measured" on the
+			// Backup; a valid RDB snapshot always carries a header.
+			r.Recorder.Event(j, corev1.EventTypeWarning, "EmptySnapshot", "The backup's RDB snapshot is empty (0 bytes); a valid snapshot is never empty, so this backup is likely broken.")
+		}
 	}
 	return backup, nil
 }
@@ -549,6 +596,12 @@ func (r *RestoreJobReconciler) reconcileRedisRestore(ctx context.Context, restor
 	if err := validateRedisApplicationRef(targetRef); err != nil {
 		return r.markRestoreJobFailed(ctx, restoreJob, err.Error())
 	}
+	// Redis and Valkey diverge in commands and RDB versions across releases, so
+	// a cross-engine replay is not something the strategy can promise.
+	if targetAppKind != backup.Spec.ApplicationRef.Kind {
+		return r.markRestoreJobFailed(ctx, restoreJob, fmt.Sprintf(
+			"cannot restore a %s backup into a %s application", backup.Spec.ApplicationRef.Kind, targetAppKind))
+	}
 
 	if restoreJob.Status.StartedAt == nil {
 		fresh := &backupsv1alpha1.RestoreJob{}
@@ -582,8 +635,8 @@ func (r *RestoreJobReconciler) reconcileRedisRestore(ctx context.Context, restor
 	if err != nil {
 		if apierrors.IsNotFound(err) || apimeta.IsNoMatchError(err) {
 			return r.markRestoreJobFailed(ctx, restoreJob, fmt.Sprintf(
-				"target Redis application not found or kind not registered: %s/%s (deploy it before requesting a restore)",
-				targetNamespace, targetAppName))
+				"target %s application not found or kind not registered: %s/%s (deploy it before requesting a restore)",
+				targetAppKind, targetNamespace, targetAppName))
 		}
 		return ctrl.Result{}, err
 	}
@@ -601,14 +654,14 @@ func (r *RestoreJobReconciler) reconcileRedisRestore(ctx context.Context, restor
 		if proceed, reason, message := redisAppReady(app); !proceed {
 			if redisBackupDeadlineExceeded(restoreJob.Status.StartedAt) {
 				return r.markRestoreJobFailed(ctx, restoreJob, fmt.Sprintf(
-					"target Redis application %s/%s not ready within %s (%s: %s)",
-					targetNamespace, targetAppName, redisDefaultBackupDeadline, reason, message))
+					"target %s application %s/%s not ready within %s (%s: %s)",
+					targetAppKind, targetNamespace, targetAppName, redisDefaultBackupDeadline, reason, message))
 			}
 			apimeta.SetStatusCondition(&restoreJob.Status.Conditions, metav1.Condition{
 				Type:    "Ready",
 				Status:  metav1.ConditionFalse,
 				Reason:  "ApplicationNotReady",
-				Message: fmt.Sprintf("target Redis application %s/%s is not ready (%s: %s)", targetNamespace, targetAppName, reason, message),
+				Message: fmt.Sprintf("target %s application %s/%s is not ready (%s: %s)", targetAppKind, targetNamespace, targetAppName, reason, message),
 			})
 			if updateErr := r.Status().Update(ctx, restoreJob); updateErr != nil {
 				return ctrl.Result{}, updateErr
@@ -622,6 +675,7 @@ func (r *RestoreJobReconciler) reconcileRedisRestore(ctx context.Context, restor
 	rendered, err := renderRedisTemplate(
 		strategy.Spec.Template,
 		app,
+		targetAppKind,
 		targetAppName,
 		targetNamespace,
 		redisModeRestore,
@@ -759,6 +813,7 @@ func (r *BackupReconciler) cleanupRedisBackup(ctx context.Context, backup *backu
 		rendered, rerr := renderRedisTemplate(
 			strategy.Spec.Template,
 			nil,
+			backup.Spec.ApplicationRef.Kind,
 			backup.Spec.ApplicationRef.Name,
 			backup.Namespace,
 			redisModeCleanup,

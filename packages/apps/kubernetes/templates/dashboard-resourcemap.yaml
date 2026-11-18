@@ -10,6 +10,11 @@ rules:
   resourceNames:
   - {{ .Release.Name }}
   verbs: ["get", "list", "watch"]
+{{- /* withholdAdminKubeconfig is internal wiring, deliberately absent from
+       values.yaml and the schema: a wrapper that keeps the cluster-admin
+       credential from the tenant (the computeplane module) sets it in its own
+       HelmRelease values, out of tenant reach. */}}
+{{- if not .Values.withholdAdminKubeconfig }}
 - apiGroups:
   - ""
   resources:
@@ -17,6 +22,7 @@ rules:
   resourceNames:
   - {{ .Release.Name }}-admin-kubeconfig
   verbs: ["get", "list", "watch"]
+{{- end }}
 - apiGroups:
   - ""
   resources:

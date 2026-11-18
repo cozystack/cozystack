@@ -27,7 +27,7 @@ tests:
           content:
             name: redis-ca
             secret:
-              secretName: "redis-{{ .Release.Name }}.ca-cert"
+              secretName: '{{ .Release.Prefix | default "redis-" }}{{ .Release.Name }}.ca-cert'
               optional: true
       - contains:
           path: spec.template.spec.containers[0].volumeMounts

@@ -1,4 +1,39 @@
-harbor: {}
+harbor:
+  # The upstream v2.15 images are amd64-only; `make image` replaces each ref
+  # with a multi-arch rebuild from images/.
+  core:
+    image:
+      repository: docker.io/goharbor/harbor-core
+      tag: v2.15.1@sha256:887a85b8ea98b76bfc9f715f1a0785bb99f9a1034241513902dd6e95be922a83
+  jobservice:
+    image:
+      repository: docker.io/goharbor/harbor-jobservice
+      tag: v2.15.1@sha256:0de4fd2ce3a02d3e6591b439e4674ea085885ddf43652b44004cc67eb19dba12
+  portal:
+    image:
+      repository: docker.io/goharbor/harbor-portal
+      tag: v2.15.1@sha256:ac55161c57a8351807adf8f8def264bdd52667c371d0436beefebdac4341c9e2
+  registry:
+    registry:
+      image:
+        repository: docker.io/goharbor/registry-photon
+        tag: v2.15.1@sha256:ebf0325c2661729dbb317cbf839608eb8b15cfa158911a94976f2c21563c466e
+    controller:
+      image:
+        repository: docker.io/goharbor/harbor-registryctl
+        tag: v2.15.1@sha256:554147a956989175f63f8d41573d716c6ddf6052acd1749c88c0f99ce6ee2bff
+  exporter:
+    image:
+      repository: docker.io/goharbor/harbor-exporter
+      tag: v2.15.1@sha256:372275b6b6abeb571fa7bd5de458e3d75f1a1636503b3c0abe02938f2b285d75
+  nginx:
+    image:
+      repository: docker.io/goharbor/nginx-photon
+      tag: v2.15.1@sha256:1f9d06d040f2478f6cf7f6da0091877bf987a641810f4bfaadb2a87d73dbf4fb
+  trivy:
+    image:
+      repository: docker.io/goharbor/trivy-adapter-photon
+      tag: v2.15.1@sha256:f0c52bed36c083ec4fded26cefab01e4cd58c9354c261cb3156c69f57bb50131
 db:
   replicas: 2
   size: 5Gi

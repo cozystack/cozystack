@@ -2,6 +2,8 @@
 # Successful-node-join timing stays in the normal job log; these mocks keep its
 # resource/event rendering cluster-free under hack/cozytest.sh.
 
+load test_helper
+
 kubectl() {
   case "$*" in
     *"get events.events.k8s.io"*)

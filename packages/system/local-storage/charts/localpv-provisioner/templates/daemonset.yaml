@@ -1,0 +1,183 @@
+{{- if .Values.localpv.enabled }}
+{{- if .Values.localpv.nodeDeployment.enabled }}
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: {{ template "localpv.fullname" . }}-node
+  {{- with .Values.localpv.annotations }}
+  annotations: {{ toYaml . | nindent 4 }}
+  {{- end }}
+  labels:
+    {{- include "localpv.labels" . | nindent 4 }}
+    {{- if .Values.extraLabels -}}
+      {{- toYaml .Values.extraLabels | nindent 4 }}
+    {{- end }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "localpv.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      {{- with .Values.localpv.podAnnotations }}
+      annotations: {{ toYaml . | nindent 8 }}
+      {{- end }}
+      labels:
+        {{- include "localpv.labels" . | nindent 8 }}
+        {{- if .Values.extraLabels -}}
+          {{- toYaml .Values.extraLabels | nindent 8 }}
+        {{- end }}
+        {{- with .Values.localpv.podLabels }}
+          {{- toYaml . | nindent 8 }}
+        {{- end }}
+        {{- with .Values.loggingLabels}}
+          {{ toYaml . | nindent 8 -}}
+        {{- end}}
+    spec:
+    {{- if .Values.localpv.priorityClassName }}
+      priorityClassName: {{ tpl .Values.localpv.priorityClassName . }}
+    {{- end }}
+      {{- if or .Values.global.imagePullSecrets .Values.imagePullSecrets }}
+      imagePullSecrets:
+      {{- include "localpv.common.pullSecrets" . | indent 6 }}
+      {{- end }}
+      serviceAccountName: {{ template "localpv.serviceAccountName" . }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+      - name: {{ template "localpv.fullname" . }}
+        image: "{{ include "localpv.common.image" (dict "imageRoot" .Values.localpv.image "global" .Values.global "override" .Values.globalImageRegistryOverride) }}"
+        imagePullPolicy: {{ default .Values.localpv.image.pullPolicy .Values.global.imagePullPolicy }}
+        {{- if .Values.localpv.privileged }}
+        securityContext:
+          privileged: true
+        {{- end }}
+        resources:
+{{ toYaml .Values.localpv.resources | indent 10 }}
+        env:
+        # OPENEBS_IO_K8S_MASTER enables openebs provisioner to connect to K8s
+        # based on this address. This is ignored if empty.
+        # This is supported for openebs provisioner version 0.5.2 onwards
+        #- name: OPENEBS_IO_K8S_MASTER
+        #  value: "http://10.128.0.12:8080"
+        # OPENEBS_IO_KUBE_CONFIG enables openebs provisioner to connect to K8s
+        # based on this config. This is ignored if empty.
+        # This is supported for openebs provisioner version 0.5.2 onwards
+        #- name: OPENEBS_IO_KUBE_CONFIG
+        #  value: "/home/ubuntu/.kube/config"
+        - name: OPENEBS_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        - name: NODE_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: spec.nodeName
+        # POD_NAME is consumed by the analytics leader-election code in
+        # node-deployment mode so that each DaemonSet pod has a stable,
+        # unique lease identity. Required for correct singleton behavior
+        # of install/ping/heartbeat events.
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        # OPENEBS_SERVICE_ACCOUNT provides the service account of this pod as
+        # environment variable
+        - name: OPENEBS_SERVICE_ACCOUNT
+          valueFrom:
+            fieldRef:
+              fieldPath: spec.serviceAccountName
+        # OPENEBS_IO_BASE_PATH is the environment variable that provides the
+        # default base path on the node where host-path PVs will be provisioned.
+        {{-  if kindIs "bool" .Values.global.analytics.enabled }}
+        - name: OPENEBS_IO_ENABLE_ANALYTICS
+          value: "{{ .Values.global.analytics.enabled }}"
+        {{- else }}
+        - name: OPENEBS_IO_ENABLE_ANALYTICS
+          value: "{{ .Values.analytics.enabled }}"
+        {{- end }}
+          # OPENEBS_IO_ANALYTICS_STATE_CM names the ConfigMap consulted to
+          # decide whether to emit the install event for this Helm release
+          # and to persist ping/heartbeat timestamps across pod restarts.
+          # The provisioner creates and updates this ConfigMap itself; it
+          # is not managed by Helm.
+        - name: OPENEBS_IO_ANALYTICS_STATE_CM
+          value: {{ include "localpv.analyticsStateCM.name" . | quote }}
+          # OPENEBS_IO_ANALYTICS_LEASE names the Lease used to elect a single
+          # analytics emitter across all DaemonSet pods. Release-scoped so
+          # multiple releases in the same namespace do not collide. The
+          # provisioner creates the Lease on-demand via client-go's
+          # leader-election; it is not managed by Helm.
+        - name: OPENEBS_IO_ANALYTICS_LEASE
+          value: {{ include "localpv.analyticsLease.name" . | quote }}
+        {{- if .Values.analytics.gaId }}
+        - name: GA_ID
+          value: {{ .Values.analytics.gaId | quote }}
+        {{- end }}
+        {{- if .Values.analytics.gaKey }}
+        - name: GA_KEY
+          value: {{ .Values.analytics.gaKey | quote }}
+        {{- end }}
+        - name: OPENEBS_IO_BASE_PATH
+          value: "{{ .Values.localpv.basePath }}"
+        - name: OPENEBS_IO_WORKER_THREADS
+          value: {{ .Values.localpv.controller.workers | quote }}
+        - name: OPENEBS_IO_HELPER_IMAGE
+          value: "{{ include "localpv.common.image" (dict "imageRoot" .Values.helperPod.image "global" .Values.global "override" .Values.globalImageRegistryOverride) }}"
+        - name: OPENEBS_IO_HELPER_POD_HOST_NETWORK
+          value: "{{ .Values.helperPod.hostNetwork }}"
+        - name: OPENEBS_IO_INSTALLER_TYPE
+          value: "localpv-charts-helm-nodedeploy"
+        - name: OPENEBS_IO_HELPER_POD_TIMEOUT_SECS
+          value: {{ .Values.helperPod.timeoutSecs | quote }}
+        # Disable leader election in node deployment mode.
+        # Not related to anonymous usage analytics leader election.
+        - name: LEADER_ELECTION_ENABLED
+          value: "false"
+        # Enable node deployment mode
+        - name: NODE_DEPLOYMENT
+          value: "true"
+{{- include "localpv.helper.pullSecrets" . | indent 8 }}
+        args:
+        - "--node-deployment=true"
+        # Process name used for matching is limited to the 15 characters
+        # present in the pgrep output.
+        # So fullname can't be used here with pgrep (>15 chars).A regular expression
+        # that matches the entire command name has to specified.
+        # Anchor `^` : matches any string that starts with `provisioner-loc`
+        # `.*`: matches any string that has `provisioner-loc` followed by zero or more char
+        livenessProbe:
+          exec:
+            command:
+            - sh
+            - -c
+            - test `pgrep -c "^provisioner-loc.*"` = 1
+          initialDelaySeconds: {{ .Values.localpv.healthCheck.initialDelaySeconds }}
+          periodSeconds: {{ .Values.localpv.healthCheck.periodSeconds }}
+        volumeMounts:
+        - name: host-root
+          mountPath: /host
+          mountPropagation: HostToContainer
+{{- if .Values.localpv.nodeDeployment.additionalVolumeMounts }}
+{{ toYaml .Values.localpv.nodeDeployment.additionalVolumeMounts | indent 8 }}
+{{- end }}
+      volumes:
+      - name: host-root
+        hostPath:
+          path: /
+          type: Directory
+{{- if .Values.localpv.nodeDeployment.additionalVolumes }}
+{{ toYaml .Values.localpv.nodeDeployment.additionalVolumes | indent 6 }}
+{{- end }}
+{{- if .Values.localpv.nodeSelector }}
+      nodeSelector:
+{{ toYaml .Values.localpv.nodeSelector | indent 8 }}
+{{- end }}
+{{- if $tolerations := include "tolerations_with_early_eviction" . }}
+      tolerations: {{ $tolerations }}
+{{- end }}
+{{- if .Values.localpv.affinity }}
+      affinity:
+{{ toYaml .Values.localpv.affinity | indent 8 }}
+{{- end }}
+{{- end }}
+{{- end }}

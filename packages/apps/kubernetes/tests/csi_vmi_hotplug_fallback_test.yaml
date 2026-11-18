@@ -1,0 +1,30 @@
+suite: KubeVirt CSI controller VMI hotplug fallback
+
+templates:
+  - templates/csi/deploy.yaml
+
+values:
+  - values/common.yaml
+
+release:
+  name: test-k8s
+  namespace: tenant-test
+
+tests:
+  # Pinned while packages/system/kubevirt leaves HotplugVolumes out of the
+  # static featureGates, so virt-api rejects the VMI-level removevolume on a
+  # VM-owned VMI. This test does not read that CR; the two change together.
+  - it: turns the VMI hotplug fallback off while the KubeVirt CR leaves HotplugVolumes off
+    documentSelector:
+      path: kind
+      value: Deployment
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].name
+          value: csi-driver
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: "--enable-vmi-hotplug-fallback=false"
+      - notContains:
+          path: spec.template.spec.containers[0].args
+          content: "--enable-vmi-hotplug-fallback=true"

@@ -3,9 +3,9 @@
 # The chart deploys Kafka in KRaft mode (no ZooKeeper): a combined-free layout
 # of separate broker + controller KafkaNodePools. This test asserts the KRaft
 # topology renders and converges (both node pools present, the Strimzi Kafka CR
-# reaches kafkaMetadataState=KRaft) and that no ZooKeeper resources remain.
-# Chainsaw's built-in cleanup deletes the applied Kafka CR and fails the test if
-# the teardown hangs, so no explicit delete step is needed.
+# is Ready) and that no ZooKeeper resources remain.
+# The last step deletes the app itself and checks that no node pool or Strimzi
+# pod of this cluster survives the uninstall.
 apiVersion: chainsaw.kyverno.io/v1alpha1
 kind: Test
 metadata:
@@ -31,9 +31,25 @@ spec:
     try:
     - apply:
         file: kafka.yaml
+    # Both node pools set deleteClaim: false, so the volumes outlive the app
+    # and would hold their LINSTOR space for every later suite. Chainsaw runs
+    # a step's cleanup ops after this step's cleaner has deleted the app, on a
+    # failed run as well. A volume a terminating broker still mounts finishes
+    # deleting once that pod is gone, and the delete waits for that.
+    cleanup:
+    - delete:
+        ref:
+          apiVersion: v1
+          kind: PersistentVolumeClaim
+          labels:
+            strimzi.io/cluster: kafka-test
 
   - name: wait-ready
     try:
+    # Deliberately under the floor, kafka-rd's default 10m install timeout: a
+    # healthy cluster is Ready in a few minutes, so a failed install ends the
+    # run early as a bare assert timeout, and the catch block's describe of the
+    # HelmRelease is where its state is read.
     - assert:
         timeout: 6m
         resource:
@@ -57,7 +73,7 @@ spec:
     - assert:
         timeout: 5m
         resource:
-          apiVersion: kafka.strimzi.io/v1beta2
+          apiVersion: kafka.strimzi.io/v1
           kind: KafkaTopic
           metadata:
             name: kafka-test-test-results
@@ -75,7 +91,7 @@ spec:
     - assert:
         timeout: 2m
         resource:
-          apiVersion: kafka.strimzi.io/v1beta2
+          apiVersion: kafka.strimzi.io/v1
           kind: KafkaNodePool
           metadata:
             labels:
@@ -86,7 +102,7 @@ spec:
     - assert:
         timeout: 2m
         resource:
-          apiVersion: kafka.strimzi.io/v1beta2
+          apiVersion: kafka.strimzi.io/v1
           kind: KafkaNodePool
           metadata:
             labels:
@@ -97,15 +113,13 @@ spec:
     - assert:
         timeout: 5m
         resource:
-          apiVersion: kafka.strimzi.io/v1beta2
+          apiVersion: kafka.strimzi.io/v1
           kind: Kafka
           metadata:
             name: kafka-test
-            annotations:
-              strimzi.io/kraft: enabled
-              strimzi.io/node-pools: enabled
           status:
-            kafkaMetadataState: KRaft
+            (conditions[?type == 'Ready']):
+            - status: "True"
     # KRaft mode ships no ZooKeeper: the client Service must never exist.
     - error:
         resource:
@@ -121,6 +135,51 @@ spec:
           metadata:
             name: kafka-test-kafka-bootstrap
           (subsets[0].addresses[0].ip != null): true
+
+  # The node pools are created by the migration hook, outside the release
+  # manifest, and each owns the StrimziPodSet running its brokers, so only the
+  # chart's pre-delete hook removes them. Deleting the app explicitly here,
+  # rather than leaving it to Chainsaw's cleanup, is what lets the test look at
+  # the namespace afterwards. The pod check selects on strimzi.io/cluster on
+  # purpose, so it covers every pod Strimzi runs for this cluster (brokers,
+  # controllers, entity operator), not only the brokers.
+  - name: verify-uninstall-removes-node-pools
+    try:
+    # Waits for the app, and so the HelmRelease uninstall behind it, to finish.
+    # 8m, the same budget and for the same reason as timeouts.cleanup above:
+    # this delete is the teardown that cleanup used to perform.
+    - delete:
+        timeout: 8m
+        ref:
+          apiVersion: apps.cozystack.io/v1alpha1
+          kind: Kafka
+          name: test
+    # The pre-delete hook deleted the pools before the delete above returned;
+    # the pods then go through garbage collection and their termination grace
+    # period, which the default error timeout covers.
+    - error:
+        resource:
+          apiVersion: kafka.strimzi.io/v1
+          kind: KafkaNodePool
+          metadata:
+            labels:
+              strimzi.io/cluster: kafka-test
+    - error:
+        resource:
+          apiVersion: v1
+          kind: Pod
+          metadata:
+            labels:
+              strimzi.io/cluster: kafka-test
+    catch:
+    # A failed error op already names each object still matching. This adds
+    # the StrimziPodSets between the pools and the pods, and the pods' phase.
+    - script:
+        timeout: 1m
+        content: |
+          kubectl -n "$NAMESPACE" --request-timeout=15s \
+            get kafkanodepools.kafka.strimzi.io,strimzipodsets.core.strimzi.io,pods \
+            -l strimzi.io/cluster=kafka-test -o wide || true
 ---
 # Logical topic-data backup -> in-place + to-copy RestoreJob round-trip,
 # driving the validated example scripts (examples/backups/kafka) as the harness
@@ -166,11 +225,11 @@ spec:
       kind: HelmRelease
       name: kafka-kafka-test
   - describe:
-      apiVersion: kafka.strimzi.io/v1beta2
+      apiVersion: kafka.strimzi.io/v1
       kind: Kafka
       name: kafka-kafka-test
   - describe:
-      apiVersion: kafka.strimzi.io/v1beta2
+      apiVersion: kafka.strimzi.io/v1
       kind: Kafka
       name: kafka-kafka-restore
   - describe:
@@ -215,16 +274,17 @@ spec:
           NAMESPACE="$NAMESPACE" examples/backups/kafka/cleanup.sh
         check:
           ($error == null): true
-    # The 40m budget is the whole documented flow: bucket provisioning, TWO
+    # The 46m budget is the whole documented flow: bucket provisioning, TWO
     # two-broker Strimzi clusters (source + to-copy target, each pulls the
-    # Kafka image, boots ZooKeeper then the brokers, and passes readiness), the
-    # freeze-end-offset drain to S3, the in-place restore, the refused restore
-    # into the populated topic (three strategy Pod attempts, each stopping at
-    # the emptiness check), and the to-copy restore with its verification.
+    # Kafka image, boots its KRaft controllers and brokers, and passes
+    # readiness), the freeze-end-offset drain to S3, the in-place restore, the
+    # refused restore into the populated topic (three strategy Pod attempts,
+    # each stopping at the emptiness check), and the to-copy restore with its
+    # verification, sized with the 660s bucket HR wait in 03-create-bucket.sh.
     # run-all.sh fails fast on terminal BackupJob/RestoreJob phases and stalled
     # HelmReleases rather than polling out the budget.
     - script:
-        timeout: 40m
+        timeout: 46m
         content: |
           set -eu
           cd ../../..
@@ -254,3 +314,63 @@ spec:
           set -eu
           cd ../../..
           NAMESPACE="$NAMESPACE" examples/backups/kafka/cleanup.sh
+    # cleanup.sh leaves the volumes, which deleteClaim: false keeps past each
+    # app's uninstall, so they go here, after both apps are gone.
+    - delete:
+        ref:
+          apiVersion: v1
+          kind: PersistentVolumeClaim
+          labels:
+            strimzi.io/cluster: kafka-kafka-test
+    - delete:
+        ref:
+          apiVersion: v1
+          kind: PersistentVolumeClaim
+          labels:
+            strimzi.io/cluster: kafka-kafka-restore
+
+  # cleanup.sh above deleted both Kafka apps and waited for them to go, so their
+  # uninstalls have run, and the node pools the migration hook created outside
+  # the release manifest must be gone with them. The pod checks select on
+  # strimzi.io/cluster on purpose, so they cover every pod Strimzi runs for each
+  # cluster, not only the brokers. What is left is garbage collection and the
+  # pods' termination grace period, which the default error timeout covers.
+  - name: verify-uninstall-removes-node-pools
+    try:
+    - error:
+        resource:
+          apiVersion: kafka.strimzi.io/v1
+          kind: KafkaNodePool
+          metadata:
+            labels:
+              strimzi.io/cluster: kafka-kafka-test
+    - error:
+        resource:
+          apiVersion: kafka.strimzi.io/v1
+          kind: KafkaNodePool
+          metadata:
+            labels:
+              strimzi.io/cluster: kafka-kafka-restore
+    - error:
+        resource:
+          apiVersion: v1
+          kind: Pod
+          metadata:
+            labels:
+              strimzi.io/cluster: kafka-kafka-test
+    - error:
+        resource:
+          apiVersion: v1
+          kind: Pod
+          metadata:
+            labels:
+              strimzi.io/cluster: kafka-kafka-restore
+    catch:
+    # A failed error op already names each object still matching. This adds
+    # the StrimziPodSets between the pools and the pods, and the pods' phase.
+    - script:
+        timeout: 1m
+        content: |
+          kubectl -n "$NAMESPACE" --request-timeout=15s \
+            get kafkanodepools.kafka.strimzi.io,strimzipodsets.core.strimzi.io,pods \
+            -l 'strimzi.io/cluster in (kafka-kafka-test,kafka-kafka-restore)' -o wide || true

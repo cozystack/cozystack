@@ -10,10 +10,14 @@
 # is captured into the substitution. These tests execute the wrapper in a
 # `sh -eu` subshell, exactly as chainsaw runs it, against a fake kubectl.
 #
-# cozytest.sh's awk parser recognizes only @test blocks and a bare `}` on its
-# own line; there is no bats `run`/`$status`. Assertions are direct shell tests.
-# Run with: hack/cozytest.sh hack/kubectl-wait-retry_test.bats
+# CI runs this file under Bats through `make bats-unit-tests`. It also remains
+# compatible with the legacy `hack/cozytest.sh` translator, whose awk parser
+# recognizes only @test blocks and a bare `}` on its own line. The tests avoid
+# `run` and `$status` for that compatibility path and use direct shell assertions.
+# Run with: bats hack/kubectl-wait-retry_test.bats
 # -----------------------------------------------------------------------------
+
+load test_helper
 
 FAKEBIN="$PWD/hack/testdata/kubectl-wait-retry"
 
@@ -55,7 +59,7 @@ prep() {
   # A real failure still aborts, is not retried, and the error is visible.
   [ "$rc" -ne 0 ]
   echo "$out" | grep -q 'NotFound'
-  ! echo "$out" | grep -q 'SCRIPT-REACHED-END'
+  if echo "$out" | grep -q 'SCRIPT-REACHED-END'; then echo "FAIL: the script must not have run on past a NotFound"; false; fi
   [ "$(grep -c . "$FAKE_CMDLOG")" -eq 1 ]
   rm -rf "$WORK"
 }

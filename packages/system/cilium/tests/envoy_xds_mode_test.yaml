@@ -1,0 +1,27 @@
+suite: cilium-envoy keeps per-type xDS
+
+# The 1.20 chart defaults envoy-xds-mode to "ads" and gives cilium-envoy an
+# adsConfig bootstrap. A 1.19 agent serves only per-type xDS and a 1.20 agent
+# in ADS mode serves only ADS, so while the agent and envoy DaemonSets roll,
+# every node whose two pods differ in version leaves envoy without config.
+# values.yaml pins split; these assert both halves of what it renders.
+tests:
+  - it: the agent serves per-type xDS
+    template: charts/cilium/templates/cilium-configmap.yaml
+    documentSelector:
+      path: kind
+      value: ConfigMap
+    asserts:
+      - equal:
+          path: data["envoy-xds-mode"]
+          value: split
+
+  - it: the envoy bootstrap asks for per-type xDS, not ADS
+    template: charts/cilium/templates/cilium-envoy/configmap.yaml
+    asserts:
+      - notMatchRegex:
+          path: data["bootstrap-config.json"]
+          pattern: adsConfig
+      - matchRegex:
+          path: data["bootstrap-config.json"]
+          pattern: apiConfigSource

@@ -1,0 +1,22 @@
+# Raw COSI objects rather than a Bucket application: a Bucket goes to the
+# instance its tenant names, which for the test namespace is tenant-root's.
+# The class names are the instance's namespace, set by the app chart's
+# cosi.bucketClassName.
+apiVersion: objectstorage.k8s.io/v1alpha1
+kind: BucketClaim
+metadata:
+  name: seaweedfs-resize
+spec:
+  bucketClassName: tenant-test
+  protocols:
+  - s3
+---
+apiVersion: objectstorage.k8s.io/v1alpha1
+kind: BucketAccess
+metadata:
+  name: seaweedfs-resize
+spec:
+  bucketAccessClassName: tenant-test
+  bucketClaimName: seaweedfs-resize
+  credentialsSecretName: seaweedfs-resize
+  protocol: s3

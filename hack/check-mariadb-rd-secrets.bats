@@ -54,6 +54,8 @@
 # hack/cozytest.sh inserts `return 0` before any line that is exactly `}`, so a
 # helper whose own last command decides the outcome returns 0 regardless.
 
+load test_helper
+
 REPO_ROOT="$(cd "$(dirname "${BATS_TEST_FILENAME:-$0}")/.." && pwd)"
 CHART="$REPO_ROOT/packages/system/mariadb-rd"
 

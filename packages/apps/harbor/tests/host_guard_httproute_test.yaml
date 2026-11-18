@@ -1,0 +1,29 @@
+suite: harbor HTTPRoute guards an empty apex in isolation
+templates:
+  - templates/httproute.yaml
+
+release:
+  name: harbor
+  namespace: tenant-root
+
+tests:
+  - it: fails when _namespace is injected with an empty host and no host override
+    set:
+      _namespace:
+        host: ""
+        ingress: tenant-root
+        gateway: tenant-root
+    asserts:
+      - failedTemplate:
+          errorMessage: "the tenant apex (_namespace.host) is empty and this app sets no host override, so its ingress hostname would be malformed. Set tenant.spec.host on this tenant, inherit it from a parent that has host set, or set this app's host value."
+
+  - it: renders the HTTPRoute hostname from the apex when it is set
+    set:
+      _namespace:
+        host: example.org
+        ingress: tenant-root
+        gateway: tenant-root
+    asserts:
+      - equal:
+          path: spec.hostnames[0]
+          value: harbor.example.org

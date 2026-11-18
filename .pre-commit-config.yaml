@@ -13,19 +13,25 @@ repos:
       files: ^(api/|pkg/apis/|pkg/generated/|internal/crdinstall/manifests/|packages/system/cozystack-controller/definitions/|packages/system/application-definition-crd/definition/|packages/system/backup-controller/definitions/|packages/system/backupstrategy-controller/definitions/|hack/update-codegen\.sh$|hack/boilerplate\.go\.txt$|Makefile$)
       pass_filenames: false
     - id: run-make-generate
-      name: Run 'make generate' in all app directories
+      name: Run 'make generate' in all package directories
       entry: |
         sh -c 'exec flock -x "$(git rev-parse --git-common-dir)/pre-commit.lock" "$@"' -- sh -c '
-          for dir in ./packages/apps/*/ ./packages/extra/*/; do
-            if [ -d "$dir" ]; then
-              echo "Running make generate in $dir"
-              make generate -C "$dir" || exit $?
-            fi
-          done
+          hack/pre-commit-generate-packages.sh || exit $?
           git diff --color=always | cat
         '
       language: system
       files: ^.*$
+    # The complete hack/*.bats and POSIX-compatibility pass is intentionally a
+    # manual local hook because it requires bats-core and has substantial wall
+    # time even with GNU parallel. Run it before pushing with:
+    # pre-commit run bats-unit-tests --hook-stage manual --all-files
+    # Pull-request CI remains the unconditional gate.
+    - id: bats-unit-tests
+      name: Run hack/*.bats unit tests
+      entry: make bats-unit-tests bats-posix-compat-tests
+      language: system
+      stages: [manual]
+      pass_filenames: false
 # Lints changed GitHub Actions workflows for unpinned actions and excessive token
 # permissions (audit scope is set in .github/zizmor.yml). Runs offline so it needs
 # no GitHub token locally. The same gate runs tree-wide in .github/workflows/zizmor.yml.

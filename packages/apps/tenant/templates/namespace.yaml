@@ -43,12 +43,14 @@
   owner's Gateway lists this namespace in allowedRoutes via the
   matching namespace.cozystack.io/gateway label.
 
-  Override fires only when the tenant itself owns a Gateway —
-  tenant.gatewayEffective returns "true" for explicit
-  tenant.spec.gateway=true and for tenants with a custom non-derived
-  host (their apex isn't covered by any ancestor's cert / Issuer).
-  In those cases the controller renders a separate Gateway in this
-  tenant's namespace, with its own LB Service / IP / Certificate.
+  Override fires only when the tenant itself owns a Gateway:
+  tenant.gatewayEffective returns "true" only for an explicit
+  tenant.spec.gateway=true, regardless of whether host is derived or
+  custom. In that case the controller renders a separate Gateway in
+  this tenant's namespace, with its own LB Service / IP / Certificate.
+  A tenant with a custom non-derived host that wants its apex routable
+  must set gateway=true explicitly, because no ancestor's cert / Issuer
+  covers that apex.
 
   Cross-namespace attach is gated by ReferenceGrants rendered by the
   TenantGateway controller in the owner namespace, one per child
@@ -123,6 +125,9 @@ stringData:
       monitoring: {{ $monitoring | quote }}
       seaweedfs: {{ $seaweedfs | quote }}
       host: {{ $computedHost | quote }}
+      {{- if include "tenant.tracingCentralEgress" . }}
+      tracingCentral: true
+      {{- end }}
       {{- with $schedulingClass }}
       schedulingClass: {{ . | quote }}
       {{- end }}

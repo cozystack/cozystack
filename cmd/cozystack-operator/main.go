@@ -36,6 +36,7 @@ import (
 	sourcewatcherv1beta1 "github.com/fluxcd/source-watcher/api/v2/v1beta1"
 	corev1 "k8s.io/api/core/v1"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/apimachinery/pkg/labels"
@@ -98,6 +99,9 @@ func main() {
 	var platformSourceName string
 	var platformSourceRef string
 	var platformSourceSecret string
+	var platformSourceCertSecret string
+	var systemNamespaceMemoryLimit string
+	var systemNamespaceMemoryRequest string
 
 	flag.StringVar(&metricsAddr, "metrics-bind-address", ":8080", "The address the metric endpoint binds to.")
 	flag.StringVar(&probeAddr, "health-probe-bind-address", ":8081", "The address the probe endpoint binds to.")
@@ -142,9 +146,18 @@ func main() {
 	flag.StringVar(&platformSourceName, "platform-source-name", "cozystack-platform", "Name for the generated platform source resource and PackageSource")
 	flag.StringVar(&platformSourceRef, "platform-source-ref", "", "Reference specification as key=value pairs (e.g., 'branch=main' or 'digest=sha256:...,tag=v1.0'). For OCI: digest, semver, semverFilter, tag. For Git: branch, tag, semver, name, commit.")
 	flag.StringVar(&platformSourceSecret, "platform-source-secret", "", "Name of the Secret in cozy-system namespace containing credentials for the platform source. Sets spec.secretRef on the generated OCIRepository or GitRepository. Secret type depends on the source kind: kubernetes.io/dockerconfigjson for OCI (oci://...); Opaque with username+password (or bearerToken) for Git over HTTPS; Opaque with identity (PEM private key) and known_hosts for Git over SSH.")
+	flag.StringVar(&platformSourceCertSecret, "platform-source-cert-secret", "", "Name of the Secret in cozy-system namespace holding TLS material for an OCI platform source: ca.crt for a registry behind a private CA, and/or tls.crt+tls.key for client certificate auth. Sets spec.certSecretRef on the generated OCIRepository. Not supported for Git sources, where Flux reads ca.crt from the --platform-source-secret Secret.")
 	flag.StringVar(&cozyValuesSecretName, "cozy-values-secret-name", "cozystack-values", "The name of the secret containing cluster-wide configuration values.")
 	flag.StringVar(&cozyValuesSecretNamespace, "cozy-values-secret-namespace", "cozy-system", "The namespace of the secret containing cluster-wide configuration values.")
 	flag.StringVar(&cozyValuesNamespaceSelector, "cozy-values-namespace-selector", "cozystack.io/system=true", "The label selector for namespaces where the cluster-wide configuration values must be replicated.")
+	flag.StringVar(&systemNamespaceMemoryLimit, "system-namespace-memory-limit", DefaultSystemNamespaceMemoryLimit,
+		"Default container memory limit in eligible system namespaces, including kube-system. "+
+			"Lowering or an oversized request creates a durable hold requiring an administrator's "+
+			"exact-value acknowledgement. Empty or 0 disables and removes managed LimitRanges; "+
+			"safety state is retained. See https://cozystack.io/docs/v1/operations/configuration/system-memory-limits/.")
+	flag.StringVar(&systemNamespaceMemoryRequest, "system-namespace-memory-request", DefaultSystemNamespaceMemoryRequest,
+		"Default memory request paired with the system namespace limit. Keep small; 0 is supported. "+
+			"An empty installer value selects the operator default. See https://cozystack.io/docs/v1/operations/configuration/system-memory-limits/.")
 
 	opts := zap.Options{
 		Development: true,
@@ -168,6 +181,18 @@ func main() {
 	hrUpgradeTimeoutDuration := parseFlag("--helmrelease-upgrade-timeout", helmReleaseUpgradeTimeout)
 	if helmReleaseMaxHistory < 0 {
 		setupLog.Error(fmt.Errorf("--helmrelease-max-history must be >= 0"), "invalid value", "value", helmReleaseMaxHistory)
+		os.Exit(1)
+	}
+
+	systemNSMemoryLimit, systemNSMemoryRequest, err := parseSystemNamespaceMemory(systemNamespaceMemoryLimit, systemNamespaceMemoryRequest)
+	if err != nil {
+		setupLog.Error(err, "invalid system namespace memory flags",
+			"limit", systemNamespaceMemoryLimit, "request", systemNamespaceMemoryRequest)
+		os.Exit(1)
+	}
+
+	if err := validatePlatformSourceCertSecret(platformSourceURL, platformSourceCertSecret); err != nil {
+		setupLog.Error(err, "invalid platform source flags")
 		os.Exit(1)
 	}
 
@@ -260,12 +285,12 @@ func main() {
 
 	// Generate and install platform source resource if specified
 	if platformSourceURL != "" {
-		setupLog.Info("Generating platform source resource", "url", platformSourceURL, "name", platformSourceName, "ref", platformSourceRef, "secret", platformSourceSecret)
+		setupLog.Info("Generating platform source resource", "url", platformSourceURL, "name", platformSourceName, "ref", platformSourceRef, "secret", platformSourceSecret, "certSecret", platformSourceCertSecret)
 		installCtx, installCancel := context.WithTimeout(mgrCtx, 2*time.Minute)
 		defer installCancel()
 
 		// Use direct client for pre-start operations (cache is not ready yet)
-		if err := installPlatformSourceResource(installCtx, directClient, platformSourceURL, platformSourceName, platformSourceRef, platformSourceSecret); err != nil {
+		if err := installPlatformSourceResource(installCtx, directClient, platformSourceURL, platformSourceName, platformSourceRef, platformSourceSecret, platformSourceCertSecret); err != nil {
 			setupLog.Error(err, "failed to install platform source resource")
 			os.Exit(1)
 		} else {
@@ -307,13 +332,20 @@ func main() {
 
 	// Setup Package reconciler
 	if err := (&operator.PackageReconciler{
-		Client:                    mgr.GetClient(),
+		Client: mgr.GetClient(),
+		// Non-cached, so the per-namespace pod and workload scan guarding the
+		// system defaults LimitRange does not start cluster-wide informers in an
+		// operator whose whole purpose here is to bound memory.
+		APIReader:                 mgr.GetAPIReader(),
 		Scheme:                    mgr.GetScheme(),
 		HelmReleaseInterval:       hrIntervalDuration,
 		HelmReleaseRetryInterval:  hrRetryIntervalDuration,
 		HelmReleaseInstallTimeout: hrInstallTimeoutDuration,
 		HelmReleaseUpgradeTimeout: hrUpgradeTimeoutDuration,
 		HelmReleaseMaxHistory:     helmReleaseMaxHistory,
+
+		SystemNamespaceMemoryLimit:   systemNSMemoryLimit,
+		SystemNamespaceMemoryRequest: systemNSMemoryRequest,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "Package")
 		os.Exit(1)
@@ -389,7 +421,7 @@ func main() {
 
 // installPlatformSourceResource generates and installs a Flux source resource (OCIRepository or GitRepository)
 // based on the platform source URL
-func installPlatformSourceResource(ctx context.Context, k8sClient client.Client, sourceURL, resourceName, refSpec, secretName string) error {
+func installPlatformSourceResource(ctx context.Context, k8sClient client.Client, sourceURL, resourceName, refSpec, secretName, certSecretName string) error {
 	logger := log.FromContext(ctx)
 
 	// Parse the source URL to determine type
@@ -407,11 +439,14 @@ func installPlatformSourceResource(ctx context.Context, k8sClient client.Client,
 	var obj client.Object
 	switch sourceType {
 	case "oci":
-		obj, err = generateOCIRepository(resourceName, repoURL, refMap, secretName)
+		obj, err = generateOCIRepository(resourceName, repoURL, refMap, secretName, certSecretName)
 		if err != nil {
 			return fmt.Errorf("failed to generate OCIRepository: %w", err)
 		}
 	case "git":
+		if err := validatePlatformSourceCertSecret(sourceURL, certSecretName); err != nil {
+			return err
+		}
 		obj, err = generateGitRepository(resourceName, repoURL, refMap, secretName)
 		if err != nil {
 			return fmt.Errorf("failed to generate GitRepository: %w", err)
@@ -451,6 +486,72 @@ func installPlatformSourceResource(ctx context.Context, k8sClient client.Client,
 		logger.Info("Updated platform source resource", "kind", obj.GetObjectKind().GroupVersionKind().Kind, "name", obj.GetName())
 	}
 
+	return nil
+}
+
+// The shipped defaults for the two system-namespace memory knobs. Constants keep flag
+// registration and the parser test inputs on the same values; the test compares the parsed
+// result with literal contract values so changing a default cannot stay green by construction.
+const (
+	DefaultSystemNamespaceMemoryLimit   = "32Gi"
+	DefaultSystemNamespaceMemoryRequest = "32Mi"
+)
+
+// parseSystemNamespaceMemory turns the --system-namespace-memory-limit and
+// --system-namespace-memory-request flag values into the quantities the Package reconciler
+// takes, rejecting the combinations that would fail later and further away.
+//
+// Empty is how both flags are disabled and parses to the zero quantity; for the limit that
+// means "no LimitRange, and remove any this operator created", which is the documented
+// off switch. A negative quantity parses fine as a Quantity and is meaningless as memory,
+// so it is caught here rather than being written into a LimitRange the API server rejects.
+//
+// The pair check is the one that matters most. A LimitRange whose defaultRequest exceeds
+// its default is rejected by the API server, and because the reconciler applies one per
+// system namespace on every Package reconcile, a bad pair would wedge namespace
+// reconciliation for every system package with an error nothing connects back to a flag.
+// A request of 0 against a non-zero limit passes deliberately: it is the supported way to
+// take the memory.max without reserving anything at schedule time, not a broken value.
+// Both zero is the disabled case and never reaches the comparison.
+func parseSystemNamespaceMemory(rawLimit, rawRequest string) (limit, request resource.Quantity, err error) {
+	parse := func(flagName, raw string) (resource.Quantity, error) {
+		if raw == "" {
+			return resource.Quantity{}, nil
+		}
+		q, err := resource.ParseQuantity(raw)
+		if err != nil {
+			return resource.Quantity{}, fmt.Errorf("%s: %w", flagName, err)
+		}
+		if q.Sign() < 0 {
+			return resource.Quantity{}, fmt.Errorf("%s must not be negative, got %s", flagName, raw)
+		}
+		return q, nil
+	}
+
+	if limit, err = parse("--system-namespace-memory-limit", rawLimit); err != nil {
+		return resource.Quantity{}, resource.Quantity{}, err
+	}
+	if request, err = parse("--system-namespace-memory-request", rawRequest); err != nil {
+		return resource.Quantity{}, resource.Quantity{}, err
+	}
+	if !limit.IsZero() && request.Cmp(limit) > 0 {
+		return resource.Quantity{}, resource.Quantity{}, fmt.Errorf(
+			"--system-namespace-memory-request (%s) must not exceed --system-namespace-memory-limit (%s)",
+			request.String(), limit.String())
+	}
+	return limit, request, nil
+}
+
+// validatePlatformSourceCertSecret rejects --platform-source-cert-secret for a
+// Git source: GitRepository has no certSecretRef, and Flux reads a Git CA from
+// the ca.crt key of the --platform-source-secret Secret instead.
+func validatePlatformSourceCertSecret(sourceURL, certSecretName string) error {
+	if certSecretName == "" {
+		return nil
+	}
+	if sourceType, _, err := parsePlatformSourceURL(sourceURL); err == nil && sourceType == "git" {
+		return fmt.Errorf("--platform-source-cert-secret is only supported for OCI sources; for a Git source put ca.crt into the --platform-source-secret Secret")
+	}
 	return nil
 }
 
@@ -562,7 +663,7 @@ func validateGitRef(refMap map[string]string) error {
 			return fmt.Errorf("commit SHA should be at least 7 characters, got: %s", commit)
 		}
 		for _, c := range commit {
-			if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')) {
+			if (c < '0' || c > '9') && (c < 'a' || c > 'f') && (c < 'A' || c > 'F') {
 				return fmt.Errorf("commit SHA should be a hexadecimal string, got: %s", commit)
 			}
 		}
@@ -572,7 +673,7 @@ func validateGitRef(refMap map[string]string) error {
 }
 
 // generateOCIRepository creates an OCIRepository resource
-func generateOCIRepository(name, repoURL string, refMap map[string]string, secretName string) (*sourcev1.OCIRepository, error) {
+func generateOCIRepository(name, repoURL string, refMap map[string]string, secretName, certSecretName string) (*sourcev1.OCIRepository, error) {
 	if err := validateOCIRef(refMap); err != nil {
 		return nil, err
 	}
@@ -606,6 +707,12 @@ func generateOCIRepository(name, repoURL string, refMap map[string]string, secre
 	if secretName != "" {
 		obj.Spec.SecretRef = &fluxmeta.LocalObjectReference{
 			Name: secretName,
+		}
+	}
+
+	if certSecretName != "" {
+		obj.Spec.CertSecretRef = &fluxmeta.LocalObjectReference{
+			Name: certSecretName,
 		}
 	}
 
@@ -694,6 +801,9 @@ func installPlatformPackageSource(ctx context.Context, k8sClient client.Client, 
 		{"isp-full", []string{"values.yaml", "values-isp-full.yaml"}},
 		{"isp-hosted", []string{"values.yaml", "values-isp-hosted.yaml"}},
 		{"isp-full-generic", []string{"values.yaml", "values-isp-full-generic.yaml"}},
+		{"isp-slim", []string{"values.yaml", "values-isp-slim.yaml"}},
+		{"isp-slim-generic", []string{"values.yaml", "values-isp-slim-generic.yaml"}},
+		{"isp-hosted-slim", []string{"values.yaml", "values-isp-hosted-slim.yaml"}},
 	}
 
 	variants := make([]cozyv1alpha1.Variant, len(variantData))

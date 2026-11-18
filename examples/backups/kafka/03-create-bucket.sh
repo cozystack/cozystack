@@ -1,7 +1,7 @@
 #!/bin/bash
 # Step 03: Provision an in-cluster Bucket and cache its S3 coordinates. The
 # generic Job strategy has no chart support to emit a backup Secret, so the
-# tenant materialises the "<app>-backup-s3" Secret itself. This step only
+# demo materialises the "<app>-backup-s3" Secret itself. This step only
 # caches the coordinates; create_s3_secret (00-helpers.sh) turns them into
 # per-app Secrets in steps 04 and 07.
 set -euo pipefail
@@ -26,7 +26,9 @@ spec:
       readonly: false
 EOF
 
-wait_hr_ready "bucket-${BUCKET_NAME}"
+# 660s, above this generated release's 600s install timeout; see "Sizing an
+# HR-Ready budget" in docs/agents/e2e-testing.md.
+wait_hr_ready "bucket-${BUCKET_NAME}" 660
 kubectl -n "$NAMESPACE" wait bucketclaims.objectstorage.k8s.io "bucket-${BUCKET_NAME}" --for=jsonpath='{.status.bucketReady}'=true --timeout=300s
 # Cozystack's bucket app provisions a BucketAccess named "<bucket-name>-backup"
 # (the "-backup" suffix is the BucketAccessClass name); the BucketInfo Secret

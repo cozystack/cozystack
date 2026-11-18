@@ -68,6 +68,38 @@ spec:
           status:
             replicas: 2
 
+  # The chart's my.cnf reaches the pod only if the operator mounts it under a
+  # name the server's !includedir picks up, which no render-time test can see.
+  # The buffer pool is the witness: the chart always sets it, and on this
+  # fixture's preset the derived 64M differs from the server's 128M default.
+  - name: verify-my-cnf-applied
+    try:
+    - assert:
+        timeout: 5m
+        resource:
+          apiVersion: v1
+          kind: Pod
+          metadata:
+            name: mariadb-test-0
+          status:
+            (conditions[?type == 'Ready']):
+            - status: "True"
+    - script:
+        content: |
+          set -eu
+          want_mib=$(kubectl -n "$NAMESPACE" get configmap mariadb-test-my-cnf \
+            -o go-template='{{index .data "my.cnf"}}' \
+            | sed -n 's/^innodb_buffer_pool_size=\([0-9]*\)M$/\1/p')
+          got_bytes=$(kubectl -n "$NAMESPACE" exec mariadb-test-0 -c mariadb -- \
+            sh -c 'mariadb -u root -p"${MARIADB_ROOT_PASSWORD}" -N -e "SELECT @@innodb_buffer_pool_size"')
+          echo "my.cnf innodb_buffer_pool_size=${want_mib}M, server reports ${got_bytes} bytes"
+          if [ -z "$want_mib" ] || [ "$got_bytes" != "$((want_mib * 1048576))" ]; then
+            echo "FAIL: the server is not running with the chart's my.cnf"
+            false
+          fi
+        check:
+          ($error == null): true
+
   - name: verify-metrics
     try:
     - assert:
@@ -454,18 +486,18 @@ spec:
           NAMESPACE="$NAMESPACE" examples/backups/mariadb/cleanup.sh
         check:
           ($error == null): true
-    # 42m runs the whole documented flow: bucket provisioning, a 2-replica
+    # 48m runs the whole documented flow: bucket provisioning, a 2-replica
     # source MariaDB, the logical dump to S3, an empty 2-replica target, and
     # the to-copy restore + verify (convention 6: justified in-line).
     #
-    # Sized so a failed install at a 660s HelmRelease wait in run-all.sh is
+    # Sized so a failed install at any 660s HelmRelease wait in run-all.sh is
     # reported by the script rather than cut off here, which SIGKILLs the
     # process group and loses the script's error. hack/mariadb-first-boot-waits.bats
     # holds this op against those waits, so raising a wait in run-all.sh means
     # raising this op too. A bound on the whole flow needs a phase budget
     # (docs/agents/e2e-testing.md), not a larger literal.
     - script:
-        timeout: 42m
+        timeout: 48m
         content: |
           set -eu
           cd ../../..

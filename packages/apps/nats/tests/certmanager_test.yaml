@@ -310,7 +310,9 @@ tests:
       tls:
         enabled: true
       external: false
-    documentIndex: 3
+    documentSelector:
+      path: metadata.name
+      value: my-nats-tls
     asserts:
       - notContains:
           path: spec.dnsNames
@@ -387,7 +389,9 @@ tests:
       tls:
         enabled: true
       external: false
-    documentIndex: 3
+    documentSelector:
+      path: metadata.name
+      value: my-nats-tls
     asserts:
       - notContains:
           path: spec.usages
@@ -398,7 +402,9 @@ tests:
       tls:
         enabled: true
       external: false
-    documentIndex: 3
+    documentSelector:
+      path: metadata.name
+      value: my-nats-tls
     asserts:
       - notContains:
           path: spec.usages

@@ -40,6 +40,9 @@ type ConfigSpec struct {
 	// PostgreSQL major version to deploy
 	// +kubebuilder:default:="v18"
 	Version Version `json:"version"`
+	// PostgreSQL image flavor, fixed when the cluster is created. `postgresql` uses the CloudNativePG PostgreSQL image. `postgis` uses the CloudNativePG PostGIS image, which adds postgis, postgis_raster, postgis_topology, postgis_sfcgal, postgis_tiger_geocoder and address_standardizer; enable them per database in `databases.<name>.extensions`. Changing the flavor of an existing cluster is refused, and a backup restores only into a cluster of the flavor it was taken from: to change flavor, create a new cluster and move the data with a logical dump (pg_dump / pg_restore).
+	// +kubebuilder:default:="postgresql"
+	Flavor Flavor `json:"flavor"`
 	// TLS configuration for server connections.
 	// +kubebuilder:default:={}
 	Tls TLS `json:"tls"`
@@ -55,7 +58,7 @@ type ConfigSpec struct {
 	// Users configuration map. Passwords are always auto-generated and stored in the `<release>-credentials` Secret; they cannot be set from values — read a user's password from that Secret. A `password` left over in values from before the field was removed is ignored by the render and draws an admission warning, but it is not inert on an upgraded release: the chart preserves whatever password is already in the Secret, which on the first upgrade is the value that was set before removal, so that value stays the live credential until it is rotated (dedicated rotation is tracked in cozystack/community#72). The live password lives only in the Secret.
 	// +kubebuilder:default:={}
 	Users map[string]User `json:"users,omitempty"`
-	// Databases configuration map.
+	// Databases configuration map. The PostgreSQL system databases `postgres`, `template0` and `template1` are refused.
 	// +kubebuilder:default:={}
 	Databases map[string]Database `json:"databases,omitempty"`
 	// Backup configuration.
@@ -121,7 +124,7 @@ type Backup struct {
 	// DEPRECATED. See `s3AccessKey`.
 	// +kubebuilder:default:=""
 	S3SecretKey string `json:"s3SecretKey,omitempty"`
-	// Legacy. Cron schedule (CNPG 6-field format) for the chart-emitted ScheduledBackup. Empty means no chart-managed schedule, which is the recommended setup when a `BackupClass` from `backups.cozystack.io` already drives backup orchestration. In the legacy chart-managed flow `spec.plugins` plus the barman-cloud ObjectStore is rendered when `backup.enabled=true` AND `useSystemBucket=false` AND `destinationPath` is non-empty AND inline-or-external creds are supplied; in the platform `useSystemBucket=true` flow the chart skips emitting `spec.plugins` and the CNPG driver SSA-applies the ObjectStore and patches `spec.plugins` onto the live Cluster at first BackupJob time.
+	// Legacy. Cron schedule for the chart-emitted ScheduledBackup, either a standard five-field cron such as `0 2 * * *` for every day at 02:00, or six fields with leading seconds such as `0 0 2 * * *` for the same time. Empty means no chart-managed schedule, which is the recommended setup when a `BackupClass` from `backups.cozystack.io` already drives backup orchestration. In the legacy chart-managed flow `spec.plugins` plus the barman-cloud ObjectStore is rendered when `backup.enabled=true` AND `useSystemBucket=false` AND `destinationPath` is non-empty AND inline-or-external creds are supplied; in the platform `useSystemBucket=true` flow the chart skips emitting `spec.plugins` and the CNPG driver SSA-applies the ObjectStore and patches `spec.plugins` onto the live Cluster at first BackupJob time.
 	// +kubebuilder:default:=""
 	Schedule string `json:"schedule,omitempty"`
 	// Opt-in: when true, the chart-emitted `<release>-s3-creds` Secret is skipped AND `spec.plugins` (plus the barman-cloud ObjectStore) is left UNSET in the chart-rendered Cluster — the cozy-default BackupClass driver SSA-applies an ObjectStore (carrying destinationPath/endpointURL/credentials) and patches `spec.plugins` on the live Cluster when the first BackupJob runs. Consequence: plugin WAL archiving is NOT active until that first BackupJob fires; WAL accumulates on the PVC in the meantime, so fire an ad-hoc BackupJob immediately after enabling the flag on existing releases. Use together with the platform `cozy-default` BackupClass — tenants do not need to fill `s3AccessKey`/`s3SecretKey` or `destinationPath`/`endpointURL`. The destination path automatically scopes to `s3://cozy-backups/<namespace>/<release>/`.
@@ -130,6 +133,9 @@ type Backup struct {
 }
 
 type Bootstrap struct {
+	// Barman ID of the base backup to recover from, passed as `recoveryTarget.backupID`. Empty lets the barman-cloud plugin pick one: the newest backup when `recoveryTime` is empty, otherwise the newest one ending at or before it, on any timeline. The CNPG backup driver sets this on restore.
+	// +kubebuilder:default:=""
+	BackupID string `json:"backupID,omitempty"`
 	// Whether to restore from a backup.
 	// +kubebuilder:default:=false
 	Enabled bool `json:"enabled"`
@@ -174,6 +180,8 @@ type PostgreSQL struct {
 	// PostgreSQL server parameters. Values may be strings or integers; integers are coerced to strings by the template (e.g. both `max_connections: 100` and `max_connections: "100"` are accepted). BLOCKED (enable arbitrary code execution): archive_command, restore_command, ssl_passphrase_command, archive_cleanup_command, recovery_end_command, dynamic_library_path, local_preload_libraries, session_preload_libraries, shared_preload_libraries. Do NOT override CloudNativePG-managed parameters: archive_mode, primary_conninfo, wal_level, max_replication_slots.
 	// +kubebuilder:default:={"max_connections":"100"}
 	Parameters map[string]intstr.IntOrString `json:"parameters,omitempty"`
+	// Libraries loaded at server start, restricted to an allowlist of modules already shipped in the PostgreSQL image. CloudNativePG also preloads `pg_stat_statements`, `auto_explain` and `pgaudit` by itself whenever `parameters` sets a key under their prefix (e.g. `pg_stat_statements.track`), so removing one of them from this list does not unload it while such a key is set; `pg_prewarm` is preloaded only through this list. Changing the list restarts PostgreSQL on every instance, the primary included, so writes pause briefly.
+	SharedPreloadLibraries []PreloadLibrary `json:"sharedPreloadLibraries,omitempty"`
 }
 
 type Quorum struct {
@@ -205,14 +213,26 @@ type S3CredentialsSecret struct {
 }
 
 type TLS struct {
-	// Tri-state switch controlling whether the chart injects the external hostname into the operator-managed CNPG cert via spec.certificates.serverAltDNSNames. When omitted, the chart injects the SAN if `external: true` and skips it otherwise. Set explicitly to `true` to inject regardless of `external` (no-op when `external: false` since there is no external hostname to add). Set to `false` to skip injection. Note that CNPG keeps its built-in TLS on the wire regardless of this flag — this toggle only controls the chart-side SAN injection; to disable PostgreSQL TLS entirely set `postgresql.parameters.ssl = "off"` at the CNPG layer.
+	// Tri-state switch controlling whether the chart injects the external hostnames into the operator-managed CNPG cert via spec.certificates.serverAltDNSNames. When omitted, the chart injects them if `external: true` and skips them otherwise. Set explicitly to `true` to inject regardless of `external` (no-op when `external: false` since there is no external hostname to add). Set to `false` to skip injection. Note that CNPG keeps its built-in TLS on the wire regardless of this flag — this toggle only controls the chart-side SAN injection; to disable PostgreSQL TLS entirely set `postgresql.parameters.ssl = "off"` at the CNPG layer.
 	Enabled *bool `json:"enabled,omitempty"`
+	// Tri-state switch controlling whether the server refuses sessions that are not encrypted. When omitted, it is on if `external: true` and off otherwise. When on, the chart renders `spec.postgresql.pg_hba` with `hostssl all all all scram-sha-256` (`md5` on PostgreSQL 13, matching CloudNativePG's default rule) followed by `host all all all reject`, so a client that connects with `sslmode=disable` is refused instead of getting a plaintext session; in-cluster clients are held to the same rule, since the pod network cannot be told apart from an external client. Set to `false` to keep accepting plaintext sessions on an external instance, or to `true` to require TLS on an in-cluster one. Rendering fails if `postgresql.parameters.ssl` is off while this is in effect.
+	Required *bool `json:"required,omitempty"`
 }
 
 type User struct {
+	// Whether the user can bypass row-level security policies (BYPASSRLS). A role can only create other roles carrying BYPASSRLS if it holds the attribute itself, so this is required alongside `createRole` to provision a privileged service role.
+	BypassRls bool `json:"bypassRls,omitempty"`
+	// Whether the user can create and manage roles (CREATEROLE). Requires PostgreSQL 16 or newer. Setting it back to `false` withdraws the attribute only: the roles the user created, and its ADMIN and SET memberships in them, stay. Once any user has held it, the chart no longer adopts an existing role it did not create, so a user or database declared later under the name of such a role fails the init job until a platform administrator drops that role.
+	CreateRole bool `json:"createRole,omitempty"`
 	// Whether the user has replication privileges.
 	Replication bool `json:"replication,omitempty"`
 }
+
+// +kubebuilder:validation:Enum="postgresql";"postgis"
+type Flavor string
+
+// +kubebuilder:validation:Enum="pg_stat_statements";"auto_explain";"pgaudit";"pg_prewarm"
+type PreloadLibrary string
 
 // +kubebuilder:validation:Enum="ReadConnections";"ReadCPUUtilization"
 type ReadMetric string

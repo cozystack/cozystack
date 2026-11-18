@@ -7,6 +7,8 @@
 #   2. topologySpreadPolicy appears outside the TLS section
 #   3. opensearch-rd cozyrds labels the tenant CA and no server certificate
 
+load test_helper
+
 REPO_ROOT="$(cd "$(dirname "${BATS_TEST_FILENAME:-$0}")/.." && pwd)"
 README="$REPO_ROOT/packages/apps/opensearch/README.md"
 COZYRDS="$REPO_ROOT/packages/system/opensearch-rd/cozyrds/opensearch.yaml"

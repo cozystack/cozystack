@@ -111,6 +111,9 @@ spec:
   # merges spec.values after valuesFrom, so nothing injected via
   # cozystack-values can disable these pins.
   values:
+    # The wrapped chart otherwise lets the tenant's "use" subjects read
+    # computeplane-cluster-admin-kubeconfig through its dashboard Role.
+    withholdAdminKubeconfig: true
     addons:
       certManager:
         enabled: true
@@ -208,7 +211,7 @@ spec:
            clone or repoint itself at another Image Factory, both of which are
            operator decisions about the platform's own images. Keep this list in
            sync with the kubernetes-nodes values schema's pool-shape params. */}}
-    {{- with pick $group "minReplicas" "maxReplicas" "instanceType" "diskSize" "storageClass" "roles" "resources" "gpus" "kubelet" "logSerialConsole" "maxUnhealthy" "nodeStartupTimeout" "readyUnknownTimeout" "readyFalseTimeout" "podCpuLimit" "podCpuRequest" "maxNodeProvisionTime" }}
+    {{- with pick $group "minReplicas" "maxReplicas" "instanceType" "diskSize" "storageClass" "roles" "resources" "gpus" "kubelet" "logSerialConsole" "maxUnhealthy" "nodeStartupTimeout" "readyUnknownTimeout" "readyFalseTimeout" "podCpuLimit" "podCpuRequest" "maxNodeProvisionTime" "maxUnavailable" }}
     {{- toYaml . | nindent 4 }}
     {{- end }}
   valuesFrom:

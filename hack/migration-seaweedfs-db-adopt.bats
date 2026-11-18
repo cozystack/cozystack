@@ -55,12 +55,15 @@
 # the script does any work, while on a developer box /bin/sh is often bash, which
 # runs green and proves nothing about ash.
 #
-# cozytest.sh's awk parser recognizes only @test blocks and a bare `}` on its
-# own line; there is no bats `run`/`$status`/`setup`. Assertions are direct
-# shell tests that exit non-zero on failure.
+# CI runs this file under Bats through `make bats-unit-tests`. It also remains
+# compatible with the legacy `hack/cozytest.sh` translator, whose awk parser
+# recognizes only @test blocks and a bare `}` on its own line. The tests avoid
+# `run`, `$status`, and setup() for that compatibility path.
 #
-# Run with: hack/cozytest.sh hack/migration-seaweedfs-db-adopt.bats
+# Run with: bats hack/migration-seaweedfs-db-adopt.bats
 # -----------------------------------------------------------------------------
+
+load test_helper
 
 FAKEBIN="$PWD/hack/testdata/migration-seaweedfs-db"
 MIG_DIR="$PWD/packages/core/platform/images/migrations/migrations"
@@ -217,7 +220,7 @@ tenant-named foo-db keep"
   run_migration 53 >"$WORK/out" 2>&1 || rc=$?
   cat "$WORK/out"; cat "$FAKE_CMDLOG"
   [ "$rc" -eq 0 ]
-  ! grep -q 'ANNOTATE' "$FAKE_CMDLOG"
+  if grep -q 'ANNOTATE' "$FAKE_CMDLOG"; then echo "FAIL: no Cluster must have been re-annotated"; false; fi
   grep -qF -- "STAMP 54" "$FAKE_CMDLOG"
   rm -rf "$WORK"
 }
@@ -231,7 +234,7 @@ tenant-named foo-db keep"
   run_migration 53 >"$WORK/out" 2>&1 || rc=$?
   cat "$WORK/out"; cat "$FAKE_CMDLOG"
   [ "$rc" -eq 0 ]
-  ! grep -q 'ANNOTATE' "$FAKE_CMDLOG"
+  if grep -q 'ANNOTATE' "$FAKE_CMDLOG"; then echo "FAIL: no Cluster must have been re-annotated"; false; fi
   grep -qF -- "carries no meta.helm.sh/release-name" "$WORK/out"
   rm -rf "$WORK"
 }
@@ -243,7 +246,7 @@ tenant-named foo-db keep"
   run_migration 53 >"$WORK/out" 2>&1 || rc=$?
   cat "$WORK/out"; cat "$FAKE_CMDLOG"
   [ "$rc" -eq 0 ]
-  ! grep -q 'ANNOTATE' "$FAKE_CMDLOG"
+  if grep -q 'ANNOTATE' "$FAKE_CMDLOG"; then echo "FAIL: no Cluster must have been re-annotated"; false; fi
   grep -qF -- "owned by unrelated release" "$WORK/out"
   rm -rf "$WORK"
 }
@@ -258,7 +261,7 @@ tenant-named foo-db keep"
   run_migration 53 >"$WORK/out" 2>&1 || rc=$?
   cat "$WORK/out"; cat "$FAKE_CMDLOG"
   [ "$rc" -eq 0 ]
-  ! grep -q 'ANNOTATE' "$FAKE_CMDLOG"
+  if grep -q 'ANNOTATE' "$FAKE_CMDLOG"; then echo "FAIL: no Cluster must have been re-annotated"; false; fi
   grep -qF -- "no instance name" "$WORK/out"
   rm -rf "$WORK"
 }
@@ -275,7 +278,7 @@ tenant-named foo-db keep"
   # Must propagate: the Job retries rather than advancing the version.
   [ "$rc" -ne 0 ]
   grep -qF -- "refusing to stamp past an unverified fleet" "$WORK/out"
-  ! grep -q 'STAMP' "$FAKE_CMDLOG"
+  if grep -q 'STAMP' "$FAKE_CMDLOG"; then echo "FAIL: no version must have been stamped"; false; fi
   rm -rf "$WORK"
 }
 
@@ -288,7 +291,7 @@ tenant-named foo-db keep"
   cat "$WORK/out"; cat "$FAKE_CMDLOG"
   [ "$rc" -ne 0 ]
   grep -qF -- "cannot read the Helm owner" "$WORK/out"
-  ! grep -q 'STAMP' "$FAKE_CMDLOG"
+  if grep -q 'STAMP' "$FAKE_CMDLOG"; then echo "FAIL: no version must have been stamped"; false; fi
   rm -rf "$WORK"
 }
 
@@ -300,7 +303,7 @@ tenant-named foo-db keep"
   run_migration 53 >"$WORK/out" 2>&1 || rc=$?
   cat "$WORK/out"; cat "$FAKE_CMDLOG"
   [ "$rc" -ne 0 ]
-  ! grep -q 'STAMP' "$FAKE_CMDLOG"
+  if grep -q 'STAMP' "$FAKE_CMDLOG"; then echo "FAIL: no version must have been stamped"; false; fi
   rm -rf "$WORK"
 }
 
@@ -315,7 +318,7 @@ tenant-named foo-db keep"
   cat "$WORK/out"; cat "$FAKE_CMDLOG"
   [ "$rc" -eq 0 ]
   grep -qF -- "resource type is not served" "$WORK/out"
-  ! grep -q 'ANNOTATE' "$FAKE_CMDLOG"
+  if grep -q 'ANNOTATE' "$FAKE_CMDLOG"; then echo "FAIL: no Cluster must have been re-annotated"; false; fi
   grep -qF -- "STAMP 54" "$FAKE_CMDLOG"
   rm -rf "$WORK"
 }
@@ -327,7 +330,7 @@ tenant-named foo-db keep"
   run_migration 53 >"$WORK/out" 2>&1 || rc=$?
   cat "$WORK/out"; cat "$FAKE_CMDLOG"
   [ "$rc" -eq 0 ]
-  ! grep -q 'ANNOTATE' "$FAKE_CMDLOG"
+  if grep -q 'ANNOTATE' "$FAKE_CMDLOG"; then echo "FAIL: no Cluster must have been re-annotated"; false; fi
   grep -qF -- "STAMP 54" "$FAKE_CMDLOG"
   rm -rf "$WORK"
 }

@@ -258,9 +258,9 @@ func TestAdoptVolumeReplicatesVolumeModeAndAccessModes(t *testing.T) {
 			adopted.Annotations[populatedForAnnotation])
 	}
 
-	// Retain is not advice: it is the only thing standing between a routine
-	// DataVolume deletion and data loss, because CDI takes a controller owner
-	// reference on the claim it adopts.
+	// Retain is not advice during the swap: between deleting the transferred
+	// claim and re-pointing claimRef the volume is Released, and under Delete
+	// the provisioner would reclaim it. settleReclaimPolicy lifts it later.
 	gotPV := &corev1.PersistentVolume{}
 	if err := c.Get(context.Background(), types.NamespacedName{Name: "pv-1"}, gotPV); err != nil {
 		t.Fatalf("get pv: %v", err)
@@ -591,7 +591,7 @@ func TestAdoptVolumeOrphansAClaimWithNoDataVolume(t *testing.T) {
 		t.Fatalf("get pv: %v", err)
 	}
 	if gotPV.Spec.PersistentVolumeReclaimPolicy != corev1.PersistentVolumeReclaimRetain {
-		t.Error("the volume was not retained")
+		t.Error("the volume was not retained for the swap")
 	}
 }
 

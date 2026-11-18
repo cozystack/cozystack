@@ -3,6 +3,8 @@
 # matchbox-ref handoff into finalize. Workflow expression checks below pin only
 # producer/consumer wiring; GitHub job-result propagation is CI-only behavior.
 
+load test_helper
+
 ROOT="$(pwd)"
 CLASSIFIER="$ROOT/hack/build-talos-needed.sh"
 WF="$ROOT/.github/workflows/pull-requests.yaml"

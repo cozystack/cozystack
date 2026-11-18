@@ -3,6 +3,7 @@ import { useNavigate } from "react-router"
 import { useQueries } from "@tanstack/react-query"
 import { useApplicationDefinitions, iconDataUrl, appDisplayName } from "../../lib/app-definitions"
 import { useK8sList, useK8sClient } from "@cozystack/k8s-client"
+import type { K8sResource } from "@cozystack/k8s-client"
 import { APPS_GROUP, APPS_VERSION } from "@cozystack/types"
 import { useTenantContext } from "../../lib/tenant-context"
 import type { CommandItem, NavigationLevel } from "./types"
@@ -66,7 +67,7 @@ export function useCommandItems(
           "",
         ] as const,
         queryFn: () =>
-          client.list(APPS_GROUP, APPS_VERSION, plural, tenantNamespace ?? undefined),
+          client.list<K8sResource>(APPS_GROUP, APPS_VERSION, plural, tenantNamespace ?? undefined),
         enabled: hasQuery && !!plural && !!tenantNamespace,
       }
     }),
@@ -255,7 +256,7 @@ export function useCommandItems(
       const instances = queryResult?.data?.items ?? []
 
       for (const inst of instances) {
-        const instance = inst as any
+        const instance = inst
         items.push({
           id: `search-inst-${plural}-${instance.metadata.name}`,
           label: instance.metadata.name,

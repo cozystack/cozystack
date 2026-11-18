@@ -1,3 +1,5 @@
+import type { K8sResource } from "@cozystack/k8s-client"
+
 export interface CommandItem {
   id: string
   label: string
@@ -20,7 +22,7 @@ export type NavigationLevel =
   | {
       type: "instance"
       plural: string
-      instance: any
+      instance: K8sResource
       label: string
       resourceLabel: string
       icon?: string

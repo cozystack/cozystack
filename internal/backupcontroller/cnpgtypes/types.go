@@ -75,6 +75,10 @@ type ClusterList struct {
 }
 
 type ClusterSpec struct {
+	// ImageName is read, never patched: the backup driver records the image
+	// family the data directory runs on. Empty means CNPG's default
+	// postgresql image.
+	ImageName string                  `json:"imageName,omitempty"`
 	Backup    *BackupConfiguration    `json:"backup,omitempty"`
 	Bootstrap *BootstrapConfiguration `json:"bootstrap,omitempty"`
 	// Plugins wires CNPG-I plugins (here barman-cloud) onto the Cluster. The
@@ -95,7 +99,8 @@ type PluginConfiguration struct {
 }
 
 type ClusterStatus struct {
-	Phase string `json:"phase,omitempty"`
+	Phase       string `json:"phase,omitempty"`
+	PhaseReason string `json:"phaseReason,omitempty"`
 }
 
 type BackupConfiguration struct {
@@ -241,4 +246,13 @@ type BackupStatus struct {
 	// destroys the source PVCs.
 	BeginWal string `json:"beginWal,omitempty"`
 	EndWal   string `json:"endWal,omitempty"`
+	// BackupID is barman's identifier for the base backup, the value
+	// bootstrap.recovery.recoveryTarget.backupID selects it by. StoppedAt is
+	// when it ended, truncated to the second where barman records the
+	// microsecond.
+	BackupID  string       `json:"backupId,omitempty"`
+	StoppedAt *metav1.Time `json:"stoppedAt,omitempty"`
+	// MajorVersion is the PostgreSQL major the backup was taken on. Zero on
+	// a Backup written by a CNPG release that predates the field.
+	MajorVersion int `json:"majorVersion,omitempty"`
 }

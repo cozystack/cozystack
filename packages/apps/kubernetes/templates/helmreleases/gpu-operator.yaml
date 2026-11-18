@@ -1,31 +1,68 @@
 {{- define "cozystack.defaultGpuOperatorValues" -}}
 {{- /*
-  GPU passthrough default: cozystack passes individual SXM GPUs (e.g.
-  H200) into tenant worker VMs WITHOUT the NVSwitches. The nvidia driver
-  then waits forever for an NVLink fabric that can never come up (no
-  NVSwitch / fabricmanager), leaving Fabric State: In Progress — every
-  CUDA call fails with "system not yet initialized" and the
-  nvidia-operator-validator crashloops. Loading the kernel module with
-  NVreg_NvLinkDisable=1 flips Fabric State to N/A so CUDA initializes.
-  This is correct for per-GPU passthrough since there is no in-VM
-  NVLink/NVSwitch peering anyway.
+  Default for the Talos workers of tenant clusters, where the NVIDIA driver
+  comes from a Talos system extension baked into the worker image. Nothing
+  here loads the module or sets its parameters: that is the kernelModules
+  field of the worker pool, in the KubernetesNodes app
+  (packages/apps/kubernetes-nodes).
 
-  The upstream chart only references an existing ConfigMap by name; the
-  wrapper chart (packages/system/gpu-operator) renders that ConfigMap
-  when kernelModuleConfig.create is true. Overridable via
-  addons.gpuOperator.valuesOverride (mergeOverwrite below keeps user
-  values winning).
+  driver and toolkit are off. The driver container would load its own module
+  and clash with the extension's, and the toolkit container rewrites
+  /etc/containerd/config.toml, which Talos owns and which already registers
+  the nvidia runtime with enable_cdi = true and cdi_spec_dirs = ['/run/cdi'].
+
+  The driver validator is pointed at the host root, where the extension puts
+  the driver. Looking for a driver container install instead, it never writes
+  its sentinel and the device plugin stays blocked behind toolkit-validation.
+  The /dev/char symlinks belong to the extension, so it must not create them.
+
+  Tenant pods carry no runtimeClassName and Talos does not make nvidia the
+  default containerd runtime, so CUDA libraries reach a pod only through CDI.
+  The device plugin annotates pods for CDI injection and generates the spec
+  into /run/cdi with the host's nvidia-ctk. CDI device names key on the uuid
+  strategy, and the annotation prefix is pinned to the one containerd reads.
+  Injection is decided at pod admission, so a pod created before its node
+  works receives nothing and has to be recreated.
+
+  mergeOverwrite below lets addons.gpuOperator.valuesOverride win, but it
+  replaces a list wholesale: an override of devicePlugin.env that adds one
+  variable drops the defaults above, and CDI with them. Restate the full list.
 */}}
-kernelModuleConfig:
-  create: true
 gpu-operator:
   driver:
-    kernelModuleConfig:
-      name: nvidia-kernel-module-params
-{{- if .Values.addons.hami.enabled }}
+    enabled: false
+  toolkit:
+    enabled: false
+  validator:
+    driver:
+      env:
+        - name: DRIVER_ROOT
+          value: "/"
+        - name: NVIDIA_DRIVER_ROOT
+          value: "/"
+        - name: DISABLE_DEV_CHAR_SYMLINK_CREATION
+          value: "true"
   devicePlugin:
+{{- if .Values.addons.hami.enabled }}
+    {{- /* HAMi ships its own device plugin and serves the GPUs itself; the
+           operator's must stay off so the two do not both advertise
+           nvidia.com/gpu. The env below is inert while this is false, and is
+           emitted anyway so the values stay coherent if HAMi is turned off
+           later. HAMi's own plugin needs its own CDI wiring on Talos, which
+           this default does not attempt. */}}
     enabled: false
 {{- end }}
+    env:
+      - name: DEVICE_LIST_STRATEGY
+        value: cdi-annotations
+      - name: DEVICE_ID_STRATEGY
+        value: uuid
+      - name: NVIDIA_DRIVER_ROOT
+        value: "/"
+      - name: NVIDIA_CTK_PATH
+        value: /usr/local/bin/nvidia-ctk
+      - name: CDI_ANNOTATION_PREFIX
+        value: cdi.k8s.io/
 {{- end }}
 
 {{- if and .Values.addons.gpuOperator.enabled .Values._namespace.etcd }}

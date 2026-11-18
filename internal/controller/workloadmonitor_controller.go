@@ -3,6 +3,7 @@ package controller
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"maps"
@@ -11,19 +12,31 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
+	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/validation"
+	"k8s.io/apimachinery/pkg/util/wait"
+	toolscache "k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/tools/record"
 	"k8s.io/client-go/util/retry"
-	"k8s.io/utils/pointer"
+	"k8s.io/client-go/util/workqueue"
+	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/manager"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
+	"sigs.k8s.io/controller-runtime/pkg/source"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -67,6 +80,282 @@ type WorkloadMonitorReconciler struct {
 	// namespace.cozystack.io/monitoring label. Used when SeaweedFS and the
 	// stack that scrapes it run outside this cluster.
 	SeaweedfsMetricsEndpoint string
+	// DataVolumeReader reads CDI DataVolumes. Nil until the DataVolume informer
+	// has synced; until then a monitor keeps its stored DataVolume verdict.
+	DataVolumeReader client.Reader
+	dataVolumeMu     sync.RWMutex
+	// dataVolumeWatchSyncing is set while the DataVolume watch is started and
+	// its reader is not installed yet. The source replays every DataVolume to
+	// the handler in that window, and a reconcile it queues must be requeued:
+	// nothing queues it again once the reader is in place.
+	dataVolumeWatchSyncing bool
+	// dataVolumeWatchStarted is set once Watch has started the DataVolume
+	// source. A started Kind source adds an event handler to the informer and
+	// never removes it, so a retry waits for the sync instead of watching again.
+	dataVolumeWatchStarted bool
+	// reconciled is closed by the first Reconcile. controller-runtime starts the
+	// workers only after the controller has started its sources
+	// (pkg/internal/controller/controller.go, Controller.Start), so from then on
+	// Watch starts a new source itself instead of queueing it for Start.
+	reconciled     chan struct{}
+	reconciledOnce sync.Once
+}
+
+const (
+	// dataVolumeAPIPollInterval is how often the controller looks for the
+	// DataVolume kind until CDI is installed.
+	dataVolumeAPIPollInterval = 30 * time.Second
+	// dataVolumeSyncTimeout bounds the wait for the DataVolume informer to sync.
+	// A reconcile context has no deadline, so a reader installed on an informer
+	// that never syncs would park every WorkloadMonitor reconcile for good.
+	dataVolumeSyncTimeout = time.Minute
+	dataVolumeSyncRequeue = 5 * time.Second
+)
+
+var errDataVolumeWatchSyncing = errors.New("the DataVolume watch has not synced yet")
+
+func (r *WorkloadMonitorReconciler) dataVolumeReader() (client.Reader, error) {
+	r.dataVolumeMu.RLock()
+	defer r.dataVolumeMu.RUnlock()
+	if r.DataVolumeReader == nil && r.dataVolumeWatchSyncing {
+		return nil, errDataVolumeWatchSyncing
+	}
+	return r.DataVolumeReader, nil
+}
+
+func (r *WorkloadMonitorReconciler) reconciledCh() chan struct{} {
+	r.dataVolumeMu.Lock()
+	defer r.dataVolumeMu.Unlock()
+	if r.reconciled == nil {
+		r.reconciled = make(chan struct{})
+	}
+	return r.reconciled
+}
+
+func (r *WorkloadMonitorReconciler) setDataVolumeWatchSyncing(syncing bool) {
+	r.dataVolumeMu.Lock()
+	defer r.dataVolumeMu.Unlock()
+	r.dataVolumeWatchSyncing = syncing
+}
+
+var dataVolumeGVK = schema.GroupVersionKind{Group: "cdi.kubevirt.io", Version: "v1beta1", Kind: "DataVolume"}
+
+// dataVolumeInFlightPhases are the DataVolumePhase values in which CDI still has
+// work to do on the disk (containerized-data-importer-api pkg/apis/core/v1beta1).
+// A phase outside this set counts as settled, so a CDI release that adds or
+// renames a phase cannot turn working disks non-operational; the price is that
+// a renamed in-flight phase reads as settled until this list follows it.
+// PendingPopulation and WaitForFirstConsumer are where a disk on a
+// WaitForFirstConsumer class rests until a VM consumes it, so neither is in
+// flight. UploadReady is in flight although it lasts until someone uploads:
+// CDI holds it from the moment the upload server is ready until the transfer
+// succeeds (pkg/controller/datavolume/upload-controller.go), so it covers an
+// empty disk and a half-uploaded one alike.
+// Paused is where a multi-stage (checkpoint) import waits for its next
+// checkpoint, which only an outside actor supplies; the
+// vm-disk chart renders no checkpoint source, so no disk of it gets there.
+var dataVolumeInFlightPhases = map[string]bool{
+	"Pending":                           true,
+	"PVCBound":                          true,
+	"ImportScheduled":                   true,
+	"ImportInProgress":                  true,
+	"CloneScheduled":                    true,
+	"CloneInProgress":                   true,
+	"SnapshotForSmartCloneInProgress":   true,
+	"CloneFromSnapshotSourceInProgress": true,
+	"SmartClonePVCInProgress":           true,
+	"CSICloneInProgress":                true,
+	"PrepClaimInProgress":               true,
+	"RebindInProgress":                  true,
+	"ExpansionInProgress":               true,
+	"NamespaceTransferInProgress":       true,
+	"UploadScheduled":                   true,
+	"UploadReady":                       true,
+}
+
+// isDataVolumeReady reports whether CDI is done with the disk. Failed and
+// Unknown are not ready, and neither is a DataVolume without a phase: CDI
+// leaves one there when it could not render the PVC spec.
+func isDataVolumeReady(dv *unstructured.Unstructured) bool {
+	phase, _, _ := unstructured.NestedString(dv.Object, "status", "phase")
+	switch phase {
+	case "", "Failed", "Unknown":
+		return false
+	}
+	return !dataVolumeInFlightPhases[phase]
+}
+
+// dataVolumeFailureMessage returns why the DataVolume's pod is not running, or
+// "" when nothing says so. A source that keeps failing (404, DNS) never moves
+// the phase off ImportInProgress, because CDI only fails the import on a fatal
+// error and restarts the pod otherwise (updateStatusPhase in
+// pkg/controller/datavolume/import-controller.go). The Running condition holds
+// the clean error text: CDI keeps it through the back-off between restarts and
+// clears it while the pod runs, and Bound repeats it behind PVC details.
+// Unknown is not a failure, so only False is read. For a host-assisted clone
+// CDI joins the target and source messages as "<target> and <source>"
+// (updateWithTargetNotRunning in pkg/controller/datavolume/conditions.go), so
+// empty halves are dropped instead of reporting " and ".
+func dataVolumeFailureMessage(dv *unstructured.Unstructured) string {
+	conditions, _, _ := unstructured.NestedSlice(dv.Object, "status", "conditions")
+	for _, c := range conditions {
+		cond, ok := c.(map[string]any)
+		if !ok || cond["type"] != "Running" || cond["status"] != "False" {
+			continue
+		}
+		message, _ := cond["message"].(string)
+		var parts []string
+		for _, part := range strings.Split(message, " and ") {
+			if part != "" {
+				parts = append(parts, part)
+			}
+		}
+		return strings.Join(parts, " and ")
+	}
+	return ""
+}
+
+// dataVolumeAPIServed treats a NoMatch as not served and returns any other
+// discovery error, so the caller retries instead of concluding CDI is absent.
+func dataVolumeAPIServed(mapper meta.RESTMapper) (bool, error) {
+	_, err := mapper.RESTMapping(dataVolumeGVK.GroupKind(), dataVolumeGVK.Version)
+	if meta.IsNoMatchError(err) {
+		return false, nil
+	}
+	return err == nil, err
+}
+
+type sourceWatcher interface {
+	Watch(src source.Source) error
+}
+
+// tryStartDataVolumeWatch registers the DataVolume watch and reader once the
+// kind is served, and reports whether it did. The reader is set only after the
+// informer has synced: the cache blocks a List on an unsynced informer until
+// the caller's context ends. The source is started once, on the manager's
+// context, and a call that times out leaves it running for the next call to
+// wait on.
+func (r *WorkloadMonitorReconciler) tryStartDataVolumeWatch(ctx context.Context, mapper meta.RESTMapper, c sourceWatcher, informers cache.Cache, syncTimeout time.Duration) (bool, error) {
+	served, err := dataVolumeAPIServed(mapper)
+	if err != nil || !served {
+		return false, err
+	}
+	dv := &unstructured.Unstructured{}
+	dv.SetGroupVersionKind(dataVolumeGVK)
+	if !r.dataVolumeWatchStarted {
+		src := source.Kind[client.Object](informers, dv,
+			handler.EnqueueRequestsFromMapFunc(mapObjectToMonitor(client.Object(dv), r.Client)))
+		r.setDataVolumeWatchSyncing(true)
+		if err := c.Watch(src); err != nil {
+			r.setDataVolumeWatchSyncing(false)
+			return false, fmt.Errorf("watching DataVolumes: %w", err)
+		}
+		r.dataVolumeWatchStarted = true
+	}
+	syncCtx, cancel := context.WithTimeout(ctx, syncTimeout)
+	defer cancel()
+	informer, err := informers.GetInformer(syncCtx, dv)
+	if err == nil && !toolscache.WaitForCacheSync(syncCtx.Done(), informer.HasSynced) {
+		err = syncCtx.Err()
+	}
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return false, ctxErr
+	}
+	if err != nil {
+		return false, fmt.Errorf("waiting for the DataVolume informer to sync: %w", err)
+	}
+	r.dataVolumeMu.Lock()
+	// The manager's client reads unstructured objects straight from the API
+	// server; the cache shares the informer the watch above starts.
+	r.DataVolumeReader = informers
+	r.dataVolumeWatchSyncing = false
+	r.dataVolumeMu.Unlock()
+	// A reconcile that ran before the watch started kept its stored verdict and
+	// was not requeued, and the source's replay cannot deliver a DataVolume
+	// deleted while the controller was down.
+	if err := c.Watch(source.Func(r.enqueueMonitorsWithDataVolumeVerdict)); err != nil {
+		return false, fmt.Errorf("queueing monitors with a DataVolume verdict: %w", err)
+	}
+	return true, nil
+}
+
+func (r *WorkloadMonitorReconciler) enqueueMonitorsWithDataVolumeVerdict(ctx context.Context, queue workqueue.TypedRateLimitingInterface[reconcile.Request]) error {
+	var monitors cozyv1alpha1.WorkloadMonitorList
+	if err := r.List(ctx, &monitors); err != nil {
+		return err
+	}
+	for i := range monitors.Items {
+		if monitors.Items[i].Status.Message != "" {
+			queue.Add(reconcile.Request{NamespacedName: client.ObjectKeyFromObject(&monitors.Items[i])})
+		}
+	}
+	return nil
+}
+
+// watchDataVolumes adds the DataVolume watch once the first reconcile has run
+// and the kind is served, checking discovery again every interval until it is.
+// Starting on the first reconcile rather than on the next tick keeps a disk
+// created right after a controller restart from reading populated until then.
+func (r *WorkloadMonitorReconciler) watchDataVolumes(ctx context.Context, mapper meta.RESTMapper, c sourceWatcher, informers cache.Cache, interval time.Duration) {
+	select {
+	case <-ctx.Done():
+		return
+	case <-r.reconciledCh():
+	}
+	logger := log.FromContext(ctx)
+	// The condition never returns an error, so the poll ends only when the
+	// watch is added or the manager stops.
+	_ = wait.PollUntilContextCancel(ctx, interval, true, func(ctx context.Context) (bool, error) {
+		done, err := r.tryStartDataVolumeWatch(ctx, mapper, c, informers, dataVolumeSyncTimeout)
+		if err != nil {
+			logger.Error(err, "Unable to start the DataVolume watch, retrying")
+		}
+		return done, nil
+	})
+}
+
+// dataVolumesMessage names every DataVolume the monitor selects that is not
+// ready, with its phase, and is empty when there is none; notReady holds their
+// names. A NoMatch from the reader counts as no DataVolumes. read is false when
+// the DataVolumes could not be read: no reader yet, or a failed List.
+func (r *WorkloadMonitorReconciler) dataVolumesMessage(ctx context.Context, monitor *cozyv1alpha1.WorkloadMonitor) (message string, notReady map[string]bool, read bool, err error) {
+	reader, err := r.dataVolumeReader()
+	if reader == nil {
+		return "", nil, false, err
+	}
+	list := &unstructured.UnstructuredList{}
+	list.SetGroupVersionKind(dataVolumeGVK.GroupVersion().WithKind(dataVolumeGVK.Kind + "List"))
+	if err := reader.List(
+		ctx,
+		list,
+		client.InNamespace(monitor.Namespace),
+		client.MatchingLabels(monitor.Spec.Selector),
+	); err != nil {
+		if meta.IsNoMatchError(err) {
+			return "", nil, true, nil
+		}
+		return "", nil, false, err
+	}
+	var stuck []string
+	notReady = map[string]bool{}
+	for i := range list.Items {
+		dv := &list.Items[i]
+		if isDataVolumeReady(dv) {
+			continue
+		}
+		notReady[dv.GetName()] = true
+		phase, _, _ := unstructured.NestedString(dv.Object, "status", "phase")
+		entry := fmt.Sprintf("DataVolume %s is %s", dv.GetName(), phase)
+		if phase == "" {
+			entry = fmt.Sprintf("DataVolume %s has no phase", dv.GetName())
+		}
+		if cause := dataVolumeFailureMessage(dv); cause != "" {
+			entry += ": " + cause
+		}
+		stuck = append(stuck, entry)
+	}
+	sort.Strings(stuck)
+	return strings.Join(stuck, "; "), notReady, true, nil
 }
 
 // +kubebuilder:rbac:groups=cozystack.io,resources=workloadmonitors,verbs=get;list;watch;create;update;patch;delete
@@ -78,10 +367,30 @@ type WorkloadMonitorReconciler struct {
 // +kubebuilder:rbac:groups=core,resources=namespaces,verbs=get
 // +kubebuilder:rbac:groups=core,resources=events,verbs=create;patch
 // +kubebuilder:rbac:groups=objectstorage.k8s.io,resources=bucketclaims,verbs=get;list;watch
+// +kubebuilder:rbac:groups=cdi.kubevirt.io,resources=datavolumes,verbs=get;list;watch
 
 // isBucketClaimReady checks if the BucketClaim has been provisioned.
 func (r *WorkloadMonitorReconciler) isBucketClaimReady(bc *cosiv1alpha1.BucketClaim) bool {
 	return bc.Status.BucketReady
+}
+
+// bucketClaimsMessage names every BucketClaim that has not been provisioned,
+// with its bucket class, and is empty when there is none.
+func (r *WorkloadMonitorReconciler) bucketClaimsMessage(claims []cosiv1alpha1.BucketClaim) string {
+	var pending []string
+	for i := range claims {
+		bc := &claims[i]
+		if r.isBucketClaimReady(bc) {
+			continue
+		}
+		entry := fmt.Sprintf("BucketClaim %s is not provisioned", bc.Name)
+		if bc.Spec.BucketClassName != "" {
+			entry = fmt.Sprintf("BucketClaim %s of bucket class %s is not provisioned", bc.Name, bc.Spec.BucketClassName)
+		}
+		pending = append(pending, entry)
+	}
+	sort.Strings(pending)
+	return strings.Join(pending, "; ")
 }
 
 // isServiceReady checks if the service has an external IP bound
@@ -133,8 +442,8 @@ func updateOwnerReferences(obj metav1.Object, monitor client.Object) {
 			Name:       monitor.GetName(),
 			UID:        monitor.GetUID(),
 			// Set Controller to false to avoid conflict as multiple controllers are not allowed
-			Controller:         pointer.BoolPtr(false),
-			BlockOwnerDeletion: pointer.BoolPtr(true),
+			Controller:         ptr.To(false),
+			BlockOwnerDeletion: ptr.To(true),
 		}
 		owners = append(owners, newOwnerRef)
 	}
@@ -235,10 +544,10 @@ func (r *WorkloadMonitorReconciler) queryAllBucketMetrics(ctx context.Context, p
 	if err != nil {
 		return nil, fmt.Errorf("querying Prometheus: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("Prometheus returned status %d", resp.StatusCode)
+		return nil, fmt.Errorf("unexpected status %d from Prometheus", resp.StatusCode)
 	}
 
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
@@ -259,7 +568,7 @@ func (r *WorkloadMonitorReconciler) queryAllBucketMetrics(ctx context.Context, p
 		return nil, fmt.Errorf("parsing Prometheus response: %w", err)
 	}
 	if promResp.Status != "success" {
-		return nil, fmt.Errorf("Prometheus query finished with status %q", promResp.Status)
+		return nil, fmt.Errorf("the Prometheus query finished with status %q", promResp.Status)
 	}
 
 	for _, r := range promResp.Data.Result {
@@ -297,6 +606,59 @@ func (r *WorkloadMonitorReconciler) queryAllBucketMetrics(ctx context.Context, p
 	return result, nil
 }
 
+// bucketWorkloadName names the Workload of a BucketClaim. A Bucket application
+// names its claim after its release, which already starts with "bucket-", so
+// the prefix is added only when the claim name does not carry it.
+func bucketWorkloadName(claimName string) string {
+	if strings.HasPrefix(claimName, "bucket-") {
+		return claimName
+	}
+	return "bucket-" + claimName
+}
+
+func ownedBy(w *cozyv1alpha1.Workload, bc *cosiv1alpha1.BucketClaim) bool {
+	for _, ref := range w.OwnerReferences {
+		if ref.UID == bc.UID {
+			return true
+		}
+	}
+	return false
+}
+
+// ownedBySomeoneElse reports whether w has owners and bc is not one of them.
+func ownedBySomeoneElse(w *cozyv1alpha1.Workload, bc *cosiv1alpha1.BucketClaim) bool {
+	return len(w.OwnerReferences) > 0 && !ownedBy(w, bc)
+}
+
+// heldBySomeoneElse reports whether the Workload called name exists and has
+// owners other than bc.
+func (r *WorkloadMonitorReconciler) heldBySomeoneElse(ctx context.Context, bc *cosiv1alpha1.BucketClaim, name string) (bool, error) {
+	w := &cozyv1alpha1.Workload{}
+	if err := r.Get(ctx, client.ObjectKey{Namespace: bc.Namespace, Name: name}, w); err != nil {
+		return false, client.IgnoreNotFound(err)
+	}
+	return ownedBySomeoneElse(w, bc), nil
+}
+
+// legacyBucketWorkload returns the Workload a previous version created for bc
+// under the unconditionally prefixed name, if it is still there and either bc
+// is among its owners or it has lost every owner (a claim deleted with
+// --cascade=orphan and recreated) while still carrying monitor's label.
+func (r *WorkloadMonitorReconciler) legacyBucketWorkload(ctx context.Context, monitor *cozyv1alpha1.WorkloadMonitor, bc *cosiv1alpha1.BucketClaim) (*cozyv1alpha1.Workload, error) {
+	name := "bucket-" + bc.Name
+	if name == bucketWorkloadName(bc.Name) {
+		return nil, nil
+	}
+	legacy := &cozyv1alpha1.Workload{}
+	if err := r.Get(ctx, client.ObjectKey{Namespace: bc.Namespace, Name: name}, legacy); err != nil {
+		return nil, client.IgnoreNotFound(err)
+	}
+	if ownedBy(legacy, bc) || (len(legacy.OwnerReferences) == 0 && legacy.Labels[workloadMonitorLabel] == monitor.Name) {
+		return legacy, nil
+	}
+	return nil, nil
+}
+
 // reconcileBucketClaimForMonitor creates or updates a Workload object for the given BucketClaim and WorkloadMonitor.
 func (r *WorkloadMonitorReconciler) reconcileBucketClaimForMonitor(
 	ctx context.Context,
@@ -305,16 +667,68 @@ func (r *WorkloadMonitorReconciler) reconcileBucketClaimForMonitor(
 	allMetrics map[string]*bucketMetrics,
 ) error {
 	logger := log.FromContext(ctx)
+
+	// The name may be held by another owner's Workload: Bucket applications
+	// "x" and "bucket-x" make the legacy name of the first the new name of the
+	// second, and a claim "x" outside the Bucket application maps to the same
+	// name as the application "x". Adopting it would meter this bucket with
+	// the other one's size. Keep metering the bucket under its legacy name
+	// until the new one is free, and skip the bucket only when that name is
+	// held as well.
+	name := bucketWorkloadName(bc.Name)
+	migrate := true
+	held, err := r.heldBySomeoneElse(ctx, &bc, name)
+	if err != nil {
+		return err
+	}
+	if held {
+		legacyName := "bucket-" + bc.Name
+		legacyHeld := legacyName == name
+		if !legacyHeld {
+			if legacyHeld, err = r.heldBySomeoneElse(ctx, &bc, legacyName); err != nil {
+				return err
+			}
+		}
+		if legacyHeld {
+			logger.Info("Workload name is held by another owner; not adopting it", "workload", name, "bucketClaim", bc.Name)
+			if r.Recorder != nil {
+				r.Recorder.Eventf(monitor, corev1.EventTypeWarning, "BucketWorkloadNameTaken",
+					"Workload %s for BucketClaim %s is owned by another object; the bucket is not metered", name, bc.Name)
+			}
+			return nil
+		}
+		logger.Info("Workload name is held by another owner; keeping the legacy name", "workload", name, "legacy", legacyName, "bucketClaim", bc.Name)
+		if r.Recorder != nil {
+			r.Recorder.Eventf(monitor, corev1.EventTypeWarning, "BucketWorkloadNameTaken",
+				"Workload %s for BucketClaim %s is owned by another object; metering the bucket as %s until it is free", name, bc.Name, legacyName)
+		}
+		name, migrate = legacyName, false
+	}
 	workload := &cozyv1alpha1.Workload{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      fmt.Sprintf("bucket-%s", bc.Name),
+			Name:      name,
 			Namespace: bc.Namespace,
 			Labels:    make(map[string]string, len(bc.Labels)),
 		},
 	}
 
+	var legacy *cozyv1alpha1.Workload
+	if migrate {
+		if legacy, err = r.legacyBucketWorkload(ctx, monitor, &bc); err != nil {
+			return err
+		}
+	}
+	// A legacy Workload with other owners is another bucket's renamed one that
+	// a rolled-back controller also attached bc to: neither its sizes nor the
+	// object are bc's to take. An ownerless one is removed, but its sizes may
+	// be older than the claim it is recognised for.
+	soleLegacy := legacy != nil && len(legacy.OwnerReferences) == 1
+	orphanLegacy := legacy != nil && len(legacy.OwnerReferences) == 0
+
 	monitorLabels := r.getMonitorLabels(monitor)
-	_, err := ctrl.CreateOrUpdate(ctx, r.Client, workload, func() error {
+	_, err = ctrl.CreateOrUpdate(ctx, r.Client, workload, func() error {
+		// sizes on a Workload bc did not own yet were not written for it
+		ownedBefore := ownedBy(workload, &bc)
 		updateOwnerReferences(workload.GetObjectMeta(), &bc)
 
 		if workload.Labels == nil {
@@ -325,14 +739,30 @@ func (r *WorkloadMonitorReconciler) reconcileBucketClaimForMonitor(
 		maps.Copy(workload.Labels, bc.Labels)
 		workload.Labels[workloadMonitorLabel] = monitor.Name
 
+		delete(workload.Labels, "workloads.cozystack.io/bucket-class")
+		if bc.Spec.BucketClassName != "" {
+			if errs := validation.IsValidLabelValue(bc.Spec.BucketClassName); len(errs) == 0 {
+				workload.Labels["workloads.cozystack.io/bucket-class"] = bc.Spec.BucketClassName
+			} else {
+				logger.Info("Skipping bucket-class label: not a valid label value",
+					"bucketClaim", bc.Name, "bucketClassName", bc.Spec.BucketClassName, "errors", errs)
+			}
+		}
+
 		// Start from the sizes already recorded on the Workload: when the
 		// metrics endpoint is unreachable or reports nothing for this bucket,
 		// the last known good values must survive rather than collapse to
-		// "no size", which billing would read as an empty bucket.
+		// "no size", which billing would read as an empty bucket. A Workload
+		// renamed from its legacy name starts from the legacy sizes, so the
+		// rename leaves no gap in the bucket's metered size.
 		resources := make(map[string]resource.Quantity)
 		for _, key := range []string{resourceS3StorageBytes, resourceS3PhysicalStorageBytes} {
-			if q, ok := workload.Status.Resources[key]; ok {
+			if q, ok := workload.Status.Resources[key]; ok && (ownedBefore || !soleLegacy) {
 				resources[key] = q
+			} else if soleLegacy {
+				if q, ok := legacy.Status.Resources[key]; ok {
+					resources[key] = q
+				}
 			}
 		}
 
@@ -357,6 +787,29 @@ func (r *WorkloadMonitorReconciler) reconcileBucketClaimForMonitor(
 	})
 	if err != nil {
 		logger.Error(err, "Failed to CreateOrUpdate Workload", "workload", workload.Name)
+		return err
+	}
+
+	// Billing reads every Workload as a consumer, so the legacy one must go
+	// once its replacement exists, or the bucket is metered twice. The
+	// preconditions delete only the object that was checked, not one that
+	// took over the name since the lookup; a conflict is retried next pass.
+	switch {
+	case soleLegacy || orphanLegacy:
+		err = r.Delete(ctx, legacy, client.Preconditions{UID: &legacy.UID, ResourceVersion: &legacy.ResourceVersion})
+	case legacy != nil:
+		orig := legacy.DeepCopy()
+		owners := legacy.OwnerReferences[:0]
+		for _, ref := range legacy.OwnerReferences {
+			if ref.UID != bc.UID {
+				owners = append(owners, ref)
+			}
+		}
+		legacy.OwnerReferences = owners
+		err = r.Patch(ctx, legacy, client.MergeFromWithOptions(orig, client.MergeFromWithOptimisticLock{}))
+	}
+	if client.IgnoreNotFound(err) != nil && !apierrors.IsConflict(err) {
+		logger.Error(err, "Failed to release legacy bucket Workload", "workload", legacy.Name)
 		return err
 	}
 
@@ -429,10 +882,15 @@ func (r *WorkloadMonitorReconciler) reconcileServiceForMonitor(
 }
 
 // reconcilePVCForMonitor creates or updates a Workload object for the given PVC and WorkloadMonitor.
+// A PVC whose controller is a DataVolume in notReadyDataVolumes is not
+// operational however it is bound; when the DataVolumes could not be read,
+// such a PVC keeps the verdict its Workload already carries.
 func (r *WorkloadMonitorReconciler) reconcilePVCForMonitor(
 	ctx context.Context,
 	monitor *cozyv1alpha1.WorkloadMonitor,
 	pvc corev1.PersistentVolumeClaim,
+	notReadyDataVolumes map[string]bool,
+	dataVolumesRead bool,
 ) error {
 	logger := log.FromContext(ctx)
 	workload := &cozyv1alpha1.Workload{
@@ -447,7 +905,7 @@ func (r *WorkloadMonitorReconciler) reconcilePVCForMonitor(
 
 	for resourceName, resourceQuantity := range pvc.Status.Capacity {
 		storageClass := "default"
-		if pvc.Spec.StorageClassName != nil || *pvc.Spec.StorageClassName == "" {
+		if pvc.Spec.StorageClassName != nil && *pvc.Spec.StorageClassName != "" {
 			storageClass = *pvc.Spec.StorageClassName
 		}
 		resourceLabel := fmt.Sprintf("%s.storageclass.storage.k8s.io/requests.%s", storageClass, resourceName.String())
@@ -471,7 +929,18 @@ func (r *WorkloadMonitorReconciler) reconcilePVCForMonitor(
 		workload.Status.Kind = monitor.Spec.Kind
 		workload.Status.Type = monitor.Spec.Type
 		workload.Status.Resources = resources
-		workload.Status.Operational = r.isPVCReady(&pvc)
+		operational := r.isPVCReady(&pvc)
+		if owner := metav1.GetControllerOf(&pvc); owner != nil && owner.Kind == dataVolumeGVK.Kind && owner.APIVersion == dataVolumeGVK.GroupVersion().String() {
+			switch {
+			case !dataVolumesRead:
+				if workload.ResourceVersion != "" {
+					operational = workload.Status.Operational
+				}
+			case notReadyDataVolumes[owner.Name]:
+				operational = false
+			}
+		}
+		workload.Status.Operational = operational
 
 		return nil
 	})
@@ -568,6 +1037,7 @@ func (r *WorkloadMonitorReconciler) reconcilePodForMonitor(
 // 1. It reconciles WorkloadMonitor objects themselves (create/update/delete).
 // 2. It also reconciles Pod events mapped to WorkloadMonitor via label selector.
 func (r *WorkloadMonitorReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+	r.reconciledOnce.Do(func() { close(r.reconciledCh()) })
 	logger := log.FromContext(ctx)
 
 	// Fetch the WorkloadMonitor object if it exists
@@ -608,6 +1078,21 @@ func (r *WorkloadMonitorReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		}
 	}
 
+	dataVolumesMessage, notReadyDataVolumes, dataVolumesRead, dataVolumesErr := r.dataVolumesMessage(ctx, monitor)
+	// The sync window is expected; an error here would count as a
+	// reconcile failure for every monitor in the cluster while it lasts.
+	dataVolumeWatchSyncing := errors.Is(dataVolumesErr, errDataVolumeWatchSyncing)
+	if dataVolumeWatchSyncing {
+		dataVolumesErr = nil
+	}
+	if dataVolumesErr != nil {
+		logger.Error(dataVolumesErr, "Unable to read DataVolumes for WorkloadMonitor, keeping the last DataVolume verdict", "monitor", monitor.Name)
+		if r.Recorder != nil {
+			r.Recorder.Eventf(monitor, corev1.EventTypeWarning, "DataVolumesUnavailable",
+				"Failed to read DataVolumes, keeping the last DataVolume verdict: %v", dataVolumesErr)
+		}
+	}
+
 	pvcList := &corev1.PersistentVolumeClaimList{}
 	if err := r.List(
 		ctx,
@@ -620,7 +1105,7 @@ func (r *WorkloadMonitorReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 	}
 
 	for _, pvc := range pvcList.Items {
-		if err := r.reconcilePVCForMonitor(ctx, monitor, pvc); err != nil {
+		if err := r.reconcilePVCForMonitor(ctx, monitor, pvc, notReadyDataVolumes, dataVolumesRead); err != nil {
 			logger.Error(err, "Failed to reconcile Workload for PVC", "PVC", pvc.Name)
 			continue
 		}
@@ -691,6 +1176,8 @@ func (r *WorkloadMonitorReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		}
 	}
 
+	bucketsMessage := r.bucketClaimsMessage(bucketClaimList.Items)
+
 	// Update WorkloadMonitor status based on observed pods
 	monitor.Status.ObservedReplicas = observedReplicas
 	monitor.Status.AvailableReplicas = availableReplicas
@@ -701,15 +1188,40 @@ func (r *WorkloadMonitorReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		if err := r.Get(ctx, req.NamespacedName, fresh); err != nil {
 			return err
 		}
+		stored := fresh.Status.DeepCopy()
 		fresh.Status.ObservedReplicas = observedReplicas
 		fresh.Status.AvailableReplicas = availableReplicas
 
 		// Default to operational = true, but check MinReplicas if set.
 		// Use fresh.Spec to avoid making decisions based on a stale cached copy
 		// when the spec was updated between the initial read and this retry.
-		fresh.Status.Operational = pointer.Bool(true)
+		fresh.Status.Operational = ptr.To(true)
 		if fresh.Spec.MinReplicas != nil && availableReplicas < *fresh.Spec.MinReplicas {
-			fresh.Status.Operational = pointer.Bool(false)
+			fresh.Status.Operational = ptr.To(false)
+		}
+		// A stored DataVolume verdict is the last one: kept while no reader is
+		// installed yet, so a controller restart does not report a stuck disk as
+		// ready. BucketClaims are listed on every pass, so their verdict is
+		// recomputed and only fills fields no DataVolume verdict holds.
+		if dataVolumesRead {
+			fresh.Status.Message = dataVolumesMessage
+			fresh.Status.Reason = ""
+			if dataVolumesMessage != "" {
+				fresh.Status.Reason = cozyv1alpha1.WorkloadMonitorReasonDataVolumeNotReady
+			}
+		} else if fresh.Status.Reason == cozyv1alpha1.WorkloadMonitorReasonBucketClaimNotReady {
+			fresh.Status.Message = ""
+			fresh.Status.Reason = ""
+		}
+		if fresh.Status.Message == "" && bucketsMessage != "" {
+			fresh.Status.Message = bucketsMessage
+			fresh.Status.Reason = cozyv1alpha1.WorkloadMonitorReasonBucketClaimNotReady
+		}
+		if fresh.Status.Message != "" {
+			fresh.Status.Operational = ptr.To(false)
+		}
+		if equality.Semantic.DeepEqual(stored, &fresh.Status) {
+			return nil
 		}
 		return r.Status().Update(ctx, fresh)
 	})
@@ -718,11 +1230,15 @@ func (r *WorkloadMonitorReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		return ctrl.Result{}, err
 	}
 
-	// Returning the metrics error makes the failure count in controller-runtime's
-	// reconcile error metrics and retries with backoff instead of quietly waiting
-	// for the next periodic requeue.
-	if bucketMetricsErr != nil {
-		return ctrl.Result{}, bucketMetricsErr
+	// Returning the metrics or DataVolume error makes the failure count in
+	// controller-runtime's reconcile error metrics and retries with backoff
+	// instead of quietly waiting for the next periodic requeue.
+	if bucketMetricsErr != nil || dataVolumesErr != nil {
+		return ctrl.Result{}, errors.Join(bucketMetricsErr, dataVolumesErr)
+	}
+
+	if dataVolumeWatchSyncing {
+		return ctrl.Result{RequeueAfter: dataVolumeSyncRequeue}, nil
 	}
 
 	// Requeue periodically if there are BucketClaims to keep sizes up to date.
@@ -736,7 +1252,7 @@ func (r *WorkloadMonitorReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 
 // SetupWithManager registers our controller with the Manager and sets up watches.
 func (r *WorkloadMonitorReconciler) SetupWithManager(mgr ctrl.Manager) error {
-	return ctrl.NewControllerManagedBy(mgr).
+	builder := ctrl.NewControllerManagedBy(mgr).
 		// Watch WorkloadMonitor objects
 		For(&cozyv1alpha1.WorkloadMonitor{}).
 		// Also watch Pod objects and map them back to WorkloadMonitor if labels match
@@ -755,8 +1271,20 @@ func (r *WorkloadMonitorReconciler) SetupWithManager(mgr ctrl.Manager) error {
 			handler.EnqueueRequestsFromMapFunc(mapObjectToMonitor(&cosiv1alpha1.BucketClaim{}, r.Client)),
 		).
 		// Watch for changes to Workload objects we create (owned by WorkloadMonitor)
-		Owns(&cozyv1alpha1.Workload{}).
-		Complete(r)
+		Owns(&cozyv1alpha1.Workload{})
+	c, err := builder.Build(r)
+	if err != nil {
+		return err
+	}
+
+	// A watch on a kind whose CRD is absent never syncs, and controller-runtime
+	// does not start a controller with unsynced caches. CDI ships with the IaaS
+	// bundle only and can be installed while this controller is running, so
+	// the DataVolume watch is added once the kind appears rather than at setup.
+	return mgr.Add(manager.RunnableFunc(func(ctx context.Context) error {
+		r.watchDataVolumes(ctx, mgr.GetRESTMapper(), c, mgr.GetCache(), dataVolumeAPIPollInterval)
+		return nil
+	}))
 }
 
 func mapObjectToMonitor[T client.Object](_ T, c client.Client) func(ctx context.Context, obj client.Object) []reconcile.Request {

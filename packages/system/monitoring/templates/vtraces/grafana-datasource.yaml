@@ -29,3 +29,37 @@ spec:
     matchLabels:
       dashboards: grafana
 {{- end }}
+{{- if include "monitoring.tracingCentral" . }}
+{{- /* Central mode reads the shared store only through the tenant-root vmauth,
+       as this tenant's read-only VMUser (vmuser.yaml). The operator substitutes ${key}
+       with that key of the referenced Secret. */}}
+---
+apiVersion: grafana.integreatly.org/v1beta1
+kind: GrafanaDatasource
+metadata:
+  name: traces-central
+spec:
+  valuesFrom:
+    - targetPath: basicAuthUser
+      valueFrom:
+        secretKeyRef:
+          name: traces-central-reader-credentials
+          key: username
+    - targetPath: secureJsonData.basicAuthPassword
+      valueFrom:
+        secretKeyRef:
+          name: traces-central-reader-credentials
+          key: password
+  datasource:
+    access: proxy
+    type: jaeger
+    name: traces-central
+    url: http://vmauth-traces-central.tenant-root.svc:8427/select/jaeger
+    basicAuth: true
+    basicAuthUser: ${username}
+    secureJsonData:
+      basicAuthPassword: ${password}
+  instanceSelector:
+    matchLabels:
+      dashboards: grafana
+{{- end }}

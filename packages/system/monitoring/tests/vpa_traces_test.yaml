@@ -92,6 +92,76 @@ tests:
           any: true
         not: true
 
+  - it: keeps the VPAs of the local stores central mode keeps
+    release:
+      namespace: tenant-foo
+    set:
+      _namespace:
+        tracingCentral: true
+      tracingStorages:
+        - name: generic
+          mode: cluster
+          retentionPeriod: "14d"
+          storage: 10Gi
+        - name: edge
+          mode: single
+          retentionPeriod: "7d"
+          storage: 10Gi
+    asserts:
+      - containsDocument:
+          apiVersion: autoscaling.k8s.io/v1
+          kind: VerticalPodAutoscaler
+          name: vpa-vtinsert-generic
+          any: true
+      - containsDocument:
+          apiVersion: autoscaling.k8s.io/v1
+          kind: VerticalPodAutoscaler
+          name: vpa-vtsingle-edge
+          any: true
+
+  - it: sizes the tenant-root shared-store vmauth like the other trace components
+    set:
+      tracingCentralHost: true
+      tracingStorages:
+        - name: generic
+          mode: cluster
+          retentionPeriod: "14d"
+          storage: 10Gi
+    documentSelector:
+      path: metadata.name
+      value: vpa-vmauth-traces-central
+    asserts:
+      - equal:
+          path: spec.targetRef
+          value:
+            apiVersion: apps/v1
+            kind: Deployment
+            name: vmauth-traces-central
+      - equal:
+          path: spec.updatePolicy.updateMode
+          value: Initial
+      - equal:
+          path: spec.resourcePolicy.containerPolicies[0].containerName
+          value: vmauth
+
+  - it: renders no vmauth VPA where no shared store is hosted
+    release:
+      namespace: tenant-foo
+    set:
+      tracingCentralHost: true
+      tracingStorages:
+        - name: generic
+          mode: cluster
+          retentionPeriod: "14d"
+          storage: 10Gi
+    asserts:
+      - containsDocument:
+          apiVersion: autoscaling.k8s.io/v1
+          kind: VerticalPodAutoscaler
+          name: vpa-vmauth-traces-central
+          any: true
+        not: true
+
   - it: renders no trace VPA when tracingStorages is empty (tracing off)
     asserts:
       - containsDocument:

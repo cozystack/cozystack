@@ -39,6 +39,10 @@ spec:
           - name: cozystack-api-certs
             mountPath: /tmp/cozystack-api-certs
             readOnly: true
+        {{- with .Values.cozystackAPI.resources }}
+        resources:
+          {{- toYaml . | nindent 10 }}
+        {{- end }}
       volumes:
         - name: cozystack-api-certs
           secret:

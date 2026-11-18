@@ -1,4 +1,4 @@
-{{- $host := .Values._namespace.host }}
+{{- $host := include "cozy-lib.ns-host-required" . }}
 {{- $exposeIngress := (index .Values._cluster "expose-ingress") | default "tenant-root" }}
 {{- $gatewayEnabled := (index .Values._cluster "gateway-enabled") | default "false" }}
 {{- if eq $gatewayEnabled "true" }}

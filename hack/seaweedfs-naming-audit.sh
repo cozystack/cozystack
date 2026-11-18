@@ -54,13 +54,15 @@
 #                  reads identically to "nothing to do".
 # Nothing is ever mutated on either path -- every kubectl call is read-only.
 #
-# POSIX sh, deliberately. hack/seaweedfs-naming-audit.bats sources this file, and
-# cozytest.sh sources the converted test into its own /bin/sh — which is dash on
-# the CI runner. A bash shebang would not save it: `.` runs the file's contents in
-# the caller's shell and the shebang is just a comment. Keeping the script POSIX
-# is what makes the tested shell and the executed shell the same one; anything
-# bash-only here is untested in CI and unavailable at run time. `pipefail` in
-# particular is not POSIX and dash 0.5.12 (Ubuntu) rejects it outright.
+# POSIX sh, deliberately. hack/seaweedfs-naming-audit.bats sources the pure
+# helpers under Bats, then drives the executable path repeatedly with explicit
+# `sh hack/seaweedfs-naming-audit.sh` subprocesses. Those subprocess assertions,
+# plus the narrow cozytest.sh compatibility pass in the root Makefile, keep the
+# tested shell and the executed shell aligned; retain at least one explicit sh
+# invocation if this suite is refactored. A bash shebang would not save sourced
+# helpers: `.` runs the file's contents in the caller's shell and the shebang is
+# just a comment. `pipefail` in particular is not POSIX and dash 0.5.12 (Ubuntu)
+# rejects it outright.
 set -u
 
 # run_kubectl <what> <kubectl-args...> -- run ONE read-only kubectl query

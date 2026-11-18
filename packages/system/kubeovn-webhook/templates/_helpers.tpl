@@ -16,9 +16,9 @@ removes the control silently rather than breaking anything visibly.
 The Service frontend port is deliberately NOT defined here. The policy denies
 the backend port only, which already covers ClusterIP-addressed traffic because
 Cilium translates a service to its backends before enforcing egress policy, so
-there is no second value that has to stay in agreement. That translation order
-is itself a pinned assumption -- see
-packages/system/cilium/tests/kube_proxy_replacement_test.yaml.
+there is no second value that has to stay in agreement. Cozystack supports that
+path only with kubeProxyReplacement enabled; the platform invariant is pinned
+in packages/system/cilium/tests/kube_proxy_replacement_test.yaml.
 */}}
 {{- define "namespace-annotation-webhook.port" -}}
 8443

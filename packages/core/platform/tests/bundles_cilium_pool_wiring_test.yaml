@@ -1,0 +1,133 @@
+suite: Cilium address block on the kube-ovn variants
+templates:
+  - templates/bundles/system.yaml
+release:
+  name: cozystack
+  namespace: cozy-system
+tests:
+  # The block has to be the same in both places: Cilium allocates its router and
+  # Ingress IPs from it, and kube-ovn must never hand one of those to a pod.
+  - it: hands the last /21 of the default pod CIDR to Cilium and excludes it in kube-ovn
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+    documentSelector:
+      path: metadata.name
+      value: cozystack.networking
+    asserts:
+      - equal:
+          path: spec.variant
+          value: kubeovn-cilium
+      - equal:
+          path: spec.components.cilium.values.cilium.ipam.operator.clusterPoolIPv4PodCIDRList
+          value:
+            - 10.244.248.0/21
+      - equal:
+          path: spec.components.kubeovn.values.kube-ovn.networking.EXCLUDE_IPS
+          value: 10.244.248.0..10.244.255.255
+
+  - it: follows a custom pod CIDR on the generic variant
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full-generic
+      networking:
+        podCIDR: 10.42.0.0/16
+    documentSelector:
+      path: metadata.name
+      value: cozystack.networking
+    asserts:
+      - equal:
+          path: spec.variant
+          value: kubeovn-cilium-generic
+      - equal:
+          path: spec.components.cilium.values.cilium.ipam.operator.clusterPoolIPv4PodCIDRList
+          value:
+            - 10.42.248.0/21
+      - equal:
+          path: spec.components.kubeovn.values.kube-ovn.networking.EXCLUDE_IPS
+          value: 10.42.248.0..10.42.255.255
+
+  - it: takes the end of a wider pod CIDR and ignores host bits in the network address
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+      networking:
+        podCIDR: 10.100.7.1/12
+    documentSelector:
+      path: metadata.name
+      value: cozystack.networking
+    asserts:
+      - equal:
+          path: spec.components.cilium.values.cilium.ipam.operator.clusterPoolIPv4PodCIDRList
+          value:
+            - 10.111.248.0/21
+      - equal:
+          path: spec.components.kubeovn.values.kube-ovn.networking.EXCLUDE_IPS
+          value: 10.111.248.0..10.111.255.255
+
+  - it: keeps the kube-ovn ipv4 overrides next to the exclusion
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+    documentSelector:
+      path: metadata.name
+      value: cozystack.networking
+    asserts:
+      - equal:
+          path: spec.components.kubeovn.values.kube-ovn.ipv4.POD_CIDR
+          value: 10.244.0.0/16
+      - equal:
+          path: spec.components.cilium.values.cilium.k8sServiceHost
+          value: localhost
+
+  - it: refuses a pod CIDR too small to give up a /21
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+      networking:
+        podCIDR: 10.244.0.0/21
+    asserts:
+      - failedTemplate:
+          errorPattern: "networking.podCIDR 10.244.0.0/21 is too small"
+
+  - it: refuses a pod CIDR that is not an IPv4 CIDR
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+      networking:
+        podCIDR: fd00::/64
+    asserts:
+      - failedTemplate:
+          errorPattern: "is not an IPv4 CIDR"
+
+  # The slim variants run Cilium alone. It allocates pod addresses there from
+  # Node.spec.podCIDR, so neither the block nor kube-ovn belongs in them.
+  - it: leaves the slim variant's Cilium IPAM alone
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-slim
+    documentSelector:
+      path: metadata.name
+      value: cozystack.networking
+    asserts:
+      - equal:
+          path: spec.variant
+          value: cilium
+      - notExists:
+          path: spec.components.cilium.values.cilium.ipam
+      - notExists:
+          path: spec.components.kubeovn

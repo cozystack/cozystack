@@ -1,0 +1,205 @@
+suite: cilium takes its own addresses from a block kube-ovn does not allocate from
+
+# On the kube-ovn variants Cilium is chained behind kube-ovn and allocates no
+# pod addresses, but its router IP and its Gateway API Ingress IP come from the
+# agent's allocation CIDR. values-kubeovn.yaml moves that CIDR from
+# Node.spec.podCIDR, which the documented installs slice from the same range
+# kube-ovn allocates pods from, to the last /21 of the pod CIDR, which kube-ovn
+# excludes. The platform passes the block derived from networking.podCIDR, and
+# the default here matches 10.244.0.0/16. The variants where Cilium is the only
+# CNI keep ipam.mode kubernetes, because there Node.spec.podCIDR is the pod
+# range and nothing else allocates from it.
+#
+# Asserted on the rendered cilium-config keys rather than on .Values, so an
+# upstream chart bump that renames them reddens here. One test per valuesFiles
+# combination that packages/core/platform/sources/networking.yaml installs.
+release:
+  name: cilium
+  namespace: cozy-cilium
+tests:
+  - it: the kubeovn-cilium variant allocates /29s from the last /21 of the default pod CIDR
+    template: charts/cilium/templates/cilium-configmap.yaml
+    values:
+      - ../values-talos.yaml
+      - ../values-kubeovn.yaml
+    documentSelector:
+      path: kind
+      value: ConfigMap
+    asserts:
+      - equal:
+          path: data.ipam
+          value: cluster-pool
+      - equal:
+          path: data["cluster-pool-ipv4-cidr"]
+          value: 10.244.248.0/21
+      - equal:
+          path: data["cluster-pool-ipv4-mask-size"]
+          value: "29"
+
+  - it: the kubeovn-cilium-generic variant allocates from the same block
+    template: charts/cilium/templates/cilium-configmap.yaml
+    values:
+      - ../values-apparmor.yaml
+      - ../values-kubeovn.yaml
+    documentSelector:
+      path: kind
+      value: ConfigMap
+    asserts:
+      - equal:
+          path: data.ipam
+          value: cluster-pool
+      - equal:
+          path: data["cluster-pool-ipv4-cidr"]
+          value: 10.244.248.0/21
+
+  - it: the cilium variant keeps ipam kubernetes
+    template: charts/cilium/templates/cilium-configmap.yaml
+    values:
+      - ../values-talos.yaml
+    documentSelector:
+      path: kind
+      value: ConfigMap
+    asserts:
+      - equal:
+          path: data.ipam
+          value: kubernetes
+
+  - it: the cilium-kilo variant keeps ipam kubernetes
+    template: charts/cilium/templates/cilium-configmap.yaml
+    values:
+      - ../values-talos.yaml
+      - ../values-kilo.yaml
+    documentSelector:
+      path: kind
+      value: ConfigMap
+    asserts:
+      - equal:
+          path: data.ipam
+          value: kubernetes
+
+  - it: the cilium-generic variant keeps ipam kubernetes
+    template: charts/cilium/templates/cilium-configmap.yaml
+    values:
+      - ../values-apparmor.yaml
+    documentSelector:
+      path: kind
+      value: ConfigMap
+    asserts:
+      - equal:
+          path: data.ipam
+          value: kubernetes
+
+  - it: chart defaults, which guest clusters install, keep ipam kubernetes
+    template: charts/cilium/templates/cilium-configmap.yaml
+    documentSelector:
+      path: kind
+      value: ConfigMap
+    asserts:
+      - equal:
+          path: data.ipam
+          value: kubernetes
+
+  - it: the migration hook is not rendered where the mode stays kubernetes
+    template: templates/ipam-migration.yaml
+    values:
+      - ../values-talos.yaml
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  # Post-upgrade only. Before the upgrade the agents still run ipam.mode
+  # kubernetes and write Node.spec.podCIDR back into any CiliumNode cleared
+  # under them, and a fresh install has nothing to move.
+  - it: the kubeovn-cilium variant moves the agents after an upgrade and does nothing on install
+    template: templates/ipam-migration.yaml
+    values:
+      - ../values-talos.yaml
+      - ../values-kubeovn.yaml
+    asserts:
+      - hasDocuments:
+          count: 6
+      - equal:
+          path: metadata.annotations["helm.sh/hook"]
+          value: post-upgrade
+
+  # The post-upgrade run restarts the agents that program the pod network, so
+  # the Job must not depend on it: host network, and the API endpoint the agent
+  # itself uses (KubePrism on Talos) rather than the Service ClusterIP.
+  - it: the hook Job runs on the host network against the agent's API endpoint
+    template: templates/ipam-migration.yaml
+    values:
+      - ../values-talos.yaml
+      - ../values-kubeovn.yaml
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - equal:
+          path: spec.template.spec.hostNetwork
+          value: true
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: KUBERNETES_SERVICE_HOST
+            value: localhost
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: KUBERNETES_SERVICE_PORT
+            value: "7445"
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: POOL
+            value: 10.244.248.0/21
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: MASK
+            value: "29"
+      - matchRegex:
+          path: spec.template.spec.containers[0].args[0]
+          pattern: "Runs as a post-upgrade hook"
+
+  - it: the hook Job takes the pool from the same value the operator does
+    template: templates/ipam-migration.yaml
+    values:
+      - ../values-talos.yaml
+      - ../values-kubeovn.yaml
+    set:
+      cilium.ipam.operator.clusterPoolIPv4PodCIDRList:
+        - 10.42.248.0/22
+        - 10.42.252.0/22
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: POOL
+            value: 10.42.248.0/22 10.42.252.0/22
+
+  # The usage check reads kube-ovn's IP objects, because the subnet status
+  # leaves excluded addresses out once the block is excluded.
+  - it: the hook can list kube-ovn IP objects and patch the subnet
+    template: templates/ipam-migration.yaml
+    values:
+      - ../values-talos.yaml
+      - ../values-kubeovn.yaml
+    documentSelector:
+      path: kind
+      value: ClusterRole
+    asserts:
+      - contains:
+          path: rules
+          content:
+            apiGroups: ["kubeovn.io"]
+            resources: ["ips"]
+            verbs: ["list"]
+      - contains:
+          path: rules
+          content:
+            apiGroups: ["kubeovn.io"]
+            resources: ["subnets"]
+            verbs: ["get", "list", "patch"]

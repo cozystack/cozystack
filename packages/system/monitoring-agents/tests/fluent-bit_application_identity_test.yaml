@@ -1,0 +1,67 @@
+suite: fluent-bit keeps the application identity of a container log line
+
+# The lineage webhook labels a pod with apps.cozystack.io/application.{group,
+# kind,name}. A container log line keeps them as top-level
+# apps_cozystack_io_application_{group,kind,name}, the names the metrics side
+# uses, and they are stream fields so a reader can scope to one application
+# with extra_stream_filters. The kubernetes map, labels included, is otherwise
+# dropped by Remove_wildcard kubernetes_, so the three keys have to be lifted
+# and renamed out of the kubernetes_ prefix before that filter runs.
+templates:
+  - charts/fluent-bit/templates/configmap.yaml
+release:
+  name: monitoring-agents
+  namespace: cozy-monitoring
+set:
+  global:
+    target: tenant-root
+kubernetesProvider:
+  scheme:
+    "v1/Namespace":
+      gvr:
+        version: v1
+        resource: namespaces
+      namespaced: false
+  objects:
+    - kind: Namespace
+      apiVersion: v1
+      metadata:
+        name: tenant-a
+        labels:
+          namespace.cozystack.io/monitoring: tenant-a
+tests:
+  - it: lifts the pod labels after the kubernetes map is lifted
+    asserts:
+      - matchRegex:
+          path: data["fluent-bit.conf"]
+          pattern: '(?s)Operation lift\n\s+Nested_under kubernetes\n.*Name nest\n\s+Match kube\.\*\n\s+Operation lift\n\s+Nested_under kubernetes_labels\n\s+Add_prefix kubernetes_labels_\n'
+
+  - it: renames the three lineage labels out of the kubernetes_ prefix before Remove_wildcard
+    asserts:
+      - matchRegex:
+          path: data["fluent-bit.conf"]
+          pattern: '(?s)Nested_under kubernetes_labels\n.*Rename kubernetes_labels_apps\.cozystack\.io/application\.group apps_cozystack_io_application_group\n\s+Rename kubernetes_labels_apps\.cozystack\.io/application\.kind apps_cozystack_io_application_kind\n\s+Rename kubernetes_labels_apps\.cozystack\.io/application\.name apps_cozystack_io_application_name\n.*Remove_wildcard kubernetes_\n'
+
+  - it: makes the lineage keys stream fields on the default container-log output
+    asserts:
+      - matchRegex:
+          path: data["fluent-bit.conf"]
+          pattern: 'Match kube\.\*\n\s+Host vlinsert-generic\.tenant-root\.svc\n\s+port 9481\n\s+compress gzip\n\s+uri /insert/jsonline\?_stream_fields=log_source,stream,kubernetes_pod_name,kubernetes_container_name,kubernetes_namespace_name,apps_cozystack_io_application_group,apps_cozystack_io_application_kind,apps_cozystack_io_application_name&'
+
+  - it: makes the lineage keys stream fields on a routed tenant's container-log output
+    asserts:
+      - matchRegex:
+          path: data["fluent-bit.conf"]
+          pattern: 'Match tenant\.tenant-a\.\*\n\s+Host vlinsert-generic\.tenant-a\.svc\n\s+port 9481\n\s+compress gzip\n\s+uri /insert/jsonline\?_stream_fields=log_source,stream,kubernetes_pod_name,kubernetes_container_name,kubernetes_namespace_name,apps_cozystack_io_application_group,apps_cozystack_io_application_kind,apps_cozystack_io_application_name&'
+
+  - it: leaves the events and audit outputs without lineage stream fields
+    asserts:
+      - matchRegex:
+          path: data["fluent-bit.conf"]
+          pattern: 'uri /insert/jsonline\?_stream_fields=log_source,reason,metadata_namespace,metadata_name&'
+      - matchRegex:
+          path: data["fluent-bit.conf"]
+          pattern: 'uri /insert/jsonline\?_stream_fields=log_source,stage,user_username,verb,requestUri&'
+      - notMatchRegex:
+          path: data["fluent-bit.conf"]
+          pattern: 'Match (events\.\*|audit\.\*|\*)\n[^\[]*Nested_under kubernetes_labels'

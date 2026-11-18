@@ -14,11 +14,14 @@ metadata:
     app.kubernetes.io/part-of: cilium
     app.kubernetes.io/name: standalone-dns-proxy
     name: standalone-dns-proxy
+    helm.sh/chart: {{ include "cilium.chart" . }}
     {{- with .Values.commonLabels }}
     {{- toYaml . | nindent 4 }}
     {{- end }}
 spec:
-  minReadySeconds: 5
+  {{- if .Values.standaloneDnsProxy.minReadySeconds }}
+  minReadySeconds: {{ .Values.standaloneDnsProxy.minReadySeconds }}
+  {{- end }}
   {{- with .Values.standaloneDnsProxy.updateStrategy }}
   updateStrategy:
     {{- toYaml . | nindent 4 }}
@@ -39,11 +42,15 @@ spec:
         name: standalone-dns-proxy
         app.kubernetes.io/name: standalone-dns-proxy
         app.kubernetes.io/part-of: cilium
+        helm.sh/chart: {{ include "cilium.chart" . }}
         {{- with .Values.commonLabels }}
           {{- toYaml . | nindent 8 }}
         {{- end }}
     spec:
       hostNetwork: true
+      {{- if (semverCompare ">= 1.33-0" .Capabilities.KubeVersion.Version) }}
+      hostUsers: true
+      {{- end }}
       automountServiceAccountToken: {{ .Values.standaloneDnsProxy.automountServiceAccountToken }}
       {{- with .Values.standaloneDnsProxy.nodeSelector }}
       nodeSelector:

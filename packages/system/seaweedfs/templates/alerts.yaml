@@ -1,0 +1,54 @@
+{{- if .Values.global.seaweedfs.monitoring.enabled }}
+{{- /*
+Every SeaweedFS instance renders this chart into its own namespace, and the
+root vmalert evaluates every rule it finds against every namespace's metrics.
+The selectors pin each expression to this release's namespace so N instances
+yield one alert per affected instance rather than N copies of each.
+*/}}
+{{- $ns := .Release.Namespace }}
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: {{ .Release.Name }}-alerts
+spec:
+  groups:
+  - name: seaweedfs
+    rules:
+    - alert: SeaweedFSVolumeServerDiskLow
+      annotations:
+        summary: A SeaweedFS volume server is close to its free-space reserve.
+        description: {{`Volume server {{ $labels.pod }} in Namespace {{ $labels.namespace }} has {{ $value | humanizePercentage }} of its disk left before the minFreeSpacePercent reserve, at which every volume on it turns read-only.`}}
+      expr: |-
+        (
+          SeaweedFS_volumeServer_resource{namespace="{{ $ns }}", type="avail"}
+            / ignoring (type)
+          SeaweedFS_volumeServer_resource{namespace="{{ $ns }}", type="all"}
+        ) < 0.10 > 0
+      for: 15m
+      labels:
+        severity: warning
+    - alert: SeaweedFSVolumeServerFull
+      annotations:
+        summary: A SeaweedFS volume server has no room for another volume.
+        description: {{`Volume server {{ $labels.pod }} in Namespace {{ $labels.namespace }} cannot host a new volume. Either it is at its free-space reserve and all its volumes are read-only, or it has no slot left and a bucket whose volumes on it are all full stops taking writes.`}}
+      expr: |-
+        max by (namespace, pod) (SeaweedFS_volumeServer_resource{namespace="{{ $ns }}", type="avail"} == 0)
+        or on (namespace, pod)
+        (
+          SeaweedFS_volumeServer_max_volumes{namespace="{{ $ns }}"}
+            - on (namespace, pod)
+          sum by (namespace, pod) (SeaweedFS_volumeServer_volumes{namespace="{{ $ns }}", type="volume"})
+        ) <= 0
+      for: 15m
+      labels:
+        severity: warning
+    - alert: SeaweedFSWritesFailing
+      annotations:
+        summary: SeaweedFS keeps failing to place writes.
+        description: {{`The SeaweedFS master in Namespace {{ $labels.namespace }} has failed to assign a volume for a write in every 5-minute window for 15 minutes. Writes may still land in between. The usual cause is a bucket with no writable volume left that the master cannot grow, whose uploads all fail; a steady stream of newly created buckets looks the same.`}}
+      expr: |-
+        sum by (namespace) (increase(SeaweedFS_master_pick_for_write_error{namespace="{{ $ns }}"}[5m])) > 0
+      for: 15m
+      labels:
+        severity: critical
+{{- end }}

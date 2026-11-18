@@ -1,0 +1,80 @@
+{"apiVersion":"v1","kind":"List","items":[
+{"apiVersion":"kubevirt.io/v1","kind":"VirtualMachineInstance",
+ "metadata":{"namespace":"tenant-a","name":"worker-old",
+   "ownerReferences":[{"apiVersion":"kubevirt.io/v1","kind":"VirtualMachine","name":"worker-old","uid":"a","controller":true}]},
+ "spec":{
+   "domain":{"devices":{"disks":[
+     {"name":"root","disk":{"bus":"virtio"}},
+     {"name":"pvc-in-spec","disk":{"bus":"scsi"},"serial":"in-spec"},
+     {"name":"pvc-vmi-only","disk":{"bus":"scsi"},"serial":"vmi-only"},
+     {"name":"pvc-claim-only","disk":{"bus":"scsi"},"serial":"claim-only"},
+     {"name":"cloudinit","disk":{"bus":"virtio"}}]}},
+   "volumes":[
+     {"name":"root","dataVolume":{"name":"worker-old-root"}},
+     {"name":"pvc-in-spec","dataVolume":{"name":"pvc-in-spec","hotpluggable":true}},
+     {"name":"pvc-vmi-only","dataVolume":{"name":"pvc-vmi-only","hotpluggable":true}},
+     {"name":"pvc-claim-only","persistentVolumeClaim":{"claimName":"pvc-claim-only","hotpluggable":true}},
+     {"name":"cloudinit","cloudInitNoCloud":{"userData":"#cloud-config"}}]},
+ "status":{"phase":"Running","volumeStatus":[
+   {"name":"pvc-vmi-only","hotplugVolume":{"attachPodName":"hp-a"}},
+   {"name":"pvc-claim-only","hotplugVolume":{"attachPodName":"hp-a"}}]}},
+{"apiVersion":"kubevirt.io/v1","kind":"VirtualMachineInstance",
+ "metadata":{"namespace":"tenant-b","name":"worker-new",
+   "ownerReferences":[{"apiVersion":"kubevirt.io/v1","kind":"VirtualMachine","name":"worker-new","uid":"b","controller":true}]},
+ "spec":{
+   "domain":{"devices":{"disks":[
+     {"name":"root","disk":{"bus":"virtio"}},
+     {"name":"pvc-b","disk":{"bus":"scsi"},"serial":"b"}]}},
+   "volumes":[
+     {"name":"root","dataVolume":{"name":"worker-new-root"}},
+     {"name":"pvc-b","dataVolume":{"name":"pvc-b","hotpluggable":true}}]},
+ "status":{"phase":"Running"}},
+{"apiVersion":"kubevirt.io/v1","kind":"VirtualMachineInstance",
+ "metadata":{"namespace":"tenant-c","name":"orphan"},
+ "spec":{
+   "domain":{"devices":{"disks":[{"name":"pvc-c","disk":{"bus":"scsi"}}]}},
+   "volumes":[{"name":"pvc-c","dataVolume":{"name":"pvc-c","hotpluggable":true}}]},
+ "status":{"phase":"Running"}},
+{"apiVersion":"kubevirt.io/v1","kind":"VirtualMachineInstance",
+ "metadata":{"namespace":"tenant-f","name":"worker-gone",
+   "ownerReferences":[{"apiVersion":"kubevirt.io/v1","kind":"VirtualMachine","name":"worker-gone","uid":"f","controller":true}]},
+ "spec":{
+   "domain":{"devices":{"disks":[{"name":"pvc-f","disk":{"bus":"scsi"}}]}},
+   "volumes":[{"name":"pvc-f","dataVolume":{"name":"pvc-f","hotpluggable":true}}]},
+ "status":{"phase":"Running"}},
+{"apiVersion":"kubevirt.io/v1","kind":"VirtualMachineInstance",
+ "metadata":{"namespace":"tenant-e","name":"worker-ref",
+   "ownerReferences":[{"apiVersion":"kubevirt.io/v1","kind":"VirtualMachine","name":"worker-ref","uid":"e"}]},
+ "spec":{
+   "domain":{"devices":{"disks":[{"name":"pvc-e","disk":{"bus":"scsi"}}]}},
+   "volumes":[{"name":"pvc-e","dataVolume":{"name":"pvc-e","hotpluggable":true}}]},
+ "status":{"phase":"Running"}},
+{"apiVersion":"kubevirt.io/v1","kind":"VirtualMachineInstance",
+ "metadata":{"namespace":"tenant-d","name":"worker-disk",
+   "ownerReferences":[{"apiVersion":"kubevirt.io/v1","kind":"VirtualMachine","name":"worker-disk","uid":"d","controller":true}]},
+ "spec":{
+   "domain":{"devices":{"disks":[
+     {"name":"root","disk":{"bus":"virtio"}},
+     {"name":"pvc-d","disk":{"bus":"scsi"},"serial":"d"}]}},
+   "volumes":[
+     {"name":"root","dataVolume":{"name":"worker-disk-root"}},
+     {"name":"pvc-d","dataVolume":{"name":"pvc-d","hotpluggable":true}}]},
+ "status":{"phase":"Running"}},
+{"apiVersion":"kubevirt.io/v1","kind":"VirtualMachineInstance",
+ "metadata":{"namespace":"tenant-g","name":"worker-failed",
+   "ownerReferences":[{"apiVersion":"kubevirt.io/v1","kind":"VirtualMachine","name":"worker-failed","uid":"g","controller":true}]},
+ "spec":{
+   "domain":{"devices":{"disks":[
+     {"name":"root","disk":{"bus":"virtio"}},
+     {"name":"pvc-g","disk":{"bus":"scsi"},"serial":"g"}]}},
+   "volumes":[
+     {"name":"root","dataVolume":{"name":"worker-failed-root"}},
+     {"name":"pvc-g","dataVolume":{"name":"pvc-g","hotpluggable":true}}]},
+ "status":{"phase":"Failed"}},
+{"apiVersion":"kubevirt.io/v1","kind":"VirtualMachineInstance",
+ "metadata":{"namespace":"tenant-h","name":"worker-pending",
+   "ownerReferences":[{"apiVersion":"kubevirt.io/v1","kind":"VirtualMachine","name":"worker-pending","uid":"h","controller":true}]},
+ "spec":{
+   "domain":{"devices":{"disks":[{"name":"pvc-h","disk":{"bus":"scsi"}}]}},
+   "volumes":[{"name":"pvc-h","dataVolume":{"name":"pvc-h","hotpluggable":true}}]}}
+]}

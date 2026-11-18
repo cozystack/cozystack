@@ -559,7 +559,7 @@ func TestS3KeyFromArtifactURI(t *testing.T) {
 }
 
 // TestResolveEtcdRestoreDestination_PrefersArtifactURIForRevSuffix is
-// the integration test for the bug found on dev7: with a v0.4.4
+// the integration test for the bug found on a test cluster: with a v0.4.4
 // operator (BACKUP_INCLUDE_REVISION=true), the agent wrote
 // "etcd/etcd-backup-job-6gghq-rev2.db" but the driver's
 // buildEtcdRestoreS3Key would emit "etcd/etcd-backup-job-6gghq.db" —

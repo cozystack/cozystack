@@ -2,18 +2,39 @@
 ARG VERSION="1.15.26"
 ARG BASE_TAG=v$VERSION
 
-FROM golang:1.27-bookworm@sha256:69a7b9788769bec032d238959b61854e9ae87f57be9029ec04e9885fabf99195 as builder
+FROM --platform=$BUILDPLATFORM golang:1.27-bookworm@sha256:69a7b9788769bec032d238959b61854e9ae87f57be9029ec04e9885fabf99195 as builder
+ARG GOPROXY
 
 ARG TAG="v1.15.26"
+ARG TARGETARCH
 RUN git clone --branch ${TAG} --depth 1 https://github.com/kubeovn/kube-ovn /source
 
 WORKDIR /source
 
 COPY patches /patches
 RUN git apply /patches/*.diff
+# The loop below runs this test: a patch touches pkg/controller.
 COPY tests/kubevirt_migration_test.go.txt /source/pkg/controller/kubevirt_migration_test.go
-RUN go test ./pkg/controller -run '^TestVMIMigrationSchedulingRetry$' -count=1
-RUN make build-go
+
+# go build never compiles a _test.go, so nothing else runs the tests of the
+# packages the patches touch. Each package is tested from its own directory:
+# that finds the module it belongs to, and an empty list runs nothing.
+# The list is read into a variable first: a for loop drops the exit status
+# of a command substitution, so a patch git cannot read would leave the list
+# empty and the step green.
+RUN files=$(git apply --numstat /patches/*.diff) || exit 1; \
+    for dir in $(printf '%s\n' "$files" | cut -f3 | grep '\.go$' | xargs -r -n1 dirname | sort -u); do \
+      (cd "$dir" && go test .) || exit 1; \
+    done
+
+# Upstream hardcodes GOARCH in each target: build-go is amd64 only, and
+# build-go-arm is its arm64 twin minus the `go mod tidy` and the test-server
+# binary, which this image never copies.
+RUN case "$TARGETARCH" in \
+      amd64) make build-go ;; \
+      arm64) go mod tidy && make build-go-arm ;; \
+      *) echo "unsupported TARGETARCH=${TARGETARCH:-<empty>}" >&2; exit 1 ;; \
+    esac
 
 WORKDIR /source/dist/images
 

@@ -15,9 +15,9 @@ release:
 # the API group string exactly.
 #
 # The last two tests bound the role from two directions, and neither covers the
-# other. The count bound pins the list at exactly twenty: templates/rbac.yaml
-# carries no template directives, so anything appended makes rules[20] exist and
-# anything dropped takes rules[19] away, whatever the rule is called. It says
+# other. The count bound pins the list at exactly twenty-one: templates/rbac.yaml
+# carries no template directives, so anything appended makes rules[21] exist and
+# anything dropped takes rules[20] away, whatever the rule is called. It says
 # nothing about a grant swapped in for an existing one, because the count does
 # not move under a swap. The spelling assert catches that case for the one rule
 # it names, and misses every other wording of it, because helm-unittest compares
@@ -67,6 +67,15 @@ tests:
             resources: ["ocirepositories"]
             verbs: ["get", "list", "watch"]
 
+  - it: grants read on cdi.kubevirt.io datavolumes for the image provider
+    asserts:
+      - contains:
+          path: rules
+          content:
+            apiGroups: ["cdi.kubevirt.io"]
+            resources: ["datavolumes"]
+            verbs: ["get", "watch", "list"]
+
   - it: does not grant objectstorage.k8s.io bucketclasses (no provider reads it)
     asserts:
       - notContains:
@@ -76,11 +85,11 @@ tests:
             resources: ["bucketclasses"]
             verbs: ["get", "watch", "list"]
 
-  - it: ships exactly the twenty rules this role is pinned to
+  - it: ships exactly the twenty-one rules this role is pinned to
     asserts:
       # Both directions. A dropped grant is the failure this suite is about:
       # the apiserver returns forbidden and List silently drops the dropdown.
       - exists:
-          path: rules[19]
-      - notExists:
           path: rules[20]
+      - notExists:
+          path: rules[21]

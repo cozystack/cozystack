@@ -1,4 +1,5 @@
 FROM --platform=$BUILDPLATFORM golang:1.27@sha256:3680233e3204827fbdc66088528ae6d4b3d034f51d03a99d454f6de034888244 AS build
+ARG GOPROXY
 
 ARG VERSION=v4.3.0
 ARG TARGETPLATFORM
@@ -13,6 +14,9 @@ RUN git init && git config user.email "build@cozystack" && git config user.name 
     git add -A && git commit -m "init" && git tag ${VERSION} && \
     git apply /patches/*.diff
 
+# The tests of pkg/multus, the package the patch touches, create network
+# namespaces (mount --make-rshared /var/run/netns), which a build container is
+# not allowed to do, so the image build does not run them.
 RUN ./hack/build-go.sh
 # The upstream reference CNI plugins, installed into the host /opt/cni/bin by
 # the install-cni-plugins init container. See packages/system/multus/values.yaml
@@ -25,7 +29,7 @@ RUN ./hack/build-go.sh
 #   dhcp       needs a long-running host daemon this package does not run.
 #   tap, dummy no consumer in this tree.
 #
-# The list here, the count, and docs/vm-external-vlan.md are asserted against
+# The list here, the count, and packages/system/multus/README.md are asserted against
 # each other in hack/cni-plugins-staging-contract.bats.
 #
 # kube-ovn installs portmap and macvlan into the same directory from its own
@@ -46,7 +50,7 @@ RUN ./hack/build-go.sh
 # CNI_PLUGINS_VERSION above -- it is about the VERSIONS matching, not about
 # which plugins exist.
 #
-# talos-cni-plugins-checked-against: v1.13.6
+# talos-cni-plugins-checked-against: v1.14.2
 ARG TARGETARCH
 ARG CNI_PLUGINS_VERSION=v1.9.1
 # SHA-256 of cni-plugins-linux-<arch>-<version>.tgz, from the release's per-asset

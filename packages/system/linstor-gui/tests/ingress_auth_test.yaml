@@ -43,7 +43,7 @@ tests:
     template: templates/ingress.yaml
     set:
       _cluster:
-        root-host: dev10.example.org
+        root-host: example.org
         oidc-enabled: "true"
         expose-services: "dashboard,linstor-gui"
         expose-ingress: "tenant-root"
@@ -57,7 +57,7 @@ tests:
           value: tenant-root
       - equal:
           path: spec.rules[0].host
-          value: linstor-gui.dev10.example.org
+          value: linstor-gui.example.org
       - equal:
           path: spec.rules[0].http.paths[0].backend.service.name
           value: linstor-gui-gatekeeper
@@ -99,7 +99,7 @@ tests:
     template: templates/gatekeeper.yaml
     set:
       _cluster:
-        root-host: dev10.example.org
+        root-host: example.org
         oidc-enabled: "true"
         oidc-insecure-skip-verify: "false"
         keycloak-internal-url: ""
@@ -121,10 +121,10 @@ tests:
           content: --upstream=http://linstor-gui.cozy-linstor.svc:80
       - contains:
           path: spec.template.spec.containers[0].args
-          content: --redirect-url=https://linstor-gui.dev10.example.org/oauth2/callback
+          content: --redirect-url=https://linstor-gui.example.org/oauth2/callback
       - contains:
           path: spec.template.spec.containers[0].args
-          content: --oidc-issuer-url=https://keycloak.dev10.example.org/realms/cozy
+          content: --oidc-issuer-url=https://keycloak.example.org/realms/cozy
       - contains:
           path: spec.template.spec.containers[0].args
           content: --scope=openid email profile groups
@@ -151,7 +151,7 @@ tests:
     template: templates/gatekeeper.yaml
     set:
       _cluster:
-        root-host: dev10.example.org
+        root-host: example.org
         oidc-enabled: "true"
         keycloak-internal-url: http://keycloak-http.cozy-keycloak.svc:8080/realms/cozy
         expose-services: "linstor-gui"
@@ -173,19 +173,19 @@ tests:
           content: --backend-logout-url=http://keycloak-http.cozy-keycloak.svc:8080/realms/cozy/protocol/openid-connect/logout?id_token_hint={id_token}
       - contains:
           path: spec.template.spec.containers[0].args
-          content: --redirect-url=https://linstor-gui.dev10.example.org/oauth2/callback
+          content: --redirect-url=https://linstor-gui.example.org/oauth2/callback
       - contains:
           path: spec.template.spec.containers[0].args
-          content: --login-url=https://keycloak.dev10.example.org/realms/cozy/protocol/openid-connect/auth
+          content: --login-url=https://keycloak.example.org/realms/cozy/protocol/openid-connect/auth
       - contains:
           path: spec.template.spec.containers[0].args
-          content: --oidc-issuer-url=https://keycloak.dev10.example.org/realms/cozy
+          content: --oidc-issuer-url=https://keycloak.example.org/realms/cozy
 
   - it: an explicit keycloak-internal-url override wins over the default
     template: templates/gatekeeper.yaml
     set:
       _cluster:
-        root-host: dev10.example.org
+        root-host: example.org
         oidc-enabled: "true"
         keycloak-internal-url: http://keycloak.example.test:8080/realms/other
         expose-services: "linstor-gui"
@@ -220,7 +220,7 @@ tests:
     template: templates/gatekeeper.yaml
     set:
       _cluster:
-        root-host: dev10.example.org
+        root-host: example.org
         oidc-enabled: "true"
         keycloak-internal-url: ""
         expose-services: "linstor-gui"
@@ -230,10 +230,10 @@ tests:
           content: --skip-oidc-discovery
       - contains:
           path: spec.template.spec.containers[0].args
-          content: --oidc-issuer-url=https://keycloak.dev10.example.org/realms/cozy
+          content: --oidc-issuer-url=https://keycloak.example.org/realms/cozy
       - contains:
           path: spec.template.spec.containers[0].args
-          content: --backend-logout-url=https://keycloak.dev10.example.org/realms/cozy/protocol/openid-connect/logout?id_token_hint={id_token}
+          content: --backend-logout-url=https://keycloak.example.org/realms/cozy/protocol/openid-connect/logout?id_token_hint={id_token}
       - notContains:
           path: spec.template.spec.containers[0].args
           content: --redeem-url=http://keycloak-http.cozy-keycloak.svc:8080/realms/cozy/protocol/openid-connect/token
@@ -254,7 +254,7 @@ tests:
         - v1.edp.epam.com/v1
     set:
       _cluster:
-        root-host: dev10.example.org
+        root-host: example.org
     asserts:
       - hasDocuments:
           count: 3
@@ -282,7 +282,7 @@ tests:
       - documentIndex: 2
         contains:
           path: spec.redirectUris
-          content: "https://linstor-gui.dev10.example.org/oauth2/callback/*"
+          content: "https://linstor-gui.example.org/oauth2/callback/*"
 
   - it: skips the KeycloakClient CRD when the API is absent, still creates Secrets
     template: templates/keycloakclient.yaml
@@ -307,7 +307,7 @@ tests:
     template: templates/gatekeeper.yaml
     set:
       _cluster:
-        root-host: dev10.example.org
+        root-host: example.org
         oidc-enabled: "true"
         oidc-realm-name: acme
         keycloak-internal-url: http://keycloak-http.cozy-keycloak.svc:8080/realms/acme
@@ -315,13 +315,13 @@ tests:
     asserts:
       - contains:
           path: spec.template.spec.containers[0].args
-          content: --oidc-issuer-url=https://keycloak.dev10.example.org/realms/acme
+          content: --oidc-issuer-url=https://keycloak.example.org/realms/acme
       - contains:
           path: spec.template.spec.containers[0].args
-          content: --login-url=https://keycloak.dev10.example.org/realms/acme/protocol/openid-connect/auth
+          content: --login-url=https://keycloak.example.org/realms/acme/protocol/openid-connect/auth
       - notContains:
           path: spec.template.spec.containers[0].args
-          content: --oidc-issuer-url=https://keycloak.dev10.example.org/realms/cozy
+          content: --oidc-issuer-url=https://keycloak.example.org/realms/cozy
 
   # The external-discovery branch (empty internal URL) builds its own
   # backend-logout-url on the browser host; its realm segment must follow
@@ -330,7 +330,7 @@ tests:
     template: templates/gatekeeper.yaml
     set:
       _cluster:
-        root-host: dev10.example.org
+        root-host: example.org
         oidc-enabled: "true"
         oidc-realm-name: acme
         keycloak-internal-url: ""
@@ -341,7 +341,7 @@ tests:
           content: --skip-oidc-discovery
       - contains:
           path: spec.template.spec.containers[0].args
-          content: --backend-logout-url=https://keycloak.dev10.example.org/realms/acme/protocol/openid-connect/logout?id_token_hint={id_token}
+          content: --backend-logout-url=https://keycloak.example.org/realms/acme/protocol/openid-connect/logout?id_token_hint={id_token}
       - notContains:
           path: spec.template.spec.containers[0].args
-          content: --backend-logout-url=https://keycloak.dev10.example.org/realms/cozy/protocol/openid-connect/logout?id_token_hint={id_token}
+          content: --backend-logout-url=https://keycloak.example.org/realms/cozy/protocol/openid-connect/logout?id_token_hint={id_token}

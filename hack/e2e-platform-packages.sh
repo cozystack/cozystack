@@ -13,9 +13,9 @@ linstor_drbd_enabled=${COZY_LINSTOR_DRBD_ENABLED:-true}
 #
 # The consequence is worth stating where it is made, and it applies to both:
 # the merge-gating lane exercises neither the shipped CDI default nor
-# `drbd.enabled: true`. Whether a tenant worker disk imports at 600M, and
-# whether the DRBD path works at all, are answered by the QEMU lanes
-# (nightly.yaml, e2e-tag.yaml), which take no override, and not here.
+# `drbd.enabled: true`. Every e2e lane runs on containers, so whether a
+# tenant worker disk imports at 600M, and whether the DRBD path works at all,
+# is answered by no CI lane.
 case "$linstor_drbd_enabled" in
   true|false) ;;
   *)
@@ -23,6 +23,32 @@ case "$linstor_drbd_enabled" in
     exit 2
     ;;
 esac
+
+# Packages left out of this install. The container lane always drops the two it
+# replaces below; COZY_DISABLED_PACKAGES adds the complement computed by
+# hack/select-install.sh for the selected suites. Both land under one
+# disabledPackages key, so the list is merged here rather than emitted twice.
+disabled=""
+if [ "$linstor_drbd_enabled" = false ]; then
+  disabled="cozystack.linstor cozystack.kubevirt-cdi"
+fi
+for pkg in ${COZY_DISABLED_PACKAGES:-}; do
+  case "$pkg" in
+    cozystack.*[!a-z0-9.-]* | cozystack.)
+      echo "COZY_DISABLED_PACKAGES: invalid package name: $pkg" >&2
+      exit 2
+      ;;
+    cozystack.?*) ;;
+    *)
+      echo "COZY_DISABLED_PACKAGES: invalid package name: $pkg" >&2
+      exit 2
+      ;;
+  esac
+  case " $disabled " in
+    *" $pkg "*) ;;
+    *) disabled="${disabled:+$disabled }$pkg" ;;
+  esac
+done
 
 cat <<EOF
 apiVersion: cozystack.io/v1alpha1
@@ -42,16 +68,25 @@ spec:
         publishing:
           host: "example.org"
           apiServerEndpoint: "$api_server_endpoint"
+        # Must match Tenant/root spec.monitoring, which the install sets to
+        # false. Left true, cozystack-basics renders Services into
+        # cozy-monitoring, which a narrow suite selection never creates.
+        monitoring:
+          rootEnabled: false
         bundles:
           enabledPackages:
             - cozystack.external-dns-application
 EOF
 
+if [ -n "$disabled" ]; then
+  echo "          disabledPackages:"
+  for pkg in $disabled; do
+    echo "            - $pkg"
+  done
+fi
+
 if [ "$linstor_drbd_enabled" = false ]; then
   cat <<'EOF'
-          disabledPackages:
-            - cozystack.linstor
-            - cozystack.kubevirt-cdi
 ---
 apiVersion: cozystack.io/v1alpha1
 kind: Package

@@ -178,7 +178,9 @@ tests:
     asserts:
       - notExists:
           path: stringData.dashboards-host
-        documentIndex: 2
+        documentSelector:
+          path: metadata.name
+          value: test-os-credentials
 
   - it: includes dashboards fields when dashboards enabled
     release:

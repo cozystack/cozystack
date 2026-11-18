@@ -3,17 +3,23 @@ import { useNavigate } from "react-router"
 import { Archive, Save } from "lucide-react"
 import { Button, Section, Spinner } from "@cozystack/ui"
 import { useK8sCreate, useK8sList } from "@cozystack/k8s-client"
+import type { K8sResource } from "@cozystack/k8s-client"
 import { useTenantContext } from "../lib/tenant-context.tsx"
 import { useApplicationDefinitions } from "../lib/app-definitions.ts"
 import { useCRDSchema } from "../lib/use-crd-schema.ts"
 import { SchemaForm, type SchemaFormHandle } from "../components/SchemaForm.tsx"
-import { enrichSchemaWithEnums } from "../lib/backup-utils.ts"
+import { enrichSchemaWithEnums, type BackupFormRef } from "../lib/backup-utils.ts"
+
+interface PlanFormData {
+  applicationRef?: BackupFormRef
+  backupClassName?: string
+}
 
 export function BackupPlanCreatePage() {
   const navigate = useNavigate()
   const { tenantNamespace } = useTenantContext()
   const { data: appDefs } = useApplicationDefinitions()
-  const [formData, setFormData] = useState<any>({})
+  const [formData, setFormData] = useState<PlanFormData>({})
   const [name, setName] = useState("")
   const schemaFormRef = useRef<SchemaFormHandle>(null)
 
@@ -39,7 +45,7 @@ export function BackupPlanCreatePage() {
     [appDefs, selectedKind]
   )
 
-  const { data: instancesData } = useK8sList<any>({
+  const { data: instancesData } = useK8sList<K8sResource>({
     apiGroup: "apps.cozystack.io",
     apiVersion: "v1alpha1",
     plural: selectedAppDef?.spec?.application.plural ?? "",
@@ -63,7 +69,7 @@ export function BackupPlanCreatePage() {
       console.error("Failed to parse Plan schema:", e)
       return null
     }
-    const instances = instancesData?.items.map((inst: any) => inst.metadata.name) ?? []
+    const instances = instancesData?.items.map((inst) => inst.metadata.name) ?? []
 
     const enumMap: Record<string, string[]> = {}
 
@@ -190,7 +196,7 @@ export function BackupPlanCreatePage() {
                 ref={schemaFormRef}
                 openAPISchema={schema}
                 formData={formData}
-                onChange={setFormData}
+                onChange={setFormData as (data: unknown) => void}
               >
                 <div className="hidden" />
               </SchemaForm>

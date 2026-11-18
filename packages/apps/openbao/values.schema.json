@@ -131,6 +131,58 @@
       "description": "Enable the OpenBAO web UI.",
       "type": "boolean",
       "default": true
+    },
+    "seal": {
+      "description": "Seal configuration. The default is Shamir key shares. Set `type: static` for auto-unseal.",
+      "type": "object",
+      "default": {},
+      "required": [
+        "keyId",
+        "secretName",
+        "type"
+      ],
+      "properties": {
+        "allowMigration": {
+          "description": "Acknowledge a seal migration. The chart refuses to change `type` on an existing instance unless this is `true`. Set it only while running `bao operator unseal -migrate`, then remove it.",
+          "type": "boolean",
+          "default": false
+        },
+        "keyId": {
+          "description": "Permanent identifier of the current key. OpenBAO stores it with the data the key wraps and picks the key by it, so change it whenever the key material changes. Lowercase alphanumerics, `-`, `.` and `_`, starting and ending with an alphanumeric, because the upstream chart evaluates the server config as a template and rewrites upper case placeholders such as `HOSTNAME` in it. Required when `type` is `static`.",
+          "type": "string",
+          "default": "",
+          "pattern": "^([a-z0-9]([-a-z0-9._]*[a-z0-9])?)?$"
+        },
+        "previousKeyId": {
+          "description": "Identifier of the previous key, with the same character constraints as `keyId`. Required when `previousSecretName` is set.",
+          "type": "string",
+          "default": "",
+          "pattern": "^([a-z0-9]([-a-z0-9._]*[a-z0-9])?)?$"
+        },
+        "previousSecretName": {
+          "description": "Secret holding the previous key during an n-1 key rotation, with the same name constraints as `secretName`. Keep it until the pods have been replaced and the active node has logged `upgrading stored keys`, see the README.",
+          "type": "string",
+          "default": "",
+          "maxLength": 52,
+          "pattern": "^([a-z0-9]([-a-z0-9]*[a-z0-9])?)?$"
+        },
+        "secretName": {
+          "description": "Existing Secret in the tenant namespace whose key `key` holds the base64 text of 32 random bytes (for example `openssl rand -base64 32`). A cluster administrator creates it, because tenant roles cannot create Secrets. Lowercase alphanumerics and hyphens, at most 52 characters, because the pod volume is named `userconfig-\u003cname\u003e` and a volume name is a DNS label. Required when `type` is `static`.",
+          "type": "string",
+          "default": "",
+          "maxLength": 52,
+          "pattern": "^([a-z0-9]([-a-z0-9]*[a-z0-9])?)?$"
+        },
+        "type": {
+          "description": "Seal type. `shamir` keeps the current behaviour, `static` enables auto-unseal from `secretName`.",
+          "type": "string",
+          "default": "shamir",
+          "enum": [
+            "shamir",
+            "static"
+          ]
+        }
+      }
     }
   }
 }

@@ -11,6 +11,7 @@ metadata:
   labels:
     app.kubernetes.io/part-of: cilium
     app.kubernetes.io/name: cilium-pre-flight-check
+    helm.sh/chart: {{ include "cilium.chart" . }}
     {{- with .Values.commonLabels }}
     {{- toYaml . | nindent 4 }}
     {{- end }}
@@ -30,6 +31,7 @@ spec:
         k8s-app: cilium-pre-flight-check-deployment
         kubernetes.io/cluster-service: "true"
         app.kubernetes.io/name: cilium-pre-flight-check
+        helm.sh/chart: {{ include "cilium.chart" . }}
         {{- with .Values.commonLabels }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
@@ -92,6 +94,9 @@ spec:
       {{- toYaml . | trim | nindent 6 }}
       {{- end }}
       hostNetwork: true
+      {{- if (semverCompare ">= 1.33-0" .Capabilities.KubeVersion.Version) }}
+      hostUsers: true
+      {{- end }}
       restartPolicy: Always
       priorityClassName: {{ include "cilium.priorityClass" (list $ .Values.preflight.priorityClassName "system-cluster-critical") }}
       serviceAccountName: {{ .Values.serviceAccounts.preflight.name | quote }}

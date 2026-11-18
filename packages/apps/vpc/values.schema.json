@@ -12,6 +12,13 @@
           "name"
         ],
         "properties": {
+          "allowSubnets": {
+            "description": "Additional source CIDRs admitted into this private subnet, such as remote networks routed in through a gateway VM",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
           "cidr": {
             "description": "IP address range",
             "type": "string"

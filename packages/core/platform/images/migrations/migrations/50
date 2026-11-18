@@ -691,7 +691,7 @@ etcd-migrate \
   --skip-controller-check || true
 
 if [ "$DRY_RUN" = "1" ]; then
-  echo "[dry-run] would scale ${ETCD_OPERATOR_NS}/${ETCD_OPERATOR_DEPLOY} to 0, run etcd-migrate --apply ${ETCD_MIGRATE_BACKUP_ARGS:-<no clusters>}, scale back to 1, then stamp version 51"
+  echo "[dry-run] would scale ${ETCD_OPERATOR_NS}/${ETCD_OPERATOR_DEPLOY} to 0, run etcd-migrate --apply ${ETCD_MIGRATE_BACKUP_ARGS:-<no clusters>}, leave it at 0 for the etcd-operator HelmRelease to replace, then stamp version 51"
   exit 0
 fi
 
@@ -712,11 +712,12 @@ if [ "$LEGACY_COUNT" -gt 0 ]; then
 
   # The etcd-operator is cluster-wide: while it sits at 0 replicas NO tenant's
   # etcd is reconciled. With `set -euo pipefail`, a non-zero exit from
-  # etcd-migrate --apply would abort the script before the scale-back, stranding
-  # the operator at 0 platform-wide until a human intervenes. Arm an EXIT trap
-  # the moment we scale down so the operator is restored on ANY exit (success,
-  # failure, or signal); the Job then retries adoption (idempotent) from a
-  # healthy operator instead of a frozen one.
+  # etcd-migrate --apply would abort the script and strand the operator at 0
+  # platform-wide until a human intervenes. Arm an EXIT trap the moment we scale
+  # down so the operator is restored when adoption fails or the script is
+  # interrupted. The Job then retries adoption (idempotent) from a healthy
+  # operator instead of a frozen one. A successful adoption disarms the trap and
+  # leaves the legacy operator at 0, see below.
   restore_etcd_operator() {
     echo "Restoring ${ETCD_OPERATOR_NS}/${ETCD_OPERATOR_DEPLOY} to 1 replica..."
     kubectl -n "$ETCD_OPERATOR_NS" scale deploy "$ETCD_OPERATOR_DEPLOY" --replicas=1 >/dev/null 2>&1 || true
@@ -738,11 +739,19 @@ if [ "$LEGACY_COUNT" -gt 0 ]; then
     --agent-image="${ETCD_OPERATOR_IMAGE}" \
     ${ETCD_MIGRATE_BACKUP_ARGS}
 
-  echo "Scaling ${ETCD_OPERATOR_NS}/${ETCD_OPERATOR_DEPLOY} back to 1..."
-  kubectl -n "$ETCD_OPERATOR_NS" scale deploy "$ETCD_OPERATOR_DEPLOY" --replicas=1
-  kubectl -n "$ETCD_OPERATOR_NS" rollout status deploy "$ETCD_OPERATOR_DEPLOY" --timeout=180s || true
-  # Clean scale-back done; disarm the safety net so the version stamp below is
-  # not shadowed by a redundant restore.
+  # Adoption succeeded, so the legacy operator stays at 0. Every legacy cluster
+  # is now a v1alpha2 EtcdCluster that only the v1alpha2 operator manages, and
+  # the etcd-operator HelmRelease replaces this Deployment with that operator
+  # later in the same upgrade. A legacy operator running in between undoes part
+  # of the adoption. Until a tenant's etcd HelmRelease picks up the new chart,
+  # Flux re-creates the legacy EtcdCluster from the old one, and the legacy
+  # operator reconciles it, re-creates the StatefulSet that etcd-migrate
+  # orphan-deleted and takes the legacy headless Service back from the adopted
+  # members. The new chart then prunes that EtcdCluster, the garbage collector
+  # deletes the Service with it, and the members' etcd-<i>.etcd-headless names
+  # stop resolving. Only a failed or interrupted adoption restores the operator,
+  # through the EXIT trap above.
+  echo "Leaving ${ETCD_OPERATOR_NS}/${ETCD_OPERATOR_DEPLOY} at 0 replicas, the etcd-operator HelmRelease replaces it with the v1alpha2 operator."
   trap - EXIT
 fi
 

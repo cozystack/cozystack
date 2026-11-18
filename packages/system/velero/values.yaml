@@ -6,7 +6,7 @@ velero:
   upgradeCRDs: false
   initContainers:
     - name: velero-plugin-for-aws
-      image: velero/velero-plugin-for-aws:v1.14.1
+      image: velero/velero-plugin-for-aws:v1.14.4
       imagePullPolicy: IfNotPresent
       volumeMounts:
         - mountPath: /target

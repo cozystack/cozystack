@@ -259,11 +259,13 @@ tests:
             - cozy-dashboard
             - cozy-keycloak
 
-  - it: tlsPassthroughServices defaults to api,vm-exportproxy,cdi-uploadproxy
+  - it: the publishing tenant renders the default tlsPassthroughServices the platform exposes
     set:
       _cluster:
         solver: http01
         expose-ingress: tenant-root
+        expose-services: api,dashboard,vm-exportproxy,cdi-uploadproxy
+        gateway-enabled: "true"
         issuer-name: letsencrypt-prod
       _namespace:
         host: example.org
@@ -274,6 +276,86 @@ tests:
             - api
             - vm-exportproxy
             - cdi-uploadproxy
+
+  - it: the publishing tenant renders only the passthrough services the platform exposes
+    set:
+      _cluster:
+        solver: http01
+        expose-ingress: tenant-root
+        expose-services: dashboard,api
+        gateway-enabled: "true"
+        issuer-name: letsencrypt-prod
+      _namespace:
+        host: example.org
+    asserts:
+      - equal:
+          path: spec.tlsPassthroughServices
+          value:
+            - api
+
+  - it: the publishing tenant is the one expose-ingress names
+    release:
+      namespace: tenant-pub
+    set:
+      _cluster:
+        solver: http01
+        expose-ingress: tenant-pub
+        expose-services: api,dashboard,vm-exportproxy,cdi-uploadproxy
+        gateway-enabled: "true"
+        issuer-name: letsencrypt-prod
+      _namespace:
+        host: pub.example.org
+    asserts:
+      - equal:
+          path: spec.tlsPassthroughServices
+          value:
+            - api
+            - vm-exportproxy
+            - cdi-uploadproxy
+
+  - it: a tenant that does not publish the platform services renders no tlsPassthroughServices
+    release:
+      namespace: tenant-alice
+    set:
+      _cluster:
+        solver: http01
+        expose-ingress: tenant-root
+        expose-services: api,dashboard,vm-exportproxy,cdi-uploadproxy
+        gateway-enabled: "true"
+        issuer-name: letsencrypt-prod
+      _namespace:
+        host: alice.example.org
+    asserts:
+      - notExists:
+          path: spec.tlsPassthroughServices
+
+  - it: the publishing tenant renders no tlsPassthroughServices while the platform gateway is off
+    set:
+      _cluster:
+        solver: http01
+        expose-ingress: tenant-root
+        expose-services: api,dashboard,vm-exportproxy,cdi-uploadproxy
+        gateway-enabled: "false"
+        issuer-name: letsencrypt-prod
+      _namespace:
+        host: example.org
+    asserts:
+      - notExists:
+          path: spec.tlsPassthroughServices
+
+  - it: the publishing tenant renders no tlsPassthroughServices when the platform exposes none of them
+    set:
+      _cluster:
+        solver: http01
+        expose-ingress: tenant-root
+        expose-services: dashboard
+        gateway-enabled: "true"
+        issuer-name: letsencrypt-prod
+      _namespace:
+        host: example.org
+    asserts:
+      - notExists:
+          path: spec.tlsPassthroughServices
 
   - it: wildcard-secret-name switches to certMode=existingSecret with wildcardSecretRef
     set:
@@ -337,6 +419,8 @@ tests:
       _cluster:
         solver: http01
         expose-ingress: tenant-root
+        expose-services: api,dashboard,vm-exportproxy,cdi-uploadproxy
+        gateway-enabled: "true"
         issuer-name: letsencrypt-prod
         wildcard-secret-name: wildcard-tls
       _namespace:
@@ -679,20 +763,18 @@ tests:
           path: spec.certMode
           value: edge
 
-  - it: an edge tenant advertises no tlsPassthroughServices in its CR
-    release:
-      namespace: tenant-alice
+  - it: an edge publishing tenant advertises no tlsPassthroughServices in its CR
     set:
       _cluster:
         solver: http01
         expose-ingress: tenant-root
+        expose-services: api,dashboard,vm-exportproxy,cdi-uploadproxy
+        gateway-enabled: "true"
         issuer-name: letsencrypt-prod
-        gateway-class-name: cilium
+        gateway-class-name: cloudflare-tunnel
         gateway-edge-classes: cloudflare-tunnel
-        gateway-tenant-classes: cloudflare-tunnel
       _namespace:
-        host: alice.example.org
-      gatewayClassName: cloudflare-tunnel
+        host: example.org
     asserts:
       - equal:
           path: spec.certMode

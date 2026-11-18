@@ -61,6 +61,26 @@ spec:
         severity: warning
         namespace: "{{ $labels.namespace }}"
         job: "{{ $labels.job }}"
+    # LastFailedArchiveTime resolves on any archive that succeeds, so archiving
+    # that fails intermittently, or runs slower than WAL is written, never keeps
+    # it firing while the backlog grows. A healthy archiver empties the queue
+    # within seconds of each switch; one that has not in 30 minutes is behind.
+    # A recreated pod gets a new instance label and so a new series. Taking the
+    # minimum of every raw series before grouping by pod name keeps the window
+    # across it and counts every scraped zero, which a sampling subquery would
+    # skip; only a pod name newer than 30 minutes is judged on less, and the
+    # hold sets its floor at 10.
+    - alert: CNPGWALArchiveBacklog
+      annotations:
+        description: Pod {{ $labels.pod }} in Namespace {{ $labels.namespace }} has had at least {{ $value }} WAL segments waiting to be archived without the queue emptying once in the last 30 minutes, or since the pod first appeared if that is more recent. Point-in-time recovery stops at the last archived segment, and the waiting segments stay on the Postgres volume until it is full.
+        summary: WAL archiving is not keeping up.
+      expr: |-
+        min by (namespace, job, pod) (min_over_time(cnpg_collector_pg_wal_archive_status{value="ready"}[30m])) > 0
+      for: 10m
+      labels:
+        severity: critical
+        namespace: "{{ $labels.namespace }}"
+        job: "{{ $labels.job }}"
     - alert: DatabaseDeadlockConflicts
       annotations:
         description: There are over 10 deadlock conflicts in Namespace {{ $labels.namespace }} Job {{ $labels.job }} Pod {{ $labels.pod }}

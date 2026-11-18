@@ -13,11 +13,15 @@ metadata:
     app: ztunnel-cilium
     app.kubernetes.io/part-of: cilium
     app.kubernetes.io/name: ztunnel-cilium
+    helm.sh/chart: {{ include "cilium.chart" . }}
     {{- with .Values.commonLabels }}
     {{- toYaml . | nindent 4 }}
     {{- end }}
 spec:
   revisionHistoryLimit: 10
+  {{- if .Values.encryption.ztunnel.minReadySeconds }}
+  minReadySeconds: {{ .Values.encryption.ztunnel.minReadySeconds }}
+  {{- end }}
   selector:
     matchLabels:
       app: ztunnel-cilium
@@ -36,6 +40,7 @@ spec:
         app: ztunnel-cilium
         app.kubernetes.io/part-of: cilium
         app.kubernetes.io/name: ztunnel-cilium
+        helm.sh/chart: {{ include "cilium.chart" . }}
         {{- with .Values.commonLabels }}
         {{- toYaml . | nindent 8 }}
         {{- end }}

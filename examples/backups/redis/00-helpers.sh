@@ -17,6 +17,16 @@ export BOLD='\033[1m'
 # reaches lives in tenant-root, and the default e2e tenant-test is egress-
 # isolated from it).
 export NAMESPACE="${NAMESPACE:-tenant-root}"
+# APP_KIND=Valkey runs the same round-trip against a Valkey app: it runs on the
+# same RedisFailover operator, and its chart names every resource valkey-<app>
+# where the redis chart uses redis-<app>.
+export APP_KIND="${APP_KIND:-Redis}"
+case "$APP_KIND" in
+    Redis)  APP_PREFIX=redis-;  APP_RESOURCE=redis ;;
+    Valkey) APP_PREFIX=valkey-; APP_RESOURCE=valkeys.apps.cozystack.io ;;
+    *) echo "APP_KIND must be Redis or Valkey, got '$APP_KIND'" >&2; exit 1 ;;
+esac
+export APP_PREFIX APP_RESOURCE
 export REDIS_NAME="${REDIS_NAME:-redis-test}"
 export REDIS_RESTORE_NAME="${REDIS_RESTORE_NAME:-redis-restore}"
 export BACKUPJOB_NAME="${BACKUPJOB_NAME:-redis-backup-job}"
@@ -64,64 +74,29 @@ print_header() {
     echo -e "\n${MAGENTA}${BOLD}== $title ==${NC}\n" >&2
 }
 
-# Wait until a JSONPath value on a resource matches the desired string. An
-# optional 7th arg is a TERMINAL failure value: once the field reaches it the
-# wait returns 1 immediately instead of polling to the timeout (a BackupJob /
-# RestoreJob settles on phase=Failed that never becomes Succeeded).
-wait_for_field() {
-    local resource_type="$1" resource_name="$2" jsonpath="$3" desired="$4"
-    local namespace="${5:-}" timeout="${6:-300}" fail_value="${7:-}"
-
-    log_substep "Waiting for $resource_type/$resource_name $jsonpath to become '$desired'..."
-    local elapsed=0 ns_flag=()
-    [[ -n "$namespace" ]] && ns_flag=(-n "$namespace")
-    while true; do
-        local current
-        current=$(kubectl get "$resource_type" "$resource_name" "${ns_flag[@]}" -o jsonpath="$jsonpath" || true)
-        [[ "$current" == "$desired" ]] && { log_success "$resource_type/$resource_name reached '$desired'"; return 0; }
-        [[ -n "$fail_value" && "$current" == "$fail_value" ]] && { log_error "$resource_type/$resource_name reached terminal '$current' (expected '$desired')"; return 1; }
-        (( elapsed >= timeout )) && { log_error "Timeout waiting for $resource_type/$resource_name (current: '$current', expected: '$desired')"; return 1; }
-        sleep 5
-        elapsed=$((elapsed + 5))
-    done
-}
-
-# Wait for a HelmRelease to become Ready, with an existence backstop (the apps
-# controller creates the HR asynchronously) and a fail-fast on Stalled=True.
-wait_hr_ready() {
-    local name="$1" timeout="${2:-300}" elapsed=0
-    log_substep "Waiting for HelmRelease/$name to become Ready..."
-    while true; do
-        if kubectl -n "$NAMESPACE" get hr "$name" >/dev/null 2>&1; then
-            local ready stalled
-            ready=$(kubectl -n "$NAMESPACE" get hr "$name" -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}' || true)
-            [[ "$ready" == "True" ]] && { log_success "HelmRelease/$name is Ready"; return 0; }
-            stalled=$(kubectl -n "$NAMESPACE" get hr "$name" -o jsonpath='{.status.conditions[?(@.type=="Stalled")].status}' || true)
-            [[ "$stalled" == "True" ]] && { log_error "HelmRelease/$name is Stalled (terminal)"; return 1; }
-        fi
-        (( elapsed >= timeout )) && { log_error "Timeout waiting for HelmRelease/$name to become Ready"; return 1; }
-        sleep 5
-        elapsed=$((elapsed + 5))
-    done
-}
+# wait_for_field, wait_hr_ready and wait_deleted live in one file shared by
+# every backup walkthrough, so a fix to one reaches all of them.
+# shellcheck source-path=SCRIPTDIR source=../_lib/wait-helpers.sh
+source "$(dirname "${BASH_SOURCE[0]}")/../_lib/wait-helpers.sh"
 
 # The cozystack redis chart names its RedisFailover (hence the operator's rfr-/
-# rfs- Services and the -auth Secret) redis-<app>, mirroring the strategy driver
-# that derives the same base from .Release.Name. So app X's password lives in
-# redis-X-auth. The chart renders that Secret only with authEnabled, so its
-# absence reads as no password; any other error still fails the read.
+# rfs- Services and the -auth Secret) redis-<app>, the valkey chart valkey-<app>,
+# mirroring the strategy driver that derives the same base from .Release.Prefix
+# and .Release.Name. So app X's password lives in <prefix>X-auth. The chart
+# renders that Secret only with authEnabled, so its absence reads as no
+# password; any other error still fails the read.
 redis_pw() {
-    kubectl -n "$NAMESPACE" get secret "redis-$1-auth" --ignore-not-found -o jsonpath='{.data.password}' | base64 -d
+    kubectl -n "$NAMESPACE" get secret "${APP_PREFIX}$1-auth" --ignore-not-found -o jsonpath='{.data.password}' | base64 -d
 }
 
 # Run a redis-cli command against an application's CURRENT master. Master
-# discovery asks a sentinel of the operator's rfs-redis-<app> Deployment
+# discovery asks a sentinel of the operator's rfs-<prefix><app> Deployment
 # (master name "mymaster"), so a write always lands on the writable node even
 # after a failover. Args after the app name are passed verbatim to redis-cli.
 #   redis_cmd redis-test SET sentinel:marker hello
 #
 # The command runs by `kubectl exec` in a sentinel Pod, whose image carries
-# redis-cli. A throwaway `kubectl run -i` Pod is not usable here: its stdout
+# redis-cli (the valkey image ships it as a link to valkey-cli). A throwaway `kubectl run -i` Pod is not usable here: its stdout
 # comes back over an attach, which only carries what the container writes after
 # the attach is established, and kubectl falls back to the Pod log only when
 # the attach fails. A redis-cli that finishes in between comes back as an
@@ -134,7 +109,7 @@ redis_pw() {
 redis_cmd() {
     local app="$1" pw; shift
     pw=$(redis_pw "$app")
-    printf '%s\n' "$pw" | kubectl -n "$NAMESPACE" exec -i "deploy/rfs-redis-$app" -c sentinel -- sh -c '
+    printf '%s\n' "$pw" | kubectl -n "$NAMESPACE" exec -i "deploy/rfs-${APP_PREFIX}$app" -c sentinel -- sh -c '
             IFS= read -r pw || true
             addr=$(redis-cli -p 26379 sentinel get-master-addr-by-name mymaster) || exit 1
             h=$(echo "$addr" | sed -n 1p); p=$(echo "$addr" | sed -n 2p)

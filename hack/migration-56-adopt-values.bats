@@ -8,7 +8,7 @@
 # spec.values from the parent kubernetes HR values with a jq helper:
 #
 #     def pick($o; ks): reduce ks[] as $k ({}; if ($o | has($k)) ...);
-#     ... + pick(.; ["version","talos"])   # images is narrowed to {kubectl} separately
+#     ... + pick(.; ["version","talos"])
 #
 # A subtle regression is to write `def pick(o; ks)` with a filter-parameter:
 # inside `reduce ks[] as $k ({}; ...)` the `.` context is the accumulator, so
@@ -21,22 +21,26 @@
 #
 # The @test below drives the REAL migration script against a fake kubectl and
 # asserts the captured child HelmRelease carries the tenant's non-default
-# talos/version/images (plus the group fields and storageClass fallback). It
+# talos/version (plus the group fields and storageClass fallback). It
 # fails against the buggy `pick(o; ...)` and passes against `pick($o; ...)`.
 #
-# cozytest.sh's awk parser recognizes only @test blocks and a bare `}` on its
-# own line; there is no bats `run`/`$status`/`setup`/`teardown`. Assertions are
-# direct shell tests that exit non-zero on failure.
+# CI runs this file under Bats through `make bats-unit-tests`. It also remains
+# compatible with the legacy `hack/cozytest.sh` translator, whose awk parser
+# recognizes only @test blocks and a bare `}` on its own line. The tests avoid
+# `run`, `$status`, setup(), and teardown() for that compatibility path.
 #
-# Run with: hack/cozytest.sh hack/migration-56-adopt-values.bats
+# Run with: bats hack/migration-56-adopt-values.bats
 # -----------------------------------------------------------------------------
+
+load test_helper
 
 FAKEBIN="$PWD/hack/testdata/migration-56"
 MIG="$PWD/packages/core/platform/images/migrations/migrations/56"
 
 # prep resets PATH/env to a clean scenario: one tenant Kubernetes HR (test3)
-# with a single pool md0 and NON-default talos/version/images so the assertions
-# distinguish "copied the tenant value" from "fell back to the chart default".
+# with a single pool md0 and NON-default talos/version so the assertions
+# distinguish "copied the tenant value" from "fell back to the chart default",
+# plus a leftover images map that must not reach the pool values.
 prep() {
   chmod +x "$FAKEBIN/kubectl"
   WORK=$(mktemp -d)
@@ -59,7 +63,7 @@ prep() {
 JSON
 }
 
-@test "child HR carries the tenant's talos/version/images (not chart defaults) so the KMT hash is preserved" {
+@test "child HR carries the tenant's talos/version (not chart defaults) so the KMT hash is preserved" {
   prep
   rc=0
   bash "$MIG" >"$WORK/out" 2>&1 || rc=$?
@@ -80,11 +84,8 @@ JSON
   [ "$(jq -r '.spec.values.talos.version' "$FAKE_CHILD_HR")" = "v1.13.0" ]
   [ "$(jq -r '.spec.values.talos.schematicID' "$FAKE_CHILD_HR")" = "deadbeef" ]
   [ "$(jq -r '.spec.values.version' "$FAKE_CHILD_HR")" = "v1.32" ]
-  [ "$(jq -r '.spec.values.images.kubectl' "$FAKE_CHILD_HR")" = "example.io/kubectl:v1.32" ]
-  # images is narrowed to the declared kubectl key only — the parent's
-  # waitForKubeconfig/talosCsrSigner (undeclared in the KubernetesNodes schema)
-  # must NOT leak into the adopted pool values.
-  [ "$(jq -r '.spec.values.images | keys | join(",")' "$FAKE_CHILD_HR")" = "kubectl" ]
+  # Neither chart reads an images map any more, so none is carried over.
+  [ "$(jq -r '.spec.values | has("images")' "$FAKE_CHILD_HR")" = "false" ]
 
   # Group fields and the storageClass cluster-level fallback carry through.
   [ "$(jq -r '.spec.values.minReplicas' "$FAKE_CHILD_HR")" = "1" ]
@@ -219,7 +220,7 @@ JSON
   rc=0
   bash "$MIG" >"$WORK/out" 2>&1 || rc=$?
   [ "$rc" -eq 0 ]
-  ! grep -qE 'label helmrelease' "$FAKE_CMDLOG"
+  if grep -qE 'label helmrelease' "$FAKE_CMDLOG"; then echo "FAIL: no HelmRelease must be labelled"; false; fi
   rm -rf "$WORK"
 }
 
@@ -249,7 +250,7 @@ JSON
   rc=0
   bash "$MIG" >"$WORK/out" 2>&1 || rc=$?
   [ "$rc" -eq 0 ]
-  ! grep -qF -- "APPLY-UNADOPTED-CM" "$FAKE_CMDLOG"
+  if grep -qF -- "APPLY-UNADOPTED-CM" "$FAKE_CMDLOG"; then echo "FAIL: no unadopted ConfigMap must be applied"; false; fi
   grep -qF -- "STAMP" "$FAKE_CMDLOG"
   rm -rf "$WORK"
 }
@@ -304,6 +305,6 @@ JSON
   rc=0
   bash "$MIG" >"$WORK/out" 2>&1 || rc=$?
   [ "$rc" -eq 0 ]
-  ! grep -qE 'label helmrelease kubernetes-decoy' "$FAKE_CMDLOG"
+  if grep -qE 'label helmrelease kubernetes-decoy' "$FAKE_CMDLOG"; then echo "FAIL: the decoy HelmRelease must not be labelled"; false; fi
   rm -rf "$WORK"
 }

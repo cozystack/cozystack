@@ -75,6 +75,22 @@ tests:
           content:
             port: "9443"
 
+  - it: denies world ingress to the etcd client, peer and HTTP ports
+    # 2383 carries etcd's HTTP endpoints and JSON KV API since Talos v1.14.
+    asserts:
+      - contains:
+          path: spec.ingressDeny[0].toPorts[0].ports
+          content:
+            port: "2379"
+      - contains:
+          path: spec.ingressDeny[0].toPorts[0].ports
+          content:
+            port: "2380"
+      - contains:
+          path: spec.ingressDeny[0].toPorts[0].ports
+          content:
+            port: "2383"
+
   - it: drops the stale frr-mode metrics port now that frrk8s is the default
     # Port 7473 was metallb's legacy FRR-mode metrics endpoint. v0.16 disables
     # FRR mode by default and migrates BGP to frr-k8s; the port is no longer

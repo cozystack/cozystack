@@ -2,7 +2,7 @@
 
 // Package postgresapp declares the typed shape of the apps.cozystack.io/v1alpha1
 // Postgres CR that the CNPG backup driver reads and patches. It carries only
-// the fields the driver touches - bootstrap, backup, databases, users -
+// the fields the driver touches - bootstrap, backup, databases, users, flavor -
 // because the live CR has many more fields (resources, quorum, postgresql
 // parameters, ...) that we never look at and that round-tripping through
 // this partial schema would otherwise silently drop.
@@ -64,10 +64,16 @@ type PostgresList struct {
 // genuinely needs them; everything else stays on the server, untouched by
 // the controller's patches.
 type PostgresSpec struct {
+	// Version is the PostgreSQL major the chart renders the Cluster with,
+	// in the chart's "v16" form.
+	Version   string              `json:"version,omitempty"`
 	Bootstrap Bootstrap           `json:"bootstrap,omitempty"`
 	Backup    Backup              `json:"backup,omitempty"`
 	Databases map[string]Database `json:"databases,omitempty"`
 	Users     map[string]User     `json:"users,omitempty"`
+	// Flavor is read, never patched: a restore must land on the image family
+	// the backup was taken from. Empty means the chart default, postgresql.
+	Flavor string `json:"flavor,omitempty"`
 }
 
 type Bootstrap struct {
@@ -80,6 +86,7 @@ type Bootstrap struct {
 	ServerName    string `json:"serverName,omitempty"`
 	NewServerName string `json:"newServerName,omitempty"`
 	RecoveryTime  string `json:"recoveryTime,omitempty"`
+	BackupID      string `json:"backupID,omitempty"`
 }
 
 type Backup struct {

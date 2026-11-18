@@ -20,7 +20,7 @@ spec:
       paths:
       - backend:
           service:
-            name: vm-exportproxy
+            name: virt-exportproxy
             port:
               number: 443
         path: /

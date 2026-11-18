@@ -17,10 +17,13 @@
 # Requires helm (present in the unit-tests CI toolchain; the same job installs
 # the helm-unittest plugin).
 #
-# cozytest.sh awk parser: @test blocks only, a bare `}` at column 0 ends a test,
-# no run/$status/setup/teardown. Assertions are direct shell tests.
-# Run with: hack/cozytest.sh hack/kubernetes-nodes-unpin-hook.bats
+# For compatibility with the legacy cozytest.sh translator, tests avoid
+# run/$status and file-local setup/teardown, and keep bare `}` lines out of test
+# bodies. Assertions are direct shell tests.
+# Run with: bats hack/kubernetes-nodes-unpin-hook.bats
 # -----------------------------------------------------------------------------
+
+load test_helper
 
 FAKEBIN="$PWD/hack/testdata/kubernetes-nodes-unpin"
 CHART="$PWD/packages/apps/kubernetes-nodes"
@@ -56,7 +59,7 @@ prep() {
   sh "$WORK/unpin.sh" >"$WORK/out" 2>&1 || rc=$?
   cat "$WORK/out"
   [ "$rc" -eq 0 ]
-  ! grep -q 'annotate' "$FAKE_CMDLOG"
+  if grep -q 'annotate' "$FAKE_CMDLOG"; then echo "FAIL: no annotate must be issued when the objects are absent"; false; fi
   rm -rf "$WORK"
 }
 
@@ -73,7 +76,7 @@ prep() {
   cat "$WORK/out"
   [ "$rc" -ne 0 ]
   grep -q 'request timed out' "$WORK/out"
-  ! grep -q 'annotate' "$FAKE_CMDLOG"
+  if grep -q 'annotate' "$FAKE_CMDLOG"; then echo "FAIL: no annotate must be issued after a read failure"; false; fi
   rm -rf "$WORK"
 }
 
@@ -88,7 +91,7 @@ prep() {
   sh "$WORK/unpin.sh" >"$WORK/out" 2>&1 || rc=$?
   cat "$WORK/out"
   [ "$rc" -ne 0 ]
-  ! grep -q 'annotate' "$FAKE_CMDLOG"
+  if grep -q 'annotate' "$FAKE_CMDLOG"; then echo "FAIL: no annotate must be issued after a read failure"; false; fi
   rm -rf "$WORK"
 }
 
@@ -102,7 +105,7 @@ prep() {
   sh "$WORK/unpin.sh" >"$WORK/out" 2>&1 || rc=$?
   cat "$WORK/out"
   [ "$rc" -ne 0 ]
-  ! grep -q 'annotate' "$FAKE_CMDLOG"
+  if grep -q 'annotate' "$FAKE_CMDLOG"; then echo "FAIL: no annotate must be issued after a failed KMT listing"; false; fi
   unset FAKE_LIST_FAIL
   rm -rf "$WORK"
 }
@@ -118,7 +121,7 @@ prep() {
   sh "$WORK/unpin.sh" >"$WORK/out" 2>&1 || rc=$?
   cat "$WORK/out"
   [ "$rc" -eq 0 ]
-  ! grep -q 'annotate' "$FAKE_CMDLOG"
+  if grep -q 'annotate' "$FAKE_CMDLOG"; then echo "FAIL: a warning on stderr must not be read as a pinned object"; false; fi
   unset FAKE_WARN_STDERR
   rm -rf "$WORK"
 }
@@ -138,7 +141,7 @@ prep() {
   grep -q 'annotate .*workloadmonitor.cozystack.io/kubernetes-myk8s-md0 helm.sh/resource-policy-' "$FAKE_CMDLOG"
   grep -q 'annotate .*kubevirtmachinetemplate.infrastructure.cluster.x-k8s.io/kubernetes-myk8s-md0-abc123 helm.sh/resource-policy-' "$FAKE_CMDLOG"
   # ...but the sibling pool md0-large's KMT is left alone (6-hex anchor).
-  ! grep -q 'md0-large-def456' "$FAKE_CMDLOG"
+  if grep -q 'md0-large-def456' "$FAKE_CMDLOG"; then echo "FAIL: the sibling pool's KubevirtMachineTemplate must not be unpinned"; false; fi
   rm -rf "$WORK"
 }
 
@@ -149,6 +152,6 @@ prep() {
   sh "$WORK/unpin.sh" >"$WORK/out" 2>&1 || rc=$?
   cat "$WORK/out"
   [ "$rc" -eq 0 ]
-  ! grep -q 'annotate' "$FAKE_CMDLOG"
+  if grep -q 'annotate' "$FAKE_CMDLOG"; then echo "FAIL: an object without the keep annotation must not be unpinned"; false; fi
   rm -rf "$WORK"
 }

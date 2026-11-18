@@ -1,6 +1,6 @@
 name: UI Test
 
-# Typecheck + unit tests for the in-tree console SPA
+# Typecheck, lint and unit tests for the in-tree console SPA
 # (packages/system/dashboard/images/console, vendored from cozystack-ui).
 # The container image itself is built by `make build` in the main build job.
 
@@ -18,7 +18,7 @@ defaults:
   run:
     working-directory: packages/system/dashboard/images/console
 
-# Read-only token; this workflow only checks out code and runs typecheck/tests.
+# Read-only token; this workflow only checks out code and runs typecheck/lint/tests.
 permissions:
   contents: read
 
@@ -53,6 +53,9 @@ jobs:
 
       - name: Typecheck
         run: pnpm typecheck
+
+      - name: Lint
+        run: pnpm lint
 
       - name: Test
         run: pnpm test

@@ -16,16 +16,14 @@
 {{- $tlsEnabled := include "kafka.tls.enabled" . | trim -}}
 {{- $showExternal := .Values.external -}}
 {{- $kafkaVersion := include "kafka.versionMap" . -}}
-apiVersion: kafka.strimzi.io/v1beta2
+{{- $entityOperatorMemory := "512Mi" -}}
+apiVersion: kafka.strimzi.io/v1
 kind: Kafka
 metadata:
   name: {{ .Release.Name }}
   labels:
     app.kubernetes.io/instance: {{ .Release.Name }}
     app.kubernetes.io/managed-by: {{ .Release.Service }}
-  annotations:
-    strimzi.io/node-pools: enabled
-    strimzi.io/kraft: enabled
 spec:
   kafka:
     version: {{ $kafkaVersion }}
@@ -64,6 +62,13 @@ spec:
       default.replication.factor: 3
       min.insync.replicas: 2
       {{- end }}
+    template:
+      pod:
+        metadata:
+          labels:
+            # The nodes read their certificates from Secrets through the
+            # Kubernetes API (Strimzi's strimzisecrets config provider).
+            policy.cozystack.io/allow-to-apiserver: "true"
     metricsConfig:
       type: jmxPrometheusExporter
       valueFrom:
@@ -82,14 +87,14 @@ spec:
           cpu: 100m
           memory: 256Mi
         limits:
-          memory: 512Mi
+          memory: {{ $entityOperatorMemory }}
     userOperator:
       resources:
         requests:
           cpu: 100m
           memory: 256Mi
         limits:
-          memory: 512Mi
+          memory: {{ $entityOperatorMemory }}
     template:
       # `pod` accepts metadata + a flat set of pod-spec fields
       # (enableServiceLinks, securityContext, affinity, …) directly.

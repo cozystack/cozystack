@@ -23,6 +23,8 @@ import (
 
 	cozyv1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
 	"github.com/cozystack/cozystack/internal/marketplace/tapconst"
+	sourcev1 "github.com/fluxcd/source-controller/api/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -77,7 +79,7 @@ func TestInstallPlatformPackageSource_Creates(t *testing.T) {
 	}
 
 	// Verify variants
-	expectedVariants := []string{"default", "isp-full", "isp-hosted", "isp-full-generic"}
+	expectedVariants := []string{"default", "isp-full", "isp-hosted", "isp-full-generic", "isp-slim", "isp-slim-generic", "isp-hosted-slim"}
 	if len(ps.Spec.Variants) != len(expectedVariants) {
 		t.Fatalf("expected %d variants, got %d", len(expectedVariants), len(ps.Spec.Variants))
 	}
@@ -114,15 +116,15 @@ func TestInstallPlatformPackageSource_Updates(t *testing.T) {
 	if ps.Spec.SourceRef.Name != "cozystack-platform" {
 		t.Errorf("expected sourceRef.name %q, got %q", "cozystack-platform", ps.Spec.SourceRef.Name)
 	}
-	if len(ps.Spec.Variants) != 4 {
-		t.Errorf("expected 4 variants, got %d", len(ps.Spec.Variants))
+	if len(ps.Spec.Variants) != 7 {
+		t.Errorf("expected 7 variants, got %d", len(ps.Spec.Variants))
 	}
 }
 
 // TestInstallPlatformPackageSource_RefusesTapOwned asserts that when a
 // marketplace tap has materialized a PackageSource under a name the platform
 // later ships, the platform refuses to overwrite it, names the conflict, and
-// leaves the object untouched (kvaps' review point).
+// leaves the object untouched.
 func TestInstallPlatformPackageSource_RefusesTapOwned(t *testing.T) {
 	s := newTestScheme()
 	tapOwned := &cozyv1alpha1.PackageSource{
@@ -259,6 +261,9 @@ func TestInstallPlatformPackageSource_VariantValuesFiles(t *testing.T) {
 		"isp-full":         {"values.yaml", "values-isp-full.yaml"},
 		"isp-hosted":       {"values.yaml", "values-isp-hosted.yaml"},
 		"isp-full-generic": {"values.yaml", "values-isp-full-generic.yaml"},
+		"isp-slim":         {"values.yaml", "values-isp-slim.yaml"},
+		"isp-slim-generic": {"values.yaml", "values-isp-slim-generic.yaml"},
+		"isp-hosted-slim":  {"values.yaml", "values-isp-hosted-slim.yaml"},
 	}
 
 	for _, v := range ps.Spec.Variants {
@@ -530,7 +535,7 @@ func TestValidateGitRef(t *testing.T) {
 
 func TestGenerateOCIRepository(t *testing.T) {
 	refMap := map[string]string{"tag": "v1.0", "digest": "sha256:abc123"}
-	obj, err := generateOCIRepository("my-repo", "oci://registry.example.com/repo", refMap, "")
+	obj, err := generateOCIRepository("my-repo", "oci://registry.example.com/repo", refMap, "", "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -556,10 +561,13 @@ func TestGenerateOCIRepository(t *testing.T) {
 	if obj.Spec.SecretRef != nil {
 		t.Errorf("expected SecretRef to be nil when secretName is empty, got %+v", obj.Spec.SecretRef)
 	}
+	if obj.Spec.CertSecretRef != nil {
+		t.Errorf("expected CertSecretRef to be nil when certSecretName is empty, got %+v", obj.Spec.CertSecretRef)
+	}
 }
 
 func TestGenerateOCIRepository_NoRef(t *testing.T) {
-	obj, err := generateOCIRepository("my-repo", "oci://registry.example.com/repo", map[string]string{}, "")
+	obj, err := generateOCIRepository("my-repo", "oci://registry.example.com/repo", map[string]string{}, "", "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -569,14 +577,14 @@ func TestGenerateOCIRepository_NoRef(t *testing.T) {
 }
 
 func TestGenerateOCIRepository_InvalidRef(t *testing.T) {
-	_, err := generateOCIRepository("my-repo", "oci://registry.example.com/repo", map[string]string{"branch": "main"}, "")
+	_, err := generateOCIRepository("my-repo", "oci://registry.example.com/repo", map[string]string{"branch": "main"}, "", "")
 	if err == nil {
 		t.Fatal("expected error for invalid OCI ref key, got nil")
 	}
 }
 
 func TestGenerateOCIRepository_WithSecret(t *testing.T) {
-	obj, err := generateOCIRepository("my-repo", "oci://registry.example.com/repo", map[string]string{"tag": "v1.0"}, "my-registry-creds")
+	obj, err := generateOCIRepository("my-repo", "oci://registry.example.com/repo", map[string]string{"tag": "v1.0"}, "my-registry-creds", "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -585,6 +593,147 @@ func TestGenerateOCIRepository_WithSecret(t *testing.T) {
 	}
 	if obj.Spec.SecretRef.Name != "my-registry-creds" {
 		t.Errorf("expected SecretRef.Name %q, got %q", "my-registry-creds", obj.Spec.SecretRef.Name)
+	}
+}
+
+func TestGenerateOCIRepository_WithCertSecret(t *testing.T) {
+	obj, err := generateOCIRepository("my-repo", "oci://registry.example.com/repo", map[string]string{"tag": "v1.0"}, "", "registry-ca")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if obj.Spec.CertSecretRef == nil {
+		t.Fatal("expected CertSecretRef to be set when certSecretName is non-empty")
+	}
+	if obj.Spec.CertSecretRef.Name != "registry-ca" {
+		t.Errorf("expected CertSecretRef.Name %q, got %q", "registry-ca", obj.Spec.CertSecretRef.Name)
+	}
+	if obj.Spec.SecretRef != nil {
+		t.Errorf("expected SecretRef to stay nil when only certSecretName is set, got %+v", obj.Spec.SecretRef)
+	}
+}
+
+func newSourceTestClient(t *testing.T, objs ...client.Object) client.Client {
+	t.Helper()
+	scheme := newTestScheme()
+	if err := sourcev1.AddToScheme(scheme); err != nil {
+		t.Fatalf("add source scheme: %v", err)
+	}
+	return fake.NewClientBuilder().WithScheme(scheme).WithObjects(objs...).Build()
+}
+
+// The operator rewrites the whole platform OCIRepository on every start, so a
+// certSecretRef patched onto the live object by hand is lost on the next
+// restart and source-controller then fails TLS against a registry behind a
+// private CA. The CA has to come from the operator's own arguments and survive
+// that update path, including a rename of the Secret when the CA is rotated.
+func TestInstallPlatformSourceResource_UpdateKeepsCertSecret(t *testing.T) {
+	existing := &sourcev1.OCIRepository{
+		ObjectMeta: metav1.ObjectMeta{Name: "cozystack-platform", Namespace: "cozy-system"},
+		Spec:       sourcev1.OCIRepositorySpec{URL: "oci://ghcr.io/cozystack/cozystack/cozystack-packages"},
+	}
+	k8sClient := newSourceTestClient(t, existing)
+
+	for _, certSecret := range []string{"registry-ca", "registry-ca-next"} {
+		if err := installPlatformSourceResource(context.Background(), k8sClient,
+			"oci://registry.internal:8083/cozystack/cozystack/cozystack-packages", "cozystack-platform",
+			"digest=sha256:abc123", "registry-creds", certSecret); err != nil {
+			t.Fatalf("installPlatformSourceResource: %v", err)
+		}
+	}
+
+	got := &sourcev1.OCIRepository{}
+	if err := k8sClient.Get(context.Background(), client.ObjectKey{Namespace: "cozy-system", Name: "cozystack-platform"}, got); err != nil {
+		t.Fatalf("get OCIRepository: %v", err)
+	}
+	if got.Spec.CertSecretRef == nil || got.Spec.CertSecretRef.Name != "registry-ca-next" {
+		t.Errorf("expected CertSecretRef registry-ca-next after update, got %+v", got.Spec.CertSecretRef)
+	}
+	if got.Spec.SecretRef == nil || got.Spec.SecretRef.Name != "registry-creds" {
+		t.Errorf("expected SecretRef registry-creds after update, got %+v", got.Spec.SecretRef)
+	}
+	if got.Spec.URL != "oci://registry.internal:8083/cozystack/cozystack/cozystack-packages" {
+		t.Errorf("expected URL to be repointed, got %q", got.Spec.URL)
+	}
+}
+
+// GitRepository has no certSecretRef: Flux reads a Git CA from the ca.crt key
+// of the secretRef Secret. Accepting the flag for a Git source would silently
+// drop the CA, so it must fail before anything is written.
+func TestInstallPlatformSourceResource_GitRejectsCertSecret(t *testing.T) {
+	k8sClient := newSourceTestClient(t)
+
+	err := installPlatformSourceResource(context.Background(), k8sClient,
+		"https://git.internal/cozystack/cozystack", "cozystack-platform", "branch=main", "git-creds", "git-ca")
+	if err == nil {
+		t.Fatal("expected an error for a cert secret on a Git platform source, got nil")
+	}
+	if !strings.Contains(err.Error(), "ca.crt") {
+		t.Errorf("expected the error to point at the ca.crt key of the source secret, got: %v", err)
+	}
+
+	list := &sourcev1.GitRepositoryList{}
+	if err := k8sClient.List(context.Background(), list); err != nil {
+		t.Fatalf("list GitRepositories: %v", err)
+	}
+	if len(list.Items) != 0 {
+		t.Errorf("expected no GitRepository to be written, got %d", len(list.Items))
+	}
+}
+
+// The Git guard runs on every start; one that misfires without a cert secret
+// would crash-loop the operator for every Git platform source.
+func TestInstallPlatformSourceResource_GitWithoutCertSecret(t *testing.T) {
+	for _, sourceURL := range []string{
+		"https://git.internal/cozystack/cozystack",
+		"ssh://git@git.internal/cozystack/cozystack",
+	} {
+		t.Run(sourceURL, func(t *testing.T) {
+			k8sClient := newSourceTestClient(t)
+
+			if err := installPlatformSourceResource(context.Background(), k8sClient,
+				sourceURL, "cozystack-platform", "branch=main", "git-creds", ""); err != nil {
+				t.Fatalf("installPlatformSourceResource: %v", err)
+			}
+
+			got := &sourcev1.GitRepository{}
+			if err := k8sClient.Get(context.Background(), client.ObjectKey{Namespace: "cozy-system", Name: "cozystack-platform"}, got); err != nil {
+				t.Fatalf("get GitRepository: %v", err)
+			}
+			if got.Spec.URL != sourceURL {
+				t.Errorf("expected URL %q, got %q", sourceURL, got.Spec.URL)
+			}
+			if got.Spec.SecretRef == nil || got.Spec.SecretRef.Name != "git-creds" {
+				t.Errorf("expected SecretRef git-creds, got %+v", got.Spec.SecretRef)
+			}
+		})
+	}
+}
+
+// Checked right after flag parsing: CRDs and Flux are installed before the
+// platform source, so a combination rejected only there would exit after a
+// partial install.
+func TestValidatePlatformSourceCertSecret(t *testing.T) {
+	tests := []struct {
+		name       string
+		sourceURL  string
+		certSecret string
+		wantErr    bool
+	}{
+		{name: "oci with cert secret", sourceURL: "oci://registry.internal:8083/cozystack-packages", certSecret: "registry-ca"},
+		{name: "oci without cert secret", sourceURL: "oci://registry.internal:8083/cozystack-packages"},
+		{name: "https git without cert secret", sourceURL: "https://git.internal/cozystack/cozystack"},
+		{name: "ssh git without cert secret", sourceURL: "ssh://git@git.internal/cozystack/cozystack"},
+		{name: "no source url", certSecret: "registry-ca"},
+		{name: "https git with cert secret", sourceURL: "https://git.internal/cozystack/cozystack", certSecret: "git-ca", wantErr: true},
+		{name: "ssh git with cert secret", sourceURL: "ssh://git@git.internal/cozystack/cozystack", certSecret: "git-ca", wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validatePlatformSourceCertSecret(tt.sourceURL, tt.certSecret)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("validatePlatformSourceCertSecret(%q, %q) error = %v, wantErr %v", tt.sourceURL, tt.certSecret, err, tt.wantErr)
+			}
+		})
 	}
 }
 
@@ -645,5 +794,120 @@ func TestGenerateGitRepository_WithSecret(t *testing.T) {
 	}
 	if obj.Spec.SecretRef.Name != "my-git-creds" {
 		t.Errorf("expected SecretRef.Name %q, got %q", "my-git-creds", obj.Spec.SecretRef.Name)
+	}
+}
+
+// The system namespace memory flags are the only ones on this binary whose bad values do
+// not surface here at all: a limit and a request that parse but contradict each other
+// produce a LimitRange the API server rejects, once per system namespace, on every Package
+// reconcile, with nothing in the error pointing back at a flag. Each branch below is a way
+// that has happened or could.
+func TestParseSystemNamespaceMemory(t *testing.T) {
+	tests := []struct {
+		name        string
+		rawLimit    string
+		rawRequest  string
+		wantErr     bool
+		wantLimit   string
+		wantRequest string
+	}{
+		{
+			// Inputs follow the constants registered as flag defaults; literal
+			// expectations pin the shipped contract so changing either constant
+			// requires an intentional test update.
+			name:        "defaults",
+			rawLimit:    DefaultSystemNamespaceMemoryLimit,
+			rawRequest:  DefaultSystemNamespaceMemoryRequest,
+			wantLimit:   "32Gi",
+			wantRequest: "32Mi",
+		},
+		{
+			// Empty is the documented off switch, not a missing value: the chart
+			// leaves both keys empty unless an operator sets them.
+			name:        "empty disables both",
+			rawLimit:    "",
+			rawRequest:  "",
+			wantLimit:   "0",
+			wantRequest: "0",
+		},
+		{
+			// An explicit 0 limit is the other way to disable, and it must not
+			// trip the pair check against a request that is still set.
+			name:        "zero limit disables and ignores the request",
+			rawLimit:    "0",
+			rawRequest:  "32Mi",
+			wantLimit:   "0",
+			wantRequest: "32Mi",
+		},
+		{
+			// Supported on purpose: the container still gets memory.max, the
+			// scheduler reserves nothing. See the flag help.
+			name:        "zero request against a real limit is accepted",
+			rawLimit:    "4Gi",
+			rawRequest:  "0",
+			wantLimit:   "4Gi",
+			wantRequest: "0",
+		},
+		{
+			name:     "malformed limit",
+			rawLimit: "4GB",
+			wantErr:  true,
+		},
+		{
+			name:       "malformed request",
+			rawLimit:   "4Gi",
+			rawRequest: "thirty-two",
+			wantErr:    true,
+		},
+		{
+			// Parses as a Quantity and is meaningless as memory.
+			name:     "negative limit",
+			rawLimit: "-1Gi",
+			wantErr:  true,
+		},
+		{
+			name:       "negative request",
+			rawLimit:   "4Gi",
+			rawRequest: "-32Mi",
+			wantErr:    true,
+		},
+		{
+			// The one the API server would otherwise reject per namespace, per
+			// reconcile, forever.
+			name:       "request above limit",
+			rawLimit:   "1Gi",
+			rawRequest: "2Gi",
+			wantErr:    true,
+		},
+		{
+			// Equal is the boundary and is legal: defaultRequest may equal default.
+			name:        "request equal to limit",
+			rawLimit:    "1Gi",
+			rawRequest:  "1Gi",
+			wantLimit:   "1Gi",
+			wantRequest: "1Gi",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			limit, request, err := parseSystemNamespaceMemory(tt.rawLimit, tt.rawRequest)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("parseSystemNamespaceMemory(%q, %q) = %s/%s, want an error",
+						tt.rawLimit, tt.rawRequest, limit.String(), request.String())
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("parseSystemNamespaceMemory(%q, %q): %v", tt.rawLimit, tt.rawRequest, err)
+			}
+			if want := resource.MustParse(tt.wantLimit); limit.Cmp(want) != 0 {
+				t.Errorf("limit = %s, want %s", limit.String(), want.String())
+			}
+			if want := resource.MustParse(tt.wantRequest); request.Cmp(want) != 0 {
+				t.Errorf("request = %s, want %s", request.String(), want.String())
+			}
+		})
 	}
 }

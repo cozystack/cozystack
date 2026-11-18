@@ -5,7 +5,7 @@ kind: ConfigMap
 metadata:
   name: {{ .Release.Name }}-my-cnf
 data:
-  config: |
+  my.cnf: |
     [mysqld]
     sql-mode=NO_ENGINE_SUBSTITUTION
     max_connections={{ $tuning.maxConnections }}

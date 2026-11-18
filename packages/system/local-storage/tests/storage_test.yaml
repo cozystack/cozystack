@@ -1,0 +1,82 @@
+suite: local hostpath storage contract
+release:
+  name: local-storage
+  namespace: storage-install
+tests:
+  - it: uses a distinct class with delayed binding and no automatic default
+    templates:
+      - charts/localpv-provisioner/templates/hostpath-class.yaml
+    asserts:
+      - equal:
+          path: metadata.name
+          value: cozystack-local-hostpath
+      - equal:
+          path: provisioner
+          value: openebs.io/local
+      - equal:
+          path: volumeBindingMode
+          value: WaitForFirstConsumer
+      - equal:
+          path: reclaimPolicy
+          value: Delete
+      - notExists:
+          path: metadata.annotations["storageclass.kubernetes.io/is-default-class"]
+  - it: makes default selection an explicit opt in
+    templates:
+      - charts/localpv-provisioner/templates/hostpath-class.yaml
+    set:
+      localpv-provisioner.hostpathClass.isDefaultClass: true
+    asserts:
+      - equal:
+          path: metadata.annotations["storageclass.kubernetes.io/is-default-class"]
+          value: "true"
+  - it: accepts administrator class and backing-directory configuration
+    templates:
+      - charts/localpv-provisioner/templates/hostpath-class.yaml
+    set:
+      localpv-provisioner.hostpathClass.name: selected-hostpath
+      localpv-provisioner.hostpathClass.reclaimPolicy: Retain
+      localpv-provisioner.hostpathClass.basePath: /mnt/local-data
+    asserts:
+      - equal:
+          path: metadata.name
+          value: selected-hostpath
+      - equal:
+          path: reclaimPolicy
+          value: Retain
+      - matchRegex:
+          path: metadata.annotations["cas.openebs.io/config"]
+          pattern: /mnt/local-data
+  - it: can leave StorageClass creation to an administrator
+    templates:
+      - charts/localpv-provisioner/templates/hostpath-class.yaml
+    set:
+      localpv-provisioner.hostpathClass.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
+  - it: sends the release namespace and disabled telemetry to the provisioner
+    templates:
+      - charts/localpv-provisioner/templates/deployment.yaml
+    asserts:
+      - equal:
+          path: metadata.namespace
+          value: storage-install
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: OPENEBS_NAMESPACE
+            valueFrom:
+              fieldRef:
+                fieldPath: metadata.namespace
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: OPENEBS_IO_ENABLE_ANALYTICS
+            value: "false"
+      - matchRegex:
+          path: spec.template.spec.containers[0].image
+          pattern: '^docker.io/openebs/provisioner-localpv:4\.5\.1@sha256:[a-f0-9]{64}$'
+      - matchRegex:
+          path: spec.template.spec.containers[0].env[?(@.name == "OPENEBS_IO_HELPER_IMAGE")].value
+          pattern: '^docker.io/openebs/linux-utils:4\.5\.0@sha256:[a-f0-9]{64}$'
