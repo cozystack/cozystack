@@ -229,6 +229,9 @@ tests:
           pattern: (?m)^sql-mode=NO_ENGINE_SUBSTITUTION$
       - matchRegex:
           path: data["my.cnf"]
+          pattern: (?m)^innodb_flush_method=O_DIRECT_NO_FSYNC$
+      - matchRegex:
+          path: data["my.cnf"]
           pattern: (?m)^innodb_flush_log_at_trx_commit=2$
       - matchRegex:
           path: data["my.cnf"]

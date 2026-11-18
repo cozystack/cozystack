@@ -12,9 +12,7 @@ data:
     #innodb_buffer_pool_dump_at_shutdown=1
     innodb_buffer_pool_size={{ $tuning.bufferPoolSizeMi }}M
     innodb_fast_shutdown=0
-    {{- if ne .Values.version "v11.8" }}
     innodb_flush_method=O_DIRECT_NO_FSYNC
-    {{- end }}
     innodb_flush_log_at_trx_commit=2
     innodb_io_capacity=10000
     innodb_io_capacity_max=50000
