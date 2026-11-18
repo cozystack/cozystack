@@ -4,23 +4,24 @@
 
 ### Common parameters
 
-| Name          | Description                                                                                                                                                                                                                                                                                                                                                                                         | Type     | Value   |
-| ------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------- | ------- |
-| `external`    | Enable external access from outside the cluster.                                                                                                                                                                                                                                                                                                                                                    | `bool`   | `false` |
-| `tls`         | TLS configuration. Strimzi manages the cluster PKI automatically (no cert-manager is involved for this chart): the operator auto-creates `<release>-cluster-ca-cert` and `<release>-clients-ca-cert` secrets, both exposed for client trust setup. The internal TLS listener on 9093 is always on; this toggle only controls the external listener on 9094.                                         | `object` | `{}`    |
-| `tls.enabled` | Enable TLS on the external listener. When unset, inherits the value of `external` (TLS is on when external access is enabled). Warning: setting this to false while external is true exposes Kafka over plaintext on a public IP via LoadBalancer. Strimzi does not provide authentication on this listener unless SCRAM, mTLS, or OAuth is separately configured. Use only in controlled networks. | `*bool`  | `null`  |
-| `version`     | Kafka version to deploy. Upgrade-only: once a cluster's KRaft metadata is at a given version, Strimzi refuses an in-place downgrade, so lowering this on a running cluster (e.g. v3.9 back to v3.8) leaves the Kafka CR stuck in a reconcile error. Pick the target version at creation and only ever raise it.                                                                                     | `string` | `v3.9`  |
+| Name          | Description                                                                                                                                                                                                                                                                                                                                                                                                                                         | Type     | Value   |
+| ------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------- | ------- |
+| `external`    | Enable external access from outside the cluster. The external listener (port 9094) accepts only clients that authenticate with SCRAM-SHA-512 as one of the `users`.                                                                                                                                                                                                                                                                                 | `bool`   | `false` |
+| `tls`         | TLS configuration. Strimzi manages the cluster PKI automatically (no cert-manager is involved for this chart): the operator auto-creates `<release>-cluster-ca-cert` and `<release>-clients-ca-cert` secrets, both exposed for client trust setup. The internal TLS listener on 9093 is always on; this toggle only controls the external listener on 9094.                                                                                         | `object` | `{}`    |
+| `tls.enabled` | Enable TLS on the external listener. When unset, inherits the value of `external` (TLS is on when external access is enabled). The external listener always requires SCRAM-SHA-512 credentials from `users`; setting this to false while external is true sends all data unencrypted over a public IP and exposes the SCRAM authentication exchange to anyone on the path, although not the password itself, so use it only in controlled networks. | `*bool`  | `null`  |
+| `version`     | Kafka version to deploy. Upgrade-only: once a cluster's KRaft metadata is at a given version, Strimzi refuses an in-place downgrade, so lowering this on a running cluster (e.g. v3.9 back to v3.8) leaves the Kafka CR stuck in a reconcile error. Pick the target version at creation and only ever raise it.                                                                                                                                     | `string` | `v3.9`  |
 
 
 ### Application-specific parameters
 
-| Name                   | Description           | Type       | Value  |
-| ---------------------- | --------------------- | ---------- | ------ |
-| `topics`               | Topics configuration. | `[]object` | `[]`   |
-| `topics[i].name`       | Topic name.           | `string`   | `""`   |
-| `topics[i].partitions` | Number of partitions. | `int`      | `0`    |
-| `topics[i].replicas`   | Number of replicas.   | `int`      | `0`    |
-| `topics[i].config`     | Topic configuration.  | `*object`  | `null` |
+| Name                   | Description                                                                                                                                                                                                                                                                                                                                                     | Type                | Value  |
+| ---------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------- | ------ |
+| `users`                | Users allowed on the external listener. Each key `<name>` (lowercase letters, digits and `-`) becomes the SCRAM-SHA-512 username `<release>-<name>`, where `<release>` is `kafka-<application name>`, and its generated password is written to the Secret of the same name (keys `password` and `sasl.jaas.config`). Every user can read and write every topic. | `map[string]object` | `{}`   |
+| `topics`               | Topics configuration.                                                                                                                                                                                                                                                                                                                                           | `[]object`          | `[]`   |
+| `topics[i].name`       | Topic name.                                                                                                                                                                                                                                                                                                                                                     | `string`            | `""`   |
+| `topics[i].partitions` | Number of partitions.                                                                                                                                                                                                                                                                                                                                           | `int`               | `0`    |
+| `topics[i].replicas`   | Number of replicas.                                                                                                                                                                                                                                                                                                                                             | `int`               | `0`    |
+| `topics[i].config`     | Topic configuration.                                                                                                                                                                                                                                                                                                                                            | `*object`           | `null` |
 
 
 ### Kafka configuration
@@ -76,6 +77,50 @@ topics:
     partitions: 1
     replicas: 3
 ```
+
+## External access and SCRAM-SHA-512
+
+The external listener (port 9094) accepts only clients that authenticate with SCRAM-SHA-512 as one of the `users`. For a user `app` of the application `events`, the User Operator writes the generated password to the Secret `kafka-events-app` in the application's namespace. Its `sasl.jaas.config` key holds a ready-made JAAS line, and the username is the Secret's name.
+
+A client needs:
+
+```properties
+bootstrap.servers=<external address of kafka-events-kafka-external-bootstrap>:9094
+security.protocol=SASL_SSL
+sasl.mechanism=SCRAM-SHA-512
+sasl.jaas.config=<the sasl.jaas.config key of the Secret kafka-events-app>
+ssl.truststore.type=PEM
+ssl.truststore.location=/path/to/ca.crt
+```
+
+`ca.crt` comes from the Secret `kafka-events-cluster-ca-cert`: the cluster CA signs the external listener's certificate. With `tls.enabled: false`, use `security.protocol=SASL_PLAINTEXT` and no truststore.
+
+### Upgrading an instance that has external access
+
+Versions before this one accepted anonymous clients on the external listener. The upgrade turns on SCRAM-SHA-512 and creates the declared `users` in the same step, so a client cannot hold credentials before it needs them. Pick one of two sequences.
+
+**Maintenance window.** Declare the `users` and upgrade. External clients are refused from the moment the brokers restart with authentication on until they are given their Secret and the settings above.
+
+**Credentials staged ahead.** The User Operator already runs on the previous version and creates SCRAM credentials for any `KafkaUser`, even while the listener does not ask for them. A cluster administrator creates, for each user, the `KafkaUser` the new chart will render, with the ownership metadata Helm needs to adopt it:
+
+```yaml
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaUser
+metadata:
+  name: kafka-events-app
+  namespace: <namespace>
+  labels:
+    strimzi.io/cluster: kafka-events
+    app.kubernetes.io/managed-by: Helm
+  annotations:
+    meta.helm.sh/release-name: kafka-events
+    meta.helm.sh/release-namespace: <namespace>
+spec:
+  authentication:
+    type: scram-sha-512
+```
+
+and hands each client its Secret and the settings above, kept ready but not applied: a client that offers SASL to the old listener is refused. The same `users` are then declared and the application upgraded; Helm adopts the existing `KafkaUser`, so the password does not change, and each client switches to its new settings once the brokers have restarted.
 
 ## ZooKeeper to KRaft Migration
 

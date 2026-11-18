@@ -21,6 +21,9 @@ rules:
   resourceNames:
   - {{ .Release.Name }}-clients-ca-cert
   - {{ .Release.Name }}-cluster-ca-cert
+  {{- range $user, $u := .Values.users }}
+  - {{ $.Release.Name }}-{{ $user }}
+  {{- end }}
   verbs: ["get", "list", "watch"]
 - apiGroups:
   - cozystack.io
