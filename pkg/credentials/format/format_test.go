@@ -112,13 +112,13 @@ func TestCarriesOver(t *testing.T) {
 		name, format, password string
 		want                   bool
 	}{
-		// PostgreSQL hashes an all-ASCII password over its raw bytes (SASLprep
-		// touches no ASCII code point, and the ASCII controls take its raw-bytes
-		// fallback), so every all-ASCII password carries over; a non-ASCII byte
-		// may be rewritten by SASLprep, so it does not.
+		// PostgreSQL returns an all-ASCII password unchanged through pg_saslprep's
+		// ASCII fast path, so every all-ASCII password, ASCII controls included,
+		// carries over; a non-ASCII byte reaches SASLprep's mapping and may be
+		// rewritten, so it does not.
 		{"scram printable ASCII", ScramSHA256, "pa55-word_ABC xyz", true},
 		{"scram space is printable", ScramSHA256, "two words", true},
-		{"scram ASCII control takes the raw-bytes fallback", ScramSHA256, "tab\there", true},
+		{"scram ASCII control is still ASCII", ScramSHA256, "tab\there", true},
 		{"scram soft hyphen rewritten by SASLprep", ScramSHA256, "I­X", false},
 		{"scram non-ASCII", ScramSHA256, "café", false},
 		// Other formats hash or store the raw bytes, which authenticate as is.

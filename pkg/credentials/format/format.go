@@ -60,15 +60,14 @@ func Known(name string) bool {
 // CarriesOver reports whether a legacy plaintext password encoded under name
 // still authenticates that same plaintext at login. For scram-sha-256,
 // PostgreSQL runs the password through SASLprep (RFC 4013) before it builds or
-// checks a SCRAM verifier, but falls back to the raw bytes whenever SASLprep
-// would reject or fail on them (pg_be_scram_build_secret and
-// scram_verify_plain_password in auth-scram.c). SASLprep maps and normalizes no
-// ASCII code point, and prohibits the ASCII controls, which take that raw-bytes
-// fallback, so every all-ASCII password is hashed over its raw bytes at both
-// ALTER ROLE and login, and a verifier built here from the same bytes matches.
-// A password with any non-ASCII byte is SASLprep'd into possibly different
-// bytes (a soft hyphen U+00AD, say, maps to nothing), so it is re-minted rather
-// than stored as a verifier that would silently fail login. Every other format
+// checks a SCRAM verifier, but pg_saslprep returns an all-ASCII input unchanged
+// through an ASCII fast path (pg_is_ascii) before its mapping and
+// prohibited-character steps run, so every all-ASCII password, ASCII controls
+// included, is hashed over its raw bytes at both ALTER ROLE and login, and a
+// verifier built here from the same bytes matches. A password with any
+// non-ASCII byte reaches SASLprep's mapping and may come out as different bytes
+// (a soft hyphen U+00AD, say, maps to nothing), so it is re-minted rather than
+// stored as a verifier that would silently fail login. Every other format
 // hashes or stores the raw bytes, which authenticate as they are.
 func CarriesOver(name, password string) bool {
 	if name != ScramSHA256 {
