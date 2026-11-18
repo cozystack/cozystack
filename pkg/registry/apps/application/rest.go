@@ -603,6 +603,12 @@ func (r *REST) Update(ctx context.Context, name string, objInfo rest.UpdatedObje
 	if helmRelease.ResourceVersion == "" {
 		helmRelease.SetResourceVersion(cur.GetResourceVersion())
 	}
+	// The memory check above compared against the read at the start of Update.
+	// Compare again against the live release, so a stale value below 1Mi cannot
+	// overwrite memory that another writer has fixed since.
+	if err := r.validateWorkloadMemory(app, cur.Spec.Values); err != nil {
+		return nil, false, err
+	}
 	r.applyLiveMetadata(helmRelease, cur, app, previousFinalizers)
 
 	// Suspension is not part of the Application, so the rebuilt object always
@@ -642,6 +648,9 @@ func (r *REST) Update(ctx context.Context, name string, objInfo rest.UpdatedObje
 			cur := &helmv2.HelmRelease{}
 			if getErr := r.c.Get(ctx, client.ObjectKey{Namespace: helmRelease.Namespace, Name: helmRelease.Name}, cur, &client.GetOptions{Raw: &metav1.GetOptions{}}); getErr != nil {
 				return getErr
+			}
+			if memErr := r.validateWorkloadMemory(app, cur.Spec.Values); memErr != nil {
+				return memErr
 			}
 			helmRelease = converted.DeepCopy()
 			r.applyLiveMetadata(helmRelease, cur, app, previousFinalizers)
