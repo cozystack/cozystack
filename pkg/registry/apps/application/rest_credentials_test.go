@@ -198,6 +198,50 @@ func TestUpdateSeedsAddedAndPrunesRemoved(t *testing.T) {
 	}
 }
 
+func TestUpdateRefusesACaseRename(t *testing.T) {
+	r, c := newCredentialsREST(t)
+	ctx := credentialsCtx()
+	if _, err := r.Create(ctx, postgresApp(`{"users":{"web":{}}}`), nil, &metav1.CreateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	before := accountSecrets(t, c)["postgres-orders.web.account"]
+
+	updated := postgresApp(`{"users":{"Web":{}}}`)
+	_, _, err := r.Update(ctx, "orders", newDefaultUpdatedObjectInfo(updated), nil, nil, false, &metav1.UpdateOptions{})
+	if !apierrors.IsInvalid(err) || !strings.Contains(err.Error(), "already belongs to account") {
+		t.Fatalf("expected Invalid for a case-only rename, got %v", err)
+	}
+	after := accountSecrets(t, c)["postgres-orders.web.account"]
+	if after == nil || after.UID != before.UID || string(after.Data[account.PasswordKey]) != string(before.Data[account.PasswordKey]) {
+		t.Fatal("a refused rename must leave the live account's Secret untouched")
+	}
+}
+
+func TestPruneAfterUpdatePrunesByTheLiveRelease(t *testing.T) {
+	r, c := newCredentialsREST(t)
+	ctx := credentialsCtx()
+	if _, err := r.Create(ctx, postgresApp(`{"users":{"web":{},"api":{}}}`), nil, &metav1.CreateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	// The live release still declares web and api; a stale request whose app no
+	// longer lists api must not prune api, because a concurrent update may have
+	// written it back and the live release references it.
+	r.pruneAfterUpdate(ctx, postgresApp(`{"users":{"web":{}}}`), false)
+	if accountSecrets(t, c)["postgres-orders.api.account"] == nil {
+		t.Fatal("prune deleted a Secret the live release still declares")
+	}
+	// Once the live release drops api, pruning removes its Secret.
+	hr := getRelease(t, c)
+	hr.Spec.Values = &apiextv1.JSON{Raw: []byte(`{"users":{"web":{}}}`)}
+	if err := c.Update(ctx, hr); err != nil {
+		t.Fatal(err)
+	}
+	r.pruneAfterUpdate(ctx, postgresApp(`{"users":{"web":{}}}`), false)
+	if accountSecrets(t, c)["postgres-orders.api.account"] != nil {
+		t.Fatal("an account the live release no longer declares must be pruned")
+	}
+}
+
 func TestDeleteRefusesSuspendedRelease(t *testing.T) {
 	r, c := newCredentialsREST(t)
 	ctx := credentialsCtx()

@@ -181,8 +181,24 @@ func (r *REST) seedBeforeUpdate(ctx context.Context, app *appsv1alpha1.Applicati
 		klog.Warningf("accounts of %s/%s before the update cannot be resolved, seeding none: %v", cur.Namespace, cur.Name, err)
 		return nil
 	}
+	release := r.storeApp(app.Namespace, app.Name).Release
+	added := store.Added(prev, accounts)
+	// An added account whose mapped name already holds a different account is a
+	// rename that changed only the case of a user name: both map to one Secret.
+	// Seeding it would replace the live account's Secret with a new password
+	// before the release write, and a failed write would lose that password with
+	// no way back. Refuse it, since the live account is not actually gone.
+	for _, acc := range added {
+		ex := &corev1.Secret{}
+		switch err := r.direct().Get(ctx, client.ObjectKey{Namespace: app.Namespace, Name: account.SecretName(release, acc.Mapped)}, ex); {
+		case err == nil && account.IsAccountSecret(ex) && string(ex.Data[account.UsernameKey]) != acc.Username:
+			return r.invalidAccounts(app, fmt.Errorf("account %q maps to the name %q, which already belongs to account %q; rename it to a name that does not collide", acc.Username, acc.Mapped, string(ex.Data[account.UsernameKey])))
+		case err != nil && !apierrors.IsNotFound(err):
+			return apierrors.NewInternalError(fmt.Errorf("read account Secret %s: %w", account.SecretName(release, acc.Mapped), err))
+		}
+	}
 	owner := store.OwnerReference(cur)
-	if _, err := store.Ensure(ctx, r.direct(), r.storeApp(app.Namespace, app.Name), store.Added(prev, accounts), &owner, metav1.Now(), actor(ctx)); err != nil {
+	if _, err := store.Ensure(ctx, r.direct(), r.storeApp(app.Namespace, app.Name), added, &owner, metav1.Now(), actor(ctx)); err != nil {
 		return apierrors.NewInternalError(fmt.Errorf("seed account Secrets: %w", err))
 	}
 	return nil
@@ -190,11 +206,29 @@ func (r *REST) seedBeforeUpdate(ctx context.Context, app *appsv1alpha1.Applicati
 
 // pruneAfterUpdate deletes the account Secrets of the accounts the update
 // removed, once the HelmRelease write has dropped them from the chart.
-func (r *REST) pruneAfterUpdate(ctx context.Context, app *appsv1alpha1.Application, accounts []account.Account, dryRun bool) {
+func (r *REST) pruneAfterUpdate(ctx context.Context, app *appsv1alpha1.Application, dryRun bool) {
 	if r.credentials == nil || dryRun {
 		return
 	}
-	if _, err := store.Prune(ctx, r.direct(), r.storeApp(app.Namespace, app.Name), accounts); err != nil {
+	// Prune by the accounts the live release declares now, not the ones this
+	// request sent: a concurrent update can have re-added an account and written
+	// it back, and its Secret is referenced by the live release, so deleting it
+	// by this request's older list would break the release. Read uncached, and
+	// prune nothing when the release or its accounts cannot be resolved.
+	cur := &helmv2.HelmRelease{}
+	switch err := r.direct().Get(ctx, client.ObjectKey{Namespace: app.Namespace, Name: r.storeApp(app.Namespace, app.Name).Release}, cur); {
+	case apierrors.IsNotFound(err):
+		return
+	case err != nil:
+		klog.Warningf("failed to read the live HelmRelease of %s/%s before pruning, pruning none: %v", app.Namespace, app.Name, err)
+		return
+	}
+	keep, err := r.accountsOf(cur.Spec.Values)
+	if err != nil {
+		klog.Warningf("accounts of the live %s/%s cannot be resolved, pruning none: %v", app.Namespace, app.Name, err)
+		return
+	}
+	if _, err := store.Prune(ctx, r.direct(), r.storeApp(app.Namespace, app.Name), keep); err != nil {
 		klog.Errorf("failed to prune account Secrets of %s/%s: %v", app.Namespace, app.Name, err)
 		warning.AddWarning(ctx, "", fmt.Sprintf("account Secrets of removed users were not all deleted: %v", err))
 	}

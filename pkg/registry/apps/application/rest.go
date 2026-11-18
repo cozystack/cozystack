@@ -673,7 +673,7 @@ func (r *REST) Update(ctx context.Context, name string, objInfo rest.UpdatedObje
 
 	// Accounts the write removed are gone from the chart now, so their
 	// Secrets can go.
-	r.pruneAfterUpdate(ctx, app, accounts, options != nil && dryrun.IsDryRun(options.DryRun))
+	r.pruneAfterUpdate(ctx, app, options != nil && dryrun.IsDryRun(options.DryRun))
 
 	// Convert the updated HelmRelease back to Application
 	convertedApp, err := r.ConvertHelmReleaseToApplication(ctx, helmRelease)
