@@ -10,8 +10,7 @@
 # A to-copy restore keeps the target's own users and copies only the databases
 # the target declares, so the demo database the source writes its sentinel to
 # is declared here. Its roles map is empty because no user of the target needs
-# it in this demo, and the chart cannot render a database with no roles key
-# once the release has users.
+# it in this demo.
 ---
 apiVersion: apps.cozystack.io/v1alpha1
 kind: MongoDB

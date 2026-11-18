@@ -482,10 +482,6 @@ tests:
       - failedTemplate:
           errorMessage: "backup.s3SecretKey is required when bootstrap.enabled is true"
 
-  #####################
-  # Selective restore #
-  #####################
-
   - it: restores only the listed databases and keeps the application's users
     release:
       name: test-mongodb
@@ -850,10 +846,6 @@ tests:
           path: kind
           value: PerconaServerMongoDBRestore
 
-  #####################
-  # Cluster readiness #
-  #####################
-
   - it: refuses bootstrap on a first install, before the cluster exists
     release:
       name: test-mongodb
@@ -1187,10 +1179,6 @@ tests:
           count: 1
       - isKind:
           of: PerconaServerMongoDBRestore
-
-  #####################
-  # Source path       #
-  #####################
 
   - it: reads the backup from bootstrap.destinationPath when it is set
     release:

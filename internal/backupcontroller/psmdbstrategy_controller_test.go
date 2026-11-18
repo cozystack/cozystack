@@ -3149,9 +3149,116 @@ func (h *mongodbGateHarness) completeHealthCheck(t *testing.T) {
 	if err := h.c.Get(context.Background(), client.ObjectKey{Namespace: "tenant", Name: "mongodb-health-current-restore"}, job); err != nil {
 		t.Fatal(err)
 	}
+	cluster := mongodbNameForApp("mongodb-target")
+	checkMongoDBHealthJob(t, job, cluster, cluster+"-rs0.tenant")
 	job.Status.Conditions = []batchv1.JobCondition{{Type: batchv1.JobComplete, Status: corev1.ConditionTrue}}
 	if err := h.c.Status().Update(context.Background(), job); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// checkMongoDBHealthJob asserts that the check logs in as the cluster admin
+// over verified TLS, with the users and TLS Secrets of that cluster, against
+// the internal service its certificate covers.
+func checkMongoDBHealthJob(t *testing.T, job *batchv1.Job, cluster, endpoint string) {
+	t.Helper()
+	pod := job.Spec.Template.Spec
+	if len(pod.Containers) != 1 {
+		t.Fatalf("expected one health-check container, got %d", len(pod.Containers))
+	}
+	c := pod.Containers[0]
+	script := strings.Join(append(append([]string{}, c.Command...), c.Args...), " ")
+	for _, want := range []string{
+		`mongodb://${MONGODB_HOST}/admin?`,
+		"--tls --tlsCAFile /tls/ca.crt --tlsCertificateKeyFile /tmp/client.pem",
+		`--username "$MONGODB_CLUSTER_ADMIN_USER" --password "$MONGODB_CLUSTER_ADMIN_PASSWORD"`,
+	} {
+		if !strings.Contains(script, want) {
+			t.Errorf("health check script lacks %q:\n%s", want, script)
+		}
+	}
+	for _, insecure := range []string{"tlsAllowInvalid", "tlsInsecure", "tlsDisabledProtocols"} {
+		if strings.Contains(script, insecure) {
+			t.Errorf("health check must verify TLS, found %q", insecure)
+		}
+	}
+	env := map[string]corev1.EnvVar{}
+	for _, e := range c.Env {
+		env[e.Name] = e
+	}
+	if got := env["MONGODB_HOST"].Value; got != endpoint {
+		t.Errorf("MONGODB_HOST = %q, want %q", got, endpoint)
+	}
+	for _, key := range []string{"MONGODB_CLUSTER_ADMIN_USER", "MONGODB_CLUSTER_ADMIN_PASSWORD"} {
+		from := env[key].ValueFrom
+		if from == nil || from.SecretKeyRef == nil || from.SecretKeyRef.Name != "internal-"+cluster+"-users" || from.SecretKeyRef.Key != key {
+			t.Errorf("%s must come from Secret internal-%s-users key %s, got %+v", key, cluster, key, from)
+		}
+	}
+	if len(c.VolumeMounts) != 1 || c.VolumeMounts[0].Name != "tls" || c.VolumeMounts[0].MountPath != "/tls" || !c.VolumeMounts[0].ReadOnly {
+		t.Errorf("expected the TLS Secret mounted read-only at /tls, got %+v", c.VolumeMounts)
+	}
+	if len(pod.Volumes) != 1 || pod.Volumes[0].Secret == nil || pod.Volumes[0].Secret.SecretName != cluster+"-ssl" {
+		t.Fatalf("expected the cluster's TLS Secret %s-ssl as the only volume, got %+v", cluster, pod.Volumes)
+	}
+	items := map[string]bool{}
+	for _, i := range pod.Volumes[0].Secret.Items {
+		items[i.Key] = i.Key == i.Path
+	}
+	for _, key := range []string{"ca.crt", "tls.crt", "tls.key"} {
+		if !items[key] {
+			t.Errorf("TLS volume must project %s under its own name, got %+v", key, pod.Volumes[0].Secret.Items)
+		}
+	}
+	if pod.AutomountServiceAccountToken == nil || *pod.AutomountServiceAccountToken {
+		t.Error("the health check must not mount a service account token")
+	}
+}
+
+func TestMongoDBHealthCheckJob(t *testing.T) {
+	ctx := context.Background()
+	load := func(t *testing.T, h *mongodbGateHarness) *psmdbtypes.PerconaServerMongoDB {
+		cluster := &psmdbtypes.PerconaServerMongoDB{}
+		if err := h.c.Get(ctx, client.ObjectKey{Namespace: "tenant", Name: mongodbNameForApp("mongodb-target")}, cluster); err != nil {
+			t.Fatal(err)
+		}
+		return cluster
+	}
+	t.Run("sharded cluster is checked through mongos", func(t *testing.T) {
+		h := newMongoDBGateHarness(t, psmdbtypes.StateReady, "", nil)
+		cluster := load(t, h)
+		cluster.Spec.Sharding = &psmdbtypes.PerconaServerMongoDBSharding{Enabled: true}
+		job, err := h.r.ensureMongoDBHealthCheck(ctx, h.job(t), cluster, time.Minute)
+		if err != nil {
+			t.Fatal(err)
+		}
+		checkMongoDBHealthJob(t, job, cluster.Name, cluster.Name+"-mongos.tenant")
+	})
+	for _, tc := range []struct {
+		name   string
+		mutate func(*psmdbtypes.PerconaServerMongoDB)
+	}{
+		{"cluster in another namespace", func(c *psmdbtypes.PerconaServerMongoDB) { c.Namespace = "other" }},
+		{"no Secrets section", func(c *psmdbtypes.PerconaServerMongoDB) { c.Spec.Secrets = nil }},
+		{"no TLS Secret", func(c *psmdbtypes.PerconaServerMongoDB) { c.Spec.Secrets.SSL = "" }},
+	} {
+		t.Run("refuses "+tc.name, func(t *testing.T) {
+			h := newMongoDBGateHarness(t, psmdbtypes.StateReady, "", nil)
+			cluster := load(t, h)
+			tc.mutate(cluster)
+			if _, err := h.r.ensureMongoDBHealthCheck(ctx, h.job(t), cluster, time.Minute); err == nil {
+				t.Fatal("expected the health check to be refused")
+			}
+			jobs := &batchv1.JobList{}
+			if err := h.c.List(ctx, jobs, client.InNamespace("tenant")); err != nil {
+				t.Fatal(err)
+			}
+			for _, j := range jobs.Items {
+				if strings.HasPrefix(j.Name, "mongodb-health-") {
+					t.Fatalf("a refused check created Job %s", j.Name)
+				}
+			}
+		})
 	}
 }
 
