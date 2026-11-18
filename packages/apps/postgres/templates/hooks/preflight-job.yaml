@@ -120,29 +120,29 @@ data:
     done
 
     echo "== refuse to adopt unmarked roles"
+    # The refusal and the create-and-mark run in one psql session per role, so a
+    # role that appears between them cannot slip through: the create keys on a
+    # snapshot of whether the role existed, taken at the top of the session, and
+    # is unconditional, so a role a concurrent CREATEROLE holder plants after the
+    # snapshot collides with the CREATE and stops the hook rather than being left
+    # for CNPG to adopt. A declared database role the Cluster does not manage yet
+    # is created and marked, as the superuser, before the Cluster applies, so the
+    # name is taken by a role no tenant controls. Users are left to CNPG; only
+    # database roles are created here.
     while read -r kind key role; do
       [ "$kind" = createrole ] && continue
       psql -v ON_ERROR_STOP=1 --echo-all -v kind="$kind" -v key="$key" -v role="$role" <<\EOT
+    SELECT NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = :'role') AS role_absent\gset
+    SELECT 'CREATE ROLE "cozystack:managed" NOLOGIN'
+    WHERE NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = 'cozystack:managed')\gexec
     SELECT format('DO $$BEGIN RAISE EXCEPTION %L; END$$', format('role "%s" already exists and this chart did not create it; a user of this instance has held createRole, so the role may be controlled by that user and %ss.%s will not adopt it. A platform administrator must inspect the role and drop it as the superuser, or declare the %s under another name', r.rolname, :'kind', :'key', :'kind'))
     FROM pg_catalog.pg_roles r
     WHERE r.rolname = :'role'
       AND current_setting('cozystack.createrole_granted', true) = 'on'
       AND NOT EXISTS (SELECT FROM pg_catalog.pg_auth_members m JOIN pg_catalog.pg_roles g ON g.oid = m.roleid WHERE g.rolname = 'cozystack:managed' AND m.member = r.oid)\gexec
-    EOT
-      # A declared database role the Cluster does not manage yet is created and
-      # marked here, as the superuser, before the Cluster applies: CNPG adopts a
-      # managed role by name within seconds of the spec, so a name left free
-      # until then can be planted by a CREATEROLE holder and adopted as its own.
-      # The refusal above still rejects an existing unmarked role; this only
-      # creates an absent one. Users are left to CNPG; only database roles.
-      if [ "$kind" = database ]; then
-      psql -v ON_ERROR_STOP=1 --echo-all -v role="$role" <<\EOT
-    SELECT 'CREATE ROLE "cozystack:managed" NOLOGIN'
-    WHERE NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = 'cozystack:managed')\gexec
     SELECT format('CREATE ROLE %I NOINHERIT; COMMENT ON ROLE %I IS %L; GRANT %I TO %I{{ $markOptions }}', :'role', :'role', 'role managed by helm', 'cozystack:managed', :'role')
-    WHERE NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = :'role')\gexec
+    WHERE :'kind' = 'database' AND :'role_absent'::boolean\gexec
     EOT
-      fi
     done < /work/new
     {{- if $grantsCreateRole }}
     psql -v ON_ERROR_STOP=1 --echo-all -c "ALTER DATABASE postgres SET cozystack.createrole_granted = 'on';"

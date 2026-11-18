@@ -200,15 +200,23 @@ tests:
       path: metadata.name
       value: pg-test-preflight-script
     asserts:
+      # The refusal and the create-and-mark run in one psql session, keyed on a
+      # snapshot of whether the role existed, so a role planted between them
+      # collides with the unconditional CREATE and stops the hook.
       - matchRegex:
           path: data["preflight.sh"]
-          pattern: "if \\[ \"\\$kind\" = database \\]; then"
+          pattern: "SELECT NOT EXISTS \\(SELECT FROM pg_catalog.pg_roles WHERE rolname = :'role'\\) AS role_absent\\\\gset"
       # The create and mark run as a top-level SELECT format(...) + \gexec, not a
       # DO block: psql does not substitute :'role' inside a dollar-quoted body,
       # so it would reach PostgreSQL literally and the hook would fail to parse.
       - matchRegex:
           path: data["preflight.sh"]
           pattern: "SELECT format\\('CREATE ROLE %I NOINHERIT; COMMENT ON ROLE %I IS %L; GRANT %I TO %I WITH INHERIT FALSE, SET FALSE', :'role', :'role', 'role managed by helm', 'cozystack:managed', :'role'\\)"
+      # The create is gated on the snapshot, not a live NOT EXISTS, so it is
+      # unconditional and fails closed on a concurrent plant.
+      - matchRegex:
+          path: data["preflight.sh"]
+          pattern: "WHERE :'kind' = 'database' AND :'role_absent'::boolean"
   - it: marks a hook-created database role without the pg16 options on older PostgreSQL
     release:
       upgrade: true
