@@ -24,6 +24,12 @@ const (
 	// MaterializedRevisionAnnotation records the artifact revision last
 	// materialized, so an unchanged revision is not re-pulled.
 	MaterializedRevisionAnnotation = "apps.cozystack.io/materialized-revision"
+	// PinnedDigestAnnotation records the digest the materializer pinned a
+	// tag-following source to (spec.ref.digest). It distinguishes an operator
+	// pin, which a re-connect may move, from a user-supplied explicit digest,
+	// which the operator never rewrites. Cleared by a re-connect so the operator
+	// re-pins the newly requested tag.
+	PinnedDigestAnnotation = "apps.cozystack.io/tap-pinned-digest"
 	// MaterializeErrorAnnotation records why the last materialization failed
 	// (e.g. a name collision with a core component), so the failure surfaces on
 	// the Tap resource and dashboard instead of only in the operator log.

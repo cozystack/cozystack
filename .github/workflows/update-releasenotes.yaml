@@ -9,9 +9,12 @@ on:
     # (tags.yaml generate-changelog) merges or when a maintainer edits an
     # existing changelog. The v* glob deliberately skips template.md /
     # patch-template.md in the same directory. Every other main push left this
-    # job scanning the latest 30 releases for nothing.
+    # job scanning the latest 30 releases for nothing. A docs/releasenotes/v*.md
+    # file, when it has content, is the body in place of its changelog, so it
+    # triggers the sync too.
     paths:
       - 'docs/changelogs/v*.md'
+      - 'docs/releasenotes/v*.md'
   # Manual re-sync hatch: re-run the changelog -> release-body sync without
   # touching a changelog file (e.g. if a release body drifted out of sync).
   workflow_dispatch:
@@ -47,6 +50,8 @@ jobs:
             const path = require('path');
             
             const changelogDir = 'docs/changelogs';
+            // Same limit and reason as MAX_BODY_BYTES in pull-requests-release.yaml.
+            const MAX_BODY_BYTES = 100000;
             
             // Get releases from first page
             const releases = await github.rest.repos.listReleases({
@@ -61,7 +66,12 @@ jobs:
             for (const release of releases.data) {
               const tag = release.tag_name;
               const changelogFile = `${tag}.md`;
-              const changelogPath = path.join(changelogDir, changelogFile);
+              // docs/releasenotes/<tag>.md is the body when it has content, as
+              // in finalize; the changelog otherwise.
+              const notesPath = path.join('docs/releasenotes', changelogFile);
+              const changelogPath = fs.existsSync(notesPath) && fs.readFileSync(notesPath, 'utf8').trim()
+                ? notesPath
+                : path.join(changelogDir, changelogFile);
               
               console.log(`\nProcessing release: ${tag}`);
               
@@ -82,6 +92,16 @@ jobs:
               
               if (!changelogContent.trim()) {
                 console.log(`  ⚠️  Changelog file ${changelogFile} is empty, skipping...`);
+                continue;
+              }
+              
+              // Finalize publishes a link in place of a body this long. Never
+              // here: a changelog that reaches main without its release notes
+              // (the tags.yaml backstop ports only the changelog) would replace
+              // a good published body with it.
+              const bytes = Buffer.byteLength(changelogContent, 'utf8');
+              if (bytes > MAX_BODY_BYTES) {
+                console.log(`::warning::${changelogPath} is ${bytes} bytes, over MAX_BODY_BYTES (${MAX_BODY_BYTES}); leaving the body of release ${tag} as it is.`);
                 continue;
               }
               

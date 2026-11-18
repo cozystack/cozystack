@@ -29,11 +29,11 @@ const (
 // +kubebuilder:subresource:status
 // +kubebuilder:resource:scope=Cluster
 
-// Redis defines a backup strategy for a spotahome RedisFailover app. The
-// spotahome operator ships no backup CRD, so the strategy runs a one-shot Job
-// that dumps an RDB snapshot to object storage (and replays it on restore) -
-// the same PodTemplateSpec model as the Job/Altinity strategies rather than an
-// operator-CR delegation.
+// Redis defines a backup strategy for a spotahome RedisFailover app, Redis or
+// Valkey. The spotahome operator ships no backup CRD, so the strategy runs a
+// one-shot Job that dumps an RDB snapshot to object storage (and replays it on
+// restore) - the same PodTemplateSpec model as the Job/Altinity strategies
+// rather than an operator-CR delegation.
 type Redis struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
@@ -61,6 +61,10 @@ type RedisSpec struct {
 	//     `.Application.spec.replicas`).
 	//   - `.Release.Name` and `.Release.Namespace` — the application's name
 	//     and namespace.
+	//   - `.Release.Prefix` — the prefix the application's chart puts before
+	//     the name of every resource it creates: `redis-` for a Redis
+	//     application, `valkey-` for a Valkey one. Both run on the same
+	//     RedisFailover operator, so one strategy serves either kind.
 	//   - `.Mode` — `"backup"`, `"restore"`, or `"cleanup"` (delete the object
 	//     of a removed Backup), identifying the run.
 	//   - `.ObjectKey` — the object-storage key for this run: unique per backup,
@@ -72,14 +76,9 @@ type RedisSpec struct {
 	//     and `.Backup.ApplicationRef` describing the source backup, so a
 	//     to-copy restore reads the SOURCE release's object-storage prefix.
 	//
-	// Stored schemaless (content preserved, not validated by the apiserver): the
-	// driver renders and validates the pod spec, and generating the full
-	// PodTemplateSpec OpenAPI schema here would add ~590 KB to this CRD. The
-	// backupstrategy-controller chart inlines every definitions/*.yaml into one
-	// Helm release whose state Secret is capped at 1 MiB, so a full
-	// PodTemplateSpec schema here (a fifth after Altinity, Job, FoundationDB and
-	// Redis's own siblings) pushes that Secret over the cap and fails install.
-	// Same reason as rabbitmq_types.go.
+	// Stored schemaless: the apiserver keeps it as written rather than
+	// checking it against the pod schema, and it is validated when the
+	// driver creates the workload from it.
 	//
 	// +kubebuilder:validation:Schemaless
 	// +kubebuilder:pruning:PreserveUnknownFields

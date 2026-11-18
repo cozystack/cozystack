@@ -14,7 +14,7 @@ migrations:
   # refuses to advance past a migration file missing from the image (exit 1), so
   # a stale pin fails loudly rather than silently skipping the etcd adoption.
   image: ghcr.io/cozystack/cozystack/platform-migrations:v1.6.0@sha256:6777042e3e9c6bad76e7d96fb64baa115061975f39061cb3ede84e21d0e2213f
-  targetVersion: 60
+  targetVersion: 62
   # Adopt legacy etcd clusters onto the v1alpha2 operator WITHOUT the mandatory
   # pre-adoption safety snapshot (migration 50). Leave false unless migration 50
   # has actually refused to proceed and you accept the risk: adoption rewires
@@ -99,6 +99,17 @@ networking:
   # Set this to comma-separated list of master node IPs to override.
   kubeovn:
     MASTER_NODES: ""
+  # Confirms a change of the cozystack.networking Package variant on a running
+  # cluster. Changing the variant of the cozystack.cozystack-platform Package
+  # can change that variant (isp-full runs kubeovn-cilium, isp-slim runs cilium,
+  # isp-hosted runs noop), and the operator then deletes the networking
+  # HelmReleases the new variant does not install: isp-full -> isp-hosted
+  # removes Cilium and Kube-OVN. The platform render refuses such a change
+  # while the live Package has another variant, unless this is set to the NEW
+  # networking variant, as named in the render error. It confirms that one
+  # switch only; a leftover value does not cover a later switch to a different
+  # variant.
+  acknowledgeVariantChange: ""
   # In-cluster (east-west) transport encryption. Opt-in, OFF by default.
   #
   # When enabled, pod-to-pod traffic that crosses nodes is encrypted at the
@@ -158,14 +169,23 @@ networking:
   # When on, the plugins are written every time the Multus pod is recreated,
   # replacing files of the same name. 14 of the upstream reference plugins are
   # installed; loopback, dhcp, dummy and tap are left alone. See
-  # docs/vm-external-vlan.md.
+  # packages/system/multus/README.md.
   #
   # On a running cluster this is set on the `platform` component of the
   # `cozystack.cozystack-platform` Package CR, the same path as backupStorage
-  # (see docs/operations/backup-classes.md). Editing the multus HelmRelease or
+  # (see https://cozystack.io/docs/v1/operations/services/backup-classes/). Editing the multus HelmRelease or
   # the child Package cozystack.multus directly is reverted by the platform
   # reconcile.
   # stageCniPlugins: true
+  # Resources of the kube-multus container, merged over the defaults in
+  # packages/system/multus/values.yaml, which also say why there is no CPU limit.
+  # Unset keeps those defaults. The multus chart refuses to render without a
+  # memory limit and a memory request. Set on a running cluster the same way as
+  # stageCniPlugins above.
+  # multus:
+  #   resources:
+  #     limits:
+  #       memory: 8Gi
 
 # Service publishing and ingress configuration
 publishing:
@@ -529,6 +549,19 @@ authentication:
     # OIDC discovery; any other value -> used verbatim. An explicit value is not rewritten, so a
     # custom realm paired with an explicit URL must name the same realm.
     keycloakInternalUrl: null
+    # Additional CA trust anchors for the bundled Keycloak server (LDAPS,
+    # external IdPs, SMTP). Each entry selects one key from an existing Secret
+    # or ConfigMap in cozy-keycloak; key defaults to ca.crt. Trust applies to
+    # the entire server across all realms. See packages/system/keycloak/values.yaml
+    # for supported formats, incoming-client-mTLS scope and rotation behavior.
+    # Ignored when oidc.enabled is false: no Keycloak Package is emitted. An
+    # existing Package and its rendered truststores remain on the cluster
+    # (helm.sh/resource-policy: keep).
+    keycloakTruststores: []
+    # - configMapName: organization-ca
+    #   key: ca.crt
+    # - secretName: partner-ca
+    #   key: certificates.pem
 # Gateway API configuration
 gateway:
   # Enable Gateway API support across the platform. When true:
@@ -648,7 +681,21 @@ gateway:
     - cozy-kubevirt-cdi
     - cozy-monitoring
     - cozy-linstor-gui
+    - cozy-observability-proxy
     - default
+# Platform ingress configuration.
+ingress:
+  # Whether the root tenant (tenant-root) runs its own ingress-nginx, i.e.
+  # Tenant/root spec.ingress=true. It decides whether tenant-root's
+  # _namespace.ingress names tenant-root or stays empty, which is what
+  # applications there (SeaweedFS waiting on ingress-nginx-system, the
+  # ingressClassName of their Ingresses) and every tenant inheriting from the
+  # root read. Nothing in the charts sets Tenant/root spec.ingress, so keep
+  # this in sync with it by hand; changing it re-renders cozystack-basics and
+  # the releases reading the cozystack-values Secret. The default is true only
+  # to keep the value existing clusters already render.
+  rootEnabled: true
+
 # Platform monitoring configuration.
 monitoring:
   # Whether the root tenant (tenant-root) hosts the platform
@@ -692,7 +739,7 @@ monitoring:
 # documents every knob: provisionBucket, bucketName, endpoint, region,
 # forcePathStyle, systemSecretName, systemNamespaces, …). Admins set this via
 # spec.components.platform.values.backupStorage on the
-# cozystack.cozystack-platform Package — see docs/operations/backup-classes.md.
+# cozystack.cozystack-platform Package — see https://cozystack.io/docs/v1/operations/services/backup-classes/.
 # Empty (the default) forwards nothing and keeps the child chart defaults.
 backupStorage: {}
 
@@ -718,10 +765,10 @@ backupStrategyController: {}
 # cozystack.kubernetes-worker-image to bundles.enabledPackages -- the package is
 # opt-in and this key alone does not enable it. The two knobs that decide
 # whether the feature is usable at all are imageFactoryURL (an air-gapped or
-# rate-limited cluster must repoint the single import) and storageClass (CDI
-# cannot clone across StorageClasses, so a cluster whose worker pools are not on
-# `replicated` must move the golden onto their class). Empty (the default)
-# forwards nothing and keeps the child chart defaults.
+# rate-limited cluster must repoint the single import) and storageClass (a
+# worker pool refuses a golden on another StorageClass, so a cluster whose
+# worker pools are not on `replicated` must move the golden onto their class).
+# Empty (the default) forwards nothing and keeps the child chart defaults.
 kubernetesWorkerImage: {}
 # Pod scheduling configuration
 scheduling:
@@ -748,37 +795,6 @@ scheduling:
 #   loginTheme: acme
 #   loginThemeImage: registry.example.com/acme-keycloak-theme:v1
 branding: {}
-# Container registry mirrors configuration
-#
-# Example:
-# registries:
-#   mirrors:
-#     docker.io:
-#       endpoints:
-#         - http://10.0.0.1:8082
-#     ghcr.io:
-#       endpoints:
-#         - http://10.0.0.1:8083
-#     gcr.io:
-#       endpoints:
-#         - http://10.0.0.1:8084
-#     registry.k8s.io:
-#       endpoints:
-#         - http://10.0.0.1:8085
-#     quay.io:
-#       endpoints:
-#         - http://10.0.0.1:8086
-#     cr.fluentbit.io:
-#       endpoints:
-#         - http://10.0.0.1:8087
-#     docker-registry3.mariadb.com:
-#       endpoints:
-#         - http://10.0.0.1:8088
-#   config:
-#     "10.0.0.1:8082":
-#       tls:
-#         insecureSkipVerify: true
-registries: {}
 # Resource allocation ratios
 resources:
   cpuAllocationRatio: 10

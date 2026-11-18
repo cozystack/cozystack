@@ -16,7 +16,9 @@ spec:
   extraArgs:
     remoteWrite.disablePathAppend: "true"
   notifiers:
-  - url: http://vmalertmanager-alertmanager.{{ $.Release.Namespace }}.svc:9093
+  {{- range $i := until (int (include "monitoring.alertmanager.replicas" $)) }}
+  - url: http://vmalertmanager-alertmanager-{{ $i }}.vmalertmanager-alertmanager.{{ $.Release.Namespace }}.svc:9093
+  {{- end }}
   remoteRead:
     url: http://vmselect-{{ .name }}.{{ $.Release.Namespace }}.svc:8481/select/0/prometheus
   remoteWrite:

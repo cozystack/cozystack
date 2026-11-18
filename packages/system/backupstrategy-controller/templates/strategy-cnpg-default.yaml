@@ -1,9 +1,12 @@
 {{- $bucketName := include "backupstrategy-controller.bucketName" . -}}
-{{- if $bucketName -}}
+{{- $crdEstablished := include "backupstrategy-controller.crdEstablished" (dict "root" . "crd" "cnpgs.strategy.backups.cozystack.io") -}}
+{{- if and $bucketName $crdEstablished -}}
 apiVersion: strategy.backups.cozystack.io/v1alpha1
 kind: CNPG
 metadata:
   name: cozy-default-cnpg
+  annotations:
+    backups.cozystack.io/endpoint: {{ include "backupstrategy-controller.endpoint" . | quote }}
 spec:
   template:
     {{- /*

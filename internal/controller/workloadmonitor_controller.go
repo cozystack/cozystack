@@ -28,7 +28,7 @@ import (
 	"k8s.io/client-go/tools/record"
 	"k8s.io/client-go/util/retry"
 	"k8s.io/client-go/util/workqueue"
-	"k8s.io/utils/pointer"
+	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -185,6 +185,36 @@ func isDataVolumeReady(dv *unstructured.Unstructured) bool {
 	return !dataVolumeInFlightPhases[phase]
 }
 
+// dataVolumeFailureMessage returns why the DataVolume's pod is not running, or
+// "" when nothing says so. A source that keeps failing (404, DNS) never moves
+// the phase off ImportInProgress, because CDI only fails the import on a fatal
+// error and restarts the pod otherwise (updateStatusPhase in
+// pkg/controller/datavolume/import-controller.go). The Running condition holds
+// the clean error text: CDI keeps it through the back-off between restarts and
+// clears it while the pod runs, and Bound repeats it behind PVC details.
+// Unknown is not a failure, so only False is read. For a host-assisted clone
+// CDI joins the target and source messages as "<target> and <source>"
+// (updateWithTargetNotRunning in pkg/controller/datavolume/conditions.go), so
+// empty halves are dropped instead of reporting " and ".
+func dataVolumeFailureMessage(dv *unstructured.Unstructured) string {
+	conditions, _, _ := unstructured.NestedSlice(dv.Object, "status", "conditions")
+	for _, c := range conditions {
+		cond, ok := c.(map[string]any)
+		if !ok || cond["type"] != "Running" || cond["status"] != "False" {
+			continue
+		}
+		message, _ := cond["message"].(string)
+		var parts []string
+		for _, part := range strings.Split(message, " and ") {
+			if part != "" {
+				parts = append(parts, part)
+			}
+		}
+		return strings.Join(parts, " and ")
+	}
+	return ""
+}
+
 // dataVolumeAPIServed treats a NoMatch as not served and returns any other
 // discovery error, so the caller retries instead of concluding CDI is absent.
 func dataVolumeAPIServed(mapper meta.RESTMapper) (bool, error) {
@@ -315,11 +345,14 @@ func (r *WorkloadMonitorReconciler) dataVolumesMessage(ctx context.Context, moni
 		}
 		notReady[dv.GetName()] = true
 		phase, _, _ := unstructured.NestedString(dv.Object, "status", "phase")
+		entry := fmt.Sprintf("DataVolume %s is %s", dv.GetName(), phase)
 		if phase == "" {
-			stuck = append(stuck, fmt.Sprintf("DataVolume %s has no phase", dv.GetName()))
-		} else {
-			stuck = append(stuck, fmt.Sprintf("DataVolume %s is %s", dv.GetName(), phase))
+			entry = fmt.Sprintf("DataVolume %s has no phase", dv.GetName())
 		}
+		if cause := dataVolumeFailureMessage(dv); cause != "" {
+			entry += ": " + cause
+		}
+		stuck = append(stuck, entry)
 	}
 	sort.Strings(stuck)
 	return strings.Join(stuck, "; "), notReady, true, nil
@@ -339,6 +372,25 @@ func (r *WorkloadMonitorReconciler) dataVolumesMessage(ctx context.Context, moni
 // isBucketClaimReady checks if the BucketClaim has been provisioned.
 func (r *WorkloadMonitorReconciler) isBucketClaimReady(bc *cosiv1alpha1.BucketClaim) bool {
 	return bc.Status.BucketReady
+}
+
+// bucketClaimsMessage names every BucketClaim that has not been provisioned,
+// with its bucket class, and is empty when there is none.
+func (r *WorkloadMonitorReconciler) bucketClaimsMessage(claims []cosiv1alpha1.BucketClaim) string {
+	var pending []string
+	for i := range claims {
+		bc := &claims[i]
+		if r.isBucketClaimReady(bc) {
+			continue
+		}
+		entry := fmt.Sprintf("BucketClaim %s is not provisioned", bc.Name)
+		if bc.Spec.BucketClassName != "" {
+			entry = fmt.Sprintf("BucketClaim %s of bucket class %s is not provisioned", bc.Name, bc.Spec.BucketClassName)
+		}
+		pending = append(pending, entry)
+	}
+	sort.Strings(pending)
+	return strings.Join(pending, "; ")
 }
 
 // isServiceReady checks if the service has an external IP bound
@@ -390,8 +442,8 @@ func updateOwnerReferences(obj metav1.Object, monitor client.Object) {
 			Name:       monitor.GetName(),
 			UID:        monitor.GetUID(),
 			// Set Controller to false to avoid conflict as multiple controllers are not allowed
-			Controller:         pointer.BoolPtr(false),
-			BlockOwnerDeletion: pointer.BoolPtr(true),
+			Controller:         ptr.To(false),
+			BlockOwnerDeletion: ptr.To(true),
 		}
 		owners = append(owners, newOwnerRef)
 	}
@@ -492,10 +544,10 @@ func (r *WorkloadMonitorReconciler) queryAllBucketMetrics(ctx context.Context, p
 	if err != nil {
 		return nil, fmt.Errorf("querying Prometheus: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("Prometheus returned status %d", resp.StatusCode)
+		return nil, fmt.Errorf("unexpected status %d from Prometheus", resp.StatusCode)
 	}
 
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
@@ -516,7 +568,7 @@ func (r *WorkloadMonitorReconciler) queryAllBucketMetrics(ctx context.Context, p
 		return nil, fmt.Errorf("parsing Prometheus response: %w", err)
 	}
 	if promResp.Status != "success" {
-		return nil, fmt.Errorf("Prometheus query finished with status %q", promResp.Status)
+		return nil, fmt.Errorf("the Prometheus query finished with status %q", promResp.Status)
 	}
 
 	for _, r := range promResp.Data.Result {
@@ -554,6 +606,59 @@ func (r *WorkloadMonitorReconciler) queryAllBucketMetrics(ctx context.Context, p
 	return result, nil
 }
 
+// bucketWorkloadName names the Workload of a BucketClaim. A Bucket application
+// names its claim after its release, which already starts with "bucket-", so
+// the prefix is added only when the claim name does not carry it.
+func bucketWorkloadName(claimName string) string {
+	if strings.HasPrefix(claimName, "bucket-") {
+		return claimName
+	}
+	return "bucket-" + claimName
+}
+
+func ownedBy(w *cozyv1alpha1.Workload, bc *cosiv1alpha1.BucketClaim) bool {
+	for _, ref := range w.OwnerReferences {
+		if ref.UID == bc.UID {
+			return true
+		}
+	}
+	return false
+}
+
+// ownedBySomeoneElse reports whether w has owners and bc is not one of them.
+func ownedBySomeoneElse(w *cozyv1alpha1.Workload, bc *cosiv1alpha1.BucketClaim) bool {
+	return len(w.OwnerReferences) > 0 && !ownedBy(w, bc)
+}
+
+// heldBySomeoneElse reports whether the Workload called name exists and has
+// owners other than bc.
+func (r *WorkloadMonitorReconciler) heldBySomeoneElse(ctx context.Context, bc *cosiv1alpha1.BucketClaim, name string) (bool, error) {
+	w := &cozyv1alpha1.Workload{}
+	if err := r.Get(ctx, client.ObjectKey{Namespace: bc.Namespace, Name: name}, w); err != nil {
+		return false, client.IgnoreNotFound(err)
+	}
+	return ownedBySomeoneElse(w, bc), nil
+}
+
+// legacyBucketWorkload returns the Workload a previous version created for bc
+// under the unconditionally prefixed name, if it is still there and either bc
+// is among its owners or it has lost every owner (a claim deleted with
+// --cascade=orphan and recreated) while still carrying monitor's label.
+func (r *WorkloadMonitorReconciler) legacyBucketWorkload(ctx context.Context, monitor *cozyv1alpha1.WorkloadMonitor, bc *cosiv1alpha1.BucketClaim) (*cozyv1alpha1.Workload, error) {
+	name := "bucket-" + bc.Name
+	if name == bucketWorkloadName(bc.Name) {
+		return nil, nil
+	}
+	legacy := &cozyv1alpha1.Workload{}
+	if err := r.Get(ctx, client.ObjectKey{Namespace: bc.Namespace, Name: name}, legacy); err != nil {
+		return nil, client.IgnoreNotFound(err)
+	}
+	if ownedBy(legacy, bc) || (len(legacy.OwnerReferences) == 0 && legacy.Labels[workloadMonitorLabel] == monitor.Name) {
+		return legacy, nil
+	}
+	return nil, nil
+}
+
 // reconcileBucketClaimForMonitor creates or updates a Workload object for the given BucketClaim and WorkloadMonitor.
 func (r *WorkloadMonitorReconciler) reconcileBucketClaimForMonitor(
 	ctx context.Context,
@@ -562,16 +667,68 @@ func (r *WorkloadMonitorReconciler) reconcileBucketClaimForMonitor(
 	allMetrics map[string]*bucketMetrics,
 ) error {
 	logger := log.FromContext(ctx)
+
+	// The name may be held by another owner's Workload: Bucket applications
+	// "x" and "bucket-x" make the legacy name of the first the new name of the
+	// second, and a claim "x" outside the Bucket application maps to the same
+	// name as the application "x". Adopting it would meter this bucket with
+	// the other one's size. Keep metering the bucket under its legacy name
+	// until the new one is free, and skip the bucket only when that name is
+	// held as well.
+	name := bucketWorkloadName(bc.Name)
+	migrate := true
+	held, err := r.heldBySomeoneElse(ctx, &bc, name)
+	if err != nil {
+		return err
+	}
+	if held {
+		legacyName := "bucket-" + bc.Name
+		legacyHeld := legacyName == name
+		if !legacyHeld {
+			if legacyHeld, err = r.heldBySomeoneElse(ctx, &bc, legacyName); err != nil {
+				return err
+			}
+		}
+		if legacyHeld {
+			logger.Info("Workload name is held by another owner; not adopting it", "workload", name, "bucketClaim", bc.Name)
+			if r.Recorder != nil {
+				r.Recorder.Eventf(monitor, corev1.EventTypeWarning, "BucketWorkloadNameTaken",
+					"Workload %s for BucketClaim %s is owned by another object; the bucket is not metered", name, bc.Name)
+			}
+			return nil
+		}
+		logger.Info("Workload name is held by another owner; keeping the legacy name", "workload", name, "legacy", legacyName, "bucketClaim", bc.Name)
+		if r.Recorder != nil {
+			r.Recorder.Eventf(monitor, corev1.EventTypeWarning, "BucketWorkloadNameTaken",
+				"Workload %s for BucketClaim %s is owned by another object; metering the bucket as %s until it is free", name, bc.Name, legacyName)
+		}
+		name, migrate = legacyName, false
+	}
 	workload := &cozyv1alpha1.Workload{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      fmt.Sprintf("bucket-%s", bc.Name),
+			Name:      name,
 			Namespace: bc.Namespace,
 			Labels:    make(map[string]string, len(bc.Labels)),
 		},
 	}
 
+	var legacy *cozyv1alpha1.Workload
+	if migrate {
+		if legacy, err = r.legacyBucketWorkload(ctx, monitor, &bc); err != nil {
+			return err
+		}
+	}
+	// A legacy Workload with other owners is another bucket's renamed one that
+	// a rolled-back controller also attached bc to: neither its sizes nor the
+	// object are bc's to take. An ownerless one is removed, but its sizes may
+	// be older than the claim it is recognised for.
+	soleLegacy := legacy != nil && len(legacy.OwnerReferences) == 1
+	orphanLegacy := legacy != nil && len(legacy.OwnerReferences) == 0
+
 	monitorLabels := r.getMonitorLabels(monitor)
-	_, err := ctrl.CreateOrUpdate(ctx, r.Client, workload, func() error {
+	_, err = ctrl.CreateOrUpdate(ctx, r.Client, workload, func() error {
+		// sizes on a Workload bc did not own yet were not written for it
+		ownedBefore := ownedBy(workload, &bc)
 		updateOwnerReferences(workload.GetObjectMeta(), &bc)
 
 		if workload.Labels == nil {
@@ -595,11 +752,17 @@ func (r *WorkloadMonitorReconciler) reconcileBucketClaimForMonitor(
 		// Start from the sizes already recorded on the Workload: when the
 		// metrics endpoint is unreachable or reports nothing for this bucket,
 		// the last known good values must survive rather than collapse to
-		// "no size", which billing would read as an empty bucket.
+		// "no size", which billing would read as an empty bucket. A Workload
+		// renamed from its legacy name starts from the legacy sizes, so the
+		// rename leaves no gap in the bucket's metered size.
 		resources := make(map[string]resource.Quantity)
 		for _, key := range []string{resourceS3StorageBytes, resourceS3PhysicalStorageBytes} {
-			if q, ok := workload.Status.Resources[key]; ok {
+			if q, ok := workload.Status.Resources[key]; ok && (ownedBefore || !soleLegacy) {
 				resources[key] = q
+			} else if soleLegacy {
+				if q, ok := legacy.Status.Resources[key]; ok {
+					resources[key] = q
+				}
 			}
 		}
 
@@ -624,6 +787,29 @@ func (r *WorkloadMonitorReconciler) reconcileBucketClaimForMonitor(
 	})
 	if err != nil {
 		logger.Error(err, "Failed to CreateOrUpdate Workload", "workload", workload.Name)
+		return err
+	}
+
+	// Billing reads every Workload as a consumer, so the legacy one must go
+	// once its replacement exists, or the bucket is metered twice. The
+	// preconditions delete only the object that was checked, not one that
+	// took over the name since the lookup; a conflict is retried next pass.
+	switch {
+	case soleLegacy || orphanLegacy:
+		err = r.Delete(ctx, legacy, client.Preconditions{UID: &legacy.UID, ResourceVersion: &legacy.ResourceVersion})
+	case legacy != nil:
+		orig := legacy.DeepCopy()
+		owners := legacy.OwnerReferences[:0]
+		for _, ref := range legacy.OwnerReferences {
+			if ref.UID != bc.UID {
+				owners = append(owners, ref)
+			}
+		}
+		legacy.OwnerReferences = owners
+		err = r.Patch(ctx, legacy, client.MergeFromWithOptions(orig, client.MergeFromWithOptimisticLock{}))
+	}
+	if client.IgnoreNotFound(err) != nil && !apierrors.IsConflict(err) {
+		logger.Error(err, "Failed to release legacy bucket Workload", "workload", legacy.Name)
 		return err
 	}
 
@@ -990,6 +1176,8 @@ func (r *WorkloadMonitorReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		}
 	}
 
+	bucketsMessage := r.bucketClaimsMessage(bucketClaimList.Items)
+
 	// Update WorkloadMonitor status based on observed pods
 	monitor.Status.ObservedReplicas = observedReplicas
 	monitor.Status.AvailableReplicas = availableReplicas
@@ -1007,22 +1195,30 @@ func (r *WorkloadMonitorReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		// Default to operational = true, but check MinReplicas if set.
 		// Use fresh.Spec to avoid making decisions based on a stale cached copy
 		// when the spec was updated between the initial read and this retry.
-		fresh.Status.Operational = pointer.Bool(true)
+		fresh.Status.Operational = ptr.To(true)
 		if fresh.Spec.MinReplicas != nil && availableReplicas < *fresh.Spec.MinReplicas {
-			fresh.Status.Operational = pointer.Bool(false)
+			fresh.Status.Operational = ptr.To(false)
 		}
-		// Only the DataVolume check writes Message and Reason, so the stored ones
-		// are the last DataVolume verdict: kept while no reader is installed yet, so a
-		// controller restart does not report a stuck disk as ready.
+		// A stored DataVolume verdict is the last one: kept while no reader is
+		// installed yet, so a controller restart does not report a stuck disk as
+		// ready. BucketClaims are listed on every pass, so their verdict is
+		// recomputed and only fills fields no DataVolume verdict holds.
 		if dataVolumesRead {
 			fresh.Status.Message = dataVolumesMessage
 			fresh.Status.Reason = ""
 			if dataVolumesMessage != "" {
 				fresh.Status.Reason = cozyv1alpha1.WorkloadMonitorReasonDataVolumeNotReady
 			}
+		} else if fresh.Status.Reason == cozyv1alpha1.WorkloadMonitorReasonBucketClaimNotReady {
+			fresh.Status.Message = ""
+			fresh.Status.Reason = ""
+		}
+		if fresh.Status.Message == "" && bucketsMessage != "" {
+			fresh.Status.Message = bucketsMessage
+			fresh.Status.Reason = cozyv1alpha1.WorkloadMonitorReasonBucketClaimNotReady
 		}
 		if fresh.Status.Message != "" {
-			fresh.Status.Operational = pointer.Bool(false)
+			fresh.Status.Operational = ptr.To(false)
 		}
 		if equality.Semantic.DeepEqual(stored, &fresh.Status) {
 			return nil

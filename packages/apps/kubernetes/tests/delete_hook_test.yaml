@@ -134,10 +134,10 @@ tests:
       # failure it is written to prevent would take the assertion with it.
       # Matching the entire rule pins the verb set in both directions and names
       # the resource when it fails; lengthEqual is what closes the remaining
-      # hole, a sixth rule appended past everything asserted here.
+      # hole, a tenth rule appended past everything asserted here.
       - lengthEqual:
           path: rules
-          count: 6
+          count: 9
       - contains:
           path: rules
           content:
@@ -168,6 +168,60 @@ tests:
             apiGroups: [""]
             resources: ["services"]
             verbs: ["get", "list", "delete"]
+
+  # Step 7 removes what outlives the release: the two Talos PKI Secrets, which
+  # cert-manager issues without an ownerReference to their Certificates, and the
+  # OIDC bootstrap Job, a hook whose only delete policy is before-hook-creation.
+  - it: deletes the Talos Certificates before their Secrets, so cert-manager cannot re-issue them
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'delete certificates\.cert-manager\.io \\\n\s+test-k8s-talos-ca test-k8s-talos-tls-cert(?:[^\n]*\\\n)*[^\n]*--wait=false'
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'delete secrets \\\n\s+test-k8s-talos-ca test-k8s-talos-tls-cert(?:[^\n]*\\\n)*[^\n]*--wait=false'
+      - notMatchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'delete secrets \\\n\s+test-k8s-talos-ca[\s\S]*delete certificates\.cert-manager\.io'
+
+  - it: deletes the orphaned OIDC bootstrap Job
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'delete jobs\.batch \\\n\s+test-k8s-oidc-bootstrap(?:[^\n]*\\\n)*[^\n]*--wait=false'
+
+  - it: cleanup Role can delete only the Step 7 objects, by name
+    documentSelector:
+      path: kind
+      value: Role
+    asserts:
+      - contains:
+          path: rules
+          content:
+            apiGroups: ["cert-manager.io"]
+            resources: ["certificates"]
+            resourceNames: ["test-k8s-talos-ca", "test-k8s-talos-tls-cert"]
+            verbs: ["get", "delete"]
+      - contains:
+          path: rules
+          content:
+            apiGroups: [""]
+            resources: ["secrets"]
+            resourceNames: ["test-k8s-talos-ca", "test-k8s-talos-tls-cert"]
+            verbs: ["get", "delete"]
+      - contains:
+          path: rules
+          content:
+            apiGroups: ["batch"]
+            resources: ["jobs"]
+            resourceNames: ["test-k8s-oidc-bootstrap"]
+            verbs: ["get", "delete"]
 
   - it: pre-delete Job makes a single attempt
     documentSelector:

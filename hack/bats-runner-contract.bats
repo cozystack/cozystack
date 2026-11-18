@@ -75,7 +75,7 @@ brc_write_parallel_stub() {
   code_command=$(yq -r '.jobs.checks.steps[] | select(.name == "Run unit and controller tests") | .run' "$BRC_WORKFLOW")
   docs_command=$(yq -r '.jobs.checks.steps[] | select(.name == "Run Bats unit tests for docs-only changes") | .run' "$BRC_WORKFLOW")
   [ -z "$lint_skip" ]
-  [ "$code_command" = 'make unit-tests test-controllers -j4 -k --output-sync=target' ]
+  [ "$code_command" = 'make unit-tests test-controllers test-controllers-envtest -j4 -k --output-sync=target' ]
   [ "$docs_command" = 'make bats-unit-tests' ]
 }
 

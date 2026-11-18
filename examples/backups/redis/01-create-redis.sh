@@ -10,7 +10,7 @@ print_header "Step 01: Provision Redis '${REDIS_NAME}'"
 
 kubectl apply -f - <<EOF
 apiVersion: apps.cozystack.io/v1alpha1
-kind: Redis
+kind: ${APP_KIND}
 metadata:
   name: ${REDIS_NAME}
   namespace: ${NAMESPACE}

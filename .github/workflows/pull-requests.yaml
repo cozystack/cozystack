@@ -75,6 +75,8 @@ jobs:
       statuses: write
     outputs:
       code: ${{ steps.p.outputs.code }}
+      docs: ${{ steps.p.outputs.docs }}
+      backport_batch: ${{ steps.p.outputs.backport_batch }}
       matrix: ${{ steps.p.outputs.matrix }}
       any: ${{ steps.p.outputs.any }}
       touched: ${{ steps.p.outputs.touched }}
@@ -167,11 +169,27 @@ jobs:
           # alone here rather than widened by a side effect.
           git diff --name-only --no-renames "origin/${BASE_REF}...HEAD" > /tmp/changed_norenames.txt
           echo "Changed files:"; sed 's/^/  /' /tmp/changed_norenames.txt
-          if grep -qvE '^docs/' /tmp/changed_norenames.txt; then
+          # `code` is false when every path is under docs/ or in a CI-only Go
+          # tool that no image builds (cmd/backport-batch, cmd/api-gate): there
+          # is nothing to build and nothing for e2e to install. e2e-fork.yaml
+          # answers the same question from the PR file list with the same
+          # prefixes, and hack/gate-concurrency-contract.bats holds the two lists
+          # equal.
+          if grep -qvE '^(docs/|cmd/backport-batch/|cmd/api-gate/)' /tmp/changed_norenames.txt; then
             echo "code=true" >> "$GITHUB_OUTPUT"
           else
             echo "code=false" >> "$GITHUB_OUTPUT"
           fi
+          # The Bats contracts read docs, so a docs change runs them even when
+          # `code` is false; a change confined to the CI-only tools does not.
+          if grep -qE '^docs/' /tmp/changed_norenames.txt; then
+            echo "docs=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "docs=false" >> "$GITHUB_OUTPUT"
+          fi
+          backport_batch="$(hack/backport-batch-tests-needed.sh /tmp/changed_norenames.txt)"
+          echo "backport-batch tests needed: $backport_batch"
+          echo "backport_batch=$backport_batch" >> "$GITHUB_OUTPUT"
           matrix="$(hack/build-matrix.sh /tmp/changed.txt)"
           echo "Build matrix: $matrix"
           echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
@@ -293,9 +311,11 @@ jobs:
       contents: read
     needs: ["plan"]
     # Unit contracts read both code and documentation. Run this job for every
-    # non-release PR: code changes take the complete unit path, while docs-only
-    # changes run the Bats lane that owns those cross-tree contracts. Builds and
-    # E2E remain gated on `code` below.
+    # non-release PR: code changes take the complete unit path, docs changes run
+    # the Bats lane that owns those cross-tree contracts, and the backport-batch
+    # tests run whenever one of their inputs changed and at no other time. A
+    # change confined to the CI-only tools runs no other lane. Builds and E2E
+    # remain gated on `code` below.
     if: |
       !contains(github.event.pull_request.labels.*.name, 'release')
     steps:
@@ -306,20 +326,21 @@ jobs:
       # The module cache is restored from the key build-main.yaml writes on
       # main, which every PR run can read, so a PR's first run starts warm. The
       # download fetches whatever the cache lacks, the whole set on a miss. The
-      # Go steps are for code changes only: a docs-only run is the Bats lane alone.
+      # Go steps are for code changes and the backport-batch tests only: a
+      # docs-only run is the Bats lane alone.
       - name: Locate Go module cache
-        if: needs.plan.outputs.code == 'true'
+        if: needs.plan.outputs.code == 'true' || needs.plan.outputs.backport_batch == 'true'
         id: gomodcache
         run: echo "dir=$(go env GOMODCACHE)" >> "$GITHUB_OUTPUT"
       - name: Cache Go modules
-        if: needs.plan.outputs.code == 'true'
+        if: needs.plan.outputs.code == 'true' || needs.plan.outputs.backport_batch == 'true'
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ steps.gomodcache.outputs.dir }}
           key: go-mod-${{ runner.os }}-${{ hashFiles('**/go.sum') }}
           restore-keys: go-mod-${{ runner.os }}-
       - name: Download Go modules
-        if: needs.plan.outputs.code == 'true'
+        if: needs.plan.outputs.code == 'true' || needs.plan.outputs.backport_batch == 'true'
         run: |
           for mod in $(git ls-files go.mod '*/go.mod' | xargs -n1 dirname); do
             (cd "$mod" && "$GITHUB_WORKSPACE/hack/go-mod-download.sh")
@@ -327,8 +348,9 @@ jobs:
       # Ephemeral runners don't carry the helm-unittest plugin the persistent
       # self-hosted runner accreted. The plugin embeds its own Helm, so its
       # version is pinned: a plugin release must not change test results. Bats is
-      # installed on every run, docs-only ones included.
+      # installed whenever a Bats lane runs, docs-only ones included.
       - name: Set up test toolchain
+        if: needs.plan.outputs.code == 'true' || needs.plan.outputs.docs == 'true'
         env:
           CODE_CHANGED: ${{ needs.plan.outputs.code }}
           HELM_UNITTEST_VERSION: "1.1.2"
@@ -353,6 +375,17 @@ jobs:
             sudo "$bats_source/install.sh" /usr/local
           fi
           bats --version | grep -qx "Bats $BATS_VERSION"
+      # setup-envtest and the kube-apiserver and etcd it fetches, so a pull
+      # request downloads them only when the versions pinned in the Makefile
+      # change, and an outage at their sources cannot fail unrelated changes.
+      # The envtest target runs the controller suites a fake client cannot
+      # stand in for.
+      - name: Cache envtest binaries
+        if: needs.plan.outputs.code == 'true'
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: _out/envtest
+          key: envtest-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Makefile') }}
       # -k is required, not cosmetic: unit-tests and test-controllers are two
       # independent goals on the same command line, and without -k make stops
       # handing out new work the moment any unit-tests prerequisite fails —
@@ -361,10 +394,22 @@ jobs:
       # goals keep running; the job still fails overall on any red target.
       - name: Run unit and controller tests
         if: needs.plan.outputs.code == 'true'
-        run: make unit-tests test-controllers -j4 -k --output-sync=target
+        run: make unit-tests test-controllers test-controllers-envtest -j4 -k --output-sync=target
       - name: Run Bats unit tests for docs-only changes
-        if: needs.plan.outputs.code == 'false'
+        if: needs.plan.outputs.code == 'false' && needs.plan.outputs.docs == 'true'
         run: make bats-unit-tests
+      # Not part of `make unit-tests`: hack/backport-batch-tests-needed.sh
+      # decides from cmd/backport-batch/test-inputs.txt, whatever `code` is.
+      # `!cancelled()` for the reason the unit lane runs with -k: a red step
+      # above must not hide this suite's own result.
+      - name: Run backport-batch tests
+        if: ${{ !cancelled() && needs.plan.outputs.backport_batch == 'true' }}
+        run: make test-backport-batch
+      - name: Check new Helm document indices
+        if: ${{ !cancelled() }}
+        env:
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+        run: python3 hack/check-helm-document-indices.py "$(git merge-base HEAD "origin/$BASE_REF")"
       - name: Upload unit test report
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -942,7 +987,7 @@ jobs:
     # Covers a green full suite. It does not cover a tenant-Kubernetes suite
     # running into its node-join deadline, so a red there can end as a
     # cancelled job. Held to one figure across every lane that runs the suite.
-    timeout-minutes: 215
+    timeout-minutes: 265
     permissions:
       contents: read
       packages: read
@@ -1213,7 +1258,7 @@ jobs:
 
       # ▸ Collect debug information (always runs)
       #
-      #   A ceiling of its own, not the job's 215 minutes. `Upload
+      #   A ceiling of its own, not the job's 265 minutes. `Upload
       #   cozyreport.tgz` is the next step and the collector writes its tarball
       #   at the very end of its run, so a read that never returns spends what
       #   is left of the job budget, the job is cancelled, and the upload never
@@ -1224,7 +1269,7 @@ jobs:
       #   30 minutes is measured against the step: it takes 3-42s across sampled
       #   runs, on failed e2e jobs as well as green ones. It RESERVES nothing --
       #   `timeout-minutes` caps a step, it does not carve budget out of the job,
-      #   so a suite that has already burned 210 of the 215 leaves this step five
+      #   so a suite that has already burned 260 of the 265 leaves this step five
       #   minutes and the upload is cancelled with everything else. What the cap
       #   buys is that a hung read cannot be the reason.
       #   `continue-on-error` because the ceiling must not change what the job
@@ -1337,28 +1382,6 @@ jobs:
             Resume from inside: `breakpoint resume`. Otherwise the breakpoint
             exits 10 minutes after the last SSH session disconnects.
 
-      # ▸ Tear down environment (always runs)
-      #
-      #   Both halves, and in this order: the compose project owns the nodes and
-      #   the zpools outlive it. A leftover pool makes the next run on a reused
-      #   host adopt storage that already carries a dead cluster's volumes.
-      - name: Tear down sandbox
-        if: always()
-        run: |
-          # Loud, but never the job's verdict. A failed teardown means a dirty
-          # host, and this runner is discarded after the job, so there is no next
-          # run to protect -- while failing the job here posts the required
-          # "E2E Tests" status as a failure that no reader can tell apart from a
-          # real one. The annotation is what a reused host (a developer machine)
-          # needs; `delete-cluster-container` returning non-zero is not evidence
-          # about the product.
-          cleanup_rc=0
-          make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME delete-cluster-container || cleanup_rc=$?
-          make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME delete || true
-          if [ "$cleanup_rc" -ne 0 ]; then
-            echo "::error title=sandbox teardown::teardown exited $cleanup_rc; the host may hold a stale compose project or zpool"
-          fi
-
   # Report the required "E2E Tests" gate as a commit status rather than relying
   # on a job named "E2E Tests". A required *job* that is skipped counts
   # as PASSED by branch protection — desired for docs-only PRs, but the exact
@@ -1438,7 +1461,7 @@ jobs:
               description = `release packages candidate did not verify (result: ${CANDIDATE_RESULT})`;
             } else if (CODE !== 'true') {
               state = 'success';
-              description = 'docs-only PR — e2e not required';
+              description = 'docs or CI-only tools — e2e not required';
             } else if (IS_RELEASE === 'true' && IS_FULL_E2E !== 'true') {
               // Release promotion PRs deliberately do not repeat e2e: the rc was
               // already verified against the immutable candidate whose digests

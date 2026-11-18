@@ -8,17 +8,12 @@
 # tag. The first wins, the second hits the write-once guard, and the promotion
 # fails — on release day, in a workflow that runs once per release.
 #
-# This is not hypothetical. platform-migrations was pinned twice: once in
-# packages/core/platform/values.yaml (stamped by its Makefile) and once as
-# .backupStrategyController.chBackupClientImage, which had no producer at all
-# and so froze at v1.4.0-rc.2 while the other advanced to v1.5.0. v1.6.0 is the
-# first release cut through the promote path rather than a full rebuild, so it
-# would have been the first to hit it.
-#
-# The general invariant is cheaper to hold than the specific one: a duplicate
-# pin can arise from any package reusing another's image, which the tree does
-# deliberately (backupstrategy-controller reuses platform-migrations as a
-# curl+jq runner rather than shipping a second one-binary tag).
+# This is not hypothetical. platform-migrations was once pinned twice, the
+# second copy by a key that had no producer: it froze at v1.4.0-rc.2 while the
+# other advanced to v1.5.0, and v1.6.0, the first release cut through the
+# promote path, would have been the first to hit it. A chart that renders one
+# image under several keys (backupstrategy-controller's backup client) must
+# have them stamped together.
 #
 # Harness compatibility note: CI runs this file under Bats through
 # `make bats-unit-tests`. It also remains compatible with the narrower legacy
@@ -65,36 +60,10 @@ load test_helper
         -- "${repo#ghcr.io/cozystack/cozystack/}" packages/ >&2 || true
     done
     echo >&2
-    echo "Give the duplicate key a producer that stamps the same ref (see" >&2
-    echo "packages/core/platform/Makefile), or drop the duplicate pin." >&2
+    echo "Give the duplicate key a producer that stamps the same ref, or drop" >&2
+    echo "the duplicate pin." >&2
     rm -rf "$tmp"
     return 1
   fi
   rm -rf "$tmp"
-}
-
-@test "platform-migrations is pinned identically in both consumers" {
-  # The specific instance, pinned separately so a regression names its cause
-  # rather than only tripping the general check above. The two must match
-  # exactly, not merely resolve to the same digest: backupstrategy-controller
-  # renders its copy into a Pod spec, so a stale tag string there is what an
-  # operator reads when asking what is running.
-  a=$(yq -r '.migrations.image' packages/core/platform/values.yaml)
-  b=$(yq -r '.backupStrategyController.chBackupClientImage' \
-    packages/system/backupstrategy-controller/values.yaml)
-  c=$(yq -r '.backupStrategyController.rabbitmqBackupClientImage' \
-    packages/system/backupstrategy-controller/values.yaml)
-
-  if [ "$a" != "$b" ] || [ "$a" != "$c" ]; then
-    echo "platform-migrations pins have drifted:" >&2
-    echo "  packages/core/platform/values.yaml            .migrations.image" >&2
-    echo "    $a" >&2
-    echo "  backupstrategy-controller/values.yaml         .chBackupClientImage" >&2
-    echo "    $b" >&2
-    echo "  backupstrategy-controller/values.yaml         .rabbitmqBackupClientImage" >&2
-    echo "    $c" >&2
-    echo >&2
-    echo "packages/core/platform/Makefile stamps all three; do not hand-edit any." >&2
-    return 1
-  fi
 }

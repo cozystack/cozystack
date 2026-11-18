@@ -76,3 +76,70 @@ spec:
             name: rfr-valkey-test
           status:
             readyReplicas: 2
+---
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: valkey-backup-roundtrip
+spec:
+  # The Redis backup round-trip (redis-2-backup-roundtrip) run against a Valkey
+  # app: Valkey shares the RedisFailover operator and the Redis strategy, so the
+  # same demo drives it with APP_KIND=Valkey. tenant-root and the .svc
+  # S3_ENDPOINT for the same reasons as there: tenant-test is egress-isolated
+  # from tenant-root's seaweedfs, and the seaweedfs serving cert's SANs cover
+  # 'seaweedfs-s3.tenant-root.svc'. The app names differ from the redis
+  # round-trip's so neither suite's leftovers can satisfy the other's waits.
+  namespace: tenant-root
+  skipDelete: true
+  catch:
+  - events: {}
+  - describe:
+      apiVersion: backups.cozystack.io/v1alpha1
+      kind: BackupJob
+  - describe:
+      apiVersion: backups.cozystack.io/v1alpha1
+      kind: RestoreJob
+  - describe:
+      apiVersion: strategy.backups.cozystack.io/v1alpha1
+      kind: Redis
+      name: redis-strategy-default
+  - podLogs:
+      selector: redis.strategy.backups.cozystack.io/mode
+      tail: 200
+  steps:
+  - name: run
+    try:
+    # Pre-clean so a stale Succeeded BackupJob from a prior run cannot satisfy
+    # the wait instantly. Idempotent; the catch cwd is the suite dir.
+    - script:
+        timeout: 8m
+        content: |
+          set -eu
+          cd ../../..
+          APP_KIND=Valkey REDIS_NAME=valkey-bkp REDIS_RESTORE_NAME=valkey-bkp-copy \
+            NAMESPACE="$NAMESPACE" examples/backups/redis/cleanup.sh
+        check:
+          ($error == null): true
+    # 36m: sized with the 660s bucket HR wait in run-all.sh, as in the redis
+    # round-trip.
+    - script:
+        timeout: 36m
+        content: |
+          set -eu
+          cd ../../..
+          [ -x examples/backups/redis/run-all.sh ] || { echo "examples/backups/redis/run-all.sh not found or not executable" >&2; exit 1; }
+          APP_KIND=Valkey REDIS_NAME=valkey-bkp REDIS_RESTORE_NAME=valkey-bkp-copy \
+            NAMESPACE="$NAMESPACE" S3_ENDPOINT="https://seaweedfs-s3.tenant-root.svc:8333" \
+            examples/backups/redis/run-all.sh
+        check:
+          ($error == null): true
+          (contains($stderr, 'To-copy restore verified')): true
+    finally:
+    - description: backup-flow cleanup
+      script:
+        timeout: 8m
+        content: |
+          set -eu
+          cd ../../..
+          APP_KIND=Valkey REDIS_NAME=valkey-bkp REDIS_RESTORE_NAME=valkey-bkp-copy \
+            NAMESPACE="$NAMESPACE" examples/backups/redis/cleanup.sh

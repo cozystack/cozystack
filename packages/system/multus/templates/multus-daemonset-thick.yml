@@ -158,33 +158,32 @@ spec:
         - name: kube-multus
           image: ghcr.io/cozystack/cozystack/multus-cni:v1.6.0@sha256:0a92e861ead179dd6b46f475fd8878d44b3cfa40ce4d7a8ff92f790d54250d25
           command: [ "/usr/src/multus-cni/bin/multus-daemon" ]
-          # Upstream sets 50Mi for both the request and the limit. This patch
-          # already raised the request to 100Mi and DELETED the memory limit
-          # outright, leaving only the CPU one -- which left the pod cgroup with
-          # no memory.max, and the Talos userspace OOM handler (v1.12+) only
-          # ever kills cgroups that lack it. So dropping the limit to survive
-          # 50Mi is what made multus an eviction candidate on every node.
+          # Keep a memory limit: without one the pod cgroup has no memory.max,
+          # and the Talos userspace OOM handler (v1.12+) only ever kills cgroups
+          # that lack it, which makes multus an eviction candidate on every node.
           #
-          # Restore a limit, sized as a backstop rather than a ceiling: 14d peak
+          # Size it as a backstop rather than a ceiling: 14d peak
           # is 230Mi on a 3-node dev cluster and this grows with pods per node,
           # so upstream's 50Mi was never survivable and a fitted value would
           # trade a rare pressure-driven kill for a deterministic one.
           #
-          # 1Gi rather than a tighter multiple of that peak, because the peak is
-          # the part least worth trusting here: multus-daemon holds per-pod
-          # state and a 3-node dev cluster understates pods per node more than
-          # it understates anything else measured for this change. The scar this
-          # avoids is the vertical-pod-autoscaler updater, which OOM-looped at a
-          # 110Mi limit for the same reason -- it scaled with pods in the
+          # Far above that peak rather than a tighter multiple of it, because the
+          # peak is the part least worth trusting here: multus-daemon holds
+          # per-pod state and a 3-node dev cluster understates pods per node more
+          # than it understates anything else measured here. The scar
+          # this avoids is the vertical-pod-autoscaler updater, which OOM-looped
+          # at a 110Mi limit for the same reason -- it scaled with pods in the
           # cluster -- and was given a limit 2.5x its measured request to stop
           # it. A limit costs nothing until it is hit; only the request reserves.
+          #
+          # The values themselves, and why there is no CPU limit, are in
+          # values.yaml.
           resources:
-            requests:
-              cpu: "100m"
-              memory: "100Mi"
-            limits:
-              cpu: "100m"
-              memory: "1Gi"
+            {{- if not (kindIs "map" .Values.resources) }}{{- fail (printf "resources: expected a map, got %s" (kindOf .Values.resources)) }}{{- end }}
+            {{- range $key := list "limits" "requests" }}{{- $value := index $.Values.resources $key }}{{- if not (or (kindIs "invalid" $value) (kindIs "map" $value)) }}{{- fail (printf "resources.%s: expected a map, got %s" $key (kindOf $value)) }}{{- end }}{{- end }}
+            {{- if not (dig "limits" "memory" "" .Values.resources) }}{{- fail "resources.limits.memory must be set: without it the pod cgroup has no memory.max and the Talos OOM handler may evict multus on any node" }}{{- end }}
+            {{- if not (dig "requests" "memory" "" .Values.resources) }}{{- fail "resources.requests.memory must be set: without it the request defaults to the limit and a node with less allocatable memory is left without multus" }}{{- end }}
+            {{- toYaml .Values.resources | nindent 12 }}
           securityContext:
             privileged: true
           terminationMessagePolicy: FallbackToLogsOnError

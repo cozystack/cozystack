@@ -11,17 +11,18 @@
   directly or Helm will try to evaluate the inner expression at chart
   install time and fail.
 
-  Gate on a resolved $bucketName: an ungated Strategy CR has no RESTMapping
-  on a fresh install, Helm Build() fails "no matches for kind", and the
-  release applies zero objects (including the CRDs). See
-  strategy-mongodb-default.yaml for the full rationale.
+  Gated, like every default Strategy, on a resolved $bucketName and on its
+  CRD being established; see the crdEstablished helper.
 */}}
 {{- $bucketName := include "backupstrategy-controller.bucketName" . -}}
-{{- if $bucketName -}}
+{{- $crdEstablished := include "backupstrategy-controller.crdEstablished" (dict "root" . "crd" "redis.strategy.backups.cozystack.io") -}}
+{{- if and $bucketName $crdEstablished -}}
 apiVersion: strategy.backups.cozystack.io/v1alpha1
 kind: Redis
 metadata:
   name: cozy-default-redis
+  annotations:
+    backups.cozystack.io/endpoint: {{ include "backupstrategy-controller.endpoint" . | quote }}
 spec:
   template:
     spec:
@@ -32,7 +33,7 @@ spec:
       keeps stacking behind; the job-in-progress path has no other deadline. int
       so a large values-file override (parsed as float64) renders as an integer,
       not exponent form (1e+06), which would fail schema validation. Full
-      rationale: docs/operations/backup-classes.md.
+      rationale: https://cozystack.io/docs/v1/operations/services/backup-classes/.
       */}}
       activeDeadlineSeconds: {{ int .Values.backupStrategyController.redisBackupActiveDeadlineSeconds }}
       volumes:
@@ -40,12 +41,15 @@ spec:
         The Redis app's own CA. The chart moves Redis and Sentinel to a TLS-only
         listener when the app has tls.enabled and publishes the CA at
         redis-<app>.ca-cert; mounting it optionally means ca.crt is present
-        exactly when the app is TLS, and a non-TLS app leaves /etc/redis-ca empty
-        so the script keeps its plaintext path (see the RTLS block).
+        exactly when the app is TLS, and a non-TLS app (every Valkey app) leaves
+        /etc/redis-ca empty so the script keeps its plaintext path (see the RTLS
+        block). .Release.Prefix is the chart's name prefix, redis- or valkey-;
+        it defaults to redis- because during an upgrade the previous controller,
+        which predates Prefix and serves only Redis, renders this same CR.
         */}}
         - name: redis-ca
           secret:
-            secretName: {{ printf "redis-{{ .Release.Name }}.ca-cert" | quote }}
+            secretName: {{ printf `{{ .Release.Prefix | default "redis-" }}{{ .Release.Name }}.ca-cert` | quote }}
             optional: true
         {{- if .Values.backupStorage.endpointCASecretName }}
         {{- /*
@@ -56,7 +60,7 @@ spec:
         activeDeadlineSeconds (never a Failed Job) when the admin has not created
         it. A missing ca.crt does NOT skip verification: the script falls through
         to the image's system CA store and curl fails the handshake fast;
-        skip-verify still needs its explicit opt-in. See backup-classes.md.
+        skip-verify still needs its explicit opt-in. See https://cozystack.io/docs/v1/operations/services/backup-classes/.
         */}}
         - name: s3-ca
           secret:
@@ -79,13 +83,13 @@ spec:
           env:
             {{- /*
             Redis password, when the app has authEnabled (the default). The chart
-            emits the Secret redis-<app>-auth; mount it optionally so a no-auth
+            emits the Secret <prefix><app>-auth; mount it optionally so a no-auth
             app still schedules.
             */}}
             - name: REDIS_PASSWORD
               valueFrom:
                 secretKeyRef:
-                  name: {{ printf "redis-{{ .Release.Name }}-auth" | quote }}
+                  name: {{ printf `{{ .Release.Prefix | default "redis-" }}{{ .Release.Name }}-auth` | quote }}
                   key: password
                   optional: true
             {{- /*
@@ -224,11 +228,12 @@ spec:
               {{- /*
               The sentinel Service always belongs to the app we operate on: the
               source on backup, the restore TARGET on restore (both are
-              .Release.Name at driver-render time). The cozystack redis chart
-              names its RedisFailover redis-<app>, so the operator's sentinel
-              Service is rfs-redis-<app>; mymaster is its master name.
+              .Release.Name at driver-render time). The cozystack redis and
+              valkey charts name their RedisFailover <prefix><app>, so the
+              operator's sentinel Service is rfs-<prefix><app>; mymaster is its
+              master name.
               */}}
-              SENTINEL="rfs-redis-{{ printf "{{ .Release.Name }}" }}"
+              SENTINEL="rfs-{{ printf `{{ .Release.Prefix | default "redis-" }}{{ .Release.Name }}` }}"
 
               # Discover the current master via any sentinel — the RedisFailover
               # master moves on failover, so a fixed host would break after one.
@@ -343,7 +348,7 @@ spec:
           cluster-scoped and Helm-managed, so an admin raises the ceiling once
           via backupStrategyController.redisBackupResources in chart values (an
           in-place edit of the CR reverts on upgrade). Defaults suit
-          small-to-medium instances. See backup-classes.md.
+          small-to-medium instances. See https://cozystack.io/docs/v1/operations/services/backup-classes/.
           */}}
           resources:
             {{- toYaml .Values.backupStrategyController.redisBackupResources | nindent 12 }}

@@ -28,6 +28,7 @@ Or step through them:
 
 ## Notes
 
+- **Valkey.** `APP_KIND=Valkey` runs the same walkthrough against a Valkey app, which runs on the same RedisFailover operator; every `redis-<name>` resource below is then `valkey-<name>`.
 - **Master discovery** goes through the operator's sentinel Service `rfs-redis-<name>` (master name `mymaster`), so writes and the dump/replay always target the current master even after a failover.
 - **Faithful restore.** The restore loads the RDB into a throwaway local redis and replays what a real engine emits, so all logical databases (`SELECT` per db), stream last-ids and consumer groups survive — a merge onto db0 does not happen.
 - **Endpoint TLS.** The projected `endpoint` in `cozy-backups-creds` is always scheme-stripped, so the strategy prepends `https://` and the transport is always TLS (there is no `http://` path). It verifies against the image's system CA store by default — the platform bucket's ACME cert needs nothing more — honours a private CA from `backupStorage.endpointCASecretName` when set, and skips verification only when `backupStorage.insecureSkipTLSVerify: true` is set explicitly.

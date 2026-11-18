@@ -116,45 +116,149 @@ step_block() {
   done
 }
 
-@test "a failed org package listing cannot exit green above the guard" {
-  # The third listing feeds the nightly sweep, and its failure used to be
-  # indistinguishable from success: one `|| true` covered both the `gh api` and
-  # the `grep` that filters it, and grep legitimately exits 1 when no package
-  # matches. Both states arrived as an empty list, and the empty state exits 0 —
-  # below the nightly sweep, above the deferred guard. So a protection failure
-  # could end in a green run that swept nothing and never reached the guard,
-  # which bypasses the test above rather than varying it.
+@test "unresolved package names or unreadable versions cannot exit green" {
+  # The nightly sweep's package list used to come from an org listing whose
+  # failure arrived as an empty list, and the empty state exited 0 above the
+  # deferred guard, so a broken run could end green having swept nothing. The
+  # names now come from the published tree, and the same hazard has two shapes:
+  # an empty list that exits 0, and a versions read that `set -e` turns into an
+  # abort of the whole loop. Positions are read inside short windows so an
+  # exit or a flag belonging to another path cannot satisfy them.
   block="$(step_block 'Prune' "$RETENTION")"
   [ -n "$block" ]
+  code="$(printf '%s\n' "$block" | code_lines)"
 
-  listing="$(printf '%s\n' "$block" | code_lines \
-    | grep -nF 'packages?package_type=container' | awk -F: 'NR == 1 { print $1 }')"
-  [ -n "$listing" ]
-  window="$(printf '%s\n' "$block" | code_lines \
-    | awk -v start="$listing" 'NR >= start && NR <= start + 11')"
-  printf '%s\n' "$window" | grep -qF 'promotion_retention_blocked=1'
-  printf '%s\n' "$window" | grep -qF 'all_pkgs=""'
+  # An empty list flags the run instead of exiting: the promotion sweep below
+  # needs no name from that list, and its safety rests on the protected set
+  # alone, so a broken name source must not stop it.
+  resolve="$(printf '%s\n' "$code" | grep -nF 'retention-packages.sh' | awk -F: 'NR == 1 { print $1 }')"
+  [ -n "$resolve" ]
+  branch="$(printf '%s\n' "$code" | awk -v start="$resolve" 'NR >= start && NR <= start + 8')"
+  printf '%s\n' "$branch" | grep -qF 'pkgs=""'
+  printf '%s\n' "$branch" | grep -qF '[ -z "$pkgs" ]'
+  printf '%s\n' "$branch" | grep -qF 'sweep_failed=1'
+  if printf '%s\n' "$branch" | grep -qE '(^|[^_])exit '; then
+    echo "FAIL: an empty package list exits before the promotion sweep"
+    false
+  fi
 
-  # The filter has to be its own statement, after that handler, so its exit 1
-  # can never again stand in for a failed listing.
-  handler="$(printf '%s\n' "$block" | code_lines \
-    | grep -nF 'all_pkgs=""' | awk -F: 'NR == 1 { print $1 }')"
-  filter="$(printf '%s\n' "$block" | code_lines \
-    | grep -nF "grep '^cozystack/'" | awk -F: 'NR == 1 { print $1 }')"
-  [ -n "$handler" ] && [ -n "$filter" ]
-  [ "$handler" -lt "$filter" ]
+  read_at="$(printf '%s\n' "$code" | grep -nF '/versions" 2>' | awk -F: 'NR == 1 { print $1 }')"
+  [ -n "$read_at" ]
+  [ "$read_at" -gt "$resolve" ]
+  handler="$(printf '%s\n' "$code" | awk -v start="$read_at" 'NR >= start && NR <= start + 8')"
+  printf '%s\n' "$handler" | grep -qF 'sweep_failed=1'
+  printf '%s\n' "$handler" | grep -qF 'continue'
 
-  # And the empty-list early exit has to consult the flag before taking it: a
-  # blocked run leaves non-zero, an ordinarily empty org still exits 0 as it
-  # always did. Positions are read inside the branch's own window so an exit
-  # belonging to some other path cannot satisfy them.
-  branch="$(printf '%s\n' "$block" | code_lines \
-    | awk -v start="$filter" 'NR >= start && NR <= start + 12')"
-  check_at="$(printf '%s\n' "$branch" \
-    | grep -nF '"$promotion_retention_blocked" -eq 0' | awk -F: 'NR == 1 { print $1 }')"
-  fail_at="$(printf '%s\n' "$branch" | grep -nF 'exit 1' | awk -F: 'NR == 1 { print $1 }')"
-  green_at="$(printf '%s\n' "$branch" | grep -nF 'exit 0' | awk -F: 'NR == 1 { print $1 }')"
-  [ -n "$check_at" ] && [ -n "$fail_at" ] && [ -n "$green_at" ]
-  [ "$check_at" -lt "$fail_at" ]
-  [ "$fail_at" -lt "$green_at" ]
+  # The flag is honoured after the promotion sweep, the last work the run does.
+  promotion_at="$(printf '%s\n' "$code" | grep -nF 'promotion_ids=' | awk -F: 'NR == 1 { print $1 }')"
+  check_at="$(printf '%s\n' "$code" | grep -nF '"$sweep_failed" -eq 1' | awk -F: 'NR == 1 { print $1 }')"
+  [ -n "$promotion_at" ] && [ -n "$check_at" ]
+  [ "$promotion_at" -lt "$check_at" ]
+  # The exit sits inside the flagged branch and nothing follows "Done.": an
+  # exit that fires unconditionally would turn every run red.
+  verdict="$(printf '%s\n' "$code" | awk -v s="$check_at" 'NR > s && NR <= s + 4 { sub(/^[[:space:]]+/, ""); print }')"
+  [ "$(printf '%s\n' "$verdict" | sed -n 1p | grep -cF 'echo "::error::')" -eq 1 ]
+  [ "$(printf '%s\n' "$verdict" | sed -n 2p)" = 'exit 1' ]
+  [ "$(printf '%s\n' "$verdict" | sed -n 3p)" = 'fi' ]
+  [ "$(printf '%s\n' "$verdict" | sed -n 4p)" = 'echo "Done."' ]
+  [ -z "$(printf '%s\n' "$code" | awk -v s="$check_at" 'NR > s + 4' | grep -v '^[[:space:]]*$')" ]
+}
+
+@test "an unreadable candidate listing fails the run without deleting anything" {
+  # Unhandled, `set -e` aborted the step on a bare gh error. Handled, the read
+  # must also leave no ids behind, because a partial page set is a list the
+  # protection filter never saw in full.
+  block="$(step_block 'Prune' "$RETENTION")"
+  [ -n "$block" ]
+  code="$(printf '%s\n' "$block" | code_lines)"
+
+  read_at="$(printf '%s\n' "$code" | grep -nF 'promotion_ids="$(gh api' | awk -F: 'NR == 1 { print $1 }')"
+  [ -n "$read_at" ]
+  handler="$(printf '%s\n' "$code" | awk -v start="$read_at" 'NR >= start && NR <= start + 14')"
+  printf '%s\n' "$handler" | grep -qF '::error::'
+  printf '%s\n' "$handler" | grep -qF 'sweep_failed=1'
+  printf '%s\n' "$handler" | grep -qF "promotion_ids='[]'"
+}
+
+@test "a refused delete flags the run instead of aborting the sweep" {
+  # Unflagged, a failed xargs would abort the step under `set -e`: still red,
+  # but the remaining packages and the promotion sweep would never run.
+  block="$(step_block 'Prune' "$RETENTION")"
+  [ -n "$block" ]
+  calls="$(printf '%s\n' "$block" | code_lines | grep -F 'retention-delete.sh' || true)"
+  [ "$(printf '%s\n' "$calls" | grep -c .)" -ge 2 ]
+  if printf '%s\n' "$calls" | grep -vqE '\|\| sweep_failed=1$'; then
+    echo "FAIL: a delete call does not flag the run: $calls"
+    false
+  fi
+}
+
+@test "deletes use the workflow token and skip packages linked elsewhere" {
+  # The app token lists versions but cannot delete them; GITHUB_TOKEN deleted a
+  # version of a package linked to this repository. A package linked elsewhere
+  # is not attempted, so it cannot turn every apply run red: it is skipped with
+  # a warning before its versions are read, while a failed linkage read still
+  # fails the run.
+  block="$(step_block 'Prune' "$RETENTION")"
+  [ -n "$block" ]
+  code="$(printf '%s\n' "$block" | code_lines)"
+
+  printf '%s\n' "$block" | grep -qF 'DELETE_TOKEN: ${{ secrets.GITHUB_TOKEN }}'
+
+  link_at="$(printf '%s\n' "$code" | grep -nF '/packages/container/${enc}" --jq' | awk -F: 'NR == 1 { print $1 }')"
+  read_at="$(printf '%s\n' "$code" | grep -nF '/versions" 2>' | awk -F: 'NR == 1 { print $1 }')"
+  [ -n "$link_at" ] && [ -n "$read_at" ]
+  [ "$link_at" -lt "$read_at" ]
+  window="$(printf '%s\n' "$code" | awk -v s="$link_at" -v e="$read_at" 'NR >= s && NR < e')"
+  printf '%s\n' "$window" | grep -qF '.repository.full_name'
+  printf '%s\n' "$window" | grep -qF 'sweep_failed=1'
+  printf '%s\n' "$window" | grep -qF '!= "$GITHUB_REPOSITORY"'
+  printf '%s\n' "$window" | grep -qF 'unlinked='
+  [ "$(printf '%s\n' "$window" | grep -cF 'continue')" -ge 2 ]
+  if printf '%s\n' "$window" | grep -qF 'retention-delete.sh'; then
+    echo "FAIL: a delete is reachable before the linkage check"
+    false
+  fi
+
+  warn_at="$(printf '%s\n' "$code" | grep -nF 'not linked to' | awk -F: 'NR == 1 { print $1 }')"
+  promotion_at="$(printf '%s\n' "$code" | grep -nF 'promotion_ids=' | awk -F: 'NR == 1 { print $1 }')"
+  [ -n "$warn_at" ] && [ "$warn_at" -lt "$promotion_at" ]
+  printf '%s\n' "$code" | sed -n "${warn_at}p" | grep -qF '::warning::'
+}
+
+@test "a sweep that finds no linked package cannot exit green" {
+  # Skipping one unlinked package is deliberate, but if every resolved package
+  # were skipped the nightly sweep would prune nothing and still end green,
+  # unlike an empty name list. Flagged rather than exited, so the promotion
+  # sweep still runs.
+  block="$(step_block 'Prune' "$RETENTION")"
+  [ -n "$block" ]
+  code="$(printf '%s\n' "$block" | code_lines)"
+
+  link_at="$(printf '%s\n' "$code" | grep -nF '!= "$GITHUB_REPOSITORY"' | awk -F: 'NR == 1 { print $1 }')"
+  read_at="$(printf '%s\n' "$code" | grep -nF '/versions" 2>' | awk -F: 'NR == 1 { print $1 }')"
+  [ -n "$link_at" ] && [ -n "$read_at" ]
+  # Counted from zero, set once ahead of the loop.
+  [ "$(printf '%s\n' "$code" | grep -cE '^[[:space:]]*linked_count=0$')" -eq 1 ]
+  [ "$(printf '%s\n' "$code" | grep -nE '^[[:space:]]*linked_count=0$' | cut -d: -f1)" -lt \
+    "$(printf '%s\n' "$code" | grep -nF 'while IFS= read -r pkg' | awk -F: 'NR == 1 { print $1 }')" ]
+  # The only increment, and only past the linkage check.
+  [ "$(printf '%s\n' "$code" | grep -cF 'linked_count=$((')" -eq 1 ]
+  printf '%s\n' "$code" | awk -v s="$link_at" -v e="$read_at" 'NR > s && NR < e' \
+    | grep -qF 'linked_count=$((linked_count + 1))'
+
+  loop_end="$(printf '%s\n' "$code" | grep -nF 'done <<< "$pkgs"' | awk -F: 'NR == 1 { print $1 }')"
+  check_at="$(printf '%s\n' "$code" | grep -nF '"$linked_count" -eq 0' | awk -F: 'NR == 1 { print $1 }')"
+  promotion_at="$(printf '%s\n' "$code" | grep -nF 'promotion_ids=' | awk -F: 'NR == 1 { print $1 }')"
+  [ -n "$loop_end" ] && [ -n "$check_at" ] && [ -n "$promotion_at" ]
+  [ "$loop_end" -lt "$check_at" ]
+  [ "$check_at" -lt "$promotion_at" ]
+  printf '%s\n' "$code" | sed -n "${check_at}p" | grep -qF '[ -n "$pkgs" ]'
+  branch="$(printf '%s\n' "$code" | awk -v s="$check_at" 'NR >= s && NR <= s + 4')"
+  printf '%s\n' "$branch" | grep -qF '::error::'
+  printf '%s\n' "$branch" | grep -qF 'sweep_failed=1'
+  if printf '%s\n' "$branch" | grep -qE '(^|[^_])exit '; then
+    echo "FAIL: an all-unlinked sweep exits before the promotion sweep"
+    false
+  fi
 }

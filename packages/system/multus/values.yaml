@@ -6,3 +6,22 @@
 ## render rather than resolving to off.
 ##
 stageCniPlugins: false
+
+## @param resources resources of the kube-multus container
+## Set this through the platform, not here: networking.multus.resources on the cozystack-platform
+## Package. See packages/core/platform/values.yaml.
+##
+## Every pod sandbox on the node waits on this container, which is why there is no CPU limit:
+## after a CNI outage left ~600 dead sandboxes for 220 pods on one node, multus at 100m answered
+## slower than kubelet's two-minute CRI deadline, every call was retried and the queue only grew.
+## With the CPU limit lifted it OOM-looped at 1Gi and cleared the backlog in minutes at 4Gi.
+##
+## The render fails without limits.memory or requests.memory: the comment above `resources` in
+## templates/multus-daemonset-thick.yml explains why a memory limit is kept at any size.
+##
+resources:
+  requests:
+    cpu: 100m
+    memory: 100Mi
+  limits:
+    memory: 4Gi

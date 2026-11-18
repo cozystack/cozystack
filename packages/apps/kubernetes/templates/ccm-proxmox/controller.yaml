@@ -56,7 +56,7 @@ spec:
       initContainers:
       {{- include "kubernetes.waitForAdminKubeconfig" $ | nindent 6 }}
       - name: build-cloud-config
-        image: "{{ default (.Files.Get "images/busybox.tag" | trim) .Values.images.waitForKubeconfig }}"
+        image: {{ include "cozy-lib.image" (list (.Files.Get "images/busybox.tag" | trim) $) | quote }}
         command:
         - sh
         - -c
@@ -101,7 +101,7 @@ spec:
           readOnlyRootFilesystem: true
       containers:
         - name: cloud-controller-manager
-          image: ghcr.io/sergelogvinov/proxmox-cloud-controller-manager:v0.15.0
+          image: "{{ $.Files.Get "images/proxmox-cloud-controller-manager.tag" | trim }}"
           args:
             - --v=4
             - --cloud-provider=proxmox

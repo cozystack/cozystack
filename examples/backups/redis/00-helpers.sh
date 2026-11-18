@@ -17,6 +17,16 @@ export BOLD='\033[1m'
 # reaches lives in tenant-root, and the default e2e tenant-test is egress-
 # isolated from it).
 export NAMESPACE="${NAMESPACE:-tenant-root}"
+# APP_KIND=Valkey runs the same round-trip against a Valkey app: it runs on the
+# same RedisFailover operator, and its chart names every resource valkey-<app>
+# where the redis chart uses redis-<app>.
+export APP_KIND="${APP_KIND:-Redis}"
+case "$APP_KIND" in
+    Redis)  APP_PREFIX=redis-;  APP_RESOURCE=redis ;;
+    Valkey) APP_PREFIX=valkey-; APP_RESOURCE=valkeys.apps.cozystack.io ;;
+    *) echo "APP_KIND must be Redis or Valkey, got '$APP_KIND'" >&2; exit 1 ;;
+esac
+export APP_PREFIX APP_RESOURCE
 export REDIS_NAME="${REDIS_NAME:-redis-test}"
 export REDIS_RESTORE_NAME="${REDIS_RESTORE_NAME:-redis-restore}"
 export BACKUPJOB_NAME="${BACKUPJOB_NAME:-redis-backup-job}"
@@ -70,22 +80,23 @@ print_header() {
 source "$(dirname "${BASH_SOURCE[0]}")/../_lib/wait-helpers.sh"
 
 # The cozystack redis chart names its RedisFailover (hence the operator's rfr-/
-# rfs- Services and the -auth Secret) redis-<app>, mirroring the strategy driver
-# that derives the same base from .Release.Name. So app X's password lives in
-# redis-X-auth. The chart renders that Secret only with authEnabled, so its
-# absence reads as no password; any other error still fails the read.
+# rfs- Services and the -auth Secret) redis-<app>, the valkey chart valkey-<app>,
+# mirroring the strategy driver that derives the same base from .Release.Prefix
+# and .Release.Name. So app X's password lives in <prefix>X-auth. The chart
+# renders that Secret only with authEnabled, so its absence reads as no
+# password; any other error still fails the read.
 redis_pw() {
-    kubectl -n "$NAMESPACE" get secret "redis-$1-auth" --ignore-not-found -o jsonpath='{.data.password}' | base64 -d
+    kubectl -n "$NAMESPACE" get secret "${APP_PREFIX}$1-auth" --ignore-not-found -o jsonpath='{.data.password}' | base64 -d
 }
 
 # Run a redis-cli command against an application's CURRENT master. Master
-# discovery asks a sentinel of the operator's rfs-redis-<app> Deployment
+# discovery asks a sentinel of the operator's rfs-<prefix><app> Deployment
 # (master name "mymaster"), so a write always lands on the writable node even
 # after a failover. Args after the app name are passed verbatim to redis-cli.
 #   redis_cmd redis-test SET sentinel:marker hello
 #
 # The command runs by `kubectl exec` in a sentinel Pod, whose image carries
-# redis-cli. A throwaway `kubectl run -i` Pod is not usable here: its stdout
+# redis-cli (the valkey image ships it as a link to valkey-cli). A throwaway `kubectl run -i` Pod is not usable here: its stdout
 # comes back over an attach, which only carries what the container writes after
 # the attach is established, and kubectl falls back to the Pod log only when
 # the attach fails. A redis-cli that finishes in between comes back as an
@@ -98,7 +109,7 @@ redis_pw() {
 redis_cmd() {
     local app="$1" pw; shift
     pw=$(redis_pw "$app")
-    printf '%s\n' "$pw" | kubectl -n "$NAMESPACE" exec -i "deploy/rfs-redis-$app" -c sentinel -- sh -c '
+    printf '%s\n' "$pw" | kubectl -n "$NAMESPACE" exec -i "deploy/rfs-${APP_PREFIX}$app" -c sentinel -- sh -c '
             IFS= read -r pw || true
             addr=$(redis-cli -p 26379 sentinel get-master-addr-by-name mymaster) || exit 1
             h=$(echo "$addr" | sed -n 1p); p=$(echo "$addr" | sed -n 2p)

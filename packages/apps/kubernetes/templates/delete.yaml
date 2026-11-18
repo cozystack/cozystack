@@ -90,7 +90,7 @@ spec:
               # final message as their only report. Record what those steps
               # leave behind so that message can name it instead of claiming
               # success in exactly the case the warnings were written for. The
-              # steps that are NOT backstopped — Steps 3, 5 and 6, and the patch
+              # steps that are NOT backstopped — Steps 3, 5, 6 and 7, and the patch
               # inside Step 1 — end the run under set -e and never reach that
               # message at all.
               #
@@ -404,6 +404,35 @@ spec:
                 --field-selector spec.type=LoadBalancer \
                 --ignore-not-found=true --wait=false
 
+              echo "Step 7: Deleting the Talos PKI and the OIDC bootstrap Job, which outlive the release"
+              # cert-manager runs with enableCertificateOwnerRef: false, so the
+              # two Talos Secrets carry no ownerReference to their Certificates
+              # and survive the uninstall, holding the CA private key of a
+              # cluster that no longer exists. A new cluster of the same name
+              # would then adopt that stale CA instead of issuing its own.
+              #
+              # The Certificates go first: deleting a Secret whose Certificate
+              # still exists is how cert-manager is told to re-issue it, so the
+              # other order brings the Secret back with a fresh key, orphaned
+              # all the same. Neither carries a finalizer, so --wait=false
+              # still leaves each one gone before the next call.
+              #
+              # After Step 4, because the control plane's CSR signer mounts the
+              # CA and the TenantControlPlane is what runs it.
+              #
+              # The OIDC bootstrap Job is a hook with before-hook-creation
+              # only, and hooks are not in the release manifest, so nothing
+              # else ever removes it.
+              kubectl -n {{ .Release.Namespace }} delete certificates.cert-manager.io \
+                {{ .Release.Name }}-talos-ca {{ .Release.Name }}-talos-tls-cert \
+                --ignore-not-found=true --wait=false
+              kubectl -n {{ .Release.Namespace }} delete secrets \
+                {{ .Release.Name }}-talos-ca {{ .Release.Name }}-talos-tls-cert \
+                --ignore-not-found=true --wait=false
+              kubectl -n {{ .Release.Namespace }} delete jobs.batch \
+                {{ .Release.Name }}-oidc-bootstrap \
+                --ignore-not-found=true --wait=false
+
               if [ -n "$residue_from" ]; then
                 echo "Cleanup incomplete; residue left by: $residue_from" >&2
                 echo "Objects named in the warnings above may need removing by hand; exiting 0 so the release can still be uninstalled" >&2
@@ -446,7 +475,7 @@ rules:
       - patch
       - delete
   # watch is granted only where a delete still waits: Step 2 on helmreleases and
-  # Step 4 on tenantcontrolplanes. The other three deletes pass --wait=false, so
+  # Step 4 on tenantcontrolplanes. The other deletes pass --wait=false, so
   # kubectl never opens a watch for them and the verb would be unexercised.
   - apiGroups:
       - "controlplane.cluster.x-k8s.io"
@@ -499,6 +528,37 @@ rules:
     verbs:
       - get
       - patch
+  # Step 7. Named rather than granted on the kind: the tenant namespace holds
+  # other Certificates, Secrets and Jobs that this hook must not reach.
+  - apiGroups:
+      - "cert-manager.io"
+    resources:
+      - certificates
+    resourceNames:
+      - {{ .Release.Name }}-talos-ca
+      - {{ .Release.Name }}-talos-tls-cert
+    verbs:
+      - get
+      - delete
+  - apiGroups:
+      - ""
+    resources:
+      - secrets
+    resourceNames:
+      - {{ .Release.Name }}-talos-ca
+      - {{ .Release.Name }}-talos-tls-cert
+    verbs:
+      - get
+      - delete
+  - apiGroups:
+      - "batch"
+    resources:
+      - jobs
+    resourceNames:
+      - {{ .Release.Name }}-oidc-bootstrap
+    verbs:
+      - get
+      - delete
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding

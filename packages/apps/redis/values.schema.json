@@ -3,7 +3,7 @@
   "type": "object",
   "properties": {
     "replicas": {
-      "description": "Number of Redis replicas.",
+      "description": "Number of Redis replicas. Three Sentinels watch them, or a single one when `replicas` is 1, since a lone pod has no replica to fail over to.",
       "type": "integer",
       "default": 2
     },
@@ -94,6 +94,25 @@
         "2xlarge"
       ]
     },
+    "affinity": {
+      "description": "Kubernetes affinity configuration for Redis and Sentinel pods.",
+      "type": "object",
+      "default": {},
+      "properties": {
+        "redis": {
+          "description": "Kubernetes Affinity for Redis pods. When set, redis-operator uses it verbatim and does not add its default soft podAntiAffinity; include podAntiAffinity unless replica co-location is intended.",
+          "type": "object",
+          "default": {},
+          "x-kubernetes-preserve-unknown-fields": true
+        },
+        "sentinel": {
+          "description": "Kubernetes Affinity for Sentinel pods. When set, redis-operator uses it verbatim and does not add its default soft podAntiAffinity; include podAntiAffinity unless replica co-location is intended.",
+          "type": "object",
+          "default": {},
+          "x-kubernetes-preserve-unknown-fields": true
+        }
+      }
+    },
     "size": {
       "description": "Persistent Volume Claim size available for application data.",
       "default": "1Gi",
@@ -128,7 +147,7 @@
       "default": false
     },
     "version": {
-      "description": "Redis major version to deploy",
+      "description": "Redis major version to deploy. The Redis and Sentinel pods run the same image.",
       "type": "string",
       "default": "v8",
       "enum": [
@@ -161,8 +180,51 @@
       "type": "boolean",
       "default": true
     },
+    "minReplicasToWrite": {
+      "description": "Redis `min-replicas-to-write`: the master refuses writes unless at least this many replicas are connected and within `minReplicasMaxLag`. Unset by default, which leaves the Redis default (disabled). With `replicas: 2` and a value of 1 the master rejects writes while its only replica is down, trading availability for a bound on the writes lost if an isolated master is failed over. Replication stays asynchronous, so this bounds the loss, it does not remove it. Must be 0 or more and below `replicas` (a master with `replicas` pods has `replicas - 1` replicas), otherwise every write is refused; the chart refuses such a value.",
+      "type": "integer",
+      "minimum": 0
+    },
+    "minReplicasMaxLag": {
+      "description": "Redis `min-replicas-max-lag`, in seconds: a replica whose last acknowledgement is older than this does not count towards `minReplicasToWrite`. Unset by default, which leaves the Redis default (10). Has no effect unless `minReplicasToWrite` is set. Must be at least 1 when `minReplicasToWrite` is set: Redis treats 0 as disabling the check, so the chart refuses it.",
+      "type": "integer",
+      "minimum": 0
+    },
+    "maxmemory": {
+      "description": "Redis `maxmemory`: the dataset size at which Redis applies `maxmemoryPolicy`. Unset by default, which renders `maxmemory 0` (no limit, the Redis default), so a value set by hand with `CONFIG SET` is reset on the next reconcile. Must be at most 90% of the memory request of each Redis pod (from `resources` or `resourcesPreset`): the operator silently drops a larger value, so the chart refuses it. Leave headroom below that for replication and snapshot buffers.",
+      "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "string"
+        }
+      ],
+      "x-kubernetes-int-or-string": true
+    },
+    "maxmemoryPolicy": {
+      "description": "Redis `maxmemory-policy`: what Redis does once `maxmemory` is reached. `noeviction` refuses writes; `allkeys-lru` evicts the least recently used keys, which suits an instance used purely as a cache. Has no effect while `maxmemory` is unset.",
+      "type": "string",
+      "default": "noeviction",
+      "enum": [
+        "noeviction",
+        "allkeys-lru",
+        "allkeys-lfu",
+        "allkeys-random",
+        "volatile-lru",
+        "volatile-lfu",
+        "volatile-random",
+        "volatile-ttl"
+      ]
+    },
+    "snapshots": {
+      "description": "Write RDB snapshots to the persistent volume (the Redis `save` directive, with the Redis default schedule). Set to `false` for an instance used purely as a cache: `save \"\"` is rendered and the volume is kept, so no further scheduled snapshot is written while replicas still have room for the full-sync RDB they write to disk. An RDB file already on the volume is not removed, and Redis loads it on restart, so turning snapshots off does not by itself empty the dataset. Always off when `size` is empty.",
+      "type": "boolean",
+      "default": true
+    },
     "sentinel": {
-      "description": "Sentinel configuration. When `sentinel.resources` is empty and `sentinel.resourcesPreset` is unset, the three Sentinel pods are sized like the Redis pods (`resources` and `resourcesPreset`). An empty `sentinel.resources` map counts as unset, as an empty top-level `resources` does.",
+      "description": "Sentinel configuration. When `sentinel.resources` is empty and `sentinel.resourcesPreset` is unset, the Sentinel pods are sized like the Redis pods (`resources` and `resourcesPreset`). An empty `sentinel.resources` map counts as unset, as an empty top-level `resources` does.",
       "type": "object",
       "default": {},
       "properties": {

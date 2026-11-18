@@ -16,8 +16,8 @@ kubectl -n "$NAMESPACE" delete restorejob "$RESTOREJOB_TOCOPY_NAME" --ignore-not
 kubectl -n "$NAMESPACE" delete restorejob "$RESTOREJOB_INPLACE_NAME" --ignore-not-found
 kubectl -n "$NAMESPACE" delete backupjob "$BACKUPJOB_NAME" --ignore-not-found
 kubectl -n "$NAMESPACE" delete backup "$BACKUPJOB_NAME" --ignore-not-found
-kubectl -n "$NAMESPACE" delete redis "$REDIS_RESTORE_NAME" --ignore-not-found
-kubectl -n "$NAMESPACE" delete redis "$REDIS_NAME" --ignore-not-found
+kubectl -n "$NAMESPACE" delete "$APP_RESOURCE" "$REDIS_RESTORE_NAME" --ignore-not-found
+kubectl -n "$NAMESPACE" delete "$APP_RESOURCE" "$REDIS_NAME" --ignore-not-found
 
 # Demo-owned backups plumbing: the BackupClass and strategy CR are cluster-scoped
 # (no -n). Deleting the Bucket releases its S3 objects and the projected keys.

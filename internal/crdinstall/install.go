@@ -40,7 +40,7 @@ func Install(ctx context.Context, k8sClient client.Client, writeEmbeddedManifest
 	if err != nil {
 		return fmt.Errorf("failed to create temp directory: %w", err)
 	}
-	defer os.RemoveAll(tmpDir)
+	defer func() { _ = os.RemoveAll(tmpDir) }()
 
 	manifestsDir := filepath.Join(tmpDir, "manifests")
 	if err := os.MkdirAll(manifestsDir, 0755); err != nil {

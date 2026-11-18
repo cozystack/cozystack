@@ -382,7 +382,7 @@ run_hook() {
   # still end the run under `set -e`. Nothing but `set -e` enforces that, so a
   # `|| true` appended to one of them later would reinstate the exact defect
   # this file pins: a cleanup that did not happen, reported as success. Step 3
-  # stands in for Steps 3, 5, 6 and the patch inside Step 1. Step 1's
+  # stands in for Steps 3, 5, 6, 7 and the patch inside Step 1. Step 1's
   # enumeration is NOT among them: it carries `|| true` on purpose, because
   # Step 2 deletes by label rather than from that list, so a failure there
   # leaves nothing behind to report.

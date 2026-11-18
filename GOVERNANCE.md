@@ -84,10 +84,21 @@ Cozystack maintainers are expected to:
   and CNCF Slack workspaces, Telegram groups, and help out when possible.
 * Rapidly respond to any time-sensitive security release processes.
 * Attend Cozystack community meetings.
+* Be familiar with the Linux Foundation guidance on [OFAC sanctions and open source](https://bestpractices.linuxfoundation.org/regulatory/ofac/) and raise any related questions privately with the other maintainers.
 
 If a maintainer is no longer interested in or cannot perform the duties
 listed above, they should move themselves to emeritus status.
 If necessary, this can also occur through the decision-making process outlined below.
+
+### Welcoming new contributors
+
+A first contribution is often the moment someone decides whether to stay. When a new contributor opens an issue or a pull request:
+
+* Aim to respond within two working days, even if only to say who will review it and when.
+* Point to the contributing guide and help with the mechanics. If the DCO check fails, explain how to fix it: `git commit --amend --signoff` for the last commit, or `git rebase --signoff main` for several.
+* Before approving a CI run for an external contributor, read the diff and make sure it does not touch workflows, secrets or release tooling in a way that could run untrusted code with project credentials. This applies to every approval, not only the first one.
+* Review against the same standards as any other change, and explain the reason behind each requested change. If the change is not going to be accepted, say so early and say why, rather than leaving it open.
+* Suggest a good next step: a `good first issue`, a related bug, or a documentation gap.
 
 ### Becoming a Maintainer
 

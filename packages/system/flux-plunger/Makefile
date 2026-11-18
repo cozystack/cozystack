@@ -4,6 +4,10 @@ export NAMESPACE=cozy-fluxcd
 include ../../../hack/common-envs.mk
 include ../../../hack/package.mk
 
+.PHONY: test
+test:
+	helm unittest .
+
 image:
 	docker buildx build -f images/flux-plunger/Dockerfile ../../../ \
 		$(call image-tags,flux-plunger,v$(COZYSTACK_VERSION)) \

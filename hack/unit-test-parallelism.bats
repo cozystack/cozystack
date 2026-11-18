@@ -25,7 +25,7 @@ load test_helper
 @test "PR workflow schedules unit and controller targets with four Make jobs and -k" {
     # -k is what lets test-controllers start when a unit-tests prerequisite
     # fails first; without it a red Bats file hides the Go controller suite.
-    grep -qF 'run: make unit-tests test-controllers -j4 -k --output-sync=target' \
+    grep -qF 'run: make unit-tests test-controllers test-controllers-envtest -j4 -k --output-sync=target' \
         .github/workflows/pull-requests.yaml || {
         echo "PR checks do not use the bounded four-slot make invocation" >&2
         exit 1

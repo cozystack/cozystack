@@ -243,6 +243,7 @@ func main() {
 				Namespace: os.Getenv("BACKUP_CREDENTIALS_HELMRELEASE_NAMESPACE"),
 				Name:      os.Getenv("BACKUP_CREDENTIALS_HELMRELEASE_NAME"),
 			},
+			CredentialsCOSISecretName: os.Getenv("BACKUP_CREDENTIALS_COSI_SECRET_NAME"),
 		}
 		if err := gate.SetupWithManager(mgr); err != nil {
 			setupLog.Error(err, "unable to add DefaultObjectsGate runnable")

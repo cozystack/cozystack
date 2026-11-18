@@ -1,3 +1,4 @@
+{{- if .Values.ui }}
 {{- $host := include "cozy-lib.ns-host-required" . }}
 {{- $ingress := .Values._namespace.ingress }}
 {{- $gateway := .Values._namespace.gateway | default "" }}
@@ -43,4 +44,5 @@ spec:
             name: {{ .Values.bucketName }}-ui
             port:
               number: 8080
+{{- end }}
 {{- end }}

@@ -176,11 +176,8 @@ func TestBackupCleanup_Altinity_DoesNotFallThroughToVelero(t *testing.T) {
 
 // TestBackupCleanup_MariaDB_DoesNotFallThroughToVelero locks in the same
 // invariant as the Altinity test above for the MariaDB strategy. The
-// dispatcher must explicitly route MariaDB-strategy Backups to a no-op
-// cleanup rather than fall through to the Velero default - the MariaDB
-// driver does not own the operator-side k8s.mariadb.com/Backup CR or the
-// S3/PVC archive behind it (rbac.yaml grants no delete verb on
-// k8s.mariadb.com/backups for that reason). The test seeds the Velero
+// dispatcher must route MariaDB-strategy Backups to their own cleanup
+// rather than fall through to the Velero default. The test seeds the Velero
 // metadata keys plus a matching velero.io/Backup; with the explicit branch
 // no DeleteBackupRequest is synthesised, and the Velero Backup survives.
 // Without the branch the default falls through to cleanupVeleroBackup,
@@ -600,5 +597,31 @@ func TestBackupCleanup_Redis_NoObjectKeyIsNoOp(t *testing.T) {
 	}
 	if len(jobs.Items) != 0 {
 		t.Errorf("expected no cleanup Job for a keyless Backup, got %d", len(jobs.Items))
+	}
+}
+
+// TestBackupCleanup_Redis_UnknownKindRendersNothing pins that a Backup routed
+// to the Redis strategy for a kind with no chart prefix is released without a
+// Job, rather than rendered with an empty prefix.
+func TestBackupCleanup_Redis_UnknownKindRendersNothing(t *testing.T) {
+	ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "tenant-test"}}
+	backup := redisCleanupBackup("redis-odd", "tenant-test/cache/redis-odd.rdb")
+	backup.Spec.ApplicationRef.Kind = "Postgres"
+	strategy := newRedisCleanupStrategy("cozy-default-redis")
+	c, s := newRabbitmqBackupReconcilerClient(ns, backup, strategy)
+	r := &BackupReconciler{Client: c, Scheme: s, Recorder: record.NewFakeRecorder(10)}
+	res, err := r.cleanupOnDelete(context.Background(), backup)
+	if err != nil {
+		t.Fatalf("cleanupOnDelete returned %v", err)
+	}
+	if res.RequeueAfter != 0 {
+		t.Error("expected the Backup released, not requeued")
+	}
+	jobs := &batchv1.JobList{}
+	if err := c.List(context.Background(), jobs, client.InNamespace("tenant-test")); err != nil {
+		t.Fatalf("list jobs: %v", err)
+	}
+	if len(jobs.Items) != 0 {
+		t.Errorf("expected no cleanup Job for a kind with no prefix, got %d", len(jobs.Items))
 	}
 }

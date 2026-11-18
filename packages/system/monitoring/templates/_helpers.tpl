@@ -4,8 +4,8 @@
   Naming — the identity unit is the Monitoring release, so the clientId
   and the audience scope are `<namespace>-<release>` prefixed. That
   gives:
-    tenant-foo/monitoring        (per-tenant Grafana in tenant-foo ns)
-    cozy-monitoring/monitoring-system  (platform Grafana in cozy-monitoring ns)
+    tenant-foo/monitoring-system   (per-tenant Grafana in tenant-foo ns)
+    tenant-root/monitoring-system  (platform Grafana in the tenant-root ns)
   A token minted for one instance is rejected by the other's Grafana
   because the per-cluster audience scope binds `id_token.aud` to the
   clientId — same isolation primitive as the tenant kube-apiserver PR
@@ -326,4 +326,13 @@
 */ -}}
 {{- define "monitoring.tracingCentral" -}}
 {{- if and (ne .Release.Namespace "tenant-root") (eq (toString (dig "tracingCentral" false (.Values._namespace | default dict))) "true") -}}true{{- end -}}
+{{- end -}}
+
+{{- /*
+  Alertmanager replica count. vmalert lists each replica as its own
+  notifier from the same number, because the Alertmanager cluster only
+  deduplicates notifications when every replica receives every alert.
+*/}}
+{{- define "monitoring.alertmanager.replicas" -}}
+3
 {{- end -}}

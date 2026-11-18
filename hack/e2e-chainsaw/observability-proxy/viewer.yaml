@@ -1,0 +1,22 @@
+# The view level of tenant A and nothing else: a ServiceAccount of tenant A
+# bound to cozy:tenant:view in A's namespace only. Its token is a real bearer
+# token, so the proxy's TokenReview and SubjectAccessReview run unmocked.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: logs-viewer
+  namespace: tenant-test-logsa
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: logs-viewer
+  namespace: tenant-test-logsa
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: cozy:tenant:view
+subjects:
+- kind: ServiceAccount
+  name: logs-viewer
+  namespace: tenant-test-logsa

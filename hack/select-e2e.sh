@@ -8,8 +8,9 @@
 # Output:
 #   - empty         no E2E impact, decided by one of the rules that select
 #                   nothing: step 1 for docs/, dashboards/ and *.md, step 2 for
-#                   a *.disabled Chainsaw suite and for an
-#                   examples/backups/<app>/ with no suite, and
+#                   a *.disabled Chainsaw suite, for an
+#                   examples/backups/<app>/ with no suite and for the CI-only
+#                   tools cmd/backport-batch/ and cmd/api-gate/, and
 #                   inert_config_pattern for repo meta and agent config
 #   - <suite names> selected per the PackageSource dependency graph
 #   - full list     any path that affects all tests, OR an unrecognised
@@ -178,6 +179,8 @@ inert_config_pattern='^(examples/|\.github/|\.claude/|\.gemini/|img/|hack/testda
 # and `-type f` would be too narrow. A chainsaw-test.y*ml counts whatever its
 # type: Chainsaw stats it and fails loudly on a directory, and leaving that
 # suite out would hide the failure instead.
+# The leak guard's allowlist accepts a suite by the same rule, in
+# lg_suite_has_test (hack/e2e-chainsaw/_lib/leak-guard.sh). Change both together.
 #
 # Captured before the sed/sort rather than piped straight into them: a pipeline
 # carries its LAST command's status, so `$(find ... | sed | sort)` would report
@@ -251,6 +254,10 @@ src_to_suites() {
     # not exist, is dropped by intersect_suites(), and a CDI change reaches
     # nothing runnable through it.
     vm-disk-application) echo vminstance ;;
+    # The VMInstance and VMDisk backup round-trips are the only Tests that run a
+    # Velero backup and restore; without this the source maps to a `velero`
+    # suite that does not exist and a Velero change runs neither.
+    velero) echo vminstance ;;
     # Both sources own system/ingress-nginx, and the gateway suite carries the
     # legacy Ingress admission regression coverage. Without these explicit
     # mappings their derived names point at suites that do not exist, so an
@@ -274,7 +281,7 @@ src_to_suites() {
     # harbor stores its registry in a BucketClaim the seaweedfs COSI driver
     # serves. etcd's round-trip is left out because CI gates it off. A test
     # derives this set from the suites.
-    seaweedfs-application) echo "bucket clickhouse harbor kafka kafka-metadata mariadb mongodb postgres rabbitmq redis seaweedfs" ;;
+    seaweedfs-application) echo "bucket clickhouse harbor kafka kafka-metadata mariadb mongodb postgres rabbitmq redis seaweedfs valkey vminstance" ;;
     # Both suites create a KeycloakClient and wait for the operator's finalizer
     # to remove it. kubernetes-application has no dependsOn on keycloak-operator
     # (#4680), so the graph reaches only monitoring and would drop the tenant
@@ -458,12 +465,29 @@ while IFS= read -r file || [ -n "$file" ]; do
       # to the harness selects a suite that cannot exercise it. A dir with no
       # matching suite is a docs-only demo and stays ignored (adding it to
       # selected_apps would empty the final intersection and trip the
-      # full-suite safety net).
+      # full-suite safety net). The redis walkthrough is the one harness shared
+      # across suites: the valkey round-trip runs it with APP_KIND=Valkey, so an
+      # edit there selects both.
       app=$(echo "$file" | sed -nE 's,^examples/backups/([^/]+)/.*,\1,p')
-      if echo "$all_apps" | grep -Fxq "$app"; then
-        selected_apps="$selected_apps $app"
-        trigger_any=1
-      fi
+      # The vmi and vmdisk backup demos are both harnessed by the vminstance
+      # suite, which owns VMDisk coverage too (see vm-disk-application in
+      # src_to_suites), so their dirs need the same source-style translation.
+      # The suite runs the vmi demo with SKIP_RESTORE_TO_COPY=1, so the to-copy
+      # step is docs-only: selecting the suite would pass without executing it.
+      case "$file" in
+        examples/backups/vmi/07-restore-to-copy.sh) continue ;;
+      esac
+      case "$app" in
+        redis) users="redis valkey" ;;
+        vmi|vmdisk) users=vminstance ;;
+        *) users=$app ;;
+      esac
+      for user in $users; do
+        if echo "$all_apps" | grep -Fxq "$user"; then
+          selected_apps="$selected_apps $user"
+          trigger_any=1
+        fi
+      done
       continue ;;
     examples/backups/*)
       # A file beside the per-app dirs rather than in one (POSIX case lets `*`
@@ -473,6 +497,14 @@ while IFS= read -r file || [ -n "$file" ]; do
       # select nothing.
       echo "select-e2e: '$file' belongs to no single backup walkthrough — escalating to the full suite" >&2
       trigger_full=1
+      continue ;;
+    cmd/backport-batch/*|cmd/api-gate/*)
+      # CI-only Go tools. No image builds them and nothing in the e2e sandbox
+      # runs them, so an edit cannot regress a suite. Matched here because
+      # full_suite_pattern takes all of cmd/ and is checked before the inert
+      # list. The plan job's `code` output and e2e-fork.yaml skip e2e for a
+      # diff made only of these and docs/; this arm keeps them from escalating
+      # a diff that also touches something else.
       continue ;;
   esac
 

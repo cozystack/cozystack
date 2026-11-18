@@ -6,6 +6,11 @@
   Initial sets requests at creation without evicting, removing the trigger.
   Do not switch back to Auto without fixing the underlying Cilium IP-reuse race.
 */ -}}
+{{- /*
+  Rendered only when the CRD is served: a release manifest that records a VPA
+  the cluster cannot map is one Helm can no longer uninstall.
+*/ -}}
+{{- if .Capabilities.APIVersions.Has "autoscaling.k8s.io/v1/VerticalPodAutoscaler" }}
 apiVersion: autoscaling.k8s.io/v1
 kind: VerticalPodAutoscaler
 metadata:
@@ -34,3 +39,4 @@ spec:
         maxAllowed:
           cpu: 4000m
           memory: 6G
+{{- end }}

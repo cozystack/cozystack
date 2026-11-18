@@ -4,10 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	csi "github.com/container-storage-interface/spec/lib/go/csi"
@@ -25,6 +27,16 @@ var _ csi.NodeServer = &WrappedNodeService{}
 type WrappedNodeService struct {
 	*service.NodeService
 	mounter mount.Interface
+	// Target paths with an NFS publish running. kubelet retries a publish
+	// that outlives its 2m deadline while the first call still runs, and on
+	// a dead server every retry would block the same way: the soft temp mount
+	// gives up only after minutes, and the stat of a target that is already
+	// hard-mounted does not give up at all.
+	publishing sync.Map
+	// Replaced in tests, which cannot get the soft temp mount's EIO locally;
+	// nil means the os function.
+	lstat func(string) (os.FileInfo, error)
+	mkdir func(string, os.FileMode) error
 }
 
 // NodeStageVolume for NFS volumes is a no-op (NFS doesn't need staging).
@@ -53,7 +65,19 @@ func (w *WrappedNodeService) NodePublishVolume(ctx context.Context, req *csi.Nod
 		return nil, status.Errorf(codes.Internal, "failed to parse NFS export: %v", err)
 	}
 
+	lstat, mkdir := w.lstat, w.mkdir
+	if lstat == nil {
+		lstat = os.Lstat
+	}
+	if mkdir == nil {
+		mkdir = os.Mkdir
+	}
+
 	targetPath := req.GetTargetPath()
+	if _, busy := w.publishing.LoadOrStore(targetPath, struct{}{}); busy {
+		return nil, status.Errorf(codes.Aborted, "publish of NFS volume %s at %s already in progress", req.GetVolumeId(), targetPath)
+	}
+	defer w.publishing.Delete(targetPath)
 
 	// Check if already mounted
 	notMnt, err := w.mounter.IsLikelyNotMountPoint(targetPath)
@@ -83,7 +107,7 @@ func (w *WrappedNodeService) NodePublishVolume(ctx context.Context, req *csi.Nod
 	// user files that were written before this fix (backward compatibility).
 	tmpMount, err := os.MkdirTemp("", fmt.Sprintf("nfs-init-%s-", req.GetVolumeId()))
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "failed to create temp mount dir: %v", err)
+		return nil, status.Errorf(codes.Internal, "failed to create temp mount dir for volume %s: %v", req.GetVolumeId(), err)
 	}
 
 	rootSource := fmt.Sprintf("%s:%s", host, path)
@@ -93,12 +117,21 @@ func (w *WrappedNodeService) NodePublishVolume(ctx context.Context, req *csi.Nod
 	// The price is a cache of its own too: pods already holding /data may not
 	// see the entries the migration moves in until their attribute cache
 	// expires (acdirmax).
-	rootOpts := []string{"nfsvers=4.2", fmt.Sprintf("port=%s", port), "nosharecache"}
+	//
+	// soft lets an RPC fail with EIO instead of blocking forever. That is
+	// safe here because this mount only does metadata work that a retried
+	// publish redoes, and it is why the volume mount below stays hard. Over
+	// NFSv4 a soft RPC fails only once the TCP connection is declared dead,
+	// which takes minutes with the default timeo and retrans. Those are not
+	// lowered: the first mount of a server sets them for the connection that
+	// every later mount of it on this node shares, the pods' hard mounts
+	// included. retry=0 stops mount.nfs from retrying a failed mount for 2m.
+	rootOpts := []string{"nfsvers=4.2", fmt.Sprintf("port=%s", port), "nosharecache", "soft", "retry=0"}
 	if err := w.mounter.Mount(rootSource, tmpMount, "nfs", rootOpts); err != nil {
 		if rmErr := os.Remove(tmpMount); rmErr != nil {
 			klog.Warningf("Failed to remove temp dir %s: %v", tmpMount, rmErr)
 		}
-		return nil, status.Errorf(codes.Internal, "NFS temp mount failed: %v", err)
+		return nil, status.Errorf(codes.Internal, "NFS temp mount for volume %s failed: %v", req.GetVolumeId(), err)
 	}
 	defer func() {
 		if err := unmountTempMount(w.mounter, tmpMount); err != nil {
@@ -107,8 +140,10 @@ func (w *WrappedNodeService) NodePublishVolume(ctx context.Context, req *csi.Nod
 	}()
 
 	dataDir := filepath.Join(tmpMount, "data")
-	if err := os.MkdirAll(dataDir, 0777); err != nil {
-		return nil, status.Errorf(codes.Internal, "failed to create /data subdir: %v", err)
+	// Not MkdirAll: with the server gone its stat fails on the mount point,
+	// and it then reports the local temp dir as existing instead of the EIO.
+	if err := mkdir(dataDir, 0777); err != nil && !errors.Is(err, fs.ErrExist) {
+		return nil, status.Errorf(codes.Internal, "failed to create /data subdir for volume %s: %v", req.GetVolumeId(), err)
 	}
 
 	// Auto-migrate: move user files from root into /data (skip internal artifacts).
@@ -124,8 +159,14 @@ func (w *WrappedNodeService) NodePublishVolume(ctx context.Context, req *csi.Nod
 		}
 		src := filepath.Join(tmpMount, name)
 		dst := filepath.Join(dataDir, name)
-		if _, err := os.Stat(dst); err == nil {
-			continue // already exists in /data, skip
+		// Lstat: a user's symlink in /data counts as present whatever it
+		// points at, and is not replaced.
+		if _, err := lstat(dst); err == nil {
+			klog.Warningf("Not migrating %s for volume %s: /data/%s already exists, so %s stays in the export root", name, req.GetVolumeId(), name, name)
+			continue
+		} else if !os.IsNotExist(err) {
+			// The rename would replace whatever the failed stat could not see.
+			return nil, status.Errorf(codes.Internal, "failed to check /data/%s for volume %s: %v", name, req.GetVolumeId(), err)
 		}
 		klog.Infof("Migrating %s to /data/%s for volume %s", name, name, req.GetVolumeId())
 		if err := os.Rename(src, dst); err != nil {
@@ -148,9 +189,7 @@ func (w *WrappedNodeService) NodePublishVolume(ctx context.Context, req *csi.Nod
 
 const (
 	// Well inside the 2m kubelet puts on NodePublishVolume (csiTimeout in
-	// kubernetes pkg/volume/csi/csi_plugin.go). Bounds the unmount only: the
-	// temp mount is a hard mount, so the mount and the migration before it
-	// still block for as long as the server is gone.
+	// kubernetes pkg/volume/csi/csi_plugin.go).
 	tempUnmountTimeout = 30 * time.Second
 	// How long umount's output pipe may stay open once umount has exited or
 	// been killed; the umount.nfs helper it forked can hold it.

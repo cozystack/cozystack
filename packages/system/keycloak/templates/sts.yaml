@@ -2,6 +2,8 @@
 {{- regexReplaceAll "-+" (regexReplaceAll "[^a-z0-9-]" (. | lower) "-") "-" | trimPrefix "-" | trimSuffix "-" -}}
 {{- end -}}
 
+{{- include "keycloak.truststores.validate" . -}}
+
 {{- $host := index .Values._cluster "root-host" }}
 {{- $ingressHost := .Values.ingress.host | default (printf "keycloak.%s" $host) }}
 {{- $clusterDomain := (index .Values._cluster "cluster-domain") | default "cozy.local" }}
@@ -213,10 +215,17 @@ spec:
             {{- with .Values.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
-          {{- if $themes }}
+          {{- if or $themes .Values.truststores }}
           volumeMounts:
+            {{- if $themes }}
             - name: themes
               mountPath: /opt/keycloak/themes
+            {{- end }}
+            {{- range $i, $_ := .Values.truststores }}
+            - name: truststore-{{ $i }}
+              mountPath: /opt/keycloak/conf/truststores/cozystack-{{ $i }}
+              readOnly: true
+            {{- end }}
           {{- end }}
           ports:
             - name: http
@@ -245,10 +254,25 @@ spec:
             periodSeconds: 10
             timeoutSeconds: 5
             failureThreshold: 3
-      {{- if $themes }}
+      {{- if or $themes .Values.truststores }}
       volumes:
+        {{- if $themes }}
         - name: themes
           emptyDir:
             sizeLimit: 256Mi
+        {{- end }}
+        {{- range $i, $store := .Values.truststores }}
+        - name: truststore-{{ $i }}
+          {{- if hasKey $store "secretName" }}
+          secret:
+            secretName: {{ $store.secretName | quote }}
+          {{- else }}
+          configMap:
+            name: {{ $store.configMapName | quote }}
+          {{- end }}
+            items:
+              - key: {{ $store.key | default "ca.crt" | quote }}
+                path: {{ $store.key | default "ca.crt" | quote }}
+        {{- end }}
       {{- end }}
       terminationGracePeriodSeconds: 60

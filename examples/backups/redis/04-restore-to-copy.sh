@@ -13,7 +13,7 @@ print_header "Step 04: To-copy restore into '${REDIS_RESTORE_NAME}'"
 
 kubectl apply -f - <<EOF
 apiVersion: apps.cozystack.io/v1alpha1
-kind: Redis
+kind: ${APP_KIND}
 metadata:
   name: ${REDIS_RESTORE_NAME}
   namespace: ${NAMESPACE}
@@ -38,7 +38,7 @@ spec:
     name: ${BACKUPJOB_NAME}
   targetApplicationRef:
     apiGroup: apps.cozystack.io
-    kind: Redis
+    kind: ${APP_KIND}
     name: ${REDIS_RESTORE_NAME}
 EOF
 

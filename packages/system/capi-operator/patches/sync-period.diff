@@ -1,0 +1,12 @@
+--- a/charts/cluster-api-operator/templates/deployment.yaml
++++ b/charts/cluster-api-operator/templates/deployment.yaml
+@@ -86,6 +86,9 @@
+         - --leader-elect-retry-period={{ .retryPeriod }}
+         {{- end }}
+         {{- end }}
++        {{- with .Values.syncPeriod }}
++        - --sync-period={{ . }}
++        {{- end }}
+         command:
+         - /manager
+         {{- with .Values.image.manager }}

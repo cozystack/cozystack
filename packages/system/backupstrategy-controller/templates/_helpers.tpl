@@ -101,8 +101,11 @@
       https://<bucket-host>.
     - provisionBucket: true + Secret missing (offline `helm template`/unit
       render, or pre-reconcile install where lookup returns nil) → fall back
-      to .Values.backupStorage.endpoint. On a live deploy Flux re-renders on
-      spec.interval once the Secret exists, promoting the derived endpoint.
+      to .Values.backupStorage.endpoint. Flux does not re-render on
+      spec.interval; the controller's DefaultObjectsGate forces the render
+      once the Secret exists, and again whenever the Secret's endpoint stops
+      matching the backups.cozystack.io/endpoint annotation every default
+      Strategy CR and the Velero BSL carry with this helper's output.
 
   Normalization of the decoded value: trim first (a trailing newline in the
   Secret data would otherwise ride into the URL and break it), then strip any
@@ -167,9 +170,11 @@
   declared that cluster-derived state should be treated as resolved. Live
   deploys go through Flux and never set it.
 
-  Every default Strategy added from here on should gate on this helper as well
-  as on the bucket name. The siblings that predate it are not wedged today only
-  because their CRDs already shipped in an earlier release.
+  Every default Strategy gates on this helper as well as on the bucket name,
+  including the kinds whose CRDs shipped long ago: the bucket gate is also open
+  on the very first render of an external-S3 install (provisionBucket=false),
+  where no CRD exists yet. hack/backupstrategy-crd-gate.bats fails CI on any
+  template that renders a Strategy CR without it.
 */}}
 {{- define "backupstrategy-controller.crdEstablished" -}}
 {{- if .root.Values.backupStorage.bucketNameOverride -}}
@@ -182,6 +187,31 @@ true
 true
 {{- end -}}
 {{- end -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+  backupStorage.forcePathStyle as "true", "false", or "" when unset. Its
+  consumers read it differently: the controller and Velero parse it with
+  strconv.ParseBool, the etcd and MongoDB strategies write it into a boolean
+  field that Helm decodes as YAML 1.1 (so "yes" or "off" is a boolean there),
+  and the Kafka and RabbitMQ scripts compare the string with "false".
+  Normalising it here means a spelling cannot mean path style to some drivers
+  and not to others. The spellings accepted are those of strconv.ParseBool and
+  of YAML 1.1 booleans, a superset of the boolean spellings the etcd and
+  MongoDB strategies accepted; any other value fails the render.
+*/}}
+{{- define "backupstrategy-controller.forcePathStyle" -}}
+{{- $value := .Values.backupStorage.forcePathStyle -}}
+{{- if not (kindIs "invalid" $value) -}}
+{{- $raw := toString $value -}}
+{{- if has $raw (list "1" "t" "T" "true" "True" "TRUE" "y" "Y" "yes" "Yes" "YES" "on" "On" "ON") -}}
+true
+{{- else if has $raw (list "0" "f" "F" "false" "False" "FALSE" "n" "N" "no" "No" "NO" "off" "Off" "OFF") -}}
+false
+{{- else if ne $raw "" -}}
+{{- fail (printf "backupStorage.forcePathStyle must be a boolean or unset, got %q" $raw) -}}
 {{- end -}}
 {{- end -}}
 {{- end -}}

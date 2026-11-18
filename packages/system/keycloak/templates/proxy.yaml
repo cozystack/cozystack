@@ -55,16 +55,45 @@
 {{- if and (gt $replicas 1) (not .Values.encryption.deksetSecretName) }}
 {{- fail "encryption.replicas > 1 requires encryption.deksetSecretName (a shared wrapped DEK set); otherwise replicas would encrypt deterministic columns under different keys" }}
 {{- end }}
+{{- /*
+  Without KKP_DEKSET_FILE the proxy mints a fresh DEK set on every start and
+  keeps it only in memory, so after any restart (rollout, drain, OOM) it can
+  no longer decrypt what it wrote before. Refuse to encrypt without a
+  persistent DEK set. fields=disabled is pure passthrough and needs no key: it
+  is how the static backend gets its KEK Secret created before the operator
+  mints a DEK set with it.
+*/}}
+{{- if and (ne (.Values.encryption.fields | default "") "disabled") (not .Values.encryption.deksetSecretName) }}
+{{- fail "encryption.deksetSecretName is required unless encryption.fields is \"disabled\": without a persistent DEK set the proxy mints a new key on every start and cannot decrypt data written before a restart. Mint one with the proxy's `backfill generate-dekset`, store it in a Secret and set encryption.deksetSecretName" }}
+{{- end }}
 {{- if eq $backend "static" }}
 {{- /*
   Static KMS: a self-generated 32-byte KEK kept in a Secret. Generated once
   and preserved across upgrades via lookup (same pattern as the admin
   credentials in sts.yaml). For production prefer kms.backend=vault-transit.
 */}}
+{{- /*
+  The proxy reads KKP_KEK as base64 of 32 random bytes. Earlier chart
+  versions stored 32 alphanumeric characters instead, which decode to 24
+  bytes: the proxy refused to start with them, so nothing was ever encrypted
+  under such a KEK and it is safe to replace it. Any other stored value may be
+  a key the operator restored by hand, so it is kept when the proxy accepts
+  it and refused otherwise, never overwritten. b64dec ignores CR and LF like
+  the proxy does, so a restored key with a trailing newline still counts.
+*/}}
 {{- $existing := lookup "v1" "Secret" .Release.Namespace "keycloak-kms-proxy-kek" }}
-{{- $kek := randAlphaNum 32 | b64enc }}
+{{- $kek := randBytes 32 | b64enc }}
+{{- $current := "" }}
 {{- if and $existing $existing.data }}
-{{- $kek = index $existing.data "kek" | default $kek }}
+{{- $current = index $existing.data "kek" | default "" }}
+{{- end }}
+{{- if $current }}
+{{- $stored := b64dec $current }}
+{{- if eq (len (b64dec $stored)) 32 }}
+{{- $kek = $current }}
+{{- else if not (regexMatch "^[A-Za-z0-9]{32}$" $stored) }}
+{{- fail "the kek key of Secret keycloak-kms-proxy-kek is not base64 of 32 bytes, so the KMS proxy cannot use it. The chart does not overwrite key material: restore the KEK the data was encrypted with, or delete the Secret if nothing was encrypted under it yet" }}
+{{- end }}
 {{- end }}
 apiVersion: v1
 kind: Secret
@@ -72,6 +101,11 @@ metadata:
   name: keycloak-kms-proxy-kek
   labels:
     app: keycloak-kms-proxy
+  annotations:
+    # The DEK set is wrapped with this KEK, so losing it loses the data.
+    # Keep it when encryption is disabled or the release is reinstalled;
+    # the lookup above picks it up again on the next install.
+    helm.sh/resource-policy: keep
 data:
   kek: {{ $kek | quote }}
 ---
