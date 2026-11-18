@@ -502,7 +502,56 @@ jobs:
       # tag is cut by pull-requests-release.yaml finalize, at the stable tag's
       # merge commit (#2677 goal 3).
 
+      # hack/upload-assets.sh writes the release SBOM with syft and signs the
+      # checksums of every asset with cosign, keylessly, as this job. syft is
+      # the release tarball checked against a committed SHA-256, for the reason
+      # given at the same step in promote-rc.yaml: this job holds the app token,
+      # the GHCR login and an OIDC token for the signing identity, so it runs no
+      # install script fetched at run time. Bump with promote-rc.yaml.
+      - name: Set up syft
+        if: needs.build-amd64.outputs.release_exists == 'false'
+        env:
+          SYFT_VERSION: "1.54.1"
+          SYFT_SHA256: "c069905b391cc4c20a5ba65ad5c10be2a7ba074f8ea6ad203e24d14e303dad47"
+        run: |
+          syft_dir="${RUNNER_TEMP}/syft"
+          mkdir -p "$syft_dir"
+          curl -fsSL -o "$syft_dir/syft.tar.gz" \
+            "https://github.com/anchore/syft/releases/download/v${SYFT_VERSION}/syft_${SYFT_VERSION}_linux_amd64.tar.gz"
+          printf '%s  %s\n' "$SYFT_SHA256" "$syft_dir/syft.tar.gz" | sha256sum -c -
+          tar -xzf "$syft_dir/syft.tar.gz" -C "$syft_dir" syft
+          rm -f "$syft_dir/syft.tar.gz"
+          echo "$syft_dir" >> "$GITHUB_PATH"
+      # cosign is the version docs/release/signatures-and-sbom.md asks users
+      # for, as in promote-rc.yaml. Bump with it.
+      - name: Set up cosign
+        if: needs.build-amd64.outputs.release_exists == 'false'
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          cosign-release: v3.1.3
+
+      # Every index the stitch repinned the tree on is signed by digest with
+      # this job's OIDC identity, and the SBOM attestation each carries is read
+      # back into one archive, before anything is uploaded: a signature that
+      # does not verify, or an image that lost its SBOM, fails the job with no
+      # asset uploaded. The checksums hack/upload-assets.sh signs next cover
+      # the archive and the image list. The signature over an index covers its
+      # attestation manifest, and promotion copies the digest within the same
+      # repository, so the stable release needs no signing step of its own.
+      - name: Sign the release images and collect their SBOMs
+        if: needs.build-amd64.outputs.release_exists == 'false'
+        run: |
+          set -eu
+          hack/sign-release-images.sh --list _out/assets/cozystack-images.txt packages "$REGISTRY"
+          hack/collect-image-sboms.sh packages "$REGISTRY" _out/assets/cozystack-images-sbom.tar.gz
+        env:
+          DOCKER_CONFIG: ${{ runner.temp }}/.docker
+          REGISTRY: ghcr.io/cozystack/cozystack
+
       # Create or reuse draft release
+      # Created only after the images are signed and their SBOMs collected: a
+      # draft left by a run that failed before that makes the re-run see an
+      # existing release and skip the whole preparation, leaving the rc unpublished.
       - name: Create / reuse draft release
         if: needs.build-amd64.outputs.release_exists == 'false'
         id: release
@@ -535,34 +584,6 @@ jobs:
             }
 
             core.setOutput('upload_url', rel.upload_url);
-
-      # hack/upload-assets.sh writes the release SBOM with syft and signs the
-      # checksums of every asset with cosign, keylessly, as this job. syft is
-      # the release tarball checked against a committed SHA-256, for the reason
-      # given at the same step in promote-rc.yaml: this job holds the app token,
-      # the GHCR login and an OIDC token for the signing identity, so it runs no
-      # install script fetched at run time. Bump with promote-rc.yaml.
-      - name: Set up syft
-        if: needs.build-amd64.outputs.release_exists == 'false'
-        env:
-          SYFT_VERSION: "1.54.1"
-          SYFT_SHA256: "c069905b391cc4c20a5ba65ad5c10be2a7ba074f8ea6ad203e24d14e303dad47"
-        run: |
-          syft_dir="${RUNNER_TEMP}/syft"
-          mkdir -p "$syft_dir"
-          curl -fsSL -o "$syft_dir/syft.tar.gz" \
-            "https://github.com/anchore/syft/releases/download/v${SYFT_VERSION}/syft_${SYFT_VERSION}_linux_amd64.tar.gz"
-          printf '%s  %s\n' "$SYFT_SHA256" "$syft_dir/syft.tar.gz" | sha256sum -c -
-          tar -xzf "$syft_dir/syft.tar.gz" -C "$syft_dir" syft
-          rm -f "$syft_dir/syft.tar.gz"
-          echo "$syft_dir" >> "$GITHUB_PATH"
-      # cosign is the version docs/release/signatures-and-sbom.md asks users
-      # for, as in promote-rc.yaml. Bump with it.
-      - name: Set up cosign
-        if: needs.build-amd64.outputs.release_exists == 'false'
-        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
-        with:
-          cosign-release: v3.1.3
 
       # The assets were built by build-amd64; the operator manifests are
       # rendered here, from the tree pinned on the index digests.
