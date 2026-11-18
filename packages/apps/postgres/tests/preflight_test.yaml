@@ -203,12 +203,12 @@ tests:
       - matchRegex:
           path: data["preflight.sh"]
           pattern: "if \\[ \"\\$kind\" = database \\]; then"
+      # The create and mark run as a top-level SELECT format(...) + \gexec, not a
+      # DO block: psql does not substitute :'role' inside a dollar-quoted body,
+      # so it would reach PostgreSQL literally and the hook would fail to parse.
       - matchRegex:
           path: data["preflight.sh"]
-          pattern: "EXECUTE format\\('CREATE ROLE %I NOINHERIT', :'role'\\);"
-      - matchRegex:
-          path: data["preflight.sh"]
-          pattern: "EXECUTE format\\('GRANT %I TO %I WITH INHERIT FALSE, SET FALSE', 'cozystack:managed', :'role'\\);"
+          pattern: "SELECT format\\('CREATE ROLE %I NOINHERIT; COMMENT ON ROLE %I IS %L; GRANT %I TO %I WITH INHERIT FALSE, SET FALSE', :'role', :'role', 'role managed by helm', 'cozystack:managed', :'role'\\)"
   - it: marks a hook-created database role without the pg16 options on older PostgreSQL
     release:
       upgrade: true
@@ -222,4 +222,4 @@ tests:
     asserts:
       - matchRegex:
           path: data["preflight.sh"]
-          pattern: "EXECUTE format\\('GRANT %I TO %I', 'cozystack:managed', :'role'\\);"
+          pattern: "SELECT format\\('CREATE ROLE %I NOINHERIT; COMMENT ON ROLE %I IS %L; GRANT %I TO %I', :'role', :'role', 'role managed by helm', 'cozystack:managed', :'role'\\)"

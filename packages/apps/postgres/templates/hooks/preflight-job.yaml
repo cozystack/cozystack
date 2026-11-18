@@ -139,14 +139,8 @@ data:
       psql -v ON_ERROR_STOP=1 --echo-all -v role="$role" <<\EOT
     SELECT 'CREATE ROLE "cozystack:managed" NOLOGIN'
     WHERE NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = 'cozystack:managed')\gexec
-    DO $$
-    BEGIN
-        IF NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = :'role') THEN
-            EXECUTE format('CREATE ROLE %I NOINHERIT', :'role');
-            EXECUTE format('COMMENT ON ROLE %I IS %L', :'role', 'role managed by helm');
-            EXECUTE format('GRANT %I TO %I{{ $markOptions }}', 'cozystack:managed', :'role');
-        END IF;
-    END$$;
+    SELECT format('CREATE ROLE %I NOINHERIT; COMMENT ON ROLE %I IS %L; GRANT %I TO %I{{ $markOptions }}', :'role', :'role', 'role managed by helm', 'cozystack:managed', :'role')
+    WHERE NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = :'role')\gexec
     EOT
       fi
     done < /work/new
