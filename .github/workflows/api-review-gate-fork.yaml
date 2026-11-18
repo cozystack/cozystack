@@ -82,9 +82,9 @@ jobs:
     # of the gate, which can only withhold a re-evaluation: a push then leaves no
     # status at all, and a withdrawn approval is caught by the sweep.
     if: >-
-      ${{ github.event_name == 'workflow_run'
+      ${{ github.repository == 'cozystack/cozystack' && (github.event_name == 'workflow_run'
       && github.event.workflow_run.conclusion != 'cancelled'
-      && github.event.workflow_run.conclusion != 'skipped' }}
+      && github.event.workflow_run.conclusion != 'skipped') }}
     runs-on: ubuntu-latest
     permissions:
       pull-requests: read
@@ -157,7 +157,7 @@ jobs:
   detect:
     name: Detect sizeable API changes
     needs: [resolve]
-    if: ${{ needs.resolve.outputs.should_run == 'true' }}
+    if: ${{ github.repository == 'cozystack/cozystack' && (needs.resolve.outputs.should_run == 'true') }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -236,9 +236,9 @@ jobs:
     name: Report fork API review gate status
     needs: [resolve, detect]
     if: >-
-      ${{ !cancelled()
+      ${{ github.repository == 'cozystack/cozystack' && (!cancelled()
       && (github.event_name != 'workflow_run'
-      || needs.resolve.outputs.should_run == 'true') }}
+      || needs.resolve.outputs.should_run == 'true')) }}
     runs-on: ubuntu-latest
     permissions:
       contents: read

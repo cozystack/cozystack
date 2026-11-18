@@ -41,7 +41,7 @@ jobs:
   #    packages artifact + installer chart on GHCR. No rebuild.
   mirror:
     name: Mirror images to GHCR
-    if: vars.NIGHTLY_ENABLED == 'true' || github.event_name == 'workflow_dispatch'
+    if: ${{ github.repository == 'cozystack/cozystack' && (vars.NIGHTLY_ENABLED == 'true' || github.event_name == 'workflow_dispatch') }}
     runs-on: oracle-vm-4cpu-16gb-x86-64
     timeout-minutes: 60
     permissions:
@@ -188,6 +188,7 @@ jobs:
   # ── Assemble the Talos nocloud disk from the upstream imager (no cozystack
   #    image dependency) and publish it as a GHCR OCI artifact.
   build-disk:
+    if: github.repository == 'cozystack/cozystack'
     name: Build & publish nocloud disk
     needs: [mirror]
     runs-on: oracle-vm-4cpu-16gb-x86-64
@@ -239,6 +240,7 @@ jobs:
   #    upstream Talos image, so the nocloud disk built above is published but
   #    not exercised here, and e2e does not wait for it.
   e2e:
+    if: github.repository == 'cozystack/cozystack'
     name: E2E (full suite)
     needs: [mirror]
     # Same sandbox as the other e2e lanes: three nodes at 8 vCPU / 24 GiB each
