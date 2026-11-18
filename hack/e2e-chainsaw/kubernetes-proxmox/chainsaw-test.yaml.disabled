@@ -124,6 +124,12 @@ spec:
     - script:
         content: |
           set -eu
+          # The tenant's super-admin kubeconfig that run-proxmox.sh fetched for
+          # the checks above; the same path the script derives. Removed before
+          # the keep_tenant exit below, because the file is a credential and
+          # keeping the tenant is not a reason to keep that on the runner. The
+          # workflow's cleanup step removes it again, for a run killed here.
+          rm -f "${COZY_PROXMOX_WORKDIR:-${RUNNER_TEMP:-${TMPDIR:-/tmp}}}/proxmox-e2e-tenant.kubeconfig"
           # keep_tenant is honoured here as well as in the workflow's own
           # teardown, or the suite would delete what the operator asked to keep.
           if [ "${COZY_KEEP_TENANT:-false}" = "true" ]; then

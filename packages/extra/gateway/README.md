@@ -16,7 +16,7 @@ Owning a separate Gateway makes sense for: a tenant that needs its own LB IP (DN
 
 The platform-wide `publishing.certificates.solver` value selects how the controller sources TLS certificates for the tenant Gateway. Setting `publishing.certificates.wildcardSecretName` switches to a third mode (existing Secret) that overrides the solver entirely, and putting the tenant's GatewayClass in `gateway.edgeTerminatedClasses` switches to a fourth that issues nothing at all — see below.
 
-The sections below are the chart's own reference. For the operator's view of the same surface — the three platform values that bound which class a tenant lands on, what a tenant writes to pick one, what moving between classes does to certificates and to the wildcard replica, and how the mechanism fails when the configured names and the installed classes disagree — see [`docs/gateway-classes.md`](../../../docs/gateway-classes.md).
+The sections below are the chart's own reference. For the operator's view of the same surface — the three platform values that bound which class a tenant lands on, what a tenant writes to pick one, what moving between classes does to certificates and to the wildcard replica, and how the mechanism fails when the configured names and the installed classes disagree — see [GatewayClass selection](https://cozystack.io/docs/v1/networking/gateway-classes/).
 
 ### Default — HTTP-01
 

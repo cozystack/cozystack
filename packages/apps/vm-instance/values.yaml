@@ -10,6 +10,8 @@
 ## @field {string} name - Disk name.
 ## @x-cozystack-options {source: vmdisk}
 ## @field {string} [bus] - Disk bus type (e.g. "sata").
+## @field {*int} [bootOrder] - Boot priority of the disk, 1 being tried first. Unset falls back to the disk's position in `disks` (the first disk gets 1), so set it to boot from a disk other than the first, such as an attached installer or rescue ISO, without reordering the list. Effective boot orders must be unique across disks: when one disk is given a value that another takes from its position, set both.
+## @minimum 1
 
 ## @typedef {struct} Network - Network to attach the VM to.
 ## @field {string} [name] - Network attachment name.
@@ -67,6 +69,12 @@ disks: []
 ## - name: example-system
 ## - name: example-data
 ##   bus: sata
+## Boot from an attached ISO while keeping the system disk first in the list:
+## disks:
+## - name: example-system
+##   bootOrder: 2
+## - name: example-iso
+##   bootOrder: 1
 
 ## @param {[]Network} networks - Networks to attach the VM to.
 networks: []

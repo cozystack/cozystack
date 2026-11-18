@@ -156,9 +156,11 @@ tests:
             resources:
               requests:
                 storage: 10Gi
+    documentSelector:
+      path: kind
+      value: Job
     asserts:
-      - documentIndex: 0
-        notMatchRegex:
+      - notMatchRegex:
           path: spec.template.spec.containers[0].args[0]
           pattern: kubectl patch pvc
 

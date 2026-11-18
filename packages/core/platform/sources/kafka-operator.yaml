@@ -20,3 +20,9 @@ spec:
       install:
         namespace: cozy-kafka-operator
         releaseName: kafka-operator
+        # helm-controller defaults CRD upgrades to Skip, which would leave the
+        # Strimzi CRDs at whatever version first installed them. Replacing them
+        # with v1-only CRDs requires every stored object to be v1 already; the
+        # platform migration that converts them runs before this release on the
+        # variants that run platform migrations.
+        upgradeCRDs: CreateReplace

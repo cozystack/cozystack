@@ -222,18 +222,35 @@ spec:
                       key: backup
                 - name: ALLOW_EMPTY_BACKUPS
                   value: "true"
+                {{- /*
+                  create_remote keeps the local backup when its upload fails,
+                  and the upstream defaults never prune local backups (0) and
+                  resume unfinished uploads at start, which pushes a failed
+                  attempt to the bucket as an archive no Backup refers to and
+                  holds the API lock (423) while it does. -1 keeps only the
+                  newest local backup and removes it once its upload succeeds.
+                */}}
+                - name: BACKUPS_TO_KEEP_LOCAL
+                  value: "-1"
+                - name: API_COMPLETE_RESUMABLE_AFTER_RESTART
+                  value: "false"
                 - name: REMOTE_STORAGE
                   value: s3
                 {{- /*
+                  On the useSystemBucket flow every S3 setting but the
+                  release's own S3_PATH below, the platform's
+                  backupStorage.forcePathStyle included, comes
+                  from the clickhouse-backup.yml key the platform projects
+                  into cozy-backups-creds, mounted below as the config file.
+                  clickhouse-backup reloads that file in each API handler
+                  that reaches S3 and kubelet rewrites a mounted Secret in
+                  place, so credentials projected after the Pod started, or
+                  rotated since, reach the running sidecar; environment
+                  would be read only at start and would override the file,
+                  so none of those is set here.
+
                   S3_FORCE_PATH_STYLE selects path-style vs vhost-style S3
-                  addressing: SeaweedFS (the platform default) needs
-                  path-style, while AWS public S3 needs vhost-style in many
-                  regions. On the useSystemBucket flow the value is the
-                  platform's backupStorage.forcePathStyle, which this app
-                  chart cannot read directly, so it is projected into
-                  cozy-backups-creds and consumed via an optional
-                  secretKeyRef (optional: true so the Pod starts before the
-                  first projection). On the legacy paths (own Secret via
+                  addressing. On the legacy paths (own Secret via
                   s3CredentialsSecret.name, or a configured endpoint) we
                   cannot peek inside the Secret at render time, so we keep
                   the historical path-style default — AWS users in that mode
@@ -241,12 +258,8 @@ spec:
                   clickhouse-backup config.
                 */}}
                 {{- if .Values.backup.useSystemBucket }}
-                - name: S3_FORCE_PATH_STYLE
-                  valueFrom:
-                    secretKeyRef:
-                      name: {{ $sidecarSecretName | quote }}
-                      key: forcePathStyle
-                      optional: true
+                - name: CLICKHOUSE_BACKUP_CONFIG
+                  value: /etc/clickhouse-backup-s3/config.yml
                 {{- else if or (not (eq (default "" .Values.backup.s3CredentialsSecret.name) "")) .Values.backup.endpoint }}
                 - name: S3_FORCE_PATH_STYLE
                   value: "true"
@@ -282,44 +295,18 @@ spec:
                 */}}
                 - name: S3_PATH
                   value: {{ $s3Path | quote }}
-                {{- /*
-                  optional: true in the useSystemBucket path so the Pod
-                  starts even before the platform projector materialises
-                  cozy-backups-creds in this namespace (projection runs at
-                  first BackupJob time; the sidecar surfaces backup errors
-                  only when its HTTP API is exercised). Without this gate
-                  every fresh ClickHouse release with useSystemBucket=true
-                  would hang in CreateContainerConfigError until a
-                  BackupJob fires. Legacy path keeps the strict reference
-                  shape — its Secret is chart-emitted and present at
-                  install time.
-                */}}
-                {{- $secretOptional := .Values.backup.useSystemBucket }}
+                {{- if not .Values.backup.useSystemBucket }}
                 - name: S3_BUCKET
-                  valueFrom: { secretKeyRef: { name: {{ $sidecarSecretName | quote }}, key: {{ $bucketKey | quote }}{{ if $secretOptional }}, optional: true{{ end }} } }
-                {{- /*
-                  clickhouse-backup's aws-sdk-go-v2 client rejects a scheme-less
-                  S3_ENDPOINT ("was not a valid URI"). On the useSystemBucket flow
-                  the projected cozy-backups-creds.endpoint is a bare host, so
-                  prepend https:// (the platform's CNPG endpoint helper does the
-                  same). Legacy / BYO-Secret endpoints are tenant-supplied with
-                  their own scheme and are consumed verbatim.
-                */}}
-                {{- if .Values.backup.useSystemBucket }}
-                - name: S3_ENDPOINT_HOST
-                  valueFrom: { secretKeyRef: { name: {{ $sidecarSecretName | quote }}, key: {{ $endpointKey | quote }}, optional: true } }
-                - name: S3_ENDPOINT
-                  value: "https://$(S3_ENDPOINT_HOST)"
-                {{- else }}
+                  valueFrom: { secretKeyRef: { name: {{ $sidecarSecretName | quote }}, key: {{ $bucketKey | quote }} } }
                 - name: S3_ENDPOINT
                   valueFrom: { secretKeyRef: { name: {{ $sidecarSecretName | quote }}, key: {{ $endpointKey | quote }} } }
-                {{- end }}
                 - name: S3_REGION
-                  valueFrom: { secretKeyRef: { name: {{ $sidecarSecretName | quote }}, key: {{ $regionKey | quote }}{{ if $secretOptional }}, optional: true{{ end }} } }
+                  valueFrom: { secretKeyRef: { name: {{ $sidecarSecretName | quote }}, key: {{ $regionKey | quote }} } }
                 - name: S3_ACCESS_KEY
-                  valueFrom: { secretKeyRef: { name: {{ $sidecarSecretName | quote }}, key: {{ $accessKeyKey | quote }}{{ if $secretOptional }}, optional: true{{ end }} } }
+                  valueFrom: { secretKeyRef: { name: {{ $sidecarSecretName | quote }}, key: {{ $accessKeyKey | quote }} } }
                 - name: S3_SECRET_KEY
-                  valueFrom: { secretKeyRef: { name: {{ $sidecarSecretName | quote }}, key: {{ $secretKeyKey | quote }}{{ if $secretOptional }}, optional: true{{ end }} } }
+                  valueFrom: { secretKeyRef: { name: {{ $sidecarSecretName | quote }}, key: {{ $secretKeyKey | quote }} } }
+                {{- end }}
 {{- if $endpointCAName }}
                 # Trust the mounted private-CA bundle for the S3 endpoint (see
                 # the `backup.endpointCA` field in values.yaml). SSL_CERT_DIR,
@@ -344,6 +331,11 @@ spec:
                   mountPath: /etc/ssl/cozy-s3-ca
                   readOnly: true
 {{- end }}
+{{- if .Values.backup.useSystemBucket }}
+                - name: backup-s3-config
+                  mountPath: /etc/clickhouse-backup-s3
+                  readOnly: true
+{{- end }}
               securityContext:
                 # clickhouse-server stores data under /var/lib/clickhouse with
                 # uid=101 / mode 0750 (alpine clickhouse-server image's
@@ -366,19 +358,32 @@ spec:
                 runAsGroup: 0
                 seccompProfile:
                   type: RuntimeDefault
-{{- if $endpointCAName }}
-          # Private-CA bundle for the backup sidecar, projected as ca.crt for
-          # SSL_CERT_DIR above. Not optional on purpose: a missing Secret holds
-          # the whole ClickHouse Pod in ContainerCreating (naming the Secret in
-          # `kubectl describe`) rather than mounting an empty trust dir and
-          # failing later inside clickhouse-backup with an opaque x509 error.
+{{- if or $endpointCAName .Values.backup.useSystemBucket }}
           volumes:
+{{- if $endpointCAName }}
+            # Private-CA bundle for the backup sidecar, projected as ca.crt for
+            # SSL_CERT_DIR above. Not optional on purpose: a missing Secret holds
+            # the whole ClickHouse Pod in ContainerCreating (naming the Secret in
+            # `kubectl describe`) rather than mounting an empty trust dir and
+            # failing later inside clickhouse-backup with an opaque x509 error.
             - name: backup-s3-ca
               secret:
                 secretName: {{ $endpointCAName | quote }}
                 items:
                   - key: {{ $endpointCAKey | quote }}
                     path: ca.crt
+{{- end }}
+{{- if .Values.backup.useSystemBucket }}
+            # Optional: the platform projects cozy-backups-creds into this
+            # namespace at the first BackupJob, after the Pod has started.
+            - name: backup-s3-config
+              secret:
+                secretName: {{ $sidecarSecretName | quote }}
+                optional: true
+                items:
+                  - key: clickhouse-backup.yml
+                    path: config.yml
+{{- end }}
 {{- end }}
 {{- end }}
     serviceTemplates:

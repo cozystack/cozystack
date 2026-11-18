@@ -1,0 +1,42 @@
+{{- /*
+  The ClusterRoleBindings the OIDC bootstrap Job (oidc-rbac-job.yaml) applies
+  inside the tenant cluster, one per `oidc.users` entry, and the list of their
+  names it prunes against. They travel in a ConfigMap the Job mounts and not as
+  text inside its script: the script reaches the container as a single `sh -c`
+  argument, Linux caps one argument at 128 KiB, and a binding per user crosses
+  that cap at about 240 users, after which the container cannot start.
+
+  A release-owned object, not a hook resource, so it exists before the
+  post-install and post-upgrade hooks run. It is rendered only where users are
+  bound; at `mode: None` the Job takes its early branch and the volume is
+  optional.
+*/}}
+{{- if ne .Values.oidc.mode "None" }}
+{{- $desired := "" }}
+{{- $bindings := "" }}
+{{- range .Values.oidc.users }}
+{{-   $name := printf "cozystack-oidc-%s" (printf "%s-%s" $.Release.Name .email | sha256sum | trunc 16) }}
+{{-   $role := "view" }}
+{{-   if eq .role "admin" }}
+{{-     $role = "cluster-admin" }}
+{{-   end }}
+{{-   $desired = printf "%s%s\n" $desired $name }}
+{{-   $binding := dict
+        "apiVersion" "rbac.authorization.k8s.io/v1"
+        "kind" "ClusterRoleBinding"
+        "metadata" (dict "name" $name "labels" (dict "app.kubernetes.io/managed-by" "cozystack-oidc" "app.kubernetes.io/instance" $.Release.Name))
+        "roleRef" (dict "apiGroup" "rbac.authorization.k8s.io" "kind" "ClusterRole" "name" $role)
+        "subjects" (list (dict "kind" "User" "apiGroup" "rbac.authorization.k8s.io" "name" .email)) }}
+{{-   $bindings = printf "%s---\n%s\n" $bindings (toYaml $binding) }}
+{{- end }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Release.Name }}-oidc-bindings
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kubernetes.labels" . | nindent 4 }}
+data:
+  {{- dict "crbs.yaml" $bindings "desired.txt" $desired | toYaml | nindent 2 }}
+{{- end }}

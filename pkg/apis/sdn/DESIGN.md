@@ -130,7 +130,21 @@ spec:
 
 The securitygroup-controller stamps `securitygroup.sdn.cozystack.io/db: ""` onto the pods of the attached `Postgres/db` application, which is what makes the policy's `endpointSelector` select them.
 
-A **membership-only SecurityGroup** — one with `attachments` but no `ingress`/`egress` rules — still projects to a backing CiliumNetworkPolicy, because the controller reconciles the policy (not the SecurityGroup) and the attachments live on it. The CiliumNetworkPolicy CRD requires at least one rule section to be present (its `spec` `anyOf` is `ingress | ingressDeny | egress | egressDeny`), so the projection always emits the `ingress` section, an empty list `ingress: []` when the group has no ingress rules. An empty list is the CRD's documented no-op ("if omitted or empty, this rule does not apply at ingress") and `enableDefaultDeny` defaults to `false` for a direction with no rules, so the policy is schema-valid yet datapath-inert: it neither allows nor denies anything, consistent with §7. The empty section is hidden from the SecurityGroup view on read, so a membership-only group round-trips with no `ingress`/`egress`.
+A **membership-only SecurityGroup** — one with `attachments` but no `ingress`/`egress` rules — still projects to a backing CiliumNetworkPolicy, because the controller reconciles the policy (not the SecurityGroup) and the attachments live on it. Cilium rejects a policy none of whose rule sections has an entry: the CRD `anyOf` (`ingress | ingressDeny | egress | egressDeny`) is satisfied by an empty list, but the agent's `api.Rule.Sanitize` counts entries and marks such a policy `Valid=False`. The projection therefore writes one empty ingress rule, which allows nothing, together with `enableDefaultDeny: {ingress: false, egress: false}`, so that the rule does not put the member pods into default-deny either:
+
+```yaml
+spec:
+  endpointSelector:
+    matchLabels:
+      securitygroup.sdn.cozystack.io/db: ""
+  ingress:
+    - {}
+  enableDefaultDeny:
+    ingress: false
+    egress: false
+```
+
+The policy is valid yet datapath-inert: it neither allows nor denies anything, consistent with §7. The override depends on the Cilium agent's `enable-non-default-deny-policies` option, which defaults to `true`; with it off, Cilium forces default deny on every policy. The placeholder is hidden from the SecurityGroup view on read, so a membership-only group round-trips with no `ingress`/`egress`. `enableDefaultDeny` is what tells it apart from a group whose single ingress rule is genuinely empty, which projects without the override and so keeps Cilium's ingress default deny.
 
 ## 6. RBAC
 

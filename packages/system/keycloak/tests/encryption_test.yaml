@@ -41,6 +41,7 @@ tests:
     template: templates/proxy.yaml
     set:
       encryption.enabled: true
+      encryption.deksetSecretName: keycloak-kms-proxy-dekset
       _cluster:
         root-host: example.org
         cluster-domain: cozy.local
@@ -55,6 +56,7 @@ tests:
       value: Deployment
     set:
       encryption.enabled: true
+      encryption.deksetSecretName: keycloak-kms-proxy-dekset
       _cluster:
         root-host: example.org
         cluster-domain: cozy.local
@@ -83,6 +85,7 @@ tests:
       value: Secret
     set:
       encryption.enabled: true
+      encryption.deksetSecretName: keycloak-kms-proxy-dekset
       _cluster:
         root-host: example.org
         cluster-domain: cozy.local
@@ -91,6 +94,167 @@ tests:
           path: metadata.name
           value: keycloak-kms-proxy-kek
 
+  - it: generates a static KEK the proxy can decode (base64 of 32 bytes)
+    # data.kek is the Secret encoding of KKP_KEK, which must itself be base64
+    # of 32 bytes (44 characters), so data.kek is 60 characters long.
+    template: templates/proxy.yaml
+    documentSelector:
+      path: kind
+      value: Secret
+    set:
+      encryption.enabled: true
+      encryption.fields: disabled
+      _cluster:
+        root-host: example.org
+        cluster-domain: cozy.local
+    asserts:
+      - matchRegex:
+          path: data.kek
+          pattern: ^[A-Za-z0-9+/]{59}=$
+
+  - it: keeps an existing static KEK the proxy can decode
+    template: templates/proxy.yaml
+    documentSelector:
+      path: kind
+      value: Secret
+    kubernetesProvider:
+      scheme:
+        "v1/Secret":
+          gvr:
+            version: "v1"
+            resource: "secrets"
+          namespaced: true
+      objects:
+        - kind: Secret
+          apiVersion: v1
+          metadata:
+            name: keycloak-kms-proxy-kek
+            namespace: cozy-keycloak
+          data:
+            kek: QUFFQ0F3UUZCZ2NJQ1FvTERBME9EeEFSRWhNVUZSWVhHQmthR3h3ZEhoOD0=
+    set:
+      encryption.enabled: true
+      encryption.fields: disabled
+      _cluster:
+        root-host: example.org
+        cluster-domain: cozy.local
+    asserts:
+      - equal:
+          path: data.kek
+          value: QUFFQ0F3UUZCZ2NJQ1FvTERBME9EeEFSRWhNVUZSWVhHQmthR3h3ZEhoOD0=
+
+  - it: replaces a static KEK from earlier chart versions that the proxy rejects
+    # Earlier versions stored 32 alphanumeric characters, which decode to 24
+    # bytes; the proxy never started with them, so nothing was encrypted.
+    template: templates/proxy.yaml
+    documentSelector:
+      path: kind
+      value: Secret
+    kubernetesProvider:
+      scheme:
+        "v1/Secret":
+          gvr:
+            version: "v1"
+            resource: "secrets"
+          namespaced: true
+      objects:
+        - kind: Secret
+          apiVersion: v1
+          metadata:
+            name: keycloak-kms-proxy-kek
+            namespace: cozy-keycloak
+          data:
+            kek: YWJjZGVmZ2hpamtsbW5vcHFyc3R1dnd4eXowMTIzNDU=
+    set:
+      encryption.enabled: true
+      encryption.fields: disabled
+      _cluster:
+        root-host: example.org
+        cluster-domain: cozy.local
+    asserts:
+      - matchRegex:
+          path: data.kek
+          pattern: ^[A-Za-z0-9+/]{59}=$
+
+  - it: keeps the static KEK Secret when the release drops it
+    # The DEK set is wrapped with this KEK; deleting it with the release
+    # would make the data undecryptable on the next enable.
+    template: templates/proxy.yaml
+    documentSelector:
+      path: kind
+      value: Secret
+    set:
+      encryption.enabled: true
+      encryption.fields: disabled
+      _cluster:
+        root-host: example.org
+        cluster-domain: cozy.local
+    asserts:
+      - equal:
+          path: metadata.annotations["helm.sh/resource-policy"]
+          value: keep
+
+  - it: keeps a restored static KEK with a trailing newline
+    # The proxy decodes KKP_KEK with base64.StdEncoding, which skips CR and
+    # LF, so a key restored from a file ending in a newline still works.
+    template: templates/proxy.yaml
+    documentSelector:
+      path: kind
+      value: Secret
+    kubernetesProvider:
+      scheme:
+        "v1/Secret":
+          gvr:
+            version: "v1"
+            resource: "secrets"
+          namespaced: true
+      objects:
+        - kind: Secret
+          apiVersion: v1
+          metadata:
+            name: keycloak-kms-proxy-kek
+            namespace: cozy-keycloak
+          data:
+            kek: QUFFQ0F3UUZCZ2NJQ1FvTERBME9EeEFSRWhNVUZSWVhHQmthR3h3ZEhoOD0K
+    set:
+      encryption.enabled: true
+      encryption.fields: disabled
+      _cluster:
+        root-host: example.org
+        cluster-domain: cozy.local
+    asserts:
+      - equal:
+          path: data.kek
+          value: QUFFQ0F3UUZCZ2NJQ1FvTERBME9EeEFSRWhNVUZSWVhHQmthR3h3ZEhoOD0K
+
+  - it: refuses a stored static KEK the proxy cannot decode instead of replacing it
+    # 44 characters of valid base64 that decode to 33 bytes.
+    template: templates/proxy.yaml
+    kubernetesProvider:
+      scheme:
+        "v1/Secret":
+          gvr:
+            version: "v1"
+            resource: "secrets"
+          namespaced: true
+      objects:
+        - kind: Secret
+          apiVersion: v1
+          metadata:
+            name: keycloak-kms-proxy-kek
+            namespace: cozy-keycloak
+          data:
+            kek: QUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUE=
+    set:
+      encryption.enabled: true
+      encryption.fields: disabled
+      _cluster:
+        root-host: example.org
+        cluster-domain: cozy.local
+    asserts:
+      - failedTemplate:
+          errorPattern: "is not base64 of 32 bytes"
+
   - it: exposes the proxy on a postgres Service
     template: templates/proxy.yaml
     documentSelector:
@@ -98,6 +262,7 @@ tests:
       value: Service
     set:
       encryption.enabled: true
+      encryption.deksetSecretName: keycloak-kms-proxy-dekset
       _cluster:
         root-host: example.org
         cluster-domain: cozy.local
@@ -116,6 +281,7 @@ tests:
       value: StatefulSet
     set:
       encryption.enabled: true
+      encryption.deksetSecretName: keycloak-kms-proxy-dekset
       _cluster:
         root-host: example.org
         cluster-domain: cozy.local
@@ -138,6 +304,7 @@ tests:
       value: Deployment
     set:
       encryption.enabled: true
+      encryption.deksetSecretName: keycloak-kms-proxy-dekset
       encryption.kms.backend: vault-transit
       encryption.kms.vault.address: https://vault.vault.svc:8200
       encryption.kms.vault.keyName: keycloak
@@ -163,6 +330,7 @@ tests:
     template: templates/proxy.yaml
     set:
       encryption.enabled: true
+      encryption.deksetSecretName: keycloak-kms-proxy-dekset
       encryption.kms.backend: vault-transit
       encryption.kms.vault.address: https://vault.vault.svc:8200
       encryption.kms.vault.keyName: keycloak
@@ -179,6 +347,7 @@ tests:
     template: templates/proxy.yaml
     set:
       encryption.enabled: true
+      encryption.deksetSecretName: keycloak-kms-proxy-dekset
       encryption.kms.backend: vault
       _cluster:
         root-host: example.org
@@ -191,6 +360,7 @@ tests:
     template: templates/proxy.yaml
     set:
       encryption.enabled: true
+      encryption.deksetSecretName: keycloak-kms-proxy-dekset
       encryption.kms.backend: vault-transit
       encryption.kms.vault.keyName: keycloak
       encryption.kms.vault.tokenSecretName: keycloak-vault-token
@@ -205,6 +375,7 @@ tests:
     template: templates/proxy.yaml
     set:
       encryption.enabled: true
+      encryption.deksetSecretName: keycloak-kms-proxy-dekset
       encryption.kms.backend: vault-transit
       encryption.kms.vault.address: https://vault.vault.svc:8200
       encryption.kms.vault.tokenSecretName: keycloak-vault-token
@@ -219,6 +390,7 @@ tests:
     template: templates/proxy.yaml
     set:
       encryption.enabled: true
+      encryption.deksetSecretName: keycloak-kms-proxy-dekset
       encryption.kms.backend: vault-transit
       encryption.kms.vault.address: https://vault.vault.svc:8200
       encryption.kms.vault.keyName: keycloak
@@ -236,6 +408,7 @@ tests:
       value: Deployment
     set:
       encryption.enabled: true
+      encryption.deksetSecretName: keycloak-kms-proxy-dekset
       encryption.kms.backend: vault-transit
       encryption.kms.vault.address: https://vault.vault.svc:8200
       encryption.kms.vault.keyName: keycloak
@@ -279,6 +452,7 @@ tests:
     template: templates/proxy.yaml
     set:
       encryption.enabled: true
+      encryption.deksetSecretName: keycloak-kms-proxy-dekset
       encryption.kms.backend: vault-transit
       encryption.kms.vault.address: https://vault.vault.svc:8200
       encryption.kms.vault.keyName: keycloak
@@ -297,6 +471,7 @@ tests:
       value: Deployment
     set:
       encryption.enabled: true
+      encryption.deksetSecretName: keycloak-kms-proxy-dekset
       encryption.kms.backend: vault-transit
       encryption.kms.vault.address: https://vault.vault.svc:8200
       encryption.kms.vault.keyName: keycloak
@@ -332,6 +507,7 @@ tests:
     template: templates/proxy.yaml
     set:
       encryption.enabled: true
+      encryption.deksetSecretName: keycloak-kms-proxy-dekset
       encryption.kms.backend: vault-transit
       encryption.kms.vault.address: https://vault.vault.svc:8200
       encryption.kms.vault.keyName: keycloak
@@ -347,6 +523,7 @@ tests:
     template: templates/proxy.yaml
     set:
       encryption.enabled: true
+      encryption.deksetSecretName: keycloak-kms-proxy-dekset
       encryption.kms.backend: vault-transit
       encryption.kms.vault.address: https://vault.vault.svc:8200
       encryption.kms.vault.keyName: keycloak
@@ -365,6 +542,7 @@ tests:
       value: ServiceAccount
     set:
       encryption.enabled: true
+      encryption.deksetSecretName: keycloak-kms-proxy-dekset
       _cluster:
         root-host: example.org
         cluster-domain: cozy.local
@@ -383,6 +561,7 @@ tests:
       value: ServiceAccount
     set:
       encryption.enabled: true
+      encryption.deksetSecretName: keycloak-kms-proxy-dekset
       encryption.kms.backend: vault-transit
       encryption.kms.vault.address: https://vault.vault.svc:8200
       encryption.kms.vault.keyName: keycloak
@@ -403,6 +582,7 @@ tests:
       value: Deployment
     set:
       encryption.enabled: true
+      encryption.deksetSecretName: keycloak-kms-proxy-dekset
       _cluster:
         root-host: example.org
         cluster-domain: cozy.local
@@ -421,6 +601,7 @@ tests:
       value: Deployment
     set:
       encryption.enabled: true
+      encryption.deksetSecretName: keycloak-kms-proxy-dekset
       encryption.kms.backend: vault-transit
       encryption.kms.vault.address: https://vault.vault.svc:8200
       encryption.kms.vault.keyName: keycloak
@@ -434,13 +615,39 @@ tests:
           path: spec.template.spec.automountServiceAccountToken
           value: true
 
-  - it: mints an ephemeral DEK (no dekset) by default
+  - it: refuses to encrypt without a persistent DEK set
+    # Without KKP_DEKSET_FILE the proxy mints a new DEK on every start and
+    # cannot decrypt rows written before a restart.
+    template: templates/proxy.yaml
+    set:
+      encryption.enabled: true
+      _cluster:
+        root-host: example.org
+        cluster-domain: cozy.local
+    asserts:
+      - failedTemplate:
+          errorPattern: "encryption.deksetSecretName is required unless encryption.fields is"
+
+  - it: refuses to encrypt only emails without a persistent DEK set
+    template: templates/proxy.yaml
+    set:
+      encryption.enabled: true
+      encryption.fields: email-only
+      _cluster:
+        root-host: example.org
+        cluster-domain: cozy.local
+    asserts:
+      - failedTemplate:
+          errorPattern: "encryption.deksetSecretName is required unless encryption.fields is"
+
+  - it: runs as a passthrough without a DEK set when fields are disabled
     template: templates/proxy.yaml
     documentSelector:
       path: kind
       value: Deployment
     set:
       encryption.enabled: true
+      encryption.fields: disabled
       _cluster:
         root-host: example.org
         cluster-domain: cozy.local
@@ -452,6 +659,11 @@ tests:
       - equal:
           path: spec.template.spec.containers[0].name
           value: proxy
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: KKP_FIELDS
+            value: disabled
       - notContains:
           path: spec.template.spec.containers[0].env
           any: true
@@ -503,6 +715,7 @@ tests:
     set:
       encryption.enabled: true
       encryption.replicas: 2
+      encryption.fields: disabled
       _cluster:
         root-host: example.org
         cluster-domain: cozy.local
@@ -549,6 +762,7 @@ tests:
   - it: trusts a private Vault CA supplied inline as caBundle
     set:
       encryption.enabled: true
+      encryption.deksetSecretName: keycloak-kms-proxy-dekset
       encryption.kms.backend: vault-transit
       encryption.kms.vault.address: https://vault.example
       encryption.kms.vault.keyName: keycloak
@@ -623,6 +837,7 @@ tests:
   - it: mounts a pre-seeded CA Secret when caSecretName is set
     set:
       encryption.enabled: true
+      encryption.fields: disabled
       encryption.kms.backend: vault-transit
       encryption.kms.vault.address: https://vault.example
       encryption.kms.vault.keyName: keycloak
@@ -681,6 +896,7 @@ tests:
   - it: fails when both caBundle and caSecretName are set
     set:
       encryption.enabled: true
+      encryption.deksetSecretName: keycloak-kms-proxy-dekset
       encryption.kms.backend: vault-transit
       encryption.kms.vault.address: https://vault.example
       encryption.kms.vault.keyName: keycloak
@@ -699,6 +915,7 @@ tests:
   - it: leaves the proxy on the system trust store when no CA is configured
     set:
       encryption.enabled: true
+      encryption.fields: disabled
       encryption.kms.backend: vault-transit
       encryption.kms.vault.address: https://vault.example
       encryption.kms.vault.keyName: keycloak
@@ -729,6 +946,7 @@ tests:
   - it: ignores a pre-seeded Vault CA Secret under the static backend
     set:
       encryption.enabled: true
+      encryption.fields: disabled
       encryption.kms.vault.caSecretName: vault-ca
       _cluster:
         root-host: example.org
@@ -751,6 +969,7 @@ tests:
   - it: ignores an inline Vault CA bundle under the static backend
     set:
       encryption.enabled: true
+      encryption.fields: disabled
       encryption.kms.vault.caBundle: PEM
       _cluster:
         root-host: example.org
@@ -772,6 +991,7 @@ tests:
   - it: does not enforce Vault CA mutual exclusion under the static backend
     set:
       encryption.enabled: true
+      encryption.deksetSecretName: keycloak-kms-proxy-dekset
       encryption.kms.vault.caSecretName: vault-ca
       encryption.kms.vault.caBundle: PEM
       _cluster:
@@ -786,6 +1006,7 @@ tests:
   - it: rolls the pods when a chart-owned caBundle is rotated
     set:
       encryption.enabled: true
+      encryption.deksetSecretName: keycloak-kms-proxy-dekset
       encryption.kms.backend: vault-transit
       encryption.kms.vault.address: https://vault.example
       encryption.kms.vault.keyName: keycloak
@@ -811,6 +1032,7 @@ tests:
   - it: rejects a caBundle that is not a PEM certificate bundle
     set:
       encryption.enabled: true
+      encryption.deksetSecretName: keycloak-kms-proxy-dekset
       encryption.kms.backend: vault-transit
       encryption.kms.vault.address: https://vault.example
       encryption.kms.vault.keyName: keycloak
@@ -828,6 +1050,7 @@ tests:
   - it: reads a pre-seeded bundle from a custom caSecretKey
     set:
       encryption.enabled: true
+      encryption.deksetSecretName: keycloak-kms-proxy-dekset
       encryption.kms.backend: vault-transit
       encryption.kms.vault.address: https://vault.example
       encryption.kms.vault.keyName: keycloak
