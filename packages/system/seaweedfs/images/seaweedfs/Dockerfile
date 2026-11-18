@@ -16,6 +16,9 @@
 # seaweedfs/seaweedfs#11674 after 4.48; drop the patch on the first vendored
 # release that carries it.
 #
+# patches/peer-membership-handoff.diff prevents a startup peer-discovery gap
+# from leaving S3 gateways subscribed to only one filer's metadata changes.
+#
 # `make update` re-pins VERSION from the vendored chart, SOURCE_SHA256 from the
 # source archive of that tag, UPSTREAM_DIGEST from the upstream image of that
 # tag and the builder from upstream's docker/Dockerfile.go_build, and checks
