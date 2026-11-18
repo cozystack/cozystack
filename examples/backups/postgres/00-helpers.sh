@@ -88,11 +88,16 @@ psql_exec() {
 # with every character outside [a-z0-9-] replaced by "-", and the chart names
 # the CNPG Cluster after the release, so the cluster IS the release here.
 # Args: <cluster> <user>
+# Minted passwords are cached for this run only, in a private run-scoped
+# directory (mktemp -d is 0700), so a later run does not read a password a mint
+# has since replaced, and no other user on the host can read the cache.
+export COZY_PW_CACHE_DIR="${COZY_PW_CACHE_DIR:-$(mktemp -d "${TMPDIR:-/tmp}/cozy-pw.XXXXXXXX")}"
+
 app_password() {
     local cluster="$1" user="$2"
     local acct cache
     acct=$(printf '%s' "$user" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9-]/-/g')
-    cache="${TMPDIR:-/tmp}/cozy-pw-${NAMESPACE}-${cluster}-${acct}"
+    cache="${COZY_PW_CACHE_DIR}/${cluster}-${acct}"
     if [[ ! -s "$cache" ]]; then
         kubectl create --raw "/apis/core.cozystack.io/v1alpha1/namespaces/${NAMESPACE}/credentials/${cluster}.${acct}/mint" \
             -f <(printf '{"apiVersion":"core.cozystack.io/v1alpha1","kind":"CredentialRequest"}') \
