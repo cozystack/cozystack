@@ -321,3 +321,84 @@ tests:
         equal:
           path: spec.variant
           value: cozyplane
+
+  # The cozyplane datapath does not encrypt cross-node traffic; accepting the
+  # flag would leave traffic in cleartext while the operator believes otherwise.
+  - it: refuses encryption on cozyplane
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+          networkingVariant: cozyplane
+      networking:
+        encryption:
+          enabled: true
+    asserts:
+      - failedTemplate:
+          errorPattern: 'networking.encryption.enabled is not supported on the cozyplane networking variant'
+
+  # kubeadm's convention is the service network's address plus 10, not the
+  # first three octets plus .10, which falls outside a /25 starting at .128.
+  - it: derives clusterDNS from the service network address
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+          networkingVariant: cozyplane
+      networking:
+        serviceCIDR: "10.96.0.128/25"
+    asserts:
+      - documentSelector:
+          path: metadata.name
+          value: cozystack.networking
+        equal:
+          path: spec.components.cozyplane.values.cozyplane.egress.clusterDNS
+          value: "10.96.0.138"
+
+  - it: refuses to derive clusterDNS from a service network without an address 10
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+          networkingVariant: cozyplane
+      networking:
+        serviceCIDR: "10.96.0.0/29"
+    asserts:
+      - failedTemplate:
+          errorPattern: 'has no address 10 to derive networking.clusterDNS'
+
+  # Disabling cozystack.networking is the documented way to keep a hand-set
+  # live variant: the guard must not run for a Package that is not rendered.
+  - it: renders with cozystack.networking disabled despite a different live variant
+    set:
+      bundles:
+        disabledPackages: [cozystack.networking]
+        system:
+          enabled: true
+          variant: isp-full
+          networkingVariant: cozyplane
+    kubernetesProvider:
+      scheme:
+        "cozystack.io/v1alpha1/Package":
+          gvr: {group: "cozystack.io", version: "v1alpha1", resource: "packages"}
+          namespaced: false
+      objects:
+        - kind: Package
+          apiVersion: cozystack.io/v1alpha1
+          metadata: {name: cozystack.networking}
+          spec: {variant: kubeovn-cilium}
+    asserts:
+      - containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.networking
+          any: true
+        not: true
+      - containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.cozyplane-apiserver
+          any: true
