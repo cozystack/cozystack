@@ -224,7 +224,15 @@ cozystack-scheduler (emitted with its own variant in both branches)
 {{include "cozystack.platform.package.default" (list "cozystack.kubeovn-plunger" $root) }}
 {{- end }}
 {{include "cozystack.platform.package.full.default" (list "cozystack.cozy-proxy" $root) }}
-{{include "cozystack.platform.package.full.default" (list "cozystack.metallb" $root) }}
+{{- $metallb := include "cozystack.platform.package.full.default" (list "cozystack.metallb" $root) }}
+{{ $metallb }}
+{{- /* Gated on its dependencies' own includes rendering a Package, so it
+       follows their emission rules rather than restating them. The core is
+       rendered here only for that test; bundles/system.yaml emits it. */ -}}
+{{- $addressController := include "cozystack.platform.package.optional.default" (list "cozystack.address-controller" $root) }}
+{{- if and (trim $metallb) (trim $addressController) }}
+{{include "cozystack.platform.package.optional.default" (list "cozystack.metallb-iad" $root) }}
+{{- end }}
 {{include "cozystack.platform.package.default" (list "cozystack.reloader" $root) }}
 {{include "cozystack.platform.package.default" (list "cozystack.linstor-scheduler" $root) }}
 {{include "cozystack.platform.package.default" (list "cozystack.snapshot-controller" $root) }}

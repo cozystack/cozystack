@@ -2,8 +2,8 @@
 # -----------------------------------------------------------------------------
 # Execution-level regression test for the worker TalosConfigTemplate heredoc:
 # it pins that the reconcile Job's unquoted heredoc still emits a valid config
-# when talos.registryMirrors (and the Talos image coordinates) carry hostile
-# free-form input.
+# when talos.registryMirrors, talos.sysctls and the Talos image coordinates
+# carry hostile free-form input.
 #
 # Since the Phase 2 split the worker pool, its talos-reconcile Job, and the
 # TalosConfigTemplate it applies live only in the kubernetes-nodes chart; the
@@ -13,8 +13,8 @@
 # The reconcile Job applies the TalosConfigTemplate via an UNQUOTED `cat <<EOF`
 # heredoc, captured into a variable and then applied, so every line of its body
 # is subject to shell parameter expansion and command substitution at Job
-# runtime. The `talos.registryMirrors` knob and the Talos image coordinates
-# render free-form tenant-facing input into that heredoc. A helm-unittest
+# runtime. The `talos.registryMirrors` and `talos.sysctls` knobs and the Talos
+# image coordinates render free-form tenant-facing input into that heredoc. A helm-unittest
 # string `matchRegex` cannot catch a heredoc that the shell refuses to emit
 # (e.g. an unbalanced backtick from an un-escaped value): it never runs the
 # shell. This test does.
@@ -26,7 +26,7 @@
 #   escaped     the value reaches the heredoc and is escaped for backslash,
 #               dollar and backtick. Assert it survives a real shell as a
 #               LITERAL. This covers talos.installerRepository and
-#               talos.registryMirrors, both genuinely free-form.
+#               talos.registryMirrors and talos.sysctls (both keys and values).
 #   validated   the value is refused at render before it can reach the heredoc.
 #               Assert the refusal. This covers talos.schematicID and
 #               talos.version, which also land in the worker DataVolume name and
@@ -34,14 +34,31 @@
 #               wrong tool. templates/nodegroup.yaml pattern-checks them. It also
 #               covers kernelModules, whose names and parameters
 #               templates/_helpers.tpl checks before rebuilding the list.
+#               Sysctl map/value types and UTF-8 are validated before escaping.
 #
 # A field that is in neither arm is the regression this file exists to catch.
 #
-# Needs `helm` + `yq` and must run from the repo root.
+# Needs `helm`, `yq`, Bash and Dash and must run from the repo root.
 # Run with: bats hack/talos-reconcile-heredoc_test.bats
 # -----------------------------------------------------------------------------
 
 load test_helper
+
+render_sysctl_pool() {
+    out="$1"; shift
+    helm template kubernetes-nodes-myk8s-md0 packages/apps/kubernetes-nodes \
+        --namespace tenant-test \
+        --set cluster=myk8s \
+        --set _cluster.cluster-domain=cozy.local \
+        --set version=v1.35 \
+        --set minReplicas=0 --set maxReplicas=3 \
+        --set instanceType="" \
+        --set diskSize=20Gi --set storageClass=replicated \
+        --set 'roles[0]=ingress-nginx' \
+        --set resources.cpu=2 --set resources.memory=4Gi \
+        "$@" > "$out" 2>"$out.err"
+    [ -s "$out" ] || { cat "$out.err" >&2; return 1; }
+}
 
 @test "kubernetes-nodes refuses hostile Talos image coordinates at render" {
     work=$(mktemp -d)
@@ -333,4 +350,86 @@ VALS
     printf '%s' "$out" | grep -qF -e '- NVreg_RegistryDwords=PowerMizerEnable=0x1;PerfLevelSrc=0x2222' \
         || { echo "kernelModules parameter was not preserved literally" >&2; printf '%s\n' "$out" | grep -A6 'kernel:' >&2; rm -rf "$work"; exit 1; }
     rm -rf "$work"
+}
+
+@test "sysctl names and values survive the actual Job heredoc literally without shell execution" {
+    TMP=$(mktemp -d)
+    cat > "$TMP/values.yaml" <<'VALUES'
+talos:
+  sysctls:
+    user.max_user_namespaces: "11255"
+    net.ipv4.ip_local_port_range: "1024\t65535"
+    kernel.panic: "0"
+    '$(touch "$SYSCTL_MARKER")': '$(touch "$SYSCTL_MARKER")'
+    '`touch "$SYSCTL_MARKER"`': '`touch "$SYSCTL_MARKER"`'
+    '${SYSCTL_MARKER}': '${SYSCTL_MARKER}'
+    'backslash\$(touch "$SYSCTL_MARKER")': 'backslash\$(touch "$SYSCTL_MARKER")'
+    "quotes\"\\\nEOF\n$(touch \"$SYSCTL_MARKER\")": "quotes\"\\\nEOF\n$(touch \"$SYSCTL_MARKER\")"
+    "unicode\u0085EOF\u2028EOF\u2029": "unicode\u0085EOF\u2028EOF\u2029"
+    "empty": ""
+VALUES
+    render_sysctl_pool "$TMP/r.yaml" -f "$TMP/values.yaml"
+    yq -r 'select(.kind == "Job") | .spec.template.spec.containers[0].command[2]' "$TMP/r.yaml" > "$TMP/job.sh"
+    # Execute only the real manifest-producing heredoc, never the surrounding
+    # kubectl/Talos operations. YAML is parsed on both sides of the shell so
+    # escaping that prevents execution but corrupts the machine config also fails.
+    awk '/^TCT_MANIFEST=/{emit=1} emit{print} emit && /^\)"$/{exit}' "$TMP/job.sh" > "$TMP/heredoc.sh"
+    [ -s "$TMP/heredoc.sh" ]
+    printf '\nprintf "%%s\\n" "$TCT_MANIFEST"\n' >> "$TMP/heredoc.sh"
+    yq -o=json '.talos.sysctls | sort_keys(.)' "$TMP/values.yaml" > "$TMP/expected.json"
+    for shell in bash dash; do
+        SYSCTL_MARKER="$TMP/executed" TALOS_TOKEN=runtime-token "$shell" "$TMP/heredoc.sh" > "$TMP/tct.yaml"
+        [ ! -e "$TMP/executed" ]
+        yq -o=json '.spec.template.spec.data | from_yaml | .machine.sysctls | sort_keys(.)' "$TMP/tct.yaml" > "$TMP/actual.json"
+        diff -u "$TMP/expected.json" "$TMP/actual.json"
+        [ "$(yq '.spec.template.spec.data | from_yaml | .machine.token' "$TMP/tct.yaml")" = "runtime-token" ]
+    done
+    rm -rf "$TMP"
+}
+
+@test "sysctl types are rejected by both the schema and the render-time guard" {
+    TMP=$(mktemp -d)
+    for value in '11255' 'false' 'null' '["1"]' '{"evil":"$(id)"}'; do
+        input="talos.sysctls={\"kernel.panic\":$value}"
+        if render_sysctl_pool "$TMP/r.yaml" --set-json "$input"; then
+            echo "FAIL: schema accepted a non-string sysctl: $value"
+            false
+        fi
+        grep -q 'values don.t meet the specifications' "$TMP/r.yaml.err"
+        if render_sysctl_pool "$TMP/r.yaml" --skip-schema-validation --set-json "$input"; then
+            echo "FAIL: template accepted a non-string sysctl: $value"
+            false
+        fi
+        grep -Fq 'talos.sysctls["kernel.panic"] must be a string' "$TMP/r.yaml.err"
+    done
+    for value in '"$(id)"' 'false' '0' '[]' '["1"]'; do
+        input="talos.sysctls=$value"
+        if render_sysctl_pool "$TMP/r.yaml" --set-json "$input"; then
+            echo "FAIL: schema accepted a non-map sysctls: $value"
+            false
+        fi
+        grep -q 'values don.t meet the specifications' "$TMP/r.yaml.err"
+        if render_sysctl_pool "$TMP/r.yaml" --skip-schema-validation --set-json "$input"; then
+            echo "FAIL: template accepted a non-map sysctls: $value"
+            false
+        fi
+        grep -Fq 'talos.sysctls must be a map of strings' "$TMP/r.yaml.err"
+    done
+    rm -rf "$TMP"
+}
+
+@test "sysctl file values reject invalid UTF-8 rather than changing their bytes" {
+    TMP=$(mktemp -d)
+    # --set-file reads raw bytes, unlike the YAML/JSON-facing application API.
+    for bytes in '\377' '\300\257' '\342\202'; do
+        printf '%b' "$bytes" > "$TMP/value"
+        if render_sysctl_pool "$TMP/r.yaml" --skip-schema-validation --set-file "talos.sysctls.kernel\\.panic=$TMP/value"; then
+            echo "FAIL: accepted invalid UTF-8 sysctl bytes: $bytes"
+            false
+        fi
+        grep -Fq 'must be valid UTF-8' "$TMP/r.yaml.err"
+    done
+    printf '\357\277\275' > "$TMP/value"
+    render_sysctl_pool "$TMP/r.yaml" --skip-schema-validation --set-file "talos.sysctls.kernel\\.panic=$TMP/value"
+    rm -rf "$TMP"
 }

@@ -286,6 +286,12 @@
 {{-   $out := "" }}
 {{-   if and (eq $section "limits") (eq $type "storage") }}
 {{-     $out = "" }}
+{{- /*
+      A ResourceQuota accepts hugepages only as requests.hugepages-<size>,
+      limits.hugepages-<size> is rejected and the whole quota with it.
+*/}}
+{{-   else if and (eq $section "limits") (hasPrefix "hugepages-" $type) }}
+{{-     $out = "" }}
 {{-   else if and (eq $section "limits") (has $type $rawQuotaKeys) }}
 {{-     $out = $type }}
 {{-   else if not (has $type $rawQuotaKeys) }}
