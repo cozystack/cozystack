@@ -143,13 +143,15 @@ func workerSpecs(raw []byte) (map[string]any, error) {
 		result[key] = obj.Object[field]
 		if obj.GetKind() == "MachineDeployment" {
 			// Autoscaler bounds and capacity live in MD annotations; the class
-			// marker and the label and taint hints, which the pre-class chart
-			// never renders, are expected to differ. The labels and taints
-			// themselves are in the compared spec and bootstrap template.
+			// marker and the label, taint and GPU hints, which the pre-class
+			// chart never renders, are expected to differ. The labels, taints
+			// and GPUs themselves are in the compared spec, bootstrap template
+			// and machine template.
 			annotations := obj.GetAnnotations()
 			delete(annotations, classAnnotation)
-			delete(annotations, "capacity.cluster-autoscaler.kubernetes.io/labels")
-			delete(annotations, "capacity.cluster-autoscaler.kubernetes.io/taints")
+			for _, hint := range []string{"labels", "taints", "gpu-type", "gpu-count"} {
+				delete(annotations, "capacity.cluster-autoscaler.kubernetes.io/"+hint)
+			}
 			if len(annotations) == 0 {
 				annotations = nil
 			}

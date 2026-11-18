@@ -167,7 +167,7 @@
       "x-kubernetes-int-or-string": true
     },
     "gpus": {
-      "description": "List of GPUs to attach (NVIDIA driver requires at least 4 GiB RAM). A pool on a Kairos WorkerClass refuses GPUs: no NVIDIA driver path for Kairos workers exists yet, so use a Talos class for a GPU pool.",
+      "description": "List of GPUs to attach (NVIDIA driver requires at least 4 GiB RAM). A pool on a Kairos WorkerClass refuses GPUs: no NVIDIA driver path for Kairos workers exists yet, so use a Talos class for a GPU pool. The GPU capacity a pool announces to the cluster-autoscaler for scaling from zero counts only `nvidia.com/` devices, which the device plugin serves as `nvidia.com/gpu`.",
       "type": "array",
       "default": [],
       "items": {
