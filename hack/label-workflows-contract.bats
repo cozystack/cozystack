@@ -214,7 +214,7 @@ assert_labels_defined() {
   count="$(stale_exempt_list exempt-issue-labels | wc -l | tr -d ' ')"
   [ "$count" -eq 12 ]
   count="$(stale_exempt_list exempt-pr-labels | wc -l | tr -d ' ')"
-  [ "$count" -eq 4 ]
+  [ "$count" -eq 2 ]
 
   # The renewal path: frozen exempts both; an accepted issue or a held PR is
   # deliberate, not stale.

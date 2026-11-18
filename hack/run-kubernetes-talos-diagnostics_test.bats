@@ -114,16 +114,6 @@ assert_file_contains() {
   return 1
 }
 
-assert_file_lacks_pattern() {
-  local pattern="$1"
-  local file="$2"
-
-  if awk -v pattern="${pattern}" '$0 ~ pattern { found = 1 } END { exit found ? 0 : 1 }' "${file}"; then
-    printf 'expected %s not to match: %s\n' "${file}" "${pattern}" >&2
-    return 1
-  fi
-}
-
 @test "worker VMI rows retain names whose default interface has no IP" {
   . hack/e2e-chainsaw/_lib/run-kubernetes.sh
   rows=$(printf '%s\n' '{"items":[{"metadata":{"name":"worker-a"},"status":{"interfaces":[{"name":"default","ipAddress":"10.244.1.92"}]}},{"metadata":{"name":"worker-b"},"status":{"interfaces":[{"name":"other","ipAddress":"192.0.2.1"}]}}]}' | cozy_tenant_worker_vmi_rows)

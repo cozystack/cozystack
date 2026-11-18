@@ -308,7 +308,7 @@ tests:
         oldName: old
     asserts:
       - failedTemplate:
-          errorMessage: "postgres: bootstrap.enabled=true is incompatible with backup.useSystemBucket=true. Use a backups.cozystack.io/RestoreJob against the cozy-default BackupClass to restore from the system bucket; see docs/operations/backup-classes.md."
+          errorMessage: "postgres: bootstrap.enabled=true is incompatible with backup.useSystemBucket=true. Use a backups.cozystack.io/RestoreJob against the cozy-default BackupClass to restore from the system bucket; see https://cozystack.io/docs/v1/operations/services/backup-classes/."
 
   - it: "bootstrap without credentials: render fails fast"
     template: templates/db.yaml

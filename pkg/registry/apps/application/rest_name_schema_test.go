@@ -36,7 +36,7 @@ func TestNameCapComesFromTheShippedSchema(t *testing.T) {
 		cap                      int
 		explains                 string
 	}{
-		{"Kubernetes", "kubernetes-", "../../../../packages/system/kubernetes-rd/cozyrds/kubernetes.yaml", 32, "md0"},
+		{"Kubernetes", "kubernetes-", "../../../../packages/system/kubernetes-rd/cozyrds/kubernetes.yaml", 32, "kubernetes-nodes-<name>-<pool>"},
 		{"Kafka", "kafka-", "../../../../packages/system/kafka-rd/cozyrds/kafka.yaml", 44, "KRaft"},
 	} {
 		t.Run(tc.kind, func(t *testing.T) {

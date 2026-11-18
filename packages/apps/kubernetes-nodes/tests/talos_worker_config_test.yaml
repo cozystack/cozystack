@@ -7,7 +7,6 @@ suite: Talos worker machineconfig (GPU labels + kubelet reservations)
 #   - GPU pools must inject nodeLabels gpu=on so HAMi's device plugin
 #     (nodeSelector gpu=on) schedules and advertises nvidia.com/gpu;
 #   - kubelet reservation overrides must reach the machineconfig kubelet config.
-# Ported from the parent chart's gpu_node_labels_test / kubelet_reservation_test.
 
 templates:
   - templates/talos-reconcile-job.yaml

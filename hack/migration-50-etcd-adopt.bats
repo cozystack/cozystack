@@ -264,7 +264,7 @@ lineno() {
 @test "external S3 (no COSI at all) keeps the Strategy CR endpoint scheme verbatim" {
   prep
   # provisionBucket: false on a cluster with no SeaweedFS/COSI at all
-  # (docs/operations/backup-classes.md describes exactly this flip), so the
+  # (https://cozystack.io/docs/v1/operations/services/backup-classes/ describes exactly this flip), so the
   # BucketClaim CRD itself is absent and every claim query fails the way real
   # kubectl fails on an unknown resource type. That must classify as external
   # and must NOT abort the script under `set -euo pipefail`.
@@ -382,7 +382,7 @@ lineno() {
 @test "COSI with overridden bucket coordinates is still detected (no hardcoded names)" {
   prep
   # backupStorage.namespace / .bucketName are supported Package-CR overrides
-  # (docs/operations/backup-classes.md), and this hook cannot see chart values —
+  # (https://cozystack.io/docs/v1/operations/services/backup-classes/), and this hook cannot see chart values —
   # nothing plumbs them into the migration Job's env. So the claim may sit in any
   # namespace under any name. Keying on the COSI-assigned .status.bucketName,
   # which is what the projector republishes, makes the probe independent of both.

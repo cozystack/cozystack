@@ -18,7 +18,7 @@ cozy_e2e_storage_class() {
   esac
 }
 
-# talos_spec_block: emit the tenant Kubernetes CR `spec.talos` block with the Talos
+# talos_spec_block: emit the tenant KubernetesNodes CR `spec.talos` block with the Talos
 # OS image cache (imageFactoryURL) when the in-sandbox cache is up. Prints nothing
 # when it falls back to the public default, so the chart default applies.
 # Indented for insertion directly under `spec:` in the heredoc below.
@@ -5702,8 +5702,9 @@ YAML
 
   # Point worker DataVolume imports at the in-sandbox Talos OS image cache when it
   # is up, falling back to the public factory otherwise. Worker image pulls use
-  # the chart's public-registry default. Emitted right under spec: as
-  # `talos: { imageFactoryURL: ... }`, or nothing when the default applies.
+  # the chart's public-registry default. Emitted right under spec: of the
+  # KubernetesNodes pool below as `talos: { imageFactoryURL: ... }`, or nothing
+  # when the default applies. The Kubernetes CR takes no worker image field.
   local talos_block
   talos_block=$(talos_spec_block)
 
@@ -5714,7 +5715,6 @@ metadata:
   name: "${test_name}"
   namespace: tenant-test
 spec:
-${talos_block}
 ${oidc_block}
   addons:
     certManager:

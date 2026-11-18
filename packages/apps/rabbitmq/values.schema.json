@@ -127,6 +127,12 @@
       "type": "boolean",
       "default": false
     },
+    "affinity": {
+      "description": "Pod affinity applied to RabbitMQ pods (standard Kubernetes corev1.Affinity). Use podAntiAffinity with topologyKey `kubernetes.io/hostname` to spread RabbitMQ pods across nodes.",
+      "type": "object",
+      "default": {},
+      "x-kubernetes-preserve-unknown-fields": true
+    },
     "tls": {
       "description": "TLS configuration. TLS is off unless `tls.enabled` is set to true.",
       "type": "object",
