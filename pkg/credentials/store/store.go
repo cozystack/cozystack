@@ -163,7 +163,12 @@ func Ensure(ctx context.Context, c client.Client, app App, accounts []account.Ac
 					return written, fmt.Errorf("%s: %w", name, ErrLiveOwner)
 				}
 			}
-			if err := c.Delete(ctx, cur, client.Preconditions{UID: &cur.UID}); err != nil && !apierrors.IsNotFound(err) {
+			// Delete the exact object read here, by UID and resourceVersion: a
+			// concurrent create or mint can have adopted and re-passworded this
+			// leftover between the read above and here, leaving the UID but a new
+			// resourceVersion, and the precondition then fails rather than destroy
+			// the Secret a live release now owns.
+			if err := c.Delete(ctx, cur, client.Preconditions{UID: &cur.UID, ResourceVersion: &cur.ResourceVersion}); err != nil && !apierrors.IsNotFound(err) {
 				return written, fmt.Errorf("replace account Secret %s: %w", name, err)
 			}
 		case !apierrors.IsNotFound(err):

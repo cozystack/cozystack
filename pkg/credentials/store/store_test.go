@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	helmv2 "github.com/fluxcd/helm-controller/api/v2"
@@ -16,6 +17,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	cozyv1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
 	"github.com/cozystack/cozystack/pkg/apis/apps/defaulting"
@@ -123,6 +125,47 @@ func TestEnsureSeedsAndKeepsTheirs(t *testing.T) {
 	api := getSecret(t, c, "postgres-orders.api.account")
 	if len(api.OwnerReferences) != 1 || api.OwnerReferences[0].UID != "uid-1" {
 		t.Fatalf("a Secret seeded on update carries the owner from the start: %v", api.OwnerReferences)
+	}
+}
+
+func TestEnsureKeepsALeftoverAdoptedMidReplace(t *testing.T) {
+	ctx := context.Background()
+	var adopted atomic.Bool
+	c := fake.NewClientBuilder().WithScheme(newScheme(t)).WithInterceptorFuncs(interceptor.Funcs{
+		Delete: func(ctx context.Context, wc client.WithWatch, obj client.Object, opts ...client.DeleteOption) error {
+			// A concurrent create adopts and re-passwords the leftover between
+			// Ensure's read and this delete, which bumps its resourceVersion.
+			if sec, ok := obj.(*corev1.Secret); ok && sec.Name == "postgres-orders.web.account" && adopted.CompareAndSwap(false, true) {
+				live := &corev1.Secret{}
+				if err := wc.Get(ctx, client.ObjectKeyFromObject(obj), live); err != nil {
+					return err
+				}
+				live.OwnerReferences = []metav1.OwnerReference{{APIVersion: helmv2.GroupVersion.String(), Kind: helmv2.HelmReleaseKind, Name: "postgres-orders", UID: "uid-winner"}}
+				live.Data[account.PasswordKey] = []byte("minted")
+				if err := wc.Update(ctx, live); err != nil {
+					return err
+				}
+			}
+			return wc.Delete(ctx, obj, opts...)
+		},
+	}).Build()
+	app := testApp()
+
+	leftover, err := SeedSecret(app, account.Account{Username: "web", Mapped: "web"}, nil, metav1.Now(), "earlier")
+	if err != nil {
+		t.Fatal(err)
+	}
+	leftover.UID = "uid-leftover"
+	if err := c.Create(ctx, leftover); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := Ensure(ctx, c, app, accounts("web"), nil, metav1.Now(), "jane"); err == nil {
+		t.Fatal("Ensure must fail rather than replace a leftover adopted under it")
+	}
+	sec := getSecret(t, c, "postgres-orders.web.account")
+	if len(sec.OwnerReferences) != 1 || sec.OwnerReferences[0].UID != "uid-winner" || string(sec.Data[account.PasswordKey]) != "minted" {
+		t.Fatalf("the adopted Secret must survive: %+v data=%q", sec.ObjectMeta, sec.Data[account.PasswordKey])
 	}
 }
 
