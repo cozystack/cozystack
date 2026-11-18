@@ -1,0 +1,33 @@
+suite: harbor-system HelmRelease readiness gate
+
+release:
+  name: harbor
+  namespace: tenant-root
+
+set:
+  _namespace:
+    host: example.org
+    ingress: nginx
+    gateway: ""
+    seaweedfs: seaweedfs
+  _cluster:
+    solver: http01
+
+# CEL outcomes are executed in test/healthchecks; this suite pins the rendered
+# expression those fixtures run against.
+tests:
+  - it: gates readiness on the backing CNPG Cluster under the poller wait
+    template: templates/harbor.yaml
+    documentSelector:
+      path: kind
+      value: HelmRelease
+    asserts:
+      - equal:
+          path: spec.waitStrategy.name
+          value: poller
+      - equal:
+          path: spec.healthCheckExprs
+          value:
+            - apiVersion: postgresql.cnpg.io/v1
+              kind: Cluster
+              current: "has(status.conditions) && status.conditions.exists(e, e.type == 'Ready' && e.status == 'True')"

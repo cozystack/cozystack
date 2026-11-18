@@ -124,6 +124,62 @@ tests:
           path: spec.healthCheckExprs[3].failed
           value: "has(status.updateStatus) && status.updateStatus != 'operational' && status.updateStatus != 'expanding'"
 
+  # CEL outcomes for every entry are executed in test/healthchecks; this pins
+  # the rendered list those fixtures run against.
+  - it: also gates on the metrics VM* CRs and the CNPG Cluster
+    asserts:
+      - lengthEqual:
+          path: spec.healthCheckExprs
+          count: 9
+      - equal:
+          path: spec.healthCheckExprs[4].kind
+          value: VMCluster
+      - equal:
+          path: spec.healthCheckExprs[5].kind
+          value: VMAgent
+      - equal:
+          path: spec.healthCheckExprs[6].kind
+          value: VMAlert
+      - equal:
+          path: spec.healthCheckExprs[7].kind
+          value: VMAlertmanager
+      - equal:
+          path: spec.healthCheckExprs[8]
+          value:
+            apiVersion: postgresql.cnpg.io/v1
+            kind: Cluster
+            current: "has(status.conditions) && status.conditions.exists(e, e.type == 'Ready' && e.status == 'True')"
+
+  # Uninstall remediation deletes the CNPG Clusters, whose owner references
+  # make their PVCs garbage-collection targets, and a failed install is
+  # retried as an upgrade.
+  - it: retries failed installs and upgrades without uninstalling database owners
+    asserts:
+      - equal:
+          path: spec.install.strategy
+          value: {name: RetryOnFailure, retryInterval: 30s}
+      - equal:
+          path: spec.upgrade.strategy
+          value: {name: RetryOnFailure, retryInterval: 30s}
+      - equal:
+          path: spec.install.remediation.retries
+          value: -1
+      - equal:
+          path: spec.upgrade.remediation.retries
+          value: -1
+
+  # Grafana readiness is a post-install/post-upgrade hook in the system chart,
+  # so the release must run hooks and outlast the hook's 900s deadline.
+  - it: runs the Grafana readiness hook inside the release timeout
+    asserts:
+      - equal:
+          path: spec.timeout
+          value: 15m
+      - notExists:
+          path: spec.install.disableHooks
+      - notExists:
+          path: spec.upgrade.disableHooks
+
   # The collector a central tenant writes through enforces the rate the
   # platform sets for it, so its image is the platform's. The apps API defaults the
   # Monitoring spec but does not prune keys its schema leaves out, so a key set
