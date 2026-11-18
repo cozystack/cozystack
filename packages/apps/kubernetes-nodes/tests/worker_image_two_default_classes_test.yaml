@@ -114,3 +114,22 @@ tests:
     asserts:
       - failedTemplate:
           errorPattern: 'requested golden image "talos-worker-elsewhere-v1\.0\.0" not found'
+
+  # CDI reads only the GA annotation when it picks a class itself, so a newer
+  # class carrying only the beta one does not displace a GA default.
+  - it: prefers a GA default over a newer class with only the beta annotation
+    kubernetesProvider:
+      objects:
+        - kind: StorageClass
+          apiVersion: storage.k8s.io/v1
+          metadata:
+            name: beta-only
+            creationTimestamp: "2026-09-01T00:00:00Z"
+            annotations:
+              storageclass.beta.kubernetes.io/is-default-class: "true"
+    asserts:
+      - notFailedTemplate: {}
+      - equal:
+          path: spec.template.spec.virtualMachineTemplate.spec.dataVolumeTemplates[0].spec.storage.storageClassName
+          value: new
+        documentSelector: {path: kind, value: KubevirtMachineTemplate}

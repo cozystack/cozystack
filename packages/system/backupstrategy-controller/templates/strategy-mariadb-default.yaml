@@ -7,6 +7,8 @@ apiVersion: strategy.backups.cozystack.io/v1alpha1
 kind: MariaDB
 metadata:
   name: cozy-default-mariadb
+  annotations:
+    backups.cozystack.io/endpoint: {{ include "backupstrategy-controller.endpoint" . | quote }}
 spec:
   template:
     storage:

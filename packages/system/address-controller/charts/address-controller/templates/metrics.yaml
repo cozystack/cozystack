@@ -1,0 +1,121 @@
+{{- if .Values.metrics.enabled }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: address-controller-metrics
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: address-controller-metrics
+    {{- include "address-controller.labels" . | nindent 4 }}
+spec:
+  selector:
+    app: address-controller
+  ports:
+    - name: metrics
+      port: 8443
+      targetPort: metrics
+---
+# Lets the controller authenticate and authorize scrape requests.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: address-controller-metrics-auth
+  labels:
+    {{- include "address-controller.labels" . | nindent 4 }}
+rules:
+  - apiGroups: ["authentication.k8s.io"]
+    resources: ["tokenreviews"]
+    verbs: ["create"]
+  - apiGroups: ["authorization.k8s.io"]
+    resources: ["subjectaccessreviews"]
+    verbs: ["create"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: address-controller-metrics-auth
+  labels:
+    {{- include "address-controller.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: address-controller-metrics-auth
+subjects:
+  - kind: ServiceAccount
+    name: address-controller
+    namespace: {{ .Release.Namespace }}
+---
+# Bind a scraper's identity to this role to let it read the metrics.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: address-controller-metrics-reader
+  labels:
+    {{- include "address-controller.labels" . | nindent 4 }}
+rules:
+  - nonResourceURLs: ["/metrics"]
+    verbs: ["get"]
+{{- if and .Values.metrics.serviceMonitor.enabled (.Capabilities.APIVersions.Has "monitoring.coreos.com/v1/ServiceMonitor") }}
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: address-controller
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "address-controller.labels" . | nindent 4 }}
+    {{- with .Values.metrics.serviceMonitor.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  selector:
+    matchLabels:
+      app: address-controller-metrics
+  endpoints:
+    - port: metrics
+      scheme: https
+      bearerTokenFile: /var/run/secrets/kubernetes.io/serviceaccount/token
+      tlsConfig:
+        # The controller serves a self-signed certificate.
+        insecureSkipVerify: true
+{{- end }}
+{{- if and .Values.metrics.prometheusRule.enabled (.Capabilities.APIVersions.Has "monitoring.coreos.com/v1/PrometheusRule") }}
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: address-controller
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "address-controller.labels" . | nindent 4 }}
+spec:
+  groups:
+    - name: address-controller
+      rules:
+        - alert: IPAddressConflict
+          expr: sum by (class) (address_controller_ipaddresses{phase="Conflict"}) > 0
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "{{ "{{ $value }}" }} IPAddress(es) of class {{ "{{ $labels.class }}" }} in Conflict"
+            description: A Service holds an address that its binding does not authorize. kubectl get ipaddresses names the offender.
+        - alert: IPAddressLost
+          expr: sum by (class) (address_controller_ipaddresses{phase="Lost"}) > 0
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "{{ "{{ $value }}" }} IPAddress(es) of class {{ "{{ $labels.class }}" }} Lost"
+            description: The backend no longer holds a reserved address. Its claim reports Lost until the address is restored or deleted.
+        - alert: IPAddressClaimPending
+          expr: sum by (namespace, class) (address_controller_ipaddressclaims{phase="Pending"}) > 0
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: "{{ "{{ $value }}" }} IPAddressClaim(s) in {{ "{{ $labels.namespace }}" }} Pending for 15m"
+            description: The claim's class may be exhausted, missing or refused by its driver. kubectl describe on the claim shows why.
+{{- end }}
+{{- end }}

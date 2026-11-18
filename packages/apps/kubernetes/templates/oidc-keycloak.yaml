@@ -1,5 +1,5 @@
 {{- /*
-  Phase 1 — System mode: render one per-cluster Keycloak client and a
+  System mode: render one per-cluster Keycloak client and a
   per-cluster audience client scope inside the platform `cozy` realm.
 
   The clientId is namespace-prefixed so it is globally unique across the

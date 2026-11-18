@@ -1,0 +1,42 @@
+suite: monitoring-agents HelmRelease values match the monitoring-agents chart
+
+# The values below are consumed by packages/system/monitoring-agents, which
+# reads vmagent.remoteWrite.urls as a list and the tenant label from
+# vmagent.externalLabels.tenant. A key the chart does not read is dropped in
+# silence, and the chart then falls back to cozy-monitoring defaults that do
+# not resolve inside a tenant cluster. Its counterpart is
+# packages/system/monitoring-agents/tests/vmagent_remote_write_test.yaml.
+templates:
+  - templates/helmreleases/monitoring-agents.yaml
+
+values:
+  - values/common.yaml
+
+release:
+  name: kubernetes-clusterprod
+  namespace: tenant-a
+
+set:
+  addons.monitoringAgents.enabled: true
+  _namespace.monitoring: tenant-root
+  _cluster:
+    cluster-domain: cozy.local
+
+tests:
+  - it: sends metrics to the shortterm vminsert of the monitoring tenant as a urls list
+    asserts:
+      - equal:
+          path: spec.values.vmagent.remoteWrite
+          value:
+            urls:
+              - http://vminsert-shortterm.tenant-root.svc.cozy.local:8480/insert/0/prometheus
+
+  - it: labels series with the tenant that owns the cluster, not the monitoring tenant
+    asserts:
+      - equal:
+          path: spec.values.vmagent.externalLabels
+          value:
+            cluster: kubernetes-clusterprod
+            tenant: tenant-a
+      - notExists:
+          path: spec.values.global

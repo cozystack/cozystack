@@ -8,7 +8,7 @@ Cozystack integrates and ships many upstream cloud native components. If you bel
 
 ## Supported Versions
 
-The Cozystack project maintains three release lines at a time: **the latest stable minor and the two minors preceding it.** That is a rolling rule rather than a list of version numbers, so it does not go stale between releases — read it against the GitHub Releases page to see which concrete lines it currently names:
+The Cozystack project supports two release lines at a time: **the two latest minor releases**, the latest stable minor and the one before it. When a new minor ships its first stable release it becomes the latest, and the older of the two drops out. That is a rolling rule rather than a list of version numbers, so it does not go stale between releases — read it against the GitHub Releases page to see which concrete lines it currently names:
 
 <https://github.com/cozystack/cozystack/releases>
 
@@ -16,16 +16,16 @@ Note that the rule is keyed to release lines, not to the existence of a `release
 
 | Version line | Status | Notes |
 | --- | --- | --- |
-| Latest stable minor | Supported | Current stable release line. Security fixes land here first, and patch releases are cut from it. |
-| The two minors preceding the latest | Supported | Receive security and important maintenance fixes, backported from the current line. |
+| Latest stable minor | Supported | Current stable release line, the first supported line a fix reaches. Patch releases are cut from it. |
+| The minor before the latest | Supported | Receives the same security and maintenance fixes, backported once the latest line carries them. |
 | Older `1.x` minors | Limited support | Critical and upgrade-blocking fixes may be backported at maintainer discretion. Adopters are encouraged to move to a supported line. |
 | `v0.41.x` | End of life | The final pre-v1 line. It received patch releases through March 2026 during the v0 to v1 transition and no longer does; no further fixes are planned. |
 | Everything before `v0.41` | Not supported | Long superseded. Upgrade to a `1.x` line. |
 | `alpha`, `beta`, `rc` releases | Not supported | Pre-release builds are for testing and evaluation only. |
 
-Being in a supported row does not mean a line receives every fix. **The project does not have a documented rule for choosing which supported lines a given fix is backported to** — that decision is taken per fix by the maintainers, weighing severity against the risk and effort of the backport. This is stated rather than dressed up as a policy because no such policy exists; adopters who need a specific fix on a specific line should ask.
+Being in a supported row does not mean a line receives every fix. Fixes reach the supported lines through the backport batch, by the rules in [`docs/release/backports.md`](docs/release/backports.md): a fix merged into `main` with a `fix` or `security` title goes onto both lines, unless the policy keeps it for the next minor, a breaking change or a platform migration for instance, and a maintainer can override that for a single fix. Adopters who need a specific fix on a specific line should ask.
 
-Reporting a vulnerability against a line with limited support or at end of life is still welcome. We will confirm whether the issue also affects a supported line and fix it there; whether the fix is additionally backported to the older line is a per-fix maintainer decision on the same basis.
+Reporting a vulnerability against a line with limited support or at end of life is still welcome. We will confirm whether the issue also affects a supported line and fix it there; whether the fix is additionally backported to the older line is a per-fix maintainer decision.
 
 ## Reporting a Vulnerability
 

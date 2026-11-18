@@ -61,6 +61,7 @@ tests:
       value: Deployment
     set:
       encryption.enabled: true
+      encryption.deksetSecretName: keycloak-kms-proxy-dekset
     asserts:
       - notExists:
           path: spec.template.spec.affinity
@@ -74,6 +75,7 @@ tests:
       value: Deployment
     set:
       encryption.enabled: true
+      encryption.deksetSecretName: keycloak-kms-proxy-dekset
       encryption.affinity:
         nodeAffinity:
           requiredDuringSchedulingIgnoredDuringExecution:
@@ -104,6 +106,7 @@ tests:
     template: templates/proxy.yaml
     set:
       encryption.enabled: true
+      encryption.deksetSecretName: keycloak-kms-proxy-dekset
     asserts:
       - hasDocuments:
           count: 4

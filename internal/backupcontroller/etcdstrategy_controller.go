@@ -134,14 +134,14 @@ var etcdClusterGVR = schema.GroupVersionResource{
 // the wrong CRD via the typed client.
 func validateEtcdApplicationRef(ref corev1.TypedLocalObjectReference) error {
 	if ref.Kind != etcdAppKind {
-		return fmt.Errorf("Etcd strategy supports applicationRef.kind=%q, got %q", etcdAppKind, ref.Kind)
+		return fmt.Errorf("the Etcd strategy supports applicationRef.kind=%q, got %q", etcdAppKind, ref.Kind)
 	}
 	apiGroup := ""
 	if ref.APIGroup != nil {
 		apiGroup = *ref.APIGroup
 	}
 	if apiGroup != "" && apiGroup != etcdapp.GroupName {
-		return fmt.Errorf("Etcd strategy supports applicationRef.apiGroup=%q, got %q", etcdapp.GroupName, apiGroup)
+		return fmt.Errorf("the Etcd strategy supports applicationRef.apiGroup=%q, got %q", etcdapp.GroupName, apiGroup)
 	}
 	return nil
 }

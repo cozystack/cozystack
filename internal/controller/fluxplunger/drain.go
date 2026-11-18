@@ -6,12 +6,16 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
+	"sync"
 	"time"
 
 	helmv2 "github.com/fluxcd/helm-controller/api/v2"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/apiutil"
@@ -26,6 +30,16 @@ const (
 	// passes it, derived from the pod's termination grace period.
 	ShutdownDrainTimeoutFlag = "shutdown-drain-timeout"
 )
+
+// ValidateShutdownDrainTimeout refuses a drain deadline that is already spent
+// when the drain starts: the drain would leave every fence behind without
+// listing one.
+func ValidateShutdownDrainTimeout(d time.Duration) error {
+	if d <= 0 {
+		return fmt.Errorf("--%s must be positive, got %v", ShutdownDrainTimeoutFlag, d)
+	}
+	return nil
+}
 
 // DrainFences gives up every fence flux-plunger holds, for a flux-plunger that is
 // stopping. A live release has its recovery aborted, the suspension and the fence
@@ -43,8 +57,10 @@ func (r *FluxPlunger) DrainFences(ctx context.Context) (int, error) {
 	if r.APIReader != nil {
 		reader = r.APIReader
 	}
-	// held is what the last listing that succeeded found; -1 until one has.
-	held := -1
+	// left is how many fences the last pass that ran left in place, named in
+	// names; -1 until a listing has succeeded.
+	left := -1
+	var names []string
 	for {
 		list := &helmv2.HelmReleaseList{}
 		if err := reader.List(ctx, list); err != nil {
@@ -54,18 +70,17 @@ func (r *FluxPlunger) DrainFences(ctx context.Context) (int, error) {
 			logger.Info("Could not list HelmReleases yet, retrying", "error", err.Error())
 			select {
 			case <-ctx.Done():
-				return held, ctx.Err()
+				return left, stillFenced(ctx.Err(), names)
 			case <-time.After(drainPollInterval):
 			}
 			continue
 		}
-		held = 0
+		names = names[:0]
 		for i := range list.Items {
 			hr := &list.Items[i]
 			if !controllerutil.ContainsFinalizer(hr, fenceFinalizer) {
 				continue
 			}
-			held++
 			var err error
 			if hr.DeletionTimestamp.IsZero() {
 				// The relinquishing apply drops every field flux-plunger's manager owns,
@@ -78,16 +93,40 @@ func (r *FluxPlunger) DrainFences(ctx context.Context) (int, error) {
 			if err != nil {
 				logger.Info("Could not give up a fence yet, retrying", "helmrelease", client.ObjectKeyFromObject(hr).String(), "error", err.Error())
 			}
+			if stillHolds(ctx, reader, hr) {
+				names = append(names, client.ObjectKeyFromObject(hr).String())
+			}
 		}
-		if held == 0 {
+		left = len(names)
+		if left == 0 {
 			return 0, nil
 		}
 		select {
 		case <-ctx.Done():
-			return held, ctx.Err()
+			return left, stillFenced(ctx.Err(), names)
 		case <-time.After(drainPollInterval):
 		}
 	}
+}
+
+// stillHolds reports whether the release still carries the fence after the
+// drain's step on it. A release that cannot be read, other than one that is
+// gone, counts as held: naming one too many is safer than naming one too few.
+func stillHolds(ctx context.Context, reader client.Reader, hr *helmv2.HelmRelease) bool {
+	cur := &helmv2.HelmRelease{}
+	if err := reader.Get(ctx, client.ObjectKeyFromObject(hr), cur); err != nil {
+		return !apierrors.IsNotFound(err)
+	}
+	return controllerutil.ContainsFinalizer(cur, fenceFinalizer)
+}
+
+// stillFenced names the releases the last pass left fenced, so the line
+// reporting a cut-short drain says which releases an operator has to look at.
+func stillFenced(err error, names []string) error {
+	if len(names) == 0 {
+		return err
+	}
+	return fmt.Errorf("%w; still fenced: %s", err, strings.Join(names, ", "))
 }
 
 const (
@@ -140,23 +179,29 @@ type drainingManager interface {
 // informer cache is frozen and would show fences already gone. Only a
 // flux-plunger that led drains: one that never did stops while the leader goes
 // on, and the fences are the leader's. Without leader election Elected is closed
-// from the start.
+// from the start. controller-runtime closes Elected only once its
+// leader-election runnables have started, so a process stopped in between holds
+// the Lease yet takes the never-led path; it has run no reconcile, so the
+// fences it skips are ones it inherited, and the next leader takes them over.
 func RunManager(ctx context.Context, mgr drainingManager, drain time.Duration) error {
-	drainer := &FluxPlunger{
-		Client:    mgr.GetClient(),
-		APIReader: mgr.GetAPIReader(),
-		Recorder:  apiEventRecorder{c: mgr.GetClient()},
-	}
 	return RunThenDrain(ctx, mgr.Start, func(dctx context.Context) (int, error) {
 		select {
 		case <-mgr.Elected():
+			drainer := &FluxPlunger{
+				Client:    mgr.GetClient(),
+				APIReader: mgr.GetAPIReader(),
+				Recorder:  newAPIEventRecorder(dctx, mgr.GetClient()),
+			}
 			return drainer.DrainFences(dctx)
 		default:
-			log.FromContext(dctx).Info("Never became leader; leaving the fences to the leader")
-			return 0, nil
+			return 0, errNeverLed
 		}
 	}, drain)
 }
+
+// errNeverLed is what the drain of a flux-plunger that never became leader
+// returns: it drained nothing, and the fences are the leader's.
+var errNeverLed = errors.New("never became leader; the fences are left to the leader")
 
 // RunThenDrain runs the manager until it stops, then drains under a deadline of
 // its own: the context run was given is cancelled by the stop signal, so the drain
@@ -174,9 +219,15 @@ func RunThenDrain(ctx context.Context, run func(context.Context) error, drain fu
 	dctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	logger := log.FromContext(ctx)
-	if left, err := drain(dctx); err != nil {
-		logger.Info("Stopped with uninstall fences still held; the next flux-plunger or the chart's pre-delete hook releases them", "held", left, "error", err.Error())
-	} else {
+	left, err := drain(dctx)
+	switch {
+	case errors.Is(err, errNeverLed):
+		logger.Info("Never became leader; leaving the fences to the leader")
+	case err != nil && left < 0:
+		logger.Error(err, "Stopped with no listing of HelmReleases answered; the next flux-plunger or the chart's pre-delete hook releases whatever is fenced")
+	case err != nil:
+		logger.Error(err, "Stopped with uninstall fences still held; the next flux-plunger or the chart's pre-delete hook releases them", "held", left)
+	default:
 		logger.Info("Released every uninstall fence before stopping")
 	}
 	return runErr
@@ -184,28 +235,65 @@ func RunThenDrain(ctx context.Context, run func(context.Context) error, drain fu
 
 // apiEventRecorder writes each Event straight to the apiserver. The drain cannot
 // use the manager's recorder: the manager stops its recorder provider before
-// Start returns, after which that recorder delivers nothing.
+// Start returns, after which that recorder delivers nothing. Like that recorder
+// it folds repeats of one Event on one object into a single counted Event, since
+// the drain revisits every fenced release once a second. Every write is bounded
+// by the drain's context, so none outlives the drain.
 type apiEventRecorder struct {
-	c client.Client
+	ctx    context.Context
+	c      client.Client
+	mu     sync.Mutex
+	folded map[eventKey]*corev1.Event
 }
 
-func (r apiEventRecorder) Event(obj runtime.Object, eventtype, reason, message string) {
+// eventKey is what makes two Events repeats of one another.
+type eventKey struct {
+	uid                     types.UID
+	namespace, name         string
+	eventtype, reason, text string
+}
+
+// eventWriteTimeout caps one Event write inside the drain's own deadline.
+const eventWriteTimeout = 5 * time.Second
+
+func newAPIEventRecorder(ctx context.Context, c client.Client) *apiEventRecorder {
+	return &apiEventRecorder{ctx: ctx, c: c, folded: map[eventKey]*corev1.Event{}}
+}
+
+func (r *apiEventRecorder) Event(obj runtime.Object, eventtype, reason, message string) {
 	r.write(obj, eventtype, reason, message)
 }
 
-func (r apiEventRecorder) Eventf(obj runtime.Object, eventtype, reason, messageFmt string, args ...interface{}) {
+func (r *apiEventRecorder) Eventf(obj runtime.Object, eventtype, reason, messageFmt string, args ...interface{}) {
 	r.write(obj, eventtype, reason, fmt.Sprintf(messageFmt, args...))
 }
 
-func (r apiEventRecorder) AnnotatedEventf(obj runtime.Object, _ map[string]string, eventtype, reason, messageFmt string, args ...interface{}) {
+func (r *apiEventRecorder) AnnotatedEventf(obj runtime.Object, _ map[string]string, eventtype, reason, messageFmt string, args ...interface{}) {
 	r.write(obj, eventtype, reason, fmt.Sprintf(messageFmt, args...))
 }
 
-func (r apiEventRecorder) write(obj runtime.Object, eventtype, reason, message string) {
+func (r *apiEventRecorder) write(obj runtime.Object, eventtype, reason, message string) {
 	logger := log.Log.WithName("drain-events")
 	o, ok := obj.(client.Object)
 	if !ok {
 		logger.Info("Cannot record an event for this object", "type", fmt.Sprintf("%T", obj), "reason", reason)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.ctx, eventWriteTimeout)
+	defer cancel()
+	now := metav1.Now()
+	key := eventKey{uid: o.GetUID(), namespace: o.GetNamespace(), name: o.GetName(), eventtype: eventtype, reason: reason, text: message}
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if ev, seen := r.folded[key]; seen {
+		// A patch, not an update: the chart grants events create and patch only.
+		base := ev.DeepCopy()
+		ev.Count++
+		ev.LastTimestamp = now
+		if err := r.c.Patch(ctx, ev, client.MergeFrom(base)); err != nil {
+			logger.Info("Could not count a repeated event", "reason", reason, "error", err.Error())
+		}
 		return
 	}
 	gvk, err := apiutil.GVKForObject(o, r.c.Scheme())
@@ -213,7 +301,6 @@ func (r apiEventRecorder) write(obj runtime.Object, eventtype, reason, message s
 		logger.Info("Cannot record an event", "reason", reason, "error", err.Error())
 		return
 	}
-	now := metav1.Now()
 	ev := &corev1.Event{
 		ObjectMeta: metav1.ObjectMeta{GenerateName: o.GetName() + ".", Namespace: o.GetNamespace()},
 		InvolvedObject: corev1.ObjectReference{
@@ -231,9 +318,9 @@ func (r apiEventRecorder) write(obj runtime.Object, eventtype, reason, message s
 		LastTimestamp:  now,
 		Count:          1,
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
 	if err := r.c.Create(ctx, ev); err != nil {
 		logger.Info("Could not record an event", "reason", reason, "error", err.Error())
+		return
 	}
+	r.folded[key] = ev
 }

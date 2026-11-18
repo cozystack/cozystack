@@ -22,11 +22,11 @@ spec:
   rejected on upgrade.
   */}}
   {{- $grace := int .Values.shutdownGracePeriodSeconds }}
-  {{- if ne (toString .Values.shutdownGracePeriodSeconds) (toString $grace) }}
-  {{- fail "shutdownGracePeriodSeconds must be a whole number of seconds: terminationGracePeriodSeconds takes an integer" }}
-  {{- end }}
   {{- if or (lt $grace 40) (gt $grace 140) }}
   {{- fail "shutdownGracePeriodSeconds must be between 40 and 140: below, the drain gets no time after the manager's 10s stop; above, the pre-delete hook cannot wait the pod out inside its deadline" }}
+  {{- end }}
+  {{- if ne (toString .Values.shutdownGracePeriodSeconds) (toString $grace) }}
+  {{- fail "shutdownGracePeriodSeconds must be a whole number of seconds: terminationGracePeriodSeconds takes an integer" }}
   {{- end }}
   replicas: 1
   strategy:

@@ -266,22 +266,54 @@ resolve_silent_conclusions() {
   plan_block="$(job_block plan "$PULL_REQUESTS" | code_lines)"
   [ -n "$plan_block" ]
 
-  count="$(printf '%s\n' "$plan_block" | grep -c "grep -qvE '\^docs/' /tmp/changed_norenames.txt" || true)"
+  count="$(printf '%s\n' "$plan_block" | grep -c "grep -qvE '\^(.*)' /tmp/changed_norenames.txt" || true)"
   [ "${count:-0}" -eq 1 ]
 
   # The rename-detected list may still feed the build matrix, but never this.
-  count="$(printf '%s\n' "$plan_block" | grep -c "grep -qvE '\^docs/' /tmp/changed.txt" || true)"
+  count="$(printf '%s\n' "$plan_block" | grep -c "grep -qvE '\^(.*)' /tmp/changed.txt" || true)"
   [ "${count:-0}" -eq 0 ]
 
   # The fork half of the same agreement: both sides of a rename are inspected.
-  # Pinned on the docs-only expression itself — `previous_filename` also appears
+  # Pinned on the skip expression itself — `previous_filename` also appears
   # in the TIA file list a few lines down, so counting the identifier would stay
   # satisfied by that one with this check deleted.
   block="$(job_block resolve "$FORK" | code_lines)"
   [ -n "$block" ]
   count="$(printf '%s\n' "$block" \
-    | grep -c 'f\.previous_filename && !isDocs(f\.previous_filename)' || true)"
+    | grep -c 'f\.previous_filename && !isNoRuntime(f\.previous_filename)' || true)"
   [ "${count:-0}" -eq 1 ]
+}
+
+@test "both lanes skip e2e for the same path prefixes" {
+  # The rename test above pins HOW each lane reads its list; this one pins
+  # WHAT it skips. A prefix added to one lane only is a fork PR that one lane
+  # reads as nothing-to-build and the other as needing the pr-patch artifact,
+  # which nothing will ever produce.
+  plan_prefixes="$(job_block plan "$PULL_REQUESTS" | code_lines \
+    | sed -nE "s,.*grep -qvE '\^\(([^)]*)\)' /tmp/changed_norenames\.txt.*,\1,p" \
+    | tr '|' '\n' | sort)"
+  fork_prefixes="$(job_block resolve "$FORK" | code_lines \
+    | sed -nE "s,.*const noRuntimePrefixes = \[([^]]*)\];.*,\1,p" \
+    | tr ',' '\n' | tr -d " '" | sort)"
+  [ -n "$plan_prefixes" ]
+  printf '%s\n' "$plan_prefixes" | grep -qx 'docs/'
+  if [ "$plan_prefixes" != "$fork_prefixes" ]; then
+    echo "plan skips:" >&2; printf '  %s\n' $plan_prefixes >&2
+    echo "fork skips:" >&2; printf '  %s\n' $fork_prefixes >&2
+    exit 1
+  fi
+
+  # The tools in that list must also be the ones the build matrix and the suite
+  # selector leave alone in a mixed diff; otherwise a tool skipped on its own
+  # still rebuilds everything beside a one-line package change.
+  tools="$(printf '%s\n' "$plan_prefixes" | grep -vx 'docs/')"
+  [ -n "$tools" ]
+  matrix_tools="$(sed -nE "s,^tooling_pattern='\^cmd/\(([^)]*)\)/'$,\1,p" "$REPO_ROOT/hack/build-matrix.sh" \
+    | tr '|' '\n' | sed 's,^,cmd/,; s,$,/,' | sort)"
+  select_tools="$(sed -nE 's,^    (cmd/[^)]*)\)$,\1,p' "$REPO_ROOT/hack/select-e2e.sh" \
+    | tr '|' '\n' | sed 's,\*$,,' | sort)"
+  [ "$tools" = "$matrix_tools" ]
+  [ "$tools" = "$select_tools" ]
 }
 
 @test "same-repo gate: every publishing guard names the same label set" {

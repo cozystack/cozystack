@@ -176,11 +176,8 @@ func TestBackupCleanup_Altinity_DoesNotFallThroughToVelero(t *testing.T) {
 
 // TestBackupCleanup_MariaDB_DoesNotFallThroughToVelero locks in the same
 // invariant as the Altinity test above for the MariaDB strategy. The
-// dispatcher must explicitly route MariaDB-strategy Backups to a no-op
-// cleanup rather than fall through to the Velero default - the MariaDB
-// driver does not own the operator-side k8s.mariadb.com/Backup CR or the
-// S3/PVC archive behind it (rbac.yaml grants no delete verb on
-// k8s.mariadb.com/backups for that reason). The test seeds the Velero
+// dispatcher must route MariaDB-strategy Backups to their own cleanup
+// rather than fall through to the Velero default. The test seeds the Velero
 // metadata keys plus a matching velero.io/Backup; with the explicit branch
 // no DeleteBackupRequest is synthesised, and the Velero Backup survives.
 // Without the branch the default falls through to cleanupVeleroBackup,

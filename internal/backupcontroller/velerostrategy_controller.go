@@ -380,9 +380,9 @@ func (r *BackupJobReconciler) collectUnderlyingResources(ctx context.Context, ap
 	// the live PVC aside and delete the DataVolume, so the restored PVC is
 	// created fresh under the original name. The HelmRelease is suspended only
 	// until Velero restores it; Flux then recreates the DataVolume and CDI
-	// adopts the restored PVC through the allowClaimAdoption annotation the
-	// restore's resource modifiers set. A standalone VMDisk has no VM, so there
-	// is no IP/MAC to collect.
+	// adopts the restored PVC because the vm-disk chart sets allowClaimAdoption
+	// on that DataVolume. A standalone VMDisk has no VM, so there is no IP/MAC
+	// to collect.
 	if appKind == vmDiskAppKind {
 		return marshalUnderlyingResources(vmInstanceResources{
 			DataVolumes: []backupsv1alpha1.DataVolumeResource{{
@@ -558,7 +558,9 @@ func (r *BackupJobReconciler) createBackupResource(ctx context.Context, backupJo
 		veleroBackupNamespaceMetadataKey: veleroBackup.Namespace,
 	}
 
-	// Create a basic artifact referencing the Velero backup
+	// SizeBytes stays unset: data lands in a content-addressed kopia
+	// repository shared across backups, so there is no per-backup stored
+	// size, and DataUpload totalBytes counts bytes read, not bytes stored.
 	artifact := &backupsv1alpha1.BackupArtifact{
 		URI: fmt.Sprintf("velero://%s/%s", veleroBackup.Namespace, veleroBackup.Name),
 	}
@@ -882,8 +884,11 @@ func marshalPatchData(v any) (string, error) {
 
 // createResourceModifiersConfigMap creates a Velero resource modifiers ConfigMap
 // that patches VM resources during restore:
-//   - PVC adoption: always adds cdi.kubevirt.io/allowClaimAdoption=true to all
-//     restored PVCs so CDI can adopt them when a HelmRelease of VMDisk recreates a DV.
+//   - PVC adoption: adds cdi.kubevirt.io/allowClaimAdoption=true to all
+//     restored PVCs. CDI v1.66 does not read it there, only on the DataVolume,
+//     so adoption of a restored PVC rests on the vm-disk chart annotating the
+//     DataVolume it recreates. Without it, CDI refuses that DataVolume unless
+//     the DataVolumeClaimAdoption feature gate is on.
 //   - OVN IP/MAC: sets OVN annotations on the VirtualMachine for correct ssh access to restored VM.
 func (r *RestoreJobReconciler) createResourceModifiersConfigMap(ctx context.Context, restoreJob *backupsv1alpha1.RestoreJob, backup *backupsv1alpha1.Backup, ur *runtime.RawExtension, target restoreTarget, opts RestoreOptions) (*corev1.ConfigMap, error) {
 	logger := getLogger(ctx)
@@ -892,7 +897,7 @@ func (r *RestoreJobReconciler) createResourceModifiersConfigMap(ctx context.Cont
 
 	var rules []resourceModifierRule
 
-	// PVC adoption: allow CDI to adopt restored PVCs when the HelmRelease recreates a DV.
+	// Inert for CDI, which reads allowClaimAdoption only on the DataVolume.
 	pvcPatch, err := marshalPatchData(map[string]any{
 		"metadata": map[string]any{
 			"annotations": map[string]string{

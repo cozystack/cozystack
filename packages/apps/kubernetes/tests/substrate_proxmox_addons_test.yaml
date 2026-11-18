@@ -319,3 +319,76 @@ tests:
           kind: Deployment
           name: kubernetes-test-pccm
           any: true
+
+  # --- the cloud-config builders run the bundled busybox ---------------------
+  # Both builders read the Proxmox token Secret, so their image comes from
+  # images/busybox.tag and nothing in the values can replace it.
+  - it: keeps the bundled busybox in the CSI cloud-config builder when values carry an image override
+    template: templates/csi-proxmox/controller.yaml
+    set:
+      <<: *base
+      images:
+        waitForKubeconfig: registry.example.test/busybox:6.6.6
+    documentSelector:
+      path: kind
+      value: Deployment
+    asserts:
+      - equal:
+          path: spec.template.spec.initContainers[1].name
+          value: build-cloud-config
+      - matchRegex:
+          path: spec.template.spec.initContainers[1].image
+          pattern: '^docker\.io/library/busybox:[^@]+@sha256:[0-9a-f]{64}$'
+
+  - it: routes the CSI cloud-config builder through _cluster.images-registry
+    template: templates/csi-proxmox/controller.yaml
+    set:
+      <<: *base
+      _cluster:
+        cluster-domain: cozy.local
+        images-registry: registry.airgap.example.test
+    documentSelector:
+      path: kind
+      value: Deployment
+    asserts:
+      - equal:
+          path: spec.template.spec.initContainers[1].name
+          value: build-cloud-config
+      - matchRegex:
+          path: spec.template.spec.initContainers[1].image
+          pattern: '^registry\.airgap\.example\.test/docker\.io/library/busybox:'
+
+  - it: keeps the bundled busybox in the CCM cloud-config builder when values carry an image override
+    template: templates/ccm-proxmox/controller.yaml
+    set:
+      <<: *base
+      images:
+        waitForKubeconfig: registry.example.test/busybox:6.6.6
+    documentSelector:
+      path: kind
+      value: Deployment
+    asserts:
+      - equal:
+          path: spec.template.spec.initContainers[1].name
+          value: build-cloud-config
+      - matchRegex:
+          path: spec.template.spec.initContainers[1].image
+          pattern: '^docker\.io/library/busybox:[^@]+@sha256:[0-9a-f]{64}$'
+
+  - it: routes the CCM cloud-config builder through _cluster.images-registry
+    template: templates/ccm-proxmox/controller.yaml
+    set:
+      <<: *base
+      _cluster:
+        cluster-domain: cozy.local
+        images-registry: registry.airgap.example.test
+    documentSelector:
+      path: kind
+      value: Deployment
+    asserts:
+      - equal:
+          path: spec.template.spec.initContainers[1].name
+          value: build-cloud-config
+      - matchRegex:
+          path: spec.template.spec.initContainers[1].image
+          pattern: '^registry\.airgap\.example\.test/docker\.io/library/busybox:'
