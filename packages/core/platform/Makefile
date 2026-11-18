@@ -44,7 +44,7 @@ image-migrations:
 	mkdir -p images/migrations/etcd-operator-crds
 	cp ../../system/etcd-operator-crds/templates/*.yaml images/migrations/etcd-operator-crds/
 	# The v1beta2 group snapshot CRDs, rendered from the snapshot-controller
-	# chart with that release's ownership metadata, so migration 61 can create
+	# chart with that release's ownership metadata, so migration 62 can create
 	# them before any HelmRelease renders against the cluster.
 	rm -rf images/migrations/snapshot-controller-crds
 	mkdir -p images/migrations/snapshot-controller-crds
@@ -54,7 +54,7 @@ image-migrations:
 	| yq --split-exp '"images/migrations/snapshot-controller-crds/" + .metadata.name + ".yaml"' \
 		'$(GROUP_SNAPSHOT_CRDS_EXPR)'
 	# yq exits 0 on empty input, so a failed render would otherwise ship an
-	# image whose migration 61 deletes the old CRDs and cannot recreate them.
+	# image whose migration 62 deletes the old CRDs and cannot recreate them.
 	test "$$(ls images/migrations/snapshot-controller-crds | wc -l)" -eq 3
 	docker buildx build images/migrations \
 		$(call image-tags,platform-migrations,v$(COZYSTACK_VERSION)) \

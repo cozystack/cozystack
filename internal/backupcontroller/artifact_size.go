@@ -36,6 +36,14 @@ type s3ObjectInfo struct {
 
 type s3ObjectLister interface {
 	ListObjects(ctx context.Context, bucket, prefix string, recursive bool) ([]s3ObjectInfo, error)
+	StatObject(ctx context.Context, bucket, key string) (int64, error)
+}
+
+type s3ObjectRemover interface {
+	// RemoveObject deletes key. S3 answers 204 for a key that does not
+	// exist and minio-go takes 204 as success; a backend answering a
+	// missing key with any other status makes it an error.
+	RemoveObject(ctx context.Context, bucket, key string) error
 }
 
 // s3Connection is what a driver resolves from its rendered strategy to
@@ -53,6 +61,9 @@ type s3Connection struct {
 	// what the writer of the backup trusted, no more.
 	CAPEM  []byte
 	CAOnly bool
+	// InsecureSkipVerify mirrors an explicit admin opt-in a strategy
+	// already applies to its own uploads; it is never a fallback.
+	InsecureSkipVerify bool
 }
 
 // objectStore reads back what a backup wrote: the Secrets it was written
@@ -63,8 +74,10 @@ type objectStore struct {
 	// reader reads Secrets, which the manager's client fetches uncached,
 	// and lists operator Backups, which it serves from the cache.
 	reader client.Reader
-	// newLister overrides the S3 client; nil means a real minio client.
-	newLister func(conn s3Connection) (s3ObjectLister, error)
+	// newLister and newRemover override the S3 client; nil means a real
+	// minio client.
+	newLister  func(conn s3Connection) (s3ObjectLister, error)
+	newRemover func(conn s3Connection) (s3ObjectRemover, error)
 }
 
 func (s objectStore) lister(conn s3Connection) (s3ObjectLister, error) {
@@ -72,6 +85,17 @@ func (s objectStore) lister(conn s3Connection) (s3ObjectLister, error) {
 		return s.newLister(conn)
 	}
 	return newMinioObjectLister(conn)
+}
+
+func (s objectStore) remover(conn s3Connection) (s3ObjectRemover, error) {
+	if s.newRemover != nil {
+		return s.newRemover(conn)
+	}
+	c, err := newMinioObjectClient(conn)
+	if err != nil {
+		return nil, err
+	}
+	return c, nil
 }
 
 func (s objectStore) secretValue(ctx context.Context, namespace, name, key string) (string, error) {
@@ -90,6 +114,14 @@ func (r *BackupJobReconciler) objectStore() objectStore {
 	return objectStore{reader: r.Client, newLister: r.newS3ObjectLister}
 }
 
+func (r *RestoreJobReconciler) objectStore() objectStore {
+	return objectStore{reader: r.Client, newLister: r.newS3ObjectLister}
+}
+
+func (r *BackupReconciler) objectStore() objectStore {
+	return objectStore{reader: r.Client, newLister: r.newS3ObjectLister, newRemover: r.newS3ObjectRemover}
+}
+
 func (r *BackupJobReconciler) s3Lister(conn s3Connection) (s3ObjectLister, error) {
 	return r.objectStore().lister(conn)
 }
@@ -99,19 +131,31 @@ type minioObjectLister struct {
 }
 
 func newMinioObjectLister(conn s3Connection) (s3ObjectLister, error) {
+	c, err := newMinioObjectClient(conn)
+	if err != nil {
+		return nil, err
+	}
+	return c, nil
+}
+
+func newMinioObjectClient(conn s3Connection) (*minioObjectLister, error) {
 	opts := &minio.Options{
 		Creds:  credentials.NewStaticV4(conn.AccessKey, conn.SecretKey, conn.SessionToken),
 		Region: conn.Region,
 		Secure: conn.Secure,
 	}
-	if conn.Secure && len(conn.CAPEM) > 0 {
+	if conn.Secure && (len(conn.CAPEM) > 0 || conn.InsecureSkipVerify) {
 		// Start from minio's transport to keep its proxy and timeout settings.
 		tr, err := minio.DefaultTransport(true)
 		if err != nil {
 			return nil, err
 		}
-		if tr.TLSClientConfig.RootCAs, err = endpointTrustPool(conn, tr.TLSClientConfig.RootCAs); err != nil {
-			return nil, err
+		if len(conn.CAPEM) > 0 {
+			if tr.TLSClientConfig.RootCAs, err = endpointTrustPool(conn, tr.TLSClientConfig.RootCAs); err != nil {
+				return nil, err
+			}
+		} else {
+			tr.TLSClientConfig.InsecureSkipVerify = true
 		}
 		opts.Transport = tr
 	}
@@ -146,6 +190,22 @@ func endpointTrustPool(conn s3Connection, system *x509.CertPool) (*x509.CertPool
 
 func (l *minioObjectLister) ListObjects(ctx context.Context, bucket, prefix string, recursive bool) ([]s3ObjectInfo, error) {
 	return collectObjects(ctx, l.client.ListObjects(ctx, bucket, minio.ListObjectsOptions{Prefix: prefix, Recursive: recursive}))
+}
+
+func (l *minioObjectLister) StatObject(ctx context.Context, bucket, key string) (int64, error) {
+	info, err := l.client.StatObject(ctx, bucket, key, minio.StatObjectOptions{})
+	if err != nil {
+		return 0, err
+	}
+	// minio-go reports -1 when the response carries no Content-Length.
+	if info.Size < 0 {
+		return 0, fmt.Errorf("object %s/%s: the endpoint reported no size", bucket, key)
+	}
+	return info.Size, nil
+}
+
+func (l *minioObjectLister) RemoveObject(ctx context.Context, bucket, key string) error {
+	return l.client.RemoveObject(ctx, bucket, key, minio.RemoveObjectOptions{})
 }
 
 // collectObjects drains a minio listing. minio-go ends a listing whose

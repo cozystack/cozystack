@@ -1,0 +1,11 @@
+{{- with .Values.defaulting }}
+apiVersion: v1
+kind: Pod
+metadata:
+  name: {{ $.Release.Name }}-defaulting
+spec:
+  containers:
+  - name: main
+    image: busybox
+    resources: {{- include "cozy-lib.resources.defaultingSanitize" (list .preset .resources $) | nindent 6 }}
+{{- end }}

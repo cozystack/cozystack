@@ -222,13 +222,13 @@ func cnpgListStub(prefix string, seen func(*http.Request)) http.HandlerFunc {
 	return func(w http.ResponseWriter, req *http.Request) {
 		w.Header().Set("Content-Type", "application/xml")
 		if _, ok := req.URL.Query()["location"]; ok {
-			fmt.Fprint(w, `<?xml version="1.0" encoding="UTF-8"?><LocationConstraint xmlns="http://s3.amazonaws.com/doc/2006-03-01/"></LocationConstraint>`)
+			_, _ = fmt.Fprint(w, `<?xml version="1.0" encoding="UTF-8"?><LocationConstraint xmlns="http://s3.amazonaws.com/doc/2006-03-01/"></LocationConstraint>`)
 			return
 		}
 		if seen != nil {
 			seen(req)
 		}
-		fmt.Fprintf(w, `<?xml version="1.0" encoding="UTF-8"?>
+		_, _ = fmt.Fprintf(w, `<?xml version="1.0" encoding="UTF-8"?>
 <ListBucketResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">
   <Name>bkt</Name><Prefix>%[1]s</Prefix><KeyCount>2</KeyCount><MaxKeys>1000</MaxKeys><IsTruncated>false</IsTruncated>
   <Contents><Key>%[1]sbackup.info</Key><Size>7</Size><ETag>"a"</ETag><LastModified>2026-10-21T10:01:00.000Z</LastModified></Contents>
@@ -284,7 +284,7 @@ func TestCreateCNPGBackupArtifact_SizeBytes(t *testing.T) {
 	r := reconcilerWithLister(t, l)
 	r.Client = newCNPGStrategyTestClient(t, s3CredsSecret("tenant", "creds"))
 
-	got, err := r.createCNPGBackupArtifact(context.Background(), j, resolved, cnpgBk, "postgres-pg", "srv", "postgresql", rendered, newPostgresApp("pg", "tenant"))
+	got, err := r.createCNPGBackupArtifact(context.Background(), j, resolved, cnpgBk, "postgres-pg", "srv", "postgresql", cnpgDestinationOf(rendered), rendered, newPostgresApp("pg", "tenant"))
 	if err != nil {
 		t.Fatalf("createCNPGBackupArtifact: %v", err)
 	}
@@ -311,7 +311,7 @@ func TestCreateCNPGBackupArtifact_ExistingBackupSkipsProbe(t *testing.T) {
 	cnpgBk := &cnpgtypes.Backup{ObjectMeta: metav1.ObjectMeta{Name: "cnpg-bk"}, Status: cnpgtypes.BackupStatus{BackupID: "20261021T100000"}}
 	rendered := &strategyv1alpha1.CNPGTemplate{BarmanObjectStore: *newSizedBarmanObjectStore()}
 
-	if _, err := r.createCNPGBackupArtifact(context.Background(), j, &ResolvedBackupConfig{}, cnpgBk, "postgres-pg", "srv", "postgresql", rendered, newPostgresApp("pg", "tenant")); err != nil {
+	if _, err := r.createCNPGBackupArtifact(context.Background(), j, &ResolvedBackupConfig{}, cnpgBk, "postgres-pg", "srv", "postgresql", cnpgDestinationOf(rendered), rendered, newPostgresApp("pg", "tenant")); err != nil {
 		t.Fatalf("createCNPGBackupArtifact: %v", err)
 	}
 	if l.calls != 0 {
@@ -331,7 +331,7 @@ func TestCreateCNPGBackupArtifact_AlreadyExistsRefetchReadsPastTheCache(t *testi
 	store := newCNPGStrategyTestClient(t, backup)
 	r := &BackupJobReconciler{Client: staleCache(t, store), APIReader: notFoundOnce(t, store)}
 	rendered := &strategyv1alpha1.CNPGTemplate{BarmanObjectStore: strategyv1alpha1.BarmanObjectStoreTemplate{DestinationPath: "s3://b/"}}
-	got, err := r.createCNPGBackupArtifact(context.Background(), j, &ResolvedBackupConfig{}, &cnpgtypes.Backup{ObjectMeta: metav1.ObjectMeta{Name: "cnpg-bk"}}, "postgres-pg", "srv", "postgresql", rendered, newPostgresApp("pg", "tenant"))
+	got, err := r.createCNPGBackupArtifact(context.Background(), j, &ResolvedBackupConfig{}, &cnpgtypes.Backup{ObjectMeta: metav1.ObjectMeta{Name: "cnpg-bk"}}, "postgres-pg", "srv", "postgresql", cnpgDestinationOf(rendered), rendered, newPostgresApp("pg", "tenant"))
 	if err != nil || got == nil || got.Name != "bj-race" {
 		t.Fatalf("createCNPGBackupArtifact = %v, %v; want the Backup that already exists", got, err)
 	}
@@ -349,7 +349,7 @@ func TestCreateCNPGBackupArtifact_UnreadableExistingBackupIsRetried(t *testing.T
 	store := newCNPGStrategyTestClient(t, backup)
 	r := &BackupJobReconciler{Client: staleCache(t, store), APIReader: failingReads(t, store)}
 	rendered := &strategyv1alpha1.CNPGTemplate{BarmanObjectStore: strategyv1alpha1.BarmanObjectStoreTemplate{DestinationPath: "s3://b/"}}
-	_, err := r.createCNPGBackupArtifact(context.Background(), j, &ResolvedBackupConfig{}, &cnpgtypes.Backup{ObjectMeta: metav1.ObjectMeta{Name: "cnpg-bk"}}, "postgres-pg", "srv", "postgresql", rendered, newPostgresApp("pg", "tenant"))
+	_, err := r.createCNPGBackupArtifact(context.Background(), j, &ResolvedBackupConfig{}, &cnpgtypes.Backup{ObjectMeta: metav1.ObjectMeta{Name: "cnpg-bk"}}, "postgres-pg", "srv", "postgresql", cnpgDestinationOf(rendered), rendered, newPostgresApp("pg", "tenant"))
 	if !errors.Is(err, errBackupNotReadBack) {
 		t.Errorf("err = %v, want errBackupNotReadBack", err)
 	}
@@ -409,7 +409,7 @@ func TestCreateCNPGBackupArtifact_FailedExistenceCheckSkipsProbe(t *testing.T) {
 	cnpgBk := &cnpgtypes.Backup{ObjectMeta: metav1.ObjectMeta{Name: "cnpg-bk"}, Status: cnpgtypes.BackupStatus{BackupID: "20261021T100000"}}
 	rendered := &strategyv1alpha1.CNPGTemplate{BarmanObjectStore: *newSizedBarmanObjectStore()}
 
-	got, err := r.createCNPGBackupArtifact(context.Background(), j, &ResolvedBackupConfig{}, cnpgBk, "postgres-pg", "srv", "postgresql", rendered, newPostgresApp("pg", "tenant"))
+	got, err := r.createCNPGBackupArtifact(context.Background(), j, &ResolvedBackupConfig{}, cnpgBk, "postgres-pg", "srv", "postgresql", cnpgDestinationOf(rendered), rendered, newPostgresApp("pg", "tenant"))
 	if err != nil || got == nil {
 		t.Fatalf("createCNPGBackupArtifact = %v, %v; a transient read must not fail the backup", got, err)
 	}
@@ -449,5 +449,130 @@ func TestReconcileCNPG_RejectedCreateFailsTheJob(t *testing.T) {
 	}
 	if persisted.Status.Phase != backupsv1alpha1.BackupJobPhaseFailed {
 		t.Errorf("phase = %q, want Failed for a rejected Create", persisted.Status.Phase)
+	}
+}
+
+// The probe measures the base backup where it was written: the destination
+// recorded on the cnpg.io/Backup when it was created, not the strategy as
+// it reads by the time the backup completes.
+func TestCreateCNPGBackupArtifact_SizeProbeReadsTheRecordedDestination(t *testing.T) {
+	apiGroup := backupsv1alpha1.DefaultApplicationAPIGroup
+	j := &backupsv1alpha1.BackupJob{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "bj-moved"},
+		Spec: backupsv1alpha1.BackupJobSpec{
+			ApplicationRef: corev1.TypedLocalObjectReference{APIGroup: &apiGroup, Kind: postgresAppKind, Name: "pg"},
+		},
+	}
+	cnpgBk := &cnpgtypes.Backup{ObjectMeta: metav1.ObjectMeta{Name: "cnpg-bk"}, Status: cnpgtypes.BackupStatus{BackupID: "20261021T100000"}}
+	rendered := &strategyv1alpha1.CNPGTemplate{BarmanObjectStore: *newSizedBarmanObjectStore()}
+	oldCreds := "creds-before-edit"
+	written := cnpgDestination{DestinationPath: "s3://old-bkt/before/edit/", EndpointURL: "https://old.example:9000", S3SecretRef: &oldCreds}
+	l := &fakeS3Lister{objects: []s3ObjectInfo{{Key: "before/edit/srv/base/20261021T100000/data.tar.gz", Size: 42}}}
+	r := reconcilerWithLister(t, l)
+	r.Client = newCNPGStrategyTestClient(t, s3CredsSecret("tenant", oldCreds))
+
+	got, err := r.createCNPGBackupArtifact(context.Background(), j, &ResolvedBackupConfig{}, cnpgBk, "postgres-pg", "srv", "postgresql", written, rendered, newPostgresApp("pg", "tenant"))
+	if err != nil {
+		t.Fatalf("createCNPGBackupArtifact: %v", err)
+	}
+	if l.bucket != "old-bkt" || l.prefix != "before/edit/srv/base/20261021T100000/" {
+		t.Errorf("listed %s/%s, want the recorded destination old-bkt/before/edit/srv/base/20261021T100000/", l.bucket, l.prefix)
+	}
+	if l.conn.Endpoint != "old.example:9000" {
+		t.Errorf("probed endpoint %q, want the recorded old.example:9000", l.conn.Endpoint)
+	}
+	if got.Status.Artifact == nil || got.Status.Artifact.SizeBytes != 42 {
+		t.Errorf("Artifact = %#v, want SizeBytes 42", got.Status.Artifact)
+	}
+}
+
+// A backup recorded without a credentials Secret is not measured with the
+// Secret the strategy names now: that Secret belongs to another location.
+func TestCreateCNPGBackupArtifact_SizeProbeSkipsARecordWithoutCredentials(t *testing.T) {
+	apiGroup := backupsv1alpha1.DefaultApplicationAPIGroup
+	j := &backupsv1alpha1.BackupJob{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "bj-nocreds"},
+		Spec: backupsv1alpha1.BackupJobSpec{
+			ApplicationRef: corev1.TypedLocalObjectReference{APIGroup: &apiGroup, Kind: postgresAppKind, Name: "pg"},
+		},
+	}
+	cnpgBk := &cnpgtypes.Backup{ObjectMeta: metav1.ObjectMeta{Name: "cnpg-bk"}, Status: cnpgtypes.BackupStatus{BackupID: "20261021T100000"}}
+	rendered := &strategyv1alpha1.CNPGTemplate{BarmanObjectStore: *newSizedBarmanObjectStore()}
+	written := cnpgDestination{DestinationPath: "s3://bkt/tenant/pg/", EndpointURL: "https://s3.example:8443"}
+	l := &fakeS3Lister{objects: []s3ObjectInfo{{Key: "x", Size: 1}}}
+	r := reconcilerWithLister(t, l)
+	r.Client = newCNPGStrategyTestClient(t, s3CredsSecret("tenant", "creds"))
+
+	got, err := r.createCNPGBackupArtifact(context.Background(), j, &ResolvedBackupConfig{}, cnpgBk, "postgres-pg", "srv", "postgresql", written, rendered, newPostgresApp("pg", "tenant"))
+	if err != nil {
+		t.Fatalf("createCNPGBackupArtifact: %v", err)
+	}
+	if l.calls != 0 {
+		t.Errorf("S3 listed %d times with the strategy's Secret for a backup recorded without one", l.calls)
+	}
+	if got.Status.Artifact == nil || got.Status.Artifact.SizeBytes != 0 {
+		t.Errorf("Artifact = %#v, want no size", got.Status.Artifact)
+	}
+}
+
+// probeRecordedBackup runs createCNPGBackupArtifact for a backup recorded as
+// written with credentials Secret recordedSecret, against rendered, and
+// returns the size it measured and the connection it measured through.
+func probeRecordedBackup(t *testing.T, rendered *strategyv1alpha1.CNPGTemplate, recordedSecret *corev1.Secret) (int64, s3Connection) {
+	t.Helper()
+	apiGroup := backupsv1alpha1.DefaultApplicationAPIGroup
+	j := &backupsv1alpha1.BackupJob{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "bj-probe"},
+		Spec: backupsv1alpha1.BackupJobSpec{
+			ApplicationRef: corev1.TypedLocalObjectReference{APIGroup: &apiGroup, Kind: postgresAppKind, Name: "pg"},
+		},
+	}
+	cnpgBk := &cnpgtypes.Backup{ObjectMeta: metav1.ObjectMeta{Name: "cnpg-bk"}, Status: cnpgtypes.BackupStatus{BackupID: "20261021T100000"}}
+	secretName := recordedSecret.Name
+	written := cnpgDestination{DestinationPath: "s3://bkt/tenant/pg/", EndpointURL: "https://s3.example:8443", S3SecretRef: &secretName}
+	l := &fakeS3Lister{objects: []s3ObjectInfo{{Key: "tenant/pg/srv/base/20261021T100000/data.tar.gz", Size: 42}}}
+	r := reconcilerWithLister(t, l)
+	r.Client = newCNPGStrategyTestClient(t, recordedSecret)
+
+	got, err := r.createCNPGBackupArtifact(context.Background(), j, &ResolvedBackupConfig{}, cnpgBk, "postgres-pg", "srv", "postgresql", written, rendered, newPostgresApp("pg", "tenant"))
+	if err != nil {
+		t.Fatalf("createCNPGBackupArtifact: %v", err)
+	}
+	if got.Status.Artifact == nil {
+		t.Fatalf("no artifact")
+	}
+	return got.Status.Artifact.SizeBytes, l.conn
+}
+
+// A strategy that has since dropped its credentials still measures a backup
+// recorded with a Secret, through that Secret and its default keys.
+func TestCreateCNPGBackupArtifact_SizeProbeOfARecordedSecretUnderAStrategyWithoutCredentials(t *testing.T) {
+	store := newSizedBarmanObjectStore()
+	store.S3Credentials = nil
+	size, conn := probeRecordedBackup(t, &strategyv1alpha1.CNPGTemplate{BarmanObjectStore: *store}, s3CredsSecret("tenant", "creds-recorded"))
+	if size != 42 {
+		t.Errorf("SizeBytes = %d, want 42 measured through the recorded Secret", size)
+	}
+	if conn.AccessKey != "AKID" {
+		t.Errorf("probed with access key %q, want the recorded Secret's AKID", conn.AccessKey)
+	}
+}
+
+// The record names the Secret, not its keys: the strategy's key names stay,
+// so a strategy with its own key names still reads the recorded Secret.
+func TestCreateCNPGBackupArtifact_SizeProbeKeepsTheStrategysSecretKeys(t *testing.T) {
+	store := newSizedBarmanObjectStore()
+	store.S3Credentials.AccessKeyIDKey = "id"
+	store.S3Credentials.SecretAccessKeyKey = "key"
+	secret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "creds-recorded"},
+		Data:       map[string][]byte{"id": []byte("CUSTOMID"), "key": []byte("custom-secret")},
+	}
+	size, conn := probeRecordedBackup(t, &strategyv1alpha1.CNPGTemplate{BarmanObjectStore: *store}, secret)
+	if size != 42 {
+		t.Errorf("SizeBytes = %d, want 42 measured with the strategy's key names", size)
+	}
+	if conn.AccessKey != "CUSTOMID" {
+		t.Errorf("probed with access key %q, want CUSTOMID read under the strategy's key name", conn.AccessKey)
 	}
 }

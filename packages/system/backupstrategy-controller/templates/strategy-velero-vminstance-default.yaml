@@ -5,6 +5,8 @@ apiVersion: strategy.backups.cozystack.io/v1alpha1
 kind: Velero
 metadata:
   name: cozy-default-velero-vminstance
+  annotations:
+    backups.cozystack.io/endpoint: {{ include "backupstrategy-controller.endpoint" . | quote }}
 spec:
   template:
     restoreSpec:

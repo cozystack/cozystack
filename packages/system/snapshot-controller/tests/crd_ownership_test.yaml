@@ -2,7 +2,7 @@ suite: snapshot CRDs owned outside the release
 
 # A distribution can ship its own snapshot CRDs. The chart renders a CRD only
 # when it is absent or already carries this release's Helm ownership, so an
-# upgrade never takes over or rewrites one owned elsewhere. Migration 61 adopts
+# upgrade never takes over or rewrites one owned elsewhere. Migration 62 adopts
 # the CRDs the release installed before, which keeps them in the manifest.
 
 templates:

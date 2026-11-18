@@ -36,6 +36,12 @@ spec:
     enabled: true
     podTemplate:
       spec:
+        {{- /* run-migration upgrades the database in place: left on the
+               operator's default image it migrates ahead of the controller,
+               irreversibly. */}}
+        initContainers:
+        - name: run-migration
+          image: {{ .Values.piraeusServer.image.repository }}:{{ .Values.piraeusServer.image.tag }}
         containers:
         - name: linstor-controller
           image: {{ .Values.piraeusServer.image.repository }}:{{ .Values.piraeusServer.image.tag }}

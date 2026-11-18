@@ -14,6 +14,7 @@ import (
 	"math/big"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -37,6 +38,16 @@ type fakeS3Lister struct {
 	bucket, prefix string
 	recursive      bool
 	calls          int
+
+	statSize int64
+	statErr  error
+	statKey  string
+}
+
+func (f *fakeS3Lister) StatObject(_ context.Context, bucket, key string) (int64, error) {
+	f.calls++
+	f.bucket, f.statKey = bucket, key
+	return f.statSize, f.statErr
 }
 
 func (f *fakeS3Lister) ListObjects(_ context.Context, bucket, prefix string, recursive bool) ([]s3ObjectInfo, error) {
@@ -167,6 +178,11 @@ func (blockingLister) ListObjects(ctx context.Context, _, _ string, _ bool) ([]s
 	return nil, ctx.Err()
 }
 
+func (blockingLister) StatObject(ctx context.Context, _, _ string) (int64, error) {
+	<-ctx.Done()
+	return 0, ctx.Err()
+}
+
 // withShortProbeTimeout shortens the probe timeout and fails the test if fn
 // is not back well before the default timeout would have expired.
 func withShortProbeTimeout(t *testing.T, fn func()) {
@@ -233,6 +249,76 @@ func TestFailBackupArtifact(t *testing.T) {
 	})
 }
 
+// unrelatedCAPEM mints a CA that signed nothing an httptest server serves:
+// every httptest server shares one certificate.
+func unrelatedCAPEM(t *testing.T) []byte {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tmpl := &x509.Certificate{SerialNumber: big.NewInt(1), Subject: pkix.Name{CommonName: "unrelated CA"}, NotBefore: time.Now(), NotAfter: time.Now().Add(time.Hour), IsCA: true, BasicConstraintsValid: true}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
+}
+
+// TestMinioObjectLister_EnforcesTheCA pins that a configured CA is the
+// trust the client verifies with, whether alone or on top of the system
+// roots: an endpoint whose certificate it did not sign is refused.
+func TestMinioObjectLister_EnforcesTheCA(t *testing.T) {
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Length", "1")
+		w.Header().Set("ETag", `"abc"`)
+		w.Header().Set("Last-Modified", "Wed, 21 Oct 2026 10:00:00 GMT")
+	}))
+	defer srv.Close()
+	// minio-go retries a TLS failure with backoff; a refusal needs no more
+	// than the first attempt.
+	stat := func(ca []byte, caOnly bool) error {
+		l, err := newMinioObjectLister(s3Connection{
+			Endpoint: strings.TrimPrefix(srv.URL, "https://"), Secure: true,
+			AccessKey: "AKID", SecretKey: "secret", Region: "us-east-1",
+			CAPEM: ca, CAOnly: caOnly,
+		})
+		if err != nil {
+			t.Fatalf("newMinioObjectLister: %v", err)
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		_, err = l.StatObject(ctx, "cozy-backups", "k")
+		return err
+	}
+	signer := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: srv.Certificate().Raw})
+	for _, caOnly := range []bool{true, false} {
+		if err := stat(signer, caOnly); err != nil {
+			t.Errorf("CAOnly=%v: the CA that signed the endpoint: %v", caOnly, err)
+		}
+		if err := stat(unrelatedCAPEM(t), caOnly); err == nil {
+			t.Errorf("CAOnly=%v: StatObject succeeded against a certificate the CA did not sign, want a TLS error", caOnly)
+		}
+	}
+}
+
+// TestMinioObjectLister_StatWithoutSize pins that a HEAD answer without
+// Content-Length, which minio-go turns into size -1, is not a size.
+func TestMinioObjectLister_StatWithoutSize(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("ETag", `"abc"`)
+		w.Header().Set("Last-Modified", "Wed, 21 Oct 2026 10:00:00 GMT")
+	}))
+	defer srv.Close()
+	l, err := newMinioObjectLister(s3Connection{Endpoint: strings.TrimPrefix(srv.URL, "http://"), AccessKey: "AKID", SecretKey: "secret", Region: "us-east-1"})
+	if err != nil {
+		t.Fatalf("newMinioObjectLister: %v", err)
+	}
+	if size, err := l.StatObject(context.Background(), "cozy-backups", "k"); err == nil {
+		t.Errorf("StatObject = %d, nil; want an error for a response without Content-Length", size)
+	}
+}
+
 // TestEndpointTrustPool_CAOnly tells apart "the CA on top of the system
 // roots" and "the CA alone". The system pool holds the endpoint's
 // certificate, and the configured CA is an unrelated one, so the endpoint
@@ -243,18 +329,7 @@ func TestEndpointTrustPool_CAOnly(t *testing.T) {
 	system := x509.NewCertPool()
 	system.AddCert(endpoint.Certificate())
 
-	// Every httptest server shares one certificate, so the unrelated CA is
-	// minted here.
-	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		t.Fatal(err)
-	}
-	tmpl := &x509.Certificate{SerialNumber: big.NewInt(1), Subject: pkix.Name{CommonName: "unrelated CA"}, NotBefore: time.Now(), NotAfter: time.Now().Add(time.Hour), IsCA: true, BasicConstraintsValid: true}
-	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
-	if err != nil {
-		t.Fatal(err)
-	}
-	unrelatedCA := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
+	unrelatedCA := unrelatedCAPEM(t)
 
 	verifies := func(caOnly bool) bool {
 		pool, err := endpointTrustPool(s3Connection{CAPEM: unrelatedCA, CAOnly: caOnly}, system.Clone())

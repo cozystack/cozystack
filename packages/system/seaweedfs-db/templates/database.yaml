@@ -11,7 +11,7 @@ spec:
   storage:
     size: {{ .Values.db.size }}
     {{- with .Values.db.storageClass }}
-    storageClass: {{ . }}
+    storageClass: {{ . | quote }}
     {{- end }}
 
   monitoring:

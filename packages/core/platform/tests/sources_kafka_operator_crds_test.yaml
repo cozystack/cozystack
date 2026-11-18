@@ -1,0 +1,18 @@
+suite: kafka-operator applies CRD updates on upgrade
+# Strimzi 1.x serves only the v1 API. Helm never upgrades CRDs shipped in
+# crds/, so without CreateReplace an upgraded cluster keeps the v1beta2-only
+# CRDs of its first install and the 1.x operator cannot work with them.
+templates:
+  - templates/sources.yaml
+release:
+  name: cozystack
+  namespace: cozy-system
+tests:
+  - it: kafka-operator PackageSource sets upgradeCRDs to CreateReplace
+    documentSelector:
+      path: metadata.name
+      value: cozystack.kafka-operator
+    asserts:
+      - equal:
+          path: spec.variants[0].components[0].install.upgradeCRDs
+          value: CreateReplace

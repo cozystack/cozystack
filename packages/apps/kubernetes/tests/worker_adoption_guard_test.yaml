@@ -1,4 +1,4 @@
-suite: Phase 2 worker-pool adoption guard
+suite: worker-pool adoption guard
 
 # The guard in templates/cluster.yaml refuses to render the control-plane-only
 # chart when a live worker MachineDeployment for this cluster is NOT owned by
