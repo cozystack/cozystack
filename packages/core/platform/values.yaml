@@ -41,10 +41,13 @@ bundles:
     # CNI/networking selector for the "isp-full" (Talos) variant:
     #   "kubeovn-cilium" — KubeOVN fabric + Cilium (default)
     #   "cozyplane"      — cozyplane eBPF CNI + cozyplane-kpr socket-LB KPR
-    #                      (no Cilium, no kube-proxy)
+    #                      (no Cilium, no kube-proxy). EXPERIMENTAL: no e2e
+    #                      coverage, not for production clusters.
     # On "cozyplane", CiliumNetworkPolicy objects apply but are NOT ENFORCED
     # (the CRDs ship inert so stock charts install): tenant network isolation
-    # on the default network and the Cilium host firewall are not in effect.
+    # on the default network, the Cilium host firewall, and the platform
+    # components' own Cilium policies (ingressDeny rules included) are not in
+    # effect.
     # cozystack-api's SecurityGroup — a restricted interface over
     # CiliumNetworkPolicy — is not served either; cozyplane's own SecurityGroup
     # polices traffic inside and across VPCs instead.
