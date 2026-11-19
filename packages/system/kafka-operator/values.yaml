@@ -1,0 +1,7 @@
+strimzi-kafka-operator:
+  watchAnyNamespace: true
+  generateNetworkPolicy: false
+  kubernetesServiceDnsDomain: cozy.local
+  resources:
+    limits:
+      memory: 512Mi

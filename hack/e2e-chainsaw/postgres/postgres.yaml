@@ -1,0 +1,32 @@
+apiVersion: apps.cozystack.io/v1alpha1
+kind: Postgres
+metadata:
+  name: test
+spec:
+  external: false
+  size: 10Gi
+  replicas: 2
+  storageClass: ""
+  postgresql:
+    parameters:
+      max_connections: "100"
+  quorum:
+    minSyncReplicas: 0
+    maxSyncReplicas: 0
+  users:
+    testuser: {}
+  databases:
+    testdb:
+      roles:
+        admin:
+        - testuser
+  backup:
+    enabled: false
+    destinationPath: s3://postgres-backups/pg/
+    endpointURL: https://s3.example.org
+    retentionPolicy: "30d"
+    schedule: "0 0 2 * * *"
+    s3AccessKey: oobaiRus9pah8PhohL1ThaeTa4UVa7gu
+    s3SecretKey: ju3eum4dekeich9ahM1te8waeGai0oog
+  resources: {}
+  resourcesPreset: "nano"

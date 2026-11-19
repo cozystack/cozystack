@@ -1,0 +1,181 @@
+suite: cozy-ouroboros controller defaults
+templates:
+  - charts/ouroboros/templates/controller-deployment.yaml
+  - charts/ouroboros/templates/_helpers.tpl
+release:
+  name: ouroboros
+  namespace: cozy-ouroboros
+tests:
+  - it: defaults to coredns mode (host scenario; tenant overrides via apps/kubernetes)
+    template: charts/ouroboros/templates/controller-deployment.yaml
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --mode=coredns
+
+  - it: emits runtime-composition flags (no chart-baked --proxy-fqdn) — chart is platform-agnostic and lets controller compose the rewrite-target FQDN at startup from the auto-detected cluster-domain
+    template: charts/ouroboros/templates/controller-deployment.yaml
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --proxy-service-name=ouroboros-proxy
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --proxy-service-namespace=cozy-ouroboros
+      # Match the flag name per element, not one whole element against one
+      # value: contains and notContains compare elements for equality, and the
+      # baked FQDN carries whatever controller.clusterDomain is set to, so an
+      # equality check against the form the default cluster-domain produces
+      # leaves every other value unforbidden.
+      - notMatchRegex:
+          path: spec.template.spec.containers[0].args[*]
+          pattern: "^--proxy-fqdn"
+
+  - it: leaves Gateway-API watching off at the parent default (consumer enables)
+    template: charts/ouroboros/templates/controller-deployment.yaml
+    asserts:
+      # Anchor the index before asserting on it. A negative assert passes
+      # whenever its path resolves to something that does not match, and a
+      # different container at [0] qualifies — as does an index resolving to
+      # nothing at all — so without this the guard goes green if a sidecar is
+      # ever placed ahead of the controller.
+      - equal:
+          path: spec.template.spec.containers[0].name
+          value: controller
+      # Match the flag name per element. An equality check against the bare
+      # form the chart renders today would go on passing if it ever rendered
+      # --gateway-api=true, with watching on.
+      - notMatchRegex:
+          path: spec.template.spec.containers[0].args[*]
+          pattern: "^--gateway-api"
+
+  - it: emits chart-default --resync=30s — host scenario inherits the upstream chart default (changed from 10m in upstream v0.7.x). The reduction is the controller's only recovery path when an Ingress watch silently dies, and 30s caps worst-case event-to-reconcile latency under broken-watch conditions. Pinning here catches a future upstream bump back to the longer value before it lands as a CI surprise.
+    template: charts/ouroboros/templates/controller-deployment.yaml
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --resync=30s
+
+  - it: emits chart-default --log-level=info — host scenario stays at info verbosity by upstream chart default. Tenants override to debug via apps/kubernetes wrapper (see cozystack.defaultOuroborosValues). Pinning here keeps the host quiet by default and catches a regression where the host wrapper accidentally inherits the tenant debug value.
+    template: charts/ouroboros/templates/controller-deployment.yaml
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --log-level=info
+
+  # The upstream chart owns this contract and tests it across every mode;
+  # these pins exist because cozystack is the kind of consumer the
+  # contract protects — helm-controller applies server-side, and
+  # server-side apply is the only path on which a mode-gated strategy
+  # breaks. Up to chart 0.8.0 the strategy was rendered only in
+  # external-dns mode, as type: Recreate. Switching a live release into
+  # that mode laid Recreate on top of the rollingUpdate block the
+  # apiserver defaults onto any Deployment created without one, and the
+  # apiserver rejected it with "spec.strategy.rollingUpdate: Forbidden:
+  # may not be specified when strategy `type` is 'Recreate'". A
+  # client-side helm upgrade clears rollingUpdate via retainKeys and
+  # never reproduces it, so no local render catches a regression here.
+  #
+  # cozystack pins coredns on the host and coredns-import for tenants,
+  # and configures external-dns nowhere, so the break is not reachable
+  # from any shipped configuration — this is a latent break and the pins
+  # are defence in depth for a user-settable value. All three modes are
+  # asserted, external-dns included: it is the only mode that ever
+  # rendered Recreate, so a bump that re-gates the block would slip past
+  # a coredns-only suite unnoticed.
+  - it: renders a no-surge RollingUpdate strategy, never Recreate — the mode-switch upgrade path is server-side-apply-only and breaks on any other shape
+    template: charts/ouroboros/templates/controller-deployment.yaml
+    asserts:
+      - equal:
+          path: spec.strategy.type
+          value: RollingUpdate
+      - equal:
+          path: spec.strategy.rollingUpdate.maxSurge
+          value: 0
+      - equal:
+          path: spec.strategy.rollingUpdate.maxUnavailable
+          value: 1
+
+  - it: renders that same strategy in coredns-import mode — the mode tenants actually run
+    template: charts/ouroboros/templates/controller-deployment.yaml
+    set:
+      ouroboros:
+        controller:
+          mode: coredns-import
+    asserts:
+      - equal:
+          path: spec.strategy.type
+          value: RollingUpdate
+      - equal:
+          path: spec.strategy.rollingUpdate.maxSurge
+          value: 0
+      - equal:
+          path: spec.strategy.rollingUpdate.maxUnavailable
+          value: 1
+
+  # The mode that rendered type: Recreate up to 0.8.0, and the only one a
+  # transition into which could trip the rejection. A re-gate that
+  # restored Recreate here while leaving the coredns paths on
+  # RollingUpdate would satisfy every other case in this file.
+  - it: renders that same strategy in external-dns mode — the one mode that previously rendered Recreate
+    template: charts/ouroboros/templates/controller-deployment.yaml
+    set:
+      ouroboros:
+        controller:
+          mode: external-dns
+    asserts:
+      - equal:
+          path: spec.strategy.type
+          value: RollingUpdate
+      - equal:
+          path: spec.strategy.rollingUpdate.maxSurge
+          value: 0
+      - equal:
+          path: spec.strategy.rollingUpdate.maxUnavailable
+          value: 1
+
+  - it: writes into the kube-system/coredns Corefile by default (host mode)
+    template: charts/ouroboros/templates/controller-deployment.yaml
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --coredns-namespace=kube-system
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --coredns-configmap=coredns
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --coredns-key=Corefile
+
+  - it: tenant valuesOverride flips into coredns-import mode (and runtime-composition flags carry over — tenants are the actual consumers of this mode, the host stays on coredns)
+    template: charts/ouroboros/templates/controller-deployment.yaml
+    set:
+      ouroboros:
+        controller:
+          mode: coredns-import
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --mode=coredns-import
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --coredns-import-configmap=coredns-custom
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --coredns-import-key=ouroboros.override
+      # Runtime-composition flags MUST be emitted in coredns-import mode
+      # too — this is the mode tenants actually run, so a future refactor
+      # in the upstream controller-deployment template that drops the
+      # composition block from this branch only would break tenants
+      # silently. The negative assert pins that no --proxy-fqdn is baked at
+      # render time when no clusterDomain is configured (the
+      # platform-agnostic default).
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --proxy-service-name=ouroboros-proxy
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --proxy-service-namespace=cozy-ouroboros
+      - notMatchRegex:
+          path: spec.template.spec.containers[0].args[*]
+          pattern: "^--proxy-fqdn"

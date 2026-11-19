@@ -1,0 +1,206 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["config"],
+  "properties": {
+    "replicaCount": {
+      "type": "integer",
+      "minimum": 1,
+      "default": 1
+    },
+    "revisionHistoryLimit": {
+      "type": "integer",
+      "minimum": 0,
+      "default": 3
+    },
+    "image": {
+      "type": "object",
+      "properties": {
+        "repository": {
+          "type": "string"
+        },
+        "tag": {
+          "type": "string"
+        },
+        "pullPolicy": {
+          "type": "string",
+          "enum": ["Always", "IfNotPresent", "Never"]
+        }
+      }
+    },
+    "imagePullSecrets": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "nameOverride": {
+      "type": "string"
+    },
+    "fullnameOverride": {
+      "type": "string"
+    },
+    "serviceAccount": {
+      "type": "object",
+      "properties": {
+        "create": {
+          "type": "boolean"
+        },
+        "annotations": {
+          "type": "object"
+        },
+        "name": {
+          "type": "string"
+        }
+      }
+    },
+    "config": {
+      "type": "object",
+      "required": ["outputs"],
+      "properties": {
+        "source": {
+          "type": "object",
+          "properties": {
+            "namespace": {
+              "type": "string",
+              "pattern": "^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$"
+            },
+            "serviceName": {
+              "type": "string",
+              "pattern": "^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$"
+            }
+          }
+        },
+        "outputs": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["name", "hostname", "serviceName"],
+            "properties": {
+              "name": {
+                "type": "string",
+                "minLength": 1
+              },
+              "hostname": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "annotationPrefix": {
+                "type": "string",
+                "pattern": "/$"
+              },
+              "serviceName": {
+                "type": "string",
+                "pattern": "^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$"
+              },
+              "recordTTL": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 86400
+              },
+              "addressSource": {
+                "type": "string",
+                "enum": ["endpointslice", "node-internal", "node-external", "node-public"]
+              },
+              "addressType": {
+                "type": "string",
+                "enum": ["IPv4", "IPv6"]
+              }
+            }
+          }
+        },
+        "metricsBindAddress": {
+          "type": "string"
+        },
+        "healthProbeBindAddress": {
+          "type": "string"
+        }
+      }
+    },
+    "resources": {
+      "type": "object",
+      "properties": {
+        "requests": {
+          "type": "object"
+        },
+        "limits": {
+          "type": "object"
+        }
+      }
+    },
+    "pdb": {
+      "type": "object",
+      "properties": {
+        "minAvailable": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 1
+        }
+      }
+    },
+    "networkPolicy": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": false
+        }
+      }
+    },
+    "nodeSelector": {
+      "type": "object"
+    },
+    "tolerations": {
+      "type": "array"
+    },
+    "affinity": {
+      "type": "object"
+    },
+    "podAnnotations": {
+      "type": "object"
+    },
+    "podLabels": {
+      "type": "object"
+    },
+    "service": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": ["ClusterIP", "NodePort", "LoadBalancer"]
+        },
+        "port": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535
+        }
+      }
+    },
+    "serviceMonitor": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "interval": {
+          "type": "string"
+        },
+        "scrapeTimeout": {
+          "type": "string"
+        },
+        "additionalLabels": {
+          "type": "object"
+        }
+      }
+    }
+  }
+}

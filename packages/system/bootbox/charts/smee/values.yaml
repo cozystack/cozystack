@@ -1,0 +1,166 @@
+# Toggle deployment of the service.
+deploy: true
+
+# Name of the service used as the deployment name and label selectors.
+name: smee
+
+# The image used to launch the container.
+image: quay.io/tinkerbell/smee:v0.15.1
+imagePullPolicy: IfNotPresent
+
+# The number of pods to run.
+replicas: 1
+
+# Resources bounds applied to the container.
+resources:
+  limits:
+    cpu: 500m
+    memory: 128Mi
+  requests:
+    cpu: 10m
+    memory: 64Mi
+
+deployment:
+  strategy:
+    type: RollingUpdate
+  tolerations: []
+  affinity: {}
+
+# The log level for the container.
+logLevel: "info"
+
+# The network mode to launch the smee container. When true, the smee container will use the
+# host network.
+hostNetwork: false
+
+# nodeSelector when defined will be constrain Pods to nodes with specific labels
+nodeSelector: {}
+
+# publicIP when defined will be used as the IP in the following locations if they are not defined:
+# dhcp.httpIPXE.binaryUrl.host, dhcp.httpIPXE.scriptUrl.host, tinkServer.ip, http.osieUrl.host, dhcp.ipForPacket, dhcp.tftpIp
+# This is useful when all Tinkerbell services are running behind the same IP.
+publicIP: ""
+
+# DHCP server configuration. Name is an identifier used across Kubernetes manifests for port
+# identification, ip is the IP address to bind to, and port is the port to bind to.
+dhcp:
+  enabled: true
+  name: smee-dhcp
+  mode: reservation
+  ip: 0.0.0.0
+  port: 67
+  ipForPacket: ""
+  tftpIp: ""
+  tftpPort: 69
+  syslogIp: ""
+  httpIPXE:
+      binaryUrl: # http://<host>:<port>/ipxe
+        scheme: "http"
+        host: ""
+        port: 7171
+        path: "/ipxe"
+      scriptUrl: # http://<host>:<port>/auto.ipxe
+        scheme: "http"
+        host: ""
+        port: 7171
+        path: "/auto.ipxe"
+
+
+# TFTP server configuration used to serve iPXE binaries. Name is an identifier used across
+# Kubernetes manifests for port identification, ip is the IP address to bind to, and port is the
+# port to bind to.
+tftp:
+  enabled: true
+  name: smee-tftp
+  ip: 0.0.0.0
+  port: 69
+  timeout: 5s
+
+# HTTP server configuration used to serve iPXE scripts. Name is an identifier used across
+# Kubernetes manifests for port identification, ip is the IP address to bind to, and port is the
+# port to bind to.
+http:
+  enabled: true
+  name: smee-http
+  ip: 0.0.0.0
+  port: 7171
+  # Tink Server configuration passed to the Tink Worker to establish a gRPC connection.
+  tinkServer:
+    ip: ""
+    port: 42113
+    tls: false
+    insecureTLS: false
+  osieUrl:
+    scheme: "http"
+    host: ""
+    port: 8080
+    path: ""
+  # Additional kernel arguments to pass to the OSIE. (k=v k=v) that are appended to the kernel cmdline in the iPXE script
+  additionalKernelArgs: []
+  # enable iPXE HTTP binary server
+  ipxeBinaryEnabled: true
+  # enable iPXE HTTP script server
+  ipxeScriptEnabled: true
+
+# ISO settings
+iso:
+  enabled: false
+  # the string pattern to match for in the source ISO, defaults to the one defined in HookOS
+  magicString: ""
+  # enable static IPAM for HookOS
+  staticIPAMEnabled: false
+  # an HTTP(S) URL target to an OSIE that is used for patching
+  url: ""
+
+# Trusted proxies defines a list of IP or CIDR ranges that are allowed to set the X-Forwarded-For
+  # header. This typically requires all Pod CIDRs in the cluster.
+  trustedProxies: []
+
+# Syslog server configuration for the smee hosted syslog server. Name is an identifier used across
+# Kubernetes manifests for port identification, ip is the IP address to bind to, and port is the
+# port to bind to.
+syslog:
+  enabled: true
+  name: smee-syslog
+  ip: 0.0.0.0
+  port: 514
+
+# The Tink Worker image passed to OSIE as a kernel arg for launching.
+tinkWorkerImage: quay.io/tinkerbell/tink-worker:v0.12.1
+
+
+# Additional arguments to pass to the smee container. Some arguments are already defined - refer
+# to the deployment.yaml template for details.
+additionalArgs: []
+
+# Additional environment variables to pass to the smee container. Each entry is expected to have a
+# name and value key. Some keys are already defined - refer to the deployment.yaml template for
+# details.
+#
+# Example
+#   - name: MY_ENV_VAR
+#     value: my-value
+additionalEnv: []
+
+# singleNodeClusterConfig to add tolerations for deployments on control plane nodes. This is defaulted to false.
+singleNodeClusterConfig:
+  controlPlaneTolerationsEnabled: false
+  nodeAffinityWeight: 1
+
+# Additional volumes on the output Deployment definition.
+additionalVolumes: [ ]
+#  - name: foo
+#    secret:
+#      secretName: mysecret
+#      optional: false
+
+# Additional volumeMounts on the Smee container
+additionalVolumeMounts: [ ]
+#  - name: foo
+#    mountPath: "/etc/foo"
+#    readOnly: true
+
+rbac:
+  type: Role # or ClusterRole
+  name: smee-role # or smee-cluster-role
+  bindingName: smee-rolebinding # or smee-cluster-rolebinding

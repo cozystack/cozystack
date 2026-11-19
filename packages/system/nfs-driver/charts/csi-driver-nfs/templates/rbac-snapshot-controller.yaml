@@ -1,0 +1,93 @@
+{{- if .Values.externalSnapshotter.enabled -}}
+# RBAC file for the snapshot controller.
+#
+# The snapshot controller implements the control loop for CSI snapshot functionality.
+# It should be installed as part of the base Kubernetes distribution in an appropriate
+# namespace for components implementing base system functionality. For installing with
+# Vanilla Kubernetes, kube-system makes sense for the namespace.
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ .Values.externalSnapshotter.name }}
+  namespace: {{ .Release.Namespace }}
+{{ include "nfs.labels" . | indent 2 }}
+
+---
+kind: ClusterRole
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  name: {{ .Values.externalSnapshotter.name }}-runner
+{{ include "nfs.labels" . | indent 2 }}
+rules:
+  - apiGroups: [""]
+    resources: ["persistentvolumes"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["persistentvolumeclaims"]
+    verbs: ["get", "list", "watch", "update"]
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["list", "watch", "create", "update", "patch"]
+  - apiGroups: ["snapshot.storage.k8s.io"]
+    resources: ["volumesnapshotclasses"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["snapshot.storage.k8s.io"]
+    resources: ["volumesnapshotcontents"]
+    verbs: ["create", "get", "list", "watch", "update", "delete", "patch"]
+  - apiGroups: ["snapshot.storage.k8s.io"]
+    resources: ["volumesnapshotcontents/status"]
+    verbs: ["patch"]
+  - apiGroups: ["snapshot.storage.k8s.io"]
+    resources: ["volumesnapshots"]
+    verbs: ["get", "list", "watch", "update", "patch", "create"]
+  - apiGroups: ["snapshot.storage.k8s.io"]
+    resources: ["volumesnapshots/status"]
+    verbs: ["update", "patch"]
+{{- if .Values.externalSnapshotter.enabledDistributedSnapshotting }}
+  - apiGroups: [""]
+    resources: ["nodes"]
+    verbs: ["get", "list", "watch"]
+{{- end }}
+---
+kind: ClusterRoleBinding
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  name: {{ .Values.externalSnapshotter.name }}-role
+{{ include "nfs.labels" . | indent 2 }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ .Values.externalSnapshotter.name }}
+    namespace: {{ .Release.Namespace }}
+roleRef:
+  kind: ClusterRole
+  name: {{ .Values.externalSnapshotter.name }}-runner
+  apiGroup: rbac.authorization.k8s.io
+
+---
+kind: Role
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  name: {{ .Values.externalSnapshotter.name }}-leaderelection
+  namespace: {{ .Release.Namespace }}
+{{ include "nfs.labels" . | indent 2 }}
+rules:
+  - apiGroups: ["coordination.k8s.io"]
+    resources: ["leases"]
+    verbs: ["get", "watch", "list", "delete", "update", "create"]
+
+---
+kind: RoleBinding
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  name: {{ .Values.externalSnapshotter.name }}-leaderelection
+  namespace: {{ .Release.Namespace }}
+{{ include "nfs.labels" . | indent 2 }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ .Values.externalSnapshotter.name }}
+roleRef:
+  kind: Role
+  name: {{ .Values.externalSnapshotter.name }}-leaderelection
+  apiGroup: rbac.authorization.k8s.io
+{{- end -}}

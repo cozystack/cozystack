@@ -1,0 +1,9 @@
+# VCS and IDE
+.git
+.gitignore
+
+# Build artifacts
+Makefile
+images/
+example/
+*.tgz

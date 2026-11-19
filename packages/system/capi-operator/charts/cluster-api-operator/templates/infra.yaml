@@ -1,0 +1,88 @@
+# Infrastructure providers
+{{- range $name, $infra := $.Values.infrastructure }}
+  {{- $infrastructureNamespace := default ( printf "%s-%s" $name "infrastructure-system" ) (get $infra "namespace") }}
+  {{- $infrastructureName := $name }}
+  {{- $infrastructureVersion := get $infra "version" }}
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  annotations:
+    {{- if $.Values.enableHelmHook }}
+    "helm.sh/hook": "post-install,post-upgrade"
+    "helm.sh/hook-weight": "1"
+    {{- end }}
+    "argocd.argoproj.io/sync-wave": "1"
+  name: {{ $infrastructureNamespace }}
+---
+apiVersion: operator.cluster.x-k8s.io/v1alpha2
+kind: InfrastructureProvider
+metadata:
+  name: {{ $infrastructureName }}
+  namespace: {{ $infrastructureNamespace }}
+  annotations:
+    {{- if $.Values.enableHelmHook }}
+    "helm.sh/hook": "post-install,post-upgrade"
+    "helm.sh/hook-weight": "2"
+    {{- end }}
+    "argocd.argoproj.io/sync-wave": "2"
+{{- if or $infrastructureVersion $.Values.configSecret.name $.Values.manager $.Values.additionalDeployments }}
+spec:
+{{- end }}
+{{- if $infrastructureVersion }}
+  version: {{ $infrastructureVersion }}
+{{- end }}
+{{- if $.Values.manager }}
+{{- if and (kindIs "map" $.Values.manager.featureGates) (hasKey $.Values.manager.featureGates $infrastructureName) }}
+  manager:
+{{- range $key, $value := $.Values.manager.featureGates }}
+  {{- if eq $key $infrastructureName }}
+    featureGates:
+    {{- range $k, $v := $value }}
+      {{ $k }}: {{ $v }}
+    {{- end }}
+  {{- end }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- if and (kindIs "map" $.Values.fetchConfig) (hasKey $.Values.fetchConfig $infrastructureName) }}
+{{- range $key, $value := $.Values.fetchConfig }}
+  {{- if eq $key $infrastructureName }}
+  fetchConfig:
+    {{- range $k, $v := $value }}
+      {{ $k }}: {{ $v }}
+    {{- end }}
+  {{- end }}
+{{- end }}
+{{- end }}
+{{- if $.Values.configSecret.name }}
+  configSecret:
+    name: {{ $.Values.configSecret.name }}
+    {{- if $.Values.configSecret.namespace }}
+    namespace: {{ $.Values.configSecret.namespace }}
+    {{- end }}
+{{- end }}
+{{- if $.Values.additionalDeployments }}
+  additionalDeployments: {{ toYaml $.Values.additionalDeployments | nindent 4 }}
+{{- end }}
+{{- if $infra.manifestPatches }}
+  manifestPatches: {{- toYaml $infra.manifestPatches | nindent 4 }}
+{{- end }} {{/* if $infra.manifestPatches */}}
+{{- if $infra.additionalManifests }}
+  additionalManifests:
+    name: {{ $infra.additionalManifests.name }}
+    {{- if $infra.additionalManifests.namespace }}
+    namespace: {{ $infra.additionalManifests.namespace }}
+    {{- end }} {{/* if $infra.additionalManifests.namespace */}}
+{{- end }} {{/* if $infra.additionalManifests */}}
+{{- if $infra.additionalManifests }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $infra.additionalManifests.name }}
+  namespace: {{ default $infrastructureNamespace $infra.additionalManifests.namespace }}
+data:
+  manifests: {{- toYaml $infra.additionalManifests.manifests | nindent 4 }}
+{{- end }}
+{{- end }} {{/* range $name, $infra := .Values.infrastructure */}}

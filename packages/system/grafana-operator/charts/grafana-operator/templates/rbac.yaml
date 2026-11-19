@@ -1,0 +1,51 @@
+{{- if .Values.rbac.create -}}
+{{ $rbac := .Files.Get "files/rbac.yaml" | fromYaml  }}
+{{ $rbacOpenShift := .Files.Get "files/rbac-openshift.yaml" | fromYaml  }}
+{{- $watchNamespaces := coalesce .Values.watchNamespaces .Values.namespaceOverride .Release.Namespace  }}
+{{- $namespaceScoped := false }}
+{{- $isOpenShift := false }}
+{{- if or (.Values.namespaceScope) (.Values.watchNamespaces) }}
+{{- $namespaceScoped = true }}
+{{- end }}
+{{- if (.Values.isOpenShift) }}
+  {{- $isOpenShift = true }}
+{{- end }}
+{{- $operatorNamespace := .Release.Namespace }}
+{{- range ( split "," $watchNamespaces ) }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: {{ if not $namespaceScoped }}Cluster{{ end }}Role
+metadata:
+  {{- if $namespaceScoped }}
+  namespace: {{ . }}
+  {{- end }}
+  name: {{ include "grafana-operator.fullname" $ }}
+  labels:
+    {{- include "grafana-operator.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: operator
+rules:
+  {{- toYaml $rbac.rules | nindent 2 }}
+  {{- if $isOpenShift }}
+  {{- toYaml $rbacOpenShift.rules | nindent 2 -}}
+  {{- end }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: {{ if not $namespaceScoped }}Cluster{{ end }}RoleBinding
+metadata:
+  name: {{ include "grafana-operator.fullname" $ }}
+  {{- if $namespaceScoped }}
+  namespace: {{ . }}
+  {{- end }}
+  labels:
+    {{- include "grafana-operator.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: operator
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "grafana-operator.serviceAccountName" $ }}
+    namespace: {{ include "grafana-operator.namespace" $ }}
+roleRef:
+  kind: {{ if not $namespaceScoped }}Cluster{{ end }}Role
+  name: {{ include "grafana-operator.fullname" $ }}
+  apiGroup: rbac.authorization.k8s.io
+{{- end }}
+{{- end }}

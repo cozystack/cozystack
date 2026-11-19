@@ -1,0 +1,22 @@
+{{- $first := true }}
+{{- range .Values.metricsStorages }}
+---
+apiVersion: grafana.integreatly.org/v1beta1
+kind: GrafanaDatasource
+metadata:
+  name: vm-{{ .name }}
+spec:
+  instanceSelector:
+    matchLabels:
+      dashboards: grafana
+  datasource:
+    name: vm-{{ .name }}
+    type: prometheus
+    access: proxy
+    url: http://vmselect-{{ .name }}.{{ $.Release.Namespace }}.svc:8481/select/0/prometheus/
+    isDefault: {{ if $first }}true{{ $first = false }}{{ else }}false{{ end }}
+    jsonData:
+      'tlsSkipVerify': true
+      'timeInterval': "30s"
+    editable: true
+{{- end }}

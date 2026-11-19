@@ -1,0 +1,13 @@
+diff --git a/packages/system/victoria-metrics-operator/charts/victoria-metrics-operator/templates/webhook.yaml b/packages/system/victoria-metrics-operator/charts/victoria-metrics-operator/templates/webhook.yaml
+index 2e027ab4..1bead84d 100644
+--- a/packages/system/victoria-metrics-operator/charts/victoria-metrics-operator/templates/webhook.yaml
++++ b/packages/system/victoria-metrics-operator/charts/victoria-metrics-operator/templates/webhook.yaml
+@@ -78,6 +78,8 @@ spec:
+     name: {{ $fullname }}-root
+   commonName: {{ $certManager.ca.commonName }}
+   isCA: true
++  privateKey:
++    rotationPolicy: Never
+ ---
+ apiVersion: cert-manager.io/v1
+ kind: Issuer

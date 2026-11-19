@@ -1,0 +1,1 @@
+FROM altinity/clickhouse-backup:2.7.4@sha256:51aa3ee4d7835d04cfb44cd75320334d52f34081c46cb9852bcb27c38181bb5d

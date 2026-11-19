@@ -1,0 +1,115 @@
+suite: ingress-nginx ACME wildcard Certificate
+
+templates:
+  - templates/wildcard-certificate.yaml
+
+release:
+  name: ingress
+  namespace: tenant-root
+
+# WS2 / #2400: when the platform decides to issue a shared wildcard on the
+# ingress-nginx path (_cluster.wildcard-issue=true, computed in
+# core/platform apps.yaml only for solver=dns01 + gateway disabled), the
+# publishing tenant's ingress controller renders ONE DNS-01 Certificate
+# for <root-host> + *.<root-host>. ingress-nginx serves the resulting
+# Secret as its default SSL certificate, so per-host ACME is unnecessary.
+# Only the publishing controller (Release.Namespace == expose-ingress)
+# renders it — the Secret must live in that namespace and child-tenant
+# controllers cannot read it. The ClusterIssuer named here already carries
+# the DNS-01 solver whenever solver=dns01.
+
+tests:
+  - it: renders a DNS-01 wildcard Certificate on the publishing controller
+    set:
+      _cluster:
+        expose-ingress: tenant-root
+        wildcard-issue: "true"
+        wildcard-secret-name: cozystack-wildcard-tls
+        root-host: example.org
+        issuer-name: letsencrypt-prod
+    asserts:
+      - hasDocuments:
+          count: 1
+      - equal:
+          path: kind
+          value: Certificate
+      - equal:
+          path: metadata.name
+          value: cozystack-wildcard
+      - equal:
+          path: spec.secretName
+          value: cozystack-wildcard-tls
+      - equal:
+          path: spec.issuerRef.kind
+          value: ClusterIssuer
+      - equal:
+          path: spec.issuerRef.name
+          value: letsencrypt-prod
+      - equal:
+          path: spec.dnsNames
+          value:
+            - example.org
+            - "*.example.org"
+
+  - it: renders nothing when wildcard-issue is not set
+    set:
+      _cluster:
+        expose-ingress: tenant-root
+        wildcard-secret-name: ""
+        root-host: example.org
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: does not render on a non-publishing tenant controller
+    release:
+      name: ingress
+      namespace: tenant-foo
+    set:
+      _cluster:
+        expose-ingress: tenant-root
+        wildcard-issue: "true"
+        wildcard-secret-name: cozystack-wildcard-tls
+        root-host: example.org
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: honors a custom issuer name
+    set:
+      _cluster:
+        expose-ingress: tenant-root
+        wildcard-issue: "true"
+        wildcard-secret-name: cozystack-wildcard-tls
+        root-host: example.org
+        issuer-name: letsencrypt-stage
+    asserts:
+      - equal:
+          path: spec.issuerRef.name
+          value: letsencrypt-stage
+
+  # Fail-fast guards: platform-internal invariants that should never trip,
+  # but must fail loudly (not render a Certificate pointing at a
+  # nonexistent Secret or with empty dnsNames) if apps.yaml ever regresses
+  # and sets wildcard-issue=true without the keys it implies.
+  - it: fails when wildcard-issue is true but the secret name is empty
+    set:
+      _cluster:
+        expose-ingress: tenant-root
+        wildcard-issue: "true"
+        wildcard-secret-name: ""
+        root-host: example.org
+    asserts:
+      - failedTemplate:
+          errorMessage: "packages/extra/ingress: _cluster.wildcard-issue=true but _cluster.wildcard-secret-name is empty — the platform must supply the target Secret name."
+
+  - it: fails when wildcard-issue is true but root-host is empty
+    set:
+      _cluster:
+        expose-ingress: tenant-root
+        wildcard-issue: "true"
+        wildcard-secret-name: cozystack-wildcard-tls
+        root-host: ""
+    asserts:
+      - failedTemplate:
+          errorMessage: "packages/extra/ingress: _cluster.wildcard-issue=true but _cluster.root-host is empty — cannot build the wildcard dnsNames."

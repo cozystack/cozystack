@@ -1,0 +1,45 @@
+{{- range .Values.images }}
+---
+apiVersion: cdi.kubevirt.io/v1beta1
+kind: DataVolume
+metadata:
+  annotations:
+    vm-default-images.cozystack.io/name: {{ .name | quote }}
+    {{- with .os }}
+    {{- with .family }}
+    vm-default-images.cozystack.io/os-family: {{ . | quote }}
+    {{- end }}
+    {{- with .name }}
+    vm-default-images.cozystack.io/os-name: {{ . | quote }}
+    {{- end }}
+    {{- with .version }}
+    vm-default-images.cozystack.io/os-version: {{ . | quote }}
+    {{- end }}
+    {{- end }}
+    {{- with .architecture }}
+    vm-default-images.cozystack.io/architecture: {{ . | quote }}
+    {{- end }}
+    {{- with .description }}
+    vm-default-images.cozystack.io/description: {{ . | quote }}
+    {{- end }}
+    cdi.kubevirt.io/storage.bind.immediate.requested: "true"
+    cdi.kubevirt.io/storage.usePopulator: "true"
+  labels:
+    app.kubernetes.io/managed-by: cozystack
+  name: vm-default-images-{{ required "A valid .name entry required for each image!" .name }}
+  namespace: cozy-public
+spec:
+  contentType: kubevirt
+  source:
+    http:
+      url: {{ required (printf "A valid .url entry required for image '%s'!" .name) .url | quote }}
+  storage:
+    resources:
+      requests:
+        storage: {{ default "5Gi" .storage }}
+    {{- if .storageClass }}
+    storageClassName: {{ .storageClass }}
+    {{- else if $.Values.storageClass }}
+    storageClassName: {{ $.Values.storageClass }}
+    {{- end }}
+{{- end }}

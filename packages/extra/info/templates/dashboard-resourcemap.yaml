@@ -1,0 +1,34 @@
+{{- $oidcEnabled := index .Values._cluster "oidc-enabled" }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: info-dashboard-resources
+rules:
+- apiGroups:
+  - ""
+  resources:
+  - secrets
+  resourceNames:
+  {{- if eq $oidcEnabled "true" }}
+  - kubeconfig-{{ .Release.Namespace }}
+  {{- else }}
+  - {{ .Release.Namespace }}
+  {{- end }}
+  verbs: ["get", "list", "watch"]
+---
+kind: RoleBinding
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  name: {{ .Release.Name }}-dashboard-resources
+subjects:
+{{- if eq $oidcEnabled "true" }}
+{{ include "cozy-lib.rbac.subjectsForTenantAndAccessLevel" (list "view" .Release.Namespace) }}
+{{- else }}
+- kind: ServiceAccount
+  name: tenant-{{ .Release.Namespace }}
+  namespace: tenant-{{ .Release.Namespace }}
+{{- end }}
+roleRef:
+  kind: Role
+  name: {{ .Release.Name }}-dashboard-resources
+  apiGroup: rbac.authorization.k8s.io

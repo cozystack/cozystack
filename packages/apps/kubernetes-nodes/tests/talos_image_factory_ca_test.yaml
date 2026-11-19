@@ -1,0 +1,383 @@
+suite: talos.imageFactoryCA — trusting a self-hosted image factory
+
+# Covers the opt-in CA bundle CDI verifies the Talos Image Factory against.
+#
+# Two properties matter and are pinned separately below:
+#
+#  1. UNSET IS UNCHANGED. The overwhelming majority of pools point at the
+#     public factory and must render exactly as before — no ConfigMap, and no
+#     certConfigMap key on the DataVolume. An importer given an empty
+#     certConfigMap would mount nothing and fall back to the system pool anyway,
+#     but the object diff would still rename the content-hashed
+#     KubevirtMachineTemplate and roll every live worker. The full-render side
+#     of that invariant is pinned by tests/render_snapshot_test.yaml, whose
+#     stored snapshot predates this feature.
+#
+#  2. THE TWO SIDES AGREE. The ConfigMap's name and the DataVolume's
+#     certConfigMap both come from kubernetes-nodes.talosImageFactoryCAConfigMapName,
+#     so they cannot drift; the assertions compare them against the same literal
+#     to catch a helper edit that changes only one call site.
+#
+# The clone path (osImage.builtin) builds no source.http at all, so it must
+# render neither the reference nor the ConfigMap — pinned below.
+#
+# The fail-closed cases pin the shared cozy-lib.tls.validateCACert guard as
+# reached through this chart's field name. They exist because the value is
+# emitted verbatim into a ConfigMap that anything able to read the namespace
+# can read: a pasted keypair must be refused outright, not published. The
+# guard's own edge cases (PGP key headers, base64-alphabet bodies, numeric
+# coercion) are pinned in packages/tests/cozy-lib-tests.
+#
+# The certificate below is a throwaway self-signed CA generated for this suite;
+# it certifies nothing and expires far out so the fixture never rots.
+
+templates:
+  - templates/image-factory-ca.yaml
+  - templates/nodegroup.yaml
+
+release:
+  name: kubernetes-nodes-myk8s-md0
+  namespace: tenant-test
+
+set:
+  cluster: myk8s
+  _cluster:
+    cluster-domain: cozy.local
+  version: "v1.35"
+  minReplicas: 1
+  maxReplicas: 3
+  instanceType: u1.medium
+  diskSize: 20Gi
+  storageClass: replicated
+  roles: [ingress-nginx]
+
+kubernetesProvider:
+  scheme:
+    "instancetype.kubevirt.io/v1beta1/VirtualMachineClusterInstancetype":
+      gvr: {group: instancetype.kubevirt.io, version: v1beta1, resource: virtualmachineclusterinstancetypes}
+      namespaced: false
+    "cluster.x-k8s.io/v1beta1/MachineSet":
+      gvr: {group: cluster.x-k8s.io, version: v1beta1, resource: machinesets}
+      namespaced: true
+    "infrastructure.cluster.x-k8s.io/v1alpha1/KubevirtMachineTemplate":
+      gvr: {group: infrastructure.cluster.x-k8s.io, version: v1alpha1, resource: kubevirtmachinetemplates}
+      namespaced: true
+    "cdi.kubevirt.io/v1beta1/DataVolume":
+      gvr: {group: cdi.kubevirt.io, version: v1beta1, resource: datavolumes}
+      namespaced: true
+    "storage.k8s.io/v1/StorageClass":
+      gvr: {group: storage.k8s.io, version: v1, resource: storageclasses}
+      namespaced: false
+  objects:
+    - kind: VirtualMachineClusterInstancetype
+      apiVersion: instancetype.kubevirt.io/v1beta1
+      metadata: {name: u1.medium}
+    - kind: StorageClass
+      apiVersion: storage.k8s.io/v1
+      metadata: {name: replicated}
+    - kind: MachineSet
+      apiVersion: cluster.x-k8s.io/v1beta1
+      metadata: {name: ignored-ms, namespace: tenant-test}
+      spec: {template: {spec: {infrastructureRef: {kind: Other, name: ignored}}}}
+    - kind: KubevirtMachineTemplate
+      apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
+      metadata: {name: ignored-kmt, namespace: tenant-test}
+    # The golden for the default talos.*, so the osImage.builtin cases have a
+    # populated source to clone.
+    - kind: DataVolume
+      apiVersion: cdi.kubevirt.io/v1beta1
+      metadata:
+        name: talos-worker-ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515-v1.13.6
+        namespace: cozy-public
+      spec:
+        storage:
+          resources:
+            requests:
+              storage: 6Gi
+          storageClassName: replicated
+      status:
+        phase: Succeeded
+
+tests:
+  ###############################################
+  # Unset: byte-for-byte the previous render    #
+  ###############################################
+  - it: renders no ConfigMap when the field is unset
+    templates:
+      - templates/image-factory-ca.yaml
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: leaves certConfigMap off the DataVolume when the field is unset
+    templates:
+      - templates/nodegroup.yaml
+    asserts:
+      - notExists:
+          path: spec.template.spec.virtualMachineTemplate.spec.dataVolumeTemplates[0].spec.source.http.certConfigMap
+        documentSelector: {path: kind, value: KubevirtMachineTemplate}
+
+  - it: treats a whitespace-only value as unset rather than rendering an empty bundle
+    templates:
+      - templates/image-factory-ca.yaml
+    set:
+      # A trailing newline left by an editor must not produce a ConfigMap whose
+      # only content is whitespace — CDI would mount it, read no certificate,
+      # and fail verification with a far less obvious message.
+      talos.imageFactoryCA: "  \n  "
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  ###############################################
+  # Set: ConfigMap + reference, names agreeing  #
+  ###############################################
+  - it: renders the CA ConfigMap when the field is set
+    templates:
+      - templates/image-factory-ca.yaml
+    set:
+      talos.imageFactoryCA: |
+        -----BEGIN CERTIFICATE-----
+        MIIBkDCCATWgAwIBAgIUYQvjA+rtcpuJZ414ETcZjPLYYHEwCgYIKoZIzj0EAwIw
+        HDEaMBgGA1UEAwwRY296eXN0YWNrLXRlc3QtY2EwIBcNMjYwODEzMTQzNTM4WhgP
+        MjEyNjA3MjAxNDM1MzhaMBwxGjAYBgNVBAMMEWNvenlzdGFjay10ZXN0LWNhMFkw
+        EwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEkYVY3hFc1GJaDFRqOkUoZV6IqFW6GsbI
+        qoQgvEq3KYAZcmrb2ZbP2LsCyCojMOEzoF5d1RJc41lQeXv9eS4ERKNTMFEwHQYD
+        VR0OBBYEFKbTnhLk/2Bb2jRjDyZic0F1ZYSPMB8GA1UdIwQYMBaAFKbTnhLk/2Bb
+        2jRjDyZic0F1ZYSPMA8GA1UdEwEB/wQFMAMBAf8wCgYIKoZIzj0EAwIDSQAwRgIh
+        ANa5qSwy8bEa4lCFsYEgmtNm4EJ3wWlwzqLrotemRkILAiEAjH8pB4pNvmyRTkI0
+        uDdynL2YtgHPfcQVfBb98CKq7yI=
+        -----END CERTIFICATE-----
+    asserts:
+      - hasDocuments:
+          count: 1
+      - isKind:
+          of: ConfigMap
+      - equal:
+          path: metadata.name
+          value: kubernetes-nodes-myk8s-md0-talos-factory-ca
+      # The key name is free — CDI reads every file in the mounted directory —
+      # but it must exist and carry the certificate, not an empty string.
+      - matchRegex:
+          path: data["ca.pem"]
+          pattern: "^-----BEGIN CERTIFICATE-----"
+      - matchRegex:
+          path: data["ca.pem"]
+          pattern: "-----END CERTIFICATE-----\\s*$"
+
+  - it: points the DataVolume at that ConfigMap by the same name
+    templates:
+      - templates/nodegroup.yaml
+    set:
+      talos.imageFactoryCA: |
+        -----BEGIN CERTIFICATE-----
+        MIIBkDCCATWgAwIBAgIUYQvjA+rtcpuJZ414ETcZjPLYYHEwCgYIKoZIzj0EAwIw
+        HDEaMBgGA1UEAwwRY296eXN0YWNrLXRlc3QtY2EwIBcNMjYwODEzMTQzNTM4WhgP
+        MjEyNjA3MjAxNDM1MzhaMBwxGjAYBgNVBAMMEWNvenlzdGFjay10ZXN0LWNhMFkw
+        EwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEkYVY3hFc1GJaDFRqOkUoZV6IqFW6GsbI
+        qoQgvEq3KYAZcmrb2ZbP2LsCyCojMOEzoF5d1RJc41lQeXv9eS4ERKNTMFEwHQYD
+        VR0OBBYEFKbTnhLk/2Bb2jRjDyZic0F1ZYSPMB8GA1UdIwQYMBaAFKbTnhLk/2Bb
+        2jRjDyZic0F1ZYSPMA8GA1UdEwEB/wQFMAMBAf8wCgYIKoZIzj0EAwIDSQAwRgIh
+        ANa5qSwy8bEa4lCFsYEgmtNm4EJ3wWlwzqLrotemRkILAiEAjH8pB4pNvmyRTkI0
+        uDdynL2YtgHPfcQVfBb98CKq7yI=
+        -----END CERTIFICATE-----
+    asserts:
+      - equal:
+          path: spec.template.spec.virtualMachineTemplate.spec.dataVolumeTemplates[0].spec.source.http.certConfigMap
+          value: kubernetes-nodes-myk8s-md0-talos-factory-ca
+        documentSelector: {path: kind, value: KubevirtMachineTemplate}
+      # The URL is untouched by the CA plumbing: trusting a factory and choosing
+      # one are separate decisions, and a pool may set either alone.
+      - matchRegex:
+          path: spec.template.spec.virtualMachineTemplate.spec.dataVolumeTemplates[0].spec.source.http.url
+          pattern: "openstack-amd64\\.raw\\.xz$"
+        documentSelector: {path: kind, value: KubevirtMachineTemplate}
+
+  - it: accepts a chain of more than one certificate
+    templates:
+      - templates/image-factory-ca.yaml
+    set:
+      # An internal PKI usually presents intermediate + root, so a multi-block
+      # bundle is the common case rather than an edge one.
+      talos.imageFactoryCA: |
+        -----BEGIN CERTIFICATE-----
+        MIIBkDCCATWgAwIBAgIUYQvjA+rtcpuJZ414ETcZjPLYYHEwCgYIKoZIzj0EAwIw
+        HDEaMBgGA1UEAwwRY296eXN0YWNrLXRlc3QtY2EwIBcNMjYwODEzMTQzNTM4WhgP
+        MjEyNjA3MjAxNDM1MzhaMBwxGjAYBgNVBAMMEWNvenlzdGFjay10ZXN0LWNhMFkw
+        EwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEkYVY3hFc1GJaDFRqOkUoZV6IqFW6GsbI
+        qoQgvEq3KYAZcmrb2ZbP2LsCyCojMOEzoF5d1RJc41lQeXv9eS4ERKNTMFEwHQYD
+        VR0OBBYEFKbTnhLk/2Bb2jRjDyZic0F1ZYSPMB8GA1UdIwQYMBaAFKbTnhLk/2Bb
+        2jRjDyZic0F1ZYSPMA8GA1UdEwEB/wQFMAMBAf8wCgYIKoZIzj0EAwIDSQAwRgIh
+        ANa5qSwy8bEa4lCFsYEgmtNm4EJ3wWlwzqLrotemRkILAiEAjH8pB4pNvmyRTkI0
+        uDdynL2YtgHPfcQVfBb98CKq7yI=
+        -----END CERTIFICATE-----
+        -----BEGIN CERTIFICATE-----
+        MIIBkDCCATWgAwIBAgIUYQvjA+rtcpuJZ414ETcZjPLYYHEwCgYIKoZIzj0EAwIw
+        HDEaMBgGA1UEAwwRY296eXN0YWNrLXRlc3QtY2EwIBcNMjYwODEzMTQzNTM4WhgP
+        MjEyNjA3MjAxNDM1MzhaMBwxGjAYBgNVBAMMEWNvenlzdGFjay10ZXN0LWNhMFkw
+        EwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEkYVY3hFc1GJaDFRqOkUoZV6IqFW6GsbI
+        qoQgvEq3KYAZcmrb2ZbP2LsCyCojMOEzoF5d1RJc41lQeXv9eS4ERKNTMFEwHQYD
+        VR0OBBYEFKbTnhLk/2Bb2jRjDyZic0F1ZYSPMB8GA1UdIwQYMBaAFKbTnhLk/2Bb
+        2jRjDyZic0F1ZYSPMA8GA1UdEwEB/wQFMAMBAf8wCgYIKoZIzj0EAwIDSQAwRgIh
+        ANa5qSwy8bEa4lCFsYEgmtNm4EJ3wWlwzqLrotemRkILAiEAjH8pB4pNvmyRTkI0
+        uDdynL2YtgHPfcQVfBb98CKq7yI=
+        -----END CERTIFICATE-----
+    asserts:
+      - hasDocuments:
+          count: 1
+      - isKind:
+          of: ConfigMap
+
+  ###############################################
+  # Clone path: the field has no effect         #
+  ###############################################
+  # certConfigMap belongs to source.http, and a builtin pool renders source.pvc
+  # instead — the reference must not appear there, and neither should the
+  # ConfigMap it would have pointed at.
+  - it: renders no ConfigMap for a pool cloning a golden image
+    templates:
+      - templates/image-factory-ca.yaml
+    set:
+      osImage:
+        builtin: {}
+      talos.imageFactoryCA: |
+        -----BEGIN CERTIFICATE-----
+        MIIBkDCCATWgAwIBAgIUYQvjA+rtcpuJZ414ETcZjPLYYHEwCgYIKoZIzj0EAwIw
+        HDEaMBgGA1UEAwwRY296eXN0YWNrLXRlc3QtY2EwIBcNMjYwODEzMTQzNTM4WhgP
+        MjEyNjA3MjAxNDM1MzhaMBwxGjAYBgNVBAMMEWNvenlzdGFjay10ZXN0LWNhMFkw
+        EwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEkYVY3hFc1GJaDFRqOkUoZV6IqFW6GsbI
+        qoQgvEq3KYAZcmrb2ZbP2LsCyCojMOEzoF5d1RJc41lQeXv9eS4ERKNTMFEwHQYD
+        VR0OBBYEFKbTnhLk/2Bb2jRjDyZic0F1ZYSPMB8GA1UdIwQYMBaAFKbTnhLk/2Bb
+        2jRjDyZic0F1ZYSPMA8GA1UdEwEB/wQFMAMBAf8wCgYIKoZIzj0EAwIDSQAwRgIh
+        ANa5qSwy8bEa4lCFsYEgmtNm4EJ3wWlwzqLrotemRkILAiEAjH8pB4pNvmyRTkI0
+        uDdynL2YtgHPfcQVfBb98CKq7yI=
+        -----END CERTIFICATE-----
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: leaves the clone source untouched when the field is set on a builtin pool
+    templates:
+      - templates/nodegroup.yaml
+    set:
+      osImage:
+        builtin: {}
+      talos.imageFactoryCA: |
+        -----BEGIN CERTIFICATE-----
+        MIIBkDCCATWgAwIBAgIUYQvjA+rtcpuJZ414ETcZjPLYYHEwCgYIKoZIzj0EAwIw
+        HDEaMBgGA1UEAwwRY296eXN0YWNrLXRlc3QtY2EwIBcNMjYwODEzMTQzNTM4WhgP
+        MjEyNjA3MjAxNDM1MzhaMBwxGjAYBgNVBAMMEWNvenlzdGFjay10ZXN0LWNhMFkw
+        EwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEkYVY3hFc1GJaDFRqOkUoZV6IqFW6GsbI
+        qoQgvEq3KYAZcmrb2ZbP2LsCyCojMOEzoF5d1RJc41lQeXv9eS4ERKNTMFEwHQYD
+        VR0OBBYEFKbTnhLk/2Bb2jRjDyZic0F1ZYSPMB8GA1UdIwQYMBaAFKbTnhLk/2Bb
+        2jRjDyZic0F1ZYSPMA8GA1UdEwEB/wQFMAMBAf8wCgYIKoZIzj0EAwIDSQAwRgIh
+        ANa5qSwy8bEa4lCFsYEgmtNm4EJ3wWlwzqLrotemRkILAiEAjH8pB4pNvmyRTkI0
+        uDdynL2YtgHPfcQVfBb98CKq7yI=
+        -----END CERTIFICATE-----
+    asserts:
+      - equal:
+          path: spec.template.spec.virtualMachineTemplate.spec.dataVolumeTemplates[0].spec.source.pvc.name
+          value: talos-worker-ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515-v1.13.6
+        documentSelector: {path: kind, value: KubevirtMachineTemplate}
+      - notExists:
+          path: spec.template.spec.virtualMachineTemplate.spec.dataVolumeTemplates[0].spec.source.http
+        documentSelector: {path: kind, value: KubevirtMachineTemplate}
+
+  ###############################################
+  # Fail-closed guards (cozy-lib.tls.validateCACert) #
+  ###############################################
+  # Both templates gate on the same validating helper, but a full render aborts
+  # on the FIRST failing template — nodegroup.yaml, which helm renders before
+  # image-factory-ca.yaml — so these cases assert there, on the error an
+  # operator would actually see. The rules themselves (which inputs are
+  # refused, and why) are pinned at the helper in packages/tests/cozy-lib-tests.
+  - it: refuses a private key
+    templates:
+      - templates/nodegroup.yaml
+    set:
+      talos.imageFactoryCA: |
+        -----BEGIN EC PRIVATE KEY-----
+        MHcCAQEEexampleprivatekeymaterialthatmustnotreachaconfigmap000000
+        -----END EC PRIVATE KEY-----
+    asserts:
+      - failedTemplate:
+          errorMessage: "cozy-lib.tls.validateCACert: talos.imageFactoryCA must not contain private key material"
+
+  - it: refuses a certificate bundle that also carries a private key
+    templates:
+      - templates/nodegroup.yaml
+    set:
+      # The realistic accident: `cat ca.pem key.pem` into the field. A valid
+      # leading certificate must not let the trailing key through.
+      talos.imageFactoryCA: |
+        -----BEGIN CERTIFICATE-----
+        MIIBkDCCATWgAwIBAgIUYQvjA+rtcpuJZ414ETcZjPLYYHEwCgYIKoZIzj0EAwIw
+        HDEaMBgGA1UEAwwRY296eXN0YWNrLXRlc3QtY2EwIBcNMjYwODEzMTQzNTM4WhgP
+        MjEyNjA3MjAxNDM1MzhaMBwxGjAYBgNVBAMMEWNvenlzdGFjay10ZXN0LWNhMFkw
+        EwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEkYVY3hFc1GJaDFRqOkUoZV6IqFW6GsbI
+        qoQgvEq3KYAZcmrb2ZbP2LsCyCojMOEzoF5d1RJc41lQeXv9eS4ERKNTMFEwHQYD
+        VR0OBBYEFKbTnhLk/2Bb2jRjDyZic0F1ZYSPMB8GA1UdIwQYMBaAFKbTnhLk/2Bb
+        2jRjDyZic0F1ZYSPMA8GA1UdEwEB/wQFMAMBAf8wCgYIKoZIzj0EAwIDSQAwRgIh
+        ANa5qSwy8bEa4lCFsYEgmtNm4EJ3wWlwzqLrotemRkILAiEAjH8pB4pNvmyRTkI0
+        uDdynL2YtgHPfcQVfBb98CKq7yI=
+        -----END CERTIFICATE-----
+        -----BEGIN PRIVATE KEY-----
+        MIIExamplePrivateKeyThatMustNotBePublishedIntoAConfigMap00000000
+        -----END PRIVATE KEY-----
+    asserts:
+      - failedTemplate:
+          errorMessage: "cozy-lib.tls.validateCACert: talos.imageFactoryCA must not contain private key material"
+
+  - it: refuses input that is not a certificate
+    templates:
+      - templates/nodegroup.yaml
+    set:
+      talos.imageFactoryCA: "this is not a certificate at all"
+    asserts:
+      - failedTemplate:
+          errorMessage: "cozy-lib.tls.validateCACert: talos.imageFactoryCA must contain a complete PEM certificate block (BEGIN/END CERTIFICATE)"
+
+  - it: refuses certificate armour with no closing line
+    templates:
+      - templates/nodegroup.yaml
+    set:
+      # A truncated paste carries the BEGIN line, so a header-only check would
+      # admit it and mount a bundle CDI can make no use of.
+      talos.imageFactoryCA: |
+        -----BEGIN CERTIFICATE-----
+        MIIBkDCCATWgAwIBAgIUYQvjA+rtcpuJZ414ETcZjPLYYHEwCgYIKoZIzj0EAwIw
+    asserts:
+      - failedTemplate:
+          errorMessage: "cozy-lib.tls.validateCACert: talos.imageFactoryCA must contain a complete PEM certificate block (BEGIN/END CERTIFICATE)"
+
+  - it: refuses a certificate wrapped in openssl's human-readable preamble
+    templates:
+      - templates/nodegroup.yaml
+    set:
+      # What `openssl x509 -text` prints above the block. The value is emitted
+      # verbatim, so leading bytes would ride into the ConfigMap.
+      talos.imageFactoryCA: |
+        Certificate:
+            Data:
+                Version: 3 (0x2)
+        -----BEGIN CERTIFICATE-----
+        MIIBkDCCATWgAwIBAgIUYQvjA+rtcpuJZ414ETcZjPLYYHEwCgYIKoZIzj0EAwIw
+        HDEaMBgGA1UEAwwRY296eXN0YWNrLXRlc3QtY2EwIBcNMjYwODEzMTQzNTM4WhgP
+        MjEyNjA3MjAxNDM1MzhaMBwxGjAYBgNVBAMMEWNvenlzdGFjay10ZXN0LWNhMFkw
+        EwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEkYVY3hFc1GJaDFRqOkUoZV6IqFW6GsbI
+        qoQgvEq3KYAZcmrb2ZbP2LsCyCojMOEzoF5d1RJc41lQeXv9eS4ERKNTMFEwHQYD
+        VR0OBBYEFKbTnhLk/2Bb2jRjDyZic0F1ZYSPMB8GA1UdIwQYMBaAFKbTnhLk/2Bb
+        2jRjDyZic0F1ZYSPMA8GA1UdEwEB/wQFMAMBAf8wCgYIKoZIzj0EAwIDSQAwRgIh
+        ANa5qSwy8bEa4lCFsYEgmtNm4EJ3wWlwzqLrotemRkILAiEAjH8pB4pNvmyRTkI0
+        uDdynL2YtgHPfcQVfBb98CKq7yI=
+        -----END CERTIFICATE-----
+    asserts:
+      - failedTemplate:
+          errorMessage: "cozy-lib.tls.validateCACert: talos.imageFactoryCA must contain a complete PEM certificate block (BEGIN/END CERTIFICATE)"
+
+  # Not covered here, because it cannot reach the template: a non-string value
+  # (an unquoted numeric scalar, say) is rejected by values.schema.json before
+  # rendering starts — "at '/talos/imageFactoryCA': got number, want string".
+  # The helper still coerces to string so it fails with its own message in any
+  # context where the schema is not applied; that path is pinned in
+  # packages/tests/cozy-lib-tests.

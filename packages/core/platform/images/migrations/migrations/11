@@ -1,0 +1,21 @@
+#!/bin/sh
+# Migration 11 --> 12
+
+# Recreate daemonset kube-rbac-proxy
+
+if kubectl get daemonset kube-rbac-proxy -n cozy-monitoring; then
+  kubectl delete daemonset kube-rbac-proxy --cascade=orphan -n cozy-monitoring
+fi
+
+if kubectl get helmrelease monitoring-agents -n cozy-monitoring; then
+  timestamp=$(date --rfc-3339=ns)
+  kubectl annotate helmrelease monitoring-agents -n cozy-monitoring \
+    reconcile.fluxcd.io/forceAt="$timestamp" \
+    reconcile.fluxcd.io/requestedAt="$timestamp" \
+    --overwrite
+fi
+
+kubectl delete pods -l app.kubernetes.io/component=kube-rbac-proxy -n cozy-monitoring
+
+# Write version to cozystack-version config
+kubectl create configmap -n cozy-system cozystack-version --from-literal=version=12 --dry-run=client -o yaml | kubectl apply -f-

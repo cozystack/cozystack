@@ -1,0 +1,7 @@
+apiVersion: v2
+name: redis
+description: Managed Redis service
+icon: /logos/redis.svg
+type: application
+version: 0.0.0 # Placeholder, the actual version will be automatically set during the build process
+appVersion: "6.2.6"

@@ -1,0 +1,64 @@
+suite: seaweedfs master probe timeouts
+
+# Pins the master probe timeout overrides that keep master-0 alive during raft
+# bootstrap. The master's /cluster/status handler calls topo.Leader(), which
+# backs off up to ~20s (MaxElapsedTime=20s) while the node has no leader in
+# view — e.g. a master that was briefly the initial raft leader then was demoted.
+# The subchart default 10s probe timeout is shorter than that worst case, so such
+# a master is liveness-killed into a permanent CrashLoop and the master
+# StatefulSet never reaches full readiness. Both probes must allow more than the
+# 20s backoff. The overlay overrides only timeoutSeconds and relies on Helm's
+# deep-merge to keep every other subchart probe field, so this also guards that
+# the merge does not drop the surrounding probe configuration.
+
+templates:
+  - charts/seaweedfs/templates/master/master-statefulset.yaml
+
+release:
+  name: seaweedfs
+  namespace: cozy-seaweedfs
+
+tests:
+  - it: raises both master probe timeouts above the cluster-status backoff
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].livenessProbe.timeoutSeconds
+          value: 30
+      - equal:
+          path: spec.template.spec.containers[0].readinessProbe.timeoutSeconds
+          value: 30
+
+  - it: preserves the other master probe fields through the deep-merge
+    asserts:
+      # liveness: only timeoutSeconds is overridden, the rest survive
+      - equal:
+          path: spec.template.spec.containers[0].livenessProbe.httpGet.path
+          value: /cluster/status
+      - equal:
+          path: spec.template.spec.containers[0].livenessProbe.failureThreshold
+          value: 4
+      - equal:
+          path: spec.template.spec.containers[0].livenessProbe.successThreshold
+          value: 1
+      - equal:
+          path: spec.template.spec.containers[0].livenessProbe.initialDelaySeconds
+          value: 20
+      - equal:
+          path: spec.template.spec.containers[0].livenessProbe.periodSeconds
+          value: 30
+      # readiness: only timeoutSeconds is overridden, the rest survive
+      - equal:
+          path: spec.template.spec.containers[0].readinessProbe.httpGet.path
+          value: /cluster/status
+      - equal:
+          path: spec.template.spec.containers[0].readinessProbe.failureThreshold
+          value: 100
+      - equal:
+          path: spec.template.spec.containers[0].readinessProbe.successThreshold
+          value: 2
+      - equal:
+          path: spec.template.spec.containers[0].readinessProbe.initialDelaySeconds
+          value: 10
+      - equal:
+          path: spec.template.spec.containers[0].readinessProbe.periodSeconds
+          value: 45

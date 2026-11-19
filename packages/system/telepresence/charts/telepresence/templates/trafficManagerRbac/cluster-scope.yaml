@@ -1,0 +1,94 @@
+{{- if .Values.managerRbac.create }}
+{{- if (not .Values.managerRbac.namespaced) }}
+{{- /*
+This file contains all cluster-scoped permissions that the traffic manager needs.
+This will be larger if namespaced: false, or smaller if it is true
+This will also likely expand over time as we move more things from the clients
+domain into the traffic-manager.  But the good news there is that it will
+require less permissions in clientRbac.yaml
+*/}}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: traffic-manager-{{ include "traffic-manager.namespace" . }}
+  labels:
+    {{- include "telepresence.labels" . | nindent 4 }}
+rules:
+- apiGroups:
+  - ""
+  resources:
+  - services
+  verbs:
+  - update {{/* Only needed for upgrade of older versions */}}
+- apiGroups:
+  - ""
+  resources:
+  - nodes
+  - pods
+  - services
+  verbs:
+  - list
+  - get
+  - watch
+{{- /* Needed to be able to find the cluster DNS resolver */}}
+- apiGroups:
+  - ""
+  resources:
+  - namespaces
+  verbs:
+  - get
+  - list
+- apiGroups:
+  - ""
+  resources:
+  - configmaps
+  verbs:
+  - create
+- apiGroups:
+  - ""
+  resources:
+  - configmaps
+  verbs:
+  - list
+  - get
+  - watch
+  - update
+  - delete
+  resourceNames:
+  - telepresence-agents
+  - telepresence-intercept-env
+- apiGroups:
+  - "apps"
+  resources:
+  - deployments
+  - replicasets
+  - statefulsets
+  verbs:
+  - get
+  - list
+  - patch
+  - update {{/* Only needed for upgrade of older versions */}}
+- apiGroups:
+    - "events.k8s.io"
+  resources:
+    - events
+  verbs:
+    - get
+    - watch
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: traffic-manager-{{ include "traffic-manager.namespace" . }}
+  labels:
+    {{- include "telepresence.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: traffic-manager-{{ include "traffic-manager.namespace" . }}
+subjects:
+- kind: ServiceAccount
+  name: traffic-manager
+  namespace: {{ include "traffic-manager.namespace" . }}
+{{- end }}
+{{- end }}

@@ -1,0 +1,119 @@
+- apiGroups:
+    - ""
+  resources:
+    - configmaps
+    - secrets
+    - services
+  verbs:
+    - create
+    - delete
+    - get
+    - list
+    - patch
+    - update
+    - watch
+- apiGroups:
+    - ""
+  resources:
+    - namespaces
+  verbs:
+    - get
+    - list
+    - watch
+- apiGroups:
+    - apps
+  resources:
+    - deployments
+  verbs:
+    - create
+    - delete
+    - get
+    - list
+    - patch
+    - update
+    - watch
+- apiGroups:
+    - batch
+  resources:
+    - jobs
+  verbs:
+    - create
+    - delete
+    - get
+    - list
+    - watch
+- apiGroups:
+    - gateway.networking.k8s.io
+  resources:
+    - gateways
+  verbs:
+    - get
+    - list
+    - watch
+- apiGroups:
+    - gateway.networking.k8s.io
+  resources:
+    - grpcroutes
+    - httproutes
+    - tlsroutes
+  verbs:
+    - create
+    - delete
+    - get
+    - list
+    - patch
+    - update
+    - watch
+- apiGroups:
+    - kamaji.clastix.io
+  resources:
+    - datastores
+    - tenantcontrolplanes
+  verbs:
+    - create
+    - delete
+    - get
+    - list
+    - patch
+    - update
+    - watch
+- apiGroups:
+    - kamaji.clastix.io
+  resources:
+    - datastores/status
+    - kubeconfiggenerators/status
+    - tenantcontrolplanes/status
+  verbs:
+    - get
+    - patch
+    - update
+- apiGroups:
+    - kamaji.clastix.io
+  resources:
+    - kubeconfiggenerators
+  verbs:
+    - create
+    - get
+    - list
+    - patch
+    - update
+    - watch
+- apiGroups:
+    - kamaji.clastix.io
+  resources:
+    - kubeconfiggenerators/finalizers
+    - tenantcontrolplanes/finalizers
+  verbs:
+    - update
+- apiGroups:
+    - networking.k8s.io
+  resources:
+    - ingresses
+  verbs:
+    - create
+    - delete
+    - get
+    - list
+    - patch
+    - update
+    - watch

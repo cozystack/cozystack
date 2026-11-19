@@ -1,0 +1,19 @@
+{{- include "opencost.plugins.configCheck" . }}
+{{- /* Only create the plugins-config secret if plugins are enabled and existingSecret is not specified */}}
+{{- if and .Values.plugins.enabled (not .Values.plugins.existingSecret) }}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ include "opencost.pluginsConfigSecretName" . }}
+  namespace: {{ include "opencost.namespace" . }}
+  labels:
+    app: {{ template "opencost.name" . }}
+    chart: {{ .Chart.Name }}-{{ .Chart.Version | replace "+" "_" }}
+    release: {{ .Release.Name }}
+    heritage: {{ .Release.Service }}
+data:
+  {{- range $key, $config := .Values.plugins.configs }}
+  {{ $key }}_config.json:
+    {{ $config | b64enc | indent 4}}
+  {{- end }}
+{{- end }}

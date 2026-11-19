@@ -1,0 +1,66 @@
+{{- /*
+  ComputePlane tenant module.
+
+  When enabled, deploys the operator-owned computeplane module chart
+  (packages/extra/computeplane), which in turn provisions a single-tenant,
+  Cozystack-managed cluster for untrusted-code workloads by deploying the
+  ordinary `kubernetes` app with operator-fixed values. The tenant gets no
+  admin kubeconfig for that cluster; see design-proposals/compute-plane in
+  cozystack/community.
+*/}}
+{{- if .Values.computeplane }}
+{{- /*
+  Fail loudly when the module is toggled on without its backing package: the
+  computeplane-application package ships in the iaas bundle while this toggle
+  arrives with tenant-rd in the system bundle, and bundles are independent
+  booleans. Without this guard a system+paas install would render a
+  HelmRelease pointing at a nonexistent ExternalArtifact and retry forever
+  with no diagnostic. The Capabilities gate keeps the check active in-cluster
+  (the Package CRD is always installed there) while letting offline renders
+  (helm template / helm-unittest, where lookup returns nothing) pass. Note
+  the guard deliberately fails closed on a nil lookup once the API group is
+  discoverable: a client-side `helm template --validate` against a live
+  cluster would trip it, but no packaging path in this repo renders the
+  tenant chart that way — Flux renders in-cluster where lookup works.
+*/}}
+{{- if .Capabilities.APIVersions.Has "cozystack.io/v1alpha1" }}
+{{- if not (lookup "cozystack.io/v1alpha1" "Package" "" "cozystack.computeplane-application") }}
+{{- fail "computeplane module is enabled, but the cozystack.computeplane-application package is not installed — it ships in the iaas bundle (set bundles.iaas.enabled: true)" }}
+{{- end }}
+{{- end }}
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: computeplane
+  namespace: {{ include "tenant.name" . }}
+  labels:
+    sharding.fluxcd.io/key: tenants
+    internal.cozystack.io/tenantmodule: "true"
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+    apps.cozystack.io/application.kind: ComputePlane
+    apps.cozystack.io/application.group: apps.cozystack.io
+    apps.cozystack.io/application.name: computeplane
+spec:
+  # No spec.releaseName — the aggregated API rebuilds HelmRelease specs
+  # without it, so the release name must equal the object name (as in every
+  # other tenant module). The cluster HelmRelease this module renders is the
+  # separately-named computeplane-cluster, whose derived release name makes
+  # Kamaji write the admin kubeconfig to computeplane-cluster-admin-kubeconfig
+  # (see packages/extra/computeplane/templates/cluster.yaml).
+  chartRef:
+    kind: ExternalArtifact
+    name: cozystack-computeplane-application-kubevirt-computeplane
+    namespace: cozy-system
+  interval: 5m
+  timeout: 10m
+  install:
+    remediation:
+      retries: -1
+  upgrade:
+    remediation:
+      retries: -1
+  valuesFrom:
+  - kind: Secret
+    name: cozystack-values
+{{- end }}

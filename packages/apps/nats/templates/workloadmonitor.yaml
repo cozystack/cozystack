@@ -1,0 +1,15 @@
+---
+apiVersion: cozystack.io/v1alpha1
+kind: WorkloadMonitor
+metadata:
+  name: {{ $.Release.Name }}
+  labels:
+    workloads.cozystack.io/resource-preset: {{ .Values.resourcesPreset | quote }}
+spec:
+  replicas: {{ .Values.replicas }}
+  minReplicas: 1
+  kind: nats
+  type: nats
+  selector:
+    app.kubernetes.io/instance: {{ $.Release.Name }}-system
+  version: {{ $.Chart.Version }}

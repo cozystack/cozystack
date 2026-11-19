@@ -1,0 +1,11 @@
+diff --git a/packages/system/seaweedfs/charts/seaweedfs/templates/volume/volume-resize-hook.yaml b/packages/system/seaweedfs/charts/seaweedfs/templates/volume/volume-resize-hook.yaml
+--- a/packages/system/seaweedfs/charts/seaweedfs/templates/volume/volume-resize-hook.yaml
++++ b/packages/system/seaweedfs/charts/seaweedfs/templates/volume/volume-resize-hook.yaml
+@@ -29,6 +29,7 @@
+         app.kubernetes.io/managed-by: {{ .Release.Service | quote }}
+         app.kubernetes.io/instance: {{ .Release.Name | quote }}
+         app.kubernetes.io/component: volume-resize-hook
++        policy.cozystack.io/allow-to-apiserver: "true"
+     spec:
+       serviceAccountName: {{ $seaweedfsName }}-volume-resize-hook
+       restartPolicy: Never

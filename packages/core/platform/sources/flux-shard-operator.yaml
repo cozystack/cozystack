@@ -1,0 +1,22 @@
+---
+apiVersion: cozystack.io/v1alpha1
+kind: PackageSource
+metadata:
+  name: cozystack.flux-shard-operator
+spec:
+  sourceRef:
+    kind: OCIRepository
+    name: cozystack-packages
+    namespace: cozy-system
+    path: /
+  variants:
+  - name: default
+    dependsOn:
+    - cozystack.cert-manager
+    - cozystack.cozystack-engine
+    components:
+    - name: flux-shard-operator
+      path: system/flux-shard-operator
+      install:
+        namespace: cozy-fluxcd
+        releaseName: flux-shard-operator

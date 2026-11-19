@@ -1,0 +1,42 @@
+suite: seaweedfs naming guard skips cleanly without a cluster view
+
+# The guard classifies a tenant by looking up its PVCs and StatefulSets. A
+# failed API call already aborts the render (Helm propagates lookup errors),
+# but a CLIENT-SIDE render (helm template, --dry-run=client) silently returns
+# nothing — which, unguarded, would render the chart-based names over a class-S
+# tenant. The release namespace is the canary: it always exists for a real
+# install or upgrade, so when it cannot be seen, an UPGRADE refuses rather than
+# classify blind, while an install without cluster access (CI lint, unittest
+# with no provider — this test) skips the guard: it never touches live data.
+#
+# The refusal branch cannot be modelled here: helm-unittest 1.0.3 ignores
+# release.isUpgrade (.Release.IsUpgrade renders false regardless). Verify it
+# with a real renderer instead:
+#   helm template packages/extra/seaweedfs --is-upgrade ... 2>&1 \
+#     | grep 'refusing to upgrade blind'
+
+templates:
+  - templates/seaweedfs.yaml
+
+release:
+  name: seaweedfs
+  namespace: tenant-root
+
+tests:
+  - it: still renders a client-side install (no cluster view, no data at risk)
+    set:
+      topology: Simple
+      replicationFactor: 2
+      _namespace:
+        host: example.org
+        ingress: tenant-root
+      _cluster:
+        issuer-name: letsencrypt-prod
+        solver: http01
+    documentSelector:
+      path: kind
+      value: HelmRelease
+    asserts:
+      - equal:
+          path: metadata.name
+          value: seaweedfs-system

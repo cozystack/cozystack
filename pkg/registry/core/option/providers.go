@@ -1,0 +1,469 @@
+// SPDX-License-Identifier: Apache-2.0
+// Providers compute the option items for each named dropdown source. They run
+// with the apiserver's privileged client (dynamic.Interface), so tenants need
+// no direct access to Nodes, the KubeVirt CR, cluster instancetypes, etc.
+
+package option
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"sort"
+	"strings"
+
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/resource"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/client-go/dynamic"
+	"k8s.io/klog/v2"
+
+	migrationv1alpha1 "github.com/cozystack/cozystack/api/migration/v1alpha1"
+	corev1alpha1 "github.com/cozystack/cozystack/pkg/apis/core/v1alpha1"
+)
+
+// kubevirtNamespace is where the singleton KubeVirt CR lives.
+const kubevirtNamespace = "cozy-kubevirt"
+
+// publicImagesNamespace and imagePVCPrefix locate the default VM image catalog.
+const (
+	publicImagesNamespace = "cozy-public"
+	imagePVCPrefix        = "vm-default-images-"
+)
+
+// providerFunc computes the items for one source. namespace is the request
+// namespace (empty for cluster-scoped callers); cluster-global providers ignore
+// it.
+type providerFunc func(ctx context.Context, namespace string) ([]corev1alpha1.OptionItem, error)
+
+// paramProviderFunc computes the items for a source whose contents depend on a
+// choice already made elsewhere in the form — the machines of one import
+// source, say, which are meaningless until that source is picked.
+type paramProviderFunc func(ctx context.Context, namespace, arg string) ([]corev1alpha1.OptionItem, error)
+
+var (
+	gvrNodes        = schema.GroupVersionResource{Group: "", Version: "v1", Resource: "nodes"}
+	gvrPVCs         = schema.GroupVersionResource{Group: "", Version: "v1", Resource: "persistentvolumeclaims"}
+	gvrDataVolumes  = schema.GroupVersionResource{Group: "cdi.kubevirt.io", Version: "v1beta1", Resource: "datavolumes"}
+	gvrKubevirts    = schema.GroupVersionResource{Group: "kubevirt.io", Version: "v1", Resource: "kubevirts"}
+	gvrInstancetype = schema.GroupVersionResource{Group: "instancetype.kubevirt.io", Version: "v1beta1", Resource: "virtualmachineclusterinstancetypes"}
+	gvrPreference   = schema.GroupVersionResource{Group: "instancetype.kubevirt.io", Version: "v1beta1", Resource: "virtualmachineclusterpreferences"}
+	gvrNADs         = schema.GroupVersionResource{Group: "k8s.cni.cncf.io", Version: "v1", Resource: "network-attachment-definitions"}
+	gvrHelmReleases = schema.GroupVersionResource{Group: "helm.toolkit.fluxcd.io", Version: "v2", Resource: "helmreleases"}
+	gvrStorageClass = schema.GroupVersionResource{Group: "storage.k8s.io", Version: "v1", Resource: "storageclasses"}
+	gvrBackupClass  = schema.GroupVersionResource{Group: "backups.cozystack.io", Version: "v1alpha1", Resource: "backupclasses"}
+	gvrVMDisks      = schema.GroupVersionResource{Group: "apps.cozystack.io", Version: "v1alpha1", Resource: "vmdisks"}
+	gvrPlans        = schema.GroupVersionResource{Group: "backups.cozystack.io", Version: "v1alpha1", Resource: "plans"}
+	gvrBackups      = schema.GroupVersionResource{Group: "backups.cozystack.io", Version: "v1alpha1", Resource: "backups"}
+	gvrImportSource = schema.GroupVersionResource{Group: "forklift.cozystack.io", Version: "v1alpha1", Resource: "vmimportsources"}
+	gvrConfigMaps   = schema.GroupVersionResource{Group: "", Version: "v1", Resource: "configmaps"}
+	gvrAppDefs      = schema.GroupVersionResource{Group: "cozystack.io", Version: "v1alpha1", Resource: "applicationdefinitions"}
+)
+
+const defaultStorageClassAnnotation = "storageclass.kubernetes.io/is-default-class"
+
+// DefaultProviders returns the registry of dropdown sources.
+func DefaultProviders(dyn dynamic.Interface) map[string]providerFunc {
+	return map[string]providerFunc{
+		"gpu":             gpuProvider(dyn),
+		"instancetype":    nameListProvider(dyn, gvrInstancetype),
+		"instanceprofile": nameListProvider(dyn, gvrPreference),
+		"network":         nameListNamespacedProvider(dyn, gvrNADs),
+		"image":           imageProvider(dyn),
+		"storagepool":     storagePoolProvider(dyn),
+		"storageclass":    storageClassProvider(dyn),
+		"backupclass":     nameListProvider(dyn, gvrBackupClass),
+		"vmdisk":          vmDiskProvider(dyn),
+		"plan":            nameListNamespacedProvider(dyn, gvrPlans),
+		"backup":          nameListNamespacedProvider(dyn, gvrBackups),
+		"appkind":         appKindProvider(dyn),
+		// Source connections a VMImportTask can reference. Namespaced, so a
+		// tenant only ever sees their own.
+		"vmimportsource": nameListNamespacedProvider(dyn, gvrImportSource),
+	}
+}
+
+// DefaultParamProviders returns the sources that need an argument. They are
+// addressed as `<name>.<argument>` and never appear in a List, because without
+// the argument they describe nothing.
+func DefaultParamProviders(dyn dynamic.Interface) map[string]paramProviderFunc {
+	return map[string]paramProviderFunc{
+		"vmimportvm": importVMProvider(dyn),
+	}
+}
+
+// importVMProvider offers the machines of one import source.
+//
+// The list is not read from vCenter here. This process has no route to a
+// provider's inventory and should not grow one — that would put the source's
+// credentials in a second component. Instead the migration controller, which
+// already holds an inventory client, publishes what it found into a ConfigMap
+// owned by the source, and this reads it back as an ordinary object.
+//
+// An absent or empty ConfigMap yields no items rather than an error: a source
+// that was just created has not published yet, and an empty dropdown says that
+// more usefully than a failure does.
+func importVMProvider(dyn dynamic.Interface) paramProviderFunc {
+	return func(ctx context.Context, namespace, source string) ([]corev1alpha1.OptionItem, error) {
+		if namespace == "" || source == "" {
+			return nil, nil
+		}
+		cm, err := dyn.Resource(gvrConfigMaps).Namespace(namespace).
+			Get(ctx, migrationv1alpha1.InventoryConfigMapName(source), metav1.GetOptions{})
+		if err != nil {
+			if apierrors.IsNotFound(err) {
+				return nil, nil
+			}
+			return nil, err
+		}
+
+		raw, found, err := unstructured.NestedString(cm.Object, "data", migrationv1alpha1.InventoryVMsKey)
+		if err != nil || !found || raw == "" {
+			return nil, nil
+		}
+		var vms []migrationv1alpha1.PublishedVM
+		if err := json.Unmarshal([]byte(raw), &vms); err != nil {
+			return nil, fmt.Errorf("decoding the published VM list for source %q: %w", source, err)
+		}
+
+		items := make([]corev1alpha1.OptionItem, 0, len(vms))
+		for _, vm := range vms {
+			if vm.ID == "" {
+				continue
+			}
+			// The name is what a person recognises and the reference is what the
+			// task records, so the label carries both. Two machines can share a
+			// name in different folders, and the reference is also the only
+			// thing a saved task shows afterwards -- a list of bare names would
+			// be ambiguous to pick from and impossible to check against.
+			label := vm.Name
+			if label != "" {
+				label = fmt.Sprintf("%s (%s)", vm.Name, vm.ID)
+			}
+			items = append(items, corev1alpha1.OptionItem{
+				Value:       vm.ID,
+				Label:       label,
+				Description: vm.Path,
+			})
+		}
+		sort.Slice(items, func(i, j int) bool { return items[i].Label < items[j].Label })
+		return items, nil
+	}
+}
+
+// appKindProvider lists the application kinds known to the cluster from
+// ApplicationDefinitions (apps.cozystack.io). These are the kinds selectable
+// in the backup forms' applicationRef.kind / targetApplicationRef.kind fields.
+func appKindProvider(dyn dynamic.Interface) providerFunc {
+	return func(ctx context.Context, _ string) ([]corev1alpha1.OptionItem, error) {
+		list, err := dyn.Resource(gvrAppDefs).List(ctx, listOpts())
+		if err != nil {
+			return nil, err
+		}
+		items := make([]corev1alpha1.OptionItem, 0, len(list.Items))
+		seen := map[string]struct{}{}
+		for i := range list.Items {
+			kind, ok, _ := unstructured.NestedString(list.Items[i].Object, "spec", "application", "kind")
+			if !ok || kind == "" {
+				continue
+			}
+			if _, dup := seen[kind]; dup {
+				continue
+			}
+			seen[kind] = struct{}{}
+			items = append(items, corev1alpha1.OptionItem{Value: kind})
+		}
+		sortItems(items)
+		return items, nil
+	}
+}
+
+// storageClassProvider lists StorageClasses and marks the cluster-default one
+// (annotated storageclass.kubernetes.io/is-default-class) so the UI can
+// preselect it.
+func storageClassProvider(dyn dynamic.Interface) providerFunc {
+	return func(ctx context.Context, _ string) ([]corev1alpha1.OptionItem, error) {
+		list, err := dyn.Resource(gvrStorageClass).List(ctx, listOpts())
+		if err != nil {
+			return nil, err
+		}
+		items := make([]corev1alpha1.OptionItem, 0, len(list.Items))
+		for i := range list.Items {
+			name := list.Items[i].GetName()
+			isDefault := list.Items[i].GetAnnotations()[defaultStorageClassAnnotation] == "true"
+			item := corev1alpha1.OptionItem{Value: name, Default: isDefault}
+			if isDefault {
+				item.Label = name + " (default)"
+			}
+			items = append(items, item)
+		}
+		sortItems(items)
+		return items, nil
+	}
+}
+
+// vmDiskProvider lists VMDisk apps in the request namespace and shows the disk
+// size in the label (mirrors the old VMDiskWidget).
+func vmDiskProvider(dyn dynamic.Interface) providerFunc {
+	return func(ctx context.Context, namespace string) ([]corev1alpha1.OptionItem, error) {
+		if namespace == "" {
+			return nil, nil
+		}
+		list, err := dyn.Resource(gvrVMDisks).Namespace(namespace).List(ctx, listOpts())
+		if err != nil {
+			return nil, err
+		}
+		items := make([]corev1alpha1.OptionItem, 0, len(list.Items))
+		for i := range list.Items {
+			name := list.Items[i].GetName()
+			item := corev1alpha1.OptionItem{Value: name}
+			if storage, ok, _ := unstructured.NestedString(list.Items[i].Object, "spec", "storage"); ok && storage != "" {
+				item.Label = fmt.Sprintf("%s (%s)", name, storage)
+			}
+			items = append(items, item)
+		}
+		sortItems(items)
+		return items, nil
+	}
+}
+
+// nameListProvider lists a cluster-scoped resource and emits one option per
+// object name.
+func nameListProvider(dyn dynamic.Interface, gvr schema.GroupVersionResource) providerFunc {
+	return func(ctx context.Context, _ string) ([]corev1alpha1.OptionItem, error) {
+		list, err := dyn.Resource(gvr).List(ctx, listOpts())
+		if err != nil {
+			return nil, err
+		}
+		return itemsFromNames(list), nil
+	}
+}
+
+// nameListNamespacedProvider lists a namespaced resource in the request
+// namespace and emits one option per object name.
+func nameListNamespacedProvider(dyn dynamic.Interface, gvr schema.GroupVersionResource) providerFunc {
+	return func(ctx context.Context, namespace string) ([]corev1alpha1.OptionItem, error) {
+		if namespace == "" {
+			return nil, nil
+		}
+		list, err := dyn.Resource(gvr).Namespace(namespace).List(ctx, listOpts())
+		if err != nil {
+			return nil, err
+		}
+		return itemsFromNames(list), nil
+	}
+}
+
+// gpuProvider intersects the KubeVirt permittedHostDevices whitelist with what
+// the nodes actually advertise as allocatable.
+func gpuProvider(dyn dynamic.Interface) providerFunc {
+	return func(ctx context.Context, _ string) ([]corev1alpha1.OptionItem, error) {
+		kvList, err := dyn.Resource(gvrKubevirts).Namespace(kubevirtNamespace).List(ctx, listOpts())
+		if err != nil {
+			return nil, fmt.Errorf("list kubevirts: %w", err)
+		}
+		if len(kvList.Items) == 0 {
+			return nil, nil
+		}
+		whitelist := permittedResourceNames(&kvList.Items[0])
+		if len(whitelist) == 0 {
+			return nil, nil
+		}
+
+		nodeList, err := dyn.Resource(gvrNodes).List(ctx, listOpts())
+		if err != nil {
+			return nil, fmt.Errorf("list nodes: %w", err)
+		}
+
+		// resourceName -> total count, and -> nodes that have it.
+		total := map[string]int64{}
+		nodesByRes := map[string][]string{}
+		for i := range nodeList.Items {
+			node := &nodeList.Items[i]
+			alloc, _, _ := unstructured.NestedMap(node.Object, "status", "allocatable")
+			for res := range whitelist {
+				raw, ok := alloc[res]
+				if !ok {
+					continue
+				}
+				qty, err := resource.ParseQuantity(fmt.Sprintf("%v", raw))
+				if err != nil {
+					continue
+				}
+				if n := qty.Value(); n > 0 {
+					total[res] += n
+					nodesByRes[res] = append(nodesByRes[res], node.GetName())
+				}
+			}
+		}
+
+		items := make([]corev1alpha1.OptionItem, 0, len(whitelist))
+		for res := range whitelist {
+			desc := "not currently available on any node"
+			if n := total[res]; n > 0 {
+				sort.Strings(nodesByRes[res])
+				desc = fmt.Sprintf("%d available on %s", n, strings.Join(nodesByRes[res], ", "))
+			}
+			items = append(items, corev1alpha1.OptionItem{Value: res, Description: desc})
+		}
+		sortItems(items)
+		return items, nil
+	}
+}
+
+// permittedResourceNames pulls resourceNames from pciHostDevices and
+// mediatedDevices of a KubeVirt CR.
+func permittedResourceNames(kv *unstructured.Unstructured) map[string]struct{} {
+	out := map[string]struct{}{}
+	for _, group := range []string{"pciHostDevices", "mediatedDevices"} {
+		devices, _, _ := unstructured.NestedSlice(kv.Object, "spec", "configuration", "permittedHostDevices", group)
+		for _, d := range devices {
+			dm, ok := d.(map[string]any)
+			if !ok {
+				continue
+			}
+			if name, ok := dm["resourceName"].(string); ok && name != "" {
+				out[name] = struct{}{}
+			}
+		}
+	}
+	return out
+}
+
+// imageProvider lists the default image PVCs in cozy-public and strips the
+// vm-default-images- prefix to get the catalog name used by the vm-disk chart.
+//
+// A golden whose import is failing is left out (see goldenImportFailing):
+// CDI does not populate it, so a disk cloned from it never becomes usable.
+// One still importing stays, because CDI holds a clone until the source is
+// populated.
+func imageProvider(dyn dynamic.Interface) providerFunc {
+	return func(ctx context.Context, _ string) ([]corev1alpha1.OptionItem, error) {
+		list, err := dyn.Resource(gvrPVCs).Namespace(publicImagesNamespace).List(ctx, listOpts())
+		if err != nil {
+			return nil, err
+		}
+		// The filter is advisory: when the DataVolumes cannot be read the
+		// goldens go out unfiltered, because the Option list drops a source
+		// whose provider errors and an empty picker is the worse outcome.
+		failed := map[string]bool{}
+		dvs, err := dyn.Resource(gvrDataVolumes).Namespace(publicImagesNamespace).List(ctx, listOpts())
+		if err != nil {
+			logProviderError("image", err)
+		} else {
+			for i := range dvs.Items {
+				if goldenImportFailing(&dvs.Items[i]) {
+					failed[dvs.Items[i].GetName()] = true
+				}
+			}
+		}
+		items := make([]corev1alpha1.OptionItem, 0, len(list.Items))
+		for i := range list.Items {
+			name := list.Items[i].GetName()
+			if !strings.HasPrefix(name, imagePVCPrefix) || failed[name] {
+				continue
+			}
+			items = append(items, corev1alpha1.OptionItem{Value: strings.TrimPrefix(name, imagePVCPrefix)})
+		}
+		sortItems(items)
+		return items, nil
+	}
+}
+
+// goldenImportFailing reports a golden DataVolume whose import is failing.
+// CDI sets phase Failed only on a fatal error such as a checksum mismatch; an
+// unreachable URL restarts the importer with back-off while the phase stays
+// in progress, so an importer that restarted at least three times and is not
+// running now counts as failing too. The kubernetes-nodes chart applies the
+// same test before cloning a golden; vm-disk refuses on the restarts alone.
+func goldenImportFailing(dv *unstructured.Unstructured) bool {
+	phase, _, _ := unstructured.NestedString(dv.Object, "status", "phase")
+	if phase == "Failed" {
+		return true
+	}
+	if phase == "Succeeded" {
+		return false
+	}
+	restarts, _, _ := unstructured.NestedInt64(dv.Object, "status", "restartCount")
+	if restarts < 3 {
+		return false
+	}
+	conditions, _, _ := unstructured.NestedSlice(dv.Object, "status", "conditions")
+	for _, c := range conditions {
+		if cm, ok := c.(map[string]any); ok && cm["type"] == "Running" {
+			return cm["status"] == "False"
+		}
+	}
+	return false
+}
+
+// storagePoolProvider derives selectable pool names from the seaweedfs
+// HelmRelease(s) in the request namespace (volume.pools and
+// volume.zones.<zone>.pools map keys). Best-effort: returns nil when no
+// seaweedfs release is present, and the UI falls back to free text.
+func storagePoolProvider(dyn dynamic.Interface) providerFunc {
+	return func(ctx context.Context, namespace string) ([]corev1alpha1.OptionItem, error) {
+		if namespace == "" {
+			return nil, nil
+		}
+		list, err := dyn.Resource(gvrHelmReleases).Namespace(namespace).List(ctx, listOpts())
+		if err != nil {
+			return nil, err
+		}
+		pools := map[string]struct{}{}
+		for i := range list.Items {
+			values, ok, _ := unstructured.NestedMap(list.Items[i].Object, "spec", "values")
+			if !ok {
+				continue
+			}
+			volume, ok := values["volume"].(map[string]any)
+			if !ok {
+				continue
+			}
+			collectPoolKeys(volume["pools"], pools)
+			if zones, ok := volume["zones"].(map[string]any); ok {
+				for _, z := range zones {
+					if zm, ok := z.(map[string]any); ok {
+						collectPoolKeys(zm["pools"], pools)
+					}
+				}
+			}
+		}
+		items := make([]corev1alpha1.OptionItem, 0, len(pools))
+		for p := range pools {
+			items = append(items, corev1alpha1.OptionItem{Value: p})
+		}
+		sortItems(items)
+		return items, nil
+	}
+}
+
+func collectPoolKeys(v any, out map[string]struct{}) {
+	m, ok := v.(map[string]any)
+	if !ok {
+		return
+	}
+	for k := range m {
+		out[k] = struct{}{}
+	}
+}
+
+// itemsFromNames builds a sorted option list from object names.
+func itemsFromNames(list *unstructured.UnstructuredList) []corev1alpha1.OptionItem {
+	items := make([]corev1alpha1.OptionItem, 0, len(list.Items))
+	for i := range list.Items {
+		items = append(items, corev1alpha1.OptionItem{Value: list.Items[i].GetName()})
+	}
+	sortItems(items)
+	return items
+}
+
+func sortItems(items []corev1alpha1.OptionItem) {
+	sort.Slice(items, func(i, j int) bool { return items[i].Value < items[j].Value })
+}
+
+func logProviderError(source string, err error) {
+	klog.V(2).InfoS("option provider failed", "source", source, "err", err)
+}

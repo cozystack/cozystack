@@ -1,0 +1,394 @@
+##
+## @section Common parameters
+##
+
+## @typedef {struct} Resources - Explicit CPU and memory configuration for each PostgreSQL replica.
+## @field {quantity} [cpu] - CPU available to each replica.
+## @field {quantity} [memory] - Memory (RAM) available to each replica.
+
+## @enum {string} ResourcesPreset - Default sizing preset.
+## @value t1.nano
+## @value t1.micro
+## @value t1.small
+## @value t1.medium
+## @value t1.large
+## @value t1.xlarge
+## @value t1.2xlarge
+## @value t1.4xlarge
+## @value c1.nano
+## @value c1.micro
+## @value c1.small
+## @value c1.medium
+## @value c1.large
+## @value c1.xlarge
+## @value c1.2xlarge
+## @value c1.4xlarge
+## @value s1.nano
+## @value s1.micro
+## @value s1.small
+## @value s1.medium
+## @value s1.large
+## @value s1.xlarge
+## @value s1.2xlarge
+## @value s1.4xlarge
+## @value u1.nano
+## @value u1.micro
+## @value u1.small
+## @value u1.medium
+## @value u1.large
+## @value u1.xlarge
+## @value u1.2xlarge
+## @value u1.4xlarge
+## @value m1.nano
+## @value m1.micro
+## @value m1.small
+## @value m1.medium
+## @value m1.large
+## @value m1.xlarge
+## @value m1.2xlarge
+## @value m1.4xlarge
+## @value nano
+## @value micro
+## @value small
+## @value medium
+## @value large
+## @value xlarge
+## @value 2xlarge
+
+## @param {int} replicas - Number of Postgres replicas. Under active autoscaling this is the resting/seed count, not the live count — KEDA drives the live count via `/scale`. Disabling autoscaling does NOT automatically bring the live count back to `replicas`: the client-side merge writes `instances` only when the rendered value changes, so a cluster KEDA grew past `replicas` stays there with no autoscaler left to reduce it — lower `replicas` to the count you want and it rebases down (shedding the surplus replicas + PVCs). Lowering it below the live count, or disabling/dry-running while it sits below the live count, sheds in one step past the scaleDown pacing; stage it to the live count first (suspend the HelmRelease and `kubectl scale` if needed) to avoid a transient. Must stay greater than `quorum.maxSyncReplicas`.
+replicas: 2
+
+## @param {Resources} [resources] - Explicit CPU and memory configuration for each PostgreSQL replica. When omitted, the preset defined in `resourcesPreset` is applied.
+resources: {}
+
+## @param {ResourcesPreset} resourcesPreset="t1.micro" - Default sizing preset used when `resources` is omitted.
+resourcesPreset: "t1.micro"
+
+## @param {quantity} size - Persistent Volume Claim size available for application data.
+size: 10Gi
+
+## @param {string} storageClass - StorageClass used to store the data.
+## @immutable
+## @x-cozystack-options {source: storageclass}
+storageClass: ""
+
+## @param {bool} external - Enable external access from outside the cluster.
+external: false
+
+##
+## @enum {string} Version
+## @value v18
+## @value v17
+## @value v16
+## @value v15
+## @value v14
+## @value v13
+
+## @param {Version} version - PostgreSQL major version to deploy
+version: v18
+
+##
+## @enum {string} Flavor
+## @value postgresql
+## @value postgis
+
+## @param {Flavor} flavor - PostgreSQL image flavor, fixed when the cluster is created. `postgresql` uses the CloudNativePG PostgreSQL image. `postgis` uses the CloudNativePG PostGIS image, which adds postgis, postgis_raster, postgis_topology, postgis_sfcgal, postgis_tiger_geocoder and address_standardizer; enable them per database in `databases.<name>.extensions`. Changing the flavor of an existing cluster is refused, and a backup restores only into a cluster of the flavor it was taken from: to change flavor, create a new cluster and move the data with a logical dump (pg_dump / pg_restore).
+flavor: postgresql
+
+##
+## @section TLS configuration
+##
+
+## @typedef {struct} TLS - TLS configuration for PostgreSQL server connections.
+## @field {*bool} enabled - Tri-state switch controlling whether the chart injects the external hostnames into the operator-managed CNPG cert via spec.certificates.serverAltDNSNames. When omitted, the chart injects them if `external: true` and skips them otherwise. Set explicitly to `true` to inject regardless of `external` (no-op when `external: false` since there is no external hostname to add). Set to `false` to skip injection. Note that CNPG keeps its built-in TLS on the wire regardless of this flag — this toggle only controls the chart-side SAN injection; to disable PostgreSQL TLS entirely set `postgresql.parameters.ssl = "off"` at the CNPG layer.
+## @field {*bool} required - Tri-state switch controlling whether the server refuses sessions that are not encrypted. When omitted, it is on if `external: true` and off otherwise. When on, the chart renders `spec.postgresql.pg_hba` with `hostssl all all all scram-sha-256` (`md5` on PostgreSQL 13, matching CloudNativePG's default rule) followed by `host all all all reject`, so a client that connects with `sslmode=disable` is refused instead of getting a plaintext session; in-cluster clients are held to the same rule, since the pod network cannot be told apart from an external client. Set to `false` to keep accepting plaintext sessions on an external instance, or to `true` to require TLS on an in-cluster one. Rendering fails if `postgresql.parameters.ssl` is off while this is in effect.
+
+## @param {TLS} tls - TLS configuration for server connections.
+tls: {}
+
+## @section Application-specific parameters
+##
+
+##
+## @enum {string} PreloadLibrary
+## @value pg_stat_statements
+## @value auto_explain
+## @value pgaudit
+## @value pg_prewarm
+
+## @typedef {struct} PostgreSQL - PostgreSQL server configuration.
+## @field {[]PreloadLibrary} [sharedPreloadLibraries] - Libraries loaded at server start, restricted to an allowlist of modules already shipped in the PostgreSQL image. CloudNativePG also preloads `pg_stat_statements`, `auto_explain` and `pgaudit` by itself whenever `parameters` sets a key under their prefix (e.g. `pg_stat_statements.track`), so removing one of them from this list does not unload it while such a key is set; `pg_prewarm` is preloaded only through this list. Changing the list restarts PostgreSQL on every instance, the primary included, so writes pause briefly.
+## @field {map[string]intOrString} [parameters] - PostgreSQL server parameters. Values may be strings or integers; integers are coerced to strings by the template (e.g. both `max_connections: 100` and `max_connections: "100"` are accepted). BLOCKED (enable arbitrary code execution): archive_command, restore_command, ssl_passphrase_command, archive_cleanup_command, recovery_end_command, dynamic_library_path, local_preload_libraries, session_preload_libraries, shared_preload_libraries. Do NOT override CloudNativePG-managed parameters: archive_mode, primary_conninfo, wal_level, max_replication_slots.
+
+## @param {PostgreSQL} postgresql - PostgreSQL server configuration.
+postgresql:
+  parameters:
+    max_connections: "100"
+## Additional parameters examples:
+##   shared_buffers: "1GB"
+##   effective_cache_size: "4GB"
+##   bgwriter_delay: "200ms"
+##   commit_delay: "100"
+##   commit_siblings: "5"
+##   work_mem: "256MB"
+##
+## SECURITY: The following parameters are BLOCKED (enable arbitrary code execution):
+##   archive_command, restore_command, ssl_passphrase_command, archive_cleanup_command, recovery_end_command (shell commands),
+##   dynamic_library_path, local_preload_libraries, session_preload_libraries,
+##   shared_preload_libraries (arbitrary .so loading)
+##
+## To preload a module, use the `sharedPreloadLibraries` allowlist instead of the
+## blocked `shared_preload_libraries` parameter:
+##   sharedPreloadLibraries:
+##     - pg_stat_statements
+##     - auto_explain
+##
+## IMPORTANT: Do NOT override CloudNativePG-managed parameters:
+##   archive_mode, primary_conninfo, wal_level, max_replication_slots
+##
+## NOTE: Some parameters require pod restart (not just reload):
+##   shared_buffers, max_connections, max_prepared_transactions,
+##   wal_buffers, max_wal_senders
+##
+## When shared_buffers is not set and the memory limit is below 512Mi, the
+## chart sets it to a quarter of the limit with a 16MB floor, capped at the
+## memory request rounded down to whole MiB. Larger limits keep the
+## PostgreSQL default of 128MB.
+
+##
+## @section Quorum-based synchronous replication
+##
+
+## @typedef {struct} Quorum - Quorum configuration for synchronous replication.
+## @field {int} minSyncReplicas - Minimum number of synchronous replicas required for commit.
+## @field {int} maxSyncReplicas - Maximum number of synchronous replicas allowed (must be less than total replicas). Under autoscaling it also sets the scale-down floor (the effective minimum is `max(minReplicas, maxSyncReplicas+1, 2)`); the chart fails to render if that floor exceeds `autoscaling.maxReplicas`.
+
+## @param {Quorum} quorum - Quorum configuration for synchronous replication.
+quorum:
+  minSyncReplicas: 0
+  maxSyncReplicas: 0
+
+##
+## @section Autoscaling
+##
+
+## @typedef {struct} Autoscaling - Horizontal autoscaling of read replicas via KEDA. When active, the CNPG instance count is SEEDED from `max(replicas, floor)` and then driven by a KEDA ScaledObject from read load; `replicas` becomes the resting/seed count, not the live count, which KEDA owns via the `/scale` subresource. Disabling does not auto-restore the live count to `replicas` (the unchanged seed is a merge no-op); lower `replicas` to reclaim capacity KEDA grew.
+## @field {bool} enabled - Enable horizontal autoscaling of read replicas. Requires the platform `keda` package to be enabled by an administrator first; the chart fails to render (rather than break the release) if KEDA is not installed. Prerequisite: the queried vmselect must hold BOTH the CNPG metrics (cnpg_backends_total / container CPU) AND kube_pod_labels (kube-state-metrics). This holds for a tenant on the shared root monitoring stack (`monitoring: false`, both land in tenant-root). A tenant running its OWN Monitoring app (`monitoring: true`) has the CNPG metrics but not kube_pod_labels (KSM is root-only), so it must set `serverAddress` to a vmselect carrying both series or autoscaling never actuates.
+## @field {string} serverAddress - Override the Prometheus/vmselect URL the ScaledObject queries. Empty (default) derives `http://vmselect-shortterm.<monitoring-ns>.svc:8481/select/0/prometheus`. Set it when the derived vmselect does not hold both the CNPG metrics and kube_pod_labels (e.g. `monitoring: true` tenants, or a non-default `metricsStorages` name). SSRF constraint: the host must be an in-cluster Service DNS name (`<svc>.<ns>.svc[.<clusterDomain>]`) whose namespace is within the tenant's own subtree (its namespace, its parents, or `tenant-root`) — the cluster-privileged KEDA operator fetches this URL every poll, so it is refused a metadata endpoint, an external host, or a sibling/system namespace. Residual surface (accepted trade-off): `tenant-root` is always allowed because the derived default points there, so a tenant can still aim the operator at any Service in `tenant-root` on any port/path (a blind in-cluster reachability probe — the operator reads no response body back to the tenant); the egress NetworkPolicy does not narrow that.
+## @field {int} minReplicas - Minimum total instances; raised to the synchronous-quorum floor (`maxSyncReplicas + 1`) and to 2 when either is higher.
+## @field {int} maxReplicas - Maximum total instances. Must be >= minReplicas and >= the synchronous-quorum floor (maxSyncReplicas+1); the chart fails to render (rather than silently run an unbounded instance count) if the effective floor exceeds it - raise maxReplicas. HAZARD: lowering maxReplicas below the live count makes the HPA cut straight to the new maximum in one step (the current>max branch bypasses the scale-down pacing), shedding the surplus replicas + PVCs at once; to lower it deliberately, suspend the HelmRelease and pin the live count with `kubectl scale` first.
+## @field {ReadMetric} metric - Read-load signal to scale on.
+## @field {int} target - Target read load per read-serving replica (unit depends on `metric`: active connections, or CPU millicores). Dimensionless integer - a resource.Quantity here would accept `150m`, which PromQL reads as 150 minutes and KEDA cannot use as a threshold.
+## @field {int} maxReplicationLagSeconds - Freeze scaling while replication lag exceeds this (seconds) and the primary is writing. 0 disables the brake. Default 0: the freeze branch has only been validated on a live cluster in its non-braking (pass-through) form, so the lag brake is opt-in until the braking path is exercised under load; set a positive value (e.g. 30) to enable it.
+## @field {bool} dryRun - Recommendation mode: keep the static count and render the ScaledObject with both scaling directions paused, so KEDA keeps the HPA and keeps serving its trigger metric but actuates neither way. Note both scaling policies are disabled, so the HPA's desiredReplicas is frozen to the current count - read the recommendation from the matching read-load dashboard panel for your metric (connections or CPU): desired = 1 + ceil(read load / target), clamped to [effectiveMin..maxReplicas] where effectiveMin = max(minReplicas, maxSyncReplicas+1, 2), not from the desired-replicas line. Like disabling, flipping a LIVE autoscaled cluster into dryRun re-renders `instances: replicas` (the raw static value, which can be below the autoscaling floor); if `replicas` is below the live count, stage it to the live count first (see the enablement note) or the cluster sheds down to `replicas`. No shed occurs when the rendered value is unchanged (replicas already equals the active seed) — client-side merge is then a no-op and the live count is preserved. Permanent, unlike `transition`.
+## @field {bool} transition - Migration phase 1: render `.spec.instances` from `replicas` (which the operator stages to the current live count) AND pause the ScaledObject in both directions, so KEDA stands up with its HPA present but not actuating. Flip to false (phase 2) to hand the runtime count to KEDA. Because the both-direction pause keeps the HPA (not the HPA-deleting full pause), KEDA is genuinely warm at phase 2 — no HPA recreate — and because the active seed is max(replicas, effectiveMin), phase 2 re-renders the same instance count phase 1 did (when `replicas` is staged at/above the floor), so the flip is a merge no-op with no dip. The HPA's scaleUp stabilization window still smooths the first actuation.
+
+## @enum {string} ReadMetric - Read-load metric type.
+## @value ReadConnections - Active read connections on the standby pods.
+## @value ReadCPUUtilization - CPU (millicores) of the postgres container on the standby pods.
+
+## Under active autoscaling the KEDA HPA owns the runtime count via the /scale
+## subresource, and the chart SEEDS `.spec.instances` at a CONSTANT =
+## max(.Values.replicas, effectiveMin), where effectiveMin = max(minReplicas,
+## maxSyncReplicas+1, 2). It re-renders that same constant every reconcile, and the
+## postgres HelmRelease applies CLIENT-SIDE, under which helm-controller patches this CRD
+## from the previous-vs-new rendered manifest and does not consult live state, so the
+## unchanged constant yields no patch and never reverts KEDA's higher live value written
+## through /scale.
+## Client-side apply is forced per-app: the platform's helm-controller (v1.5.0) defaults
+## to server-side apply, which would force-own the rendered field and revert it, so the
+## postgres ApplicationDefinition carries `release.cozystack.io/helm-server-side-apply:
+## "false"` (threaded onto the HelmRelease in pkg/registry/apps/application/rest.go).
+## Seeding (rather than omitting) is deliberate: an omitted field defaults to 1, which the
+## CNPG webhook rejects under quorum, and — worse — under server-side apply the phase-2
+## omit prunes the field whenever KEDA has not yet written /scale (e.g. a cluster idle at
+## its floor), collapsing it to 1 and decommissioning every replica PVC (see community
+## design proposal §Upgrade "Implementation update 2026-09-02"; validated live on a test cluster).
+## Seeding max(replicas, effectiveMin) — rather than effectiveMin alone — keeps the active
+## branch equal to the disabled/dryRun/transition branch (which renders `instances:
+## replicas`) whenever `replicas` sits at or above the floor, so enabling, dry-running, or
+## completing a transition is a merge no-op and the live count does NOT dip.
+## The merge writes `instances` (rebasing the live count) only when the newly-rendered
+## SEED differs from the previously-rendered one — KEDA's live count is never compared —
+## so the residual drop cases are narrow:
+##   (1) LOWERING `.Values.replicas` below the live count (or enabling with `replicas`
+##       left at its default 2 while the live cluster is larger): the seed becomes
+##       max(replicas, floor) and the live count rebases down to it (never below the
+##       quorum floor, never a collapse to 1), decommissioning the surplus replicas+PVCs.
+##       Stage `replicas` to the live count first to avoid this.
+##   (2) RAISING `minReplicas`/`quorum.maxSyncReplicas` so the floor exceeds both the live
+##       count and `replicas`: the seed rises and the live count is raised to it. Lowering
+##       the floor is a no-op while `replicas` >= the new floor.
+## HAZARD (either case, under load): the rebase compares the newly-rendered seed to the
+## PREVIOUS rendered seed — never to KEDA's live count. So whenever load has scaled the live
+## count ABOVE the seed and any chart change re-renders a seed still at/below that live count
+## (lowering `replicas`, OR raising the floor to a value still below the live count), the
+## re-apply cuts `.spec.instances` straight down to the seed in ONE step — shedding the
+## surplus standbys and their PVCs past the scaleDown pacing — before the HPA re-clones them
+## back up. This is the same one-step shed the lowering-`maxReplicas` HAZARD warns about, but
+## triggered by a floor/replicas change rather than the ceiling. Stage the live count into
+## `replicas` first (below) to avoid the transient.
+## To rebase deliberately with no transient: suspend the HelmRelease, pin the live count
+## with `kubectl scale cluster.postgresql.cnpg.io/<name> --replicas=<live count>` and set
+## `.Values.replicas` to match (or use the two-phase `transition` flow), apply, then
+## resume. The `transition` flag additionally lets KEDA come up warm so it actuates at
+## phase 2 without recreating the HPA.
+## Keep `.Values.replicas` greater than `quorum.maxSyncReplicas` even under autoscaling:
+## the active path floors the seed up to effectiveMin so it admits a too-small `replicas`,
+## but the static path (disable / dryRun / transition phase 1) renders `instances:
+## replicas` and fails closed when `replicas <= maxSyncReplicas` — so a too-small
+## `replicas` only surfaces when you later disable or dry-run, not at enable.
+## Likewise `autoscaling.maxReplicas` must be >= effectiveMin = max(minReplicas,
+## maxSyncReplicas+1, 2) or the chart fails to render (it will not silently run an
+## unbounded instance count) — e.g. with the default read floor, maxReplicas must be >= 2.
+## @param {Autoscaling} autoscaling - Read-replica autoscaling configuration.
+autoscaling:
+  enabled: false
+  serverAddress: ""
+  minReplicas: 2
+  maxReplicas: 6
+  metric: ReadConnections
+  target: 150
+  maxReplicationLagSeconds: 0
+  dryRun: false
+  transition: false
+
+##
+## @section Users configuration
+##
+
+## @typedef {struct} User - User configuration.
+## @field {bool} [replication] - Whether the user has replication privileges.
+## @field {bool} [createRole] - Whether the user can create and manage roles (CREATEROLE). Requires PostgreSQL 16 or newer. Setting it back to `false` withdraws the attribute only: the roles the user created, and its ADMIN and SET memberships in them, stay. Once any user has held it, the chart no longer adopts an existing role it did not create, so a user or database declared later under the name of such a role fails the init job until a platform administrator drops that role.
+## @field {bool} [bypassRls] - Whether the user can bypass row-level security policies (BYPASSRLS). A role can only create other roles carrying BYPASSRLS if it holds the attribute itself, so this is required alongside `createRole` to provision a privileged service role.
+
+## @param {map[string]User} users - Users configuration map. Passwords are always auto-generated and stored in the `<release>-credentials` Secret; they cannot be set from values — read a user's password from that Secret. A `password` left over in values from before the field was removed is ignored by the render and draws an admission warning, but it is not inert on an upgraded release: the chart preserves whatever password is already in the Secret, which on the first upgrade is the value that was set before removal, so that value stays the live credential until it is rotated (dedicated rotation is tracked in cozystack/community#72). The live password lives only in the Secret.
+users: {}
+## Example:
+## users:
+##   user1: {}
+##   user2: {}
+##   airflow: {}
+##   debezium:
+##     replication: true
+##   migrator:
+##     createRole: true
+##     bypassRls: true
+
+##
+## @section Databases configuration
+##
+
+## @typedef {struct} DatabaseRoles - Role assignments for a database.
+## @field {[]string} [admin] - List of users with admin privileges.
+## @field {[]string} [readonly] - List of users with read-only privileges.
+
+## @typedef {struct} Database - Database configuration.
+## @field {DatabaseRoles} [roles] - Roles assigned to users.
+## @field {[]string} [extensions] - List of enabled PostgreSQL extensions.
+
+## @param {map[string]Database} databases - Databases configuration map. The PostgreSQL system databases `postgres`, `template0` and `template1` are refused.
+databases: {}
+## Example:
+## databases:
+##   myapp:
+##     roles:
+##       admin:
+##       - user1
+##       - debezium
+##       readonly:
+##       - user2
+##   airflow:
+##     roles:
+##       admin:
+##       - airflow
+##     extensions:
+##     - hstore
+
+##
+## @section Backup parameters
+##
+
+## @typedef {struct} S3CredentialsSecret - Reference to a pre-existing Secret with S3 credentials. Setting `name` makes the chart bind the barman-cloud ObjectStore's `spec.configuration.s3Credentials` directly to that Secret instead of materialising `<release>-s3-creds` from `s3AccessKey`/`s3SecretKey`. Use this to keep credentials out of the Postgres CR's `.spec`.
+## @field {string} [name] - Name of the Secret in the application namespace. Empty means the chart materialises `<release>-s3-creds` from `s3AccessKey`/`s3SecretKey`.
+## @field {string} [accessKeyIDKey] - Key in the Secret holding the access key ID. Defaults to `AWS_ACCESS_KEY_ID`.
+## @field {string} [secretAccessKeyKey] - Key in the Secret holding the secret access key. Defaults to `AWS_SECRET_ACCESS_KEY`.
+
+## @typedef {struct} EndpointCA - Reference to a Secret holding a PEM-encoded CA bundle the barman-cloud plugin should trust when reaching a self-signed S3 endpoint. Required when the cluster's S3 (e.g. cozystack's seaweedfs-s3) presents a certificate not signed by a publicly-trusted CA. Used by both the backup ObjectStore's spec.configuration.endpointCA and the recovery ObjectStore's spec.configuration.endpointCA (referenced from externalClusters[].plugin) so backup *and* recovery can verify TLS.
+## @field {string} [name] - Name of the Secret in the application namespace. Empty means no endpointCA is emitted (the plugin uses the system trust store).
+## @field {string} [key] - Key within the Secret containing the CA bundle. Defaults to `ca.crt`.
+
+## @typedef {struct} Backup - Backup configuration.
+## @field {bool} enabled - Enable regular backups.
+## @field {bool} [useSystemBucket] - Opt-in: when true, the chart-emitted `<release>-s3-creds` Secret is skipped AND `spec.plugins` (plus the barman-cloud ObjectStore) is left UNSET in the chart-rendered Cluster — the cozy-default BackupClass driver SSA-applies an ObjectStore (carrying destinationPath/endpointURL/credentials) and patches `spec.plugins` on the live Cluster when the first BackupJob runs. Consequence: plugin WAL archiving is NOT active until that first BackupJob fires; WAL accumulates on the PVC in the meantime, so fire an ad-hoc BackupJob immediately after enabling the flag on existing releases. Use together with the platform `cozy-default` BackupClass — tenants do not need to fill `s3AccessKey`/`s3SecretKey` or `destinationPath`/`endpointURL`. The destination path automatically scopes to `s3://cozy-backups/<namespace>/<release>/`.
+## @field {string} [schedule] - Legacy. Cron schedule for the chart-emitted ScheduledBackup, either a standard five-field cron such as `0 2 * * *` for every day at 02:00, or six fields with leading seconds such as `0 0 2 * * *` for the same time. Empty means no chart-managed schedule, which is the recommended setup when a `BackupClass` from `backups.cozystack.io` already drives backup orchestration. In the legacy chart-managed flow `spec.plugins` plus the barman-cloud ObjectStore is rendered when `backup.enabled=true` AND `useSystemBucket=false` AND `destinationPath` is non-empty AND inline-or-external creds are supplied; in the platform `useSystemBucket=true` flow the chart skips emitting `spec.plugins` and the CNPG driver SSA-applies the ObjectStore and patches `spec.plugins` onto the live Cluster at first BackupJob time.
+## @field {string} [retentionPolicy] - Retention policy (e.g. "30d").
+## @field {string} [destinationPath] - DEPRECATED. Per-tenant S3 configuration is superseded by the platform-managed `cozy-default` BackupClass and the `cozy-backups` system bucket. Leave empty for new installations; the BackupClass driver picks up the system-managed coordinates. Kept for in-place upgrade compatibility.
+## @field {string} [endpointURL] - DEPRECATED. See `destinationPath`.
+## @field {string} [s3AccessKey] - DEPRECATED. Tenants no longer supply S3 keys; the system Bucket Secret is projected into the tenant namespace by the backup controller. Ignored when `s3CredentialsSecret.name` is set or `useSystemBucket` is true. The chart skips materialising `<release>-s3-creds` whenever this field is empty so a default install does not leak placeholder credentials into the tenant namespace.
+## @field {string} [s3SecretKey] - DEPRECATED. See `s3AccessKey`.
+## @field {S3CredentialsSecret} [s3CredentialsSecret] - DEPRECATED. Pre-existing Secret with S3 credentials. Use the platform-managed `cozy-default` BackupClass instead. When set, the chart references this Secret directly (legacy chart-managed flow). The CNPG backup driver writes this field on restore so credentials never land in the CR `.spec`.
+## @field {EndpointCA} [endpointCA] - DEPRECATED. Pre-existing Secret with the CA bundle the barman-cloud plugin should trust when reaching a self-signed S3 endpoint. Used for both backup and bootstrap recovery in the legacy chart-managed flow.
+
+## @param {Backup} backup - Backup configuration.
+##
+## Note on defaults: destinationPath/endpointURL keep their pre-PR
+## placeholder values so existing tenants on the legacy chart-managed
+## flow continue to render spec.plugins + a barman-cloud ObjectStore on
+## upgrade (the placeholder coordinates never produced working plugin
+## WAL archiving, but the CR shape stays compatible with what Flux
+## already applied).
+##
+## BEHAVIOUR CHANGE on upgrade for tenants with backup.enabled=true and
+## empty s3AccessKey / s3SecretKey: the pre-PR defaults were the literal
+## "<your-access-key>" / "<your-secret-key>" placeholders, so the chart
+## still wired the plugin (with junk creds, plugin WAL archiving failing
+## at runtime). After this PR the defaults are empty strings,
+## $hasInlineCreds is false, and the chart NO LONGER renders the backup
+## block at all. Such tenants stop seeing chart-emitted spec.plugins and
+## the ObjectStore on the cnpg.io Cluster. Action: either set real
+## s3AccessKey/s3SecretKey (legacy flow), set useSystemBucket=true
+## (platform flow), or supply s3CredentialsSecret.name (external Secret).
+##
+## New tenants should set useSystemBucket=true and leave the placeholders
+## alone — the chart skips rendering spec.plugins and the ObjectStore
+## entirely in that mode and the CNPG driver SSA-applies the ObjectStore
+## and patches spec.plugins onto the live Cluster at first BackupJob time.
+backup:
+  enabled: false
+  useSystemBucket: false
+  retentionPolicy: 30d
+  destinationPath: "s3://bucket/path/to/folder/"
+  endpointURL: "http://minio-gateway-service:9000"
+  schedule: ""
+  s3AccessKey: ""
+  s3SecretKey: ""
+  s3CredentialsSecret:
+    name: ""
+    accessKeyIDKey: ""
+    secretAccessKeyKey: ""
+  endpointCA:
+    name: ""
+    key: ""
+
+##
+## @section Bootstrap (recovery) parameters
+##
+
+## @typedef {struct} Bootstrap - Bootstrap configuration for restoring a database cluster from a backup.
+## @field {bool} enabled - Whether to restore from a backup.
+## @field {string} [recoveryTime] - Timestamp (RFC3339) for point-in-time recovery; empty means latest.
+## @field {string} [backupID] - Barman ID of the base backup to recover from, passed as `recoveryTarget.backupID`. Empty lets the barman-cloud plugin pick one: the newest backup when `recoveryTime` is empty, otherwise the newest one ending at or before it, on any timeline. The CNPG backup driver sets this on restore.
+## @field {string} oldName - Previous cluster name before deletion.
+## @field {string} [serverName] - Server name (S3 path prefix) used by the original cluster when writing backups; passed to the barman-cloud plugin via `externalClusters[].plugin.parameters.serverName`. Defaults to `bootstrap.oldName`. Set this only when the original cluster wrote backups under an explicit server name that differed from its Kubernetes resource name.
+## @field {string} [newServerName] - WAL-archive server name (S3 path prefix) the RESTORED cluster writes to. Must differ from `serverName` (the recovery source) so a restored cluster archives to a fresh, empty prefix and barman-cloud-check-wal-archive passes while it recovers from the source's prefix. The CNPG backup driver sets this on restore; empty means the cluster archives under its own name.
+
+## @param {Bootstrap} bootstrap - Bootstrap configuration.
+bootstrap:
+  enabled: false
+  # example: 2020-11-26 15:22:00.00000+00
+  recoveryTime: ""
+  backupID: ""
+  oldName: ""
+  serverName: ""
+  newServerName: ""

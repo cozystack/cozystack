@@ -1,0 +1,34 @@
+Piraeus Operator installed.
+
+{{- $piraeusResources := .Capabilities.APIVersions.Has "piraeus.linbit.com/v1/LinstorController" }}
+{{- $linbitResources := .Capabilities.APIVersions.Has "linstor.linbit.com/v1/LinstorController" }}
+{{- if or $piraeusResources $linbitResources }}
+{{- fail `
+
+	Refusing to upgrade from v1 deployment!
+	=======================================
+
+	Please read the upgrade instructions at:
+
+		https://github.com/piraeusdatastore/piraeus-operator/blob/v2/docs/how-to/upgrade/index.md
+` }}
+{{- end }}
+
+{{- if and (not (.Capabilities.APIVersions.Has "piraeus.io/v1/LinstorCluster")) (not .Values.installCRDs) }}
+It looks like the necessary CRDs for Piraeus Operator are still missing.
+
+To apply them via helm now use:
+
+  helm upgrade {{ .Release.Name }} ./charts/piraeus --reuse-values --set installCRDs=true
+
+Alternatively, you can manage them manually:
+
+  kubectl apply --server-side -k "https://github.com/piraeusdatastore/piraeus-operator//config/crd?ref={{ .Chart.AppVersion }}"
+
+{{- end }}
+
+To get started with Piraeus Datastore deploy the "linstor-cluster" chart:
+
+$ helm upgrade --install --namespace {{ .Release.Namespace }} linstor-cluster oci://ghcr.io/piraeusdatastore/helm-charts/linstor-cluster
+
+For next steps, check out our documentation at https://piraeus.io/docs/{{ .Chart.AppVersion }}

@@ -1,0 +1,180 @@
+controller:
+  enabled: true
+
+  replicaCount: 1
+
+  revisionHistoryLimit: 10
+
+  args:
+    leaderElection: true
+    leaderElectionNamespace: "$(NAMESPACE)"
+    httpEndpoint: ":8080"
+
+  image:
+    repository: registry.k8s.io/sig-storage/snapshot-controller
+    pullPolicy: IfNotPresent
+    # Overrides the image tag whose default is the chart appVersion.
+    tag: ""
+
+  imagePullSecrets: []
+
+  podAnnotations: {}
+
+  podLabels: {}
+
+  podSecurityContext: {}
+    # fsGroup: 2000
+
+  securityContext:
+    capabilities:
+      drop:
+      - ALL
+    readOnlyRootFilesystem: true
+    runAsNonRoot: true
+    runAsUser: 1000
+
+  resources: {}
+
+  nodeSelector: {}
+
+  tolerations: []
+
+  affinity: {}
+
+  ## Ref: https://kubernetes.io/docs/tasks/run-application/configure-pdb/
+  ##
+  pdb: {}
+
+  topologySpreadConstraints: []
+
+  rbac:
+    # Specifies whether RBAC resources should be created
+    create: true
+
+  serviceAccount:
+    # Specifies whether a ServiceAccount should be created
+    create: true
+    name: ""
+
+  serviceMonitor:
+    # Specifies whether a ServiceMonitor should be created
+    create: false
+
+  volumeSnapshotClasses: []
+#    - name: linstor-csi-delete
+#      annotations:
+#        snapshot.storage.kubernetes.io/is-default-class: "true"
+#      labels:
+#        velero.io/csi-volumesnapshot-class: "true"
+#      driver: linstor.csi.linbit.com
+#      deletionPolicy: Delete
+
+  priorityClassName: ""
+    # Specifies wether a Priority Class should be attached to deployment pods
+
+  # Change `hostNetwork` to `true` when you want the pod to share its host's network namespace.
+  hostNetwork: false
+
+  # DNS settings for the controller pod. https://kubernetes.io/docs/concepts/services-networking/dns-pod-service/#pod-dns-config
+  dnsConfig: {}
+  # DNS Policy for controller pod. For Pods running with hostNetwork, set to `ClusterFirstWithHostNet`
+  # For further reference: https://kubernetes.io/docs/concepts/services-networking/dns-pod-service/#pod-s-dns-policy.
+  dnsPolicy: ClusterFirst
+
+webhook:
+  enabled: true
+
+  replicaCount: 1
+
+  revisionHistoryLimit: 10
+
+  args:
+    tlsPrivateKeyFile: /etc/snapshot-validation/tls.key
+    tlsCertFile: /etc/snapshot-validation/tls.crt
+    port: 8443
+    # enableVolumeGroupSnapshotWebhook: true
+
+  image:
+    repository: registry.k8s.io/sig-storage/snapshot-validation-webhook
+    pullPolicy: IfNotPresent
+    # Overrides the image tag whose default is the chart appVersion.
+    tag: ""
+
+  webhook:
+    timeoutSeconds: 2
+    failurePolicy: Fail
+
+  tls:
+    certificateSecret: ""
+    autogenerate: true
+    renew: false
+    certManagerIssuerRef: {}
+
+  imagePullSecrets: []
+  podAnnotations: {}
+  podLabels: {}
+
+  networkPolicy:
+    enabled: false
+    ingress: {}
+      # - from:
+      #   - ipBlock:
+    #       cidr: 0.0.0.0/0
+
+  ## Ref: https://kubernetes.io/docs/tasks/run-application/configure-pdb/
+  ##
+  pdb: {}
+
+  priorityClassName:
+
+  ## Ref: https://kubernetes.io/docs/concepts/scheduling-eviction/topology-spread-constraints/
+  ##
+  topologySpreadConstraints: []
+    # - maxSkew: 1
+    #   topologyKey: topology.kubernetes.io/zone
+    #   whenUnsatisfiable: ScheduleAnyway
+    #   labelSelector:
+    #     matchLabels:
+  #       app.kubernetes.io/instance: snapshot-validation-webhook
+
+  podSecurityContext: {}
+  # fsGroup: 2000
+
+  securityContext:
+    capabilities:
+      drop:
+        - ALL
+    readOnlyRootFilesystem: true
+    runAsNonRoot: true
+    runAsUser: 1000
+
+  resources: {}
+
+  nodeSelector: {}
+
+  tolerations: []
+
+  affinity: {}
+
+  serviceAccount:
+    create: true
+    name: ""
+
+  rbac:
+    create: true
+
+  # Change `hostNetwork` to `true` when you want the pod to share its host's network namespace.
+  hostNetwork: false
+
+  # DNS settings for the webhook pod. https://kubernetes.io/docs/concepts/services-networking/dns-pod-service/#pod-dns-config
+  dnsConfig: {}
+  # DNS Policy for webhook pod. For Pods running with hostNetwork, set to `ClusterFirstWithHostNet`
+  # For further reference: https://kubernetes.io/docs/concepts/services-networking/dns-pod-service/#pod-s-dns-policy.
+  dnsPolicy: ClusterFirst
+
+  tests:
+    nodeSelector: { }
+
+    tolerations: [ ]
+
+    affinity: { }

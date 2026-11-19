@@ -1,0 +1,14 @@
+#!/bin/sh
+# Migration 2 --> 3
+
+kubectl apply -f  packages/system/mariadb-operator/charts/mariadb-operator/crds/crds.yaml --server-side --force-conflicts
+
+# Fix mariadb-operator crds
+mariadb_crds=$(kubectl get crd -o name | grep '\.k8s\.mariadb\.com$')
+if [ -n "$mariadb_crds" ]; then
+  kubectl annotate $mariadb_crds meta.helm.sh/release-namespace=cozy-mariadb-operator meta.helm.sh/release-name=mariadb-operator
+  kubectl label $mariadb_crds app.kubernetes.io/managed-by=Helm
+fi
+
+# Write version to cozystack-version config
+kubectl create configmap -n cozy-system cozystack-version --from-literal=version=3 --dry-run=client -o yaml | kubectl apply -f-

@@ -1,0 +1,251 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2025 The Cozystack Authors.
+
+package tap
+
+import (
+	"fmt"
+	"regexp"
+	"sort"
+	"strings"
+
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+
+	cozyv1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
+	"github.com/cozystack/cozystack/internal/marketplace/naming"
+	"github.com/cozystack/cozystack/internal/marketplace/tapconst"
+	corev1alpha1 "github.com/cozystack/cozystack/pkg/apis/core/v1alpha1"
+)
+
+var sanitizeDNSRe = regexp.MustCompile(`[^a-z0-9-]+`)
+
+var ociDigestRe = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
+
+// connectTarget is the parsed form of a connect request's oci:// URL.
+type connectTarget struct {
+	URL  string // reference without a tag
+	Org  string
+	Repo string
+	Tag  string
+	// Digest, when set, pins the exact content (sha256:<64 hex>); it takes
+	// precedence over Tag at pull time, so a digest-pinned connect never
+	// follows a moved tag. Mirrors the CLI's ociRef.Digest.
+	Digest string
+	// FluxSourceName is the RFC-1123 name of the tap's OCIRepository. The tapped
+	// repository keeps its own declared PackageSource name(s), which are not
+	// known until the artifact is materialized, so the source (this name) is the
+	// tap's stable identity, not a name derived from the artifact.
+	FluxSourceName string
+}
+
+// parseConnectURL parses an oci:// URL (and an optional tag override) into the
+// tap's Flux source name. It mirrors the CLI's fluxSourceName so the API and
+// CLI agree on the source object's identity.
+func parseConnectURL(url, tagOverride string) (connectTarget, error) {
+	if !strings.HasPrefix(url, "oci://") {
+		return connectTarget{}, fmt.Errorf("url %q must start with oci://", url)
+	}
+	body := strings.TrimPrefix(url, "oci://")
+
+	// A digest pins the exact content (oci://host/org/repo@sha256:...); an
+	// optional tag may precede it and is then informational only. Mirrors the
+	// CLI's parseOCIRef so the API and CLI agree on digest handling.
+	digest := ""
+	if at := strings.LastIndex(body, "@"); at >= 0 {
+		digest = body[at+1:]
+		body = body[:at]
+		if !ociDigestRe.MatchString(digest) {
+			return connectTarget{}, fmt.Errorf("invalid digest %q in url %q: want sha256:<64 hex>", digest, url)
+		}
+	}
+
+	tag := tagOverride
+	if colon := strings.LastIndex(body, ":"); colon >= 0 && !strings.Contains(body[colon:], "/") {
+		if tag == "" {
+			tag = body[colon+1:]
+		}
+		body = body[:colon]
+	}
+	segs := strings.Split(strings.Trim(body, "/"), "/")
+	if len(segs) < 2 {
+		return connectTarget{}, fmt.Errorf("url %q must include a host and a repository path", url)
+	}
+	t := connectTarget{URL: "oci://" + body, Repo: segs[len(segs)-1], Tag: tag, Digest: digest}
+	if len(segs) >= 3 {
+		t.Org = segs[len(segs)-2]
+	}
+	// Default to latest only when neither a tag nor a digest pins the content.
+	if t.Tag == "" && digest == "" {
+		t.Tag = "latest"
+	}
+	fluxBase := t.Repo
+	if t.Org != "" {
+		fluxBase = t.Org + "-" + t.Repo
+	}
+	t.FluxSourceName = "tap-" + sanitizeDNSRe.ReplaceAllString(strings.ToLower(fluxBase), "-")
+	return t, nil
+}
+
+// buildVerifySpec maps a connect-time TapVerify input to a Flux OCIRepository
+// spec.verify. Only keyless cosign identity matching is exposed, so both the
+// issuer and the subject are required: a verification policy that matched any
+// signer would be worse than none. A key-based policy an admin sets by hand on
+// the source is preserved across connects (see Create) but is not settable here.
+func buildVerifySpec(v *corev1alpha1.TapVerify) (map[string]any, error) {
+	// Only keyless cosign is settable here; matchOIDCIdentity is a cosign-only
+	// construct, so a non-cosign provider would produce a nonsensical policy.
+	if v.Provider != "" && v.Provider != "cosign" {
+		return nil, fmt.Errorf("verify.provider %q is not supported; only keyless cosign identity matching is settable at connect", v.Provider)
+	}
+	if v.Issuer == "" || v.Subject == "" {
+		return nil, fmt.Errorf("verify requires both issuer and subject (keyless cosign identity)")
+	}
+	// Flux treats issuer and subject as Go regexps. Anchor and quote them so an
+	// exact identity matches exactly: an unanchored `alice@example.com` would also
+	// accept `malice@example.com`, and the `.` would match any character.
+	return map[string]any{
+		"provider": "cosign",
+		"matchOIDCIdentity": []any{map[string]any{
+			"issuer":  "^" + regexp.QuoteMeta(v.Issuer) + "$",
+			"subject": "^" + regexp.QuoteMeta(v.Subject) + "$",
+		}},
+	}, nil
+}
+
+var (
+	gvrPackageSources = schema.GroupVersionResource{Group: "cozystack.io", Version: "v1alpha1", Resource: "packagesources"}
+	gvrPackages       = schema.GroupVersionResource{Group: "cozystack.io", Version: "v1alpha1", Resource: "packages"}
+	gvrAppDefs        = schema.GroupVersionResource{Group: "cozystack.io", Version: "v1alpha1", Resource: "applicationdefinitions"}
+	gvrOCIRepos       = schema.GroupVersionResource{Group: "source.toolkit.fluxcd.io", Version: "v1", Resource: "ocirepositories"}
+)
+
+// anyOtherReferences reports whether a PackageSource other than excludeName
+// still points at the given Flux source, so a tap's source is only deleted when
+// nothing else uses it.
+func anyOtherReferences(pss []cozyv1alpha1.PackageSource, srcName, excludeName string) bool {
+	for i := range pss {
+		if pss[i].Name == excludeName {
+			continue
+		}
+		if ref := pss[i].Spec.SourceRef; ref != nil && ref.Name == srcName {
+			return true
+		}
+	}
+	return false
+}
+
+// artifactName links a component to the ApplicationDefinition whose
+// release.chartRef.name references its assembled artifact. It delegates to the
+// shared naming helper so the API, the validator, and the materializer cannot
+// drift on this convention.
+func artifactName(psName, variant, component string) string {
+	return naming.ArtifactName(psName, variant, component)
+}
+
+// indexAppDefsByChartRef indexes ApplicationDefinitions by their ExternalArtifact
+// chartRef name, the value artifactName produces for the component they back.
+func indexAppDefsByChartRef(ads []cozyv1alpha1.ApplicationDefinition) map[string]cozyv1alpha1.ApplicationDefinition {
+	idx := make(map[string]cozyv1alpha1.ApplicationDefinition, len(ads))
+	for _, ad := range ads {
+		ref := ad.Spec.Release.ChartRef
+		if ref == nil || ref.Name == "" {
+			continue
+		}
+		idx[ref.Name] = ad
+	}
+	return idx
+}
+
+// buildTap computes a Tap from a PackageSource and the ApplicationDefinition
+// index. A package is emitted for each component whose assembled-artifact name
+// matches an ApplicationDefinition, deduplicated by application name across
+// variants (privileged is ORed over occurrences).
+func buildTap(ps cozyv1alpha1.PackageSource, idx map[string]cozyv1alpha1.ApplicationDefinition) corev1alpha1.Tap {
+	tap := corev1alpha1.Tap{
+		TypeMeta: metav1.TypeMeta{
+			APIVersion: corev1alpha1.SchemeGroupVersion.String(),
+			Kind:       "Tap",
+		},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:            ps.Name,
+			ResourceVersion: "0",
+		},
+		Spec: corev1alpha1.TapSpec{
+			// Tap-ness is marked by the marketplace-tap label, not a name prefix:
+			// a tapped repository keeps its own declared name.
+			Community: ps.GetLabels()[tapconst.Label] == "true",
+		},
+	}
+	if ps.Spec.SourceRef != nil {
+		tap.Spec.Source = corev1alpha1.TapSource{
+			Kind: ps.Spec.SourceRef.Kind,
+			Name: ps.Spec.SourceRef.Name,
+		}
+	}
+	for _, cond := range ps.Status.Conditions {
+		if cond.Type == "Ready" {
+			tap.Spec.Ready = cond.Status == metav1.ConditionTrue
+			tap.Spec.Message = cond.Message
+		}
+	}
+
+	// Each ApplicationDefinition's chartRef names exactly one component's
+	// assembled artifact (the artifact name embeds the variant), so a package
+	// maps to a single (variant, component). The seen guard is only a defensive
+	// backstop against an index that somehow yields the same app twice.
+	seen := map[string]bool{}
+	for _, v := range ps.Spec.Variants {
+		for _, c := range v.Components {
+			ad, ok := idx[artifactName(ps.Name, v.Name, c.Name)]
+			if !ok || seen[ad.Name] {
+				continue
+			}
+			seen[ad.Name] = true
+			pkg := corev1alpha1.TapPackage{
+				Name:       ad.Name,
+				Kind:       ad.Spec.Application.Kind,
+				Component:  c.Name,
+				Privileged: c.Install != nil && c.Install.Privileged,
+			}
+			if d := ad.Spec.Dashboard; d != nil {
+				pkg.Description = d.Description
+				pkg.Category = d.Category
+				pkg.Tags = d.Tags
+				pkg.Icon = d.Icon
+			}
+			tap.Spec.Packages = append(tap.Spec.Packages, pkg)
+		}
+	}
+	sort.Slice(tap.Spec.Packages, func(i, j int) bool {
+		return tap.Spec.Packages[i].Name < tap.Spec.Packages[j].Name
+	})
+	return tap
+}
+
+// buildPendingTap represents a tap whose OCIRepository exists but whose
+// PackageSource has not been materialized yet: a connect in progress, or one
+// blocked by a materialization error (e.g. a name collision with a core
+// component). Its identity is the source object's own name, which is stable
+// from connect onward, and it surfaces the block reason so the dashboard shows
+// it rather than the tap silently never appearing.
+func buildPendingTap(sourceName, errMessage string) corev1alpha1.Tap {
+	tap := corev1alpha1.Tap{
+		TypeMeta: metav1.TypeMeta{
+			APIVersion: corev1alpha1.SchemeGroupVersion.String(),
+			Kind:       "Tap",
+		},
+		ObjectMeta: metav1.ObjectMeta{Name: sourceName, ResourceVersion: "0"},
+		Spec: corev1alpha1.TapSpec{
+			Community: true,
+			Source:    corev1alpha1.TapSource{Kind: "OCIRepository", Name: sourceName},
+			Ready:     false,
+		},
+	}
+	if errMessage != "" {
+		tap.Spec.Message = errMessage
+	} else {
+		tap.Spec.Message = "connecting: waiting for the artifact to be pulled and materialized"
+	}
+	return tap
+}

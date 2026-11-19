@@ -1,0 +1,181 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.18.0
+  name: keycloakrealmidentityproviders.v1.edp.epam.com
+spec:
+  group: v1.edp.epam.com
+  names:
+    kind: KeycloakRealmIdentityProvider
+    listKind: KeycloakRealmIdentityProviderList
+    plural: keycloakrealmidentityproviders
+    singular: keycloakrealmidentityprovider
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - description: Reconciliation status
+      jsonPath: .status.value
+      name: Status
+      type: string
+    name: v1
+    schema:
+      openAPIV3Schema:
+        description: KeycloakRealmIdentityProvider is the Schema for the keycloak
+          realm identity provider API.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: KeycloakRealmIdentityProviderSpec defines the desired state
+              of KeycloakRealmIdentityProvider.
+            properties:
+              addReadTokenRoleOnCreate:
+                description: AddReadTokenRoleOnCreate is a flag to add read token
+                  role on create.
+                type: boolean
+              adminFineGrainedPermissionsEnabled:
+                description: |-
+                  AdminFineGrainedPermissionsEnabled enable/disable fine-grained admin permissions for an identity provider.
+                  Feature flag admin-fine-grained-authz:v1 should be enabled in Keycloak server.
+                  Important: FGAP:V1 Keycloak feature remains in preview and may be deprecated and removed in a future releases.
+                type: boolean
+              alias:
+                description: Alias is a alias of identity provider.
+                type: string
+              authenticateByDefault:
+                description: AuthenticateByDefault is a flag to authenticate by default.
+                type: boolean
+              config:
+                additionalProperties:
+                  type: string
+                description: |-
+                  Config is a map of identity provider configuration.
+                  Map key is a name of configuration property, map value is a value of configuration property.
+                  Any value can be a reference to k8s secret, in this case value should be in format $secretName:secretKey.
+                example:
+                  clientId: provider-client
+                  clientSecret: $clientSecret:secretKey
+                type: object
+              displayName:
+                description: DisplayName is a display name of identity provider.
+                type: string
+              enabled:
+                description: Enabled is a flag to enable/disable identity provider.
+                type: boolean
+              firstBrokerLoginFlowAlias:
+                description: FirstBrokerLoginFlowAlias is a first broker login flow
+                  alias.
+                type: string
+              linkOnly:
+                description: LinkOnly is a flag to link only.
+                type: boolean
+              mappers:
+                description: Mappers is a list of identity provider mappers.
+                items:
+                  properties:
+                    config:
+                      additionalProperties:
+                        type: string
+                      description: Config is a map of identity provider mapper configuration.
+                      nullable: true
+                      type: object
+                    identityProviderAlias:
+                      description: IdentityProviderAlias is a identity provider alias.
+                      type: string
+                    identityProviderMapper:
+                      description: IdentityProviderMapper is a identity provider mapper.
+                      type: string
+                    name:
+                      description: Name is a name of identity provider mapper.
+                      type: string
+                  type: object
+                nullable: true
+                type: array
+              permission:
+                description: Permission is a identity provider permissions configuration
+                nullable: true
+                properties:
+                  scopePermissions:
+                    description: ScopePermissions mapping of scope and the policies
+                      attached
+                    items:
+                      properties:
+                        name:
+                          type: string
+                        policies:
+                          items:
+                            type: string
+                          type: array
+                      required:
+                      - name
+                      type: object
+                    type: array
+                type: object
+              postBrokerLoginFlowAlias:
+                description: PostBrokerLoginFlowAlias is a post broker login flow
+                  alias.
+                type: string
+              providerId:
+                description: ProviderID is a provider ID of identity provider.
+                type: string
+              realmRef:
+                description: RealmRef is reference to Realm custom resource.
+                properties:
+                  kind:
+                    default: KeycloakRealm
+                    description: Kind specifies the kind of the Keycloak resource.
+                    enum:
+                    - KeycloakRealm
+                    - ClusterKeycloakRealm
+                    type: string
+                  name:
+                    description: Name specifies the name of the Keycloak resource.
+                    type: string
+                required:
+                - name
+                type: object
+              storeToken:
+                description: StoreToken is a flag to store token.
+                type: boolean
+              trustEmail:
+                description: TrustEmail is a flag to trust email.
+                type: boolean
+            required:
+            - alias
+            - config
+            - enabled
+            - providerId
+            - realmRef
+            type: object
+          status:
+            description: KeycloakRealmIdentityProviderStatus defines the observed
+              state of KeycloakRealmIdentityProvider.
+            properties:
+              failureCount:
+                format: int64
+                type: integer
+              value:
+                type: string
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

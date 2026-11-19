@@ -1,0 +1,16 @@
+apiVersion: v2
+appVersion: v0.0.25
+dependencies:
+- condition: crds.enabled
+  name: crds
+  repository: ""
+  version: 0.0.25
+description: A cloud native wrapper of FRR
+home: https://metallb.universe.tf
+icon: https://metallb.universe.tf/images/logo/metallb-white.png
+kubeVersion: '>= 1.19.0-0'
+name: frr-k8s
+sources:
+- https://github.com/metallb/frr-k8s
+type: application
+version: 0.0.25

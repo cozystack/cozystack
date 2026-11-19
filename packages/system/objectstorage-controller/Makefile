@@ -1,0 +1,28 @@
+export NAME=objectstorage-controller
+export NAMESPACE=cozy-$(NAME)
+
+include ../../../hack/common-envs.mk
+include ../../../hack/package.mk
+
+update:
+	rm -rf templates
+	mkdir -p templates
+	kubectl kustomize github.com/kubernetes-sigs/container-object-storage-interface > templates/controller.yaml
+	sed -i 's/namespace: container-object-storage-system/namespace: {{ .Release.Namespace }}/g' templates/controller.yaml
+	sed -i 's|image:.*|image: {{ .Values.objectstorage.controller.image }}|' templates/controller.yaml
+
+image: image-controller image-sidecar
+image-controller image-sidecar:
+	$(eval TARGET      := $(subst image-,,$@))
+	$(eval VALUES_FILE := $(if $(filter sidecar,$(TARGET)),../seaweedfs/values.yaml,values.yaml))
+	$(eval YAML_PATH   := $(if $(filter sidecar,$(TARGET)),.seaweedfs.cosi.sidecar.image,.objectstorage.controller.image))
+	docker buildx build images/objectstorage \
+		--target $(TARGET) \
+		$(call image-tags,objectstorage-$(TARGET),v$(COZYSTACK_VERSION)) \
+		$(call cache-args,objectstorage-$(TARGET)) \
+		--metadata-file images/$(TARGET).json \
+		$(BUILDX_ARGS)
+	IMAGE="$(REGISTRY)/objectstorage-$(TARGET):$(IMAGE_TAG)@$$(yq e '."containerimage.digest"' images/$(TARGET).json -r)" \
+		yq -i '$(YAML_PATH) = strenv(IMAGE)' $(VALUES_FILE)
+	rm -f images/$(TARGET).json
+	yq .seaweedfs.cosi.sidecar.image ../seaweedfs/values.yaml > ../../extra/seaweedfs/images/objectstorage-sidecar.tag

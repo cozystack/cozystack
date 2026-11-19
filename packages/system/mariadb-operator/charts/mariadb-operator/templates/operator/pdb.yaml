@@ -1,0 +1,13 @@
+{{- if  .Values.pdb.enabled }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "mariadb-operator.fullname" . }}
+  labels:
+    {{ include "mariadb-operator.labels" . | nindent 4 }}
+spec:
+  maxUnavailable: {{ .Values.pdb.maxUnavailable }}
+  selector:
+    matchLabels:
+      {{ include "mariadb-operator.selectorLabels" . | nindent 6 }}
+{{- end }}

@@ -1,0 +1,23 @@
+---
+apiVersion: cozystack.io/v1alpha1
+kind: PackageSource
+metadata:
+  name: cozystack.goldpinger
+spec:
+  sourceRef:
+    kind: OCIRepository
+    name: cozystack-packages
+    namespace: cozy-system
+    path: /
+  variants:
+  - name: default
+    dependsOn:
+    - cozystack.networking
+    - cozystack.prometheus-operator-crds
+    components:
+    - name: goldpinger
+      path: system/goldpinger
+      install:
+        privileged: true
+        namespace: cozy-goldpinger
+        releaseName: goldpinger

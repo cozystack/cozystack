@@ -1,0 +1,17 @@
+{{- if .Values.webhook.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "snapshot-validation-webhook.fullname" . }}
+  labels:
+    {{- include "snapshot-validation-webhook.labels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  ports:
+    - port: 443
+      targetPort: https
+      protocol: TCP
+      name: https
+  selector:
+    {{- include "snapshot-validation-webhook.selectorLabels" . | nindent 4 }}
+{{- end }}

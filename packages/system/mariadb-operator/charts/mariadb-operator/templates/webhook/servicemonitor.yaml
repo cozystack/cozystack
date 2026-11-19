@@ -1,0 +1,44 @@
+{{ if and (not .Values.currentNamespaceOnly) .Values.webhook.enabled .Values.metrics.enabled .Values.webhook.serviceMonitor.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "mariadb-operator.fullname" . }}-webhook-metrics
+  labels:
+    {{ include "mariadb-operator-webhook.labels" . | nindent 4 }}
+spec:
+  ports:
+    - port: 8080
+      protocol: TCP
+      name: metrics
+  selector:
+    {{ include "mariadb-operator-webhook.selectorLabels" . | nindent 4 }}
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "mariadb-operator.fullname" . }}-webhook
+  labels:
+    {{ include "mariadb-operator-webhook.labels" . | nindent 4 }}
+    {{ with .Values.webhook.serviceMonitor.additionalLabels }}
+    {{ toYaml . | nindent 4 }}
+    {{ end }}
+spec:
+  selector:
+    matchLabels:
+      {{ include "mariadb-operator-webhook.selectorLabels" . | nindent 6 }}
+  namespaceSelector:
+    matchNames:
+    - {{ .Release.Namespace | quote }}
+  endpoints:
+  - port: metrics
+    interval: {{ .Values.webhook.serviceMonitor.interval }}
+    scrapeTimeout: {{ .Values.webhook.serviceMonitor.scrapeTimeout }}
+    {{- if .Values.webhook.serviceMonitor.metricRelabelings }}
+    metricRelabelings:
+      {{- toYaml .Values.webhook.serviceMonitor.metricRelabelings | nindent 6 }}
+    {{- end }}
+    {{- if .Values.webhook.serviceMonitor.relabelings }}
+    relabelings:
+      {{- toYaml .Values.webhook.serviceMonitor.relabelings | nindent 6 }}
+    {{- end }}
+{{- end }}

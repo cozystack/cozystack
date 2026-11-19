@@ -1,0 +1,110 @@
+{{- if and (not .Values.currentNamespaceOnly) .Values.certController.enabled  (not .Values.webhook.cert.certManager.enabled) -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "mariadb-operator.fullname" . }}-cert-controller
+  labels:
+    {{- include "mariadb-operator-cert-controller.labels" . | nindent 4 }}
+spec:
+  {{- if .Values.certController.ha.enabled }}
+  replicas: {{ .Values.certController.ha.replicas}}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "mariadb-operator-cert-controller.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      {{- with .Values.certController.podAnnotations }}
+      annotations:
+        {{ toYaml . | nindent 8 }}
+      {{- end }}
+      labels:
+        {{- include "mariadb-operator-cert-controller.selectorLabels" . | nindent 8 }}
+    spec:
+      {{- with .Values.certController.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "mariadb-operator-cert-controller.serviceAccountName" . }}-cert-controller
+      automountServiceAccountToken: {{ .Values.certController.serviceAccount.automount }}
+      {{- with .Values.certController.nodeSelector }}
+      nodeSelector:
+        {{ toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.certController.tolerations }}
+      tolerations:
+        {{ toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.certController.topologySpreadConstraints }}
+      topologySpreadConstraints:
+        {{ toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.certController.priorityClassName  }}
+      priorityClassName: {{ . | quote }}
+      {{- end }}
+      {{- with .Values.certController.affinity }}
+      affinity:
+        {{ toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.certController.podSecurityContext }}
+      securityContext:
+        {{ toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - image: "{{ template "image" (tuple .Values.certController.image $.Chart.AppVersion) }}"
+          imagePullPolicy: {{ .Values.certController.image.pullPolicy }}
+          name: cert-controller
+          args:
+            - cert-controller
+            - --ca-secret-name={{ include "mariadb-operator.fullname" . }}-webhook-ca
+            - --ca-secret-namespace={{ .Release.Namespace }}
+            - --ca-lifetime={{ .Values.certController.caLifetime }}
+            - --cert-secret-name={{ include "mariadb-operator.fullname" . }}-webhook-cert
+            - --cert-secret-namespace={{ .Release.Namespace }}
+            - --cert-lifetime={{ .Values.certController.certLifetime }}
+            - --renew-before-percentage={{ .Values.certController.renewBeforePercentage }}
+            - --service-name={{ include "mariadb-operator.fullname" . }}-webhook
+            - --service-namespace={{ .Release.Namespace }}
+            - --requeue-duration={{ .Values.certController.requeueDuration }}
+            - --metrics-addr=:8080
+            - --health-addr=:8081
+            - --log-level={{ .Values.logLevel }}
+            {{- if .Values.certController.ha.enabled }}
+            - --leader-elect
+            {{- end }}
+            {{- range .Values.certController.extrArgs }}
+            - {{ . }}
+            {{- end }}
+          ports:
+            - containerPort: 8080
+              protocol: TCP
+              name: metrics
+            - containerPort: 8081
+              protocol: TCP
+              name: health
+          env: 
+            - name: CLUSTER_NAME
+              value: {{ .Values.clusterName }}
+          {{- with .Values.certController.extraVolumeMounts }}
+          volumeMounts:
+          {{- toYaml . | nindent 12 }}
+          {{- end }}
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: 8081
+            initialDelaySeconds: 20
+            periodSeconds: 5
+          {{ with .Values.certController.resources }}
+          resources:
+            {{ toYaml . | nindent 12 }}
+          {{ end }}
+          {{ with .Values.certController.securityContext}}
+          securityContext:
+            {{ toYaml . | nindent 12 }}
+          {{ end }}
+      {{- with .Values.certController.extraVolumes }}
+      volumes:
+      {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}

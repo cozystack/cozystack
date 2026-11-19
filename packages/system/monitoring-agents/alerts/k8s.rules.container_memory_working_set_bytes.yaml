@@ -1,0 +1,17 @@
+apiVersion: operator.victoriametrics.com/v1beta1
+kind: VMRule
+metadata:
+  name: alerts-k8s.rules.containermemoryworkingsetbytes
+spec:
+  groups:
+  - name: k8s.rules.container_memory_working_set_bytes
+    params: {}
+    rules:
+    - annotations: {}
+      expr: |-
+        container_memory_working_set_bytes{job="kubelet", metrics_path="/metrics/cadvisor", image!=""}
+        * on (namespace,pod,cluster) group_left(node) topk by (namespace,pod,cluster) (1,
+          max by (namespace,pod,node,cluster) (kube_pod_info{node!=""})
+        )
+      labels: {}
+      record: node_namespace_pod_container:container_memory_working_set_bytes

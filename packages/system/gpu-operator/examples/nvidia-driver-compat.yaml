@@ -1,0 +1,109 @@
+# Workaround for https://github.com/NVIDIA/gpu-operator/issues/1687
+#
+# On Talos, the NVIDIA system extension installs driver files under
+# /usr/local/glibc/usr/lib/ and /usr/local/bin/. The GPU Operator
+# validator only looks for libnvidia-ml.so.1 and bin/nvidia-smi under
+# the path configured as hostPaths.driverInstallDir. This DaemonSet
+# stages the required files into /var/nvidia-driver on each node and
+# creates the .driver-ctr-ready flag so the validator proceeds.
+#
+# Paired with examples/values-native-talos.yaml, which sets
+# hostPaths.driverInstallDir to /var/nvidia-driver.
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: nvidia-driver-compat
+  namespace: cozy-gpu-operator
+  labels:
+    app: nvidia-driver-compat
+spec:
+  selector:
+    matchLabels:
+      app: nvidia-driver-compat
+  template:
+    metadata:
+      labels:
+        app: nvidia-driver-compat
+    # DaemonSet rather than a one-shot Job: staging is idempotent per-node,
+    # must re-run after every Talos reboot (hostPath contents are wiped on
+    # reboot when the system extension re-installs), and the pause container
+    # keeps the pod visible for operator observability (kubectl get pods).
+    spec:
+      priorityClassName: system-node-critical
+      # Restrict to GPU nodes only. Without this the DaemonSet schedules onto
+      # every node (including control-plane and CPU-only workers) and burns
+      # resources on hosts where the compat tree is meaningless.
+      # The label is published by Node Feature Discovery / GPU Operator's NFD
+      # subchart; if NFD is disabled, replace this with whatever label your
+      # cluster uses to mark GPU hosts.
+      nodeSelector:
+        nvidia.com/gpu.present: "true"
+      # Tolerate-all is intentionally broad: the nodeSelector above already
+      # confines scheduling to GPU nodes, so the "Exists" toleration only
+      # matters when those nodes carry extra taints (dedicated=gpu:NoSchedule,
+      # nvidia.com/gpu:NoSchedule from the GPU Operator's default policy,
+      # etc.). This mirrors the stance of the upstream nvidia-driver-daemonset
+      # and nvidia-device-plugin DaemonSets — blanket tolerations plus a
+      # narrow nodeSelector.
+      tolerations:
+        - operator: Exists
+      initContainers:
+        - name: create-driver-tree
+          image: busybox:1.37
+          command:
+            - sh
+            - -c
+            - |
+              set -e
+              GLIBC_LIB="/host/usr/local/glibc/usr/lib"
+              SRC_BIN="/host/usr/local/bin"
+              DST="/host/var/nvidia-driver"
+
+              mkdir -p "$DST/bin"
+
+              [ -f "$GLIBC_LIB/libnvidia-ml.so.1" ] || {
+                echo "missing $GLIBC_LIB/libnvidia-ml.so.1" >&2
+                exit 1
+              }
+              [ -f "$SRC_BIN/nvidia-smi" ] || {
+                echo "missing $SRC_BIN/nvidia-smi" >&2
+                exit 1
+              }
+
+              cp -f "$GLIBC_LIB/libnvidia-ml.so.1" "$DST/libnvidia-ml.so.1"
+              echo "Copied libnvidia-ml.so.1"
+
+              cp -f "$SRC_BIN/nvidia-smi" "$DST/bin/nvidia-smi"
+              chmod +x "$DST/bin/nvidia-smi"
+              echo "Copied nvidia-smi"
+
+              mkdir -p /host/run/nvidia/validations
+              touch /host/run/nvidia/validations/.driver-ctr-ready
+              echo "Created driver-ctr-ready flag"
+              echo "Done"
+          securityContext:
+            privileged: true
+          resources:
+            requests:
+              cpu: 10m
+              memory: 16Mi
+            limits:
+              cpu: 100m
+              memory: 64Mi
+          volumeMounts:
+            - name: host-root
+              mountPath: /host
+      containers:
+        - name: pause
+          image: registry.k8s.io/pause:3.10
+          resources:
+            requests:
+              cpu: 10m
+              memory: 8Mi
+            limits:
+              cpu: 50m
+              memory: 16Mi
+      volumes:
+        - name: host-root
+          hostPath:
+            path: /

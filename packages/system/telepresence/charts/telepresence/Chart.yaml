@@ -1,0 +1,12 @@
+apiVersion: v2
+appVersion: 2.16.1
+dependencies:
+- condition: ambassador-agent.enabled
+  name: ambassador-agent
+  repository: https://app.getambassador.io/
+  version: ~1.0.0
+description: A chart for deploying the server-side components of Telepresence
+icon: https://www.getambassador.io/images/logo.png
+name: telepresence
+type: application
+version: 2.16.1

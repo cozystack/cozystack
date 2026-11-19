@@ -1,0 +1,168 @@
+suite: tenant kube-apiserver OIDC, refusals and additions next to an entry the chart cannot read
+
+values:
+  - values/common.yaml
+  - values/oidc-system.yaml
+
+release:
+  name: kubernetes-app
+  namespace: tenant-foo
+
+templates:
+  - templates/cluster.yaml
+
+# An entry written as a flag and a value in two elements hides its value from
+# the chart. What it hides can move the effective version (--emulated-version)
+# or the gate (--feature-gates); the cases below are the ones where the
+# apiserver's answer does not depend on it.
+
+tests:
+  - it: refuses an explicit gate opt-out beside a header entry when --emulated-version is unreadable
+    # Emulation only lowers the version, and the gate never matures going down,
+    # so an opt-out stays an opt-out whatever the hidden version is.
+    set:
+      version: "v1.34"
+      controlPlane.apiServer.extraArgs:
+        - "--feature-gates=RemoteRequestHeaderUID=false"
+        - "--requestheader-uid-headers=X-Remote-Uid"
+        - "--emulated-version"
+        - "1.34"
+    asserts:
+      - failedTemplate:
+          errorMessage: 'controlPlane.apiServer.extraArgs contains "--requestheader-uid-headers=X-Remote-Uid" alongside "--feature-gates=RemoteRequestHeaderUID=false", while spec.oidc.mode is "System" on Kubernetes v1.34 — the kube-apiserver rejects a --requestheader-uid-headers list while RemoteRequestHeaderUID is disabled, so the control plane would refuse to start. Drop one of the two: your header flag, or the gate setting that turns RemoteRequestHeaderUID off.'
+
+  - it: renders an opt-out beside a header entry when --feature-gates is unreadable
+    # The hidden term can turn the gate back on, since the last term for a
+    # name wins across entries, so the chart cannot call this fatal.
+    set:
+      version: "v1.34"
+      controlPlane.apiServer.extraArgs:
+        - "--feature-gates=RemoteRequestHeaderUID=false"
+        - "--requestheader-uid-headers=X-Remote-Uid"
+        - "--feature-gates"
+        - "RemoteRequestHeaderUID=true"
+    asserts:
+      - equal:
+          path: spec.apiServer.extraArgs
+          value:
+            - "--feature-gates=RemoteRequestHeaderUID=false"
+            - "--requestheader-uid-headers=X-Remote-Uid"
+            - "--feature-gates"
+            - "RemoteRequestHeaderUID=true"
+            - "--authentication-config=/etc/kubernetes/authentication-config/config.yaml"
+        documentIndex: 1
+
+  - it: refuses an empty header element when --feature-gates is unreadable
+    # The gate off rejects any list and the gate on rejects the empty element.
+    set:
+      version: "v1.34"
+      controlPlane.apiServer.extraArgs:
+        - "--requestheader-uid-headers=X-Remote-Uid,"
+        - "--feature-gates"
+        - "Foo=true"
+    asserts:
+      - failedTemplate:
+          errorMessage: 'controlPlane.apiServer.extraArgs contains "--requestheader-uid-headers=X-Remote-Uid," while spec.oidc.mode is "System" — the kube-apiserver rejects a uid-headers list with an empty or whitespace-only element, and it validates every entry of the flag as one list, so the control plane would refuse to start. Remove the empty element from your entry, or drop the entry.'
+
+  - it: refuses an empty header element when --emulated-version is unreadable
+    set:
+      version: "v1.34"
+      controlPlane.apiServer.extraArgs:
+        - "--requestheader-uid-headers=X-Remote-Uid,"
+        - "--emulated-version"
+        - "1.34"
+    asserts:
+      - failedTemplate:
+          errorMessage: 'controlPlane.apiServer.extraArgs contains "--requestheader-uid-headers=X-Remote-Uid," while spec.oidc.mode is "System" — the kube-apiserver rejects a uid-headers list with an empty or whitespace-only element, and it validates every entry of the flag as one list, so the control plane would refuse to start. Remove the empty element from your entry, or drop the entry.'
+
+  - it: adds X-Remote-Uid beside a header list without it when --feature-gates is unreadable
+    # The gate off rejects the operator's list on its own; the gate on accepts
+    # it only with X-Remote-Uid in the union. The element helps in one state
+    # and changes nothing in the other.
+    set:
+      version: "v1.33"
+      controlPlane.apiServer.extraArgs:
+        - "--feature-gates"
+        - "Foo=true"
+        - "--requestheader-uid-headers=X-Foo"
+    asserts:
+      - equal:
+          path: spec.apiServer.extraArgs
+          value:
+            - "--feature-gates"
+            - "Foo=true"
+            - "--requestheader-uid-headers=X-Foo"
+            - "--authentication-config=/etc/kubernetes/authentication-config/config.yaml"
+            - "--requestheader-uid-headers=X-Remote-Uid"
+        documentIndex: 1
+
+  - it: adds X-Remote-Uid beside a header list without it when --emulated-version is unreadable
+    set:
+      version: "v1.35"
+      controlPlane.apiServer.extraArgs:
+        - "--emulated-version"
+        - "1.34"
+        - "--requestheader-uid-headers=X-Foo"
+    asserts:
+      - equal:
+          path: spec.apiServer.extraArgs
+          value:
+            - "--emulated-version"
+            - "1.34"
+            - "--requestheader-uid-headers=X-Foo"
+            - "--authentication-config=/etc/kubernetes/authentication-config/config.yaml"
+            - "--requestheader-uid-headers=X-Remote-Uid"
+        documentIndex: 1
+
+  - it: adds nothing beside a conforming header list when --feature-gates is unreadable
+    set:
+      version: "v1.33"
+      controlPlane.apiServer.extraArgs:
+        - "--feature-gates"
+        - "Foo=true"
+        - "--requestheader-uid-headers=X-Remote-Uid"
+    asserts:
+      - equal:
+          path: spec.apiServer.extraArgs
+          value:
+            - "--feature-gates"
+            - "Foo=true"
+            - "--requestheader-uid-headers=X-Remote-Uid"
+            - "--authentication-config=/etc/kubernetes/authentication-config/config.yaml"
+        documentIndex: 1
+
+  - it: refuses an empty header element beside an opt-out when --feature-gates is unreadable
+    # The hidden term keeps the opt-out refusal off, but the empty element is
+    # fatal whichever way it leaves the gate.
+    set:
+      version: "v1.33"
+      controlPlane.apiServer.extraArgs:
+        - "--feature-gates=RemoteRequestHeaderUID=false"
+        - "--feature-gates"
+        - "Foo=true"
+        - "--requestheader-uid-headers=X-Remote-Uid,"
+    asserts:
+      - failedTemplate:
+          errorMessage: 'controlPlane.apiServer.extraArgs contains "--requestheader-uid-headers=X-Remote-Uid," while spec.oidc.mode is "System" — the kube-apiserver rejects a uid-headers list with an empty or whitespace-only element, and it validates every entry of the flag as one list, so the control plane would refuse to start. Remove the empty element from your entry, or drop the entry.'
+
+  - it: renders a blanket opt-out beside a header entry when --emulated-version is unreadable
+    # AllBeta=false reaches the gate only while it is beta. A hidden emulated
+    # 1.32 makes it alpha again, where AllAlpha=true switches it on, so only
+    # an explicit RemoteRequestHeaderUID=false survives an unread version.
+    set:
+      version: "v1.33"
+      controlPlane.apiServer.extraArgs:
+        - "--feature-gates=AllBeta=false,AllAlpha=true"
+        - "--requestheader-uid-headers=X-Remote-Uid"
+        - "--emulated-version"
+        - "1.32"
+    asserts:
+      - equal:
+          path: spec.apiServer.extraArgs
+          value:
+            - "--feature-gates=AllBeta=false,AllAlpha=true"
+            - "--requestheader-uid-headers=X-Remote-Uid"
+            - "--emulated-version"
+            - "1.32"
+            - "--authentication-config=/etc/kubernetes/authentication-config/config.yaml"
+        documentIndex: 1

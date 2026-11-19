@@ -1,0 +1,944 @@
+suite: mongodb CR tests
+
+templates:
+  - templates/mongodb.yaml
+
+tests:
+  ###################
+  # Basic rendering #
+  ###################
+
+  - it: renders PerconaServerMongoDB and WorkloadMonitor
+    release:
+      name: test-mongodb
+      namespace: tenant-test
+    set:
+      _cluster:
+        cluster-domain: cozy.local
+    asserts:
+      - hasDocuments:
+          count: 2
+      - isKind:
+          of: PerconaServerMongoDB
+        documentIndex: 0
+      - isKind:
+          of: WorkloadMonitor
+        documentIndex: 1
+
+  - it: sets correct CR name
+    release:
+      name: my-mongodb
+      namespace: tenant-test
+    set:
+      _cluster:
+        cluster-domain: cozy.local
+    asserts:
+      - equal:
+          path: metadata.name
+          value: my-mongodb
+        documentIndex: 0
+
+  #########################
+  # Backup storage gating #
+  #########################
+
+  # Legacy flow: the chart renders the static s3-storage from backup.* values.
+  - it: renders static s3-storage on the legacy backup flow
+    release:
+      name: test-mongodb
+      namespace: tenant-test
+    set:
+      _cluster:
+        cluster-domain: cozy.local
+      backup:
+        enabled: true
+        useSystemBucket: false
+        destinationPath: s3://my-bucket/mongodb-src/
+        endpointURL: https://s3.example.org
+    asserts:
+      - equal:
+          path: spec.backup.enabled
+          value: true
+        documentIndex: 0
+      - equal:
+          path: spec.backup.storages.s3-storage.s3.credentialsSecret
+          value: test-mongodb-s3-creds
+        documentIndex: 0
+
+  # useSystemBucket: enabled stays true (pbm agents run) but the chart omits
+  # spec.backup.storages entirely - the cozy-default BackupClass driver
+  # SSA-injects it at BackupJob time, so Helm must not own that subtree.
+  - it: omits spec.backup.storages on useSystemBucket
+    release:
+      name: test-mongodb
+      namespace: tenant-test
+    set:
+      _cluster:
+        cluster-domain: cozy.local
+      backup:
+        enabled: true
+        useSystemBucket: true
+    asserts:
+      - equal:
+          path: spec.backup.enabled
+          value: true
+        documentIndex: 0
+      - notExists:
+          path: spec.backup.storages
+        documentIndex: 0
+      - notExists:
+          path: spec.backup.tasks
+        documentIndex: 0
+      - notExists:
+          path: spec.backup.pitr
+        documentIndex: 0
+
+  - it: ignores retentionPolicy and schedule on useSystemBucket (renders, no tasks)
+    # On this flow retentionPolicy and schedule are inert (documented as ignored),
+    # handled the same way: a custom value renders cleanly without emitting the
+    # tasks block, never a hard render error.
+    release:
+      name: test-mongodb
+      namespace: tenant-test
+    set:
+      _cluster:
+        cluster-domain: cozy.local
+      backup:
+        enabled: true
+        useSystemBucket: true
+        retentionPolicy: 7d
+        schedule: "0 5 * * *"
+    asserts:
+      - equal:
+          path: spec.backup.enabled
+          value: true
+        documentIndex: 0
+      - notExists:
+          path: spec.backup.tasks
+        documentIndex: 0
+
+  ##################
+  # Finalizers     #
+  ##################
+
+  - it: renders Percona finalizers on PSMDB CR
+    release:
+      name: test-mongodb
+      namespace: tenant-test
+    set:
+      _cluster:
+        cluster-domain: cozy.local
+    asserts:
+      - contains:
+          path: metadata.finalizers
+          content: percona.com/delete-psmdb-pvc
+        documentIndex: 0
+      - contains:
+          path: metadata.finalizers
+          content: percona.com/delete-psmdb-pods-in-order
+        documentIndex: 0
+
+  - it: renders Percona finalizers in sharded mode
+    release:
+      name: test-mongodb
+      namespace: tenant-test
+    set:
+      _cluster:
+        cluster-domain: cozy.local
+      sharding: true
+      shardingConfig:
+        configServers: 3
+        configServerSize: 3Gi
+        mongos: 2
+        shards:
+          - name: rs0
+            replicas: 3
+            size: 10Gi
+    asserts:
+      - contains:
+          path: metadata.finalizers
+          content: percona.com/delete-psmdb-pvc
+        documentIndex: 0
+      - contains:
+          path: metadata.finalizers
+          content: percona.com/delete-psmdb-pods-in-order
+        documentIndex: 0
+
+  ##################
+  # Secrets        #
+  ##################
+
+  - it: scopes users secret name to the release for namespace isolation
+    release:
+      name: test-mongodb
+      namespace: tenant-test
+    set:
+      _cluster:
+        cluster-domain: cozy.local
+    asserts:
+      - equal:
+          path: spec.secrets.users
+          value: test-mongodb-percona-server-mongodb-users
+        documentIndex: 0
+
+  ##################
+  # CR Version     #
+  ##################
+
+  - it: sets crVersion to 1.22.0
+    release:
+      name: test-mongodb
+      namespace: tenant-test
+    set:
+      _cluster:
+        cluster-domain: cozy.local
+    asserts:
+      - equal:
+          path: spec.crVersion
+          value: "1.22.0"
+        documentIndex: 0
+
+  #####################
+  # Cluster DNS       #
+  #####################
+
+  - it: sets clusterServiceDNSSuffix from cluster config
+    release:
+      name: test-mongodb
+      namespace: tenant-test
+    set:
+      _cluster:
+        cluster-domain: custom.local
+    asserts:
+      - equal:
+          path: spec.clusterServiceDNSSuffix
+          value: svc.custom.local
+        documentIndex: 0
+
+  - it: defaults clusterServiceDNSSuffix to cozy.local
+    release:
+      name: test-mongodb
+      namespace: tenant-test
+    set:
+      _cluster: {}
+    asserts:
+      - equal:
+          path: spec.clusterServiceDNSSuffix
+          value: svc.cozy.local
+        documentIndex: 0
+
+  ##################
+  # Unsafe flags   #
+  ##################
+
+  - it: enables unsafeFlags when replicas is 1
+    release:
+      name: test-mongodb
+      namespace: tenant-test
+    set:
+      _cluster:
+        cluster-domain: cozy.local
+      replicas: 1
+    asserts:
+      - equal:
+          path: spec.unsafeFlags.replsetSize
+          value: true
+        documentIndex: 0
+
+  - it: enables unsafeFlags when replicas is 2
+    release:
+      name: test-mongodb
+      namespace: tenant-test
+    set:
+      _cluster:
+        cluster-domain: cozy.local
+      replicas: 2
+    asserts:
+      - equal:
+          path: spec.unsafeFlags.replsetSize
+          value: true
+        documentIndex: 0
+
+  - it: does not set unsafeFlags when replicas is 3
+    release:
+      name: test-mongodb
+      namespace: tenant-test
+    set:
+      _cluster:
+        cluster-domain: cozy.local
+      replicas: 3
+    asserts:
+      - notExists:
+          path: spec.unsafeFlags
+        documentSelector:
+          path: kind
+          value: PerconaServerMongoDB
+
+  - it: does not set unsafeFlags when replicas is 5
+    release:
+      name: test-mongodb
+      namespace: tenant-test
+    set:
+      _cluster:
+        cluster-domain: cozy.local
+      replicas: 5
+    asserts:
+      - notExists:
+          path: spec.unsafeFlags
+        documentSelector:
+          path: kind
+          value: PerconaServerMongoDB
+
+  ###########################
+  # Replica Set Mode        #
+  ###########################
+
+  - it: configures replica set rs0 in non-sharded mode
+    release:
+      name: test-mongodb
+      namespace: tenant-test
+    set:
+      _cluster:
+        cluster-domain: cozy.local
+      sharding: false
+      replicas: 3
+    asserts:
+      - equal:
+          path: spec.sharding.enabled
+          value: false
+        documentIndex: 0
+      - equal:
+          path: spec.replsets[0].name
+          value: rs0
+        documentIndex: 0
+      - equal:
+          path: spec.replsets[0].size
+          value: 3
+        documentIndex: 0
+
+  - it: sets storage size for replica set
+    release:
+      name: test-mongodb
+      namespace: tenant-test
+    set:
+      _cluster:
+        cluster-domain: cozy.local
+      sharding: false
+      size: 20Gi
+    asserts:
+      - equal:
+          path: spec.replsets[0].volumeSpec.persistentVolumeClaim.resources.requests.storage
+          value: 20Gi
+        documentIndex: 0
+
+  - it: sets storageClass when provided
+    release:
+      name: test-mongodb
+      namespace: tenant-test
+    set:
+      _cluster:
+        cluster-domain: cozy.local
+      sharding: false
+      storageClass: fast-ssd
+    asserts:
+      - equal:
+          path: spec.replsets[0].volumeSpec.persistentVolumeClaim.storageClassName
+          value: fast-ssd
+        documentIndex: 0
+
+  - it: does not set storageClass when empty
+    release:
+      name: test-mongodb
+      namespace: tenant-test
+    set:
+      _cluster:
+        cluster-domain: cozy.local
+      sharding: false
+      storageClass: ""
+    asserts:
+      - notExists:
+          path: spec.replsets[0].volumeSpec.persistentVolumeClaim.storageClassName
+        documentSelector:
+          path: kind
+          value: PerconaServerMongoDB
+
+  ###########################
+  # Replica set expose      #
+  ###########################
+
+  - it: disables replset expose by default
+    release:
+      name: test-mongodb
+      namespace: tenant-test
+    set:
+      _cluster:
+        cluster-domain: cozy.local
+      sharding: false
+      external: false
+    asserts:
+      - equal:
+          path: spec.replsets[0].expose.enabled
+          value: false
+        documentIndex: 0
+      - notExists:
+          path: spec.replsets[0].expose.type
+        documentIndex: 0
+
+  - it: enables per-pod LoadBalancer when external is true (issue 2514)
+    release:
+      name: test-mongodb
+      namespace: tenant-test
+    set:
+      _cluster:
+        cluster-domain: cozy.local
+      sharding: false
+      external: true
+    asserts:
+      - equal:
+          path: spec.replsets[0].expose.enabled
+          value: true
+        documentIndex: 0
+      - equal:
+          path: spec.replsets[0].expose.type
+          value: LoadBalancer
+        documentIndex: 0
+      - equal:
+          path: spec.replsets[0].expose.externalTrafficPolicy
+          value: Local
+        documentIndex: 0
+
+  ###########################
+  # Sharded Cluster Mode    #
+  ###########################
+
+  - it: enables sharding when configured
+    release:
+      name: test-mongodb
+      namespace: tenant-test
+    set:
+      _cluster:
+        cluster-domain: cozy.local
+      sharding: true
+      shardingConfig:
+        configServers: 3
+        configServerSize: 3Gi
+        mongos: 2
+        shards:
+          - name: rs0
+            replicas: 3
+            size: 10Gi
+    asserts:
+      - equal:
+          path: spec.sharding.enabled
+          value: true
+        documentIndex: 0
+      - equal:
+          path: spec.sharding.balancer.enabled
+          value: true
+        documentIndex: 0
+
+  - it: configures config servers
+    release:
+      name: test-mongodb
+      namespace: tenant-test
+    set:
+      _cluster:
+        cluster-domain: cozy.local
+      sharding: true
+      shardingConfig:
+        configServers: 5
+        configServerSize: 5Gi
+        mongos: 2
+        shards:
+          - name: rs0
+            replicas: 3
+            size: 10Gi
+    asserts:
+      - equal:
+          path: spec.sharding.configsvrReplSet.size
+          value: 5
+        documentIndex: 0
+      - equal:
+          path: spec.sharding.configsvrReplSet.volumeSpec.persistentVolumeClaim.resources.requests.storage
+          value: 5Gi
+        documentIndex: 0
+
+  - it: configures mongos routers
+    release:
+      name: test-mongodb
+      namespace: tenant-test
+    set:
+      _cluster:
+        cluster-domain: cozy.local
+      sharding: true
+      shardingConfig:
+        configServers: 3
+        configServerSize: 3Gi
+        mongos: 4
+        shards:
+          - name: rs0
+            replicas: 3
+            size: 10Gi
+    asserts:
+      - equal:
+          path: spec.sharding.mongos.size
+          value: 4
+        documentIndex: 0
+      - equal:
+          path: spec.sharding.mongos.expose.exposeType
+          value: ClusterIP
+        documentIndex: 0
+
+  - it: configures multiple shards
+    release:
+      name: test-mongodb
+      namespace: tenant-test
+    set:
+      _cluster:
+        cluster-domain: cozy.local
+      sharding: true
+      shardingConfig:
+        configServers: 3
+        configServerSize: 3Gi
+        mongos: 2
+        shards:
+          - name: shard1
+            replicas: 3
+            size: 50Gi
+          - name: shard2
+            replicas: 5
+            size: 100Gi
+    asserts:
+      - equal:
+          path: spec.replsets[0].name
+          value: shard1
+        documentIndex: 0
+      - equal:
+          path: spec.replsets[0].size
+          value: 3
+        documentIndex: 0
+      - equal:
+          path: spec.replsets[0].volumeSpec.persistentVolumeClaim.resources.requests.storage
+          value: 50Gi
+        documentIndex: 0
+      - equal:
+          path: spec.replsets[1].name
+          value: shard2
+        documentIndex: 0
+      - equal:
+          path: spec.replsets[1].size
+          value: 5
+        documentIndex: 0
+      - equal:
+          path: spec.replsets[1].volumeSpec.persistentVolumeClaim.resources.requests.storage
+          value: 100Gi
+        documentIndex: 0
+
+  ###########################
+  # Users configuration     #
+  ###########################
+
+  - it: does not include users section when no users defined
+    release:
+      name: test-mongodb
+      namespace: tenant-test
+    set:
+      _cluster:
+        cluster-domain: cozy.local
+      users: {}
+      databases: {}
+    asserts:
+      - notExists:
+          path: spec.users
+        documentSelector:
+          path: kind
+          value: PerconaServerMongoDB
+
+  - it: configures users with admin role
+    release:
+      name: test-mongodb
+      namespace: tenant-test
+    set:
+      _cluster:
+        cluster-domain: cozy.local
+      users:
+        appuser: {}
+      databases:
+        appdb:
+          roles:
+            admin:
+              - appuser
+    asserts:
+      - exists:
+          path: spec.users
+        documentIndex: 0
+      - equal:
+          path: spec.users[0].name
+          value: appuser
+        documentIndex: 0
+      - equal:
+          path: spec.users[0].db
+          value: admin
+        documentIndex: 0
+      - equal:
+          path: spec.users[0].passwordSecretRef.name
+          value: test-mongodb-user-appuser
+        documentIndex: 0
+      - equal:
+          path: spec.users[0].passwordSecretRef.key
+          value: password
+        documentIndex: 0
+
+  - it: assigns readWrite and dbAdmin roles for admin users
+    release:
+      name: test-mongodb
+      namespace: tenant-test
+    set:
+      _cluster:
+        cluster-domain: cozy.local
+      users:
+        appuser: {}
+      databases:
+        mydb:
+          roles:
+            admin:
+              - appuser
+    asserts:
+      - equal:
+          path: spec.users[0].roles[0].name
+          value: readWrite
+        documentIndex: 0
+      - equal:
+          path: spec.users[0].roles[0].db
+          value: mydb
+        documentIndex: 0
+      - equal:
+          path: spec.users[0].roles[1].name
+          value: dbAdmin
+        documentIndex: 0
+      - equal:
+          path: spec.users[0].roles[1].db
+          value: mydb
+        documentIndex: 0
+
+  - it: assigns read role for readonly users
+    release:
+      name: test-mongodb
+      namespace: tenant-test
+    set:
+      _cluster:
+        cluster-domain: cozy.local
+      users:
+        reader: {}
+      databases:
+        mydb:
+          roles:
+            readonly:
+              - reader
+    asserts:
+      - equal:
+          path: spec.users[0].roles[0].name
+          value: read
+        documentIndex: 0
+      - equal:
+          path: spec.users[0].roles[0].db
+          value: mydb
+        documentIndex: 0
+
+  - it: fails when user is not assigned to any database role
+    release:
+      name: test-mongodb
+      namespace: tenant-test
+    set:
+      _cluster:
+        cluster-domain: cozy.local
+      users:
+        myuser: {}
+      databases: {}
+    asserts:
+      - failedTemplate:
+          errorMessage: "user 'myuser' is not assigned to any database role in databases.*.roles"
+
+  ###########################
+  # Backup configuration    #
+  ###########################
+
+  - it: disables backup when not enabled
+    release:
+      name: test-mongodb
+      namespace: tenant-test
+    set:
+      _cluster:
+        cluster-domain: cozy.local
+      backup:
+        enabled: false
+    asserts:
+      - equal:
+          path: spec.backup.enabled
+          value: false
+        documentIndex: 0
+      - notExists:
+          path: spec.backup.storages
+        documentIndex: 0
+
+  - it: configures backup when enabled
+    release:
+      name: test-mongodb
+      namespace: tenant-test
+    set:
+      _cluster:
+        cluster-domain: cozy.local
+      backup:
+        enabled: true
+        schedule: "0 3 * * *"
+        retentionPolicy: 14d
+        destinationPath: "s3://mybucket/backups/"
+        endpointURL: "http://minio:9000"
+        s3AccessKey: "access"
+        s3SecretKey: "secret"
+    asserts:
+      - equal:
+          path: spec.backup.enabled
+          value: true
+        documentIndex: 0
+      - equal:
+          path: spec.backup.storages.s3-storage.type
+          value: s3
+        documentIndex: 0
+
+  - it: parses bucket from destinationPath
+    release:
+      name: test-mongodb
+      namespace: tenant-test
+    set:
+      _cluster:
+        cluster-domain: cozy.local
+      backup:
+        enabled: true
+        destinationPath: "s3://my-backup-bucket/mongodb/prod/"
+        endpointURL: "http://minio:9000"
+        s3AccessKey: "access"
+        s3SecretKey: "secret"
+    asserts:
+      - equal:
+          path: spec.backup.storages.s3-storage.s3.bucket
+          value: my-backup-bucket
+        documentIndex: 0
+
+  - it: parses prefix from destinationPath
+    release:
+      name: test-mongodb
+      namespace: tenant-test
+    set:
+      _cluster:
+        cluster-domain: cozy.local
+      backup:
+        enabled: true
+        destinationPath: "s3://bucket/path/to/backups/"
+        endpointURL: "http://minio:9000"
+        s3AccessKey: "access"
+        s3SecretKey: "secret"
+    asserts:
+      - equal:
+          path: spec.backup.storages.s3-storage.s3.prefix
+          value: path/to/backups/
+        documentIndex: 0
+
+  - it: sets backup retention from retentionPolicy
+    release:
+      name: test-mongodb
+      namespace: tenant-test
+    set:
+      _cluster:
+        cluster-domain: cozy.local
+      backup:
+        enabled: true
+        retentionPolicy: 30d
+        destinationPath: "s3://bucket/path/"
+        endpointURL: "http://minio:9000"
+        s3AccessKey: "access"
+        s3SecretKey: "secret"
+    asserts:
+      - equal:
+          path: spec.backup.tasks[0].keep
+          value: 30
+        documentIndex: 0
+
+  - it: sets backup schedule
+    release:
+      name: test-mongodb
+      namespace: tenant-test
+    set:
+      _cluster:
+        cluster-domain: cozy.local
+      backup:
+        enabled: true
+        schedule: "0 4 * * *"
+        retentionPolicy: 7d
+        destinationPath: "s3://bucket/path/"
+        endpointURL: "http://minio:9000"
+        s3AccessKey: "access"
+        s3SecretKey: "secret"
+    asserts:
+      - equal:
+          path: spec.backup.tasks[0].schedule
+          value: "0 4 * * *"
+        documentIndex: 0
+
+  - it: enables PITR when backup enabled
+    release:
+      name: test-mongodb
+      namespace: tenant-test
+    set:
+      _cluster:
+        cluster-domain: cozy.local
+      backup:
+        enabled: true
+        destinationPath: "s3://bucket/path/"
+        endpointURL: "http://minio:9000"
+        s3AccessKey: "access"
+        s3SecretKey: "secret"
+    asserts:
+      - equal:
+          path: spec.backup.pitr.enabled
+          value: true
+        documentIndex: 0
+
+  - it: references s3-creds secret for backup
+    release:
+      name: mydb
+      namespace: tenant-test
+    set:
+      _cluster:
+        cluster-domain: cozy.local
+      backup:
+        enabled: true
+        destinationPath: "s3://bucket/path/"
+        endpointURL: "http://minio:9000"
+        s3AccessKey: "access"
+        s3SecretKey: "secret"
+    asserts:
+      - equal:
+          path: spec.backup.storages.s3-storage.s3.credentialsSecret
+          value: mydb-s3-creds
+        documentIndex: 0
+
+  ###########################
+  # WorkloadMonitor         #
+  ###########################
+
+  - it: creates WorkloadMonitor with correct metadata
+    release:
+      name: test-mongodb
+      namespace: tenant-test
+    set:
+      _cluster:
+        cluster-domain: cozy.local
+    asserts:
+      - equal:
+          path: metadata.name
+          value: test-mongodb
+        documentIndex: 1
+      - equal:
+          path: spec.kind
+          value: mongodb
+        documentIndex: 1
+      - equal:
+          path: spec.type
+          value: mongodb
+        documentIndex: 1
+
+  - it: sets replicas from values in non-sharded mode
+    release:
+      name: test-mongodb
+      namespace: tenant-test
+    set:
+      _cluster:
+        cluster-domain: cozy.local
+      sharding: false
+      replicas: 5
+    asserts:
+      - equal:
+          path: spec.replicas
+          value: 5
+        documentIndex: 1
+
+  - it: calculates total replicas in sharded mode
+    release:
+      name: test-mongodb
+      namespace: tenant-test
+    set:
+      _cluster:
+        cluster-domain: cozy.local
+      sharding: true
+      shardingConfig:
+        configServers: 3
+        configServerSize: 3Gi
+        mongos: 2
+        shards:
+          - name: rs0
+            replicas: 3
+            size: 10Gi
+          - name: rs1
+            replicas: 5
+            size: 10Gi
+          - name: rs2
+            replicas: 2
+            size: 10Gi
+    asserts:
+      - equal:
+          path: spec.replicas
+          value: 10
+        documentIndex: 1
+
+  - it: sets minReplicas to 1
+    release:
+      name: test-mongodb
+      namespace: tenant-test
+    set:
+      _cluster:
+        cluster-domain: cozy.local
+    asserts:
+      - equal:
+          path: spec.minReplicas
+          value: 1
+        documentIndex: 1
+
+  - it: sets correct selector labels
+    release:
+      name: mydb
+      namespace: tenant-test
+    set:
+      _cluster:
+        cluster-domain: cozy.local
+    asserts:
+      - equal:
+          path: spec.selector["app.kubernetes.io/name"]
+          value: percona-server-mongodb
+        documentIndex: 1
+      - equal:
+          path: spec.selector["app.kubernetes.io/instance"]
+          value: mydb
+        documentIndex: 1
+      - equal:
+          path: spec.selector["app.kubernetes.io/component"]
+          value: mongod
+        documentIndex: 1
+
+  # useSystemBucket without backup.enabled renders a cluster that can never
+  # service a BackupJob (the pbm agents run on enabled alone), so the chart
+  # refuses it at render time instead of letting the tenant find out at the
+  # first BackupJob's deadline.
+  - it: refuses useSystemBucket without backup.enabled
+    release:
+      name: mongo-usb-off
+      namespace: tenant-test
+    set:
+      _cluster:
+        cluster-domain: cozy.local
+      backup:
+        enabled: false
+        useSystemBucket: true
+    asserts:
+      - failedTemplate:
+          errorMessage: "mongodb: backup.useSystemBucket=true requires backup.enabled=true: the percona-backup-mongodb agents only run when backups are enabled, so this combination renders a cluster that can never service a BackupJob. Set backup.enabled=true (or drop useSystemBucket). See https://cozystack.io/docs/v1/operations/services/backup-classes/."

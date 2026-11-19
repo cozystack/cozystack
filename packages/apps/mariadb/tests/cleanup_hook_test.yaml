@@ -1,0 +1,113 @@
+suite: post-delete cleanup hook
+
+# Locks in the post-delete cleanup behaviour. The mariadb-operator creates
+# <release>-metrics-password and <release>-repl-password Secrets as a side
+# effect of metrics/replication being enabled. These Secrets are not
+# Helm-owned and survive `helm uninstall`, so the post-delete hook must
+# sweep them (issue #3056) alongside the orphaned PVCs. The hook Role also
+# needs RBAC on secrets to do so.
+
+templates:
+  - templates/hooks/cleanup-pvc.yaml
+
+release:
+  name: mariadb-test
+  namespace: tenant-test
+
+tests:
+  # The cert-manager Secrets are deleted here too: cert-manager runs with
+  # enableCertificateOwnerRef=false, so removing the Certificates leaves the CA
+  # private key and the server private key behind in the tenant's namespace.
+  - it: "cleanup Job deletes the operator-generated and cert-manager Secrets by name"
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      # The verb is part of the assertion. Matching the name list alone leaves
+      # the whole point of the hook — that these Secrets are REMOVED — pinned by
+      # nothing, so `kubectl get secret` in place of the delete stays green.
+      #
+      # One pattern for the whole invocation, with the shell's line
+      # continuations spelled out instead of skipped over. A `(?s).*` gap does
+      # not bind a name to the verb it follows: with `.` matching newlines the
+      # gap runs across command boundaries, so the names satisfy it from any
+      # later command in the script while the delete above them removes
+      # something else entirely. Whitespace and backslashes cannot spell a
+      # command, which is what makes this separator load-bearing.
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: "kubectl delete secret -n \\S+[\\s\\\\]+mariadb-test-metrics-password mariadb-test-repl-password[\\s\\\\]+mariadb-test\\.ca-tls mariadb-test\\.tls --ignore-not-found"
+
+  - it: "cleanup Job fails (exits non-zero) when a real delete error occurs, so orphaned resources don't pass silently"
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      # --ignore-not-found tolerates absent resources, but a genuine RBAC/API
+      # failure must propagate: the script tracks failures and exits with that
+      # status instead of masking errors behind `|| echo ...`.
+      #
+      # Assert both delete branches set the failure flag (not just the final
+      # exit), so a regression that stops flagging either path is caught.
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: '(?s)PVC cleanup failed for mariadb-test.*?cleanup_failed=1'
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: '(?s)Secret cleanup failed for mariadb-test.*?cleanup_failed=1'
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'exit "\$\{cleanup_failed\}"'
+
+  - it: "bounds the cleanup Job so a claim that will not go cannot hang the uninstall"
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - equal:
+          path: spec.activeDeadlineSeconds
+          value: 270
+      - equal:
+          path: spec.template.spec.terminationGracePeriodSeconds
+          value: 10
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'kubectl delete pvc -n tenant-test -l app\.kubernetes\.io/instance=mariadb-test --ignore-not-found --wait=true --timeout=120s'
+      - notMatchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: '--request-timeout='
+
+  - it: "cleanup Role grants get/list/watch/delete on persistentvolumeclaims"
+    documentSelector:
+      path: kind
+      value: Role
+    asserts:
+      - contains:
+          path: rules
+          content:
+            apiGroups: [""]
+            resources: ["persistentvolumeclaims"]
+            verbs: ["get", "list", "watch", "delete"]
+
+  - it: "cleanup Role scopes secret access to the named secrets only (least privilege)"
+    documentSelector:
+      path: kind
+      value: Role
+    asserts:
+      - contains:
+          path: rules
+          content:
+            apiGroups: [""]
+            resources: ["secrets"]
+            resourceNames:
+              - mariadb-test-metrics-password
+              - mariadb-test-repl-password
+              - mariadb-test.ca-tls
+              - mariadb-test.tls
+            verbs: ["get", "delete"]
+      # Lock the exact rule set (PVC rule + the single scoped secrets rule).
+      # Without this, a broader unscoped `secrets` rule could be added and the
+      # `contains` checks above would still pass.
+      - lengthEqual:
+          path: rules
+          count: 2

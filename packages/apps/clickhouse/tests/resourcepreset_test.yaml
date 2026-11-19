@@ -1,0 +1,87 @@
+suite: resourcesPreset legacy and instance-type compatibility
+
+# Locks in the 1:1 equivalence between legacy flat names and instance-type
+# names for both the top-level ClickHouse preset and the nested
+# clickhouseKeeper preset, which is the canonical "top u1 + nested s1"
+# layout that earlier migration attempts broke when they applied a single
+# series to every nested field.
+
+release:
+  name: ch-test
+  namespace: tenant-test
+
+set:
+  _cluster:
+    cluster-domain: cluster.local
+
+tests:
+  - it: "legacy 'small' top preset renders 1 CPU / 512Mi on ClickHouseInstallation"
+    templates:
+      - templates/clickhouse.yaml
+    set:
+      resourcesPreset: small
+    documentSelector:
+      path: kind
+      value: ClickHouseInstallation
+    asserts:
+      - equal:
+          path: spec.configuration.clusters[0].layout.shardsCount
+          value: 1
+      - matchRegex:
+          path: spec.templates.podTemplates[0].spec.containers[0].resources.limits.memory
+          pattern: "^512Mi$"
+      - matchRegex:
+          path: spec.templates.podTemplates[0].spec.containers[0].resources.limits.cpu
+          pattern: "^1$"
+
+  - it: "instance-type 't1.small' top preset renders 1 CPU / 512Mi (matches legacy)"
+    templates:
+      - templates/clickhouse.yaml
+    set:
+      resourcesPreset: t1.small
+    documentSelector:
+      path: kind
+      value: ClickHouseInstallation
+    asserts:
+      - matchRegex:
+          path: spec.templates.podTemplates[0].spec.containers[0].resources.limits.memory
+          pattern: "^512Mi$"
+      - matchRegex:
+          path: spec.templates.podTemplates[0].spec.containers[0].resources.limits.cpu
+          pattern: "^1$"
+
+  - it: "legacy 'micro' nested clickhouseKeeper preset renders 500m / 256Mi"
+    templates:
+      - templates/chkeeper.yaml
+    set:
+      clickhouseKeeper:
+        enabled: true
+        resourcesPreset: micro
+    documentSelector:
+      path: kind
+      value: ClickHouseKeeperInstallation
+    asserts:
+      - matchRegex:
+          path: spec.templates.podTemplates[0].spec.containers[0].resources.limits.memory
+          pattern: "^256Mi$"
+      - matchRegex:
+          path: spec.templates.podTemplates[0].spec.containers[0].resources.limits.cpu
+          pattern: "^500m$"
+
+  - it: "instance-type 't1.micro' nested clickhouseKeeper preset renders 500m / 256Mi"
+    templates:
+      - templates/chkeeper.yaml
+    set:
+      clickhouseKeeper:
+        enabled: true
+        resourcesPreset: t1.micro
+    documentSelector:
+      path: kind
+      value: ClickHouseKeeperInstallation
+    asserts:
+      - matchRegex:
+          path: spec.templates.podTemplates[0].spec.containers[0].resources.limits.memory
+          pattern: "^256Mi$"
+      - matchRegex:
+          path: spec.templates.podTemplates[0].spec.containers[0].resources.limits.cpu
+          pattern: "^500m$"

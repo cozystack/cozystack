@@ -1,0 +1,85 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}-vpn
+spec:
+  replicas: {{ .Values.replicas }}
+  selector:
+    matchLabels:
+      app: {{ .Release.Name }}-vpn
+      name: {{ .Release.Name }}-vpn
+  template:
+    metadata:
+      labels:
+        app: {{ .Release.Name }}-vpn
+        name: {{ .Release.Name }}-vpn
+        app.kubernetes.io/instance: {{ .Release.Name }}
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
+    spec:
+      volumes:
+        - name: cache
+          emptyDir: {}
+        - name: shadowbox-config
+          emptyDir: {}
+        - name: tls
+          secret:
+            secretName: {{ .Release.Name }}-vpn-tls
+            items:
+              - key: tls.crt
+                path: shadowbox.crt
+              - key: tls.key
+                path: shadowbox.key
+            defaultMode: 420
+        - name: shadowbox-server-config
+          secret:
+            secretName: {{ .Release.Name }}-vpn
+            items:
+              - key: shadowbox_config.json
+                path: shadowbox_config.json
+              - key: shadowbox_server_config.json
+                path: shadowbox_server_config.json
+      containers:
+        - name: outline-vpn
+          image: {{ .Files.Get "images/shadowbox.tag" | trim | quote }}
+          resources: {{- include "cozy-lib.resources.defaultingSanitize" (list .Values.resourcesPreset .Values.resources $) | nindent 12 }}
+          ports:
+            - containerPort: 40000
+              protocol: TCP
+            #- containerPort: 60000
+            #  protocol: TCP
+          env:
+            - name: SB_API_PORT
+              value: "60000"
+            #- name: SB_API_PREFIX
+            #  value: b782eecb-bb9e-58be-614a-d5de1431d6b3
+            - name: SB_CERTIFICATE_FILE
+              value: /tmp/shadowbox.crt
+            - name: SB_PRIVATE_KEY_FILE
+              value: /tmp/shadowbox.key
+          volumeMounts:
+            - name: cache
+              mountPath: /cache
+            - name: shadowbox-config
+              mountPath: /opt/outline
+            - name: shadowbox-config
+              mountPath: /root/shadowbox
+            - name: shadowbox-server-config
+              readOnly: true
+              mountPath: /root/shadowbox/persisted-state/shadowbox_server_config.json
+              subPath: shadowbox_server_config.json
+            - name: shadowbox-server-config
+              readOnly: true
+              mountPath: /root/shadowbox/persisted-state/shadowbox_config.json
+              subPath: shadowbox_config.json
+            - name: tls
+              readOnly: true
+              mountPath: /tmp/shadowbox.crt
+              subPath: shadowbox.crt
+            - name: tls
+              readOnly: true
+              mountPath: /tmp/shadowbox.key
+              subPath: shadowbox.key
+      restartPolicy: Always
+      terminationGracePeriodSeconds: 30

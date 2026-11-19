@@ -1,0 +1,23 @@
+{{- if .Values.leaderElect }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "grafana-operator.fullname" . }}
+  namespace: {{ include "grafana-operator.namespace" . }}
+  labels:
+    {{- include "grafana-operator.labels" . | nindent 4 }}
+    app.kubernetes.io/component: operator
+data:
+  controller_manager_config.yaml: |
+    apiVersion: controller-runtime.sigs.k8s.io/v1alpha1
+    kind: ControllerManagerConfig
+    health:
+      healthProbeBindAddress: :8081
+    metrics:
+      bindAddress: 127.0.0.1:8080
+    webhook:
+      port: 9443
+    leaderElection:
+      leaderElect: true
+      resourceName: f75f3bba.integreatly.org
+{{- end }}

@@ -1,0 +1,316 @@
+{{- $solver := (index .Values._cluster "solver") | default "http01" }}
+{{- $clusterIssuer := (index .Values._cluster "issuer-name") | default "letsencrypt-prod" }}
+{{- $ingress := .Values._namespace.ingress }}
+{{- $host := include "cozy-lib.ns-host-required" . }}
+{{- $gatewayEnabled := (index .Values._cluster "gateway-enabled") | default "false" }}
+{{- $wildcardSecret := (index .Values._cluster "wildcard-secret-name") | default "" }}
+
+{{- /*
+  OIDC (see values.yaml — oidc.mode).
+  System        → chart-owned Keycloak client + audience client scope +
+                  persisted client-secret. Grafana authorization is
+                  app-side: `spec.oidc.users` is reconciled into
+                  Grafana org membership/roles by the users-Job.
+                  Grafana's group-based `role_attribute_path` is NOT
+                  wired up; `skip_org_role_sync = true` prevents a
+                  subsequent login from overwriting the app-side
+                  assignments.
+  CustomConfig  → operator-supplied auth.generic_oauth payload — either
+                  inline as a map (customConfig.config), or as a Secret
+                  with a ready-made ini fragment
+                  (customConfig.secretRef.name). XOR-guarded via the
+                  assertCustomConfigXor helper. `spec.oidc.users` is
+                  also honoured in this mode by the users-Job (users
+                  are matched to Grafana identities by the `email`
+                  claim from the tenant-supplied issuer).
+  None          → no auth.generic_oauth section, no OIDC env — the
+                  admin_user/admin_password Secret remains the only auth
+                  path.
+*/}}
+{{- $oidc := .Values.oidc | default dict }}
+{{- $oidcMode := $oidc.mode | default "None" }}
+{{- /*
+  Users-map prologue is included from oidc-users-job.yaml (rendered in
+  every mode), so the secretRef+users incompat is caught even when
+  oidc-users-job.yaml is disabled downstream. Only the CustomConfig-XOR
+  check is grafana.yaml-scoped.
+*/}}
+{{- if eq $oidcMode "CustomConfig" }}
+{{-   include "monitoring.oidc.assertCustomConfigXor" . }}
+{{- end }}
+{{- /*
+  Symmetric assertions with templates/grafana/oidc-keycloak.yaml so a
+  missing platform OIDC feature or missing Keycloak operator CRD
+  hard-fails the render instead of bringing Grafana up with an
+  `auth.generic_oauth` block pointing at a client that never gets
+  provisioned.
+*/}}
+{{- if eq $oidcMode "System" }}
+{{-   include "monitoring.oidc.assertSystemEnabled" . }}
+{{-   include "monitoring.oidc.assertSystemKeycloakCRD" . }}
+{{- end }}
+{{- $customConfig := $oidc.customConfig | default dict }}
+{{- $customInline := $customConfig.config | default dict }}
+{{- $customSecretRefName := dig "secretRef" "name" "" $customConfig }}
+{{- $useCustomInline := and (eq $oidcMode "CustomConfig") (gt (len $customInline) 0) }}
+{{- $useCustomSecretRef := and (eq $oidcMode "CustomConfig") (ne $customSecretRefName "") }}
+{{- $users := $oidc.users | default (list) }}
+{{- /*
+  The users-map is the switch that turns the chart's authorization
+  contract on. When it's non-empty:
+    * skip_org_role_sync=true keeps a login from overwriting the
+      users-Job's org-role assignments;
+    * oauth_allow_insecure_email_lookup=true binds the OIDC identity
+      to the pre-provisioned local account by email;
+    * allow_sign_up=false rejects any OIDC identity whose email is
+      NOT in `users:` — otherwise Grafana's default allow_sign_up=true
+      combined with skip_org_role_sync=true would silently mint a
+      Viewer account for every cozy-realm user until the next
+      helm-upgrade prune pass.
+  When users[] is empty the chart hands the auth.generic_oauth block
+  to the operator (System mode → chart-supplied issuer defaults;
+  CustomConfig-inline → operator's map applied verbatim; secretRef →
+  operator's ini fragment is authoritative). The users-Job also does
+  not render in that state so nothing app-side touches org membership.
+*/}}
+{{- $usersMapActive := gt (len $users) 0 }}
+{{- $chartForcedOidc := dict }}
+{{- if $usersMapActive }}
+{{-   $chartForcedOidc = dict
+        "skip_org_role_sync" "true"
+        "oauth_allow_insecure_email_lookup" "true"
+        "allow_sign_up" "false"
+}}
+{{- end }}
+---
+apiVersion: grafana.integreatly.org/v1beta1
+kind: Grafana
+metadata:
+  name: grafana
+  labels:
+    dashboards: grafana
+spec:
+  config:
+    log:
+      mode: "console"
+    auth:
+      disable_login_form: "false"
+    database:
+      type: postgres
+      name: ${GF_DATABASE_NAME}
+      host: ${GF_DATABASE_HOST}
+      user: ${GF_DATABASE_USER}
+      password: ${GF_DATABASE_PASSWORD}
+      #ssl_mode: require
+    server:
+      root_url: "https://{{ printf "grafana.%s" (.Values.host | default $host) }}"
+    security:
+      admin_user: user
+      admin_password: ${GF_PASSWORD}
+    {{- /*
+      $chartForcedOidc is prepared above at file scope — it is a non-empty
+      dict when the users-map is active (skip_org_role_sync +
+      oauth_allow_insecure_email_lookup + allow_sign_up=false) and an
+      empty dict otherwise. Merged on top of System's generated block AND
+      on top of the operator's inline map in CustomConfig, so the users-
+      Job contract holds regardless of mode. In CustomConfig secretRef
+      mode the operator's ini fragment is authoritative and the chart
+      cannot inject anything — see _helpers.tpl
+      assertCustomSecretRefUsersEmpty.
+    */}}
+    {{- if eq $oidcMode "System" }}
+    {{- /*
+      Tenant-membership gate — chart-owned and unconditional in System
+      mode. `groups` is requested so Keycloak emits the caller's realm
+      groups in the token (via the platform-managed `groups`
+      KeycloakClientScope + oidc-group-membership-mapper — see
+      packages/system/keycloak-configure). `allowed_groups` then rejects
+      any login whose token does not carry at least one of this
+      tenant's `<namespace>-{view,use,admin,super-admin}` groups. This
+      closes the cross-tenant hole where a user in the shared `cozy`
+      realm could otherwise sign into any tenant's Grafana just by
+      being authenticated: the audience mapper stops REPLAY of a
+      minted token, the allowed_groups check stops ISSUANCE of a
+      usable one to callers outside the tenant.
+    */}}
+    {{- /*
+      `groups_attribute_path` is REQUIRED (not optional) alongside
+      `allowed_groups` on Grafana v11.x+. Without it Grafana leaves
+      the extracted user's Groups slice empty regardless of what the
+      userinfo endpoint returns, and the `allowed_groups` gate rejects
+      every login with "user not a member of one of the required
+      groups" — even when the token carries the correct claim. Verified
+      end-to-end on a test cluster with Grafana v11.6.15: id_token AND userinfo
+      both contained `groups: [<ns>-super-admin, ...]`, `allowed_groups`
+      listed `<ns>-super-admin`, but login failed until
+      `groups_attribute_path=groups` was added. JMESPath expression
+      "groups" reads the top-level `groups` array from userinfo — the
+      shape Keycloak's oidc-group-membership-mapper emits.
+    */}}
+    {{- $systemOidc := dict
+        "enabled" "true"
+        "name" "Keycloak"
+        "client_id" (include "monitoring.oidc.clientId" .)
+        "client_secret" "${GF_AUTH_GENERIC_OAUTH_CLIENT_SECRET}"
+        "auth_url" (printf "%s/protocol/openid-connect/auth" (include "monitoring.oidc.systemIssuerURL" .))
+        "token_url" (printf "%s/protocol/openid-connect/token" (include "monitoring.oidc.systemIssuerURL" .))
+        "api_url" (printf "%s/protocol/openid-connect/userinfo" (include "monitoring.oidc.systemIssuerURL" .))
+        "scopes" (printf "openid email profile groups %s" (include "monitoring.oidc.audienceScopeName" .))
+        "groups_attribute_path" "groups"
+        "allowed_groups" (include "monitoring.oidc.allowedGroups" .)
+        "email_attribute_path" "email"
+        "auto_login" "false"
+    }}
+    auth.generic_oauth:
+      {{- toYaml (merge $chartForcedOidc $systemOidc) | nindent 6 }}
+    {{- else if $useCustomInline }}
+    auth.generic_oauth:
+      {{- /* $chartForcedOidc wins over $customInline via `merge` semantics:
+             merge lhs rhs = lhs values kept, rhs fills only missing keys.
+             So the operator can NOT override skip_org_role_sync=true or
+             oauth_allow_insecure_email_lookup=true — those are contract. */}}
+      {{- toYaml (merge $chartForcedOidc $customInline) | nindent 6 }}
+    {{- end }}
+  deployment:
+    spec:
+      replicas: 2
+      template:
+        spec:
+          containers:
+            - name: grafana
+              resources: {{- toYaml .Values.grafana.resources | nindent 16 }}
+              image: {{ include "cozy-lib.image" (list .Values.grafana.image $) }}
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: false
+              readinessProbe:
+                failureThreshold: 3
+              env:
+              {{- /*
+                Plugins are installed at container startup instead of being
+                baked into a rebuilt Grafana image. This keeps the deployment
+                on the upstream grafana/grafana image and removes the need to
+                redistribute an AGPL-3.0 Grafana rebuild.
+
+                The zips are served by the in-cluster grafana-dashboards
+                static file server, which mirrors them from the official
+                Grafana catalog (https://grafana.com/grafana/plugins) at image
+                build time — so pod startup needs no egress to the internet
+                and keeps working on air-gapped installs. Keep the ids and
+                versions in sync with the plugin list in
+                packages/system/grafana-operator/images/grafana-dashboards/Dockerfile.
+                Tenant egress to that server is opened by the
+                allow-to-grafana-dashboards CiliumNetworkPolicy in
+                packages/apps/tenant.
+                  * victoriametrics-logs-datasource — the VictoriaLogs
+                    datasource (signed, the reason the image was rebuilt);
+                  * the three panels reproduce the set previously vendored in
+                    the removed Dockerfile. Versions are pinned to releases
+                    compatible with the Grafana version above.
+                Plugins land in the default GF_PATHS_PLUGINS
+                (/var/lib/grafana/plugins), which is writable in the upstream
+                image, so no custom plugins path is needed.
+              */}}
+              {{- $pluginsURL := "http://grafana-dashboards.cozy-grafana-operator.svc/plugins" }}
+              {{- $plugins := dict
+                    "victoriametrics-logs-datasource" "0.29.0"
+                    "natel-discrete-panel" "0.1.1"
+                    "grafana-worldmap-panel" "1.0.6"
+                    "marcusolsson-dynamictext-panel" "6.2.0"
+              }}
+              {{- $specs := list }}
+              {{- range $id, $ver := $plugins }}
+              {{- $specs = append $specs (printf "%s/%s-%s.zip;%s" $pluginsURL $id $ver $id) }}
+              {{- end }}
+              - name: GF_INSTALL_PLUGINS
+                value: "{{ join "," $specs }}"
+              - name: ONCALL_API_URL
+                value: http://grafana-oncall-engine:8080
+              - name: GF_DATABASE_HOST
+                value: "grafana-db-rw:5432"
+              - name: GF_DATABASE_PASSWORD
+                valueFrom: { secretKeyRef: { name: grafana-db-app, key: password } }
+              - name: GF_DATABASE_NAME
+                value: "app"
+              - name: GF_DATABASE_USER
+                value: "app"
+              - name: GF_PASSWORD
+                valueFrom: { secretKeyRef: { name: grafana-admin-password, key: password } }
+              - name: GF_SECURITY_ADMIN_USER
+                valueFrom:
+                  secretKeyRef:
+                    key: user
+                    name: grafana-admin-password
+              - name: GF_SECURITY_ADMIN_PASSWORD
+                valueFrom:
+                  secretKeyRef:
+                    key: password
+                    name: grafana-admin-password
+              {{- if eq $oidcMode "System" }}
+              - name: GF_AUTH_GENERIC_OAUTH_CLIENT_SECRET
+                valueFrom:
+                  secretKeyRef:
+                    name: {{ include "monitoring.oidc.clientSecretName" . }}
+                    key: client-secret
+              {{- end }}
+              {{- if $useCustomSecretRef }}
+              - name: GF_PATHS_CUSTOM_INI
+                value: /etc/grafana/oidc/auth.ini
+              {{- end }}
+              {{- if $useCustomSecretRef }}
+              volumeMounts:
+                - name: oidc-custom-ini
+                  mountPath: /etc/grafana/oidc
+                  readOnly: true
+              {{- end }}
+          {{- if $useCustomSecretRef }}
+          volumes:
+            - name: oidc-custom-ini
+              secret:
+                secretName: {{ $customSecretRefName }}
+                {{- /* The tenant names the Secret; for a central tenant,
+                       mounting only the key Grafana reads keeps any other
+                       one, such as its collector's vmauth password, out of a
+                       pod that can reach the shared traces store. Other
+                       tenants keep the whole Secret, which an auth.ini
+                       reading a sibling key with $__file{} relies on. */}}
+                {{- if eq (include "monitoring.tracingCentral" $) "true" }}
+                items:
+                  - key: auth.ini
+                    path: auth.ini
+                {{- end }}
+          {{- end }}
+  {{- if and (ne $gatewayEnabled "true") $ingress }}
+  ingress:
+    {{- /* Operator wildcard mode: nginx serves the default SSL cert, so skip per-host ACME. */}}
+    {{- if not $wildcardSecret }}
+    metadata:
+      annotations:
+        {{- if eq $solver "http01" }}
+        acme.cert-manager.io/http01-ingress-ingressclassname: "{{ $ingress }}"
+        {{- end }}
+        cert-manager.io/cluster-issuer: {{ $clusterIssuer }}
+    {{- end }}
+    spec:
+      ingressClassName: "{{ $ingress }}"
+      rules:
+        - host: "{{ printf "grafana.%s" (.Values.host | default $host) }}"
+          http:
+            paths:
+              - backend:
+                  service:
+                    name: grafana-service
+                    port:
+                      number: 3000
+                path: /
+                pathType: Prefix
+      tls:
+      - hosts:
+        - "{{ printf "grafana.%s" (.Values.host | default $host) }}"
+        {{- /* Operator wildcard mode: no per-host secret — ingress-nginx falls
+               back to the default SSL certificate while the tls section keeps
+               the HTTP-to-HTTPS redirect enforced. */}}
+        {{- if not $wildcardSecret }}
+        secretName: grafana-ingress-tls
+        {{- end }}
+  {{- end }}

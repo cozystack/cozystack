@@ -1,0 +1,402 @@
+global:
+  # App-specific globals were namespaced under global.seaweedfs in chart 4.18
+  # (upstream commit moving global.* -> global.seaweedfs.* to avoid polluting the
+  # shared global namespace when the chart is used as a subchart).
+  seaweedfs:
+    enableSecurity: true
+    serviceAccountName: "tenant-foo-seaweedfs"
+    extraEnvironmentVars:
+      WEED_CLUSTER_SW_MASTER: "seaweedfs-master:9333"
+      WEED_CLUSTER_SW_FILER: "seaweedfs-filer-client:8888"
+    monitoring:
+      enabled: true
+seaweedfs:
+  # Decouple the workload names from the Helm release name. Upstream 4.31 started
+  # naming resources after the release, and the data-plane release is
+  # `<name>-system`, so every StatefulSet was renamed to `<name>-system-*`. Those
+  # names are immutable, so Helm could not rename in place — it stood up a second,
+  # empty set beside the running one while the data stayed on `data1-seaweedfs-volume-*`.
+  # Pinning the chart name restores the pre-4.31 names, so the running workloads
+  # and their volumes are adopted across the bump. extra/seaweedfs does NOT override
+  # this per release — it relies on this pin. The cases the pin cannot serve (a
+  # tenant installed fresh on 1.5.x, whose data is on the renamed volumes, and a
+  # live D-split duplicate) refuse to render in templates/naming-guard.yaml — the
+  # guard MUST live in this chart, because a platform upgrade re-renders this
+  # chart directly from its ExternalArtifact without re-rendering extra/seaweedfs.
+  # The guard also refuses to render at all if this pin is ever lifted.
+  fullnameOverride: seaweedfs
+  # Built in-tree from images/seaweedfs, which carries the patches in
+  # images/seaweedfs/patches. Without this block the vendored chart falls back
+  # to chrislusf/seaweedfs at its appVersion, the unpatched upstream build.
+  # `make image` rewrites both keys on every build.
+  image:
+    repository: "ghcr.io/cozystack/cozystack/seaweedfs"
+    tag: "4.45@sha256:2a063deb9992ac0c06f8c09589ae063a30ac8c87af2c6aa1f4d4420cc544535c"
+  master:
+    # At the shipped replicationFactor of 2 the size limit and
+    # extraEnvironmentVars.WEED_MASTER_VOLUME_GROWTH_COPY_2 below are one
+    # budget. A volume server runs with -max 0 and derives its slot count from
+    # free space divided by the limit, replication 001 spends a slot on each of
+    # two servers, and a collection claims COPY_2 volumes each time it grows,
+    # so the bucket ceiling is set by their product and moving either moves it.
+    # At 1 or 3 copies the master reads COPY_1 or COPY_3 instead, and COPY_2
+    # governs nothing. The sources are MaybeAdjustVolumeMax
+    # (weed/storage/store.go) and findVolumeCount
+    # (weed/topology/volume_growth.go) at the 4.31 the vendored chart pins;
+    # read them again once `make update` moves the tag.
+    #
+    # The pair installs run is 400 and 3, a budget of 1200 MB per collection
+    # against upstream's 1000 and 6, which is 6000; on the shipped 10Gi volume
+    # that takes an instance from two collections to about eight, and two is
+    # what the platform's own backup bucket and one tenant bucket already use.
+    # Both numbers come down rather than the limit alone because open
+    # descriptors, two per volume, follow stored bytes divided by the limit, so
+    # taking the whole reduction out of the limit would multiply them.
+    #
+    # The limit installs run with is set in packages/extra/seaweedfs/values.yaml
+    # and sent on every release. The value here is only the fallback for a
+    # render without it and stays at upstream's 1000: a platform upgrade can
+    # re-render this release before its parent sends anything, and a lower
+    # fallback would then drop the limit ahead of the parent's value. COPY_2 is
+    # sent by nothing, so the value below is the live one.
+    #
+    # The minFreeSpacePercent reserve only matters on a server whose writable
+    # volumes have all passed the limit, since nothing there is charged
+    # headroom. Where five percent of the filesystem is at least the limit, from
+    # 8000 MiB of filesystem at 400, such a server refuses a grow only with its
+    # disk down to the reserve; with a smaller reserve it can refuse one with up
+    # to a limit still free. Elsewhere the headroom charged to the volumes
+    # decides, whatever the reserve, and neither makes an instance safe. What
+    # lowering the limit costs an instance that holds data, and the check to run
+    # first, are in docs/operations/seaweedfs-lowering-the-volume-size-limit.md.
+    #
+    # Deriving the limit from volume.size was rejected: pools and zones carry
+    # their own PVC sizes while this setting is master-wide.
+    volumeSizeLimitMB: 1000
+    # The other half of the budget above. The subchart already declares all
+    # four COPY_* growth counts at their upstream defaults; Helm merges this
+    # key over that map and leaves the rest standing.
+    extraEnvironmentVars:
+      WEED_MASTER_VOLUME_GROWTH_COPY_2: "3"
+    replicas: 3
+    #  replication type is XYZ:
+    # X number of replica in other data centers
+    # Y number of replica in other racks in the same data center
+    # Z number of replica in other servers in the same rack
+    defaultReplication: "001"
+    data:
+      type: "emptyDir"
+    logs:
+      type: ""
+    # The master's /cluster/status handler calls topo.Leader(), which backs off
+    # up to ~20s (MaxElapsedTime=20s) while the node has no leader in view — e.g.
+    # a master that was briefly the initial raft leader then was demoted during
+    # bootstrap. The default 10s probe timeout is shorter than that worst case, so
+    # such a master is liveness-killed every ~137s into a permanent CrashLoop and
+    # the master StatefulSet never reaches full readiness, timing out the install.
+    # Both probes must allow more than the 20s backoff (the volume component in
+    # this chart already uses 30s). Override only timeoutSeconds; Helm deep-merges
+    # these onto the subchart defaults, keeping enabled/path/initialDelay/etc.
+    livenessProbe:
+      timeoutSeconds: 30
+    readinessProbe:
+      timeoutSeconds: 30
+    # The upstream subchart pins the master to a HARD hostname anti-affinity
+    # (requiredDuringSchedulingIgnoredDuringExecution). With the 3-replica
+    # StatefulSet above, that makes the master unschedulable on clusters with
+    # fewer than three nodes: the surplus master Pods stay Pending forever, so
+    # `helm install --wait` never returns and Flux loops install/uninstall —
+    # the whole S3 stack never comes up. Soften it to a strong preference
+    # (weight 100) so the masters still spread across distinct nodes whenever
+    # the cluster has them, while single- and dual-node clusters can still
+    # bring the master up. Same posture already used for the s3 component
+    # below. Selector and topologyKey are unchanged from the subchart default;
+    # only required -> preferred.
+    affinity: |
+      podAntiAffinity:
+        preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchLabels:
+                  app.kubernetes.io/name: {{ template "seaweedfs.name" . }}
+                  app.kubernetes.io/instance: {{ .Release.Name }}
+                  app.kubernetes.io/component: master
+              topologyKey: kubernetes.io/hostname
+  volume:
+    replicas: 2
+    resizeHook:
+      image: docker.io/alpine/k8s:1.36.2
+    # minimum free disk space(in percents). If free disk space lower this value - all volumes marks as ReadOnly
+    minFreeSpacePercent: 5
+    dataDirs:
+      - name: data1
+        type: "persistentVolumeClaim"
+        size: "10Gi"
+        maxVolumes: 0
+  filer:
+    replicas: 2
+    #  replication type is XYZ:
+    # X number of replica in other data centers
+    # Y number of replica in other racks in the same data center
+    # Z number of replica in other servers in the same rack
+    defaultReplicaPlacement: "001"
+    data:
+      type: "emptyDir"
+    logs:
+      type: ""
+    extraEnvironmentVars:
+      WEED_LEVELDB2_ENABLED: "false"
+      WEED_POSTGRES2_ENABLED: "true"
+      # Without explicit pool settings the Go sql pool keeps zero idle
+      # connections, so every filer metadata lookup opens a fresh PostgreSQL
+      # connection (TCP + TLS + SCRAM, ~300ms each), adding seconds of latency
+      # to every S3 operation. Keep max_open * filer.replicas below the
+      # database max_connections (CNPG default: 100).
+      WEED_POSTGRES2_CONNECTION_MAX_IDLE: "20"
+      WEED_POSTGRES2_CONNECTION_MAX_OPEN: "40"
+      WEED_POSTGRES2_CONNECTION_MAX_LIFETIME_SECONDS: "600"
+      WEED_POSTGRES2_CREATETABLE: |
+        CREATE TABLE IF NOT EXISTS "%s" (
+          dirhash   BIGINT,
+          name      VARCHAR(65535),
+          directory VARCHAR(65535),
+          meta      bytea,
+          PRIMARY KEY (dirhash, name)
+        );
+    secretExtraEnvironmentVars:
+      WEED_POSTGRES2_HOSTNAME:
+        secretKeyRef:
+          key: host
+          name: seaweedfs-db-app
+      WEED_POSTGRES2_DATABASE:
+        secretKeyRef:
+          key: dbname
+          name: seaweedfs-db-app
+      WEED_POSTGRES2_USERNAME:
+        secretKeyRef:
+          key: username
+          name: seaweedfs-db-app
+      WEED_POSTGRES2_PASSWORD:
+        secretKeyRef:
+          key: password
+          name: seaweedfs-db-app
+    s3:
+      replicas: 2
+      enabled: false
+      port: 8333
+      httpsPort: 0
+      # Suffix of the host name, {bucket}.{domainName}
+      domainName: ""
+      # enable user & permission to s3 (need to inject to all services)
+      enableAuth: false
+      # set to the name of an existing kubernetes Secret with the s3 json config file
+      # should have a secret key called seaweedfs_s3_config with an inline json configure
+      existingConfigSecret: null
+      auditLogConfig: {}
+  s3:
+    enabled: true
+    replicas: 2
+    port: 8333
+    # Upstream 4.45 turns the Lance Namespace catalog on by default
+    # (charts/seaweedfs/values.yaml: lancePort: 9101) and the s3 Service
+    # publishes it. weed serves that catalog over plain HTTP and accepts no
+    # certificate for it, which is the posture patches/s3-tls-main-port.patch
+    # exists to avoid, and its namespace and table routes are writable. Nothing
+    # in Cozystack consumes the catalog, so keep the pre-4.45 surface: 0 makes
+    # weed skip startLanceServer and drops the container port and Service port
+    # with it.
+    lancePort: 0
+    # patches/s3-grpc-tls.patch adds [grpc.s3] to security.toml, which the s3
+    # pods mount by subPath and so never re-read. This annotation changes the
+    # pod template in the release that brings the section, so an upgrade
+    # restarts s3 onto it instead of leaving its gRPC in plaintext. The
+    # upstream s3 template carries no checksum of that ConfigMap, and adding
+    # one would be another vendored patch for a change made once.
+    podAnnotations:
+      seaweedfs.cozystack.io/grpc-s3-tls: "true"
+    # Keep S3 traffic on same-zone endpoints. Native chart support landed in 4.12
+    # (replaces the former s3-traffic-distribution.patch); the chart gates the
+    # field on Kubernetes >=1.31 and auto-converts to PreferSameZone on >=1.35.
+    trafficDistribution: PreferClose
+    extraArgs:
+      - -idleTimeout=60
+    enableAuth: false
+    readinessProbe:
+      httpGet:
+        scheme: HTTPS
+    livenessProbe:
+      httpGet:
+        scheme: HTTPS
+    logs:
+      type: ""
+    ingress:
+      enabled: true
+      className: "tenant-root"
+      host: "seaweedfs.demo.cozystack.io"
+      annotations:
+        # Limit single PUT request to 5GB to enforce multipart uploads for large files.
+        # This prevents issues with large file uploads and reduces support load.
+        # For files >5GB, clients must use S3 multipart upload API.
+        nginx.ingress.kubernetes.io/proxy-body-size: "5g"
+        nginx.ingress.kubernetes.io/proxy-buffering: "off"
+        nginx.ingress.kubernetes.io/proxy-request-buffering: "off"
+        nginx.ingress.kubernetes.io/backend-protocol: "HTTPS"
+        nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+        nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+        nginx.ingress.kubernetes.io/client-body-timeout: "3600"
+        nginx.ingress.kubernetes.io/client-header-timeout: "120"
+        nginx.ingress.kubernetes.io/service-upstream: "true"
+        acme.cert-manager.io/http01-ingress-ingressclassname: tenant-root
+        cert-manager.io/cluster-issuer: letsencrypt-prod
+      tls:
+        - hosts:
+            - seaweedfs.demo.cozystack.io
+          secretName: seaweedfs-s3-ingress-tls
+    affinity: |
+      podAntiAffinity:
+        preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 10
+            podAffinityTerm:
+              labelSelector:
+                matchExpressions:
+                  - key: app.kubernetes.io/name
+                    operator: In
+                    values:
+                    - '{{ template "seaweedfs.name" . }}'
+                  - key: app.kubernetes.io/instance
+                    operator: In
+                    values:
+                    - '{{ .Release.Name }}'
+                  - key: app.kubernetes.io/component
+                    operator: In
+                    values:
+                    - s3
+              topologyKey: kubernetes.io/hostname
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchExpressions:
+                  - key: app.kubernetes.io/name
+                    operator: In
+                    values:
+                    - '{{ template "seaweedfs.name" . }}'
+                  - key: app.kubernetes.io/instance
+                    operator: In
+                    values:
+                    - '{{ .Release.Name }}'
+                  - key: app.kubernetes.io/component
+                    operator: In
+                    values:
+                    - s3
+              topologyKey: topology.kubernetes.io/zone
+      podAffinity:
+        preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 20
+            podAffinityTerm:
+              labelSelector:
+                matchExpressions:
+                  - key: app.kubernetes.io/name
+                    operator: In
+                    values:
+                    - ingress-nginx
+                  - key: app.kubernetes.io/component
+                    operator: In
+                    values:
+                    - controller
+              topologyKey: kubernetes.io/hostname
+  cosi:
+    enabled: true
+    # Override the vendored chart default (v0.1.2), which hardcodes read-write
+    # S3 actions for every BucketAccess and ignores the accessPolicy parameter.
+    # v0.3.x honours accessPolicy: readonly, so a -readonly BucketAccessClass
+    # actually issues read-only (Read,List) credentials instead of read-write.
+    # v0.4.0 also writes each grant to the per-identity IAM file: v0.3.1
+    # rewrites only the legacy identity.json, which the S3 gateways migrate
+    # concurrently, so a grant could be lost for good. v0.5.0 adds the
+    # public-read accessPolicy the -public BucketAccessClass relies on.
+    image: "ghcr.io/seaweedfs/seaweedfs-cosi-driver:v0.5.0"
+    podLabels:
+      policy.cozystack.io/allow-to-apiserver: "true"
+    driverName: "seaweedfs.objectstorage.k8s.io"
+    bucketClassName: "seaweedfs"
+    region: ""
+    # What the post-install/post-upgrade hook does with identity files no BucketAccess
+    # carries (files/orphan-identities.sh): "delete" removes them, anything
+    # else only reports them. extra/seaweedfs sets it from its
+    # cosi.orphanIdentities value.
+    orphanIdentities:
+      mode: report
+    sidecar:
+      image: "ghcr.io/cozystack/cozystack/objectstorage-sidecar:v1.6.0@sha256:4d665becd3399c2fe1e8a66e15d14d16e4a5a75395fb0ae65cff46679a8989f1"
+  # A bucket lifecycle rule is stored on PUT and acted on only by the
+  # s3_lifecycle job of the plugin worker, scheduled by the admin server once a
+  # day (weed/worker/tasks/s3_lifecycle/handler.go at 4.45). The parent chart
+  # sends both enabled flags from its lifecycle.enabled, together with the
+  # admin password below; off here, so a render without the parent never
+  # starts an admin without one.
+  admin:
+    enabled: false
+    # Without a password weed admin serves its UI unauthenticated, and a tenant
+    # namespace admits ingress from the whole cluster. The parent chart names
+    # the Secret it keeps; these are the keys it writes.
+    secret:
+      userKey: adminUser
+      pwKey: adminPassword
+    # Job state and anything changed in the admin UI live in -dataDir.
+    data:
+      type: "persistentVolumeClaim"
+      size: "1Gi"
+    logs:
+      type: ""
+    resources:
+      requests:
+        cpu: "50m"
+        memory: "64Mi"
+      limits:
+        cpu: "500m"
+        memory: "256Mi"
+    # 75% of the limit above, as cozy-lib.resources.goMemLimit derives it for
+    # the components whose resources the parent chart sets. Without it the
+    # heap has no absolute ceiling and grows past the limit.
+    extraEnvironmentVars:
+      GOMEMLIMIT: "192MiB"
+  worker:
+    enabled: false
+    # Vacuum, balance and erasure coding move data; enabling lifecycle must
+    # not start them.
+    jobType: "s3_lifecycle"
+    # The subchart's hard hostname anti-affinity keeps the surge pod of a
+    # rollout off the node the running worker holds, so on a single-node
+    # cluster any change to the worker template never finishes rolling out.
+    # Only required -> preferred, as for the master above.
+    affinity: |
+      podAntiAffinity:
+        preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchLabels:
+                  app.kubernetes.io/name: {{ template "seaweedfs.name" . }}
+                  app.kubernetes.io/instance: {{ .Release.Name }}
+                  app.kubernetes.io/component: worker
+              topologyKey: kubernetes.io/hostname
+    logs:
+      type: ""
+    resources:
+      requests:
+        cpu: "50m"
+        memory: "64Mi"
+      limits:
+        cpu: "1"
+        memory: "512Mi"
+    # 75% of the limit above; see admin.extraEnvironmentVars.
+    extraEnvironmentVars:
+      GOMEMLIMIT: "384MiB"
+  certificates:
+    commonName: "SeaweedFS CA"
+    ipAddresses: []
+    keyAlgorithm: RSA
+    keySize: 2048
+    duration: 87600h # 10 years
+    renewBefore: 720h # 30d

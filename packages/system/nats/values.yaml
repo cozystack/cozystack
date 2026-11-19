@@ -1,0 +1,15 @@
+nats:
+  statefulSet:
+    merge:
+      spec:
+        persistentVolumeClaimRetentionPolicy:
+          whenDeleted: Delete
+          whenScaled: Delete
+  config:
+    cluster:
+      routeURLs:
+        k8sClusterDomain: cozy.local
+  promExporter:
+    enabled: true
+    podMonitor:
+      enabled: true

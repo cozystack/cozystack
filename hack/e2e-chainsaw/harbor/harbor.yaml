@@ -1,0 +1,27 @@
+apiVersion: apps.cozystack.io/v1alpha1
+kind: Harbor
+metadata:
+  name: test
+spec:
+  host: ""
+  storageClass: ""
+  core:
+    resources: {}
+    resourcesPreset: "nano"
+  registry:
+    resources: {}
+    resourcesPreset: "nano"
+  jobservice:
+    resources: {}
+    resourcesPreset: "nano"
+  trivy:
+    enabled: false
+    size: 2Gi
+    resources: {}
+    resourcesPreset: "nano"
+  database:
+    size: 2Gi
+    replicas: 1
+  redis:
+    size: 1Gi
+    replicas: 1

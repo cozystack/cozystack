@@ -1,0 +1,7 @@
+apiVersion: v2
+name: bucket
+description: S3 compatible storage
+icon: /logos/bucket.svg
+type: application
+version: 0.0.0 # Placeholder, the actual version will be automatically set during the build process
+appVersion: "0.2.0"

@@ -1,0 +1,136 @@
+{{- $exposeIngress := (index .Values._cluster "expose-ingress") | default "tenant-root" }}
+{{- $exposeExternalIPs := (index .Values._cluster "expose-external-ips") | default "" | nospace }}
+{{- $loadBalancerClass := (index .Values._cluster "load-balancer-class") | default "" }}
+{{- $wildcardSecret := (index .Values._cluster "wildcard-secret-name") | default "" }}
+{{- /* PROXY-protocol is enabled either explicitly per-app (.Values.proxyProtocol)
+       or, for the host control plane, via the platform-level publishing.proxyProtocol
+       switch carried in _cluster.proxy-protocol and applied only to the external-facing
+       ingress (the namespace named by expose-ingress, like expose-external-ips above).
+       toString normalises the _cluster value whether it arrives as string "true" or bool. */ -}}
+{{- $proxyProtocol := or .Values.proxyProtocol (and (eq $exposeIngress .Release.Namespace) (eq (toString (index .Values._cluster "proxy-protocol")) "true")) }}
+{{- /* The per-app proxyProtocol value is for tenant Ingress apps. On the
+       external-facing (host) ingress, PROXY-protocol must be enabled via the
+       platform-level publishing.proxyProtocol switch — only that path installs
+       ouroboros (hairpin handling) and arms the disable-hazard guard. */ -}}
+{{- if and .Values.proxyProtocol (eq $exposeIngress .Release.Namespace) }}
+{{- fail "On the host (external-facing) ingress, enable PROXY-protocol via publishing.proxyProtocol, not the per-app proxyProtocol value — the platform switch pairs it with ouroboros hairpin handling and the disable-hazard guard" }}
+{{- end }}
+{{- /* Cloudflare's HTTP proxy does not speak PROXY-protocol to origins, and its
+       real_ip_header server-snippet overrides real-ip-header: proxy_protocol —
+       the two together emit contradictory config. */ -}}
+{{- if and .Values.cloudflareProxy $proxyProtocol }}
+{{- fail "cloudflareProxy and proxyProtocol are mutually exclusive: Cloudflare's HTTP proxy does not send PROXY-protocol frames, and the cloudflareProxy server-snippet overrides real-ip-header proxy_protocol" }}
+{{- end }}
+{{- /* spec.loadBalancerClass is immutable: once the host ingress Service exists
+       as type LoadBalancer, Kubernetes forbids adding, changing, OR removing the
+       field on update, so Flux would wedge on the reconcile instead of migrating.
+       Guard only the host ingress on the LoadBalancer path (where the class is
+       emitted on the service block below), and only against an existing
+       type: LoadBalancer Service whose class actually differs from the requested
+       value — set, change, or clear all trip it, while a ClusterIP Service
+       (externalIPs path) transitioning to LoadBalancer may set the class freely.
+       lookup returns nil on fresh install / dry-run / CI, so the guard stays
+       silent there and the Service is born with the requested class. */ -}}
+{{- if and (eq $exposeIngress .Release.Namespace) (not $exposeExternalIPs) }}
+{{- $svcName := printf "%s-ingress-controller" (trimPrefix "tenant-" .Release.Namespace) }}
+{{- $existingSvc := lookup "v1" "Service" .Release.Namespace $svcName }}
+{{- if and $existingSvc (eq (dig "spec" "type" "" $existingSvc) "LoadBalancer") (ne (dig "spec" "loadBalancerClass" "" $existingSvc) $loadBalancerClass) }}
+{{- fail (printf "publishing.loadBalancerClass cannot be changed on the existing host ingress Service %s/%s: spec.loadBalancerClass is immutable once the Service is type LoadBalancer (existing: %q, requested: %q). Delete the Service once so Flux recreates it with the new setting — the external LoadBalancer is briefly reprovisioned: kubectl -n %s delete service %s" .Release.Namespace $svcName (dig "spec" "loadBalancerClass" "" $existingSvc) $loadBalancerClass .Release.Namespace $svcName) }}
+{{- end }}
+{{- end }}
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: ingress-nginx-system
+  labels:
+    sharding.fluxcd.io/key: tenants
+spec:
+  chartRef:
+    kind: ExternalArtifact
+    name: cozystack-ingress-application-default-ingress-system
+    namespace: cozy-system
+  interval: 5m
+  timeout: 10m
+  install:
+    remediation:
+      retries: -1
+  upgrade:
+    remediation:
+      retries: -1
+  valuesFrom:
+  - kind: Secret
+    name: cozystack-values
+  values:
+    ingress-nginx:
+      fullnameOverride: {{ trimPrefix "tenant-" .Release.Namespace }}-ingress
+      controller:
+        replicaCount: {{ .Values.replicas }}
+        ingressClass: {{ .Release.Namespace }}
+        {{- /*
+          Operator-supplied wildcard mode. Serve the pre-existing
+          wildcard Secret as the default SSL certificate so per-host
+          ACME certs are unnecessary. ingress-nginx can only read a
+          default-ssl-certificate Secret from its own namespace, so the
+          reference is always same-namespace: the publishing controller
+          reads the operator-created Secret in tenant-root, and every
+          child-tenant controller reads the replica that the platform
+          controller mirrors into that tenant namespace. Each ingress
+          HelmRelease renders only in the namespace that owns the
+          controller, so .Release.Namespace is always the right place.
+          On a freshly-created tenant the replica may land a moment after
+          the controller starts; until then ingress-nginx logs a
+          default-ssl-certificate warning and serves its built-in
+          certificate, then self-corrects once the replica appears.
+        */}}
+        {{- if $wildcardSecret }}
+        extraArgs:
+          default-ssl-certificate: "{{ .Release.Namespace }}/{{ $wildcardSecret }}"
+        {{- end }}
+        resources: {{- include "cozy-lib.resources.defaultingSanitize" (list .Values.resourcesPreset .Values.resources $) | nindent 10 }}
+        ingressClassResource:
+          name: {{ .Release.Namespace }}
+          controllerValue: k8s.io/ingress-nginx-{{ .Release.Namespace }}
+        podLabels:
+          cozystack.io/service: ingress
+          policy.cozystack.io/allow-to-apiserver: "true"
+        {{- if not (eq .Release.Namespace "tenant-root") }}
+        admissionWebhooks:
+          enabled: false
+        {{- end }}
+        service:
+          {{- if and (eq $exposeIngress .Release.Namespace) $exposeExternalIPs }}
+          externalIPs:
+            {{- toYaml (splitList "," $exposeExternalIPs) | nindent 12 }}
+          type: ClusterIP
+          externalTrafficPolicy: Cluster
+          {{- else }}
+          type: LoadBalancer
+          externalTrafficPolicy: Local
+          {{- /* loadBalancerClass is a host-publishing setting: apply it only to
+                 the external-facing ingress (the namespace named by expose-ingress),
+                 host-scoped like expose-external-ips and proxy-protocol above.
+                 Tenant ingress Services keep the cluster's default LB controller. */}}
+          {{- if and $loadBalancerClass (eq $exposeIngress .Release.Namespace) }}
+          loadBalancerClass: {{ $loadBalancerClass }}
+          {{- end }}
+          {{- end }}
+        {{- if or .Values.whitelist .Values.cloudflareProxy $proxyProtocol }}
+        config:
+          {{- with .Values.whitelist }}
+          whitelist-source-range: "{{ join "," . }}"
+          {{- end }}
+          {{- if .Values.cloudflareProxy }}
+          proxy-real-ip-cidr: "{{ include "ingress.cloudflare-ips" . }}"
+          use-forwarded-headers: "true"
+          server-snippet: "real_ip_header CF-Connecting-IP;"
+          {{- end }}
+          {{- if $proxyProtocol }}
+          {{- /* real-ip-header + enable-real-ip make the PROXY-protocol frame the
+                 source of truth for $remote_addr. use-forwarded-headers /
+                 compute-full-forwarded-for are deliberately NOT set: without a
+                 paired proxy-real-ip-cidr they let clients spoof X-Forwarded-For. */}}
+          use-proxy-protocol: "true"
+          real-ip-header: "proxy_protocol"
+          enable-real-ip: "true"
+          {{- end }}
+        {{- end }}

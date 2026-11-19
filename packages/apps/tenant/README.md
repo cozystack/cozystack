@@ -1,0 +1,126 @@
+# Tenant
+
+A tenant is the main unit of security on the platform. The closest analogy would be Linux kernel namespaces.
+
+Tenants can be created recursively and are subject to the following rules:
+
+### Tenant naming
+
+Tenant names must be alphanumeric:
+
+-   Lowercase letters (`a-z`) and digits (`0-9`) only
+-   Must start with a lowercase letter
+-   Dashes (`-`) are **not allowed**, unlike with other services
+-   Maximum length depends on the cluster configuration (Helm release prefix and root domain)
+
+This restriction exists to keep consistent naming in tenants, nested tenants, and services deployed in them.
+A tenant cannot be named `foo-bar` because parsing internal resource names like `tenant-foo-bar` would be ambiguous.
+
+For example:
+
+-   The root tenant is named `root`, but internally it's referenced as `tenant-root`.
+-   A nested tenant could be named `foo`, which would result in `tenant-foo` in service names and URLs.
+
+### Unique domains
+
+Each tenant has its own domain.
+By default, (unless otherwise specified), it inherits the domain of its parent with a prefix of its name.
+For example, if the parent had the domain `example.org`, then `tenant-foo` would get the domain `foo.example.org` by default.
+
+Kubernetes clusters created in this tenant namespace would get domains like: `kubernetes-cluster.foo.example.org`
+
+Example:
+```text       
+tenant-root (example.org)
+└── tenant-foo (foo.example.org)
+    └── kubernetes-cluster1 (kubernetes-cluster1.foo.example.org)
+```
+
+### Nesting tenants and reusing parent services
+
+Tenants can be nested.
+A tenant administrator can create nested tenants using the "Tenant" application from the catalogue.
+
+Higher-level tenants can view and manage the applications of all their children tenants.
+If a tenant does not run their own cluster services, it can access ones of its parent.
+
+For example, you create:
+-   Tenant `tenant-u1` with a set of services like `etcd`, `ingress`, `monitoring`.
+-   Tenant `tenant-u2` nested in `tenant-u1`.
+
+Let's see what will happen when you run Kubernetes and Postgres under `tenant-u2` namespace.
+
+Since `tenant-u2` does not have its own cluster services like `etcd`, `ingress`, and `monitoring`,
+the applications running in `tenant-u2` will use the cluster services of the parent tenant.
+
+This in turn means:
+
+-    The Kubernetes cluster data will be stored in `etcd` for `tenant-u1`.
+-    Access to the cluster will be through the common `ingress` of `tenant-u1`.
+-    Essentially, all metrics will be collected in the `monitoring` from `tenant-u1`, and only that tenant will have access to them.
+
+Example:
+```
+tenant-u1
+├── etcd
+├── ingress
+├── monitoring
+└── tenant-u2
+    ├── kubernetes-cluster1
+    └── postgres-db1
+```
+
+### Network isolation
+
+Tenant network isolation is enforced with Cilium network policies. On the `isp-hosted` and `isp-hosted-slim` platform variants the CNI belongs to the host, so these policies are created only if the host serves the Cilium policy API when the tenant is installed or updated. On a host without Cilium, tenants get no network isolation from Cozystack, and isolating them is up to the host. If Cilium appears on the host later, the policies are created on the tenant's next chart or values change, not automatically.
+
+## Parameters
+
+### Common parameters
+
+| Name              | Description                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      | Type                  | Value   |
+| ----------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------- | ------- |
+| `host`            | The hostname used to access tenant services (defaults to using the tenant name as a subdomain for its parent tenant host).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       | `string`              | `""`    |
+| `etcd`            | Deploy own Etcd cluster.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         | `bool`                | `false` |
+| `monitoring`      | Deploy own Monitoring Stack.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     | `bool`                | `false` |
+| `tracingCentral`  | Send this tenant's traces to the shared VictoriaTraces store in tenant-root instead of a per-tenant backend; its Grafana reads them through a vmauth there that pins the tenant's own account, so tenants sharing the store cannot read each other's traces. It needs the tenant's own Monitoring (`monitoring: true`) and tenant-root hosting the store (`tracingCentralHost: true` on its Monitoring, with a `cluster`-mode tracingStorages entry named `generic`); without that the tenant's monitoring render fails rather than dropping spans. tenant-root, and whoever it admits to its Grafana, are inside the store's trust boundary. Applications should export over OTLP/HTTP, in requests below 3 MiB: spans above the platform's per-tenant write rate are retried over HTTP but dropped over gRPC, and a larger request is refused and not retried. | `bool`                | `false` |
+| `ingress`         | Deploy own Ingress Controller.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   | `bool`                | `false` |
+| `gateway`         | Deploy own Gateway API Gateway (backed by Cilium Gateway API controller). When unset (the default) or set to `false`, the tenant does not own a Gateway and instead publishes through the nearest ancestor tenant that owns one, regardless of whether `host` is empty or custom (`false` currently behaves the same as unset and does not opt out of that inheritance). Set to `true` to give the tenant its own Gateway with its own LoadBalancer IP and Certificate. A tenant with a custom (non-derived) `host` that needs its apex publicly reachable must set `true` explicitly, because an ancestor's TLS certificate does not cover a custom apex. Note: leave the key absent (do not write `gateway: null`): the chart distinguishes "unset" via missing-key, not via null value, to satisfy the JSON schema generated from this comment.               | `bool`                | `false` |
+| `gatewayClass`    | GatewayClass for this tenant's own Gateway. Empty uses the platform default (`gateway.className`). Only the classes the operator lists in the platform's `gateway.tenantSelectableClasses`, plus that default, may be named here — anything else fails this tenant's own gateway release and reaches no other tenant. Read only when this tenant owns a Gateway; an inheriting tenant uses its ancestor's. Whether a class terminates TLS itself or at its provider's edge is declared once per class on the platform, not here.                                                                                                                                                                                                                                                                                                                               | `string`              | `""`    |
+| `seaweedfs`       | Deploy own SeaweedFS.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            | `bool`                | `false` |
+| `computeplane`    | Deploy own ComputePlane — a single-tenant, Cozystack-managed cluster for untrusted-code applications. The tenant receives no admin kubeconfig for it. Automatic routing of catalog applications onto it (placement: ComputePlane) is a planned follow-up and is not available yet; until it lands, external catalogs target the cluster via its computeplane-cluster-admin-kubeconfig Secret. See design-proposals/compute-plane in cozystack/community.                                                                                                                                                                                                                                                                                                                                                                                                       | `bool`                | `false` |
+| `schedulingClass` | The name of a SchedulingClass CR to apply scheduling constraints for this tenant's workloads.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    | `string`              | `""`    |
+| `resourceQuotas`  | Define resource quotas for the tenant.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           | `map[string]quantity` | `{}`    |
+
+
+## Configuration
+
+### Resource Quotas
+
+The `resourceQuotas` parameter allows you to limit resources available to the tenant. Supported keys include:
+
+**Compute resources** (converted to `requests.X` and `limits.X`):
+- `cpu` - Total CPU cores (e.g., `"4"` or `"500m"`)
+- `memory` - Total memory (e.g., `"4Gi"` or `"512Mi"`)
+- `ephemeral-storage` - Ephemeral storage limit (e.g., `"10Gi"`)
+- `storage` - Total persistent storage (e.g., `"100Gi"`)
+- `hugepages-2Mi`, `hugepages-1Gi` - Total huge pages of that size (e.g., `"4Gi"`), converted to `requests.hugepages-<size>` only, as Kubernetes has no limits quota for huge pages
+
+**Object count quotas** (passed as-is):
+- `pods` - Maximum number of pods
+- `services` - Maximum number of services
+- `services.loadbalancers` - Maximum number of LoadBalancer services
+- `services.nodeports` - Maximum number of NodePort services
+- `configmaps` - Maximum number of ConfigMaps
+- `secrets` - Maximum number of Secrets
+- `persistentvolumeclaims` - Maximum number of PVCs
+
+**Example:**
+```yaml
+resourceQuotas:
+  cpu: 4
+  memory: 4Gi
+  storage: 10Gi
+  services.loadbalancers: "3"
+  pods: "50"
+```

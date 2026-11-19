@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: Secret
+metadata:
+  name: additional-scrape-configs
+stringData:
+  prometheus-additional.yaml: |
+    {{- toYaml .Values.additionalScrapeConfigs | nindent 4 }}

@@ -1,0 +1,84 @@
+suite: resourcesPreset legacy and instance-type compatibility
+
+# Locks in the 1:1 equivalence between legacy flat names and instance-type
+# names on both the top-level OpenSearch preset (memory-heavy, default
+# c1.medium ~ legacy large) and the nested dashboards preset (CPU-balanced,
+# default c1.small ~ legacy medium). The dashboards fallback in the
+# template was bumped from "medium" to "c1.small" so the template path
+# uses the canonical name; the legacy alias keeps the resource footprint
+# identical.
+
+templates:
+  - templates/opensearch.yaml
+
+release:
+  name: os-test
+  namespace: tenant-test
+
+set:
+  _cluster:
+    cluster-domain: cozy.local
+
+tests:
+  - it: "legacy 'large' top preset renders 2 CPU / 2Gi on OpenSearchCluster"
+    set:
+      resourcesPreset: large
+    documentSelector:
+      path: kind
+      value: OpenSearchCluster
+    asserts:
+      - equal:
+          path: spec.general.serviceName
+          value: os-test
+      - equal:
+          path: spec.nodePools[0].resources.limits.cpu
+          value: "2"
+      - equal:
+          path: spec.nodePools[0].resources.limits.memory
+          value: "2Gi"
+
+  - it: "instance-type 'c1.medium' top preset renders 2 CPU / 2Gi (matches legacy 'large')"
+    set:
+      resourcesPreset: c1.medium
+    documentSelector:
+      path: kind
+      value: OpenSearchCluster
+    asserts:
+      - equal:
+          path: spec.nodePools[0].resources.limits.cpu
+          value: "2"
+      - equal:
+          path: spec.nodePools[0].resources.limits.memory
+          value: "2Gi"
+
+  - it: "legacy 'medium' nested dashboards preset renders 1 CPU / 1Gi"
+    set:
+      dashboards:
+        enabled: true
+        resourcesPreset: medium
+    documentSelector:
+      path: kind
+      value: OpenSearchCluster
+    asserts:
+      - equal:
+          path: spec.dashboards.resources.limits.cpu
+          value: "1"
+      - equal:
+          path: spec.dashboards.resources.limits.memory
+          value: "1Gi"
+
+  - it: "instance-type 'c1.small' nested dashboards preset renders 1 CPU / 1Gi"
+    set:
+      dashboards:
+        enabled: true
+        resourcesPreset: c1.small
+    documentSelector:
+      path: kind
+      value: OpenSearchCluster
+    asserts:
+      - equal:
+          path: spec.dashboards.resources.limits.cpu
+          value: "1"
+      - equal:
+          path: spec.dashboards.resources.limits.memory
+          value: "1Gi"

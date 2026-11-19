@@ -1,0 +1,3 @@
+# `update` fetches here to check the pin, and keeps the file on a mismatch.
+# The recipe's error text says why.
+/cdi-cr.yaml.download

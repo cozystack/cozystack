@@ -1,0 +1,19 @@
+# Cozystack-managed S3 bucket for storing this demo's RabbitMQ definitions.
+# The Bucket controller provisions a Secret named "bucket-<bucket>-<user>"
+# per user (the bucket app carries the "bucket-" release prefix); run-all.sh
+# reads the "backup" user's BucketInfo and projects its access keys into the
+# rabbitmq-backup-creds Secret the strategy below references.
+#
+# The platform ships a cozy-default-rabbitmq strategy that writes to the shared
+# cozy-backups system bucket; this demo instead provisions its own Bucket and a
+# matching strategy so the round-trip is self-contained and its objects are
+# torn down with the demo (see cleanup.sh).
+---
+apiVersion: apps.cozystack.io/v1alpha1
+kind: Bucket
+metadata:
+  name: rabbitmq-backups
+spec:
+  users:
+    backup:
+      readonly: false

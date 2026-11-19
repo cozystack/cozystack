@@ -1,0 +1,37 @@
+annotations:
+  artifacthub.io/category: database
+  artifacthub.io/changes: |
+    - kind: added
+      description: Update Qdrant to v1.16.3
+    - kind: added
+      description: Add support for global additional labels
+      links:
+        - name: GitHub Pull Request
+          url: https://github.com/qdrant/qdrant-helm/pull/424
+    - kind: added
+      description: Add support for setting persistent volume claim labels
+      links:
+        - name: GitHub Pull Request
+          url: https://github.com/qdrant/qdrant-helm/pull/418
+    - kind: fixed
+      description: Add the ability to set minReadySecond
+      links:
+        - name: GitHub Pull Request
+          url: https://github.com/qdrant/qdrant-helm/pull/417
+apiVersion: v2
+appVersion: v1.16.3
+description: Qdrant - Vector Database for the next generation of AI applications.
+home: https://qdrant.tech
+icon: https://qdrant.github.io/qdrant-helm/logo_with_text.svg
+keywords:
+- vector database
+maintainers:
+- email: info@qdrant.com
+  name: qdrant
+  url: https://github.com/qdrant
+name: qdrant
+sources:
+- https://github.com/qdrant/qdrant
+- https://github.com/qdrant/qdrant-helm
+type: application
+version: 1.16.3

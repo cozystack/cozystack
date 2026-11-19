@@ -1,0 +1,115 @@
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ .Release.Name }}-cleanup
+  labels:
+    app.kubernetes.io/instance: {{ .Release.Name }}
+  annotations:
+    "helm.sh/hook": post-delete
+    "helm.sh/hook-weight": "10"
+    # Keep only before-hook-creation on the Job so a Failed cleanup survives for
+    # post-mortem; the SA/Role/RoleBinding keep hook-succeeded (cozystack #3072).
+    "helm.sh/hook-delete-policy": before-hook-creation
+spec:
+  # Backstop: the deletes are best-effort and non-blocking (--wait=false), but
+  # cap the Job so it can never stall the HelmRelease teardown.
+  activeDeadlineSeconds: 120
+  # Best-effort cleanup: never retry.
+  backoffLimit: 0
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/instance: {{ .Release.Name }}
+        policy.cozystack.io/allow-to-apiserver: "true"
+    spec:
+      serviceAccountName: {{ .Release.Name }}-cleanup
+      restartPolicy: Never
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        runAsGroup: 65534
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: cleanup
+          image: docker.io/clastix/kubectl:v1.32
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          env:
+            - name: HOME
+              value: /tmp
+          resources:
+            requests:
+              cpu: 10m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
+          command:
+            - /bin/sh
+            - -c
+            - |
+              kubectl delete pvc -n {{ .Release.Namespace }} -l apps.cozystack.io/application.name={{ .Release.Name }}-system --ignore-not-found --wait=false \
+                || echo "WARNING: VM storage PVC cleanup failed for {{ .Release.Name }}; orphaned PVCs may remain" >&2
+              kubectl delete secret -n {{ .Release.Namespace }} alerta-tls grafana-ingress-tls --ignore-not-found --wait=false \
+                || echo "WARNING: TLS secret cleanup failed for {{ .Release.Name }}; orphaned secrets may remain" >&2
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ .Release.Name }}-cleanup
+  labels:
+    app.kubernetes.io/instance: {{ .Release.Name }}
+  annotations:
+    "helm.sh/hook": post-delete
+    "helm.sh/hook-weight": "0"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ .Release.Name }}-cleanup
+  labels:
+    app.kubernetes.io/instance: {{ .Release.Name }}
+  annotations:
+    "helm.sh/hook": post-delete
+    "helm.sh/hook-weight": "5"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+rules:
+  - apiGroups: [""]
+    resources: ["persistentvolumeclaims"]
+    verbs: ["get", "list", "delete"]
+  - apiGroups: [""]
+    resources: ["secrets"]
+    resourceNames: ["alerta-tls", "grafana-ingress-tls"]
+    verbs: ["get", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ .Release.Name }}-cleanup
+  labels:
+    app.kubernetes.io/instance: {{ .Release.Name }}
+  annotations:
+    "helm.sh/hook": post-delete
+    "helm.sh/hook-weight": "5"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ .Release.Name }}-cleanup
+subjects:
+  - kind: ServiceAccount
+    name: {{ .Release.Name }}-cleanup
+    namespace: {{ .Release.Namespace }}

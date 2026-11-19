@@ -1,0 +1,7 @@
+kind: Kubernetes
+# The kind on line 1 with no apiVersion anywhere. awk starts `av` at 0, so a
+# matcher testing `av == NR - 1` compares 0 with 0 here and calls this a CR.
+# The sweep is not fooled -- it pairs by document and indent, not by NR -- so
+# this file must NOT be reported as a creator.
+metadata:
+  name: not-a-creator

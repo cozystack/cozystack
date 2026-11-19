@@ -1,0 +1,109 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "clustersecret-operator.webhook.fullname" . }}
+  labels:
+    {{- include "clustersecret-operator.webhook.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.webhook.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "clustersecret-operator.webhook.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      {{- with .Values.webhook.podAnnotations | default .Values.global.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      labels:
+        {{- include "clustersecret-operator.webhook.selectorLabels" . | nindent 8 }}
+        {{- with .Values.webhook.podLabels | default .Values.global.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      {{- with .Values.webhook.imagePullSecrets | default .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+      {{- toYaml . | nindent 6 }}
+      {{- end }}
+      {{- with .Values.webhook.podSecurityContext | default .Values.global.podSecurityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.webhook.nodeSelector | default .Values.global.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.webhook.affinity | default .Values.global.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.webhook.topologySpreadConstraints | default .Values.global.topologySpreadConstraints }}
+      topologySpreadConstraints:
+      {{- range . }}
+      - {{ toYaml . | nindent 8 | trim }}
+        {{- if not .labelSelector }}
+        labelSelector:
+          matchLabels:
+            {{- include "clustersecret-operator.webhook.selectorLabels" $ | nindent 12 }}
+        {{- end }}
+      {{- end }}
+      {{- else }}
+      topologySpreadConstraints:
+      - maxSkew: 1
+        topologyKey: kubernetes.io/hostname
+        nodeTaintsPolicy: Honor
+        whenUnsatisfiable: {{ .Values.webhook.defaultHostNameSpreadPolicy | default .Values.global.defaultHostNameSpreadPolicy }}
+        labelSelector:
+          matchLabels:
+            {{- include "clustersecret-operator.webhook.selectorLabels" . | nindent 12 }}
+      - maxSkew: 1
+        topologyKey: topology.kubernetes.io/zone
+        nodeTaintsPolicy: Honor
+        whenUnsatisfiable: {{ .Values.webhook.defaultZoneSpreadPolicy | default .Values.global.defaultZoneSpreadPolicy }}
+        labelSelector:
+          matchLabels:
+            {{- include "clustersecret-operator.webhook.selectorLabels" . | nindent 12 }}
+      {{- end }}
+      {{- with .Values.webhook.tolerations | default .Values.global.tolerations }}
+      tolerations:
+      {{- toYaml . | nindent 6 }}
+      {{- end }}
+      {{- with .Values.webhook.priorityClassName | default .Values.global.priorityClassName }}
+      priorityClassName: {{ . }}
+      {{- end }}
+      serviceAccountName: {{ include "clustersecret-operator.webhook.fullname" . }}
+      automountServiceAccountToken: true
+      containers:
+      - name: webhook
+        image: {{ .Values.webhook.image.repository }}:{{ .Values.webhook.image.tag | default .Values.global.image.tag | default .Chart.AppVersion }}
+        imagePullPolicy: {{ .Values.webhook.image.pullPolicy | default .Values.global.image.pullPolicy }}
+        {{- with .Values.webhook.securityContext | default .Values.global.securityContext }}
+        securityContext:
+          {{- toYaml . | nindent 12 }}
+        {{- end }}
+        resources:
+          {{- toYaml .Values.webhook.resources | nindent 12 }}
+        env:
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        args:
+        - "--bind_address=:1443"
+        - "--tls_enabled=true"
+        - "--tls_key_file=/app/etc/ssl/tls.key"
+        - "--tls_cert_file=/app/etc/ssl/tls.crt"
+        - "--v={{ .Values.webhook.logLevel | default .Values.global.logLevel | default 0 }}"
+        volumeMounts:
+        - name: ssl
+          mountPath: /app/etc/ssl
+      volumes:
+      - name: ssl
+        secret:
+          secretName: {{ include "clustersecret-operator.webhook.fullname" . }}-tls
+          items:
+          - key: tls.key
+            path: tls.key
+          - key: tls.crt
+            path: tls.crt

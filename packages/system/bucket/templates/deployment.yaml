@@ -1,0 +1,41 @@
+{{- if .Values.ui }}
+{{- $host := include "cozy-lib.ns-host-required" . }}
+{{- $endpoint := printf "s3.%s" $host }}
+{{- range $name, $user := .Values.users }}
+  {{- $secretName := printf "%s-%s" $.Values.bucketName $name }}
+  {{- $existingSecret := lookup "v1" "Secret" $.Release.Namespace $secretName }}
+  {{- if $existingSecret }}
+    {{- $bucketInfo := fromJson (b64dec (index $existingSecret.data "BucketInfo")) }}
+    {{- $endpoint = trimPrefix "https://" (index $bucketInfo.spec.secretS3 "endpoint") }}
+  {{- end }}
+{{- end }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Values.bucketName }}-ui
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: {{ .Values.bucketName }}-ui
+  template:
+    metadata:
+      labels:
+        app: {{ .Values.bucketName }}-ui
+    spec:
+      containers:
+      - name: s3manager
+        image: "{{ $.Files.Get "images/s3manager.tag" | trim }}"
+        env:
+        - name: ENDPOINT
+          value: {{ $endpoint | quote }}
+        - name: SKIP_SSL_VERIFICATION
+          value: "true"
+        resources:
+          limits:
+            cpu: 500m
+            memory: 512Mi
+          requests:
+            cpu: 100m
+            memory: 128Mi
+{{- end }}

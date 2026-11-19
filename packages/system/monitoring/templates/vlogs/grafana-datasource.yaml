@@ -1,0 +1,16 @@
+{{- range .Values.logsStorages }}
+---
+apiVersion: grafana.integreatly.org/v1beta1
+kind: GrafanaDatasource
+metadata:
+  name: vlogs-{{ .name }}
+spec:
+  datasource:
+    access: proxy
+    type: victoriametrics-logs-datasource
+    name: vlogs-{{ .name }}
+    url: http://vlselect-{{ .name }}.{{ $.Release.Namespace }}.svc:9471
+  instanceSelector:
+    matchLabels:
+      dashboards: grafana
+{{- end }}

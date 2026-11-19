@@ -1,0 +1,292 @@
+{{- $clusterDomain := (index .Values._cluster "cluster-domain") | default "cozy.local" }}
+{{- if and .Values.backup.useSystemBucket (not .Values.backup.enabled) }}
+{{- fail "mongodb: backup.useSystemBucket=true requires backup.enabled=true: the percona-backup-mongodb agents only run when backups are enabled, so this combination renders a cluster that can never service a BackupJob. Set backup.enabled=true (or drop useSystemBucket). See https://cozystack.io/docs/v1/operations/services/backup-classes/." }}
+{{- end }}
+{{- /*
+TLS IMPLEMENTATION NOTE — operator-managed cert-manager chain
+=============================================================
+TLS is always on, and neither fact below depends on spec.secrets.ssl being set
+here: the operator defaults that name unconditionally, and runs its cert-manager
+integration regardless. TLS-on comes from spec.tls.mode defaulting to preferTLS
+together with the operator refusing a disabled-TLS CR unless unsafeFlags.tls is
+set. Setting secrets.ssl explicitly only makes the name visible in the rendered
+CR. The operator creates the full certificate chain itself:
+
+  1. Self-signed bootstrap Issuer
+  2. CA Certificate, 365-day duration renewed 730h (~30 days) before expiry.
+     The CA therefore ROTATES annually — clients must re-read the trust anchor
+     rather than bake it into an image or ConfigMap.
+  3. CA-backed Issuer
+  4. Leaf server+client cert, lifetime left to the operator's own
+     certValidityDuration default (90 days at 1.22.0 — an operator default this
+     chart deliberately does not pin, so treat the number as informational) and
+     reissued by it without client action, with a SAN
+     list covering the per-replset service (short, namespace, FQDN), the
+     matching wildcards — which is what covers the per-pod headless names,
+     rather than a separate entry each — mongos and config-replset names, and
+     localhost.
+
+The chart does NOT render cert-manager Issuer/Certificate resources to avoid
+orphaning the operator-managed ones. Chart-rendered resources would be ignored
+as trust anchors because the PSMDB operator controls the CA it embeds in pods.
+
+EXTERNAL HOSTNAME SANs:
+  When external: true, the per-pod external hostnames (<release>-rs0-<i>.<host>)
+  are advertised via replsets[].splitHorizons. PSMDB ≥ 1.22.0 folds the horizon
+  hostnames into the operator-managed leaf certificate SAN list when the CR is at
+  crVersion ≥ 1.22.0, so external clients can verify the TLS hostname. The DNS
+  names must resolve to the per-pod LoadBalancers (operational prerequisite).
+*/}}
+---
+apiVersion: psmdb.percona.com/v1
+kind: PerconaServerMongoDB
+metadata:
+  name: {{ .Release.Name }}
+  finalizers:
+    - percona.com/delete-psmdb-pods-in-order
+    - percona.com/delete-psmdb-pvc
+spec:
+  {{- /*
+    The backup driver matches this operator's own error text ("unable to get
+    storage") to retry the storage-injection race; bumping crVersion must be
+    paired with re-checking that wording in internal/backupcontroller/
+    psmdbstrategy_controller.go (psmdbErrorIsUnresolvedStorage).
+  */}}
+  crVersion: 1.22.0
+  clusterServiceDNSSuffix: svc.{{ $clusterDomain }}
+  secrets:
+    users: {{ .Release.Name }}-percona-server-mongodb-users
+    ssl: {{ .Release.Name }}-ssl
+  pause: false
+  unmanaged: false
+
+  tls:
+    # This pins the operator's own default rather than choosing a posture: the
+    # operator defaults spec.tls.mode to preferTLS and rejects a disabled-TLS CR
+    # unless spec.unsafeFlags.tls is set, so TLS was already on before this key
+    # existed. Stated explicitly so the mode is visible in the rendered CR.
+    # preferTLS accepts plaintext connections; moving to requireTLS would break
+    # existing plaintext clients and is a separate, breaking change.
+    mode: preferTLS
+  image: percona/percona-server-mongodb:{{ include "mongodb.versionMap" $ }}
+  imagePullPolicy: IfNotPresent
+
+  {{- if lt (int .Values.replicas) 3 }}
+  unsafeFlags:
+    replsetSize: true
+  {{- end }}
+
+  updateStrategy: SmartUpdate
+  upgradeOptions:
+    apply: disabled
+
+  pmm:
+    enabled: false
+    image: percona/pmm-client:2.44.1
+    serverHost: ""
+
+  sharding:
+    enabled: {{ .Values.sharding | default false }}
+    balancer:
+      enabled: true
+    {{- if .Values.sharding }}
+    configsvrReplSet:
+      size: {{ .Values.shardingConfig.configServers }}
+      resources: {{- include "cozy-lib.resources.defaultingSanitize" (list .Values.resourcesPreset .Values.resources $) | nindent 8 }}
+      volumeSpec:
+        persistentVolumeClaim:
+          {{- with .Values.storageClass }}
+          storageClassName: {{ . }}
+          {{- end }}
+          accessModes:
+            - ReadWriteOnce
+          resources:
+            requests:
+              storage: {{ .Values.shardingConfig.configServerSize }}
+      affinity:
+        antiAffinityTopologyKey: kubernetes.io/hostname
+      podDisruptionBudget:
+        maxUnavailable: 1
+    mongos:
+      size: {{ .Values.shardingConfig.mongos }}
+      resources: {{- include "cozy-lib.resources.defaultingSanitize" (list .Values.resourcesPreset .Values.resources $) | nindent 8 }}
+      affinity:
+        antiAffinityTopologyKey: kubernetes.io/hostname
+      podDisruptionBudget:
+        maxUnavailable: 1
+      expose:
+        exposeType: ClusterIP
+    {{- end }}
+
+  replsets:
+    {{- if .Values.sharding }}
+    {{- range .Values.shardingConfig.shards }}
+    - name: {{ .name }}
+      size: {{ .replicas }}
+      resources: {{- include "cozy-lib.resources.defaultingSanitize" (list $.Values.resourcesPreset $.Values.resources $) | nindent 8 }}
+      volumeSpec:
+        persistentVolumeClaim:
+          {{- with $.Values.storageClass }}
+          storageClassName: {{ . }}
+          {{- end }}
+          accessModes:
+            - ReadWriteOnce
+          resources:
+            requests:
+              storage: {{ .size }}
+      affinity:
+        antiAffinityTopologyKey: kubernetes.io/hostname
+      podDisruptionBudget:
+        maxUnavailable: 1
+    {{- end }}
+    {{- else }}
+    - name: rs0
+      size: {{ .Values.replicas }}
+      resources: {{- include "cozy-lib.resources.defaultingSanitize" (list .Values.resourcesPreset .Values.resources $) | nindent 8 }}
+      volumeSpec:
+        persistentVolumeClaim:
+          {{- with .Values.storageClass }}
+          storageClassName: {{ . }}
+          {{- end }}
+          accessModes:
+            - ReadWriteOnce
+          resources:
+            requests:
+              storage: {{ .Values.size }}
+      affinity:
+        antiAffinityTopologyKey: kubernetes.io/hostname
+      podDisruptionBudget:
+        maxUnavailable: 1
+      expose:
+        {{- if .Values.external }}
+        enabled: true
+        type: LoadBalancer
+        externalTrafficPolicy: Local
+        {{- else }}
+        enabled: false
+        {{- end }}
+      {{- if .Values.external }}
+      {{- /* Split-horizon DNS advertises per-pod external hostnames to clients
+             connecting from outside the cluster. PSMDB ≥ 1.22.0 also folds these
+             hostnames into the operator-managed leaf certificate SAN list (gated
+             on crVersion ≥ 1.22.0), so TLS hostname verification works for
+             external clients. Requires <release>-rs0-<i>.<host> to resolve to the
+             per-pod LoadBalancer (DNS is an operational prerequisite). The host
+             is injected by the cozystack controller as _namespace.host; if it is
+             absent we skip the horizons rather than render an invalid SAN.
+
+             The replicas guard is load-bearing, not defensive: with replicas: 0
+             the range body renders nothing and `splitHorizons:` would be emitted
+             with a null value. The CRD types it as object without nullable, so
+             the API server rejects the whole PerconaServerMongoDB and the
+             HelmRelease fails. Omit the key entirely instead. */}}
+      {{- $host := (.Values._namespace | default dict).host }}
+      {{- if and $host (gt (int $.Values.replicas) 0) }}
+      splitHorizons:
+        {{- range $i := until (int $.Values.replicas) }}
+        {{ $.Release.Name }}-rs0-{{ $i }}:
+          external: {{ $.Release.Name }}-rs0-{{ $i }}.{{ $host }}
+        {{- end }}
+      {{- end }}
+      {{- end }}
+    {{- end }}
+
+  {{- if .Values.users }}
+  {{- /* Build a map of username -> list of roles from databases config */}}
+  {{- $userRoles := dict }}
+  {{- range $dbname, $db := .Values.databases }}
+    {{- range $user := $db.roles.admin }}
+      {{- $roles := index $userRoles $user | default list }}
+      {{- $roles = append $roles (dict "name" "readWrite" "db" $dbname) }}
+      {{- $roles = append $roles (dict "name" "dbAdmin" "db" $dbname) }}
+      {{- $_ := set $userRoles $user $roles }}
+    {{- end }}
+    {{- range $user := $db.roles.readonly }}
+      {{- $roles := index $userRoles $user | default list }}
+      {{- $roles = append $roles (dict "name" "read" "db" $dbname) }}
+      {{- $_ := set $userRoles $user $roles }}
+    {{- end }}
+  {{- end }}
+  users:
+    {{- range $username, $user := .Values.users }}
+    {{- $roles := index $userRoles $username }}
+    {{- if not $roles }}
+    {{- fail (printf "user '%s' is not assigned to any database role in databases.*.roles" $username) }}
+    {{- end }}
+    - name: {{ $username }}
+      db: admin
+      passwordSecretRef:
+        name: {{ $.Release.Name }}-user-{{ $username }}
+        key: password
+      roles:
+        {{- range $roles }}
+        - name: {{ .name }}
+          db: {{ .db }}
+        {{- end }}
+    {{- end }}
+  {{- end }}
+
+  backup:
+    enabled: {{ .Values.backup.enabled | default false }}
+    image: percona/percona-backup-mongodb:2.11.0
+    {{- /*
+      useSystemBucket: keep enabled (so the pbm agents run) but omit the static
+      storage/tasks/pitr. The chart cannot know the platform bucket/endpoint at
+      render time, so the cozy-default BackupClass driver SSA-injects
+      spec.backup.storages["s3-storage"] under its own field manager at
+      BackupJob time; Helm never owns that subtree, so a Flux re-render leaves
+      the injected storage intact (same split the postgres useSystemBucket flow
+      uses for spec.plugins). Scheduling is driven by a BackupClass Plan, not
+      the chart's tasks; PITR on the system bucket is not wired here yet.
+    */}}
+    {{- if and .Values.backup.enabled (not .Values.backup.useSystemBucket) }}
+    storages:
+      s3-storage:
+        type: s3
+        s3:
+          bucket: {{ include "mongodb.backup.bucket" . | quote }}
+          {{- with include "mongodb.backup.prefix" . }}
+          prefix: {{ . | quote }}
+          {{- end }}
+          endpointUrl: {{ .Values.backup.endpointURL }}
+          credentialsSecret: {{ .Release.Name }}-s3-creds
+          insecureSkipTLSVerify: {{ .Values.backup.insecureSkipTLSVerify | default false }}
+          forcePathStyle: true
+    tasks:
+      - name: daily-backup
+        enabled: true
+        schedule: {{ .Values.backup.schedule | quote }}
+        keep: {{ .Values.backup.retentionPolicy | trimSuffix "d" | int }}
+        storageName: s3-storage
+        type: logical
+        compressionType: gzip
+    pitr:
+      enabled: true
+    {{- end }}
+---
+# WorkloadMonitor tracks data-bearing mongod pods only (not config servers or mongos routers)
+# The selector filters by component=mongod, so we only count shard replicas
+apiVersion: cozystack.io/v1alpha1
+kind: WorkloadMonitor
+metadata:
+  name: {{ .Release.Name }}
+  labels:
+    workloads.cozystack.io/resource-preset: {{ .Values.resourcesPreset | quote }}
+spec:
+  {{- if .Values.sharding }}
+  {{- $totalReplicas := 0 }}
+  {{- range .Values.shardingConfig.shards }}
+  {{- $totalReplicas = add $totalReplicas .replicas }}
+  {{- end }}
+  replicas: {{ $totalReplicas }}
+  {{- else }}
+  replicas: {{ .Values.replicas }}
+  {{- end }}
+  minReplicas: 1
+  kind: mongodb
+  type: mongodb
+  selector:
+    app.kubernetes.io/name: percona-server-mongodb
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: mongod
+  version: {{ .Chart.Version }}

@@ -1,0 +1,7 @@
+{{- $files := .Files.Glob "alerts/*.yaml" -}}
+{{- range $path, $file := $files }}
+---
+# from: {{ $path }}
+{{ toString $file }}
+
+{{- end -}}

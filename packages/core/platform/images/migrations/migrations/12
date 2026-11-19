@@ -1,0 +1,35 @@
+#!/bin/sh
+# Migration 12 --> 13
+
+# Copy configuration from ingress to cozystack configmap
+if kubectl get hr -n tenant-root tenant-root > /dev/null; then
+  expose_services=$(
+    kubectl get hr -n tenant-root ingress -o go-template='{{ with .spec }}{{ with .values }}{{ if .dashboard  }}dashboard,{{ end }}{{ if .cdiUploadProxy }}cdi-uploadproxy,{{ end }}{{ if .virtExportProxy }}vm-exportproxy,{{ end }}{{ end }}{{ end }}'
+  )
+  expose_services=$(echo "$expose_services" | awk '{sub(/,$/,""); print}')
+  
+  expose_external_ips=$(
+    kubectl get hr -n tenant-root ingress -o go-template='{{ with .spec }}{{ with .values }}{{ if .externalIPs  }}{{ range .externalIPs }}{{ . }},{{ end }}{{ end }}{{ end }}{{ end }}'
+  )
+  expose_external_ips=$(echo "$expose_external_ips" | awk '{sub(/,$/,""); print}')
+
+  existing_expose_external_ips=$(kubectl get cm -n cozy-system cozystack -o go-template='{{ index .data "expose-external-ips" }}')
+  existing_expose_services=$(kubectl get cm -n cozy-system cozystack -o go-template='{{ index .data "expose-services" }}')
+
+  if [ "$existing_expose_external_ips" == "<no value>" ]; then
+    kubectl patch cm -n cozy-system cozystack --type merge -p="{\"data\":{\"expose-external-ips\":\"$expose_external_ips\"}}"
+  fi
+
+  if [ "$existing_expose_services" == "<no value>" ]; then
+    kubectl patch cm -n cozy-system cozystack --type merge -p="{\"data\":{\"expose-services\":\"$expose_services\"}}"
+  fi
+
+  kubectl patch hr -n tenant-root ingress --type json -p='[{"op": "remove", "path": "/spec/values/dashboard"}]' || true
+  kubectl patch hr -n tenant-root ingress --type json -p='[{"op": "remove", "path": "/spec/values/cdiUploadProxy"}]' || true
+  kubectl patch hr -n tenant-root ingress --type json -p='[{"op": "remove", "path": "/spec/values/virtExportProxy"}]' || true
+  kubectl patch hr -n tenant-root ingress --type json -p='[{"op": "remove", "path": "/spec/values/externalIPs"}]' || true
+  kubectl patch hr -n tenant-root ingress --type merge -p='{"spec":{"chart":{"spec":{"version":"1.6.0"}}}}'
+fi
+
+# Write version to cozystack-version config
+kubectl create configmap -n cozy-system cozystack-version --from-literal=version=13 --dry-run=client -o yaml | kubectl apply -f-

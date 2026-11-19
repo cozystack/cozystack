@@ -1,0 +1,84 @@
+suite: tenant cilium kube-proxy-replacement override beacon
+# addons.cilium.valuesOverride is x-kubernetes-preserve-unknown-fields, so a
+# tenant can set cilium.kubeProxyReplacement: false for its own cluster. That is
+# the one path by which the unsupported value reaches a live cluster without a
+# cozystack commit. It can break ClusterIP routing and removes the ingress-nginx
+# policy's source-side pre-DNAT match, but the target-side ingressDeny remains;
+# the override does not imply that the webhook becomes reachable.
+#
+# The override is assembled on the MANAGEMENT cluster, in this chart, which is
+# why the mismatch is detectable here at all. Same beacon mechanism as the
+# -awaiting-etcd ConfigMap in templates/cluster.yaml: something an operator and
+# an alert can both see. It diagnoses an unsupported override rather than
+# defining an alternative compatibility mode.
+templates:
+  - templates/helmreleases/cilium.yaml
+values:
+  - values-ci.yaml
+tests:
+  - it: emits no beacon when the tenant does not touch the value
+    asserts:
+      - hasDocuments:
+          count: 1
+      - isKind:
+          of: HelmRelease
+
+  - it: emits no beacon when the tenant sets it to true explicitly
+    set:
+      addons:
+        cilium:
+          valuesOverride:
+            cilium:
+              kubeProxyReplacement: true
+    asserts:
+      - hasDocuments:
+          count: 1
+      - isKind:
+          of: HelmRelease
+
+  - it: emits a beacon naming the cluster when the tenant turns it off
+    set:
+      addons:
+        cilium:
+          valuesOverride:
+            cilium:
+              kubeProxyReplacement: false
+    asserts:
+      - hasDocuments:
+          count: 2
+      - equal:
+          path: data.status
+          value: kube-proxy-replacement-off
+        documentSelector:
+          path: kind
+          value: ConfigMap
+      - equal:
+          path: data.kubeProxyReplacement
+          value: "false"
+        documentSelector:
+          path: kind
+          value: ConfigMap
+      - matchRegex:
+          path: data.message
+          pattern: "supports guest cluster networking only when"
+        documentSelector:
+          path: kind
+          value: ConfigMap
+
+  # The override survives the merge: cozystack.defaultCiliumValues is
+  # mergeOverwrite'd on top of it and does not set this key, so a tenant value
+  # is what reaches the HelmRelease.
+  - it: passes the tenant override through to the HelmRelease values
+    set:
+      addons:
+        cilium:
+          valuesOverride:
+            cilium:
+              kubeProxyReplacement: false
+    asserts:
+      - equal:
+          path: spec.values.cilium.kubeProxyReplacement
+          value: false
+        documentSelector:
+          path: kind
+          value: HelmRelease

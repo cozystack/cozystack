@@ -1,0 +1,8 @@
+# The kind written as a quoted scalar. YAML makes no distinction, so this
+# creates the same cluster; a matcher keyed on the bare word sees no creator
+# here and the "exactly one script" claim stays green while being false.
+apiVersion: apps.cozystack.io/v1alpha1
+kind: "Kubernetes"
+---
+apiVersion: apps.cozystack.io/v1alpha1
+kind: 'Kubernetes'

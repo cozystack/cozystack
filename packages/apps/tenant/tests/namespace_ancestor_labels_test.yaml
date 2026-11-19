@@ -1,0 +1,91 @@
+suite: tenant namespace ancestor labels
+# Regression cover for the tenant.cozystack.io/<ancestor> namespace labels
+# emitted by namespace.yaml. These labels drive the <ancestor>-egress
+# CiliumClusterwideNetworkPolicy (networkpolicy.yaml): an ancestor tenant is
+# allowed to reach any namespace carrying tenant.cozystack.io/<ancestor>, so
+# every tenant namespace MUST carry the label of each of its ancestors,
+# tenant-root included, at every depth.
+#
+# The labels are derived from the namespace name by tenant.ancestorTenantLabels
+# (see _helpers.tpl) with no cluster lookup, so helm-unittest can render them
+# offline — the ownerReference lookup is the only cluster-coupled part of
+# namespace.yaml and is skipped when the parent namespace lookup is empty.
+templates:
+  - templates/namespace.yaml
+set:
+  _cluster:
+    root-host: example.com
+tests:
+  - it: depth-1 tenant (direct child of root) carries tenant-root and its own label
+    release:
+      name: tenant-ktj
+      namespace: tenant-root
+    asserts:
+      - documentIndex: 0
+        isKind:
+          of: Namespace
+      - documentIndex: 0
+        equal:
+          path: metadata.name
+          value: tenant-ktj
+      - documentIndex: 0
+        equal:
+          path: metadata.labels["tenant.cozystack.io/tenant-root"]
+          value: ""
+      - documentIndex: 0
+        equal:
+          path: metadata.labels["tenant.cozystack.io/tenant-ktj"]
+          value: ""
+
+  - it: depth-2 tenant carries the full ancestor chain including tenant-root
+    release:
+      name: tenant-htdev
+      namespace: tenant-ktj
+    asserts:
+      - documentIndex: 0
+        equal:
+          path: metadata.name
+          value: tenant-ktj-htdev
+      - documentIndex: 0
+        equal:
+          path: metadata.labels["tenant.cozystack.io/tenant-root"]
+          value: ""
+      - documentIndex: 0
+        equal:
+          path: metadata.labels["tenant.cozystack.io/tenant-ktj"]
+          value: ""
+      - documentIndex: 0
+        equal:
+          path: metadata.labels["tenant.cozystack.io/tenant-ktj-htdev"]
+          value: ""
+
+  - it: depth-3 tenant carries every ancestor from root down to itself
+    release:
+      name: tenant-foo
+      namespace: tenant-ktj-htdev
+    asserts:
+      - documentIndex: 0
+        equal:
+          path: metadata.name
+          value: tenant-ktj-htdev-foo
+      - documentIndex: 0
+        equal:
+          path: metadata.labels["tenant.cozystack.io/tenant-root"]
+          value: ""
+      - documentIndex: 0
+        equal:
+          path: metadata.labels["tenant.cozystack.io/tenant-ktj"]
+          value: ""
+      - documentIndex: 0
+        equal:
+          path: metadata.labels["tenant.cozystack.io/tenant-ktj-htdev"]
+          value: ""
+      - documentIndex: 0
+        equal:
+          path: metadata.labels["tenant.cozystack.io/tenant-ktj-htdev-foo"]
+          value: ""
+      # A tenant must NOT claim descendants it does not have: the depth-3
+      # namespace is not an ancestor of any deeper tenant, so no stray label.
+      - documentIndex: 0
+        notExists:
+          path: metadata.labels["tenant.cozystack.io/tenant-ktj-htdev-foo-bar"]

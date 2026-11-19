@@ -1,0 +1,42 @@
+{{- /*
+  updateMode is Initial, not Auto. Auto mode evicts running pods to apply new
+  recommendations; during install that churn recreates pods faster than Cilium
+  releases their endpoint IPs, tripping the cluster-pool IPAM "IP already in
+  use" (putEndpointIdInvalid) leak that wedges a pod and stalls the install.
+  Initial sets requests at creation without evicting, removing the trigger.
+  Do not switch back to Auto without fixing the underlying Cilium IP-reuse race.
+*/ -}}
+{{- /*
+  Rendered only when the CRD is served: a release manifest that records a VPA
+  the cluster cannot map is one Helm can no longer uninstall.
+*/ -}}
+{{- if .Capabilities.APIVersions.Has "autoscaling.k8s.io/v1/VerticalPodAutoscaler" }}
+apiVersion: autoscaling.k8s.io/v1
+kind: VerticalPodAutoscaler
+metadata:
+  name: vpa-vmagent
+spec:
+  targetRef:
+    apiVersion: operator.victoriametrics.com/v1beta1
+    kind: VMAgent
+    name: vmagent
+  updatePolicy:
+    updateMode: Initial
+    minReplicas: 1
+  resourcePolicy:
+    containerPolicies:
+      - containerName: config-reloader
+        minAllowed:
+          cpu: 100m
+          memory: 25Mi
+        maxAllowed:
+          cpu: 1000m
+          memory: 256Mi
+      - containerName: vmagent
+        minAllowed:
+          cpu: 100m
+          memory: 25Mi
+        maxAllowed:
+          cpu: 4000m
+          memory: 6G
+{{- end }}

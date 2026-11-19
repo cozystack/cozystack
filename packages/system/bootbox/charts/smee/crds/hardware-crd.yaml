@@ -1,0 +1,388 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.16.3
+  name: hardware.tinkerbell.org
+spec:
+  group: tinkerbell.org
+  names:
+    categories:
+      - tinkerbell
+    kind: Hardware
+    listKind: HardwareList
+    plural: hardware
+    shortNames:
+      - hw
+    singular: hardware
+  scope: Namespaced
+  versions:
+    - additionalPrinterColumns:
+        - jsonPath: .status.state
+          name: State
+          type: string
+      name: v1alpha1
+      schema:
+        openAPIV3Schema:
+          description: Hardware is the Schema for the Hardware API.
+          properties:
+            apiVersion:
+              description: |-
+                APIVersion defines the versioned schema of this representation of an object.
+                Servers should convert recognized schemas to the latest internal value, and
+                may reject unrecognized values.
+                More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+              type: string
+            kind:
+              description: |-
+                Kind is a string value representing the REST resource this object represents.
+                Servers may infer this from the endpoint the client submits requests to.
+                Cannot be updated.
+                In CamelCase.
+                More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+              type: string
+            metadata:
+              type: object
+            spec:
+              description: HardwareSpec defines the desired state of Hardware.
+              properties:
+                bmcRef:
+                  description: |-
+                    BMCRef contains a relation to a BMC state management type in the same
+                    namespace as the Hardware. This may be used for BMC management by
+                    orchestrators.
+                  properties:
+                    apiGroup:
+                      description: |-
+                        APIGroup is the group for the resource being referenced.
+                        If APIGroup is not specified, the specified Kind must be in the core API group.
+                        For any other third-party types, APIGroup is required.
+                      type: string
+                    kind:
+                      description: Kind is the type of resource being referenced
+                      type: string
+                    name:
+                      description: Name is the name of resource being referenced
+                      type: string
+                  required:
+                    - kind
+                    - name
+                  type: object
+                  x-kubernetes-map-type: atomic
+                disks:
+                  items:
+                    description: Disk represents a disk device for Tinkerbell Hardware.
+                    properties:
+                      device:
+                        type: string
+                    type: object
+                  type: array
+                interfaces:
+                  items:
+                    description: Interface represents a network interface configuration for Hardware.
+                    properties:
+                      dhcp:
+                        description: DHCP configuration.
+                        properties:
+                          arch:
+                            type: string
+                          hostname:
+                            type: string
+                          iface_name:
+                            type: string
+                          ip:
+                            description: IP configuration.
+                            properties:
+                              address:
+                                type: string
+                              family:
+                                format: int64
+                                type: integer
+                              gateway:
+                                type: string
+                              netmask:
+                                type: string
+                            type: object
+                          lease_time:
+                            format: int64
+                            type: integer
+                          mac:
+                            pattern: ([0-9a-f]{2}[:]){5}([0-9a-f]{2})
+                            type: string
+                          name_servers:
+                            items:
+                              type: string
+                            type: array
+                          time_servers:
+                            items:
+                              type: string
+                            type: array
+                          uefi:
+                            type: boolean
+                          vlan_id:
+                            description: validation pattern for VLANDID is a string number between 0-4096
+                            pattern: ^(([0-9][0-9]{0,2}|[1-3][0-9][0-9][0-9]|40([0-8][0-9]|9[0-6]))(,[1-9][0-9]{0,2}|[1-3][0-9][0-9][0-9]|40([0-8][0-9]|9[0-6]))*)$
+                            type: string
+                        type: object
+                      disableDhcp:
+                        default: false
+                        description: DisableDHCP disables DHCP for this interface.
+                        type: boolean
+                      netboot:
+                        description: Netboot configuration.
+                        properties:
+                          allowPXE:
+                            type: boolean
+                          allowWorkflow:
+                            type: boolean
+                          ipxe:
+                            description: IPXE configuration.
+                            properties:
+                              contents:
+                                type: string
+                              url:
+                                type: string
+                            type: object
+                          osie:
+                            description: OSIE configuration.
+                            properties:
+                              baseURL:
+                                type: string
+                              initrd:
+                                type: string
+                              kernel:
+                                type: string
+                            type: object
+                        type: object
+                    type: object
+                  type: array
+                metadata:
+                  properties:
+                    bonding_mode:
+                      format: int64
+                      type: integer
+                    custom:
+                      properties:
+                        preinstalled_operating_system_version:
+                          properties:
+                            distro:
+                              type: string
+                            image_tag:
+                              type: string
+                            os_slug:
+                              type: string
+                            slug:
+                              type: string
+                            version:
+                              type: string
+                          type: object
+                        private_subnets:
+                          items:
+                            type: string
+                          type: array
+                      type: object
+                    facility:
+                      properties:
+                        facility_code:
+                          type: string
+                        plan_slug:
+                          type: string
+                        plan_version_slug:
+                          type: string
+                      type: object
+                    instance:
+                      properties:
+                        allow_pxe:
+                          type: boolean
+                        always_pxe:
+                          type: boolean
+                        crypted_root_password:
+                          type: string
+                        hostname:
+                          type: string
+                        id:
+                          type: string
+                        ips:
+                          items:
+                            properties:
+                              address:
+                                type: string
+                              family:
+                                format: int64
+                                type: integer
+                              gateway:
+                                type: string
+                              management:
+                                type: boolean
+                              netmask:
+                                type: string
+                              public:
+                                type: boolean
+                            type: object
+                          type: array
+                        ipxe_script_url:
+                          type: string
+                        network_ready:
+                          type: boolean
+                        operating_system:
+                          properties:
+                            distro:
+                              type: string
+                            image_tag:
+                              type: string
+                            os_slug:
+                              type: string
+                            slug:
+                              type: string
+                            version:
+                              type: string
+                          type: object
+                        rescue:
+                          type: boolean
+                        ssh_keys:
+                          items:
+                            type: string
+                          type: array
+                        state:
+                          type: string
+                        storage:
+                          properties:
+                            disks:
+                              items:
+                                properties:
+                                  device:
+                                    type: string
+                                  partitions:
+                                    items:
+                                      properties:
+                                        label:
+                                          type: string
+                                        number:
+                                          format: int64
+                                          type: integer
+                                        size:
+                                          format: int64
+                                          type: integer
+                                        start:
+                                          format: int64
+                                          type: integer
+                                        type_guid:
+                                          type: string
+                                      type: object
+                                    type: array
+                                  wipe_table:
+                                    type: boolean
+                                type: object
+                              type: array
+                            filesystems:
+                              items:
+                                properties:
+                                  mount:
+                                    properties:
+                                      create:
+                                        properties:
+                                          force:
+                                            type: boolean
+                                          options:
+                                            items:
+                                              type: string
+                                            type: array
+                                        type: object
+                                      device:
+                                        type: string
+                                      files:
+                                        items:
+                                          properties:
+                                            contents:
+                                              type: string
+                                            gid:
+                                              format: int64
+                                              type: integer
+                                            mode:
+                                              format: int64
+                                              type: integer
+                                            path:
+                                              type: string
+                                            uid:
+                                              format: int64
+                                              type: integer
+                                          type: object
+                                        type: array
+                                      format:
+                                        type: string
+                                      point:
+                                        type: string
+                                    type: object
+                                type: object
+                              type: array
+                            raid:
+                              items:
+                                properties:
+                                  devices:
+                                    items:
+                                      type: string
+                                    type: array
+                                  level:
+                                    type: string
+                                  name:
+                                    type: string
+                                  spare:
+                                    format: int64
+                                    type: integer
+                                type: object
+                              type: array
+                          type: object
+                        tags:
+                          items:
+                            type: string
+                          type: array
+                        userdata:
+                          type: string
+                      type: object
+                    manufacturer:
+                      properties:
+                        id:
+                          type: string
+                        slug:
+                          type: string
+                      type: object
+                    state:
+                      type: string
+                  type: object
+                resources:
+                  additionalProperties:
+                    anyOf:
+                      - type: integer
+                      - type: string
+                    pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                    x-kubernetes-int-or-string: true
+                  description: |-
+                    Resources represents known resources that are available on a machine.
+                    Resources may be used for scheduling by orchestrators.
+                  type: object
+                tinkVersion:
+                  format: int64
+                  type: integer
+                userData:
+                  description: |-
+                    UserData is the user data to configure in the hardware's
+                    metadata
+                  type: string
+                vendorData:
+                  description: |-
+                    VendorData is the vendor data to configure in the hardware's
+                    metadata
+                  type: string
+              type: object
+            status:
+              description: HardwareStatus defines the observed state of Hardware.
+              properties:
+                state:
+                  description: HardwareState represents the hardware state.
+                  type: string
+              type: object
+          type: object
+      served: true
+      storage: true
+      subresources:
+        status: {}

@@ -1,0 +1,182 @@
+{{- if .Values.deploy }}
+{{- $publicIP := .Values.publicIP }}
+{{- $trustedProxies := .Values.trustedProxies }}
+{{- $roleType := .Values.rbac.type }}
+{{- $nodeSelector := .Values.nodeSelector }}
+{{- if .Values.global }}
+{{- $publicIP = coalesce .Values.publicIP .Values.global.publicIP }}
+{{- $trustedProxies = coalesce .Values.trustedProxies .Values.global.trustedProxies }}
+{{- $roleType = coalesce .Values.global.rbac.type .Values.rbac.type }}
+{{- $nodeSelector = coalesce .Values.nodeSelector .Values.global.nodeSelector }}
+{{- end }}
+{{- $_ := set .Values.dhcp "syslogIp" (default $publicIP .Values.dhcp.syslogIp) }}
+{{- $_ := set .Values.dhcp "ipForPacket" (default $publicIP .Values.dhcp.ipForPacket) }}
+{{- $_ := set .Values.dhcp "tftpIp" (default $publicIP .Values.dhcp.tftpIp) }}
+{{- $_ := set .Values.dhcp.httpIPXE.binaryUrl "host" (default $publicIP .Values.dhcp.httpIPXE.binaryUrl.host) }}
+{{- $_ := set .Values.dhcp.httpIPXE.scriptUrl "host" (default $publicIP .Values.dhcp.httpIPXE.scriptUrl.host) }}
+{{- $_ := set .Values.http.tinkServer "ip" (default $publicIP .Values.http.tinkServer.ip) }}
+{{- $_ := set .Values.http.osieUrl "host" (default $publicIP .Values.http.osieUrl.host) }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app: {{ .Values.name }}
+  name: {{ .Values.name }}
+  namespace: {{ .Release.Namespace | quote }}
+spec:
+  replicas: {{ .Values.replicas }}
+  selector:
+    matchLabels:
+      app: {{ .Values.name }}
+      stack: tinkerbell
+      {{- with .Values.selector }}
+      {{- toYaml . | nindent 6 }}
+      {{- end }}
+  strategy:
+    type: {{ .Values.deployment.strategy.type }}
+  template:
+    metadata:
+      labels:
+        app: {{ .Values.name }}
+        stack: tinkerbell
+        {{- with .Values.selector }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      containers:
+        - image: {{ .Values.image }}
+          imagePullPolicy: {{ .Values.imagePullPolicy }}
+          args:
+          {{- range .Values.additionalArgs }}
+            - {{ . }}
+          {{- end }}
+          env:
+            - name: SMEE_LOG_LEVEL
+              value: {{ .Values.logLevel | quote }}
+            - name: SMEE_DHCP_ADDR
+              value: {{ printf "%v:%v" .Values.dhcp.ip .Values.dhcp.port | quote }}
+            - name: SMEE_DHCP_ENABLED
+              value: {{ .Values.dhcp.enabled | quote }}
+            - name: SMEE_DHCP_TFTP_PORT
+              value: {{ .Values.dhcp.tftpPort | quote }}
+            - name: SMEE_DHCP_HTTP_IPXE_BINARY_PATH
+              value: {{ .Values.dhcp.httpIPXE.binaryUrl.path | quote }}
+            - name: SMEE_DHCP_HTTP_IPXE_BINARY_PORT
+              value: {{ .Values.dhcp.httpIPXE.binaryUrl.port | quote }}
+            - name: SMEE_DHCP_HTTP_IPXE_BINARY_SCHEME
+              value: {{ .Values.dhcp.httpIPXE.binaryUrl.scheme | quote }}
+            - name: SMEE_DHCP_HTTP_IPXE_SCRIPT_PATH
+              value: {{ .Values.dhcp.httpIPXE.scriptUrl.path | quote }}
+            - name: SMEE_DHCP_HTTP_IPXE_SCRIPT_PORT
+              value: {{ .Values.dhcp.httpIPXE.scriptUrl.port | quote }}
+            - name: SMEE_DHCP_HTTP_IPXE_SCRIPT_SCHEME
+              value: {{ .Values.dhcp.httpIPXE.scriptUrl.scheme | quote }}
+            - name: SMEE_DHCP_MODE
+              value: {{ .Values.dhcp.mode | quote }}
+            - name: SMEE_EXTRA_KERNEL_ARGS
+              value: {{ join " " ( append .Values.http.additionalKernelArgs ( printf "tink_worker_image=%s" ( required "missing tinkWorkerImage" .Values.tinkWorkerImage ) ) ) | quote }}
+            - name: SMEE_HTTP_IPXE_BINARY_ENABLED
+              value: {{ .Values.http.ipxeBinaryEnabled | quote }}
+            - name: SMEE_HTTP_IPXE_SCRIPT_ENABLED
+              value: {{ .Values.http.ipxeScriptEnabled | quote }}
+            - name: SMEE_HTTP_PORT
+              value: {{ .Values.http.port | quote }}
+            - name: SMEE_OSIE_URL
+              value: {{include "urlJoiner" (dict "urlDict" .Values.http.osieUrl) | quote }}
+            - name: SMEE_TINK_SERVER
+              value: {{ printf "%v:%v" .Values.http.tinkServer.ip .Values.http.tinkServer.port | quote }}
+            - name: SMEE_TINK_SERVER_TLS
+              value: {{ .Values.http.tinkServer.tls | quote }}
+            - name: SMEE_TINK_SERVER_INSECURE_TLS
+              value: {{ .Values.http.tinkServer.insecureTLS | quote }}
+            - name: SMEE_TRUSTED_PROXIES
+              value: {{ required "missing trustedProxies" ( join "," $trustedProxies ) | quote }}
+            - name: SMEE_SYSLOG_ENABLED
+              value: {{ .Values.syslog.enabled | quote }}
+            - name: SMEE_IPXE_SCRIPT_PATCH
+              value: {{ .Values.ipxeScriptPatch | quote }}
+            - name: SMEE_TFTP_ENABLED
+              value: {{ .Values.tftp.enabled | quote }}
+            - name: SMEE_TFTP_TIMEOUT
+              value: {{ .Values.tftp.timeout | quote }}
+            - name: SMEE_TFTP_PORT
+              value: {{ .Values.tftp.port | quote }}
+            - name: SMEE_SYSLOG_PORT
+              value: {{ .Values.syslog.port | quote }}
+            - name: SMEE_HTTP_ADDR
+              value: {{ .Values.http.ip | quote }}
+            - name: SMEE_SYSLOG_ADDR
+              value: {{ .Values.syslog.ip | quote }}
+            - name: SMEE_TFTP_ADDR
+              value: {{ .Values.tftp.ip | quote }}
+            - name: SMEE_DHCP_HTTP_IPXE_BINARY_HOST
+              value: {{ .Values.dhcp.httpIPXE.binaryUrl.host | quote }}
+            - name: SMEE_DHCP_HTTP_IPXE_SCRIPT_HOST
+              value: {{ .Values.dhcp.httpIPXE.scriptUrl.host | quote }}
+            - name: SMEE_DHCP_SYSLOG_IP
+              value: {{ .Values.dhcp.syslogIp | quote }}
+            - name: SMEE_DHCP_TFTP_IP
+              value: {{ .Values.dhcp.tftpIp | quote }}
+            - name: SMEE_DHCP_IP_FOR_PACKET
+              value: {{ .Values.dhcp.ipForPacket | quote }}
+            - name: SMEE_ISO_ENABLED
+              value: {{ .Values.iso.enabled | quote }}
+            - name: SMEE_ISO_URL
+              value: {{ .Values.iso.url | quote }}
+            - name: SMEE_ISO_MAGIC_STRING
+              value: {{ .Values.iso.magicString | quote }}
+            - name: SMEE_ISO_STATIC_IPAM_ENABLED
+              value: {{ .Values.iso.staticIPAMEnabled | quote }}
+            {{- if eq $roleType "Role"}}
+            - name: SMEE_BACKEND_KUBE_NAMESPACE
+              value: {{ .Release.Namespace | quote }}
+            {{- end }}
+            {{- range .Values.additionalEnv }}
+            - name: {{ .name | quote }}
+              value: {{ .value | quote }}
+            {{- end }}
+          {{- if not .Values.hostNetwork }}
+          ports:
+            {{- include "smee.ports" ( merge ( dict "PortKey" "containerPort" ) .Values  ) | indent 12 }}
+          {{- end }}
+          name: {{ .Values.name }}
+          resources:
+            limits:
+              cpu: {{ .Values.resources.limits.cpu }}
+              memory: {{ .Values.resources.limits.memory }}
+            requests:
+              cpu: {{ .Values.resources.requests.cpu }}
+              memory: {{ .Values.resources.requests.memory }}
+          {{- with .Values.additionalVolumeMounts }}
+          volumeMounts:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+      {{- with .Values.additionalVolumes }}
+      volumes:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ .Values.name }}
+      {{- if .Values.hostNetwork }}
+      hostNetwork: true
+      {{- end }}
+      {{- with $nodeSelector }}
+      nodeSelector:
+      {{ toYaml . | nindent 8 }}
+      {{- end }}
+      {{- if or .Values.deployment.tolerations .Values.singleNodeClusterConfig.controlPlaneTolerationsEnabled }}
+      tolerations:
+      {{- .Values.deployment.tolerations | toYaml | nindent 8 }}
+      {{- if .Values.singleNodeClusterConfig.controlPlaneTolerationsEnabled }}
+      {{- include "singleNodeClusterConfig" . | indent 6 }}
+      {{- end }}
+      {{- end }}
+      {{- if .Values.deployment.affinity }}
+      affinity:
+        {{- .Values.deployment.affinity | toYaml | nindent 8 }}
+      {{- else if .Values.singleNodeClusterConfig.controlPlaneTolerationsEnabled }}
+      affinity:
+        nodeAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          {{- include "preferWorkerNodes" (dict "nodeAffinityWeight" .Values.singleNodeClusterConfig.nodeAffinityWeight) | indent 10 }}
+      {{- end }}
+{{- end }}

@@ -1,0 +1,58 @@
+{{- if and .Values.admission.enabled (eq .Values.admission.createTLS "cert-manager") }}
+---
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: {{ include "linstor-scheduler.admissionFullname" . }}-selfsigned
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "linstor-scheduler.admissionLabels" . | nindent 4 }}
+spec:
+  selfSigned: {}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ include "linstor-scheduler.admissionFullname" . }}-root-ca
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "linstor-scheduler.admissionLabels" . | nindent 4 }}
+spec:
+  secretName: {{ include "linstor-scheduler.admissionFullname" . }}-root-ca
+  duration: 43800h  # 5 years
+  commonName: {{ include "linstor-scheduler.admissionFullname" . }}-root-ca
+  privateKey:
+    rotationPolicy: {{ .Values.admission.tls.certManager.rotationPolicy }}
+  issuerRef:
+    name: {{ include "linstor-scheduler.admissionFullname" . }}-selfsigned
+  isCA: true
+---
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: {{ include "linstor-scheduler.admissionFullname" . }}-ca-issuer
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "linstor-scheduler.admissionLabels" . | nindent 4 }}
+spec:
+  ca:
+    secretName: {{ include "linstor-scheduler.admissionFullname" . }}-root-ca
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ include "linstor-scheduler.admissionFullname" . }}-cert
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "linstor-scheduler.admissionLabels" . | nindent 4 }}
+spec:
+  secretName: {{ include "linstor-scheduler.admissionTLSSecretName" . }}
+  duration: 8760h  # 1 year
+  renewBefore: 24h
+  issuerRef:
+    name: {{ include "linstor-scheduler.admissionFullname" . }}-ca-issuer
+  commonName: {{ include "linstor-scheduler.admissionFullname" . }}
+  dnsNames:
+    - {{ include "linstor-scheduler.admissionFullname" . }}
+    - {{ include "linstor-scheduler.admissionFullname" . }}.{{ .Release.Namespace }}.svc
+{{- end }}

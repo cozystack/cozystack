@@ -1,0 +1,39 @@
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Release.Name }}-haproxy
+  labels:
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+spec:
+  type: {{ ternary "LoadBalancer" "ClusterIP" .Values.external }}
+  {{- if .Values.external }}
+  externalTrafficPolicy: Local
+    {{- if (include "cozy-lib.network.disableLoadBalancerNodePorts" $ | fromYaml) }}
+  allocateLoadBalancerNodePorts: false
+    {{- end }}
+  {{- end }}
+  selector:
+    app: {{ .Release.Name }}-haproxy
+  ports:
+  {{- with .Values.httpAndHttps }}
+  - name: http
+    protocol: TCP
+    port: 80
+    targetPort: http
+  - name: https
+    protocol: TCP
+    port: 443
+    targetPort: https
+  {{- end }}
+  {{- with .Values.kubernetesAndTalos }}
+  - name: kubernetes
+    protocol: TCP
+    port: 6443
+    targetPort: kubernetes
+  - name: talos
+    protocol: TCP
+    port: 50000
+    targetPort: talos
+  {{- end }}

@@ -1,0 +1,8 @@
+{{- $files := .Files.Glob "alerts/*.yaml" -}}
+{{- if .Capabilities.APIVersions.Has "monitoring.coreos.com/v1" }}
+{{- range $path, $file := $files }}
+---
+# from: {{ $path }}
+{{ toString $file }}
+{{- end }}
+{{- end -}}

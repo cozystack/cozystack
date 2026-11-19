@@ -1,0 +1,40 @@
+{{- $ingress := .Values._namespace.ingress }}
+{{- $host := .Values._namespace.host }}
+{{- if and (not (eq .Values.topology "Client")) (.Values.filer.grpcHost) }}
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  annotations:
+    nginx.ingress.kubernetes.io/backend-protocol: GRPCS
+    nginx.ingress.kubernetes.io/ssl-passthrough: "true"
+    nginx.ingress.kubernetes.io/whitelist-source-range: "{{ join "," (.Values.filer.whitelist | default "0.0.0.0/32") }}"
+  name: seaweedfs-filer-external
+spec:
+  ingressClassName: tenant-root
+  rules:
+  - host: {{ .Values.filer.grpcHost | default (printf "filer.%s" $host) }}
+    http:
+      paths:
+      - backend:
+          service:
+            name: {{ $.Release.Name }}-filer-external
+            port:
+              number: 18888
+        path: /
+        pathType: ImplementationSpecific
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $.Release.Name }}-filer-external
+spec:
+  ports:
+  - name: swfs-filer-grpc
+    port: 18888
+    protocol: TCP
+    targetPort: 18888
+  selector:
+    app.kubernetes.io/component: filer
+    app.kubernetes.io/name: {{ $.Release.Name }}
+{{- end }}

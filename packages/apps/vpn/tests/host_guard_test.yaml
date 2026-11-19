@@ -1,0 +1,28 @@
+suite: vpn access URL fails on an empty apex
+
+templates:
+  - templates/secret.yaml
+
+release:
+  name: vpn-test
+  namespace: tenant-test
+
+# secret.yaml builds the per-user access URL as <release>.<_namespace.host>.
+# cozy-lib.ns-host-required guards the apex, so an empty apex fails the render.
+
+tests:
+  - it: fails when the apex is empty and no host override
+    set:
+      _namespace:
+        host: ""
+    asserts:
+      - failedTemplate:
+          errorMessage: "the tenant apex (_namespace.host) is empty and this app sets no host override, so its ingress hostname would be malformed. Set tenant.spec.host on this tenant, inherit it from a parent that has host set, or set this app's host value."
+
+  - it: renders the secret when the apex is set
+    set:
+      _namespace:
+        host: example.com
+    asserts:
+      - hasDocuments:
+          count: 2

@@ -1,0 +1,110 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "grafana-operator.fullname" . }}
+  namespace: {{ include "grafana-operator.namespace" . }}
+  labels:
+    {{- include "grafana-operator.labels" . | nindent 4 }}
+    app.kubernetes.io/component: operator
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "grafana-operator.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      labels:
+        {{- include "grafana-operator.labels" . | nindent 8 }}
+        app.kubernetes.io/component: operator
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "grafana-operator.serviceAccountName" . }}
+      {{- with .Values.podSecurityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: {{ .Chart.Name }}
+          {{- with .Values.securityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          env:
+            - name: WATCH_NAMESPACE
+              {{- if and .Values.namespaceScope (eq .Values.watchNamespaces "") }}
+              value: {{ .Release.Namespace }}
+              {{ else }}
+              value: {{ .Values.watchNamespaces }}
+              {{- end }}
+            - name: WATCH_NAMESPACE_SELECTOR
+              {{- if and .Values.namespaceScope (eq .Values.watchNamespaceSelector "") }}
+              value: ""
+              {{ else }}
+              value: {{quote .Values.watchNamespaceSelector }}
+              {{- end }}
+            {{- with .Values.env }}
+              {{- toYaml . | nindent 12 }}
+            {{- end }}
+          args:
+            - --health-probe-bind-address=:8081
+            - --metrics-bind-address=0.0.0.0:{{ .Values.metricsService.metricsPort }}
+            - --pprof-addr=0.0.0.0:{{ .Values.metricsService.pprofPort }}
+            {{- if .Values.leaderElect }}
+            - --leader-elect
+            {{- end }}
+          volumeMounts:
+            - name: dashboards-dir
+              mountPath: /tmp/dashboards
+          ports:
+            - containerPort: {{ .Values.metricsService.metricsPort }}
+              name: metrics
+              protocol: TCP
+            - containerPort: {{ .Values.metricsService.pprofPort }}
+              name: pprof
+              protocol: TCP
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8081
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: 8081
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: 8081
+            periodSeconds: 5
+            failureThreshold: 30
+            timeoutSeconds: 10
+          {{- with .Values.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+      volumes:
+        - name: dashboards-dir
+          emptyDir: {}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- if .Values.priorityClassName }}
+      priorityClassName: {{ .Values.priorityClassName }}
+      {{- end }}

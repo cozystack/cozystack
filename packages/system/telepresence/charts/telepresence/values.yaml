@@ -1,0 +1,145 @@
+affinity: {}
+agent:
+  appProtocolStrategy: http2Probe
+  envoy:
+    adminPort: 19000
+    httpIdleTimeout: 70s
+    logLevel: warning
+    serverPort: 18000
+  image:
+    name: null
+    pullPolicy: IfNotPresent
+    pullSecrets: []
+    registry: docker.io/datawire
+    tag: null
+  initResources: {}
+  logLevel: null
+  port: 9900
+  resources: {}
+agentInjector:
+  agentImage: {}
+  certificate:
+    regenerate: false
+  injectPolicy: OnDemand
+  name: agent-injector
+  secret:
+    name: mutator-webhook-tls
+  webhook:
+    admissionReviewVersions:
+    - v1
+    failurePolicy: Ignore
+    name: agent-injector-webhook
+    namespaceSelector:
+      matchExpressions:
+      - key: kubernetes.io/metadata.name
+        operator: NotIn
+        values:
+        - kube-system
+        - kube-node-lease
+    port: 443
+    reinvocationPolicy: IfNeeded
+    servicePath: /traffic-agent
+    sideEffects: None
+    timeoutSeconds: 5
+ambassador-agent:
+  enabled: true
+  securityContext:
+    readOnlyRootFilesystem: true
+    runAsNonRoot: true
+    runAsUser: 1000
+apiPort: 8081
+client:
+  connectionTTL: 24h
+  dns:
+    excludeSuffixes:
+    - .com
+    - .io
+    - .net
+    - .org
+    - .ru
+    includeSuffixes: []
+  routing:
+    allowConflictingSubnets: []
+    alsoProxySubnets: []
+    neverProxySubnets: []
+clientRbac:
+  create: false
+  namespaced: false
+  namespaces:
+  - ambassador
+  ruleExtras: true
+  subjects: []
+grpc:
+  maxReceiveSize: 4Mi
+hooks:
+  busybox:
+    image: busybox
+    imagePullSecrets: []
+    registry: docker.io
+    tag: latest
+  curl:
+    image: curlimages/curl
+    imagePullSecrets: []
+    registry: docker.io
+    tag: 8.1.1
+  podSecurityContext: {}
+  resources: {}
+  securityContext: {}
+httpsProxy:
+  rootCATLSSecret: ""
+image:
+  imagePullSecrets: []
+  name: ambassador-telepresence-manager
+  pullPolicy: IfNotPresent
+  registry: docker.io/datawire
+  tag: ""
+intercept:
+  disableGlobal: false
+  environment:
+    excluded: []
+isCI: false
+licenseKey:
+  create: false
+  secret:
+    create: true
+    name: systema-license
+  value: ""
+livenessProbe: {}
+logLevel: info
+managerRbac:
+  create: true
+  namespaced: false
+  namespaces: []
+nodeSelector: {}
+podAnnotations: {}
+podCIDRStrategy: auto
+podCIDRs: []
+podLabels: {}
+podSecurityContext: {}
+priorityClassName: ""
+prometheus:
+  port: 0
+rbac:
+  only: false
+readinessProbe: {}
+replicaCount: 1
+resources: {}
+securityContext:
+  readOnlyRootFilesystem: true
+  runAsNonRoot: true
+  runAsUser: 1000
+service:
+  type: ClusterIP
+systemaHost: app.getambassador.io
+systemaPort: 443
+telepresenceAPI:
+  port: 0
+timeouts:
+  agentArrival: 30s
+tolerations: []
+tracing:
+  grpcPort: 15766
+trafficManager:
+  envTemplate: true
+  mountsTemplate: true
+  volsTemplate: true

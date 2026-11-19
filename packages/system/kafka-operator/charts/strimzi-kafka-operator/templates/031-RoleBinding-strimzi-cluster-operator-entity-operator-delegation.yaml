@@ -1,0 +1,33 @@
+{{- if .Values.rbac.create -}}
+{{- $namespaces := include "strimzi.watchNamespacesList" . | fromYamlArray }}
+{{- range $i, $ns := $namespaces }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+{{- if $.Values.watchAnyNamespace }}
+kind: ClusterRoleBinding
+{{- else }}
+kind: RoleBinding
+{{- end }}
+metadata:
+  name: strimzi-cluster-operator-entity-operator-delegation
+  {{- if not $.Values.watchAnyNamespace }}
+  namespace: {{ $ns }}
+  {{- end }}
+  labels:
+    app: {{ template "strimzi.name" $ }}
+    chart: {{ template "strimzi.chart" $ }}
+    component: entity-operator-role-binding
+    release: {{ $.Release.Name }}
+    heritage: {{ $.Release.Service }}
+# The Entity Operator cluster role must be bound to the cluster operator service account so that it can delegate the cluster role to the Entity Operator.
+# This must be done to avoid escalating privileges which would be blocked by Kubernetes.
+subjects:
+  - kind: ServiceAccount
+    name: {{ $.Values.serviceAccount }}
+    namespace: {{ $.Release.Namespace }}
+roleRef:
+  kind: ClusterRole
+  name: strimzi-entity-operator
+  apiGroup: rbac.authorization.k8s.io
+{{- end }}
+{{- end -}}

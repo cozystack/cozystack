@@ -1,0 +1,7 @@
+{{- if .Values.useParams -}}
+{{ include "cozy-lib.tls.caCertSecret" (dict
+     "name" .Values.name
+     "namespace" .Values.namespace
+     "caCert" .Values.caCert
+) }}
+{{- end -}}

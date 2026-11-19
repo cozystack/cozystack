@@ -1,0 +1,44 @@
+apiVersion: apiregistration.k8s.io/v1
+kind: APIService
+metadata:
+  annotations:
+    cert-manager.io/inject-ca-from: "{{ .Release.Namespace }}/cozystack-api"
+  name: v1alpha1.apps.cozystack.io
+spec:
+  group: apps.cozystack.io
+  groupPriorityMinimum: 1000
+  versionPriority: 15
+  service:
+    name: cozystack-api
+    namespace: cozy-system
+  version: v1alpha1
+---
+apiVersion: apiregistration.k8s.io/v1
+kind: APIService
+metadata:
+  annotations:
+    cert-manager.io/inject-ca-from: "{{ .Release.Namespace }}/cozystack-api"
+  name: v1alpha1.core.cozystack.io
+spec:
+  group: core.cozystack.io
+  groupPriorityMinimum: 1000
+  versionPriority: 15
+  service:
+    name: cozystack-api
+    namespace: cozy-system
+  version: v1alpha1
+---
+apiVersion: apiregistration.k8s.io/v1
+kind: APIService
+metadata:
+  annotations:
+    cert-manager.io/inject-ca-from: "{{ .Release.Namespace }}/cozystack-api"
+  name: v1alpha1.sdn.cozystack.io
+spec:
+  group: sdn.cozystack.io
+  groupPriorityMinimum: 1000
+  versionPriority: 15
+  service:
+    name: cozystack-api
+    namespace: cozy-system
+  version: v1alpha1

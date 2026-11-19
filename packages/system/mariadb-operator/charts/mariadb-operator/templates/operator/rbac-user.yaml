@@ -1,0 +1,30 @@
+{{- if and (not .Values.currentNamespaceOnly) .Values.rbac.enabled -}}
+{{ $fullName := include "mariadb-operator.fullname" . }}
+# the mariadb-view ClusterRole allows viewing all k8s.mariadb.com resources
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ $fullName }}-view
+  {{- if .Values.rbac.aggregation.enabled }}
+  labels:
+    rbac.authorization.k8s.io/aggregate-to-view: "true"
+  {{- end }}
+rules:
+- apiGroups: ["k8s.mariadb.com"]
+  resources: ["*"]
+  verbs: ["get", "list", "watch"]
+---
+# the mariadb-edit ClusterRole allows editing k8s.mariadb.com resources
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ $fullName }}-edit
+  {{- if .Values.rbac.aggregation.enabled }}
+  labels:
+    rbac.authorization.k8s.io/aggregate-to-edit: "true"
+  {{- end }}
+rules:
+- apiGroups: ["k8s.mariadb.com"]
+  resources: ["*"]
+  verbs: ["create", "update", "patch", "delete"]
+{{- end }}

@@ -1,0 +1,22 @@
+{{- if .Values.controller.enabled }}
+{{- range .Values.controller.volumeSnapshotClasses }}
+---
+kind: VolumeSnapshotClass
+apiVersion: snapshot.storage.k8s.io/v1
+metadata:
+  name: {{ .name }}
+{{- with .annotations }}
+  annotations: {{- . | toYaml | trim | nindent 4 }}
+{{- end }}
+  labels:
+  {{- include "snapshot-controller.labels" $ | nindent 4 }}
+{{- with .labels }}
+  {{- . | toYaml | trim | nindent 4 }}
+{{- end }}
+driver: {{ .driver }}
+deletionPolicy: {{ .deletionPolicy }}
+{{- with .parameters }}
+parameters: {{- . | toYaml | trim | nindent 2 }}
+{{- end }}
+{{- end }}
+{{- end }}

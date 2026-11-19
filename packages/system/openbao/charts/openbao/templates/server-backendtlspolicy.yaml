@@ -1,0 +1,43 @@
+{{ template "openbao.mode" . }}
+{{- if ne .mode "external" }}
+{{- if and (not .Values.global.tlsDisable) .Values.server.gateway.tlsPolicy.enabled -}}
+{{- $serviceName := include "openbao.fullname" . -}}
+{{- template "openbao.serverServiceEnabled" . -}}
+{{- if .serverServiceEnabled -}}
+{{- if and (eq .mode "ha" ) (eq (.Values.server.gateway.tlsPolicy.activeService | toString) "true") }}
+{{- $serviceName = printf "%s-%s" $serviceName "active" -}}
+{{- end }}
+apiVersion: {{ .Values.server.gateway.tlsPolicy.apiVersion }}
+kind: BackendTLSPolicy
+metadata:
+  name: {{ template "openbao.fullname" . }}
+  namespace: {{ include "openbao.namespace" . }}
+  labels:
+    helm.sh/chart: {{ include "openbao.chart" . }}
+    app.kubernetes.io/name: {{ include "openbao.name" . }}
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+    {{- with .Values.server.gateway.tlsPolicy.labels }}
+      {{- toYaml . | nindent 4 }}
+    {{- end }}
+  {{- template "openbao.gateway.tlsPolicy.annotations" . }}
+spec:
+  targetRefs:
+  {{- if .Values.server.gateway.tlsPolicy.targetRefs }}
+  {{- with .Values.server.gateway.tlsPolicy.targetRefs }}
+  {{- toYaml . | nindent 4 }}
+  {{- end }}
+  {{- else }}
+  - group: ''
+    kind: Service
+    name: {{ $serviceName }}
+    sectionName: {{ include "openbao.scheme" . }}
+  {{- end }}
+  validation:
+    {{- with .Values.server.gateway.tlsPolicy.validation }}
+      {{- toYaml . | nindent 4 }}
+    {{- end }}
+    hostname: {{ include "openbao.fullname" . }}
+{{- end }}
+{{- end }}
+{{- end }}

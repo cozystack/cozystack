@@ -1,0 +1,12 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: cozystack-controller
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: cozystack-controller
+subjects:
+- kind: ServiceAccount
+  name: cozystack-controller
+  namespace: cozy-system

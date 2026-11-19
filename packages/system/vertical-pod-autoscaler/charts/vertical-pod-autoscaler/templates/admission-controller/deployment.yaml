@@ -1,0 +1,258 @@
+{{- if .Values.admissionController.enabled }}
+apiVersion: {{ include "common.capabilities.deployment.apiVersion" . }}
+kind: Deployment
+metadata:
+  name: {{ include "vertical-pod-autoscaler.admissionController.fullname" . }}
+  namespace: {{ include "common.names.namespace" . | quote }}
+  labels:
+    {{- include "vertical-pod-autoscaler.admissionController.labels" . | nindent 4 }}
+    {{- if .Values.commonLabels }}
+    {{- include "common.tplvalues.render" ( dict "value" .Values.commonLabels "context" $ ) | nindent 4 }}
+    {{- end }}
+  {{- if or .Values.admissionController.deploymentAnnotations .Values.commonAnnotations }}
+  {{- $annotations := include "common.tplvalues.merge" ( dict "values" ( list .Values.admissionController.deploymentAnnotations .Values.commonAnnotations ) "context" . ) }}
+  annotations: {{- include "common.tplvalues.render" ( dict "value" $annotations "context" $ ) | nindent 4 }}
+  {{- end }}
+spec:
+  replicas: {{ .Values.admissionController.replicaCount }}
+  revisionHistoryLimit: {{ .Values.admissionController.revisionHistoryLimit }}
+  selector:
+    matchLabels:
+      {{- include "vertical-pod-autoscaler.admissionController.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "vertical-pod-autoscaler.admissionController.selectorLabels" . | nindent 8 }}
+        {{- if .Values.admissionController.podLabels }}
+        {{- include "common.tplvalues.render" ( dict "value" .Values.admissionController.podLabels "context" $ ) | nindent 8 }}
+        {{- end }}
+        {{- if .Values.commonLabels }}
+        {{- include "common.tplvalues.render" ( dict "value" .Values.commonLabels "context" $ ) | nindent 8 }}
+        {{- end }}
+      annotations:
+        {{- /*
+          checksum/tls-secret trips pod rotation whenever tls-secret.yaml
+          renders a different sha. Under the legacy path that Secret's
+          content depends on `genCA`/`genSignedCert` which produce a
+          fresh CA on every render — so this annotation was the amplifier
+          that turned a single-chart-race into a rolling-ReplicaSet
+          storm. When cert-manager owns the TLS Secret it's stable
+          across renders (only rotates near `renewBefore`), and the
+          `checksum` would either be misleading (secret content isn't
+          driven by this template anymore) or trigger a needless rollout
+          on every unrelated chart change. Gate on the same flag as the
+          legacy template so exactly one code path emits it.
+        */}}
+        {{- if and (not .Values.admissionController.tls.existingSecret) (not .Values.admissionController.tls.certManagerEnabled) }}
+        checksum/tls-secret: {{ include (print $.Template.BasePath "/admission-controller/tls-secret.yaml") . | sha256sum }}
+        {{- end }}
+        {{- /*
+          Under cert-manager we need pod rotation ONLY when the Secret
+          content actually changes. `checksum/tls-cert` hashes the runtime
+          Secret's `tls.crt` (via `lookup`), so:
+
+            * fresh install:       Secret does not exist yet at first
+                                   render; the annotation is absent, pod
+                                   comes up on whichever Secret cert-
+                                   manager writes next.
+            * cert-manager adopt:  cert-manager rewrites the Secret once
+                                   (issuer changed on upgrade) → sha
+                                   flips → pod restarts ONCE and picks up
+                                   the new CA + cert.
+            * steady state:        Secret content stable → sha stable
+                                   → no rotation.
+            * renewal (~275d):     cert-manager rotates Secret → sha
+                                   flips → pod restarts ONCE **only if a
+                                   Helm action fires**; see the trade-off
+                                   below.
+
+          `lookup` runs ONLY on Helm actions (install / upgrade /
+          rollback) — helm-controller does not re-render a deployed
+          release on interval ticks, so `lookup` does not fire on every
+          reconcile. Concrete trade-off:
+
+            - Any Helm action (chart bump, values change, dependency
+              re-apply, manual `flux reconcile hr`) re-templates the
+              chart, `lookup` sees the current Secret content, the
+              annotation is re-computed, and — if the Secret has been
+              rotated since the last render — Kubernetes rolls the pod
+              on the resulting podTemplate change.
+            - Between Helm actions the pod holds the certificate it
+              loaded at startup. With `duration: 8760h` (365d) and
+              `renewBefore: 2160h` (90d) in `certificate.yaml`,
+              cert-manager rotates the Secret at day ~275; if NO Helm
+              action fires in the following ~90 days, the pod keeps
+              serving with an expired in-memory cert past day 365
+              (--reload-cert alone would make this worse — the mounted
+              cert would rotate while the pod's self-registered
+              MutatingWebhookConfiguration caBundle went stale). At
+              cozystack's release cadence a Helm action realistically
+              lands well within that 90-day post-rotation window, so
+              we accept this. If ever it stops holding, a small
+              post-renewal Job that annotates the Deployment
+              podTemplate would close the gap without re-introducing
+              the ReplicaSet-churn amplifier.
+
+          `lookup` returns nil during `helm template --dry-run=client`
+          (offline CI renders / this chart's helm-unittest suite) — that
+          is intentional; the annotation is only meaningful against a
+          live cluster where cert-manager has actually written the
+          Secret. Tests assert the annotation is ABSENT under offline
+          render, exactly for that reason.
+
+          Crucially, this replaces the earlier `kubectl rollout restart`
+          post-upgrade hook. That hook itself was the amplifier of the
+          previous iteration: every Flux reconcile stamped a fresh
+          `kubectl.kubernetes.io/restartedAt` timestamp, which mutated
+          the Deployment podTemplate, which spawned a new ReplicaSet —
+          the same ReplicaSet-churn pattern in a different disguise.
+          Runtime-content-based checksum only mutates when the runtime
+          content actually mutates, so the loop cannot form.
+
+          Hashing only `tls.crt` is sufficient because the Issuer is
+          `selfSigned` (see `certificate.yaml`): the leaf is its own CA,
+          so `ca.crt == tls.crt` and every rotation re-issues `tls.crt`
+          regardless of key-rotation policy. If a future change ever
+          switches the Issuer to a CA-backed one (external CA, ACME,
+          Vault, etc.), the CA can rotate independently of the leaf and
+          this checksum MUST be extended to also cover `ca.crt` —
+          otherwise a CA-only rotation would leave the pod serving with
+          a stale caBundle in its self-registered
+          MutatingWebhookConfiguration until the next full leaf
+          rotation.
+        */}}
+        {{- if and .Values.admissionController.tls.certManagerEnabled (not .Values.admissionController.tls.existingSecret) }}
+        {{- $secret := lookup "v1" "Secret" (include "common.names.namespace" .) (include "vertical-pod-autoscaler.admissionController.tls.secretName" .) }}
+        {{- if and $secret $secret.data (index $secret.data "tls.crt") }}
+        checksum/tls-cert: {{ index $secret.data "tls.crt" | sha256sum }}
+        {{- end }}
+        {{- end }}
+        {{- if .Values.admissionController.podAnnotations }}
+        {{- include "common.tplvalues.render" ( dict "value" .Values.admissionController.podAnnotations "context" $ ) | nindent 8 }}
+        {{- end }}
+        {{- if .Values.commonAnnotations }}
+        {{- include "common.tplvalues.render" ( dict "value" .Values.commonAnnotations "context" $ ) | nindent 8 }}
+        {{- end }}
+    spec:
+      enableServiceLinks: {{ .Values.admissionController.enableServiceLinks }}
+      {{- include "common.images.pullSecrets" ( dict "images" ( list .Values.admissionController.image ) "global" .Values.global ) | nindent 6 }}
+      {{- if .Values.admissionController.hostAliases }}
+      hostAliases: {{- include "common.tplvalues.render" (dict "value" .Values.admissionController.hostAliases "context" $) | nindent 8 }}
+      {{- end }}
+      {{- if .Values.admissionController.hostNetwork }}
+      dnsPolicy: ClusterFirstWithHostNet
+      hostNetwork: true
+      {{- end }}
+      {{- if .Values.admissionController.priorityClassName }}
+      priorityClassName: {{ .Values.admissionController.priorityClassName | quote }}
+      {{- end }}
+      {{- if .Values.admissionController.runtimeClassName }}
+      runtimeClassName: {{ .Values.admissionController.runtimeClassName | quote }}
+      {{- end }}
+      serviceAccountName: {{ include "vertical-pod-autoscaler.admissionController.serviceAccountName" . }}
+      {{- if .Values.admissionController.topologySpreadConstraints }}
+      topologySpreadConstraints: {{- include "common.tplvalues.render" (dict "value" .Values.admissionController.topologySpreadConstraints "context" .) | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.admissionController.podSecurityContext | nindent 8 }}
+      containers:
+        - name: admission-controller
+          securityContext:
+            {{- toYaml .Values.admissionController.securityContext | nindent 12 }}
+          image: {{ include "common.images.image" ( dict "imageRoot" .Values.admissionController.image "global" .Values.global ) }}
+          imagePullPolicy: {{ .Values.admissionController.image.pullPolicy }}
+          args:
+            - --address=:{{ .Values.admissionController.containerPorts.metrics }}
+            - --port={{ .Values.admissionController.containerPorts.https }}
+            - --client-ca-file=/tls-secret/ca.crt
+            - --tls-cert-file=/tls-secret/tls.crt
+            - --tls-private-key=/tls-secret/tls.key
+            {{- range $key, $value := .Values.admissionController.extraArgs }}
+            - --{{ $key }}={{ $value }}
+            {{- end }}
+          env:
+            - name: NAMESPACE
+              value: {{ include "common.names.namespace" . | quote }}
+            {{- if .Values.admissionController.extraEnvVars }}
+            {{- include "common.tplvalues.render" (dict "value" .Values.admissionController.extraEnvVars "context" $) | nindent 12 }}
+            {{- end }}
+          {{- if or .Values.admissionController.extraEnvVarsCM .Values.admissionController.extraEnvVarsSecret }}
+          envFrom:
+            {{- if .Values.admissionController.extraEnvVarsCM }}
+            - configMapRef:
+                name: {{ include "common.tplvalues.render" (dict "value" .Values.admissionController.extraEnvVarsCM "context" $) }}
+            {{- end }}
+            {{- if .Values.admissionController.extraEnvVarsSecret }}
+            - secretRef:
+                name: {{ include "common.tplvalues.render" (dict "value" .Values.admissionController.extraEnvVarsSecret "context" $) }}
+            {{- end }}
+          {{- end }}
+          ports:
+            - name: https
+              containerPort: {{ .Values.admissionController.containerPorts.https }}
+              protocol: TCP
+            - name: http-metrics
+              containerPort: {{ .Values.admissionController.containerPorts.metrics }}
+              protocol: TCP
+          {{- if .Values.admissionController.livenessProbe.enabled }}
+          livenessProbe:
+            httpGet:
+              path: /health-check
+              port: http-metrics
+            initialDelaySeconds: {{ .Values.admissionController.livenessProbe.initialDelaySeconds }}
+            periodSeconds: {{ .Values.admissionController.livenessProbe.periodSeconds }}
+            timeoutSeconds: {{ .Values.admissionController.livenessProbe.timeoutSeconds }}
+            failureThreshold: {{ .Values.admissionController.livenessProbe.failureThreshold }}
+            successThreshold: {{ .Values.admissionController.livenessProbe.successThreshold }}
+          {{- end }}
+          {{- if .Values.admissionController.readinessProbe.enabled }}
+          readinessProbe:
+            httpGet:
+              path: /health-check
+              port: http-metrics
+            initialDelaySeconds: {{ .Values.admissionController.readinessProbe.initialDelaySeconds }}
+            periodSeconds: {{ .Values.admissionController.readinessProbe.periodSeconds }}
+            timeoutSeconds: {{ .Values.admissionController.readinessProbe.timeoutSeconds }}
+            failureThreshold: {{ .Values.admissionController.readinessProbe.failureThreshold }}
+            successThreshold: {{ .Values.admissionController.readinessProbe.successThreshold }}
+          {{- end }}
+          {{- if .Values.admissionController.startupProbe.enabled }}
+          startupProbe:
+            httpGet:
+              path: /health-check
+              port: http-metrics
+            initialDelaySeconds: {{ .Values.admissionController.startupProbe.initialDelaySeconds }}
+            periodSeconds: {{ .Values.admissionController.startupProbe.periodSeconds }}
+            timeoutSeconds: {{ .Values.admissionController.startupProbe.timeoutSeconds }}
+            failureThreshold: {{ .Values.admissionController.startupProbe.failureThreshold }}
+            successThreshold: {{ .Values.admissionController.startupProbe.successThreshold }}
+          {{- end }}
+          resources:
+            {{- toYaml .Values.admissionController.resources | nindent 12 }}
+          volumeMounts:
+            - name: tls-secret
+              mountPath: /tls-secret
+              readOnly: true
+            {{- if .Values.admissionController.extraVolumeMounts }}
+            {{- include "common.tplvalues.render" (dict "value" .Values.admissionController.extraVolumeMounts "context" $) | nindent 12 }}
+            {{- end }}
+      {{- with .Values.admissionController.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    {{- with .Values.admissionController.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+    {{- end }}
+    {{- with .Values.admissionController.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+    {{- end }}
+      volumes:
+        - name: tls-secret
+          secret:
+            secretName: {{ include "vertical-pod-autoscaler.admissionController.tls.secretName" . }}
+        {{- if .Values.admissionController.extraVolumes }}
+        {{- include "common.tplvalues.render" (dict "value" .Values.admissionController.extraVolumes "context" $) | nindent 8 }}
+        {{- end }}
+{{- end }}

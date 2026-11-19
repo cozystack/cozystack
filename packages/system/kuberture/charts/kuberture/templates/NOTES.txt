@@ -1,0 +1,20 @@
+kuberture has been installed.
+
+Controller watches EndpointSlice "{{ .Values.config.source.serviceName }}" in namespace "{{ .Values.config.source.namespace }}".
+
+Configured outputs:
+{{- range .Values.config.outputs }}
+  - {{ .name }}: {{ .hostname | join ", " }} -> {{ .serviceName }}
+{{- end }}
+
+Verify the deployment:
+
+  kubectl get deployment {{ include "kuberture.fullname" . }} --namespace {{ .Release.Namespace }}
+
+Check controller logs:
+
+  kubectl logs deployment/{{ include "kuberture.fullname" . }} --namespace {{ .Release.Namespace }}
+
+Check created headless Services:
+
+  kubectl get services --selector app.kubernetes.io/managed-by=kuberture

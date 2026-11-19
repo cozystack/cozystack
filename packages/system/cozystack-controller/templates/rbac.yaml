@@ -1,0 +1,77 @@
+kind: ClusterRole
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  name: cozystack-controller
+rules:
+- apiGroups: ['cozystack.io', 'gateway.cozystack.io']
+  resources: ['*']
+  verbs: ['*']
+# TenantGatewayReconciler renders Gateway / HTTPRoute / TLSRoute and
+# reads back their status to populate TenantGateway.Status.
+- apiGroups: ["gateway.networking.k8s.io"]
+  resources: ["gateways", "httproutes", "tlsroutes"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+- apiGroups: ["gateway.networking.k8s.io"]
+  resources: ["gateways/status", "httproutes/status", "tlsroutes/status"]
+  verbs: ["get", "update", "patch"]
+# Read-only, to report a class whose supportedFeatures leave out a
+# route kind the tenant Gateway renders listeners for.
+- apiGroups: ["gateway.networking.k8s.io"]
+  resources: ["gatewayclasses"]
+  verbs: ["get", "list", "watch"]
+# TenantGatewayReconciler renders the per-tenant Issuer and the
+# wildcard / per-listener Certificates the Gateway listeners reference.
+- apiGroups: ["cert-manager.io"]
+  resources: ["issuers", "certificates"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+# TenantLogRoutingReconciler patches the forced-upgrade request annotations on
+# cozy-monitoring/monitoring-agents when a namespace monitoring label changes.
+- apiGroups: ["helm.toolkit.fluxcd.io"]
+  resources: ["helmreleases"]
+  verbs: ["get", "list", "watch", "patch", "update"]
+# TapMaterializerReconciler manages the finalizer and materialized-revision
+# annotation on a community tap's OCIRepository. Read (get/list/watch) is
+# covered by the catch-all rule below; the update/patch it needs are scoped to a
+# namespaced Role in cozy-system (see tap-source-role.yaml), since the
+# materializer only ever touches tap sources there. PackageSource writes it
+# performs are already covered by the cozystack.io:*/* rule above.
+# CACertReconciler reconciles TenantProjection sentinels a chart renders and
+# writes their Ready status. It never creates or deletes a sentinel; that is
+# the chart's (helm-controller's) job. No tenant role grants any verb on
+# internal.cozystack.io, which is what keeps sentinels out of tenant reach.
+- apiGroups: ["internal.cozystack.io"]
+  resources: ["tenantprojections"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: ["internal.cozystack.io"]
+  resources: ["tenantprojections/status"]
+  verbs: ["get", "update", "patch"]
+- apiGroups: [""]
+  resources: ["namespaces"]
+  verbs: ["get", "list", "watch", "patch", "update"]
+# TenantQuotaReconciler manages the per-namespace "tenant-quota-allocated"
+# ResourceQuota that enforces each tenant's share of its parent pool, copies the
+# pool root's "tenant-range-limits" LimitRange into unbounded members as
+# "tenant-range-limits-allocated", and emits events on the tenant namespace when
+# sub-tenant quotas overcommit the budget.
+- apiGroups: [""]
+  resources: ["resourcequotas", "limitranges"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+- apiGroups: [""]
+  resources: ["events"]
+  verbs: ["create", "patch"]
+# Two reconcilers share this one Secret write grant on the platform controller's
+# own ServiceAccount; it widens no tenant's RBAC. WildcardSecretReconciler
+# replicates the operator wildcard TLS Secret into each tenant namespace;
+# CACertReconciler writes — and withdraws — the key-free "<release>.tenant-ca"
+# projection, deleting only a projection it owns by owner reference, never a
+# foreign Secret. Read was already covered by the catch-all rule below;
+# create/update/patch/delete are the new grants.
+- apiGroups: [""]
+  resources: ["secrets"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+# Leader election (--leader-elect) is granted by a namespaced Role in cozy-system
+# (see leader-election-role.yaml): the Lease lives in the controller's own
+# namespace, so the write does not need to reach every namespace.
+- apiGroups: ['*']
+  resources: ['*']
+  verbs: ["get", "list", "watch"]

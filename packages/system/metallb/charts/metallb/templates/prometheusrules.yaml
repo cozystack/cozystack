@@ -1,0 +1,86 @@
+{{- if .Values.prometheus.prometheusRule.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: {{ template "metallb.fullname" . }}
+  labels:
+    {{- include "metallb.labels" . | nindent 4 }}
+    {{- if .Values.prometheus.prometheusRule.additionalLabels }}
+{{ toYaml .Values.prometheus.prometheusRule.additionalLabels | indent 4 }}
+    {{- end }}
+  {{- if .Values.prometheus.prometheusRule.annotations }}
+  annotations:
+{{ toYaml .Values.prometheus.prometheusRule.annotations | indent 4 }}
+  {{- end }}
+spec:
+  groups:
+  - name: {{ template "metallb.fullname" . }}.rules
+    rules:
+    {{- if .Values.prometheus.prometheusRule.staleConfig.enabled }}
+    - alert: MetalLBStaleConfig
+      annotations:
+        summary: {{`'Stale config on {{ $labels.pod }}'`}}
+        description: {{`'{{ $labels.job }} - MetalLB {{ $labels.container }} on {{ $labels.pod }} has a stale config for > 1 minute'`}}
+      expr: metallb_k8s_client_config_stale_bool{job=~"{{ template "metallb.fullname" . }}.*"} == 1
+      for: 1m
+      {{- with .Values.prometheus.prometheusRule.staleConfig.labels }}
+      labels:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    {{- end }}
+    {{- if .Values.prometheus.prometheusRule.configNotLoaded.enabled }}
+    - alert: MetalLBConfigNotLoaded
+      annotations:
+        summary: {{`'Config on {{ $labels.pod }} has not been loaded'`}}
+        description: {{`'{{ $labels.job }} - MetalLB {{ $labels.container }} on {{ $labels.pod }} has not loaded for > 1 minute'`}}
+      expr: metallb_k8s_client_config_loaded_bool{job=~"{{ template "metallb.fullname" . }}.*"} == 0
+      for: 1m
+      {{- with .Values.prometheus.prometheusRule.configNotLoaded.labels }}
+      labels:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    {{- end }}
+    {{- if .Values.prometheus.prometheusRule.addressPoolExhausted.enabled }}
+    {{ $exclude := .Values.prometheus.prometheusRule.addressPoolExhausted.excludePools }}
+    - alert: MetalLBAddressPoolExhausted
+      annotations:
+        summary: {{`'Exhausted address pool on {{ $labels.pod }}'`}}
+        description: {{`'{{ $labels.job }} - MetalLB {{ $labels.container }} on {{ $labels.pod }} has exhausted address pool {{ $labels.pool }} for > 1 minute'`}}
+      expr: metallb_allocator_addresses_in_use_total{pool!~"{{ $exclude }}"} >= on(pool) metallb_allocator_addresses_total
+      for: 1m
+      {{- with .Values.prometheus.prometheusRule.addressPoolExhausted.labels }}
+      labels:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    {{- end }}
+
+    {{- if .Values.prometheus.prometheusRule.addressPoolUsage.enabled }}
+    {{ $exclude := .Values.prometheus.prometheusRule.addressPoolUsage.excludePools }}
+    {{- range .Values.prometheus.prometheusRule.addressPoolUsage.thresholds }}
+    - alert: MetalLBAddressPoolUsage{{ .percent }}Percent
+      annotations:
+        summary: {{`'Exhausted address pool on {{ $labels.pod }}'`}}
+        message: {{`'{{ $labels.job }} - MetalLB {{ $labels.container }} on {{ $labels.pod }} has address pool {{ $labels.pool }} past `}}{{ .percent }}{{`% usage for > 1 minute'`}}
+      expr: ( metallb_allocator_addresses_in_use_total{pool!~"{{ $exclude }}"} / on(pool) metallb_allocator_addresses_total ) * 100 > {{ .percent }}
+      {{- with .labels }}
+      labels:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    {{- end }}
+    {{- end }}
+    {{- if .Values.prometheus.prometheusRule.bgpSessionDown.enabled }}
+    - alert: MetalLBBGPSessionDown
+      annotations:
+        summary:  {{`'BGP session down on {{ $labels.pod }}'`}}
+        message: {{`'{{ $labels.job }} - MetalLB {{ $labels.container }} on {{ $labels.pod }} has BGP session {{ $labels.peer }} down for > 1 minute'`}}
+      expr: metallb_bgp_session_up{job=~"{{ template "metallb.fullname" . }}.*"} == 0
+      for: 1m
+      {{- with .Values.prometheus.prometheusRule.bgpSessionDown.labels }}
+      labels:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    {{- end }}
+    {{- with .Values.prometheus.prometheusRule.extraAlerts }}
+    {{- toYaml . | nindent 4 }}
+    {{- end}}
+{{- end }}

@@ -1,0 +1,75 @@
+# Control plane provider
+{{- range $name, $controlPlane := $.Values.controlPlane }}
+  {{- $controlPlaneNamespace := default ( printf "%s-%s" $name "control-plane-system" ) (get $controlPlane "namespace") }}
+  {{- $controlPlaneName := $name }}
+  {{- $controlPlaneVersion := get $controlPlane "version" }}
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  annotations:
+    {{- if $.Values.enableHelmHook }}
+    "helm.sh/hook": "post-install,post-upgrade"
+    "helm.sh/hook-weight": "1"
+    {{- end }}
+    "argocd.argoproj.io/sync-wave": "1"
+  name: {{ $controlPlaneNamespace }}
+---
+apiVersion: operator.cluster.x-k8s.io/v1alpha2
+kind: ControlPlaneProvider
+metadata:
+  name: {{ $controlPlaneName }}
+  namespace: {{ $controlPlaneNamespace }}
+  annotations:
+    {{- if $.Values.enableHelmHook }}
+    "helm.sh/hook": "post-install,post-upgrade"
+    "helm.sh/hook-weight": "2"
+    {{- end }}
+    "argocd.argoproj.io/sync-wave": "2"
+{{- if or $controlPlaneVersion $.Values.configSecret.name $.Values.manager }}
+spec:
+{{- end}}
+{{- if $controlPlaneVersion }}
+  version: {{ $controlPlaneVersion }}
+{{- end }}
+{{- if $.Values.manager }}
+{{- if hasKey $.Values.manager.featureGates $controlPlaneName }}
+  manager:
+{{- range $key, $value := $.Values.manager.featureGates }}
+  {{- if eq $key $controlPlaneName }}
+    featureGates:
+    {{- range $k, $v := $value }}
+      {{ $k }}: {{ $v }}
+    {{- end }}
+  {{- end }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- if $.Values.configSecret.name }}
+  configSecret:
+    name: {{ $.Values.configSecret.name }}
+    {{- if $.Values.configSecret.namespace }}
+    namespace: {{ $.Values.configSecret.namespace }}
+    {{- end }}
+{{- end }}
+{{- if $controlPlane.manifestPatches }}
+  manifestPatches: {{ toYaml $controlPlane.manifestPatches | nindent 4 }}
+{{- end }}
+{{- if $controlPlane.additionalManifests }}
+  additionalManifests:
+    name: {{ $controlPlane.additionalManifests.name }}
+    {{- if $controlPlane.additionalManifests.namespace }}
+    namespace: {{ $controlPlane.additionalManifests.namespace }}
+    {{- end }} {{/* if $controlPlane.additionalManifests.namespace */}}
+{{- end }}
+{{- if $controlPlane.additionalManifests }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $controlPlane.additionalManifests.name }}
+  namespace: {{ default $controlPlaneNamespace $controlPlane.additionalManifests.namespace }}
+data:
+  manifests: {{- toYaml $controlPlane.additionalManifests.manifests | nindent 4 }}
+{{- end }}
+{{- end }} {{/* range $name, $controlPlane := .Values.controlPlane */}}

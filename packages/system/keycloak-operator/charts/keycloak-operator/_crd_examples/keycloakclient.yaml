@@ -1,0 +1,133 @@
+apiVersion: v1.edp.epam.com/v1
+kind: KeycloakClient
+metadata:
+  name: keycloakclient-sample
+spec:
+  realmRef:
+    name: keycloakrealm-sample
+    kind: KeycloakRealm
+  advancedProtocolMappers: true
+  clientId: agocd
+  directAccess: true
+  public: false
+  secret: $client-secret-name:client-secret-key
+  webUrl: https://argocd.example.com
+  adminUrl: https://admin.example.com
+  homeUrl: /home/
+  redirectUris:
+    - /url1/*
+    - /url2/*
+  clientRolesV2:
+    - name: roleA
+      description: "Role A"
+      associatedClientRoles:
+        - roleB
+    - name: roleB
+      description: "Role B"
+
+---
+
+apiVersion: v1.edp.epam.com/v1
+kind: KeycloakClient
+metadata:
+  name: keycloakclient-authorization-sample
+spec:
+  realmRef:
+    name: keycloakrealm-sample
+    kind: KeycloakRealm
+  clientId: authorization-sample
+  secret: $client-secret-authorization-sample:client-secret-key
+  webUrl: https://example.com
+  directAccess: true
+  authorizationServicesEnabled: true
+  serviceAccount:
+    enabled: true
+  authorization:
+    scopes:
+      - scope1
+    resources:
+      - name: resource1
+        displayName: Resource 1
+        type: test
+        iconUri: https://example.com/icon.png
+        scopes:
+          - scope1
+    policies:
+      - name: role-policy
+        type: role
+        decisionStrategy: AFFIRMATIVE
+        logic: POSITIVE
+        description: "Role policy"
+        rolePolicy:
+          roles:
+            - name: developer
+              required: true
+      - type: aggregate
+        name: aggregate-policy
+        description: "Aggregate policy"
+        aggregatedPolicy:
+          policies:
+            - policy1
+            - policy2
+      - type: client
+        name: client-policy
+        description: "Client policy"
+        clientPolicy:
+          clients:
+            - client1
+            - client2
+      - type: group
+        name: group-policy
+        description: "Group policy"
+        groupPolicy:
+          groups:
+            - name: group1
+              extendChildren: true
+      - type: role
+        name: role-policy
+        description: "Role policy"
+        rolePolicy:
+          roles:
+            - name: developer
+              required: true
+      - type: time
+        name: time-policy
+        description: "Time policy"
+        timePolicy:
+          notBefore: "2021-01-01T00:00:00Z"
+          notOnOrAfter: "2021-12-31T23:59:59Z"
+      - type: user
+        name: user-policy
+        description: "User policy"
+        userPolicy:
+          users:
+            - user1
+            - user2
+    permissions:
+      - name: resource-permission
+        type: resource
+        logic: POSITIVE
+        description: "Resource permission"
+        decisionStrategy: AFFIRMATIVE
+        policies:
+          - role-policy
+        resources:
+          - resource1
+      - name: scope-permission
+        type: scope
+        logic: POSITIVE
+        description: "Scope permission"
+        decisionStrategy: CONSENSUS
+        policies:
+          - role-policy
+        scopes:
+          - scope1
+
+---
+
+apiVersion: v1
+kind: Secret
+metadata:
+  name: client-secret-authorization-sample
+data:
+  client-secret-key: cGFzc3dvcmQ=

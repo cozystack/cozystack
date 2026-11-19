@@ -1,0 +1,181 @@
+##
+## @section Common parameters
+##
+
+## @typedef {struct} Resources - Explicit CPU and memory configuration for each ClickHouse replica.
+## @field {quantity} [cpu] - CPU available to each replica.
+## @field {quantity} [memory] - Memory (RAM) available to each replica.
+
+## @enum {string} ResourcesPreset - Default sizing preset.
+## @value t1.nano
+## @value t1.micro
+## @value t1.small
+## @value t1.medium
+## @value t1.large
+## @value t1.xlarge
+## @value t1.2xlarge
+## @value t1.4xlarge
+## @value c1.nano
+## @value c1.micro
+## @value c1.small
+## @value c1.medium
+## @value c1.large
+## @value c1.xlarge
+## @value c1.2xlarge
+## @value c1.4xlarge
+## @value s1.nano
+## @value s1.micro
+## @value s1.small
+## @value s1.medium
+## @value s1.large
+## @value s1.xlarge
+## @value s1.2xlarge
+## @value s1.4xlarge
+## @value u1.nano
+## @value u1.micro
+## @value u1.small
+## @value u1.medium
+## @value u1.large
+## @value u1.xlarge
+## @value u1.2xlarge
+## @value u1.4xlarge
+## @value m1.nano
+## @value m1.micro
+## @value m1.small
+## @value m1.medium
+## @value m1.large
+## @value m1.xlarge
+## @value m1.2xlarge
+## @value m1.4xlarge
+## @value nano
+## @value micro
+## @value small
+## @value medium
+## @value large
+## @value xlarge
+## @value 2xlarge
+
+## @param {int} replicas - Number of ClickHouse replicas.
+replicas: 2
+
+## @param {int} shards - Number of ClickHouse shards.
+shards: 1
+
+## @param {Resources} [resources] - Explicit CPU and memory configuration for each ClickHouse replica. When omitted, the preset defined in `resourcesPreset` is applied.
+resources: {}
+
+## @param {ResourcesPreset} resourcesPreset="t1.small" - Default sizing preset used when `resources` is omitted.
+resourcesPreset: "t1.small"
+
+## @param {quantity} size - Persistent Volume Claim size available for application data.
+size: 10Gi
+
+## @param {string} storageClass - StorageClass used to store the data.
+## @immutable
+## @x-cozystack-options {source: storageclass}
+storageClass: ""
+
+## @enum {string} Version
+## @value v25.8
+## @value v25.3
+## @value v24.9
+
+## @param {Version} version - ClickHouse major.minor version to deploy. Applies to both the ClickHouse server and ClickHouse Keeper images. Downgrading to an older major is unsafe (ClickHouse cannot read data written by a newer server and Keeper snapshots are not backward compatible) — only increase this value.
+version: v24.9
+
+##
+## @section Application-specific parameters
+##
+
+## @param {quantity} logStorageSize - Size of Persistent Volume for logs.
+logStorageSize: 2Gi
+
+## @param {int} logTTL - TTL (expiration time) for `query_log` and `query_thread_log`.
+logTTL: 15
+
+## @typedef {struct} User - User configuration.
+## @field {string} [password] - Password for the user.
+## @field {bool} [readonly] - User is readonly (default: false).
+
+## @param {map[string]User} users - Users configuration map.
+users: {}
+## Example:
+## users:
+##   user1:
+##     password: strongpassword
+##   user2:
+##     readonly: true
+##     password: hackme
+##
+
+##
+## @section Backup parameters
+##
+
+## @typedef {struct} S3CredentialsSecret - Reference to a pre-existing Secret with S3 credentials and bucket coordinates consumed by the chart-emitted `clickhouse-backup` sidecar (rendered into the ClickHouseInstallation Pod by `templates/clickhouse.yaml`). The strategy Pod itself is a curl/jq HTTP client and never reads this Secret. Setting `name` skips the chart-emitted `<release>-backup-s3` Secret in favour of the referenced one. Use this to keep credentials out of the chart values.
+## @field {string} [name] - Name of the Secret in the application namespace. Empty means the chart materialises `<release>-backup-s3` from the legacy `s3*` fields.
+## @field {string} [bucketKey] - Key in the Secret holding the bucket name. Defaults to `bucketName`.
+## @field {string} [endpointKey] - Key in the Secret holding the S3 endpoint URL. Defaults to `endpoint`.
+## @field {string} [regionKey] - Key in the Secret holding the S3 region. Defaults to `region`.
+## @field {string} [accessKeyIDKey] - Key in the Secret holding the access key ID. Defaults to `accessKey`.
+## @field {string} [secretAccessKeyKey] - Key in the Secret holding the secret access key. Defaults to `secretKey`.
+
+## @typedef {struct} EndpointCA - Reference to a Secret holding a PEM-encoded CA bundle the `clickhouse-backup` sidecar should trust when reaching an S3 endpoint that serves a certificate signed by a private CA. Cozystack's in-cluster SeaweedFS (`seaweedfs-s3.<tenant>:8333`) is the common case: it serves TLS signed by the self-signed "SeaweedFS CA", which no system trust store contains. Leave `name` empty for a publicly-trusted endpoint. The Secret must live in the application namespace; copy `ca.crt` out of the seaweedfs CA Secret (`seaweedfs-ca-cert` in the tenant that hosts seaweedfs) to populate it. The bundle is mounted into the sidecar and added to its trust store via `SSL_CERT_DIR`, which *adds* to the system CA set rather than replacing it, so a release configured this way still reaches publicly-trusted endpoints.
+## @field {string} [name] - Name of the Secret in the application namespace. Empty (default) mounts nothing and leaves the sidecar on the system trust store only.
+## @field {string} [key] - Key inside the Secret holding the PEM CA bundle. Defaults to `ca.crt`.
+
+## @typedef {struct} Backup - Backup configuration.
+## @field {bool} enabled - Enable backup integration. Materialises the chart-emitted `<release>-backup-s3` Secret consumed by the Altinity backup strategy and, when `schedule` is non-empty, also renders the legacy chart-managed CronJob.
+## @field {bool} [useSystemBucket] - Opt-in: when true, the chart-emitted `<release>-backup-s3` Secret is skipped and the `clickhouse-backup` sidecar reads bucket coordinates + S3 credentials from the platform-projected `cozy-backups-creds` Secret. `S3_PATH` is set to `<namespace>/<release>` for cross-tenant isolation. Use together with the platform `cozy-default` BackupClass — tenants do not need to fill any `s3*` field below.
+## @field {string} [s3Region] - DEPRECATED. Per-tenant S3 configuration is being phased out in favour of the platform-managed `cozy-default` BackupClass. Optional now so tenants on `useSystemBucket: true` can omit it.
+## @field {string} [s3Bucket] - DEPRECATED. Optional; see `s3Region`.
+## @field {string} [endpoint] - DEPRECATED. S3 endpoint URL for the legacy chart-emitted sidecar.
+## @field {string} [s3PathOverride] - DEPRECATED. Object-key prefix inside the legacy `s3Bucket`; the new platform flow scopes by namespace automatically.
+## @field {string} [schedule] - Legacy. Cron schedule for the chart-emitted CronJob that runs the dump+restic backup. Empty (default) skips the legacy CronJob; recommended when a `BackupClass` + `Plan` from `backups.cozystack.io` already drives backup orchestration via the Altinity strategy.
+## @field {string} [cleanupStrategy] - Legacy. Restic retention policy passed to the legacy CronJob (`restic forget …`). Unused by the Altinity strategy.
+## @field {string} [s3AccessKey] - DEPRECATED. Tenants no longer supply S3 keys; the platform-managed Bucket Secret is the source of truth. Optional now so `useSystemBucket: true` tenants can omit it.
+## @field {string} [s3SecretKey] - DEPRECATED. Optional; see `s3AccessKey`.
+## @field {string} [resticPassword] - Legacy. Password for Restic backup encryption used by the legacy CronJob. Unused by the Altinity strategy.
+## @field {S3CredentialsSecret} [s3CredentialsSecret] - DEPRECATED. Pre-existing Secret reference for the legacy chart-emitted sidecar. The platform flow projects `cozy-backups-creds` instead.
+## @field {EndpointCA} [endpointCA] - CA bundle the sidecar trusts when the S3 endpoint's certificate is signed by a private CA (e.g. Cozystack's in-cluster SeaweedFS). Applies to both the per-tenant and the `useSystemBucket` flow, and to the `clickhouse-backup` sidecar only — the legacy `schedule` CronJob writes to S3 through restic and does not consume it, so a private-CA endpoint combined with `schedule` still fails TLS. Use the BackupClass flow for such an endpoint.
+
+## @param {Backup} backup - Backup configuration.
+backup:
+  enabled: false
+  useSystemBucket: false
+  s3Region: us-east-1
+  s3Bucket: "s3.example.org/clickhouse-backups"
+  endpoint: ""
+  s3PathOverride: ""
+  schedule: ""
+  cleanupStrategy: "--keep-last=3 --keep-daily=3 --keep-within-weekly=1m"
+  s3AccessKey: "<your-access-key>"
+  s3SecretKey: "<your-secret-key>"
+  resticPassword: "<password>"
+  s3CredentialsSecret:
+    name: ""
+    bucketKey: ""
+    endpointKey: ""
+    regionKey: ""
+    accessKeyIDKey: ""
+    secretAccessKeyKey: ""
+  endpointCA:
+    name: ""
+    key: "ca.crt"
+
+##
+## @section ClickHouse Keeper parameters
+##
+
+## @typedef {struct} ClickHouseKeeper - ClickHouse Keeper configuration.
+## @field {bool} [enabled] - Deploy ClickHouse Keeper for cluster coordination.
+## @field {quantity} [size] - Persistent Volume Claim size available for application data.
+## @field {ResourcesPreset} [resourcesPreset] - Default sizing preset.
+## @field {int} [replicas] - Number of Keeper replicas.
+
+## @param {ClickHouseKeeper} clickhouseKeeper - ClickHouse Keeper configuration.
+clickhouseKeeper:
+  enabled: true
+  size: 1Gi
+  resourcesPreset: "t1.micro"
+  replicas: 3

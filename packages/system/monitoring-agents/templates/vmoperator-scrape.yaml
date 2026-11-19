@@ -1,0 +1,17 @@
+---
+apiVersion: operator.victoriametrics.com/v1beta1
+kind: VMServiceScrape
+metadata:
+  name: victoria-metrics-operator
+  namespace: cozy-victoria-metrics-operator
+spec:
+  endpoints:
+  - path: /metrics
+    port: http
+    relabelConfigs:
+    - sourceLabels: [__meta_kubernetes_pod_node_name]
+      targetLabel: node
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: victoria-metrics-operator
+      app.kubernetes.io/instance: victoria-metrics-operator

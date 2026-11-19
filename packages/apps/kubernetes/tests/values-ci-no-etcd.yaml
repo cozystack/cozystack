@@ -1,0 +1,8 @@
+_namespace:
+  etcd: ""
+  monitoring: ""
+  ingress: ""
+  seaweedfs: ""
+  host: ""
+_cluster:
+  cluster-domain: cozy.local

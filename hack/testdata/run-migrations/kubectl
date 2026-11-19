@@ -1,0 +1,37 @@
+#!/bin/sh
+# Fake kubectl for hack/run-migrations.bats. It serves the three calls
+# run-migrations.sh and lib/cozystack-version.sh make against the
+# cozystack-version ConfigMap, backed by a state file so a stamp made by one
+# pod is what the next pod reads.
+#
+#   FAKE_STATE      file holding the stamped version; absent => no ConfigMap
+#   FAKE_READ_FAIL  non-empty => reading .data.version exits 1 with this stderr
+#   FAKE_EXIST_FAIL non-empty => the existence check exits 1 with this stderr,
+#                   --ignore-not-found or not, as a real non-NotFound error does
+set -u
+
+case "$*" in
+  *"apply --filename -"*)
+    v=$(sed -n 's/^  version: "\([0-9]*\)"$/\1/p')
+    [ -n "$v" ] || { echo "fake kubectl: no version in the applied manifest" >&2; exit 1; }
+    printf '%s' "$v" > "$FAKE_STATE"
+    ;;
+  *"get configmap"*"cozystack-version"*"jsonpath"*)
+    if [ -n "${FAKE_READ_FAIL:-}" ]; then echo "$FAKE_READ_FAIL" >&2; exit 1; fi
+    [ -f "$FAKE_STATE" ] || { echo 'Error from server (NotFound): configmaps "cozystack-version" not found' >&2; exit 1; }
+    cat "$FAKE_STATE"
+    ;;
+  *"get configmap"*"cozystack-version"*)
+    if [ -n "${FAKE_EXIST_FAIL:-}" ]; then echo "$FAKE_EXIST_FAIL" >&2; exit 1; fi
+    if [ ! -f "$FAKE_STATE" ]; then
+      case "$*" in *--ignore-not-found*) exit 0 ;; esac
+      echo 'Error from server (NotFound): configmaps "cozystack-version" not found' >&2
+      exit 1
+    fi
+    echo "configmap/cozystack-version"
+    ;;
+  *)
+    echo "fake kubectl: unexpected call: $*" >&2
+    exit 1
+    ;;
+esac

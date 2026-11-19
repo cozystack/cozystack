@@ -1,0 +1,48 @@
+{{- if .Values.plugins.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ template "opencost.fullname" . }}-install-plugins
+  namespace: {{ include "opencost.namespace" . }}
+  labels:
+    app: {{ template "opencost.name" . }}
+    chart: {{ .Chart.Name }}-{{ .Chart.Version | replace "+" "_" }}
+    release: {{ .Release.Name }}
+    heritage: {{ .Release.Service }}
+data:
+  install_plugins.sh: |-
+    {{- if .Values.plugins.install.enabled }}
+      set -ex
+      rm -f {{ .Values.plugins.folder }}/bin/*
+      mkdir -p {{ .Values.plugins.folder }}/bin
+      cd {{ .Values.plugins.folder }}/bin
+      OSTYPE=$(cat /etc/os-release)
+      OS=''
+      case "$OSTYPE" in
+        *Linux*) OS='linux';;
+        *)         echo "$OSTYPE is unsupported" && exit 1 ;;
+      esac
+
+      UNAME_OUTPUT=$(uname -m)
+      ARCH=''
+      case "$UNAME_OUTPUT" in
+        *x86_64*) ARCH='amd64';;
+        *amd64*) ARCH='amd64';;
+        *aarch64*) ARCH='arm64';;
+        *arm64*) ARCH='arm64';;
+        *)         echo "$UNAME_OUTPUT is unsupported" && exit 1 ;;
+      esac
+
+      {{- if .Values.plugins.version  }}
+      VER={{ .Values.plugins.version | quote}}
+      {{- else }}
+      VER=$(curl --silent https://api.github.com/repos/opencost/opencost-plugins/releases/latest | grep ".tag_name" | awk -F\" '{print $4}')
+      {{- end }}
+
+      {{- $pluginList := include "opencost.plugins.installList" . | fromYamlArray }}
+      {{- range $pluginName := $pluginList }}
+      curl -fsSLO "https://github.com/opencost/opencost-plugins/releases/download/$VER/{{ $pluginName }}.ocplugin.$OS.$ARCH"
+      chmod a+rx "{{ $pluginName }}.ocplugin.$OS.$ARCH"
+      {{- end }}
+    {{- end }}
+{{- end }}

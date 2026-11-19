@@ -1,0 +1,48 @@
+{{- if .Values.monitoring.enabled -}}
+{{- $fullName := include "chart.fullname" . -}}
+{{- $svcPort := .Values.service.port -}}
+{{- $data := dict "Chart" .Chart "Release" .Release "Values" .Values -}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $fullName }}-prometheus
+  namespace: {{ include "chart.namespaceName" . }}
+  labels:
+    prometheus: {{ .Values.monitoring.prometheus.name }}
+    {{- include "chart.labels" $data | nindent 4 }}
+{{- if .Values.monitoring.serviceAnnotations }}
+  annotations:
+{{ toYaml .Values.monitoring.serviceAnnotations | indent 4 }}
+{{- end }}
+spec:
+  ports:
+    - port: {{ $svcPort }}
+      protocol: TCP
+      name: metrics
+      targetPort: metrics
+  selector:
+{{- include "chart.selectorLabels" $data | nindent 4 }}
+
+---
+{{- if .Values.monitoring.serviceMonitor -}}
+apiVersion: monitoring.coreos.com/v1 
+kind: ServiceMonitor
+metadata:
+  name: {{ $fullName }}
+  namespace: {{ include "chart.namespaceName" . }}
+  labels:
+    prometheus: {{ .Values.monitoring.prometheus.name }}
+    {{- include "chart.labels" $data | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      prometheus: {{ .Values.monitoring.prometheus.name }}
+     {{- include "chart.selectorLabels" $data | nindent 6 }}
+  namespaceSelector:
+    matchNames:
+    - {{ include "chart.namespaceName" . }}
+  endpoints:
+  - port: metrics
+    interval: 15s
+{{- end -}}
+{{- end -}}

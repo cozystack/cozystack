@@ -1,0 +1,115 @@
+suite: mariadb post-delete cleanup hook
+templates:
+  - templates/hooks/cleanup-pvc.yaml
+
+release:
+  name: mariadb-test
+  namespace: tenant-root
+
+tests:
+  - it: renders the cleanup Job as a post-delete hook
+    documentIndex: 0
+    asserts:
+      - equal:
+          path: kind
+          value: Job
+      - equal:
+          path: metadata.name
+          value: mariadb-test-cleanup
+      - equal:
+          path: metadata.annotations["helm.sh/hook"]
+          value: post-delete
+
+  - it: pins the cleanup image by digest and routes it through the images registry
+    documentIndex: 0
+    asserts:
+      # The image must be digest-pinned (immutable) rather than a moving tag,
+      # and must NOT hardcode docker.io so a mirrored/air-gapped registry can be
+      # prefixed via cozy-lib.image. Asserted by pattern (not an exact digest)
+      # so a Renovate tag/digest bump does not break the test.
+      - matchRegex:
+          path: spec.template.spec.containers[0].image
+          pattern: ^clastix/kubectl:v[0-9]+\.[0-9]+(\.[0-9]+)?@sha256:[0-9a-f]{64}$
+      - notMatchRegex:
+          path: spec.template.spec.containers[0].image
+          pattern: docker\.io
+
+  - it: prefixes the cleanup image with the cluster images registry when set
+    documentIndex: 0
+    set:
+      _cluster:
+        images-registry: registry.example.com
+    asserts:
+      # A mirrored / air-gapped install resolves the image from the internal
+      # registry; the digest pin is preserved.
+      - matchRegex:
+          path: spec.template.spec.containers[0].image
+          pattern: ^registry\.example\.com/clastix/kubectl:v[0-9]+\.[0-9]+(\.[0-9]+)?@sha256:[0-9a-f]{64}$
+
+  - it: leaves no leading slash when the images registry is empty (default)
+    documentIndex: 0
+    asserts:
+      # With images-registry defaulting to "", the rendered ref must still be a
+      # valid image reference (no leading "/") so a standard install resolves it.
+      # The "^clastix" anchor proves there is no leading slash and no registry.
+      - matchRegex:
+          path: spec.template.spec.containers[0].image
+          pattern: ^clastix/kubectl:v[0-9]+\.[0-9]+(\.[0-9]+)?@sha256:[0-9a-f]{64}$
+      - notMatchRegex:
+          path: spec.template.spec.containers[0].image
+          pattern: ^/
+
+  - it: does not emit a double slash when the images registry has a trailing slash
+    documentIndex: 0
+    set:
+      _cluster:
+        images-registry: registry.example.com/
+    asserts:
+      # A misconfigured registry with a trailing "/" must not yield
+      # "registry.example.com//clastix/..." — the helper trims it.
+      - matchRegex:
+          path: spec.template.spec.containers[0].image
+          pattern: ^registry\.example\.com/clastix/kubectl:v[0-9]+\.[0-9]+(\.[0-9]+)?@sha256:[0-9a-f]{64}$
+      - notMatchRegex:
+          path: spec.template.spec.containers[0].image
+          pattern: //
+
+  # cert-manager runs with enableCertificateOwnerRef=false, so deleting the
+  # Certificates does not delete the Secrets they issued. Without this, the CA
+  # private key and the server private key outlive the release in a namespace
+  # the tenant shares with its other applications.
+  - it: deletes the key-bearing cert-manager Secrets on uninstall
+    documentIndex: 0
+    asserts:
+      # Bound to the delete, and to this one invocation of it: a name reachable
+      # by any other verb says nothing about whether the key outlives the
+      # release, and a `(?s).*` gap between verb and name binds them no better,
+      # since it crosses newlines and therefore crosses commands. Only
+      # whitespace and the shell's line continuations may sit between the
+      # arguments, so the match cannot leave the command it started in. The
+      # operator-generated names are in the pattern because they share that
+      # invocation, not because this case is about them.
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: "kubectl delete secret -n \\S+[\\s\\\\]+mariadb-test-metrics-password mariadb-test-repl-password[\\s\\\\]+mariadb-test\\.ca-tls mariadb-test\\.tls --ignore-not-found"
+      # -ca-bundle carries an ownerRef to the MariaDB resource, so Kubernetes
+      # collects it; deleting it here would need a grant that is not warranted.
+      - notMatchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: "mariadb-test-ca-bundle"
+
+  - it: grants delete on exactly the Secrets it removes
+    documentIndex: 2
+    asserts:
+      - equal:
+          path: kind
+          value: Role
+      - contains:
+          path: rules[1].resourceNames
+          content: mariadb-test.ca-tls
+      - contains:
+          path: rules[1].resourceNames
+          content: mariadb-test.tls
+      - lengthEqual:
+          path: rules[1].resourceNames
+          count: 4

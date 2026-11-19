@@ -1,0 +1,180 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ template "capi-operator.fullname" . }}
+  namespace: '{{ .Release.Namespace }}'
+  labels:
+    app: {{ template "capi-operator.name" . }}
+    app.kubernetes.io/name: {{ template "capi-operator.name" . }}
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: "controller"
+    control-plane: controller-manager
+    clusterctl.cluster.x-k8s.io/core: capi-operator
+    {{- with .Values.deploymentLabels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+  {{- with .Values.deploymentAnnotations }}
+  annotations:
+  {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ template "capi-operator.name" . }}
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: "controller"
+      control-plane: controller-manager
+      clusterctl.cluster.x-k8s.io/core: capi-operator
+  {{- with .Values.strategy }}
+  strategy:
+  {{- toYaml . | nindent 4 }}
+  {{- end }}
+  template:
+    metadata:
+      labels:
+        app: {{ template "capi-operator.name" . }}
+        app.kubernetes.io/name: {{ template "capi-operator.name" . }}
+        app.kubernetes.io/instance: {{ .Release.Name }}
+        app.kubernetes.io/component: "controller"
+        control-plane: controller-manager
+        clusterctl.cluster.x-k8s.io/core: capi-operator
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- with .Values.podAnnotations }}
+      annotations:
+      {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      serviceAccountName: capi-operator-manager
+      automountServiceAccountToken: true
+      {{- with .Values.securityContext }}
+      securityContext:
+      {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+      {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+      - args:
+        {{- if .Values.logLevel }}
+        - --v={{ .Values.logLevel }}
+        {{- end }}
+        {{- if .Values.healthAddr }}
+        - --health-addr={{ .Values.healthAddr }}
+        {{- end }}
+        {{- if .Values.diagnosticsAddress }}
+        - --diagnostics-address={{ .Values.diagnosticsAddress }}
+        {{- end }}
+        {{- if .Values.insecureDiagnostics }}
+        - --insecure-diagnostics={{ .Values.insecureDiagnostics }}
+        {{- end }}
+        {{- if .Values.watchConfigSecret }}
+        - --watch-configsecret
+        {{- end }}
+        {{- with .Values.leaderElection }}
+        - --leader-elect={{ .enabled }}
+        {{- if .leaseDuration }}
+        - --leader-elect-lease-duration={{ .leaseDuration }}
+        {{- end }}
+        {{- if .renewDeadline }}
+        - --leader-elect-renew-deadline={{ .renewDeadline }}
+        {{- end }}
+        {{- if .retryPeriod }}
+        - --leader-elect-retry-period={{ .retryPeriod }}
+        {{- end }}
+        {{- end }}
+        {{- with .Values.syncPeriod }}
+        - --sync-period={{ . }}
+        {{- end }}
+        command:
+        - /manager
+        {{- with .Values.image.manager }}
+        image: "{{- if .registry -}}{{ .registry }}/{{- end -}}{{ .repository }}{{- if (.digest) -}} @{{ .digest }}{{- else -}}:{{ default $.Chart.AppVersion .tag }} {{- end -}}"
+        {{- end }}
+        imagePullPolicy: {{ .Values.image.manager.pullPolicy }}
+        name: manager
+        ports:
+        - containerPort: 9443
+          name: webhook-server
+          protocol: TCP
+          {{- if $.Values.diagnosticsAddress }}
+          {{- $diagnosticsPort := $.Values.diagnosticsAddress }}
+          {{- if contains ":" $diagnosticsPort -}}
+          {{ $diagnosticsPort = ( split ":" $.Values.diagnosticsAddress)._1 | int }}
+          {{- end }}
+        - containerPort: {{ $diagnosticsPort | int }}
+          name: metrics
+          protocol: TCP
+          {{- end }}
+        {{- with .Values.resources.manager }}
+        resources:
+        {{- toYaml . | nindent 12 }}
+        {{- end }}
+        {{- with .Values.env.manager }}
+        env:
+        {{- toYaml . | nindent 12 }}
+        {{- end }}
+        {{- with .Values.containerSecurityContext.manager }}
+        securityContext:
+        {{- toYaml . | nindent 12 }}
+        {{- end }}
+        {{- with .Values.volumeMounts.manager }}
+        volumeMounts:
+        {{- toYaml . | nindent 12 }}
+        {{- end }}
+        terminationMessagePolicy: FallbackToLogsOnError
+        {{- $healthAddr := $.Values.healthAddr }}
+        {{- if contains ":" $healthAddr -}}
+        {{ $healthAddr = ( split ":" $.Values.healthAddr)._1 | int }}
+        {{- end }}
+        livenessProbe:
+          failureThreshold: 3
+          httpGet:
+            path: /healthz
+            port: {{ $healthAddr | default 9440 }}
+            scheme: HTTP
+          initialDelaySeconds: 15
+          periodSeconds: 20
+          successThreshold: 1
+          timeoutSeconds: 1
+        readinessProbe:
+          failureThreshold: 3
+          httpGet:
+            path: /readyz
+            port: {{ $healthAddr | default 9440 }}
+            scheme: HTTP
+          initialDelaySeconds: 5
+          periodSeconds: 10
+          successThreshold: 1
+          timeoutSeconds: 1
+      terminationGracePeriodSeconds: 10
+      {{- with .Values.volumes }}
+      volumes:
+      {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+      {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+      {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+      {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with  .Values.topologySpreadConstraints }}
+      topologySpreadConstraints:
+      {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.podDnsPolicy }}
+      dnsPolicy: {{ . }}
+      {{- end }}
+      {{- with .Values.podDnsConfig }}
+      dnsConfig:
+      {{- toYaml . | nindent 8 }}
+      {{- end }}

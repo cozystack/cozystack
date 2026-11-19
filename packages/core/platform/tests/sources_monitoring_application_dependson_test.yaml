@@ -1,0 +1,70 @@
+suite: monitoring-application variant ordering edges (default + oidc)
+# Regression guard for a fresh-install ordering race introduced by the Phase-1
+# OIDC selector (cozystack/cozystack#3176). The `oidc` variant additionally
+# depends on cozystack.keycloak-operator so the v1.edp.epam.com CRDs are
+# registered before the monitoring chart reconciles — without this edge the
+# `.Capabilities.APIVersions.Has` guard in
+# templates/grafana/oidc-keycloak.yaml would silently drop the whole
+# Keycloak side of mode: System and Grafana's auth.generic_oauth block would
+# point at a client that never gets provisioned. The `default` variant MUST
+# NOT depend on keycloak-operator — that Package is only emitted when
+# authentication.oidc.enabled is true, so a hard dep on the default variant
+# would leave every OIDC-off cluster stuck on DependenciesNotReady forever.
+templates:
+  - templates/sources.yaml
+release:
+  name: cozystack
+  namespace: cozy-system
+tests:
+  - it: default variant carries the baseline reconciliation edges without keycloak-operator
+    documentSelector:
+      path: metadata.name
+      value: cozystack.monitoring-application
+    asserts:
+      - contains:
+          path: spec.variants[0].dependsOn
+          content: cozystack.networking
+      - contains:
+          path: spec.variants[0].dependsOn
+          content: cozystack.postgres-operator
+      - contains:
+          path: spec.variants[0].dependsOn
+          content: cozystack.grafana-operator
+      - contains:
+          path: spec.variants[0].dependsOn
+          content: cozystack.victoria-metrics-operator
+      - contains:
+          path: spec.variants[0].dependsOn
+          content: cozystack.cozystack-engine
+      - notContains:
+          path: spec.variants[0].dependsOn
+          content: cozystack.keycloak-operator
+
+  - it: oidc variant additionally waits for keycloak-operator (OIDC CRDs)
+    documentSelector:
+      path: metadata.name
+      value: cozystack.monitoring-application
+    asserts:
+      - equal:
+          path: spec.variants[1].name
+          value: oidc
+      - contains:
+          path: spec.variants[1].dependsOn
+          content: cozystack.keycloak-operator
+      # oidc variant inherits the baseline edges (regression guard against
+      # someone dropping one when refactoring the variant).
+      - contains:
+          path: spec.variants[1].dependsOn
+          content: cozystack.networking
+      - contains:
+          path: spec.variants[1].dependsOn
+          content: cozystack.grafana-operator
+      - contains:
+          path: spec.variants[1].dependsOn
+          content: cozystack.postgres-operator
+      - contains:
+          path: spec.variants[1].dependsOn
+          content: cozystack.victoria-metrics-operator
+      - contains:
+          path: spec.variants[1].dependsOn
+          content: cozystack.cozystack-engine

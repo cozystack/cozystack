@@ -1,0 +1,101 @@
+{{- if .Values.admission.enabled }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "linstor-scheduler.admissionFullname" . }}
+  {{- if .Values.admission.reloadOnCertChange }}
+  annotations:
+    # The webhook binary loads its serving certificate once at startup and does
+    # not hot-reload it, so the pods must restart when the TLS secret changes
+    # (e.g. cert-manager renewal). These annotations let Stakater Reloader roll
+    # the Deployment automatically when the secret is updated.
+    secret.reloader.stakater.com/reload: {{ include "linstor-scheduler.admissionTLSSecretName" . | quote }}
+  {{- end }}
+  labels:
+    {{- include "linstor-scheduler.admissionLabels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.admission.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "linstor-scheduler.admissionSelectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      {{- if or .Values.podAnnotations (eq .Values.admission.createTLS "helm") }}
+      annotations:
+        {{- if eq .Values.admission.createTLS "helm" }}
+        # In "helm" TLS mode the CA and certificate are regenerated on every
+        # "helm upgrade". Rolling the pods each revision makes them pick up the
+        # new certificate that matches the freshly generated webhook caBundle.
+        checksum/tls-revision: {{ .Release.Revision | quote }}
+        {{- end }}
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- end }}
+      labels:
+        {{- include "linstor-scheduler.admissionSelectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: admission
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "linstor-scheduler.admissionServiceAccountName" . }}
+      securityContext:
+        {{- toYaml .Values.admission.podSecurityContext | nindent 8 }}
+      containers:
+        - name: linstor-scheduler-admission
+          image: {{ .Values.extender.image.repository }}:{{ .Values.extender.image.tag | default .Chart.AppVersion }}
+          imagePullPolicy: {{ .Values.extender.image.pullPolicy }}
+          command: ["/linstor-scheduler-admission"]
+          args:
+            - -scheduler={{ include "linstor-scheduler.fullname" . }}
+            - -driver={{ .Values.admission.driver }}
+            - -tls-cert-file=/etc/webhook/certs/tls.crt
+            - -tls-key-file=/etc/webhook/certs/tls.key
+          securityContext:
+            {{- toYaml .Values.admission.securityContext | nindent 12 }}
+          ports:
+            - containerPort: 8080
+              name: https
+              protocol: TCP
+          readinessProbe:
+            tcpSocket:
+              port: https
+          livenessProbe:
+            tcpSocket:
+              port: https
+          volumeMounts:
+            - name: webhook-certs
+              mountPath: /etc/webhook/certs
+              readOnly: true
+          resources:
+            {{- toYaml .Values.admission.resources | nindent 12 }}
+      volumes:
+        - name: webhook-certs
+          secret:
+            secretName: {{ include "linstor-scheduler.admissionTLSSecretName" . }}
+            defaultMode: 0440
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      affinity:
+        {{- if .Values.admission.affinity }}
+        {{- toYaml .Values.admission.affinity | nindent 8 }}
+        {{- else }}
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchLabels:
+                    {{- include "linstor-scheduler.admissionSelectorLabels" . | nindent 20 }}
+                topologyKey: kubernetes.io/hostname
+        {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}

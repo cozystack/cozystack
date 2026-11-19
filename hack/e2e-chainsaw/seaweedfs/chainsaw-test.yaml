@@ -1,0 +1,320 @@
+# Lowering master.volumeSizeLimitMB on a live instance. Every volume at or
+# above the new limit leaves the master's writable set, so a bucket whose
+# volumes have all crossed it takes its next write only after a grow. Readiness
+# stays green through all of it; the failure is a PUT that times out while the
+# disk still has room, so the test ends on a write.
+#
+# 200 -> 20 stands in for the shipped 1000 -> 400: what matters is that a
+# bucket can be filled into the band between them, and at these numbers that
+# costs about a hundred megabytes rather than gigabytes.
+#
+# The same run checks the hand-off between the two SeaweedFS charts on the live
+# merge: the value set on the SeaweedFS resource must start the master, before
+# and after the change, with the growth counts the data-plane chart carries
+# still in place. hack/seaweedfs-chart-seam.bats checks the same hand-off by
+# rendering, on every pull request.
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: seaweedfs-resize
+spec:
+  # Uninstalling the instance runs the chart's post-delete Job, which removes
+  # the volume claims and the CNPG cluster behind the filer, so the delete
+  # waits on that Job as well as on the workloads.
+  timeouts:
+    cleanup: 10m
+  catch:
+  - events: {}
+  - describe:
+      apiVersion: helm.toolkit.fluxcd.io/v2
+      kind: HelmRelease
+      name: seaweedfs
+  - describe:
+      apiVersion: helm.toolkit.fluxcd.io/v2
+      kind: HelmRelease
+      name: seaweedfs-system
+  - describe:
+      apiVersion: apps/v1
+      kind: StatefulSet
+      name: seaweedfs-master
+  - podLogs:
+      selector: app.kubernetes.io/component=master
+      tail: 200
+  - description: master volume map
+    script:
+      timeout: 2m
+      content: |
+        set -u
+        echo "» master /vol/status (per server: Id, Collection, Size, ReadOnly):"
+        timeout 60 kubectl -n "$NAMESPACE" exec statefulset/seaweedfs-master -c seaweedfs -- \
+          curl -s --max-time 20 http://localhost:9333/vol/status \
+          || echo "» /vol/status read failed"
+        echo
+        exit 0
+  steps:
+  - name: create-instance
+    try:
+    - apply:
+        file: seaweedfs.yaml
+
+  - name: wait-instance-ready
+    try:
+    # 11m: the generated release carries the 10m install timeout every
+    # ApplicationDefinition gets unless it overrides it, and seaweedfs-rd does
+    # not; the extra minute is the start margin. The parent's install waits on
+    # the seaweedfs-system and seaweedfs-db releases it renders.
+    - assert:
+        timeout: 11m
+        resource:
+          apiVersion: helm.toolkit.fluxcd.io/v2
+          kind: HelmRelease
+          metadata:
+            name: seaweedfs
+          status:
+            (conditions[?type == 'Ready']):
+            - status: "True"
+    - assert:
+        resource:
+          apiVersion: apps/v1
+          kind: StatefulSet
+          metadata:
+            name: seaweedfs-master
+          spec:
+            template:
+              spec:
+                (containers[?name == 'seaweedfs']):
+                - (contains(command[2], '-volumeSizeLimitMB=200 ')): true
+                  (env[?starts_with(name, 'WEED_MASTER_VOLUME_GROWTH_')]):
+                  - name: WEED_MASTER_VOLUME_GROWTH_COPY_1
+                    value: "7"
+                  - name: WEED_MASTER_VOLUME_GROWTH_COPY_2
+                    value: "3"
+                  - name: WEED_MASTER_VOLUME_GROWTH_COPY_3
+                    value: "3"
+                  - name: WEED_MASTER_VOLUME_GROWTH_COPY_OTHER
+                    value: "1"
+
+  - name: create-bucket
+    try:
+    - apply:
+        file: bucket.yaml
+    - assert:
+        timeout: 2m
+        resource:
+          apiVersion: objectstorage.k8s.io/v1alpha1
+          kind: BucketClaim
+          metadata:
+            name: seaweedfs-resize
+          status:
+            bucketReady: true
+    - assert:
+        resource:
+          apiVersion: objectstorage.k8s.io/v1alpha1
+          kind: BucketAccess
+          metadata:
+            name: seaweedfs-resize
+          status:
+            accessGranted: true
+
+  # Write until every volume of the bucket's collection sits between the two
+  # limits. Each write goes to a volume picked at random, so a fixed amount
+  # leaves one short volume often enough, and that one volume keeps the bucket
+  # writable after the change and nothing is tested. Below 180 MiB, rather than
+  # 200, keeps the master from growing more volumes at the old limit, which it
+  # does once no writable volume is under nine tenths of it.
+  - name: fill-bucket-between-the-limits
+    try:
+    - script:
+        timeout: 5m
+        content: |
+          set -eu
+          # The op timeout kills only this shell, and an mc it leaves behind
+          # holds the op open past it (#4268). Every call below carries its own
+          # cap, and no write starts after this deadline: the last one, a size
+          # read and the pause after it still end inside the 5m.
+          deadline=$(( $(date +%s) + 190 ))
+          workdir=$(mktemp -d)
+          trap '[ -n "${pf_pid:-}" ] && kill "$pf_pid" 2>/dev/null || true; rm -rf "$workdir"' EXIT
+
+          k() { timeout 30 kubectl "$@"; }
+          k -n "$NAMESPACE" get secret seaweedfs-resize -o jsonpath='{.data.BucketInfo}' > "$workdir/info.b64"
+          base64 -d "$workdir/info.b64" > "$workdir/info.json"
+          ACCESS_KEY=$(jq -r '.spec.secretS3.accessKeyID // ""' "$workdir/info.json")
+          SECRET_KEY=$(jq -r '.spec.secretS3.accessSecretKey // ""' "$workdir/info.json")
+          BUCKET=$(jq -r '.spec.bucketName // ""' "$workdir/info.json")
+          if [ -z "$ACCESS_KEY" ] || [ -z "$SECRET_KEY" ] || [ -z "$BUCKET" ]; then
+            echo "premise broken: BucketInfo lacks the access key, secret key or bucket name" >&2
+            exit 1
+          fi
+
+          # Volume sizes as the master last heard them, one line per replica:
+          # "<id> <bytes>". The filer stores a bucket in the collection named
+          # after it.
+          sizes() {
+            k -n "$NAMESPACE" exec statefulset/seaweedfs-master -c seaweedfs -- \
+              curl -sf --max-time 20 http://localhost:9333/vol/status > "$workdir/vol.json"
+            jq -r --arg c "$BUCKET" \
+              '.Volumes.DataCenters[][][] | .[]? | select(.Collection == $c) | "\(.Id) \(.Size)"' \
+              "$workdir/vol.json"
+          }
+
+          kubectl port-forward service/seaweedfs-s3 -n "$NAMESPACE" 8334:8333 >/dev/null 2>&1 &
+          pf_pid=$!
+          timeout 30 sh -ec 'until nc -z localhost 8334; do sleep 1; done'
+          timeout 15 mc alias set swfs https://localhost:8334 "$ACCESS_KEY" "$SECRET_KEY" --insecure
+
+          # Incompressible, so the bytes written are the bytes stored.
+          head -c 4194304 /dev/urandom > "$workdir/chunk.bin"
+          low=$((24 * 1048576))
+          high=$((180 * 1048576))
+          n=0
+          while :; do
+            for _ in 1 2 3 4 5; do
+              if [ "$(date +%s)" -ge "$deadline" ]; then
+                echo "premise broken: out of time after $n writes with a volume still under 24 MiB" >&2
+                exit 1
+              fi
+              n=$((n + 1))
+              # 45s: the first write into a new bucket waits for its grow.
+              timeout 45 mc cp --insecure "$workdir/chunk.bin" "swfs/$BUCKET/fill-$n.bin" >/dev/null
+            done
+            # The master learns sizes from heartbeats, a few seconds apart.
+            # TODO(e2e-replace-fixed-timeouts): nothing reports a heartbeat as
+            # received, so the read waits out one interval.
+            sleep 6
+            sizes > "$workdir/sizes"
+            echo "» after $n writes of 4 MiB:"
+            cat "$workdir/sizes"
+            if [ ! -s "$workdir/sizes" ]; then
+              echo "premise broken: collection $BUCKET has no volume after $n writes; collections present:" >&2
+              jq -r '[.Volumes.DataCenters[][][] | .[]? | .Collection] | unique | .[]' "$workdir/vol.json" >&2
+              exit 1
+            fi
+            if awk -v h="$high" '$2 >= h { found = 1 } END { exit !found }' "$workdir/sizes"; then
+              echo "premise broken: a volume reached 180 MiB before every volume passed 24 MiB" >&2
+              exit 1
+            fi
+            if awk -v l="$low" '$2 < l { found = 1 } END { exit found }' "$workdir/sizes"; then
+              echo "» every volume of $BUCKET is between the limits"
+              exit 0
+            fi
+          done
+        check:
+          ($error == null): true
+
+  - name: lower-the-limit
+    try:
+    - patch:
+        resource:
+          apiVersion: apps.cozystack.io/v1alpha1
+          kind: SeaweedFS
+          metadata:
+            name: seaweedfs
+          spec:
+            master:
+              volumeSizeLimitMB: 20
+    # The change reaches the master only through two Helm upgrades, the
+    # parent's and seaweedfs-system's, and then a rollout of the master.
+    - assert:
+        timeout: 6m
+        resource:
+          apiVersion: apps/v1
+          kind: StatefulSet
+          metadata:
+            name: seaweedfs-master
+          spec:
+            template:
+              spec:
+                (containers[?name == 'seaweedfs']):
+                - (contains(command[2], '-volumeSizeLimitMB=20 ')): true
+                  (env[?starts_with(name, 'WEED_MASTER_VOLUME_GROWTH_')]):
+                  - name: WEED_MASTER_VOLUME_GROWTH_COPY_1
+                    value: "7"
+                  - name: WEED_MASTER_VOLUME_GROWTH_COPY_2
+                    value: "3"
+                  - name: WEED_MASTER_VOLUME_GROWTH_COPY_3
+                    value: "3"
+                  - name: WEED_MASTER_VOLUME_GROWTH_COPY_OTHER
+                    value: "1"
+          # Without the generation, the status of the previous template matches
+          # before the controller has seen the new one.
+          (status.observedGeneration == metadata.generation): true
+          status:
+            readyReplicas: 1
+            updatedReplicas: 1
+            (currentRevision == updateRevision): true
+    # Both upgrades have to have finished, not only the rollout they started,
+    # or cleanup lands on a release still upgrading. 11m clears the 10m install
+    # and upgrade timeouts of either release by the start margin.
+    - assert:
+        timeout: 11m
+        resource:
+          apiVersion: helm.toolkit.fluxcd.io/v2
+          kind: HelmRelease
+          metadata:
+            name: seaweedfs
+          (status.observedGeneration == metadata.generation): true
+          status:
+            (conditions[?type == 'Ready']):
+            - status: "True"
+    - assert:
+        timeout: 11m
+        resource:
+          apiVersion: helm.toolkit.fluxcd.io/v2
+          kind: HelmRelease
+          metadata:
+            name: seaweedfs-system
+          (status.observedGeneration == metadata.generation): true
+          status:
+            (conditions[?type == 'Ready']):
+            - status: "True"
+
+  # Every volume of the bucket is now over the limit, so this write lands only
+  # in a volume grown after the change. A volume under 20 MiB in the
+  # collection is that grow: none was under 24 MiB before it.
+  - name: write-after-lowering
+    try:
+    - script:
+        timeout: 5m
+        content: |
+          set -eu
+          workdir=$(mktemp -d)
+          trap '[ -n "${pf_pid:-}" ] && kill "$pf_pid" 2>/dev/null || true; rm -rf "$workdir"' EXIT
+
+          k() { timeout 30 kubectl "$@"; }
+          k -n "$NAMESPACE" get secret seaweedfs-resize -o jsonpath='{.data.BucketInfo}' > "$workdir/info.b64"
+          base64 -d "$workdir/info.b64" > "$workdir/info.json"
+          ACCESS_KEY=$(jq -r '.spec.secretS3.accessKeyID // ""' "$workdir/info.json")
+          SECRET_KEY=$(jq -r '.spec.secretS3.accessSecretKey // ""' "$workdir/info.json")
+          BUCKET=$(jq -r '.spec.bucketName // ""' "$workdir/info.json")
+          if [ -z "$ACCESS_KEY" ] || [ -z "$SECRET_KEY" ] || [ -z "$BUCKET" ]; then
+            echo "premise broken: BucketInfo lacks the access key, secret key or bucket name" >&2
+            exit 1
+          fi
+
+          kubectl port-forward service/seaweedfs-s3 -n "$NAMESPACE" 8334:8333 >/dev/null 2>&1 &
+          pf_pid=$!
+          timeout 30 sh -ec 'until nc -z localhost 8334; do sleep 1; done'
+          timeout 15 mc alias set swfs https://localhost:8334 "$ACCESS_KEY" "$SECRET_KEY" --insecure
+
+          # 90s: the master was just replaced, so the volume servers have to
+          # register with it before the grow this write needs can be placed.
+          echo "after lowering" > "$workdir/probe.txt"
+          timeout 90 mc cp --insecure "$workdir/probe.txt" "swfs/$BUCKET/probe.txt"
+          timeout 15 mc cat --insecure "swfs/$BUCKET/probe.txt" | grep -qx "after lowering"
+
+          # TODO(e2e-replace-fixed-timeouts): the new volume reaches /vol/status
+          # with the next heartbeat, and nothing reports that.
+          sleep 6
+          k -n "$NAMESPACE" exec statefulset/seaweedfs-master -c seaweedfs -- \
+            curl -sf --max-time 20 http://localhost:9333/vol/status > "$workdir/vol.json"
+          jq -r --arg c "$BUCKET" \
+            '.Volumes.DataCenters[][][] | .[]? | select(.Collection == $c) | "\(.Id) \(.Size)"' \
+            "$workdir/vol.json" > "$workdir/sizes"
+          cat "$workdir/sizes"
+          if ! awk -v l=$((20 * 1048576)) '$2 < l { found = 1 } END { exit !found }' "$workdir/sizes"; then
+            echo "FAIL: the write landed but $BUCKET grew no volume, so the master is not applying the lowered limit" >&2
+            exit 1
+          fi
+        check:
+          ($error == null): true

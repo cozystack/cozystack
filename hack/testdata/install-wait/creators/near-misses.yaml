@@ -1,0 +1,34 @@
+# Shapes that name the kind without creating one: a selector entry and a label
+# whose value happens to be the kind, both of which exist under
+# hack/e2e-chainsaw today, and a bare `kind:` with no apiVersion above it --
+# the one that reaches the indent comparison rather than dying at the field name.
+# `git diff --check` flags the trailing space on that line, deliberately:
+# the space is the subject here, not an accident, and a case reds if it is
+# stripped. Nothing suppresses the warning -- a suppression would cover the
+# next file written here too, where a stray space would be an accident.
+spec:
+  fromApp:
+  - kind: Kubernetes
+    name: other
+  selector:
+    matchLabels:
+      apps.cozystack.io/application.kind: Kubernetes
+  template:
+    kind: Kubernetes
+---
+# A cozystack apiVersion and the kind in one document but at different indents:
+# they belong to different objects, so the pair does not make a creator. Only
+# comparing the indents tells them apart.
+apiVersion: apps.cozystack.io/v1alpha1
+kind: Tenant
+spec:
+  nested:
+      kind: Kubernetes
+---
+# The sibling kind. `KubernetesNodes` shares the group and the first eleven
+# characters, and the script that creates the tenant cluster creates one of
+# these too, so a sweep matching the name as a prefix calls every such file a
+# creator. The trailing space on the line below is legal YAML and changes no
+# document -- an anchor that assumes nothing follows the value does not see it.
+apiVersion: apps.cozystack.io/v1alpha1
+kind: KubernetesNodes 

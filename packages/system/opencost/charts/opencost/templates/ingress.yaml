@@ -1,0 +1,122 @@
+{{- if and .Values.opencost.ui.enabled .Values.opencost.ui.ingress.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "opencost.fullname" . }}-ingress
+  namespace: {{ include "opencost.namespace" . }}
+  labels: {{- include "opencost.labels" . | nindent 4 }}
+  {{- with .Values.opencost.ui.ingress.annotations }}
+  annotations: {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  {{- with .Values.opencost.ui.ingress.ingressClassName }}
+  ingressClassName: {{ . }}
+  {{- end }}
+  {{- if .Values.opencost.ui.ingress.tls }}
+  tls:
+    {{- range .Values.opencost.ui.ingress.tls }}
+    - hosts:
+        {{- range .hosts }}
+        - {{ . | quote }}
+        {{- end }}
+      secretName: {{ .secretName }}
+    {{- end }}
+  {{- end }}
+  rules:
+    {{- range .Values.opencost.ui.ingress.hosts }}
+    - host: {{ .host | quote }}
+      http:
+        paths:
+          {{- range .paths }}
+          - path: {{ . }}
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "opencost.fullname" $ }}
+                port:
+                  name: {{ $.Values.opencost.ui.ingress.servicePort }}
+        {{- end }}
+  {{- end }}
+---
+{{- end }}
+{{- if .Values.opencost.exporter.apiIngress.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "opencost.fullname" . }}-api-ingress
+  namespace: {{ include "opencost.namespace" . }}
+  labels: {{- include "opencost.labels" . | nindent 4 }}
+  {{- with .Values.opencost.exporter.apiIngress.annotations }}
+  annotations: {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  {{- with .Values.opencost.exporter.apiIngress.ingressClassName }}
+  ingressClassName: {{ . }}
+  {{- end }}
+  {{- if .Values.opencost.exporter.apiIngress.tls }}
+  tls:
+    {{- range .Values.opencost.exporter.apiIngress.tls }}
+    - hosts:
+        {{- range .hosts }}
+        - {{ . | quote }}
+        {{- end }}
+      secretName: {{ .secretName }}
+    {{- end }}
+  {{- end }}
+  rules:
+    {{- range .Values.opencost.exporter.apiIngress.hosts }}
+    - host: {{ .host | quote }}
+      http:
+        paths:
+          {{- range .paths }}
+          - path: {{ .path }}
+            pathType: {{ .pathType }}
+            backend:
+              service:
+                name: {{ include "opencost.fullname" $ }}
+                port:
+                  name: {{ $.Values.opencost.exporter.apiIngress.servicePort }}
+        {{- end }}
+  {{- end }}
+---
+{{- end }}
+{{- if and .Values.opencost.mcp.enabled .Values.opencost.mcp.ingress.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "opencost.fullname" . }}-mcp-ingress
+  namespace: {{ include "opencost.namespace" . }}
+  labels: {{- include "opencost.labels" . | nindent 4 }}
+  {{- with .Values.opencost.mcp.ingress.annotations }}
+  annotations: {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  {{- with .Values.opencost.mcp.ingress.ingressClassName }}
+  ingressClassName: {{ . }}
+  {{- end }}
+  {{- if .Values.opencost.mcp.ingress.tls }}
+  tls:
+    {{- range .Values.opencost.mcp.ingress.tls }}
+    - hosts:
+        {{- range .hosts }}
+        - {{ . | quote }}
+        {{- end }}
+      secretName: {{ .secretName }}
+    {{- end }}
+  {{- end }}
+  rules:
+    {{- range .Values.opencost.mcp.ingress.hosts }}
+    - host: {{ .host | quote }}
+      http:
+        paths:
+          {{- range .paths }}
+          - path: {{ .path }}
+            pathType: {{ .pathType }}
+            backend:
+              service:
+                name: {{ include "opencost.fullname" $ }}
+                port:
+                  name: mcp-server
+        {{- end }}
+  {{- end }}
+{{- end }}

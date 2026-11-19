@@ -1,0 +1,11 @@
+{{- if .Values.opencost.metrics.config.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Values.opencost.metrics.config.configmapName }}
+  namespace: {{ include "opencost.namespace" . }}
+  labels: {{- include "opencost.labels" . | nindent 4 }}
+data:
+  metrics.json: |-
+    {"disabledMetrics": {{ toJson .Values.opencost.metrics.config.disabledMetrics }} }
+{{- end }}

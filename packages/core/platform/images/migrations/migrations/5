@@ -1,0 +1,15 @@
+#!/bin/sh
+# Migration 5 --> 6
+
+# Fix tenant-kubernetes PVCs
+kubectl get secret -l kamaji.clastix.io/project=kamaji,kamaji.clastix.io/component=admin-kubeconfig -A --output=go-template='{{ range .items }}{{ printf "%s %s %s %s\n" .metadata.namespace .metadata.name (index .metadata.labels "kamaji.clastix.io/name") (index .data "super-admin.conf") }}{{ end }}' | while read NAMESPACE NAME CLUSTER CONFIGB64; do
+  config=$(mktemp)
+  echo "$CONFIGB64" | base64 -d > "$config"
+  kubectl get pv --kubeconfig="$config" --output=go-template='{{ range .items }}{{ printf "%s\n" .metadata.name }}{{ end }}' | while read PVC; do
+    (set -x; kubectl label pvc --overwrite -n "$NAMESPACE" "$PVC" "cluster.x-k8s.io/cluster-name=$CLUSTER")
+    (set -x; kubectl label dv --overwrite -n "$NAMESPACE" "$PVC" "cluster.x-k8s.io/cluster-name=$CLUSTER")
+  done
+  rm -f "$config"
+done
+
+kubectl create configmap -n cozy-system cozystack-version --from-literal=version=6 --dry-run=client -o yaml | kubectl apply -f-

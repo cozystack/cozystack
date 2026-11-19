@@ -1,0 +1,128 @@
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: piraeus-datastore
+spec:
+  groups:
+    - name: linstor.rules
+      rules:
+        - alert: linstorControllerUnavailable
+          annotations:
+            description: |
+              LINSTOR Controller deployment has no available replicas.
+          expr: kube_deployment_status_replicas_available{namespace="cozy-linstor",deployment="linstor-controller"} < 1
+          for: 3m
+          labels:
+            severity: critical
+        - alert: linstorControllerMetricsScrapeFailing
+          annotations:
+            description: |
+              LINSTOR Controller metrics endpoint is not being scraped successfully.
+          expr: up{job="linstor-controller"} == 0
+          for: 10m
+          labels:
+            severity: warning
+        - alert: linstorSatelliteErrorRate
+          annotations:
+            description: |
+              LINSTOR Satellite "{{ $labels.hostname }}" reports {{ $value }} errors in the last 15 minutes.
+              Use "linstor error-reports list --nodes {{ $labels.hostname }}" to inspect the reports.
+          expr: |
+            increase((max by (hostname) (last_over_time(linstor_error_reports_count{module="SATELLITE"}[1h])))[15m:1m]) > 0
+            and on()
+            min_over_time(up{job="linstor-controller"}[15m]) == 1
+          labels:
+            severity: warning
+        - alert: linstorControllerErrorRate
+          annotations:
+            description: |
+              LINSTOR Controller reports {{ $value }} errors in the last 15 minutes.
+              Use "linstor error-reports list --since 15minutes" to see them.
+          expr: increase((max by (hostname) (last_over_time(linstor_error_reports_count{module="CONTROLLER"}[1h])))[15m:1m]) > 0
+          labels:
+            severity: warning
+        - alert: linstorSatelliteNotOnline
+          annotations:
+            description: |
+              LINSTOR Satellite "{{ $labels.hostname }}" is not ONLINE.
+              Check that the Satellite is running and reachable from the LINSTOR Controller.
+          expr: linstor_node_state{nodetype="SATELLITE"} != 2
+          labels:
+            severity: critical
+        - alert: linstorStoragePoolErrors
+          annotations:
+            description: |
+              Storage pool "{{ $labels.storage_pool }}" on node "{{ $labels.node }}" ({{ $labels.driver }}={{ $labels.backing_pool }}) is reporting errors.
+          expr: linstor_storage_pool_error_count > 0
+          labels:
+            severity: critical
+        - alert: linstorStoragePoolAtCapacity
+          annotations:
+            description: |
+              Storage pool "{{ $labels.storage_pool }}" on node "{{ $labels.node }}" ({{ $labels.driver }}={{ $labels.backing_pool }}) has less than 20% free space available.
+          expr: ( linstor_storage_pool_capacity_free_bytes / linstor_storage_pool_capacity_total_bytes ) < 0.20
+          labels:
+            severity: warning
+    - name: drbd.rules
+      rules:
+        - alert: drbdReactorOffline
+          annotations:
+            description: |
+              DRBD Reactor on "{{ $labels.node }}" is not reachable.
+          expr: up{job="piraeus-datastore/linstor-satellite"} == 0
+          labels:
+            severity: critical
+        - alert: drbdConnectionNotConnected
+          annotations:
+            description: |
+              DRBD Resource "{{ $labels.name }}" on "{{ $labels.node }}" is not connected to "{{ $labels.conn_name }}": {{ $labels.drbd_connection_state }}.
+          expr: drbd_connection_state{drbd_connection_state!="Connected"} > 0
+          labels:
+            severity: warning
+        - alert: drbdDeviceNotUpToDate
+          annotations:
+            description: |
+              DRBD device "{{ $labels.name }}" on "{{ $labels.node }}" has unexpected device state "{{ $labels.drbd_device_state }}".
+          expr: drbd_device_state{drbd_device_state!~"UpToDate|Diskless"} > 0
+          labels:
+            severity: warning
+        - alert: drbdDeviceUnintentionalDiskless
+          annotations:
+            description: |
+              DRBD device "{{ $labels.name }}" on "{{ $labels.node }}" is unintenionally diskless.
+              This usually indicates IO errors reported on the backing device. Check the kernel log.
+          expr: drbd_device_unintentionaldiskless > 0
+          labels:
+            severity: warning
+        - alert: drbdDeviceWithoutQuorum
+          annotations:
+            description: |
+              DRBD device "{{ $labels.name }}" on "{{ $labels.node }}" has no quorum.
+              This usually indicates connectivity issues.
+          expr: drbd_device_quorum == 0
+          labels:
+            severity: warning
+        - alert: drbdResourceSuspended
+          annotations:
+            description: |
+              DRBD resource "{{ $labels.name }}" on "{{ $labels.node }}" has been suspended for 1m.
+          for: 1m
+          expr: drbd_resource_suspended > 0
+          labels:
+            severity: warning
+        - alert: drbdResourceResyncWithoutProgress
+          annotations:
+            description: |
+              DRBD resource "{{ $labels.name }}" on "{{ $labels.node }}" has been in Inconsistent without resync progress for 5 minutes.
+              This may indicate there is no connection to UpToDate data, or a stuck resync.
+          expr: drbd_device_state{drbd_device_state="Inconsistent"} and delta(drbd_peerdevice_outofsync_bytes[5m]) >= 0
+          labels:
+            severity: warning
+        - alert: drbdResourceWithNoUpToDateReplicas
+          annotations:
+            description: |
+              DRBD resource "{{ $labels.name }}" has no UpToDate replicas.
+          expr: sum by (name) (drbd_device_state{drbd_device_state="UpToDate"}) == 0
+          labels:
+            severity: critical

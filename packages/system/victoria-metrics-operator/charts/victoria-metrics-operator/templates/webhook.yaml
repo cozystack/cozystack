@@ -1,0 +1,155 @@
+{{- $webhooks := .Values.admissionWebhooks }}
+{{- if $webhooks.enabled }}
+{{- $ctx := dict "helm" . "extraLabels" .Values.extraLabels }}
+{{- $tls := fromYaml (include "vm-operator.certs" $ctx) }}
+{{- $fullname := include "vm.plain.fullname" $ctx }}
+{{- $domain := ((.Values.global).cluster).dnsDomain }}
+{{- $ns := include "vm.namespace" $ctx }}
+{{- $certManager := $webhooks.certManager }}
+{{- $files := .Files }}
+{{- $crds := $files.Get "crd.yaml" | splitList "---" }}
+{{- $disabledFor := $webhooks.disabledFor | default list }}
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingWebhookConfiguration
+metadata:
+  name:  {{ $fullname }}-admission
+  {{- if or $certManager.enabled $webhooks.annotations }}
+  annotations:
+    {{- if $certManager.enabled }}
+    certmanager.k8s.io/inject-ca-from: {{ printf "%s/%s-validation" $ns $fullname | quote }}
+    cert-manager.io/inject-ca-from: {{ printf "%s/%s-validation" $ns $fullname | quote }}
+    {{- end }}
+    {{- with $certManager.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+    {{- with $webhooks.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+  {{- end }}
+  labels: {{ include "vm.labels" $ctx | nindent 4 }}
+webhooks:
+{{- range $crds }}
+{{- $crd := fromYaml . }}
+{{- $name := $crd.spec.names.singular }}
+{{- if not (has $name $disabledFor) }}
+{{- range $version := $crd.spec.versions }}
+  - clientConfig:
+      service:
+        namespace: {{ $ns }}
+        name: {{ $fullname }}
+        path: /validate-operator-victoriametrics-com-{{ $version.name }}-{{ $crd.spec.names.singular }}
+        port: {{ $.Values.service.webhookPort }}
+      {{- if not $certManager.enabled }}
+      caBundle: {{ $tls.caCert }}
+      {{- end }}
+    failurePolicy: {{ $webhooks.policy }}
+    name: '{{ $crd.metadata.name }}'
+    admissionReviewVersions:
+      - v1
+    sideEffects: None
+    objectSelector:
+      matchExpressions:
+        - key: app.kubernetes.io/name
+          operator: NotIn
+          values: [{{ include "vm.name" $ }}]
+    rules:
+      - apiGroups:
+          - {{ $crd.spec.group }}
+        apiVersions:
+          - {{ $version.name }}
+        operations:
+          - CREATE
+          - UPDATE
+        resources:
+          - {{ $crd.spec.names.plural }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- if $certManager.enabled }}
+{{- if not $certManager.issuer }}
+---
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: {{ $fullname }}-root
+  namespace: {{ $ns }}
+spec:
+  selfSigned: {}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ $fullname }}-root-ca
+  namespace: {{ $ns }}
+spec:
+  secretName: {{ $fullname }}-root-ca
+  duration: {{ $certManager.ca.duration }}
+  {{- with $certManager.ca.secretTemplate }}
+  secretTemplate: {{ toYaml . | nindent 4 }}
+  {{- end }}
+  {{- with $certManager.ca.subject }}
+  subject: {{ toYaml . | nindent 4 }}
+  {{- end }}
+  issuerRef:
+    name: {{ $fullname }}-root
+  commonName: {{ $certManager.ca.commonName }}
+  isCA: true
+  privateKey:
+    rotationPolicy: Never
+---
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: {{ $fullname }}-issuer
+  namespace: {{ $ns }}
+spec:
+  ca:
+    secretName: {{ $fullname }}-root-ca
+{{- end }}
+---
+# actual cert part for operator
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ $fullname }}-validation
+  namespace: {{ $ns }}
+spec:
+  secretName: {{ $fullname }}-validation
+  duration: {{ $certManager.cert.duration }}
+  {{- with $certManager.cert.secretTemplate }}
+  secretTemplate: {{ toYaml . | nindent 4 }}
+  {{- end }}
+  {{- with $certManager.cert.commonName }}
+  commonName: {{ . }}
+  {{- end }}
+  {{- with $certManager.cert.subject }}
+  subject: {{ toYaml . | nindent 4 }}
+  {{- end }}
+  {{- $issuerRef := $certManager.issuer | default dict }}
+  {{- if empty $issuerRef }}
+    {{- $_ := set $issuerRef "name" (printf "%s-issuer" $fullname) }}
+  {{- end }}
+  issuerRef: {{ toYaml $issuerRef | nindent 4 }}
+  dnsNames:
+    - {{ $fullname }}
+    - {{ $fullname }}.{{ $ns }}
+    - {{ $fullname }}.{{ $ns }}.svc
+    {{- with $domain }}
+    - {{ $fullname }}.{{ $ns }}.svc.{{ . }}
+    {{- end }}
+{{- else }}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ $fullname }}-validation
+  namespace: {{ $ns }}
+  labels: {{ include "vm.labels" $ctx | nindent 4 }}
+type: kubernetes.io/tls
+data:
+  ca.crt: {{ $tls.caCert }}
+  tls.crt: {{ $tls.clientCert }}
+  tls.key: {{ $tls.clientKey }}
+{{- end -}}
+{{- end }}

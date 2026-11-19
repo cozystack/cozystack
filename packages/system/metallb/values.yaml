@@ -1,0 +1,124 @@
+# Notes for operators on bumps that crossed v0.15.x → v0.16.x:
+#
+# - BGP backend: upstream defaults flipped from FRR mode to FRR-K8s. This chart
+#   ships frr-k8s as a sibling DaemonSet (cozy-metallb/metallb-frr-k8s). Speaker
+#   talks to it via in-cluster API; existing BGPPeer / BGPAdvertisement objects
+#   keep working unchanged. To revert speaker to legacy FRR mode (deprecated
+#   upstream), set BOTH of these here:
+#       metallb.frrk8s.enabled: false
+#       metallb.speaker.frr.enabled: true
+#   This switches the speaker DaemonSet to the four-container layout (speaker,
+#   frr, reloader, frr-metrics) and METALLB_BGP_TYPE=frr. The frr-k8s subchart
+#   stays installed but idle — Helm evaluates a `condition:` on a dep against
+#   the declaring chart's own values context (here: the vendored metallb
+#   chart), so a grandparent override from the cozy-metallb umbrella cannot
+#   suppress that dep via the condition. The metallb-frr-k8s DaemonSet and
+#   metallb-frr-k8s-statuscleaner Deployment are still rendered with zero
+#   replicas worth of effect on the chosen BGP path. The frr-k8s metrics ports
+#   (9140/9141) remain host-network and the cilium-networkpolicy denylist
+#   covers them; under this escape hatch the additional legacy FRR metrics
+#   port 9121 on the speaker pod becomes active and the same denylist covers
+#   it. If you need a fully-clean revert, deinstall the chart and reinstall
+#   from a prior cozystack release that still ran v0.15.x.
+# - Metrics endpoints: kube-rbac-proxy is gone. Speaker and controller now serve
+#   /metrics directly on HTTPS at port 9120 (was HTTP on 7472). Any external
+#   scrape config that targeted 7472 must move to 9120 and add a TLS skip / CA.
+# - TLS minimum version: upstream removed controller.tlsMinVersion in favor of
+#   a global tls.minVersion. The new default (empty string) resolves to TLS
+#   1.3 per the upstream chart README; the previous chart pinned TLS 1.2.
+#   Prometheus scrapers without TLS 1.3 support fail until you override:
+#       metallb.tls.minVersion: VersionTLS12
+# - Host-network ports added by the frr-k8s DaemonSet: 9140 (controller metrics),
+#   9141 (FRR metrics), plus 19443 from the frr-k8s statuscleaner Deployment.
+#   The cozystack cilium-networkpolicy denies world ingress to all of these.
+metallb:
+  crds:
+    enabled: true
+  controller:
+    image:
+      repository: ghcr.io/cozystack/cozystack/metallb-controller
+      tag: v1.6.0@sha256:cb7321c5674509048dfbea7938378b84013d1370eca5ace7f9665fc79b4a8a05
+  speaker:
+    image:
+      repository: ghcr.io/cozystack/cozystack/metallb-speaker
+      tag: v1.6.0@sha256:61ab7e2381f0897607b15df7cb5ba4d51a947c261c1c197fcda3b79c7a280016
+    # A memory limit is what sets memory.max on the pod cgroup, and the Talos
+    # userspace OOM handler (v1.12+) only ever kills cgroups that lack it. The
+    # speaker ran BestEffort, so it was picked as the victim whenever a tenant
+    # workload drove node memory PSI — the pressure and the victim being
+    # unrelated by design. See the same block on every node DaemonSet below.
+    #
+    # Requests come from observed usage (14d peak 97Mi on a 3-node dev cluster);
+    # limits are deliberately loose, sized as a runaway backstop rather than a
+    # fitted ceiling, because undersizing here converts a rare pressure-driven
+    # kill into a deterministic one.
+    resources:
+      requests:
+        cpu: 50m
+        memory: 64Mi
+      limits:
+        memory: 512Mi
+  # The vendored metallb chart's values.yaml leaves `frr-k8s.prometheus:` as
+  # a YAML block containing only commented examples — it parses to null.
+  # Helm-controller's deep-merge then writes that null over the frr-k8s
+  # subchart's own `prometheus:` map (which carries the schema-driving
+  # defaults for serviceMonitor / podMonitor). The next render of
+  # `frr-k8s/templates/service-monitor.yaml` dereferences nil at
+  # `.Values.prometheus.serviceMonitor.enabled` and aborts the install
+  # with "nil pointer evaluating interface {}.serviceMonitor".
+  #
+  # Pin the merge target here so the subchart always sees a real (false)
+  # prometheus block. This matches the corresponding test-fixture
+  # workaround in tests/metallb_test.yaml and unblocks the bump; the
+  # underlying upstream bug is filed at metallb/frr-k8s (the schema
+  # placement issue tracked alongside it).
+  frr-k8s:
+    prometheus:
+      serviceMonitor:
+        enabled: false
+      podMonitor:
+        enabled: false
+    # Same reasoning as speaker.resources above. frr-k8s is the sibling node
+    # DaemonSet that actually speaks BGP, so it shares the speaker's exposure.
+    # 14d peaks on a 3-node dev cluster: controller ~124Mi, frr 43Mi,
+    # frr-metrics 49Mi, frr-status 31Mi, reloader 7Mi.
+    #
+    # The four cp-* init containers are NOT covered here: the upstream chart
+    # hardcodes them with no resources knob, so the pod-level memory.max still
+    # depends on the default LimitRange the operator maintains in every system
+    # namespace. Lifting that needs an upstream change in metallb/frr-k8s.
+    frrk8s:
+      resources:
+        requests:
+          cpu: 50m
+          memory: 64Mi
+        limits:
+          memory: 512Mi
+      frr:
+        resources:
+          requests:
+            cpu: 50m
+            memory: 64Mi
+          limits:
+            memory: 512Mi
+      reloader:
+        resources:
+          requests:
+            cpu: 10m
+            memory: 16Mi
+          limits:
+            memory: 128Mi
+      frrMetrics:
+        resources:
+          requests:
+            cpu: 10m
+            memory: 32Mi
+          limits:
+            memory: 256Mi
+      frrStatus:
+        resources:
+          requests:
+            cpu: 10m
+            memory: 32Mi
+          limits:
+            memory: 256Mi

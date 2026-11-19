@@ -1,0 +1,79 @@
+# Injected by the platform from the cozystack-values Secret. The empty
+# default keeps the chart renderable on its own, outside a cluster.
+_cluster: {}
+
+# CPU oversubscription ratio. When set, propagates to
+# spec.configuration.developerConfiguration.cpuAllocationRatio on the
+# KubeVirt CR. Driven by .Values.resources.cpuAllocationRatio at the
+# platform level.
+# cpuAllocationRatio: 10
+
+# Feature gates appended after the static defaults
+# (DeclarativeHotplugVolumes/ExpandDisks/LiveMigration/AutoResourceLimitsGate/CPUManager/GPU/VMExport).
+# Empty by default. Filled by the platform with "HostDevices" when the
+# gpu-operator package is enabled with the passthrough variant — the
+# admission webhook rejects spec.template.spec.domain.devices.hostDevices
+# without that gate even with the GPU gate on, since current KubeVirt
+# splits them.
+extraFeatureGates: []
+
+# Feature gates appended after the static opt-outs under
+# spec.configuration.developerConfiguration.disabledFeatureGates. The chart
+# always disables Template and ExternalNetResourceInjection, and adds
+# ImageVolume below Kubernetes 1.35, where the apiserver's own gate is off and
+# would strip the launcher's image volumes. KubeVirt enables every Beta gate by
+# default; list a gate here to switch off one this cluster cannot carry, e.g. on
+# a container runtime without image volume support at 1.35 or newer.
+# Naming a gate the chart already disables is a no-op: it renders once.
+#
+# Admins set this through spec.components.platform.values.kubevirt on the
+# cozystack.cozystack-platform Package; the iaas bundle forwards it into the
+# emitted cozystack.kubevirt Package as components.kubevirt.values.
+#
+# A gate this chart already enables cannot be switched off here, and a gate it
+# disables cannot be switched back on through extraFeatureGates: KubeVirt
+# refuses a CR that names the same gate in both lists, so the template stops
+# the render and names the gate. ImageVolume is therefore rejected in
+# extraFeatureGates below 1.35 and accepted from 1.35 on.
+disabledFeatureGates: []
+
+# Permitted host devices the KubeVirt admission webhook accepts under
+# spec.template.spec.domain.devices.hostDevices / gpus on a VirtualMachine.
+# Empty by default — leaves the CR's permittedHostDevices unset.
+#
+# Filled by the platform with NVIDIA PCI vendor:device → resourceName
+# pairs (vendor 10DE) when gpu-operator runs in vfio passthrough mode,
+# and with mediatedDevices entries when it runs in vGPU mode.
+# externalResourceProvider: true is required because the resource names
+# are published by gpu-operator's nvidia-sandbox-device-plugin DaemonSet,
+# not by KubeVirt itself.
+#
+# Shape (subset of kubevirt.io/v1 PermittedHostDevices):
+#   pciHostDevices:
+#   - pciVendorSelector: "10DE:2335"
+#     resourceName: nvidia.com/GH100_H200_SXM_141GB
+#     externalResourceProvider: true
+#   mediatedDevices:
+#   - mdevNameSelector: NVIDIA L40S-24Q
+#     resourceName: nvidia.com/L40S-24Q
+permittedHostDevices: {}
+
+# mediatedDevicesConfiguration for vGPU. Filled by the platform when the
+# gpu-operator package runs in vGPU mode; empty otherwise.
+#
+# Shape (subset of kubevirt.io/v1 MediatedDevicesConfiguration):
+#   mediatedDeviceTypes:
+#   - nvidia-740   # L40S-24Q
+#   nodeMediatedDeviceTypes:
+#   - nodeSelector:
+#       nvidia.com/gpu.product: NVIDIA-L40S
+#     mediatedDeviceTypes:
+#     - nvidia-740
+mediatedDevicesConfiguration: {}
+
+# Passed to spec.configuration.migrations on the KubeVirt CR.
+# Empty leaves KubeVirt's migration defaults unchanged.
+# bandwidthPerMigration is a quantity in bytes per second.
+# Set through spec.components.platform.values.kubevirt.migrations
+# on the cozystack.cozystack-platform Package.
+migrations: {}

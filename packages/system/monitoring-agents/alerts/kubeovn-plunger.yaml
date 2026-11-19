@@ -1,0 +1,56 @@
+apiVersion: operator.victoriametrics.com/v1beta1
+kind: VMRule
+metadata:
+  name: alerts-kubeovn-plunger
+spec:
+  groups:
+  - name: kubeovn-plunger
+    params: {}
+    rules:
+    - alert: OVNMemberNotConnected
+      expr: ovn_member_connected == 0
+      for: 2m
+      labels: { severity: warning }
+      annotations:
+        summary: "OVN {{ $labels.db }} member not connected"
+        description: "Member {{ $labels.sid }} (ip={{ $labels.ip }}) reports no cluster connectivity."
+    
+    - alert: OVNFollowerStale
+      expr: ovn_member_last_msg_ms > 10000
+      for: 1m
+      labels: { severity: warning }
+      annotations:
+        summary: "OVN {{ $labels.db }} follower stale"
+        description: "Follower {{ $labels.sid }} has last_msg_ms={{ $value }} (>10s) to leader."
+    
+    - alert: OVNMemberLagging
+      expr: ovn_member_index_gap > 1000
+      for: 2m
+      labels: { severity: warning }
+      annotations:
+        summary: "OVN {{ $labels.db }} member lagging"
+        description: "Log index gap {{ $value }} behind leader (sid={{ $labels.sid }}) is high."
+    
+    - alert: OVNMemberMissingSelfReporter
+      expr: ovn_member_missing_reporter == 1
+      for: 10m
+      labels: { severity: warning }
+      annotations:
+        summary: "OVN {{ $labels.db }} member not reporting"
+        description: "SID {{ $labels.sid }} appears in DB but produced no self-view for ≥10m."
+    
+    - alert: OVNConsensusSplitView
+      expr: ovn_cluster_all_agree == 0 and on (db, cid) ovn_cluster_quorum == 1
+      for: 5m
+      labels: { severity: warning }
+      annotations:
+        summary: "OVN {{ $labels.db }} inconsistent views"
+        description: "Majority exists but not all members agree. Investigate minority nodes."
+    
+    - alert: OVNSuspectStale
+      expr: sum by (db,cid) (ovn_consensus_suspect_stale) > 0
+      for: 2m
+      labels: { severity: warning }
+      annotations:
+        summary: "OVN {{ $labels.db }} stale member(s) suspected"
+        description: "Candidates exist to kick from cluster membership."

@@ -1,0 +1,3 @@
+{{- if .Values.nonDict -}}
+{{ include "cozy-lib.tls.caCertSecret" "not-a-dict" }}
+{{- end -}}

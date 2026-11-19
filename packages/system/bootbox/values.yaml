@@ -1,0 +1,6 @@
+smee:
+  hostNetwork: true
+  trustedProxies:
+    - 0.0.0.0/0
+  syslog:
+    enabled: false

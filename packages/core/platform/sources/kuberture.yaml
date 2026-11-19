@@ -1,0 +1,35 @@
+---
+apiVersion: cozystack.io/v1alpha1
+kind: PackageSource
+metadata:
+  name: cozystack.kuberture
+spec:
+  sourceRef:
+    kind: OCIRepository
+    name: cozystack-packages
+    namespace: cozy-system
+    path: /
+  variants:
+  - name: default
+    # Install-order dependencies only:
+    # - cozystack.networking: CNI must be reconciled before the controller pod schedules.
+    # - cozystack.prometheus-operator-crds: the chart enables ServiceMonitor by
+    #   default; the CRD must exist before the manifest is applied.
+    #
+    # external-dns is intentionally NOT listed here. Kuberture creates
+    # annotated headless Services regardless of whether external-dns is
+    # installed — external-dns is a downstream consumer of those annotations,
+    # not a runtime prerequisite. Operators who want DNS records actually
+    # published enable an external-dns instance separately
+    # (cozystack.external-dns for the cluster-wide platform instance, which
+    # is the one that watches cozy-kuberture; cozystack.external-dns-application
+    # is tenant-namespaced and will not see Services outside its tenant).
+    dependsOn:
+    - cozystack.networking
+    - cozystack.prometheus-operator-crds
+    components:
+    - name: kuberture
+      path: system/kuberture
+      install:
+        namespace: cozy-kuberture
+        releaseName: kuberture

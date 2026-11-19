@@ -1,0 +1,61 @@
+# Addon provider
+{{- range $name, $addon := $.Values.addon }}
+  {{- $addonNamespace := default ( printf "%s-%s" $name "addon-system" ) (get $addon "namespace") }}
+  {{- $addonName := $name }}
+  {{- $addonVersion := get $addon "version" }}
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  annotations:
+    {{- if $.Values.enableHelmHook }}
+    "helm.sh/hook": "post-install,post-upgrade"
+    "helm.sh/hook-weight": "1"
+    {{- end }}
+    "argocd.argoproj.io/sync-wave": "1"
+  name: {{ $addonNamespace }}
+---
+apiVersion: operator.cluster.x-k8s.io/v1alpha2
+kind: AddonProvider
+metadata:
+  name: {{ $addonName }}
+  namespace: {{ $addonNamespace }}
+  annotations:
+    {{- if $.Values.enableHelmHook }}
+    "helm.sh/hook": "post-install,post-upgrade"
+    "helm.sh/hook-weight": "2"
+    {{- end }}
+    "argocd.argoproj.io/sync-wave": "2"
+{{- if or $addonVersion $.Values.secretName }}
+spec:
+{{- end}}
+{{- if $addonVersion }}
+  version: {{ $addonVersion }}
+{{- end }}
+{{- if $.Values.secretName }}
+  secretName: {{ $.Values.secretName }}
+{{- end }}
+{{- if $.Values.secretNamespace }}
+  secretNamespace: {{ $.Values.secretNamespace }}
+{{- end }}
+{{- if $addon.manifestPatches }}
+  manifestPatches: {{ toYaml $addon.manifestPatches | nindent 4 }}
+{{- end }}
+{{- if $addon.additionalManifests }}
+  additionalManifests:
+    name: {{ $addon.additionalManifests.name }}
+    {{- if $addon.additionalManifests.namespace }}
+    namespace: {{ $addon.additionalManifests.namespace }}
+    {{- end }} {{/* if $addon.additionalManifests.namespace */}}
+{{- end }}
+{{- if $addon.additionalManifests }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $addon.additionalManifests.name }}
+  namespace: {{ default $addonNamespace $addon.additionalManifests.namespace }}
+data:
+  manifests: {{- toYaml $addon.additionalManifests.manifests | nindent 4 }}
+{{- end }}
+{{- end }} {{/* range $name, $addon := .Values.addon */}}

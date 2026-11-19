@@ -1,0 +1,281 @@
+suite: Migration pre-upgrade hook tests
+
+templates:
+  - templates/migration-hook.yaml
+
+tests:
+  - it: renders SA + Role + RoleBinding + Job
+    release:
+      name: test-kafka
+      namespace: tenant-test
+    asserts:
+      - hasDocuments:
+          count: 4
+      - isKind:
+          of: ServiceAccount
+        documentIndex: 0
+      - isKind:
+          of: Role
+        documentIndex: 1
+      - isKind:
+          of: RoleBinding
+        documentIndex: 2
+      - isKind:
+          of: Job
+        documentIndex: 3
+
+  # The pools are managed by this hook, not a regular manifest, so the hook must
+  # also run on a fresh install (pre-install) — otherwise a brand-new KRaft
+  # cluster would come up with no node pools.
+  - it: tags all resources as pre-install + pre-upgrade hooks
+    release:
+      name: test-kafka
+      namespace: tenant-test
+    asserts:
+      - equal:
+          path: metadata.annotations["helm.sh/hook"]
+          value: pre-install,pre-upgrade
+        documentIndex: 0
+      - equal:
+          path: metadata.annotations["helm.sh/hook"]
+          value: pre-install,pre-upgrade
+        documentIndex: 1
+      - equal:
+          path: metadata.annotations["helm.sh/hook"]
+          value: pre-install,pre-upgrade
+        documentIndex: 2
+      - equal:
+          path: metadata.annotations["helm.sh/hook"]
+          value: pre-install,pre-upgrade
+        documentIndex: 3
+
+  - it: names all resources with the release prefix
+    release:
+      name: test-kafka
+      namespace: tenant-test
+    asserts:
+      - equal:
+          path: metadata.name
+          value: test-kafka-kafka-migration
+        documentIndex: 0
+      - equal:
+          path: metadata.name
+          value: test-kafka-kafka-migration
+        documentIndex: 3
+
+  # The hook creates the broker pool under the render-resolved name
+  # (kafka.brokerPoolName): "kafka" for a cluster migrated from ZooKeeper,
+  # "b-<hash>" otherwise. The manifest references the shell var so both resolve here.
+  - it: creates the broker node pool under the resolved pool name
+    release:
+      name: test-kafka
+      namespace: tenant-test
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].args[0]
+          pattern: 'name: \$\{brokerPool\}'
+        documentIndex: 3
+      - matchRegex:
+          path: spec.template.spec.containers[0].args[0]
+          pattern: "roles:\\n +- broker"
+        documentIndex: 3
+
+  # Fresh install (no live lookup): the broker pool resolves to the
+  # release-unique "b-<hash>", so multiple fresh Kafkas coexist in a namespace.
+  - it: resolves the broker pool to b-<hash> for a fresh install
+    release:
+      name: test-kafka
+      namespace: tenant-test
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].args[0]
+          pattern: 'brokerPool="b-[0-9a-f]{8}"'
+        documentIndex: 3
+
+  # The controller pool the hook creates must use the short hashed name
+  # kafka.controllerPoolName, in lockstep with every selector helper.
+  - it: creates the controller node pool with the release-hashed name
+    release:
+      name: test-kafka
+      namespace: tenant-test
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].args[0]
+          pattern: 'name: c-[0-9a-f]{8}\n'
+        documentIndex: 3
+      - matchRegex:
+          path: spec.template.spec.containers[0].args[0]
+          pattern: "roles:\\n +- controller"
+        documentIndex: 3
+
+  # CRITICAL: the hook creates the broker and controller pools together, so the
+  # controller pool must pin its node IDs above the broker range. Otherwise
+  # Strimzi hands it the existing broker IDs [0..replicas-1], recreating brokers
+  # empty and orphaning the tenant's data (reproduced live on Strimzi 0.45).
+  - it: pins the hook-created controller pool's node IDs above the broker range
+    release:
+      name: test-kafka
+      namespace: tenant-test
+    set:
+      kafka:
+        replicas: 3
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].args[0]
+          pattern: 'strimzi.io/next-node-ids: "\[3-999\]"'
+        documentIndex: 3
+
+  # Preserve failed-Job logs for a post-mortem: only before-hook-creation, never
+  # hook-succeeded (which would delete the previous attempt's pod logs).
+  - it: keeps only before-hook-creation on the Job hook-delete-policy
+    release:
+      name: test-kafka
+      namespace: tenant-test
+    asserts:
+      - equal:
+          path: metadata.annotations["helm.sh/hook-delete-policy"]
+          value: before-hook-creation
+        documentIndex: 3
+
+  # The kubectl image is routed through the cluster registry helper and digest-pinned.
+  - it: pins the hook image by digest through the images registry
+    release:
+      name: test-kafka
+      namespace: tenant-test
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].image
+          pattern: "^clastix/kubectl:v[0-9]+\\.[0-9]+(\\.[0-9]+)?@sha256:[0-9a-f]{64}$"
+        documentIndex: 3
+
+  - it: prefixes the hook image with a configured images-registry
+    release:
+      name: test-kafka
+      namespace: tenant-test
+    set:
+      _cluster:
+        images-registry: registry.example.com
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].image
+          pattern: "^registry\\.example\\.com/clastix/kubectl:v[0-9]+\\.[0-9]+(\\.[0-9]+)?@sha256:[0-9a-f]{64}$"
+        documentIndex: 3
+
+  # The hook-created pools govern the Kafka pods for the whole lifecycle. They
+  # must carry resources or a tenant LimitRange defaults the JVMs to 128Mi and
+  # they OOM, stalling the migration.
+  - it: sets resources on both node pools
+    release:
+      name: test-kafka
+      namespace: tenant-test
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].args[0]
+          pattern: "roles:\\s+- broker[\\s\\S]*?resources:\\s+limits:"
+        documentIndex: 3
+      - matchRegex:
+          path: spec.template.spec.containers[0].args[0]
+          pattern: "roles:\\s+- controller[\\s\\S]*?resources:\\s+limits:"
+        documentIndex: 3
+
+  - it: applies without the OpenAPI patch lookup, so an upgrade fits the tenant LimitRange default
+    release:
+      name: test-kafka
+      namespace: tenant-test
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - notMatchRegex:
+          path: spec.template.spec.containers[0].args[0]
+          pattern: "kubectl[^|\\n]* apply (-f|--filename|--server-side)"
+      - matchRegex:
+          path: spec.template.spec.containers[0].args[0]
+          pattern: "echo \"\\$broker_manifest\" \\| kubectl apply --openapi-patch=false -f -\\n[\\s\\S]*echo \"\\$controller_manifest\" \\| kubectl apply --openapi-patch=false -f -\\n"
+
+  # The hook only applies the two pools; it needs nothing beyond that.
+  - it: grants only what applying the node pools needs
+    release:
+      name: test-kafka
+      namespace: tenant-test
+    documentSelector:
+      path: kind
+      value: Role
+    asserts:
+      - equal:
+          path: rules
+          value:
+            - apiGroups: ["kafka.strimzi.io"]
+              resources: ["kafkanodepools"]
+              verbs: ["get", "create", "patch"]
+
+  - it: applies both node pools through the v1 API
+    release:
+      name: test-kafka
+      namespace: tenant-test
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].args[0]
+          pattern: "apiVersion: kafka.strimzi.io/v1\\n *kind: KafkaNodePool[\\s\\S]*roles:\\n +- broker[\\s\\S]*apiVersion: kafka.strimzi.io/v1\\n *kind: KafkaNodePool[\\s\\S]*roles:\\n +- controller"
+      - notMatchRegex:
+          path: spec.template.spec.containers[0].args[0]
+          pattern: "v1beta2|strimzi.io/kraft|KafkaRebalance"
+
+  - it: keeps the kafka broker pool of a cluster migrated from ZooKeeper
+    release:
+      name: test-kafka
+      namespace: tenant-test
+    documentSelector:
+      path: kind
+      value: Job
+    kubernetesProvider:
+      scheme:
+        "kafka.strimzi.io/v1/KafkaNodePool":
+          gvr:
+            group: kafka.strimzi.io
+            version: v1
+            resource: kafkanodepools
+          namespaced: true
+      objects:
+        - apiVersion: kafka.strimzi.io/v1
+          kind: KafkaNodePool
+          metadata:
+            name: kafka
+            namespace: tenant-test
+            labels:
+              strimzi.io/cluster: test-kafka
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].args[0]
+          pattern: 'brokerPool="kafka"'
+
+  - it: does not take a kafka broker pool that belongs to another cluster
+    release:
+      name: test-kafka
+      namespace: tenant-test
+    documentSelector:
+      path: kind
+      value: Job
+    kubernetesProvider:
+      scheme:
+        "kafka.strimzi.io/v1/KafkaNodePool":
+          gvr:
+            group: kafka.strimzi.io
+            version: v1
+            resource: kafkanodepools
+          namespaced: true
+      objects:
+        - apiVersion: kafka.strimzi.io/v1
+          kind: KafkaNodePool
+          metadata:
+            name: kafka
+            namespace: tenant-test
+            labels:
+              strimzi.io/cluster: other-kafka
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].args[0]
+          pattern: 'brokerPool="b-[0-9a-f]{8}"'

@@ -1,0 +1,211 @@
+suite: etcd post-delete cleanup hook removes orphaned PVCs and TLS secrets
+templates:
+  - templates/hooks/cleanup.yaml
+
+release:
+  name: etcd
+  namespace: tenant-root
+
+# After the etcd tenant module is disabled (etcd: false), the etcd-operator
+# StatefulSet data PVCs (data-etcd-{0,1,2}) are never garbage-collected, and
+# the five etcd-*-tls secrets are left orphaned in the tenant namespace:
+#   - etcd-ca-tls / etcd-client-tls are created by this chart as pre-install
+#     hooks with helm.sh/resource-policy: keep, so Helm deliberately keeps them.
+#   - etcd-peer-ca-tls / etcd-server-tls / etcd-peer-tls are populated by
+#     cert-manager from Certificate resources and carry no owner reference back
+#     to the chart, so they survive the uninstall.
+# The check-release-name.tpl guard pins .Release.Name to "etcd", so every
+# target name is deterministic. This post-delete hook renders a Job (plus its
+# RBAC) that deletes the data PVCs by name (one per replica) and the five
+# secrets by name.
+
+tests:
+  - it: renders the cleanup ServiceAccount as a post-delete hook
+    documentSelector:
+      path: kind
+      value: ServiceAccount
+    asserts:
+      - equal:
+          path: metadata.name
+          value: etcd-cleanup
+      - equal:
+          path: metadata.annotations["helm.sh/hook"]
+          value: post-delete
+      - equal:
+          path: metadata.annotations["helm.sh/hook-weight"]
+          value: "0"
+      - equal:
+          path: metadata.annotations["helm.sh/hook-delete-policy"]
+          value: before-hook-creation,hook-succeeded
+
+  - it: grants delete on PVCs and only the 5 named TLS secrets
+    documentSelector:
+      path: kind
+      value: Role
+    asserts:
+      - equal:
+          path: metadata.annotations["helm.sh/hook"]
+          value: post-delete
+      - equal:
+          path: metadata.annotations["helm.sh/hook-weight"]
+          value: "5"
+      - equal:
+          path: metadata.annotations["helm.sh/hook-delete-policy"]
+          value: before-hook-creation,hook-succeeded
+      # PVC deletes are scoped to the deterministic per-replica names, not a
+      # namespace-wide delete, so a regression cannot reach a sibling's PVC.
+      - contains:
+          path: rules
+          content:
+            apiGroups: [""]
+            resources: ["persistentvolumeclaims"]
+            verbs: ["get", "delete"]
+            resourceNames:
+              - data-etcd-0
+              - data-etcd-1
+              - data-etcd-2
+      - contains:
+          path: rules
+          content:
+            apiGroups: [""]
+            resources: ["secrets"]
+            verbs: ["get", "delete"]
+            resourceNames:
+              - etcd-peer-ca-tls
+              - etcd-ca-tls
+              - etcd-server-tls
+              - etcd-peer-tls
+              - etcd-client-tls
+
+  - it: binds the cleanup Role to the cleanup ServiceAccount
+    documentSelector:
+      path: kind
+      value: RoleBinding
+    asserts:
+      - equal:
+          path: metadata.annotations["helm.sh/hook"]
+          value: post-delete
+      - equal:
+          path: metadata.annotations["helm.sh/hook-weight"]
+          value: "5"
+      - equal:
+          path: metadata.annotations["helm.sh/hook-delete-policy"]
+          value: before-hook-creation,hook-succeeded
+      - equal:
+          path: roleRef.name
+          value: etcd-cleanup
+      - equal:
+          path: subjects[0].kind
+          value: ServiceAccount
+      - equal:
+          path: subjects[0].name
+          value: etcd-cleanup
+
+  - it: renders a hardened cleanup Job with the right hook metadata
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - equal:
+          path: metadata.name
+          value: etcd-cleanup
+      - equal:
+          path: metadata.annotations["helm.sh/hook"]
+          value: post-delete
+      - equal:
+          path: metadata.annotations["helm.sh/hook-weight"]
+          value: "10"
+      - equal:
+          path: metadata.annotations["helm.sh/hook-delete-policy"]
+          value: before-hook-creation,hook-succeeded
+      - equal:
+          path: spec.activeDeadlineSeconds
+          value: 120
+      - equal:
+          path: spec.template.metadata.labels["policy.cozystack.io/allow-to-apiserver"]
+          value: "true"
+      - equal:
+          path: spec.template.spec.serviceAccountName
+          value: etcd-cleanup
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: docker.io/clastix/kubectl:v1.32
+      - equal:
+          path: spec.template.spec.securityContext.runAsNonRoot
+          value: true
+      - equal:
+          path: spec.template.spec.securityContext.runAsUser
+          value: 65534
+      - equal:
+          path: spec.template.spec.securityContext.seccompProfile.type
+          value: RuntimeDefault
+      - equal:
+          path: spec.template.spec.containers[0].securityContext.readOnlyRootFilesystem
+          value: true
+      - equal:
+          path: spec.template.spec.containers[0].securityContext.allowPrivilegeEscalation
+          value: false
+      - contains:
+          path: spec.template.spec.containers[0].securityContext.capabilities.drop
+          content: ALL
+      - equal:
+          path: spec.template.spec.containers[0].resources.requests.cpu
+          value: 10m
+      - equal:
+          path: spec.template.spec.containers[0].resources.requests.memory
+          value: 64Mi
+      - equal:
+          path: spec.template.spec.containers[0].resources.limits.cpu
+          value: 200m
+      - equal:
+          path: spec.template.spec.containers[0].resources.limits.memory
+          value: 128Mi
+
+  - it: deletes one data PVC per replica and the five TLS secrets by name
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'kubectl delete pvc -n tenant-root data-etcd-0 data-etcd-1 data-etcd-2 --ignore-not-found --wait=false'
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'kubectl delete secret -n tenant-root etcd-peer-ca-tls etcd-ca-tls etcd-server-tls etcd-peer-tls etcd-client-tls --ignore-not-found --wait=false'
+
+  - it: scales the PVC list to the configured replica count
+    documentSelector:
+      path: kind
+      value: Job
+    set:
+      replicas: 5
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'kubectl delete pvc -n tenant-root data-etcd-0 data-etcd-1 data-etcd-2 data-etcd-3 data-etcd-4 --ignore-not-found --wait=false'
+
+  # An explicit replicas: 0 must NOT render an empty resourceNames list — an
+  # empty resourceNames in an RBAC rule matches every PVC in the namespace
+  # (a wildcard), which would silently undo the least-privilege scoping. The
+  # $replicaCount clamp keeps at least data-etcd-0 in both the Role and command.
+  - it: clamps to one PVC name when replicas is 0 so RBAC never becomes a wildcard
+    set:
+      replicas: 0
+    asserts:
+      - contains:
+          path: rules
+          content:
+            apiGroups: [""]
+            resources: ["persistentvolumeclaims"]
+            verbs: ["get", "delete"]
+            resourceNames:
+              - data-etcd-0
+        documentSelector:
+          path: kind
+          value: Role
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'kubectl delete pvc -n tenant-root data-etcd-0 --ignore-not-found --wait=false'
+        documentSelector:
+          path: kind
+          value: Job

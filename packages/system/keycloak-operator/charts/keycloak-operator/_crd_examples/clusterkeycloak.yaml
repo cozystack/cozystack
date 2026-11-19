@@ -1,0 +1,7 @@
+apiVersion: v1.edp.epam.com/v1alpha1
+kind: ClusterKeycloak
+metadata:
+  name: keycloak-sample
+spec:
+  secret: keycloak-access
+  url: https://keycloak.example.com

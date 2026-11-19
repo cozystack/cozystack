@@ -1,0 +1,30 @@
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingWebhookConfiguration
+metadata:
+  name: lineage-applicationdefinition-kind
+  annotations:
+    cert-manager.io/inject-ca-from: {{ .Release.Namespace }}/lineage-controller-webhook
+  labels:
+    app: cozystack-controller
+webhooks:
+  # Refuses a second ApplicationDefinition for an application kind that is
+  # already declared. failurePolicy Ignore: ApplicationDefinitions ship with the
+  # platform itself, so a webhook that is not up yet must not block a bootstrap
+  # or an upgrade. Which definition manages a kind is decided in code
+  # (internal/shared/appdefowner) whatever this check lets through.
+  - name: applicationdefinition-kind.cozystack.io
+    admissionReviewVersions: ["v1"]
+    sideEffects: None
+    timeoutSeconds: 5
+    clientConfig:
+      service:
+        name: lineage-controller-webhook
+        namespace: {{ .Release.Namespace }}
+        path: /validate-applicationdefinition
+    rules:
+      - operations: ["CREATE", "UPDATE"]
+        apiGroups: ["cozystack.io"]
+        apiVersions: ["v1alpha1"]
+        resources: ["applicationdefinitions"]
+        scope: Cluster
+    failurePolicy: Ignore

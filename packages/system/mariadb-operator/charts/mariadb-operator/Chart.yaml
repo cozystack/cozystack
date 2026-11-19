@@ -1,0 +1,24 @@
+apiVersion: v2
+appVersion: 25.10.2
+dependencies:
+- condition: crds.enabled
+  name: mariadb-operator-crds
+  repository: file://../mariadb-operator-crds
+  version: 25.10.2
+description: Run and operate MariaDB in a cloud native way
+home: https://github.com/mariadb-operator/mariadb-operator
+icon: https://mariadb-operator.github.io/mariadb-operator/assets/mariadb_profile.svg
+keywords:
+- mariadb
+- mysql
+- operator
+- mariadb-operator
+- database
+- maxscale
+kubeVersion: '>=1.26.0-0'
+maintainers:
+- email: martin.montes@mariadb.com
+  name: mmontes11
+name: mariadb-operator
+type: application
+version: 25.10.2

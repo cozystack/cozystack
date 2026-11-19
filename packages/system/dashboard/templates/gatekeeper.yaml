@@ -1,0 +1,223 @@
+{{- $host := index .Values._cluster "root-host" }}
+{{- $realm := index .Values._cluster "oidc-realm-name" | default "cozy" }}
+{{- $oidcEnabled := index .Values._cluster "oidc-enabled" }}
+{{- $oidcInsecureSkipVerify := index .Values._cluster "oidc-insecure-skip-verify" }}
+{{- $keycloakInternalUrl := index .Values._cluster "keycloak-internal-url" | default "" }}
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: incloud-web-gatekeeper
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/instance: incloud-web
+      app.kubernetes.io/name: gatekeeper
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 25%
+      maxUnavailable: 25%
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/instance: incloud-web
+        app.kubernetes.io/name: gatekeeper
+    spec:
+      serviceAccountName: incloud-web-gatekeeper
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchExpressions:
+                    - key: app.kubernetes.io/name
+                      operator: In
+                      values:
+                        - appSpec
+                    - key: app.kubernetes.io/instance
+                      operator: In
+                      values:
+                        - incloud-web
+                topologyKey: kubernetes.io/hostname
+      dnsPolicy: ClusterFirst
+      enableServiceLinks: false
+      restartPolicy: Always
+      priorityClassName: system-cluster-critical
+      containers:
+        {{- if eq $oidcEnabled "true" }}
+        - name: auth-proxy
+          image: quay.io/oauth2-proxy/oauth2-proxy:v7.12.0
+          imagePullPolicy: IfNotPresent
+          args:
+            - --provider=oidc
+            - --upstream=http://cozy-dashboard-console.{{ .Release.Namespace }}.svc:8080
+            - --http-address=0.0.0.0:8000
+            - --redirect-url=https://dashboard.{{ $host }}/oauth2/callback
+            - --oidc-issuer-url=https://keycloak.{{ $host }}/realms/{{ $realm }}
+            {{- if $keycloakInternalUrl }}
+            - --skip-oidc-discovery
+            - --login-url=https://keycloak.{{ $host }}/realms/{{ $realm }}/protocol/openid-connect/auth
+            - --redeem-url={{ $keycloakInternalUrl }}/protocol/openid-connect/token
+            - --oidc-jwks-url={{ $keycloakInternalUrl }}/protocol/openid-connect/certs
+            - --validate-url={{ $keycloakInternalUrl }}/protocol/openid-connect/userinfo
+            - --backend-logout-url={{ $keycloakInternalUrl }}/protocol/openid-connect/logout?id_token_hint={id_token}
+            {{- else }}
+            - --backend-logout-url=https://keycloak.{{ $host }}/realms/{{ $realm }}/protocol/openid-connect/logout?id_token_hint={id_token}
+            {{- end }}
+            - --whitelist-domain=keycloak.{{ $host }}
+            - --email-domain=*
+            - --api-route=^/api(/|$)
+            - --api-route=^/apis(/|$)
+            - --pass-access-token=true
+            - --pass-authorization-header=true
+            - --cookie-refresh=3m
+            - --cookie-name=kc-access
+            - --cookie-secure=true
+            - --cookie-secret=$(OAUTH2_PROXY_COOKIE_SECRET)
+            - --skip-provider-button
+            # No offline_access: that scope makes Keycloak issue an *offline*
+            # refresh token, which is decoupled from the SSO session and is NOT
+            # revoked by logout (end_session). Since oauth2-proxy keeps the
+            # refresh token in the kc-access cookie and silently refreshes it,
+            # a copied cookie would stay valid for the whole offline-session
+            # lifetime (~30d) even after the user logs out. An online refresh
+            # token is bound to the SSO session and is revoked on logout.
+            - --scope=openid email profile
+            {{- if eq $oidcInsecureSkipVerify "true" }}
+            - --ssl-insecure-skip-verify=true
+            {{- end }}
+          env:
+            - name: OAUTH2_PROXY_CLIENT_ID
+              value: dashboard
+            - name: OAUTH2_PROXY_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: dashboard-client
+                  key: client-secret-key
+            - name: OAUTH2_PROXY_COOKIE_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: dashboard-auth-config
+                  key: cookieSecret
+          livenessProbe:
+            httpGet:
+              path: /ping
+              port: proxy
+              scheme: HTTP
+            initialDelaySeconds: 10
+            periodSeconds: 15
+            timeoutSeconds: 2
+            successThreshold: 1
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /ping
+              port: proxy
+              scheme: HTTP
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 2
+            successThreshold: 1
+            failureThreshold: 3
+        {{- else }}
+        - name: token-proxy
+          image: {{ .Values.tokenProxy.image }}
+          imagePullPolicy: IfNotPresent
+          args:
+            - --upstream=http://cozy-dashboard-console.{{ .Release.Namespace }}.svc:8080
+            - --http-address=0.0.0.0:8000
+            - --cookie-refresh=1h
+            - --cookie-name=kc-access
+            - --cookie-secure=true
+            - --cookie-secret=$(TOKEN_PROXY_COOKIE_SECRET)
+          env:
+            - name: TOKEN_PROXY_COOKIE_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: dashboard-auth-config
+                  key: cookieSecret
+          # /healthz/live: process is up; /healthz/ready: JWK cache populated.
+          # Splitting them lets a permanent JWKS misconfig surface as 0/1 Ready
+          # (pod stays out of service endpoints) instead of being indistinguishable
+          # from "user pasted a bad token" at the sign-in handler.
+          #
+          # startupProbe is the backstop for the genuinely-stuck case: a
+          # permanently broken JWKS (wrong URL, missing RBAC, DNS that never
+          # resolves) leaves /healthz/ready returning 503 forever, but
+          # readiness failures alone never restart the pod. After ~5 minutes
+          # of consecutive failures the startupProbe restarts the container
+          # and surfaces the problem as RestartCount/CrashLoopBackOff so an
+          # operator sees something instead of a silently NotReady pod.
+          startupProbe:
+            httpGet:
+              path: /healthz/ready
+              port: proxy
+              scheme: HTTP
+            periodSeconds: 10
+            timeoutSeconds: 2
+            successThreshold: 1
+            failureThreshold: 30
+          livenessProbe:
+            httpGet:
+              path: /healthz/live
+              port: proxy
+              scheme: HTTP
+            initialDelaySeconds: 10
+            periodSeconds: 15
+            timeoutSeconds: 2
+            successThreshold: 1
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /healthz/ready
+              port: proxy
+              scheme: HTTP
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 2
+            successThreshold: 1
+            failureThreshold: 3
+          # The branding config.json the SPA reads via the kube-api is mounted
+          # here so the pre-auth login page can render the same title and logo.
+          volumeMounts:
+            - name: branding
+              mountPath: /etc/cozystack/branding
+              readOnly: true
+        {{- end }}
+          ports:
+            - name: proxy
+              containerPort: 8000
+              protocol: TCP
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+              ephemeral-storage: 50Mi
+            limits:
+              cpu: 200m
+              memory: 256Mi
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1001
+            runAsGroup: 1001
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+            seccompProfile:
+              type: RuntimeDefault
+          terminationMessagePath: /dev/termination-log
+          terminationMessagePolicy: File
+        {{- if ne $oidcEnabled "true" }}
+      volumes:
+        # optional: the login page degrades to its unbranded default if the
+        # ConfigMap is missing, so a start-up dependency is not worth failing on.
+        - name: branding
+          configMap:
+            name: cozy-dashboard-console-config
+            optional: true
+        {{- end }}

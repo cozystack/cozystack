@@ -1,0 +1,515 @@
+{{- include "seaweedfs.compat" . -}}
+{{- if .Values.allInOne.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "seaweedfs.fullname" . }}-all-in-one
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/name: {{ template "seaweedfs.name" . }}
+    helm.sh/chart: {{ .Chart.Name }}-{{ .Chart.Version | replace "+" "_" }}
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: seaweedfs-all-in-one
+  {{- if .Values.allInOne.annotations }}
+  annotations:
+    {{- toYaml .Values.allInOne.annotations | nindent 4 }}
+  {{- end }}
+spec:
+  replicas: {{ .Values.allInOne.replicas | default 1 }}
+  strategy:
+    type: {{ .Values.allInOne.updateStrategy.type | default "Recreate" }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ template "seaweedfs.name" . }}
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: seaweedfs-all-in-one
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: {{ template "seaweedfs.name" . }}
+        helm.sh/chart: {{ .Chart.Name }}-{{ .Chart.Version | replace "+" "_" }}
+        app.kubernetes.io/instance: {{ .Release.Name }}
+        app.kubernetes.io/component: seaweedfs-all-in-one
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+        {{- with .Values.allInOne.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      annotations:
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+        {{- with .Values.allInOne.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      restartPolicy: {{ default .Values.global.seaweedfs.restartPolicy .Values.allInOne.restartPolicy }}
+      {{- if .Values.allInOne.affinity }}
+      affinity:
+        {{ tpl .Values.allInOne.affinity . | nindent 8 | trim }}
+      {{- end }}
+      {{- if .Values.allInOne.topologySpreadConstraints }}
+      topologySpreadConstraints:
+        {{ tpl .Values.allInOne.topologySpreadConstraints . | nindent 8 | trim }}
+      {{- end }}
+      {{- if .Values.allInOne.tolerations }}
+      tolerations:
+        {{- tpl .Values.allInOne.tolerations . | nindent 8 }}
+      {{- end }}
+      {{- include "seaweedfs.imagePullSecrets" . | nindent 6 }}
+      terminationGracePeriodSeconds: 60
+      enableServiceLinks: false
+      {{- if .Values.allInOne.priorityClassName }}
+      priorityClassName: {{ .Values.allInOne.priorityClassName | quote }}
+      {{- end }}
+      {{- if .Values.allInOne.schedulerName }}
+      schedulerName: {{ .Values.allInOne.schedulerName | quote }}
+      {{- end }}
+      {{- if .Values.allInOne.serviceAccountName }}
+      serviceAccountName: {{ .Values.allInOne.serviceAccountName | quote }}
+      {{- end }}
+      {{- if .Values.allInOne.initContainers }}
+      initContainers:
+        {{- tpl .Values.allInOne.initContainers . | nindent 8 }}
+      {{- end }}
+      {{- if .Values.allInOne.podSecurityContext.enabled }}
+      securityContext:
+        {{- omit .Values.allInOne.podSecurityContext "enabled" | toYaml | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: seaweedfs
+          image: {{ template "seaweedfs.master.image" . }}
+          imagePullPolicy: {{ default "IfNotPresent" .Values.global.seaweedfs.imagePullPolicy }}
+          env:
+            {{- include "seaweedfs.licenseEnv" . | nindent 12 }}
+            {{- if and .Values.allInOne.s3.enabled (or .Values.allInOne.s3.enableAuth .Values.s3.enableAuth .Values.filer.s3.enableAuth) }}
+            {{- include "seaweedfs.s3.credentialEnv" . | nindent 12 }}
+            {{- end }}
+            {{- /* Determine default cluster alias and the corresponding env var keys to avoid conflicts */}}
+            {{- $mergedExtraEnvironmentVars := dict }}
+            {{- include "seaweedfs.mergeExtraEnvironmentVars" (dict "global" .Values.global.seaweedfs "component" .Values.allInOne "target" $mergedExtraEnvironmentVars) }}
+            {{- $clusterDefault := default "sw" (index $mergedExtraEnvironmentVars "WEED_CLUSTER_DEFAULT") }}
+            {{- $clusterUpper := upper $clusterDefault }}
+            {{- $clusterMasterKey := printf "WEED_CLUSTER_%s_MASTER" $clusterUpper }}
+            {{- $clusterFilerKey := printf "WEED_CLUSTER_%s_FILER" $clusterUpper }}
+            - name: POD_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: SEAWEEDFS_FULLNAME
+              value: "{{ include "seaweedfs.fullname" . }}"
+            {{- range $key := keys $mergedExtraEnvironmentVars | sortAlpha }}
+            {{- $value := index $mergedExtraEnvironmentVars $key }}
+            {{- if and (ne $key $clusterMasterKey) (ne $key $clusterFilerKey) }}
+            - name: {{ $key }}
+              {{- if kindIs "string" $value }}
+              value: {{ tpl $value $ | quote }}
+              {{- else }}
+              valueFrom:
+                {{ toYaml $value | nindent 16 }}
+              {{- end }}
+            {{- end }}
+            {{- end }}
+            # Inject computed cluster endpoints for the default cluster
+            - name: {{ $clusterMasterKey }}
+              value: {{ include "seaweedfs.cluster.masterAddress" . | quote }}
+            - name: {{ $clusterFilerKey }}
+              value: {{ include "seaweedfs.cluster.filerAddress" . | quote }}
+            {{- if .Values.allInOne.secretExtraEnvironmentVars }}
+            {{- range $key, $value := .Values.allInOne.secretExtraEnvironmentVars }}
+            {{- if not (and $key (eq $key "SEAWEED_LICENSE") (include "seaweedfs.licenseEnabled" $)) }}
+            - name: {{ $key }}
+              valueFrom:
+                {{ toYaml $value | nindent 16 }}
+            {{- end }}
+            {{- end }}
+            {{- end }}
+          command:
+            - "/bin/sh"
+            - "-ec"
+            - |
+              /usr/bin/weed \
+              {{- if .Values.allInOne.loggingOverrideLevel }}
+              -v={{ .Values.allInOne.loggingOverrideLevel }} \
+              {{- else }}
+              -v={{ .Values.global.seaweedfs.loggingLevel }} \
+              {{- end }}
+              server \
+              -dir=/data \
+              -master \
+              -volume \
+              -ip=${POD_IP} \
+              -ip.bind=0.0.0.0 \
+              {{- if .Values.allInOne.idleTimeout }}
+              -idleTimeout={{ .Values.allInOne.idleTimeout }} \
+              {{- end }}
+              {{- if .Values.allInOne.dataCenter }}
+              -dataCenter={{ .Values.allInOne.dataCenter }} \
+              {{- end }}
+              {{- if .Values.allInOne.rack }}
+              -rack={{ .Values.allInOne.rack }} \
+              {{- end }}
+              {{- if .Values.allInOne.whiteList }}
+              -whiteList={{ .Values.allInOne.whiteList }} \
+              {{- end }}
+              {{- if .Values.allInOne.disableHttp }}
+              -disableHttp={{ .Values.allInOne.disableHttp }} \
+              {{- end }}
+              {{- if .Values.volume.dataDirs }}
+              {{- with (first .Values.volume.dataDirs) }}
+              {{- if and (hasKey . "maxVolumes") (ne .maxVolumes nil) }}
+              -volume.max={{ .maxVolumes }} \
+              {{- end }}
+              {{- end }}
+              {{- end }}
+              -master.port={{ .Values.master.port }} \
+              {{- if .Values.global.seaweedfs.enableReplication }}
+              -master.defaultReplication={{ .Values.global.seaweedfs.replicationPlacement }} \
+              {{- else }}
+              -master.defaultReplication={{ .Values.master.defaultReplication }} \
+              {{- end }}
+              {{- if .Values.master.volumePreallocate }}
+              -master.volumePreallocate \
+              {{- end }}
+              -master.volumeSizeLimitMB={{ .Values.master.volumeSizeLimitMB }} \
+              {{- if .Values.master.garbageThreshold }}
+              -master.garbageThreshold={{ .Values.master.garbageThreshold }} \
+              {{- end }}
+              -volume.port={{ .Values.volume.port }} \
+              -volume.readMode={{ .Values.volume.readMode }} \
+              {{- if .Values.volume.imagesFixOrientation }}
+              -volume.images.fix.orientation \
+              {{- end }}
+              {{- if .Values.volume.index }}
+              -volume.index={{ .Values.volume.index }} \
+              {{- end }}
+              {{- if .Values.volume.fileSizeLimitMB }}
+              -volume.fileSizeLimitMB={{ .Values.volume.fileSizeLimitMB }} \
+              {{- end }}
+              -volume.minFreeSpacePercent={{ .Values.volume.minFreeSpacePercent }} \
+              -volume.compactionMBps={{ .Values.volume.compactionMBps }} \
+              {{- if .Values.allInOne.metricsPort }}
+              -metricsPort={{ .Values.allInOne.metricsPort }} \
+              {{- else if .Values.master.metricsPort }}
+              -metricsPort={{ .Values.master.metricsPort }} \
+              {{- end }}
+              {{- if .Values.allInOne.metricsIp }}
+              -metricsIp={{ .Values.allInOne.metricsIp }} \
+              {{- end }}
+              -filer \
+              -filer.port={{ .Values.filer.port }} \
+              {{- if .Values.filer.disableDirListing }}
+              -filer.disableDirListing \
+              {{- end }}
+              -filer.dirListLimit={{ .Values.filer.dirListLimit }} \
+              {{- if .Values.global.seaweedfs.enableReplication }}
+              -filer.defaultReplicaPlacement={{ .Values.global.seaweedfs.replicationPlacement }} \
+              {{- else }}
+              -filer.defaultReplicaPlacement={{ .Values.filer.defaultReplicaPlacement }} \
+              {{- end }}
+              {{- if .Values.filer.maxMB }}
+              -filer.maxMB={{ .Values.filer.maxMB }} \
+              {{- end }}
+              {{- if .Values.filer.encryptVolumeData }}
+              -filer.encryptVolumeData \
+              {{- end }}
+              {{- if .Values.filer.filerGroup}}
+              -filer.filerGroup={{ .Values.filer.filerGroup}} \
+              {{- end }}
+              {{- if .Values.filer.rack }}
+              -filer.rack={{ .Values.filer.rack }} \
+              {{- end }}
+              {{- if .Values.filer.dataCenter }}
+              -filer.dataCenter={{ .Values.filer.dataCenter }} \
+              {{- end }}
+              {{- if .Values.allInOne.s3.enabled }}
+              -s3 \
+              -s3.port={{ .Values.allInOne.s3.port | default .Values.s3.port }} \
+              {{- $domainName := .Values.allInOne.s3.domainName | default .Values.s3.domainName }}
+              {{- if $domainName }}
+              -s3.domainName={{ $domainName }} \
+              {{- end }}
+              {{- if .Values.global.seaweedfs.enableSecurity }}
+              {{- $httpsPort := .Values.allInOne.s3.httpsPort | default .Values.s3.httpsPort }}
+              {{- if $httpsPort }}
+              -s3.port.https={{ $httpsPort }} \
+              {{- include "seaweedfs.s3.tlsArgs" (dict "root" . "prefix" "s3.") | nindent 14 }}
+              {{- end }}
+              {{- end }}
+              {{- if or .Values.allInOne.s3.enableAuth .Values.s3.enableAuth .Values.filer.s3.enableAuth }}
+              -s3.config=/etc/sw/s3/seaweedfs_s3_config \
+              {{- end }}
+              {{- $auditLogConfig := .Values.allInOne.s3.auditLogConfig | default .Values.s3.auditLogConfig }}
+              {{- if $auditLogConfig }}
+              -s3.auditLogConfig=/etc/sw/s3/s3_auditLogConfig.json \
+              {{- end }}
+              {{- end }}
+              {{- if .Values.allInOne.sftp.enabled }}
+              -sftp \
+              -sftp.port={{ .Values.allInOne.sftp.port | default .Values.sftp.port }} \
+              {{- $sshPrivateKey := .Values.allInOne.sftp.sshPrivateKey | default .Values.sftp.sshPrivateKey }}
+              {{- if $sshPrivateKey }}
+              -sftp.sshPrivateKey={{ $sshPrivateKey }} \
+              {{- end }}
+              {{- $hostKeysFolder := .Values.allInOne.sftp.hostKeysFolder | default .Values.sftp.hostKeysFolder }}
+              {{- if $hostKeysFolder }}
+              -sftp.hostKeysFolder={{ $hostKeysFolder }} \
+              {{- end }}
+              {{- $authMethods := .Values.allInOne.sftp.authMethods | default .Values.sftp.authMethods }}
+              {{- if $authMethods }}
+              -sftp.authMethods={{ $authMethods }} \
+              {{- if contains "certificate" $authMethods }}
+              -sftp.trustedUserCAKeysFile=/etc/sw/sftp_ca/ca_user.pub \
+              {{- end }}
+              {{- end }}
+              {{- $maxAuthTries := .Values.allInOne.sftp.maxAuthTries | default .Values.sftp.maxAuthTries }}
+              {{- if $maxAuthTries }}
+              -sftp.maxAuthTries={{ $maxAuthTries }} \
+              {{- end }}
+              {{- $bannerMessage := .Values.allInOne.sftp.bannerMessage | default .Values.sftp.bannerMessage }}
+              {{- if $bannerMessage }}
+              -sftp.bannerMessage="{{ $bannerMessage }}" \
+              {{- end }}
+              {{- $loginGraceTime := .Values.allInOne.sftp.loginGraceTime | default .Values.sftp.loginGraceTime }}
+              {{- if $loginGraceTime }}
+              -sftp.loginGraceTime={{ $loginGraceTime }} \
+              {{- end }}
+              {{- $clientAliveInterval := .Values.allInOne.sftp.clientAliveInterval | default .Values.sftp.clientAliveInterval }}
+              {{- if $clientAliveInterval }}
+              -sftp.clientAliveInterval={{ $clientAliveInterval }} \
+              {{- end }}
+              {{- $clientAliveCountMax := .Values.allInOne.sftp.clientAliveCountMax | default .Values.sftp.clientAliveCountMax }}
+              {{- if $clientAliveCountMax }}
+              -sftp.clientAliveCountMax={{ $clientAliveCountMax }} \
+              {{- end }}
+              {{- if or .Values.allInOne.sftp.enableAuth .Values.sftp.enableAuth }}
+              -sftp.userStoreFile=/etc/sw/sftp/seaweedfs_sftp_config \
+              {{- end }}
+              {{- end }}
+              {{- $extraArgsCount := len .Values.allInOne.extraArgs }}
+              {{- range $i, $arg := .Values.allInOne.extraArgs }}
+              {{ $arg | quote }}{{ if ne (add1 $i) $extraArgsCount }} \{{ end }}
+              {{- end }}
+
+          volumeMounts:
+            - name: data
+              mountPath: /data
+            {{- if and .Values.allInOne.s3.enabled (or .Values.allInOne.s3.enableAuth .Values.s3.enableAuth .Values.filer.s3.enableAuth) }}
+            - name: config-s3-users
+              mountPath: /etc/sw/s3
+              readOnly: true
+            {{- end }}
+            {{- if .Values.allInOne.sftp.enabled }}
+            - name: config-ssh
+              mountPath: {{ .Values.allInOne.sftp.hostKeysFolder | default .Values.sftp.hostKeysFolder | default "/etc/sw/ssh" }}
+              readOnly: true
+            {{- if or .Values.allInOne.sftp.enableAuth .Values.sftp.enableAuth }}
+            - mountPath: /etc/sw/sftp
+              name: config-users
+              readOnly: true
+            {{- end }}
+            {{- $aioAuthMethods := .Values.allInOne.sftp.authMethods | default .Values.sftp.authMethods }}
+            {{- if and $aioAuthMethods (contains "certificate" $aioAuthMethods) }}
+            - mountPath: /etc/sw/sftp_ca
+              name: config-sftp-ca
+              readOnly: true
+            {{- end }}
+            {{- end }}
+            {{- if .Values.filer.notificationConfig }}
+            - name: notification-config
+              mountPath: /etc/seaweedfs/notification.toml
+              subPath: notification.toml
+              readOnly: true
+            {{- end }}
+            - name: master-config
+              mountPath: /etc/seaweedfs/master.toml
+              subPath: master.toml
+              readOnly: true
+            {{- if include "seaweedfs.securityConfigEnabled" . }}
+            - name: security-config
+              mountPath: /etc/seaweedfs/security.toml
+              subPath: security.toml
+              readOnly: true
+            {{- end }}
+            {{- if .Values.global.seaweedfs.enableSecurity }}
+            - name: ca-cert
+              mountPath: /usr/local/share/ca-certificates/ca/
+              readOnly: true
+            - name: master-cert
+              mountPath: /usr/local/share/ca-certificates/master/
+              readOnly: true
+            - name: volume-cert
+              mountPath: /usr/local/share/ca-certificates/volume/
+              readOnly: true
+            - name: filer-cert
+              mountPath: /usr/local/share/ca-certificates/filer/
+              readOnly: true
+            - name: client-cert
+              mountPath: /usr/local/share/ca-certificates/client/
+              readOnly: true
+            {{- if .Values.allInOne.s3.enabled }}
+            {{- include "seaweedfs.s3.tlsVolumeMount" . | nindent 12 }}
+            {{- end }}
+            {{- end }}
+            {{- include "seaweedfs.licenseVolumeMount" . | nindent 12 }}
+            {{ tpl .Values.allInOne.extraVolumeMounts . | nindent 12 }}
+          ports:
+            - containerPort: {{ .Values.master.port }}
+              name: swfs-mas
+            - containerPort: {{ .Values.master.grpcPort }}
+              name: swfs-mas-grpc
+            - containerPort: {{ .Values.volume.port }}
+              name: swfs-vol
+            - containerPort: {{ .Values.volume.grpcPort }}
+              name: swfs-vol-grpc
+            - containerPort: {{ .Values.filer.port }}
+              name: swfs-fil
+            - containerPort: {{ .Values.filer.grpcPort }}
+              name: swfs-fil-grpc
+            {{- if .Values.allInOne.s3.enabled }}
+            - containerPort: {{ .Values.allInOne.s3.port | default .Values.s3.port }}
+              name: swfs-s3
+              {{- $httpsPort := .Values.allInOne.s3.httpsPort | default .Values.s3.httpsPort }}
+              {{- if $httpsPort }}
+            - containerPort: {{ $httpsPort }}
+              name: swfs-s3-tls
+              {{- end }}
+            {{- end }}
+            {{- if .Values.allInOne.sftp.enabled }}
+            - containerPort: {{ .Values.allInOne.sftp.port | default .Values.sftp.port }}
+              name: swfs-sftp
+            {{- end }}
+            {{- if .Values.allInOne.metricsPort }}
+            - containerPort: {{ .Values.allInOne.metricsPort }}
+              name: server-metrics
+            {{- end }}
+          {{- if .Values.allInOne.readinessProbe.enabled }}
+          readinessProbe:
+            httpGet:
+              path: {{ .Values.allInOne.readinessProbe.httpGet.path }}
+              port: {{ .Values.master.port }}
+              scheme: {{ .Values.allInOne.readinessProbe.httpGet.scheme }}
+            initialDelaySeconds: {{ .Values.allInOne.readinessProbe.initialDelaySeconds }}
+            periodSeconds: {{ .Values.allInOne.readinessProbe.periodSeconds }}
+            successThreshold: {{ .Values.allInOne.readinessProbe.successThreshold }}
+            failureThreshold: {{ .Values.allInOne.readinessProbe.failureThreshold }}
+            timeoutSeconds: {{ .Values.allInOne.readinessProbe.timeoutSeconds }}
+          {{- end }}
+          {{- if .Values.allInOne.livenessProbe.enabled }}
+          livenessProbe:
+            httpGet:
+              path: {{ .Values.allInOne.livenessProbe.httpGet.path }}
+              port: {{ .Values.master.port }}
+              scheme: {{ .Values.allInOne.livenessProbe.httpGet.scheme }}
+            initialDelaySeconds: {{ .Values.allInOne.livenessProbe.initialDelaySeconds }}
+            periodSeconds: {{ .Values.allInOne.livenessProbe.periodSeconds }}
+            successThreshold: {{ .Values.allInOne.livenessProbe.successThreshold }}
+            failureThreshold: {{ .Values.allInOne.livenessProbe.failureThreshold }}
+            timeoutSeconds: {{ .Values.allInOne.livenessProbe.timeoutSeconds }}
+          {{- end }}
+          {{- with .Values.allInOne.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- if .Values.allInOne.containerSecurityContext.enabled }}
+          securityContext:
+            {{- omit .Values.allInOne.containerSecurityContext "enabled" | toYaml | nindent 12 }}
+          {{- end }}
+      {{- if .Values.allInOne.sidecars }}
+      {{- include "seaweedfs.tplvalues.render" (dict "value" .Values.allInOne.sidecars "context" $) | nindent 8 }}
+      {{- end }}
+      volumes:
+        {{- include "seaweedfs.licenseVolume" . | nindent 8 }}
+        - name: data
+          {{- if eq .Values.allInOne.data.type "hostPath" }}
+          hostPath:
+            path: {{ .Values.allInOne.data.hostPathPrefix }}/seaweedfs-all-in-one-data/
+            type: DirectoryOrCreate
+          {{- else if eq .Values.allInOne.data.type "persistentVolumeClaim" }}
+          persistentVolumeClaim:
+            claimName: {{ include "seaweedfs.fullname" . }}-all-in-one-data
+          {{- else if eq .Values.allInOne.data.type "existingClaim" }}
+          persistentVolumeClaim:
+            claimName: {{ .Values.allInOne.data.claimName }}
+          {{- else if eq .Values.allInOne.data.type "emptyDir" }}
+          emptyDir: {}
+          {{- end }}
+        {{- if and .Values.allInOne.s3.enabled (or .Values.allInOne.s3.enableAuth .Values.s3.enableAuth .Values.filer.s3.enableAuth) }}
+        - name: config-s3-users
+          secret:
+            defaultMode: 420
+            secretName: {{ default (printf "%s-s3-secret" (include "seaweedfs.fullname" .)) (or .Values.allInOne.s3.existingConfigSecret .Values.s3.existingConfigSecret .Values.filer.s3.existingConfigSecret) }}
+        {{- end }}
+        {{- if .Values.allInOne.sftp.enabled }}
+        - name: config-ssh
+          secret:
+            defaultMode: 420
+            secretName: {{ default (printf "%s-sftp-ssh-secret" (include "seaweedfs.fullname" .)) (or .Values.allInOne.sftp.existingSshConfigSecret .Values.sftp.existingSshConfigSecret) }}
+        {{- if or .Values.allInOne.sftp.enableAuth .Values.sftp.enableAuth }}
+        - name: config-users
+          secret:
+            defaultMode: 420
+            secretName: {{ default (printf "%s-sftp-secret" (include "seaweedfs.fullname" .)) (or .Values.allInOne.sftp.existingConfigSecret .Values.sftp.existingConfigSecret) }}
+        {{- end }}
+        {{- $aioAuthMethodsVol := .Values.allInOne.sftp.authMethods | default .Values.sftp.authMethods }}
+        {{- if and $aioAuthMethodsVol (contains "certificate" $aioAuthMethodsVol) }}
+        {{- $aioCASecret := or .Values.allInOne.sftp.existingCAKeysSecret .Values.sftp.existingCAKeysSecret }}
+        {{- $aioCAKeys := or .Values.allInOne.sftp.trustedUserCAKeys .Values.sftp.trustedUserCAKeys }}
+        {{- if and (not $aioCASecret) (not $aioCAKeys) }}
+        {{- fail "allInOne.sftp.authMethods includes \"certificate\" but neither trustedUserCAKeys nor existingCAKeysSecret is set" }}
+        {{- end }}
+        - name: config-sftp-ca
+          secret:
+            defaultMode: 420
+            secretName: {{ default (printf "%s-sftp-ca-secret" (include "seaweedfs.fullname" .)) $aioCASecret }}
+        {{- end }}
+        {{- end }}
+        {{- if .Values.filer.notificationConfig }}
+        - name: notification-config
+          configMap:
+            name: {{ include "seaweedfs.fullname" . }}-notification-config
+        {{- end }}
+        - name: master-config
+          configMap:
+            name: {{ include "seaweedfs.fullname" . }}-master-config
+        {{- if include "seaweedfs.securityConfigEnabled" . }}
+        - name: security-config
+          configMap:
+            name: {{ include "seaweedfs.fullname" . }}-security-config
+        {{- end }}
+        {{- if .Values.global.seaweedfs.enableSecurity }}
+        - name: ca-cert
+          secret:
+            secretName: {{ include "seaweedfs.fullname" . }}-ca-cert
+        - name: master-cert
+          secret:
+            secretName: {{ include "seaweedfs.fullname" . }}-master-cert
+        - name: volume-cert
+          secret:
+            secretName: {{ include "seaweedfs.fullname" . }}-volume-cert
+        - name: filer-cert
+          secret:
+            secretName: {{ include "seaweedfs.fullname" . }}-filer-cert
+        - name: client-cert
+          secret:
+            secretName: {{ include "seaweedfs.fullname" . }}-client-cert
+        {{- if .Values.allInOne.s3.enabled }}
+        {{- include "seaweedfs.s3.tlsVolume" . | nindent 8 }}
+        {{- end }}
+        {{- end }}
+        {{ tpl .Values.allInOne.extraVolumes . | nindent 8 }}
+      {{- if .Values.allInOne.nodeSelector }}
+      nodeSelector:
+        {{ tpl .Values.allInOne.nodeSelector . | nindent 8 }}
+      {{- end }}
+{{- end }}

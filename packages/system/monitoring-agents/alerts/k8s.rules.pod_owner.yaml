@@ -1,0 +1,60 @@
+apiVersion: operator.victoriametrics.com/v1beta1
+kind: VMRule
+metadata:
+  name: alerts-k8s.rules.podowner
+spec:
+  groups:
+  - name: k8s.rules.pod_owner
+    params: {}
+    rules:
+    - annotations: {}
+      expr: |-
+        max by (namespace,workload,pod,cluster) (
+          label_replace(
+            label_replace(
+              kube_pod_owner{job="kube-state-metrics", owner_kind="ReplicaSet"},
+              "replicaset", "$1", "owner_name", "(.*)"
+            ) * on (replicaset,namespace,cluster) group_left(owner_name) topk by (replicaset,namespace,cluster) (
+              1, max by (replicaset,namespace,owner_name,cluster) (
+                kube_replicaset_owner{job="kube-state-metrics"}
+              )
+            ),
+            "workload", "$1", "owner_name", "(.*)"
+          )
+        )
+      labels:
+        workload_type: deployment
+      record: namespace_workload_pod:kube_pod_owner:relabel
+    - annotations: {}
+      expr: |-
+        max by (namespace,workload,pod,cluster) (
+          label_replace(
+            kube_pod_owner{job="kube-state-metrics", owner_kind="DaemonSet"},
+            "workload", "$1", "owner_name", "(.*)"
+          )
+        )
+      labels:
+        workload_type: daemonset
+      record: namespace_workload_pod:kube_pod_owner:relabel
+    - annotations: {}
+      expr: |-
+        max by (namespace,workload,pod,cluster) (
+          label_replace(
+            kube_pod_owner{job="kube-state-metrics", owner_kind="StatefulSet"},
+            "workload", "$1", "owner_name", "(.*)"
+          )
+        )
+      labels:
+        workload_type: statefulset
+      record: namespace_workload_pod:kube_pod_owner:relabel
+    - annotations: {}
+      expr: |-
+        max by (namespace,workload,pod,cluster) (
+          label_replace(
+            kube_pod_owner{job="kube-state-metrics", owner_kind="Job"},
+            "workload", "$1", "owner_name", "(.*)"
+          )
+        )
+      labels:
+        workload_type: job
+      record: namespace_workload_pod:kube_pod_owner:relabel

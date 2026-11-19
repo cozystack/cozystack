@@ -1,0 +1,3 @@
+# `update` fetches and transforms here before moving the result into
+# templates/. A run that dies between those steps leaves the file behind.
+kubevirt-operator.yaml.download

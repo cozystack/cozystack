@@ -1,0 +1,400 @@
+{{- $clusterDomain := (index .Values._cluster "cluster-domain") | default "cozy.local" }}
+{{- $existingSecret := lookup "v1" "Secret" .Release.Namespace (printf "%s-credentials" .Release.Name) }}
+{{- $passwords := dict }}
+{{- $users := .Values.users }}
+{{- $_ := set $users "backup" dict }}
+
+{{- with (index $existingSecret "data") }}
+  {{- range $k, $v := . }}
+    {{- $_ := set $passwords $k (b64dec $v) }}
+  {{- end }}
+{{- end }}
+
+{{- range $user, $u := $users }}
+  {{- if $u.password }}
+    {{- $_ := set $passwords $user $u.password }}
+  {{- else if not (index $passwords $user) }}
+    {{- $_ := set $passwords $user (randAlphaNum 16) }}
+  {{- end }}
+{{- end }}
+
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ .Release.Name }}-credentials
+stringData:
+  {{- range $user, $u := .Values.users }}
+  {{ quote $user }}: {{ quote (index $passwords $user) }}
+  {{- end }}
+
+---
+apiVersion: "clickhouse.altinity.com/v1"
+kind: "ClickHouseInstallation"
+metadata:
+  name: "{{ .Release.Name }}"
+spec:
+  namespaceDomainPattern:  "%s.svc.{{ $clusterDomain }}"
+  defaults:
+    templates:
+      dataVolumeClaimTemplate: data-volume-template
+      podTemplate: clickhouse-per-host
+      serviceTemplate: svc-template
+  configuration:
+    {{- with $users }}
+    users:
+      {{- range $name, $u := . }}
+      {{ $name }}/password_sha256_hex: {{ sha256sum (index $passwords $name) }}
+      {{ $name }}/profile: {{ ternary "readonly" "default" (index $u "readonly" | default false) }}
+      {{ $name }}/networks/ip: ["::/0"]
+      {{- end }}
+    {{- end }}
+    files:
+      config.d/z_log_disable.xml: |
+        <clickhouse>
+            <asynchronous_metric_log remove="1"/>
+            <metric_log remove="1"/>
+            <query_views_log remove="1" />
+            <part_log remove="1"/>
+            <session_log remove="1"/>
+            <text_log remove="1" />
+            <trace_log remove="1"/>
+            <crash_log remove="1"/>
+            <opentelemetry_span_log remove="1"/>
+            <processors_profile_log remove="1"/>
+        </clickhouse>
+      config.d/query_log_ttl.xml: |
+        <clickhouse>
+            <query_log replace="1">
+                <database>system</database>
+                <table>query_log</table>
+                <engine>ENGINE = MergeTree PARTITION BY (event_date)
+                        ORDER BY (event_time)
+                        TTL event_date + INTERVAL {{ .Values.logTTL }} DAY DELETE
+                </engine>
+                <flush_interval_milliseconds>7500</flush_interval_milliseconds>
+            </query_log>
+            <query_thread_log replace="1">
+                <database>system</database>
+                <table>query_thread_log</table>
+                <engine>ENGINE = MergeTree PARTITION BY (event_date)
+                        ORDER BY (event_time)
+                        TTL event_date + INTERVAL {{ .Values.logTTL }} DAY DELETE
+                </engine>
+                <flush_interval_milliseconds>7500</flush_interval_milliseconds>
+            </query_thread_log>
+        </clickhouse>
+    profiles:
+      readonly/readonly: "1"
+    clusters:
+      - name: "clickhouse"
+        layout:
+          shardsCount: {{ .Values.shards }}
+          replicasCount: {{ .Values.replicas }}
+    {{- if .Values.clickhouseKeeper.enabled }}
+    zookeeper:
+      nodes:
+        {{- $replicas := int .Values.clickhouseKeeper.replicas }}
+        {{- $keeper := include "clickhouse.keeperName" $ }}
+        {{- $namespace := .Release.Namespace }}
+        {{- range $i := until $replicas }}
+        - host: "chk-{{ $keeper }}-cluster1-0-{{ $i }}.{{ $namespace }}.svc.{{ $clusterDomain }}"
+          port: 2181
+        {{- end }}
+    {{- end }}
+  templates:
+    volumeClaimTemplates:
+      - name: data-volume-template
+        metadata:
+          labels:
+            app.kubernetes.io/instance: {{ .Release.Name }}
+        spec:
+          accessModes:
+            - ReadWriteOnce
+          resources:
+            requests:
+              storage: {{ .Values.size }}
+      - name: log-volume-template
+        metadata:
+          labels:
+            app.kubernetes.io/instance: {{ .Release.Name }}
+        spec:
+          accessModes:
+            - ReadWriteOnce
+          resources:
+            requests:
+              storage: {{ .Values.logStorageSize }}
+    podTemplates:
+      - name: clickhouse-per-host
+        metadata:
+          labels:
+            app.kubernetes.io/instance: {{ .Release.Name }}
+        spec:
+          affinity:
+            podAntiAffinity:
+              requiredDuringSchedulingIgnoredDuringExecution:
+                - labelSelector:
+                    matchExpressions:
+                      - key: "clickhouse.altinity.com/chi"
+                        operator: In
+                        values:
+                          - "{{ .Release.Name }}"
+                  topologyKey: "kubernetes.io/hostname"
+          containers:
+            - name: clickhouse
+              image: clickhouse/clickhouse-server:{{ include "clickhouse.versionMap" $ }}
+              resources: {{- include "cozy-lib.resources.defaultingSanitize" (list .Values.resourcesPreset .Values.resources $) | nindent 16 }}
+              volumeMounts:
+                - name: data-volume-template
+                  mountPath: /var/lib/clickhouse
+                - name: log-volume-template
+                  mountPath: /var/log/clickhouse-server
+{{- if .Values.backup.enabled }}
+{{- /*
+  clickhouse-backup sidecar exposes the Altinity tool as an HTTP API on
+  port 7171, sharing the data PVC with the clickhouse-server container.
+  Backup strategy Pods (per BackupJob/RestoreJob) hit this endpoint
+  rather than running clickhouse-backup themselves: that gives the tool
+  the FREEZE/shadow filesystem access it needs without splitting the
+  RWO PVC across two Pods.
+
+  Credentials and bucket coordinates come from <release>-backup-s3
+  (rendered by templates/backup-strategy-secret.yaml when the user
+  hasn't set backup.s3CredentialsSecret.name) or from the user-supplied
+  Secret with the override keys when they have.
+*/}}
+{{- $sidecarSecretName := printf "%s-backup-s3" .Release.Name }}
+{{- $bucketKey := "bucketName" }}
+{{- $endpointKey := "endpoint" }}
+{{- $regionKey := "region" }}
+{{- $accessKeyKey := "accessKey" }}
+{{- $secretKeyKey := "secretKey" }}
+{{- $s3Path := default .Release.Name .Values.backup.s3PathOverride }}
+{{- /*
+  Optional CA bundle for an S3 endpoint signed by a private CA. Independent of
+  which Secret carries the credentials, so it composes with the per-tenant, the
+  bring-your-own-Secret and the useSystemBucket flows alike.
+*/}}
+{{- $endpointCAName := "" }}
+{{- $endpointCAKey := "ca.crt" }}
+{{- with .Values.backup.endpointCA }}
+{{- if .name }}
+{{- $endpointCAName = .name }}
+{{- if .key }}{{ $endpointCAKey = .key }}{{ end }}
+{{- end }}
+{{- end }}
+{{- if .Values.backup.useSystemBucket }}
+{{- if .Values.backup.s3PathOverride }}
+{{- fail "clickhouse: backup.s3PathOverride is incompatible with backup.useSystemBucket=true. The platform flow scopes the S3 path to <namespace>/<release> automatically; clear s3PathOverride or disable useSystemBucket. To restore from another release's prefix, use a backups.cozystack.io/RestoreJob with spec.targetApplicationRef." }}
+{{- end }}
+{{- $sidecarSecretName = "cozy-backups-creds" }}
+{{- $s3Path = printf "%s/%s" .Release.Namespace .Release.Name }}
+{{- else }}
+{{- with .Values.backup.s3CredentialsSecret }}
+{{- if .name }}
+{{- $sidecarSecretName = .name }}
+{{- if .bucketKey }}{{ $bucketKey = .bucketKey }}{{ end }}
+{{- if .endpointKey }}{{ $endpointKey = .endpointKey }}{{ end }}
+{{- if .regionKey }}{{ $regionKey = .regionKey }}{{ end }}
+{{- if .accessKeyIDKey }}{{ $accessKeyKey = .accessKeyIDKey }}{{ end }}
+{{- if .secretAccessKeyKey }}{{ $secretKeyKey = .secretAccessKeyKey }}{{ end }}
+{{- end }}
+{{- end }}
+{{- end }}
+            - name: clickhouse-backup
+              image: "{{ .Files.Get "images/altinity-clickhouse-backup.tag" | trim }}"
+              imagePullPolicy: IfNotPresent
+              command: ["clickhouse-backup", "server"]
+              ports:
+                - name: ch-backup-api
+                  containerPort: 7171
+                  protocol: TCP
+              env:
+                - name: CLICKHOUSE_HOST
+                  value: localhost
+                - name: CLICKHOUSE_PORT
+                  value: "9000"
+                - name: CLICKHOUSE_USERNAME
+                  value: backup
+                - name: CLICKHOUSE_PASSWORD
+                  valueFrom:
+                    secretKeyRef:
+                      name: {{ .Release.Name }}-credentials
+                      key: backup
+                - name: ALLOW_EMPTY_BACKUPS
+                  value: "true"
+                {{- /*
+                  create_remote keeps the local backup when its upload fails,
+                  and the upstream defaults never prune local backups (0) and
+                  resume unfinished uploads at start, which pushes a failed
+                  attempt to the bucket as an archive no Backup refers to and
+                  holds the API lock (423) while it does. -1 keeps only the
+                  newest local backup and removes it once its upload succeeds.
+                */}}
+                - name: BACKUPS_TO_KEEP_LOCAL
+                  value: "-1"
+                - name: API_COMPLETE_RESUMABLE_AFTER_RESTART
+                  value: "false"
+                - name: REMOTE_STORAGE
+                  value: s3
+                {{- /*
+                  On the useSystemBucket flow every S3 setting but the
+                  release's own S3_PATH below, the platform's
+                  backupStorage.forcePathStyle included, comes
+                  from the clickhouse-backup.yml key the platform projects
+                  into cozy-backups-creds, mounted below as the config file.
+                  clickhouse-backup reloads that file in each API handler
+                  that reaches S3 and kubelet rewrites a mounted Secret in
+                  place, so credentials projected after the Pod started, or
+                  rotated since, reach the running sidecar; environment
+                  would be read only at start and would override the file,
+                  so none of those is set here.
+
+                  S3_FORCE_PATH_STYLE selects path-style vs vhost-style S3
+                  addressing. On the legacy paths (own Secret via
+                  s3CredentialsSecret.name, or a configured endpoint) we
+                  cannot peek inside the Secret at render time, so we keep
+                  the historical path-style default — AWS users in that mode
+                  must set S3_FORCE_PATH_STYLE=false in their own
+                  clickhouse-backup config.
+                */}}
+                {{- if .Values.backup.useSystemBucket }}
+                - name: CLICKHOUSE_BACKUP_CONFIG
+                  value: /etc/clickhouse-backup-s3/config.yml
+                {{- else if or (not (eq (default "" .Values.backup.s3CredentialsSecret.name) "")) .Values.backup.endpoint }}
+                - name: S3_FORCE_PATH_STYLE
+                  value: "true"
+                {{- end }}
+                - name: API_LISTEN
+                  value: 0.0.0.0:7171
+                {{- /*
+                  Required HTTP auth on :7171. Without these the API
+                  is reachable to any Pod with network access to the
+                  ClickHouseInstallation Pod IP and accepts
+                  restore_remote (overwrites tables from S3) and
+                  DELETE /backup/<name>/remote (wipes archives) calls
+                  with no credentials. Sidecar reads from the
+                  chart-emitted backup-api-auth Secret; strategy Pod
+                  reads the same Secret and curls with -u user:pass.
+                */}}
+                - name: API_USERNAME
+                  valueFrom: { secretKeyRef: { name: {{ printf "%s-backup-api-auth" .Release.Name | quote }}, key: username } }
+                - name: API_PASSWORD
+                  valueFrom: { secretKeyRef: { name: {{ printf "%s-backup-api-auth" .Release.Name | quote }}, key: password } }
+                {{- /*
+                  S3_PATH scopes every backup this release writes/lists
+                  under a release-named prefix inside the bucket. Tenants
+                  routinely point multiple ClickHouse releases at the
+                  same Bucket app; without a prefix, list/remote and
+                  restore_remote walk the bucket root and a restore on
+                  release A could pick up B's archive (data corruption).
+                  The prefix is fixed at chart-render time so source and
+                  destination releases share it iff they share a name -
+                  to-copy restore between two releases requires that the
+                  destination release explicitly point at the source
+                  release's prefix (set backup.s3PathOverride).
+                */}}
+                - name: S3_PATH
+                  value: {{ $s3Path | quote }}
+                {{- if not .Values.backup.useSystemBucket }}
+                - name: S3_BUCKET
+                  valueFrom: { secretKeyRef: { name: {{ $sidecarSecretName | quote }}, key: {{ $bucketKey | quote }} } }
+                - name: S3_ENDPOINT
+                  valueFrom: { secretKeyRef: { name: {{ $sidecarSecretName | quote }}, key: {{ $endpointKey | quote }} } }
+                - name: S3_REGION
+                  valueFrom: { secretKeyRef: { name: {{ $sidecarSecretName | quote }}, key: {{ $regionKey | quote }} } }
+                - name: S3_ACCESS_KEY
+                  valueFrom: { secretKeyRef: { name: {{ $sidecarSecretName | quote }}, key: {{ $accessKeyKey | quote }} } }
+                - name: S3_SECRET_KEY
+                  valueFrom: { secretKeyRef: { name: {{ $sidecarSecretName | quote }}, key: {{ $secretKeyKey | quote }} } }
+                {{- end }}
+{{- if $endpointCAName }}
+                # Trust the mounted private-CA bundle for the S3 endpoint (see
+                # the `backup.endpointCA` field in values.yaml). SSL_CERT_DIR,
+                # not AWS_CA_BUNDLE: Go reads it in addition to the system store,
+                # so a private and a public endpoint both verify, whereas
+                # AWS_CA_BUNDLE replaces the trust pool and breaks public S3.
+                - name: SSL_CERT_DIR
+                  value: /etc/ssl/cozy-s3-ca:/etc/ssl/certs
+{{- end }}
+              resources:
+                requests:
+                  cpu: 10m
+                  memory: 64Mi
+                limits:
+                  cpu: 500m
+                  memory: 256Mi
+              volumeMounts:
+                - name: data-volume-template
+                  mountPath: /var/lib/clickhouse
+{{- if $endpointCAName }}
+                - name: backup-s3-ca
+                  mountPath: /etc/ssl/cozy-s3-ca
+                  readOnly: true
+{{- end }}
+{{- if .Values.backup.useSystemBucket }}
+                - name: backup-s3-config
+                  mountPath: /etc/clickhouse-backup-s3
+                  readOnly: true
+{{- end }}
+              securityContext:
+                # clickhouse-server stores data under /var/lib/clickhouse with
+                # uid=101 / mode 0750 (alpine clickhouse-server image's
+                # `clickhouse` user). Running as uid 0 alone is not enough -
+                # dropping ALL caps strips DAC_OVERRIDE and root loses its
+                # perm-bypass. DAC_OVERRIDE is in the PSA baseline-allowed
+                # set; adding DAC_READ_SEARCH would violate baseline so we
+                # rely on DAC_OVERRIDE alone (it covers read+write+exec for
+                # arbitrary files).
+                allowPrivilegeEscalation: false
+                capabilities:
+                  drop: ["ALL"]
+                  # All in PSA baseline-allowed set:
+                  #   DAC_OVERRIDE - read/write/exec arbitrary files
+                  #   CHOWN, FOWNER, FSETID - clickhouse-backup chowns its
+                  #     own /var/lib/clickhouse/backup dir at startup and
+                  #     during create_remote
+                  add: ["DAC_OVERRIDE", "CHOWN", "FOWNER", "FSETID"]
+                runAsUser: 0
+                runAsGroup: 0
+                seccompProfile:
+                  type: RuntimeDefault
+{{- if or $endpointCAName .Values.backup.useSystemBucket }}
+          volumes:
+{{- if $endpointCAName }}
+            # Private-CA bundle for the backup sidecar, projected as ca.crt for
+            # SSL_CERT_DIR above. Not optional on purpose: a missing Secret holds
+            # the whole ClickHouse Pod in ContainerCreating (naming the Secret in
+            # `kubectl describe`) rather than mounting an empty trust dir and
+            # failing later inside clickhouse-backup with an opaque x509 error.
+            - name: backup-s3-ca
+              secret:
+                secretName: {{ $endpointCAName | quote }}
+                items:
+                  - key: {{ $endpointCAKey | quote }}
+                    path: ca.crt
+{{- end }}
+{{- if .Values.backup.useSystemBucket }}
+            # Optional: the platform projects cozy-backups-creds into this
+            # namespace at the first BackupJob, after the Pod has started.
+            - name: backup-s3-config
+              secret:
+                secretName: {{ $sidecarSecretName | quote }}
+                optional: true
+                items:
+                  - key: clickhouse-backup.yml
+                    path: config.yml
+{{- end }}
+{{- end }}
+{{- end }}
+    serviceTemplates:
+      - name: svc-template
+        metadata:
+          labels:
+            app.kubernetes.io/instance: {{ .Release.Name }}
+        generateName: chendpoint-{chi}
+        spec:
+          ports:
+            - name: http
+              port: 8123
+            - name: tcp
+              port: 9000

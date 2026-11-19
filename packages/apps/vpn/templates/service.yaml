@@ -1,0 +1,35 @@
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Release.Name }}-vpn
+  labels:
+    app: {{ .Release.Name }}-vpn
+    app.kubernetes.io/instance: {{ .Release.Name }}
+spec:
+  {{- if .Values.externalIPs }}
+  externalIPs:
+    {{- toYaml .Values.externalIPs | nindent 12 }}
+  type: ClusterIP
+  externalTrafficPolicy: Cluster
+  {{- else }}
+  type: LoadBalancer
+  externalTrafficPolicy: {{ ternary "Local" "Cluster" .Values.external }}
+  {{- end }}
+
+  ports:
+    #- name: apiport-tcp
+    #  protocol: TCP
+    #  port: 60000
+    #  targetPort: 60000
+    - name: accessport-tcp
+      protocol: TCP
+      port: 40000
+      targetPort: 40000
+    - name: accessport-udp
+      protocol: UDP
+      port: 40000
+      targetPort: 40000
+  selector:
+    app: {{ .Release.Name }}-vpn
+  internalTrafficPolicy: Cluster

@@ -1,0 +1,33 @@
+annotations:
+  artifacthub.io/category: monitoring-logging
+  artifacthub.io/changes: |
+    - reverted usage of `app` label in `vm.selectorLabels`
+  artifacthub.io/license: Apache-2.0
+  artifacthub.io/links: |
+    - name: Sources
+      url: https://github.com/VictoriaMetrics/helm-charts/tree/master/charts/victoria-metrics-common
+    - name: Charts repo
+      url: https://victoriametrics.github.io/helm-charts/
+  artifacthub.io/readme: |
+    # VictoriaMetrics Common Helm chart
+
+    Chart documentation is available [here](https://docs.victoriametrics.com/helm/victoria-metrics-common/).
+    Changelog is [here](https://docs.victoriametrics.com/helm/victoria-metrics-common/changelog/).
+apiVersion: v2
+description: VictoriaMetrics Common - contains shared templates for all Victoria Metrics
+  helm charts
+keywords:
+- victoriametrics
+- monitoring
+- kubernetes
+- observability
+- tsdb
+- metrics
+- metricsql
+- timeseries
+kubeVersion: '>=1.23.0-0'
+name: victoria-metrics-common
+sources:
+- https://github.com/VictoriaMetrics/helm-charts
+type: library
+version: 0.3.0

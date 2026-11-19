@@ -1,0 +1,94 @@
+suite: old machine templates survive a rerender on proxmox
+
+# A MachineSet draining its last workers still references the template those
+# workers were created from. If the render stops emitting it, Helm deletes the
+# infrastructureRef out from under them. The retention loop exists for that, and
+# it looks templates up BY KIND — so on a proxmox pool it has to look for
+# ProxmoxMachineTemplate. Pinned here because pinning the lookup back to the
+# KubeVirt kind left all 99 tests green: no proxmox case reached that loop.
+templates:
+  - templates/nodegroup.yaml
+release:
+  name: kubernetes-nodes-myk8s-md0
+  namespace: tenant-test
+set:
+  cluster: myk8s
+  _cluster:
+    cluster-domain: cozy.local
+  version: "v1.35"
+  minReplicas: 0
+  maxReplicas: 3
+  instanceType: ""
+  diskSize: 20Gi
+  storageClass: replicated
+  roles:
+    - ingress-nginx
+  resources:
+    cpu: "2"
+    memory: 4Gi
+  substrate: proxmox
+  proxmox:
+    templateTags: [talos]
+    network:
+      bridge: vmbr0
+    dnsServers: ["10.0.0.1"]
+tests:
+  - it: keeps a ProxmoxMachineTemplate a MachineSet still references
+    kubernetesProvider:
+      scheme:
+        "cluster.x-k8s.io/v1beta1/MachineDeployment":
+          gvr: {group: "cluster.x-k8s.io", version: "v1beta1", resource: "machinedeployments"}
+          namespaced: true
+        "cluster.x-k8s.io/v1beta1/Cluster":
+          gvr: {group: "cluster.x-k8s.io", version: "v1beta1", resource: "clusters"}
+          namespaced: true
+        "cluster.x-k8s.io/v1beta1/MachineSet":
+          gvr: {group: "cluster.x-k8s.io", version: "v1beta1", resource: "machinesets"}
+          namespaced: true
+        "infrastructure.cluster.x-k8s.io/v1alpha1/ProxmoxMachineTemplate":
+          gvr: {group: "infrastructure.cluster.x-k8s.io", version: "v1alpha1", resource: "proxmoxmachinetemplates"}
+          namespaced: true
+        "infrastructure.cluster.x-k8s.io/v1alpha1/KubevirtMachineTemplate":
+          gvr: {group: "infrastructure.cluster.x-k8s.io", version: "v1alpha1", resource: "kubevirtmachinetemplates"}
+          namespaced: true
+      objects:
+        - kind: Cluster
+          apiVersion: cluster.x-k8s.io/v1beta1
+          metadata: {name: kubernetes-myk8s, namespace: tenant-test}
+          spec:
+            infrastructureRef: {kind: ProxmoxCluster, name: kubernetes-myk8s}
+        - kind: ProxmoxMachineTemplate
+          apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
+          metadata:
+            name: kubernetes-myk8s-md0-0ld0ld
+            namespace: tenant-test
+            annotations:
+              meta.helm.sh/release-name: kubernetes-nodes-myk8s-md0
+            ownerReferences:
+              - kind: Cluster
+                apiVersion: cluster.x-k8s.io/v1beta1
+                name: kubernetes-myk8s
+                uid: "00000000-0000-0000-0000-000000000000"
+          spec:
+            template:
+              spec:
+                sourceNode: prox-home
+        - kind: MachineSet
+          apiVersion: cluster.x-k8s.io/v1beta1
+          metadata: {name: kubernetes-myk8s-md0-draining, namespace: tenant-test}
+          spec:
+            template:
+              spec:
+                infrastructureRef:
+                  kind: ProxmoxMachineTemplate
+                  name: kubernetes-myk8s-md0-0ld0ld
+        - kind: KubevirtMachineTemplate
+          apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
+          metadata: {name: scheme-registration-only, namespace: scheme-registration-only}
+          spec: {}
+    asserts:
+      - containsDocument:
+          apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
+          kind: ProxmoxMachineTemplate
+          name: kubernetes-myk8s-md0-0ld0ld
+          any: true

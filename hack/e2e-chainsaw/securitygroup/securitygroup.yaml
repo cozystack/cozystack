@@ -1,0 +1,22 @@
+# SecurityGroup created through the aggregated API (storage-backed by the
+# CiliumNetworkPolicy itself). It attaches to a managed application; the
+# backing endpointSelector is the group's own membership label, and peers are
+# expressed as fromApp/fromSG.
+apiVersion: sdn.cozystack.io/v1alpha1
+kind: SecurityGroup
+metadata:
+  name: sg-e2e
+spec:
+  attachments:
+  - kind: Postgres
+    name: db
+  ingress:
+  - fromApp:
+    - kind: Kubernetes
+      name: web
+    fromSG:
+    - sg-frontend-e2e
+    toPorts:
+    - ports:
+      - port: "5432"
+        protocol: TCP

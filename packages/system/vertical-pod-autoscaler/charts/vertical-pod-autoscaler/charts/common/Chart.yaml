@@ -1,0 +1,22 @@
+annotations:
+  category: Infrastructure
+  licenses: Apache-2.0
+apiVersion: v2
+appVersion: 2.31.3
+description: A Library Helm Chart for grouping common logic between bitnami charts.
+  This chart is not deployable by itself.
+home: https://github.com/cowboysysop/charts/tree/master/charts/common
+keywords:
+- common
+- helper
+- template
+- function
+- bitnami
+maintainers:
+- email: sebastien.prudhomme@gmail.com
+  name: sebastien-prudhomme
+name: common
+sources:
+- https://github.com/cowboysysop/charts/tree/master/charts/common
+type: library
+version: 2.31.3

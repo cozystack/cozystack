@@ -1,0 +1,102 @@
+suite: seaweedfs volume storage class reaches the data plane as a string
+
+templates:
+  - templates/seaweedfs.yaml
+
+release:
+  name: seaweedfs
+  namespace: tenant-root
+
+set: &platform
+  _namespace:
+    host: example.org
+    ingress: tenant-root
+  _cluster:
+    issuer-name: letsencrypt-prod
+    solver: http01
+
+tests:
+  - it: hands a numeric storage class name on as a string
+    set:
+      <<: *platform
+      volume:
+        storageClass: "123"
+    documentSelector:
+      path: metadata.name
+      value: seaweedfs-system
+    asserts:
+      - equal:
+          path: spec.values.seaweedfs.volume.dataDirs[0].storageClass
+          value: "123"
+
+  # The value is written into the values of another release; a line break in
+  # it must not open new keys there.
+  - it: keeps a storage class with a line break inside its own field
+    set:
+      <<: *platform
+      volume:
+        storageClass: "local\n          image: example/other"
+    documentSelector:
+      path: metadata.name
+      value: seaweedfs-system
+    asserts:
+      - equal:
+          path: spec.values.seaweedfs.volume.dataDirs[0].storageClass
+          value: "local\n          image: example/other"
+      - notExists:
+          path: spec.values.seaweedfs.volume.dataDirs[0].image
+
+  # A pool or zone class is quoted by hand around the value, which a quote
+  # character inside it closes early, breaking the release values.
+  - it: keeps a pool storage class with a quote inside its own field
+    set:
+      <<: *platform
+      volume:
+        pools:
+          fast:
+            diskType: ssd
+            storageClass: 'local"x'
+    documentSelector:
+      path: metadata.name
+      value: seaweedfs-system
+    asserts:
+      - equal:
+          path: spec.values.seaweedfs.volumes.fast.dataDirs[0].storageClass
+          value: 'local"x'
+
+  - it: keeps a zone storage class with a quote inside its own field
+    set:
+      <<: *platform
+      topology: MultiZone
+      replicationFactor: 1
+      volume:
+        zones:
+          a:
+            storageClass: 'local"x'
+    documentSelector:
+      path: metadata.name
+      value: seaweedfs-system
+    asserts:
+      - equal:
+          path: spec.values.seaweedfs.volumes.a.dataDirs[0].storageClass
+          value: 'local"x'
+
+  - it: keeps a zone pool storage class with a quote inside its own field
+    set:
+      <<: *platform
+      topology: MultiZone
+      replicationFactor: 1
+      volume:
+        zones:
+          a:
+            pools:
+              fast:
+                diskType: ssd
+                storageClass: 'local"x'
+    documentSelector:
+      path: metadata.name
+      value: seaweedfs-system
+    asserts:
+      - equal:
+          path: spec.values.seaweedfs.volumes.a-fast.dataDirs[0].storageClass
+          value: 'local"x'

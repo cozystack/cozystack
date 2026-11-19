@@ -1,0 +1,151 @@
+{{- $host := index .Values._cluster "root-host" }}
+{{- $realmName := index .Values._cluster "oidc-realm-name" | default "cozy" }}
+{{- $extraRedirectUris := splitList "," ((index .Values._cluster "extra-keycloak-redirect-uri-for-dashboard") | default "") }}
+{{- $k8sCa := index .Values._cluster "kube-root-ca" }}
+
+{{- $existingKubeappsSecret := lookup "v1" "Secret" .Release.Namespace "kubeapps-client" }}
+{{- $existingAuthConfig := lookup "v1" "Secret" "cozy-dashboard" "kubeapps-auth-config" }}
+{{- $brandingConfig := .Values._cluster.branding | default dict }}
+---
+
+apiVersion: v1.edp.epam.com/v1alpha1
+kind: ClusterKeycloak
+metadata:
+  name: keycloak-cozy
+  namespace: {{ .Release.Namespace }}
+spec:
+  secret: keycloak-credentials
+  url: http://keycloak-http.cozy-keycloak.svc:8080
+  insecureSkipVerify: true
+
+---
+
+apiVersion: v1.edp.epam.com/v1alpha1
+kind: ClusterKeycloakRealm
+metadata:
+  name: keycloakrealm-cozy
+  namespace: {{ .Release.Namespace }}
+spec:
+  realmName: {{ $realmName | quote }}
+  clusterKeycloakRef: keycloak-cozy
+  organizationsEnabled: {{ .Values.organizationsEnabled | default false }}
+  {{- if $brandingConfig }}
+  {{- if hasKey $brandingConfig "brandName" }}
+  displayName: {{ $brandingConfig.brandName }}
+  {{- end }}
+  {{- if hasKey $brandingConfig "brandHtmlName" }}
+  displayHtmlName: {{ $brandingConfig.brandHtmlName }}
+  {{- else if hasKey $brandingConfig "branding" }}
+  displayHtmlName: {{ $brandingConfig.branding }}
+  {{- end }}
+  {{- if hasKey $brandingConfig "loginTheme" }}
+  themes:
+    loginTheme: {{ $brandingConfig.loginTheme | quote }}
+  {{- end }}
+  {{- end }}
+  {{- with .Values.login }}
+  login:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  {{- with .Values.smtp }}
+  smtp:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  {{- with .Values.userProfile }}
+  userProfileConfig:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  sessions:
+    ssoSessionSettings:
+      idleTimeout: 86400
+      maxLifespan: 604800
+
+---
+
+apiVersion: v1.edp.epam.com/v1
+kind: KeycloakClientScope
+metadata:
+  name: keycloakclientscope-cozy
+spec:
+  name: groups
+  realmRef:
+    name: keycloakrealm-cozy
+    kind: ClusterKeycloakRealm
+  description: "Group Membership"
+  protocol: openid-connect
+  default: true
+  protocolMappers:
+    - name: groups
+      protocol: openid-connect
+      protocolMapper: "oidc-group-membership-mapper"
+      config:
+        "access.token.claim": "true"
+        "claim.name": "groups"
+        "full.path": "false"
+        "id.token.claim": "true"
+        "userinfo.token.claim": "true"
+  attributes:
+    "include.in.token.scope": "true"
+
+---
+
+apiVersion: v1.edp.epam.com/v1
+kind: KeycloakClient
+metadata:
+  name: keycloakclient
+spec:
+  advancedProtocolMappers: true
+  clientId: kubernetes
+  defaultClientScopes:
+    - groups
+  name: kubernetes
+  public: true
+  realmRef:
+    name: keycloakrealm-cozy
+    kind: ClusterKeycloakRealm
+  webUrl: https://localhost:8000/oauth2/callback
+  webOrigins:
+    - /*
+  redirectUris:
+    - http://localhost:18000
+    - http://localhost:8000
+
+---
+
+apiVersion: v1.edp.epam.com/v1
+kind: KeycloakClientScope
+metadata:
+  name: kubernetes-client
+spec:
+  name: kubernetes-client
+  realmRef:
+    name: keycloakrealm-cozy
+    kind: ClusterKeycloakRealm
+  description: "kubernetes-client"
+  protocol: openid-connect
+  default: true
+  attributes:
+    "include.in.token.scope": "true"
+  protocolMappers:
+    - name: audience
+      protocol: openid-connect
+      protocolMapper: "oidc-audience-mapper"
+      config:
+        "included.client.audience": "kubernetes"
+        "id.token.claim": "true"
+        "access.token.claim": "true"
+        "lightweight.claim": "false"
+        "introspection.token.claim": "true"
+
+---
+
+apiVersion: v1.edp.epam.com/v1
+kind: KeycloakRealmGroup
+metadata:
+  name: cozystack-cluster-admin
+  namespace: cozy-system
+spec:
+  name: cozystack-cluster-admin
+  realmRef:
+    name: keycloakrealm-cozy
+    kind: ClusterKeycloakRealm

@@ -1,0 +1,118 @@
+{{/*
+  Legacy chart-managed scheduled backup.
+
+  Emits a CronJob that runs the per-table Restic dump (see backup-script.yaml).
+  Superseded by the BackupClass + Plan flow under `backups.cozystack.io` driven
+  by the Altinity backup strategy (see packages/apps/clickhouse/README.md),
+  which is the recommended path for tenant-managed backup orchestration.
+
+  Gating: rendered only when `backup.enabled` and `backup.schedule` are
+  non-empty AND `backup.useSystemBucket` is false. `backup.enabled=true` alone
+  is the documented way to materialise the chart-emitted `<release>-backup-s3`
+  Secret consumed by the Altinity strategy; leaving `backup.schedule=""` lets
+  users opt into the new flow without also getting the legacy CronJob. The
+  `useSystemBucket` exclusion prevents tenants who flip to the platform flow
+  from carrying a legacy CronJob that would still try to read the (no longer
+  rendered) `<release>-backup` Secret — the platform flow is BackupClass-driven
+  and has no chart-side CronJob counterpart.
+*/}}
+{{- if and .Values.backup.enabled .Values.backup.schedule (not .Values.backup.useSystemBucket) }}
+{{ $image := .Files.Get "images/backup.json" | fromJson }}
+{{- /* The CronJob controller starts each Job as <name>-<timestamp>, so the API
+       refuses a CronJob name over 52 characters. Cutting the release name to
+       fit could give two releases one CronJob, so a name that does not fit
+       keeps a hash of the full release name instead. */}}
+{{- $cronJobName := printf "%s-backup" .Release.Name }}
+{{- if gt (len $cronJobName) 52 }}
+{{- $cronJobName = printf "%s-%s-backup" (.Release.Name | trunc 38 | trimSuffix "-") (.Release.Name | sha256sum | trunc 6) }}
+{{- end }}
+
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ $cronJobName }}
+spec:
+  schedule: "{{ .Values.backup.schedule }}"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      template:
+        metadata:
+          annotations:
+            checksum/config: {{ include (print $.Template.BasePath "/backup-script.yaml") . | sha256sum }}
+            checksum/secret: {{ include (print $.Template.BasePath "/backup-secret.yaml") . | sha256sum }}
+        spec:
+          imagePullSecrets:
+          - name: {{ .Release.Name }}-regsecret
+          restartPolicy: Never
+          containers:
+          - name: clickhouse-backup
+            image: "{{ $.Files.Get "images/clickhouse-backup.tag" | trim }}"
+            command:
+            - /bin/sh
+            - -x
+            - /scripts/backup.sh
+            env:
+            - name: REPO_PREFIX
+              value: {{ required "s3Bucket is not specified!" .Values.backup.s3Bucket | quote }}
+            - name: CLEANUP_STRATEGY
+              value: {{ required "cleanupPolicy is not specified!" .Values.backup.cleanupStrategy | quote }}
+            - name: CLICKHOUSE_USER
+              value: backup
+            - name: CLICKHOUSE_HOST
+              value: chi-{{ .Release.Name }}-clickhouse-0-0
+            - name: CLICKHOUSE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Release.Name }}-credentials
+                  key: backup
+            - name: AWS_ACCESS_KEY_ID
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Release.Name }}-backup
+                  key: s3AccessKey
+            - name: AWS_SECRET_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Release.Name }}-backup
+                  key: s3SecretKey
+            - name: AWS_DEFAULT_REGION
+              value: {{ .Values.backup.s3Region }}
+            - name: RESTIC_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Release.Name }}-backup
+                  key: resticPassword
+            volumeMounts:
+            - mountPath: /scripts
+              name: scripts
+            - mountPath: /tmp
+              name: tmp
+            - mountPath: /.cache
+              name: cache
+            securityContext:
+              allowPrivilegeEscalation: false
+              capabilities:
+                drop:
+                - ALL
+              privileged: false
+              readOnlyRootFilesystem: true
+              runAsNonRoot: true
+          volumes:
+          - name: scripts
+            secret:
+              secretName: {{ .Release.Name }}-backup-script
+          - name: tmp
+            emptyDir: {}
+          - name: cache
+            emptyDir: {}
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 9000
+            runAsGroup: 9000
+            seccompProfile:
+              type: RuntimeDefault
+{{- end }}

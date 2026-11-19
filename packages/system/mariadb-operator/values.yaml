@@ -1,0 +1,10 @@
+mariadb-operator:
+  # Fallback only: core/platform injects networking.clusterDomain into this key
+  # through the shared cozystack-values Secret (see its apps.yaml).
+  clusterName: cozy.local
+  metrics:
+    enabled: true
+  webhook:
+    cert:
+      certManager:
+        enabled: true

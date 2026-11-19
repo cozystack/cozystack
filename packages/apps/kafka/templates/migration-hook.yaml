@@ -1,0 +1,167 @@
+{{- /*
+  Node pools are applied by this hook, not as regular chart manifests. Every
+  pool that exists today was created here and is absent from every release
+  manifest; applying them before the main release apply also keeps the Kafka
+  CR from being reconciled against pools that do not exist yet.
+*/ -}}
+{{- $controllerReplicas := include "kafka.controllerReplicas" . }}
+{{- $brokerPool := include "kafka.brokerPoolName" . }}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ .Release.Name }}-kafka-migration
+  annotations:
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-weight: "1"
+    helm.sh/hook-delete-policy: before-hook-creation
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ .Release.Name }}-kafka-migration
+  annotations:
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-weight: "1"
+    helm.sh/hook-delete-policy: before-hook-creation
+rules:
+- apiGroups: ["kafka.strimzi.io"]
+  resources: ["kafkanodepools"]
+  verbs: ["get", "create", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ .Release.Name }}-kafka-migration
+  annotations:
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-weight: "1"
+    helm.sh/hook-delete-policy: before-hook-creation
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ .Release.Name }}-kafka-migration
+subjects:
+  - kind: ServiceAccount
+    name: {{ .Release.Name }}-kafka-migration
+    namespace: {{ .Release.Namespace | quote }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ printf "%s-kafka-migration" .Release.Name | trunc 63 | trimSuffix "-" }}
+  annotations:
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-weight: "2"
+    # Only before-hook-creation: keep the previous (possibly failed) Job and its
+    # pod logs around for a post-mortem until the next attempt recreates it.
+    helm.sh/hook-delete-policy: before-hook-creation
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 300
+  template:
+    metadata:
+      labels:
+        policy.cozystack.io/allow-to-apiserver: "true"
+    spec:
+      serviceAccountName: {{ .Release.Name }}-kafka-migration
+      restartPolicy: Never
+      containers:
+        - name: kubectl
+          image: {{ include "cozy-lib.image" (list "clastix/kubectl:v1.32@sha256:b9ef7d8dbe65bcc81a46c09b8dc7543103055021c4f43287bf59e92a8f4fe05c" $) }}
+          command: [sh, -ec]
+          args:
+            - |
+              set -eu
+
+              ns={{ .Release.Namespace | quote }}
+              name={{ .Release.Name | quote }}
+              brokerPool={{ $brokerPool | quote }}
+
+              # Every apply here passes --openapi-patch=false. Without it, applying
+              # an object that already exists makes kubectl download the cluster's
+              # whole OpenAPI v2 document only to learn that a custom resource
+              # takes a JSON merge patch: about 300Mi with the platform's CRDs,
+              # while this container runs under a tenant LimitRange default of
+              # 128Mi. With it kubectl builds the same merge patch from the
+              # last-applied annotation. Not --server-side: fields that
+              # "kubectl create" set on a pool stay co-owned by that manager, so
+              # a server-side apply would never remove them.
+              broker_manifest=$(cat <<MANIFEST
+              apiVersion: kafka.strimzi.io/v1
+              kind: KafkaNodePool
+              metadata:
+                # "kafka" for a cluster migrated from ZooKeeper (that pool adopted
+                # its <cluster>-kafka-N brokers), "b-<hash>" otherwise. Resolved
+                # at render time by kafka.brokerPoolName.
+                name: ${brokerPool}
+                namespace: ${ns}
+                labels:
+                  strimzi.io/cluster: ${name}
+                  app.kubernetes.io/managed-by: Helm
+                annotations:
+                  meta.helm.sh/release-name: ${name}
+                  meta.helm.sh/release-namespace: ${ns}
+              spec:
+                replicas: {{ .Values.kafka.replicas }}
+                roles:
+                  - broker
+                resources: {{- include "cozy-lib.resources.defaultingSanitize" (list .Values.kafka.resourcesPreset .Values.kafka.resources $) | nindent 18 }}
+                storage:
+                  type: jbod
+                  volumes:
+                  - id: 0
+                    type: persistent-claim
+                    {{- with .Values.kafka.size }}
+                    size: {{ . }}
+                    {{- end }}
+                    {{- with .Values.kafka.storageClass }}
+                    class: {{ . }}
+                    {{- end }}
+                    # Strimzi's PvcReconciler deletes a pool's PVCs when the pool
+                    # is removed; deleteClaim:false leaves the tenant's data on a
+                    # pool teardown.
+                    deleteClaim: false
+              MANIFEST
+              )
+
+              controller_manifest=$(cat <<MANIFEST
+              apiVersion: kafka.strimzi.io/v1
+              kind: KafkaNodePool
+              metadata:
+                name: {{ include "kafka.controllerPoolName" . }}
+                namespace: ${ns}
+                labels:
+                  strimzi.io/cluster: ${name}
+                  app.kubernetes.io/managed-by: Helm
+                annotations:
+                  meta.helm.sh/release-name: ${name}
+                  meta.helm.sh/release-namespace: ${ns}
+                  # Controller node IDs start above the broker range, leaving
+                  # [0..replicas-1] to the broker pool. A cluster migrated from
+                  # ZooKeeper relies on it: its brokers kept their original IDs.
+                  strimzi.io/next-node-ids: "[{{ .Values.kafka.replicas }}-999]"
+              spec:
+                replicas: {{ $controllerReplicas }}
+                roles:
+                  - controller
+                resources: {{- include "cozy-lib.resources.defaultingSanitize" (list .Values.kafka.resourcesPreset .Values.kafka.resources $) | nindent 18 }}
+                storage:
+                  type: jbod
+                  volumes:
+                  - id: 0
+                    type: persistent-claim
+                    size: {{ .Values.kafka.controllerStorageSize | default "5Gi" }}
+                    {{- with .Values.kafka.storageClass }}
+                    class: {{ . }}
+                    {{- end }}
+                    kraftMetadata: shared
+                    deleteClaim: false
+              MANIFEST
+              )
+
+              echo "Ensuring broker KafkaNodePool \"$brokerPool\" exists..."
+              echo "$broker_manifest" | kubectl apply --openapi-patch=false -f -
+
+              echo "Ensuring controller KafkaNodePool exists..."
+              echo "$controller_manifest" | kubectl apply --openapi-patch=false -f -

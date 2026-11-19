@@ -1,0 +1,144 @@
+suite: cozystack-operator rollout strategy
+
+# Pins the rollout strategy and the four preconditions the surge pod makes
+# load-bearing: no declared port, no bound listener, leader election on, no
+# httpGet probe. Each is checked against every variant the chart ships. The
+# bound-listener one is pinned only partially, for a reason recorded next to
+# the asserts themselves; the other three are airtight.
+#
+# Why the strategy is what it is, why each precondition matters and how each one
+# fails: the maintainer note at the top of templates/cozystack-operator.yaml.
+# That note is the single owner of the reasoning; this file only asserts it.
+
+templates:
+  - templates/cozystack-operator.yaml
+
+tests:
+  - it: keeps the strategy and every surge precondition on the talos variant
+    set:
+      cozystackOperator.variant: talos
+    asserts: &surgeSafe
+      # The strategy rides the same anchor as the preconditions rather than
+      # sitting in a talos-only case of its own. It renders outside every
+      # variant branch today, so one case would pass, but that is a property
+      # of the template rather than a guarantee: move the block inside a
+      # branch and a single-variant assert stops seeing the other two.
+      - equal:
+          path: spec.replicas
+          value: 1
+        documentSelector:
+          path: kind
+          value: Deployment
+      # Pinned alongside the two values below because they are meaningless
+      # without it: MaxUnavailable() reports 0 for any strategy that is not
+      # RollingUpdate, so a switch to Recreate would satisfy the intent of this
+      # test by a different route while leaving the rollingUpdate block behind
+      # as dead configuration the API server then rejects at apply.
+      - equal:
+          path: spec.strategy.type
+          value: RollingUpdate
+        documentSelector:
+          path: kind
+          value: Deployment
+      - equal:
+          path: spec.strategy.rollingUpdate.maxUnavailable
+          value: 0
+        documentSelector:
+          path: kind
+          value: Deployment
+      - equal:
+          path: spec.strategy.rollingUpdate.maxSurge
+          value: 1
+        documentSelector:
+          path: kind
+          value: Deployment
+      - equal:
+          path: spec.template.spec.hostNetwork
+          value: true
+        documentSelector:
+          path: kind
+          value: Deployment
+      - notExists:
+          path: spec.template.spec.containers[*].ports
+        documentSelector:
+          path: kind
+          value: Deployment
+      - notExists:
+          path: spec.template.spec.initContainers[*].ports
+        documentSelector:
+          path: kind
+          value: Deployment
+      # The three argument asserts read containers[0], so pin which container
+      # that is. A container inserted ahead of the operator would otherwise
+      # shift the index and leave them asserting about something else.
+      - equal:
+          path: spec.template.spec.containers[0].name
+          value: cozystack-operator
+        documentSelector:
+          path: kind
+          value: Deployment
+      # contains is a membership test with no notion of position, while Go's
+      # flag package keeps the last occurrence, so these two alone stay green
+      # whether a duplicate lands before the =0 and loses or after it and binds
+      # the port — they cannot tell the two apart. Moving the =0 flag last
+      # would fix the process without making these asserts catch anything. The
+      # notContains pair below closes that for the two addresses this binary
+      # defaults its own flags to; any other address still slips through.
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --metrics-bind-address=0
+        documentSelector:
+          path: kind
+          value: Deployment
+      - notContains:
+          path: spec.template.spec.containers[0].args
+          content: --metrics-bind-address=:8080
+        documentSelector:
+          path: kind
+          value: Deployment
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --health-probe-bind-address=0
+        documentSelector:
+          path: kind
+          value: Deployment
+      - notContains:
+          path: spec.template.spec.containers[0].args
+          content: --health-probe-bind-address=:8081
+        documentSelector:
+          path: kind
+          value: Deployment
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --leader-elect=true
+        documentSelector:
+          path: kind
+          value: Deployment
+      # Only the httpGet field is asserted absent, not the probes themselves, so
+      # an exec probe stays legitimate.
+      - notExists:
+          path: spec.template.spec.containers[*].readinessProbe.httpGet
+        documentSelector:
+          path: kind
+          value: Deployment
+      - notExists:
+          path: spec.template.spec.containers[*].livenessProbe.httpGet
+        documentSelector:
+          path: kind
+          value: Deployment
+      - notExists:
+          path: spec.template.spec.containers[*].startupProbe.httpGet
+        documentSelector:
+          path: kind
+          value: Deployment
+
+  - it: keeps the strategy and every surge precondition on the generic variant
+    set:
+      cozystackOperator.variant: generic
+      cozystack.apiServerHost: api.example.com
+    asserts: *surgeSafe
+
+  - it: keeps the strategy and every surge precondition on the hosted variant
+    set:
+      cozystackOperator.variant: hosted
+    asserts: *surgeSafe

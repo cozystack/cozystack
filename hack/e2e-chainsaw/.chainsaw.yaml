@@ -1,0 +1,231 @@
+apiVersion: chainsaw.kyverno.io/v1alpha2
+kind: Configuration
+metadata:
+  name: cozystack-e2e
+spec:
+  # Default namespace for app tests: the pre-existing tenant-test (created by
+  # hack/e2e-install-cozystack.bats), matching the BATS suite. Chainsaw only
+  # deletes namespaces it created itself, so tenant-test is safe.
+  #
+  # A Test whose S3 client runs inside the tenant sets `namespace: tenant-root`
+  # itself, overriding this: the e2e tenant-test tenant is created isolated, so
+  # its Cilium egress allowlist blocks its Pods from reaching tenant-root's
+  # seaweedfs.
+  namespace:
+    name: tenant-test
+  # Run tests sequentially, matching the current BATS behavior. The bucket
+  # suite uses a fixed local port-forward port in both of its cases, so
+  # parallelism is unsafe until ports are made dynamic.
+  execution:
+    parallel: 1
+  timeouts:
+    apply: 1m
+    assert: 5m
+    # delete/cleanup are generous: finalizer-draining CRs (VMDisk, FoundationDB,
+    # Tenant child namespaces) can take minutes to fully reclaim their backing
+    # resources, and Chainsaw waits for the delete to complete during cleanup.
+    delete: 5m
+    cleanup: 5m
+    error: 5m
+    exec: 5m
+  cleanup:
+    skipDelete: false
+  # Global failure handler: on any test error, capture a crust-gather snapshot of
+  # the HOST cluster BEFORE Chainsaw's cleanup deletes the test's resources. This
+  # is the Chainsaw analog of the per-failed-test EXIT-trap host snapshot in
+  # hack/cozytest.sh (which covers the BATS prepare-cluster, install and openapi
+  # tests) — without it the Chainsaw app suite uploads a cozyreport.tgz with zero
+  # per-test snapshots. Combines additively with the per-test events/describe
+  # catches in each suite; the nested-tenant snapshot for the kubernetes-* tests
+  # is captured separately by hack/e2e-chainsaw/_lib/run-kubernetes.sh while its
+  # LB is alive. The snapshot lands under the _out/cozyreport/snapshots/<test>/
+  # tree that hack/cozyreport.sh folds into the uploaded artifact, so each failed
+  # test keeps its own `crust-gather serve`-able cluster state.
+  #
+  # Every catch script below carries an explicit `timeout:`. A Chainsaw script
+  # op is bounded by `timeouts.exec` (5m above) unless it overrides it, and the
+  # inner wall-clock budgets here sum well past that — so without the override
+  # the op ceiling fires and the catch reports `SCRIPT | ERROR | signal: killed`
+  # having collected little. That kill is strictly worse than an inner `timeout`
+  # firing, and worse in a way the process tree makes precise: the ceiling
+  # SIGKILLs the shell process alone — Chainsaw runs it under exec.CommandContext
+  # whose default cancel is Process.Kill() on the shell PID, not a process-group
+  # kill — so every later step in the script is skipped, but any collector the
+  # shell already spawned is orphaned rather than killed and keeps running. It
+  # also keeps the script's stdout/stderr pipe open, and cmd.Wait() does not
+  # return until that pipe closes, so the op does not even come back at its
+  # ceiling until the orphan exits on its own (#4268). An inner `timeout` instead
+  # kills that read at a known budget, exits 124, leaves a partial capture on
+  # disk and lets the remaining steps run — which is why every read below is
+  # itself wrapped in `timeout`, not left to the op ceiling. Keep each op's
+  # `timeout:` above the sum of the inner budgets it contains.
+  #
+  # Accepted tradeoff, so the arithmetic does not have to be rediscovered: this
+  # raises the worst-case catch to ~19m per failed test. The old design had no
+  # inner caps and leaned on the op ceiling, which does not reliably cut a busy
+  # script: it SIGKILLs the shell alone, orphaned children hold the pipe open,
+  # and the op overruns (#4268 measured 606s under a 300s ceiling), so the
+  # nominal ~5m was a figure a busy catch could exceed, not a cap. Tests run
+  # sequentially, and the E2E job is capped at 265 timeout-minutes. A cascade
+  # reddening many suites can therefore spend a large share of the job in
+  # diagnostics. That is deliberate — the old ceiling
+  # bought its speed by collecting nothing at all — and it is bounded: both legs
+  # only approach their ceilings on a genuinely degraded cluster, a systemic
+  # failure usually reds the install gate and skips the E2E step entirely, and
+  # the report-upload steps are `if: always()`. That last point does NOT extend
+  # to a job timeout: a 265-minute cap ends the job `cancelled`, and the ~4m48s
+  # grace window is consumed by the earlier `Collect report` step, so both
+  # cozyreport.tgz and the job log are lost (measured on runs 29557003429 and
+  # 29568562337). If this ever does start truncating runs, bound the number of
+  # snapshotted tests rather than shrinking these timeouts back down: the op
+  # ceiling firing does not cleanly cut a busy script (it SIGKILLs the shell
+  # alone and orphaned children hold the pipe open, so the op overruns), so a
+  # smaller timeout does not guarantee a kill.
+  error:
+    catch:
+    # Ordered cheapest-and-most-decisive first: if anything downstream overruns,
+    # the previous-instance logs are already in the job output.
+    - description: previous-instance container logs on failure
+      script:
+        # ~30s for the cluster-wide pod list plus 12 × 20s worst case for the
+        # per-container log reads = 270s, which the 300s inner backstop clears;
+        # 300 + the 30s kill grace = 330s, which 6m clears in turn. Sized so the
+        # rule above holds end-to-end for this op as well: the per-read timeouts
+        # are what fire, then the inner backstop, and the op timeout never does.
+        timeout: 6m
+        env:
+        - name: TEST_NAME
+          value: ($test.metadata.name)
+        content: |
+          set -u
+          name="${TEST_NAME:-unknown-test}"
+          snap="${COZY_REPORT_DIR:-/workspace/_out/cozyreport}/snapshots/${name}"
+          # The global catch fires once per failed operation; capture once per
+          # test. The directory is created here, before the helper runs, so the
+          # `-d` check below is decided by whether this block already ran rather
+          # than by what the helper found.
+          if [ -d "${snap}/previous-logs" ]; then exit 0; fi
+          mkdir -p "${snap}/previous-logs" 2>/dev/null || true
+          # `kubectl logs` shows only the CURRENT container instance, so for a
+          # crash-looping pod the suite's own `podLogs` collector captures the
+          # Nth restart — a fresh replay of the same startup path — while the
+          # evidence that explains the failure sits in the immediately preceding
+          # instance, reachable only via `--previous`. Chainsaw v0.2.15's podLogs
+          # collector has no `previous` option, so this closes the gap once for
+          # every suite here instead of per-suite. crust-gather does archive a previous.log per
+          # container, but that is a whole archive to fetch and serve; this puts
+          # the decisive lines straight into the failed job's log, and keeps
+          # them even when the snapshot below is truncated.
+          #
+          # The preferred-namespace argument only orders the capture (the test's
+          # own pods first, so a broadly degraded cluster cannot spend the cap on
+          # unrelated cozy-* restarts); it never restricts it. tenant-test is the
+          # namespace every app suite runs in, declared under `namespace.name`
+          # above. Within each namespace group the helper orders by how recently
+          # the previous instance ended, so the install-time restarts that exist
+          # before any app suite runs no longer displace one that happened during
+          # the failing test. Also ordering only -- an install-time restart is
+          # the explanation when the install is what broke.
+          if [ -x ../../e2e-capture-previous-logs.sh ]; then
+            timeout -k 30 300 ../../e2e-capture-previous-logs.sh \
+              "${snap}/previous-logs" "${COZY_TEST_NAMESPACE:-tenant-test}" 2>&1
+            rc=$?
+            # Same rule the snapshot op below follows: a backstop that fires has
+            # to say so. 300s sits above the ~270s worst case inside, so this
+            # should not fire — but if a read stalls past it, a capture cut short
+            # without a line would read as a complete one listing fewer
+            # crash-loops than actually occurred.
+            if [ "${rc}" -ne 0 ]; then
+              echo "» previous-instance capture INCOMPLETE (exit ${rc}); kept what landed in ${snap}/previous-logs"
+            fi
+          fi
+          # Diagnostics must never turn a failed assertion into a failed catch:
+          # the test's own error is the thing worth reading.
+          exit 0
+    - description: crust-gather host snapshot on failure
+      script:
+        # 390s worst case for the snapshot leg (360s + the 30s kill grace) plus
+        # 330s for the data-plane leg = 720s; 13m leaves 60s of slack. Only ever
+        # paid on an already-failed test.
+        timeout: 13m
+        # $test.metadata.name is the individual Test name (e.g. etcd-basic), so
+        # cases sharing a suite dir get distinct snapshots.
+        env:
+        - name: TEST_NAME
+          value: ($test.metadata.name)
+        # COZY_REPORT_DIR mirrors hack/cozytest.sh. A Chainsaw catch script's cwd
+        # is the failing test's suite dir (not the repo root), so default to the
+        # sandbox-invariant absolute path where cozyreport.sh collects from.
+        content: |
+          set -u
+          command -v crust-gather >/dev/null 2>&1 || exit 0
+          name="${TEST_NAME:-unknown-test}"
+          snap="${COZY_REPORT_DIR:-/workspace/_out/cozyreport}/snapshots/${name}"
+          # The global catch can fire once per failed operation in a test; one
+          # host snapshot per test is enough, so skip if it already exists.
+          if [ -d "${snap}/host" ]; then exit 0; fi
+          mkdir -p "${snap}" 2>/dev/null || true
+          echo "» capturing crust-gather host snapshot of failed ${name} -> ${snap}/host"
+          # --duration is crust-gather's OWN budget for the collection phase and
+          # it defaults to 60s, which silently truncates a snapshot of a cluster
+          # this size: on elapse it aborts the collection and skips its finish
+          # step, leaving whatever had been written so far and no indication that
+          # the rest is missing. Set it explicitly to 180s so the collection is
+          # actually allowed to complete.
+          #
+          # The outer wall-clock has to cover more than that budget, because
+          # crust-gather runs API discovery BEFORE the timer starts and that
+          # phase is unbounded — on a cluster with an unhealthy aggregated
+          # APIService (exactly the state a failed e2e is in) aggregated
+          # discovery times out and the fallback re-walks every group, which is
+          # where the old 300s went before a single object was written. 360s
+          # gives ~180s of discovery headroom on top of the 180s collection; if
+          # it still elapses, timeout exits 124, the verdict below records it
+          # rather than propagating it, and the
+          # partially-written snapshot stays on disk and remains servable.
+          # -k 30 hard-kills a collect that ignores the SIGTERM.
+          #
+          # Output goes to a log inside the snapshot instead of /dev/null so
+          # "is this snapshot complete or truncated?" is answerable from the
+          # uploaded artifact rather than a guess.
+          # --disable-additional-logs: the host-log leg spawns a privileged debug pod per
+          # node, which baseline PodSecurity rejects (403); its retry loop then burns the
+          # whole --duration and crust-gather exits 1. Skip it — it collects nothing here.
+          timeout -k 30 360 crust-gather collect --disable-additional-logs --duration 180s \
+            --exclude-kind Secret -f "${snap}/host" >"${snap}/crust-gather.log" 2>&1
+          rc=$?
+          case "${rc}" in
+            0)   echo "» crust-gather host snapshot complete" ;;
+            124|137) echo "» crust-gather host snapshot TRUNCATED (wall-clock ${rc}); partial state kept, see ${snap}/crust-gather.log" ;;
+            *)   echo "» crust-gather host snapshot FAILED (exit ${rc}); see ${snap}/crust-gather.log" ;;
+          esac
+          # Host->pod data-plane capture for NotReady pods — parity with the
+          # equivalent block in hack/cozytest.sh's fail handler. The catch
+          # script's cwd is the failing test's suite dir, so ../../ is hack/.
+          # 300s rather than the 600s used from cozytest.sh: this call site sits
+          # inside a Chainsaw op alongside the snapshot leg above and has to
+          # share that envelope, and the script keeps its own 270s wall-clock
+          # budget (COZY_DATAPLANE_BUDGET) under it. cozytest.sh has no
+          # containing op, so it passes a wider budget to match its 600s
+          # backstop.
+          if [ -x ../../e2e-capture-dataplane.sh ]; then
+            echo "» capturing host->pod data-plane for NotReady pods -> ${snap}/dataplane"
+            timeout -k 30 300 ../../e2e-capture-dataplane.sh "${snap}/dataplane" 2>&1
+            dp_rc=$?
+            # Read, not propagated: the `exit 0` below still stands. The
+            # collector names every read of its own it could not finish, so this
+            # backstop is the last way its leg can die without a word, and a
+            # truncated dataplane/ then reads exactly like a complete one that
+            # found little. The collector's own budget ends inside this
+            # backstop, so it fires only when that budget fails to hold, and the
+            # previous-logs leg above already reports its own.
+            if [ "${dp_rc}" -ne 0 ]; then
+              echo "» data-plane capture INCOMPLETE (exit ${dp_rc}); kept what landed in ${snap}/dataplane"
+            fi
+          fi
+          # A non-zero collector must not fail the catch and bury the test's own
+          # error, which is the thing worth reading.
+          exit 0
+  report:
+    format: XML
+    name: chainsaw-report

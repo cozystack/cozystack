@@ -1,0 +1,122 @@
+suite: external service tests
+
+templates:
+  - templates/external-svc.yaml
+
+tests:
+  ###################
+  # Rendering       #
+  ###################
+
+  - it: does not render when external is false
+    release:
+      name: test-mongodb
+      namespace: tenant-test
+    set:
+      external: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: does not render in replica-set mode (operator handles per-pod LBs via replsets[].expose)
+    release:
+      name: test-mongodb
+      namespace: tenant-test
+    set:
+      external: true
+      sharding: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: renders single LoadBalancer in sharded mode (mongos front-end)
+    release:
+      name: test-mongodb
+      namespace: tenant-test
+    set:
+      external: true
+      sharding: true
+    asserts:
+      - hasDocuments:
+          count: 1
+      - isKind:
+          of: Service
+
+  ###################
+  # Service config  #
+  ###################
+
+  - it: uses correct service name
+    release:
+      name: mydb
+      namespace: tenant-test
+    set:
+      external: true
+      sharding: true
+    asserts:
+      - equal:
+          path: metadata.name
+          value: mydb-external
+
+  - it: sets LoadBalancer type
+    release:
+      name: test-mongodb
+      namespace: tenant-test
+    set:
+      external: true
+      sharding: true
+    asserts:
+      - equal:
+          path: spec.type
+          value: LoadBalancer
+
+  - it: sets externalTrafficPolicy to Local
+    release:
+      name: test-mongodb
+      namespace: tenant-test
+    set:
+      external: true
+      sharding: true
+    asserts:
+      - equal:
+          path: spec.externalTrafficPolicy
+          value: Local
+
+  - it: exposes MongoDB port 27017
+    release:
+      name: test-mongodb
+      namespace: tenant-test
+    set:
+      external: true
+      sharding: true
+    asserts:
+      - equal:
+          path: spec.ports[0].name
+          value: mongodb
+      - equal:
+          path: spec.ports[0].port
+          value: 27017
+
+  ###########################
+  # Sharded selector        #
+  ###########################
+
+  - it: targets mongos pods only
+    release:
+      name: test-mongodb
+      namespace: tenant-test
+    set:
+      external: true
+      sharding: true
+    asserts:
+      - equal:
+          path: spec.selector["app.kubernetes.io/name"]
+          value: percona-server-mongodb
+      - equal:
+          path: spec.selector["app.kubernetes.io/instance"]
+          value: test-mongodb
+      - equal:
+          path: spec.selector["app.kubernetes.io/component"]
+          value: mongos
+      - notExists:
+          path: spec.selector["app.kubernetes.io/replset"]

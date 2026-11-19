@@ -1,0 +1,824 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  labels:
+    cluster.x-k8s.io/provider: bootstrap-talos
+  name: cabpt-system
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    cert-manager.io/inject-ca-from: cabpt-system/cabpt-serving-cert
+    controller-gen.kubebuilder.io/version: v0.17.0
+  labels:
+    cluster.x-k8s.io/provider: bootstrap-talos
+    cluster.x-k8s.io/v1alpha3: v1alpha3
+    cluster.x-k8s.io/v1alpha4: v1alpha3
+    cluster.x-k8s.io/v1beta1: v1alpha3
+  name: talosconfigs.bootstrap.cluster.x-k8s.io
+spec:
+  conversion:
+    strategy: Webhook
+    webhook:
+      clientConfig:
+        service:
+          name: cabpt-webhook-service
+          namespace: cabpt-system
+          path: /convert
+      conversionReviewVersions:
+      - v1
+      - v1beta1
+  group: bootstrap.cluster.x-k8s.io
+  names:
+    categories:
+    - cluster-api
+    kind: TalosConfig
+    listKind: TalosConfigList
+    plural: talosconfigs
+    singular: talosconfig
+  scope: Namespaced
+  versions:
+  - name: v1alpha2
+    schema:
+      openAPIV3Schema:
+        description: TalosConfig is the Schema for the talosconfigs API
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: TalosConfigSpec defines the desired state of TalosConfig
+            properties:
+              data:
+                type: string
+              generateType:
+                type: string
+            required:
+            - generateType
+            type: object
+          status:
+            description: TalosConfigStatus defines the observed state of TalosConfig
+            properties:
+              bootstrapData:
+                description: BootstrapData will be a slice of bootstrap data
+                format: byte
+                type: string
+              errorMessage:
+                description: ErrorMessage will be set on non-retryable errors
+                type: string
+              errorReason:
+                description: ErrorReason will be set on non-retryable errors
+                type: string
+              ready:
+                description: Ready indicates the BootstrapData field is ready to be
+                  consumed
+                type: boolean
+              talosConfig:
+                description: Talos config will be a string containing the config for
+                  download
+                type: string
+            type: object
+        type: object
+    served: true
+    storage: false
+    subresources:
+      status: {}
+  - name: v1alpha3
+    schema:
+      openAPIV3Schema:
+        description: TalosConfig is the Schema for the talosconfigs API
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: TalosConfigSpec defines the desired state of TalosConfig
+            properties:
+              configPatches:
+                items:
+                  properties:
+                    op:
+                      type: string
+                    path:
+                      type: string
+                    value:
+                      x-kubernetes-preserve-unknown-fields: true
+                  required:
+                  - op
+                  - path
+                  type: object
+                type: array
+              data:
+                type: string
+              generateType:
+                type: string
+              hostname:
+                description: Set hostname in the machine configuration to some value.
+                properties:
+                  source:
+                    description: |-
+                      Source of the hostname.
+
+                      Allowed values:
+                      "MachineName" (use linked Machine's Name).
+                      "InfrastructureName" (use linked Machine's infrastructure's name).
+                    type: string
+                type: object
+              strategicPatches:
+                description: Talos Linux machine configuration strategic merge patch
+                  list.
+                items:
+                  type: string
+                type: array
+              talosVersion:
+                type: string
+            required:
+            - generateType
+            type: object
+          status:
+            description: TalosConfigStatus defines the observed state of TalosConfig
+            properties:
+              conditions:
+                description: Conditions defines current service state of the TalosConfig.
+                items:
+                  description: Condition defines an observation of a Cluster API resource
+                    operational state.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed. If that is not known, then using the time when
+                        the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This field may be empty.
+                      maxLength: 10240
+                      minLength: 1
+                      type: string
+                    reason:
+                      description: |-
+                        reason is the reason for the condition's last transition in CamelCase.
+                        The specific API may choose whether or not this field is considered a guaranteed API.
+                        This field may be empty.
+                      maxLength: 256
+                      minLength: 1
+                      type: string
+                    severity:
+                      description: |-
+                        severity provides an explicit classification of Reason code, so the users or machines can immediately
+                        understand the current situation and act accordingly.
+                        The Severity field MUST be set only when Status=False.
+                      maxLength: 32
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      type: string
+                    type:
+                      description: |-
+                        type of condition in CamelCase or in foo.example.com/CamelCase.
+                        Many .condition.type values are consistent across resources like Available, but because arbitrary conditions
+                        can be useful (see .node.status.conditions), the ability to deconflict is important.
+                      maxLength: 256
+                      minLength: 1
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - status
+                  - type
+                  type: object
+                type: array
+              dataSecretName:
+                description: DataSecretName is the name of the secret that stores
+                  the bootstrap data script.
+                type: string
+              failureMessage:
+                description: FailureMessage will be set on non-retryable errors
+                type: string
+              failureReason:
+                description: FailureReason will be set on non-retryable errors
+                type: string
+              observedGeneration:
+                description: ObservedGeneration is the latest generation observed
+                  by the controller.
+                format: int64
+                type: integer
+              ready:
+                description: Ready indicates the BootstrapData field is ready to be
+                  consumed
+                type: boolean
+              talosConfig:
+                description: |-
+                  Talos config will be a string containing the config for download.
+
+                  Deprecated: please use `<cluster>-talosconfig` secret.
+                type: string
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    cert-manager.io/inject-ca-from: cabpt-system/cabpt-serving-cert
+    controller-gen.kubebuilder.io/version: v0.17.0
+  labels:
+    cluster.x-k8s.io/provider: bootstrap-talos
+    cluster.x-k8s.io/v1alpha3: v1alpha3
+    cluster.x-k8s.io/v1alpha4: v1alpha3
+    cluster.x-k8s.io/v1beta1: v1alpha3
+  name: talosconfigtemplates.bootstrap.cluster.x-k8s.io
+spec:
+  conversion:
+    strategy: Webhook
+    webhook:
+      clientConfig:
+        service:
+          name: cabpt-webhook-service
+          namespace: cabpt-system
+          path: /convert
+      conversionReviewVersions:
+      - v1
+      - v1beta1
+  group: bootstrap.cluster.x-k8s.io
+  names:
+    categories:
+    - cluster-api
+    kind: TalosConfigTemplate
+    listKind: TalosConfigTemplateList
+    plural: talosconfigtemplates
+    singular: talosconfigtemplate
+  scope: Namespaced
+  versions:
+  - name: v1alpha2
+    schema:
+      openAPIV3Schema:
+        description: TalosConfigTemplate is the Schema for the talosconfigtemplates
+          API
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: TalosConfigTemplateSpec defines the desired state of TalosConfigTemplate
+            properties:
+              template:
+                description: TalosConfigTemplateResource defines the Template structure
+                properties:
+                  spec:
+                    description: TalosConfigSpec defines the desired state of TalosConfig
+                    properties:
+                      data:
+                        type: string
+                      generateType:
+                        type: string
+                    required:
+                    - generateType
+                    type: object
+                type: object
+            required:
+            - template
+            type: object
+        type: object
+    served: true
+    storage: false
+  - name: v1alpha3
+    schema:
+      openAPIV3Schema:
+        description: TalosConfigTemplate is the Schema for the talosconfigtemplates
+          API
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: TalosConfigTemplateSpec defines the desired state of TalosConfigTemplate
+            properties:
+              template:
+                description: TalosConfigTemplateResource defines the Template structure
+                properties:
+                  spec:
+                    description: TalosConfigSpec defines the desired state of TalosConfig
+                    properties:
+                      configPatches:
+                        items:
+                          properties:
+                            op:
+                              type: string
+                            path:
+                              type: string
+                            value:
+                              x-kubernetes-preserve-unknown-fields: true
+                          required:
+                          - op
+                          - path
+                          type: object
+                        type: array
+                      data:
+                        type: string
+                      generateType:
+                        type: string
+                      hostname:
+                        description: Set hostname in the machine configuration to
+                          some value.
+                        properties:
+                          source:
+                            description: |-
+                              Source of the hostname.
+
+                              Allowed values:
+                              "MachineName" (use linked Machine's Name).
+                              "InfrastructureName" (use linked Machine's infrastructure's name).
+                            type: string
+                        type: object
+                      strategicPatches:
+                        description: Talos Linux machine configuration strategic merge
+                          patch list.
+                        items:
+                          type: string
+                        type: array
+                      talosVersion:
+                        type: string
+                    required:
+                    - generateType
+                    type: object
+                type: object
+            required:
+            - template
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  labels:
+    cluster.x-k8s.io/provider: bootstrap-talos
+  name: cabpt-leader-election-role
+  namespace: cabpt-system
+rules:
+- apiGroups:
+  - ""
+  resources:
+  - configmaps
+  verbs:
+  - get
+  - list
+  - watch
+  - create
+  - update
+  - patch
+  - delete
+- apiGroups:
+  - ""
+  resources:
+  - configmaps/status
+  verbs:
+  - get
+  - update
+  - patch
+- apiGroups:
+  - ""
+  resources:
+  - events
+  verbs:
+  - create
+- apiGroups:
+  - coordination.k8s.io
+  resources:
+  - leases
+  verbs:
+  - get
+  - list
+  - watch
+  - create
+  - update
+  - patch
+  - delete
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  labels:
+    cluster.x-k8s.io/provider: bootstrap-talos
+  name: cabpt-manager-role
+rules:
+- apiGroups:
+  - ""
+  resources:
+  - secrets
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - bootstrap.cluster.x-k8s.io
+  resources:
+  - talosconfigs
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - bootstrap.cluster.x-k8s.io
+  resources:
+  - talosconfigs/status
+  verbs:
+  - get
+  - patch
+  - update
+- apiGroups:
+  - cluster.x-k8s.io
+  resources:
+  - clusters
+  - clusters/status
+  - machines
+  - machines/status
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - exp.cluster.x-k8s.io
+  resources:
+  - machinepools
+  - machinepools/status
+  verbs:
+  - get
+  - list
+  - watch
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  labels:
+    cluster.x-k8s.io/provider: bootstrap-talos
+  name: cabpt-proxy-role
+rules:
+- apiGroups:
+  - authentication.k8s.io
+  resources:
+  - tokenreviews
+  verbs:
+  - create
+- apiGroups:
+  - authorization.k8s.io
+  resources:
+  - subjectaccessreviews
+  verbs:
+  - create
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  labels:
+    cluster.x-k8s.io/provider: bootstrap-talos
+  name: cabpt-talosconfig-editor-role
+rules:
+- apiGroups:
+  - bootstrap.cluster.x-k8s.io
+  resources:
+  - talosconfigs
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - bootstrap.cluster.x-k8s.io
+  resources:
+  - talosconfigs/status
+  verbs:
+  - get
+  - patch
+  - update
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  labels:
+    cluster.x-k8s.io/provider: bootstrap-talos
+  name: cabpt-manager
+  namespace: cabpt-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  labels:
+    cluster.x-k8s.io/provider: bootstrap-talos
+  name: cabpt-leader-election-rolebinding
+  namespace: cabpt-system
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: cabpt-leader-election-role
+subjects:
+- kind: ServiceAccount
+  name: cabpt-manager
+  namespace: cabpt-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  labels:
+    cluster.x-k8s.io/provider: bootstrap-talos
+  name: cabpt-manager-rolebinding
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: cabpt-manager-role
+subjects:
+- kind: ServiceAccount
+  name: cabpt-manager
+  namespace: cabpt-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  labels:
+    cluster.x-k8s.io/provider: bootstrap-talos
+  name: cabpt-proxy-rolebinding
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: cabpt-proxy-role
+subjects:
+- kind: ServiceAccount
+  name: cabpt-manager
+  namespace: cabpt-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  labels:
+    cluster.x-k8s.io/provider: bootstrap-talos
+  name: cabpt-talosconfig-editor-rolebinding
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: cabpt-talosconfig-editor-role
+subjects:
+- kind: ServiceAccount
+  name: cabpt-manager
+  namespace: cabpt-system
+---
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    cluster.x-k8s.io/provider: bootstrap-talos
+    control-plane: controller-manager
+  name: cabpt-controller-manager-metrics-service
+  namespace: cabpt-system
+spec:
+  ports:
+  - name: https
+    port: 8443
+    targetPort: https
+  selector:
+    cluster.x-k8s.io/provider: bootstrap-talos
+    control-plane: controller-manager
+---
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    cluster.x-k8s.io/provider: bootstrap-talos
+  name: cabpt-webhook-service
+  namespace: cabpt-system
+spec:
+  ports:
+  - port: 443
+    targetPort: 9443
+  selector:
+    cluster.x-k8s.io/provider: bootstrap-talos
+    control-plane: controller-manager
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    cluster.x-k8s.io/provider: bootstrap-talos
+    control-plane: controller-manager
+  name: cabpt-controller-manager
+  namespace: cabpt-system
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      cluster.x-k8s.io/provider: bootstrap-talos
+      control-plane: controller-manager
+  template:
+    metadata:
+      labels:
+        cluster.x-k8s.io/provider: bootstrap-talos
+        control-plane: controller-manager
+    spec:
+      containers:
+      - args:
+        - --enable-leader-election
+        - --feature-gates=MachinePool=${EXP_MACHINE_POOL:=false}
+        - --diagnostics-address=${CAPI_DIAGNOSTICS_ADDRESS:=:8443}
+        - --insecure-diagnostics=${CAPI_INSECURE_DIAGNOSTICS:=false}
+        command:
+        - /manager
+        image: ghcr.io/siderolabs/cluster-api-talos-controller:v0.6.12
+        imagePullPolicy: Always
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: healthz
+        name: manager
+        ports:
+        - containerPort: 9443
+          name: webhook-server
+          protocol: TCP
+        - containerPort: 9440
+          name: healthz
+          protocol: TCP
+        - containerPort: 8443
+          name: metrics
+          protocol: TCP
+        readinessProbe:
+          httpGet:
+            path: /readyz
+            port: healthz
+        resources:
+          limits:
+            cpu: 500m
+            memory: 500Mi
+          requests:
+            cpu: 100m
+            memory: 128Mi
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+          privileged: false
+          runAsGroup: 65532
+          runAsUser: 65532
+        terminationMessagePolicy: FallbackToLogsOnError
+        volumeMounts:
+        - mountPath: /tmp/k8s-webhook-server/serving-certs
+          name: cert
+          readOnly: true
+      serviceAccountName: cabpt-manager
+      terminationGracePeriodSeconds: 10
+      volumes:
+      - name: cert
+        secret:
+          defaultMode: 420
+          secretName: cabpt-webhook-service-cert
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  labels:
+    cluster.x-k8s.io/provider: bootstrap-talos
+  name: cabpt-serving-cert
+  namespace: cabpt-system
+spec:
+  dnsNames:
+  - cabpt-webhook-service.cabpt-system.svc
+  - cabpt-webhook-service.cabpt-system.svc.cluster.local
+  issuerRef:
+    kind: Issuer
+    name: cabpt-selfsigned-issuer
+  secretName: cabpt-webhook-service-cert
+---
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  labels:
+    cluster.x-k8s.io/provider: bootstrap-talos
+  name: cabpt-selfsigned-issuer
+  namespace: cabpt-system
+spec:
+  selfSigned: {}
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingWebhookConfiguration
+metadata:
+  annotations:
+    cert-manager.io/inject-ca-from: cabpt-system/cabpt-serving-cert
+  labels:
+    cluster.x-k8s.io/provider: bootstrap-talos
+  name: cabpt-validating-webhook-configuration
+webhooks:
+- admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: cabpt-webhook-service
+      namespace: cabpt-system
+      path: /validate-bootstrap-cluster-x-k8s-io-v1alpha3-talosconfig
+  failurePolicy: Fail
+  name: vtalosconfig.cluster.x-k8s.io
+  rules:
+  - apiGroups:
+    - bootstrap.cluster.x-k8s.io
+    apiVersions:
+    - v1alpha3
+    operations:
+    - CREATE
+    - UPDATE
+    resources:
+    - talosconfigs
+  sideEffects: None
+- admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: cabpt-webhook-service
+      namespace: cabpt-system
+      path: /validate-bootstrap-cluster-x-k8s-io-v1alpha3-talosconfigtemplate
+  failurePolicy: Fail
+  name: vtalosconfigtemplate.cluster.x-k8s.io
+  rules:
+  - apiGroups:
+    - bootstrap.cluster.x-k8s.io
+    apiVersions:
+    - v1alpha3
+    operations:
+    - UPDATE
+    resources:
+    - talosconfigtemplates
+  sideEffects: None

@@ -1,0 +1,140 @@
+// SPDX-License-Identifier: Apache-2.0
+// Package v1alpha1 defines backups.cozystack.io API types.
+//
+// Group: backups.cozystack.io
+// Version: v1alpha1
+package v1alpha1
+
+import (
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+)
+
+func init() {
+	SchemeBuilder.Register(func(s *runtime.Scheme) error {
+		s.AddKnownTypes(GroupVersion,
+			&Backup{},
+			&BackupList{},
+		)
+		return nil
+	})
+}
+
+// BackupPhase represents the lifecycle phase of a Backup.
+type BackupPhase string
+
+const (
+	BackupPhaseEmpty   BackupPhase = ""
+	BackupPhasePending BackupPhase = "Pending"
+	BackupPhaseReady   BackupPhase = "Ready"
+	BackupPhaseFailed  BackupPhase = "Failed"
+)
+
+// BackupArtifact describes the stored backup object (tarball, snapshot, etc.).
+type BackupArtifact struct {
+	// URI is a driver-/storage-specific URI pointing to the backup artifact.
+	// For example: s3://bucket/prefix/file.tar.gz
+	URI string `json:"uri"`
+
+	// SizeBytes is the stored size in bytes of the files this backup owns,
+	// if known: the dump of a MariaDB backup, for example, or the base backup
+	// of a CNPG one, which leaves out the WAL archive the server's backups
+	// share and a point-in-time restore also reads. Strategies that cannot
+	// attribute stored bytes to a single backup, such as Velero's, whose
+	// repository deduplicates across backups, leave it unset. Drivers never
+	// write 0 for a size they cannot measure, so an absent value means
+	// "unknown", not "empty".
+	// +optional
+	SizeBytes int64 `json:"sizeBytes,omitempty"`
+
+	// Checksum is the checksum of the artifact, if computed.
+	// For example: "sha256:<hex>".
+	// +optional
+	Checksum string `json:"checksum,omitempty"`
+}
+
+// BackupSpec describes an immutable backup artifact produced by a BackupJob.
+type BackupSpec struct {
+	// ApplicationRef refers to the application that was backed up.
+	ApplicationRef corev1.TypedLocalObjectReference `json:"applicationRef"`
+
+	// PlanRef refers to the Plan that produced this backup, if any.
+	// For manually triggered backups, this can be omitted.
+	// +optional
+	PlanRef *corev1.LocalObjectReference `json:"planRef,omitempty"`
+
+	// StrategyRef refers to the driver-specific BackupStrategy that was used
+	// to create this backup. This allows the driver to later perform restores.
+	StrategyRef corev1.TypedLocalObjectReference `json:"strategyRef"`
+
+	// TakenAt is the time at which the backup was taken (as reported by the
+	// driver). It may differ slightly from metadata.creationTimestamp.
+	TakenAt metav1.Time `json:"takenAt"`
+
+	// DriverMetadata holds driver-specific, opaque metadata associated with
+	// this backup (for example snapshot IDs, schema versions, etc.).
+	// This data is not interpreted by the core backup controllers.
+	// +optional
+	DriverMetadata map[string]string `json:"driverMetadata,omitempty"`
+}
+
+// DataVolumeResource describes a dataVolume associated with the backed-up application.
+type DataVolumeResource struct {
+	// DataVolumeName is the name of the dataVolume/PVC (e.g., "vm-disk-ubuntu-source").
+	DataVolumeName string `json:"dataVolumeName"`
+
+	// ApplicationName is the cozystack application name for this disk (e.g., "ubuntu-source").
+	ApplicationName string `json:"applicationName"`
+}
+
+// BackupStatus represents the observed state of a Backup.
+type BackupStatus struct {
+	// Phase is a simple, high-level summary of the backup's state.
+	// Typical values are: Pending, Ready, Failed.
+	// +optional
+	Phase BackupPhase `json:"phase,omitempty"`
+
+	// Artifact describes the stored backup object, if available.
+	// +optional
+	Artifact *BackupArtifact `json:"artifact,omitempty"`
+
+	// UnderlyingResources holds application-specific resource metadata discovered
+	// during backup (e.g., VM disks, network configuration). The payload is a
+	// self-typed JSON object carrying an inlined TypeMeta (kind/apiVersion) so
+	// the consuming controller can dispatch on the application kind.
+	// +optional
+	// +kubebuilder:pruning:PreserveUnknownFields
+	// +kubebuilder:validation:Type=object
+	UnderlyingResources *runtime.RawExtension `json:"underlyingResources,omitempty"`
+
+	// Conditions represents the latest available observations of a Backup's state.
+	// +optional
+	Conditions []metav1.Condition `json:"conditions,omitempty"`
+}
+
+// The field indexing on applicationRef will be needed later to display per-app backup resources.
+
+// +kubebuilder:object:root=true
+// +kubebuilder:selectablefield:JSONPath=`.spec.applicationRef.apiGroup`
+// +kubebuilder:selectablefield:JSONPath=`.spec.applicationRef.kind`
+// +kubebuilder:selectablefield:JSONPath=`.spec.applicationRef.name`
+// +kubebuilder:metadata:annotations={"options.cozystack.io/source.applicationRef.kind=appkind"}
+
+// Backup represents a single backup artifact for a given application.
+type Backup struct {
+	metav1.TypeMeta   `json:",inline"`
+	metav1.ObjectMeta `json:"metadata,omitempty"`
+
+	Spec   BackupSpec   `json:"spec,omitempty"`
+	Status BackupStatus `json:"status,omitempty"`
+}
+
+// +kubebuilder:object:root=true
+
+// BackupList contains a list of Backups.
+type BackupList struct {
+	metav1.TypeMeta `json:",inline"`
+	metav1.ListMeta `json:"metadata,omitempty"`
+	Items           []Backup `json:"items"`
+}

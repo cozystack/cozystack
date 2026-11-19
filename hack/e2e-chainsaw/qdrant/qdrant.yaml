@@ -1,0 +1,16 @@
+apiVersion: apps.cozystack.io/v1alpha1
+kind: Qdrant
+metadata:
+  name: test
+spec:
+  replicas: 1
+  size: 10Gi
+  storageClass: ""
+  resourcesPreset: "nano"
+  resources: {}
+  external: false
+  # TLS is set explicitly rather than through `external`, which would also
+  # allocate a LoadBalancer. With TLS off the chart renders no CA and no
+  # TenantProjection, so the trust-anchor steps would have nothing to check.
+  tls:
+    enabled: true

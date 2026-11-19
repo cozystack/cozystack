@@ -1,0 +1,65 @@
+{{- $ingressApiIsStable := eq (include "fluent-bit.ingress.isStable" .) "true" -}}
+{{- $ingressSupportsIngressClassName := eq (include "fluent-bit.ingress.supportsIngressClassName" .) "true" -}}
+{{- $ingressSupportsPathType := eq (include "fluent-bit.ingress.supportsPathType" .) "true" -}}
+{{- $fullName := include "fluent-bit.fullname" . -}}
+{{- $svcPort := .Values.service.port -}}
+
+{{- if and ( eq .Values.kind "Deployment" ) .Values.ingress.enabled }}
+apiVersion: {{ include "fluent-bit.ingress.apiVersion" . }}
+kind: Ingress
+metadata:
+  name: {{ $fullName }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "fluent-bit.labels" . | nindent 4 }}
+  {{- with .Values.ingress.annotations }}
+  annotations:
+  {{- range $key, $value := . }}
+    {{ printf "%s: %s" $key ((tpl $value $) | quote) }}
+  {{- end }}
+  {{- end }}
+spec:
+  {{- if and $ingressSupportsIngressClassName .Values.ingress.ingressClassName }}
+  ingressClassName: {{ .Values.ingress.ingressClassName }}
+  {{- end -}}
+  {{- if .Values.ingress.tls }}
+  tls:
+    {{- range .Values.ingress.tls }}
+    - hosts:
+        {{- range .hosts }}
+        - {{ . | quote }}
+        {{- end }}
+      {{- with .secretName }}
+      secretName: {{ . }}
+      {{- end }}
+    {{- end }}
+  {{- end }}
+  rules:
+    {{- range concat .Values.ingress.hosts .Values.ingress.extraHosts }}
+    - host: {{ .host | quote }}
+      http:
+        paths:
+          - path: /
+            {{- if $ingressSupportsPathType }}
+            pathType: Prefix
+            {{- end }}
+            backend:
+              {{- if $ingressApiIsStable }}
+              service:
+                name: {{ $fullName }}
+                port:
+                  {{- if .port }}
+                  number: {{ .port }}
+                  {{- else }}
+                  number: {{ $svcPort }}
+                  {{- end }}
+              {{- else }}
+              serviceName: {{ $fullName }}
+              {{- if .port }}
+              servicePort: {{ .port }}
+              {{- else }}
+              servicePort: {{ $svcPort }}
+              {{- end }}
+              {{- end }}
+    {{- end }}
+{{- end }}

@@ -1,0 +1,26 @@
+{{- if .Values.testFramework.enabled }}
+apiVersion: v1
+kind: Pod
+metadata:
+  name: "{{ include "fluent-bit.fullname" . }}-test-connection"
+  namespace: {{ default .Release.Namespace .Values.testFramework.namespace }}
+  labels:
+    helm.sh/chart: {{ include "fluent-bit.chart" . }}
+    app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+  annotations:
+    helm.sh/hook: test
+    helm.sh/hook-delete-policy: hook-succeeded
+spec:
+  containers:
+    - name: wget
+      image: {{ include "fluent-bit.image" .Values.testFramework.image | quote }}
+      imagePullPolicy: {{ .Values.testFramework.image.pullPolicy }}
+      command: ["sh"]
+      args: ["-c", "sleep 5s && wget -O- {{ include "fluent-bit.fullname" . }}:{{ .Values.service.port }}"]
+  {{- with .Values.imagePullSecrets }}
+  imagePullSecrets:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  restartPolicy: Never
+{{- end }}

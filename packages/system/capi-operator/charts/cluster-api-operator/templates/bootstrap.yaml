@@ -1,0 +1,62 @@
+# Bootstrap provider
+{{- range $name, $bootstrap := $.Values.bootstrap }}
+  {{- $bootstrapNamespace := default ( printf "%s-%s" $name "bootstrap-system" ) (get $bootstrap "namespace") }}
+  {{- $bootstrapName := $name }}
+  {{- $bootstrapVersion := get $bootstrap "version" }}
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  annotations:
+    {{- if $.Values.enableHelmHook }}
+    "helm.sh/hook": "post-install,post-upgrade"
+    "helm.sh/hook-weight": "1"
+    {{- end }}
+    "argocd.argoproj.io/sync-wave": "1"
+  name: {{ $bootstrapNamespace }}
+---
+apiVersion: operator.cluster.x-k8s.io/v1alpha2
+kind: BootstrapProvider
+metadata:
+  name: {{ $bootstrapName }}
+  namespace: {{ $bootstrapNamespace }}
+  annotations:
+    {{- if $.Values.enableHelmHook }}
+    "helm.sh/hook": "post-install,post-upgrade"
+    "helm.sh/hook-weight": "2"
+    {{- end }}
+    "argocd.argoproj.io/sync-wave": "2"
+{{- if or $bootstrapVersion $.Values.configSecret.name }}
+spec:
+{{- end}}
+{{- if $bootstrapVersion }}
+  version: {{ $bootstrapVersion }}
+{{- end }}
+{{- if $.Values.configSecret.name }}
+  configSecret:
+    name: {{ $.Values.configSecret.name }}
+    {{- if $.Values.configSecret.namespace }}
+    namespace: {{ $.Values.configSecret.namespace }}
+    {{- end }}
+{{- end }}
+{{- if $bootstrap.manifestPatches }}
+  manifestPatches: {{ toYaml $bootstrap.manifestPatches | nindent 4 }}
+{{- end }}
+{{- if $bootstrap.additionalManifests }}
+  additionalManifests:
+    name: {{ $bootstrap.additionalManifests.name }}
+    {{- if $bootstrap.additionalManifests.namespace }}
+    namespace: {{ $bootstrap.additionalManifests.namespace }}
+    {{- end }} {{/* if $bootstrap.additionalManifests.namespace */}}
+{{- end }}
+{{- if $bootstrap.additionalManifests }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $bootstrap.additionalManifests.name }}
+  namespace: {{ default $bootstrapNamespace $bootstrap.additionalManifests.namespace }}
+data:
+  manifests: {{- toYaml $bootstrap.additionalManifests.manifests | nindent 4 }}
+{{- end }}
+{{- end }} {{/* range $name, $bootstrap := .Values.bootstrap */}}

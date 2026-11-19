@@ -1,0 +1,82 @@
+{{- $ingress := .Values._namespace.ingress }}
+{{- /* The _namespace.etcd gate mirrors the ingress-nginx addon HelmRelease:
+       on an etcd-less tenant the chart collapses to the awaiting-etcd beacon,
+       so no addon controller exists and the Service would select nothing. */}}
+{{- if and .Values.addons.ingressNginx.enabled .Values._namespace.etcd (eq .Values.addons.ingressNginx.exposeMethod "Proxied") }}
+{{- if and .Values.addons.ingressNginx.hosts $ingress }}
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ .Release.Name }}-ingress-nginx
+  annotations:
+    nginx.ingress.kubernetes.io/backend-protocol: AUTO_HTTP
+    nginx.ingress.kubernetes.io/configuration-snippet: |
+      if ($scheme = http) {
+        set $proxy_upstream_name "{{ .Release.Namespace }}-{{ .Release.Name }}-ingress-nginx-80";
+        set $proxy_host $proxy_upstream_name;
+      }
+    nginx.ingress.kubernetes.io/ssl-passthrough: "true"
+    nginx.ingress.kubernetes.io/ssl-redirect: "false"
+  labels:
+    apps.cozystack.io/application.group: apps.cozystack.io
+    apps.cozystack.io/application.kind: Kubernetes
+    apps.cozystack.io/application.name: {{ .Release.Name | trimPrefix "kubernetes-" }}
+    internal.cozystack.io/tenantresource: "true"
+spec:
+  ingressClassName: "{{ $ingress }}"
+  rules:
+  {{- range .Values.addons.ingressNginx.hosts }}
+  - host: {{ . | quote }}
+    http:
+      paths:
+      - path: /
+        pathType: ImplementationSpecific
+        backend:
+          service:
+            name: {{ $.Release.Name }}-ingress-nginx
+            port:
+              number: 443
+      - path: /
+        pathType: ImplementationSpecific
+        backend:
+          service:
+            name: {{ $.Release.Name }}-ingress-nginx
+            port:
+              number: 80
+  {{- end }}
+{{- end }}
+---
+# The proxy Service is created whenever the addon is enabled on an etcd-backed
+# tenant with exposeMethod Proxied (independent of `hosts`) so that external
+# consumers — e.g. a ComputePlane app's per-app management Ingress — can route to
+# the tenant cluster's ingress-nginx without the tenant module having to know
+# every app host in advance. Both gates match the addon HelmRelease this Service
+# fronts: exposeMethod defaults to Proxied while the addon defaults to off, so
+# gating on exposeMethod alone would emit a selector-less Service on every cluster
+# that runs no ingress-nginx at all; and on an etcd-less tenant the chart collapses
+# to the awaiting-etcd beacon, so the Service would select a controller that never
+# renders.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Release.Name }}-ingress-nginx
+  labels:
+    apps.cozystack.io/application.group: apps.cozystack.io
+    apps.cozystack.io/application.kind: Kubernetes
+    apps.cozystack.io/application.name: {{ .Release.Name | trimPrefix "kubernetes-" }}
+    internal.cozystack.io/tenantresource: "true"
+spec:
+  ports:
+  - appProtocol: http
+    name: http
+    port: 80
+    targetPort: 30000
+  - appProtocol: https
+    name: https
+    port: 443
+    targetPort: 30001
+  selector:
+    cluster.x-k8s.io/cluster-name: {{ .Release.Name }}
+    node-role.kubernetes.io/ingress-nginx: ""
+{{- end }}

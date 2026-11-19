@@ -1,0 +1,388 @@
+# DO NOT EDIT; Automatically created by tools/copy-rbac-config-to-chart.sh
+{{ if .Values.rbac.create }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "piraeus-operator.fullname" . }}-controller-manager
+  labels:
+    {{- include "piraeus-operator.labels" . | nindent 4 }}
+rules:
+- apiGroups:
+    - ""
+  resources:
+    - configmaps
+    - events
+    - persistentvolumes
+    - pods
+    - serviceaccounts
+    - services
+  verbs:
+    - create
+    - delete
+    - get
+    - list
+    - patch
+    - update
+    - watch
+- apiGroups:
+    - ""
+  resources:
+    - nodes
+  verbs:
+    - get
+    - list
+    - patch
+    - update
+    - watch
+- apiGroups:
+    - ""
+  resources:
+    - persistentvolumeclaims
+  verbs:
+    - delete
+    - get
+    - list
+    - patch
+    - update
+    - watch
+- apiGroups:
+    - ""
+  resources:
+    - persistentvolumeclaims/status
+  verbs:
+    - patch
+- apiGroups:
+    - ""
+  resources:
+    - pods/eviction
+  verbs:
+    - create
+- apiGroups:
+    - ""
+  resources:
+    - pods/exec
+  verbs:
+    - create
+    - get
+- apiGroups:
+    - apiextensions.k8s.io
+  resources:
+    - customresourcedefinitions
+  verbs:
+    - create
+    - delete
+    - get
+    - list
+    - patch
+    - update
+    - watch
+- apiGroups:
+    - apiextensions.k8s.io
+  resources:
+    - customresourcedefinitions/status
+  verbs:
+    - patch
+- apiGroups:
+    - apps
+  resources:
+    - daemonsets
+    - deployments
+  verbs:
+    - create
+    - delete
+    - get
+    - list
+    - patch
+    - update
+    - watch
+- apiGroups:
+    - apps
+  resources:
+    - replicasets
+  verbs:
+    - get
+- apiGroups:
+    - cert-manager.io
+  resources:
+    - certificates
+  verbs:
+    - create
+    - delete
+    - get
+    - list
+    - patch
+    - update
+    - watch
+- apiGroups:
+    - cluster.x-k8s.io
+  resources:
+    - machines
+  verbs:
+    - get
+    - update
+- apiGroups:
+    - discovery.k8s.io
+  resources:
+    - endpointslices
+    - endpointslices/restricted
+  verbs:
+    - create
+    - delete
+- apiGroups:
+    - events.k8s.io
+  resources:
+    - events
+  verbs:
+    - create
+    - get
+    - list
+    - patch
+    - update
+    - watch
+- apiGroups:
+    - groupsnapshot.storage.k8s.io
+  resources:
+    - volumegroupsnapshotclasses
+    - volumesnapshots
+  verbs:
+    - get
+    - list
+    - watch
+- apiGroups:
+    - groupsnapshot.storage.k8s.io
+  resources:
+    - volumegroupsnapshotcontents
+  verbs:
+    - get
+    - list
+    - patch
+    - update
+    - watch
+- apiGroups:
+    - groupsnapshot.storage.k8s.io
+  resources:
+    - volumegroupsnapshotcontents/status
+  verbs:
+    - patch
+    - update
+- apiGroups:
+    - internal.linstor.linbit.com
+  resources:
+    - '*'
+  verbs:
+    - create
+    - delete
+    - deletecollection
+    - get
+    - list
+    - patch
+    - update
+    - watch
+- apiGroups:
+    - piraeus.io
+  resources:
+    - linstorclusters
+    - linstornodeconnections
+    - linstorsatellites
+  verbs:
+    - create
+    - delete
+    - get
+    - list
+    - patch
+    - update
+    - watch
+- apiGroups:
+    - piraeus.io
+  resources:
+    - linstorclusters/finalizers
+    - linstornodeconnections/finalizers
+    - linstorsatellites/finalizers
+  verbs:
+    - update
+- apiGroups:
+    - piraeus.io
+  resources:
+    - linstorclusters/status
+    - linstornodeconnections/status
+    - linstorsatelliteconfigurations/status
+    - linstorsatellites/status
+  verbs:
+    - get
+    - patch
+    - update
+- apiGroups:
+    - piraeus.io
+  resources:
+    - linstorsatelliteconfigurations
+  verbs:
+    - get
+    - list
+    - watch
+- apiGroups:
+    - rbac.authorization.k8s.io
+  resources:
+    - clusterrolebindings
+    - clusterroles
+    - rolebindings
+    - roles
+  verbs:
+    - create
+    - delete
+    - get
+    - list
+    - patch
+    - update
+    - watch
+- apiGroups:
+    - security.openshift.io
+  resourceNames:
+    - privileged
+  resources:
+    - securitycontextconstraints
+  verbs:
+    - use
+- apiGroups:
+    - snapshot.storage.k8s.io
+  resources:
+    - volumesnapshotclasses
+  verbs:
+    - get
+    - list
+    - watch
+- apiGroups:
+    - snapshot.storage.k8s.io
+  resources:
+    - volumesnapshotcontents
+  verbs:
+    - get
+    - list
+    - patch
+    - update
+    - watch
+- apiGroups:
+    - snapshot.storage.k8s.io
+  resources:
+    - volumesnapshotcontents/status
+  verbs:
+    - patch
+    - update
+- apiGroups:
+    - snapshot.storage.k8s.io
+  resources:
+    - volumesnapshots
+  verbs:
+    - get
+    - list
+    - update
+    - watch
+- apiGroups:
+    - storage.k8s.io
+  resources:
+    - csidrivers
+    - csistoragecapacities
+  verbs:
+    - create
+    - delete
+    - get
+    - list
+    - patch
+    - update
+    - watch
+- apiGroups:
+    - storage.k8s.io
+  resources:
+    - csinodes
+  verbs:
+    - get
+    - list
+    - patch
+    - watch
+- apiGroups:
+    - storage.k8s.io
+  resources:
+    - storageclasses
+    - volumeattributesclasses
+  verbs:
+    - get
+    - list
+    - watch
+- apiGroups:
+    - storage.k8s.io
+  resources:
+    - volumeattachments
+  verbs:
+    - delete
+    - get
+    - list
+    - patch
+    - watch
+- apiGroups:
+    - storage.k8s.io
+  resources:
+    - volumeattachments/status
+  verbs:
+    - patch
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "piraeus-operator.fullname" . }}-controller-manager
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "piraeus-operator.labels" . | nindent 4 }}
+rules:
+- apiGroups:
+    - ""
+  resources:
+    - secrets
+  verbs:
+    - create
+    - delete
+    - get
+    - list
+    - patch
+    - update
+    - watch
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "piraeus-operator.fullname" . }}-leader-election
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "piraeus-operator.labels" . | nindent 4 }}
+rules:
+- apiGroups:
+    - ""
+  resources:
+    - configmaps
+  verbs:
+    - get
+    - list
+    - watch
+    - create
+    - update
+    - patch
+    - delete
+- apiGroups:
+    - coordination.k8s.io
+  resources:
+    - leases
+  verbs:
+    - get
+    - list
+    - watch
+    - create
+    - update
+    - patch
+    - delete
+- apiGroups:
+    - ""
+  resources:
+    - events
+  verbs:
+    - create
+    - patch
+{{ end }}

@@ -1,0 +1,128 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.16.4
+  name: workloadmonitors.cozystack.io
+spec:
+  group: cozystack.io
+  names:
+    kind: WorkloadMonitor
+    listKind: WorkloadMonitorList
+    plural: workloadmonitors
+    singular: workloadmonitor
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.kind
+      name: Kind
+      type: string
+    - jsonPath: .spec.type
+      name: Type
+      type: string
+    - jsonPath: .spec.version
+      name: Version
+      type: string
+    - jsonPath: .spec.replicas
+      name: Replicas
+      type: integer
+    - jsonPath: .spec.minReplicas
+      name: MinReplicas
+      type: integer
+    - jsonPath: .status.availableReplicas
+      name: Available
+      type: integer
+    - jsonPath: .status.observedReplicas
+      name: Observed
+      type: integer
+    - jsonPath: .status.operational
+      name: Operational
+      type: boolean
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: WorkloadMonitor is the Schema for the workloadmonitors API
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: WorkloadMonitorSpec defines the desired state of WorkloadMonitor
+            properties:
+              kind:
+                description: Kind specifies the kind of the workload
+                type: string
+              minReplicas:
+                description: MinReplicas specifies the minimum number of replicas
+                  that should be available
+                format: int32
+                minimum: 0
+                type: integer
+              replicas:
+                description: |-
+                  Replicas is the desired number of replicas
+                  If not specified, will use observedReplicas as the target
+                format: int32
+                minimum: 0
+                type: integer
+              selector:
+                additionalProperties:
+                  type: string
+                description: Selector is a label selector to find workloads to monitor
+                minProperties: 1
+                type: object
+              type:
+                description: Type specifies the type of the workload
+                type: string
+              version:
+                description: Version specifies the version of the workload
+                type: string
+            required:
+            - selector
+            type: object
+          status:
+            description: WorkloadMonitorStatus defines the observed state of WorkloadMonitor
+            properties:
+              availableReplicas:
+                description: AvailableReplicas is the number of ready replicas
+                format: int32
+                type: integer
+              message:
+                description: |-
+                  Message names what keeps the workload from being operational, when the
+                  controller can tell.
+                type: string
+              observedReplicas:
+                description: ObservedReplicas is the total number of pods observed
+                format: int32
+                type: integer
+              operational:
+                description: Operational indicates if the workload meets all operational
+                  requirements
+                type: boolean
+              reason:
+                description: |-
+                  Reason is a machine-readable cause for Message, such as
+                  DataVolumeNotReady.
+                type: string
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

@@ -1,0 +1,21 @@
+apiVersion: operator.victoriametrics.com/v1beta1
+kind: VMRule
+metadata:
+  name: alerts-kubernetes-system-controller-manager
+spec:
+  groups:
+  - name: kubernetes-system-controller-manager
+    params: {}
+    rules:
+    - alert: KubeControllerManagerDown
+      annotations:
+        description: KubeControllerManager has disappeared from Prometheus target
+          discovery.
+        runbook_url: https://runbooks.prometheus-operator.dev/runbooks/kubernetes/kubecontrollermanagerdown
+        summary: Target disappeared from Prometheus target discovery.
+      expr: absent(up{job="kube-controller-manager"} == 1)
+      for: 15m
+      labels:
+        severity: critical
+        exported_instance: '{{ $labels.instance }}/controller-manager'
+        service: kubernetes-system-controller-manager

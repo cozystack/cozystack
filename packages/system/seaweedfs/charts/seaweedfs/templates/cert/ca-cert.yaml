@@ -1,0 +1,28 @@
+{{- include "seaweedfs.compat" . -}}
+{{- if and .Values.global.seaweedfs.enableSecurity (not .Values.certificates.externalCertificates.enabled)}}
+apiVersion: cert-manager.io/v1{{ if .Values.global.seaweedfs.certificates.alphacrds }}alpha1{{ end }}
+kind: Certificate
+metadata:
+  name: {{ include "seaweedfs.fullname" . }}-ca-cert
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/name: {{ template "seaweedfs.name" . }}
+    helm.sh/chart: {{ .Chart.Name }}-{{ .Chart.Version | replace "+" "_" }}
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+    app.kubernetes.io/instance: {{ .Release.Name }}
+spec:
+  secretName: {{ include "seaweedfs.fullname" . }}-ca-cert
+  commonName: "{{ include "seaweedfs.fullname" . }}-root-ca"
+  isCA: true
+  privateKey:
+    rotationPolicy: Never
+  {{- if .Values.certificates.ca.duration }}
+  duration: {{ .Values.certificates.ca.duration }}
+  {{- end }}
+  {{- if .Values.certificates.ca.renewBefore }}
+  renewBefore: {{ .Values.certificates.ca.renewBefore }}
+  {{- end }}
+  issuerRef:
+    name: {{ include "seaweedfs.fullname" . }}-issuer
+    kind: Issuer
+{{- end }}

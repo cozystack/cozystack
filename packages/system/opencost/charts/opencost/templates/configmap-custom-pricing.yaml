@@ -1,0 +1,14 @@
+{{- if and .Values.opencost.customPricing.createConfigmap .Values.opencost.customPricing.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Values.opencost.customPricing.configmapName }}
+  namespace: {{ include "opencost.namespace" . }}
+data:
+    {
+{{- range $key, $val := .Values.opencost.customPricing.costModel }}
+{{ $key | quote | indent 6}}: {{ $val | quote }},
+{{- end}}
+      "provider" : {{ .Values.opencost.customPricing.provider | quote }}
+    }
+{{- end }}

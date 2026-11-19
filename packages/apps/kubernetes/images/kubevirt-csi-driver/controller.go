@@ -1,0 +1,637 @@
+package main
+
+import (
+	"context"
+	"fmt"
+	"net/url"
+	"slices"
+	"time"
+
+	csi "github.com/container-storage-interface/spec/lib/go/csi"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/resource"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/util/wait"
+	"k8s.io/client-go/dynamic"
+	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/tools/cache"
+	"k8s.io/client-go/util/retry"
+	"k8s.io/klog/v2"
+	kubevirtv1 "kubevirt.io/api/core/v1"
+	cdiv1 "kubevirt.io/containerized-data-importer-api/pkg/apis/core/v1beta1"
+
+	kubevirtclient "kubevirt.io/csi-driver/pkg/kubevirt"
+	"kubevirt.io/csi-driver/pkg/service"
+	"kubevirt.io/csi-driver/pkg/util"
+)
+
+const (
+	nfsVolumeKey    = "nfsVolume"
+	nfsExportKey    = "nfsExport"
+	busParameter    = "bus"
+	serialParameter = "serial"
+)
+
+var ciliumNetworkPolicyGVR = schema.GroupVersionResource{
+	Group:    "cilium.io",
+	Version:  "v2",
+	Resource: "ciliumnetworkpolicies",
+}
+
+var _ csi.ControllerServer = &WrappedControllerService{}
+
+// WrappedControllerService embeds the upstream ControllerService and adds RWX Filesystem (NFS) support.
+type WrappedControllerService struct {
+	*service.ControllerService
+	infraClient             kubernetes.Interface
+	dynamicClient           dynamic.Interface
+	virtClient              kubevirtclient.Client
+	infraNamespace          string
+	infraClusterLabels      map[string]string
+	storageClassEnforcement util.StorageClassEnforcement
+}
+
+// isRWXFilesystem checks if the volume capabilities request RWX access with filesystem mode.
+func isRWXFilesystem(caps []*csi.VolumeCapability) bool {
+	hasRWX := false
+	hasMount := false
+	for _, cap := range caps {
+		if cap == nil {
+			continue
+		}
+		if cap.GetMount() != nil {
+			hasMount = true
+		}
+		if am := cap.GetAccessMode(); am != nil && am.Mode == csi.VolumeCapability_AccessMode_MULTI_NODE_MULTI_WRITER {
+			hasRWX = true
+		}
+	}
+	return hasRWX && hasMount
+}
+
+// CreateVolume intercepts RWX Filesystem requests and creates a DataVolume in the infra
+// cluster with AccessMode=RWX and VolumeMode=Filesystem. Upstream rejects RWX+Filesystem,
+// so we handle DataVolume creation ourselves. Using DataVolume (not bare PVC) preserves
+// compatibility with upstream snapshot and clone operations.
+// For all other requests, delegates to upstream.
+func (w *WrappedControllerService) CreateVolume(ctx context.Context, req *csi.CreateVolumeRequest) (*csi.CreateVolumeResponse, error) {
+	if req == nil {
+		return nil, status.Error(codes.InvalidArgument, "missing request")
+	}
+	if !isRWXFilesystem(req.GetVolumeCapabilities()) {
+		return w.ControllerService.CreateVolume(ctx, req)
+	}
+
+	if len(req.GetName()) == 0 {
+		return nil, status.Error(codes.InvalidArgument, "name missing in request")
+	}
+
+	// Storage class enforcement
+	storageClassName := req.Parameters[kubevirtclient.InfraStorageClassNameParameter]
+	if !w.storageClassEnforcement.AllowAll {
+		if storageClassName == "" {
+			if !w.storageClassEnforcement.AllowDefault {
+				return nil, status.Error(codes.InvalidArgument, "infraStorageclass is not in the allowed list")
+			}
+		} else if !util.Contains(w.storageClassEnforcement.AllowList, storageClassName) {
+			return nil, status.Error(codes.InvalidArgument, "infraStorageclass is not in the allowed list")
+		}
+	}
+
+	storageSize := req.GetCapacityRange().GetRequiredBytes()
+	dvName := req.Name
+
+	// Determine DataVolume source (blank, snapshot, or clone)
+	source, err := w.determineDvSource(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+
+	// Handle CSI clone: CDI doesn't allow cloning PVCs in use by a pod,
+	// so use DataSourceRef instead (same approach as upstream)
+	sourcePVCName := ""
+	if source.PVC != nil {
+		sourcePVCName = source.PVC.Name
+		source = nil
+	}
+
+	volumeMode := corev1.PersistentVolumeFilesystem
+	dv := &cdiv1.DataVolume{
+		TypeMeta: metav1.TypeMeta{
+			Kind:       "DataVolume",
+			APIVersion: cdiv1.SchemeGroupVersion.String(),
+		},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      dvName,
+			Namespace: w.infraNamespace,
+			Labels:    w.infraClusterLabels,
+			Annotations: map[string]string{
+				"cdi.kubevirt.io/storage.deleteAfterCompletion":    "false",
+				"cdi.kubevirt.io/storage.bind.immediate.requested": "true",
+			},
+		},
+		Spec: cdiv1.DataVolumeSpec{
+			Storage: &cdiv1.StorageSpec{
+				AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteMany},
+				VolumeMode:  &volumeMode,
+				Resources: corev1.ResourceRequirements{
+					Requests: corev1.ResourceList{
+						corev1.ResourceStorage: *resource.NewScaledQuantity(storageSize, 0),
+					},
+				},
+			},
+			Source: source,
+		},
+	}
+
+	if sourcePVCName != "" {
+		dv.Spec.Storage.DataSourceRef = &corev1.TypedObjectReference{
+			Kind: "PersistentVolumeClaim",
+			Name: sourcePVCName,
+		}
+	}
+
+	if storageClassName != "" {
+		dv.Spec.Storage.StorageClassName = &storageClassName
+	}
+
+	// Idempotency: check if DataVolume already exists
+	if existingDv, err := w.virtClient.GetDataVolume(ctx, w.infraNamespace, dvName); errors.IsNotFound(err) {
+		klog.Infof("Creating NFS DataVolume %s/%s", w.infraNamespace, dvName)
+		dv, err = w.virtClient.CreateDataVolume(ctx, w.infraNamespace, dv)
+		if err != nil {
+			klog.Errorf("Failed creating NFS DataVolume %s: %v", dvName, err)
+			return nil, err
+		}
+	} else if err != nil {
+		return nil, err
+	} else {
+		if existingDv != nil && existingDv.Spec.Storage != nil {
+			existingRequest := existingDv.Spec.Storage.Resources.Requests[corev1.ResourceStorage]
+			newRequest := dv.Spec.Storage.Resources.Requests[corev1.ResourceStorage]
+			if newRequest.Cmp(existingRequest) != 0 {
+				return nil, status.Error(codes.AlreadyExists, "requested storage size does not match existing size")
+			}
+			dv = existingDv
+		}
+	}
+
+	serial := string(dv.GetUID())
+
+	return &csi.CreateVolumeResponse{
+		Volume: &csi.Volume{
+			CapacityBytes: storageSize,
+			VolumeId:      dvName,
+			VolumeContext: map[string]string{
+				busParameter:    "scsi",
+				serialParameter: serial,
+				nfsVolumeKey:    "true",
+			},
+			ContentSource: req.GetVolumeContentSource(),
+		},
+	}, nil
+}
+
+// determineDvSource determines the DataVolume source from the CSI request content source.
+// Mirrors upstream logic for blank, snapshot, and clone sources.
+func (w *WrappedControllerService) determineDvSource(ctx context.Context, req *csi.CreateVolumeRequest) (*cdiv1.DataVolumeSource, error) {
+	res := &cdiv1.DataVolumeSource{}
+	if req.GetVolumeContentSource() != nil {
+		source := req.GetVolumeContentSource()
+		switch source.Type.(type) {
+		case *csi.VolumeContentSource_Snapshot:
+			snapshot, err := w.virtClient.GetVolumeSnapshot(ctx, w.infraNamespace, source.GetSnapshot().GetSnapshotId())
+			if errors.IsNotFound(err) {
+				return nil, status.Errorf(codes.NotFound, "source snapshot %s not found", source.GetSnapshot().GetSnapshotId())
+			} else if err != nil {
+				return nil, err
+			}
+			if snapshot != nil {
+				res.Snapshot = &cdiv1.DataVolumeSourceSnapshot{
+					Name:      snapshot.Name,
+					Namespace: w.infraNamespace,
+				}
+			}
+		case *csi.VolumeContentSource_Volume:
+			volume, err := w.virtClient.GetDataVolume(ctx, w.infraNamespace, source.GetVolume().GetVolumeId())
+			if errors.IsNotFound(err) {
+				return nil, status.Errorf(codes.NotFound, "source volume %s not found", source.GetVolume().GetVolumeId())
+			} else if err != nil {
+				return nil, err
+			}
+			if volume != nil {
+				res.PVC = &cdiv1.DataVolumeSourcePVC{
+					Name:      volume.Name,
+					Namespace: w.infraNamespace,
+				}
+			}
+		default:
+			return nil, status.Error(codes.InvalidArgument, "unknown content type")
+		}
+	} else {
+		res.Blank = &cdiv1.DataVolumeBlankImage{}
+	}
+	return res, nil
+}
+
+// publishHotplugVolume delegates to upstream for the hotplug attach, then re-verifies
+// that the volume reached VolumeReady in VMI.Status.VolumeStatus before returning
+// success. Upstream's fast path (EnsureVolumeAvailableVM) considers the volume
+// attached based only on its presence in VM.spec.template.spec.volumes — so when an
+// earlier attempt wrote that entry but the volume never became Ready (e.g. the infra
+// PVC is stuck ClaimPending because the storage backend cannot provision), the
+// retried Publish reports success and external-attacher sets Attached=true.
+// QEMU never received device_add, and the tenant kubelet's NodeStageVolume fails
+// with "couldn't find device by serial id". Verifying VMI Ready independently of
+// upstream propagates the not-ready condition back to external-attacher so it keeps
+// retrying instead of silently declaring the volume attached.
+func (w *WrappedControllerService) publishHotplugVolume(ctx context.Context, req *csi.ControllerPublishVolumeRequest) (*csi.ControllerPublishVolumeResponse, error) {
+	resp, err := w.ControllerService.ControllerPublishVolume(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+
+	vmNamespace, vmName, parseErr := cache.SplitMetaNamespaceKey(req.GetNodeId())
+	if parseErr != nil {
+		return nil, status.Errorf(codes.Internal,
+			"cannot verify VMI readiness after publish: failed to parse node ID %q: %v",
+			req.GetNodeId(), parseErr)
+	}
+	dvName := req.GetVolumeId()
+	// GetVirtualMachine on this client returns a VirtualMachineInstance, not a VM.
+	vmi, getErr := w.virtClient.GetVirtualMachine(ctx, vmNamespace, vmName)
+	if getErr != nil {
+		return nil, status.Errorf(codes.Unavailable,
+			"cannot verify VMI %s/%s readiness after publish of %s: %v",
+			vmNamespace, vmName, dvName, getErr)
+	}
+	for _, vs := range vmi.Status.VolumeStatus {
+		if vs.Name != dvName {
+			continue
+		}
+		if vs.Phase == kubevirtv1.VolumeReady {
+			return resp, nil
+		}
+		return nil, status.Errorf(codes.Unavailable,
+			"volume %s is in VM %s/%s spec but not Ready in VMI status (phase=%q, message=%q)",
+			dvName, vmNamespace, vmName, vs.Phase, vs.Message)
+	}
+	return nil, status.Errorf(codes.Unavailable,
+		"volume %s not present in VMI %s/%s status after publish", dvName, vmNamespace, vmName)
+}
+
+// ControllerPublishVolume for NFS volumes: annotates infra PVC for WFFC binding,
+// waits for PVC bound, extracts NFS export from PV, and creates CiliumNetworkPolicy.
+// For hotplug volumes (RWO and RWX Block), delegates to upstream and then verifies
+// the volume is actually Ready in VMI.Status.VolumeStatus before returning success.
+func (w *WrappedControllerService) ControllerPublishVolume(ctx context.Context, req *csi.ControllerPublishVolumeRequest) (*csi.ControllerPublishVolumeResponse, error) {
+	if req.GetVolumeContext()[nfsVolumeKey] != "true" {
+		return w.publishHotplugVolume(ctx, req)
+	}
+
+	if len(req.GetVolumeId()) == 0 {
+		return nil, status.Error(codes.InvalidArgument, "volume id missing in request")
+	}
+	if len(req.GetNodeId()) == 0 {
+		return nil, status.Error(codes.InvalidArgument, "node id missing in request")
+	}
+
+	dvName := req.GetVolumeId()
+	vmNamespace, vmName, err := cache.SplitMetaNamespaceKey(req.GetNodeId())
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to parse node ID %q: %v", req.GetNodeId(), err)
+	}
+
+	klog.V(3).Infof("Publishing NFS volume %s to node %s/%s", dvName, vmNamespace, vmName)
+
+	// Get VMI for CiliumNetworkPolicy ownerReference
+	vmi, err := w.virtClient.GetVirtualMachine(ctx, vmNamespace, vmName)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to get VMI %s/%s: %v", vmNamespace, vmName, err)
+	}
+
+	// Wait for PVC to be bound (CDI handles immediate binding via annotation)
+	klog.V(3).Infof("Waiting for PVC %s to be bound", dvName)
+	if err := wait.PollUntilContextTimeout(ctx, time.Second, 2*time.Minute, true, func(ctx context.Context) (bool, error) {
+		p, err := w.infraClient.CoreV1().PersistentVolumeClaims(w.infraNamespace).Get(ctx, dvName, metav1.GetOptions{})
+		if err != nil {
+			return false, err
+		}
+		return p.Status.Phase == corev1.ClaimBound, nil
+	}); err != nil {
+		return nil, status.Errorf(codes.Internal, "timed out waiting for PVC %s to be bound: %v", dvName, err)
+	}
+
+	// Read PV to get NFS export
+	pvc, err := w.infraClient.CoreV1().PersistentVolumeClaims(w.infraNamespace).Get(ctx, dvName, metav1.GetOptions{})
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to re-read PVC %s: %v", dvName, err)
+	}
+	pv, err := w.infraClient.CoreV1().PersistentVolumes().Get(ctx, pvc.Spec.VolumeName, metav1.GetOptions{})
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to get PV %s: %v", pvc.Spec.VolumeName, err)
+	}
+	nfsExport, err := getNFSExport(pv)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to extract NFS export from PV %s: %v", pv.Name, err)
+	}
+	klog.V(3).Infof("NFS export for volume %s: %s", dvName, nfsExport)
+
+	// Parse NFS URL for CiliumNetworkPolicy port
+	_, port, _, err := parseNFSExport(nfsExport)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to parse NFS export URL: %v", err)
+	}
+
+	// Create or update CiliumNetworkPolicy allowing egress to NFS server
+	cnpName := fmt.Sprintf("csi-nfs-%s", dvName)
+	vmiOwnerRef := map[string]any{
+		"apiVersion": "kubevirt.io/v1",
+		"kind":       "VirtualMachineInstance",
+		"name":       vmName,
+		"uid":        string(vmi.UID),
+	}
+	cnp := &unstructured.Unstructured{
+		Object: map[string]any{
+			"apiVersion": "cilium.io/v2",
+			"kind":       "CiliumNetworkPolicy",
+			"metadata": map[string]any{
+				"name":            cnpName,
+				"namespace":       vmNamespace,
+				"ownerReferences": []any{vmiOwnerRef},
+			},
+			"spec": map[string]any{
+				"endpointSelector": buildEndpointSelector([]string{vmName}),
+				"egress": []any{
+					map[string]any{
+						"toEndpoints": []any{
+							map[string]any{
+								"matchLabels": map[string]any{
+									"k8s:app.kubernetes.io/component": "linstor-csi-nfs-server",
+									"k8s:io.kubernetes.pod.namespace": "cozy-linstor",
+								},
+							},
+						},
+						"toPorts": []any{
+							map[string]any{
+								"ports": []any{
+									map[string]any{
+										"port":     port,
+										"protocol": "TCP",
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	if _, err := w.dynamicClient.Resource(ciliumNetworkPolicyGVR).Namespace(vmNamespace).Create(ctx, cnp, metav1.CreateOptions{}); err != nil {
+		if !errors.IsAlreadyExists(err) {
+			return nil, status.Errorf(codes.Internal, "failed to create CiliumNetworkPolicy %s: %v", cnpName, err)
+		}
+		// CNP exists — add ownerReference for this VMI
+		if err := w.addCNPOwnerReference(ctx, vmNamespace, cnpName, vmiOwnerRef); err != nil {
+			return nil, err
+		}
+	}
+
+	klog.V(3).Infof("Successfully published NFS volume %s", dvName)
+	return &csi.ControllerPublishVolumeResponse{
+		PublishContext: map[string]string{
+			nfsExportKey: nfsExport,
+		},
+	}, nil
+}
+
+// ControllerUnpublishVolume for NFS volumes (RWX Filesystem): drops this node from the
+// CiliumNetworkPolicy owners, which deletes the policy once no node is left.
+// For everything else (RWO and RWX Block), delegates to upstream, which removes the
+// hotplug DataVolume and waits for it to leave VMI.Status.VolumeStatus. RWX Block volumes used
+// for live migration must NOT be treated as NFS — their cleanup goes through upstream
+// hotplug removal, otherwise stale VM-spec entries permanently block re-attachment to
+// a different VM via the anti-split-brain check (issue #2634).
+func (w *WrappedControllerService) ControllerUnpublishVolume(ctx context.Context, req *csi.ControllerUnpublishVolumeRequest) (*csi.ControllerUnpublishVolumeResponse, error) {
+	dvName := req.GetVolumeId()
+
+	pvc, err := w.infraClient.CoreV1().PersistentVolumeClaims(w.infraNamespace).Get(ctx, dvName, metav1.GetOptions{})
+	if err != nil {
+		if errors.IsNotFound(err) {
+			// A failed PVC creation can still leave a hotplug entry in the VM.
+			return w.ControllerService.ControllerUnpublishVolume(ctx, req)
+		}
+		return nil, err
+	}
+
+	if !isNFSVolume(pvc) {
+		return w.ControllerService.ControllerUnpublishVolume(ctx, req)
+	}
+
+	// NFS volume: remove VMI ownerReference from CiliumNetworkPolicy
+	vmNamespace, vmName, err := cache.SplitMetaNamespaceKey(req.GetNodeId())
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to parse node ID %q: %v", req.GetNodeId(), err)
+	}
+
+	cnpName := fmt.Sprintf("csi-nfs-%s", dvName)
+	klog.V(3).Infof("Removing VMI %s ownerReference from CiliumNetworkPolicy %s/%s", vmName, vmNamespace, cnpName)
+	if err := w.removeCNPOwnerReference(ctx, vmNamespace, cnpName, vmName); err != nil {
+		return nil, err
+	}
+
+	klog.V(3).Infof("Successfully unpublished NFS volume %s", dvName)
+	return &csi.ControllerUnpublishVolumeResponse{}, nil
+}
+
+// ControllerExpandVolume delegates to upstream for the actual DataVolume/PVC resize.
+// For NFS volumes, LINSTOR handles NFS server resize automatically, so no node expansion is needed.
+func (w *WrappedControllerService) ControllerExpandVolume(ctx context.Context, req *csi.ControllerExpandVolumeRequest) (*csi.ControllerExpandVolumeResponse, error) {
+	resp, err := w.ControllerService.ControllerExpandVolume(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+
+	// For NFS volumes (RWX Filesystem), no node-side expansion is needed. RWX Block
+	// volumes still require node-side expansion of the in-VM disk.
+	pvc, err := w.infraClient.CoreV1().PersistentVolumeClaims(w.infraNamespace).Get(ctx, req.GetVolumeId(), metav1.GetOptions{})
+	if err != nil {
+		klog.Warningf("Failed to check PVC access mode for %s/%s: %v", w.infraNamespace, req.GetVolumeId(), err)
+	} else if isNFSVolume(pvc) {
+		resp.NodeExpansionRequired = false
+	}
+
+	return resp, nil
+}
+
+// addCNPOwnerReference adds a VMI ownerReference to an existing CiliumNetworkPolicy.
+func (w *WrappedControllerService) addCNPOwnerReference(ctx context.Context, namespace, cnpName string, ownerRef map[string]any) error {
+	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		existing, err := w.dynamicClient.Resource(ciliumNetworkPolicyGVR).Namespace(namespace).Get(ctx, cnpName, metav1.GetOptions{})
+		if err != nil {
+			return status.Errorf(codes.Internal, "failed to get CiliumNetworkPolicy %s: %v", cnpName, err)
+		}
+
+		ownerRefs, _, _ := unstructured.NestedSlice(existing.Object, "metadata", "ownerReferences")
+		uid, _, _ := unstructured.NestedString(ownerRef, "uid")
+		for _, ref := range ownerRefs {
+			if refMap, ok := ref.(map[string]any); ok {
+				if refMap["uid"] == uid {
+					return nil // already present
+				}
+			}
+		}
+
+		ownerRefs = append(ownerRefs, ownerRef)
+		if err := unstructured.SetNestedSlice(existing.Object, ownerRefs, "metadata", "ownerReferences"); err != nil {
+			return status.Errorf(codes.Internal, "failed to set ownerReferences: %v", err)
+		}
+
+		// Rebuild endpointSelector to include all VMs
+		selector := buildEndpointSelector(vmNamesFromOwnerRefs(ownerRefs))
+		if err := unstructured.SetNestedField(existing.Object, selector, "spec", "endpointSelector"); err != nil {
+			return status.Errorf(codes.Internal, "failed to set endpointSelector: %v", err)
+		}
+
+		if _, err := w.dynamicClient.Resource(ciliumNetworkPolicyGVR).Namespace(namespace).Update(ctx, existing, metav1.UpdateOptions{}); err != nil {
+			return err
+		}
+		klog.V(3).Infof("Added ownerReference to CiliumNetworkPolicy %s", cnpName)
+		return nil
+	})
+}
+
+// removeCNPOwnerReference removes a VMI ownerReference from a CiliumNetworkPolicy.
+// Deletes the CNP if no ownerReferences remain.
+func (w *WrappedControllerService) removeCNPOwnerReference(ctx context.Context, namespace, cnpName, vmName string) error {
+	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		existing, err := w.dynamicClient.Resource(ciliumNetworkPolicyGVR).Namespace(namespace).Get(ctx, cnpName, metav1.GetOptions{})
+		if err != nil {
+			if errors.IsNotFound(err) {
+				return nil
+			}
+			return status.Errorf(codes.Internal, "failed to get CiliumNetworkPolicy %s: %v", cnpName, err)
+		}
+
+		ownerRefs, _, _ := unstructured.NestedSlice(existing.Object, "metadata", "ownerReferences")
+		var remaining []any
+		for _, ref := range ownerRefs {
+			if refMap, ok := ref.(map[string]any); ok {
+				if refMap["name"] == vmName {
+					continue
+				}
+			}
+			remaining = append(remaining, ref)
+		}
+
+		if len(remaining) == 0 {
+			// Last owner — delete CNP
+			if err := w.dynamicClient.Resource(ciliumNetworkPolicyGVR).Namespace(namespace).Delete(ctx, cnpName, metav1.DeleteOptions{}); err != nil {
+				if !errors.IsNotFound(err) {
+					return status.Errorf(codes.Internal, "failed to delete CiliumNetworkPolicy %s: %v", cnpName, err)
+				}
+			}
+			klog.V(3).Infof("Deleted CiliumNetworkPolicy %s (no more owners)", cnpName)
+			return nil
+		}
+
+		if err := unstructured.SetNestedSlice(existing.Object, remaining, "metadata", "ownerReferences"); err != nil {
+			return status.Errorf(codes.Internal, "failed to set ownerReferences: %v", err)
+		}
+
+		// Rebuild endpointSelector from remaining VMs
+		selector := buildEndpointSelector(vmNamesFromOwnerRefs(remaining))
+		if err := unstructured.SetNestedField(existing.Object, selector, "spec", "endpointSelector"); err != nil {
+			return status.Errorf(codes.Internal, "failed to set endpointSelector: %v", err)
+		}
+
+		if _, err := w.dynamicClient.Resource(ciliumNetworkPolicyGVR).Namespace(namespace).Update(ctx, existing, metav1.UpdateOptions{}); err != nil {
+			return err
+		}
+		klog.V(3).Infof("Removed VMI %s ownerReference from CiliumNetworkPolicy %s", vmName, cnpName)
+		return nil
+	})
+}
+
+// buildEndpointSelector returns an endpointSelector using matchExpressions
+// so that multiple VMs can be listed in a single selector.
+func buildEndpointSelector(vmNames []string) map[string]any {
+	values := make([]any, len(vmNames))
+	for i, name := range vmNames {
+		values[i] = name
+	}
+	return map[string]any{
+		"matchExpressions": []any{
+			map[string]any{
+				"key":      "kubevirt.io/vm",
+				"operator": "In",
+				"values":   values,
+			},
+		},
+	}
+}
+
+// vmNamesFromOwnerRefs extracts VM names from ownerReferences.
+func vmNamesFromOwnerRefs(ownerRefs []any) []string {
+	var names []string
+	for _, ref := range ownerRefs {
+		if refMap, ok := ref.(map[string]any); ok {
+			if name, ok := refMap["name"].(string); ok {
+				names = append(names, name)
+			}
+		}
+	}
+	return names
+}
+
+func hasRWXAccessMode(pvc *corev1.PersistentVolumeClaim) bool {
+	return slices.Contains(pvc.Spec.AccessModes, corev1.ReadWriteMany)
+}
+
+// isNFSVolume reports whether the PVC was provisioned by our CreateVolume NFS path
+// (RWX + Filesystem). RWX Block volumes are upstream hotplug volumes used for live
+// migration and must NOT be handled as NFS.
+func isNFSVolume(pvc *corev1.PersistentVolumeClaim) bool {
+	if !hasRWXAccessMode(pvc) {
+		return false
+	}
+	return pvc.Spec.VolumeMode == nil || *pvc.Spec.VolumeMode == corev1.PersistentVolumeFilesystem
+}
+
+// getNFSExport extracts the NFS export URL from a PersistentVolume.
+// Supports both native NFS PVs and CSI PVs with nfs-export volume attribute.
+func getNFSExport(pv *corev1.PersistentVolume) (string, error) {
+	if pv.Spec.NFS != nil {
+		return fmt.Sprintf("nfs://%s:2049%s", pv.Spec.NFS.Server, pv.Spec.NFS.Path), nil
+	}
+	if pv.Spec.CSI != nil && pv.Spec.CSI.VolumeAttributes != nil {
+		if export, ok := pv.Spec.CSI.VolumeAttributes["linstor.csi.linbit.com/nfs-export"]; ok {
+			return export, nil
+		}
+	}
+	return "", fmt.Errorf("no NFS export info found in PV %s", pv.Name)
+}
+
+// parseNFSExport parses an NFS URL of the form nfs://host:port/path.
+func parseNFSExport(nfsURL string) (host, port, path string, err error) {
+	u, err := url.Parse(nfsURL)
+	if err != nil {
+		return "", "", "", fmt.Errorf("failed to parse NFS URL %q: %w", nfsURL, err)
+	}
+	host = u.Hostname()
+	port = u.Port()
+	if port == "" {
+		port = "2049"
+	}
+	path = u.Path
+	if path == "" {
+		path = "/"
+	}
+	return host, port, path, nil
+}

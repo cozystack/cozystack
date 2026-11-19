@@ -1,0 +1,32 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "vertical-pod-autoscaler.recommender.metrics.fullname" . }}
+  namespace: {{ include "common.names.namespace" . | quote }}
+  labels:
+    {{- include "vertical-pod-autoscaler.recommender.labels" . | nindent 4 }}
+    {{- if .Values.commonLabels }}
+    {{- include "common.tplvalues.render" ( dict "value" .Values.commonLabels "context" $ ) | nindent 4 }}
+    {{- end }}
+  {{- if or .Values.recommender.metrics.service.annotations .Values.commonAnnotations }}
+  {{- $annotations := include "common.tplvalues.merge" ( dict "values" ( list .Values.recommender.metrics.service.annotations .Values.commonAnnotations ) "context" . ) }}
+  annotations: {{- include "common.tplvalues.render" ( dict "value" $annotations "context" $ ) | nindent 4 }}
+  {{- end }}
+spec:
+  type: {{ .Values.recommender.metrics.service.type }}
+  {{- if and (eq .Values.recommender.metrics.service.type "ClusterIP") .Values.recommender.metrics.service.clusterIP }}
+  clusterIP: {{ .Values.recommender.metrics.service.clusterIP }}
+  {{- end }}
+  {{- if .Values.recommender.metrics.service.ipFamilyPolicy }}
+  ipFamilyPolicy: {{ .Values.recommender.metrics.service.ipFamilyPolicy }}
+  {{- end }}
+  {{- if not (empty .Values.recommender.metrics.service.ipFamilies)}}
+  ipFamilies: {{- toYaml .Values.recommender.metrics.service.ipFamilies | nindent 4 }}
+  {{- end }}
+  ports:
+    - port: {{ .Values.recommender.metrics.service.ports.metrics }}
+      targetPort: http-metrics
+      protocol: TCP
+      name: http-metrics
+  selector:
+    {{- include "vertical-pod-autoscaler.recommender.selectorLabels" . | nindent 4 }}

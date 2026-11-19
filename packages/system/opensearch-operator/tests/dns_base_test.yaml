@@ -1,0 +1,40 @@
+suite: opensearch-operator DNS base follows the value set on the umbrella key
+
+release:
+  name: opensearch-operator
+  namespace: cozy-opensearch-operator
+
+# The platform carries the cluster domain to this package under the subchart key
+# in the shared values Secret (packages/core/platform/templates/apps.yaml). The
+# vendored chart reads it as manager.dnsBase and hands it to the manager as
+# DNS_BASE, from which the operator builds the securityconfig job target, its own
+# OpenSearch API client URL, the Dashboards host and the SANs it writes into node
+# certificates. Rendered without the Secret the package stays on the upstream
+# cluster.local default.
+
+tests:
+  - it: passes the domain set on the umbrella key through to the manager env
+    set:
+      opensearch-operator.manager.dnsBase: example.test
+    template: charts/opensearch-operator/templates/opensearch-operator-controller-manager-deployment.yaml
+    documentSelector:
+      path: kind
+      value: Deployment
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[1].env
+          content:
+            name: DNS_BASE
+            value: example.test
+
+  - it: keeps the upstream default when the platform sets nothing
+    template: charts/opensearch-operator/templates/opensearch-operator-controller-manager-deployment.yaml
+    documentSelector:
+      path: kind
+      value: Deployment
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[1].env
+          content:
+            name: DNS_BASE
+            value: cluster.local

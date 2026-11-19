@@ -1,0 +1,149 @@
+suite: ingress loadBalancerClass immutability guard
+templates:
+  - templates/nginx-ingress.yaml
+release:
+  name: ingress
+  namespace: tenant-root
+
+# spec.loadBalancerClass is immutable once a Service is type LoadBalancer.
+# Adding or changing it on the existing host ingress Service would wedge Flux on
+# an API-rejected patch, so the chart fails early with recreate instructions.
+# lookup returns nil on fresh install / dry-run / CI (no kubernetesProvider),
+# where the Service is born with the class and the guard must stay silent.
+tests:
+  - it: renders cleanly on a fresh install when no Service exists yet
+    set:
+      _cluster:
+        expose-ingress: tenant-root
+        load-balancer-class: metallb.io/metallb
+    asserts:
+      - equal:
+          path: spec.values.ingress-nginx.controller.service.loadBalancerClass
+          value: metallb.io/metallb
+
+  - it: fails when the existing host Service is LoadBalancer without a class
+    set:
+      _cluster:
+        expose-ingress: tenant-root
+        load-balancer-class: metallb.io/metallb
+    kubernetesProvider:
+      scheme:
+        "v1/Service":
+          gvr:
+            version: v1
+            resource: services
+          namespaced: true
+      objects:
+        - apiVersion: v1
+          kind: Service
+          metadata:
+            name: root-ingress-controller
+            namespace: tenant-root
+          spec:
+            type: LoadBalancer
+    asserts:
+      - failedTemplate:
+          errorPattern: "spec\\.loadBalancerClass is immutable once the Service is type LoadBalancer"
+      - failedTemplate:
+          errorPattern: "kubectl -n tenant-root delete service root-ingress-controller"
+
+  - it: fails when the existing host Service has a different class
+    set:
+      _cluster:
+        expose-ingress: tenant-root
+        load-balancer-class: metallb.io/metallb
+    kubernetesProvider:
+      scheme:
+        "v1/Service":
+          gvr:
+            version: v1
+            resource: services
+          namespaced: true
+      objects:
+        - apiVersion: v1
+          kind: Service
+          metadata:
+            name: root-ingress-controller
+            namespace: tenant-root
+          spec:
+            type: LoadBalancer
+            loadBalancerClass: cilium.io/l2-announcer
+    asserts:
+      - failedTemplate:
+          errorPattern: 'existing: "cilium.io/l2-announcer", requested: "metallb.io/metallb"'
+
+  - it: renders cleanly when the existing host Service already has the same class
+    set:
+      _cluster:
+        expose-ingress: tenant-root
+        load-balancer-class: metallb.io/metallb
+    kubernetesProvider:
+      scheme:
+        "v1/Service":
+          gvr:
+            version: v1
+            resource: services
+          namespaced: true
+      objects:
+        - apiVersion: v1
+          kind: Service
+          metadata:
+            name: root-ingress-controller
+            namespace: tenant-root
+          spec:
+            type: LoadBalancer
+            loadBalancerClass: metallb.io/metallb
+    asserts:
+      - equal:
+          path: spec.values.ingress-nginx.controller.service.loadBalancerClass
+          value: metallb.io/metallb
+
+  - it: fails when clearing a class the existing host Service still carries
+    set:
+      _cluster:
+        expose-ingress: tenant-root
+        # load-balancer-class intentionally unset (operator clearing it)
+    kubernetesProvider:
+      scheme:
+        "v1/Service":
+          gvr:
+            version: v1
+            resource: services
+          namespaced: true
+      objects:
+        - apiVersion: v1
+          kind: Service
+          metadata:
+            name: root-ingress-controller
+            namespace: tenant-root
+          spec:
+            type: LoadBalancer
+            loadBalancerClass: metallb.io/metallb
+    asserts:
+      - failedTemplate:
+          errorPattern: 'existing: "metallb.io/metallb", requested: ""'
+
+  - it: renders cleanly when migrating from the externalIPs (ClusterIP) Service
+    set:
+      _cluster:
+        expose-ingress: tenant-root
+        load-balancer-class: metallb.io/metallb
+    kubernetesProvider:
+      scheme:
+        "v1/Service":
+          gvr:
+            version: v1
+            resource: services
+          namespaced: true
+      objects:
+        - apiVersion: v1
+          kind: Service
+          metadata:
+            name: root-ingress-controller
+            namespace: tenant-root
+          spec:
+            type: ClusterIP
+    asserts:
+      - equal:
+          path: spec.values.ingress-nginx.controller.service.loadBalancerClass
+          value: metallb.io/metallb

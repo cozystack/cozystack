@@ -1,0 +1,16 @@
+{{- if .Values.clusterReconciliationEnabled }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: edp-{{ .Release.Namespace }}-servicebindings
+  labels:
+    {{- include "keycloak-operator.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: edp-{{ .Release.Namespace }}-clusterrole
+subjects:
+  - kind: ServiceAccount
+    name: edp-{{ .Values.name }}
+    namespace: {{ .Release.Namespace }}
+{{- end}}

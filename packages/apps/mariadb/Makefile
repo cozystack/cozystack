@@ -1,0 +1,26 @@
+MARIADB_BACKUP_TAG = $(shell awk '$$1 == "version:" {print $$2}' Chart.yaml)
+
+include ../../../hack/common-envs.mk
+include ../../../hack/package.mk
+
+generate:
+	cozyvalues-gen -m 'mariadb' -v values.yaml -s values.schema.json -r README.md -g ../../../api/apps/v1alpha1/mariadb/types.go
+	../../../hack/update-crd.sh
+
+update:
+	hack/update-versions.sh
+	make generate
+
+.PHONY: test
+test:
+	helm unittest .
+
+image:
+	docker buildx build images/mariadb-backup \
+		$(call image-tags,mariadb-backup,$(MARIADB_BACKUP_TAG)) \
+		$(call cache-args,mariadb-backup) \
+		--metadata-file images/mariadb-backup.json \
+		$(BUILDX_ARGS)
+	echo "$(REGISTRY)/mariadb-backup:$(IMAGE_TAG)@$$(yq e '."containerimage.digest"' images/mariadb-backup.json -o json -r)" \
+		> images/mariadb-backup.tag
+	rm -f images/mariadb-backup.json

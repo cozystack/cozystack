@@ -1,0 +1,9 @@
+apiVersion: apps.cozystack.io/v1alpha1
+kind: Bucket
+metadata:
+  name: test
+spec:
+  users:
+    admin: {}
+    viewer:
+      readonly: true

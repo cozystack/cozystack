@@ -1,0 +1,81 @@
+{{- if .Values.infrastructure }}
+
+# Deploy bootstrap, and infrastructure components if not specified
+{{- if not .Values.bootstrap }}
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  annotations:
+    {{- if $.Values.enableHelmHook }}
+    "helm.sh/hook": "post-install,post-upgrade"
+    "helm.sh/hook-weight": "1"
+    {{- end }}
+    "argocd.argoproj.io/sync-wave": "1"
+  name: capi-kubeadm-bootstrap-system
+---
+apiVersion: operator.cluster.x-k8s.io/v1alpha2
+kind: BootstrapProvider
+metadata:
+  name: kubeadm
+  namespace: capi-kubeadm-bootstrap-system
+  annotations:
+    {{- if $.Values.enableHelmHook }}
+    "helm.sh/hook": "post-install,post-upgrade"
+    "helm.sh/hook-weight": "2"
+    {{- end }}
+    "argocd.argoproj.io/sync-wave": "2"
+{{- with .Values.configSecret }}
+spec:
+  configSecret:
+    name: {{ .name }}
+    {{- if .namespace }}
+    namespace: {{ .namespace }}
+    {{- end }}
+{{- end }}
+{{- end }}
+
+{{- if not .Values.controlPlane }}
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  annotations:
+    {{- if $.Values.enableHelmHook }}
+    "helm.sh/hook": "post-install,post-upgrade"
+    "helm.sh/hook-weight": "1"
+    {{- end }}
+    "argocd.argoproj.io/sync-wave": "1"
+  name: capi-kubeadm-control-plane-system
+---
+apiVersion: operator.cluster.x-k8s.io/v1alpha2
+kind: ControlPlaneProvider
+metadata:
+  name: kubeadm
+  namespace: capi-kubeadm-control-plane-system
+  annotations:
+    {{- if $.Values.enableHelmHook }}
+    "helm.sh/hook": "post-install,post-upgrade"
+    "helm.sh/hook-weight": "2"
+    {{- end }}
+    "argocd.argoproj.io/sync-wave": "2"
+{{- with .Values.configSecret }}
+spec:
+{{- if $.Values.manager }}
+{{- if and $.Values.manager.featureGates $.Values.manager.featureGates.kubeadm }}
+  manager:
+    featureGates:
+    {{- range $key, $value := $.Values.manager.featureGates.kubeadm }}
+      {{ $key }}: {{ $value }}
+    {{- end }}
+{{- end }}
+{{- end }}
+  configSecret:
+    name: {{ .name }}
+    {{- if .namespace }}
+    namespace: {{ .namespace }}
+    {{- end }}
+{{- end }}
+{{- end }}
+
+{{- end }}

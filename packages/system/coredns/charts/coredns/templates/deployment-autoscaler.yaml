@@ -1,0 +1,98 @@
+{{- if and (.Values.autoscaler.enabled) (not .Values.hpa.enabled) }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ template "coredns.fullname" . }}-autoscaler
+  namespace: {{ .Release.Namespace }}
+  labels: {{- include "coredns.labels.autoscaler" . | nindent 4 }}
+{{- if .Values.customLabels }}
+{{ toYaml .Values.customLabels | indent 4 }}
+{{- end }}
+{{- with .Values.customAnnotations }}
+  annotations:
+{{- toYaml . | nindent 4 }}
+{{- end }}
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ .Release.Name | quote }}
+      {{- if .Values.isClusterService }}
+      k8s-app: {{ template "coredns.k8sapplabel" . }}-autoscaler
+      {{- end }}
+      app.kubernetes.io/name: {{ template "coredns.name" . }}-autoscaler
+  template:
+    metadata:
+      labels:
+        {{- if .Values.isClusterService }}
+        {{- if not (hasKey .Values.customLabels "k8s-app")}}
+        k8s-app: {{ template "coredns.k8sapplabel" . }}-autoscaler
+        {{- end }}
+        {{- end }}
+        app.kubernetes.io/name: {{ template "coredns.name" . }}-autoscaler
+        app.kubernetes.io/instance: {{ .Release.Name | quote }}
+        {{- if .Values.customLabels }}
+        {{ toYaml .Values.customLabels | nindent 8 }}
+        {{- end }}
+      annotations:
+        checksum/configmap: {{ include (print $.Template.BasePath "/configmap-autoscaler.yaml") . | sha256sum }}
+        {{- if .Values.isClusterService }}
+        scheduler.alpha.kubernetes.io/tolerations: '[{"key":"CriticalAddonsOnly", "operator":"Exists"}]'
+        {{- end }}
+        {{- with .Values.autoscaler.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      serviceAccountName: {{ template "coredns.fullname" . }}-autoscaler
+      {{- $priorityClassName := default .Values.priorityClassName .Values.autoscaler.priorityClassName }}
+      {{- if $priorityClassName }}
+      priorityClassName: {{ $priorityClassName | quote }}
+      {{- end }}
+      {{- if .Values.autoscaler.affinity }}
+      affinity:
+{{ toYaml .Values.autoscaler.affinity | indent 8 }}
+      {{- end }}
+      {{- if .Values.autoscaler.tolerations }}
+      tolerations:
+{{ toYaml .Values.autoscaler.tolerations | indent 8 }}
+      {{- end }}
+      {{- if .Values.autoscaler.nodeSelector }}
+      nodeSelector:
+{{ toYaml .Values.autoscaler.nodeSelector | indent 8 }}
+      {{- end }}
+      {{- if .Values.autoscaler.image.pullSecrets }}
+      imagePullSecrets:
+{{ toYaml .Values.autoscaler.image.pullSecrets | indent 8 }}
+      {{- end }}
+      containers:
+      - name: autoscaler
+        image: "{{ .Values.autoscaler.image.repository }}:{{ .Values.autoscaler.image.tag }}"
+        imagePullPolicy: {{ .Values.autoscaler.image.pullPolicy }}
+        resources:
+{{ toYaml .Values.autoscaler.resources | indent 10 }}
+        {{- if .Values.autoscaler.livenessProbe.enabled }}
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: 8080
+            scheme: HTTP
+          initialDelaySeconds: {{ .Values.autoscaler.livenessProbe.initialDelaySeconds }}
+          periodSeconds: {{ .Values.autoscaler.livenessProbe.periodSeconds }}
+          timeoutSeconds: {{ .Values.autoscaler.livenessProbe.timeoutSeconds }}
+          successThreshold: {{ .Values.autoscaler.livenessProbe.successThreshold }}
+          failureThreshold: {{ .Values.autoscaler.livenessProbe.failureThreshold }}
+        {{- end }}
+        command:
+          - /cluster-proportional-autoscaler
+          - --namespace={{ .Release.Namespace }}
+          - --configmap={{ template "coredns.fullname" . }}-autoscaler
+          - --target=Deployment/{{ default (include "coredns.fullname" .) .Values.deployment.name }}
+          - --logtostderr=true
+          - --v=2
+        {{- if .Values.autoscaler.customFlags }}
+{{ toYaml .Values.autoscaler.customFlags | indent 10 }}
+        {{- end }}
+{{- if .Values.autoscaler.extraContainers }}
+{{ toYaml .Values.autoscaler.extraContainers | indent 6 }}
+{{- end }}
+{{- end }}

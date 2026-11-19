@@ -1,0 +1,465 @@
+#!/bin/sh
+# Given the E2E app suite(s) about to run, emit the conservative set of packages
+# that must be INSTALLED for those suites: the suite owners and runtime needs,
+# the E2E install baseline, and their forward PackageSource dependency closure.
+# This is the install-side companion to select-e2e.sh:
+# select-e2e.sh picks WHICH Chainsaw suites run (reverse dependency walk);
+# select-install.sh picks WHAT must be up for them (forward dependency walk).
+#
+# Usage:
+#   hack/select-install.sh <suites> [<sources-dir>]
+#   hack/select-install.sh --disabled <suites> [<sources-dir>]
+#   hack/select-install.sh --validate [<sources-dir> [<suites-dir>]]
+#
+# Defaults: sources-dir = packages/core/platform/sources
+#           suites-dir  = hack/e2e-chainsaw
+#
+# <suites>: whitespace-separated suite names, i.e. the output of select-e2e.sh
+#           (e.g. "postgres harbor"). "-" reads the list from stdin.
+#
+# Output (closure mode): space-separated PackageSource names (cozystack.*) that
+#   the run must enable, seeds + the platform baseline + all transitive
+#   dependsOn. Empty when <suites> is empty.
+#
+# Output (--disabled): the COMPLEMENT of that closure, for bundles.disabledPackages
+#   in the platform chart. The base package helper in
+#   packages/core/platform/templates/_helpers.tpl consults disabledPackages for
+#   every package rather than only the optional ones, so an ordinary variant
+#   can be reduced by subtraction with no new variant. Refuses on an empty
+#   selection, where the complement would be the whole platform.
+#
+#   Three limits worth knowing before consuming it.
+#
+#   Subtraction governs a FRESH install only. Both package defines stamp
+#   `helm.sh/resource-policy: keep`, so adding a name on a live cluster stops
+#   emitting the Package CR but does not remove the one already there; the
+#   package stays installed. Fine for a per-run E2E install, wrong as a way to
+#   uninstall.
+#
+#   Packages emitted through package.optional (nfs-driver, telepresence,
+#   external-dns, external-dns-application, and the others gated the same way)
+#   need bundles.enabledPackages as well. Keeping one in the closure is
+#   therefore not enough to install it, and a suite whose closure contains one
+#   needs that list set separately. Subtraction is correct for them either way,
+#   since an optional package absent from enabledPackages is not installed
+#   regardless.
+#
+#   A package that no selected suite owns or needs, and that the baseline does
+#   not keep, is not installed, including when select-e2e.sh answers with every
+#   suite. That is deliberate: nothing in the run looks at such packages
+#   (monitoring exporters like goldpinger and kubeovn-plunger, apps without a
+#   suite, provider-specific operators), so installing them only adds a
+#   readiness wait. A change to one of them gets no install check from this gate.
+#
+#   The declared graph is not the whole runtime contract. The standard E2E
+#   install waits for storage, load-balancer, CAPI and OIDC components which no
+#   selected application necessarily reaches, so they are explicit baseline
+#   seeds below. This mode describes a FRESH install using that audited path;
+#   live convergence still has to be proved separately. A suite with no known
+#   mapping is a HARD ERROR (fail closed) — a silently-skipped suite would
+#   install nothing and let the test pass vacuously or fail later on a missing
+#   CRD.
+#
+# --validate: check the whole graph AND the suite mapping — every dependsOn
+#   target resolves to a real PackageSource, there are no dependency cycles, and
+#   every Chainsaw suite under <suites-dir> has real PackageSources for both its
+#   owners and runtime requirements. Exit non-zero on any failure. The graph
+#   is read from the current PackageSource inventory. The hand-maintained suite
+#   mapping can drift independently, so validation checks it against both that
+#   inventory and the current suite directories.
+#
+# Unlike select-e2e.sh's reverse walk, the forward walk KEEPS the
+# cozystack.cozystack-engine edge: every *-application declares
+# `dependsOn: cozystack.cozystack-engine` because the app's *-rd HelmRelease
+# needs the engine to register the ApplicationDefinition CRD before it can
+# reconcile. For test SELECTION that edge is noise (it would fan every app out
+# to every other); for INSTALL it is a genuine prerequisite that must be up.
+# Suites backed by a system package (e.g. securitygroup) carry no such edge, so
+# the engine is seeded explicitly for any non-empty closure (see below).
+set -eu
+
+SOURCES_DIR="packages/core/platform/sources"
+SUITES_DIR="hack/e2e-chainsaw"
+MODE="closure"
+SUITES=""
+
+if [ "${1:-}" = "--disabled" ]; then
+  MODE="disabled"
+  shift
+  suites_arg="${1?usage: select-install.sh --disabled <suites> [sources-dir]}"
+  SOURCES_DIR="${2:-$SOURCES_DIR}"
+  if [ "$suites_arg" = "-" ]; then
+    SUITES="$(cat)"
+  else
+    SUITES="$suites_arg"
+  fi
+elif [ "${1:-}" = "--validate" ]; then
+  MODE="validate"
+  SOURCES_DIR="${2:-$SOURCES_DIR}"
+  SUITES_DIR="${3:-$SUITES_DIR}"
+else
+  suites_arg="${1?usage: select-install.sh <suites> [sources-dir] | --validate [sources-dir [suites-dir]]}"
+  SOURCES_DIR="${2:-$SOURCES_DIR}"
+  if [ "$suites_arg" = "-" ]; then
+    SUITES="$(cat)"
+  else
+    SUITES="$suites_arg"
+  fi
+fi
+
+# suite name -> owning PackageSource(s). Prints:
+#   - one or more "cozystack.*" names   every direct install target
+#   - nothing                           no mapping is known (caller fails closed)
+# Most suites follow the <suite>-application convention; a bare-<suite> fallback
+# and the explicit cases cover suites whose source is named differently. Kept in
+# lockstep with select-e2e.sh's src_to_suites() and the hack/e2e-chainsaw/ dirs;
+# --validate asserts every suite dir still resolves here.
+#
+# A suite may have more than one direct owner. The Kubernetes suites create
+# Kubernetes and KubernetesNodes; vminstance creates VMInstance and VMDisk and
+# observes the DataVolume behind the disk. Each API needs its application source.
+# Fixtures which only name other app kinds as selectors are not owners.
+suite_to_source() {
+  case "$1" in
+    kubernetes-latest|kubernetes-previous)
+      echo "cozystack.kubernetes-application cozystack.kubernetes-nodes-application"
+      return ;;
+    vminstance)
+      echo "cozystack.vm-instance-application cozystack.vm-disk-application"
+      return ;;
+    securitygroup) echo cozystack.securitygroup-controller ; return ;;
+    kafka-metadata) echo cozystack.kafka-application ; return ;;
+  esac
+  for cand in "cozystack.$1-application" "cozystack.$1"; do
+    if echo "$NODES" | grep -Fxq "$cand"; then echo "$cand"; return; fi
+  done
+}
+
+# Backup examples create Bucket and backup CRs alongside the selected app;
+# gateway's namespace-churn test also requires the pod admission webhook.
+# These requirements belong to the suites; adding application graph edges
+# would also change reverse test selection.
+suite_runtime_sources() {
+  case "$1" in
+    clickhouse|etcd|kafka|kafka-metadata|mariadb|mongodb|postgres|rabbitmq|redis|valkey|vminstance)
+      echo cozystack.backupstrategy-controller ;;
+    gateway) echo cozystack.kubeovn-webhook ;;
+  esac
+}
+
+# yq: forward edges — "owner<TAB>dep", one per variant dependsOn entry.
+# NOTE: this unions dependsOn across ALL spec.variants[] rather than the single
+# variant actually installed (e.g. cozystack.networking has 6 variants; only 5
+# declare gateway-api-crds). That OVER-selects, never under-selects, so the
+# emitted set is a safe superset of the true minimal set for the chosen variant.
+build_forward_deps() {
+  yq -rN '.metadata.name as $n | .spec.variants[]?.dependsOn[]? | select(. != null and . != "") | $n + "\t" + .' "$SOURCES_DIR"/*.yaml
+}
+
+# Capture each producer before sorting. This file runs under dash through
+# cozytest, so pipefail is not available; checking the producer explicitly is
+# what prevents a failed yq from turning into a successful empty graph.
+if ! nodes_raw=$(yq -rN '.metadata.name | select(. != null and . != "")' "$SOURCES_DIR"/*.yaml); then
+  echo "select-install: yq failed while reading PackageSource names from $SOURCES_DIR" >&2
+  exit 1
+fi
+NODES=$(printf '%s\n' "$nodes_raw" | sort -u)
+if [ -z "$NODES" ]; then
+  echo "select-install: found no PackageSources in $SOURCES_DIR" >&2
+  exit 1
+fi
+
+if ! forward_raw=$(build_forward_deps); then
+  echo "select-install: yq failed while reading PackageSource dependencies from $SOURCES_DIR" >&2
+  exit 1
+fi
+FORWARD=$(printf '%s\n' "$forward_raw" | sort -u)
+
+# forward deps of a single node
+deps_of() {
+  echo "$FORWARD" | awk -v s="$1" -F'\t' '$1==s {print $2}'
+}
+
+# Validate the complete PackageSource graph, including branches unrelated to
+# the requested suites. Any emitted closure or complement describes this
+# inventory as a whole, so accepting a dangling edge or cycle elsewhere would
+# make the result depend on an invalid input snapshot.
+validate_graph() {
+  # One awk pass checks every reference and walks every node once, because
+  # ordinary selection runs this validation too and the graph has ~100 nodes.
+  # The node list goes through the environment: BWK awk rejects literal
+  # newlines in -v assignments.
+  if graph_errors=$(printf '%s\n' "$FORWARD" | SELECT_INSTALL_NODES="$NODES" awk -F'\t' '
+    function visit(node, i, next_node) {
+      if (state[node] == 1) {
+        cycle = node
+        return 1
+      }
+      if (state[node] == 2)
+        return 0
+      state[node] = 1
+      for (i = 1; i <= degree[node]; i++) {
+        next_node = edge[node, i]
+        if (visit(next_node))
+          return 1
+      }
+      state[node] = 2
+      return 0
+    }
+    BEGIN {
+      count = split(ENVIRON["SELECT_INSTALL_NODES"], known_list, "\n")
+      for (i = 1; i <= count; i++)
+        known[known_list[i]] = 1
+    }
+    NF == 2 {
+      if (references[$2] == "")
+        references[$2] = $1
+      else
+        references[$2] = references[$2] "," $1
+      edge[$1, ++degree[$1]] = $2
+    }
+    END {
+      rc = 0
+      for (dependency in references) {
+        if (!(dependency in known)) {
+          print "select-install: dangling dependency \047" dependency \
+            "\047 (referenced by: " references[dependency] ") has no PackageSource"
+          rc = 1
+        }
+      }
+      for (i = 1; i <= count; i++) {
+        if (visit(known_list[i])) {
+          print "select-install: dependency cycle detected involving \047" cycle "\047"
+          rc = 1
+          break
+        }
+      }
+      exit rc
+    }
+  '); then
+    return 0
+  fi
+  printf '%s\n' "$graph_errors" >&2
+  return 1
+}
+
+# all Chainsaw suite names under a suites-dir (top-level dirs holding, in them or
+# below, chainsaw-test.yaml, chainsaw-test.yml or numbered step files such as
+# 01-install.yaml), discovered exactly like select-e2e.sh. find runs from inside
+# the dir so the suite name is the first path component however the dir is
+# spelled. It is captured on its own because a pipeline reports sort's status,
+# and a failed listing must not read as an empty suites dir.
+discover_suites() {
+  if ! found=$(cd "$1" && find . -mindepth 2 \( ! -type d -o -name chainsaw-test.yaml -o -name chainsaw-test.yml \)); then
+    echo "select-install: find failed listing the suites under $1" >&2
+    return 1
+  fi
+  suites=$(printf '%s\n' "$found" \
+    | sed -nE 's,^\./([^/]+)/(.*/)?(chainsaw-test|[0-9]+-[^/]*)\.ya?ml$,\1,p' | sort -u)
+  if [ -z "$suites" ]; then
+    echo "select-install: found no chainsaw-test.yaml, chainsaw-test.yml or numbered step file under $1" >&2
+    return 1
+  fi
+  printf '%s\n' "$suites"
+}
+
+if [ "$MODE" = "validate" ]; then
+  rc=0
+
+  validate_graph || rc=1
+
+  # Suite mapping: every Chainsaw suite dir must resolve to a real source.
+  #    The suite universe is auto-discovered while suite_to_source() is
+  #    hand-maintained, so this is the part that actually drifts. A missing
+  #    suites dir is itself a failure — otherwise a moved/misspelled path would
+  #    make discovery yield nothing and silently pass this whole check.
+  if [ ! -d "$SUITES_DIR" ]; then
+    echo "select-install: suites dir '$SUITES_DIR' does not exist" >&2
+    rc=1
+  elif ! suites=$(discover_suites "$SUITES_DIR"); then
+    rc=1
+  else
+    for suite in $suites; do
+      owners="$(suite_to_source "$suite")"
+      if [ -z "$owners" ]; then
+        echo "select-install: suite '$suite' has no PackageSource mapping (add it to suite_to_source)" >&2
+        rc=1
+        continue
+      fi
+      for src in $owners $(suite_runtime_sources "$suite"); do
+        if ! echo "$NODES" | grep -Fxq "$src"; then
+          echo "select-install: suite '$suite' maps to '$src', not a PackageSource in $SOURCES_DIR" >&2
+          rc=1
+        fi
+      done
+    done
+  fi
+
+  [ "$rc" = 0 ] && echo "select-install: graph OK ($(echo "$NODES" | grep -c .) sources)" >&2
+  exit "$rc"
+fi
+
+# Closure mode: map suites to seed sources, then take the forward closure.
+seeds=""
+map_rc=0
+for suite in $SUITES; do
+  [ -z "$suite" ] && continue
+  owners="$(suite_to_source "$suite")"
+  if [ -z "$owners" ]; then
+    # Fail closed: a suite that maps to nothing must abort, not silently emit an
+    # empty set. Collect every bad suite so one run reports them all.
+    echo "select-install: error: suite '$suite' has no known PackageSource mapping (add it to suite_to_source)" >&2
+    map_rc=1
+    continue
+  fi
+  for src in $owners $(suite_runtime_sources "$suite"); do
+    if echo "$NODES" | grep -Fxq "$src"; then
+      case " $seeds " in *" $src "*) ;; *) seeds="$seeds $src" ;; esac
+    else
+      echo "select-install: error: suite '$suite' -> '$src' is not a PackageSource in $SOURCES_DIR" >&2
+      map_rc=1
+    fi
+  done
+done
+[ "$map_rc" = 0 ] || exit "$map_rc"
+
+# An empty seed set means no suite was selected. In closure mode that is a valid
+# answer -- install nothing extra. In disabled mode it is not: the complement of
+# an empty closure is the whole platform, which as an install instruction is a
+# platform with no packages at all, so refuse rather than emit it.
+if [ -z "$seeds" ]; then
+  if [ "$MODE" = "disabled" ]; then
+    echo "select-install: refusing to emit a disable list for an empty suite selection — the complement would be the entire platform" >&2
+    exit 1
+  fi
+  exit 0
+fi
+
+# Do not emit an answer from an invalid inventory. Suite-directory validation
+# remains exclusive to --validate because ordinary selection must not depend on
+# scanning an unrelated test tree.
+validate_graph || exit 1
+
+# The standard E2E install has unconditional runtime requirements which are not
+# owned by any selected application. Seed those direct requirements here rather
+# than inventing PackageSource edges: graph edges also drive select-e2e.sh's
+# reverse test selection, while these dependencies belong to the install harness.
+#
+# Root platform: aggregated APIs, tenant namespaces and three root services
+# (etcd, ingress, SeaweedFS) are waited before a selected suite can finish;
+# monitoring is not waited and stays only because tenant-application depends on
+# it. Storage/network prep waits
+# LINSTOR, CDI and MetalLB. The install then waits the CAPI operator plus all four
+# providers, and later enables and waits the Keycloak OIDC stack. Kamaji,
+# KubeVirt, storage controllers and CRDs remain graph-derived so losing those
+# declared edges stays observable in tests. Tenant HelmReleases carry a shard
+# label excluded by flux-aio, so the shard operator must supply their reconciler.
+#
+# Platform services no suite owns are kept as well, so a selective install still
+# runs the platform the way a full one does: multus (secondary networks), the
+# cozystack and LINSTOR schedulers, flux-plunger (repairs HelmReleases stuck on
+# "has no deployed releases"), cozy-proxy (external Services of VMs) and
+# ouroboros (hairpin NAT, asserted by the Kubernetes suites). Nothing waits for
+# them, so no graph edge reaches them; keeping them here leaves the product
+# PackageSources untouched.
+baseline="cozystack.cozystack-engine
+cozystack.flux-shard-operator
+cozystack.cozystack-basics
+cozystack.tenant-application
+cozystack.etcd-application
+cozystack.ingress-application
+cozystack.monitoring-application
+cozystack.seaweedfs-application
+cozystack.linstor
+cozystack.kubevirt-cdi
+cozystack.metallb
+cozystack.capi-operator
+cozystack.capi-provider-bootstrap-kubeadm
+cozystack.capi-provider-core
+cozystack.capi-provider-cp-kamaji
+cozystack.capi-provider-infra-kubevirt
+cozystack.keycloak
+cozystack.keycloak-operator
+cozystack.multus
+cozystack.cozystack-scheduler
+cozystack.linstor-scheduler
+cozystack.flux-plunger
+cozystack.cozy-proxy
+cozystack.ouroboros"
+
+missing=""
+for b in $baseline; do
+  if echo "$NODES" | grep -Fxq "$b"; then
+    case " $seeds " in *" $b "*) ;; *) seeds="$seeds $b" ;; esac
+  else
+    missing="${missing:+$missing }$b"
+  fi
+done
+if [ -n "$missing" ]; then
+  echo "select-install: error: required baseline PackageSource(s) not found in $SOURCES_DIR: $missing" >&2
+  exit 1
+fi
+
+all="$seeds"
+while :; do
+  new=""
+  for s in $all; do
+    for d in $(deps_of "$s"); do
+      case " $all $new " in *" $d "*) ;; *) new="$new $d" ;; esac
+    done
+  done
+  [ -z "$new" ] && break
+  all="$all $new"
+done
+
+closure="$(echo "$all" | tr ' ' '\n' | grep -v '^$' | sort -u)"
+
+# These runtime prerequisites are intentionally graph-derived rather than
+# redundant seeds. That keeps their PackageSource edges meaningful: if a CAPI
+# provider loses Kamaji or KubeVirt, or LINSTOR loses one of its controllers,
+# the selector fails closed instead of silently emitting an under-sized install.
+derived_baseline="cozystack.cert-manager
+cozystack.networking
+cozystack.gateway-api-crds
+cozystack.etcd-operator
+cozystack.grafana-operator
+cozystack.postgres-operator
+cozystack.victoria-metrics-operator
+cozystack.prometheus-operator-crds
+cozystack.vertical-pod-autoscaler
+cozystack.reloader
+cozystack.snapshot-controller
+cozystack.objectstorage-controller
+cozystack.gateway-application
+cozystack.info-application
+cozystack.kamaji
+cozystack.kubevirt"
+missing_sources=""
+missing_reachable=""
+for required in $derived_baseline; do
+  if ! echo "$NODES" | grep -Fxq "$required"; then
+    missing_sources="${missing_sources:+$missing_sources }$required"
+  elif ! echo "$closure" | grep -Fxq "$required"; then
+    missing_reachable="${missing_reachable:+$missing_reachable }$required"
+  fi
+done
+if [ -n "$missing_sources" ]; then
+  echo "select-install: error: required runtime PackageSource(s) not found in $SOURCES_DIR: $missing_sources" >&2
+  exit 1
+fi
+if [ -n "$missing_reachable" ]; then
+  echo "select-install: error: runtime baseline dependency closure is missing: $missing_reachable" >&2
+  exit 1
+fi
+
+if [ "$MODE" = "disabled" ]; then
+  # The complement is every PackageSource minus the audited baseline, selected
+  # owners and their declared forward closure. No declared dependency of a kept
+  # package can enter it. The explicit baseline covers the current install
+  # harness's known undeclared requirements; only a fresh live run can establish
+  # that no other operational dependency is missing.
+  echo "$NODES" | grep -vxF "$closure" | paste -sd ' ' -
+  exit 0
+fi
+
+echo "$closure" | paste -sd ' ' -

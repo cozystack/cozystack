@@ -1,0 +1,178 @@
+{{- if include "kubeovn.renderFullOnly" . }}
+{{- if .Values.HYBRID_DPDK }}
+kind: DaemonSet
+apiVersion: apps/v1
+metadata:
+  name: ovs-ovn-dpdk
+  namespace: {{ .Values.namespace }}
+  annotations:
+    kubernetes.io/description: |
+      This daemon set launches the openvswitch daemon.
+spec:
+  selector:
+    matchLabels:
+      app: ovs-dpdk
+  updateStrategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  template:
+    metadata:
+      labels:
+        app: ovs-dpdk
+        component: network
+        type: infra
+    spec:
+      tolerations:
+      - operator: Exists
+      priorityClassName: system-node-critical
+      serviceAccountName: ovn-ovs
+      automountServiceAccountToken: true
+      hostNetwork: true
+      hostPID: true
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: openvswitch
+          image: {{ .Values.global.registry.address }}/{{ .Values.global.images.kubeovn.repository }}:{{ .Values.DPDK_IMAGE_TAG }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["/kube-ovn/start-ovs-dpdk-v2.sh"]
+          securityContext:
+            runAsUser: 0
+            privileged: true
+          env:
+            - name: ENABLE_SSL
+              value: "{{ .Values.networking.ENABLE_SSL }}"
+            - name: POD_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
+            - name: HW_OFFLOAD
+              value: "{{- .Values.func.HW_OFFLOAD }}"
+            - name: TUNNEL_TYPE
+              value: "{{- .Values.networking.TUNNEL_TYPE }}"
+            - name: DPDK_TUNNEL_IFACE
+              value: "{{- .Values.networking.DPDK_TUNNEL_IFACE }}"
+            - name: NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+            {{- if index .Values "ovn-central" "hcp" "enabled" }}
+            - name: OVN_SB_ADDR
+              value: "{{ include "kubeovn.ovnSbAddress" . }}"
+            {{- else if eq .Values.installMode "dataPlaneOnly" }}
+            - name: OVN_SB_ADDR
+              value: "{{ include "kubeovn.externalOvnSbAddress" . }}"
+            {{- else }}
+            - name: OVN_DB_IPS
+              value: "{{ .Values.MASTER_NODES | default (include "kubeovn.nodeIPs" .) }}"
+            {{- end }}
+            - name: OVN_REMOTE_PROBE_INTERVAL
+              value: "{{ .Values.networking.OVN_REMOTE_PROBE_INTERVAL }}"
+            - name: OVN_REMOTE_OPENFLOW_INTERVAL
+              value: "{{ .Values.networking.OVN_REMOTE_OPENFLOW_INTERVAL }}"
+          volumeMounts:
+            - mountPath: /opt/ovs-config
+              name: host-config-ovs
+            - name: shareddir
+              mountPath: {{ .Values.kubelet_conf.KUBELET_DIR }}/pods
+            - name: hugepage
+              mountPath: /dev/hugepages
+            - mountPath: /lib/modules
+              name: host-modules
+              readOnly: true
+            - mountPath: /var/run/openvswitch
+              name: host-run-ovs
+              mountPropagation: HostToContainer
+            - mountPath: /var/run/ovn
+              name: host-run-ovn
+            - mountPath: /sys
+              name: host-sys
+            - mountPath: /etc/openvswitch
+              name: host-config-openvswitch
+            - mountPath: /etc/ovn
+              name: host-config-ovn
+            - mountPath: /var/log/openvswitch
+              name: host-log-ovs
+            - mountPath: /var/log/ovn
+              name: host-log-ovn
+            - mountPath: /etc/localtime
+              name: localtime
+              readOnly: true
+            - mountPath: /var/run/tls
+              name: kube-ovn-tls
+          readinessProbe:
+            exec:
+              command:
+                - bash
+                - /kube-ovn/ovs-healthcheck.sh
+            periodSeconds: 5
+            timeoutSeconds: 45
+          livenessProbe:
+            exec:
+              command:
+                - bash
+                - /kube-ovn/ovs-healthcheck.sh
+            initialDelaySeconds: 60
+            periodSeconds: 5
+            failureThreshold: 5
+            timeoutSeconds: 45
+          resources:
+            requests:
+              cpu: {{ index .Values "ovs-ovn" "requests" "cpu" }}
+              memory: {{ index .Values "ovs-ovn" "requests" "memory" }}
+            limits:
+              cpu: {{ index .Values "ovs-ovn" "limits" "cpu" }}
+              {{.Values.HUGEPAGE_SIZE_TYPE}}: {{.Values.HUGEPAGES}}
+              memory: {{ index .Values "ovs-ovn" "limits" "memory" }}
+      nodeSelector:
+        kubernetes.io/os: "linux"
+        ovn.kubernetes.io/ovs_dp_type: "userspace"
+      volumes:
+        - name: host-config-ovs
+          hostPath:
+            path: /opt/ovs-config
+            type: DirectoryOrCreate
+        - name: shareddir
+          hostPath:
+            path: {{ .Values.kubelet_conf.KUBELET_DIR }}/pods
+            type: ''
+        - name: hugepage
+          emptyDir:
+            medium: HugePages
+        - name: host-modules
+          hostPath:
+            path: /lib/modules
+        - name: host-run-ovs
+          hostPath:
+            path: /run/openvswitch
+        - name: host-run-ovn
+          hostPath:
+            path: /run/ovn
+        - name: host-sys
+          hostPath:
+            path: /sys
+        - name: host-config-openvswitch
+          hostPath:
+            path: {{ .Values.OPENVSWITCH_DIR }}
+        - name: host-config-ovn
+          hostPath:
+            path: {{ .Values.OVN_DIR }}
+        - name: host-log-ovs
+          hostPath:
+            path: {{ .Values.log_conf.LOG_DIR }}/openvswitch
+        - name: host-log-ovn
+          hostPath:
+            path: {{ .Values.log_conf.LOG_DIR }}/ovn
+        - name: localtime
+          hostPath:
+            path: /etc/localtime
+        - name: kube-ovn-tls
+          secret:
+            optional: true
+            secretName: kube-ovn-tls
+{{- end }}
+
+{{- end }}

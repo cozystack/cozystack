@@ -1,0 +1,72 @@
+{
+  "title": "Chart Values",
+  "type": "object",
+  "properties": {
+    "logLevel": {
+      "description": "Vector log verbosity (trace, debug, info, warn, error).",
+      "type": "string",
+      "default": "warn",
+      "enum": [
+        "trace",
+        "debug",
+        "info",
+        "warn",
+        "error"
+      ]
+    },
+    "listenPort": {
+      "description": "TCP port bound on the node loopback (127.0.0.1) where Talos machine.logging pushes logs.",
+      "type": "integer",
+      "default": 5170,
+      "maximum": 65535,
+      "minimum": 1
+    },
+    "resources": {
+      "description": "Compute resources for the collector.",
+      "type": "object",
+      "default": {},
+      "properties": {
+        "cpu": {
+          "description": "CPU request.",
+          "default": "100m",
+          "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "string"
+            }
+          ],
+          "x-kubernetes-int-or-string": true
+        },
+        "memory": {
+          "description": "Memory request and limit.",
+          "default": "128Mi",
+          "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "string"
+            }
+          ],
+          "x-kubernetes-int-or-string": true
+        }
+      }
+    },
+    "global": {
+      "description": "Global values block; `target` selects the destination tenant.",
+      "type": "object",
+      "default": {},
+      "properties": {
+        "target": {
+          "description": "Tenant whose VictoriaLogs (vlinsert-generic.\u003ctarget\u003e.svc) receives the logs. Defaults to tenant-root; override via bundle values.",
+          "type": "string",
+          "default": "tenant-root"
+        }
+      }
+    }
+  }
+}

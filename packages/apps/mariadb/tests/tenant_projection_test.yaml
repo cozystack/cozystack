@@ -1,0 +1,103 @@
+suite: mariadb TenantProjection sentinel
+
+# The chart renders one TenantProjection per release: the declaration that tells
+# the CA-extraction controller to lift ca.crt out of the operator's key-free
+# <release>-ca-bundle into the tenant-readable <release>.tenant-ca projection.
+#
+# The load-bearing invariant is the ABSENCE of ownerReferences. The sentinel must
+# carry none — it owns the projection, and it is itself owned only through the
+# helm.toolkit.fluxcd.io/name label Flux stamps, which is how the lineage webhook
+# resolves the application. An ownerReference here would short-circuit that walk
+# and silently break the tenant's read path (pkg/lineage/lineage.go).
+
+release:
+  name: my-mariadb
+  namespace: tenant-test
+
+templates:
+  - templates/tenant-projection.yaml
+
+tests:
+  - it: renders exactly one TenantProjection named after the release
+    asserts:
+      - hasDocuments:
+          count: 1
+      - isKind:
+          of: TenantProjection
+      - equal:
+          path: apiVersion
+          value: internal.cozystack.io/v1alpha1
+      - equal:
+          path: metadata.name
+          value: my-mariadb-ca
+
+  # The source is the operator's own ca-bundle rather than the cert-manager CA
+  # Secret: it is key-free already and it exists under both tls.issuer values,
+  # whereas the cert-manager CA Secret only renders under tls.issuer:
+  # cert-manager (see tls_test.yaml / certmanager.yaml).
+  - it: declares a CACert projection of the operator's key-free CA bundle
+    asserts:
+      - equal:
+          path: spec.projections[0].type
+          value: CACert
+      - equal:
+          path: spec.projections[0].sourceSecretName
+          value: my-mariadb-ca-bundle
+      - equal:
+          path: spec.projections[0].sourceKey
+          value: ca.crt
+
+  # The invariant the lineage chain depends on: no ownerReferences, so the
+  # helm-label fallback resolves the application. Pinned so a future edit adding
+  # one reddens here instead of silently breaking tenant reads.
+  - it: carries no ownerReferences
+    asserts:
+      - notExists:
+          path: metadata.ownerReferences
+
+  # Ungated: unlike nats/qdrant, TLS is always served here (see the tls.issuer
+  # discussion in the README), so the source Secret exists for every release
+  # regardless of tls.issuer. Being ungated is the projection's whole contract,
+  # so every issuer state is spelled out. One case setting the chart default
+  # would assert the same branch the cases above already cover, and hiding the
+  # sentinel behind the cert-manager gate would still pass it.
+  - it: renders under the default issuer
+    asserts:
+      - hasDocuments:
+          count: 1
+
+  - it: renders under tls.issuer=operator
+    set:
+      tls:
+        issuer: operator
+    asserts:
+      - hasDocuments:
+          count: 1
+
+  - it: renders under tls.issuer=cert-manager
+    set:
+      tls:
+        issuer: cert-manager
+    asserts:
+      - hasDocuments:
+          count: 1
+
+  # The chart resolves the issuer through a helper that treats an explicit null
+  # as unset, so this is a third state rather than a spelling of the default.
+  - it: renders when tls is explicitly null
+    set:
+      tls: null
+    asserts:
+      - hasDocuments:
+          count: 1
+
+  - it: renders the source and target names from the release, not a fixed string
+    release:
+      name: other-mariadb
+    asserts:
+      - equal:
+          path: metadata.name
+          value: other-mariadb-ca
+      - equal:
+          path: spec.projections[0].sourceSecretName
+          value: other-mariadb-ca-bundle

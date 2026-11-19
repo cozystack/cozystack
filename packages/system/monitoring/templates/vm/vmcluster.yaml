@@ -1,0 +1,68 @@
+{{- range .Values.metricsStorages }}
+---
+apiVersion: operator.victoriametrics.com/v1beta1
+kind: VMCluster
+metadata:
+  name: {{ .name }}
+spec:
+  managedMetadata:
+    labels:
+      apps.cozystack.io/application.group: apps.cozystack.io
+      apps.cozystack.io/application.kind: Monitoring
+      apps.cozystack.io/application.name: {{ $.Release.Name }}
+  replicationFactor: 2
+  retentionPeriod: {{ .retentionPeriod | quote }}
+  vminsert:
+    extraArgs:
+      # kubevirt and other systems produce a lot of labels
+      # it's usually more than default 30
+      maxLabelsPerTimeseries: "60"
+    replicaCount: 2
+    resources: {}
+  vmselect:
+    replicaCount: 2
+    resources: {}
+    extraArgs:
+      search.maxUniqueTimeseries: "600000"
+      vmalert.proxyURL: http://vmalert-{{ .name }}.{{ $.Release.Namespace }}.svc:8080
+      dedup.minScrapeInterval: {{ .deduplicationInterval | quote}}
+    cacheMountPath: /select-cache
+    storage:
+      volumeClaimTemplate:
+        metadata:
+          # Stamped on the claim template so vm-operator copies it onto the
+          # storage PVCs (IntoSTSVolume). The operator does NOT apply
+          # spec.managedMetadata to PVCs, so the claim template is the only path
+          # that lands a label on them. The monitoring post-delete cleanup hook
+          # selects PVCs by this label to stay release-scoped.
+          labels:
+            apps.cozystack.io/application.name: {{ $.Release.Name }}
+        spec:
+          {{- with .storageClassName }}
+          storageClassName: {{ . }}
+          {{- end }}
+          resources:
+            requests:
+              storage: 2Gi
+  vmstorage:
+    replicaCount: 2
+    resources: {}
+    storage:
+      volumeClaimTemplate:
+        metadata:
+          # Stamped on the claim template so vm-operator copies it onto the
+          # storage PVCs (IntoSTSVolume). The operator does NOT apply
+          # spec.managedMetadata to PVCs, so the claim template is the only path
+          # that lands a label on them. The monitoring post-delete cleanup hook
+          # selects PVCs by this label to stay release-scoped.
+          labels:
+            apps.cozystack.io/application.name: {{ $.Release.Name }}
+        spec:
+          {{- with .storageClassName }}
+          storageClassName: {{ . }}
+          {{- end }}
+          resources:
+            requests:
+              storage: {{ .storage }}
+    storageDataPath: /vm-data
+{{- end }}

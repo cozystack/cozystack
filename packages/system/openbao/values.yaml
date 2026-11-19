@@ -1,0 +1,5 @@
+openbao:
+  injector:
+    enabled: false
+  csi:
+    enabled: false

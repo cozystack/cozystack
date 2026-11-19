@@ -1,0 +1,125 @@
+{{ if and (not .Values.currentNamespaceOnly) .Values.webhook.enabled }}
+{{ $fullName := include "mariadb-operator.fullname" . }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $fullName }}-webhook
+  labels:
+    {{- include "mariadb-operator-webhook.labels" . | nindent 4 }}
+spec:
+  {{- if .Values.webhook.ha.enabled }}
+  replicas: {{ .Values.webhook.ha.replicas}}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "mariadb-operator-webhook.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      {{- with .Values.webhook.podAnnotations }}
+      annotations:
+        {{ toYaml . | nindent 8 }}
+      {{- end }}
+      labels:
+        {{- include "mariadb-operator-webhook.selectorLabels" . | nindent 8 }}
+    spec:
+      {{- with .Values.webhook.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "mariadb-operator-webhook.serviceAccountName" . }}
+      automountServiceAccountToken: {{ .Values.webhook.serviceAccount.automount }}
+      {{- with .Values.webhook.nodeSelector }}
+      nodeSelector:
+        {{ toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.webhook.tolerations }}
+      tolerations:
+        {{ toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.webhook.topologySpreadConstraints }}
+      topologySpreadConstraints:
+        {{ toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.webhook.priorityClassName  }}
+      priorityClassName: {{ . | quote }}
+      {{- end }}
+      {{- with .Values.webhook.affinity }}
+      affinity:
+        {{ toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.webhook.podSecurityContext }}
+      securityContext:
+        {{ toYaml . | nindent 8 }}
+      {{- end }}
+      hostNetwork: {{ .Values.webhook.hostNetwork }}
+      containers:
+        - image: "{{ template "image" (tuple .Values.webhook.image $.Chart.AppVersion) }}"
+          imagePullPolicy: {{ .Values.webhook.image.pullPolicy }}
+          name: webhook
+          args:
+            - webhook
+            {{- if .Values.webhook.cert.certManager.enabled }}
+            - --ca-cert-path={{ include "mariadb-operator-webhook.certManagerFullCAPath" . }}
+            {{- else }}
+            - --ca-cert-path={{ include "mariadb-operator-webhook.certControllerFullCAPath" . }}
+            {{- end }}
+            - --cert-dir={{ .Values.webhook.cert.path }}
+            - --dns-name={{ $fullName }}-webhook.{{ .Release.Namespace }}.svc
+            - --port={{ .Values.webhook.port }}
+            - --metrics-addr=:8080
+            - --health-addr=:8081
+            - --log-level={{ .Values.logLevel }}
+            {{- range .Values.webhook.extrArgs }}
+            - {{ . }}
+            {{- end }}
+          ports:
+            - containerPort: {{ .Values.webhook.port }}
+              protocol: TCP
+              name: https
+            - containerPort: 8080
+              protocol: TCP
+              name: metrics
+            - containerPort: 8081
+              protocol: TCP
+              name: health
+          volumeMounts:
+            {{- if not .Values.webhook.cert.certManager.enabled }}
+            - mountPath: {{ include "mariadb-operator-webhook.certControllerCAPath" . }}
+              name: ca
+              readOnly: true
+            {{- end }}
+            - mountPath: {{ .Values.webhook.cert.path }}
+              name: cert
+              readOnly: true
+          {{- if .Values.webhook.extraVolumeMounts }}
+          {{- toYaml .Values.webhook.extraVolumeMounts | nindent 12 }}
+          {{- end }}
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: 8081
+            initialDelaySeconds: 20
+            periodSeconds: 5
+          {{- with .Values.webhook.resources }}
+          resources:
+            {{ toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.webhook.securityContext}}
+          securityContext:
+            {{ toYaml . | nindent 12 }}
+          {{- end }}
+      volumes:
+        {{- if not .Values.webhook.cert.certManager.enabled }}
+        - name: ca
+          secret:
+            defaultMode: 420
+            secretName: {{ $fullName }}-webhook-ca
+        {{- end }}
+        - name: cert
+          secret:
+            defaultMode: 420
+            secretName: {{ $fullName }}-webhook-cert
+      {{- if .Values.webhook.extraVolumes }}
+      {{- toYaml .Values.webhook.extraVolumes | nindent 8 }}
+      {{- end }}
+{{- end }}

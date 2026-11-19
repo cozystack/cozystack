@@ -1,0 +1,58 @@
+suite: seaweedfs capacity alerts
+
+templates:
+  - templates/alerts.yaml
+
+release:
+  name: seaweedfs-system
+  namespace: tenant-foo
+
+tests:
+  # The root vmalert loads every instance's rules and evaluates each against
+  # every namespace, so a selector that loses its namespace turns one full
+  # instance into an alert from every instance. Each rule is pinned on its own.
+  - it: scopes every rule to the release namespace
+    asserts:
+      - matchRegex:
+          path: spec.groups[0].rules[0].expr
+          pattern: '(?s)^[^{]*\{namespace="tenant-foo", type="avail"\}.*\{namespace="tenant-foo", type="all"\}'
+      - matchRegex:
+          path: spec.groups[0].rules[1].expr
+          pattern: '(?s)\{namespace="tenant-foo", type="avail"\} == 0.*max_volumes\{namespace="tenant-foo"\}.*volumes\{namespace="tenant-foo", type="volume"\}'
+      - matchRegex:
+          path: spec.groups[0].rules[2].expr
+          pattern: 'pick_for_write_error\{namespace="tenant-foo"\}'
+
+  # A server can move from one arm of the "full" rule to the other while it
+  # stays full; if the arms carried different label sets, the alert would
+  # resolve and restart its hold at that moment.
+  - it: gives both arms of the full-server rule the same labels
+    asserts:
+      - matchRegex:
+          path: spec.groups[0].rules[1].expr
+          pattern: '(?s)^max by \(namespace, pod\) \(SeaweedFS_volumeServer_resource\{[^}]*\} == 0\)\s+or on \(namespace, pod\)\s+\(\s+SeaweedFS_volumeServer_max_volumes\{[^}]*\}\s+- on \(namespace, pod\)\s+sum by \(namespace, pod\)'
+
+  - it: pages only on writes that keep failing, not on a single failed pick
+    asserts:
+      - equal:
+          path: spec.groups[0].rules[2].alert
+          value: SeaweedFSWritesFailing
+      - equal:
+          path: spec.groups[0].rules[2].for
+          value: 15m
+      - equal:
+          path: spec.groups[0].rules[2].labels.severity
+          value: critical
+
+  - it: leaves alert templating to vmalert
+    asserts:
+      - matchRegex:
+          path: spec.groups[0].rules[1].annotations.description
+          pattern: '^Volume server \{\{ \$labels\.pod \}\} in Namespace \{\{ \$labels\.namespace \}\}'
+
+  - it: renders nothing when the instance is not monitored
+    set:
+      global.seaweedfs.monitoring.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0

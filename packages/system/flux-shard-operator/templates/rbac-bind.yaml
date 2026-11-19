@@ -1,0 +1,12 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: flux-shard-operator
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: flux-shard-operator
+subjects:
+- kind: ServiceAccount
+  name: flux-shard-operator
+  namespace: {{ .Release.Namespace }}

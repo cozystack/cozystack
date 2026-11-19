@@ -1,0 +1,61 @@
+{{- if and .Values.deployment.enabled .Values.prometheus.monitor.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ template "coredns.fullname" . }}
+  {{- if .Values.prometheus.monitor.namespace }}
+  namespace: {{ .Values.prometheus.monitor.namespace }}
+  {{- end }}
+  labels: {{- include "coredns.labels" . | nindent 4 }}
+    {{- if .Values.prometheus.monitor.additionalLabels }}
+{{ toYaml .Values.prometheus.monitor.additionalLabels | indent 4 }}
+    {{- end }}
+{{- with .Values.customAnnotations }}
+  annotations:
+{{- toYaml . | nindent 4 }}
+{{- end }}
+spec:
+  {{- if ne .Values.prometheus.monitor.namespace .Release.Namespace }}
+  namespaceSelector:
+    matchNames:
+    - {{ .Release.Namespace }}
+  {{- end }}
+  selector:
+    {{- if .Values.prometheus.monitor.selector }}
+    {{- toYaml .Values.prometheus.monitor.selector | nindent 4 }}
+    {{- else }}
+    matchLabels:
+      app.kubernetes.io/instance: {{ .Release.Name | quote }}
+      {{- if .Values.isClusterService }}
+      k8s-app: {{ template "coredns.k8sapplabel" . }}
+      {{- end }}
+      app.kubernetes.io/name: {{ template "coredns.name" . }}
+      app.kubernetes.io/component: metrics
+    {{- end }}
+  endpoints:
+    - port: metrics
+      {{- if .Values.prometheus.monitor.interval }}
+      interval: {{ .Values.prometheus.monitor.interval }}
+      {{- end }}
+      {{- if .Values.prometheus.monitor.scrapeTimeout }}
+      scrapeTimeout: {{ .Values.prometheus.monitor.scrapeTimeout }}
+      {{- end }}
+      {{- if .Values.prometheus.monitor.scheme }}
+      scheme: {{ .Values.prometheus.monitor.scheme }}
+      {{- end }}
+      {{- if .Values.prometheus.monitor.honorLabels }}
+      honorLabels: {{ .Values.prometheus.monitor.honorLabels }}
+      {{- end }}
+      {{- with .Values.prometheus.monitor.tlsConfig }}
+      tlsConfig:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.prometheus.monitor.relabelings }}
+      relabelings:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.prometheus.monitor.metricRelabelings }}
+      metricRelabelings:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}

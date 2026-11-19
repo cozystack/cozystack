@@ -1,0 +1,140 @@
+suite: tenant-root keeps hosting while central tenants depend on it
+templates:
+  - templates/vtraces/vmauth.yaml
+
+# Dropping the hosting (the flag, the generic store or its cluster mode) removes
+# the vmauth every central tenant writes through, and a tenant release that is
+# already in sync is not re-rendered, so its own check never runs. tenant-root's
+# live render therefore refuses while any central tenant is left.
+release:
+  name: monitoring
+  namespace: tenant-root
+
+tests:
+  - it: refuses to stop hosting while a central tenant still depends on it
+    set:
+      tracingStorages:
+        - name: generic
+          mode: cluster
+          storage: 10Gi
+    kubernetesProvider:
+      scheme: &scheme
+        "v1/Namespace":
+          gvr:
+            version: "v1"
+            resource: "namespaces"
+          namespaced: false
+        "operator.victoriametrics.com/v1beta1/VMUser":
+          gvr:
+            group: "operator.victoriametrics.com"
+            version: "v1beta1"
+            resource: "vmusers"
+          namespaced: true
+      objects:
+        - &root
+          kind: Namespace
+          apiVersion: v1
+          metadata:
+            name: tenant-root
+        - &reader
+          kind: VMUser
+          apiVersion: operator.victoriametrics.com/v1beta1
+          metadata:
+            name: traces-central
+            namespace: tenant-foo
+            labels:
+              tracing.cozystack.io/central-reader: "true"
+    asserts:
+      - failedTemplate:
+          errorMessage: "monitoring: tenant-root cannot stop hosting shared-central tracing while these tenants still use it: tenant-foo. Turn tracingCentral off on them first, then wait until each has reconciled its Monitoring and its VMUsers traces-central and traces-central-reader are gone."
+
+  # Each central tenant has a write and a read VMUser; it is named once.
+  - it: names a tenant once though both of its VMUsers remain
+    set:
+      tracingStorages:
+        - name: generic
+          mode: cluster
+          storage: 10Gi
+    kubernetesProvider:
+      scheme: *scheme
+      objects:
+        - *root
+        - *reader
+        - kind: VMUser
+          apiVersion: operator.victoriametrics.com/v1beta1
+          metadata:
+            name: traces-central-reader
+            namespace: tenant-foo
+            labels:
+              tracing.cozystack.io/central-reader: "true"
+    asserts:
+      - failedTemplate:
+          errorMessage: "monitoring: tenant-root cannot stop hosting shared-central tracing while these tenants still use it: tenant-foo. Turn tracingCentral off on them first, then wait until each has reconciled its Monitoring and its VMUsers traces-central and traces-central-reader are gone."
+
+  - it: keeps hosting without complaint when central tenants exist
+    set:
+      tracingCentralHost: true
+      tracingStorages:
+        - name: generic
+          mode: cluster
+          storage: 10Gi
+    kubernetesProvider:
+      scheme: *scheme
+      objects:
+        - *root
+        - *reader
+    asserts:
+      - hasDocuments:
+          count: 1
+
+  - it: stops hosting when no central tenant is left
+    kubernetesProvider:
+      scheme: *scheme
+      objects:
+        - *root
+        - kind: VMUser
+          apiVersion: operator.victoriametrics.com/v1beta1
+          metadata:
+            name: someone-else
+            namespace: tenant-foo
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  # A VMUser already being deleted belongs to a tenant on its way out, most
+  # often a namespace that is terminating; waiting on its finalizers would
+  # hold tenant-root back for no tenant that still exports.
+  - it: stops hosting when the only central VMUser left is being deleted
+    kubernetesProvider:
+      scheme: *scheme
+      objects:
+        - *root
+        - kind: VMUser
+          apiVersion: operator.victoriametrics.com/v1beta1
+          metadata:
+            name: traces-central
+            namespace: tenant-foo
+            deletionTimestamp: "2026-09-30T00:00:00Z"
+            finalizers:
+              - apps.victoriametrics.com/finalizer
+            labels:
+              tracing.cozystack.io/central-reader: "true"
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: refuses the host flag without a store it could host
+    set:
+      tracingCentralHost: true
+      tracingStorages:
+        - name: generic
+          mode: single
+          storage: 10Gi
+    asserts:
+      - failedTemplate:
+          errorMessage: 'monitoring: tracingCentralHost is set, but tracingStorages has no entry named "generic" in cluster mode to host the shared store in.'
+
+  - it: does not refuse an offline render, which cannot see the tenants
+    asserts:
+      - hasDocuments:
+          count: 0

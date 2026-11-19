@@ -1,0 +1,6 @@
+{{- if ne .Release.Name .Chart.Name }}
+{{- fail (printf "The name of the release MUST BE %s" .Chart.Name) }}
+{{- end -}}
+{{- if ne .Release.Namespace "tenant-root" }}
+{{- fail "The namespace of the release MUST BE tenant-root" }}
+{{- end -}}

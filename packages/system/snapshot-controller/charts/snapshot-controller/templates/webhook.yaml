@@ -1,0 +1,112 @@
+{{- if .Values.webhook.enabled }}
+# Check if the TLS secret already exists and initialize variables for later use at the top level
+{{- $secret := lookup "v1" "Secret" .Release.Namespace (include "snapshot-validation-webhook.certifcateName" .) }}
+{{ $ca := "" }}
+{{ $key := "" }}
+{{ $crt := "" }}
+---
+{{- if .Values.webhook.tls.certManagerIssuerRef }}
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ include "snapshot-validation-webhook.fullname" . }}
+  labels:
+  {{- include "snapshot-validation-webhook.labels" . | nindent 4 }}
+spec:
+  secretName: {{ include "snapshot-validation-webhook.certifcateName" . }}
+  dnsNames:
+    - {{ include "snapshot-validation-webhook.fullname" . }}.{{ .Release.Namespace }}.svc
+  issuerRef:
+  {{- toYaml .Values.webhook.tls.certManagerIssuerRef | nindent 4 }}
+  privateKey:
+    rotationPolicy: Always
+---
+{{- else if .Values.webhook.tls.autogenerate }}
+  {{- if and $secret (not .Values.webhook.tls.renew) }}
+    {{- $ca = get $secret.data "ca.crt" }}
+    {{- $key = get $secret.data "tls.key" }}
+    {{- $crt = get $secret.data "tls.crt" }}
+  {{- else }}
+    {{- $serviceName := (printf "%s.%s.svc" (include "snapshot-validation-webhook.fullname" .) .Release.Namespace)}}
+    {{- $cert := genSelfSignedCert $serviceName nil (list $serviceName) 3650 }}
+    {{- $ca = b64enc $cert.Cert }}
+    {{- $key = b64enc $cert.Key }}
+    {{- $crt = b64enc $cert.Cert }}
+  {{- end }}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ include "snapshot-validation-webhook.certifcateName" . }}
+  labels:
+    {{- include "snapshot-validation-webhook.labels" . | nindent 4 }}
+type: kubernetes.io/tls
+data:
+  ca.crt: {{ $ca }}
+  tls.key: {{ $key }}
+  tls.crt: {{ $crt }}
+---
+{{- end }}
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingWebhookConfiguration
+metadata:
+  name: {{ include "snapshot-validation-webhook.fullname" . }}
+  labels:
+    {{- include "snapshot-validation-webhook.labels" . | nindent 4 }}
+  {{- if .Values.webhook.tls.certManagerIssuerRef }}
+  annotations:
+    cert-manager.io/inject-ca-from: {{ .Release.Namespace }}/{{ include "snapshot-validation-webhook.fullname" . }}
+  {{- end }}
+webhooks:
+  - name: {{ include "snapshot-validation-webhook.name" . }}.snapshot.storage.k8s.io
+    rules:
+      - apiGroups:
+        - snapshot.storage.k8s.io
+        apiVersions:
+        - v1
+        operations:
+        - CREATE
+        - UPDATE
+        resources:
+        - volumesnapshotclasses
+        scope: "*"
+    clientConfig:
+      service:
+        namespace: {{ .Release.Namespace }}
+        name: {{ include "snapshot-validation-webhook.fullname" . }}
+        path: "/volumesnapshot"
+      {{- if not .Values.webhook.tls.certManagerIssuerRef }}
+      caBundle: {{ $ca }}
+      {{- end }}
+    admissionReviewVersions:
+      - v1
+      - v1beta1
+    sideEffects: None
+    failurePolicy: {{ .Values.webhook.webhook.failurePolicy }}
+    timeoutSeconds: {{ .Values.webhook.webhook.timeoutSeconds }}
+  - name: {{ include "snapshot-validation-webhook.name" . }}.groupsnapshot.storage.k8s.io
+    rules:
+      - apiGroups:
+          - groupsnapshot.storage.k8s.io
+        apiVersions:
+          - v1alpha1
+        operations:
+          - CREATE
+          - UPDATE
+        resources:
+          - volumegroupsnapshotclasses
+        scope: "*"
+    clientConfig:
+      service:
+        namespace: {{ .Release.Namespace }}
+        name: {{ include "snapshot-validation-webhook.fullname" . }}
+        path: "/volumegroupsnapshot"
+      {{- if not .Values.webhook.tls.certManagerIssuerRef }}
+      caBundle: {{ $ca }}
+      {{- end }}
+    admissionReviewVersions:
+      - v1
+      - v1beta1
+    sideEffects: None
+    failurePolicy: {{ .Values.webhook.webhook.failurePolicy }}
+    timeoutSeconds: {{ .Values.webhook.webhook.timeoutSeconds }}
+{{- end }}

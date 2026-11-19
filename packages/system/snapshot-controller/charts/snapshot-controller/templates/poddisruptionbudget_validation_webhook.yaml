@@ -1,0 +1,13 @@
+{{- if and .Values.webhook.enabled .Values.webhook.pdb -}}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "snapshot-validation-webhook.fullname" . }}
+  labels:
+    {{- include "snapshot-validation-webhook.labels" . | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "snapshot-validation-webhook.selectorLabels" . | nindent 6 }}
+{{ toYaml .Values.webhook.pdb | indent 2 }}
+{{- end -}}

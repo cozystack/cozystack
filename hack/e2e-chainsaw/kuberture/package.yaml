@@ -1,0 +1,26 @@
+apiVersion: cozystack.io/v1alpha1
+kind: Package
+metadata:
+  name: cozystack.kuberture
+spec:
+  variant: default
+  components:
+    kuberture:
+      values:
+        kuberture:
+          config:
+            outputs:
+              - name: public
+                hostname:
+                  - kuberture-e2e-public.cozystack.test
+                annotationPrefix: external-dns.alpha.kubernetes.io/
+                serviceName: kuberture-e2e-public
+                addressSource: endpointslice
+                recordTTL: 60
+              - name: internal
+                hostname:
+                  - kuberture-e2e-internal.cozystack.test
+                annotationPrefix: kuberture-e2e-internal-dns.io/
+                serviceName: kuberture-e2e-internal
+                addressSource: endpointslice
+                recordTTL: 300

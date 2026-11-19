@@ -1,0 +1,39 @@
+{{/*
+Copyright (c) HashiCorp, Inc.
+SPDX-License-Identifier: MPL-2.0
+*/}}
+
+{{- if .Values.global.openshift }}
+{{- if ne .mode "external" }}
+{{- if .Values.server.route.enabled -}}
+{{- $serviceName := include "openbao.fullname" . -}}
+{{- if and (eq .mode "ha" ) (eq (.Values.server.route.activeService | toString) "true") }}
+{{- $serviceName = printf "%s-%s" $serviceName "active" -}}
+{{- end }}
+kind: Route
+apiVersion: route.openshift.io/v1
+metadata:
+  name: {{ template "openbao.fullname" . }}
+  namespace: {{ include "openbao.namespace" . }}
+  labels:
+    helm.sh/chart: {{ include "openbao.chart" . }}
+    app.kubernetes.io/name: {{ include "openbao.name" . }}
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+    {{- with .Values.server.route.labels }}
+      {{- toYaml . | nindent 4 }}
+    {{- end }}
+  {{- template "openbao.route.annotations" . }}
+spec:
+  host: {{ .Values.server.route.host }}
+  to:
+    kind: Service
+    name: {{ $serviceName }}
+    weight: 100
+  port:
+    targetPort: 8200
+  tls:
+    {{- toYaml .Values.server.route.tls | nindent  4 }}
+{{- end }}
+{{- end }}
+{{- end }}

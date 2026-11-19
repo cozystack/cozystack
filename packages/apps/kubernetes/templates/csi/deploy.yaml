@@ -1,0 +1,257 @@
+{{- /* KubeVirt-only: the cloud-controller-manager and the CSI driver here
+      exist to reach the workers' VirtualMachines and their DataVolumes in
+      THIS cluster. On the proxmox substrate the VMs are on an external
+      hypervisor: the CSI node plugin comes from the proxmox-csi package and
+      its controller, with the cloud-controller-manager, runs in this cluster
+      (templates/csi-proxmox/, templates/ccm-proxmox/). Rendering these would
+      leave a controller in the tenant reconciling objects that do not exist. */}}
+{{- if ne (.Values.substrate | default "kubevirt") "proxmox" }}
+{{- if .Values._namespace.etcd }}
+kind: Deployment
+apiVersion: apps/v1
+metadata:
+  name: {{ .Release.Name }}-kcsi-controller
+  labels:
+    app: {{ .Release.Name }}-kcsi-driver
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: {{ .Release.Name }}-kcsi-driver
+  template:
+    metadata:
+      labels:
+        app: {{ .Release.Name }}-kcsi-driver
+        policy.cozystack.io/allow-to-apiserver: "true"
+    spec:
+      enableServiceLinks: false
+      serviceAccountName: {{ .Release.Name }}-kcsi
+      priorityClassName: system-cluster-critical
+      tolerations:
+        - key: CriticalAddonsOnly
+          operator: Exists
+        - key: node-role.kubernetes.io/control-plane
+          operator: Exists
+          effect: "NoSchedule"
+      initContainers:
+      {{- include "kubernetes.waitForAdminKubeconfig" $ | nindent 6 }}
+      containers:
+        - name: csi-driver
+          imagePullPolicy: Always
+          image: "{{ $.Files.Get "images/kubevirt-csi-driver.tag" | trim }}"
+          args:
+            - "--endpoint=$(CSI_ENDPOINT)"
+            - "--infra-cluster-namespace=$(INFRACLUSTER_NAMESPACE)"
+            - "--infra-cluster-labels=$(INFRACLUSTER_LABELS)"
+            - "--run-node-service=false"
+            # false while packages/system/kubevirt leaves HotplugVolumes off:
+            # without that gate virt-api rejects removevolume on a VM-owned VMI.
+            - "--enable-vmi-hotplug-fallback=false"
+            - "--v=5"
+          ports:
+            - name: healthz
+              containerPort: 10301
+              protocol: TCP
+          env:
+            - name: CSI_ENDPOINT
+              value: unix:///var/lib/csi/sockets/pluginproxy/csi.sock
+            - name: KUBE_NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+            - name: INFRACLUSTER_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: INFRACLUSTER_LABELS
+              value: "cluster.x-k8s.io/cluster-name={{ .Release.Name }}"
+            - name: INFRA_STORAGE_CLASS_ENFORCEMENT
+              valueFrom:
+                configMapKeyRef:
+                  name: driver-config
+                  key: infraStorageClassEnforcement
+                  optional: true
+          volumeMounts:
+            - name: socket-dir
+              mountPath: /var/lib/csi/sockets/pluginproxy/
+            - name: kubeconfig
+              mountPath: /etc/kubernetes/kubeconfig
+              readOnly: true
+          resources:
+            limits:
+              cpu: 512m
+              memory: 512Mi
+            requests:
+              cpu: 125m
+              memory: 128Mi
+          securityContext:
+            capabilities:
+              drop:
+              - ALL
+            readOnlyRootFilesystem: true
+        - name: csi-provisioner
+          image: registry.k8s.io/sig-storage/csi-provisioner:v6.1.0
+          resources:
+            limits:
+              cpu: 512m
+              memory: 512Mi
+            requests:
+              cpu: 125m
+              memory: 128Mi
+          securityContext:
+            capabilities:
+              drop:
+              - ALL
+            readOnlyRootFilesystem: true
+          args:
+            - "--csi-address=$(ADDRESS)"
+            - "--default-fstype=ext4"
+            - "--kubeconfig=/etc/kubernetes/kubeconfig/super-admin.svc"
+            - "--v=5"
+            - "--timeout=3m"
+            - "--retry-interval-max=1m"
+          env:
+            - name: ADDRESS
+              value: /var/lib/csi/sockets/pluginproxy/csi.sock
+          volumeMounts:
+            - name: socket-dir
+              mountPath: /var/lib/csi/sockets/pluginproxy/
+            - name: kubeconfig
+              mountPath: /etc/kubernetes/kubeconfig
+              readOnly: true
+        - name: csi-attacher
+          image: registry.k8s.io/sig-storage/csi-attacher:v4.10.0
+          args:
+            - "--csi-address=$(ADDRESS)"
+            - "--kubeconfig=/etc/kubernetes/kubeconfig/super-admin.svc"
+            - "--v=5"
+            - "--timeout=3m"
+            - "--retry-interval-max=1m"
+          env:
+            - name: ADDRESS
+              value: /var/lib/csi/sockets/pluginproxy/csi.sock
+          volumeMounts:
+            - name: socket-dir
+              mountPath: /var/lib/csi/sockets/pluginproxy/
+            - name: kubeconfig
+              mountPath: /etc/kubernetes/kubeconfig
+              readOnly: true
+          resources:
+            limits:
+              cpu: 512m
+              memory: 512Mi
+            requests:
+              cpu: 125m
+              memory: 128Mi
+          securityContext:
+            capabilities:
+              drop:
+              - ALL
+            readOnlyRootFilesystem: true
+        - name: csi-liveness-probe
+          image: registry.k8s.io/sig-storage/livenessprobe:v2.17.0
+          args:
+            - "--csi-address=/csi/csi.sock"
+            - "--probe-timeout=3s"
+            - "--health-port=10301"
+          volumeMounts:
+            - name: socket-dir
+              mountPath: /csi
+          resources:
+            limits:
+              cpu: 512m
+              memory: 512Mi
+            requests:
+              cpu: 125m
+              memory: 128Mi
+          securityContext:
+            capabilities:
+              drop:
+              - ALL
+            readOnlyRootFilesystem: true
+        - name: csi-snapshotter
+          args:
+          - --timeout=1m
+          - --csi-address=$(ADDRESS)
+          - --worker-threads=10
+          - --kubeconfig=/etc/kubernetes/kubeconfig/super-admin.svc
+          env:
+          - name: ADDRESS
+            value: /csi/csi.sock
+          image: registry.k8s.io/sig-storage/csi-snapshotter:v8.3.0
+          imagePullPolicy: IfNotPresent
+          resources:
+            limits:
+              cpu: 512m
+              memory: 512Mi
+            requests:
+              cpu: 125m
+              memory: 128Mi
+          securityContext:
+            capabilities:
+              drop:
+              - ALL
+            readOnlyRootFilesystem: true
+          volumeMounts:
+          - mountPath: /csi
+            name: socket-dir
+          - mountPath: /etc/kubernetes/kubeconfig
+            name: kubeconfig
+            readOnly: true
+        - name: snapshot-controller
+          image: registry.k8s.io/sig-storage/snapshot-controller:v8.3.0
+          args:
+            - --worker-threads=10
+            - --kubeconfig=/etc/kubernetes/kubeconfig/super-admin.svc
+          imagePullPolicy: IfNotPresent
+          resources:
+            limits:
+              cpu: 512m
+              memory: 512Mi
+            requests:
+              cpu: 125m
+              memory: 128Mi
+          securityContext:
+            capabilities:
+              drop:
+              - ALL
+            readOnlyRootFilesystem: true
+          volumeMounts:
+          - mountPath: /etc/kubernetes/kubeconfig
+            name: kubeconfig
+            readOnly: true
+        - name: csi-resizer
+          image: registry.k8s.io/sig-storage/csi-resizer:v1.13.1
+          args:
+            - "-csi-address=/csi/csi.sock"
+            - "-kubeconfig=/etc/kubernetes/kubeconfig/super-admin.svc"
+            - "-v=5"
+            - "-timeout=3m"
+            - '-handle-volume-inuse-error=false'
+          volumeMounts:
+            - mountPath: /csi
+              name: socket-dir
+            - mountPath: /etc/kubernetes/kubeconfig
+              name: kubeconfig
+              readOnly: true
+          resources:
+            limits:
+              cpu: 512m
+              memory: 512Mi
+            requests:
+              cpu: 125m
+              memory: 128Mi
+          securityContext:
+            capabilities:
+              drop:
+              - ALL
+            readOnlyRootFilesystem: true
+      volumes:
+        - name: socket-dir
+          emptyDir: {}
+        - secret:
+            secretName: {{ .Release.Name }}-admin-kubeconfig
+            optional: true
+          name: kubeconfig
+{{- end }}
+{{- end }}

@@ -1,0 +1,21 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "grafana-operator.fullname" . }}-metrics-service
+  namespace: {{ include "grafana-operator.namespace" . }}
+  labels:
+    {{- include "grafana-operator.labels" . | nindent 4 }}
+    app.kubernetes.io/component: operator
+spec:
+  type: {{ .Values.metricsService.type }}
+  ports:
+    - port: {{ .Values.metricsService.metricsPort }}
+      targetPort: metrics
+      protocol: TCP
+      name: metrics
+    - port: {{ .Values.metricsService.pprofPort }}
+      targetPort: pprof
+      protocol: TCP
+      name: pprof
+  selector:
+    {{- include "grafana-operator.selectorLabels" . | nindent 4 }}

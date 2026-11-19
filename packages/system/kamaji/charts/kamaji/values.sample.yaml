@@ -1,0 +1,2 @@
+etcd:
+  endpoints: "https://etcd-0.etcd.kamaji-system.svc.cluster.local:2379,https://etcd-1.etcd.kamaji-system.svc.cluster.local:2379,https://etcd-2.etcd.kamaji-system.svc.cluster.local:2379"

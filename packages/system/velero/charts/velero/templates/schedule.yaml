@@ -1,0 +1,38 @@
+{{- range $scheduleName, $schedule := .Values.schedules }}
+{{- if (not $schedule.disabled) }}
+apiVersion: velero.io/v1
+kind: Schedule
+metadata:
+  name: {{ include "velero.fullname" $ }}-{{ $scheduleName }}
+  namespace: {{ $.Release.Namespace }}
+  {{- if $schedule.annotations }}
+  annotations:
+    {{- toYaml $schedule.annotations | nindent 4 }}
+  {{- end }}
+  labels:
+    app.kubernetes.io/name: {{ include "velero.name" $ }}
+    app.kubernetes.io/instance: {{ $.Release.Name }}
+    app.kubernetes.io/managed-by: {{ $.Release.Service }}
+    app.kubernetes.io/version: {{ $.Chart.AppVersion }}
+    helm.sh/chart: {{ include "velero.chart" $ }}
+    {{- if $schedule.labels }}
+      {{- toYaml $schedule.labels | nindent 4 }}
+    {{- end }}
+spec:
+{{- if $schedule.paused }}
+  paused: {{ $schedule.paused }}
+{{- end }}
+{{- if $schedule.useOwnerReferencesInBackup }}
+  useOwnerReferencesInBackup: {{ $schedule.useOwnerReferencesInBackup }}
+{{- end }}
+{{- if $schedule.skipImmediately }}
+  skipImmediately: {{ $schedule.skipImmediately }}
+{{- end }}
+  schedule: {{ $schedule.schedule | quote }}
+{{- with $schedule.template }}
+  template:
+    {{- toYaml . | nindent 4 }}
+{{- end }}
+---
+{{- end }}
+{{- end }}

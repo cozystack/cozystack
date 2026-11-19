@@ -1,0 +1,52 @@
+suite: postgres TenantProjection sentinel
+
+# The chart renders one TenantProjection per release: the declaration that tells
+# the CA-extraction controller to lift ca.crt out of CNPG's key-bearing
+# <release>-ca into the tenant-readable <release>.tenant-ca projection.
+#
+# The load-bearing invariant is the ABSENCE of ownerReferences. The sentinel must
+# carry none — it owns the projection, and it is itself owned only through the
+# helm.toolkit.fluxcd.io/name label Flux stamps, which is how the lineage webhook
+# resolves the application. An ownerReference here would short-circuit that walk
+# and silently break the tenant's read path (pkg/lineage/lineage.go).
+
+release:
+  name: pg-test
+  namespace: tenant-test
+
+templates:
+  - templates/tenant-projection.yaml
+
+tests:
+  - it: renders exactly one TenantProjection named after the release
+    asserts:
+      - hasDocuments:
+          count: 1
+      - isKind:
+          of: TenantProjection
+      - equal:
+          path: apiVersion
+          value: internal.cozystack.io/v1alpha1
+      - equal:
+          path: metadata.name
+          value: pg-test-ca
+
+  - it: declares a CACert projection of CNPG's CA
+    asserts:
+      - equal:
+          path: spec.projections[0].type
+          value: CACert
+      - equal:
+          path: spec.projections[0].sourceSecretName
+          value: pg-test-ca
+      - equal:
+          path: spec.projections[0].sourceKey
+          value: ca.crt
+
+  # The invariant the lineage chain depends on: no ownerReferences, so the
+  # helm-label fallback resolves the application. Pinned so a future edit adding
+  # one reddens here instead of silently breaking tenant reads.
+  - it: carries no ownerReferences
+    asserts:
+      - notExists:
+          path: metadata.ownerReferences

@@ -1,0 +1,78 @@
+{{- if .Values.enableWebhooks }}
+apiVersion: admissionregistration.k8s.io/v1
+kind: MutatingWebhookConfiguration
+metadata:
+  name: {{ .Values.name }}-mutating-webhook-configuration-{{ .Release.Namespace }}
+  labels:
+      {{- include "keycloak-operator.labels" . | nindent 4 }}
+  annotations:
+    cert-manager.io/inject-ca-from: {{ .Release.Namespace }}/{{ .Values.name }}-serving-cert
+webhooks:
+- admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: {{ .Values.name }}-webhook-service
+      namespace: {{ .Release.Namespace }}
+      path: /mutate-v1-edp-epam-com-v1-keycloakclient
+  failurePolicy: Fail
+  name: mkeycloakclient-v1.kb.io
+  {{- /* Namespace-scoped webhook to prevent cross-namespace conflicts. */ -}}
+  {{- if not .Values.clusterReconciliationEnabled }}
+  namespaceSelector:
+    matchExpressions:
+    - key: kubernetes.io/metadata.name
+      operator: In
+      values:
+      - {{ .Release.Namespace }}
+  {{- end }}
+  rules:
+  - apiGroups:
+    - v1.edp.epam.com
+    apiVersions:
+    - v1
+    operations:
+    - CREATE
+    - UPDATE
+    resources:
+    - keycloakclients
+  sideEffects: None
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingWebhookConfiguration
+metadata:
+  labels:
+      {{- include "keycloak-operator.labels" . | nindent 4 }}
+  annotations:
+    cert-manager.io/inject-ca-from: {{ .Release.Namespace }}/{{ .Values.name }}-serving-cert
+  name: {{ .Values.name }}-validating-webhook-configuration-{{ .Release.Namespace }}
+webhooks:
+- admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: {{ .Values.name }}-webhook-service
+      namespace: {{ .Release.Namespace }}
+      path: /validate-v1-edp-epam-com-v1-keycloakrealm
+  failurePolicy: Fail
+  name: vkeycloakrealm-v1.kb.io
+  {{- /* Namespace-scoped webhook validation to prevent cross-namespace conflicts. */ -}}
+  {{- if not .Values.clusterReconciliationEnabled }}
+  namespaceSelector:
+    matchExpressions:
+    - key: kubernetes.io/metadata.name
+      operator: In
+      values:
+      - {{ .Release.Namespace }}
+  {{- end }}
+  rules:
+  - apiGroups:
+    - v1.edp.epam.com
+    apiVersions:
+    - v1
+    operations:
+    - CREATE
+    resources:
+    - keycloakrealms
+  sideEffects: None
+{{- end }}

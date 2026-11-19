@@ -1,0 +1,37 @@
+suite: node DaemonSet memory requests and limits
+
+# fluent-bit and node-exporter both run on every node and both ran BestEffort.
+# The Talos userspace OOM handler (v1.12+) only ever selects cgroups that lack
+# memory.max, and it picks its victim by QoS class rather than by what caused
+# the pressure — so either one could be killed for a tenant workload thrashing
+# against its own limit, on a node that was otherwise healthy.
+#
+# A memory limit is the only thing that sets memory.max, so the limits below are
+# the load-bearing assertions; the requests are pinned alongside them because
+# they are what the values were sized from and a silent drift in either
+# direction is worth catching. Both are set from the umbrella values.yaml, which
+# means an upstream subchart bump that renames or moves the key would render
+# nothing at all and leave no other trace — exactly what these pin against.
+release:
+  name: monitoring-agents
+  namespace: cozy-monitoring
+tests:
+  - it: fluent-bit declares a memory limit and request
+    template: charts/fluent-bit/templates/daemonset.yaml
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[?(@.name=="fluent-bit")].resources.limits.memory
+          value: 1Gi
+      - equal:
+          path: spec.template.spec.containers[?(@.name=="fluent-bit")].resources.requests.memory
+          value: 128Mi
+
+  - it: node-exporter declares a memory limit and request
+    template: charts/prometheus-node-exporter/templates/daemonset.yaml
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[?(@.name=="node-exporter")].resources.limits.memory
+          value: 256Mi
+      - equal:
+          path: spec.template.spec.containers[?(@.name=="node-exporter")].resources.requests.memory
+          value: 32Mi

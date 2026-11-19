@@ -1,0 +1,37 @@
+suite: tenant-application slim variant waits only on packages the slim presets emit
+# The slim platform variants emit no monitoring, etcd or seaweedfs application.
+# If the slim variant of tenant-application waited on any of them, the Package
+# would stay DependenciesNotReady and so would cozystack-basics and tenant-root.
+templates:
+  - templates/sources.yaml
+release:
+  name: cozystack
+  namespace: cozy-system
+tests:
+  - it: slim dependsOn keeps the base edges and drops the opt-in applications
+    documentSelector:
+      path: metadata.name
+      value: cozystack.tenant-application
+    asserts:
+      - equal:
+          path: spec.variants[1].name
+          value: slim
+      - equal:
+          path: spec.variants[1].dependsOn
+          value:
+            - cozystack.networking
+            - cozystack.ingress-application
+            - cozystack.gateway-application
+            - cozystack.info-application
+            - cozystack.cozystack-engine
+      - equal:
+          path: spec.variants[1].components
+          value:
+            - name: tenant
+              path: apps/tenant
+              libraries: [cozy-lib]
+            - name: tenant-rd
+              path: system/tenant-rd
+              install:
+                namespace: cozy-system
+                releaseName: tenant-rd

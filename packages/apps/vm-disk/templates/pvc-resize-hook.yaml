@@ -1,0 +1,90 @@
+{{- $existingPVC := lookup "v1" "PersistentVolumeClaim" .Release.Namespace .Release.Name }}
+{{- $shouldResize := false -}}
+{{- if and $existingPVC .Values.storage -}}
+  {{- $currentStorage := $existingPVC.spec.resources.requests.storage | toString -}}
+  {{- if ne $currentStorage .Values.storage -}}
+    {{- $oldSize := (include "cozy-lib.resources.toFloat" $currentStorage) | float64 -}}
+    {{- $newSize := (include "cozy-lib.resources.toFloat" .Values.storage) | float64 -}}
+    {{- if gt $newSize $oldSize -}}
+      {{- $shouldResize = true -}}
+    {{- end -}}
+  {{- end -}}
+{{- end -}}
+
+{{- if $shouldResize -}}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ printf "%s-volume-resize-hook" .Release.Name | trunc 63 | trimSuffix "-" | quote }}
+  annotations:
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-weight: "0"
+    helm.sh/hook-delete-policy: hook-succeeded,before-hook-creation
+spec:
+  backoffLimit: 1
+  template:
+    metadata:
+      labels:
+        policy.cozystack.io/allow-to-apiserver: "true"
+    spec:
+      serviceAccountName: {{ .Release.Name }}-volume-resize-hook
+      restartPolicy: Never
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: resize
+          image: docker.io/alpine/k8s:1.36.2
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          command: ["sh", "-xec"]
+          args:
+            - |
+              echo "Resizing PVC to {{ .Values.storage }}..."
+              kubectl patch pvc {{ .Release.Name }} -p '{"spec":{"resources":{"requests":{"storage":"{{ .Values.storage }}"}}}}'
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ .Release.Name }}-volume-resize-hook
+  annotations:
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-weight: "-5"
+    helm.sh/hook-delete-policy: before-hook-creation
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ .Release.Name }}-volume-resize-hook
+  annotations:
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-weight: "-5"
+    helm.sh/hook-delete-policy: before-hook-creation
+rules:
+  - apiGroups: ["apps"]
+    resources: ["statefulsets"]
+    verbs: ["delete", "get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["persistentvolumeclaims"]
+    verbs: ["patch", "get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ .Release.Name }}-volume-resize-hook
+  annotations:
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-weight: "-5"
+    helm.sh/hook-delete-policy: before-hook-creation
+subjects:
+  - kind: ServiceAccount
+    name: {{ .Release.Name }}-volume-resize-hook
+roleRef:
+  kind: Role
+  name: {{ .Release.Name }}-volume-resize-hook
+  apiGroup: rbac.authorization.k8s.io
+{{- end }}

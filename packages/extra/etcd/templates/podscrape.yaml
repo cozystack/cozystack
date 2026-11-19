@@ -1,0 +1,11 @@
+apiVersion: operator.victoriametrics.com/v1beta1
+kind: VMPodScrape
+metadata:
+  name: etcd-pod-scrape
+spec:
+  podMetricsEndpoints:
+    - port: metrics
+      scheme: http
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: etcd

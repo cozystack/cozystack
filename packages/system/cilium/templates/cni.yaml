@@ -1,0 +1,29 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cni-configuration
+  namespace: cozy-cilium
+data:
+  cni-config: |-
+    {
+      "name": "generic-veth",
+      "cniVersion": "0.3.1",
+      "plugins": [
+        {
+          "type": "kube-ovn",
+          "server_socket": "/run/openvswitch/kube-ovn-daemon.sock",
+          "ipam": {
+              "type": "kube-ovn",
+              "server_socket": "/run/openvswitch/kube-ovn-daemon.sock"
+          }
+        },
+        {
+          "type": "portmap",
+          "snat": true,
+          "capabilities": {"portMappings": true}
+        },
+        {
+          "type": "cilium-cni"
+        }
+      ]
+    }

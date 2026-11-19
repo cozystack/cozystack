@@ -1,0 +1,22 @@
+{{- if not .Values.rbac.only }}
+apiVersion: v1
+kind: Pod
+metadata:
+  name: "{{ include "traffic-manager.name" . }}-test-connection"
+  namespace: {{ include "traffic-manager.namespace" . }}
+  labels:
+    {{- include "telepresence.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": test-success
+spec:
+  {{- with .Values.hooks.busybox.imagePullSecrets }}
+  imagePullSecrets:
+    {{- toYaml . | nindent 2 }}
+  {{- end }}
+  containers:
+    - name: wget
+      image: "{{ .Values.hooks.busybox.registry }}/{{ .Values.hooks.busybox.image }}:{{ .Values.hooks.busybox.tag }}"
+      command: ['wget']
+      args: ['{{ include "traffic-manager.name" . }}:8081']
+  restartPolicy: Never
+{{- end }}

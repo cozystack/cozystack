@@ -1,0 +1,146 @@
+apiVersion: operator.victoriametrics.com/v1beta1
+kind: VMRule
+metadata:
+  name: alerts-kube-apiserver-availability.rules
+spec:
+  groups:
+  - interval: 3m
+    name: kube-apiserver-availability.rules
+    params: {}
+    rules:
+    - annotations: {}
+      expr: avg_over_time(code_verb:apiserver_request_total:increase1h[30d]) * 24
+        * 30
+      labels: {}
+      record: code_verb:apiserver_request_total:increase30d
+    - annotations: {}
+      expr: sum by (code,cluster) (code_verb:apiserver_request_total:increase30d{verb=~"LIST|GET"})
+      labels:
+        verb: read
+      record: code:apiserver_request_total:increase30d
+    - annotations: {}
+      expr: sum by (code,cluster) (code_verb:apiserver_request_total:increase30d{verb=~"POST|PUT|PATCH|DELETE"})
+      labels:
+        verb: write
+      record: code:apiserver_request_total:increase30d
+    - annotations: {}
+      expr: sum by (verb,scope,cluster) (increase(apiserver_request_sli_duration_seconds_count{job="kube-apiserver"}[1h]))
+      labels: {}
+      record: cluster_verb_scope:apiserver_request_sli_duration_seconds_count:increase1h
+    - annotations: {}
+      expr: sum by (verb,scope,cluster) (avg_over_time(cluster_verb_scope:apiserver_request_sli_duration_seconds_count:increase1h[30d])
+        * 24 * 30)
+      labels: {}
+      record: cluster_verb_scope:apiserver_request_sli_duration_seconds_count:increase30d
+    - annotations: {}
+      expr: sum by (verb,scope,le,cluster) (increase(apiserver_request_sli_duration_seconds_bucket[1h]))
+      labels: {}
+      record: cluster_verb_scope_le:apiserver_request_sli_duration_seconds_bucket:increase1h
+    - annotations: {}
+      expr: sum by (verb,scope,le,cluster) (avg_over_time(cluster_verb_scope_le:apiserver_request_sli_duration_seconds_bucket:increase1h[30d])
+        * 24 * 30)
+      labels: {}
+      record: cluster_verb_scope_le:apiserver_request_sli_duration_seconds_bucket:increase30d
+    - annotations: {}
+      expr: |-
+        1 - (
+          (
+            # write too slow
+            sum by (cluster) (cluster_verb_scope:apiserver_request_sli_duration_seconds_count:increase30d{verb=~"POST|PUT|PATCH|DELETE"})
+            -
+            sum by (cluster) (cluster_verb_scope_le:apiserver_request_sli_duration_seconds_bucket:increase30d{verb=~"POST|PUT|PATCH|DELETE",le="1"})
+          ) +
+          (
+            # read too slow
+            sum by (cluster) (cluster_verb_scope:apiserver_request_sli_duration_seconds_count:increase30d{verb=~"LIST|GET"})
+            -
+            (
+              (
+                sum by (cluster) (cluster_verb_scope_le:apiserver_request_sli_duration_seconds_bucket:increase30d{verb=~"LIST|GET",scope=~"resource|",le="1"})
+                or
+                vector(0)
+              )
+              +
+              sum by (cluster) (cluster_verb_scope_le:apiserver_request_sli_duration_seconds_bucket:increase30d{verb=~"LIST|GET",scope="namespace",le="5"})
+              +
+              sum by (cluster) (cluster_verb_scope_le:apiserver_request_sli_duration_seconds_bucket:increase30d{verb=~"LIST|GET",scope="cluster",le="30"})
+            )
+          ) +
+          # errors
+          sum by (cluster) (code:apiserver_request_total:increase30d{code=~"5.."} or vector(0))
+        )
+        /
+        sum by (cluster) (code:apiserver_request_total:increase30d)
+      labels:
+        verb: all
+      record: apiserver_request:availability30d
+    - annotations: {}
+      expr: |-
+        1 - (
+          sum by (cluster) (cluster_verb_scope:apiserver_request_sli_duration_seconds_count:increase30d{verb=~"LIST|GET"})
+          -
+          (
+            # too slow
+            (
+              sum by (cluster) (cluster_verb_scope_le:apiserver_request_sli_duration_seconds_bucket:increase30d{verb=~"LIST|GET",scope=~"resource|",le="1"})
+              or
+              vector(0)
+            )
+            +
+            sum by (cluster) (cluster_verb_scope_le:apiserver_request_sli_duration_seconds_bucket:increase30d{verb=~"LIST|GET",scope="namespace",le="5"})
+            +
+            sum by (cluster) (cluster_verb_scope_le:apiserver_request_sli_duration_seconds_bucket:increase30d{verb=~"LIST|GET",scope="cluster",le="30"})
+          )
+          +
+          # errors
+          sum by (cluster) (code:apiserver_request_total:increase30d{verb="read",code=~"5.."} or vector(0))
+        )
+        /
+        sum by (cluster) (code:apiserver_request_total:increase30d{verb="read"})
+      labels:
+        verb: read
+      record: apiserver_request:availability30d
+    - annotations: {}
+      expr: |-
+        1 - (
+          (
+            # too slow
+            sum by (cluster) (cluster_verb_scope:apiserver_request_sli_duration_seconds_count:increase30d{verb=~"POST|PUT|PATCH|DELETE"})
+            -
+            sum by (cluster) (cluster_verb_scope_le:apiserver_request_sli_duration_seconds_bucket:increase30d{verb=~"POST|PUT|PATCH|DELETE",le="1"})
+          )
+          +
+          # errors
+          sum by (cluster) (code:apiserver_request_total:increase30d{verb="write",code=~"5.."} or vector(0))
+        )
+        /
+        sum by (cluster) (code:apiserver_request_total:increase30d{verb="write"})
+      labels:
+        verb: write
+      record: apiserver_request:availability30d
+    - annotations: {}
+      expr: sum by (code,resource,cluster) (rate(apiserver_request_total{job="kube-apiserver",verb=~"LIST|GET"}[5m]))
+      labels:
+        verb: read
+      record: code_resource:apiserver_request_total:rate5m
+    - annotations: {}
+      expr: sum by (code,resource,cluster) (rate(apiserver_request_total{job="kube-apiserver",verb=~"POST|PUT|PATCH|DELETE"}[5m]))
+      labels:
+        verb: write
+      record: code_resource:apiserver_request_total:rate5m
+    - annotations: {}
+      expr: sum by (code,verb,cluster) (increase(apiserver_request_total{job="kube-apiserver",verb=~"LIST|GET|POST|PUT|PATCH|DELETE",code=~"2.."}[1h]))
+      labels: {}
+      record: code_verb:apiserver_request_total:increase1h
+    - annotations: {}
+      expr: sum by (code,verb,cluster) (increase(apiserver_request_total{job="kube-apiserver",verb=~"LIST|GET|POST|PUT|PATCH|DELETE",code=~"3.."}[1h]))
+      labels: {}
+      record: code_verb:apiserver_request_total:increase1h
+    - annotations: {}
+      expr: sum by (code,verb,cluster) (increase(apiserver_request_total{job="kube-apiserver",verb=~"LIST|GET|POST|PUT|PATCH|DELETE",code=~"4.."}[1h]))
+      labels: {}
+      record: code_verb:apiserver_request_total:increase1h
+    - annotations: {}
+      expr: sum by (code,verb,cluster) (increase(apiserver_request_total{job="kube-apiserver",verb=~"LIST|GET|POST|PUT|PATCH|DELETE",code=~"5.."}[1h]))
+      labels: {}
+      record: code_verb:apiserver_request_total:increase1h

@@ -1,0 +1,155 @@
+{{- if and .Values.opencost.ui.enabled .Values.opencost.ui.httpRoute.enabled }}
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: {{ include "opencost.fullname" . }}-ui
+  namespace: {{ include "opencost.namespace" . }}
+  labels: {{- include "opencost.labels" . | nindent 4 }}
+  {{- with .Values.opencost.ui.httpRoute.labels }}
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  {{- with .Values.opencost.ui.httpRoute.annotations }}
+  annotations: {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  parentRefs:
+    {{- range .Values.opencost.ui.httpRoute.parentRefs }}
+    - name: {{ .name }}
+      {{- if .namespace }}
+      namespace: {{ .namespace }}
+      {{- end }}
+      {{- if .sectionName }}
+      sectionName: {{ .sectionName }}
+      {{- end }}
+    {{- end }}
+  {{- with .Values.opencost.ui.httpRoute.hostnames }}
+  hostnames:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  rules:
+    {{- range .Values.opencost.ui.httpRoute.rules }}
+    - matches:
+        {{- range .matches }}
+        - path:
+            type: {{ .path.type }}
+            value: {{ .path.value }}
+        {{- end }}
+      {{- with .filters }}
+      filters:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      backendRefs:
+        {{- range .backendRefs }}
+        - name: {{ default (include "opencost.fullname" $) .name }}
+          port: {{ default $.Values.opencost.ui.uiPort .port }}
+          {{- with .filters }}
+          filters:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+        {{- end }}
+    {{- end }}
+---
+{{- end }}
+{{- if .Values.opencost.exporter.apiHttpRoute.enabled }}
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: {{ include "opencost.fullname" . }}-api
+  namespace: {{ include "opencost.namespace" . }}
+  labels: {{- include "opencost.labels" . | nindent 4 }}
+  {{- with .Values.opencost.exporter.apiHttpRoute.labels }}
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  {{- with .Values.opencost.exporter.apiHttpRoute.annotations }}
+  annotations: {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  parentRefs:
+    {{- range .Values.opencost.exporter.apiHttpRoute.parentRefs }}
+    - name: {{ .name }}
+      {{- if .namespace }}
+      namespace: {{ .namespace }}
+      {{- end }}
+      {{- if .sectionName }}
+      sectionName: {{ .sectionName }}
+      {{- end }}
+    {{- end }}
+  {{- with .Values.opencost.exporter.apiHttpRoute.hostnames }}
+  hostnames:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  rules:
+    {{- range .Values.opencost.exporter.apiHttpRoute.rules }}
+    - matches:
+        {{- range .matches }}
+        - path:
+            type: {{ .path.type }}
+            value: {{ .path.value }}
+        {{- end }}
+      {{- with .filters }}
+      filters:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      backendRefs:
+        {{- range .backendRefs }}
+        - name: {{ default (include "opencost.fullname" $) .name }}
+          port: {{ default $.Values.opencost.exporter.apiPort .port }}
+          {{- with .filters }}
+          filters:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+        {{- end }}
+    {{- end }}
+---
+{{- end }}
+{{- if and .Values.opencost.mcp.enabled .Values.opencost.mcp.httpRoute.enabled }}
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: {{ include "opencost.fullname" . }}-mcp
+  namespace: {{ include "opencost.namespace" . }}
+  labels: {{- include "opencost.labels" . | nindent 4 }}
+  {{- with .Values.opencost.mcp.httpRoute.labels }}
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  {{- with .Values.opencost.mcp.httpRoute.annotations }}
+  annotations: {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  parentRefs:
+    {{- range .Values.opencost.mcp.httpRoute.parentRefs }}
+    - name: {{ .name }}
+      {{- if .namespace }}
+      namespace: {{ .namespace }}
+      {{- end }}
+      {{- if .sectionName }}
+      sectionName: {{ .sectionName }}
+      {{- end }}
+    {{- end }}
+  {{- with .Values.opencost.mcp.httpRoute.hostnames }}
+  hostnames:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  rules:
+    {{- range .Values.opencost.mcp.httpRoute.rules }}
+    - matches:
+        {{- range .matches }}
+        - path:
+            type: {{ .path.type }}
+            value: {{ .path.value }}
+        {{- end }}
+      {{- with .filters }}
+      filters:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      backendRefs:
+        {{- range .backendRefs }}
+        - name: {{ default (include "opencost.fullname" $) .name }}
+          port: {{ default $.Values.opencost.mcp.port .port }}
+          {{- with .filters }}
+          filters:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+        {{- end }}
+    {{- end }}
+{{- end }}

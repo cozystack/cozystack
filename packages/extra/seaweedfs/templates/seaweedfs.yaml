@@ -1,0 +1,579 @@
+{{- /* Preflight checks for Helm template */ -}}
+{{- if not (has .Values.topology (list "Simple" "MultiZone" "Client")) }}
+{{-   fail "Invalid value for .Values.topology. Must be one of 'Simple', 'MultiZone' or 'Client'." }}
+{{- end }}
+{{- if and (eq .Values.topology "Client") (not .Values.filer.grpcHost) }}
+{{-   fail "When topology is 'Client', .Values.filer.grpcHost must be set to a valid remote filer GRPC service endpoint." }}
+{{- end }}
+{{- if lt (int .Values.replicationFactor) 1 }}
+{{-   fail "Invalid value for .Values.replicationFactor. Must be at least 1." }}
+{{- end }}
+{{- if eq .Values.topology "MultiZone" }}
+{{-   if (eq (len .Values.volume.zones) 0) }}
+{{-     fail "Zones must be defined for MultiZone topology." }}
+{{-   end }}
+{{-   if and (hasKey .Values.volume "zones") (gt (int .Values.replicationFactor) (len .Values.volume.zones)) }}
+{{-     fail "replicationFactor must be less than or equal to the number of zones defined in .Values.volume.zones." }}
+{{-   end }}
+{{- end }}
+{{- if and (eq .Values.topology "Client") (gt (len .Values.volume.pools) 0) }}
+{{-   fail "volume.pools is not supported with Client topology." }}
+{{- end }}
+{{- if and (eq .Values.topology "MultiZone") (gt (len .Values.volume.pools) 0) }}
+{{-   fail "volume.pools is not supported with MultiZone topology. Use volume.zones[name].pools instead." }}
+{{- end }}
+{{- if and .Values.volume.diskType (not (regexMatch "^[a-z0-9]+$" .Values.volume.diskType)) }}
+{{-   fail (printf "volume.diskType must be lowercase alphanumeric (got: %s)." .Values.volume.diskType) }}
+{{- end }}
+
+{{- /* Collect and validate all pools from volume.pools and zones[].pools */ -}}
+{{- $allPools := dict }}
+{{- range $poolName, $pool := .Values.volume.pools }}
+{{-   if not (regexMatch "^[a-z0-9]([a-z0-9-]*[a-z0-9])?$" $poolName) }}
+{{-     fail (printf "volume.pools key '%s' must be a valid DNS label (lowercase alphanumeric and hyphens, no dots)." $poolName) }}
+{{-   end }}
+{{-   if or (hasSuffix "-lock" $poolName) (hasSuffix "-readonly" $poolName) (hasSuffix "-public" $poolName) (eq "public" $poolName) }}
+{{-     fail (printf "volume.pools key '%s' must not be 'public' or end with '-lock', '-readonly' or '-public' (reserved for COSI resources)." $poolName) }}
+{{-   end }}
+{{-   if not $pool.diskType }}
+{{-     fail (printf "volume.pools.%s.diskType is required." $poolName) }}
+{{-   end }}
+{{-   if not (regexMatch "^[a-z0-9]+$" $pool.diskType) }}
+{{-     fail (printf "volume.pools.%s.diskType must be lowercase alphanumeric (got: %s)." $poolName $pool.diskType) }}
+{{-   end }}
+{{-   if and $.Values.volume.diskType (eq $pool.diskType $.Values.volume.diskType) }}
+{{-     fail (printf "volume.pools.%s.diskType '%s' must differ from volume.diskType." $poolName $pool.diskType) }}
+{{-   end }}
+{{-   $_ := set $allPools $poolName $pool.diskType }}
+{{- end }}
+{{- if eq .Values.topology "MultiZone" }}
+{{-   range $zoneName, $zone := .Values.volume.zones }}
+{{-     range $poolName, $pool := (dig "pools" dict $zone) }}
+{{-       if not (regexMatch "^[a-z0-9]([a-z0-9-]*[a-z0-9])?$" $poolName) }}
+{{-         fail (printf "volume.zones.%s.pools key '%s' must be a valid DNS label." $zoneName $poolName) }}
+{{-       end }}
+{{-       if or (hasSuffix "-lock" $poolName) (hasSuffix "-readonly" $poolName) (hasSuffix "-public" $poolName) (eq "public" $poolName) }}
+{{-         fail (printf "volume.zones.%s.pools key '%s' must not be 'public' or end with '-lock', '-readonly' or '-public' (reserved for COSI resources)." $zoneName $poolName) }}
+{{-       end }}
+{{-       if not $pool.diskType }}
+{{-         fail (printf "volume.zones.%s.pools.%s.diskType is required." $zoneName $poolName) }}
+{{-       end }}
+{{-       if not (regexMatch "^[a-z0-9]+$" $pool.diskType) }}
+{{-         fail (printf "volume.zones.%s.pools.%s.diskType must be lowercase alphanumeric (got: %s)." $zoneName $poolName $pool.diskType) }}
+{{-       end }}
+{{-       if and $.Values.volume.diskType (eq $pool.diskType $.Values.volume.diskType) }}
+{{-         fail (printf "volume.zones.%s.pools.%s.diskType '%s' must differ from volume.diskType." $zoneName $poolName $pool.diskType) }}
+{{-       end }}
+{{-       if and (hasKey $allPools $poolName) (ne (get $allPools $poolName) $pool.diskType) }}
+{{-         fail (printf "Pool '%s' has inconsistent diskType across zones (expected '%s', got '%s' in zone '%s')." $poolName (get $allPools $poolName) $pool.diskType $zoneName) }}
+{{-       end }}
+{{-       $_ := set $allPools $poolName $pool.diskType }}
+{{-       $composedName := printf "%s-%s" $zoneName $poolName }}
+{{-       if hasKey $.Values.volume.zones $composedName }}
+{{-         fail (printf "Composed volume name '%s' (from zone '%s' and pool '%s') collides with an existing zone name." $composedName $zoneName $poolName) }}
+{{-       end }}
+{{-     end }}
+{{-   end }}
+{{- end }}
+
+{{- $detectedTopology := "Unknown" }}
+{{- $configMap := lookup "v1" "ConfigMap" .Release.Namespace (printf "%s-deployed-topology" .Release.Name) }}
+{{- if $configMap }}
+{{-   $detectedTopology = dig "data" "topology" "Unknown" $configMap }}
+{{- else }}
+{{-   if lookup "v1" "PersistentVolumeClaim" .Release.Namespace (printf "data1-%s-volume-0" .Release.Name) }}
+{{-     $detectedTopology = "Simple" }}
+{{-   else if lookup "apps/v1" "StatefulSet" .Release.Namespace (printf "%s-master" .Release.Name) }}
+{{-     $detectedTopology = "MultiZone" }}
+{{-   end }}
+{{- end }}
+
+{{- if not (has $detectedTopology (list .Values.topology "Unknown")) }}
+{{-   fail (printf "Not allowed to switch between topologies after the first deployment: %s" $detectedTopology) }}
+{{- end }}
+
+{{- if not (eq .Values.topology "Client") }}
+{{- $ingress := .Values._namespace.ingress }}
+{{- $host := include "cozy-lib.ns-host-required" . }}
+{{- $solver := (index .Values._cluster "solver") | default "http01" }}
+{{- $clusterIssuer := (index .Values._cluster "issuer-name") | default "letsencrypt-prod" }}
+{{- $wildcardSecret := (index .Values._cluster "wildcard-secret-name") | default "" }}
+{{- /* Refuse to rename a running SeaweedFS away from its data.
+
+   Before 4.31 the chart named workloads after the CHART, ignoring the release
+   name, so every instance ran as `seaweedfs-*` with its data on
+   `data1-seaweedfs-volume-*`. 4.31 names them after the release instead, so the
+   upgrade could not rename in place (StatefulSet names are immutable) and Helm
+   stood up a second, empty set while the data stayed put. system/seaweedfs pins
+   the chart-based name back, so those workloads and volumes are adopted in place.
+
+   These states cannot be adopted and stop the render instead:
+
+   - FRESH on 1.5.x: only the renamed volumes exist, so the data was written under
+     them. Adopting the chart-based name would rename the workloads AWAY from that
+     data and bring up an empty cluster beside it. Helm cannot move data between
+     PVCs, so the operator is sent to the PV re-bind runbook (Step 2).
+   - D-split: both sets exist AND the renamed volume servers are live, so they may
+     hold objects written through the split endpoint. Adopting the chart-based set
+     would strand those. The operator is sent to reconcile the split first (Step 3).
+     A duplicate that never served (D-wedged: zero ready replicas) is refused the
+     same way: readyReplicas is a snapshot, not proof it never served, so it cannot
+     be told apart from D-split and is never adopted blind (see the note below).
+
+   The renamed volumes are matched by SHAPE rather than by reconstructing the
+   name: a volume PVC is always `data1-<fullname>-volume[-<pool|zone>]-N`, and
+   `<fullname>` is `seaweedfs` only for the adopted naming. Reconstructing it
+   instead would have to replay the chart's fullname helper AND its 56-character
+   component truncation, and would silently miss a tenant whose name is long or
+   does not contain the chart name.
+
+   PVCs hold the data and outlive any workload, but carry no chart labels, so they
+   are matched on the name shape and must mention the chart to avoid tripping over
+   an unrelated `data1-*-volume-*` claim. StatefulSets do carry the labels, so they
+   are matched on those, which is also the ONLY signal for a tenant whose PVCs are
+   not provisioned yet and for one whose instance name is long enough that the
+   chart truncated `seaweedfs` off the PVC names. Either establishes a generation's
+   presence, so the two are OR-ed.
+
+   Two generations present is UNDECIDABLE from inside a render and this guard does
+   not guess — see the long note in system/seaweedfs/templates/naming-guard.yaml.
+   In short: the release history DOES record birth order durably, but birth order
+   is the wrong question. It says which generation is original; adoption needs to
+   know whether the other one is EMPTY, and D-wedged and D-split are identical on
+   every durable signal.
+
+   This copy of the guard warns on the SeaweedFS application itself, where the
+   operator looks first. The ENFORCING copy lives in system/seaweedfs
+   (templates/naming-guard.yaml): the <name>-system HelmRelease pulls its chart
+   from a platform-managed ExternalArtifact, so a platform upgrade re-renders
+   THAT chart directly without ever re-rendering this one. Keep the two
+   classifications in sync — they are deliberately identical, and
+   hack/seaweedfs-guard-parity.bats fails the build if they drift.
+
+   Fail-closed: lookup errors abort the render, but a client-side render returns
+   nothing — the release namespace is used as a canary, and an upgrade that
+   cannot see the cluster refuses instead of misclassifying. */}}
+{{- $canary := lookup "v1" "Namespace" "" .Release.Namespace }}
+{{- if and (not $canary) .Release.IsUpgrade }}
+{{-   fail (printf "SeaweedFS naming-migration guard for %s in namespace %s: cannot see the cluster (lookup returned nothing for the release namespace itself). This render decides whether workloads are renamed away from live data, so refusing to upgrade blind. Renders applied by helm-controller always see the cluster; if templating by hand, render server-side." .Release.Name .Release.Namespace) }}
+{{- end }}
+{{- if $canary }}
+{{- /* extra/seaweedfs is the `<name>` release; the renamed generation is named
+   after its CHILD `<name>-system` release, so derive it. This one line is the only
+   difference from the copy in system/seaweedfs. */}}
+{{- $sysRelease := printf "%s-system" .Release.Name }}
+{{- $renamedVol := include "seaweedfs.renamedVolumePrefix" $sysRelease }}
+{{- $legacyPVC := false }}
+{{- $systemPVC := false }}
+{{- $legacySTS := false }}
+{{- $systemSTS := false }}
+{{- range (lookup "v1" "PersistentVolumeClaim" .Release.Namespace "").items | default list }}
+{{-   if hasPrefix (printf "data1-%s" $renamedVol) .metadata.name }}
+{{-     $systemPVC = true }}
+{{-   else if hasPrefix "data1-seaweedfs-volume" .metadata.name }}
+{{-     $legacyPVC = true }}
+{{-   end }}
+{{- end }}
+{{- range (lookup "apps/v1" "StatefulSet" .Release.Namespace "").items | default list }}
+{{-   if eq (dig "app.kubernetes.io/name" "" (.metadata.labels | default dict)) "seaweedfs" }}
+{{-     if hasPrefix $renamedVol .metadata.name }}
+{{-       $systemSTS = true }}
+{{-     else if hasPrefix "seaweedfs-volume" .metadata.name }}
+{{-       $legacySTS = true }}
+{{-     end }}
+{{-   end }}
+{{- end }}
+{{- $legacyGen := or $legacyPVC $legacySTS }}
+{{- $systemGen := or $systemPVC $systemSTS }}
+{{- if and $legacyGen $systemGen }}
+{{-   fail (printf "SeaweedFS %s in namespace %s has BOTH naming generations present: the chart-named set (seaweedfs-volume / data1-seaweedfs-volume-*) AND the release-named set this chart no longer uses. One of them is an empty duplicate and one holds the data, and which is which cannot be established from inside a Helm render — claim timestamps are mutable (the Step 2 re-bind recreates claims), StatefulSets are recreated by the adoption hook, and a duplicate with zero ready replicas may still have served writes. Rendering would adopt the chart-named set, so guessing wrong strands or destroys the data. Refusing instead. Classify the tenant and delete the EMPTY generation so exactly one remains — this render then adopts the survivor with no further action. See docs/operations/seaweedfs-431-rename-recovery.md (Step 1 classifies; Step 2/2a/3 recover). If you are part-way through Step 2's re-bind, finish it." .Release.Name .Release.Namespace) }}
+{{- else if $systemGen }}
+{{-   fail (printf "SeaweedFS %s in namespace %s keeps its data on volumes named after the Helm release — a tenant installed fresh on Cozystack 1.5.x (or one whose instance name is long enough that the chart truncated the volume PVC names, leaving only its StatefulSets to match on). Workloads are named seaweedfs-*, so rendering would rename them away from that data and bring up an empty cluster. Helm cannot move data between PVCs. Re-bind the existing PVs onto the data1-seaweedfs-volume-* PVC names before upgrading — see docs/operations/seaweedfs-431-rename-recovery.md (Step 2)." .Release.Name .Release.Namespace) }}
+{{- end }}
+{{- end }}
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: {{ .Release.Name }}-system
+  labels:
+    sharding.fluxcd.io/key: tenants
+spec:
+  dependsOn:
+  - name: {{ .Release.Name }}-db
+  {{- if eq $ingress .Release.Namespace }}
+  # Ensure the ingress-nginx admission webhook is ready before creating Ingress resources.
+  # Only when this tenant owns its ingress; sub-tenants inherit ingress from a parent
+  # namespace where ingress-nginx-system already runs, and the dependency would deadlock
+  # because the HR doesn't exist locally.
+  - name: ingress-nginx-system
+    namespace: {{ .Release.Namespace }}
+  {{- end }}
+  chartRef:
+    kind: ExternalArtifact
+    name: cozystack-seaweedfs-application-default-seaweedfs-system
+    namespace: cozy-system
+  interval: 30s
+  timeout: 10m
+  {{- /* Flux remediates a failed install by uninstalling and a failed upgrade
+         by rolling back, and with retries: -1 it does so on every attempt. A
+         release waiting on tenant quota for the admin volume would then roll
+         the s3 pods back and forth with the [grpc.s3] restart annotation.
+         RetryOnFailure keeps what was applied and retries it. */}}
+  install:
+    strategy:
+      name: RetryOnFailure
+      retryInterval: 30s
+    remediation:
+      retries: -1
+  upgrade:
+    strategy:
+      name: RetryOnFailure
+      retryInterval: 30s
+    remediation:
+      retries: -1
+  valuesFrom:
+  - kind: Secret
+    name: cozystack-values
+  values:
+    global:
+      serviceAccountName: "{{ .Release.Namespace }}-seaweedfs"
+    seaweedfs:
+      master:
+        {{ if eq .Values.topology "Simple" }}
+        defaultReplicaPlacement: "00{{ sub .Values.replicationFactor 1 }}"
+        {{- else if eq .Values.topology "MultiZone" }}
+        defaultReplicaPlacement: "{{ sub .Values.replicationFactor 1 }}00"
+        {{- end }}
+        replicas: {{ .Values.master.replicas }}
+        {{- /* An explicit null is dropped before schema validation, so neither
+               bound sees it, and the master exits on the empty flag it renders. */}}
+        volumeSizeLimitMB: {{ required "master.volumeSizeLimitMB must be set" .Values.master.volumeSizeLimitMB }}
+{{- $masterResources := include "cozy-lib.resources.defaultingSanitize" (list .Values.master.resourcesPreset .Values.master.resources $) | fromYaml }}
+        resources: {{- toYaml $masterResources | nindent 10 }}
+        extraEnvironmentVars:
+          GOMEMLIMIT: {{ include "cozy-lib.resources.goMemLimit" $masterResources | quote }}
+      volume:
+        {{ if eq .Values.topology "MultiZone" }}
+        enabled: false
+        {{- end }}
+        replicas: {{ .Values.volume.replicas }}
+{{- $volumeResources := include "cozy-lib.resources.defaultingSanitize" (list .Values.volume.resourcesPreset .Values.volume.resources $) | fromYaml }}
+        resources: {{- toYaml $volumeResources | nindent 10 }}
+        extraEnvironmentVars:
+          GOMEMLIMIT: {{ include "cozy-lib.resources.goMemLimit" $volumeResources | quote }}
+        dataDirs:
+        - name: data1
+          type: "persistentVolumeClaim"
+          size: "{{ .Values.volume.size }}"
+          {{- with .Values.volume.storageClass }}
+          storageClass: {{ . | quote }}
+          {{- end }}
+          maxVolumes: 0
+        {{- if .Values.volume.diskType }}
+        extraArgs:
+        - "-disk={{ .Values.volume.diskType }}"
+        {{- end }}
+      {{- if or (and (eq .Values.topology "Simple") (gt (len .Values.volume.pools) 0)) (eq .Values.topology "MultiZone") }}
+      volumes:
+        {{- if eq .Values.topology "Simple" }}
+        {{- range $poolName, $pool := .Values.volume.pools }}
+        {{ $poolName }}:
+          replicas: {{ ternary $pool.replicas $.Values.volume.replicas (hasKey $pool "replicas") }}
+{{- $poolResources := include "cozy-lib.resources.defaultingSanitize" (list ($pool.resourcesPreset | default $.Values.volume.resourcesPreset) (default dict $pool.resources) $) | fromYaml }}
+          resources: {{- toYaml $poolResources | nindent 12 }}
+          {{- /* The subchart merges volume into every entry of volumes, so a
+                 pool that does not set its own value runs on the default
+                 volume's, sized for a different limit. */}}
+          extraEnvironmentVars:
+            GOMEMLIMIT: {{ include "cozy-lib.resources.goMemLimit" $poolResources | quote }}
+          dataDirs:
+          - name: data1
+            type: "persistentVolumeClaim"
+            size: "{{ $pool.size | default $.Values.volume.size }}"
+            {{- with ($pool.storageClass | default $.Values.volume.storageClass) }}
+            storageClass: {{ . | quote }}
+            {{- end }}
+            maxVolumes: 0
+          extraArgs:
+          - "-disk={{ $pool.diskType }}"
+        {{- end }}
+        {{- else if eq .Values.topology "MultiZone" }}
+        {{- range $zoneName, $zone := .Values.volume.zones }}
+        {{ $zoneName }}:
+          replicas: {{ ternary $zone.replicas $.Values.volume.replicas (hasKey $zone "replicas") }}
+          resources: {{- toYaml $volumeResources | nindent 12 }}
+          extraEnvironmentVars:
+            GOMEMLIMIT: {{ include "cozy-lib.resources.goMemLimit" $volumeResources | quote }}
+          dataDirs:
+          - name: data1
+            type: "persistentVolumeClaim"
+            size: "{{ $zone.size | default $.Values.volume.size }}"
+            {{- with ($zone.storageClass | default $.Values.volume.storageClass) }}
+            storageClass: {{ . | quote }}
+            {{- end }}
+            maxVolumes: 0
+          nodeSelector: |
+            {{- with $zone.nodeSelector }}
+{{ . | indent 12 }}
+            {{- else }}
+            topology.kubernetes.io/zone: {{ $zoneName }}
+            {{- end }}
+          dataCenter: {{ $zone.dataCenter | default $zoneName }}
+          {{- if $.Values.volume.diskType }}
+          extraArgs:
+          - "-disk={{ $.Values.volume.diskType }}"
+          {{- end }}
+        {{- end }}
+        {{- range $zoneName, $zone := .Values.volume.zones }}
+        {{- range $poolName, $pool := (dig "pools" dict $zone) }}
+        {{ $zoneName }}-{{ $poolName }}:
+          replicas: {{ ternary $pool.replicas (ternary $zone.replicas $.Values.volume.replicas (hasKey $zone "replicas")) (hasKey $pool "replicas") }}
+{{- $poolResources := include "cozy-lib.resources.defaultingSanitize" (list ($pool.resourcesPreset | default $.Values.volume.resourcesPreset) (default dict $pool.resources) $) | fromYaml }}
+          resources: {{- toYaml $poolResources | nindent 12 }}
+          {{- /* The subchart merges volume into every entry of volumes, so a
+                 pool that does not set its own value runs on the default
+                 volume's, sized for a different limit. */}}
+          extraEnvironmentVars:
+            GOMEMLIMIT: {{ include "cozy-lib.resources.goMemLimit" $poolResources | quote }}
+          dataDirs:
+          - name: data1
+            type: "persistentVolumeClaim"
+            size: "{{ $pool.size | default $zone.size | default $.Values.volume.size }}"
+            {{- with ($pool.storageClass | default $zone.storageClass | default $.Values.volume.storageClass) }}
+            storageClass: {{ . | quote }}
+            {{- end }}
+            maxVolumes: 0
+          nodeSelector: |
+            {{- with $zone.nodeSelector }}
+{{ . | indent 12 }}
+            {{- else }}
+            topology.kubernetes.io/zone: {{ $zoneName }}
+            {{- end }}
+          dataCenter: {{ $zone.dataCenter | default $zoneName }}
+          extraArgs:
+          - "-disk={{ $pool.diskType }}"
+        {{- end }}
+        {{- end }}
+        {{- end }}
+      {{- end }}
+      filer:
+        {{ if eq .Values.topology "Simple" }}
+        defaultReplicaPlacement: "00{{ sub .Values.replicationFactor 1 }}"
+        {{- else if eq .Values.topology "MultiZone" }}
+        defaultReplicaPlacement: "{{ sub .Values.replicationFactor 1 }}00"
+        {{- end }}
+        replicas: {{ .Values.filer.replicas }}
+        s3:
+          domainName: {{ .Values.host | default (printf "s3.%s" $host) }}
+{{- $filerResources := include "cozy-lib.resources.defaultingSanitize" (list .Values.filer.resourcesPreset .Values.filer.resources $) | fromYaml }}
+        resources: {{- toYaml $filerResources | nindent 10 }}
+        extraEnvironmentVars:
+          GOMEMLIMIT: {{ include "cozy-lib.resources.goMemLimit" $filerResources | quote }}
+      s3:
+        replicas: {{ .Values.s3.replicas }}
+        ingress:
+          enabled: {{ not (empty $ingress) }}
+          className: {{ $ingress }}
+          host: {{ .Values.host | default (printf "s3.%s" $host) }}
+          annotations:
+            # Limit single PUT request to 5GB to enforce multipart uploads for large files.
+            # This prevents issues with large file uploads and reduces support load.
+            # For files >5GB, clients must use S3 multipart upload API.
+            nginx.ingress.kubernetes.io/proxy-body-size: "5g"
+            nginx.ingress.kubernetes.io/proxy-buffering: "off"
+            nginx.ingress.kubernetes.io/proxy-request-buffering: "off"
+            nginx.ingress.kubernetes.io/backend-protocol: "HTTPS"
+            nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+            nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+            nginx.ingress.kubernetes.io/client-body-timeout: "3600"
+            nginx.ingress.kubernetes.io/client-header-timeout: "120"
+            nginx.ingress.kubernetes.io/service-upstream: "true"
+            {{- /* Operator wildcard mode: nginx serves the default SSL cert, so skip per-host ACME. */}}
+            {{- if not $wildcardSecret }}
+            {{- if eq $solver "http01" }}
+            acme.cert-manager.io/http01-ingress-ingressclassname: {{ $ingress }}
+            {{- end }}
+            cert-manager.io/cluster-issuer: {{ $clusterIssuer }}
+            {{- end }}
+          tls:
+            - hosts:
+              - {{ .Values.host | default (printf "s3.%s" $host) }}
+              {{- /* Operator wildcard mode: no per-host secret — ingress-nginx
+                     falls back to the default SSL certificate while the tls
+                     section keeps the HTTP-to-HTTPS redirect enforced. */}}
+              {{- if not $wildcardSecret }}
+              secretName: {{ .Release.Name }}-s3-ingress-tls
+              {{- end }}
+{{- $s3Resources := include "cozy-lib.resources.defaultingSanitize" (list .Values.s3.resourcesPreset .Values.s3.resources $) | fromYaml }}
+        resources: {{- toYaml $s3Resources | nindent 10 }}
+        extraEnvironmentVars:
+          GOMEMLIMIT: {{ include "cozy-lib.resources.goMemLimit" $s3Resources | quote }}
+      admin:
+        enabled: {{ .Values.lifecycle.enabled }}
+        secret:
+          existingSecret: {{ .Release.Name }}-admin-credentials
+        {{- with .Values.lifecycle.storageClass }}
+        data:
+          storageClass: {{ . | quote }}
+        {{- end }}
+      worker:
+        enabled: {{ .Values.lifecycle.enabled }}
+      cosi:
+        driverName: "{{ .Release.Namespace }}.seaweedfs.objectstorage.k8s.io"
+        bucketClassName: "{{ .Release.Namespace }}"
+        orphanIdentities:
+          {{- $orphans := dig "orphanIdentities" "auto" (.Values.cosi | default dict) }}
+          {{- if eq $orphans "auto" }}
+          {{- /* A filer published for Client-topology clusters (ingress.yaml)
+                 holds identities of BucketAccesses in those clusters. */}}
+          {{- $orphans = ternary "report" "delete" (not (empty .Values.filer.grpcHost)) }}
+          {{- end }}
+          mode: {{ $orphans | quote }}
+        resources:
+          requests:
+            cpu: "100m"
+            memory: "128Mi"
+          limits:
+            cpu: "500m"
+            memory: "512Mi"
+---
+apiVersion: cozystack.io/v1alpha1
+kind: WorkloadMonitor
+metadata:
+  name: {{ $.Release.Name }}-master
+spec:
+  replicas: {{ .Values.master.replicas }}
+  minReplicas: {{ div .Values.master.replicas 2 | add1 }}
+  kind: seaweedfs
+  type: master
+  selector:
+    app.kubernetes.io/component: master
+    app.kubernetes.io/name: seaweedfs
+  version: {{ $.Chart.Version }}
+---
+apiVersion: cozystack.io/v1alpha1
+kind: WorkloadMonitor
+metadata:
+  name: {{ $.Release.Name }}-filer
+spec:
+  replicas: {{ .Values.filer.replicas }}
+  minReplicas: 1
+  kind: seaweedfs
+  type: filer
+  selector:
+    app.kubernetes.io/component: filer
+    app.kubernetes.io/name: seaweedfs
+  version: {{ $.Chart.Version }}
+
+{{ if eq .Values.topology "Simple" }}
+---
+apiVersion: cozystack.io/v1alpha1
+kind: WorkloadMonitor
+metadata:
+  name: {{ $.Release.Name }}-volume
+spec:
+  replicas: {{ .Values.volume.replicas }}
+  minReplicas: 1
+  kind: seaweedfs
+  type: volume
+  selector:
+    app.kubernetes.io/component: volume
+    app.kubernetes.io/name: seaweedfs
+  version: {{ $.Chart.Version }}
+{{- range $poolName, $pool := .Values.volume.pools }}
+---
+apiVersion: cozystack.io/v1alpha1
+kind: WorkloadMonitor
+metadata:
+  name: {{ $.Release.Name }}-volume-{{ $poolName }}
+spec:
+  replicas: {{ ternary $pool.replicas $.Values.volume.replicas (hasKey $pool "replicas") }}
+  minReplicas: 1
+  kind: seaweedfs
+  type: volume
+  selector:
+    app.kubernetes.io/component: volume-{{ $poolName }}
+    app.kubernetes.io/name: seaweedfs
+  version: {{ $.Chart.Version }}
+{{- end }}
+{{- else if eq .Values.topology "MultiZone" }}
+{{- range $zoneName, $zoneSpec := .Values.volume.zones }}
+---
+apiVersion: cozystack.io/v1alpha1
+kind: WorkloadMonitor
+metadata:
+  name: {{ $.Release.Name }}-volume-{{ $zoneName }}
+spec:
+  replicas: {{ ternary $zoneSpec.replicas $.Values.volume.replicas (hasKey $zoneSpec "replicas") }}
+  minReplicas: 1
+  kind: seaweedfs
+  type: volume
+  selector:
+    app.kubernetes.io/component: volume-{{ $zoneName }}
+    app.kubernetes.io/name: seaweedfs
+  version: {{ $.Chart.Version }}
+{{- range $poolName, $pool := (dig "pools" dict $zoneSpec) }}
+---
+apiVersion: cozystack.io/v1alpha1
+kind: WorkloadMonitor
+metadata:
+  name: {{ $.Release.Name }}-volume-{{ $zoneName }}-{{ $poolName }}
+spec:
+  replicas: {{ ternary $pool.replicas (ternary $zoneSpec.replicas $.Values.volume.replicas (hasKey $zoneSpec "replicas")) (hasKey $pool "replicas") }}
+  minReplicas: 1
+  kind: seaweedfs
+  type: volume
+  selector:
+    app.kubernetes.io/component: volume-{{ $zoneName }}-{{ $poolName }}
+    app.kubernetes.io/name: seaweedfs
+  version: {{ $.Chart.Version }}
+{{- end }}
+{{- end }}
+{{- end }}
+---
+apiVersion: cozystack.io/v1alpha1
+kind: WorkloadMonitor
+metadata:
+  name: {{ $.Release.Name }}-db
+spec:
+  replicas: {{ .Values.db.replicas }}
+  minReplicas: 1
+  kind: seaweedfs
+  type: postgres
+  selector:
+    cnpg.io/cluster: seaweedfs-db
+    cnpg.io/podRole: instance
+  version: {{ $.Chart.Version }}
+---
+apiVersion: cozystack.io/v1alpha1
+kind: WorkloadMonitor
+metadata:
+  name: {{ $.Release.Name }}-s3
+spec:
+  replicas: {{ .Values.s3.replicas }}
+  minReplicas: 1
+  kind: seaweedfs
+  type: s3
+  selector:
+    app.kubernetes.io/component: s3
+    app.kubernetes.io/name: seaweedfs
+  version: {{ $.Chart.Version }}
+{{- if .Values.lifecycle.enabled }}
+{{- range $component := list "admin" "worker" }}
+---
+apiVersion: cozystack.io/v1alpha1
+kind: WorkloadMonitor
+metadata:
+  name: {{ $.Release.Name }}-{{ $component }}
+spec:
+  replicas: 1
+  minReplicas: 1
+  kind: seaweedfs
+  type: {{ $component }}
+  selector:
+    app.kubernetes.io/component: {{ $component }}
+    app.kubernetes.io/name: seaweedfs
+  version: {{ $.Chart.Version }}
+{{- end }}
+{{- end }}
+{{- end }}

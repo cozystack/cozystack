@@ -1,0 +1,86 @@
+{{- if eq .Values.topology "Client" }}
+{{- $host := include "cozy-lib.ns-host-required" . }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $.Release.Name }}-objectstorage-provisioner
+  namespace: {{ $.Release.Namespace }}
+  labels:
+    app.kubernetes.io/component: objectstorage-provisioner
+    app.kubernetes.io/instance: seaweedfs
+    app.kubernetes.io/name: {{ $.Release.Name }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: objectstorage-provisioner
+      app.kubernetes.io/instance: seaweedfs
+      app.kubernetes.io/name: {{ $.Release.Name }}
+  strategy:
+    rollingUpdate:
+      maxSurge: 25%
+      maxUnavailable: 25%
+    type: RollingUpdate
+  template:
+    metadata:
+      creationTimestamp: null
+      labels:
+        policy.cozystack.io/allow-to-apiserver: "true"
+        app.kubernetes.io/component: objectstorage-provisioner
+        app.kubernetes.io/instance: seaweedfs
+        app.kubernetes.io/name: {{ $.Release.Name }}
+    spec:
+      containers:
+      - name: seaweedfs-cosi-driver
+        image: "{{ $.Files.Get "images/seaweedfs-cosi-driver.tag" | trim }}"
+        imagePullPolicy: IfNotPresent
+        env:
+        - name: DRIVERNAME
+          value: {{ .Release.Namespace }}.seaweedfs.objectstorage.k8s.io
+        - name: ENDPOINT
+          value: https://{{ .Values.host | default (printf "s3.%s" $host) }}
+        - name: SEAWEEDFS_FILER
+          value: "{{ .Values.filer.grpcHost }}:{{ .Values.filer.grpcPort }}"
+        - name: WEED_GRPC_CLIENT_KEY
+          value: /usr/local/share/ca-certificates/client/tls.key
+        - name: WEED_GRPC_CLIENT_CERT
+          value: /usr/local/share/ca-certificates/client/tls.crt
+        - name: WEED_GRPC_CA
+          value: /usr/local/share/ca-certificates/client/ca.crt
+        resources:
+          limits:
+            cpu: 500m
+            memory: 512Mi
+          requests:
+            cpu: 100m
+            memory: 128Mi
+        volumeMounts:
+        - mountPath: /var/lib/cosi
+          name: socket
+        - mountPath: /usr/local/share/ca-certificates/client/
+          name: client-cert
+          readOnly: true
+      - name: seaweedfs-cosi-sidecar
+        image: "{{ $.Files.Get "images/objectstorage-sidecar.tag" | trim }}"
+        imagePullPolicy: IfNotPresent
+        args:
+        - --v=5
+        env:
+        - name: POD_NAMESPACE
+          value: {{ .Release.Namespace }}
+        volumeMounts:
+        - mountPath: /var/lib/cosi
+          name: socket
+      enableServiceLinks: false
+      restartPolicy: Always
+      terminationGracePeriodSeconds: 10
+      serviceAccountName: {{ .Release.Name }}-objectstorage-provisioner
+      volumes:
+      - name: socket
+        emptyDir: {}
+      - name: client-cert
+        secret:
+          defaultMode: 420
+          secretName: seaweedfs-client-cert
+{{- end }}

@@ -1,0 +1,57 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}-haproxy
+  labels:
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+spec:
+  replicas: {{ .Values.replicas }}
+  selector:
+    matchLabels:
+      app: {{ .Release.Name }}-haproxy
+  template:
+    metadata:
+      labels:
+        app: {{ .Release.Name }}-haproxy
+        app.kubernetes.io/instance: {{ .Release.Name }}
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+    spec:
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 1
+            podAffinityTerm:
+              labelSelector:
+                matchExpressions:
+                - key: app
+                  operator: In
+                  values:
+                  - {{ .Release.Name }}-haproxy
+              topologyKey: kubernetes.io/hostname
+      containers:
+      - image: haproxy:{{ .Chart.AppVersion }}
+        name: haproxy
+        resources: {{- include "cozy-lib.resources.defaultingSanitize" (list .Values.resourcesPreset .Values.resources $) | nindent 10 }}
+        ports:
+        {{- with .Values.httpAndHttps }}
+        - containerPort: 8080
+          name: http
+        - containerPort: 8443
+          name: https
+        {{- end }}
+        {{- with .Values.kubernetesAndTalos }}
+        - containerPort: 6443
+          name: kubernetes
+        - containerPort: 50000
+          name: talos
+        {{- end }}
+        volumeMounts:
+        - mountPath: /usr/local/etc/haproxy
+          name: config
+      volumes:
+      - configMap:
+          name: {{ .Release.Name }}-haproxy
+        name: config

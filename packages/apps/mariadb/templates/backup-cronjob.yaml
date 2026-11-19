@@ -1,0 +1,127 @@
+{{- if .Values.backup.enabled }}
+{{ $image := .Files.Get "images/backup.json" | fromJson }}
+{{- /* The CronJob controller starts each Job as <name>-<timestamp>, so the API
+       refuses a CronJob name over 52 characters. Cutting the release name to
+       fit could give two releases one CronJob, so a name that does not fit
+       keeps a hash of the full release name instead. */}}
+{{- $cronJobName := printf "%s-backup" .Release.Name }}
+{{- if gt (len $cronJobName) 52 }}
+{{- $cronJobName = printf "%s-%s-backup" (.Release.Name | trunc 38 | trimSuffix "-") (.Release.Name | sha256sum | trunc 6) }}
+{{- end }}
+
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ $cronJobName }}
+spec:
+  schedule: "{{ .Values.backup.schedule }}"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      template:
+        metadata:
+          annotations:
+            checksum/config: {{ include (print $.Template.BasePath "/backup-script.yaml") . | sha256sum }}
+            checksum/secret: {{ include (print $.Template.BasePath "/backup-secret.yaml") . | sha256sum }}
+        spec:
+          imagePullSecrets:
+          - name: {{ .Release.Name }}-regsecret
+          restartPolicy: Never
+          containers:
+          - name: mysqldump
+            image: "{{ $.Files.Get "images/mariadb-backup.tag" | trim }}"
+            command:
+            - /bin/sh
+            - /scripts/backup.sh
+            env:
+            - name: REPO_PREFIX
+              value: {{ required "s3Bucket is not specified!" .Values.backup.s3Bucket | quote }}
+            - name: CLEANUP_STRATEGY
+              value: {{ required "cleanupPolicy is not specified!" .Values.backup.cleanupStrategy | quote }}
+            - name: MYSQL_USER
+              value: root
+            - name: MYSQL_PWD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Release.Name }}
+                  key: root-password
+            - name: MYSQL_CA_SECRET
+              value: {{ .Release.Name }}-ca-bundle
+            - name: MYSQL_HOST
+              # replicas>1 enables replication (offload dumps to a secondary);
+              # replicas=1 has no replication and only the bare service exists.
+              value: "{{ .Release.Name }}{{- if gt (int .Values.replicas) 1 }}-secondary{{- end }}"
+            - name: AWS_ACCESS_KEY_ID
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Release.Name }}-backup
+                  key: s3AccessKey
+            - name: AWS_SECRET_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Release.Name }}-backup
+                  key: s3SecretKey
+            - name: AWS_DEFAULT_REGION
+              value: {{ .Values.backup.s3Region }}
+            - name: RESTIC_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Release.Name }}-backup
+                  key: resticPassword
+            volumeMounts:
+            - mountPath: /scripts
+              name: scripts
+            - mountPath: /tmp
+              name: tmp
+            - mountPath: /.cache
+              name: cache
+            - mountPath: /etc/mysql-ssl
+              name: tls-ca
+              readOnly: true
+            securityContext:
+              allowPrivilegeEscalation: false
+              capabilities:
+                drop:
+                - ALL
+              privileged: false
+              readOnlyRootFilesystem: true
+              runAsNonRoot: true
+          volumes:
+          - name: scripts
+            secret:
+              secretName: {{ .Release.Name }}-backup-script
+          - name: tmp
+            emptyDir: {}
+          - name: cache
+            emptyDir: {}
+          # -ca-bundle is the operator-reconciled trust bundle. It carries both
+          # the old and the new CA across a rollover, whereas the leaf Secret
+          # only ever holds the CA that signed the current certificate. Mounted
+          # unconditionally: the server always serves TLS, so the backup client
+          # always has something to verify against.
+          #
+          # optional so a missing bundle fails the run instead of stopping it.
+          # The operator reconciles the bundle only after certificates settle, so
+          # there is a window on first install where it does not exist yet; a
+          # required mount would leave the pod in ContainerCreating, and with
+          # concurrencyPolicy: Forbid that one stuck pod blocks every later
+          # backup indefinitely. The script checks for the file before connecting
+          # because the client reports its absence only as "TLS/SSL error: No
+          # such file or directory", without naming what it could not read.
+          - name: tls-ca
+            secret:
+              secretName: {{ .Release.Name }}-ca-bundle
+              optional: true
+              items:
+              - key: ca.crt
+                path: ca.crt
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 9000
+            runAsGroup: 9000
+            seccompProfile:
+              type: RuntimeDefault
+{{- end }}

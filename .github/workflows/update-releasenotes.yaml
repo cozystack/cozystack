@@ -1,0 +1,129 @@
+name: Update Release Notes
+
+on:
+  push:
+    branches:
+      - main
+    # Only run when a release changelog changes. The release body is synced from
+    # docs/changelogs/v*.md, which lands on main either when the changelog PR
+    # (tags.yaml generate-changelog) merges or when a maintainer edits an
+    # existing changelog. The v* glob deliberately skips template.md /
+    # patch-template.md in the same directory. Every other main push left this
+    # job scanning the latest 30 releases for nothing. A docs/releasenotes/v*.md
+    # file, when it has content, is the body in place of its changelog, so it
+    # triggers the sync too.
+    paths:
+      - 'docs/changelogs/v*.md'
+      - 'docs/releasenotes/v*.md'
+  # Manual re-sync hatch: re-run the changelog -> release-body sync without
+  # touching a changelog file (e.g. if a release body drifted out of sync).
+  workflow_dispatch:
+
+concurrency:
+  group: update-releasenotes-${{ github.workflow }}
+  cancel-in-progress: false
+
+# Top-level token defaults to read-only. A job-level block replaces this one
+# rather than adding to it, so each job restates every scope it needs.
+permissions:
+  contents: read
+
+jobs:
+  update-releasenotes:
+    name: Update Release Notes
+    # GitHub API calls only — no docker, no repo toolchain: GitHub-hosted.
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Update release notes from changelogs
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          script: |
+            const fs = require('fs');
+            const path = require('path');
+            
+            const changelogDir = 'docs/changelogs';
+            // Same limit and reason as MAX_BODY_BYTES in pull-requests-release.yaml.
+            const MAX_BODY_BYTES = 100000;
+            
+            // Get releases from first page
+            const releases = await github.rest.repos.listReleases({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              per_page: 30
+            });
+            
+            console.log(`Found ${releases.data.length} releases (first page only)`);
+            
+            // Process each release
+            for (const release of releases.data) {
+              const tag = release.tag_name;
+              const changelogFile = `${tag}.md`;
+              // docs/releasenotes/<tag>.md is the body when it has content, as
+              // in finalize; the changelog otherwise.
+              const notesPath = path.join('docs/releasenotes', changelogFile);
+              const changelogPath = fs.existsSync(notesPath) && fs.readFileSync(notesPath, 'utf8').trim()
+                ? notesPath
+                : path.join(changelogDir, changelogFile);
+              
+              console.log(`\nProcessing release: ${tag}`);
+              
+              // Check if changelog file exists
+              if (!fs.existsSync(changelogPath)) {
+                console.log(`  ⚠️  Changelog file ${changelogFile} does not exist, skipping...`);
+                continue;
+              }
+              
+              // Read changelog file content
+              let changelogContent;
+              try {
+                changelogContent = fs.readFileSync(changelogPath, 'utf8');
+              } catch (error) {
+                console.log(`  ❌ Error reading file ${changelogPath}: ${error.message}`);
+                continue;
+              }
+              
+              if (!changelogContent.trim()) {
+                console.log(`  ⚠️  Changelog file ${changelogFile} is empty, skipping...`);
+                continue;
+              }
+              
+              // Finalize publishes a link in place of a body this long. Never
+              // here: a changelog that reaches main without its release notes
+              // (the tags.yaml backstop ports only the changelog) would replace
+              // a good published body with it.
+              const bytes = Buffer.byteLength(changelogContent, 'utf8');
+              if (bytes > MAX_BODY_BYTES) {
+                console.log(`::warning::${changelogPath} is ${bytes} bytes, over MAX_BODY_BYTES (${MAX_BODY_BYTES}); leaving the body of release ${tag} as it is.`);
+                continue;
+              }
+              
+              // Check if content is already up to date
+              const currentBody = release.body || '';
+              if (currentBody.trim() === changelogContent.trim()) {
+                console.log(`  ✓ Content is already up to date, skipping...`);
+                continue;
+              }
+              
+              // Update release notes
+              try {
+                await github.rest.repos.updateRelease({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  release_id: release.id,
+                  body: changelogContent
+                });
+                console.log(`  ✅ Successfully updated release notes for ${tag}`);
+              } catch (error) {
+                console.log(`  ❌ Error updating release ${tag}: ${error.message}`);
+                core.setFailed(`Failed to update release notes for ${tag}`);
+              }
+            }
+

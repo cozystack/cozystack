@@ -1,0 +1,768 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.18.0
+  name: keycloakclients.v1.edp.epam.com
+spec:
+  group: v1.edp.epam.com
+  names:
+    kind: KeycloakClient
+    listKind: KeycloakClientList
+    plural: keycloakclients
+    singular: keycloakclient
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - description: Reconciliation status
+      jsonPath: .status.value
+      name: Status
+      type: string
+    name: v1
+    schema:
+      openAPIV3Schema:
+        description: KeycloakClient is the Schema for the keycloak clients API.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: KeycloakClientSpec defines the desired state of KeycloakClient.
+            properties:
+              adminFineGrainedPermissionsEnabled:
+                description: |-
+                  AdminFineGrainedPermissionsEnabled enable/disable fine-grained admin permissions for a client.
+                  Feature flag admin-fine-grained-authz:v1 should be enabled in Keycloak server.
+                  Important: FGAP:V1 Keycloak feature remains in preview and may be deprecated and removed in a future releases.
+                type: boolean
+              adminUrl:
+                description: |-
+                  AdminUrl is client admin url.
+                  If empty - WebUrl will be used.
+                type: string
+              advancedProtocolMappers:
+                description: AdvancedProtocolMappers is a flag to enable advanced
+                  protocol mappers.
+                type: boolean
+              attributes:
+                additionalProperties:
+                  type: string
+                default:
+                  post.logout.redirect.uris: +
+                description: Attributes is a map of client attributes.
+                nullable: true
+                type: object
+              authenticationFlowBindingOverrides:
+                description: AuthenticationFlowBindingOverrides client auth flow overrides
+                properties:
+                  browser:
+                    type: string
+                  directGrant:
+                    type: string
+                type: object
+              authorization:
+                description: Authorization is a client authorization configuration.
+                nullable: true
+                properties:
+                  permissions:
+                    items:
+                      properties:
+                        decisionStrategy:
+                          default: UNANIMOUS
+                          description: DecisionStrategy is a permission decision strategy.
+                          enum:
+                          - UNANIMOUS
+                          - AFFIRMATIVE
+                          - CONSENSUS
+                          type: string
+                        description:
+                          description: Description is a permission description.
+                          type: string
+                        logic:
+                          default: POSITIVE
+                          description: Logic is a permission logic.
+                          enum:
+                          - POSITIVE
+                          - NEGATIVE
+                          type: string
+                        name:
+                          description: Name is a permission name.
+                          type: string
+                        policies:
+                          description: |-
+                            Policies is a list of policies names.
+                            Specifies all the policies that must be applied to the scopes defined by this policy or permission.
+                          example:
+                          - policy1
+                          - policy2
+                          items:
+                            type: string
+                          nullable: true
+                          type: array
+                        resources:
+                          description: |-
+                            Resources is a list of resources names.
+                            Specifies that this permission must be applied to all resource instances of a given type.
+                          example:
+                          - resource1
+                          - resource2
+                          items:
+                            type: string
+                          nullable: true
+                          type: array
+                        scopes:
+                          description: |-
+                            Scopes is a list of authorization scopes names.
+                            Specifies that this permission must be applied to one or more scopes.
+                          example:
+                          - scope1
+                          - scope2
+                          items:
+                            type: string
+                          nullable: true
+                          type: array
+                        type:
+                          description: Type is a permission type.
+                          enum:
+                          - resource
+                          - scope
+                          type: string
+                      required:
+                      - name
+                      - type
+                      type: object
+                    type: array
+                  policies:
+                    items:
+                      description: Policy represents a client authorization policy.
+                      properties:
+                        aggregatedPolicy:
+                          description: AggregatedPolicy is an aggregated policy settings.
+                          properties:
+                            policies:
+                              description: |-
+                                Policies is a list of aggregated policies names.
+                                Specifies all the policies that must be applied to the scopes defined by this policy or permission.
+                              example:
+                                policies:
+                                - policy1
+                                - policy2
+                              items:
+                                type: string
+                              type: array
+                          required:
+                          - policies
+                          type: object
+                        clientPolicy:
+                          description: ClientPolicy is a client policy settings.
+                          properties:
+                            clients:
+                              description: Clients is a list of client names. Specifies
+                                which client(s) are allowed by this policy.
+                              example:
+                              - clients1
+                              - clients2
+                              items:
+                                type: string
+                              type: array
+                          required:
+                          - clients
+                          type: object
+                        decisionStrategy:
+                          default: UNANIMOUS
+                          description: DecisionStrategy is a policy decision strategy.
+                          enum:
+                          - UNANIMOUS
+                          - AFFIRMATIVE
+                          - CONSENSUS
+                          type: string
+                        description:
+                          description: Description is a policy description.
+                          type: string
+                        groupPolicy:
+                          description: GroupPolicy is a group policy settings.
+                          properties:
+                            groups:
+                              description: Groups is a list of group names. Specifies
+                                which group(s) are allowed by this policy.
+                              example: '{"groups":[{"name":"group1","extendChildren":true},{"name":"group2"}]}'
+                              items:
+                                description: GroupDefinition represents a group in
+                                  a GroupPolicyData.
+                                properties:
+                                  extendChildren:
+                                    description: ExtendChildren is a flag that specifies
+                                      whether to extend children.
+                                    type: boolean
+                                  name:
+                                    description: Name is a group name.
+                                    example: group1
+                                    type: string
+                                required:
+                                - name
+                                type: object
+                              type: array
+                            groupsClaim:
+                              description: |-
+                                GroupsClaim is a group claim.
+                                If defined, the policy will fetch user's groups from the given claim
+                                within an access token or ID token representing the identity asking permissions.
+                                If not defined, user's groups are obtained from your realm configuration.
+                              type: string
+                          required:
+                          - groups
+                          type: object
+                        logic:
+                          default: POSITIVE
+                          description: Logic is a policy logic.
+                          enum:
+                          - POSITIVE
+                          - NEGATIVE
+                          type: string
+                        name:
+                          description: Name is a policy name.
+                          type: string
+                        rolePolicy:
+                          description: RolePolicy is a role policy settings.
+                          properties:
+                            roles:
+                              description: Roles is a list of role.
+                              example:
+                                roles:
+                                - name: role1
+                                  required: true
+                                - name: role2
+                              items:
+                                description: RoleDefinition represents a role in a
+                                  RolePolicyData.
+                                properties:
+                                  name:
+                                    description: Name is a role name.
+                                    example: role1
+                                    type: string
+                                  required:
+                                    description: Required is a flag that specifies
+                                      whether the role is required.
+                                    type: boolean
+                                required:
+                                - name
+                                type: object
+                              type: array
+                          required:
+                          - roles
+                          type: object
+                        timePolicy:
+                          description: ScopePolicy is a scope policy settings.
+                          properties:
+                            dayMonth:
+                              description: |-
+                                Day defines the month which the policy MUST be granted.
+                                You can also provide a range by filling the dayMonthEnd field.
+                                In this case, permission is granted only if current month is between or equal to the two values you provided.
+                              example: "1"
+                              type: string
+                            dayMonthEnd:
+                              example: "2"
+                              type: string
+                            hour:
+                              description: |-
+                                Hour defines the hour when the policy MUST be granted.
+                                You can also provide a range by filling the hourEnd.
+                                In this case, permission is granted only if current hour is between or equal to the two values you provided.
+                              example: "1"
+                              type: string
+                            hourEnd:
+                              example: "2"
+                              type: string
+                            minute:
+                              description: |-
+                                Minute defines the minute when the policy MUST be granted.
+                                You can also provide a range by filling the minuteEnd field.
+                                In this case, permission is granted only if current minute is between or equal to the two values you provided.
+                              example: "1"
+                              type: string
+                            minuteEnd:
+                              example: "2"
+                              type: string
+                            month:
+                              description: |-
+                                Month defines the month which the policy MUST be granted.
+                                You can also provide a range by filling the monthEnd.
+                                In this case, permission is granted only if current month is between or equal to the two values you provided.
+                              example: "1"
+                              type: string
+                            monthEnd:
+                              example: "2"
+                              type: string
+                            notBefore:
+                              description: |-
+                                NotBefore defines the time before which the policy MUST NOT be granted.
+                                Only granted if current date/time is after or equal to this value.
+                              example: "2024-03-03 00:00:00"
+                              type: string
+                            notOnOrAfter:
+                              description: |-
+                                NotOnOrAfter defines the time after which the policy MUST NOT be granted.
+                                Only granted if current date/time is before or equal to this value.
+                              example: "2024-04-04 00:00:00"
+                              type: string
+                          required:
+                          - notBefore
+                          - notOnOrAfter
+                          type: object
+                        type:
+                          description: Type is a policy type.
+                          enum:
+                          - aggregate
+                          - client
+                          - group
+                          - role
+                          - time
+                          - user
+                          type: string
+                        userPolicy:
+                          description: UserPolicy is a user policy settings.
+                          properties:
+                            users:
+                              description: Users is a list of usernames. Specifies
+                                which user(s) are allowed by this policy.
+                              example:
+                              - users1
+                              - users2
+                              items:
+                                type: string
+                              type: array
+                          required:
+                          - users
+                          type: object
+                      required:
+                      - name
+                      - type
+                      type: object
+                    type: array
+                  resources:
+                    items:
+                      properties:
+                        attributes:
+                          additionalProperties:
+                            items:
+                              type: string
+                            type: array
+                          description: Attributes is a map of resource attributes.
+                          nullable: true
+                          type: object
+                        displayName:
+                          description: DisplayName for Identity Providers.
+                          type: string
+                        iconUri:
+                          description: IconURI pointing to an icon.
+                          type: string
+                        name:
+                          description: Name is unique resource name.
+                          type: string
+                        ownerManagedAccess:
+                          description: OwnerManagedAccess if enabled, the access to
+                            this resource can be managed by the resource owner.
+                          type: boolean
+                        scopes:
+                          description: |-
+                            Scopes requested or assigned in advance to the client to determine whether the policy is applied to this client.
+                            Condition is evaluated during OpenID Connect authorization request and/or token request.
+                          items:
+                            type: string
+                          nullable: true
+                          type: array
+                        type:
+                          description: Type of this resource. It can be used to group
+                            different resource instances with the same type.
+                          type: string
+                        uris:
+                          description: URIs which are protected by resource.
+                          items:
+                            type: string
+                          nullable: true
+                          type: array
+                      required:
+                      - displayName
+                      - name
+                      type: object
+                    type: array
+                  scopes:
+                    items:
+                      type: string
+                    type: array
+                type: object
+              authorizationServicesEnabled:
+                description: AuthorizationServicesEnabled enable/disable fine-grained
+                  authorization support for a client.
+                type: boolean
+              bearerOnly:
+                description: BearerOnly is a flag to enable bearer-only.
+                type: boolean
+              clientAuthenticatorType:
+                default: client-secret
+                description: ClientAuthenticatorType is a client authenticator type.
+                type: string
+              clientId:
+                description: ClientId is a unique keycloak client ID referenced in
+                  URI and tokens.
+                type: string
+              clientRoles:
+                description: |-
+                  ClientRoles is a list of client roles names assigned to client.
+                  Deprecated: Use ClientRolesV2 instead.
+                items:
+                  type: string
+                nullable: true
+                type: array
+              clientRolesV2:
+                description: ClientRolesV2 is a list of client roles assigned to client.
+                items:
+                  properties:
+                    associatedClientRoles:
+                      description: |-
+                        AssociatedClientRoles is a list of client roles names associated with the current role.
+                        These roles won't be created automatically, user should specify them separately in clientRolesV2.
+                      items:
+                        type: string
+                      nullable: true
+                      type: array
+                    description:
+                      description: Description is a client role description.
+                      type: string
+                    name:
+                      description: Name is a client role name.
+                      type: string
+                  required:
+                  - name
+                  type: object
+                nullable: true
+                type: array
+              consentRequired:
+                description: ConsentRequired is a flag to enable consent.
+                type: boolean
+              defaultClientScopes:
+                description: DefaultClientScopes is a list of default client scopes
+                  assigned to client.
+                items:
+                  type: string
+                nullable: true
+                type: array
+              description:
+                description: Description is a client description.
+                type: string
+              directAccess:
+                description: DirectAccess is a flag to set client as direct access.
+                type: boolean
+              enabled:
+                default: true
+                description: Enabled is a flag to enable client.
+                type: boolean
+              frontChannelLogout:
+                description: FrontChannelLogout is a flag to enable front channel
+                  logout.
+                type: boolean
+              fullScopeAllowed:
+                default: true
+                description: FullScopeAllowed is a flag to enable full scope.
+                type: boolean
+              homeUrl:
+                description: HomeUrl is a client home url.
+                type: string
+              implicitFlowEnabled:
+                description: ImplicitFlowEnabled is a flag to enable support for OpenID
+                  Connect redirect based authentication without authorization code.
+                type: boolean
+              name:
+                description: Name is a client name.
+                type: string
+              optionalClientScopes:
+                description: OptionalClientScopes is a list of optional client scopes
+                  assigned to client.
+                items:
+                  type: string
+                nullable: true
+                type: array
+              permission:
+                description: Permission is a client permissions configuration
+                nullable: true
+                properties:
+                  scopePermissions:
+                    description: ScopePermissions mapping of scope and the policies
+                      attached
+                    items:
+                      properties:
+                        name:
+                          type: string
+                        policies:
+                          items:
+                            type: string
+                          type: array
+                      required:
+                      - name
+                      type: object
+                    type: array
+                type: object
+              protocol:
+                description: Protocol is a client protocol.
+                nullable: true
+                type: string
+              protocolMappers:
+                description: ProtocolMappers is a list of protocol mappers assigned
+                  to client.
+                items:
+                  properties:
+                    config:
+                      additionalProperties:
+                        type: string
+                      description: Config is a map of protocol mapper configuration.
+                      nullable: true
+                      type: object
+                    name:
+                      description: Name is a protocol mapper name.
+                      type: string
+                    protocol:
+                      description: Protocol is a protocol name.
+                      type: string
+                    protocolMapper:
+                      description: ProtocolMapper is a protocol mapper name.
+                      type: string
+                  type: object
+                nullable: true
+                type: array
+              public:
+                description: Public is a flag to set client as public.
+                type: boolean
+              realmRef:
+                description: RealmRef is reference to Realm custom resource.
+                properties:
+                  kind:
+                    default: KeycloakRealm
+                    description: Kind specifies the kind of the Keycloak resource.
+                    enum:
+                    - KeycloakRealm
+                    - ClusterKeycloakRealm
+                    type: string
+                  name:
+                    description: Name specifies the name of the Keycloak resource.
+                    type: string
+                required:
+                - name
+                type: object
+              realmRoles:
+                description: RealmRoles is a list of realm roles assigned to client.
+                items:
+                  properties:
+                    composite:
+                      description: Composite is a realm composite role name.
+                      type: string
+                    name:
+                      description: Name is a realm role name.
+                      type: string
+                  required:
+                  - composite
+                  type: object
+                nullable: true
+                type: array
+              reconciliationStrategy:
+                description: ReconciliationStrategy is a strategy to reconcile client.
+                enum:
+                - full
+                - addOnly
+                type: string
+              redirectUris:
+                description: |-
+                  RedirectUris is a list of valid URI pattern a browser can redirect to after a successful login.
+                  Simple wildcards are allowed such as 'https://example.com/*'.
+                  Relative path can be specified too, such as /my/relative/path/*. Relative paths are relative to the client root URL.
+                  If not specified, spec.webUrl + "/*" will be used.
+                example:
+                - https://example.com/*
+                - /my/relative/path/*
+                items:
+                  type: string
+                nullable: true
+                type: array
+              secret:
+                description: |-
+                  Secret is kubernetes secret name where the client's secret will be stored.
+                  Secret should have the following format: $secretName:secretKey.
+                  If not specified, a client secret will be generated and stored in a secret with the name keycloak-client-{metadata.name}-secret.
+                  If keycloak client is public, secret property will be ignored.
+                example: $keycloak-secret:client_secret
+                type: string
+              serviceAccount:
+                description: ServiceAccount is a service account configuration.
+                nullable: true
+                properties:
+                  attributes:
+                    additionalProperties:
+                      type: string
+                    description: |-
+                      Attributes is a map of service account attributes.
+                      Deprecated: Use AttributesV2 instead.
+                    nullable: true
+                    type: object
+                  attributesV2:
+                    additionalProperties:
+                      items:
+                        type: string
+                      type: array
+                    description: |-
+                      AttributesV2 is a map of service account attributes.
+                      Each attribute can have multiple values.
+                    nullable: true
+                    type: object
+                  clientRoles:
+                    description: ClientRoles is a list of client roles assigned to
+                      service account.
+                    items:
+                      properties:
+                        clientId:
+                          description: ClientID is a client ID.
+                          type: string
+                        roles:
+                          description: Roles is a list of client roles names assigned
+                            to user.
+                          items:
+                            type: string
+                          nullable: true
+                          type: array
+                      required:
+                      - clientId
+                      type: object
+                    nullable: true
+                    type: array
+                  enabled:
+                    description: Enabled is a flag to enable service account.
+                    type: boolean
+                  groups:
+                    description: Groups is a list of groups assigned to service account
+                    items:
+                      type: string
+                    nullable: true
+                    type: array
+                  realmRoles:
+                    description: RealmRoles is a list of realm roles assigned to service
+                      account.
+                    items:
+                      type: string
+                    nullable: true
+                    type: array
+                type: object
+              standardFlowEnabled:
+                default: true
+                description: StandardFlowEnabled is a flag to enable standard flow.
+                type: boolean
+              surrogateAuthRequired:
+                description: SurrogateAuthRequired is a flag to enable surrogate auth.
+                type: boolean
+              webOrigins:
+                description: |-
+                  WebOrigins is a list of allowed CORS origins.
+                  To permit all origins of Valid Redirect URIs, add '+'. This does not include the '*' wildcard though.
+                  To permit all origins, explicitly add '*'.
+                  If not specified, the value from `WebUrl` is used
+                example:
+                - https://example.com/*
+                items:
+                  type: string
+                nullable: true
+                type: array
+              webUrl:
+                description: WebUrl is a client web url.
+                type: string
+            required:
+            - clientId
+            - realmRef
+            type: object
+          status:
+            description: KeycloakClientStatus defines the observed state of KeycloakClient.
+            properties:
+              clientId:
+                type: string
+              conditions:
+                description: Conditions represent the latest available observations
+                  of an object's state.
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                nullable: true
+                type: array
+              failureCount:
+                format: int64
+                type: integer
+              value:
+                type: string
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

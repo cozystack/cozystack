@@ -1,0 +1,114 @@
+##
+## @section Common parameters
+##
+
+## @typedef {struct} Resources - Explicit CPU and memory configuration for each OpenBAO replica.
+## @field {quantity} [cpu] - CPU available to each replica.
+## @field {quantity} [memory] - Memory (RAM) available to each replica.
+
+## @enum {string} ResourcesPreset - Default sizing preset.
+## @value t1.nano
+## @value t1.micro
+## @value t1.small
+## @value t1.medium
+## @value t1.large
+## @value t1.xlarge
+## @value t1.2xlarge
+## @value t1.4xlarge
+## @value c1.nano
+## @value c1.micro
+## @value c1.small
+## @value c1.medium
+## @value c1.large
+## @value c1.xlarge
+## @value c1.2xlarge
+## @value c1.4xlarge
+## @value s1.nano
+## @value s1.micro
+## @value s1.small
+## @value s1.medium
+## @value s1.large
+## @value s1.xlarge
+## @value s1.2xlarge
+## @value s1.4xlarge
+## @value u1.nano
+## @value u1.micro
+## @value u1.small
+## @value u1.medium
+## @value u1.large
+## @value u1.xlarge
+## @value u1.2xlarge
+## @value u1.4xlarge
+## @value m1.nano
+## @value m1.micro
+## @value m1.small
+## @value m1.medium
+## @value m1.large
+## @value m1.xlarge
+## @value m1.2xlarge
+## @value m1.4xlarge
+## @value nano
+## @value micro
+## @value small
+## @value medium
+## @value large
+## @value xlarge
+## @value 2xlarge
+
+## @param {int} replicas - Number of OpenBAO replicas. HA with Raft is automatically enabled when replicas > 1. Switching between standalone (file storage) and HA (Raft storage) modes requires data migration.
+replicas: 1
+
+## @param {Resources} [resources] - Explicit CPU and memory configuration for each OpenBAO replica. When omitted, the preset defined in `resourcesPreset` is applied.
+resources: {}
+
+## @param {ResourcesPreset} resourcesPreset="t1.small" - Default sizing preset used when `resources` is omitted.
+resourcesPreset: "t1.small"
+
+## @param {quantity} size - Persistent Volume Claim size for data storage.
+size: 10Gi
+
+## @param {string} storageClass - StorageClass used to store the data.
+## @immutable
+## @x-cozystack-options {source: storageclass}
+storageClass: ""
+
+## @param {bool} external - Enable external access from outside the cluster.
+external: false
+
+##
+## @section Application-specific parameters
+##
+
+## @param {bool} ui - Enable the OpenBAO web UI.
+ui: true
+
+##
+## @section Seal
+##
+
+## @enum {string} SealType - How the OpenBAO barrier is unsealed.
+## @value shamir - Shamir key shares. An operator has to unseal every replica after each pod restart.
+## @value static - OpenBAO `seal "static"`. The barrier unseals itself from a 32-byte key read from a Secret.
+
+## @typedef {struct} Seal - Seal configuration. With `static`, the key is read from a Secret that a cluster administrator creates in the tenant namespace. The chart never generates or rotates it.
+## @field {SealType} type - Seal type. `shamir` keeps the current behaviour, `static` enables auto-unseal from `secretName`.
+## @field {string} secretName - Existing Secret in the tenant namespace whose key `key` holds the base64 text of 32 random bytes (for example `openssl rand -base64 32`). A cluster administrator creates it, because tenant roles cannot create Secrets. Lowercase alphanumerics and hyphens, at most 52 characters, because the pod volume is named `userconfig-<name>` and a volume name is a DNS label. Required when `type` is `static`.
+## @maxLength 52
+## @pattern ^([a-z0-9]([-a-z0-9]*[a-z0-9])?)?$
+## @field {string} keyId - Permanent identifier of the current key. OpenBAO stores it with the data the key wraps and picks the key by it, so change it whenever the key material changes. Lowercase alphanumerics, `-`, `.` and `_`, starting and ending with an alphanumeric, because the upstream chart evaluates the server config as a template and rewrites upper case placeholders such as `HOSTNAME` in it. Required when `type` is `static`.
+## @pattern ^([a-z0-9]([-a-z0-9._]*[a-z0-9])?)?$
+## @field {string} [previousSecretName] - Secret holding the previous key during an n-1 key rotation, with the same name constraints as `secretName`. Keep it until the pods have been replaced and the active node has logged `upgrading stored keys`, see the README.
+## @maxLength 52
+## @pattern ^([a-z0-9]([-a-z0-9]*[a-z0-9])?)?$
+## @field {string} [previousKeyId] - Identifier of the previous key, with the same character constraints as `keyId`. Required when `previousSecretName` is set.
+## @pattern ^([a-z0-9]([-a-z0-9._]*[a-z0-9])?)?$
+## @field {bool} [allowMigration] - Acknowledge a seal migration. The chart refuses to change `type` on an existing instance unless this is `true`. Set it only while running `bao operator unseal -migrate`, then remove it.
+
+## @param {Seal} seal - Seal configuration. The default is Shamir key shares. Set `type: static` for auto-unseal.
+seal:
+  type: shamir
+  secretName: ""
+  keyId: ""
+  previousSecretName: ""
+  previousKeyId: ""
+  allowMigration: false

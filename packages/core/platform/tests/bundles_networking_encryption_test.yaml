@@ -1,0 +1,137 @@
+suite: networking.encryption bundle wiring
+templates:
+  - templates/bundles/system.yaml
+release:
+  name: cozystack
+  namespace: cozy-system
+tests:
+  - it: leaves KubeOVN overlay IPsec unset on the default isp-full datapath when encryption is off
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+      networking:
+        encryption:
+          enabled: false
+    documentSelector:
+      path: metadata.name
+      value: cozystack.networking
+    asserts:
+      - equal:
+          path: spec.variant
+          value: kubeovn-cilium
+      - notExists:
+          path: spec.components.kubeovn.values.kube-ovn.func.ENABLE_OVN_IPSEC
+
+  - it: leaves KubeOVN overlay IPsec unset on isp-full when networking.encryption is absent (backward compatible, no nil-pointer)
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+    documentSelector:
+      path: metadata.name
+      value: cozystack.networking
+    asserts:
+      - equal:
+          path: spec.variant
+          value: kubeovn-cilium
+      - notExists:
+          path: spec.components.kubeovn.values.kube-ovn.func.ENABLE_OVN_IPSEC
+
+  - it: enables KubeOVN Geneve-overlay IPsec on the default isp-full datapath when encryption is on
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+      networking:
+        encryption:
+          enabled: true
+    documentSelector:
+      path: metadata.name
+      value: cozystack.networking
+    asserts:
+      - equal:
+          path: spec.variant
+          value: kubeovn-cilium
+      - equal:
+          path: spec.components.kubeovn.values.kube-ovn.func.ENABLE_OVN_IPSEC
+          value: true
+
+  - it: enables KubeOVN overlay IPsec on the generic kubeovn-cilium-generic datapath when encryption is on
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full-generic
+      networking:
+        encryption:
+          enabled: true
+    documentSelector:
+      path: metadata.name
+      value: cozystack.networking
+    asserts:
+      - equal:
+          path: spec.variant
+          value: kubeovn-cilium-generic
+      - equal:
+          path: spec.components.kubeovn.values.kube-ovn.func.ENABLE_OVN_IPSEC
+          value: true
+
+  - it: leaves the generic datapath IPsec unset when encryption is off
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full-generic
+      networking:
+        encryption:
+          enabled: false
+    documentSelector:
+      path: metadata.name
+      value: cozystack.networking
+    asserts:
+      - equal:
+          path: spec.variant
+          value: kubeovn-cilium-generic
+      - notExists:
+          path: spec.components.kubeovn.values.kube-ovn.func.ENABLE_OVN_IPSEC
+
+  - it: keeps the existing kube-ovn ipv4 component overrides alongside the IPsec toggle (deep merge, not replace)
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+      networking:
+        encryption:
+          enabled: true
+    documentSelector:
+      path: metadata.name
+      value: cozystack.networking
+    asserts:
+      - equal:
+          path: spec.components.kubeovn.values.kube-ovn.ipv4.POD_CIDR
+          value: 10.244.0.0/16
+      - equal:
+          path: spec.components.kubeovn.values.kube-ovn.func.ENABLE_OVN_IPSEC
+          value: true
+
+  - it: renders without a nil-pointer error when networking is set to null and encryption is therefore unreachable
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+      networking: null
+    documentSelector:
+      path: metadata.name
+      value: cozystack.networking
+    asserts:
+      - equal:
+          path: spec.variant
+          value: kubeovn-cilium
+      - notExists:
+          path: spec.components

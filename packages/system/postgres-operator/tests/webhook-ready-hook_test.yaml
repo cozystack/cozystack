@@ -1,0 +1,328 @@
+suite: cnpg webhook post-install readiness gate
+
+templates:
+  - templates/webhook-ready-hook.yaml
+  - charts/cloudnative-pg/templates/service.yaml
+
+release:
+  name: postgres-operator
+  namespace: cozy-postgres-operator
+
+tests:
+  - it: renders four hook objects (SA + Role + RoleBinding + Job)
+    template: templates/webhook-ready-hook.yaml
+    asserts:
+      - hasDocuments:
+          count: 4
+
+  - it: every rendered object carries post-install and post-upgrade hook annotations
+    template: templates/webhook-ready-hook.yaml
+    asserts:
+      - documentIndex: 0
+        equal:
+          path: metadata.annotations["helm.sh/hook"]
+          value: post-install,post-upgrade
+      - documentIndex: 1
+        equal:
+          path: metadata.annotations["helm.sh/hook"]
+          value: post-install,post-upgrade
+      - documentIndex: 2
+        equal:
+          path: metadata.annotations["helm.sh/hook"]
+          value: post-install,post-upgrade
+      - documentIndex: 3
+        equal:
+          path: metadata.annotations["helm.sh/hook"]
+          value: post-install,post-upgrade
+
+  - it: RBAC is created before the Job (hook-weight ordering)
+    template: templates/webhook-ready-hook.yaml
+    asserts:
+      - documentIndex: 0
+        equal:
+          path: kind
+          value: ServiceAccount
+      - documentIndex: 0
+        equal:
+          path: metadata.annotations["helm.sh/hook-weight"]
+          value: "0"
+      - documentIndex: 1
+        equal:
+          path: kind
+          value: Role
+      - documentIndex: 1
+        equal:
+          path: metadata.annotations["helm.sh/hook-weight"]
+          value: "0"
+      - documentIndex: 2
+        equal:
+          path: kind
+          value: RoleBinding
+      - documentIndex: 2
+        equal:
+          path: metadata.annotations["helm.sh/hook-weight"]
+          value: "0"
+      - documentIndex: 3
+        equal:
+          path: kind
+          value: Job
+      - documentIndex: 3
+        equal:
+          path: metadata.annotations["helm.sh/hook-weight"]
+          value: "10"
+
+  - it: RBAC resourceName matches the exact proxy URL segment the Job probes
+    template: templates/webhook-ready-hook.yaml
+    asserts:
+      - documentIndex: 1
+        equal:
+          path: rules[0].resources[0]
+          value: services/proxy
+      - documentIndex: 1
+        equal:
+          path: rules[0].resourceNames[0]
+          value: https:cnpg-webhook-service:webhook-server
+      - documentIndex: 3
+        matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: "/api/v1/namespaces/\\$\\{ns\\}/services/https:cnpg-webhook-service:webhook-server/proxy/readyz"
+
+  - it: hardcoded service name in the hook matches the vendored cnpg subchart Service (drift guard for make update)
+    template: charts/cloudnative-pg/templates/service.yaml
+    asserts:
+      - equal:
+          path: metadata.name
+          value: cnpg-webhook-service
+      - equal:
+          path: spec.ports[0].name
+          value: webhook-server
+
+  - it: Job calls kubectl get --raw on the proxy path
+    template: templates/webhook-ready-hook.yaml
+    asserts:
+      - documentIndex: 3
+        matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: "kubectl get --raw"
+
+  - it: Job image is digest-pinned when webhookReady.image.digest is set
+    template: templates/webhook-ready-hook.yaml
+    set:
+      webhookReady:
+        image:
+          repository: docker.io/clastix/kubectl
+          tag: v1.32
+          digest: sha256:b9ef7d8dbe65bcc81a46c09b8dc7543103055021c4f43287bf59e92a8f4fe05c
+    asserts:
+      - documentIndex: 3
+        equal:
+          path: spec.template.spec.containers[0].image
+          value: docker.io/clastix/kubectl:v1.32@sha256:b9ef7d8dbe65bcc81a46c09b8dc7543103055021c4f43287bf59e92a8f4fe05c
+
+  - it: Job image falls back to tag-only when digest is not configured
+    template: templates/webhook-ready-hook.yaml
+    set:
+      webhookReady:
+        image:
+          repository: docker.io/clastix/kubectl
+          tag: v1.32
+          digest: ""
+    asserts:
+      - documentIndex: 3
+        equal:
+          path: spec.template.spec.containers[0].image
+          value: docker.io/clastix/kubectl:v1.32
+
+  - it: backoffLimit defaults to 2 so transient pod-level failures retry instead of killing the HelmRelease
+    template: templates/webhook-ready-hook.yaml
+    asserts:
+      - documentIndex: 3
+        equal:
+          path: spec.backoffLimit
+          value: 2
+
+  - it: backoffLimit is overridable
+    template: templates/webhook-ready-hook.yaml
+    set:
+      webhookReady:
+        backoffLimit: 5
+    asserts:
+      - documentIndex: 3
+        equal:
+          path: spec.backoffLimit
+          value: 5
+
+  - it: chart render fails when webhookReady.image.repository is empty
+    template: templates/webhook-ready-hook.yaml
+    set:
+      webhookReady:
+        image:
+          repository: ""
+          tag: v1.32
+    asserts:
+      - failedTemplate:
+          errorMessage: "webhookReady.image.repository must be set to the container image providing kubectl for the post-install readiness Job"
+
+  - it: chart render fails when webhookReady.image.tag is empty
+    template: templates/webhook-ready-hook.yaml
+    set:
+      webhookReady:
+        image:
+          repository: docker.io/clastix/kubectl
+          tag: ""
+    asserts:
+      - failedTemplate:
+          errorMessage: "webhookReady.image.tag must be set for the post-install readiness Job"
+
+  - it: retry loop bounds default when blanked so a wiped override still produces a working Job
+    template: templates/webhook-ready-hook.yaml
+    set:
+      webhookReady:
+        image:
+          repository: docker.io/clastix/kubectl
+          tag: v1.32
+        maxAttempts: null
+        sleepSeconds: null
+    asserts:
+      - documentIndex: 3
+        matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: "max_attempts=60"
+      - documentIndex: 3
+        matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: "sleep_seconds=2"
+
+  - it: Job pod runs non-root with seccomp RuntimeDefault for restricted-PSA clusters
+    template: templates/webhook-ready-hook.yaml
+    asserts:
+      - documentIndex: 3
+        equal:
+          path: spec.template.spec.securityContext.runAsNonRoot
+          value: true
+      - documentIndex: 3
+        equal:
+          path: spec.template.spec.securityContext.seccompProfile.type
+          value: RuntimeDefault
+
+  - it: wait container declares resource requests and limits for predictable scheduling
+    template: templates/webhook-ready-hook.yaml
+    asserts:
+      - documentIndex: 3
+        equal:
+          path: spec.template.spec.containers[0].resources.requests.cpu
+          value: 10m
+      - documentIndex: 3
+        equal:
+          path: spec.template.spec.containers[0].resources.requests.memory
+          value: 32Mi
+      - documentIndex: 3
+        equal:
+          path: spec.template.spec.containers[0].resources.limits.cpu
+          value: 100m
+      - documentIndex: 3
+        equal:
+          path: spec.template.spec.containers[0].resources.limits.memory
+          value: 64Mi
+
+  - it: Job container drops all capabilities and runs read-only rootfs
+    template: templates/webhook-ready-hook.yaml
+    asserts:
+      - documentIndex: 3
+        equal:
+          path: spec.template.spec.containers[0].securityContext.allowPrivilegeEscalation
+          value: false
+      - documentIndex: 3
+        equal:
+          path: spec.template.spec.containers[0].securityContext.readOnlyRootFilesystem
+          value: true
+      - documentIndex: 3
+        equal:
+          path: spec.template.spec.containers[0].securityContext.capabilities.drop[0]
+          value: ALL
+
+  - it: imagePullPolicy is IfNotPresent when digest-pinned, Always when tag-only
+    template: templates/webhook-ready-hook.yaml
+    set:
+      webhookReady:
+        image:
+          repository: docker.io/clastix/kubectl
+          tag: v1.32
+          digest: sha256:b9ef7d8dbe65bcc81a46c09b8dc7543103055021c4f43287bf59e92a8f4fe05c
+    asserts:
+      - documentIndex: 3
+        equal:
+          path: spec.template.spec.containers[0].imagePullPolicy
+          value: IfNotPresent
+
+  - it: imagePullPolicy is Always when no digest is configured
+    template: templates/webhook-ready-hook.yaml
+    set:
+      webhookReady:
+        image:
+          repository: docker.io/clastix/kubectl
+          tag: v1.32
+          digest: ""
+    asserts:
+      - documentIndex: 3
+        equal:
+          path: spec.template.spec.containers[0].imagePullPolicy
+          value: Always
+
+  - it: retry loop captures and surfaces the last kubectl error message on timeout
+    template: templates/webhook-ready-hook.yaml
+    asserts:
+      - documentIndex: 3
+        matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'last_err=\$\(kubectl get --raw'
+      - documentIndex: 3
+        matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'last error: \$\{last_err\}'
+
+  - it: retry loop error message stays in sync when maxAttempts is bumped
+    template: templates/webhook-ready-hook.yaml
+    set:
+      webhookReady:
+        image:
+          repository: docker.io/clastix/kubectl
+          tag: v1.32
+        maxAttempts: 90
+        sleepSeconds: 3
+    asserts:
+      - documentIndex: 3
+        matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: "max_attempts=90"
+      - documentIndex: 3
+        matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: "sleep_seconds=3"
+      - documentIndex: 3
+        matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'after \$\{max_attempts\} attempts'
+
+  - it: activeDeadlineSeconds scales with retry bounds so an override raise does not silently cut
+    template: templates/webhook-ready-hook.yaml
+    set:
+      webhookReady:
+        image:
+          repository: docker.io/clastix/kubectl
+          tag: v1.32
+        maxAttempts: 180
+        sleepSeconds: 3
+    asserts:
+      - documentIndex: 3
+        equal:
+          path: spec.activeDeadlineSeconds
+          value: 600
+
+  - it: activeDeadlineSeconds defaults include 60s slack over the default retry window
+    template: templates/webhook-ready-hook.yaml
+    asserts:
+      - documentIndex: 3
+        equal:
+          path: spec.activeDeadlineSeconds
+          value: 180

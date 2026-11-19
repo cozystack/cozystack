@@ -1,0 +1,28 @@
+diff --git a/apps/ingress-nginx/charts/ingress-nginx/templates/controller-daemonset.yaml b/apps/ingress-nginx/charts/ingress-nginx/templates/controller-daemonset.yaml
+index 82abe75..148d930 100644
+--- a/apps/ingress-nginx/charts/ingress-nginx/templates/controller-daemonset.yaml
++++ b/apps/ingress-nginx/charts/ingress-nginx/templates/controller-daemonset.yaml
+@@ -121,6 +121,9 @@ spec:
+             - name: {{ .Values.controller.metrics.portName }}
+               containerPort: {{ .Values.controller.metrics.port }}
+               protocol: TCP
++            - name: metrics2
++              containerPort: 9091
++              protocol: TCP
+           {{- end }}
+           {{- if .Values.controller.admissionWebhooks.enabled }}
+             - name: webhook
+diff --git a/apps/ingress-nginx/charts/ingress-nginx/templates/controller-deployment.yaml b/apps/ingress-nginx/charts/ingress-nginx/templates/controller-deployment.yaml
+index 7fe8804..9fe0142 100644
+--- a/apps/ingress-nginx/charts/ingress-nginx/templates/controller-deployment.yaml
++++ b/apps/ingress-nginx/charts/ingress-nginx/templates/controller-deployment.yaml
+@@ -125,6 +125,9 @@ spec:
+             - name: {{ .Values.controller.metrics.portName }}
+               containerPort: {{ .Values.controller.metrics.port }}
+               protocol: TCP
++            - name: metrics2
++              containerPort: 9091
++              protocol: TCP
+           {{- end }}
+           {{- if .Values.controller.admissionWebhooks.enabled }}
+             - name: webhook

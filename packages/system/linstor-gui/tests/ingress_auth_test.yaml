@@ -1,0 +1,347 @@
+suite: linstor-gui ingress + keycloak auth
+templates:
+  - templates/ingress.yaml
+  - templates/gatekeeper.yaml
+  - templates/gatekeeper-svc.yaml
+  - templates/gatekeeper-sa.yaml
+  - templates/keycloakclient.yaml
+
+release:
+  name: linstor-gui
+  namespace: cozy-linstor
+
+tests:
+  - it: does not render an Ingress when OIDC is disabled cluster-wide
+    template: templates/ingress.yaml
+    set:
+      _cluster:
+        root-host: example.org
+        oidc-enabled: "false"
+        expose-services: "linstor-gui"
+        expose-ingress: "tenant-root"
+        issuer-name: "letsencrypt-prod"
+        solver: "http01"
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: does not render an Ingress when linstor-gui is not in expose-services
+    template: templates/ingress.yaml
+    set:
+      _cluster:
+        root-host: example.org
+        oidc-enabled: "true"
+        expose-services: "dashboard,api"
+        expose-ingress: "tenant-root"
+        issuer-name: "letsencrypt-prod"
+        solver: "http01"
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: renders an Ingress to the gatekeeper service when exposed and OIDC enabled
+    template: templates/ingress.yaml
+    set:
+      _cluster:
+        root-host: example.org
+        oidc-enabled: "true"
+        expose-services: "dashboard,linstor-gui"
+        expose-ingress: "tenant-root"
+        issuer-name: "letsencrypt-prod"
+        solver: "http01"
+    asserts:
+      - isKind:
+          of: Ingress
+      - equal:
+          path: spec.ingressClassName
+          value: tenant-root
+      - equal:
+          path: spec.rules[0].host
+          value: linstor-gui.example.org
+      - equal:
+          path: spec.rules[0].http.paths[0].backend.service.name
+          value: linstor-gui-gatekeeper
+      - equal:
+          path: spec.rules[0].http.paths[0].backend.service.port.number
+          value: 8000
+      - equal:
+          path: metadata.annotations["cert-manager.io/cluster-issuer"]
+          value: letsencrypt-prod
+
+  - it: does not render the gatekeeper Deployment when OIDC is disabled
+    template: templates/gatekeeper.yaml
+    set:
+      _cluster:
+        root-host: example.org
+        oidc-enabled: "false"
+        expose-services: "linstor-gui"
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  # authentication.oidc.enabled defaults to false while keycloakInternalUrl now
+  # defaults to the in-cluster Service, so THIS pair — OIDC off, internal URL
+  # set — is what most clusters actually render. A non-empty internal URL must
+  # not conjure a gatekeeper on a cluster that never asked for OIDC.
+  - it: a set keycloak-internal-url does not render a gatekeeper while OIDC is disabled
+    template: templates/gatekeeper.yaml
+    set:
+      _cluster:
+        root-host: example.org
+        oidc-enabled: "false"
+        keycloak-internal-url: http://keycloak-http.cozy-keycloak.svc:8080/realms/cozy
+        expose-services: "linstor-gui"
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: renders an oauth2-proxy Deployment pointing at the cluster Keycloak realm
+    template: templates/gatekeeper.yaml
+    set:
+      _cluster:
+        root-host: example.org
+        oidc-enabled: "true"
+        oidc-insecure-skip-verify: "false"
+        keycloak-internal-url: ""
+        expose-services: "linstor-gui"
+    asserts:
+      - isKind:
+          of: Deployment
+      - equal:
+          path: metadata.name
+          value: linstor-gui-gatekeeper
+      - matchRegex:
+          path: spec.template.spec.containers[0].image
+          pattern: "^quay\\.io/oauth2-proxy/oauth2-proxy:"
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --provider=oidc
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --upstream=http://linstor-gui.cozy-linstor.svc:80
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --redirect-url=https://linstor-gui.example.org/oauth2/callback
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --oidc-issuer-url=https://keycloak.example.org/realms/cozy
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --scope=openid email profile groups
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --allowed-group=cozystack-cluster-admin
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: OAUTH2_PROXY_CLIENT_ID
+            value: linstor-gui
+      - equal:
+          path: spec.template.spec.containers[0].securityContext.readOnlyRootFilesystem
+          value: true
+
+  # keycloak-internal-url arrives on the _cluster channel from
+  # authentication.oidc.keycloakInternalUrl in packages/core/platform, whose
+  # default is the in-cluster Keycloak Service. A stock cluster therefore
+  # renders --skip-oidc-discovery with the backend calls (token, jwks,
+  # userinfo, logout) aimed at the Service, so the proxy does not need the
+  # external keycloak.<host> ingress to be serving before it can start. The
+  # browser-facing URLs (redirect, login) must stay on the external host.
+  - it: default in-cluster keycloak URL skips discovery and keeps browser URLs external
+    template: templates/gatekeeper.yaml
+    set:
+      _cluster:
+        root-host: example.org
+        oidc-enabled: "true"
+        keycloak-internal-url: http://keycloak-http.cozy-keycloak.svc:8080/realms/cozy
+        expose-services: "linstor-gui"
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --skip-oidc-discovery
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --redeem-url=http://keycloak-http.cozy-keycloak.svc:8080/realms/cozy/protocol/openid-connect/token
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --oidc-jwks-url=http://keycloak-http.cozy-keycloak.svc:8080/realms/cozy/protocol/openid-connect/certs
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --validate-url=http://keycloak-http.cozy-keycloak.svc:8080/realms/cozy/protocol/openid-connect/userinfo
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --backend-logout-url=http://keycloak-http.cozy-keycloak.svc:8080/realms/cozy/protocol/openid-connect/logout?id_token_hint={id_token}
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --redirect-url=https://linstor-gui.example.org/oauth2/callback
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --login-url=https://keycloak.example.org/realms/cozy/protocol/openid-connect/auth
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --oidc-issuer-url=https://keycloak.example.org/realms/cozy
+
+  - it: an explicit keycloak-internal-url override wins over the default
+    template: templates/gatekeeper.yaml
+    set:
+      _cluster:
+        root-host: example.org
+        oidc-enabled: "true"
+        keycloak-internal-url: http://keycloak.example.test:8080/realms/other
+        expose-services: "linstor-gui"
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --skip-oidc-discovery
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --redeem-url=http://keycloak.example.test:8080/realms/other/protocol/openid-connect/token
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --oidc-jwks-url=http://keycloak.example.test:8080/realms/other/protocol/openid-connect/certs
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --validate-url=http://keycloak.example.test:8080/realms/other/protocol/openid-connect/userinfo
+      - notContains:
+          path: spec.template.spec.containers[0].args
+          content: --redeem-url=http://keycloak-http.cozy-keycloak.svc:8080/realms/cozy/protocol/openid-connect/token
+
+  # The escape hatch: setting keycloakInternalUrl back to "" must keep
+  # rendering the historical shape — full OIDC discovery against the external
+  # issuer, no backend URLs pinned.
+  #
+  # --skip-oidc-discovery carries the whole meaning here. All five in-cluster
+  # args live inside one {{- if $keycloakInternalUrl }} block in the template,
+  # so its absence structurally guarantees the absence of the other four; the
+  # notContains assertions below then pin the regression that actually threatens
+  # this branch — the in-cluster default leaking back in. Asserting an arg count
+  # instead would couple this OIDC test to every unrelated gatekeeper flag.
+  - it: empty keycloak-internal-url restores external OIDC discovery
+    template: templates/gatekeeper.yaml
+    set:
+      _cluster:
+        root-host: example.org
+        oidc-enabled: "true"
+        keycloak-internal-url: ""
+        expose-services: "linstor-gui"
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].args
+          content: --skip-oidc-discovery
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --oidc-issuer-url=https://keycloak.example.org/realms/cozy
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --backend-logout-url=https://keycloak.example.org/realms/cozy/protocol/openid-connect/logout?id_token_hint={id_token}
+      - notContains:
+          path: spec.template.spec.containers[0].args
+          content: --redeem-url=http://keycloak-http.cozy-keycloak.svc:8080/realms/cozy/protocol/openid-connect/token
+      - notContains:
+          path: spec.template.spec.containers[0].args
+          content: --oidc-jwks-url=http://keycloak-http.cozy-keycloak.svc:8080/realms/cozy/protocol/openid-connect/certs
+      - notContains:
+          path: spec.template.spec.containers[0].args
+          content: --validate-url=http://keycloak-http.cozy-keycloak.svc:8080/realms/cozy/protocol/openid-connect/userinfo
+      - notContains:
+          path: spec.template.spec.containers[0].args
+          content: --backend-logout-url=http://keycloak-http.cozy-keycloak.svc:8080/realms/cozy/protocol/openid-connect/logout?id_token_hint={id_token}
+
+  - it: creates client + cookie Secrets and a KeycloakClient CRD
+    template: templates/keycloakclient.yaml
+    capabilities:
+      apiVersions:
+        - v1.edp.epam.com/v1
+    set:
+      _cluster:
+        root-host: example.org
+    asserts:
+      - hasDocuments:
+          count: 3
+      - documentIndex: 0
+        isKind:
+          of: Secret
+      - documentIndex: 0
+        equal:
+          path: metadata.name
+          value: linstor-gui-client
+      - documentIndex: 1
+        isKind:
+          of: Secret
+      - documentIndex: 1
+        equal:
+          path: metadata.name
+          value: linstor-gui-auth-config
+      - documentIndex: 2
+        isKind:
+          of: KeycloakClient
+      - documentIndex: 2
+        equal:
+          path: spec.clientId
+          value: linstor-gui
+      - documentIndex: 2
+        contains:
+          path: spec.redirectUris
+          content: "https://linstor-gui.example.org/oauth2/callback/*"
+
+  - it: skips the KeycloakClient CRD when the API is absent, still creates Secrets
+    template: templates/keycloakclient.yaml
+    set:
+      _cluster:
+        root-host: example.org
+    asserts:
+      - hasDocuments:
+          count: 2
+      - documentIndex: 0
+        isKind:
+          of: Secret
+      - documentIndex: 1
+        isKind:
+          of: Secret
+
+  # The realm segment of the browser-facing issuer/login/logout URLs is driven
+  # by _cluster.oidc-realm-name (authentication.oidc.realmName in the platform).
+  # A renamed realm must reach every one of them so SSO keeps matching the
+  # apiserver OIDC issuer.
+  - it: threads a custom realm name through the browser-facing OIDC URLs
+    template: templates/gatekeeper.yaml
+    set:
+      _cluster:
+        root-host: example.org
+        oidc-enabled: "true"
+        oidc-realm-name: acme
+        keycloak-internal-url: http://keycloak-http.cozy-keycloak.svc:8080/realms/acme
+        expose-services: "linstor-gui"
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --oidc-issuer-url=https://keycloak.example.org/realms/acme
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --login-url=https://keycloak.example.org/realms/acme/protocol/openid-connect/auth
+      - notContains:
+          path: spec.template.spec.containers[0].args
+          content: --oidc-issuer-url=https://keycloak.example.org/realms/cozy
+
+  # The external-discovery branch (empty internal URL) builds its own
+  # backend-logout-url on the browser host; its realm segment must follow
+  # oidc-realm-name too.
+  - it: threads a custom realm into the external-discovery logout URL
+    template: templates/gatekeeper.yaml
+    set:
+      _cluster:
+        root-host: example.org
+        oidc-enabled: "true"
+        oidc-realm-name: acme
+        keycloak-internal-url: ""
+        expose-services: "linstor-gui"
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].args
+          content: --skip-oidc-discovery
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --backend-logout-url=https://keycloak.example.org/realms/acme/protocol/openid-connect/logout?id_token_hint={id_token}
+      - notContains:
+          path: spec.template.spec.containers[0].args
+          content: --backend-logout-url=https://keycloak.example.org/realms/cozy/protocol/openid-connect/logout?id_token_hint={id_token}

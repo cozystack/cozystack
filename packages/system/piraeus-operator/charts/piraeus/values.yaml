@@ -1,0 +1,156 @@
+---
+replicaCount: 1
+
+installCRDs: false
+
+operator:
+  image:
+    repository: quay.io/piraeusdatastore/piraeus-operator
+    pullPolicy: IfNotPresent
+    # Overrides the image tag whose default is the chart appVersion.
+    tag: ""
+  securityContext:
+    capabilities:
+      drop:
+        - ALL
+    readOnlyRootFilesystem: true
+    runAsNonRoot: true
+    runAsUser: 1000
+
+  options:
+    leaderElect: true
+    #clusterApiKubeconfig: "" # set to "<none>" to disable ClusterAPI integration
+
+  resources: { }
+    # limits:
+    #   cpu: 100m
+    #   memory: 128Mi
+    # requests:
+    #   cpu: 100m
+    #   memory: 128Mi
+
+  ## Additional volume mounts
+  extraVolumeMounts: [ ]
+  # - name: clusterapi-kubeconfig
+  #   mountPath: /etc/operator
+  #   readOnly: true
+
+kubeRbacProxy:
+  enabled: false
+  image:
+    repository: gcr.io/kubebuilder/kube-rbac-proxy
+    pullPolicy: IfNotPresent
+    tag: v0.13.1
+  options:
+    logtostderr: "true"
+    v: 0
+  securityContext:
+    capabilities:
+      drop:
+        - ALL
+    readOnlyRootFilesystem: true
+    runAsNonRoot: true
+    runAsUser: 1000
+
+  resources: { }
+    # limits:
+    #   cpu: 100m
+    #   memory: 128Mi
+    # requests:
+    #   cpu: 100m
+    #   memory: 128Mi
+
+  ## Additional volume mounts
+  extraVolumeMounts: [ ]
+
+
+## Additional volumes
+extraVolumes: []
+# - name: clusterapi-kubeconfig
+#   secret:
+#     secretName: super-secret
+
+webhook:
+  timeoutSeconds: 2
+  failurePolicy: Fail
+
+tls:
+  certificateSecret: ""
+  autogenerate: true
+  renew: false
+  certManagerIssuerRef: {}
+
+imagePullSecrets: [ ]
+nameOverride: ""
+fullnameOverride: ""
+
+serviceAccount:
+  # Specifies whether a service account should be created
+  create: true
+  # Annotations to add to the service account
+  annotations: { }
+  # The name of the service account to use.
+  # If not set and create is true, a name is generated using the fullname template
+  name: ""
+
+rbac:
+  # Specifies whether RBAC resources should be created
+  create: true
+
+podAnnotations: { }
+podLabels: {}
+
+podSecurityContext: {}
+  # fsGroup: 2000
+
+nodeSelector: { }
+
+tolerations:
+  - key: drbd.linbit.com/lost-quorum
+    effect: NoSchedule
+  - key: drbd.linbit.com/force-io-error
+    effect: NoSchedule
+affinity: { }
+
+priorityClassName: ""
+
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 1
+  # maxUnavailable: 1
+
+imageConfigOverride: []
+  # - base: example.com/piraeus
+  #   components:
+  #     linstor-csi:
+  #       image: linstor-csi
+  #       tag: my-custom-tag
+  #   Results in the image example.com/piraeus/linstor-csi:my-custom-tag being used.
+  #   See templates/config.yaml for available components.
+
+## Extra manifests to deploy. Can be of type dict or list.
+## If dict, keys are ignored and only values are used.
+## Items contained within extraObjects can be defined as dict or string and are passed through tpl.
+extraManifests: null
+  # - apiVersion: v1
+  #   kind: ConfigMap
+  #   metadata:
+  #   labels:
+  #     name: piraeus-extra
+  #   data:
+  #     extra-data: "value"
+  #
+  # can also be defined as a string, useful for templating field names
+  # - |
+  #   apiVersion: v1
+  #   kind: Secret
+  #   type: Opaque
+  #   metadata:
+  #     name: super-secret
+  #     labels:
+  #       {{- range $key, $value := .Values.commonLabels }}
+  #       {{ $key }}: {{ $value }}
+  #       {{- end }}
+  #   data:
+  #     plaintext: Zm9vYmFy
+#     templated: '{{ print "foobar" | upper | b64enc }}'

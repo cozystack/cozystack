@@ -1,0 +1,369 @@
+/*
+Copyright 2025.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
+package main
+
+import (
+	"crypto/tls"
+	"flag"
+	"os"
+	"time"
+
+	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
+	// to ensure that exec-entrypoint and run can make use of them.
+	_ "k8s.io/client-go/plugin/pkg/client/auth"
+
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
+	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/cache"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/cluster"
+	"sigs.k8s.io/controller-runtime/pkg/healthz"
+	"sigs.k8s.io/controller-runtime/pkg/log/zap"
+	"sigs.k8s.io/controller-runtime/pkg/metrics/filters"
+	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
+	"sigs.k8s.io/controller-runtime/pkg/webhook"
+
+	gatewayv1alpha1 "github.com/cozystack/cozystack/api/gateway/v1alpha1"
+	internalv1alpha1 "github.com/cozystack/cozystack/api/internalapi/v1alpha1"
+	cozystackiov1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
+	"github.com/cozystack/cozystack/internal/controller"
+	"github.com/cozystack/cozystack/internal/controller/cacert"
+	"github.com/cozystack/cozystack/internal/controller/tenantgateway"
+	"github.com/cozystack/cozystack/internal/controller/tenantlogrouting"
+	"github.com/cozystack/cozystack/internal/controller/tenantquota"
+	"github.com/cozystack/cozystack/internal/controller/wildcardsecret"
+	"github.com/cozystack/cozystack/internal/telemetry"
+
+	cmv1 "github.com/cert-manager/cert-manager/pkg/apis/certmanager/v1"
+	helmv2 "github.com/fluxcd/helm-controller/api/v2"
+	cosiv1alpha1 "sigs.k8s.io/container-object-storage-interface-api/apis/objectstorage/v1alpha1"
+	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
+	gatewayv1alpha2 "sigs.k8s.io/gateway-api/apis/v1alpha2"
+	gatewayv1beta1 "sigs.k8s.io/gateway-api/apis/v1beta1"
+	// +kubebuilder:scaffold:imports
+)
+
+var (
+	scheme   = runtime.NewScheme()
+	setupLog = ctrl.Log.WithName("setup")
+)
+
+func init() {
+	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
+
+	utilruntime.Must(cozystackiov1alpha1.AddToScheme(scheme))
+	utilruntime.Must(gatewayv1alpha1.AddToScheme(scheme))
+	utilruntime.Must(internalv1alpha1.AddToScheme(scheme))
+	utilruntime.Must(gatewayv1.Install(scheme))
+	utilruntime.Must(gatewayv1alpha2.Install(scheme))
+	utilruntime.Must(gatewayv1beta1.Install(scheme))
+	utilruntime.Must(cmv1.AddToScheme(scheme))
+	utilruntime.Must(helmv2.AddToScheme(scheme))
+	utilruntime.Must(cosiv1alpha1.AddToScheme(scheme))
+	// +kubebuilder:scaffold:scheme
+}
+
+func main() {
+	var metricsAddr string
+	var enableLeaderElection bool
+	var probeAddr string
+	var secureMetrics bool
+	var enableHTTP2 bool
+	var disableTelemetry bool
+	var telemetryEndpoint string
+	var telemetryInterval string
+	var quotaBufferPercent int64
+	var seaweedfsMetricsEndpoint string
+	var tlsOpts []func(*tls.Config)
+	flag.StringVar(&metricsAddr, "metrics-bind-address", "0", "The address the metrics endpoint binds to. "+
+		"Use :8443 for HTTPS or :8080 for HTTP, or leave as 0 to disable the metrics service.")
+	flag.StringVar(&probeAddr, "health-probe-bind-address", ":8081", "The address the probe endpoint binds to.")
+	flag.BoolVar(&enableLeaderElection, "leader-elect", false,
+		"Enable leader election for controller manager. "+
+			"Enabling this will ensure there is only one active controller manager.")
+	flag.BoolVar(&secureMetrics, "metrics-secure", true,
+		"If set, the metrics endpoint is served securely via HTTPS. Use --metrics-secure=false to use HTTP instead.")
+	flag.BoolVar(&enableHTTP2, "enable-http2", false,
+		"If set, HTTP/2 will be enabled for the metrics and webhook servers")
+	flag.BoolVar(&disableTelemetry, "disable-telemetry", false,
+		"Disable telemetry collection")
+	flag.StringVar(&telemetryEndpoint, "telemetry-endpoint", "https://telemetry.cozystack.io",
+		"Endpoint for sending telemetry data")
+	flag.StringVar(&telemetryInterval, "telemetry-interval", "15m",
+		"Interval between telemetry data collection (e.g. 15m, 1h)")
+	flag.Int64Var(&quotaBufferPercent, "tenant-quota-buffer-percent", 0,
+		"Temporary buffer (e.g. 130 = +30%) added to every hierarchical tenant quota pool so workloads already over a freshly-introduced quota keep running during rollout. 0 disables it.")
+	flag.StringVar(&seaweedfsMetricsEndpoint, "seaweedfs-metrics-endpoint", "",
+		"Base URL of a Prometheus-compatible query API to fetch SeaweedFS bucket size metrics from, e.g. https://vm.example.com/path/to/prometheus (/api/v1/query is appended). "+
+			"Overrides discovery via the namespace.cozystack.io/monitoring label; use when SeaweedFS and the monitoring stack that scrapes it run in a separate cluster. "+
+			"Basic auth may be embedded as userinfo (https://user:pass@host/...). Empty keeps label-based discovery.")
+	opts := zap.Options{
+		Development: false,
+	}
+	opts.BindFlags(flag.CommandLine)
+	flag.Parse()
+
+	// Parse telemetry interval
+	interval, err := time.ParseDuration(telemetryInterval)
+	if err != nil {
+		setupLog.Error(err, "invalid telemetry interval")
+		os.Exit(1)
+	}
+
+	// Validate and normalize the SeaweedFS metrics endpoint override; the sizes
+	// it serves feed billing, so a malformed URL must fail startup, not queries.
+	if seaweedfsMetricsEndpoint != "" {
+		seaweedfsMetricsEndpoint, err = controller.ParseMetricsEndpointURL(seaweedfsMetricsEndpoint)
+		if err != nil {
+			setupLog.Error(err, "invalid --seaweedfs-metrics-endpoint")
+			os.Exit(1)
+		}
+	}
+
+	// Configure telemetry
+	telemetryConfig := telemetry.Config{
+		Disabled: disableTelemetry,
+		Endpoint: telemetryEndpoint,
+		Interval: interval,
+	}
+
+	ctrl.SetLogger(zap.New(zap.UseFlagOptions(&opts)))
+
+	// if the enable-http2 flag is false (the default), http/2 should be disabled
+	// due to its vulnerabilities. More specifically, disabling http/2 will
+	// prevent from being vulnerable to the HTTP/2 Stream Cancellation and
+	// Rapid Reset CVEs. For more information see:
+	// - https://github.com/advisories/GHSA-qppj-fm5r-hxr3
+	// - https://github.com/advisories/GHSA-4374-p667-p6c8
+	disableHTTP2 := func(c *tls.Config) {
+		setupLog.Info("disabling http/2")
+		c.NextProtos = []string{"http/1.1"}
+	}
+
+	if !enableHTTP2 {
+		tlsOpts = append(tlsOpts, disableHTTP2)
+	}
+
+	webhookServer := webhook.NewServer(webhook.Options{
+		TLSOpts: tlsOpts,
+	})
+
+	// Metrics endpoint is enabled in 'config/default/kustomization.yaml'. The Metrics options configure the server.
+	// More info:
+	// - https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.19.1/pkg/metrics/server
+	// - https://book.kubebuilder.io/reference/metrics.html
+	metricsServerOptions := metricsserver.Options{
+		BindAddress:   metricsAddr,
+		SecureServing: secureMetrics,
+		TLSOpts:       tlsOpts,
+	}
+
+	if secureMetrics {
+		// FilterProvider is used to protect the metrics endpoint with authn/authz.
+		// These configurations ensure that only authorized users and service accounts
+		// can access the metrics endpoint. The RBAC are configured in 'config/rbac/kustomization.yaml'. More info:
+		// https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.19.1/pkg/metrics/filters#WithAuthenticationAndAuthorization
+		metricsServerOptions.FilterProvider = filters.WithAuthenticationAndAuthorization
+
+		// TODO(user): If CertDir, CertName, and KeyName are not specified, controller-runtime will automatically
+		// generate self-signed certificates for the metrics server. While convenient for development and testing,
+		// this setup is not recommended for production.
+	}
+
+	// Configure rate limiting for the Kubernetes client
+	config := ctrl.GetConfigOrDie()
+	config.QPS = 50.0  // Increased from default 5.0
+	config.Burst = 100 // Increased from default 10
+
+	mgr, err := ctrl.NewManager(config, ctrl.Options{
+		Scheme:                 scheme,
+		Metrics:                metricsServerOptions,
+		WebhookServer:          webhookServer,
+		HealthProbeBindAddress: probeAddr,
+		LeaderElection:         enableLeaderElection,
+		LeaderElectionID:       "19a0338c.cozystack.io",
+		// Scope the shared Secret informer so the WildcardSecret reconciler's
+		// cluster-wide Secret watch does not cache every Secret (and its key
+		// material) in memory. Only managed wildcard replicas and the values
+		// channel are cached; no other reconciler reads Secrets through THIS
+		// (the manager's) typed Secret cache. See wildcardsecret.SecretCacheByObject.
+		//
+		// The CA-extraction reconciler does NOT use this cache at all — neither its
+		// typed Secret informer nor a metadata one. A metadata informer for
+		// v1/Secret would route to THIS same per-GVK cache and inherit its
+		// wildcard-replica label selector, so its source watch would never fire for
+		// an unlabelled CA source. It therefore owns a SEPARATE metadata-only cache
+		// (caSecretCluster, below) and reads the one source it projects through the
+		// uncached APIReader. So this manager-level Secret scoping is
+		// wildcardsecret's alone.
+		Cache: cache.Options{
+			ByObject: map[client.Object]cache.ByObject{
+				&corev1.Secret{}: wildcardsecret.SecretCacheByObject(),
+			},
+		},
+		// LeaderElectionReleaseOnCancel defines if the leader should step down voluntarily
+		// when the Manager ends. This requires the binary to immediately end when the
+		// Manager is stopped, otherwise, this setting is unsafe. Setting this significantly
+		// speeds up voluntary leader transitions as the new leader don't have to wait
+		// LeaseDuration time first.
+		//
+		// In the default scaffold provided, the program ends immediately after
+		// the manager stops, so would be fine to enable this option. However,
+		// if you are doing or is intended to do any operation such as perform cleanups
+		// after the manager stops then its usage might be unsafe.
+		// LeaderElectionReleaseOnCancel: true,
+	})
+	if err != nil {
+		setupLog.Error(err, "unable to start manager")
+		os.Exit(1)
+	}
+
+	if err = (&controller.WorkloadMonitorReconciler{
+		Client:                   mgr.GetClient(),
+		Scheme:                   mgr.GetScheme(),
+		Recorder:                 mgr.GetEventRecorderFor("workloadmonitor-controller"),
+		SeaweedfsMetricsEndpoint: seaweedfsMetricsEndpoint,
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "WorkloadMonitor")
+		os.Exit(1)
+	}
+
+	if err = (&controller.WorkloadReconciler{
+		Client: mgr.GetClient(),
+		Scheme: mgr.GetScheme(),
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "WorkloadReconciler")
+		os.Exit(1)
+	}
+
+	if err = (&controller.ApplicationDefinitionReconciler{
+		Client: mgr.GetClient(),
+		Scheme: mgr.GetScheme(),
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "ApplicationDefinitionReconciler")
+		os.Exit(1)
+	}
+
+	if err = (&controller.ApplicationDefinitionHelmReconciler{
+		Client:   mgr.GetClient(),
+		Scheme:   mgr.GetScheme(),
+		Recorder: mgr.GetEventRecorderFor("applicationdefinition-helm-reconciler"),
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "ApplicationDefinitionHelmReconciler")
+		os.Exit(1)
+	}
+
+	if err = (&tenantgateway.Reconciler{
+		Client: mgr.GetClient(),
+		Scheme: mgr.GetScheme(),
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "TenantGateway")
+		os.Exit(1)
+	}
+
+	if err = (&tenantquota.Reconciler{
+		Client:        mgr.GetClient(),
+		Scheme:        mgr.GetScheme(),
+		Recorder:      mgr.GetEventRecorderFor("tenantquota-controller"),
+		BufferPercent: quotaBufferPercent,
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "TenantQuota")
+		os.Exit(1)
+	}
+
+	if err = (&tenantlogrouting.Reconciler{
+		Client: mgr.GetClient(),
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "TenantLogRouting")
+		os.Exit(1)
+	}
+
+	if err = (&wildcardsecret.Reconciler{
+		Client:   mgr.GetClient(),
+		Reader:   mgr.GetAPIReader(),
+		Scheme:   mgr.GetScheme(),
+		Recorder: mgr.GetEventRecorderFor("wildcardsecret"),
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "WildcardSecret")
+		os.Exit(1)
+	}
+
+	// The CA-extraction reconciler watches its source Secrets as metadata only, so
+	// no private key ever enters a cache. It cannot watch them on the manager's
+	// cache: that cache's Secret informer is label-scoped to WildcardSecret's
+	// replicas (above), a metadata informer for the same v1/Secret GVK routes to
+	// that same scoped informer and inherits the selector, and the watch would
+	// then silently never fire for an unlabelled CA source — the projection would
+	// appear only on the slow resync. So it owns a SEPARATE cache, metadata-only
+	// and unscoped, holding Secret metadata stubs cluster-wide (no key material).
+	// It is a cluster.Cluster so mgr.Add registers it in the manager's
+	// cache-runnable group — started, waited-for-sync before the controllers run,
+	// and stopped on shutdown, exactly like the shared cache.
+	caSecretCluster, err := cluster.New(config, func(o *cluster.Options) {
+		o.Scheme = scheme
+	})
+	if err != nil {
+		setupLog.Error(err, "unable to build the CA source metadata cache")
+		os.Exit(1)
+	}
+	if err = mgr.Add(caSecretCluster); err != nil {
+		setupLog.Error(err, "unable to add the CA source metadata cache to the manager")
+		os.Exit(1)
+	}
+
+	if err = (&cacert.Reconciler{
+		Client:   mgr.GetClient(),
+		Reader:   mgr.GetAPIReader(),
+		Recorder: mgr.GetEventRecorderFor("cacert-controller"),
+	}).SetupWithManager(mgr, caSecretCluster.GetCache()); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "CACert")
+		os.Exit(1)
+	}
+
+	// +kubebuilder:scaffold:builder
+
+	if err := mgr.AddHealthzCheck("healthz", healthz.Ping); err != nil {
+		setupLog.Error(err, "unable to set up health check")
+		os.Exit(1)
+	}
+	if err := mgr.AddReadyzCheck("readyz", healthz.Ping); err != nil {
+		setupLog.Error(err, "unable to set up ready check")
+		os.Exit(1)
+	}
+
+	// Initialize telemetry collector
+	collector, err := telemetry.NewCollector(mgr.GetClient(), &telemetryConfig, mgr.GetConfig())
+	if err != nil {
+		setupLog.V(1).Error(err, "unable to create telemetry collector, telemetry will be disabled")
+	}
+
+	if collector != nil {
+		if err := mgr.Add(collector); err != nil {
+			setupLog.Error(err, "unable to set up telemetry collector")
+			setupLog.V(1).Error(err, "unable to set up telemetry collector, continuing without telemetry")
+		}
+	}
+
+	setupLog.Info("starting manager")
+	if err := mgr.Start(ctrl.SetupSignalHandler()); err != nil {
+		setupLog.Error(err, "problem running manager")
+		os.Exit(1)
+	}
+}

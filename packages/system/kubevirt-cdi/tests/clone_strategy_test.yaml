@@ -1,0 +1,66 @@
+suite: cozy-kubevirt-cdi clone strategy
+release:
+  name: kubevirt-cdi
+  namespace: cozy-kubevirt-cdi
+tests:
+  # The CRD enum takes copy, snapshot and csi-clone and carries no empty
+  # member, so the only way to ask CDI for its own per-StorageProfile choice
+  # is for the field to be absent. An empty value used to render
+  # cloneStrategyOverride: "", which that enum does not accept; this pins
+  # against it coming back.
+  - it: omits the field when no strategy is configured
+    template: cdi-cr.yaml
+    documentSelector:
+      path: kind
+      value: CDI
+      matchMany: false
+    set:
+      cloneStrategyOverride: ""
+    asserts:
+      - notExists:
+          path: spec.cloneStrategyOverride
+
+  # An operator writing `cloneStrategyOverride: ~` by hand is a separate input
+  # from the empty string, and it used to render a bare key. It reaches the
+  # same falsy branch of `with`, but that is a claim about behaviour, so it is
+  # pinned rather than argued. The case cannot pass vacuously: were the null
+  # not reaching the template, the chart default would render csi-clone here
+  # and the assertion below would fail.
+  - it: omits the field when the strategy is null
+    template: cdi-cr.yaml
+    documentSelector:
+      path: kind
+      value: CDI
+      matchMany: false
+    set:
+      cloneStrategyOverride: null
+    asserts:
+      - notExists:
+          path: spec.cloneStrategyOverride
+
+  - it: keeps the chart default
+    template: cdi-cr.yaml
+    documentSelector:
+      path: kind
+      value: CDI
+      matchMany: false
+    asserts:
+      - equal:
+          path: spec.cloneStrategyOverride
+          value: csi-clone
+
+  # The other direction: a configured value still has to reach the CR verbatim.
+  # A test that only covered the empty case would pass against a template that
+  # dropped the field unconditionally.
+  - it: passes a configured strategy through unchanged
+    template: cdi-cr.yaml
+    documentSelector:
+      path: kind
+      value: CDI
+      matchMany: false
+    set:
+      cloneStrategyOverride: snapshot
+    asserts:
+      - equal:
+          path: spec.cloneStrategyOverride
+          value: snapshot

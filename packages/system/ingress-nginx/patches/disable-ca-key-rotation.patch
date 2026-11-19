@@ -1,0 +1,13 @@
+diff --git a/packages/system/ingress-nginx/charts/ingress-nginx/templates/admission-webhooks/cert-manager.yaml b/packages/system/ingress-nginx/charts/ingress-nginx/templates/admission-webhooks/cert-manager.yaml
+index db2946c3..fab1e02e 100644
+--- a/packages/system/ingress-nginx/charts/ingress-nginx/templates/admission-webhooks/cert-manager.yaml
++++ b/packages/system/ingress-nginx/charts/ingress-nginx/templates/admission-webhooks/cert-manager.yaml
+@@ -23,6 +23,8 @@ spec:
+     name: {{ include "ingress-nginx.fullname" . }}-self-signed-issuer
+   commonName: "ca.webhook.ingress-nginx"
+   isCA: true
++  privateKey:
++    rotationPolicy: Never
+   subject:
+     organizations:
+       - ingress-nginx

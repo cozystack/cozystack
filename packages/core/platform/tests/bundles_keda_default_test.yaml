@@ -1,0 +1,60 @@
+suite: keda optional package (opt-in via enabledPackages)
+templates:
+  - templates/bundles/system.yaml
+release:
+  name: cozystack
+  namespace: cozy-system
+tests:
+  # KEDA is optional: it claims the cluster-wide external.metrics.k8s.io
+  # APIService, so it must never install unless an operator opts in. It also must
+  # not be a dependsOn of any default package, or the platform HelmRelease would
+  # stay DependenciesNotReady when KEDA is not enabled.
+  - it: does not emit cozystack.keda by default (optional, not enabled)
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+    asserts:
+      # any: true is REQUIRED inside the matcher for the negative to search the whole
+      # document set; without it containsDocument matches nothing and `not: true` is a
+      # vacuous no-op (a package.default regression would pass unnoticed).
+      - containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.keda
+          any: true
+        not: true
+
+  - it: emits cozystack.keda when listed in enabledPackages
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+        enabledPackages:
+          - cozystack.keda
+    asserts:
+      - containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.keda
+          any: true
+
+  - it: honors disabledPackages even when also enabled
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+        enabledPackages:
+          - cozystack.keda
+        disabledPackages:
+          - cozystack.keda
+    asserts:
+      - containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.keda
+          any: true
+        not: true

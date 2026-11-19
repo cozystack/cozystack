@@ -1,0 +1,129 @@
+##
+## @section Common parameters
+##
+
+## @param {string} [host] - Hostname for external access to Harbor (defaults to 'harbor' subdomain for the tenant host).
+host: ""
+
+## @param {[]string} [managementWhitelist] - IP addresses or CIDR ranges allowed to reach the Harbor web portal and API. `/v2/` and `/service/token`, which `docker login`, image pulls and pushes use, are not restricted by this list. For the portal and API it replaces the tenant ingress `whitelist` rather than narrowing it, and it is matched against the client address the ingress controller sees, which is a proxy or a forwarded header rather than the real client when something in front of the controller rewrites it. Empty allows every address. Requires Ingress publishing; rejected when the tenant publishes through Gateway API.
+managementWhitelist: []
+
+## @param {string} storageClass - StorageClass used to store the data.
+## @immutable
+## @x-cozystack-options {source: storageclass}
+storageClass: ""
+
+##
+## @section Component configuration
+##
+
+## @typedef {struct} Resources - Resource configuration.
+## @field {quantity} [cpu] - Number of CPU cores allocated.
+## @field {quantity} [memory] - Amount of memory allocated.
+
+## @enum {string} ResourcesPreset - Default sizing preset.
+## @value t1.nano
+## @value t1.micro
+## @value t1.small
+## @value t1.medium
+## @value t1.large
+## @value t1.xlarge
+## @value t1.2xlarge
+## @value t1.4xlarge
+## @value c1.nano
+## @value c1.micro
+## @value c1.small
+## @value c1.medium
+## @value c1.large
+## @value c1.xlarge
+## @value c1.2xlarge
+## @value c1.4xlarge
+## @value s1.nano
+## @value s1.micro
+## @value s1.small
+## @value s1.medium
+## @value s1.large
+## @value s1.xlarge
+## @value s1.2xlarge
+## @value s1.4xlarge
+## @value u1.nano
+## @value u1.micro
+## @value u1.small
+## @value u1.medium
+## @value u1.large
+## @value u1.xlarge
+## @value u1.2xlarge
+## @value u1.4xlarge
+## @value m1.nano
+## @value m1.micro
+## @value m1.small
+## @value m1.medium
+## @value m1.large
+## @value m1.xlarge
+## @value m1.2xlarge
+## @value m1.4xlarge
+## @value nano
+## @value micro
+## @value small
+## @value medium
+## @value large
+## @value xlarge
+## @value 2xlarge
+
+## @typedef {struct} Core - Core API server configuration.
+## @field {Resources} [resources] - Explicit CPU and memory configuration. When omitted, the preset defined in `resourcesPreset` is applied.
+## @field {ResourcesPreset} [resourcesPreset] - Default sizing preset used when `resources` is omitted.
+
+## @param {Core} core - Core API server configuration.
+core:
+  resources: {}
+  resourcesPreset: "t1.small"
+
+## @typedef {struct} Registry - Container image registry configuration.
+## @field {Resources} [resources] - Explicit CPU and memory configuration. When omitted, the preset defined in `resourcesPreset` is applied.
+## @field {ResourcesPreset} [resourcesPreset] - Default sizing preset used when `resources` is omitted.
+
+## @param {Registry} registry - Container image registry configuration.
+registry:
+  resources: {}
+  resourcesPreset: "t1.small"
+
+## @typedef {struct} Jobservice - Background job service configuration.
+## @field {Resources} [resources] - Explicit CPU and memory configuration. When omitted, the preset defined in `resourcesPreset` is applied.
+## @field {ResourcesPreset} [resourcesPreset] - Default sizing preset used when `resources` is omitted.
+
+## @param {Jobservice} jobservice - Background job service configuration.
+jobservice:
+  resources: {}
+  resourcesPreset: "t1.nano"
+
+## @typedef {struct} Trivy - Trivy vulnerability scanner configuration.
+## @field {bool} enabled - Enable or disable the vulnerability scanner.
+## @field {quantity} size - Persistent Volume size for vulnerability database cache.
+## @field {Resources} [resources] - Explicit CPU and memory configuration. When omitted, the preset defined in `resourcesPreset` is applied.
+## @field {ResourcesPreset} [resourcesPreset] - Default sizing preset used when `resources` is omitted.
+
+## @param {Trivy} trivy - Trivy vulnerability scanner configuration.
+trivy:
+  enabled: true
+  size: 5Gi
+  resources: {}
+  resourcesPreset: "t1.nano"
+
+## @typedef {struct} Database - PostgreSQL database configuration (provisioned via CloudNativePG).
+## @field {quantity} size - Persistent Volume size for database storage.
+## @field {int} replicas - Number of database instances.
+
+## @param {Database} database - PostgreSQL database configuration.
+database:
+  size: 5Gi
+  replicas: 2
+
+## @typedef {struct} Redis - Redis cache configuration (provisioned via redis-operator).
+## @field {quantity} size - Persistent Volume size for cache storage.
+## @field {int} replicas - Number of Redis replicas.
+
+## @param {Redis} redis - Redis cache configuration.
+redis:
+  size: 1Gi
+  replicas: 2

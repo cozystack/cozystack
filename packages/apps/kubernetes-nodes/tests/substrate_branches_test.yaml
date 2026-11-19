@@ -1,0 +1,174 @@
+suite: substrate branches in the pool render
+
+# Every `if substrate` in this chart, asserted on BOTH sides: the SVC_IP source
+# (the LoadBalancer address on proxmox, the ClusterIP on kubevirt — a KubeVirt
+# pool waiting for a LoadBalancer address on a ClusterIP Service would never
+# write its TalosConfigTemplate) and the nameservers (the pool's own on proxmox,
+# none on kubevirt, where the workers reach the management CoreDNS).
+#
+# The sizing case uses 1500m and 8G, where ceil and floor disagree; at 4 CPUs
+# and 8Gi they agree, and the rounding values.yaml promises would go unpinned.
+templates:
+  - templates/nodegroup.yaml
+  - templates/talos-reconcile-job.yaml
+release:
+  name: kubernetes-nodes-myk8s-md0
+  namespace: tenant-test
+set: &base
+  cluster: myk8s
+  _cluster:
+    cluster-domain: cozy.local
+  version: "v1.35"
+  minReplicas: 2
+  maxReplicas: 3
+  instanceType: ""
+  diskSize: 20Gi
+  storageClass: replicated
+  roles:
+    - ingress-nginx
+  resources:
+    cpu: "2"
+    memory: 4Gi
+tests:
+  - it: kubevirt takes the apiserver Service ClusterIP
+    template: templates/talos-reconcile-job.yaml
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'SVC_IP=\$\(kubectl -n "\$NS" get svc "\$RELEASE" -o jsonpath=''\{\.spec\.clusterIP\}'''
+      - notMatchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'loadBalancer\.ingress'
+
+  - it: proxmox takes the Service LoadBalancer address, which is what an off-cluster VM can reach
+    set: &proxmox
+      substrate: proxmox
+      proxmox:
+        templateTags: [talos]
+        network:
+          bridge: vmbr0
+        dnsServers: ["10.0.0.1"]
+    template: templates/talos-reconcile-job.yaml
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'SVC_IP=\$\(kubectl -n "\$NS" get svc "\$RELEASE" -o jsonpath=''\{\.status\.loadBalancer\.ingress\[0\]\.ip\}'''
+      # kube-dns is still read with {.spec.clusterIP}; what must not appear on
+      # proxmox is the apiserver Service being read that way.
+      - notMatchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'SVC_IP=\$\(kubectl -n "\$NS" get svc "\$RELEASE" -o jsonpath=''\{\.spec\.clusterIP\}'''
+
+  - it: kubevirt workers resolve through the management cluster CoreDNS
+    template: templates/talos-reconcile-job.yaml
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'nameservers:\s*\n\s*- \$\{COREDNS_IP\}'
+
+  - it: proxmox workers carry their own resolvers, because that ClusterIP is unroutable for them
+    set: *proxmox
+    template: templates/talos-reconcile-job.yaml
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'nameservers:\s*\n\s*- "10\.0\.0\.1"'
+      - notMatchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'nameservers:\s*\n\s*- \$\{COREDNS_IP\}'
+
+  - it: rounds fractional CPU up, because a VM cannot have 1.5 cores
+    set:
+      substrate: proxmox
+      proxmox:
+        templateTags: [talos]
+        network:
+          bridge: vmbr0
+        dnsServers: ["10.0.0.1"]
+      resources:
+        cpu: "1500m"
+        memory: "8G"
+    template: templates/nodegroup.yaml
+    documentSelector:
+      path: kind
+      value: ProxmoxMachineTemplate
+    asserts:
+      # floor would give 1 core and 7629 MiB; both numbers are chosen to differ.
+      - equal:
+          path: spec.template.spec.numCores
+          value: 2
+      - equal:
+          path: spec.template.spec.memoryMiB
+          value: 7630
+
+  # osImage picks where a KubeVirt worker's disk comes from. A Proxmox worker's
+  # disk is a clone of the VM template, so the field cannot be honoured — but
+  # half of it looks as if it were: osImage.factory.version reaches the
+  # machineconfig's installer image and changes the Job, while the boot image
+  # stays whatever the template carries. Refused rather than ignored for that
+  # reason.
+  - it: and still takes it on kubevirt
+    set:
+      osImage:
+        factory:
+          version: v1.12.6
+    template: templates/nodegroup.yaml
+    documentSelector:
+      path: kind
+      value: MachineDeployment
+    asserts:
+      - exists:
+          path: metadata.name
+
+  - it: the worker monitor keeps its Pod threshold on kubevirt
+    template: templates/nodegroup.yaml
+    documentSelector:
+      path: kind
+      value: WorkloadMonitor
+    asserts:
+      - equal:
+          path: spec.minReplicas
+          value: 2
+
+  - it: and drops it on proxmox, where there are no Pods to count
+    set: *proxmox
+    template: templates/nodegroup.yaml
+    documentSelector:
+      path: kind
+      value: WorkloadMonitor
+    asserts:
+      # The controller lists Pods matching the selector and reports
+      # Operational=false below minReplicas. A proxmox worker has no Pod here,
+      # so any threshold pins the pool to false while its nodes are healthy.
+      - notExists:
+          path: spec.minReplicas
+      - exists:
+          path: spec.selector
+
+  - it: refuses osImage on proxmox, where the disk comes from the template
+    set:
+      substrate: proxmox
+      proxmox:
+        templateTags: [talos]
+        network:
+          bridge: vmbr0
+        dnsServers: ["10.0.0.1"]
+      osImage:
+        factory:
+          version: v1.12.6
+    template: templates/nodegroup.yaml
+    asserts:
+      - failedTemplate:
+          errorPattern: "substrate proxmox does not take osImage"

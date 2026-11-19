@@ -1,0 +1,144 @@
+suite: resourcesPreset legacy and instance-type compatibility
+
+# Locks in the 1:1 equivalence between legacy flat names and instance-type
+# names in cozy-lib. Renaming the table or accidentally dropping the legacy
+# aliases must fail one of these cases instead of silently rendering a
+# different resource footprint.
+
+templates:
+  - templates/db.yaml
+
+release:
+  name: pg-test
+  namespace: tenant-test
+
+set:
+  _cluster:
+    scheduling: {}
+
+tests:
+  - it: "legacy 'small' renders 1 CPU / 512Mi"
+    set:
+      resourcesPreset: small
+    documentSelector:
+      path: kind
+      value: Cluster
+    asserts:
+      - equal:
+          path: spec.resources.limits.cpu
+          value: "1"
+      - equal:
+          path: spec.resources.limits.memory
+          value: "512Mi"
+
+  - it: "instance-type 't1.small' renders 1 CPU / 512Mi (matches legacy 'small')"
+    set:
+      resourcesPreset: t1.small
+    documentSelector:
+      path: kind
+      value: Cluster
+    asserts:
+      - equal:
+          path: spec.resources.limits.cpu
+          value: "1"
+      - equal:
+          path: spec.resources.limits.memory
+          value: "512Mi"
+
+  - it: "legacy 'medium' renders 1 CPU / 1Gi"
+    set:
+      resourcesPreset: medium
+    documentSelector:
+      path: kind
+      value: Cluster
+    asserts:
+      - equal:
+          path: spec.resources.limits.cpu
+          value: "1"
+      - equal:
+          path: spec.resources.limits.memory
+          value: "1Gi"
+
+  - it: "instance-type 'c1.small' renders 1 CPU / 1Gi (matches legacy 'medium')"
+    set:
+      resourcesPreset: c1.small
+    documentSelector:
+      path: kind
+      value: Cluster
+    asserts:
+      - equal:
+          path: spec.resources.limits.cpu
+          value: "1"
+      - equal:
+          path: spec.resources.limits.memory
+          value: "1Gi"
+
+  - it: "legacy 'nano' renders 250m / 128Mi"
+    set:
+      resourcesPreset: nano
+    documentSelector:
+      path: kind
+      value: Cluster
+    asserts:
+      - equal:
+          path: spec.resources.limits.cpu
+          value: "250m"
+      - equal:
+          path: spec.resources.limits.memory
+          value: "128Mi"
+
+  - it: "instance-type 't1.nano' renders 250m / 128Mi (matches legacy 'nano')"
+    set:
+      resourcesPreset: t1.nano
+    documentSelector:
+      path: kind
+      value: Cluster
+    asserts:
+      - equal:
+          path: spec.resources.limits.cpu
+          value: "250m"
+      - equal:
+          path: spec.resources.limits.memory
+          value: "128Mi"
+
+  - it: "instance-type 's1.small' renders 1 CPU / 2Gi"
+    set:
+      resourcesPreset: s1.small
+    documentSelector:
+      path: kind
+      value: Cluster
+    asserts:
+      - equal:
+          path: spec.resources.limits.cpu
+          value: "1"
+      - equal:
+          path: spec.resources.limits.memory
+          value: "2Gi"
+
+  - it: "instance-type 'u1.small' renders 1 CPU / 4Gi"
+    set:
+      resourcesPreset: u1.small
+    documentSelector:
+      path: kind
+      value: Cluster
+    asserts:
+      - equal:
+          path: spec.resources.limits.cpu
+          value: "1"
+      - equal:
+          path: spec.resources.limits.memory
+          value: "4Gi"
+
+  - it: "instance-type 'm1.small' renders 1 CPU / 8Gi"
+    set:
+      resourcesPreset: m1.small
+    documentSelector:
+      path: kind
+      value: Cluster
+    asserts:
+      - equal:
+          path: spec.resources.limits.cpu
+          value: "1"
+      - equal:
+          path: spec.resources.limits.memory
+          value: "8Gi"

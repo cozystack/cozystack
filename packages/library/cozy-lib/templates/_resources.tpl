@@ -1,0 +1,301 @@
+{{- define "cozy-lib.resources.defaultCpuAllocationRatio" }}
+{{-   `10` }}
+{{- end }}
+{{- define "cozy-lib.resources.defaultMemoryAllocationRatio" }}
+{{-   `1` }}
+{{- end }}
+{{- define "cozy-lib.resources.defaultEphemeralStorageAllocationRatio" }}
+{{-   `40` }}
+{{- end }}
+
+{{- define "cozy-lib.resources.cpuAllocationRatio" }}
+{{-   include "cozy-lib.loadCozyConfig" . }}
+{{-   $cozyConfig := index . 1 "cozyConfig" }}
+{{-   if not $cozyConfig }}
+{{-     include "cozy-lib.resources.defaultCpuAllocationRatio" . }}
+{{-   else }}
+{{-     dig "data" "cpu-allocation-ratio" (include "cozy-lib.resources.defaultCpuAllocationRatio" dict) $cozyConfig }}
+{{-   end }}
+{{- end }}
+
+{{- define "cozy-lib.resources.memoryAllocationRatio" }}
+{{-   include "cozy-lib.loadCozyConfig" . }}
+{{-   $cozyConfig := index . 1 "cozyConfig" }}
+{{-   if not $cozyConfig }}
+{{-     include "cozy-lib.resources.defaultMemoryAllocationRatio" . }}
+{{-   else }}
+{{-     dig "data" "memory-allocation-ratio" (include "cozy-lib.resources.defaultMemoryAllocationRatio" dict) $cozyConfig }}
+{{-   end }}
+{{- end }}
+
+{{- define "cozy-lib.resources.ephemeralStorageAllocationRatio" }}
+{{-   include "cozy-lib.loadCozyConfig" . }}
+{{-   $cozyConfig := index . 1 "cozyConfig" }}
+{{-   if not $cozyConfig }}
+{{-     include "cozy-lib.resources.defaultEphemeralStorageAllocationRatio" . }}
+{{-   else }}
+{{-     dig "data" "ephemeral-storage-allocation-ratio" (include "cozy-lib.resources.defaultEphemeralStorageAllocationRatio" dict) $cozyConfig }}
+{{-   end }}
+{{- end }}
+
+
+{{- define "cozy-lib.resources.toFloat" -}}
+    {{- $value := . -}}
+    {{- $unit := 1.0 -}}
+    {{- if typeIs "string" . -}}
+        {{- /* Every suffix the Kubernetes quantity grammar allows, because a
+               suffix missing here does not fail: the value keeps its unit
+               letter, `float64` cannot parse it and silently yields zero, and
+               whatever compared or divided that zero reports a wrong answer
+               with no error to notice. */ -}}
+        {{- $base2 := dict "Ki" 0x1p10 "Mi" 0x1p20 "Gi" 0x1p30 "Ti" 0x1p40 "Pi" 0x1p50 "Ei" 0x1p60 -}}
+        {{- $base10 := dict "n" 1e-9 "u" 1e-6 "m" 1e-3 "k" 1e3 "M" 1e6 "G" 1e9 "T" 1e12 "P" 1e15 "E" 1e18 -}}
+        {{- range $k, $v := merge $base2 $base10 -}}
+            {{- if hasSuffix $k $ -}}
+                {{- $value = trimSuffix $k $ -}}
+                {{- $unit = $v -}}
+            {{- end -}}
+        {{- end -}}
+    {{- end -}}
+    {{- mulf (float64 $value) $unit | toString -}}
+{{- end -}}
+
+{{- /*
+  A sanitized resource map is a dict with resource-name to resource-quantity.
+  All resources are returned with equal **requests** and **limits**, except for
+  **cpu**, whose *request* is reduced by the CPU-allocation ratio obtained from
+  `cozy-lib.resources.cpuAllocationRatio` and then rounded **up** to a whole
+  number of milli-CPUs (a CPU quantity finer than 1m is invalid for the VPA
+  admission webhook and meaningless for the scheduler).
+
+  A memory below 1Mi fails the render, see cozy-lib.resources.checkMemory.
+
+  The template now expects **one flat map** as input (no nested `requests:` /
+  `limits:` sections).  Each value in that map is taken as the *limit* for the
+  corresponding resource.  Usage example:
+
+      {{ include "cozy-lib.resources.sanitize" list (.Values.resources $) }}
+
+  Example input:
+  ==============
+  cpu: "2"
+  memory: 256Mi
+  devices.com/nvidia: "1"
+
+  Example output (cpuAllocationRatio = 10):
+  =========================================
+  limits:
+    cpu: "2"
+    memory: 256Mi
+    devices.com/nvidia: "1"
+  requests:
+    cpu: 200m                 # 2 / 10
+    memory: 256Mi             # = limit
+    devices.com/nvidia: "1"   # = limit
+*/}}
+{{- define "cozy-lib.resources.sanitize" }}
+{{-   include "cozy-lib.resources.checkMemory" (index . 0) }}
+{{-   include "cozy-lib.resources.requestsAndLimits" . }}
+{{- end }}
+
+{{- /*
+  A quantity without a unit counts bytes, so a memory of `8` typed for 8Gi
+  sizes the container at 8 bytes and nothing else refuses it. Every preset is
+  128Mi or more, so a floor of 1Mi only stops that kind of slip.
+*/}}
+{{- define "cozy-lib.resources.checkMemory" }}
+{{-   if hasKey . "memory" }}
+{{-     $memory := index . "memory" }}
+{{-     if not (kindIs "invalid" $memory) }}
+{{-       if lt (include "cozy-lib.resources.toFloat" $memory | float64) (include "cozy-lib.resources.toFloat" "1Mi" | float64) }}
+{{-         fail (printf "memory (%v) must be at least 1Mi. A value without a unit is read as bytes, so add the unit, such as 512Mi or 8Gi." $memory) }}
+{{-       end }}
+{{-     end }}
+{{-   end }}
+{{- end }}
+
+{{- /*
+  sanitize without the memory floor. flatten renders a ResourceQuota with it,
+  where a memory of 0 is a valid quota that allows none.
+*/}}
+{{- define "cozy-lib.resources.requestsAndLimits" }}
+{{-   $cpuAllocationRatio := include "cozy-lib.resources.cpuAllocationRatio" . | float64 }}
+{{-   $memoryAllocationRatio := include "cozy-lib.resources.memoryAllocationRatio" . | float64 }}
+{{-   $ephemeralStorageAllocationRatio := include "cozy-lib.resources.ephemeralStorageAllocationRatio" . | float64 }}
+{{-   $args := index . 0 }}
+{{-   $output := dict "requests" dict "limits" dict }}
+{{-   if or (hasKey $args "limits") (hasKey $args "requests") }}
+{{-     fail "ERROR: A flat map of resources expected, not nested `requests:` or `limits:` sections." -}}
+{{-   end }}
+{{-   range $k, $v := $args }}
+{{-     if eq $k "cpu" }}
+{{-       $vcpuRequestF64 := (include "cozy-lib.resources.toFloat" $v) | float64 }}
+{{-       $cpuRequestF64 := divf $vcpuRequestF64 $cpuAllocationRatio }}
+{{- /*
+        A CPU quantity must be a whole number of milli-CPUs: the VPA admission
+        webhook rejects anything finer ("minAllowed: CPU [62500u] must be a
+        whole number of milli CPUs"), and a sub-milli request is meaningless
+        anyway. A ratio that does not divide the value evenly produces one:
+        250m / 4 = 62.5m. Round the request up to the next whole milli-CPU so
+        every allocation ratio renders a valid quantity, never below the
+        intended fraction of the limit. A request whose shortest decimal form
+        is already whole-milli keeps that form, so the default ratio of 10
+        renders exactly as it did before.
+        The comparison needs no tolerance: sprig's divf/mulf run on
+        shopspring/decimal rather than float64, so 250m / 10 * 1000 is exactly
+        25 and not 25.000000000000004. A tolerance would in fact reintroduce
+        the bug it looks like it prevents, by accepting a value such as
+        100.0000004m as whole-milli and rendering it verbatim.
+*/}}
+{{-       $cpuRequestMilli := mulf $cpuRequestF64 1000.0 | float64 }}
+{{-       $cpuRequestMilliCeil := ceil $cpuRequestMilli }}
+{{-       if eq $cpuRequestMilli $cpuRequestMilliCeil }}
+{{-         $_ := set $output.requests $k ($cpuRequestF64 | toString) }}
+{{-       else }}
+{{-         $_ := set $output.requests $k (printf "%dm" (int64 $cpuRequestMilliCeil)) }}
+{{-       end }}
+{{-       $_ := set $output.limits $k ($v | toString) }}
+{{-     else if eq $k "memory" }}
+{{-       $vMemoryRequestF64 := (include "cozy-lib.resources.toFloat" $v) | float64 }}
+{{-       $memoryRequestF64 := divf $vMemoryRequestF64 $memoryAllocationRatio }}
+{{-       $_ := set $output.requests $k ($memoryRequestF64 | int | toString ) }}
+{{-       $_ := set $output.limits $k ($v | toString) }}
+{{-     else if eq $k "ephemeral-storage" }}
+{{-       $vEphemeralStorageRequestF64 := (include "cozy-lib.resources.toFloat" $v) | float64 }}
+{{-       $ephemeralStorageRequestF64 := divf $vEphemeralStorageRequestF64 $ephemeralStorageAllocationRatio }}
+{{-       $_ := set $output.requests $k ($ephemeralStorageRequestF64 | int | toString) }}
+{{-       $_ := set $output.limits $k ($v | toString) }}
+{{-     else }}
+{{-       $_ := set $output.requests $k $v }}
+{{-       $_ := set $output.limits $k $v }}
+{{-     end }}
+{{-   end }}
+{{-   $output | toYaml }}
+{{- end  }}
+
+{{- /*
+  The defaultingSanitize helper takes a 3-element list as its argument:
+  {{- include "cozy-lib.resources.defaultingSanitize" list (
+      .Values.resourcesPreset
+      .Values.resources
+      $
+  ) }}
+  and returns the same result as
+  {{- include "cozy-lib.resources.sanitize" list (
+      .Values.resources
+      $
+  ) }}, however if cpu, memory, or ephemeral storage is not specified in
+  .Values.resources, it is filled from the resource presets.
+
+  Example input (cpuAllocationRatio = 10):
+  ========================================
+  resources:
+    cpu: "1"
+  resourcesPreset: "t1.nano"
+
+  Example output:
+  ===============
+  resources:
+    limits:
+      cpu: "1" # == user input
+      ephemeral-storage: 2Gi # == default ephemeral storage limit
+      memory: 128Mi # from "t1.nano"
+    requests:
+      cpu: 100m # == 1 / 10
+      ephemeral-storage: 50Mi # == default ephemeral storage request
+      memory: 128Mi # memory request == limit
+*/}}
+{{- define "cozy-lib.resources.defaultingSanitize" }}
+{{-   $preset := index . 0 }}
+{{-   $resources := index . 1 }}
+{{-   $global := index . 2 }}
+{{-   $presetMap := include "cozy-lib.resources.unsanitizedPreset" $preset | fromYaml }}
+{{-   $mergedMap := deepCopy (default (dict) $resources) | mergeOverwrite $presetMap }}
+{{-   include "cozy-lib.resources.sanitize" (list $mergedMap $global) }}
+{{- end }}
+
+{{- /*
+    javaHeap takes a .Values.resources and returns Java heap settings based on
+    memory requests and limits. -Xmx is set to 75% of memory limits, -Xms is
+    set to the lesser of requests or 25% of limits. Accepts only sanitized
+    resource maps.
+*/}}
+{{- define "cozy-lib.resources.javaHeap" }}
+{{-   $memoryRequestInt := include "cozy-lib.resources.toFloat" .requests.memory | float64 | int64 }}
+{{-   $memoryLimitInt := include "cozy-lib.resources.toFloat" .limits.memory | float64 | int64 }}
+{{- /* 4194304 is 4Mi */}}
+{{-   $xmxMi := div (mul $memoryLimitInt 3) 4194304 }}
+{{-   $xmsMi := min (div $memoryLimitInt 4194304) (div $memoryRequestInt 1048576) }}
+{{-   printf `-Xms%dm -Xmx%dm` $xmsMi $xmxMi }}
+{{- end }}
+
+{{- /*
+    goMemLimit takes a sanitized .Values.resources and returns a GOMEMLIMIT
+    value set to 75% of the memory limit. Without it the Go runtime collects
+    on a relative target (GOGC) with no absolute ceiling, so a burst of
+    allocation grows the heap past the cgroup limit and the kernel kills the
+    container. The 25% headroom covers what GOMEMLIMIT does not account for:
+    goroutine stacks and any mmap'd region. Accepts only sanitized resource
+    maps.
+*/}}
+{{- define "cozy-lib.resources.goMemLimit" }}
+{{-   $memoryLimitInt := include "cozy-lib.resources.toFloat" .limits.memory | float64 | int64 }}
+{{- /* 4194304 is 4Mi */}}
+{{-   $limitMiB := div (mul $memoryLimitInt 3) 4194304 }}
+{{- /* Go accepts 0, and then collects almost without pause. */}}
+{{-   if lt $limitMiB 1 }}
+{{-     fail (printf "ERROR: a memory limit of %s leaves no room for a Go heap; GOMEMLIMIT needs a limit of at least 1398102 bytes (4/3 Mi) to come out at 1MiB." .limits.memory) }}
+{{-   end }}
+{{-   printf `%dMiB` $limitMiB }}
+{{- end }}
+
+{{- define "cozy-lib.resources.flatten" -}}
+{{-   $out := dict -}}
+{{-   $res := include "cozy-lib.resources.requestsAndLimits" . | fromYaml -}}
+{{-   range $section, $values := $res }}
+{{-     range $k, $v := $values }}
+{{-       with include "cozy-lib.resources.flattenResource" (list $section $k) }}
+{{-         $_ := set $out . $v }}
+{{-       end }}
+{{-     end }}
+{{-   end }}
+{{-   $out | toYaml }}
+{{- end }}
+
+{{/*
+  This is a helper function that takes an argument like `list "limits" "services.loadbalancers"`
+  or `list "limits" "storage"` or `list "requests" "cpu"` and returns "services.loadbalancers",
+  "", and "requests.cpu", respectively, thus transforming them to an acceptable format for k8s
+  ResourceQuotas objects.
+*/}}
+{{- define "cozy-lib.resources.flattenResource" }}
+{{-   $rawQuotaKeys := list
+        "pods"
+        "services"
+        "services.loadbalancers"
+        "services.nodeports"
+        "services.clusterip"
+        "configmaps"
+        "secrets"
+        "persistentvolumeclaims"
+        "replicationcontrollers"
+        "resourcequotas"
+-}}
+{{-   $section := index . 0 }}
+{{-   $type := index . 1 }}
+{{-   $out := "" }}
+{{-   if and (eq $section "limits") (eq $type "storage") }}
+{{-     $out = "" }}
+{{- /*
+      A ResourceQuota accepts hugepages only as requests.hugepages-<size>,
+      limits.hugepages-<size> is rejected and the whole quota with it.
+*/}}
+{{-   else if and (eq $section "limits") (hasPrefix "hugepages-" $type) }}
+{{-     $out = "" }}
+{{-   else if and (eq $section "limits") (has $type $rawQuotaKeys) }}
+{{-     $out = $type }}
+{{-   else if not (has $type $rawQuotaKeys) }}
+{{-     $out = printf "%s.%s" $section $type }}
+{{-   end }}
+{{-   $out -}}
+{{- end }}

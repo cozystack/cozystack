@@ -1,0 +1,405 @@
+# Default values for metallb.
+# This is a YAML-formatted file.
+# Declare variables to be passed into your templates.
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+loadBalancerClass: ""
+
+# To configure MetalLB, you must specify ONE of the following two
+# options.
+
+rbac:
+  # create specifies whether to install and use RBAC rules.
+  create: true
+
+tls:
+  # -- Comma-separated list of TLS cipher suites. If empty, uses Go defaults. Only applies to TLS 1.2.
+  cipherSuites: ""
+  # -- Comma-separated list of numeric CurveID values (e.g. 29,4588). See https://pkg.go.dev/crypto/tls#CurveID. If empty, uses Go defaults.
+  curvePreferences: ""
+  # -- Minimum TLS version (VersionTLS12 or VersionTLS13). Defaults to VersionTLS13.
+  minVersion: ""
+  # -- The name of the secret to be mounted in the controller pod to provide TLS certificates for metrics endpoints. If not present, a self-signed certificate is auto-generated.
+  controllerMetricsTLSSecret: ""
+  # -- The name of the secret to be mounted in the speaker pod to provide TLS certificates for metrics endpoints. If not present, a self-signed certificate is auto-generated.
+  speakerMetricsTLSSecret: ""
+
+prometheus:
+  # scrape annotations specifies whether to add Prometheus metric
+  # auto-collection annotations to pods. See
+  # https://github.com/prometheus/prometheus/blob/release-2.1/documentation/examples/prometheus-kubernetes.yml
+  # for a corresponding Prometheus configuration. Alternatively, you
+  # may want to use the Prometheus Operator
+  # (https://github.com/coreos/prometheus-operator) for more powerful
+  # monitoring configuration. If you use the Prometheus operator, this
+  # can be left at false.
+  scrapeAnnotations: false
+
+  # port both controller and speaker will listen on for metrics (always HTTPS).
+  # Matches the port kube-rbac-proxy previously served on.
+  metricsPort: 9120
+
+  # prometheus doesn't have the permission to scrape all namespaces so we give it permission to scrape metallb's one
+  rbacPrometheus: true
+
+  # the service account used by prometheus
+  # required when " .Values.prometheus.rbacPrometheus == true " and " .Values.prometheus.podMonitor.enabled=true or prometheus.serviceMonitor.enabled=true "
+  serviceAccount: ""
+
+  # the namespace where prometheus is deployed
+  # required when " .Values.prometheus.rbacPrometheus == true " and " .Values.prometheus.podMonitor.enabled=true or prometheus.serviceMonitor.enabled=true "
+  namespace: ""
+
+  # Prometheus Operator PodMonitors
+  podMonitor:
+    # enable support for Prometheus Operator
+    enabled: false
+
+    # optional additional labels for podMonitors
+    additionalLabels: {}
+
+    # optional annotations for podMonitors
+    annotations: {}
+
+    # Job label for scrape target
+    jobLabel: "app.kubernetes.io/name"
+
+    # Scrape interval. If not set, the Prometheus default scrape interval is used.
+    interval:
+
+    # 	metric relabel configs to apply to samples before ingestion.
+    metricRelabelings: []
+    # - action: keep
+    #   regex: 'kube_(daemonset|deployment|pod|namespace|node|statefulset).+'
+    #   sourceLabels: [__name__]
+
+    # 	relabel configs to apply to samples before ingestion.
+    relabelings: []
+    # - sourceLabels: [__meta_kubernetes_pod_node_name]
+    #   separator: ;
+    #   regex: ^(.*)$
+    #   target_label: nodename
+    #   replacement: $1
+    #   action: replace
+
+  # Prometheus Operator ServiceMonitors. To be used as an alternative
+  # to podMonitor, supports secure metrics.
+  serviceMonitor:
+    # enable support for Prometheus Operator
+    enabled: false
+
+    speaker:
+      # optional additional labels for the speaker serviceMonitor
+      additionalLabels: {}
+      # optional additional annotations for the speaker serviceMonitor
+      annotations: {}
+      # optional tls configuration for the speaker serviceMonitor, in case
+      # secure metrics are enabled.
+      tlsConfig:
+        insecureSkipVerify: true
+
+    controller:
+      # optional additional labels for the controller serviceMonitor
+      additionalLabels: {}
+      # optional additional annotations for the controller serviceMonitor
+      annotations: {}
+      # optional tls configuration for the controller serviceMonitor, in case
+      # secure metrics are enabled.
+      tlsConfig:
+        insecureSkipVerify: true
+
+    # Job label for scrape target
+    jobLabel: "app.kubernetes.io/name"
+
+    # Scrape interval. If not set, the Prometheus default scrape interval is used.
+    interval:
+
+    # 	metric relabel configs to apply to samples before ingestion.
+    metricRelabelings: []
+    # - action: keep
+    #   regex: 'kube_(daemonset|deployment|pod|namespace|node|statefulset).+'
+    #   sourceLabels: [__name__]
+
+    # 	relabel configs to apply to samples before ingestion.
+    relabelings: []
+    # - sourceLabels: [__meta_kubernetes_pod_node_name]
+    #   separator: ;
+    #   regex: ^(.*)$
+    #   target_label: nodename
+    #   replacement: $1
+    #   action: replace
+
+  # Prometheus Operator alertmanager alerts
+  prometheusRule:
+    # enable alertmanager alerts
+    enabled: false
+
+    # optional additional labels for prometheusRules
+    additionalLabels: {}
+
+    # optional annotations for prometheusRules
+    annotations: {}
+
+    # MetalLBStaleConfig
+    staleConfig:
+      enabled: true
+      labels:
+        severity: warning
+
+    # MetalLBConfigNotLoaded
+    configNotLoaded:
+      enabled: true
+      labels:
+        severity: warning
+
+    # MetalLBAddressPoolExhausted
+    addressPoolExhausted:
+      enabled: true
+      labels:
+        severity: critical
+      # Exclude the pools matching the regular expression from triggering the alert.
+      excludePools: ""
+
+    addressPoolUsage:
+      enabled: true
+      thresholds:
+        - percent: 75
+          labels:
+            severity: warning
+        - percent: 85
+          labels:
+            severity: warning
+        - percent: 95
+          labels:
+            severity: critical
+      # Exclude the pools matching the regular expression from triggering the alert.
+      excludePools: ""
+
+    # MetalLBBGPSessionDown
+    bgpSessionDown:
+      enabled: true
+      labels:
+        severity: critical
+
+    extraAlerts: []
+
+# controller contains configuration specific to the MetalLB cluster
+# controller.
+controller:
+  enabled: true
+  # -- Controller log level. Must be one of: `all`, `debug`, `info`, `warn`, `error` or `none`
+  logLevel: info
+  # command: /controller
+  webhookMode: enabled
+  image:
+    repository: quay.io/metallb/controller
+    tag:
+    pullPolicy:
+  ## @param controller.updateStrategy.type Metallb controller deployment strategy type.
+  ## ref: https://kubernetes.io/docs/concepts/workloads/controllers/deployment/#strategy
+  ## e.g:
+  ## strategy:
+  ##  type: RollingUpdate
+  ##  rollingUpdate:
+  ##    maxSurge: 25%
+  ##    maxUnavailable: 25%
+  ##
+  strategy:
+    type: RollingUpdate
+  serviceAccount:
+    # Specifies whether a ServiceAccount should be created
+    create: true
+    # The name of the ServiceAccount to use. If not set and create is
+    # true, a name is generated using the fullname template
+    name: ""
+    annotations: {}
+  securityContext:
+    runAsNonRoot: true
+    # nobody
+    runAsUser: 65534
+    fsGroup: 65534
+  resources: {}
+    # limits:
+      # cpu: 100m
+      # memory: 100Mi
+  nodeSelector: {}
+  tolerations: []
+  priorityClassName: ""
+  runtimeClassName: ""
+  affinity: {}
+  podAnnotations: {}
+  labels: {}
+  livenessProbe:
+    enabled: true
+    port: 17472
+    failureThreshold: 3
+    initialDelaySeconds: 10
+    periodSeconds: 10
+    successThreshold: 1
+    timeoutSeconds: 1
+  readinessProbe:
+    enabled: true
+    port: 17472
+    failureThreshold: 3
+    initialDelaySeconds: 10
+    periodSeconds: 10
+    successThreshold: 1
+    timeoutSeconds: 1
+
+  extraContainers: []
+
+# speaker contains configuration specific to the MetalLB speaker
+# daemonset.
+speaker:
+  enabled: true
+  # command: /speaker
+  # -- Speaker log level. Must be one of: `all`, `debug`, `info`, `warn`, `error` or `none`
+  logLevel: info
+  tolerateMaster: true
+  memberlist:
+    # --  When enabled: false, the speaker pods must run on all nodes
+    enabled: true
+    mlBindPort: 7946
+    mlBindAddrOverride: ""
+    mlSecretKeyPath: "/etc/ml_secret_key"
+  excludeInterfaces:
+    enabled: true
+  # ignore the exclude-from-external-loadbalancer label
+  ignoreExcludeLB: false
+  # --  BGP debounce timeout for FRR configuration reloads, in milliseconds. Only applies when BGP type is frr. Default (when unset) is 3000 ms. This feature is experimental
+  bgpDebounceTimeout: null
+
+  image:
+    repository: quay.io/metallb/speaker
+    tag:
+    pullPolicy:
+  ## @param speaker.updateStrategy.type Speaker daemonset strategy type
+  ## ref: https://kubernetes.io/docs/tasks/manage-daemon/update-daemon-set/
+  ##
+  updateStrategy:
+    ## StrategyType
+    ## Can be set to RollingUpdate or OnDelete
+    ##
+    type: RollingUpdate
+  serviceAccount:
+    # Specifies whether a ServiceAccount should be created
+    create: true
+    # The name of the ServiceAccount to use. If not set and create is
+    # true, a name is generated using the fullname template
+    name: ""
+    annotations: {}
+  securityContext: {}
+  ## Defines a secret name for the controller to generate a memberlist encryption secret
+  ## By default secretName: {{ "metallb.fullname" }}-memberlist
+  ##
+  # secretName:
+  resources: {}
+    # limits:
+      # cpu: 100m
+      # memory: 100Mi
+  nodeSelector: {}
+  tolerations: []
+  priorityClassName: ""
+  affinity: {}
+  ## Selects which runtime class will be used by the pod.
+  runtimeClassName: ""
+  podAnnotations: {}
+  labels: {}
+  livenessProbe:
+    enabled: true
+    port: 17472
+    failureThreshold: 3
+    initialDelaySeconds: 10
+    periodSeconds: 10
+    successThreshold: 1
+    timeoutSeconds: 1
+  readinessProbe:
+    enabled: true
+    port: 17472
+    failureThreshold: 3
+    initialDelaySeconds: 10
+    periodSeconds: 10
+    successThreshold: 1
+    timeoutSeconds: 1
+  startupProbe:
+    enabled: true
+    failureThreshold: 30
+    periodSeconds: 5
+  # frr contains configuration specific to the MetalLB FRR container,
+  # for speaker running alongside FRR.
+  # DEPRECATED: The FRR mode is deprecated and will be removed in a future
+  # release. Use the frr-k8s mode (frrk8s.enabled) instead, which is now
+  # the default BGP backend.
+  frr:
+    enabled: false
+    image:
+      repository: quay.io/frrouting/frr
+      tag: 10.5.3
+      pullPolicy:
+    metricsPort: 9121
+    resources: {}
+
+  reloader:
+    resources: {}
+
+  frrMetrics:
+    resources: {}
+
+  initContainers:
+    cpFrrFiles:
+      resources: {}
+    cpReloader:
+      resources: {}
+    cpMetrics:
+      resources: {}
+
+  extraContainers: []
+
+crds:
+  enabled: true
+  validationFailurePolicy: Fail
+
+# frrk8s contains the configuration related to using an frrk8s instance
+# (github.com/metallb/frr-k8s) as the backend for the BGP implementation.
+# This allows configuring additional frr parameters in combination to those
+# applied by MetalLB.
+frrk8s:
+  # -- If set, enables frrk8s as a backend. This is mutually exclusive to frr mode.
+  enabled: true
+  # -- If true, uses an external frr-k8s installation instead of the bundled subchart.
+  external: false
+  # -- Namespace where external frr-k8s is installed (only used when external=true).
+  namespace: ""
+
+# Values passed to the frr-k8s subchart (note the hyphen in "frr-k8s").
+# For all available options, see:
+# https://github.com/metallb/frr-k8s/blob/main/charts/frr-k8s/values.yaml
+frr-k8s:
+  prometheus:
+    serviceMonitor:
+      # -- Enable Prometheus ServiceMonitor for frr-k8s metrics.
+      enabled: false
+      # The FRR-K8s BGP/BFD metrics are exposed with the "frrk8s_" prefix
+      # (e.g. frrk8s_bgp_session_up, frrk8s_bfd_session_up).
+      # To rename them to the legacy "metallb_" prefix for backward compatibility
+      # with existing dashboards or alerts, enable and configure metric relabelings:
+      # metricRelabelings:
+      # - sourceLabels: [__name__]
+      #   regex: "frrk8s_bgp_(.*)"
+      #   targetLabel: "__name__"
+      #   replacement: "metallb_bgp_$1"
+      # - sourceLabels: [__name__]
+      #   regex: "frrk8s_bfd_(.*)"
+      #   targetLabel: "__name__"
+      #   replacement: "metallb_bfd_$1"
+
+# networkpolicies
+networkpolicies:
+  # if set, networkpolicies for metallb components will be installed in the metallb namespace
+  enabled: false
+  # if set, a default deny network policy will be installed in the metallb namespace
+  defaultDeny: false
+  # to override internal k8s api targetPort
+  apiPort: 6443

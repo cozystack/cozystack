@@ -1,0 +1,22 @@
+{{- /*
+Ungated: TLS is always served (see certmanager.yaml and the tls.issuer
+discussion in the README), so the operator reconciles the source Secret for
+every release regardless of tls.issuer.
+
+The source is the operator's own <release>-ca-bundle rather than a
+cert-manager CA Secret: it is key-free already, it exists under both
+tls.issuer values — cert-manager Secrets only render under tls.issuer:
+cert-manager — and it carries the previous CA alongside the new one across a
+rollover, so the tenant reads the same object no matter which issuer is
+active.
+*/}}
+---
+apiVersion: internal.cozystack.io/v1alpha1
+kind: TenantProjection
+metadata:
+  name: {{ .Release.Name }}-ca
+spec:
+  projections:
+    - type: CACert
+      sourceSecretName: {{ .Release.Name }}-ca-bundle
+      sourceKey: ca.crt

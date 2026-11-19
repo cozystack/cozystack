@@ -1,0 +1,90 @@
+---
+# ---
+# Cluster API provider options
+core: {}
+# cluster-api: {}  # Name, required
+#   namespace: ""  # Optional
+#   version: ""    # Optional
+bootstrap: {}
+# kubeadm: {}      # Name, required
+#   namespace: ""  # Optional
+#   version: ""    # Optional
+controlPlane: {}
+# kubeadm: {}      # Name, required
+#   namespace: ""  # Optional
+#   version: ""    # Optional
+infrastructure: {}
+# docker: {}  # Name, required
+#   namespace: ""  # Optional
+#   version: ""    # Optional
+addon: {}
+# helm: {}         # Name, required
+#   namespace: ""  # Optional
+#   version: ""    # Optional
+ipam: {}
+# in-cluster: {}   # Name, required
+#   namespace: ""  # Optional
+#   version: ""    # Optional
+manager.featureGates: {}
+fetchConfig: {}
+# ---
+# Common configuration secret options
+configSecret: {}
+# ---
+# CAPI operator deployment options
+logLevel: 2
+replicaCount: 1
+leaderElection:
+  enabled: true
+image:
+  manager:
+    repository: registry.k8s.io/capi-operator/cluster-api-operator
+    tag: v0.19.0
+    pullPolicy: IfNotPresent
+env:
+  manager: []
+diagnosticsAddress: ":8443"
+healthAddr: ":9440"
+insecureDiagnostics: false
+watchConfigSecret: false
+imagePullSecrets: {}
+resources:
+  manager:
+    limits:
+      cpu: 100m
+      memory: 150Mi
+    requests:
+      cpu: 100m
+      memory: 100Mi
+containerSecurityContext: {}
+affinity:
+  nodeAffinity:
+    requiredDuringSchedulingIgnoredDuringExecution:
+      nodeSelectorTerms:
+        - matchExpressions:
+            - key: kubernetes.io/arch
+              operator: In
+              values:
+                - amd64
+                - arm64
+                - ppc64le
+            - key: kubernetes.io/os
+              operator: In
+              values:
+                - linux
+tolerations:
+  - effect: NoSchedule
+    key: node-role.kubernetes.io/master
+  - effect: NoSchedule
+    key: node-role.kubernetes.io/control-plane
+volumes:
+  - name: cert
+    secret:
+      defaultMode: 420
+      secretName: capi-operator-webhook-service-cert
+volumeMounts:
+  manager:
+    - mountPath: /tmp/k8s-webhook-server/serving-certs
+      name: cert
+      readOnly: true
+enableHelmHook: true

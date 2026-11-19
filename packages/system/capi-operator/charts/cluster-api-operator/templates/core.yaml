@@ -1,0 +1,71 @@
+# Core provider
+{{- range $name, $core := $.Values.core }}
+  {{- $coreNamespace := default "capi-system" (get $core "namespace") }}
+  {{- $coreName := $name }}
+  {{- $coreVersion := get $core "version" }}
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  annotations:
+    {{- if $.Values.enableHelmHook }}
+    "helm.sh/hook": "post-install,post-upgrade"
+    "helm.sh/hook-weight": "1"
+    {{- end }}
+    "argocd.argoproj.io/sync-wave": "1"
+  name: {{ $coreNamespace }}
+---
+apiVersion: operator.cluster.x-k8s.io/v1alpha2
+kind: CoreProvider
+metadata:
+  name: {{ $coreName }}
+  namespace: {{ $coreNamespace }}
+  annotations:
+    {{- if $.Values.enableHelmHook }}
+    "helm.sh/hook": "post-install,post-upgrade"
+    "helm.sh/hook-weight": "2"
+    {{- end }}
+    "argocd.argoproj.io/sync-wave": "2"
+{{- if or $coreVersion $.Values.configSecret.name $.Values.manager }}
+spec:
+{{- end}}
+{{- if $coreVersion }}
+  version: {{ $coreVersion }}
+{{- end }}
+{{- if $.Values.manager }}
+{{- if and $.Values.manager.featureGates $.Values.manager.featureGates.core }}
+  manager:
+    featureGates:
+    {{- range $key, $value := $.Values.manager.featureGates.core }}
+      {{ $key }}: {{ $value }}
+    {{- end }}
+{{- end }}
+{{- end }}
+{{- if $.Values.configSecret.name }}
+  configSecret:
+    name: {{ $.Values.configSecret.name }}
+    {{- if $.Values.configSecret.namespace }}
+    namespace: {{ $.Values.configSecret.namespace }}
+    {{- end }}
+{{- end }}
+{{- if $core.manifestPatches }}
+  manifestPatches: {{ toYaml $core.manifestPatches | nindent 4 }}
+{{- end }}
+{{- if $core.additionalManifests }}
+  additionalManifests:
+    name: {{ $core.additionalManifests.name }}
+    {{- if $core.additionalManifests.namespace }}
+    namespace: {{ $core.additionalManifests.namespace }}
+    {{- end }}
+{{- end }}
+{{- if $core.additionalManifests }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $core.additionalManifests.name }}
+  namespace: {{ default $coreNamespace $core.additionalManifests.namespace }}
+data:
+  manifests: {{- toYaml $core.additionalManifests.manifests | nindent 4 }}
+{{- end }}
+{{- end }} {{/* range $name, $core := .Values.core */}}

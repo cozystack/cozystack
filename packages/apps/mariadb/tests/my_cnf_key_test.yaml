@@ -1,0 +1,29 @@
+suite: MariaDB my.cnf ConfigMap key
+
+# mariadb-operator projects the referenced key into /etc/mysql/conf.d under
+# the key's own name, and the server's `!includedir` reads only files ending
+# in .cnf there. A key without that suffix is mounted and silently ignored.
+
+tests:
+  - it: stores the config under a .cnf key
+    template: templates/config.yaml
+    release:
+      name: mariadb-test
+      namespace: tenant-test
+    asserts:
+      - exists:
+          path: data["my.cnf"]
+      - isNull:
+          path: data.config
+
+  - it: points the MariaDB CR at that same key
+    template: templates/mariadb.yaml
+    release:
+      name: mariadb-test
+      namespace: tenant-test
+    asserts:
+      - equal:
+          path: spec.myCnfConfigMapKeyRef
+          value:
+            name: mariadb-test-my-cnf
+            key: my.cnf

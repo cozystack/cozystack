@@ -1,0 +1,149 @@
+{{- /*
+  Clamp the replica count to at least 1 so an explicit replicas: 0 cannot
+  render an empty resourceNames list below — an empty resourceNames in an RBAC
+  rule matches ALL PVCs in the namespace (a wildcard), which would silently
+  undo the least-privilege scoping. data-etcd-0 always exists for any running
+  cluster, and the delete uses --ignore-not-found, so the clamp is safe.
+*/}}
+{{- $replicaCount := max 1 (int .Values.replicas) | int }}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ .Release.Name }}-cleanup
+  labels:
+    app.kubernetes.io/instance: {{ .Release.Name }}
+  annotations:
+    "helm.sh/hook": post-delete
+    "helm.sh/hook-weight": "0"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ .Release.Name }}-cleanup
+  labels:
+    app.kubernetes.io/instance: {{ .Release.Name }}
+  annotations:
+    "helm.sh/hook": post-delete
+    "helm.sh/hook-weight": "5"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+rules:
+  # The Job deletes the data PVCs by their deterministic per-replica names
+  # (data-etcd-<ordinal>), so we grant delete by explicit resourceNames rather
+  # than a namespace-wide PVC delete that could hit a sibling workload's PVC.
+  - apiGroups: [""]
+    resources: ["persistentvolumeclaims"]
+    verbs: ["get", "delete"]
+    resourceNames:
+{{- range $i := until $replicaCount }}
+      - data-etcd-{{ $i }}
+{{- end }}
+  # cert-manager TLS secrets carry only the cluster-wide
+  # controller.cert-manager.io/fao label, and the two pre-install "keep"
+  # secrets carry none, so we grant delete by explicit resourceNames rather
+  # than an unsafe label sweep that could hit a sibling app's secrets.
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get", "delete"]
+    resourceNames:
+      - etcd-peer-ca-tls
+      - etcd-ca-tls
+      - etcd-server-tls
+      - etcd-peer-tls
+      - etcd-client-tls
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ .Release.Name }}-cleanup
+  labels:
+    app.kubernetes.io/instance: {{ .Release.Name }}
+  annotations:
+    "helm.sh/hook": post-delete
+    "helm.sh/hook-weight": "5"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ .Release.Name }}-cleanup
+subjects:
+  - kind: ServiceAccount
+    name: {{ .Release.Name }}-cleanup
+    namespace: {{ .Release.Namespace }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ .Release.Name }}-cleanup
+  labels:
+    app.kubernetes.io/instance: {{ .Release.Name }}
+  annotations:
+    "helm.sh/hook": post-delete
+    "helm.sh/hook-weight": "10"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 3
+  activeDeadlineSeconds: 120
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/instance: {{ .Release.Name }}
+        policy.cozystack.io/allow-to-apiserver: "true"
+    spec:
+      serviceAccountName: {{ .Release.Name }}-cleanup
+      restartPolicy: Never
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        runAsGroup: 65534
+        fsGroup: 65534
+        seccompProfile:
+          type: RuntimeDefault
+      volumes:
+        - name: tmp
+          emptyDir: {}
+      containers:
+        - name: cleanup
+          image: docker.io/clastix/kubectl:v1.32
+          env:
+            - name: HOME
+              value: /tmp
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+          resources:
+            requests:
+              cpu: 10m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
+          command:
+            - /bin/sh
+            - -c
+            - |
+              # The EtcdCluster is named "etcd" (check-release-name pins the
+              # release name to "etcd"), so its StatefulSet volumeClaimTemplate
+              # PVCs are named data-etcd-<ordinal>, one per replica. The
+              # etcd-operator does not garbage-collect them on EtcdCluster
+              # deletion, so we delete them here by name (safe: no sibling
+              # workload shares the data-etcd-* prefix in a tenant namespace).
+              echo "Deleting orphaned etcd data PVCs for {{ .Release.Name }}..."
+              kubectl delete pvc -n {{ .Release.Namespace }} {{ range $i := until $replicaCount }}data-etcd-{{ $i }} {{ end }}--ignore-not-found --wait=false \
+                || echo "WARNING: etcd PVC cleanup failed for {{ .Release.Name }}; orphaned PVCs may remain" >&2
+              # etcd-ca-tls / etcd-client-tls are pre-install "keep" secrets
+              # this chart owns; etcd-peer-ca-tls / etcd-server-tls /
+              # etcd-peer-tls are cert-manager-issued secrets with no owner
+              # reference. None are reclaimed by the uninstall, so delete them
+              # by name.
+              echo "Deleting orphaned etcd TLS secrets for {{ .Release.Name }}..."
+              kubectl delete secret -n {{ .Release.Namespace }} etcd-peer-ca-tls etcd-ca-tls etcd-server-tls etcd-peer-tls etcd-client-tls --ignore-not-found --wait=false \
+                || echo "WARNING: etcd secret cleanup failed for {{ .Release.Name }}; orphaned secrets may remain" >&2
+              echo "etcd cleanup complete."

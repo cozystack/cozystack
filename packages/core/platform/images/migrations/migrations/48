@@ -1,0 +1,72 @@
+#!/bin/sh
+# Migration 48 --> 49
+# Backfill the app.kubernetes.io/instance release label onto pre-existing
+# ClickHouse keeper PVCs.
+#
+# PR #3072 adds app.kubernetes.io/instance to the keeper volumeClaimTemplates and
+# a post-delete hook that garbage-collects PVCs carrying that label. But the
+# altinity clickhouse-keeper-operator only stamps volumeClaimTemplates.metadata
+# .labels onto PVCs it creates *after* the change; it never re-labels PVCs that
+# already exist. Keeper PVCs provisioned before this upgrade therefore stay
+# unlabeled, the cleanup hook's selector misses them, and they keep leaking on
+# delete (issue #3057). This migration relabels them once so the hook can reclaim
+# them. The main ClickHouse data/log PVCs have carried the label since 2025-06-03
+# (well before the migration era) and need no backfill.
+#
+# Best-effort by design: the worst case if a relabel is skipped is the
+# pre-existing leak this PR set out to fix, which is strictly no worse than the
+# status quo. A transient apiserver hiccup must therefore NOT abort the whole
+# platform upgrade, so the keeper list and per-PVC reads tolerate failure
+# (|| true) rather than exiting non-zero.
+
+set -euo pipefail
+
+# shellcheck source=lib/cozystack-version.sh
+. "$(dirname "$0")/lib/cozystack-version.sh"
+
+# This migration runs platform-wide (targetVersion bump), including on clusters
+# that never installed ClickHouse. Skip the backfill when the keeper CRD is
+# absent. The `|| true` on the list additionally keeps a transient apiserver
+# error from aborting the upgrade — there is nothing safety-critical to gate on.
+if ! kubectl get crd clickhousekeeperinstallations.clickhouse-keeper.altinity.com >/dev/null 2>&1; then
+  echo "ClickHouse keeper CRD not present; skipping keeper PVC label backfill"
+  chks=""
+else
+  # Each ClickHouseKeeperInstallation is named "<release>-keeper"; its PVCs are
+  # created from the "default" volumeClaimTemplate and named
+  # "default-chk-<release>-keeper-<cluster>-<shard>-<replica>-<ordinal>".
+  # No early-close (head) in the pipe: under pipefail a large list would SIGPIPE
+  # kubectl and abort the migration.
+  chks=$(kubectl get clickhousekeeperinstallations.clickhouse-keeper.altinity.com -A \
+    -o jsonpath='{range .items[*]}{.metadata.namespace}{" "}{.metadata.name}{"\n"}{end}' || true)
+fi
+
+echo "$chks" | while read -r ns chk; do
+  [ -n "${ns:-}" ] || continue
+  release="${chk%-keeper}"
+
+  # grep exits 1 when a namespace has no matching PVCs; tolerate it so pipefail
+  # does not abort the whole migration on an empty match.
+  pvcs=$(kubectl get pvc -n "$ns" \
+    -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' 2>/dev/null \
+    | grep -E "^default-chk-${chk}-" || true)
+
+  for pvc in $pvcs; do
+    [ -n "${pvc:-}" ] || continue
+    current=$(kubectl get pvc -n "$ns" "$pvc" \
+      -o jsonpath='{.metadata.labels.app\.kubernetes\.io/instance}' 2>/dev/null || true)
+    if [ "$current" = "$release" ]; then
+      echo "PVC $ns/$pvc already labeled app.kubernetes.io/instance=$release; skipping"
+      continue
+    fi
+    echo "Labeling PVC $ns/$pvc with app.kubernetes.io/instance=$release"
+    kubectl label pvc -n "$ns" "$pvc" "app.kubernetes.io/instance=$release" --overwrite
+  done
+done
+
+# Stamp version via the shared helper so the cozystack-version ConfigMap keeps
+# the platform.cozystack.io/no-delete label. A label-less apply by the same
+# field manager would strip the label migration 42 added, dropping
+# cozystack-version out of the cozystack-no-delete-guardrail
+# ValidatingAdmissionPolicy.
+stamp_cozystack_version 49

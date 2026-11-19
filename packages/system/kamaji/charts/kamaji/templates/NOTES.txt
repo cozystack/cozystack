@@ -1,0 +1,5 @@
+List the available CRDs installed by Kamaji:
+  kubectl get customresourcedefinitions.apiextensions.k8s.io
+
+List all the Tenant Control Plane resources deployed in your cluster:
+  kubectl get tenantcontrolplanes.kamaji.clastix.io --all-namespaces

@@ -1,0 +1,38 @@
+---
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: alerta-db
+spec:
+  instances: 2
+  {{- $existingCluster := lookup "postgresql.cnpg.io/v1" "Cluster" .Release.Namespace "alerta-db" }}
+  {{- $image := dig "spec" "imageName" "ghcr.io/cloudnative-pg/postgresql:17.7-standard-trixie" $existingCluster }}
+  imageName: {{ if regexMatch ":17\\." $image }}ghcr.io/cloudnative-pg/postgresql:17.7-standard-trixie{{ else if regexMatch ":[0-9]+\\.[0-9]+$" $image }}{{ printf "%s-standard-trixie" $image }}{{ else }}{{ $image }}{{ end }}
+  {{- if .Values._cluster.scheduling }}
+  {{- $rawConstraints := get .Values._cluster.scheduling "globalAppTopologySpreadConstraints" }}
+  {{- if $rawConstraints }}
+  {{- $rawConstraints | fromYaml | toYaml | nindent 2 }}
+    labelSelector:
+      matchLabels:
+        cnpg.io/cluster: alerta-db
+  {{- end }}
+  {{- end }}
+  storage:
+    size: {{ required ".Values.alerta.storage is required" .Values.alerta.storage }}
+    {{- with .Values.alerta.storageClassName }}
+    storageClass: {{ . }}
+    {{- end }}
+  resources:
+    limits:
+      cpu: "1"
+      memory: 2048Mi
+    requests:
+      cpu: 100m
+      memory: 512Mi
+
+  monitoring:
+    enablePodMonitor: true
+
+  inheritedMetadata:
+    labels:
+      policy.cozystack.io/allow-to-apiserver: "true"

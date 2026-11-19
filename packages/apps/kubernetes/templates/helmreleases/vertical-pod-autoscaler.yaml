@@ -1,0 +1,62 @@
+{{- define "cozystack.defaultVPAValues" -}}
+{{- $clusterDomain := (index .Values._cluster "cluster-domain") | default "cozy.local" }}
+{{- $targetTenant := .Values._namespace.monitoring }}
+vpaForVPA: false
+vertical-pod-autoscaler:
+  recommender:
+    extraArgs:
+      container-name-label: container
+      container-namespace-label: namespace
+      container-pod-name-label: pod
+      storage: prometheus
+      memory-saver: true
+      pod-label-prefix: label_
+      metric-for-pod-labels: kube_pod_labels{job="kube-state-metrics", tenant="{{ .Release.Namespace }}", cluster="{{ .Release.Name }}"}[8d]
+      pod-name-label: pod
+      pod-namespace-label: namespace
+      prometheus-address: http://vmselect-shortterm.{{ $targetTenant }}.svc.{{ $clusterDomain }}:8481/select/0/prometheus/
+      prometheus-cadvisor-job-name: cadvisor
+    resources:
+      limits:
+        memory: 1600Mi
+      requests:
+        cpu: 100m
+        memory: 1600Mi
+{{- end }}
+
+{{- if and .Values.addons.monitoringAgents.enabled .Values._namespace.etcd }}
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: {{ .Release.Name }}-vertical-pod-autoscaler
+  labels:
+    cozystack.io/repository: system
+    cozystack.io/target-cluster-name: {{ .Release.Name }}
+    sharding.fluxcd.io/key: tenants
+spec:
+  releaseName: vertical-pod-autoscaler
+  chartRef:
+    kind: ExternalArtifact
+    name: cozystack-kubernetes-application-kubevirt-kubernetes-vertical-pod-autoscaler
+    namespace: cozy-system
+  kubeConfig:
+    secretRef:
+      name: {{ .Release.Name }}-admin-kubeconfig
+      key: super-admin.svc
+  targetNamespace: cozy-vertical-pod-autoscaler
+  storageNamespace: cozy-vertical-pod-autoscaler
+  interval: 5m
+  timeout: 10m
+  install:
+    createNamespace: true
+    remediation:
+      retries: -1
+  upgrade:
+    remediation:
+      retries: -1
+  values:
+    {{- toYaml (deepCopy .Values.addons.verticalPodAutoscaler.valuesOverride | mergeOverwrite (fromYaml (include "cozystack.defaultVPAValues" .))) | nindent 4 }}
+  dependsOn:
+  - name: {{ .Release.Name }}-monitoring-agents
+    namespace: {{ .Release.Namespace }}
+{{- end }}

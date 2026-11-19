@@ -1,0 +1,26 @@
+{{- if and .Values.deployment.enabled .Values.podDisruptionBudget -}}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ template "coredns.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels: {{- include "coredns.labels" . | nindent 4 }}
+{{- if .Values.customLabels }}
+{{ toYaml .Values.customLabels | indent 4 }}
+{{- end }}
+{{- with .Values.customAnnotations }}
+  annotations:
+{{- toYaml . | nindent 4 }}
+{{- end }}
+spec:
+  {{- if not .Values.podDisruptionBudget.selector }}
+  selector:
+    matchLabels:
+        app.kubernetes.io/instance: {{ .Release.Name | quote }}
+        {{- if .Values.isClusterService }}
+        k8s-app: {{ template "coredns.k8sapplabel" . }}
+        {{- end }}
+        app.kubernetes.io/name: {{ template "coredns.name" . }}
+  {{- end }}
+{{ toYaml .Values.podDisruptionBudget | indent 2 }}
+{{- end }}

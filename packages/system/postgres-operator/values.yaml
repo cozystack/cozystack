@@ -1,0 +1,58 @@
+cloudnative-pg:
+  crds:
+    create: true
+  # The vendored chart is 0.29.0 (appVersion 1.30.0), pulled directly by `make update`.
+  # The operator image and its CRDs both come from that published chart, so they are
+  # aligned by construction - there is no patch step. (This replaced
+  # patches/cloudnative-pg-1.28.2.patch, which hand-carried the 1.28 line to appVersion
+  # 1.28.2 because upstream published no chart for that appVersion - charts ship only per
+  # minor .0/.1; chart 0.29.0 carries appVersion 1.30.0 natively, so the patch is gone.)
+  #
+  # Do NOT pin image.tag here: the tag follows the chart's appVersion, so operator and CRDs stay
+  # in lockstep. Pinning image.tag to a version the CRDs do not match makes the operator write
+  # status fields the CRD prunes (e.g. status.instanceID.sessionID, added in CNPG 1.27.3),
+  # failing every backup cluster-wide. To move the operator + CRDs, bump the chart version
+  # in the Makefile.
+
+# CloudNativePG Barman Cloud Plugin (github.com/cloudnative-pg/plugin-barman-cloud).
+# Native spec.backup.barmanObjectStore is deprecated in CNPG 1.27 and removed in 1.29,
+# and the `standard` postgresql image variant this platform pins no longer ships the
+# barman-cloud-* binaries. The plugin runs the barman tooling in a sidecar instead, so
+# it must be co-located with the CNPG operator: CNPG discovers plugins by listing
+# Services carrying the cnpg.io/pluginName label *in the operator's own namespace*
+# (cozy-postgres-operator). The subchart renders every object into .Release.Namespace,
+# which cozyhr/Flux set to cozy-postgres-operator, so no namespaceOverride is needed.
+#
+# Requires cert-manager: the subchart mints a self-signed Issuer plus the
+# barman-cloud-server-tls / barman-cloud-client-tls Secrets that carry the mTLS between
+# the operator and the plugin.
+plugin-barman-cloud:
+  crds:
+    create: true
+# Image used by the post-install webhook-readiness Job (see templates/webhook-ready-hook.yaml).
+# Any image with kubectl on PATH works; the Job calls the apiserver service proxy with the
+# hook ServiceAccount's token to confirm the mcluster.cnpg.io webhook is reachable end-to-end
+# before the HelmRelease reports Ready, closing the "connection refused" bootstrap race.
+#
+# The tag is digest-pinned so an upstream retag does not change what runs on every install
+# and upgrade across the fleet. Refresh by resolving the current manifest-list digest
+# (`docker manifest inspect docker.io/clastix/kubectl:v1.32`) and updating `digest` below.
+# renovate: datasource=docker depName=docker.io/clastix/kubectl
+webhookReady:
+  image:
+    repository: docker.io/clastix/kubectl
+    tag: v1.32
+    digest: sha256:b9ef7d8dbe65bcc81a46c09b8dc7543103055021c4f43287bf59e92a8f4fe05c
+  # Retry loop bounds for the readiness probe. Defaults total ~120s wall clock.
+  # Both are `default`-coerced in the template so an override that blanks them still
+  # produces a working Job.
+  maxAttempts: 60
+  sleepSeconds: 2
+  # Pod-level retry budget for transient node/registry failures (image pull rate limit,
+  # OOM, CNI hiccup). The shell loop inside the container only covers reachability retries.
+  # Pod retries and activeDeadlineSeconds (wall-clock bound on the whole Job across all
+  # pod retries) are ANDed, so activeDeadlineSeconds is the shorter of the two gates with
+  # the defaults above: the 60*2+60 = 180s deadline cuts the Job before backoffLimit=2
+  # ever matters if pod-level failures eat more than ~60s of the budget. Raise
+  # maxAttempts/sleepSeconds alongside backoffLimit when tuning for slow image pulls.
+  backoffLimit: 2

@@ -1,0 +1,95 @@
+{{- if .Values.externalSnapshotter.enabled -}}
+# This YAML file shows how to deploy the snapshot controller
+
+# The snapshot controller implements the control loop for CSI snapshot functionality.
+# It should be installed as part of the base Kubernetes distribution in an appropriate
+# namespace for components implementing base system functionality. For installing with
+# Vanilla Kubernetes, kube-system makes sense for the namespace.
+---
+kind: Deployment
+apiVersion: apps/v1
+metadata:
+  name: {{ .Values.externalSnapshotter.name }}
+  namespace: {{ .Release.Namespace }}
+{{ include "nfs.labels" . | indent 2 }}
+    app: {{ .Values.externalSnapshotter.name }}
+{{- with .Values.externalSnapshotter.labels }}
+{{ . | toYaml | indent 4 }}
+{{- end }}
+{{- with .Values.externalSnapshotter.annotations }}
+  annotations:
+{{ . | toYaml | indent 4 }}
+{{- end }}
+spec:
+  replicas: {{ .Values.externalSnapshotter.controller.replicas }}
+  selector:
+    matchLabels:
+      app: {{ .Values.externalSnapshotter.name }}
+  # the snapshot controller won't be marked as ready if the v1 CRDs are unavailable
+  # in #504 the snapshot-controller will exit after around 7.5 seconds if it
+  # can't find the v1 CRDs so this value should be greater than that
+  minReadySeconds: 15
+  strategy:
+    rollingUpdate:
+      maxSurge: 0
+      maxUnavailable: 1
+    type: RollingUpdate
+  template:
+    metadata:
+      labels:
+        app: {{ .Values.externalSnapshotter.name }}
+    spec:
+      serviceAccountName: {{ .Values.externalSnapshotter.name }}
+      {{- if .Values.imagePullSecrets }}
+      imagePullSecrets:
+{{ toYaml .Values.imagePullSecrets | indent 8 }}
+      {{- end }}
+      nodeSelector:
+        kubernetes.io/os: linux
+    # runOnControlPlane=true or runOnMaster=true only takes effect if affinity is not set
+    {{- if tpl "{{ .Values.controller.affinity }}" . | contains "nodeSelectorTerms" }}
+      {{- with .Values.controller.affinity }}
+      affinity:
+{{ toYaml . | indent 8 }}
+      {{- end }}
+    {{- else if or .Values.controller.runOnControlPlane .Values.controller.runOnMaster}}
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                {{- if .Values.controller.runOnControlPlane}}
+                - key: node-role.kubernetes.io/control-plane
+                  operator: Exists
+                {{- end}}
+                {{- if .Values.controller.runOnMaster}}
+                - key: node-role.kubernetes.io/master
+                  operator: Exists
+                {{- end}}
+    {{- end }}
+      priorityClassName: {{ .Values.externalSnapshotter.priorityClassName }}
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
+{{- with .Values.controller.tolerations }}
+      tolerations:
+{{ toYaml . | indent 8 }}
+{{- end }}
+      containers:
+        - name: {{ .Values.externalSnapshotter.name }}
+{{- if hasPrefix "/" .Values.image.externalSnapshotter.repository }}
+          image: "{{ .Values.image.baseRepo }}{{ .Values.image.externalSnapshotter.repository }}:{{ .Values.image.externalSnapshotter.tag }}"
+{{- else }}
+          image: {{ .Values.image.externalSnapshotter.repository }}:{{ .Values.image.externalSnapshotter.tag }}
+{{- end }}
+          args:
+            - "--v=2"
+            - "--leader-election=true"
+            - "--leader-election-namespace={{ .Release.Namespace }}"
+          resources: {{- toYaml .Values.externalSnapshotter.resources | nindent 12 }}
+          imagePullPolicy: {{ .Values.image.externalSnapshotter.pullPolicy }}
+          securityContext:
+            capabilities:
+              drop:
+              - ALL
+{{- end -}}

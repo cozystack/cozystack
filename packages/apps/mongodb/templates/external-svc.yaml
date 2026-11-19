@@ -1,0 +1,27 @@
+{{- /*
+  External access for non-sharded replica sets is handled by the Percona
+  MongoDB operator via `replsets[].expose` in mongodb.yaml: the operator
+  creates one LoadBalancer per pod and rewrites rs.conf so the driver can
+  discover the primary from outside the cluster (issue #2514). For sharded
+  mode we still expose mongos through a single LoadBalancer because mongos
+  is stateless and any router can route writes to the right shard primary.
+*/}}
+{{- if and .Values.external .Values.sharding }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Release.Name }}-external
+spec:
+  type: LoadBalancer
+  externalTrafficPolicy: Local
+  {{- if (include "cozy-lib.network.disableLoadBalancerNodePorts" $ | fromYaml) }}
+  allocateLoadBalancerNodePorts: false
+  {{- end }}
+  ports:
+  - name: mongodb
+    port: 27017
+  selector:
+    app.kubernetes.io/name: percona-server-mongodb
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: mongos
+{{- end }}

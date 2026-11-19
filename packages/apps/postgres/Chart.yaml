@@ -1,0 +1,7 @@
+apiVersion: v2
+name: postgres
+description: Managed PostgreSQL service
+icon: /logos/postgres.svg
+type: application
+version: 0.0.0 # Placeholder, the actual version will be automatically set during the build process
+appVersion: "16.2"

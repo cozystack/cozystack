@@ -1,0 +1,36 @@
+suite: the traces collector's replica count is bounded only where the rate needs it
+# Each collector replica holds its own share of a shared-central tenant's write
+# rate and starts with a full token bucket, so the replica count bounds how
+# much a central tenant can write above its rate on a rollout. A collector
+# writing to the tenant's own store has no rate, and the replica count it
+# shipped with stays valid; this chart cannot tell the two apart, so the bound
+# is enforced where the collector is rendered.
+templates:
+  - templates/helmrelease.yaml
+
+release:
+  name: monitoring
+  namespace: tenant-foo
+
+tests:
+  - it: accepts ten collector replicas
+    set:
+      tracingCollector:
+        enabled: true
+        replicas: 10
+        samplingPercentage: 10
+    asserts:
+      - equal:
+          path: spec.values.tracingCollector.replicas
+          value: 10
+
+  - it: accepts more than ten collector replicas, which only shared-central tracing refuses
+    set:
+      tracingCollector:
+        enabled: true
+        replicas: 12
+        samplingPercentage: 10
+    asserts:
+      - equal:
+          path: spec.values.tracingCollector.replicas
+          value: 12

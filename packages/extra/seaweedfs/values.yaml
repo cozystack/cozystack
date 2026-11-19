@@ -1,0 +1,224 @@
+##
+## @section Common parameters
+##
+
+## @param {string} [host] - The hostname used to access SeaweedFS externally (defaults to 's3' subdomain for the tenant host).
+host: ""
+
+## @enum {string} Topology - The topology of the SeaweedFS cluster.
+## @value Simple
+## @value MultiZone
+## @value Client
+
+## @param {Topology} topology="Simple" - The topology of the SeaweedFS cluster.
+topology: Simple
+
+## @param {int} replicationFactor - Replication factor: number of replicas for each volume in the SeaweedFS cluster.
+replicationFactor: 2
+
+##
+## @section SeaweedFS Components Configuration
+##
+
+## @typedef {struct} Resources - Resource configuration.
+## @field {quantity} [cpu] - Number of CPU cores allocated.
+## @field {quantity} [memory] - Amount of memory allocated.
+
+## @enum {string} ResourcesPreset - Default sizing preset.
+## @value t1.nano
+## @value t1.micro
+## @value t1.small
+## @value t1.medium
+## @value t1.large
+## @value t1.xlarge
+## @value t1.2xlarge
+## @value t1.4xlarge
+## @value c1.nano
+## @value c1.micro
+## @value c1.small
+## @value c1.medium
+## @value c1.large
+## @value c1.xlarge
+## @value c1.2xlarge
+## @value c1.4xlarge
+## @value s1.nano
+## @value s1.micro
+## @value s1.small
+## @value s1.medium
+## @value s1.large
+## @value s1.xlarge
+## @value s1.2xlarge
+## @value s1.4xlarge
+## @value u1.nano
+## @value u1.micro
+## @value u1.small
+## @value u1.medium
+## @value u1.large
+## @value u1.xlarge
+## @value u1.2xlarge
+## @value u1.4xlarge
+## @value m1.nano
+## @value m1.micro
+## @value m1.small
+## @value m1.medium
+## @value m1.large
+## @value m1.xlarge
+## @value m1.2xlarge
+## @value m1.4xlarge
+## @value nano
+## @value micro
+## @value small
+## @value medium
+## @value large
+## @value xlarge
+## @value 2xlarge
+
+## @typedef {struct} DB - Database configuration.
+## @field {int} [replicas] - Number of database replicas.
+## @field {quantity} [size] - Persistent Volume size.
+## @field {string} [storageClass] - StorageClass used to store the data.
+## @field {Resources} [resources] - Explicit CPU and memory configuration. When omitted, the preset defined in `resourcesPreset` is applied.
+## @field {ResourcesPreset} [resourcesPreset] - Default sizing preset used when `resources` is omitted.
+
+## @param {DB} db - Database configuration.
+db:
+  replicas: 2
+  size: "10Gi"
+  storageClass: ""
+  resources: {}
+  resourcesPreset: "t1.small"
+
+## @typedef {struct} Master - Master service configuration.
+## @field {int} [replicas] - Number of master replicas.
+## @field {Resources} [resources] - Explicit CPU and memory configuration. When omitted, the preset defined in `resourcesPreset` is applied.
+## @field {ResourcesPreset} [resourcesPreset] - Default sizing preset used when `resources` is omitted.
+## @field {int} [volumeSizeLimitMB] - Size in MB at which a volume stops taking writes, and the divisor that sets how many buckets a volume server can serve. Lower it to fit more buckets on the same disk, at the cost of more volume files for the same stored data; on a large volume it is worth raising instead. Changing it on an instance that already holds data costs something either way: lowering it stops writes to every bucket whose volumes all reach the new value until that bucket can grow, and raising it takes the room new buckets grow into, so run the check in docs/operations/seaweedfs-lowering-the-volume-size-limit.md first. Must be between 1 and 30000. A value close to or above `volume.size` leaves each volume server a single slot rather than failing, since the server floors its slot count at one.
+## @minimum 1
+## @maximum 30000
+
+## @param {Master} [master] - Master service configuration.
+master:
+  replicas: 3
+  resources: {}
+  resourcesPreset: "t1.small"
+  # The size limit a new instance starts with; on a variant that runs platform
+  # migrations, migration 57 keeps every instance that predates it at 1000
+  # unless its limit was already set or its master is not an object. The
+  # template sends it on every release, so it wins over the data-plane chart's
+  # value, which is only a fallback and stays at upstream's 1000 for the reason
+  # given beside it. Why the number is 400, and the growth count it multiplies
+  # against, are in packages/system/seaweedfs/values.yaml; the pin in this
+  # chart's suite moves with this value and nothing moves that reasoning with
+  # it, so change both or neither. What changing it costs an instance that
+  # already holds data is in
+  # docs/operations/seaweedfs-lowering-the-volume-size-limit.md.
+  #
+  # The bounds on the field are where the instance stops working rather than
+  # a preference. Zero is not a small limit but an off switch: the volume
+  # server leaves its slot calculation untouched, reports no capacity, and
+  # nothing is grown. Above 30000 the master exits at start; that ceiling is
+  # VolumeSizeLimitGB in the standard SeaweedFS build the image carries, and a
+  # large-disk build raises it, so read that constant there before widening.
+  volumeSizeLimitMB: 400
+
+## @typedef {struct} Filer - Filer service configuration.
+## @field {int} [replicas] - Number of filer replicas.
+## @field {Resources} [resources] - Explicit CPU and memory configuration. When omitted, the preset defined in `resourcesPreset` is applied.
+## @field {ResourcesPreset} [resourcesPreset] - Default sizing preset used when `resources` is omitted.
+## @field {string} [grpcHost] - The hostname used to expose or access the filer service externally.
+## @field {int} [grpcPort] - The port used to access the filer service externally.
+## @field {[]string} [whitelist] - A list of IP addresses or CIDR ranges that are allowed to access the filer service.
+
+## @param {Filer} [filer] - Filer service configuration.
+filer:
+  replicas: 2
+  resources: {}
+  resourcesPreset: "t1.small"
+  grpcHost: ""
+  grpcPort: 443
+  whitelist: []
+
+## @typedef {struct} StoragePool - Storage pool configuration for separating buckets by disk type.
+## @field {string} diskType - SeaweedFS disk type tag (e.g., "ssd", "hdd", "nvme").
+## @field {int} [replicas] - Number of volume replicas. Defaults to volume.replicas (Simple) or zone.replicas/volume.replicas (MultiZone).
+## @field {quantity} [size] - Persistent Volume size. Defaults to volume.size (Simple) or zone.size/volume.size (MultiZone).
+## @field {string} [storageClass] - Kubernetes StorageClass for the pool. Defaults to volume.storageClass.
+## @field {Resources} [resources] - Explicit CPU and memory configuration. When omitted, the preset defined in `resourcesPreset` is applied.
+## @field {ResourcesPreset} [resourcesPreset] - Default sizing preset used when `resources` is omitted. Defaults to volume.resourcesPreset.
+
+## @typedef {struct} Zone - Zone configuration.
+## @field {int} [replicas] - Number of replicas in the zone.
+## @field {quantity} [size] - Zone storage size.
+## @field {string} [dataCenter] - SeaweedFS data center name for this zone. Defaults to the zone name.
+## @field {string} [nodeSelector] - YAML nodeSelector for this zone (default: topology.kubernetes.io/zone: <zoneName>).
+## @field {string} [storageClass] - StorageClass used to store zone data. Defaults to volume.storageClass.
+## @field {map[string]StoragePool} [pools] - A map of storage pools for this zone. Each pool creates a separate Volume StatefulSet per zone.
+## NOTE: Zone-level resources/resourcesPreset are inherited from volume.* settings. Pools within a zone can define their own resources.
+
+## @typedef {struct} Volume - Volume service configuration.
+## @field {int} [replicas] - Number of volume replicas.
+## @field {quantity} [size] - Persistent Volume size.
+## @field {string} [storageClass] - StorageClass used to store the data.
+## @field {string} [diskType] - SeaweedFS disk type tag for the default volume servers (e.g., "hdd", "ssd").
+## @field {Resources} [resources] - Explicit CPU and memory configuration. When omitted, the preset defined in `resourcesPreset` is applied.
+## @field {ResourcesPreset} [resourcesPreset] - Default sizing preset used when `resources` is omitted.
+## @field {map[string]Zone} [zones] - A map of zones for MultiZone topology. Each zone can have its own number of replicas and size.
+## @field {map[string]StoragePool} [pools] - A map of storage pools. Each pool creates a separate Volume StatefulSet with its own disk type.
+
+## @param {Volume} [volume] - Volume service configuration.
+volume:
+  replicas: 2
+  size: 10Gi
+  storageClass: ""
+  diskType: ""
+  resources: {}
+  resourcesPreset: "t1.small"
+  zones: {}
+  pools: {}
+  #pools:
+  #  fast:
+  #    diskType: ssd
+  #    replicas: 2
+  #    size: 50Gi
+  #    storageClass: "local-nvme"
+
+## @typedef {struct} S3 - S3 service configuration.
+## @field {int} [replicas] - Number of S3 replicas.
+## @field {Resources} [resources] - Explicit CPU and memory configuration. When omitted, the preset defined in `resourcesPreset` is applied.
+## @field {ResourcesPreset} [resourcesPreset] - Default sizing preset used when `resources` is omitted.
+
+## @param {S3} [s3] - S3 service configuration.
+s3:
+  replicas: 2
+  resources: {}
+  resourcesPreset: "t1.small"
+
+## @typedef {struct} Lifecycle - Enforcement of S3 bucket lifecycle rules.
+## @field {bool} [enabled] - Run the SeaweedFS admin server and a worker that applies bucket lifecycle rules, once a day. When disabled, rules are still accepted and stored, but not applied. Ignored with the Client topology, whose rules are enforced by the instance it connects to. Rules stored before enabling are applied on the first pass, minutes after the switch. While on, in a bucket without versioning enabled, an object overwritten between the daily listing and its expiry delete can be deleted although it is new.
+## @field {string} [storageClass] - StorageClass of the admin server's 1Gi job-state volume. Empty uses the cluster default; `volume.storageClass` is not used, because in MultiZone it can be local to one zone. Prefer a replicated class: on a node-local one, losing the node stops lifecycle enforcement. Set it before enabling lifecycle: the class is part of the admin StatefulSet's volume claim template, which cannot change, so changing it while lifecycle is on makes every upgrade of the instance fail until it is reverted. To move the volume, disable lifecycle, delete the `admin-data-seaweedfs-admin-0` PVC of the instance, change the class and enable lifecycle again.
+## @maxLength 253
+## @pattern ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*)?$
+
+## @param {Lifecycle} [lifecycle] - S3 bucket lifecycle configuration.
+lifecycle:
+  # Off by default. The daily walk of SeaweedFS (4.45 through 4.52) sends its
+  # expiry deletes without an object identity, which the s3 server takes as
+  # "skip the check" (weed/s3api/s3lifecycle/dailyrun/walker_dispatcher.go,
+  # identityMatches in weed/s3api/s3api_internal_lifecycle.go), and it does not
+  # re-check the object's age. A key overwritten between the walk's listing and
+  # the delete loses its new content, which a tenant bucket that rewrites a
+  # fixed key can hit. On by default only once that path carries identity.
+  enabled: false
+  storageClass: ""
+
+## @enum {string} OrphanIdentities - What installs and upgrades do with S3 identities left behind by deleted BucketAccesses.
+## @value auto
+## @value report
+## @value delete
+
+## @typedef {struct} Cosi - Bucket provisioning configuration.
+## @field {OrphanIdentities} [orphanIdentities] - What installs and upgrades do with S3 identities left behind by deleted BucketAccesses: `delete` removes them, `report` only lists them in an Event, `auto` reports when `filer.grpcHost` is set (other clusters may use this filer) and removes them otherwise. Set `report` if the filer is reachable from other clusters some other way. Ignored with the Client topology, whose identities live on the filer of the instance it connects to.
+
+## @param {Cosi} [cosi] - Bucket provisioning configuration.
+cosi:
+  orphanIdentities: auto

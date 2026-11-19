@@ -1,0 +1,152 @@
+apiVersion: piraeus.io/v1
+kind: LinstorCluster
+metadata:
+  name: linstorcluster
+  labels:
+    platform.cozystack.io/no-delete: "true"
+spec:
+  #nodeSelector:
+  #  node-role.kubernetes.io/linstor: ""
+  internalTLS:
+    certManager:
+      name: linstor-internal-ca
+      kind: Issuer
+  apiTLS:
+    certManager:
+      name: linstor-api-ca
+      kind: Issuer
+  properties:
+  {{- if .Values.linstor.autoDiskful.enabled }}
+  - name: DrbdOptions/auto-diskful
+    value: {{ .Values.linstor.autoDiskful.minutes | quote }}
+  - name: DrbdOptions/auto-diskful-allow-cleanup
+    value: {{ .Values.linstor.autoDiskful.allowCleanup | quote }}
+  {{- end }}
+  - name: DrbdOptions/Net/verify-alg
+    value: "crc32c"
+  - name: DrbdOptions/Net/connect-int
+    value: "15"
+  - name: DrbdOptions/Net/ping-int
+    value: "15"
+  - name: DrbdOptions/Net/ping-timeout
+    value: "20"
+  - name: DrbdOptions/Net/timeout
+    value: "100"
+  controller:
+    enabled: true
+    podTemplate:
+      spec:
+        {{- /* run-migration upgrades the database in place: left on the
+               operator's default image it migrates ahead of the controller,
+               irreversibly. */}}
+        initContainers:
+        - name: run-migration
+          image: {{ .Values.piraeusServer.image.repository }}:{{ .Values.piraeusServer.image.tag }}
+        containers:
+        - name: linstor-controller
+          image: {{ .Values.piraeusServer.image.repository }}:{{ .Values.piraeusServer.image.tag }}
+          # Guarantee CPU/memory so the JVM keeps answering its /health probe
+          # under node contention. Requests only — see values.yaml controller.*.
+          resources:
+            {{- toYaml .Values.controller.resources | nindent 12 }}
+          # Partial override: piraeus-operator merges podTemplate as a strategic
+          # merge patch, so only these timing fields change. The operator's
+          # httpGet (GET /health on the api port) is preserved as-is.
+          livenessProbe:
+            timeoutSeconds: {{ .Values.controller.livenessProbe.timeoutSeconds }}
+            failureThreshold: {{ .Values.controller.livenessProbe.failureThreshold }}
+        - name: plunger
+          image: {{ .Values.piraeusServer.image.repository }}:{{ .Values.piraeusServer.image.tag }}
+          command:
+          - "/scripts/plunger-controller.sh"
+          securityContext:
+            capabilities:
+              drop:
+              - ALL
+            # make some room for live debugging
+            readOnlyRootFilesystem: false
+          volumeMounts:
+          - mountPath: /etc/linstor/client
+            name: client-tls
+            readOnly: true
+          - mountPath: /etc/linstor
+            name: etc-linstor
+            readOnly: true
+          - mountPath: /scripts
+            name: script-volume
+            readOnly: true
+        volumes:
+        - name: script-volume
+          configMap:
+            name: linstor-plunger
+            defaultMode: 0755
+  csiController:
+    podTemplate:
+      spec:
+        initContainers:
+        - name: linstor-wait-api-online
+          image: {{ .Values.linstorCSI.image.repository }}:{{ .Values.linstorCSI.image.tag }}
+        containers:
+        - name: linstor-csi
+          image: {{ .Values.linstorCSI.image.repository }}:{{ .Values.linstorCSI.image.tag }}
+        {{- if .Values.linstorCSI.strictTopology }}
+        {{- /* A `#` comment in a rendered template is part of the output: it
+               is applied to the live LinstorCluster and read back on every
+               `kubectl get`. Explanations therefore live in a template comment,
+               which is stripped at render, and not in a YAML one.
+
+               See values.yaml linstorCSI.strictTopology for what this prevents.
+               The full argument list is restated because `args` has no
+               patchMergeKey, so a strategic merge REPLACES it rather than
+               appending. That makes this list a drift hazard: re-check it
+               against the operator's defaults on every piraeus-operator bump,
+               or a newly added upstream flag is silently dropped -- nothing in
+               the suite can observe that, see tests/csi-topology_test.yaml. The
+               $(VAR) references are resolved from the container's env by
+               Kubernetes and are stable across versions. */}}
+        - name: csi-provisioner
+          args:
+          - --v=$(VERBOSE)
+          - --csi-address=$(ADDRESS)
+          - --timeout=$(TIMEOUT)
+          - --leader-election=$(LEADER_ELECTION)
+          - --leader-election-namespace=$(NAMESPACE)
+          - --worker-threads=$(WORKER_THREADS)
+          - --http-endpoint=$(HTTP_ENDPOINT)
+          - --default-fstype=$(DEFAULT_FS_TYPE)
+          - --enable-capacity=$(ENABLE_CAPACITY)
+          - --extra-create-metadata=$(EXTRA_CREATE_METADATA)
+          - --capacity-ownerref-level=$(CAPACITY_OWNERREF_LEVEL)
+          - --strict-topology
+        {{- end }}
+  csiNode:
+    podTemplate:
+      spec:
+        initContainers:
+        - name: linstor-wait-node-online
+          image: {{ .Values.linstorCSI.image.repository }}:{{ .Values.linstorCSI.image.tag }}
+        containers:
+        - name: linstor-csi
+          image: {{ .Values.linstorCSI.image.repository }}:{{ .Values.linstorCSI.image.tag }}
+  patches:
+    - target:
+        kind: Deployment
+        name: linstor-controller
+      patch: |-
+        - op: add
+          path: /metadata/annotations/reloader.stakater.com~1auto
+          value: "true"
+    - target:
+        kind: Deployment
+        name: linstor-csi-controller
+      patch: |-
+        - op: add
+          path: /metadata/annotations/reloader.stakater.com~1auto
+          value: "true"
+    - target:
+        kind: DaemonSet
+        name: linstor-csi-node
+      patch: |-
+        - op: add
+          path: /metadata/annotations/reloader.stakater.com~1auto
+          value: "true"

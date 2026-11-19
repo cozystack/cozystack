@@ -1,0 +1,16 @@
+{{- if and .Values.controller.enabled .Values.controller.serviceMonitor.create }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "snapshot-controller.fullname" . }}
+  labels:
+    {{- include "snapshot-controller.labels" . | nindent 4 }}
+spec:
+  clusterIP: None
+  ports:
+    - port: {{ (.Values.controller.args.httpEndpoint | split ":")._1 }}
+      targetPort: {{ (.Values.controller.args.httpEndpoint | split ":")._1 }}
+      name: http
+  selector:
+    {{- include "snapshot-controller.selectorLabels" . | nindent 4 }}
+{{- end }}

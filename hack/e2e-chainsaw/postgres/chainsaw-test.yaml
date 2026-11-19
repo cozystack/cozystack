@@ -1,0 +1,494 @@
+# Chainsaw port of hack/e2e-apps/postgres.bats ("Create DB PostgreSQL").
+#
+# Every `timeout N sh -ec "until kubectl get ..."` + `kubectl wait` pair from
+# the BATS test collapses into a single assert: chainsaw polls until the
+# resource exists AND matches, or the timeout expires. Failure output is a
+# structured diff of the assertion tree against the live object.
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: postgres
+spec:
+  # Diagnostics collected automatically when any step fails. The BATS suite
+  # only does this in harbor.bats, by hand.
+  catch:
+  - events: {}
+  - describe:
+      apiVersion: helm.toolkit.fluxcd.io/v2
+      kind: HelmRelease
+      name: postgres-test
+  - podLogs:
+      selector: cnpg.io/cluster=postgres-test
+      tail: 50
+  steps:
+  - name: create-postgres
+    try:
+    - apply:
+        file: postgres.yaml
+
+  - name: wait-helmrelease-ready
+    try:
+    # 11m: above the 600s install timeout cozystack-api gives this release;
+    # see "Sizing an HR-Ready budget" in docs/agents/e2e-testing.md.
+    - assert:
+        timeout: 11m
+        resource:
+          apiVersion: helm.toolkit.fluxcd.io/v2
+          kind: HelmRelease
+          metadata:
+            name: postgres-test
+          status:
+            # JMESPath filter: condition order in the array does not matter
+            (conditions[?type == 'Ready']):
+            - status: "True"
+
+  - name: wait-init-job-complete
+    try:
+    - assert:
+        timeout: 2m
+        resource:
+          apiVersion: batch/v1
+          kind: Job
+          metadata:
+            name: postgres-test-init-job
+          status:
+            (conditions[?type == 'Complete']):
+            - status: "True"
+
+  - name: verify-services-and-endpoints
+    try:
+    # Replaces three `until kubectl get svc ... | grep -q 5432` loops
+    # TODO(chainsaw>0.2.15): the (ports[0].port) / (ports[*].port) projection form in
+    # these Service asserts is a v0.2.15 workaround for mis-evaluated number-literal
+    # filters (ports[?port==`5432`]); (ports[0]) also checks only the first port.
+    # Restore the filter form on a chainsaw bump. Same workaround lives in
+    # kafka/mariadb/harbor — see "Chainsaw v0.2.15 gotchas" in docs/agents/e2e-testing.md.
+    - assert:
+        resource:
+          apiVersion: v1
+          kind: Service
+          metadata:
+            name: postgres-test-r
+          spec:
+            (ports[0].port): 5432
+    - assert:
+        resource:
+          apiVersion: v1
+          kind: Service
+          metadata:
+            name: postgres-test-ro
+          spec:
+            (ports[0].port): 5432
+    - assert:
+        resource:
+          apiVersion: v1
+          kind: Service
+          metadata:
+            name: postgres-test-rw
+          spec:
+            (ports[0].port): 5432
+    # Replaces `until kubectl get endpoints ... | grep -q '[0-9]'` loops.
+    # The read-only endpoint is skipped, same as in the BATS test.
+    - assert:
+        timeout: 3m
+        resource:
+          apiVersion: v1
+          kind: Endpoints
+          metadata:
+            name: postgres-test-r
+          (subsets[0].addresses[0].ip != null): true
+    - assert:
+        timeout: 3m
+        resource:
+          apiVersion: v1
+          kind: Endpoints
+          metadata:
+            name: postgres-test-rw
+          (subsets[0].addresses[0].ip != null): true
+    # Functional probe — the BATS test never actually talks to the database.
+    - script:
+        timeout: 2m
+        content: |
+          set -eu
+          pod=$(kubectl -n "$NAMESPACE" get pod \
+            -l cnpg.io/cluster=postgres-test,cnpg.io/instanceRole=primary \
+            -o name | head -n1)
+          kubectl -n "$NAMESPACE" exec "$pod" -c postgres -- \
+            psql -U postgres -tAc 'SELECT 1'
+        check:
+          ($error == null): true
+          (contains($stdout, '1')): true
+    # The init-job is operator-created (not applied by chainsaw), so it is
+    # not part of automatic cleanup — delete it explicitly, as BATS does.
+    finally:
+    - delete:
+        ref:
+          apiVersion: batch/v1
+          kind: Job
+          name: postgres-test-init-job
+
+  # The trust anchor a client verifies against, checked against the live
+  # operator rather than against our own beliefs about it.
+  #
+  # This is the only independent witness the CA-extraction feature has. Its unit
+  # tests build CNPG's CA Secret from a fixture that encodes the same assumption
+  # the shipped ApplicationDefinition encodes ("{{ .release }}-ca", key ca.crt),
+  # so the two agree by construction and cannot catch each other being wrong.
+  # Only a real CNPG can say whether that name and key are right, and only a real
+  # apiserver can say whether the lineage webhook actually promotes the
+  # projection to a tenant-readable object.
+  - name: verify-tenant-ca-projection
+    try:
+    # Postgres never opts out of TLS: CNPG mints its CA regardless of the
+    # chart's tls flag, so the projection is expected on this plain fixture.
+    #
+    # The labels are the assertion that matters. tenant-ca is stamped by the
+    # controller; tenantresource is stamped by the LINEAGE WEBHOOK, computed
+    # from the ApplicationDefinition's spec.secrets — the new matchLabels
+    # include. It is "true" only if the whole chain held: definition selects the
+    # label, webhook admitted the object, verdict came out positive. Nothing
+    # short of a live cluster proves that link.
+    - assert:
+        timeout: 2m
+        resource:
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: postgres-test.tenant-ca
+            labels:
+              internal.cozystack.io/tenant-ca: "true"
+              internal.cozystack.io/tenantresource: "true"
+          type: Opaque
+    # The projection must be the CA and ONLY the CA. Everything below is
+    # deterministic once the assert above has passed, so it runs without retry.
+    - script:
+        content: |
+          set -eu
+
+          # Exactly one key, and it is ca.crt. Any second key is a leak in the
+          # making: the source this was lifted from carries a private key.
+          keys=$(kubectl -n "$NAMESPACE" get secret postgres-test.tenant-ca \
+            -o go-template='{{range $k, $v := .data}}{{$k}}{{"\n"}}{{end}}' | sort | tr '\n' ' ')
+          if [ "$keys" != "ca.crt " ]; then
+            echo "projection must hold exactly ca.crt, holds: $keys" >&2
+            exit 1
+          fi
+
+          # It lifted the right certificate: the projection's ca.crt is CNPG's
+          # ca.crt. This is what pins "{{ .release }}-ca" to reality — if CNPG ever
+          # renames its CA Secret, the controller finds nothing and this fails.
+          #
+          # Compare the parsed certificates, not the raw PEM. The controller
+          # re-encodes ca.crt from the DER it parsed (certificateChainPEM), so a PEM
+          # header line or a column-width change at the source would redden a
+          # byte-for-byte comparison of a correct projection. The certificate
+          # fingerprint is identity-stable across any re-encoding.
+          src=$(kubectl -n "$NAMESPACE" get secret postgres-test-ca -o jsonpath='{.data.ca\.crt}' | base64 -d)
+          proj=$(kubectl -n "$NAMESPACE" get secret postgres-test.tenant-ca -o jsonpath='{.data.ca\.crt}' | base64 -d)
+          if [ -z "$src" ]; then
+            echo "CNPG's postgres-test-ca has no ca.crt — the declared source name or key is wrong" >&2
+            exit 1
+          fi
+          src_fp=$(echo "$src" | openssl x509 -noout -fingerprint -sha256)
+          proj_fp=$(echo "$proj" | openssl x509 -noout -fingerprint -sha256)
+          if [ "$src_fp" != "$proj_fp" ]; then
+            echo "projection does not carry CNPG's CA certificate" >&2
+            exit 1
+          fi
+
+          # And the point of the whole exercise: the source carries the CA
+          # PRIVATE KEY, the projection must not. Asserting the source really
+          # does hold ca.key keeps this honest — if CNPG ever stopped storing it
+          # there, this check would otherwise pass while proving nothing.
+          if ! kubectl -n "$NAMESPACE" get secret postgres-test-ca \
+            -o go-template='{{if .data}}{{range $k, $v := .data}}{{$k}}{{"\n"}}{{end}}{{end}}' | grep -qx 'ca.key'; then
+            echo "CNPG's CA Secret no longer carries ca.key — this check has stopped proving anything" >&2
+            exit 1
+          fi
+          if kubectl -n "$NAMESPACE" get secret postgres-test.tenant-ca \
+            -o go-template='{{if .data}}{{range $k, $v := .data}}{{$k}}{{"\n"}}{{end}}{{end}}' | grep -qx 'ca.key'; then
+            echo "projection leaked the CA private key" >&2
+            exit 1
+          fi
+
+          # Belt and braces on the bytes themselves: no PEM key header of any
+          # flavour survived into the tenant-readable object.
+          if kubectl -n "$NAMESPACE" get secret postgres-test.tenant-ca \
+            -o jsonpath='{.data.ca\.crt}' | base64 -d | grep -qi 'BEGIN .*PRIVATE KEY'; then
+            echo "projection carries PEM private key material" >&2
+            exit 1
+          fi
+
+          # The delivery path the README actually tells a tenant to use, run as
+          # the command the README prints. Everything above reads the raw Secret,
+          # which only an admin can do — it proves the projection's SHAPE and
+          # nothing about whether a tenant can reach it.
+          #
+          # core.cozystack.io/tenantsecrets serves only objects labelled
+          # tenantresource=true, and that label is the lineage webhook's verdict,
+          # computed from this app's ApplicationDefinition selectors. So this
+          # query 404s unless the whole chain held: the definition selects
+          # tenant-ca, the webhook admitted the projection, and the verdict came
+          # out positive. It is the one assertion that exercises the registry
+          # rather than inspecting its input.
+          anchor=$(kubectl -n "$NAMESPACE" get tenantsecret postgres-test.tenant-ca \
+            -o jsonpath='{.data.ca\.crt}' | base64 -d)
+          if ! echo "$anchor" | grep -q 'BEGIN CERTIFICATE'; then
+            echo "the trust anchor is not served through core.cozystack.io/tenantsecrets" >&2
+            exit 1
+          fi
+
+          # And the negative that gives the positive its meaning: the registry
+          # must NOT serve CNPG's key-bearing CA. It carries no tenant-ca label,
+          # so the definition does not select it and the webhook marks it
+          # tenantresource=false. If this ever starts resolving, the label path
+          # has stopped gating on the platform's verdict.
+          if kubectl -n "$NAMESPACE" get tenantsecret postgres-test-ca >/dev/null 2>&1; then
+            echo "CNPG's key-bearing CA is being served as a tenant secret" >&2
+            exit 1
+          fi
+        check:
+          ($error == null): true
+# The Postgres CR itself was applied by chainsaw and is deleted (and waited
+# on) automatically during cleanup — no explicit teardown step needed.
+---
+# Full barman-cloud backup -> restore round-trips, driving the validated
+# example scripts (examples/backups/postgres) as the harness so the test and
+# the documented flow can never drift. run-all.sh runs Bucket -> source
+# Postgres + sentinel row -> CNPG strategy + BackupClass -> ad-hoc BackupJob
+# (waits Succeeded) -> empty target Postgres + to-copy RestoreJob (waits
+# Succeeded, asserts the sentinel round-tripped through S3) -> a point-in-time
+# restore between two marker writes (step 45, asserts the pre-marker survived
+# and the post-marker did not) -> a negative unreachable-target restore
+# (step 46, asserts it terminates Failed with a message attributing it to the PITR
+# target rather than hanging or falsely succeeding; the reason-classification
+# itself is unit-tested, being best-effort against a still-archiving source). The
+# in-cluster witness that a barman-cloud
+# plugin backup is taken, restorable, point-in-time-recoverable, and that a
+# bad target is rejected quickly.
+#
+# Runs in tenant-root, not the default tenant-test: the S3 client here is the
+# barman-cloud sidecar INSIDE the Postgres Pod, and the e2e tenant is created
+# isolated (hack/e2e-install-cozystack.bats) — its Cilium egress allowlist
+# blocks a tenant-test Pod from reaching tenant-root's seaweedfs, while a
+# tenant-root Pod reaches it over same-tenant egress. The harness targets the
+# in-cluster endpoint (S3_ENDPOINT below) instead of the BucketInfo external
+# ingress URL, which in CI is an unroutable placeholder, and trusts its
+# self-signed cert by copying the seaweedfs CA secret (seaweedfs-ca-cert,
+# auto-discovered from the cert-manager Certificate) into the per-app
+# endpointCA Secret. (The bucket suite's mc checks lean on the same
+# tenant-root seaweedfs, just from the test runner via port-forward.)
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: postgres-2-backup-roundtrip
+spec:
+  namespace: tenant-root
+  skipDelete: true
+  catch:
+  - events: {}
+  - describe:
+      apiVersion: helm.toolkit.fluxcd.io/v2
+      kind: HelmRelease
+      name: postgres-pg-src
+  - describe:
+      apiVersion: postgresql.cnpg.io/v1
+      kind: Cluster
+      name: postgres-pg-src
+  - describe:
+      apiVersion: barmancloud.cnpg.io/v1
+      kind: ObjectStore
+  - describe:
+      apiVersion: backups.cozystack.io/v1alpha1
+      kind: BackupJob
+  - describe:
+      apiVersion: backups.cozystack.io/v1alpha1
+      kind: RestoreJob
+  # The barman-cloud backup/WAL work runs in the cnpg Cluster Pods' sidecar; a
+  # failed upload or TLS handshake leaves its error only in that Pod's log.
+  - podLogs:
+      selector: cnpg.io/cluster=postgres-pg-src
+      tail: 200
+  steps:
+  - name: run
+    try:
+    # The 66m budget is the whole documented flow: bucket provisioning, a
+    # 2-replica source Postgres, the plugin base backup to S3, an empty target
+    # app, and THREE sequential purge + re-bootstrap restores against it - the
+    # latest-point to-copy restore, the point-in-time restore (step 45), and
+    # the negative unreachable-target restore (step 46, which sets a short
+    # restoreTimeoutSeconds and must terminate Failed at that deadline, attributed
+    # to the PITR target), and the in-place restore (step 50, the
+    # regression guard for the archive-vs-recovery serverName collision)
+    # (convention 6: justified in-line). The old 25m budget predated the PITR
+    # phases; four restores plus the negative phase need the larger window,
+    # and the 660s bucket and Postgres HR waits in run-all.sh add 16m to it.
+    # run-all.sh fails fast on terminal BackupJob/RestoreJob phases and stalled
+    # HelmReleases rather than polling out the budget.
+    - script:
+        timeout: 66m
+        content: |
+          set -eu
+          cd ../../..
+          [ -x examples/backups/postgres/run-all.sh ] || { echo "postgres backup example scripts not found at examples/backups/postgres" >&2; exit 1; }
+          COZY_E2E_BACKUP_PREFLIGHT=1 NAMESPACE="$NAMESPACE" S3_ENDPOINT="https://seaweedfs-s3.tenant-root:8333" \
+            examples/backups/postgres/run-all.sh
+        check:
+          ($error == null): true
+    finally:
+    # Resumes the driver-suspended HelmReleases before deleting the RestoreJob
+    # so the apps are not stranded, then removes every resource the harness
+    # created (chainsaw did not apply them, so they are not part of automatic
+    # cleanup).
+    - description: backup-flow cleanup
+      script:
+        timeout: 8m
+        content: |
+          set -eu
+          cd ../../..
+          NAMESPACE="$NAMESPACE" examples/backups/postgres/cleanup.sh
+---
+# A system database that a version before the refusal took over is handed back
+# by the next init-job run, and only what this chart marked changes hands.
+#
+# The helm-unittest and bats suites check the rendered SQL against a fake psql;
+# only a real PostgreSQL can say that the predicates select what they claim. The
+# state an older version left is rebuilt by hand as the superuser, since the
+# chart now refuses to produce it:
+#   * postgres is commented as managed and owned by a postgres_admin role that
+#     carries the cozystack:managed mark, as the chart left it: it must come back
+#     to the superuser, and the role must be dropped;
+#   * template1 is commented as managed, but its template1_admin carries only the
+#     role comment, which a CREATEROLE holder can forge, and not the mark: the
+#     comment must be cleared and everything that role owns or was granted must
+#     stay as it is, in template1 and in a database cloned from it.
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: postgres-3-system-databases
+spec:
+  catch:
+  - events: {}
+  - describe:
+      apiVersion: helm.toolkit.fluxcd.io/v2
+      kind: HelmRelease
+      name: postgres-sysdb
+  - podLogs:
+      selector: job-name=postgres-sysdb-init-job
+      tail: 200
+  steps:
+  - name: create-postgres
+    try:
+    - apply:
+        file: postgres-sysdb.yaml
+    # 11m: above the 600s install timeout cozystack-api gives this release;
+    # see "Sizing an HR-Ready budget" in docs/agents/e2e-testing.md.
+    - assert:
+        timeout: 11m
+        resource:
+          apiVersion: helm.toolkit.fluxcd.io/v2
+          kind: HelmRelease
+          metadata:
+            name: postgres-sysdb
+          status:
+            (conditions[?type == 'Ready']):
+            - status: "True"
+    - assert:
+        timeout: 2m
+        resource:
+          apiVersion: batch/v1
+          kind: Job
+          metadata:
+            name: postgres-sysdb-init-job
+          status:
+            (conditions[?type == 'Complete']):
+            - status: "True"
+
+  - name: rebuild-taken-over-system-databases
+    try:
+    - script:
+        timeout: 3m
+        content: |
+          set -eu
+          pod=$(kubectl -n "$NAMESPACE" get pod \
+            -l cnpg.io/cluster=postgres-sysdb,cnpg.io/instanceRole=primary -o name | head -n1)
+          [ -n "$pod" ] || { echo "no primary pod for postgres-sysdb" >&2; exit 1; }
+          sql() { kubectl -n "$NAMESPACE" exec -i "$pod" -c postgres -- psql -v ON_ERROR_STOP=1 -U postgres -d "$1"; }
+          sql postgres <<'SQL'
+          CREATE ROLE postgres_admin NOLOGIN;
+          COMMENT ON ROLE postgres_admin IS 'role managed by helm';
+          GRANT "cozystack:managed" TO postgres_admin WITH INHERIT FALSE, SET FALSE;
+          COMMENT ON DATABASE postgres IS 'database managed by helm';
+          ALTER DATABASE postgres OWNER TO postgres_admin;
+          CREATE ROLE template1_admin NOLOGIN;
+          COMMENT ON ROLE template1_admin IS 'role managed by helm';
+          CREATE ROLE template1_readonly NOLOGIN;
+          COMMENT ON DATABASE template1 IS 'database managed by helm';
+          ALTER DATABASE template1 OWNER TO template1_admin;
+          SQL
+          sql template1 <<'SQL'
+          ALTER SCHEMA public OWNER TO template1_admin;
+          CREATE TABLE public.kept (id int);
+          ALTER TABLE public.kept OWNER TO template1_admin;
+          GRANT SELECT ON public.kept TO template1_readonly;
+          SQL
+          sql postgres <<'SQL'
+          CREATE DATABASE sysdb_clone TEMPLATE template1;
+          SQL
+          # The next run must be a new Job: remove the completed one so the
+          # assert below cannot match it.
+          kubectl -n "$NAMESPACE" delete job postgres-sysdb-init-job --wait=true
+          # Declaring a user is enough for an upgrade, and runs the init-job.
+          kubectl -n "$NAMESPACE" patch postgres.apps.cozystack.io sysdb --type merge \
+            -p '{"spec":{"users":{"sysdbuser":{},"sysdbprobe":{}}}}'
+        check:
+          ($error == null): true
+    - assert:
+        timeout: 11m
+        resource:
+          apiVersion: batch/v1
+          kind: Job
+          metadata:
+            name: postgres-sysdb-init-job
+          status:
+            (conditions[?type == 'Complete']):
+            - status: "True"
+
+  - name: verify-release
+    try:
+    - script:
+        timeout: 2m
+        content: |
+          set -eu
+          pod=$(kubectl -n "$NAMESPACE" get pod \
+            -l cnpg.io/cluster=postgres-sysdb,cnpg.io/instanceRole=primary -o name | head -n1)
+          q() { kubectl -n "$NAMESPACE" exec "$pod" -c postgres -- psql -v ON_ERROR_STOP=1 -U postgres -tA -d "$1" -c "$2"; }
+          fail=0
+          expect() {
+            got=$(q "$1" "$3")
+            if [ "$got" != "$4" ]; then
+              echo "FAIL: $2: got '$got', want '$4'" >&2
+              fail=1
+            fi
+          }
+          comment="SELECT coalesce(shobj_description(oid, 'pg_database'), '<none>') FROM pg_database WHERE datname = "
+          owner="SELECT pg_get_userbyid(datdba) FROM pg_database WHERE datname = "
+          expect postgres "postgres comment cleared" "$comment'postgres'" '<none>'
+          expect postgres "postgres back to the superuser" "$owner'postgres'" postgres
+          expect postgres "marked postgres_admin dropped" "SELECT count(*) FROM pg_roles WHERE rolname = 'postgres_admin'" 0
+          expect postgres "template1 comment cleared" "$comment'template1'" '<none>'
+          expect postgres "unmarked template1_admin still exists" "SELECT count(*) FROM pg_roles WHERE rolname = 'template1_admin'" 1
+          expect postgres "template1 still owned by the unmarked role" "$owner'template1'" template1_admin
+          for db in template1 sysdb_clone; do
+            expect "$db" "$db public still owned by the unmarked role" \
+              "SELECT pg_get_userbyid(nspowner) FROM pg_namespace WHERE nspname = 'public'" template1_admin
+            expect "$db" "$db kept table still owned by the unmarked role" \
+              "SELECT tableowner FROM pg_tables WHERE schemaname = 'public' AND tablename = 'kept'" template1_admin
+            expect "$db" "$db grant to the unmarked readonly role kept" \
+              "SELECT has_table_privilege('template1_readonly', 'public.kept', 'SELECT')" t
+          done
+          exit "$fail"
+        check:
+          ($error == null): true
+# The Postgres CR was applied by chainsaw; deleting it removes the whole
+# cluster, the databases and roles built above included.

@@ -1,0 +1,145 @@
+ARG NODE_VERSION=24-alpine@sha256:ebfe2f90462722a7a4de65e91990e97fe0d401c70e0e762c5b53302f905ec1c1
+
+# Stage 1: Install dependencies and build
+FROM --platform=$BUILDPLATFORM node:${NODE_VERSION} AS builder
+
+ARG APP_VERSION
+ENV VITE_APP_VERSION=${APP_VERSION}
+
+# Pin to the version in package.json's packageManager field so the image build
+# matches CI and the lockfile, rather than drifting to a newer pnpm major.
+RUN corepack enable && corepack prepare pnpm@11.1.2 --activate
+
+WORKDIR /src
+
+# Workspace manifests first for cached installs.
+COPY pnpm-workspace.yaml package.json pnpm-lock.yaml ./
+COPY apps/console/package.json apps/console/
+COPY packages/ui/package.json packages/ui/
+COPY packages/types/package.json packages/types/
+COPY packages/k8s-client/package.json packages/k8s-client/
+
+RUN pnpm install --frozen-lockfile
+
+COPY apps/console/ apps/console/
+COPY packages/ packages/
+COPY tsconfig.base.json ./
+
+RUN pnpm --filter @cozystack/console build
+
+# Stage 2: Serve with nginx
+FROM nginxinc/nginx-unprivileged:1.31-alpine@sha256:b9241c6e7b8e9a862f129d8d4199ab64b10390949a78bdd5603379b32c844083
+
+COPY --from=builder /src/apps/console/dist /usr/share/nginx/html
+
+# The config is a template the image's entrypoint renders into conf.d at
+# startup, substituting only variables set in the environment: CLUSTER_DOMAIN,
+# which the chart overrides with the platform cluster domain, and
+# NGINX_LOCAL_RESOLVERS, which the entrypoint reads from the pod's resolv.conf.
+ENV CLUSTER_DOMAIN=cozy.local
+ENV NGINX_ENTRYPOINT_LOCAL_RESOLVERS=1
+
+COPY <<'EOF' /etc/nginx/templates/default.conf.template
+map $http_upgrade $connection_upgrade {
+    default upgrade;
+    '' close;
+}
+
+# An OIDC access token with many group claims pushes the Cookie header past the
+# 8k default, and a header field must fit in a single buffer. Kept here rather
+# than inside the server block: a field read before the Host header has selected
+# the virtual server is measured against the default server's buffers, so the
+# same lines inside a server block cover this one only while it stays default.
+client_header_buffer_size 16k;
+large_client_header_buffers 4 16k;
+
+server {
+    listen       8080 default_server;
+    listen       [::]:8080 default_server;
+    server_name  _;
+
+    root /usr/share/nginx/html;
+    index index.html;
+
+    # Logs and metrics roots of a namespace or of one application, served by
+    # the observability proxy rather than the API server. A regex location wins
+    # over the /apis prefix below. The upstream is a variable so nginx resolves
+    # it per request: on a cluster without the proxy nginx still starts, and a
+    # request it cannot deliver gets the not-installed answer below. The
+    # resolver does not apply search domains, hence the fully qualified name.
+    location ~ ^/apis/(?:cozystack\.io/v1alpha1/namespaces/[^/]+/(?:logs|metrics)|apps\.cozystack\.io/v1alpha1/namespaces/[^/]+/[^/]+/[^/]+/(?:log|metrics))/ {
+        resolver ${NGINX_LOCAL_RESOLVERS};
+        set $observability_proxy observability-proxy.cozy-observability-proxy.svc.${CLUSTER_DOMAIN}:80;
+        proxy_http_version 1.1;
+        proxy_buffering off;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_read_timeout 86400s;
+        proxy_send_timeout 86400s;
+        # With proxy_intercept_errors off this catches only the 502 and 504
+        # nginx makes itself when the proxy cannot be resolved or reached;
+        # the proxy's own 502 and 504 for an unreachable store pass through.
+        proxy_intercept_errors off;
+        error_page 502 504 = @observability_proxy_unavailable;
+        proxy_pass http://$observability_proxy;
+    }
+
+    # The console reads a Kubernetes Status body as "not installed", the same
+    # answer kube-apiserver gives for a root nothing serves.
+    location @observability_proxy_unavailable {
+        default_type application/json;
+        return 404 '{"kind":"Status","apiVersion":"v1","metadata":{},"status":"Failure","message":"the observability proxy is not available on this cluster","reason":"NotFound","code":404}';
+    }
+
+    # Kubernetes API proxy for both core and aggregated groups.
+    # Chunked-encoding watches require proxy_buffering off and a long timeout.
+    location /apis {
+        proxy_http_version 1.1;
+        proxy_buffering off;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection $connection_upgrade;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header Host kubernetes.default.svc;
+        proxy_read_timeout 86400s;
+        proxy_send_timeout 86400s;
+        proxy_pass https://kubernetes.default.svc:443;
+    }
+
+    location /api {
+        proxy_http_version 1.1;
+        proxy_buffering off;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection $connection_upgrade;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header Host kubernetes.default.svc;
+        proxy_read_timeout 86400s;
+        proxy_send_timeout 86400s;
+        proxy_pass https://kubernetes.default.svc:443;
+    }
+
+    # /k8s prefix for VNC WebSocket compatibility
+    location /k8s/ {
+        proxy_http_version 1.1;
+        proxy_buffering off;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection $connection_upgrade;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header Host kubernetes.default.svc;
+        proxy_read_timeout 86400s;
+        proxy_send_timeout 86400s;
+        rewrite /k8s/(.*) /$1 break;
+        proxy_pass https://kubernetes.default.svc:443;
+    }
+
+    # SPA fallback: serve index.html for all frontend routes.
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+
+    location /healthcheck {
+        access_log off;
+        return 200 "Healthy\n";
+    }
+}
+EOF
+
+EXPOSE 8080

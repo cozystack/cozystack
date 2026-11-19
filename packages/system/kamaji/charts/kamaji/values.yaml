@@ -1,0 +1,178 @@
+# Default values for kamaji.
+# This is a YAML-formatted file.
+# Declare variables to be passed into your templates.
+
+# -- The number of the pod replicas for the Kamaji controller.
+replicaCount: 1
+
+image:
+  # -- The container image of the Kamaji controller.
+  repository: clastix/kamaji
+  pullPolicy: Always
+  # -- Overrides the image tag whose default is the chart appVersion.
+  tag:
+
+# -- A list of extra arguments to add to the kamaji controller default ones
+extraArgs: []
+
+serviceMonitor:
+  # -- Toggle the ServiceMonitor true if you have Prometheus Operator installed and configured
+  enabled: false
+
+# -- The address the probe endpoint binds to. (default ":8081")
+healthProbeBindAddress: ":8081"
+
+# -- The livenessProbe for the controller container
+livenessProbe:
+  httpGet:
+    path: /healthz
+    port: healthcheck
+  initialDelaySeconds: 15
+  periodSeconds: 20
+
+# -- The readinessProbe for the controller container
+readinessProbe:
+  httpGet:
+    path: /readyz
+    port: healthcheck
+  initialDelaySeconds: 5
+  periodSeconds: 10
+
+# -- The address the metric endpoint binds to. (default ":8080")
+metricsBindAddress: ":8080"
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+serviceAccount:
+  # Specifies whether a service account should be created
+  create: true
+  # Annotations to add to the service account
+  annotations: {}
+  # The name of the service account to use.
+  # If not set and create is true, a name is generated using the fullname template
+  name: kamaji-controller-manager
+
+# -- The annotations to apply to the Kamaji controller pods.
+podAnnotations: {}
+
+# -- The securityContext to apply to the Kamaji controller pods.
+podSecurityContext:
+  runAsNonRoot: true
+
+# -- The securityContext to apply to the Kamaji controller container only. It does not apply to the Kamaji RBAC proxy container.
+securityContext:
+  allowPrivilegeEscalation: false
+  # capabilities:
+  #   drop:
+  #   - ALL
+  # readOnlyRootFilesystem: true
+  # runAsNonRoot: true
+  # runAsUser: 1000
+
+resources:
+  limits:
+    cpu: 200m
+    memory: 100Mi
+  requests:
+    cpu: 100m
+    memory: 20Mi
+
+# -- Kubernetes node selector rules to schedule Kamaji controller
+nodeSelector: {}
+
+# -- Kubernetes node taints that the Kamaji controller pods would tolerate
+tolerations: []
+
+# -- Kubernetes affinity rules to apply to Kamaji controller pods
+affinity: {}
+
+# -- Directory which will be used to work with temporary files. (default "/tmp/kamaji")
+temporaryDirectoryPath: "/tmp/kamaji"
+
+loggingDevel:
+  # -- Development Mode defaults(encoder=consoleEncoder,logLevel=Debug,stackTraceLevel=Warn). Production Mode defaults(encoder=jsonEncoder,logLevel=Info,stackTraceLevel=Error) (default false)
+  enable: false
+
+# -- If specified, all the Kamaji instances with an unassigned DataStore will inherit this default value.
+defaultDatastoreName: default
+
+certManager:
+  # -- Reference to an existing cert-manager issuer that signs the webhook serving certificate. When
+  # `name` is empty the chart creates a self-signed `Issuer` named `kamaji-selfsigned-issuer` and uses
+  # that. Set this to chain the webhook certificate to a certificate authority you own. `kind` defaults
+  # to `Issuer` and `group` to `cert-manager.io`. Note that the `kamaji-etcd` subchart has its own
+  # `kamaji-etcd.certManager.issuerRef`, which defaults to `kamaji-selfsigned-issuer` and has to be
+  # updated as well when the etcd certificates are issued by cert-manager.
+  issuerRef: {}
+    # name: my-issuer
+    # kind: ClusterIssuer
+    # group: cert-manager.io
+
+# -- Subchart: See https://github.com/clastix/kamaji-etcd/blob/master/charts/kamaji-etcd/values.yaml
+kamaji-etcd:
+  deploy: true
+  fullnameOverride: kamaji-etcd
+  ## -- Important, this must match your management cluster's clusterDomain, otherwise the init jobs will fail
+  clusterDomain: "cluster.local"
+  selfSignedCertificates:
+    enabled: false
+  certManager:
+    enabled: true
+    issuerRef:
+      name: kamaji-selfsigned-issuer
+      kind: Issuer
+      group: cert-manager.io
+  datastore:
+    enabled: true
+    name: default
+
+# -- Disable the analytics traces collection
+telemetry:
+  disabled: false
+
+kubeconfigGenerator:
+  # -- Toggle to deploy the Kubeconfig Generator Deployment.
+  enabled: false
+  fullnameOverride: ""
+  # -- The number of the pod replicas for the Kubeconfig Generator controller.
+  replicaCount: 2
+  # -- The annotations to apply to the Kubeconfig Generator controller pods.
+  podAnnotations: {}
+  # -- The securityContext to apply to the Kubeconfig Generator controller pods.
+  podSecurityContext:
+    runAsNonRoot: true
+  # -- The name of the service account to use. If not set, the root Kamaji one will be used.
+  serviceAccountOverride: ""
+  # -- The address the probe endpoint binds to.
+  healthProbeBindAddress: ":8081"
+  # -- Enables the leader election.
+  enableLeaderElect: true
+  loggingDevel:
+    # -- Development Mode defaults(encoder=consoleEncoder,logLevel=Debug,stackTraceLevel=Warn). Production Mode defaults(encoder=jsonEncoder,logLevel=Info,stackTraceLevel=Error)
+    enable: false
+  # -- A list of extra arguments to add to the Kubeconfig Generator controller default ones.
+  extraArgs: []
+  resources:
+    limits:
+      cpu: 200m
+      memory: 512Mi
+    requests:
+      cpu: 200m
+      memory: 512Mi
+  # -- The securityContext to apply to the Kubeconfig Generator controller container only.
+  securityContext:
+    allowPrivilegeEscalation: false
+    # capabilities:
+    #   drop:
+    #   - ALL
+    # readOnlyRootFilesystem: true
+    # runAsNonRoot: true
+    # runAsUser: 1000
+  # -- Kubernetes node selector rules to schedule Kubeconfig Generator controller
+  nodeSelector: {}
+  # -- Kubernetes node taints that the Kubeconfig Generator controller pods would tolerate
+  tolerations: []
+  # -- Kubernetes affinity rules to apply to Kubeconfig Generator controller pods
+  affinity: {}

@@ -1,0 +1,4 @@
+# Dependencies are copied to charts when the client is built. We don't want them
+# checked in.
+/charts
+

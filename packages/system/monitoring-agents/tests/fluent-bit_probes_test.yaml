@@ -1,0 +1,53 @@
+suite: fluent-bit liveness/readiness probes carry load headroom
+
+# Regression guard for the fluent-bit crash loop on a loaded install. The
+# subchart default probes (initialDelaySeconds 0, timeoutSeconds 1,
+# failureThreshold 3) fire into a connection-refused :2020 before fluent-bit's
+# HTTP server binds — that bind happens only AFTER the kubernetes filter's
+# "testing connectivity with API server" step, which the kube-API can gate for
+# ~10s under a concurrent install. The aggressive defaults then liveness-kill
+# fluent-bit into a restart loop, timing out the HelmRelease. The umbrella
+# values relax both probes. Pin the relaxed timing AND the unchanged target
+# (httpGet path / on port http = :2020) — a wrong path/port would make the
+# probe always fail, strictly worse than the bug it fixes.
+release:
+  name: monitoring-agents
+  namespace: cozy-monitoring
+tests:
+  - it: liveness probe keeps :2020 target and gains load headroom
+    template: charts/fluent-bit/templates/daemonset.yaml
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].livenessProbe.httpGet.path
+          value: /
+      - equal:
+          path: spec.template.spec.containers[0].livenessProbe.httpGet.port
+          value: http
+      - equal:
+          path: spec.template.spec.containers[0].livenessProbe.initialDelaySeconds
+          value: 15
+      - equal:
+          path: spec.template.spec.containers[0].livenessProbe.periodSeconds
+          value: 10
+      - equal:
+          path: spec.template.spec.containers[0].livenessProbe.timeoutSeconds
+          value: 5
+      - equal:
+          path: spec.template.spec.containers[0].livenessProbe.failureThreshold
+          value: 6
+
+  - it: readiness probe keeps :2020 target and gains load headroom
+    template: charts/fluent-bit/templates/daemonset.yaml
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].readinessProbe.httpGet.path
+          value: /
+      - equal:
+          path: spec.template.spec.containers[0].readinessProbe.httpGet.port
+          value: http
+      - equal:
+          path: spec.template.spec.containers[0].readinessProbe.timeoutSeconds
+          value: 5
+      - equal:
+          path: spec.template.spec.containers[0].readinessProbe.failureThreshold
+          value: 6

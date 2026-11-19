@@ -1,0 +1,563 @@
+// SPDX-License-Identifier: Apache-2.0
+// TenantNamespace registry: read-only view over Namespaces whose names start
+// with “tenant-”.
+
+package tenantnamespace
+
+import (
+	"context"
+	"fmt"
+	"net/http"
+	"strconv"
+	"strings"
+	"time"
+
+	corev1 "k8s.io/api/core/v1"
+	rbacv1 "k8s.io/api/rbac/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metainternal "k8s.io/apimachinery/pkg/apis/meta/internalversion"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/fields"
+	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/duration"
+	"k8s.io/apimachinery/pkg/watch"
+	"k8s.io/apiserver/pkg/endpoints/request"
+	"k8s.io/apiserver/pkg/registry/rest"
+	"k8s.io/klog/v2"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+
+	corev1alpha1 "github.com/cozystack/cozystack/pkg/apis/core/v1alpha1"
+	"github.com/cozystack/cozystack/pkg/registry"
+	"github.com/cozystack/cozystack/pkg/registry/sorting"
+)
+
+const (
+	prefix       = "tenant-"
+	singularName = "tenantnamespace"
+)
+
+// -----------------------------------------------------------------------------
+// REST storage
+// -----------------------------------------------------------------------------
+
+var (
+	_ rest.Lister               = &REST{}
+	_ rest.Getter               = &REST{}
+	_ rest.Watcher              = &REST{}
+	_ rest.TableConvertor       = &REST{}
+	_ rest.Scoper               = &REST{}
+	_ rest.SingularNameProvider = &REST{}
+)
+
+type REST struct {
+	c   client.Client
+	w   client.WithWatch
+	gvr schema.GroupVersionResource
+}
+
+func NewREST(
+	c client.Client,
+	w client.WithWatch,
+) *REST {
+	return &REST{
+		c: c,
+		w: w,
+		gvr: schema.GroupVersionResource{
+			Group:    corev1alpha1.GroupName,
+			Version:  "v1alpha1",
+			Resource: "tenantnamespaces",
+		},
+	}
+}
+
+// -----------------------------------------------------------------------------
+// Basic meta
+// -----------------------------------------------------------------------------
+
+func (*REST) NamespaceScoped() bool { return false }
+func (*REST) New() runtime.Object   { return &corev1alpha1.TenantNamespace{} }
+func (*REST) NewList() runtime.Object {
+	return &corev1alpha1.TenantNamespaceList{}
+}
+func (*REST) Kind() string { return "TenantNamespace" }
+func (r *REST) GroupVersionKind(_ schema.GroupVersion) schema.GroupVersionKind {
+	return r.gvr.GroupVersion().WithKind("TenantNamespace")
+}
+func (*REST) GetSingularName() string { return singularName }
+
+// -----------------------------------------------------------------------------
+// Lister / Getter
+// -----------------------------------------------------------------------------
+
+func (r *REST) List(
+	ctx context.Context,
+	_ *metainternal.ListOptions,
+) (runtime.Object, error) {
+	nsList := &corev1.NamespaceList{}
+	err := r.c.List(ctx, nsList)
+	if err != nil {
+		return nil, err
+	}
+
+	var tenantNames []string
+	for i := range nsList.Items {
+		if strings.HasPrefix(nsList.Items[i].Name, prefix) {
+			tenantNames = append(tenantNames, nsList.Items[i].Name)
+		}
+	}
+
+	allowed, err := r.filterAccessible(ctx, tenantNames)
+	if err != nil {
+		return nil, err
+	}
+
+	return r.makeList(nsList, allowed), nil
+}
+
+func (r *REST) Get(
+	ctx context.Context,
+	name string,
+	opts *metav1.GetOptions,
+) (runtime.Object, error) {
+	if !strings.HasPrefix(name, prefix) {
+		return nil, apierrors.NewNotFound(r.gvr.GroupResource(), name)
+	}
+
+	// Check if user has access to this namespace
+	hasAccess, err := r.hasAccessToNamespace(ctx, name)
+	if err != nil {
+		return nil, err
+	}
+	if !hasAccess {
+		// Return Forbidden to follow standard K8s RBAC behavior
+		return nil, apierrors.NewForbidden(r.gvr.GroupResource(), name, fmt.Errorf("access denied"))
+	}
+
+	ns := &corev1.Namespace{}
+	err = r.c.Get(ctx, types.NamespacedName{Namespace: "", Name: name}, ns, &client.GetOptions{Raw: opts})
+	if err != nil {
+		// Repackage NotFound so the Status reports this resource, not the
+		// backing Namespace one.
+		if apierrors.IsNotFound(err) {
+			return nil, apierrors.NewNotFound(r.gvr.GroupResource(), name)
+		}
+		return nil, err
+	}
+
+	return &corev1alpha1.TenantNamespace{
+		TypeMeta: metav1.TypeMeta{
+			APIVersion: corev1alpha1.SchemeGroupVersion.String(),
+			Kind:       "TenantNamespace",
+		},
+		ObjectMeta: ns.ObjectMeta,
+	}, nil
+}
+
+// -----------------------------------------------------------------------------
+// Watcher
+// -----------------------------------------------------------------------------
+
+func (r *REST) Watch(ctx context.Context, opts *metainternal.ListOptions) (watch.Interface, error) {
+	// Extract user identity once for the lifetime of the watch — it does not
+	// change between events and rebuilding it per event is wasteful.
+	u, ok := request.UserFrom(ctx)
+	if !ok {
+		return nil, apierrors.NewUnauthorized("user missing in context")
+	}
+	username := u.GetName()
+	groups := make(map[string]struct{})
+	for _, group := range u.GetGroups() {
+		groups[group] = struct{}{}
+	}
+
+	nsList := &corev1.NamespaceList{}
+
+	initialEventsEnd := registry.InitialEventsEndBookmarkRequested(opts)
+
+	// Build upstream watch options with field and label selectors
+	rawOpts := &metav1.ListOptions{
+		Watch:           true,
+		ResourceVersion: opts.ResourceVersion,
+		// Backing bookmarks are forwarded to the client, so ask for them only
+		// when the client did; a WatchList client always does, which keeps
+		// the terminating bookmark's trigger.
+		AllowWatchBookmarks: opts.AllowWatchBookmarks,
+	}
+	if opts.FieldSelector != nil {
+		rawOpts.FieldSelector = opts.FieldSelector.String()
+	}
+	if opts.LabelSelector != nil {
+		rawOpts.LabelSelector = opts.LabelSelector.String()
+	}
+
+	nsWatch, err := r.w.Watch(ctx, nsList, &client.ListOptions{Raw: rawOpts})
+	if err != nil {
+		return nil, err
+	}
+
+	// Get starting resourceVersion from options
+	var startingRV uint64
+	if opts.ResourceVersion != "" {
+		if rv, err := strconv.ParseUint(opts.ResourceVersion, 10, 64); err == nil {
+			startingRV = rv
+		}
+	}
+
+	// Emit the initial-events-end bookmark after the initial ADDED events so
+	// client-go reflectors reach HasSynced.
+	bookmarker := registry.NewInitialEventsBookmarker(initialEventsEnd, opts.ResourceVersion, func() runtime.Object {
+		return &corev1alpha1.TenantNamespace{
+			TypeMeta: metav1.TypeMeta{
+				APIVersion: corev1alpha1.SchemeGroupVersion.String(),
+				Kind:       "TenantNamespace",
+			},
+		}
+	})
+
+	events := make(chan watch.Event)
+	pw := watch.NewProxyWatcher(events)
+
+	go func() {
+		// This goroutine is the sole writer to events; closing it on exit
+		// signals end-of-stream to the consumer (ProxyWatcher.Stop does not
+		// close the channel it proxies).
+		defer close(events)
+		defer pw.Stop()
+		defer nsWatch.Stop()
+
+		// send forwards an event, returning false if the watch or context ended.
+		send := func(ev watch.Event) bool {
+			select {
+			case events <- ev:
+				return true
+			case <-pw.StopChan():
+				return false
+			case <-ctx.Done():
+				return false
+			}
+		}
+
+		for ev := range nsWatch.ResultChan() {
+			// Handle bookmark events
+			if ev.Type == watch.Bookmark {
+				if ns, ok := ev.Object.(*corev1.Namespace); ok {
+					bookmark, _ := bookmarker.OnBackingBookmark(ns.ResourceVersion)
+					if !send(bookmark) {
+						return
+					}
+				}
+				continue
+			}
+
+			ns, ok := ev.Object.(*corev1.Namespace)
+			if !ok || !strings.HasPrefix(ns.Name, prefix) {
+				continue
+			}
+			bookmarker.Observe(ns.ResourceVersion)
+
+			// Apply defensive filtering for field and label selectors
+			if opts.FieldSelector != nil {
+				if !opts.FieldSelector.Matches(fields.Set{"metadata.name": ns.Name}) {
+					continue
+				}
+			}
+			if opts.LabelSelector != nil {
+				if !opts.LabelSelector.Matches(labels.Set(ns.Labels)) {
+					continue
+				}
+			}
+
+			// Check if user has access to this namespace using the cached
+			// identity — avoids re-extracting user/groups on every event.
+			hasAccess, err := r.hasAccessToNamespaceForUser(ctx, ns.Name, username, groups)
+			if err != nil {
+				klog.ErrorS(err, "Failed to check access for namespace in watch", "namespace", ns.Name)
+				continue
+			}
+			if !hasAccess {
+				// User doesn't have access, skip this event
+				continue
+			}
+
+			out := &corev1alpha1.TenantNamespace{
+				TypeMeta: metav1.TypeMeta{
+					APIVersion: corev1alpha1.SchemeGroupVersion.String(),
+					Kind:       "TenantNamespace",
+				},
+				ObjectMeta: metav1.ObjectMeta{
+					Name:              ns.Name,
+					UID:               ns.UID,
+					ResourceVersion:   ns.ResourceVersion,
+					CreationTimestamp: ns.CreationTimestamp,
+					Labels:            ns.Labels,
+					Annotations:       ns.Annotations,
+				},
+			}
+
+			// Skip ADDED events based on resourceVersion comparison
+			// Only skip when client provided resourceVersion (they already have objects from List)
+			if ev.Type == watch.Added && startingRV > 0 {
+				objRV, parseErr := strconv.ParseUint(out.ResourceVersion, 10, 64)
+				// Skip objects client already has (objRV <= startingRV)
+				if parseErr == nil && objRV <= startingRV {
+					continue
+				}
+			}
+			// When startingRV == 0, always send ADDED events (client wants full state)
+
+			// Emit the initial-events-end bookmark before the first live event.
+			if bookmark, ok := bookmarker.BeforeLiveEvent(ev.Type); ok {
+				if !send(bookmark) {
+					return
+				}
+			}
+
+			if !send(watch.Event{Type: ev.Type, Object: out}) {
+				return
+			}
+		}
+
+		// Backing watcher closed: flush the terminating bookmark if still pending.
+		if bookmark, ok := bookmarker.OnClose(); ok {
+			send(bookmark)
+		}
+	}()
+
+	return pw, nil
+}
+
+// -----------------------------------------------------------------------------
+// TableConvertor
+// -----------------------------------------------------------------------------
+
+func (r *REST) ConvertToTable(_ context.Context, obj runtime.Object, _ runtime.Object) (*metav1.Table, error) {
+	now := time.Now()
+	row := func(o *corev1alpha1.TenantNamespace) metav1.TableRow {
+		return metav1.TableRow{
+			Cells:  []any{o.Name, duration.HumanDuration(now.Sub(o.CreationTimestamp.Time))},
+			Object: runtime.RawExtension{Object: o},
+		}
+	}
+
+	tbl := &metav1.Table{
+		TypeMeta: metav1.TypeMeta{APIVersion: "meta.k8s.io/v1", Kind: "Table"},
+		ColumnDefinitions: []metav1.TableColumnDefinition{
+			{Name: "NAME", Type: "string"},
+			{Name: "AGE", Type: "string"},
+		},
+	}
+
+	switch v := obj.(type) {
+	case *corev1alpha1.TenantNamespaceList:
+		for i := range v.Items {
+			tbl.Rows = append(tbl.Rows, row(&v.Items[i]))
+		}
+		tbl.ResourceVersion = v.ResourceVersion
+	case *corev1alpha1.TenantNamespace:
+		tbl.Rows = append(tbl.Rows, row(v))
+		tbl.ResourceVersion = v.ResourceVersion
+	default:
+		return nil, notAcceptable{r.gvr.GroupResource(), fmt.Sprintf("unexpected %T", obj)}
+	}
+	return tbl, nil
+}
+
+// -----------------------------------------------------------------------------
+// Helpers
+// -----------------------------------------------------------------------------
+
+func (r *REST) makeList(src *corev1.NamespaceList, allowed []string) *corev1alpha1.TenantNamespaceList {
+	set := map[string]struct{}{}
+	for _, n := range allowed {
+		set[n] = struct{}{}
+	}
+
+	// Get ResourceVersion from list or compute from items
+	// controller-runtime cached client may not set ResourceVersion on the list itself
+	listRV := src.ResourceVersion
+	if listRV == "" {
+		listRV, _ = registry.MaxResourceVersion(src)
+	}
+
+	out := &corev1alpha1.TenantNamespaceList{
+		TypeMeta: metav1.TypeMeta{
+			APIVersion: corev1alpha1.SchemeGroupVersion.String(),
+			Kind:       "TenantNamespaceList",
+		},
+		ListMeta: metav1.ListMeta{ResourceVersion: listRV},
+	}
+
+	for i := range src.Items {
+		ns := &src.Items[i]
+		if _, ok := set[ns.Name]; !ok {
+			continue
+		}
+		out.Items = append(out.Items, corev1alpha1.TenantNamespace{
+			TypeMeta: metav1.TypeMeta{
+				APIVersion: corev1alpha1.SchemeGroupVersion.String(),
+				Kind:       "TenantNamespace",
+			},
+			ObjectMeta: metav1.ObjectMeta{
+				Name:              ns.Name,
+				UID:               ns.UID,
+				ResourceVersion:   ns.ResourceVersion,
+				CreationTimestamp: ns.CreationTimestamp,
+				Labels:            ns.Labels,
+				Annotations:       ns.Annotations,
+			},
+		})
+	}
+
+	sorting.ByName[corev1alpha1.TenantNamespace, *corev1alpha1.TenantNamespace](out.Items)
+
+	return out
+}
+
+// matchesSubject checks if a RoleBinding subject matches the user's identity.
+// It handles Group, User, and ServiceAccount subjects with proper namespace fallback.
+func matchesSubject(subj rbacv1.Subject, bindingNamespace, username string, groups map[string]struct{}) bool {
+	switch subj.Kind {
+	case "Group":
+		_, ok := groups[subj.Name]
+		return ok
+	case "User":
+		return subj.Name == username
+	case "ServiceAccount":
+		saNamespace := subj.Namespace
+		if saNamespace == "" {
+			saNamespace = bindingNamespace
+		}
+		return username == fmt.Sprintf("system:serviceaccount:%s:%s", saNamespace, subj.Name)
+	default:
+		return false
+	}
+}
+
+func (r *REST) filterAccessible(
+	ctx context.Context,
+	names []string,
+) ([]string, error) {
+	u, ok := request.UserFrom(ctx)
+	if !ok {
+		return nil, apierrors.NewUnauthorized("user missing in context")
+	}
+	groups := make(map[string]struct{})
+	for _, group := range u.GetGroups() {
+		groups[group] = struct{}{}
+	}
+	if _, ok = groups["system:masters"]; ok {
+		return names, nil
+	}
+	if _, ok = groups["cozystack-cluster-admin"]; ok {
+		return names, nil
+	}
+	nameSet := make(map[string]struct{})
+	for _, name := range names {
+		nameSet[name] = struct{}{}
+	}
+	rbs := &rbacv1.RoleBindingList{}
+	err := r.c.List(ctx, rbs)
+	if err != nil {
+		return nil, apierrors.NewInternalError(fmt.Errorf("failed to list rolebindings: %w", err))
+	}
+	allowedNameSet := make(map[string]struct{})
+	for i := range rbs.Items {
+		if _, ok := allowedNameSet[rbs.Items[i].Namespace]; ok {
+			continue
+		}
+		if _, ok := nameSet[rbs.Items[i].Namespace]; !ok {
+			continue
+		}
+	subjectLoop:
+		for j := range rbs.Items[i].Subjects {
+			subj := rbs.Items[i].Subjects[j]
+			if matchesSubject(subj, rbs.Items[i].Namespace, u.GetName(), groups) {
+				allowedNameSet[rbs.Items[i].Namespace] = struct{}{}
+				break subjectLoop
+			}
+		}
+	}
+	allowed := make([]string, 0, len(allowedNameSet))
+	for name := range allowedNameSet {
+		allowed = append(allowed, name)
+	}
+	return allowed, nil
+}
+
+// hasAccessToNamespace checks if the user has access to a single namespace.
+// This is optimized for Get/Watch operations where we check one namespace at a time.
+// It lists RoleBindings only in the target namespace instead of all cluster RoleBindings.
+func (r *REST) hasAccessToNamespace(
+	ctx context.Context,
+	namespace string,
+) (bool, error) {
+	u, ok := request.UserFrom(ctx)
+	if !ok {
+		return false, apierrors.NewUnauthorized("user missing in context")
+	}
+	groups := make(map[string]struct{})
+	for _, group := range u.GetGroups() {
+		groups[group] = struct{}{}
+	}
+	return r.hasAccessToNamespaceForUser(ctx, namespace, u.GetName(), groups)
+}
+
+// hasAccessToNamespaceForUser is the inner check that does not re-extract user
+// identity from context. Use this in hot paths (e.g. the Watch loop) where the
+// caller has already cached the user name and groups.
+func (r *REST) hasAccessToNamespaceForUser(
+	ctx context.Context,
+	namespace, username string,
+	groups map[string]struct{},
+) (bool, error) {
+	// Check privileged groups
+	if _, ok := groups["system:masters"]; ok {
+		return true, nil
+	}
+	if _, ok := groups["cozystack-cluster-admin"]; ok {
+		return true, nil
+	}
+
+	// List RoleBindings only in the target namespace
+	rbs := &rbacv1.RoleBindingList{}
+	err := r.c.List(ctx, rbs, client.InNamespace(namespace))
+	if err != nil {
+		return false, apierrors.NewInternalError(fmt.Errorf("failed to list rolebindings in %s: %w", namespace, err))
+	}
+
+	// Check if user is in any RoleBinding subjects
+	for i := range rbs.Items {
+		for j := range rbs.Items[i].Subjects {
+			subj := rbs.Items[i].Subjects[j]
+			if matchesSubject(subj, rbs.Items[i].Namespace, username, groups) {
+				return true, nil
+			}
+		}
+	}
+
+	return false, nil
+}
+
+// -----------------------------------------------------------------------------
+// Boiler-plate
+// -----------------------------------------------------------------------------
+
+func (*REST) Destroy() {}
+
+type notAcceptable struct {
+	resource schema.GroupResource
+	message  string
+}
+
+func (e notAcceptable) Error() string { return e.message }
+func (e notAcceptable) Status() metav1.Status {
+	return metav1.Status{
+		Status:  metav1.StatusFailure,
+		Code:    http.StatusNotAcceptable,
+		Reason:  metav1.StatusReason("NotAcceptable"),
+		Message: e.message,
+	}
+}

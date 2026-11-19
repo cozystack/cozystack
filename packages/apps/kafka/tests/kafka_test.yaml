@@ -1,0 +1,306 @@
+suite: Kafka CR tests
+
+templates:
+  - templates/kafka.yaml
+
+tests:
+  ##########################
+  # KRaft mode (new inst.) #
+  ##########################
+
+  - it: renders a v1 Kafka CR without the KRaft annotations Strimzi ignores
+    release:
+      name: test-kafka
+      namespace: tenant-test
+    asserts:
+      - hasDocuments:
+          count: 1
+      - isKind:
+          of: Kafka
+      - isAPIVersion:
+          of: kafka.strimzi.io/v1
+      - notExists:
+          path: metadata.annotations["strimzi.io/kraft"]
+      - notExists:
+          path: metadata.annotations["strimzi.io/node-pools"]
+
+  - it: sets correct name and labels
+    release:
+      name: my-kafka
+      namespace: tenant-test
+    asserts:
+      - equal:
+          path: metadata.name
+          value: my-kafka
+      - equal:
+          path: metadata.labels["app.kubernetes.io/instance"]
+          value: my-kafka
+
+  ##########################
+  # Version                #
+  ##########################
+
+  - it: sets Kafka version from version map (default v4.3)
+    release:
+      name: test-kafka
+      namespace: tenant-test
+    asserts:
+      - equal:
+          path: spec.kafka.version
+          value: "4.3.1"
+
+  - it: resolves v4.2 version
+    release:
+      name: test-kafka
+      namespace: tenant-test
+    set:
+      version: "v4.2"
+    asserts:
+      - equal:
+          path: spec.kafka.version
+          value: "4.2.1"
+
+  - it: refuses a Kafka 3.x version the operator no longer runs
+    release:
+      name: test-kafka
+      namespace: tenant-test
+    set:
+      version: "v3.9"
+    asserts:
+      - failedTemplate:
+          errorPattern: "value must be one of 'v4.3', 'v4.2'"
+
+  ##########################
+  # No ZooKeeper / node-pool managed fields #
+  ##########################
+
+  - it: does not include zookeeper section for new instance
+    release:
+      name: test-kafka
+      namespace: tenant-test
+    asserts:
+      - notExists:
+          path: spec.zookeeper
+
+  - it: does not include replicas in Kafka CR (managed by KafkaNodePool)
+    release:
+      name: test-kafka
+      namespace: tenant-test
+    asserts:
+      - notExists:
+          path: spec.kafka.replicas
+
+  - it: does not include storage in Kafka CR (managed by KafkaNodePool)
+    release:
+      name: test-kafka
+      namespace: tenant-test
+    asserts:
+      - notExists:
+          path: spec.kafka.storage
+
+  - it: does not include resources in Kafka CR (managed by KafkaNodePool)
+    release:
+      name: test-kafka
+      namespace: tenant-test
+    asserts:
+      - notExists:
+          path: spec.kafka.resources
+
+  #####################
+  # Internal listeners #
+  #####################
+
+  - it: always creates plain internal listener
+    release:
+      name: test-kafka
+      namespace: tenant-test
+    asserts:
+      - contains:
+          path: spec.kafka.listeners
+          content:
+            name: plain
+            port: 9092
+            type: internal
+            tls: false
+
+  - it: always creates tls internal listener
+    release:
+      name: test-kafka
+      namespace: tenant-test
+    asserts:
+      - contains:
+          path: spec.kafka.listeners
+          content:
+            name: tls
+            port: 9093
+            type: internal
+            tls: true
+
+  #####################
+  # External listener  #
+  #####################
+
+  - it: does not create external listener when external is false and tls.enabled is unset
+    release:
+      name: test-kafka
+      namespace: tenant-test
+    set:
+      external: false
+    asserts:
+      - notContains:
+          path: spec.kafka.listeners
+          content:
+            name: external
+            port: 9094
+            type: loadbalancer
+            tls: false
+      - notContains:
+          path: spec.kafka.listeners
+          content:
+            name: external
+            port: 9094
+            type: loadbalancer
+            tls: true
+
+  - it: creates external loadbalancer listener with tls when external is true
+    release:
+      name: test-kafka
+      namespace: tenant-test
+    set:
+      external: true
+    asserts:
+      - contains:
+          path: spec.kafka.listeners
+          content:
+            name: external
+            port: 9094
+            type: loadbalancer
+            tls: true
+
+  - it: configures internal listeners by default and omits external
+    release:
+      name: test-kafka
+      namespace: tenant-test
+    asserts:
+      - equal:
+          path: spec.kafka.listeners[0].name
+          value: plain
+      - equal:
+          path: spec.kafka.listeners[0].type
+          value: internal
+      - equal:
+          path: spec.kafka.listeners[1].name
+          value: tls
+      - equal:
+          path: spec.kafka.listeners[1].type
+          value: internal
+      - lengthEqual:
+          path: spec.kafka.listeners
+          count: 2
+
+  - it: adds loadbalancer external listener when external is true
+    release:
+      name: test-kafka
+      namespace: tenant-test
+    set:
+      external: true
+    asserts:
+      - lengthEqual:
+          path: spec.kafka.listeners
+          count: 3
+      - equal:
+          path: spec.kafka.listeners[2].name
+          value: external
+      - equal:
+          path: spec.kafka.listeners[2].type
+          value: loadbalancer
+
+  ##########################
+  # Replication config     #
+  ##########################
+
+  - it: sets replication factor 1 for single replica
+    release:
+      name: test-kafka
+      namespace: tenant-test
+    set:
+      kafka:
+        replicas: 1
+    asserts:
+      - equal:
+          path: spec.kafka.config["offsets.topic.replication.factor"]
+          value: 1
+      - equal:
+          path: spec.kafka.config["min.insync.replicas"]
+          value: 1
+
+  - it: sets replication factor 2 for two replicas
+    release:
+      name: test-kafka
+      namespace: tenant-test
+    set:
+      kafka:
+        replicas: 2
+    asserts:
+      - equal:
+          path: spec.kafka.config["offsets.topic.replication.factor"]
+          value: 2
+
+  - it: sets replication factor 3 for three or more replicas
+    release:
+      name: test-kafka
+      namespace: tenant-test
+    set:
+      kafka:
+        replicas: 5
+    asserts:
+      - equal:
+          path: spec.kafka.config["offsets.topic.replication.factor"]
+          value: 3
+      - equal:
+          path: spec.kafka.config["min.insync.replicas"]
+          value: 2
+
+  ##########################
+  # Entity Operator        #
+  ##########################
+
+  - it: includes entity operator with topic and user operators
+    release:
+      name: test-kafka
+      namespace: tenant-test
+    asserts:
+      - exists:
+          path: spec.entityOperator.topicOperator
+      - exists:
+          path: spec.entityOperator.userOperator
+
+  ##########################
+  # Metrics                #
+  ##########################
+
+  - it: configures JMX Prometheus metrics
+    release:
+      name: test-kafka
+      namespace: tenant-test
+    asserts:
+      - equal:
+          path: spec.kafka.metricsConfig.type
+          value: jmxPrometheusExporter
+      - equal:
+          path: spec.kafka.metricsConfig.valueFrom.configMapKeyRef.name
+          value: test-kafka-metrics
+      - equal:
+          path: spec.kafka.metricsConfig.valueFrom.configMapKeyRef.key
+          value: kafka-metrics-config.yml
+
+  # Strimzi 1.x Kafka nodes read their certificates from Secrets through the
+  # Kubernetes API, which tenant network policy opens only to labelled pods.
+  - it: lets the Kafka pods reach the Kubernetes API
+    release:
+      name: test-kafka
+      namespace: tenant-test
+    asserts:
+      - equal:
+          path: spec.kafka.template.pod.metadata.labels["policy.cozystack.io/allow-to-apiserver"]
+          value: "true"

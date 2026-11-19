@@ -1,0 +1,50 @@
+{{ template "openbao.mode" . }}
+{{- if ne .mode "external" }}
+{{- if .Values.server.gateway.httpRoute.enabled -}}
+{{- $serviceName := include "openbao.fullname" . -}}
+{{- template "openbao.serverServiceEnabled" . -}}
+{{- if .serverServiceEnabled -}}
+{{- if and (eq .mode "ha" ) (eq (.Values.server.gateway.httpRoute.activeService | toString) "true") }}
+{{- $serviceName = printf "%s-%s" $serviceName "active" -}}
+{{- end }}
+{{- $servicePort := .Values.server.service.port -}}
+apiVersion: {{ .Values.server.gateway.httpRoute.apiVersion }}
+kind: HTTPRoute
+metadata:
+  name: {{ template "openbao.fullname" . }}
+  namespace: {{ include "openbao.namespace" . }}
+  labels:
+    helm.sh/chart: {{ include "openbao.chart" . }}
+    app.kubernetes.io/name: {{ include "openbao.name" . }}
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+    {{- with .Values.server.gateway.httpRoute.labels }}
+      {{- toYaml . | nindent 4 }}
+    {{- end }}
+  {{- template "openbao.gateway.httpRoute.annotations" . }}
+spec:
+  hostnames:
+  {{- range .Values.server.gateway.httpRoute.hosts }}
+    - {{ . | quote }}
+  {{- end }}
+  parentRefs:
+  {{- with .Values.server.gateway.httpRoute.parentRefs }}
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  rules:
+  - backendRefs:
+    - kind: Service
+      name: {{ $serviceName }}
+      port: {{ $servicePort }}
+    matches:
+    {{- with .Values.server.gateway.httpRoute.matches.path }}
+    - path:
+      {{- toYaml . | nindent 8 }}
+    {{- end }}
+    {{- with .Values.server.gateway.httpRoute.filters }}
+    filters:
+      {{- toYaml . | nindent 6 }}
+    {{- end }}
+{{- end }}
+{{- end }}
+{{- end }}

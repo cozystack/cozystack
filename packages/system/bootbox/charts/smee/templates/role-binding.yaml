@@ -1,0 +1,21 @@
+{{- if .Values.deploy }}
+{{- $roleType := .Values.rbac.type }}
+{{- if .Values.global }}
+{{- $roleType = coalesce .Values.global.rbac.type .Values.rbac.type }}
+{{- end }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: {{ printf "%sBinding" $roleType }}
+metadata:
+  name: {{ .Values.rbac.bindingName }}
+  {{- if eq $roleType "Role"  }}
+  namespace: {{ .Release.Namespace | quote }}
+  {{- end }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: {{ $roleType }}
+  name: {{ .Values.rbac.name }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ .Values.name }}
+    namespace: {{ .Release.Namespace | quote }}
+{{- end }}

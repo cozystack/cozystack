@@ -1,0 +1,45 @@
+{{- if and .Values.openShift.enabled .Values.openShift.securityContextConstraints.create }}
+apiVersion: security.openshift.io/v1
+kind: SecurityContextConstraints
+metadata:
+  name: {{ include "fluent-bit.openShiftSccName" . }}
+  labels:
+    {{- include "fluent-bit.labels" . | nindent 4 }}
+  {{- with .Values.openShift.securityContextConstraints.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+allowPrivilegedContainer: true
+allowPrivilegeEscalation: true
+allowHostDirVolumePlugin: true
+defaultAllowPrivilegeEscalation: false
+# forbid host namespaces
+allowHostNetwork: false
+allowHostIPC: false
+allowHostPorts: false
+allowHostPID: false
+allowedCapabilities: []
+forbiddenSysctls:
+  - "*"
+readOnlyRootFilesystem: false
+requiredDropCapabilities:
+  - MKNOD
+{{- with .Values.openShift.securityContextConstraints.runAsUser }}
+runAsUser:
+  {{- toYaml . | nindent 4 }}
+{{- end }}
+{{- with .Values.openShift.securityContextConstraints.seLinuxContext }}
+seLinuxContext:
+  {{- toYaml . | nindent 4 }}
+{{- end }}
+supplementalGroups:
+  type: RunAsAny
+volumes:
+  - configMap
+  - downwardAPI
+  - emptyDir
+  - hostPath
+  - persistentVolumeClaim
+  - projected
+  - secret
+{{- end }}

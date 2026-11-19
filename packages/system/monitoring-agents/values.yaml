@@ -1,0 +1,589 @@
+global:
+  target: cozy-monitoring
+
+kube-state-metrics:
+  # Sized from a measured 14d peak of 307Mi working set on a 3-node cluster with
+  # 322 pods and roughly 25.6k series, which is the smallest cluster we run. The
+  # request sits above the 176Mi mean rather than at the peak, and the limit
+  # carries wide headroom on purpose: this component's memory scales with the
+  # number of objects in the cluster, and --metric-labels-allowlist below copies
+  # every label of each pod, deployment and PVC onto its kube_*_labels series,
+  # so a cluster larger than the one measured will land well above the peak
+  # seen here.
+  # 2Gi is 6.7x that peak, so scaling linearly with object count it stays a
+  # ceiling rather than a bound up to roughly 2100 pods and 170k series.
+  #
+  # A memory limit is what sets memory.max on the pod cgroup, and the Talos
+  # userspace OOM handler only ever selects cgroups that lack one, so running
+  # this without a limit leaves it an eviction candidate on every node. See
+  # https://cozystack.io/docs/v1/operations/configuration/system-memory-limits/.
+  #
+  # No CPU limit: it is irrelevant to that OOM ranking, and a ceiling that binds
+  # only buys CFS throttling, which for a metrics scraper turns into scrape
+  # timeouts rather than backpressure.
+  resources:
+    requests:
+      cpu: 50m
+      memory: 192Mi
+    limits:
+      memory: 2Gi
+  extraArgs:
+    # PVCs are listed so the tenant metrics API can find an application's PVCs
+    # in kube_persistentvolumeclaim_labels by their apps.cozystack.io/application.*
+    # lineage labels. kube-state-metrics emits that metric only for resources on
+    # this list, one series per PVC; naming only the lineage keys would emit the
+    # same number of series.
+    - --metric-labels-allowlist=pods=[*],deployments=[*],persistentvolumeclaims=[*]
+  rbac:
+    extraRules:
+      - apiGroups:
+          - source.toolkit.fluxcd.io
+          - kustomize.toolkit.fluxcd.io
+          - helm.toolkit.fluxcd.io
+          - notification.toolkit.fluxcd.io
+          - image.toolkit.fluxcd.io
+        resources:
+          - gitrepositories
+          - buckets
+          - helmrepositories
+          - helmcharts
+          - ocirepositories
+          - kustomizations
+          - helmreleases
+          - alerts
+          - providers
+          - receivers
+          - imagerepositories
+          - imagepolicies
+          - imageupdateautomations
+        verbs: [ "list", "watch" ]
+  customResourceState:
+    enabled: true
+    config:
+      spec:
+        resources:
+          - groupVersionKind:
+              group: kustomize.toolkit.fluxcd.io
+              version: v1
+              kind: Kustomization
+            metricNamePrefix: gotk
+            metrics:
+              - name: "resource_info"
+                help: "The current state of a Flux Kustomization resource."
+                each:
+                  type: Info
+                  info:
+                    labelsFromPath:
+                      name: [ metadata, name ]
+                labelsFromPath:
+                  exported_namespace: [ metadata, namespace ]
+                  ready: [ status, conditions, "[type=Ready]", status ]
+                  suspended: [ spec, suspend ]
+                  revision: [ status, lastAppliedRevision ]
+                  source_name: [ spec, sourceRef, name ]
+          - groupVersionKind:
+              group: helm.toolkit.fluxcd.io
+              version: v2
+              kind: HelmRelease
+            metricNamePrefix: gotk
+            metrics:
+              - name: "resource_info"
+                help: "The current state of a Flux HelmRelease resource."
+                each:
+                  type: Info
+                  info:
+                    labelsFromPath:
+                      name: [ metadata, name ]
+                labelsFromPath:
+                  exported_namespace: [ metadata, namespace ]
+                  ready: [ status, conditions, "[type=Ready]", status ]
+                  suspended: [ spec, suspend ]
+                  revision: [ status, history, "0", chartVersion ]
+                  chart_name: [ status, history, "0", chartName ]
+                  chart_app_version: [ status, history, "0", appVersion ]
+                  chart_ref_name: [ spec, chartRef, name ]
+                  chart_source_name: [ spec, chart, spec, sourceRef, name ]
+          - groupVersionKind:
+              group: source.toolkit.fluxcd.io
+              version: v1
+              kind: GitRepository
+            metricNamePrefix: gotk
+            metrics:
+              - name: "resource_info"
+                help: "The current state of a Flux GitRepository resource."
+                each:
+                  type: Info
+                  info:
+                    labelsFromPath:
+                      name: [ metadata, name ]
+                labelsFromPath:
+                  exported_namespace: [ metadata, namespace ]
+                  ready: [ status, conditions, "[type=Ready]", status ]
+                  suspended: [ spec, suspend ]
+                  revision: [ status, artifact, revision ]
+                  url: [ spec, url ]
+          - groupVersionKind:
+              group: source.toolkit.fluxcd.io
+              version: v1beta2
+              kind: Bucket
+            metricNamePrefix: gotk
+            metrics:
+              - name: "resource_info"
+                help: "The current state of a Flux Bucket resource."
+                each:
+                  type: Info
+                  info:
+                    labelsFromPath:
+                      name: [ metadata, name ]
+                labelsFromPath:
+                  exported_namespace: [ metadata, namespace ]
+                  ready: [ status, conditions, "[type=Ready]", status ]
+                  suspended: [ spec, suspend ]
+                  revision: [ status, artifact, revision ]
+                  endpoint: [ spec, endpoint ]
+                  bucket_name: [ spec, bucketName ]
+          - groupVersionKind:
+              group: source.toolkit.fluxcd.io
+              version: v1
+              kind: HelmRepository
+            metricNamePrefix: gotk
+            metrics:
+              - name: "resource_info"
+                help: "The current state of a Flux HelmRepository resource."
+                each:
+                  type: Info
+                  info:
+                    labelsFromPath:
+                      name: [ metadata, name ]
+                labelsFromPath:
+                  exported_namespace: [ metadata, namespace ]
+                  ready: [ status, conditions, "[type=Ready]", status ]
+                  suspended: [ spec, suspend ]
+                  revision: [ status, artifact, revision ]
+                  url: [ spec, url ]
+          - groupVersionKind:
+              group: source.toolkit.fluxcd.io
+              version: v1
+              kind: HelmChart
+            metricNamePrefix: gotk
+            metrics:
+              - name: "resource_info"
+                help: "The current state of a Flux HelmChart resource."
+                each:
+                  type: Info
+                  info:
+                    labelsFromPath:
+                      name: [ metadata, name ]
+                labelsFromPath:
+                  exported_namespace: [ metadata, namespace ]
+                  ready: [ status, conditions, "[type=Ready]", status ]
+                  suspended: [ spec, suspend ]
+                  revision: [ status, artifact, revision ]
+                  chart_name: [ spec, chart ]
+                  chart_version: [ spec, version ]
+          - groupVersionKind:
+              group: source.toolkit.fluxcd.io
+              version: v1beta2
+              kind: OCIRepository
+            metricNamePrefix: gotk
+            metrics:
+              - name: "resource_info"
+                help: "The current state of a Flux OCIRepository resource."
+                each:
+                  type: Info
+                  info:
+                    labelsFromPath:
+                      name: [ metadata, name ]
+                labelsFromPath:
+                  exported_namespace: [ metadata, namespace ]
+                  ready: [ status, conditions, "[type=Ready]", status ]
+                  suspended: [ spec, suspend ]
+                  revision: [ status, artifact, revision ]
+                  url: [ spec, url ]
+          - groupVersionKind:
+              group: notification.toolkit.fluxcd.io
+              version: v1beta3
+              kind: Alert
+            metricNamePrefix: gotk
+            metrics:
+              - name: "resource_info"
+                help: "The current state of a Flux Alert resource."
+                each:
+                  type: Info
+                  info:
+                    labelsFromPath:
+                      name: [ metadata, name ]
+                labelsFromPath:
+                  exported_namespace: [ metadata, namespace ]
+                  suspended: [ spec, suspend ]
+          - groupVersionKind:
+              group: notification.toolkit.fluxcd.io
+              version: v1beta3
+              kind: Provider
+            metricNamePrefix: gotk
+            metrics:
+              - name: "resource_info"
+                help: "The current state of a Flux Provider resource."
+                each:
+                  type: Info
+                  info:
+                    labelsFromPath:
+                      name: [ metadata, name ]
+                labelsFromPath:
+                  exported_namespace: [ metadata, namespace ]
+                  suspended: [ spec, suspend ]
+          - groupVersionKind:
+              group: notification.toolkit.fluxcd.io
+              version: v1
+              kind: Receiver
+            metricNamePrefix: gotk
+            metrics:
+              - name: "resource_info"
+                help: "The current state of a Flux Receiver resource."
+                each:
+                  type: Info
+                  info:
+                    labelsFromPath:
+                      name: [ metadata, name ]
+                labelsFromPath:
+                  exported_namespace: [ metadata, namespace ]
+                  ready: [ status, conditions, "[type=Ready]", status ]
+                  suspended: [ spec, suspend ]
+                  webhook_path: [ status, webhookPath ]
+          - groupVersionKind:
+              group: image.toolkit.fluxcd.io
+              version: v1beta2
+              kind: ImageRepository
+            metricNamePrefix: gotk
+            metrics:
+              - name: "resource_info"
+                help: "The current state of a Flux ImageRepository resource."
+                each:
+                  type: Info
+                  info:
+                    labelsFromPath:
+                      name: [ metadata, name ]
+                labelsFromPath:
+                  exported_namespace: [ metadata, namespace ]
+                  ready: [ status, conditions, "[type=Ready]", status ]
+                  suspended: [ spec, suspend ]
+                  image: [ spec, image ]
+          - groupVersionKind:
+              group: image.toolkit.fluxcd.io
+              version: v1beta2
+              kind: ImagePolicy
+            metricNamePrefix: gotk
+            metrics:
+              - name: "resource_info"
+                help: "The current state of a Flux ImagePolicy resource."
+                each:
+                  type: Info
+                  info:
+                    labelsFromPath:
+                      name: [ metadata, name ]
+                labelsFromPath:
+                  exported_namespace: [ metadata, namespace ]
+                  ready: [ status, conditions, "[type=Ready]", status ]
+                  suspended: [ spec, suspend ]
+                  source_name: [ spec, imageRepositoryRef, name ]
+          - groupVersionKind:
+              group: image.toolkit.fluxcd.io
+              version: v1beta2
+              kind: ImageUpdateAutomation
+            metricNamePrefix: gotk
+            metrics:
+              - name: "resource_info"
+                help: "The current state of a Flux ImageUpdateAutomation resource."
+                each:
+                  type: Info
+                  info:
+                    labelsFromPath:
+                      name: [ metadata, name ]
+                labelsFromPath:
+                  exported_namespace: [ metadata, namespace ]
+                  ready: [ status, conditions, "[type=Ready]", status ]
+                  suspended: [ spec, suspend ]
+                  source_name: [ spec, sourceRef, name ]
+
+vmagent:
+  externalLabels:
+    cluster: cozystack
+  remoteWrite:
+    urls:
+      - http://vminsert-shortterm.{{ .Values.global.target }}.svc:8480/insert/0/prometheus
+      - http://vminsert-longterm.{{ .Values.global.target }}.svc:8480/insert/0/prometheus
+  extraArgs: {}
+  # Replaces the global promscrape.maxScrapeSize (32MB) for the kube-apiserver
+  # job only. Its /metrics grows with the number of CRDs and outgrows 32MB on a
+  # full install. vmagent buffers the whole uncompressed response even with
+  # streamParse, so keep this finite. It replaces the global in both
+  # directions: if extraArgs raises promscrape.maxScrapeSize above this value,
+  # raise this one too. An empty value falls back to the global.
+  apiserverMaxScrapeSize: 128MB
+
+fluent-bit:
+  # 14d peak 319Mi; scales with log volume, so the limit carries wide headroom.
+  # See the node-DaemonSet note at the bottom of this file.
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      memory: 1Gi
+  rbac:
+    eventsAccess: true
+  # Relax probe timing to survive a loaded install. Fluent-bit's HTTP server on
+  # :2020 (the probe target) does not bind until AFTER the kubernetes filter's
+  # "testing connectivity with API server" step; under concurrent install the
+  # kube-API can be unreachable for ~10s, delaying the :2020 bind, and the
+  # single-threaded HTTP server can miss a 1s timeout while the engine is busy.
+  # The subchart defaults (initialDelaySeconds 0, timeoutSeconds 1,
+  # failureThreshold 3) then liveness-kill fluent-bit into a crash loop. httpGet
+  # stays on path / port http (:2020) — same target as the subchart defaults.
+  livenessProbe:
+    httpGet:
+      path: /
+      port: http
+    initialDelaySeconds: 15
+    periodSeconds: 10
+    timeoutSeconds: 5
+    failureThreshold: 6
+  readinessProbe:
+    httpGet:
+      path: /
+      port: http
+    timeoutSeconds: 5
+    failureThreshold: 6
+  daemonSetVolumes:
+    - name: varlog
+      hostPath:
+        path: /var/log
+    - name: varlibdockercontainers
+      hostPath:
+        path: /var/lib/docker/containers
+  daemonSetVolumeMounts:
+    - name: varlog
+      mountPath: /var/log
+    - name: varlibdockercontainers
+      mountPath: /var/lib/docker/containers
+      readOnly: true
+  config:
+    inputs: |
+      [INPUT]
+          Name tail
+          Path /var/log/containers/*.log
+          multiline.parser docker, cri
+          Tag kube.*
+          Mem_Buf_Limit 5MB
+          Skip_Long_Lines On
+      [INPUT]
+          Name kubernetes_events
+          Tag events.*
+          Kube_url https://kubernetes.default.svc
+      [INPUT]
+          Name tail
+          Alias audit
+          Path /var/log/audit/kube/*.log
+          Parser audit
+          Tag audit.*
+    customParsers: |
+      [PARSER]
+          Name docker_no_time
+          Format json
+          Time_Keep Off
+          Time_Key time
+          Time_Format %Y-%m-%dT%H:%M:%S.%L
+      [PARSER]
+          Name          audit
+          Format        json
+          Time_Key      requestReceivedTimestamp
+          Time_Format   %Y-%m-%dT%H:%M:%S.%L%z
+      [PARSER]
+          Name          containerd
+          Format        regex
+          Regex         ^(?<time>[^ ]+) (?<stream>stdout|stderr) (?<logtag>[^ ]*) (?<event>.*)$
+          Time_Key      time
+          Time_Format   %Y-%m-%dT%H:%M:%S.%L%z
+    outputs: |
+      [OUTPUT]
+          Name http
+          Match kube.*
+          Host vlinsert-generic.{{ .Values.global.target }}.svc
+          port 9481
+          compress gzip
+          uri /insert/jsonline?_stream_fields=log_source,stream,kubernetes_pod_name,kubernetes_container_name,kubernetes_namespace_name,apps_cozystack_io_application_group,apps_cozystack_io_application_kind,apps_cozystack_io_application_name&_msg_field=log&_time_field=date
+          format json_lines
+          json_date_format iso8601
+          header AccountID 0
+          header ProjectID 0
+      [OUTPUT]
+          Name http
+          Match events.*
+          Host vlinsert-generic.{{ .Values.global.target }}.svc
+          port 9481
+          compress gzip
+          uri /insert/jsonline?_stream_fields=log_source,reason,metadata_namespace,metadata_name&_msg_field=message&_time_field=date
+          format json_lines
+          json_date_format iso8601
+          header AccountID 0
+          header ProjectID 0
+      [OUTPUT]
+          Name http
+          Match audit.*
+          Host vlinsert-generic.{{ .Values.global.target }}.svc
+          port 9481
+          compress gzip
+          uri /insert/jsonline?_stream_fields=log_source,stage,user_username,verb,requestUri&_msg_field=requestURI&_time_field=date
+          format json_lines
+          json_date_format iso8601
+          header AccountID 0
+          header ProjectID 0
+      {{- range $target, $_ := include "monitoring-agents.tenantLogRoutes" . | fromJson }}
+      [OUTPUT]
+          Name http
+          Match tenant.{{ $target }}.*
+          Host vlinsert-generic.{{ $target }}.svc
+          port 9481
+          compress gzip
+          uri /insert/jsonline?_stream_fields=log_source,stream,kubernetes_pod_name,kubernetes_container_name,kubernetes_namespace_name,apps_cozystack_io_application_group,apps_cozystack_io_application_kind,apps_cozystack_io_application_name&_msg_field=log&_time_field=date
+          format json_lines
+          json_date_format iso8601
+          header AccountID 0
+          header ProjectID 0
+      {{- end }}
+    filters: |
+      [FILTER]
+          Name kubernetes
+          Match kube.*
+          Merge_Log On
+          Merge_Log_Key log_processed
+          Keep_Log On
+          K8S-Logging.Parser On
+          K8S-Logging.Exclude On
+      [FILTER]
+          Name nest
+          Match kube.*
+          Wildcard pod_name
+          Operation lift
+          Nested_under kubernetes
+          Add_prefix   kubernetes_
+      {{- /*
+        The pod's lineage labels name the application it belongs to. lift
+        cannot pick keys, so every label comes up; all but these three keep
+        the kubernetes_ prefix and fall to Remove_wildcard below. An absent
+        label stays absent, and VictoriaLogs builds _stream from the stream
+        fields that are present, so an unlabelled pod keeps its stream.
+      */}}
+      [FILTER]
+          Name nest
+          Match kube.*
+          Operation lift
+          Nested_under kubernetes_labels
+          Add_prefix kubernetes_labels_
+      [FILTER]
+          Name modify
+          Match kube.*
+          Add log_source container_log
+      [FILTER]
+          Name nest
+          Match events.*
+          Wildcard metadata.*
+          Operation lift
+          Nested_under metadata
+          Add_prefix   metadata_
+      [FILTER]
+          Name nest
+          Match audit.*
+          Wildcard user.*
+          Operation lift
+          Nested_under user
+          Add_prefix   user_
+      [FILTER]
+          Name modify
+          Match events.*
+          Add log_source kube_events
+      [FILTER]
+          Name modify
+          Match audit.*
+          Add log_source audit_log
+      [FILTER]
+          Name modify
+          Match *
+          Add tenant {{ .Values.global.target }}
+      [FILTER]
+          Name modify
+          Match *
+          Add cluster root-cluster
+      [FILTER]
+          Name modify
+          Match kube.*
+          Rename kubernetes_pod_name keep_kubernetes_pod_name
+          Rename kubernetes_namespace_name keep_kubernetes_namespace_name
+          Rename kubernetes_container_name keep_kubernetes_container_name
+          Rename kubernetes_labels_apps.cozystack.io/application.group apps_cozystack_io_application_group
+          Rename kubernetes_labels_apps.cozystack.io/application.kind apps_cozystack_io_application_kind
+          Rename kubernetes_labels_apps.cozystack.io/application.name apps_cozystack_io_application_name
+      [FILTER]
+          Name modify
+          Match kube.*
+          Remove_wildcard kubernetes_
+      [FILTER]
+          Name modify
+          Match kube.*
+          Rename keep_kubernetes_pod_name kubernetes_pod_name
+          Rename keep_kubernetes_namespace_name kubernetes_namespace_name
+          Rename keep_kubernetes_container_name kubernetes_container_name
+      {{- /*
+        Routed records are re-tagged with keep false: they leave the default
+        outputs, so a tenant that runs its own monitoring holds its logs and the
+        root store no longer does. rewrite_tag sits last so the re-tagged record
+        already carries the kube.* processing above; the record then re-enters
+        the chain under its new tag, where the Match * "Add tenant" is a no-op
+        (Add never overwrites), hence the per-target Set.
+      */}}
+      {{- $routes := include "monitoring-agents.tenantLogRoutes" . | fromJson }}
+      {{- if $routes }}
+      [FILTER]
+          Name rewrite_tag
+          Match kube.*
+      {{- range $target, $namespaces := $routes }}
+          Rule $kubernetes_namespace_name ^({{ $namespaces | sortAlpha | join "|" }})$ tenant.{{ $target }}.$TAG false
+      {{- end }}
+      {{- range $target, $_ := $routes }}
+      [FILTER]
+          Name modify
+          Match tenant.{{ $target }}.*
+          Set tenant {{ $target }}
+      {{- end }}
+      {{- end }}
+scrapeRules:
+  etcd:
+    enabled: false
+
+# Node DaemonSets: a memory limit is what sets memory.max on the pod cgroup, and
+# the Talos userspace OOM handler (v1.12+) only ever kills cgroups that lack one.
+# Both of these ran BestEffort on every node, so they were eviction candidates
+# whenever a tenant workload drove node memory PSI. Requests come from observed
+# usage (14d peak on a 3-node dev cluster); limits are a runaway backstop rather
+# than a fitted ceiling — fluent-bit in particular scales with log volume, which
+# a dev cluster understates.
+prometheus-node-exporter:
+  # 14d peak 42Mi.
+  resources:
+    requests:
+      cpu: 10m
+      memory: 32Mi
+    limits:
+      memory: 256Mi
+
+# Image for the pre-delete hook that releases the VictoriaMetrics objects (see
+# templates/vm-cleanup-hook.yaml). Only needs a kubectl binary. Digest-pinned so
+# an upstream retag does not change what runs across the fleet; refresh with
+# `docker manifest inspect docker.io/clastix/kubectl:v1.32`. Same pin as the
+# etcd-operator hook.
+# renovate: datasource=docker depName=docker.io/clastix/kubectl
+kubectlImage:
+  repository: docker.io/clastix/kubectl
+  tag: v1.32
+  digest: sha256:b9ef7d8dbe65bcc81a46c09b8dc7543103055021c4f43287bf59e92a8f4fe05c
+  pullPolicy: IfNotPresent

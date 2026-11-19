@@ -1,0 +1,84 @@
+{{- $seaweedfsName := include "seaweedfs.fullname" $ }}
+{{- /* Shared with networkpolicy.yaml, which renders this Job's policy exactly
+       when the Job itself renders. */}}
+{{- /* trim: include returns a string, and a whitespace-only one is truthy. */}}
+{{- $commands := include "seaweedfs.volumeResizeHookCommands" . | trim }}
+
+{{- if $commands }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: "{{ $seaweedfsName }}-volume-resize-hook"
+  labels:
+    app.kubernetes.io/name: {{ template "seaweedfs.name" . }}
+    helm.sh/chart: {{ .Chart.Name }}-{{ .Chart.Version | replace "+" "_" }}
+    app.kubernetes.io/managed-by: {{ .Release.Service | quote }}
+    app.kubernetes.io/instance: {{ .Release.Name | quote }}
+    app.kubernetes.io/component: volume-resize-hook
+  annotations:
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-weight: "0"
+    helm.sh/hook-delete-policy: hook-succeeded,before-hook-creation
+spec:
+  backoffLimit: 1
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: {{ template "seaweedfs.name" . }}
+        helm.sh/chart: {{ .Chart.Name }}-{{ .Chart.Version | replace "+" "_" }}
+        app.kubernetes.io/managed-by: {{ .Release.Service | quote }}
+        app.kubernetes.io/instance: {{ .Release.Name | quote }}
+        app.kubernetes.io/component: volume-resize-hook
+        policy.cozystack.io/allow-to-apiserver: "true"
+    spec:
+      serviceAccountName: {{ $seaweedfsName }}-volume-resize-hook
+      restartPolicy: Never
+      containers:
+        - name: resize
+          image: {{ .Values.volume.resizeHook.image }}
+          command: ["sh", "-xec"]
+          args:
+            - |
+{{ $commands | indent 14 }}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ $seaweedfsName }}-volume-resize-hook
+  annotations:
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-weight: "-5"
+    helm.sh/hook-delete-policy: before-hook-creation
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $seaweedfsName }}-volume-resize-hook
+  annotations:
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-weight: "-5"
+    helm.sh/hook-delete-policy: before-hook-creation
+rules:
+  - apiGroups: ["apps"]
+    resources: ["statefulsets"]
+    verbs: ["delete", "get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["persistentvolumeclaims"]
+    verbs: ["patch", "get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $seaweedfsName }}-volume-resize-hook
+  annotations:
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-weight: "-5"
+    helm.sh/hook-delete-policy: before-hook-creation
+subjects:
+  - kind: ServiceAccount
+    name: {{ $seaweedfsName }}-volume-resize-hook
+roleRef:
+  kind: Role
+  name: {{ $seaweedfsName }}-volume-resize-hook
+  apiGroup: rbac.authorization.k8s.io
+{{- end }}

@@ -1,0 +1,81 @@
+suite: dashboard cluster-usage RBAC
+templates:
+  - templates/clusterrole-cluster-usage.yaml
+  - templates/clusterrolebinding-cluster-usage.yaml
+
+release:
+  name: dashboard
+  namespace: cozy-dashboard
+
+# The cluster-usage admin page in the dashboard reads cluster-scoped
+# resources (nodes, pods, metrics.k8s.io) to render aggregate utilisation
+# and a per-node table including arbitrary extended resources (GPUs etc.).
+# The built-in `edit` ClusterRole already bound to cozystack-cluster-admin
+# does not grant cluster-wide pod read or `nodes` access, so the dashboard
+# needs an explicit grant. The page-side sidebar item is gated by SSAR on
+# `nodes list` — pinning the rules here keeps that gate meaningful.
+
+tests:
+  - it: ClusterRole exists and grants nodes/pods get/list/watch
+    template: templates/clusterrole-cluster-usage.yaml
+    asserts:
+      - isKind:
+          of: ClusterRole
+      - equal:
+          path: apiVersion
+          value: rbac.authorization.k8s.io/v1
+      - equal:
+          path: metadata.name
+          value: cozystack-dashboard-cluster-usage
+      - contains:
+          path: rules
+          content:
+            apiGroups: [""]
+            resources: ["nodes", "pods"]
+            verbs: ["get", "list", "watch"]
+
+  - it: ClusterRole grants metrics.k8s.io nodes get/list
+    template: templates/clusterrole-cluster-usage.yaml
+    asserts:
+      - contains:
+          path: rules
+          content:
+            apiGroups: ["metrics.k8s.io"]
+            resources: ["nodes"]
+            verbs: ["get", "list"]
+
+  - it: ClusterRoleBinding binds the role to cozystack-cluster-admin group
+    template: templates/clusterrolebinding-cluster-usage.yaml
+    asserts:
+      - isKind:
+          of: ClusterRoleBinding
+      - equal:
+          path: apiVersion
+          value: rbac.authorization.k8s.io/v1
+      - equal:
+          path: metadata.name
+          value: cozystack-dashboard-cluster-usage
+      - equal:
+          path: roleRef.kind
+          value: ClusterRole
+      - equal:
+          path: roleRef.name
+          value: cozystack-dashboard-cluster-usage
+      - equal:
+          path: subjects[0].kind
+          value: Group
+      - equal:
+          path: subjects[0].name
+          value: cozystack-cluster-admin
+      - equal:
+          path: subjects[0].apiGroup
+          value: rbac.authorization.k8s.io
+
+  - it: each template renders exactly one document
+    asserts:
+      - template: templates/clusterrole-cluster-usage.yaml
+        hasDocuments:
+          count: 1
+      - template: templates/clusterrolebinding-cluster-usage.yaml
+        hasDocuments:
+          count: 1

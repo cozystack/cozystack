@@ -1,0 +1,131 @@
+suite: nats config.merge and generated accounts
+
+release:
+  name: my-nats
+  namespace: tenant-test
+
+set:
+  _cluster:
+    cluster-domain: cozy.local
+
+templates:
+  - templates/nats.yaml
+
+tests:
+  - it: renders the generated users under accounts.A when users are set
+    set:
+      users:
+        app:
+          password: secret
+    documentSelector:
+      path: kind
+      value: HelmRelease
+    asserts:
+      - equal:
+          path: spec.values.nats.config.merge.accounts.A.users
+          value:
+            - user: app
+              password: secret
+      - notExists:
+          path: spec.values.nats.config.merge.jetstream
+
+  - it: merges a tenant accounts block into the generated accounts map
+    set:
+      users:
+        app:
+          password: secret
+      config:
+        merge:
+          accounts:
+            A:
+              jetstream: enabled
+    documentSelector:
+      path: kind
+      value: HelmRelease
+    asserts:
+      - equal:
+          path: spec.values.nats.config.merge.accounts.A.jetstream
+          value: enabled
+      - equal:
+          path: spec.values.nats.config.merge.accounts.A.users
+          value:
+            - user: app
+              password: secret
+      - lengthEqual:
+          path: spec.values.nats.config.merge.accounts.A.users
+          count: 1
+
+  - it: keeps the generated users when the tenant block also lists users for account A
+    set:
+      users:
+        app:
+          password: secret
+      config:
+        merge:
+          accounts:
+            A:
+              users:
+                - user: stray
+                  password: stray
+    documentSelector:
+      path: kind
+      value: HelmRelease
+    asserts:
+      - equal:
+          path: spec.values.nats.config.merge.accounts.A.users
+          value:
+            - user: app
+              password: secret
+
+  - it: keeps other accounts and top-level merge keys next to the generated one
+    set:
+      users:
+        app:
+          password: secret
+      config:
+        merge:
+          max_payload: 4MB
+          accounts:
+            B:
+              jetstream: enabled
+    documentSelector:
+      path: kind
+      value: HelmRelease
+    asserts:
+      - equal:
+          path: spec.values.nats.config.merge.max_payload
+          value: 4MB
+      - equal:
+          path: spec.values.nats.config.merge.accounts.B.jetstream
+          value: enabled
+      - equal:
+          path: spec.values.nats.config.merge.accounts.A.users[0].user
+          value: app
+
+  - it: passes config.merge through unchanged when there are no users
+    set:
+      config:
+        merge:
+          max_payload: 4MB
+          accounts:
+            A:
+              jetstream: enabled
+    documentSelector:
+      path: kind
+      value: HelmRelease
+    asserts:
+      - equal:
+          path: spec.values.nats.config.merge
+          value:
+            max_payload: 4MB
+            accounts:
+              A:
+                jetstream: enabled
+
+  - it: renders no merge block when neither users nor config.merge are set
+    documentSelector:
+      path: kind
+      value: HelmRelease
+    asserts:
+      - notExists:
+          path: spec.values.nats.config.merge

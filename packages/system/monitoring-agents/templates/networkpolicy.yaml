@@ -1,0 +1,21 @@
+{{- if .Capabilities.APIVersions.Has "cilium.io/v2/CiliumClusterwideNetworkPolicy" }}
+---
+apiVersion: cilium.io/v2
+kind: CiliumClusterwideNetworkPolicy
+metadata:
+  name: restrict-node-exporter
+spec:
+  ingressDeny:
+  - fromEntities:
+    - world
+    toPorts:
+    - ports:
+      - port: "9100"
+  ingress:
+  - fromEntities:
+    - world
+    - host
+    - cluster
+  nodeSelector:
+    matchLabels: {}
+{{- end }}

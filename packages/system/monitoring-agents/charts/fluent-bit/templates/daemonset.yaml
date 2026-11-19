@@ -1,0 +1,48 @@
+{{- if eq .Values.kind "DaemonSet" }}
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: {{ include "fluent-bit.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "fluent-bit.labels" . | nindent 4 }}
+    {{- with .Values.labels }}
+      {{- toYaml . | nindent 4 }}
+    {{- end }}
+  {{- with .Values.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "fluent-bit.selectorLabels" . | nindent 6 }}
+  {{- with .Values.updateStrategy }}
+  updateStrategy:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  {{- with .Values.minReadySeconds }}
+  minReadySeconds: {{ . }}
+  {{- end }}
+  template:
+    metadata:
+      labels:
+        {{- include "fluent-bit.selectorLabels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    {{- if or (not .Values.hotReload.enabled) .Values.podAnnotations }}
+      annotations:
+      {{- if not .Values.hotReload.enabled }}
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+      {{- if .Values.luaScripts }}
+        checksum/luascripts: {{ include (print $.Template.BasePath "/configmap-luascripts.yaml") . | sha256sum }}
+      {{- end }}
+      {{- end }}
+      {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    {{- end }}
+    spec:
+      {{- include "fluent-bit.pod" . | nindent 6 }}
+{{- end }}

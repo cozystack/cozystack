@@ -1,0 +1,25 @@
+suite: NOTES.txt warns when deletion-protection capability gate trips
+templates:
+  - templates/NOTES.txt
+release:
+  name: cozystack
+  namespace: cozy-system
+capabilities:
+  apiVersions: []
+tests:
+  - it: NOTES.txt warns the operator the guardrail is not active on pre-1.30
+    asserts:
+      - matchRegexRaw:
+          pattern: 'deletion-protection guardrail is NOT active'
+      - matchRegexRaw:
+          pattern: 'Upgrade the cluster to 1\.30\+'
+      - matchRegexRaw:
+          pattern: 'platform\.cozystack\.io/no-delete=true'
+
+  - it: NOTES.txt stays quiet when ValidatingAdmissionPolicy is available
+    capabilities:
+      apiVersions:
+        - admissionregistration.k8s.io/v1/ValidatingAdmissionPolicy
+    asserts:
+      - notMatchRegexRaw:
+          pattern: 'guardrail is NOT active'

@@ -1,0 +1,60 @@
+suite: csi.yaml StorageClass propagation
+
+templates:
+  - templates/helmreleases/csi.yaml
+
+values:
+  - values/common.yaml
+
+# NOTE: helm unittest has no live cluster, so `lookup` returns empty and these
+# tests exercise the non-destructive fallback path of the storageClasses map.
+# The LINSTOR provisioner / allowRemoteVolumeAccess filtering is covered by e2e.
+
+tests:
+  - it: renders the -csi HelmRelease when the tenant has etcd
+    release:
+      name: kubernetes-test
+      namespace: tenant-test
+    asserts:
+      - hasDocuments:
+          count: 1
+      - isKind:
+          of: HelmRelease
+      - equal:
+          path: metadata.name
+          value: kubernetes-test-csi
+
+  - it: fallback yields replicated (default) and the kubevirt alias
+    release:
+      name: kubernetes-test
+      namespace: tenant-test
+    asserts:
+      - equal:
+          path: spec.values.storageClasses.replicated.infraStorageClass
+          value: replicated
+      - equal:
+          path: spec.values.storageClasses.replicated.default
+          value: true
+      - equal:
+          path: spec.values.storageClasses.kubevirt.infraStorageClass
+          value: replicated
+      - equal:
+          path: spec.values.storageClasses.kubevirt.default
+          value: false
+
+  - it: kubevirt alias tracks a custom storageClass selector, replicated stays default
+    release:
+      name: kubernetes-test
+      namespace: tenant-test
+    set:
+      storageClass: fast
+    asserts:
+      - equal:
+          path: spec.values.storageClasses.kubevirt.infraStorageClass
+          value: fast
+      - equal:
+          path: spec.values.storageClasses.replicated.default
+          value: true
+      - equal:
+          path: spec.values.storageClasses.kubevirt.default
+          value: false

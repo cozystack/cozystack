@@ -1,0 +1,105 @@
+#!/bin/sh
+# Fake kubectl for hack/migration-57-seaweedfs-size-limit.bats. It serves only
+# the calls migration 57 (and lib/cozystack-version.sh) and the matching steps of
+# docs/operations/seaweedfs-lowering-the-volume-size-limit.md make; behaviour is
+# driven by FAKE_* env and every invocation is appended to $FAKE_CMDLOG.
+#
+#   FAKE_CMDLOG      file to append a one-line record of each call to
+#   FAKE_HRS         newline list of "<ns> <name> <values>", one per SeaweedFS
+#                    HelmRelease the fleet list reports. <values> is the JSON of
+#                    spec.values, or "-" for a release that has no spec.values at
+#                    all (the shape the tenant module renders).
+#   FAKE_VALUESFROM  newline list of "<ns> <valuesFrom>", overriding the
+#                    valuesFrom of that namespace's release. <valuesFrom> is JSON,
+#                    or "-" for none. Every other release carries the single
+#                    cozystack-values entry both of its writers set.
+#   FAKE_LIST_FAIL   non-empty => the fleet list exits 1, as an apiserver error.
+#   FAKE_PATCH_FAIL  non-empty => every patch exits 1.
+#
+# The list is served only for the exact selector cozystack-api uses to find
+# SeaweedFS instances (the kind and group requirements in
+# pkg/registry/apps/application/rest.go). Any other selector is refused rather
+# than answered with an empty list: an empty list is a legitimate cluster state
+# here, so a mistyped selector would otherwise pass every test and patch nothing
+# in production.
+set -u
+
+SELECTOR='apps.cozystack.io/application.kind=SeaweedFS,apps.cozystack.io/application.group=apps.cozystack.io'
+
+log() { [ -n "${FAKE_CMDLOG:-}" ] && printf '%s\n' "$*" >> "$FAKE_CMDLOG"; }
+log "KUBECTL $*"
+
+args="$*"
+
+# arg_after KEY -- echoes the token following KEY in the argument vector.
+arg_after() { k="$1"; shift; p=""; for a in "$@"; do [ "$p" = "$k" ] && { printf '%s' "$a"; return; }; p="$a"; done; }
+
+# has ARG -- whether ARG appears as a whole token.
+has() { k="$1"; shift; for a in "$@"; do [ "$a" = "$k" ] && return 0; done; return 1; }
+
+case "$args" in
+  *"get helmreleases.helm.toolkit.fluxcd.io"*)
+    if [ "$(arg_after -l "$@")" != "$SELECTOR" ] || ! { has --all-namespaces "$@" || has -A "$@"; } \
+        || [ "$(arg_after -o "$@")" != json ]; then
+      log "BADLIST $args"
+      printf 'fake kubectl: unexpected fleet list: %s\n' "$args" >&2
+      exit 1
+    fi
+    if [ -n "${FAKE_LIST_FAIL:-}" ]; then
+      printf 'fake kubectl: the server is currently unable to handle the request\n' >&2
+      exit 1
+    fi
+    printf '{"items":['
+    printf '%s\n' "${FAKE_HRS:-}" | {
+      sep=""
+      while read -r ns name values; do
+        [ -n "$ns" ] || continue
+        from=$(printf '%s\n' "${FAKE_VALUESFROM:-}" | while read -r vns vfrom; do
+          [ "$vns" = "$ns" ] && printf '%s' "$vfrom"
+        done)
+        case "$from" in
+          "") from=',"valuesFrom":[{"kind":"Secret","name":"cozystack-values"}]' ;;
+          -) from="" ;;
+          *) from=",\"valuesFrom\":$from" ;;
+        esac
+        if [ "$values" = "-" ]; then
+          spec="{\"interval\":\"5m\"$from}"
+        else
+          spec="{\"interval\":\"5m\",\"values\":$values$from}"
+        fi
+        printf '%s{"metadata":{"namespace":"%s","name":"%s"},"spec":%s}' "$sep" "$ns" "$name" "$spec"
+        sep=","
+      done
+    }
+    printf ']}\n'
+    exit 0
+    ;;
+
+  *"patch helmreleases.helm.toolkit.fluxcd.io"*)
+    if [ "$(arg_after --type "$@")" != merge ] && ! has --type=merge "$@"; then
+      log "BADPATCH $args"
+      printf 'fake kubectl: patch is not a merge patch: %s\n' "$args" >&2
+      exit 1
+    fi
+    if [ -n "${FAKE_PATCH_FAIL:-}" ]; then
+      printf 'fake kubectl: admission webhook denied the patch\n' >&2
+      exit 1
+    fi
+    ns=$(arg_after -n "$@")
+    name=$(arg_after helmreleases.helm.toolkit.fluxcd.io "$@")
+    patch=$(arg_after -p "$@")
+    log "PATCH ${ns:-<none>} $name $patch"
+    exit 0
+    ;;
+
+  *"apply --filename -"*)
+    manifest=$(cat)
+    v=$(printf '%s\n' "$manifest" | sed -n 's/^  version: "\{0,1\}\([0-9]\{1,\}\)"\{0,1\}$/\1/p' | head -1)
+    log "STAMP ${v:-unknown}"
+    exit 0
+    ;;
+esac
+
+log "UNHANDLED $args"
+printf 'fake kubectl: unmodelled call: %s\n' "$args" >&2
+exit 1

@@ -1,0 +1,40 @@
+{{- if .Values.admissionController.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: vpa-webhook
+  namespace: {{ include "common.names.namespace" . | quote }}
+  labels:
+    {{- include "vertical-pod-autoscaler.admissionController.labels" . | nindent 4 }}
+    {{- if .Values.commonLabels }}
+    {{- include "common.tplvalues.render" ( dict "value" .Values.commonLabels "context" $ ) | nindent 4 }}
+    {{- end }}
+  {{- if or .Values.admissionController.service.annotations .Values.commonAnnotations }}
+  {{- $annotations := include "common.tplvalues.merge" ( dict "values" ( list .Values.admissionController.service.annotations .Values.commonAnnotations ) "context" . ) }}
+  annotations: {{- include "common.tplvalues.render" ( dict "value" $annotations "context" $ ) | nindent 4 }}
+  {{- end }}
+spec:
+  type: {{ .Values.admissionController.service.type }}
+  {{- if and (eq .Values.admissionController.service.type "ClusterIP") .Values.admissionController.service.clusterIP }}
+  clusterIP: {{ .Values.admissionController.service.clusterIP }}
+  {{- end }}
+  {{- if .Values.admissionController.service.ipFamilyPolicy }}
+  ipFamilyPolicy: {{ .Values.admissionController.service.ipFamilyPolicy }}
+  {{- end }}
+  {{- if not (empty .Values.admissionController.service.ipFamilies)}}
+  ipFamilies: {{- toYaml .Values.admissionController.service.ipFamilies | nindent 4 }}
+  {{- end }}
+  {{- if .Values.admissionController.service.sessionAffinity }}
+  sessionAffinity: {{ .Values.admissionController.service.sessionAffinity }}
+  {{- end }}
+  {{- if .Values.admissionController.service.sessionAffinityConfig }}
+  sessionAffinityConfig: {{- include "common.tplvalues.render" (dict "value" .Values.admissionController.service.sessionAffinityConfig "context" $) | nindent 4 }}
+  {{- end }}
+  ports:
+    - port: {{ .Values.admissionController.service.ports.https }}
+      targetPort: https
+      protocol: TCP
+      name: https
+  selector:
+    {{- include "vertical-pod-autoscaler.admissionController.selectorLabels" . | nindent 4 }}
+{{- end }}

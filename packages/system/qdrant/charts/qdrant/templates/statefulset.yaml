@@ -1,0 +1,312 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "qdrant.fullname" . }}
+  labels:
+    {{- include "qdrant.labels" . | nindent 4 }}
+    {{- include "qdrant.additionalLabels" . | nindent 4 }}
+{{- with .Values.additionalAnnotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+{{- end }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  podManagementPolicy: {{ .Values.podManagementPolicy }}
+  {{- if .Values.minReadySeconds }}
+  minReadySeconds: {{ .Values.minReadySeconds }}
+  {{- end }}
+  updateStrategy:
+    type: RollingUpdate
+    rollingUpdate:
+      partition: 0
+  selector:
+    matchLabels:
+      {{- include "qdrant.selectorLabels" . | nindent 6 }}
+  serviceName: {{ include "qdrant.fullname" . }}-headless
+  template:
+    metadata:
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+      {{- if or .Values.apiKey .Values.readOnlyApiKey }}
+        checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
+      {{- end }}
+      {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      labels:
+        {{- include "qdrant.selectorLabels" . | nindent 8 }}
+        {{- include "qdrant.additionalLabels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+          {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- if .Values.priorityClassName }}
+      priorityClassName: "{{ .Values.priorityClassName }}"
+      {{- end }}
+      {{- if .Values.shareProcessNamespace }}
+      shareProcessNamespace: {{ .Values.shareProcessNamespace }}
+      {{- end }}
+      initContainers:
+      {{- if and .Values.updateVolumeFsOwnership (not .Values.image.useUnprivilegedImage) }}
+      {{- if and .Values.containerSecurityContext .Values.containerSecurityContext.runAsUser }}
+      - name: ensure-dir-ownership
+        image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+        command:
+          - chown
+          - -R
+          - {{ int64 .Values.containerSecurityContext.runAsUser }}:{{ int64 .Values.podSecurityContext.fsGroup }}
+          - /qdrant/storage
+          - /qdrant/snapshots
+          {{- if and .Values.snapshotRestoration.enabled .Values.snapshotRestoration.pvcName }}
+          - {{ .Values.snapshotRestoration.mountPath }}
+          {{- end }}
+        volumeMounts:
+          - name: {{ .Values.persistence.storageVolumeName | default "qdrant-storage" }}
+            mountPath: /qdrant/storage
+            {{- if .Values.persistence.storageSubPath }}
+            subPath: "{{ .Values.persistence.storageSubPath }}"
+            {{- end }}
+          - name: {{ .Values.snapshotPersistence.snapshotsVolumeName | default "qdrant-snapshots" }}
+            mountPath: /qdrant/snapshots
+            {{- if .Values.snapshotPersistence.snapshotsSubPath }}
+            subPath: "{{ .Values.snapshotPersistence.snapshotsSubPath }}"
+            {{- end }}
+          {{- if and .Values.snapshotRestoration.enabled .Values.snapshotRestoration.pvcName }}
+          - name: qdrant-snapshot-restoration
+            mountPath: {{ .Values.snapshotRestoration.mountPath }}
+          {{- end }}
+      {{- end }}
+      {{- end }}
+      containers:
+        {{- if .Values.sidecarContainers -}}
+        {{- toYaml .Values.sidecarContainers | trim | nindent 8 }}
+        {{- end}}
+        - name: {{ .Chart.Name }}
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}{{ .Values.image.useUnprivilegedImage | ternary "-unprivileged" "" }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          env:
+            - name: QDRANT_INIT_FILE_PATH
+              value: /qdrant/init/.qdrant-initialized
+          {{- range .Values.env }}
+            - name: {{ .name }}
+              {{- if .valueFrom }}
+              valueFrom: {{- toYaml .valueFrom | nindent 16 }}
+              {{- else }}
+              value: {{ .value | quote }}
+              {{- end }}
+          {{- end }}
+          command: ["/bin/bash", "-c"]
+          {{- with .Values.args }}
+          args:
+            {{- toYaml . | nindent 10 }}
+          {{- end }}
+          ports:
+          {{- range .Values.service.ports }}
+            - name: {{ .name }}
+              containerPort: {{ .targetPort }}
+              protocol: {{ .protocol }}
+          {{- end }}
+
+          {{- $values := .Values -}}
+          {{- range .Values.service.ports }}
+          {{- if and $values.livenessProbe.enabled .checksEnabled }}
+          livenessProbe:
+            {{- if eq .name "grpc"}}
+            grpc:
+              port: {{ .targetPort }}
+            {{- end }}
+            {{- if eq .name "http"}}
+            httpGet:
+              path: /
+              port: {{ .targetPort }}
+              {{- if and $values.config.service $values.config.service.enable_tls }}
+              scheme: HTTPS
+              {{- end }}
+            {{- end }}
+            initialDelaySeconds: {{ $values.livenessProbe.initialDelaySeconds }}
+            timeoutSeconds: {{ $values.livenessProbe.timeoutSeconds }}
+            periodSeconds: {{ $values.livenessProbe.periodSeconds }}
+            successThreshold: {{ $values.livenessProbe.successThreshold }}
+            failureThreshold: {{ $values.livenessProbe.failureThreshold }}
+          {{- end }}
+          {{- if and $values.readinessProbe.enabled .checksEnabled }}
+          readinessProbe:
+            {{- if eq .name "grpc"}}
+            grpc:
+              port: {{ .targetPort }}
+            {{- end }}
+            {{- if eq .name "http"}}
+            httpGet:
+              path: "{{- if semverCompare ">=1.7.3" ($.Values.image.tag | default $.Chart.AppVersion) -}}/readyz{{else}}/{{end}}"
+              port: {{ .targetPort }}
+              {{- if and $values.config.service $values.config.service.enable_tls }}
+              scheme: HTTPS
+              {{- end }}
+            {{- end }}
+            initialDelaySeconds: {{ $values.readinessProbe.initialDelaySeconds }}
+            timeoutSeconds: {{ $values.readinessProbe.timeoutSeconds }}
+            periodSeconds: {{ $values.readinessProbe.periodSeconds }}
+            successThreshold: {{ $values.readinessProbe.successThreshold }}
+            failureThreshold: {{ $values.readinessProbe.failureThreshold }}
+          {{- end }}
+          {{- if and $values.startupProbe.enabled .checksEnabled }}
+          startupProbe:
+            {{- if eq .name "grpc"}}
+            grpc:
+              port: {{ .targetPort }}
+            {{- end }}
+            {{- if eq .name "http"}}
+            httpGet:
+              path: /
+              port: {{ .targetPort }}
+              {{- if and $values.config.service $values.config.service.enable_tls }}
+              scheme: HTTPS
+              {{- end }}
+            {{- end }}
+            initialDelaySeconds: {{ $values.startupProbe.initialDelaySeconds }}
+            timeoutSeconds: {{ $values.startupProbe.timeoutSeconds }}
+            periodSeconds: {{ $values.startupProbe.periodSeconds }}
+            successThreshold: {{ $values.startupProbe.successThreshold }}
+            failureThreshold: {{ $values.startupProbe.failureThreshold }}
+          {{- end }}
+          {{- end }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          {{- with .Values.containerSecurityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.lifecycle }}
+          lifecycle:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          volumeMounts:
+          - name: {{ .Values.persistence.storageVolumeName | default "qdrant-storage" }}
+            mountPath: /qdrant/storage
+            {{- if .Values.persistence.storageSubPath }}
+            subPath: "{{ .Values.persistence.storageSubPath }}"
+            {{- end }}
+          - name: qdrant-config
+            mountPath: /qdrant/config/initialize.sh
+            subPath: initialize.sh
+          - name: qdrant-config
+            mountPath: /qdrant/config/production.yaml
+            subPath: production.yaml
+          {{- if or .Values.apiKey .Values.readOnlyApiKey }}
+          - name: qdrant-secret
+            mountPath: /qdrant/config/local.yaml
+            subPath: local.yaml
+          {{- end }}
+          {{- if and .Values.snapshotRestoration.enabled .Values.snapshotRestoration.pvcName }}
+          - name: qdrant-snapshot-restoration
+            mountPath: {{ .Values.snapshotRestoration.mountPath }}
+          {{- end }}
+          - name: {{ .Values.snapshotPersistence.snapshotsVolumeName | default "qdrant-snapshots" }}
+            mountPath: /qdrant/snapshots
+            {{- if .Values.snapshotPersistence.snapshotsSubPath }}
+            subPath: "{{ .Values.snapshotPersistence.snapshotsSubPath }}"
+            {{- end }}
+          - name: qdrant-init
+            mountPath: /qdrant/init
+          {{- if .Values.additionalVolumeMounts }}
+{{- toYaml .Values.additionalVolumeMounts | default "" | nindent 10 }}
+          {{- end}}
+      {{- with .Values.podSecurityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- tpl (toYaml .) $ | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.topologySpreadConstraints}}
+      topologySpreadConstraints:
+        {{- tpl (toYaml .) $ | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "qdrant.fullname" . }}
+      volumes:
+        - name: qdrant-config
+          configMap:
+            name: {{ include "qdrant.fullname" . }}
+            defaultMode: 0755
+        {{- if and .Values.snapshotRestoration.enabled .Values.snapshotRestoration.pvcName }}
+        - name: qdrant-snapshot-restoration
+          persistentVolumeClaim:
+            claimName: {{ .Values.snapshotRestoration.pvcName }}
+        {{- end }}
+        {{- if not .Values.snapshotPersistence.enabled }}
+        - name: {{ .Values.snapshotPersistence.snapshotsVolumeName | default "qdrant-snapshots" }}
+          emptyDir: {}
+        {{- end }}
+        - name: qdrant-init
+          emptyDir: {}
+        {{- if or .Values.apiKey .Values.readOnlyApiKey }}
+        - name: qdrant-secret
+          secret:
+            secretName: {{ include "qdrant.fullname" . }}-apikey
+            defaultMode: 0600
+        {{- end }}
+        {{- if .Values.additionalVolumes }}
+{{- toYaml .Values.additionalVolumes | default "" | nindent 8 }}
+        {{- end}}
+  volumeClaimTemplates:
+    - metadata:
+        name: {{ .Values.persistence.storageVolumeName | default "qdrant-storage" }}
+        labels:
+          app: {{ template "qdrant.name" . }}
+          {{- with .Values.persistence.additionalLabels }}
+          {{- toYaml . | nindent 10 }}
+          {{- end }}
+        {{- with .Values.persistence.annotations }}
+        annotations:
+        {{- toYaml . | nindent 10 }}
+        {{- end }}
+      spec:
+        storageClassName: {{ .Values.persistence.storageClassName }}
+        {{- if .Values.persistence.volumeAttributesClassName }}
+        volumeAttributesClassName: {{ .Values.persistence.volumeAttributesClassName }}
+        {{- end }}
+        accessModes:
+        {{- range .Values.persistence.accessModes }}
+          - {{ . | quote }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.persistence.size | quote }}
+    {{- if .Values.snapshotPersistence.enabled }}
+    - metadata:
+        name: {{ .Values.snapshotPersistence.snapshotsVolumeName | default "qdrant-snapshots" }}
+        labels:
+          app: {{ template "qdrant.name" . }}
+          {{- with .Values.snapshotPersistence.additionalLabels }}
+          {{- toYaml . | nindent 10 }}
+          {{- end }}
+        {{- with .Values.snapshotPersistence.annotations }}
+        annotations:
+        {{- toYaml . | nindent 10 }}
+        {{- end }}
+      spec:
+        storageClassName: {{ .Values.snapshotPersistence.storageClassName }}
+        {{- if .Values.snapshotPersistence.volumeAttributesClassName }}
+        volumeAttributesClassName: {{ .Values.snapshotPersistence.volumeAttributesClassName }}
+        {{- end }}
+        accessModes:
+        {{- range .Values.snapshotPersistence.accessModes }}
+          - {{ . | quote }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.snapshotPersistence.size | quote }}
+    {{- end }}

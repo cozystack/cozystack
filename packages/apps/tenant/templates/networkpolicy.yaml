@@ -1,0 +1,309 @@
+{{- if include "tenant.ciliumPolicies" . }}
+---
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-internal-communication
+  namespace: {{ include "tenant.name" . }}
+spec:
+  endpointSelector: {}
+  ingress:
+  - fromEndpoints:
+    - {}
+  egress:
+  - toEndpoints:
+    - {}
+---
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-external-communication
+  namespace: {{ include "tenant.name" . }}
+spec:
+  endpointSelector: {}
+  ingress:
+  - fromEntities:
+      - world
+      - cluster
+  egress:
+  - toEntities:
+      - world
+---
+apiVersion: cilium.io/v2
+kind: CiliumClusterwideNetworkPolicy
+metadata:
+  name: {{ include "tenant.name" . }}-egress
+spec:
+  endpointSelector:
+    matchLabels:
+      "k8s:io.kubernetes.pod.namespace": "{{ include "tenant.name" . }}"
+  egress:
+  - toEndpoints:
+    - matchLabels:
+        "k8s:io.cilium.k8s.namespace.labels.tenant.cozystack.io/{{ include "tenant.name" . }}": ""
+  {{- if ne (include "tenant.name" .) "tenant-root" }}
+  - toEndpoints:
+    {{- if hasPrefix "tenant-" .Release.Namespace }}
+    {{- $parts := splitList "-" .Release.Namespace }}
+    {{- range $i, $v := $parts }}
+    {{- if ne $i 0 }}
+    - matchLabels:
+        "k8s:app.kubernetes.io/name": "vminsert"
+        "k8s:io.kubernetes.pod.namespace": {{ join "-" (slice $parts 0 (add $i 1)) }}
+    {{- end }}
+    {{- end }}
+    {{- end }}
+  {{- end }}    
+  {{- if ne (include "tenant.name" .) "tenant-root" }}
+  - toEndpoints:
+    {{- if hasPrefix "tenant-" .Release.Namespace }}
+    {{- $parts := splitList "-" .Release.Namespace }}
+    {{- range $i, $v := $parts }}
+    {{- if ne $i 0 }}
+    - matchLabels:
+        "k8s:app.kubernetes.io/instance": "etcd"
+        "k8s:io.kubernetes.pod.namespace": {{ join "-" (slice $parts 0 (add $i 1)) }}
+    {{- end }}
+    {{- end }}
+    {{- end }}
+  {{- end }}
+  {{- if ne (include "tenant.name" .) "tenant-root" }}
+  - toEndpoints:
+    {{- if hasPrefix "tenant-" .Release.Namespace }}
+    {{- $parts := splitList "-" .Release.Namespace }}
+    {{- range $i, $v := $parts }}
+    {{- if ne $i 0 }}
+    - matchLabels:
+        cozystack.io/service: ingress
+        "k8s:io.kubernetes.pod.namespace": {{ join "-" (slice $parts 0 (add $i 1)) }}
+    {{- end }}
+    {{- end }}
+    {{- end }}
+  {{- end }}
+---
+apiVersion: cilium.io/v2
+kind: CiliumClusterwideNetworkPolicy
+metadata:
+  name: {{ include "tenant.name" . }}-ingress
+spec:
+  endpointSelector:
+    matchLabels:
+      "k8s:io.kubernetes.pod.namespace": "{{ include "tenant.name" . }}"
+  ingress:
+  - fromEntities:
+    - kube-apiserver
+  - fromEndpoints:
+      - matchLabels:
+          "k8s:io.cilium.k8s.namespace.labels.cozystack.io/system": "true"
+  - fromEndpoints:
+      - matchLabels:
+          "k8s:io.kubernetes.pod.namespace": kube-system
+  {{- if ne (include "tenant.name" .) "tenant-root" }}
+  - fromEndpoints:
+    {{- if hasPrefix "tenant-" .Release.Namespace }}
+    {{- $parts := splitList "-" .Release.Namespace }}
+    {{- range $i, $v := $parts }}
+    {{- if ne $i 0 }}
+    - matchLabels:
+        "k8s:io.kubernetes.pod.namespace": {{ join "-" (slice $parts 0 (add $i 1)) }}
+    {{- end }}
+    {{- end }}
+    {{- end }}
+  {{- end }}
+---
+{{- if .Values.ingress }}
+apiVersion: cilium.io/v2
+kind: CiliumClusterwideNetworkPolicy
+metadata:
+  name: {{ include "tenant.name" . }}-ingress-ingress
+spec:
+  endpointSelector:
+    matchLabels:
+      "k8s:io.kubernetes.pod.namespace": "{{ include "tenant.name" . }}"
+      cozystack.io/service: ingress
+  ingress:
+  - fromEndpoints:
+    - {}
+{{- end }}
+---
+{{- if .Values.etcd }}
+apiVersion: cilium.io/v2
+kind: CiliumClusterwideNetworkPolicy
+metadata:
+  name: {{ include "tenant.name" . }}-ingress-etcd
+spec:
+  endpointSelector:
+    matchLabels:
+      "k8s:io.kubernetes.pod.namespace": "{{ include "tenant.name" . }}"
+      cozystack.io/service: etcd
+  ingress:
+  - fromEndpoints:
+    - matchLabels:
+        "k8s:io.cilium.k8s.namespace.labels.namespace.cozystack.io/etcd": "{{ include "tenant.name" . }}"
+        policy.cozystack.io/allow-to-etcd: "true"
+{{- end }}
+---
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-to-apiserver
+  namespace: {{ include "tenant.name" . }}
+spec:
+  endpointSelector:
+    matchLabels:
+      policy.cozystack.io/allow-to-apiserver: "true"
+  egress:
+  - toEntities:
+    - kube-apiserver
+  - toPorts:
+    - ports:
+      - port: "6443"
+        protocol: TCP
+---
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-to-dns
+  namespace: {{ include "tenant.name" . }}
+spec:
+  endpointSelector: {}
+  egress:
+  - toEndpoints:
+    - matchLabels:
+        "k8s:io.kubernetes.pod.namespace": kube-system
+        k8s-app: kube-dns
+---
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-to-dashboard
+  namespace: {{ include "tenant.name" . }}
+spec:
+  endpointSelector: {}
+  egress:
+  - toEndpoints:
+      - matchLabels:
+          "k8s:io.kubernetes.pod.namespace": cozy-dashboard
+---
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  # Allow the tenant's ingress-nginx to reach both the linstor-gui
+  # gatekeeper pods (for /oauth2/* and app traffic) AND the transient
+  # ACME http-01 solver pods that cert-manager spins up in the same
+  # namespace during certificate issuance/renewal. Matching the whole
+  # namespace mirrors allow-to-dashboard / allow-to-keycloak.
+  name: allow-to-linstor-gui
+  namespace: {{ include "tenant.name" . }}
+spec:
+  endpointSelector: {}
+  egress:
+  - toEndpoints:
+      - matchLabels:
+          "k8s:io.kubernetes.pod.namespace": cozy-linstor
+---
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-to-keycloak
+  namespace: {{ include "tenant.name" . }}
+spec:
+  endpointSelector: {}
+  egress:
+  - toEndpoints:
+      - matchLabels:
+          "k8s:io.kubernetes.pod.namespace": cozy-keycloak
+---
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  # Grafana pods install their plugins at startup from the in-cluster
+  # grafana-dashboards static file server instead of the public Grafana
+  # catalog (see packages/system/monitoring/templates/grafana/grafana.yaml),
+  # so the download keeps working without internet egress. Matching the
+  # whole namespace mirrors allow-to-dashboard / allow-to-keycloak.
+  name: allow-to-grafana-dashboards
+  namespace: {{ include "tenant.name" . }}
+spec:
+  endpointSelector: {}
+  egress:
+  - toEndpoints:
+      - matchLabels:
+          "k8s:io.kubernetes.pod.namespace": cozy-grafana-operator
+---
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-to-cdi-upload-proxy
+  namespace: {{ include "tenant.name" . }}
+spec:
+  endpointSelector: {}
+  egress:
+  - toEndpoints:
+      - matchLabels:
+          "k8s:io.kubernetes.pod.namespace": cozy-kubevirt-cdi
+---
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-to-vm-exportproxy
+  namespace: {{ include "tenant.name" . }}
+spec:
+  endpointSelector: {}
+  egress:
+  - toEndpoints:
+      - matchLabels:
+          "k8s:io.kubernetes.pod.namespace": cozy-kubevirt
+          kubevirt.io: virt-exportproxy
+    toPorts:
+    - ports:
+      - port: "8443"
+        protocol: TCP
+---
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  # The whole namespace, as for linstor-gui: the ingress controller also
+  # has to reach the ACME HTTP-01 solver pods cert-manager starts there.
+  name: allow-to-observability-proxy
+  namespace: {{ include "tenant.name" . }}
+spec:
+  endpointSelector: {}
+  egress:
+  - toEndpoints:
+      - matchLabels:
+          "k8s:io.kubernetes.pod.namespace": cozy-observability-proxy
+{{- if .Values.monitoring }}
+---
+apiVersion: cilium.io/v2
+kind: CiliumClusterwideNetworkPolicy
+metadata:
+  name: {{ include "tenant.name" . }}-egress-virt-handler
+spec:
+  endpointSelector:
+    matchLabels:
+      "k8s:io.kubernetes.pod.namespace": "{{ include "tenant.name" . }}"
+      "k8s:app.kubernetes.io/name": "vmagent"
+  egress:
+  - toEndpoints:
+    - matchLabels:
+        "k8s:kubevirt.io": "virt-handler"
+        "k8s:io.kubernetes.pod.namespace": "cozy-kubevirt"
+    toPorts:
+    - ports:
+      - port: "8443"
+        protocol: TCP
+{{- end }}
+---
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-to-ingress
+  namespace: {{ include "tenant.name" . }}
+spec:
+  endpointSelector: {}
+  egress:
+  - toEndpoints:
+    - matchLabels:
+        cozystack.io/service: ingress
+{{- end }}

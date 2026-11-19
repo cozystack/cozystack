@@ -1,0 +1,3 @@
+robotlb:
+  replicas: 1
+  existingSecrets: ["hetzner-robotlb-credentials"]

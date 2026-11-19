@@ -1,0 +1,708 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.18.0
+  name: keycloakrealms.v1.edp.epam.com
+spec:
+  group: v1.edp.epam.com
+  names:
+    kind: KeycloakRealm
+    listKind: KeycloakRealmList
+    plural: keycloakrealms
+    singular: keycloakrealm
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - description: Is the resource available
+      jsonPath: .status.available
+      name: Available
+      type: boolean
+    - description: Reconciliation status
+      jsonPath: .status.value
+      name: Status
+      type: string
+    - description: Keycloak realm name
+      jsonPath: .spec.realmName
+      name: Realm
+      type: boolean
+    - description: Keycloak instance name
+      jsonPath: .spec.keycloakRef
+      name: Keycloak
+      type: boolean
+    name: v1
+    schema:
+      openAPIV3Schema:
+        description: KeycloakRealm is the Schema for the keycloak realms API.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: KeycloakRealmSpec defines the desired state of KeycloakRealm.
+            properties:
+              browserFlow:
+                description: BrowserFlow specifies the authentication flow to use
+                  for the realm's browser clients.
+                nullable: true
+                type: string
+              browserSecurityHeaders:
+                additionalProperties:
+                  type: string
+                description: BrowserSecurityHeaders is a map of security headers to
+                  apply to HTTP responses from the realm's browser clients.
+                nullable: true
+                type: object
+              displayHtmlName:
+                description: DisplayHTMLName name to render in the UI
+                type: string
+              displayName:
+                description: DisplayName is the display name of the realm.
+                type: string
+              frontendUrl:
+                description: FrontendURL Set the frontend URL for the realm. Use in
+                  combination with the default hostname provider to override the base
+                  URL for frontend requests for a specific realm.
+                type: string
+              id:
+                description: ID is the ID of the realm.
+                nullable: true
+                type: string
+              keycloakRef:
+                description: KeycloakRef is reference to Keycloak custom resource.
+                properties:
+                  kind:
+                    default: Keycloak
+                    description: Kind specifies the kind of the Keycloak resource.
+                    enum:
+                    - Keycloak
+                    - ClusterKeycloak
+                    type: string
+                  name:
+                    description: Name specifies the name of the Keycloak resource.
+                    type: string
+                required:
+                - name
+                type: object
+              login:
+                description: Login settings for the realm.
+                nullable: true
+                properties:
+                  duplicateEmails:
+                    default: false
+                    description: DuplicateEmails allows multiple users to have the
+                      same email address.
+                    type: boolean
+                  editUsername:
+                    default: false
+                    description: EditUsername allows to edit username.
+                    type: boolean
+                  emailAsUsername:
+                    default: false
+                    description: EmailAsUsername allows users to set email as username.
+                    type: boolean
+                  forgotPassword:
+                    default: false
+                    description: ForgotPassword shows a link on the login page for
+                      users who have forgotten their credentials.
+                    type: boolean
+                  loginWithEmail:
+                    default: true
+                    description: LoginWithEmail allows users to log in with their
+                      email address.
+                    type: boolean
+                  rememberMe:
+                    default: false
+                    description: RememberMe shows checkbox on the login page to allow
+                      the user to remain logged in between browser restarts until
+                      the session expires.
+                    type: boolean
+                  userRegistration:
+                    default: false
+                    description: UserRegistration enables/disables the registration
+                      page. A link for registration will show on the login page too.
+                    type: boolean
+                  verifyEmail:
+                    default: false
+                    description: VerifyEmail requires user to verify their email address
+                      after initial login or after address changes are submitted.
+                    type: boolean
+                type: object
+              organizationsEnabled:
+                default: false
+                description: |-
+                  OrganizationsEnabled enables Keycloak Organizations feature for this realm.
+                  When enabled, this realm can support Organization resources for multi-tenant scenarios,
+                  identity provider groupings, and domain-based user routing.
+                type: boolean
+              passwordPolicy:
+                description: PasswordPolicies is a list of password policies to apply
+                  to the realm.
+                items:
+                  properties:
+                    type:
+                      description: Type of password policy.
+                      type: string
+                    value:
+                      description: Value of password policy.
+                      type: string
+                  required:
+                  - type
+                  - value
+                  type: object
+                nullable: true
+                type: array
+              realmEventConfig:
+                description: RealmEventConfig is the configuration for events in the
+                  realm.
+                nullable: true
+                properties:
+                  adminEventsDetailsEnabled:
+                    description: AdminEventsDetailsEnabled indicates whether to enable
+                      detailed admin events.
+                    type: boolean
+                  adminEventsEnabled:
+                    description: AdminEventsEnabled indicates whether to enable admin
+                      events.
+                    type: boolean
+                  adminEventsExpiration:
+                    description: |-
+                      AdminEventsExpiration sets the expiration for events in seconds.
+                      Expired events are periodically deleted from the database.
+                    type: integer
+                  enabledEventTypes:
+                    description: EnabledEventTypes is a list of event types to enable.
+                    items:
+                      type: string
+                    type: array
+                  eventsEnabled:
+                    description: EventsEnabled indicates whether to enable events.
+                    type: boolean
+                  eventsExpiration:
+                    description: EventsExpiration is the number of seconds after which
+                      events expire.
+                    type: integer
+                  eventsListeners:
+                    description: EventsListeners is a list of event listeners to enable.
+                    items:
+                      type: string
+                    type: array
+                type: object
+              realmName:
+                description: RealmName specifies the name of the realm.
+                type: string
+                x-kubernetes-validations:
+                - message: Value is immutable
+                  rule: self == oldSelf
+              sessions:
+                description: Sessions defines the session settings for the realm.
+                properties:
+                  ssoLoginSettings:
+                    description: SSOLoginSettings defines the SSO login settings for
+                      the realm.
+                    properties:
+                      accessCodeLifespanLogin:
+                        default: 1800
+                        description: AccessCodeLifespanLogin represents the max time
+                          a user has to complete a login. This is recommended to be
+                          relatively long, such as 30 minutes or more.
+                        type: integer
+                      accessCodeLifespanUserAction:
+                        default: 300
+                        description: AccessCodeLifespanUserAction represents the max
+                          time a user has to complete login related actions like update
+                          password or configure totp. This is recommended to be relatively
+                          long, such as 5 minutes or more.
+                        type: integer
+                    type: object
+                  ssoOfflineSessionSettings:
+                    description: SSOOfflineSessionSettings defines the SSO offline
+                      session settings for the realm.
+                    properties:
+                      idleTimeout:
+                        default: 2592000
+                        description: |-
+                          IdleTimeout represents the time an offline session is allowed to be idle before it expires.
+                          You need to use offline token to refresh at least once within this period; otherwise offline session will expire.
+                        type: integer
+                      maxLifespan:
+                        default: 5184000
+                        description: MaxLifespan represents the max time before an
+                          offline session is expired regardless of activity.
+                        type: integer
+                      maxLifespanEnabled:
+                        default: false
+                        description: MaxLifespanEnabled enables the offline session
+                          maximum lifetime.
+                        type: boolean
+                    type: object
+                  ssoSessionSettings:
+                    description: SSOSessionSettings defines the SSO session settings
+                      for the realm.
+                    properties:
+                      idleTimeout:
+                        default: 1800
+                        description: |-
+                          IdleTimeout represents the time a session is allowed to be idle before it expires.
+                          Tokens and browser sessions are invalidated when a session is expired.
+                        type: integer
+                      idleTimeoutRememberMe:
+                        default: 0
+                        description: |-
+                          IdleTimeoutRememberMe represents the time a session is allowed to be idle before it expires.
+                          Tokens and browser sessions are invalidated when a session is expired.
+                          If not set it uses the standard ssoSessionIdle value.
+                        type: integer
+                      maxLifespan:
+                        default: 36000
+                        description: |-
+                          MaxLifespan represents the max time before a session is expired.
+                          Tokens and browser sessions are invalidated when a session is expired.
+                        type: integer
+                      maxLifespanRememberMe:
+                        default: 0
+                        description: |-
+                          MaxLifespanRememberMe represents the max time before a session is expired when a user has set the remember me option.
+                          Tokens and browser sessions are invalidated when a session is expired.
+                          If not set it uses the standard ssoSessionMax value.
+                        type: integer
+                    type: object
+                type: object
+              smtp:
+                description: Smtp is the configuration for email in the realm.
+                nullable: true
+                properties:
+                  connection:
+                    description: Connection specifies the email connection configuration.
+                    properties:
+                      authentication:
+                        description: Authentication specifies the email authentication
+                          configuration.
+                        properties:
+                          password:
+                            description: Password specifies login password.
+                            properties:
+                              configMapKeyRef:
+                                description: Selects a key of a ConfigMap.
+                                properties:
+                                  key:
+                                    description: The key to select.
+                                    type: string
+                                  name:
+                                    default: ""
+                                    description: |-
+                                      Name of the referent.
+                                      This field is effectively required, but due to backwards compatibility is
+                                      allowed to be empty. Instances of this type with an empty value here are
+                                      almost certainly wrong.
+                                      More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                                    type: string
+                                required:
+                                - key
+                                type: object
+                                x-kubernetes-map-type: atomic
+                              secretKeyRef:
+                                description: Selects a key of a secret.
+                                properties:
+                                  key:
+                                    description: The key of the secret to select from.
+                                    type: string
+                                  name:
+                                    default: ""
+                                    description: |-
+                                      Name of the referent.
+                                      This field is effectively required, but due to backwards compatibility is
+                                      allowed to be empty. Instances of this type with an empty value here are
+                                      almost certainly wrong.
+                                      More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                                    type: string
+                                required:
+                                - key
+                                type: object
+                                x-kubernetes-map-type: atomic
+                            type: object
+                          username:
+                            description: Username specifies login username.
+                            properties:
+                              configMapKeyRef:
+                                description: Selects a key of a ConfigMap.
+                                properties:
+                                  key:
+                                    description: The key to select.
+                                    type: string
+                                  name:
+                                    default: ""
+                                    description: |-
+                                      Name of the referent.
+                                      This field is effectively required, but due to backwards compatibility is
+                                      allowed to be empty. Instances of this type with an empty value here are
+                                      almost certainly wrong.
+                                      More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                                    type: string
+                                required:
+                                - key
+                                type: object
+                                x-kubernetes-map-type: atomic
+                              secretKeyRef:
+                                description: Selects a key of a secret.
+                                properties:
+                                  key:
+                                    description: The key of the secret to select from.
+                                    type: string
+                                  name:
+                                    default: ""
+                                    description: |-
+                                      Name of the referent.
+                                      This field is effectively required, but due to backwards compatibility is
+                                      allowed to be empty. Instances of this type with an empty value here are
+                                      almost certainly wrong.
+                                      More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                                    type: string
+                                required:
+                                - key
+                                type: object
+                                x-kubernetes-map-type: atomic
+                              value:
+                                description: Directly specifies a value.
+                                type: string
+                            type: object
+                        required:
+                        - password
+                        - username
+                        type: object
+                      enableSSL:
+                        description: EnableSSL specifies if SSL is enabled.
+                        type: boolean
+                      enableStartTLS:
+                        description: EnableStartTLS specifies if StartTLS is enabled.
+                        type: boolean
+                      host:
+                        description: Host specifies the email server host.
+                        type: string
+                      port:
+                        default: 25
+                        description: Port specifies the email server port.
+                        type: integer
+                    required:
+                    - host
+                    type: object
+                  template:
+                    description: Template specifies the email template configuration.
+                    properties:
+                      envelopeFrom:
+                        description: EnvelopeFrom is an email address used for bounces
+                          .
+                        type: string
+                      from:
+                        description: From specifies the sender email address.
+                        type: string
+                      fromDisplayName:
+                        description: FromDisplayName specifies the sender display
+                          for sender email address.
+                        type: string
+                      replyTo:
+                        description: ReplyTo specifies the reply-to email address.
+                        type: string
+                      replyToDisplayName:
+                        description: ReplyToDisplayName specifies display name for
+                          reply-to email address.
+                        type: string
+                    required:
+                    - from
+                    type: object
+                required:
+                - connection
+                - template
+                type: object
+              themes:
+                description: Themes is a map of themes to apply to the realm.
+                nullable: true
+                properties:
+                  accountTheme:
+                    description: AccountTheme specifies the account theme to use for
+                      the realm.
+                    nullable: true
+                    type: string
+                  adminConsoleTheme:
+                    description: AdminConsoleTheme specifies the admin console theme
+                      to use for the realm.
+                    nullable: true
+                    type: string
+                  emailTheme:
+                    description: EmailTheme specifies the email theme to use for the
+                      realm.
+                    nullable: true
+                    type: string
+                  internationalizationEnabled:
+                    description: InternationalizationEnabled indicates whether to
+                      enable internationalization.
+                    nullable: true
+                    type: boolean
+                  loginTheme:
+                    description: LoginTheme specifies the login theme to use for the
+                      realm.
+                    nullable: true
+                    type: string
+                type: object
+              tokenSettings:
+                description: TokenSettings is the configuration for tokens in the
+                  realm.
+                nullable: true
+                properties:
+                  accessCodeLifespan:
+                    default: 60
+                    description: |-
+                      AccessCodeLifespan specifies max time(in seconds)a client has to finish the access token protocol.
+                      This should normally be 1 minute.
+                    type: integer
+                  accessToken:
+                    default: 900
+                    description: AccessTokenLifespanForImplicitFlow specifies max
+                      time(in seconds) before an access token is expired for implicit
+                      flow.
+                    type: integer
+                  accessTokenLifespan:
+                    default: 300
+                    description: |-
+                      AccessTokenLifespan specifies max time(in seconds) before an access token is expired.
+                      This value is recommended to be short relative to the SSO timeout.
+                    type: integer
+                  actionTokenGeneratedByAdminLifespan:
+                    default: 43200
+                    description: |-
+                      ActionTokenGeneratedByAdminLifespan specifies max time(in seconds) before an action permit sent to a user by administrator is expired.
+                      This value is recommended to be long to allow administrators to send e-mails for users that are currently offline.
+                      The default timeout can be overridden immediately before issuing the token.
+                    type: integer
+                  actionTokenGeneratedByUserLifespan:
+                    default: 300
+                    description: |-
+                      AccessCodeLifespanUserAction specifies max time(in seconds) before an action permit sent by a user (such as a forgot password e-mail) is expired.
+                      This value is recommended to be short because it's expected that the user would react to self-created action quickly.
+                    type: integer
+                  defaultSignatureAlgorithm:
+                    default: RS256
+                    description: DefaultSignatureAlgorithm specifies the default algorithm
+                      used to sign tokens for the realm
+                    enum:
+                    - ES256
+                    - ES384
+                    - ES512
+                    - EdDSA
+                    - HS256
+                    - HS384
+                    - HS512
+                    - PS256
+                    - PS384
+                    - PS512
+                    - RS256
+                    - RS384
+                    - RS512
+                    example: RS256
+                    type: string
+                  refreshTokenMaxReuse:
+                    default: 0
+                    description: |-
+                      RefreshTokenMaxReuse specifies maximum number of times a refresh token can be reused.
+                      When a different token is used, revocation is immediate.
+                    type: integer
+                  revokeRefreshToken:
+                    default: false
+                    description: |-
+                      RevokeRefreshToken if enabled a refresh token can only be used up to 'refreshTokenMaxReuse' and
+                      is revoked when a different token is used.
+                      Otherwise, refresh tokens are not revoked when used and can be used multiple times.
+                    type: boolean
+                type: object
+              userProfileConfig:
+                description: |-
+                  UserProfileConfig is the configuration for user profiles in the realm.
+                  Attributes and groups will be added to the current realm configuration.
+                  Deletion of attributes and groups is not supported.
+                nullable: true
+                properties:
+                  attributes:
+                    description: Attributes specifies the list of user profile attributes.
+                    items:
+                      properties:
+                        annotations:
+                          additionalProperties:
+                            type: string
+                          description: Annotations specifies the annotations for the
+                            attribute.
+                          type: object
+                        displayName:
+                          description: Display name for the attribute.
+                          type: string
+                        group:
+                          description: Group to which the attribute belongs.
+                          type: string
+                        multivalued:
+                          description: |-
+                            Multivalued specifies if this attribute supports multiple values.
+                            This setting is an indicator and does not enable any validation
+                          type: boolean
+                        name:
+                          description: Name of the user attribute, used to uniquely
+                            identify an attribute.
+                          type: string
+                        permissions:
+                          description: Permissions specifies the permissions for the
+                            attribute.
+                          properties:
+                            edit:
+                              description: Edit specifies who can edit the attribute.
+                              items:
+                                type: string
+                              type: array
+                            view:
+                              description: View specifies who can view the attribute.
+                              items:
+                                type: string
+                              type: array
+                          type: object
+                        required:
+                          description: Required indicates that the attribute must
+                            be set by users and administrators.
+                          properties:
+                            roles:
+                              description: Roles specifies the roles for whom the
+                                attribute is required.
+                              items:
+                                type: string
+                              type: array
+                            scopes:
+                              description: Scopes specifies the scopes when the attribute
+                                is required.
+                              items:
+                                type: string
+                              type: array
+                          type: object
+                        selector:
+                          description: Selector specifies the scopes for which the
+                            attribute is available.
+                          properties:
+                            scopes:
+                              description: Scopes specifies the scopes for which the
+                                attribute is available.
+                              items:
+                                type: string
+                              type: array
+                          type: object
+                        validations:
+                          additionalProperties:
+                            additionalProperties:
+                              properties:
+                                intVal:
+                                  type: integer
+                                mapVal:
+                                  additionalProperties:
+                                    type: string
+                                  nullable: true
+                                  type: object
+                                sliceVal:
+                                  items:
+                                    type: string
+                                  nullable: true
+                                  type: array
+                                stringVal:
+                                  type: string
+                              type: object
+                            type: object
+                          description: Validations specifies the validations for the
+                            attribute.
+                          type: object
+                      required:
+                      - name
+                      type: object
+                    type: array
+                  groups:
+                    description: Groups specifies the list of user profile groups.
+                    items:
+                      properties:
+                        annotations:
+                          additionalProperties:
+                            type: string
+                          description: |-
+                            Annotations specifies the annotations for the group.
+                            nullable
+                          type: object
+                        displayDescription:
+                          description: DisplayDescription specifies a user-friendly
+                            name for the group that should be used when rendering
+                            a group of attributes in user-facing forms.
+                          type: string
+                        displayHeader:
+                          description: DisplayHeader specifies a text that should
+                            be used as a header when rendering user-facing forms.
+                          type: string
+                        name:
+                          description: Name is unique name of the group.
+                          type: string
+                      required:
+                      - name
+                      type: object
+                    type: array
+                  unmanagedAttributePolicy:
+                    description: |-
+                      UnmanagedAttributePolicy are user attributes not explicitly defined in the user profile configuration.
+                      Empty value means that unmanaged attributes are disabled.
+                      Possible values:
+                      ENABLED - unmanaged attributes are allowed.
+                      ADMIN_VIEW - unmanaged attributes are read-only and only available through the administration console and API.
+                      ADMIN_EDIT - unmanaged attributes can be managed only through the administration console and API.
+                    type: string
+                type: object
+              users:
+                description: Users is a list of users to create in the realm.
+                items:
+                  properties:
+                    realmRoles:
+                      description: RealmRoles is a list of roles attached to keycloak
+                        user.
+                      items:
+                        type: string
+                      type: array
+                    username:
+                      description: Username of keycloak user.
+                      type: string
+                  required:
+                  - username
+                  type: object
+                nullable: true
+                type: array
+            required:
+            - keycloakRef
+            - realmName
+            type: object
+          status:
+            description: KeycloakRealmStatus defines the observed state of KeycloakRealm.
+            properties:
+              available:
+                type: boolean
+              failureCount:
+                format: int64
+                type: integer
+              value:
+                type: string
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

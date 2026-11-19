@@ -1,0 +1,51 @@
+{{- if and ( .Capabilities.APIVersions.Has "monitoring.coreos.com/v1" ) .Values.serviceMonitor.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ template "fluent-bit.fullname" . }}
+  namespace: {{ default .Release.Namespace .Values.serviceMonitor.namespace }}
+  labels:
+    {{- include "fluent-bit.labels" . | nindent 4 }}
+    {{- with .Values.serviceMonitor.selector }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  jobLabel: app.kubernetes.io/instance
+  endpoints:
+    - port: http
+      path: {{ default "/api/v2/metrics/prometheus" .Values.serviceMonitor.path }}
+      {{- with .Values.serviceMonitor.interval }}
+      interval: {{ . }}
+      {{- end }}
+      {{- with .Values.serviceMonitor.scrapeTimeout }}
+      scrapeTimeout: {{ . }}
+      {{- end }}
+      {{- with .Values.serviceMonitor.metricRelabelings }}
+      metricRelabelings:
+      {{- if kindIs "string" . }}
+        {{- tpl . $ | nindent 8 }}
+      {{- else }}
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- end }}
+      {{- with .Values.serviceMonitor.relabelings }}
+      relabelings:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- if .Values.serviceMonitor.scheme }}
+      scheme: {{ .Values.serviceMonitor.scheme }}
+      {{- end }}
+      {{- if .Values.serviceMonitor.tlsConfig }}
+      tlsConfig:
+        {{- toYaml .Values.serviceMonitor.tlsConfig | nindent 8 }}
+      {{- end }}
+    {{- with .Values.serviceMonitor.additionalEndpoints }}
+      {{- toYaml . | nindent 4 }}
+    {{- end }}
+  namespaceSelector:
+    matchNames:
+      - {{ .Release.Namespace }}
+  selector:
+    matchLabels:
+      {{- include "fluent-bit.selectorLabels" . | nindent 6 }}
+{{- end }}

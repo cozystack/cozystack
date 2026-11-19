@@ -1,0 +1,519 @@
+package server
+
+import (
+	"encoding/json"
+	"fmt"
+	"strings"
+
+	appsv1alpha1 "github.com/cozystack/cozystack/pkg/apis/apps/v1alpha1"
+	"github.com/cozystack/cozystack/pkg/apiserver"
+	"github.com/cozystack/cozystack/pkg/config"
+	sampleopenapi "github.com/cozystack/cozystack/pkg/generated/openapi"
+	"k8s.io/apiserver/pkg/endpoints/openapi"
+	genericapiserver "k8s.io/apiserver/pkg/server"
+	"k8s.io/kube-openapi/pkg/spec3"
+	"k8s.io/kube-openapi/pkg/validation/spec"
+)
+
+// -----------------------------------------------------------------------------
+// shared helpers
+// -----------------------------------------------------------------------------
+
+const (
+	apiPrefix     = "com.github.cozystack.cozystack.pkg.apis.apps.v1alpha1"
+	baseRef       = apiPrefix + ".Application"
+	baseListRef   = apiPrefix + ".ApplicationList"
+	baseStatusRef = apiPrefix + ".ApplicationStatus"
+	smp           = "application/strategic-merge-patch+json"
+)
+
+// deepCopySchema clones *spec.Schema via JSON-marshal/unmarshal.
+func deepCopySchema(in *spec.Schema) *spec.Schema {
+	if in == nil {
+		return nil
+	}
+	raw, err := json.Marshal(in)
+	if err != nil {
+		panic(fmt.Errorf("failed to marshal schema: %w", err))
+	}
+	var out spec.Schema
+	err = json.Unmarshal(raw, &out)
+	if err != nil {
+		panic(fmt.Errorf("failed to unmarshal schema: %w", err))
+	}
+	return &out
+}
+
+// findSpecContainer returns first object owning ".spec".
+func findSpecContainer(s *spec.Schema) *spec.Schema {
+	if s == nil {
+		return nil
+	}
+	if len(s.Type) > 0 && s.Type.Contains("object") {
+		if _, ok := s.Properties["spec"]; ok {
+			return s
+		}
+	}
+	for _, branch := range [][]spec.Schema{s.AllOf, s.OneOf, s.AnyOf} {
+		for i := range branch {
+			if res := findSpecContainer(&branch[i]); res != nil {
+				return res
+			}
+		}
+	}
+	return nil
+}
+
+// markOpenObject marks a schema as a free-form object that accepts arbitrary
+// properties, using the x-kubernetes-preserve-unknown-fields extension rather
+// than the boolean additionalProperties:true form.
+//
+// This distinction matters: a boolean additionalProperties node (the JSON
+// `true` or `false` form) carries a nil inner schema. The Kubernetes
+// ValidatingAdmissionPolicy status type-checker (run by kube-controller-manager)
+// dereferences that nil inner schema, crash-looping KCM cluster-wide as soon as
+// a VAP matches one of these aggregated resources (e.g.
+// cozystack-tenant-host-policy on tenants). The extension is semantically
+// equivalent ("arbitrary fields allowed") and the type-checker handles it
+// safely. See https://github.com/cozystack/cozystack/issues/2863.
+func markOpenObject(s *spec.Schema) {
+	if len(s.Type) == 0 {
+		s.Type = spec.StringOrArray{"object"}
+	}
+	s.AdditionalProperties = nil
+	if s.Extensions == nil {
+		s.Extensions = spec.Extensions{}
+	}
+	s.Extensions["x-kubernetes-preserve-unknown-fields"] = true
+}
+
+// sanitizeBooleanAdditionalProperties recursively rewrites every boolean-form
+// additionalProperties (one whose inner Schema is nil — both the JSON `true`
+// and `false` forms) anywhere in s, because both crash the VAP status
+// type-checker (#2863): additionalProperties:true becomes the equivalent
+// x-kubernetes-preserve-unknown-fields:true, and additionalProperties:false is
+// dropped (the published schema is consumed only for documentation and
+// type-checking, not for enforcement, so "declared properties only" is
+// preserved without the crash-prone node). Object-form additionalProperties (a
+// real map value schema) is safe; it is recursed into, never rewritten.
+//
+// ApplicationDefinition.openAPISchema is untrusted input — external-apps and
+// operator-authored definitions flow through here without validation — so this
+// closes the whole class of crash rather than only the schemas cozystack ships.
+func sanitizeBooleanAdditionalProperties(s *spec.Schema) {
+	if s == nil {
+		return
+	}
+	if ap := s.AdditionalProperties; ap != nil && ap.Schema == nil {
+		if ap.Allows {
+			markOpenObject(s) // additionalProperties:true -> preserve-unknown-fields
+		} else {
+			s.AdditionalProperties = nil // additionalProperties:false -> drop
+		}
+	} else if ap != nil && ap.Schema != nil {
+		sanitizeBooleanAdditionalProperties(ap.Schema)
+	}
+	for k := range s.Properties {
+		prop := s.Properties[k]
+		sanitizeBooleanAdditionalProperties(&prop)
+		s.Properties[k] = prop
+	}
+	if s.Items != nil {
+		sanitizeBooleanAdditionalProperties(s.Items.Schema)
+		for i := range s.Items.Schemas {
+			sanitizeBooleanAdditionalProperties(&s.Items.Schemas[i])
+		}
+	}
+	for i := range s.AllOf {
+		sanitizeBooleanAdditionalProperties(&s.AllOf[i])
+	}
+	for i := range s.AnyOf {
+		sanitizeBooleanAdditionalProperties(&s.AnyOf[i])
+	}
+	for i := range s.OneOf {
+		sanitizeBooleanAdditionalProperties(&s.OneOf[i])
+	}
+	sanitizeBooleanAdditionalProperties(s.Not)
+}
+
+// patchSpec injects/overrides ".spec" with user JSON (or schemaless object).
+func patchSpec(target *spec.Schema, raw string) error {
+	if target.Properties == nil {
+		target.Properties = map[string]spec.Schema{}
+	}
+
+	// Schemaless: publish a fresh, fully open object. Starting from a fresh
+	// schema (rather than mutating the cloned base) discards any inherited
+	// $ref or properties so the published spec is unambiguously open.
+	if strings.TrimSpace(raw) == "" {
+		prop := spec.Schema{}
+		markOpenObject(&prop)
+		target.Properties["spec"] = prop
+		return nil
+	}
+
+	var custom spec.Schema
+	if err := json.Unmarshal([]byte(raw), &custom); err != nil {
+		return err
+	}
+	// The name declaration describes metadata.name, not anything inside spec.
+	delete(custom.Extensions, appsv1alpha1.NameSchemaExtension)
+
+	// Neutralize any crash-prone boolean additionalProperties at any depth in
+	// the user-supplied schema before publishing it.
+	topLevelAPAbsent := custom.AdditionalProperties == nil
+	sanitizeBooleanAdditionalProperties(&custom)
+
+	// Preserve the historical "spec is a superset of the documented values"
+	// behavior: when the documented schema does not itself declare
+	// additionalProperties, mark the top level open so undocumented Helm
+	// values are accepted rather than rejected. A schema that explicitly
+	// declared additionalProperties (now sanitized) keeps its own intent.
+	if topLevelAPAbsent {
+		markOpenObject(&custom)
+	}
+
+	target.Properties["spec"] = custom
+	return nil
+}
+
+/* ────────────────────────────────────────────────────────────────────────── */
+/*  DRY helpers                                                             */
+/* ────────────────────────────────────────────────────────────────────────── */
+
+// cloneKindSchemas: from base schemas, create new schemas for a specific kind.
+func cloneKindSchemas(kind string, base, baseStatus, baseList *spec.Schema, v3 bool) (obj, status, list *spec.Schema) {
+	obj = deepCopySchema(base)
+	status = deepCopySchema(baseStatus)
+	list = deepCopySchema(baseList)
+
+	// Ensure we have valid clones
+	if obj == nil || status == nil || list == nil {
+		return nil, nil, nil
+	}
+
+	// GVK-extensions
+	setGVK := func(s *spec.Schema, k string) {
+		s.Extensions = map[string]any{
+			"x-kubernetes-group-version-kind": []any{
+				map[string]any{"group": "apps.cozystack.io", "version": "v1alpha1", "kind": k},
+			},
+		}
+	}
+	setGVK(obj, kind)
+	setGVK(list, kind+"List")
+
+	// fix refs
+	refPrefix := "#/components/schemas/" // v3
+	if !v3 {
+		refPrefix = "#/definitions/"
+	}
+	statusRef := refPrefix + apiPrefix + "." + kind + "Status"
+	itemRef := refPrefix + apiPrefix + "." + kind
+
+	if prop, ok := obj.Properties["status"]; ok {
+		prop.Ref = spec.MustCreateRef(statusRef)
+		obj.Properties["status"] = prop
+	}
+	if list.Properties != nil {
+		if items := list.Properties["items"]; items.Items != nil && items.Items.Schema != nil {
+			items.Items.Schema.Ref = spec.MustCreateRef(itemRef)
+			list.Properties["items"] = items
+		}
+	}
+	return
+}
+
+// rewriteDocRefs rewrites all $ref in the OpenAPI document
+func rewriteDocRefs(doc any) ([]byte, error) {
+	raw, err := json.Marshal(doc)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal OpenAPI document: %w", err)
+	}
+	var parsed any
+	if err := json.Unmarshal(raw, &parsed); err != nil {
+		return nil, err
+	}
+	walkAndRewriteRefs(parsed, "")
+	return json.Marshal(parsed)
+}
+
+// walkAndRewriteRefs walks arbitrary JSON (map/array) and
+//   - when encountering x-kubernetes-group-version-kind, extracts kind,
+//     updating the currentKind context;
+//   - rewrites all $ref inside the current context from Application* → kind*.
+func walkAndRewriteRefs(node any, currentKind string) {
+	switch n := node.(type) {
+	case map[string]any:
+		if gvk, ok := n["x-kubernetes-group-version-kind"]; ok {
+			switch g := gvk.(type) {
+			case map[string]any:
+				if k, ok := g["kind"].(string); ok {
+					currentKind = k
+				}
+			case []any:
+				if len(g) > 0 {
+					if mm, ok := g[0].(map[string]any); ok {
+						if k, ok := mm["kind"].(string); ok {
+							currentKind = k
+						}
+					}
+				}
+			}
+		}
+		for k, v := range n {
+			if k == "$ref" && currentKind != "" {
+				if s, ok := v.(string); ok {
+					n[k] = rewriteRefForKind(s, currentKind)
+					continue
+				}
+			}
+			walkAndRewriteRefs(v, currentKind)
+		}
+	case []any:
+		for _, v := range n {
+			walkAndRewriteRefs(v, currentKind)
+		}
+	}
+}
+
+// rewriteRefForKind rewrites a reference to a specific kind.
+func rewriteRefForKind(old, kind string) string {
+	var base string
+	switch {
+	case strings.HasPrefix(old, "#/components/schemas/"):
+		base = "#/components/schemas/"
+	case strings.HasPrefix(old, "#/definitions/"):
+		base = "#/definitions/"
+	default:
+		return old
+	}
+	switch {
+	case strings.HasSuffix(old, ".Application"):
+		return base + apiPrefix + "." + kind
+	case strings.HasSuffix(old, ".ApplicationList"):
+		return base + apiPrefix + "." + kind + "List"
+	case strings.HasSuffix(old, ".ApplicationStatus"):
+		return base + apiPrefix + "." + kind + "Status"
+	default:
+		return old
+	}
+}
+
+// -----------------------------------------------------------------------------
+// OpenAPI **v3** post-processor
+// -----------------------------------------------------------------------------
+// BuildPostProcessV3 returns an OpenAPI v3 post-processor that clones base
+// Application schemas into per-kind schemas and rewrites $ref pointers.
+func BuildPostProcessV3(kindSchemas map[string]string) func(*spec3.OpenAPI) (*spec3.OpenAPI, error) {
+	return func(doc *spec3.OpenAPI) (*spec3.OpenAPI, error) {
+
+		if doc.Components == nil {
+			doc.Components = &spec3.Components{}
+		}
+		if doc.Components.Schemas == nil {
+			doc.Components.Schemas = map[string]*spec.Schema{}
+		}
+
+		// Get base schemas
+		base, ok1 := doc.Components.Schemas[baseRef]
+		list, ok2 := doc.Components.Schemas[baseListRef]
+		stat, ok3 := doc.Components.Schemas[baseStatusRef]
+		if !ok1 || !ok2 || !ok3 {
+			return doc, nil // not the apps GV — nothing to patch
+		}
+
+		// Clone base schemas for each kind
+		for kind, raw := range kindSchemas {
+			ref := apiPrefix + "." + kind
+			statusRef := ref + "Status"
+			listRef := ref + "List"
+
+			obj, status, l := cloneKindSchemas(kind, base, stat, list /*v3=*/, true)
+			doc.Components.Schemas[ref] = obj
+			doc.Components.Schemas[statusRef] = status
+			doc.Components.Schemas[listRef] = l
+
+			// patch .spec
+			container := findSpecContainer(obj)
+			if container == nil {
+				container = obj
+			}
+			if err := patchSpec(container, raw); err != nil {
+				return nil, fmt.Errorf("kind %s: %w", kind, err)
+			}
+		}
+
+		// Delete base schemas
+		delete(doc.Components.Schemas, baseRef)
+		delete(doc.Components.Schemas, baseListRef)
+		delete(doc.Components.Schemas, baseStatusRef)
+
+		// Disable strategic-merge-patch+json
+		for p, pi := range doc.Paths.Paths {
+			if pi != nil && pi.Patch != nil && pi.Patch.RequestBody != nil {
+				delete(pi.Patch.RequestBody.Content, smp)
+				doc.Paths.Paths[p] = pi
+			}
+		}
+
+		// Rewrite all $ref in the document
+		out, err := rewriteDocRefs(doc)
+		if err != nil {
+			return nil, err
+		}
+		return doc, json.Unmarshal(out, doc)
+	}
+}
+
+// hasIntAndStringAnyOf returns true if anyOf is exactly a combination of string and integer.
+func hasIntAndStringAnyOf(anyOf []spec.Schema) bool {
+	seen := map[string]bool{}
+	for i := range anyOf {
+		for _, t := range anyOf[i].Type {
+			seen[t] = true
+		}
+	}
+	return seen["string"] && seen["integer"] && len(seen) <= 2
+}
+
+// sanitizeForV2 removes unsupported constructs for Swagger v2 and normalizes common patterns.
+func sanitizeForV2(s *spec.Schema) {
+	if s == nil {
+		return
+	}
+
+	if len(s.AnyOf) > 0 {
+		if hasIntAndStringAnyOf(s.AnyOf) {
+			s.Type = spec.StringOrArray{"string"}
+			if s.Extensions == nil {
+				s.Extensions = spec.Extensions{}
+			}
+			s.Extensions["x-kubernetes-int-or-string"] = true
+		}
+		s.AnyOf = nil
+	}
+
+	if len(s.OneOf) > 0 {
+		s.OneOf = nil
+	}
+
+	if s.AdditionalProperties != nil {
+		ap := s.AdditionalProperties
+		if ap.Schema != nil {
+			sanitizeForV2(ap.Schema)
+		}
+	}
+
+	for k := range s.Properties {
+		prop := s.Properties[k]
+		sanitizeForV2(&prop)
+		s.Properties[k] = prop
+	}
+
+	if s.Items != nil {
+		if s.Items.Schema != nil {
+			sanitizeForV2(s.Items.Schema)
+		}
+		for i := range s.Items.Schemas {
+			sanitizeForV2(&s.Items.Schemas[i])
+		}
+	}
+
+	for i := range s.AllOf {
+		sanitizeForV2(&s.AllOf[i])
+	}
+}
+
+// KindSchemasFromConfig extracts the kind→OpenAPISchema mapping from a ResourceConfig.
+func KindSchemasFromConfig(rc *config.ResourceConfig) map[string]string {
+	m := make(map[string]string, len(rc.Resources))
+	for _, r := range rc.Resources {
+		m[r.Application.Kind] = r.Application.OpenAPISchema
+	}
+	return m
+}
+
+// ConfigureOpenAPI sets up OpenAPI v2 and v3 on a GenericAPIServer Config,
+// including the post-processors that clone Application schemas to per-kind schemas.
+func ConfigureOpenAPI(cfg *genericapiserver.Config, kindSchemas map[string]string, title, version string) {
+	cfg.OpenAPIConfig = genericapiserver.DefaultOpenAPIConfig(
+		sampleopenapi.GetOpenAPIDefinitions, openapi.NewDefinitionNamer(apiserver.Scheme),
+	)
+	cfg.OpenAPIConfig.Info.Title = title
+	cfg.OpenAPIConfig.Info.Version = version
+	cfg.OpenAPIConfig.PostProcessSpec = BuildPostProcessV2(kindSchemas)
+
+	cfg.OpenAPIV3Config = genericapiserver.DefaultOpenAPIV3Config(
+		sampleopenapi.GetOpenAPIDefinitions, openapi.NewDefinitionNamer(apiserver.Scheme),
+	)
+	cfg.OpenAPIV3Config.Info.Title = title
+	cfg.OpenAPIV3Config.Info.Version = version
+	cfg.OpenAPIV3Config.PostProcessSpec = BuildPostProcessV3(kindSchemas)
+}
+
+// -----------------------------------------------------------------------------
+// OpenAPI **v2** (swagger) post-processor
+// -----------------------------------------------------------------------------
+// BuildPostProcessV2 returns a Swagger post-processor that clones base
+// Application schemas into per-kind schemas and rewrites $ref pointers.
+func BuildPostProcessV2(kindSchemas map[string]string) func(*spec.Swagger) (*spec.Swagger, error) {
+	return func(sw *spec.Swagger) (*spec.Swagger, error) {
+		defs := sw.Definitions
+		base, ok1 := defs[baseRef]
+		list, ok2 := defs[baseListRef]
+		stat, ok3 := defs[baseStatusRef]
+		if !ok1 || !ok2 || !ok3 {
+			return sw, nil // not the apps GV — nothing to patch
+		}
+
+		for kind, raw := range kindSchemas {
+			ref := apiPrefix + "." + kind
+			statusRef := ref + "Status"
+			listRef := ref + "List"
+
+			obj, status, l := cloneKindSchemas(kind, &base, &stat, &list, false)
+
+			if err := patchSpec(obj, raw); err != nil {
+				return nil, fmt.Errorf("kind %s: %w", kind, err)
+			}
+
+			defs[ref] = *obj
+			defs[statusRef] = *status
+			defs[listRef] = *l
+		}
+
+		delete(defs, baseRef)
+		delete(defs, baseListRef)
+		delete(defs, baseStatusRef)
+
+		for p, op := range sw.Paths.Paths {
+			if op.Patch != nil && len(op.Patch.Consumes) > 0 {
+				var out []string
+				for _, c := range op.Patch.Consumes {
+					if c != smp {
+						out = append(out, c)
+					}
+				}
+				op.Patch.Consumes = out
+				sw.Paths.Paths[p] = op
+			}
+		}
+
+		out, err := rewriteDocRefs(sw)
+		if err != nil {
+			return nil, err
+		}
+		if err := json.Unmarshal(out, sw); err != nil {
+			return nil, err
+		}
+
+		for name := range sw.Definitions {
+			s := sw.Definitions[name]
+			sanitizeForV2(&s)
+			sw.Definitions[name] = s
+		}
+
+		return sw, nil
+	}
+}

@@ -1,0 +1,29 @@
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: {{ include "cozy-proxy.fullname" . }}
+  labels:
+    {{- include "cozy-proxy.labels" . | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      app: {{ include "cozy-proxy.name" . }}
+  template:
+    metadata:
+      labels:
+        app: {{ include "cozy-proxy.name" . }}
+      annotations:
+        {{- toYaml .Values.daemonset.podAnnotations | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "cozy-proxy.fullname" . }}
+      hostNetwork: {{ .Values.daemonset.hostNetwork }}
+      containers:
+        - name: cozy-proxy
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            privileged: true
+            capabilities:
+              add: ["NET_ADMIN"]
+      tolerations:
+      - operator: Exists

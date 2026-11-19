@@ -1,0 +1,158 @@
+##
+## @section Common parameters
+##
+
+## @typedef {struct} Resources - Explicit CPU and memory configuration for each Redis replica.
+## @field {quantity} [cpu] - CPU available to each replica.
+## @field {quantity} [memory] - Memory (RAM) available to each replica.
+
+## @enum {string} ResourcesPreset - Default sizing preset.
+## @value t1.nano
+## @value t1.micro
+## @value t1.small
+## @value t1.medium
+## @value t1.large
+## @value t1.xlarge
+## @value t1.2xlarge
+## @value t1.4xlarge
+## @value c1.nano
+## @value c1.micro
+## @value c1.small
+## @value c1.medium
+## @value c1.large
+## @value c1.xlarge
+## @value c1.2xlarge
+## @value c1.4xlarge
+## @value s1.nano
+## @value s1.micro
+## @value s1.small
+## @value s1.medium
+## @value s1.large
+## @value s1.xlarge
+## @value s1.2xlarge
+## @value s1.4xlarge
+## @value u1.nano
+## @value u1.micro
+## @value u1.small
+## @value u1.medium
+## @value u1.large
+## @value u1.xlarge
+## @value u1.2xlarge
+## @value u1.4xlarge
+## @value m1.nano
+## @value m1.micro
+## @value m1.small
+## @value m1.medium
+## @value m1.large
+## @value m1.xlarge
+## @value m1.2xlarge
+## @value m1.4xlarge
+## @value nano
+## @value micro
+## @value small
+## @value medium
+## @value large
+## @value xlarge
+## @value 2xlarge
+
+## @param {int} replicas - Number of Redis replicas. Three Sentinels watch them, or a single one when `replicas` is 1, since a lone pod has no replica to fail over to.
+replicas: 2
+
+## @param {Resources} [resources] - Explicit CPU and memory configuration for each Redis replica. When omitted, the preset defined in `resourcesPreset` is applied.
+resources: {}
+
+## @param {ResourcesPreset} resourcesPreset="t1.nano" - Default sizing preset used when `resources` is omitted.
+resourcesPreset: "t1.nano"
+
+## @typedef {struct} AffinitySpec - Kubernetes affinity configuration.
+## @field {*object} [redis] - Kubernetes Affinity for Redis pods. When set, redis-operator uses it verbatim and does not add its default soft podAntiAffinity; include podAntiAffinity unless replica co-location is intended.
+## @field {*object} [sentinel] - Kubernetes Affinity for Sentinel pods. When set, redis-operator uses it verbatim and does not add its default soft podAntiAffinity; include podAntiAffinity unless replica co-location is intended.
+
+## @param {AffinitySpec} [affinity] - Kubernetes affinity configuration for Redis and Sentinel pods.
+affinity:
+  redis: {}
+  sentinel: {}
+
+## @param {quantity} size - Persistent Volume Claim size available for application data.
+size: 1Gi
+
+## @param {string} storageClass - StorageClass used to store the data.
+## @immutable
+## @x-cozystack-options {source: storageclass}
+storageClass: ""
+
+## @param {bool} external - Enable external access from outside the cluster. Can be enabled only when the instance is created, together with `tls.enabled: true`; turning it on for an existing instance, or changing `tls.enabled` while it is on, is refused at admission.
+external: false
+
+## @enum {string} Version
+## @value v8
+## @value v7
+
+## @param {Version} version - Redis major version to deploy. The Redis and Sentinel pods run the same image.
+version: v8
+
+##
+## @section TLS parameters
+##
+
+## @enum {string} AuthClients - Values accepted by the Redis `tls-auth-clients` directive.
+## @value no
+## @value optional
+## @value yes
+
+## @typedef {struct} TLS - TLS configuration.
+## @field {*bool} [enabled] - Enable TLS for Redis and Sentinel connections. Disabled unless set. Enabling it moves Redis and Sentinel to a TLS-only listener, so existing plaintext clients must be migrated at the same time. Encryption is provided by the redis-operator fork that mounts the certificate Secret into both Redis and Sentinel pods at `/tls`.
+## @field {AuthClients} [authClients] - Maps to the Redis `tls-auth-clients` directive. Defaults to `no` — the server certificate is presented but client certificates are not validated. `yes` requires a client certificate signed by this release's CA, which the platform does not issue. Changing it restarts the Redis and Sentinel pods, because the directive is read from the config file once at startup.
+
+## @param {TLS} [tls] - TLS configuration. TLS is opt-in and is not inferred from `external`.
+# Stays empty on purpose. Spelling out `authClients: "no"` here would make the
+# generated README show the default instead of `{}`, but cozyvalues-gen quotes a
+# default only for the literal types `string` and `quantity`; an `@enum` alias
+# like AuthClients falls through to a YAML re-parse where `no` becomes boolean
+# false. The schema would get `"default": false` on a string-typed enum property
+# and the Go field `+kubebuilder:default:=false`. The default is resolved in
+# templates/_tls.tpl instead, and
+# hack/check-values-schema-string-defaults.bats fails on the coercion.
+tls: {}
+
+##
+## @section Application-specific parameters
+##
+
+## @param {bool} authEnabled - Enable password generation.
+authEnabled: true
+
+## @param {*int} [minReplicasToWrite] - Redis `min-replicas-to-write`: the master refuses writes unless at least this many replicas are connected and within `minReplicasMaxLag`. Unset by default, which leaves the Redis default (disabled). With `replicas: 2` and a value of 1 the master rejects writes while its only replica is down, trading availability for a bound on the writes lost if an isolated master is failed over. Replication stays asynchronous, so this bounds the loss, it does not remove it. Must be 0 or more and below `replicas` (a master with `replicas` pods has `replicas - 1` replicas), otherwise every write is refused; the chart refuses such a value.
+## @minimum 0
+
+## @param {*int} [minReplicasMaxLag] - Redis `min-replicas-max-lag`, in seconds: a replica whose last acknowledgement is older than this does not count towards `minReplicasToWrite`. Unset by default, which leaves the Redis default (10). Has no effect unless `minReplicasToWrite` is set. Must be at least 1 when `minReplicasToWrite` is set: Redis treats 0 as disabling the check, so the chart refuses it.
+## @minimum 0
+
+## @param {quantity} [maxmemory] - Redis `maxmemory`: the dataset size at which Redis applies `maxmemoryPolicy`. Unset by default, which renders `maxmemory 0` (no limit, the Redis default), so a value set by hand with `CONFIG SET` is reset on the next reconcile. Must be at most 90% of the memory request of each Redis pod (from `resources` or `resourcesPreset`): the operator silently drops a larger value, so the chart refuses it. Leave headroom below that for replication and snapshot buffers.
+
+## @enum {string} MaxmemoryPolicy - Values accepted by the Redis `maxmemory-policy` directive.
+## @value noeviction
+## @value allkeys-lru
+## @value allkeys-lfu
+## @value allkeys-random
+## @value volatile-lru
+## @value volatile-lfu
+## @value volatile-random
+## @value volatile-ttl
+
+## @param {MaxmemoryPolicy} maxmemoryPolicy="noeviction" - Redis `maxmemory-policy`: what Redis does once `maxmemory` is reached. `noeviction` refuses writes; `allkeys-lru` evicts the least recently used keys, which suits an instance used purely as a cache. Has no effect while `maxmemory` is unset.
+maxmemoryPolicy: "noeviction"
+
+## @param {bool} snapshots - Write RDB snapshots to the persistent volume (the Redis `save` directive, with the Redis default schedule). Set to `false` for an instance used purely as a cache: `save ""` is rendered and the volume is kept, so no further scheduled snapshot is written while replicas still have room for the full-sync RDB they write to disk. An RDB file already on the volume is not removed, and Redis loads it on restart, so turning snapshots off does not by itself empty the dataset. Always off when `size` is empty.
+snapshots: true
+
+##
+## @section Sentinel parameters
+##
+
+## @typedef {struct} Sentinel - Sentinel configuration.
+## @field {Resources} [resources] - Explicit CPU and memory configuration for each Sentinel pod. Keys left out are filled from the preset in `sentinel.resourcesPreset`.
+## @field {ResourcesPreset} [resourcesPreset] - Sizing preset for the Sentinel pods. Defaults to `resourcesPreset`.
+
+## @param {Sentinel} [sentinel] - Sentinel configuration. When `sentinel.resources` is empty and `sentinel.resourcesPreset` is unset, the Sentinel pods are sized like the Redis pods (`resources` and `resourcesPreset`). An empty `sentinel.resources` map counts as unset, as an empty top-level `resources` does.
+sentinel: {}

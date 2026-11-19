@@ -1,0 +1,11 @@
+spec:
+  conversion:
+    strategy: Webhook
+    webhook:
+      clientConfig:
+        service:
+          name: kamaji-webhook-service
+          namespace: kamaji-system
+          path: /convert
+      conversionReviewVersions:
+        - v1

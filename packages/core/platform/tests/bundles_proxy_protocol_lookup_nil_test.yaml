@@ -1,0 +1,48 @@
+suite: publishing.proxyProtocol disable hazard guard (lookup returns nil — CI/dry-run/fresh-install)
+templates:
+  - templates/bundles/system.yaml
+release:
+  name: cozystack
+  namespace: cozy-system
+# Deliberately no `kubernetesProvider:` — helm-unittest's mock then
+# resolves `lookup` calls to nil, the same shape Helm itself returns
+# during `helm template`, dry-run, and CI render checks. The
+# acknowledge guard is documented as defence-in-depth precisely
+# because of this: it MUST let render proceed when lookup returns nil
+# so that fresh installs (no cozystack.ouroboros Package CR yet) and
+# CI pipelines are not blocked by the gate. If a future change
+# tightens the guard into a static check (e.g. a `fail` that fires
+# regardless of lookup), this test fails first.
+tests:
+  - it: renders cleanly with proxyProtocol false on a fresh cluster (no leftover Package CR) — bare flag flip path
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+      publishing:
+        proxyProtocol: false
+        proxyProtocolAcknowledgeUnclean: false
+    asserts:
+      - containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.ouroboros
+        not: true
+        documentIndex: -1
+
+  - it: renders cleanly with proxyProtocol true on a fresh cluster (lookup-nil happy path also irrelevant — render does not invoke lookup when proxyProtocol=true)
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+      publishing:
+        proxyProtocol: true
+    documentSelector:
+      path: metadata.name
+      value: cozystack.ouroboros
+    asserts:
+      - equal:
+          path: kind
+          value: Package

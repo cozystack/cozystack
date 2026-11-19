@@ -1,0 +1,13 @@
+{{- if and (not .Values.currentNamespaceOnly) .Values.certController.enabled  (not .Values.webhook.cert.certManager.enabled) .Values.certController.pdb.enabled -}}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "mariadb-operator.fullname" . }}-cert-controller
+  labels:
+    {{ include "mariadb-operator-cert-controller.labels" . | nindent 4 }}
+spec:
+  maxUnavailable: {{ .Values.certController.pdb.maxUnavailable }}
+  selector:
+    matchLabels:
+      {{ include "mariadb-operator-cert-controller.selectorLabels" . | nindent 6 }}
+{{- end }}

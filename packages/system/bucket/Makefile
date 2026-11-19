@@ -1,0 +1,24 @@
+S3MANAGER_TAG=v0.5.0
+
+export NAME=s3manager-system
+
+include ../../../hack/common-envs.mk
+include ../../../hack/package.mk
+
+update:
+	@echo Nothing to update
+
+test:
+	helm unittest .
+
+image: image-s3manager
+
+image-s3manager:
+	docker buildx build images/s3manager \
+		$(call image-tags,s3manager,$(S3MANAGER_TAG)) \
+		$(call cache-args,s3manager) \
+		--metadata-file images/s3manager.json \
+		$(BUILDX_ARGS)
+	echo "$(REGISTRY)/s3manager:$(IMAGE_TAG)@$$(yq e '."containerimage.digest"' images/s3manager.json -o json -r)" \
+		> images/s3manager.tag
+	rm -f images/s3manager.json

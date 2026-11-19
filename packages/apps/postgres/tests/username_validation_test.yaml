@@ -1,0 +1,246 @@
+suite: init-script rejects a username outside the safe charset
+
+# The username becomes a Kubernetes Secret data key AND is interpolated into the
+# init-script shell (pw=$(cat "/credentials/<user>")) and role SQL. A name with a
+# shell metacharacter is a command-injection shape; the apiserver would reject it
+# later as an invalid Secret key with an opaque error. The chart must reject it at
+# render time, naming the offending username, so the metacharacter never reaches
+# the script. Reverting the guard in init-script.yaml lets the render succeed,
+# so the first test fails.
+
+templates:
+  - templates/init-script.yaml
+
+release:
+  name: pg-test
+  namespace: tenant-test
+
+set:
+  _cluster:
+    scheduling: {}
+
+tests:
+  - it: fails the render for a username carrying a shell metacharacter
+    set:
+      users:
+        'evil";id;echo "x': {}
+    asserts:
+      - failedTemplate:
+          errorMessage: 'invalid username "evil\";id;echo \"x": a username may contain only letters, digits and the characters -._ , must not be "." or start with "..", and must be at most 63 characters (it is a PostgreSQL role name, which CREATE ROLE silently truncates past 63 bytes, and it becomes a Kubernetes Secret key)'
+
+  - it: fails the render for a username with a space
+    set:
+      users:
+        'a b': {}
+    asserts:
+      - failedTemplate:
+          errorMessage: 'invalid username "a b": a username may contain only letters, digits and the characters -._ , must not be "." or start with "..", and must be at most 63 characters (it is a PostgreSQL role name, which CREATE ROLE silently truncates past 63 bytes, and it becomes a Kubernetes Secret key)'
+
+  # "." and ".." match the charset regex but are rejected by k8s IsConfigMapKey as
+  # Secret keys, so the guard rejects them explicitly (the length cap is a separate,
+  # PostgreSQL-driven concern pinned by the 63/64 boundary tests below). These pin
+  # the guard to the full IsConfigMapKey contract.
+  - it: fails the render for the reserved name "."
+    set:
+      users:
+        '.': {}
+    asserts:
+      - failedTemplate:
+          errorMessage: 'invalid username ".": a username may contain only letters, digits and the characters -._ , must not be "." or start with "..", and must be at most 63 characters (it is a PostgreSQL role name, which CREATE ROLE silently truncates past 63 bytes, and it becomes a Kubernetes Secret key)'
+
+  - it: fails the render for the reserved name ".."
+    set:
+      users:
+        '..': {}
+    asserts:
+      - failedTemplate:
+          errorMessage: 'invalid username "..": a username may contain only letters, digits and the characters -._ , must not be "." or start with "..", and must be at most 63 characters (it is a PostgreSQL role name, which CREATE ROLE silently truncates past 63 bytes, and it becomes a Kubernetes Secret key)'
+
+  # IsConfigMapKey rejects ANY name starting with ".." (hasChDirPrefix), not just
+  # the literal "..", so "..foo" is charset-legal yet cannot install.
+  - it: fails the render for a name starting with ".."
+    set:
+      users:
+        '..foo': {}
+    asserts:
+      - failedTemplate:
+          errorMessage: 'invalid username "..foo": a username may contain only letters, digits and the characters -._ , must not be "." or start with "..", and must be at most 63 characters (it is a PostgreSQL role name, which CREATE ROLE silently truncates past 63 bytes, and it becomes a Kubernetes Secret key)'
+
+  # A username is a PostgreSQL role name: CREATE ROLE silently truncates past 63
+  # bytes (NAMEDATALEN-1) with a NOTICE, not an error, so a 64-char name would be
+  # created as its 63-byte prefix and then dropped by the delete pass (catalog
+  # truncated != declared full name) in the same hook. The cap is 63, not the
+  # 253-char Secret-key limit. 64 chars fails; 63 renders. Reverting the cap to 253
+  # lets the 64-char case through.
+  - it: fails the render for a username of 64 characters (past the 63-byte role limit)
+    set:
+      users:
+        'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa': {}
+    asserts:
+      - failedTemplate:
+          errorMessage: 'invalid username "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa": a username may contain only letters, digits and the characters -._ , must not be "." or start with "..", and must be at most 63 characters (it is a PostgreSQL role name, which CREATE ROLE silently truncates past 63 bytes, and it becomes a Kubernetes Secret key)'
+
+  - it: renders normally for a username at the 63-character boundary
+    set:
+      users:
+        'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa': {}
+    documentSelector:
+      path: metadata.name
+      value: pg-test-credentials
+    asserts:
+      - matchRegex:
+          path: stringData["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]
+          pattern: ^[a-zA-Z0-9]{16}$
+
+  - it: renders normally for names using the full safe charset
+    set:
+      users:
+        a-b.c_1: {}
+    documentSelector:
+      path: metadata.name
+      value: pg-test-credentials
+    asserts:
+      - matchRegex:
+          path: stringData["a-b.c_1"]
+          pattern: ^[a-zA-Z0-9]{16}$
+
+  # `postgres` is the CNPG-managed superuser and is forbidden as an app role. The
+  # rejection must not depend on bootstrap.enabled: while it is true the
+  # create-users block is gated off, so a restore target carrying users.postgres
+  # installs, and the restore controller's automatic bootstrap clear
+  # (disablePostgresAppBootstrap) then wedges the next reconcile against this fail
+  # — a state the controller records as Succeeded. Rejecting it regardless of
+  # bootstrap keeps the controller from converging a release into an unrenderable
+  # one. Moving the guard back inside the `not .Values.bootstrap.enabled` block
+  # lets the bootstrap case render, so this test fails.
+  - it: rejects users.postgres even while bootstrap.enabled is true
+    set:
+      bootstrap:
+        enabled: true
+      users:
+        postgres:
+          replication: false
+    asserts:
+      - failedTemplate:
+          errorMessage: '`users.postgres` is forbidden by policy. Use a different username.'
+
+  - it: rejects users.postgres on the normal (non-bootstrap) path too
+    set:
+      users:
+        postgres:
+          replication: false
+    asserts:
+      - failedTemplate:
+          errorMessage: '`users.postgres` is forbidden by policy. Use a different username.'
+
+  # The credentials Secret is gated on .Values.users, so a release installed with
+  # the default `users: {}` has none. Adding its FIRST user is an upgrade whose
+  # lookup is legitimately empty — indistinguishable at render time from a deleted
+  # Secret — so postgres must NOT reject an empty-lookup upgrade (that would hard-
+  # block the common first-user path). It mints instead; the post-upgrade init-job
+  # applies the password. Re-adding a `not $existingSecret` fail on IsUpgrade turns
+  # this red — the regression this pins (a userless release could no longer gain a
+  # user). MariaDB is the opposite case (its Secret always exists via root, and
+  # root desyncs permanently), so its guard stays; see mariadb secret.yaml.
+  - it: mints when the first user is added to a userless release on upgrade
+    release:
+      name: pg-test
+      namespace: tenant-test
+      upgrade: true
+    set:
+      users:
+        app: {}
+    documentSelector:
+      path: metadata.name
+      value: pg-test-credentials
+    asserts:
+      - matchRegex:
+          path: stringData.app
+          pattern: ^[a-zA-Z0-9]{16}$
+
+  # A username of 64+ bytes installed before the 63 cap: its credentials Secret
+  # key was written, while the role itself was truncated and dropped in the same
+  # hook. Failing the render on the next upgrade would wedge the whole release
+  # over a user that never worked, so on upgrade the cap applies only to a user
+  # the existing credentials Secret does not already carry, i.e. a NEW user.
+  # Applying the cap on upgrade regardless of the Secret makes the first case
+  # fail to render; dropping the Secret-key conjunct lets the second render, so
+  # it fails.
+  - it: renders on upgrade for a 64-character user the credentials Secret already carries
+    release:
+      name: pg-test
+      namespace: tenant-test
+      upgrade: true
+    kubernetesProvider:
+      scheme:
+        "v1/Secret":
+          gvr: {version: v1, resource: secrets}
+          namespaced: true
+      objects:
+        - apiVersion: v1
+          kind: Secret
+          metadata:
+            name: pg-test-credentials
+            namespace: tenant-test
+          data:
+            aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa: ZXhpc3RpbmdwYXNzd29yZA==
+    set:
+      users:
+        aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa: {}
+    documentSelector:
+      path: metadata.name
+      value: pg-test-credentials
+    asserts:
+      - equal:
+          path: stringData["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]
+          value: existingpassword
+
+  - it: still fails on upgrade for a NEW 64-character user
+    release:
+      name: pg-test
+      namespace: tenant-test
+      upgrade: true
+    kubernetesProvider:
+      scheme:
+        "v1/Secret":
+          gvr: {version: v1, resource: secrets}
+          namespaced: true
+      objects:
+        - apiVersion: v1
+          kind: Secret
+          metadata:
+            name: pg-test-credentials
+            namespace: tenant-test
+          data:
+            app: ZXhpc3RpbmdwYXNzd29yZA==
+    set:
+      users:
+        app: {}
+        aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa: {}
+    asserts:
+      - failedTemplate:
+          errorMessage: 'invalid username "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa": a username may contain only letters, digits and the characters -._ , must not be "." or start with "..", and must be at most 63 characters (it is a PostgreSQL role name, which CREATE ROLE silently truncates past 63 bytes, and it becomes a Kubernetes Secret key)'
+
+  # A fresh install has no release to protect, so the cap holds even when a stale
+  # credentials Secret left in the namespace happens to carry the key. Dropping
+  # the ".Release.IsInstall" conjunct lets the render succeed, so this fails.
+  - it: still fails on install for a 64-character user a stale Secret carries
+    kubernetesProvider:
+      scheme:
+        "v1/Secret":
+          gvr: {version: v1, resource: secrets}
+          namespaced: true
+      objects:
+        - apiVersion: v1
+          kind: Secret
+          metadata:
+            name: pg-test-credentials
+            namespace: tenant-test
+          data:
+            aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa: ZXhpc3RpbmdwYXNzd29yZA==
+    set:
+      users:
+        aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa: {}
+    asserts:
+      - failedTemplate:
+          errorMessage: 'invalid username "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa": a username may contain only letters, digits and the characters -._ , must not be "." or start with "..", and must be at most 63 characters (it is a PostgreSQL role name, which CREATE ROLE silently truncates past 63 bytes, and it becomes a Kubernetes Secret key)'

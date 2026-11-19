@@ -1,0 +1,121 @@
+{{- /*
+  Gate the control-plane-side workloads on the parent tenant having an etcd
+  DataStore. Without it no KamajiControlPlane is ever created, Kamaji never
+  provisions -admin-kubeconfig, and rendering these Deployments would cause
+  the wait-for-kubeconfig init to CrashLoopBackOff indefinitely, consuming
+  the parent HelmRelease install timeout and triggering the very uninstall
+  remediation cycle this chart is supposed to avoid. Rendering them only
+  when $etcd is set keeps the HelmRelease Ready while flux retries on its
+  interval and picks up the DataStore as soon as the Tenant chart finishes.
+*/}}
+{{- if .Values._namespace.etcd }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}-cluster-autoscaler
+  labels:
+    app: {{ .Release.Name }}-cluster-autoscaler
+spec:
+  selector:
+    matchLabels:
+      app: {{ .Release.Name }}-cluster-autoscaler
+  replicas: 1
+  template:
+    metadata:
+      labels:
+        app: {{ .Release.Name }}-cluster-autoscaler
+        policy.cozystack.io/allow-to-apiserver: "true"
+    spec:
+      enableServiceLinks: false
+      tolerations:
+        - key: CriticalAddonsOnly
+          operator: Exists
+        - key: node-role.kubernetes.io/control-plane
+          operator: Exists
+          effect: "NoSchedule"
+      initContainers:
+      {{- include "kubernetes.waitForAdminKubeconfig" $ | nindent 6 }}
+      containers:
+      - image: "{{ $.Files.Get "images/cluster-autoscaler.tag" | trim }}"
+        name: cluster-autoscaler
+        resources:
+          limits:
+            cpu: 512m
+            memory: 512Mi
+          requests:
+            cpu: 125m
+            memory: 128Mi
+        command:
+        - /cluster-autoscaler
+        args:
+        - --cloud-provider=clusterapi
+        - --enforce-node-group-min-size=true
+        - --ignore-daemonsets-utilization=true
+        - --ignore-mirror-pods-utilization=true
+        - --scale-down-unneeded-time=30s
+        - --scan-interval=25s
+        - --kubeconfig=/etc/kubernetes/kubeconfig/super-admin.svc
+        - --clusterapi-cloud-config-authoritative
+        - --node-group-auto-discovery=clusterapi:namespace={{ .Release.Namespace }},clusterName={{ .Release.Name }}
+        volumeMounts:
+        - mountPath: /etc/kubernetes/kubeconfig
+          name: kubeconfig
+          readOnly: true
+      volumes:
+      - configMap:
+          name: {{ .Release.Name }}-cloud-config
+        name: cloud-config
+      - secret:
+          secretName: {{ .Release.Name }}-admin-kubeconfig
+          optional: true
+        name: kubeconfig
+      serviceAccountName: {{ .Release.Name }}-cluster-autoscaler
+      terminationGracePeriodSeconds: 10
+---
+kind: RoleBinding
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  name: {{ .Release.Name }}-cluster-autoscaler
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ .Release.Name }}-cluster-autoscaler
+subjects:
+- kind: ServiceAccount
+  name: {{ .Release.Name }}-cluster-autoscaler
+  namespace: {{ .Release.Namespace }}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ .Release.Name }}-cluster-autoscaler
+---
+kind: Role
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  name: {{ .Release.Name }}-cluster-autoscaler
+rules:
+  - apiGroups:
+    - cluster.x-k8s.io
+    resources:
+    - machinedeployments
+    - machinedeployments/scale
+    - machines
+    - machinesets
+    - machinepools
+    verbs:
+    - get
+    - list
+    - update
+    - watch
+  - apiGroups:
+    - infrastructure.cluster.x-k8s.io
+    resources:
+    - kubevirtmachinetemplates
+    verbs:
+    - get
+    - list
+    - update
+    - watch
+{{- end }}

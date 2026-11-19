@@ -1,0 +1,290 @@
+suite: harbor post-delete cleanup hook
+templates:
+  - templates/hooks/cleanup.yaml
+
+release:
+  name: harbor-test
+  namespace: tenant-root
+
+# The cleanup hook scopes its ACME solver sweep to this release's TLS host,
+# which defaults to "<release>.<_namespace.host>".
+#
+# The template renders a Job, a ServiceAccount, a Role and a RoleBinding, each
+# unique by kind, so every test names the one it wants instead of counting
+# positions. Document indices are assigned in template source order rather than
+# the kind-sorted order `helm template` prints, which makes them easy to get
+# wrong by reading the rendered output, and a document added ahead silently
+# shifts every later index onto the wrong object.
+set:
+  _namespace:
+    host: example.org
+
+tests:
+  - it: renders the cleanup Job as a post-delete hook
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - equal:
+          path: kind
+          value: Job
+      - equal:
+          path: metadata.name
+          value: harbor-test-cleanup
+      - equal:
+          path: metadata.annotations["helm.sh/hook"]
+          value: post-delete
+      - equal:
+          path: spec.template.spec.serviceAccountName
+          value: harbor-test-cleanup
+      # The script exits non-zero when a delete or a listing failed, so the Job
+      # can now fail. Under the Kubernetes default of 6 it would back off across
+      # seven pods for about ten minutes and outlast the hook timeout, and Helm
+      # would report that timeout instead of the hook's own error.
+      - equal:
+          path: spec.backoffLimit
+          value: 1
+      # Pinned exactly, because the whole point of the non-zero exit is that the
+      # failed Job survives to be read. Adding hook-failed here hands the Job
+      # straight back to Helm to delete on failure, destroying the only account
+      # of what was left behind — and until this assert existed, that one-line
+      # reversal left this chart's whole suite green, because nothing else here
+      # read the annotation.
+      - equal:
+          path: metadata.annotations["helm.sh/hook-delete-policy"]
+          value: before-hook-creation,hook-succeeded
+
+  - it: targets both kept PVCs (jobservice + trivy) via the shared release label and ACME objects
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      # The upstream Harbor subchart runs as the "<release>-system"
+      # HelmRelease. Its kept PVCs must be selected by release=<release>-system:
+      # jobservice carries it via "harbor.labels", and trivy's StatefulSet PVC
+      # carries it via "harbor.legacy.labels". The trivy PVC does NOT carry
+      # app.kubernetes.io/instance, so selecting on that label would silently
+      # miss trivy (which is enabled by default).
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: kubectl delete pvc[\s\S]*-l release=harbor-test-system
+      # Guard against regressing to the instance label, which misses trivy.
+      - notMatchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: app.kubernetes.io/instance=harbor-test-system
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: harbor-test-ingress-tls
+
+  - it: scopes the ACME solver sweep to this release's TLS host
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      # The solver sweep must be scoped to this release's host, not a
+      # namespace-wide label sweep, so sibling apps' in-flight challenges in
+      # the shared tenant namespace are never touched.
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: HOST="harbor-test\.example\.org"
+      # Challenges are filtered by .spec.dnsName == $HOST.
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: \@\.spec\.dnsName==.\$HOST
+      # Solver Ingresses are filtered by .spec.rules[0].host == $HOST.
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: \@\.spec\.rules\[0\]\.host==.\$HOST
+      # There must be NO namespace-wide blanket delete that targets every
+      # object carrying the http01-solver label. The label may still appear
+      # in the scoped `kubectl get ingress -l ...` selector, but it must
+      # never be used in a `kubectl delete` against the whole namespace.
+      - notMatchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: kubectl delete[^\n]*-l acme.cert-manager.io/http01-solver=true
+
+  - it: bounds the cleanup Job so a claim that will not go cannot hang the uninstall
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - equal:
+          path: spec.activeDeadlineSeconds
+          value: 270
+      - equal:
+          path: spec.template.spec.terminationGracePeriodSeconds
+          value: 10
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: '-l release=harbor-test-system --ignore-not-found --wait=true --timeout=120s'
+      - notMatchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: '--request-timeout='
+
+  - it: pins the cleanup image by digest and routes it through the images registry
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      # The image must be digest-pinned (immutable) rather than a moving tag,
+      # and must NOT hardcode docker.io so a mirrored/air-gapped registry can be
+      # prefixed via cozy-lib.image. Asserted by pattern (not an exact digest)
+      # so a Renovate tag/digest bump does not break the test.
+      - matchRegex:
+          path: spec.template.spec.containers[0].image
+          pattern: ^clastix/kubectl:v[0-9]+\.[0-9]+(\.[0-9]+)?@sha256:[0-9a-f]{64}$
+      - notMatchRegex:
+          path: spec.template.spec.containers[0].image
+          pattern: docker\.io
+
+  - it: prefixes the cleanup image with the cluster images registry when set
+    documentSelector:
+      path: kind
+      value: Job
+    set:
+      _cluster:
+        images-registry: registry.example.com
+    asserts:
+      # A mirrored / air-gapped install resolves the image from the internal
+      # registry; the digest pin is preserved.
+      - matchRegex:
+          path: spec.template.spec.containers[0].image
+          pattern: ^registry\.example\.com/clastix/kubectl:v[0-9]+\.[0-9]+(\.[0-9]+)?@sha256:[0-9a-f]{64}$
+
+  - it: leaves no leading slash when the images registry is empty (default)
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      # With images-registry defaulting to "", the rendered ref must still be a
+      # valid image reference (no leading "/") so a standard install resolves it.
+      # The "^clastix" anchor proves there is no leading slash and no registry.
+      - matchRegex:
+          path: spec.template.spec.containers[0].image
+          pattern: ^clastix/kubectl:v[0-9]+\.[0-9]+(\.[0-9]+)?@sha256:[0-9a-f]{64}$
+      - notMatchRegex:
+          path: spec.template.spec.containers[0].image
+          pattern: ^/
+
+  - it: does not emit a double slash when the images registry has a trailing slash
+    documentSelector:
+      path: kind
+      value: Job
+    set:
+      _cluster:
+        images-registry: registry.example.com/
+    asserts:
+      # A misconfigured registry with a trailing "/" must not yield
+      # "registry.example.com//clastix/..." — the helper trims it.
+      - matchRegex:
+          path: spec.template.spec.containers[0].image
+          pattern: ^registry\.example\.com/clastix/kubectl:v[0-9]+\.[0-9]+(\.[0-9]+)?@sha256:[0-9a-f]{64}$
+      - notMatchRegex:
+          path: spec.template.spec.containers[0].image
+          pattern: //
+
+  - it: sets resource requests and limits on the cleanup container
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].resources.requests.cpu
+          value: 10m
+      - equal:
+          path: spec.template.spec.containers[0].resources.requests.memory
+          value: 64Mi
+      - equal:
+          path: spec.template.spec.containers[0].resources.limits.cpu
+          value: 200m
+      - equal:
+          path: spec.template.spec.containers[0].resources.limits.memory
+          value: 128Mi
+
+  - it: creates a ServiceAccount for the cleanup job
+    documentSelector:
+      path: kind
+      value: ServiceAccount
+    asserts:
+      - equal:
+          path: kind
+          value: ServiceAccount
+      - equal:
+          path: metadata.name
+          value: harbor-test-cleanup
+
+  - it: grants RBAC for PVCs and cert-manager ACME resources
+    documentSelector:
+      path: kind
+      value: Role
+    asserts:
+      - equal:
+          path: kind
+          value: Role
+      - equal:
+          path: metadata.name
+          value: harbor-test-cleanup
+      - contains:
+          path: rules
+          content:
+            apiGroups: [""]
+            resources: ["persistentvolumeclaims"]
+            verbs: ["get", "list", "watch", "delete"]
+      - contains:
+          path: rules
+          content:
+            apiGroups: ["cert-manager.io"]
+            resources: ["certificates"]
+            verbs: ["get", "list", "watch", "delete"]
+      # Only "challenges" are granted: the host-scoped sweep lists/deletes
+      # them, while Orders are cascade-deleted by cert-manager itself when the
+      # Certificate is removed, so the hook needs no RBAC for orders.
+      - contains:
+          path: rules
+          content:
+            apiGroups: ["acme.cert-manager.io"]
+            resources: ["challenges"]
+            verbs: ["get", "list", "watch", "delete"]
+      - notContains:
+          path: rules
+          content:
+            apiGroups: ["acme.cert-manager.io"]
+            resources: ["orders", "challenges"]
+            verbs: ["get", "list", "watch", "delete"]
+      # We list+delete orphaned http01 solver Ingresses by name, so we need
+      # get/list/delete on networking.k8s.io ingresses.
+      - contains:
+          path: rules
+          content:
+            apiGroups: ["networking.k8s.io"]
+            resources: ["ingresses"]
+            verbs: ["get", "list", "watch", "delete"]
+      # The hook must not grant services/pods: solver Pods/Services cascade
+      # from the Challenge/Certificate and are never deleted directly.
+      - notContains:
+          path: rules
+          content:
+            apiGroups: [""]
+            resources: ["services"]
+            verbs: ["get", "list", "watch", "delete"]
+      - notContains:
+          path: rules
+          content:
+            apiGroups: [""]
+            resources: ["pods"]
+            verbs: ["get", "list", "watch", "delete"]
+
+  - it: binds the Role to the cleanup ServiceAccount
+    documentSelector:
+      path: kind
+      value: RoleBinding
+    asserts:
+      - equal:
+          path: kind
+          value: RoleBinding
+      - equal:
+          path: roleRef.name
+          value: harbor-test-cleanup
+      - equal:
+          path: subjects[0].name
+          value: harbor-test-cleanup

@@ -1,0 +1,162 @@
+{{- $vmName := include "virtual-machine.fullname" . -}}
+{{- $namespace := .Release.Namespace -}}
+{{- $jobName := printf "%s-update-hook" .Release.Name | trunc 63 | trimSuffix "-" -}}
+
+{{- $existingVM := lookup "kubevirt.io/v1" "VirtualMachine" $namespace $vmName -}}
+{{- $existingService := lookup "v1" "Service" $namespace $vmName -}}
+
+{{- /* The effective type, not the raw value: a VM switched from an instance
+       type to a complete resources block renders no matcher any more, and the
+       hook has to strip the one already on the object. Reading .Values
+       directly here would see the leftover instanceType, skip the patch, and
+       leave spec.instancetype.revisionName in place for KubeVirt to keep
+       applying against the domain resources Helm just wrote. */}}
+{{- $instanceType := include "virtual-machine.effectiveInstanceType" . -}}
+{{- $instanceProfile := .Values.instanceProfile | default "" -}}
+{{- $desiredServiceType := ternary "LoadBalancer" "ClusterIP" .Values.external -}}
+
+{{- $needUpdateType := false -}}
+{{- $needUpdateProfile := false -}}
+{{- $needRecreateService := false -}}
+{{- $needRemoveInstanceType := false -}}
+{{- $needRemoveCustomResources := false -}}
+
+{{- $existingHasInstanceType := and $existingVM $existingVM.spec.instancetype -}}
+{{- if and $existingHasInstanceType (not $instanceType) -}}
+  {{- $needRemoveInstanceType = true -}}
+{{- else if and $existingHasInstanceType $instanceType -}}
+  {{- if not (eq $existingVM.spec.instancetype.name $instanceType) -}}
+    {{- $needUpdateType = true -}}
+  {{- end -}}
+{{- else if and $existingVM (not $existingHasInstanceType) $instanceType -}}
+  {{- $needRemoveCustomResources = true -}}
+{{- end -}}
+
+{{- if and $existingVM $existingVM.spec.preference $instanceProfile -}}
+  {{- if not (eq $existingVM.spec.preference.name $instanceProfile) -}}
+    {{- $needUpdateProfile = true -}}
+  {{- end -}}
+{{- end -}}
+
+{{- if $existingService -}}
+  {{- $currentServiceType := $existingService.spec.type -}}
+  {{- if ne $currentServiceType $desiredServiceType -}}
+    {{- $needRecreateService = true -}}
+  {{- end -}}
+{{- end -}}
+
+{{- if or $needUpdateType $needUpdateProfile $needRecreateService $needRemoveInstanceType $needRemoveCustomResources }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: "{{ $jobName }}"
+  annotations:
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-weight: "0"
+    helm.sh/hook-delete-policy: hook-succeeded,before-hook-creation
+spec:
+  template:
+    metadata:
+      labels:
+        app: "{{ $jobName }}"
+        policy.cozystack.io/allow-to-apiserver: "true"
+    spec:
+      serviceAccountName: {{ $.Release.Name }}-update-hook
+      restartPolicy: Never
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: update-resources
+          image: docker.io/alpine/k8s:1.36.2
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              memory: "16Mi"
+              cpu: "10m"
+            limits:
+              memory: "128Mi"
+              cpu: "100m"
+          command: ["sh", "-exc"]
+          args:
+            - |
+              {{- if $needUpdateType }}
+              echo "Patching VirtualMachine for instancetype update..."
+              kubectl patch virtualmachines.kubevirt.io {{ $vmName }} -n {{ $namespace }} \
+                --type merge \
+                -p '{"spec":{"instancetype":{"name": "{{ $instanceType }}", "revisionName": null}}}'
+              {{- end }}
+
+              {{- if $needUpdateProfile }}
+              echo "Patching VirtualMachine for preference update..."
+              kubectl patch virtualmachines.kubevirt.io {{ $vmName }} -n {{ $namespace }} \
+                --type merge \
+                -p '{"spec":{"preference":{"name": "{{ $instanceProfile }}", "revisionName": null}}}'
+              {{- end }}
+
+              {{- if $needRemoveInstanceType }}
+              echo "Removing instancetype from VM (switching to custom resources)..."
+              kubectl patch virtualmachines.kubevirt.io {{ $vmName }} -n {{ $namespace }} \
+                --type merge \
+                -p '{"spec":{"instancetype":null{{- if not $instanceProfile }},"preference":null{{- end }},"template":{"spec":{"domain":{{ include "virtual-machine.domainResources" . }}}}}}'
+              {{- end }}
+
+              {{- if $needRemoveCustomResources }}
+              echo "Removing custom CPU/memory from domain (switching to instancetype)..."
+              kubectl patch virtualmachines.kubevirt.io {{ $vmName }} -n {{ $namespace }} \
+                --type merge \
+                -p '{"spec":{"instancetype":{"name":"{{ $instanceType }}","revisionName":null},"template":{"spec":{"domain":{"cpu":null,"resources":null}}}}}'
+              {{- end }}
+
+              {{- if $needRecreateService }}
+              echo "Removing Service..."
+              kubectl delete service --cascade=orphan -n {{ $namespace }} {{ $vmName }}
+              {{- end }}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ $.Release.Name }}-update-hook
+  annotations:
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-weight: "-5"
+    helm.sh/hook-delete-policy: before-hook-creation
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $.Release.Name }}-update-hook
+  annotations:
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-weight: "-5"
+    helm.sh/hook-delete-policy: before-hook-creation
+rules:
+  - apiGroups: ["kubevirt.io"]
+    resources: ["virtualmachines"]
+    verbs: ["patch", "get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["services"]
+    resourceNames: ["{{ $vmName }}"]
+    verbs: ["delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $.Release.Name }}-update-hook
+  annotations:
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-weight: "-5"
+    helm.sh/hook-delete-policy: before-hook-creation
+subjects:
+  - kind: ServiceAccount
+    name: {{ $.Release.Name }}-update-hook
+roleRef:
+  kind: Role
+  name: {{ $.Release.Name }}-update-hook
+  apiGroup: rbac.authorization.k8s.io
+{{- end }}

@@ -1,0 +1,126 @@
+## @name {string} - Kafka cluster name. The KRaft controller pods are named `kafka-<name>-c-<hash>-<id>` with an 8-character hash, and that pod hostname must fit the 63-character DNS-1123 label limit even for the smallest cluster.
+## @maxLength 44
+
+##
+## @section Common parameters
+##
+
+## @param {bool} external - Enable external access from outside the cluster.
+external: false
+
+## @typedef {struct} TLS - TLS configuration for the external listener.
+## @field {*bool} enabled - Enable TLS on the external listener. When unset, inherits the value of `external` (TLS is on when external access is enabled). Warning: setting this to false while external is true exposes Kafka over plaintext on a public IP via LoadBalancer. Strimzi does not provide authentication on this listener unless SCRAM, mTLS, or OAuth is separately configured. Use only in controlled networks.
+
+## @param {TLS} tls - TLS configuration. Strimzi manages the cluster PKI automatically (no cert-manager is involved for this chart): the operator auto-creates `<release>-cluster-ca-cert` and `<release>-clients-ca-cert` secrets, both exposed for client trust setup. The internal TLS listener on 9093 is always on; this toggle only controls the external listener on 9094.
+tls: {}
+
+## @enum {string} Version - Kafka version to deploy.
+## @value v4.3
+## @value v4.2
+
+## @param {Version} version - Kafka version to deploy. Upgrade-only: once a cluster's KRaft metadata is at a given version, Strimzi refuses an in-place downgrade, so lowering this on a running cluster (e.g. v4.3 back to v4.2) leaves the Kafka CR stuck in a reconcile error. Pick the target version at creation and only ever raise it.
+version: "v4.3"
+
+##
+## @section Application-specific parameters
+##
+
+## @typedef {struct} Topic - Topic configuration.
+## @field {string} name - Topic name.
+## @field {int} partitions - Number of partitions.
+## @field {int} replicas - Number of replicas.
+## @field {*object} [config] - Topic configuration.
+
+## @param {[]Topic} topics - Topics configuration.
+topics: []
+## Example:
+## topics:
+##   - name: Results
+##     partitions: 1
+##     replicas: 3
+##     config:
+##       min.insync.replicas: 2
+##   - name: Orders
+##     config:
+##       cleanup.policy: compact
+##       segment.ms: 3600000
+##       max.compaction.lag.ms: 5400000
+##       min.insync.replicas: 2
+##     partitions: 1
+##     replicas: 3
+
+##
+## @section Kafka configuration
+##
+
+## @typedef {struct} Resources - Explicit CPU and memory configuration for each replica.
+## @field {quantity} [cpu] - CPU available to each replica.
+## @field {quantity} [memory] - Memory (RAM) available to each replica.
+
+## @enum {string} ResourcesPreset - Default sizing preset.
+## @value t1.nano
+## @value t1.micro
+## @value t1.small
+## @value t1.medium
+## @value t1.large
+## @value t1.xlarge
+## @value t1.2xlarge
+## @value t1.4xlarge
+## @value c1.nano
+## @value c1.micro
+## @value c1.small
+## @value c1.medium
+## @value c1.large
+## @value c1.xlarge
+## @value c1.2xlarge
+## @value c1.4xlarge
+## @value s1.nano
+## @value s1.micro
+## @value s1.small
+## @value s1.medium
+## @value s1.large
+## @value s1.xlarge
+## @value s1.2xlarge
+## @value s1.4xlarge
+## @value u1.nano
+## @value u1.micro
+## @value u1.small
+## @value u1.medium
+## @value u1.large
+## @value u1.xlarge
+## @value u1.2xlarge
+## @value u1.4xlarge
+## @value m1.nano
+## @value m1.micro
+## @value m1.small
+## @value m1.medium
+## @value m1.large
+## @value m1.xlarge
+## @value m1.2xlarge
+## @value m1.4xlarge
+## @value nano
+## @value micro
+## @value small
+## @value medium
+## @value large
+## @value xlarge
+## @value 2xlarge
+
+## @typedef {struct} Kafka - Kafka configuration.
+## @field {int} replicas - Number of Kafka replicas.
+## @field {Resources} [resources] - Explicit CPU and memory configuration. When omitted, the preset defined in `resourcesPreset` is applied.
+## @field {ResourcesPreset} resourcesPreset - Default sizing preset used when `resources` is omitted.
+## @field {quantity} size - Persistent Volume size for Kafka.
+## @field {string} storageClass - StorageClass used to store the Kafka data.
+## @immutable
+## @x-cozystack-options {source: storageclass}
+## @field {quantity} [controllerStorageSize] - Persistent Volume size for KRaft controller metadata.
+
+## @param {Kafka} kafka - Kafka configuration.
+kafka:
+  replicas: 3
+  resources: {}
+  resourcesPreset: "c1.small"
+  size: 10Gi
+  storageClass: ""
+  controllerStorageSize: 5Gi

@@ -1,0 +1,26 @@
+# Every path whose change can change the result of
+# `go test ./cmd/backport-batch/...`. The plan job in
+# .github/workflows/pull-requests.yaml runs those tests when, and only when, the
+# pull request touches one of these paths.
+#
+# One repository-relative path per line. A trailing slash names a directory and
+# matches everything below it; anything else matches that file alone. Blank lines
+# and lines starting with # are ignored.
+#
+# TestInputsListed in inputs_test.go keeps this list in step with the code: it
+# fails when the tests' in-repo package dependencies (go list -deps -test) or the
+# docs pages they read are missing from it.
+
+cmd/backport-batch/
+go.mod
+go.sum
+
+# In-repo packages the tool and its tests import.
+internal/apigate/
+pkg/apis/apps/v1alpha1/
+pkg/apis/apps/validation/
+pkg/config/
+
+# Pages the tests read from the tree.
+docs/release/backports.md
+docs/release/backport-tasks/

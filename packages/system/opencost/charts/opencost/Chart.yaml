@@ -1,0 +1,19 @@
+apiVersion: v2
+appVersion: 1.120.3
+description: OpenCost and OpenCost UI
+home: https://github.com/opencost/opencost-helm-chart
+keywords:
+- cloud-costs
+- cost-optimization
+- finops
+- monitoring
+- opencost
+maintainers:
+- name: jessegoodier
+- name: toscott
+- name: mittal-ishaan
+- email: rafa@stormforge.io
+  name: brito-rafa
+name: opencost
+type: application
+version: 2.5.23

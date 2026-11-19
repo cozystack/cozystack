@@ -1,0 +1,19 @@
+suite: cozy-opencost chart rendering invariants
+release:
+  name: opencost
+  namespace: cozy-opencost
+tests:
+  - it: pins the opencost image and wires the cluster prometheus endpoint
+    template: charts/opencost/templates/deployment.yaml
+    documentSelector:
+      path: kind
+      value: Deployment
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].image
+          pattern: 'opencost/opencost:1\.120\.3'
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: PROMETHEUS_SERVER_ENDPOINT
+            value: "http://vmselect-shortterm.tenant-root.svc:8481/select/0/prometheus"

@@ -1,0 +1,31 @@
+{{- if .Values.deploy }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    app: {{ .Values.name }}
+  name: {{ .Values.name }}
+  namespace: {{ .Release.Namespace | quote }}
+spec:
+  type: ClusterIP
+  ports:
+  - name: tftp
+    port: 69
+    targetPort: 69
+    protocol: UDP
+  - name: http
+    port: {{ .Values.http.port }}
+    targetPort: {{ .Values.http.port }}
+    protocol: TCP
+  - name: syslog
+    port: {{ .Values.syslog.port }}
+    targetPort: {{ .Values.syslog.port }}
+    protocol: UDP
+  - name: dhcp
+    port: 67
+    targetPort: 67
+    protocol: UDP
+  selector:
+    app: {{ .Values.name }}
+{{- end }}

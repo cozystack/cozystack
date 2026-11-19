@@ -1,0 +1,54 @@
+{{ if and (not .Values.currentNamespaceOnly) .Values.webhook.enabled .Values.webhook.cert.certManager.enabled }}
+{{ if not .Values.webhook.cert.certManager.issuerRef }}
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: {{ include "mariadb-operator.fullname" . }}-selfsigned-issuer
+  labels:
+    {{ include "mariadb-operator-webhook.labels" . | nindent 4 }}
+spec:
+  selfSigned: {}
+{{ end }}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ include "mariadb-operator.fullname" . }}-webhook-cert
+  labels:
+    {{ include "mariadb-operator-webhook.labels" . | nindent 4 }}
+spec:
+  commonName: {{ include "mariadb-operator.fullname" . }}-webhook.{{ .Release.Namespace }}.svc
+  dnsNames:
+    - {{ include "mariadb-operator.fullname" . }}-webhook.{{ .Release.Namespace }}.svc.{{ .Values.clusterName }}
+    - {{ include "mariadb-operator.fullname" . }}-webhook.{{ .Release.Namespace }}.svc
+    - {{ include "mariadb-operator.fullname" . }}-webhook.{{ .Release.Namespace }}
+    - {{ include "mariadb-operator.fullname" . }}-webhook
+  issuerRef:
+  {{- if .Values.webhook.cert.certManager.issuerRef -}}
+    {{ toYaml .Values.webhook.cert.certManager.issuerRef | nindent 4 }}
+  {{- else }}
+    kind: Issuer
+    name: {{ include "mariadb-operator.fullname" . }}-selfsigned-issuer
+  {{- end }}
+  {{- with .Values.webhook.cert.certManager.duration }}
+  duration: {{ . | quote }}
+  {{- end }}
+  {{- with .Values.webhook.cert.certManager.renewBefore }}
+  renewBefore: {{ . | quote }}
+  {{- end }}
+  {{- with .Values.webhook.cert.certManager.revisionHistoryLimit }}
+  revisionHistoryLimit: {{ . }}
+  {{- end }}
+  secretName: {{ include "mariadb-operator.fullname" . }}-webhook-cert
+  {{- if or (.Values.webhook.cert.secretLabels) (.Values.webhook.cert.secretAnnotations) }}
+  secretTemplate:
+    {{- with .Values.webhook.cert.secretLabels }}
+    labels:
+      {{- toYaml . | nindent 6 }}
+    {{- end }}
+    {{- with .Values.webhook.cert.secretAnnotations }}
+    annotations:
+      {{- toYaml . | nindent 6 }}
+    {{- end }}
+  {{- end }}
+{{- end }}

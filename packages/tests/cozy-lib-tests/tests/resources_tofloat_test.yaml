@@ -1,0 +1,100 @@
+# ./tests/resources_tofloat_test.yaml
+suite: resources toFloat helper
+
+# The helper turns a Kubernetes quantity into a number for arithmetic and for
+# comparison. A suffix it does not know is not an error: the unit letter stays
+# on the string, `float64` yields zero for it, and the caller divides or
+# compares that zero without noticing. So the pin here is the suffix grammar
+# itself, one value per form the quantity syntax admits.
+
+templates:
+  - templates/tests/resources-tofloat.yaml
+
+tests:
+  - it: converts every suffix the quantity grammar admits
+    values:
+      - resources_tofloat_values.yaml
+
+    release:
+      name: myrelease
+      namespace: default
+
+    asserts:
+      - equal:
+          path: data.bareInteger
+          value: "2"
+
+      - equal:
+          path: data.bareDecimal
+          value: "1.5"
+
+      - equal:
+          path: data.milli
+          value: "0.5"
+
+      # Micro and nano are the two the helper used to drop, which made every
+      # value in that range convert to zero.
+      - equal:
+          path: data.micro
+          value: "0.0001"
+
+      - equal:
+          path: data.nano
+          value: "2.5e-07"
+
+      - equal:
+          path: data.kilo
+          value: "2000"
+
+      - equal:
+          path: data.mega
+          value: "3e+06"
+
+      - equal:
+          path: data.giga
+          value: "3e+09"
+
+      - equal:
+          path: data.tera
+          value: "2e+12"
+
+      - equal:
+          path: data.peta
+          value: "1e+15"
+
+      - equal:
+          path: data.exa
+          value: "1e+18"
+
+      - equal:
+          path: data.kibi
+          value: "4096"
+
+      - equal:
+          path: data.mebi
+          value: "2.68435456e+08"
+
+      - equal:
+          path: data.gibi
+          value: "2.147483648e+09"
+
+      - equal:
+          path: data.tebi
+          value: "2.199023255552e+12"
+
+      - equal:
+          path: data.pebi
+          value: "1.125899906842624e+15"
+
+      # 2^60 exactly. The shortest decimal that round-trips to that float64 is
+      # what gets printed, which is why this one loses its trailing digits and
+      # the smaller binary suffixes above do not.
+      - equal:
+          path: data.exbi
+          value: "1.152921504606847e+18"
+
+      # No suffix at all: the exponent is part of the number and `float64`
+      # reads it directly.
+      - equal:
+          path: data.decimalExponent
+          value: "2000"

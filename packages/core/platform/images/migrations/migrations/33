@@ -1,0 +1,30 @@
+#!/bin/sh
+# Migration 33 --> 34
+# Clean up orphaned system -rd HelmReleases left after application renames.
+#
+# These HelmReleases reference ExternalArtifacts that no longer exist:
+#   ferretdb-rd   -> replaced by mongodb-rd
+#   mysql-rd      -> replaced by mariadb-rd (migration 28 handled user HRs only)
+#   virtual-machine-rd -> replaced by vm-disk-rd + vm-instance-rd (migration 29 handled user HRs only)
+#
+# Idempotent: safe to re-run.
+
+set -euo pipefail
+
+echo "=== Cleaning up orphaned -rd HelmReleases ==="
+
+for hr_name in ferretdb-rd mysql-rd virtual-machine-rd; do
+  if kubectl -n cozy-system get hr "$hr_name" --no-headers 2>/dev/null | grep -q .; then
+    echo "  [DELETE] hr/${hr_name}"
+    kubectl -n cozy-system delete hr "$hr_name" --wait=false
+  else
+    echo "  [SKIP] hr/${hr_name} already gone"
+  fi
+  kubectl -n cozy-system delete secret -l "owner=helm,name=${hr_name}" --ignore-not-found
+done
+
+echo "=== Cleanup complete ==="
+
+# Stamp version
+kubectl create configmap -n cozy-system cozystack-version \
+  --from-literal=version=34 --dry-run=client -o yaml | kubectl apply -f-

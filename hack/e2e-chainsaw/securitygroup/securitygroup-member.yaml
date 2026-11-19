@@ -1,0 +1,8 @@
+apiVersion: sdn.cozystack.io/v1alpha1
+kind: SecurityGroup
+metadata:
+  name: sg-member-e2e
+spec:
+  attachments:
+  - kind: Postgres
+    name: sg-member-app

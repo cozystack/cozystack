@@ -1,0 +1,47 @@
+{{- if .Values.sftp.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "seaweedfs.componentName" (list . "sftp") }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/name: {{ template "seaweedfs.name" . }}
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: sftp
+    helm.sh/chart: {{ .Chart.Name }}-{{ .Chart.Version | replace "+" "_" }}
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+{{- if .Values.sftp.annotations }}
+  annotations:
+    {{- toYaml .Values.sftp.annotations | nindent 4 }}
+{{- end }}
+spec:
+  {{- $serviceType := .Values.sftp.service.type }}
+  {{- $nodePorts := dict }}
+  {{- if or (eq $serviceType "NodePort") (eq $serviceType "LoadBalancer") }}
+  {{- $nodePorts = .Values.sftp.service.nodePorts | default dict }}
+  {{- end }}
+  type: {{ $serviceType }}
+  {{- include "seaweedfs.service.loadBalancerFields" .Values.sftp.service }}
+  internalTrafficPolicy: {{ .Values.sftp.internalTrafficPolicy | default "Cluster" }}
+  ports:
+  - name: "swfs-sftp"
+    port: {{ .Values.sftp.port }}
+    targetPort: {{ .Values.sftp.port }}
+{{- if $nodePorts.sftp }}
+    nodePort: {{ $nodePorts.sftp }}
+{{- end }}
+    protocol: TCP
+{{- if .Values.sftp.metricsPort }}
+  - name: "metrics"
+    port: {{ .Values.sftp.metricsPort }}
+    targetPort: {{ .Values.sftp.metricsPort }}
+{{- if $nodePorts.metrics }}
+    nodePort: {{ $nodePorts.metrics }}
+{{- end }}
+    protocol: TCP
+{{- end }}
+  selector:
+    app.kubernetes.io/name: {{ template "seaweedfs.name" . }}
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: sftp
+{{- end }}

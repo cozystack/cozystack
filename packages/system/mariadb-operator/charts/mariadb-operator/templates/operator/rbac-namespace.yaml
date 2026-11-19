@@ -1,0 +1,255 @@
+{{- if and .Values.currentNamespaceOnly .Values.rbac.enabled -}}
+{{ $fullName := include "mariadb-operator.fullname" . }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $fullName }}
+rules:
+- apiGroups:
+  - ""
+  resources:
+  - configmaps
+  verbs:
+  - get
+  - list
+  - watch
+  - create
+  - update
+  - patch
+  - delete
+- apiGroups:
+  - coordination.k8s.io
+  resources:
+  - leases
+  verbs:
+  - get
+  - list
+  - watch
+  - create
+  - update
+  - patch
+  - delete
+- apiGroups:
+  - ""
+  resources:
+  - events
+  verbs:
+  - create
+  - patch
+- apiGroups:
+  - ""
+  resources:
+  - events
+  - secrets
+  - serviceaccounts
+  - services
+  verbs:
+  - create
+  - list
+  - patch
+  - watch
+- apiGroups:
+  - ""
+  resources:
+  - persistentvolumeclaims
+  verbs:
+  - create
+  - delete
+  - deletecollection
+  - list
+  - patch
+  - watch
+- apiGroups:
+  - ""
+  resources:
+  - pods
+  verbs:
+  - delete
+  - get
+  - list
+  - watch
+  - patch
+- apiGroups:
+  - ""
+  resources:
+  - pods/log
+  verbs:
+  - get
+- apiGroups:
+  - apps
+  resources:
+  - deployments
+  verbs:
+  - create
+  - list
+  - patch
+  - watch
+- apiGroups:
+  - apps
+  resources:
+  - statefulsets
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - watch
+- apiGroups:
+  - batch
+  resources:
+  - cronjobs
+  verbs:
+  - create
+  - list
+  - patch
+  - watch
+- apiGroups:
+  - batch
+  resources:
+  - jobs
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - watch
+- apiGroups:
+  - cert-manager.io
+  resources:
+  - certificates
+  verbs:
+  - create
+  - list
+  - patch
+  - watch
+- apiGroups:
+  - discovery.k8s.io
+  resources:
+  - endpointslices
+  - endpointslices/restricted
+  verbs:
+  - create
+  - get
+  - list
+  - patch
+  - watch
+- apiGroups:
+  - k8s.mariadb.com
+  resources:
+  - backups
+  - connections
+  - databases
+  - grants
+  - mariadbs
+  - externalmariadbs
+  - maxscales
+  - physicalbackups
+  - restores
+  - sqljobs
+  - users
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - k8s.mariadb.com
+  resources:
+  - backups/finalizers
+  - connections/finalizers
+  - databases/finalizers
+  - grants/finalizers
+  - mariadbs/finalizers
+  - externalmariadbs/finalizers
+  - maxscales/finalizers
+  - physicalbackups/finalizers
+  - restores/finalizers
+  - sqljobs/finalizers
+  - users/finalizers
+  verbs:
+  - update
+- apiGroups:
+  - k8s.mariadb.com
+  resources:
+  - backups/status
+  - connections/status
+  - databases/status
+  - grants/status
+  - mariadbs/status
+  - externalmariadbs/status
+  - maxscales/status
+  - physicalbackups/status
+  - restores/status
+  - sqljobs/status
+  - users/status
+  verbs:
+  - get
+  - patch
+  - update
+- apiGroups:
+  - k8s.mariadb.com
+  resources:
+  - maxscale
+  verbs:
+  - create
+  - list
+  - patch
+  - watch
+- apiGroups:
+  - monitoring.coreos.com
+  resources:
+  - servicemonitors
+  verbs:
+  - create
+  - list
+  - patch
+  - watch
+- apiGroups:
+  - policy
+  resources:
+  - poddisruptionbudgets
+  verbs:
+  - create
+  - list
+  - patch
+  - watch
+- apiGroups:
+  - rbac.authorization.k8s.io
+  resources:
+  - rolebindings
+  - roles
+  verbs:
+  - create
+  - list
+  - patch
+  - watch
+- apiGroups:
+  - snapshot.storage.k8s.io
+  resources:
+  - volumesnapshots
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - watch
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $fullName }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ $fullName }}
+subjects:
+- kind: ServiceAccount
+  name: {{ include "mariadb-operator.serviceAccountName" . }}
+  namespace: {{ .Release.Namespace }}
+{{- end }}

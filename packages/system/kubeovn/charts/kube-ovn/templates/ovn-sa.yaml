@@ -1,0 +1,73 @@
+{{- /*
+ServiceAccounts. Partitioned by installMode:
+- ovn          : used by kube-ovn-controller / ic-controller   → data plane
+- ovn-ovs      : used by ovn-central AND ovs-ovn               → both planes
+- kube-ovn-cni : used by kube-ovn-cni DaemonSet                → data plane
+- kube-ovn-app : used by kube-ovn-monitor / kube-ovn-pinger    → data plane
+*/}}
+{{- if include "kubeovn.renderDataPlane" . }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: ovn
+  namespace: {{ .Values.namespace }}
+automountServiceAccountToken: false
+{{-  if .Values.global.registry.imagePullSecrets }}
+imagePullSecrets:
+{{- range $index, $secret := .Values.global.registry.imagePullSecrets }}
+{{- if $secret }}
+- name: {{ $secret | quote}}
+{{- end }}
+{{- end }}
+{{- end }}
+
+---
+{{- end }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: ovn-ovs
+  namespace: {{ .Values.namespace }}
+automountServiceAccountToken: false
+{{-  if .Values.global.registry.imagePullSecrets }}
+imagePullSecrets:
+{{- range $index, $secret := .Values.global.registry.imagePullSecrets }}
+{{- if $secret }}
+- name: {{ $secret | quote}}
+{{- end }}
+{{- end }}
+{{- end }}
+
+{{- if include "kubeovn.renderDataPlane" . }}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: kube-ovn-cni
+  namespace: {{ .Values.namespace }}
+automountServiceAccountToken: false
+{{-  if .Values.global.registry.imagePullSecrets }}
+imagePullSecrets:
+{{- range $index, $secret := .Values.global.registry.imagePullSecrets }}
+{{- if $secret }}
+- name: {{ $secret | quote}}
+{{- end }}
+{{- end }}
+{{- end }}
+
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: kube-ovn-app
+  namespace: {{ .Values.namespace }}
+automountServiceAccountToken: false
+{{-  if .Values.global.registry.imagePullSecrets }}
+imagePullSecrets:
+{{- range $index, $secret := .Values.global.registry.imagePullSecrets }}
+{{- if $secret }}
+- name: {{ $secret | quote}}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- end }}

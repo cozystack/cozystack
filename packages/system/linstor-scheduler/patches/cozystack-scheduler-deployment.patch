@@ -1,0 +1,35 @@
+# Cozystack downstream customizations to the linstor-scheduler Deployment.
+# Both edits touch the same file and are deliberately kept in one patch:
+# splitting them into two patches on deployment.yaml would create fragile
+# line-offset coupling between the hunks.
+#
+#   (a) Add the pod label 'app.kubernetes.io/component: scheduler' so the
+#       wrapper chart's templates/extender-service.yaml can select the
+#       scheduler pods by that label.
+#   (b) Derive the kube-scheduler image tag from the stripped kubeVersion
+#       helper instead of raw .Capabilities.KubeVersion.Version, so a
+#       distribution suffix (e.g. v1.31.0+k3s1) does not resolve to a
+#       non-existent registry.k8s.io/kube-scheduler image tag.
+#
+# Chart source: https://piraeus.io/helm-charts (linstor-scheduler 0.3.1)
+diff --git a/packages/system/linstor-scheduler/charts/linstor-scheduler/templates/deployment.yaml b/packages/system/linstor-scheduler/charts/linstor-scheduler/templates/deployment.yaml
+index 49898b8..289021f 100644
+--- a/packages/system/linstor-scheduler/charts/linstor-scheduler/templates/deployment.yaml
++++ b/packages/system/linstor-scheduler/charts/linstor-scheduler/templates/deployment.yaml
+@@ -20,6 +20,7 @@ spec:
+       {{- end }}
+       labels:
+         {{- include "linstor-scheduler.selectorLabels" . | nindent 8 }}
++        app.kubernetes.io/component: scheduler
+     spec:
+       {{- with .Values.imagePullSecrets }}
+       imagePullSecrets:
+@@ -30,7 +31,7 @@ spec:
+         {{- toYaml .Values.podSecurityContext | nindent 8 }}
+       containers:
+         - name: kube-scheduler
+-          image: "{{ .Values.scheduler.image.repository }}:{{ .Values.scheduler.image.tag | default .Capabilities.KubeVersion.Version }}"
++          image: "{{ .Values.scheduler.image.repository }}:{{ .Values.scheduler.image.tag | default (include "linstor-scheduler.kubeVersion" .) }}"
+           securityContext:
+             {{- toYaml .Values.scheduler.securityContext | nindent 12 }}
+           command:

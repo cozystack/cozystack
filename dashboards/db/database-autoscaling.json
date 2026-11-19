@@ -1,0 +1,93 @@
+{
+  "title": "Database Autoscaling",
+  "uid": "cozy-db-autoscaling",
+  "tags": ["cozystack", "database", "autoscaling"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "time": { "from": "now-6h", "to": "now" },
+  "templating": {
+    "list": [
+      {
+        "current": { "selected": false, "text": "default", "value": "default" },
+        "hide": 0,
+        "includeAll": false,
+        "label": "Datasource",
+        "multi": false,
+        "name": "ds_prometheus",
+        "options": [],
+        "query": "prometheus",
+        "queryValue": "",
+        "refresh": 1,
+        "regex": "",
+        "skipUrlSync": false,
+        "type": "datasource"
+      },
+      {
+        "name": "namespace",
+        "type": "query",
+        "datasource": { "type": "prometheus", "uid": "${ds_prometheus}" },
+        "query": "label_values(kube_horizontalpodautoscaler_status_current_replicas{horizontalpodautoscaler=~\"keda-hpa-.*\"}, namespace)",
+        "includeAll": true,
+        "multi": true
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "title": "Desired vs current replicas",
+      "description": "Live HPA actuation, per KEDA HPA (keda-hpa-<cluster>). In dry-run / transition (ScaledObject paused in both directions) the HPA's desiredReplicas is frozen to currentReplicas, so the two lines coincide — read the recommendation from the matching read-load panel (connections or CPU) instead: desired = 1 + ceil(load / target), clamped to [minReplicas..maxReplicas] (floor = max(minReplicas, maxSyncReplicas+1, 2)).",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${ds_prometheus}" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "targets": [
+        { "datasource": { "type": "prometheus", "uid": "${ds_prometheus}" }, "expr": "kube_horizontalpodautoscaler_status_current_replicas{horizontalpodautoscaler=~\"keda-hpa-.*\",namespace=~\"$namespace\"}", "legendFormat": "current {{namespace}}/{{horizontalpodautoscaler}}" },
+        { "datasource": { "type": "prometheus", "uid": "${ds_prometheus}" }, "expr": "kube_horizontalpodautoscaler_status_desired_replicas{horizontalpodautoscaler=~\"keda-hpa-.*\",namespace=~\"$namespace\"}", "legendFormat": "desired {{namespace}}/{{horizontalpodautoscaler}}" }
+      ]
+    },
+    {
+      "id": 2,
+      "title": "Active read connections (replicas, per cluster)",
+      "description": "Replica-scoped active connections per cluster — the ReadConnections autoscaler input. For a cluster on metric: ReadConnections the recommendation is desired = 1 + ceil(this / target), clamped to [minReplicas..maxReplicas] (floor = max(minReplicas, maxSyncReplicas+1, 2)); CPU-mode clusters read the 'Replica CPU' panel instead. Restricted to standby pods via the same replica join as the ScaledObject query and scoped per cluster (label_cnpg_io_cluster), so it also surfaces the recommendation in dry-run, where panel 1's desired line is frozen to current.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${ds_prometheus}" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "targets": [
+        { "datasource": { "type": "prometheus", "uid": "${ds_prometheus}" }, "expr": "sum by (namespace, label_cnpg_io_cluster) (cnpg_backends_total{state=\"active\",namespace=~\"$namespace\"} * on(namespace,pod) group_left(label_cnpg_io_cluster) kube_pod_labels{label_cnpg_io_cluster!=\"\",label_cnpg_io_instance_role=\"replica\",namespace=~\"$namespace\"})", "legendFormat": "{{namespace}}/{{label_cnpg_io_cluster}}" }
+      ]
+    },
+    {
+      "id": 3,
+      "title": "Replication lag (seconds, per cluster)",
+      "description": "Max standby replication lag per cluster. Deliberately joins ALL instance pods (no instance-role filter, unlike the read-load panels) because lag is a per-standby signal collapsed by max(); the primary reports no lag. Feeds the opt-in replication-lag brake (autoscaling.maxReplicationLagSeconds).",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${ds_prometheus}" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "targets": [
+        { "datasource": { "type": "prometheus", "uid": "${ds_prometheus}" }, "expr": "max by (namespace, label_cnpg_io_cluster) (cnpg_pg_replication_lag{namespace=~\"$namespace\"} * on(namespace,pod) group_left(label_cnpg_io_cluster) kube_pod_labels{label_cnpg_io_cluster!=\"\",namespace=~\"$namespace\"})", "legendFormat": "{{namespace}}/{{label_cnpg_io_cluster}}" }
+      ]
+    },
+    {
+      "id": 4,
+      "title": "Scaling limited (ScalingLimited=true)",
+      "description": "Per KEDA HPA: 1 while the HPA reports ScalingLimited=true — set at BOTH the ceiling (maxReplicas) and the floor (an idle cluster's desired clamps UP to minReplicas), so this is 1 on quiet clusters too. Distinguish via the 'Desired vs current replicas' panel; the DatabaseAutoscalerAtMax alert scopes to the ceiling case (desired >= maxReplicas), where raising maxReplicas adds read capacity.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${ds_prometheus}" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+      "targets": [
+        { "datasource": { "type": "prometheus", "uid": "${ds_prometheus}" }, "expr": "kube_horizontalpodautoscaler_status_condition{horizontalpodautoscaler=~\"keda-hpa-.*\",condition=\"ScalingLimited\",status=\"true\",namespace=~\"$namespace\"}", "legendFormat": "{{namespace}}/{{horizontalpodautoscaler}}" }
+      ]
+    },
+    {
+      "id": 5,
+      "title": "Replica CPU (millicores, per cluster)",
+      "description": "Replica-scoped postgres-container CPU per cluster (millicores) — the ReadCPUUtilization autoscaler input. For a cluster on metric: ReadCPUUtilization the recommendation is desired = 1 + ceil(this / target), clamped to [minReplicas..maxReplicas] (floor = max(minReplicas, maxSyncReplicas+1, 2)). Mirrors the ScaledObject's CPU query (rate over 5m x 1000) restricted to standby pods.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${ds_prometheus}" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 16 },
+      "targets": [
+        { "datasource": { "type": "prometheus", "uid": "${ds_prometheus}" }, "expr": "sum by (namespace, label_cnpg_io_cluster) (rate(container_cpu_usage_seconds_total{container=\"postgres\",namespace=~\"$namespace\"}[5m]) * 1000 * on(namespace,pod) group_left(label_cnpg_io_cluster) kube_pod_labels{label_cnpg_io_cluster!=\"\",label_cnpg_io_instance_role=\"replica\",namespace=~\"$namespace\"})", "legendFormat": "{{namespace}}/{{label_cnpg_io_cluster}}" }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,669 @@
+diff --git a/.golangci.yml b/.golangci.yml
+index cf72a41a2..1c9237e83 100644
+--- a/.golangci.yml
++++ b/.golangci.yml
+@@ -122,3 +122,9 @@ linters:
+   # - testpackage
+   # - revive
+   # - wsl
++issues:
++  exclude-rules:
++    - filename: "kubevirteps_controller_test.go"
++      linters:
++        - govet
++      text: "declaration of \"err\" shadows"
+diff --git a/cmd/kubevirt-cloud-controller-manager/kubevirteps.go b/cmd/kubevirt-cloud-controller-manager/kubevirteps.go
+index 74166b5d9..4e744f8de 100644
+--- a/cmd/kubevirt-cloud-controller-manager/kubevirteps.go
++++ b/cmd/kubevirt-cloud-controller-manager/kubevirteps.go
+@@ -101,7 +101,18 @@ func startKubevirtCloudController(
+ 
+ 	klog.Infof("Setting up kubevirtEPSController")
+ 
+-	kubevirtEPSController := kubevirteps.NewKubevirtEPSController(tenantClient, infraClient, infraDynamic, kubevirtCloud.Namespace())
++	clusterName := ccmConfig.ComponentConfig.KubeCloudShared.ClusterName
++	if clusterName == "" {
++		klog.Fatalf("Required flag --cluster-name is missing")
++	}
++
++	kubevirtEPSController := kubevirteps.NewKubevirtEPSController(
++		tenantClient,
++		infraClient,
++		infraDynamic,
++		kubevirtCloud.Namespace(),
++		clusterName,
++	)
+ 
+ 	klog.Infof("Initializing kubevirtEPSController")
+ 
+diff --git a/pkg/controller/kubevirteps/kubevirteps_controller.go b/pkg/controller/kubevirteps/kubevirteps_controller.go
+index 53388eb8e..b56882c12 100644
+--- a/pkg/controller/kubevirteps/kubevirteps_controller.go
++++ b/pkg/controller/kubevirteps/kubevirteps_controller.go
+@@ -54,10 +54,10 @@ type Controller struct {
+ 	infraDynamic dynamic.Interface
+ 	infraFactory informers.SharedInformerFactory
+ 
+-	infraNamespace string
+-	queue          workqueue.RateLimitingInterface
+-	maxRetries     int
+-
++	infraNamespace       string
++	clusterName          string
++	queue                workqueue.RateLimitingInterface
++	maxRetries           int
+ 	maxEndPointsPerSlice int
+ }
+ 
+@@ -65,8 +65,9 @@ func NewKubevirtEPSController(
+ 	tenantClient kubernetes.Interface,
+ 	infraClient kubernetes.Interface,
+ 	infraDynamic dynamic.Interface,
+-	infraNamespace string) *Controller {
+-
++	infraNamespace string,
++	clusterName string,
++) *Controller {
+ 	tenantFactory := informers.NewSharedInformerFactory(tenantClient, 0)
+ 	infraFactory := informers.NewSharedInformerFactoryWithOptions(infraClient, 0, informers.WithNamespace(infraNamespace))
+ 	queue := workqueue.NewRateLimitingQueue(workqueue.DefaultControllerRateLimiter())
+@@ -79,6 +80,7 @@ func NewKubevirtEPSController(
+ 		infraDynamic:         infraDynamic,
+ 		infraFactory:         infraFactory,
+ 		infraNamespace:       infraNamespace,
++		clusterName:          clusterName,
+ 		queue:                queue,
+ 		maxRetries:           25,
+ 		maxEndPointsPerSlice: 100,
+@@ -320,22 +322,30 @@ func (c *Controller) processNextItem(ctx context.Context) bool {
+ 
+ // getInfraServiceFromTenantEPS returns the Service in the infra cluster that is associated with the given tenant endpoint slice.
+ func (c *Controller) getInfraServiceFromTenantEPS(ctx context.Context, slice *discovery.EndpointSlice) (*v1.Service, error) {
+-	infraServices, err := c.infraClient.CoreV1().Services(c.infraNamespace).List(ctx,
+-		metav1.ListOptions{LabelSelector: fmt.Sprintf("%s=%s,%s=%s", kubevirt.TenantServiceNameLabelKey, slice.Labels["kubernetes.io/service-name"],
+-			kubevirt.TenantServiceNamespaceLabelKey, slice.Namespace)})
++	tenantServiceName := slice.Labels[discovery.LabelServiceName]
++	tenantServiceNamespace := slice.Namespace
++
++	labelSelector := fmt.Sprintf(
++		"%s=%s,%s=%s,%s=%s",
++		kubevirt.TenantServiceNameLabelKey, tenantServiceName,
++		kubevirt.TenantServiceNamespaceLabelKey, tenantServiceNamespace,
++		kubevirt.TenantClusterNameLabelKey, c.clusterName,
++	)
++
++	svcList, err := c.infraClient.CoreV1().Services(c.infraNamespace).List(ctx, metav1.ListOptions{
++		LabelSelector: labelSelector,
++	})
+ 	if err != nil {
+-		klog.Errorf("Failed to get Service in Infra for EndpointSlice %s in namespace %s: %v", slice.Name, slice.Namespace, err)
++		klog.Errorf("Failed to get Service in Infra for EndpointSlice %s in namespace %s: %v", slice.Name, tenantServiceNamespace, err)
+ 		return nil, err
+ 	}
+-	if len(infraServices.Items) > 1 {
+-		// This should never be possible, only one service should exist for a given tenant endpoint slice
+-		klog.Errorf("Multiple services found for tenant endpoint slice %s in namespace %s", slice.Name, slice.Namespace)
++	if len(svcList.Items) > 1 {
++		klog.Errorf("Multiple services found for tenant endpoint slice %s in namespace %s", slice.Name, tenantServiceNamespace)
+ 		return nil, errors.New("multiple services found for tenant endpoint slice")
+ 	}
+-	if len(infraServices.Items) == 1 {
+-		return &infraServices.Items[0], nil
++	if len(svcList.Items) == 1 {
++		return &svcList.Items[0], nil
+ 	}
+-	// No service found, possible if service is deleted.
+ 	return nil, nil
+ }
+ 
+@@ -363,16 +373,27 @@ func (c *Controller) getTenantEPSFromInfraService(ctx context.Context, svc *v1.S
+ // getInfraEPSFromInfraService returns the EndpointSlices in the infra cluster that are associated with the given infra service.
+ func (c *Controller) getInfraEPSFromInfraService(ctx context.Context, svc *v1.Service) ([]*discovery.EndpointSlice, error) {
+ 	var infraEPSSlices []*discovery.EndpointSlice
+-	klog.Infof("Searching for endpoints on infra cluster for service %s in namespace %s.", svc.Name, svc.Namespace)
+-	result, err := c.infraClient.DiscoveryV1().EndpointSlices(svc.Namespace).List(ctx,
+-		metav1.ListOptions{LabelSelector: fmt.Sprintf("%s=%s", discovery.LabelServiceName, svc.Name)})
++
++	klog.Infof("Searching for EndpointSlices in infra cluster for service %s/%s", svc.Namespace, svc.Name)
++
++	labelSelector := fmt.Sprintf(
++		"%s=%s,%s=%s",
++		discovery.LabelServiceName, svc.Name,
++		kubevirt.TenantClusterNameLabelKey, c.clusterName,
++	)
++
++	result, err := c.infraClient.DiscoveryV1().EndpointSlices(svc.Namespace).List(ctx, metav1.ListOptions{
++		LabelSelector: labelSelector,
++	})
+ 	if err != nil {
+ 		klog.Errorf("Failed to get EndpointSlices for Service %s in namespace %s: %v", svc.Name, svc.Namespace, err)
+ 		return nil, err
+ 	}
++
+ 	for _, eps := range result.Items {
+ 		infraEPSSlices = append(infraEPSSlices, &eps)
+ 	}
++
+ 	return infraEPSSlices, nil
+ }
+ 
+@@ -382,74 +403,117 @@ func (c *Controller) reconcile(ctx context.Context, r *Request) error {
+ 		return errors.New("could not cast object to service")
+ 	}
+ 
++	// Skip services not managed by this controller (missing required labels)
+ 	if service.Labels[kubevirt.TenantServiceNameLabelKey] == "" ||
+ 		service.Labels[kubevirt.TenantServiceNamespaceLabelKey] == "" ||
+ 		service.Labels[kubevirt.TenantClusterNameLabelKey] == "" {
+-		klog.Infof("This LoadBalancer Service: %s is not managed by the %s. Skipping.", service.Name, ControllerName)
++		klog.Infof("Service %s is not managed by this controller. Skipping.", service.Name)
++		return nil
++	}
++
++	// Skip services for other clusters
++	if service.Labels[kubevirt.TenantClusterNameLabelKey] != c.clusterName {
++		klog.Infof("Skipping Service %s: cluster label %q doesn't match our clusterName %q", service.Name, service.Labels[kubevirt.TenantClusterNameLabelKey], c.clusterName)
+ 		return nil
+ 	}
++
+ 	klog.Infof("Reconciling: %v", service.Name)
+ 
++	/*
++	   1) Check if Service in the infra cluster is actually present.
++	      If it's not found, mark it as 'deleted' so that we don't create new slices.
++	*/
+ 	serviceDeleted := false
+-	svc, err := c.infraFactory.Core().V1().Services().Lister().Services(c.infraNamespace).Get(service.Name)
++	infraSvc, err := c.infraFactory.Core().V1().Services().Lister().Services(c.infraNamespace).Get(service.Name)
+ 	if err != nil {
+-		klog.Infof("Service %s in namespace %s is deleted.", service.Name, service.Namespace)
++		// The Service is not present in the infra lister => treat as deleted
++		klog.Infof("Service %s in namespace %s is deleted (or not found).", service.Name, service.Namespace)
+ 		serviceDeleted = true
+ 	} else {
+-		service = svc
++		// Use the actual object from the lister, so we have the latest state
++		service = infraSvc
+ 	}
+ 
++	/*
++	   2) Get all existing EndpointSlices in the infra cluster that belong to this LB Service.
++	      We'll decide which of them should be updated or deleted.
++	*/
+ 	infraExistingEpSlices, err := c.getInfraEPSFromInfraService(ctx, service)
+ 	if err != nil {
+ 		return err
+ 	}
+ 
+-	// At this point we have the current state of the 3 main objects we are interested in:
+-	// 1. The Service in the infra cluster, the one created by the KubevirtCloudController.
+-	// 2. The EndpointSlices in the tenant cluster, created for the tenant cluster's Service.
+-	// 3. The EndpointSlices in the infra cluster, managed by this controller.
+-
+ 	slicesToDelete := []*discovery.EndpointSlice{}
+ 	slicesByAddressType := make(map[discovery.AddressType][]*discovery.EndpointSlice)
+ 
++	// For example, if the service is single-stack IPv4 => only AddressTypeIPv4
++	// or if dual-stack => IPv4 and IPv6, etc.
+ 	serviceSupportedAddressesTypes := getAddressTypesForService(service)
+-	// If the services switched to a different address type, we need to delete the old ones, because it's immutable.
+-	// If the services switched to a different externalTrafficPolicy, we need to delete the old ones.
++
++	/*
++	   3) Determine which slices to delete, and which to pass on to the normal
++	      "reconcileByAddressType" logic.
++
++	      - If 'serviceDeleted' is true OR service.Spec.Selector != nil, we remove them.
++	      - Also, if the slice's address type is unsupported by the Service, we remove it.
++	*/
+ 	for _, eps := range infraExistingEpSlices {
+-		if service.Spec.Selector != nil || serviceDeleted {
+-			klog.Infof("Added for deletion EndpointSlice %s in namespace %s because it has a selector", eps.Name, eps.Namespace)
+-			// to be sure we don't delete any slice that is not managed by us
++		// If service is deleted or has a non-nil selector => remove slices
++		if serviceDeleted || service.Spec.Selector != nil {
++			/*
++			   Only remove if it is clearly labeled as managed by us:
++			   we do not want to accidentally remove slices that are not
++			   created by this controller.
++			*/
+ 			if c.managedByController(eps) {
++				klog.Infof("Added for deletion EndpointSlice %s in namespace %s because service is deleted or has a selector",
++					eps.Name, eps.Namespace)
+ 				slicesToDelete = append(slicesToDelete, eps)
+ 			}
+ 			continue
+ 		}
++
++		// If the Service does not support this slice's AddressType => remove
+ 		if !serviceSupportedAddressesTypes.Has(eps.AddressType) {
+-			klog.Infof("Added for deletion EndpointSlice %s in namespace %s because it has an unsupported address type: %v", eps.Name, eps.Namespace, eps.AddressType)
++			klog.Infof("Added for deletion EndpointSlice %s in namespace %s because it has an unsupported address type: %v",
++				eps.Name, eps.Namespace, eps.AddressType)
+ 			slicesToDelete = append(slicesToDelete, eps)
+ 			continue
+ 		}
++
++		/*
++		   Otherwise, this slice is potentially still valid for the given AddressType,
++		   we'll send it to reconcileByAddressType for final merging and updates.
++		*/
+ 		slicesByAddressType[eps.AddressType] = append(slicesByAddressType[eps.AddressType], eps)
+ 	}
+ 
+-	if !serviceDeleted {
+-		// Get tenant's endpoint slices for this service
++	/*
++	   4) If the Service was NOT deleted and has NO selector (i.e., it's a "no-selector" LB Service),
++	      we proceed to handle creation and updates. That means:
++	      - Gather Tenant's EndpointSlices
++	      - Reconcile them by each AddressType
++	*/
++	if !serviceDeleted && service.Spec.Selector == nil {
+ 		tenantEpSlices, err := c.getTenantEPSFromInfraService(ctx, service)
+ 		if err != nil {
+ 			return err
+ 		}
+ 
+-		// Reconcile the EndpointSlices for each address type e.g. ipv4, ipv6
++		// For each addressType (ipv4, ipv6, etc.) reconcile the infra slices
+ 		for addressType := range serviceSupportedAddressesTypes {
+ 			existingSlices := slicesByAddressType[addressType]
+-			err := c.reconcileByAddressType(service, tenantEpSlices, existingSlices, addressType)
+-			if err != nil {
++			if err := c.reconcileByAddressType(service, tenantEpSlices, existingSlices, addressType); err != nil {
+ 				return err
+ 			}
+ 		}
+ 	}
+ 
+-	// Delete the EndpointSlices that are no longer needed
++	/*
++	   5) Perform the actual deletion of all slices we flagged.
++	      In many cases (serviceDeleted or .Spec.Selector != nil),
++	      we end up with only "delete" actions and no new slice creation.
++	*/
+ 	for _, eps := range slicesToDelete {
+ 		err := c.infraClient.DiscoveryV1().EndpointSlices(eps.Namespace).Delete(context.TODO(), eps.Name, metav1.DeleteOptions{})
+ 		if err != nil {
+@@ -588,55 +652,114 @@ func ownedBy(endpointSlice *discovery.EndpointSlice, svc *v1.Service) bool {
+ 	return false
+ }
+ 
+-func (c *Controller) finalize(service *v1.Service, slicesToCreate []*discovery.EndpointSlice, slicesToUpdate []*discovery.EndpointSlice, slicesToDelete []*discovery.EndpointSlice) error {
+-	// If there are slices to delete and slices to create, make them as update
+-	for i := 0; i < len(slicesToDelete); {
++func (c *Controller) finalize(
++	service *v1.Service,
++	slicesToCreate []*discovery.EndpointSlice,
++	slicesToUpdate []*discovery.EndpointSlice,
++	slicesToDelete []*discovery.EndpointSlice,
++) error {
++	/*
++	   We try to turn a "delete + create" pair into a single "update" operation
++	   if the original slice (slicesToDelete[i]) has the same address type as
++	   the first slice in slicesToCreate, and is owned by the same Service.
++
++	   However, we must re-check the lengths of slicesToDelete and slicesToCreate
++	   within the loop to avoid an out-of-bounds index in slicesToCreate.
++	*/
++
++	i := 0
++	for i < len(slicesToDelete) {
++		// If there is nothing to create, break early
+ 		if len(slicesToCreate) == 0 {
+ 			break
+ 		}
+-		if slicesToDelete[i].AddressType == slicesToCreate[0].AddressType && ownedBy(slicesToDelete[i], service) {
+-			slicesToCreate[0].Name = slicesToDelete[i].Name
++
++		sd := slicesToDelete[i]
++		sc := slicesToCreate[0] // We can safely do this now, because len(slicesToCreate) > 0
++
++		// If the address type matches, and the slice is owned by the same Service,
++		// then instead of deleting sd and creating sc, we'll transform it into an update:
++		// we rename sc with sd's name, remove sd from the delete list, remove sc from the create list,
++		// and add sc to the update list.
++		if sd.AddressType == sc.AddressType && ownedBy(sd, service) {
++			sliceToUpdate := sc
++			sliceToUpdate.Name = sd.Name
++
++			// Remove the first element from slicesToCreate
+ 			slicesToCreate = slicesToCreate[1:]
+-			slicesToUpdate = append(slicesToUpdate, slicesToCreate[0])
++
++			// Remove the slice from slicesToDelete
+ 			slicesToDelete = append(slicesToDelete[:i], slicesToDelete[i+1:]...)
++
++			// Now add the renamed slice to the list of slices we want to update
++			slicesToUpdate = append(slicesToUpdate, sliceToUpdate)
++
++			/*
++			   Do not increment i here, because we've just removed an element from
++			   slicesToDelete. The next slice to examine is now at the same index i.
++			*/
+ 		} else {
++			// If they don't match, move on to the next slice in slicesToDelete.
+ 			i++
+ 		}
+ 	}
+ 
+-	// Create the new slices if service is not marked for deletion
++	/*
++	   If the Service is not being deleted, create all remaining slices in slicesToCreate.
++	   (If the Service has a DeletionTimestamp, it means it is going away, so we do not
++	   want to create new EndpointSlices.)
++	*/
+ 	if service.DeletionTimestamp == nil {
+ 		for _, slice := range slicesToCreate {
+-			createdSlice, err := c.infraClient.DiscoveryV1().EndpointSlices(slice.Namespace).Create(context.TODO(), slice, metav1.CreateOptions{})
++			createdSlice, err := c.infraClient.DiscoveryV1().EndpointSlices(slice.Namespace).Create(
++				context.TODO(),
++				slice,
++				metav1.CreateOptions{},
++			)
+ 			if err != nil {
+-				klog.Errorf("Failed to create EndpointSlice %s in namespace %s: %v", slice.Name, slice.Namespace, err)
++				klog.Errorf("Failed to create EndpointSlice %s in namespace %s: %v",
++					slice.Name, slice.Namespace, err)
++				// If the namespace is terminating, it's safe to ignore the error.
+ 				if k8serrors.HasStatusCause(err, v1.NamespaceTerminatingCause) {
+-					return nil
++					continue
+ 				}
+ 				return err
+ 			}
+-			klog.Infof("Created EndpointSlice %s in namespace %s", createdSlice.Name, createdSlice.Namespace)
++			klog.Infof("Created EndpointSlice %s in namespace %s",
++				createdSlice.Name, createdSlice.Namespace)
+ 		}
+ 	}
+ 
+-	// Update slices
++	// Update slices that are in the slicesToUpdate list.
+ 	for _, slice := range slicesToUpdate {
+-		_, err := c.infraClient.DiscoveryV1().EndpointSlices(slice.Namespace).Update(context.TODO(), slice, metav1.UpdateOptions{})
++		_, err := c.infraClient.DiscoveryV1().EndpointSlices(slice.Namespace).Update(
++			context.TODO(),
++			slice,
++			metav1.UpdateOptions{},
++		)
+ 		if err != nil {
+-			klog.Errorf("Failed to update EndpointSlice %s in namespace %s: %v", slice.Name, slice.Namespace, err)
++			klog.Errorf("Failed to update EndpointSlice %s in namespace %s: %v",
++				slice.Name, slice.Namespace, err)
+ 			return err
+ 		}
+-		klog.Infof("Updated EndpointSlice %s in namespace %s", slice.Name, slice.Namespace)
++		klog.Infof("Updated EndpointSlice %s in namespace %s",
++			slice.Name, slice.Namespace)
+ 	}
+ 
+-	// Delete slices
++	// Finally, delete slices that are in slicesToDelete and are no longer needed.
+ 	for _, slice := range slicesToDelete {
+-		err := c.infraClient.DiscoveryV1().EndpointSlices(slice.Namespace).Delete(context.TODO(), slice.Name, metav1.DeleteOptions{})
++		err := c.infraClient.DiscoveryV1().EndpointSlices(slice.Namespace).Delete(
++			context.TODO(),
++			slice.Name,
++			metav1.DeleteOptions{},
++		)
+ 		if err != nil {
+-			klog.Errorf("Failed to delete EndpointSlice %s in namespace %s: %v", slice.Name, slice.Namespace, err)
++			klog.Errorf("Failed to delete EndpointSlice %s in namespace %s: %v",
++				slice.Name, slice.Namespace, err)
+ 			return err
+ 		}
+-		klog.Infof("Deleted EndpointSlice %s in namespace %s", slice.Name, slice.Namespace)
++		klog.Infof("Deleted EndpointSlice %s in namespace %s",
++			slice.Name, slice.Namespace)
+ 	}
+ 
+ 	return nil
+diff --git a/pkg/controller/kubevirteps/kubevirteps_controller_test.go b/pkg/controller/kubevirteps/kubevirteps_controller_test.go
+index 1c97035b4..14d92d340 100644
+--- a/pkg/controller/kubevirteps/kubevirteps_controller_test.go
++++ b/pkg/controller/kubevirteps/kubevirteps_controller_test.go
+@@ -190,7 +190,7 @@ func setupTestKubevirtEPSController() *testKubevirtEPSController {
+ 		}: "VirtualMachineInstanceList",
+ 	})
+ 
+-	controller := NewKubevirtEPSController(tenantClient, infraClient, infraDynamic, "test")
++	controller := NewKubevirtEPSController(tenantClient, infraClient, infraDynamic, "test", "test-cluster")
+ 
+ 	err := controller.Init()
+ 	if err != nil {
+@@ -697,51 +697,43 @@ var _ = g.Describe("KubevirtEPSController", g.Ordered, func() {
+ 				*createPort("http", 80, v1.ProtocolTCP),
+ 				[]discoveryv1.Endpoint{*createEndpoint("123.45.67.89", "worker-0-test", true, true, false)})
+ 
+-			// Define several unique ports for the Service
++			// Define multiple ports for the Service
+ 			servicePorts := []v1.ServicePort{
+ 				{
+-					Name:        "client",
+-					Protocol:    v1.ProtocolTCP,
+-					Port:        10001,
+-					TargetPort:  intstr.FromInt(30396),
+-					NodePort:    30396,
+-					AppProtocol: nil,
++					Name:       "client",
++					Protocol:   v1.ProtocolTCP,
++					Port:       10001,
++					TargetPort: intstr.FromInt(30396),
++					NodePort:   30396,
+ 				},
+ 				{
+-					Name:        "dashboard",
+-					Protocol:    v1.ProtocolTCP,
+-					Port:        8265,
+-					TargetPort:  intstr.FromInt(31003),
+-					NodePort:    31003,
+-					AppProtocol: nil,
++					Name:       "dashboard",
++					Protocol:   v1.ProtocolTCP,
++					Port:       8265,
++					TargetPort: intstr.FromInt(31003),
++					NodePort:   31003,
+ 				},
+ 				{
+-					Name:        "metrics",
+-					Protocol:    v1.ProtocolTCP,
+-					Port:        8080,
+-					TargetPort:  intstr.FromInt(30452),
+-					NodePort:    30452,
+-					AppProtocol: nil,
++					Name:       "metrics",
++					Protocol:   v1.ProtocolTCP,
++					Port:       8080,
++					TargetPort: intstr.FromInt(30452),
++					NodePort:   30452,
+ 				},
+ 			}
+ 
+-			// Create a Service with the first port
+ 			createAndAssertInfraServiceLB("infra-multiport-service", "tenant-service-name", "test-cluster",
+-				servicePorts[0],
+-				v1.ServiceExternalTrafficPolicyLocal)
++				servicePorts[0], v1.ServiceExternalTrafficPolicyLocal)
+ 
+-			// Update the Service by adding the remaining ports
+ 			svc, err := testVals.infraClient.CoreV1().Services(infraNamespace).Get(context.TODO(), "infra-multiport-service", metav1.GetOptions{})
+ 			Expect(err).To(BeNil())
+ 
+ 			svc.Spec.Ports = servicePorts
+-
+ 			_, err = testVals.infraClient.CoreV1().Services(infraNamespace).Update(context.TODO(), svc, metav1.UpdateOptions{})
+ 			Expect(err).To(BeNil())
+ 
+ 			var epsListMultiPort *discoveryv1.EndpointSliceList
+ 
+-			// Verify that the EndpointSlice is created with correct unique ports
+ 			Eventually(func() (bool, error) {
+ 				epsListMultiPort, err = testVals.infraClient.DiscoveryV1().EndpointSlices(infraNamespace).List(context.TODO(), metav1.ListOptions{})
+ 				if len(epsListMultiPort.Items) != 1 {
+@@ -758,7 +750,6 @@ var _ = g.Describe("KubevirtEPSController", g.Ordered, func() {
+ 					}
+ 				}
+ 
+-				// Verify that all expected ports are present and without duplicates
+ 				if len(foundPortNames) != len(expectedPortNames) {
+ 					return false, err
+ 				}
+@@ -769,5 +760,156 @@ var _ = g.Describe("KubevirtEPSController", g.Ordered, func() {
+ 			}).Should(BeTrue(), "EndpointSlice should contain all unique ports from the Service without duplicates")
+ 		})
+ 
++		g.It("Should not panic when Service changes to have a non-nil selector, causing EndpointSlice deletion with no new slices to create", func() {
++			createAndAssertVMI("worker-0-test", "ip-10-32-5-13", "123.45.67.89")
++			createAndAssertTenantSlice("test-epslice", "tenant-service-name", discoveryv1.AddressTypeIPv4,
++				*createPort("http", 80, v1.ProtocolTCP),
++				[]discoveryv1.Endpoint{*createEndpoint("123.45.67.89", "worker-0-test", true, true, false)})
++			createAndAssertInfraServiceLB("infra-service-no-selector", "tenant-service-name", "test-cluster",
++				v1.ServicePort{
++					Name:       "web",
++					Port:       80,
++					NodePort:   31900,
++					Protocol:   v1.ProtocolTCP,
++					TargetPort: intstr.IntOrString{IntVal: 30390},
++				},
++				v1.ServiceExternalTrafficPolicyLocal,
++			)
++
++			// Wait for the controller to create an EndpointSlice in the infra cluster.
++			var epsList *discoveryv1.EndpointSliceList
++			var err error
++			Eventually(func() (bool, error) {
++				epsList, err = testVals.infraClient.DiscoveryV1().EndpointSlices(infraNamespace).
++					List(context.TODO(), metav1.ListOptions{})
++				if err != nil {
++					return false, err
++				}
++				// Wait exactly 1 slice
++				if len(epsList.Items) == 1 {
++					return true, nil
++				}
++				return false, nil
++			}).Should(BeTrue(), "Controller should create an EndpointSlice in infra cluster for the LB service")
++
++			svcWithSelector, err := testVals.infraClient.CoreV1().Services(infraNamespace).
++				Get(context.TODO(), "infra-service-no-selector", metav1.GetOptions{})
++			Expect(err).To(BeNil())
++
++			// Let's set any selector to run the slice deletion logic
++			svcWithSelector.Spec.Selector = map[string]string{"test": "selector-added"}
++			_, err = testVals.infraClient.CoreV1().Services(infraNamespace).
++				Update(context.TODO(), svcWithSelector, metav1.UpdateOptions{})
++			Expect(err).To(BeNil())
++
++			Eventually(func() (bool, error) {
++				epsList, err = testVals.infraClient.DiscoveryV1().EndpointSlices(infraNamespace).
++					List(context.TODO(), metav1.ListOptions{})
++				if err != nil {
++					return false, err
++				}
++				// We expect that after the update service.EndpointSlice will become 0
++				if len(epsList.Items) == 0 {
++					return true, nil
++				}
++				return false, nil
++			}).Should(BeTrue(), "Existing EndpointSlice should be removed because Service now has a selector")
++		})
++
++		g.It("Should remove EndpointSlices and not recreate them when a previously no-selector Service obtains a selector", func() {
++			testVals.infraClient.Fake.PrependReactor("create", "endpointslices", func(action testing.Action) (bool, runtime.Object, error) {
++				createAction := action.(testing.CreateAction)
++				slice := createAction.GetObject().(*discoveryv1.EndpointSlice)
++				if slice.Name == "" && slice.GenerateName != "" {
++					slice.Name = slice.GenerateName + "-fake001"
++				}
++				return false, slice, nil
++			})
++
++			createAndAssertVMI("worker-0-test", "ip-10-32-5-13", "123.45.67.89")
++
++			createAndAssertTenantSlice("test-epslice", "tenant-service-name", discoveryv1.AddressTypeIPv4,
++				*createPort("http", 80, v1.ProtocolTCP),
++				[]discoveryv1.Endpoint{
++					*createEndpoint("123.45.67.89", "worker-0-test", true, true, false),
++				},
++			)
++
++			noSelectorSvcName := "svc-without-selector"
++			svc := &v1.Service{
++				ObjectMeta: metav1.ObjectMeta{
++					Name:      noSelectorSvcName,
++					Namespace: infraNamespace,
++					Labels: map[string]string{
++						kubevirt.TenantServiceNameLabelKey:      "tenant-service-name",
++						kubevirt.TenantServiceNamespaceLabelKey: tenantNamespace,
++						kubevirt.TenantClusterNameLabelKey:      "test-cluster",
++					},
++				},
++				Spec: v1.ServiceSpec{
++					Ports: []v1.ServicePort{
++						{
++							Name:       "web",
++							Port:       80,
++							NodePort:   31900,
++							Protocol:   v1.ProtocolTCP,
++							TargetPort: intstr.IntOrString{IntVal: 30390},
++						},
++					},
++					Type:                  v1.ServiceTypeLoadBalancer,
++					ExternalTrafficPolicy: v1.ServiceExternalTrafficPolicyLocal,
++				},
++			}
++
++			_, err := testVals.infraClient.CoreV1().Services(infraNamespace).Create(context.TODO(), svc, metav1.CreateOptions{})
++			Expect(err).To(BeNil())
++
++			Eventually(func() (bool, error) {
++				epsList, err := testVals.infraClient.DiscoveryV1().EndpointSlices(infraNamespace).
++					List(context.TODO(), metav1.ListOptions{})
++				if err != nil {
++					return false, err
++				}
++				return len(epsList.Items) == 1, nil
++			}).Should(BeTrue(), "Controller should create an EndpointSlice in infra cluster for the no-selector LB service")
++
++			svcWithSelector, err := testVals.infraClient.CoreV1().Services(infraNamespace).Get(
++				context.TODO(), noSelectorSvcName, metav1.GetOptions{})
++			Expect(err).To(BeNil())
++
++			svcWithSelector.Spec.Selector = map[string]string{"app": "test-value"}
++			_, err = testVals.infraClient.CoreV1().Services(infraNamespace).
++				Update(context.TODO(), svcWithSelector, metav1.UpdateOptions{})
++			Expect(err).To(BeNil())
++
++			Eventually(func() (bool, error) {
++				epsList, err := testVals.infraClient.DiscoveryV1().EndpointSlices(infraNamespace).
++					List(context.TODO(), metav1.ListOptions{})
++				if err != nil {
++					return false, err
++				}
++				return len(epsList.Items) == 0, nil
++			}).Should(BeTrue(), "All EndpointSlices should be removed after Service acquires a selector (no new slices created)")
++		})
++
++		g.It("Should ignore Services from a different cluster", func() {
++			// Create a Service with cluster label "other-cluster"
++			svc := createInfraServiceLB("infra-service-conflict", "tenant-service-name", "other-cluster",
++				v1.ServicePort{Name: "web", Port: 80, NodePort: 31900, Protocol: v1.ProtocolTCP, TargetPort: intstr.IntOrString{IntVal: 30390}},
++				v1.ServiceExternalTrafficPolicyLocal)
++			_, err := testVals.infraClient.CoreV1().Services(infraNamespace).Create(context.TODO(), svc, metav1.CreateOptions{})
++			Expect(err).To(BeNil())
++
++			// The controller should ignore this Service, so no EndpointSlice should be created.
++			Eventually(func() (bool, error) {
++				epsList, err := testVals.infraClient.DiscoveryV1().EndpointSlices(infraNamespace).List(context.TODO(), metav1.ListOptions{})
++				if err != nil {
++					return false, err
++				}
++				// Expect zero slices since cluster label does not match "test-cluster"
++				return len(epsList.Items) == 0, nil
++			}).Should(BeTrue(), "Services with a different cluster label should be ignored")
++		})
++
+ 	})
+ })

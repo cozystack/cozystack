@@ -1,0 +1,36 @@
+kind: ConfigMap
+apiVersion: v1
+metadata:
+  name: {{ .Values.logConfigMap }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: {{ template "strimzi.name" . }}
+    chart: {{ template "strimzi.chart" . }}
+    component: logging-config-map
+    release: {{ .Release.Name }}
+    heritage: {{ .Release.Service }}
+data:
+  log4j2.properties: |
+    {{- if .Values.logConfiguration }}
+    {{- tpl .Values.logConfiguration . | nindent 4 }}
+    {{- else }}
+    name = COConfig
+    monitorInterval = 30
+
+    appender.console.type = Console
+    appender.console.name = STDOUT
+    appender.console.layout.type = PatternLayout
+    appender.console.layout.pattern = %d{yyyy-MM-dd HH:mm:ss} %-5p %c{1}:%L - %m%n
+
+    rootLogger.level = {{ default .Values.logLevel .Values.logLevelOverride }}
+    rootLogger.appenderRefs = stdout
+    rootLogger.appenderRef.console.ref = STDOUT
+
+    # Kafka AdminClient logging is a bit noisy at INFO level
+    logger.kafka.name = org.apache.kafka
+    logger.kafka.level = WARN
+
+    # Keeps separate level for Netty logging -> to not be changed by the root logger
+    logger.netty.name = io.netty
+    logger.netty.level = INFO
+    {{- end }}

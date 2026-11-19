@@ -1,0 +1,4 @@
+=== helmreleases.helm.toolkit.fluxcd.io (not ready) ===
+tenant-prod                    broken-app                                         False
+  UpgradeFailed: Helm upgrade failed: timed out waiting for the condition
+  -> 1/2 not ready

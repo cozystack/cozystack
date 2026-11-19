@@ -1,0 +1,96 @@
+apiVersion: piraeus.io/v1
+kind: LinstorSatelliteConfiguration
+metadata:
+  name: cozystack-plunger
+spec:
+  internalTLS:
+    certManager:
+      name: linstor-internal-ca
+      kind: Issuer
+  podTemplate:
+    spec:
+      containers:
+      - name: plunger
+        image: {{ .Values.piraeusServer.image.repository }}:{{ .Values.piraeusServer.image.tag }}
+        # Sidecars in the satellite pod. Every container needs a memory limit
+        # for the pod cgroup to get memory.max, which is what keeps the pod out
+        # of the Talos userspace OOM handler's victim set — one limit-free
+        # sidecar is enough to put the whole satellite pod back in it.
+        # 14d peaks on a 3-node dev cluster: plunger 18Mi, drbd-logger 5Mi.
+        resources:
+          requests:
+            cpu: 10m
+            memory: 32Mi
+          limits:
+            memory: 128Mi
+        command:
+        - "/scripts/plunger-satellite.sh"
+        securityContext:
+          capabilities:
+            add:
+            - NET_ADMIN
+            - SYS_ADMIN
+            drop:
+            - ALL
+          privileged: true
+          # make some room for live debugging
+          readOnlyRootFilesystem: false
+        volumeMounts:
+        - mountPath: /dev
+          name: dev
+        - mountPath: /var/lib/drbd
+          name: var-lib-drbd
+        - mountPath: /var/lib/linstor.d
+          name: var-lib-linstor-d
+        - mountPath: /etc/lvm
+          name: container-etc-lvm
+        - mountPath: /etc/lvm/archive
+          name: etc-lvm-archive
+        - mountPath: /etc/lvm/backup
+          name: etc-lvm-backup
+        - mountPath: /run/lock/lvm
+          name: run-lock-lvm
+        - mountPath: /run/lvm
+          name: run-lvm
+        - mountPath: /run/udev
+          name: run-udev
+          readOnly: true
+        - mountPath: /scripts
+          name: script-volume
+          readOnly: true
+{{- if .Values.drbd.enabled }}
+      - name: drbd-logger
+        image: {{ .Values.piraeusServer.image.repository }}:{{ .Values.piraeusServer.image.tag }}
+        resources:
+          requests:
+            cpu: 10m
+            memory: 32Mi
+          limits:
+            memory: 128Mi
+        command:
+        - "/scripts/plunger-drbd-logger.sh"
+        securityContext:
+          capabilities:
+            add:
+            - NET_ADMIN
+            - SYS_ADMIN
+            drop:
+            - ALL
+          privileged: true
+          readOnlyRootFilesystem: false
+        volumeMounts:
+        - mountPath: /dev
+          name: dev
+        - mountPath: /var/lib/drbd
+          name: var-lib-drbd
+        - mountPath: /var/lib/linstor.d
+          name: var-lib-linstor-d
+        - mountPath: /scripts
+          name: script-volume
+          readOnly: true
+{{- end }}
+      volumes:
+      - name: script-volume
+        configMap:
+          name: linstor-plunger
+          defaultMode: 0755

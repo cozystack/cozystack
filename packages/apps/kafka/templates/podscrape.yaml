@@ -1,0 +1,40 @@
+apiVersion: operator.victoriametrics.com/v1beta1
+kind: VMPodScrape
+metadata:
+  name: {{ .Release.Name }}
+spec:
+  podMetricsEndpoints:
+    - port: tcp-prometheus
+      scheme: http
+      relabelConfigs:
+      - separator: ;
+        regex: __meta_kubernetes_pod_label_(strimzi_io_.+)
+        replacement: $1
+        action: labelmap
+      - sourceLabels: [__meta_kubernetes_namespace]
+        separator: ;
+        regex: (.*)
+        targetLabel: namespace
+        replacement: $1
+        action: replace
+      - sourceLabels: [__meta_kubernetes_pod_name]
+        separator: ;
+        regex: (.*)
+        targetLabel: pod
+        replacement: $1
+        action: replace
+      - sourceLabels: [__meta_kubernetes_pod_node_name]
+        separator: ;
+        regex: (.*)
+        targetLabel: node
+        replacement: $1
+        action: replace
+      - sourceLabels: [__meta_kubernetes_pod_host_ip]
+        separator: ;
+        regex: (.*)
+        targetLabel: node_ip
+        replacement: $1
+        action: replace
+  selector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ .Release.Name }}

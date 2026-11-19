@@ -1,0 +1,20 @@
+---
+apiVersion: cozystack.io/v1alpha1
+kind: Package
+metadata:
+  name: cozystack.cozystack-platform
+spec:
+  variant: isp-full
+  components:
+    platform:
+      values:
+        publishing:
+          host: "example.org"
+          apiServerEndpoint: "https://api.example.org"
+          externalIPs:
+          - 192.0.2.10
+          - 192.0.2.11
+          - 192.0.2.12
+        authentication:
+          oidc:
+            enabled: true

@@ -1,0 +1,132 @@
+##
+## @section Common parameters
+##
+
+## @enum {string} ExternalMethod - Method to pass through traffic to the VM.
+## @value PortList - Forward selected ports only.
+## @value WholeIP - Forward all traffic for the IP.
+
+## @typedef {struct} Disk - Disk configuration.
+## @field {string} name - Disk name.
+## @x-cozystack-options {source: vmdisk}
+## @field {string} [bus] - Disk bus type (e.g. "sata").
+## @field {*int} [bootOrder] - Boot priority of the disk, 1 being tried first. Unset falls back to the disk's position in `disks` (the first disk gets 1), so set it to boot from a disk other than the first, such as an attached installer or rescue ISO, without reordering the list. Effective boot orders must be unique across disks: when one disk is given a value that another takes from its position, set both.
+## @minimum 1
+
+## @typedef {struct} Network - Network to attach the VM to.
+## @field {string} [name] - Network attachment name.
+## @x-cozystack-options {source: network}
+
+## @typedef {struct} GPU - GPU device configuration.
+## @field {string} name - The name of the GPU resource to attach.
+## @x-cozystack-options {source: gpu}
+
+## @typedef {struct} Resources - Resource configuration for the virtual machine.
+## @field {quantity} [cpu] - Number of CPU cores allocated, as a positive whole number such as `2`. Millicore or other unit-suffixed, fractional, zero, negative, above 4294967295 and quoted leading-zero values are rejected at render time, because the value becomes the VM's unsigned integer `domain.cpu.cores`.
+## @field {quantity} [memory] - Amount of memory allocated, as a quantity of at least `1M` such as `8Gi`. Less than 1M is rejected at render time, because KubeVirt refuses a non-zero amount below 1M and a zero or negative amount sizes nothing.
+## @field {quantity} [sockets] - Number of CPU sockets (vCPU topology), as a positive whole number such as `1`. Millicore or other unit-suffixed, fractional, zero, negative, above 4294967295 and quoted leading-zero values are rejected at render time, because the value becomes the VM's unsigned integer `domain.cpu.sockets`.
+
+## @typedef {struct} Firmware - Firmware and boot configuration. When left empty, the boot mode is inherited from the instanceProfile.
+## @field {string} [bootloader] - Bootloader to boot the VM with: "uefi" (OVMF) or "bios" (SeaBIOS). Empty inherits the instanceProfile default.
+## @field {bool} [secureBoot] - Enable UEFI Secure Boot. Only applies when bootloader is "uefi".
+## @field {bool} [efiPersistent] - Persist EFI NVRAM (e.g. enrolled Secure Boot keys, such as an updated Microsoft UEFI CA) across reboots. Only applies when bootloader is "uefi".
+
+## @param {bool} external - Enable external access from outside the cluster.
+external: false
+
+## @param {ExternalMethod} externalMethod - Method to pass through traffic to the VM.
+externalMethod: PortList
+
+## @param {[]int} externalPorts - Ports to forward from outside the cluster.
+externalPorts:
+- 22
+
+## @param {bool} externalAllowICMP - Whether to accept ICMP traffic to the VM in PortList mode (preserves ping and PMTU discovery). No effect in WholeIP mode. Default true so ping behaves as users expect even when port filtering is in effect.
+externalAllowICMP: true
+
+## @enum {string} RunStrategy - Requested running state of the VirtualMachineInstance
+## @value Always - VMI should always be running
+## @value Halted - VMI should never be running
+## @value Manual - VMI can be started/stopped using API endpoints
+## @value RerunOnFailure - VMI will initially be running and restarted if a failure occurs, but will not be restarted upon successful completion
+## @value Once - VMI will run once and not be restarted upon completion regardless if the completion is of phase Failure or Success
+
+## @param {RunStrategy} runStrategy - Requested running state of the VirtualMachineInstance
+runStrategy: Always
+
+## @param {string} instanceType - Virtual Machine instance type. Ignored when `resources` sizes the VM, which needs whole-number cpu and sockets plus memory; the whole type is dropped then, so any dedicated CPU placement, hugepages, NUMA or realtime settings it carries go with it. While this field is set, a `resources` block that sizes only part of the VM is rejected outright instead of ignored, so complete it or clear it.
+## @x-cozystack-options {source: instancetype}
+instanceType: "u1.medium"
+
+## @param {string} instanceProfile - Virtual Machine preferences profile.
+## @x-cozystack-options {source: instanceprofile}
+instanceProfile: ubuntu
+
+## @param {[]Disk} disks - List of disks to attach.
+disks: []
+## Example:
+## disks:
+## - name: example-system
+## - name: example-data
+##   bus: sata
+## Boot from an attached ISO while keeping the system disk first in the list:
+## disks:
+## - name: example-system
+##   bootOrder: 2
+## - name: example-iso
+##   bootOrder: 1
+
+## @param {[]Network} networks - Networks to attach the VM to.
+networks: []
+## Example:
+## networks:
+##   - name: subnet-84dbec17
+##   - name: subnet-aa8896b5
+
+## @param {[]Network} subnets - Deprecated: use networks instead.
+subnets: []
+
+## @param {[]GPU} gpus - List of GPUs to attach (NVIDIA driver requires at least 4 GiB RAM).
+gpus: []
+## Example:
+## gpus:
+## - name: nvidia.com/GA102GL_A10
+
+## @param {string} cpuModel - Model specifies the CPU model inside the VMI. List of available models https://github.com/libvirt/libvirt/tree/master/src/cpu_map
+cpuModel: ""
+
+## @param {Firmware} [firmware] - Firmware and boot configuration (UEFI/BIOS selection, Secure Boot, persistent EFI NVRAM).
+firmware: {}
+## Example:
+## firmware:
+##   bootloader: uefi
+##   secureBoot: true
+##   efiPersistent: true
+
+## @param {Resources} [resources] - Resource configuration for the virtual machine. Set whole-number cpu and sockets together with memory to size the VM directly, which overrides `instanceType`. Alongside an `instanceType`, a block that sizes only part of the VM is rejected; a whole-number cpu or sockets on its own sizes nothing and is ignored.
+resources: {}
+
+## @param {[]string} sshKeys - List of SSH public keys for authentication.
+sshKeys: []
+## Example:
+## sshKeys:
+##   - ssh-rsa ...
+##   - ssh-ed25519 ...
+##
+
+## @param {string} cloudInit - Cloud-init user data.
+cloudInit: ""
+## Example:
+## cloudInit: |
+##   #cloud-config
+##   password: ubuntu
+##   chpasswd: { expire: False }
+##
+
+## @param {bool} netplanDhcp - Supply cloud-init network-data that requests DHCP on every `en*` and `eth*` interface and keeps the DNS search domains DHCP offers. Needed for a netplan guest (Ubuntu, Debian) to address a secondary network such as a VPC subnet. Leave it off for a guest rendered by anything other than netplan, which would lose DHCP on every interface, and for a guest that configures an interface statically through netplan, which this configuration would shadow. Turning it on for a VM that has neither `cloudInit` nor `sshKeys` adds a cloud-init disk, and the guest's next boot is then treated as a first boot.
+netplanDhcp: false
+
+## @param {string} cloudInitSeed - Seed string to generate SMBIOS UUID for the VM.
+cloudInitSeed: ""
+## Example:
+## cloudInitSeed: "upd1"

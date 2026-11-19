@@ -1,0 +1,4 @@
+# Konnectivity proxy version overrides per Kubernetes minor version.
+# When empty or absent, Kamaji auto-derives v0.{minor}.0 from the Kubernetes version.
+# Add entries here only when the auto-derived image tag does not exist in the registry.
+"v1.35": "v0.34.0"

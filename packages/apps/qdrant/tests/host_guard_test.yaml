@@ -1,0 +1,46 @@
+suite: qdrant external cert fails on an empty apex, but only when external
+
+templates:
+  - templates/certmanager.yaml
+
+# The external SAN test-qdrant.<_namespace.host> is emitted only under
+# `if .Values.external`. cozy-lib.ns-host-required guards that one line, so an
+# empty apex fails the render when external is on, and is a non-issue when it is
+# off (a tenant with no apex and no external exposure must still render).
+
+tests:
+  - it: fails when external is true and the apex is empty
+    release:
+      name: test-qdrant
+      namespace: tenant-test
+    set:
+      tls:
+        enabled: true
+      external: true
+      _namespace:
+        host: ""
+      _cluster:
+        cluster-domain: cozy.local
+    asserts:
+      - failedTemplate:
+          errorMessage: "the tenant apex (_namespace.host) is empty and this app sets no host override, so its ingress hostname would be malformed. Set tenant.spec.host on this tenant, inherit it from a parent that has host set, or set this app's host value."
+
+  - it: still renders when external is false even though the apex is empty
+    release:
+      name: test-qdrant
+      namespace: tenant-test
+    set:
+      tls:
+        enabled: true
+      external: false
+      _namespace:
+        host: ""
+      _cluster:
+        cluster-domain: cozy.local
+    asserts:
+      - hasDocuments:
+          count: 4
+      - notContains:
+          path: spec.dnsNames
+          content: test-qdrant.
+        documentIndex: 3

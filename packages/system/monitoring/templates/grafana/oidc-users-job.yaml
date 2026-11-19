@@ -1,0 +1,316 @@
+{{- /*
+  OIDC user reconcile Job — runs as Helm post-install,post-upgrade
+  hook and syncs `spec.oidc.users` into the release's Grafana org via
+  Grafana's admin API. Same operator UX as the tenant kube-apiserver
+  sibling in cozystack/cozystack#3044 (users-map → ClusterRoleBindings
+  in the guest cluster); here the target is Grafana org membership
+  because grafana-operator has no user CRD.
+
+  Contract:
+    - For each `spec.oidc.users[]` entry:
+        * pre-provision a local Grafana account with the given email
+          (random password — the account is a shell so the users-Job
+          can set an org role before the operator's first OIDC login,
+          and `oauth_allow_insecure_email_lookup = true` glues them
+          together at login time);
+        * add the account to Main Org. with the requested role
+          (`Admin` / `Editor` / `Viewer`), promoting/demoting on
+          re-run.
+    - Prune every non-admin Main-Org member whose email is not in the
+      desired list — handles removal of a `users:` entry.
+    - `skip_org_role_sync = true` in the Grafana generic_oauth block
+      (see grafana.yaml) makes sure a later login never overwrites the
+      role this Job sets.
+
+  Renders only when `spec.oidc.users` is non-empty. `users: []` (or
+  unset) is the switch that says "the chart owns nothing in Grafana
+  orgs" — a prune pass with an empty desired list would silently
+  delete every non-admin Main-Org member on every helm upgrade. That
+  covers three empty-users states that all resolve to the same
+  hands-off contract:
+    * mode=None                          → OIDC off, no chart-managed
+                                           org membership at all.
+    * customConfig.secretRef mode        → users[] is forbidden by
+                                           the assertion helper; the
+                                           operator's ini fragment is
+                                           authoritative.
+    * System / CustomConfig-inline with
+      users[] unset                      → the operator opted into
+                                           OIDC but not into the
+                                           chart-managed users-map;
+                                           they own org membership
+                                           themselves.
+  Removing the last `users:` entry therefore no longer prunes it —
+  the operator cleans up any leftover OIDC-provisioned accounts by
+  hand, matching the already-documented `System → None` posture.
+
+  Lifecycle:
+    - The Job itself is a Helm hook (post-install,post-upgrade) with
+      `helm.sh/hook-delete-policy: before-hook-creation` so `helm
+      upgrade` re-runs it on every reconcile.
+    - No ServiceAccount/Role/RoleBinding: the Job only talks to
+      Grafana over the in-cluster Service and reads the admin
+      credentials from the chart-managed `grafana-admin-password`
+      Secret via `envFrom`.
+    - `activeDeadlineSeconds` caps a stuck Job so a broken Grafana
+      does not hold the release in `pending-upgrade`.
+*/}}
+{{- $oidc := .Values.oidc | default dict }}
+{{- $mode := $oidc.mode | default "None" }}
+{{- $users := $oidc.users | default (list) }}
+{{- /*
+  Prologue: incompat (secretRef+users) first, then per-entry role +
+  email validation. See monitoring.oidc.assertUsersPrologue. Runs in
+  every mode so a malformed users[] entry fails render even when the
+  Job itself is not emitted (mode=None).
+*/}}
+{{- include "monitoring.oidc.assertUsersPrologue" . }}
+{{- /*
+  Render gate — two independent guards ANDed together:
+    * mode != None    keeps pre-OIDC installs safe on `monitoring`
+                      HR reconciles (empty users but no OIDC at all).
+    * users non-empty covers `customConfig.secretRef` (users forbidden
+                      by assertion) and System / CustomConfig-inline
+                      with `users:` unset — both cases where the
+                      operator opted into OIDC but not into the
+                      chart-managed users-map.
+*/}}
+{{- if and (ne $mode "None") (gt (len $users) 0) }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ .Release.Name }}-oidc-users
+  namespace: {{ .Release.Namespace }}
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "10"
+    "helm.sh/hook-delete-policy": before-hook-creation
+spec:
+  backoffLimit: 6
+  activeDeadlineSeconds: 900
+  # Non-hook cleanup: `hook-delete-policy: before-hook-creation` only fires
+  # on the NEXT hook activation, never on release uninstall — a succeeded
+  # Job + Pod would otherwise linger in the namespace forever. Cozystack
+  # convention: 3600s.
+  ttlSecondsAfterFinished: 3600
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: monitoring-oidc-users
+        app.kubernetes.io/instance: {{ .Release.Name }}
+    spec:
+      restartPolicy: OnFailure
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        runAsGroup: 65534
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: reconcile
+          # Route through cozy-lib.image so mirrored / air-gapped
+          # installations (`_cluster.images-registry`) resolve the image;
+          # matches the pattern in
+          # packages/apps/mariadb/templates/hooks/cleanup-pvc.yaml.
+          image: {{ include "cozy-lib.image" (list ($.Files.Get "images/kubectl.tag" | trim) $) }}
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          env:
+            - name: HOME
+              value: /tmp
+            - name: GRAFANA_URL
+              value: "http://grafana-service.{{ .Release.Namespace }}.svc:3000"
+            - name: GF_ADMIN_USER
+              valueFrom:
+                secretKeyRef:
+                  name: grafana-admin-password
+                  key: user
+            - name: GF_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: grafana-admin-password
+                  key: password
+            - name: OIDC_MODE
+              value: {{ $mode | quote }}
+            - name: DESIRED_USERS_JSON
+              value: {{ $users | toJson | quote }}
+          resources:
+            requests:
+              cpu: 10m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 256Mi
+          command:
+            - /bin/sh
+            - -c
+            - |
+              set -eu
+
+              log() { printf '%s\n' "$*" >&2; }
+
+              api() {
+                # api METHOD PATH [json-body]
+                method=$1
+                path=$2
+                body=${3:-}
+                if [ -n "$body" ]; then
+                  curl --silent --show-error --output /tmp/resp --write-out '%{http_code}' \
+                    --user "$GF_ADMIN_USER:$GF_ADMIN_PASSWORD" \
+                    --header 'Content-Type: application/json' \
+                    --request "$method" \
+                    --data "$body" \
+                    "$GRAFANA_URL$path"
+                else
+                  curl --silent --show-error --output /tmp/resp --write-out '%{http_code}' \
+                    --user "$GF_ADMIN_USER:$GF_ADMIN_PASSWORD" \
+                    --request "$method" \
+                    "$GRAFANA_URL$path"
+                fi
+              }
+
+              log "Waiting for Grafana at $GRAFANA_URL/api/health..."
+              deadline=$(( $(date +%s) + 600 ))
+              while :; do
+                if curl --silent --fail --output /dev/null --max-time 5 \
+                  "$GRAFANA_URL/api/health"; then
+                  break
+                fi
+                if [ "$(date +%s)" -ge "$deadline" ]; then
+                  log "Grafana did not become ready within 10m; aborting"
+                  exit 1
+                fi
+                sleep 5
+              done
+
+              # Main Org. is orgId=1 in Grafana OSS. We only ever
+              # touch that one org — the chart does not create
+              # additional orgs.
+              ORG_ID=1
+
+              # Emit desired emails one per line. Portable — BusyBox
+              # coreutils in the alpine base do not support jq
+              # --raw-output0 (jq 1.7+) nor `read -d ''`. The template-
+              # level assertUsersEmailShape helper already rejects any
+              # email containing whitespace / control characters, so
+              # line-oriented iteration is safe here.
+              printf '%s' "$DESIRED_USERS_JSON" | jq --raw-output '.[].email' > /tmp/desired-emails 2>/dev/null || : > /tmp/desired-emails
+
+              # URL-encode a string via jq (@uri) — used for query-string
+              # values like /api/users/lookup?loginOrEmail=<encoded>.
+              urlencode() { printf '%s' "$1" | jq --slurp --raw-input --raw-output '@uri'; }
+
+              if [ "$OIDC_MODE" != "None" ]; then
+                log "Reconciling ${OIDC_MODE} users into Grafana org $ORG_ID..."
+                while IFS= read -r email; do
+                  [ -n "$email" ] || continue
+                  role=$(printf '%s' "$DESIRED_USERS_JSON" | jq --raw-output --arg e "$email" '.[] | select(.email == $e) | .role')
+                  log "  ensure user: email=$email role=$role"
+
+                  # 1. Pre-provision the local account so the operator
+                  #    can be assigned a role before their first login.
+                  #    409 is expected on re-run — already provisioned.
+                  # BusyBox `head` / `tr` support only short flags.
+                  password=$(head -c 24 /dev/urandom | base64 | tr -d '=+/' | head -c 32)
+                  create_body=$(jq --null-input --compact-output \
+                    --arg name "$email" \
+                    --arg email "$email" \
+                    --arg login "$email" \
+                    --arg password "$password" \
+                    '{name:$name,email:$email,login:$login,password:$password}')
+                  code=$(api POST /api/admin/users "$create_body")
+                  case "$code" in
+                    200|201) log "    created Grafana account" ;;
+                    412|409|400) log "    account already exists (code $code) — proceeding" ;;
+                    *) log "    POST /api/admin/users failed with code $code:"; cat /tmp/resp >&2; exit 1 ;;
+                  esac
+
+                  # 2. Add to Main Org. — 409 means already a member,
+                  #    we'll PATCH the role below either way.
+                  add_body=$(jq --null-input --compact-output \
+                    --arg loginOrEmail "$email" \
+                    --arg role "$role" \
+                    '{loginOrEmail:$loginOrEmail,role:$role}')
+                  code=$(api POST "/api/orgs/$ORG_ID/users" "$add_body")
+                  case "$code" in
+                    200|201) log "    added to org $ORG_ID with role $role" ;;
+                    409) log "    already a member of org $ORG_ID — will PATCH role" ;;
+                    *) log "    POST /api/orgs/$ORG_ID/users failed with code $code:"; cat /tmp/resp >&2; exit 1 ;;
+                  esac
+
+                  # 3. Look up userId, then PATCH the role to converge
+                  #    demotions/promotions across re-runs. Query-string
+                  #    value URL-encoded so & = ? in the local part parse
+                  #    correctly on the Grafana side.
+                  email_enc=$(urlencode "$email")
+                  code=$(api GET "/api/users/lookup?loginOrEmail=$email_enc")
+                  if [ "$code" != "200" ]; then
+                    log "    GET /api/users/lookup failed with code $code:"; cat /tmp/resp >&2; exit 1
+                  fi
+                  user_id=$(jq --raw-output '.id' < /tmp/resp)
+                  patch_body=$(jq --null-input --compact-output --arg role "$role" '{role:$role}')
+                  code=$(api PATCH "/api/orgs/$ORG_ID/users/$user_id" "$patch_body")
+                  case "$code" in
+                    200) log "    role set to $role" ;;
+                    *) log "    PATCH role failed with code $code:"; cat /tmp/resp >&2; exit 1 ;;
+                  esac
+                done < /tmp/desired-emails
+              else
+                log "mode=None: skipping user reconcile, running prune only."
+              fi
+
+              # Prune — remove every non-admin Main-Org member whose
+              # email is not in the desired list.
+              log "Pruning stale org members..."
+              code=$(api GET "/api/orgs/$ORG_ID/users")
+              if [ "$code" != "200" ]; then
+                log "  GET /api/orgs/$ORG_ID/users failed with code $code:"; cat /tmp/resp >&2; exit 1
+              fi
+              cp /tmp/resp /tmp/members.json
+
+              # The chart-managed admin login name — never pruned.
+              admin_login="$GF_ADMIN_USER"
+
+              # Membership stream: one TAB-separated record per line —
+              # portable across BusyBox coreutils (no jq --raw-output0,
+              # no `read -d ''`, no `grep -z`). Safe because the
+              # template-level email-shape guard already rejects
+              # whitespace / TAB / newline in `spec.oidc.users[].email`.
+              jq --raw-output '.[] | [.userId, .login, .email] | @tsv' < /tmp/members.json > /tmp/members.tsv
+
+              # IFS holds a literal TAB char (POSIX portable — some
+              # ash variants don't handle $'\t' escape).
+              IFS="$(printf '\t')"
+              while read -r uid ulogin uemail; do
+                if [ -z "$uid" ] || [ "$uid" = "null" ]; then continue; fi
+                if [ "$ulogin" = "$admin_login" ]; then
+                  log "  keep admin: login=$ulogin uid=$uid"
+                  continue
+                fi
+                # Match uemail / ulogin against desired list. -F fixed
+                # strings, -x line-anchored, -q quiet. Portable across
+                # BusyBox and GNU grep.
+                if grep -Fxq -e "$uemail" -e "$ulogin" /tmp/desired-emails; then
+                  continue
+                fi
+                log "  removing stale member: login=$ulogin email=$uemail uid=$uid"
+                code=$(api DELETE "/api/orgs/$ORG_ID/users/$uid")
+                case "$code" in
+                  200) : ;;
+                  *) log "    DELETE failed with code $code:"; cat /tmp/resp >&2; exit 1 ;;
+                esac
+              done < /tmp/members.tsv
+
+              log "Done."
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
+{{- end }}

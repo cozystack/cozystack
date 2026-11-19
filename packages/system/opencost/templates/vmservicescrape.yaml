@@ -1,0 +1,11 @@
+apiVersion: operator.victoriametrics.com/v1beta1
+kind: VMServiceScrape
+metadata:
+  name: opencost
+spec:
+  endpoints:
+    - port: http
+      path: /metrics
+  selector:
+    matchLabels:
+      app.kubernetes.io/instance: opencost

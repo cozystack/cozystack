@@ -1,0 +1,13 @@
+snapshot-controller:
+  controller:
+    replicaCount: 2
+    revisionHistoryLimit: 10
+  webhook:
+    replicaCount: 2
+    revisionHistoryLimit: 10
+    hostNetwork: false
+    dnsPolicy: ClusterFirst
+    tls:
+      certManagerIssuerRef:
+        name: selfsigned-cluster-issuer
+        kind: ClusterIssuer

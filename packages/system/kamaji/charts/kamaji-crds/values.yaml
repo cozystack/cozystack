@@ -1,0 +1,15 @@
+# Default values for kamaji-crds.
+# This is a YAML-formatted file.
+# Declare variables to be passed into your templates.
+
+# -- Overrides the name of the chart for resource naming purposes.
+nameOverride: ""
+# -- Overrides the full name of the resources created by the chart.
+fullnameOverride: ""
+
+# -- The namespace where Kamaji has been installed: required to inject the Certificate Authority for cert-manager.
+kamajiNamespace: kamaji-system
+# -- The Kamaji webhook Service name.
+kamajiService: kamaji-webhook-service
+# -- The cert-manager Certificate resource name, holding the Certificate Authority for webhooks.
+kamajiCertificateName: kamaji-serving-cert

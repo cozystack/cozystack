@@ -1,0 +1,34 @@
+_cluster:
+  oidc-enabled: "true"
+  root-host: example.org
+_namespace:
+  etcd: cozy-etcd
+  ingress: nginx
+  host: example.org
+version: "v1.35"
+controlPlane:
+  replicas: 1
+  apiServer:
+    resources: {}
+    resourcesPreset: "large"
+  controllerManager:
+    resources: {}
+    resourcesPreset: "micro"
+  scheduler:
+    resources: {}
+    resourcesPreset: "micro"
+  konnectivity:
+    server:
+      resources: {}
+      resourcesPreset: "micro"
+oidc:
+  mode: "System"
+  customConfig:
+    config: ""
+    secretRef:
+      name: ""
+  users:
+    - email: alice@example.org
+      role: admin
+    - email: bob@example.org
+      role: view

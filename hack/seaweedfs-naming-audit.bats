@@ -1,0 +1,764 @@
+#!/usr/bin/env bats
+# -----------------------------------------------------------------------------
+# Unit tests for hack/seaweedfs-naming-audit.sh.
+#
+# The chart's naming guard refuses whenever both naming generations exist, so the
+# audit IS the classifier — it is what an operator acts on, and acting on it
+# deletes PVCs. Two earlier revisions of this classification shipped as an
+# untested shell snippet inside the runbook, and both were wrong in ways that
+# routed a live tenant into the step that strands its data:
+#
+#   - a selector `^data1-(.*seaweedfs.*)-volume` also matched the CHART-named
+#     claims, so the release-named age range spanned both generations, every
+#     tenant read as "ranges overlap / mid-rebind", and a genuine S-damaged tenant
+#     was routed AWAY from Step 2a (which would have been correct) into Step 2,
+#     which deletes its data claim;
+#   - matching claims by name with `grep seaweedfs` cannot see a long instance
+#     name, whose claims the chart truncates past `seaweedfs`, so such a tenant
+#     read as "L — nothing to do" while the chart refused it.
+#
+# Moving the classifier into a file with tests is the point. These drive it
+# against a fake kubectl, mocking only the cluster boundary.
+#
+# CI runs this file under Bats through `make bats-unit-tests`. It also remains
+# compatible with the legacy `hack/cozytest.sh` translator, whose awk parser
+# recognizes only @test blocks and a bare `}` on its own line. The tests avoid
+# `run`, `$status`, and setup() for that compatibility path.
+#
+# Run with: bats hack/seaweedfs-naming-audit.bats
+# -----------------------------------------------------------------------------
+
+load test_helper
+
+SEAWEEDFS_AUDIT_LIB=1
+export SEAWEEDFS_AUDIT_LIB
+# shellcheck source=seaweedfs-naming-audit.sh
+. "$PWD/hack/seaweedfs-naming-audit.sh"
+
+@test "reconstructs the renamed volume prefix for a default instance" {
+  [ "$(renamed_volume_prefix seaweedfs-system)" = "seaweedfs-system-volume" ]
+}
+
+@test "reconstructs the renamed volume prefix for a non-default instance" {
+  # The release name does not contain the chart name, so 4.31 appends it.
+  [ "$(renamed_volume_prefix foo-system)" = "foo-system-seaweedfs-volume" ]
+}
+
+@test "reconstructs the truncated prefix for a long instance name" {
+  # componentName cuts the fullname to 62-len("volume")=56 before appending, so
+  # `seaweedfs` falls off the tail — the case a `grep seaweedfs` name match cannot
+  # see, and the reason this is reconstructed rather than pattern-matched.
+  got=$(renamed_volume_prefix archive-of-quarterly-financial-statements-x1-system)
+  [ "$got" = "archive-of-quarterly-financial-statements-x1-system-seaw-volume" ]
+  # 56 chars of fullname + "-volume"
+  [ "${#got}" -eq 63 ]
+}
+
+@test "reconstructs a distinct prefix for an instance named seaweedfs-volume" {
+  # The pathological case: this instance's RELEASE-named objects
+  # (seaweedfs-volume-system-volume, data1-seaweedfs-volume-system-volume-0) also
+  # satisfy the CHART-named prefixes. The reconstruction must return the
+  # release-named prefix so the release-named branch can be tested first.
+  got=$(renamed_volume_prefix seaweedfs-volume-system)
+  [ "$got" = "seaweedfs-volume-system-volume" ]
+  # It must NOT collide with the chart-named prefix.
+  [ "$got" != "seaweedfs-volume" ]
+}
+
+@test "the reconstructed prefix never equals the chart-named prefix" {
+  # If it did, both generations would match one branch and the guard/audit could
+  # not separate them at all.
+  for r in seaweedfs-system foo-system seaweedfs-volume-system a-system; do
+    [ "$(renamed_volume_prefix "$r")" != "seaweedfs-volume" ]
+  done
+}
+
+@test "clean duplicate: release-named PVs all strictly newer => legacy is original" {
+  # A tenant that passed through the 4.31 rename: legacy PVs at install time,
+  # duplicate PVs provisioned by the bad upgrade much later.
+  [ "$(classify_mixed_direction 1000 1010 5000 5020)" = "legacy-original" ]
+}
+
+@test "S-damaged: chart-named PVs all strictly newer => release-named is original" {
+  # Installed fresh on 1.5.x (release-named PVs first); an unguarded 1.6 upgrade
+  # then created empty chart-named claims beside them.
+  [ "$(classify_mixed_direction 5000 5020 1000 1010)" = "renamed-original" ]
+}
+
+@test "interrupted Step 2 re-bind: overlapping vintages => no candidate" {
+  # Step 2 re-binds release-named claims onto their ORIGINAL PVs under chart
+  # names, one claim at a time. Interrupted part-way, BOTH generations sit on
+  # original-vintage PVs, so the ranges interleave. The old absolute-window
+  # classifier fell through to a coin flip here and its advice deleted the
+  # un-re-bound claims; the relative rule must refuse instead.
+  [ "$(classify_mixed_direction 1000 1010 1005 1015)" = "overlap" ]
+}
+
+@test "a tie is overlap, not a candidate" {
+  # Second-resolution timestamps: a duplicate provisioned within the same second
+  # as the newest original PV is not STRICTLY newer. Refusing is recoverable;
+  # naming the wrong candidate is not.
+  [ "$(classify_mixed_direction 1000 1010 1010 1020)" = "overlap" ]
+}
+
+@test "direction needs no clock: vintages far from any anchor still classify" {
+  # The shipped StorageClasses are WaitForFirstConsumer, so PVs appear at
+  # pod-SCHEDULE time — on a cold cluster minutes after first_deployed. The rule
+  # must not care: only the two generations' ranges relative to EACH OTHER count.
+  # (The previous classifier anchored a 120s window on first_deployed and
+  # misclassified exactly this case.)
+  [ "$(classify_mixed_direction 100000 100600 200000 200600)" = "legacy-original" ]
+}
+
+@test "the audit's reconstruction agrees with the chart helper it mirrors" {
+  # hack/seaweedfs-naming-audit.sh and
+  # packages/system/seaweedfs/templates/_naming.tpl reimplement the same two
+  # upstream helpers in two languages. If they drift, the audit classifies a
+  # tenant differently from the render that refuses it, and the operator is
+  # working from a different picture than the chart. Render the chart helper
+  # through helm and compare it to this script's output, release by release.
+  chart=$(mktemp -d)
+  printf 'apiVersion: v2\nname: probe\nversion: 0.0.0\n' > "$chart/Chart.yaml"
+  mkdir -p "$chart/templates"
+  cp packages/system/seaweedfs/templates/_naming.tpl "$chart/templates/"
+  cat > "$chart/templates/out.yaml" <<'EOF'
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: probe
+data:
+{{- range $r := list "seaweedfs-system" "foo-system" "seaweedfs-volume-system" "archive-of-quarterly-financial-statements-x1-system" "a-system" }}
+  {{ $r }}: {{ include "seaweedfs.renamedVolumePrefix" $r }}
+{{- end }}
+EOF
+  helm template probe "$chart" 2>/dev/null | sed -n 's/^  \([a-z0-9-]*-system\): \(.*\)$/\1=\2/p' > "$chart/rendered"
+  [ -s "$chart/rendered" ]
+  [ "$(wc -l < "$chart/rendered")" -eq 5 ]
+  while IFS='=' read -r rel expected; do
+    [ -n "$rel" ] || continue
+    got=$(renamed_volume_prefix "$rel")
+    echo "chart: $rel -> $expected ; audit: $got"
+    [ "$got" = "$expected" ]
+  done < "$chart/rendered"
+  rm -rf "$chart"
+}
+
+# -----------------------------------------------------------------------------
+# Fail-closed tests (issue #3431).
+#
+# The classification tests above mock nothing below the classifier. These drive
+# the KUBECTL layer, where the fail-open bug lived: a kubectl call that failed
+# used to return empty stdout, byte-identical to a genuinely clean fleet, so the
+# audit printed an empty table and exited 0 -- the exact false "nothing to do" the
+# operator is told to trust before deleting PVCs. They shim `kubectl` on PATH with
+# a fake and assert the audit fails LOUDLY (non-zero exit + a FATAL naming the
+# query) on any real error, while still treating a genuinely-absent object as
+# clean. Two families:
+#
+#   * enumerating LISTs (get ns / secret / pvc / sts) -- a failure is always fatal;
+#   * by-NAME GETs (a release secret in system_releases, a PVC/PV in pv_epoch) --
+#     `--ignore-not-found` splits a real error (fatal) from a legitimate absence:
+#     an absent release revision is a clean skip; an absent PV degrades to the
+#     safe "cannot establish direction" note and must NOT become a deletion
+#     candidate (the range-narrowing flip Codex reproduced).
+#
+# The two golden tests guard the reverse: on a healthy cluster the output stays
+# byte-for-byte what it was on origin/main, including the MIXED path that exercises
+# every pv_epoch GET.
+#
+# The fake is a real executable on PATH, so it exercises the actual exit-status
+# handling in run_kubectl and the propagation up through every caller -- a for
+# loop over `$(...)` swallows the status, so this is where a regression would hide.
+
+# _release_blob [chart-name] -- the value kubectl returns for a Helm release
+# secret's `.data.release`: base64(base64(gzip(json))). release_json base64-decodes
+# twice and gunzips it, and system_releases reads the chart name from
+# chart.metadata.name (as real Helm payloads carry it). Defaults to a cozy-seaweedfs
+# release so the audit confirms the tenant; pass another chart name for a non-
+# SeaweedFS release, or the literal EMPTY for a chartless {} payload.
+#
+# Three payload SHAPES beyond the default compact one, because the chart-name
+# extraction is now fatal on a miss and every shape below is something a
+# re-serializer or a user's values could produce:
+#   SPACED  whitespace around the JSON punctuation (json.dumps' default)
+#   PRETTY  indented and MULTI-LINE (jq . / yq -o=json), which a line-based
+#           matcher cannot read at all unless newlines are folded first
+#   DECOY   a real cozy-seaweedfs chart PLUS a values subtree that spells
+#           chart.metadata.name with a different value. Helm marshals "config"
+#           (the values) AFTER "chart", so a last-match extraction returns the
+#           decoy and silently declares the tenant non-SeaweedFS.
+#   FIRSTDEP a payload that carries info.first_deployed, so the first_deployed
+#           date call site (the other one #4273 names) is actually exercised --
+#           the default blob omits the field, so first_deployed returns early
+#           without ever touching date.
+_release_blob() {
+  _rb_name=${1:-cozy-seaweedfs}
+  case "$_rb_name" in
+    EMPTY)  _rb_json='{}' ;;
+    SPACED) _rb_json='{"name": "seaweedfs-system", "chart": {"metadata": {"name": "cozy-seaweedfs", "version": "1.0.0"}}}' ;;
+    PRETTY) _rb_json='{
+  "name": "seaweedfs-system",
+  "chart": {
+    "metadata": {
+      "name": "cozy-seaweedfs",
+      "version": "1.0.0"
+    }
+  }
+}' ;;
+    DECOY)  _rb_json='{"name":"seaweedfs-system","chart":{"metadata":{"name":"cozy-seaweedfs"}},"config":{"chart":{"metadata":{"name":"decoy-not-seaweedfs"}}}}' ;;
+    FIRSTDEP) _rb_json='{"name":"seaweedfs-system","info":{"first_deployed":"2019-01-01T00:00:00Z"},"chart":{"metadata":{"name":"cozy-seaweedfs"}}}' ;;
+    *)      _rb_json='{"name":"seaweedfs-system","chart":{"metadata":{"name":"'"$_rb_name"'"}}}' ;;
+  esac
+  printf '%s' "$_rb_json" | gzip | base64 | base64 | tr -d '\n'
+}
+
+# _write_fake_kubectl <dir> <fail> <absent-pv> <blob> <pvcs> -- drop a fake kubectl
+# into <dir>.
+#   <fail>       one of ns | secretlist | secretget | secretget_absent |
+#                secret_missing_field | secret_bad_payload | pvclist | pvcget |
+#                sts | pvget | "" -- the single call to make behave badly. Real-
+#                error targets exit non-zero with a stderr message; secretget_absent
+#                mirrors an absent Secret (--ignore-not-found: exit 0, empty -o
+#                name); secret_missing_field / secret_bad_payload keep the Secret
+#                present but return an empty / undecodable .data.release payload.
+#   <absent-pv>  a PV name (pv-legacy|pv-legacy2|pv-renamed) to report as absent
+#                (exit 0, empty), exercising the "bound claim, PV gone" path.
+#   <pvcs>       newline-separated `get pvc -o name` LIST output.
+#   <bad-ts-pv>  optional PV name whose creationTimestamp GET returns a present
+#                but UNPARSEABLE value (exit 0, garbage), exercising the parse-
+#                failure path #4273 splits from absent evidence.
+# It otherwise walks one confirmed seaweedfs-system tenant. The by-name PVC->PV and
+# PV->timestamp maps are fixed here; timestamps are chosen so the two legacy PVs
+# straddle the single renamed PV (true answer OVERLAP), which is what makes the
+# range-narrowing flip observable. Kept POSIX and free of a column-0 `}` so
+# cozytest.sh's awk converter passes the heredoc through untouched.
+_write_fake_kubectl() {
+  # Grouped redirect (one open of the file). The closing brace is indented, so
+  # cozytest.sh's awk -- which only rewrites a `}` in column 0 -- leaves it and the
+  # heredoc alone.
+  {
+    printf '#!/bin/sh\n'
+    printf "FAIL='%s'\n" "$2"
+    printf "ABSENT_PV='%s'\n" "$3"
+    printf "BLOB='%s'\n" "$4"
+    printf "PVCS='%s'\n" "$5"
+    printf "BAD_TS_PV='%s'\n" "${6:-}"
+    cat <<'FAKE'
+verb=${1:-}; res=${2:-}; args="$*"
+fail() { echo "fake kubectl: $1 (real error)" >&2; exit 1; }
+# Anything this fake does not model must NOT look like a successful empty
+# answer: that is the fail-open shape the audited script exists to reject, and
+# it would let a new query added to the script pass these goldens unnoticed.
+unmodelled() { echo "fake kubectl: unmodelled invocation: $args" >&2; exit 97; }
+if [ "$verb $res" = "get ns" ]; then
+  [ "$FAIL" = ns ] && fail "get ns"
+  printf 'namespace/tenant-test\n'; exit 0
+fi
+if [ "$verb $res" = "get secret" ]; then
+  case "$args" in
+    *sh.helm.release.v1*)
+      # release_json now asks two questions: existence (-o name) then payload
+      # (jsonpath .data.release). Mirror that split so absence, real error, and
+      # corrupt-payload are all reachable independently.
+      case "$args" in
+        *"-o name"*)
+          [ "$FAIL" = secretget ] && fail "release secret existence GET"
+          [ "$FAIL" = secretget_absent ] && exit 0
+          printf 'secret/sh.helm.release.v1.seaweedfs-system.v1\n'; exit 0 ;;
+        *)
+          [ "$FAIL" = secret_missing_field ] && exit 0
+          if [ "$FAIL" = secret_bad_payload ]; then printf '@@@not-base64@@@\n'; exit 0; fi
+          printf '%s\n' "$BLOB"; exit 0 ;;
+      esac ;;
+    *owner=helm*) printf '1\n'; exit 0 ;;
+    *) [ "$FAIL" = secretlist ] && fail "namespace secret LIST"
+       printf 'seaweedfs-system\n'; exit 0 ;;
+  esac
+fi
+if [ "$verb $res" = "get pvc" ]; then
+  case "$args" in
+    *"-o name"*)
+      [ "$FAIL" = pvclist ] && fail "pvc LIST"
+      [ -n "$PVCS" ] && printf '%s\n' "$PVCS"
+      exit 0 ;;
+    *data1-seaweedfs-system-volume-0*) [ "$FAIL" = pvcget ] && fail "pvc GET"; printf 'pv-renamed\n'; exit 0 ;;
+    *data1-seaweedfs-volume-1*)        [ "$FAIL" = pvcget ] && fail "pvc GET"; printf 'pv-legacy2\n'; exit 0 ;;
+    *data1-seaweedfs-volume-0*)        [ "$FAIL" = pvcget ] && fail "pvc GET"; printf 'pv-legacy\n'; exit 0 ;;
+  esac
+  unmodelled
+fi
+if [ "$verb $res" = "get sts" ]; then
+  [ "$FAIL" = sts ] && fail "sts LIST"
+  exit 0
+fi
+if [ "$verb $res" = "get pv" ]; then
+  [ "$FAIL" = pvget ] && fail "get pv"
+  if [ -n "$BAD_TS_PV" ]; then
+    case "$args" in *"$BAD_TS_PV"*) printf 'not-a-timestamp\n'; exit 0 ;; esac
+  fi
+  case "$args" in
+    *pv-legacy2*) [ "$ABSENT_PV" = pv-legacy2 ] && exit 0; printf '2099-01-01T00:00:00Z\n'; exit 0 ;;
+    *pv-legacy*)  [ "$ABSENT_PV" = pv-legacy ]  && exit 0; printf '2020-01-01T00:00:00Z\n'; exit 0 ;;
+    *pv-renamed*) [ "$ABSENT_PV" = pv-renamed ] && exit 0; printf '2020-06-01T00:00:00Z\n'; exit 0 ;;
+  esac
+  unmodelled
+fi
+unmodelled
+FAKE
+  } > "$1/kubectl"
+  chmod +x "$1/kubectl"
+}
+
+# _write_fake_date <dir> -- drop a BSD-flavoured `date` shim into <dir>. It rejects
+# the GNU `-d` spelling exactly as macOS/BSD date does, forcing the audited script
+# down its portable BSD branch, and services that branch with whatever real date
+# lives beneath us (GNU on a CI runner, BSD on a developer's mac). That is what
+# reproduces issue #4273 on EITHER kind of host: without the shim a GNU runner
+# never hits the failing spelling and the bug is invisible in CI. Same heredoc
+# discipline as _write_fake_kubectl -- indented grouped-redirect brace, no
+# column-0 `}` inside, so cozytest.sh's awk converter leaves it untouched.
+_write_fake_date() {
+  {
+    cat <<'FAKEDATE'
+#!/bin/sh
+for _a in "$@"; do
+  case "$_a" in
+    -d) echo "date: illegal option -- d" >&2; exit 1 ;;
+  esac
+done
+# The audit's only other date form: -u -j -f FMT VALUE +%s. Capture BOTH the
+# format and the value the audit actually passed, so this shim exercises the
+# script's real BSD spelling instead of substituting its own. If it dropped the
+# format, a regression in that exact string would ship green -- and the BSD path
+# is the whole of issue #4273, so an inert guard here would defeat the test.
+_fmt=""; _val=""
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = -f ]; then _fmt=${2:-}; _val=${3:-}; break; fi
+  shift
+done
+if [ -n "$_val" ]; then
+  # A real BSD host has `-j -f`, so honor the format the audit passed: a wrong
+  # format fails here exactly as production would.
+  /bin/date -u -j -f "$_fmt" "$_val" +%s 2>/dev/null && exit 0
+  /usr/bin/date -u -j -f "$_fmt" "$_val" +%s 2>/dev/null && exit 0
+  # A GNU-only runner (the CI gate) has no `-j` to enforce the format, so
+  # recompute via `-d` -- but ONLY for the exact format the audit is supposed to
+  # pass. A regressed format must NOT be rescued by GNU here, or these BSD tests
+  # would go green on a broken spelling on the very runner they are meant to guard.
+  if [ "$_fmt" = '%Y-%m-%dT%H:%M:%S' ]; then
+    /usr/bin/date -u -d "$_val" +%s 2>/dev/null && exit 0
+    /bin/date -u -d "$_val" +%s 2>/dev/null && exit 0
+  fi
+fi
+echo "fake date: unsupported invocation: $*" >&2
+exit 1
+FAKEDATE
+  } > "$1/date"
+  chmod +x "$1/date"
+}
+
+# _pvcs_mixed -- the `get pvc -o name` LIST for a MIXED tenant: two legacy claims
+# and one release-named claim, whose PV vintages truly overlap.
+_pvcs_mixed() {
+  printf '%s\n' \
+    persistentvolumeclaim/data1-seaweedfs-volume-0 \
+    persistentvolumeclaim/data1-seaweedfs-volume-1 \
+    persistentvolumeclaim/data1-seaweedfs-system-volume-0
+}
+
+# _expected_L / _expected_mixed_overlap -- golden output built with the SAME printf
+# contract the script uses, so a drift in row count, text, or padding fails the diff.
+_expected_L() {
+  printf '%-24s %-14s %-8s %s\n' NAMESPACE RELEASE CLASS NOTE
+  printf '%-24s %-14s %-8s %s\n' --------- ------- ----- ----
+  printf '%-24s %-14s %-8s %s\n' tenant-test seaweedfs-system L 'chart-named only; the upgrade adopts it, nothing to do'
+}
+_expected_mixed_overlap() {
+  printf '%-24s %-14s %-8s %s\n' NAMESPACE RELEASE CLASS NOTE
+  printf '%-24s %-14s %-8s %s\n' --------- ------- ----- ----
+  printf '%-24s %-14s %-8s %s\n' tenant-test seaweedfs-system MIXED 'both generations; the chart REFUSES until one is removed'
+  printf '%-24s %-14s %-8s   %s\n' '' '' '' 'PV vintages OVERLAP => no candidate. An interrupted Step 2 re-bind looks exactly like this (both generations on original PVs). Finish Step 2 if one is in progress; otherwise escalate. Do NOT run Step 2a.'
+  printf '%-24s %-14s %-8s   %s\n' '' '' '' 'CANDIDATE ONLY: "original" does not mean the other set is EMPTY. A duplicate that'
+  printf '%-24s %-14s %-8s   %s\n' '' '' '' 'served writes and later crashed looks identical here. Verify emptiness before deleting.'
+}
+
+@test "fails closed when 'kubectl get ns' fails (whole-cluster mode)" {
+  # No namespace args -> main enumerates namespaces itself. If that LIST fails,
+  # the OLD code audited zero namespaces and still printed an empty clean table.
+  d=$(mktemp -d)
+  _write_fake_kubectl "$d" ns "" "$(_release_blob)" ""
+  rc=0
+  out=$(PATH="$d:$PATH" SEAWEEDFS_AUDIT_LIB=0 sh "$PWD/hack/seaweedfs-naming-audit.sh" 2>&1) || rc=$?
+  rm -rf "$d"
+  echo "rc=$rc"; echo "$out"
+  [ "$rc" -ne 0 ]
+  printf '%s\n' "$out" | grep -q 'FATAL'
+  printf '%s\n' "$out" | grep -q 'list namespaces'
+}
+
+@test "fails closed when the namespace-wide secret LIST fails" {
+  # system_releases enumerates Helm releases with a namespace-wide secret LIST --
+  # the exact call that timed out in the field and reported a false clean.
+  d=$(mktemp -d)
+  _write_fake_kubectl "$d" secretlist "" "$(_release_blob)" ""
+  rc=0
+  out=$(PATH="$d:$PATH" SEAWEEDFS_AUDIT_LIB=0 sh "$PWD/hack/seaweedfs-naming-audit.sh" tenant-test 2>&1) || rc=$?
+  rm -rf "$d"
+  echo "rc=$rc"; echo "$out"
+  [ "$rc" -ne 0 ]
+  printf '%s\n' "$out" | grep -q 'FATAL'
+  printf '%s\n' "$out" | grep -q 'list Helm release secrets'
+}
+
+@test "fails closed when the by-name release-secret existence GET hits a real error" {
+  # Codex Finding 1: system_releases uses release_json to decide whether a release
+  # IS SeaweedFS. Both LISTs succeed, then a transient/forbidden by-name Secret GET
+  # used to leave `chart` empty -> the tenant was silently skipped -> exit 0, empty
+  # table. A real error here must now be fatal, not a false clean.
+  d=$(mktemp -d)
+  _write_fake_kubectl "$d" secretget "" "$(_release_blob)" ""
+  rc=0
+  out=$(PATH="$d:$PATH" SEAWEEDFS_AUDIT_LIB=0 sh "$PWD/hack/seaweedfs-naming-audit.sh" tenant-test 2>&1) || rc=$?
+  rm -rf "$d"
+  echo "rc=$rc"; echo "$out"
+  [ "$rc" -ne 0 ]
+  printf '%s\n' "$out" | grep -q 'FATAL'
+  printf '%s\n' "$out" | grep -q 'Helm release secret'
+}
+
+@test "an absent release-secret revision is a clean skip, not a failure" {
+  # The one legitimately-empty case for release_json: the revision secret does not
+  # exist (pruned by Helm history limit). The existence check (--ignore-not-found -o
+  # name) returns empty + exit 0, so the release is simply not confirmed as
+  # SeaweedFS. No error, no crash -- the audit completes and reports nothing here.
+  d=$(mktemp -d)
+  _write_fake_kubectl "$d" secretget_absent "" "$(_release_blob)" ""
+  rc=0
+  out=$(PATH="$d:$PATH" SEAWEEDFS_AUDIT_LIB=0 sh "$PWD/hack/seaweedfs-naming-audit.sh" tenant-test 2>&1) || rc=$?
+  rm -rf "$d"
+  echo "rc=$rc"; echo "$out"
+  [ "$rc" -eq 0 ]
+  [ "$(printf '%s\n' "$out" | grep -c 'FATAL')" -eq 0 ]
+}
+
+@test "fails closed when a present release secret has no .data.release payload" {
+  # Codex re-review round 2: the existence check passes (Secret EXISTS), but its
+  # .data.release field is empty/missing. That is CORRUPT state, not an absence --
+  # and because the earlier fix used --ignore-not-found -o jsonpath, which returns
+  # empty+0 for BOTH, it used to read as a clean skip. It must be a loud stop.
+  d=$(mktemp -d)
+  _write_fake_kubectl "$d" secret_missing_field "" "$(_release_blob)" ""
+  rc=0
+  out=$(PATH="$d:$PATH" SEAWEEDFS_AUDIT_LIB=0 sh "$PWD/hack/seaweedfs-naming-audit.sh" tenant-test 2>&1) || rc=$?
+  rm -rf "$d"
+  echo "rc=$rc"; echo "$out"
+  [ "$rc" -ne 0 ]
+  printf '%s\n' "$out" | grep -q 'FATAL'
+  printf '%s\n' "$out" | grep -q 'no .data.release payload'
+}
+
+@test "fails closed when a present release secret has an undecodable payload" {
+  # Existence passes, .data.release is non-empty but is not base64(base64(gzip(...))),
+  # so every decode fails. The old `|| return 0` converted that decode failure into
+  # a clean 0 return -> silent skip. A corrupt payload must be fatal.
+  d=$(mktemp -d)
+  _write_fake_kubectl "$d" secret_bad_payload "" "$(_release_blob)" ""
+  rc=0
+  out=$(PATH="$d:$PATH" SEAWEEDFS_AUDIT_LIB=0 sh "$PWD/hack/seaweedfs-naming-audit.sh" tenant-test 2>&1) || rc=$?
+  rm -rf "$d"
+  echo "rc=$rc"; echo "$out"
+  [ "$rc" -ne 0 ]
+  printf '%s\n' "$out" | grep -q 'FATAL'
+  printf '%s\n' "$out" | grep -q 'not decodable'
+}
+
+@test "fails closed when a present release secret decodes to a chartless payload" {
+  # Codex round 3: the payload fetches and DECODES cleanly (valid JSON {}), so the
+  # decode guards all pass -- but it carries no chart name. system_releases then
+  # extracted chart='' and silently skipped the tenant -> exit 0, clean table. A
+  # decoded helm.sh/release.v1 release without a chart name is corrupt: fatal.
+  d=$(mktemp -d)
+  _write_fake_kubectl "$d" "" "" "$(_release_blob EMPTY)" ""
+  rc=0
+  out=$(PATH="$d:$PATH" SEAWEEDFS_AUDIT_LIB=0 sh "$PWD/hack/seaweedfs-naming-audit.sh" tenant-test 2>&1) || rc=$?
+  rm -rf "$d"
+  echo "rc=$rc"; echo "$out"
+  [ "$rc" -ne 0 ]
+  printf '%s\n' "$out" | grep -q 'FATAL'
+  printf '%s\n' "$out" | grep -q 'could not read the chart name'
+  # The diagnostic must name the path it looked at, so a future Helm payload
+  # format change is diagnosable as such instead of reading as real corruption.
+  printf '%s\n' "$out" | grep -q '\.chart\.metadata\.name'
+}
+
+@test "a present release secret for a non-SeaweedFS chart is a silent legitimate skip" {
+  # The counterpart the guard must NOT break: a real, well-formed release whose
+  # chart is simply not cozy-seaweedfs. It has a chart name (so it is not corrupt),
+  # but the wrong one, so it is filtered out exactly as before -- no row, no error.
+  d=$(mktemp -d)
+  _write_fake_kubectl "$d" "" "" "$(_release_blob cozy-postgres)" ""
+  rc=0
+  out=$(PATH="$d:$PATH" SEAWEEDFS_AUDIT_LIB=0 sh "$PWD/hack/seaweedfs-naming-audit.sh" tenant-test 2>&1) || rc=$?
+  rm -rf "$d"
+  echo "rc=$rc"; echo "$out"
+  [ "$rc" -eq 0 ]
+  [ "$(printf '%s\n' "$out" | grep -c 'FATAL')" -eq 0 ]
+  # Not confirmed as SeaweedFS -> no classification row for the release.
+  [ "$(printf '%s\n' "$out" | grep -c 'seaweedfs-system')" -eq 0 ]
+}
+
+@test "fails closed when 'kubectl get pvc' LIST fails" {
+  # The secret enumeration succeeds and confirms a seaweedfs-system tenant, so the
+  # audit reaches the per-namespace PVC LIST; a failure there must abort, not read
+  # as "this tenant has no claims".
+  d=$(mktemp -d)
+  _write_fake_kubectl "$d" pvclist "" "$(_release_blob)" ""
+  rc=0
+  out=$(PATH="$d:$PATH" SEAWEEDFS_AUDIT_LIB=0 sh "$PWD/hack/seaweedfs-naming-audit.sh" tenant-test 2>&1) || rc=$?
+  rm -rf "$d"
+  echo "rc=$rc"; echo "$out"
+  [ "$rc" -ne 0 ]
+  printf '%s\n' "$out" | grep -q 'FATAL'
+  printf '%s\n' "$out" | grep -q 'list PVCs'
+}
+
+@test "fails closed when 'kubectl get sts' LIST fails" {
+  # PVC LIST succeeds (empty), so the audit reaches the StatefulSet LIST; a
+  # failure there must abort rather than read as "no StatefulSets".
+  d=$(mktemp -d)
+  _write_fake_kubectl "$d" sts "" "$(_release_blob)" ""
+  rc=0
+  out=$(PATH="$d:$PATH" SEAWEEDFS_AUDIT_LIB=0 sh "$PWD/hack/seaweedfs-naming-audit.sh" tenant-test 2>&1) || rc=$?
+  rm -rf "$d"
+  echo "rc=$rc"; echo "$out"
+  [ "$rc" -ne 0 ]
+  printf '%s\n' "$out" | grep -q 'FATAL'
+  printf '%s\n' "$out" | grep -q 'StatefulSets'
+}
+
+@test "fails closed when the by-name PV GET hits a real error" {
+  # Codex Finding 2, error half: pv_epoch reads each bound PV's age by name. A real
+  # error (RBAC/timeout) must abort, not silently drop that PV from the range.
+  d=$(mktemp -d)
+  _write_fake_kubectl "$d" pvget "" "$(_release_blob)" "$(_pvcs_mixed)"
+  rc=0
+  out=$(PATH="$d:$PATH" SEAWEEDFS_AUDIT_LIB=0 sh "$PWD/hack/seaweedfs-naming-audit.sh" tenant-test 2>&1) || rc=$?
+  rm -rf "$d"
+  echo "rc=$rc"; echo "$out"
+  [ "$rc" -ne 0 ]
+  printf '%s\n' "$out" | grep -q 'FATAL'
+  printf '%s\n' "$out" | grep -q "get PV '"
+}
+
+@test "an absent PV degrades to the safe fallback, never a wrong candidate" {
+  # Codex Finding 2, absence half. True vintages: legacy PVs 2020 + 2099 straddle
+  # the single renamed PV 2020-06 => OVERLAP. Report the newest legacy PV (2099) as
+  # ABSENT: the observed legacy range collapses to {2020} and, unguarded, "every
+  # release-named PV is strictly newer" would fire -- naming the release-named set a
+  # deletion candidate on incomplete evidence. The generation must instead read as
+  # incomplete and fall to "cannot establish direction".
+  d=$(mktemp -d)
+  _write_fake_kubectl "$d" "" pv-legacy2 "$(_release_blob)" "$(_pvcs_mixed)"
+  rc=0
+  out=$(PATH="$d:$PATH" SEAWEEDFS_AUDIT_LIB=0 sh "$PWD/hack/seaweedfs-naming-audit.sh" tenant-test 2>&1) || rc=$?
+  rm -rf "$d"
+  echo "rc=$rc"; echo "$out"
+  [ "$rc" -eq 0 ]
+  [ "$(printf '%s\n' "$out" | grep -c 'FATAL')" -eq 0 ]
+  printf '%s\n' "$out" | grep -q 'direction cannot be established from PV ages'
+  # The whole point: incomplete evidence must NOT be reported as a deletion candidate.
+  [ "$(printf '%s\n' "$out" | grep -c 'candidate duplicate')" -eq 0 ]
+}
+
+@test "success path (L) is byte-identical to the expected fixture" {
+  # A single chart-named claim, no release-named one, no StatefulSets => L, adopt in
+  # place. Full-output compare, so an extra row / warning / duplicate line fails.
+  d=$(mktemp -d)
+  _write_fake_kubectl "$d" "" "" "$(_release_blob)" "persistentvolumeclaim/data1-seaweedfs-volume-0"
+  rc=0
+  out=$(PATH="$d:$PATH" SEAWEEDFS_AUDIT_LIB=0 sh "$PWD/hack/seaweedfs-naming-audit.sh" tenant-test 2>&1) || rc=$?
+  printf '%s\n' "$out" > "$d/got"
+  _expected_L > "$d/want"
+  echo "rc=$rc"; echo "--- got ---"; cat "$d/got"; echo "--- want ---"; cat "$d/want"
+  [ "$rc" -eq 0 ]
+  diff "$d/want" "$d/got"
+  rm -rf "$d"
+}
+
+@test "success path (MIXED/overlap) is byte-identical and exercises pv_epoch" {
+  # Both generations present with all PVs readable => the MIXED path runs every
+  # pv_epoch GET and lands on OVERLAP. Full-output compare against the golden.
+  d=$(mktemp -d)
+  _write_fake_kubectl "$d" "" "" "$(_release_blob)" "$(_pvcs_mixed)"
+  rc=0
+  out=$(PATH="$d:$PATH" SEAWEEDFS_AUDIT_LIB=0 sh "$PWD/hack/seaweedfs-naming-audit.sh" tenant-test 2>&1) || rc=$?
+  printf '%s\n' "$out" > "$d/got"
+  _expected_mixed_overlap > "$d/want"
+  echo "rc=$rc"; echo "--- got ---"; cat "$d/got"; echo "--- want ---"; cat "$d/want"
+  [ "$rc" -eq 0 ]
+  diff "$d/want" "$d/got"
+  rm -rf "$d"
+}
+
+@test "a whitespace-spaced Helm payload still classifies the tenant" {
+  # The chart-name read is FATAL on a miss, so any payload shape a re-serializer
+  # can produce must parse. Byte-compare against the same golden as the compact
+  # payload: the shape must make no difference to the report at all.
+  d=$(mktemp -d)
+  _write_fake_kubectl "$d" "" "" "$(_release_blob SPACED)" "persistentvolumeclaim/data1-seaweedfs-volume-0"
+  rc=0
+  out=$(PATH="$d:$PATH" SEAWEEDFS_AUDIT_LIB=0 sh "$PWD/hack/seaweedfs-naming-audit.sh" tenant-test 2>&1) || rc=$?
+  printf '%s\n' "$out" > "$d/got"
+  _expected_L > "$d/want"
+  echo "rc=$rc"; echo "--- got ---"; cat "$d/got"
+  [ "$rc" -eq 0 ]
+  diff "$d/want" "$d/got"
+  rm -rf "$d"
+}
+
+@test "a pretty-printed multi-line Helm payload still classifies the tenant" {
+  # Line-based sed/grep cannot see across newlines at all, so this shape is the
+  # one that fails hardest without the newline fold -- and jq/yq re-serialization
+  # is exactly how a payload would arrive indented.
+  d=$(mktemp -d)
+  _write_fake_kubectl "$d" "" "" "$(_release_blob PRETTY)" "persistentvolumeclaim/data1-seaweedfs-volume-0"
+  rc=0
+  out=$(PATH="$d:$PATH" SEAWEEDFS_AUDIT_LIB=0 sh "$PWD/hack/seaweedfs-naming-audit.sh" tenant-test 2>&1) || rc=$?
+  printf '%s\n' "$out" > "$d/got"
+  _expected_L > "$d/want"
+  echo "rc=$rc"; echo "--- got ---"; cat "$d/got"
+  [ "$rc" -eq 0 ]
+  diff "$d/want" "$d/got"
+  rm -rf "$d"
+}
+
+@test "a values subtree spelling chart.metadata.name cannot shadow the real chart" {
+  # Helm marshals "config" (the user's values) AFTER "chart", so a LAST-match
+  # extraction returns the decoy, the release reads as non-SeaweedFS, and the
+  # tenant vanishes from the report with exit 0 -- a false clean, the failure this
+  # whole script exists to prevent. First-match extraction is what stops it.
+  d=$(mktemp -d)
+  _write_fake_kubectl "$d" "" "" "$(_release_blob DECOY)" "persistentvolumeclaim/data1-seaweedfs-volume-0"
+  rc=0
+  out=$(PATH="$d:$PATH" SEAWEEDFS_AUDIT_LIB=0 sh "$PWD/hack/seaweedfs-naming-audit.sh" tenant-test 2>&1) || rc=$?
+  printf '%s\n' "$out" > "$d/got"
+  _expected_L > "$d/want"
+  echo "rc=$rc"; echo "--- got ---"; cat "$d/got"
+  [ "$rc" -eq 0 ]
+  # The decoy name must never reach the report.
+  [ "$(printf '%s\n' "$out" | grep -c 'decoy-not-seaweedfs')" -eq 0 ]
+  diff "$d/want" "$d/got"
+  rm -rf "$d"
+}
+
+@test "fails closed when the by-name PVC GET hits a real error" {
+  # pv_epoch resolves each claim's bound PV by name before reading the PV's age.
+  # A real error there (RBAC/timeout) must abort: silently dropping the claim
+  # shrinks the observed vintage range, which is what produces a wrong "candidate
+  # duplicate" verdict. The PV half of this pair was already covered; this is the
+  # PVC half, whose fake FAIL mode existed with no test behind it.
+  d=$(mktemp -d)
+  _write_fake_kubectl "$d" pvcget "" "$(_release_blob)" "$(_pvcs_mixed)"
+  rc=0
+  out=$(PATH="$d:$PATH" SEAWEEDFS_AUDIT_LIB=0 sh "$PWD/hack/seaweedfs-naming-audit.sh" tenant-test 2>&1) || rc=$?
+  rm -rf "$d"
+  echo "rc=$rc"; echo "$out"
+  [ "$rc" -ne 0 ]
+  printf '%s\n' "$out" | grep -q 'FATAL'
+  printf '%s\n' "$out" | grep -q "get PVC '"
+}
+
+# -----------------------------------------------------------------------------
+# Portable timestamp parsing (issue #4273).
+#
+# first_deployed and pv_epoch turn an RFC3339 timestamp into epoch seconds. The
+# call sites used `date -u -d`, which only GNU date accepts; on a host with BSD
+# date (macOS) the call failed, its stderr was swallowed, and `|| return 0`
+# converted that host-tool failure into the script's "no epoch" signal -- so every
+# tenant read as MIXED / "direction cannot be established". These drive both call
+# sites, the parse_epoch helper directly, and the split the fix introduces between
+# an ABSENT timestamp (benign, still silent) and a PRESENT-but-unreadable one
+# (fatal, loud). The BSD-date reproduction shims `date` on PATH so it is
+# deterministic on a GNU CI runner too, where the raw bug is otherwise invisible.
+
+@test "parse_epoch reads an RFC3339 timestamp on either GNU or BSD date" {
+  # The fix's core: whichever spelling the host's date speaks, the same epoch
+  # comes out. On a BSD host this exercises the branch #4273 was about; on a GNU
+  # runner the other. Either way the answer is the known epoch, Z-suffix and all.
+  #
+  # These are ABSOLUTE epochs and hold on any host timezone: both forms carry
+  # `-u`, which forces the zoneless string (the fix strips the Z at 19 chars) to
+  # be parsed as UTC on GNU and BSD alike -- not just formatted as UTC. So a
+  # non-UTC TZ shifts neither value, which is also why the audit's clock-free
+  # relative comparison is timezone-immune. Run under a deliberately non-UTC TZ
+  # so this stays a regression guard on that `-u`: drop it and the values move.
+  [ "$(TZ='XXX5'; export TZ; parse_epoch 2026-09-15T11:00:00Z)" = 1789470000 ]
+  [ "$(TZ='XXX5'; export TZ; parse_epoch 2020-01-01T00:00:00Z)" = 1577836800 ]
+}
+
+@test "parse_epoch fails loudly on a value neither date form can read" {
+  # A present-but-unreadable timestamp is NOT the absent-evidence case: it is a
+  # clock the host could not read. It must be fatal and name the value, never
+  # folded into the silent "no epoch" path (#4273). audit_fatal writes to stderr.
+  rc=0
+  out=$(parse_epoch 'not-a-timestamp' 2>&1) || rc=$?
+  echo "rc=$rc out=$out"
+  [ "$rc" -ne 0 ]
+  # Nothing on stdout: a caller capturing the epoch gets empty, not garbage.
+  [ -z "$(parse_epoch 'not-a-timestamp' 2>/dev/null)" ]
+  printf '%s\n' "$out" | grep -q 'FATAL'
+  printf '%s\n' "$out" | grep -q 'not-a-timestamp'
+}
+
+@test "MIXED classifies under a BSD-only date, not 'direction cannot be established'" {
+  # #4273 reproduced end-to-end at the pv_epoch call site. With a date that has no
+  # GNU -d, the OLD code swallowed every parse, marked both generations INCOMPLETE,
+  # and reported "direction cannot be established" for a tenant whose PV ages ARE
+  # readable. The portable parse must classify the SAME fixtures as OVERLAP,
+  # byte-identical to the golden the GNU path produces.
+  d=$(mktemp -d)
+  _write_fake_kubectl "$d" "" "" "$(_release_blob)" "$(_pvcs_mixed)"
+  _write_fake_date "$d"
+  rc=0
+  out=$(PATH="$d:$PATH" SEAWEEDFS_AUDIT_LIB=0 sh "$PWD/hack/seaweedfs-naming-audit.sh" tenant-test 2>&1) || rc=$?
+  printf '%s\n' "$out" > "$d/got"
+  _expected_mixed_overlap > "$d/want"
+  echo "rc=$rc"; echo "--- got ---"; cat "$d/got"; echo "--- want ---"; cat "$d/want"
+  [ "$rc" -eq 0 ]
+  [ "$(printf '%s\n' "$out" | grep -c 'direction cannot be established')" -eq 0 ]
+  diff "$d/want" "$d/got"
+  rm -rf "$d"
+}
+
+@test "first_deployed parses under a BSD-only date (the second call site)" {
+  # #4273 names BOTH date call sites. With a payload that carries first_deployed
+  # and a BSD-only date, the OLD line returned non-zero and aborted the whole
+  # audit before the MIXED report; the portable parse reads it, so the
+  # 'oldest PV vs first_deployed' context line appears and the audit completes.
+  d=$(mktemp -d)
+  _write_fake_kubectl "$d" "" "" "$(_release_blob FIRSTDEP)" "$(_pvcs_mixed)"
+  _write_fake_date "$d"
+  rc=0
+  out=$(PATH="$d:$PATH" SEAWEEDFS_AUDIT_LIB=0 sh "$PWD/hack/seaweedfs-naming-audit.sh" tenant-test 2>&1) || rc=$?
+  echo "rc=$rc"; echo "$out"
+  [ "$rc" -eq 0 ]
+  printf '%s\n' "$out" | grep -q 'oldest PV vs first_deployed'
+}
+
+@test "an unparseable PV timestamp is fatal, not absent evidence" {
+  # The distinction #4273 asks for, at the pv_epoch site: a PV whose
+  # creationTimestamp is PRESENT but unreadable must abort loudly, NOT degrade to
+  # the absent-evidence 'direction cannot be established' branch that a Pending
+  # claim legitimately takes. The fake returns garbage for one bound PV; real
+  # host date is used, so this fails on GNU and BSD alike.
+  d=$(mktemp -d)
+  _write_fake_kubectl "$d" "" "" "$(_release_blob)" "$(_pvcs_mixed)" pv-renamed
+  rc=0
+  out=$(PATH="$d:$PATH" SEAWEEDFS_AUDIT_LIB=0 sh "$PWD/hack/seaweedfs-naming-audit.sh" tenant-test 2>&1) || rc=$?
+  rm -rf "$d"
+  echo "rc=$rc"; echo "$out"
+  [ "$rc" -ne 0 ]
+  printf '%s\n' "$out" | grep -q 'FATAL'
+  printf '%s\n' "$out" | grep -q 'not-a-timestamp'
+  [ "$(printf '%s\n' "$out" | grep -c 'direction cannot be established')" -eq 0 ]
+}

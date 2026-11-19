@@ -1,0 +1,25 @@
+{{/*
+Copyright (c) HashiCorp, Inc.
+SPDX-License-Identifier: MPL-2.0
+*/}}
+
+{{- if .Values.injector.podDisruptionBudget }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ template "openbao.fullname" . }}-agent-injector
+  namespace: {{ include "openbao.namespace" . }}
+  labels:
+    helm.sh/chart: {{ include "openbao.chart" . }}
+    app.kubernetes.io/name: {{ include "openbao.name" . }}-agent-injector
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+    component: webhook
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ template "openbao.name" . }}-agent-injector
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      component: webhook
+  {{- toYaml .Values.injector.podDisruptionBudget | nindent 2 }}
+{{- end -}}

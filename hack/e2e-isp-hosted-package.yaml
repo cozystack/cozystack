@@ -1,0 +1,17 @@
+# Platform Package for the isp-hosted lane (.github/workflows/e2e-isp-hosted.yaml).
+# The cluster is kind, which brings its own CNI, kube-proxy and default
+# StorageClass, so nothing here configures networking or storage: providing
+# them is the host's job on this variant. The endpoint is the kind
+# control-plane container's name on the docker network the sandbox joins.
+apiVersion: cozystack.io/v1alpha1
+kind: Package
+metadata:
+  name: cozystack.cozystack-platform
+spec:
+  variant: isp-hosted
+  components:
+    platform:
+      values:
+        publishing:
+          host: "example.org"
+          apiServerEndpoint: "https://cozy-hosted-control-plane:6443"

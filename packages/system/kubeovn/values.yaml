@@ -1,0 +1,82 @@
+kube-ovn:
+  namespace: cozy-kubeovn
+  func:
+    ENABLE_NP: false
+    ENABLE_LB: false
+  ipv4:
+    POD_CIDR: "10.244.0.0/16"
+    POD_GATEWAY: "10.244.0.1"
+    SVC_CIDR: "10.96.0.0/16"
+    JOIN_CIDR: "100.64.0.0/16"
+  MASTER_NODES_LABEL: "node-role.kubernetes.io/control-plane"
+  networking:
+    ENABLE_SSL: true
+  cni_conf:
+    CNI_CONFIG_PRIORITY: "10"
+    MOUNT_LOCAL_BIN_DIR: false
+  # These three directories are hostPaths on every node. The kube-ovn defaults
+  # place them under /etc/origin, which a Talos node cannot create: its root
+  # filesystem is read-only, so the container fails at create time with
+  # "mkdir /etc/origin: read-only file system". Keep them under the writable
+  # /var/lib. OVN_IPSEC_KEY_DIR only takes effect with func.ENABLE_OVN_IPSEC
+  # on, where its absence leaves the node without ESP security associations.
+  OPENVSWITCH_DIR: "/var/lib/openvswitch"
+  OVN_IPSEC_KEY_DIR: "/var/lib/ovs_ipsec_keys"
+  OVN_DIR: "/var/lib/ovn"
+  DISABLE_MODULES_MANAGEMENT: true
+  ovn-central:
+    requests:
+      cpu: "50m"
+      memory: "100Mi"
+    limits:
+      cpu: "3"
+      memory: "4Gi"
+  ovs-ovn:
+    # ovn-controller runs inside this container (alongside ovsdb-server and
+    # ovs-vswitchd) and is CPU-bound while programming OpenFlow for newly
+    # created logical ports. During a burst install (many pods created at
+    # once) it competes for CPU in this one container; too tight a limit makes
+    # it CFS-throttle, lengthening flow-programming lag that leaves fresh pods
+    # unreachable from their node until the flows land. Give it CPU headroom
+    # (limit) plus a guaranteed share (request) so it keeps up under burst.
+    requests:
+      cpu: "100m"
+      memory: "50Mi"
+    limits:
+      cpu: "4"
+      memory: "1000Mi"
+  kube-ovn-controller:
+    requests:
+      cpu: "10m"
+      memory: "100Mi"
+    limits:
+      cpu: "1000m"
+      memory: "1Gi"
+  kube-ovn-cni:
+    requests:
+      cpu: "50m"
+      memory: "50Mi"
+    limits:
+      cpu: "1000m"
+      memory: "2Gi"
+  kube-ovn-pinger:
+    requests:
+      cpu: "10m"
+      memory: "50Mi"
+    limits:
+      cpu: "200m"
+      memory: "400Mi"
+  kube-ovn-monitor:
+    requests:
+      cpu: "10m"
+      memory: "50Mi"
+    limits:
+      cpu: "200m"
+      memory: "200Mi"
+global:
+  registry:
+    address: ghcr.io/cozystack/cozystack
+  images:
+    kubeovn:
+      repository: kubeovn
+      tag: v1.15.26@sha256:741299cbd0081a786a6b60c460fa3156b3a42a38141c559dd8ac031f50c5504f

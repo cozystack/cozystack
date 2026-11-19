@@ -1,0 +1,59 @@
+{{- /*
+Render-time signal for a required Cozystack networking invariant.
+
+Cozystack supports this chart only with kubeProxyReplacement: true. The
+platform does not supply a supported alternative owner for ClusterIP
+translation when it is false; in the kube-ovn management topology kube-proxy
+is absent and packages/system/kubeovn/values.yaml explicitly disables the OVN
+service load balancer. A false value can therefore break Service connectivity.
+
+It also removes the pre-policy translation that the source-side webhook denies
+in packages/system/ingress-nginx and packages/system/kubeovn-webhook rely on.
+That does not make either webhook fail open: both policies also carry a
+target-side ingressDeny evaluated after any translation. Even a second,
+unsupported change that introduced another service load balancer would still
+meet that deny.
+
+A ConfigMap rather than `fail`, deliberately. A field override may already be
+running, and this guard keeps the unsupported state visible without turning
+every reconciliation into a render failure. The beacon is diagnostic, not an
+opt-in compatibility mode; the repair is always to restore the required value.
+
+`.Values.cilium.kubeProxyReplacement` reads the coalesced value, so this fires
+both on an explicit flip to false and on the umbrella key being deleted, which
+falls back to the vendored chart's own "false" default.
+
+tests/kube_proxy_replacement_test.yaml pins the value itself and carries the
+full service-routing and policy argument.
+*/}}
+{{- $cilium := index .Values "cilium" | default dict }}
+{{- $kpr := dig "kubeProxyReplacement" "" $cilium }}
+{{- if ne (toString $kpr) "true" }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Release.Name }}-kube-proxy-replacement-off
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+    app.kubernetes.io/name: cilium
+    app.kubernetes.io/instance: {{ .Release.Name }}
+data:
+  status: "kube-proxy-replacement-off"
+  kubeProxyReplacement: {{ toString $kpr | quote }}
+  message: |
+    cilium.kubeProxyReplacement is {{ toString $kpr | quote }}, not "true".
+
+    Cozystack supports this chart only when cilium.kubeProxyReplacement is "true".
+    The current platform topology has no supported replacement for Cilium's
+    ClusterIP translation; on kube-ovn, kube-proxy is absent and the OVN service
+    load balancer is disabled. Service connectivity may fail in this state.
+
+    The source-side admission-webhook denies also lose their pre-DNAT match, but
+    both policies retain a target-side ingressDeny. This override does not imply
+    that either webhook is reachable through its Service.
+
+    Restore cilium.kubeProxyReplacement to true. Disabling the webhook policies
+    does not make this networking configuration supported.
+{{- end }}

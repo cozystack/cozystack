@@ -1,0 +1,39 @@
+apiVersion: v2
+appVersion: latest
+description: Kamaji is the Hosted Control Plane Manager for Kubernetes.
+home: https://github.com/clastix/kamaji
+icon: https://github.com/clastix/kamaji/raw/master/assets/logo-colored.png
+maintainers:
+  - email: dario@tranchitella.eu
+    name: Dario Tranchitella
+    url: https://clastix.io
+  - email: me@bsctl.io
+    name: Adriano Pezzuto
+    url: https://clastix.io
+name: kamaji-crds
+sources:
+  - https://github.com/clastix/kamaji
+type: application
+version: 0.0.0+latest
+annotations:
+  artifacthub.io/crds: |
+    - kind: TenantControlPlane
+      version: v1alpha1
+      name: tenantcontrolplanes.kamaji.clastix.io
+      displayName: TenantControlPlane
+      description: TenantControlPlane defines the desired state for a Control Plane backed by Kamaji.
+    - kind: DataStore
+      version: v1alpha1
+      name: datastores.kamaji.clastix.io
+      displayName: DataStore
+      description: DataStores is holding all the required details to communicate with a Datastore, such as etcd, MySQL, PostgreSQL, and NATS.
+  artifacthub.io/links: |
+    - name: CLASTIX
+      url: https://clastix.io
+    - name: support
+      url: https://clastix.io/support
+  artifacthub.io/changes: |
+    - kind: changed
+      description: Upgrading support to Kubernetes v1.35
+    - kind: added
+      description: Supporting multiple Datastore via etcd overrides

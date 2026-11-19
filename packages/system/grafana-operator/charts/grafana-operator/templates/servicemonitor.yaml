@@ -1,0 +1,44 @@
+{{- if.Values.serviceMonitor.enabled -}}
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "grafana-operator.fullname" . }}
+  namespace: {{ include "grafana-operator.namespace" . }}
+  labels:
+    {{- include "grafana-operator.labels" . | nindent 4 }}
+    app.kubernetes.io/component: operator
+    {{- with .Values.serviceMonitor.additionalLabels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  jobLabel: {{ .Release.Name }}
+  namespaceSelector:
+    matchNames:
+      - {{ .Release.Namespace }}
+  selector:
+    matchLabels:
+      {{- include "grafana-operator.selectorLabels" . | nindent 6 }}
+  endpoints:
+    - port: metrics
+      path: {{ .Values.serviceMonitor.telemetryPath }}
+      {{- with .Values.serviceMonitor.interval }}
+      interval: {{ . }}
+      {{- end }}
+      {{- with .Values.serviceMonitor.scrapeTimeout  }}
+      scrapeTimeout: {{ . }}
+      {{- end }}
+      {{- if .Values.serviceMonitor.metricRelabelings }}
+      metricRelabelings:
+      {{ toYaml .Values.serviceMonitor.metricRelabelings | indent 4 }}
+      {{- end }}
+      {{- if .Values.serviceMonitor.relabelings }}
+      relabelings:
+      {{ toYaml .Values.serviceMonitor.relabelings | nindent 4 }}
+      {{- end }}
+  {{- if .Values.serviceMonitor.targetLabels }}
+  targetLabels:
+  {{- range .Values.serviceMonitor.targetLabels }}
+  - {{ . }}
+  {{- end }}
+  {{- end }}
+{{- end }}

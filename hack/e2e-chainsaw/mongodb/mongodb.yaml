@@ -1,0 +1,20 @@
+apiVersion: apps.cozystack.io/v1alpha1
+kind: MongoDB
+metadata:
+  name: test
+spec:
+  external: false
+  size: 10Gi
+  replicas: 1
+  storageClass: ""
+  resourcesPreset: "small"
+  users:
+    testuser:
+      password: xai7Wepo
+  databases:
+    testdb:
+      roles:
+        admin:
+        - testuser
+  backup:
+    enabled: false

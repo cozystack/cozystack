@@ -1,0 +1,43 @@
+
+apiVersion: cozystack.io/v1alpha1
+kind: PackageSource
+metadata:
+  name: cozystack.monitoring
+  annotations:
+    operator.cozystack.io/skip-cozystack-values: "true"
+spec:
+  sourceRef:
+    kind: OCIRepository
+    name: cozystack-packages
+    namespace: cozy-system
+    path: /
+  variants:
+    - name: default
+      dependsOn:
+        - cozystack.vertical-pod-autoscaler
+        - cozystack.networking
+        - cozystack.postgres-operator
+        - cozystack.grafana-operator
+        - cozystack.victoria-metrics-operator
+        - cozystack.prometheus-operator-crds
+      libraries:
+        - name: cozy-lib
+          path: library/cozy-lib
+      components:
+        - name: monitoring
+          path: system/monitoring
+          libraries: ["cozy-lib"]
+          install:
+            privileged: true
+            namespace: cozy-monitoring
+            releaseName: monitoring
+        - name: vertical-pod-autoscaler
+          path: system/vertical-pod-autoscaler
+        - name: postgres-operator
+          path: system/postgres-operator
+        - name: grafana-operator
+          path: system/grafana-operator
+        - name: victoria-metrics-operator
+          path: system/victoria-metrics-operator
+        - name: prometheus-operator-crds
+          path: system/prometheus-operator-crds

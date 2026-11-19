@@ -1,0 +1,289 @@
+{{- $host := include "cozy-lib.ns-host-required" . }}
+{{- $harborHost := .Values.host | default (printf "%s.%s" .Release.Name $host) }}
+
+{{- $existingSecret := lookup "v1" "Secret" .Release.Namespace (printf "%s-credentials" .Release.Name) }}
+{{- $adminPassword := randAlphaNum 16 }}
+{{- $redisPassword := randAlphaNum 32 }}
+{{- if $existingSecret }}
+  {{- $adminPassword = index $existingSecret.data "admin-password" | b64dec }}
+  {{- if hasKey $existingSecret.data "redis-password" }}
+    {{- $redisPassword = index $existingSecret.data "redis-password" | b64dec }}
+  {{- end }}
+{{- end }}
+
+{{- $existingCoreSecret := lookup "v1" "Secret" .Release.Namespace (printf "%s-core" .Release.Name) }}
+{{- $tokenKey := "" }}
+{{- $tokenCert := "" }}
+{{- if $existingCoreSecret }}
+  {{- if hasKey $existingCoreSecret.data "tls.key" }}
+    {{- $tokenKey = index $existingCoreSecret.data "tls.key" | b64dec }}
+  {{- end }}
+  {{- if hasKey $existingCoreSecret.data "tls.crt" }}
+    {{- $tokenCert = index $existingCoreSecret.data "tls.crt" | b64dec }}
+  {{- end }}
+{{- end }}
+
+{{- /*
+  storageClassName on a PVC is immutable, and a StatefulSet's volumeClaimTemplate
+  cannot be patched at all. The upstream chart renders both the jobservice PVC and
+  the trivy VCT without a storageClassName unless one is passed, so on first install
+  the default-StorageClass admission stamps the cluster default onto the live object.
+  To avoid an immutable-field rejection on upgrade we keep the rendered value equal
+  to the live one: preserve an existing object's storageClassName, and only fall back
+  to the configured storageClass for a fresh install. See issue #2368.
+
+  A live object pinned to an explicit "" (no dynamic provisioning) must round-trip
+  too: upstream maps the "-" sentinel back to storageClassName: "", so forward "-"
+  rather than letting "" collapse to an omitted field. An object carrying no
+  storageClassName key at all keeps the empty fallback so the field stays omitted,
+  matching the live object.
+*/}}
+{{- $jobservicePvc := lookup "v1" "PersistentVolumeClaim" .Release.Namespace (printf "%s-jobservice" .Release.Name) }}
+{{- $jobserviceStorageClass := .Values.storageClass }}
+{{- if $jobservicePvc }}
+  {{- $jobserviceSpec := $jobservicePvc.spec | default dict }}
+  {{- if hasKey $jobserviceSpec "storageClassName" }}
+    {{- $jobserviceStorageClass = $jobserviceSpec.storageClassName | default "-" }}
+  {{- else }}
+    {{- $jobserviceStorageClass = "" }}
+  {{- end }}
+{{- end }}
+
+{{- /* The trivy StatefulSet's VCT is named "data", so its PVCs are
+       data-<release>-trivy-0..N; the class is identical across ordinals, so the
+       first ordinal is representative. */}}
+{{- $trivyPvc := lookup "v1" "PersistentVolumeClaim" .Release.Namespace (printf "data-%s-trivy-0" .Release.Name) }}
+{{- $trivyStorageClass := .Values.storageClass }}
+{{- if $trivyPvc }}
+  {{- $trivySpec := $trivyPvc.spec | default dict }}
+  {{- if hasKey $trivySpec "storageClassName" }}
+    {{- $trivyStorageClass = $trivySpec.storageClassName | default "-" }}
+  {{- else }}
+    {{- $trivyStorageClass = "" }}
+  {{- end }}
+{{- end }}
+
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ .Release.Name }}-credentials
+  labels:
+    apps.cozystack.io/user-secret: "true"
+stringData:
+  admin-password: {{ $adminPassword | quote }}
+  redis-password: {{ $redisPassword | quote }}
+  url: https://{{ $harborHost }}
+
+---
+
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: {{ .Release.Name }}-system
+  labels:
+    sharding.fluxcd.io/key: tenants
+spec:
+  chartRef:
+    kind: ExternalArtifact
+    name: cozystack-harbor-application-default-harbor-system
+    namespace: cozy-system
+  interval: 5m
+  timeout: 15m
+  {{- /* This nested release owns the whole harbor workload: the Deployments,
+         the inline RedisFailover and its volume. Flux's default install
+         strategy remediates a failed install by uninstalling, and install
+         remediation is an uninstall in every case Flux offers, so a first
+         install that goes over budget is torn down between attempts and the
+         next one re-provisions the redis PVC and re-runs the master election
+         from zero. It goes over budget on a busy runner: harbor-core blocks on
+         redis, and the nginx Deployment reaches the default
+         progressDeadlineSeconds of 600s, which Flux reads as a stalled
+         resource and fails the install early. RetryOnFailure keeps the
+         manifests applied and retries the failed release, so the convergence
+         already under way continues instead of restarting. Both actions carry
+         the strategy because the controller performs that retry as an upgrade
+         and the retry's own failure would otherwise fall through to upgrade
+         remediation. The cost is that a genuine upgrade failure retries rather
+         than rolls back, which gives up no stable safety net: with retries: -1
+         and the default strategy, upgrade remediation already rolled back and
+         retried without end. The remediation blocks stay because an absent
+         release consults install and an out-of-sync one consults upgrade, both
+         by retry count rather than by strategy. The parent release that
+         renders this one already carries the same strategy, stamped by the
+         apiserver that builds it from the Application. */}}
+  install:
+    strategy:
+      name: RetryOnFailure
+      retryInterval: 30s
+    remediation:
+      retries: -1
+  upgrade:
+    strategy:
+      name: RetryOnFailure
+      retryInterval: 30s
+    remediation:
+      retries: -1
+  valuesFrom:
+  - kind: Secret
+    name: cozystack-values
+  - kind: Secret
+    name: {{ .Release.Name }}-credentials
+    valuesKey: redis-password
+    targetPath: redis.password
+  - kind: Secret
+    name: {{ .Release.Name }}-credentials
+    valuesKey: redis-password
+    targetPath: harbor.redis.external.password
+  # BucketInfo is the JSON blob populated by the COSI BucketAccess controller.
+  # Merge it at the values root (no targetPath) so Flux unmarshals it as YAML
+  # instead of running it through Helm's strvals parser, which would split the
+  # JSON on commas. This also gates reconciliation on the Secret being ready and
+  # forces a config-digest change when its contents change.
+  - kind: Secret
+    name: {{ .Release.Name }}-registry-bucket
+    valuesKey: BucketInfo
+  values:
+    db:
+      replicas: {{ .Values.database.replicas }}
+      size: {{ .Values.database.size }}
+      {{- with .Values.storageClass }}
+      storageClass: {{ . }}
+      {{- end }}
+    redis:
+      replicas: {{ .Values.redis.replicas }}
+      size: {{ .Values.redis.size }}
+      {{- with .Values.storageClass }}
+      storageClass: {{ . }}
+      {{- end }}
+    harbor:
+      fullnameOverride: {{ .Release.Name }}
+      harborAdminPassword: {{ $adminPassword | quote }}
+      externalURL: https://{{ $harborHost }}
+      expose:
+        type: clusterIP
+        clusterIP:
+          name: {{ .Release.Name }}
+        tls:
+          enabled: false
+      persistence:
+        enabled: true
+        resourcePolicy: "keep"
+        imageChartStorage:
+          type: s3
+          s3:
+            existingSecret: {{ .Release.Name }}-registry-s3
+            region: us-east-1
+            bucket: {{ .Release.Name }}-registry
+            secure: false
+            v4auth: true
+        {{- if or $jobserviceStorageClass .Values.trivy.enabled }}
+        persistentVolumeClaim:
+          {{- with $jobserviceStorageClass }}
+          jobservice:
+            jobLog:
+              storageClass: {{ . | quote }}
+          {{- end }}
+          {{- if .Values.trivy.enabled }}
+          trivy:
+            size: {{ .Values.trivy.size }}
+            {{- with $trivyStorageClass }}
+            storageClass: {{ . | quote }}
+            {{- end }}
+          {{- end }}
+        {{- end }}
+      nginx:
+        resources: {{- include "cozy-lib.resources.defaultingSanitize" (list "t1.small" (dict) $) | nindent 10 }}
+      portal:
+        resources: {{- include "cozy-lib.resources.defaultingSanitize" (list "t1.micro" (dict) $) | nindent 10 }}
+      core:
+        {{- if and $tokenKey $tokenCert }}
+        tokenKey: {{ $tokenKey | quote }}
+        tokenCert: {{ $tokenCert | quote }}
+        {{- end }}
+        resources: {{- include "cozy-lib.resources.defaultingSanitize" (list .Values.core.resourcesPreset .Values.core.resources $) | nindent 10 }}
+      registry:
+        registry:
+          resources: {{- include "cozy-lib.resources.defaultingSanitize" (list .Values.registry.resourcesPreset .Values.registry.resources $) | nindent 12 }}
+        controller:
+          resources: {{- include "cozy-lib.resources.defaultingSanitize" (list .Values.registry.resourcesPreset .Values.registry.resources $) | nindent 12 }}
+      jobservice:
+        resources: {{- include "cozy-lib.resources.defaultingSanitize" (list .Values.jobservice.resourcesPreset .Values.jobservice.resources $) | nindent 10 }}
+      trivy:
+        enabled: {{ .Values.trivy.enabled }}
+        {{- if .Values.trivy.enabled }}
+        resources: {{- include "cozy-lib.resources.defaultingSanitize" (list .Values.trivy.resourcesPreset .Values.trivy.resources $) | nindent 10 }}
+        {{- end }}
+      database:
+        type: external
+        external:
+          host: "{{ .Release.Name }}-db-rw"
+          port: "5432"
+          username: app
+          coreDatabase: app
+          sslmode: require
+          existingSecret: "{{ .Release.Name }}-db-app"
+      redis:
+        type: external
+        external:
+          addr: "rfs-{{ .Release.Name }}-redis:26379"
+          sentinelMasterSet: "mymaster"
+          coreDatabaseIndex: "0"
+          jobserviceDatabaseIndex: "1"
+          registryDatabaseIndex: "2"
+          trivyAdapterIndex: "5"
+      metrics:
+        enabled: true
+        serviceMonitor:
+          enabled: true
+
+---
+
+apiVersion: cozystack.io/v1alpha1
+kind: WorkloadMonitor
+metadata:
+  name: {{ $.Release.Name }}-core
+  labels:
+    workloads.cozystack.io/resource-preset: {{ .Values.core.resourcesPreset | quote }}
+spec:
+  replicas: 1
+  minReplicas: 1
+  kind: harbor
+  type: core
+  selector:
+    release: {{ $.Release.Name }}-system
+    component: core
+  version: {{ $.Chart.Version }}
+
+---
+
+apiVersion: cozystack.io/v1alpha1
+kind: WorkloadMonitor
+metadata:
+  name: {{ $.Release.Name }}-registry
+  labels:
+    workloads.cozystack.io/resource-preset: {{ .Values.registry.resourcesPreset | quote }}
+spec:
+  replicas: 1
+  minReplicas: 1
+  kind: harbor
+  type: registry
+  selector:
+    release: {{ $.Release.Name }}-system
+    component: registry
+  version: {{ $.Chart.Version }}
+
+---
+
+apiVersion: cozystack.io/v1alpha1
+kind: WorkloadMonitor
+metadata:
+  name: {{ $.Release.Name }}-portal
+spec:
+  replicas: 1
+  minReplicas: 1
+  kind: harbor
+  type: portal
+  selector:
+    release: {{ $.Release.Name }}-system
+    component: portal
+  version: {{ $.Chart.Version }}

@@ -1,0 +1,128 @@
+{{- define "backendoptions" }}
+{{- if eq . "tcp" }}
+mode tcp
+balance leastconn
+default-server observe layer4 error-limit 10 on-error mark-down check
+{{- else if eq . "tcp-with-proxy" }}
+mode tcp
+balance leastconn
+default-server observe layer4 error-limit 10 on-error mark-down check send-proxy-v2
+{{- else }}
+{{- fail (printf "mode %s is not supported" .) }}
+{{- end }}
+{{- end }}
+{{- $resources := include "cozy-lib.resources.defaultingSanitize" (list .Values.resourcesPreset .Values.resources $) | fromYaml }}
+{{- $memoryMi := div (include "cozy-lib.resources.toFloat" $resources.limits.memory | float64 | int64) 1048576 }}
+{{- $cpu := include "cozy-lib.resources.toFloat" $resources.limits.cpu | float64 }}
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Release.Name }}-haproxy
+  labels:
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+data:
+  haproxy.cfg: |
+    global
+        fd-hard-limit {{ mul $memoryMi 32 }}
+        thread-hard-limit {{ max (ceil $cpu | int64) 1 }}
+
+    defaults
+        mode    tcp
+        option  dontlognull
+        timeout http-request    10s
+        timeout queue           20s
+        timeout connect         5s
+        timeout client          5m
+        timeout server          5m
+        timeout tunnel          5m
+        timeout http-keep-alive 10s
+        timeout check           10s
+
+    {{- with .Values.httpAndHttps }}
+    {{- if and $.Values.whitelistHTTP (not $.Values.whitelist) }}
+    {{- fail "whitelistHTTP is enabled but whitelist is empty" }}
+    {{- end }}
+    {{- if .targetPorts.http }}
+    frontend http
+        bind :::8080 v4v6
+        mode tcp
+        default_backend http_backend
+        {{- if $.Values.whitelistHTTP }}
+        acl whitelist src{{ range $.Values.whitelist }} {{ . }}{{ end }}
+        acl all src 0.0.0.0
+        tcp-request content accept if whitelist
+        tcp-request content reject
+        {{- end }}
+        tcp-request content set-dst-port int(80)
+
+    backend http_backend
+        {{- include "backendoptions" (default "tcp" .mode) | nindent 8 }}
+        {{- range $num, $ep := .endpoints }} 
+        server srv{{ $num }} {{ $ep }}:{{ $.Values.httpAndHttps.targetPorts.http }} check
+        {{- end }}
+    {{- end }}
+
+    {{- if .targetPorts.https }}
+    frontend https
+        bind :::8443 v4v6
+        {{- if eq (default "tcp" .mode) "http" }}
+        mode http
+        {{- else }}
+        mode tcp
+        {{- end }}
+        default_backend https_backend
+        {{- if $.Values.whitelistHTTP }}
+        acl whitelist src{{ range $.Values.whitelist }} {{ . }}{{ end }}
+        acl all src 0.0.0.0
+        tcp-request content accept if whitelist
+        tcp-request content reject
+        {{- end }}
+        tcp-request content set-dst-port int(443)
+
+    backend https_backend
+        {{- include "backendoptions" (default "tcp" .mode) | nindent 8 }}
+        {{- range $num, $ep := .endpoints }} 
+        server srv{{ $num }} {{ $ep }}:{{ $.Values.httpAndHttps.targetPorts.https }} check
+        {{- end }}
+    {{- end }}
+
+    {{- end }}
+
+
+    {{- with .Values.kubernetesAndTalos }}
+    frontend kubernetes
+        bind :::6443 v4v6
+        mode tcp
+        default_backend kubernetes_backend
+        {{- with $.Values.whitelist }}
+        acl whitelist src{{ range . }} {{ . }}{{ end }}
+        acl all src 0.0.0.0
+        tcp-request content accept if whitelist
+        tcp-request content reject
+        {{- end }}
+
+    frontend talos
+        bind :::50000 v4v6
+        mode tcp
+        default_backend talos_backend
+        {{- with $.Values.whitelist }}
+        acl whitelist src{{ range . }} {{ . }}{{ end }}
+        acl all src 0.0.0.0
+        tcp-request content accept if whitelist
+        tcp-request content reject
+        {{- end }}
+
+    backend kubernetes_backend
+        {{- include "backendoptions" (default "tcp" .mode) | nindent 8 }}
+        {{- range $num, $ep := .endpoints }} 
+        server srv{{ $num }} {{ $ep }}:6443 check
+        {{- end }}
+
+    backend talos_backend
+        {{- include "backendoptions" (default "tcp" .mode) | nindent 8 }}
+        {{- range $num, $ep := .endpoints }} 
+        server srv{{ $num }} {{ $ep }}:50000 check
+        {{- end }}
+    {{- end }}

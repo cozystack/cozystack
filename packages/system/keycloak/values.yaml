@@ -1,0 +1,295 @@
+# Injected by the platform from the cozystack-values Secret. The empty
+# default keeps the chart renderable on its own, outside a cluster.
+_cluster: {}
+
+image: quay.io/keycloak/keycloak:26.6.3
+
+ingress:
+  # Custom hostname for the Keycloak Ingress.
+  # If set, this value will be used as the Ingress hostname (e.g., "auth.example.com").
+  # If left empty, defaults to "keycloak.<root-host>" based on the cluster root-host setting.
+  host: ""
+  # Optional separate hostname for the Keycloak admin console (opt-in).
+  # When set (e.g., "keycloak-admin.example.com"):
+  #   - KC_HOSTNAME_ADMIN is configured so the admin console generates its
+  #     URLs on this hostname;
+  #   - the main `host` (login) route is narrowed to the public OIDC paths
+  #     (the published realms, /resources, /.well-known) only, so the admin
+  #     console and Administration REST API (/admin) are NOT served on the
+  #     login hostname;
+  #   - a dedicated Ingress/HTTPRoute for this hostname routes /  to Keycloak.
+  # The admin route attaches to the Gateway/ingressClass selected by the
+  # cluster-level expose-ingress-admin (defaults to expose-ingress). Point
+  # that at a separate, e.g. private-IP, Gateway to keep the admin console off
+  # the public internet. Note: KC_HOSTNAME_ADMIN alone is NOT a security
+  # boundary (admin REST stays reachable on any hostname routed to Keycloak);
+  # the network/path separation here is what restricts access.
+  # If left empty, the admin console stays on the main hostname (default).
+  adminHost: ""
+  # Realms published on the login hostname, in addition to the platform realm
+  # (authentication.oidc.realmName, default "cozy"), which is always published
+  # because every component's issuer URL points at it.
+  #
+  # A realm not named here is not routed in from outside the cluster once
+  # adminHost is set — that is the point, and master is refused outright, since
+  # its token endpoint accepts super-admin credentials. Without adminHost the
+  # login route still serves "/", master and /admin included; this list is
+  # validated but does not narrow anything until then.
+  #
+  # List a realm a deployment serves to its users beyond the platform one, e.g.
+  # a back-office realm whose issuer URL lives on this hostname:
+  #   exposedRealms: [cozy-admin]
+  # On the Gateway API route each realm takes two of the 64 path matches a rule
+  # holds, so at most 30 entries fit here beside the platform realm.
+  exposedRealms: []
+  annotations:
+    nginx.ingress.kubernetes.io/affinity: "cookie"
+    nginx.ingress.kubernetes.io/session-cookie-expires: "86400"
+    nginx.ingress.kubernetes.io/session-cookie-max-age: "86400"
+    nginx.ingress.kubernetes.io/session-cookie-name: "keycloak-cookie"
+resources:
+  requests:
+    memory: 500Mi
+    cpu: 100m
+
+themes: []
+# - name: my-theme
+#   image: my-registry/my-keycloak-theme:v1.0
+# Theme images must contain theme files under /themes/ directory.
+# Each theme is copied into Keycloak's /opt/keycloak/themes/ via init container.
+# If multiple themes contain files with the same path, later entries take precedence.
+#
+# In addition to this explicit list, a single login theme can be shipped through
+# platform branding values: setting branding.loginTheme (the theme name) together
+# with branding.loginThemeImage (the OCI image carrying it under /themes/) appends
+# an entry here automatically and selects it as the realm login theme. branding
+# arrives via _cluster.branding, so no per-package values plumbing is required.
+
+imagePullSecrets: []
+
+# Placement of the Keycloak pods. Empty leaves it to the scheduler, which is
+# free to put both replicas in one failure domain; a StatefulSet does not
+# replace a pod stuck on an unreachable node, so that domain's loss then takes
+# every replica with it. Example spreading one replica per zone:
+#
+#   topologySpreadConstraints:
+#     - maxSkew: 1
+#       topologyKey: topology.kubernetes.io/zone
+#       whenUnsatisfiable: DoNotSchedule
+#       # Leave out nodes the pod cannot run on (an unreachable zone carries
+#       # the unreachable NoSchedule taint), so the constraint does not count
+#       # a lost zone as a domain the replacement pod must balance against.
+#       nodeTaintsPolicy: Honor
+#       labelSelector:
+#         matchLabels:
+#           app: keycloak-ha
+affinity: {}
+topologySpreadConstraints: []
+# - name: my-registry-secret
+
+# Extra environment variables to inject into the Keycloak container.
+# Useful for passing runtime values that custom themes read via
+# kcContext.properties (Keycloakify themes, FTL templates with
+# ${env.NAME} substitution, etc.).
+# Each entry is appended verbatim to the container's env list and
+# supports the full corev1.EnvVar schema (value, valueFrom, ...).
+extraEnv: []
+# - name: MY_VAR
+#   value: "some-value"
+# - name: MY_SECRET_VAR
+#   valueFrom:
+#     secretKeyRef:
+#       name: my-secret
+#       key: my-key
+
+# Additional system trust anchors (LDAPS, external IdPs, SMTP).
+# Each entry selects one key from an existing Secret or ConfigMap in the
+# release namespace; key defaults to ca.crt. Supply only public certificates:
+# PEM bundles or unencrypted PKCS12 (.p12, .pfx, .pkcs12), without private keys.
+# Keycloak scans /opt/keycloak/conf/truststores recursively on startup;
+# its Java default roots and certificates baked into the image stay trusted.
+# The chart reserves the cozystack-* subdirectories there for these mounts.
+# These CAs apply to the whole Keycloak server, across all realms, so restrict
+# writes to the referenced objects to administrators who manage that trust.
+# They also verify incoming client certificates when https-client-auth is
+# request or required and no separate https-trust-store-file is configured.
+# Set that file explicitly if incoming mTLS needs a different trust boundary.
+# Changing an object's contents does not restart Keycloak: restart both pods
+# after rotation, or change the referenced object name to trigger a rollout.
+# Missing objects/keys prevent the pod from starting. Certificate
+# loading is handled by Keycloak, not Helm; no API read permissions are added.
+truststores: []
+# - configMapName: freeipa-ca
+#   key: ca.crt
+# - secretName: partner-ca
+#   key: certificates.pem
+
+# Transparent column-level PII encryption for the Keycloak database.
+# When enabled, a keycloak-kms-proxy Deployment is placed on the wire
+# between Keycloak and its CloudNativePG database: Keycloak's DB endpoint
+# is repointed at the proxy, which encrypts designated PII columns on
+# writes and decrypts them on reads. The data-encryption key is wrapped by
+# a KMS, so it never lives inside PostgreSQL.
+# Project: https://github.com/cozystack/keycloak-kms-proxy
+#
+# OPERATIONAL CAVEATS — read before enabling:
+#   * Availability downgrade. The proxy runs as a single replica by default.
+#     Keycloak itself runs HA (2 replicas); with encryption on, both replicas
+#     funnel their DB traffic through this one pod, so any proxy restart — node
+#     drain, rollout, image pull, OOM — briefly drops the database connection
+#     for the entire IdP. Set encryption.replicas to run more than one.
+#   * A persistent DEK set is required. Unless fields is "disabled", the chart
+#     refuses to render without deksetSecretName: without it the proxy would
+#     mint a new DEK on every start and lose access to everything it encrypted
+#     before a restart. With kms.backend=static, deploy once with
+#     fields: disabled (passthrough) so the KEK Secret exists, mint the DEK set
+#     with that KEK, then set deksetSecretName and switch fields on.
+#   * Existing data is NOT migrated automatically. Flipping enabled:true on a
+#     populated database leaves the pre-existing PII as plaintext; logins that
+#     match on the deterministic columns (username/email) then fail until the
+#     offline backfill has run. Disabling later is just as unsafe — Keycloak
+#     would point back at CNPG and read ciphertext directly. Off-by-default only
+#     protects FRESH installs. To enable on an existing install, run the backfill
+#     procedure first:
+#     https://github.com/cozystack/keycloak-kms-proxy/blob/main/docs/migration-existing-keycloak.md
+#   * Static KEK = single point of permanent data loss. With kms.backend=static
+#     the KEK is generated once and kept in the keycloak-kms-proxy-kek Secret
+#     (in etcd, next to the DB credentials — "static" trades some at-rest
+#     protection for zero external dependencies). If that Secret is ever lost,
+#     every previously-encrypted value becomes permanently undecryptable, so it
+#     MUST be part of the backup set. Helm keeps the Secret when encryption is
+#     disabled or the package is removed, and the next install reuses it; delete
+#     it by hand only once nothing encrypted under it is left. A stored value
+#     the proxy cannot use fails the render instead of being replaced. For
+#     production prefer kms.backend=vault-transit.
+encryption:
+  enabled: false
+  image: ghcr.io/cozystack/keycloak-kms-proxy:0.2.3@sha256:6ad52ca209b31afe0fb118ca5c2ada418ec22c16a20c5153003c954d9bb54e8e
+  # Encrypted field set: "" = full default set (username, email, names,
+  # PII attributes, credentials), "email-only", or "disabled" (passthrough).
+  fields: ""
+  # Bootstrap window only: downgrades fail-loud rules to passthrough so the
+  # Keycloak Liquibase migrations can complete. MUST be false in steady state.
+  lenient: false
+  # Number of proxy replicas. >1 requires deksetSecretName (a shared wrapped
+  # DEK set) so every replica encrypts deterministic columns under one key.
+  replicas: 1
+  # Placement of the proxy pods, same shape as the top-level affinity and
+  # topologySpreadConstraints (the label is app: keycloak-kms-proxy). With more
+  # than one replica a PodDisruptionBudget keeps one of them up through drains.
+  affinity: {}
+  topologySpreadConstraints: []
+  # Existing Secret holding the wrapped DEK set (dekset.json) minted by the
+  # proxy's backfill tool (`cmd/backfill generate-dekset`). REQUIRED unless
+  # fields is "disabled": the proxy must load the same DEKs on every start to
+  # read what it encrypted before, and the backfill and every replica must
+  # share them. Back it up together with the KEK.
+  deksetSecretName: ""
+  deksetSecretKey: dekset.json
+  kms:
+    # "static" — a self-generated 32-byte KEK kept in a Secret (works on any
+    # cluster, suitable for evaluation). "vault-transit" — the KEK lives in
+    # HashiCorp Vault (recommended for production; supports KEK rotation).
+    backend: static
+    vault:
+      address: ""       # e.g. https://vault.vault.svc:8200
+      keyName: ""       # Transit key name
+      mount: transit    # Transit mount path
+      # Vault authentication mode:
+      #   "kubernetes" — the proxy logs in with its own ServiceAccount token
+      #     (RECOMMENDED: no credential is stored; the kubelet rotates the token).
+      #   "approle" — the proxy logs in via AppRole and re-authenticates on demand.
+      #   "token" — a long-lived Vault token in a Secret.
+      auth: token
+      # token auth: existing Secret holding the Vault token under key "token".
+      tokenSecretName: ""
+      # kubernetes auth: bind the Vault role to the proxy's dedicated
+      # ServiceAccount — system:serviceaccount:<namespace>:keycloak-kms-proxy
+      # (created by this chart). No Secret is needed; the SA token is mounted
+      # into the proxy pod only in this mode.
+      kubernetes:
+        role: ""                # Vault Kubernetes auth role
+        mount: kubernetes       # Kubernetes auth mount path
+      # approle auth: existing Secret holding the AppRole role id and secret id.
+      appRole:
+        mount: approle          # AppRole auth mount path
+        secretName: ""          # Secret with the role id / secret id
+        roleIdKey: role-id      # key in secretName holding the role id
+        secretIdKey: secret-id  # key in secretName holding the secret id
+      # CA to trust when Vault is served over HTTPS by a private CA — as an
+      # inline PEM (the chart renders the Secret and rolls the pods when it
+      # changes) or as a Secret seeded beforehand. Exactly one key of that
+      # Secret is mounted; caSecretKey names it. Rotating a pre-seeded Secret
+      # needs a manual `kubectl rollout restart deploy/keycloak-kms-proxy`,
+      # because the chart cannot see its contents.
+      #
+      # The Vault leg then trusts this CA and nothing else — the public roots in
+      # the proxy image are excluded. The database leg is unaffected either way:
+      # it never consults the system trust store.
+      #
+      # caBundle and caSecretName are mutually exclusive, and both are ignored
+      # unless kms.backend=vault-transit.
+      caBundle: ""
+      caSecretName: ""
+      caSecretKey: ca.crt      # key of caSecretName holding the PEM bundle
+  resources:
+    requests:
+      memory: 128Mi
+      cpu: 50m
+    limits:
+      memory: 256Mi
+
+# Placement of the keycloak-db instances (the CloudNativePG Cluster). Empty leaves
+# it to the scheduler, which is free to put both instances in one failure domain:
+# losing that domain then loses the database and every login with it. `affinity`
+# takes the CloudNativePG affinity shape (nodeAffinity, podAntiAffinityType, ...),
+# `topologySpreadConstraints` the Kubernetes one; the labelSelector for
+# cnpg.io/cluster: keycloak-db is added to each constraint that has none. When
+# topologySpreadConstraints is set it replaces the cluster-wide
+# _cluster.scheduling.globalAppTopologySpreadConstraints for this database.
+# Example, one instance per zone on nodes of two zones only:
+#
+#   database:
+#     affinity:
+#       nodeAffinity:
+#         requiredDuringSchedulingIgnoredDuringExecution:
+#           nodeSelectorTerms:
+#             - matchExpressions:
+#                 - key: topology.kubernetes.io/zone
+#                   operator: In
+#                   values: [zone-a, zone-b]
+#     topologySpreadConstraints:
+#       - maxSkew: 1
+#         topologyKey: topology.kubernetes.io/zone
+#         whenUnsatisfiable: DoNotSchedule
+#         nodeTaintsPolicy: Honor
+#
+# Placement applies to instances created from now on; CloudNativePG does not
+# move a running instance, so an existing cluster has to be rebuilt one instance
+# at a time (scale out, then remove the misplaced one).
+database:
+  affinity: {}
+  topologySpreadConstraints: []
+
+# Scheduled S3 backup of the Keycloak CNPG database (keycloak-db).
+# Disabled by default; enabling it configures WAL archiving + base backups
+# to an S3-compatible object store via CNPG Barman.
+backup:
+  # Enable S3 backups for keycloak-db.
+  enabled: false
+  # Cron schedule for recurring base backups. NOTE: CNPG ScheduledBackup uses a
+  # 6-field cron (leading seconds field), not the 5-field Kubernetes format.
+  schedule: "0 0 2 * * *"
+  # Barman retention policy for stored backups.
+  retentionPolicy: "30d"
+  # Destination prefix, e.g. s3://bucket/keycloak-db/.
+  destinationPath: ""
+  # S3-compatible endpoint URL, e.g. https://s3.example.com.
+  endpointURL: ""
+  # Inline S3 credentials (rendered into keycloak-db-backup-s3-creds), or
+  # leave empty and set existingSecretName instead.
+  s3AccessKey: ""
+  s3SecretKey: ""
+  # Reference an existing Secret carrying AWS_ACCESS_KEY_ID /
+  # AWS_SECRET_ACCESS_KEY instead of inline keys.
+  existingSecretName: ""

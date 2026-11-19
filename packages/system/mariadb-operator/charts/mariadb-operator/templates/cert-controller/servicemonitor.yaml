@@ -1,0 +1,44 @@
+{{ if and (not .Values.currentNamespaceOnly) .Values.certController.enabled (not .Values.webhook.cert.certManager.enabled) .Values.metrics.enabled  .Values.certController.serviceMonitor.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "mariadb-operator.fullname" . }}-cert-controller-metrics
+  labels:
+    {{ include "mariadb-operator-cert-controller.labels" . | nindent 4 }}
+spec:
+  ports:
+    - port: 8080
+      protocol: TCP
+      name: metrics
+  selector:
+    {{ include "mariadb-operator-cert-controller.selectorLabels" . | nindent 4 }}
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "mariadb-operator.fullname" . }}-cert-controller
+  labels:
+    {{ include "mariadb-operator-cert-controller.labels" . | nindent 4 }}
+    {{ with .Values.certController.serviceMonitor.additionalLabels }}
+    {{ toYaml . | nindent 4 }}
+    {{ end }}
+spec:
+  selector:
+    matchLabels:
+      {{ include "mariadb-operator-cert-controller.selectorLabels" . | nindent 6 }}
+  namespaceSelector:
+    matchNames:
+    - {{ .Release.Namespace | quote }}
+  endpoints:
+  - port: metrics
+    interval: {{ .Values.certController.serviceMonitor.interval }}
+    scrapeTimeout: {{ .Values.certController.serviceMonitor.scrapeTimeout }}
+    {{- if .Values.certController.serviceMonitor.metricRelabelings }}
+    metricRelabelings:
+      {{- toYaml .Values.certController.serviceMonitor.metricRelabelings | nindent 6 }}
+    {{- end }}
+    {{- if .Values.certController.serviceMonitor.relabelings }}
+    relabelings:
+      {{- toYaml .Values.certController.serviceMonitor.relabelings | nindent 6 }}
+    {{- end }}
+{{ end }}

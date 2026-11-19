@@ -1,0 +1,84 @@
+# Render a bare `Namespace cozy-system` resource (with PSA + identity labels).
+# Off by default: helm install/upgrade callers create the namespace via
+# `--create-namespace` and let the pre-install labeler hook stamp the labels.
+# The top-level Makefile turns this on for the kubectl-apply release artifacts
+# (_out/assets/cozystack-operator-*.yaml).
+bareNamespace: false
+cozystackOperator:
+  # Deployment variant: talos, generic, hosted
+  variant: talos
+  # Platform version this install reports (telemetry, observability). Supplied
+  # as deploy-time data, not baked into the image — so a release-candidate image
+  # can be promoted to stable by retagging alone. Injected as the
+  # COZYSTACK_VERSION env var on the operator; when empty the operator falls back
+  # to the value baked at build time. The Makefile sets this for the
+  # kubectl-apply release artifacts (_out/assets/cozystack-operator-*.yaml).
+  platformVersion: ""
+  # Stop the operator sending cluster telemetry (nodes, storage, packages) to
+  # https://telemetry.cozystack.io. This covers the OPERATOR only. The second
+  # collector, cozystack-controller, reports application counts and is
+  # configured through the platform Package — set telemetry.disabled there as
+  # well, or the opt-out is partial. Declared here rather than left implicit
+  # because the documented opt-out is a `--set` against this key.
+  disableTelemetry: false
+  image: ghcr.io/cozystack/cozystack/cozystack-operator:v1.6.0@sha256:93b305f78823b070c59ca631b213e39bd9d8a256d5c520f156a03f5f72f57a5d
+  platformSourceUrl: 'oci://ghcr.io/cozystack/cozystack/cozystack-packages'
+  platformSourceRef: 'digest=sha256:bf68208730860fa8e47f378a0260e79a0262e0783fa63ba4f7f97f57a48b2d23'
+  # When non-empty, overrides the operator's --helmrelease-interval flag
+  # (operator default: 5m). E2E sets this to 30s; production should leave empty.
+  helmReleaseInterval: ""
+  # When non-empty, overrides the operator's --helmrelease-retry-interval flag
+  # (operator default: 30s). Controls how fast failed install/upgrade attempts
+  # are retried. Decoupled from helmReleaseInterval (healthy reconcile cadence).
+  helmReleaseRetryInterval: ""
+  # When non-empty, overrides the operator's --helmrelease-install-timeout flag
+  # (operator default: 10m). Bounds individual k8s operations (job/hook/wait)
+  # during Helm install. Charts with long-running install hooks may need longer.
+  helmReleaseInstallTimeout: ""
+  # When non-empty, overrides the operator's --helmrelease-upgrade-timeout flag
+  # (operator default: 10m). Same semantics as helmReleaseInstallTimeout, for
+  # the Helm upgrade action.
+  helmReleaseUpgradeTimeout: ""
+  # When non-empty, overrides the operator's --helmrelease-max-history flag
+  # (operator default: 5). Number of release revisions Helm keeps per HR.
+  # Use 0 for unlimited; lower values reduce Secret accumulation in test clusters.
+  helmReleaseMaxHistory: ""
+  # Default container memory limit in eligible system namespaces, including kube-system.
+  # Empty selects the operator default (32Gi); 0 removes managed LimitRanges.
+  # Lowering or an oversized request creates a durable hold. A cluster administrator
+  # must acknowledge its exact target before defaulting resumes; disabling retains holds.
+  # Explicit container limits and foreign namespace memory policies are preserved.
+  # See https://cozystack.io/docs/v1/operations/configuration/system-memory-limits/ for sizing, exclusions and acknowledgement.
+  systemNamespaceMemoryLimit: ""
+  # Default memory request paired with the limit. Empty selects 32Mi; 0 is supported.
+  # Keep small to avoid reserving the full limit for every previously limitless container.
+  systemNamespaceMemoryRequest: ""
+  # Name of the Secret in cozy-system namespace containing credentials for the
+  # platform source. When non-empty, sets spec.secretRef on the generated
+  # OCIRepository or GitRepository resource. Secret type depends on source kind:
+  #   OCI (oci://...): kubernetes.io/dockerconfigjson with registry credentials.
+  #   Git over HTTPS:  Opaque secret with `username`+`password`, or `bearerToken`.
+  #   Git over SSH:    Opaque secret with `identity` (PEM private key) and `known_hosts`.
+  # The Secret must already exist in cozy-system before the operator reconciles;
+  # otherwise source-controller will report a failed condition until it is created.
+  # See FluxCD source-controller docs for the exact key layout per scheme.
+  platformSourceSecret: ''
+  # Name of the Secret in cozy-system namespace with TLS material for an OCI
+  # platform source: `ca.crt` for a registry whose certificate is issued by a
+  # private CA, and/or `tls.crt`+`tls.key` for client certificate auth. A
+  # CA-only Secret must be type Opaque: kubernetes.io/tls requires `tls.crt`
+  # and `tls.key`. When non-empty, sets spec.certSecretRef on the
+  # generated OCIRepository; the operator rewrites that object on every start,
+  # so a certSecretRef patched onto it by hand does not survive a restart.
+  # The cozystack-packages source copies the spec, so it inherits the CA too.
+  # OCI only: for a Git source put `ca.crt` into the platformSourceSecret Secret.
+  platformSourceCertSecret: ''
+# Generic variant configuration (only used when cozystackOperator.variant=generic)
+cozystack:
+  # Kubernetes API server host (IP only, no protocol/port)
+  # Must be the INTERNAL IP of the control-plane node
+  # (the IP visible on the node's network interface, not a public/NAT IP)
+  # Used by the operator and networking components (cilium, kube-ovn)
+  apiServerHost: ""
+  # Kubernetes API server port
+  apiServerPort: "6443"

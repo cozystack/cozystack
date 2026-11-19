@@ -1,0 +1,61 @@
+{{- if eq .Values.topology "Client" }}
+---
+kind: ClusterRole
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  name: {{ .Release.Namespace }}-objectstorage-provisioner
+rules:
+- apiGroups: ["objectstorage.k8s.io"]
+  resources:
+    - "buckets"
+    - "bucketaccesses"
+    - "bucketclaims"
+    - "bucketclasses"
+    - "bucketclasses/status"
+    - "bucketaccessclasses"
+    - "buckets/status"
+    - "bucketaccesses/status"
+    - "bucketclaims/status"
+    - "bucketaccessclasses/status"
+  verbs:
+    - "get"
+    - "list"
+    - "watch"
+    - "update"
+    - "create"
+    - "delete"
+- apiGroups: ["coordination.k8s.io"]
+  resources: ["leases"]
+  verbs:
+    - "get"
+    - "watch"
+    - "list"
+    - "delete"
+    - "update"
+    - "create"
+- apiGroups: [""]
+  resources:
+    - "secrets"
+    - "events"
+  verbs:
+    - "get"
+    - "list"
+    - "watch"
+    - "update"
+    - "create"
+    - "delete"
+    - "patch"
+---
+kind: ClusterRoleBinding
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  name: {{ .Release.Namespace }}-objectstorage-provisioner
+subjects:
+  - kind: ServiceAccount
+    name: {{ .Release.Name }}-objectstorage-provisioner
+    namespace: {{ .Release.Namespace }}
+roleRef:
+  kind: ClusterRole
+  name: {{ .Release.Namespace }}-objectstorage-provisioner
+  apiGroup: rbac.authorization.k8s.io
+{{- end }}

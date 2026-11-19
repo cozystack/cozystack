@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: v1.10.1-core
+  labels:
+    core-components: cozy
+  annotations:
+    provider.cluster.x-k8s.io/compressed: "true"
+binaryData:
+  components: {{ .Files.Get "files/components.gz" | b64enc | quote }}
+data:
+  metadata: {{ .Files.Get "files/metadata.yaml" | quote }}

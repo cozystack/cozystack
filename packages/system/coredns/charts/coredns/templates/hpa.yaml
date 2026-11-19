@@ -1,0 +1,33 @@
+{{- if and (.Values.hpa.enabled) (not .Values.autoscaler.enabled) }}
+---
+{{- if .Capabilities.APIVersions.Has "autoscaling/v2" }}
+apiVersion: autoscaling/v2
+{{- else }}
+apiVersion: autoscaling/v2beta2
+{{- end }}
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ template "coredns.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels: {{- include "coredns.labels" . | nindent 4 }}
+{{- if .Values.customLabels }}
+{{ toYaml .Values.customLabels | indent 4 }}
+{{- end }}
+{{- with .Values.customAnnotations }}
+  annotations:
+{{- toYaml . | nindent 4 }}
+{{- end }}
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ default (include "coredns.fullname" .) .Values.deployment.name }}
+  minReplicas: {{ .Values.hpa.minReplicas }}
+  maxReplicas: {{ .Values.hpa.maxReplicas }}
+  metrics:
+{{ toYaml .Values.hpa.metrics | indent 4 }}
+{{- if .Values.hpa.behavior }}
+  behavior:
+{{ toYaml .Values.hpa.behavior | indent 4 }}
+{{- end }}
+{{- end }}

@@ -1,0 +1,21 @@
+{{- if and  ( eq  .Values.kind "Deployment" )  .Values.podDisruptionBudget.enabled  }}
+apiVersion: {{ include "fluent-bit.pdb.apiVersion" . }}
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "fluent-bit.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "fluent-bit.labels" . | nindent 4 }}
+{{- with .Values.podDisruptionBudget.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+{{- end }}
+spec:
+  maxUnavailable: {{ .Values.podDisruptionBudget.maxUnavailable }}
+  selector:
+    matchLabels:
+      {{- include "fluent-bit.selectorLabels" . | nindent 6 }}
+      {{- with .Values.labels }}
+        {{- toYaml . | nindent 6 }}
+      {{- end }}
+{{- end }}

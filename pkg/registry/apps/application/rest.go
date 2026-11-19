@@ -1,0 +1,2390 @@
+/*
+Copyright 2024 The Cozystack Authors.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
+package application
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"maps"
+	"net/http"
+	"slices"
+	"sort"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
+
+	cozyv1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
+	helmv2 "github.com/fluxcd/helm-controller/api/v2"
+	corev1 "k8s.io/api/core/v1"
+	metainternalversion "k8s.io/apimachinery/pkg/apis/meta/internalversion"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/fields"
+	labels "k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/selection"
+	"k8s.io/apimachinery/pkg/util/duration"
+	"k8s.io/apimachinery/pkg/util/validation/field"
+	"k8s.io/apimachinery/pkg/watch"
+	"k8s.io/apiserver/pkg/endpoints/request"
+	"k8s.io/apiserver/pkg/registry/rest"
+	"k8s.io/apiserver/pkg/warning"
+	"k8s.io/client-go/util/retry"
+	"k8s.io/klog/v2"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+
+	fluxshard "github.com/cozystack/cozystack/internal/fluxshardoperator"
+	"github.com/cozystack/cozystack/pkg/apis/apps/defaulting"
+	"github.com/cozystack/cozystack/pkg/apis/apps/presets"
+	appsv1alpha1 "github.com/cozystack/cozystack/pkg/apis/apps/v1alpha1"
+	"github.com/cozystack/cozystack/pkg/apis/apps/validation"
+	"github.com/cozystack/cozystack/pkg/config"
+	"github.com/cozystack/cozystack/pkg/registry"
+	fieldfilter "github.com/cozystack/cozystack/pkg/registry/fields"
+	"github.com/cozystack/cozystack/pkg/registry/sorting"
+	apiextv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
+	structuralschema "k8s.io/apiextensions-apiserver/pkg/apiserver/schema"
+
+	// Importing API errors package to construct appropriate error responses
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+)
+
+// Ensure REST implements necessary interfaces
+var (
+	_ rest.Getter          = &REST{}
+	_ rest.Lister          = &REST{}
+	_ rest.Updater         = &REST{}
+	_ rest.Creater         = &REST{}
+	_ rest.GracefulDeleter = &REST{}
+	_ rest.Watcher         = &REST{}
+	_ rest.Patcher         = &REST{}
+)
+
+// Define constants for label and annotation prefixes
+const (
+	LabelPrefix      = "apps.cozystack.io-"
+	AnnotationPrefix = "apps.cozystack.io-"
+)
+
+// Application label keys - use constants from API package
+const (
+	ApplicationKindLabel  = appsv1alpha1.ApplicationKindLabel
+	ApplicationGroupLabel = appsv1alpha1.ApplicationGroupLabel
+	ApplicationNameLabel  = appsv1alpha1.ApplicationNameLabel
+)
+
+// REST implements the RESTStorage interface for Application resources
+type REST struct {
+	c             client.Client
+	w             client.WithWatch
+	gvr           schema.GroupVersionResource
+	gvk           schema.GroupVersionKind
+	kindName      string
+	singularName  string
+	releaseConfig config.ReleaseConfig
+	specSchema    *structuralschema.Structural
+	nameSchema    *validation.NameSchema
+	nameSchemaErr error
+}
+
+// buildSpecSchema parses an OpenAPI-v3 JSON schema string and returns the
+// structural-schema form used for defaulting. Returns (nil, nil) when raw
+// is empty after trimming. Returns (nil, error) for malformed JSON,
+// v1→internal conversion failures, or structural-schema construction
+// errors — callers can decide whether to log-and-continue (NewREST does)
+// or fail hard (tests do).
+func buildSpecSchema(raw string) (*structuralschema.Structural, error) {
+	return defaulting.BuildSchema(raw)
+}
+
+// NewREST creates a new REST storage for Application with specific configuration
+func NewREST(c client.Client, w client.WithWatch, config *config.Resource) *REST {
+	specSchema, err := buildSpecSchema(config.Application.OpenAPISchema)
+	if err != nil {
+		klog.Errorf("Failed to build spec schema: %v", err)
+	}
+
+	nameSchema, nameSchemaErr := resolveNameSchema(config)
+	if nameSchemaErr != nil {
+		klog.Errorf("ApplicationDefinition for %s declares an invalid %s, refusing to create %s objects until it is fixed: %v",
+			config.Application.Kind, appsv1alpha1.NameSchemaExtension, config.Application.Kind, nameSchemaErr)
+	}
+
+	return &REST{
+		c: c,
+		w: w,
+		gvr: schema.GroupVersionResource{
+			Group:    appsv1alpha1.GroupName,
+			Version:  "v1alpha1",
+			Resource: config.Application.Plural,
+		},
+		gvk: schema.GroupVersion{
+			Group:   appsv1alpha1.GroupName,
+			Version: "v1alpha1",
+		}.WithKind(config.Application.Kind),
+		kindName:      config.Application.Kind,
+		singularName:  config.Application.Singular,
+		releaseConfig: config.Release,
+		specSchema:    specSchema,
+		nameSchema:    nameSchema,
+		nameSchemaErr: nameSchemaErr,
+	}
+}
+
+// NamespaceScoped indicates whether the resource is namespaced
+func (r *REST) NamespaceScoped() bool {
+	return true
+}
+
+// GetSingularName returns the singular name of the resource
+func (r *REST) GetSingularName() string {
+	return r.singularName
+}
+
+// Create handles the creation of a new Application by converting it to a HelmRelease
+func (r *REST) Create(ctx context.Context, obj runtime.Object, createValidation rest.ValidateObjectFunc, options *metav1.CreateOptions) (runtime.Object, error) {
+	// Assert the object is of type Application
+	app, ok := obj.(*appsv1alpha1.Application)
+	if !ok {
+		return nil, fmt.Errorf("expected *appsv1alpha1.Application object, got %T", obj)
+	}
+
+	app = app.DeepCopy()
+
+	// Validate Application name format (DNS-1035 plus any kind-specific rules)
+	if errs := r.validateNameFormat(app.Name); len(errs) > 0 {
+		return nil, apierrors.NewInvalid(r.gvk.GroupKind(), app.Name, errs)
+	}
+
+	// Validate name length against Helm release and label limits
+	if nameLenErrs := r.validateNameLength(app.Name); len(nameLenErrs) > 0 {
+		return nil, apierrors.NewInvalid(r.gvk.GroupKind(), app.Name, nameLenErrs)
+	}
+
+	// For Tenant applications, also validate that the computed workload
+	// namespace fits within the DNS-1123 label limit. A deeply-nested tenant
+	// can exceed the limit even when its own name passes the per-name Helm
+	// release length check, because the namespace is formed from the full
+	// ancestor chain.
+	if r.kindName == "Tenant" {
+		if nsErrs := r.validateTenantNamespaceLength(app.Namespace, app.Name); len(nsErrs) > 0 {
+			return nil, apierrors.NewInvalid(r.gvk.GroupKind(), app.Name, nsErrs)
+		}
+		// Enforce hierarchical quota allocation: a child tenant's declared
+		// quota may not exceed its parent's remaining (un-carved) quota.
+		if qErrs := r.validateTenantResourceQuotas(ctx, app); len(qErrs) > 0 {
+			return nil, apierrors.NewInvalid(r.gvk.GroupKind(), app.Name, qErrs)
+		}
+	}
+
+	// Validate that values don't contain reserved keys (starting with "_")
+	if err := validateNoInternalKeys(app.Spec); err != nil {
+		return nil, apierrors.NewBadRequest(err.Error())
+	}
+
+	// Omission permits a chart default; explicit null suppresses it in Helm.
+	// Normalize only repairable fields before admission and persistence.
+	emptied, err := r.normalizeSpecNulls(app)
+	if err != nil {
+		return nil, apierrors.NewBadRequest(fmt.Sprintf("failed to normalize spec: %v", err))
+	}
+	if len(emptied) > 0 {
+		warning.AddWarning(ctx, "", emptyFieldsWarning(emptied))
+	}
+
+	r.warnLegacyPresets(app)
+	r.warnRemovedKubernetesFields(ctx, app)
+	r.warnRemovedUserPasswords(ctx, app)
+
+	// Run the genericapiserver-supplied validating admission chain
+	// (validating webhooks + ValidatingAdmissionPolicies) before
+	// persisting anything. Mutating webhooks already ran upstream in
+	// genericapiserver/handlers.create before this REST handler was
+	// invoked; createValidation is documented as validate-only (must
+	// not transform the object). Custom REST handlers must invoke
+	// this hook explicitly — unlike genericregistry.Store, which
+	// wires it automatically.
+	if createValidation != nil {
+		if err := createValidation(ctx, app); err != nil {
+			return nil, err
+		}
+	}
+
+	// Convert Application to HelmRelease
+	helmRelease, err := r.ConvertApplicationToHelmRelease(app)
+	if err != nil {
+		klog.Errorf("Conversion error: %v", err)
+		return nil, fmt.Errorf("conversion error: %v", err)
+	}
+
+	// Merge system labels (from config) directly
+	helmRelease.Labels = mergeMaps(r.releaseConfig.Labels, helmRelease.Labels)
+	// Merge user labels with prefix
+	helmRelease.Labels = mergeMaps(helmRelease.Labels, addPrefixedMap(app.Labels, LabelPrefix))
+	// Add application metadata labels
+	if helmRelease.Labels == nil {
+		helmRelease.Labels = make(map[string]string)
+	}
+	helmRelease.Labels[ApplicationKindLabel] = r.kindName
+	helmRelease.Labels[ApplicationGroupLabel] = r.gvk.Group
+	helmRelease.Labels[ApplicationNameLabel] = app.Name
+	// Note: Annotations from config are not handled as r.releaseConfig.Annotations is undefined
+
+	klog.V(6).Infof("Creating HelmRelease %s in namespace %s", helmRelease.Name, app.Namespace)
+
+	// Create HelmRelease in Kubernetes
+	err = r.c.Create(ctx, helmRelease, registry.ClientCreateOptions(options))
+	if err != nil {
+		klog.Errorf("Failed to create HelmRelease %s: %v", helmRelease.Name, err)
+		return nil, registry.WrapPreservingStatus("failed to create HelmRelease", err, r.gvr.GroupResource(), app.Name)
+	}
+
+	// Convert the created HelmRelease back to Application
+	convertedApp, err := r.ConvertHelmReleaseToApplication(ctx, helmRelease)
+	if err != nil {
+		klog.Errorf("Conversion error from HelmRelease to Application for resource %s: %v", helmRelease.GetName(), err)
+		return nil, fmt.Errorf("conversion error: %v", err)
+	}
+
+	klog.V(6).Infof("Successfully created and converted HelmRelease %s to Application", helmRelease.GetName())
+
+	klog.V(6).Infof("Successfully retrieved and converted resource %s of type %s", convertedApp.GetName(), r.gvr.Resource)
+	return &convertedApp, nil
+}
+
+// Get retrieves an Application by converting the corresponding HelmRelease
+func (r *REST) Get(ctx context.Context, name string, options *metav1.GetOptions) (runtime.Object, error) {
+	namespace, err := r.getNamespace(ctx)
+	if err != nil {
+		klog.Errorf("Failed to get namespace: %v", err)
+		return nil, err
+	}
+
+	klog.V(6).Infof("Attempting to retrieve resource %s of type %s in namespace %s", name, r.gvr.Resource, namespace)
+
+	// Get the corresponding HelmRelease using the new prefix
+	helmReleaseName := r.releaseConfig.Prefix + name
+	helmRelease := &helmv2.HelmRelease{}
+	err = r.c.Get(ctx, client.ObjectKey{Namespace: namespace, Name: helmReleaseName}, helmRelease, &client.GetOptions{Raw: options})
+	if err != nil {
+		klog.Errorf("Error retrieving HelmRelease for resource %s: %v", name, err)
+
+		// Check if the error is a NotFound error
+		if apierrors.IsNotFound(err) {
+			// Return a NotFound error for the Application resource instead of HelmRelease
+			return nil, apierrors.NewNotFound(r.gvr.GroupResource(), name)
+		}
+
+		// For other errors, return them as-is
+		return nil, err
+	}
+
+	// Check if HelmRelease has required labels
+	if !r.hasRequiredApplicationLabels(helmRelease) {
+		klog.Errorf("HelmRelease %s does not match the required application labels", helmReleaseName)
+		// Return a NotFound error for the Application resource
+		return nil, apierrors.NewNotFound(r.gvr.GroupResource(), name)
+	}
+
+	// Convert HelmRelease to Application
+	convertedApp, err := r.ConvertHelmReleaseToApplication(ctx, helmRelease)
+	if err != nil {
+		klog.Errorf("Conversion error from HelmRelease to Application for resource %s: %v", name, err)
+		return nil, fmt.Errorf("conversion error: %v", err)
+	}
+
+	klog.V(6).Infof("Successfully retrieved and converted resource %s of kind %s", name, r.gvr.Resource)
+	return &convertedApp, nil
+}
+
+// List retrieves a list of Applications by converting HelmReleases
+func (r *REST) List(ctx context.Context, options *metainternalversion.ListOptions) (runtime.Object, error) {
+	namespace, err := r.getNamespace(ctx)
+	if err != nil {
+		klog.Errorf("Failed to get namespace: %v", err)
+		return nil, err
+	}
+
+	klog.V(6).Infof("List called for %s in namespace %q", r.kindName, namespace)
+
+	// Get resource name from the request (if any)
+	var resourceName string
+	if requestInfo, ok := request.RequestInfoFrom(ctx); ok {
+		resourceName = requestInfo.Name
+	}
+
+	// Initialize variables for selector mapping
+	var helmLabelSelector labels.Selector
+
+	// Parse field selector for manual filtering
+	// controller-runtime cache doesn't support field selectors
+	// See: https://github.com/kubernetes-sigs/controller-runtime/issues/612
+	fieldFilter, err := fieldfilter.ParseFieldSelector(options.FieldSelector)
+	if err != nil {
+		klog.Errorf("Error parsing field selector: %v", err)
+		return nil, err
+	}
+
+	// If field selector specifies namespace different from context, return empty list
+	if fieldFilter.Namespace != "" && namespace != "" && namespace != fieldFilter.Namespace {
+		klog.V(6).Infof("Field selector namespace %s doesn't match context namespace %s, returning empty list", fieldFilter.Namespace, namespace)
+		return &appsv1alpha1.ApplicationList{
+			TypeMeta: metav1.TypeMeta{
+				APIVersion: appsv1alpha1.SchemeGroupVersion.String(),
+				Kind:       r.kindName + "List",
+			},
+		}, nil
+	}
+
+	// Convert Application name to HelmRelease name for manual filtering
+	var filterByName string
+	if fieldFilter.Name != "" {
+		filterByName = r.releaseConfig.Prefix + fieldFilter.Name
+	}
+
+	// Process label.selector
+	// Always add application metadata label requirements
+	appKindReq, err := labels.NewRequirement(ApplicationKindLabel, selection.Equals, []string{r.kindName})
+	if err != nil {
+		klog.Errorf("Error creating application kind label requirement: %v", err)
+		return nil, fmt.Errorf("error creating application kind label requirement: %v", err)
+	}
+	appGroupReq, err := labels.NewRequirement(ApplicationGroupLabel, selection.Equals, []string{r.gvk.Group})
+	if err != nil {
+		klog.Errorf("Error creating application group label requirement: %v", err)
+		return nil, fmt.Errorf("error creating application group label requirement: %v", err)
+	}
+	labelRequirements := []labels.Requirement{*appKindReq, *appGroupReq}
+
+	if options.LabelSelector != nil {
+		ls := options.LabelSelector.String()
+		parsedLabels, err := labels.Parse(ls)
+		if err != nil {
+			klog.Errorf("Invalid label selector: %v", err)
+			return nil, fmt.Errorf("invalid label selector: %v", err)
+		}
+		if !parsedLabels.Empty() {
+			reqs, _ := parsedLabels.Requirements()
+			var prefixedReqs []labels.Requirement
+			for _, req := range reqs {
+				// Add prefix to each label key
+				prefixedReq, err := labels.NewRequirement(LabelPrefix+req.Key(), req.Operator(), req.Values().List())
+				if err != nil {
+					klog.Errorf("Error prefixing label key: %v", err)
+					return nil, fmt.Errorf("error prefixing label key: %v", err)
+				}
+				prefixedReqs = append(prefixedReqs, *prefixedReq)
+			}
+			labelRequirements = append(labelRequirements, prefixedReqs...)
+		}
+	}
+	helmLabelSelector = labels.NewSelector().Add(labelRequirements...)
+
+	klog.V(6).Infof("Using label selector: %s for kind: %s, group: %s", helmLabelSelector, r.kindName, r.gvk.Group)
+
+	// List HelmReleases with label selector only
+	// Field selectors are not supported by controller-runtime cache, so we filter manually below
+	hrList := &helmv2.HelmReleaseList{}
+	err = r.c.List(ctx, hrList, &client.ListOptions{
+		Namespace:     namespace,
+		LabelSelector: helmLabelSelector,
+	})
+	if err != nil {
+		klog.Errorf("Error listing HelmReleases: %v", err)
+		return nil, err
+	}
+
+	klog.V(6).Infof("Found %d HelmReleases with label selector", len(hrList.Items))
+
+	// Initialize Application items array
+	items := make([]appsv1alpha1.Application, 0, len(hrList.Items))
+
+	// Iterate over HelmReleases and convert to Applications
+	// Note: All HelmReleases already match the required labels due to server-side label selector filtering
+	for i := range hrList.Items {
+		hr := &hrList.Items[i]
+
+		// Apply manual field selector filtering (metadata.name and metadata.namespace)
+		// controller-runtime cache doesn't support field selectors
+		// See: https://github.com/kubernetes-sigs/controller-runtime/issues/612
+		if filterByName != "" && hr.Name != filterByName {
+			continue
+		}
+		if !fieldFilter.MatchesNamespace(hr.Namespace) {
+			continue
+		}
+
+		app, err := r.ConvertHelmReleaseToApplication(ctx, hr)
+		if err != nil {
+			klog.Errorf("Error converting HelmRelease %s to Application: %v", hr.GetName(), err)
+			continue
+		}
+
+		// If resourceName is set, check for match
+		if resourceName != "" && app.Name != resourceName {
+			continue
+		}
+
+		// Apply label.selector
+		if options.LabelSelector != nil {
+			sel, err := labels.Parse(options.LabelSelector.String())
+			if err != nil {
+				klog.Errorf("Invalid label selector: %v", err)
+				continue
+			}
+			if !sel.Matches(labels.Set(app.Labels)) {
+				continue
+			}
+		}
+
+		// Apply field.selector by name and namespace (if specified)
+		if options.FieldSelector != nil {
+			fs, err := fields.ParseSelector(options.FieldSelector.String())
+			if err != nil {
+				klog.Errorf("Invalid field selector: %v", err)
+				continue
+			}
+			fieldsSet := fields.Set{
+				"metadata.name":      app.Name,
+				"metadata.namespace": app.Namespace,
+			}
+			if !fs.Matches(fieldsSet) {
+				continue
+			}
+		}
+
+		items = append(items, app)
+	}
+
+	// Create ApplicationList with proper kind
+	appList := r.NewList().(*appsv1alpha1.ApplicationList)
+
+	// Get ResourceVersion from list or compute from items
+	// controller-runtime cached client may not set ResourceVersion on the list itself
+	listRV := hrList.GetResourceVersion()
+	if listRV == "" {
+		listRV, _ = registry.MaxResourceVersion(hrList)
+	}
+	appList.SetResourceVersion(listRV)
+	appList.Items = items
+
+	sorting.ByNamespacedName[appsv1alpha1.Application, *appsv1alpha1.Application](appList.Items)
+
+	klog.V(6).Infof("List returning %d items for %s in namespace %q, resourceVersion=%q",
+		len(items), r.kindName, namespace, appList.GetResourceVersion())
+	return appList, nil
+}
+
+// Update updates an existing Application by converting it to a HelmRelease
+func (r *REST) Update(ctx context.Context, name string, objInfo rest.UpdatedObjectInfo, createValidation rest.ValidateObjectFunc, updateValidation rest.ValidateObjectUpdateFunc, forceAllowCreate bool, options *metav1.UpdateOptions) (runtime.Object, bool, error) {
+	// Retrieve the existing Application
+	oldObj, err := r.Get(ctx, name, &metav1.GetOptions{})
+	if err != nil {
+		if apierrors.IsNotFound(err) {
+			if !forceAllowCreate {
+				return nil, false, err
+			}
+			// If not found and force allow create, create a new one
+			obj, err := objInfo.UpdatedObject(ctx, nil)
+			if err != nil {
+				klog.Errorf("Failed to get updated object: %v", err)
+				return nil, false, err
+			}
+			createdObj, err := r.Create(ctx, obj, createValidation, registry.CreateOptionsFromUpdate(options))
+			if err != nil {
+				klog.Errorf("Failed to create new Application: %v", err)
+				return nil, false, err
+			}
+			return createdObj, true, nil
+		}
+		klog.Errorf("Failed to get existing Application %s: %v", name, err)
+		return nil, false, err
+	}
+
+	previousFinalizers := slices.Clone(oldObj.(*appsv1alpha1.Application).Finalizers)
+
+	// Update the Application object
+	newObj, err := objInfo.UpdatedObject(ctx, oldObj)
+	if err != nil {
+		klog.Errorf("Failed to get updated object: %v", err)
+		return nil, false, err
+	}
+
+	// Assert the new object is of type Application
+	app, ok := newObj.(*appsv1alpha1.Application)
+	if !ok {
+		klog.Errorf("expected *appsv1alpha1.Application object, got %T", newObj)
+		return nil, false, fmt.Errorf("expected *appsv1alpha1.Application object, got %T", newObj)
+	}
+
+	app = app.DeepCopy()
+
+	// Note: name validation (DNS-1035 format + length) is intentionally skipped on
+	// Update because Kubernetes names are immutable. Validating here would block
+	// updates to pre-existing resources whose names don't conform to the new rules.
+
+	// Validate that values don't contain reserved keys (starting with "_")
+	if err := validateNoInternalKeys(app.Spec); err != nil {
+		return nil, false, apierrors.NewBadRequest(err.Error())
+	}
+
+	// Admission must validate the same normalized values that will be stored.
+	emptied, err := r.normalizeSpecNulls(app)
+	if err != nil {
+		return nil, false, apierrors.NewBadRequest(fmt.Sprintf("failed to normalize spec: %v", err))
+	}
+	if len(emptied) > 0 {
+		warning.AddWarning(ctx, "", emptyFieldsWarning(emptied))
+	}
+
+	// Validate the update if a validation function is provided
+	if updateValidation != nil {
+		if err := updateValidation(ctx, app, oldObj); err != nil {
+			klog.Errorf("Update validation failed for Application %s: %v", name, err)
+			return nil, false, err
+		}
+	}
+
+	// Enforce hierarchical quota allocation on quota changes too: raising a
+	// child tenant's declared quota above its parent's remaining budget is
+	// rejected the same way as on create.
+	if r.kindName == "Tenant" {
+		if qErrs := r.validateTenantResourceQuotas(ctx, app); len(qErrs) > 0 {
+			return nil, false, apierrors.NewInvalid(r.gvk.GroupKind(), app.Name, qErrs)
+		}
+	}
+
+	r.warnLegacyPresets(app)
+	r.warnRemovedKubernetesFields(ctx, app)
+	r.warnRemovedUserPasswords(ctx, app)
+	r.warnUpgradeIntroducedCollisions(ctx, oldObj, app)
+
+	// Convert Application to HelmRelease
+	helmRelease, err := r.ConvertApplicationToHelmRelease(app)
+	if err != nil {
+		klog.Errorf("Conversion error: %v", err)
+		return nil, false, fmt.Errorf("conversion error: %v", err)
+	}
+
+	// Keep the conversion output pristine: the metadata assembly below reads the
+	// live object, so a conflict retry has to redo it from this copy rather than
+	// re-apply it on top of its own previous result.
+	converted := helmRelease.DeepCopy()
+
+	cur := &helmv2.HelmRelease{}
+	if err := r.c.Get(ctx, client.ObjectKey{Namespace: helmRelease.Namespace, Name: helmRelease.Name}, cur, &client.GetOptions{Raw: &metav1.GetOptions{}}); err != nil {
+		return nil, false, registry.WrapPreservingStatus("failed to fetch current HelmRelease", err, r.gvr.GroupResource(), name)
+	}
+	if helmRelease.ResourceVersion == "" {
+		helmRelease.SetResourceVersion(cur.GetResourceVersion())
+	}
+	r.applyLiveMetadata(helmRelease, cur, app, previousFinalizers)
+
+	// Suspension is not part of the Application, so the rebuilt object always
+	// says suspend=false, and sending it as is resumes a release that an
+	// operator or a controller suspended. The CNPG restore driver relies on the
+	// suspension holding across its own patch of the Postgres app through this
+	// API: it purges the Cluster while the release is suspended and resumes it
+	// only once the purge is done, so the chart's next render lands
+	// bootstrap.recovery on an empty namespace. Resumed early, the release
+	// renders while the purge is still running, and the purge then deletes
+	// what it rendered.
+	helmRelease.Spec.Suspend = cur.Spec.Suspend
+
+	klog.V(6).Infof("Updating HelmRelease %s in namespace %s", helmRelease.Name, helmRelease.Namespace)
+
+	// Update the HelmRelease in Kubernetes.
+	//
+	// Flux's helm-controller (and other controllers) continuously write the
+	// HelmRelease's status, which shares the object's resourceVersion. When a
+	// caller updates an app CR while a prior reconcile is still in flight, the
+	// resourceVersion read above goes stale and the Update is rejected with a
+	// 409 Conflict. Apart from suspend, the HelmRelease spec is derived from the
+	// Application the caller just applied, so a stale-resourceVersion conflict
+	// is never a real spec conflict here: refresh the resourceVersion from the
+	// live object and retry. Suspend is refreshed with it, because the write
+	// that caused the conflict may be the one that suspended the release.
+	//
+	// The carried-over metadata is not derived from the Application, though, and
+	// the writer that caused the conflict is usually the controller that owns it
+	// — helm-controller re-adding finalizers.fluxcd.io is the case this whole
+	// carry-over exists for. Keeping the copy read before the conflict would put
+	// the stale metadata back and undo that write, so rebuild from the
+	// conversion output against the object just read.
+	err = retry.RetryOnConflict(retry.DefaultBackoff, func() error {
+		updateErr := r.c.Update(ctx, helmRelease, registry.ClientUpdateOptions(options))
+		if apierrors.IsConflict(updateErr) {
+			cur := &helmv2.HelmRelease{}
+			if getErr := r.c.Get(ctx, client.ObjectKey{Namespace: helmRelease.Namespace, Name: helmRelease.Name}, cur, &client.GetOptions{Raw: &metav1.GetOptions{}}); getErr != nil {
+				return getErr
+			}
+			helmRelease = converted.DeepCopy()
+			r.applyLiveMetadata(helmRelease, cur, app, previousFinalizers)
+			helmRelease.SetResourceVersion(cur.GetResourceVersion())
+			helmRelease.Spec.Suspend = cur.Spec.Suspend
+		}
+		return updateErr
+	})
+	if err != nil {
+		klog.Errorf("Failed to update HelmRelease %s: %v", helmRelease.Name, err)
+		return nil, false, registry.WrapPreservingStatus("failed to update HelmRelease", err, r.gvr.GroupResource(), name)
+	}
+
+	// Convert the updated HelmRelease back to Application
+	convertedApp, err := r.ConvertHelmReleaseToApplication(ctx, helmRelease)
+	if err != nil {
+		klog.Errorf("Conversion error from HelmRelease to Application for resource %s: %v", helmRelease.GetName(), err)
+		return nil, false, fmt.Errorf("conversion error: %v", err)
+	}
+
+	klog.V(6).Infof("Successfully updated and converted HelmRelease %s to Application", helmRelease.GetName())
+
+	klog.V(6).Infof("Returning updated Application object: %+v", convertedApp)
+
+	return &convertedApp, false, nil
+}
+
+// Delete removes an Application by deleting the corresponding HelmRelease
+func (r *REST) Delete(ctx context.Context, name string, deleteValidation rest.ValidateObjectFunc, options *metav1.DeleteOptions) (runtime.Object, bool, error) {
+	namespace, err := r.getNamespace(ctx)
+	if err != nil {
+		klog.Errorf("Failed to get namespace: %v", err)
+		return nil, false, err
+	}
+
+	klog.V(6).Infof("Attempting to delete HelmRelease %s in namespace %s", name, namespace)
+
+	// Construct HelmRelease name with the configured prefix
+	helmReleaseName := r.releaseConfig.Prefix + name
+
+	// Retrieve the HelmRelease before attempting to delete
+	helmRelease := &helmv2.HelmRelease{}
+	err = r.c.Get(ctx, client.ObjectKey{Namespace: namespace, Name: helmReleaseName}, helmRelease, &client.GetOptions{Raw: &metav1.GetOptions{}})
+	if err != nil {
+		if apierrors.IsNotFound(err) {
+			// If HelmRelease does not exist, return NotFound error for Application
+			klog.Errorf("HelmRelease %s not found in namespace %s", helmReleaseName, namespace)
+			return nil, false, apierrors.NewNotFound(r.gvr.GroupResource(), name)
+		}
+		// For other errors, log and return
+		klog.Errorf("Error retrieving HelmRelease %s: %v", helmReleaseName, err)
+		return nil, false, err
+	}
+
+	// Validate that the HelmRelease has required labels
+	if !r.hasRequiredApplicationLabelsWithName(helmRelease, name) {
+		klog.Errorf("HelmRelease %s does not match the required application labels", helmReleaseName)
+		// Return NotFound error for Application resource
+		return nil, false, apierrors.NewNotFound(r.gvr.GroupResource(), name)
+	}
+
+	// Run the genericapiserver-supplied admission chain (validating webhooks
+	// and ValidatingAdmissionPolicies) on the resolved Application before
+	// removing the underlying HelmRelease. Custom REST handlers must invoke
+	// this hook explicitly — unlike genericregistry.Store, which wires it
+	// automatically.
+	if deleteValidation != nil {
+		converted, convErr := r.ConvertHelmReleaseToApplication(ctx, helmRelease)
+		if convErr != nil {
+			klog.Errorf("Failed to convert HelmRelease %s to Application for delete admission: %v", helmReleaseName, convErr)
+			return nil, false, convErr
+		}
+		if err := deleteValidation(ctx, &converted); err != nil {
+			return nil, false, err
+		}
+	}
+
+	klog.V(6).Infof("Deleting HelmRelease %s in namespace %s", helmReleaseName, namespace)
+
+	// Delete the HelmRelease corresponding to the Application
+	err = r.c.Delete(ctx, helmRelease, registry.ClientDeleteOptions(options))
+	if err != nil {
+		klog.Errorf("Failed to delete HelmRelease %s: %v", helmReleaseName, err)
+		return nil, false, registry.WrapPreservingStatus("failed to delete HelmRelease", err, r.gvr.GroupResource(), name)
+	}
+
+	klog.V(6).Infof("Successfully deleted HelmRelease %s", helmReleaseName)
+	return nil, true, nil
+}
+
+// Watch sets up a watch on HelmReleases, filters them based on application labels, and converts events to Applications
+func (r *REST) Watch(ctx context.Context, options *metainternalversion.ListOptions) (watch.Interface, error) {
+	namespace, err := r.getNamespace(ctx)
+	if err != nil {
+		klog.Errorf("Failed to get namespace: %v", err)
+		return nil, err
+	}
+
+	klog.V(6).Infof("Watch called for %s in namespace %q, resourceVersion=%q",
+		r.kindName, namespace, options.ResourceVersion)
+
+	// Get request information, including resource name if specified
+	var resourceName string
+	if requestInfo, ok := request.RequestInfoFrom(ctx); ok {
+		resourceName = requestInfo.Name
+	}
+
+	// Initialize variables for selector mapping
+	var helmLabelSelector labels.Selector
+
+	// Parse field selector for manual filtering
+	// controller-runtime cache doesn't support field selectors
+	// See: https://github.com/kubernetes-sigs/controller-runtime/issues/612
+	fieldFilter, err := fieldfilter.ParseFieldSelector(options.FieldSelector)
+	if err != nil {
+		klog.Errorf("Error parsing field selector: %v", err)
+		return nil, err
+	}
+
+	// Convert Application name to HelmRelease name for manual filtering
+	var filterByName string
+	if fieldFilter.Name != "" {
+		filterByName = r.releaseConfig.Prefix + fieldFilter.Name
+	}
+
+	// Process label.selector
+	// Always add application metadata label requirements
+	appKindReq, err := labels.NewRequirement(ApplicationKindLabel, selection.Equals, []string{r.kindName})
+	if err != nil {
+		klog.Errorf("Error creating application kind label requirement: %v", err)
+		return nil, fmt.Errorf("error creating application kind label requirement: %v", err)
+	}
+	appGroupReq, err := labels.NewRequirement(ApplicationGroupLabel, selection.Equals, []string{r.gvk.Group})
+	if err != nil {
+		klog.Errorf("Error creating application group label requirement: %v", err)
+		return nil, fmt.Errorf("error creating application group label requirement: %v", err)
+	}
+	labelRequirements := []labels.Requirement{*appKindReq, *appGroupReq}
+
+	if options.LabelSelector != nil {
+		ls := options.LabelSelector.String()
+		parsedLabels, err := labels.Parse(ls)
+		if err != nil {
+			klog.Errorf("Invalid label selector: %v", err)
+			return nil, fmt.Errorf("invalid label selector: %v", err)
+		}
+		if !parsedLabels.Empty() {
+			reqs, _ := parsedLabels.Requirements()
+			var prefixedReqs []labels.Requirement
+			for _, req := range reqs {
+				// Add prefix to each label key
+				prefixedReq, err := labels.NewRequirement(LabelPrefix+req.Key(), req.Operator(), req.Values().List())
+				if err != nil {
+					klog.Errorf("Error prefixing label key: %v", err)
+					return nil, fmt.Errorf("error prefixing label key: %v", err)
+				}
+				prefixedReqs = append(prefixedReqs, *prefixedReq)
+			}
+			labelRequirements = append(labelRequirements, prefixedReqs...)
+		}
+	}
+	helmLabelSelector = labels.NewSelector().Add(labelRequirements...)
+
+	// Honor a WatchList request: the client expects all existing
+	// objects as ADDED events, then a Bookmark annotated with
+	// metav1.InitialEventsAnnotationKey. controller-runtime's cache already
+	// replays the ADDED events, so we just emit the terminating bookmark.
+	initialEventsEnd := registry.InitialEventsEndBookmarkRequested(options)
+	bookmarker := registry.NewInitialEventsBookmarker(initialEventsEnd, options.ResourceVersion, func() runtime.Object {
+		app := &appsv1alpha1.Application{}
+		app.TypeMeta = metav1.TypeMeta{
+			APIVersion: appsv1alpha1.SchemeGroupVersion.String(),
+			Kind:       r.kindName,
+		}
+		return app
+	})
+
+	// Create a custom watcher to transform events
+	customW := &customWatcher{
+		resultChan: make(chan watch.Event),
+		stopChan:   make(chan struct{}),
+	}
+
+	// Start watch on HelmRelease with label selector only
+	// Field selectors are not supported by controller-runtime cache
+	// See: https://github.com/kubernetes-sigs/controller-runtime/issues/612
+	hrList := &helmv2.HelmReleaseList{}
+	helmWatcher, err := r.w.Watch(ctx, hrList, &client.ListOptions{
+		Namespace:     namespace,
+		LabelSelector: helmLabelSelector,
+		// Backing bookmarks are forwarded to the client, so ask for them only
+		// when the client did; a WatchList client always does, which keeps
+		// the terminating bookmark's trigger.
+		Raw: &metav1.ListOptions{AllowWatchBookmarks: options.AllowWatchBookmarks},
+	})
+	if err != nil {
+		klog.Errorf("Error setting up watch for HelmReleases: %v", err)
+		return nil, err
+	}
+	customW.underlying = helmWatcher
+
+	// Start watch on WorkloadMonitor to detect pod readiness changes.
+	// For Tenant applications the WorkloadMonitor lives in a computed child
+	// namespace (see computeTenantNamespace), not in the HelmRelease namespace,
+	// so scoping the watch to `namespace` would miss all events. Use a
+	// cluster-wide watch in that case — label selectors still restrict the
+	// stream to the relevant kind/group.
+	wmLabelSelector := labels.NewSelector().Add(*appKindReq, *appGroupReq)
+	wmList := &cozyv1alpha1.WorkloadMonitorList{}
+	wmListOpts := &client.ListOptions{LabelSelector: wmLabelSelector}
+	if r.kindName != "Tenant" {
+		wmListOpts.Namespace = namespace
+	}
+	wmWatcher, err := r.w.Watch(ctx, wmList, wmListOpts)
+	if err != nil {
+		klog.Warningf("Failed to set up WorkloadMonitor watch, workload status changes won't trigger events: %v", err)
+		// Non-fatal: proceed without WorkloadMonitor watch
+		wmWatcher = nil
+	}
+
+	go func() {
+		// Capture wmWatcher for cleanup; the variable may be set to nil
+		// inside the loop when the channel closes, so defer must use this copy.
+		wmWatcherForCleanup := wmWatcher
+		defer close(customW.resultChan)
+		defer customW.underlying.Stop()
+		if wmWatcherForCleanup != nil {
+			defer wmWatcherForCleanup.Stop()
+		}
+
+		// Buffer of WorkloadMonitor events that arrived before the initial
+		// snapshot finished. The watch-list contract requires the stream to
+		// deliver all ADDED events followed by the initial-events-end bookmark
+		// before any live updates, so we hold WM-triggered Modified events and
+		// replay them once the bookmark has been emitted. Without this, a
+		// workload whose status flips during the snapshot window (after the
+		// Application ADDED but before the bookmark) and then stops changing
+		// would leave the client with a stale WorkloadsReady forever.
+		var pendingWMEvents []watch.Event
+
+		// Get the starting resourceVersion from options
+		// If client provides resourceVersion (e.g., from a previous List), we should skip
+		// objects with resourceVersion <= startingRV (client already has them)
+		var startingRV uint64
+		if options.ResourceVersion != "" {
+			if rv, err := strconv.ParseUint(options.ResourceVersion, 10, 64); err == nil {
+				startingRV = rv
+			}
+		}
+
+		// send forwards an event, returning false if the watch or context ended.
+		send := func(ev watch.Event) bool {
+			select {
+			case customW.resultChan <- ev:
+				return true
+			case <-customW.stopChan:
+				return false
+			case <-ctx.Done():
+				return false
+			}
+		}
+
+		drainPendingWMEvents := func() bool {
+			for _, ev := range pendingWMEvents {
+				if !send(ev) {
+					return false
+				}
+			}
+			pendingWMEvents = nil
+			return true
+		}
+
+		// Process watch events
+		for {
+			select {
+			case event, ok := <-customW.underlying.ResultChan():
+				if !ok {
+					// The watcher has been closed
+					klog.Warning("HelmRelease watcher closed")
+					// Send initial-events-end bookmark before closing if not yet sent
+					if bookmark, ok := bookmarker.OnClose(); ok {
+						if send(bookmark) {
+							drainPendingWMEvents()
+						}
+					}
+					return
+				}
+
+				// Handle bookmark events - these are critical for informer sync
+				if event.Type == watch.Bookmark {
+					if hr, ok := event.Object.(*helmv2.HelmRelease); ok {
+						// controller-runtime bookmarks after the initial list
+						// replay; the first one becomes the terminating marker.
+						bookmark, initialEventsEnd := bookmarker.OnBackingBookmark(hr.GetResourceVersion())
+						if !send(bookmark) {
+							return
+						}
+						if initialEventsEnd && !drainPendingWMEvents() {
+							return
+						}
+					}
+					continue
+				}
+
+				// Check if the object is a *v1.Status
+				if status, ok := event.Object.(*metav1.Status); ok {
+					klog.V(4).Infof("Received Status object in HelmRelease watch: %v", status.Message)
+					continue // Skip processing this event
+				}
+
+				// Proceed with processing HelmRelease objects
+				hr, ok := event.Object.(*helmv2.HelmRelease)
+				if !ok {
+					klog.V(4).Infof("Expected HelmRelease object, got %T", event.Object)
+					continue
+				}
+
+				// Track resourceVersion for the eventual bookmark
+				bookmarker.Observe(hr.GetResourceVersion())
+
+				// Apply manual field selector filtering (metadata.name and metadata.namespace)
+				// controller-runtime cache doesn't support field selectors
+				// See: https://github.com/kubernetes-sigs/controller-runtime/issues/612
+				if filterByName != "" && hr.Name != filterByName {
+					continue
+				}
+				if !fieldFilter.MatchesNamespace(hr.Namespace) {
+					continue
+				}
+
+				// Note: All HelmReleases already match the required labels due to server-side label selector filtering
+				// Convert HelmRelease to Application
+				app, err := r.ConvertHelmReleaseToApplication(ctx, hr)
+				if err != nil {
+					klog.Errorf("Error converting HelmRelease to Application: %v", err)
+					continue
+				}
+
+				// Apply field.selector by name if specified
+				if resourceName != "" && app.Name != resourceName {
+					continue
+				}
+
+				// Apply label.selector
+				if options.LabelSelector != nil {
+					sel, err := labels.Parse(options.LabelSelector.String())
+					if err != nil {
+						klog.Errorf("Invalid label selector: %v", err)
+						continue
+					}
+					if !sel.Matches(labels.Set(app.Labels)) {
+						continue
+					}
+				}
+
+				// Emit the terminating bookmark before the first live event, then
+				// replay any buffered WorkloadMonitor events.
+				if bookmark, ok := bookmarker.BeforeLiveEvent(event.Type); ok {
+					if !send(bookmark) {
+						return
+					}
+					if !drainPendingWMEvents() {
+						return
+					}
+				}
+
+				// Skip ADDED events based on resourceVersion comparison
+				if event.Type == watch.Added && startingRV > 0 {
+					objRV, parseErr := strconv.ParseUint(app.ResourceVersion, 10, 64)
+					// Skip objects client already has (objRV <= startingRV)
+					if parseErr == nil && objRV <= startingRV {
+						klog.V(6).Infof("Skipping ADDED event for %s/%s (objRV=%d <= startingRV=%d)",
+							app.Namespace, app.Name, objRV, startingRV)
+						continue
+					}
+				}
+				// When startingRV == 0, always send ADDED events (client wants full state)
+
+				// Send event to custom watcher
+				if !send(watch.Event{Type: event.Type, Object: &app}) {
+					return
+				}
+
+			case wmEvent, ok := <-wmResultChan(wmWatcher):
+				if !ok {
+					klog.V(4).Info("WorkloadMonitor watcher closed")
+					wmWatcher = nil
+					continue
+				}
+				if wmEvent.Type == watch.Bookmark || wmEvent.Type == watch.Error {
+					if wmEvent.Type == watch.Error {
+						klog.V(4).Infof("WorkloadMonitor watch error event: %v", wmEvent.Object)
+					}
+					continue
+				}
+				wm, ok := wmEvent.Object.(*cozyv1alpha1.WorkloadMonitor)
+				if !ok {
+					continue
+				}
+				// All WM event types (Added/Modified/Deleted) produce a Modified
+				// Application event because the Application itself is what changed
+				// from the client's perspective.
+				wmAppName, hasLabel := wm.Labels[ApplicationNameLabel]
+				if !hasLabel {
+					continue
+				}
+				// Filter: skip WorkloadMonitor events for applications not matching
+				// the watch scope (single-resource or field-selector filtered watches)
+				hrName := r.releaseConfig.Prefix + wmAppName
+				if filterByName != "" && hrName != filterByName {
+					continue
+				}
+				if resourceName != "" && wmAppName != resourceName {
+					continue
+				}
+
+				// Locate the owning HelmRelease. For most application kinds the
+				// WorkloadMonitor and its HelmRelease live in the same namespace,
+				// but Tenant workloads live in a child namespace (see
+				// computeTenantNamespace) while the HelmRelease remains in the
+				// parent/requested namespace — so the WM-to-HR namespace mapping
+				// differs.
+				hrNS := wm.Namespace
+				if r.kindName == "Tenant" {
+					hrNS = namespace
+					// Filter out WM events whose child namespace does not
+					// correspond to the Tenant in our watched namespace, since
+					// the cluster-wide WM watch delivers events for all tenants.
+					if r.computeTenantNamespace(namespace, wmAppName) != wm.Namespace {
+						continue
+					}
+					if !fieldFilter.MatchesNamespace(hrNS) {
+						continue
+					}
+				} else if !fieldFilter.MatchesNamespace(hrNS) {
+					continue
+				}
+				hr := &helmv2.HelmRelease{}
+				if err := r.c.Get(ctx, client.ObjectKey{Namespace: hrNS, Name: hrName}, hr); err != nil {
+					klog.V(4).Infof("Cannot find HelmRelease %s/%s for WorkloadMonitor event: %v", hrNS, hrName, err)
+					continue
+				}
+				// Pass the fresh WorkloadMonitor so conversion uses the latest
+				// operational status even if the cache (r.c) has not yet
+				// observed this watch event.
+				app, err := r.ConvertHelmReleaseToApplicationWithMonitor(ctx, hr, wm)
+				if err != nil {
+					klog.V(4).Infof("Error converting HelmRelease for WorkloadMonitor event: %v", err)
+					continue
+				}
+				// Apply label selector filtering (same as HelmRelease event path)
+				if options.LabelSelector != nil {
+					sel, err := labels.Parse(options.LabelSelector.String())
+					if err != nil {
+						klog.Errorf("Invalid label selector: %v", err)
+						continue
+					}
+					if !sel.Matches(labels.Set(app.Labels)) {
+						continue
+					}
+				}
+				// Use the WorkloadMonitor's ResourceVersion for the emitted event
+				// so clients see a monotonically increasing RV and don't skip this update.
+				app.SetResourceVersion(wm.GetResourceVersion())
+				outEvent := watch.Event{Type: watch.Modified, Object: &app}
+				// Buffer WM-triggered events that arrive before the
+				// initial-events-end bookmark. They will be replayed in order
+				// immediately after the bookmark is emitted.
+				if !bookmarker.Sent() {
+					pendingWMEvents = append(pendingWMEvents, outEvent)
+					continue
+				}
+				bookmarker.Observe(wm.GetResourceVersion())
+				if !send(outEvent) {
+					return
+				}
+
+			case <-customW.stopChan:
+				return
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+
+	klog.V(6).Infof("Custom watch established successfully")
+	return customW, nil
+}
+
+// wmResultChan returns the result channel of a WorkloadMonitor watcher, or a nil
+// channel (which blocks forever in select) if the watcher is nil.
+func wmResultChan(w watch.Interface) <-chan watch.Event {
+	if w == nil {
+		return nil
+	}
+	return w.ResultChan()
+}
+
+// customWatcher wraps the original watcher and filters/converts events
+type customWatcher struct {
+	resultChan chan watch.Event
+	stopChan   chan struct{}
+	stopOnce   sync.Once
+	underlying watch.Interface
+}
+
+// Stop terminates the watch
+func (cw *customWatcher) Stop() {
+	cw.stopOnce.Do(func() {
+		close(cw.stopChan)
+		if cw.underlying != nil {
+			cw.underlying.Stop()
+		}
+	})
+}
+
+// ResultChan returns the event channel
+func (cw *customWatcher) ResultChan() <-chan watch.Event {
+	return cw.resultChan
+}
+
+// getNamespace extracts the namespace from the context
+func (r *REST) getNamespace(ctx context.Context) (string, error) {
+	namespace, ok := request.NamespaceFrom(ctx)
+	if !ok {
+		err := fmt.Errorf("namespace not found in context")
+		klog.Error(err)
+		return "", err
+	}
+	return namespace, nil
+}
+
+// hasRequiredApplicationLabels checks if a HelmRelease has the required application labels
+// matching the REST instance's kind and group
+func (r *REST) hasRequiredApplicationLabels(hr *helmv2.HelmRelease) bool {
+	if hr.Labels == nil {
+		return false
+	}
+	return hr.Labels[ApplicationKindLabel] == r.kindName &&
+		hr.Labels[ApplicationGroupLabel] == r.gvk.Group
+}
+
+// hasRequiredApplicationLabelsWithName checks if a HelmRelease has the required application labels
+// matching the REST instance's kind, group, and the specified application name
+func (r *REST) hasRequiredApplicationLabelsWithName(hr *helmv2.HelmRelease, appName string) bool {
+	if hr.Labels == nil {
+		return false
+	}
+	return hr.Labels[ApplicationKindLabel] == r.kindName &&
+		hr.Labels[ApplicationGroupLabel] == r.gvk.Group &&
+		hr.Labels[ApplicationNameLabel] == appName
+}
+
+// mergeMaps combines two maps of labels or annotations
+// mergeMaps merges b over a into a freshly allocated map. It never returns
+// either input: callers mutate the result in place, and a may be a long-lived
+// shared map (e.g. r.releaseConfig.Labels) that concurrent requests must not
+// write to.
+func mergeMaps(a, b map[string]string) map[string]string {
+	if a == nil && b == nil {
+		return nil
+	}
+	merged := make(map[string]string, len(a)+len(b))
+	maps.Copy(merged, a)
+	maps.Copy(merged, b)
+	return merged
+}
+
+// addPrefixedMap adds the predefined prefix to the keys of a map
+func addPrefixedMap(original map[string]string, prefix string) map[string]string {
+	if original == nil {
+		return nil
+	}
+	processed := make(map[string]string, len(original))
+	for k, v := range original {
+		processed[prefix+k] = v
+	}
+	return processed
+}
+
+// filterPrefixedMap filters a map by the predefined prefix and removes the prefix from the keys
+func filterPrefixedMap(original map[string]string, prefix string) map[string]string {
+	if original == nil {
+		return nil
+	}
+	processed := make(map[string]string)
+	for k, v := range original {
+		if key, ok := strings.CutPrefix(k, prefix); ok {
+			processed[key] = v
+		}
+	}
+	return processed
+}
+
+func garbageCollectionFinalizers(finalizers []string) []string {
+	var result []string
+	for _, finalizer := range finalizers {
+		if finalizer == metav1.FinalizerDeleteDependents || finalizer == metav1.FinalizerOrphanDependents {
+			result = append(result, finalizer)
+		}
+	}
+	return result
+}
+
+func mergeGarbageCollectionFinalizers(current, previous, desired []string) []string {
+	result := slices.Clone(current)
+	for _, finalizer := range []string{metav1.FinalizerDeleteDependents, metav1.FinalizerOrphanDependents} {
+		before, after := slices.Contains(previous, finalizer), slices.Contains(desired, finalizer)
+		if before == after {
+			continue
+		}
+		if !after {
+			result = slices.DeleteFunc(result, func(f string) bool { return f == finalizer })
+		} else if !slices.Contains(result, finalizer) {
+			result = append(result, finalizer)
+		}
+	}
+	return result
+}
+
+// applyLiveMetadata assembles the metadata of a HelmRelease rebuilt from an
+// Application, given the live object it is about to replace. The PUT is a full
+// replace, so anything not restated here is dropped:
+//   - controller finalizers: helm-controller's finalizers.fluxcd.io guarantees
+//     `helm uninstall` runs on deletion. Stripping it lets a subsequent delete
+//     remove the HelmRelease instantly, orphaning every resource of the release.
+//   - ownerReferences: garbage collection and lineage.
+//   - labels/annotations outside the apps.cozystack.io- prefix: set directly on
+//     the HelmRelease by Flux or other controllers. Keys under the prefix are
+//     owned by this API and recomputed from the Application, so stale ones are
+//     dropped and a deletion on the Application propagates.
+//
+// hr must be a fresh conversion output: the function overlays the live metadata
+// and is not idempotent against its own result.
+func (r *REST) applyLiveMetadata(hr, cur *helmv2.HelmRelease, app *appsv1alpha1.Application, previousFinalizers []string) {
+	hr.Finalizers = mergeGarbageCollectionFinalizers(cur.Finalizers, previousFinalizers, app.Finalizers)
+	hr.DeletionTimestamp = cur.DeletionTimestamp.DeepCopy()
+	hr.DeletionGracePeriodSeconds = cur.DeletionGracePeriodSeconds
+	hr.OwnerReferences = cur.OwnerReferences
+	hr.Labels = mergeMaps(omitPrefixedMap(cur.Labels, LabelPrefix), hr.Labels)
+	hr.Annotations = mergeMaps(omitPrefixedMap(cur.Annotations, AnnotationPrefix), hr.Annotations)
+
+	// Merge system labels (from config) directly
+	hr.Labels = mergeMaps(r.releaseConfig.Labels, hr.Labels)
+	// Merge user labels with prefix
+	hr.Labels = mergeMaps(hr.Labels, addPrefixedMap(app.Labels, LabelPrefix))
+	// Add application metadata labels
+	if hr.Labels == nil {
+		hr.Labels = make(map[string]string)
+	}
+	hr.Labels[ApplicationKindLabel] = r.kindName
+	hr.Labels[ApplicationGroupLabel] = r.gvk.Group
+	hr.Labels[ApplicationNameLabel] = app.Name
+	// Note: Annotations from config are not handled as r.releaseConfig.Annotations is undefined
+
+	// The flux-shard-operator assigns each tenant HelmRelease to a
+	// helm-controller shard by rewriting this label at runtime. Rebuilding
+	// the object from the Application reverts it to the ApplicationDefinition
+	// default, which would bounce the HelmRelease off its shard on every
+	// update, so the live value wins.
+	if shard, ok := cur.Labels[fluxshard.ShardKeyLabel]; ok {
+		hr.Labels[fluxshard.ShardKeyLabel] = shard
+	}
+}
+
+// omitPrefixedMap returns the entries of a map whose keys do NOT carry the
+// predefined prefix, keeping the keys as-is. It is the complement of
+// filterPrefixedMap: prefixed keys are owned by this API and recomputed from
+// the Application on every write, while the remaining keys belong to other
+// controllers and must be preserved.
+func omitPrefixedMap(original map[string]string, prefix string) map[string]string {
+	if original == nil {
+		return nil
+	}
+	processed := make(map[string]string)
+	for k, v := range original {
+		if !strings.HasPrefix(k, prefix) {
+			processed[k] = v
+		}
+	}
+	return processed
+}
+
+// ConvertHelmReleaseToApplication converts a HelmRelease to an Application.
+func (r *REST) ConvertHelmReleaseToApplication(ctx context.Context, hr *helmv2.HelmRelease) (appsv1alpha1.Application, error) {
+	return r.ConvertHelmReleaseToApplicationWithMonitor(ctx, hr, nil)
+}
+
+// ConvertHelmReleaseToApplicationWithMonitor converts a HelmRelease to an
+// Application, optionally overriding the cached copy of a WorkloadMonitor with
+// a fresher version received from the watch client. This prevents the emitted
+// Application object from carrying stale WorkloadsReady data when r.c (cache)
+// lags behind r.w (watch).
+func (r *REST) ConvertHelmReleaseToApplicationWithMonitor(ctx context.Context, hr *helmv2.HelmRelease, freshMonitor *cozyv1alpha1.WorkloadMonitor) (appsv1alpha1.Application, error) {
+	klog.V(6).Infof("Converting HelmRelease to Application for resource %s", hr.GetName())
+
+	// Convert HelmRelease struct to Application struct
+	app, err := r.convertHelmReleaseToApplication(ctx, hr, freshMonitor)
+	if err != nil {
+		klog.Errorf("Error converting from HelmRelease to Application: %v", err)
+		return appsv1alpha1.Application{}, err
+	}
+
+	if err := r.applySpecDefaults(&app); err != nil {
+		return app, fmt.Errorf("defaulting error: %w", err)
+	}
+
+	klog.V(6).Infof("Successfully converted HelmRelease %s to Application", hr.GetName())
+	return app, nil
+}
+
+// ConvertApplicationToHelmRelease converts an Application to a HelmRelease
+func (r *REST) ConvertApplicationToHelmRelease(app *appsv1alpha1.Application) (*helmv2.HelmRelease, error) {
+	return r.convertApplicationToHelmRelease(app)
+}
+
+// filterInternalKeys removes keys starting with "_" from the JSON values
+func filterInternalKeys(values *apiextv1.JSON) *apiextv1.JSON {
+	if values == nil || len(values.Raw) == 0 {
+		return values
+	}
+	var data map[string]any
+	if err := json.Unmarshal(values.Raw, &data); err != nil {
+		return values
+	}
+	for key := range data {
+		if strings.HasPrefix(key, "_") {
+			delete(data, key)
+		}
+	}
+	filtered, err := json.Marshal(data)
+	if err != nil {
+		return values
+	}
+	return &apiextv1.JSON{Raw: filtered}
+}
+
+// validateNoInternalKeys checks that values don't contain keys starting with "_"
+func validateNoInternalKeys(values *apiextv1.JSON) error {
+	if values == nil || len(values.Raw) == 0 {
+		return nil
+	}
+	var data map[string]any
+	if err := json.Unmarshal(values.Raw, &data); err != nil {
+		return err
+	}
+	for key := range data {
+		if strings.HasPrefix(key, "_") {
+			return fmt.Errorf("values key %q is reserved (keys starting with '_' are not allowed)", key)
+		}
+	}
+	return nil
+}
+
+// maxHelmReleaseName is the Helm release name limit. Helm reserves room for
+// chart-generated resource suffixes within the 63-char DNS-1035 label limit.
+const maxHelmReleaseName = 53
+
+// maxNamespaceName is the DNS-1123 label limit for Kubernetes namespace names.
+// The tenant Helm chart creates a Namespace whose name is the computed
+// workload namespace (parent namespace + "-" + tenant name), so the total
+// must fit inside a single 63-char DNS-1123 label.
+const maxNamespaceName = 63
+
+// legacyNameCaps are the caps this server enforced in code before applications
+// declared their own. An upgrade brings cozystack-api up before the
+// application definitions it serves are re-rendered, so for that window a
+// definition can predate its chart's declaration, and without these a name
+// admitted then renders sub-resources that cannot exist. They apply only to a
+// definition that declares nothing, and go once no supported upgrade starts
+// from a definition without the declaration.
+var legacyNameCaps = map[string]validation.NameSchema{
+	"Kubernetes": {
+		MaxLength:   new(int64(32)),
+		Description: "worker pools are KubernetesNodes releases named `kubernetes-nodes-<name>-<pool>`, which must fit the 53-character Helm release name limit",
+	},
+	"Kafka": {
+		MaxLength:   new(int64(44)),
+		Description: "the KRaft controller pod hostname `kafka-<name>-c-<hash>-<id>` must fit the 63-character DNS-1123 label limit",
+	},
+}
+
+// resolveNameSchema returns the name constraints for the kind cfg describes.
+// An error means the declaration exists but cannot be enforced as written;
+// the caller refuses creates for that kind rather than guess, since guessing
+// either admits names the chart cannot render or rejects names it can.
+func resolveNameSchema(cfg *config.Resource) (*validation.NameSchema, error) {
+	declared, err := validation.ParseNameSchema(cfg.Application.OpenAPISchema)
+	if err != nil {
+		return nil, err
+	}
+	if declared == nil {
+		if legacy, ok := legacyNameCaps[cfg.Application.Kind]; ok {
+			return &legacy, nil
+		}
+		return nil, nil
+	}
+	if budget := maxHelmReleaseName - len(cfg.Release.Prefix); declared.MinLength != nil && *declared.MinLength > int64(budget) {
+		return nil, fmt.Errorf("minLength %d exceeds the %d characters the release prefix %q leaves, so no name fits",
+			*declared.MinLength, budget, cfg.Release.Prefix)
+	}
+	return declared, nil
+}
+
+// validateNameFormat checks an Application name against DNS-1035, any
+// kind-specific format rules (e.g. Tenant names must be alphanumeric — see
+// validation.ValidateApplicationName for the reasoning), and the format the
+// application declares for itself in its schema.
+func (r *REST) validateNameFormat(name string) field.ErrorList {
+	allErrs := validation.ValidateApplicationName(name, r.kindName, field.NewPath("metadata").Child("name"))
+	return append(allErrs, r.validateNameAgainstSchema(name)...)
+}
+
+// validateNameAgainstSchema applies the minLength and pattern the application
+// declares for its name; maxLength is applied in validateNameLength, together
+// with the Helm budget it shares.
+func (r *REST) validateNameAgainstSchema(name string) field.ErrorList {
+	if r.nameSchema == nil {
+		return nil
+	}
+	fldPath := field.NewPath("metadata").Child("name")
+	allErrs := field.ErrorList{}
+
+	if minLen := r.nameSchema.MinLength; minLen != nil && int64(len(name)) < *minLen {
+		allErrs = append(allErrs, field.Invalid(fldPath, name,
+			fmt.Sprintf("must be at least %d characters (%s)", *minLen, r.declaredReason())))
+	}
+	if !r.nameSchema.MatchesPattern(name) {
+		allErrs = append(allErrs, field.Invalid(fldPath, name,
+			fmt.Sprintf("must match %q (%s)", r.nameSchema.Pattern, r.declaredReason())))
+	}
+	return allErrs
+}
+
+// declaredReason is what a name rejected by the application's own
+// declaration is told: the chart's explanation when it gives one.
+func (r *REST) declaredReason() string {
+	if r.nameSchema.Description != "" {
+		return r.nameSchema.Description
+	}
+	return fmt.Sprintf("limit declared by the %s application", r.kindName)
+}
+
+// validateNameLength checks that the application name fits both the Helm
+// release name limit (prefix + name <= 53) and any stricter budget the
+// application declares for itself. The tighter one wins and reports itself; a
+// declaration can never widen the Helm budget.
+func (r *REST) validateNameLength(name string) field.ErrorList {
+	fldPath := field.NewPath("metadata").Child("name")
+	allErrs := field.ErrorList{}
+
+	maxLen := maxHelmReleaseName - len(r.releaseConfig.Prefix)
+
+	if maxLen <= 0 {
+		allErrs = append(allErrs, field.Invalid(fldPath, name,
+			fmt.Sprintf("configuration error: no valid name length possible (release prefix %q)", r.releaseConfig.Prefix)))
+		return allErrs
+	}
+	if r.nameSchemaErr != nil {
+		allErrs = append(allErrs, field.Invalid(fldPath, name,
+			fmt.Sprintf("configuration error: the %s ApplicationDefinition declares an invalid %s: %v", r.kindName, appsv1alpha1.NameSchemaExtension, r.nameSchemaErr)))
+		return allErrs
+	}
+
+	reason := fmt.Sprintf("release prefix %q", r.releaseConfig.Prefix)
+	if declared := r.nameSchema; declared != nil && declared.MaxLength != nil && *declared.MaxLength < int64(maxLen) {
+		maxLen = int(*declared.MaxLength)
+		reason = r.declaredReason()
+	}
+
+	if len(name) > maxLen {
+		allErrs = append(allErrs, field.Invalid(fldPath, name,
+			fmt.Sprintf("must be no more than %d characters (%s)", maxLen, reason)))
+	}
+	return allErrs
+}
+
+// validateTenantNamespaceLength checks that the computed workload namespace
+// for a Tenant application fits within the DNS-1123 label limit. The namespace
+// is formed by dash-joining the parent namespace with the tenant name, so
+// deep nesting can exceed the limit even when each individual name passes the
+// per-name Helm release length check.
+func (r *REST) validateTenantNamespaceLength(currentNamespace, tenantName string) field.ErrorList {
+	fldPath := field.NewPath("metadata").Child("name")
+	allErrs := field.ErrorList{}
+
+	computed := r.computeTenantNamespace(currentNamespace, tenantName)
+	if len(computed) > maxNamespaceName {
+		allErrs = append(allErrs, field.Invalid(fldPath, tenantName,
+			fmt.Sprintf("computed tenant namespace %q would be %d characters, which exceeds the %d-character Kubernetes namespace limit; shorten the tenant name or reduce ancestor nesting depth",
+				computed, len(computed), maxNamespaceName)))
+	}
+	return allErrs
+}
+
+// convertHelmReleaseToApplication implements the actual conversion logic.
+// The optional freshMonitor is used to override the cache copy of a
+// WorkloadMonitor when a newer version was delivered via the watch client —
+// see ConvertHelmReleaseToApplicationWithMonitor for the rationale.
+func (r *REST) convertHelmReleaseToApplication(ctx context.Context, hr *helmv2.HelmRelease, freshMonitor *cozyv1alpha1.WorkloadMonitor) (appsv1alpha1.Application, error) {
+	// Filter out internal keys (starting with "_") from spec
+	filteredSpec := filterInternalKeys(hr.Spec.Values)
+
+	app := appsv1alpha1.Application{
+		TypeMeta: metav1.TypeMeta{
+			APIVersion: "apps.cozystack.io/v1alpha1",
+			Kind:       r.kindName,
+		},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              strings.TrimPrefix(hr.Name, r.releaseConfig.Prefix),
+			Namespace:         hr.Namespace,
+			UID:               hr.GetUID(),
+			ResourceVersion:   hr.GetResourceVersion(),
+			CreationTimestamp: hr.CreationTimestamp,
+			DeletionTimestamp: hr.DeletionTimestamp,
+			Finalizers:        garbageCollectionFinalizers(hr.Finalizers),
+			Labels:            filterPrefixedMap(hr.Labels, LabelPrefix),
+			Annotations:       filterPrefixedMap(hr.Annotations, AnnotationPrefix),
+		},
+		Spec: filteredSpec,
+		Status: appsv1alpha1.ApplicationStatus{
+			Version:                    hr.Status.LastAttemptedRevision,
+			InstallFailures:            hr.Status.InstallFailures,
+			UpgradeFailures:            hr.Status.UpgradeFailures,
+			LastAttemptedReleaseAction: string(hr.Status.LastAttemptedReleaseAction),
+		},
+	}
+
+	var conditions []metav1.Condition
+	for _, hrCondition := range hr.GetConditions() {
+		// The Application carries no generation, so a client cannot tell a Stalled
+		// left over from the previous spec from one about the current spec. Compare
+		// the condition's own ObservedGeneration, not Status.ObservedGeneration: the
+		// question is which spec this condition describes.
+		if hrCondition.Type == "Stalled" && hrCondition.ObservedGeneration < hr.Generation {
+			continue
+		}
+		if hrCondition.Type == "Ready" || hrCondition.Type == "Released" || hrCondition.Type == "Stalled" {
+			conditions = append(conditions, metav1.Condition{
+				LastTransitionTime: hrCondition.LastTransitionTime,
+				Reason:             hrCondition.Reason,
+				Message:            hrCondition.Message,
+				Status:             hrCondition.Status,
+				Type:               hrCondition.Type,
+			})
+		}
+	}
+	// Enrich conditions with WorkloadMonitor operational status.
+	// Tenant workloads live in a child namespace (computed from the Tenant name),
+	// not in the same namespace as the owning HelmRelease — look there instead.
+	workloadsNS := hr.Namespace
+	if r.kindName == "Tenant" {
+		workloadsNS = r.computeTenantNamespace(hr.Namespace, app.Name)
+	}
+	ws, wsErr := r.getWorkloadsOperational(ctx, workloadsNS, app.Name, freshMonitor)
+	// Derive a stable LastTransitionTime: use the owning HelmRelease's own
+	// condition update time (or CreationTimestamp as a floor) so that repeated
+	// conversions of the same underlying state produce identical timestamps.
+	wrTransition := hr.CreationTimestamp
+	for _, c := range hr.GetConditions() {
+		if c.LastTransitionTime.After(wrTransition.Time) {
+			wrTransition = c.LastTransitionTime
+		}
+	}
+	if ws.transitionTime.After(wrTransition.Time) {
+		wrTransition = ws.transitionTime
+	}
+	if wrTransition.IsZero() {
+		// Fallback for objects that somehow have no timestamps at all
+		// (e.g. hand-crafted test fixtures). In production HelmReleases
+		// always carry a CreationTimestamp, so the stable branch above
+		// is used.
+		wrTransition = metav1.Now()
+	}
+	if wsErr != nil {
+		// Fail-open: if we can't query WorkloadMonitors (e.g., informer cache not ready),
+		// don't override Ready. Prefer operational availability over safety.
+		// The WorkloadsReady=Unknown condition still signals the issue to the user.
+		klog.Warningf("Failed to check workload monitors for %s/%s: %v", workloadsNS, app.Name, wsErr)
+		conditions = append(conditions, metav1.Condition{
+			Type:               "WorkloadsReady",
+			Status:             metav1.ConditionUnknown,
+			LastTransitionTime: wrTransition,
+			Reason:             "Error",
+			Message:            fmt.Sprintf("Failed to check workload status: %v", wsErr),
+		})
+	} else if ws.found {
+		workloadsCondition := metav1.Condition{
+			Type:               "WorkloadsReady",
+			LastTransitionTime: wrTransition,
+			Reason:             "WorkloadMonitorCheck",
+		}
+		switch {
+		case !ws.operational:
+			// Concrete failure takes priority over unknown/pending state
+			workloadsCondition.Status = metav1.ConditionFalse
+			workloadsCondition.Message = "One or more workloads are not operational"
+			if len(ws.messages) > 0 {
+				workloadsCondition.Message = strings.Join(ws.messages, "; ")
+			}
+			if ws.reason != "" {
+				workloadsCondition.Reason = ws.reason
+			}
+		case ws.unknown:
+			workloadsCondition.Status = metav1.ConditionUnknown
+			workloadsCondition.Reason = "Pending"
+			workloadsCondition.Message = "One or more workloads have not been reconciled yet"
+		default:
+			workloadsCondition.Status = metav1.ConditionTrue
+			workloadsCondition.Message = "All workloads are operational"
+		}
+		conditions = append(conditions, workloadsCondition)
+
+		// Intentionally do NOT override the Ready condition based on WorkloadsReady.
+		// Ready continues to reflect HelmRelease state only, which:
+		//   - preserves backward compatibility with existing tooling (kubectl wait,
+		//     GitOps health checks) that expect Ready to match HelmRelease
+		//   - avoids false-negative Ready=False during normal startup windows where
+		//     pods are still coming up but WorkloadMonitor has already reported
+		//     Operational=false due to availableReplicas < MinReplicas
+		// WorkloadsReady is a separate condition that surfaces workload health
+		// independently — users and dashboards can observe it for operational visibility.
+	}
+
+	app.SetConditions(conditions)
+
+	// Add namespace field for Tenant applications
+	if r.kindName == validation.TenantKind {
+		app.Status.Namespace = r.computeTenantNamespace(hr.Namespace, app.Name)
+		externalIPsCount, err := r.countTenantExternalIPs(ctx, app.Status.Namespace)
+		if err != nil {
+			klog.Warningf("Failed to count external IPs for tenant %s/%s: %v", hr.Namespace, app.Name, err)
+		} else {
+			app.Status.ExternalIPsCount = externalIPsCount
+		}
+	}
+
+	return app, nil
+}
+
+// workloadsStatus holds the aggregated operational status of WorkloadMonitors.
+type workloadsStatus struct {
+	operational bool
+	found       bool
+	unknown     bool // true when at least one monitor has nil Operational (not yet reconciled)
+	// messages are the non-empty status messages of the monitors that are not
+	// operational, sorted so repeated conversions produce identical content.
+	messages []string
+	// reason is the status Reason of a monitor that is not operational and
+	// names its cause, such as DataVolumeNotReady; empty when none does.
+	reason string
+	// transitionTime is the most recent metadata update time across the
+	// matching monitors. Used as WorkloadsReady.LastTransitionTime so that
+	// repeated conversions for the same underlying state produce stable
+	// timestamps (preserving the Kubernetes contract that identical
+	// resource versions represent identical content).
+	transitionTime metav1.Time
+}
+
+// getWorkloadsOperational checks WorkloadMonitor resources for an application and returns
+// aggregated operational status. If no monitors exist, returns found=false.
+// When freshOverride is non-nil, its status replaces the cached copy for the
+// corresponding monitor — this keeps the result consistent with watch events
+// when the cache (r.c) lags behind the watch client (r.w).
+func (r *REST) getWorkloadsOperational(ctx context.Context, namespace, appName string, freshOverride *cozyv1alpha1.WorkloadMonitor) (workloadsStatus, error) {
+	monitors := &cozyv1alpha1.WorkloadMonitorList{}
+	if err := r.c.List(ctx, monitors,
+		client.InNamespace(namespace),
+		client.MatchingLabels{
+			appsv1alpha1.ApplicationKindLabel:  r.kindName,
+			appsv1alpha1.ApplicationGroupLabel: r.gvk.Group,
+			appsv1alpha1.ApplicationNameLabel:  appName,
+		},
+	); err != nil {
+		return workloadsStatus{}, err
+	}
+	// Ensure the freshOverride is represented in the aggregation even when
+	// the cache has not yet observed it (brand-new resource) or is behind.
+	replaced := false
+	if freshOverride != nil {
+		for i := range monitors.Items {
+			if monitors.Items[i].UID == freshOverride.UID ||
+				(monitors.Items[i].Name == freshOverride.Name && monitors.Items[i].Namespace == freshOverride.Namespace) {
+				monitors.Items[i] = *freshOverride
+				replaced = true
+				break
+			}
+		}
+		if !replaced {
+			monitors.Items = append(monitors.Items, *freshOverride)
+		}
+	}
+	if len(monitors.Items) == 0 {
+		return workloadsStatus{operational: true, found: false}, nil
+	}
+	operational := true
+	unknown := false
+	var messages, reasons []string
+	var latest metav1.Time
+	for _, m := range monitors.Items {
+		if m.Status.Operational == nil {
+			unknown = true
+		} else if !*m.Status.Operational {
+			operational = false
+			if m.Status.Message != "" {
+				messages = append(messages, m.Status.Message)
+			}
+			if m.Status.Reason != "" {
+				reasons = append(reasons, m.Status.Reason)
+			}
+		}
+		// Pick the most recent monitor mtime as a stable transition time.
+		if t := latestMonitorTime(&m); t.After(latest.Time) {
+			latest = t
+		}
+	}
+	sort.Strings(messages)
+	sort.Strings(reasons)
+	var reason string
+	if len(reasons) > 0 {
+		reason = reasons[0]
+	}
+	return workloadsStatus{operational: operational, found: true, unknown: unknown, messages: messages, reason: reason, transitionTime: latest}, nil
+}
+
+// latestMonitorTime returns the most recent timestamp associated with a
+// WorkloadMonitor — currently only the object creation time is guaranteed.
+// Status does not carry a transition time, so we fall back to CreationTimestamp.
+func latestMonitorTime(m *cozyv1alpha1.WorkloadMonitor) metav1.Time {
+	return m.CreationTimestamp
+}
+
+// convertApplicationToHelmRelease implements the actual conversion logic.
+//
+// Spec.Interval, Install/Upgrade.Strategy{Name=RetryOnFailure,RetryInterval},
+// Install/Upgrade.Timeout, and Spec.MaxHistory are populated from
+// ReleaseConfig fields fed by the cozystack-api server flags
+// (--helmrelease-{interval,retry-interval,install-timeout,upgrade-timeout,
+// max-history}). This mirrors cozystack-operator's
+// PackageReconciler.buildHelmReleaseSpec so both HelmRelease-generating paths
+// share the same retry strategy, history retention, and reconcile cadence.
+//
+// Strategy.Name=RetryOnFailure with an explicit RetryInterval (rather than
+// Remediation{Retries:-1}) decouples failed install/upgrade retry timing
+// from Spec.Interval — the previous coupling caused failed installs to
+// retry only every 5m, exceeding E2E budgets.
+func (r *REST) convertApplicationToHelmRelease(app *appsv1alpha1.Application) (*helmv2.HelmRelease, error) {
+	// Kind-wide annotation overrides from this kind's ApplicationDefinition
+	// win over the global defaults (HelmReleaseInstallTimeout /
+	// HelmReleaseUpgradeTimeout):
+	//   - HelmInstallTimeout (release.cozystack.io/helm-install-timeout)
+	//     sets both Install.Timeout and Upgrade.Timeout;
+	//   - HelmUpgradeTimeout (release.cozystack.io/helm-upgrade-timeout)
+	//     then overrides only Upgrade.Timeout, so a kind can carry an
+	//     asymmetric budget (short install, long upgrade or vice versa).
+	// Both annotations live on the kind's ApplicationDefinition (for a
+	// kind shipped in this repo, the cozyrds manifest of its -rd
+	// package), so a kind whose chart can legitimately outlast the
+	// global wait budget opts in there rather than raising the default
+	// for every kind.
+	installTimeout := r.releaseConfig.HelmReleaseInstallTimeout
+	upgradeTimeout := r.releaseConfig.HelmReleaseUpgradeTimeout
+	if r.releaseConfig.HelmInstallTimeout > 0 {
+		installTimeout = r.releaseConfig.HelmInstallTimeout
+		upgradeTimeout = r.releaseConfig.HelmInstallTimeout
+	}
+	if r.releaseConfig.HelmUpgradeTimeout > 0 {
+		upgradeTimeout = r.releaseConfig.HelmUpgradeTimeout
+	}
+
+	maxHistory := r.releaseConfig.HelmReleaseMaxHistory
+	helmRelease := &helmv2.HelmRelease{
+		TypeMeta: metav1.TypeMeta{
+			APIVersion: "helm.toolkit.fluxcd.io/v2",
+			Kind:       "HelmRelease",
+		},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:            r.releaseConfig.Prefix + app.Name,
+			Namespace:       app.Namespace,
+			Labels:          addPrefixedMap(app.Labels, LabelPrefix),
+			Annotations:     addPrefixedMap(app.Annotations, AnnotationPrefix),
+			ResourceVersion: app.ResourceVersion,
+			UID:             app.UID,
+			Finalizers:      garbageCollectionFinalizers(app.Finalizers),
+		},
+		Spec: helmv2.HelmReleaseSpec{
+			ChartRef: &helmv2.CrossNamespaceSourceReference{
+				Kind:      r.releaseConfig.ChartRef.Kind,
+				Name:      r.releaseConfig.ChartRef.Name,
+				Namespace: r.releaseConfig.ChartRef.Namespace,
+			},
+			Interval:   metav1.Duration{Duration: r.releaseConfig.HelmReleaseInterval},
+			MaxHistory: &maxHistory,
+			Install: &helmv2.Install{
+				Timeout: &metav1.Duration{Duration: installTimeout},
+				Strategy: &helmv2.InstallStrategy{
+					Name:          string(helmv2.ActionStrategyRetryOnFailure),
+					RetryInterval: &metav1.Duration{Duration: r.releaseConfig.HelmReleaseRetryInterval},
+				},
+			},
+			Upgrade: &helmv2.Upgrade{
+				Timeout: &metav1.Duration{Duration: upgradeTimeout},
+				Strategy: &helmv2.UpgradeStrategy{
+					Name:          string(helmv2.ActionStrategyRetryOnFailure),
+					RetryInterval: &metav1.Duration{Duration: r.releaseConfig.HelmReleaseRetryInterval},
+				},
+			},
+			ValuesFrom: []helmv2.ValuesReference{
+				{
+					Kind: "Secret",
+					Name: "cozystack-values",
+				},
+			},
+			Values: app.Spec,
+		},
+	}
+
+	// Per-Application HelmRelease wait disablement. An
+	// ApplicationDefinition that sets
+	// release.cozystack.io/helm-install-disable-wait: "true" gets
+	// Install.DisableWait and Upgrade.DisableWait set on the emitted
+	// HelmRelease. Required for parent charts that emit in-tenant child
+	// HelmReleases which cannot become Ready during the parent's own
+	// install (e.g. the Kubernetes Application emits cilium/coredns/csi/etc.
+	// HelmReleases that can never become Ready until worker nodes exist,
+	// plus a main-phase talos-reconcile Job that generates the
+	// TalosConfigTemplate the worker MachineSet clones from; without
+	// DisableWait the helm-controller blocks the release on those addon
+	// HelmReleases, which cannot happen during install).
+	if r.releaseConfig.HelmInstallDisableWait {
+		helmRelease.Spec.Install.DisableWait = true
+		helmRelease.Spec.Upgrade.DisableWait = true
+	}
+
+	// Helm apply-strategy override (release.cozystack.io/helm-server-side-apply).
+	// helm-controller v1.5.0 defaults to server-side apply, which force-owns every
+	// field the chart renders and reverts a value a runtime co-writer later sets. A
+	// kind that has such a co-writer — the postgres read-replica autoscaler, where
+	// KEDA's HPA writes the CNPG Cluster's /scale subresource (spec.instances) while
+	// the chart renders a constant seed — sets this false to get client-side apply,
+	// under which helm-controller patches the Cluster (a CRD) from the previous-vs-new
+	// rendered manifest and does not consult live state, so the unchanged constant
+	// render yields no patch and KEDA's live value survives. Left unset, the
+	// helm-controller default applies.
+	if r.releaseConfig.HelmServerSideApply != nil {
+		// Copy into a fresh local rather than aliasing the shared ReleaseConfig pointer
+		// across every emitted HelmRelease (defense-in-depth; matches the maxHistory pattern).
+		ssa := *r.releaseConfig.HelmServerSideApply
+		helmRelease.Spec.Install.ServerSideApply = &ssa
+		if ssa {
+			helmRelease.Spec.Upgrade.ServerSideApply = helmv2.ServerSideApplyEnabled
+		} else {
+			helmRelease.Spec.Upgrade.ServerSideApply = helmv2.ServerSideApplyDisabled
+		}
+	}
+
+	// kstatus readiness (issue #2642): set the wait strategy + CEL health
+	// expressions so the release reports Ready only when the rendered CR is
+	// actually healthy instead of as soon as helm applies it. ResolveWaitStrategy
+	// couples the default — expressions imply the poller strategy when none is
+	// set, since healthCheckExprs are only evaluated under poller.
+	helmRelease.Spec.HealthCheckExprs = r.releaseConfig.HealthCheckExprs
+	helmRelease.Spec.WaitStrategy = config.ResolveWaitStrategy(r.releaseConfig.WaitStrategy, len(r.releaseConfig.HealthCheckExprs) > 0)
+
+	return helmRelease, nil
+}
+
+// ConvertToTable implements the TableConvertor interface for displaying resources in a table format
+func (r *REST) ConvertToTable(ctx context.Context, object runtime.Object, tableOptions runtime.Object) (*metav1.Table, error) {
+	klog.V(6).Infof("ConvertToTable: received object of type %T", object)
+
+	var table metav1.Table
+
+	switch obj := object.(type) {
+	case *appsv1alpha1.ApplicationList:
+		table = r.buildTableFromApplications(obj.Items)
+		table.ResourceVersion = obj.ResourceVersion
+	case *appsv1alpha1.Application:
+		table = r.buildTableFromApplication(*obj)
+		table.ResourceVersion = obj.GetResourceVersion()
+	default:
+		resource := schema.GroupResource{}
+		if info, ok := request.RequestInfoFrom(ctx); ok {
+			resource = schema.GroupResource{Group: info.APIGroup, Resource: info.Resource}
+		}
+		return nil, errNotAcceptable{
+			resource: resource,
+			message:  "object does not implement the Object interfaces",
+		}
+	}
+
+	// Handle table options
+	if opt, ok := tableOptions.(*metav1.TableOptions); ok && opt != nil && opt.NoHeaders {
+		table.ColumnDefinitions = nil
+	}
+
+	table.TypeMeta = metav1.TypeMeta{
+		APIVersion: "meta.k8s.io/v1",
+		Kind:       "Table",
+	}
+
+	klog.V(6).Infof("ConvertToTable: returning table with %d rows", len(table.Rows))
+	return &table, nil
+}
+
+// buildTableFromApplications constructs a table from a list of Applications
+func (r *REST) buildTableFromApplications(apps []appsv1alpha1.Application) metav1.Table {
+	table := metav1.Table{
+		ColumnDefinitions: []metav1.TableColumnDefinition{
+			{Name: "NAME", Type: "string", Description: "Name of the Application", Priority: 0},
+			{Name: "READY", Type: "string", Description: "Ready status of the Application", Priority: 0},
+			{Name: "WORKLOADS", Type: "string", Description: "Status of the WorkloadsReady condition, <none> when the Application has no WorkloadMonitor", Priority: 0},
+			{Name: "AGE", Type: "string", Description: "Age of the Application", Priority: 0},
+			{Name: "VERSION", Type: "string", Description: "Version of the Application", Priority: 0},
+		},
+		Rows: make([]metav1.TableRow, 0, len(apps)),
+	}
+	now := time.Now()
+
+	for i := range apps {
+		app := &apps[i]
+		row := metav1.TableRow{
+			Cells:  []any{app.GetName(), conditionStatus(app.Status.Conditions, "Ready", "Unknown"), conditionStatus(app.Status.Conditions, "WorkloadsReady", "<none>"), computeAge(app.GetCreationTimestamp().Time, now), getVersion(app.Status.Version)},
+			Object: runtime.RawExtension{Object: app},
+		}
+		table.Rows = append(table.Rows, row)
+	}
+
+	return table
+}
+
+// buildTableFromApplication constructs a table from a single Application
+func (r *REST) buildTableFromApplication(app appsv1alpha1.Application) metav1.Table {
+	table := metav1.Table{
+		ColumnDefinitions: []metav1.TableColumnDefinition{
+			{Name: "NAME", Type: "string", Description: "Name of the Application", Priority: 0},
+			{Name: "READY", Type: "string", Description: "Ready status of the Application", Priority: 0},
+			{Name: "WORKLOADS", Type: "string", Description: "Status of the WorkloadsReady condition, <none> when the Application has no WorkloadMonitor", Priority: 0},
+			{Name: "AGE", Type: "string", Description: "Age of the Application", Priority: 0},
+			{Name: "VERSION", Type: "string", Description: "Version of the Application", Priority: 0},
+		},
+		Rows: []metav1.TableRow{},
+	}
+	now := time.Now()
+
+	a := app
+	row := metav1.TableRow{
+		Cells:  []any{app.GetName(), conditionStatus(app.Status.Conditions, "Ready", "Unknown"), conditionStatus(app.Status.Conditions, "WorkloadsReady", "<none>"), computeAge(app.GetCreationTimestamp().Time, now), getVersion(app.Status.Version)},
+		Object: runtime.RawExtension{Object: &a},
+	}
+	table.Rows = append(table.Rows, row)
+
+	return table
+}
+
+// getVersion extracts and returns only the revision from the version string
+// If version is in format "0.1.4+abcdef", returns "abcdef"
+// Otherwise returns the original string or "<unknown>" if empty
+func getVersion(version string) string {
+	if version == "" {
+		return "<unknown>"
+	}
+	// Check if version contains "+" separator
+	if idx := strings.LastIndex(version, "+"); idx >= 0 && idx < len(version)-1 {
+		// Return only the part after "+"
+		return version[idx+1:]
+	}
+	// If no "+" found, return original version
+	return version
+}
+
+// computeAge calculates the age of the object based on CreationTimestamp and current time
+func computeAge(creationTime, currentTime time.Time) string {
+	ageDuration := currentTime.Sub(creationTime)
+	return duration.HumanDuration(ageDuration)
+}
+
+// conditionStatus returns the status of the condition of the given type, or
+// absent when there is none.
+func conditionStatus(conditions []metav1.Condition, conditionType, absent string) string {
+	for _, condition := range conditions {
+		if condition.Type == conditionType {
+			switch condition.Status {
+			case metav1.ConditionTrue:
+				return "True"
+			case metav1.ConditionFalse:
+				return "False"
+			default:
+				return "Unknown"
+			}
+		}
+	}
+	return absent
+}
+
+// computeTenantNamespace computes the namespace for a Tenant application based on the specified logic
+func (r *REST) computeTenantNamespace(currentNamespace, tenantName string) string {
+	hrName := r.releaseConfig.Prefix + tenantName
+
+	switch {
+	case currentNamespace == "tenant-root" && hrName == "tenant-root":
+		// 1) root tenant inside root namespace
+		return "tenant-root"
+
+	case currentNamespace == "tenant-root":
+		// 2) any other tenant in root namespace
+		return fmt.Sprintf("tenant-%s", tenantName)
+
+	default:
+		// 3) tenant in a dedicated namespace
+		return fmt.Sprintf("%s-%s", currentNamespace, tenantName)
+	}
+}
+
+func (r *REST) countTenantExternalIPs(ctx context.Context, namespace string) (int32, error) {
+	if namespace == "" {
+		return 0, nil
+	}
+
+	var services corev1.ServiceList
+	if err := r.c.List(
+		ctx,
+		&services,
+		client.InNamespace(namespace),
+		client.MatchingFields{"spec.type": string(corev1.ServiceTypeLoadBalancer)},
+	); err != nil {
+		return 0, err
+	}
+
+	var count int32
+	for i := range services.Items {
+		svc := &services.Items[i]
+		for _, ingress := range svc.Status.LoadBalancer.Ingress {
+			if ingress.IP != "" {
+				count++
+				break
+			}
+		}
+	}
+
+	return count, nil
+}
+
+// Destroy releases resources associated with REST
+func (r *REST) Destroy() {
+	// No additional actions needed to release resources.
+}
+
+// New creates a new instance of Application
+func (r *REST) New() runtime.Object {
+	obj := &appsv1alpha1.Application{}
+	obj.TypeMeta = metav1.TypeMeta{
+		APIVersion: r.gvk.GroupVersion().String(),
+		Kind:       r.kindName,
+	}
+	return obj
+}
+
+// NewList returns an empty list of Application objects
+func (r *REST) NewList() runtime.Object {
+	obj := &appsv1alpha1.ApplicationList{}
+	obj.TypeMeta = metav1.TypeMeta{
+		APIVersion: r.gvk.GroupVersion().String(),
+		Kind:       r.kindName + "List",
+	}
+	return obj
+}
+
+// Kind returns the resource kind used for API discovery
+func (r *REST) Kind() string {
+	return r.gvk.Kind
+}
+
+// GroupVersionKind returns the GroupVersionKind for REST
+func (r *REST) GroupVersionKind(schema.GroupVersion) schema.GroupVersionKind {
+	return r.gvk
+}
+
+// deprecationMessagesFor builds the deprecation log lines for any
+// resourcesPreset field on the Application that still carries a legacy
+// flat name (nano/micro/.../2xlarge). Returned in the order
+// presets.FindLegacyPresets discovers them. Pure function so tests can
+// assert the output without intercepting klog.
+//
+// A malformed spec.Raw is reported via a V(2) debug log instead of a
+// hard error: validation upstream of this hook owns rejecting invalid
+// specs, and surfacing the unmarshal failure as a warning here would
+// fire even on transient inputs the caller is about to reject anyway.
+func deprecationMessagesFor(kindName, namespace, name string, raw []byte) []string {
+	if len(raw) == 0 {
+		return nil
+	}
+	var spec map[string]any
+	if err := json.Unmarshal(raw, &spec); err != nil {
+		klog.V(2).Infof("deprecationMessagesFor: skipping %s/%s in %s: spec is not valid JSON: %v",
+			kindName, name, namespace, err)
+		return nil
+	}
+	return presets.FormatDeprecationMessages(kindName, namespace, name, presets.FindLegacyPresets(spec))
+}
+
+// warnLegacyPresets emits a klog warning per deprecation message for
+// the given Application. Non-blocking: the value still renders
+// correctly through cozy-lib legacy aliases.
+func (r *REST) warnLegacyPresets(app *appsv1alpha1.Application) {
+	if app == nil || app.Spec == nil {
+		return
+	}
+	for _, msg := range deprecationMessagesFor(r.kindName, app.Namespace, app.Name, app.Spec.Raw) {
+		klog.Warning(msg)
+	}
+}
+
+// kubernetesKind is the Application.Kind of the Kubernetes cluster CR whose
+// Phase 2-removed value keys the warning below reports on.
+const kubernetesKind = "Kubernetes"
+
+// removedKubernetesFields are Kubernetes CR value keys that Phase 2 moved to the
+// separate KubernetesNodes resource. They are still accepted and stored -- an
+// upgraded cluster keeps them in its values until re-edited, and the adoption
+// migration deliberately leaves them in place rather than rewriting parent
+// values mid-upgrade -- but they no longer render anything on the Kubernetes CR.
+var removedKubernetesFields = []string{"nodeGroups", "nodeHealthCheck", "maxNodeProvisionTime", "talos"}
+
+// warnRemovedKubernetesFields emits a client-facing admission warning for each
+// Phase 2-removed field still present in a Kubernetes CR's values, so an
+// operator editing one (e.g. bumping spec.nodeGroups.<x>.minReplicas) is told it
+// has no effect instead of silently getting nothing. Non-blocking: the field is
+// preserved as-is; worker pools are managed as KubernetesNodes resources.
+func (r *REST) warnRemovedKubernetesFields(ctx context.Context, app *appsv1alpha1.Application) {
+	if r.kindName != kubernetesKind || app == nil || app.Spec == nil || len(app.Spec.Raw) == 0 {
+		return
+	}
+	var values map[string]any
+	if err := json.Unmarshal(app.Spec.Raw, &values); err != nil {
+		return
+	}
+	for _, key := range removedKubernetesFields {
+		if _, present := values[key]; present {
+			warning.AddWarning(ctx, "", fmt.Sprintf(
+				"spec.%s is ignored on the Kubernetes resource since Phase 2: worker pools are managed as separate KubernetesNodes resources (see the kubernetes-nodes chart). The field is stored but has no effect.", key))
+		}
+	}
+}
+
+// removedUserPasswordKinds are the Application kinds whose per-user `password`
+// field was removed from the chart render -- passwords are chart-generated into
+// the <release>-credentials Secret. Like the Kubernetes fields above the key is
+// still accepted and stored (the user object's schema keeps additionalProperties
+// open, and the render preserves an existing password through lookup), so a value
+// left from before the upgrade stays the LIVE credential and there is no longer a
+// values knob to change it. Warn so an operator editing it is told it has no
+// effect instead of getting a silent 200.
+var removedUserPasswordKinds = map[string]bool{
+	postgresKind: true,
+	mariadbKind:  true,
+}
+
+const (
+	postgresKind = "Postgres"
+	mariadbKind  = "MariaDB"
+)
+
+// warnRemovedUserPasswords emits a client-facing admission warning for every
+// spec.users[<name>].password still present on a Postgres or MariaDB resource.
+func (r *REST) warnRemovedUserPasswords(ctx context.Context, app *appsv1alpha1.Application) {
+	if !removedUserPasswordKinds[r.kindName] || app == nil || app.Spec == nil || len(app.Spec.Raw) == 0 {
+		return
+	}
+	// Decode the users map leniently, then each user on its own, so one malformed
+	// entry cannot suppress the warning for another: a single json.Unmarshal into a
+	// typed struct returns the first type error and discards every field it already
+	// decoded, so one user sent with a non-object value would mute the warning for a
+	// sibling user that does carry a removed password.
+	var top map[string]json.RawMessage
+	if err := json.Unmarshal(app.Spec.Raw, &top); err != nil {
+		return
+	}
+	var users map[string]json.RawMessage
+	if raw, ok := top["users"]; ok {
+		// A malformed users shape (not a map) carries no per-user password we
+		// recognise; ignore it rather than fail the whole decode.
+		_ = json.Unmarshal(raw, &users)
+	}
+	for user, raw := range users {
+		// Each chart hard-manages one reserved superuser (MariaDB root, Postgres
+		// "postgres"); it is warned about as a whole below, so skip it here to avoid
+		// a second, partial "password is ignored" warning on the same key that reads
+		// as if the rest of the entry were fine.
+		if (r.kindName == mariadbKind && user == "root") || (r.kindName == postgresKind && user == "postgres") {
+			continue
+		}
+		var u map[string]json.RawMessage
+		// A non-object user value is not one this warning is about; skip it
+		// rather than letting one malformed entry mute the rest.
+		if json.Unmarshal(raw, &u) != nil {
+			continue
+		}
+		if _, present := u["password"]; present {
+			warning.AddWarning(ctx, "", fmt.Sprintf(
+				"spec.users[%q].password is ignored: passwords are auto-generated into the <release>-credentials Secret and cannot be set from values. Read the current password from that Secret; editing this field has no effect.", user))
+		}
+	}
+	// MariaDB force-generates root's password (root is chart-managed), silently
+	// discarding any value-supplied users.root. Postgres hard-rejects users.postgres
+	// at render, but MariaDB accepts-and-ignores it — a hard reject would wedge an
+	// existing release that already lists it on upgrade — so warn that it has no
+	// effect rather than reject.
+	if r.kindName == mariadbKind {
+		if _, ok := users["root"]; ok {
+			warning.AddWarning(ctx, "",
+				"spec.users.root is ignored: root is chart-managed and its password is always auto-generated. Editing it has no effect.")
+		}
+	}
+	// Postgres hard-rejects users.postgres at render (the chart fails the release),
+	// so warn about the KEY at admission rather than letting only the generic
+	// "password is ignored" warning fire, which reads as if the entry were otherwise
+	// accepted and hides that the whole release will not reconcile until it is removed.
+	if r.kindName == postgresKind {
+		if _, ok := users["postgres"]; ok {
+			warning.AddWarning(ctx, "",
+				"spec.users.postgres is not allowed: postgres is the CNPG-managed superuser and cannot be redefined as an app user; the release will fail to render until it is removed.")
+		}
+	}
+}
+
+func dnsName(s string) string { return strings.ReplaceAll(s, "_", "-") }
+
+// collisionSpec buckets the three "_"/"-" collision namespaces the mariadb chart
+// guards — usernames, database names, and (database,user) Grant pairs — as maps
+// from a rendered DNS name to the human-readable sources that produce it. A key
+// with >=2 sources is a collision. The chart renders each name as
+// <release>-<replace "_" "-">, so the constant release prefix is dropped here; it
+// does not change which names collide.
+type collisionSpec struct {
+	users     map[string][]string
+	databases map[string][]string
+	grants    map[string][]string
+}
+
+// parseCollisionSpec decodes an Application's raw spec leniently (a malformed
+// shape contributes nothing rather than erroring), mirroring the chart's Grant
+// derivation: admin members plus readonly members not already in admin.
+func parseCollisionSpec(raw []byte) collisionSpec {
+	cs := collisionSpec{users: map[string][]string{}, databases: map[string][]string{}, grants: map[string][]string{}}
+	if len(raw) == 0 {
+		return cs
+	}
+	var top map[string]json.RawMessage
+	if json.Unmarshal(raw, &top) != nil {
+		return cs
+	}
+	var users map[string]json.RawMessage
+	if u, ok := top["users"]; ok {
+		_ = json.Unmarshal(u, &users)
+	}
+	for name := range users {
+		d := dnsName(name)
+		cs.users[d] = append(cs.users[d], name)
+	}
+	var dbs map[string]json.RawMessage
+	if d, ok := top["databases"]; ok {
+		_ = json.Unmarshal(d, &dbs)
+	}
+	for db, rawDB := range dbs {
+		cs.databases[dnsName(db)] = append(cs.databases[dnsName(db)], db)
+		var body struct {
+			Roles struct {
+				Admin    []string `json:"admin"`
+				Readonly []string `json:"readonly"`
+			} `json:"roles"`
+		}
+		if json.Unmarshal(rawDB, &body) != nil {
+			continue
+		}
+		seen := map[string]bool{}
+		for _, u := range append(append([]string{}, body.Roles.Admin...), body.Roles.Readonly...) {
+			if seen[u] {
+				continue // a user in both roles renders one Grant (admin ALL wins)
+			}
+			seen[u] = true
+			g := dnsName(db) + "-" + dnsName(u)
+			cs.grants[g] = append(cs.grants[g], fmt.Sprintf("(database %q, user %q)", db, u))
+		}
+	}
+	return cs
+}
+
+// introducedCollisions returns, per DNS name, the sorted new sources that collide
+// on it — but only when the old spec did not already carry that collision (an
+// inherited one is left alone, exactly as the install-gated render guard does).
+func introducedCollisions(oldByDNS, newByDNS map[string][]string) map[string][]string {
+	out := map[string][]string{}
+	for dns, names := range newByDNS {
+		if len(names) < 2 || len(oldByDNS[dns]) >= 2 {
+			continue
+		}
+		s := append([]string(nil), names...)
+		sort.Strings(s)
+		out[dns] = s
+	}
+	return out
+}
+
+// warnUpgradeIntroducedCollisions warns when an UPDATE introduces a "_"/"-"
+// collision the old object did not carry, in any of the three namespaces MariaDB
+// renders as <release>-<replace "_" "-">: usernames (one User CR), database names
+// (one Database CR), and (database,user) Grant pairs (one Grant CR). In each the
+// colliding names produce one resource and one silently overwrites the other. The
+// chart's render guards for all three are gated to install — blocking on upgrade
+// would wedge a release that already inherited the pair — so an upgrade that
+// INTRODUCES one renders silently. The aggregated apiserver holds both specs here
+// and can tell an introduced collision from an inherited one, closing the gap for
+// all three without touching the inherited case. Warns rather than rejects,
+// matching the removed-password warning and keeping an already-broken release
+// editable. MariaDB-only; Postgres has no "_"→"-" resource mapping.
+func (r *REST) warnUpgradeIntroducedCollisions(ctx context.Context, oldObj runtime.Object, newApp *appsv1alpha1.Application) {
+	if r.kindName != mariadbKind || newApp == nil || newApp.Spec == nil {
+		return
+	}
+	newCS := parseCollisionSpec(newApp.Spec.Raw)
+	oldCS := parseCollisionSpec(nil)
+	if oldApp, ok := oldObj.(*appsv1alpha1.Application); ok && oldApp.Spec != nil {
+		oldCS = parseCollisionSpec(oldApp.Spec.Raw)
+	}
+	warn := func(kind, resource string, oldG, newG map[string][]string) {
+		for dns, names := range introducedCollisions(oldG, newG) {
+			warning.AddWarning(ctx, "", fmt.Sprintf(
+				"%s %v map to the same mariadb-operator %s name %q (\"_\" renders as \"-\"); one silently overwrites the other. Rename one before applying.",
+				kind, names, resource, dns))
+		}
+	}
+	warn("spec.users", "User", oldCS.users, newCS.users)
+	warn("spec.databases", "Database", oldCS.databases, newCS.databases)
+	warn("Grant pairs", "Grant", oldCS.grants, newCS.grants)
+}
+
+// errNotAcceptable indicates that the resource does not support conversion to Table
+type errNotAcceptable struct {
+	resource schema.GroupResource
+	message  string
+}
+
+func (e errNotAcceptable) Error() string {
+	return e.message
+}
+
+func (e errNotAcceptable) Status() metav1.Status {
+	return metav1.Status{
+		Status:  metav1.StatusFailure,
+		Code:    http.StatusNotAcceptable,
+		Reason:  metav1.StatusReason("NotAcceptable"),
+		Message: e.Error(),
+	}
+}

@@ -1,0 +1,8 @@
+# CLOMonitor metadata file, read when CLOMonitor lints this repository:
+# https://clomonitor.io/projects/cncf/cozystack
+# Format: https://github.com/cncf/clomonitor/blob/main/docs/metadata/.clomonitor.yml
+
+# License scanning results: the CNCF FOSSA project for this repository, kept
+# current by the FOSSA GitHub integration on the cozystack organization (#4758).
+licenseScanning:
+  url: https://app.fossa.com/projects/git%2Bgithub.com%2Fcozystack%2Fcozystack

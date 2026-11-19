@@ -1,0 +1,38 @@
+suite: OIDC selector — Keycloak operator CRD missing (Phase 1)
+# Split from oidc_test.yaml because the suite-level `capabilities`
+# override in that file installs `v1.edp.epam.com/v1`, and per-test
+# `capabilities` in helm-unittest v1.0.3 merges with the suite-level
+# list instead of replacing it — so the CRD-missing fail-close guard
+# needs its own suite where the capability list is empty at the top.
+templates:
+  - templates/grafana/oidc-keycloak.yaml
+  - templates/grafana/grafana.yaml
+
+release:
+  name: monitoring
+  namespace: tenant-root
+
+set:
+  _cluster:
+    root-host: example.org
+    oidc-enabled: "true"
+  _namespace:
+    host: tenant-root.example.org
+    ingress: tenant-root
+
+capabilities:
+  apiVersions: []
+
+tests:
+  - it: mode=System hard-fails the render when the Keycloak operator CRD is missing
+    # oidc-keycloak.yaml fires the assertion first because helm renders all
+    # templates in one pass; grafana.yaml carries the same assertion as
+    # defense-in-depth so a future refactor that removes oidc-keycloak.yaml
+    # cannot bring Grafana up pointing at a client that never gets
+    # provisioned. See monitoring.oidc.assertSystemKeycloakCRD in _helpers.tpl.
+    template: templates/grafana/oidc-keycloak.yaml
+    set:
+      oidc.mode: System
+    asserts:
+      - failedTemplate:
+          errorMessage: "spec.oidc.mode: System requires the Keycloak operator CRDs (v1.edp.epam.com/v1). If cozystack.keycloak-operator is still bootstrapping this will resolve on the next reconcile; otherwise verify the keycloak-operator package is deployed and its CRDs are registered."

@@ -1,0 +1,271 @@
+apiVersion: operator.victoriametrics.com/v1beta1
+kind: VMRule
+metadata:
+  name: container-memory-kmem
+  namespace: cozy-monitoring
+spec:
+  groups:
+    - name: container_memory_kmem
+      rules:
+      - record: container_memory:kmem
+        expr: |
+          container_memory_usage_bytes
+          -
+          (
+            container_memory_swap
+            +
+            container_memory_rss
+            +
+            container_memory_cache
+          )
+      - record: container_memory_working_set_bytes:without_kmem
+        expr: |
+          container_memory_working_set_bytes - container_memory:kmem
+---
+apiVersion: operator.victoriametrics.com/v1beta1
+kind: VMRule
+metadata:
+  name: kube-persistentvolume-is-local
+  namespace: cozy-monitoring
+spec:
+  groups:
+    - name: kube_persistentvolume_is_local
+      rules:
+      # kube_persistentvolume_is_local migration.
+      # The patch was not generic enough, but it is used in many alerts/panels.
+      # This recording rule is aimed to avoid rewriting them.
+      #
+      # kube_persistentvolume_is_local {instance="", job="", persistentvolume="", scrape_endpoint="", storageclass=""} 0
+      - expr: max by (instance, job, persistentvolume, scrape_endpoint, storageclass) (kube_persistentvolume_info{local_path!~".+"} - 1)
+        record: kube_persistentvolume_is_local
+      - expr: max by (instance, job, persistentvolume, scrape_endpoint, storageclass) (kube_persistentvolume_info{host_path!~".+"} - 1)
+        record: kube_persistentvolume_is_local
+      # kube_persistentvolume_is_local {instance="", job="", persistentvolume="", scrape_endpoint="", storageclass=""} 1
+      - expr: max by (instance, job, persistentvolume, scrape_endpoint, storageclass) (kube_persistentvolume_info{local_path=~".+"})
+        record: kube_persistentvolume_is_local
+      - expr: max by (instance, job, persistentvolume, scrape_endpoint, storageclass) (kube_persistentvolume_info{host_path=~".+"})
+        record: kube_persistentvolume_is_local
+---
+apiVersion: operator.victoriametrics.com/v1beta1
+kind: VMRule
+metadata:
+  name: kube-controller-pod
+  namespace: cozy-monitoring
+spec:
+  groups:
+    - name: kube_controller_pod
+      rules:
+      - record: kube_controller_pod
+        expr: |-
+          max by(job, node, namespace, controller, controller_name, controller_type, pod)
+          (
+            label_replace (
+            # lowercase ReplicaSet
+              label_replace (
+              # lowercase Deployment
+                label_replace (
+                # rename owner_kind to controller_type
+                  label_replace (
+                  # rename owner_name to controller_name
+                    label_replace (
+                    # rename owner_kind_name to controller
+                      max by(job, namespace, replicaset, owner_kind_name, owner_kind, owner_name) (
+                        label_replace (
+                        # rename temp label to owner_kind_name
+                          label_join (
+                          # generate owner_kind_name
+                            label_join (
+                            # generate temp label for  owner_kind_name
+                              label_replace(
+                              # rename ReplicaSet
+                                kube_replicaset_owner{owner_kind=~"Deployment|<none>"},
+                                "replica", "ReplicaSet", "owner_kind", "<none>"),
+                                "temp", "/", "replica", "replicaset"),
+                                "owner_kind_name", "/", "owner_kind", "owner_name"),
+                                "owner_kind_name", "$1", "temp", "(.+/.*)")
+                        )
+                       * on(job, namespace, replicaset) group_right(owner_kind, owner_name, owner_kind_name)
+                       label_replace(
+                       # add label replicaset for multiplication
+                        max by(job, namespace, owner_name, pod) (
+                          kube_pod_owner{owner_kind="ReplicaSet"})
+                          * on (namespace, pod) group_left(node) sum by (node, namespace, pod) (kube_pod_info),
+                       "replicaset", "$1", "owner_name", "(.*)"),
+                     "controller", "$1", "owner_kind_name", "(.*)"),
+                   "controller_name", "$1", "owner_name", "(.*)"),
+                 "controller_type", "$1", "owner_kind", "(.*)"),
+               "controller", "deploy/$1", "controller", "Deployment/(.*)"),
+             "controller", "rs/$1", "controller", "ReplicaSet/(.*)")
+          )
+      - record: kube_controller_pod
+        expr: |-
+          sum by(job, node, namespace, controller, controller_type, controller_name, pod)
+          (
+            # certificate controller
+            label_replace (
+              # job controller
+              label_replace (
+                # sts controller
+                label_replace (
+                  # ds controller
+                  label_replace (
+                    # none controller
+                    label_replace (
+                      # controller_type for static pods
+                      label_replace (
+                        # controller
+                        label_join (
+                          # controller_name
+                          label_replace (
+                            # controller_type
+                            label_replace (
+                              kube_pod_owner{owner_kind!="ReplicaSet"}
+                              * on (namespace, pod) group_left(node) sum by (node, namespace, pod) (kube_pod_info),
+                            "controller_type", "$1", "owner_kind", "(.*)"),
+                          "controller_name", "$1", "owner_name", "(.*)"),
+                        "controller", "/", "controller_type", "controller_name"),
+                      "controller_type", "No controller", "controller_type", "<none>"),
+                    "controller", "No Controller", "controller", "<none>/<none>"),
+                  "controller", "ds/$1", "controller", "DaemonSet/(.*)"),
+                "controller", "sts/$1", "controller", "StatefulSet/(.*)"),
+              "controller", "job/$1", "controller", "Job/(.*)"),
+            "controller", "certificate/$1", "controller", "Certificate/(.*)")
+          )
+      - record: kube_controller_replicas
+        expr: |-
+         # get daemonset replicas
+         max by(job, namespace, controller_type, controller_name)
+         (
+           label_replace (
+           # set controller_name
+             label_replace (
+             # set controller_type
+               kube_daemonset_status_desired_number_scheduled,
+             "controller_type", "DaemonSet", "", ""),
+           "controller_name", "$1", "daemonset", "(.*)")
+         )
+         or (
+         # get deployment available replicas
+         max by(job, namespace, controller_type, controller_name)
+         (
+           label_replace (
+           # set controller_name
+             label_replace (
+             # set controller_type
+               kube_deployment_spec_replicas,
+             "controller_type", "Deployment", "", ""),
+           "controller_name", "$1", "deployment", "(.*)"))
+         )
+         # get statefulset ready replicas
+         or (
+         max by(job, namespace, controller_type, controller_name)
+         (
+           label_replace (
+           # set controller_name
+             label_replace (
+             # set controller_type
+               kube_statefulset_replicas,
+             "controller_type", "StatefulSet", "", ""),
+           "controller_name", "$1", "statefulset", "(.*)"))
+         )
+         # get replicaset ready replicas
+         or (
+         max by(job, namespace, controller_type, controller_name)
+         (
+           label_replace (
+           # set controller_name
+             label_replace (
+             # set controller_type
+               kube_replicaset_spec_replicas,
+             "controller_type", "ReplicaSet", "", ""),
+           "controller_name", "$1", "replicaset", "(.*)"))
+         )
+      - record: kube_controller_replicas_ready
+        expr: |-
+         # get daemonset ready replicas
+         max by(job, namespace, controller_type, controller_name)
+         (
+           label_replace (
+           # set controller_name
+             label_replace (
+             # set controller_type
+               kube_daemonset_status_number_ready,
+             "controller_type", "DaemonSet", "", ""),
+           "controller_name", "$1", "daemonset", "(.*)")
+         )
+         or (
+         # get deployment available replicas
+         max by(job, namespace, controller_type, controller_name)
+         (
+           label_replace (
+           # set controller_name
+             label_replace (
+             # set controller_type
+               kube_deployment_status_replicas_available,
+             "controller_type", "Deployment", "", ""),
+           "controller_name", "$1", "deployment", "(.*)"))
+         )
+         # get statefulset ready replicas
+         or (
+         max by(job, namespace, controller_type, controller_name)
+         (
+           label_replace (
+           # set controller_name
+             label_replace (
+             # set controller_type
+               kube_statefulset_status_replicas_ready,
+             "controller_type", "StatefulSet", "", ""),
+           "controller_name", "$1", "statefulset", "(.*)"))
+         )
+         # get replicaset ready replicas
+         or (
+         max by(job, namespace, controller_type, controller_name)
+         (
+           label_replace (
+           # set controller_name
+             label_replace (
+             # set controller_type
+               kube_replicaset_status_ready_replicas,
+             "controller_type", "ReplicaSet", "", ""),
+           "controller_name", "$1", "replicaset", "(.*)"))
+         )
+---
+apiVersion: operator.victoriametrics.com/v1beta1
+kind: VMRule
+metadata:
+  name: ingress-nginx-detailed
+  namespace: cozy-monitoring
+spec:
+  groups:
+    - name: ingress_nginx
+      rules:
+        - record: ingress_nginx_overall_info
+          expr: count({__name__=~"ingress_nginx_overall_.*", __name__!="ingress_nginx_overall_info"}) by (job,  controller, app, node, endpoint, content_kind, namespace, vhost) * 0 + 1
+        - record: ingress_nginx_detail_info
+          expr: count({__name__=~"ingress_nginx_detail_.*", __name__!="ingress_nginx_detail_info", __name__!~"ingress_nginx_detail_backend_.*"}) by (job, controller, app, node, endpoint, content_kind, namespace, ingress, service, service_port, vhost, location) * 0 + 1
+        - record: ingress_nginx_detail_backend_info
+          expr: count({__name__=~"ingress_nginx_detail_backend_.*", __name__!="ingress_nginx_detail_backend_info"}) by (job, controller, app, node, endpoint, namespace, ingress, service, service_port, vhost, location, pod_ip) * 0 + 1
+---
+apiVersion: operator.victoriametrics.com/v1beta1
+kind: VMRule
+metadata:
+  name: wss
+  namespace: cozy-monitoring
+spec:
+  groups:
+    - name: kubernetes.wss_bytes
+      rules:
+      - record: container_memory:kmem
+        expr: |
+          container_memory_usage_bytes
+          -
+          (
+            container_memory_swap
+            +
+            container_memory_rss
+            +
+            container_memory_cache
+          )
+      - record: container_memory_working_set_bytes:without_kmem
+        expr: |
+          container_memory_working_set_bytes - container_memory:kmem

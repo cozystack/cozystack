@@ -1,0 +1,43 @@
+testFramework:
+  enabled: true
+
+logLevel: debug
+
+extraVolumeMounts:
+  - name: extra-volume
+    mountPath: /extra-volume-path
+  - name: another-extra-volume
+    mountPath: /another-extra-volume-path
+
+extraVolumes:
+  - name: extra-volume
+    emptyDir: {}
+  - name: another-extra-volume
+    emptyDir: {}
+
+dashboards:
+  enabled: true
+  deterministicUid: true
+
+luaScripts:
+  filter_example.lua: |
+    function filter_name(tag, timestamp, record)
+        -- put your lua code here.
+    end
+  filter_with_templating_example.lua: |
+    local log_level = {{ .Values.logLevel | quote }}
+    function filter_with_templating_name(tag, timestamp, record)
+        -- put your lua code here.
+    end
+
+config:
+  outputs: |
+    [OUTPUT]
+        name   stdout
+        match  *
+
+hotReload:
+  enabled: true
+  extraWatchVolumes:
+    - extra-volume
+    - another-extra-volume

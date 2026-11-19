@@ -1,0 +1,49 @@
+{{- if .Values.admissionController.enabled }}
+{{- if .Values.admissionController.metrics.serviceMonitor.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "vertical-pod-autoscaler.admissionController.fullname" . }}
+  namespace: {{ default (include "common.names.namespace" .) .Values.admissionController.metrics.serviceMonitor.namespace | quote }}
+  labels:
+    {{- include "vertical-pod-autoscaler.admissionController.labels" . | nindent 4 }}
+    {{- if .Values.admissionController.metrics.serviceMonitor.labels }}
+    {{- include "common.tplvalues.render" ( dict "value" .Values.admissionController.metrics.serviceMonitor.labels "context" $ ) | nindent 4 }}
+    {{- end }}
+    {{- if .Values.commonLabels }}
+    {{- include "common.tplvalues.render" ( dict "value" .Values.commonLabels "context" $ ) | nindent 4 }}
+    {{- end }}
+  {{- if or .Values.admissionController.metrics.serviceMonitor.annotations .Values.commonAnnotations }}
+  {{- $annotations := include "common.tplvalues.merge" ( dict "values" ( list .Values.admissionController.metrics.serviceMonitor.annotations .Values.commonAnnotations ) "context" . ) }}
+  annotations: {{- include "common.tplvalues.render" ( dict "value" $annotations "context" $ ) | nindent 4 }}
+  {{- end }}
+spec:
+  {{- if .Values.admissionController.metrics.serviceMonitor.jobLabel }}
+  jobLabel: {{ .Values.admissionController.metrics.serviceMonitor.jobLabel }}
+  {{- end }}
+  endpoints:
+    - port: http-metrics
+      {{- if .Values.admissionController.metrics.serviceMonitor.interval }}
+      interval: {{ .Values.admissionController.metrics.serviceMonitor.interval }}
+      {{- end }}
+      {{- if .Values.admissionController.metrics.serviceMonitor.scrapeTimeout }}
+      scrapeTimeout: {{ .Values.admissionController.metrics.serviceMonitor.scrapeTimeout }}
+      {{- end }}
+      {{- if .Values.admissionController.metrics.serviceMonitor.honorLabels }}
+      honorLabels: {{ .Values.admissionController.metrics.serviceMonitor.honorLabels }}
+      {{- end }}
+      {{- if .Values.admissionController.metrics.serviceMonitor.metricRelabelings }}
+      metricRelabelings: {{ toYaml .Values.admissionController.metrics.serviceMonitor.metricRelabelings | nindent 8 }}
+      {{- end }}
+      {{- if .Values.admissionController.metrics.serviceMonitor.relabelings }}
+      relabelings: {{ toYaml .Values.admissionController.metrics.serviceMonitor.relabelings | nindent 8 }}
+      {{- end }}
+      path: /metrics
+  namespaceSelector:
+    matchNames:
+      - {{ include "common.names.namespace" . | quote }}
+  selector:
+    matchLabels:
+      {{- include "vertical-pod-autoscaler.admissionController.selectorLabels" . | nindent 6 }}
+{{- end -}}
+{{- end -}}

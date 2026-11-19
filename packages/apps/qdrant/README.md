@@ -1,0 +1,70 @@
+# Managed Qdrant Service
+
+Qdrant is a high-performance vector database and similarity search engine designed for AI and machine learning applications. It provides efficient storage and retrieval of high-dimensional vectors with advanced filtering capabilities, making it ideal for recommendation systems, semantic search, and RAG (Retrieval-Augmented Generation) applications.
+
+## Deployment Details
+
+Service deploys Qdrant as a StatefulSet with automatic cluster mode when multiple replicas are configured.
+
+- Docs: https://qdrant.tech/documentation/
+- GitHub: https://github.com/qdrant/qdrant
+
+> `storageClass` is annotated as immutable in the chart schema — see [storageClass immutability](https://cozystack.io/docs/v1/operations/storage-class-immutability/) for the contract and which consumers enforce it.
+
+## Parameters
+
+### Common parameters
+
+| Name               | Description                                                                                                                      | Type       | Value      |
+| ------------------ | -------------------------------------------------------------------------------------------------------------------------------- | ---------- | ---------- |
+| `replicas`         | Number of Qdrant replicas. Cluster mode is automatically enabled when replicas > 1.                                              | `int`      | `1`        |
+| `resources`        | Explicit CPU and memory configuration for each Qdrant replica. When omitted, the preset defined in `resourcesPreset` is applied. | `object`   | `{}`       |
+| `resources.cpu`    | CPU available to each replica.                                                                                                   | `quantity` | `""`       |
+| `resources.memory` | Memory (RAM) available to each replica.                                                                                          | `quantity` | `""`       |
+| `resourcesPreset`  | Default sizing preset used when `resources` is omitted.                                                                          | `string`   | `t1.small` |
+| `size`             | Persistent Volume Claim size available for vector data storage.                                                                  | `quantity` | `10Gi`     |
+| `storageClass`     | StorageClass used to store the data.                                                                                             | `string`   | `""`       |
+| `external`         | Enable external access from outside the cluster.                                                                                 | `bool`     | `false`    |
+
+
+### TLS parameters
+
+| Name          | Description                                                                                                                                            | Type     | Value  |
+| ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ | -------- | ------ |
+| `tls`         | TLS configuration. When omitted, the effective TLS state follows the value of `external`.                                                              | `object` | `{}`   |
+| `tls.enabled` | Enable TLS. When unset, inherits the value of `external` (TLS is on when external access is enabled). Set explicitly to `true` or `false` to override. | `*bool`  | `null` |
+
+
+## Parameter examples and reference
+
+### resources and resourcesPreset
+
+`resources` sets explicit CPU and memory configurations for each replica.
+Every resource it leaves unset is taken from the preset defined in `resourcesPreset`.
+
+```yaml
+resources:
+  cpu: 4000m
+  memory: 4Gi
+```
+
+`resourcesPreset` sets named CPU and memory configurations for each replica.
+This setting is ignored if the corresponding `resources` value is set.
+
+Presets follow a cloud-style `<series>.<size>` naming convention. Five series cover the full CPU-to-memory ratio range (`t1` 1:0.5, `c1` 1:1, `s1` 1:2, `u1` 1:4, `m1` 1:8) and each series ships eight sizes (`nano` through `4xlarge`). The legacy flat names (`nano`, `micro`, `small`, `medium`, `large`, `xlarge`, `2xlarge`) remain accepted as deprecated aliases and keep their original sizes, which do not follow one series: `nano` through `small` equal the `t1` sizes of the same name, while `medium` equals `c1.small` rather than `c1.medium`.
+
+See [Resource management](https://cozystack.io/docs/v1/guides/resource-management/) for the full size matrix and the legacy-to-instance-type mapping.
+
+### tls
+
+With TLS on, the chart issues the server certificate from a self-signed CA it creates per release. The trust anchor for verifying that certificate is published as `qdrant-<name>.tenant-ca`, where `<name>` is the name of the `Qdrant` resource: an object holding `ca.crt` and nothing else, delivered to tenants through the `core.cozystack.io/tenantsecrets` API that the base tenant roles already grant.
+
+```bash
+kubectl --context <ctx> --namespace <tenant> \
+  get tenantsecret qdrant-<name>.tenant-ca \
+  --output jsonpath='{.data.ca\.crt}' | base64 --decode
+```
+
+It is the only object that hands over the CA certificate without also handing over a private key, which is why it exists. The `qdrant-<name>-ca` Secret the chart creates stores the CA **private key** alongside the certificate — read access to it would let the holder issue certificates for anything, so it is never granted to a tenant.
+
+It is reached through `tenantsecrets` rather than by reading the Secret directly, and that is deliberate: `tenantsecrets` surfaces only objects the platform has vouched for (those the application's definition selects), whereas a direct grant on the name would convey whatever happens to occupy that name.

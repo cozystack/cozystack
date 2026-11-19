@@ -1,0 +1,57 @@
+{{- if .Values.rbac.enabled }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "opencost.fullname" . }}
+  labels: {{- include "opencost.labels" . | nindent 4 }}
+  {{- with .Values.annotations }}
+  annotations: {{- toYaml . | nindent 4 }}
+  {{- end }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "opencost.fullname" . }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ template "opencost.serviceAccountName" . }}
+    namespace: {{ include "opencost.namespace" . }}
+---
+{{- end }}
+{{- if and .Values.opencost.platforms.openshift.enabled .Values.opencost.platforms.openshift.createMonitoringClusterRoleBinding }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "opencost.fullname" . }}-operator
+  labels: {{- include "opencost.labels" . | nindent 4 }}
+  {{- with .Values.annotations }}
+  annotations: {{- toYaml . | nindent 4 }}
+  {{- end }}
+roleRef:
+  # Grant the OpenCost ServiceAccount the cluster-monitoring-view role to enable it to query a KUBE_RBAC_PROXY enabled Prometheus.
+  # This is necessary for OpenCost to get access and query the in-cluster Prometheus instance using its service account token.
+  # https://docs.redhat.com/en/documentation/openshift_container_platform/4.2/html/monitoring/cluster-monitoring#monitoring-accessing-prometheus-alerting-ui-grafana-using-the-web-console_accessing-prometheus
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: cluster-monitoring-view
+subjects:
+  - kind: ServiceAccount
+    name: {{ template "opencost.serviceAccountName" . }}
+    namespace: {{ include "opencost.namespace" . }}
+---
+{{- end }}
+
+{{- if and .Values.opencost.platforms.openshift.enabled .Values.opencost.platforms.openshift.enableSCC }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: opencost-scc-binding
+  namespace: {{include "opencost.namespace" .}}
+subjects:
+  - kind: ServiceAccount
+    name: {{template "opencost.serviceAccountName"}}
+    namespace: {{include "opencost.namespace" .}}
+roleRef:
+  kind: Role
+  name: system:openshift:scc:{{ include "opencost.sccName" . }}
+  apiGroup: rbac.authorization.k8s.io
+{{- end}}

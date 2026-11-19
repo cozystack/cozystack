@@ -1,0 +1,126 @@
+{{- if .Values.upgrade.enabled }}
+{{- $app := .Values.upgrade }}
+{{- if empty (($app.kubectl).image).tag }}
+  {{- $tag := regexSplit "[+-]" .Capabilities.KubeVersion.Version -1 | first -}}
+  {{- $_ := set $app.kubectl.image "tag" $tag }}
+{{- else if not (kindIs "string" (($app.kubectl).image).tag) }}
+  {{- fail "`crd.upgrade.kubectl.image.tag` is not string, most probably you need to enquote provided value" -}}
+{{- end }}
+{{- $ctx := dict "helm" . "noEnterprise" true }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ template "crds.upgrade.name" $ctx }}
+  namespace: {{ template "vm.namespace" $ctx }}
+  annotations:
+    "helm.sh/hook": pre-install,pre-upgrade,pre-rollback
+    "helm.sh/hook-weight": "5"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+    {{- with $app.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+  {{- $extraLabels := $app.labels | default dict }}
+  {{- $_ := set $ctx "extraLabels" $app.labels }}
+  {{- $_ := set $extraLabels "app.kubernetes.io/component" "upgrade-crds" }}
+  {{- $_ := set $ctx "extraLabels" $extraLabels }}
+  labels: {{ include "vm.labels" $ctx | nindent 4 }}
+  {{- $_ := unset $ctx "extraLabels" }}
+spec:
+  backoffLimit: 3
+  template:
+    metadata:
+      {{- with $app.podLabels }}
+      labels: {{ toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $app.podAnnotations }}
+      annotations: {{ toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      {{- with (.Values.imagePullSecrets | default (.Values.global).imagePullSecrets) }}
+      imagePullSecrets: {{ toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "crds.upgrade.serviceAccountName" . }}
+      {{- if ($app.podSecurityContext).enabled }}
+      securityContext: {{ include "vm.securityContext" (dict "securityContext" $app.podSecurityContext "helm" .) | nindent 8 }}
+      {{- end }}
+      initContainers:
+        - name: busybox
+          {{- $_ := set $ctx "appKey" (list "upgrade" "busybox") }}
+          image: {{ include "vm.image" $ctx }}
+          imagePullPolicy: {{ $app.busybox.image.pullPolicy }}
+          workingDir: /tmp/
+          command:
+            - sh
+          args:
+            - -c
+            - bzcat /crds/crd.yaml.bz2 > /tmp/crd.yaml
+          {{- with $app.resources }}
+          resources: {{ toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with $app.securityContext }}
+          securityContext: {{ toYaml . | nindent 12 }}
+          {{- end }}
+          volumeMounts:
+            - mountPath: /crds/
+              name: crds
+            - mountPath: /tmp/
+              name: tmp
+            {{- with $app.extraVolumeMounts }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          {{- with $app.env }}
+          env: {{ toYaml . | nindent 12 }}
+          {{- end }}
+      containers:
+        - name: kubectl
+          {{- $_ := set $ctx "appKey" (list "upgrade" "kubectl") }}
+          image: {{ include "vm.image" $ctx }}
+          imagePullPolicy: {{ $app.kubectl.image.pullPolicy }}
+          command:
+            - kubectl
+          args:
+            - apply
+            - --server-side
+            {{- if $app.forceConflicts }}
+            - --force-conflicts
+            {{- end }}
+            - --filename
+            - /tmp/crd.yaml
+          {{- with $app.resources }}
+          resources: {{ toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with $app.securityContext }}
+          securityContext: {{ toYaml . | nindent 12 }}
+          {{- end }}
+          volumeMounts:
+            - mountPath: /tmp/
+              name: tmp
+            {{- with $app.extraVolumeMounts }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          {{- with $app.env }}
+          env: {{ toYaml . | nindent 12 }}
+          {{- end }}
+      volumes:
+        - name: tmp
+          emptyDir: {}
+        - name: crds
+          configMap:
+            name: {{ template "crds.upgrade.name" . }}
+        {{- with $app.extraVolumes }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      restartPolicy: OnFailure
+      {{- with $app.nodeSelector }}
+      nodeSelector: {{ toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $app.tolerations }}
+      tolerations: {{ toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $app.affinity }}
+      affinity: {{ toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $app.topologySpreadConstraints }}
+      topologySpreadConstraints: {{ toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}

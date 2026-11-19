@@ -1,0 +1,53 @@
+suite: harbor ingress wildcard mode drops per-host ACME
+templates:
+  - templates/ingress.yaml
+
+release:
+  name: harbor
+  namespace: tenant-root
+
+# harbor gates its Ingress on an empty _namespace.gateway. In wildcard
+# mode the cert-manager + http01 annotations and the per-host tls
+# secretName are dropped (the tls section stays so the HTTPS redirect
+# keeps working against the default SSL certificate); the other nginx
+# annotations stay.
+
+tests:
+  - it: drops cert-manager annotation and tls secretName when wildcard secret is set
+    set:
+      _namespace:
+        host: example.org
+        ingress: tenant-root
+        gateway: ""
+      _cluster:
+        issuer-name: letsencrypt-prod
+        solver: http01
+        wildcard-secret-name: wildcard-tls
+    asserts:
+      - equal:
+          path: kind
+          value: Ingress
+      - notExists:
+          path: metadata.annotations["cert-manager.io/cluster-issuer"]
+      - exists:
+          path: spec.tls
+      - notExists:
+          path: spec.tls[0].secretName
+      - exists:
+          path: metadata.annotations["nginx.ingress.kubernetes.io/proxy-body-size"]
+
+  - it: keeps cert-manager annotation and tls secretName without wildcard secret
+    set:
+      _namespace:
+        host: example.org
+        ingress: tenant-root
+        gateway: ""
+      _cluster:
+        issuer-name: letsencrypt-prod
+        solver: http01
+    asserts:
+      - equal:
+          path: metadata.annotations["cert-manager.io/cluster-issuer"]
+          value: letsencrypt-prod
+      - exists:
+          path: spec.tls[0].secretName

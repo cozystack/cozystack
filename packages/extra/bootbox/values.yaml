@@ -1,0 +1,45 @@
+##
+## @section Common parameters
+##
+
+## @param {bool} whitelistHTTP - Secure HTTP by enabling client networks whitelisting.
+whitelistHTTP: true
+## Example:
+## whitelistHTTP: true
+## whitelist:
+## - "1.2.3.4"
+## - "10.8.0.0/16"
+
+## @param {[]string} whitelist - List of client networks.
+whitelist: []
+
+## @typedef {struct} MachineConfig - IP address configuration.
+## @field {string} address - IP address.
+## @field {string} gateway - IP gateway.
+## @field {string} netmask - Netmask.
+
+## @typedef {struct} Machine - Machine configuration.
+## @field {string} hostname - Hostname.
+## @field {string} arch - Architecture.
+## @field {MachineConfig} ip - IP address configuration.
+## @field {int} leaseTime - Lease time.
+## @field {[]string} mac - MAC addresses.
+## @field {[]string} nameServers - Name servers.
+## @field {[]string} timeServers - Time servers.
+## @field {bool} uefi - UEFI.
+
+## @param {[]Machine} machines - Configuration of physical machine instances.
+machines: []
+## Example:
+## machines:
+## - hostname: machine1
+##   arch: x86_64
+##   ip:
+##     address: 10.8.2.2
+##     gateway: 10.8.2.1
+##     netmask: 255.255.255.0
+##   leaseTime: 86400
+##   mac: [d6:fa:af:52:25:93]
+##   nameServers: [1.1.1.1,8.8.8.8]
+##   timeServers: [pool.ntp.org]
+##   uefi: true

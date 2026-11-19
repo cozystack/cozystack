@@ -1,0 +1,231 @@
+customLabels: {}
+image:
+    baseRepo: registry.k8s.io
+    nfs:
+        repository: registry.k8s.io/sig-storage/nfsplugin
+        tag: v4.13.3
+        pullPolicy: IfNotPresent
+    csiProvisioner:
+        repository: /sig-storage/csi-provisioner
+        tag: v6.1.0
+        pullPolicy: IfNotPresent
+    csiResizer:
+        repository: /sig-storage/csi-resizer
+        tag: v2.0.0
+        pullPolicy: IfNotPresent
+    csiSnapshotter:
+        repository: /sig-storage/csi-snapshotter
+        tag: v8.4.0
+        pullPolicy: IfNotPresent
+    livenessProbe:
+        repository: /sig-storage/livenessprobe
+        tag: v2.17.0
+        pullPolicy: IfNotPresent
+    nodeDriverRegistrar:
+        repository: /sig-storage/csi-node-driver-registrar
+        tag: v2.15.0
+        pullPolicy: IfNotPresent
+    externalSnapshotter:
+        repository: /sig-storage/snapshot-controller
+        tag: v8.4.0
+        pullPolicy: IfNotPresent
+
+serviceAccount:
+  create: true # When true, service accounts will be created for you. Set to false if you want to use your own.
+  controller: csi-nfs-controller-sa # Name of Service Account to be created or used
+  node: csi-nfs-node-sa # Name of Service Account to be created or used
+
+rbac:
+  create: true
+  name: nfs
+
+driver:
+  name: nfs.csi.k8s.io
+  mountPermissions: 0
+
+feature:
+  enableFSGroupPolicy: true
+  enableInlineVolume: false
+  propagateHostMountOptions: false
+
+kubeletDir: /var/lib/kubelet
+
+controller:
+  name: csi-nfs-controller
+  replicas: 1
+  strategyType: Recreate
+  runOnMaster: false
+  runOnControlPlane: false
+  enableSnapshotter: true
+  useTarCommandInSnapshot: false
+  enableSnapshotCompression: true
+  livenessProbe:
+    healthPort: 29652
+  logLevel: 5
+  workingMountDir: /tmp
+  dnsPolicy: ClusterFirstWithHostNet  # available values: Default, ClusterFirstWithHostNet, ClusterFirst
+  defaultOnDeletePolicy: delete  # available values: delete, retain
+  affinity: {}
+  nodeSelector: {}
+  priorityClassName: system-cluster-critical
+  tolerations:
+    - key: "node-role.kubernetes.io/master"
+      operator: "Exists"
+      effect: "NoSchedule"
+    - key: "node-role.kubernetes.io/controlplane"
+      operator: "Exists"
+      effect: "NoSchedule"
+    - key: "node-role.kubernetes.io/control-plane"
+      operator: "Exists"
+      effect: "NoSchedule"
+    - key: "CriticalAddonsOnly"
+      operator: "Exists"
+      effect: "NoSchedule"
+  resources:
+    csiProvisioner:
+      limits:
+        memory: 400Mi
+      requests:
+        cpu: 10m
+        memory: 20Mi
+    csiResizer:
+      limits:
+        memory: 400Mi
+      requests:
+        cpu: 10m
+        memory: 20Mi
+    csiSnapshotter:
+      limits:
+        memory: 200Mi
+      requests:
+        cpu: 10m
+        memory: 20Mi
+    livenessProbe:
+      limits:
+        memory: 100Mi
+      requests:
+        cpu: 10m
+        memory: 20Mi
+    nfs:
+      limits:
+        memory: 200Mi
+      requests:
+        cpu: 10m
+        memory: 20Mi
+
+nodeDriverRegistrar:
+  timeout: 60
+  healthPort: 19809
+  livenessProbe:
+    enabled: true
+    initialDelaySeconds: 20
+    timeoutSeconds: 10
+    periodSeconds: 5
+    failureThreshold: 2
+
+node:
+  name: csi-nfs-node
+  dnsPolicy: ClusterFirstWithHostNet  # available values: Default, ClusterFirstWithHostNet, ClusterFirst
+  maxUnavailable: 1
+  logLevel: 5
+  livenessProbe:
+    healthPort: 29653
+  affinity: {}
+  nodeSelector: {}
+  priorityClassName: system-cluster-critical
+  tolerations:
+    - operator: "Exists"
+  resources:
+    livenessProbe:
+      limits:
+        memory: 100Mi
+      requests:
+        cpu: 10m
+        memory: 20Mi
+    nodeDriverRegistrar:
+      limits:
+        memory: 100Mi
+      requests:
+        cpu: 10m
+        memory: 20Mi
+    nfs:
+      limits:
+        memory: 300Mi
+      requests:
+        cpu: 10m
+        memory: 20Mi
+
+externalSnapshotter:
+  enabled: false
+  name: snapshot-controller
+  priorityClassName: system-cluster-critical
+  deletionPolicy: Delete
+  controller:
+    replicas: 1
+  resources:
+    limits:
+      memory: 300Mi
+    requests:
+      cpu: 10m
+      memory: 20Mi
+  # Create volume snapshot CRDs.
+  customResourceDefinitions:
+    enabled: true   #if set true, VolumeSnapshot, VolumeSnapshotContent and VolumeSnapshotClass CRDs will be created. Set it false, If they already exist in cluster.
+
+## volumeSnapshotClass resource example:
+volumeSnapshotClass:
+  create: false
+  name: csi-nfs-snapclass
+  deletionPolicy: Delete
+  
+## Reference to one or more secrets to be used when pulling images
+## ref: https://kubernetes.io/docs/tasks/configure-pod-container/pull-image-private-registry/
+##
+imagePullSecrets: []
+# - name: "image-pull-secret"
+
+## StorageClass resource example:
+storageClass:
+  create: false
+#   name: nfs-csi
+#   annotations:
+#     storageclass.kubernetes.io/is-default-class: "true"
+#   parameters:
+#     server: nfs-server.default.svc.cluster.local
+#     share: /
+#     subDir:
+#     mountPermissions: "0755"
+#     csi.storage.k8s.io/provisioner-secret is only needed for providing mountOptions in DeleteVolume
+#     csi.storage.k8s.io/provisioner-secret-name: "mount-options"
+#     csi.storage.k8s.io/provisioner-secret-namespace: "default"
+#   reclaimPolicy: Delete
+#   volumeBindingMode: Immediate
+#   mountOptions:
+#     - nfsvers=4.1
+
+## StorageClass resources for creating multiple storage classes:
+## If you want multiple storage classes with different configurations, use this instead of storageClass above
+# storageClasses:
+#   - name: nfs-delete
+#     annotations:
+#       storageclass.kubernetes.io/is-default-class: "true"
+#     parameters:
+#       server: nfs-server.default.svc.cluster.local
+#       share: /
+#       # subDir:
+#       # mountPermissions: "0"
+#       # csi.storage.k8s.io/provisioner-secret is only needed for providing mountOptions in DeleteVolume
+#       # csi.storage.k8s.io/provisioner-secret-name: "mount-options"
+#       # csi.storage.k8s.io/provisioner-secret-namespace: "default"
+#     reclaimPolicy: Delete
+#     volumeBindingMode: Immediate
+#     mountOptions:
+#       - nfsvers=4.1
+#   - name: nfs-retain
+#     parameters:
+#       server: nfs-server.default.svc.cluster.local
+#       share: /
+#     reclaimPolicy: Retain
+#     volumeBindingMode: Immediate
+#     mountOptions:
+#       - nfsvers=4.1

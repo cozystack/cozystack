@@ -1,0 +1,104 @@
+suite: keycloak ingress wildcard mode drops per-host ACME
+templates:
+  - templates/ingress.yaml
+
+release:
+  name: keycloak
+  namespace: cozy-keycloak
+
+# keycloak wraps its cert-manager annotations inside
+# `with .Values.ingress.annotations`; the chart ships default
+# session-cookie annotations, so the block always renders. In wildcard
+# mode the cert-manager + http01 annotations and the per-host tls
+# secretName are dropped (the tls section stays so the HTTPS redirect
+# keeps working against the default SSL certificate); the user
+# annotations are preserved.
+
+tests:
+  - it: drops cert-manager annotation and tls secretName when wildcard secret is set
+    set:
+      _cluster:
+        root-host: example.org
+        issuer-name: letsencrypt-prod
+        solver: http01
+        expose-ingress: tenant-root
+        gateway-enabled: "false"
+        wildcard-secret-name: wildcard-tls
+    asserts:
+      - equal:
+          path: kind
+          value: Ingress
+      - notExists:
+          path: metadata.annotations["cert-manager.io/cluster-issuer"]
+      - exists:
+          path: spec.tls
+      - notExists:
+          path: spec.tls[0].secretName
+
+  - it: keeps cert-manager annotation and tls secretName without wildcard secret
+    set:
+      _cluster:
+        root-host: example.org
+        issuer-name: letsencrypt-prod
+        solver: http01
+        expose-ingress: tenant-root
+        gateway-enabled: "false"
+    asserts:
+      - equal:
+          path: metadata.annotations["cert-manager.io/cluster-issuer"]
+          value: letsencrypt-prod
+      - equal:
+          path: spec.tls[0].secretName
+          value: web-tls
+
+  # WS2 / #2400 blocker guard: a custom keycloak host (auth.example.com)
+  # is outside the platform wildcard *.<root-host>. Because shared
+  # wildcard issuance is opt-in (publishing.certificates.wildcard,
+  # default false), a dns01 cluster carries no _cluster.wildcard-secret-name
+  # and keycloak keeps its own per-host certificate — the controller never
+  # falls back to a default cert that does not cover this host.
+  - it: keeps per-host ACME for a custom host on dns01 when wildcard issuance is off
+    set:
+      ingress.host: auth.example.com
+      _cluster:
+        root-host: example.org
+        issuer-name: letsencrypt-prod
+        solver: dns01
+        expose-ingress: tenant-root
+        gateway-enabled: "false"
+    asserts:
+      - equal:
+          path: spec.rules[0].host
+          value: auth.example.com
+      - equal:
+          path: metadata.annotations["cert-manager.io/cluster-issuer"]
+          value: letsencrypt-prod
+      - equal:
+          path: spec.tls[0].secretName
+          value: web-tls
+
+  # WS2 / #2400 coverage tradeoff, pinned as a contract: once shared
+  # wildcard mode is active (_cluster.wildcard-secret-name set), a custom
+  # host outside *.<root-host> ALSO drops its per-host cert and falls back
+  # to the default SSL certificate, which does not cover it. This is the
+  # hazard the publishing.certificates.wildcard values.yaml caveat warns
+  # about and the reason issuance is opt-in / off by default. Pinning it
+  # keeps the tradeoff a conscious contract rather than an accident.
+  - it: custom host drops per-host ACME when wildcard mode is active
+    set:
+      ingress.host: auth.example.com
+      _cluster:
+        root-host: example.org
+        issuer-name: letsencrypt-prod
+        solver: dns01
+        expose-ingress: tenant-root
+        gateway-enabled: "false"
+        wildcard-secret-name: cozystack-wildcard-tls
+    asserts:
+      - equal:
+          path: spec.rules[0].host
+          value: auth.example.com
+      - notExists:
+          path: metadata.annotations["cert-manager.io/cluster-issuer"]
+      - notExists:
+          path: spec.tls[0].secretName

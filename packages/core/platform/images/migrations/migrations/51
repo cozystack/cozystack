@@ -1,0 +1,99 @@
+#!/bin/bash
+# Migration 51 --> 52
+# Backfill the apps.cozystack.io/application.name release label onto pre-existing
+# VictoriaMetrics / VictoriaLogs storage PVCs of the monitoring module.
+#
+# PR #3094 adds apps.cozystack.io/application.name to the VMCluster/VLCluster
+# storage volumeClaimTemplates (packages/system/monitoring) and a post-delete
+# hook that garbage-collects PVCs carrying that label. But vm-operator only
+# stamps volumeClaimTemplate.metadata.labels onto PVCs it creates *after* the
+# change; the Kubernetes StatefulSet controller applies claim-template labels
+# only at PVC creation and never re-labels existing PVCs, and vm-operator's PVC
+# reconciler is resize-only. Storage provisioned before this upgrade therefore
+# stays unlabeled, the cleanup hook's selector misses it, and it keeps leaking on
+# delete (issue #3091). This migration relabels those PVCs once so the hook can
+# reclaim them.
+#
+# The label value is read from each CR's spec.managedMetadata so we relabel only
+# cozystack-managed monitoring clusters (a user's own VMCluster carries no such
+# label and is left untouched) and always stamp the exact value the hook selects.
+#
+# Best-effort by design: the worst case if a relabel is skipped is the
+# pre-existing leak this PR set out to fix, which is strictly no worse than the
+# status quo. A transient apiserver hiccup must therefore NOT abort the whole
+# platform upgrade, so the CR list and per-PVC reads tolerate failure (|| true)
+# rather than exiting non-zero.
+
+set -euo pipefail
+
+# shellcheck source=lib/cozystack-version.sh
+. "$(dirname "$0")/lib/cozystack-version.sh"
+
+label_key="apps.cozystack.io/application.name"
+# jsonpath escapes the dots/slash in the label key.
+label_path='{.spec.managedMetadata.labels.apps\.cozystack\.io/application\.name}'
+
+# relabel_storage <crd> <pvc-name-regex>
+# For every CR of <crd> that carries the cozystack application.name label, relabel
+# its storage PVCs (matched by the StatefulSet-derived <pvc-name-regex>, with the
+# CR name spliced in) to the same value.
+relabel_storage() {
+  crd="$1"
+  pvc_regex_tmpl="$2"
+
+  # This migration runs platform-wide (targetVersion bump), including on clusters
+  # that never installed monitoring. Skip when the CRD is absent. The `|| true`
+  # on the list additionally keeps a transient apiserver error from aborting the
+  # upgrade — there is nothing safety-critical to gate on.
+  if ! kubectl get crd "$crd" >/dev/null 2>&1; then
+    echo "$crd not present; skipping monitoring PVC label backfill"
+    return 0
+  fi
+
+  crs=$(kubectl get "$crd" -A \
+    -o jsonpath='{range .items[*]}{.metadata.namespace}{" "}{.metadata.name}{"\n"}{end}' || true)
+
+  echo "$crs" | while read -r ns name; do
+    [ -n "${ns:-}" ] || continue
+
+    appname=$(kubectl get "$crd" -n "$ns" "$name" -o jsonpath="$label_path" 2>/dev/null || true)
+    if [ -z "$appname" ]; then
+      echo "$crd $ns/$name has no $label_key; not a cozystack-managed cluster, skipping"
+      continue
+    fi
+
+    # Splice the CR name into the PVC regex (e.g. "(vmstorage|vmselect)-NAME-[0-9]+$").
+    pvc_regex=$(printf '%s' "$pvc_regex_tmpl" | sed "s/NAME/${name}/g")
+
+    # grep exits 1 when a namespace has no matching PVCs; tolerate it so pipefail
+    # does not abort the whole migration on an empty match.
+    pvcs=$(kubectl get pvc -n "$ns" \
+      -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' 2>/dev/null \
+      | grep -E "$pvc_regex" || true)
+
+    for pvc in $pvcs; do
+      [ -n "${pvc:-}" ] || continue
+      current=$(kubectl get pvc -n "$ns" "$pvc" \
+        -o jsonpath="{.metadata.labels.apps\.cozystack\.io/application\.name}" 2>/dev/null || true)
+      if [ "$current" = "$appname" ]; then
+        echo "PVC $ns/$pvc already labeled $label_key=$appname; skipping"
+        continue
+      fi
+      echo "Labeling PVC $ns/$pvc with $label_key=$appname"
+      kubectl label pvc -n "$ns" "$pvc" "$label_key=$appname" --overwrite
+    done
+  done
+}
+
+# vm-operator storage PVCs are named "<claim-template>-<sts>-<ordinal>" and the
+# StatefulSet is "<component>-<cr>", so every PVC ends with
+# "<component>-<cr>-<ordinal>". The regex suffix-matches that tail, so it is
+# robust to the claim-template prefix (e.g. vmstorage-db-vmstorage-<cr>-0 and
+# vmselect-cachedir-vmselect-<cr>-0 both match on the vmselect/vmstorage arm).
+relabel_storage vmclusters.operator.victoriametrics.com '(vmstorage|vmselect)-NAME-[0-9]+$'
+# vlstorage STS PVCs are "<claim-template>-vlstorage-<cr>-<ordinal>".
+relabel_storage vlclusters.operator.victoriametrics.com 'vlstorage-NAME-[0-9]+$'
+
+# Stamp version via the shared helper so the cozystack-version ConfigMap keeps
+# the platform.cozystack.io/no-delete label.
+stamp_cozystack_version 52

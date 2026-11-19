@@ -1,0 +1,51 @@
+---
+apiVersion: cozystack.io/v1alpha1
+kind: PackageSource
+metadata:
+  name: cozystack.gpu-operator
+spec:
+  sourceRef:
+    kind: OCIRepository
+    name: cozystack-packages
+    namespace: cozy-system
+    path: /
+  variants:
+  - name: default
+    dependsOn:
+    - cozystack.networking
+    components:
+    - name: gpu-operator
+      path: system/gpu-operator
+      valuesFiles:
+      - values.yaml
+      - values-passthrough.yaml
+      install:
+        privileged: true
+        namespace: cozy-gpu-operator
+        releaseName: gpu-operator
+  - name: vgpu
+    dependsOn:
+    - cozystack.networking
+    components:
+    - name: gpu-operator
+      path: system/gpu-operator
+      valuesFiles:
+      - values.yaml
+      - values-vgpu.yaml
+      install:
+        privileged: true
+        namespace: cozy-gpu-operator
+        releaseName: gpu-operator
+  - name: container
+    dependsOn:
+    - cozystack.networking
+    components:
+    - name: gpu-operator
+      path: system/gpu-operator
+      valuesFiles:
+      - values.yaml
+      - values-container.yaml
+      install:
+        privileged: true
+        namespace: cozy-gpu-operator
+        releaseName: gpu-operator

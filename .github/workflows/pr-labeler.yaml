@@ -1,0 +1,377 @@
+name: PR Auto-Label
+
+on:
+  pull_request_target:
+    # Note: 'edited' is intentionally omitted. It fires on every PR body edit,
+    # which causes long-lived bot PRs (e.g. Renovate) to re-run this job dozens
+    # of times on an unchanged commit. Labels are re-applied on the next push
+    # (synchronize) or reopen instead.
+    types: [opened, reopened, synchronize]
+
+# Top-level token defaults to read-only. A job-level block replaces this one
+# rather than adding to it, so each job restates every scope it needs.
+permissions:
+  contents: read
+
+jobs:
+  label:
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+    steps:
+      - name: Apply labels from PR title
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          script: |
+            // Conventional Commits types accepted by Cozystack (per docs/agents/contributing.md):
+            //   feat, fix, security, docs, style, refactor, perf, test, build, ci, chore, revert
+            // Mapping below maps a subset to kind/* — types not listed do not produce a kind/*.
+            const typeToKind = {
+              feat:     'kind/feature',
+              fix:      'kind/bug',
+              docs:     'kind/documentation',
+              chore:    'kind/cleanup',
+              refactor: 'kind/cleanup',
+              // security, style, perf, test, build, ci, revert — no kind mapping
+            };
+
+            // scope -> area/* mapping. Keys are the scopes observed in cozystack issues
+            // and PRs. Add new entries when a scope recurs (3+ times).
+            const scopeToArea = {
+              // area/api
+              'api':                 'area/api',
+              'cozystack-api':       'area/api',
+              'registry':            'area/api',
+
+              // area/ai
+              'agents':              'area/ai',
+              'ai':                  'area/ai',
+
+              // area/build
+              'build':               'area/build',
+
+              // area/ci
+              'ci':                  'area/ci',
+              'workflows':           'area/ci',
+              'labeler':             'area/ci',
+
+              // area/dependencies — Renovate uses scope `deps` (see .github/renovate.json)
+              'deps':                'area/dependencies',
+              'dependencies':        'area/dependencies',
+              'renovate':            'area/dependencies',
+
+              // area/dx — developer tooling: hack/, package Makefiles, cozypkg
+              'dx':                  'area/dx',
+              'hack':                'area/dx',
+              'cozypkg':             'area/dx',
+
+              // area/dashboard
+              'dashboard':           'area/dashboard',
+              'cozystack-ui':        'area/dashboard',
+              'console':             'area/dashboard',
+              'dashboard-controller': 'area/dashboard',
+
+              // area/database
+              'postgres':            'area/database',
+              'postgres-operator':   'area/database',
+              'mariadb':             'area/database',
+              'mariadb-operator':    'area/database',
+              'redis':               'area/database',
+              'valkey':              'area/database',
+              'etcd':                'area/database',
+              'kafka':               'area/database',
+              'clickhouse':          'area/database',
+              'mongodb':             'area/database',
+              'rabbitmq':            'area/database',
+              'nats':                'area/database',
+              'qdrant':              'area/database',
+              'foundationdb':        'area/database',
+              'database':            'area/database',
+              'etcd-operator':       'area/database',
+              'opensearch':          'area/database',
+              'opensearch-operator': 'area/database',
+
+              // area/extra
+              'extra':               'area/extra',
+
+              // area/kamaji
+              'kamaji':              'area/kamaji',
+
+              // area/keycloak
+              'keycloak':            'area/keycloak',
+              'keycloak-configure':  'area/keycloak',
+
+              // area/kubernetes
+              'kubernetes':          'area/kubernetes',
+              'apps/kubernetes':     'area/kubernetes',
+              'kubernetes-nodes':    'area/kubernetes',
+
+              // area/monitoring
+              'monitoring':          'area/monitoring',
+              'metrics-server':      'area/monitoring',
+              'vlogs':               'area/monitoring',
+              'vmstack':             'area/monitoring',
+              'grafana':             'area/monitoring',
+              'workloadmonitor':     'area/monitoring',
+              'monitoring-agents':   'area/monitoring',
+
+              // area/networking
+              'ingress':             'area/networking',
+              'ingress-nginx':       'area/networking',
+              'gateway':             'area/networking',
+              'vpn':                 'area/networking',
+              'vpc':                 'area/networking',
+              'metallb':             'area/networking',
+              'kube-ovn':            'area/networking',
+              'kubeovn-webhook':     'area/networking',
+              'tcp-balancer':        'area/networking',
+              'securitygroups':      'area/networking',
+              'cozy-proxy':          'area/networking',
+              'networking':          'area/networking',
+              'kubeovn':             'area/networking',
+              'multus':              'area/networking',
+              'kilo':                'area/networking',
+              'hetzner-robotlb':     'area/networking',
+              'ouroboros':           'area/networking',
+
+              // area/cilium
+              'cilium':              'area/cilium',
+
+              // area/openbao
+              'openbao':             'area/openbao',
+              'openbao-central':     'area/openbao',
+
+              // area/platform
+              'platform':            'area/platform',
+              'cert-manager':        'area/platform',
+              'external-secrets':    'area/platform',
+              'bundle':              'area/platform',
+              'flux':                'area/platform',
+              'fluxcd':              'area/platform',
+              'cluster-api':         'area/platform',
+              'talos':               'area/platform',
+              'installer':           'area/platform',
+              'cozyctl':             'area/platform',
+              'cozystack-engine':    'area/platform',
+              'cozy-lib':            'area/platform',
+              'operator':            'area/platform',
+              'cozystack-operator':  'area/platform',
+              'controller':          'area/platform',
+              'cozystack-controller': 'area/platform',
+              'cozystack-basics':    'area/platform',
+              'flux-shard-operator': 'area/platform',
+              'lineage':             'area/platform',
+              'migrations':          'area/platform',
+              'scheduler':           'area/platform',
+              'cozystack-scheduler': 'area/platform',
+              'reloader':            'area/platform',
+              'bootbox':             'area/platform',
+
+              // area/release
+              'backport':            'area/release',
+              'release':             'area/release',
+              'changelog':           'area/release',
+              'changelogs':          'area/release',
+
+              // area/storage
+              'seaweedfs':           'area/storage',
+              'seaweedfs-cosi-driver': 'area/storage',
+              'objectstorage-controller': 'area/storage',
+              'bucket':              'area/storage',
+              'linstor':             'area/storage',
+              'velero':              'area/storage',
+              'harbor':              'area/storage',
+              'backups':             'area/storage',
+              'csi':                 'area/storage',
+              'storage':             'area/storage',
+              'piraeus-operator':    'area/storage',
+              'backupstrategy-controller': 'area/storage',
+              'local-storage':       'area/storage',
+
+              // area/tenant
+              'tenant':              'area/tenant',
+
+              // area/testing
+              'tests':               'area/testing',
+              'e2e':                 'area/testing',
+              'testing':             'area/testing',
+
+              // area/virtualization
+              'kubevirt':            'area/virtualization',
+              'cdi':                 'area/virtualization',
+              'vmi':                 'area/virtualization',
+              'vm-import':           'area/virtualization',
+              'migration':           'area/virtualization',
+              'vm-instance':         'area/virtualization',
+              'vm-disk':             'area/virtualization',
+              'virtual-machine':     'area/virtualization',
+              'hami':                'area/virtualization',
+              'gpu-operator':        'area/virtualization',
+              'virtualization':      'area/virtualization',
+              'vm':                  'area/virtualization',
+              'kubevirt-operator':   'area/virtualization',
+              'kubevirt-cdi':        'area/virtualization',
+              'kubevirt-instancetypes': 'area/virtualization',
+            };
+
+            const pr = context.payload.pull_request;
+            const title = pr.title || '';
+            const body  = pr.body  || '';
+            const existing = new Set((pr.labels || []).map(l => l.name));
+            const toAdd = new Set();
+
+            // 1. Strip every leading "[Backport release-1.x]" prefix: a backport of
+            // a backport carries two, and a leftover one would be parsed as the scope.
+            const cleanTitle = title.replace(/^(?:\[Backport [^\]]+\]\s+)+/, '');
+            if (cleanTitle !== title) {
+              toAdd.add('area/release');
+            }
+
+            // 2. Try Conventional Commits form: type(scope)?(!)?: description
+            const conv = cleanTitle.match(/^([a-z]+)(?:\(([^)]+)\))?(!)?:\s*.+$/);
+            // 3. Fall back to bracket form: [scope] description
+            const bracket = !conv && cleanTitle.match(/^\[([^\]]+)\]\s+.+$/);
+
+            let type = null, scopeStr = null, breaking = false;
+            if (conv) {
+              type = conv[1];
+              scopeStr = conv[2] || null;
+              breaking = !!conv[3];
+            } else if (bracket) {
+              scopeStr = bracket[1];
+            }
+
+            // 4. Detect BREAKING CHANGE: or BREAKING-CHANGE: footer in body.
+            // Conventional Commits 1.0 spec item 16 treats them as synonymous.
+            if (/^BREAKING[ -]CHANGE:/m.test(body)) {
+              breaking = true;
+            }
+
+            // 5. Apply kind/* from type.
+            if (type) {
+              // Object.hasOwn: a title typed or scoped `constructor` would otherwise
+              // resolve to an Object.prototype member instead of to nothing.
+              if (Object.hasOwn(typeToKind, type)) {
+                toAdd.add(typeToKind[type]);
+              } else {
+                core.warning(`type "${type}" has no kind/* mapping — typo or new type? See .github/workflows/pr-labeler.yaml typeToKind`);
+              }
+            }
+
+            // 6. Apply area/* from scope. Composite scopes split on comma.
+            const scopes = (scopeStr || '')
+              .split(/,\s*/)
+              .map(s => s.trim())
+              .filter(Boolean);
+            for (const s of scopes) {
+              if (Object.hasOwn(scopeToArea, s)) {
+                toAdd.add(scopeToArea[s]);
+              } else {
+                core.warning(`scope "${s}" has no area/* mapping — consider extending scopeToArea in .github/workflows/pr-labeler.yaml if it recurs`);
+              }
+            }
+
+            // 7. kind/breaking-change.
+            if (breaking) {
+              toAdd.add('kind/breaking-change');
+            }
+
+            // 8. Fallback: no area/* applied -> area/uncategorized.
+            const hasArea = [...toAdd].some(l => l.startsWith('area/'));
+            if (!hasArea) {
+              toAdd.add('area/uncategorized');
+            }
+
+            // 9. Additive only — never remove existing labels.
+            const newLabels = [...toAdd].filter(l => !existing.has(l));
+            if (newLabels.length === 0) {
+              core.info('No new labels to apply');
+              return;
+            }
+
+            await github.rest.issues.addLabels({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: pr.number,
+              labels: newLabels,
+            });
+            core.info(`Applied labels: ${newLabels.join(', ')}`);
+
+  # Backports are automatic (docs/release/backports.md), so a pull request
+  # against a release branch from outside the team is closed with a pointer to
+  # the policy. Only when it is opened: a maintainer keeps a fix that exists
+  # only on a release line by reopening it.
+  #
+  # pull_request_target hands a write token to a fork's pull request, so this
+  # job never touches the head: actions/checkout takes the event's own ref,
+  # which is the base repository, the script reads only the event JSON and the
+  # author's permission on the repository, and no `${{ }}` expression reaches
+  # the shell. The permission read needs repository metadata read access, which
+  # a GITHUB_TOKEN always carries and `permissions:` has no key for.
+  close-manual-backport:
+    if: >-
+      github.event.action == 'opened' &&
+      startsWith(github.event.pull_request.base.ref, 'release-')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read        # check out hack/ from the base repository
+      pull-requests: write  # close the pull request with a comment
+    steps:
+      - name: Check out the base repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: hack
+      - name: Close a backport opened by hand from outside the team
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: hack/close-manual-backport.sh "$GITHUB_EVENT_PATH"
+
+  # A batch pull request carries each original in the shape cmd/backport-batch
+  # gives it. fold checks one resolution, and only when whoever resolved the
+  # conflict runs it; this checks every original on the batch on each push.
+  #
+  # pull_request_target takes the workflow from main for a pull request into
+  # any branch, so the check reaches release-* lines, which do not carry it; a
+  # pull_request job would run the line's own workflows. The tool is built from
+  # main, since the lines do not carry it either. Nothing from the pull request
+  # is checked out or run: its head is fetched as data and read with git, and
+  # no `${{ }}` expression reaches the shell. Only a branch of this repository
+  # named like a batch is checked.
+  backport-batch-verify:
+    name: Backport batch shape
+    if: >-
+      startsWith(github.event.pull_request.base.ref, 'release-') &&
+      startsWith(github.event.pull_request.head.ref, 'backport-batch/') &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    env:
+      # The pipe falls back to direct on any proxy error (hack/common-envs.mk).
+      GOPROXY: "https://proxy.golang.org|direct"
+    steps:
+      - name: Check out main
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Build backport-batch from main
+        run: go build -o "$RUNNER_TEMP/backport-batch" ./cmd/backport-batch
+      - name: Fetch the batch head as data
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: git fetch --no-tags --quiet origin "$HEAD_SHA"
+      - name: Verify every original on the batch
+        env:
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: '"$RUNNER_TEMP/backport-batch" verify --line "$BASE_REF" --head "$HEAD_SHA"'

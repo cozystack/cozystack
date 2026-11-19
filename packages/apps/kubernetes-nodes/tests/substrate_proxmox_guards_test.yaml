@@ -1,0 +1,47 @@
+suite: proxmox substrate refuses what it cannot invent
+# Two guards that fire on the ABSENCE of a field, so the suite omits both and
+# each test supplies the other one back. helm-unittest merges per-test `set`
+# into the suite defaults rather than replacing them, so a suite that declared
+# either field could never take it away again — the same reason the sizing
+# guard lives in its own suite.
+#
+# Both failures are silent without the guard rather than loud: a worker with no
+# bridge never gets an interface, and one pointed at the management cluster's
+# CoreDNS resolves nothing from outside it. The chart stopping is the cheapest
+# place to learn that.
+templates:
+  - templates/nodegroup.yaml
+release:
+  name: kubernetes-nodes-myk8s-md0
+  namespace: tenant-test
+set:
+  cluster: myk8s
+  _cluster:
+    cluster-domain: cozy.local
+  version: "v1.35"
+  minReplicas: 0
+  maxReplicas: 3
+  instanceType: ""
+  resources:
+    cpu: 4
+    memory: 8Gi
+  substrate: proxmox
+  proxmox:
+    templateTags: [capmox-template, talos]
+tests:
+  - it: refuses a pool with no bridge to attach the worker to
+    set:
+      proxmox:
+        dnsServers: ["8.8.8.8"]
+    asserts:
+      - failedTemplate:
+          errorMessage: "substrate proxmox requires proxmox.network.bridge"
+
+  - it: refuses resolvers it would otherwise borrow from the management cluster
+    set:
+      proxmox:
+        network:
+          bridge: vmbr0
+    asserts:
+      - failedTemplate:
+          errorMessage: "substrate proxmox requires proxmox.dnsServers: an off-cluster worker cannot resolve through the management cluster's CoreDNS"

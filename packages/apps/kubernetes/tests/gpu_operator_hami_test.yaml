@@ -1,0 +1,197 @@
+suite: GPU Operator HelmRelease HAMi integration tests
+templates:
+  - templates/helmreleases/gpu-operator.yaml
+values:
+  - values-ci.yaml
+tests:
+  - it: should disable devicePlugin when hami is enabled
+    set:
+      addons:
+        gpuOperator:
+          enabled: true
+          valuesOverride: {}
+        hami:
+          enabled: true
+          valuesOverride: {}
+    asserts:
+      - equal:
+          path: spec.values.gpu-operator.devicePlugin.enabled
+          value: false
+
+  # On Talos the driver comes from a system extension: the operator must not own
+  # the driver or containerd, the validator must look at the host root, and the
+  # device plugin must route CUDA libraries through CDI.
+  - it: configures the operator for a driver provided by the OS
+    set:
+      addons:
+        gpuOperator:
+          enabled: true
+          valuesOverride: {}
+        hami:
+          enabled: false
+          valuesOverride: {}
+    asserts:
+      - equal:
+          path: spec.values.gpu-operator.driver.enabled
+          value: false
+      - equal:
+          path: spec.values.gpu-operator.toolkit.enabled
+          value: false
+      # Without these the validator never writes its sentinel and the device
+      # plugin stays blocked behind toolkit-validation.
+      - contains:
+          path: spec.values.gpu-operator.validator.driver.env
+          content:
+            name: DRIVER_ROOT
+            value: "/"
+      - contains:
+          path: spec.values.gpu-operator.validator.driver.env
+          content:
+            name: DISABLE_DEV_CHAR_SYMLINK_CREATION
+            value: "true"
+      # Without the CDI settings the pod gets the device and no CUDA libraries.
+      - contains:
+          path: spec.values.gpu-operator.devicePlugin.env
+          content:
+            name: DEVICE_LIST_STRATEGY
+            value: cdi-annotations
+      - contains:
+          path: spec.values.gpu-operator.devicePlugin.env
+          content:
+            name: NVIDIA_CTK_PATH
+            value: /usr/local/bin/nvidia-ctk
+      # CDI device names key on the UUID strategy, the plugin resolves the driver
+      # from NVIDIA_DRIVER_ROOT, and the annotation prefix has to be the one
+      # containerd reads.
+      - contains:
+          path: spec.values.gpu-operator.devicePlugin.env
+          content:
+            name: DEVICE_ID_STRATEGY
+            value: uuid
+      - contains:
+          path: spec.values.gpu-operator.devicePlugin.env
+          content:
+            name: NVIDIA_DRIVER_ROOT
+            value: "/"
+      - contains:
+          path: spec.values.gpu-operator.devicePlugin.env
+          content:
+            name: CDI_ANNOTATION_PREFIX
+            value: cdi.k8s.io/
+      # The driver-validation init container reads NVIDIA_DRIVER_ROOT alongside
+      # DRIVER_ROOT.
+      - contains:
+          path: spec.values.gpu-operator.validator.driver.env
+          content:
+            name: NVIDIA_DRIVER_ROOT
+            value: "/"
+
+  # With the driver container off nothing mounts this ConfigMap. Module
+  # parameters belong to the worker pool's kernelModules in the KubernetesNodes
+  # app (packages/apps/kubernetes-nodes), and an inert second place to set them
+  # would only mislead.
+  - it: does not render the driver-container kernel module ConfigMap
+    set:
+      addons:
+        gpuOperator:
+          enabled: true
+          valuesOverride: {}
+        hami:
+          enabled: false
+          valuesOverride: {}
+    asserts:
+      - notExists:
+          path: spec.values.kernelModuleConfig
+      - notExists:
+          path: spec.values.gpu-operator.driver.kernelModuleConfig
+
+  # mergeOverwrite replaces a list rather than merging it, so an override adding
+  # one variable to devicePlugin.env drops the CDI defaults with it and has to
+  # restate the full list.
+  - it: lets an operator replace the device plugin env wholesale
+    set:
+      addons:
+        gpuOperator:
+          enabled: true
+          valuesOverride:
+            gpu-operator:
+              devicePlugin:
+                env:
+                  - name: DEVICE_LIST_STRATEGY
+                    value: envvar
+        hami:
+          enabled: false
+          valuesOverride: {}
+    asserts:
+      - equal:
+          path: spec.values.gpu-operator.devicePlugin.env
+          value:
+            - name: DEVICE_LIST_STRATEGY
+              value: envvar
+
+  - it: should apply hami defaults when valuesOverride key is omitted
+    set:
+      addons:
+        gpuOperator:
+          enabled: true
+        hami:
+          enabled: true
+    asserts:
+      - equal:
+          path: spec.values.gpu-operator.devicePlugin.enabled
+          value: false
+
+  - it: should allow user overrides to merge with hami defaults
+    set:
+      addons:
+        gpuOperator:
+          enabled: true
+          valuesOverride:
+            gpu-operator:
+              driver:
+                enabled: false
+        hami:
+          enabled: true
+          valuesOverride: {}
+    asserts:
+      - equal:
+          path: spec.values.gpu-operator.devicePlugin.enabled
+          value: false
+      - equal:
+          path: spec.values.gpu-operator.driver.enabled
+          value: false
+
+  - it: should let user explicitly override devicePlugin.enabled to true with hami enabled
+    set:
+      addons:
+        gpuOperator:
+          enabled: true
+          valuesOverride:
+            gpu-operator:
+              devicePlugin:
+                enabled: true
+              driver:
+                enabled: false
+        hami:
+          enabled: true
+          valuesOverride: {}
+    asserts:
+      - equal:
+          path: spec.values.gpu-operator.devicePlugin.enabled
+          value: true
+      - equal:
+          path: spec.values.gpu-operator.driver.enabled
+          value: false
+
+  - it: should not render when gpuOperator is disabled
+    set:
+      addons:
+        gpuOperator:
+          enabled: false
+          valuesOverride: {}
+        hami:
+          enabled: false
+          valuesOverride: {}
+    asserts:
+      - hasDocuments:
+          count: 0

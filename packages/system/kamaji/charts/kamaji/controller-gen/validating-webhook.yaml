@@ -1,0 +1,43 @@
+{{- if not .Values.telemetry.disabled }}
+- admissionReviewVersions:
+    - v1
+  clientConfig:
+    service:
+      name: '{{ include "kamaji.webhookServiceName" . }}'
+      namespace: '{{ .Release.Namespace }}'
+      path: /telemetry
+  failurePolicy: Ignore
+  name: telemetry.kamaji.clastix.io
+  rules:
+    - apiGroups:
+        - kamaji.clastix.io
+      apiVersions:
+        - v1alpha1
+      operations:
+        - CREATE
+        - UPDATE
+        - DELETE
+      resources:
+        - tenantcontrolplanes
+  sideEffects: None
+{{- end }}
+- admissionReviewVersions:
+    - v1
+  clientConfig:
+    service:
+      name: '{{ include "kamaji.webhookServiceName" . }}'
+      namespace: '{{ .Release.Namespace }}'
+      path: /validate-kamaji-clastix-io-v1alpha1-tenantcontrolplane
+  failurePolicy: Fail
+  name: vtenantcontrolplane.kb.io
+  rules:
+    - apiGroups:
+        - kamaji.clastix.io
+      apiVersions:
+        - v1alpha1
+      operations:
+        - CREATE
+        - UPDATE
+      resources:
+        - tenantcontrolplanes
+  sideEffects: None

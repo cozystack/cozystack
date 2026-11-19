@@ -1,0 +1,98 @@
+#!/usr/bin/env bats
+# -----------------------------------------------------------------------------
+# Unit tests for hack/e2e-chainsaw/_lib/remediation-guard.sh
+#
+# helmrelease_has_remediation_cycle takes a newline-delimited list of
+# HelmRelease history snapshot status values (deployed/superseded/failed/
+# uninstalled/...) and returns 0 when any entry is "failed" or "uninstalled"
+# (meaning flux helm-controller performed install/upgrade remediation).
+#
+# This is used by the e2e script after the HelmRelease reaches Ready. The
+# failure/upgrade counters (.status.installFailures / .status.upgradeFailures)
+# are useless there because flux's ClearFailures zeroes them on successful
+# reconciliation; .status.history retains the snapshot trail.
+#
+# CI runs this file under Bats through `make bats-unit-tests`. It also remains
+# compatible with the legacy `hack/cozytest.sh` translator, whose awk parser
+# recognizes only @test blocks and a bare `}` on its own line. The tests avoid
+# `run` and `$status` for that compatibility path and use direct shell assertions.
+#
+# Run with: bats hack/remediation-guard.bats
+# -----------------------------------------------------------------------------
+
+load test_helper
+
+@test "empty history returns not-detected" {
+    . hack/e2e-chainsaw/_lib/remediation-guard.sh
+    if helmrelease_has_remediation_cycle ""; then
+        echo "expected not-detected for empty history" >&2
+        exit 1
+    fi
+}
+
+@test "single deployed snapshot returns not-detected" {
+    . hack/e2e-chainsaw/_lib/remediation-guard.sh
+    if helmrelease_has_remediation_cycle "deployed"; then
+        echo "expected not-detected for deployed-only history" >&2
+        exit 1
+    fi
+}
+
+@test "deployed then superseded returns not-detected" {
+    . hack/e2e-chainsaw/_lib/remediation-guard.sh
+    statuses=$(printf 'deployed\nsuperseded\n')
+    if helmrelease_has_remediation_cycle "${statuses}"; then
+        echo "expected not-detected for deployed+superseded history" >&2
+        exit 1
+    fi
+}
+
+@test "single failed snapshot returns detected" {
+    . hack/e2e-chainsaw/_lib/remediation-guard.sh
+    if ! helmrelease_has_remediation_cycle "failed"; then
+        echo "expected detected when history contains failed snapshot" >&2
+        exit 1
+    fi
+}
+
+@test "single uninstalled snapshot returns detected" {
+    # The exact signature of the install-remediation race: the first install
+    # exceeded flux's wait budget, remediation uninstalled, the next retry
+    # eventually succeeded. History still carries the uninstalled snapshot.
+    . hack/e2e-chainsaw/_lib/remediation-guard.sh
+    if ! helmrelease_has_remediation_cycle "uninstalled"; then
+        echo "expected detected when history contains uninstalled snapshot" >&2
+        exit 1
+    fi
+}
+
+@test "uninstalled then deployed still returns detected" {
+    . hack/e2e-chainsaw/_lib/remediation-guard.sh
+    statuses=$(printf 'uninstalled\ndeployed\n')
+    if ! helmrelease_has_remediation_cycle "${statuses}"; then
+        echo "expected detected despite later successful deploy" >&2
+        exit 1
+    fi
+}
+
+@test "deployed then failed still returns detected" {
+    . hack/e2e-chainsaw/_lib/remediation-guard.sh
+    statuses=$(printf 'deployed\nfailed\n')
+    if ! helmrelease_has_remediation_cycle "${statuses}"; then
+        echo "expected detected when any entry is failed" >&2
+        exit 1
+    fi
+}
+
+@test "the predicate does not overwrite a caller variable named statuses" {
+    # This library is sourced rather than executed, and the helper assigns
+    # "statuses" internally, so without a local the argument lands in the
+    # caller's scope.
+    . hack/e2e-chainsaw/_lib/remediation-guard.sh
+    statuses=sentinel
+    helmrelease_has_remediation_cycle "failed"
+    if [ "${statuses}" != sentinel ]; then
+        echo "helmrelease_has_remediation_cycle replaced the caller's statuses with: ${statuses}" >&2
+        exit 1
+    fi
+}

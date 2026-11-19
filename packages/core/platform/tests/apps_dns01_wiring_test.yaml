@@ -1,0 +1,104 @@
+suite: apps.yaml DNS-01 platform → tenant value wiring
+templates:
+  - templates/apps.yaml
+
+release:
+  name: cozy-platform
+  namespace: cozy-system
+
+# All tests in this suite assert that publishing.certificates.dns01.*
+# values written by the operator land in _cluster.dns01-* keys read by
+# the gateway chart (packages/extra/gateway/templates/tenantgateway.yaml).
+# Without these assertions the documented DNS-01 provider table in the
+# gateway README is unreachable — the gateway chart fail-fast guards
+# fire because no key path supplies the required values.
+
+tests:
+  - it: writes dns01-provider default (cloudflare) when not explicitly set
+    asserts:
+      - matchRegex:
+          path: stringData["values.yaml"]
+          pattern: 'dns01-provider:\s*"cloudflare"'
+
+  - it: writes dns01-cloudflare-secret-name default
+    asserts:
+      - matchRegex:
+          path: stringData["values.yaml"]
+          pattern: 'dns01-cloudflare-secret-name:\s*"cloudflare-api-token-secret"'
+      - matchRegex:
+          path: stringData["values.yaml"]
+          pattern: 'dns01-cloudflare-secret-key:\s*"api-token"'
+
+  - it: route53 provider writes region + secret refs
+    set:
+      publishing.certificates.dns01.provider: route53
+      publishing.certificates.dns01.route53.region: us-east-1
+      publishing.certificates.dns01.route53.accessKeyID: AKIAIOSFODNN7EXAMPLE
+      publishing.certificates.dns01.route53.secretName: aws-iam-secret
+      publishing.certificates.dns01.route53.secretKey: secret-access-key
+    asserts:
+      - matchRegex:
+          path: stringData["values.yaml"]
+          pattern: 'dns01-provider:\s*"route53"'
+      - matchRegex:
+          path: stringData["values.yaml"]
+          pattern: 'dns01-route53-region:\s*"us-east-1"'
+      - matchRegex:
+          path: stringData["values.yaml"]
+          pattern: 'dns01-route53-access-key-id:\s*"AKIAIOSFODNN7EXAMPLE"'
+      - matchRegex:
+          path: stringData["values.yaml"]
+          pattern: 'dns01-route53-secret-name:\s*"aws-iam-secret"'
+      - matchRegex:
+          path: stringData["values.yaml"]
+          pattern: 'dns01-route53-secret-key:\s*"secret-access-key"'
+
+  - it: digitalocean provider writes secret refs with defaults
+    set:
+      publishing.certificates.dns01.provider: digitalocean
+    asserts:
+      - matchRegex:
+          path: stringData["values.yaml"]
+          pattern: 'dns01-provider:\s*"digitalocean"'
+      - matchRegex:
+          path: stringData["values.yaml"]
+          pattern: 'dns01-digitalocean-secret-name:\s*"digitalocean-api-token-secret"'
+      - matchRegex:
+          path: stringData["values.yaml"]
+          pattern: 'dns01-digitalocean-secret-key:\s*"access-token"'
+
+  - it: rfc2136 provider writes nameserver + tsig refs
+    set:
+      publishing.certificates.dns01.provider: rfc2136
+      publishing.certificates.dns01.rfc2136.nameserver: ns1.example.test:53
+      publishing.certificates.dns01.rfc2136.tsigKeyName: letsencrypt.example.test.
+      publishing.certificates.dns01.rfc2136.secretName: tsig-secret
+      publishing.certificates.dns01.rfc2136.secretKey: tsig-secret-key
+    asserts:
+      - matchRegex:
+          path: stringData["values.yaml"]
+          pattern: 'dns01-provider:\s*"rfc2136"'
+      - matchRegex:
+          path: stringData["values.yaml"]
+          pattern: 'dns01-rfc2136-nameserver:\s*"ns1\.example\.test:53"'
+      - matchRegex:
+          path: stringData["values.yaml"]
+          pattern: 'dns01-rfc2136-tsig-key-name:\s*"letsencrypt\.example\.test\."'
+      - matchRegex:
+          path: stringData["values.yaml"]
+          pattern: 'dns01-rfc2136-tsig-algorithm:\s*"HMACSHA256"'
+      - matchRegex:
+          path: stringData["values.yaml"]
+          pattern: 'dns01-rfc2136-secret-name:\s*"tsig-secret"'
+
+  - it: rfc2136 tsigAlgorithm override is honored
+    set:
+      publishing.certificates.dns01.provider: rfc2136
+      publishing.certificates.dns01.rfc2136.nameserver: ns.example.test
+      publishing.certificates.dns01.rfc2136.tsigKeyName: k.example.test.
+      publishing.certificates.dns01.rfc2136.tsigAlgorithm: HMACSHA512
+      publishing.certificates.dns01.rfc2136.secretName: tsig
+    asserts:
+      - matchRegex:
+          path: stringData["values.yaml"]
+          pattern: 'dns01-rfc2136-tsig-algorithm:\s*"HMACSHA512"'

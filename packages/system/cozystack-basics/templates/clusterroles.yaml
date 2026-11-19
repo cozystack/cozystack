@@ -1,0 +1,333 @@
+---
+# == default cluster role ==
+# Used by tenant ServiceAccounts
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: cozy:tenant
+aggregationRule:
+  clusterRoleSelectors:
+  - matchLabels:
+      rbac.cozystack.io/aggregate-to-tenant: "true"
+rules: []
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: cozy:tenant:base
+  labels:
+    rbac.cozystack.io/aggregate-to-tenant: "true"
+rules:
+- apiGroups: [""]
+  resources: ["pods", "services", "persistentvolumes", "endpoints", "events", "resourcequotas"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: ["discovery.k8s.io"]
+  resources: ["endpointslices"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: ["networking.k8s.io"]
+  resources: ["ingresses"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: ["rbac.authorization.k8s.io"]
+  resources: ["roles"]
+  verbs: ["get"]
+- apiGroups: ["apps.cozystack.io"]
+  resources: ['*']
+  verbs: ['*']
+- apiGroups: ["sdn.cozystack.io"]
+  resources: ["securitygroups"]
+  verbs: ['*']
+- apiGroups:
+  - cozystack.io
+  resources:
+  - workloadmonitors
+  - workloads
+  verbs: ["get", "list", "watch"]
+- apiGroups:
+  - core.cozystack.io
+  resources:
+  - tenantmodules
+  - tenantsecrets
+  - options
+  - taps
+  verbs: ["get", "list", "watch"]
+---
+# == view cluster role ==
+# Aggregates all roles labeled for view access
+# Also aggregated into use, admin, and super-admin
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: cozy:tenant:view
+  labels:
+    rbac.cozystack.io/aggregate-to-tenant-use: "true"
+    rbac.cozystack.io/aggregate-to-tenant-admin: "true"
+    rbac.cozystack.io/aggregate-to-tenant-super-admin: "true"
+aggregationRule:
+  clusterRoleSelectors:
+  - matchLabels:
+      rbac.cozystack.io/aggregate-to-tenant-view: "true"
+rules: []
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: cozy:tenant:view:base
+  labels:
+    rbac.cozystack.io/aggregate-to-tenant-view: "true"
+rules:
+- apiGroups:
+  - rbac.authorization.k8s.io
+  resources:
+  - roles
+  verbs:
+  - get
+- apiGroups:
+  - apps.cozystack.io
+  resources:
+  - "*"
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - sdn.cozystack.io
+  resources:
+  - securitygroups
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - ""
+  resources:
+  - pods
+  - services
+  - persistentvolumes
+  - endpoints
+  - events
+  - resourcequotas
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - discovery.k8s.io
+  resources:
+  - endpointslices
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - networking.k8s.io
+  resources:
+  - ingresses
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - cozystack.io
+  resources:
+  - workloadmonitors
+  - workloads
+  verbs: ["get", "list", "watch"]
+- apiGroups:
+  - core.cozystack.io
+  resources:
+  - options
+  - taps
+  verbs: ["get", "list", "watch"]
+{{/* Read-only visibility into the objects that govern read-replica autoscaling of a
+     tenant's own databases: the KEDA ScaledObject the chart renders into the tenant
+     namespace and the keda-hpa-<release> HorizontalPodAutoscaler KEDA creates beside
+     it. Without this a tenant who enables autoscaling.enabled but mis-set serverAddress
+     (its own Monitoring stack has no kube_pod_labels) has no in-band way to see the
+     FailedGetExternalMetric / TriggerError that keeps autoscaling from actuating - the
+     error would otherwise surface only in a root-scoped alert they cannot reach. Read
+     verbs only: the objects are managed by the chart / KEDA, not edited by the tenant.
+     (Go-template comment, stripped at render — a `#` YAML comment would be copied
+     verbatim into every rendered manifest in every tenant and drift out of date.) */}}
+- apiGroups:
+  - keda.sh
+  resources:
+  - scaledobjects
+  verbs: ["get", "list", "watch"]
+- apiGroups:
+  - autoscaling
+  resources:
+  - horizontalpodautoscalers
+  verbs: ["get", "list", "watch"]
+---
+# == use cluster role ==
+# Aggregates view + all roles labeled for use access
+# Also aggregated into admin and super-admin
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: cozy:tenant:use
+  labels:
+    rbac.cozystack.io/aggregate-to-tenant-admin: "true"
+    rbac.cozystack.io/aggregate-to-tenant-super-admin: "true"
+aggregationRule:
+  clusterRoleSelectors:
+  - matchLabels:
+      rbac.cozystack.io/aggregate-to-tenant-use: "true"
+rules: []
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: cozy:tenant:use:base
+  labels:
+    rbac.cozystack.io/aggregate-to-tenant-use: "true"
+rules:
+- apiGroups: ["subresources.kubevirt.io"]
+  resources:
+  - virtualmachineinstances/console
+  - virtualmachineinstances/vnc
+  verbs:
+  - get
+  - list
+- apiGroups: ["subresources.kubevirt.io"]
+  resources:
+  - virtualmachineinstances/portforward
+  verbs:
+  - get
+  - update
+# Power controls (start/stop/restart) for VMs owned by the tenant.
+# Operational, like console/vnc above, so granted at the "use" level
+# (aggregates into admin and super-admin). Without these the dashboard
+# power buttons return 403 even for tenant admins.
+- apiGroups: ["subresources.kubevirt.io"]
+  resources:
+  - virtualmachines/start
+  - virtualmachines/stop
+  - virtualmachines/restart
+  verbs:
+  - update
+- apiGroups:
+  - core.cozystack.io
+  resources:
+  - tenantmodules
+  - tenantsecrets
+  verbs: ["get", "list", "watch"]
+---
+# == admin cluster role ==
+# Aggregates use + all roles labeled for admin access
+# Also aggregated into super-admin
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: cozy:tenant:admin
+  labels:
+    rbac.cozystack.io/aggregate-to-tenant-super-admin: "true"
+aggregationRule:
+  clusterRoleSelectors:
+  - matchLabels:
+      rbac.cozystack.io/aggregate-to-tenant-admin: "true"
+rules: []
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: cozy:tenant:admin:base
+  labels:
+    rbac.cozystack.io/aggregate-to-tenant-admin: "true"
+rules:
+# virtctl reads both the disk PVC and CDI's dynamically named PVC Prime.
+- apiGroups: [""]
+  resources:
+  - persistentvolumeclaims
+  verbs:
+  - get
+- apiGroups: ["upload.cdi.kubevirt.io"]
+  resources:
+  - uploadtokenrequests
+  verbs:
+  - create
+- apiGroups: [""]
+  resources:
+  - pods
+  - services
+  - persistentvolumes
+  - endpoints
+  - events
+  verbs:
+  - delete
+- apiGroups: ["kubevirt.io"]
+  resources:
+  - virtualmachines
+  verbs:
+  - get
+  - list
+- apiGroups: ["apps.cozystack.io"]
+  resources:
+  - buckets
+  - clickhouses
+  - foos
+  - foundationdbs
+  - harbors
+  - kafkas
+  - kuberneteses
+  - mariadbs
+  - mongodbs
+  - natses
+  - openbaos
+  - opensearches
+  - postgreses
+  - qdrants
+  - rabbitmqs
+  - redises
+  - seaweedfses
+  - tcpbalancers
+  - valkeys
+  - virtualmachines
+  - vmdisks
+  - vminstances
+  - vpns
+  - infos
+  - virtualprivateclouds
+  verbs:
+  - create
+  - update
+  - patch
+  - delete
+- apiGroups: ["sdn.cozystack.io"]
+  resources:
+  - securitygroups
+  verbs:
+  - create
+  - update
+  - patch
+  - delete
+---
+# == super admin cluster role ==
+# Aggregates admin + all roles labeled for super-admin access
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: cozy:tenant:super-admin
+aggregationRule:
+  clusterRoleSelectors:
+  - matchLabels:
+      rbac.cozystack.io/aggregate-to-tenant-super-admin: "true"
+rules: []
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: cozy:tenant:super-admin:base
+  labels:
+    rbac.cozystack.io/aggregate-to-tenant-super-admin: "true"
+rules:
+- apiGroups: ["kubevirt.io"]
+  resources:
+  - virtualmachines
+  verbs:
+  - '*'
+- apiGroups: ["apps.cozystack.io"]
+  resources:
+  - '*'
+  verbs:
+  - '*'

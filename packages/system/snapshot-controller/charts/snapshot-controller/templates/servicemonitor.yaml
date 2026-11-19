@@ -1,0 +1,15 @@
+{{- if and .Values.controller.enabled .Values.controller.serviceMonitor.create }}
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "snapshot-controller.fullname" . }}
+  labels:
+    {{- include "snapshot-controller.labels" . | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "snapshot-controller.selectorLabels" . | nindent 6 }}
+  endpoints:
+    - port: http
+      path: /metrics
+{{- end }}

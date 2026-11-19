@@ -1,0 +1,70 @@
+#!/bin/sh
+# Migration 49 --> 50
+# Backfill tenant.cozystack.io/<ancestor> labels on existing tenant namespaces.
+#
+# Tenant chart versions before this release derived the ancestor label chain by
+# splitting .Release.Namespace, which only ever reached one level up and dropped
+# the transitive ancestors (notably tenant.cozystack.io/tenant-root) for tenants
+# at depth >= 2. That broke the <ancestor>-egress CiliumClusterwideNetworkPolicy
+# (packages/apps/tenant/templates/networkpolicy.yaml): it grants an ancestor
+# reachability to a descendant namespace only when the descendant carries
+# tenant.cozystack.io/<ancestor>, so a missing tenant-root label left the root
+# ingress controller unable to reach nested tenants (upstream timeouts, #2810 /
+# #2171).
+#
+# The chart fix makes every tenant namespace self-compute its full ancestor
+# chain from its own name on the next reconcile. This migration backfills the
+# labels immediately so clusters heal without waiting on each tenant
+# HelmRelease to re-reconcile (e.g. suspended or failed releases).
+#
+# Best-effort by design: the worst case if a relabel is skipped is the
+# pre-existing missing-label bug this PR set out to fix, which is strictly no
+# worse than the status quo. A transient apiserver hiccup must therefore NOT
+# abort the whole platform upgrade, so the namespace list and per-namespace
+# relabel tolerate failure (|| true) rather than exiting non-zero. Idempotent:
+# kubectl label --overwrite only adds/refreshes the listed labels and never
+# removes others.
+
+set -euo pipefail
+
+# shellcheck source=lib/cozystack-version.sh
+. "$(dirname "$0")/lib/cozystack-version.sh"
+
+# Every tenant lives in a namespace named tenant-<...>. tenant-root is the
+# implicit chain root and carries no tenant.cozystack.io/* label (the chart
+# omits the label block for it), so it is skipped. The `|| true` keeps a
+# transient apiserver error from aborting the upgrade.
+tenant_ns=$(kubectl get namespaces \
+              -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' \
+            | grep '^tenant-' || true)
+
+for ns in $tenant_ns; do
+  [ "$ns" = "tenant-root" ] && continue
+
+  # Build the ancestor label list from the namespace name: every tenant
+  # descends from tenant-root, then each progressive dash-prefix of the name
+  # (skipping the bare "tenant" segment) is a real ancestor namespace, the last
+  # being the tenant itself. e.g. tenant-ktj-htdev -> tenant-root, tenant-ktj,
+  # tenant-ktj-htdev.
+  labels="tenant.cozystack.io/tenant-root="
+  acc=""
+  IFS='-'
+  for seg in $ns; do
+    if [ -z "$acc" ]; then
+      acc="$seg"
+    else
+      acc="$acc-$seg"
+    fi
+    [ "$acc" = "tenant" ] && continue
+    labels="$labels tenant.cozystack.io/$acc="
+  done
+  unset IFS
+
+  echo "Backfilling ancestor labels on namespace $ns: $labels"
+  # shellcheck disable=SC2086 # word splitting of $labels into flags is intended
+  kubectl label namespace "$ns" $labels --overwrite || true
+done
+
+# Stamp version via the shared helper so the cozystack-version ConfigMap keeps
+# the platform.cozystack.io/no-delete label (see lib/cozystack-version.sh).
+stamp_cozystack_version 50

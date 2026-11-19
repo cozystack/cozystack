@@ -1,0 +1,37 @@
+{{- if .Values.deployment.enabled }}
+{{- if not .Values.deployment.skipConfig }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ template "coredns.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels: {{- include "coredns.labels" . | nindent 4 }}
+{{- if .Values.customLabels }}
+{{ toYaml .Values.customLabels | indent 4 }}
+{{- end }}
+{{- with .Values.customAnnotations }}
+  annotations:
+{{- toYaml . | nindent 4 }}
+{{- end }}
+data:
+  Corefile: |-
+    {{- range $name, $conf := .Values.extraConfig }}
+    {{ $name }}{{ if $conf.parameters }} {{ $conf.parameters }}{{ end }}
+    {{- end }}
+    {{ range .Values.servers }}
+    {{- range $idx, $zone := .zones }}{{ if $idx }} {{ else }}{{ end }}{{ default "" $zone.scheme }}{{ default "." $zone.zone }}{{ else }}.{{ end -}}
+    {{- if .port }}:{{ .port }} {{ end -}}
+    {
+      {{- range .plugins }}
+        {{ .name }}{{ if .parameters }} {{ .parameters }}{{ end }}{{ if .configBlock }} {
+{{ .configBlock | indent 12 }}
+        }{{ end }}
+      {{- end }}
+    }
+    {{ end }}
+  {{- range .Values.zoneFiles }}
+  {{ .filename }}: {{ toYaml .contents | indent 4 }}
+  {{- end }}
+{{- end }}
+{{- end }}

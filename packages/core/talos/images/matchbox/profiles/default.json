@@ -1,0 +1,18 @@
+{
+  "id": "default",
+  "name": "default",
+  "boot": {
+    "kernel": "/assets/vmlinuz",
+    "initrd": ["/assets/initramfs.xz"],
+    "args": [
+      "initrd=initramfs.xz",
+      "init_on_alloc=1",
+      "slab_nomerge",
+      "pti=on",
+      "console=tty0",
+      "console=ttyS0",
+      "printk.devkmsg=on",
+      "talos.platform=metal"
+    ]
+  }
+}

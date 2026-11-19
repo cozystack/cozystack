@@ -1,0 +1,287 @@
+suite: networking.stageCniPlugins bundle wiring
+templates:
+  - templates/bundles/system.yaml
+release:
+  name: cozystack
+  namespace: cozy-system
+tests:
+  # The line that delivers the feature: nothing asserted in
+  # packages/system/multus or hack/cni-plugins-staging-contract.bats can tell
+  # whether any bundle switches it on.
+  - it: stages the reference CNI plugins on generic Linux
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full-generic
+    documentSelector:
+      path: metadata.name
+      value: cozystack.multus
+    asserts:
+      - equal:
+          path: spec.components.multus.values.stageCniPlugins
+          value: true
+
+  # Talos is the default variant, and it bundles only bridge, firewall, flannel,
+  # host-local, loopback and portmap. The other ten are absent there too, so
+  # staging is on. The four that overlap are rewritten with the same upstream
+  # version rather than an older one, which is what makes this safe.
+  - it: stages the reference CNI plugins on talos as well
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+    documentSelector:
+      path: metadata.name
+      value: cozystack.multus
+    asserts:
+      - equal:
+          path: spec.components.multus.values.stageCniPlugins
+          value: true
+
+  # Turning staging on is a behaviour change for existing generic clusters, and
+  # the way out cannot be "disable the package": that takes the
+  # NetworkAttachmentDefinition CRD and the vpc app with it.
+  - it: honours an explicit opt-out on generic Linux
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full-generic
+      networking:
+        stageCniPlugins: false
+    documentSelector:
+      path: metadata.name
+      value: cozystack.multus
+    asserts:
+      - equal:
+          path: spec.components.multus.values.stageCniPlugins
+          value: false
+
+  # The other direction of the same lever on Talos: an operator who provisions
+  # /opt/cni/bin himself declines there too.
+  - it: honours an explicit opt-out on talos
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+      networking:
+        stageCniPlugins: false
+    documentSelector:
+      path: metadata.name
+      value: cozystack.multus
+    asserts:
+      - equal:
+          path: spec.components.multus.values.stageCniPlugins
+          value: false
+
+  # Clearing an override is written in Helm by setting the key to null rather
+  # than by deleting it, and `dig` returns its default only for an ABSENT key --
+  # a present-but-nil value comes through as nil. Both variants are asserted,
+  # because the bug would be in the resolution and not in either default.
+  - it: treats an explicit null as unset on generic Linux
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full-generic
+      networking:
+        stageCniPlugins: null
+    documentSelector:
+      path: metadata.name
+      value: cozystack.multus
+    asserts:
+      - equal:
+          path: spec.components.multus.values.stageCniPlugins
+          value: true
+
+  - it: treats an explicit null as unset on talos
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+      networking:
+        stageCniPlugins: null
+    documentSelector:
+      path: metadata.name
+      value: cozystack.multus
+    asserts:
+      - equal:
+          path: spec.components.multus.values.stageCniPlugins
+          value: true
+
+  # A values file can hand the key over as a string, so a spelling the template
+  # does not recognise must not resolve to the opposite of what was written.
+  - it: normalises a quoted spelling instead of reading it as off
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+      networking:
+        stageCniPlugins: "True"
+    documentSelector:
+      path: metadata.name
+      value: cozystack.multus
+    asserts:
+      - equal:
+          path: spec.components.multus.values.stageCniPlugins
+          value: true
+
+  # The helper holds the accepted spellings as two independent branches and
+  # nothing else makes them agree; a spelling moved across stays accepted while
+  # resolving to the opposite, since only an UNrecognised value calls fail().
+  # The chart's own two lists are a different pair, covered separately.
+  - it: resolves a non-canonical ON spelling as on, not as off
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+      networking:
+        stageCniPlugins: "yes"
+    documentSelector:
+      path: metadata.name
+      value: cozystack.multus
+    asserts:
+      - equal:
+          path: spec.components.multus.values.stageCniPlugins
+          value: true
+
+  - it: resolves a non-canonical OFF spelling as off, not as on
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full-generic
+      networking:
+        stageCniPlugins: "off"
+    documentSelector:
+      path: metadata.name
+      value: cozystack.multus
+    asserts:
+      - equal:
+          path: spec.components.multus.values.stageCniPlugins
+          value: false
+
+  - it: resolves the ON spelling 'on' the way it is documented
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+      networking:
+        stageCniPlugins: "on"
+    documentSelector:
+      path: metadata.name
+      value: cozystack.multus
+    asserts:
+      - equal:
+          path: spec.components.multus.values.stageCniPlugins
+          value: true
+
+  - it: resolves the ON spelling '1' the way it is documented
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+      networking:
+        stageCniPlugins: "1"
+    documentSelector:
+      path: metadata.name
+      value: cozystack.multus
+    asserts:
+      - equal:
+          path: spec.components.multus.values.stageCniPlugins
+          value: true
+
+  - it: resolves the OFF spelling 'no' the way it is documented
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full-generic
+      networking:
+        stageCniPlugins: "no"
+    documentSelector:
+      path: metadata.name
+      value: cozystack.multus
+    asserts:
+      - equal:
+          path: spec.components.multus.values.stageCniPlugins
+          value: false
+
+  - it: resolves the OFF spelling '0' the way it is documented
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full-generic
+      networking:
+        stageCniPlugins: "0"
+    documentSelector:
+      path: metadata.name
+      value: cozystack.multus
+    asserts:
+      - equal:
+          path: spec.components.multus.values.stageCniPlugins
+          value: false
+
+  - it: refuses a value that is neither true nor false
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full-generic
+      networking:
+        stageCniPlugins: maybe
+    asserts:
+      - failedTemplate:
+          errorMessage: 'networking.stageCniPlugins: expected a boolean, got "maybe" -- leaving it unset follows the bundle variant'
+
+  # multus is included by hand in both variant branches rather than through
+  # cozystack.platform.system.common-packages. The two branches currently pass
+  # the same value, and that is not an oversight: the value is variant-scoped by
+  # construction, not because it happens to differ. It differed when Talos was
+  # thought to carry the whole reference set; it stopped differing when that
+  # turned out to be five plugins out of fourteen. Folding multus back into the
+  # shared helper would edit a template every package renders through, and is
+  # worth doing only if variant scoping is decided to be wrong in principle --
+  # not because two lines read alike today.
+  #
+  # What the two cases below hold is that multus is shipped at all in each
+  # variant: dropping it takes the NetworkAttachmentDefinition CRD with it, and
+  # the vpc app dependsOn cozystack.multus -- that edge is asserted in
+  # tests/vpc_multus_dependency_test.yaml, which renders a different template and
+  # so cannot share this suite.
+  - it: ships multus in the talos bundle
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+    documentSelector:
+      path: metadata.name
+      value: cozystack.multus
+    asserts:
+      - equal:
+          path: spec.variant
+          value: default
+
+  - it: ships multus in the generic bundle
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full-generic
+    documentSelector:
+      path: metadata.name
+      value: cozystack.multus
+    asserts:
+      - equal:
+          path: spec.variant
+          value: default

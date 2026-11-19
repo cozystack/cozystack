@@ -1,0 +1,250 @@
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: manager-role
+rules:
+  - apiGroups:
+      - ""
+    resources:
+      - configmaps
+      - persistentvolumeclaims
+      - secrets
+      - serviceaccounts
+      - services
+    verbs:
+      - create
+      - delete
+      - get
+      - list
+      - patch
+      - update
+      - watch
+  - apiGroups:
+      - ""
+    resources:
+      - events
+    verbs:
+      - create
+      - get
+      - list
+      - patch
+      - watch
+  - apiGroups:
+      - apps
+    resources:
+      - deployments
+    verbs:
+      - create
+      - delete
+      - get
+      - list
+      - patch
+      - update
+      - watch
+  - apiGroups:
+      - coordination.k8s.io
+    resources:
+      - leases
+    verbs:
+      - create
+      - delete
+      - get
+      - list
+      - patch
+      - update
+      - watch
+  - apiGroups:
+      - grafana.integreatly.org
+    resources:
+      - grafanaalertrulegroups
+    verbs:
+      - create
+      - delete
+      - get
+      - list
+      - patch
+      - update
+      - watch
+  - apiGroups:
+      - grafana.integreatly.org
+    resources:
+      - grafanaalertrulegroups/finalizers
+    verbs:
+      - update
+  - apiGroups:
+      - grafana.integreatly.org
+    resources:
+      - grafanaalertrulegroups/status
+    verbs:
+      - get
+      - patch
+      - update
+  - apiGroups:
+      - grafana.integreatly.org
+    resources:
+      - grafanacontactpoints
+    verbs:
+      - create
+      - delete
+      - get
+      - list
+      - patch
+      - update
+      - watch
+  - apiGroups:
+      - grafana.integreatly.org
+    resources:
+      - grafanacontactpoints/finalizers
+    verbs:
+      - update
+  - apiGroups:
+      - grafana.integreatly.org
+    resources:
+      - grafanacontactpoints/status
+    verbs:
+      - get
+      - patch
+      - update
+  - apiGroups:
+      - grafana.integreatly.org
+    resources:
+      - grafanadashboards
+    verbs:
+      - create
+      - delete
+      - get
+      - list
+      - patch
+      - update
+      - watch
+  - apiGroups:
+      - grafana.integreatly.org
+    resources:
+      - grafanadashboards/finalizers
+    verbs:
+      - update
+  - apiGroups:
+      - grafana.integreatly.org
+    resources:
+      - grafanadashboards/status
+    verbs:
+      - get
+      - patch
+      - update
+  - apiGroups:
+      - grafana.integreatly.org
+    resources:
+      - grafanadatasources
+    verbs:
+      - create
+      - delete
+      - get
+      - list
+      - patch
+      - update
+      - watch
+  - apiGroups:
+      - grafana.integreatly.org
+    resources:
+      - grafanadatasources/finalizers
+    verbs:
+      - update
+  - apiGroups:
+      - grafana.integreatly.org
+    resources:
+      - grafanadatasources/status
+    verbs:
+      - get
+      - patch
+      - update
+  - apiGroups:
+      - grafana.integreatly.org
+    resources:
+      - grafanafolders
+    verbs:
+      - create
+      - delete
+      - get
+      - list
+      - patch
+      - update
+      - watch
+  - apiGroups:
+      - grafana.integreatly.org
+    resources:
+      - grafanafolders/finalizers
+    verbs:
+      - update
+  - apiGroups:
+      - grafana.integreatly.org
+    resources:
+      - grafanafolders/status
+    verbs:
+      - get
+      - patch
+      - update
+  - apiGroups:
+      - grafana.integreatly.org
+    resources:
+      - grafananotificationpolicies
+    verbs:
+      - create
+      - delete
+      - get
+      - list
+      - patch
+      - update
+      - watch
+  - apiGroups:
+      - grafana.integreatly.org
+    resources:
+      - grafananotificationpolicies/finalizers
+    verbs:
+      - update
+  - apiGroups:
+      - grafana.integreatly.org
+    resources:
+      - grafananotificationpolicies/status
+    verbs:
+      - get
+      - patch
+      - update
+  - apiGroups:
+      - grafana.integreatly.org
+    resources:
+      - grafanas
+    verbs:
+      - create
+      - delete
+      - get
+      - list
+      - patch
+      - update
+      - watch
+  - apiGroups:
+      - grafana.integreatly.org
+    resources:
+      - grafanas/finalizers
+    verbs:
+      - update
+  - apiGroups:
+      - grafana.integreatly.org
+    resources:
+      - grafanas/status
+    verbs:
+      - get
+      - patch
+      - update
+  - apiGroups:
+      - networking.k8s.io
+    resources:
+      - ingresses
+    verbs:
+      - create
+      - delete
+      - get
+      - list
+      - patch
+      - update
+      - watch

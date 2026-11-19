@@ -1,0 +1,13 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: cozystack-api
+  namespace: cozy-system
+spec:
+  trafficDistribution: PreferClose
+  ports:
+  - port: 443
+    protocol: TCP
+    targetPort: https
+  selector:
+    app: cozystack-api

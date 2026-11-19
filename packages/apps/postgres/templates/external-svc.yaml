@@ -1,0 +1,20 @@
+{{- if .Values.external }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Release.Name }}-external-write
+spec:
+  type: {{ ternary "LoadBalancer" "ClusterIP" .Values.external }}
+  {{- if .Values.external }}
+  externalTrafficPolicy: Local
+    {{- if (include "cozy-lib.network.disableLoadBalancerNodePorts" $ | fromYaml) }}
+  allocateLoadBalancerNodePorts: false
+    {{- end }}
+  {{- end }}
+  ports:
+  - name: postgres
+    port: 5432
+  selector:
+    cnpg.io/cluster: {{ .Release.Name }}
+    role: primary
+{{- end }}

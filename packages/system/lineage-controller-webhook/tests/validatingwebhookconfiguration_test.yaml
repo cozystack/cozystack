@@ -1,0 +1,31 @@
+suite: lineage-controller-webhook ApplicationDefinition kind check
+templates:
+  - templates/validatingwebhookconfiguration.yaml
+
+release:
+  name: lineage-controller-webhook
+  namespace: cozy-system
+
+tests:
+  - it: routes ApplicationDefinition create and update to the kind check without blocking on an outage
+    asserts:
+      - isKind:
+          of: ValidatingWebhookConfiguration
+      - equal:
+          path: webhooks[0].clientConfig.service.path
+          value: /validate-applicationdefinition
+      - equal:
+          path: webhooks[0].clientConfig.service.namespace
+          value: cozy-system
+      - equal:
+          path: webhooks[0].failurePolicy
+          value: Ignore
+      - equal:
+          path: webhooks[0].rules[0].resources
+          value: ["applicationdefinitions"]
+      - equal:
+          path: webhooks[0].rules[0].operations
+          value: ["CREATE", "UPDATE"]
+      - equal:
+          path: metadata.annotations["cert-manager.io/inject-ca-from"]
+          value: cozy-system/lineage-controller-webhook

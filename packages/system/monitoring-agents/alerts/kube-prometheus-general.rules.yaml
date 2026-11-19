@@ -1,0 +1,17 @@
+apiVersion: operator.victoriametrics.com/v1beta1
+kind: VMRule
+metadata:
+  name: alerts-kube-prometheus-general.rules
+spec:
+  groups:
+  - name: kube-prometheus-general.rules
+    params: {}
+    rules:
+    - annotations: {}
+      expr: count without(instance, pod, node) (up == 1)
+      labels: {}
+      record: count:up1
+    - annotations: {}
+      expr: count without(instance, pod, node) (up == 0)
+      labels: {}
+      record: count:up0

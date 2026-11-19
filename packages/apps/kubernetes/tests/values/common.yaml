@@ -1,0 +1,23 @@
+_cluster: {}
+_namespace:
+  etcd: cozy-etcd
+  ingress: nginx
+  host: example.com
+version: "v1.32"
+controlPlane:
+  replicas: 2
+  apiServer:
+    resources: {}
+    resourcesPreset: "large"
+  controllerManager:
+    resources: {}
+    resourcesPreset: "micro"
+  scheduler:
+    resources: {}
+    resourcesPreset: "micro"
+  konnectivity:
+    server:
+      resources: {}
+      resourcesPreset: "micro"
+# Worker pools are KubernetesNodes resources; the kubernetes chart renders the
+# control plane only.

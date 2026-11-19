@@ -1,0 +1,48 @@
+{{- if .Values.master.enabled }}
+{{- if .Values.master.ingress.enabled }}
+{{- if semverCompare ">=1.19-0" .Capabilities.KubeVersion.GitVersion }}
+apiVersion: networking.k8s.io/v1
+{{- else if semverCompare ">=1.14-0" .Capabilities.KubeVersion.GitVersion }}
+apiVersion: networking.k8s.io/v1beta1
+{{- else }}
+apiVersion: extensions/v1beta1
+{{- end }}
+kind: Ingress
+metadata:
+  name: ingress-{{ include "seaweedfs.fullname" . }}-master
+  namespace: {{ .Release.Namespace }}
+  {{- with .Values.master.ingress.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  labels:
+    app.kubernetes.io/name: {{ template "seaweedfs.name" . }}
+    helm.sh/chart: {{ .Chart.Name }}-{{ .Chart.Version | replace "+" "_" }}
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: master
+spec:
+  ingressClassName: {{ .Values.master.ingress.className | quote }}
+  tls:
+    {{ .Values.master.ingress.tls | default list | toYaml | nindent 6 }}
+  rules:
+    - http:
+        paths:
+          - path: {{ .Values.master.ingress.path | quote }}
+            pathType: {{ .Values.master.ingress.pathType | quote }}
+            backend:
+{{- if semverCompare ">=1.19-0" .Capabilities.KubeVersion.GitVersion }}
+              service:
+                name: {{ include "seaweedfs.componentName" (list . "master") }}
+                port:
+                  number: {{ .Values.master.port }}
+                  #name:
+{{- else }}
+              serviceName: {{ include "seaweedfs.componentName" (list . "master") }}
+              servicePort: {{ .Values.master.port }}
+{{- end }}
+{{- if .Values.master.ingress.host }}
+      host: {{ .Values.master.ingress.host }}
+{{- end }}
+{{- end }}
+{{- end }}

@@ -1,0 +1,36 @@
+{{- $controllerReplicas := include "kafka.controllerReplicas" . }}
+{{- $brokerPool := include "kafka.brokerPoolName" . }}
+---
+apiVersion: cozystack.io/v1alpha1
+kind: WorkloadMonitor
+metadata:
+  name: {{ $.Release.Name }}
+  labels:
+    workloads.cozystack.io/resource-preset: {{ .Values.kafka.resourcesPreset | quote }}
+spec:
+  replicas: {{ .Values.kafka.replicas }}
+  minReplicas: 1
+  kind: kafka
+  type: kafka-broker
+  selector:
+    app.kubernetes.io/instance: {{ $.Release.Name }}
+    app.kubernetes.io/name: kafka
+    strimzi.io/pool-name: {{ $brokerPool }}
+  version: {{ $.Chart.Version }}
+---
+apiVersion: cozystack.io/v1alpha1
+kind: WorkloadMonitor
+metadata:
+  name: {{ $.Release.Name }}-controller
+  labels:
+    workloads.cozystack.io/resource-preset: {{ .Values.kafka.resourcesPreset | quote }}
+spec:
+  replicas: {{ $controllerReplicas }}
+  minReplicas: 1
+  kind: kafka
+  type: kafka-controller
+  selector:
+    app.kubernetes.io/instance: {{ $.Release.Name }}
+    app.kubernetes.io/name: kafka
+    strimzi.io/pool-name: {{ include "kafka.controllerPoolName" . }}
+  version: {{ $.Chart.Version }}

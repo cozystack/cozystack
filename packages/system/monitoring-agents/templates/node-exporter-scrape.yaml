@@ -1,0 +1,24 @@
+---
+apiVersion: operator.victoriametrics.com/v1beta1
+kind: VMServiceScrape
+metadata:
+  name: node-exporter
+  namespace: cozy-monitoring
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: prometheus-node-exporter
+  endpoints:
+  - metricRelabelConfigs:
+    - action: drop
+      regex: /var/lib/kubelet/pods.+
+      source_labels: [mountpoint]
+    relabelConfigs:
+    - regex: endpoint|namespace|pod|service
+      action: labeldrop
+    - sourceLabels: [__meta_kubernetes_pod_node_name]
+      targetLabel: node
+    - replacement: node-exporter
+      targetLabel: job
+    port: metrics
+  jobLabel: jobLabel

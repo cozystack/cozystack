@@ -1,0 +1,207 @@
+# Injected by the platform from the cozystack-values Secret. The empty
+# defaults keep the chart renderable on its own, outside a cluster.
+_cluster: {}
+_namespace: {}
+
+host: ""
+
+metricsStorages:
+## Example:
+## metricsStorages:
+## - name: shortterm
+##   retentionPeriod: "3d"
+##   deduplicationInterval: "15s"
+##   storage: 10Gi
+##   storageClassName: ""
+##   vminsert:
+##     minAllowed:
+##       cpu: 200m
+##       memory: 512Mi
+##     maxAllowed:
+##       cpu: 1500m
+##       memory: 3Gi
+##   vmselect:
+##     minAllowed:
+##       cpu: 300m
+##       memory: 1Gi
+##     maxAllowed:
+##       cpu: 3500m
+##       memory: 6Gi
+##   vmstorage:
+##     minAllowed:
+##       cpu: 500m
+##       memory: 2Gi
+##     maxAllowed:
+##       cpu: 4000m
+##       memory: 8Gi
+- name: shortterm
+  retentionPeriod: "3d"
+  deduplicationInterval: "15s"
+  storage: 10Gi
+  storageClassName: ""
+- name: longterm
+  retentionPeriod: "14d"
+  deduplicationInterval: "5m"
+  storage: 10Gi
+  storageClassName: ""
+
+logsStorages:
+- name: generic
+  retentionPeriod: "1"
+  storage: 10Gi
+  storageClassName: ""
+
+tracingStorages: []
+tracingCentralHost: false
+
+tracingCollector:
+  enabled: true
+  replicas: 1
+  samplingPercentage: 10
+  image: docker.io/otel/opentelemetry-collector-contrib:0.136.0@sha256:45392d534c1edcc809c2d112394029246bc679d2ae5ea7081414a1fc74f2c621
+  redactAttributes: []
+  resources:
+    limits:
+      cpu: "1"
+      memory: 1Gi
+    requests:
+      cpu: 100m
+      memory: 256Mi
+alerta:
+  # Alerta respun on a patched base (images/alerta); `make image` replaces this
+  # upstream default with the cozystack build.
+  image: docker.io/alerta/alerta-web:9.1.0@sha256:693845fb8a95a483c8c9d560786f661f5b6198e5ea0baa6ddf368a7e53c94f39
+  storage: 10Gi
+  storageClassName: ""
+  resources:
+    limits:
+      cpu: "1"
+      memory: 1Gi
+    requests:
+      cpu: 100m
+      memory: 256Mi
+  alerts:
+    telegram:
+      token: ""
+      chatID: ""
+      disabledSeverity: []
+    slack:
+      url: ""
+      disabledSeverity: []
+      dashboardUrl: ""
+      summaryFmt: ""
+    email:
+      to: ""
+      from: ""
+      smarthost: ""
+      authUsername: ""
+      repeatInterval: ""
+      alertnames: []
+      severities: []
+      template: ""
+grafana:
+  # Upstream Grafana image, pinned by digest and routed through
+  # cozy-lib.image (so mirrored-registry installs work). Plugins (VictoriaLogs
+  # datasource + panels) are installed at startup via GF_INSTALL_PLUGINS from
+  # the in-cluster grafana-dashboards server, so no custom rebuilt Grafana
+  # image is published anymore.
+  image: docker.io/grafana/grafana:11.6.15@sha256:f739273dfed04760428fcfbfccd1752b3b7fc87ef0a3d5637e2e87cce151e1a2
+  db:
+    size: 10Gi
+  resources:
+    limits:
+      cpu: "1"
+      memory: 1Gi
+    requests:
+      cpu: 100m
+      memory: 256Mi
+vmagent:
+  externalLabels:
+    cluster: cozystack
+    environment: ""
+  remoteWrite:
+    urls:
+      - http://vminsert-shortterm:8480/insert/0/prometheus
+      - http://vminsert-longterm:8480/insert/0/prometheus
+  ## inlineScrapeConfig: |
+  ##   - job_name: "custom"
+  ##     static_configs:
+  ##       - targets: ["my-service:9090"]
+
+## OIDC authentication for the Grafana instance.
+##
+## Identity mode picks the auth source for `[auth.generic_oauth]`:
+##   None         no OIDC; login form + admin_user/admin_password Secret
+##                stay the only auth path (default).
+##   System       trust the platform Keycloak realm (`cozy` by default) via a
+##                per-instance confidential client and audience binding.
+##                Requires the platform-level authentication.oidc.enabled
+##                flag; the chart hard-fails the render otherwise.
+##   CustomConfig trust a tenant-supplied issuer directly (BYO IdP).
+##                Exactly one of `customConfig.config` (inline) or
+##                `customConfig.secretRef.name` (existing Secret) must be
+##                set — the chart fails the render otherwise. `cozy` is
+##                not in the path in this mode.
+##
+## Authorization is app-side: `users` is reconciled into Grafana org
+## membership/roles by a chart-owned post-install/post-upgrade Job.
+## Users not listed here get nothing when they log in — no default org
+## role from group mapping.
+##
+## The admin_user / admin_password Secret stays a documented break-glass
+## path regardless of mode.
+oidc:
+  mode: "None"
+  ## CustomConfig payload — consumed only when `mode: CustomConfig`.
+  ## Exactly one of `config` or `secretRef.name` MUST be set.
+  customConfig:
+    ## Inline map of grafana.ini `[auth.generic_oauth]` keys. Any key
+    ## accepted by Grafana's generic_oauth provider is valid; typical
+    ## keys are `enabled: "true"`, `client_id`, `client_secret`,
+    ## `auth_url`, `token_url`, `api_url`, `scopes`. Grafana defaults
+    ## `enabled: false`, so an inline map without an explicit
+    ## `enabled: "true"` is inert — remember to set it.
+    ##
+    ## The chart merges TWO chart-forced settings on top of this map so
+    ## the users-Job contract holds:
+    ##   * `skip_org_role_sync: "true"` (login never overwrites the
+    ##     Job's org-role assignments);
+    ##   * `oauth_allow_insecure_email_lookup: "true"` (OIDC identity
+    ##     binds to the pre-provisioned local account by email).
+    ## These two keys cannot be overridden — set them explicitly here
+    ## and the chart still wins. `role_attribute_path` would be dead
+    ## config; the Job manages roles.
+    ##
+    ## Mutually exclusive with `customConfig.secretRef.name`.
+    config: {}
+    ## Reference to an operator-managed Secret carrying a ready-made
+    ## `[auth.generic_oauth]` ini fragment in the `auth.ini` key. The
+    ## chart mounts it and Grafana loads it via
+    ## `GF_PATHS_CUSTOM_INI`. Mutually exclusive with
+    ## `customConfig.config`.
+    ##
+    ## IMPORTANT — users-map is NOT supported in this branch: the
+    ## chart cannot inject `skip_org_role_sync=true` /
+    ## `oauth_allow_insecure_email_lookup=true` into a Secret-mounted
+    ## ini fragment, so the users-Job's role assignments would be
+    ## silently overwritten on the next login. Either use
+    ## `customConfig.config` (inline) and let the chart merge the two
+    ## settings, or leave `spec.oidc.users` empty and manage
+    ## authorization inside the mounted ini fragment yourself. The
+    ## chart hard-fails render when both `secretRef.name` and non-empty
+    ## `users` are set.
+    secretRef:
+      name: ""
+  ## Users granted access to this Grafana instance's org. Each entry
+  ## produces one pre-provisioned Grafana account (matched to the OIDC
+  ## login by `email`) and one org membership + role in the release's
+  ## `Main Org.`. Empty by default — no OIDC user gets any role until
+  ## an operator lists them here.
+  ##
+  ## Example:
+  ##   users:
+  ##     - email: alice@example.com
+  ##       role: Admin
+  ##     - email: bob@example.com
+  ##       role: Viewer
+  users: []

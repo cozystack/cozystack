@@ -1,0 +1,164 @@
+import { describe, it, expect, vi, beforeAll } from "vitest"
+import { screen, waitFor } from "@testing-library/react"
+import { useLocation } from "react-router"
+import {
+  K8sClient,
+  type K8sList,
+  type APIGroupList,
+} from "@cozystack/k8s-client"
+import App from "./App.tsx"
+import { renderWithK8sProvider } from "./test-utils/render.tsx"
+
+// Echoes the router location so a redirect can be asserted by URL.
+function LocationProbe() {
+  const { pathname } = useLocation()
+  return <div data-testid="location">{pathname}</div>
+}
+
+function makeClient(tenants: unknown[] = []): K8sClient {
+  const client = new K8sClient()
+  vi.spyOn(client, "list").mockImplementation(async (_g, _v, plural) => {
+    return {
+      apiVersion: "v1",
+      kind: `${plural}List`,
+      metadata: {},
+      items: plural === "tenantnamespaces" ? tenants : [],
+    } as K8sList<unknown>
+  })
+  vi.spyOn(client, "getApiGroups").mockResolvedValue({
+    kind: "APIGroupList",
+    apiVersion: "v1",
+    groups: [],
+  } as APIGroupList)
+  vi.spyOn(client, "create").mockResolvedValue({
+    apiVersion: "authorization.k8s.io/v1",
+    kind: "SelfSubjectAccessReview",
+    metadata: { name: "" },
+    spec: {},
+    status: { allowed: false },
+  } as unknown)
+  return client
+}
+
+// TenantProvider reads window.localStorage on mount; provide a minimal
+// in-memory shim for the test environment when one is not present.
+beforeAll(() => {
+  if (typeof globalThis.localStorage?.getItem !== "function") {
+    const store = new Map<string, string>()
+    vi.stubGlobal("localStorage", {
+      getItem: (k: string) => store.get(k) ?? null,
+      setItem: (k: string, v: string) => void store.set(k, v),
+      removeItem: (k: string) => void store.delete(k),
+      clear: () => store.clear(),
+    })
+  }
+})
+
+describe("default landing", () => {
+  it("opens the Console when no path is given", async () => {
+    const client = makeClient()
+    renderWithK8sProvider(<App />, { client, initialRoute: "/" })
+
+    // ConsoleOverview's no-tenant state: reached only under /console, and it
+    // needs no cluster data, so it is a stable marker for "we landed here".
+    expect(
+      await screen.findByText(/Select a tenant to view its deployed applications/i),
+    ).toBeTruthy()
+    // The catalog must not be what greets the user. Matching on the heading
+    // rather than the text keeps the Marketplace *tab* from satisfying this.
+    expect(screen.queryByRole("heading", { name: "Marketplace", level: 1 })).toBeNull()
+  })
+
+  it("still serves the Marketplace when it is asked for directly", async () => {
+    const client = makeClient()
+    renderWithK8sProvider(<App />, { client, initialRoute: "/marketplace" })
+
+    expect(
+      await screen.findByRole("heading", { name: "Marketplace", level: 1 }),
+    ).toBeTruthy()
+  })
+
+  it("sends the old Marketplace Repositories URL to the Admin portal", async () => {
+    // Without the redirect the :appName catch-all would render an order page
+    // for an application called "taps".
+    const client = makeClient()
+    renderWithK8sProvider(
+      <>
+        <App />
+        <LocationProbe />
+      </>,
+      { client, initialRoute: "/marketplace/taps" },
+    )
+
+    expect(
+      await screen.findByRole("heading", { name: "Repositories", level: 1 }),
+    ).toBeTruthy()
+    expect(screen.getByTestId("location").textContent).toBe("/admin/taps")
+  })
+})
+
+describe("runtime config", () => {
+  it("reaches the tree through AppConfigContext", async () => {
+    const client = makeClient()
+    renderWithK8sProvider(<App config={{ version: "v0.0.0-test" }} />, {
+      client,
+      initialRoute: "/",
+    })
+
+    // The header prints config.version verbatim, so it is the cheapest proof
+    // that the loaded config is published to the whole tree (routes read the
+    // same context for serviceDomain).
+    expect(await screen.findByText("v0.0.0-test")).toBeTruthy()
+  })
+})
+
+describe("shell subtitle", () => {
+  // The picker only renders its "Tenant /" label once a tenant list has
+  // arrived; asserting against an empty list passes whether or not the picker
+  // is there, because its empty and loading branches say something else.
+  // The picker labels itself "Tenant"; the admin route is Modules rather than
+  // the tenant list, whose own "Tenant" create button would match too.
+  const TENANTS = ["tenant-acme", "tenant-globex"].map((name) => ({
+    apiVersion: "core.cozystack.io/v1alpha1",
+    kind: "TenantNamespace",
+    metadata: { name, labels: {} },
+  }))
+
+  // Every cluster-scoped prefix, and a deeper path under each, so dropping one
+  // from the list fails here instead of passing quietly.
+  const CLUSTER_SCOPED = [
+    "/admin/capacity/cluster",
+    "/admin/backups/backupclasses",
+    "/admin/external-ips",
+    "/admin/modules",
+  ]
+
+  it.each(CLUSTER_SCOPED)("hides the tenant picker on %s", async (route) => {
+    const client = makeClient(TENANTS)
+    renderWithK8sProvider(<App />, { client, initialRoute: route })
+
+    // The marker is on every Breadcrumb branch, so absence means the subtitle
+    // was not rendered at all rather than that the list had not arrived.
+    await waitFor(() => expect(screen.queryByText("Loading tenants…")).toBeNull())
+    expect(screen.queryByTestId("tenant-picker")).toBeNull()
+  })
+
+  // The tenant list is scoped by the picker's own selection, so it needs the
+  // picker even though it lives under /admin.
+  it.each(["/admin/tenants", "/admin/vminstances", "/admin/vminstances/db1"])(
+    "keeps the tenant picker on %s",
+    async (route) => {
+      const client = makeClient(TENANTS)
+      renderWithK8sProvider(<App />, { client, initialRoute: route })
+
+      expect(await screen.findByTestId("tenant-picker")).toBeTruthy()
+    },
+  )
+
+  it("still shows the tenant picker outside the admin portal", async () => {
+    const client = makeClient(TENANTS)
+    renderWithK8sProvider(<App />, { client, initialRoute: "/console" })
+
+    expect(await screen.findByTestId("tenant-picker")).toBeTruthy()
+  })
+})

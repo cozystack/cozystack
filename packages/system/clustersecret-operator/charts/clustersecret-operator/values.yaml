@@ -1,0 +1,138 @@
+# -- Override full name
+fullnameOverride: ""
+# -- Override name
+nameOverride: ""
+
+global:
+  image:
+    # -- Image tag (defauls to .Chart.AppVersion)
+    tag: ""
+    # -- Image pull policy
+    pullPolicy: IfNotPresent
+  # -- Image pull secrets
+  imagePullSecrets: []
+  # -- Affinity settings
+  affinity: {}
+  # -- Node selector
+  nodeSelector: {}
+  # -- Topology spread constraints (if unspecified, default constraints for hostname and zone will be generated)
+  topologySpreadConstraints: []
+  # -- Default topology spread policy for hostname
+  defaultHostNameSpreadPolicy: ScheduleAnyway
+  # -- Default topology spread policy for zone
+  defaultZoneSpreadPolicy: ScheduleAnyway
+  # -- Tolerations
+  tolerations: []
+  # -- Priority class
+  priorityClassName: ""
+  # -- Pod security context
+  podSecurityContext: {}
+  # -- Additional pod annotations
+  podAnnotations: {}
+  # -- Additional pod labels
+  podLabels: {}
+  # -- Container security context
+  securityContext: {}
+  # -- Log level
+  logLevel: 0
+
+controller:
+  # -- Replica count
+  replicaCount: 1
+  image:
+    # -- Image repository
+    repository: ghcr.io/sap/clustersecret-operator/controller
+    # -- Image tag (defauls to .Chart.AppVersion)
+    tag: ""
+    # -- Image pull policy
+    pullPolicy: ""
+  # -- Image pull secrets
+  imagePullSecrets: []
+  # -- Affinity settings
+  affinity: {}
+  # -- Node selector
+  nodeSelector: {}
+  # -- Topology spread constraints (if unspecified, default constraints for hostname and zone will be generated)
+  topologySpreadConstraints: []
+  # -- Default topology spread policy for hostname
+  defaultHostNameSpreadPolicy: ""
+  # -- Default topology spread policy for zone
+  defaultZoneSpreadPolicy: ""
+  # -- Tolerations
+  tolerations: []
+  # -- Priority class
+  priorityClassName: ""
+  # -- Pod security context
+  podSecurityContext: {}
+  # -- Additional pod annotations
+  podAnnotations: {}
+  # -- Additional pod labels
+  podLabels: {}
+  # -- Container security context
+  securityContext: {}
+  resources:
+    limits:
+      # -- Memory limit
+      memory: 200Mi
+      # -- CPU limit
+      cpu: 0.1
+    requests:
+      # -- Memory request
+      memory: 20Mi
+      # -- CPU request
+      cpu: 0.01
+  # -- Log level
+  logLevel: 0
+
+webhook:
+  # -- Replica count
+  replicaCount: 1
+  image:
+    # -- Image repository
+    repository: ghcr.io/sap/clustersecret-operator/webhook
+    # -- Image tag (defauls to .Chart.AppVersion)
+    tag: ""
+    # -- Image pull policy
+    pullPolicy: ""
+  # -- Image pull secrets
+  imagePullSecrets: []
+  # -- Affinity settings
+  affinity: {}
+  # -- Node selector
+  nodeSelector: {}
+  # -- Topology spread constraints (if unspecified, default constraints for hostname and zone will be generated)
+  topologySpreadConstraints: []
+  # -- Default topology spread policy for hostname
+  defaultHostNameSpreadPolicy: ""
+  # -- Default topology spread policy for zone
+  defaultZoneSpreadPolicy: ""
+  # -- Tolerations
+  tolerations: []
+  # -- Priority class
+  priorityClassName: ""
+  # -- Pod security context
+  podSecurityContext: {}
+  # -- Additional pod annotations
+  podAnnotations: {}
+  # -- Additional pod labels
+  podLabels: {}
+  # -- Container security context
+  securityContext: {}
+  resources:
+    limits:
+      # -- Memory limit
+      memory: 100Mi
+      # -- CPU limit
+      cpu: 0.1
+    requests:
+      # -- Memory request
+      memory: 20Mi
+      # -- CPU request
+      cpu: 0.01
+  service:
+    # -- Service type
+    type: ClusterIP
+    # -- Service port
+    port: 443
+  # -- Log level
+  logLevel: 0

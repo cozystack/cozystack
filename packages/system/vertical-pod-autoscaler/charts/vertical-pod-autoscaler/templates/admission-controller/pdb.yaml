@@ -1,0 +1,27 @@
+{{- if .Values.admissionController.enabled }}
+{{- if .Values.admissionController.pdb.create }}
+apiVersion: {{ include "common.capabilities.policy.apiVersion" . }}
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "vertical-pod-autoscaler.admissionController.fullname" . }}
+  namespace: {{ include "common.names.namespace" . | quote }}
+  labels:
+    {{- include "vertical-pod-autoscaler.admissionController.labels" . | nindent 4 }}
+    {{- if .Values.commonLabels }}
+    {{- include "common.tplvalues.render" ( dict "value" .Values.commonLabels "context" $ ) | nindent 4 }}
+    {{- end }}
+  {{- if .Values.commonAnnotations }}
+  annotations: {{- include "common.tplvalues.render" ( dict "value" .Values.commonAnnotations "context" $ ) | nindent 4 }}
+  {{- end }}
+spec:
+  {{- if .Values.admissionController.pdb.minAvailable }}
+  minAvailable: {{ .Values.admissionController.pdb.minAvailable }}
+  {{- end }}
+  {{- if .Values.admissionController.pdb.maxUnavailable }}
+  maxUnavailable: {{ .Values.admissionController.pdb.maxUnavailable }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "vertical-pod-autoscaler.admissionController.selectorLabels" . | nindent 6 }}
+{{- end }}
+{{- end }}

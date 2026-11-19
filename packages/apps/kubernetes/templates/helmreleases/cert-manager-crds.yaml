@@ -1,0 +1,48 @@
+{{- if and .Values.addons.certManager.enabled .Values._namespace.etcd }}
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: {{ .Release.Name }}-cert-manager-crds
+  labels:
+    cozystack.io/repository: system
+    cozystack.io/target-cluster-name: {{ .Release.Name }}
+    sharding.fluxcd.io/key: tenants
+spec:
+  releaseName: cert-manager-crds
+  chartRef:
+    kind: ExternalArtifact
+    name: cozystack-kubernetes-application-kubevirt-kubernetes-cert-manager-crds
+    namespace: cozy-system
+  kubeConfig:
+    secretRef:
+      name: {{ .Release.Name }}-admin-kubeconfig
+      key: super-admin.svc
+  targetNamespace: cozy-cert-manager-crds
+  storageNamespace: cozy-cert-manager-crds
+  interval: 5m
+  timeout: 10m
+  install:
+    createNamespace: true
+    remediation:
+      retries: -1
+  upgrade:
+    remediation:
+      retries: -1
+  {{- if .Values.addons.certManager.valuesOverride }}
+  valuesFrom:
+  - kind: Secret
+    name: {{ .Release.Name }}-cert-manager-crds-values-override
+    valuesKey: values
+  {{- end }}
+
+{{- if .Values.addons.certManager.valuesOverride }}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ .Release.Name }}-cert-manager-crds-values-override
+stringData:
+  values: |
+    {{- toYaml .Values.addons.certManager.valuesOverride | nindent 4 }}
+{{- end }}
+{{- end }}

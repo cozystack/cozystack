@@ -1,0 +1,29 @@
+# OpenTelemetry Collector Builder manifest for the tenant traces collector.
+# Every component the chart's collector config uses must be listed here, at the
+# collector version in the Containerfile. The rate limiter is the one component
+# outside the upstream distributions: no OpenTelemetry processor limits
+# throughput, and a shared-central store needs each tenant held to a rate.
+# Its v0.8.2 is the release built against collector v0.135.0, the last one
+# before v0.137.0; it builds against v0.136.0 unchanged.
+dist:
+  name: otelcol-tracing
+  description: OpenTelemetry Collector for cozystack tenant traces
+  version: 0.136.0
+  output_path: /build/dist
+receivers:
+  - gomod: go.opentelemetry.io/collector/receiver/otlpreceiver v0.136.0
+processors:
+  - gomod: go.opentelemetry.io/collector/processor/memorylimiterprocessor v0.136.0
+  - gomod: go.opentelemetry.io/collector/processor/batchprocessor v0.136.0
+  - gomod: github.com/open-telemetry/opentelemetry-collector-contrib/processor/probabilisticsamplerprocessor v0.136.0
+  - gomod: github.com/open-telemetry/opentelemetry-collector-contrib/processor/resourceprocessor v0.136.0
+  - gomod: github.com/open-telemetry/opentelemetry-collector-contrib/processor/attributesprocessor v0.136.0
+  - gomod: github.com/elastic/opentelemetry-collector-components/processor/ratelimitprocessor v0.8.2
+exporters:
+  - gomod: go.opentelemetry.io/collector/exporter/otlphttpexporter v0.136.0
+extensions:
+  - gomod: github.com/open-telemetry/opentelemetry-collector-contrib/extension/healthcheckextension v0.136.0
+  - gomod: github.com/open-telemetry/opentelemetry-collector-contrib/extension/basicauthextension v0.136.0
+providers:
+  - gomod: go.opentelemetry.io/collector/confmap/provider/envprovider v1.42.0
+  - gomod: go.opentelemetry.io/collector/confmap/provider/fileprovider v1.42.0

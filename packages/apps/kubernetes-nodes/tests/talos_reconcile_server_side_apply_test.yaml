@@ -1,0 +1,47 @@
+suite: worker TalosConfigTemplate is applied server-side
+
+# The reconcile Job runs under a 256Mi limit. A client-side apply builds its merge
+# patch from the cluster's full OpenAPI schema, which costs ~290Mi RSS against a
+# management cluster carrying a few hundred CRDs, so the Job is OOMKilled on every
+# reconcile that updates an existing TalosConfigTemplate -- that is, on every chart
+# upgrade, while the create on first install stays cheap and hides the fault.
+
+templates:
+  - templates/talos-reconcile-job.yaml
+release:
+  name: kubernetes-nodes-myk8s-md0
+  namespace: tenant-test
+set:
+  cluster: myk8s
+  _cluster:
+    cluster-domain: cozy.local
+  version: "v1.35"
+  minReplicas: 0
+  maxReplicas: 3
+  instanceType: ""
+  diskSize: 20Gi
+  storageClass: replicated
+  roles:
+    - ingress-nginx
+  resources:
+    cpu: "2"
+    memory: 4Gi
+
+tests:
+  - it: applies the TalosConfigTemplate server-side
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'kubectl apply --server-side --force-conflicts -f -'
+        documentSelector:
+          path: kind
+          value: Job
+
+  - it: never falls back to a client-side apply
+    asserts:
+      - notMatchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'kubectl apply -f -'
+        documentSelector:
+          path: kind
+          value: Job

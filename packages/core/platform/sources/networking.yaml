@@ -1,0 +1,148 @@
+---
+apiVersion: cozystack.io/v1alpha1
+kind: PackageSource
+metadata:
+  name: cozystack.networking
+spec:
+  sourceRef:
+    kind: OCIRepository
+    name: cozystack-packages
+    namespace: cozy-system
+    path: /
+  variants:
+  - name: noop
+    components: []
+  - name: cilium
+    dependsOn:
+    - cozystack.gateway-api-crds
+    components:
+    - name: cilium
+      path: system/cilium
+      valuesFiles:
+      - values.yaml
+      - values-talos.yaml
+      install:
+        privileged: true
+        namespace: cozy-cilium
+        releaseName: cilium
+        dependsOn: []
+    - name: cilium-networkpolicy
+      path: system/cilium-networkpolicy
+      install:
+        privileged: true
+        namespace: cozy-cilium
+        releaseName: cilium-networkpolicy
+        dependsOn:
+        - cilium
+  - name: cilium-kilo
+    dependsOn:
+    - cozystack.gateway-api-crds
+    components:
+    - name: cilium
+      path: system/cilium
+      valuesFiles:
+      - values.yaml
+      - values-talos.yaml
+      - values-kilo.yaml
+      install:
+        privileged: true
+        namespace: cozy-cilium
+        releaseName: cilium
+        dependsOn: []
+    - name: kilo
+      path: system/kilo
+      valuesFiles:
+      - values.yaml
+      - values-cilium.yaml
+      install:
+        privileged: true
+        namespace: cozy-kilo
+        releaseName: kilo
+        dependsOn:
+        - cilium
+  # Generic Cilium variant for non-Talos clusters (kubeadm, k3s, RKE2, etc.)
+  - name: cilium-generic
+    dependsOn:
+    - cozystack.gateway-api-crds
+    components:
+    - name: cilium
+      path: system/cilium
+      valuesFiles:
+      - values.yaml
+      - values-apparmor.yaml
+      install:
+        privileged: true
+        namespace: cozy-cilium
+        releaseName: cilium
+        dependsOn: []
+    - name: cilium-networkpolicy
+      path: system/cilium-networkpolicy
+      install:
+        privileged: true
+        namespace: cozy-cilium
+        releaseName: cilium-networkpolicy
+        dependsOn:
+        - cilium
+  - name: kubeovn-cilium
+    dependsOn:
+    - cozystack.gateway-api-crds
+    components:
+    - name: cilium
+      path: system/cilium
+      valuesFiles:
+      - values.yaml
+      - values-talos.yaml
+      - values-kubeovn.yaml
+      install:
+        privileged: true
+        namespace: cozy-cilium
+        releaseName: cilium
+        dependsOn: []
+    - name: cilium-networkpolicy
+      path: system/cilium-networkpolicy
+      install:
+        privileged: true
+        namespace: cozy-cilium
+        releaseName: cilium-networkpolicy
+        dependsOn:
+        - cilium
+    - name: kubeovn
+      path: system/kubeovn
+      install:
+        privileged: true
+        namespace: cozy-kubeovn
+        releaseName: kubeovn
+        dependsOn:
+        - cilium
+  # Generic KubeOVN+Cilium variant for non-Talos clusters (kubeadm, k3s, RKE2, etc.)
+  - name: kubeovn-cilium-generic
+    dependsOn:
+    - cozystack.gateway-api-crds
+    components:
+    - name: cilium
+      path: system/cilium
+      valuesFiles:
+      - values.yaml
+      - values-apparmor.yaml
+      - values-kubeovn.yaml
+      install:
+        privileged: true
+        namespace: cozy-cilium
+        releaseName: cilium
+        dependsOn: []
+    - name: cilium-networkpolicy
+      path: system/cilium-networkpolicy
+      install:
+        privileged: true
+        namespace: cozy-cilium
+        releaseName: cilium-networkpolicy
+        dependsOn:
+        - cilium
+    - name: kubeovn
+      path: system/kubeovn
+      install:
+        privileged: true
+        namespace: cozy-kubeovn
+        releaseName: kubeovn
+        dependsOn:
+        - cilium

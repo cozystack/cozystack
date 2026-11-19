@@ -1,0 +1,151 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.18.0
+  name: keycloakauthflows.v1.edp.epam.com
+spec:
+  group: v1.edp.epam.com
+  names:
+    kind: KeycloakAuthFlow
+    listKind: KeycloakAuthFlowList
+    plural: keycloakauthflows
+    singular: keycloakauthflow
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - description: Reconciliation status
+      jsonPath: .status.value
+      name: Status
+      type: string
+    name: v1
+    schema:
+      openAPIV3Schema:
+        description: KeycloakAuthFlow is the Schema for the keycloak authentication
+          flow API.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: KeycloakAuthFlowSpec defines the desired state of KeycloakAuthFlow.
+            properties:
+              alias:
+                description: Alias is display name for authentication flow.
+                type: string
+              authenticationExecutions:
+                description: AuthenticationExecutions is list of authentication executions
+                  for this auth flow.
+                items:
+                  description: AuthenticationExecution defines keycloak authentication
+                    execution.
+                  properties:
+                    alias:
+                      description: Alias is display name for this execution.
+                      type: string
+                    authenticator:
+                      description: Authenticator is name of authenticator.
+                      type: string
+                    authenticatorConfig:
+                      description: AuthenticatorConfig is configuration for authenticator.
+                      nullable: true
+                      properties:
+                        alias:
+                          description: Alias is display name for authenticator config.
+                          type: string
+                        config:
+                          additionalProperties:
+                            type: string
+                          description: Config is configuration for authenticator.
+                          type: object
+                      type: object
+                    authenticatorFlow:
+                      description: AuthenticatorFlow is true if this is auth flow.
+                      type: boolean
+                    priority:
+                      description: Priority is priority for this execution. Lower
+                        values have higher priority.
+                      type: integer
+                    requirement:
+                      description: 'Requirement is requirement for this execution.
+                        Available options: REQUIRED, ALTERNATIVE, DISABLED, CONDITIONAL.'
+                      type: string
+                  type: object
+                nullable: true
+                type: array
+              builtIn:
+                description: BuiltIn is true if this is built-in auth flow.
+                type: boolean
+              childRequirement:
+                description: 'ChildRequirement is requirement for child execution.
+                  Available options: REQUIRED, ALTERNATIVE, DISABLED, CONDITIONAL.'
+                type: string
+              childType:
+                description: 'ChildType is type for auth flow if it has a parent,
+                  available options: basic-flow, form-flow'
+                type: string
+              description:
+                description: Description is description for authentication flow.
+                type: string
+              parentName:
+                description: ParentName is name of parent auth flow.
+                type: string
+              providerId:
+                description: ProviderID for root auth flow and provider for child
+                  auth flows.
+                type: string
+              realmRef:
+                description: RealmRef is reference to Realm custom resource.
+                properties:
+                  kind:
+                    default: KeycloakRealm
+                    description: Kind specifies the kind of the Keycloak resource.
+                    enum:
+                    - KeycloakRealm
+                    - ClusterKeycloakRealm
+                    type: string
+                  name:
+                    description: Name specifies the name of the Keycloak resource.
+                    type: string
+                required:
+                - name
+                type: object
+              topLevel:
+                description: TopLevel is true if this is root auth flow.
+                type: boolean
+            required:
+            - alias
+            - builtIn
+            - providerId
+            - realmRef
+            - topLevel
+            type: object
+          status:
+            description: KeycloakAuthFlowStatus defines the observed state of KeycloakAuthFlow.
+            properties:
+              failureCount:
+                format: int64
+                type: integer
+              value:
+                type: string
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

@@ -1,0 +1,183 @@
+diff --git a/mocks/service/redis/Client.go b/mocks/service/redis/Client.go
+index 1770e4b..dfb27c7 100644
+--- a/mocks/service/redis/Client.go
++++ b/mocks/service/redis/Client.go
+@@ -322,6 +322,24 @@ func (_m *Client) SetCustomSentinelConfig(ip string, masterName string, configs
+ 	return r0
+ }
+ 
++// SetSentinelAuthPass provides a mock function with given fields: ip, masterName, password, tlsConfig
++func (_m *Client) SetSentinelAuthPass(ip string, masterName string, password string, tlsConfig *tls.Config) error {
++	ret := _m.Called(ip, masterName, password, tlsConfig)
++
++	if len(ret) == 0 {
++		panic("no return value specified for SetSentinelAuthPass")
++	}
++
++	var r0 error
++	if rf, ok := ret.Get(0).(func(string, string, string, *tls.Config) error); ok {
++		r0 = rf(ip, masterName, password, tlsConfig)
++	} else {
++		r0 = ret.Error(0)
++	}
++
++	return r0
++}
++
+ // SlaveIsReady provides a mock function with given fields: ip, port, password, tlsConfig
+ func (_m *Client) SlaveIsReady(ip string, port string, password string, tlsConfig *tls.Config) (bool, error) {
+ 	ret := _m.Called(ip, port, password, tlsConfig)
+diff --git a/operator/redisfailover/service/heal.go b/operator/redisfailover/service/heal.go
+index 9947d73..36bbc6a 100644
+--- a/operator/redisfailover/service/heal.go
++++ b/operator/redisfailover/service/heal.go
+@@ -332,7 +332,25 @@ func (r *RedisFailoverHealer) RestoreSentinel(ip string, rf *redisfailoverv1.Red
+ 	if err != nil {
+ 		return err
+ 	}
+-	return r.redisClient.ResetSentinel(ip, tlsConfig)
++	if err := r.redisClient.ResetSentinel(ip, tlsConfig); err != nil {
++		return err
++	}
++
++	// SENTINEL RESET keeps the auth-pass the Sentinel already has, and
++	// NewSentinelMonitor, the only other place that sets it, runs only when
++	// the Sentinel monitors the wrong address. A Sentinel restarted with the
++	// initial config can take the current master address from a peer's hello
++	// message, so it monitors the right address without a password, gets
++	// NOAUTH from the master and keeps reporting it as down: the reset alone
++	// would then repeat on every check without converging.
++	password, err := k8s.GetRedisPassword(r.k8sService, rf)
++	if err != nil {
++		return err
++	}
++	if password == "" {
++		return nil
++	}
++	return r.redisClient.SetSentinelAuthPass(ip, rf.MasterName(), password, tlsConfig)
+ }
+ 
+ // SetSentinelCustomConfig will call sentinel to set the configuration given in config
+diff --git a/operator/redisfailover/service/heal_test.go b/operator/redisfailover/service/heal_test.go
+index eab037d..e8c316e 100644
+--- a/operator/redisfailover/service/heal_test.go
++++ b/operator/redisfailover/service/heal_test.go
+@@ -454,3 +454,79 @@ func TestNewSentinelMonitorWithPort(t *testing.T) {
+ 		})
+ 	}
+ }
++
++func TestRestoreSentinel(t *testing.T) {
++	tests := []struct {
++		name          string
++		authSecret    string
++		resetErr      error
++		secretErr     error
++		authPassErr   error
++		wantAuthPass  bool
++		errorExpected bool
++	}{
++		{
++			name: "auth disabled: reset only",
++		},
++		{
++			name:         "auth enabled: reset, then re-send auth-pass",
++			authSecret:   "redis-auth",
++			wantAuthPass: true,
++		},
++		{
++			name:          "reset fails: auth-pass is not sent",
++			authSecret:    "redis-auth",
++			resetErr:      errors.New("reset failed"),
++			errorExpected: true,
++		},
++		{
++			name:          "password secret unreadable",
++			authSecret:    "redis-auth",
++			secretErr:     errors.New("secret not found"),
++			errorExpected: true,
++		},
++		{
++			name:          "auth-pass fails",
++			authSecret:    "redis-auth",
++			authPassErr:   errors.New("set failed"),
++			wantAuthPass:  true,
++			errorExpected: true,
++		},
++	}
++
++	for _, test := range tests {
++		t.Run(test.name, func(t *testing.T) {
++			assert := assert.New(t)
++			rf := generateRF()
++			rf.Spec.Auth.SecretPath = test.authSecret
++			ms := &mK8SService.Services{}
++			mr := &mRedisService.Client{}
++
++			mr.On("ResetSentinel", "0.0.0.0", mock.Anything).Once().Return(test.resetErr)
++			if test.resetErr == nil && test.authSecret != "" {
++				secret := &corev1.Secret{Data: map[string][]byte{"password": []byte("s3cret")}}
++				if test.secretErr != nil {
++					secret = nil
++				}
++				ms.On("GetSecret", rf.Namespace, test.authSecret).Once().Return(secret, test.secretErr)
++			}
++			if test.wantAuthPass {
++				mr.On("SetSentinelAuthPass", "0.0.0.0", "mymaster", "s3cret", mock.Anything).Once().Return(test.authPassErr)
++			}
++
++			healer := rfservice.NewRedisFailoverHealer(ms, mr, log.DummyLogger{})
++			err := healer.RestoreSentinel("0.0.0.0", rf)
++
++			if test.errorExpected {
++				assert.Error(err)
++			} else {
++				assert.NoError(err)
++			}
++			ms.AssertExpectations(t)
++			mr.AssertExpectations(t)
++			if !test.wantAuthPass {
++				mr.AssertNotCalled(t, "SetSentinelAuthPass", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
++			}
++		})
++	}
++}
+diff --git a/service/redis/client.go b/service/redis/client.go
+index d902563..0e4f8c6 100644
+--- a/service/redis/client.go
++++ b/service/redis/client.go
+@@ -29,6 +29,7 @@ type Client interface {
+ 	MakeSlaveOfWithPort(ip, localPort, masterIP, masterPort, password string, tlsConfig *tls.Config) error
+ 	GetSentinelMonitor(ip, masterName string, tlsConfig *tls.Config) (string, string, error)
+ 	SetCustomSentinelConfig(ip, masterName string, configs []string, tlsConfig *tls.Config) error
++	SetSentinelAuthPass(ip, masterName, password string, tlsConfig *tls.Config) error
+ 	SetCustomRedisConfig(ip string, port string, configs []string, password string, tlsConfig *tls.Config) error
+ 	SlaveIsReady(ip, port, password string, tlsConfig *tls.Config) (bool, error)
+ 	SentinelCheckQuorum(ip, masterName string, tlsConfig *tls.Config) error
+@@ -344,6 +345,26 @@ func (c *client) SetCustomSentinelConfig(ip, masterName string, configs []string
+ 	return nil
+ }
+ 
++// SetSentinelAuthPass sets the password the Sentinel authenticates with to
++// the master it monitors and to that master's replicas.
++func (c *client) SetSentinelAuthPass(ip, masterName, password string, tlsConfig *tls.Config) error {
++	options := &rediscli.Options{
++		Addr:      net.JoinHostPort(ip, sentinelPort),
++		Password:  "",
++		DB:        0,
++		TLSConfig: tlsConfig,
++	}
++	rClient := rediscli.NewClient(options)
++	defer func() { _ = rClient.Close() }()
++	cmd := rediscli.NewStatusCmd(context.TODO(), "SENTINEL", "SET", masterName, "auth-pass", password)
++	if err := rClient.Process(context.TODO(), cmd); err != nil {
++		c.metricsRecorder.RecordRedisOperation(metrics.KIND_SENTINEL, ip, metrics.APPLY_SENTINEL_CONFIG, metrics.FAIL, getRedisError(err))
++		return err
++	}
++	c.metricsRecorder.RecordRedisOperation(metrics.KIND_SENTINEL, ip, metrics.APPLY_SENTINEL_CONFIG, metrics.SUCCESS, metrics.NOT_APPLICABLE)
++	return nil
++}
++
+ func (c *client) SentinelCheckQuorum(ip, masterName string, tlsConfig *tls.Config) error {
+ 
+ 	options := &rediscli.Options{

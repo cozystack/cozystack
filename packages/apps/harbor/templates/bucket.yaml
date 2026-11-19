@@ -1,0 +1,19 @@
+{{- $seaweedfs := .Values._namespace.seaweedfs }}
+apiVersion: objectstorage.k8s.io/v1alpha1
+kind: BucketClaim
+metadata:
+  name: {{ .Release.Name }}-registry
+spec:
+  bucketClassName: {{ $seaweedfs }}
+  protocols:
+    - s3
+---
+apiVersion: objectstorage.k8s.io/v1alpha1
+kind: BucketAccess
+metadata:
+  name: {{ .Release.Name }}-registry
+spec:
+  bucketAccessClassName: {{ $seaweedfs }}
+  bucketClaimName: {{ .Release.Name }}-registry
+  credentialsSecretName: {{ .Release.Name }}-registry-bucket
+  protocol: s3

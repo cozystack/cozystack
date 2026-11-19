@@ -1,0 +1,39 @@
+diff --git a/sidecar/pkg/bucketaccess/bucketaccess_controller.go b/sidecar/pkg/bucketaccess/bucketaccess_controller.go
+index a4db5c4..b351f9e 100644
+--- a/sidecar/pkg/bucketaccess/bucketaccess_controller.go
++++ b/sidecar/pkg/bucketaccess/bucketaccess_controller.go
+@@ -31,6 +31,7 @@ import (
+ 	kube "k8s.io/client-go/kubernetes"
+ 	kubecorev1 "k8s.io/client-go/kubernetes/typed/core/v1"
+ 	"k8s.io/client-go/tools/record"
++	"k8s.io/client-go/util/retry"
+ 	"k8s.io/klog/v2"
+ 	cosiapi "sigs.k8s.io/container-object-storage-interface/client/apis"
+ 	"sigs.k8s.io/container-object-storage-interface/client/apis/objectstorage/consts"
+@@ -273,11 +274,22 @@ func (bal *BucketAccessListener) Add(ctx context.Context, inputBucketAccess *v1a
+ 		}
+ 	}
+ 
+-	if controllerutil.AddFinalizer(bucket, consts.BABucketFinalizer) {
+-		_, err = bal.buckets().Update(ctx, bucket, metav1.UpdateOptions{})
+-		if err != nil {
+-			return bal.recordError(inputBucketAccess, v1.EventTypeWarning, v1alpha1.FailedGrantAccess, err)
++	// Re-fetch and update inside RetryOnConflict to handle the case where the Bucket
++	// reconciler in the same controller process mutates the Bucket between our Get
++	// and Update, which surfaces as "the object has been modified" on the parent
++	// Bucket and emits FailedGrantAccess on the BucketAccess.
++	if err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
++		latest, getErr := bal.buckets().Get(ctx, bucketClaim.Status.BucketName, metav1.GetOptions{})
++		if getErr != nil {
++			return getErr
++		}
++		if !controllerutil.AddFinalizer(latest, consts.BABucketFinalizer) {
++			return nil
+ 		}
++		_, updateErr := bal.buckets().Update(ctx, latest, metav1.UpdateOptions{})
++		return updateErr
++	}); err != nil {
++		return bal.recordError(inputBucketAccess, v1.EventTypeWarning, v1alpha1.FailedGrantAccess, err)
+ 	}
+ 
+ 	if controllerutil.AddFinalizer(bucketAccess, consts.BAFinalizer) {

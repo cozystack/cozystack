@@ -1,0 +1,12 @@
+goldpinger:
+  serviceMonitor:
+    enabled: true
+  prometheusRule:
+    enabled: true
+  resources:
+    limits:
+      cpu: 200m
+      memory: 256Mi
+    requests:
+      cpu: 50m
+      memory: 64Mi

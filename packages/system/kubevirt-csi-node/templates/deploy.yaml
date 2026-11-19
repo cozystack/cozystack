@@ -1,0 +1,295 @@
+apiVersion: storage.k8s.io/v1
+kind: CSIDriver
+metadata:
+  name: csi.kubevirt.io
+spec:
+  attachRequired: true
+  podInfoOnMount: true
+  fsGroupPolicy: ReadWriteOnceWithFSType
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: kubevirt-csi-controller-sa
+  namespace: {{ .Release.Namespace }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: kubevirt-csi-controller-cr
+rules:
+  - apiGroups: ['']
+    resources: ['persistentvolumes']
+    verbs: ['create', 'delete', 'get', 'list', 'watch', 'update', 'patch']
+  - apiGroups: ['']
+    resources: ['secrets']
+    verbs: ['get', 'list']
+  - apiGroups: ['']
+    resources: ['persistentvolumeclaims']
+    verbs: ['get', 'list', 'watch', 'update']
+  - apiGroups: [""]
+    resources: ["persistentvolumeclaims/status"]
+    verbs: ["update", "patch"]
+  - apiGroups: ['']
+    resources: ['nodes']
+    verbs: ['get', 'list', 'watch']
+  - apiGroups: ['storage.k8s.io']
+    resources: ['volumeattachments']
+    verbs: ['get', 'list', 'watch', 'update', 'patch']
+  - apiGroups: ['storage.k8s.io']
+    resources: ['storageclasses']
+    verbs: ['get', 'list', 'watch']
+  - apiGroups: ['csi.storage.k8s.io']
+    resources: ['csidrivers']
+    verbs: ['get', 'list', 'watch', 'update', 'create']
+  - apiGroups: ['']
+    resources: ['events']
+    verbs: ['list', 'watch', 'create', 'update', 'patch']
+  - apiGroups: ["snapshot.storage.k8s.io"]
+    resources: ["volumesnapshotclasses"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["snapshot.storage.k8s.io"]
+    resources: ["volumesnapshotcontents"]
+    verbs: ["create", "get", "list", "watch", "update", "delete"]
+  - apiGroups: ["snapshot.storage.k8s.io"]
+    resources: ["volumesnapshots"]
+    verbs: ["get", "list", "watch", "update"]
+  - apiGroups: ["snapshot.storage.k8s.io"]
+    resources: ["volumesnapshots/status"]
+    verbs: ["update"]
+  - apiGroups: [ "storage.k8s.io" ]
+    resources: [ "volumeattachments/status" ]
+    verbs: [ "get", "list", "watch", "update", "patch" ]
+  - apiGroups: ["storage.k8s.io"]
+    resources: ["csinodes"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["security.openshift.io"]
+    resources: ["securitycontextconstraints"]
+    verbs: ["use"]
+    resourceNames: ["privileged"]
+---
+kind: ClusterRoleBinding
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  name: kubevirt-csi-controller-binding
+subjects:
+  - kind: ServiceAccount
+    name: kubevirt-csi-controller-sa
+    namespace: {{ .Release.Namespace }}
+roleRef:
+  kind: ClusterRole
+  name: kubevirt-csi-controller-cr
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: kubevirt-csi-node-sa
+  namespace: {{ .Release.Namespace }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: kubevirt-csi-node-cr
+rules:
+  - apiGroups: [""]
+    resources: ["persistentvolumes"]
+    verbs: ["get", "list", "watch", "update", "create", "delete"]
+  - apiGroups: [""]
+    resources: ["persistentvolumeclaims"]
+    verbs: ["get", "list", "watch", "update"]
+  - apiGroups: ["storage.k8s.io"]
+    resources: ["storageclasses"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["nodes"]
+    verbs: ["get", "list", "watch", "update", "patch"]
+  - apiGroups: ["csi.storage.k8s.io"]
+    resources: ["csinodeinfos"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["storage.k8s.io"]
+    resources: ["csinodes"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["storage.k8s.io"]
+    resources: ["volumeattachments"]
+    verbs: ["get", "list", "watch", "update"]
+  - apiGroups: ["storage.k8s.io"]
+    resources: ["volumeattachments/status"]
+    verbs: ["get", "list", "watch", "update", "patch"]
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["list", "watch", "create", "update", "patch"]
+  - apiGroups: ["security.openshift.io"]
+    resources: ["securitycontextconstraints"]
+    verbs: ["use"]
+    resourceNames: ["privileged"]
+---
+kind: ClusterRoleBinding
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  name: kubevirt-csi-node-binding
+subjects:
+  - kind: ServiceAccount
+    name: kubevirt-csi-node-sa
+    namespace: {{ .Release.Namespace }}
+roleRef:
+  kind: ClusterRole
+  name: kubevirt-csi-node-cr
+  apiGroup: rbac.authorization.k8s.io
+---
+kind: DaemonSet
+apiVersion: apps/v1
+metadata:
+  name: kubevirt-csi-node
+  namespace: {{ .Release.Namespace }}
+spec:
+  selector:
+    matchLabels:
+      app: {{ .Release.Namespace }}
+  updateStrategy:
+    type: RollingUpdate
+  template:
+    metadata:
+      labels:
+        app: {{ .Release.Namespace }}
+    spec:
+      serviceAccount: kubevirt-csi-node-sa
+      priorityClassName: system-node-critical
+      tolerations:
+        - operator: Exists
+      containers:
+        - name: csi-driver
+          securityContext:
+            privileged: true
+            allowPrivilegeEscalation: true
+          imagePullPolicy: Always
+          image: {{ .Values.csiDriver.image }}
+          args:
+            - "--endpoint=unix:/csi/csi.sock"
+            - "--node-name=$(KUBE_NODE_NAME)"
+            - "--run-controller-service=false"
+            - "--v=5"
+          env:
+            - name: KUBE_NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+          volumeMounts:
+            - name: kubelet-dir
+              mountPath: /var/lib/kubelet
+              mountPropagation: "Bidirectional"
+            - name: plugin-dir
+              mountPath: /csi
+            - name: device-dir
+              mountPath: /dev
+            - name: udev
+              mountPath: /run/udev
+          ports:
+            - name: healthz
+              containerPort: 10300
+              protocol: TCP
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: healthz
+            initialDelaySeconds: 10
+            timeoutSeconds: 3
+            periodSeconds: 10
+            failureThreshold: 5
+          # Limits, not just requests: a memory limit is what sets memory.max on
+          # the pod cgroup, and the Talos userspace OOM handler (v1.12+) only
+          # ever kills cgroups that lack one. Requests alone left this DaemonSet
+          # an eviction candidate on every node whatever caused the pressure.
+          # Every container in the pod needs one for the pod cgroup to get it.
+          resources:
+            requests:
+              memory: 50Mi
+              cpu: 10m
+            limits:
+              memory: 512Mi
+        - name: csi-node-driver-registrar
+          image: registry.k8s.io/sig-storage/csi-node-driver-registrar:v2.17.0
+          args:
+            - "--csi-address=$(ADDRESS)"
+            - "--kubelet-registration-path=$(DRIVER_REG_SOCK_PATH)"
+            - "--v=5"
+          lifecycle:
+            preStop:
+              exec:
+                command: ["/bin/sh", "-c", "rm -rf /registration/csi.kubevirt.io-reg.sock /csi/csi.sock"]
+          env:
+            - name: ADDRESS
+              value: /csi/csi.sock
+            - name: DRIVER_REG_SOCK_PATH
+              value: /var/lib/kubelet/plugins/csi.kubevirt.io/csi.sock
+          volumeMounts:
+            - name: plugin-dir
+              mountPath: /csi
+            - name: registration-dir
+              mountPath: /registration
+          resources:
+            requests:
+              memory: 20Mi
+              cpu: 5m
+            limits:
+              memory: 128Mi
+        - name: csi-liveness-probe
+          image: registry.k8s.io/sig-storage/livenessprobe:v2.17.0
+          args:
+            - "--csi-address=/csi/csi.sock"
+            - "--probe-timeout=3s"
+            - "--health-port=10300"
+          volumeMounts:
+            - name: plugin-dir
+              mountPath: /csi
+          resources:
+            requests:
+              memory: 20Mi
+              cpu: 5m
+            limits:
+              memory: 128Mi
+      volumes:
+        - name: kubelet-dir
+          hostPath:
+            path: /var/lib/kubelet
+            type: Directory
+        - name: plugin-dir
+          hostPath:
+            path: /var/lib/kubelet/plugins/csi.kubevirt.io/
+            type: DirectoryOrCreate
+        - name: registration-dir
+          hostPath:
+            path: /var/lib/kubelet/plugins_registry/
+            type: Directory
+        - name: device-dir
+          hostPath:
+            path: /dev
+            type: Directory
+        - name: udev
+          hostPath:
+            path: /run/udev
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: driver-config
+  namespace: {{ .Release.Namespace }}
+data:
+  infraClusterNamespace: 
+  infraClusterLabels: csi-driver/cluster=tenant
+{{- range $name, $m := .Values.storageClasses }}
+---
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: {{ $name | quote }}
+  {{- if $m.default }}
+  annotations:
+    storageclass.kubernetes.io/is-default-class: "true"
+  {{- end }}
+provisioner: csi.kubevirt.io
+allowVolumeExpansion: true
+parameters:
+  infraStorageClassName: {{ $m.infraStorageClass | quote }}
+  bus: scsi
+{{- end }}

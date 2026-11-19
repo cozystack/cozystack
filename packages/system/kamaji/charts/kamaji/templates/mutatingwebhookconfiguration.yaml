@@ -1,0 +1,11 @@
+apiVersion: admissionregistration.k8s.io/v1
+kind: MutatingWebhookConfiguration
+metadata:
+  annotations:
+    cert-manager.io/inject-ca-from: {{ .Release.Namespace }}/{{ include "kamaji.certificateName" . }}
+  labels:
+    {{- $data := . | mustMergeOverwrite (dict "instance" "mutating-webhook-configuration") -}}
+    {{- include "kamaji.labels" $data | nindent 4 }}
+  name: kamaji-mutating-webhook-configuration
+webhooks:
+{{ tpl (.Files.Get "controller-gen/mutating-webhook.yaml") . }}

@@ -1,0 +1,71 @@
+# Injected by the platform from the cozystack-values Secret. The empty
+# default keeps the chart renderable on its own, outside a cluster.
+_cluster: {}
+
+# Keycloak image used by the one-shot admin-API job that enables the
+# UPDATE_EMAIL required action. Only kcadm.sh is used, so it just needs
+# to track the Keycloak server major version (packages/system/keycloak).
+image: quay.io/keycloak/keycloak:26.5.2
+
+# Enable the Keycloak Organizations feature for the platform realm.
+# Mapped to ClusterKeycloakRealm.spec.organizationsEnabled. Defaults to
+# false to preserve the current behaviour; set to true to manage
+# organizations (and KeycloakOrganization resources) in the realm.
+organizationsEnabled: false
+
+# login:
+#   userRegistration: false
+#   verifyEmail: false
+#   duplicateEmails: false
+#   editUsername: false
+#   emailAsUsername: false
+#   forgotPassword: false
+#   loginWithEmail: true
+#   rememberMe: false
+
+# smtp:
+#   template:
+#     from: "noreply@example.com"
+#     fromDisplayName: ""
+#     replyTo: ""
+#     replyToDisplayName: ""
+#     envelopeFrom: ""
+#   connection:
+#     host: "smtp.example.com"
+#     port: 587
+#     enableSSL: false
+#     enableStartTLS: true
+#     authentication:
+#       username:
+#         value: "user"
+#         # secretKeyRef:
+#         #   name: "secret-name"
+#         #   key: "key"
+#         # configMapKeyRef:
+#         #   name: "configmap-name"
+#         #   key: "key"
+#       password:
+#         secretKeyRef:
+#           name: "smtp-credentials"
+#           key: "password"
+#         # value: "plaintext-password"
+#         # configMapKeyRef:
+#         #   name: "configmap-name"
+#         #   key: "key"
+
+# Declarative User Profile configuration mirrored into
+# ClusterKeycloakRealm.spec.userProfileConfig. Use this to define
+# custom user attributes that should be required at registration or
+# managed via the account console.
+# userProfile:
+#   unmanagedAttributePolicy: ENABLED
+#   attributes:
+#     - name: department
+#       displayName: "Department"
+#       permissions:
+#         view: [user, admin]
+#         edit: [admin]
+#       validations:
+#         length:
+#           min: 1
+#           max: 255

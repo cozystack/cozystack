@@ -1,0 +1,173 @@
+{{- /* The effective type, not the raw value: once complete resources size the
+       VM the matcher is gone, and a stale or misspelled instanceType that the
+       dashboard gives no way to clear must not fail a render that never
+       references it. */}}
+{{- $instanceType := include "virtual-machine.effectiveInstanceType" . }}
+{{- if and $instanceType (not (lookup "instancetype.kubevirt.io/v1beta1" "VirtualMachineClusterInstancetype" "" $instanceType)) }}
+{{-   fail (printf "Specified instanceType does not exist in the cluster: %s" $instanceType) }}
+{{- end }}
+{{- if and .Values.instanceProfile (not (lookup "instancetype.kubevirt.io/v1beta1" "VirtualMachineClusterPreference" "" .Values.instanceProfile)) }}
+{{-   fail (printf "Specified instanceProfile does not exist in the cluster: %s" .Values.instanceProfile) }}
+{{- end }}
+{{- /* Raw values here, deliberately. This gate asks whether the user supplied
+       a sizing source at all, which is a question about their input; every
+       other read asks what gets rendered, which is a question about the
+       output. The raw instanceType and the effective one cannot disagree on
+       this gate's outcome -- a truthy raw value with an empty effective one
+       means the resources are complete, so the VM is sized either way -- but
+       swapping this one to $instanceType would quietly change what it means. */}}
+{{- if and (not .Values.instanceType) (not (and .Values.resources .Values.resources.cpu .Values.resources.sockets .Values.resources.memory)) }}
+{{-   fail "Either instanceType or resources (cpu, sockets, memory) must be specified" }}
+{{- end }}
+{{- $networks := .Values.networks | default .Values.subnets }}
+
+apiVersion: kubevirt.io/v1
+kind: VirtualMachine
+metadata:
+  name: {{ include "virtual-machine.fullname" . }}
+  labels:
+    {{- include "virtual-machine.labels" . | nindent 4 }}
+spec:
+  {{- if hasKey .Values "runStrategy" }}
+  runStrategy: {{ .Values.runStrategy }}
+  {{- else }}
+  runStrategy: {{ ternary "Always" "Halted" (.Values.running | default true) }}
+  {{- end }}
+  {{- with $instanceType }}
+  instancetype:
+    kind: VirtualMachineClusterInstancetype
+    name: {{ . }}
+    {{- end }}
+  {{- with .Values.instanceProfile }}
+  preference:
+    kind: VirtualMachineClusterPreference
+    name: {{ . }}
+    {{- end }}
+  template:
+    metadata:
+      annotations:
+        kubevirt.io/allow-pod-bridge-network-live-migration: "true"
+        {{- if .Capabilities.APIVersions.Has "kubeovn.io/v1/IP" }}
+        {{- $ovnIPName := printf "%s.%s" (include "virtual-machine.fullname" .) .Release.Namespace }}
+        {{- $ovnIP := lookup "kubeovn.io/v1" "IP" "" $ovnIPName }}
+        {{- if $ovnIP }}
+        ovn.kubernetes.io/mac_address: {{ $ovnIP.spec.macAddress | quote }}
+        ovn.kubernetes.io/ip_address: {{ $ovnIP.spec.ipAddress | quote }}
+        {{- end }}
+        {{- end }}
+      labels:
+        {{- include "virtual-machine.labels" . | nindent 8 }}
+    spec:
+      domain:
+        {{- $domainRes := include "virtual-machine.domainResources" . | fromJson -}}
+        {{- $fw := .Values.firmware | default dict }}
+        {{- with $domainRes.cpu }}
+        cpu: {{- . | toYaml | nindent 10 }}
+        {{- end }}
+        {{- with $domainRes.resources }}
+        resources: {{- . | toYaml | nindent 10 }}
+        {{- end }}
+        firmware:
+          uuid: {{ include "virtual-machine.stableUuid" . }}
+          {{- if eq (toString $fw.bootloader) "uefi" }}
+          bootloader:
+            efi:
+              secureBoot: {{ $fw.secureBoot | default false }}
+              persistent: {{ $fw.efiPersistent | default false }}
+          {{- else if eq (toString $fw.bootloader) "bios" }}
+          bootloader:
+            bios: {}
+          {{- end }}
+        {{- if and (eq (toString $fw.bootloader) "uefi") ($fw.secureBoot | default false) }}
+        features:
+          smm:
+            enabled: true
+        {{- end }}
+        devices:
+          {{- if .Values.gpus }}
+          gpus:
+          {{- range $i, $gpu := .Values.gpus }}
+          - name: gpu{{ add $i 1 }}
+            deviceName: {{ $gpu.name }}
+          {{- end }}
+          {{- end }}
+          disks:
+          {{- /* KubeVirt rejects two devices sharing a bootOrder, so a clash is
+                 reported here with the disk names rather than surfacing as a
+                 webhook denial on the VirtualMachine. */}}
+          {{- $bootOrderOwners := dict }}
+          {{- range $i, $disk := .Values.disks }}
+          {{- $bootOrder := int ($disk.bootOrder | default (add $i 1)) }}
+          {{- with get $bootOrderOwners (toString $bootOrder) }}
+          {{-   fail (printf "disks %q and %q both have bootOrder %d; boot orders must be unique" . $disk.name $bootOrder) }}
+          {{- end }}
+          {{- $_ := set $bootOrderOwners (toString $bootOrder) $disk.name }}
+          - name: disk-{{ $disk.name }}
+            {{- $dv := lookup "cdi.kubevirt.io/v1beta1" "DataVolume" $.Release.Namespace (printf "vm-disk-%s" $disk.name) }}
+            {{- if $dv }}
+            {{- $isOptical := and (hasKey $dv.metadata.annotations "vm-disk.cozystack.io/optical") (eq (index $dv.metadata.annotations "vm-disk.cozystack.io/optical") "true") }}
+            {{- $deviceKey := ternary "cdrom" "disk" $isOptical }}
+            {{- if $disk.bus }}
+            {{ $deviceKey }}:
+              bus: {{ $disk.bus }}
+            {{- else }}
+            {{ $deviceKey }}: {}
+            {{- end }}
+            bootOrder: {{ $bootOrder }}
+            {{- else }}
+            {{-   fail (printf "Specified disk not exists in cluster: %s" .name) }}
+            {{- end }}
+          {{- end }}
+          {{- if or .Values.cloudInit .Values.sshKeys .Values.netplanDhcp }}
+          - name: cloudinitdisk
+            disk: {}
+          {{- end }}
+          interfaces:
+          - name: default
+            bridge: {}
+          {{- range $i, $net := $networks }}
+          - name: {{ $net.name }}
+            bridge: {}
+          {{- end }}
+        machine:
+          type: ""
+      {{- with .Values.sshKeys }}
+      accessCredentials:
+      - sshPublicKey:
+          source:
+            secret:
+              secretName: {{ include "virtual-machine.fullname" $ }}-ssh-keys
+          propagationMethod:
+            # keys will be injected into metadata part of cloud-init disk
+            noCloud: {}
+      {{- end }}
+      terminationGracePeriodSeconds: 30
+
+      {{- include "virtual-machine.nodeAffinity" . | nindent 6 }}
+
+      volumes:
+      {{- range .Values.disks }}
+      - name: disk-{{ .name }}
+        dataVolume:
+          name: vm-disk-{{ .name }}
+      {{- end }}
+      {{- if or .Values.cloudInit .Values.sshKeys .Values.netplanDhcp }}
+      - name: cloudinitdisk
+        cloudInitNoCloud:
+          {{- if or .Values.cloudInit .Values.sshKeys }}
+          secretRef:
+            name: {{ include "virtual-machine.fullname" . }}-cloud-init
+          {{- end }}
+          {{- if .Values.netplanDhcp }}
+          networkDataSecretRef:
+            name: {{ include "virtual-machine.fullname" . }}-network-config
+          {{- end }}
+      {{- end }}
+      networks:
+      - name: default
+        pod: {}
+      {{- range $i, $net := $networks }}
+      - name: {{ $net.name }}
+        multus:
+          networkName: {{ $.Release.Namespace }}/{{ $net.name }}
+      {{- end }}

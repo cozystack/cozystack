@@ -1,0 +1,172 @@
+##
+## @section Common parameters
+##
+
+## @typedef {struct} Resources - Explicit CPU and memory configuration for each MariaDB replica.
+## @field {quantity} [cpu] - CPU available to each replica.
+## @field {quantity} [memory] - Memory (RAM) available to each replica.
+
+## @enum {string} ResourcesPreset - Default sizing preset.
+## @value t1.nano
+## @value t1.micro
+## @value t1.small
+## @value t1.medium
+## @value t1.large
+## @value t1.xlarge
+## @value t1.2xlarge
+## @value t1.4xlarge
+## @value c1.nano
+## @value c1.micro
+## @value c1.small
+## @value c1.medium
+## @value c1.large
+## @value c1.xlarge
+## @value c1.2xlarge
+## @value c1.4xlarge
+## @value s1.nano
+## @value s1.micro
+## @value s1.small
+## @value s1.medium
+## @value s1.large
+## @value s1.xlarge
+## @value s1.2xlarge
+## @value s1.4xlarge
+## @value u1.nano
+## @value u1.micro
+## @value u1.small
+## @value u1.medium
+## @value u1.large
+## @value u1.xlarge
+## @value u1.2xlarge
+## @value u1.4xlarge
+## @value m1.nano
+## @value m1.micro
+## @value m1.small
+## @value m1.medium
+## @value m1.large
+## @value m1.xlarge
+## @value m1.2xlarge
+## @value m1.4xlarge
+## @value nano
+## @value micro
+## @value small
+## @value medium
+## @value large
+## @value xlarge
+## @value 2xlarge
+
+## @param {int} replicas - Number of MariaDB replicas.
+replicas: 2
+
+## @param {Resources} [resources] - Explicit CPU and memory configuration for each MariaDB replica. When omitted, the preset defined in `resourcesPreset` is applied.
+resources: {}
+
+## @param {ResourcesPreset} resourcesPreset="t1.nano" - Default sizing preset used when `resources` is omitted.
+resourcesPreset: "t1.nano"
+
+## @param {quantity} size - Persistent Volume Claim size available for application data.
+size: 10Gi
+
+## @param {string} storageClass - StorageClass used to store the data.
+## @immutable
+## @x-cozystack-options {source: storageclass}
+storageClass: ""
+
+## @param {bool} external - Enable external access from outside the cluster.
+external: false
+
+##
+## @section TLS parameters
+##
+
+## @enum {string} TLSIssuer
+## @value operator
+## @value cert-manager
+
+## @typedef {struct} TLS - TLS configuration.
+## @field {TLSIssuer} [issuer] - Who issues the server certificate: `operator` uses the CA mariadb-operator manages itself, `cert-manager` gives the instance its own CA and is what covers the external hostname. Named for the issuer because TLS is served under both, unlike the similarly-spelled `tls.enabled` in some other charts, which does switch TLS on and off.
+## @field {*bool} [required] - Refuse plaintext connections (sets MariaDB require_secure_transport=ON). Applies under either issuer. Opt-in: turn it on once every client connects over TLS, since it disconnects those that do not.
+
+## @param {TLS} [tls] - TLS configuration. Selects who issues the certificates and whether plaintext is refused; TLS itself is always served.
+tls:
+  issuer: operator
+
+##
+## @section Version parameters
+##
+
+##
+## @enum {string} Version
+## @value v11.8
+## @value v11.4
+## @value v10.11
+## @value v10.6
+
+## @param {Version} version - MariaDB major.minor version to deploy
+version: v11.8
+
+##
+## @section Application-specific parameters
+##
+
+## @typedef {struct} User - User configuration.
+## @field {int} maxUserConnections - Maximum number of connections.
+
+## @param {map[string]User} users - Users configuration map. Passwords (including the `root` account) are always auto-generated and stored in the `<release>-credentials` Secret; they cannot be set from values — read a user's password from that Secret. A `password` left over in values from before the field was removed is ignored by the render and draws an admission warning, but it is not inert on an upgraded release: the chart preserves whatever password is already in the Secret, which on the first upgrade is the value that was set before removal, so that value stays the live credential until it is rotated (dedicated rotation is tracked in cozystack/community#72). The live password lives only in the Secret.
+users: {}
+## Example:
+## users:
+##   user1:
+##     maxUserConnections: 1000
+##   user2:
+##     maxUserConnections: 1000
+
+## @typedef {struct} DatabaseRoles - Role assignments for a database.
+## @field {[]string} [admin] - List of users with admin privileges.
+## @field {[]string} [readonly] - List of users with read-only privileges.
+
+## @typedef {struct} Database - Database configuration.
+## @field {DatabaseRoles} [roles] - Roles assigned to users.
+
+## @param {map[string]Database} databases - Databases configuration map.
+databases: {}
+## Example:
+## databases:
+##   myapp1:
+##     roles:
+##       admin:
+##       - user1
+##       readonly:
+##       - user2
+
+##
+## @section Backup parameters (DEPRECATED)
+##
+## DEPRECATED: the fields below drive the chart's original mariadb-dump+restic
+## CronJob backup mechanism. They are preserved for backward compatibility:
+## existing tenants who already rely on the cronjob can keep using it
+## unchanged. New deployments should use the operator-native backup path
+## via Cozystack's BackupClass / Plan / RestoreJob CRDs and the
+## strategy.backups.cozystack.io/MariaDB driver. See
+## examples/backups/mariadb/ for a full end-to-end walkthrough.
+
+## @typedef {struct} Backup - DEPRECATED: Backup configuration.
+## @field {bool} enabled - DEPRECATED: Enable regular backups (default: false).
+## @field {string} s3Region - DEPRECATED: AWS S3 region where backups are stored.
+## @field {string} s3Bucket - DEPRECATED: S3 bucket used for storing backups.
+## @field {string} schedule - DEPRECATED: Cron schedule for automated backups.
+## @field {string} cleanupStrategy - DEPRECATED: Retention strategy for cleaning up old backups.
+## @field {string} s3AccessKey - DEPRECATED: Access key for S3 authentication.
+## @field {string} s3SecretKey - DEPRECATED: Secret key for S3 authentication.
+## @field {string} resticPassword - DEPRECATED: Password for Restic backup encryption.
+
+## @param {Backup} backup - DEPRECATED: Backup configuration. Prefer the BackupClass / Plan flow under examples/backups/mariadb/.
+backup:
+  enabled: false
+  s3Region: us-east-1
+  s3Bucket: "s3.example.org/mariadb-backups"
+  schedule: "0 2 * * *"
+  cleanupStrategy: "--keep-last=3 --keep-daily=3 --keep-within-weekly=1m"
+  s3AccessKey: "<your-access-key>"
+  s3SecretKey: "<your-secret-key>"
+  resticPassword: "<password>"

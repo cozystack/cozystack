@@ -1,0 +1,9 @@
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: flux-shard-operator
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels:
+      app: flux-shard-operator

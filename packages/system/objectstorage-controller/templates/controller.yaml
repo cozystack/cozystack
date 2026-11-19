@@ -1,0 +1,677 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  annotations:
+    api-approved.kubernetes.io: https://github.com/kubernetes/enhancements/tree/master/keps/sig-storage/1979-object-storage-support
+    objectstorage.k8s.io/authors: Kubernetes Authors
+    objectstorage.k8s.io/license: Apache V2
+    objectstorage.k8s.io/support: https://github.com/kubernetes-sigs/container-object-storage-api
+  labels:
+    app.kubernetes.io/component: controller
+    app.kubernetes.io/managed-by: kustomize
+    app.kubernetes.io/name: container-object-storage-interface-controller
+    app.kubernetes.io/part-of: container-object-storage-interface
+  name: container-object-storage-system
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    api-approved.kubernetes.io: https://github.com/kubernetes/enhancements/tree/master/keps/sig-storage/1979-object-storage-support
+    controller-gen.kubebuilder.io/version: v0.17.3
+    objectstorage.k8s.io/authors: Kubernetes Authors
+    objectstorage.k8s.io/license: Apache V2
+    objectstorage.k8s.io/support: https://github.com/kubernetes-sigs/container-object-storage-api
+  name: bucketaccessclasses.objectstorage.k8s.io
+spec:
+  group: objectstorage.k8s.io
+  names:
+    kind: BucketAccessClass
+    listKind: BucketAccessClassList
+    plural: bucketaccessclasses
+    singular: bucketaccessclass
+  scope: Cluster
+  versions:
+  - name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          authenticationType:
+            description: |-
+              AuthenticationType denotes the style of authentication
+              It can be one of
+              Key - access, secret tokens based authentication
+              IAM - implicit authentication of pods to the OSP based on service account mappings
+            type: string
+          driverName:
+            description: |-
+              DriverName is the name of driver associated with
+              this BucketAccess
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          parameters:
+            additionalProperties:
+              type: string
+            description: |-
+              Parameters is an opaque map for passing in configuration to a driver
+              for granting access to a bucket
+            type: object
+        required:
+        - authenticationType
+        - driverName
+        type: object
+    served: true
+    storage: true
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    api-approved.kubernetes.io: https://github.com/kubernetes/enhancements/tree/master/keps/sig-storage/1979-object-storage-support
+    controller-gen.kubebuilder.io/version: v0.17.3
+    objectstorage.k8s.io/authors: Kubernetes Authors
+    objectstorage.k8s.io/license: Apache V2
+    objectstorage.k8s.io/support: https://github.com/kubernetes-sigs/container-object-storage-api
+  name: bucketaccesses.objectstorage.k8s.io
+spec:
+  group: objectstorage.k8s.io
+  names:
+    kind: BucketAccess
+    listKind: BucketAccessList
+    plural: bucketaccesses
+    singular: bucketaccess
+  scope: Namespaced
+  versions:
+  - name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            properties:
+              bucketAccessClassName:
+                description: BucketAccessClassName is the name of the BucketAccessClass
+                type: string
+              bucketClaimName:
+                description: BucketClaimName is the name of the BucketClaim.
+                type: string
+              credentialsSecretName:
+                description: |-
+                  CredentialsSecretName is the name of the secret that COSI should populate
+                  with the credentials. If a secret by this name already exists, then it is
+                  assumed that credentials have already been generated. It is not overridden.
+                  This secret is deleted when the BucketAccess is delted.
+                type: string
+              protocol:
+                description: |-
+                  Protocol is the name of the Protocol
+                  that this access credential is supposed to support
+                  If left empty, it will choose the protocol supported
+                  by the bucket. If the bucket supports multiple protocols,
+                  the end protocol is determined by the driver.
+                type: string
+              serviceAccountName:
+                description: |-
+                  ServiceAccountName is the name of the serviceAccount that COSI will map
+                  to the OSP service account when IAM styled authentication is specified
+                type: string
+            required:
+            - bucketAccessClassName
+            - bucketClaimName
+            - credentialsSecretName
+            type: object
+          status:
+            properties:
+              accessGranted:
+                description: AccessGranted indicates the successful grant of privileges
+                  to access the bucket
+                type: boolean
+              accountID:
+                description: |-
+                  AccountID is the unique ID for the account in the OSP. It will be populated
+                  by the COSI sidecar once access has been successfully granted.
+                type: string
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    api-approved.kubernetes.io: https://github.com/kubernetes/enhancements/tree/master/keps/sig-storage/1979-object-storage-support
+    controller-gen.kubebuilder.io/version: v0.17.3
+    objectstorage.k8s.io/authors: Kubernetes Authors
+    objectstorage.k8s.io/license: Apache V2
+    objectstorage.k8s.io/support: https://github.com/kubernetes-sigs/container-object-storage-api
+  name: bucketclaims.objectstorage.k8s.io
+spec:
+  group: objectstorage.k8s.io
+  names:
+    kind: BucketClaim
+    listKind: BucketClaimList
+    plural: bucketclaims
+    singular: bucketclaim
+  scope: Namespaced
+  versions:
+  - name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            properties:
+              bucketClassName:
+                description: Name of the BucketClass
+                type: string
+              existingBucketName:
+                description: |-
+                  Name of a bucket object that was manually
+                  created to import a bucket created outside of COSI
+                  If unspecified, then a new Bucket will be dynamically provisioned
+                type: string
+              protocols:
+                description: |-
+                  Protocols are the set of data API this bucket is required to support.
+                  The possible values for protocol are:
+                  -  S3: Indicates Amazon S3 protocol
+                  -  Azure: Indicates Microsoft Azure BlobStore protocol
+                  -  GCS: Indicates Google Cloud Storage protocol
+                items:
+                  type: string
+                type: array
+            required:
+            - protocols
+            type: object
+          status:
+            properties:
+              bucketName:
+                description: |-
+                  BucketName is the name of the provisioned Bucket in response
+                  to this BucketClaim. It is generated and set by the COSI controller
+                  before making the creation request to the OSP backend.
+                type: string
+              bucketReady:
+                description: |-
+                  BucketReady indicates that the bucket is ready for consumpotion
+                  by workloads
+                type: boolean
+            required:
+            - bucketReady
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    api-approved.kubernetes.io: https://github.com/kubernetes/enhancements/tree/master/keps/sig-storage/1979-object-storage-support
+    controller-gen.kubebuilder.io/version: v0.17.3
+    objectstorage.k8s.io/authors: Kubernetes Authors
+    objectstorage.k8s.io/license: Apache V2
+    objectstorage.k8s.io/support: https://github.com/kubernetes-sigs/container-object-storage-api
+  name: bucketclasses.objectstorage.k8s.io
+spec:
+  group: objectstorage.k8s.io
+  names:
+    kind: BucketClass
+    listKind: BucketClassList
+    plural: bucketclasses
+    singular: bucketclass
+  scope: Cluster
+  versions:
+  - name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          deletionPolicy:
+            default: Retain
+            description: |-
+              DeletionPolicy is used to specify how COSI should handle deletion of this
+              bucket. There are 2 possible values:
+               - Retain: Indicates that the bucket should not be deleted from the OSP
+               - Delete: Indicates that the bucket should be deleted from the OSP
+                     once all the workloads accessing this bucket are done
+            type: string
+          driverName:
+            description: DriverName is the name of driver associated with this bucket
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          parameters:
+            additionalProperties:
+              type: string
+            description: |-
+              Parameters is an opaque map for passing in configuration to a driver
+              for creating the bucket
+            type: object
+        required:
+        - deletionPolicy
+        - driverName
+        type: object
+    served: true
+    storage: true
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    api-approved.kubernetes.io: https://github.com/kubernetes/enhancements/tree/master/keps/sig-storage/1979-object-storage-support
+    controller-gen.kubebuilder.io/version: v0.17.3
+    objectstorage.k8s.io/authors: Kubernetes Authors
+    objectstorage.k8s.io/license: Apache V2
+    objectstorage.k8s.io/support: https://github.com/kubernetes-sigs/container-object-storage-api
+  name: buckets.objectstorage.k8s.io
+spec:
+  group: objectstorage.k8s.io
+  names:
+    kind: Bucket
+    listKind: BucketList
+    plural: buckets
+    singular: bucket
+  scope: Cluster
+  versions:
+  - name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            properties:
+              bucketClaim:
+                description: |-
+                  Name of the BucketClaim that resulted in the creation of this Bucket
+                  In case the Bucket object was created manually, then this should refer
+                  to the BucketClaim with which this Bucket should be bound
+                properties:
+                  apiVersion:
+                    description: API version of the referent.
+                    type: string
+                  fieldPath:
+                    description: |-
+                      If referring to a piece of an object instead of an entire object, this string
+                      should contain a valid JSON/Go field access statement, such as desiredState.manifest.containers[2].
+                      For example, if the object reference is to a container within a pod, this would take on a value like:
+                      "spec.containers{name}" (where "name" refers to the name of the container that triggered
+                      the event) or if no container name is specified "spec.containers[2]" (container with
+                      index 2 in this pod). This syntax is chosen only to have some well-defined way of
+                      referencing a part of an object.
+                    type: string
+                  kind:
+                    description: |-
+                      Kind of the referent.
+                      More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+                    type: string
+                  name:
+                    description: |-
+                      Name of the referent.
+                      More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                    type: string
+                  namespace:
+                    description: |-
+                      Namespace of the referent.
+                      More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/namespaces/
+                    type: string
+                  resourceVersion:
+                    description: |-
+                      Specific resourceVersion to which this reference is made, if any.
+                      More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#concurrency-control-and-consistency
+                    type: string
+                  uid:
+                    description: |-
+                      UID of the referent.
+                      More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#uids
+                    type: string
+                type: object
+                x-kubernetes-map-type: atomic
+              bucketClassName:
+                description: Name of the BucketClass specified in the BucketRequest
+                type: string
+              deletionPolicy:
+                default: Retain
+                description: |-
+                  DeletionPolicy is used to specify how COSI should handle deletion of this
+                  bucket. There are 2 possible values:
+                   - Retain: Indicates that the bucket should not be deleted from the OSP (default)
+                   - Delete: Indicates that the bucket should be deleted from the OSP
+                         once all the workloads accessing this bucket are done
+                type: string
+              driverName:
+                description: DriverName is the name of driver associated with this
+                  bucket
+                type: string
+              existingBucketID:
+                description: |-
+                  ExistingBucketID is the unique id of the bucket in the OSP. This field should be
+                  used to specify a bucket that has been created outside of COSI.
+                  This field will be empty when the Bucket is dynamically provisioned by COSI.
+                type: string
+              parameters:
+                additionalProperties:
+                  type: string
+                type: object
+              protocols:
+                description: |-
+                  Protocols are the set of data APIs this bucket is expected to support.
+                  The possible values for protocol are:
+                  -  S3: Indicates Amazon S3 protocol
+                  -  Azure: Indicates Microsoft Azure BlobStore protocol
+                  -  GCS: Indicates Google Cloud Storage protocol
+                items:
+                  type: string
+                type: array
+            required:
+            - bucketClaim
+            - bucketClassName
+            - driverName
+            - protocols
+            type: object
+          status:
+            properties:
+              bucketID:
+                description: |-
+                  BucketID is the unique id of the bucket in the OSP. This field will be
+                  populated by COSI.
+                type: string
+              bucketReady:
+                description: |-
+                  BucketReady is a boolean condition to reflect the successful creation
+                  of a bucket.
+                type: boolean
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  annotations:
+    api-approved.kubernetes.io: https://github.com/kubernetes/enhancements/tree/master/keps/sig-storage/1979-object-storage-support
+    objectstorage.k8s.io/authors: Kubernetes Authors
+    objectstorage.k8s.io/license: Apache V2
+    objectstorage.k8s.io/support: https://github.com/kubernetes-sigs/container-object-storage-api
+  labels:
+    app.kubernetes.io/component: controller
+    app.kubernetes.io/managed-by: kustomize
+    app.kubernetes.io/name: container-object-storage-interface-controller
+    app.kubernetes.io/part-of: container-object-storage-interface
+  name: container-object-storage-controller-sa
+  namespace: {{ .Release.Namespace }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  annotations:
+    api-approved.kubernetes.io: https://github.com/kubernetes/enhancements/tree/master/keps/sig-storage/1979-object-storage-support
+    objectstorage.k8s.io/authors: Kubernetes Authors
+    objectstorage.k8s.io/license: Apache V2
+    objectstorage.k8s.io/support: https://github.com/kubernetes-sigs/container-object-storage-api
+  labels:
+    app.kubernetes.io/component: controller
+    app.kubernetes.io/managed-by: kustomize
+    app.kubernetes.io/name: container-object-storage-interface-controller
+    app.kubernetes.io/part-of: container-object-storage-interface
+    app.kubernetes.io/version: main
+  name: container-object-storage-controller
+  namespace: {{ .Release.Namespace }}
+rules:
+- apiGroups:
+  - coordination.k8s.io
+  resources:
+  - leases
+  verbs:
+  - get
+  - watch
+  - list
+  - delete
+  - update
+  - create
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  annotations:
+    api-approved.kubernetes.io: https://github.com/kubernetes/enhancements/tree/master/keps/sig-storage/1979-object-storage-support
+    objectstorage.k8s.io/authors: Kubernetes Authors
+    objectstorage.k8s.io/license: Apache V2
+    objectstorage.k8s.io/support: https://github.com/kubernetes-sigs/container-object-storage-api
+  labels:
+    app.kubernetes.io/component: controller
+    app.kubernetes.io/managed-by: kustomize
+    app.kubernetes.io/name: container-object-storage-interface-controller
+    app.kubernetes.io/part-of: container-object-storage-interface
+  name: container-object-storage-controller-role
+rules:
+- apiGroups:
+  - objectstorage.k8s.io
+  resources:
+  - bucketclaims
+  - bucketaccesses
+  - bucketclaims/status
+  - bucketaccesses/status
+  verbs:
+  - get
+  - list
+  - watch
+  - update
+- apiGroups:
+  - objectstorage.k8s.io
+  resources:
+  - buckets
+  verbs:
+  - get
+  - list
+  - watch
+  - update
+  - create
+  - delete
+- apiGroups:
+  - objectstorage.k8s.io
+  resources:
+  - bucketclasses
+  - bucketaccessclasses
+  verbs:
+  - get
+  - list
+- apiGroups:
+  - ""
+  resources:
+  - events
+  verbs:
+  - list
+  - watch
+  - create
+  - update
+  - patch
+- apiGroups:
+  - ""
+  resources:
+  - configmaps
+  - serviceaccounts
+  verbs:
+  - list
+  - get
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  annotations:
+    api-approved.kubernetes.io: https://github.com/kubernetes/enhancements/tree/master/keps/sig-storage/1979-object-storage-support
+    objectstorage.k8s.io/authors: Kubernetes Authors
+    objectstorage.k8s.io/license: Apache V2
+    objectstorage.k8s.io/support: https://github.com/kubernetes-sigs/container-object-storage-api
+  labels:
+    app.kubernetes.io/component: controller
+    app.kubernetes.io/managed-by: kustomize
+    app.kubernetes.io/name: container-object-storage-interface-controller
+    app.kubernetes.io/part-of: container-object-storage-interface
+    app.kubernetes.io/version: main
+  name: container-object-storage-controller
+  namespace: {{ .Release.Namespace }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: container-object-storage-controller
+subjects:
+- kind: ServiceAccount
+  name: container-object-storage-controller-sa
+  namespace: {{ .Release.Namespace }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  annotations:
+    api-approved.kubernetes.io: https://github.com/kubernetes/enhancements/tree/master/keps/sig-storage/1979-object-storage-support
+    objectstorage.k8s.io/authors: Kubernetes Authors
+    objectstorage.k8s.io/license: Apache V2
+    objectstorage.k8s.io/support: https://github.com/kubernetes-sigs/container-object-storage-api
+  labels:
+    app.kubernetes.io/component: controller
+    app.kubernetes.io/managed-by: kustomize
+    app.kubernetes.io/name: container-object-storage-interface-controller
+    app.kubernetes.io/part-of: container-object-storage-interface
+    app.kubernetes.io/version: main
+  name: container-object-storage-controller
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: container-object-storage-controller-role
+subjects:
+- kind: ServiceAccount
+  name: container-object-storage-controller-sa
+  namespace: {{ .Release.Namespace }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  annotations:
+    api-approved.kubernetes.io: https://github.com/kubernetes/enhancements/tree/master/keps/sig-storage/1979-object-storage-support
+    objectstorage.k8s.io/authors: Kubernetes Authors
+    objectstorage.k8s.io/license: Apache V2
+    objectstorage.k8s.io/support: https://github.com/kubernetes-sigs/container-object-storage-api
+  labels:
+    app: container-object-storage-interface-controller
+    app.kubernetes.io/component: controller
+    app.kubernetes.io/managed-by: kustomize
+    app.kubernetes.io/name: container-object-storage-interface-controller
+    app.kubernetes.io/part-of: container-object-storage-interface
+  name: container-object-storage-controller
+  namespace: {{ .Release.Namespace }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: container-object-storage-interface-controller
+  strategy:
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  template:
+    metadata:
+      annotations:
+        api-approved.kubernetes.io: https://github.com/kubernetes/enhancements/tree/master/keps/sig-storage/1979-object-storage-support
+        objectstorage.k8s.io/authors: Kubernetes Authors
+        objectstorage.k8s.io/license: Apache V2
+        objectstorage.k8s.io/support: https://github.com/kubernetes-sigs/container-object-storage-api
+      labels:
+        app: container-object-storage-interface-controller
+        app.kubernetes.io/component: controller
+        app.kubernetes.io/managed-by: kustomize
+        app.kubernetes.io/name: container-object-storage-interface-controller
+        app.kubernetes.io/part-of: container-object-storage-interface
+    spec:
+      containers:
+      - args:
+        - --v=5
+        image: {{ .Values.objectstorage.controller.image }}
+        name: objectstorage-controller
+      serviceAccountName: container-object-storage-controller-sa

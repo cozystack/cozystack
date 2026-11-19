@@ -1,0 +1,17 @@
+Worker node pool "{{ include "kubernetes-nodes.groupName" . }}" for cluster "{{ .Values.cluster }}".
+
+This pool is a separate release from the control plane. Three operational notes:
+
+1. Deletion order. Deleting the parent Kubernetes cluster while this pool still
+   exists leaves the pool release trying to recreate CAPI objects against a
+   cluster that is being torn down. Delete the KubernetesNodes pools first, then
+   the parent Kubernetes cluster.
+
+2. Version skew. This pool's `version` may lag the parent cluster's Kubernetes
+   minor during an upgrade but may not lead it: a worker kubelet ahead of the
+   apiserver is refused at render time. Upgrade the parent Kubernetes CR first,
+   then each pool.
+
+3. Pool name. The pool's objects are named `kubernetes-<cluster>-<pool>`. When a
+   MachineDeployment of that name already exists and belongs to another Helm
+   release, this release fails at render time rather than taking it over.

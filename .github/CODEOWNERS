@@ -1,0 +1,86 @@
+# Path-to-owner mapping for this repository. MAINTAINERS.md names the people and
+# points here for the areas; CONTRIBUTOR_LADDER.md defines the roles. Security
+# reports do NOT come through this file — see SECURITY.md.
+#
+# Two mechanics shape the file, and both fail silently.
+#
+# Matching REPLACES, it does not merge. Only the LAST matching pattern applies,
+# and it discards every broader one including the * catch-all, so exactly one
+# line decides the owners of any given path. There is no syntax for "these
+# people may review anything" — repeating the handles on every line is that
+# statement. A rule that omits someone strips their ownership of those paths.
+#
+# A handle without write access to this repository is ignored and no error is
+# reported, which leaves the paths it scopes gating on nobody. Check write access
+# before adding a handle.
+#
+# Rules run broad to specific. An area with no rule of its own is owned by the
+# tier rule above it — add a person to an existing rule rather than carving a new
+# path for them.
+
+*                                    @kvaps @lllamnyp @lexfrei @myasnikovdaniil @IvanHunters
+
+/api/                                @kvaps @lllamnyp @lexfrei @myasnikovdaniil @IvanHunters @sircthulhu
+/cmd/                                @kvaps @lllamnyp @lexfrei @myasnikovdaniil @IvanHunters @sircthulhu
+/internal/                           @kvaps @lllamnyp @lexfrei @myasnikovdaniil @IvanHunters @sircthulhu
+/pkg/                                @kvaps @lllamnyp @lexfrei @myasnikovdaniil @IvanHunters @sircthulhu
+
+/packages/core/                      @kvaps @lllamnyp @lexfrei @myasnikovdaniil @IvanHunters @sircthulhu @kingdonb
+/packages/system/                    @kvaps @lllamnyp @lexfrei @myasnikovdaniil @IvanHunters @sircthulhu @mattia-eleuteri
+/packages/extra/                     @kvaps @lllamnyp @lexfrei @myasnikovdaniil @IvanHunters @sircthulhu @mattia-eleuteri
+/packages/apps/                      @kvaps @lllamnyp @lexfrei @myasnikovdaniil @IvanHunters @matthieu-robin @scooby87
+
+/packages/apps/vm-*/                 @kvaps @lllamnyp @lexfrei @myasnikovdaniil @IvanHunters @scooby87 @mattia-eleuteri
+/packages/system/kubevirt*/          @kvaps @lllamnyp @lexfrei @myasnikovdaniil @IvanHunters @scooby87 @mattia-eleuteri
+/packages/system/vm-*/               @kvaps @lllamnyp @lexfrei @myasnikovdaniil @IvanHunters @scooby87 @mattia-eleuteri
+/packages/system/gpu-operator/       @kvaps @lllamnyp @lexfrei @myasnikovdaniil @IvanHunters @scooby87 @mattia-eleuteri
+/packages/system/hami/               @kvaps @lllamnyp @lexfrei @myasnikovdaniil @IvanHunters @scooby87 @mattia-eleuteri
+/dashboards/gpu/                     @kvaps @lllamnyp @lexfrei @myasnikovdaniil @IvanHunters @scooby87 @mattia-eleuteri
+/dashboards/kubevirt/                @kvaps @lllamnyp @lexfrei @myasnikovdaniil @IvanHunters @scooby87 @mattia-eleuteri
+
+/api/backups/                        @kvaps @lllamnyp @lexfrei @myasnikovdaniil @IvanHunters @androndo @mattia-eleuteri
+/cmd/backup*-controller/             @kvaps @lllamnyp @lexfrei @myasnikovdaniil @IvanHunters @androndo @mattia-eleuteri
+/internal/backupcontroller/          @kvaps @lllamnyp @lexfrei @myasnikovdaniil @IvanHunters @androndo @mattia-eleuteri
+/examples/backups/                   @kvaps @lllamnyp @lexfrei @myasnikovdaniil @IvanHunters @androndo @mattia-eleuteri
+/packages/system/backup*-controller/ @kvaps @lllamnyp @lexfrei @myasnikovdaniil @IvanHunters @androndo @mattia-eleuteri
+/packages/system/velero/             @kvaps @lllamnyp @lexfrei @myasnikovdaniil @IvanHunters @androndo @mattia-eleuteri
+/packages/system/vsnap-crd/          @kvaps @lllamnyp @lexfrei @myasnikovdaniil @IvanHunters @androndo @mattia-eleuteri
+
+/packages/system/keycloak*/          @kvaps @lllamnyp @lexfrei @myasnikovdaniil @IvanHunters @sircthulhu
+
+/packages/system/capi-providers-infraprovider-proxmox/ @kvaps @lllamnyp @lexfrei @myasnikovdaniil @IvanHunters @sircthulhu @mattia-eleuteri @themoriarti
+/packages/system/proxmox-*/          @kvaps @lllamnyp @lexfrei @myasnikovdaniil @IvanHunters @sircthulhu @mattia-eleuteri @themoriarti
+
+/cmd/flux-*/                         @kvaps @lllamnyp @lexfrei @myasnikovdaniil @IvanHunters @kingdonb
+/internal/flux*/                     @kvaps @lllamnyp @lexfrei @myasnikovdaniil @IvanHunters @kingdonb
+/packages/core/flux-aio/             @kvaps @lllamnyp @lexfrei @myasnikovdaniil @IvanHunters @kingdonb
+/packages/system/flux-*/             @kvaps @lllamnyp @lexfrei @myasnikovdaniil @IvanHunters @kingdonb
+/dashboards/flux/                    @kvaps @lllamnyp @lexfrei @myasnikovdaniil @IvanHunters @kingdonb
+
+/.github/                            @kvaps @lllamnyp @lexfrei @myasnikovdaniil @IvanHunters
+/hack/                               @kvaps @lllamnyp @lexfrei @myasnikovdaniil @IvanHunters
+/test/                               @kvaps @lllamnyp @lexfrei @myasnikovdaniil @IvanHunters
+/tools/                              @kvaps @lllamnyp @lexfrei @myasnikovdaniil @IvanHunters
+/Makefile                            @kvaps @lllamnyp @lexfrei @myasnikovdaniil @IvanHunters
+/.pre-commit-config.yaml             @kvaps @lllamnyp @lexfrei @myasnikovdaniil @IvanHunters
+
+/docs/                               @kvaps @lllamnyp @lexfrei @myasnikovdaniil @IvanHunters @tym83
+/ADOPTERS.md                         @kvaps @lllamnyp @lexfrei @myasnikovdaniil @IvanHunters @tym83
+/CODE_OF_CONDUCT.md                  @kvaps @lllamnyp @lexfrei @myasnikovdaniil @IvanHunters @tym83
+/CONTRIBUTING.md                     @kvaps @lllamnyp @lexfrei @myasnikovdaniil @IvanHunters @tym83
+/CONTRIBUTOR_LADDER.md               @kvaps @lllamnyp @lexfrei @myasnikovdaniil @IvanHunters @tym83
+/GENERAL_TECHNICAL_REVIEW.md         @kvaps @lllamnyp @lexfrei @myasnikovdaniil @IvanHunters @tym83
+/GOVERNANCE.md                       @kvaps @lllamnyp @lexfrei @myasnikovdaniil @IvanHunters @tym83
+/LICENSE                             @kvaps @lllamnyp @lexfrei @myasnikovdaniil @IvanHunters @tym83
+/MAINTAINERS.md                      @kvaps @lllamnyp @lexfrei @myasnikovdaniil @IvanHunters @tym83
+/README.md                           @kvaps @lllamnyp @lexfrei @myasnikovdaniil @IvanHunters @tym83
+/ROADMAP.md                          @kvaps @lllamnyp @lexfrei @myasnikovdaniil @IvanHunters @tym83
+/SECURITY.md                         @kvaps @lllamnyp @lexfrei @myasnikovdaniil @IvanHunters @tym83
+
+# `make generate` produces the paths below from each app's values.yaml, which is
+# already reviewed under the rules above, and the pre-commit run-make-generate /
+# run-make-generate-root CI hooks regenerate and fail on any diff. A pattern
+# listed with no owner is what waives the rules above for just these paths.
+/api/apps/v1alpha1/*/types.go
+/api/apps/v1alpha1/*/zz_generated.deepcopy.go
+/packages/system/*/cozyrds/

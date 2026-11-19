@@ -1,0 +1,54 @@
+{{- if .Values.storageClass.create }}
+---
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: {{ .Values.storageClass.name }}
+{{ include "nfs.labels" . | indent 2 }}
+  {{- with .Values.storageClass.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+provisioner: {{ .Values.driver.name }}
+{{- with .Values.storageClass.parameters }}
+parameters:
+{{ toYaml . | indent 2 }}
+{{- end }}
+reclaimPolicy: {{ .Values.storageClass.reclaimPolicy }}
+volumeBindingMode: {{ .Values.storageClass.volumeBindingMode }}
+allowVolumeExpansion: true
+{{- with .Values.storageClass.mountOptions }}
+mountOptions:
+{{ toYaml . | nindent 2 }}
+{{- end }}
+{{- end }}
+{{- if .Values.storageClasses }}
+{{- range .Values.storageClasses }}
+---
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: {{ .name }}
+{{ include "nfs.labels" $ | indent 2 }}
+  {{- with .annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+provisioner: {{ $.Values.driver.name }}
+{{- with .parameters }}
+parameters:
+{{ toYaml . | indent 2 }}
+{{- end }}
+reclaimPolicy: {{ .reclaimPolicy | default "Delete" }}
+volumeBindingMode: {{ .volumeBindingMode | default "Immediate" }}
+{{- if hasKey . "allowVolumeExpansion" }}
+allowVolumeExpansion: {{ .allowVolumeExpansion }}
+{{- else }}
+allowVolumeExpansion: true
+{{- end }}
+{{- with .mountOptions }}
+mountOptions:
+{{ toYaml . | nindent 2 }}
+{{- end }}
+{{- end }}
+{{- end }}

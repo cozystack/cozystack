@@ -1,0 +1,16 @@
+---
+apiVersion: cozystack.io/v1alpha1
+kind: WorkloadMonitor
+metadata:
+  name: {{ $.Release.Name }}
+  namespace: {{ $.Release.Namespace }}
+spec:
+  replicas: {{ .Values.replicas }}
+  minReplicas: {{ div .Values.replicas 2 | add1 }}
+  kind: ingress
+  type: controller
+  selector:
+    app.kubernetes.io/component: controller
+    app.kubernetes.io/instance: ingress-nginx-system
+    app.kubernetes.io/name: ingress-nginx
+  version: {{ $.Chart.Version }}

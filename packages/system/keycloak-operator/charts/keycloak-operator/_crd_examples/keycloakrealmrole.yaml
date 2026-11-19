@@ -1,0 +1,19 @@
+apiVersion: v1.edp.epam.com/v1
+kind: KeycloakRealmRole
+metadata:
+  name: keycloakrealmrole-sample
+spec:
+  description: developer role
+  name: test-role
+  realmRef:
+    name: keycloakrealm-sample
+    kind: KeycloakRealm
+  composite: true
+  composites:
+    - name: offline_access
+  compositesClientRoles:
+    broker:
+      - name: read-token
+    account:
+      - name: manage-account
+      - name: view-profile

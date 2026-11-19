@@ -1,0 +1,8 @@
+_namespace:
+  etcd: tenant-root
+  monitoring: ""
+  ingress: ""
+  seaweedfs: ""
+  host: "example.org"
+_cluster:
+  cluster-domain: cozy.local

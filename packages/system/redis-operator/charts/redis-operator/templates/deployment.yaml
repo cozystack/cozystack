@@ -1,0 +1,89 @@
+{{- $fullName := include "chart.fullname" . -}}
+{{ $name := "registry" }}
+{{- $data := dict "Chart" .Chart "Release" .Release "Values" .Values -}}
+apiVersion: {{ template "common.capabilities.deployment.apiVersion" . }}
+kind: Deployment
+metadata:
+  name: {{ $fullName }}
+  namespace: {{ include "chart.namespaceName" . }}
+  labels:
+    {{- include "chart.labels" $data | nindent 4 }}
+  {{- if .Values.annotations }}
+  annotations:
+{{ toYaml .Values.annotations | indent 4 }}
+  {{- end }}
+spec:
+  replicas: {{ .Values.replicas }}
+  selector:
+    matchLabels:
+      {{- include "chart.selectorLabels" $data | nindent 6 }}
+  strategy:
+    type: {{ .Values.updateStrategy.type }}
+  template:
+    metadata:
+      {{- with .Values.annotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      labels:
+        {{- include "chart.selectorLabels" $data | nindent 8 }}
+    spec:
+      serviceAccountName: {{ template "chart.serviceAccountName" . }}
+      {{- if (and .Values.imageCredentials.create (not .Values.imageCredentials.existsSecrets)) }}
+      imagePullSecrets:
+        - name: {{ $fullName }}-{{ $name }}
+      {{- else if (and .Values.imageCredentials.create .Values.imageCredentials.existsSecrets) }}
+      {{- range .Values.imageCredentials.existsSecrets }}
+      imagePullSecrets:
+        {{ printf "- name: %s" . }}
+      {{- end }}
+      {{- end }}
+      containers:
+      - name: {{ .Chart.Name }}
+        image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion}}"
+        {{- if .Values.image.cli_args }}
+        args: 
+        - {{ quote .Values.image.cli_args }}
+        {{- end }}
+        imagePullPolicy: {{ .Values.image.pullPolicy }}
+        {{- if .Values.extraEnvVars }}
+        env:
+          {{- toYaml .Values.extraEnvVars | nindent 10 }}
+        {{- end }}
+        ports:
+          - name: metrics
+            containerPort: {{ .Values.container.port }}
+            protocol: TCP
+        readinessProbe:
+          tcpSocket:
+            port: {{ .Values.container.port }}
+          initialDelaySeconds: 10
+          periodSeconds: 3
+          timeoutSeconds: 3
+        livenessProbe:
+          tcpSocket:
+            port: {{ .Values.container.port }}
+          initialDelaySeconds: 30
+          periodSeconds: 5
+          timeoutSeconds: 5
+          failureThreshold: 6
+          successThreshold: 1
+        securityContext:
+          {{- toYaml .Values.securityContext | nindent 12 }}
+        resources:
+          {{- toYaml .Values.resources | nindent 12 }}
+    {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+    {{- end }}
+    {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+    {{- end }}
+    {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+    {{- end }}
+    {{- if .Values.priorityClassName }}
+      priorityClassName: {{ .Values.priorityClassName }}
+    {{- end }}

@@ -1,0 +1,70 @@
+suite: cozy-kubevirt-operator vendored manifest
+release:
+  name: kubevirt-operator
+  namespace: cozy-kubevirt
+tests:
+  # prometheusrule.yaml is ours rather than upstream's and sits in the
+  # directory `make update` writes into, so a refresh is what is most likely to
+  # take it. Addressed as a `template:` because helm-unittest fails outright on
+  # one it cannot find, which is what makes the absence loud rather than a
+  # quietly smaller render.
+  - it: keeps the local PrometheusRule beside the vendored manifest
+    template: prometheusrule.yaml
+    asserts:
+      - containsDocument:
+          apiVersion: monitoring.coreos.com/v1
+          kind: PrometheusRule
+          name: vm-not-running-alert
+      - equal:
+          path: spec.groups[0].name
+          value: kubevirt-alerts
+
+  # Addressed by name rather than by index: the vendored file is one long
+  # document stream and an upstream reorder would slide any index off the
+  # Deployment silently.
+  - it: runs the virt-operator image from the pinned release
+    template: kubevirt-operator.yaml
+    documentSelector:
+      path: metadata.name
+      value: virt-operator
+    asserts:
+      - equal:
+          path: kind
+          value: Deployment
+      # The Makefile's grep ties this tag back to RELEASE. This one says the
+      # tag is on the operator Deployment rather than somewhere in the stream.
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: quay.io/kubevirt/virt-operator:v1.9.0
+      # KUBEVIRT_VERSION is what virt-operator reads to pick the tags for
+      # virt-controller, virt-handler and virt-launcher, so a manifest whose
+      # operator image moved while this did not deploys a split control plane.
+      # Matched against the env list by content rather than by position: the
+      # order upstream emits these in is not ours to rely on.
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: KUBEVIRT_VERSION
+            value: v1.9.0
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: VIRT_OPERATOR_IMAGE
+            value: quay.io/kubevirt/virt-operator:v1.9.0
+      # First of the two transforms `update` applies: upstream ships
+      # `namespace: kubevirt` throughout and the recipe rewrites it.
+      - equal:
+          path: metadata.namespace
+          value: cozy-kubevirt
+
+  # Second transform. `any: true` is load-bearing on a negated containsDocument:
+  # without it the assertion reads "not every document is a Namespace", which is
+  # true of any multi-document template and would pin nothing.
+  - it: drops the Namespace object upstream ships
+    template: kubevirt-operator.yaml
+    asserts:
+      - containsDocument:
+          apiVersion: v1
+          kind: Namespace
+          any: true
+        not: true

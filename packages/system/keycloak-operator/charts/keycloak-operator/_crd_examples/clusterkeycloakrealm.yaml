@@ -1,0 +1,31 @@
+apiVersion: v1.edp.epam.com/v1alpha1
+kind: ClusterKeycloakRealm
+metadata:
+  name: clusterkeycloakrealm-sample
+spec:
+  clusterKeycloakRef: clusterkeycloak-sample
+  realmName: realm-sample1234
+  authenticationFlows:
+    browserFlow: browserFlow-sample
+  login:
+    userRegistration: true
+    forgotPassword: true
+    rememberMe: true
+    emailAsUsername: false
+    loginWithEmail: true
+    duplicateEmails: false
+    verifyEmail: true
+    editUsername: false
+  sessions:
+    ssoLoginSettings:
+      accessCodeLifespanLogin: 1800      # 30 minutes
+      accessCodeLifespanUserAction: 300  # 5 minutes
+    ssoSessionSettings:
+      idleTimeout: 1800                  # 30 minutes
+      idleTimeoutRememberMe: 604800      # 7 days
+      maxLifespan: 36000                 # 10 hours
+      maxLifespanRememberMe: 2592000     # 30 days
+    ssoOfflineSessionSettings:
+      idleTimeout: 2592000               # 30 days
+      maxLifespan: 5184000               # 60 days
+      maxLifespanEnabled: true

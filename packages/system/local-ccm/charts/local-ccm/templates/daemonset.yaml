@@ -1,0 +1,54 @@
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: {{ include "local-ccm.fullname" . }}
+  labels:
+    {{- include "local-ccm.labels" . | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "local-ccm.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "local-ccm.selectorLabels" . | nindent 8 }}
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      serviceAccountName: {{ include "local-ccm.serviceAccountName" . }}
+      hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+      - name: local-ccm
+        image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+        imagePullPolicy: {{ .Values.image.pullPolicy }}
+        command:
+        - /usr/local/bin/local-ccm
+        args:
+        - --node-name=$(NODE_NAME)
+        - --external-ip-target={{ .Values.ipDetection.externalIPTarget }}
+        {{- if .Values.ipDetection.internalIPTarget }}
+        - --internal-ip-target={{ .Values.ipDetection.internalIPTarget }}
+        {{- end }}
+        - --remove-taint={{ .Values.controller.removeTaint }}
+        - --reconcile-interval={{ .Values.controller.reconcileInterval }}
+        - --v={{ .Values.controller.verbosity }}
+        env:
+        - name: NODE_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: spec.nodeName
+        securityContext:
+          {{- toYaml .Values.securityContext | nindent 10 }}
+        resources:
+          {{- toYaml .Values.resources | nindent 10 }}

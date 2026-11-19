@@ -1,0 +1,41 @@
+{{- define "cozystack.defaultCoreDNSValues" -}}
+coredns:
+  service:
+    clusterIP: "10.95.0.10"
+{{- end }}
+
+{{- if .Values._namespace.etcd }}
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: {{ .Release.Name }}-coredns
+  labels:
+    cozystack.io/repository: system
+    cozystack.io/target-cluster-name: {{ .Release.Name }}
+    sharding.fluxcd.io/key: tenants
+spec:
+  releaseName: coredns
+  chartRef:
+    kind: ExternalArtifact
+    name: cozystack-kubernetes-application-kubevirt-kubernetes-coredns
+    namespace: cozy-system
+  kubeConfig:
+    secretRef:
+      name: {{ .Release.Name }}-admin-kubeconfig
+      key: super-admin.svc
+  targetNamespace: kube-system
+  storageNamespace: kube-system
+  interval: 5m
+  timeout: 10m
+  install:
+    remediation:
+      retries: -1
+  upgrade:
+    remediation:
+      retries: -1
+  values:
+    {{- toYaml (deepCopy .Values.addons.coredns.valuesOverride | mergeOverwrite (fromYaml (include "cozystack.defaultCoreDNSValues" .))) | nindent 4 }}
+  dependsOn:
+  - name: {{ .Release.Name }}-cilium
+    namespace: {{ .Release.Namespace }}
+{{- end }}

@@ -1,0 +1,19 @@
+suite: fluent-bit routes no tenant logs when lookup sees no cluster
+
+# No kubernetesProvider: lookup returns nothing, as it does under helm template
+# and dry-run. The config must then carry no routing at all, rather than a
+# rewrite_tag with no Rule or an output with an empty host.
+templates:
+  - charts/fluent-bit/templates/configmap.yaml
+release:
+  name: monitoring-agents
+  namespace: cozy-monitoring
+set:
+  global:
+    target: tenant-root
+tests:
+  - it: renders no rewrite_tag filter, tenant output or tenant label override
+    asserts:
+      - notMatchRegex:
+          path: data["fluent-bit.conf"]
+          pattern: 'rewrite_tag|Match tenant\.|Set tenant'

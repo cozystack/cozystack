@@ -1,0 +1,83 @@
+import type {
+  IconButtonProps,
+  ArrayFieldTemplateItemType,
+  FormContextType,
+  RJSFSchema,
+  StrictRJSFSchema,
+  SubmitButtonProps,
+} from "@rjsf/utils"
+
+function IconButton<
+  T = unknown,
+  S extends StrictRJSFSchema = RJSFSchema,
+  F extends FormContextType = FormContextType,
+>(props: IconButtonProps<T, S, F>) {
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  const { icon, className, uiSchema, registry, iconType, ...btnProps } = props
+  return (
+    <button
+      type="button"
+      className={className}
+      {...btnProps}
+    >
+      {icon}
+    </button>
+  )
+}
+
+const buttonClassName =
+  "rounded-md border border-slate-200 bg-white px-3 py-1.5 text-sm font-medium text-slate-600 shadow-sm hover:bg-slate-50 hover:border-slate-300 transition-colors"
+
+const removeButtonClassName =
+  "rounded-md border border-red-200 bg-white px-3 py-1.5 text-sm font-medium text-red-600 shadow-sm hover:bg-red-50 hover:border-red-300 transition-colors"
+
+export function ArrayFieldItemTemplate<
+  T = unknown,
+  S extends StrictRJSFSchema = RJSFSchema,
+  F extends FormContextType = FormContextType,
+>(props: ArrayFieldTemplateItemType<T, S, F>) {
+  const { children, hasRemove, index, onDropIndexClick, disabled, readonly, schema } = props
+  const isNumeric = schema.type === 'integer' || schema.type === 'number'
+  return (
+    <div className="array-item-row group flex items-center gap-1.5 mb-1">
+      <div className={isNumeric ? 'w-36 shrink-0' : 'flex-1'}>{children}</div>
+      {hasRemove && (
+        <button
+          type="button"
+          aria-label="Remove"
+          className="opacity-0 group-hover:opacity-100 size-[26px] flex-shrink-0 flex items-center justify-center rounded-full border border-red-200 bg-white text-red-400 text-sm leading-none hover:bg-red-50 hover:text-red-600 hover:border-red-300 disabled:opacity-30 transition-all duration-150"
+          onClick={onDropIndexClick(index)}
+          disabled={disabled || readonly}
+        >
+          ×
+        </button>
+      )}
+    </div>
+  )
+}
+
+export function AddButton(props: IconButtonProps) {
+  return (
+    <IconButton
+      {...props}
+      icon="+ add"
+      className="mt-0.5 flex items-center gap-1 px-2 py-1 text-xs font-medium text-slate-500 hover:text-blue-600 rounded-md border border-dashed border-slate-300 hover:border-blue-400 hover:bg-blue-50/60 bg-white transition-all duration-150 cursor-pointer"
+    />
+  )
+}
+
+export function RemoveButton(props: IconButtonProps) {
+  return <IconButton {...props} icon="× Remove" className={removeButtonClassName} />
+}
+
+export function CopyButton(props: IconButtonProps) {
+  return <IconButton {...props} icon="Copy" className={buttonClassName} />
+}
+
+export function SubmitButton(props: SubmitButtonProps) {
+  return <IconButton {...props} icon="Submit" className={buttonClassName} />
+}
+
+export function HiddenButton() {
+  return null
+}

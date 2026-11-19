@@ -1,0 +1,42 @@
+suite: apps.yaml monitoring.rootEnabled → _cluster wiring
+templates:
+  - templates/apps.yaml
+
+release:
+  name: cozy-platform
+  namespace: cozy-system
+
+# monitoring.rootEnabled records whether the root tenant hosts the platform
+# monitoring stack (Tenant/root spec.monitoring). It reaches cozystack-basics
+# through _cluster.monitoring-enabled in the cozystack-values Secret, where it
+# gates the cozy-monitoring -> tenant-root vlinsert/vminsert ExternalName
+# redirects. Without the flag in the Secret those redirects would always be
+# created and dead-end when the root tenant has no monitoring, silently
+# dropping logs (issue #3181). These assertions pin that the flag lands in the
+# Secret both ways.
+
+tests:
+  - it: writes monitoring-enabled true by default
+    asserts:
+      - matchRegex:
+          path: stringData["values.yaml"]
+          pattern: '(?m)^\s*monitoring-enabled:\s*"true"'
+
+  - it: writes monitoring-enabled false when monitoring.rootEnabled is disabled
+    set:
+      monitoring.rootEnabled: false
+    asserts:
+      - matchRegex:
+          path: stringData["values.yaml"]
+          pattern: '(?m)^\s*monitoring-enabled:\s*"false"'
+
+  # Guard: `.Values.monitoring` nulled in custom values must not panic the
+  # render; `dig ... (.Values.monitoring | default dict)` falls back to the
+  # true default.
+  - it: falls back to true (no panic) when monitoring is null
+    set:
+      monitoring: null
+    asserts:
+      - matchRegex:
+          path: stringData["values.yaml"]
+          pattern: '(?m)^\s*monitoring-enabled:\s*"true"'

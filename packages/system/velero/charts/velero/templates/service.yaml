@@ -1,0 +1,45 @@
+{{- if .Values.metrics.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "velero.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  {{- with .Values.metrics.service.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  labels:
+    app.kubernetes.io/name: {{ include "velero.name" . }}
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+    app.kubernetes.io/version: {{ .Chart.AppVersion }}
+    helm.sh/chart: {{ include "velero.chart" . }}
+    {{- with .Values.metrics.service.labels }}
+      {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  {{- if .Values.metrics.service.externalTrafficPolicy }}
+  externalTrafficPolicy: {{ .Values.metrics.service.externalTrafficPolicy }}
+  {{- end }}
+  {{- if .Values.metrics.service.internalTrafficPolicy }}
+  internalTrafficPolicy: {{ .Values.metrics.service.internalTrafficPolicy }}
+  {{- end }}
+  {{- if .Values.metrics.service.ipFamilyPolicy }}
+  ipFamilyPolicy: {{ .Values.metrics.service.ipFamilyPolicy }}
+  {{- end }}
+  {{- if .Values.metrics.service.ipFamilies }}
+  ipFamilies: {{ toYaml .Values.metrics.service.ipFamilies | nindent 4 }}
+  {{- end }}
+  type: {{ .Values.metrics.service.type }}
+  ports:
+    - name: http-monitoring
+      port: 8085
+      {{- if ( and (eq .Values.metrics.service.type "NodePort" ) (not (empty .Values.metrics.service.nodePort)) ) }}
+      nodePort: {{ .Values.metrics.service.nodePort }}
+      {{- end }}
+      targetPort: http-monitoring
+  selector:
+    name: velero
+    app.kubernetes.io/name: {{ include "velero.name" . }}
+    app.kubernetes.io/instance: {{ .Release.Name }}
+{{- end }}

@@ -1,0 +1,34 @@
+#!/bin/sh
+# Migration 43 --> 44
+# Adopt existing Cluster/seaweedfs-db resources into the new <name>-db
+# HelmRelease introduced in this release.
+#
+# Pre-split, the CNPG Cluster lived inside the <name>-system Helm release.
+# Splitting moves it to a new release named <name>-db. We rewrite the helm
+# ownership annotations so Helm adopts the existing Cluster instead of erroring
+# on the next reconcile, and stamp helm.sh/resource-policy: keep so the
+# <name>-system upgrade (which no longer renders the Cluster) does not delete it
+# during the transition.
+#
+# The hand-over itself lives in lib/seaweedfs-db-adopt.sh, shared with migration
+# 53. This migration originally compared the owning release name against the
+# literal "seaweedfs-system", which silently skipped every instance NOT named
+# `seaweedfs`: SeaweedFS is a user-creatable kind, so an instance `foo` is owned
+# by `foo-system`. Those tenants got no `keep`, and the <name>-system upgrade
+# pruned their Cluster — taking the filer metadata, and with it all of the
+# tenant's S3. The shared helper matches the `-system` SUFFIX instead, covering
+# every instance name; migration 53 repairs clusters that already ran the
+# hardcoded version.
+
+set -euo pipefail
+
+# shellcheck source=lib/cozystack-version.sh
+. "$(dirname "$0")/lib/cozystack-version.sh"
+# shellcheck source=lib/seaweedfs-db-adopt.sh
+. "$(dirname "$0")/lib/seaweedfs-db-adopt.sh"
+
+adopt_seaweedfs_db_clusters
+
+# Stamp version. The labeled manifest lives in the shared helper so it cannot
+# drift back to a label-less apply that strips platform.cozystack.io/no-delete.
+stamp_cozystack_version 44

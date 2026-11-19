@@ -1,0 +1,721 @@
+suite: postgres read-replica autoscaling (KEDA)
+
+# Covers the autoscaling.enabled path: under active autoscaling the chart stops
+# declaring spec.instances (so Flux/KEDA no longer contend) and renders a KEDA
+# ScaledObject whose bounds encode the synchronous-quorum floor. dryRun keeps the
+# static count and pauses the ScaledObject.
+
+release:
+  name: postgres-db
+  namespace: tenant-acme
+
+set:
+  _cluster:
+    scheduling: {}
+    cluster-domain: cozy.local
+  _namespace:
+    monitoring: tenant-root
+
+# The ScaledObject template guards on the KEDA CRD being present; make it available
+# to every rendering test (individual guard tests override this).
+capabilities:
+  apiVersions:
+    - keda.sh/v1alpha1
+
+templates:
+  - templates/db.yaml
+  - templates/scaledobject.yaml
+
+tests:
+  - it: keeps a static spec.instances and renders no ScaledObject when autoscaling is off (default)
+    templates:
+      - templates/db.yaml
+    documentSelector:
+      path: kind
+      value: Cluster
+    asserts:
+      - equal:
+          path: spec.instances
+          value: 2
+
+  - it: renders no ScaledObject when autoscaling is off (default)
+    templates:
+      - templates/scaledobject.yaml
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: seeds spec.instances at the quorum floor and floors the WorkloadMonitor under active autoscaling
+    templates:
+      - templates/db.yaml
+    set:
+      autoscaling:
+        enabled: true
+        minReplicas: 2
+        maxReplicas: 6
+        target: 150
+      quorum:
+        maxSyncReplicas: 2
+    asserts:
+      # The field is seeded (not omitted) to effectiveMin = max(minReplicas=2,
+      # maxSyncReplicas+1=3, 2) = 3 so a fresh Cluster is admitted at a valid,
+      # quorum-satisfying count; KEDA then owns the runtime value via /scale and
+      # the constant render keeps three-way merge from reverting it.
+      - equal:
+          path: spec.instances
+          value: 3
+        documentSelector:
+          path: kind
+          value: Cluster
+      # WorkloadMonitor tracks the quorum-floored minimum instead of a stale static value
+      - equal:
+          path: spec.replicas
+          value: 3
+        documentSelector:
+          path: kind
+          value: WorkloadMonitor
+
+  - it: seeds a quorum-valid instance count on a fresh autoscaled cluster with synchronous replication
+    templates:
+      - templates/db.yaml
+    set:
+      autoscaling:
+        enabled: true
+        minReplicas: 2
+        maxReplicas: 6
+        target: 150
+      quorum:
+        maxSyncReplicas: 1
+    asserts:
+      # Regression guard for the CNPG admission webhook: an absent .spec.instances
+      # defaults to 1, and "maxSyncReplicas must be lower than the number of
+      # instances" rejects the Cluster when maxSyncReplicas>=1. effectiveMin here is
+      # max(2, 1+1, 2) = 2 > maxSyncReplicas=1, so the fresh Cluster is admitted.
+      - equal:
+          path: spec.instances
+          value: 2
+        documentSelector:
+          path: kind
+          value: Cluster
+
+  - it: seeds spec.instances at the floor under active autoscaling without synchronous quorum
+    templates:
+      - templates/db.yaml
+    set:
+      autoscaling:
+        enabled: true
+        minReplicas: 2
+        maxReplicas: 6
+        target: 150
+      quorum:
+        maxSyncReplicas: 0
+    asserts:
+      # Non-quorum path also SEEDS effectiveMin (=2) rather than omitting the field.
+      # Omitting would delete spec.instances on an existing cluster's enable-upgrade,
+      # collapsing it to CNPG's default of 1 and decommissioning every replica PVC.
+      # The constant seed is a three-way-merge no-op, so KEDA still owns the runtime
+      # count via /scale while the enable dip is capped at the floor (>=2), not 1.
+      - equal:
+          path: spec.instances
+          value: 2
+        documentSelector:
+          path: kind
+          value: Cluster
+
+  - it: renders a KEDA ScaledObject with quorum-floored bounds under active autoscaling
+    templates:
+      - templates/scaledobject.yaml
+    set:
+      autoscaling:
+        enabled: true
+        minReplicas: 2
+        maxReplicas: 6
+        target: 150
+      quorum:
+        maxSyncReplicas: 2
+    asserts:
+      - hasDocuments:
+          count: 1
+      - isKind:
+          of: ScaledObject
+      - equal:
+          path: metadata.name
+          value: postgres-db
+      - equal:
+          path: spec.scaleTargetRef.kind
+          value: Cluster
+      - equal:
+          path: spec.scaleTargetRef.name
+          value: postgres-db
+      # minReplicaCount = max(minReplicas=2, maxSyncReplicas+1=3, 2) = 3
+      - equal:
+          path: spec.minReplicaCount
+          value: 3
+      - equal:
+          path: spec.maxReplicaCount
+          value: 6
+      - equal:
+          path: spec.triggers[0].type
+          value: prometheus
+      - equal:
+          path: spec.triggers[0].metadata.threshold
+          value: "150"
+      # fail-safe: empty result must error (HPA holds), not read as 0 (scale to floor)
+      - equal:
+          path: spec.triggers[0].metadata.ignoreNullValues
+          value: "false"
+      - matchRegex:
+          path: spec.triggers[0].metadata.serverAddress
+          pattern: ^http://vmselect-.*:8481/select/0/prometheus$
+      # the query is scoped to the tenant namespace and folds the target in as +150
+      - matchRegex:
+          path: spec.triggers[0].metadata.query
+          pattern: tenant-acme
+      - matchRegex:
+          path: spec.triggers[0].metadata.query
+          pattern: \+ 150
+      # read load is restricted to standby pods via the exact kube_pod_labels key
+      # kube-state-metrics exposes for CNPG's cnpg.io/instance_role (verified live:
+      # label_cnpg_io_instance_role, snake_case, not camelCase). A wrong key matches
+      # no series; the floor below is gated on replica-pod existence so that fails
+      # safe (empty → HPA holds) rather than reading no-series as idle.
+      - matchRegex:
+          path: spec.triggers[0].metadata.query
+          pattern: label_cnpg_io_instance_role="replica"
+      # every kube_pod_labels selector pins job="kube-state-metrics", parity with the
+      # alert rules, so a duplicate kube_pod_labels series from another exporter cannot
+      # multiply the join. Assert the pin on each selector by its own identifying label
+      # (a bare presence match would pass with only one of them pinned): the read-load
+      # join keys on instance_role="replica"...
+      - matchRegex:
+          path: spec.triggers[0].metadata.query
+          pattern: kube_pod_labels\{job="kube-state-metrics",namespace="tenant-acme",label_cnpg_io_cluster="postgres-db",label_cnpg_io_instance_role="replica"\}
+      # ...and the fail-safe idle floor gates on any instance_role (=~".+")
+      - matchRegex:
+          path: spec.triggers[0].metadata.query
+          pattern: count\(kube_pod_labels\{job="kube-state-metrics",namespace="tenant-acme",label_cnpg_io_cluster="postgres-db",label_cnpg_io_instance_role=~".\+"\}\) > 0
+      # ...and scoped to THIS cluster by release name, so a namespace with multiple
+      # postgres clusters does not cross-count. The dashboard read-load panel mirrors
+      # this per-cluster scoping (label_cnpg_io_cluster).
+      - matchRegex:
+          path: spec.triggers[0].metadata.query
+          pattern: label_cnpg_io_cluster="postgres-db"
+      # Fail-safe floor (design proposal: "must not read a missing sample as zero").
+      # The `or vector(0)` is gated on `count(...replica) > 0`, so a broken metrics
+      # pipeline (empty join) leaves the term empty → KEDA FailedGetExternalMetric →
+      # HPA holds, instead of collapsing a loaded cluster to the floor.
+      - matchRegex:
+          path: spec.triggers[0].metadata.query
+          pattern: or \(vector\(0\) and on\(\) \(count\(kube_pod_labels
+
+  - it: honors an explicit autoscaling.serverAddress override (own-monitoring tenants)
+    templates:
+      - templates/scaledobject.yaml
+    set:
+      autoscaling:
+        enabled: true
+        serverAddress: http://custom-vmselect.tenant-acme.svc:8481/select/0/prometheus
+        minReplicas: 2
+        maxReplicas: 6
+        target: 150
+      quorum:
+        maxSyncReplicas: 2
+    asserts:
+      # A tenant whose derived vmselect lacks kube_pod_labels (monitoring: true) points
+      # serverAddress at one that holds both series; the override wins over the derived
+      # per-tenant address. The namespace must be within the tenant's own subtree
+      # (here its own namespace, tenant-acme) — the SSRF namespace-pin allows own/parent/root.
+      - equal:
+          path: spec.triggers[0].metadata.serverAddress
+          value: http://custom-vmselect.tenant-acme.svc:8481/select/0/prometheus
+
+  - it: refuses an off-cluster serverAddress (SSRF guard on the metric destination)
+    templates:
+      - templates/scaledobject.yaml
+    set:
+      autoscaling:
+        enabled: true
+        serverAddress: http://169.254.169.254/latest/meta-data
+        minReplicas: 2
+        maxReplicas: 6
+        target: 150
+    asserts:
+      # The cluster-privileged KEDA operator fetches serverAddress every poll; a tenant must
+      # not be able to point it at a cloud metadata endpoint or an external host. Only an
+      # in-cluster Service DNS name (…svc[.<domain>]) is accepted.
+      - failedTemplate:
+          errorMessage: 'postgres: autoscaling.serverAddress host "169.254.169.254" is not an in-cluster Service DNS name (must be <service>.<namespace>.svc or ...svc.cozy.local). An external host or IP is refused so the cluster-privileged KEDA operator cannot be used as an SSRF relay to a metadata endpoint or another tenant''s address.'
+
+  - it: refuses an external-hostname serverAddress
+    templates:
+      - templates/scaledobject.yaml
+    set:
+      autoscaling:
+        enabled: true
+        serverAddress: https://evil.example.com/api/v1/query
+        minReplicas: 2
+        maxReplicas: 6
+        target: 150
+    asserts:
+      - failedTemplate:
+          errorMessage: 'postgres: autoscaling.serverAddress host "evil.example.com" is not an in-cluster Service DNS name (must be <service>.<namespace>.svc or ...svc.cozy.local). An external host or IP is refused so the cluster-privileged KEDA operator cannot be used as an SSRF relay to a metadata endpoint or another tenant''s address.'
+
+  - it: refuses a crafted .svc host whose suffix is an external domain (SSRF bypass)
+    templates:
+      - templates/scaledobject.yaml
+    set:
+      autoscaling:
+        enabled: true
+        # `.svc` label followed by an attacker-controlled domain: rejected because the
+        # suffix is anchored to the cluster domain, not any dotted tail. Without the anchor
+        # this resolves and egresses off-cluster.
+        serverAddress: http://x.svc.attacker.com/api/v1/query
+        minReplicas: 2
+        maxReplicas: 6
+        target: 150
+    asserts:
+      - failedTemplate:
+          errorMessage: 'postgres: autoscaling.serverAddress host "x.svc.attacker.com" is not an in-cluster Service DNS name (must be <service>.<namespace>.svc or ...svc.cozy.local). An external host or IP is refused so the cluster-privileged KEDA operator cannot be used as an SSRF relay to a metadata endpoint or another tenant''s address.'
+
+  - it: refuses a single-label .svc host with the host message, not the namespace one
+    templates:
+      - templates/scaledobject.yaml
+    set:
+      autoscaling:
+        enabled: true
+        # `foo.svc` carries no <namespace> segment, so it is not a resolvable in-cluster
+        # Service DNS name. It must be rejected at the host-shape check with the "not an
+        # in-cluster Service DNS name" message. Before the host regex required a
+        # <service>.<namespace>.svc shape it slipped past that check (the regex accepted any
+        # dotted tail ending in .svc), and the namespace-extraction regex two lines down
+        # left the host unchanged, so it was rejected for the WRONG reason — a "namespace
+        # outside subtree" error naming the whole host as the namespace. Same rejection,
+        # actionable message.
+        serverAddress: http://foo.svc:8481/select/0/prometheus
+        minReplicas: 2
+        maxReplicas: 6
+        target: 150
+    asserts:
+      - failedTemplate:
+          errorMessage: 'postgres: autoscaling.serverAddress host "foo.svc" is not an in-cluster Service DNS name (must be <service>.<namespace>.svc or ...svc.cozy.local). An external host or IP is refused so the cluster-privileged KEDA operator cannot be used as an SSRF relay to a metadata endpoint or another tenant''s address.'
+
+  - it: accepts an in-cluster serverAddress that carries the cluster domain (…svc.<domain>)
+    templates:
+      - templates/scaledobject.yaml
+    set:
+      autoscaling:
+        enabled: true
+        # root namespace (tenant-root) is in the tenant's subtree and carries the cluster
+        # domain suffix; both the domain anchor and the namespace-pin accept it.
+        serverAddress: http://vmselect-shortterm.tenant-root.svc.cozy.local:8481/select/0/prometheus
+        minReplicas: 2
+        maxReplicas: 6
+        target: 150
+    asserts:
+      - equal:
+          path: spec.triggers[0].metadata.serverAddress
+          value: http://vmselect-shortterm.tenant-root.svc.cozy.local:8481/select/0/prometheus
+
+  - it: refuses a cross-namespace serverAddress outside the tenant subtree (cross-tenant SSRF)
+    templates:
+      - templates/scaledobject.yaml
+    set:
+      autoscaling:
+        enabled: true
+        # valid in-cluster .svc form AND correct cluster domain, but the namespace belongs to
+        # a sibling tenant the operator must not be pointed at — rejected by the namespace-pin.
+        serverAddress: http://vmselect-shortterm.tenant-sibling.svc.cozy.local:8481/select/0/prometheus
+        minReplicas: 2
+        maxReplicas: 6
+        target: 150
+    asserts:
+      - failedTemplate:
+          errorMessage: 'postgres: autoscaling.serverAddress namespace "tenant-sibling" is outside this tenant''s subtree [tenant-acme tenant-root]; the cluster-privileged KEDA operator may only be pointed at a vmselect in the tenant''s own, parent, or root namespace, not a sibling tenant''s or a system namespace''s Service.'
+
+  - it: refuses a userinfo-smuggled external host (…svc:port@evil.example.com)
+    templates:
+      - templates/scaledobject.yaml
+    set:
+      autoscaling:
+        enabled: true
+        # the userinfo (before @) is a valid-looking .svc name, but net/url dials the host
+        # AFTER the @; authority parsing extracts evil.example.com and rejects it.
+        serverAddress: http://vmselect-shortterm.tenant-acme.svc:8481@evil.example.com/api/v1/query
+        minReplicas: 2
+        maxReplicas: 6
+        target: 150
+    asserts:
+      - failedTemplate:
+          errorMessage: 'postgres: autoscaling.serverAddress host "evil.example.com" is not an in-cluster Service DNS name (must be <service>.<namespace>.svc or ...svc.cozy.local). An external host or IP is refused so the cluster-privileged KEDA operator cannot be used as an SSRF relay to a metadata endpoint or another tenant''s address.'
+
+  - it: fails closed when maxReplicas exceeds the absolute read-replica ceiling (resource-exhaustion cap)
+    templates:
+      - templates/scaledobject.yaml
+    set:
+      autoscaling:
+        enabled: true
+        minReplicas: 2
+        maxReplicas: 100000
+        target: 150
+    asserts:
+      - failedTemplate:
+          errorMessage: "postgres: autoscaling.maxReplicas (100000) exceeds the maximum of 100 read replicas; a higher ceiling is a platform-policy decision, not a per-tenant setting."
+
+  # dryRun renders instances: replicas (=2) but the ScaledObject carries minReplicaCount:
+  # effectiveMin (=4). The pause disables scale policies, not the min clamp, so the HPA would
+  # raise the live count to 4 — a scale-up in a mode meant to only observe. Fail closed.
+  - it: fails closed when dry-run/transition would let the paused HPA min-clamp actuate above the static count
+    templates:
+      - templates/scaledobject.yaml
+    set:
+      replicas: 2
+      autoscaling:
+        enabled: true
+        dryRun: true
+        minReplicas: 4
+        maxReplicas: 6
+        target: 150
+    asserts:
+      - failedTemplate:
+          errorMessage: "postgres: replicas (2) is below the effective floor (4 = max(minReplicas 4, maxSyncReplicas+1 1, 2)); under dry-run/transition the ScaledObject is paused but its minReplicaCount clamp still raises the live count to the floor on the first reconcile (a scale-up in a mode meant to only observe), and client-side apply never pulls it back. Stage replicas to at least the floor before dry-run/transition."
+
+  - it: fails closed when the quorum floor exceeds maxReplicas rather than silently running an unbounded count
+    templates:
+      - templates/scaledobject.yaml
+    set:
+      autoscaling:
+        enabled: true
+        minReplicas: 2
+        maxReplicas: 6
+        target: 150
+      quorum:
+        maxSyncReplicas: 6
+    asserts:
+      # floor = maxSyncReplicas+1 = 7 > maxReplicas 6. Previously effectiveMax silently
+      # raised BOTH bounds to 7 (a maxReplicas cost ceiling quietly defeated, unbounded
+      # for a large maxSyncReplicas). Now the render fails closed and tells the operator
+      # to raise maxReplicas.
+      - failedTemplate:
+          errorMessage: "postgres: the effective minimum instance count (7 = max(minReplicas 2, maxSyncReplicas+1 7, 2)) exceeds autoscaling.maxReplicas (6); raise maxReplicas to at least the quorum floor."
+
+  - it: fails closed when replicas exceeds maxReplicas (cold-start above-ceiling shed guard)
+    templates:
+      - templates/scaledobject.yaml
+    set:
+      replicas: 8
+      autoscaling:
+        enabled: true
+        minReplicas: 2
+        maxReplicas: 6
+        target: 150
+      quorum:
+        maxSyncReplicas: 0
+    asserts:
+      # effectiveMin = 2 <= maxReplicas 6 (the floor>max guard passes), but the resting/seed
+      # count replicas 8 exceeds maxReplicas 6: on enable (or dry-run/transition) the stock
+      # HPA's currentReplicas > maxReplicaCount branch writes /scale = maxReplicaCount
+      # unconditionally, cutting the live count straight to 6 past the scale-down pacing.
+      # Fail closed rather than shed standbys + PVCs silently.
+      - failedTemplate:
+          errorMessage: "postgres: replicas (8) exceeds autoscaling.maxReplicas (6); enabling autoscaling (or dry-run/transition) would make KEDA's HPA cut the live count straight to maxReplicas in one step, shedding the surplus standbys and their PVCs past the scale-down pacing. Raise autoscaling.maxReplicas to at least replicas, or lower replicas deliberately first."
+
+  - it: rejects a stray maxReplicas of 0 (effective floor > max) rather than coercing or clamping it
+    templates:
+      - templates/scaledobject.yaml
+    set:
+      autoscaling:
+        enabled: true
+        minReplicas: 2
+        maxReplicas: 0
+        target: 150
+      quorum:
+        maxSyncReplicas: 0
+    asserts:
+      # maxReplicas: 0 is neither silently coerced to the values default (6) nor
+      # clamped to the floor: the effective minimum (2, the read floor) exceeds
+      # maxReplicas (0), a contradiction that fails at render with a clear message.
+      - failedTemplate:
+          errorMessage: "postgres: the effective minimum instance count (2 = max(minReplicas 2, maxSyncReplicas+1 1, 2)) exceeds autoscaling.maxReplicas (0); raise maxReplicas to at least the quorum floor."
+
+  - it: holds instances at the staged count and pauses the ScaledObject in migration phase 1 (transition)
+    set:
+      replicas: 5                    # operator stages this to the live instance count
+      autoscaling:
+        enabled: true
+        transition: true
+        minReplicas: 2
+        maxReplicas: 6
+        target: 150
+      quorum:
+        maxSyncReplicas: 2
+    asserts:
+      # phase 1: the static field is kept (as a floor) so three-way merge cannot
+      # delete it and collapse CNPG to 1 while KEDA stands up
+      - equal:
+          path: spec.instances
+          value: 5
+        documentSelector:
+          path: kind
+          value: Cluster
+        template: templates/db.yaml
+      # ...and the ScaledObject is present but paused in BOTH directions (no writer
+      # contention yet). Deliberately not the full paused annotation, which would
+      # delete the HPA; the unidirectional pair keeps the HPA warm for phase 2.
+      - equal:
+          path: metadata.annotations["autoscaling.keda.sh/paused-scale-in"]
+          value: "true"
+        template: templates/scaledobject.yaml
+      - equal:
+          path: metadata.annotations["autoscaling.keda.sh/paused-scale-out"]
+          value: "true"
+        template: templates/scaledobject.yaml
+      # the HPA-deleting full pause must NOT be set
+      - notExists:
+          path: metadata.annotations["autoscaling.keda.sh/paused"]
+        template: templates/scaledobject.yaml
+
+  - it: does not dip instances when transition flips to active (phase 1 -> phase 2, staged replicas)
+    templates:
+      - templates/db.yaml
+    set:
+      replicas: 5                    # staged to the live count in phase 1
+      autoscaling:
+        enabled: true
+        transition: false            # phase 2: active autoscaling
+        minReplicas: 2
+        maxReplicas: 6
+        target: 150
+      quorum:
+        maxSyncReplicas: 2
+    asserts:
+      # Phase 1 (transition:true, tested above) renders instances: replicas = 5. Phase 2
+      # (active) must render the SAME 5 so the three-way merge is a no-op and the live
+      # cluster does not shed replicas. activeSeed = max(replicas 5, effectiveMin 3) = 5.
+      # Seeding effectiveMin alone would render 3 here and drop 5->3 at the flip.
+      - equal:
+          path: spec.instances
+          value: 5
+        documentSelector:
+          path: kind
+          value: Cluster
+
+  - it: seeds the quorum floor (not the smaller staged replicas) when replicas is below the floor
+    templates:
+      - templates/db.yaml
+    set:
+      replicas: 2
+      autoscaling:
+        enabled: true
+        minReplicas: 2
+        maxReplicas: 6
+        target: 150
+      quorum:
+        maxSyncReplicas: 4             # floor = 5 > replicas 2
+    asserts:
+      # activeSeed = max(replicas 2, effectiveMin 5) = 5 — the floor still wins, so the
+      # constant never undercuts synchronous quorum even with a small replicas.
+      - equal:
+          path: spec.instances
+          value: 5
+        documentSelector:
+          path: kind
+          value: Cluster
+
+  - it: builds a CPU query when metric is ReadCPUUtilization
+    templates:
+      - templates/scaledobject.yaml
+    set:
+      autoscaling:
+        enabled: true
+        metric: ReadCPUUtilization
+        minReplicas: 2
+        maxReplicas: 6
+        target: 500
+      quorum:
+        maxSyncReplicas: 2
+    asserts:
+      - matchRegex:
+          path: spec.triggers[0].metadata.query
+          pattern: container_cpu_usage_seconds_total
+      - matchRegex:
+          path: spec.triggers[0].metadata.query
+          pattern: \+ 500
+      # same standby-only selector on the CPU path
+      - matchRegex:
+          path: spec.triggers[0].metadata.query
+          pattern: label_cnpg_io_instance_role="replica"
+
+  - it: folds the replication-lag brake into the query when maxReplicationLagSeconds > 0
+    templates:
+      - templates/scaledobject.yaml
+    set:
+      autoscaling:
+        enabled: true
+        minReplicas: 2
+        maxReplicas: 6
+        target: 150
+        maxReplicationLagSeconds: 30
+      quorum:
+        maxSyncReplicas: 2
+    asserts:
+      # lag term (with hysteresis via max_over_time) at the configured threshold,
+      # individually floored so an absent lag metric resolves to 0 (fail-open)
+      - matchRegex:
+          path: spec.triggers[0].metadata.query
+          pattern: max_over_time\(cnpg_pg_replication_lag.*> bool 30\) or vector\(0\)
+      # write gate so an idle primary does not trip the brake, likewise floored
+      - matchRegex:
+          path: spec.triggers[0].metadata.query
+          pattern: rate\(cnpg_collector_wal_records.*> bool 0\) or vector\(0\)
+      # frozen branch pins desired to the current instance count under lag, counting
+      # only instance pods (role-scoped) so lingering CNPG join/bootstrap Job pods
+      # (which carry cnpg.io/cluster but jobRole, not instanceRole) don't inflate it
+      - matchRegex:
+          path: spec.triggers[0].metadata.query
+          pattern: count\(kube_pod_labels\{job="kube-state-metrics",namespace="tenant-acme",label_cnpg_io_cluster="postgres-db",label_cnpg_io_instance_role=~".\+"\}\) \* 150
+      # the frozen summand is floored with `or vector(0)` so a kube-state-metrics
+      # scrape gap (empty count) cannot empty the whole `+` sum and defeat the
+      # base term's own floor
+      - matchRegex:
+          path: spec.triggers[0].metadata.query
+          pattern: count\(kube_pod_labels.*\* 150\).*or vector\(0\)\)$
+      # the cluster-wide lag/WAL join is the fourth kube_pod_labels selector; it pins
+      # job="kube-state-metrics" too and carries no instance_role (closes right after
+      # the cluster label), so assert it distinctly from the role-scoped selectors
+      - matchRegex:
+          path: spec.triggers[0].metadata.query
+          pattern: kube_pod_labels\{job="kube-state-metrics",namespace="tenant-acme",label_cnpg_io_cluster="postgres-db"\}
+
+  - it: fails closed when the monitoring namespace is not set
+    templates:
+      - templates/scaledobject.yaml
+    set:
+      _namespace:
+        monitoring: ""
+      autoscaling:
+        enabled: true
+        minReplicas: 2
+        maxReplicas: 6
+        target: 150
+      quorum:
+        maxSyncReplicas: 0
+    asserts:
+      - failedTemplate:
+          errorMessage: "postgres: autoscaling requires a monitoring namespace to reach vmselect, but none is set (_namespace.monitoring is empty). The platform normally injects it; ensure the tenant has monitoring enabled."
+
+  - it: omits the replication-lag brake when maxReplicationLagSeconds is 0
+    templates:
+      - templates/scaledobject.yaml
+    set:
+      autoscaling:
+        enabled: true
+        minReplicas: 2
+        maxReplicas: 6
+        target: 150
+        maxReplicationLagSeconds: 0
+      quorum:
+        maxSyncReplicas: 2
+    asserts:
+      - notMatchRegex:
+          path: spec.triggers[0].metadata.query
+          pattern: cnpg_pg_replication_lag
+
+  - it: keeps the static count and pauses the ScaledObject in dry-run mode
+    set:
+      autoscaling:
+        enabled: true
+        dryRun: true
+        minReplicas: 2
+        maxReplicas: 6
+        target: 150
+      quorum:
+        maxSyncReplicas: 1
+    asserts:
+      - equal:
+          path: spec.instances
+          value: 2
+        documentSelector:
+          path: kind
+          value: Cluster
+        template: templates/db.yaml
+      # dry-run pauses both directions (HPA kept + metric still served; desired freezes
+      # to current, so the recommendation is read from the metric), never the
+      # HPA-deleting full pause that would blind the recommendation entirely.
+      - equal:
+          path: metadata.annotations["autoscaling.keda.sh/paused-scale-in"]
+          value: "true"
+        template: templates/scaledobject.yaml
+      - equal:
+          path: metadata.annotations["autoscaling.keda.sh/paused-scale-out"]
+          value: "true"
+        template: templates/scaledobject.yaml
+      - notExists:
+          path: metadata.annotations["autoscaling.keda.sh/paused"]
+        template: templates/scaledobject.yaml
+
+  - it: fails closed when the static instance count would violate synchronous quorum (disable-wedge guard)
+    templates:
+      - templates/db.yaml
+    set:
+      # autoscaling off: the chart renders the static instances: <replicas>. With
+      # replicas at its default 2 and maxSyncReplicas 2, CNPG would reject the
+      # Cluster (maxSyncReplicas must be < instances). This is exactly the wedge a
+      # tenant hits when DISABLING autoscaling on a quorum cluster whose replicas
+      # was never raised off the default. Must fail closed at render, not at the webhook.
+      autoscaling:
+        enabled: false
+      quorum:
+        maxSyncReplicas: 2
+    asserts:
+      - failedTemplate:
+          errorMessage: "postgres: replicas (2) must be greater than quorum.maxSyncReplicas (2) - CNPG rejects a Cluster whose maxSyncReplicas is not lower than its instance count. Raise replicas above maxSyncReplicas. (If you are disabling autoscaling on a synchronous-quorum cluster, first set replicas to at least the live instance count: kubectl scale cluster.postgresql.cnpg.io/postgres-db --replicas=<live count>, with the HelmRelease suspended.)"
+
+  - it: fails closed when dryRun renders a quorum-invalid static count (floor guard subsumes the wedge)
+    templates:
+      - templates/scaledobject.yaml
+    set:
+      # dryRun with a quorum cluster whose replicas is still the default is caught by the
+      # floor guard (scaledobject.yaml), not the db.yaml wedge: under dryRun the ScaledObject
+      # is live with minReplicaCount=effectiveMin=max(minReplicas 2, maxSyncReplicas+1 3, 2)=3,
+      # and replicas (2) < 3 fires the floor guard first. That guard is strictly broader than
+      # the wedge here — any replicas <= maxSyncReplicas is also < effectiveMin — so it
+      # supersedes it for dryRun/transition. The wedge itself is still exercised for the
+      # DISABLED path above, where no ScaledObject (and no floor guard) renders.
+      autoscaling:
+        enabled: true
+        dryRun: true
+      quorum:
+        maxSyncReplicas: 2
+    asserts:
+      - failedTemplate:
+          errorMessage: "postgres: replicas (2) is below the effective floor (3 = max(minReplicas 2, maxSyncReplicas+1 3, 2)); under dry-run/transition the ScaledObject is paused but its minReplicaCount clamp still raises the live count to the floor on the first reconcile (a scale-up in a mode meant to only observe), and client-side apply never pulls it back. Stage replicas to at least the floor before dry-run/transition."
+
+  - it: rejects a non-positive autoscaling target
+    templates:
+      - templates/scaledobject.yaml
+    set:
+      autoscaling:
+        enabled: true
+        minReplicas: 2
+        maxReplicas: 6
+        target: 0
+      quorum:
+        maxSyncReplicas: 2
+    asserts:
+      - failedTemplate:
+          errorMessage: "postgres: autoscaling.target must be a positive integer (the desired-replica formula divides the read load by it)."
+
+  - it: rejects minReplicas greater than maxReplicas instead of silently clamping
+    templates:
+      - templates/scaledobject.yaml
+    set:
+      autoscaling:
+        enabled: true
+        minReplicas: 10
+        maxReplicas: 3
+        target: 150
+      quorum:
+        maxSyncReplicas: 0
+    asserts:
+      - failedTemplate:
+          errorMessage: "postgres: the effective minimum instance count (10 = max(minReplicas 10, maxSyncReplicas+1 1, 2)) exceeds autoscaling.maxReplicas (3); raise maxReplicas to at least the quorum floor."

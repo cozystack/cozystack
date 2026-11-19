@@ -1,0 +1,68 @@
+suite: flux-shard-operator webhook configuration + service
+templates:
+  - templates/mutatingwebhookconfiguration.yaml
+  - templates/service.yaml
+
+release:
+  name: flux-shard-operator
+  namespace: cozy-fluxcd
+
+tests:
+  - it: intercepts HelmRelease CREATE only, never UPDATE
+    template: templates/mutatingwebhookconfiguration.yaml
+    asserts:
+      - equal:
+          path: webhooks[0].rules[0].operations
+          value: ["CREATE"]
+      - equal:
+          path: webhooks[0].rules[0].apiGroups
+          value: ["helm.toolkit.fluxcd.io"]
+      - equal:
+          path: webhooks[0].rules[0].resources
+          value: ["helmreleases"]
+
+  - it: degrades gracefully on outage
+    template: templates/mutatingwebhookconfiguration.yaml
+    asserts:
+      - equal:
+          path: webhooks[0].failurePolicy
+          value: Ignore
+
+  - it: scopes to HelmReleases born on the legacy tenants bucket
+    template: templates/mutatingwebhookconfiguration.yaml
+    asserts:
+      - equal:
+          path: webhooks[0].objectSelector.matchExpressions[0].key
+          value: sharding.fluxcd.io/key
+      - equal:
+          path: webhooks[0].objectSelector.matchExpressions[0].operator
+          value: In
+      - equal:
+          path: webhooks[0].objectSelector.matchExpressions[0].values
+          value: ["tenants"]
+
+  - it: points at the operator service with injected CA
+    template: templates/mutatingwebhookconfiguration.yaml
+    asserts:
+      - equal:
+          path: webhooks[0].clientConfig.service.name
+          value: flux-shard-operator
+      - equal:
+          path: webhooks[0].clientConfig.service.namespace
+          value: cozy-fluxcd
+      - equal:
+          path: webhooks[0].clientConfig.service.path
+          value: /mutate-helmrelease-shard
+      - equal:
+          path: metadata.annotations["cert-manager.io/inject-ca-from"]
+          value: cozy-fluxcd/flux-shard-operator
+
+  - it: serves the webhook on 443 -> 9443
+    template: templates/service.yaml
+    asserts:
+      - equal:
+          path: spec.ports[0].port
+          value: 443
+      - equal:
+          path: spec.ports[0].targetPort
+          value: 9443

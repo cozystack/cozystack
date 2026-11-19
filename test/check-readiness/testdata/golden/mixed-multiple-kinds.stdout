@@ -1,0 +1,6 @@
+=== packages.cozystack.io (not ready) ===
+tenant-root                                        False
+=== nodes (not ready) ===
+worker-3                                           False
+=== persistentvolumeclaims (not ready) ===
+storage                        archive-pvc                                        Pending

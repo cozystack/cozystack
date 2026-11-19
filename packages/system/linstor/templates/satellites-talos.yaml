@@ -1,0 +1,67 @@
+{{- if .Values.talos.enabled }}
+{{- $shutdown := .Values.talos.gracefulShutdown | default dict }}
+{{- $enabled := dig "enabled" false $shutdown }}
+{{- if kindIs "invalid" $enabled }}{{- $enabled = false }}{{- end }}
+{{- if not (kindIs "bool" $enabled) }}
+{{- fail "linstor: talos.gracefulShutdown.enabled must be a boolean" }}
+{{- end }}
+apiVersion: piraeus.io/v1
+kind: LinstorSatelliteConfiguration
+metadata:
+  name: cozystack-talos
+spec:
+{{- if and .Values.drbd.enabled $enabled }}
+  podTemplate:
+    spec:
+      terminationGracePeriodSeconds: 90
+      containers:
+      - name: linstor-satellite
+        lifecycle:
+          preStop:
+            exec:
+              command:
+              - /usr/bin/python3
+              - -c
+              - |
+{{ required "satellite pre-stop script is missing" (.Files.Get "hack/satellite-pre-stop.py") | indent 16 }}
+              - --execute
+{{- end }}
+  patches:
+  - target:
+      group: apps
+      version: v1
+      kind: DaemonSet
+      name: linstor-satellite
+    patch: |
+      apiVersion: apps/v1
+      kind: DaemonSet
+      metadata:
+        name: linstor-satellite
+      spec:
+        template:
+          spec:
+            initContainers:
+            - name: drbd-shutdown-guard
+              $patch: delete
+            - name: drbd-module-loader
+              $patch: delete
+            volumes:
+            - name: run-systemd-system
+              $patch: delete
+            - name: run-drbd-shutdown-guard
+              $patch: delete
+            - name: systemd-bus-socket
+              $patch: delete
+            - name: lib-modules
+              $patch: delete
+            - name: usr-src
+              $patch: delete
+            - name: etc-lvm-backup
+              hostPath:
+                path: /var/etc/lvm/backup
+                type: DirectoryOrCreate
+            - name: etc-lvm-archive
+              hostPath:
+                path: /var/etc/lvm/archive
+                type: DirectoryOrCreate
+{{- end }}

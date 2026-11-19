@@ -1,0 +1,310 @@
+annotations:
+  artifacthub.io/changes: |
+    - Add frontend url property for realm
+    - Allow define KeycloakRealmUser password in Kubernetes secret
+    - Update current development version
+    - Publish 1.15.0 version on OperatorHub
+    - Update current development version
+    - Add a description to the Custom Resources fields
+  artifacthub.io/crds: |
+    - kind: Keycloak
+      version: v1.edp.epam.com/v1
+      name: keycloak
+      displayName: keycloak
+      description: Keycloak instance baseline configuration
+    - kind: ClusterKeycloak
+      version: v1.edp.epam.com/v1alpha1
+      name: clusterkeycloak
+      displayName: clusterkeycloak
+      description: Keycloak instance baseline configuration
+    - kind: KeycloakAuthFlow
+      version: v1.edp.epam.com/v1
+      name: keycloakauthflows
+      displayName: keycloakauthflows
+      description: Keycloak AuthFlow Management
+    - kind: KeycloakClient
+      version: v1.edp.epam.com/v1
+      name: keycloakpermissiontemplate
+      displayName: KeycloakClient
+      description: Keycloak client Management
+    - kind: KeycloakClientScope
+      version: v1.edp.epam.com/v1
+      name: keycloakclientscope
+      displayName: KeycloakClientScope
+      description: Keycloak Client Scope Management
+    - kind: KeycloakRealm
+      version: v1.edp.epam.com/v1
+      name: keycloakrealm
+      displayName: KeycloakRealm
+      description: Keycloak Realm Management
+    - kind: KeycloakRealmComponent
+      version: v1.edp.epam.com/v1
+      name: keycloakrealmcomponent
+      displayName: KeycloakRealmComponent
+      description: Keycloak Realm Component Management
+    - kind: KeycloakRealmGroup
+      version: v1.edp.epam.com/v1
+      name: keycloakrealmgroup
+      displayName: KeycloakRealmGroup
+      description: Keycloak Realm Group Management
+    - kind: KeycloakRealmIdentityProvider
+      version: v1.edp.epam.com/v1
+      name: keycloakrealmidentityprovider
+      displayName: KeycloakRealmIdentityProvider
+      description: Keycloak Realm Identity Provider Management
+    - kind: KeycloakRealmRole
+      version: v1.edp.epam.com/v1
+      name: keycloakrealmrole
+      displayName: KeycloakRealmRole
+      description: Keycloak Realm Role Management
+    - kind: KeycloakRealmRoleBatch
+      version: v1.edp.epam.com/v1
+      name: keycloakrealmrolebatch
+      displayName: KeycloakRealmRoleBatch
+      description: Keycloak Realm Role Management in a batch mode
+    - kind: KeycloakRealmUser
+      version: v1.edp.epam.com/v1
+      name: keycloakrealmuser
+      displayName: KeycloakRealmUser
+      description: Keycloak Realm User Management
+  artifacthub.io/crdsExamples: |
+    - apiVersion: v1.edp.epam.com/v1
+      kind: KeycloakClientScope
+      metadata:
+        name: groups
+      spec:
+        name: groups
+        realm: main
+        description: "Group Membership"
+        protocol: openid-connect
+        protocolMappers:
+          - name: groups
+            protocol: openid-connect
+            protocolMapper: "oidc-group-membership-mapper"
+            config:
+              "access.token.claim": "true"
+              "claim.name": "groups"
+              "full.path": "false"
+              "id.token.claim": "true"
+              "userinfo.token.claim": "true"
+    - apiVersion: v1.edp.epam.com/v1
+      kind: KeycloakClient
+      metadata:
+        name: argocd
+      spec:
+        advancedProtocolMappers: true
+        clientId: agocd
+        directAccess: true
+        public: false
+        secret: ''
+        targetRealm: edp-delivery-main
+        webUrl: https://argocd.example.com
+        defaultClientScopes:
+          - argocd_groups
+    - apiVersion: v1.edp.epam.com/v1
+      kind: KeycloakRealmGroup
+      metadata:
+        name: argocd-admins
+      spec:
+        clientRoles: null
+        name: ArgoCDAdmins
+        realm: main
+    - apiVersion: v1.edp.epam.com/v1
+      kind: KeycloakAuthFlow
+      metadata:
+        name: d1-auth-flow
+      spec:
+        realm: d2-id-k8s-realm-name
+        alias: MyBrowser
+        description: browser with idp
+        providerId: basic-flow
+        topLevel: true
+        builtIn: false
+        authenticationExecutions:
+          - authenticator: "auth-cookie"
+            priority: 0
+            requirement: "ALTERNATIVE"
+          - authenticator: "identity-provider-redirector"
+            priority: 1
+            requirement: "REQUIRED"
+            authenticatorConfig:
+              alias: my-alias
+              config:
+                "defaultProvider": "my-alias"
+    - apiVersion: v1.edp.epam.com/v1
+      kind: KeycloakRealmComponent
+      metadata:
+        name: kerberos-test
+      spec:
+        realm: d1-id-k8s-realm-name
+        name: cr-kerb-test
+        providerId: kerberos
+        providerType: "org.keycloak.storage.UserStorageProvider"
+        config:
+          allowPasswordAuthentication: ["true"]
+          cachePolicy: ["EVICT_WEEKLY"]
+          debug: ["true"]
+          editMode: ["READ_ONLY"]
+          enabled: ["true"]
+          evictionDay: ["3"]
+          evictionHour: ["5"]
+          evictionMinute: ["7"]
+          kerberosRealm: ["test-realm"]
+          keyTab: ["test-key-tab"]
+          priority: ["0"]
+          serverPrincipal: ["srv-principal-test"]
+          updateProfileFirstLogin: ["true"]
+    - apiVersion: v1.edp.epam.com/v1
+      kind: KeycloakRealmIdentityProvider
+      metadata:
+        name: github-test
+      spec:
+        realm: d2-id-k8s-realm-name
+        alias: github
+        authenticateByDefault: false
+        enabled: true
+        firstBrokerLoginFlowAlias: "first broker login"
+        providerId: "github"
+        config:
+          clientId: "foo"
+          clientSecret: "bar"
+          syncMode: "IMPORT"
+          useJwksUrl: "true"
+        mappers:
+          - name: "test3212"
+            identityProviderMapper: "oidc-hardcoded-role-idp-mapper"
+            identityProviderAlias: "github"
+            config:
+              role: "role-tr"
+              syncMode: "INHERIT"
+          - name: "test-33221"
+            identityProviderMapper: "hardcoded-attribute-idp-mapper"
+            identityProviderAlias: "github"
+            config:
+              attribute: "foo"
+              "attribute.value": "bar"
+              syncMode: "IMPORT"
+    - apiVersion: v1.edp.epam.com/v1
+      kind: KeycloakRealm
+      metadata:
+        name: d2-id-k8s-realm-name
+      spec:
+        id: d1-id-kc-realm-name
+        realmName: d2-id-kc-realm-name
+        keycloakOwner: main
+        passwordPolicy:
+          - type: "forceExpiredPasswordChange"
+            value: "365"
+          - type: "length"
+            value: "8"
+        realmEventConfig:
+          adminEventsDetailsEnabled: false
+          adminEventsEnabled: true
+          enabledEventTypes:
+            - UPDATE_CONSENT_ERROR
+            - CLIENT_LOGIN
+          eventsEnabled: true
+          eventsExpiration: 15000
+          eventsListeners:
+            - jboss-logging
+    - apiVersion: v1.edp.epam.com/v1
+      kind: KeycloakRealmUser
+      metadata:
+        name: d1-user-test1
+      spec:
+        realm: d1-id-k8s-realm-name
+        username: "john.snow13"
+        firstName: "John"
+        lastName: "Snow"
+        email: "john.snow13@example.com"
+        enabled: true
+        emailVerified: true
+        password: "12345678"
+        keepResource: true
+        requiredUserActions:
+          - UPDATE_PASSWORD
+        attributes:
+          foo: "bar"
+          baz: "jazz"
+    - apiVersion: v1.edp.epam.com/v1
+      kind: Keycloak
+      metadata:
+        name: my-keycloak
+      spec:
+        secret: my-keycloak-secret
+        url: https://example.com
+    - apiVersion: v1.edp.epam.com/v1
+      kind: KeycloakRealmRoleBatch
+      metadata:
+        name: myrole
+      spec:
+        realm: main
+        roles:
+          - attributes: null
+            composite: true
+            composites: null
+            description: default developer role
+            isDefault: false
+            name: developer
+          - attributes: null
+            composite: true
+            composites: null
+            description: default administrator role
+            isDefault: false
+            name: administrator
+    - apiVersion: v1.edp.epam.com/v1
+      kind: KeycloakRealmRole
+      metadata:
+        name: realmrole
+      spec:
+        attributes: null
+        composite: true
+        composites: null
+        description: default developer role
+        name: developer
+        realm: main
+    - apiVersion: v1.edp.epam.com/v1alpha1
+      kind: ClusterKeycloak
+      metadata:
+        name: keycloak-sample
+      spec:
+        secret: secret-name-in-operator-ns
+        url: https://keycloak.example.com
+  artifacthub.io/images: |
+    - name: keycloak-operator:1.32.0
+      image: epamedp/keycloak-operator:1.32.0
+  artifacthub.io/license: Apache-2.0
+  artifacthub.io/links: |
+    - name: KubeRocketCI Documentation
+      url: https://docs.kuberocketci.io/
+    - name: EPAM SolutionHub
+      url: https://solutionshub.epam.com/solution/kuberocketci
+  artifacthub.io/operator: "true"
+  artifacthub.io/operatorCapabilities: Deep Insights
+apiVersion: v2
+appVersion: 1.32.0
+description: A Helm chart for KubeRocketCI Keycloak Operator
+home: https://docs.kuberocketci.io/
+icon: https://docs.kuberocketci.io/img/logo.svg
+keywords:
+- authentication
+- authorization
+- edp
+- idp
+- keycloak
+- oauth
+- oidc
+- operator
+- saml
+- sso
+maintainers:
+- email: SupportEPMD-EDP@epam.com
+  name: epmd-edp
+  url: https://solutionshub.epam.com/solution/kuberocketci
+- name: sergk
+  url: https://github.com/SergK
+name: keycloak-operator
+sources:
+- https://github.com/epam/edp-keycloak-operator
+type: application
+version: 1.32.0

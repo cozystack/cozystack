@@ -1,0 +1,154 @@
+{{- /* Naming-migration guard — the ENFORCING copy.
+
+   Before 4.31 the vendored chart named workloads after the CHART, ignoring the
+   release name, so every instance ran as `seaweedfs-*` with its data on
+   `data1-seaweedfs-volume-*`. 4.31 names them after the release; values.yaml pins
+   `fullnameOverride: seaweedfs` so an upgrade past the bump adopts the running
+   set and its volumes in place. This template stops the render instead of letting
+   Helm rename workloads away from live data, or adopt the wrong one of two sets:
+
+   - exactly the legacy generation (or nothing) — decidable, and adoption is
+     correct. Renders.
+   - exactly the release-named generation — a tenant installed fresh on 1.5.x,
+     whose data is on `data1-<release>[-seaweedfs]-volume-*`. Rendering the pinned
+     names would rename the workloads AWAY from that data. Refuses → runbook Step 2.
+   - BOTH generations — undecidable from inside a render, so it refuses rather
+     than guess. See the classification note below. → runbook Step 1, then 2/2a/3.
+
+   extra/seaweedfs carries the same classification for its own render, but that
+   render is NOT in the path of a platform upgrade: this chart reaches
+   helm-controller through an ExternalArtifact, so a platform bump upgrades the
+   `<name>-system` release directly from the new artifact without ever
+   re-rendering extra/seaweedfs. The only render guaranteed to sit between a
+   platform upgrade and the tenant's workloads is THIS one. (v1.6 regression:
+   the guard lived only in extra/seaweedfs, so upgrading a fresh-1.5.x tenant
+   created an empty chart-named set beside its live data.)
+
+   Fail-closed: `lookup` errors abort the render (Helm propagates API errors),
+   but a client-side render (`helm template`, --dry-run=client) silently returns
+   nothing. The release namespace itself is used as a canary: it always exists
+   for any real install/upgrade, so an empty canary means the render cannot see
+   the cluster — refuse on upgrade rather than misclassify, and skip the guard
+   for client-side installs (CI lint/unittest), which never touch live data. */}}
+
+{{- /* The classification below and the whole adoption scheme assume chart-based
+   workload names. Refuse to render at all if the pin is ever lifted. */}}
+{{- if ne (dig "fullnameOverride" "" (.Values.seaweedfs | default dict)) "seaweedfs" }}
+{{-   fail (printf "system/seaweedfs must pin seaweedfs.fullnameOverride=seaweedfs (got %q): workload adoption across the 4.31 rename and the naming-migration guard are both built on chart-based names. Do not lift the pin without a data-migration plan." (dig "fullnameOverride" "" (.Values.seaweedfs | default dict))) }}
+{{- end }}
+
+{{- $canary := lookup "v1" "Namespace" "" .Release.Namespace }}
+{{- if and (not $canary) .Release.IsUpgrade }}
+{{-   fail (printf "SeaweedFS naming-migration guard for release %s in namespace %s: cannot see the cluster (lookup returned nothing for the release namespace itself). This render decides whether workloads are renamed away from live data, so refusing to upgrade blind. Renders applied by helm-controller always see the cluster; if templating by hand, render server-side." .Release.Name .Release.Namespace) }}
+{{- end }}
+{{- if $canary }}
+
+{{- /* Two naming GENERATIONS can exist in a namespace:
+     legacy — the pre-4.31 chart-based names (`seaweedfs-volume[-<key>]`,
+              `data1-seaweedfs-volume[-<key>]-N`), which this chart pins and renders;
+     system — the 4.31 release-based names (`<release>[-seaweedfs]-volume`,
+              `data1-<release>[-seaweedfs]-volume-N`).
+
+   The release-named generation is matched by RECONSTRUCTING the name 4.31 would
+   give this release's volume component, and the chart-named one by the pinned
+   name — release-named checked FIRST, because the two prefixes can nest.
+   Overlapping prefixes alone are not safe: for an instance legitimately named
+   `seaweedfs-volume`, the release-named StatefulSet `seaweedfs-volume-system-volume`
+   and claim `data1-seaweedfs-volume-system-volume-0` BOTH satisfy the chart-named
+   prefixes, so a prefix-only guard reads live release-named storage as legacy and
+   renders onto the empty chart-named claims, stranding the real generation.
+
+   Reconstructing also removes the blind spot a name match alone has: 4.31's
+   componentName truncates the fullname to 56 chars before appending `-volume`, so
+   an instance name >= ~40 chars loses `seaweedfs` from its claim names and a
+   `contains "seaweedfs"` filter cannot see them. The reconstructed prefix carries
+   the same truncation, so it matches those claims exactly.
+
+   PVCs hold the data and outlive any workload but carry no chart labels, so they
+   are matched on name alone. StatefulSets DO carry the labels, and are the only
+   signal for a tenant whose PVCs are not provisioned yet. Either establishes a
+   generation's presence, so the two are OR-ed. */}}
+{{- /* This chart IS the `<name>-system` release, so its own release name is what
+   4.31 named the renamed generation after. extra/seaweedfs is the `<name>` release
+   and derives the child instead; that one line is the only difference between the
+   two copies of the block below. */}}
+{{- $sysRelease := .Release.Name }}
+{{- $renamedVol := include "seaweedfs.renamedVolumePrefix" $sysRelease }}
+{{- $legacyPVC := false }}
+{{- $systemPVC := false }}
+{{- $legacySTS := false }}
+{{- $systemSTS := false }}
+{{- range (lookup "v1" "PersistentVolumeClaim" .Release.Namespace "").items | default list }}
+{{-   if hasPrefix (printf "data1-%s" $renamedVol) .metadata.name }}
+{{-     $systemPVC = true }}
+{{-   else if hasPrefix "data1-seaweedfs-volume" .metadata.name }}
+{{-     $legacyPVC = true }}
+{{-   end }}
+{{- end }}
+{{- range (lookup "apps/v1" "StatefulSet" .Release.Namespace "").items | default list }}
+{{-   if eq (dig "app.kubernetes.io/name" "" (.metadata.labels | default dict)) "seaweedfs" }}
+{{-     if hasPrefix $renamedVol .metadata.name }}
+{{-       $systemSTS = true }}
+{{-     else if hasPrefix "seaweedfs-volume" .metadata.name }}
+{{-       $legacySTS = true }}
+{{-     end }}
+{{-   end }}
+{{- end }}
+{{- $legacyGen := or $legacyPVC $legacySTS }}
+{{- $systemGen := or $systemPVC $systemSTS }}
+
+{{- /* Exactly one generation is decidable; two is not.
+
+   This guard used to try to tell the cases apart by comparing PVC creation
+   timestamps — older generation wins, because "PVCs are never recreated in
+   place". That premise is false, and the runbook itself is the counter-example:
+   Step 2's re-bind DELETES each release-named claim and re-creates it under the
+   chart name against the same PV. A tenant interrupted part-way through that
+   loop has a chart-named claim created SECONDS ago holding real data, beside a
+   release-named claim with the original timestamp also holding real data — the
+   exact inversion of the rule. The guard then reported S-damaged and sent the
+   operator to a step that deletes the claim Step 2 had just re-bound.
+
+   A durable signal for BIRTH ORDER does exist, and it is worth naming so nobody
+   re-derives the broken one: the release history. `sh.helm.release.v1.<name>-
+   system.v1` records the naming scheme the tenant was installed under (its
+   manifest names either `seaweedfs-master` or `<release>-master`), and
+   `info.first_deployed` — present on every retained revision, so it survives
+   history pruning — anchors the PV creationTimestamps that Step 2's re-bind
+   preserves. On the upgrade stand that classifies every tenant correctly,
+   including reporting "no duplicate, mid-rebind" for the interrupted-Step-2 case,
+   because there BOTH generations sit at first_deployed.
+
+   This render still cannot read it — the release is base64(gzip(json)) in a
+   Secret and Go templates have no gunzip — but that is NOT the reason the guard
+   refuses. Birth order is the wrong question. It says which generation is
+   ORIGINAL; adoption needs to know whether the OTHER one is EMPTY, and those come
+   apart exactly where it matters:
+
+     D-wedged  — duplicate never scheduled, holds nothing  -> adopting is safe
+     D-split   — duplicate served writes, holds unique objects -> adopting strands them
+
+   Both are born pre-4.31, so the history signal is IDENTICAL for both (verified:
+   tenant-root and tenant-dsplit have the same rev-1 scheme and the same
+   first_deployed deltas — ~10s legacy vs ~35min release-named — yet one duplicate
+   served and the other did not). The only thing that separated them was
+   readyReplicas, which is a snapshot and not evidence: a duplicate that crashed,
+   was scaled down, or lost readiness after serving reads exactly like one that
+   never started.
+
+   So this render does not guess. Two generations => refuse, and let an operator
+   establish emptiness with context the template does not have (the duplicate's
+   volume files, the filer's volume list). Once the empty generation is gone
+   exactly one remains, which IS decidable, and the render proceeds on its own.
+
+   The cost is bounded: a duplicate only exists on a tenant that passed through
+   the broken 4.31 rename in 1.5.x, i.e. one that is already damaged and already
+   needs an operator. A 1.4.x tenant upgrading straight to 1.6 never renames, so
+   it only ever has the legacy generation and renders untouched. */}}
+{{- if and $legacyGen $systemGen }}
+{{-   fail (printf "SeaweedFS release %s in namespace %s has BOTH naming generations present: the chart-named set (seaweedfs-volume / data1-seaweedfs-volume-*) AND the release-named set this chart no longer uses. One of them is an empty duplicate and one holds the data, and which is which cannot be established from inside a Helm render — claim timestamps are mutable (the Step 2 re-bind recreates claims), StatefulSets are recreated by the adoption hook, and a duplicate with zero ready replicas may still have served writes. Rendering would adopt the chart-named set, so guessing wrong strands or destroys the data. Refusing instead. Classify the tenant and delete the EMPTY generation so exactly one remains — this render then adopts the survivor with no further action. See docs/operations/seaweedfs-431-rename-recovery.md (Step 1 classifies; Step 2/2a/3 recover). If you are part-way through Step 2's re-bind, finish it." .Release.Name .Release.Namespace) }}
+{{- else if $systemGen }}
+{{-   fail (printf "SeaweedFS release %s in namespace %s keeps its data on volumes named after the Helm release — a tenant installed fresh on Cozystack 1.5.x (or one whose instance name is long enough that the chart truncated the volume PVC names, leaving only its StatefulSets to match on). This chart pins the pre-4.31 chart-based names, so rendering would rename the workloads away from that data and stand up an empty cluster beside it. Helm cannot move data between PVCs. Re-bind the existing PVs onto the data1-seaweedfs-volume-* PVC names first — docs/operations/seaweedfs-431-rename-recovery.md (Step 2)." .Release.Name .Release.Namespace) }}
+{{- end }}
+
+{{- end }}

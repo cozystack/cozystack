@@ -1,0 +1,42 @@
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: coredns-metrics
+  namespace: kube-system
+  labels:
+    app: coredns
+spec:
+  clusterIP: None
+  ports:
+    - name: http-metrics
+      port: 9153
+      protocol: TCP
+      targetPort: 9153
+  selector:
+    k8s-app: kube-dns
+---
+apiVersion: operator.victoriametrics.com/v1beta1
+kind: VMServiceScrape
+metadata:
+  name: coredns-metrics
+  namespace: cozy-monitoring
+spec:
+  selector:
+    matchLabels:
+      app: coredns
+  namespaceSelector:
+    matchNames:
+      - "kube-system"
+  endpoints:
+  - bearerTokenFile: /var/run/secrets/kubernetes.io/serviceaccount/token
+    port: http-metrics
+    relabelConfigs:
+    - action: labeldrop
+      regex: (endpoint|namespace|pod|container)
+    - replacement: kube-dns
+      targetLabel: job
+    - sourceLabels: [__meta_kubernetes_pod_node_name]
+      targetLabel: node
+    - targetLabel: tier
+      replacement: cluster

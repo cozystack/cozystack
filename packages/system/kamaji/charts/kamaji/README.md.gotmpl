@@ -1,0 +1,67 @@
+{{ template "chart.header" . }}
+{{ template "chart.deprecationWarning" . }}
+
+{{ template "chart.badgesSection" . }}
+
+{{ template "chart.description" . }}
+
+{{ template "chart.maintainersSection" . }}
+
+{{ template "chart.sourcesSection" . }}
+
+{{ template "chart.requirementsSection" . }}
+
+[Kamaji](https://github.com/clastix/kamaji) requires a [multi-tenant `etcd`](https://github.com/clastix/kamaji-internal/blob/master/deploy/getting-started-with-kamaji.md#setup-internal-multi-tenant-etcd) cluster.
+This Helm Chart starting from v0.1.1 provides the installation of an internal `etcd` in order to streamline the local test. If you'd like to use an externally managed etcd instance, you can specify the overrides and by setting the value `etcd.deploy=false`.
+
+> For production use an externally managed `etcd` is highly recommended, the `etcd` addon offered by this Chart is not considered production-grade.
+
+## Install Kamaji
+
+To add clastix helm repository:
+
+
+        helm repo add clastix https://clastix.github.io/charts
+
+To install the Chart with the release name `kamaji`:
+
+
+        helm upgrade --install --namespace kamaji-system --create-namespace kamaji clastix/kamaji
+
+Show the status:
+
+        helm status kamaji -n kamaji-system
+
+Upgrade the Chart
+
+        helm upgrade kamaji -n kamaji-system clastix/kamaji
+
+Uninstall the Chart
+
+        helm uninstall kamaji -n kamaji-system
+
+## Customize the installation
+
+There are two methods for specifying overrides of values during Chart installation: `--values` and `--set`.
+
+The `--values` option is the preferred method because it allows you to keep your overrides in a YAML file, rather than specifying them all on the command line. Create a copy of the YAML file `values.yaml` and add your overrides to it.
+
+Specify your overrides file when you install the Chart:
+
+        helm upgrade kamaji --install --namespace kamaji-system --create-namespace clastix/kamaji --values myvalues.yaml
+
+The values in your overrides file `myvalues.yaml` will override their counterparts in the Chart's values.yaml file. Any values in `values.yaml` that weren’t overridden will keep their defaults.
+
+If you only need to make minor customizations, you can specify them on the command line by using the `--set` option. For example:
+
+        helm upgrade kamaji --install --namespace kamaji-system --create-namespace clastix/kamaji --set etcd.deploy=false
+
+Here the values you can override:
+
+{{ template "chart.valuesSection" . }}
+
+## Installing and managing etcd as DataStore
+
+Kamaji supports multiple data store, although `etcd` is the default one: thus, an initial cluster will be created upon the Chart installation.
+
+The `DataStore` resource can be configured with the proper values in case of overrides when using a different driver, otherwise all the required data will be inherited by the Chart values.

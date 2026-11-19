@@ -1,0 +1,27 @@
+# The cozystack-api ServiceAccount creates, updates, and deletes a community
+# tap's Flux OCIRepository, but only ever in cozy-system. Keep those write verbs
+# in a namespaced Role here (list/watch/get stay cluster-wide in the ClusterRole
+# for the aggregated watch cache) rather than granting them cluster-wide.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: cozystack-api-tap-sources
+  namespace: cozy-system
+rules:
+- apiGroups: ["source.toolkit.fluxcd.io"]
+  resources: ["ocirepositories"]
+  verbs: ["create", "update", "patch", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: cozystack-api-tap-sources
+  namespace: cozy-system
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: cozystack-api-tap-sources
+subjects:
+- kind: ServiceAccount
+  name: cozystack-api
+  namespace: cozy-system

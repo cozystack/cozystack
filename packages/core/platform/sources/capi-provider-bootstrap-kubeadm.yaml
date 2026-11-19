@@ -1,0 +1,34 @@
+---
+apiVersion: cozystack.io/v1alpha1
+kind: PackageSource
+metadata:
+  name: cozystack.capi-provider-bootstrap-kubeadm
+spec:
+  sourceRef:
+    kind: OCIRepository
+    name: cozystack-packages
+    namespace: cozy-system
+    path: /
+  variants:
+  - name: default
+    dependsOn:
+    - cozystack.networking
+    - cozystack.capi-operator
+    components:
+    - name: capi-providers-bootstrap
+      path: system/capi-providers-bootstrap
+      install:
+        privileged: true
+        namespace: cozy-cluster-api
+        releaseName: capi-providers-bootstrap
+  - name: kubevirt
+    dependsOn:
+    - cozystack.networking
+    - cozystack.capi-operator
+    components:
+    - name: capi-providers-bootstrap
+      path: system/capi-providers-bootstrap
+      install:
+        privileged: true
+        namespace: cozy-cluster-api
+        releaseName: capi-providers-bootstrap

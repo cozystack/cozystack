@@ -1,0 +1,21 @@
+{{- range $username, $user := .Values.users }}
+{{- $existingSecret := lookup "v1" "Secret" $.Release.Namespace (printf "%s-user-%s" $.Release.Name $username) }}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ $.Release.Name }}-user-{{ $username }}
+  labels:
+    opensearch.opster.io/credentials: "true"
+type: kubernetes.io/basic-auth
+stringData:
+  username: {{ $username | quote }}
+  {{- if $user.password }}
+  password: {{ $user.password | quote }}
+  {{- else if and $existingSecret (hasKey $existingSecret.data "password") }}
+  password: {{ index $existingSecret.data "password" | b64dec | quote }}
+  {{- else }}
+  password: {{ randAlphaNum 16 | quote }}
+  {{- end }}
+  roles: {{ $user.roles | default (list "readall") | join "," | quote }}
+{{- end }}

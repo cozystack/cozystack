@@ -1,0 +1,52 @@
+#!/bin/sh
+# Migration 53 --> 54
+# Repair the 1.5.0 db-split hand-over for SeaweedFS instances whose name is not
+# the default `seaweedfs`.
+#
+# Migration 43 performs the hand-over of Cluster/seaweedfs-db from the
+# <name>-system release to the <name>-db release introduced by the split (PR
+# #2601, v1.5.0). It matched the owning release name against the literal
+# "seaweedfs-system", so it only ever fired for an instance named `seaweedfs`.
+# `SeaweedFS` is a user-creatable kind: an instance named `foo` is owned by
+# release `foo-system` and was skipped. Such a tenant kept
+# meta.helm.sh/release-name: <name>-system and never received
+# helm.sh/resource-policy: keep, so the <name>-system upgrade — whose post-split
+# chart no longer renders the Cluster — deleted it as a removed resource. CNPG
+# takes the PVC with the Cluster, so the filer metadata, and with it every object
+# in that tenant's S3, is unreachable.
+#
+# Migration 43 is fixed in place, which covers clusters upgrading from before 43.
+# Migrations never re-run, so any cluster already at version >= 44 ran the
+# hardcoded version and is still exposed: this migration re-checks the fleet and
+# performs the hand-over for any Cluster/seaweedfs-db still owned by a
+# <name>-system release. Running as a pre-upgrade hook, it lands before the
+# platform applies the new artifacts and therefore before <name>-system
+# re-renders, closing the window on THIS upgrade.
+#
+# The prune is not a one-shot: Helm diffs the LAST DEPLOYED revision against the
+# new manifest, so a tenant whose <name>-system last succeeded on a pre-split
+# revision recomputes the same deletion on EVERY upgrade attempt, including ones
+# that fail for unrelated reasons. Such a tenant re-deletes the Cluster each time
+# <name>-db recreates it. Stamping `keep` breaks that loop even when the
+# <name>-system upgrade itself stays wedged.
+#
+# Idempotent (a Cluster already owned by <name>-db is left alone), so it is a
+# no-op on a correctly migrated cluster and on fresh installs.
+#
+# LIMIT — this migration cannot recover a Cluster that is ALREADY deleted. There
+# is nothing left to re-annotate: the PVC went with it. Such a tenant needs its
+# filer metadata restored from a backup; see
+# docs/operations/seaweedfs-431-rename-recovery.md.
+
+set -euo pipefail
+
+# shellcheck source=lib/cozystack-version.sh
+. "$(dirname "$0")/lib/cozystack-version.sh"
+# shellcheck source=lib/seaweedfs-db-adopt.sh
+. "$(dirname "$0")/lib/seaweedfs-db-adopt.sh"
+
+adopt_seaweedfs_db_clusters
+
+# Stamp version via the shared helper so the cozystack-version ConfigMap keeps
+# the platform.cozystack.io/no-delete label.
+stamp_cozystack_version 54

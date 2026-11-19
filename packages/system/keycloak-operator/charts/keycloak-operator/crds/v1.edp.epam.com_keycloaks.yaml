@@ -1,0 +1,131 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.18.0
+  name: keycloaks.v1.edp.epam.com
+spec:
+  group: v1.edp.epam.com
+  names:
+    kind: Keycloak
+    listKind: KeycloakList
+    plural: keycloaks
+    singular: keycloak
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - description: Is connected to keycloak
+      jsonPath: .status.connected
+      name: Connected
+      type: boolean
+    name: v1
+    schema:
+      openAPIV3Schema:
+        description: Keycloak is the Schema for the keycloaks API.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: KeycloakSpec defines the desired state of Keycloak.
+            properties:
+              adminType:
+                description: AdminType can be user or serviceAccount, if serviceAccount
+                  was specified, then client_credentials grant type should be used
+                  for getting admin realm token.
+                enum:
+                - serviceAccount
+                - user
+                type: string
+              caCert:
+                description: |-
+                  CACert defines the root certificate authority
+                  that api client use when verifying server certificates.
+                properties:
+                  configMapKeyRef:
+                    description: Selects a key of a ConfigMap.
+                    properties:
+                      key:
+                        description: The key to select.
+                        type: string
+                      name:
+                        default: ""
+                        description: |-
+                          Name of the referent.
+                          This field is effectively required, but due to backwards compatibility is
+                          allowed to be empty. Instances of this type with an empty value here are
+                          almost certainly wrong.
+                          More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                        type: string
+                    required:
+                    - key
+                    type: object
+                    x-kubernetes-map-type: atomic
+                  secretKeyRef:
+                    description: Selects a key of a secret.
+                    properties:
+                      key:
+                        description: The key of the secret to select from.
+                        type: string
+                      name:
+                        default: ""
+                        description: |-
+                          Name of the referent.
+                          This field is effectively required, but due to backwards compatibility is
+                          allowed to be empty. Instances of this type with an empty value here are
+                          almost certainly wrong.
+                          More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                        type: string
+                    required:
+                    - key
+                    type: object
+                    x-kubernetes-map-type: atomic
+                type: object
+              insecureSkipVerify:
+                description: |-
+                  InsecureSkipVerify controls whether api client verifies the server's
+                  certificate chain and host name. If InsecureSkipVerify is true, api client
+                  accepts any certificate presented by the server and any host name in that
+                  certificate.
+                type: boolean
+              secret:
+                description: Secret is a secret name which contains admin credentials.
+                type: string
+              url:
+                description: URL of keycloak service.
+                type: string
+            required:
+            - secret
+            - url
+            type: object
+          status:
+            default:
+              connected: false
+            description: KeycloakStatus defines the observed state of Keycloak.
+            properties:
+              connected:
+                description: Connected shows if keycloak service is up and running.
+                type: boolean
+            required:
+            - connected
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

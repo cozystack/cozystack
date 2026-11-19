@@ -1,0 +1,122 @@
+{{- $tlsEnabled := (include "rabbitmq.tls.enabled" .) | eq "true" }}
+
+{{- if $tlsEnabled }}
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: {{ .Release.Name }}-selfsigned
+  namespace: {{ .Release.Namespace }}
+spec:
+  selfSigned: {}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ .Release.Name }}-ca
+  namespace: {{ .Release.Namespace }}
+spec:
+  {{- /* tenant-projection.yaml names this Secret as its sourceSecretName, and
+       that is how the CA-extraction controller finds it: no label on this
+       Secret selects it. The controller reads ca.crt from here rather than
+       from the leaf below, whose Secret carries the server private key beside
+       the same ca.crt.
+
+       cert-manager keeps this Secret when TLS goes off and Helm does not own
+       it, so nothing rendered here can withdraw the raw CA material. See
+       README "Turning TLS off again". */}}
+  secretName: {{ .Release.Name }}-ca
+  duration: 43800h
+  commonName: {{ .Release.Name }}-ca
+  issuerRef:
+    name: {{ .Release.Name }}-selfsigned
+    kind: Issuer
+    group: cert-manager.io
+  isCA: true
+  usages:
+    - cert sign
+    - crl sign
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+    {{- /* Rotating the CA key invalidates every leaf signed by the old one.
+         Renewal keeps the key and issues a fresh certificate, which
+         cert-manager does on its own as the 43800h duration runs out. */}}
+    rotationPolicy: Never
+---
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: {{ .Release.Name }}-ca
+  namespace: {{ .Release.Namespace }}
+spec:
+  ca:
+    secretName: {{ .Release.Name }}-ca
+---
+{{- $clusterDomain := include "rabbitmq.clusterDomain" . }}
+{{- $ns := .Release.Namespace }}
+{{- $name := .Release.Name }}
+{{- /* Every name is covered in all resolvable forms: bare (same namespace),
+     two-segment <name>.<namespace> (the cross-namespace shorthand the DNS search
+     path resolves), and the fully qualified .svc / .svc.<domain>. That includes
+     the per-pod wildcards — the operator addresses nodes as
+     <pod>.<name>-nodes.<namespace>, the two-segment form, in RABBITMQ_NODENAME and
+     K8S_HOSTNAME_SUFFIX, so it is the canonical pod address rather than an
+     afterthought. Omitting a two-segment form is the easy mistake: it resolves
+     fine, so the connection succeeds and fails only at hostname verification,
+     which reads as a certificate bug rather than a missing SAN. */}}
+{{- $dnsNames := list
+  $name
+  (printf "%s.%s" $name $ns)
+  (printf "%s.%s.svc" $name $ns)
+  (printf "%s.%s.svc.%s" $name $ns $clusterDomain)
+  (printf "%s-nodes" $name)
+  (printf "%s-nodes.%s" $name $ns)
+  (printf "%s-nodes.%s.svc" $name $ns)
+  (printf "%s-nodes.%s.svc.%s" $name $ns $clusterDomain)
+  (printf "*.%s-nodes" $name)
+  (printf "*.%s-nodes.%s" $name $ns)
+  (printf "*.%s-nodes.%s.svc" $name $ns)
+  (printf "*.%s-nodes.%s.svc.%s" $name $ns $clusterDomain)
+}}
+{{- /* Add the external hostname as a SAN when the platform supplies one, and skip
+     it otherwise rather than failing: _namespace.host derives from the optional
+     _cluster.root-host, so requiring it would turn "external RabbitMQ on a cluster
+     with no root host" into a render error on upgrade. The chart creates no DNS
+     record for this name; see README "Verifying the server certificate". */}}
+{{- if .Values.external }}
+  {{- $host := dig "host" "" (.Values._namespace | default dict) }}
+  {{- if $host }}
+    {{- $dnsNames = append $dnsNames (printf "%s.%s" $name $host) }}
+  {{- end }}
+{{- end }}
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ .Release.Name }}-tls
+  namespace: {{ .Release.Namespace }}
+spec:
+  secretName: {{ .Release.Name }}-tls
+  duration: 8760h
+  renewBefore: 720h
+  issuerRef:
+    name: {{ .Release.Name }}-ca
+    kind: Issuer
+    group: cert-manager.io
+  commonName: {{ .Release.Name }}
+  dnsNames:
+    {{- range $dnsNames }}
+    - {{ . | quote }}
+    {{- end }}
+  {{- /* No `key encipherment`: that bit authorises RSA key transport, and this is
+       an ECDSA key. ECDSA cipher suites establish the session over ECDHE and use
+       the certificate only to sign the exchange, so `digital signature` is the
+       bit that does the work. Requesting the other one asks for a capability the
+       key type cannot supply. */}}
+  usages:
+    - digital signature
+    - server auth
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+    rotationPolicy: Always
+{{- end }}

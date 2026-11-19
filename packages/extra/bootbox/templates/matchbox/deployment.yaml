@@ -1,0 +1,61 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: bootbox-matchbox
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: bootbox-matchbox
+  template:
+    metadata:
+      labels:
+        app: bootbox-matchbox
+    spec:
+      containers:
+      - name: matchbox
+        image: "{{ $.Files.Get "images/matchbox.tag" | trim }}"
+        args:
+          - "-address=:8080"
+          - "-log-level=debug"
+        volumeMounts:
+          - name: profiles-volume
+            mountPath: /var/lib/matchbox/profiles
+          - name: groups-volume
+            mountPath: /var/lib/matchbox/groups
+          - name: configs-volume
+            mountPath: /var/lib/matchbox/assets/configs
+        ports:
+          - name: http
+            containerPort: 8080
+            protocol: TCP
+        resources:
+          limits:
+            cpu: 200m
+            memory: 256Mi
+          requests:
+            cpu: 50m
+            memory: 128Mi
+      volumes:
+        - name: profiles-volume
+          configMap:
+            name: bootbox-profiles
+        - name: groups-volume
+          configMap:
+            name: bootbox-groups
+        - name: configs-volume
+          configMap:
+            name: bootbox-configs
+---
+apiVersion: cozystack.io/v1alpha1
+kind: WorkloadMonitor
+metadata:
+  name: bootbox-matchbox
+spec:
+  replicas: 1
+  minReplicas: 1
+  kind: bootbox
+  type: matchbox
+  selector:
+    app: bootbox-matchbox
+  version: {{ $.Chart.Version }}

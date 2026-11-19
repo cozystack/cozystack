@@ -1,0 +1,3 @@
+cluster-autoscaler:
+  extraArgs:
+    enforce-node-group-min-size: true

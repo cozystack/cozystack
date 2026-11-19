@@ -1,0 +1,14 @@
+diff --git a/packages/system/seaweedfs/charts/seaweedfs/templates/volume/volume-statefulset.yaml b/packages/system/seaweedfs/charts/seaweedfs/templates/volume/volume-statefulset.yaml
+index 0a70d8c..eb3bb91 100644
+--- a/packages/system/seaweedfs/charts/seaweedfs/templates/volume/volume-statefulset.yaml
++++ b/packages/system/seaweedfs/charts/seaweedfs/templates/volume/volume-statefulset.yaml
+@@ -10,6 +10,9 @@ metadata:
+     app.kubernetes.io/managed-by: {{ .Release.Service }}
+     app.kubernetes.io/instance: {{ .Release.Name }}
+ spec:
++  persistentVolumeClaimRetentionPolicy:
++    whenDeleted: Delete
++    whenScaled: Delete
+   serviceName: {{ template "seaweedfs.name" . }}-volume
+   replicas: {{ .Values.volume.replicas }}
+   podManagementPolicy: {{ .Values.volume.podManagementPolicy }}

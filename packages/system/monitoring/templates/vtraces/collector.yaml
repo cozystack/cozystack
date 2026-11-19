@@ -1,0 +1,278 @@
+{{- /*
+  Per-tenant OpenTelemetry Collector — the app-facing OTLP ingest gateway for
+  traces (design-proposals/distributed-tracing, phase 2). It lives in the tenant
+  namespace (like a per-tenant vmagent), so app -> collector traffic is
+  intra-namespace and never crosses the tenant boundary. It applies head
+  sampling and optional attribute redaction, then exports over OTLP/HTTP to the
+  tracingStorages backend. No OpenTelemetry operator exists in the platform, so
+  this is a plain Deployment + ConfigMap + Service (the fluent-bit pattern).
+
+  Trust boundary: the collector is the place where sampling/redaction are
+  enforced, but its OTLP receiver is unauthenticated and the Service is a plain
+  ClusterIP — actual tenant isolation is provided by the tenant NetworkPolicies
+  and, with shared-central tracing, by the vmauth in tenant-root, which pins the
+  account to the tenant's login whatever this collector sends.
+
+  Off by default: tracingStorages is empty out of the box, so the collector
+  renders only once a backend is configured (local) or central mode is selected
+  — there is no producer/backend to wire otherwise. Gating on that, rather than
+  failing on empty, keeps "no backend" a clean off-state (an app's OTLP exporter
+  simply finds no collector Service and retries harmlessly) instead of aborting
+  the whole monitoring release.
+
+  Backend topology (monitoring.tracingCentral):
+    - local (default): the exporter targets the tenant's own tracingStorages[0]
+      in this namespace. A collector fronting more than one local backend is
+      rejected below rather than silently writing to only the first.
+    - central (shared-central topology): the exporter writes to the shared
+      VictoriaTraces in tenant-root through its vmauth, logged in as this
+      tenant's VMUser (vmuser.yaml). vmauth sets the account from that login,
+      so the account does not depend on what the collector, or anything else
+      running with its pod label, sends.
+*/ -}}
+{{- define "monitoring.tracingCollectorConfig" -}}
+{{- $c := .Values.tracingCollector -}}
+{{- /* Drop empty redact keys: the schema admits "" (free-form []string, no
+       minLength), and an empty key would render `- key: ""`, which the otel
+       attributes processor rejects at startup — crashlooping the collector on the
+       PII/secret control point. Filtering here also means an all-empty list emits
+       no attributes/redact processor at all, rather than one with empty actions. */}}
+{{- $redact := list -}}
+{{- range ($c.redactAttributes | default list) -}}
+{{- if . }}{{- $redact = append $redact . -}}{{- end -}}
+{{- end -}}
+{{- $central := eq (include "monitoring.tracingCentral" .) "true" -}}
+{{- $endpoint := "" -}}
+{{- $rate := 0 -}}
+{{- $burst := 0 -}}
+{{- if $central -}}
+{{- $endpoint = "http://vmauth-traces-central.tenant-root.svc:8427/insert/opentelemetry/v1/traces" -}}
+{{- /* The platform sets the tenant's rate in _cluster, which reaches this
+       release through the cozystack-values Secret, so a change upgrades it.
+       Without one, or on a value that is not a positive number, the default
+       holds: floor(2 vtstorage replicas * 80% of a 10Gi volume / 172800 s),
+       at which one tenant writes at most a default store's disk cap,
+       uncompressed and before sampling, over the two days VictoriaTraces
+       always keeps. The rate is split across the replicas the Service
+       spreads its senders over. The limiter sees the requests the receiver
+       admits, so the receiver caps them at 3 MiB (decompressed for HTTP). It
+       counts a request as the collector re-encodes it, which pdata makes
+       larger by writing the empty value of an attribute the wire may omit:
+       1.4x for a valid request of spans with empty-valued attributes. Burst
+       holds that at 3 MiB, since a request counted above burst never passes,
+       and is at least one second of rate. Requests the spec calls invalid,
+       spans without IDs, grow further and are refused for good. The limiter
+       runs right after memory_limiter, before the sampler adds a tracestate
+       to each span it keeps and resource/tenant an attribute to each
+       resource, either of which could push an admitted request past burst.
+       A refused request gets a 429 over OTLP/HTTP, which senders retry, and
+       RESOURCE_EXHAUSTED without RetryInfo over gRPC, which is final. Each pod
+       starts with a full bucket, so burst is also what a pod start lets
+       through above the rate. */ -}}
+{{- $tenantRate := int64 99420 -}}
+{{- $configured := toString (index (.Values._cluster | default dict) "tracing-central-tenant-bytes-per-second" | default "") -}}
+{{- if regexMatch "^[1-9][0-9]{0,12}$" $configured }}{{ $tenantRate = int64 $configured }}{{ end -}}
+{{- $replicas := int64 $c.replicas -}}
+{{- if gt $replicas 10 }}{{ fail (printf "monitoring: shared-central tracing allows at most 10 collector replicas (tracingCollector.replicas is %d): each replica starts with a full rate bucket, so more of them would let a tenant write further above its rate on every rollout." $replicas) }}{{ end -}}
+{{- $rate = div (add $tenantRate (sub $replicas 1)) $replicas -}}
+{{- $burst = max 5242880 $rate -}}
+{{- else -}}
+{{- $backend := index .Values.tracingStorages 0 -}}
+{{- $mode := $backend.mode | default "cluster" -}}
+{{- $endpoint = ternary (printf "http://vtsingle-%s.%s.svc:10428/insert/opentelemetry/v1/traces" $backend.name .Release.Namespace) (printf "http://vtinsert-%s.%s.svc:10481/insert/opentelemetry/v1/traces" $backend.name .Release.Namespace) (eq $mode "single") -}}
+{{- end -}}
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+{{- if $central }}
+        max_recv_msg_size_mib: 3
+{{- end }}
+      http:
+        endpoint: 0.0.0.0:4318
+{{- if $central }}
+        max_request_body_size: 3145728
+{{- end }}
+processors:
+  memory_limiter:
+    check_interval: 5s
+    limit_percentage: 80
+    spike_limit_percentage: 25
+  probabilistic_sampler:
+    sampling_percentage: {{ $c.samplingPercentage }}
+  batch: {}
+{{- if $central }}
+  # The account already separates tenants; the attribute keeps the source
+  # tenant on each span once it is copied out of the store, where the account
+  # does not travel. Prefixed so it does not overwrite an application's own
+  # `tenant`.
+  resource/tenant:
+    attributes:
+      - key: cozystack.tenant
+        value: {{ .Release.Namespace }}
+        action: upsert
+  # Runs right after memory_limiter: a request later processors grew past burst would be refused for good.
+  ratelimit/tenant:
+    strategy: bytes
+    rate: {{ $rate }}
+    burst: {{ $burst }}
+    throttle_behavior: error
+{{- end }}
+{{- if $redact }}
+  attributes/redact:
+    actions:
+{{- /* quote: redactAttributes is a free-form []string with no schema pattern, so a
+       key with YAML structural chars (e.g. "foo: bar") would otherwise emit invalid
+       config and crashloop the collector, and a key YAML re-types ("true"/"123"/"null")
+       would reach the processor as a non-string and silently fail to redact — the
+       worse outcome on the PII/secret control point. */}}
+{{- range $redact }}
+      - key: {{ . | quote }}
+        action: delete
+{{- end }}
+{{- end }}
+exporters:
+  # vtinsert (cluster) / VTSingle accept OTLP/HTTP natively; gRPC would require
+  # -otlpGRPCListenAddr on the backend, so export over HTTP.
+  otlphttp/victoriatraces:
+    traces_endpoint: {{ $endpoint }}
+{{- if $central }}
+    auth:
+      authenticator: basicauth/vmauth
+    # The write VMUser allows four requests in flight per vmauth replica; two
+    # senders keep writes under it.
+    sending_queue:
+      num_consumers: 2
+{{- end }}
+extensions:
+  health_check:
+    endpoint: 0.0.0.0:13133
+{{- if $central }}
+  basicauth/vmauth:
+    client_auth:
+      username: ${env:VMAUTH_USERNAME}
+      password: ${env:VMAUTH_PASSWORD}
+{{- end }}
+service:
+  extensions: [health_check{{ if $central }}, basicauth/vmauth{{ end }}]
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, {{ if $central }}ratelimit/tenant, {{ end }}probabilistic_sampler, {{ if $redact }}attributes/redact, {{ end }}{{ if $central }}resource/tenant, {{ end }}batch]
+      exporters: [otlphttp/victoriatraces]
+{{- end -}}
+{{- if and .Values.tracingCollector.enabled (or (include "monitoring.tracingCentral" .) (not (empty .Values.tracingStorages))) }}
+{{- if gt (len .Values.tracingStorages) 1 }}
+{{- if include "monitoring.tracingCentral" . }}
+{{- fail "monitoring: tracingCollector fronts a single traces backend, but tracingStorages has more than one entry: once shared-central tracing is turned off, the collector would export to the first and leave the rest empty. Reduce tracingStorages to one entry or set tracingCollector.enabled=false." }}
+{{- end }}
+{{- fail "monitoring: tracingCollector fronts a single traces backend, but tracingStorages has more than one entry — the collector would export to the first and leave the rest empty. Reduce tracingStorages to one entry or set tracingCollector.enabled=false (apps then send OTLP straight to each backend)." }}
+{{- end }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: otel-traces
+  labels:
+    app.kubernetes.io/name: otel-traces
+    apps.cozystack.io/application.name: {{ .Release.Name }}
+data:
+  config.yaml: |
+{{ include "monitoring.tracingCollectorConfig" . | indent 4 }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: otel-traces
+  labels:
+    app.kubernetes.io/name: otel-traces
+    apps.cozystack.io/application.name: {{ .Release.Name }}
+spec:
+  replicas: {{ .Values.tracingCollector.replicas }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: otel-traces
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: otel-traces
+      annotations:
+        checksum/config: {{ include "monitoring.tracingCollectorConfig" . | sha256sum }}
+        {{- if eq (include "monitoring.tracingCentral" .) "true" }}
+        {{- /* The login is read from env at start, so a new one needs a new pod. */}}
+        checksum/credentials: {{ include "monitoring.tracingCentralPassword" (list . "traces-central-credentials") | sha256sum }}
+        {{- end }}
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: otel-collector
+          image: {{ include "cozy-lib.image" (list .Values.tracingCollector.image $) }}
+          args:
+            - --config=/etc/otel-traces/config.yaml
+          {{- if eq (include "monitoring.tracingCentral" .) "true" }}
+          env:
+            - name: VMAUTH_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: traces-central-credentials
+                  key: username
+            - name: VMAUTH_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: traces-central-credentials
+                  key: password
+          {{- end }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          ports:
+            - name: otlp-grpc
+              containerPort: 4317
+            - name: otlp-http
+              containerPort: 4318
+          livenessProbe:
+            httpGet:
+              path: /
+              port: 13133
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 13133
+          resources: {{ .Values.tracingCollector.resources | toYaml | nindent 12 }}
+          volumeMounts:
+            - name: config
+              mountPath: /etc/otel-traces
+      volumes:
+        - name: config
+          configMap:
+            name: otel-traces
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: otel-traces
+  labels:
+    app.kubernetes.io/name: otel-traces
+    apps.cozystack.io/application.name: {{ .Release.Name }}
+spec:
+  selector:
+    app.kubernetes.io/name: otel-traces
+  ports:
+    - name: otlp-grpc
+      port: 4317
+      targetPort: 4317
+      protocol: TCP
+    - name: otlp-http
+      port: 4318
+      targetPort: 4318
+      protocol: TCP
+{{- end }}

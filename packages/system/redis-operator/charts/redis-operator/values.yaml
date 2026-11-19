@@ -1,0 +1,101 @@
+# Default values for redis-operator.
+# This is a YAML-formatted file.
+# Declare variables to be passed into your templates.
+
+# Name of the image repository to pull the container image from.
+image:
+  repository: ghcr.io/freshworks-oss/redis-operator
+  pullPolicy: IfNotPresent
+  tag: v1.3.0
+  cli_args: ""
+
+imageCredentials:
+  create: false
+  registry: url.private.registry
+  username: someone
+  password: somepassword
+  email: someone@example.com
+  # Use exists secrets in namespace
+  existsSecrets:
+    - registrysecret
+
+updateStrategy:
+  type: RollingUpdate
+
+replicas: 1
+
+# A name in place of the chart name for `app:` labels.
+nameOverride: ""
+
+labels: {}
+  # app: redis
+
+# A name to substitute for the full names of resources.
+fullnameOverride: ""
+
+# The name of the Namespace to deploy
+# If not set, `.Release.Namespace` is used
+namespace: null
+
+serviceAccount:
+  # Enable service account creation.
+  create: true
+  # Annotations to be added to the service account.
+  annotations: {}
+  # The name of the service account to use.
+  # If not set and create is true, a name is generated using the fullname template.
+  name: ""
+
+service:
+  type: ClusterIP
+  port: 9710
+
+container:
+  port: 9710
+
+# Extra environment variables to add to the operator container, using the
+# native Kubernetes EnvVar schema, e.g.:
+# extraEnvVars:
+#   - name: FOO
+#     value: bar
+extraEnvVars: []
+
+# Container [security context](https://kubernetes.io/docs/tasks/configure-pod-container/security-context/#set-the-security-context-for-a-container).
+# See the [API reference](https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#security-context-1) for details.
+securityContext:
+  readOnlyRootFilesystem: true
+  runAsNonRoot: true
+  runAsUser: 1000
+
+# Container resource [requests and limits](https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/).
+# See the [API reference](https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#resources) for details.
+# @default -- No requests or limits.
+resources: {}
+#   requests:
+#     cpu: 100m
+#     memory: 128Mi
+#   limits:
+#     cpu: 100m
+#     memory: 128Mi
+
+### Monitoring
+###############
+monitoring:
+  # Enable Prometheus PodMonitor to monitor the operator.
+  enabled: false
+  serviceMonitor: false
+  serviceAnnotations: {}
+  prometheus:
+    name: unknown
+
+# Annotations to be added to pods and deployments.
+annotations: {}
+
+nodeSelector: {}
+
+tolerations: []
+
+affinity: {}
+
+priorityClassName: ""
+

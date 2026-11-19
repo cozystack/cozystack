@@ -1,0 +1,195 @@
+# Chainsaw port of hack/e2e-apps/securitygroup.bats.
+#
+# Exercises the SecurityGroup membership model against a live cluster. Two
+# things unit tests cannot prove: that the in-tree CiliumNetworkPolicy mirror
+# (membership endpointSelector, app/SG peer selectors, attachments annotation)
+# round-trips against the real cilium.io/v2 CRD, and that the
+# securitygroup-controller actually stamps the membership label onto an
+# attached application's pods.
+#
+# Everything both Tests create is chainsaw-applied, so auto-cleanup reclaims
+# it even on mid-test failure — strictly better than the bats, which had no
+# teardown hook and leaked its fixtures on failure. The one operator-created
+# object (the backing CNP) is the same storage object as the tracked
+# SecurityGroup, so no finally block is needed anywhere.
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: securitygroup-projection
+spec:
+  catch:
+  - events: {}
+  - describe:
+      apiVersion: cilium.io/v2
+      kind: CiliumNetworkPolicy
+      name: sg-e2e
+  steps:
+  - name: create-securitygroup
+    try:
+    - apply:
+        file: securitygroup.yaml
+
+  - name: assert-backing-cnp
+    try:
+    # The backing CNP must materialise with the marker label, the group's own
+    # membership label as endpointSelector (the EMPTY value must round-trip
+    # against the real cilium.io/v2 CRD), fromApp projected to the three
+    # lineage labels, fromSG to the peer group's membership label (index
+    # order fromApp-then-fromSG is code-guaranteed by projectIngress), and
+    # the rule list translated 1:1 (port is a string in the CRD).
+    - assert:
+        timeout: 1m
+        resource:
+          apiVersion: cilium.io/v2
+          kind: CiliumNetworkPolicy
+          metadata:
+            name: sg-e2e
+            labels:
+              sdn.cozystack.io/securitygroup: "true"
+          spec:
+            endpointSelector:
+              matchLabels:
+                securitygroup.sdn.cozystack.io/sg-e2e: ""
+            (ingress[0].fromEndpoints[0].matchLabels):
+              apps.cozystack.io/application.group: apps.cozystack.io
+              apps.cozystack.io/application.kind: Kubernetes
+              apps.cozystack.io/application.name: web
+            (ingress[0].fromEndpoints[1].matchLabels):
+              securitygroup.sdn.cozystack.io/sg-frontend-e2e: ""
+            (ingress[0].toPorts[0].ports[0].port): "5432"
+            (ingress[0].toPorts[0].ports[0].protocol): TCP
+    # The attachments annotation is a JSON *string* on the backing policy —
+    # parsed with jq, exactly like the bats (no reliance on JMESPath JSON
+    # parsing in chainsaw v0.2.15).
+    - script:
+        timeout: 1m
+        content: |
+          set -eu
+          att=$(kubectl -n "$NAMESPACE" get ciliumnetworkpolicy sg-e2e \
+            -o jsonpath='{.metadata.annotations.sdn\.cozystack\.io/attachments}')
+          echo "$att" | jq -e '.[0].kind == "Postgres" and .[0].name == "db"' >/dev/null
+        check:
+          ($error == null): true
+
+  - name: assert-securitygroup-view
+    try:
+    # The SecurityGroup view reconstructs attachments and peers, and HIDES the
+    # internal marker label + storage annotation.
+    - assert:
+        timeout: 1m
+        resource:
+          apiVersion: sdn.cozystack.io/v1alpha1
+          kind: SecurityGroup
+          metadata:
+            name: sg-e2e
+          spec:
+            (attachments[0].kind): Postgres
+            (attachments[0].name): db
+            (ingress[0].fromApp[0].name): web
+            (ingress[0].fromSG[0]): sg-frontend-e2e
+          (metadata.labels."sdn.cozystack.io/securitygroup" == null): true
+          (metadata.annotations."sdn.cozystack.io/attachments" == null): true
+
+  - name: unmarked-cnp-invisible
+    try:
+    - apply:
+        file: plain-cnp.yaml
+    # The aggregated API filters by the marker label synchronously, so
+    # non-existence of the view is deterministic.
+    - error:
+        timeout: 30s
+        resource:
+          apiVersion: sdn.cozystack.io/v1alpha1
+          kind: SecurityGroup
+          metadata:
+            name: plain-cnp-e2e
+
+  - name: delete-propagates
+    try:
+    # Deleting the SecurityGroup removes its backing policy (the delete op
+    # waits for full disappearance of the view); the unmarked CNP survives.
+    - delete:
+        timeout: 1m
+        ref:
+          apiVersion: sdn.cozystack.io/v1alpha1
+          kind: SecurityGroup
+          name: sg-e2e
+    - error:
+        timeout: 1m
+        resource:
+          apiVersion: cilium.io/v2
+          kind: CiliumNetworkPolicy
+          metadata:
+            name: sg-e2e
+    - assert:
+        timeout: 30s
+        resource:
+          apiVersion: cilium.io/v2
+          kind: CiliumNetworkPolicy
+          metadata:
+            name: plain-cnp-e2e
+---
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: securitygroup-membership
+spec:
+  catch:
+  - events: {}
+  - describe:
+      apiVersion: v1
+      kind: Pod
+      name: sg-member-pod-e2e
+  - podLogs:
+      namespace: cozy-securitygroup-controller
+      selector: app=securitygroup-controller
+      tail: 100
+  steps:
+  - name: create-member-pod-and-securitygroup
+    try:
+    - apply:
+        file: member-pod.yaml
+    - apply:
+        file: securitygroup-member.yaml
+
+  - name: membership-label-stamped
+    try:
+    # The controller must stamp the membership label onto the member pod;
+    # the value is the empty string (reconciler sets pod.Labels[key] = "").
+    - assert:
+        timeout: 2m
+        resource:
+          apiVersion: v1
+          kind: Pod
+          metadata:
+            name: sg-member-pod-e2e
+            labels:
+              securitygroup.sdn.cozystack.io/sg-member-e2e: ""
+
+  - name: delete-clears-membership
+    try:
+    # Deleting the SecurityGroup while a pod is still a member must strip the
+    # membership label off that pod (the controller's finalizer runs before
+    # the backing policy is garbage-collected), leaving no orphaned label.
+    # This is the delete-with-members path, distinct from detach.
+    - delete:
+        timeout: 2m
+        ref:
+          apiVersion: sdn.cozystack.io/v1alpha1
+          kind: SecurityGroup
+          name: sg-member-e2e
+    - error:
+        timeout: 1m
+        resource:
+          apiVersion: cilium.io/v2
+          kind: CiliumNetworkPolicy
+          metadata:
+            name: sg-member-e2e
+    - assert:
+        timeout: 1m
+        resource:
+          apiVersion: v1
+          kind: Pod
+          metadata:
+            name: sg-member-pod-e2e
+          (metadata.labels."securitygroup.sdn.cozystack.io/sg-member-e2e" == null): true

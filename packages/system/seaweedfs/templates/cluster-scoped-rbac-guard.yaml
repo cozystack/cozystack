@@ -1,0 +1,69 @@
+{{- /* Cluster-scoped RBAC uniqueness guard.
+
+   ClusterRoles and ClusterRoleBindings are CLUSTER-scoped: exactly one object can
+   carry a given name, cluster-wide. This chart is installed once per tenant, so
+   every cluster-scoped name it renders must be unique per install.
+
+   That is in direct tension with the adoption pin. `seaweedfs.fullnameOverride`
+   is pinned to `seaweedfs` (see values.yaml and templates/naming-guard.yaml) so
+   the NAMESPACED workloads keep their pre-4.31 chart-based names and are adopted
+   in place across the bump — which means `seaweedfs.fullname` is, by
+   construction, the SAME string in every tenant. Naming a cluster-scoped object
+   after it makes every tenant fight over one object.
+
+   Upstream 4.31 did exactly that: it switched the four cluster-scoped names from
+   global.serviceAccountName to seaweedfs.fullname. Pre-4.31 they were
+   `<global.serviceAccountName>-{objectstorage-provisioner,rw-cr}`, and Cozystack
+   sets that value to `<namespace>-seaweedfs` (extra/seaweedfs), so they were
+   unique per tenant. patches/cluster-scoped-names-per-namespace.patch puts them
+   back on the service account name — restoring the pre-4.31 names byte-for-byte
+   and, with them, per-tenant uniqueness.
+
+   Uniqueness therefore rests on a VALUE, so assert it instead of trusting it:
+   the name must carry the release namespace. Without this, a tenant that stops
+   setting the value per namespace silently re-collides — no error, no ownership
+   conflict, just one ClusterRoleBinding whose subject flips to whichever tenant
+   reconciled last while every other tenant's COSI provisioner loses its RBAC.
+   That failure is invisible until a bucket operation fails, which is why the
+   collision survived two releases.
+
+   Checked only when the render can see the cluster (same namespace canary as
+   naming-guard.yaml): system/seaweedfs's own values.yaml carries a static
+   PLACEHOLDER serviceAccountName that only extra/seaweedfs overrides per
+   release, so a client-side render (CI lint, helm unittest) legitimately sees
+   the placeholder and touches no live RBAC.
+
+   The compat shim must run first. extra/seaweedfs sets the OLD flat key
+   global.serviceAccountName, and seaweedfs.compat is what folds it into the
+   canonical global.seaweedfs.serviceAccountName (the flat key wins when
+   present). Every subchart template includes the shim before reading, and this
+   guard has to read the same value the subchart will, or it compares against
+   this chart's placeholder default and refuses every real upgrade. Including
+   the shim rather than re-deriving the precedence here is deliberate: a second
+   copy of that rule would be free to drift from the one that actually names the
+   objects. It is idempotent and output-free, so calling it here is safe. */}}
+{{- include "seaweedfs.compat" . -}}
+
+{{- $canary := lookup "v1" "Namespace" "" .Release.Namespace }}
+{{- if $canary }}
+{{-   $sa := include "seaweedfs.serviceAccountName" . }}
+{{- /* Equality, not a prefix or substring test. extra/seaweedfs sets exactly
+   `<namespace>-seaweedfs`, so that is what to assert. Anything looser accepts a
+   value belonging to a DIFFERENT namespace: `contains` lets namespace `tenant-a`
+   through on `tenant-ab-seaweedfs`, and `hasPrefix "tenant-a-"` still lets it
+   through on `tenant-a-b-seaweedfs` — which is also the natural value for
+   namespace `tenant-a-b`, i.e. two namespaces would accept one string and
+   collide on the very object this guard exists to keep unique.
+
+   This asserts the VALUE the names are built from, not the rendered names — it
+   cannot catch the chart being reverted to name them after the pinned fullname.
+   tests/cluster_scoped_names_test.yaml covers that axis, by asserting that two
+   tenants render two different names.
+
+   (The comment marker must be exactly `{{- /*`: Go's lexer looks for `/*` at a
+   fixed offset past the trim marker, so `{{-   /*` lexes as a command and fails
+   with `unexpected "/" in command`.) */}}
+{{-   if ne $sa (printf "%s-seaweedfs" .Release.Namespace) }}
+{{-     fail (printf "SeaweedFS release %s in namespace %s would render cluster-scoped RBAC named %q, which is not this namespace's own <namespace>-seaweedfs and so is not unique per tenant. Every SeaweedFS instance pins the same fullname, so ClusterRole/ClusterRoleBinding names are taken from global.seaweedfs.serviceAccountName, which extra/seaweedfs must set per namespace. With a shared name only one tenant can own the object, and the ClusterRoleBinding's subject flips to whichever tenant reconciled last — silently revoking every other tenant's COSI provisioner." .Release.Name .Release.Namespace $sa) }}
+{{-   end }}
+{{- end }}

@@ -1,0 +1,19 @@
+export NAME=flux-plunger
+export NAMESPACE=cozy-fluxcd
+
+include ../../../hack/common-envs.mk
+include ../../../hack/package.mk
+
+.PHONY: test
+test:
+	helm unittest .
+
+image:
+	docker buildx build -f images/flux-plunger/Dockerfile ../../../ \
+		$(call image-tags,flux-plunger,v$(COZYSTACK_VERSION)) \
+		$(call cache-args,flux-plunger) \
+		--metadata-file images/flux-plunger.json \
+		$(BUILDX_ARGS)
+	IMAGE="$(REGISTRY)/flux-plunger:$(IMAGE_TAG)@$$(yq e '."containerimage.digest"' images/flux-plunger.json -o json -r)" \
+		yq -i '.image = strenv(IMAGE)' values.yaml
+	rm -f images/flux-plunger.json

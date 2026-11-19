@@ -1,0 +1,37 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: {{ include "vertical-pod-autoscaler.tests.fullname" . }}
+  namespace: {{ include "common.names.namespace" . | quote }}
+  labels:
+    {{- include "vertical-pod-autoscaler.tests.labels" . | nindent 4 }}
+    {{- if .Values.commonLabels }}
+    {{- include "common.tplvalues.render" ( dict "value" .Values.commonLabels "context" $ ) | nindent 4 }}
+    {{- end }}
+  annotations:
+    helm.sh/hook: test
+    {{- if .Values.commonAnnotations }}
+    {{- include "common.tplvalues.render" ( dict "value" .Values.commonAnnotations "context" $ ) | nindent 4 }}
+    {{- end }}
+spec:
+  {{- include "common.images.pullSecrets" ( dict "images" ( list .Values.tests.image ) "global" .Values.global ) | nindent 2 }}
+  containers:
+    - name: tests
+      image: {{ include "common.images.image" ( dict "imageRoot" .Values.tests.image "global" .Values.global ) }}
+      imagePullPolicy: {{ .Values.tests.image.pullPolicy }}
+      volumeMounts:
+        - name: tests
+          mountPath: /tests
+          readOnly: true
+        - name: admission-controller-tls-secret
+          mountPath: /admission-controller-tls-secret
+          readOnly: true
+      workingDir: /tests
+  restartPolicy: Never
+  volumes:
+    - name: tests
+      configMap:
+        name: {{ include "vertical-pod-autoscaler.tests.fullname" . }}
+    - name: admission-controller-tls-secret
+      secret:
+        secretName: {{ include "vertical-pod-autoscaler.admissionController.tls.secretName" . }}

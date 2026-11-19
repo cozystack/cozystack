@@ -1,0 +1,10 @@
+apiVersion: v2
+appVersion: v0.0.25
+description: FRR K8s CRDs
+home: https://metallb.universe.tf
+icon: https://metallb.universe.tf/images/logo/metallb-white.png
+name: crds
+sources:
+- https://github.com/metallb/frr-k8s
+type: application
+version: 0.0.25

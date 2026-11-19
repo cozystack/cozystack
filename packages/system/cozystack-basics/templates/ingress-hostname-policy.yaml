@@ -1,0 +1,114 @@
+{{/*
+  cozystack-ingress-hostname-policy
+
+  Legacy-Ingress counterpart of the Gateway and Route hostname VAPs in
+  this package. Gateway API is opt-in and off by default; in the default
+  configuration tenant applications publish through a legacy
+  networking.k8s.io/Ingress (see packages/apps/harbor). This VAP gives
+  the default Ingress path a tenant-scoped hostname constraint, in the
+  same family as the Gateway and Route policies.
+
+  Scope: only Ingresses in tenant-* namespaces are gated. cozy-*
+  namespaces are cluster-admin-managed and trusted to publish under any
+  apex (they back platform services like dashboard, harbor, bucket).
+
+  Rule: a tenant Ingress hostname is allowed when it is within the
+  namespace's own apex (the namespace.cozystack.io/host label), OR when
+  it is a concrete (non-wildcard) name that lies entirely outside the
+  platform root apex (_cluster.root-host) — the latter lets a tenant
+  route its own external custom domain (for example via the kubernetes
+  app's Proxied exposeMethod, which routes a user-supplied domain to a
+  nested cluster). A hostname that falls under the platform root apex but
+  outside the namespace's own apex is rejected; so is a wildcard taken
+  through the outside-root path, because a wildcard such as *.<root-parent>
+  would also match the platform root apex itself. Both hostname carriers
+  are checked:
+   - spec.rules[].host   — routing host. A rule without a host (absent or
+     empty) matches all inbound HTTP on the shared ingress-nginx, an
+     unbounded catch-all, so every rule must carry a non-empty host — a
+     missing or empty host is rejected.
+   - spec.tls[].hosts[]  — TLS SNI hosts.
+  spec.defaultBackend (a catch-all for otherwise-unmatched traffic) is
+  also rejected.
+
+  The policy renders only when _cluster.root-host is set; without it the
+  "outside the root apex" test is undefined and the policy could not
+  constrain anything, so it is omitted rather than shipped in a state
+  that admits everything.
+*/}}
+{{- /*
+  CEL safety note: has() only works on field access expressions, not on
+  top-level variables. namespaceObject is a top-level var supplied by
+  the apiserver, so the nil check uses `== null` first; the nested
+  has() then walks into metadata.labels safely. See the feedback memory
+  cel-has-field-only.md.
+
+  Case handling: every comparison below normalizes both operands with
+  .lowerAscii(), and for this policy that is load-bearing rather than
+  hardening. The resource-side host is always lowercase — kube-apiserver
+  permits only lowercase in spec.rules[].host and spec.tls[].hosts[],
+  wildcards included, and rejects the rest before this VAP runs — but BOTH apex operands can carry
+  uppercase: the namespace.cozystack.io/host label VALUE (Kubernetes
+  permits uppercase in a label value) and the templated root-host, a
+  free-form platform value that nothing validates for case.
+
+  An uppercase root-host is the dangerous direction. The outside-root
+  branch below admits a host lying entirely outside the platform apex,
+  and it decides that by comparing the lowercase host against this
+  templated literal. Un-normalized, that comparison can never match, the
+  exclusion silently stops excluding, and the policy degenerates into
+  "admit any non-wildcard host" — every non-wildcard platform-apex name a
+  tenant asks for is granted, including the root apex itself. Only the
+  anti-wildcard gate still holds.
+
+  A mixed-case apex LABEL is the milder direction: it wrongly denies a
+  tenant its own legitimate in-apex hostname rather than granting it
+  someone else's.
+
+  Defense-in-depth contract: this VAP is fail-closed. A tenant-*
+  namespace without `namespace.cozystack.io/host` is rejected (not
+  silently allowed) so a missing or scrubbed own-apex label cannot open
+  the Ingress path by itself. The only legitimate state where the label
+  is absent is an in-flight namespace creation that hasn't finished
+  labelling yet — in which case the caller should retry.
+*/}}
+{{- $rootHost := index .Values._cluster "root-host" }}
+{{- /* Also gate on the ValidatingAdmissionPolicy API (GA since Kubernetes 1.30; the management cluster requires 1.33+), so a cluster without it does not get an unrenderable resource. Same guard as packages/core/platform/templates/deletion-protection.yaml. */}}
+{{- if and $rootHost (.Capabilities.APIVersions.Has "admissionregistration.k8s.io/v1/ValidatingAdmissionPolicy") }}
+{{- $A := `namespaceObject.metadata.labels["namespace.cozystack.io/host"]` }}
+{{- $celValidator := printf `(namespaceObject == null || !has(namespaceObject.metadata.labels) || !("namespace.cozystack.io/host" in namespaceObject.metadata.labels)) ? false : (!has(object.spec.defaultBackend) && (!has(object.spec.rules) || object.spec.rules.all(r, has(r.host) && r.host != "" && (r.host.lowerAscii() == %s.lowerAscii() || r.host.lowerAscii().endsWith("." + %s.lowerAscii()) || (!r.host.lowerAscii().startsWith("*.") && !(r.host.lowerAscii() == %q.lowerAscii() || r.host.lowerAscii().endsWith(%q.lowerAscii())))))) && (!has(object.spec.tls) || object.spec.tls.all(t, !has(t.hosts) || t.hosts.all(h, h != "" && (h.lowerAscii() == %s.lowerAscii() || h.lowerAscii().endsWith("." + %s.lowerAscii()) || (!h.lowerAscii().startsWith("*.") && !(h.lowerAscii() == %q.lowerAscii() || h.lowerAscii().endsWith(%q.lowerAscii()))))))))` $A $A $rootHost (printf ".%s" $rootHost) $A $A $rootHost (printf ".%s" $rootHost) -}}
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: cozystack-ingress-hostname-policy
+  labels:
+    internal.cozystack.io/managed-by-cozystack: ""
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+    - apiGroups: ["networking.k8s.io"]
+      apiVersions: ["v1"]
+      operations: ["CREATE", "UPDATE"]
+      resources: ["ingresses"]
+  matchConditions:
+  - name: tenant-namespace
+    expression: object.metadata.namespace.startsWith("tenant-")
+  validations:
+  - expression: >-
+      {{ $celValidator }}
+    messageExpression: >-
+      "Ingress hostnames must be within the namespace's namespace.cozystack.io/host apex, or be a concrete name outside the platform apex {{ $rootHost }}; a hostname under {{ $rootHost }} but outside the namespace apex, a wildcard taken through the outside-apex path, a rule without a host, and spec.defaultBackend are not allowed (namespace " + object.metadata.namespace + ")"
+    reason: Forbidden
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: cozystack-ingress-hostname-policy
+  labels:
+    internal.cozystack.io/managed-by-cozystack: ""
+spec:
+  policyName: cozystack-ingress-hostname-policy
+  validationActions: [Deny]
+{{- end }}

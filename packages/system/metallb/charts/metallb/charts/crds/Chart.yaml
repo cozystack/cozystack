@@ -1,0 +1,10 @@
+apiVersion: v2
+appVersion: v0.16.1
+description: MetalLB CRDs
+home: https://metallb.universe.tf
+icon: https://metallb.universe.tf/images/logo/metallb-white.png
+name: crds
+sources:
+- https://github.com/metallb/metallb
+type: application
+version: 0.16.1

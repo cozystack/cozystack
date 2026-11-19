@@ -1,0 +1,278 @@
+{{- define "keycloak.theme.sanitizedName" -}}
+{{- regexReplaceAll "-+" (regexReplaceAll "[^a-z0-9-]" (. | lower) "-") "-" | trimPrefix "-" | trimSuffix "-" -}}
+{{- end -}}
+
+{{- include "keycloak.truststores.validate" . -}}
+
+{{- $host := index .Values._cluster "root-host" }}
+{{- $ingressHost := .Values.ingress.host | default (printf "keycloak.%s" $host) }}
+{{- $clusterDomain := (index .Values._cluster "cluster-domain") | default "cozy.local" }}
+
+{{- /*
+Effective theme list. Starts from the explicit .Values.themes and, when the
+platform branding config names a login theme (branding.loginTheme) together
+with the OCI image that carries it (branding.loginThemeImage), appends an
+auto-derived entry. This lets an operator ship a Keycloak login theme purely
+through platform branding values, without editing this chart or patching the
+StatefulSet. branding flows in via _cluster.branding (the cozystack-values
+Secret), the same path that feeds the realm displayName.
+*/}}
+{{- $branding := (.Values._cluster | default dict).branding | default dict }}
+{{- $themes := .Values.themes | default list }}
+{{- if and (hasKey $branding "loginTheme") (hasKey $branding "loginThemeImage") }}
+{{- $themes = concat $themes (list (dict "name" $branding.loginTheme "image" $branding.loginThemeImage)) }}
+{{- end }}
+
+{{- $existingPassword := lookup "v1" "Secret" "cozy-keycloak" (printf "%s-credentials" .Release.Name) }}
+{{- $password := randAlphaNum 16 -}}
+{{- if $existingPassword }}
+  {{- $password = index $existingPassword.data "password" | b64dec }}
+{{- end }}
+
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ .Release.Name }}-credentials
+stringData:
+  username: admin
+  password: {{ $password }}
+
+---
+
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: keycloak
+  labels:
+    app: keycloak-ha
+spec:
+  selector:
+    matchLabels:
+      app: keycloak-ha
+  replicas: 2
+  serviceName: keycloak-headless
+  podManagementPolicy: Parallel
+  updateStrategy:
+    type: RollingUpdate
+  template:
+    metadata:
+      labels:
+        app: keycloak-ha
+    spec:
+      restartPolicy: Always
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.topologySpreadConstraints }}
+      topologySpreadConstraints:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        fsGroup: 1000
+      {{- if $themes }}
+      {{- $themeNames := list }}
+      {{- range $themes }}
+      {{- if not .name }}{{ fail "theme entry missing required field: name" }}{{- end }}
+      {{- if not .image }}{{ fail "theme entry missing required field: image" }}{{- end }}
+      {{- $sanitized := include "keycloak.theme.sanitizedName" .name }}
+      {{- if not $sanitized }}{{ fail (printf "theme name %q produces empty container name after sanitization" .name) }}{{- end }}
+      {{- if gt (len (printf "theme-%s" $sanitized)) 63 }}{{ fail (printf "theme name %q produces container name exceeding 63 characters" .name) }}{{- end }}
+      {{- if has $sanitized $themeNames }}{{ fail (printf "duplicate theme name after sanitization: %s (from %s)" $sanitized .name) }}{{- end }}
+      {{- $themeNames = append $themeNames $sanitized }}
+      {{- end }}
+      initContainers:
+        {{- range $themes }}
+        - name: theme-{{ include "keycloak.theme.sanitizedName" .name }}
+          image: "{{ .image }}"
+          imagePullPolicy: IfNotPresent
+          command: ["sh", "-c", "[ -d /themes ] && cp -r /themes/. /opt/keycloak/themes/ || { echo 'ERROR: /themes directory not found in image'; exit 1; }"]
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+            limits:
+              memory: 64Mi
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            capabilities:
+              drop:
+                - ALL
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+          volumeMounts:
+            - name: themes
+              mountPath: /opt/keycloak/themes
+        {{- end }}
+      {{- end }}
+      containers:
+        - name: keycloak
+          image: {{ .Values.image }}
+          imagePullPolicy: Always
+         {{- if or .Values.resources.requests .Values.resources.limits }}
+          resources:
+            {{- if .Values.resources.limits }}
+            limits:
+              {{- toYaml .Values.resources.limits | nindent 14 }}
+            {{- end }}
+            {{- if .Values.resources.requests }}
+            requests:
+              {{- toYaml .Values.resources.requests | nindent 14 }}
+            {{- end }}
+          {{- end }}
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            capabilities:
+              drop:
+                - ALL
+                - CAP_NET_RAW
+            readOnlyRootFilesystem: false
+            allowPrivilegeEscalation: false
+          args:
+            - start
+          env:
+            {{- with (fromYaml (include "cozy-lib.resources.defaultingSanitize" (list "t1.small" (default dict .Values.resources.limits) $))) }}
+            {{- with (mergeOverwrite . $.Values.resources ) }}
+            - name: JAVA_OPTS_KC_HEAP
+              value: {{ include "cozy-lib.resources.javaHeap" . }}
+            {{- end }}
+            {{- end }}
+            - name: KC_METRICS_ENABLED
+              value: "true"
+            - name: KC_HEALTH_ENABLED
+              value: "true"
+            - name: KC_LOG_LEVEL
+              value: "info"
+            - name: KC_CACHE
+              value: "ispn"
+            - name: KC_CACHE_STACK
+              value: "kubernetes"
+            - name: KC_PROXY_HEADERS
+              value: "xforwarded"
+            - name: KC_HTTP_ENABLED
+              value: "true"
+            - name: KEYCLOAK_ADMIN
+              value: admin
+            - name: KEYCLOAK_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Release.Name }}-credentials
+                  key: password
+            - name: KC_DB
+              value: "postgres"
+            {{- if .Values.encryption.enabled }}
+            # Encryption on: route through the keycloak-kms-proxy, which dials
+            # the real CNPG cluster. Auth (username/password/dbname) still comes
+            # from the CNPG-managed keycloak-db-app secret below and passes
+            # through the proxy unchanged.
+            - name: KC_DB_URL_HOST
+              value: keycloak-kms-proxy.{{ .Release.Namespace }}.svc.{{ $clusterDomain }}
+            - name: KC_DB_URL_PORT
+              value: "5432"
+            {{- else }}
+            - name: KC_DB_URL_HOST
+              valueFrom:
+                secretKeyRef:
+                  name: keycloak-db-app
+                  key: "host"
+            - name: KC_DB_URL_PORT
+              valueFrom:
+                secretKeyRef:
+                  name: keycloak-db-app
+                  key: "port"
+            {{- end }}
+            - name: KC_DB_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: keycloak-db-app
+                  key: "username"
+            - name: KC_DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: keycloak-db-app
+                  key: "password"
+            - name: KC_DB_URL_DATABASE
+              valueFrom:
+                secretKeyRef:
+                  name: keycloak-db-app
+                  key: "dbname"
+            - name: KC_FEATURES
+              value: "docker"
+            - name: KC_HOSTNAME
+              value: https://{{ $ingressHost }}
+            {{- with .Values.ingress.adminHost }}
+            - name: KC_HOSTNAME_ADMIN
+              value: https://{{ . }}
+            {{- end }}
+            - name: JAVA_OPTS_APPEND
+              value: "-Djgroups.dns.query=keycloak-headless.cozy-keycloak.svc.{{ $clusterDomain }}"
+            {{- with .Values.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          {{- if or $themes .Values.truststores }}
+          volumeMounts:
+            {{- if $themes }}
+            - name: themes
+              mountPath: /opt/keycloak/themes
+            {{- end }}
+            {{- range $i, $_ := .Values.truststores }}
+            - name: truststore-{{ $i }}
+              mountPath: /opt/keycloak/conf/truststores/cozystack-{{ $i }}
+              readOnly: true
+            {{- end }}
+          {{- end }}
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+            - name: management
+              containerPort: 9000
+              protocol: TCP
+          startupProbe:
+            httpGet:
+              path: /health/ready
+              port: management
+            failureThreshold: 30
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: management
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 5
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: management
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+      {{- if or $themes .Values.truststores }}
+      volumes:
+        {{- if $themes }}
+        - name: themes
+          emptyDir:
+            sizeLimit: 256Mi
+        {{- end }}
+        {{- range $i, $store := .Values.truststores }}
+        - name: truststore-{{ $i }}
+          {{- if hasKey $store "secretName" }}
+          secret:
+            secretName: {{ $store.secretName | quote }}
+          {{- else }}
+          configMap:
+            name: {{ $store.configMapName | quote }}
+          {{- end }}
+            items:
+              - key: {{ $store.key | default "ca.crt" | quote }}
+                path: {{ $store.key | default "ca.crt" | quote }}
+        {{- end }}
+      {{- end }}
+      terminationGracePeriodSeconds: 60

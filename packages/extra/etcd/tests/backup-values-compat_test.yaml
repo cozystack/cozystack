@@ -1,0 +1,41 @@
+suite: etcd chart tolerates leftover legacy backup.* values on upgrade
+
+# A tenant upgrading from the pre-v1alpha2 chart still carries spec.backup on
+# their apps.cozystack.io/Etcd CR (the old backup.enabled=true knob). The
+# v1alpha2 chart dropped the backup.* schema and templates entirely. Helm
+# validates a release's values against values.schema.json on every upgrade, so
+# if that schema ever gains `additionalProperties: false`, the leftover backup
+# key would fail validation and wedge the Etcd HelmRelease for EVERY such tenant
+# (a far louder, earlier break than the scheduled-backups-stop the migration
+# warns about). This pins that the leftover values are IGNORED, not rejected.
+
+release:
+  name: etcd
+  namespace: tenant-test
+
+templates:
+  - templates/etcd-cluster.yaml
+
+tests:
+  - it: renders the EtcdCluster when a legacy backup.* block is still present
+    set:
+      _cluster: {}
+      backup:
+        enabled: true
+        s3Bucket: legacy-bucket
+        s3Region: us-east-1
+        schedule: "@daily"
+    documentSelector:
+      path: kind
+      value: EtcdCluster
+    asserts:
+      # The render reaching a valid EtcdCluster doc proves Helm's values-schema
+      # validation accepted the leftover backup.* block. If values.schema.json
+      # gained additionalProperties:false, helm-unittest would error here with
+      # "additional properties 'backup' not allowed" instead.
+      - equal:
+          path: spec.replicas
+          value: 3
+      - equal:
+          path: spec.version
+          value: "3.6.11"

@@ -1,0 +1,501 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.17.3
+  name: frrconfigurations.frrk8s.metallb.io
+spec:
+  group: frrk8s.metallb.io
+  names:
+    kind: FRRConfiguration
+    listKind: FRRConfigurationList
+    plural: frrconfigurations
+    singular: frrconfiguration
+  scope: Namespaced
+  versions:
+  - name: v1beta1
+    schema:
+      openAPIV3Schema:
+        description: FRRConfiguration is a piece of FRR configuration.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: FRRConfigurationSpec defines the desired state of FRRConfiguration.
+            properties:
+              bgp:
+                description: BGP is the configuration related to the BGP protocol.
+                properties:
+                  bfdProfiles:
+                    description: BFDProfiles is the list of bfd profiles to be used
+                      when configuring the neighbors.
+                    items:
+                      description: |-
+                        BFDProfile is the configuration related to the BFD protocol associated
+                        to a BGP session.
+                      properties:
+                        detectMultiplier:
+                          description: |-
+                            Configures the detection multiplier to determine
+                            packet loss. The remote transmission interval will be multiplied
+                            by this value to determine the connection loss detection timer.
+                          format: int32
+                          maximum: 255
+                          minimum: 2
+                          type: integer
+                        echoInterval:
+                          description: |-
+                            Configures the minimal echo receive transmission
+                            interval that this system is capable of handling in milliseconds.
+                            Defaults to 50ms
+                          format: int32
+                          maximum: 60000
+                          minimum: 10
+                          type: integer
+                        echoMode:
+                          description: |-
+                            Enables or disables the echo transmission mode.
+                            This mode is disabled by default, and not supported on multi
+                            hops setups.
+                          type: boolean
+                        minimumTtl:
+                          description: |-
+                            For multi hop sessions only: configure the minimum
+                            expected TTL for an incoming BFD control packet.
+                          format: int32
+                          maximum: 254
+                          minimum: 1
+                          type: integer
+                        name:
+                          description: |-
+                            The name of the BFD Profile to be referenced in other parts
+                            of the configuration.
+                          type: string
+                        passiveMode:
+                          description: |-
+                            Mark session as passive: a passive session will not
+                            attempt to start the connection and will wait for control packets
+                            from peer before it begins replying.
+                          type: boolean
+                        receiveInterval:
+                          description: |-
+                            The minimum interval that this system is capable of
+                            receiving control packets in milliseconds.
+                            Defaults to 300ms.
+                          format: int32
+                          maximum: 60000
+                          minimum: 10
+                          type: integer
+                        transmitInterval:
+                          description: |-
+                            The minimum transmission interval (less jitter)
+                            that this system wants to use to send BFD control packets in
+                            milliseconds. Defaults to 300ms
+                          format: int32
+                          maximum: 60000
+                          minimum: 10
+                          type: integer
+                      required:
+                      - name
+                      type: object
+                    type: array
+                  routers:
+                    description: Routers is the list of routers we want FRR to configure
+                      (one per VRF).
+                    items:
+                      description: Router represent a neighbor router we want FRR
+                        to connect to.
+                      properties:
+                        asn:
+                          description: ASN is the AS number to use for the local end
+                            of the session.
+                          format: int64
+                          maximum: 4294967295
+                          minimum: 0
+                          type: integer
+                        id:
+                          description: ID is the BGP router ID
+                          type: string
+                        imports:
+                          description: Imports is the list of imported VRFs we want
+                            for this router / vrf.
+                          items:
+                            description: Import represents the possible imported VRFs
+                              to a given router.
+                            properties:
+                              vrf:
+                                description: Vrf is the vrf we want to import from
+                                type: string
+                            type: object
+                          type: array
+                        neighbors:
+                          description: Neighbors is the list of neighbors we want
+                            to establish BGP sessions with.
+                          items:
+                            description: Neighbor represents a BGP Neighbor we want
+                              FRR to connect to.
+                            properties:
+                              address:
+                                description: Address is the IP address to establish
+                                  the session with.
+                                type: string
+                              asn:
+                                description: |-
+                                  ASN is the AS number to use for the local end of the session.
+                                  ASN and DynamicASN are mutually exclusive and one of them must be specified.
+                                format: int64
+                                maximum: 4294967295
+                                minimum: 0
+                                type: integer
+                              bfdProfile:
+                                description: |-
+                                  BFDProfile is the name of the BFD Profile to be used for the BFD session associated
+                                  to the BGP session. If not set, the BFD session won't be set up.
+                                type: string
+                              connectTime:
+                                description: Requested BGP connect time, controls
+                                  how long BGP waits between connection attempts to
+                                  a neighbor.
+                                type: string
+                                x-kubernetes-validations:
+                                - message: connect time should be between 1 seconds
+                                    to 65535
+                                  rule: duration(self).getSeconds() >= 1 && duration(self).getSeconds()
+                                    <= 65535
+                                - message: connect time should contain a whole number
+                                    of seconds
+                                  rule: duration(self).getMilliseconds() % 1000 ==
+                                    0
+                              disableMP:
+                                default: false
+                                description: |-
+                                  DisableMP is no longer used and has no effect.
+                                  Use DualStackAddressFamily instead to enable the neighbor for both IPv4 and IPv6 address families.
+
+                                  Deprecated: This field is ignored. Use DualStackAddressFamily instead.
+                                type: boolean
+                              dualStackAddressFamily:
+                                default: false
+                                description: |-
+                                  To set if we want to enable the neighbor not only for the ipfamily related to its session,
+                                  but also the other one. This allows to advertise/receive IPv4 prefixes over IPv6 sessions and vice versa.
+                                type: boolean
+                              dynamicASN:
+                                description: |-
+                                  DynamicASN detects the AS number to use for the local end of the session
+                                  without explicitly setting it via the ASN field. Limited to:
+                                  internal - if the neighbor's ASN is different than the router's the connection is denied.
+                                  external - if the neighbor's ASN is the same as the router's the connection is denied.
+                                  ASN and DynamicASN are mutually exclusive and one of them must be specified.
+                                enum:
+                                - internal
+                                - external
+                                type: string
+                              ebgpMultiHop:
+                                description: EBGPMultiHop indicates if the BGPPeer
+                                  is multi-hops away.
+                                type: boolean
+                              enableGracefulRestart:
+                                description: |-
+                                  EnableGracefulRestart allows BGP peer to continue to forward data packets along
+                                  known routes while the routing protocol information is being restored. If
+                                  the session is already established, the configuration will have effect
+                                  after reconnecting to the peer
+                                type: boolean
+                              holdTime:
+                                description: |-
+                                  HoldTime is the requested BGP hold time, per RFC4271.
+                                  Defaults to 180s.
+                                type: string
+                              interface:
+                                description: |-
+                                  Interface is the node interface over which the unnumbered BGP peering will
+                                  be established. No API validation takes place as that string value
+                                  represents an interface name on the host and if user provides an invalid
+                                  value, only the actual BGP session will not be established.
+                                  Address and Interface are mutually exclusive and one of them must be specified.
+                                  Note: when enabling unnumbered, the neighbor will be enabled for both
+                                  IPv4 and IPv6 address families.
+                                type: string
+                              keepaliveTime:
+                                description: |-
+                                  KeepaliveTime is the requested BGP keepalive time, per RFC4271.
+                                  Defaults to 60s.
+                                type: string
+                              localASN:
+                                description: |-
+                                  LocalASN allows advertising a different AS number to the peer using BGP's
+                                  local-as feature. When set, FRR will advertise this ASN to the peer
+                                  via "neighbor <peer> local-as <ASN> no-prepend replace-as", overriding
+                                  the router-level ASN for this specific session.
+                                  Note: this field is only applicable to eBGP sessions (where the peer ASN differs
+                                  from the router ASN). Setting it on an iBGP session is rejected.
+                                format: int64
+                                maximum: 4294967295
+                                minimum: 1
+                                type: integer
+                              password:
+                                description: |-
+                                  Password to be used for establishing the BGP session.
+                                  Password and PasswordSecret are mutually exclusive.
+                                type: string
+                              passwordSecret:
+                                description: |-
+                                  PasswordSecret is name of the authentication secret for the neighbor.
+                                  the secret must be of type "kubernetes.io/basic-auth", and created in the
+                                  same namespace as the frr-k8s daemon. The password is stored in the
+                                  secret as the key "password".
+                                  Password and PasswordSecret are mutually exclusive.
+                                properties:
+                                  name:
+                                    description: name is unique within a namespace
+                                      to reference a secret resource.
+                                    type: string
+                                  namespace:
+                                    description: namespace defines the space within
+                                      which the secret name must be unique.
+                                    type: string
+                                type: object
+                                x-kubernetes-map-type: atomic
+                              port:
+                                description: |-
+                                  Port is the port to dial when establishing the session.
+                                  Defaults to 179.
+                                maximum: 16384
+                                minimum: 0
+                                type: integer
+                              sourceaddress:
+                                description: |-
+                                  SourceAddress is the IPv4 or IPv6 source address to use for the BGP
+                                  session to this neighbour, may be specified as either an IP address
+                                  directly or as an interface name
+                                type: string
+                              toAdvertise:
+                                description: |-
+                                  ToAdvertise represents the list of prefixes to advertise to the given neighbor
+                                  and the associated properties.
+                                properties:
+                                  allowed:
+                                    description: |-
+                                      Allowed is is the list of prefixes allowed to be propagated to
+                                      this neighbor. They must match the prefixes defined in the router.
+                                    properties:
+                                      mode:
+                                        default: filtered
+                                        description: |-
+                                          Mode is the mode to use when handling the prefixes.
+                                          When set to "filtered", only the prefixes in the given list will be allowed.
+                                          When set to "all", all the prefixes configured on the router will be allowed.
+                                        enum:
+                                        - all
+                                        - filtered
+                                        type: string
+                                      prefixes:
+                                        items:
+                                          type: string
+                                        type: array
+                                    type: object
+                                  withCommunity:
+                                    description: |-
+                                      PrefixesWithCommunity is a list of prefixes that are associated to a
+                                      bgp community when being advertised. The prefixes associated to a given local pref
+                                      must be in the prefixes allowed to be advertised.
+                                    items:
+                                      description: CommunityPrefixes is a list of
+                                        prefixes associated to a community.
+                                      properties:
+                                        community:
+                                          description: Community is the community
+                                            associated to the prefixes.
+                                          type: string
+                                        prefixes:
+                                          description: Prefixes is the list of prefixes
+                                            associated to the community.
+                                          format: cidr
+                                          items:
+                                            type: string
+                                          minItems: 1
+                                          type: array
+                                      type: object
+                                    type: array
+                                  withLocalPref:
+                                    description: |-
+                                      PrefixesWithLocalPref is a list of prefixes that are associated to a local
+                                      preference when being advertised. The prefixes associated to a given local pref
+                                      must be in the prefixes allowed to be advertised.
+                                    items:
+                                      description: LocalPrefPrefixes is a list of
+                                        prefixes associated to a local preference.
+                                      properties:
+                                        localPref:
+                                          description: LocalPref is the local preference
+                                            associated to the prefixes.
+                                          format: int32
+                                          type: integer
+                                        prefixes:
+                                          description: Prefixes is the list of prefixes
+                                            associated to the local preference.
+                                          format: cidr
+                                          items:
+                                            type: string
+                                          minItems: 1
+                                          type: array
+                                      type: object
+                                    type: array
+                                type: object
+                              toReceive:
+                                description: ToReceive represents the list of prefixes
+                                  to receive from the given neighbor.
+                                properties:
+                                  allowed:
+                                    description: |-
+                                      Allowed is the list of prefixes allowed to be received from
+                                      this neighbor.
+                                    properties:
+                                      mode:
+                                        default: filtered
+                                        description: |-
+                                          Mode is the mode to use when handling the prefixes.
+                                          When set to "filtered", only the prefixes in the given list will be allowed.
+                                          When set to "all", all the prefixes configured on the router will be allowed.
+                                        enum:
+                                        - all
+                                        - filtered
+                                        type: string
+                                      prefixes:
+                                        items:
+                                          description: PrefixSelector is a filter
+                                            of prefixes to receive.
+                                          properties:
+                                            ge:
+                                              description: |-
+                                                The prefix length modifier. This selector accepts any matching prefix with length
+                                                greater or equal the given value.
+                                              format: int32
+                                              maximum: 128
+                                              minimum: 1
+                                              type: integer
+                                            le:
+                                              description: |-
+                                                The prefix length modifier. This selector accepts any matching prefix with length
+                                                less or equal the given value.
+                                              format: int32
+                                              maximum: 128
+                                              minimum: 1
+                                              type: integer
+                                            prefix:
+                                              format: cidr
+                                              type: string
+                                          type: object
+                                        type: array
+                                    type: object
+                                type: object
+                            type: object
+                          type: array
+                        prefixes:
+                          description: Prefixes is the list of prefixes we want to
+                            advertise from this router instance.
+                          items:
+                            type: string
+                          type: array
+                        vrf:
+                          description: VRF is the host vrf used to establish sessions
+                            from this router.
+                          type: string
+                      required:
+                      - asn
+                      type: object
+                    type: array
+                type: object
+              nodeSelector:
+                description: |-
+                  NodeSelector limits the nodes that will attempt to apply this config.
+                  When specified, the configuration will be considered only on nodes
+                  whose labels match the specified selectors.
+                  When it is not specified all nodes will attempt to apply this config.
+                properties:
+                  matchExpressions:
+                    description: matchExpressions is a list of label selector requirements.
+                      The requirements are ANDed.
+                    items:
+                      description: |-
+                        A label selector requirement is a selector that contains values, a key, and an operator that
+                        relates the key and values.
+                      properties:
+                        key:
+                          description: key is the label key that the selector applies
+                            to.
+                          type: string
+                        operator:
+                          description: |-
+                            operator represents a key's relationship to a set of values.
+                            Valid operators are In, NotIn, Exists and DoesNotExist.
+                          type: string
+                        values:
+                          description: |-
+                            values is an array of string values. If the operator is In or NotIn,
+                            the values array must be non-empty. If the operator is Exists or DoesNotExist,
+                            the values array must be empty. This array is replaced during a strategic
+                            merge patch.
+                          items:
+                            type: string
+                          type: array
+                          x-kubernetes-list-type: atomic
+                      required:
+                      - key
+                      - operator
+                      type: object
+                    type: array
+                    x-kubernetes-list-type: atomic
+                  matchLabels:
+                    additionalProperties:
+                      type: string
+                    description: |-
+                      matchLabels is a map of {key,value} pairs. A single {key,value} in the matchLabels
+                      map is equivalent to an element of matchExpressions, whose key field is "key", the
+                      operator is "In", and the values array contains only "value". The requirements are ANDed.
+                    type: object
+                type: object
+                x-kubernetes-map-type: atomic
+              raw:
+                description: |-
+                  Raw is a snippet of raw frr configuration that gets appended to the
+                  one rendered translating the type safe API.
+                properties:
+                  priority:
+                    description: |-
+                      Priority is the order with this configuration is appended to the
+                      bottom of the rendered configuration. A higher value means the
+                      raw config is appended later in the configuration file.
+                    type: integer
+                  rawConfig:
+                    description: |-
+                      Config is a raw FRR configuration to be appended to the configuration
+                      rendered via the k8s api.
+                    type: string
+                type: object
+            type: object
+          status:
+            description: FRRConfigurationStatus defines the observed state of FRRConfiguration.
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

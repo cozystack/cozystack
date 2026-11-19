@@ -1,0 +1,116 @@
+suite: RabbitMQ TenantProjection sentinel
+
+# The chart renders one TenantProjection per TLS-enabled release: the
+# declaration that tells the CA-extraction controller to lift ca.crt out of the
+# key-bearing <release>-ca into the tenant-readable <release>.tenant-ca
+# projection. Without this sentinel the controller has no source to read, so
+# <release>.tenant-ca is never created and the Role's careful exclusion of the
+# key-bearing Secrets (dashboard_resourcemap_test.yaml) buys the tenant no
+# actual path to the CA.
+#
+# The load-bearing invariant is the ABSENCE of ownerReferences. The sentinel must
+# carry none — it owns the projection, and it is itself owned only through the
+# helm.toolkit.fluxcd.io/name label Flux stamps, which is how the lineage webhook
+# resolves the application. An ownerReference here would short-circuit that walk
+# and silently break the tenant's read path (pkg/lineage/lineage.go).
+
+templates:
+  - templates/tenant-projection.yaml
+
+tests:
+  - it: renders exactly one TenantProjection named after the release
+    release:
+      name: myrabbitmq
+      namespace: tenant-test
+    set:
+      tls.enabled: true
+    asserts:
+      - hasDocuments:
+          count: 1
+      - isKind:
+          of: TenantProjection
+      - equal:
+          path: apiVersion
+          value: internal.cozystack.io/v1alpha1
+      - equal:
+          path: metadata.name
+          value: myrabbitmq-ca
+
+  - it: declares a CACert projection of the isCA certificate's Secret
+    release:
+      name: myrabbitmq
+      namespace: tenant-test
+    set:
+      tls.enabled: true
+    asserts:
+      - lengthEqual:
+          path: spec.projections
+          count: 1
+      - equal:
+          path: spec.projections[0].type
+          value: CACert
+      - equal:
+          path: spec.projections[0].sourceSecretName
+          value: myrabbitmq-ca
+      - equal:
+          path: spec.projections[0].sourceKey
+          value: ca.crt
+
+  - it: carries no ownerReferences, so the lineage walk reaches the helm label
+    release:
+      name: myrabbitmq
+      namespace: tenant-test
+    set:
+      tls.enabled: true
+    asserts:
+      - notExists:
+          path: metadata.ownerReferences
+
+  - it: omits namespace and chart-added labels, matching the shared sentinel shape
+    release:
+      name: myrabbitmq
+      namespace: tenant-test
+    set:
+      tls.enabled: true
+    asserts:
+      - notExists:
+          path: metadata.namespace
+      - notExists:
+          path: metadata.labels
+
+  - it: renders nothing when TLS is disabled, the default
+    release:
+      name: myrabbitmq
+      namespace: tenant-test
+    set:
+      tls.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  # Unlike nats and qdrant, this chart's TLS is opt-in only and never follows
+  # external — see README "TLS scope" and rabbitmq.tls.enabled — so external
+  # alone must not render the sentinel either.
+  - it: renders nothing when external is true but tls.enabled is not set
+    release:
+      name: myrabbitmq
+      namespace: tenant-test
+    set:
+      external: true
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: renders the source name from the release, not a fixed string
+    release:
+      name: other-rabbitmq
+      namespace: tenant-test
+    set:
+      tls.enabled: true
+    asserts:
+      - equal:
+          path: metadata.name
+          value: other-rabbitmq-ca
+      - equal:
+          path: spec.projections[0].sourceSecretName
+          value: other-rabbitmq-ca

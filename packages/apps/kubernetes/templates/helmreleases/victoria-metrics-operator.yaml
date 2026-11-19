@@ -1,0 +1,38 @@
+{{- if and .Values.addons.monitoringAgents.enabled .Values._namespace.etcd }}
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: {{ .Release.Name }}-cozy-victoria-metrics-operator
+  labels:
+    cozystack.io/repository: system
+    cozystack.io/target-cluster-name: {{ .Release.Name }}
+    sharding.fluxcd.io/key: tenants
+spec:
+  releaseName: cozy-victoria-metrics-operator
+  chartRef:
+    kind: ExternalArtifact
+    name: cozystack-kubernetes-application-kubevirt-kubernetes-victoria-metrics-operator
+    namespace: cozy-system
+  kubeConfig:
+    secretRef:
+      name: {{ .Release.Name }}-admin-kubeconfig
+      key: super-admin.svc
+  targetNamespace: cozy-victoria-metrics-operator
+  storageNamespace: cozy-victoria-metrics-operator
+  interval: 5m
+  timeout: 10m
+  install:
+    createNamespace: true
+    remediation:
+      retries: -1
+  upgrade:
+    remediation:
+      retries: -1
+  dependsOn:
+  - name: {{ .Release.Name }}-cilium
+    namespace: {{ .Release.Namespace }}
+  {{- if .Values.addons.certManager.enabled }}
+  - name: {{ .Release.Name }}-cert-manager-crds
+    namespace: {{ .Release.Namespace }}
+  {{- end }}
+{{- end }}

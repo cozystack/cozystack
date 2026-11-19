@@ -1,0 +1,177 @@
+{{/*
+Cluster-wide configuration helpers.
+These helpers read from .Values._cluster which is populated via valuesFrom from Secret cozystack-values.
+*/}}
+
+{{/*
+Get the root host for the cluster.
+Usage: {{ include "cozy-lib.root-host" . }}
+*/}}
+{{- define "cozy-lib.root-host" -}}
+{{- (index (.Values._cluster | default dict) "root-host") | default "" }}
+{{- end }}
+
+{{/*
+Get the bundle name for the cluster.
+Usage: {{ include "cozy-lib.bundle-name" . }}
+*/}}
+{{- define "cozy-lib.bundle-name" -}}
+{{- (index (.Values._cluster | default dict) "bundle-name") | default "" }}
+{{- end }}
+
+{{/*
+Get the images registry.
+Usage: {{ include "cozy-lib.images-registry" . }}
+*/}}
+{{- define "cozy-lib.images-registry" -}}
+{{- (index (.Values._cluster | default dict) "images-registry") | default "" }}
+{{- end }}
+
+{{/*
+Build a fully-qualified image reference routed through the cluster images
+registry. Pass the registry-relative image path (repository + tag, ideally
+digest-pinned) and the global context.
+Usage: {{ include "cozy-lib.image" (list "clastix/kubectl:v1.32@sha256:..." $) }}
+When images-registry is set (mirrored / air-gapped installs) it is prefixed as
+"<registry>/<image>"; when empty (the default on a standard install) the image
+is returned unchanged so it resolves from its default registry — importantly
+with no leading "/", which would otherwise be an invalid reference.
+A trailing "/" on the registry and a leading "/" on the image path are trimmed
+so a misconfigured images-registry ("registry.example.com/") cannot produce a
+double slash in the rendered reference.
+*/}}
+{{- define "cozy-lib.image" -}}
+{{- include "cozy-lib.checkInput" . }}
+{{- $image := index . 0 | trimPrefix "/" }}
+{{- $ctx := index . 1 }}
+{{- $registry := include "cozy-lib.images-registry" $ctx | trimSuffix "/" }}
+{{- with $registry }}{{ . }}/{{ end }}{{ $image }}
+{{- end }}
+
+{{/*
+Get the ipv4 cluster CIDR.
+Usage: {{ include "cozy-lib.ipv4-cluster-cidr" . }}
+*/}}
+{{- define "cozy-lib.ipv4-cluster-cidr" -}}
+{{- (index (.Values._cluster | default dict) "ipv4-cluster-cidr") | default "" }}
+{{- end }}
+
+{{/*
+Get the ipv4 service CIDR.
+Usage: {{ include "cozy-lib.ipv4-service-cidr" . }}
+*/}}
+{{- define "cozy-lib.ipv4-service-cidr" -}}
+{{- (index (.Values._cluster | default dict) "ipv4-service-cidr") | default "" }}
+{{- end }}
+
+{{/*
+Get the ipv4 join CIDR.
+Usage: {{ include "cozy-lib.ipv4-join-cidr" . }}
+*/}}
+{{- define "cozy-lib.ipv4-join-cidr" -}}
+{{- (index (.Values._cluster | default dict) "ipv4-join-cidr") | default "" }}
+{{- end }}
+
+{{/*
+Get scheduling configuration.
+Usage: {{ include "cozy-lib.scheduling" . }}
+Returns: YAML string of scheduling configuration
+*/}}
+{{- define "cozy-lib.scheduling" -}}
+{{- $scheduling := (.Values._cluster | default dict).scheduling }}
+{{- if $scheduling }}
+{{- $scheduling | toYaml }}
+{{- end }}
+{{- end }}
+
+{{/*
+Get branding configuration.
+Usage: {{ include "cozy-lib.branding" . }}
+Returns: YAML string of branding configuration
+*/}}
+{{- define "cozy-lib.branding" -}}
+{{- $branding := (.Values._cluster | default dict).branding }}
+{{- if $branding }}
+{{- $branding | toYaml }}
+{{- end }}
+{{- end }}
+
+{{/*
+Namespace-specific configuration helpers.
+These helpers read from .Values._namespace which is populated via valuesFrom from Secret cozystack-values.
+*/}}
+
+{{/*
+Get the host for this namespace.
+Usage: {{ include "cozy-lib.ns-host" . }}
+*/}}
+{{- define "cozy-lib.ns-host" -}}
+{{- (.Values._namespace | default dict).host | default "" }}
+{{- end }}
+
+{{/*
+Get the host for this namespace, requiring a usable apex.
+Returns the same value as cozy-lib.ns-host, but fails the render when
+the platform has injected _namespace and its host is empty AND this app
+sets no host override (.Values.host), instead of silently composing a
+malformed "<sub>." hostname into an Ingress, HTTPRoute or Certificate
+dnsName. The guard is scoped to the injected state on purpose: a
+standalone render (helm lint / helm template with no _namespace) has no
+apex by design and must stay renderable, so an absent _namespace never
+fails. Call it only at a site that actually emits a hostname, so a
+tenant with no apex and no public exposure is unaffected. This mirrors
+the gateway path (packages/extra/gateway/templates/tenantgateway.yaml),
+which fails on an empty apex only when a Gateway is actually rendered.
+Usage: {{ include "cozy-lib.ns-host-required" . }}
+*/}}
+{{- define "cozy-lib.ns-host-required" -}}
+{{- $ns := .Values._namespace -}}
+{{- $apex := ($ns | default dict).host | default "" -}}
+{{- if and $ns (not (.Values.host | default "")) (not $apex) -}}
+{{- fail "the tenant apex (_namespace.host) is empty and this app sets no host override, so its ingress hostname would be malformed. Set tenant.spec.host on this tenant, inherit it from a parent that has host set, or set this app's host value." -}}
+{{- end -}}
+{{- $apex -}}
+{{- end }}
+
+{{/*
+Get the etcd namespace reference.
+Usage: {{ include "cozy-lib.ns-etcd" . }}
+*/}}
+{{- define "cozy-lib.ns-etcd" -}}
+{{- (.Values._namespace | default dict).etcd | default "" }}
+{{- end }}
+
+{{/*
+Get the ingress namespace reference.
+Usage: {{ include "cozy-lib.ns-ingress" . }}
+*/}}
+{{- define "cozy-lib.ns-ingress" -}}
+{{- (.Values._namespace | default dict).ingress | default "" }}
+{{- end }}
+
+{{/*
+Get the monitoring namespace reference.
+Usage: {{ include "cozy-lib.ns-monitoring" . }}
+*/}}
+{{- define "cozy-lib.ns-monitoring" -}}
+{{- (.Values._namespace | default dict).monitoring | default "" }}
+{{- end }}
+
+{{/*
+Get the seaweedfs namespace reference.
+Usage: {{ include "cozy-lib.ns-seaweedfs" . }}
+*/}}
+{{- define "cozy-lib.ns-seaweedfs" -}}
+{{- (.Values._namespace | default dict).seaweedfs | default "" }}
+{{- end }}
+
+{{/*
+Legacy helper - kept for backward compatibility during migration.
+Loads config into context. Deprecated: use direct .Values._cluster access instead.
+*/}}
+{{- define "cozy-lib.loadCozyConfig" }}
+{{-   include "cozy-lib.checkInput" . }}
+{{-   if not (hasKey (index . 1) "cozyConfig") }}
+{{-     $_ := set (index . 1) "cozyConfig" (dict "data" ((index . 1).Values._cluster | default dict)) }}
+{{-   end }}
+{{- end }}

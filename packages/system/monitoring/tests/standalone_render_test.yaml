@@ -1,0 +1,24 @@
+suite: monitoring renders with no platform values injected
+release:
+  name: monitoring
+  namespace: cozy-monitoring
+
+# The platform injects _cluster and _namespace through the cozystack-values
+# Secret, so every case that sets them itself renders fine whether or not
+# values.yaml declares the keys. This case supplies neither. Drop the
+# _cluster declaration and the render dies on "index of untyped nil"; drop
+# the _namespace one and it dies on "nil pointer evaluating interface
+# {}.host". Both are what keep the chart renderable outside a cluster. No
+# suite-level `templates:` list here on purpose: it would narrow the render
+# to the listed files and let a later template reintroduce the same
+# breakage unseen.
+
+tests:
+  - it: still renders grafana and no route when _cluster and _namespace are absent
+    asserts:
+      - template: templates/grafana/grafana.yaml
+        hasDocuments:
+          count: 1
+      - template: templates/grafana/httproute.yaml
+        hasDocuments:
+          count: 0

@@ -1,0 +1,134 @@
+{{/*
+  Lookup the parent namespace, used below to stamp the child namespace's
+  ownerReference uid. During a real helm-controller reconcile the parent
+  namespace (.Release.Namespace) always exists, so the ownerReference is
+  always emitted. The lookup returns empty only when rendering offline
+  (helm template / helm unittest), where the ownerReference is simply omitted
+  so the rest of the template — notably the ancestor labels below, which are
+  derived purely from the namespace name and need no cluster state — still
+  renders and can be unit-tested.
+*/}}
+{{- $existingNS := lookup "v1" "Namespace" "" .Release.Namespace }}
+
+{{- if ne (include "tenant.name" .) "tenant-root" }}
+{{/* Compute namespace values once for use in both Secret and labels */}}
+{{- $tenantName := include "tenant.name" . }}
+{{- $parentNamespace := .Values._namespace | default dict }}
+{{- $parentHost := $parentNamespace.host | default "" }}
+
+{{/* Compute host */}}
+{{- $computedHost := "" }}
+{{- if .Values.host }}
+{{- $computedHost = .Values.host }}
+{{- else if $parentHost }}
+{{- $computedHost = printf "%s.%s" (splitList "-" $tenantName | last) $parentHost }}
+{{- end }}
+
+{{/* Compute service references */}}
+{{- $etcd := $parentNamespace.etcd | default "" }}
+{{- if .Values.etcd }}
+{{- $etcd = $tenantName }}
+{{- end }}
+
+{{- $ingress := $parentNamespace.ingress | default "" }}
+{{- if .Values.ingress }}
+{{- $ingress = $tenantName }}
+{{- end }}
+
+{{/*
+  Gateway reference inherits from the parent, same shape as ingress
+  above: $gateway is the name of the nearest ancestor (inclusive)
+  that owns a Gateway. Apps in this tenant render HTTPRoutes whose
+  parentRefs.namespace points at that owner namespace, and the
+  owner's Gateway lists this namespace in allowedRoutes via the
+  matching namespace.cozystack.io/gateway label.
+
+  Override fires only when the tenant itself owns a Gateway:
+  tenant.gatewayEffective returns "true" only for an explicit
+  tenant.spec.gateway=true, regardless of whether host is derived or
+  custom. In that case the controller renders a separate Gateway in
+  this tenant's namespace, with its own LB Service / IP / Certificate.
+  A tenant with a custom non-derived host that wants its apex routable
+  must set gateway=true explicitly, because no ancestor's cert / Issuer
+  covers that apex.
+
+  Cross-namespace attach is gated by ReferenceGrants rendered by the
+  TenantGateway controller in the owner namespace, one per child
+  that inherits.
+*/}}
+{{- $gateway := $parentNamespace.gateway | default "" }}
+{{- if eq (include "tenant.gatewayEffective" .) "true" }}
+{{- $gateway = $tenantName }}
+{{- end }}
+
+{{- $monitoring := $parentNamespace.monitoring | default "" }}
+{{- if .Values.monitoring }}
+{{- $monitoring = $tenantName }}
+{{- end }}
+
+{{- $seaweedfs := $parentNamespace.seaweedfs | default "" }}
+{{- if .Values.seaweedfs }}
+{{- $seaweedfs = $tenantName }}
+{{- end }}
+
+{{/* SchedulingClass: inherited from parent, can be set if parent has none */}}
+{{- $schedulingClass := $parentNamespace.schedulingClass | default "" }}
+{{- if and (not $schedulingClass) .Values.schedulingClass }}
+{{- $schedulingClass = .Values.schedulingClass }}
+{{- end }}
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ $tenantName }}
+  {{- if hasPrefix "tenant-" .Release.Namespace }}
+  labels:
+    {{- include "tenant.ancestorTenantLabels" $tenantName | nindent 4 }}
+    {{/* Labels for network policies */}}
+    namespace.cozystack.io/etcd: {{ $etcd | quote }}
+    namespace.cozystack.io/ingress: {{ $ingress | quote }}
+    namespace.cozystack.io/gateway: {{ $gateway | quote }}
+    namespace.cozystack.io/monitoring: {{ $monitoring | quote }}
+    namespace.cozystack.io/seaweedfs: {{ $seaweedfs | quote }}
+    namespace.cozystack.io/host: {{ $computedHost | quote }}
+    {{- with $schedulingClass }}
+    scheduler.cozystack.io/scheduling-class: {{ . | quote }}
+    {{- end }}
+    alpha.kubevirt.io/auto-memory-limits-ratio: "1.0"
+  {{- if $existingNS }}
+  ownerReferences:
+  - apiVersion: v1
+    blockOwnerDeletion: true
+    controller: true
+    kind: Namespace
+    name: {{ .Release.Namespace }}
+    uid: {{ $existingNS.metadata.uid }}
+  {{- end }}
+  {{- end }}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: cozystack-values
+  namespace: {{ $tenantName }}
+  labels:
+    reconcile.fluxcd.io/watch: Enabled
+type: Opaque
+stringData:
+  values.yaml: |
+    _cluster:
+      {{- .Values._cluster | toYaml | nindent 6 }}
+    _namespace:
+      etcd: {{ $etcd | quote }}
+      ingress: {{ $ingress | quote }}
+      gateway: {{ $gateway | quote }}
+      monitoring: {{ $monitoring | quote }}
+      seaweedfs: {{ $seaweedfs | quote }}
+      host: {{ $computedHost | quote }}
+      {{- if include "tenant.tracingCentralEgress" . }}
+      tracingCentral: true
+      {{- end }}
+      {{- with $schedulingClass }}
+      schedulingClass: {{ . | quote }}
+      {{- end }}
+{{- end }}

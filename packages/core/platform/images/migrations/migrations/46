@@ -1,0 +1,118 @@
+#!/bin/bash
+# Migration 46 --> 47
+# Bump kuberneteses.apps.cozystack.io spec.version from "v1.30" to "v1.31".
+#
+# This release drops v1.30 from the Talos<->Kubernetes support matrix: Talos v1.13
+# (the version this chart pins for worker images) supports only k8s 1.31-1.36.
+# The chart now refuses to render with version: "v1.30" via an explicit fail()
+# guard in templates/_versions.tpl. Without this migration, tenants that were
+# still on v1.30 when the platform upgrade lands have their HelmRelease enter
+# a failed state and the Talos worker rollover never starts.
+#
+# This migration patches the tenant CR ahead of the chart upgrade. The bump
+# v1.30 -> v1.31 is the standard kubeadm minor upgrade path; kubeadm handles
+# kubelet/control-plane rollover during the subsequent HR reconcile, and the
+# new chart then layers the TalosConfigTemplate switch on top so workers move
+# off Ubuntu+kubeadm onto Talos in the same upgrade window.
+#
+# Idempotent: re-running on already-bumped CRs is a no-op (current != "v1.30").
+# Best-effort: a failed patch is logged and leaves the version stamp at 46 so
+# the migration retries on the next platform upgrade.
+
+set -euo pipefail
+
+# shellcheck source=lib/cozystack-version.sh
+. "$(dirname "$0")/lib/cozystack-version.sh"
+
+DRY_RUN="${MIGRATION_DRY_RUN:-0}"
+FAILURES=0
+PATCHED=0
+SKIPPED=0
+FAILED_TENANTS=""
+
+OLD_VERSION="v1.30"
+NEW_VERSION="v1.31"
+
+bump_version() {
+  local ns="$1" name="$2" current
+
+  current=$(kubectl get kuberneteses.apps.cozystack.io --namespace "$ns" "$name" \
+    --output 'jsonpath={.spec.version}' 2>/dev/null || true)
+
+  if [ "$current" != "$OLD_VERSION" ]; then
+    SKIPPED=$((SKIPPED + 1))
+    return 0
+  fi
+
+  if [ "$DRY_RUN" = "1" ]; then
+    echo "[dry-run] would patch kubernetes $ns/$name: spec.version $OLD_VERSION -> $NEW_VERSION"
+    PATCHED=$((PATCHED + 1))
+    return 0
+  fi
+
+  local kubectl_err
+  if kubectl_err=$(kubectl patch kuberneteses.apps.cozystack.io --namespace "$ns" "$name" \
+       --type merge --patch "{\"spec\":{\"version\":\"$NEW_VERSION\"}}" 2>&1 >/dev/null); then
+    echo "Patched kubernetes $ns/$name: spec.version $OLD_VERSION -> $NEW_VERSION"
+    PATCHED=$((PATCHED + 1))
+  else
+    echo "WARN: failed to patch kubernetes $ns/$name: ${kubectl_err:-unknown error}" >&2
+    FAILURES=$((FAILURES + 1))
+    FAILED_TENANTS="${FAILED_TENANTS}${FAILED_TENANTS:+,}${ns}/${name}"
+  fi
+}
+
+echo "==> Bumping kuberneteses.apps.cozystack.io spec.version $OLD_VERSION -> $NEW_VERSION"
+
+if ! items=$(kubectl get kuberneteses.apps.cozystack.io --all-namespaces \
+     --output 'jsonpath={range .items[*]}{.metadata.namespace}{"\t"}{.metadata.name}{"\n"}{end}' \
+     2>&1); then
+  case "$items" in
+    *"the server doesn't have a resource type"*|*"no matches for kind"*|*"NotFound"*)
+      echo "kuberneteses.apps.cozystack.io CRD not present; nothing to migrate"
+      items=""
+      ;;
+    *)
+      echo "ERROR: kubectl get kuberneteses.apps.cozystack.io failed: $items" >&2
+      exit 1
+      ;;
+  esac
+fi
+
+while IFS=$'\t' read -r ns name; do
+  [ -z "$ns" ] && continue
+  bump_version "$ns" "$name"
+done <<<"$items"
+
+echo "==> Summary: patched=$PATCHED skipped=$SKIPPED failures=$FAILURES" | tee /dev/stderr
+
+if [ "$DRY_RUN" = "1" ]; then
+  echo "Dry-run complete; version stamp not advanced"
+  exit 0
+fi
+
+if [ "$FAILURES" -gt 0 ]; then
+  echo "WARN: $FAILURES patch(es) failed; leaving CURRENT_VERSION at 46 for retry on next upgrade."
+  echo "WARN: failed tenants: $FAILED_TENANTS" >&2
+  # Surface the failure list as an annotation on the cozystack-version
+  # ConfigMap so operators see "which tenants are stuck at v1.30" via
+  # `kubectl describe cm -n cozy-system cozystack-version` without having
+  # to grep migration Job logs (the Job exits 0 to allow retry, which
+  # otherwise hides this state behind a green Job status).
+  kubectl annotate configmap --namespace cozy-system cozystack-version \
+    "cozystack.io/migration-46-failed-tenants=$FAILED_TENANTS" \
+    --overwrite >/dev/null 2>&1 || true
+  exit 0
+fi
+
+# Clear any annotation left by a previous partial-failure run, so a clean
+# success doesn't leave stale "failed tenants" data on the ConfigMap.
+kubectl annotate configmap --namespace cozy-system cozystack-version \
+  "cozystack.io/migration-46-failed-tenants-" >/dev/null 2>&1 || true
+
+# Stamp version=47. The labeled manifest lives in the shared helper so it
+# cannot drift back to a label-less apply that strips the
+# platform.cozystack.io/no-delete label migration 42 added (which would drop
+# cozystack-version out of the cozystack-no-delete-guardrail
+# ValidatingAdmissionPolicy).
+stamp_cozystack_version 47

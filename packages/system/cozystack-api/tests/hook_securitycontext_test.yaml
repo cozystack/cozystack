@@ -1,0 +1,45 @@
+suite: cozystack-api post-upgrade hook runs non-root
+
+# The hook only renders when the legacy cozystack-api DaemonSet still exists
+# (lookup-gated), so mock that DaemonSet to drive the render, then pin the
+# non-root securityContext so it cannot regress to running kubectl as root.
+release:
+  name: cozystack-api
+  namespace: cozy-system
+templates:
+  - templates/hook.yaml
+kubernetesProvider:
+  scheme:
+    "apps/v1/DaemonSet":
+      gvr:
+        group: "apps"
+        version: "v1"
+        resource: "daemonsets"
+      namespaced: true
+  objects:
+    - kind: DaemonSet
+      apiVersion: apps/v1
+      metadata:
+        name: cozystack-api
+        namespace: cozy-system
+tests:
+  - it: post-upgrade hook Job runs under a restrictive non-root securityContext
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - equal:
+          path: spec.template.spec.securityContext.runAsNonRoot
+          value: true
+      - equal:
+          path: spec.template.spec.securityContext.runAsUser
+          value: 65534
+      - equal:
+          path: spec.template.spec.securityContext.seccompProfile.type
+          value: RuntimeDefault
+      - equal:
+          path: spec.template.spec.containers[0].securityContext.allowPrivilegeEscalation
+          value: false
+      - contains:
+          path: spec.template.spec.containers[0].securityContext.capabilities.drop
+          content: ALL

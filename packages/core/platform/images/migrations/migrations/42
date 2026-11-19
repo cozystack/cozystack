@@ -1,0 +1,40 @@
+#!/bin/sh
+# Migration 42 --> 43
+# Backfill the platform.cozystack.io/no-delete=true label on the
+# cozystack-version ConfigMap so the deletion-protection
+# ValidatingAdmissionPolicy guards it on upgraded clusters.
+#
+# On first install the chart template renders the ConfigMap with the
+# label inline. On upgrades the template skips re-rendering (lookup-if-not
+# preserves migration-managed data.version), so the label needs an
+# explicit one-shot backfill here.
+#
+# Idempotent: kubectl apply re-runs are a no-op once the ConfigMap matches
+# the declared shape. Same label set the chart bakes in at install time, so
+# the next chart-driven apply sees no diff.
+#
+# 3-way-merge note: this apply records the no-delete label in the kubectl
+# last-applied-configuration annotation under the default field manager. A
+# label-less apply by the same field manager would strip it, so the manifest
+# is rendered by the shared helper (lib/cozystack-version.sh) that every
+# migration sources rather than a hand-copied heredoc.
+
+set -euo pipefail
+
+# shellcheck source=lib/cozystack-version.sh
+. "$(dirname "$0")/lib/cozystack-version.sh"
+
+NAMESPACE="${NAMESPACE:-cozy-system}"
+DRY_RUN="${MIGRATION_DRY_RUN:-0}"
+
+MANIFEST=$(render_cozystack_version_manifest 43)
+
+if [ "$DRY_RUN" = "1" ]; then
+  echo "[dry-run] would apply:"
+  printf '%s\n' "$MANIFEST"
+  echo "Dry-run complete; version stamp not advanced"
+  exit 0
+fi
+
+printf '%s\n' "$MANIFEST" | kubectl apply --filename -
+echo "Applied configmap $NAMESPACE/cozystack-version with deletion-protection label"

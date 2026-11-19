@@ -1,0 +1,20 @@
+# In-place restore. With targetApplicationRef omitted, the driver restores
+# back into pg-src. WARNING: deletes the live cnpg.io Cluster and its PVCs
+# before re-bootstrapping from S3 - any data not yet streamed to WAL is lost.
+#
+# Optional: spec.options.recoveryTime (RFC3339) turns this into a point-in-time
+# recovery, same as the to-copy variant in 45-restorejob-pitr.yaml (which the
+# e2e drives with a real, in-window timestamp). Uncomment and set a timestamp
+# inside your recoverable window - see 45-restorejob-pitr.yaml and
+# https://cozystack.io/docs/v1/operations/services/backup-classes/ ("Point-in-time recovery") for how to find
+# the earliest/latest restorable time.
+---
+apiVersion: backups.cozystack.io/v1alpha1
+kind: RestoreJob
+metadata:
+  name: pg-src-in-place
+spec:
+  backupRef:
+    name: pg-src-adhoc
+  options:
+    # recoveryTime: "2026-05-01T12:00:00Z"

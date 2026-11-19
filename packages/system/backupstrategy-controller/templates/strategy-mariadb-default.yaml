@@ -1,0 +1,29 @@
+{{- $endpoint := include "backupstrategy-controller.endpoint" . -}}
+{{- $endpointHost := $endpoint | trimPrefix "https://" | trimPrefix "http://" -}}
+{{- $bucketName := include "backupstrategy-controller.bucketName" . -}}
+{{- $crdEstablished := include "backupstrategy-controller.crdEstablished" (dict "root" . "crd" "mariadbs.strategy.backups.cozystack.io") -}}
+{{- if and $bucketName $crdEstablished -}}
+apiVersion: strategy.backups.cozystack.io/v1alpha1
+kind: MariaDB
+metadata:
+  name: cozy-default-mariadb
+  annotations:
+    backups.cozystack.io/endpoint: {{ include "backupstrategy-controller.endpoint" . | quote }}
+spec:
+  template:
+    storage:
+      s3:
+        bucket: {{ $bucketName | quote }}
+        endpoint: {{ $endpointHost | quote }}
+        prefix: {{ printf "{{ .Application.metadata.namespace }}/{{ .Application.metadata.name }}/" | quote }}
+        region: {{ .Values.backupStorage.region | quote }}
+        accessKeyIdSecretKeyRef:
+          name: cozy-backups-creds
+          key: AWS_ACCESS_KEY_ID
+        secretAccessKeySecretKeyRef:
+          name: cozy-backups-creds
+          key: AWS_SECRET_ACCESS_KEY
+        tls:
+          enabled: {{ hasPrefix "https://" $endpoint }}
+    compression: gzip
+{{- end -}}

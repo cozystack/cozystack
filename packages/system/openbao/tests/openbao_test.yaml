@@ -1,0 +1,29 @@
+suite: cozy-openbao chart rendering invariants
+release:
+  name: openbao
+  namespace: cozy-openbao
+tests:
+  - it: renders the openbao server StatefulSet on the pinned image
+    template: charts/openbao/templates/server-statefulset.yaml
+    documentSelector:
+      path: kind
+      value: StatefulSet
+    asserts:
+      # Pin the full registry-qualified image. A partial regex on
+      # openbao/openbao:2.5.1 would also pass a wrong registry (e.g.
+      # docker.io); the chart configures quay.io, so assert it verbatim.
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: quay.io/openbao/openbao:2.5.1
+
+  - it: keeps the agent injector disabled (cozystack override)
+    template: charts/openbao/templates/injector-deployment.yaml
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: keeps the CSI provider disabled (cozystack override)
+    template: charts/openbao/templates/csi-daemonset.yaml
+    asserts:
+      - hasDocuments:
+          count: 0

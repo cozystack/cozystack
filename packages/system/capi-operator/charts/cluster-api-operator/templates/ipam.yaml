@@ -1,0 +1,78 @@
+# IPAM providers
+{{- range $name, $ipam := $.Values.ipam }}
+  {{- $ipamNamespace := default ( printf "%s-%s" $name "ipam-system" ) (get $ipam "namespace") }}
+  {{- $ipamName := $name }}
+  {{- $ipamVersion := get $ipam "version" }}
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  annotations:
+    {{- if $.Values.enableHelmHook }}
+    "helm.sh/hook": "post-install,post-upgrade"
+    "helm.sh/hook-weight": "1"
+    {{- end }}
+    "argocd.argoproj.io/sync-wave": "1"
+  name: {{ $ipamNamespace }}
+---
+apiVersion: operator.cluster.x-k8s.io/v1alpha2
+kind: IPAMProvider
+metadata:
+  name: {{ $ipamName }}
+  namespace: {{ $ipamNamespace }}
+  annotations:
+    {{- if $.Values.enableHelmHook }}
+    "helm.sh/hook": "post-install,post-upgrade"
+    "helm.sh/hook-weight": "2"
+    {{- end }}
+    "argocd.argoproj.io/sync-wave": "2"
+{{- if or $ipamVersion $.Values.configSecret.name $.Values.manager $.Values.additionalDeployments }}
+spec:
+{{- end }}
+{{- if $ipamVersion }}
+  version: {{ $ipamVersion }}
+{{- end }}
+{{- if $.Values.manager }}
+{{- if and (kindIs "map" $.Values.manager.featureGates) (hasKey $.Values.manager.featureGates $ipamName) }}
+  manager:
+{{- range $key, $value := $.Values.manager.featureGates }}
+  {{- if eq $key $ipamName }}
+    featureGates:
+    {{- range $k, $v := $value }}
+      {{ $k }}: {{ $v }}
+    {{- end }}
+  {{- end }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- if $.Values.configSecret.name }}
+  configSecret:
+    name: {{ $.Values.configSecret.name }}
+    {{- if $.Values.configSecret.namespace }}
+    namespace: {{ $.Values.configSecret.namespace }}
+    {{- end }}
+{{- end }}
+{{- if $ipam.manifestPatches }}
+  manifestPatches: {{ toYaml $ipam.manifestPatches | nindent 4 }}
+{{- end }}
+{{- if $.Values.additionalDeployments }}
+  additionalDeployments: {{ toYaml $.Values.additionalDeployments | nindent 4 }}
+{{- end }}
+{{- if $ipam.additionalManifests }}
+  additionalManifests:
+    name: {{ $ipam.additionalManifests.name }}
+    {{- if $ipam.additionalManifests.namespace }}
+    namespace: {{ $ipam.additionalManifests.namespace }}
+    {{- end }} {{/* if $ipam.additionalManifests.namespace */}}
+{{- end }}
+{{- if $ipam.additionalManifests }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $ipam.additionalManifests.name }}
+  namespace: {{ default $ipamNamespace $ipam.additionalManifests.namespace }}
+data:
+  manifests: {{- toYaml $ipam.additionalManifests.manifests | nindent 4 }}
+{{- end }}
+{{- end }} {{/* range $name, $ipam := .Values.ipam */}}

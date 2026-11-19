@@ -1,0 +1,19 @@
+{{- if or .Values.master.enabled .Values.allInOne.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "seaweedfs.fullname" . }}-master-config
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/name: {{ template "seaweedfs.name" . }}
+    helm.sh/chart: {{ .Chart.Name }}-{{ .Chart.Version | replace "+" "_" }}
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+    app.kubernetes.io/instance: {{ .Release.Name }}
+{{- if .Values.master.annotations }}
+  annotations:
+    {{- toYaml .Values.master.annotations | nindent 4 }}
+{{- end }}
+data:
+  master.toml: |-
+    {{ .Values.master.config | nindent 4 }}
+{{- end }}

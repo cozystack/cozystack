@@ -1,0 +1,23 @@
+---
+apiVersion: operator.victoriametrics.com/v1beta1
+kind: VMServiceScrape
+metadata:
+  name: kubeovn-plunger
+  namespace: cozy-monitoring
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: kube-ovn-plunger
+      app.kubernetes.io/instance: kubeovn-plunger
+  namespaceSelector:
+    matchNames:
+    - "cozy-kubeovn"
+  endpoints:
+  - port: metrics
+    relabelConfigs:
+    - action: labeldrop
+      regex: (endpoint|pod|container)
+    - replacement: kubeovn-plunger
+      targetLabel: job
+    - targetLabel: tier
+      replacement: cluster

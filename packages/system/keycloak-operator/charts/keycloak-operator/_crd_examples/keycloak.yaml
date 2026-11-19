@@ -1,0 +1,16 @@
+apiVersion: v1.edp.epam.com/v1
+kind: Keycloak
+metadata:
+  name: keycloak-sample
+spec:
+  secret: keycloak-access
+  url: https://keycloak.example.com
+
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: keycloak-access
+data:
+  username: YWRtaW4=
+  password: YWRtaW4=

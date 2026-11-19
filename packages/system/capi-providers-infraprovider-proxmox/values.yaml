@@ -1,0 +1,26 @@
+## @section Proxmox API credentials
+##
+## capmox authenticates to Proxmox VE with an API token. The operator reads the
+## values below out of a Secret and injects them into the provider Deployment as
+## PROXMOX_URL / PROXMOX_TOKEN / PROXMOX_SECRET.
+##
+## The Secret is a precondition, not an optional extra: capi-operator fetches it
+## before it installs the provider, so while it is missing nothing is deployed
+## at all — no Deployment, no CRDs — and the InfrastructureProvider reports the
+## fetch error.
+##
+## Three things are easy to get wrong:
+##
+##   PROXMOX_URL    is the bare https://<host>:8006. capmox appends /api2/json
+##                  itself; a URL that already carries it sends every call to
+##                  /api2/json/api2/json/... and gets 501 back.
+##   PROXMOX_TOKEN  is the full token id, user@realm!tokenid — not the id alone.
+##   PROXMOX_SECRET is the UUID shown once when the token is created.
+##
+## Rotation is not picked up on its own. This chart runs capi-operator without
+## --watch-configsecret, and capmox reads PROXMOX_* from the environment at pod
+## start, so a rotated token takes effect only after the next provider reconcile
+## and a restart of the manager pod.
+##
+## @param {string} credentialsSecretName - Name of the Secret holding PROXMOX_URL, PROXMOX_TOKEN and PROXMOX_SECRET. It must live in this release's namespace and is NOT created by this chart: the token is a hypervisor credential and belongs to the platform's own secret management.
+credentialsSecretName: "capmox-config"

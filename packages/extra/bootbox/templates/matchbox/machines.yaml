@@ -1,0 +1,42 @@
+{{- $host := include "cozy-lib.ns-host-required" . }}
+
+{{ range $m := .Values.machines }}
+---
+apiVersion: tinkerbell.org/v1alpha1
+kind: Hardware
+metadata:
+  name: {{ $m.hostname }}
+  namespace: cozy-bootbox
+spec:
+  interfaces:
+  {{- range $mac := $m.mac }}
+  - dhcp:
+      hostname: {{ $m.hostname }}
+      mac: {{ lower $mac }}
+      {{- with $m.arch }}
+      arch: {{ . }}
+      {{- end }}
+      {{- with $m.ip }}
+      ip:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $m.leaseTime }}
+      lease_time: {{ . }}
+      {{- end }}
+      {{- with $m.uefi }}
+      uefi: {{ . }}
+      {{- end }}
+      {{- with $m.nameServers }}
+      name_servers:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $m.timeServers }}
+      time_servers:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    netboot:
+      allowPXE: true
+      ipxe:
+        url: "https://{{ printf "bootbox.%s" ($.Values.host | default $host) }}/boot.ipxe"
+  {{- end }}
+{{- end }}

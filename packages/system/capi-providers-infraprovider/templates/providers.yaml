@@ -1,0 +1,22 @@
+apiVersion: operator.cluster.x-k8s.io/v1alpha2
+kind: InfrastructureProvider
+metadata:
+  name: kubevirt
+spec:
+  # https://github.com/kubernetes-sigs/cluster-api-provider-kubevirt
+  version: v0.1.10-infraprovider
+  fetchConfig:
+    selector:
+      matchLabels:
+        infraprovider-components: cozy
+  deployment:
+    containers:
+    - name: manager
+      imageUrl: {{ .Files.Get "images/cluster-api-provider-kubevirt.tag" | trim | quote }}
+      resources:
+        limits:
+          cpu: 500m
+          memory: 256Mi
+        requests:
+          cpu: 10m
+          memory: 64Mi

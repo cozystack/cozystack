@@ -1,0 +1,16 @@
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    {{- $data := . | mustMergeOverwrite (dict "component" "metrics") -}}
+    {{- include "kamaji.labels" $data | nindent 4 }}
+  name: {{ include "kamaji.metricsServiceName" . }}
+  namespace: {{ .Release.Namespace }}
+spec:
+  ports:
+    - port: 8080
+      name: metrics
+      protocol: TCP
+      targetPort: metrics
+  selector:
+    {{- include "kamaji.selectorLabels" . | nindent 4 }}

@@ -1,0 +1,57 @@
+# Managed TCP Load Balancer Service
+
+The Managed TCP Load Balancer Service simplifies the deployment and management of load balancers. It efficiently distributes incoming TCP traffic across multiple backend servers, ensuring high availability and optimal resource utilization.
+
+## Deployment Details
+
+Managed TCP Load Balancer Service efficiently utilizes HAProxy for load balancing purposes. HAProxy is a well-established and reliable solution for distributing incoming TCP traffic across multiple backend servers, ensuring high availability and efficient resource utilization. This deployment choice guarantees the seamless and dependable operation of your load balancing infrastructure.
+
+- Docs: https://www.haproxy.com/documentation/
+
+## Parameters
+
+### Common parameters
+
+| Name               | Description                                                                                                                            | Type       | Value     |
+| ------------------ | -------------------------------------------------------------------------------------------------------------------------------------- | ---------- | --------- |
+| `replicas`         | Number of HAProxy replicas.                                                                                                            | `int`      | `2`       |
+| `resources`        | Explicit CPU and memory configuration for each TCP Balancer replica. When omitted, the preset defined in `resourcesPreset` is applied. | `object`   | `{}`      |
+| `resources.cpu`    | CPU available to each replica.                                                                                                         | `quantity` | `""`      |
+| `resources.memory` | Memory (RAM) available to each replica.                                                                                                | `quantity` | `""`      |
+| `resourcesPreset`  | Default sizing preset used when `resources` is omitted.                                                                                | `string`   | `t1.nano` |
+| `external`         | Enable external access from outside the cluster.                                                                                       | `bool`     | `false`   |
+
+
+### Application-specific parameters
+
+| Name                             | Description                                                                                               | Type       | Value   |
+| -------------------------------- | --------------------------------------------------------------------------------------------------------- | ---------- | ------- |
+| `httpAndHttps`                   | HTTP and HTTPS configuration.                                                                             | `object`   | `{}`    |
+| `httpAndHttps.mode`              | Mode for balancer.                                                                                        | `string`   | `tcp`   |
+| `httpAndHttps.targetPorts`       | Target ports configuration.                                                                               | `object`   | `{}`    |
+| `httpAndHttps.targetPorts.http`  | HTTP port number.                                                                                         | `int`      | `80`    |
+| `httpAndHttps.targetPorts.https` | HTTPS port number.                                                                                        | `int`      | `443`   |
+| `httpAndHttps.endpoints`         | Endpoint addresses list.                                                                                  | `[]string` | `[]`    |
+| `whitelistHTTP`                  | Secure HTTP and HTTPS by whitelisting client networks. Requires a non-empty `whitelist` (default: false). | `bool`     | `false` |
+| `whitelist`                      | List of allowed client networks.                                                                          | `[]string` | `[]`    |
+
+
+## Parameter examples and reference
+
+### resources and resourcesPreset
+
+`resources` sets explicit CPU and memory configurations for each replica.
+Every resource it leaves unset is taken from the preset defined in `resourcesPreset`.
+
+```yaml
+resources:
+  cpu: 4000m
+  memory: 4Gi
+```
+
+`resourcesPreset` sets named CPU and memory configurations for each replica.
+This setting is ignored if the corresponding `resources` value is set.
+
+Presets follow a cloud-style `<series>.<size>` naming convention. Five series cover the full CPU-to-memory ratio range (`t1` 1:0.5, `c1` 1:1, `s1` 1:2, `u1` 1:4, `m1` 1:8) and each series ships eight sizes (`nano` through `4xlarge`). The legacy flat names (`nano`, `micro`, `small`, `medium`, `large`, `xlarge`, `2xlarge`) remain accepted as deprecated aliases and keep their original sizes, which do not follow one series: `nano` through `small` equal the `t1` sizes of the same name, while `medium` equals `c1.small` rather than `c1.medium`.
+
+See [Resource management](https://cozystack.io/docs/v1/guides/resource-management/) for the full size matrix and the legacy-to-instance-type mapping.

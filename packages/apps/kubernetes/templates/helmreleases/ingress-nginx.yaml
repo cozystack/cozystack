@@ -1,0 +1,65 @@
+{{- define "cozystack.defaultIngressValues" -}}
+ingress-nginx:
+  fullnameOverride: ingress-nginx
+  controller:
+    kind: DaemonSet
+    {{- if eq .Values.addons.ingressNginx.exposeMethod "Proxied" }}
+    service:
+      enabled: true
+      type: NodePort
+      nodePorts:
+        http: 30000
+        https: 30001
+    {{- end }}
+    {{- if not .Values.addons.certManager.enabled }}
+    admissionWebhooks:
+      certManager:
+        enabled: false
+    {{- end }}
+  nodeSelector:
+    node-role.kubernetes.io/ingress-nginx: ""
+{{- end }}
+
+{{- if and .Values.addons.ingressNginx.enabled .Values._namespace.etcd }}
+{{- /* The ingress-nginx controller DaemonSet pins itself to nodes labelled
+       node-role.kubernetes.io/ingress-nginx (see cozystack.defaultIngressValues
+       nodeSelector). That label is produced by a KubernetesNodes pool with
+       roles: [ingress-nginx]. If no such pool exists the DaemonSet simply
+       schedules nothing (degraded, not failed) — the requirement is documented
+       in NOTES.txt and the release note rather than enforced at render time, so
+       an existing cluster is never flipped from Ready to Failed on upgrade. */}}
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: {{ .Release.Name }}-ingress-nginx
+  labels:
+    cozystack.io/repository: system
+    cozystack.io/target-cluster-name: {{ .Release.Name }}
+    sharding.fluxcd.io/key: tenants
+spec:
+  releaseName: ingress-nginx
+  chartRef:
+    kind: ExternalArtifact
+    name: cozystack-kubernetes-application-kubevirt-kubernetes-ingress-nginx
+    namespace: cozy-system
+  kubeConfig:
+    secretRef:
+      name: {{ .Release.Name }}-admin-kubeconfig
+      key: super-admin.svc
+  targetNamespace: cozy-ingress-nginx
+  storageNamespace: cozy-ingress-nginx
+  interval: 5m
+  timeout: 10m
+  install:
+    createNamespace: true
+    remediation:
+      retries: -1
+  upgrade:
+    remediation:
+      retries: -1
+  values:
+    {{- toYaml (deepCopy .Values.addons.ingressNginx.valuesOverride | mergeOverwrite (fromYaml (include "cozystack.defaultIngressValues" .))) | nindent 4 }}
+  dependsOn:
+  - name: {{ .Release.Name }}-cilium
+    namespace: {{ .Release.Namespace }}
+{{- end }}

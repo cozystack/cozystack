@@ -1,0 +1,54 @@
+suite: csi.yaml install retry strategy
+
+templates:
+  - templates/helmreleases/csi.yaml
+
+values:
+  - values/common.yaml
+
+tests:
+  # Install remediation is an uninstall in every case Flux offers, so under the
+  # default strategy an install that misses its budget takes the tenant's CSI
+  # node plugin and propagated StorageClasses away until a later attempt lands
+  # them again. RetryOnFailure keeps the manifests applied and retries instead.
+  - it: retries a failed install instead of uninstalling the tenant CSI
+    release:
+      name: kubernetes-test
+      namespace: tenant-test
+    asserts:
+      - equal:
+          path: spec.install.strategy.name
+          value: RetryOnFailure
+      - equal:
+          path: spec.install.strategy.retryInterval
+          value: 30s
+
+  # The controller performs the retry of a failed install as an upgrade, so
+  # without a strategy here that retry's own failure falls through to upgrade
+  # remediation instead of retrying again.
+  - it: carries the strategy on the upgrade action the retry runs as
+    release:
+      name: kubernetes-test
+      namespace: tenant-test
+    asserts:
+      - equal:
+          path: spec.upgrade.strategy.name
+          value: RetryOnFailure
+      - equal:
+          path: spec.upgrade.strategy.retryInterval
+          value: 30s
+
+  # The strategy governs a failed release. An absent release and an out-of-sync
+  # one take different branches, which consult the retry count instead and stop
+  # acting once it is exhausted.
+  - it: keeps unlimited retries for the branches the strategy does not reach
+    release:
+      name: kubernetes-test
+      namespace: tenant-test
+    asserts:
+      - equal:
+          path: spec.install.remediation.retries
+          value: -1
+      - equal:
+          path: spec.upgrade.remediation.retries
+          value: -1

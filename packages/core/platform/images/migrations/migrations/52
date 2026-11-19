@@ -1,0 +1,28 @@
+#!/bin/sh
+# Migration 52 --> 53
+# Delete the old linstor-scheduler admission webhook Deployment so the upgrade
+# can recreate it.
+#
+# Cozystack used to ship the linstor-scheduler admission webhook as loose
+# downstream templates whose Deployment selected pods by the base scheduler
+# selectorLabels plus app.kubernetes.io/component: admission. Upstream chart
+# 0.3.0 now ships the admission webhook natively; its Deployment keeps the same
+# name (linstor-scheduler-admission) but selects on a distinct
+# app.kubernetes.io/name: linstor-scheduler-admission. A Deployment's
+# spec.selector is immutable, so an in-place upgrade of an existing install
+# would be rejected. Deleting the old Deployment before the component reconciles
+# lets the new one be created cleanly (its ReplicaSet and pods follow); the
+# webhook's failurePolicy is Ignore, so the brief gap does not block Pod
+# creation. Safe when absent: fresh installs and clusters without the linstor
+# stack simply skip it via --ignore-not-found.
+
+set -euo pipefail
+
+# shellcheck source=lib/cozystack-version.sh
+. "$(dirname "$0")/lib/cozystack-version.sh"
+
+kubectl delete deployment linstor-scheduler-admission --namespace cozy-linstor --ignore-not-found
+
+# Stamp version via the shared helper so the cozystack-version ConfigMap keeps
+# the platform.cozystack.io/no-delete label.
+stamp_cozystack_version 53

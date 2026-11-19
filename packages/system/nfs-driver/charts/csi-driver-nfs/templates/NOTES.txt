@@ -1,0 +1,5 @@
+ The CSI NFS Driver is getting deployed to your cluster.
+
+To check CSI NFS Driver pods status, please run:
+
+  kubectl --namespace={{ .Release.Namespace }} get pods --selector="app.kubernetes.io/instance={{ .Release.Name }}" --watch

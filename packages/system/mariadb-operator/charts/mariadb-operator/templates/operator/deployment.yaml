@@ -1,0 +1,120 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "mariadb-operator.fullname" . }}
+  labels:
+    {{- include "mariadb-operator.labels" . | nindent 4 }}
+spec:
+  {{- if .Values.ha.enabled }}
+  replicas: {{ .Values.ha.replicas}}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "mariadb-operator.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{ toYaml . | nindent 8 }}
+      {{- end }}
+      labels:
+        {{- include "mariadb-operator.selectorLabels" . | nindent 8 }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "mariadb-operator.serviceAccountName" . }}
+      automountServiceAccountToken: {{ .Values.serviceAccount.automount }}
+      terminationGracePeriodSeconds: 10
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{ toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{ toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.topologySpreadConstraints }}
+      topologySpreadConstraints:
+        {{ toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.priorityClassName  }}
+      priorityClassName: {{ . | quote }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{ toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.podSecurityContext }}
+      securityContext:
+        {{ toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - image: "{{ template "image" (tuple .Values.image $.Chart.AppVersion) }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          name: controller
+          args:
+            - --metrics-addr=:8080
+            - --log-level={{ .Values.logLevel }}
+            {{- if .Values.ha.enabled }}
+            - --leader-elect
+            {{- end }}
+            {{- if .Values.pprof.enabled }}
+            - --pprof
+            - --pprof-addr=:{{ .Values.pprof.port | int }}
+            {{- end }}
+            {{- range .Values.extraArgs }}
+            - {{ . }}
+            {{- end }}
+          ports:
+            - containerPort: 8080
+              protocol: TCP
+              name: metrics
+          {{- if .Values.pprof.enabled }}
+            - containerPort: {{ .Values.pprof.port }}
+              protocol: TCP
+              name: pprof
+          {{- end }}
+          envFrom:
+            - configMapRef:
+                name: mariadb-operator-env
+            {{- with .Values.extraEnvFrom }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          env:
+            - name: CLUSTER_NAME
+              value: {{ .Values.clusterName }}
+            {{- if .Values.currentNamespaceOnly }}
+            - name: WATCH_NAMESPACE
+              value: {{ .Release.Namespace }}
+            {{- end }}
+            - name: MARIADB_OPERATOR_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.serviceAccountName
+            - name: MARIADB_OPERATOR_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: MARIADB_OPERATOR_SA_PATH
+              value: /var/run/secrets/kubernetes.io/serviceaccount/token
+            {{- with .Values.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          {{- if .Values.extraVolumeMounts }}
+          volumeMounts:
+          {{- toYaml .Values.extraVolumeMounts | nindent 12 }}
+          {{- end }}
+          {{ with .Values.resources }}          
+          resources:
+            {{ toYaml . | nindent 12 }}
+          {{ end }}
+          {{ with .Values.securityContext}}
+          securityContext:
+            {{ toYaml . | nindent 12 }}
+          {{ end }}
+      {{- if .Values.extraVolumes }}
+      volumes:
+      {{- toYaml .Values.extraVolumes | nindent 8 }}
+      {{- end }}

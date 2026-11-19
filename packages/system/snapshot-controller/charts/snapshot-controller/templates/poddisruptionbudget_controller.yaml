@@ -1,0 +1,13 @@
+{{- if and .Values.controller.enabled .Values.controller.pdb }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "snapshot-controller.fullname" . }}
+  labels:
+    {{- include "snapshot-controller.labels" . | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "snapshot-controller.selectorLabels" . | nindent 6 }}
+{{ toYaml .Values.controller.pdb | indent 2 }}
+{{- end }}

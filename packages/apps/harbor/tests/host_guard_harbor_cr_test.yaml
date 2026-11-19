@@ -1,0 +1,39 @@
+suite: harbor CR (harbor.yaml) guards an empty apex in isolation
+templates:
+  - templates/harbor.yaml
+
+release:
+  name: harbor
+  namespace: tenant-root
+
+# Isolated to templates/harbor.yaml so reverting its own guard reddens this
+# suite even though sibling templates guard the same apex.
+
+tests:
+  - it: fails when _namespace is injected with an empty host and no host override
+    set:
+      _namespace:
+        host: ""
+        ingress: tenant-root
+      _cluster:
+        issuer-name: letsencrypt-prod
+        solver: http01
+    asserts:
+      - failedTemplate:
+          errorMessage: "the tenant apex (_namespace.host) is empty and this app sets no host override, so its ingress hostname would be malformed. Set tenant.spec.host on this tenant, inherit it from a parent that has host set, or set this app's host value."
+
+  - it: renders the credentials Secret URL from the apex when it is set
+    set:
+      _namespace:
+        host: example.org
+        ingress: tenant-root
+      _cluster:
+        issuer-name: letsencrypt-prod
+        solver: http01
+    documentSelector:
+      path: kind
+      value: Secret
+    asserts:
+      - equal:
+          path: stringData.url
+          value: https://harbor.example.org

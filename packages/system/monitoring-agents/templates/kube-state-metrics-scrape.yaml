@@ -1,0 +1,27 @@
+---
+apiVersion: operator.victoriametrics.com/v1beta1
+kind: VMServiceScrape
+metadata:
+  name: kube-state-metrics
+  namespace: cozy-monitoring
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: kube-state-metrics
+  endpoints:
+  - port: http
+    honorLabels: true
+    metricRelabelConfigs:
+      - action: labeldrop
+        regex: (uid|container_id|image_id)
+    relabelConfigs:
+    #- action: labeldrop
+    #  regex: (endpoint|namespace|pod|container)
+    - replacement: kube-state-metrics
+      targetLabel: job
+    - sourceLabels:
+      - __meta_kubernetes_pod_node_name
+      targetLabel: node
+    - targetLabel: tier
+      replacement: cluster
+  jobLabel: app.kubernetes.io/name

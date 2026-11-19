@@ -1,0 +1,34 @@
+export NAME=kamaji
+export NAMESPACE=cozy-$(NAME)
+
+include ../../../hack/common-envs.mk
+include ../../../hack/package.mk
+
+test:
+	helm unittest .
+
+update:
+	rm -rf charts
+	tag=$$(git ls-remote --tags --sort="v:refname" https://github.com/clastix/kamaji | grep -E 'refs/tags/[0-9]+\.[0-9]+\.[0-9]+-edge$$' | awk -F/ 'END{print $$NF}') && \
+	curl -sSL https://github.com/clastix/kamaji/archive/refs/tags/$${tag}.tar.gz | \
+	tar -xzvf - --strip 1 kamaji-$${tag}/charts && \
+	sed -i "/ARG VERSION/ s|=.*|=$${tag}|g" images/kamaji/Dockerfile
+	# Re-apply Cozystack-side patches over the freshly extracted chart so
+	# `make update` stays reproducible. Mirrors the pattern used by
+	# packages/system/ingress-nginx.
+	patch --no-backup-if-mismatch -p1 < patches/1.diff
+	# cozy-kamaji declares no dependencies, so Helm's processDependencyEnabled never evaluates kamaji-etcd.deploy and any subchart here always renders.
+	rm -rf charts/kamaji/charts
+
+image:
+	docker buildx build images/kamaji \
+		$(call image-tags,kamaji,v$(COZYSTACK_VERSION)) \
+		$(call cache-args,kamaji) \
+		--metadata-file images/kamaji.json \
+		$(BUILDX_ARGS)
+	REPOSITORY="$(REGISTRY)/kamaji" \
+		yq -i '.kamaji.image.repository = strenv(REPOSITORY)' values.yaml
+	TAG=$(IMAGE_TAG)@$$(yq e '."containerimage.digest"' images/kamaji.json -o json -r) \
+		yq -i '.kamaji.image.tag = strenv(TAG)' values.yaml
+	yq -i '.kamaji.extraArgs[0] = "--migrate-image=" + .kamaji.image.repository + ":" + .kamaji.image.tag' values.yaml
+	rm -f images/kamaji.json

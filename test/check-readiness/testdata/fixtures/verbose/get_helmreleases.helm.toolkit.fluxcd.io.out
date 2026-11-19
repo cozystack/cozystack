@@ -1,0 +1,2 @@
+tenant-test<US>healthy-app<US>True<US>ReconciliationSucceeded<US>Release reconciliation succeeded<US>false
+tenant-prod<US>broken-app<US>False<US>UpgradeFailed<US>Helm upgrade failed: timed out waiting for the condition<US>false

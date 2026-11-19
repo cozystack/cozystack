@@ -1,0 +1,116 @@
+#!/bin/bash
+# Migration 30 --> 31
+# Convert VPC subnets from map format to array format in HelmRelease values.
+# Map format:  subnets: {name: {cidr: x}}
+# Array format: subnets: [{name: name, cidr: x}]
+# Idempotent: skips if subnets is already an array or empty/null.
+
+set -euo pipefail
+
+# ============================================================
+# STEP 1: Discover all VirtualPrivateCloud HelmReleases
+# ============================================================
+echo "=== Discovering VirtualPrivateCloud HelmReleases ==="
+INSTANCES=()
+while IFS=/ read -r ns name; do
+  [ -z "$ns" ] && continue
+  INSTANCES+=("${ns}/${name}")
+  echo "  Found: ${ns}/${name}"
+done < <(kubectl get hr -A -l "apps.cozystack.io/application.kind=VirtualPrivateCloud" \
+  -o jsonpath='{range .items[*]}{.metadata.namespace}/{.metadata.name}{"\n"}{end}' 2>/dev/null)
+
+if [ ${#INSTANCES[@]} -eq 0 ]; then
+  echo "  No VirtualPrivateCloud HelmReleases found. Nothing to migrate."
+  kubectl create configmap -n cozy-system cozystack-version \
+    --from-literal=version=31 --dry-run=client -o yaml | kubectl apply -f-
+  exit 0
+fi
+echo "  Total: ${#INSTANCES[@]} instance(s)"
+
+# ============================================================
+# STEP 2: Migrate each instance
+# ============================================================
+for entry in "${INSTANCES[@]}"; do
+  NAMESPACE="${entry%%/*}"
+  HR_NAME="${entry#*/}"
+
+  echo ""
+  echo "======================================================================"
+  echo "=== Processing: ${HR_NAME} in ${NAMESPACE}"
+  echo "======================================================================"
+
+  # --- Find values Secret ---
+  VALUES_SECRET=$(kubectl -n "$NAMESPACE" get hr "$HR_NAME" -o json | \
+    jq -r '.spec.valuesFrom // [] | map(select(.kind == "Secret" and (.name | test("cozystack-values") | not))) | .[0].name // ""')
+  VALUES_KEY=$(kubectl -n "$NAMESPACE" get hr "$HR_NAME" -o json | \
+    jq -r '.spec.valuesFrom // [] | map(select(.kind == "Secret" and (.name | test("cozystack-values") | not))) | .[0].valuesKey // "values.yaml"')
+
+  if [ -z "$VALUES_SECRET" ]; then
+    echo "  [SKIP] No values Secret found for hr/${HR_NAME}"
+    continue
+  fi
+
+  if ! kubectl -n "$NAMESPACE" get secret "$VALUES_SECRET" --no-headers 2>/dev/null | grep -q .; then
+    echo "  [SKIP] Secret ${VALUES_SECRET} not found"
+    continue
+  fi
+
+  echo "  Reading values from secret: ${VALUES_SECRET} (key: ${VALUES_KEY})"
+
+  # --- Decode current values ---
+  VALUES_YAML=$(kubectl -n "$NAMESPACE" get secret "$VALUES_SECRET" \
+    -o jsonpath="{.data.${VALUES_KEY}}" 2>/dev/null | base64 -d 2>/dev/null || true)
+  if [ -z "$VALUES_YAML" ]; then
+    VALUES_YAML=$(kubectl -n "$NAMESPACE" get secret "$VALUES_SECRET" \
+      -o jsonpath="{.stringData.${VALUES_KEY}}" 2>/dev/null || true)
+  fi
+
+  if [ -z "$VALUES_YAML" ]; then
+    echo "  [SKIP] Could not read values from secret"
+    continue
+  fi
+
+  # --- Check subnets type ---
+  SUBNETS_TYPE=$(echo "$VALUES_YAML" | yq -r '.subnets | type')
+
+  case "$SUBNETS_TYPE" in
+    "!!map"|"object")
+      echo "  [CONVERT] subnets is a map, converting to array"
+      ;;
+    "!!seq"|"array")
+      echo "  [SKIP] subnets is already an array"
+      continue
+      ;;
+    "!!null"|"null")
+      echo "  [SKIP] subnets is null/empty"
+      continue
+      ;;
+    *)
+      echo "  [SKIP] subnets has unexpected type: ${SUBNETS_TYPE}"
+      continue
+      ;;
+  esac
+
+  # --- Convert map to array ---
+  # {name: {cidr: x}} -> [{name: name, cidr: x}]
+  NEW_VALUES=$(echo "$VALUES_YAML" | yq '
+    .subnets = ([.subnets | to_entries[] | {"name": .key} + .value])
+  ')
+
+  # --- Patch the Secret ---
+  NEW_VALUES_B64=$(echo "$NEW_VALUES" | base64)
+  echo "  [PATCH] Updating secret/${VALUES_SECRET}"
+  kubectl -n "$NAMESPACE" get secret "$VALUES_SECRET" -o json | \
+    jq --arg key "$VALUES_KEY" --arg val "$NEW_VALUES_B64" \
+      '.data[$key] = $val' | \
+    kubectl apply -f -
+
+  echo "  [OK] Converted subnets for ${HR_NAME}"
+done
+
+echo ""
+echo "=== Migration complete (${#INSTANCES[@]} instance(s)) ==="
+
+# Stamp version
+kubectl create configmap -n cozy-system cozystack-version \
+  --from-literal=version=31 --dry-run=client -o yaml | kubectl apply -f-

@@ -1,0 +1,49 @@
+{{- /*
+  A central-mode tenant's logins at the tenant-root vmauth (vmauth.yaml), both
+  pinned to the tenant's one account: traces-central for the collector, which
+  may only write, and traces-central-reader for Grafana, which may only read.
+  vmauth cleans the request path before it picks a route, so a login holding
+  both routes would let a Grafana user send a write through the datasource
+  proxy as ../insert, past the collector's rate limit. A namespace name holds
+  no dot, so the reader's username never matches another tenant's. Their
+  passwords live in the chart-owned Secrets of central-credentials.yaml.
+*/ -}}
+{{- if include "monitoring.tracingCentral" . }}
+{{- /* Without the tenant-root VMAuth every export fails while every object
+       reports Ready. A live render sees the release namespace; an offline one
+       sees nothing and cannot tell a missing store from a missing cluster. */}}
+{{- if and (lookup "v1" "Namespace" "" .Release.Namespace) (not (lookup "operator.victoriametrics.com/v1beta1" "VMAuth" "tenant-root" "traces-central")) }}
+{{- fail "monitoring: shared-central tracing is on for this tenant, but tenant-root does not host a shared traces store (VMAuth tenant-root/traces-central is missing), so every span would be dropped. In the tenant-root Monitoring set tracingCentralHost: true with a tracingStorages entry named \"generic\" in cluster mode, or turn tracingCentral off for this tenant." }}
+{{- end }}
+{{- $tenantID := splitList ":" (include "monitoring.tracingTenantID" .) }}
+{{- range $login := list (dict "name" "traces-central" "username" $.Release.Namespace "kind" "VTCluster/vtinsert" "path" "/insert/opentelemetry/v1/traces") (dict "name" "traces-central-reader" "username" (printf "%s.reader" $.Release.Namespace) "kind" "VTCluster/vtselect" "path" "/select/jaeger/.*") }}
+---
+apiVersion: operator.victoriametrics.com/v1beta1
+kind: VMUser
+metadata:
+  name: {{ $login.name }}
+  labels:
+    tracing.cozystack.io/central-reader: "true"
+spec:
+  username: {{ $login.username }}
+  passwordRef:
+    name: {{ $login.name }}-credentials
+    key: password
+  disable_secret_creation: true
+  # Every central tenant shares one vmauth; this caps what each of its logins
+  # holds in flight on each vmauth replica. Above it vmauth queues a request
+  # for up to 10s (-maxQueueDuration), then answers 429: the collector's
+  # exporter retries it, Grafana shows the query as failed.
+  max_concurrent_requests: 4
+  targetRefs:
+    - crd:
+        kind: {{ $login.kind }}
+        name: generic
+        namespace: tenant-root
+      paths:
+        - {{ $login.path }}
+      headers:
+        - "AccountID: {{ index $tenantID 0 }}"
+        - "ProjectID: {{ index $tenantID 1 }}"
+{{- end }}
+{{- end }}

@@ -1,0 +1,99 @@
+# ./tests/tls_validatecacert_test.yaml
+suite: tls validateCACert helper
+
+# Direct coverage for the validate-only helper that caCertSecret (and any other
+# chart accepting a CA in PEM form) delegates to: the fail messages must carry
+# the caller-supplied field name, so an operator sees the value they actually
+# set rather than this helper's caCert parameter. The shared rules themselves
+# (private-key header anchoring, whole-value PEM, verbatim emission) are pinned
+# through caCertSecret in tls_cacert_test.yaml.
+#
+# The certificate below is the same real, self-signed CA as
+# tls_cacert_values.yaml — the regex guard cannot parse x509, so only a real
+# body proves the accepted shape is one a verifier would accept.
+
+templates:
+  - templates/tests/tls-validatecacert.yaml
+
+release:
+  name: myrelease
+  namespace: tenant-acme
+
+tests:
+  - it: renders nothing itself and lets the caller's document through on a valid bundle
+    set:
+      field: talos.imageFactoryCA
+      caCert: |
+        -----BEGIN CERTIFICATE-----
+        MIIBjTCCATOgAwIBAgIUEVKlZMojk6oxsIdEnHzgqNSB5EQwCgYIKoZIzj0EAwIw
+        GzEZMBcGA1UEAwwQY296eS1saWItdGVzdC1jYTAgFw0yNjA3MTYxNjM0NDZaGA8y
+        MTI2MDYyMjE2MzQ0NlowGzEZMBcGA1UEAwwQY296eS1saWItdGVzdC1jYTBZMBMG
+        ByqGSM49AgEGCCqGSM49AwEHA0IABHYaDAyL+v09MqV1Yp1T1AE7Y6LHqBnVF2kH
+        4mzq8ewzoqb7EF/IY/acC4G514Lsi212vky2z+yk61EIWlgzqmGjUzBRMB0GA1Ud
+        DgQWBBReFu/b3ZdMzmFjrOTD8A8bFPX6fDAfBgNVHSMEGDAWgBReFu/b3ZdMzmFj
+        rOTD8A8bFPX6fDAPBgNVHRMBAf8EBTADAQH/MAoGCCqGSM49BAMCA0gAMEUCIQCj
+        P8IEUi9H4YcxOyAtGt22n6WCP8dqxP4p2QfkcRl6LAIgSOIMy4oHa5IJWREYdFt9
+        L/I7Ek4FlYbzy9kZu/MXqlE=
+        -----END CERTIFICATE-----
+    asserts:
+      - hasDocuments:
+          count: 1
+      - isKind:
+          of: ConfigMap
+
+  - it: names the caller's field when refusing private key material
+    set:
+      field: talos.imageFactoryCA
+      caCert: |
+        -----BEGIN EC PRIVATE KEY-----
+        MHcCAQEEexampleprivatekeymaterialthatmustneverreachtenants00000000
+        -----END EC PRIVATE KEY-----
+    asserts:
+      - failedTemplate:
+          errorMessage: "cozy-lib.tls.validateCACert: talos.imageFactoryCA must not contain private key material"
+
+  - it: names the caller's field when the value is not a PEM certificate
+    set:
+      field: talos.imageFactoryCA
+      caCert: |
+        this is not a certificate at all
+    asserts:
+      - failedTemplate:
+          errorMessage: "cozy-lib.tls.validateCACert: talos.imageFactoryCA must contain a complete PEM certificate block (BEGIN/END CERTIFICATE)"
+
+  # An unquoted numeric scalar parses to float64; the coercion must turn it into
+  # the helper's own message, not a raw Go type error.
+  - it: fails closed on a numeric value with the caller's field named
+    set:
+      field: talos.imageFactoryCA
+      caCert: 12345
+    asserts:
+      - failedTemplate:
+          errorMessage: "cozy-lib.tls.validateCACert: talos.imageFactoryCA must contain a complete PEM certificate block (BEGIN/END CERTIFICATE)"
+
+  # A message that names no field sends the operator hunting through every
+  # CA-accepting value in the chart, so the parameter is mandatory.
+  - it: fails closed when field is not supplied
+    set:
+      caCert: |
+        -----BEGIN CERTIFICATE-----
+        MIIBjTCCATOgAwIBAgIUEVKlZMojk6oxsIdEnHzgqNSB5EQwCgYIKoZIzj0EAwIw
+        GzEZMBcGA1UEAwwQY296eS1saWItdGVzdC1jYTAgFw0yNjA3MTYxNjM0NDZaGA8y
+        MTI2MDYyMjE2MzQ0NlowGzEZMBcGA1UEAwwQY296eS1saWItdGVzdC1jYTBZMBMG
+        ByqGSM49AgEGCCqGSM49AwEHA0IABHYaDAyL+v09MqV1Yp1T1AE7Y6LHqBnVF2kH
+        4mzq8ewzoqb7EF/IY/acC4G514Lsi212vky2z+yk61EIWlgzqmGjUzBRMB0GA1Ud
+        DgQWBBReFu/b3ZdMzmFjrOTD8A8bFPX6fDAfBgNVHSMEGDAWgBReFu/b3ZdMzmFj
+        rOTD8A8bFPX6fDAPBgNVHRMBAf8EBTADAQH/MAoGCCqGSM49BAMCA0gAMEUCIQCj
+        P8IEUi9H4YcxOyAtGt22n6WCP8dqxP4p2QfkcRl6LAIgSOIMy4oHa5IJWREYdFt9
+        L/I7Ek4FlYbzy9kZu/MXqlE=
+        -----END CERTIFICATE-----
+    asserts:
+      - failedTemplate:
+          errorMessage: "cozy-lib.tls.validateCACert: field is required"
+
+  - it: fails closed when invoked with a non-dict argument
+    set:
+      nonDict: true
+    asserts:
+      - failedTemplate:
+          errorMessage: "cozy-lib.tls.validateCACert: expected a single dict argument"

@@ -1,0 +1,179 @@
+import { describe, it, expect, beforeEach, vi } from "vitest"
+import { focusFirstError } from "@/lib/focus-first-error.ts"
+
+describe("focusFirstError", () => {
+  beforeEach(() => {
+    document.body.innerHTML = ""
+    // jsdom has no layout, so scrollIntoView is absent. Stub it so the call can
+    // be asserted: focus() is passed preventScroll, which disables the
+    // browser's own scroll-on-focus, making this the only thing that brings
+    // the field into view.
+    HTMLElement.prototype.scrollIntoView = vi.fn()
+  })
+
+  it("focuses the field carrying the generated id", () => {
+    document.body.innerHTML = `<input id="root_name" />`
+    const field = document.getElementById("root_name")
+
+    focusFirstError({ property: ".name" })
+
+    expect(document.activeElement).toBe(field)
+  })
+
+  // RJSF flattens the instance path with dots, so this is the shape a nested
+  // field actually arrives as. A decoy sharing the prefix keeps the assertion
+  // from passing on the descendant fallback alone.
+  it("resolves a nested property path", () => {
+    document.body.innerHTML = `
+      <input id="root_spec_firstname_decoy" />
+      <input id="root_spec_firstname" />
+    `
+    const field = document.getElementById("root_spec_firstname")
+
+    focusFirstError({ property: ".spec.firstname" })
+
+    expect(document.activeElement).toBe(field)
+  })
+
+  it("resolves an array item path", () => {
+    document.body.innerHTML = `<input id="root_items_0_name" />`
+    const field = document.getElementById("root_items_0_name")
+
+    focusFirstError({ property: ".items.0.name" })
+
+    expect(document.activeElement).toBe(field)
+  })
+
+  // A map key can itself contain a dot -- a mariadb user `john.doe`, a registry
+  // mirror `ghcr.io` -- and the flattened path cannot say whether a dot
+  // separates two properties or sits inside one, so both readings are tried.
+  it("resolves a property whose own name contains a dot", () => {
+    document.body.innerHTML = `<input id="root_users_john.doe_maxUserConnections" />`
+    const field = document.getElementById("root_users_john.doe_maxUserConnections")
+
+    focusFirstError({ property: ".users.john.doe.maxUserConnections" })
+
+    expect(document.activeElement).toBe(field)
+  })
+
+  it("prefers the plain split when both readings are present", () => {
+    document.body.innerHTML = `
+      <input id="root_a.b" />
+      <input id="root_a_b" />
+    `
+    const plain = document.getElementById("root_a_b")
+
+    focusFirstError({ property: ".a.b" })
+
+    expect(document.activeElement).toBe(plain)
+  })
+
+  it("uses the same custom prefix and separator as the form", () => {
+    document.body.innerHTML = `<input id="form/spec/name" />`
+    const field = document.getElementById("form/spec/name")
+
+    focusFirstError({ property: ".spec.name" }, "form", "/")
+
+    expect(document.activeElement).toBe(field)
+  })
+
+  // vm-disk marks source.http.url required, not source, so this is the shape
+  // validation actually reports for a SourceField. The widget sets the id on
+  // its own control; the exact lookup is what has to find it.
+  it("focuses a SourceField sub-control by its generated id", () => {
+    document.body.innerHTML = `
+      <input type="radio" name="root_source-source" value="http" />
+      <input id="root_source_http_url" />
+    `
+    const field = document.getElementById("root_source_http_url")
+
+    focusFirstError({ property: ".source.http.url" })
+
+    expect(document.activeElement).toBe(field)
+  })
+
+  // A radio group carries only `name="<id>-source"`, so the name half of the
+  // fallback is the only thing that can reach it.
+  it("falls back to the name attribute for a radio group with no id", () => {
+    document.body.innerHTML = `
+      <input type="radio" name="root_source-source" value="http" />
+      <input type="radio" name="root_source-source" value="pvc" />
+    `
+    const first = document.querySelector<HTMLInputElement>('input[value="http"]')
+
+    focusFirstError({ property: ".source" })
+
+    expect(document.getElementById("root_source")).toBeNull()
+    expect(document.activeElement).toBe(first)
+  })
+
+  // A bare prefix match would grab any sibling whose id merely starts with the
+  // same string, scrolling to a field the user was not asked about.
+  it("does not fall back to a sibling that merely shares the prefix", () => {
+    document.body.innerHTML = `<input id="root_database" />`
+
+    focusFirstError({ property: ".data" })
+
+    expect(document.getElementById("root_data")).toBeNull()
+    expect(document.activeElement).toBe(document.body)
+  })
+
+  it("falls back to a nested input under the errored object", () => {
+    document.body.innerHTML = `
+      <input id="root_database" />
+      <input id="root_data_host" />
+    `
+    const nested = document.getElementById("root_data_host")
+
+    focusFirstError({ property: ".data" })
+
+    expect(document.activeElement).toBe(nested)
+  })
+
+  // The x-cozystack-options fields (storageClass, backupClass, VM disks, GPU
+  // names) render through DynamicOptionsWidget as a select, not an input.
+  it("focuses a select carrying the generated id", () => {
+    document.body.innerHTML = `<select id="root_gpus_0_name"></select>`
+    const field = document.getElementById("root_gpus_0_name")
+
+    focusFirstError({ property: ".gpus.0.name" })
+
+    expect(document.activeElement).toBe(field)
+  })
+
+  it("falls back to a nested select under the errored object", () => {
+    document.body.innerHTML = `<select id="root_gpus_0_name"></select>`
+    const field = document.getElementById("root_gpus_0_name")
+
+    focusFirstError({ property: ".gpus.0" })
+
+    expect(document.activeElement).toBe(field)
+  })
+
+  it("scrolls the field into view, not only focuses it", () => {
+    document.body.innerHTML = `<input id="root_name" />`
+    const field = document.getElementById("root_name") as HTMLElement
+
+    focusFirstError({ property: ".name" })
+
+    expect(field.scrollIntoView).toHaveBeenCalledWith({ block: "center" })
+  })
+
+  it("escapes a quote in the generated id rather than breaking the selector", () => {
+    // Only the fallback interpolates the id into a quoted attribute selector,
+    // so the exact lookup has to miss for this to bite: an unescaped quote
+    // ends the selector string early and querySelector throws SyntaxError.
+    document.body.innerHTML = `<input id='root_a"b_child' />`
+    const field = document.getElementById('root_a"b_child')
+
+    expect(() => focusFirstError({ property: '.a"b' })).not.toThrow()
+    expect(document.activeElement).toBe(field)
+  })
+
+  it("does nothing when the field is nowhere in the document", () => {
+    document.body.innerHTML = `<input id="root_other" />`
+
+    expect(() => focusFirstError({ property: ".missing" })).not.toThrow()
+    expect(document.activeElement).toBe(document.body)
+  })
+})

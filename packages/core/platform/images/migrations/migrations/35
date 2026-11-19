@@ -1,0 +1,21 @@
+#!/bin/sh
+# Migration 35 --> 36
+# Add helm.sh/resource-policy=keep annotation to existing VLogs resources
+# so they are preserved when the monitoring helm release upgrades to VLCluster.
+# Users will need to manually verify the new cluster is working, then optionally
+# migrate historical data and delete old VLogs resources.
+
+set -euo pipefail
+
+VLOGS=$(kubectl get vlogs.operator.victoriametrics.com --all-namespaces --output jsonpath='{range .items[*]}{.metadata.namespace}/{.metadata.name}{"\n"}{end}' 2>/dev/null || true)
+for resource in $VLOGS; do
+  NS="${resource%%/*}"
+  NAME="${resource##*/}"
+  echo "Adding keep annotation to VLogs/$NAME in $NS"
+  kubectl annotate vlogs.operator.victoriametrics.com --namespace "$NS" "$NAME" \
+    helm.sh/resource-policy=keep \
+    --overwrite
+done
+
+kubectl create configmap --namespace cozy-system cozystack-version \
+  --from-literal=version=36 --dry-run=client --output yaml | kubectl apply --filename -

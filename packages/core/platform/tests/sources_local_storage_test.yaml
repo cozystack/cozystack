@@ -1,0 +1,78 @@
+suite: standalone local storage registration
+templates:
+  - templates/sources.yaml
+  - templates/bundles/system.yaml
+release:
+  name: cozystack
+  namespace: cozy-system
+tests:
+  - it: registers the source before optional application APIs exist
+    template: templates/sources.yaml
+    documentSelector:
+      path: metadata.name
+      value: cozystack.local-storage
+    asserts:
+      - equal:
+          path: spec.variants[0].name
+          value: default
+      - contains:
+          path: spec.variants[0].dependsOn
+          content: cozystack.networking
+      - contains:
+          path: spec.variants[0].components
+          content:
+            name: local-storage
+            path: system/local-storage
+            install:
+              privileged: true
+              namespace: cozy-local-storage
+              releaseName: local-storage
+  - it: does not install local storage with ordinary system defaults
+    template: templates/bundles/system.yaml
+    set:
+      bundles.system.enabled: true
+    asserts:
+      - containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.local-storage
+          any: true
+        not: true
+  - it: emits a Package only for explicit system bundle selection
+    template: templates/bundles/system.yaml
+    capabilities:
+      apiVersions:
+        - apps.cozystack.io/v1alpha1
+    set:
+      bundles.system.enabled: true
+      bundles.enabledPackages: [cozystack.local-storage]
+    documentSelector:
+      path: metadata.name
+      value: cozystack.local-storage
+    asserts:
+      - equal:
+          path: kind
+          value: Package
+      - equal:
+          path: spec.variant
+          value: default
+  - it: lets disabledPackages override opt in
+    template: templates/bundles/system.yaml
+    set:
+      bundles.system.enabled: true
+      bundles.enabledPackages: [cozystack.local-storage]
+      bundles.disabledPackages: [cozystack.local-storage]
+    asserts:
+      - containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.local-storage
+          any: true
+        not: true
+  - it: leaves a bundle-free platform available for standalone Package installation
+    template: templates/bundles/system.yaml
+    set:
+      bundles.enabledPackages: [cozystack.local-storage]
+    asserts:
+      - hasDocuments:
+          count: 0

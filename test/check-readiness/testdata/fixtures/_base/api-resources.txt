@@ -1,0 +1,14 @@
+packages                       cozystack.io/v1alpha1                false   Package
+artifactgenerators             source.extensions.fluxcd.io/v1alpha1 true    ArtifactGenerator
+externalartifacts              source.toolkit.fluxcd.io/v1          true    ExternalArtifact
+helmreleases          hr       helm.toolkit.fluxcd.io/v2            true    HelmRelease
+kustomizations        ks       kustomize.toolkit.fluxcd.io/v1       true    Kustomization
+gitrepositories       gitrepo  source.toolkit.fluxcd.io/v1          true    GitRepository
+ocirepositories       ocirepo  source.toolkit.fluxcd.io/v1beta2     true    OCIRepository
+helmrepositories      helmrepo source.toolkit.fluxcd.io/v1          true    HelmRepository
+helmcharts            hc       source.toolkit.fluxcd.io/v1          true    HelmChart
+buckets                        source.toolkit.fluxcd.io/v1          true    Bucket
+nodes                 no       v1                                   false   Node
+apiservices                    apiregistration.k8s.io/v1            false   APIService
+customresourcedefinitions crd,crds apiextensions.k8s.io/v1          false   CustomResourceDefinition
+persistentvolumeclaims pvc      v1                                   true    PersistentVolumeClaim

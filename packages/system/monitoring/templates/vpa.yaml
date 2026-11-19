@@ -1,0 +1,310 @@
+{{- /*
+  updateMode is Initial, not Auto. In Auto mode the VPA Updater evicts running
+  pods to apply new recommendations. During install that eviction churn
+  recreates pods faster than Cilium releases their endpoint IPs, tripping the
+  cluster-pool IPAM "IP already in use" (putEndpointIdInvalid) leak: a pod gets
+  wedged in ContainerCreating and the install stalls (e.g. vmstorage/vmagent
+  evictions wedging vmalertmanager / fluent-bit). Initial sets requests at pod
+  creation without ever evicting, which removes the trigger. Do not switch back
+  to Auto without first fixing the underlying Cilium IP-reuse race.
+*/ -}}
+{{- range .Values.metricsStorages }}
+---
+apiVersion: autoscaling.k8s.io/v1
+kind: VerticalPodAutoscaler
+metadata:
+  name: vpa-vminsert-{{ .name }}
+spec:
+  targetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: vminsert-{{ .name }}
+  updatePolicy:
+    updateMode: Initial
+  resourcePolicy:
+    containerPolicies:
+      - containerName: vminsert
+        minAllowed:
+          {{- if and .vminsert .vminsert.minAllowed }}
+          {{- toYaml .vminsert.minAllowed | nindent 10 }}
+          {{- else }}
+          cpu: 25m
+          memory: 64Mi
+          {{- end }}
+        maxAllowed:
+          {{- if and .vminsert .vminsert.maxAllowed }}
+          {{- toYaml .vminsert.maxAllowed | nindent 10 }}
+          {{- else }}
+          cpu: 2000m
+          memory: 4Gi
+          {{- end }}
+---
+apiVersion: autoscaling.k8s.io/v1
+kind: VerticalPodAutoscaler
+metadata:
+  name: vpa-vmselect-{{ .name }}
+spec:
+  targetRef:
+    apiVersion: apps/v1
+    kind: StatefulSet
+    name: vmselect-{{ .name }}
+  updatePolicy:
+    updateMode: Initial
+  resourcePolicy:
+    containerPolicies:
+      - containerName: vmselect
+        minAllowed:
+          {{- if and .vmselect .vmselect.minAllowed }}
+          {{- toYaml .vmselect.minAllowed | nindent 10 }}
+          {{- else }}
+          cpu: 200m
+          memory: 512Mi
+          {{- end }}
+        maxAllowed:
+          {{- if and .vmselect .vmselect.maxAllowed }}
+          {{- toYaml .vmselect.maxAllowed | nindent 10 }}
+          {{- else }}
+          cpu: 4000m
+          memory: 8Gi
+          {{- end }}
+---
+apiVersion: autoscaling.k8s.io/v1
+kind: VerticalPodAutoscaler
+metadata:
+  name: vpa-vmstorage-{{ .name }}
+spec:
+  targetRef:
+    apiVersion: apps/v1
+    kind: StatefulSet
+    name: vmstorage-{{ .name }}
+  updatePolicy:
+    updateMode: Initial
+  resourcePolicy:
+    containerPolicies:
+      - containerName: vmstorage
+        minAllowed:
+          {{- if and .vmstorage .vmstorage.minAllowed }}
+          {{- toYaml .vmstorage.minAllowed | nindent 10 }}
+          {{- else }}
+          cpu: 200m
+          memory: 512Mi
+          {{- end }}
+        maxAllowed:
+          {{- if and .vmstorage .vmstorage.maxAllowed }}
+          {{- toYaml .vmstorage.maxAllowed | nindent 10 }}
+          {{- else }}
+          cpu: 4000m
+          memory: 8Gi
+          {{- end }}
+{{- end }}
+{{- range .Values.logsStorages }}
+---
+apiVersion: autoscaling.k8s.io/v1
+kind: VerticalPodAutoscaler
+metadata:
+  name: vpa-vlinsert-{{ .name }}
+spec:
+  targetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: vlinsert-{{ .name }}
+  updatePolicy:
+    updateMode: Initial
+  resourcePolicy:
+    containerPolicies:
+      - containerName: vlinsert
+        minAllowed:
+          {{- if and .vlinsert .vlinsert.minAllowed }}
+          {{- toYaml .vlinsert.minAllowed | nindent 10 }}
+          {{- else }}
+          cpu: 25m
+          memory: 64Mi
+          {{- end }}
+        maxAllowed:
+          {{- if and .vlinsert .vlinsert.maxAllowed }}
+          {{- toYaml .vlinsert.maxAllowed | nindent 10 }}
+          {{- else }}
+          cpu: 2000m
+          memory: 4Gi
+          {{- end }}
+---
+apiVersion: autoscaling.k8s.io/v1
+kind: VerticalPodAutoscaler
+metadata:
+  name: vpa-vlselect-{{ .name }}
+spec:
+  targetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: vlselect-{{ .name }}
+  updatePolicy:
+    updateMode: Initial
+  resourcePolicy:
+    containerPolicies:
+      - containerName: vlselect
+        minAllowed:
+          {{- if and .vlselect .vlselect.minAllowed }}
+          {{- toYaml .vlselect.minAllowed | nindent 10 }}
+          {{- else }}
+          cpu: 25m
+          memory: 64Mi
+          {{- end }}
+        maxAllowed:
+          {{- if and .vlselect .vlselect.maxAllowed }}
+          {{- toYaml .vlselect.maxAllowed | nindent 10 }}
+          {{- else }}
+          cpu: 4000m
+          memory: 8Gi
+          {{- end }}
+---
+apiVersion: autoscaling.k8s.io/v1
+kind: VerticalPodAutoscaler
+metadata:
+  name: vpa-vlstorage-{{ .name }}
+spec:
+  targetRef:
+    apiVersion: apps/v1
+    kind: StatefulSet
+    name: vlstorage-{{ .name }}
+  updatePolicy:
+    updateMode: Initial
+  resourcePolicy:
+    containerPolicies:
+      - containerName: vlstorage
+        minAllowed:
+          {{- if and .vlstorage .vlstorage.minAllowed }}
+          {{- toYaml .vlstorage.minAllowed | nindent 10 }}
+          {{- else }}
+          cpu: 25m
+          memory: 64Mi
+          {{- end }}
+        maxAllowed:
+          {{- if and .vlstorage .vlstorage.maxAllowed }}
+          {{- toYaml .vlstorage.maxAllowed | nindent 10 }}
+          {{- else }}
+          cpu: 4000m
+          memory: 8Gi
+          {{- end }}
+{{- end }}
+{{- /*
+  Trace components. tracingStorages has no resource knobs, so bounds are
+  hardcoded (no dead min/maxAllowed conditionals like the logs entries above).
+  Component kinds per victoria-metrics-operator: vtinsert/vtselect are
+  Deployments, vtstorage a StatefulSet, vtsingle a Deployment. tracingStorages
+  is empty by default, so this renders nothing until a backend is configured.
+*/ -}}
+{{- range .Values.tracingStorages }}
+{{- if eq (.mode | default "cluster") "single" }}
+---
+# VTSingle mounts a plain ReadWriteOnce PVC by claim name (not a volume claim
+# template), so an evicting VPA would deadlock on multi-attach — updateMode
+# Initial (file-wide) avoids that on top of the Cilium IP-reuse race.
+apiVersion: autoscaling.k8s.io/v1
+kind: VerticalPodAutoscaler
+metadata:
+  name: vpa-vtsingle-{{ .name }}
+spec:
+  targetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: vtsingle-{{ .name }}
+  updatePolicy:
+    updateMode: Initial
+  resourcePolicy:
+    containerPolicies:
+      - containerName: vtsingle
+        minAllowed:
+          cpu: 25m
+          memory: 128Mi
+        maxAllowed:
+          cpu: 4000m
+          memory: 8Gi
+{{- else }}
+---
+apiVersion: autoscaling.k8s.io/v1
+kind: VerticalPodAutoscaler
+metadata:
+  name: vpa-vtinsert-{{ .name }}
+spec:
+  targetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: vtinsert-{{ .name }}
+  updatePolicy:
+    updateMode: Initial
+  resourcePolicy:
+    containerPolicies:
+      - containerName: vtinsert
+        minAllowed:
+          cpu: 25m
+          memory: 64Mi
+        maxAllowed:
+          cpu: 2000m
+          memory: 4Gi
+---
+apiVersion: autoscaling.k8s.io/v1
+kind: VerticalPodAutoscaler
+metadata:
+  name: vpa-vtselect-{{ .name }}
+spec:
+  targetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: vtselect-{{ .name }}
+  updatePolicy:
+    updateMode: Initial
+  resourcePolicy:
+    containerPolicies:
+      - containerName: vtselect
+        minAllowed:
+          cpu: 25m
+          memory: 64Mi
+        maxAllowed:
+          cpu: 4000m
+          memory: 8Gi
+---
+apiVersion: autoscaling.k8s.io/v1
+kind: VerticalPodAutoscaler
+metadata:
+  name: vpa-vtstorage-{{ .name }}
+spec:
+  targetRef:
+    apiVersion: apps/v1
+    kind: StatefulSet
+    name: vtstorage-{{ .name }}
+  updatePolicy:
+    updateMode: Initial
+  resourcePolicy:
+    containerPolicies:
+      - containerName: vtstorage
+        minAllowed:
+          cpu: 25m
+          memory: 64Mi
+        maxAllowed:
+          cpu: 4000m
+          memory: 8Gi
+{{- end }}
+{{- end }}
+{{- if include "monitoring.tracingCentralStore" . }}
+---
+apiVersion: autoscaling.k8s.io/v1
+kind: VerticalPodAutoscaler
+metadata:
+  name: vpa-vmauth-traces-central
+spec:
+  targetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: vmauth-traces-central
+  updatePolicy:
+    updateMode: Initial
+  resourcePolicy:
+    containerPolicies:
+      - containerName: vmauth
+        minAllowed:
+          cpu: 25m
+          memory: 64Mi
+        maxAllowed:
+          cpu: 2000m
+          memory: 2Gi
+{{- end }}

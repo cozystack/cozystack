@@ -1,0 +1,35 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "qdrant.fullname" . }}-headless
+  labels:
+    {{- include "qdrant.labels" . | nindent 4 }}
+    {{- include "qdrant.additionalLabels" . | nindent 4 }}
+    app.kubernetes.io/component: cluster-discovery
+{{- with .Values.service.additionalLabels }}
+{{- toYaml . | nindent 4 }}
+{{- end }}
+{{- if or .Values.service.annotations .Values.additionalAnnotations }}
+  annotations:
+{{- with .Values.additionalAnnotations }}
+    {{- toYaml . | nindent 4 }}
+{{- end }}
+{{- with .Values.service.annotations }}
+    {{- toYaml . | nindent 4 }}
+{{- end }}
+{{- end }}
+spec:
+  clusterIP: None
+  publishNotReadyAddresses: true
+  ports:
+    {{- range .Values.service.ports }}
+    - name: {{ .name }}
+      port: {{ .port }}
+      targetPort: {{ .targetPort }}
+      protocol: {{ .protocol | default "TCP" }}
+      {{- if .appProtocol }}
+      appProtocol: {{ .appProtocol }}
+      {{- end }}
+    {{- end }}
+  selector:
+    {{- include "qdrant.selectorLabels" . | nindent 4 }}

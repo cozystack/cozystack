@@ -1,0 +1,70 @@
+{{- $tlsEnabled := eq (include "qdrant.tls.enabled" .) "true" -}}
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: {{ .Release.Name }}-system
+  labels:
+    sharding.fluxcd.io/key: tenants
+spec:
+  chartRef:
+    kind: ExternalArtifact
+    name: cozystack-qdrant-application-default-qdrant-system
+    namespace: cozy-system
+  interval: 5m
+  timeout: 10m
+  install:
+    remediation:
+      retries: -1
+  upgrade:
+    remediation:
+      retries: -1
+  valuesFrom:
+  - kind: Secret
+    name: cozystack-values
+  values:
+    qdrant:
+      fullnameOverride: {{ .Release.Name }}
+      replicaCount: {{ .Values.replicas }}
+      resources: {{- include "cozy-lib.resources.defaultingSanitize" (list .Values.resourcesPreset .Values.resources $) | nindent 8 }}
+      apiKey: true
+      livenessProbe:
+        enabled: true
+      persistence:
+        size: {{ .Values.size }}
+        {{- with .Values.storageClass }}
+        storageClassName: {{ . }}
+        {{- end }}
+      metrics:
+        serviceMonitor:
+          enabled: true
+      {{- if .Values.external }}
+      service:
+        type: LoadBalancer
+      {{- end }}
+      config:
+        service:
+          enable_tls: {{ $tlsEnabled }}
+        cluster:
+          p2p:
+            enable_tls: {{ $tlsEnabled }}
+        {{- if $tlsEnabled }}
+        tls:
+          cert: /qdrant/tls/tls.crt
+          key: /qdrant/tls/tls.key
+          ca_cert: /qdrant/tls/ca.crt
+        {{- end }}
+      {{- if $tlsEnabled }}
+      podAnnotations:
+        secret.reloader.stakater.com/reload: "{{ .Release.Name }}-tls"
+      additionalVolumes:
+        - name: tls
+          secret:
+            secretName: {{ .Release.Name }}-tls
+      additionalVolumeMounts:
+        - name: tls
+          mountPath: /qdrant/tls
+          readOnly: true
+      {{- else }}
+      additionalVolumes: []
+      additionalVolumeMounts: []
+      {{- end }}

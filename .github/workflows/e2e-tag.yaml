@@ -1,0 +1,456 @@
+name: E2E Release Tag
+
+# Validate the installable release closure for an existing version tag.
+#
+# Every RC must pass this lane after tags.yaml has published the prerelease and
+# pushed its release-X.Y.Z-rc.N digest-pinned staging branch — tags.yaml's
+# rc-e2e job calls this workflow as that mandatory post-cut check. The
+# workflow_dispatch trigger is the manual validation button for published
+# alpha, beta, RC, and stable releases.
+#
+# This lane validates published tags only; draft and promote-time validation are
+# explicitly out of scope because release checks run at RC publication time.
+# Prerelease tags use the matching digest-pinned staging branch, while stable
+# tags use their pinned merge tree directly. The nodes run as Talos containers
+# booted from the upstream image, so the release's nocloud disk is required to
+# exist but is not what the suite runs on. It is still required because users
+# install from it, and promote-rc.yaml checks it for an rc only.
+
+on:
+  workflow_call:
+    inputs:
+      tag:
+        description: "Release tag to validate, e.g. v1.7.0-rc.1"
+        required: true
+        type: string
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to validate, e.g. v1.7.0-rc.1"
+        required: true
+        type: string
+      debug:
+        description: "Open a maintainer SSH breakpoint if E2E fails"
+        required: false
+        default: false
+        type: boolean
+
+concurrency:
+  group: e2e-tag-${{ inputs.tag }}
+  cancel-in-progress: false
+
+# Listing published releases, reading Git refs and checking out the pinned tree
+# require only repository contents read access.
+# Draft releases are not part of this lane's contract. The public GHCR images
+# referenced by that tree need no package token.
+#
+# CALLERS MUST GRANT `contents: read` AND `checks: write`. A caller's permissions
+# are the ceiling for every job here, and GitHub validates that ceiling when it
+# creates the run, before any `if:` is evaluated — so the `checks: write` the e2e
+# job below declares for its dispatch-only breakpoint has to be granted even by a
+# caller whose invocation can never reach that step. Granting less does not
+# degrade the breakpoint; it fails the caller's entire workflow run at startup.
+permissions:
+  contents: read
+
+jobs:
+  resolve:
+    name: Resolve release assets and tree
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      tree_ref: ${{ steps.resolve.outputs.tree_ref }}
+    steps:
+      - name: Validate tag and resolve release
+        id: resolve
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        env:
+          TAG: ${{ inputs.tag }}
+        with:
+          script: |
+            const tag = process.env.TAG;
+            const pattern = /^v[0-9]+\.[0-9]+\.[0-9]+(-(alpha|beta|rc)\.[0-9]+)?$/;
+            if (!pattern.test(tag)) {
+              core.setFailed(`Tag '${tag}' must match vX.Y.Z, vX.Y.Z-alpha.N, vX.Y.Z-beta.N, or vX.Y.Z-rc.N`);
+              return;
+            }
+
+            const isPrerelease = /-(alpha|beta|rc)\.[0-9]+$/.test(tag);
+            const releases = await github.paginate(github.rest.repos.listReleases, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              per_page: 100
+            });
+            const release = releases.find(candidate => candidate.tag_name === tag);
+            if (!release) {
+              core.setFailed(`GitHub release '${tag}' not found`);
+              return;
+            }
+
+            if (release.draft) {
+              core.setFailed(`Release for tag '${tag}' is still a draft — this lane validates published tags only; RC validation runs after tags.yaml publishes the prerelease`);
+              return;
+            } else if (isPrerelease && !release.prerelease) {
+              core.setFailed(`Release '${tag}' must be published as a prerelease`);
+              return;
+            } else if (!isPrerelease && release.prerelease) {
+              core.setFailed(`Release '${tag}' must be published as a stable release`);
+              return;
+            }
+
+            const disk = release.assets.find(asset => asset.name === 'nocloud-amd64.raw.xz');
+            if (!disk) {
+              core.setFailed(`Required asset 'nocloud-amd64.raw.xz' is missing from release '${tag}'`);
+              return;
+            }
+
+            const treeRef = isPrerelease ? `release-${tag.slice(1)}` : tag;
+            const gitRef = isPrerelease ? `heads/${treeRef}` : `tags/${treeRef}`;
+            try {
+              await github.rest.git.getRef({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                ref: gitRef
+              });
+            } catch (error) {
+              if (error.status === 404 && isPrerelease) {
+                core.setFailed(`Expected staging branch '${treeRef}' for prerelease tag '${tag}' was not found`);
+                return;
+              }
+              if (error.status === 404) {
+                core.setFailed(`Expected stable tag ref '${tag}' was not found`);
+                return;
+              }
+              throw error;
+            }
+
+            core.setOutput('tree_ref', treeRef);
+            core.info(`Resolved ${tag}: tree '${treeRef}', disk asset ${disk.id}`);
+
+  e2e:
+    name: E2E ${{ inputs.tag }} (full suite)
+    needs: resolve
+    # The sandbox runs three 8-vCPU / 24-GiB Talos containers. This runner
+    # leaves enough host headroom for networking, containerd, and the runner
+    # agent while the full platform installs across all three nodes.
+    runs-on: oracle-vm-32cpu-128gb-x86-64
+    # Covers a green full suite. It does not cover a tenant-Kubernetes suite
+    # running into its node-join deadline, so a red there can end as a
+    # cancelled job. Held to one figure across every lane that runs the suite.
+    timeout-minutes: 265
+    permissions:
+      contents: read
+      checks: write # Breakpoint action updates its dedicated "Breakpoint Open" Check Run.
+    steps:
+      # The resolved ref is the digest-pinned staging branch for a prerelease,
+      # or the stable tag's pinned merge tree.
+      - name: Checkout resolved release tree
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.resolve.outputs.tree_ref }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Set sandbox ID
+        env:
+          TAG: ${{ inputs.tag }}
+        run: echo "SANDBOX_NAME=cozy-e2e-sandbox-$(echo "${GITHUB_REPOSITORY}:${GITHUB_WORKFLOW}:${TAG}" | sha256sum | cut -c1-10)" >> "$GITHUB_ENV"
+
+      # tags.yaml calls the e2e-tag.yaml from the tag's own commit, so this can
+      # only fire on a dispatch from a newer ref against an older tag.
+      - name: Require a container-lane tree
+        env:
+          TAG: ${{ inputs.tag }}
+        run: |
+          if [ ! -f hack/e2e-compose.yaml ]; then
+            echo "::error title=e2e-tag::${TAG} predates the container lane; dispatch e2e-tag.yaml with --ref ${TAG} to run it on the lane it shipped with"
+            exit 1
+          fi
+
+      - name: Prepare workspace
+        run: |
+          rm -rf "/tmp/$SANDBOX_NAME"
+          cp -r "${{ github.workspace }}" "/tmp/$SANDBOX_NAME"
+
+      # Talos cannot load kernel modules in container mode, so the nodes get
+      # exactly what this host has loaded. Why each module, and why failing
+      # here is better than an hour later: the same step in pull-requests.yaml.
+      - name: Prepare container-lane host
+        run: |
+          set -eu
+          for m in openvswitch zfs; do
+            grep -q "^${m} " /proc/modules && continue
+            if [ "${m}" = zfs ]; then
+              sudo apt-get update -qq
+              sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq zfsutils-linux
+            fi
+            sudo modprobe "${m}" || echo "${m}: modprobe failed"
+          done
+          missing=''
+          for m in openvswitch zfs; do
+            grep -q "^${m} " /proc/modules || missing="${missing} ${m}"
+          done
+          if [ -n "${missing}" ]; then
+            echo "::error title=container-lane host::kernel module(s) could not be loaded:${missing}"
+            exit 1
+          fi
+
+      # This is the only retried stage: Talos container startup and sandbox
+      # networking are pure runner infrastructure, not product logic.
+      - name: Prepare environment
+        run: |
+          cd "/tmp/$SANDBOX_NAME"
+          attempt=0
+          until make SANDBOX_NAME="$SANDBOX_NAME" prepare-env-container; do
+            attempt=$((attempt + 1))
+            if [ $attempt -ge 3 ]; then
+              echo "Attempt $attempt failed, exiting..."
+              exit 1
+            fi
+            echo "Attempt $attempt failed, retrying..."
+            make -C packages/core/testing SANDBOX_NAME="$SANDBOX_NAME" delete-cluster-container || true
+          done
+          echo "Prepare environment completed after $((attempt + 1)) attempts"
+
+      - name: Install Cozystack into sandbox
+        env:
+          # No ARP VIP in container mode: .11 is a plain control-plane node.
+          COZY_APISERVER_ENDPOINT: https://192.168.123.11:6443
+          # The nodes share the runner kernel and cannot load DRBD.
+          COZY_LINSTOR_DRBD_ENABLED: "false"
+          COZY_E2E_STORAGE_CLASS: local
+        run: |
+          cd "/tmp/$SANDBOX_NAME"
+          if ! make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME install-cozystack; then
+            echo "❌ Install failed (no retry — see diagnostics below)"
+            echo "::group::Diagnostics: HelmRelease status"
+            docker exec "$SANDBOX_NAME" sh -c 'kubectl get hr -A -o wide 2>&1 | tail -100' || true
+            echo "::endgroup::"
+            echo "::group::Diagnostics: not-Ready HelmReleases (describe)"
+            docker exec "$SANDBOX_NAME" sh -c 'kubectl get hr -A --no-headers 2>/dev/null | awk "\$4 != \"True\" {print \$1\" \"\$2}"' \
+              | while read -r ns name; do
+                  echo "--- $ns/$name ---"
+                  docker exec "$SANDBOX_NAME" sh -c "kubectl describe hr '$name' -n '$ns' 2>&1 | tail -50" || true
+                done
+            echo "::endgroup::"
+            echo "::group::Diagnostics: recent events"
+            docker exec "$SANDBOX_NAME" sh -c 'kubectl get events -A --sort-by=.lastTimestamp 2>&1 | tail -50' || true
+            echo "::endgroup::"
+            exit 1
+          fi
+
+      - name: Run OpenAPI tests
+        run: |
+          cd "/tmp/$SANDBOX_NAME"
+          make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME test-openapi
+
+      # A tag has no PR diff to scope with Test Impact Analysis. Empty
+      # CHAINSAW_SUITES is the testing Makefile's full-suite mode.
+      - name: Run E2E tests (full suite)
+        id: e2e_tests
+        env:
+          COZY_E2E_STORAGE_CLASS: local
+        run: |
+          cd "/tmp/$SANDBOX_NAME"
+          if ! make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME test-chainsaw CHAINSAW_SUITES=""; then
+            echo "❌ Chainsaw E2E failed (see the assertion diffs or LEAKED-PODS lines above and diagnostics below)"
+            echo "::group::Diagnostics: HelmRelease status"
+            docker exec "$SANDBOX_NAME" sh -c 'kubectl get hr -A -o wide 2>&1 | tail -50' || true
+            echo "::endgroup::"
+            echo "::group::Diagnostics: recent events"
+            docker exec "$SANDBOX_NAME" sh -c 'kubectl get events -A --sort-by=.lastTimestamp 2>&1 | tail -30' || true
+            echo "::endgroup::"
+            # COSI CRDs have no printer columns, so capture readiness fields at
+            # failure time before tests and report collection can move state.
+            echo "::group::Diagnostics: COSI bucket state"
+            docker exec "$SANDBOX_NAME" sh -c '
+              kubectl get bucketclaims.objectstorage.k8s.io -A -o custom-columns="NAMESPACE:.metadata.namespace,NAME:.metadata.name,READY:.status.bucketReady,BUCKET:.status.bucketName" 2>&1
+              kubectl get buckets.objectstorage.k8s.io -o custom-columns="NAME:.metadata.name,READY:.status.bucketReady,ID:.status.bucketID,CLAIMNS:.spec.bucketClaim.namespace" 2>&1
+              kubectl get bucketaccesses.objectstorage.k8s.io -A -o custom-columns="NAMESPACE:.metadata.namespace,NAME:.metadata.name,GRANTED:.status.accessGranted,CLAIM:.spec.bucketClaimName" 2>&1
+            ' || true
+            echo "::endgroup::"
+            exit 1
+          fi
+          echo "✅ All E2E tests passed"
+
+      - name: Collect chainsaw report
+        if: always()
+        run: |
+          cd "/tmp/$SANDBOX_NAME"
+          mkdir -p _out
+          docker cp "$SANDBOX_NAME":/workspace/hack/e2e-chainsaw/chainsaw-report.xml \
+            _out/chainsaw-report.xml || true
+
+      - name: Upload chainsaw report
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: chainsaw-report-${{ inputs.tag }}
+          path: /tmp/${{ env.SANDBOX_NAME }}/_out/chainsaw-report.xml
+          if-no-files-found: ignore
+
+      # collect-report packages cozyreport plus per-failed-test crust-gather
+      # snapshots captured before Chainsaw cleanup.
+      #
+      # A ceiling of its own, not the job's 265 minutes. `Upload cozyreport.tgz`
+      # is the next step and the collector writes its tarball at the very end of
+      # its run, so a read that never returns spends what is left of the job
+      # budget, the job is cancelled, and the upload never runs -- the artifact
+      # is lost rather than truncated. 30 minutes is measured against the step:
+      # it takes 3-42s across sampled runs, failed e2e jobs included.
+      # `continue-on-error` because the ceiling must not change what the job
+      # reports: `|| true` says collecting diagnostics is never fatal, and a step
+      # killed at its ceiling never reaches it.
+      - name: Collect report
+        id: collect_report
+        if: always()
+        timeout-minutes: 30
+        continue-on-error: true
+        run: |
+          cd "/tmp/$SANDBOX_NAME"
+          make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME collect-report || true
+
+      # `continue-on-error` keeps the overrun out of the job's result, which also
+      # keeps it out of everyone's view: a step that ended at its ceiling renders
+      # green and the only trace is in the raw log. This branch's own standard is
+      # that a bound which fires is recorded, and that has to hold for the outer
+      # bound too.
+      #
+      # The wording says what `outcome` establishes and no more. A step can end
+      # non-zero without any ceiling firing -- in e2e-tag.yaml the body opens with
+      # a `cd` into a sandbox tree an earlier step may never have created, and the
+      # default shell is `bash -e` -- so naming the timeout as the cause would be
+      # the same false-mechanism claim the collector refuses to make for a 137.
+      - name: Report collection overran its ceiling
+        if: always() && steps.collect_report.outcome == 'failure'
+        run: |
+          echo "::warning title=cozyreport::Collect report ended non-zero -- its timeout-minutes fired, or the step failed before the collector ran; cozyreport.tgz is missing or partial for this run"
+
+      - name: Upload cozyreport.tgz
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: cozyreport-${{ inputs.tag }}
+          path: /tmp/${{ env.SANDBOX_NAME }}/_out/cozyreport.tgz
+
+      - name: Collect images list
+        if: always()
+        run: |
+          cd "/tmp/$SANDBOX_NAME"
+          make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME collect-images || true
+
+      # Every image the nodes pulled, read from their image stores rather than
+      # from the pods still running, since the tests delete what they create.
+      # That covers chart defaults and operator-launched images the static gate
+      # in tags.yaml never sees, because the tree does not pin them by digest.
+      # A pre-release fails on a single-arch image, on a ref that cannot be
+      # read or is still rate-limited after the retries, or on a list the
+      # collection could not produce; a stable tag only warns, since it ships
+      # its rc's images unchanged. Before teardown, which runs whatever this
+      # step does.
+      - name: Audit pulled images are multi-arch
+        if: always()
+        env:
+          TAG: ${{ inputs.tag }}
+        run: |
+          set -o pipefail
+          cd "/tmp/$SANDBOX_NAME"
+          # A tag cut before the audit existed has neither the script nor the
+          # image list, and its e2e must still be re-runnable from main.
+          if [ ! -f hack/verify-multiarch.sh ]; then
+            echo "::warning title=multi-arch audit::the tree under test predates the multi-arch audit; skipped"
+            exit 0
+          fi
+          mkdir -p _out
+          { command -v skopeo && command -v jq; } >/dev/null \
+            || { sudo apt-get update -qq && sudo apt-get install -y -qq skopeo jq; }
+          status=0
+          hack/verify-multiarch.sh --refs-file _out/image-refs.txt 2>&1 | tee _out/multiarch-audit.txt \
+            || status=${PIPESTATUS[0]}
+          if [ "$status" -ne 0 ]; then
+            case "$TAG" in
+              *-*) exit 1 ;;
+            esac
+            # 1: the audit ran and flagged refs (single-arch, unreadable or
+            # rate-limited); anything else: it did not run.
+            if [ "$status" -eq 1 ]; then
+              echo "::warning title=multi-arch audit::some images pulled by e2e are not amd64+arm64 indexes or could not be checked; see multiarch-audit.txt"
+            else
+              echo "::warning title=multi-arch audit::the multi-arch audit did not run; see multiarch-audit.txt"
+            fi
+          fi
+
+      - name: Upload image list
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: image-list-${{ inputs.tag }}
+          path: |
+            /tmp/${{ env.SANDBOX_NAME }}/_out/images.txt
+            /tmp/${{ env.SANDBOX_NAME }}/_out/image-refs.txt
+            /tmp/${{ env.SANDBOX_NAME }}/_out/multiarch-audit.txt
+
+      # ▸ Open an SSH breakpoint to the failing sandbox so maintainers can attach,
+      #   inspect Talos/Cozystack state and resume with `breakpoint resume`.
+      #
+      #   Gated by the workflow_dispatch `debug` boolean and the configured
+      #   BREAKPOINT_ENDPOINT repository variable. workflow_call runs never get
+      #   a breakpoint. authorized-users is kept as a second defense layer at
+      #   the breakpoint level.
+      #
+      #   Uses cozystack/breakpoint-action (fork of namespacelabs/breakpoint-action)
+      #   pinned by SHA. The fork adds: pause-idle mode (initial grace period for
+      #   the first SSH connection, idle-aware exit afterwards), endpoint output
+      #   and ::notice:: annotation, and a dedicated Check Run "Breakpoint Open"
+      #   that carries the SSH endpoint in output.summary while the breakpoint is
+      #   paused (conclusion=failure → standard ✗ in checks; updated to
+      #   conclusion=success when the breakpoint exits).
+      - name: Breakpoint on E2E failure
+        if: |
+          failure() &&
+          github.event_name == 'workflow_dispatch' &&
+          inputs.debug == true &&
+          vars.BREAKPOINT_ENDPOINT != ''
+        # cozystack/breakpoint-action v2-cozy.1
+        # mode: pause-idle defaults: grace-period=20m, idle-timeout=10m
+        uses: cozystack/breakpoint-action@a6f3a6f87be398ad63b6577351e3398e53f578e4
+        with:
+          mode: pause-idle
+          endpoint: ${{ vars.BREAKPOINT_ENDPOINT }}
+          authorized-users: androndo, Arsolitt, IvanHunters, kvaps, lexfrei, lllamnyp, mattia-eleuteri, matthieu-robin, myasnikovdaniil, sircthulhu, tym83
+          check-run-name: "Breakpoint Open"
+          github-token: ${{ github.token }}
+          check-run-summary-template: |
+            ## 🔴 SSH breakpoint open — paused for debug
+
+            ```
+            {endpoint}
+            ```
+
+            Enter the e2e sandbox after SSH:
+            ```
+            docker exec -ti $(docker ps --filter name=cozy-e2e-sandbox -q | head -1) bash
+            export KUBECONFIG=/workspace/kubeconfig
+            ```
+
+            Resume from inside: `breakpoint resume`. Otherwise the breakpoint
+            exits 10 minutes after the last SSH session disconnects.
+
+      # The compose project owns the nodes and the zpools outlive it, so both
+      # halves go, in this order.
+      - name: Tear down sandbox
+        if: always()
+        run: |
+          make -C packages/core/testing SANDBOX_NAME="$SANDBOX_NAME" delete-cluster-container || true
+          make -C packages/core/testing SANDBOX_NAME="$SANDBOX_NAME" delete || true
+
+      - name: Remove workspace
+        if: always()
+        run: rm -rf "/tmp/${SANDBOX_NAME:?}"
+
+      - name: Summarize outcome
+        if: always()
+        env:
+          OUTCOME: ${{ job.status }}
+          TAG: ${{ inputs.tag }}
+        run: printf '| E2E tag `%s` | %s |\n' "$TAG" "$OUTCOME" >> "$GITHUB_STEP_SUMMARY"

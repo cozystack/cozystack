@@ -1,0 +1,63 @@
+{{/*
+  ValidatingAdmissionPolicy that blocks DELETE on any object carrying the
+  platform.cozystack.io/no-delete=true label. Native, in-process CEL eval —
+  no webhook DaemonSet, no Service, no TLS, no image to maintain.
+
+  Requires Kubernetes 1.30+ (ValidatingAdmissionPolicy GA). The capability
+  gate below keeps the template renderable on clusters that pre-date 1.30
+  (the install simply skips the guardrail there).
+
+  Bypass: remove the label, then delete. Pass --namespace for namespaced
+  resources (omit it for cluster-scoped objects like CRDs and Namespaces).
+    kubectl label <kind> <name> --namespace <ns> platform.cozystack.io/no-delete-
+
+  Self-protection is sequential, not bilateral: both the VAP and the Binding
+  carry the no-delete label, but either one can be unlabeled and deleted
+  first — once the Binding is gone, the VAP is unenforced and can be deleted
+  without the dance, and vice versa. The labeling is operational guidance,
+  not adversarial defense. Whole-chart teardown is via `make unprotect` (see
+  packages/core/platform/Makefile), which strips the label from every
+  guarded object so `helm uninstall` can proceed.
+
+  failurePolicy is intentionally omitted: the validation expression is the
+  literal `false`, so CEL evaluation cannot fail and the default (Fail) is
+  unreachable in practice. Setting it explicitly would be misleading config.
+*/}}
+{{- if .Capabilities.APIVersions.Has "admissionregistration.k8s.io/v1/ValidatingAdmissionPolicy" }}
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: cozystack-no-delete-guardrail
+  labels:
+    platform.cozystack.io/no-delete: "true"
+spec:
+  matchConstraints:
+    resourceRules:
+    - apiGroups:   ["*"]
+      apiVersions: ["*"]
+      operations:  ["DELETE"]
+      resources:   ["*/*"]
+      scope:       "*"
+  validations:
+  - expression: "false"
+    message: >-
+      Deletion blocked: object carries platform.cozystack.io/no-delete=true.
+      To bypass, first remove the label:
+      kubectl label <kind> <name> --namespace <ns> platform.cozystack.io/no-delete-
+      (omit --namespace for cluster-scoped resources)
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: cozystack-no-delete-guardrail
+  labels:
+    platform.cozystack.io/no-delete: "true"
+spec:
+  policyName: cozystack-no-delete-guardrail
+  validationActions: [Deny]
+  matchResources:
+    objectSelector:
+      matchLabels:
+        platform.cozystack.io/no-delete: "true"
+{{- end }}

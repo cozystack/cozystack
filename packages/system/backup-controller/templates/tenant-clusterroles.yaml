@@ -1,0 +1,44 @@
+---
+# == backup view cluster role ==
+# Aggregated into cozy-tenant-view (and consequently use, admin, super-admin)
+# Provides read-only access to all backup resources
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: cozy:backups:view
+  labels:
+    rbac.cozystack.io/aggregate-to-tenant-view: "true"
+rules:
+- apiGroups: ["backups.cozystack.io"]
+  resources:
+  - plans
+  - backupjobs
+  - restorejobs
+  - backups
+  - backupclasses
+  verbs:
+  - get
+  - list
+  - watch
+---
+# == backup admin cluster role ==
+# Aggregated into cozy-tenant-admin (and consequently super-admin)
+# Provides write access to plans, backupjobs, restorejobs
+# Backups and backupclasses remain read-only (inherited from view)
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: cozy:backups:admin
+  labels:
+    rbac.cozystack.io/aggregate-to-tenant-admin: "true"
+rules:
+- apiGroups: ["backups.cozystack.io"]
+  resources:
+  - plans
+  - backupjobs
+  - restorejobs
+  verbs:
+  - create
+  - update
+  - patch
+  - delete

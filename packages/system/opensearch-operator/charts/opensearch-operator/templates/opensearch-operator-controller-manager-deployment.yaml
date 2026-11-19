@@ -1,0 +1,114 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    control-plane: controller-manager
+  name: {{ include "opensearch-operator.fullname" . }}-controller-manager
+spec:
+  replicas: {{ .Values.manager.replicaCount | default 1 }}
+  {{- if le (int (.Values.manager.replicaCount | default 1)) 1 }}
+  # Leader election is gated off on a single replica, so a rollout should not run two
+  # managers side by side. maxSurge: 0 caps total pods at replicas, so the old manager is
+  # scaled down before the new one is scaled up (maxUnavailable: 1 permits the gap),
+  # unlike the default 25% surge which starts a second manager while the first is fully
+  # live. This is not Recreate's exclusivity: the old manager may still be draining
+  # in-flight reconciles (up to terminationGracePeriodSeconds) as the new one starts.
+  # Recreate cannot be used here: under server-side apply (helm-controller's default) the
+  # apiserver-defaulted rollingUpdate block on an existing Deployment is not owned by the
+  # helm-controller field manager, so switching type to Recreate does not clear it and the
+  # merged object is rejected as invalid ("spec.strategy.rollingUpdate: Forbidden").
+  # Multi-replica installs keep the default (25%) with leader election on.
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 0
+      maxUnavailable: 1
+  {{- end }}
+  selector:
+    matchLabels:
+      control-plane: controller-manager
+  template:
+    metadata:
+      labels:
+        control-plane: controller-manager
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      containers:
+      {{- if or (.Values.kubeRbacProxy.enable) (eq (.Values.kubeRbacProxy.enable | toString) "<nil>") }}
+      - args:
+        - --secure-listen-address=0.0.0.0:8443
+        - --upstream=http://127.0.0.1:8080/
+        - --proxy-endpoints-port=10443
+        - --logtostderr=true
+        - --v=10
+        image: "{{ .Values.kubeRbacProxy.image.repository }}:{{ .Values.kubeRbacProxy.image.tag}}"
+        name: kube-rbac-proxy
+        resources:
+{{- toYaml .Values.kubeRbacProxy.resources | nindent 10 }}
+        readinessProbe:
+{{- toYaml .Values.kubeRbacProxy.readinessProbe | nindent 10 }}
+        livenessProbe:
+{{- toYaml .Values.kubeRbacProxy.livenessProbe | nindent 10 }}
+        securityContext:
+{{- toYaml .Values.kubeRbacProxy.securityContext | nindent 10 }}
+        ports:
+        - containerPort: 8443
+          name: https
+        - containerPort: 10443
+          name: https-proxy
+          protocol: TCP
+      {{- end}}
+      - args:
+        - --health-probe-bind-address=:8081
+        - --metrics-bind-address=127.0.0.1:8080
+        {{- if gt (int (.Values.manager.replicaCount | default 1)) 1 }}
+        - --leader-elect
+        {{- end }}
+        {{- if .Values.manager.watchNamespace }}
+        - --watch-namespace={{ .Values.manager.watchNamespace }}
+        {{- end }}
+        - --loglevel={{ .Values.manager.loglevel }}
+        command:
+        - /manager
+        image: "{{ .Values.manager.image.repository }}:{{ .Values.manager.image.tag | default .Chart.AppVersion }}"
+        name: operator-controller-manager
+        imagePullPolicy: "{{ .Values.manager.image.pullPolicy }}"
+        resources:
+{{- toYaml .Values.manager.resources | nindent 10 }}
+        readinessProbe:
+{{- toYaml .Values.manager.readinessProbe | nindent 10 }}
+        livenessProbe:
+{{- toYaml .Values.manager.livenessProbe | nindent 10 }}
+        env:
+        - name: DNS_BASE
+          value: {{ .Values.manager.dnsBase }}
+        - name: PARALLEL_RECOVERY_ENABLED
+          value: "{{ .Values.manager.parallelRecoveryEnabled }}"
+        - name: PPROF_ENDPOINTS_ENABLED
+          value: "{{ .Values.manager.pprofEndpointsEnabled }}"
+        {{- if .Values.manager.extraEnv }}
+        {{- toYaml .Values.manager.extraEnv | nindent 10 }}
+        {{- end }}
+        securityContext:
+{{- toYaml .Values.manager.securityContext | nindent 10 }}
+      nodeSelector:
+{{- toYaml .Values.nodeSelector | nindent 8 }}
+      tolerations:
+{{- toYaml .Values.tolerations | nindent 8 }}
+      securityContext:
+{{- toYaml .Values.securityContext | nindent 8 }}
+      {{- if .Values.manager.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml .Values.manager.imagePullSecrets | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "opensearch-operator.serviceAccountName" . }}
+      terminationGracePeriodSeconds: 10
+      {{- if .Values.priorityClassName }}
+      priorityClassName: {{ .Values.priorityClassName }}
+      {{- end }}

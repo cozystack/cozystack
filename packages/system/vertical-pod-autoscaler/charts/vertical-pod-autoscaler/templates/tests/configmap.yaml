@@ -1,0 +1,51 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "vertical-pod-autoscaler.tests.fullname" . }}
+  namespace: {{ include "common.names.namespace" . | quote }}
+  labels:
+    {{- include "vertical-pod-autoscaler.tests.labels" . | nindent 4 }}
+    {{- if .Values.commonLabels }}
+    {{- include "common.tplvalues.render" ( dict "value" .Values.commonLabels "context" $ ) | nindent 4 }}
+    {{- end }}
+  annotations:
+    helm.sh/hook: test
+    {{- if .Values.commonAnnotations }}
+    {{- include "common.tplvalues.render" ( dict "value" .Values.commonAnnotations "context" $ ) | nindent 4 }}
+    {{- end }}
+data:
+  test_all.py: |
+    import requests
+
+
+    def test_admission_controller_service_connection():
+        url = "https://vpa-webhook.{{ include "common.names.namespace" . }}.svc:{{ .Values.admissionController.service.ports.https }}/"
+        verify = "/admission-controller-tls-secret/ca.crt"
+
+        response = requests.get(url, verify=verify)
+
+        assert response.status_code == 200
+
+
+    def test_admission_controller_metrics_service_connection():
+        url = "http://{{ include "vertical-pod-autoscaler.admissionController.metrics.fullname" . }}:{{ .Values.admissionController.metrics.service.ports.metrics }}/metrics"
+
+        response = requests.get(url)
+
+        assert response.status_code == 200
+
+
+    def test_recommender_metrics_service_connection():
+        url = "http://{{ include "vertical-pod-autoscaler.recommender.metrics.fullname" . }}:{{ .Values.recommender.metrics.service.ports.metrics }}/metrics"
+
+        response = requests.get(url)
+
+        assert response.status_code == 200
+
+
+    def test_updater_metrics_service_connection():
+        url = "http://{{ include "vertical-pod-autoscaler.updater.metrics.fullname" . }}:{{ .Values.updater.metrics.service.ports.metrics }}/metrics"
+
+        response = requests.get(url)
+
+        assert response.status_code == 200

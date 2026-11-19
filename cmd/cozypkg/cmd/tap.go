@@ -1,0 +1,658 @@
+/*
+Copyright 2025 The Cozystack Authors.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
+package cmd
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"io"
+	"regexp"
+	"strings"
+	"time"
+
+	cozyv1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
+	"github.com/cozystack/cozystack/internal/marketplace/collision"
+	"github.com/cozystack/cozystack/internal/marketplace/tapconst"
+	fluxmeta "github.com/fluxcd/pkg/apis/meta"
+	sourcev1 "github.com/fluxcd/source-controller/api/v1"
+	"github.com/spf13/cobra"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
+	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	"k8s.io/client-go/rest"
+	"k8s.io/client-go/tools/clientcmd"
+	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+
+	_ "k8s.io/client-go/plugin/pkg/client/auth"
+)
+
+const (
+	// cozySystemNamespace is where tap creates the Flux source, alongside the
+	// platform and External-Apps sources.
+	cozySystemNamespace = "cozy-system"
+)
+
+var tapCmdFlags struct {
+	secret       string
+	tag          string
+	kubeconfig   string
+	index        string
+	skipValidate bool
+	certIdentity string
+	certIssuer   string
+}
+
+// ociRef is the parsed form of an oci:// reference.
+type ociRef struct {
+	// URL is the reference without any tag/digest, e.g. oci://ghcr.io/org/repo.
+	URL string
+	Org string
+	// Repo is the last path segment.
+	Repo string
+	Tag  string
+	// Digest, when set, pins the exact content (sha256:<64 hex>). It takes
+	// precedence over Tag at pull time (Flux resolves digest before tag), so a
+	// digest-pinned reference never follows a moved tag.
+	Digest string
+}
+
+// pullRef is the reference to pull: by digest when one is pinned (so the pull
+// resolves the exact content regardless of where the tag points), otherwise by
+// tag.
+func (r ociRef) pullRef() string {
+	if r.Digest != "" {
+		return r.URL + "@" + r.Digest
+	}
+	return r.URL + ":" + r.Tag
+}
+
+var sanitizeName = regexp.MustCompile(`[^a-z0-9-]+`)
+
+// ociDigestRe matches a full OCI manifest digest (sha256:<64 hex>), the same
+// shape the platform source's "digest=" reference enforces.
+var ociDigestRe = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
+
+// parseOCIRef splits an oci:// reference into its URL (without tag), org, repo,
+// and tag. A missing tag defaults to "latest".
+func parseOCIRef(ref string) (ociRef, error) {
+	if !strings.HasPrefix(ref, "oci://") {
+		return ociRef{}, fmt.Errorf("reference %q must start with oci://", ref)
+	}
+	body := strings.TrimPrefix(ref, "oci://")
+
+	// A digest pins the exact content (oci://host/org/repo@sha256:...). An
+	// optional tag may precede it and is then informational only. The digest
+	// must be a full sha256:<64 hex>, the same contract the platform source's
+	// "digest=" reference enforces.
+	digest := ""
+	if at := strings.LastIndex(body, "@"); at >= 0 {
+		digest = body[at+1:]
+		body = body[:at]
+		if !ociDigestRe.MatchString(digest) {
+			return ociRef{}, fmt.Errorf("invalid digest %q in reference %q: want sha256:<64 hex>", digest, ref)
+		}
+	}
+
+	tag := ""
+	if colon := strings.LastIndex(body, ":"); colon >= 0 && !strings.Contains(body[colon:], "/") {
+		tag = body[colon+1:]
+		body = body[:colon]
+	}
+
+	segs := strings.Split(strings.Trim(body, "/"), "/")
+	if len(segs) < 2 {
+		return ociRef{}, fmt.Errorf("reference %q must include at least a host and a repository path", ref)
+	}
+	repo := segs[len(segs)-1]
+	org := ""
+	if len(segs) >= 3 {
+		org = segs[len(segs)-2]
+	}
+	// Default to latest only when neither a tag nor a digest pins the content.
+	if tag == "" && digest == "" {
+		tag = "latest"
+	}
+	return ociRef{URL: "oci://" + body, Org: org, Repo: repo, Tag: tag, Digest: digest}, nil
+}
+
+// fluxSourceName is the RFC-1123 name of the OCIRepository tap creates. It
+// names the Flux source object in cozy-system, not the app-facing PackageSource:
+// a tapped repository keeps its own declared PackageSource name(s). The neutral
+// "tap-" prefix distinguishes it from platform sources without namespacing the
+// packages under "community.".
+func fluxSourceName(r ociRef) string {
+	base := r.Repo
+	if r.Org != "" {
+		base = r.Org + "-" + r.Repo
+	}
+	return "tap-" + sanitizeName.ReplaceAllString(strings.ToLower(base), "-")
+}
+
+// buildTapOCIRepository mirrors the operator's generateOCIRepository: an
+// OCIRepository in cozy-system, 5m interval, a tag and/or digest reference,
+// optional pull-credential secretRef (the private-tap credential, symmetric
+// with #2472). A tag-only reference is pinned to a digest later by the tap
+// materializer; an explicit digest is pinned here at connect time.
+func buildTapOCIRepository(name string, r ociRef, secret string, verify *sourcev1.OCIRepositoryVerification) *sourcev1.OCIRepository {
+	obj := &sourcev1.OCIRepository{
+		TypeMeta: metav1.TypeMeta{
+			APIVersion: sourcev1.GroupVersion.String(),
+			Kind:       sourcev1.OCIRepositoryKind,
+		},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: cozySystemNamespace,
+			// Mark the source as a tap and record its own object name, so the
+			// dashboard's orphan-disconnect (deleteOrphanTapSource) and the
+			// operator's materializer recognise a CLI-created source too.
+			Labels:      map[string]string{tapconst.Label: "true"},
+			Annotations: map[string]string{tapconst.NameAnnotation: name},
+		},
+		Spec: sourcev1.OCIRepositorySpec{
+			URL:       r.URL,
+			Interval:  metav1.Duration{Duration: 5 * time.Minute},
+			Reference: &sourcev1.OCIRepositoryRef{Tag: r.Tag, Digest: r.Digest},
+		},
+	}
+	if secret != "" {
+		obj.Spec.SecretRef = &fluxmeta.LocalObjectReference{Name: secret}
+	}
+	if verify != nil {
+		obj.Spec.Verify = verify
+	}
+	return obj
+}
+
+// carryoverSourceFields preserves an existing tap source's verification policy
+// and pull credential when this invocation did not set them from flags, so a
+// re-tap (e.g. to move the pin to a new tag) never silently drops signature
+// verification or the pull secret. A server-side apply that omits a field this
+// field owner previously set would otherwise remove it, which the API connect
+// path (rest.go) deliberately avoids; this keeps the CLI symmetric with it.
+func carryoverSourceFields(obj, existing *sourcev1.OCIRepository, flagVerify *sourcev1.OCIRepositoryVerification, flagSecret string) {
+	if existing == nil {
+		return
+	}
+	if flagVerify == nil && existing.Spec.Verify != nil {
+		obj.Spec.Verify = existing.Spec.Verify
+	}
+	if flagSecret == "" && existing.Spec.SecretRef != nil {
+		obj.Spec.SecretRef = existing.Spec.SecretRef
+	}
+}
+
+// tapVerification builds a keyless cosign verification policy from the connect
+// flags, or nil when neither is set. Both the certificate identity (subject)
+// and the OIDC issuer are required together: a policy that verified a signature
+// without pinning who signed it would be worse than none. Both are Go regular
+// expressions at the Flux layer, so an exact identity should be anchored.
+func tapVerification(identity, issuer string) (*sourcev1.OCIRepositoryVerification, error) {
+	if identity == "" && issuer == "" {
+		return nil, nil
+	}
+	if identity == "" || issuer == "" {
+		return nil, fmt.Errorf("keyless signature verification needs both --certificate-identity and --certificate-oidc-issuer")
+	}
+	// Flux treats Issuer and Subject as Go regexps, so anchor and quote them for
+	// an exact match: an unanchored identity would also accept a superstring
+	// (e.g. alice@example.com matching malice@example.com).
+	return &sourcev1.OCIRepositoryVerification{
+		Provider: "cosign",
+		MatchOIDCIdentity: []sourcev1.OIDCIdentityMatch{{
+			Issuer:  "^" + regexp.QuoteMeta(issuer) + "$",
+			Subject: "^" + regexp.QuoteMeta(identity) + "$",
+		}},
+	}, nil
+}
+
+// rewritePackageSourceForTap prepares a PackageSource read from the artifact for
+// apply: it keeps the repository's own declared name (no community rename),
+// clears server-set metadata, stamps the tap marker (label + source annotation)
+// so the source is identifiable without a name prefix, and repoints its
+// sourceRef at the OCIRepository tap created. Variants/components are preserved.
+func rewritePackageSourceForTap(ps *cozyv1alpha1.PackageSource, sourceName, sourcePath string) {
+	ps.SetResourceVersion("")
+	ps.SetUID("")
+
+	labels := ps.GetLabels()
+	if labels == nil {
+		labels = map[string]string{}
+	}
+	labels[tapconst.Label] = "true"
+	ps.SetLabels(labels)
+
+	anns := ps.GetAnnotations()
+	if anns == nil {
+		anns = map[string]string{}
+	}
+	anns[tapconst.SourceAnnotation] = sourceName
+	ps.SetAnnotations(anns)
+
+	if sourcePath == "" {
+		sourcePath = "/"
+	}
+	ps.Spec.SourceRef = &cozyv1alpha1.PackageSourceRef{
+		Kind:      sourcev1.OCIRepositoryKind,
+		Name:      sourceName,
+		Namespace: cozySystemNamespace,
+		Path:      sourcePath,
+	}
+}
+
+// resetTapPinState prepares a tap's OCIRepository for a re-tap. It clears the
+// materialized-revision annotation so the next reconcile does not short-circuit
+// on the unchanged revision and re-materializes its PackageSources (recovering
+// one removed out-of-band), and the pinned-digest annotation so the operator
+// re-pins the newly requested reference. For a tag-based re-tap (explicitDigest
+// false) it also drops the operator's prior digest pin from spec.ref: a
+// server-side apply under field owner cozypkg cannot clear a field the operator
+// owns, so a moved tag would otherwise stay pinned to the old digest. An
+// explicit-digest re-tap keeps the digest the apply itself set. A no-op (and no
+// error) when the source is absent or there is nothing to clear.
+func resetTapPinState(ctx context.Context, k8sClient client.Client, srcName string, explicitDigest bool) error {
+	reg := &sourcev1.OCIRepository{}
+	if err := k8sClient.Get(ctx, client.ObjectKey{Name: srcName, Namespace: cozySystemNamespace}, reg); err != nil {
+		return client.IgnoreNotFound(err)
+	}
+	base := reg.DeepCopy()
+	changed := false
+	if _, ok := reg.Annotations[tapconst.MaterializedRevisionAnnotation]; ok {
+		delete(reg.Annotations, tapconst.MaterializedRevisionAnnotation)
+		changed = true
+	}
+	if _, ok := reg.Annotations[tapconst.PinnedDigestAnnotation]; ok {
+		delete(reg.Annotations, tapconst.PinnedDigestAnnotation)
+		changed = true
+	}
+	if !explicitDigest && reg.Spec.Reference != nil && reg.Spec.Reference.Digest != "" {
+		reg.Spec.Reference.Digest = ""
+		changed = true
+	}
+	if !changed {
+		return nil
+	}
+	return k8sClient.Patch(ctx, reg, client.MergeFrom(base))
+}
+
+func tapScheme() *runtime.Scheme {
+	scheme := runtime.NewScheme()
+	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
+	utilruntime.Must(cozyv1alpha1.AddToScheme(scheme))
+	utilruntime.Must(sourcev1.AddToScheme(scheme))
+	return scheme
+}
+
+func newClusterClient(kubeconfig string) (client.Client, error) {
+	var config *rest.Config
+	var err error
+	if kubeconfig != "" {
+		config, err = clientcmd.BuildConfigFromFlags("", kubeconfig)
+	} else {
+		config, err = ctrl.GetConfig()
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to load kubeconfig: %w", err)
+	}
+	return client.New(config, client.Options{Scheme: tapScheme()})
+}
+
+var tapCmd = &cobra.Command{
+	Use:   "tap <oci-ref>",
+	Short: "Register an external External-Apps repository as a PackageSource",
+	Long: `Tap registers an external repository published as an OCI artifact: it
+creates a Flux OCIRepository pointing at the artifact and the PackageSource(s)
+the artifact carries, under the names the repository declares. A name that
+clashes with a core component (or another tap) is rejected, so an external
+package can never silently shadow an official one. Tapping installs nothing: it
+makes the repository's apps available as PackageSources. Install an app with
+'cozypkg add <name>'; a privileged install component is not installed until you
+confirm it with 'cozypkg add --allow-privileged'. Tapping is idempotent. Creating
+cluster-scoped resources requires cluster-admin.
+
+With --secret the OCIRepository is given a pull-credential secretRef (the
+admin pre-creates the Secret in cozy-system), so a private repository taps in
+one command.
+
+Pinning: a tapped repository does not follow a moving tag. A reference given by
+digest (oci://host/org/repo@sha256:...) is pinned to that digest immediately; a
+tag reference is pinned to the digest it currently resolves to as soon as the
+source materializes, with the tag kept informational. Moving the tag upstream
+changes nothing in the cluster; tap the repository again to move the pin.
+
+Trust: tap validates the artifact's structure. Keyless signature verification at
+pull time is enabled with --certificate-identity and --certificate-oidc-issuer,
+which set a Flux cosign verify policy on the source so content is pulled only
+when signed by that identity. Signature verification at publication time is the
+community index's job ('cozypkg validate --require-signature' in the index CI
+gate, pinned to the entry's recorded identity). Installing an app from a tapped repository
+runs its charts in your management cluster: tap only sources you trust.`,
+	Args: cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		ctx := context.Background()
+		target, err := resolveTapTarget(args[0], defaultIndexRef(tapCmdFlags.index))
+		if err != nil {
+			return err
+		}
+		ref, err := parseOCIRef(target)
+		if err != nil {
+			return err
+		}
+		if tapCmdFlags.tag != "" {
+			if ref.Digest != "" {
+				return fmt.Errorf("--tag cannot override the digest in %q; drop the digest or the --tag flag", args[0])
+			}
+			ref.Tag = tapCmdFlags.tag
+		}
+		verify, err := tapVerification(tapCmdFlags.certIdentity, tapCmdFlags.certIssuer)
+		if err != nil {
+			return err
+		}
+
+		// With verification flags set, verify the signature now and pin the verified
+		// digest, so the artifact we pull and the PackageSources we apply are the
+		// exact content a trusted identity signed. Without this the CLI would apply
+		// an unverified tag pull (only the Flux source would carry the policy), so a
+		// moved tag could land unsigned PackageSource content in the cluster before
+		// the operator re-materialized.
+		if verify != nil {
+			verifiedDigest, verr := verifyCosignSignature(ref.pullRef(), tapCmdFlags.certIdentity, tapCmdFlags.certIssuer)
+			if verr != nil {
+				return verr
+			}
+			// Fail closed: a verified signature with no parseable digest must not
+			// fall back to an unpinned tag pull, which would reopen the tag-mutation
+			// window between verify and pull.
+			if verifiedDigest == "" {
+				return fmt.Errorf("cosign verified %q but returned no manifest digest; refusing to pull by an unpinned tag", ref.pullRef())
+			}
+			if ref.Digest == "" {
+				ref.Digest = verifiedDigest
+			}
+		}
+
+		// Pull first: an unreachable/invalid ref must fail before any cluster
+		// resource is created (no half-created source).
+		fullRef := ref.pullRef()
+		dir, cleanup, err := pullOCIArtifact(fullRef)
+		if err != nil {
+			return err
+		}
+		defer cleanup()
+
+		if !tapCmdFlags.skipValidate {
+			rep, err := ValidateRepo(ValidateOptions{RepoRoot: dir})
+			if err != nil {
+				return err
+			}
+			if rep.HasErrors() {
+				errs, _, _ := rep.Counts()
+				return errors.Join(fmt.Errorf("refusing to tap: artifact failed validation with %d error(s) (use --skip-validate to override)", errs), printReport(rep, cmd.OutOrStdout()))
+			}
+		}
+
+		report := &Report{}
+		sources, _ := loadManifests(dir, report)
+		if len(sources) == 0 {
+			return fmt.Errorf("artifact at %s carries no PackageSource manifest", fullRef)
+		}
+
+		srcName := fluxSourceName(ref)
+		ociRepo := buildTapOCIRepository(srcName, ref, tapCmdFlags.secret, verify)
+
+		toApply := make([]client.Object, 0, len(sources)+1)
+		toApply = append(toApply, ociRepo)
+		names := make([]string, 0, len(sources))
+		for i := range sources {
+			ps := sources[i].PS.DeepCopy()
+			origPath := ""
+			if ps.Spec.SourceRef != nil {
+				origPath = ps.Spec.SourceRef.Path
+			}
+			rewritePackageSourceForTap(ps, srcName, origPath)
+			toApply = append(toApply, ps)
+			names = append(names, ps.GetName())
+		}
+
+		k8sClient, err := newClusterClient(tapCmdFlags.kubeconfig)
+		if err != nil {
+			return err
+		}
+
+		// Refuse to silently retarget an existing tap: two repositories that
+		// share an org/repo path on different hosts derive the same source name,
+		// and a force-apply would repoint the first at the second.
+		existing := &sourcev1.OCIRepository{}
+		if err := k8sClient.Get(ctx, client.ObjectKey{Name: srcName, Namespace: cozySystemNamespace}, existing); err == nil {
+			if existing.Spec.URL != "" && existing.Spec.URL != ref.URL {
+				return fmt.Errorf("a different repository (%s) is already tapped as %q; run 'cozypkg untap %s' before tapping %s", existing.Spec.URL, srcName, names[0], ref.URL)
+			}
+			// Same repository, re-tapped: carry over a verify policy or pull secret
+			// this invocation did not set, so moving the pin never silently drops them.
+			carryoverSourceFields(ociRepo, existing, verify, tapCmdFlags.secret)
+		}
+
+		// A tapped repository keeps its own declared name. Refuse the whole tap
+		// if any declared name clashes with an existing core component or a
+		// different tap, rather than silently overwriting it on apply.
+		for _, n := range names {
+			if err := collision.PackageSourceName(ctx, k8sClient, n, srcName); err != nil {
+				return err
+			}
+		}
+
+		// Only roll back objects this invocation actually created; a re-tap is
+		// idempotent and must not delete resources that pre-existed it.
+		created := make([]client.Object, 0, len(toApply))
+		patchOptions := []client.PatchOption{client.FieldOwner("cozypkg"), client.ForceOwnership}
+		for _, obj := range toApply {
+			preExisted := objectExists(ctx, k8sClient, obj)
+			if err := k8sClient.Patch(ctx, obj, client.Apply, patchOptions...); err != nil {
+				for _, done := range created {
+					_ = k8sClient.Delete(ctx, done)
+				}
+				return fmt.Errorf("failed to apply %T %s: %w", obj, obj.GetName(), err)
+			}
+			if !preExisted {
+				created = append(created, obj)
+			}
+		}
+
+		// Force a fresh materialization on this tap: clear the materialized-revision
+		// annotation so the operator does not short-circuit on the unchanged
+		// artifact revision. This makes a re-tap the supported recovery for a
+		// PackageSource removed out-of-band since the last materialization. Tapping
+		// no longer installs anything, so a re-tap does NOT re-install an app removed
+		// with `cozypkg del`; re-install it with `cozypkg add`. A first tap has no
+		// such annotation, so this is a no-op then. resetTapPinState also drops the
+		// operator's prior digest pin so the newly requested tag re-resolves.
+		if err := resetTapPinState(ctx, k8sClient, srcName, ref.Digest != ""); err != nil {
+			_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "warning: could not reset materialization state on OCIRepository/%s: %v\n", srcName, err)
+		}
+
+		return writeTapSummary(cmd.OutOrStdout(), fullRef, srcName, names)
+	},
+}
+
+// writeTapSummary reports what a tap created. The tap is applied by then, so a
+// summary that cannot be written fails the command while saying so.
+func writeTapSummary(w io.Writer, fullRef, srcName string, names []string) error {
+	var b strings.Builder
+	fmt.Fprintf(&b, "Tapped %s\n  OCIRepository/%s\n", fullRef, srcName)
+	for _, n := range names {
+		fmt.Fprintf(&b, "  PackageSource/%s\n", n)
+	}
+	b.WriteString("Tapping installs nothing. Install an app with:\n")
+	for _, n := range names {
+		fmt.Fprintf(&b, "  cozypkg add %s\n", n)
+	}
+	b.WriteString("A privileged install component is not installed until you confirm it with 'cozypkg add --allow-privileged'.\n")
+	if _, err := io.WriteString(w, b.String()); err != nil {
+		return fmt.Errorf("tap applied, but writing its summary failed: %w", err)
+	}
+	return nil
+}
+
+var untapCmd = &cobra.Command{
+	Use:   "untap <packagesource-name>",
+	Short: "Remove a tapped repository",
+	Long: `Untap removes a tapped PackageSource and its Flux source. A tap-managed
+registration Package left by an older Cozystack (one that registered apps on
+connect) is removed too, de-registering those apps. An app you installed yourself
+with 'cozypkg add' is left installed: untap refuses without --yes while such a
+Package is present. Running application instances are left in place but become
+unmanaged until the repository is tapped again. Only tapped sources (marked with
+the marketplace-tap label) can be untapped; official sources are refused.`,
+	Args: cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		k8sClient, err := newClusterClient(tapCmdFlags.kubeconfig)
+		if err != nil {
+			return err
+		}
+		return runUntap(context.Background(), k8sClient, args[0], untapConfirmFlag, cmd.OutOrStdout(), cmd.ErrOrStderr())
+	},
+}
+
+// runUntap removes a tapped PackageSource, its tap-managed registration Package,
+// and its Flux source. It is the testable body of untapCmd; see that command's
+// Long for the behaviour and the guard.
+func runUntap(ctx context.Context, k8sClient client.Client, name string, allowYes bool, out, errOut io.Writer) error {
+	ps := &cozyv1alpha1.PackageSource{}
+	if err := k8sClient.Get(ctx, client.ObjectKey{Name: name}, ps); err != nil {
+		return fmt.Errorf("failed to get PackageSource %s: %w", name, err)
+	}
+	// A tap is identified by its marker label, not by a name prefix.
+	if ps.GetLabels()[tapconst.Label] != "true" {
+		return fmt.Errorf("refusing to untap %q: not a tapped repository (missing the %s label); official sources cannot be untapped", name, tapconst.Label)
+	}
+
+	srcName := ""
+	if ps.Spec.SourceRef != nil {
+		srcName = ps.Spec.SourceRef.Name
+	}
+
+	// A tap-managed registration Package (left by an older Cozystack that
+	// registered apps on connect) de-registers the repository's apps and is
+	// removed with the untap. Deleting it garbage-collects its registration
+	// HelmReleases and the ApplicationDefinitions they render. It is removed only
+	// when it belongs to THIS source (label AND source annotation); a Package a
+	// later tap created under a reused name, or a foreign Package, is left in place
+	// and blocks the untap without --yes.
+	//
+	// The Package is handled BEFORE the PackageSource: a transient error here must
+	// abort the untap, not fall through to delete the PackageSource and OCIRepository
+	// and strand the Package where no later cleanup can find it.
+	// Re-read and re-classify on a conflict rather than assume the Package was
+	// pinned: its resourceVersion also moves on a status write. The UID +
+	// ResourceVersion precondition deletes only the exact object classified.
+	for attempt := 0; ; attempt++ {
+		pkg := &cozyv1alpha1.Package{}
+		err := k8sClient.Get(ctx, client.ObjectKey{Name: name}, pkg)
+		if apierrors.IsNotFound(err) {
+			break // no registration Package; nothing to de-register
+		}
+		if err != nil {
+			return fmt.Errorf("failed to check registration Package %s: %w", name, err)
+		}
+		if !collision.ManagedRegistration(pkg, srcName, pkg.Spec.Variant) {
+			if !allowYes {
+				return fmt.Errorf("package %s is still installed from this source; delete it with 'cozypkg del %s' first, or pass --yes to untap anyway (the Package stays installed)", name, name)
+			}
+			break
+		}
+		delErr := k8sClient.Delete(ctx, pkg, client.Preconditions{UID: &pkg.UID, ResourceVersion: &pkg.ResourceVersion})
+		if delErr == nil || apierrors.IsNotFound(delErr) {
+			_, _ = fmt.Fprintf(out, "Removed Package/%s\n", name)
+			break
+		}
+		if apierrors.IsConflict(delErr) && attempt < 4 {
+			continue
+		}
+		return fmt.Errorf("failed to delete registration Package %s: %w", name, delErr)
+	}
+
+	if err := k8sClient.Delete(ctx, ps); err != nil {
+		return fmt.Errorf("failed to delete PackageSource %s: %w", name, err)
+	}
+	_, _ = fmt.Fprintf(out, "Removed PackageSource/%s\n", name)
+
+	// Delete the Flux source only if it is a tap we own (marker label) and no
+	// other PackageSource still references it.
+	if srcName != "" && !sourceStillReferenced(ctx, k8sClient, srcName, name) {
+		oci := &sourcev1.OCIRepository{}
+		if err := k8sClient.Get(ctx, client.ObjectKey{Name: srcName, Namespace: cozySystemNamespace}, oci); err == nil && oci.GetLabels()[tapconst.Label] == "true" {
+			if err := k8sClient.Delete(ctx, oci); err != nil {
+				_, _ = fmt.Fprintf(errOut, "warning: could not delete OCIRepository/%s: %v\n", srcName, err)
+			} else {
+				_, _ = fmt.Fprintf(out, "Removed OCIRepository/%s\n", srcName)
+			}
+		}
+	}
+	return nil
+}
+
+// objectExists reports whether obj already exists on the cluster, so an
+// idempotent re-tap does not roll back resources it did not create. It fails
+// safe: only a definite NotFound means "this run created it" (eligible for
+// rollback). Any other error (RBAC, throttling, timeout) is treated as
+// possibly-pre-existing so rollback never deletes an object it did not create.
+func objectExists(ctx context.Context, k8sClient client.Client, obj client.Object) bool {
+	probe, ok := obj.DeepCopyObject().(client.Object)
+	if !ok {
+		return true
+	}
+	err := k8sClient.Get(ctx, client.ObjectKeyFromObject(obj), probe)
+	return !apierrors.IsNotFound(err)
+}
+
+// sourceStillReferenced reports whether any PackageSource other than excludeName
+// still points at the given Flux source.
+func sourceStillReferenced(ctx context.Context, k8sClient client.Client, srcName, excludeName string) bool {
+	var list cozyv1alpha1.PackageSourceList
+	if err := k8sClient.List(ctx, &list); err != nil {
+		// On a list error, keep the source (safer than deleting a shared one).
+		return true
+	}
+	for i := range list.Items {
+		if list.Items[i].Name == excludeName {
+			continue
+		}
+		if ref := list.Items[i].Spec.SourceRef; ref != nil && ref.Name == srcName {
+			return true
+		}
+	}
+	return false
+}
+
+var untapConfirmFlag bool
+
+func init() {
+	rootCmd.AddCommand(tapCmd)
+	rootCmd.AddCommand(untapCmd)
+	tapCmd.Flags().StringVar(&tapCmdFlags.secret, "secret", "", "Name of a pull-credential Secret in cozy-system for a private repository")
+	tapCmd.Flags().StringVar(&tapCmdFlags.tag, "tag", "", "OCI tag to tap (overrides a tag in the reference; defaults to latest)")
+	tapCmd.Flags().StringVar(&tapCmdFlags.kubeconfig, "kubeconfig", "", "Path to kubeconfig file")
+	tapCmd.Flags().StringVar(&tapCmdFlags.index, "index", "", "Index location for resolving a short name (local dir or oci:// ref; defaults to COZYPKG_INDEX)")
+	tapCmd.Flags().BoolVar(&tapCmdFlags.skipValidate, "skip-validate", false, "Skip validating the artifact before tapping")
+	tapCmd.Flags().StringVar(&tapCmdFlags.certIdentity, "certificate-identity", "", "Keyless cosign certificate identity (subject regex) to verify the artifact's signature against at pull time; requires --certificate-oidc-issuer")
+	tapCmd.Flags().StringVar(&tapCmdFlags.certIssuer, "certificate-oidc-issuer", "", "Keyless cosign OIDC issuer (regex) to verify the artifact's signature against at pull time; requires --certificate-identity")
+	untapCmd.Flags().StringVar(&tapCmdFlags.kubeconfig, "kubeconfig", "", "Path to kubeconfig file")
+	untapCmd.Flags().BoolVar(&untapConfirmFlag, "yes", false, "Untap even if a Package from this source is still installed")
+}

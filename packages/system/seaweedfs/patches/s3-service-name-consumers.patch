@@ -1,0 +1,47 @@
+diff --git a/packages/system/seaweedfs/charts/seaweedfs/templates/cosi/cosi-deployment.yaml b/packages/system/seaweedfs/charts/seaweedfs/templates/cosi/cosi-deployment.yaml
+index d485e0678..d581b085d 100644
+--- a/packages/system/seaweedfs/charts/seaweedfs/templates/cosi/cosi-deployment.yaml
++++ b/packages/system/seaweedfs/charts/seaweedfs/templates/cosi/cosi-deployment.yaml
+@@ -79,9 +79,9 @@ spec:
+               {{- else if .Values.s3.ingress.enabled }}
+               value: "{{ printf "https://%s" .Values.s3.ingress.host }}"
+               {{- else if .Values.s3.enabled }}
+-              value: "{{ printf "https://%s.%s.svc" (include "seaweedfs.componentName" (list . "s3")) .Release.Namespace }}"
++              value: "{{ printf "https://%s-s3.%s.svc:%v" (include "seaweedfs.name" .) .Release.Namespace .Values.s3.port }}"
+               {{- else }}
+-              value: "{{ printf "https://%s.%s.svc" (include "seaweedfs.componentName" (list . "filer")) .Release.Namespace }}"
++              value: "{{ printf "https://%s-s3.%s.svc:%v" (include "seaweedfs.name" .) .Release.Namespace .Values.filer.s3.port }}"
+               {{- end }}
+             {{- with .Values.cosi.region }}
+             - name: REGION
+diff --git a/packages/system/seaweedfs/charts/seaweedfs/templates/s3/s3-iceberg-ingress.yaml b/packages/system/seaweedfs/charts/seaweedfs/templates/s3/s3-iceberg-ingress.yaml
+index 5a760d7e9..68db538dc 100644
+--- a/packages/system/seaweedfs/charts/seaweedfs/templates/s3/s3-iceberg-ingress.yaml
++++ b/packages/system/seaweedfs/charts/seaweedfs/templates/s3/s3-iceberg-ingress.yaml
+@@ -5,11 +5,11 @@ paths:
+   backend:
+     {{- if semverCompare ">=1.19-0" .Capabilities.KubeVersion.GitVersion }}
+     service:
+-      name: {{ include "seaweedfs.componentName" (list . "s3") }}
++      name: {{ template "seaweedfs.name" . }}-s3
+       port:
+         number: {{ .Values.s3.icebergPort }}
+     {{- else }}
+-    serviceName: {{ include "seaweedfs.componentName" (list . "s3") }}
++    serviceName: {{ template "seaweedfs.name" . }}-s3
+     servicePort: {{ .Values.s3.icebergPort }}
+     {{- end }}
+ {{- end -}}
+diff --git a/packages/system/seaweedfs/charts/seaweedfs/templates/s3/s3-ingress.yaml b/packages/system/seaweedfs/charts/seaweedfs/templates/s3/s3-ingress.yaml
+index bc4eee164..c92063f8c 100644
+--- a/packages/system/seaweedfs/charts/seaweedfs/templates/s3/s3-ingress.yaml
++++ b/packages/system/seaweedfs/charts/seaweedfs/templates/s3/s3-ingress.yaml
+@@ -2,7 +2,7 @@
+ {{- $s3Enabled := or .Values.s3.enabled (and .Values.filer.s3.enabled (not .Values.allInOne.enabled)) (and .Values.allInOne.enabled .Values.allInOne.s3.enabled) }}
+ {{- if and $s3Enabled .Values.s3.ingress.enabled }}
+ {{- /* Determine service name based on deployment mode */}}
+-{{- $serviceName := ternary (include "seaweedfs.componentName" (list . "all-in-one")) (include "seaweedfs.componentName" (list . "s3")) .Values.allInOne.enabled }}
++{{- $serviceName := ternary (include "seaweedfs.componentName" (list . "all-in-one")) (printf "%s-s3" (include "seaweedfs.name" .)) .Values.allInOne.enabled }}
+ {{- $s3Port := .Values.allInOne.s3.port | default .Values.s3.port }}
+ {{- /* Build hosts list - support both legacy .host (string) and new .hosts (array) for backwards compatibility */}}
+ {{- $hosts := list }}

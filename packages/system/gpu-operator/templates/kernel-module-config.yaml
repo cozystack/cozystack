@@ -1,0 +1,25 @@
+{{- if .Values.kernelModuleConfig.create }}
+{{- /*
+  Name the ConfigMap after the driver's effective kernelModuleConfig
+  reference (gpu-operator.driver.kernelModuleConfig.name) — that is the
+  name the operator mounts into the driver pod. Falling back to the
+  wrapper's own kernelModuleConfig.name keeps the two from ever diverging:
+  overriding only the driver reference would otherwise leave the driver
+  pointing at a ConfigMap that is never rendered.
+*/}}
+{{- $gpuOperator := index .Values "gpu-operator" | default dict -}}
+{{- $driver := index $gpuOperator "driver" | default dict -}}
+{{- $driverKmc := index $driver "kernelModuleConfig" | default dict -}}
+{{- $name := $driverKmc.name | default .Values.kernelModuleConfig.name -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+    app.kubernetes.io/name: gpu-operator
+data:
+  nvidia.conf: |
+    {{- .Values.kernelModuleConfig.content | nindent 4 }}
+{{- end }}

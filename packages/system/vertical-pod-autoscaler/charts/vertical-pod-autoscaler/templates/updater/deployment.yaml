@@ -1,0 +1,146 @@
+{{- if .Values.updater.enabled }}
+apiVersion: {{ include "common.capabilities.deployment.apiVersion" . }}
+kind: Deployment
+metadata:
+  name: {{ include "vertical-pod-autoscaler.updater.fullname" . }}
+  namespace: {{ include "common.names.namespace" . | quote }}
+  labels:
+    {{- include "vertical-pod-autoscaler.updater.labels" . | nindent 4 }}
+    {{- if .Values.commonLabels }}
+    {{- include "common.tplvalues.render" ( dict "value" .Values.commonLabels "context" $ ) | nindent 4 }}
+    {{- end }}
+  {{- if or .Values.updater.deploymentAnnotations .Values.commonAnnotations }}
+  {{- $annotations := include "common.tplvalues.merge" ( dict "values" ( list .Values.updater.deploymentAnnotations .Values.commonAnnotations ) "context" . ) }}
+  annotations: {{- include "common.tplvalues.render" ( dict "value" $annotations "context" $ ) | nindent 4 }}
+  {{- end }}
+spec:
+  replicas: {{ .Values.updater.replicaCount }}
+  revisionHistoryLimit: {{ .Values.updater.revisionHistoryLimit }}
+  selector:
+    matchLabels:
+      {{- include "vertical-pod-autoscaler.updater.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "vertical-pod-autoscaler.updater.selectorLabels" . | nindent 8 }}
+        {{- if .Values.updater.podLabels }}
+        {{- include "common.tplvalues.render" ( dict "value" .Values.updater.podLabels "context" $ ) | nindent 8 }}
+        {{- end }}
+        {{- if .Values.commonLabels }}
+        {{- include "common.tplvalues.render" ( dict "value" .Values.commonLabels "context" $ ) | nindent 8 }}
+        {{- end }}
+      {{- if or .Values.updater.podAnnotations .Values.commonAnnotations }}
+      annotations:
+        {{- if .Values.updater.podAnnotations }}
+        {{- include "common.tplvalues.render" ( dict "value" .Values.updater.podAnnotations "context" $ ) | nindent 8 }}
+        {{- end }}
+        {{- if .Values.commonAnnotations }}
+        {{- include "common.tplvalues.render" ( dict "value" .Values.commonAnnotations "context" $ ) | nindent 8 }}
+        {{- end }}
+      {{- end }}
+    spec:
+      enableServiceLinks: {{ .Values.updater.enableServiceLinks }}
+      {{- include "common.images.pullSecrets" ( dict "images" ( list .Values.updater.image ) "global" .Values.global ) | nindent 6 }}
+      {{- if .Values.updater.hostAliases }}
+      hostAliases: {{- include "common.tplvalues.render" (dict "value" .Values.updater.hostAliases "context" $) | nindent 8 }}
+      {{- end }}
+      {{- if .Values.updater.priorityClassName }}
+      priorityClassName: {{ .Values.updater.priorityClassName | quote }}
+      {{- end }}
+      {{- if .Values.updater.runtimeClassName }}
+      runtimeClassName: {{ .Values.updater.runtimeClassName | quote }}
+      {{- end }}
+      serviceAccountName: {{ include "vertical-pod-autoscaler.updater.serviceAccountName" . }}
+      {{- if .Values.updater.topologySpreadConstraints }}
+      topologySpreadConstraints: {{- include "common.tplvalues.render" (dict "value" .Values.updater.topologySpreadConstraints "context" .) | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.updater.podSecurityContext | nindent 8 }}
+      containers:
+        - name: updater
+          securityContext:
+            {{- toYaml .Values.updater.securityContext | nindent 12 }}
+          image: {{ include "common.images.image" ( dict "imageRoot" .Values.updater.image "global" .Values.global ) }}
+          imagePullPolicy: {{ .Values.updater.image.pullPolicy }}
+          args:
+            - --address=:{{ .Values.updater.containerPorts.metrics }}
+            {{- range $key, $value := .Values.updater.extraArgs }}
+            - --{{ $key }}={{ $value }}
+            {{- end }}
+          env:
+            - name: NAMESPACE
+              value: {{ include "common.names.namespace" . | quote }}
+            {{- if .Values.updater.extraEnvVars }}
+            {{- include "common.tplvalues.render" (dict "value" .Values.updater.extraEnvVars "context" $) | nindent 12 }}
+            {{- end }}
+          {{- if or .Values.updater.extraEnvVarsCM .Values.updater.extraEnvVarsSecret }}
+          envFrom:
+            {{- if .Values.updater.extraEnvVarsCM }}
+            - configMapRef:
+                name: {{ include "common.tplvalues.render" (dict "value" .Values.updater.extraEnvVarsCM "context" $) }}
+            {{- end }}
+            {{- if .Values.updater.extraEnvVarsSecret }}
+            - secretRef:
+                name: {{ include "common.tplvalues.render" (dict "value" .Values.updater.extraEnvVarsSecret "context" $) }}
+            {{- end }}
+          {{- end }}
+          ports:
+            - name: http-metrics
+              containerPort: {{ .Values.updater.containerPorts.metrics }}
+              protocol: TCP
+          {{- if .Values.updater.livenessProbe.enabled }}
+          livenessProbe:
+            httpGet:
+              path: /health-check
+              port: http-metrics
+            initialDelaySeconds: {{ .Values.updater.livenessProbe.initialDelaySeconds }}
+            periodSeconds: {{ .Values.updater.livenessProbe.periodSeconds }}
+            timeoutSeconds: {{ .Values.updater.livenessProbe.timeoutSeconds }}
+            failureThreshold: {{ .Values.updater.livenessProbe.failureThreshold }}
+            successThreshold: {{ .Values.updater.livenessProbe.successThreshold }}
+          {{- end }}
+          {{- if .Values.updater.readinessProbe.enabled }}
+          readinessProbe:
+            httpGet:
+              path: /health-check
+              port: http-metrics
+            initialDelaySeconds: {{ .Values.updater.readinessProbe.initialDelaySeconds }}
+            periodSeconds: {{ .Values.updater.readinessProbe.periodSeconds }}
+            timeoutSeconds: {{ .Values.updater.readinessProbe.timeoutSeconds }}
+            failureThreshold: {{ .Values.updater.readinessProbe.failureThreshold }}
+            successThreshold: {{ .Values.updater.readinessProbe.successThreshold }}
+          {{- end }}
+          {{- if .Values.updater.startupProbe.enabled }}
+          startupProbe:
+            httpGet:
+              path: /health-check
+              port: http-metrics
+            initialDelaySeconds: {{ .Values.updater.startupProbe.initialDelaySeconds }}
+            periodSeconds: {{ .Values.updater.startupProbe.periodSeconds }}
+            timeoutSeconds: {{ .Values.updater.startupProbe.timeoutSeconds }}
+            failureThreshold: {{ .Values.updater.startupProbe.failureThreshold }}
+            successThreshold: {{ .Values.updater.startupProbe.successThreshold }}
+          {{- end }}
+          resources:
+            {{- toYaml .Values.updater.resources | nindent 12 }}
+          volumeMounts:
+            {{- if .Values.updater.extraVolumeMounts }}
+            {{- include "common.tplvalues.render" (dict "value" .Values.updater.extraVolumeMounts "context" $) | nindent 12 }}
+            {{- end }}
+      {{- with .Values.updater.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    {{- with .Values.updater.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+    {{- end }}
+    {{- with .Values.updater.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+    {{- end }}
+      volumes:
+        {{- if .Values.updater.extraVolumes }}
+        {{- include "common.tplvalues.render" (dict "value" .Values.updater.extraVolumes "context" $) | nindent 8 }}
+        {{- end }}
+{{- end }}

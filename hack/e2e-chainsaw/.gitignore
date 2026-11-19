@@ -1,0 +1,4 @@
+# Chainsaw JUnit report artifacts (written into the run directory; CI uploads
+# them via docker cp, they are never committed).
+*.xml
+chainsaw-report*.xml

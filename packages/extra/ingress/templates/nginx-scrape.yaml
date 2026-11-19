@@ -1,0 +1,69 @@
+---
+apiVersion: operator.victoriametrics.com/v1beta1
+kind: VMPodScrape
+metadata:
+  name: nginx-ingress-controller
+spec:
+  jobLabel: jobLabel
+  namespaceSelector:
+    matchNames:
+    - {{ .Release.Namespace }}
+  podMetricsEndpoints:
+  # Most series describe the Ingress objects served, in any namespace, so
+  # the application identity the vmagent scrape class stamps from the
+  # controller pod would misattribute them; and with honorLabels an
+  # exporter-supplied identity would win over the class. The controller's
+  # own series (nginx process, reload status, go_*, up, scrape_*) lose the
+  # Ingress application's identity too; that is the accepted cost. The
+  # target-stage drop covers up and scrape_*, which skip metric relabeling.
+  - port: metrics
+    honorLabels: true
+    interval: 30s
+    relabelConfigs:
+    - replacement: nginx-ingress-controller
+      targetLabel: job
+    - sourceLabels: [__meta_kubernetes_pod_node_name]
+      targetLabel: node
+    - targetLabel: tier
+      replacement: cluster
+    - action: labeldrop
+      regex: apps_cozystack_io_application_(group|kind|name)
+    metricRelabelConfigs:
+    - action: labeldrop
+      regex: apps_cozystack_io_application_(group|kind|name)
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: controller
+      app.kubernetes.io/name: ingress-nginx
+---
+apiVersion: operator.victoriametrics.com/v1beta1
+kind: VMPodScrape
+metadata:
+  name: nginx-ingress-controller-detailed
+spec:
+  jobLabel: jobLabel
+  namespaceSelector:
+    matchNames:
+    - {{ .Release.Namespace }}
+  podMetricsEndpoints:
+  - port: metrics2
+    honorLabels: true
+    interval: 30s
+    relabelConfigs:
+    - replacement: nginx-ingress-controller
+      targetLabel: job
+    - sourceLabels: [__meta_kubernetes_pod_node_name]
+      targetLabel: node
+    - sourceLabels: [__meta_kubernetes_pod_label_app_kubernetes_io_name]
+      targetLabel: controller
+    - targetLabel: tier
+      replacement: cluster
+    - action: labeldrop
+      regex: apps_cozystack_io_application_(group|kind|name)
+    metricRelabelConfigs:
+    - action: labeldrop
+      regex: apps_cozystack_io_application_(group|kind|name)
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: controller
+      app.kubernetes.io/name: ingress-nginx

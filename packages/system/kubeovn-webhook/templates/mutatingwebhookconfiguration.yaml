@@ -1,0 +1,33 @@
+apiVersion: admissionregistration.k8s.io/v1
+kind: MutatingWebhookConfiguration
+metadata:
+  name: {{ include "namespace-annotation-webhook.fullname" . }}
+  annotations:
+    cert-manager.io/inject-ca-from: {{ .Release.Namespace }}/{{ include "namespace-annotation-webhook.fullname" . }}-cert
+  labels:
+    app.kubernetes.io/name: {{ include "namespace-annotation-webhook.fullname" . }}
+webhooks:
+  - name: kube-ovn-webhook.cozystack.io
+    admissionReviewVersions: ["v1"]
+    sideEffects: None
+    clientConfig:
+      service:
+        name: {{ include "namespace-annotation-webhook.fullname" . }}
+        namespace: {{ .Release.Namespace }}
+        path: /mutate-pods
+    rules:
+      - operations: ["CREATE"]
+        apiGroups: [""]
+        apiVersions: ["v1"]
+        resources: ["pods"]
+    failurePolicy: Fail
+    namespaceSelector:
+      matchExpressions:
+        - key: cozystack.io/system
+          operator: NotIn
+          values:
+            - "true"
+        - key: kubernetes.io/metadata.name
+          operator: NotIn
+          values:
+            - kube-system

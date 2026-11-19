@@ -1,0 +1,26 @@
+export NAME=keycloak-operator
+export NAMESPACE=cozy-keycloak
+
+include ../../../hack/common-envs.mk
+include ../../../hack/package.mk
+
+test:
+	helm unittest .
+
+image:
+	docker buildx build images/keycloak-operator \
+		$(call image-tags,keycloak-operator,v$(COZYSTACK_VERSION)) \
+		$(call cache-args,keycloak-operator) \
+		--metadata-file images/keycloak-operator.json \
+		$(BUILDX_ARGS)
+	REPOSITORY="$(REGISTRY)/keycloak-operator" \
+		yq -i '.keycloak-operator.image.repository = strenv(REPOSITORY)' values.yaml
+	TAG="$(IMAGE_TAG)@$$(yq e '."containerimage.digest"' images/keycloak-operator.json -r)" \
+		yq -i '.keycloak-operator.image.tag = strenv(TAG)' values.yaml
+	rm -f images/keycloak-operator.json
+
+update:
+	rm -rf charts
+	helm repo add epamedp https://epam.github.io/edp-helm-charts/stable
+	helm repo update epamedp
+	helm pull epamedp/keycloak-operator --untar --untardir charts

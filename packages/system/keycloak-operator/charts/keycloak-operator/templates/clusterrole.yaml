@@ -1,0 +1,393 @@
+{{- if .Values.clusterReconciliationEnabled }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  labels:
+    {{- include "keycloak-operator.labels" . | nindent 4 }}
+  name: edp-{{ .Release.Namespace }}-clusterrole
+rules:
+  - apiGroups:
+      - ""
+    resources:
+      - configmaps
+    verbs:
+      - get
+      - list
+      - watch
+  - apiGroups:
+      - ""
+    resources:
+      - secrets
+    verbs:
+      - create
+      - delete
+      - get
+      - list
+      - patch
+      - update
+      - watch
+  - apiGroups:
+      - v1.edp.epam.com
+    resources:
+      - clusterkeycloakrealms
+    verbs:
+      - create
+      - delete
+      - get
+      - list
+      - patch
+      - update
+      - watch
+  - apiGroups:
+      - v1.edp.epam.com
+    resources:
+      - clusterkeycloakrealms/finalizers
+    verbs:
+      - update
+  - apiGroups:
+      - v1.edp.epam.com
+    resources:
+      - clusterkeycloakrealms/status
+    verbs:
+      - get
+      - patch
+      - update
+  - apiGroups:
+      - v1.edp.epam.com
+    resources:
+      - clusterkeycloaks
+    verbs:
+      - create
+      - delete
+      - get
+      - list
+      - patch
+      - update
+      - watch
+  - apiGroups:
+      - v1.edp.epam.com
+    resources:
+      - clusterkeycloaks/finalizers
+    verbs:
+      - update
+  - apiGroups:
+      - v1.edp.epam.com
+    resources:
+      - clusterkeycloaks/status
+    verbs:
+      - get
+      - patch
+      - update
+  - apiGroups:
+      - v1.edp.epam.com
+    resources:
+      - keycloakauthflows
+    verbs:
+      - create
+      - delete
+      - get
+      - list
+      - patch
+      - update
+      - watch
+  - apiGroups:
+      - v1.edp.epam.com
+    resources:
+      - keycloakauthflows/finalizers
+    verbs:
+      - update
+  - apiGroups:
+      - v1.edp.epam.com
+    resources:
+      - keycloakauthflows/status
+    verbs:
+      - get
+      - patch
+      - update
+  - apiGroups:
+      - v1.edp.epam.com
+    resources:
+      - keycloakclients
+    verbs:
+      - create
+      - delete
+      - get
+      - list
+      - patch
+      - update
+      - watch
+  - apiGroups:
+      - v1.edp.epam.com
+    resources:
+      - keycloakclients/finalizers
+    verbs:
+      - update
+  - apiGroups:
+      - v1.edp.epam.com
+    resources:
+      - keycloakclients/status
+    verbs:
+      - get
+      - patch
+      - update
+  - apiGroups:
+      - v1.edp.epam.com
+    resources:
+      - keycloakclientscopes
+    verbs:
+      - create
+      - delete
+      - get
+      - list
+      - patch
+      - update
+      - watch
+  - apiGroups:
+      - v1.edp.epam.com
+    resources:
+      - keycloakclientscopes/finalizers
+    verbs:
+      - update
+  - apiGroups:
+      - v1.edp.epam.com
+    resources:
+      - keycloakclientscopes/status
+    verbs:
+      - get
+      - patch
+      - update
+  - apiGroups:
+      - v1.edp.epam.com
+    resources:
+      - keycloakorganizations
+    verbs:
+      - create
+      - delete
+      - get
+      - list
+      - patch
+      - update
+      - watch
+  - apiGroups:
+      - v1.edp.epam.com
+    resources:
+      - keycloakorganizations/finalizers
+    verbs:
+      - update
+  - apiGroups:
+      - v1.edp.epam.com
+    resources:
+      - keycloakorganizations/status
+    verbs:
+      - get
+      - patch
+      - update
+  - apiGroups:
+      - v1.edp.epam.com
+    resources:
+      - keycloakrealmcomponents
+    verbs:
+      - create
+      - delete
+      - get
+      - list
+      - patch
+      - update
+      - watch
+  - apiGroups:
+      - v1.edp.epam.com
+    resources:
+      - keycloakrealmcomponents/finalizers
+    verbs:
+      - update
+  - apiGroups:
+      - v1.edp.epam.com
+    resources:
+      - keycloakrealmcomponents/status
+    verbs:
+      - get
+      - patch
+      - update
+  - apiGroups:
+      - v1.edp.epam.com
+    resources:
+      - keycloakrealmgroups
+    verbs:
+      - create
+      - delete
+      - get
+      - list
+      - patch
+      - update
+      - watch
+  - apiGroups:
+      - v1.edp.epam.com
+    resources:
+      - keycloakrealmgroups/finalizers
+    verbs:
+      - update
+  - apiGroups:
+      - v1.edp.epam.com
+    resources:
+      - keycloakrealmgroups/status
+    verbs:
+      - get
+      - patch
+      - update
+  - apiGroups:
+      - v1.edp.epam.com
+    resources:
+      - keycloakrealmidentityproviders
+    verbs:
+      - create
+      - delete
+      - get
+      - list
+      - patch
+      - update
+      - watch
+  - apiGroups:
+      - v1.edp.epam.com
+    resources:
+      - keycloakrealmidentityproviders/finalizers
+    verbs:
+      - update
+  - apiGroups:
+      - v1.edp.epam.com
+    resources:
+      - keycloakrealmidentityproviders/status
+    verbs:
+      - get
+      - patch
+      - update
+  - apiGroups:
+      - v1.edp.epam.com
+    resources:
+      - keycloakrealmrolebatches
+    verbs:
+      - create
+      - delete
+      - get
+      - list
+      - patch
+      - update
+      - watch
+  - apiGroups:
+      - v1.edp.epam.com
+    resources:
+      - keycloakrealmrolebatches/finalizers
+    verbs:
+      - update
+  - apiGroups:
+      - v1.edp.epam.com
+    resources:
+      - keycloakrealmrolebatches/status
+    verbs:
+      - get
+      - patch
+      - update
+  - apiGroups:
+      - v1.edp.epam.com
+    resources:
+      - keycloakrealmroles
+    verbs:
+      - create
+      - delete
+      - get
+      - list
+      - patch
+      - update
+      - watch
+  - apiGroups:
+      - v1.edp.epam.com
+    resources:
+      - keycloakrealmroles/finalizers
+    verbs:
+      - update
+  - apiGroups:
+      - v1.edp.epam.com
+    resources:
+      - keycloakrealmroles/status
+    verbs:
+      - get
+      - patch
+      - update
+  - apiGroups:
+      - v1.edp.epam.com
+    resources:
+      - keycloakrealms
+    verbs:
+      - create
+      - delete
+      - get
+      - list
+      - patch
+      - update
+      - watch
+  - apiGroups:
+      - v1.edp.epam.com
+    resources:
+      - keycloakrealms/finalizers
+    verbs:
+      - update
+  - apiGroups:
+      - v1.edp.epam.com
+    resources:
+      - keycloakrealms/status
+    verbs:
+      - get
+      - patch
+      - update
+  - apiGroups:
+      - v1.edp.epam.com
+    resources:
+      - keycloakrealmusers
+    verbs:
+      - create
+      - delete
+      - get
+      - list
+      - patch
+      - update
+      - watch
+  - apiGroups:
+      - v1.edp.epam.com
+    resources:
+      - keycloakrealmusers/finalizers
+    verbs:
+      - update
+  - apiGroups:
+      - v1.edp.epam.com
+    resources:
+      - keycloakrealmusers/status
+    verbs:
+      - get
+      - patch
+      - update
+  - apiGroups:
+      - v1.edp.epam.com
+    resources:
+      - keycloaks
+    verbs:
+      - create
+      - delete
+      - get
+      - list
+      - patch
+      - update
+      - watch
+  - apiGroups:
+      - v1.edp.epam.com
+    resources:
+      - keycloaks/finalizers
+    verbs:
+      - update
+  - apiGroups:
+      - v1.edp.epam.com
+    resources:
+      - keycloaks/status
+    verbs:
+      - get
+      - patch
+      - update
+{{- end }}

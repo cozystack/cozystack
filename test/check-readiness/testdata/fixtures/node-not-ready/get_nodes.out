@@ -1,0 +1,2 @@
+<US>worker-1<US>True<US>KubeletReady<US>kubelet is posting ready status<US>false
+<US>worker-2<US>False<US>KubeletNotReady<US>container runtime is down<US>false

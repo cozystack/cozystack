@@ -1,0 +1,40 @@
+# Cozystack downstream customization: gate the KEDA CiliumNetworkPolicy objects on the
+# cilium.io/v2 API being served by the cluster.
+#
+# The cozystack shim hardcodes networkPolicy.flavor: cilium, and the upstream templates
+# gate only on networkPolicy.enabled + flavor==cilium — never on the cilium.io/v2 CRD being
+# present. On a variant that ships no Cilium (an ISP-hosted cluster whose CNI is something
+# else) the CiliumNetworkPolicy is unmappable and the whole keda HelmRelease fails to
+# install. keda is offered on every variant from the shared system bundle, so this makes it
+# uninstallable there. Adding the capability check makes the package install on any CNI; the
+# egress hardening is simply absent where Cilium is not (documented in values.yaml).
+diff --git a/charts/keda/templates/manager/ciliumnetworkpolicy.yaml b/charts/keda/templates/manager/ciliumnetworkpolicy.yaml
+index 05483873f..0b6c53019 100644
+--- a/charts/keda/templates/manager/ciliumnetworkpolicy.yaml
++++ b/charts/keda/templates/manager/ciliumnetworkpolicy.yaml
+@@ -1,4 +1,4 @@
+-{{- if and .Values.networkPolicy.enabled (eq .Values.networkPolicy.flavor "cilium") }}
++{{- if and .Values.networkPolicy.enabled (eq .Values.networkPolicy.flavor "cilium") (.Capabilities.APIVersions.Has "cilium.io/v2") }}
+ apiVersion: "cilium.io/v2"
+ kind: CiliumNetworkPolicy
+ metadata:
+diff --git a/charts/keda/templates/metrics-server/ciliumnetworkpolicy.yaml b/charts/keda/templates/metrics-server/ciliumnetworkpolicy.yaml
+index f34982db7..e16dd727a 100644
+--- a/charts/keda/templates/metrics-server/ciliumnetworkpolicy.yaml
++++ b/charts/keda/templates/metrics-server/ciliumnetworkpolicy.yaml
+@@ -1,4 +1,4 @@
+-{{- if and .Values.metricsServer.enabled .Values.networkPolicy.enabled (eq .Values.networkPolicy.flavor "cilium") }}
++{{- if and .Values.metricsServer.enabled .Values.networkPolicy.enabled (eq .Values.networkPolicy.flavor "cilium") (.Capabilities.APIVersions.Has "cilium.io/v2") }}
+ apiVersion: "cilium.io/v2"
+ kind: CiliumNetworkPolicy
+ metadata:
+diff --git a/charts/keda/templates/webhooks/ciliumnetworkpolicy.yaml b/charts/keda/templates/webhooks/ciliumnetworkpolicy.yaml
+index 1eea65d14..4e59d41f4 100644
+--- a/charts/keda/templates/webhooks/ciliumnetworkpolicy.yaml
++++ b/charts/keda/templates/webhooks/ciliumnetworkpolicy.yaml
+@@ -1,4 +1,4 @@
+-{{- if and .Values.webhooks.enabled .Values.networkPolicy.enabled (eq .Values.networkPolicy.flavor "cilium") }}
++{{- if and .Values.webhooks.enabled .Values.networkPolicy.enabled (eq .Values.networkPolicy.flavor "cilium") (.Capabilities.APIVersions.Has "cilium.io/v2") }}
+ apiVersion: "cilium.io/v2"
+ kind: CiliumNetworkPolicy
+ metadata:

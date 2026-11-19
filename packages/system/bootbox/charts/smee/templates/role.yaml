@@ -1,0 +1,17 @@
+{{- if .Values.deploy }}
+{{- $roleType := .Values.rbac.type }}
+{{- if .Values.global }}
+{{- $roleType = coalesce .Values.global.rbac.type .Values.rbac.type }}
+{{- end }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: {{ $roleType }}
+metadata:
+  name: {{ .Values.rbac.name }}
+  {{- if eq $roleType "Role"  }}
+  namespace: {{ .Release.Namespace | quote }}
+  {{- end }}
+rules:
+  - apiGroups: ["tinkerbell.org"]
+    resources: ["hardware", "hardware/status"]
+    verbs: ["get", "list", "watch"]
+{{- end }}

@@ -1,0 +1,320 @@
+.PHONY: manifests assets prepare-env prepare-env-container unit-tests helm-unit-tests bats-unit-tests bats-unit-files-check bats-posix-compat-tests print-bats-unit-files print-bats-posix-compat-files print-bats-jobs rd-presets-check migrations-target-check test test-controllers test-controllers-envtest test-backport-batch preflight
+
+include hack/common-envs.mk
+
+build-deps:
+	@command -V find docker skopeo jq gh helm > /dev/null
+	@yq --version | grep -q "mikefarah" || (echo "mikefarah/yq is required" && exit 1)
+	@tar --version | grep -q GNU || (echo "GNU tar is required" && exit 1)
+	@sed --version | grep -q GNU || (echo "GNU sed is required" && exit 1)
+	@awk --version | grep -q GNU || (echo "GNU awk is required" && exit 1)
+
+build: build-deps
+	make -C packages/apps/mariadb image
+	make -C packages/apps/clickhouse image
+	make -C packages/apps/kubernetes image
+	make -C packages/apps/vpn image
+	make -C packages/system/cozystack-api image
+	make -C packages/system/cozystack-controller image
+	make -C packages/system/backup-controller image
+	make -C packages/system/observability-proxy image
+	make -C packages/system/backupstrategy-controller image
+	make -C packages/system/lineage-controller-webhook image
+	make -C packages/system/migration-controller image
+	make -C packages/system/flux-shard-operator image
+	make -C packages/system/flux-plunger image
+	make -C packages/system/cilium image
+	make -C packages/system/linstor image
+	make -C packages/system/linstor-gui image
+	make -C packages/system/kubeovn image
+	make -C packages/system/kubeovn-webhook image
+	make -C packages/system/kubeovn-plunger image
+	make -C packages/system/kilo image
+	make -C packages/system/dashboard image
+	make -C packages/system/metallb image
+	make -C packages/system/talos-log-collector image
+	make -C packages/system/kamaji image
+	make -C packages/system/capi-providers-cpprovider image
+	make -C packages/system/capi-providers-infraprovider image
+	make -C packages/system/multus image
+	make -C packages/system/bucket image
+	make -C packages/system/seaweedfs image
+	make -C packages/system/objectstorage-controller image
+	make -C packages/system/securitygroup-controller image
+	make -C packages/system/grafana-operator image
+	make -C packages/system/monitoring image
+	make -C packages/system/redis-operator image
+	make -C packages/system/harbor image
+	make -C packages/system/velero image
+	make -C packages/system/opensearch-operator image
+	make -C packages/system/keycloak-operator image
+	make -C packages/core/testing image
+	make -C packages/core/talos image
+	make -C packages/core/platform image
+	make -C packages/core/installer image
+	make manifests
+
+manifests:
+	mkdir -p _out/assets
+	cat internal/crdinstall/manifests/*.yaml > _out/assets/cozystack-crds.yaml
+	# kubectl-apply install path: render the bare Namespace resource alongside
+	# the operator. bareNamespace=true gates a Namespace cozy-system with PSA +
+	# identity labels (see packages/core/installer/templates/cozy-system-namespace.yaml).
+	# helm install/upgrade users keep the default (false) and use --create-namespace
+	# + the pre-install labeler hook.
+	# platformVersion is rendered into the COZYSTACK_VERSION env on the operator so
+	# the install artifacts carry the version as deploy-time data (not baked into
+	# the image). Promotion re-renders these with the stable version, no rebuild.
+	# Talos variant (default)
+	helm template installer packages/core/installer -n cozy-system \
+		--set bareNamespace=true \
+		--set cozystackOperator.platformVersion=$(if $(COZYSTACK_VERSION),v$(COZYSTACK_VERSION),) \
+		--show-only templates/cozy-system-namespace.yaml \
+		--show-only templates/cozystack-operator.yaml \
+		> _out/assets/cozystack-operator-talos.yaml
+	# Generic Kubernetes variant (k3s, kubeadm, RKE2)
+	helm template installer packages/core/installer -n cozy-system \
+		--set bareNamespace=true \
+		--set cozystackOperator.variant=generic \
+		--set cozystackOperator.platformVersion=$(if $(COZYSTACK_VERSION),v$(COZYSTACK_VERSION),) \
+		--set cozystack.apiServerHost=REPLACE_ME \
+		--show-only templates/cozy-system-namespace.yaml \
+		--show-only templates/cozystack-operator.yaml \
+		> _out/assets/cozystack-operator-generic.yaml
+	# Hosted variant (managed Kubernetes)
+	helm template installer packages/core/installer -n cozy-system \
+		--set bareNamespace=true \
+		--set cozystackOperator.variant=hosted \
+		--set cozystackOperator.platformVersion=$(if $(COZYSTACK_VERSION),v$(COZYSTACK_VERSION),) \
+		--show-only templates/cozy-system-namespace.yaml \
+		--show-only templates/cozystack-operator.yaml \
+		> _out/assets/cozystack-operator-hosted.yaml
+
+cozypkg:
+	go build -ldflags "-X github.com/cozystack/cozystack/cmd/cozypkg/cmd.Version=v$(COZYSTACK_VERSION)" -o _out/bin/cozypkg ./cmd/cozypkg
+
+# Operator diagnostic: reports non-ready cozystack / Flux / Kubernetes resources.
+check-readiness:
+	go build -ldflags "-X main.Version=v$(COZYSTACK_VERSION)" -o _out/bin/check-readiness ./cmd/check-readiness
+
+assets: assets-talos assets-cozypkg openapi-json
+
+openapi-json:
+	mkdir -p _out/assets
+	VERSION=$(if $(COZYSTACK_VERSION),v$(COZYSTACK_VERSION),$(shell git describe --tags --always 2>/dev/null || echo dev)) go run ./tools/openapi-gen/ 2>/dev/null > _out/assets/openapi.json
+
+assets-talos:
+	make -C packages/core/talos assets
+
+assets-cozypkg: assets-cozypkg-linux-amd64 assets-cozypkg-linux-arm64 assets-cozypkg-darwin-amd64 assets-cozypkg-darwin-arm64 assets-cozypkg-windows-amd64 assets-cozypkg-windows-arm64
+	(cd _out/assets/ && sha256sum cozypkg-*.tar.gz) > _out/assets/cozypkg-checksums.txt
+
+assets-cozypkg-%:
+	$(eval EXT := $(if $(filter windows,$(firstword $(subst -, ,$*))),.exe,))
+	mkdir -p _out/assets
+	GOOS=$(firstword $(subst -, ,$*)) GOARCH=$(lastword $(subst -, ,$*)) go build -ldflags "-X github.com/cozystack/cozystack/cmd/cozypkg/cmd.Version=v$(COZYSTACK_VERSION)" -o _out/bin/cozypkg-$*/cozypkg$(EXT) ./cmd/cozypkg
+	cp LICENSE _out/bin/cozypkg-$*/LICENSE
+	tar -C _out/bin/cozypkg-$* -czf _out/assets/cozypkg-$*.tar.gz LICENSE cozypkg$(EXT)
+
+test:
+	make -C packages/core/testing apply
+	make -C packages/core/testing e2e
+
+unit-tests: helm-unit-tests bats-unit-tests bats-posix-compat-tests go-unit-tests go-module-tests rd-presets-check test-check-readiness migrations-target-check
+
+helm-unit-tests:
+	hack/helm-unit-tests.sh
+
+# Pin the resourcesPreset enum in every ApplicationDefinition openAPISchema
+# to the canonical 47-value set (40 instance-type names + 7 legacy aliases).
+# Catches the regression where one chart's Makefile forgets to invoke
+# hack/update-crd.sh and that RD's schema drifts from values.schema.json.
+rd-presets-check:
+	hack/check-rd-presets.sh
+
+# Catch the off-by-one where migrations/<N> is added but
+# migrations.targetVersion in packages/core/platform/values.yaml is not
+# bumped to >= N+1. run-migrations.sh loops `seq $$CURRENT $$((TARGET-1))`,
+# so the new migration is silently skipped on every cluster upgrade.
+migrations-target-check:
+	hack/check-migrations-target.sh
+
+# ./internal/... runs in test-controllers; ./test/... and cmd/backport-batch
+# run in targets of their own.
+go-unit-tests:
+	go test -count=1 ./pkg/... $(patsubst %,./%/...,$(filter-out cmd/backport-batch,$(wildcard cmd/*)))
+
+# The nested Go modules (image sources and the published API types) are
+# outside ./... of the root module, so no other target reaches their tests.
+# git ls-files, not find: gitignored checkouts such as .claude/worktrees
+# hold whole copies of this repository.
+go-module-tests:
+	@for mod in $$(git ls-files '*/go.mod' | xargs -n1 dirname); do \
+		echo "--- go test $$mod ---"; \
+		(cd "$$mod" && go test -count=1 ./...) || exit 1; \
+	done
+
+# Go tests for the controllers and supporting packages under ./internal.
+# CI schedules this target in the same four-slot make invocation as
+# unit-tests; locally invoke it directly or chain the two targets.
+test-controllers:
+	go test ./internal/... -count=1
+
+# Controller suites that need a real apiserver (build tag `envtest`): server-side
+# apply ownership, apply preconditions and finalizer handling, which a fake client
+# does not implement. setup-envtest fetches the kube-apiserver and etcd release
+# pinned by ENVTEST_K8S_VERSION into _out/envtest; the HelmRelease CRD comes from
+# the in-tree Flux manifests (envtest skips their non-CRD objects). CI runs it
+# next to test-controllers. Only the packages listed below are compiled, so a
+# package that gains an envtest suite has to be added here.
+#
+# setup-envtest itself is built into _out/envtest too, and binaries already there
+# are used without asking the release index, so a warm _out/envtest (CI caches
+# it) needs no network at all.
+ENVTEST_K8S_VERSION ?= 1.35.0
+SETUP_ENVTEST_VERSION ?= v0.0.0-20260305142021-f9589b9f2b9d
+ENVTEST_DIR = $(CURDIR)/_out/envtest
+SETUP_ENVTEST = $(ENVTEST_DIR)/bin/setup-envtest-$(SETUP_ENVTEST_VERSION)
+$(SETUP_ENVTEST):
+	GOBIN=$(ENVTEST_DIR)/bin go install sigs.k8s.io/controller-runtime/tools/setup-envtest@$(SETUP_ENVTEST_VERSION)
+	mv $(ENVTEST_DIR)/bin/setup-envtest $@
+test-controllers-envtest: $(SETUP_ENVTEST)
+	KUBEBUILDER_ASSETS="$$($(SETUP_ENVTEST) use $(ENVTEST_K8S_VERSION) --installed-only --bin-dir $(ENVTEST_DIR) --print path 2>/dev/null || $(SETUP_ENVTEST) use $(ENVTEST_K8S_VERSION) --bin-dir $(ENVTEST_DIR) --print path)" \
+		HELMRELEASE_CRD_DIR=$(CURDIR)/internal/fluxinstall/manifests \
+		go test -tags envtest -run '^TestEnvtest' ./internal/controller/fluxplunger/... -count=1
+
+# Black-box golden test for cmd/check-readiness. Builds the binary and runs it
+# against a mock kubectl (fixtures under test/check-readiness/testdata),
+# diffing stdout/stderr/exit against golden files. Regenerate goldens with:
+#   go test ./test/check-readiness/ -update
+test-check-readiness:
+	go test ./test/check-readiness/ -count=1
+
+# The batch tool's suite drives real git repositories for minutes, so it is
+# kept out of go-unit-tests in a target of its own. It is not a prerequisite
+# of unit-tests: the checks job in pull-requests.yaml runs it only when the
+# diff touches a path listed in cmd/backport-batch/test-inputs.txt.
+test-backport-batch:
+	go test ./cmd/backport-batch/... -count=1
+
+# Unit discovery is one level deep. Live-cluster files need an invocation in
+# packages/core/testing; hack/bats-runner-coverage.bats checks that boundary.
+# Bats supplies TAP and JUnit output; the live-cluster runner keeps its tracing.
+#
+# Caveat: $(wildcard ...) returns space-separated names, so a filename
+# containing a literal space would split into multiple tokens here. All
+# current bats files use hyphen-separated names; if the project ever
+# introduces whitespace-bearing filenames this recipe must be rewritten
+# (e.g. to use `find ... -print0 | xargs -0`).
+BATS_UNIT_FILES := $(filter-out hack/e2e-%.bats,$(wildcard hack/*.bats))
+
+# The same list, one file per line, for hack/bats-strict-setup.bats. Every unit
+# file has to load hack/test_helper.bash to get `set -u` back, and that audit is
+# only worth anything if the set it walks is the set that actually runs -- so it
+# asks here rather than keeping a second copy of the filter above.
+print-bats-unit-files:
+	@printf '%s\n' $(BATS_UNIT_FILES)
+
+# `bats -j` needs GNU parallel and exits non-zero rather than degrading when it
+# is missing. moreutils also ships a command named parallel, so identify the GNU
+# implementation from its version output before enabling concurrency. Resolve
+# the probe once per make process; `?=` would keep the `$(shell ...)` recursive
+# and rerun it at every expansion.
+ifndef BATS_JOBS
+BATS_JOBS := $(shell parallel --version 2>/dev/null | grep -q '^GNU parallel ' && nproc 2>/dev/null || echo 1)
+endif
+
+print-bats-jobs:
+	@printf '%s\n' "$(BATS_JOBS)"
+
+# JUnit XML is preserved as a CI artifact for inspection. _out is gitignored.
+BATS_REPORT_DIR ?= _out/test-reports
+
+bats-unit-files-check:
+	@if [ -z "$(BATS_UNIT_FILES)" ]; then \
+		echo "ERROR: no hack/*.bats unit test files found"; \
+		exit 1; \
+	fi
+bats-unit-tests: bats-unit-files-check
+	@command -v bats >/dev/null 2>&1 || { \
+		echo "ERROR: bats not found. Install bats-core >= 1.5 — https://bats-core.readthedocs.io"; \
+		exit 1; \
+	}
+	@mkdir -p "$(BATS_REPORT_DIR)"
+	bats -j $(BATS_JOBS) --report-formatter junit -o "$(BATS_REPORT_DIR)" $(BATS_UNIT_FILES)
+
+# Real Bats is authoritative. Unit files that source production code whose
+# contract is POSIX sh retain a compatibility pass through cozytest.sh's
+# /bin/sh translator. Discover literal .sh dependencies wherever they live,
+# including hack/lib and package migration helpers, so a new non-Chainsaw
+# helper test cannot run only under Bash. The explicit entries retain reviewed
+# shell-facing tests, including files whose production path is held in a
+# variable and therefore cannot be identified from the source line alone.
+BATS_SOURCED_SH_FILES := $(shell grep -El '^[[:space:]]*(\.|source)[[:space:]]+.*\.sh' $(BATS_UNIT_FILES))
+BATS_POSIX_COMPAT_FILES := $(sort \
+	$(BATS_SOURCED_SH_FILES) \
+	hack/capture-dataplane.bats \
+	hack/capture-previous-logs.bats \
+	hack/cilium-leak-healer_test.bats \
+	hack/container-lane-capacity_test.bats \
+	hack/cozyreport-talos.bats \
+	hack/cozyreport.bats \
+	hack/cozystack-version-stamp.bats \
+	hack/nightly-mirror_test.bats \
+	hack/pod-label-census_test.bats \
+	hack/promote-rewrite-tags_test.bats \
+	hack/runner-identity.bats \
+	hack/seaweedfs-naming-audit.bats \
+)
+
+# CI's /bin/sh is dash. Keep the interpreter overridable so contributors can
+# run the same compatibility lane explicitly on hosts whose /bin/sh differs.
+BATS_POSIX_SHELL ?= /bin/sh
+COZYTEST_TRACE ?= 0
+
+print-bats-posix-compat-files:
+	@printf '%s\n' $(BATS_POSIX_COMPAT_FILES)
+
+bats-posix-compat-tests:
+	@status=0; \
+	for f in $(BATS_POSIX_COMPAT_FILES); do \
+		echo "--- running POSIX compatibility: $$f ---"; \
+		COZYTEST_TRACE=$(COZYTEST_TRACE) "$(BATS_POSIX_SHELL)" hack/cozytest.sh "$$f" || status=1; \
+	done; \
+	exit $$status
+
+# No cluster for the unit and controller lanes. A test that misses a stub, or
+# whose stub a `timeout` or `bash -c` steps past, otherwise reaches whatever
+# cluster the caller's kubeconfig points at. An empty KUBERNETES_SERVICE_HOST
+# is needed beside KUBECONFIG: given an empty kubeconfig, client-go falls back
+# to in-cluster credentials wherever that variable and a service-account token
+# are present.
+# Every prerequisite of unit-tests is listed so it is guarded when run on its
+# own too; hack/unit-lane-no-cluster.bats fails when one is missing.
+NO_CLUSTER_TARGETS := unit-tests test-controllers helm-unit-tests bats-unit-tests \
+	bats-posix-compat-tests go-unit-tests go-module-tests rd-presets-check \
+	test-check-readiness test-backport-batch migrations-target-check
+$(NO_CLUSTER_TARGETS): export KUBECONFIG := /dev/null
+$(NO_CLUSTER_TARGETS): export KUBERNETES_SERVICE_HOST :=
+
+# Operator-facing host preflight check. Warns about a standalone
+# containerd.service or docker.service running alongside the embedded
+# k3s runtime. Safe to run at any time; always exits 0.
+preflight:
+	@hack/check-host-runtime.sh
+
+prepare-env:
+	make -C packages/core/testing apply
+	make -C packages/core/testing prepare-cluster
+
+# Container-lane sibling of prepare-env. Same sandbox, Talos nodes as containers
+# instead of QEMU guests, so no nocloud asset is copied in.
+prepare-env-container:
+	make -C packages/core/testing apply
+	make -C packages/core/testing prepare-cluster-container
+
+generate:
+	hack/update-codegen.sh
+
+upload_assets: manifests
+	hack/upload-assets.sh

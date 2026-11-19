@@ -1,0 +1,34 @@
+{{- if .Values.admissionController.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "vertical-pod-autoscaler.admissionController.metrics.fullname" . }}
+  namespace: {{ include "common.names.namespace" . | quote }}
+  labels:
+    {{- include "vertical-pod-autoscaler.admissionController.labels" . | nindent 4 }}
+    {{- if .Values.commonLabels }}
+    {{- include "common.tplvalues.render" ( dict "value" .Values.commonLabels "context" $ ) | nindent 4 }}
+    {{- end }}
+  {{- if or .Values.admissionController.metrics.service.annotations .Values.commonAnnotations }}
+  {{- $annotations := include "common.tplvalues.merge" ( dict "values" ( list .Values.admissionController.metrics.service.annotations .Values.commonAnnotations ) "context" . ) }}
+  annotations: {{- include "common.tplvalues.render" ( dict "value" $annotations "context" $ ) | nindent 4 }}
+  {{- end }}
+spec:
+  type: {{ .Values.admissionController.metrics.service.type }}
+  {{- if and (eq .Values.admissionController.metrics.service.type "ClusterIP") .Values.admissionController.metrics.service.clusterIP }}
+  clusterIP: {{ .Values.admissionController.metrics.service.clusterIP }}
+  {{- end }}
+  {{- if .Values.admissionController.metrics.service.ipFamilyPolicy }}
+  ipFamilyPolicy: {{ .Values.admissionController.metrics.service.ipFamilyPolicy }}
+  {{- end }}
+  {{- if not (empty .Values.admissionController.metrics.service.ipFamilies)}}
+  ipFamilies: {{- toYaml .Values.admissionController.metrics.service.ipFamilies | nindent 4 }}
+  {{- end }}
+  ports:
+    - port: {{ .Values.admissionController.metrics.service.ports.metrics }}
+      targetPort: http-metrics
+      protocol: TCP
+      name: http-metrics
+  selector:
+    {{- include "vertical-pod-autoscaler.admissionController.selectorLabels" . | nindent 4 }}
+{{- end }}

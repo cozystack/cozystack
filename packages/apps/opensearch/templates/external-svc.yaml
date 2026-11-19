@@ -1,0 +1,55 @@
+{{- if .Values.external }}
+{{- include "opensearch.validateReleaseName" . -}}
+{{- /*
+The tenant host may legitimately be empty — a platform with no _cluster.root-host
+set leaves it so all the way down the tenant tree. That is not a reason to take the
+release down: the LoadBalancers still get addresses and still serve. Publish the
+external-dns hostname only when there is a host to publish, rather than requiring
+one. The certificate SANs degrade the same way.
+*/}}
+{{- $extHost := (.Values._namespace | default dict).host | default "" }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Release.Name }}-external
+  {{- if $extHost }}
+  annotations:
+    external-dns.alpha.kubernetes.io/hostname: {{ printf "%s.%s" .Release.Name $extHost }}
+  {{- end }}
+spec:
+  type: LoadBalancer
+  selector:
+    opster.io/opensearch-cluster: {{ .Release.Name }}
+    opster.io/opensearch-nodepool: nodes
+  ports:
+    - name: https
+      port: 9200
+      targetPort: 9200
+      protocol: TCP
+{{- if .Values.dashboards.enabled }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Release.Name }}-dashboards-external
+  {{- if $extHost }}
+  annotations:
+    external-dns.alpha.kubernetes.io/hostname: {{ printf "%s-dashboards.%s" .Release.Name $extHost }}
+  {{- end }}
+spec:
+  type: LoadBalancer
+  {{- /*
+  The operator labels Dashboards pods with opensearch.cluster.dashboards and
+  nothing else — no opster.io/opensearch-cluster, no app.kubernetes.io/*. A
+  selector naming those matches no pod, so the Service silently has no endpoints.
+  */}}
+  selector:
+    opensearch.cluster.dashboards: {{ .Release.Name }}
+  ports:
+    - name: https
+      port: 5601
+      targetPort: 5601
+      protocol: TCP
+{{- end }}
+{{- end }}

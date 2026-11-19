@@ -1,0 +1,15 @@
+---
+apiVersion: cozystack.io/v1alpha1
+kind: WorkloadMonitor
+metadata:
+  name: {{ $.Release.Name }}
+  labels:
+    workloads.cozystack.io/resource-preset: {{ .Values.resourcesPreset | quote }}
+spec:
+  replicas: {{ .Values.replicas }}
+  minReplicas: 1
+  kind: tcp-balancer
+  type: haproxy
+  selector:
+    app.kubernetes.io/instance: {{ $.Release.Name }}
+  version: {{ $.Chart.Version }}

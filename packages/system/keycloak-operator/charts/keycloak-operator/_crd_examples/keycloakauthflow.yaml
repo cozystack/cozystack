@@ -1,0 +1,83 @@
+apiVersion: v1.edp.epam.com/v1
+kind: KeycloakAuthFlow
+metadata:
+  name: keycloakauthflow-sample
+spec:
+  realmRef:
+    name: keycloakrealm-sample
+    kind: KeycloakRealm
+  alias: Demo
+  description: Example of KeycloakAuthFlow
+  providerId: basic-flow
+  topLevel: true
+  builtIn: false
+  authenticationExecutions:
+    - authenticator: "auth-cookie"
+      priority: 0
+      requirement: "ALTERNATIVE"
+    - authenticator: "identity-provider-redirector"
+      priority: 1
+      requirement: "ALTERNATIVE"
+      authenticatorConfig:
+        alias: my-alias
+        config:
+          "defaultProvider": "my-alias"
+---
+apiVersion: v1.edp.epam.com/v1
+kind: KeycloakAuthFlow
+metadata:
+  name: keycloakauthflow-forms
+spec:
+  realmRef:
+    name: keycloakrealm-sample
+    kind: KeycloakRealm
+  alias: Forms
+  description: browser auth forms
+  providerId: basic-flow
+  topLevel: false
+  parentName: Demo
+  childType: basic-flow
+  builtIn: false
+---
+apiVersion: v1.edp.epam.com/v1
+kind: KeycloakAuthFlow
+metadata:
+  name: keycloakauthflow-x509
+spec:
+  realmRef:
+    name: keycloakrealm-sample
+    kind: KeycloakRealm
+  alias: X509
+  description: Client certificate, and other auth forms.
+  providerId: basic-flow
+  topLevel: false
+  parentName: Forms
+  childType: basic-flow
+  builtIn: false
+  authenticationExecutions:
+    - authenticator: "auth-x509-client-username-form"
+      priority: 0
+      requirement: "ALTERNATIVE"
+---
+apiVersion: v1.edp.epam.com/v1
+kind: KeycloakAuthFlow
+metadata:
+  name: keycloakauthflow-otp
+spec:
+  realmRef:
+    name: keycloakrealm-sample
+    kind: KeycloakRealm
+  alias: Conditional OTP
+  description: Flow to determine if the OTP is required for the authentication.
+  providerId: basic-flow
+  topLevel: false
+  parentName: X509
+  childType: basic-flow
+  builtIn: false
+  authenticationExecutions:
+    - authenticator: "conditional-user-configured"
+      priority: 0
+      requirement: "ALTERNATIVE"
+    - authenticator: "auth-otp-form"
+      priority: 0
+      requirement: "ALTERNATIVE"

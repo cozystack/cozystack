@@ -1,0 +1,44 @@
+{{- $clusterSecretName := printf "%s-test-1-%s" (include "clustersecret-operator.fullname" .) (randAlphaNum 10 | lower) }}
+---
+apiVersion: core.cs.sap.com/v1alpha1
+kind: ClusterSecret
+metadata:
+  name: {{ $clusterSecretName }}
+  labels:
+    {{- include "clustersecret-operator.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/hook: test
+    helm.sh/hook-weight: "0"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+spec:
+  namespaceSelector:
+    matchLabels:
+      kubernetes.io/metadata.name: default
+  template:
+    type: Opaque
+    data:
+      mykey: bXl2YWx1ZQ==
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: {{ include "clustersecret-operator.fullname" . }}-test-1
+  labels:
+    {{- include "clustersecret-operator.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/hook: test
+    helm.sh/hook-weight: "1"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+spec:
+  containers:
+  - name: kubectl
+    image: ghcr.io/sap/kubectl-container:{{ .Capabilities.KubeVersion.Version }}
+    command:
+    - bash
+    - -ec
+    - |
+        kubectl wait clustersecrets.core.cs.sap.com/{{ $clusterSecretName }} --for condition=Ready --timeout 30s
+        kubectl -n default get secret {{ $clusterSecretName }}
+  serviceAccountName: {{ include "clustersecret-operator.fullname" . }}-test
+  terminationGracePeriodSeconds: 3
+  restartPolicy: Never

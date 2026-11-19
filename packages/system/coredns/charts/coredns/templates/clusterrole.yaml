@@ -1,0 +1,50 @@
+{{- if and .Values.deployment.enabled .Values.rbac.create }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ template "coredns.clusterRoleName" . }}
+  labels: {{- include "coredns.labels" . | nindent 4 }}
+{{- with .Values.customAnnotations }}
+  annotations:
+{{- toYaml . | nindent 4 }}
+{{- end }}
+rules:
+- apiGroups:
+  - ""
+  resources:
+  - endpoints
+  - services
+  - pods
+  - namespaces
+  verbs:
+  - list
+  - watch
+- apiGroups:
+  - discovery.k8s.io
+  resources:
+  - endpointslices
+  verbs:
+  - list
+  - watch
+{{- if .Values.rbac.pspEnable }}
+- apiGroups:
+  - policy
+  - extensions
+  resources:
+  - podsecuritypolicies
+  verbs:
+  - use
+  resourceNames:
+  - {{ template "coredns.fullname" . }}
+{{- end }}
+{{- if .Values.rbac.multiclusterEnable }}
+- apiGroups:
+  - multicluster.x-k8s.io
+  resources:
+  - serviceexports
+  - serviceimports
+  verbs:
+  - list
+  - watch
+{{- end }}
+{{- end }}

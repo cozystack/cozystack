@@ -1,0 +1,50 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cozystack-api
+  namespace: cozy-system
+  labels:
+    app: cozystack-api
+spec:
+  replicas: {{ .Values.cozystackAPI.replicas }}
+  selector:
+    matchLabels:
+      app: cozystack-api
+  template:
+    metadata:
+      labels:
+        app: cozystack-api
+    spec:
+      tolerations:
+      - operator: Exists
+      serviceAccountName: cozystack-api
+      affinity:
+        nodeAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            preference:
+              matchExpressions:
+              - key: node-role.kubernetes.io/control-plane
+                operator: Exists
+      containers:
+      - name: cozystack-api
+        args:
+        - --tls-cert-file=/tmp/cozystack-api-certs/tls.crt
+        - --tls-private-key-file=/tmp/cozystack-api-certs/tls.key
+        image: "{{ .Values.cozystackAPI.image }}"
+        ports:
+        - containerPort: 443
+          name: https
+        volumeMounts:
+          - name: cozystack-api-certs
+            mountPath: /tmp/cozystack-api-certs
+            readOnly: true
+        {{- with .Values.cozystackAPI.resources }}
+        resources:
+          {{- toYaml . | nindent 10 }}
+        {{- end }}
+      volumes:
+        - name: cozystack-api-certs
+          secret:
+            secretName: cozystack-api-cert
+            defaultMode: 0400

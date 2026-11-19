@@ -1,0 +1,14 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 💬 Question, help, or an early idea
+    url: https://github.com/cozystack/cozystack/discussions
+    about: Usage questions, troubleshooting, or a "should we…" idea that isn't a concrete request yet — start a Discussion. The community and maintainers answer here.
+  - name: 📐 Design proposal / RFC (architectural or cross-cutting)
+    url: https://github.com/cozystack/community/tree/main/design-proposals
+    about: Changes that affect multiple components or APIs, or that need a decision before any code is written (a new subsystem, an API change with tradeoffs). Open a design-proposal PR in the community repo.
+  - name: 🏛️ Governance, process, or community
+    url: https://github.com/cozystack/community/issues/new
+    about: Maintainership, decision-making, meetings, working groups, community resources — these live in the community repo.
+  - name: 💬 Chat (Telegram / CNCF Slack)
+    url: https://t.me/cozystack
+    about: Real-time discussion with the Cozystack community.

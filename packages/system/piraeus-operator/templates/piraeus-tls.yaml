@@ -1,0 +1,8 @@
+---
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: ca-bootstrapper
+  namespace: {{ .Release.namespace }}
+spec:
+  selfSigned: {}

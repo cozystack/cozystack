@@ -1,0 +1,26 @@
+{{ template "chart.header" . }}
+
+{{ template "chart.description" . }}
+
+{{ template "chart.versionBadge" . }}
+{{ template "chart.typeBadge" . }}
+{{ template "chart.appVersionBadge" . }}
+[![Artifact Hub](https://img.shields.io/endpoint?url=https://artifacthub.io/badge/repository/opencost)](https://artifacthub.io/packages/search?repo=opencost)
+[![Artifact Hub](https://img.shields.io/endpoint?url=https://artifacthub.io/badge/repository/opencost-oci)](https://artifacthub.io/packages/search?repo=opencost-oci)
+
+
+{{ template "chart.maintainersSection" . }}
+
+## Installing the Chart
+
+To install the chart with the release name `opencost`:
+
+```console
+$ helm install opencost opencost/{{ template "chart.name" . }}
+```
+
+{{ template "chart.requirementsSection" . }}
+
+{{ template "chart.valuesSection" . }}
+
+{{ template "helm-docs.versionFooter" . }}

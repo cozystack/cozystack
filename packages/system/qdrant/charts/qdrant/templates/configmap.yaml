@@ -1,0 +1,33 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "qdrant.fullname" . }}
+  labels:
+    {{- include "qdrant.labels" . | nindent 4 }}
+    {{- include "qdrant.additionalLabels" . | nindent 4 }}
+{{- with .Values.additionalAnnotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+{{- end }}
+data:
+  initialize.sh: |
+    #!/bin/sh
+    echo "Soft limits"
+    ulimit -a -S
+    echo "Hard limits"
+    ulimit -a -H
+    ulimit -n $(ulimit -Hn)
+    SET_INDEX=${HOSTNAME##*-}
+    {{- if and (.Values.snapshotRestoration.enabled) (eq (.Values.replicaCount | quote)  (1 | quote)) }}
+    echo "Starting initializing for pod $SET_INDEX and snapshots restoration"
+    exec ./entrypoint.sh --uri '{{ include "qdrant.p2p.protocol" . }}://{{ include "qdrant.fullname" . }}-0.{{ include "qdrant.fullname" . }}-headless:{{ include "qdrant.p2p.port" . }}' {{ range .Values.snapshotRestoration.snapshots }} --snapshot {{ . }} {{ end }}
+    {{- else }}
+    echo "Starting initializing for pod $SET_INDEX"
+    if [ "$SET_INDEX" = "0" ]; then
+      exec ./entrypoint.sh --uri '{{ include "qdrant.p2p.protocol" . }}://{{ include "qdrant.fullname" . }}-0.{{ include "qdrant.fullname" . }}-headless:{{ include "qdrant.p2p.port" . }}'
+    else
+      exec ./entrypoint.sh --bootstrap '{{ include "qdrant.p2p.protocol" . }}://{{ include "qdrant.fullname" . }}-0.{{ include "qdrant.fullname" . }}-headless:{{ include "qdrant.p2p.port" . }}' --uri '{{ include "qdrant.p2p.protocol" . }}://{{ include "qdrant.fullname" . }}-'"$SET_INDEX"'.{{ include "qdrant.fullname" . }}-headless:{{ include "qdrant.p2p.port" . }}'
+    fi
+    {{ end }}
+  production.yaml: |
+    {{- tpl (toYaml .Values.config) . | nindent 4 }}

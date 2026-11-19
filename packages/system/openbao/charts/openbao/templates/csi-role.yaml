@@ -1,0 +1,32 @@
+{{/*
+Copyright (c) HashiCorp, Inc.
+SPDX-License-Identifier: MPL-2.0
+*/}}
+
+{{- template "openbao.csiEnabled" . -}}
+{{- if .csiEnabled -}}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ template "openbao.fullname" . }}-csi-provider-role
+  namespace: {{ include "openbao.namespace" . }}
+  labels:
+    app.kubernetes.io/name: {{ include "openbao.name" . }}-csi-provider
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+rules:
+- apiGroups: [""]
+  resources: ["secrets"]
+  verbs: ["get"]
+  resourceNames:
+    {{- if .Values.csi.hmacSecretName }}
+    - {{ .Values.csi.hmacSecretName }}
+    {{- else }}
+    - {{ include "openbao.name" . }}-csi-provider-hmac-key
+    {{- end }}
+# 'create' permissions cannot be restricted by resource name:
+# https://kubernetes.io/docs/reference/access-authn-authz/rbac/#referring-to-resources
+- apiGroups: [""]
+  resources: ["secrets"]
+  verbs: ["create"]
+{{- end }}

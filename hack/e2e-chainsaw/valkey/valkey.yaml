@@ -1,0 +1,12 @@
+apiVersion: apps.cozystack.io/v1alpha1
+kind: Valkey
+metadata:
+  name: test
+spec:
+  external: false
+  size: 1Gi
+  replicas: 2
+  storageClass: ""
+  authEnabled: true
+  resources: {}
+  resourcesPreset: "nano"

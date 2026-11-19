@@ -1,0 +1,37 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cozystack-controller
+  labels:
+    app: cozystack-controller
+spec:
+  replicas: {{ .Values.cozystackController.replicas }}
+  selector:
+    matchLabels:
+      app: cozystack-controller
+  template:
+    metadata:
+      labels:
+        app: cozystack-controller
+    spec:
+      serviceAccountName: cozystack-controller
+      containers:
+      - name: cozystack-controller
+        image: "{{ .Values.cozystackController.image }}"
+        args:
+        - --leader-elect
+        {{- if .Values.cozystackController.debug }}
+        - --zap-log-level=debug
+        {{- else }}
+        - --zap-log-level=info
+        {{- end }}
+        {{- if .Values.cozystackController.disableTelemetry }}
+        - --disable-telemetry
+        {{- end }}
+        {{- with .Values.cozystackController.seaweedfsMetricsEndpoint }}
+        - --seaweedfs-metrics-endpoint={{ . }}
+        {{- end }}
+        {{- with .Values.cozystackController.resources }}
+        resources:
+          {{- toYaml . | nindent 10 }}
+        {{- end }}

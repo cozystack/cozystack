@@ -1,0 +1,48 @@
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: kube-scheduler
+  namespace: kube-system
+  labels:
+    app: kube-scheduler
+spec:
+  clusterIP: None
+  ports:
+    - name: http-metrics
+      port: 10259
+      protocol: TCP
+      targetPort: 10259
+  selector:
+    k8s-app: kube-scheduler
+  type: ClusterIP
+---
+apiVersion: operator.victoriametrics.com/v1beta1
+kind: VMServiceScrape
+metadata:
+  name: kube-scheduler
+  namespace: cozy-monitoring
+spec:
+  selector:
+    matchLabels:
+      app: kube-scheduler
+  namespaceSelector:
+    matchNames:
+      - "kube-system"
+  endpoints:
+  - bearerTokenFile: /var/run/secrets/kubernetes.io/serviceaccount/token
+    port: http-metrics
+    scheme: https
+    relabelConfigs:
+    - action: labeldrop
+      regex: (endpoint|namespace|pod|container)
+    - replacement: kube-scheduler
+      targetLabel: job
+    - sourceLabels: [__meta_kubernetes_pod_node_name]
+      targetLabel: node
+    - targetLabel: tier
+      replacement: cluster
+    tlsConfig:
+      caFile: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+      insecureSkipVerify: true
+  jobLabel: jobLabel

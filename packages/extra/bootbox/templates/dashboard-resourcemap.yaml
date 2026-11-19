@@ -1,0 +1,44 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ .Release.Name }}-dashboard-resources
+rules:
+- apiGroups:
+  - networking.k8s.io
+  resources:
+  - ingresses
+  resourceNames:
+  - bootbox
+  verbs: ["get", "list", "watch"]
+- apiGroups:
+  - ""
+  resources:
+  - secrets
+  resourceNames:
+  - grafana-admin-password
+  verbs: ["get", "list", "watch"]
+- apiGroups:
+  - ""
+  resources:
+  - services
+  resourceNames:
+  - bootbox
+  verbs: ["get", "list", "watch"]
+- apiGroups:
+  - cozystack.io
+  resources:
+  - workloadmonitors
+  resourceNames:
+  - bootbox-matchbox
+  verbs: ["get", "list", "watch"]
+---
+kind: RoleBinding
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  name: {{ .Release.Name }}-dashboard-resources
+subjects:
+{{ include "cozy-lib.rbac.subjectsForTenantAndAccessLevel" (list "super-admin" .Release.Namespace) }}
+roleRef:
+  kind: Role
+  name: {{ .Release.Name }}-dashboard-resources
+  apiGroup: rbac.authorization.k8s.io

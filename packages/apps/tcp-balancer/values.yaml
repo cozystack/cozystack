@@ -1,0 +1,105 @@
+##
+## @section Common parameters
+##
+
+## @typedef {struct} Resources - Explicit CPU and memory configuration for each TCP Balancer replica.
+## @field {quantity} [cpu] - CPU available to each replica.
+## @field {quantity} [memory] - Memory (RAM) available to each replica.
+
+## @enum {string} ResourcesPreset - Default sizing preset.
+## @value t1.nano
+## @value t1.micro
+## @value t1.small
+## @value t1.medium
+## @value t1.large
+## @value t1.xlarge
+## @value t1.2xlarge
+## @value t1.4xlarge
+## @value c1.nano
+## @value c1.micro
+## @value c1.small
+## @value c1.medium
+## @value c1.large
+## @value c1.xlarge
+## @value c1.2xlarge
+## @value c1.4xlarge
+## @value s1.nano
+## @value s1.micro
+## @value s1.small
+## @value s1.medium
+## @value s1.large
+## @value s1.xlarge
+## @value s1.2xlarge
+## @value s1.4xlarge
+## @value u1.nano
+## @value u1.micro
+## @value u1.small
+## @value u1.medium
+## @value u1.large
+## @value u1.xlarge
+## @value u1.2xlarge
+## @value u1.4xlarge
+## @value m1.nano
+## @value m1.micro
+## @value m1.small
+## @value m1.medium
+## @value m1.large
+## @value m1.xlarge
+## @value m1.2xlarge
+## @value m1.4xlarge
+## @value nano
+## @value micro
+## @value small
+## @value medium
+## @value large
+## @value xlarge
+## @value 2xlarge
+
+## @param {int} replicas - Number of HAProxy replicas.
+replicas: 2
+
+## @param {Resources} [resources] - Explicit CPU and memory configuration for each TCP Balancer replica. When omitted, the preset defined in `resourcesPreset` is applied.
+resources: {}
+
+## @param {ResourcesPreset} resourcesPreset="t1.nano" - Default sizing preset used when `resources` is omitted.
+resourcesPreset: "t1.nano"
+
+## @param {bool} external - Enable external access from outside the cluster.
+external: false
+
+##
+## @section Application-specific parameters
+##
+
+## @enum {string} Mode - Mode for balancer.
+## @value tcp
+## @value tcp-with-proxy
+
+## @typedef {struct} TargetPorts - Target ports configuration.
+## @field {int} http - HTTP port number.
+## @field {int} https - HTTPS port number.
+
+## @typedef {struct} HttpAndHttps - HTTP and HTTPS configuration.
+## @field {Mode} mode - Mode for balancer.
+## @field {TargetPorts} targetPorts - Target ports configuration.
+## @field {[]string} endpoints - Endpoint addresses list.
+
+## @param {HttpAndHttps} httpAndHttps - HTTP and HTTPS configuration.
+httpAndHttps:
+  mode: tcp
+  targetPorts:
+    http: 80
+    https: 443
+  endpoints: []
+
+## @param {bool} whitelistHTTP - Secure HTTP and HTTPS by whitelisting client networks. Requires a non-empty `whitelist` (default: false).
+whitelistHTTP: false
+## Example:
+## whitelistHTTP: true
+## whitelist:
+## - "1.2.3.4"
+## - "10.100.0.0/16"
+##
+
+## @param {[]string} whitelist - List of allowed client networks.
+whitelist: []

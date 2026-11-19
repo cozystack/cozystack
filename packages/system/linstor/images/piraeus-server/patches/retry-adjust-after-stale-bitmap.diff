@@ -1,0 +1,140 @@
+diff --git a/satellite/src/main/java/com/linbit/linstor/layer/drbd/utils/DrbdAdm.java b/satellite/src/main/java/com/linbit/linstor/layer/drbd/utils/DrbdAdm.java
+index 0a19f875b702..d44e19b70d88 100644
+--- a/satellite/src/main/java/com/linbit/linstor/layer/drbd/utils/DrbdAdm.java
++++ b/satellite/src/main/java/com/linbit/linstor/layer/drbd/utils/DrbdAdm.java
+@@ -45,6 +45,8 @@ import java.util.List;
+ import java.util.Set;
+ import java.util.concurrent.ArrayBlockingQueue;
+ import java.util.concurrent.TimeUnit;
++import java.util.regex.Matcher;
++import java.util.regex.Pattern;
+ import java.util.stream.Collectors;
+ 
+ @Singleton
+@@ -68,6 +70,9 @@ public class DrbdAdm
+     private static final long SECONDARY_RETRY_INITIAL_BACKOFF_MS = 250L;
+     private static final long SECONDARY_RETRY_MAX_BACKOFF_MS = 2_000L;
+     private static final String DEVICE_HELD_OPEN_ERR_MSG = "Device is held open by someone";
++    private static final long FORCE_DETACH_RETRY_WAIT_MS = 250;
++    private static final String BITMAP_LEAK_ERR_MSG = "already has a bitmap, this should not happen";
++    private static final Pattern BITMAP_LEAK_MINOR_PATTERN = Pattern.compile("\\bminor\\s+(\\d+)\\b");
+ 
+     private final ExtCmdFactory extCmdFactory;
+     private final StltConfigAccessor stltCfgAccessor;
+@@ -143,8 +148,38 @@ public class DrbdAdm
+         // command.add(resName);
+         command.add(drbdRscData.getSuffixedResourceName());
+         // execute(Arrays.asList("drbdsetup", "show", drbdRscData.getSuffixedResourceName()));
+-        execute(command);
+-        // execute(Arrays.asList("drbdsetup", "show", drbdRscData.getSuffixedResourceName()));
++        String[] commandArr = command.toArray(new String[0]);
++        try
++        {
++            File nullDevice = new File(Platform.nullDevice());
++            ExtCmd extCmd = extCmdFactory.create();
++            if (Platform.isWindows())
++            {
++                extCmd.setTimeout(TimeoutType.WAIT, DFLT_WINDOWS_TIMEOUT_MS);
++            }
++
++            OutputData outputData = extCmd.pipeExec(ProcessBuilder.Redirect.from(nullDevice), commandArr);
++            if (
++                outputData.exitCode != 0 &&
++                isBitmapLeakOnAttach(outputData) &&
++                cleanupStaleBitmapAndRetry(extCmd, nullDevice, outputData)
++            )
++            {
++                outputData = extCmd.pipeExec(ProcessBuilder.Redirect.from(nullDevice), commandArr);
++            }
++            if (outputData.exitCode != 0)
++            {
++                throw new ExtCmdFailedException(commandArr, outputData);
++            }
++        }
++        catch (ChildProcessTimeoutException timeoutExc)
++        {
++            throw new ExtCmdFailedException(commandArr, timeoutExc);
++        }
++        catch (IOException ioExc)
++        {
++            throw new ExtCmdFailedException(commandArr, ioExc);
++        }
+ 
+         drbdRscData.setAdjustRequired(false);
+     }
+@@ -955,6 +990,75 @@ public class DrbdAdm
+         return ret;
+     }
+ 
++    static boolean isBitmapLeakOnAttach(OutputData outputData)
++    {
++        return extractBitmapLeakMinor(outputData) != null;
++    }
++
++    static @Nullable Integer extractBitmapLeakMinor(OutputData outputData)
++    {
++        String stderr = new String(outputData.stderrData, StandardCharsets.UTF_8);
++        if (!stderr.contains(BITMAP_LEAK_ERR_MSG))
++        {
++            return null;
++        }
++
++        Matcher matcher = BITMAP_LEAK_MINOR_PATTERN.matcher(stderr);
++        if (!matcher.find())
++        {
++            return null;
++        }
++
++        return Integer.parseInt(matcher.group(1));
++    }
++
++    private boolean cleanupStaleBitmapAndRetry(
++        ExtCmd extCmd,
++        File nullDevice,
++        OutputData outputData
++    )
++        throws IOException, ChildProcessTimeoutException, ExtCmdFailedException
++    {
++        @Nullable Integer minor = extractBitmapLeakMinor(outputData);
++        if (minor == null)
++        {
++            return false;
++        }
++
++        OutputData detachOut = extCmd.pipeExec(
++            ProcessBuilder.Redirect.from(nullDevice),
++            DRBDSETUP_UTIL,
++            "detach",
++            Integer.toString(minor)
++        );
++        if (detachOut.exitCode == 0)
++        {
++            return true;
++        }
++
++        OutputData forceDetachOut = extCmd.pipeExec(
++            ProcessBuilder.Redirect.from(nullDevice),
++            DRBDSETUP_UTIL,
++            "detach",
++            Integer.toString(minor),
++            "--force"
++        );
++        if (forceDetachOut.exitCode != 0)
++        {
++            throw new ExtCmdFailedException(forceDetachOut.executedCommand, forceDetachOut);
++        }
++
++        try
++        {
++            Thread.sleep(FORCE_DETACH_RETRY_WAIT_MS);
++        }
++        catch (InterruptedException ignored)
++        {
++            Thread.currentThread().interrupt();
++        }
++        return true;
++    }
++
+     public static class DrbdPrimary implements AutoCloseable
+     {
+         private final DrbdAdm drbdAdm;

@@ -1,0 +1,40 @@
+{{- if .Values.master.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "seaweedfs.componentName" (list . "master") }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/name: {{ template "seaweedfs.name" . }}
+    app.kubernetes.io/component: master
+    helm.sh/chart: {{ .Chart.Name }}-{{ .Chart.Version | replace "+" "_" }}
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+    app.kubernetes.io/instance: {{ .Release.Name }}
+  annotations:
+    service.alpha.kubernetes.io/tolerate-unready-endpoints: "true"
+{{- if .Values.master.annotations }}
+    {{- toYaml .Values.master.annotations | nindent 4 }}
+{{- end }}
+spec:
+  clusterIP: None
+  publishNotReadyAddresses: true
+  ports:
+  - name: "swfs-master"
+    port: {{ .Values.master.port }}
+    targetPort: {{ .Values.master.port }}
+    protocol: TCP
+  - name: "swfs-master-grpc"
+    port: {{ .Values.master.grpcPort }}
+    targetPort: {{ .Values.master.grpcPort }}
+    protocol: TCP
+  {{- if .Values.master.metricsPort }}
+  - name: "metrics"
+    port: {{ .Values.master.metricsPort }}
+    targetPort: {{ .Values.master.metricsPort }}
+    protocol: TCP
+  {{- end }}
+  selector:
+    app.kubernetes.io/name: {{ template "seaweedfs.name" . }}
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: master
+{{- end }}

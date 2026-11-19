@@ -1,0 +1,39 @@
+##
+## @section Common parameters
+##
+
+## @typedef {struct} SourceImage - Use image by name.
+## @field {string} name - Name of the image to use.
+## @x-cozystack-options {source: image}
+
+## @typedef {struct} SourceUpload - Upload local image.
+
+## @typedef {struct} SourceHTTP - Download image from an HTTP source.
+## @field {string} url - URL to download the image.
+
+## @typedef {struct} SourceDisk - Clone an existing vm-disk.
+## @field {string} name - Name of the vm-disk to clone.
+
+## @typedef {struct} Source - The source image location used to create a disk.
+## @field {*SourceImage} [image] - Use image by name from default collection.
+## @field {*SourceUpload} [upload] - Upload local image.
+## @field {*SourceHTTP} [http] - Download image from an HTTP source.
+## @field {*SourceDisk} [disk] - Clone an existing vm-disk.
+
+## @param {Source} source - The source image location used to create a disk.
+## @immutable
+source: {}
+
+## @param {bool} optical - Defines if disk should be considered optical.
+optical: false
+
+## @param {quantity} storage - The size of the disk allocated for the virtual machine.
+storage: 5Gi
+
+## @param {string} storageClass - StorageClass used to store the data.
+## @immutable
+## @x-cozystack-options {source: storageclass}
+storageClass: replicated
+
+## @param {bool} bindImmediately - Provision the volume at disk creation instead of waiting for a consumer.
+bindImmediately: true

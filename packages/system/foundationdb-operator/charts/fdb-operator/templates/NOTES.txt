@@ -1,0 +1,6 @@
+FoundationDB operator has been installed successfully.
+
+To see the logs of the operator you can use below command
+kubectl logs deployment/{{ include "fdb-operator.fullname" . }} -n {{ .Release.Namespace }} -f
+
+Thanks for trying out FoundationDB helm chart.

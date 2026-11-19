@@ -1,0 +1,47 @@
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: {{ include "namespace-annotation-webhook.fullname" . }}-selfsigned-issuer
+  namespace: {{ .Release.Namespace }}
+spec:
+  selfSigned: {}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ include "namespace-annotation-webhook.fullname" . }}-root-ca
+  namespace: {{ .Release.Namespace }}
+spec:
+  secretName: {{ include "namespace-annotation-webhook.fullname" . }}-root-ca
+  duration: 43800h  # 5 years
+  commonName: {{ include "namespace-annotation-webhook.fullname" . }}-root-ca
+  issuerRef:
+    name: {{ include "namespace-annotation-webhook.fullname" . }}-selfsigned-issuer
+  isCA: true
+  privateKey:
+    rotationPolicy: Never
+---
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: {{ include "namespace-annotation-webhook.fullname" . }}-ca-issuer
+  namespace: {{ .Release.Namespace }}
+spec:
+  ca:
+    secretName: {{ include "namespace-annotation-webhook.fullname" . }}-root-ca
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ include "namespace-annotation-webhook.fullname" . }}-cert
+  namespace: {{ .Release.Namespace }}
+spec:
+  secretName: {{ include "namespace-annotation-webhook.fullname" . }}-tls
+  duration: 8760h
+  renewBefore: 720h
+  issuerRef:
+    name: {{ include "namespace-annotation-webhook.fullname" . }}-ca-issuer
+  commonName: {{ include "namespace-annotation-webhook.fullname" . }}-tls
+  dnsNames:
+    - {{ include "namespace-annotation-webhook.fullname" . }}
+    - {{ include "namespace-annotation-webhook.fullname" . }}.{{ .Release.Namespace }}.svc

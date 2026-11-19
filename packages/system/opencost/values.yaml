@@ -1,0 +1,12 @@
+opencost:
+  opencost:
+    prometheus:
+      external:
+        enabled: true
+        url: "http://vmselect-shortterm.tenant-root.svc:8481/select/0/prometheus"
+      internal:
+        enabled: false
+
+    customPricing:
+      enabled: true
+      createConfigmap: true

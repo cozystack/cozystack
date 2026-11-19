@@ -1,0 +1,46 @@
+{{- if .Values.rbac.create -}}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "fluent-bit.fullname" . }}
+  labels:
+    {{- include "fluent-bit.labels" . | nindent 4 }}
+rules:
+  - apiGroups:
+      - ""
+    resources:
+      - namespaces
+      - pods
+      {{- if .Values.rbac.nodeAccess }}
+      - nodes
+      - nodes/metrics
+      - nodes/proxy
+      {{- end }}
+      {{- if .Values.rbac.eventsAccess }}
+      - events
+      {{- end }}
+    verbs:
+      - get
+      - list
+      - watch
+  {{- if and .Values.podSecurityPolicy.create (semverCompare "<=1.25-0" .Capabilities.KubeVersion.GitVersion) }}
+  - apiGroups:
+      - policy
+    resources:
+      - podsecuritypolicies
+    resourceNames:
+      - {{ include "fluent-bit.fullname" . }}
+    verbs:
+      - use
+  {{- end }}
+  {{- if .Values.openShift.enabled }}
+  - apiGroups:
+      - security.openshift.io
+    resources:
+      - securitycontextconstraints
+    resourceNames:
+      - {{ include "fluent-bit.openShiftSccName" . }}
+    verbs:
+      - use
+  {{- end }}
+{{- end -}}

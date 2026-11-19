@@ -1,0 +1,104 @@
+{{- $targetTenant := .Values._namespace.monitoring }}
+{{- $clusterDomain := (index .Values._cluster "cluster-domain") | default "cozy.local" }}
+{{- if and .Values.addons.monitoringAgents.enabled .Values._namespace.etcd }}
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: {{ .Release.Name }}-monitoring-agents
+  labels:
+    cozystack.io/repository: system
+    cozystack.io/target-cluster-name: {{ .Release.Name }}
+    sharding.fluxcd.io/key: tenants
+spec:
+  releaseName: cozy-monitoring-agents
+  chartRef:
+    kind: ExternalArtifact
+    name: cozystack-kubernetes-application-kubevirt-kubernetes-monitoring-agents
+    namespace: cozy-system
+  kubeConfig:
+    secretRef:
+      name: {{ .Release.Name }}-admin-kubeconfig
+      key: super-admin.svc
+  targetNamespace: cozy-monitoring
+  storageNamespace: cozy-monitoring
+  interval: 5m
+  timeout: 10m
+  install:
+    createNamespace: true
+    remediation:
+      retries: -1
+  upgrade:
+    remediation:
+      retries: -1
+  dependsOn:
+  - name: {{ .Release.Name }}-cozy-victoria-metrics-operator
+    namespace: {{ .Release.Namespace }}
+  - name: {{ .Release.Name }}-vertical-pod-autoscaler-crds
+    namespace: {{ .Release.Namespace }}
+  - name: {{ .Release.Name }}-prometheus-operator-crds
+    namespace: {{ .Release.Namespace }}
+  - name: {{ .Release.Name }}-metrics-server
+    namespace: {{ .Release.Namespace }}
+  values:
+    vmagent:
+      externalLabels:
+        cluster: {{ .Release.Name }}
+        tenant: {{ .Release.Namespace }}
+      remoteWrite:
+        urls:
+          - http://vminsert-shortterm.{{ $targetTenant }}.svc.{{ $clusterDomain }}:8480/insert/0/prometheus
+    fluent-bit:
+      readinessProbe:
+        httpGet:
+          path: /
+      daemonSetVolumes:
+        - name: varlog
+          hostPath:
+            path: /var/log
+        - name: varlibdockercontainers
+          hostPath:
+            path: /var/lib/docker/containers
+      daemonSetVolumeMounts:
+        - name: varlog
+          mountPath: /var/log
+        - name: varlibdockercontainers
+          mountPath: /var/lib/docker/containers
+          readOnly: true
+      config:
+        outputs: |
+          [OUTPUT]
+              Name http
+              Match kube.*
+              Host vlinsert-generic.{{ $targetTenant }}.svc.{{ $clusterDomain }}
+              port 9481
+              compress gzip
+              uri /insert/jsonline?_stream_fields=stream,kubernetes_pod_name,kubernetes_container_name,kubernetes_namespace_name&_msg_field=log&_time_field=date
+              format json_lines
+              json_date_format iso8601
+              header AccountID 0
+              header ProjectID 0
+        filters: |
+          [FILTER]
+              Name kubernetes
+              Match kube.*
+              Merge_Log On
+              Merge_Log_Key log_processed
+              Keep_Log On
+              K8S-Logging.Parser On
+              K8S-Logging.Exclude On
+          [FILTER]
+              Name                nest
+              Match               *
+              Wildcard            pod_name
+              Operation lift
+              Nested_under kubernetes
+              Add_prefix   kubernetes_
+          [FILTER]
+              Name modify
+              Match *
+              Add tenant {{ .Release.Namespace }}
+          [FILTER]
+              Name modify
+              Match *
+              Add cluster {{ .Release.Name }}
+{{- end }}

@@ -1,0 +1,23 @@
+{{- $fullName := include "chart.fullname" . -}}
+{{- $svcPort := .Values.service.port -}}
+{{- $data := dict "Chart" .Chart "Release" .Release "Values" .Values -}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $fullName }}
+  namespace: {{ include "chart.namespaceName" . }}
+  labels:
+    {{- include "chart.labels" $data | nindent 4 }}
+  {{- if .Values.annotations }}
+  annotations:
+{{ toYaml .Values.annotations | indent 4 }}
+  {{- end }}
+spec:
+  type: {{ .Values.service.type}}
+  ports:
+    - name: metrics
+      port: {{ $svcPort }}
+      protocol: TCP
+  selector:
+    {{- include "chart.selectorLabels" $data | nindent 4 }}
+

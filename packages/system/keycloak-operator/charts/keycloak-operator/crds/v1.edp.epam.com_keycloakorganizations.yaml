@@ -1,0 +1,149 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.18.0
+  name: keycloakorganizations.v1.edp.epam.com
+spec:
+  group: v1.edp.epam.com
+  names:
+    kind: KeycloakOrganization
+    listKind: KeycloakOrganizationList
+    plural: keycloakorganizations
+    singular: keycloakorganization
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - description: Reconciliation status
+      jsonPath: .status.value
+      name: Status
+      type: string
+    - description: Keycloak organization ID
+      jsonPath: .status.organizationId
+      name: Organization ID
+      type: string
+    - description: Keycloak realm name
+      jsonPath: .spec.realmName
+      name: Realm
+      type: string
+    - description: Keycloak instance name
+      jsonPath: .spec.keycloakRef.name
+      name: Keycloak
+      type: string
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: KeycloakOrganization is the Schema for the organizations API.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: KeycloakOrganizationSpec defines the desired state of Organization.
+            properties:
+              alias:
+                description: |-
+                  Alias is the unique alias for the organization.
+                  The alias should be unique across Organizations.
+                type: string
+              attributes:
+                additionalProperties:
+                  items:
+                    type: string
+                  type: array
+                description: Attributes is a map of custom attributes for the organization.
+                nullable: true
+                type: object
+              description:
+                description: Description is an optional description of the organization.
+                type: string
+              domains:
+                description: |-
+                  Domains is a list of email domains associated with the organization.
+                  Each domain should be unique across Organizations.
+                items:
+                  type: string
+                minItems: 1
+                type: array
+              identityProviders:
+                description: |-
+                  IdentityProviders is a list of identity providers associated with the organization.
+                  One identity provider can't be assigned to multiple organizations.
+                items:
+                  description: OrgIdentityProvider defines an identity provider for
+                    an organization.
+                  properties:
+                    alias:
+                      description: Alias is the unique identifier for the identity
+                        provider within the organization.
+                      type: string
+                  required:
+                  - alias
+                  type: object
+                nullable: true
+                type: array
+              name:
+                description: |-
+                  Name is the unique name of the organization.
+                  The name should be unique across Organizations.
+                type: string
+              realmRef:
+                description: RealmRef is reference to Realm custom resource.
+                properties:
+                  kind:
+                    default: KeycloakRealm
+                    description: Kind specifies the kind of the Keycloak resource.
+                    enum:
+                    - KeycloakRealm
+                    - ClusterKeycloakRealm
+                    type: string
+                  name:
+                    description: Name specifies the name of the Keycloak resource.
+                    type: string
+                required:
+                - name
+                type: object
+              redirectUrl:
+                description: RedirectURL is the optional redirect URL for the organization.
+                type: string
+            required:
+            - alias
+            - domains
+            - name
+            - realmRef
+            type: object
+          status:
+            description: KeycloakOrganizationStatus defines the observed state of
+              Organization.
+            properties:
+              error:
+                description: Error is the error message if the reconciliation failed.
+                type: string
+              organizationId:
+                description: OrganizationID is the unique identifier of the organization
+                  in Keycloak.
+                type: string
+              value:
+                description: Value contains the current reconciliation status.
+                type: string
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

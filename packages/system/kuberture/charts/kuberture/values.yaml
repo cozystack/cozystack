@@ -1,0 +1,54 @@
+replicaCount: 1
+revisionHistoryLimit: 3
+
+image:
+  repository: ghcr.io/lexfrei/kuberture
+  tag: "0.1.1"
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+serviceAccount:
+  create: true
+  annotations: {}
+  name: ""
+
+config:
+  source:
+    namespace: default
+    serviceName: kubernetes
+  outputs: []
+  metricsBindAddress: ":8080"
+  healthProbeBindAddress: ":8081"
+
+resources:
+  requests:
+    cpu: 10m
+    memory: 32Mi
+  limits:
+    memory: 64Mi
+
+pdb:
+  minAvailable: 1
+
+networkPolicy:
+  enabled: false
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+podAnnotations: {}
+podLabels: {}
+
+service:
+  type: ClusterIP
+  port: 8080
+
+serviceMonitor:
+  enabled: false
+  interval: 30s
+  scrapeTimeout: 10s
+  additionalLabels: {}

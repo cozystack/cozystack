@@ -1,0 +1,18 @@
+{{- if and ( .Capabilities.APIVersions.Has "monitoring.coreos.com/v1" ) .Values.prometheusRule.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: {{ include "fluent-bit.fullname" . }}
+  namespace: {{ default $.Release.Namespace .Values.prometheusRule.namespace }}
+  labels:
+    {{- include "fluent-bit.labels" . | nindent 4 }}
+  {{- if .Values.prometheusRule.additionalLabels }}
+    {{- toYaml .Values.prometheusRule.additionalLabels | nindent 4 }}
+  {{- end }}
+spec:
+{{- if .Values.prometheusRule.rules }}
+  groups:
+  - name: {{ template "fluent-bit.name" . }}
+    rules: {{- toYaml .Values.prometheusRule.rules | nindent 4 }}
+{{- end }}
+{{- end }}

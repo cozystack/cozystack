@@ -1,0 +1,46 @@
+apiVersion: operator.victoriametrics.com/v1beta1
+kind: VMServiceScrape
+metadata:
+  name: {{ .Release.Name }}
+  labels:
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+spec:
+  jobLabel: jobLabel
+  namespaceSelector:
+    matchNames:
+    - {{ .Release.Namespace }}
+  endpoints:
+  - metricRelabelConfigs:
+    relabelConfigs:
+    - replacement: redis
+      targetLabel: job
+    - sourceLabels: [__meta_kubernetes_pod_node_name]
+      targetLabel: node
+    - replacement: cluster
+      targetLabel: tier
+    - target_label: service
+      replacement: {{ .Release.Name }}
+    port: metrics
+  selector:
+    matchLabels:
+      app: {{ .Release.Name }}-metrics
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Release.Name }}-metrics
+  labels:
+    app: {{ .Release.Name }}-metrics
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+  annotations:
+spec:
+  selector:
+    app.kubernetes.io/component: redis
+    app.kubernetes.io/name: {{ .Release.Name }}
+    app.kubernetes.io/part-of: redis-failover
+  ports:
+  - name: metrics
+    port: 9121
+    targetPort: metrics

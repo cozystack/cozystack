@@ -1,0 +1,12 @@
+# Map of tenant StorageClasses to create, keyed by name. Normally populated by
+# the parent kubernetes chart from remote-accessible LINSTOR infra classes; the
+# default below is the fallback used for `helm template` / unit tests.
+storageClasses:
+  replicated:
+    infraStorageClass: replicated
+    default: true
+  kubevirt:
+    infraStorageClass: replicated
+    default: false
+csiDriver:
+  image: ghcr.io/cozystack/cozystack/kubevirt-csi-driver:v1.6.0@sha256:d6326e343c7932ce3d375c6742b9b9745090a4a26bf5bbc5ad19f5504ea93d65

@@ -1,0 +1,37 @@
+suite: cozy-hami chart rendering invariants
+release:
+  name: hami
+  namespace: cozy-hami
+tests:
+  - it: pins the HAMi device-plugin image
+    template: charts/hami/templates/device-plugin/daemonsetnvidia.yaml
+    documentSelector:
+      path: kind
+      value: DaemonSet
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].image
+          pattern: 'projecthami/hami:v2\.9\.0'
+
+  # Guards the cozystack indent->nindent patch on the monitor Service labels
+  # block: with custom labels set, they must render as proper map entries.
+  - it: renders device-plugin monitor Service custom labels (nindent patch)
+    template: charts/hami/templates/device-plugin/monitorservice.yaml
+    set:
+      hami.devicePlugin.service.labels:
+        team: cozystack
+    asserts:
+      - equal:
+          path: metadata.labels.team
+          value: cozystack
+
+  # Same nindent patch on the scheduler Service (shares the upstream defect).
+  - it: renders scheduler Service custom labels (nindent patch)
+    template: charts/hami/templates/scheduler/service.yaml
+    set:
+      hami.scheduler.service.labels:
+        team: cozystack
+    asserts:
+      - equal:
+          path: metadata.labels.team
+          value: cozystack

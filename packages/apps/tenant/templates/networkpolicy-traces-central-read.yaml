@@ -1,0 +1,23 @@
+{{- if and (include "tenant.ciliumPolicies" .) (include "tenant.tracingCentralEgress" .) }}
+# Read hop of shared-central tracing: Grafana reaches the tenant-root vmauth,
+# never vtselect, which serves any account a client names.
+apiVersion: cilium.io/v2
+kind: CiliumClusterwideNetworkPolicy
+metadata:
+  name: {{ include "tenant.name" . }}-egress-traces-central-read
+spec:
+  endpointSelector:
+    matchLabels:
+      "k8s:io.kubernetes.pod.namespace": "{{ include "tenant.name" . }}"
+      "k8s:app": grafana
+  egress:
+  - toEndpoints:
+    - matchLabels:
+        "k8s:app.kubernetes.io/name": vmauth
+        "k8s:app.kubernetes.io/instance": traces-central
+        "k8s:io.kubernetes.pod.namespace": tenant-root
+    toPorts:
+    - ports:
+      - port: "8427"
+        protocol: TCP
+{{- end }}

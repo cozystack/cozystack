@@ -1,0 +1,44 @@
+suite: dashboard resource Role and the admin kubeconfig Secret
+
+values:
+  - values-ci.yaml
+
+templates:
+  - templates/dashboard-resourcemap.yaml
+
+tests:
+  - it: grants the tenant read on the admin kubeconfig of its own cluster
+    release:
+      name: kubernetes-foo
+      namespace: tenant-alice
+    documentSelector:
+      path: kind
+      value: Role
+    asserts:
+      - lengthEqual:
+          path: rules
+          count: 4
+      - equal:
+          path: rules[?(@.resources[0]=="secrets")].resourceNames
+          value:
+            - kubernetes-foo-admin-kubeconfig
+
+  - it: grants no read on the admin kubeconfig when the wrapper withholds it
+    release:
+      name: computeplane-cluster
+      namespace: tenant-alice
+    set:
+      withholdAdminKubeconfig: true
+    documentSelector:
+      path: kind
+      value: Role
+    asserts:
+      - lengthEqual:
+          path: rules
+          count: 3
+      - notExists:
+          path: rules[?(@.resources[0]=="secrets")]
+      - equal:
+          path: rules[?(@.resources[0]=="services")].resourceNames
+          value:
+            - computeplane-cluster

@@ -1,0 +1,29 @@
+suite: shared-central traces egress reaches tenant-root at any depth
+# The shared store lives in tenant-root, not in the parent, so a tenant nested
+# below a non-root parent must still target tenant-root.
+templates:
+  - templates/networkpolicy-traces-central.yaml
+release:
+  name: tenant-deep
+  namespace: tenant-ktj
+set:
+  tracingCentral: true
+  monitoring: true
+tests:
+  - it: targets tenant-root even for a tenant nested below a non-root parent
+    documentSelector:
+      path: metadata.name
+      value: tenant-ktj-deep-egress-traces-central
+    asserts:
+      - equal:
+          path: spec.egress
+          value:
+            - toEndpoints:
+                - matchLabels:
+                    "k8s:app.kubernetes.io/name": vmauth
+                    "k8s:app.kubernetes.io/instance": traces-central
+                    "k8s:io.kubernetes.pod.namespace": tenant-root
+              toPorts:
+                - ports:
+                    - port: "8427"
+                      protocol: TCP

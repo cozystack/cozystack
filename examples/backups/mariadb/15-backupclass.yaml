@@ -1,0 +1,16 @@
+# Maps Kind=MariaDB to the mariadb-operator strategy. BackupClass is
+# cluster-scoped, so a single instance covers every namespace.
+---
+apiVersion: backups.cozystack.io/v1alpha1
+kind: BackupClass
+metadata:
+  name: mariadb-default
+spec:
+  strategies:
+    - application:
+        apiGroup: apps.cozystack.io
+        kind: MariaDB
+      strategyRef:
+        apiGroup: strategy.backups.cozystack.io
+        kind: MariaDB
+        name: mariadb-strategy-default

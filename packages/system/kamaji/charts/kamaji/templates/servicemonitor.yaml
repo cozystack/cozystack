@@ -1,0 +1,21 @@
+{{- if and (.Capabilities.APIVersions.Has "monitoring.coreos.com/v1") .Values.serviceMonitor.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  labels:
+    {{- $data := . | mustMergeOverwrite (dict "component" "servicemonitor") -}}
+    {{- include "kamaji.labels" $data | nindent 4 }}
+  name: {{ include "kamaji.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+spec:
+  endpoints:
+    - path: /metrics
+      port: metrics
+      scheme: http
+  namespaceSelector:
+    matchNames:
+      - {{ .Release.Namespace }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "kamaji.name" . }}
+{{- end }}

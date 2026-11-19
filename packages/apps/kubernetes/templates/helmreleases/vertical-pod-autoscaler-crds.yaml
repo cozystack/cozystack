@@ -1,0 +1,30 @@
+{{- if and .Values.addons.monitoringAgents.enabled .Values._namespace.etcd }}
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: {{ .Release.Name }}-vertical-pod-autoscaler-crds
+  labels:
+    cozystack.io/repository: system
+    cozystack.io/target-cluster-name: {{ .Release.Name }}
+    sharding.fluxcd.io/key: tenants
+spec:
+  interval: 5m
+  releaseName: vertical-pod-autoscaler-crds
+  chartRef:
+    kind: ExternalArtifact
+    name: cozystack-kubernetes-application-kubevirt-kubernetes-vertical-pod-autoscaler-crds
+    namespace: cozy-system
+  kubeConfig:
+    secretRef:
+      name: {{ .Release.Name }}-admin-kubeconfig
+      key: super-admin.svc
+  targetNamespace: cozy-vertical-pod-autoscaler-crds
+  storageNamespace: cozy-vertical-pod-autoscaler-crds
+  install:
+    createNamespace: true
+    remediation:
+      retries: -1
+  upgrade:
+    remediation:
+      retries: -1
+{{- end }}

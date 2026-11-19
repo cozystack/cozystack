@@ -1,0 +1,28 @@
+{{- $host := index .Values._cluster "root-host" }}
+{{- $exposeServices := splitList "," ((index .Values._cluster "expose-services") | default "") }}
+{{- $exposeIngress := (index .Values._cluster "expose-ingress") | default "tenant-root" }}
+{{- $gatewayEnabled := (index .Values._cluster "gateway-enabled") | default "false" }}
+
+{{- if and (has "vm-exportproxy" $exposeServices) (ne $gatewayEnabled "true") }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  annotations:
+    nginx.ingress.kubernetes.io/backend-protocol: HTTPS
+    nginx.ingress.kubernetes.io/ssl-passthrough: "true"
+  name: vm-exportproxy
+  namespace: cozy-kubevirt
+spec:
+  ingressClassName: {{ $exposeIngress }}
+  rules:
+  - host: vm-exportproxy.{{ $host }}
+    http:
+      paths:
+      - backend:
+          service:
+            name: virt-exportproxy
+            port:
+              number: 443
+        path: /
+        pathType: ImplementationSpecific
+{{- end }}

@@ -1,0 +1,5 @@
+mariadb-operator CRDs have been successfully installed! 🦭
+
+To complete the mariadb-operator installation, please now proceed to install the
+mariadb-operator chart:
+https://github.com/mariadb-operator/mariadb-operator?tab=readme-ov-file#helm-installation

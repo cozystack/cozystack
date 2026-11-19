@@ -1,0 +1,184 @@
+{{- if .Values.controller.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ template "metallb.fullname" . }}-controller
+  namespace: {{ .Release.Namespace | quote }}
+  labels:
+    {{- include "metallb.labels" . | nindent 4 }}
+    app.kubernetes.io/component: controller
+    {{- range $key, $value := .Values.controller.labels }}
+    {{ $key }}: {{ $value | quote }}
+    {{- end }}
+spec:
+  {{- if .Values.controller.strategy }}
+  strategy: {{- toYaml .Values.controller.strategy | nindent 4 }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "metallb.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: controller
+  template:
+    metadata:
+      {{- if or .Values.prometheus.scrapeAnnotations .Values.controller.podAnnotations }}
+      annotations:
+        {{- if .Values.prometheus.scrapeAnnotations }}
+        prometheus.io/scrape: "true"
+        prometheus.io/scheme: "https"
+        prometheus.io/port: "{{ .Values.prometheus.metricsPort }}"
+        {{- end }}
+        {{- with .Values.controller.podAnnotations }}
+          {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- end }}
+      labels:
+        {{- include "metallb.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: controller
+        {{- range $key, $value := .Values.controller.labels }}
+        {{ $key }}: {{ $value | quote }}
+        {{- end }}
+    spec:
+      {{- with .Values.controller.runtimeClassName }}
+      runtimeClassName: {{ . | quote }}
+      {{- end }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ template "metallb.controller.serviceAccountName" . }}
+      terminationGracePeriodSeconds: 0
+{{- if .Values.controller.securityContext }}
+      securityContext:
+{{ toYaml .Values.controller.securityContext | indent 8 }}
+{{- end }}
+      containers:
+      - name: controller
+        image: {{ .Values.controller.image.repository }}:{{ .Values.controller.image.tag | default .Chart.AppVersion }}
+        {{- if .Values.controller.image.pullPolicy }}
+        imagePullPolicy: {{ .Values.controller.image.pullPolicy }}
+        {{- end }}
+        {{- if .Values.controller.command }}
+        command:
+          - {{ .Values.controller.command }}
+        {{- end }}
+        args:
+        - --port={{ .Values.prometheus.metricsPort }}
+        {{- with .Values.controller.logLevel }}
+        - --log-level={{ . }}
+        {{- end }}
+        {{- if .Values.loadBalancerClass }}
+        - --lb-class={{ .Values.loadBalancerClass }}
+        {{- end }}
+        {{- if .Values.controller.webhookMode }}
+        - --webhook-mode={{ .Values.controller.webhookMode }}
+        {{- end }}
+        {{- if .Values.tls.cipherSuites }}
+        - --tls-cipher-suites={{ .Values.tls.cipherSuites }}
+        {{- end }}
+        {{- if .Values.tls.curvePreferences }}
+        - --tls-curve-preferences={{ .Values.tls.curvePreferences }}
+        {{- end }}
+        {{- if .Values.tls.minVersion }}
+        - --tls-min-version={{ .Values.tls.minVersion }}
+        {{- end }}
+        {{- if .Values.tls.controllerMetricsTLSSecret }}
+        - --metrics-cert-dir=/etc/metrics
+        {{- end }}
+        env:
+        - name: METALLB_POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        {{- if and .Values.speaker.enabled .Values.speaker.memberlist.enabled }}
+        - name: METALLB_ML_SECRET_NAME
+          value: {{ include "metallb.secretName" . }}
+        - name: METALLB_DEPLOYMENT
+          value: {{ template "metallb.fullname" . }}-controller
+        {{- end }}
+        {{- if and .Values.speaker.enabled .Values.speaker.frr.enabled }}
+        - name: METALLB_BGP_TYPE
+          value: frr
+        {{- end }}
+        {{- if or .Values.frrk8s.enabled .Values.frrk8s.external }}
+        - name: METALLB_BGP_TYPE
+          value: frr-k8s
+        {{- end }}
+        ports:
+        - name: metricshttps
+          containerPort: {{ .Values.prometheus.metricsPort }}
+        {{- if and .Values.controller.webhookMode (ne .Values.controller.webhookMode "disabled") }}
+        - containerPort: 9443
+          name: webhook-server
+          protocol: TCP
+        {{- end }}
+        volumeMounts:
+        - mountPath: /tmp/k8s-webhook-server/serving-certs
+          name: cert
+          readOnly: true
+        {{- if .Values.tls.controllerMetricsTLSSecret }}
+        - name: metrics-certs
+          mountPath: /etc/metrics
+          readOnly: true
+        {{- end }}
+        {{- if .Values.controller.livenessProbe.enabled }}
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: {{ .Values.controller.livenessProbe.port }}
+          initialDelaySeconds: {{ .Values.controller.livenessProbe.initialDelaySeconds }}
+          periodSeconds: {{ .Values.controller.livenessProbe.periodSeconds }}
+          timeoutSeconds: {{ .Values.controller.livenessProbe.timeoutSeconds }}
+          successThreshold: {{ .Values.controller.livenessProbe.successThreshold }}
+          failureThreshold: {{ .Values.controller.livenessProbe.failureThreshold }}
+        {{- end }}
+        {{- if .Values.controller.readinessProbe.enabled }}
+        readinessProbe:
+          httpGet:
+            path: /readyz
+            port: {{ .Values.controller.readinessProbe.port }}
+          initialDelaySeconds: {{ .Values.controller.readinessProbe.initialDelaySeconds }}
+          periodSeconds: {{ .Values.controller.readinessProbe.periodSeconds }}
+          timeoutSeconds: {{ .Values.controller.readinessProbe.timeoutSeconds }}
+          successThreshold: {{ .Values.controller.readinessProbe.successThreshold }}
+          failureThreshold: {{ .Values.controller.readinessProbe.failureThreshold }}
+        {{- end }}
+        {{- with .Values.controller.resources }}
+        resources:
+          {{- toYaml . | nindent 10 }}
+        {{- end }}
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop:
+            - ALL
+      {{- if .Values.controller.extraContainers }}
+      {{- toYaml .Values.controller.extraContainers | nindent 6 }}
+      {{- end }}
+      nodeSelector:
+        "kubernetes.io/os": linux
+        {{- with .Values.controller.nodeSelector }}
+          {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- with .Values.controller.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.controller.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 6 }}
+      {{- end }}
+      {{- with .Values.controller.priorityClassName }}
+      priorityClassName: {{ . | quote }}
+      {{- end }}
+      volumes:
+      - name: cert
+        secret:
+          defaultMode: 420
+          secretName: metallb-webhook-cert
+      {{- if .Values.tls.controllerMetricsTLSSecret }}
+      - name: metrics-certs
+        secret:
+          secretName: {{ .Values.tls.controllerMetricsTLSSecret }}
+      {{- end }}
+{{- end }}

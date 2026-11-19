@@ -1,0 +1,147 @@
+suite: networking.multus.resources bundle wiring
+templates:
+  - templates/bundles/system.yaml
+release:
+  name: cozystack
+  namespace: cozy-system
+tests:
+  # Unset leaves the multus chart default in charge rather than freezing a copy
+  # of it into every Package.
+  - it: passes no resources when the key is unset
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+    documentSelector:
+      path: metadata.name
+      value: cozystack.multus
+    asserts:
+      - notExists:
+          path: spec.components.multus.values.resources
+      - equal:
+          path: spec.components.multus.values.stageCniPlugins
+          value: true
+
+  - it: passes an override on talos next to stageCniPlugins
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+      networking:
+        multus:
+          resources:
+            limits:
+              memory: 8Gi
+    documentSelector:
+      path: metadata.name
+      value: cozystack.multus
+    asserts:
+      - equal:
+          path: spec.components.multus.values
+          value:
+            stageCniPlugins: true
+            resources:
+              limits:
+                memory: 8Gi
+
+  - it: passes an override on generic Linux
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full-generic
+      networking:
+        multus:
+          resources:
+            requests:
+              cpu: 500m
+    documentSelector:
+      path: metadata.name
+      value: cozystack.multus
+    asserts:
+      - equal:
+          path: spec.components.multus.values.resources
+          value:
+            requests:
+              cpu: 500m
+
+  - it: passes an override when multus is opted in on a slim variant
+    values:
+      - ../values-isp-slim-generic.yaml
+    set:
+      bundles:
+        enabledPackages:
+          - cozystack.multus
+      networking:
+        multus:
+          resources:
+            limits:
+              memory: 8Gi
+    documentSelector:
+      path: metadata.name
+      value: cozystack.multus
+    asserts:
+      - equal:
+          path: spec.components.multus.values.resources.limits.memory
+          value: 8Gi
+
+  - it: reads an explicit null as unset
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+      networking:
+        multus:
+          resources: null
+    documentSelector:
+      path: metadata.name
+      value: cozystack.multus
+    asserts:
+      - notExists:
+          path: spec.components.multus.values.resources
+
+  - it: refuses resources that are not a map
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+      networking:
+        multus:
+          resources: 4Gi
+    asserts:
+      - failedTemplate:
+          errorMessage: 'networking.multus.resources: expected a map, got string'
+
+  # An uncommented `multus:` with nothing under it arrives as null.
+  - it: reads a null multus block as unset
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+      networking:
+        multus: null
+    documentSelector:
+      path: metadata.name
+      value: cozystack.multus
+    asserts:
+      - notExists:
+          path: spec.components.multus.values.resources
+
+  # false is the spelling most likely to mean "turn multus off", which this key
+  # does not do, so it must not pass as unset.
+  - it: refuses a multus block that is not a map
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+      networking:
+        multus: false
+    asserts:
+      - failedTemplate:
+          errorMessage: 'networking.multus: expected a map, got bool'

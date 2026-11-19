@@ -1,0 +1,113 @@
+{{- if .Values.rbac.create -}}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "frrk8s.fullname" . }}-controller
+  labels: {{- include "frrk8s.labels" . | nindent 4 }}
+rules:
+- apiGroups: ["frrk8s.metallb.io"]
+  resources: ["frrk8sconfigurations"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: ["frrk8s.metallb.io"]
+  resources: ["frrconfigurations"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: ["frrk8s.metallb.io"]
+  resources: ["frrnodestates"]
+  verbs: ["get", "list", "watch", "create", "delete", "patch", "update"]
+- apiGroups: ["frrk8s.metallb.io"]
+  resources: ["frrnodestates/status"]
+  verbs: ["get", "patch", "update"]
+- apiGroups: ["frrk8s.metallb.io"]
+  resources: ["bgpsessionstates"]
+  verbs: ["get", "list", "watch", "create", "delete", "patch", "update"]
+- apiGroups: ["frrk8s.metallb.io"]
+  resources: ["bgpsessionstates/status"]
+  verbs: ["get", "patch", "update"]
+- apiGroups: [""]
+  resources: ["nodes"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: ["authentication.k8s.io"]
+  resources: ["tokenreviews"]
+  verbs: ["create"]
+- apiGroups: ["authorization.k8s.io"]
+  resources: ["subjectaccessreviews"]
+  verbs: ["create"]
+- apiGroups: ["admissionregistration.k8s.io"]
+  resources: ["validatingwebhookconfigurations"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: ["admissionregistration.k8s.io"]
+  resourceNames: ["frr-k8s-validating-webhook-configuration"]
+  resources: ["validatingwebhookconfigurations"]
+  verbs: ["update"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "frrk8s.fullname" . }}-controller
+  labels: {{- include "frrk8s.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "frrk8s.fullname" . }}-controller
+subjects:
+- kind: ServiceAccount
+  name: {{ include "frrk8s.serviceAccountName" . }}
+  namespace: {{ .Release.Namespace | quote }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "frrk8s.fullname" . }}-controller
+  namespace: {{ .Release.Namespace | quote }}
+  labels: {{- include "frrk8s.labels" . | nindent 4 }}
+rules:
+- apiGroups: [""]
+  resources: ["secrets"]
+  verbs: ["get", "list", "watch","update"]
+- apiGroups: [""]
+  resources: ["pods"]
+  verbs: ["get","list","watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "frrk8s.fullname" . }}-controller
+  namespace: {{ .Release.Namespace | quote }}
+  labels: {{- include "frrk8s.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "frrk8s.fullname" . }}-controller
+subjects:
+- kind: ServiceAccount
+  name: {{ include "frrk8s.serviceAccountName" . }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "frrk8s.fullname" . }}-nodestate-cleaner
+  namespace: {{ .Release.Namespace | quote }}
+  labels: {{- include "frrk8s.labels" . | nindent 4 }}
+rules:
+- apiGroups: [""]
+  resources: ["pods"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: ["frrk8s.metallb.io"]
+  resources: ["frrnodestates"]
+  verbs: ["get", "list", "watch", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "frrk8s.fullname" . }}-nodestate-cleaner
+  namespace: {{ .Release.Namespace | quote }}
+  labels: {{- include "frrk8s.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "frrk8s.fullname" . }}-nodestate-cleaner
+subjects:
+- kind: ServiceAccount
+  name: {{ include "frrk8s.serviceAccountName" . }}
+{{ end -}}

@@ -1,0 +1,86 @@
+{{- $host := index .Values._cluster "root-host" }}
+{{- $extraRedirectUris := splitList "," ((index .Values._cluster "extra-keycloak-redirect-uri-for-dashboard") | default "") }}
+
+{{- $existingDashboardSecret := lookup "v1" "Secret" .Release.Namespace "dashboard-client" }}
+
+{{ $dashboardClient := "" }}
+{{- if $existingDashboardSecret }}
+  {{- $dashboardClient = index $existingDashboardSecret.data "client-secret-key" | b64dec }}
+{{- else }}
+  {{- $dashboardClient = randAlphaNum 32 }}
+{{- end }}
+
+{{- $existingAuthConfig := lookup "v1" "Secret" .Release.Namespace "dashboard-auth-config" }}
+{{ $cookieSecret := "" }}
+{{- if $existingAuthConfig }}
+  {{- $cookieSecret = index $existingAuthConfig.data "cookieSecret" | b64dec }}
+{{- else }}
+  {{- $cookieSecret = randAlphaNum 16 }}
+{{- end }}
+
+
+---
+
+apiVersion: v1
+kind: Secret
+metadata:
+  name: dashboard-client
+type: Opaque
+data:
+  client-secret-key: {{ $dashboardClient | b64enc }}
+
+---
+
+apiVersion: v1
+kind: Secret
+metadata:
+  name: dashboard-auth-config
+type: Opaque
+data:
+  cookieSecret: {{ $cookieSecret | b64enc }}
+
+
+
+---
+
+{{- if .Capabilities.APIVersions.Has "v1.edp.epam.com/v1" }}
+---
+apiVersion: v1.edp.epam.com/v1
+kind: KeycloakClient
+metadata:
+  name: dashboard-client
+  annotations:
+    secret-hash: {{ $dashboardClient | sha256sum }}
+spec:
+  serviceAccount:
+    enabled: true
+  realmRef:
+    name: keycloakrealm-cozy
+    kind: ClusterKeycloakRealm
+  secret: $dashboard-client:client-secret-key
+  advancedProtocolMappers: true
+  name: dashboard
+  clientId: dashboard
+  directAccess: true
+  public: false
+  webUrl: "https://dashboard.{{ $host }}"
+  webOrigins:
+    - "+"
+  defaultClientScopes:
+    - groups
+    - kubernetes-client
+  # offline_access is intentionally not offered: an offline refresh token
+  # survives logout (see the proxy Deployment's --scope). NB the
+  # keycloak-operator only adds client scopes, so dropping this does not strip
+  # the realm-default offline_access from an already-created client; the proxy
+  # --scope change is what prevents issuance.
+  attributes:
+    post.logout.redirect.uris: "+"
+    client.session.idle.timeout: "86400"
+    client.session.max.lifespan: "604800"
+  redirectUris:
+    - "https://dashboard.{{ $host }}/oauth2/callback/*"
+    {{- range $i, $v := $extraRedirectUris }}
+    - "{{ $v }}"
+    {{- end }}
+{{- end }}

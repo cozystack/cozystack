@@ -1,0 +1,131 @@
+#!/bin/bash
+# Migration 47 --> 48
+# Pin the implicit default "md0" node group explicitly on existing tenant
+# Kubernetes clusters.
+#
+# The kubernetes app chart used to ship a default nodeGroups.md0 in
+# values.yaml, which Helm merged into every cluster's values. The default is
+# now applied only when nodeGroups is empty (see the kubernetes chart helper
+# "kubernetes.nodeGroups"). Clusters that defined their own nodeGroups without
+# md0 were nonetheless getting md0 via the merge, and md0 is tracked in their
+# Helm release manifest; without this migration the new chart would prune the
+# live md0 MachineDeployment (→ CAPI MachineSet/Machine/node deletion) on the
+# next reconcile. We pin md0 explicitly to preserve the current node topology.
+# Operators may remove it afterwards on clusters that do not need it.
+#
+# Idempotent: clusters that already define md0 are left untouched.
+# Fail-closed: any read or patch failure aborts the migration (exit 1) before the
+# version stamp advances, so the pre-upgrade hook fails and Helm does not roll out
+# the new kubernetes chart against clusters whose md0 is not yet pinned (their
+# live md0 MachineDeployment would otherwise be pruned). CURRENT_VERSION stays at
+# 47 and the migration retries on the next upgrade.
+
+set -euo pipefail
+
+# shellcheck source=lib/cozystack-version.sh
+. "$(dirname "$0")/lib/cozystack-version.sh"
+
+DRY_RUN="${MIGRATION_DRY_RUN:-0}"
+FAILURES=0
+PATCHED=0
+SKIPPED=0
+
+# Default md0 group, matching the chart's built-in default (kubernetes.nodeGroups).
+MD0_JSON='{"minReplicas":0,"maxReplicas":10,"instanceType":"u1.medium","diskSize":"20Gi","storageClass":"","roles":["ingress-nginx"],"resources":{},"gpus":[],"kubelet":{}}'
+
+# Add .spec.nodeGroups.md0 only when nodeGroups exists and md0 is absent.
+JQ_TRANSFORM="
+  if (.spec.nodeGroups | type) == \"object\" and (.spec.nodeGroups | has(\"md0\") | not)
+  then .spec.nodeGroups.md0 = ${MD0_JSON}
+  else . end
+"
+
+list_objects() {
+  local kind="$1" out
+  if ! out=$(kubectl get "$kind" --all-namespaces \
+       --output 'jsonpath={range .items[*]}{.metadata.namespace}{"\t"}{.metadata.name}{"\n"}{end}' \
+       2>&1); then
+    # CRD not installed (kubernetes app type never registered) → nothing to do.
+    case "$out" in
+      *"the server doesn't have a resource type"*|*"no matches for kind"*|*"NotFound"*) return 0 ;;
+    esac
+    echo "ERROR: kubectl get $kind failed: $out" >&2
+    return 1
+  fi
+  printf '%s' "$out"
+}
+
+patch_md0() {
+  local ns="$1" name="$2" obj new patch kubectl_err out rc
+
+  # Distinguish "object genuinely gone" (NotFound → skip) from any other read
+  # error (RBAC/transient/timeout → failure). On success kubectl writes JSON to
+  # stdout and nothing to stderr; on failure it writes the error to stderr and
+  # nothing to stdout, so a combined capture keyed on the exit code is exact.
+  out=$(kubectl get kuberneteses.apps.cozystack.io --namespace "$ns" "$name" --output json 2>&1) && rc=0 || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    case "$out" in
+      *"NotFound"*|*"not found"*)
+        echo "SKIP $ns/$name: object not found (deleted concurrently)"
+        SKIPPED=$((SKIPPED + 1)) ;;
+      *)
+        echo "WARN: failed to read $ns/$name: ${out:-unknown error}" >&2
+        FAILURES=$((FAILURES + 1)) ;;
+    esac
+    return 0
+  fi
+  obj="$out"
+
+  new=$(printf '%s' "$obj" | jq -c "$JQ_TRANSFORM")
+  if [ "$(printf '%s' "$obj" | jq -c .spec.nodeGroups)" = "$(printf '%s' "$new" | jq -c .spec.nodeGroups)" ]; then
+    echo "SKIP $ns/$name: md0 already defined (or no nodeGroups)"
+    SKIPPED=$((SKIPPED + 1))
+    return 0
+  fi
+
+  # Patch only md0 — a JSON merge patch carrying the whole re-read nodeGroups map
+  # could restore stale sibling groups if another actor changed them between the
+  # read and the patch. The transform above only ever adds md0.
+  patch=$(printf '%s' "$new" | jq -c '{spec: {nodeGroups: {md0: .spec.nodeGroups.md0}}}')
+
+  if [ "$DRY_RUN" = "1" ]; then
+    echo "[dry-run] would pin md0 on $ns/$name"
+    PATCHED=$((PATCHED + 1))
+    return 0
+  fi
+
+  if kubectl_err=$(printf '%s' "$patch" | kubectl patch kuberneteses.apps.cozystack.io \
+       --namespace "$ns" "$name" --type merge --patch-file /dev/stdin 2>&1 >/dev/null); then
+    echo "Pinned md0 on $ns/$name"
+    PATCHED=$((PATCHED + 1))
+  else
+    echo "WARN: failed to patch $ns/$name: ${kubectl_err:-unknown error}" >&2
+    FAILURES=$((FAILURES + 1))
+  fi
+}
+
+echo "==> Pinning implicit md0 node group on kuberneteses.apps.cozystack.io"
+items=$(list_objects kuberneteses.apps.cozystack.io) || exit 1
+while IFS=$'\t' read -r ns name; do
+  [ -z "$ns" ] && continue
+  patch_md0 "$ns" "$name"
+done <<<"$items"
+
+echo "==> Summary: pinned=$PATCHED skipped=$SKIPPED failures=$FAILURES" | tee /dev/stderr
+
+if [ "$DRY_RUN" = "1" ]; then
+  echo "Dry-run complete; version stamp not advanced"
+  exit 0
+fi
+
+if [ "$FAILURES" -gt 0 ]; then
+  echo "ERROR: $FAILURES read/patch(es) failed; aborting before the version stamp so the kubernetes chart upgrade does not proceed against un-pinned clusters (their live md0 MachineDeployment would be pruned). Leaving CURRENT_VERSION at 47; investigate the failures above and re-run the upgrade." >&2
+  exit 1
+fi
+
+# Stamp version via the shared helper so the cozystack-version ConfigMap keeps
+# the platform.cozystack.io/no-delete label. A label-less apply by the same
+# field manager (kubectl create configmap | kubectl apply) would strip the
+# label migration 42 added, dropping cozystack-version out of the
+# cozystack-no-delete-guardrail ValidatingAdmissionPolicy.
+stamp_cozystack_version 48

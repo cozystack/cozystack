@@ -1,0 +1,29 @@
+{{- range .Values.metricsStorages }}
+---
+apiVersion: operator.victoriametrics.com/v1beta1
+kind: VMAlert
+metadata:
+  name: vmalert-{{ .name }}
+spec:
+  managedMetadata:
+    labels:
+      apps.cozystack.io/application.group: apps.cozystack.io
+      apps.cozystack.io/application.kind: Monitoring
+      apps.cozystack.io/application.name: {{ $.Release.Name }}
+  datasource:
+    url: http://vmselect-{{ .name }}.{{ $.Release.Namespace }}.svc:8481/select/0/prometheus
+  evaluationInterval: 15s
+  extraArgs:
+    remoteWrite.disablePathAppend: "true"
+  notifiers:
+  {{- range $i := until (int (include "monitoring.alertmanager.replicas" $)) }}
+  - url: http://vmalertmanager-alertmanager-{{ $i }}.vmalertmanager-alertmanager.{{ $.Release.Namespace }}.svc:9093
+  {{- end }}
+  remoteRead:
+    url: http://vmselect-{{ .name }}.{{ $.Release.Namespace }}.svc:8481/select/0/prometheus
+  remoteWrite:
+    url: http://vminsert-{{ .name }}.{{ $.Release.Namespace }}.svc:8480/insert/0/prometheus/api/v1/write
+  resources: {}
+  selectAllByDefault: true
+{{- break }}
+{{- end }}

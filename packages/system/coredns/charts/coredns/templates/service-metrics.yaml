@@ -1,0 +1,39 @@
+{{- if and .Values.deployment.enabled .Values.prometheus.service.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ template "coredns.fullname" . }}-metrics
+  namespace: {{ .Release.Namespace }}
+  labels: {{- include "coredns.labels" . | nindent 4 }}
+    app.kubernetes.io/component: metrics
+{{- if .Values.customLabels }}
+{{ toYaml .Values.customLabels | indent 4 }}
+{{- end }}
+  {{- if or .Values.prometheus.service.annotations .Values.service.annotations .Values.customAnnotations }}
+  annotations:
+    {{- if .Values.prometheus.service.annotations }}
+    {{- toYaml .Values.prometheus.service.annotations | nindent 4 }}
+    {{- end }}
+    {{- if .Values.service.annotations }}
+    {{- toYaml .Values.service.annotations | nindent 4 }}
+    {{- end }}
+    {{- if .Values.customAnnotations }}
+    {{- toYaml .Values.customAnnotations | nindent 4 }}
+    {{- end }}
+  {{- end }}
+spec:
+  selector:
+    {{- if .Values.prometheus.service.selector }}
+    {{- toYaml .Values.prometheus.service.selector | nindent 4 }}
+    {{- else }}
+    app.kubernetes.io/instance: {{ .Release.Name | quote }}
+    {{- if .Values.isClusterService }}
+    k8s-app: {{ template "coredns.k8sapplabel" . }}
+    {{- end }}
+    app.kubernetes.io/name: {{ template "coredns.name" . }}
+    {{- end }}
+  ports:
+  - name: metrics
+    port: 9153
+    targetPort: 9153
+{{- end }}

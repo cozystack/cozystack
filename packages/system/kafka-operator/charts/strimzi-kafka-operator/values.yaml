@@ -1,0 +1,225 @@
+# Default values for strimzi-kafka-operator.
+
+# Default replicas for the cluster operator
+replicas: 1
+
+# Contains `.Release.Namespace` by default
+watchNamespaces: []
+watchAnyNamespace: false
+
+defaultImageRegistry: quay.io
+defaultImageRepository: strimzi
+defaultImageTag: 1.2.0
+
+image:
+  registry: ""
+  repository: ""
+  name: operator
+  tag: ""
+  # imagePullSecrets:
+  #   - name: secretname
+logVolume: co-config-volume
+logConfigMap: strimzi-cluster-operator
+logConfiguration: ""
+logLevel: ${env:STRIMZI_LOG_LEVEL:-INFO}
+fullReconciliationIntervalMs: 120000
+operationTimeoutMs: 300000
+kubernetesServiceDnsDomain: cluster.local
+featureGates: ""
+tmpDirSizeLimit: 1Mi
+
+# Example on how to configure extraEnvs
+# extraEnvs:
+#   - name: JAVA_OPTS
+#     value: "-Xms256m -Xmx256m"
+
+extraEnvs: []
+
+tolerations: []
+topologySpreadConstraints: []
+affinity: {}
+annotations: {}
+labels: {}
+nodeSelector: {}
+deploymentAnnotations: {}
+deploymentLabels: {}
+deploymentStrategy: {}
+priorityClassName: ""
+
+hostUsers: NULL
+enableServiceLinks: NULL
+podSecurityContext: {}
+securityContext:
+  # Specifies container security context. Defaults to a security context that matches the Restricted Kubernetes
+  # Pod Security Standard (https://kubernetes.io/docs/concepts/security/pod-security-standards/).
+  allowPrivilegeEscalation: false
+  runAsNonRoot: true
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop:
+      - ALL
+  seccompProfile:
+    type: RuntimeDefault
+rbac:
+  create: yes
+serviceAccountCreate: yes
+serviceAccount: strimzi-cluster-operator
+
+leaderElection:
+  enable: true
+
+# https://kubernetes.io/docs/tasks/run-application/configure-pdb/
+podDisruptionBudget:
+  enabled: false
+  # The PDB definition three attributes to control the availability requirements:
+  # minAvailable or maxUnavailable (mutually exclusive).
+  # unhealthyPodEvictionPolicy
+  #
+  # Field maxUnavailable tells how many pods can be down and minAvailable tells how many pods must be running in a cluster.
+
+  # The pdb template will check values according to below order
+  #
+  #  {{- if .Values.podDisruptionBudget.minAvailable }}
+  #     minAvailable: {{ .Values.podDisruptionBudget.minAvailable }}
+  #  {{- end  }}
+  #  {{- if .Values.podDisruptionBudget.maxUnavailable }}
+  #     maxUnavailable: {{ .Values.podDisruptionBudget.maxUnavailable }}
+  #  {{- end }}
+  #
+  # If both values are set, the template will use the first one and ignore the second one. currently by default minAvailable is set to 1
+  minAvailable: 1
+  maxUnavailable:
+  unhealthyPodEvictionPolicy: IfHealthyBudget
+
+operatorNetworkPolicy:
+  # If enabled, this will generate a networkPolicy for the strimzi-operator.
+  # This flag DOES NOT control operator generated networkPolicies!
+  # This flag ONLY controls access for the strimzi-operator deployment.
+  enabled: false
+  # For ingress we permit access to the metrics endpoint
+  ingress:
+  - ports:
+    - protocol: TCP
+      port: http
+  # The operator must communicate with DNS, the Kubernetes API server,
+  # and all managed Kafka components.
+  #
+  # The operands use numerous ports that differ per component and may exist in
+  # "arbitrary" namespaces. This makes a generic egress NetworkPolicy
+  # impractical to define. Thus we set `{}` an unrestrictred value.
+  #
+  # Any meaningful network restrictions must be defined per cluster,
+  # with a full knowledge of the Kafka topology and port configuration.
+  egress:
+  - {}
+
+# If you are using the grafana dashboard sidecar,
+# you can import some default dashboards here
+dashboards:
+  enabled: false
+  namespace: ~
+  label: grafana_dashboard # this is the default value from the grafana chart
+  labelValue: "1" # this is the default value from the grafana chart
+  annotations: {}
+  extraLabels: {}
+
+# Docker images that operator uses to provision various components of Strimzi.
+# To use your own registry or repository, define them for each component below or generally via defaultImageRegistry and defaultImageRepository above
+kafka:
+  image:
+    registry: ""
+    repository: ""
+    name: kafka
+    tagPrefix: ""
+kafkaConnect:
+  image:
+    registry: ""
+    repository: ""
+    name: kafka
+    tagPrefix: ""
+topicOperator:
+  image:
+    registry: ""
+    repository: ""
+    name: operator
+    tag: ""
+userOperator:
+  image:
+    registry:
+    repository:
+    name: operator
+    tag: ""
+kafkaInit:
+  image:
+    registry: ""
+    repository: ""
+    name: operator
+    tag: ""
+kafkaBridge:
+  image:
+    registry: ""
+    repository:
+    name: kafka-bridge
+    tag: 1.1.0
+kafkaExporter:
+  image:
+    registry: ""
+    repository: ""
+    name: kafka
+    tagPrefix: ""
+kafkaMirrorMaker2:
+  image:
+    registry: ""
+    repository: ""
+    name: kafka
+    tagPrefix: ""
+cruiseControl:
+  image:
+    registry: ""
+    repository: ""
+    name: kafka
+    tagPrefix: ""
+kanikoExecutor:
+  image:
+    registry: ""
+    repository: ""
+    name: kaniko-executor
+    tag: ""
+buildah:
+  image:
+    registry: ""
+    repository: ""
+    name: buildah
+    tag: ""
+mavenBuilder:
+  image:
+    registry: ""
+    repository: ""
+    name: maven-builder
+    tag: ""
+resources:
+  limits:
+    memory: 384Mi
+    cpu: 1000m
+  requests:
+    memory: 384Mi
+    cpu: 200m
+livenessProbe:
+  initialDelaySeconds: 10
+  periodSeconds: 30
+readinessProbe:
+  initialDelaySeconds: 10
+  periodSeconds: 30
+
+createGlobalResources: true
+# Create clusterroles that extend existing clusterroles to interact with strimzi crds
+# Ref: https://kubernetes.io/docs/reference/access-authn-authz/rbac/#aggregated-clusterroles
+createAggregateRoles: false
+# Override the exclude pattern for exclude some labels
+labelsExclusionPattern: ""
+# Controls whether Strimzi generates network policy resources (By default true)
+generateNetworkPolicy: true
+# Override the value for Connect build timeout
+connectBuildTimeoutMs: 300000
+# Controls whether Strimzi generates pod disruption budget resources (By default true)
+generatePodDisruptionBudget: true

@@ -1,0 +1,43 @@
+diff --git a/operator/redisfailover/service/engine.go b/operator/redisfailover/service/engine.go
+index 1601924..9c27ce9 100644
+--- a/operator/redisfailover/service/engine.go
++++ b/operator/redisfailover/service/engine.go
+@@ -22,7 +22,7 @@ type valkeyEngine struct{}
+ 
+ func (valkeyEngine) ServerBinary() string    { return "valkey-server" }
+ func (valkeyEngine) CLIBinary() string       { return "valkey-cli" }
+-func (valkeyEngine) CLIAuthEnvName() string { return "VALKEYCLI_AUTH" }
++func (valkeyEngine) CLIAuthEnvName() string { return "REDISCLI_AUTH" }
+ 
+ // EngineFor returns the engine implementation for pod generation. Empty or Redis uses Redis binaries; Valkey uses Valkey binaries.
+ func EngineFor(rf *redisfailoverv1.RedisFailover) DatabaseEngineProvider {
+diff --git a/operator/redisfailover/service/engine_test.go b/operator/redisfailover/service/engine_test.go
+index 9f95b09..3724e0a 100644
+--- a/operator/redisfailover/service/engine_test.go
++++ b/operator/redisfailover/service/engine_test.go
+@@ -19,7 +19,7 @@ func TestEngineFor(t *testing.T) {
+ 	}{
+ 		{"omitted is redis", "", "redis-server", "redis-cli", "REDISCLI_AUTH"},
+ 		{"redis", redisfailoverv1.RedisEngine, "redis-server", "redis-cli", "REDISCLI_AUTH"},
+-		{"valkey", redisfailoverv1.ValkeyEngine, "valkey-server", "valkey-cli", "VALKEYCLI_AUTH"},
++		{"valkey", redisfailoverv1.ValkeyEngine, "valkey-server", "valkey-cli", "REDISCLI_AUTH"},
+ 	}
+ 	for _, tc := range cases {
+ 		t.Run(tc.name, func(t *testing.T) {
+diff --git a/test/integration/redisfailover/database_engine_test.go b/test/integration/redisfailover/database_engine_test.go
+index dc6b10e..6cc4da9 100644
+--- a/test/integration/redisfailover/database_engine_test.go
++++ b/test/integration/redisfailover/database_engine_test.go
+@@ -185,10 +185,10 @@ func (c *clients) testValkeyWorkloadBinaries(t *testing.T, currentNamespace, rfN
+ 	shutdownCM, err := c.k8sClient.CoreV1().ConfigMaps(currentNamespace).Get(context.Background(), fmt.Sprintf("rfr-s-%s", rfName), metav1.GetOptions{})
+ 	require.NoError(err)
+ 	assert.Contains(shutdownCM.Data["shutdown.sh"], "valkey-cli")
+-	assert.Contains(shutdownCM.Data["shutdown.sh"], "VALKEYCLI_AUTH")
++	assert.Contains(shutdownCM.Data["shutdown.sh"], "REDISCLI_AUTH")
+ 
+ 	readinessCM, err := c.k8sClient.CoreV1().ConfigMaps(currentNamespace).Get(context.Background(), fmt.Sprintf("rfr-readiness-%s", rfName), metav1.GetOptions{})
+ 	require.NoError(err)
+ 	assert.Contains(readinessCM.Data["ready.sh"], "valkey-cli")
+-	assert.Contains(readinessCM.Data["ready.sh"], "VALKEYCLI_AUTH")
++	assert.Contains(readinessCM.Data["ready.sh"], "REDISCLI_AUTH")
+ }

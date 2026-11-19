@@ -1,0 +1,115 @@
+{{/*
+  cozy-default BackupClass is rendered unconditionally — it carries only
+  strategyRef.name routing entries (no bucket coords, no endpoint, no
+  credentials), so it has no dependency on the BucketClaim being
+  reconciled. This makes the platform's tenant-visible interface present
+  from Day 1; the Strategy CRs it references stay gated on a populated
+  $bucketName because they DO need the COSI-assigned bucket name
+  embedded in their template. A BackupJob fired during the bootstrap
+  window surfaces a transient Ready=False/StrategyNotReady in the driver.
+
+  It does NOT self-heal on a Flux reconcile: helm-controller re-renders
+  only when the chart or values change, so the gated Strategy CRs would
+  stay absent forever. The controller's DefaultObjectsGate reads THIS
+  object's strategyRefs as the manifest of what must exist and forces the
+  real Helm upgrade that materialises them (see
+  backupStorage.reconcileDefaultObjects). Adding a route here therefore
+  also adds the referenced Strategy CR to that existence check.
+*/}}
+apiVersion: backups.cozystack.io/v1alpha1
+kind: BackupClass
+metadata:
+  name: cozy-default
+spec:
+  strategies:
+    - application:
+        apiGroup: apps.cozystack.io
+        kind: Postgres
+      strategyRef:
+        apiGroup: strategy.backups.cozystack.io
+        kind: CNPG
+        name: cozy-default-cnpg
+    - application:
+        apiGroup: apps.cozystack.io
+        kind: MariaDB
+      strategyRef:
+        apiGroup: strategy.backups.cozystack.io
+        kind: MariaDB
+        name: cozy-default-mariadb
+    - application:
+        apiGroup: apps.cozystack.io
+        kind: Etcd
+      strategyRef:
+        apiGroup: strategy.backups.cozystack.io
+        kind: Etcd
+        name: cozy-default-etcd
+    - application:
+        apiGroup: apps.cozystack.io
+        kind: ClickHouse
+      strategyRef:
+        apiGroup: strategy.backups.cozystack.io
+        kind: Altinity
+        name: cozy-default-altinity
+    - application:
+        apiGroup: apps.cozystack.io
+        kind: MongoDB
+      strategyRef:
+        apiGroup: strategy.backups.cozystack.io
+        kind: MongoDB
+        name: cozy-default-mongodb
+    - application:
+        apiGroup: apps.cozystack.io
+        kind: RabbitMQ
+      strategyRef:
+        apiGroup: strategy.backups.cozystack.io
+        kind: Rabbitmq
+        name: cozy-default-rabbitmq
+    - application:
+        apiGroup: apps.cozystack.io
+        kind: Redis
+      strategyRef:
+        apiGroup: strategy.backups.cozystack.io
+        kind: Redis
+        name: cozy-default-redis
+    - application:
+        apiGroup: apps.cozystack.io
+        kind: Valkey
+      strategyRef:
+        apiGroup: strategy.backups.cozystack.io
+        kind: Redis
+        name: cozy-default-redis
+    - application:
+        apiGroup: apps.cozystack.io
+        kind: Kubernetes
+      strategyRef:
+        apiGroup: strategy.backups.cozystack.io
+        kind: Kubernetes
+        name: cozy-default-kubernetes
+    - application:
+        apiGroup: apps.cozystack.io
+        kind: Kafka
+      strategyRef:
+        apiGroup: strategy.backups.cozystack.io
+        kind: Kafka
+        name: cozy-default-kafka
+    # FoundationDB intentionally NOT bound in cozy-default. The Strategy
+    # CR cozy-default-foundationdb is shipped (admins can wire it into a
+    # custom BackupClass), but Restore goes through fdbrestore in the
+    # foundationdb operator pod itself (cozy-foundationdb-operator). That
+    # operator deployment does not yet mount cozy-backups-creds, so a
+    # platform-default FDB restore would silently fail. See DESIGN.md /
+    # https://cozystack.io/docs/v1/operations/services/backup-classes/ for the open gap and follow-up work.
+    - application:
+        apiGroup: apps.cozystack.io
+        kind: VMInstance
+      strategyRef:
+        apiGroup: strategy.backups.cozystack.io
+        kind: Velero
+        name: cozy-default-velero-vminstance
+    - application:
+        apiGroup: apps.cozystack.io
+        kind: VMDisk
+      strategyRef:
+        apiGroup: strategy.backups.cozystack.io
+        kind: Velero
+        name: cozy-default-velero-vmdisk

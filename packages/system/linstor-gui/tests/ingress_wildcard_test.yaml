@@ -1,0 +1,47 @@
+suite: linstor-gui ingress wildcard mode drops per-host ACME
+templates:
+  - templates/ingress.yaml
+
+release:
+  name: linstor-gui
+  namespace: cozy-linstor-gui
+
+# linstor-gui has no gateway guard (it only publishes under
+# expose-services + oidc-enabled), so it exercises the drop-cert path
+# for the no-gateway-guard convention. In wildcard mode the controller
+# serves the default SSL cert, so the per-host cert-manager annotation
+# and per-host tls secretName are dropped; the tls section stays so
+# the HTTPS redirect keeps working against the default SSL certificate.
+
+tests:
+  - it: drops cert-manager annotation and tls secretName when wildcard secret is set
+    set:
+      _cluster:
+        root-host: example.org
+        expose-services: "linstor-gui"
+        oidc-enabled: "true"
+        wildcard-secret-name: wildcard-tls
+    asserts:
+      - equal:
+          path: kind
+          value: Ingress
+      - notExists:
+          path: metadata.annotations["cert-manager.io/cluster-issuer"]
+      - exists:
+          path: spec.tls
+      - notExists:
+          path: spec.tls[0].secretName
+
+  - it: keeps cert-manager annotation and tls secretName without wildcard secret
+    set:
+      _cluster:
+        root-host: example.org
+        expose-services: "linstor-gui"
+        oidc-enabled: "true"
+    asserts:
+      - equal:
+          path: metadata.annotations["cert-manager.io/cluster-issuer"]
+          value: letsencrypt-prod
+      - equal:
+          path: spec.tls[0].secretName
+          value: linstor-gui-ingress-tls

@@ -1,0 +1,81 @@
+suite: cozy-kubevirt-cdi values schema
+release:
+  name: kubevirt-cdi
+  namespace: cozy-kubevirt-cdi
+templates:
+  - cdi-cr.yaml
+tests:
+  # The CDI CRD rejects anything outside its enum, but only when the object is
+  # applied, so without the schema a typo surfaces as a failed HelmRelease
+  # rather than at the value that caused it.
+  - it: refuses a clone strategy CDI does not know
+    set:
+      cloneStrategyOverride: csi_clone
+    asserts:
+      - failedTemplate:
+          errorPattern: "cloneStrategyOverride.*does not match pattern"
+
+  - it: refuses a clone strategy that is not a string
+    set:
+      cloneStrategyOverride: 1
+    asserts:
+      - failedTemplate:
+          errorPattern: "cloneStrategyOverride.*want string"
+
+  # The empty string is the chart's own "omit the field" state, which the
+  # CRD enum has no member for: copying that enum into the schema would
+  # refuse it.
+  - it: accepts the empty clone strategy
+    set:
+      cloneStrategyOverride: ""
+    asserts:
+      - notFailedTemplate: {}
+
+  - it: accepts copy
+    set:
+      cloneStrategyOverride: copy
+    asserts:
+      - notFailedTemplate: {}
+
+  - it: accepts snapshot
+    set:
+      cloneStrategyOverride: snapshot
+    asserts:
+      - notFailedTemplate: {}
+
+  - it: accepts csi-clone
+    set:
+      cloneStrategyOverride: csi-clone
+    asserts:
+      - notFailedTemplate: {}
+
+  # The key has a chart default, so Helm drops a null for it before it
+  # validates, and the template sees it unset; tests/clone_strategy_test.yaml
+  # pins what that renders. Without the default, the null would reach the
+  # schema and be refused.
+  - it: accepts a null clone strategy
+    set:
+      cloneStrategyOverride: null
+    asserts:
+      - notFailedTemplate: {}
+
+  - it: accepts any string as the upload proxy URL
+    set:
+      uploadProxyURL: cdi-uploadproxy.example.com:8443
+    asserts:
+      - notFailedTemplate: {}
+
+  - it: refuses an upload proxy URL that is not a string
+    set:
+      uploadProxyURL:
+        host: cdi-uploadproxy.example.com
+    asserts:
+      - failedTemplate:
+          errorPattern: "uploadProxyURL.*want string"
+
+  - it: refuses importer resources that are not a map
+    set:
+      importerResources: 600M
+    asserts:
+      - failedTemplate:
+          errorPattern: "importerResources.*want object"

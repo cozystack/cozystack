@@ -1,0 +1,34 @@
+---
+apiVersion: cozystack.io/v1alpha1
+kind: PackageSource
+metadata:
+  name: cozystack.kubernetes-nodes-application
+spec:
+  sourceRef:
+    kind: OCIRepository
+    name: cozystack-packages
+    namespace: cozy-system
+    path: /
+  variants:
+    - name: kubevirt
+      dependsOn:
+        - cozystack.networking
+        - cozystack.capi-operator
+        - cozystack.capi-provider-bootstrap-kubeadm
+        - cozystack.capi-provider-core
+        - cozystack.capi-provider-cp-kamaji
+        - cozystack.capi-provider-infra-kubevirt
+        # cozystack-engine ships the ApplicationDefinition CRD rendered by the *-rd component below.
+        - cozystack.cozystack-engine
+      libraries:
+        - name: cozy-lib
+          path: library/cozy-lib
+      components:
+        - name: kubernetes-nodes
+          path: apps/kubernetes-nodes
+          libraries: ["cozy-lib"]
+        - name: kubernetes-nodes-rd
+          path: system/kubernetes-nodes-rd
+          install:
+            namespace: cozy-system
+            releaseName: kubernetes-nodes-rd

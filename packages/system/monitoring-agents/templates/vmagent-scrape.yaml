@@ -1,0 +1,18 @@
+---
+apiVersion: operator.victoriametrics.com/v1beta1
+kind: VMServiceScrape
+metadata:
+  name: vmagent-vmagent
+  namespace: cozy-monitoring
+spec:
+  endpoints:
+  - path: /metrics
+    port: http
+    relabelConfigs:
+    - sourceLabels: [__meta_kubernetes_pod_node_name]
+      targetLabel: node
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: monitoring
+      app.kubernetes.io/instance: vmagent
+      app.kubernetes.io/name: vmagent

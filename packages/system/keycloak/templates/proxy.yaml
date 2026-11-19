@@ -1,0 +1,379 @@
+{{- if .Values.encryption.enabled }}
+{{- $clusterDomain := (index .Values._cluster "cluster-domain") | default "cozy.local" }}
+{{- $kms := .Values.encryption.kms }}
+{{- /*
+  Fail fast on an unsupported backend. Both the KEK Secret below and the env
+  wiring further down key off $backend, so an invalid value (e.g. a "vault"
+  typo) can never render a Deployment that mounts KKP_KEK from a Secret that
+  was never created — which would silently break the whole IdP.
+*/}}
+{{- $backend := ($kms.backend | default "static") }}
+{{- if and (ne $backend "static") (ne $backend "vault-transit") }}
+{{- fail (printf "encryption.kms.backend must be 'static' or 'vault-transit', got %q" $backend) }}
+{{- end }}
+{{- $vault := ($kms.vault | default dict) }}
+{{- /* The proxy needs its ServiceAccount token only for Vault Kubernetes auth. */}}
+{{- $vaultAuth := ($vault.auth | default "token") }}
+{{- $k8sAuth := and (eq $backend "vault-transit") (eq $vaultAuth "kubernetes") }}
+{{- /*
+  CA the proxy trusts for the Vault connection: either seeded by the operator
+  (caSecretName) or rendered here from an inline PEM (caBundle). It reaches the
+  proxy as SSL_CERT_FILE plus SSL_CERT_DIR — see the env block for why both are
+  needed. Neither affects the database leg, which never consults the system
+  trust store: that connection is plaintext today, and once KKP_BACKEND_CA_FILE
+  is wired it will verify against an explicit RootCAs pool.
+
+  Like every other vault.* key, both are inert unless the backend is
+  vault-transit: the volume and mount below sit at pod level, so keying them off
+  an ungated caSecretName would make a static-backend Deployment mount a Secret
+  the chart never creates and wedge the proxy in ContainerCreating.
+*/}}
+{{- $vaultCASecret := "" }}
+{{- $vaultCASecretKey := "" }}
+{{- if eq $backend "vault-transit" }}
+{{- if and $vault.caBundle $vault.caSecretName }}
+{{- fail "encryption.kms.vault.caBundle and caSecretName are mutually exclusive — set one" }}
+{{- end }}
+{{- if $vault.caBundle }}
+{{- /*
+  A bundle that is not PEM would be written to the Secret, mounted, and then
+  silently dropped by AppendCertsFromPEM, leaving the proxy on whatever roots
+  the image ships — a failure that only shows up as an unrelated TLS error, or
+  not at all against a publicly trusted Vault. Reject it at render time.
+*/}}
+{{- if not (regexMatch "-----BEGIN CERTIFICATE-----" $vault.caBundle) }}
+{{- fail "encryption.kms.vault.caBundle must be a PEM bundle containing at least one -----BEGIN CERTIFICATE----- block" }}
+{{- end }}
+{{- $vaultCASecret = "keycloak-kms-proxy-vault-ca" }}
+{{- $vaultCASecretKey = "ca.crt" }}
+{{- else if $vault.caSecretName }}
+{{- $vaultCASecret = $vault.caSecretName }}
+{{- $vaultCASecretKey = ($vault.caSecretKey | default "ca.crt") }}
+{{- end }}
+{{- end }}
+{{- $replicas := .Values.encryption.replicas | default 1 | int }}
+{{- if and (gt $replicas 1) (not .Values.encryption.deksetSecretName) }}
+{{- fail "encryption.replicas > 1 requires encryption.deksetSecretName (a shared wrapped DEK set); otherwise replicas would encrypt deterministic columns under different keys" }}
+{{- end }}
+{{- /*
+  Without KKP_DEKSET_FILE the proxy mints a fresh DEK set on every start and
+  keeps it only in memory, so after any restart (rollout, drain, OOM) it can
+  no longer decrypt what it wrote before. Refuse to encrypt without a
+  persistent DEK set. fields=disabled is pure passthrough and needs no key: it
+  is how the static backend gets its KEK Secret created before the operator
+  mints a DEK set with it.
+*/}}
+{{- if and (ne (.Values.encryption.fields | default "") "disabled") (not .Values.encryption.deksetSecretName) }}
+{{- fail "encryption.deksetSecretName is required unless encryption.fields is \"disabled\": without a persistent DEK set the proxy mints a new key on every start and cannot decrypt data written before a restart. Mint one with the proxy's `backfill generate-dekset`, store it in a Secret and set encryption.deksetSecretName" }}
+{{- end }}
+{{- if eq $backend "static" }}
+{{- /*
+  Static KMS: a self-generated 32-byte KEK kept in a Secret. Generated once
+  and preserved across upgrades via lookup (same pattern as the admin
+  credentials in sts.yaml). For production prefer kms.backend=vault-transit.
+*/}}
+{{- /*
+  The proxy reads KKP_KEK as base64 of 32 random bytes. Earlier chart
+  versions stored 32 alphanumeric characters instead, which decode to 24
+  bytes: the proxy refused to start with them, so nothing was ever encrypted
+  under such a KEK and it is safe to replace it. Any other stored value may be
+  a key the operator restored by hand, so it is kept when the proxy accepts
+  it and refused otherwise, never overwritten. b64dec ignores CR and LF like
+  the proxy does, so a restored key with a trailing newline still counts.
+*/}}
+{{- $existing := lookup "v1" "Secret" .Release.Namespace "keycloak-kms-proxy-kek" }}
+{{- $kek := randBytes 32 | b64enc }}
+{{- $current := "" }}
+{{- if and $existing $existing.data }}
+{{- $current = index $existing.data "kek" | default "" }}
+{{- end }}
+{{- if $current }}
+{{- $stored := b64dec $current }}
+{{- if eq (len (b64dec $stored)) 32 }}
+{{- $kek = $current }}
+{{- else if not (regexMatch "^[A-Za-z0-9]{32}$" $stored) }}
+{{- fail "the kek key of Secret keycloak-kms-proxy-kek is not base64 of 32 bytes, so the KMS proxy cannot use it. The chart does not overwrite key material: restore the KEK the data was encrypted with, or delete the Secret if nothing was encrypted under it yet" }}
+{{- end }}
+{{- end }}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: keycloak-kms-proxy-kek
+  labels:
+    app: keycloak-kms-proxy
+  annotations:
+    # The DEK set is wrapped with this KEK, so losing it loses the data.
+    # Keep it when encryption is disabled or the release is reinstalled;
+    # the lookup above picks it up again on the next install.
+    helm.sh/resource-policy: keep
+data:
+  kek: {{ $kek | quote }}
+---
+{{- end }}
+{{- if and (eq $backend "vault-transit") $vault.caBundle }}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: keycloak-kms-proxy-vault-ca
+  labels:
+    app: keycloak-kms-proxy
+stringData:
+  ca.crt: {{ $vault.caBundle | quote }}
+---
+{{- end }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: keycloak-kms-proxy
+  labels:
+    app: keycloak-kms-proxy
+# Dedicated identity for the proxy (never the namespace default SA). Its token
+# is only mounted for Vault Kubernetes auth; other modes don't need it.
+automountServiceAccountToken: {{ $k8sAuth }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: keycloak-kms-proxy
+  labels:
+    app: keycloak-kms-proxy
+spec:
+  # Defaults to a single replica. HA (replicas > 1) requires a shared wrapped
+  # DEK set (encryption.deksetSecretName → KKP_DEKSET_FILE) so every replica
+  # encrypts deterministic columns under the same key; the guard above enforces
+  # that.
+  replicas: {{ $replicas }}
+  selector:
+    matchLabels:
+      app: keycloak-kms-proxy
+  template:
+    metadata:
+      {{- if and (eq $backend "vault-transit") $vault.caBundle }}
+      annotations:
+        # The chart owns this Secret, so it owns the rollout. crypto/x509
+        # memoizes the system pool per process (sync.Once), so a rotated bundle
+        # reaches the proxy only in a fresh pod — without this the upgrade
+        # succeeds and the old CA stays in use until some unrelated restart.
+        checksum/vault-ca: {{ $vault.caBundle | sha256sum }}
+      {{- end }}
+      labels:
+        app: keycloak-kms-proxy
+    spec:
+      serviceAccountName: keycloak-kms-proxy
+      {{- with .Values.encryption.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.encryption.topologySpreadConstraints }}
+      topologySpreadConstraints:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      automountServiceAccountToken: {{ $k8sAuth }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        fsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: proxy
+          image: {{ .Values.encryption.image }}
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          ports:
+            - name: postgres
+              containerPort: 5432
+            - name: metrics
+              containerPort: 9090
+          env:
+            - name: KKP_LISTEN_ADDR
+              value: ":5432"
+            - name: KKP_METRICS_ADDR
+              value: ":9090"
+            # NOTE: the proxy re-originates the connection to keycloak-db-rw and
+            # negotiates TLS in-band, but does not yet pin the CNPG CA. Backend
+            # CA validation (sslrootcert) is a tracked follow-up before this is
+            # production-ready; see the keycloak-kms-proxy project.
+            - name: KKP_BACKEND_ADDR
+              value: "keycloak-db-rw.{{ .Release.Namespace }}.svc.{{ $clusterDomain }}:5432"
+            # The proxy terminates SCRAM on both legs. Keycloak still presents
+            # the CNPG-managed credential (KC_DB_USERNAME/KC_DB_PASSWORD come
+            # from keycloak-db-app), so the upstream and backend credentials
+            # are the same CNPG role.
+            - name: KKP_UPSTREAM_USER
+              valueFrom:
+                secretKeyRef:
+                  name: keycloak-db-app
+                  key: username
+            - name: KKP_UPSTREAM_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: keycloak-db-app
+                  key: password
+            - name: KKP_BACKEND_USER
+              valueFrom:
+                secretKeyRef:
+                  name: keycloak-db-app
+                  key: username
+            - name: KKP_BACKEND_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: keycloak-db-app
+                  key: password
+            - name: KKP_FIELDS
+              value: {{ .Values.encryption.fields | quote }}
+            - name: KKP_LENIENT
+              value: {{ .Values.encryption.lenient | quote }}
+            {{- if eq $backend "vault-transit" }}
+            {{- if and (ne $vaultAuth "token") (ne $vaultAuth "approle") (ne $vaultAuth "kubernetes") }}
+            {{- fail (printf "encryption.kms.vault.auth must be 'token', 'approle', or 'kubernetes', got %q" $vaultAuth) }}
+            {{- end }}
+            - name: KKP_VAULT_ADDR
+              value: {{ required "encryption.kms.vault.address is required when kms.backend=vault-transit" $vault.address | quote }}
+            - name: KKP_VAULT_KEY_NAME
+              value: {{ required "encryption.kms.vault.keyName is required when kms.backend=vault-transit" $vault.keyName | quote }}
+            - name: KKP_VAULT_MOUNT
+              value: {{ $vault.mount | default "transit" | quote }}
+            {{- with $vaultCASecret }}
+            # SSL_CERT_FILE alone would ADD this CA to the roots the image ships
+            # (crypto/x509 replaces only its file list, then scans SSL_CERT_DIR
+            # unconditionally, and this image carries /etc/ssl/certs). Setting
+            # both collapses the pool to the mount, so the leg that guards the
+            # KEK trusts this CA and nothing else. The database leg is untouched:
+            # it never reads the system pool.
+            - name: SSL_CERT_FILE
+              value: /etc/kkp/vault-ca/ca.crt
+            - name: SSL_CERT_DIR
+              value: /etc/kkp/vault-ca
+            {{- end }}
+            {{- if eq $vaultAuth "approle" }}
+            {{- $appRole := $vault.appRole | default dict }}
+            {{- $secretName := required "encryption.kms.vault.appRole.secretName is required when vault.auth=approle" $appRole.secretName }}
+            - name: KKP_VAULT_APPROLE_MOUNT
+              value: {{ $appRole.mount | default "approle" | quote }}
+            - name: KKP_VAULT_ROLE_ID
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $secretName }}
+                  key: {{ $appRole.roleIdKey | default "role-id" }}
+            - name: KKP_VAULT_SECRET_ID
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $secretName }}
+                  key: {{ $appRole.secretIdKey | default "secret-id" }}
+            {{- else if eq $vaultAuth "kubernetes" }}
+            {{- $k8s := $vault.kubernetes | default dict }}
+            # The proxy logs in with its own ServiceAccount token; bind the
+            # Vault role to system:serviceaccount:<namespace>:keycloak-kms-proxy.
+            # No credential is stored in a Secret.
+            - name: KKP_VAULT_KUBERNETES_ROLE
+              value: {{ required "encryption.kms.vault.kubernetes.role is required when vault.auth=kubernetes" $k8s.role | quote }}
+            - name: KKP_VAULT_KUBERNETES_MOUNT
+              value: {{ $k8s.mount | default "kubernetes" | quote }}
+            {{- else }}
+            - name: KKP_VAULT_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ required "encryption.kms.vault.tokenSecretName is required when vault.auth=token" $vault.tokenSecretName }}
+                  key: token
+            {{- end }}
+            {{- else }}
+            - name: KKP_KEK
+              valueFrom:
+                secretKeyRef:
+                  name: keycloak-kms-proxy-kek
+                  key: kek
+            {{- end }}
+            {{- if .Values.encryption.deksetSecretName }}
+            # Wrapped DEK set minted by the backfill tool. Required to run more
+            # than one replica AND to migrate an existing populated database
+            # (the proxy must reuse the DEK that encrypt-rows wrapped with);
+            # without it the proxy mints an ephemeral DEK usable only on a fresh
+            # database.
+            - name: KKP_DEKSET_FILE
+              value: /etc/kkp/dekset/{{ .Values.encryption.deksetSecretKey | default "dekset.json" }}
+            {{- end }}
+          {{- with .Values.encryption.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          readinessProbe:
+            tcpSocket:
+              port: postgres
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket:
+              port: postgres
+            periodSeconds: 15
+          {{- if or .Values.encryption.deksetSecretName $vaultCASecret }}
+          volumeMounts:
+            {{- if .Values.encryption.deksetSecretName }}
+            - name: dekset
+              mountPath: /etc/kkp/dekset
+              readOnly: true
+            {{- end }}
+            {{- with $vaultCASecret }}
+            - name: vault-ca
+              mountPath: /etc/kkp/vault-ca
+              readOnly: true
+            {{- end }}
+          {{- end }}
+      {{- if or .Values.encryption.deksetSecretName $vaultCASecret }}
+      volumes:
+        {{- if .Values.encryption.deksetSecretName }}
+        - name: dekset
+          secret:
+            secretName: {{ .Values.encryption.deksetSecretName }}
+        {{- end }}
+        {{- with $vaultCASecret }}
+        - name: vault-ca
+          secret:
+            secretName: {{ . }}
+            # One key, projected under a fixed name so SSL_CERT_FILE is constant.
+            # A pre-seeded Secret is often a cert-manager TLS Secret, whose
+            # tls.key has no business inside the proxy. The trade-off is
+            # deliberate: a key that does not exist wedges the pod at mount time
+            # (vault.caSecretKey is there to point at the right one) rather than
+            # letting an empty trust store surface later as an opaque TLS error.
+            items:
+              - key: {{ $vaultCASecretKey }}
+                path: ca.crt
+        {{- end }}
+      {{- end }}
+{{- if gt $replicas 1 }}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: keycloak-kms-proxy
+  labels:
+    app: keycloak-kms-proxy
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels:
+      app: keycloak-kms-proxy
+{{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: keycloak-kms-proxy
+  labels:
+    app: keycloak-kms-proxy
+spec:
+  selector:
+    app: keycloak-kms-proxy
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: postgres
+    - name: metrics
+      port: 9090
+      targetPort: metrics
+{{- end }}

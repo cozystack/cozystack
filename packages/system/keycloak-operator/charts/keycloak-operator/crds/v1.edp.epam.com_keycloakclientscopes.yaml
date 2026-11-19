@@ -1,0 +1,140 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.18.0
+  name: keycloakclientscopes.v1.edp.epam.com
+spec:
+  group: v1.edp.epam.com
+  names:
+    kind: KeycloakClientScope
+    listKind: KeycloakClientScopeList
+    plural: keycloakclientscopes
+    singular: keycloakclientscope
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - description: Reconciliation status
+      jsonPath: .status.value
+      name: Status
+      type: string
+    name: v1
+    schema:
+      openAPIV3Schema:
+        description: KeycloakClientScope is the Schema for the keycloakclientscopes
+          API.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: KeycloakClientScopeSpec defines the desired state of KeycloakClientScope.
+            properties:
+              attributes:
+                additionalProperties:
+                  type: string
+                description: Attributes is a map of client scope attributes.
+                nullable: true
+                type: object
+              default:
+                description: |-
+                  Default is a flag to set client scope as default.
+                  Deprecated: Use Type: default instead.
+                type: boolean
+              description:
+                description: Description is a description of client scope.
+                type: string
+              name:
+                description: Name of keycloak client scope.
+                type: string
+              protocol:
+                description: Protocol is SSO protocol configuration which is being
+                  supplied by this client scope.
+                type: string
+              protocolMappers:
+                description: ProtocolMappers is a list of protocol mappers assigned
+                  to client scope.
+                items:
+                  properties:
+                    config:
+                      additionalProperties:
+                        type: string
+                      description: Config is a map of protocol mapper configuration.
+                      nullable: true
+                      type: object
+                    name:
+                      description: Name is a protocol mapper name.
+                      type: string
+                    protocol:
+                      description: Protocol is a protocol name.
+                      type: string
+                    protocolMapper:
+                      description: ProtocolMapper is a protocol mapper name.
+                      type: string
+                  type: object
+                nullable: true
+                type: array
+              realmRef:
+                description: RealmRef is reference to Realm custom resource.
+                properties:
+                  kind:
+                    default: KeycloakRealm
+                    description: Kind specifies the kind of the Keycloak resource.
+                    enum:
+                    - KeycloakRealm
+                    - ClusterKeycloakRealm
+                    type: string
+                  name:
+                    description: Name specifies the name of the Keycloak resource.
+                    type: string
+                required:
+                - name
+                type: object
+              type:
+                default: none
+                description: |-
+                  Type of the client scope.
+                  If set to "default", the client scope is assigned to all clients by default.
+                  If set to "optional", the client scope can be assigned to clients on demand.
+                  If set to "none", the client scope is not assigned to any clients by default.
+                enum:
+                - default
+                - optional
+                - none
+                type: string
+            required:
+            - name
+            - protocol
+            - realmRef
+            type: object
+          status:
+            description: KeycloakClientScopeStatus defines the observed state of KeycloakClientScope.
+            properties:
+              failureCount:
+                format: int64
+                type: integer
+              id:
+                type: string
+              value:
+                type: string
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

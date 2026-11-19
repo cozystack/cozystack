@@ -1,0 +1,107 @@
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "clustersecret-operator.webhook.fullname" . }}
+  labels:
+    {{- include "clustersecret-operator.webhook.labels" . | nindent 4 }}
+spec:
+  type: {{ .Values.webhook.service.type }}
+  ports:
+    - port: {{ .Values.webhook.service.port }}
+      targetPort: 1443
+      protocol: TCP
+      name: https
+  selector:
+    {{- include "clustersecret-operator.webhook.selectorLabels" . | nindent 4 }}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ include "clustersecret-operator.webhook.fullname" . }}-tls
+  labels:
+    {{- include "clustersecret-operator.webhook.labels" . | nindent 4 }}
+type: Opaque
+data:
+  {{- $data := (lookup "v1" "Secret" .Release.Namespace (printf "%s-tls" (include "clustersecret-operator.webhook.fullname" .))).data }}
+  {{- $caCert := "" }}
+  {{- if $data }}
+  {{ $data | toYaml | nindent 2 }}
+  {{- $caCert = index $data "ca.crt" }}
+  {{- else }}
+  {{- $cn := printf "%s.%s.svc" (include "clustersecret-operator.webhook.fullname" .) .Release.Namespace }}
+  {{- $ca := genCA (printf "%s-ca" (include "clustersecret-operator.webhook.fullname" .)) 36500 }}
+  {{- $cert := genSignedCert $cn (list "127.0.0.1") (list $cn "localhost") 36500 $ca }}
+  ca.crt: {{ $ca.Cert | b64enc }}
+  tls.crt: {{ $cert.Cert | b64enc }}
+  tls.key: {{ $cert.Key | b64enc }}
+  {{- $caCert = $ca.Cert | b64enc }}
+  {{- end }}
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingWebhookConfiguration
+metadata:
+  name: clustersecret-operator
+  labels:
+    {{- include "clustersecret-operator.webhook.labels" . | nindent 4 }}
+webhooks:
+- name: clustersecret-operator.cs.sap.com
+  admissionReviewVersions:
+  - v1
+  clientConfig:
+    caBundle: {{ $caCert }}
+    service:
+      name: {{ include "clustersecret-operator.webhook.fullname" . }}
+      namespace: {{ .Release.Namespace }}
+      path: /validation
+      port: {{ .Values.webhook.service.port }}
+  rules:
+  - apiGroups:
+    - core.cs.sap.com
+    apiVersions:
+    - v1alpha1
+    operations:
+    - CREATE
+    - UPDATE
+    - DELETE
+    resources:
+    - clustersecrets
+    scope: Cluster
+  matchPolicy: Exact
+  sideEffects: None
+  timeoutSeconds: 10
+  failurePolicy: Fail
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: MutatingWebhookConfiguration
+metadata:
+  name: clustersecret-operator
+  labels:
+    {{- include "clustersecret-operator.webhook.labels" . | nindent 4 }}
+webhooks:
+- name: clustersecret-operator.cs.sap.com
+  admissionReviewVersions:
+  - v1
+  clientConfig:
+    caBundle: {{ $caCert }}
+    service:
+      name: {{ include "clustersecret-operator.webhook.fullname" . }}
+      namespace: {{ .Release.Namespace }}
+      path: /mutation
+      port: {{ .Values.webhook.service.port }}
+  rules:
+  - apiGroups:
+    - core.cs.sap.com
+    apiVersions:
+    - v1alpha1
+    operations:
+    - CREATE
+    - UPDATE
+    - DELETE
+    resources:
+    - clustersecrets
+    scope: Cluster
+  matchPolicy: Exact
+  sideEffects: None
+  timeoutSeconds: 10
+  failurePolicy: Fail

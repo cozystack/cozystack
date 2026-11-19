@@ -1,0 +1,34 @@
+---
+apiVersion: operator.victoriametrics.com/v1beta1
+kind: VMServiceScrape
+metadata:
+  name: apiserver
+  namespace: cozy-monitoring
+spec:
+  endpoints:
+  - bearerTokenFile: /var/run/secrets/kubernetes.io/serviceaccount/token
+    port: https
+    scheme: https
+    {{- with .Values.vmagent.apiserverMaxScrapeSize }}
+    max_scrape_size: {{ . | quote }}
+    {{- end }}
+    relabelConfigs:
+    - action: labeldrop
+      regex: (endpoint|namespace|pod|container)
+    - replacement: kube-apiserver
+      targetLabel: job
+    - sourceLabels: [__meta_kubernetes_pod_node_name]
+      targetLabel: node
+    - targetLabel: tier
+      replacement: cluster
+    tlsConfig:
+      caFile: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+      serverName: kubernetes
+  jobLabel: component
+  namespaceSelector:
+    matchNames:
+    - default
+  selector:
+    matchLabels:
+      component: apiserver
+      provider: kubernetes

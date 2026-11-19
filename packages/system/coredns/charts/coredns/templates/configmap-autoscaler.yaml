@@ -1,0 +1,33 @@
+{{- if .Values.autoscaler.enabled }}
+---
+kind: ConfigMap
+apiVersion: v1
+metadata:
+  name: {{ template "coredns.fullname" . }}-autoscaler
+  namespace:  {{ .Release.Namespace }}
+  labels: {{- include "coredns.labels.autoscaler" . | nindent 4 }}
+    {{- if .Values.customLabels }}
+    {{- toYaml .Values.customLabels | nindent 4 }}
+    {{- end }}
+  {{- if or .Values.autoscaler.configmap.annotations .Values.customAnnotations }}
+  annotations:
+    {{- if .Values.customAnnotations }}
+    {{- toYaml .Values.customAnnotations | nindent 4 }}
+    {{- end }}
+    {{- if .Values.autoscaler.configmap.annotations -}}
+    {{ toYaml .Values.autoscaler.configmap.annotations | nindent 4 }}
+    {{- end }}
+  {{- end }}
+data:
+  # When cluster is using large nodes(with more cores), "coresPerReplica" should dominate.
+  # If using small nodes, "nodesPerReplica" should dominate.
+  linear: |-
+    {
+      "coresPerReplica": {{ .Values.autoscaler.coresPerReplica | float64 }},
+      "nodesPerReplica": {{ .Values.autoscaler.nodesPerReplica | float64 }},
+      "preventSinglePointFailure": {{ .Values.autoscaler.preventSinglePointFailure }},
+      "min": {{ .Values.autoscaler.min | int }},
+      "max": {{ .Values.autoscaler.max | int }},
+      "includeUnschedulableNodes": {{ .Values.autoscaler.includeUnschedulableNodes }}
+    }
+{{- end }}

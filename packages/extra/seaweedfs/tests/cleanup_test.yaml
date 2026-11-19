@@ -1,0 +1,229 @@
+suite: seaweedfs post-delete cleanup hook removes orphaned PVCs and secrets
+templates:
+  - templates/hooks/cleanup.yaml
+
+release:
+  name: seaweedfs
+  namespace: tenant-root
+
+# After the seaweedfs module is disabled, the StatefulSet data PVCs
+# (data1-seaweedfs-system-volume-{0,1}) and the cert-manager TLS / db
+# secrets are left orphaned. The post-delete hook renders a Job (plus its
+# RBAC) that deletes the volume PVCs by label and the secrets by name.
+# Secrets are cleaned under BOTH naming schemes: the native
+# {{ .Release.Name }}-system-* prefix (fresh installs) and the adopted
+# chart-name-based seaweedfs-* prefix (clusters upgraded past the 4.31
+# rename, where seaweedfs.yaml pins fullnameOverride=seaweedfs). Only one
+# set exists on a given cluster; the hook lists both so cleanup stays
+# exhaustive. PVCs are deleted by the app.kubernetes.io/instance label,
+# which is {{ .Release.Name }}-system under either naming.
+
+tests:
+  - it: renders the cleanup ServiceAccount as a post-delete hook
+    documentSelector:
+      path: kind
+      value: ServiceAccount
+    asserts:
+      - equal:
+          path: metadata.name
+          value: seaweedfs-cleanup
+      - equal:
+          path: metadata.annotations["helm.sh/hook"]
+          value: post-delete
+      - equal:
+          path: metadata.annotations["helm.sh/hook-weight"]
+          value: "0"
+      - equal:
+          path: metadata.annotations["helm.sh/hook-delete-policy"]
+          value: before-hook-creation,hook-succeeded
+
+  - it: grants delete on PVCs and only the named secrets under both naming schemes
+    documentSelector:
+      path: kind
+      value: Role
+    asserts:
+      - equal:
+          path: metadata.annotations["helm.sh/hook-weight"]
+          value: "5"
+      - contains:
+          path: rules
+          content:
+            apiGroups: [""]
+            resources: ["persistentvolumeclaims"]
+            verbs: ["get", "list", "delete"]
+      # Migration 43/53 stamps helm.sh/resource-policy=keep on the CNPG Cluster
+      # so a <name>-system upgrade cannot prune the filer metadata. `keep` is
+      # permanent and also survives the <name>-db release's own uninstall, so
+      # without an explicit reclaim here, deleting the app orphans the Cluster,
+      # its Postgres pods and its PVCs (which the PVC selector above does not
+      # match — they are labelled cnpg.io/cluster=seaweedfs-db).
+      - contains:
+          path: rules
+          content:
+            apiGroups: ["postgresql.cnpg.io"]
+            resources: ["clusters"]
+            verbs: ["get", "delete"]
+            resourceNames:
+              - seaweedfs-db
+      - contains:
+          path: rules
+          content:
+            apiGroups: [""]
+            resources: ["secrets"]
+            verbs: ["get", "delete"]
+            resourceNames:
+              - seaweedfs-s3-ingress-tls
+              - seaweedfs-system-admin-cert
+              - seaweedfs-system-ca-cert
+              - seaweedfs-system-client-cert
+              - seaweedfs-system-filer-cert
+              - seaweedfs-system-master-cert
+              - seaweedfs-system-volume-cert
+              - seaweedfs-system-worker-cert
+              - seaweedfs-system-db-secret
+              - seaweedfs-admin-cert
+              - seaweedfs-ca-cert
+              - seaweedfs-client-cert
+              - seaweedfs-filer-cert
+              - seaweedfs-master-cert
+              - seaweedfs-volume-cert
+              - seaweedfs-worker-cert
+              - seaweedfs-db-secret
+
+  - it: binds the cleanup Role to the cleanup ServiceAccount
+    documentSelector:
+      path: kind
+      value: RoleBinding
+    asserts:
+      - equal:
+          path: metadata.annotations["helm.sh/hook-weight"]
+          value: "5"
+      - equal:
+          path: roleRef.name
+          value: seaweedfs-cleanup
+      - equal:
+          path: subjects[0].kind
+          value: ServiceAccount
+      - equal:
+          path: subjects[0].name
+          value: seaweedfs-cleanup
+
+  - it: renders a hardened cleanup Job with the right hook metadata
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - equal:
+          path: metadata.name
+          value: seaweedfs-cleanup
+      - equal:
+          path: metadata.annotations["helm.sh/hook"]
+          value: post-delete
+      - equal:
+          path: metadata.annotations["helm.sh/hook-weight"]
+          value: "10"
+      - equal:
+          path: metadata.annotations["helm.sh/hook-delete-policy"]
+          value: before-hook-creation,hook-succeeded
+      - equal:
+          path: spec.activeDeadlineSeconds
+          value: 120
+      - equal:
+          path: spec.template.metadata.labels["policy.cozystack.io/allow-to-apiserver"]
+          value: "true"
+      - equal:
+          path: spec.template.spec.serviceAccountName
+          value: seaweedfs-cleanup
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: docker.io/clastix/kubectl:v1.32
+      - equal:
+          path: spec.template.spec.securityContext.runAsNonRoot
+          value: true
+      - equal:
+          path: spec.template.spec.securityContext.runAsUser
+          value: 65534
+      - equal:
+          path: spec.template.spec.securityContext.seccompProfile.type
+          value: RuntimeDefault
+      - equal:
+          path: spec.template.spec.containers[0].securityContext.readOnlyRootFilesystem
+          value: true
+      - equal:
+          path: spec.template.spec.containers[0].securityContext.allowPrivilegeEscalation
+          value: false
+      - contains:
+          path: spec.template.spec.containers[0].securityContext.capabilities.drop
+          content: ALL
+      - equal:
+          path: spec.template.spec.containers[0].resources.requests.cpu
+          value: 10m
+      - equal:
+          path: spec.template.spec.containers[0].resources.requests.memory
+          value: 64Mi
+      - equal:
+          path: spec.template.spec.containers[0].resources.limits.cpu
+          value: 200m
+      - equal:
+          path: spec.template.spec.containers[0].resources.limits.memory
+          value: 128Mi
+
+  - it: deletes volume PVCs by label and the named secrets in the cleanup command
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'kubectl delete pvc -n tenant-root -l app\.kubernetes\.io/name=seaweedfs,app\.kubernetes\.io/instance=seaweedfs-system --ignore-not-found --wait=false'
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'kubectl delete secret -n tenant-root seaweedfs-s3-ingress-tls seaweedfs-system-admin-cert seaweedfs-system-ca-cert seaweedfs-system-client-cert seaweedfs-system-filer-cert seaweedfs-system-master-cert seaweedfs-system-volume-cert seaweedfs-system-worker-cert seaweedfs-system-db-secret seaweedfs-admin-cert seaweedfs-ca-cert seaweedfs-client-cert seaweedfs-filer-cert seaweedfs-master-cert seaweedfs-volume-cert seaweedfs-worker-cert seaweedfs-db-secret --ignore-not-found --wait=false'
+      # The PVC selector must NOT filter by component: the volume StatefulSet sets
+      # app.kubernetes.io/component to volume / volume-<pool> / volume-<zone>[-<pool>]
+      # depending on topology, so a component clause would leave non-default pools and
+      # MultiZone PVCs orphaned (the leak this hook fixes).
+      - notMatchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'app\.kubernetes\.io/component='
+      # The filer-metadata database must be reclaimed too. Migration 43/53 stamps
+      # helm.sh/resource-policy=keep on the Cluster so a <name>-system upgrade
+      # cannot prune it (that prune destroys the tenant's S3 index), but keep is
+      # permanent and also survives the <name>-db release's own uninstall — so
+      # deleting the app would leave the Cluster, its Postgres pods and its PVCs
+      # with nothing owning them. The PVCs carry ownerReferences to the Cluster,
+      # so deleting it garbage-collects them; the label selector above does not
+      # match them (they are labelled cnpg.io/cluster=seaweedfs-db).
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'kubectl delete cluster\.postgresql\.cnpg\.io -n tenant-root seaweedfs-db --ignore-not-found --wait=false'
+      # The Cluster name is hardcoded `seaweedfs-db` for EVERY instance, so name
+      # alone is not ownership. Deleting on name would take a different SeaweedFS
+      # app's database (a Client shares another app's filer; a second Simple
+      # instance loses Helm's ownership race but still installs), and CNPG takes
+      # the PVC with it. The Job must re-check the owner annotation at run time.
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'REFUSING to delete Cluster/seaweedfs-db: owned by'
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: '\$owner" != "seaweedfs-db"'
+      # A failed reclaim must FAIL the Job: the Cluster is keep-protected, so
+      # nothing else reclaims it, and hook-delete-policy would drop the only
+      # cleanup Job. `|| echo` would swallow it into exit zero.
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'Failing so the Job retries.*\n.*exit 1|exit 1'
+      - notMatchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'delete cluster\.postgresql\.cnpg\.io[^|]*\|\| echo'
+      # Reading ownership must ALSO fail closed. `|| true` on the get would turn a
+      # Forbidden or timeout into an empty owner, take the "nothing to reclaim"
+      # branch, and orphan the keep-protected Cluster. Only a genuine NotFound is
+      # treated as absence; every other error aborts the Job.
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'failed to read Cluster/seaweedfs-db ownership'
+      - notMatchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: "release-name.}' 2>/dev/null \\|\\| true"

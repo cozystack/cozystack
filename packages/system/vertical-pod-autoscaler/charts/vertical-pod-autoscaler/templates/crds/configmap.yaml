@@ -1,0 +1,23 @@
+{{- if .Values.crds.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "vertical-pod-autoscaler.crds.fullname" . }}
+  namespace: {{ include "common.names.namespace" . | quote }}
+  labels:
+    {{- include "vertical-pod-autoscaler.crds.labels" . | nindent 4 }}
+    {{- if .Values.commonLabels }}
+    {{- include "common.tplvalues.render" ( dict "value" .Values.commonLabels "context" $ ) | nindent 4 }}
+    {{- end }}
+  annotations:
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+    {{- if .Values.commonAnnotations }}
+    {{- include "common.tplvalues.render" ( dict "value" .Values.commonAnnotations "context" $ ) | nindent 4 }}
+    {{- end }}
+data:
+  {{- range $path, $_ := .Files.Glob  "files/crds/*.yaml" }}
+  {{ base $path }}: |
+    {{- tpl ($.Files.Get $path) $ | nindent 4 }}
+  {{- end }}
+{{- end }}

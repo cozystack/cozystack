@@ -1,0 +1,171 @@
+{{- if and (eq (include "ouroboros.mode" .) "external-dns") .Values.externalDns.cleanupOnUninstall }}
+{{- $namespace := include "ouroboros.externalDnsNamespace" . }}
+{{- /*
+  hookName must fit in 63 chars (DNS-1123 label). ouroboros.fullname
+  already truncates to 63; appending "-cleanup" (8 chars) would push
+  past the limit on long release names. Trim the base to 55 first so
+  the suffixed name always fits.
+*/}}
+{{- $base := include "ouroboros.fullname" . | trunc 55 | trimSuffix "-" }}
+{{- $hookName := printf "%s-cleanup" $base }}
+{{- $output := default "crd" .Values.externalDns.output }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ $hookName }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "ouroboros.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/hook: post-delete
+    helm.sh/hook-weight: "-10"
+    helm.sh/hook-delete-policy: hook-succeeded,hook-failed,before-hook-creation
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $hookName }}
+  namespace: {{ $namespace }}
+  labels:
+    {{- include "ouroboros.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/hook: post-delete
+    helm.sh/hook-weight: "-10"
+    helm.sh/hook-delete-policy: hook-succeeded,hook-failed,before-hook-creation
+rules:
+  {{- if eq $output "service" }}
+  - apiGroups: [""]
+    resources: ["services"]
+    verbs: ["list", "delete", "deletecollection"]
+  {{- else }}
+  - apiGroups: ["externaldns.k8s.io"]
+    resources: ["dnsendpoints"]
+    verbs: ["list", "delete", "deletecollection"]
+  {{- end }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $hookName }}
+  namespace: {{ $namespace }}
+  labels:
+    {{- include "ouroboros.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/hook: post-delete
+    helm.sh/hook-weight: "-10"
+    helm.sh/hook-delete-policy: hook-succeeded,hook-failed,before-hook-creation
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ $hookName }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ $hookName }}
+    namespace: {{ .Release.Namespace }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ $hookName }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "ouroboros.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/hook: post-delete
+    helm.sh/hook-weight: "0"
+    # NOTE: deliberately omitting 'hook-failed' here so a failed Job's
+    # Pod sticks around long enough for `kubectl logs` to surface the
+    # cause. The Job is still cleaned up on success (hook-succeeded).
+    # before-hook-creation guarantees the previous run's Job is removed
+    # before the new one fires, so an upgrade does not stack stale Jobs.
+    helm.sh/hook-delete-policy: hook-succeeded,before-hook-creation
+spec:
+  # activeDeadlineSeconds bounds the Job at the Helm-uninstall scale so a
+  # stuck finalizer or a wedged kubectl call does not block helm uninstall
+  # forever. 120s mirrors the Helm-default --timeout for hooks.
+  activeDeadlineSeconds: 120
+  backoffLimit: 1
+  # 10-minute TTL (well past helm/e2e timeouts) so failed Job pods stay
+  # around long enough for kubectl logs after the fact. The hook-succeeded
+  # delete-policy still reaps the whole hook bundle on success during the
+  # same helm operation, so this only widens the diagnostic window for
+  # failures.
+  ttlSecondsAfterFinished: 600
+  template:
+    metadata:
+      labels:
+        {{- include "ouroboros.labels" . | nindent 8 }}
+    spec:
+      serviceAccountName: {{ $hookName }}
+      restartPolicy: Never
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      # writable /tmp + HOME=/tmp so kubectl can create its discovery
+      # cache (~/.kube/cache) under readOnlyRootFilesystem=true. Without
+      # this, kubectl 1.30+ aborts with "MkdirAll ... permission denied"
+      # before any subcommand runs.
+      volumes:
+        - name: kube-cache
+          emptyDir: {}
+      containers:
+        - name: cleanup
+          image: "{{ .Values.externalDns.cleanupHookImage.repository }}:{{ .Values.externalDns.cleanupHookImage.tag }}"
+          imagePullPolicy: {{ .Values.externalDns.cleanupHookImage.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          env:
+            - name: HOME
+              value: /tmp
+          volumeMounts:
+            - name: kube-cache
+              mountPath: /tmp
+          # CRD-presence probe uses 'kubectl api-resources' instead of
+          # 'kubectl get crd'. The Job's RBAC only grants dnsendpoints
+          # verbs in the namespace; cluster-scope CRD reads would 403 on
+          # default RBAC and the previous probe silently short-circuited
+          # cleanup. api-resources hits the discovery endpoint, which
+          # system:discovery grants to every authenticated principal —
+          # so the probe is reliable on managed and self-managed
+          # clusters alike.
+          command:
+            - sh
+            - -c
+            - |
+              # set -x for command tracing — diagnostic harness reads
+              # these from kubectl logs when the Job's outcome is unclear.
+              set -eux
+              {{- if eq $output "service" }}
+              echo "[cleanup-hook] output=service; deleting matching Services..."
+              kubectl --namespace='{{ $namespace }}' get services \
+                --selector='app.kubernetes.io/managed-by={{ include "ouroboros.managedByValue" . }},ouroboros.lexfrei.tech/instance={{ .Release.Name }}' \
+                --output='custom-columns=NAME:.metadata.name' \
+                || true
+              kubectl --namespace='{{ $namespace }}' delete services \
+                --selector='app.kubernetes.io/managed-by={{ include "ouroboros.managedByValue" . }},ouroboros.lexfrei.tech/instance={{ .Release.Name }}' \
+                --ignore-not-found=true \
+                --wait=true \
+                --timeout=60s
+              echo "[cleanup-hook] done."
+              {{- else }}
+              echo "[cleanup-hook] probing for DNSEndpoint CRD..."
+              if ! kubectl api-resources --api-group=externaldns.k8s.io --output=name 2>&1 \
+                  | grep '^dnsendpoints'; then
+                echo "[cleanup-hook] DNSEndpoint CRD missing — nothing to clean up"
+                exit 0
+              fi
+              echo "[cleanup-hook] probe passed; listing matching dnsendpoints..."
+              kubectl --namespace='{{ $namespace }}' get \
+                dnsendpoints.externaldns.k8s.io \
+                --selector='app.kubernetes.io/managed-by={{ include "ouroboros.managedByValue" . }},ouroboros.lexfrei.tech/instance={{ .Release.Name }}' \
+                --output='custom-columns=NAME:.metadata.name,DNS:.spec.endpoints[0].dnsName' \
+                || true
+              echo "[cleanup-hook] running delete..."
+              kubectl --namespace='{{ $namespace }}' delete \
+                dnsendpoints.externaldns.k8s.io \
+                --selector='app.kubernetes.io/managed-by={{ include "ouroboros.managedByValue" . }},ouroboros.lexfrei.tech/instance={{ .Release.Name }}' \
+                --ignore-not-found=true \
+                --wait=true \
+                --timeout=60s
+              echo "[cleanup-hook] done."
+              {{- end }}
+{{- end }}

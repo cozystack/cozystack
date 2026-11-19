@@ -1,0 +1,13 @@
+diff --git a/packages/system/seaweedfs/charts/seaweedfs/templates/cosi/cosi-deployment.yaml b/packages/system/seaweedfs/charts/seaweedfs/templates/cosi/cosi-deployment.yaml
+index aefc9d369..d485e0678 100644
+--- a/packages/system/seaweedfs/charts/seaweedfs/templates/cosi/cosi-deployment.yaml
++++ b/packages/system/seaweedfs/charts/seaweedfs/templates/cosi/cosi-deployment.yaml
+@@ -58,7 +58,7 @@ spec:
+       priorityClassName: {{ .Values.cosi.priorityClassName | quote }}
+       {{- end }}
+       enableServiceLinks: false
+-      serviceAccountName: {{ include "seaweedfs.componentName" (list . "objectstorage-provisioner") }}
++      serviceAccountName: {{ .Values.global.seaweedfs.serviceAccountName }}-objectstorage-provisioner
+       {{- if .Values.cosi.initContainers }}
+       initContainers:
+         {{ tpl .Values.cosi.initContainers . | nindent 8 | trim }}

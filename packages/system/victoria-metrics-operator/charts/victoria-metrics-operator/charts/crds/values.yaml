@@ -1,0 +1,17 @@
+upgrade:
+  enabled: false
+  serviceAccount:
+    labels: {}
+    create: true
+  forceConflicts: false
+  busybox:
+    image:
+      repository: busybox
+      tag: latest
+      pullPolicy: IfNotPresent
+  kubectl:
+    image:
+      repository: rancher/kubectl
+      # use image tag that matches k8s API version by default
+      tag: ""
+      pullPolicy: IfNotPresent

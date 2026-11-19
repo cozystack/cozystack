@@ -1,0 +1,15 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "local-ccm.fullname" . }}
+  labels:
+    {{- include "local-ccm.labels" . | nindent 4 }}
+rules:
+# Permissions to get and update nodes
+- apiGroups: [""]
+  resources: ["nodes"]
+  verbs: ["get", "list", "watch", "patch"]
+# Permissions to update node status (for addresses)
+- apiGroups: [""]
+  resources: ["nodes/status"]
+  verbs: ["patch"]
