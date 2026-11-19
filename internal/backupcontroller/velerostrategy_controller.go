@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -306,12 +307,12 @@ func (r *BackupJobReconciler) reconcileVelero(ctx context.Context, j *backupsv1a
 	}
 
 	if len(veleroBackupList.Items) > 1 {
-		logger.Error(fmt.Errorf("too many Velero backups for BackupJob"), "found more than one Velero Backup referencing a single BackupJob as owner")
-		j.Status.Phase = backupsv1alpha1.BackupJobPhaseFailed
-		if err := r.Status().Update(ctx, j); err != nil {
-			logger.Error(err, "failed to update BackupJob status")
+		names := make([]string, 0, len(veleroBackupList.Items))
+		for _, vb := range veleroBackupList.Items {
+			names = append(names, vb.Name)
 		}
-		return ctrl.Result{}, nil
+		sort.Strings(names)
+		return r.markBackupJobFailed(ctx, j, fmt.Sprintf("more than one Velero Backup references this BackupJob: %s", strings.Join(names, ", ")))
 	}
 
 	veleroBackup := veleroBackupList.Items[0].DeepCopy()
@@ -360,6 +361,12 @@ func (r *BackupJobReconciler) reconcileVelero(ctx context.Context, j *backupsv1a
 	// Step 5: On failure
 	if phase == "Failed" || phase == "PartiallyFailed" {
 		message := formatVeleroBackupFailureMessageForBackupJob(ctx, r.Client, veleroBackup)
+		// No Backup is created for a failed run, so nothing else deletes this
+		// Velero backup. A failed request is retried by
+		// deleteFailedJobVeleroBackups once the job is Failed.
+		if _, err := requestVeleroBackupDeletion(ctx, r.Client, veleroBackup.Namespace, veleroBackup.Name); err != nil {
+			logger.Error(err, "failed to request deletion of the failed Velero Backup", "name", veleroBackup.Name)
+		}
 		return r.markBackupJobFailed(ctx, j, message)
 	}
 

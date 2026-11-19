@@ -60,7 +60,11 @@ func (r *BackupJobReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 	// would otherwise materialise cozy-backups-creds in tenant namespaces
 	// long after the BackupJob is done and pin needless work on the
 	// apiserver.
-	if j.Status.Phase == backupsv1alpha1.BackupJobPhaseSucceeded || j.Status.Phase == backupsv1alpha1.BackupJobPhaseFailed {
+	if j.Status.Phase == backupsv1alpha1.BackupJobPhaseFailed {
+		logger.V(1).Info("BackupJob already terminal, cleaning up its Velero Backups", "phase", j.Status.Phase)
+		return r.deleteFailedJobVeleroBackups(ctx, j)
+	}
+	if j.Status.Phase == backupsv1alpha1.BackupJobPhaseSucceeded {
 		logger.V(1).Info("BackupJob already terminal, skipping", "phase", j.Status.Phase)
 		return ctrl.Result{}, nil
 	}
