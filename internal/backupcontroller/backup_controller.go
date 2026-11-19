@@ -234,28 +234,16 @@ func (r *BackupReconciler) cleanupVeleroBackup(ctx context.Context, backup *back
 		return fmt.Errorf("failed to get Velero backup %s/%s: %w", veleroBackupNamespace, veleroBackupName, err)
 	}
 
-	// Create a DeleteBackupRequest so Velero removes backup data from storage.
-	// Without this, BSL sync will recreate the backup.velero.io resource.
-	dbr := &velerov1.DeleteBackupRequest{
-		ObjectMeta: metav1.ObjectMeta{
-			GenerateName: veleroBackupName + "-",
-			Namespace:    veleroBackupNamespace,
-		},
-		Spec: velerov1.DeleteBackupRequestSpec{
-			BackupName: veleroBackupName,
-		},
+	created, err := requestVeleroBackupDeletion(ctx, r.Client, veleroBackupNamespace, veleroBackupName)
+	if err != nil {
+		return err
 	}
-	if err := r.Create(ctx, dbr); err != nil {
-		if apierrors.IsAlreadyExists(err) {
-			logger.V(1).Info("DeleteBackupRequest already exists", "backup", veleroBackupName)
-			return nil
-		}
-		return fmt.Errorf("failed to create DeleteBackupRequest for %s/%s: %w", veleroBackupNamespace, veleroBackupName, err)
+	if created {
+		logger.Info("created DeleteBackupRequest for Velero backup",
+			"name", veleroBackupName, "namespace", veleroBackupNamespace)
+	} else {
+		logger.V(1).Info("deletion of Velero backup already requested", "backup", veleroBackupName)
 	}
-
-	logger.Info("created DeleteBackupRequest for Velero backup",
-		"name", veleroBackupName, "namespace", veleroBackupNamespace,
-		"deleteRequest", dbr.Name)
 	return nil
 }
 
