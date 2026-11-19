@@ -360,13 +360,9 @@ func (r *BackupJobReconciler) reconcileVelero(ctx context.Context, j *backupsv1a
 
 	// Step 5: On failure
 	if phase == "Failed" || phase == "PartiallyFailed" {
+		// The Velero backup is deleted by deleteFailedJobVeleroBackups once
+		// the Failed phase written here triggers the next reconcile.
 		message := formatVeleroBackupFailureMessageForBackupJob(ctx, r.Client, veleroBackup)
-		// No Backup is created for a failed run, so nothing else deletes this
-		// Velero backup. A failed request is retried by
-		// deleteFailedJobVeleroBackups once the job is Failed.
-		if _, err := requestVeleroBackupDeletion(ctx, r.Client, veleroBackup.Namespace, veleroBackup.Name); err != nil {
-			logger.Error(err, "failed to request deletion of the failed Velero Backup", "name", veleroBackup.Name)
-		}
 		return r.markBackupJobFailed(ctx, j, message)
 	}
 
