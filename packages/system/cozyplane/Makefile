@@ -13,7 +13,8 @@ test:
 	helm unittest .
 
 update:
-	tmp=$$(mktemp -d) && \
-	curl -fsSL https://github.com/lllamnyp/cozyplane/archive/$(COZYPLANE_REF).tar.gz | \
-	  tar -xzf - -C "$$tmp" --strip-components=3 cozyplane-$(COZYPLANE_REF)/chart/cozyplane && \
-	rm -rf charts/cozyplane && mkdir -p charts && mv "$$tmp" charts/cozyplane
+	mkdir -p charts && tmp=$$(mktemp -d charts/.update.XXXXXX) && \
+	{ curl -fsSL https://github.com/lllamnyp/cozyplane/archive/$(COZYPLANE_REF).tar.gz | \
+	  tar -xzf - -C "$$tmp" --strip-components=3 cozyplane-$(COZYPLANE_REF)/chart/cozyplane || \
+	  { rm -rf "$$tmp"; exit 1; }; } && \
+	rm -rf charts/cozyplane && mv "$$tmp" charts/cozyplane
