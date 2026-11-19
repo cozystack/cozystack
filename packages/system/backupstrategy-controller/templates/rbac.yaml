@@ -108,10 +108,11 @@ rules:
 - apiGroups: ["velero.io"]
   resources: ["backupstoragelocations"]
   verbs: ["get"]
-# Velero DeleteBackupRequest: used by BackupReconciler to delete Velero backups with their storage data
+# Velero DeleteBackupRequest: used to delete Velero backups with their storage
+# data. delete replaces a request Velero processed with errors.
 - apiGroups: ["velero.io"]
   resources: ["deletebackuprequests"]
-  verbs: ["create", "get", "list", "watch"]
+  verbs: ["create", "get", "list", "watch", "delete"]
 # Namespaces: validate target namespace exists for cross-namespace restore
 # controller-runtime cache requires list/watch for any resource accessed via r.Get()
 - apiGroups: [""]
