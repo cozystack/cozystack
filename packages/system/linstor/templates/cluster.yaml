@@ -1,3 +1,6 @@
+{{- /* See linstor.piraeusExternal in _backend.tpl for why this follows it
+       rather than .Values.backend. */ -}}
+{{- $external := include "linstor.piraeusExternal" . -}}
 apiVersion: piraeus.io/v1
 kind: LinstorCluster
 metadata:
@@ -7,7 +10,7 @@ metadata:
 spec:
   #nodeSelector:
   #  node-role.kubernetes.io/linstor: ""
-  {{- if eq .Values.backend "blockstor" }}
+  {{- if $external }}
   {{- /* External mode: piraeus-operator runs no linstor-controller of its
          own. linstor-csi talks to blockstor-apiserver, which serves the
          LINSTOR REST API on the mTLS port :3371 only. The URL has to match
@@ -23,7 +26,7 @@ spec:
   {{- end }}
   apiTLS:
     certManager:
-      {{- if eq .Values.backend "blockstor" }}
+      {{- if $external }}
       {{- /* The operator issues linstor-csi-{controller,node}-tls from this
              Issuer, so the CSI pods present a client certificate chained to
              the CA blockstor-apiserver verifies. */}}
@@ -32,7 +35,7 @@ spec:
       name: linstor-api-ca
       {{- end }}
       kind: Issuer
-    {{- if eq .Values.backend "blockstor" }}
+    {{- if $external }}
     {{- /* The operator is a client of the API itself: it probes
            /v1/controller/version before every LinstorCluster and
            LinstorSatellite reconcile. In external mode it issues no
@@ -62,7 +65,7 @@ spec:
     value: "20"
   - name: DrbdOptions/Net/timeout
     value: "100"
-  {{- if eq .Values.backend "linstor" }}
+  {{- if not $external }}
   controller:
     enabled: true
     podTemplate:
@@ -155,7 +158,7 @@ spec:
         - name: linstor-csi
           image: {{ .Values.linstorCSI.image.repository }}:{{ .Values.linstorCSI.image.tag }}
   patches:
-    {{- if eq .Values.backend "linstor" }}
+    {{- if not $external }}
     - target:
         kind: Deployment
         name: linstor-controller

@@ -16,6 +16,30 @@
 # https://blockstor.org/docs/migration/
 backend: linstor
 
+# Set only while a cluster that holds LINSTOR volumes moves to blockstor,
+# with backend blockstor. The runbook freezes CSI and stops LINSTOR before
+# blockstor adopts the volumes, and repoints CSI only once adoption has
+# converged; one backend flip cannot express that order. Each step is a
+# value:
+#
+#   hold  — blockstor is deployed with its controller stopped. Every
+#           piraeus object renders as under backend linstor, so the
+#           operator keeps linstor-csi on LINSTOR. Apply the converted
+#           manifests in this step.
+#   adopt — the blockstor controller runs and adopts the volumes. piraeus
+#           is still untouched.
+#   ""    — migration done: LinstorCluster goes external and the operator
+#           repoints linstor-csi at blockstor-apiserver.
+#
+# piraeus stays untouched because the runbook keeps piraeus-operator
+# stopped while blockstor adopts, and the operator itself serves the
+# validating webhooks (failurePolicy: Fail) on LinstorCluster and
+# LinstorSatelliteConfiguration: a release that changes them while it is
+# stopped fails and retries until it returns, switching back to linstor
+# included. Clearing this value is the one step that changes them, so
+# piraeus-operator has to be running for it. README.md has the order.
+blockstorMigration: ""
+
 piraeusServer:
   image:
     repository: ghcr.io/cozystack/cozystack/piraeus-server

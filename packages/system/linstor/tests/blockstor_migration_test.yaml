@@ -1,0 +1,198 @@
+suite: blockstor adopting a LINSTOR cluster
+
+# The runbook freezes CSI by stopping piraeus-operator, and the operator is
+# also the server of the validating webhooks (failurePolicy: Fail) on its own
+# kinds. While it is stopped, any change the release makes to a piraeus object
+# fails the upgrade, which then retries forever, skips its post-upgrade hook,
+# and blocks the way back to linstor just the same. So hold and adopt must
+# render every piraeus object byte for byte as backend linstor does, and only
+# clearing the value may move piraeus to external mode.
+
+release:
+  name: linstor
+  namespace: cozy-linstor
+
+tests:
+  - it: "keeps LinstorCluster on the LINSTOR controller while holding"
+    set:
+      backend: blockstor
+      blockstorMigration: hold
+    templates:
+      - templates/cluster.yaml
+    asserts:
+      - notExists:
+          path: spec.externalController
+      - equal:
+          path: spec.internalTLS.certManager.name
+          value: linstor-internal-ca
+      - equal:
+          path: spec.apiTLS.certManager.name
+          value: linstor-api-ca
+      - notExists:
+          path: spec.apiTLS.clientSecretName
+      - equal:
+          path: spec.controller.enabled
+          value: true
+
+  - it: "keeps LinstorCluster on the LINSTOR controller while adopting"
+    set:
+      backend: blockstor
+      blockstorMigration: adopt
+    templates:
+      - templates/cluster.yaml
+    asserts:
+      - notExists:
+          path: spec.externalController
+      - equal:
+          path: spec.controller.enabled
+          value: true
+
+  # Dropping the plunger configuration is a change to a piraeus object too, and
+  # its ConfigMap is mounted by the LINSTOR controller and satellite pods the
+  # stopped operator leaves in place.
+  - it: "keeps the plunger and the LINSTOR API CA during the migration"
+    set:
+      backend: blockstor
+      blockstorMigration: hold
+    templates:
+      - templates/satellites-plunger.yaml
+      - templates/plunger/configmap-scripts.yaml
+      - templates/linstor-api-tls.yaml
+    asserts:
+      - hasDocuments:
+          count: 1
+        template: templates/satellites-plunger.yaml
+      - hasDocuments:
+          count: 1
+        template: templates/plunger/configmap-scripts.yaml
+      - hasDocuments:
+          count: 2
+        template: templates/linstor-api-tls.yaml
+
+  - it: "keeps scraping the LINSTOR controller during the migration"
+    set:
+      backend: blockstor
+      blockstorMigration: adopt
+    capabilities:
+      apiVersions:
+        - operator.victoriametrics.com/v1beta1
+    templates:
+      - templates/podscrape.yaml
+    asserts:
+      - hasDocuments:
+          count: 2
+
+  - it: "moves LinstorCluster to external mode once the migration is cleared"
+    set:
+      backend: blockstor
+      blockstorMigration: ""
+    templates:
+      - templates/cluster.yaml
+    asserts:
+      - equal:
+          path: spec.externalController.url
+          value: https://blockstor-apiserver.cozy-linstor.svc:3371
+      - notExists:
+          path: spec.controller
+
+  - it: "deploys blockstor while holding"
+    set:
+      backend: blockstor
+      blockstorMigration: hold
+    templates:
+      - templates/blockstor-apiserver.yaml
+      - templates/blockstor-satellite.yaml
+      - templates/crds/crds.yaml
+    asserts:
+      - isKind:
+          of: Deployment
+        template: templates/blockstor-apiserver.yaml
+        documentSelector:
+          path: kind
+          value: Deployment
+      - isKind:
+          of: DaemonSet
+        template: templates/blockstor-satellite.yaml
+        documentSelector:
+          path: kind
+          value: DaemonSet
+      - hasDocuments:
+          count: 8
+        template: templates/crds/crds.yaml
+
+  # Started before the converted manifests are in, the controller places
+  # replicas of its own under definitions whose Resources have not arrived.
+  # Rendered at 0 rather than scaled by hand, so a retried or repeated upgrade
+  # does not start it.
+  - it: "stops the blockstor controller while holding"
+    set:
+      backend: blockstor
+      blockstorMigration: hold
+    template: templates/blockstor-controller.yaml
+    documentSelector:
+      path: kind
+      value: Deployment
+    asserts:
+      - equal:
+          path: spec.replicas
+          value: 0
+
+  - it: "runs the blockstor controller while adopting"
+    set:
+      backend: blockstor
+      blockstorMigration: adopt
+    template: templates/blockstor-controller.yaml
+    documentSelector:
+      path: kind
+      value: Deployment
+    asserts:
+      - equal:
+          path: spec.replicas
+          value: 1
+
+  # The hook names the passphrase Secret; the controller started in adopt has
+  # to find it in place.
+  - it: "points ControllerConfig at the passphrase while holding"
+    set:
+      backend: blockstor
+      blockstorMigration: hold
+    template: templates/blockstor-controllerconfig.yaml
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - isKind:
+          of: Job
+
+  # blockstor-satellite runs on the nodes from hold on, so the hook would down
+  # its DRBD resources there as it would after the switch.
+  - it: "refuses the Talos shutdown hook during the migration"
+    set:
+      backend: blockstor
+      blockstorMigration: adopt
+      talos.gracefulShutdown.enabled: true
+    templates:
+      - templates/satellites-talos.yaml
+    asserts:
+      - failedTemplate:
+          errorMessage: "linstor: talos.gracefulShutdown.enabled is not supported with backend blockstor: its hook would tear down blockstor's DRBD resources"
+
+  - it: "refuses a migration step it does not know"
+    set:
+      backend: blockstor
+      blockstorMigration: adopted
+    templates:
+      - templates/backend-guard.yaml
+    asserts:
+      - failedTemplate:
+          errorMessage: 'linstor: blockstorMigration must be "", "hold" or "adopt", got "adopted"'
+
+  - it: "refuses a migration step under the LINSTOR backend"
+    set:
+      backend: linstor
+      blockstorMigration: hold
+    templates:
+      - templates/backend-guard.yaml
+    asserts:
+      - failedTemplate:
+          errorMessage: 'linstor: blockstorMigration "hold" is only valid with backend blockstor; clear it together with switching the backend back'
