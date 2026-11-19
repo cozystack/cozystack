@@ -3,6 +3,7 @@ package backupcontroller
 import (
 	"context"
 	"fmt"
+	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -24,8 +25,9 @@ import (
 // request. Nothing is created while any request for the backup is unprocessed,
 // or once one was processed without errors (Velero then removes the backup and
 // the remaining requests). A request of ours that Velero processed with errors
-// is replaced: Velero keeps it for a day, and until then its name would block
-// the retry.
+// is deleted and created again: Velero keeps it for a day, and until then its
+// name would block a new attempt. Velero does not retry a processed request,
+// so a caller that needs the deletion to happen must call again later.
 func requestVeleroBackupDeletion(ctx context.Context, c client.Client, namespace, name string) (bool, error) {
 	requests := &velerov1.DeleteBackupRequestList{}
 	if err := c.List(ctx, requests, client.InNamespace(namespace)); err != nil {
@@ -71,12 +73,27 @@ func requestVeleroBackupDeletion(ctx context.Context, c client.Client, namespace
 	return true, nil
 }
 
-// deleteFailedJobVeleroBackups requests deletion of the Velero backups a Failed
-// BackupJob left behind. A failed run creates no Backup, and the Backup
-// finalizer is the only other path that deletes Velero data, so without this
-// the backup and its objects stay in the bucket until Velero's TTL expires
-// them. It runs on every reconcile of a Failed job, which also clears backups
-// left by controller versions that did not request the deletion.
+const (
+	// failedJobSweepRequeue is how often a Failed BackupJob is reconciled
+	// again while one of its Velero backups still waits for deletion. Nothing
+	// watches DeleteBackupRequests, so a request Velero processed with errors
+	// is only noticed, and replaced, on this requeue.
+	failedJobSweepRequeue = 5 * time.Minute
+	// failedJobRunningBackupRequeue is how often a Failed BackupJob is
+	// reconciled again while one of its Velero backups is still running.
+	// Velero rejects a deletion request for a running backup.
+	failedJobRunningBackupRequeue = time.Minute
+)
+
+// deleteFailedJobVeleroBackups requests deletion of the failed Velero backups
+// a Failed BackupJob left behind. A failed run creates no Backup, and the
+// Backup finalizer is the only other path that deletes Velero data, so without
+// this the backup and its objects stay in the bucket until Velero's TTL
+// expires them. It runs on every reconcile of a Failed job, which also clears
+// backups left by controller versions that did not request the deletion, and
+// it requests the deletion only once the Failed phase is persisted: a request
+// sent before that write would let a retried run start over with the failure
+// already gone.
 func (r *BackupJobReconciler) deleteFailedJobVeleroBackups(ctx context.Context, j *backupsv1alpha1.BackupJob) (ctrl.Result, error) {
 	logger := getLogger(ctx)
 
@@ -94,30 +111,33 @@ func (r *BackupJobReconciler) deleteFailedJobVeleroBackups(ctx context.Context, 
 		return ctrl.Result{}, nil
 	}
 
-	// A job can fail after its Backup was created: the status update that
-	// records the Backup is lost, and the retried create hits AlreadyExists.
-	// That Backup owns the Velero backup and deletes it itself.
-	referenced, err := r.veleroBackupsReferencedByBackups(ctx, j.Namespace)
-	if err != nil {
-		return ctrl.Result{}, err
-	}
-
-	var running bool
+	var referenced map[client.ObjectKey]bool
+	var requeueAfter time.Duration
 	for i := range veleroBackups.Items {
 		vb := &veleroBackups.Items[i]
+		switch vb.Status.Phase {
+		case velerov1.BackupPhasePartiallyFailed, velerov1.BackupPhaseFailed, velerov1.BackupPhaseFailedValidation:
+		case velerov1.BackupPhaseCompleted, velerov1.BackupPhaseDeleting:
+			// A job can fail after Velero completed, when creating or
+			// recording its Backup fails. That Velero backup may be the only
+			// copy of good data, and a Backup that already references it
+			// deletes it itself, so a job-level failure never removes it.
+			continue
+		default:
+			requeueAfter = shorterRequeue(requeueAfter, failedJobRunningBackupRequeue)
+			continue
+		}
+
+		if referenced == nil {
+			var err error
+			if referenced, err = r.veleroBackupsReferencedByBackups(ctx, j.Namespace); err != nil {
+				return ctrl.Result{}, err
+			}
+		}
 		if referenced[client.ObjectKeyFromObject(vb)] {
 			continue
 		}
-		switch vb.Status.Phase {
-		case velerov1.BackupPhaseCompleted, velerov1.BackupPhasePartiallyFailed,
-			velerov1.BackupPhaseFailed, velerov1.BackupPhaseFailedValidation:
-		case velerov1.BackupPhaseDeleting:
-			continue
-		default:
-			// Velero rejects a request for a backup that is still running.
-			running = true
-			continue
-		}
+
 		created, err := requestVeleroBackupDeletion(ctx, r.Client, vb.Namespace, vb.Name)
 		if err != nil {
 			return ctrl.Result{}, err
@@ -126,16 +146,23 @@ func (r *BackupJobReconciler) deleteFailedJobVeleroBackups(ctx context.Context, 
 			logger.Info("requested deletion of the Velero Backup of a failed BackupJob",
 				"backupjob", j.Name, "namespace", j.Namespace, "veleroBackup", vb.Name)
 		}
+		requeueAfter = shorterRequeue(requeueAfter, failedJobSweepRequeue)
 	}
-	if running {
-		return ctrl.Result{RequeueAfter: defaultActiveJobPollingInterval}, nil
-	}
-	return ctrl.Result{}, nil
+	return ctrl.Result{RequeueAfter: requeueAfter}, nil
 }
 
+func shorterRequeue(current, next time.Duration) time.Duration {
+	if current == 0 || next < current {
+		return next
+	}
+	return current
+}
+
+// veleroBackupsReferencedByBackups reads Backups past the cache: a Backup the
+// cache has not seen yet must still protect its Velero backup from deletion.
 func (r *BackupJobReconciler) veleroBackupsReferencedByBackups(ctx context.Context, namespace string) (map[client.ObjectKey]bool, error) {
 	backups := &backupsv1alpha1.BackupList{}
-	if err := r.List(ctx, backups, client.InNamespace(namespace)); err != nil {
+	if err := r.apiReader().List(ctx, backups, client.InNamespace(namespace)); err != nil {
 		return nil, fmt.Errorf("failed to list Backups in %s: %w", namespace, err)
 	}
 	referenced := map[client.ObjectKey]bool{}
