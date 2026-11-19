@@ -38,7 +38,11 @@
        the class or inherited the platform default. */}}
 {{- range splitList "," ((index .Values._cluster "gateway-unserved-classes") | default "") }}
   {{- if eq (trim .) $className }}
-    {{- fail (printf "packages/extra/gateway: GatewayClass %q has no controller on this cluster, so this Gateway would never be programmed. Set tenant.spec.gatewayClass to a class the operator lists in gateway.tenantSelectableClasses, or have the operator set gateway.className to a served class." $className) }}
+    {{- $remedy := "Set tenant.spec.gatewayClass to a served class the operator lists in gateway.tenantSelectableClasses, or have the operator set gateway.className to a served class." }}
+    {{- if trim $rawClassName }}
+      {{- $remedy = "Change tenant.spec.gatewayClass to a served class the operator lists in gateway.tenantSelectableClasses, or clear it to take the platform default if that class is served." }}
+    {{- end }}
+    {{- fail (printf "packages/extra/gateway: GatewayClass %q has no controller on this cluster, so this Gateway would never be programmed. %s" $className $remedy) }}
   {{- end }}
 {{- end }}
 {{- $edgeClasses := list }}

@@ -23,7 +23,7 @@ tests:
         host: alice.example.org
     asserts:
       - failedTemplate:
-          errorPattern: 'GatewayClass "cilium" has no controller on this cluster'
+          errorPattern: 'GatewayClass "cilium" has no controller on this cluster.*have the operator set gateway.className'
 
   - it: refuses a tenant-chosen class nothing serves
     set:
@@ -39,7 +39,7 @@ tests:
       gatewayClassName: cilium
     asserts:
       - failedTemplate:
-          errorPattern: 'GatewayClass "cilium" has no controller on this cluster'
+          errorPattern: 'GatewayClass "cilium" has no controller on this cluster.*Change tenant.spec.gatewayClass .* or clear it'
 
   - it: lets a tenant select a served class while the default is unserved
     set:
