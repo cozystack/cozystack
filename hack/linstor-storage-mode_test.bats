@@ -15,13 +15,16 @@ kubectl() { printf '%s\n' "$*"; }
 # The pool waits poll against a wall-clock deadline. Each `date` call moves this
 # clock a minute on, so a wait that cannot succeed runs out within a few polls.
 # The suite also runs kubectl through `timeout` and `sh -c`, which bypass the
-# shell function, so a kubectl that refuses to run goes first on PATH.
+# shell function, so a kubectl that refuses to run goes first on PATH. The stub
+# lives in the test's own temporary directory: tests in this file run in
+# parallel under `bats -j`, and rewriting one shared stub while a sibling test
+# executes it fails with "Text file busy".
 fake_linstor_clock() {
   clock_file="_out/tmp/linstor-clock-$$"
-  mkdir -p _out/tmp/linstor-bin
-  printf '#!/bin/sh\necho "unstubbed kubectl $*" >&2\nexit 97\n' >_out/tmp/linstor-bin/kubectl
-  chmod +x _out/tmp/linstor-bin/kubectl
-  PATH="$PWD/_out/tmp/linstor-bin:$PATH"
+  mkdir -p "$BATS_TEST_TMPDIR/linstor-bin"
+  printf '#!/bin/sh\necho "unstubbed kubectl $*" >&2\nexit 97\n' >"$BATS_TEST_TMPDIR/linstor-bin/kubectl"
+  chmod +x "$BATS_TEST_TMPDIR/linstor-bin/kubectl"
+  PATH="$BATS_TEST_TMPDIR/linstor-bin:$PATH"
   printf '0\n' >"$clock_file"
   date() {
     _now=$(cat "$clock_file")
