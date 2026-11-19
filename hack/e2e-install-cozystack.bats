@@ -386,7 +386,7 @@
   wait "$pf_pid" 2>/dev/null || true
 
   case "$hinted" in
-    https://keycloak.example.org/realms/cozy/protocol/openid-connect/auth\?*kc_idp_hint=e2e-idp*) ;;
+    https://keycloak.example.org/realms/cozy/protocol/openid-connect/auth\?*\&kc_idp_hint=e2e-idp\&*|https://keycloak.example.org/realms/cozy/protocol/openid-connect/auth\?*\&kc_idp_hint=e2e-idp) ;;
     *)
       echo "=== /oauth2/start?kc_idp_hint=e2e-idp did not redirect to the cozy realm with the hint ==="
       echo "Location: ${hinted:-<none>}"
