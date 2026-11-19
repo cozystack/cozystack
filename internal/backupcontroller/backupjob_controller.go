@@ -43,6 +43,9 @@ type BackupJobReconciler struct {
 	// newS3ObjectLister overrides the S3 client used to measure artifact
 	// sizes; nil means a real minio client. Set by unit tests.
 	newS3ObjectLister func(conn s3Connection) (s3ObjectLister, error)
+
+	// now is a test seam for the clock that paces Velero deletion retries.
+	now func() time.Time
 }
 
 func (r *BackupJobReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
