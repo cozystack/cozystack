@@ -364,8 +364,9 @@ func TestReconcile_PoolRootWithoutLimitRange(t *testing.T) {
 	}
 }
 
-// TestReconcile_NoLimitRangeWithoutComputeLimitQuota: the chart renders its
-// LimitRange for any non-empty resourceQuotas, compute or not. A member whose
+// TestReconcile_NoLimitRangeWithoutComputeLimitQuota: a chart release older
+// than the per-resource defaults renders its LimitRange for any non-empty
+// resourceQuotas, compute or not, and the root may still carry it. A member whose
 // allocated quota bounds neither limits.cpu nor limits.memory is admitted
 // without limits today; copying the root's defaults there would cap or refuse
 // pods (one requesting more than the default memory limit, for instance)
