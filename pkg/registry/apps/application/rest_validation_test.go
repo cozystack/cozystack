@@ -110,6 +110,7 @@ func TestUpdate_ForceAllowCreate_RejectsTenantDashName(t *testing.T) {
 
 	r := &REST{
 		c: fakeClient,
+		w: fakeClient,
 		gvr: schema.GroupVersionResource{
 			Group:    appsv1alpha1.GroupName,
 			Version:  "v1alpha1",

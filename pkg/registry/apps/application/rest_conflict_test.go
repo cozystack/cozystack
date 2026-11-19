@@ -35,21 +35,6 @@ import (
 	"github.com/cozystack/cozystack/pkg/config"
 )
 
-// TestUpdate_RetriesOnResourceVersionConflict pins the retry.RetryOnConflict
-// wrapper around the HelmRelease write in REST.Update.
-//
-// Flux's helm-controller continuously rewrites a HelmRelease's status, which
-// shares the object's resourceVersion. When a caller updates an Application CR
-// while a prior reconcile is still in flight, the resourceVersion read by
-// Update goes stale and the write is rejected with a 409 Conflict. Apart from
-// suspend, which TestUpdate_RefreshesSuspendOnConflictRetry covers, the
-// HelmRelease spec is derived from the Application the caller just applied, so
-// a stale-resourceVersion conflict is never a real spec conflict: Update must
-// refresh the resourceVersion and retry rather than surface the 409.
-//
-// The fake client returns one Conflict on the first HelmRelease Update, then
-// lets the second through. A regression that drops the retry makes the first
-// 409 fatal and this test fails.
 func TestUpdate_RetriesOnResourceVersionConflict(t *testing.T) {
 	scheme := runtime.NewScheme()
 	if err := helmv2.AddToScheme(scheme); err != nil {
@@ -104,6 +89,7 @@ func TestUpdate_RetriesOnResourceVersionConflict(t *testing.T) {
 
 	r := &REST{
 		c: fakeClient,
+		w: fakeClient,
 		gvr: schema.GroupVersionResource{
 			Group:    appsv1alpha1.GroupName,
 			Version:  "v1alpha1",

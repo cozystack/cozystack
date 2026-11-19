@@ -158,14 +158,17 @@ func TestWorkloadMemoryRecheckedAgainstLiveRelease(t *testing.T) {
 			}}, Spec: helmv2.HelmReleaseSpec{Values: &apiextv1.JSON{Raw: []byte(stale)}}}
 			r := newKubernetesWarnREST(t, stored)
 			r.specSchema = chartSpecSchema(t, "tcp-balancer")
-			r.c = interceptor.NewClient(r.w, tc.funcs())
+			base := r.w
+			intercepted := interceptor.NewClient(base, tc.funcs())
+			r.c = intercepted
+			r.w = intercepted
 			ctx := request.WithNamespace(context.Background(), app.Namespace)
 			_, _, err := r.Update(ctx, app.Name, newDefaultUpdatedObjectInfo(app), nil, nil, false, &metav1.UpdateOptions{})
 			if tc.reject && !apierrors.IsInvalid(err) || !tc.reject && err != nil {
 				t.Fatalf("reject=%v, got %v", tc.reject, err)
 			}
 			got := &helmv2.HelmRelease{}
-			if err := r.w.Get(ctx, client.ObjectKeyFromObject(stored), got); err != nil {
+			if err := base.Get(ctx, client.ObjectKeyFromObject(stored), got); err != nil {
 				t.Fatal(err)
 			}
 			if string(got.Spec.Values.Raw) != tc.want {

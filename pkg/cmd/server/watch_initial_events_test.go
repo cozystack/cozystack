@@ -27,11 +27,13 @@ import (
 	"testing"
 	"time"
 
+	cozyv1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
 	helmv2 "github.com/fluxcd/helm-controller/api/v2"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apiserver/pkg/admission"
 	"k8s.io/apiserver/pkg/authentication/authenticator"
 	"k8s.io/apiserver/pkg/authentication/user"
 	"k8s.io/apiserver/pkg/authorization/authorizerfactory"
@@ -76,36 +78,51 @@ func startAppsServerWithUIDs(t *testing.T, rc *config.ResourceConfig, objects ..
 
 func serveApps(t *testing.T, rc *config.ResourceConfig, assignUIDs bool, objects ...client.Object) (*httptest.Server, client.Client) {
 	t.Helper()
+	return serveAppsWith(t, rc, assignUIDs, interceptor.Funcs{}, nil, objects...)
+}
+
+func startAppsServerWithInterceptors(t *testing.T, rc *config.ResourceConfig, funcs interceptor.Funcs, admissionControl admission.Interface) (*httptest.Server, client.Client) {
+	t.Helper()
+	return serveAppsWith(t, rc, false, funcs, admissionControl)
+}
+
+func serveAppsWith(t *testing.T, rc *config.ResourceConfig, assignUIDs bool, funcs interceptor.Funcs, admissionControl admission.Interface, objects ...client.Object) (*httptest.Server, client.Client) {
+	t.Helper()
 	if err := appsv1alpha1.RegisterDynamicTypes(apiserver.Scheme, rc); err != nil {
 		t.Fatal(err)
 	}
 
 	backing := runtime.NewScheme()
+	if err := cozyv1alpha1.AddToScheme(backing); err != nil {
+		t.Fatal(err)
+	}
 	if err := helmv2.AddToScheme(backing); err != nil {
 		t.Fatal(err)
 	}
 	if err := corev1.AddToScheme(backing); err != nil {
 		t.Fatal(err)
 	}
-	builder := fake.NewClientBuilder().WithScheme(backing).WithObjects(objects...)
 	if assignUIDs {
 		var uids atomic.Int64
-		builder = builder.WithInterceptorFuncs(interceptor.Funcs{
-			Create: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
-				if obj.GetUID() == "" {
-					obj.SetUID(types.UID(fmt.Sprintf("00000000-0000-0000-0000-%012d", uids.Add(1))))
-				}
-				return c.Create(ctx, obj, opts...)
-			},
-		})
+		next := funcs.Create
+		funcs.Create = func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
+			if obj.GetUID() == "" {
+				obj.SetUID(types.UID(fmt.Sprintf("00000000-0000-0000-0000-%012d", uids.Add(1))))
+			}
+			if next != nil {
+				return next(ctx, c, obj, opts...)
+			}
+			return c.Create(ctx, obj, opts...)
+		}
 	}
-	cli := builder.Build()
+	cli := fake.NewClientBuilder().WithScheme(backing).WithObjects(objects...).WithStatusSubresource(&helmv2.HelmRelease{}).WithInterceptorFuncs(funcs).WithReturnManagedFields().Build()
 
 	cfg := genericapiserver.NewConfig(apiserver.Codecs)
 	cfg.Authorization.Authorizer = authorizerfactory.NewAlwaysAllowAuthorizer()
 	cfg.Authentication.Authenticator = authenticator.RequestFunc(func(*http.Request) (*authenticator.Response, bool, error) {
 		return &authenticator.Response{User: &user.DefaultInfo{Name: "test-user"}}, true, nil
 	})
+	cfg.AdmissionControl = admissionControl
 	cfg.ExternalAddress = "localhost:443"
 	cfg.LoopbackClientConfig = &restclient.Config{}
 	cfg.FeatureGate = utilfeature.DefaultMutableFeatureGate
