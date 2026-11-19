@@ -1,50 +1,138 @@
 # cozyplane-apiserver Helm chart
 
-The `sdn.cozystack.io` API group served by a real **aggregated API server**
-(backed by a dedicated etcd) instead of CRDs — the design target: custom
-validation, the export/peer verb checks in-server, and subresources (e.g. the
-`/ports` observability subresource) beyond CRD ergonomics.
+Serves the `sdn.cozystack.io` API group — the tenant kinds `VPC`, `VPCBinding`,
+`VPCPeering`, `VPCGateway`, `NATGateway`, `RouteTable`, `Port`, `SecurityGroup`,
+`HostFirewall`, `ServiceVIP` and `FloatingIP` — from an aggregated API server
+backed by its own etcd. No chart installs CRDs for this group; this chart is the
+only thing that serves it. The [cozyplane](../cozyplane) CNI chart installs only
+the `local.sdn.cozystack.io` CRDs (see
+[docs/api-groups.md](../../docs/api-groups.md)).
 
-This is a **separate chart from [cozyplane](../cozyplane)** by design. cozyplane
-is the CNI and must install before almost everything — including cert-manager —
-while this apiserver needs cert-manager `Certificate`s (its serving cert, the
-etcd PKI). Splitting lets the CNI slot stay cert-manager-free and this chart
-install later, once cert-manager is up (in Cozystack: a component that
-`dependsOn` cert-manager).
+The chart installs:
 
-## The takeover
-
-The cozyplane chart installs the group's **CRDs** (its `crds.enabled` default),
-so `sdn.cozystack.io` is served — and tenancy works — from the moment the CNI
-lands. Installing this chart creates an explicit `APIService` for
-`v1alpha1.sdn.cozystack.io`, which **atomically replaces** the CRDs' implicit
-serving of the group: from that moment every request goes to the aggregated
-server and its etcd. On a fresh cluster the CRD store is empty when that happens
-(tenants come later), so the takeover needs no migration. On a cluster with
-existing CRD-stored objects, export them first and re-apply after — the CRD
-store is not visible through the aggregated server:
-
-```sh
-kubectl get vpcs,ports,vpcbindings,vpcpeerings,securitygroups,floatingips,servicevips -A -o yaml > sdn-backup.yaml
-helm install cozyplane-apiserver ./chart/cozyplane-apiserver -n cozyplane-system
-kubectl apply -f sdn-backup.yaml
-kubectl -n <cozyplane-namespace> rollout restart deploy/cozyplane-controller ds/cozyplane-agent
-```
-
-(Strip `resourceVersion`/`uid`/`status` on re-apply, or use `kubectl create`.)
-
-The final restart is load-bearing: watch streams opened against the CRD serving
-survive the takeover (the kube-apiserver closes idle watches only after 30–60
-minutes), so without it the controller and agents keep watching the shadowed
-CRD store. Restart **after** the import so agent startup pruning sees a
-populated store and no-ops instead of tearing down live datapath state.
+- the `cozyplane-apiserver` Deployment and Service;
+- its etcd: an operator-managed `EtcdCluster` (default) or a built-in single-pod
+  etcd ([Storage](#storage));
+- cert-manager `Issuer`s and `Certificate`s for the serving certificate and the
+  etcd PKI;
+- RBAC: delegated authentication and authorization, and the server's own
+  APIService registration.
 
 ## Requirements
 
-- cert-manager (serving certificate, etcd PKI).
-- For the production etcd: the aenix-io etcd-operator (`etcd.operator.enabled`),
-  replicated and PVC-backed. The default is a built-in single-pod etcd with
-  emptyDir storage — dev/evaluation only; a pod reschedule erases every
-  `sdn.cozystack.io` object.
-- The [cozyplane](../cozyplane) chart (any order relative to it — but the CNI
-  normally lands first).
+- Kubernetes >= 1.30.
+- The [cozyplane](../cozyplane) chart, installed and its nodes Ready. The
+  apiserver and etcd run as default-network pods.
+- cert-manager.
+- For the default etcd: the aenix-io etcd-operator
+  (`etcd-operator.cozystack.io/v1alpha2`) and a StorageClass named `replicated`,
+  or another class set in `etcd.operator.storageClass`.
+- For the built-in etcd: a default StorageClass, unless the etcd runs on
+  emptyDir.
+
+## Install order
+
+1. **cozyplane** (the CNI). It has no cert-manager dependency, so it installs
+   first, on a cluster with no other CNI.
+2. **cert-manager**, the **etcd-operator** and the **storage layer**. These run on
+   the default network the CNI provides.
+3. **cozyplane-apiserver** (this chart).
+
+```sh
+helm install cozyplane ./chart/cozyplane -n cozy-cozyplane --create-namespace
+# install cert-manager, the etcd-operator and a StorageClass
+helm install cozyplane-apiserver ./chart/cozyplane-apiserver -n cozy-cozyplane
+```
+
+In Cozystack the two charts are separate PackageSources:
+`packages/packagesources/networking.yaml` (the CNI, no `dependsOn`) and
+`packages/packagesources/apiserver.yaml` (`dependsOn` cert-manager, the
+etcd-operator and the storage layer).
+
+## How the group becomes available
+
+The chart ships no `APIService`. The server creates `v1alpha1.sdn.cozystack.io`
+at startup, pointing at Service `cozyplane-apiserver`, with the cert-manager
+cainjector annotation that fills its CA bundle. It re-creates or re-patches the
+object every 30 seconds while it serves.
+
+Until that APIService is available, `sdn.cozystack.io` does not exist: creating
+a `VPC` fails with `no matches for kind "VPC"`. The default network works
+throughout. The cozyplane controller and agents probe discovery every 15
+seconds and start their tenant controllers and informers once the group
+answers, without a restart.
+
+A fresh install has nothing to migrate: no CRD store for the group exists to
+take over from.
+
+## Storage
+
+The aggregated API's objects live only in this chart's etcd. Losing that etcd
+loses every `sdn.cozystack.io` object in the cluster.
+
+### Operator-managed etcd (default)
+
+`etcd.operator.enabled: true` creates an `EtcdCluster` named `cozyplane-etcd`.
+The apiserver connects to it over mutual TLS; the etcd-operator issues the
+member certificates from the chart's cert-manager issuers.
+
+| Value | Default | Meaning |
+|-------|---------|---------|
+| `etcd.operator.replicas` | `3` | etcd members |
+| `etcd.operator.persistent` | `true` | `true`: one PVC per member. `false`: tmpfs, lost when the members restart |
+| `etcd.operator.storageClass` | `replicated` | StorageClass of the member PVCs; `""` is the cluster default |
+| `etcd.operator.size` | `4Gi` | PVC size per member, or the tmpfs cap |
+| `etcd.operator.version` | `3.6.11` | etcd version the operator runs |
+
+The storage medium and StorageClass cannot change after the `EtcdCluster` is
+created. Set them before the first install.
+
+### Built-in single-pod etcd
+
+`etcd.operator.enabled: false` runs one etcd pod instead: a Deployment and
+Service named `cozyplane-etcd`, plaintext on port 2379, with no replication. Use
+it where the etcd-operator is absent, such as kind.
+
+By default its data is on a PVC the chart creates:
+
+| Value | Default | Meaning |
+|-------|---------|---------|
+| `etcd.persistence.enabled` | `true` | create the PVC `cozyplane-etcd-data` (ReadWriteOnce) |
+| `etcd.persistence.storageClassName` | `""` | StorageClass of the PVC; `""` is the cluster default |
+| `etcd.persistence.size` | `2Gi` | PVC size |
+| `etcd.storage` | the PVC above | the etcd data volume source |
+
+On a cluster with no StorageClass, put the data on an emptyDir. Every
+`sdn.cozystack.io` object is then lost when the pod is deleted or rescheduled.
+
+```yaml
+etcd:
+  operator:
+    enabled: false
+  persistence:
+    enabled: false
+  storage:
+    persistentVolumeClaim: null
+    emptyDir: {}
+```
+
+## Legacy: installs that served `sdn.cozystack.io` from CRDs
+
+This section applies only to clusters installed from cozyplane before
+2026-07-12, when the cozyplane chart shipped the tenant kinds as CRDs and this
+chart took the group over from them. No install from the current charts has
+such CRDs.
+
+No supported migration path exists for these clusters. Two facts matter before
+upgrading one:
+
+- The old cozyplane chart rendered the tenant CRDs as templates without
+  `helm.sh/resource-policy: keep`. Upgrading that release to the current chart
+  deletes the CRDs and every object stored in them. Export the objects first.
+- Exported objects do not re-apply unchanged: `Port.spec.fabricIP` was removed
+  on 2026-07-13 and the `ExternalPool` kind on 2026-07-18.
+
+A tenant CRD that survives the upgrade breaks the group's OpenAPI, and with it
+`kubectl apply` of every object in the group. The server's
+`--remove-bootstrap-crds` flag deletes those CRDs at startup. The chart grants
+the RBAC for it but does not set the flag.

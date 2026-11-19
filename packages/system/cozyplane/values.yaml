@@ -1,1 +1,4 @@
-cozyplane: {}
+cozyplane:
+  # The cozyplane release's image by tag and digest, for mirroring and
+  # promotion; the vendored chart pins a digest only.
+  image: ghcr.io/lllamnyp/cozyplane:v0.1.2@sha256:0fbf42fca2f65fc500a0b48738ee321c483246952fc013d249b6bb27445cc19f
