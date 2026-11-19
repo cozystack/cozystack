@@ -1,12 +1,11 @@
 suite: blockstor adopting a LINSTOR cluster
 
-# The runbook freezes CSI by stopping piraeus-operator, and the operator is
-# also the server of the validating webhooks (failurePolicy: Fail) on its own
-# kinds. While it is stopped, any change the release makes to a piraeus object
-# fails the upgrade, which then retries forever, skips its post-upgrade hook,
-# and blocks the way back to linstor just the same. So hold and adopt must
-# render every piraeus object byte for byte as backend linstor does, and only
-# clearing the value may move piraeus to external mode.
+# The runbook freezes CSI by stopping piraeus-operator before blockstor
+# adopts, and repoints CSI only once adoption has converged. So hold and adopt
+# render every piraeus object byte for byte as backend linstor does, which an
+# operator started again finds unchanged, and only clearing the value moves
+# piraeus to external mode. The webhooks the stopped operator cannot serve are
+# piraeus_webhooks_test.yaml's.
 
 release:
   name: linstor
