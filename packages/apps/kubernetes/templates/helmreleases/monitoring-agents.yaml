@@ -45,7 +45,8 @@ spec:
         cluster: {{ .Release.Name }}
         tenant: {{ .Release.Namespace }}
       remoteWrite:
-        url: http://vminsert-shortterm.{{ $targetTenant }}.svc.{{ $clusterDomain }}:8480/insert/0/prometheus
+        urls:
+          - http://vminsert-shortterm.{{ $targetTenant }}.svc.{{ $clusterDomain }}:8480/insert/0/prometheus
     fluent-bit:
       readinessProbe:
         httpGet:
