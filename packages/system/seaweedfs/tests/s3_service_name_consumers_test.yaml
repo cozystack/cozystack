@@ -7,7 +7,8 @@ suite: seaweedfs s3 consumers resolve the renamed s3 service
 # but several consumers still resolved it via componentName -> `<fullname>-s3`:
 #   - the S3 ingress backend,
 #   - the iceberg ingress backend,
-#   - the COSI provisioner ENDPOINT (in-cluster, s3.ingress.enabled=false path).
+#   - the COSI provisioner ENDPOINT (in-cluster, s3.ingress.enabled=false path),
+#   - the Lance catalog ingress backend and the Lance namespace URL the worker gets.
 # name and fullname only coincide when the release name equals the chart name;
 # the shipped release is `seaweedfs-system`, so those consumers pointed at
 # `seaweedfs-system-s3` while the real service is `seaweedfs-s3`. With no
@@ -25,6 +26,8 @@ templates:
   - charts/seaweedfs/templates/s3/s3-ingress.yaml
   - charts/seaweedfs/templates/s3/s3-iceberg-ingress.yaml
   - charts/seaweedfs/templates/cosi/cosi-deployment.yaml
+  - charts/seaweedfs/templates/s3/s3-lance-ingress.yaml
+  - charts/seaweedfs/templates/worker/worker-deployment.yaml
 
 release:
   name: seaweedfs-system
@@ -107,3 +110,33 @@ tests:
           content:
             name: ENDPOINT
             value: https://seaweedfs-s3.cozy-seaweedfs.svc:8333
+
+  # values.yaml ships s3.lancePort: 0, which keeps both Lance consumers from
+  # rendering at all; the cases below turn the catalog on to reach them.
+  - it: lance ingress backend points at the s3 service too
+    template: charts/seaweedfs/templates/s3/s3-lance-ingress.yaml
+    set:
+      seaweedfs.fullnameOverride: seaweedfs-system
+      seaweedfs.s3.enabled: true
+      seaweedfs.s3.lancePort: 9101
+      seaweedfs.s3.lanceIngress.enabled: true
+      seaweedfs.s3.lanceIngress.host: lance.example.com
+    asserts:
+      - equal:
+          path: spec.rules[0].http.paths[0].backend.service.name
+          value: seaweedfs-s3
+
+  - it: worker Lance namespace URL resolves the s3 service
+    template: charts/seaweedfs/templates/worker/worker-deployment.yaml
+    set:
+      seaweedfs.fullnameOverride: seaweedfs-system
+      seaweedfs.s3.enabled: true
+      seaweedfs.s3.lancePort: 9101
+      seaweedfs.worker.enabled: true
+      seaweedfs.worker.adminServer: seaweedfs-admin:23646
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[1].env
+          content:
+            name: LANCE_NAMESPACE_URL
+            value: http://seaweedfs-s3.cozy-seaweedfs:9101
