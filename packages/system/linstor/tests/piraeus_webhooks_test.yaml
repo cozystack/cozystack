@@ -12,6 +12,8 @@ templates:
 release:
   name: linstor
   namespace: cozy-linstor
+set:
+  backend: blockstor
 
 tests:
   - it: "relaxes the webhooks before the upgrade that holds a migration"
@@ -57,24 +59,23 @@ tests:
       - isKind:
           of: Job
 
-  # The way back from hold or adopt is backend linstor with the operator still
-  # stopped, so the hooks are not tied to the migration value.
-  - it: "carries the hooks under the LINSTOR backend for the way back"
+  - it: "carries the hooks once the migration is complete"
+    set:
+      backend: blockstor
+    asserts:
+      - hasDocuments:
+          count: 7
+
+  # A LINSTOR cluster blockstor never touched upgrades without them: no Jobs
+  # to fail its upgrades, and no change to its piraeus objects let through
+  # unvalidated. The way back from hold or adopt, backend linstor with the
+  # operator still stopped, is covered by piraeus_webhooks_lookup_test.yaml.
+  - it: "is not rendered on a LINSTOR cluster"
     set:
       backend: linstor
     asserts:
       - hasDocuments:
-          count: 7
-      - isKind:
-          of: Job
-        documentSelector:
-          path: metadata.name
-          value: piraeus-webhooks-relax
-      - isKind:
-          of: Job
-        documentSelector:
-          path: metadata.name
-          value: piraeus-webhooks-restore
+          count: 0
 
   # A first install creates the piraeus objects with the operator running; it
   # is not a step of the migration.
