@@ -116,8 +116,9 @@ spec:
           {{ $labels.To }} is taking {{ $value }}s on etcd instance {{ $labels.instance
           }}.'
         summary: etcd cluster member communication is slow.
+      # Tenant peer RTT is covered by the tenant etcd rules.
       expr: |-
-        histogram_quantile(0.99, rate(etcd_network_peer_round_trip_time_seconds_bucket{job=~".*etcd.*"}[5m]))
+        histogram_quantile(0.99, rate(etcd_network_peer_round_trip_time_seconds_bucket{job=~".*etcd.*", job!~"tenant-.*/etcd-pod-scrape"}[5m]))
         > 0.15
       for: 10m
       labels:
