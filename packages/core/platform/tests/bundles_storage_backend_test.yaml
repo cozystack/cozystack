@@ -148,6 +148,59 @@ tests:
           path: metadata.name
           value: cozystack.linstor-gui
 
+  # During a migration step LINSTOR's state is still the one CSI acts on, and
+  # blockstor-apiserver serves Resources it has not adopted, which the
+  # scheduler extender cannot read. The consumers move with linstor-csi, when
+  # the step is cleared.
+  - it: leaves the linstor-scheduler on LINSTOR during a migration step
+    set:
+      storage:
+        backend: blockstor
+        blockstorMigration: hold
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+    asserts:
+      - notExists:
+          path: spec.components
+        documentSelector:
+          path: metadata.name
+          value: cozystack.linstor-scheduler
+
+  - it: leaves the linstor-scheduler on LINSTOR while adopting on the generic variant
+    set:
+      storage:
+        backend: blockstor
+        blockstorMigration: adopt
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full-generic
+    asserts:
+      - notExists:
+          path: spec.components
+        documentSelector:
+          path: metadata.name
+          value: cozystack.linstor-scheduler
+
+  - it: leaves linstor-gui on LINSTOR during a migration step
+    set:
+      storage:
+        backend: blockstor
+        blockstorMigration: adopt
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+        enabledPackages: [cozystack.linstor-gui]
+    asserts:
+      - notExists:
+          path: spec.components
+        documentSelector:
+          path: metadata.name
+          value: cozystack.linstor-gui
+
   - it: leaves linstor-gui on its defaults under linstor
     set:
       bundles:

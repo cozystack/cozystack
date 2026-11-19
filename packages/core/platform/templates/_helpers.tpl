@@ -254,7 +254,7 @@ cozystack-scheduler (emitted with its own variant in both branches)
 {{include "cozystack.platform.package.full.default" (list "cozystack.cozy-proxy" $root) }}
 {{include "cozystack.platform.package.full.default" (list "cozystack.metallb" $root) }}
 {{include "cozystack.platform.package.default" (list "cozystack.reloader" $root) }}
-{{- if eq (include "cozystack.platform.storage.backend" $root) "blockstor" }}
+{{- if include "cozystack.platform.storage.blockstorServesApi" $root }}
 {{- $schedulerComponents := dict "linstor-scheduler" (dict "values" (dict "linstor-scheduler" (dict "linstor" (include "cozystack.platform.storage.linstorApiClient" $root | fromYaml)))) -}}
 {{include "cozystack.platform.package" (list "cozystack.linstor-scheduler" "default" $root $schedulerComponents) }}
 {{- else }}
@@ -313,6 +313,22 @@ before rendering, so it reads as absent.
 {{- fail (printf "storage.backend must be \"linstor\" or \"blockstor\", got %#v" $backend) -}}
 {{- end -}}
 {{- $backend -}}
+{{- end -}}
+
+{{- /*
+Whether the LINSTOR API consumers outside the linstor package are pointed at
+blockstor-apiserver: backend blockstor once blockstorMigration is cleared, the
+same step in which piraeus-operator repoints linstor-csi there. Until then
+LINSTOR's state is the one CSI acts on, while blockstor-apiserver serves
+nothing (hold, before the converted manifests are in) or Resources it has not
+adopted yet, with no volume state. linstor-scheduler reads a replica's disk
+state from the first volume of every Resource of a pod's volume, and on a
+Resource without volumes it panics rather than answering. Left on the stopped
+linstor-controller, it fails a scheduling attempt instead, the pod stays
+Pending and is retried, and nothing is placed on what blockstor half knows.
+*/ -}}
+{{- define "cozystack.platform.storage.blockstorServesApi" -}}
+{{- if and (eq (include "cozystack.platform.storage.backend" .) "blockstor") (not (include "cozystack.platform.storage.blockstorMigration" .)) }}true{{ end -}}
 {{- end -}}
 
 {{- /*
