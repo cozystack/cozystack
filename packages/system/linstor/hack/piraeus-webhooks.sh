@@ -2,8 +2,8 @@
 # Lets a release of this chart through piraeus-operator's validating webhooks
 # while the operator is stopped, and puts them back afterwards.
 #
-#   piraeus-webhooks.sh relax    pre-upgrade and pre-rollback
-#   piraeus-webhooks.sh restore  post-upgrade and post-rollback
+#   piraeus-webhooks.sh relax    pre-install, pre-upgrade and pre-rollback
+#   piraeus-webhooks.sh restore  post-install, post-upgrade and post-rollback
 #
 # Helm patches every object of a release on every upgrade and rollback, even
 # one whose render did not change: it stamps its ownership label and

@@ -28,7 +28,7 @@ tests:
           of: Job
       - equal:
           path: metadata.annotations["helm.sh/hook"]
-          value: pre-upgrade,pre-rollback
+          value: pre-install,pre-upgrade,pre-rollback
       - equal:
           path: spec.template.spec.containers[0].command
           value: [sh, -ec, "$(SCRIPT)", piraeus-webhooks.sh, relax]
@@ -43,7 +43,7 @@ tests:
     asserts:
       - equal:
           path: metadata.annotations["helm.sh/hook"]
-          value: post-upgrade,post-rollback
+          value: post-install,post-upgrade,post-rollback
       - equal:
           path: spec.template.spec.containers[0].command
           value: [sh, -ec, "$(SCRIPT)", piraeus-webhooks.sh, restore]
@@ -77,13 +77,19 @@ tests:
       - hasDocuments:
           count: 0
 
-  # A first install creates the piraeus objects with the operator running; it
-  # is not a step of the migration.
-  - it: "does not run on install"
+  # Flux installs whenever it finds no release. One whose history was lost
+  # while the operator is stopped takes over the piraeus objects still on the
+  # cluster with the same patch an upgrade sends, so an install is hooked
+  # too; on a first install the operator is serving and the hooks do nothing.
+  - it: "runs on install as well"
+    documentSelector:
+      path: kind
+      value: Job
+      matchMany: true
     asserts:
-      - notMatchRegex:
+      - matchRegex:
           path: metadata.annotations["helm.sh/hook"]
-          pattern: install
+          pattern: (^|,)(pre|post)-install(,|$)
 
   - it: "names piraeus-operator's webhook configuration"
     documentSelector:
@@ -134,7 +140,7 @@ tests:
     asserts:
       - equal:
           path: metadata.annotations["helm.sh/hook"]
-          value: pre-upgrade,pre-rollback,post-upgrade,post-rollback
+          value: pre-install,pre-upgrade,pre-rollback,post-install,post-upgrade,post-rollback
       - equal:
           path: metadata.annotations["helm.sh/hook-weight"]
           value: "-10"

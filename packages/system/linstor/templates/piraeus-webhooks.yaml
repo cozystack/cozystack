@@ -1,5 +1,5 @@
 {{- /*
-   Lets an upgrade or rollback of this release through piraeus-operator's
+   Lets an install, upgrade or rollback of this release through piraeus-operator's
    validating webhooks while the operator is stopped, as a LINSTOR to
    blockstor migration keeps it from hold until the operator is started
    again, and as the way back to linstor from those steps does too.
@@ -18,7 +18,10 @@
    only while their Service has no ready endpoint, and the post hook sets
    back exactly what the pre hook changed, so a running operator validates
    every change as before and a stopped one is back to Fail when the release
-   is done. The configuration belongs to the piraeus-operator release, which
+   is done. An install runs them too: Flux installs whenever it finds no
+   release, history lost mid-migration included, and Helm then takes over
+   the piraeus objects still on the cluster with the same patch. The
+   configuration belongs to the piraeus-operator release, which
    puts Fail back itself the next time it is upgraded.
 
    Only a cluster blockstor has been brought to carries the hooks: backend
@@ -31,7 +34,7 @@
 {{- $blockstorCRD := lookup "apiextensions.k8s.io/v1" "CustomResourceDefinition" "" "controllerconfigs.blockstor.org" }}
 {{- if or (eq .Values.backend "blockstor") $blockstorCRD }}
 {{- $config := "piraeus-operator-validating-webhook-configuration" }}
-{{- $rbac := dict "helm.sh/hook" "pre-upgrade,pre-rollback,post-upgrade,post-rollback" "helm.sh/hook-delete-policy" "before-hook-creation,hook-succeeded" "helm.sh/hook-weight" "-10" }}
+{{- $rbac := dict "helm.sh/hook" "pre-install,pre-upgrade,pre-rollback,post-install,post-upgrade,post-rollback" "helm.sh/hook-delete-policy" "before-hook-creation,hook-succeeded" "helm.sh/hook-weight" "-10" }}
 ---
 apiVersion: v1
 kind: ServiceAccount
@@ -104,7 +107,7 @@ metadata:
   name: piraeus-webhooks-{{ $phase }}
   namespace: {{ $.Release.Namespace }}
   annotations:
-    helm.sh/hook: {{ ternary "pre-upgrade,pre-rollback" "post-upgrade,post-rollback" (eq $phase "relax") }}
+    helm.sh/hook: {{ ternary "pre-install,pre-upgrade,pre-rollback" "post-install,post-upgrade,post-rollback" (eq $phase "relax") }}
     helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
     helm.sh/hook-weight: "-5"
 spec:
