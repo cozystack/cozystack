@@ -17,7 +17,7 @@ limitations under the License.
 package reservation
 
 import (
-	"bytes"
+	"bufio"
 	"errors"
 	"fmt"
 	"io"
@@ -29,6 +29,7 @@ import (
 
 	yamlv3 "go.yaml.in/yaml/v3"
 	"k8s.io/apimachinery/pkg/api/resource"
+	utilyaml "k8s.io/apimachinery/pkg/util/yaml"
 	"sigs.k8s.io/yaml"
 
 	cozyv1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
@@ -77,36 +78,71 @@ func shippedDefinitions(t *testing.T) map[string]*cozyv1alpha1.ApplicationDefini
 	return out
 }
 
-// singleDocument checks that raw holds exactly one YAML document and returns
-// it. Helm renders every document of the file, while a strict decode reads
-// only the first, so a second one would go unchecked. Documents are counted
-// by a YAML parser, so any line ending and a comment before the first
-// marker are read as YAML reads them, and a document holding only comments
-// counts as none.
+// singleDocument returns the one YAML document raw holds, as written, so that
+// a strict decode of it still catches duplicate keys. Helm renders every
+// document of the file, while a strict decode reads only the first, so a
+// second one would go unchecked. Line endings are normalized first, as YAML
+// itself reads them, and a document holding only comments counts as none.
 func singleDocument(raw []byte) ([]byte, error) {
-	dec := yamlv3.NewDecoder(bytes.NewReader(raw))
-	count := 0
+	normalized := strings.ReplaceAll(strings.ReplaceAll(string(raw), "\r\n", "\n"), "\r", "\n")
+	reader := utilyaml.NewYAMLReader(bufio.NewReader(strings.NewReader(normalized)))
+	var found []byte
 	for {
-		var node yamlv3.Node
-		err := dec.Decode(&node)
+		doc, err := reader.Read()
 		if errors.Is(err, io.EOF) {
 			break
 		}
 		if err != nil {
 			return nil, err
 		}
+		var node yamlv3.Node
+		if err := yamlv3.Unmarshal(doc, &node); err != nil {
+			return nil, err
+		}
 		if len(node.Content) == 0 || (node.Content[0].Kind == yamlv3.ScalarNode && node.Content[0].Tag == "!!null") {
 			continue
 		}
-		count++
+		if found != nil {
+			return nil, fmt.Errorf("holds more than one YAML document, expected one")
+		}
+		found = doc
 	}
-	switch count {
-	case 0:
+	if found == nil {
 		return nil, fmt.Errorf("holds no YAML document")
-	case 1:
-		return raw, nil
 	}
-	return nil, fmt.Errorf("holds %d YAML documents, expected one", count)
+	return found, nil
+}
+
+// The document returned must be the one that holds the definition, or the
+// strict decode reads an empty one and checks nothing.
+func TestSingleDocumentReturnsTheDefinition(t *testing.T) {
+	def := "kind: ApplicationDefinition\nmetadata:\n  name: x\n"
+	for name, raw := range map[string]string{
+		"empty documents first":   "---\n# empty\n---\n" + def,
+		"CR line endings":         strings.ReplaceAll("---\n# empty\n---\n"+def, "\n", "\r"),
+		"CRLF line endings":       strings.ReplaceAll("# head\n---\n"+def, "\n", "\r\n"),
+		"trailing empty document": def + "---\n# empty\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			doc, err := singleDocument([]byte(raw))
+			if err != nil {
+				t.Fatal(err)
+			}
+			got := &cozyv1alpha1.ApplicationDefinition{}
+			if err := yaml.UnmarshalStrict(doc, got); err != nil {
+				t.Fatal(err)
+			}
+			if got.Name != "x" {
+				t.Fatalf("decoded name %q from %q", got.Name, doc)
+			}
+		})
+	}
+	// Strict decoding still sees the document as written.
+	if doc, err := singleDocument([]byte("---\n# empty\n---\nkind: A\nkind: B\n")); err != nil {
+		t.Fatal(err)
+	} else if err := yaml.UnmarshalStrict(doc, &cozyv1alpha1.ApplicationDefinition{}); err == nil {
+		t.Fatal("a duplicate key in the returned document must fail the strict decode")
+	}
 }
 
 func TestSingleDocument(t *testing.T) {
@@ -420,6 +456,11 @@ func TestShippedDeclarations(t *testing.T) {
 			// default does for any empty value.
 			kind: "kubernetes-nodes", name: "zero disk size takes the chart's fallback",
 			values: `{"maxReplicas": 3, "diskSize": 0}`,
+			want:   rl("cpu", "3", "memory", "12Gi", "storage", "60Gi"),
+		},
+		{
+			kind: "kubernetes-nodes", name: "null disk size takes the chart's fallback",
+			values: `{"maxReplicas": 3, "diskSize": null}`,
 			want:   rl("cpu", "3", "memory", "12Gi", "storage", "60Gi"),
 		},
 		{

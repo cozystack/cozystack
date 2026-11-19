@@ -80,5 +80,6 @@ spec:
       hugepages-2Mi: "count == 0 || sized ? quantity(0) : instanceType(values.instanceType)['hugepages-2Mi'].mul(count)"
       hugepages-1Gi: "count == 0 || sized ? quantity(0) : instanceType(values.instanceType)['hugepages-1Gi'].mul(count)"
       overcommitted-memory: "count == 0 || sized ? quantity(0) : instanceType(values.instanceType)['overcommitted-memory'].mul(count)"
-      # The chart takes 20Gi for an empty diskSize, as Helm's default does.
-      storage: "count == 0 ? quantity(0) : ((type(values.diskSize) == int && values.diskSize == 0) || (type(values.diskSize) == string && values.diskSize == '') ? quantity('20Gi') : quantity(values.diskSize)).mul(count)"
+      # The chart takes 20Gi for an absent or empty diskSize, as Helm's
+      # default does.
+      storage: "count == 0 ? quantity(0) : (!has(values.diskSize) || (type(values.diskSize) == int && values.diskSize == 0) || (type(values.diskSize) == string && values.diskSize == '') ? quantity('20Gi') : quantity(values.diskSize)).mul(count)"
