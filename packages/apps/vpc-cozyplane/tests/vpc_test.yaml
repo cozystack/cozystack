@@ -75,6 +75,28 @@ tests:
           value:
             name: virtualprivatecloud-myvpc
 
+  - it: names peerings apart when their joined target names collide
+    set:
+      cidrs: ["10.10.0.0/24"]
+      peers:
+        - vpcName: c
+          tenantNamespace: tenant-a-b
+        - vpcName: b-c
+          tenantNamespace: tenant-a
+    asserts:
+      - documentSelector:
+          path: spec.peerRef.namespace
+          value: tenant-a
+        equal:
+          path: metadata.name
+          value: virtualprivatecloud-myvpc-to-tenant-a-b-c-0cc24cae
+      - documentSelector:
+          path: spec.peerRef.namespace
+          value: tenant-a-b
+        equal:
+          path: metadata.name
+          value: virtualprivatecloud-myvpc-to-tenant-a-b-c-b82e8c9a
+
   - it: renders the gateway only when enabled
     set:
       cidrs: ["10.10.0.0/24"]

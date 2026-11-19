@@ -37,7 +37,8 @@ spec:
 apiVersion: sdn.cozystack.io/v1alpha1
 kind: VPCPeering
 metadata:
-  name: {{ printf "%s-to-%s-%s" $.Release.Name .tenantNamespace .vpcName }}
+  {{- /* The hash keeps (tenant-a, b-c) and (tenant-a-b, c) apart. */}}
+  name: {{ printf "%s-to-%s-%s-%s" $.Release.Name .tenantNamespace .vpcName (printf "%s/%s" .tenantNamespace .vpcName | sha256sum | trunc 8) }}
   namespace: {{ $.Release.Namespace }}
   labels:
     cozystack.io/vpcName: {{ $.Release.Name }}
