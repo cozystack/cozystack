@@ -4,17 +4,18 @@ cozy-lib.barman.sidecarConfiguration renders a barman-cloud ObjectStore
 plugin. It carries the two settings the sidecar cannot get right on its own.
 
 Resources: the plugin injects the sidecar with no resources, and what that
-means depends on the namespace. A tenant with resourceQuotas set carries a
-LimitRange (packages/apps/tenant/templates/quota.yaml) that defaults every
-container to 128Mi; the sidecar is OOMKilled mid-backup under it, leaving the
-ObjectStore healthy and the backup failed. Measured cgroup high-water mark on a
-38 MB database is 254 MiB, so 128Mi cannot hold it. A namespace without a
-LimitRange, which is cozy-keycloak and any tenant that leaves resourceQuotas
-empty, gave the sidecar no requests and no limit at all, so nothing reserved
+means depends on the namespace. A tenant whose resourceQuotas bound memory
+carries a LimitRange (packages/apps/tenant/templates/quota.yaml) that defaults
+every container to 128Mi; the sidecar is OOMKilled mid-backup under it, leaving
+the ObjectStore healthy and the backup failed. Measured cgroup high-water mark
+on a 38 MB database is 254 MiB, so 128Mi cannot hold it. A namespace without a
+LimitRange, which is cozy-keycloak and any tenant whose resourceQuotas bound
+none of cpu, memory or ephemeral-storage, gave the sidecar no requests and no
+limit at all, so nothing reserved
 memory for it and nothing bounded it. The same request and limit settle both:
 256Mi holds the measured working set and 1Gi is four times the measurement.
-The CPU limit is explicit for the same reason: left unset, that LimitRange
-gives the sidecar its 250m default, so gzip compression of full backups and
+The CPU limit is explicit for the same reason: left unset, a LimitRange under
+a cpu quota gives the sidecar its 250m default, so gzip compression of full backups and
 WAL segments runs on a quarter of a core (a 1.6 GB database took 30 minutes
 to back up). One core keeps the sidecar from starving the instance while
 removing that ceiling. Inside a tenant both limits count against the
