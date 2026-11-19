@@ -13,6 +13,10 @@ The fork's README changes are left out.
 - Keep a segment leader's existing valid WireGuard IP across topology rebuilds
   and agent restarts, so nodes joining or leaving no longer renumber existing
   peers (context: https://github.com/squat/kilo/issues/549).
+- Keep the wireguard-ip annotation when the agent cleans up on shutdown, so
+  a restarted agent reuses its address instead of allocating a fresh one
+  from an incomplete view of the mesh and renumbering its neighbours on
+  every rolling update.
 
 diff --git a/cmd/kgctl/connect_linux.go b/cmd/kgctl/connect_linux.go
 index 9f38fe57..4c4ab0d7 100644
@@ -1128,6 +1132,95 @@ index dee77b72..7d325157 100644
 +		"chain":     "*",
 +	}).Inc()
 +	return m.client.RestoreNoFlush(input)
++}
+diff --git a/pkg/k8s/backend.go b/pkg/k8s/backend.go
+index ae8a72a9..a464605a 100644
+--- a/pkg/k8s/backend.go
++++ b/pkg/k8s/backend.go
+@@ -129,16 +129,26 @@ func New(c kubernetes.Interface, kc kiloclient.Interface, ec apiextensions.Inter
+ }
+ 
+ // CleanUp removes configuration applied to the backend.
+-func (nb *nodeBackend) CleanUp(ctx context.Context, name string) error {
+-	patch := []byte("[" + strings.Join([]string{
++// cleanUpPatch is the JSON patch CleanUp applies to the node on agent shutdown.
++func cleanUpPatch() []byte {
++	return []byte("[" + strings.Join([]string{
+ 		fmt.Sprintf(jsonRemovePatch, path.Join("/metadata", "annotations", strings.Replace(endpointAnnotationKey, "/", jsonPatchSlash, 1))),
+ 		fmt.Sprintf(jsonRemovePatch, path.Join("/metadata", "annotations", strings.Replace(internalIPAnnotationKey, "/", jsonPatchSlash, 1))),
+ 		fmt.Sprintf(jsonRemovePatch, path.Join("/metadata", "annotations", strings.Replace(keyAnnotationKey, "/", jsonPatchSlash, 1))),
+ 		fmt.Sprintf(jsonRemovePatch, path.Join("/metadata", "annotations", strings.Replace(lastSeenAnnotationKey, "/", jsonPatchSlash, 1))),
+-		fmt.Sprintf(jsonRemovePatch, path.Join("/metadata", "annotations", strings.Replace(wireGuardIPAnnotationKey, "/", jsonPatchSlash, 1))),
++		// The wireguard-ip annotation is deliberately kept: it is the node's
++		// claim on its WireGuard IP. Removing it on every agent restart made the
++		// restarted agent allocate a fresh address from an incomplete view of the
++		// mesh, collide with the current owner and renumber its neighbours.
++		// handleLocal reuses the annotated IP on start, so keeping it makes the
++		// address survive restarts and rolling updates.
+ 		fmt.Sprintf(jsonRemovePatch, path.Join("/metadata", "annotations", strings.Replace(discoveredEndpointsKey, "/", jsonPatchSlash, 1))),
+ 		fmt.Sprintf(jsonRemovePatch, path.Join("/metadata", "annotations", strings.Replace(granularityKey, "/", jsonPatchSlash, 1))),
+ 	}, ",") + "]")
++}
++
++func (nb *nodeBackend) CleanUp(ctx context.Context, name string) error {
++	patch := cleanUpPatch()
+ 	if _, err := nb.client.CoreV1().Nodes().Patch(ctx, name, types.JSONPatchType, patch, metav1.PatchOptions{}); err != nil {
+ 		return fmt.Errorf("failed to patch node: %v", err)
+ 	}
+diff --git a/pkg/k8s/cleanup_test.go b/pkg/k8s/cleanup_test.go
+new file mode 100644
+index 00000000..80d57c0b
+--- /dev/null
++++ b/pkg/k8s/cleanup_test.go
+@@ -0,0 +1,49 @@
++// Copyright 2026 the Kilo authors
++//
++// Licensed under the Apache License, Version 2.0 (the "License");
++// you may not use this file except in compliance with the License.
++// You may obtain a copy of the License at
++//
++//     http://www.apache.org/licenses/LICENSE-2.0
++//
++// Unless required by applicable law or agreed to in writing, software
++// distributed under the License is distributed on an "AS IS" BASIS,
++// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++// See the License for the specific language governing permissions and
++// limitations under the License.
++
++package k8s
++
++import (
++	"encoding/json"
++	"testing"
++)
++
++// CleanUp runs on every agent shutdown, including rolling updates. It must keep
++// the node's wireguard-ip claim, otherwise the restarted agent allocates a fresh
++// address and renumbers its neighbours.
++func TestCleanUpPatchKeepsWireGuardIP(t *testing.T) {
++	var ops []struct {
++		Op   string `json:"op"`
++		Path string `json:"path"`
++	}
++	if err := json.Unmarshal(cleanUpPatch(), &ops); err != nil {
++		t.Fatalf("clean-up patch is not valid JSON: %v", err)
++	}
++	removed := map[string]bool{}
++	for _, op := range ops {
++		if op.Op != "remove" {
++			t.Errorf("unexpected op %q on %q", op.Op, op.Path)
++		}
++		removed[op.Path] = true
++	}
++	path := func(key string) string { return "/metadata/annotations/" + key[:len("kilo.squat.ai")] + "~1" + key[len("kilo.squat.ai/"):] }
++	if removed[path(wireGuardIPAnnotationKey)] {
++		t.Errorf("clean-up removes %s; it must keep the WireGuard IP claim", wireGuardIPAnnotationKey)
++	}
++	for _, k := range []string{endpointAnnotationKey, internalIPAnnotationKey, keyAnnotationKey, lastSeenAnnotationKey, discoveredEndpointsKey, granularityKey} {
++		if !removed[path(k)] {
++			t.Errorf("clean-up no longer removes %s", k)
++		}
++	}
 +}
 diff --git a/pkg/mesh/mesh.go b/pkg/mesh/mesh.go
 index 4cb1661d..0ff46cbd 100644
