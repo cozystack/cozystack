@@ -234,7 +234,7 @@ func (r *BackupReconciler) cleanupVeleroBackup(ctx context.Context, backup *back
 		return fmt.Errorf("failed to get Velero backup %s/%s: %w", veleroBackupNamespace, veleroBackupName, err)
 	}
 
-	req, err := requestVeleroBackupDeletion(ctx, r.Client, veleroBackupNamespace, veleroBackupName)
+	req, err := requestVeleroBackupDeletion(ctx, r.Client, veleroBackupNamespace, veleroBackupName, true)
 	if err != nil {
 		return err
 	}

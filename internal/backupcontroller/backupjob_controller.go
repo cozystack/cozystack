@@ -39,6 +39,9 @@ type BackupJobReconciler struct {
 	// re-reads the BackupJob before dispatching to a driver. Wired in
 	// SetupWithManager.
 	APIReader client.Reader
+
+	// now is a test seam for the clock that paces Velero deletion retries.
+	now func() time.Time
 }
 
 func (r *BackupJobReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
