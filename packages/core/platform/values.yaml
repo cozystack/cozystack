@@ -36,21 +36,27 @@ migrations:
 # Which storage control plane the cluster runs.
 #
 #   linstor   — the default, and what every existing cluster runs.
-#   blockstor — EXPERIMENTAL, for new clusters. A
-#               LINSTOR-API-compatible control plane serving the same
-#               CSI driver and StorageClasses. This value does not move
-#               a cluster that already holds LINSTOR volumes: blockstor
-#               adopts them with its own linstor-migrate runbook, which
-#               this platform does not run:
-#               https://blockstor.org/docs/migration/
+#   blockstor — EXPERIMENTAL. A LINSTOR-API-compatible control plane
+#               serving the same CSI driver and StorageClasses. A new
+#               cluster selects it here. A cluster that already holds
+#               LINSTOR volumes moves only through blockstorMigration
+#               below, in the order packages/system/linstor/README.md
+#               gives; changing this value alone does not adopt them.
 #
 # Anything else fails the render rather than defaulting, so a typo
 # cannot quietly deploy the wrong storage control plane. Changing the
-# backend of a running cluster fails the render too; on a cluster that
-# holds no volumes yet, set storage.acknowledgeBackendChange to the new
-# backend to confirm the switch.
+# backend of a running cluster fails the render too until
+# storage.acknowledgeBackendChange names the new backend. On a cluster
+# that holds no volumes yet that confirms the whole switch; on one with
+# LINSTOR volumes it goes together with blockstorMigration: hold.
+#
+# blockstorMigration is set only while blockstor adopts the volumes of a
+# LINSTOR cluster: "hold", then "adopt", then removed. Until it is removed
+# the linstor package deploys blockstor but leaves every piraeus object as
+# it is under linstor. The steps are in packages/system/linstor/README.md.
 storage:
   backend: linstor
+  blockstorMigration: ""
 
 # Bundle deployment configuration
 bundles:
