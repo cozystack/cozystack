@@ -45,3 +45,34 @@ index bc4eee164..c92063f8c 100644
  {{- $s3Port := .Values.allInOne.s3.port | default .Values.s3.port }}
  {{- /* Build hosts list - support both legacy .host (string) and new .hosts (array) for backwards compatibility */}}
  {{- $hosts := list }}
+diff --git a/packages/system/seaweedfs/charts/seaweedfs/templates/s3/s3-lance-ingress.yaml b/packages/system/seaweedfs/charts/seaweedfs/templates/s3/s3-lance-ingress.yaml
+index 32033a8f1..fce6b13c8 100644
+--- a/packages/system/seaweedfs/charts/seaweedfs/templates/s3/s3-lance-ingress.yaml
++++ b/packages/system/seaweedfs/charts/seaweedfs/templates/s3/s3-lance-ingress.yaml
+@@ -5,11 +5,11 @@ paths:
+   backend:
+     {{- if semverCompare ">=1.19-0" .Capabilities.KubeVersion.GitVersion }}
+     service:
+-      name: {{ include "seaweedfs.componentName" (list . "s3") }}
++      name: {{ template "seaweedfs.name" . }}-s3
+       port:
+         number: {{ .Values.s3.lancePort }}
+     {{- else }}
+-    serviceName: {{ include "seaweedfs.componentName" (list . "s3") }}
++    serviceName: {{ template "seaweedfs.name" . }}-s3
+     servicePort: {{ .Values.s3.lancePort }}
+     {{- end }}
+ {{- end -}}
+diff --git a/packages/system/seaweedfs/charts/seaweedfs/templates/shared/_helpers.tpl b/packages/system/seaweedfs/charts/seaweedfs/templates/shared/_helpers.tpl
+index 6fc10efe6..2f933b8df 100644
+--- a/packages/system/seaweedfs/charts/seaweedfs/templates/shared/_helpers.tpl
++++ b/packages/system/seaweedfs/charts/seaweedfs/templates/shared/_helpers.tpl
+@@ -153,7 +153,7 @@ true
+ {{- if .Values.worker.namespaceUrl -}}
+ {{- .Values.worker.namespaceUrl -}}
+ {{- else if and .Values.s3.enabled .Values.s3.lancePort -}}
+-{{- printf "http://%s.%s:%d" (include "seaweedfs.componentName" (list . "s3")) .Release.Namespace (int .Values.s3.lancePort) -}}
++{{- printf "http://%s-s3.%s:%d" (include "seaweedfs.name" .) .Release.Namespace (int .Values.s3.lancePort) -}}
+ {{- end -}}
+ {{- end -}}
+ 
