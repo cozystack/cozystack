@@ -11,7 +11,11 @@
 # packages before it was found (#4276, #4288), and in one of them the hook
 # reported success while doing nothing.
 #
-# Scope and its limit. A file that names KUBECONFIG is skipped: it hands kubectl
+# Scope and its limit. Chart templates are checked, and so are shell scripts
+# kept under packages/*/*/files/: a chart that loads its hook script with
+# .Files.Get runs it with the same in-cluster credentials. Both the
+# --request-timeout=<value> and the --request-timeout <value> forms are caught.
+# A file that names KUBECONFIG is skipped: it hands kubectl
 # an explicit kubeconfig, so the in-cluster branch is not what serves it and the
 # flag is harmless there. That is a per-file judgement, not per-command, which
 # is the coarse part of this check and is why it is written down rather than
@@ -26,11 +30,51 @@ load test_helper
 
 REPO_ROOT="$(cd "$(dirname "${BATS_TEST_FILENAME:-$0}")/.." && pwd)"
 
+# A non-zero value in either form, quoted or not. The space form needs a digit
+# after it, so prose such as "a non-zero --request-timeout on a call" in a
+# comment is not a hit; the = form keeps the rule it always had.
+REQUEST_TIMEOUT_RE="--request-timeout(=[\"']?[^0[:space:]\"']|[[:space:]]+[\"']?[1-9])"
+
+# is_shell_script FILE: a .sh file, or one whose first line is a sh/bash
+# shebang, directly or through env, `env -S` included.
+is_shell_script() {
+  case "$1" in *.sh) return 0 ;; esac
+  head -n 1 "$1" | grep -qE '^#!.*/(env([[:space:]]+-S)?[[:space:]]+)?(ba|da)?sh([[:space:]]|$)'
+}
+
+# request_timeout_candidates ROOT: non-vendored templates and files/ shell
+# scripts under ROOT that invoke kubectl, one path per line.
+request_timeout_candidates() {
+  local root="$1" f
+  grep -rl 'kubectl' "$root"/packages/*/*/templates/ 2>/dev/null || true
+  for f in $(grep -rl 'kubectl' "$root"/packages/*/*/files/ 2>/dev/null || true); do
+    if is_shell_script "$f"; then
+      echo "$f"
+    fi
+  done
+}
+
+# request_timeout_offenders FILE...: the files, with matching lines, that pass
+# a non-zero --request-timeout without naming KUBECONFIG.
+request_timeout_offenders() {
+  local f hits
+  for f in "$@"; do
+    # An explicit kubeconfig means the in-cluster branch is not in play here.
+    if grep -q 'KUBECONFIG' "$f"; then
+      continue
+    fi
+    hits="$(grep -nE -- "$REQUEST_TIMEOUT_RE" "$f" || true)"
+    if [ -n "$hits" ]; then
+      printf '%s\n%s\n' "$f" "$hits"
+    fi
+  done
+}
+
 @test "no in-cluster kubectl call carries a non-zero --request-timeout" {
   cd "$REPO_ROOT"
 
-  # Files in scope: non-vendored templates that invoke kubectl.
-  candidates="$(grep -rl 'kubectl' packages/*/*/templates/ 2>/dev/null || true)"
+  # Files in scope: non-vendored templates and files/ shell scripts that invoke kubectl.
+  candidates="$(request_timeout_candidates .)"
   [ -n "$candidates" ] || { echo "FAIL: found no templates invoking kubectl; this check is broken, not clean"; false; }
 
   # Guard against a vacuous pass: the tree ships many such templates, so a
@@ -38,19 +82,8 @@ REPO_ROOT="$(cd "$(dirname "${BATS_TEST_FILENAME:-$0}")/.." && pwd)"
   count="$(printf '%s\n' "$candidates" | grep -c . || true)"
   [ "$count" -ge 10 ] || { echo "FAIL: only $count template(s) invoke kubectl; expected the tree's usual population"; false; }
 
-  offenders=""
-  for f in $candidates; do
-    # An explicit kubeconfig means the in-cluster branch is not in play here.
-    if grep -q 'KUBECONFIG' "$f"; then
-      continue
-    fi
-    hits="$(grep -nE -- '--request-timeout=[^0[:space:]]' "$f" || true)"
-    if [ -n "$hits" ]; then
-      offenders="${offenders}${f}
-${hits}
-"
-    fi
-  done
+  # shellcheck disable=SC2086 # paths in this tree carry no whitespace
+  offenders="$(request_timeout_offenders $candidates)"
 
   if [ -n "$offenders" ]; then
     echo "FAIL: non-zero --request-timeout on a call that depends on in-cluster credentials."
@@ -59,4 +92,57 @@ ${hits}
     printf '%s\n' "$offenders"
     false
   fi
+}
+
+# The cases below run the same scan on a throwaway tree, so they pin what it
+# catches and what it leaves alone independently of the repository's content.
+scan_tree() {
+  # shellcheck disable=SC2046
+  request_timeout_offenders $(request_timeout_candidates "$BATS_TEST_TMPDIR/tree")
+}
+
+write_tree_file() {
+  mkdir -p "$(dirname "$BATS_TEST_TMPDIR/tree/$1")"
+  printf '%s\n' "$2" > "$BATS_TEST_TMPDIR/tree/$1"
+}
+
+@test "a hook script under files/ is checked" {
+  write_tree_file packages/x/y/files/hook.sh 'kubectl get pods --request-timeout=30s'
+  [ -n "$(scan_tree)" ]
+}
+
+@test "a script under files/ without a .sh suffix is checked through its shebang" {
+  write_tree_file packages/x/y/files/hook "$(printf '#!/bin/sh\nkubectl get pods --request-timeout=30s')"
+  [ -n "$(scan_tree)" ]
+}
+
+@test "the space-separated form is caught" {
+  write_tree_file packages/x/y/files/hook.sh 'kubectl get pods --request-timeout 30s'
+  [ -n "$(scan_tree)" ]
+  write_tree_file packages/x/y/files/hook.sh 'kubectl get pods --request-timeout=5'
+  [ -n "$(scan_tree)" ]
+}
+
+@test "quoted values are caught" {
+  write_tree_file packages/x/y/files/hook.sh 'kubectl get pods --request-timeout "30s"'
+  [ -n "$(scan_tree)" ]
+  write_tree_file packages/x/y/files/hook.sh "kubectl get pods --request-timeout='30s'"
+  [ -n "$(scan_tree)" ]
+}
+
+@test "a script with an env -S shebang is checked" {
+  write_tree_file packages/x/y/files/hook "$(printf '#!/usr/bin/env -S bash -e\nkubectl get pods --request-timeout=30s')"
+  [ -n "$(scan_tree)" ]
+}
+
+@test "a script for another interpreter is not collected" {
+  write_tree_file packages/x/y/files/hook "$(printf '#!/usr/bin/env -S python3\n# kubectl get pods --request-timeout=30s')"
+  [ -z "$(scan_tree)" ]
+}
+
+@test "zero values, prose and kubeconfig users are left alone" {
+  write_tree_file packages/x/y/files/hook.sh "$(printf 'kubectl get pods --request-timeout=0\nkubectl get pods --request-timeout 0s\nkubectl get pods --request-timeout "0"\n# a non-zero --request-timeout on a call is diverted')"
+  write_tree_file packages/x/y/files/external.sh "$(printf 'export KUBECONFIG=/etc/kubeconfig\nkubectl get pods --request-timeout=30s')"
+  write_tree_file packages/x/y/files/manifest.yaml 'command: ["kubectl", "get", "pods", "--request-timeout=30s"]'
+  [ -z "$(scan_tree)" ]
 }
