@@ -41,6 +41,8 @@ if args[:2] == ["get", "validatingwebhookconfiguration"]:
         print(json.dumps(state["config"]))
     sys.exit(0)
 if args[:2] == ["get", "endpointslices"]:
+    if state.get("endpoints_error"):
+        sys.exit(state["endpoints_error"])
     service = opt("--namespace") + "/" + opt("--selector").split("=", 1)[1]
     endpoints = [{"addresses": ["10.0.0.1"], "conditions": {"ready": ready}}
                  for ready in state["endpoints"].get(service, [])]
@@ -162,6 +164,27 @@ class PiraeusWebhooksTest(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(self.patches(), [])
         self.assertEqual(self.config(), configuration())
+
+    def test_relax_fails_when_the_endpoints_cannot_be_read(self):
+        # A refused or timed-out read says nothing about the operator; taking
+        # it for a serving one would leave the webhooks at Fail and the
+        # upgrade failing on them with a log that says all is well.
+        for config in (configuration(), self.relaxed()):
+            with self.subTest(relaxed=MARK in config["metadata"]["annotations"]):
+                state = {"config": config, "endpoints": STOPPED,
+                         "endpoints_error": 'Error from server (Forbidden): endpointslices.discovery.k8s.io is forbidden'}
+                self.state.write_text(json.dumps(state))
+                result = self.run_script("relax")
+                self.assertEqual(result.returncode, 1, result.stdout)
+                self.assertIn("cannot list the endpoints of cozy-linstor/piraeus-operator-webhook-service",
+                              result.stderr)
+                self.assertNotIn("restored", result.stdout)
+                self.assertEqual(self.config(), config)
+
+    def relaxed(self):
+        self.given(configuration(), STOPPED)
+        self.assertEqual(self.run_script("relax").returncode, 0)
+        return self.config()
 
     def test_restore_returns_the_configuration_as_it_was(self):
         self.given(configuration(), STOPPED)

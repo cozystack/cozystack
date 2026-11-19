@@ -30,6 +30,11 @@ if [ -z "$current" ]; then
   exit 0
 fi
 
+fail() {
+  echo "$config: $1" >&2
+  exit 1
+}
+
 apply() {
   if [ "$1" = "[]" ]; then
     return
@@ -60,9 +65,17 @@ restore() {
 
 served() {
   for service in $(printf '%s' "$current" | jq -r "$selected"' | .[].value.clientConfig.service // empty | "\(.namespace)/\(.name)"' | sort -u); do
-    ready=$(kubectl get endpointslices --namespace "${service%%/*}" \
-      --selector "kubernetes.io/service-name=${service#*/}" -o json |
-      jq '[.items[].endpoints[]? | select(.conditions.ready != false)] | length')
+    # served runs as an if condition, where set -e is off: a failed read
+    # has to stop the script here, or it would pass for a serving operator.
+    slices=$(kubectl get endpointslices --namespace "${service%%/*}" \
+      --selector "kubernetes.io/service-name=${service#*/}" -o json) ||
+      fail "cannot list the endpoints of $service"
+    ready=$(printf '%s' "$slices" |
+      jq '[.items[].endpoints[]? | select(.conditions.ready != false)] | length') ||
+      fail "cannot read the endpoints of $service"
+    case $ready in
+    '' | *[!0-9]*) fail "cannot count the ready endpoints of $service: got '$ready'" ;;
+    esac
     if [ "$ready" -eq 0 ]; then
       echo "$config: $service has no ready endpoint"
       return 1
