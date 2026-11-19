@@ -1,0 +1,100 @@
+rule_files:
+  - rules.yaml
+
+evaluation_interval: 15s
+
+tests:
+  - name: watch streams of a stopped API server end with Canceled
+    interval: 30s
+    input_series:
+      - series: 'grpc_server_handled_total{job="tenant-test/etcd-pod-scrape", instance="10.0.0.1:2381", grpc_service="etcdserverpb.Watch", grpc_method="Watch", grpc_type="bidi_stream", grpc_code="Canceled"}'
+        values: '0+19x80'
+      - series: 'grpc_server_handled_total{job="tenant-test/etcd-pod-scrape", instance="10.0.0.1:2381", grpc_service="etcdserverpb.Watch", grpc_method="Watch", grpc_type="bidi_stream", grpc_code="Unavailable"}'
+        values: '2x80'
+      - series: 'grpc_server_handled_total{job="tenant-test/etcd-pod-scrape", instance="10.0.0.1:2381", grpc_service="etcdserverpb.KV", grpc_method="Range", grpc_type="unary", grpc_code="OK"}'
+        values: '0+30x80'
+    alert_rule_test:
+      - eval_time: 6m
+        groupname: etcd
+        alertname: etcdHighNumberOfFailedGRPCRequests
+      - eval_time: 12m
+        groupname: etcd
+        alertname: etcdHighNumberOfFailedGRPCRequests
+      - eval_time: 30m
+        groupname: etcd
+        alertname: etcdHighNumberOfFailedGRPCRequests
+
+  - name: range calls fail with Unavailable
+    interval: 30s
+    input_series:
+      - series: 'grpc_server_handled_total{job="tenant-test/etcd-pod-scrape", instance="10.0.0.1:2381", grpc_service="etcdserverpb.KV", grpc_method="Range", grpc_type="unary", grpc_code="OK"}'
+        values: '0+3x80'
+      - series: 'grpc_server_handled_total{job="tenant-test/etcd-pod-scrape", instance="10.0.0.1:2381", grpc_service="etcdserverpb.KV", grpc_method="Range", grpc_type="unary", grpc_code="Unavailable"}'
+        values: '0+1x80'
+    alert_rule_test:
+      - eval_time: 4m
+        groupname: etcd
+        alertname: etcdHighNumberOfFailedGRPCRequests
+      - eval_time: 7m
+        groupname: etcd
+        alertname: etcdHighNumberOfFailedGRPCRequests
+        exp_alerts:
+          - exp_labels:
+              job: tenant-test/etcd-pod-scrape
+              instance: 10.0.0.1:2381
+              grpc_service: etcdserverpb.KV
+              grpc_method: Range
+              severity: critical
+            exp_annotations:
+              summary: "etcd cluster 'tenant-test/etcd-pod-scrape': '25' of requests for 'Range' failed on etcd instance '10.0.0.1:2381'."
+      - eval_time: 12m
+        groupname: etcd
+        alertname: etcdHighNumberOfFailedGRPCRequests
+        exp_alerts:
+          - exp_labels:
+              job: tenant-test/etcd-pod-scrape
+              instance: 10.0.0.1:2381
+              grpc_service: etcdserverpb.KV
+              grpc_method: Range
+              severity: warning
+            exp_annotations:
+              summary: "etcd cluster 'tenant-test/etcd-pod-scrape': '25' of requests for 'Range' failed on etcd instance '10.0.0.1:2381'."
+          - exp_labels:
+              job: tenant-test/etcd-pod-scrape
+              instance: 10.0.0.1:2381
+              grpc_service: etcdserverpb.KV
+              grpc_method: Range
+              severity: critical
+            exp_annotations:
+              summary: "etcd cluster 'tenant-test/etcd-pod-scrape': '25' of requests for 'Range' failed on etcd instance '10.0.0.1:2381'."
+
+  - name: canceled watch streams next to failing range calls
+    interval: 30s
+    input_series:
+      - series: 'grpc_server_handled_total{job="tenant-test/etcd-pod-scrape", instance="10.0.0.1:2381", grpc_service="etcdserverpb.Watch", grpc_method="Watch", grpc_type="bidi_stream", grpc_code="Canceled"}'
+        values: '0+19x80'
+      - series: 'grpc_server_handled_total{job="tenant-test/etcd-pod-scrape", instance="10.0.0.1:2381", grpc_service="etcdserverpb.KV", grpc_method="Range", grpc_type="unary", grpc_code="OK"}'
+        values: '0+3x80'
+      - series: 'grpc_server_handled_total{job="tenant-test/etcd-pod-scrape", instance="10.0.0.1:2381", grpc_service="etcdserverpb.KV", grpc_method="Range", grpc_type="unary", grpc_code="Unavailable"}'
+        values: '0+1x80'
+    alert_rule_test:
+      - eval_time: 12m
+        groupname: etcd
+        alertname: etcdHighNumberOfFailedGRPCRequests
+        exp_alerts:
+          - exp_labels:
+              job: tenant-test/etcd-pod-scrape
+              instance: 10.0.0.1:2381
+              grpc_service: etcdserverpb.KV
+              grpc_method: Range
+              severity: warning
+            exp_annotations:
+              summary: "etcd cluster 'tenant-test/etcd-pod-scrape': '25' of requests for 'Range' failed on etcd instance '10.0.0.1:2381'."
+          - exp_labels:
+              job: tenant-test/etcd-pod-scrape
+              instance: 10.0.0.1:2381
+              grpc_service: etcdserverpb.KV
+              grpc_method: Range
+              severity: critical
+            exp_annotations:
+              summary: "etcd cluster 'tenant-test/etcd-pod-scrape': '25' of requests for 'Range' failed on etcd instance '10.0.0.1:2381'."
