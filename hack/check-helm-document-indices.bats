@@ -332,3 +332,69 @@ EOF
     fi
     grep -q 'use documentSelector.*templates/nested/multi.yaml' output
 }
+
+# The check parses `git diff` output, so the caller's diff.* settings must not
+# change which lines it sees as added; CI runs with git's defaults.
+expect_rejected_with_config() {
+    git config "$1" "$2"
+    if python3 "$REPO_ROOT/hack/check-helm-document-indices.py" "$base" > output 2>&1; then
+        echo "accepted a positional selector with $1=$2" >&2
+        false
+    fi
+    grep -q 'resource_test.yaml:.*use documentSelector' output
+}
+
+@test "diff.noprefix does not hide added indices" {
+    write_suite multi
+    expect_rejected_with_config diff.noprefix true
+}
+
+@test "diff.mnemonicPrefix does not hide added indices" {
+    write_suite multi
+    expect_rejected_with_config diff.mnemonicPrefix true
+}
+
+@test "color.diff does not hide added indices" {
+    write_suite multi
+    expect_rejected_with_config color.diff always
+}
+
+@test "diff.algorithm does not pair an added index with a removed one" {
+    cat > packages/apps/example/tests/resource_test.yaml <<'SUITE'
+suite: resource selection
+templates:
+  - templates/single.yaml
+tests:
+  - it: removed
+    documentIndex: 3
+    asserts:
+      - notExists:
+          path: spec.removed
+  - it: kept
+    asserts:
+      - notExists:
+          path: spec.kept
+SUITE
+    git add .
+    git -c user.name=Test -c user.email=test@example.org commit -qm existing
+    base=$(git rev-parse HEAD)
+    cat > packages/apps/example/tests/resource_test.yaml <<'SUITE'
+suite: resource selection
+templates:
+  - templates/single.yaml
+tests:
+  - it: kept
+    template: templates/multi.yaml
+    documentIndex: 3
+    asserts:
+      - notExists:
+          path: spec.kept
+SUITE
+    git add .
+    expect_rejected_with_config diff.algorithm histogram
+}
+
+@test "diff.indentHeuristic does not change which indices count as added" {
+    write_suite multi
+    expect_rejected_with_config diff.indentHeuristic false
+}
