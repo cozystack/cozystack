@@ -217,6 +217,8 @@ spec:
           # Same 45s write budget as the readwrite PUT above, bypassing the 15s
           # mc() wrapper; a 124 here is still a timed-out probe (handled below).
           timeout 45 mc cp --insecure "$workdir/ro-test.txt" "ro-user/$BUCKET_NAME/ro-test.txt" > "$workdir/ro-cp.log" 2>&1 || ro_status=$?
+          # Show mc's output first: the EXIT trap removes $workdir, and the branches below leave before they could print it.
+          cat "$workdir/ro-cp.log" >&2
           if [ "$ro_status" -eq 0 ]; then
             echo "FAIL: read-only user must NOT be able to upload (accessPolicy=readonly regression; enforced since cosi-driver v0.3.1, #1921)" >&2
             # Drop the object the viewer should not have been able to create
@@ -229,11 +231,9 @@ spec:
             exit 1
           fi
           if ! grep -Eiq 'access ?denied' "$workdir/ro-cp.log"; then
-            echo "FAIL: read-only upload failed (exit $ro_status) without an S3 AccessDenied, so the denial is not proven; mc said:" >&2
-            cat "$workdir/ro-cp.log" >&2
+            echo "FAIL: read-only upload failed (exit $ro_status) without an S3 AccessDenied, so the denial is not proven; the mc output is printed above" >&2
             exit 1
           fi
-          cat "$workdir/ro-cp.log"
 
           # Remove the test object so bucket cleanup is not blocked
           mc rm --insecure "rw-user/$BUCKET_NAME/rw-test.txt"

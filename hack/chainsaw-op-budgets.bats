@@ -418,6 +418,7 @@ rc=0") ;; *) printf '%s\n' "$bs_out" >&2; echo "the step failed although S3 answ
     case "$bs_out" in *"
 rc=0") printf '%s\n' "$bs_out" >&2; echo "the step passed without an S3 denial" >&2; exit 1 ;; esac
     case "$bs_out" in *"without an S3 AccessDenied"*) ;; *) printf '%s\n' "$bs_out" >&2; echo "the failure did not say: without an S3 AccessDenied" >&2; exit 1 ;; esac
+    case "$bs_out" in *"connection refused"*) ;; *) printf '%s\n' "$bs_out" >&2; echo "the mc output of the refused connection was lost" >&2; exit 1 ;; esac
     rm -rf "$bs_dir"
 }
 
@@ -428,16 +429,18 @@ rc=0") printf '%s\n' "$bs_out" >&2; echo "the step passed without an S3 denial" 
     case "$bs_out" in *"
 rc=0") printf '%s\n' "$bs_out" >&2; echo "the step passed without an S3 denial" >&2; exit 1 ;; esac
     case "$bs_out" in *"without an S3 AccessDenied"*) ;; *) printf '%s\n' "$bs_out" >&2; echo "the failure did not say: without an S3 AccessDenied" >&2; exit 1 ;; esac
+    case "$bs_out" in *"503 Service Unavailable"*) ;; *) printf '%s\n' "$bs_out" >&2; echo "the mc output of the gateway 5xx was lost" >&2; exit 1 ;; esac
     rm -rf "$bs_dir"
 }
 
 @test "the bucket read-only upload check fails when the upload succeeds" {
     bs_dir=$(mktemp -d)
     write_bucket_stubs "$bs_dir"
-    bs_out=$(STUB_RO_OUT='' STUB_RO_RC=0 run_bucket_step "$bs_dir")
+    bs_out=$(STUB_RO_OUT='mc: stub upload accepted' STUB_RO_RC=0 run_bucket_step "$bs_dir")
     case "$bs_out" in *"
 rc=0") printf '%s\n' "$bs_out" >&2; echo "the step passed without an S3 denial" >&2; exit 1 ;; esac
     case "$bs_out" in *"read-only user must NOT be able to upload"*) ;; *) printf '%s\n' "$bs_out" >&2; echo "the failure did not say: read-only user must NOT be able to upload" >&2; exit 1 ;; esac
+    case "$bs_out" in *"stub upload accepted"*) ;; *) printf '%s\n' "$bs_out" >&2; echo "the output of the unexpectedly successful upload was lost" >&2; exit 1 ;; esac
     rm -rf "$bs_dir"
 }
 
@@ -448,6 +451,7 @@ rc=0") printf '%s\n' "$bs_out" >&2; echo "the step passed without an S3 denial" 
     case "$bs_out" in *"
 rc=0") printf '%s\n' "$bs_out" >&2; echo "the step passed without an S3 denial" >&2; exit 1 ;; esac
     case "$bs_out" in *"timed out at its 45s cap"*) ;; *) printf '%s\n' "$bs_out" >&2; echo "the failure did not say: timed out at its 45s cap" >&2; exit 1 ;; esac
+    case "$bs_out" in *"Access Denied."*) ;; *) printf '%s\n' "$bs_out" >&2; echo "the output of the timed-out upload was lost" >&2; exit 1 ;; esac
     rm -rf "$bs_dir"
 }
 
