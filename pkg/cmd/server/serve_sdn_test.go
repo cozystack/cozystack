@@ -136,10 +136,17 @@ func TestServeSDNOffKeepsGroupOutOfOpenAPI(t *testing.T) {
 	if err := json.Unmarshal(body, &v2); err != nil {
 		t.Fatal(err)
 	}
+	coreListed := false
 	for p := range v2.Paths {
+		if strings.HasPrefix(p, "/apis/core.cozystack.io/") {
+			coreListed = true
+		}
 		if strings.HasPrefix(p, "/apis/sdn.cozystack.io") {
 			t.Errorf("OpenAPI v2 lists %s with --serve-sdn=false", p)
 		}
+	}
+	if !coreListed {
+		t.Fatalf("OpenAPI v2 lists no core.cozystack.io path: %d paths", len(v2.Paths))
 	}
 
 	if code, _ := get(t, ts, "/apis/sdn.cozystack.io/v1alpha1"); code != http.StatusNotFound {
