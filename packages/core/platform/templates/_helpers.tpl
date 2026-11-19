@@ -270,6 +270,25 @@ cozystack-scheduler (emitted with its own variant in both branches)
 {{- end }}
 
 {{- /*
+The migration step for the linstor package, empty when none is in progress.
+Checked here as well as in the linstor chart, so a typo fails the platform
+render instead of leaving the cozystack.linstor HelmRelease failing.
+*/ -}}
+{{- define "cozystack.platform.storage.blockstorMigration" -}}
+{{- $migration := "" -}}
+{{- if and (kindIs "map" .Values.storage) (hasKey .Values.storage "blockstorMigration") -}}
+{{- $migration = .Values.storage.blockstorMigration -}}
+{{- end -}}
+{{- if not (and (kindIs "string" $migration) (has $migration (list "" "hold" "adopt"))) -}}
+{{- fail (printf "storage.blockstorMigration must be \"\", \"hold\" or \"adopt\", got %#v" $migration) -}}
+{{- end -}}
+{{- if and $migration (ne (include "cozystack.platform.storage.backend" .) "blockstor") -}}
+{{- fail (printf "storage.blockstorMigration %q is only valid with storage.backend: blockstor; remove it together with switching the backend back" $migration) -}}
+{{- end -}}
+{{- $migration -}}
+{{- end -}}
+
+{{- /*
 Resolve the storage backend for the linstor package.
 
 Defaults to `linstor`, which is what every existing cluster runs, and only

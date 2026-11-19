@@ -49,8 +49,14 @@ migrations:
 # backend of a running cluster fails the render too; on a cluster that
 # holds no volumes yet, set storage.acknowledgeBackendChange to the new
 # backend to confirm the switch.
+#
+# blockstorMigration is set only while blockstor adopts the volumes of a
+# LINSTOR cluster: "hold", then "adopt", then removed. Until it is removed
+# the linstor package deploys blockstor but leaves every piraeus object as
+# it is under linstor. The steps are in packages/system/linstor/README.md.
 storage:
   backend: linstor
+  blockstorMigration: ""
 
 # Bundle deployment configuration
 bundles:

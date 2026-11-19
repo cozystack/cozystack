@@ -60,9 +60,12 @@
 {{- $multusComponents := dict "multus" (dict "values" (include "cozystack.platform.multus.values" (list $ true) | fromYaml)) -}}
 {{include "cozystack.platform.package.full" (list "cozystack.multus" "default" $ $multusComponents) }}
 {{- if eq (include "cozystack.platform.storage.backend" $) "blockstor" }}
-{{- $linstorComponents := dict "linstor" (dict "values" (dict "backend" "blockstor")) -}}
+{{- $linstorValues := dict "backend" "blockstor" -}}
+{{- with include "cozystack.platform.storage.blockstorMigration" $ }}{{ $_ := set $linstorValues "blockstorMigration" . }}{{ end -}}
+{{- $linstorComponents := dict "linstor" (dict "values" $linstorValues) -}}
 {{include "cozystack.platform.package" (list "cozystack.linstor" "default" $ $linstorComponents) }}
 {{- else }}
+{{- $_ := include "cozystack.platform.storage.blockstorMigration" $ }}
 {{include "cozystack.platform.package.default" (list "cozystack.linstor" $) }}
 {{- end }}
 {{include "cozystack.platform.package" (list "cozystack.cozystack-scheduler" "linstor" $) }}
@@ -161,6 +164,7 @@
 {{- if eq (include "cozystack.platform.storage.backend" $) "blockstor" -}}
 {{- $_ := set $linstorValues "backend" "blockstor" -}}
 {{- end -}}
+{{- with include "cozystack.platform.storage.blockstorMigration" $ }}{{ $_ := set $linstorValues "blockstorMigration" . }}{{ end -}}
 {{- $linstorComponents := dict "linstor" (dict "values" $linstorValues) -}}
 {{include "cozystack.platform.package" (list "cozystack.linstor" "default" $ $linstorComponents) }}
 {{include "cozystack.platform.package" (list "cozystack.cozystack-scheduler" "linstor" $) }}
