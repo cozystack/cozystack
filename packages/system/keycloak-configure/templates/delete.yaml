@@ -20,7 +20,7 @@ spec:
           effect: "NoSchedule"
       containers:
         - name: kubectl
-          image: docker.io/clastix/kubectl:v1.32
+          image: docker.io/clastix/kubectl:v1.32@sha256:b9ef7d8dbe65bcc81a46c09b8dc7543103055021c4f43287bf59e92a8f4fe05c
           command:
             - /bin/sh
             - -c

@@ -27,9 +27,17 @@
     },
     {
       "customType": "regex",
-      "description": "Track and keep fresh the clastix/kubectl image digest-pinned in the post-delete cleanup hooks. The ref is assembled at render time by the cozy-lib.image helper (routed through cozy-lib.images-registry so mirrored / air-gapped installs resolve it), so it is neither a Dockerfile nor a go.mod dependency and the built-in managers cannot see it. The helm-values manager is disabled repo-wide (see enabledManagers above), so without this regex manager the digest — a supply-chain pin — would silently age.",
-      "managerFilePatterns": ["/^packages/.+/templates/hooks/.+\\.yaml$/"],
+      "description": "Track and keep fresh the clastix/kubectl image digest-pinned in chart templates: the post-delete cleanup hooks, and Jobs kept outside templates/hooks/ such as the keycloak-configure teardown and the kafka migration hook. Some refs are assembled at render time by the cozy-lib.image helper (routed through cozy-lib.images-registry so mirrored / air-gapped installs resolve it), so they are neither a Dockerfile nor a go.mod dependency and the built-in managers cannot see them. Vendored charts under packages/*/*/charts are left out. The helm-values manager is disabled repo-wide (see enabledManagers above), so without this regex manager the digest — a supply-chain pin — would silently age.",
+      "managerFilePatterns": ["/^packages/[^/]+/[^/]+/templates/.+\\.yaml$/"],
       "matchStrings": ["clastix/kubectl:(?<currentValue>v[0-9]+\\.[0-9]+(?:\\.[0-9]+)?)@(?<currentDigest>sha256:[a-f0-9]+)"],
+      "datasourceTemplate": "docker",
+      "depNameTemplate": "docker.io/clastix/kubectl"
+    },
+    {
+      "customType": "regex",
+      "description": "Track the clastix/kubectl image pinned in package values files as separate repository, tag and digest keys (kubectlImage in etcd-operator and flux-plunger). The helm-values manager is disabled repo-wide (see enabledManagers above), so the `# renovate:` comment above those keys is read by nothing, and the template manager above cannot see a ref split across keys.",
+      "managerFilePatterns": ["/^packages/[^/]+/[^/]+/values\\.yaml$/"],
+      "matchStrings": ["repository:\\s*docker\\.io/clastix/kubectl\\s*\\n\\s*tag:\\s*(?<currentValue>v[0-9]+\\.[0-9]+(?:\\.[0-9]+)?)\\s*\\n\\s*digest:\\s*(?<currentDigest>sha256:[a-f0-9]+)"],
       "datasourceTemplate": "docker",
       "depNameTemplate": "docker.io/clastix/kubectl"
     },
