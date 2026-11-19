@@ -1,4 +1,4 @@
-{{- if eq .Values.backend "linstor" }}
+{{- if not (include "linstor.piraeusExternal" .) }}
 apiVersion: piraeus.io/v1
 kind: LinstorSatelliteConfiguration
 metadata:

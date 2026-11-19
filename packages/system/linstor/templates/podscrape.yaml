@@ -20,7 +20,7 @@ spec:
   selector:
     matchLabels:
       app.kubernetes.io/component: linstor-satellite
-{{- if eq .Values.backend "linstor" }}
+{{- if not (include "linstor.piraeusExternal" .) }}
 ---
 apiVersion: operator.victoriametrics.com/v1beta1
 kind: VMPodScrape
