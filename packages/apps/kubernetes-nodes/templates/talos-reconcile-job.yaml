@@ -296,6 +296,16 @@ spec:
                 exit 1
               fi
               echo "[$(date -u +%H:%M:%S)] inputs ready (svc=${SVC_IP} coredns=${COREDNS_IP})"
+              {{- /* The render-time network check is skipped when the pool
+                     renders before the parent's Service exists. */}}
+              if ! PARENT_VPC=$(kubectl -n "$NS" get svc "$RELEASE" -o jsonpath='{.metadata.annotations.sdn\.cozystack\.io/vpc}'); then
+                echo "[$(date -u +%H:%M:%S)] cannot read the apiserver Service's network"
+                exit 1
+              fi
+              if [ "$PARENT_VPC" != {{ .vpc | quote }} ]; then
+                echo "[$(date -u +%H:%M:%S)] network.name must match the parent Kubernetes cluster's network: the control plane of ${RELEASE} is in VPC '${PARENT_VPC}', this pool asks for '{{ .vpc }}'"
+                exit 1
+              fi
               {{- if .vpc }}
 
               {{- /* Inside the VPC the ClusterIP is unreachable. The workers'

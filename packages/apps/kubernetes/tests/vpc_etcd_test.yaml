@@ -14,6 +14,15 @@ capabilities:
   apiVersions:
     - sdn.cozystack.io/v1alpha1/VPC
 
+kubernetesProvider:
+  scheme: &scheme
+    "etcd-operator.cozystack.io/v1alpha2/EtcdCluster":
+      gvr:
+        group: "etcd-operator.cozystack.io"
+        version: "v1alpha2"
+        resource: "etcdclusters"
+      namespaced: true
+
 tests:
   # The operator copies additionalMetadata onto the member Pods and both etcd
   # Services, so this one annotation is what lets the apiserver reach its
@@ -40,3 +49,49 @@ tests:
     asserts:
       - notExists:
           path: spec.additionalMetadata.annotations
+
+  # A failed first install can leave the etcd without a control plane, so
+  # the control plane's own check has nothing to compare against.
+  - it: refuses to move an existing etcd to another VPC
+    set:
+      network:
+        name: othervpc
+    kubernetesProvider:
+      scheme: *scheme
+      objects:
+        - apiVersion: etcd-operator.cozystack.io/v1alpha2
+          kind: EtcdCluster
+          metadata:
+            name: test-etcd
+            namespace: tenant-test
+          spec:
+            additionalMetadata:
+              annotations:
+                sdn.cozystack.io/vpc: virtualprivatecloud-myvpc
+    asserts:
+      - failedTemplate:
+          errorPattern: 'the etcd of test is in VPC "virtualprivatecloud-myvpc" and this render would move it to "virtualprivatecloud-othervpc"'
+
+  - it: keeps an existing etcd in its VPC
+    set:
+      network:
+        name: myvpc
+    kubernetesProvider:
+      scheme: *scheme
+      objects:
+        - apiVersion: etcd-operator.cozystack.io/v1alpha2
+          kind: EtcdCluster
+          metadata:
+            name: test-etcd
+            namespace: tenant-test
+          spec:
+            additionalMetadata:
+              annotations:
+                sdn.cozystack.io/vpc: virtualprivatecloud-myvpc
+    documentSelector:
+      path: kind
+      value: EtcdCluster
+    asserts:
+      - equal:
+          path: spec.additionalMetadata.annotations["sdn.cozystack.io/vpc"]
+          value: virtualprivatecloud-myvpc
