@@ -32,12 +32,14 @@ backend: linstor
 #           repoints linstor-csi at blockstor-apiserver.
 #
 # piraeus stays untouched because the runbook keeps piraeus-operator
-# stopped while blockstor adopts, and the operator itself serves the
-# validating webhooks (failurePolicy: Fail) on LinstorCluster and
-# LinstorSatelliteConfiguration: a release that changes them while it is
-# stopped fails and retries until it returns, switching back to linstor
-# included. Clearing this value is the one step that changes them, so
-# piraeus-operator has to be running for it. README.md has the order.
+# stopped while blockstor adopts, and an operator started again must still
+# find LINSTOR's shape. The operator also serves the validating webhooks
+# (failurePolicy: Fail) on LinstorCluster and LinstorSatelliteConfiguration,
+# which Helm patches on every upgrade, unchanged render or not; the
+# release's pre and post hooks relax and restore those two webhooks while
+# nothing serves them (templates/piraeus-webhooks.yaml). Clearing this value
+# is the one step that changes piraeus, so piraeus-operator has to be
+# running for it. README.md has the order.
 blockstorMigration: ""
 
 piraeusServer:

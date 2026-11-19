@@ -1,0 +1,133 @@
+{{- /*
+   Lets an upgrade or rollback of this release through piraeus-operator's
+   validating webhooks while the operator is stopped, as a LINSTOR to
+   blockstor migration keeps it from hold until the operator is started
+   again, and as the way back to linstor from those steps does too.
+
+   An unchanged render does not keep Helm away from the webhooks. Helm
+   stamps its ownership label and annotations onto the new release's
+   objects before it diffs them against the previous manifest, which does
+   not carry them, so the merge patch it sends LinstorCluster and every
+   LinstorSatelliteConfiguration is never empty; a release applied
+   server-side sends whole objects. The apiserver runs the webhooks on that
+   patch, and with failurePolicy Fail and nothing serving them every upgrade
+   fails, its post-upgrade hooks with it, until someone relaxes them by
+   hand.
+
+   hack/piraeus-webhooks.sh relaxes only the webhooks of those two kinds,
+   only while their Service has no ready endpoint, and the post hook sets
+   back exactly what the pre hook changed, so a running operator validates
+   every change as before and a stopped one is back to Fail when the release
+   is done. The configuration belongs to the piraeus-operator release, which
+   puts Fail back itself the next time it is upgraded. */}}
+{{- $config := "piraeus-operator-validating-webhook-configuration" }}
+{{- $rbac := dict "helm.sh/hook" "pre-upgrade,pre-rollback,post-upgrade,post-rollback" "helm.sh/hook-delete-policy" "before-hook-creation,hook-succeeded" "helm.sh/hook-weight" "-10" }}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: piraeus-webhooks
+  namespace: {{ .Release.Namespace }}
+  annotations:
+    {{- toYaml $rbac | nindent 4 }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: cozystack-linstor-piraeus-webhooks
+  annotations:
+    {{- toYaml $rbac | nindent 4 }}
+rules:
+  - apiGroups: [admissionregistration.k8s.io]
+    resources: [validatingwebhookconfigurations]
+    resourceNames: [{{ $config }}]
+    verbs: [get, patch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: cozystack-linstor-piraeus-webhooks
+  annotations:
+    {{- toYaml $rbac | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: cozystack-linstor-piraeus-webhooks
+subjects:
+  - kind: ServiceAccount
+    name: piraeus-webhooks
+    namespace: {{ .Release.Namespace }}
+---
+{{- /* The webhook Service is piraeus-operator's, in this namespace. */}}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: piraeus-webhooks
+  namespace: {{ .Release.Namespace }}
+  annotations:
+    {{- toYaml $rbac | nindent 4 }}
+rules:
+  - apiGroups: [discovery.k8s.io]
+    resources: [endpointslices]
+    verbs: [list]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: piraeus-webhooks
+  namespace: {{ .Release.Namespace }}
+  annotations:
+    {{- toYaml $rbac | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: piraeus-webhooks
+subjects:
+  - kind: ServiceAccount
+    name: piraeus-webhooks
+    namespace: {{ .Release.Namespace }}
+{{- range $phase := list "relax" "restore" }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: piraeus-webhooks-{{ $phase }}
+  namespace: {{ $.Release.Namespace }}
+  annotations:
+    helm.sh/hook: {{ ternary "pre-upgrade,pre-rollback" "post-upgrade,post-rollback" (eq $phase "relax") }}
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+    helm.sh/hook-weight: "-5"
+spec:
+  backoffLimit: 3
+  activeDeadlineSeconds: 120
+  template:
+    spec:
+      serviceAccountName: piraeus-webhooks
+      restartPolicy: Never
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        runAsGroup: 65534
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: {{ $phase }}
+          image: {{ $.Values.kubectl.image.repository }}:{{ $.Values.kubectl.image.tag }}
+          imagePullPolicy: IfNotPresent
+          command: [sh, -ec, '$(SCRIPT)', piraeus-webhooks.sh, {{ $phase }}]
+          env:
+            - name: HOME
+              value: /tmp
+            - name: PIRAEUS_WEBHOOKS
+              value: {{ $config }}
+            - name: SCRIPT
+              value: |
+{{ required "piraeus webhooks script is missing" ($.Files.Get "hack/piraeus-webhooks.sh") | indent 16 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          volumeMounts:
+            - {name: tmp, mountPath: /tmp}
+      volumes:
+        - {name: tmp, emptyDir: {}}
+{{- end }}
