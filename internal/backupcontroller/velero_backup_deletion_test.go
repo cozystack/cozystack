@@ -3,6 +3,7 @@ package backupcontroller
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -384,54 +385,156 @@ func TestReconcile_FailedJobVeleroBackupSweep(t *testing.T) {
 	}
 }
 
-// A deletion Velero keeps failing is retried with a growing interval, and
-// every failed attempt is reported on the BackupJob with Velero's errors.
+func markOwnRequestProcessed(t *testing.T, c client.Client, errs ...string) {
+	t.Helper()
+	dbr := &velerov1.DeleteBackupRequest{}
+	if err := c.Get(context.Background(), types.NamespacedName{Namespace: veleroNamespace, Name: failedVeleroBackup}, dbr); err != nil {
+		t.Fatalf("get request: %v", err)
+	}
+	dbr.Status = velerov1.DeleteBackupRequestStatus{Phase: velerov1.DeleteBackupRequestPhaseProcessed, Errors: errs}
+	if err := c.Update(context.Background(), dbr); err != nil {
+		t.Fatalf("mark request processed: %v", err)
+	}
+}
+
+// A deletion Velero keeps failing at once is retried only after a growing
+// wait, even though recording each attempt triggers a new reconcile, and
+// every retry is reported on the BackupJob with Velero's errors.
 func TestReconcile_FailedJobVeleroDeletionBacksOff(t *testing.T) {
+	const readOnly = "backup storage location default is currently in read-only mode"
 	r, c := newVeleroCleanupReconciler(t,
 		veleroCleanupJob(backupsv1alpha1.BackupJobPhaseFailed),
 		ownedVeleroBackup(failedVeleroBackup, velerov1.BackupPhaseFailed))
+	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	r.now = func() time.Time { return now }
 	events := r.Recorder.(*record.FakeRecorder).Events
+	expectEvent := func(step string, want bool) {
+		t.Helper()
+		select {
+		case ev := <-events:
+			if !want {
+				t.Fatalf("%s: unexpected event %q", step, ev)
+			}
+			if !strings.Contains(ev, "Warning VeleroBackupDeletionFailed") || !strings.Contains(ev, readOnly) {
+				t.Errorf("%s: unexpected event %q", step, ev)
+			}
+		default:
+			if want {
+				t.Fatalf("%s: no Warning event", step)
+			}
+		}
+	}
 
 	if res := reconcileCleanupJob(t, r); res.RequeueAfter != failedJobSweepRequeue {
 		t.Fatalf("first request: RequeueAfter = %v, want %v", res.RequeueAfter, failedJobSweepRequeue)
 	}
-	for i, want := range []time.Duration{10 * time.Minute, 20 * time.Minute, 40 * time.Minute} {
-		dbr := &velerov1.DeleteBackupRequest{}
-		if err := c.Get(context.Background(), types.NamespacedName{Namespace: veleroNamespace, Name: failedVeleroBackup}, dbr); err != nil {
-			t.Fatalf("get request: %v", err)
-		}
-		dbr.Status = velerov1.DeleteBackupRequestStatus{
-			Phase:  velerov1.DeleteBackupRequestPhaseProcessed,
-			Errors: []string{"backup storage location default is currently in read-only mode"},
-		}
-		if err := c.Update(context.Background(), dbr); err != nil {
-			t.Fatalf("mark request processed: %v", err)
-		}
+	expectEvent("first request", false)
 
-		if res := reconcileCleanupJob(t, r); res.RequeueAfter != want {
-			t.Errorf("retry %d: RequeueAfter = %v, want %v", i+1, res.RequeueAfter, want)
+	markOwnRequestProcessed(t, c, readOnly)
+	if res := reconcileCleanupJob(t, r); res.RequeueAfter != failedJobSweepRequeue {
+		t.Errorf("before the backoff: RequeueAfter = %v, want %v", res.RequeueAfter, failedJobSweepRequeue)
+	}
+	expectEvent("before the backoff", false)
+
+	for i, wait := range []time.Duration{5 * time.Minute, 10 * time.Minute, 20 * time.Minute} {
+		now = now.Add(wait)
+		step := fmt.Sprintf("retry %d", i+1)
+		if res := reconcileCleanupJob(t, r); res.RequeueAfter != 2*wait {
+			t.Errorf("%s: RequeueAfter = %v, want %v", step, res.RequeueAfter, 2*wait)
 		}
-		select {
-		case ev := <-events:
-			if !strings.Contains(ev, "Warning VeleroBackupDeletionFailed") || !strings.Contains(ev, "read-only mode") {
-				t.Errorf("retry %d: unexpected event %q", i+1, ev)
-			}
-		default:
-			t.Fatalf("retry %d: no Warning event", i+1)
+		expectEvent(step, true)
+
+		markOwnRequestProcessed(t, c, readOnly)
+		if res := reconcileCleanupJob(t, r); res.RequeueAfter != 2*wait {
+			t.Errorf("%s, reconcile right after: RequeueAfter = %v, want %v", step, res.RequeueAfter, 2*wait)
 		}
+		expectEvent(step+", reconcile right after", false)
 		if n := len(listDeleteBackupRequests(t, c)); n != 1 {
-			t.Fatalf("retry %d: expected one request, got %d", i+1, n)
+			t.Fatalf("%s: expected one request, got %d", step, n)
 		}
-	}
-	if res := reconcileCleanupJob(t, r); res.RequeueAfter != 40*time.Minute {
-		t.Errorf("a pending request must keep the backoff, got %v", res.RequeueAfter)
-	}
-	if len(events) != 0 {
-		t.Errorf("a pending request must not emit an event, got %q", <-events)
 	}
 
 	if got := failedJobSweepBackoff(10); got != failedJobSweepMaxRequeue {
 		t.Errorf("backoff after 10 retries = %v, want the %v cap", got, failedJobSweepMaxRequeue)
+	}
+}
+
+// Requests and backups Velero has not acted on yet are checked less often the
+// longer they wait, and waiting is not reported.
+func TestReconcile_FailedJobWaitingOnVeleroBacksOff(t *testing.T) {
+	now := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+	cases := []struct {
+		name        string
+		veleroPhase velerov1.BackupPhase
+		existing    []client.Object
+		backupAge   time.Duration
+		want        time.Duration
+	}{
+		{name: "request waiting 20m", veleroPhase: velerov1.BackupPhaseFailed, want: 20 * time.Minute,
+			existing: []client.Object{agedRequest(now.Add(-20 * time.Minute))}},
+		{name: "request waiting 3h", veleroPhase: velerov1.BackupPhaseFailed, want: failedJobSweepMaxRequeue,
+			existing: []client.Object{agedRequest(now.Add(-3 * time.Hour))}},
+		{name: "request just created", veleroPhase: velerov1.BackupPhaseFailed, want: failedJobSweepRequeue,
+			existing: []client.Object{agedRequest(now)}},
+		{name: "backup new for 3h", veleroPhase: velerov1.BackupPhaseNew, backupAge: 3 * time.Hour, want: failedJobSweepMaxRequeue},
+		{name: "backup new for 10m", veleroPhase: "", backupAge: 10 * time.Minute, want: 10 * time.Minute},
+		{name: "backup just started", veleroPhase: velerov1.BackupPhaseInProgress, want: failedJobRunningBackupRequeue},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			vb := ownedVeleroBackup(failedVeleroBackup, tc.veleroPhase)
+			vb.CreationTimestamp = metav1.NewTime(now.Add(-tc.backupAge))
+			r, c := newVeleroCleanupReconciler(t, append([]client.Object{veleroCleanupJob(backupsv1alpha1.BackupJobPhaseFailed), vb}, tc.existing...)...)
+			r.now = func() time.Time { return now }
+
+			if res := reconcileCleanupJob(t, r); res.RequeueAfter != tc.want {
+				t.Errorf("RequeueAfter = %v, want %v", res.RequeueAfter, tc.want)
+			}
+			if n := len(listDeleteBackupRequests(t, c)); n != len(tc.existing) {
+				t.Errorf("waiting must not create requests, got %d", n)
+			}
+			if events := r.Recorder.(*record.FakeRecorder).Events; len(events) != 0 {
+				t.Errorf("waiting must not be reported, got %q", <-events)
+			}
+		})
+	}
+}
+
+func agedRequest(created time.Time) *velerov1.DeleteBackupRequest {
+	dbr := deleteRequest(failedVeleroBackup, velerov1.DeleteBackupRequestPhaseInProgress)
+	dbr.CreationTimestamp = metav1.NewTime(created)
+	return dbr
+}
+
+// Recording the attempt can fail after the request was created: a job deleted
+// meanwhile ends the sweep, any other error still keeps the backoff requeue.
+func TestReconcile_FailedJobAttemptRecordErrors(t *testing.T) {
+	for name, patchErr := range map[string]error{
+		"job deleted": apierrors.NewNotFound(schema.GroupResource{Group: "backups.cozystack.io", Resource: "backupjobs"}, failedJobName),
+		"apiserver":   apierrors.NewServiceUnavailable("etcd timeout"),
+	} {
+		t.Run(name, func(t *testing.T) {
+			funcs := &interceptor.Funcs{
+				Patch: func(context.Context, client.WithWatch, client.Object, client.Patch, ...client.PatchOption) error {
+					return patchErr
+				},
+			}
+			c := newVeleroCleanupClient(t, funcs,
+				veleroCleanupJob(backupsv1alpha1.BackupJobPhaseFailed),
+				ownedVeleroBackup(failedVeleroBackup, velerov1.BackupPhaseFailed))
+			r := &BackupJobReconciler{Client: c, Recorder: record.NewFakeRecorder(16)}
+
+			want := failedJobSweepRequeue
+			if apierrors.IsNotFound(patchErr) {
+				want = 0
+			}
+			if res := reconcileCleanupJob(t, r); res.RequeueAfter != want {
+				t.Errorf("RequeueAfter = %v, want %v", res.RequeueAfter, want)
+			}
+			if n := len(listDeleteBackupRequests(t, c)); n != 1 {
+				t.Errorf("expected the request to stay, got %d", n)
+			}
+		})
 	}
 }
 
@@ -465,7 +568,7 @@ func TestRequestVeleroBackupDeletion_ReplacesByUID(t *testing.T) {
 		},
 	}
 	c := newVeleroCleanupClient(t, funcs, stale)
-	req, err := requestVeleroBackupDeletion(context.Background(), c, veleroNamespace, failedVeleroBackup)
+	req, err := requestVeleroBackupDeletion(context.Background(), c, veleroNamespace, failedVeleroBackup, true)
 	if err != nil || !req.created || req.replaced == nil {
 		t.Fatalf("requestVeleroBackupDeletion = (%+v, %v), want a replaced and a created request", req, err)
 	}
@@ -491,7 +594,7 @@ func TestRequestVeleroBackupDeletion_ReturnsAPIErrors(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			c := newVeleroCleanupClient(t, &funcs,
 				deleteRequest(failedVeleroBackup, velerov1.DeleteBackupRequestPhaseProcessed, "backup storage location unavailable"))
-			req, err := requestVeleroBackupDeletion(context.Background(), c, veleroNamespace, failedVeleroBackup)
+			req, err := requestVeleroBackupDeletion(context.Background(), c, veleroNamespace, failedVeleroBackup, true)
 			if req.created || !apierrors.IsForbidden(err) {
 				t.Fatalf("requestVeleroBackupDeletion = (%+v, %v), want a Forbidden error", req, err)
 			}
