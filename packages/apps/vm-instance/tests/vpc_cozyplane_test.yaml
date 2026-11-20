@@ -83,3 +83,61 @@ tests:
       - lengthEqual:
           path: spec.template.spec.domain.devices.interfaces
           count: 2
+
+  - it: names the chosen route table next to the VPC
+    capabilities:
+      apiVersions:
+        - sdn.cozystack.io/v1alpha1/VPC
+    set:
+      networks:
+        - name: mynet
+      routeTable: to-internet
+    asserts:
+      - equal:
+          path: spec.template.metadata.annotations["sdn.cozystack.io/route-table"]
+          value: to-internet
+      - equal:
+          path: spec.template.metadata.annotations["sdn.cozystack.io/vpc"]
+          value: virtualprivatecloud-mynet
+
+  - it: leaves the VPC's default route table to cozyplane when routeTable is empty
+    capabilities:
+      apiVersions:
+        - sdn.cozystack.io/v1alpha1/VPC
+    set:
+      networks:
+        - name: mynet
+    asserts:
+      - notExists:
+          path: spec.template.metadata.annotations["sdn.cozystack.io/route-table"]
+
+  - it: refuses a route table without a VPC to route
+    capabilities:
+      apiVersions:
+        - sdn.cozystack.io/v1alpha1/VPC
+    set:
+      routeTable: to-internet
+    asserts:
+      - failedTemplate:
+          errorPattern: 'routeTable "to-internet" needs the VM to join a VPC'
+
+  - it: refuses a route table outside the cozyplane variant
+    set:
+      networks:
+        - name: mynet
+      routeTable: to-internet
+    asserts:
+      - failedTemplate:
+          errorPattern: 'routeTable "to-internet" names a cozyplane RouteTable, but the cluster does not serve sdn.cozystack.io'
+
+  - it: refuses a route table name that is not a DNS-1123 name
+    capabilities:
+      apiVersions:
+        - sdn.cozystack.io/v1alpha1/VPC
+    set:
+      networks:
+        - name: mynet
+      routeTable: To_Internet
+    asserts:
+      - failedTemplate:
+          errorPattern: 'routeTable.*does not match pattern'
