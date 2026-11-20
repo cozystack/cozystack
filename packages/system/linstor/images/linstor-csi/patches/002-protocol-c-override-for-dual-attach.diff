@@ -120,11 +120,11 @@ index 9a5f79c..c8bc9c3 100644
 +	// "Protocol C required" (errno 139).
 +	PropertyDrbdNetProtocol = lc.NamespcDrbdNetOptions + "/protocol"
 +
-+	// PropertyCsiProtocolOverride marks a resource-connection where this driver
-+	// has installed a temporary Protocol=C override to make a Protocol-A/B
++	// PropertyCsiProtocolOverride marks a resource-definition on which this
++	// driver installed a temporary Protocol=C override, to make a Protocol-A/B
 +	// resource compatible with allow-two-primaries during live migration. The
-+	// marker lets us safely remove only the overrides we set, without touching
-+	// connection-level overrides installed by the operator.
++	// marker lets Detach remove only the override it set, leaving a protocol
++	// set by the operator alone.
 +	PropertyCsiProtocolOverride = lc.NamespcAuxiliary + "/csi-protocol-override"
 +
  	// CreatedForTemporaryDisklessAttach marks a resource as temporary, i.e. it should be removed after it is no longer
