@@ -14,6 +14,43 @@ release:
   namespace: tenant-root
 
 tests:
+  - it: refuses a non-loopback admin without authentication
+    template: charts/seaweedfs/templates/admin/admin-statefulset.yaml
+    set:
+      seaweedfs:
+        global:
+          seaweedfs:
+            extraEnvironmentVars: null
+        admin: &unauthenticatedAdmin
+          enabled: true
+          ip: "0.0.0.0"
+          allowInsecureBind: false
+          secret:
+            existingSecret: ""
+            adminPassword: ""
+          extraEnvironmentVars: null
+          secretExtraEnvironmentVars: null
+    asserts:
+      - failedTemplate:
+          errorPattern: 'admin\.ip is set to "0\.0\.0\.0" \(non-loopback\) but admin authentication is not configured\.'
+
+  - it: allows an explicitly unauthenticated non-loopback admin
+    template: charts/seaweedfs/templates/admin/admin-statefulset.yaml
+    set:
+      seaweedfs:
+        global:
+          seaweedfs:
+            extraEnvironmentVars: null
+        admin:
+          <<: *unauthenticatedAdmin
+          allowInsecureBind: true
+    asserts:
+      - isKind:
+          of: StatefulSet
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: '-allowInsecureBind '
+
   - it: runs the admin server that schedules lifecycle jobs
     template: charts/seaweedfs/templates/admin/admin-statefulset.yaml
     set: &enabled
@@ -46,6 +83,17 @@ tests:
       - equal:
           path: spec.volumeClaimTemplates[0].spec.resources.requests.storage
           value: 1Gi
+
+  # weed admin keeps its worker gRPC port on loopback unless -ip is given
+  # explicitly (weed/command/admin.go at 4.48), and the worker runs in its own
+  # pod.
+  - it: lets the worker reach the admin gRPC port
+    template: charts/seaweedfs/templates/admin/admin-statefulset.yaml
+    set: *enabled
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: '-ip=0\.0\.0\.0 '
 
   - it: runs the worker against the admin of the same release
     template: charts/seaweedfs/templates/worker/worker-deployment.yaml
