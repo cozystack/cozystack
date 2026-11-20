@@ -51,7 +51,7 @@ type ConfigSpec struct {
 	// DEPRECATED: Backup configuration. Prefer the BackupClass / Plan flow under examples/backups/mariadb/.
 	// +kubebuilder:default:={}
 	Backup Backup `json:"backup"`
-	// Name of a SchedulingClass CR (cluster-scoped, group cozystack.io) applied to this application's workloads in place of the tenant's. Must be the tenant's own class or one listed in the tenant's `allowedSchedulingClasses`; any other value is refused. Empty means inherit from the tenant.
+	// Name of a SchedulingClass CR (cluster-scoped, group cozystack.io) used in place of the tenant's for this application's pods. A pod gets its class when it is created, so running pods keep theirs until they are recreated. Must be the tenant's own class or one listed in the tenant's `allowedSchedulingClasses`; any other value is refused. If the class is later removed from that list, new pods get the tenant's class. Empty means inherit from the tenant.
 	// +kubebuilder:default:=""
 	// +kubebuilder:validation:MaxLength=63
 	SchedulingClass string `json:"schedulingClass"`
