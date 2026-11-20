@@ -1,0 +1,11 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Release.Name }}-jvm-options
+data:
+  # -XX:-UseBASE64Intrinsics turns off the AVX-512 Base64 decoder hit by
+  # CVE-2026-114938: OpenSearch decodes the Basic credentials of a request
+  # before it authenticates it, and the image may bundle an OpenJDK that
+  # predates the fix.
+  cozystack.options: |
+    -XX:-UseBASE64Intrinsics
