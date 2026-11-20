@@ -1,0 +1,23 @@
+suite: keycloak JVM options
+templates:
+  - templates/sts.yaml
+
+release:
+  name: keycloak
+  namespace: cozy-keycloak
+
+tests:
+  - it: disables the Base64 intrinsics next to the JGroups discovery query
+    documentSelector:
+      path: kind
+      value: StatefulSet
+    set:
+      _cluster:
+        root-host: example.org
+        cluster-domain: cozy.local
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: JAVA_OPTS_APPEND
+            value: "-Djgroups.dns.query=keycloak-headless.cozy-keycloak.svc.cozy.local -XX:-UseBASE64Intrinsics"

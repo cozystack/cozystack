@@ -210,8 +210,11 @@ spec:
             - name: KC_HOSTNAME_ADMIN
               value: https://{{ . }}
             {{- end }}
+            # -XX:-UseBASE64Intrinsics turns off the AVX-512 Base64 decoder hit by
+            # CVE-2026-114938: Keycloak decodes Base64 before authentication, and
+            # the image may bundle an OpenJDK that predates the fix.
             - name: JAVA_OPTS_APPEND
-              value: "-Djgroups.dns.query=keycloak-headless.cozy-keycloak.svc.{{ $clusterDomain }}"
+              value: "-Djgroups.dns.query=keycloak-headless.cozy-keycloak.svc.{{ $clusterDomain }} -XX:-UseBASE64Intrinsics"
             {{- with .Values.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
