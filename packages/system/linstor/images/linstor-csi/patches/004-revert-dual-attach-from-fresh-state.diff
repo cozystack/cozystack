@@ -1,0 +1,591 @@
+diff --git a/cmd/linstor-csi/linstor-csi.go b/cmd/linstor-csi/linstor-csi.go
+index bd28e06..83d5d03 100644
+--- a/cmd/linstor-csi/linstor-csi.go
++++ b/cmd/linstor-csi/linstor-csi.go
+@@ -91,10 +91,6 @@ func main() {
+ 		lapi.Limiter(rate.NewLimiter(r, *burst)),
+ 		lapi.UserAgent("linstor-csi/" + driver.Version),
+ 		lapi.Log(logger),
+-		lapicache.WithCaches(
+-			&lapicache.NodeCache{Timeout: *nodeCacheTimeout},
+-			&lapicache.ResourceCache{Timeout: *resourceCacheTimeout},
+-		),
+ 	}
+ 
+ 	if *lsEndpoint != "" {
+@@ -123,13 +119,25 @@ func main() {
+ 		linstorOpts = append(linstorOpts, lapi.BearerToken(string(token)))
+ 	}
+ 
+-	c, err := lc.NewHighLevelClient(linstorOpts...)
++	// Detach decides from the attachment state whether a live migration is
++	// over, and gets one chance to do so: it reads through a client of its
++	// own that the resource cache does not sit in front of.
++	freshClient, err := lc.NewHighLevelClient(linstorOpts...)
++	if err != nil {
++		log.Fatal(err)
++	}
++
++	c, err := lc.NewHighLevelClient(append(linstorOpts, lapicache.WithCaches(
++		&lapicache.NodeCache{Timeout: *nodeCacheTimeout},
++		&lapicache.ResourceCache{Timeout: *resourceCacheTimeout},
++	))...)
+ 	if err != nil {
+ 		log.Fatal(err)
+ 	}
+ 
+ 	linstorClient, err := client.NewLinstor(
+ 		client.APIClient(c),
++		client.FreshResources(freshClient.Resources),
+ 		client.LogFmt(logFmt),
+ 		client.LogLevel(*logLevel),
+ 		client.LogOut(logOut),
+diff --git a/pkg/client/dual_attach_test.go b/pkg/client/dual_attach_test.go
+new file mode 100644
+index 0000000..3fb1de0
+--- /dev/null
++++ b/pkg/client/dual_attach_test.go
+@@ -0,0 +1,353 @@
++package client
++
++import (
++	"context"
++	"encoding/json"
++	"net/http"
++	"net/http/httptest"
++	"net/url"
++	"slices"
++	"sync"
++	"testing"
++	"time"
++
++	lapicache "github.com/LINBIT/golinstor/cache"
++	lapi "github.com/LINBIT/golinstor/client"
++	"github.com/sirupsen/logrus"
++	"github.com/stretchr/testify/assert"
++	"github.com/stretchr/testify/require"
++
++	"github.com/piraeusdatastore/linstor-csi/pkg/linstor"
++	lc "github.com/piraeusdatastore/linstor-csi/pkg/linstor/highlevelclient"
++)
++
++const (
++	dualVol  = "pvc-dual"
++	dualRG   = "rg-async"
++	nodeSrc  = "node-a"
++	nodeDst  = "node-b"
++	otherVol = "pvc-other"
++)
++
++// fakeController serves the part of the LINSTOR REST API that Attach,
++// Detach and Clone use, keeping props and the InUse state of each resource
++// so a test can move a volume through a live migration.
++type fakeController struct {
++	t  *testing.T
++	mu sync.Mutex
++
++	rdProps map[string]map[string]string
++	rdGroup map[string]string
++	rgProps map[string]map[string]string
++	inUse   map[string]map[string]bool
++
++	// refusedAdjusts records every definition change DRBD would refuse:
++	// dropping two-primaries while two peers are Primary.
++	refusedAdjusts []string
++	rdWrites       int
++}
++
++func newFakeController(t *testing.T) *fakeController {
++	return &fakeController{
++		t:       t,
++		rdProps: map[string]map[string]string{dualVol: {}, otherVol: {}},
++		rdGroup: map[string]string{dualVol: dualRG, otherVol: dualRG},
++		rgProps: map[string]map[string]string{dualRG: {linstor.PropertyDrbdNetProtocol: "A"}},
++		inUse: map[string]map[string]bool{
++			dualVol:  {nodeSrc: true, nodeDst: false},
++			otherVol: {nodeSrc: false, nodeDst: false},
++		},
++	}
++}
++
++func (f *fakeController) setInUse(rd, node string, inUse bool) {
++	f.mu.Lock()
++	defer f.mu.Unlock()
++	f.inUse[rd][node] = inUse
++}
++
++func (f *fakeController) props(rd string) map[string]string {
++	f.mu.Lock()
++	defer f.mu.Unlock()
++	out := map[string]string{}
++	for k, v := range f.rdProps[rd] {
++		out[k] = v
++	}
++	return out
++}
++
++func (f *fakeController) resources(rd string) []lapi.ResourceWithVolumes {
++	var out []lapi.ResourceWithVolumes
++	nodes := make([]string, 0, len(f.inUse[rd]))
++	for n := range f.inUse[rd] {
++		nodes = append(nodes, n)
++	}
++	slices.Sort(nodes)
++	for _, n := range nodes {
++		inUse := f.inUse[rd][n]
++		out = append(out, lapi.ResourceWithVolumes{
++			Resource: lapi.Resource{Name: rd, NodeName: n, State: &lapi.ResourceState{InUse: &inUse}},
++			Volumes:  []lapi.Volume{{VolumeNumber: 0, DevicePath: "/dev/drbd1000", ProviderKind: lapi.LVM_THIN}},
++		})
++	}
++	return out
++}
++
++func (f *fakeController) writeJSON(w http.ResponseWriter, v any) {
++	w.Header().Set("Content-Type", "application/json")
++	_ = json.NewEncoder(w).Encode(v)
++}
++
++func (f *fakeController) ok(w http.ResponseWriter) {
++	f.writeJSON(w, []lapi.ApiCallRc{{RetCode: 0, Message: "ok"}})
++}
++
++func (f *fakeController) notFound(w http.ResponseWriter) {
++	w.WriteHeader(http.StatusNotFound)
++	f.writeJSON(w, []lapi.ApiCallRc{{RetCode: -4611686018427387904, Message: "not found"}})
++}
++
++func (f *fakeController) handler() http.Handler {
++	return f.handlerWith(nil)
++}
++
++func (f *fakeController) handlerWith(extra func(*http.ServeMux)) http.Handler {
++	mux := http.NewServeMux()
++	if extra != nil {
++		extra(mux)
++	}
++
++	mux.HandleFunc("GET /v1/view/resources", func(w http.ResponseWriter, r *http.Request) {
++		f.mu.Lock()
++		defer f.mu.Unlock()
++		var out []lapi.ResourceWithVolumes
++		rds := make([]string, 0, len(f.inUse))
++		for rd := range f.inUse {
++			rds = append(rds, rd)
++		}
++		slices.Sort(rds)
++		for _, rd := range rds {
++			out = append(out, f.resources(rd)...)
++		}
++		f.writeJSON(w, out)
++	})
++
++	mux.HandleFunc("GET /v1/resource-definitions/{rd}/resources", func(w http.ResponseWriter, r *http.Request) {
++		f.mu.Lock()
++		defer f.mu.Unlock()
++		var out []lapi.Resource
++		for _, res := range f.resources(r.PathValue("rd")) {
++			out = append(out, res.Resource)
++		}
++		f.writeJSON(w, out)
++	})
++
++	mux.HandleFunc("POST /v1/resource-definitions/{rd}/resources/{node}/make-available", func(w http.ResponseWriter, r *http.Request) {
++		f.ok(w)
++	})
++
++	mux.HandleFunc("GET /v1/resource-definitions/{rd}", func(w http.ResponseWriter, r *http.Request) {
++		f.mu.Lock()
++		defer f.mu.Unlock()
++		rd := r.PathValue("rd")
++		props, ok := f.rdProps[rd]
++		if !ok {
++			f.notFound(w)
++			return
++		}
++		f.writeJSON(w, lapi.ResourceDefinition{Name: rd, ResourceGroupName: f.rdGroup[rd], Props: props})
++	})
++
++	mux.HandleFunc("PUT /v1/resource-definitions/{rd}", func(w http.ResponseWriter, r *http.Request) {
++		var mod lapi.GenericPropsModify
++		if err := json.NewDecoder(r.Body).Decode(&mod); err != nil {
++			f.t.Errorf("decode RD modify: %v", err)
++		}
++
++		f.mu.Lock()
++		defer f.mu.Unlock()
++		rd := r.PathValue("rd")
++		f.rdWrites++
++
++		primaries := 0
++		for _, inUse := range f.inUse[rd] {
++			if inUse {
++				primaries++
++			}
++		}
++		if primaries > 1 && slices.Contains(mod.DeleteProps, linstor.PropertyAllowTwoPrimaries) {
++			f.refusedAdjusts = append(f.refusedAdjusts, rd)
++		}
++
++		for _, k := range mod.DeleteProps {
++			delete(f.rdProps[rd], k)
++		}
++		for k, v := range mod.OverrideProps {
++			f.rdProps[rd][k] = v
++		}
++		f.ok(w)
++	})
++
++	mux.HandleFunc("GET /v1/resource-groups/{rg}", func(w http.ResponseWriter, r *http.Request) {
++		f.mu.Lock()
++		defer f.mu.Unlock()
++		rg := r.PathValue("rg")
++		f.writeJSON(w, lapi.ResourceGroup{Name: rg, Props: f.rgProps[rg]})
++	})
++
++	mux.HandleFunc("PUT /v1/resource-groups/{rg}", func(w http.ResponseWriter, r *http.Request) {
++		f.ok(w)
++	})
++
++	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
++		f.t.Errorf("unexpected request: %s %s", r.Method, r.URL)
++		f.notFound(w)
++	})
++
++	return mux
++}
++
++// newDualAttachLinstor builds the client the way main does: the regular
++// provider sits behind the resource cache, FreshResources does not.
++func newDualAttachLinstor(t *testing.T, f *fakeController) *Linstor {
++	return newDualAttachLinstorWith(t, f, nil)
++}
++
++func newDualAttachLinstorWith(t *testing.T, f *fakeController, extra func(*http.ServeMux)) *Linstor {
++	srv := httptest.NewServer(f.handlerWith(extra))
++	t.Cleanup(srv.Close)
++
++	u, err := url.Parse(srv.URL)
++	require.NoError(t, err)
++
++	cached, err := lc.NewHighLevelClient(
++		lapi.BaseURL(u),
++		lapicache.WithCaches(&lapicache.ResourceCache{Timeout: time.Hour}),
++	)
++	require.NoError(t, err)
++
++	fresh, err := lc.NewHighLevelClient(lapi.BaseURL(u))
++	require.NoError(t, err)
++
++	return &Linstor{
++		client:         cached,
++		freshResources: fresh.Resources,
++		log:            logrus.WithField("test", t.Name()),
++	}
++}
++
++func dualAttachOverride() map[string]string {
++	return map[string]string{
++		linstor.PropertyAllowTwoPrimaries:   "yes",
++		linstor.PropertyDrbdNetProtocol:     "C",
++		linstor.PropertyCsiProtocolOverride: "yes",
++	}
++}
++
++// migrate runs the CSI side of a live migration up to the point where both
++// ends are Primary and the shared resource cache holds that state, which is
++// what the attach of an unrelated volume a few seconds later leaves behind.
++func migrate(t *testing.T, f *fakeController, l *Linstor) {
++	ctx := context.Background()
++
++	_, err := l.Attach(ctx, dualVol, nodeDst, true)
++	require.NoError(t, err)
++	require.Equal(t, dualAttachOverride(), f.props(dualVol), "attach installs the dual-attach override")
++
++	f.setInUse(dualVol, nodeDst, true)
++
++	require.NoError(t, l.client.Resources.MakeAvailable(ctx, otherVol, nodeDst, lapi.ResourceMakeAvailable{}))
++	_, err = l.client.Resources.GetAll(ctx, otherVol)
++	require.NoError(t, err)
++}
++
++func TestDetach_RevertsDualAttachPastStaleCache(t *testing.T) {
++	f := newFakeController(t)
++	l := newDualAttachLinstor(t, f)
++	migrate(t, f, l)
++
++	// The source lets go; the cache still says it is Primary.
++	f.setInUse(dualVol, nodeSrc, false)
++
++	cached, err := l.client.Resources.GetAll(context.Background(), dualVol)
++	require.NoError(t, err)
++	for _, res := range cached {
++		require.True(t, *res.State.InUse, "precondition: the cache still shows %s Primary", res.NodeName)
++	}
++
++	require.NoError(t, l.Detach(context.Background(), dualVol, nodeSrc))
++
++	assert.Empty(t, f.props(dualVol), "the definition is back to its pre-migration options")
++	assert.Empty(t, f.refusedAdjusts)
++}
++
++func TestDetach_RetriesWhileSourceStillPrimary(t *testing.T) {
++	f := newFakeController(t)
++	l := newDualAttachLinstor(t, f)
++	migrate(t, f, l)
++
++	err := l.Detach(context.Background(), dualVol, nodeSrc)
++	require.Error(t, err, "a detach that cannot revert yet must fail so the external-attacher retries")
++	assert.Equal(t, dualAttachOverride(), f.props(dualVol))
++	assert.Empty(t, f.refusedAdjusts, "two-primaries is not dropped under two Primaries")
++
++	f.setInUse(dualVol, nodeSrc, false)
++
++	require.NoError(t, l.Detach(context.Background(), dualVol, nodeSrc))
++	assert.Empty(t, f.props(dualVol))
++	assert.Empty(t, f.refusedAdjusts)
++}
++
++func TestDetach_RevertsWhenNoPrimaryIsLeft(t *testing.T) {
++	f := newFakeController(t)
++	l := newDualAttachLinstor(t, f)
++	migrate(t, f, l)
++
++	// The VM stopped halfway through the migration.
++	f.setInUse(dualVol, nodeSrc, false)
++	f.setInUse(dualVol, nodeDst, false)
++
++	require.NoError(t, l.Detach(context.Background(), dualVol, nodeSrc))
++	assert.Empty(t, f.props(dualVol))
++}
++
++func TestDetach_KeepsUnmarkedProtocol(t *testing.T) {
++	f := newFakeController(t)
++	l := newDualAttachLinstor(t, f)
++	f.rdProps[dualVol] = map[string]string{
++		linstor.PropertyAllowTwoPrimaries: "yes",
++		linstor.PropertyDrbdNetProtocol:   "C",
++	}
++
++	require.NoError(t, l.Detach(context.Background(), dualVol, nodeDst))
++	assert.Equal(t, map[string]string{linstor.PropertyDrbdNetProtocol: "C"}, f.props(dualVol),
++		"a protocol without the marker was not set by Attach and stays")
++}
++
++func TestDetach_WritesNothingWithoutDualAttachProps(t *testing.T) {
++	f := newFakeController(t)
++	l := newDualAttachLinstor(t, f)
++
++	require.NoError(t, l.Detach(context.Background(), dualVol, nodeDst))
++	assert.Zero(t, f.rdWrites, "a plain detach does not touch the definition")
++}
++
++func TestDualAttachProps(t *testing.T) {
++	cases := []struct {
++		name  string
++		props map[string]string
++		keep  map[string]string
++		want  []string
++	}{
++		{name: "none"},
++		{name: "override", props: dualAttachOverride(), want: []string{linstor.PropertyAllowTwoPrimaries, linstor.PropertyDrbdNetProtocol, linstor.PropertyCsiProtocolOverride}},
++		{name: "unmarked protocol", props: map[string]string{linstor.PropertyAllowTwoPrimaries: "yes", linstor.PropertyDrbdNetProtocol: "C"}, want: []string{linstor.PropertyAllowTwoPrimaries}},
++		{name: "kept", props: dualAttachOverride(), keep: map[string]string{linstor.PropertyAllowTwoPrimaries: "yes"}, want: []string{linstor.PropertyDrbdNetProtocol, linstor.PropertyCsiProtocolOverride}},
++	}
++
++	for _, tc := range cases {
++		t.Run(tc.name, func(t *testing.T) {
++			assert.Equal(t, tc.want, dualAttachProps(tc.props, tc.keep))
++		})
++	}
++}
+diff --git a/pkg/client/linstor.go b/pkg/client/linstor.go
+index 5d71c37..4ecca53 100644
+--- a/pkg/client/linstor.go
++++ b/pkg/client/linstor.go
+@@ -72,6 +72,8 @@ type Linstor struct {
+ 	mounter        mount.Interface
+ 	resizer        *mount.ResizeFs
+ 	labelBySP      bool
++	// freshResources reads resources past the client-side cache.
++	freshResources lapi.ResourceProvider
+ }
+ 
+ // NewLinstor returns a high-level linstor client for CSI applications to interact with
+@@ -125,6 +127,15 @@ func APIClient(c *lc.HighLevelClient) func(*Linstor) error {
+ 	}
+ }
+ 
++// FreshResources sets the resource provider Detach reads attachment state
++// from. It must not go through the client-side resource cache.
++func FreshResources(p lapi.ResourceProvider) func(*Linstor) error {
++	return func(l *Linstor) error {
++		l.freshResources = p
++		return nil
++	}
++}
++
+ // LogOut sets the Linstor client to write logs to the provided io.Writer
+ // instead of discarding logs.
+ func LogOut(out io.Writer) func(*Linstor) error {
+@@ -790,64 +801,125 @@ func (s *Linstor) Detach(ctx context.Context, volId, node string) error {
+ 		"targetNode": node,
+ 	})
+ 
+-	ress, err := s.client.Resources.GetAll(ctx, volId)
++	err := s.revertDualAttach(ctx, volId, node, log)
++	if err != nil {
++		return err
++	}
++
++	vol, err := s.client.Resources.GetVolume(ctx, volId, node, 0)
+ 	if err != nil {
+ 		return nil404(err)
+ 	}
+ 
+-	resInUse := 0
++	createdFor, ok := vol.Props[linstor.PropertyCreatedFor]
++	if !ok || createdFor != linstor.CreatedForTemporaryDisklessAttach {
++		log.Info("resource not temporary (not created by Attach) not deleting")
++		return nil
++	}
+ 
+-	for i := range ress {
+-		if ress[i].State != nil && ress[i].State.InUse != nil && *ress[i].State.InUse {
+-			resInUse++
+-		}
++	if vol.ProviderKind != lapi.DISKLESS {
++		log.Info("temporary resource created by Attach is now diskfull, not deleting")
++		return nil
+ 	}
+ 
+-	if resInUse == 1 {
+-		deleteProps := []string{linstor.PropertyAllowTwoPrimaries}
++	log.Info("removing temporary resource")
++
++	return nil404(s.client.Resources.Delete(ctx, volId, node))
++}
++
++// revertDualAttach undoes what Attach set up for a live migration once at
++// most one node is left Primary, including when none is (the VM stopped
++// halfway through). The external-attacher never calls Detach again after it
++// returns nil, so a revert skipped here is lost for good. That is why the
++// attachment state is read past the client-side resource cache: the cache
++// is shared by every volume, lives for --resource-cache-timeout and is
++// routinely filled while both ends of the migration were still Primary.
++func (s *Linstor) revertDualAttach(ctx context.Context, volId, node string, log *logrus.Entry) error {
++	ress, err := s.currentResources().GetAll(ctx, volId)
++	if err != nil {
++		return nil404(err)
++	}
+ 
+-		// Drop the Protocol=C override only if Attach installed it (gated by
+-		// our marker), so an operator-set Protocol property on the
+-		// resource-definition is preserved.
+-		rd, getErr := s.client.ResourceDefinitions.Get(ctx, volId)
+-		if getErr != nil {
+-			log.WithError(getErr).Warn("failed to fetch resource-definition props; skipping Protocol=C override removal")
+-		} else if rd.Props[linstor.PropertyCsiProtocolOverride] != "" {
+-			log.Info("removing Protocol=C override from resource-definition")
++	selfInUse := false
++	othersInUse := 0
+ 
+-			deleteProps = append(deleteProps,
+-				linstor.PropertyDrbdNetProtocol,
+-				linstor.PropertyCsiProtocolOverride,
+-			)
++	for i := range ress {
++		if ress[i].State == nil || ress[i].State.InUse == nil || !*ress[i].State.InUse {
++			continue
+ 		}
+ 
+-		err = s.client.ResourceDefinitions.Modify(ctx, volId, lapi.GenericPropsModify{
+-			DeleteProps: deleteProps,
+-		})
+-		if err != nil {
+-			return nil404(err)
++		if ress[i].NodeName == node {
++			selfInUse = true
++		} else {
++			othersInUse++
+ 		}
+ 	}
+ 
+-	vol, err := s.client.Resources.GetVolume(ctx, volId, node, 0)
++	switch {
++	case selfInUse && othersInUse > 0:
++		// DRBD refuses to drop two-primaries while both peers are Primary,
++		// so the revert has to wait for this node to let go. Failing makes
++		// the external-attacher retry; succeeding would not.
++		return fmt.Errorf("resource is still Primary on %s and on %d other node(s), retrying once %s is released", node, othersInUse, node)
++	case othersInUse > 1:
++		// Attach never makes more than two nodes Primary: whoever did
++		// still needs the props.
++		return nil
++	}
++
++	return nil404(s.dropDualAttachProps(ctx, volId, nil, log))
++}
++
++// dropDualAttachProps removes the dual-primary permission and, when Attach
++// installed it, the Protocol=C override from a resource-definition. Keys in
++// keep are left alone. It writes nothing when there is nothing to remove,
++// so running it on every detach does not make every satellite adjust.
++func (s *Linstor) dropDualAttachProps(ctx context.Context, volId string, keep map[string]string, log *logrus.Entry) error {
++	rd, err := s.client.ResourceDefinitions.Get(ctx, volId)
+ 	if err != nil {
+-		return nil404(err)
++		return err
+ 	}
+ 
+-	createdFor, ok := vol.Props[linstor.PropertyCreatedFor]
+-	if !ok || createdFor != linstor.CreatedForTemporaryDisklessAttach {
+-		log.Info("resource not temporary (not created by Attach) not deleting")
++	deleteProps := dualAttachProps(rd.Props, keep)
++	if len(deleteProps) == 0 {
+ 		return nil
+ 	}
+ 
+-	if vol.ProviderKind != lapi.DISKLESS {
+-		log.Info("temporary resource created by Attach is now diskfull, not deleting")
+-		return nil
++	log.WithField("props", deleteProps).Info("removing dual-attach props from resource-definition")
++
++	return s.client.ResourceDefinitions.Modify(ctx, volId, lapi.GenericPropsModify{DeleteProps: deleteProps})
++}
++
++// dualAttachProps returns the keys Attach set on a resource-definition for
++// a dual attach that are present in props and not in keep. The protocol is
++// included only together with the marker: a protocol set by an operator, or
++// left by a version of this driver that set no marker, is not ours to drop.
++func dualAttachProps(props, keep map[string]string) []string {
++	var keys []string
++
++	if _, ok := props[linstor.PropertyAllowTwoPrimaries]; ok {
++		keys = append(keys, linstor.PropertyAllowTwoPrimaries)
+ 	}
+ 
+-	log.Info("removing temporary resource")
++	if props[linstor.PropertyCsiProtocolOverride] != "" {
++		keys = append(keys, linstor.PropertyDrbdNetProtocol, linstor.PropertyCsiProtocolOverride)
++	}
+ 
+-	return nil404(s.client.Resources.Delete(ctx, volId, node))
++	return slices.DeleteFunc(keys, func(k string) bool {
++		_, ok := keep[k]
++		return ok
++	})
++}
++
++// currentResources returns the provider that reads resources from the
++// controller rather than from the client-side cache. Without one configured
++// (a client built without caches, as in tests) the regular provider is it.
++func (s *Linstor) currentResources() lapi.ResourceProvider {
++	if s.freshResources != nil {
++		return s.freshResources
++	}
++
++	return s.client.Resources
+ }
+ 
+ // getEffectiveDrbdProtocol returns the DRBD network protocol ("A", "B" or "C")
