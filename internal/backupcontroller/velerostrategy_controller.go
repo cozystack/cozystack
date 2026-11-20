@@ -815,7 +815,7 @@ func (r *RestoreJobReconciler) reconcileVeleroRestore(ctx context.Context, resto
 		// does not act on, so nothing recreates their DataVolumes and the
 		// restored PVCs stay unowned until some later upgrade.
 		disks := restoreDisks(backup, r.restoredUnderlyingResources(ctx, backup, veleroBackupName))
-		if err := r.forceDiskHelmReleases(ctx, restoreJob, target.Namespace, disks); err != nil {
+		if err := r.forceDiskHelmReleases(ctx, restoreJob, target, restoreOpts, disks); err != nil {
 			return ctrl.Result{}, err
 		}
 
@@ -1595,27 +1595,80 @@ func (r *RestoreJobReconciler) restoredUnderlyingResources(ctx context.Context, 
 // under it. An in-place restore updates a HelmRelease that already exists,
 // which leaves its release in sync, so no upgrade follows on its own: the PVC
 // stays unowned, and deleting the VMDisk leaves it and its volume behind.
-// forceAt is honoured only together with an equal requestedAt; a release that
-// is still suspended keeps both and is upgraded once it is resumed. A missing
-// HelmRelease is skipped, since Velero creates one that did not exist and
-// helm-controller installs it.
-func (r *RestoreJobReconciler) forceDiskHelmReleases(ctx context.Context, restoreJob *backupsv1alpha1.RestoreJob, ns string, disks *vmInstanceResources) error {
+// A release that is still suspended keeps the request and is upgraded once it
+// is resumed.
+//
+// A disk is skipped when there is nothing to adopt or nothing to do: its
+// HelmRelease is missing (Velero creates one that did not exist and
+// helm-controller installs it), a forced upgrade is already pending (a retry
+// after a failed status update), or its DataVolume exists. A disk whose PVC
+// Velero did not restore is skipped with a Warning, because the upgrade would
+// have CDI provision an empty disk under the original name while the data sits
+// elsewhere. An error the API server will repeat on every retry is reported
+// the same way rather than holding the RestoreJob Running forever; any other
+// error is returned for a requeue.
+func (r *RestoreJobReconciler) forceDiskHelmReleases(ctx context.Context, restoreJob *backupsv1alpha1.RestoreJob, target restoreTarget, opts RestoreOptions, disks *vmInstanceResources) error {
 	if disks == nil {
 		return nil
 	}
-	patch := helmForceUpgradePatch(time.Now())
 	for _, dv := range disks.DataVolumes {
-		_, err := r.Resource(helmReleaseGVR).Namespace(ns).Patch(ctx, dv.DataVolumeName, types.MergePatchType, patch, metav1.PatchOptions{})
-		if errors.IsNotFound(err) {
+		err := r.forceDiskHelmRelease(ctx, restoreJob, target, opts, dv.DataVolumeName)
+		if err == nil {
 			continue
 		}
-		if err != nil {
-			return fmt.Errorf("failed to request a Helm upgrade of HelmRelease %s/%s: %w", ns, dv.DataVolumeName, err)
+		if !isPermanentAPIError(err) {
+			return err
 		}
-		r.Recorder.Event(restoreJob, corev1.EventTypeNormal, "PostRestore",
-			fmt.Sprintf("Requested a Helm upgrade of HelmRelease %s so the restored disk is owned by its DataVolume again", dv.DataVolumeName))
+		r.Recorder.Event(restoreJob, corev1.EventTypeWarning, "PostRestoreUpgradeFailed",
+			fmt.Sprintf("%v; the restored PVC %s stays without an owner until HelmRelease %s is upgraded", err, dv.DataVolumeName, dv.DataVolumeName))
 	}
 	return nil
+}
+
+func (r *RestoreJobReconciler) forceDiskHelmRelease(ctx context.Context, restoreJob *backupsv1alpha1.RestoreJob, target restoreTarget, opts RestoreOptions, name string) error {
+	ns := target.Namespace
+	hrClient := r.Resource(helmReleaseGVR).Namespace(ns)
+	hr, err := hrClient.Get(ctx, name, metav1.GetOptions{})
+	if errors.IsNotFound(err) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("failed to get HelmRelease %s/%s: %w", ns, name, err)
+	}
+	if helmForcePending(hr) {
+		return nil
+	}
+	_, err = r.Resource(dataVolumeGVR).Namespace(ns).Get(ctx, name, metav1.GetOptions{})
+	if err == nil {
+		return nil
+	}
+	if !errors.IsNotFound(err) {
+		return fmt.Errorf("failed to get DataVolume %s/%s: %w", ns, name, err)
+	}
+	err = r.apiReader().Get(ctx, client.ObjectKey{Namespace: ns, Name: name}, &corev1.PersistentVolumeClaim{})
+	if errors.IsNotFound(err) {
+		msg := fmt.Sprintf("Velero did not restore PVC %s, so HelmRelease %s was not upgraded: the upgrade would provision an empty disk under that name", name, name)
+		if !target.IsCopy && opts.GetKeepOriginalPVC() {
+			msg += fmt.Sprintf("; the data from before the restore is in PVC %s-orig-%s", name, shortHash(restoreJob.Name))
+		}
+		r.Recorder.Event(restoreJob, corev1.EventTypeWarning, "PostRestoreDiskMissing", msg+"; check the disk before the next change to the release")
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("failed to get PVC %s/%s: %w", ns, name, err)
+	}
+	if _, err := hrClient.Patch(ctx, name, types.MergePatchType, helmForceUpgradePatch(time.Now()), metav1.PatchOptions{}); err != nil {
+		return fmt.Errorf("failed to request a Helm upgrade of HelmRelease %s/%s: %w", ns, name, err)
+	}
+	r.Recorder.Event(restoreJob, corev1.EventTypeNormal, "PostRestore",
+		fmt.Sprintf("Requested a Helm upgrade of HelmRelease %s; PVC %s is owned by its DataVolume again once the upgrade succeeds", name, name))
+	return nil
+}
+
+// isPermanentAPIError reports whether the API server will refuse a retry of
+// the same request in the same way, so requeueing it cannot help.
+func isPermanentAPIError(err error) bool {
+	return errors.IsForbidden(err) || errors.IsInvalid(err) || errors.IsBadRequest(err) || errors.IsMethodNotSupported(err)
 }
 
 // suspendHelmRelease sets spec.suspend=true on a HelmRelease.

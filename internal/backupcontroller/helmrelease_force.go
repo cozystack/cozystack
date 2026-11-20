@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"time"
 
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+
 	fluxmeta "github.com/fluxcd/pkg/apis/meta"
 )
 
@@ -17,4 +19,17 @@ func helmForceUpgradePatch(now time.Time) []byte {
 	stamp := now.UTC().Format(time.RFC3339Nano)
 	return fmt.Appendf(nil, `{"metadata":{"annotations":{%q:%q,%q:%q}}}`,
 		fluxmeta.ForceRequestAnnotation, stamp, fluxmeta.ReconcileRequestAnnotation, stamp)
+}
+
+// helmForcePending reports whether hr carries a forced upgrade request that
+// helm-controller has not handled yet, so stamping another one would only
+// queue a second upgrade behind it.
+func helmForcePending(hr *unstructured.Unstructured) bool {
+	ann := hr.GetAnnotations()
+	forceAt := ann[fluxmeta.ForceRequestAnnotation]
+	if forceAt == "" || forceAt != ann[fluxmeta.ReconcileRequestAnnotation] {
+		return false
+	}
+	handled, _, _ := unstructured.NestedString(hr.Object, "status", "lastHandledForceAt")
+	return handled != forceAt
 }
