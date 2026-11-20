@@ -343,7 +343,8 @@ tests:
 
   # The satellite is Ready once its caches sync, minutes before its first
   # adjust pass is done; the Kubernetes default would move to the next node
-  # right then.
+  # right then. The pause covers the pass measured on a test cluster, up
+  # to 160s after Ready for about 110 resources.
   - it: rolls the satellites one node at a time with a pause after Ready
     template: templates/blockstor-satellite.yaml
     documentSelector:
@@ -352,7 +353,7 @@ tests:
     asserts:
       - equal:
           path: spec.minReadySeconds
-          value: 120
+          value: 180
       - equal:
           path: spec.updateStrategy
           value:

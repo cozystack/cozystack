@@ -63,23 +63,29 @@ blockstorSatellite:
     repository: ghcr.io/cozystack/blockstor-satellite
     tag: 0.3.0@sha256:abff381da5425fdf7a6abc0d52006727cf7fe13c438acc79aaea192fc8681cb4
   # How a change to the satellite pod template reaches the nodes. The
-  # satellite turns Ready once its caches have synced, which is seconds
-  # after start and minutes before it has re-rendered and adjusted every
-  # DRBD resource on the node. minReadySeconds holds the rollout on each
-  # node for that long after Ready, so a satellite that fails during its
-  # first adjust pass stops the rollout on one node instead of being
-  # followed by the next. Every node adds it to the rollout, and the
-  # HelmRelease upgrade waits for the whole rollout: see "Upgrading the
-  # blockstor satellites" in README.md before raising it.
-  minReadySeconds: 120
+  # satellite turns Ready once its caches have synced, seconds after
+  # start; its first pass over the node's DRBD resources ends later and
+  # does not show in readiness. minReadySeconds holds the rollout on each
+  # node for that long after Ready, so that first passes on two nodes do
+  # not overlap. 180 covers the passes measured on a test cluster, 1.5 to
+  # 2.7 minutes after Ready for about 110 resources per node; a node with
+  # more resources needs longer.
+  # The pause stops the rollout only if the satellite exits or restarts
+  # within it. A satellite that keeps running while resources fail to
+  # adjust stays Ready, and the next node follows. For an upgrade that
+  # changes how resources are rendered, use OnDelete and the per-node
+  # checks in "Upgrading the blockstor satellites" in README.md.
+  # Every node adds the pause to the rollout, and the HelmRelease upgrade
+  # waits for the whole rollout: see the same section before raising it.
+  minReadySeconds: 180
   updateStrategy:
     # RollingUpdate replaces one node at a time; OnDelete replaces a pod
     # only when it is deleted, for an upgrade checked node by node.
+    # rollingUpdate may be left out: maxUnavailable can only be 1, since
+    # several nodes would run their first passes at once, and maxSurge
+    # only 0, since two satellites on one node would both drive its DRBD
+    # resources. The chart refuses other values.
     type: RollingUpdate
-    rollingUpdate:
-      # Never more than one node at a time. A surge pod is not offered:
-      # two satellites on one node would both drive its DRBD resources.
-      maxUnavailable: 1
 # The Secret, in this namespace, whose MASTER_PASSPHRASE key unlocks the
 # blockstor master key that wraps every LUKS volume password. It is the
 # Secret piraeus reads for LINSTOR, so a cluster migrated from LINSTOR keeps
