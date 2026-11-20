@@ -144,3 +144,16 @@ tests:
       - equal:
           path: metadata.annotations["helm.sh/hook-weight"]
           value: "-10"
+
+  # The deadline counts from the Job's creation, image pull included, and the
+  # kubectl image is not shared with any other release, so it is cold on the
+  # node the first hook lands on.
+  - it: "gives both Jobs time to pull the kubectl image"
+    documentSelector:
+      path: kind
+      value: Job
+      matchMany: true
+    asserts:
+      - equal:
+          path: spec.activeDeadlineSeconds
+          value: 600

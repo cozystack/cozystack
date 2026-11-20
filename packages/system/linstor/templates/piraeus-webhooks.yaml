@@ -112,7 +112,13 @@ metadata:
     helm.sh/hook-weight: "-5"
 spec:
   backoffLimit: 3
-  activeDeadlineSeconds: 120
+  {{- /* The deadline runs from the Job's creation, so it includes pulling
+     the kubectl image, about 320 MB and pinned at this tag by no other
+     release, and so cold on whichever node the hook lands. Two minutes is
+     not enough for that on a slow link, and a hold that fails there has not
+     run the script at all. It only has to stop a kubectl that hangs, and
+     Helm 4 waits out its whole timeout on a failed hook Job either way. */}}
+  activeDeadlineSeconds: 600
   template:
     spec:
       serviceAccountName: piraeus-webhooks
