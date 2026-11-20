@@ -30,6 +30,7 @@ import (
 	backupsv1alpha1 "github.com/cozystack/cozystack/api/backups/v1alpha1"
 	"github.com/cozystack/cozystack/internal/template"
 
+	fluxmeta "github.com/fluxcd/pkg/apis/meta"
 	"github.com/go-logr/logr"
 	velerov1 "github.com/vmware-tanzu/velero/pkg/apis/velero/v1"
 )
@@ -900,6 +901,9 @@ func marshalPatchData(v any) (string, error) {
 //     so adoption of a restored PVC rests on the vm-disk chart annotating the
 //     DataVolume it recreates. Without it, CDI refuses that DataVolume unless
 //     the DataVolumeClaimAdoption feature gate is on.
+//   - HelmRelease request stamps: drops the reconcile.fluxcd.io requests a
+//     backed-up HelmRelease carries, so a stale forced upgrade cannot run
+//     while the restore is still in progress.
 //   - OVN IP/MAC: sets OVN annotations on the VirtualMachine for correct ssh access to restored VM.
 func (r *RestoreJobReconciler) createResourceModifiersConfigMap(ctx context.Context, restoreJob *backupsv1alpha1.RestoreJob, backup *backupsv1alpha1.Backup, ur *runtime.RawExtension, target restoreTarget, opts RestoreOptions) (*corev1.ConfigMap, error) {
 	logger := getLogger(ctx)
@@ -953,6 +957,32 @@ func (r *RestoreJobReconciler) createResourceModifiersConfigMap(ctx context.Cont
 			MergePatches: []mergePatch{{PatchData: pvcStripPatch}},
 		})
 	}
+
+	// A HelmRelease backed up after an earlier restore carries the forceAt and
+	// requestedAt pair stamped then. Written back by a later restore, the pair
+	// no longer matches lastHandledForceAt, so helm-controller would run a
+	// forced upgrade as soon as Velero resumes the release, while the restore
+	// is still running and before the restored PVC is guaranteed to exist.
+	// The upgrade an in-place restore needs is requested once it completes.
+	hrPatch, err := marshalPatchData(map[string]any{
+		"metadata": map[string]any{
+			"annotations": map[string]any{
+				fluxmeta.ReconcileRequestAnnotation: nil,
+				fluxmeta.ForceRequestAnnotation:     nil,
+			},
+		},
+	})
+	if err != nil {
+		return nil, err
+	}
+	rules = append(rules, resourceModifierRule{
+		Conditions: resourceModifierConditions{
+			GroupResource:     "helmreleases.helm.toolkit.fluxcd.io",
+			ResourceNameRegex: ".*",
+			Namespaces:        []string{targetNS},
+		},
+		MergePatches: []mergePatch{{PatchData: hrPatch}},
+	})
 
 	// OVN IP/MAC annotations on VirtualMachine for correct network identity after restore.
 	// Only applied when keepOriginalIpAndMac is true; for restore-to-copy the copy

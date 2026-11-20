@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -21,6 +22,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	clientfake "sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
+	"sigs.k8s.io/yaml"
 
 	strategyv1alpha1 "github.com/cozystack/cozystack/api/backups/strategy/v1alpha1"
 	backupsv1alpha1 "github.com/cozystack/cozystack/api/backups/v1alpha1"
@@ -1386,6 +1388,54 @@ func TestCreateResourceModifiersConfigMap_Copy_NoOVN(t *testing.T) {
 	// Should NOT contain OVN annotations (keepOriginalIpAndMac=false)
 	if containsString(rulesYAML, ovnIPAnnotation) {
 		t.Error("OVN IP annotation should not be present when keepOriginalIpAndMac=false")
+	}
+}
+
+// A HelmRelease backed up after an earlier restore carries that restore's
+// forced upgrade request; written back unhandled, it would have
+// helm-controller upgrade the release while the restore is still running.
+func TestCreateResourceModifiersConfigMap_StripsHelmReleaseRequests(t *testing.T) {
+	for _, isCopy := range []bool{false, true} {
+		ns := "tenant-root"
+		restoreJob := makeTestRestoreJob(ns, "rj-hr")
+		backup := makeTestBackup(ns, "test-vm", "VMInstance")
+		target := restoreTarget{Namespace: ns, AppName: "test-vm", AppKind: "VMInstance", IsCopy: isCopy}
+		reconciler := newTestRestoreJobReconciler(t, restoreJob, backup)
+
+		cm, err := reconciler.createResourceModifiersConfigMap(context.Background(), restoreJob, backup, makeVMInstanceUR("", "", nil), target, RestoreOptions{})
+		if err != nil {
+			t.Fatalf("createResourceModifiersConfigMap() error = %v", err)
+		}
+		var mods resourceModifiers
+		if err := yaml.Unmarshal([]byte(cm.Data["resource-modifier-rules.yaml"]), &mods); err != nil {
+			t.Fatalf("unmarshal rules: %v", err)
+		}
+		var found bool
+		for _, rule := range mods.ResourceModifierRules {
+			if rule.Conditions.GroupResource != "helmreleases.helm.toolkit.fluxcd.io" {
+				continue
+			}
+			found = true
+			if !slices.Contains(rule.Conditions.Namespaces, ns) {
+				t.Errorf("copy=%v: HelmRelease rule namespaces = %v, want %s", isCopy, rule.Conditions.Namespaces, ns)
+			}
+			var patch map[string]map[string]map[string]any
+			if len(rule.MergePatches) != 1 {
+				t.Fatalf("copy=%v: HelmRelease rule merge patches = %d, want 1", isCopy, len(rule.MergePatches))
+			}
+			if err := yaml.Unmarshal([]byte(rule.MergePatches[0].PatchData), &patch); err != nil {
+				t.Fatalf("unmarshal patch: %v", err)
+			}
+			ann := patch["metadata"]["annotations"]
+			for _, key := range []string{"reconcile.fluxcd.io/forceAt", "reconcile.fluxcd.io/requestedAt"} {
+				if v, ok := ann[key]; !ok || v != nil {
+					t.Errorf("copy=%v: patch annotation %s = %v (present %v), want null", isCopy, key, v, ok)
+				}
+			}
+		}
+		if !found {
+			t.Errorf("copy=%v: no HelmRelease rule in %s", isCopy, cm.Data["resource-modifier-rules.yaml"])
+		}
 	}
 }
 
