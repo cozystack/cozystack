@@ -15,6 +15,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -1376,4 +1377,145 @@ func (f *fakeS3Bucket) StatObject(_ context.Context, _, key string) (int64, erro
 		}
 	}
 	return 0, errors.New("not found")
+}
+
+// orphanedCleanupBackup is cleanupBackup made of a run that stored to s3,
+// as status.underlyingResources records it.
+func orphanedCleanupBackup(t *testing.T, s3 *strategyv1alpha1.MariaDBS3Template, dumpFile string) *backupsv1alpha1.Backup {
+	t.Helper()
+	rendered := newRenderedMariaDBTemplate()
+	rendered.Storage.S3 = s3
+	snap, err := marshalMariaDBBackupSnapshot(rendered, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	backup := cleanupBackup(dumpFile)
+	backup.Status.UnderlyingResources = snap
+	return backup
+}
+
+func cleanupStorage() *strategyv1alpha1.MariaDBS3Template {
+	s3 := newRenderedMariaDBTemplate().Storage.S3
+	s3.Prefix = "tenant/db"
+	return s3
+}
+
+func cleanupDumpListing() *fakeS3Bucket {
+	return &fakeS3Bucket{objects: []s3ObjectInfo{{Key: cleanupPrefix + cleanupDumpName, LastModified: cleanupCreated.Add(2 * time.Minute)}}}
+}
+
+// Namespace teardown deletes the operator Backup, which carries no
+// finalizer, before the Backup's finalizer runs; the tenant's own Secrets
+// go with it, so only the platform credentials reach the dump.
+func TestCleanupMariaDBBackup_GoneOperatorBackupDeletesTheRecordedDumpOnThePlatformBucket(t *testing.T) {
+	bucket := cleanupDumpListing()
+	r, rec := cleanupReconciler(t, bucket, tenantNamespace(), platformCredsSecret("bkt", "s3.new.example"))
+	r.CredentialsConfig = platformCredsConfig("https://s3.new.example")
+
+	res, err := r.cleanupMariaDBBackup(context.Background(), orphanedCleanupBackup(t, cleanupStorage(), cleanupDumpName))
+	if err != nil || requeues(res) {
+		t.Fatalf("got res=%+v err=%v, want the Backup released", res, err)
+	}
+	if want := "bkt/" + cleanupPrefix + cleanupDumpName; len(bucket.removed) != 1 || bucket.removed[0] != want {
+		t.Errorf("removed %v, want [%s]", bucket.removed, want)
+	}
+	for _, conn := range bucket.conns {
+		if conn.Endpoint != "s3.new.example" || conn.AccessKey != "PLATFORM" {
+			t.Errorf("connection = %+v, want the platform's endpoint and keys", conn)
+		}
+	}
+	if events := drainEvents(rec); hasEvent(events, "Warning ArtifactNotDeleted") {
+		t.Errorf("events = %v, want no ArtifactNotDeleted", events)
+	}
+}
+
+func TestCleanupMariaDBBackup_GoneOperatorBackupWithTheDumpAlreadyGone(t *testing.T) {
+	bucket := &fakeS3Bucket{}
+	r, rec := cleanupReconciler(t, bucket, tenantNamespace(), platformCredsSecret("bkt", "s3.new.example"))
+	r.CredentialsConfig = platformCredsConfig("https://s3.new.example")
+
+	res, err := r.cleanupMariaDBBackup(context.Background(), orphanedCleanupBackup(t, cleanupStorage(), cleanupDumpName))
+	if err != nil || requeues(res) || len(bucket.removed) != 0 {
+		t.Fatalf("got res=%+v err=%v removed=%v, want released with nothing deleted", res, err, bucket.removed)
+	}
+	if events := drainEvents(rec); !hasEvent(events, "Normal ArtifactAlreadyAbsent") {
+		t.Errorf("events = %v, want a Normal ArtifactAlreadyAbsent", events)
+	}
+}
+
+func TestCleanupMariaDBBackup_GoneOperatorBackupWithAContestedDumpIsReleased(t *testing.T) {
+	bucket := cleanupDumpListing()
+	running := cleanupOperatorBackup(t)
+	running.Name = "op-running"
+	running.Status.Conditions = nil
+	r, rec := cleanupReconciler(t, bucket, running, tenantNamespace(), platformCredsSecret("bkt", "s3.new.example"))
+	r.CredentialsConfig = platformCredsConfig("https://s3.new.example")
+
+	res, err := r.cleanupMariaDBBackup(context.Background(), orphanedCleanupBackup(t, cleanupStorage(), cleanupDumpName))
+	if err != nil || requeues(res) || len(bucket.removed) != 0 {
+		t.Fatalf("got res=%+v err=%v removed=%v, want released with nothing deleted", res, err, bucket.removed)
+	}
+	if events := drainEvents(rec); !hasEvent(events, "Warning ArtifactNotDeleted") {
+		t.Errorf("events = %v, want a Warning ArtifactNotDeleted", events)
+	}
+}
+
+func TestCleanupMariaDBBackup_GoneOperatorBackupFailedDeleteRetries(t *testing.T) {
+	bucket := cleanupDumpListing()
+	bucket.removeErr = errors.New("connection refused")
+	r, rec := cleanupReconciler(t, bucket, tenantNamespace(), platformCredsSecret("bkt", "s3.new.example"))
+	r.CredentialsConfig = platformCredsConfig("https://s3.new.example")
+
+	res, err := r.cleanupMariaDBBackup(context.Background(), orphanedCleanupBackup(t, cleanupStorage(), cleanupDumpName))
+	if err != nil || !requeues(res) {
+		t.Fatalf("got res=%+v err=%v, want the Backup held for a retry", res, err)
+	}
+	if events := drainEvents(rec); !hasEvent(events, "Warning ArtifactCleanupFailed") {
+		t.Errorf("events = %v, want a Warning ArtifactCleanupFailed", events)
+	}
+}
+
+func TestCleanupMariaDBBackup_GoneOperatorBackupReleasesWhatItCannotReach(t *testing.T) {
+	ownCreds := cleanupStorage()
+	ownCreds.AccessKeyIDSecretKeyRef.Name = "own-creds"
+	otherBucket := cleanupStorage()
+	otherBucket.Bucket = "tenant-own-bucket"
+	onVolume := cleanupBackup(cleanupDumpName)
+	onVolume.Status.UnderlyingResources = &runtime.RawExtension{Raw: []byte(
+		`{"kind":"` + mariadbBackupSnapshotKind + `","storage":{"persistentVolumeClaim":{"accessModes":["ReadWriteOnce"]}}}`)}
+	foreignKind := orphanedCleanupBackup(t, cleanupStorage(), cleanupDumpName)
+	foreignKind.Status.UnderlyingResources.Raw = []byte(strings.Replace(string(foreignKind.Status.UnderlyingResources.Raw),
+		mariadbBackupSnapshotKind, "SomethingElse", 1))
+	cases := map[string]struct {
+		backup   *backupsv1alpha1.Backup
+		platform bool
+	}{
+		"no dump recorded":          {backup: orphanedCleanupBackup(t, cleanupStorage(), ""), platform: true},
+		"no storage snapshot":       {backup: cleanupBackup(cleanupDumpName), platform: true},
+		"another bucket":            {backup: orphanedCleanupBackup(t, otherBucket, cleanupDumpName), platform: true},
+		"the tenant's own Secret":   {backup: orphanedCleanupBackup(t, ownCreds, cleanupDumpName), platform: true},
+		"platform credentials gone": {backup: orphanedCleanupBackup(t, cleanupStorage(), cleanupDumpName)},
+		"dump on a volume":          {backup: onVolume, platform: true},
+		"recorded name not a dump":  {backup: orphanedCleanupBackup(t, cleanupStorage(), "backup.tar"), platform: true},
+		"snapshot of another kind":  {backup: foreignKind, platform: true},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			bucket := cleanupDumpListing()
+			objs := []client.Object{tenantNamespace(), s3CredsSecret("tenant", "creds")}
+			if tc.platform {
+				objs = append(objs, platformCredsSecret("bkt", "s3.new.example"))
+			}
+			r, rec := cleanupReconciler(t, bucket, objs...)
+			r.CredentialsConfig = platformCredsConfig("https://s3.new.example")
+
+			res, err := r.cleanupMariaDBBackup(context.Background(), tc.backup)
+			if err != nil || requeues(res) || len(bucket.removed) != 0 {
+				t.Fatalf("got res=%+v err=%v removed=%v, want released with nothing deleted", res, err, bucket.removed)
+			}
+			if events := drainEvents(rec); !hasEvent(events, "Warning ArtifactNotDeleted") {
+				t.Errorf("events = %v, want a Warning ArtifactNotDeleted", events)
+			}
+		})
+	}
 }
