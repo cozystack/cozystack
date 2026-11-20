@@ -69,6 +69,10 @@ spec:
             # The nodes read their certificates from Secrets through the
             # Kubernetes API (Strimzi's strimzisecrets config provider).
             policy.cozystack.io/allow-to-apiserver: "true"
+      kafkaContainer:
+        env:
+          - name: JAVA_TOOL_OPTIONS
+            value: {{ include "kafka.javaToolOptions" . | quote }}
     metricsConfig:
       type: jmxPrometheusExporter
       valueFrom:
@@ -106,3 +110,11 @@ spec:
           labels:
             policy.cozystack.io/allow-to-apiserver: "true"
         enableServiceLinks: false
+      topicOperatorContainer:
+        env:
+          - name: JAVA_TOOL_OPTIONS
+            value: {{ include "kafka.javaToolOptions" . | quote }}
+      userOperatorContainer:
+        env:
+          - name: JAVA_TOOL_OPTIONS
+            value: {{ include "kafka.javaToolOptions" . | quote }}

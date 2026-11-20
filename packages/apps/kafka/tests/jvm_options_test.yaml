@@ -1,0 +1,29 @@
+suite: Kafka JVM options
+
+templates:
+  - templates/kafka.yaml
+
+tests:
+  - it: disables the Base64 intrinsics on the Kafka nodes and both entity operators
+    release:
+      name: test-kafka
+      namespace: tenant-test
+    asserts:
+      - contains:
+          path: spec.kafka.template.kafkaContainer.env
+          content:
+            name: JAVA_TOOL_OPTIONS
+            value: "-XX:-UseBASE64Intrinsics"
+      - contains:
+          path: spec.entityOperator.template.topicOperatorContainer.env
+          content:
+            name: JAVA_TOOL_OPTIONS
+            value: "-XX:-UseBASE64Intrinsics"
+      - contains:
+          path: spec.entityOperator.template.userOperatorContainer.env
+          content:
+            name: JAVA_TOOL_OPTIONS
+            value: "-XX:-UseBASE64Intrinsics"
+      # jvmOptions -XX would replace the G1 tuning of kafka-run-class.sh
+      - notExists:
+          path: spec.kafka.jvmOptions
