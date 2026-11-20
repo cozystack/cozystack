@@ -78,3 +78,33 @@ tests:
       - equal:
           path: spec.values.fluent-bit.daemonSetVolumes[0].name
           value: varlog
+
+  - it: adds extra destinations through valuesOverride without dropping the tenant ones
+    set:
+      addons.monitoringAgents.valuesOverride:
+        vmagent:
+          extraRemoteWrite:
+            - url: https://metrics.example.org/api/v1/write
+        fluent-bit:
+          config:
+            extraOutputs: |
+              [OUTPUT]
+                  Name stdout
+                  Match *
+    asserts:
+      - equal:
+          path: spec.values.vmagent.remoteWrite.urls
+          value:
+            - http://vminsert-shortterm.tenant-root.svc.cozy.local:8480/insert/0/prometheus
+      - equal:
+          path: spec.values.vmagent.extraRemoteWrite
+          value:
+            - url: https://metrics.example.org/api/v1/write
+      - matchRegex:
+          path: spec.values.fluent-bit.config.outputs
+          pattern: 'Host vlinsert-generic\.tenant-root\.svc\.cozy\.local'
+      # The outputs string is rendered again by the fluent-bit subchart,
+      # which is where extraOutputs gets appended.
+      - matchRegex:
+          path: spec.values.fluent-bit.config.outputs
+          pattern: '\{\{- with \.Values\.config\.extraOutputs \}\}\n\{\{ \. \}\}\n\{\{- end \}\}'
