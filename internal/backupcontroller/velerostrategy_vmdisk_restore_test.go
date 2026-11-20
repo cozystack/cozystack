@@ -25,6 +25,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	clientfake "sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
+	"sigs.k8s.io/yaml"
 
 	strategyv1alpha1 "github.com/cozystack/cozystack/api/backups/strategy/v1alpha1"
 	backupsv1alpha1 "github.com/cozystack/cozystack/api/backups/v1alpha1"
@@ -125,9 +126,10 @@ func TestCreateVeleroRestore_VMDiskKeepsStrategySelector(t *testing.T) {
 	}
 }
 
-// Velero fails validation of a Restore whose resource modifier ConfigMap has
-// no rules, and an in-place VMDisk restore has none to apply.
-func TestCreateVeleroRestore_InPlaceVMDiskHasNoResourceModifier(t *testing.T) {
+// An in-place VMDisk restore has no PVC or VirtualMachine to patch, so the
+// only rule its resource modifier carries is the one that strips stale Flux
+// requests from the restored HelmRelease.
+func TestCreateVeleroRestore_InPlaceVMDiskModifiesOnlyHelmReleases(t *testing.T) {
 	s := vmDiskTestScheme()
 	ns := "tenant-root"
 	backup := makeTestBackup(ns, "data", vmDiskAppKind)
@@ -144,12 +146,20 @@ func TestCreateVeleroRestore_InPlaceVMDiskHasNoResourceModifier(t *testing.T) {
 	if err := c.List(context.Background(), restores, client.InNamespace(veleroNamespace)); err != nil || len(restores.Items) != 1 {
 		t.Fatalf("list Velero Restores: %v (%d items)", err, len(restores.Items))
 	}
-	if rm := restores.Items[0].Spec.ResourceModifier; rm != nil {
-		t.Errorf("Velero Restore references resource modifier %q, want none", rm.Name)
+	rm := restores.Items[0].Spec.ResourceModifier
+	if rm == nil {
+		t.Fatalf("Velero Restore references no resource modifier")
 	}
-	cms := &corev1.ConfigMapList{}
-	if err := c.List(context.Background(), cms, client.InNamespace(veleroNamespace)); err != nil || len(cms.Items) != 0 {
-		t.Errorf("list ConfigMaps: %v (%d items), want none", err, len(cms.Items))
+	cm := &corev1.ConfigMap{}
+	if err := c.Get(context.Background(), client.ObjectKey{Namespace: veleroNamespace, Name: rm.Name}, cm); err != nil {
+		t.Fatalf("get resource modifier ConfigMap: %v", err)
+	}
+	var mods resourceModifiers
+	if err := yaml.Unmarshal([]byte(cm.Data["resource-modifier-rules.yaml"]), &mods); err != nil {
+		t.Fatalf("unmarshal rules: %v", err)
+	}
+	if len(mods.ResourceModifierRules) != 1 || mods.ResourceModifierRules[0].Conditions.GroupResource != "helmreleases.helm.toolkit.fluxcd.io" {
+		t.Errorf("resource modifier rules = %+v, want the HelmRelease rule alone", mods.ResourceModifierRules)
 	}
 }
 
