@@ -106,6 +106,7 @@ EOF
   cat >"$FIX/bin/chainsaw" <<'EOF'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >>"$FIX/chainsaw-calls"
+printf '%s\n' "${COZY_WORKER_UPGRADE_DEADLINE:-}" >>"$FIX/chainsaw-deadlines"
 while [ $# -gt 0 ]; do
   case $1 in
     --report-path) path=$2; shift 2 ;;
@@ -121,6 +122,8 @@ case ${name##*/} in
 esac
 base=${name%.xml}
 if [ -f "$FIX/leak-after-$base" ]; then cp "$FIX/leak-after-$base" "$FIX/pods.json"; fi
+if [ -f "$FIX/hang-$base" ]; then exec sleep 30; fi
+if [ -f "$FIX/stubborn-$base" ]; then trap '' TERM; sleep 60; fi
 printf '<testsuites name="chainsaw-report" time="1.5" tests="1">\n  <testsuite name="%s" tests="1" failures="0" errors="0" id="0" time="">\n    <testcase name="%s" classname="" time="1.5"></testcase>\n  </testsuite>\n</testsuites>' "$base" "$base" >"$file"
 exit 0
 EOF
@@ -534,6 +537,24 @@ EOF
   rm -rf "$FIX"
 }
 
+@test "an unchecked suite fails the merged report like a leaked one, with its recorded reason" {
+  new_fixture
+  mkdir -p "$FIX/r"
+  for suite in up down plain; do
+    printf '<testsuites name="chainsaw-report" time="1" tests="1" failures="0">\n  <testsuite name="%s" tests="1" failures="0" errors="0" id="0" time="">\n    <testcase name="%s" classname="" time="1"></testcase>\n  </testsuite>\n</testsuites>\n' "$suite" "$suite" >"$FIX/r/$suite.xml"
+  done
+  printf '%s\n' 'the upgrade failed before it recorded its platform roots' >"$FIX/r/up.unchecked"
+  : >"$FIX/r/down.leaked"
+  : >"$FIX/r/plain.unchecked"
+  lg lg_merge_reports "$FIX/r" up down plain >"$FIX/merged.xml"
+  head -n 1 "$FIX/merged.xml" | grep -Fq 'failures="3"'
+  grep -Fq 'the upgrade failed before it recorded its platform roots' "$FIX/merged.xml"
+  grep -Fq 'the leak guard failed this suite' "$FIX/merged.xml"
+  grep -Fq 'the leak guard could not read the cluster after this suite' "$FIX/merged.xml"
+  python3 -c 'import sys, xml.dom.minidom; xml.dom.minidom.parse(sys.argv[1])' "$FIX/merged.xml"
+  rm -rf "$FIX"
+}
+
 @test "the runner fails a leaking suite and still runs and reports every other suite" {
   new_fixture
   mkdir -p "$FIX/root/aaa" "$FIX/root/bbb" "$FIX/root/_lib"
@@ -551,6 +572,78 @@ EOF
   echo "$out" | grep -Fq 'leak-guard: suite=bbb clear after'
   grep -Fq 'leak-guard' "$FIX/root/chainsaw-report.xml"
   grep -Fq '<testsuite name="bbb"' "$FIX/root/chainsaw-report.xml"
+  rm -rf "$FIX"
+}
+
+@test "a required run stops a suite still running at the job deadline and runs nothing after it" {
+  new_fixture
+  mkdir -p "$FIX/root/kubernetes-latest" "$FIX/root/bbb"
+  : >"$FIX/root/kubernetes-latest/chainsaw-test.yaml"
+  : >"$FIX/root/bbb/chainsaw-test.yaml"
+  printf '# none\n' >"$FIX/allow"
+  pods "$FIX/pods.json" "$(platform)"
+  : >"$FIX/hang-kubernetes-latest"
+  rc=0
+  started=$(date +%s)
+  out=$(cd "$FIX/root" && PATH="$FIX/bin:$PATH" COZY_LEAK_ALLOWLIST="$FIX/allow" COZY_LEAK_BUDGET=1 \
+    COZY_WORKER_UPGRADE_MODE=required COZY_WORKER_UPGRADE_DEADLINE=$((started + 4)) \
+    bash "$LG_RUN" bbb kubernetes-latest 2>&1) || rc=$?
+  [ "$rc" -eq 1 ]
+  [ "$(( $(date +%s) - started ))" -lt 20 ]
+  [ "$(wc -l <"$FIX/chainsaw-calls")" -eq 1 ]
+  grep -Fq 'required upgrade job budget ran out while this suite was running' "$FIX/root/chainsaw-report.xml"
+  grep -Fq '<testsuite name="bbb"' "$FIX/root/chainsaw-report.xml"
+  rm -rf "$FIX"
+}
+
+@test "a required suite sees the deadline its own bound ends at, not the job's" {
+  new_fixture
+  mkdir -p "$FIX/root/kubernetes-latest"
+  : >"$FIX/root/kubernetes-latest/chainsaw-test.yaml"
+  printf '# none\n' >"$FIX/allow"
+  pods "$FIX/pods.json" "$(platform)"
+  deadline=$(( $(date +%s) + 3600 ))
+  rc=0
+  (cd "$FIX/root" && PATH="$FIX/bin:$PATH" COZY_LEAK_ALLOWLIST="$FIX/allow" COZY_LEAK_BUDGET=300 \
+    COZY_WORKER_UPGRADE_MODE=required COZY_WORKER_UPGRADE_DEADLINE=$deadline \
+    bash "$LG_RUN" kubernetes-latest >/dev/null 2>&1) || rc=$?
+  [ "$(cat "$FIX/chainsaw-deadlines")" = "$((deadline - 300))" ]
+  rm -rf "$FIX"
+}
+
+@test "a suite that ignores the deadline signal is killed and still reported as out of budget" {
+  new_fixture
+  mkdir -p "$FIX/root/kubernetes-latest"
+  : >"$FIX/root/kubernetes-latest/chainsaw-test.yaml"
+  printf '# none\n' >"$FIX/allow"
+  pods "$FIX/pods.json" "$(platform)"
+  : >"$FIX/stubborn-kubernetes-latest"
+  rc=0
+  out=$(cd "$FIX/root" && PATH="$FIX/bin:$PATH" COZY_LEAK_ALLOWLIST="$FIX/allow" COZY_LEAK_BUDGET=1 \
+    COZY_WORKER_UPGRADE_MODE=required COZY_WORKER_UPGRADE_DEADLINE=$(( $(date +%s) + 3 )) \
+    bash "$LG_RUN" kubernetes-latest 2>&1) || rc=$?
+  [ "$rc" -eq 1 ]
+  grep -Fq 'required upgrade job budget ran out while this suite was running' "$FIX/root/chainsaw-report.xml"
+  rm -rf "$FIX"
+}
+
+@test "a required run past its job deadline starts no suite and reports them as not run" {
+  new_fixture
+  mkdir -p "$FIX/root/kubernetes-latest" "$FIX/root/bbb"
+  : >"$FIX/root/kubernetes-latest/chainsaw-test.yaml"
+  : >"$FIX/root/bbb/chainsaw-test.yaml"
+  printf '# none\n' >"$FIX/allow"
+  pods "$FIX/pods.json" "$(platform)"
+  rc=0
+  out=$(cd "$FIX/root" && PATH="$FIX/bin:$PATH" COZY_LEAK_ALLOWLIST="$FIX/allow" COZY_LEAK_BUDGET=1 \
+    COZY_WORKER_UPGRADE_MODE=required COZY_WORKER_UPGRADE_DEADLINE=$(( $(date +%s) + 1 )) \
+    bash "$LG_RUN" bbb kubernetes-latest 2>&1) || rc=$?
+  [ "$rc" -eq 1 ]
+  [ ! -e "$FIX/chainsaw-calls" ]
+  grep -Fq 'required upgrade job budget exhausted; suite not run' "$FIX/root/chainsaw-report.xml"
+  grep -Fq '<testsuite name="bbb"' "$FIX/root/chainsaw-report.xml"
+  grep -Fq 'suite not run: required upgrade job budget exhausted' "$FIX/root/chainsaw-report.xml"
+  if grep -Fq 'chainsaw wrote no report' "$FIX/root/chainsaw-report.xml"; then echo "FAIL: a suite that never started is reported as run without a report"; false; fi
   rm -rf "$FIX"
 }
 

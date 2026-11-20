@@ -5632,6 +5632,11 @@ run_kubernetes_test() {
     # The previous-version suite leaves it empty because OIDC is feature
     # coverage, not a compatibility matrix that justifies another upgrade.
     local enable_oidc="${5:-}"
+    local worker_replicas=2 worker_max_replicas=10
+    if [ "${COZY_WORKER_UPGRADE_MODE:-off}" = required ] && [ "$test_name" = test-latest-version ]; then
+      worker_replicas=1
+      worker_max_replicas=1
+    fi
     # The previous suite's baseline must not survive into this suite's cleanup
     # when this run fails before recording its own.
     rm -f -- "$(_cozy_linstor_pool_baseline_file)" || return 1
@@ -5833,8 +5838,8 @@ ${talos_block}
   # KubeVirt's guest-console-log container, the only artifact that covers that
   # window.
   logSerialConsole: true
-  maxReplicas: 10
-  minReplicas: 2
+  maxReplicas: ${worker_max_replicas}
+  minReplicas: ${worker_replicas}
   # Headroom above the vCPU count, where KubeVirt would otherwise put the
   # ceiling. Workers failing to join (cozystack/cozystack#3513) have been
   # measured burning their vCPU threads flat out at a ceiling equal to their
@@ -5863,6 +5868,9 @@ ${talos_block}
   storageClass: "${storage_class}"
   version: "${k8s_version}"
 EOF
+  if [ "${COZY_WORKER_UPGRADE_MODE:-off}" = required ] && [ "$test_name" = test-latest-version ]; then
+    cozy_worker_upgrade_create_custom "$test_name" || return 1
+  fi
   # Wait for the tenant-test namespace to be active
   kubectl wait namespace tenant-test --timeout=20s --for=jsonpath='{.status.phase}'=Active
 
@@ -5909,7 +5917,7 @@ EOF
   # Secrets (talos-secrets, talos-ca, k8s ca, apiserver Service ClusterIP)
   # all exist; cold-start in a fresh CI sandbox pushes the time to first
   # MachineSet scale-up past the old 1m budget.
-  kubectl_wait_retry machinedeployment kubernetes-${test_name}-md0 -n tenant-test --timeout=5m --for=jsonpath='{.status.replicas}'=2
+  kubectl_wait_retry machinedeployment kubernetes-${test_name}-md0 -n tenant-test --timeout=5m --for=jsonpath='{.status.replicas}'="$worker_replicas"
   # Get the admin kubeconfig and save it to a file
   kubectl get secret kubernetes-${test_name}-admin-kubeconfig -ojsonpath='{.data.super-admin\.conf}' -n tenant-test | base64 -d > "tenantkubeconfig-${test_name}"
 
@@ -6429,7 +6437,7 @@ EOF
   # Named at v1beta1: status.v1beta2.readyReplicas exists only there, and a bare
   # resource name follows whichever version the cluster prefers, which is
   # v1beta2 from Cluster API v1.11. v1beta1 is served until v1.16.
-  kubectl wait machinedeployments.v1beta1.cluster.x-k8s.io kubernetes-${test_name}-md0 -n tenant-test --timeout=10m --for=jsonpath='{.status.v1beta2.readyReplicas}'=2
+  kubectl wait machinedeployments.v1beta1.cluster.x-k8s.io kubernetes-${test_name}-md0 -n tenant-test --timeout=10m --for=jsonpath='{.status.v1beta2.readyReplicas}'="$worker_replicas"
 
   for component in cilium coredns csi vsnap-crd; do
       kubectl wait hr "kubernetes-${test_name}-${component}" -n tenant-test --timeout=5m --for=condition=ready

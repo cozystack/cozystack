@@ -1,0 +1,6 @@
+{
+  "source": "6b755a4420908d6899837f7c93d88b56f14ff9b3",
+  "operatorImage": "iad.ocir.io/idyksih5sir9/cozystack/cozystack-operator:pr-4902-6b755a4420908d6899837f7c93d88b56f14ff9b3@sha256:e595c8330ea63d90f1bf171dae159f0b3c5b63a67558697254940468c2a6a0c8",
+  "packagesURL": "oci://iad.ocir.io/idyksih5sir9/cozystack/cozystack-packages",
+  "packagesRef": "digest=sha256:08d777a1c13e42ddc476b0ef4dd2c310f870baf6ebfff52de31744f5e7f010b4"
+}
