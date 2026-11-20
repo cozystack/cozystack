@@ -1,0 +1,45 @@
+suite: repository copies the live source whatever observedDigest the operator stamps
+# cozystack-operator writes sourceRef.observedDigest only to make helm-controller
+# render this release again; the copy must not depend on it or carry it.
+templates:
+  - templates/repository.yaml
+release:
+  name: cozystack-platform
+  namespace: cozy-system
+scheme: &scheme
+  "source.toolkit.fluxcd.io/v1/OCIRepository":
+    gvr:
+      group: source.toolkit.fluxcd.io
+      version: v1
+      resource: ocirepositories
+    namespaced: true
+source: &source
+  kind: OCIRepository
+  apiVersion: source.toolkit.fluxcd.io/v1
+  metadata:
+    name: cozystack-platform
+    namespace: cozy-system
+  spec:
+    url: oci://mirror.example.test/cozystack-packages
+    secretRef:
+      name: rotated-pull-secret
+tests:
+  - it: copies the current source spec into cozystack-packages when the stamp is set
+    set:
+      sourceRef:
+        observedDigest: sha256:0123456789abcdef@cozystack-platform=2
+    kubernetesProvider:
+      scheme: *scheme
+      objects: [*source]
+    asserts:
+      - containsDocument:
+          apiVersion: source.toolkit.fluxcd.io/v1
+          kind: OCIRepository
+          name: cozystack-packages
+          namespace: cozy-system
+      - equal:
+          path: spec
+          value:
+            url: oci://mirror.example.test/cozystack-packages
+            secretRef:
+              name: rotated-pull-secret
