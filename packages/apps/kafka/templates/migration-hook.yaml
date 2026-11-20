@@ -99,8 +99,6 @@ spec:
                 labels:
                   strimzi.io/cluster: ${name}
                   app.kubernetes.io/managed-by: Helm
-                  helm.toolkit.fluxcd.io/name: ${name}
-                  helm.toolkit.fluxcd.io/namespace: ${ns}
                   # Flux puts these on everything it renders, and the lineage
                   # walk follows them to the application. A pool created here
                   # has neither them nor an ownerReference, so without them its
@@ -142,6 +140,8 @@ spec:
                 labels:
                   strimzi.io/cluster: ${name}
                   app.kubernetes.io/managed-by: Helm
+                  helm.toolkit.fluxcd.io/name: ${name}
+                  helm.toolkit.fluxcd.io/namespace: ${ns}
                 annotations:
                   meta.helm.sh/release-name: ${name}
                   meta.helm.sh/release-namespace: ${ns}
