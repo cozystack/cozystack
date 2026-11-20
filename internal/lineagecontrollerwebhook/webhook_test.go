@@ -704,3 +704,38 @@ func TestApplySchedulingClass_MissingCRDSkipsInjection(t *testing.T) {
 		t.Errorf("pod spec.schedulerName should not be set without the CRD, got %q", sched)
 	}
 }
+
+// The application class is looked up once. If it were looked up again before
+// injecting, a class deleted between the two lookups would leave the pod with
+// neither the application class nor the tenant class.
+func TestApplySchedulingClass_ApplicationClassDeletedDuringAdmissionKeepsAClass(t *testing.T) {
+	ctx := context.Background()
+	h := newWebhookTestEnv(t, "tenant-acme", testSchedulingClass, true)
+	addSchedulingClassCR(t, h, "app-class")
+	allowSchedulingClasses(t, h, "tenant-acme", "app-class")
+	lookups := 0
+	h.dynClient.(*dynamicfake.FakeDynamicClient).PrependReactor("get", schedulerapi.Resource,
+		func(action k8stesting.Action) (bool, runtime.Object, error) {
+			if action.(k8stesting.GetAction).GetName() != "app-class" {
+				return false, nil, nil
+			}
+			lookups++
+			if lookups == 1 {
+				return false, nil, nil
+			}
+			return true, nil, apierrors.NewNotFound(schema.GroupResource{Group: schedulerapi.Group, Resource: schedulerapi.Resource}, "app-class")
+		})
+	owner := newOwnerApplication("tenant-acme", "db", map[string]interface{}{"schedulingClass": "app-class"})
+	pod := newPod("tenant-acme", "db-0")
+
+	if err := h.applySchedulingClass(ctx, pod, owner, "tenant-acme"); err != nil {
+		t.Fatalf("applySchedulingClass returned error: %v", err)
+	}
+
+	if sched, _, _ := unstructured.NestedString(pod.Object, "spec", "schedulerName"); sched != schedulerapi.SchedulerName {
+		t.Errorf("expected pod spec.schedulerName=%s, got %q", schedulerapi.SchedulerName, sched)
+	}
+	if got := pod.GetAnnotations()[schedulerapi.SchedulingClassAnnotation]; got != "app-class" {
+		t.Errorf("expected pod annotation %s=app-class, got %q", schedulerapi.SchedulingClassAnnotation, got)
+	}
+}

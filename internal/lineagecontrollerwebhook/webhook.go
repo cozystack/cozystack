@@ -270,34 +270,26 @@ func (h *LineageControllerWebhook) applySchedulingClass(ctx context.Context, obj
 	if err := h.Get(ctx, client.ObjectKey{Name: namespace}, ns); err != nil {
 		return fmt.Errorf("getting namespace %s: %w", namespace, err)
 	}
-	schedulingClass := ns.Labels[schedulerapi.SchedulingClassLabel]
+	tenantClass := ns.Labels[schedulerapi.SchedulingClassLabel]
 
-	if appClass := ownerSchedulingClass(owner); appClass != "" && appClass != schedulingClass {
-		if !slices.Contains(allowedSchedulingClasses(ns), appClass) {
-			logger.Info("application SchedulingClass is not allowed in this namespace, keeping the tenant class",
-				"schedulingClass", appClass, "tenantSchedulingClass", schedulingClass, "namespace", namespace)
-		} else if exists, err := h.schedulingClassExists(ctx, appClass); err != nil {
-			return err
-		} else if !exists {
-			logger.Info("application SchedulingClass not found, keeping the tenant class",
-				"schedulingClass", appClass, "tenantSchedulingClass", schedulingClass, "namespace", namespace)
-		} else {
-			schedulingClass = appClass
-		}
-	}
-
-	if schedulingClass == "" {
-		return nil
-	}
-
-	exists, err := h.schedulingClassExists(ctx, schedulingClass)
+	schedulingClass, err := h.resolveApplicationClass(ctx, ownerSchedulingClass(owner), tenantClass, ns)
 	if err != nil {
 		return err
 	}
-	if !exists {
-		logger.Info("SchedulingClass not found, skipping scheduler injection",
-			"schedulingClass", schedulingClass, "namespace", namespace)
-		return nil
+	if schedulingClass == "" {
+		if tenantClass == "" {
+			return nil
+		}
+		exists, err := h.schedulingClassExists(ctx, tenantClass)
+		if err != nil {
+			return err
+		}
+		if !exists {
+			logger.Info("SchedulingClass not found, skipping scheduler injection",
+				"schedulingClass", tenantClass, "namespace", namespace)
+			return nil
+		}
+		schedulingClass = tenantClass
 	}
 
 	if err := unstructured.SetNestedField(obj.Object, schedulerapi.SchedulerName, "spec", "schedulerName"); err != nil {
@@ -329,6 +321,33 @@ func (h *LineageControllerWebhook) applySchedulingClass(ctx context.Context, obj
 	obj.SetLabels(podLabels)
 
 	return nil
+}
+
+// resolveApplicationClass returns the application's class when it may replace
+// the tenant class: it differs from it, the namespace allows it and it exists.
+// It returns "" otherwise, so that the caller falls back to the tenant class.
+// The existence check runs once and its answer is final, since a second
+// lookup that found the class gone would leave the pod with no class at all.
+func (h *LineageControllerWebhook) resolveApplicationClass(ctx context.Context, appClass, tenantClass string, ns *corev1.Namespace) (string, error) {
+	if appClass == "" || appClass == tenantClass {
+		return "", nil
+	}
+	logger := log.FromContext(ctx)
+	if !slices.Contains(allowedSchedulingClasses(ns), appClass) {
+		logger.Info("application SchedulingClass is not allowed in this namespace, keeping the tenant class",
+			"schedulingClass", appClass, "tenantSchedulingClass", tenantClass, "namespace", ns.Name)
+		return "", nil
+	}
+	exists, err := h.schedulingClassExists(ctx, appClass)
+	if err != nil {
+		return "", err
+	}
+	if !exists {
+		logger.Info("application SchedulingClass not found, keeping the tenant class",
+			"schedulingClass", appClass, "tenantSchedulingClass", tenantClass, "namespace", ns.Name)
+		return "", nil
+	}
+	return appClass, nil
 }
 
 func ownerSchedulingClass(owner *unstructured.Unstructured) string {
