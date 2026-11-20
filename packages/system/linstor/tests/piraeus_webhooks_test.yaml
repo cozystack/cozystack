@@ -1,0 +1,159 @@
+suite: piraeus webhooks during an upgrade with the operator stopped
+
+# Helm patches LinstorCluster and every LinstorSatelliteConfiguration on every
+# upgrade and rollback, an unchanged render included, and the webhooks on both
+# are served by piraeus-operator with failurePolicy Fail. The migration's hold
+# and adopt steps, and the way back to linstor from them, run with the
+# operator stopped, so the release carries hooks around the patch.
+# hack/piraeus-webhooks.sh's behaviour is covered by test_piraeus_webhooks.py.
+
+templates:
+  - templates/piraeus-webhooks.yaml
+release:
+  name: linstor
+  namespace: cozy-linstor
+set:
+  backend: blockstor
+
+tests:
+  - it: "relaxes the webhooks before the upgrade that holds a migration"
+    set:
+      backend: blockstor
+      blockstorMigration: hold
+    documentSelector:
+      path: metadata.name
+      value: piraeus-webhooks-relax
+    asserts:
+      - isKind:
+          of: Job
+      - equal:
+          path: metadata.annotations["helm.sh/hook"]
+          value: pre-install,pre-upgrade,pre-rollback
+      - equal:
+          path: spec.template.spec.containers[0].command
+          value: [sh, -ec, "$(SCRIPT)", piraeus-webhooks.sh, relax]
+
+  - it: "restores the webhooks after the upgrade that holds a migration"
+    set:
+      backend: blockstor
+      blockstorMigration: hold
+    documentSelector:
+      path: metadata.name
+      value: piraeus-webhooks-restore
+    asserts:
+      - equal:
+          path: metadata.annotations["helm.sh/hook"]
+          value: post-install,post-upgrade,post-rollback
+      - equal:
+          path: spec.template.spec.containers[0].command
+          value: [sh, -ec, "$(SCRIPT)", piraeus-webhooks.sh, restore]
+
+  - it: "relaxes the webhooks before the upgrade that starts adoption"
+    set:
+      backend: blockstor
+      blockstorMigration: adopt
+    documentSelector:
+      path: metadata.name
+      value: piraeus-webhooks-relax
+    asserts:
+      - isKind:
+          of: Job
+
+  - it: "carries the hooks once the migration is complete"
+    set:
+      backend: blockstor
+    asserts:
+      - hasDocuments:
+          count: 7
+
+  # A LINSTOR cluster blockstor never touched upgrades without them: no Jobs
+  # to fail its upgrades, and no change to its piraeus objects let through
+  # unvalidated. The way back from hold or adopt, backend linstor with the
+  # operator still stopped, is covered by piraeus_webhooks_lookup_test.yaml.
+  - it: "is not rendered on a LINSTOR cluster"
+    set:
+      backend: linstor
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  # Flux installs whenever it finds no release. One whose history was lost
+  # while the operator is stopped takes over the piraeus objects still on the
+  # cluster with the same patch an upgrade sends, so an install is hooked
+  # too; on a first install the operator is serving and the hooks do nothing.
+  - it: "runs on install as well"
+    documentSelector:
+      path: kind
+      value: Job
+      matchMany: true
+    asserts:
+      - matchRegex:
+          path: metadata.annotations["helm.sh/hook"]
+          pattern: (^|,)(pre|post)-install(,|$)
+
+  - it: "names piraeus-operator's webhook configuration"
+    documentSelector:
+      path: kind
+      value: Job
+      matchMany: true
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: PIRAEUS_WEBHOOKS
+            value: piraeus-operator-validating-webhook-configuration
+
+  - it: "may patch that one configuration and nothing else cluster-wide"
+    documentSelector:
+      path: kind
+      value: ClusterRole
+    asserts:
+      - equal:
+          path: rules
+          value:
+            - apiGroups: [admissionregistration.k8s.io]
+              resources: [validatingwebhookconfigurations]
+              resourceNames: [piraeus-operator-validating-webhook-configuration]
+              verbs: [get, patch]
+
+  - it: "reads endpoints only in the release namespace"
+    documentSelector:
+      path: kind
+      value: Role
+    asserts:
+      - equal:
+          path: metadata.namespace
+          value: cozy-linstor
+      - equal:
+          path: rules
+          value:
+            - apiGroups: [discovery.k8s.io]
+              resources: [endpointslices]
+              verbs: [list]
+
+  # The RBAC is deleted after the pre hooks succeed and the post hooks need it
+  # again, so it is a hook of both phases and is created before either Job.
+  - it: "creates the RBAC before the Jobs in both phases"
+    documentSelector:
+      path: kind
+      value: ServiceAccount
+    asserts:
+      - equal:
+          path: metadata.annotations["helm.sh/hook"]
+          value: pre-install,pre-upgrade,pre-rollback,post-install,post-upgrade,post-rollback
+      - equal:
+          path: metadata.annotations["helm.sh/hook-weight"]
+          value: "-10"
+
+  # The deadline counts from the Job's creation, image pull included, and the
+  # kubectl image is not shared with any other release, so it is cold on the
+  # node the first hook lands on.
+  - it: "gives both Jobs time to pull the kubectl image"
+    documentSelector:
+      path: kind
+      value: Job
+      matchMany: true
+    asserts:
+      - equal:
+          path: spec.activeDeadlineSeconds
+          value: 600

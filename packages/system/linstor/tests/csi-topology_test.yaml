@@ -59,3 +59,18 @@ tests:
       - equal:
           path: spec.csiController.podTemplate.spec.containers[0].name
           value: linstor-csi
+
+  # The LinstorCluster is one document for both backends, so the CSI controller
+  # half is shared and blockstor gets the same constraint. linstor-csi issues the
+  # same CreateVolume either way; only the API behind it differs.
+  - it: the provisioner is constrained under the blockstor backend too
+    template: templates/cluster.yaml
+    set:
+      backend: blockstor
+    asserts:
+      - contains:
+          path: spec.csiController.podTemplate.spec.containers[?(@.name=="csi-provisioner")].args
+          content: --strict-topology
+      - lengthEqual:
+          path: spec.csiController.podTemplate.spec.containers[?(@.name=="csi-provisioner")].args
+          count: 12

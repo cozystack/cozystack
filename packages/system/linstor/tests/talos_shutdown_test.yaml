@@ -78,3 +78,22 @@ tests:
       - matchRegex:
           path: spec.patches[0].patch
           pattern: 'name: drbd-shutdown-guard'
+
+  # The hook downs idle Secondary resources in the shared host kernel, which
+  # under blockstor belong to blockstor-satellite.
+  - it: refuses the hook under the blockstor backend
+    set:
+      backend: blockstor
+      talos.gracefulShutdown.enabled: true
+    asserts:
+      - failedTemplate:
+          errorMessage: "linstor: talos.gracefulShutdown.enabled is not supported with backend blockstor: its hook would tear down blockstor's DRBD resources"
+
+  - it: keeps the Talos patch under blockstor when the hook is off
+    set:
+      backend: blockstor
+    asserts:
+      - notExists:
+          path: spec.podTemplate
+      - exists:
+          path: spec.patches

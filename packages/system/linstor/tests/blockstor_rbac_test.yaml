@@ -1,0 +1,92 @@
+# The apiserver reads and writes the keyring and the generated unlock Secret
+# and reads the passphrase Secret, always in its own namespace, which it
+# shares with piraeus. A cluster-wide grant would reach every tenant's admin
+# kubeconfig; an unnamed one in the namespace would reach piraeus's TLS keys.
+suite: blockstor apiserver Secret access
+templates:
+  - templates/blockstor-apiserver.yaml
+release:
+  name: linstor
+  namespace: cozy-linstor
+set:
+  backend: blockstor
+tests:
+  - it: grants no Secret access cluster-wide
+    documentSelector:
+      path: kind
+      value: ClusterRole
+    asserts:
+      - notContains:
+          path: rules
+          content:
+            apiGroups: [""]
+            resources: [secrets]
+            verbs: [get, list, watch]
+          any: true
+      - lengthEqual:
+          path: rules
+          count: 1
+
+  - it: grants Secret reads and writes in the release namespace by name only
+    documentSelector:
+      path: kind
+      value: Role
+    asserts:
+      - equal:
+          path: metadata.namespace
+          value: cozy-linstor
+      - equal:
+          path: rules
+          value:
+            - apiGroups: [""]
+              resources: [secrets]
+              resourceNames: [blockstor-master-key, blockstor-unlock, linstor-passphrase]
+              verbs: [get, update]
+            - apiGroups: [""]
+              resources: [secrets]
+              verbs: [create]
+
+  - it: names the passphrase Secret the chart is told to use
+    set:
+      blockstorPassphraseSecret: my-passphrase
+    documentSelector:
+      path: kind
+      value: Role
+    asserts:
+      - equal:
+          path: rules[0].resourceNames
+          value: [blockstor-master-key, blockstor-unlock, my-passphrase]
+
+  - it: refuses a passphrase Secret name that is not a Secret name
+    set:
+      blockstorPassphraseSecret: ""
+    asserts:
+      - failedTemplate:
+          errorPattern: blockstorPassphraseSecret must be a Secret name
+
+  - it: binds the namespaced Role to the apiserver ServiceAccount
+    documentSelector:
+      path: kind
+      value: RoleBinding
+    asserts:
+      - equal:
+          path: roleRef.name
+          value: blockstor-apiserver-secrets
+      - contains:
+          path: subjects
+          content:
+            kind: ServiceAccount
+            name: blockstor-apiserver
+            namespace: cozy-linstor
+
+  - it: names the blockstor kinds instead of granting the whole group
+    documentSelector:
+      path: kind
+      value: ClusterRole
+    asserts:
+      - notContains:
+          path: rules
+          content:
+            apiGroups: [blockstor.org]
+            resources: ["*"]
+            verbs: [get, list, watch, create, update, patch, delete]

@@ -1,0 +1,36 @@
+{{- /*
+Every template here renders one backend or the other from this value, so
+an unrecognised one renders some of each and exits 0. The platform chart
+validates storage.backend before passing it on, but a value arriving here
+any other way, a hand-set component value for one, is checked here too.
+*/ -}}
+{{- if not (has .Values.backend (list "linstor" "blockstor")) }}
+{{- fail (printf "linstor: backend must be \"linstor\" or \"blockstor\", got %q" (toString .Values.backend)) }}
+{{- end }}
+{{- /*
+blockstorMigration holds piraeus in the LINSTOR shape. A value the chart
+does not know would render it as complete, and with backend linstor there
+is nothing to migrate to: both are refused rather than read as off.
+*/ -}}
+{{- $migration := .Values.blockstorMigration | default "" }}
+{{- if not (has $migration (list "" "hold" "adopt")) }}
+{{- fail (printf "linstor: blockstorMigration must be \"\", \"hold\" or \"adopt\", got %q" (toString $migration)) }}
+{{- end }}
+{{- if and $migration (ne .Values.backend "blockstor") }}
+{{- fail (printf "linstor: blockstorMigration %q is only valid with backend blockstor; clear it together with switching the backend back" $migration) }}
+{{- end }}
+{{- /*
+blockstor's three images are one release: the controller, apiserver and
+satellite share a wire protocol and the CRDs under definitions/, which
+`make update-blockstor-crds` fetches for the controller's tag. Pinning one
+of them to another release still renders, and only fails on a cluster.
+*/ -}}
+{{- if eq .Values.backend "blockstor" }}
+{{- $versions := dict }}
+{{- range $component := list "blockstorController" "blockstorApiserver" "blockstorSatellite" }}
+{{- $_ := set $versions $component (index $.Values $component "image" "tag" | toString | splitList "@" | first) }}
+{{- end }}
+{{- if ne 1 (values $versions | uniq | len) }}
+{{- fail (printf "linstor: the blockstor images must share one release, got controller %q, apiserver %q, satellite %q" $versions.blockstorController $versions.blockstorApiserver $versions.blockstorSatellite) }}
+{{- end }}
+{{- end }}

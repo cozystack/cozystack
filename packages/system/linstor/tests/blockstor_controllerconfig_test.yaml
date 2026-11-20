@@ -1,0 +1,92 @@
+# Every blockstor component finds the Secret that unlocks the master key
+# through ControllerConfig/default. The chart sets that one field from a hook,
+# because the CRD ships in this same release and blockstor writes the rest of
+# the object at runtime.
+suite: blockstor ControllerConfig passphrase reference
+templates:
+  - templates/blockstor-controllerconfig.yaml
+release:
+  name: linstor
+  namespace: cozy-linstor
+set:
+  backend: blockstor
+tests:
+  - it: renders nothing under the LINSTOR backend
+    set:
+      backend: linstor
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: runs after every install and upgrade, and cleans up after itself
+    asserts:
+      - equal:
+          path: metadata.annotations["helm.sh/hook"]
+          value: post-install,post-upgrade
+      - equal:
+          path: metadata.annotations["helm.sh/hook-delete-policy"]
+          value: before-hook-creation,hook-succeeded
+
+  - it: points passphraseSecretRef at piraeus's Secret, key MASTER_PASSPHRASE
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: MANIFEST
+            value: |
+              apiVersion: blockstor.org/v1alpha1
+              kind: ControllerConfig
+              metadata:
+                name: default
+              spec:
+                passphraseSecretRef:
+                  name: linstor-passphrase
+                  key: MASTER_PASSPHRASE
+
+  - it: follows the passphrase Secret value
+    set:
+      blockstorPassphraseSecret: my-passphrase
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].env[1].value
+          pattern: '(?m)^    name: my-passphrase$'
+
+  - it: owns only the fields it applies, and wins over a ref set by hand
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'kubectl apply --server-side --field-manager=cozystack-linstor --force-conflicts -f -'
+
+  - it: pins its image by digest
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].image
+          pattern: '^[^@]+:[^@]+@sha256:[0-9a-f]{64}$'
+
+  - it: may touch no ControllerConfig but default, and nothing else
+    documentSelector:
+      path: kind
+      value: ClusterRole
+    asserts:
+      - equal:
+          path: rules
+          value:
+            - apiGroups: [blockstor.org]
+              resources: [controllerconfigs]
+              resourceNames: [default]
+              verbs: [get, patch]
+            - apiGroups: [blockstor.org]
+              resources: [controllerconfigs]
+              verbs: [create]
