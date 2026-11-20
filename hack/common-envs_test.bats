@@ -144,15 +144,20 @@ load test_helper
   echo "$out" | grep -q -- '--push=0 --load=1'
 }
 
-@test "SBOM=1 attaches an SPDX attestation from a scanner pinned by digest, and the default builds none" {
+@test "SBOM=1 attaches an SPDX attestation from a scanner pinned by digest and a mode=min provenance, and the default builds none" {
   # An image built with an attestation is an index, not a plain manifest, which
   # the stitch and the gate have to read, so it stays off unless a build asks.
-  # --sbom=true would pull the scanner by a floating tag.
+  # --sbom=true would pull the scanner by a floating tag. Provenance rides the
+  # same attestation manifest; mode=max would write build arguments into it.
   out=$(make -n -C packages/system/cozystack-controller image IMAGE_TAG=pr-1-abc COZYSTACK_VERSION=0 BUILDER=b)
   if echo "$out" | grep -q -- '--attest\|--sbom'; then echo "FAIL: an attestation without SBOM=1"; false; fi
+  echo "$out" | grep -q -- '--provenance=false' || { echo "FAIL: provenance not switched off without SBOM=1"; false; }
   out=$(make -n -C packages/system/cozystack-controller image IMAGE_TAG=pr-1-abc COZYSTACK_VERSION=0 BUILDER=b SBOM=1)
   echo "$out" | grep -qE -- '--attest type=sbom,generator=[^ ]+@sha256:[0-9a-f]{64} ' || { echo "FAIL: no digest-pinned scanner"; false; }
   if echo "$out" | grep -q -- '--sbom'; then echo "FAIL: --sbom=true pulls a floating scanner tag"; false; fi
+  echo "$out" | grep -q -- '--attest type=provenance,mode=min' || { echo "FAIL: no mode=min provenance beside the SBOM"; false; }
+  if echo "$out" | grep -q -- '--provenance=false'; then echo "FAIL: --provenance=false cancels the provenance attestation"; false; fi
+  if echo "$out" | grep -qE -- 'provenance,mode=max|--provenance=true'; then echo "FAIL: full provenance would carry build arguments"; false; fi
   # The environment reaches buildx as well, which is how the release workflow sets it.
   out=$(SBOM=1 make -n -C packages/system/cozystack-controller image IMAGE_TAG=pr-1-abc COZYSTACK_VERSION=0 BUILDER=b)
   echo "$out" | grep -q -- '--attest type=sbom,'
