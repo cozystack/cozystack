@@ -373,8 +373,8 @@ tests:
         updateStrategy:
           type: RollingUpdate
           rollingUpdate:
-            maxUnavailable: 25%
-            maxSurge: 1
+            maxUnavailable: 1
+            maxSurge: 0
     asserts:
       - equal:
           path: spec.minReadySeconds
@@ -382,8 +382,42 @@ tests:
       - equal:
           path: spec.updateStrategy.rollingUpdate
           value:
-            maxUnavailable: 25%
+            maxUnavailable: 1
             maxSurge: 0
+
+  - it: refuses a surge pod
+    template: templates/blockstor-satellite.yaml
+    set:
+      blockstorSatellite.updateStrategy.rollingUpdate.maxSurge: 1
+    asserts:
+      - failedTemplate:
+          errorMessage: 'linstor: blockstorSatellite.updateStrategy.rollingUpdate.maxSurge can only be 0, got 1'
+
+  # Several nodes at once run their first adjust passes together.
+  - it: refuses a rollout wider than one node
+    template: templates/blockstor-satellite.yaml
+    set:
+      blockstorSatellite.updateStrategy.rollingUpdate.maxUnavailable: 5
+    asserts:
+      - failedTemplate:
+          errorMessage: 'linstor: blockstorSatellite.updateStrategy.rollingUpdate.maxUnavailable can only be 1, got 5'
+
+  - it: refuses a percentage rollout
+    template: templates/blockstor-satellite.yaml
+    set:
+      blockstorSatellite.updateStrategy.rollingUpdate.maxUnavailable: 50%
+    asserts:
+      - failedTemplate:
+          errorMessage: 'linstor: blockstorSatellite.updateStrategy.rollingUpdate.maxUnavailable can only be 1, got "50%"'
+
+  # With maxSurge 0 the apiserver refuses it, after the chart's own checks.
+  - it: refuses a rollout that replaces no node
+    template: templates/blockstor-satellite.yaml
+    set:
+      blockstorSatellite.updateStrategy.rollingUpdate.maxUnavailable: 0
+    asserts:
+      - failedTemplate:
+          errorMessage: 'linstor: blockstorSatellite.updateStrategy.rollingUpdate.maxUnavailable can only be 1, got 0'
 
   # OnDelete alone: the API keeps a rollingUpdate block it would ignore.
   - it: replaces a satellite only when its pod is deleted under OnDelete
@@ -421,7 +455,25 @@ tests:
       blockstorSatellite.minReadySeconds: 2m
     asserts:
       - failedTemplate:
-          errorMessage: 'linstor: blockstorSatellite.minReadySeconds must be a number of seconds, got "2m"'
+          errorMessage: 'linstor: blockstorSatellite.minReadySeconds must be a whole number of seconds, 0 or more, got "2m"'
+
+  # --set hands a decimal over as a string; the message must still say
+  # what is wrong with it.
+  - it: refuses a decimal minReadySeconds given as a string
+    template: templates/blockstor-satellite.yaml
+    set:
+      blockstorSatellite.minReadySeconds: "1.5"
+    asserts:
+      - failedTemplate:
+          errorMessage: 'linstor: blockstorSatellite.minReadySeconds must be a whole number of seconds, 0 or more, got "1.5"'
+
+  - it: refuses a decimal minReadySeconds
+    template: templates/blockstor-satellite.yaml
+    set:
+      blockstorSatellite.minReadySeconds: 1.5
+    asserts:
+      - failedTemplate:
+          errorMessage: 'linstor: blockstorSatellite.minReadySeconds must be a whole number of seconds, 0 or more, got 1.5'
 
   # A SIGTERM must not cut a detached rollback short: the pod outlives the
   # REST server's shutdown window.
