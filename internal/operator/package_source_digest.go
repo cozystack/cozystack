@@ -20,6 +20,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	cozyv1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
 	helmv2 "github.com/fluxcd/helm-controller/api/v2"
@@ -56,17 +57,24 @@ type fluxSource interface {
 	GetConditions() []metav1.Condition
 }
 
-// settledSourcesDigest returns the ArtifactGenerator's observed sources
-// digest once it describes what every source serves for its current spec,
-// and "" while either side is still catching up.
+// settledSourcesDigest returns the value a following release is stamped
+// with: the ArtifactGenerator's observed sources digest, followed by the
+// generation of every source, once the digest describes what every source
+// serves for its current spec. It returns "" while either side is still
+// catching up.
 //
 // The order matters. The platform release's pre-upgrade migrations have to
-// run before cozystack-packages moves, so the platform must render with the
-// chart built from the new source. Its ExternalArtifact is rewritten before
-// source-watcher records the new digest, so a digest that matches the
-// sources means that chart is already in place. A source whose spec has
-// changed but not been fetched still serves the old artifact, which the
-// generator has also seen: the generation check keeps that from passing.
+// run before cozystack-packages moves, so the digest must not be the thing
+// that renders the old chart against the new source. Its ExternalArtifact is
+// rewritten before source-watcher records the new digest, so a digest that
+// matches the sources means that chart is already in place. A source whose
+// spec has changed but not been fetched still serves the old artifact, which
+// the generator has also seen: the generation check keeps that from passing.
+//
+// The generations are part of the value because the platform copies the
+// source spec, not its artifact. A move to a mirror serving the same
+// artifact, or a rotated pull secret, leaves the digest as it was and would
+// otherwise never reach cozystack-packages.
 func (r *PackageReconciler) settledSourcesDigest(ctx context.Context, agName string) (string, error) {
 	ag := &sourcewatcherv1beta1.ArtifactGenerator{}
 	if err := r.Get(ctx, types.NamespacedName{Namespace: "cozy-system", Name: agName}, ag); err != nil {
@@ -77,6 +85,7 @@ func (r *PackageReconciler) settledSourcesDigest(ctx context.Context, agName str
 	}
 
 	observed := make(map[string]sourcewatcherv1beta1.ObservedSource, len(ag.Spec.Sources))
+	generations := make([]string, 0, len(ag.Spec.Sources))
 	for _, ref := range ag.Spec.Sources {
 		var src fluxSource
 		switch ref.Kind {
@@ -113,18 +122,21 @@ func (r *PackageReconciler) settledSourcesDigest(ctx context.Context, agName str
 			o.OriginRevision = origin
 		}
 		observed[ref.Alias] = o
+		generations = append(generations, fmt.Sprintf("%s=%d", ref.Alias, src.GetGeneration()))
 	}
 
 	if sourcewatcherv1beta1.HashObservedSources(observed) != ag.Status.ObservedSourcesDigest {
 		return "", nil
 	}
-	return ag.Status.ObservedSourcesDigest, nil
+	return ag.Status.ObservedSourcesDigest + "@" + strings.Join(generations, ","), nil
 }
 
 // sourceDigestValues returns the release values with sourceRef.observedDigest
-// set to the settled digest. While the sources are not settled it carries
-// over the digest the release already has, so a values change made in the
-// meantime cannot re-render the old chart against the new source.
+// set to the settled stamp. While the sources are not settled it carries
+// over the stamp the release already has, so the stamp never triggers a
+// render before the chart is rebuilt. It cannot stop a render that another
+// values change triggers in the meantime; that render copies the new source
+// spec with the chart that is still in place, as it did before the stamp.
 func (r *PackageReconciler) sourceDigestValues(ctx context.Context, hr *helmv2.HelmRelease, agName string) (*apiextensionsv1.JSON, error) {
 	digest, err := r.settledSourcesDigest(ctx, agName)
 	if err != nil {
@@ -217,4 +229,52 @@ func (r *PackageReconciler) packageForArtifactGenerator(ctx context.Context, obj
 		return nil
 	}
 	return []reconcile.Request{{NamespacedName: types.NamespacedName{Name: obj.GetName()}}}
+}
+
+// sourceGenerationFetched lets through the source updates that finish
+// fetching a new spec. One that changes the artifact also changes the
+// generator's digest; one that does not, such as a mirror move or a rotated
+// secret, reaches a following release only through this watch.
+var sourceGenerationFetched = predicate.Funcs{
+	UpdateFunc: func(e event.UpdateEvent) bool {
+		return readyGeneration(e.ObjectOld) != readyGeneration(e.ObjectNew)
+	},
+}
+
+func readyGeneration(obj client.Object) int64 {
+	src, ok := obj.(fluxSource)
+	if !ok {
+		return 0
+	}
+	ready := apimeta.FindStatusCondition(src.GetConditions(), "Ready")
+	if ready == nil || ready.Status != metav1.ConditionTrue {
+		return 0
+	}
+	return ready.ObservedGeneration
+}
+
+// packagesForSource maps a source to the following Packages whose generator
+// builds from it.
+func (r *PackageReconciler) packagesForSource(kind string) func(context.Context, client.Object) []reconcile.Request {
+	return func(ctx context.Context, obj client.Object) []reconcile.Request {
+		ags := &sourcewatcherv1beta1.ArtifactGeneratorList{}
+		if err := r.List(ctx, ags, client.InNamespace("cozy-system")); err != nil {
+			return nil
+		}
+		var requests []reconcile.Request
+		for i := range ags.Items {
+			ag := &ags.Items[i]
+			for _, ref := range ag.Spec.Sources {
+				namespace := ref.Namespace
+				if namespace == "" {
+					namespace = ag.Namespace
+				}
+				if ref.Kind == kind && ref.Name == obj.GetName() && namespace == obj.GetNamespace() {
+					requests = append(requests, r.packageForArtifactGenerator(ctx, ag)...)
+					break
+				}
+			}
+		}
+		return requests
+	}
 }

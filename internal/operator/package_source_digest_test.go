@@ -19,6 +19,7 @@ package operator
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"testing"
 
 	cozyv1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
@@ -34,6 +35,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/event"
 )
 
 const (
@@ -127,6 +129,12 @@ func platformAG(builtFrom string) *sourcewatcherv1beta1.ArtifactGenerator {
 	}
 }
 
+// stampFor is the value a following release gets once the source, asked for
+// generation, serves the artifact for digest and the chart is built from it.
+func stampFor(digest string, generation int64) string {
+	return fmt.Sprintf("%s@%s=%d", hashFor(digest), platformSource, generation)
+}
+
 func reconcilePlatform(t *testing.T, cl client.Client) map[string]any {
 	t.Helper()
 	r := &PackageReconciler{Client: cl, Scheme: sourceDigestScheme()}
@@ -163,8 +171,8 @@ func newPlatformClient(objs ...client.Object) client.Client {
 func TestPlatformReleaseRendersAgainWhenOnlyTheSourceMoves(t *testing.T) {
 	ctx := context.Background()
 	cl := newPlatformClient(platformPS(true), platformPackage(""), platformRepo(1, 1, "aaaa"), platformAG("aaaa"))
-	if got := observedDigest(reconcilePlatform(t, cl)); got != hashFor("aaaa") {
-		t.Fatalf("observedDigest = %q, want the settled digest %q", got, hashFor("aaaa"))
+	if got := observedDigest(reconcilePlatform(t, cl)); got != stampFor("aaaa", 1) {
+		t.Fatalf("observedDigest = %q, want the settled stamp %q", got, stampFor("aaaa", 1))
 	}
 
 	// The installer points the source at a new artifact; source-controller
@@ -187,8 +195,8 @@ func TestPlatformReleaseRendersAgainWhenOnlyTheSourceMoves(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if got := observedDigest(reconcilePlatform(t, cl)); got != hashFor("bbbb") {
-		t.Fatalf("observedDigest = %q after the source moved, want %q: the platform release would not render again", got, hashFor("bbbb"))
+	if got := observedDigest(reconcilePlatform(t, cl)); got != stampFor("bbbb", 2) {
+		t.Fatalf("observedDigest = %q after the source moved, want %q: the platform release would not render again", got, stampFor("bbbb", 2))
 	}
 }
 
@@ -238,7 +246,7 @@ func TestPlatformReleaseGetsNoDigestBeforeTheSourceSettles(t *testing.T) {
 func TestPlatformReleaseKeepsItsSourceRefValues(t *testing.T) {
 	cl := newPlatformClient(platformPS(true), platformPackage(`{"sourceRef":{"name":"custom"}}`), platformRepo(1, 1, "aaaa"), platformAG("aaaa"))
 	ref, _ := reconcilePlatform(t, cl)["sourceRef"].(map[string]any)
-	if ref["name"] != "custom" || ref[observedDigestKey] != hashFor("aaaa") {
+	if ref["name"] != "custom" || ref[observedDigestKey] != stampFor("aaaa", 1) {
 		t.Fatalf("sourceRef = %v, want name kept and the digest added", ref)
 	}
 }
@@ -264,5 +272,70 @@ func TestArtifactGeneratorEventsReachOnlyFollowingPackages(t *testing.T) {
 		if !follow && len(got) != 0 {
 			t.Errorf("non-following PackageSource: requests = %v, want none", got)
 		}
+	}
+}
+
+// The platform copies the source spec into cozystack-packages. A move to a
+// mirror that serves the same artifact, or a rotated pull secret, leaves the
+// artifact and the generator's digest as they were, and still has to reach
+// cozystack-packages.
+func TestPlatformReleaseRendersAgainWhenOnlyTheSourceSpecChanges(t *testing.T) {
+	ctx := context.Background()
+	cl := newPlatformClient(platformPS(true), platformPackage(""), platformRepo(1, 1, "aaaa"), platformAG("aaaa"))
+	before := observedDigest(reconcilePlatform(t, cl))
+
+	repo := &sourcev1.OCIRepository{}
+	if err := cl.Get(ctx, types.NamespacedName{Namespace: "cozy-system", Name: platformSource}, repo); err != nil {
+		t.Fatal(err)
+	}
+	mirrored := platformRepo(2, 2, "aaaa")
+	repo.Generation, repo.Status = mirrored.Generation, mirrored.Status
+	if err := cl.Update(ctx, repo); err != nil {
+		t.Fatal(err)
+	}
+
+	after := observedDigest(reconcilePlatform(t, cl))
+	if after == before {
+		t.Fatalf("observedDigest stayed %q after the source spec changed: cozystack-packages would keep the old spec", after)
+	}
+	if after != stampFor("aaaa", 2) {
+		t.Fatalf("observedDigest = %q, want %q", after, stampFor("aaaa", 2))
+	}
+}
+
+func TestSourceEventsReachOnlyFollowingPackagesBuiltFromThem(t *testing.T) {
+	other := &sourcev1.OCIRepository{ObjectMeta: metav1.ObjectMeta{Name: "unrelated", Namespace: "cozy-system"}}
+	for _, follow := range []bool{true, false} {
+		cl := newPlatformClient(platformPS(follow), platformPackage(""), platformAG("aaaa"))
+		r := &PackageReconciler{Client: cl, Scheme: sourceDigestScheme()}
+		mapper := r.packagesForSource(sourcev1.OCIRepositoryKind)
+		got := mapper(context.Background(), platformRepo(1, 1, "aaaa"))
+		if follow && (len(got) != 1 || got[0].Name != platformPkg) {
+			t.Errorf("following PackageSource: requests = %v, want the platform Package", got)
+		}
+		if !follow && len(got) != 0 {
+			t.Errorf("non-following PackageSource: requests = %v, want none", got)
+		}
+		if got := mapper(context.Background(), other); len(got) != 0 {
+			t.Errorf("unrelated source: requests = %v, want none", got)
+		}
+		if got := r.packagesForSource(sourcev1.GitRepositoryKind)(context.Background(), platformRepo(1, 1, "aaaa")); len(got) != 0 {
+			t.Errorf("same name, other kind: requests = %v, want none", got)
+		}
+	}
+}
+
+func TestSourceWatchFiresWhenANewSpecIsFetched(t *testing.T) {
+	update := func(oldObj, newObj client.Object) bool {
+		return sourceGenerationFetched.Update(event.UpdateEvent{ObjectOld: oldObj, ObjectNew: newObj})
+	}
+	if update(platformRepo(1, 1, "aaaa"), platformRepo(2, 1, "aaaa")) {
+		t.Error("a spec change not yet fetched must not fire: nothing has settled")
+	}
+	if !update(platformRepo(2, 1, "aaaa"), platformRepo(2, 2, "aaaa")) {
+		t.Error("fetching the new spec must fire even when the artifact is the same")
+	}
+	if update(platformRepo(2, 2, "aaaa"), platformRepo(2, 2, "aaaa")) {
+		t.Error("a status write that fetches nothing new must not fire")
 	}
 }

@@ -4,11 +4,12 @@ sourceRef:
   namespace: cozy-system
   path: /
   # observedDigest is written by cozystack-operator, never by hand: the
-  # source digest this release last rendered against. templates/repository.yaml
-  # copies the source into cozystack-packages only when the release renders,
-  # and a new source that leaves this chart unchanged renders nothing on its
-  # own. The operator changes this value once the chart has been rebuilt from
-  # the new source, which makes helm-controller render the release again.
+  # source digest and source generation this release last rendered against.
+  # templates/repository.yaml copies the source spec into cozystack-packages
+  # only when the release renders, and a new source that leaves this chart
+  # unchanged renders nothing on its own. The operator changes this value once
+  # the source has fetched its current spec and the chart has been rebuilt
+  # from it, which makes helm-controller render the release again.
   # observedDigest: ""
 migrations:
   enabled: false

@@ -28,6 +28,7 @@ import (
 	"github.com/cozystack/cozystack/internal/marketplace/collision"
 	"github.com/cozystack/cozystack/pkg/config"
 	helmv2 "github.com/fluxcd/helm-controller/api/v2"
+	sourcev1 "github.com/fluxcd/source-controller/api/v1"
 	sourcewatcherv1beta1 "github.com/fluxcd/source-watcher/api/v2/v1beta1"
 	appsv1 "k8s.io/api/apps/v1"
 	batchv1 "k8s.io/api/batch/v1"
@@ -1603,6 +1604,16 @@ func (r *PackageReconciler) SetupWithManager(mgr ctrl.Manager) error {
 			&sourcewatcherv1beta1.ArtifactGenerator{},
 			handler.EnqueueRequestsFromMapFunc(r.packageForArtifactGenerator),
 			builder.WithPredicates(observedSourcesDigestChanged),
+		).
+		Watches(
+			&sourcev1.OCIRepository{},
+			handler.EnqueueRequestsFromMapFunc(r.packagesForSource(sourcev1.OCIRepositoryKind)),
+			builder.WithPredicates(sourceGenerationFetched),
+		).
+		Watches(
+			&sourcev1.GitRepository{},
+			handler.EnqueueRequestsFromMapFunc(r.packagesForSource(sourcev1.GitRepositoryKind)),
+			builder.WithPredicates(sourceGenerationFetched),
 		).
 		Watches(
 			&cozyv1alpha1.PackageSource{},
