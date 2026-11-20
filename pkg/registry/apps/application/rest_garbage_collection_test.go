@@ -1,12 +1,14 @@
 package application
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"slices"
 	"testing"
 
 	helmv2 "github.com/fluxcd/helm-controller/api/v2"
+	apiextv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -77,18 +79,17 @@ func TestApplicationGarbageCollection(t *testing.T) {
 	}
 }
 
-func TestApplicationGarbageCollectionConflict(t *testing.T) {
+func TestApplicationGarbageCollectionExplicitVersionConflict(t *testing.T) {
 	for _, concurrent := range []struct {
 		name      string
 		initial   []string
 		requested []string
 		updated   []string
-		expected  []string
 	}{
-		{"helm-completes", []string{metav1.FinalizerDeleteDependents, "finalizers.fluxcd.io", "test.example/hold"}, nil, []string{metav1.FinalizerDeleteDependents, "test.example/hold"}, []string{"test.example/hold"}},
-		{"controller-adds-finalizer", []string{metav1.FinalizerDeleteDependents}, nil, []string{metav1.FinalizerDeleteDependents, "finalizers.fluxcd.io"}, []string{"finalizers.fluxcd.io"}},
-		{"gc-starts-during-update", []string{"finalizers.fluxcd.io"}, nil, []string{"finalizers.fluxcd.io", metav1.FinalizerDeleteDependents}, []string{"finalizers.fluxcd.io", metav1.FinalizerDeleteDependents}},
-		{"gc-finishes-during-update", []string{"finalizers.fluxcd.io", metav1.FinalizerDeleteDependents}, []string{metav1.FinalizerDeleteDependents}, []string{"finalizers.fluxcd.io"}, []string{"finalizers.fluxcd.io"}},
+		{"helm-completes", []string{metav1.FinalizerDeleteDependents, "finalizers.fluxcd.io", "test.example/hold"}, nil, []string{metav1.FinalizerDeleteDependents, "test.example/hold"}},
+		{"controller-adds-finalizer", []string{metav1.FinalizerDeleteDependents}, nil, []string{metav1.FinalizerDeleteDependents, "finalizers.fluxcd.io"}},
+		{"gc-starts-during-update", []string{"finalizers.fluxcd.io"}, nil, []string{"finalizers.fluxcd.io", metav1.FinalizerDeleteDependents}},
+		{"gc-finishes-during-update", []string{"finalizers.fluxcd.io", metav1.FinalizerDeleteDependents}, []string{metav1.FinalizerDeleteDependents}, []string{"finalizers.fluxcd.io"}},
 	} {
 		t.Run(concurrent.name, func(t *testing.T) {
 			hr := optionsTestHelmRelease()
@@ -105,6 +106,7 @@ func TestApplicationGarbageCollectionConflict(t *testing.T) {
 						return err
 					}
 					live.Finalizers = slices.Clone(concurrent.updated)
+					live.Spec.Values = &apiextv1.JSON{Raw: []byte(`{"concurrent":true}`)}
 					if err := c.Update(ctx, live); err != nil {
 						return err
 					}
@@ -118,18 +120,22 @@ func TestApplicationGarbageCollectionConflict(t *testing.T) {
 			}
 			app := obj.(*appsv1alpha1.Application)
 			app.Finalizers = concurrent.requested
-			if _, _, err := r.Update(ctx, app.Name, rest.DefaultUpdatedObjectInfo(app), nil, nil, false, &metav1.UpdateOptions{}); err != nil {
-				t.Fatal(err)
+			app.Spec = &apiextv1.JSON{Raw: []byte(`{"requested":true}`)}
+			if _, _, err := r.Update(ctx, app.Name, rest.DefaultUpdatedObjectInfo(app), nil, nil, false, &metav1.UpdateOptions{}); !apierrors.IsConflict(err) {
+				t.Fatalf("expected explicit resourceVersion conflict, got %v", err)
 			}
 			live := &helmv2.HelmRelease{}
 			if err := r.c.Get(ctx, client.ObjectKeyFromObject(hr), live); err != nil {
 				t.Fatal(err)
 			}
-			if updates != 2 {
-				t.Fatalf("update calls = %d, want 2", updates)
+			if updates != 1 {
+				t.Fatalf("update calls = %d, want 1", updates)
 			}
-			if !slices.Equal(live.Finalizers, concurrent.expected) {
-				t.Fatalf("finalizers = %v, want %v", live.Finalizers, concurrent.expected)
+			if !slices.Equal(live.Finalizers, concurrent.updated) {
+				t.Fatalf("finalizers = %v, want %v", live.Finalizers, concurrent.updated)
+			}
+			if live.Spec.Values == nil || !bytes.Equal(live.Spec.Values.Raw, []byte(`{"concurrent":true}`)) {
+				t.Fatalf("stale desired spec persisted: %v", live.Spec.Values)
 			}
 		})
 	}

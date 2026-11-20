@@ -63,6 +63,7 @@ func TestCreate_AdmissionChain_RejectsViaCreateValidation(t *testing.T) {
 	fakeClient := fake.NewClientBuilder().WithScheme(scheme).Build()
 	r := &REST{
 		c: fakeClient,
+		w: fakeClient,
 		gvr: schema.GroupVersionResource{
 			Group:    appsv1alpha1.GroupName,
 			Version:  "v1alpha1",
@@ -143,6 +144,7 @@ func TestUpdate_AdmissionChain_RejectsViaUpdateValidation(t *testing.T) {
 	fakeClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(existing).Build()
 	r := &REST{
 		c: fakeClient,
+		w: fakeClient,
 		gvr: schema.GroupVersionResource{
 			Group:    appsv1alpha1.GroupName,
 			Version:  "v1alpha1",
@@ -247,6 +249,7 @@ func TestDelete_AdmissionChain_RejectsViaDeleteValidation(t *testing.T) {
 
 	r := &REST{
 		c: fakeClient,
+		w: fakeClient,
 		gvr: schema.GroupVersionResource{
 			Group:    appsv1alpha1.GroupName,
 			Version:  "v1alpha1",

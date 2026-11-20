@@ -55,10 +55,11 @@ func newOptionsTestREST(t *testing.T, funcs interceptor.Funcs, objects ...client
 	}
 	c := fake.NewClientBuilder().
 		WithScheme(scheme).
+		WithStatusSubresource(&helmv2.HelmRelease{}).
 		WithObjects(objects...).
 		WithInterceptorFuncs(funcs).
 		Build()
-	return NewREST(c, nil, &config.Resource{
+	return NewREST(c, c, &config.Resource{
 		Application: config.ApplicationConfig{
 			Kind:     "PostgreSQL",
 			Plural:   "postgresqls",

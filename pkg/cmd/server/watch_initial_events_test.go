@@ -28,6 +28,8 @@ import (
 	helmv2 "github.com/fluxcd/helm-controller/api/v2"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apiserver/pkg/admission"
+	"k8s.io/apiserver/pkg/authorization/authorizerfactory"
 	"k8s.io/apiserver/pkg/registry/rest"
 	genericapiserver "k8s.io/apiserver/pkg/server"
 	utilfeature "k8s.io/apiserver/pkg/util/feature"
@@ -36,6 +38,7 @@ import (
 	baseversion "k8s.io/component-base/version"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	appsv1alpha1 "github.com/cozystack/cozystack/pkg/apis/apps/v1alpha1"
 	"github.com/cozystack/cozystack/pkg/apiserver"
@@ -54,6 +57,11 @@ var redisConfig = config.Resource{
 // registered on the process-wide apiserver.Scheme.
 func startAppsServer(t *testing.T, rc *config.ResourceConfig) (*httptest.Server, client.Client) {
 	t.Helper()
+	return startAppsServerWithInterceptors(t, rc, interceptor.Funcs{}, nil)
+}
+
+func startAppsServerWithInterceptors(t *testing.T, rc *config.ResourceConfig, funcs interceptor.Funcs, admissionControl admission.Interface) (*httptest.Server, client.Client) {
+	t.Helper()
 	if err := appsv1alpha1.RegisterDynamicTypes(apiserver.Scheme, rc); err != nil {
 		t.Fatal(err)
 	}
@@ -62,9 +70,11 @@ func startAppsServer(t *testing.T, rc *config.ResourceConfig) (*httptest.Server,
 	if err := helmv2.AddToScheme(backing); err != nil {
 		t.Fatal(err)
 	}
-	cli := fake.NewClientBuilder().WithScheme(backing).Build()
+	cli := fake.NewClientBuilder().WithScheme(backing).WithStatusSubresource(&helmv2.HelmRelease{}).WithInterceptorFuncs(funcs).Build()
 
 	cfg := genericapiserver.NewConfig(apiserver.Codecs)
+	cfg.Authorization.Authorizer = authorizerfactory.NewAlwaysAllowAuthorizer()
+	cfg.AdmissionControl = admissionControl
 	cfg.ExternalAddress = "localhost:443"
 	cfg.LoopbackClientConfig = &restclient.Config{}
 	cfg.FeatureGate = utilfeature.DefaultMutableFeatureGate
