@@ -15,10 +15,14 @@ release:
 tests:
   - it: allows no class by default
     asserts:
-      - documentIndex: 0
+      - documentSelector:
+          path: kind
+          value: Namespace
         notExists:
           path: metadata.annotations["namespace.cozystack.io/allowed-scheduling-classes"]
-      - documentIndex: 1
+      - documentSelector:
+          path: kind
+          value: Secret
         notMatchRegex:
           path: stringData["values.yaml"]
           pattern: allowedSchedulingClasses
@@ -27,11 +31,15 @@ tests:
     set:
       allowedSchedulingClasses: [co-region-a, co-region-b]
     asserts:
-      - documentIndex: 0
+      - documentSelector:
+          path: kind
+          value: Namespace
         equal:
           path: metadata.annotations["namespace.cozystack.io/allowed-scheduling-classes"]
           value: co-region-a,co-region-b
-      - documentIndex: 1
+      - documentSelector:
+          path: kind
+          value: Secret
         matchRegex:
           path: stringData["values.yaml"]
           pattern: 'allowedSchedulingClasses: \["co-region-a","co-region-b"\]'
@@ -42,14 +50,20 @@ tests:
         schedulingClass: parent-class
       allowedSchedulingClasses: [co-region-a]
     asserts:
-      - documentIndex: 0
+      - documentSelector:
+          path: kind
+          value: Namespace
         equal:
           path: metadata.labels["scheduler.cozystack.io/scheduling-class"]
           value: parent-class
-      - documentIndex: 0
+      - documentSelector:
+          path: kind
+          value: Namespace
         notExists:
           path: metadata.annotations["namespace.cozystack.io/allowed-scheduling-classes"]
-      - documentIndex: 1
+      - documentSelector:
+          path: kind
+          value: Secret
         notMatchRegex:
           path: stringData["values.yaml"]
           pattern: allowedSchedulingClasses
@@ -61,11 +75,15 @@ tests:
         allowedSchedulingClasses: [co-region-a]
       allowedSchedulingClasses: [co-region-a, co-region-b]
     asserts:
-      - documentIndex: 0
+      - documentSelector:
+          path: kind
+          value: Namespace
         equal:
           path: metadata.annotations["namespace.cozystack.io/allowed-scheduling-classes"]
           value: co-region-a
-      - documentIndex: 1
+      - documentSelector:
+          path: kind
+          value: Secret
         matchRegex:
           path: stringData["values.yaml"]
           pattern: 'allowedSchedulingClasses: \["co-region-a"\]'
@@ -76,7 +94,9 @@ tests:
         allowedSchedulingClasses: [co-region-a]
       allowedSchedulingClasses: [co-region-b]
     asserts:
-      - documentIndex: 0
+      - documentSelector:
+          path: kind
+          value: Namespace
         equal:
           path: metadata.annotations["namespace.cozystack.io/allowed-scheduling-classes"]
           value: co-region-a

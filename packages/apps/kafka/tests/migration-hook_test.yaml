@@ -291,8 +291,12 @@ tests:
       - matchRegex:
           path: spec.template.spec.containers[0].args[0]
           pattern: 'name: \$\{brokerPool\}\s+namespace: \$\{ns\}\s+labels:\s+strimzi\.io/cluster: \$\{name\}\s+app\.kubernetes\.io/managed-by: Helm\s+(#[^\n]*\s+)*helm\.toolkit\.fluxcd\.io/name: \$\{name\}\s+helm\.toolkit\.fluxcd\.io/namespace: \$\{ns\}\s+annotations:'
-        documentIndex: 3
+        documentSelector:
+          path: kind
+          value: Job
       - matchRegex:
           path: spec.template.spec.containers[0].args[0]
           pattern: 'name: [-a-z0-9]+\s+namespace: \$\{ns\}\s+labels:\s+strimzi\.io/cluster: \$\{name\}\s+app\.kubernetes\.io/managed-by: Helm\s+helm\.toolkit\.fluxcd\.io/name: \$\{name\}\s+helm\.toolkit\.fluxcd\.io/namespace: \$\{ns\}\s+annotations:\s+meta\.helm\.sh/release-name: \$\{name\}\s+meta\.helm\.sh/release-namespace: \$\{ns\}\s+# Controller node IDs'
-        documentIndex: 3
+        documentSelector:
+          path: kind
+          value: Job

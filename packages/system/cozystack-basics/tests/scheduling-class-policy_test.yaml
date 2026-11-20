@@ -16,19 +16,27 @@ tests:
     asserts:
       - hasDocuments:
           count: 2
-      - documentIndex: 0
+      - documentSelector:
+          path: kind
+          value: ValidatingAdmissionPolicy
         equal:
           path: kind
           value: ValidatingAdmissionPolicy
-      - documentIndex: 0
+      - documentSelector:
+          path: kind
+          value: ValidatingAdmissionPolicy
         equal:
           path: metadata.name
           value: cozystack-application-scheduling-class-policy
-      - documentIndex: 1
+      - documentSelector:
+          path: kind
+          value: ValidatingAdmissionPolicyBinding
         equal:
           path: spec.policyName
           value: cozystack-application-scheduling-class-policy
-      - documentIndex: 1
+      - documentSelector:
+          path: kind
+          value: ValidatingAdmissionPolicyBinding
         equal:
           path: spec.validationActions
           value: [Deny]
