@@ -1,0 +1,1911 @@
+Ported from a downstream Kilo fork (author: Daniel Sali), rebased onto the
+upstream base pinned in the Dockerfile plus feat-add-cross-mesh-granularity.diff.
+The fork's README changes are left out.
+
+- Coalesce remote Node watch events over a 1s debounce window before
+  rebuilding the topology.
+- Replace per-rule iptables fork/exec loops with atomic iptables-restore /
+  ip6tables-restore --noflush transactions, and skip KILO-NAT population when
+  no POSTROUTING jump exists.
+- Ignore remote discovered-endpoints updates that cannot affect local
+  WireGuard peer endpoints (PersistentKeepalive == 0, same-location nodes in
+  cross mode, or keys already shadowed by a local handshake).
+- Keep a segment leader's existing valid WireGuard IP across topology rebuilds
+  and agent restarts, so nodes joining or leaving no longer renumber existing
+  peers (context: https://github.com/squat/kilo/issues/549).
+- Keep the wireguard-ip annotation when the agent cleans up on shutdown, so
+  a restarted agent reuses its address instead of allocating a fresh one
+  from an incomplete view of the mesh and renumbering its neighbours on
+  every rolling update.
+
+diff --git a/cmd/kgctl/connect_linux.go b/cmd/kgctl/connect_linux.go
+index 9f38fe57..4c4ab0d7 100644
+--- a/cmd/kgctl/connect_linux.go
++++ b/cmd/kgctl/connect_linux.go
+@@ -308,7 +308,7 @@ func sync(table *route.Table, peerName string, privateKey wgtypes.Key, iface int
+ 			nodeNames = append(nodeNames, n.Name)
+ 		}
+ 		if n.WireGuardIP != nil && subnet == nil {
+-			subnet = n.WireGuardIP
++			subnet = &net.IPNet{IP: n.WireGuardIP.IP.Mask(n.WireGuardIP.Mask), Mask: n.WireGuardIP.Mask}
+ 		}
+ 	}
+ 	if len(nodes) == 0 {
+@@ -317,7 +317,6 @@ func sync(table *route.Table, peerName string, privateKey wgtypes.Key, iface int
+ 	if subnet == nil {
+ 		return errors.New("did not find a valid Kilo subnet on any node")
+ 	}
+-	subnet.IP = subnet.IP.Mask(subnet.Mask)
+ 	sort.Strings(nodeNames)
+ 	nodes[nodeNames[0]].AllowedLocationIPs = append(nodes[nodeNames[0]].AllowedLocationIPs, connectOpts.allowedIPs...)
+ 	peers := make(map[string]*mesh.Peer)
+diff --git a/cmd/kgctl/graph.go b/cmd/kgctl/graph.go
+index cb104089..70ec21f4 100644
+--- a/cmd/kgctl/graph.go
++++ b/cmd/kgctl/graph.go
+@@ -16,9 +16,9 @@ package main
+ 
+ import (
+ 	"fmt"
+-
+ 	"github.com/spf13/cobra"
+ 	"golang.zx2c4.com/wireguard/wgctrl/wgtypes"
++	"net"
+ 
+ 	"github.com/squat/kilo/pkg/mesh"
+ )
+@@ -54,10 +54,10 @@ func runGraph(_ *cobra.Command, _ []string) error {
+ 			hostname = n.Name
+ 		}
+ 		if n.WireGuardIP != nil {
+-			subnet = n.WireGuardIP
++			subnet = &net.IPNet{IP: n.WireGuardIP.IP.Mask(n.WireGuardIP.Mask), Mask: n.WireGuardIP.Mask}
+ 		}
+ 	}
+-	subnet.IP = subnet.IP.Mask(subnet.Mask)
++	subnet = &net.IPNet{IP: subnet.IP.Mask(subnet.Mask), Mask: subnet.Mask}
+ 	if len(nodes) == 0 {
+ 		return fmt.Errorf("did not find any valid Kilo nodes in the cluster")
+ 	}
+diff --git a/cmd/kgctl/showconf.go b/cmd/kgctl/showconf.go
+index 7351c927..01ae45e9 100644
+--- a/cmd/kgctl/showconf.go
++++ b/cmd/kgctl/showconf.go
+@@ -162,10 +162,10 @@ func runShowConfNode(_ *cobra.Command, args []string) error {
+ 			nodes[n.Name] = n
+ 		}
+ 		if n.WireGuardIP != nil {
+-			subnet = n.WireGuardIP
++			subnet = &net.IPNet{IP: n.WireGuardIP.IP.Mask(n.WireGuardIP.Mask), Mask: n.WireGuardIP.Mask}
+ 		}
+ 	}
+-	subnet.IP = subnet.IP.Mask(subnet.Mask)
++	subnet = &net.IPNet{IP: subnet.IP.Mask(subnet.Mask), Mask: subnet.Mask}
+ 	if len(nodes) == 0 {
+ 		return errors.New("did not find any valid Kilo nodes in the cluster")
+ 	}
+@@ -260,10 +260,10 @@ func runShowConfPeer(_ *cobra.Command, args []string) error {
+ 			hostname = n.Name
+ 		}
+ 		if n.WireGuardIP != nil {
+-			subnet = n.WireGuardIP
++			subnet = &net.IPNet{IP: n.WireGuardIP.IP.Mask(n.WireGuardIP.Mask), Mask: n.WireGuardIP.Mask}
+ 		}
+ 	}
+-	subnet.IP = subnet.IP.Mask(subnet.Mask)
++	subnet = &net.IPNet{IP: subnet.IP.Mask(subnet.Mask), Mask: subnet.Mask}
+ 	if len(nodes) == 0 {
+ 		return errors.New("did not find any valid Kilo nodes in the cluster")
+ 	}
+diff --git a/pkg/iptables/fake.go b/pkg/iptables/fake.go
+index 985b7b33..43fd49b2 100644
+--- a/pkg/iptables/fake.go
++++ b/pkg/iptables/fake.go
+@@ -16,6 +16,7 @@ package iptables
+ 
+ import (
+ 	"fmt"
++	"strconv"
+ 	"strings"
+ 	"sync/atomic"
+ 
+@@ -118,21 +119,23 @@ func (f *fakeClient) List(table, chain string) ([]string, error) {
+ 
+ func (f *fakeClient) ClearChain(table, name string) error {
+ 	atomic.AddUint64(&f.calls, 1)
+-	for i := range f.storage {
+-		r, ok := f.storage[i].(*rule)
+-		if !ok {
++	f.flushChainRules(table, name)
++	_ = f.DeleteChain(table, name)
++	return f.NewChain(table, name)
++}
++
++func (f *fakeClient) flushChainRules(table, name string) {
++	kept := f.storage[:0]
++	for _, item := range f.storage {
++		if r, ok := item.(*rule); ok && r.table == table && r.chain == name {
+ 			continue
+ 		}
+-		if table == r.table && name == r.chain {
+-			if err := f.Delete(table, name, r.spec...); err != nil {
+-				return nil
+-			}
+-		}
++		kept = append(kept, item)
+ 	}
+-	if err := f.DeleteChain(table, name); err != nil {
+-		return err
++	for i := len(kept); i < len(f.storage); i++ {
++		f.storage[i] = nil
+ 	}
+-	return f.NewChain(table, name)
++	f.storage = kept
+ }
+ 
+ func (f *fakeClient) DeleteChain(table, name string) error {
+@@ -183,3 +186,126 @@ func (f *fakeClient) ListChains(table string) ([]string, error) {
+ 	}
+ 	return cs, nil
+ }
++
++func (f *fakeClient) RestoreNoFlush(input string) error {
++	if input == "" {
++		return nil
++	}
++	atomic.AddUint64(&f.calls, 1)
++	var table string
++	for _, rawLine := range strings.Split(input, "\n") {
++		line := strings.TrimSpace(rawLine)
++		if line == "" || strings.HasPrefix(line, "#") || line == "COMMIT" {
++			continue
++		}
++		if strings.HasPrefix(line, "*") {
++			table = line[1:]
++			continue
++		}
++		if strings.HasPrefix(line, ":") {
++			fields := strings.Fields(line[1:])
++			if len(fields) == 0 {
++				continue
++			}
++			chName := fields[0]
++			f.flushChainRules(table, chName)
++			exists := false
++			c := &chain{table: table, chain: chName}
++			for _, item := range f.storage {
++				if item.String() == c.String() {
++					exists = true
++					break
++				}
++			}
++			if !exists {
++				f.storage = append(f.storage, c)
++			}
++			continue
++		}
++		tokens := splitRestoreArgs(line)
++		if len(tokens) < 2 {
++			continue
++		}
++		switch tokens[0] {
++		case "-A":
++			f.storage = append(f.storage, &rule{table: table, chain: tokens[1], spec: tokens[2:]})
++		case "-I":
++			pos := 1
++			specStart := 2
++			if len(tokens) >= 3 {
++				if p, err := strconv.Atoi(tokens[2]); err == nil {
++					pos = p
++					specStart = 3
++				}
++			}
++			idx := pos - 1
++			if idx < 0 {
++				idx = 0
++			}
++			if idx > len(f.storage) {
++				idx = len(f.storage)
++			}
++			r := &rule{table: table, chain: tokens[1], spec: tokens[specStart:]}
++			f.storage = append(f.storage, nil)
++			copy(f.storage[idx+1:], f.storage[idx:])
++			f.storage[idx] = r
++		case "-D":
++			r := &rule{table: table, chain: tokens[1], spec: tokens[2:]}
++			found := false
++			for i := range f.storage {
++				if f.storage[i].String() == r.String() {
++					copy(f.storage[i:], f.storage[i+1:])
++					f.storage[len(f.storage)-1] = nil
++					f.storage = f.storage[:len(f.storage)-1]
++					found = true
++					break
++				}
++			}
++			if !found {
++				return fmt.Errorf("bad rule (does a matching rule exist in chain %s?): %s", tokens[1], r.String())
++			}
++		case "-F":
++			f.flushChainRules(table, tokens[1])
++		case "-X":
++			for i := range f.storage {
++				if r, ok := f.storage[i].(*rule); ok && r.table == table && r.chain == tokens[1] {
++					return fmt.Errorf("cannot delete chain %s; rules exist", tokens[1])
++				}
++			}
++			c := &chain{table: table, chain: tokens[1]}
++			for i := range f.storage {
++				if f.storage[i].String() == c.String() {
++					copy(f.storage[i:], f.storage[i+1:])
++					f.storage[len(f.storage)-1] = nil
++					f.storage = f.storage[:len(f.storage)-1]
++					break
++				}
++			}
++		}
++	}
++	return nil
++}
++
++func splitRestoreArgs(line string) []string {
++	var args []string
++	var cur strings.Builder
++	inQuotes := false
++	for i := range len(line) {
++		ch := line[i]
++		switch {
++		case ch == '"':
++			inQuotes = !inQuotes
++		case (ch == ' ' || ch == '\t') && !inQuotes:
++			if cur.Len() > 0 {
++				args = append(args, cur.String())
++				cur.Reset()
++			}
++		default:
++			cur.WriteByte(ch)
++		}
++	}
++	if cur.Len() > 0 {
++		args = append(args, cur.String())
++	}
++	return args
++}
+diff --git a/pkg/iptables/iptables.go b/pkg/iptables/iptables.go
+index 26967aa2..4e337b7d 100644
+--- a/pkg/iptables/iptables.go
++++ b/pkg/iptables/iptables.go
+@@ -15,10 +15,14 @@
+ package iptables
+ 
+ import (
++	"bytes"
+ 	"fmt"
+ 	"io"
+ 	"net"
+ 	"os"
++	"os/exec"
++	"sort"
++	"strings"
+ 	"sync"
+ 	"time"
+ 
+@@ -92,6 +96,7 @@ type Client interface {
+ 	DeleteChain(table string, chain string) error
+ 	NewChain(table string, chain string) error
+ 	ListChains(table string) ([]string, error)
++	RestoreNoFlush(input string) error
+ }
+ 
+ // Rule is an interface for interacting with iptables objects.
+@@ -157,7 +162,14 @@ func (r *rule) String() string {
+ 	if r == nil {
+ 		return ""
+ 	}
+-	spec := r.table + " -A " + r.chain
++	return r.table + " " + r.specString("-A")
++}
++
++func (r *rule) specString(op string) string {
++	if r == nil {
++		return ""
++	}
++	spec := op + " " + r.chain
+ 	for i, s := range r.spec {
+ 		spec += " "
+ 		// If this is the content of a comment, wrap the value in quotes.
+@@ -247,6 +259,53 @@ func chainToString(table, chain string) string {
+ 	return fmt.Sprintf("%s -N %s", table, chain)
+ }
+ 
++// restoreClient wraps a go-iptables client with atomic iptables-restore --noflush support.
++type restoreClient struct {
++	*iptables.IPTables
++	restorePath string
++	hasWait     bool
++}
++
++func newRestoreClient(proto iptables.Protocol) (Client, error) {
++	ipt, err := iptables.NewWithProtocol(proto)
++	if err != nil {
++		return nil, err
++	}
++	cmd := "iptables-restore"
++	if proto == iptables.ProtocolIPv6 {
++		cmd = "ip6tables-restore"
++	}
++	path, err := exec.LookPath(cmd)
++	if err != nil {
++		return nil, fmt.Errorf("failed to find %s: %v", cmd, err)
++	}
++	v1, v2, v3 := ipt.GetIptablesVersion()
++	hasWait := v1 > 1 || (v1 == 1 && v2 > 6) || (v1 == 1 && v2 == 6 && v3 >= 2)
++	return &restoreClient{
++		IPTables:    ipt,
++		restorePath: path,
++		hasWait:     hasWait,
++	}, nil
++}
++
++func (r *restoreClient) RestoreNoFlush(input string) error {
++	if input == "" {
++		return nil
++	}
++	args := []string{"--noflush"}
++	if r.hasWait {
++		args = append(args, "--wait")
++	}
++	var stderr bytes.Buffer
++	cmd := exec.Command(r.restorePath, args...)
++	cmd.Stdin = strings.NewReader(input)
++	cmd.Stderr = &stderr
++	if err := cmd.Run(); err != nil {
++		return fmt.Errorf("running %s %s: %v: %s", r.restorePath, strings.Join(args, " "), err, strings.TrimSpace(stderr.String()))
++	}
++	return nil
++}
++
+ // Controller is able to reconcile a given set of iptables rules.
+ type Controller struct {
+ 	v4           Client
+@@ -305,7 +364,7 @@ func New(opts ...ControllerOption) (*Controller, error) {
+ 		o(c)
+ 	}
+ 	if c.v4 == nil {
+-		v4, err := iptables.NewWithProtocol(iptables.ProtocolIPv4)
++		v4, err := newRestoreClient(iptables.ProtocolIPv4)
+ 		if err != nil {
+ 			return nil, fmt.Errorf("failed to create iptables IPv4 client: %v", err)
+ 		}
+@@ -320,7 +379,7 @@ func New(opts ...ControllerOption) (*Controller, error) {
+ 			_ = level.Info(c.logger).Log("msg", "IPv6 is disabled in the kernel; disabling the IPv6 iptables controller")
+ 			c.v6 = &fakeClient{}
+ 		} else {
+-			v6, err := iptables.NewWithProtocol(iptables.ProtocolIPv6)
++			v6, err := newRestoreClient(iptables.ProtocolIPv6)
+ 			if err != nil {
+ 				return nil, fmt.Errorf("failed to create iptables IPv6 client: %v", err)
+ 			}
+@@ -367,75 +426,143 @@ func (c *Controller) reconcile() error {
+ 	c.Lock()
+ 	defer c.Unlock()
+ 	var rc ruleCache
+-	if err := c.reconcileAppendRules(rc); err != nil {
+-		return err
++	for _, proto := range []Protocol{ProtocolIPv4, ProtocolIPv6} {
++		if err := c.reconcileProto(proto, &rc); err != nil {
++			return err
++		}
+ 	}
+-	return c.reconcilePrependRules(rc)
++	return nil
+ }
+ 
+-func (c *Controller) reconcileAppendRules(rc ruleCache) error {
++func (c *Controller) reconcileProto(proto Protocol, rc *ruleCache) error {
++	owned := ownedChainsForProto(proto, c.appendRules, c.prependRules)
++
++	firstMissingAppend := -1
++	var missingAppendTables map[string]struct{}
+ 	for i, r := range c.appendRules {
+-		ok, err := rc.exists(c.client(r.Proto()), r)
++		if r.Proto() != proto {
++			continue
++		}
++		ok, err := rc.exists(c.client(proto), r)
+ 		if err != nil {
+ 			return fmt.Errorf("failed to check if rule exists: %v", err)
+ 		}
+ 		if !ok {
+-			_ = level.Info(c.logger).Log("msg", fmt.Sprintf("applying %d iptables rules", len(c.appendRules)-i))
+-			if err := c.resetFromIndex(i, c.appendRules); err != nil {
+-				return fmt.Errorf("failed to add rule: %v", err)
++			if firstMissingAppend == -1 {
++				firstMissingAppend = i
++				missingAppendTables = make(map[string]struct{})
+ 			}
+-			break
++		}
++		if firstMissingAppend != -1 {
++			missingAppendTables[ruleTable(r)] = struct{}{}
+ 		}
+ 	}
+-	return nil
+-}
+ 
+-func (c *Controller) reconcilePrependRules(rc ruleCache) error {
++	rebuildTables := make(map[string]struct{})
++	for t := range missingAppendTables {
++		if len(owned[t]) > 0 {
++			rebuildTables[t] = struct{}{}
++		}
++	}
++
++	var missingPrepends []*rule
+ 	for _, r := range c.prependRules {
+-		ok, err := rc.exists(c.client(r.Proto()), r)
++		if r.Proto() != proto {
++			continue
++		}
++		ok, err := rc.exists(c.client(proto), r)
+ 		if err != nil {
+ 			return fmt.Errorf("failed to check if rule exists: %v", err)
+ 		}
+ 		if !ok {
+-			_ = level.Info(c.logger).Log("msg", "prepending iptables rule")
+-			if err := r.Prepend(c.client(r.Proto())); err != nil {
+-				return fmt.Errorf("failed to prepend rule: %v", err)
++			ru, isRule := r.(*rule)
++			if !isRule {
++				continue
++			}
++			if owned[ru.table][ru.chain] {
++				rebuildTables[ru.table] = struct{}{}
++			} else {
++				missingPrepends = append(missingPrepends, ru)
+ 			}
+ 		}
+ 	}
+-	return nil
+-}
+ 
+-// resetFromIndex re-adds all rules starting from the given index.
+-func (c *Controller) resetFromIndex(i int, rules []Rule) error {
+-	if i >= len(rules) {
++	if firstMissingAppend == -1 && len(rebuildTables) == 0 && len(missingPrepends) == 0 {
+ 		return nil
+ 	}
+-	for j := i; j < len(rules); j++ {
+-		if err := rules[j].Delete(c.client(rules[j].Proto())); err != nil {
+-			return fmt.Errorf("failed to delete rule: %v", err)
++
++	tables := make(map[string]*tableBatch)
++	getBatch := func(table string) *tableBatch {
++		b, ok := tables[table]
++		if !ok {
++			b = &tableBatch{flushedChains: make(map[string]bool)}
++			tables[table] = b
+ 		}
+-		if err := rules[j].Append(c.client(rules[j].Proto())); err != nil {
+-			return fmt.Errorf("failed to add rule: %v", err)
++		return b
++	}
++
++	// Atomically rebuild owned chains in affected tables via :CHAIN - [0:0].
++	for table := range rebuildTables {
++		b := getBatch(table)
++		for ch := range owned[table] {
++			b.flushedChains[ch] = true
++		}
++		for _, r := range c.prependRules {
++			if r.Proto() != proto {
++				continue
++			}
++			if ru, ok := r.(*rule); ok && ru.table == table && owned[table][ru.chain] {
++				b.lines = append(b.lines, insertSpecString(ru, 1))
++			}
++		}
++		for _, r := range c.appendRules {
++			if r.Proto() != proto {
++				continue
++			}
++			if ru, ok := r.(*rule); ok && ru.table == table && owned[table][ru.chain] {
++				b.lines = append(b.lines, ru.specString("-A"))
++			}
+ 		}
+ 	}
+-	return nil
+-}
+ 
+-// deleteFromIndex deletes all rules starting from the given index.
+-func (c *Controller) deleteFromIndex(i int, rules *[]Rule) error {
+-	if i >= len(*rules) {
+-		return nil
++	// Re-prepend missing rules on non-owned chains (e.g. POSTROUTING, FORWARD).
++	for _, ru := range missingPrepends {
++		b := getBatch(ru.table)
++		b.lines = append(b.lines, insertSpecString(ru, 1))
+ 	}
+-	for j := i; j < len(*rules); j++ {
+-		if err := (*rules)[j].Delete(c.client((*rules)[j].Proto())); err != nil {
+-			*rules = append((*rules)[:i], (*rules)[j:]...)
+-			return fmt.Errorf("failed to delete rule: %v", err)
++
++	// Re-apply missing append rules from firstMissingAppend on non-owned chains (e.g. INPUT).
++	if firstMissingAppend != -1 {
++		_ = level.Info(c.logger).Log("msg", fmt.Sprintf("applying %d iptables rules", len(c.appendRules)-firstMissingAppend))
++		for j := firstMissingAppend; j < len(c.appendRules); j++ {
++			r := c.appendRules[j]
++			if r.Proto() != proto {
++				continue
++			}
++			if ch, ok := r.(*chain); ok {
++				if _, rebuilt := rebuildTables[ch.table]; !rebuilt {
++					b := getBatch(ch.table)
++					b.flushedChains[ch.chain] = true
++				}
++				continue
++			}
++			ru := r.(*rule)
++			if owned[ru.table][ru.chain] {
++				continue
++			}
++			exists, err := rc.exists(c.client(proto), ru)
++			if err != nil {
++				return fmt.Errorf("failed to check if rule exists: %v", err)
++			}
++			b := getBatch(ru.table)
++			if exists {
++				b.lines = append(b.lines, ru.specString("-D"))
++			}
++			b.lines = append(b.lines, ru.specString("-A"))
+ 		}
+-		(*rules)[j] = nil
+ 	}
+-	*rules = (*rules)[:i]
+-	return nil
++
++	return c.restoreTables(proto, tables)
+ }
+ 
+ // Set idempotently overwrites any iptables rules previously defined
+@@ -443,64 +570,354 @@ func (c *Controller) deleteFromIndex(i int, rules *[]Rule) error {
+ func (c *Controller) Set(rules RuleSet) error {
+ 	c.Lock()
+ 	defer c.Unlock()
+-	if err := c.setAppendRules(rules.appendRules); err != nil {
+-		return err
++	if rulesEqual(c.appendRules, rules.appendRules) && rulesEqualUnordered(c.prependRules, rules.prependRules) {
++		return nil
++	}
++	for _, proto := range []Protocol{ProtocolIPv4, ProtocolIPv6} {
++		if err := c.setProto(proto, rules.appendRules, rules.prependRules); err != nil {
++			return err
++		}
+ 	}
+-	return c.setPrependRules(rules.prependRules)
++	c.appendRules = append([]Rule(nil), rules.appendRules...)
++	c.prependRules = append([]Rule(nil), rules.prependRules...)
++	return nil
+ }
+ 
+-func (c *Controller) setAppendRules(appendRules []Rule) error {
+-	var i int
+-	for ; i < len(appendRules); i++ {
+-		if i < len(c.appendRules) {
+-			if appendRules[i].String() != c.appendRules[i].String() {
+-				if err := c.deleteFromIndex(i, &c.appendRules); err != nil {
+-					return err
++func (c *Controller) setProto(proto Protocol, newAppendAll, newPrependAll []Rule) error {
++	oldAppend := filterByProto(proto, c.appendRules)
++	newAppend := filterByProto(proto, newAppendAll)
++	oldPrepend := filterByProto(proto, c.prependRules)
++	newPrepend := filterByProto(proto, newPrependAll)
++
++	if rulesEqual(oldAppend, newAppend) && rulesEqualUnordered(oldPrepend, newPrepend) {
++		return nil
++	}
++
++	var rc ruleCache
++	oldOwned := ownedChainsForProto(proto, oldAppend, oldPrepend)
++	newOwned := ownedChainsForProto(proto, newAppend, newPrepend)
++
++	tables := make(map[string]*tableBatch)
++	getBatch := func(table string) *tableBatch {
++		b, ok := tables[table]
++		if !ok {
++			b = &tableBatch{
++				flushedChains: make(map[string]bool),
++				deletedChains: make(map[string]bool),
++			}
++			tables[table] = b
++		}
++		return b
++	}
++
++	// Determine which owned chains changed and need atomic flush + repopulate.
++	for table, chains := range newOwned {
++		for ch := range chains {
++			if !oldOwned[table][ch] ||
++				!chainRulesEqual(table, ch, oldAppend, newAppend) ||
++				!chainRulesEqualUnordered(table, ch, oldPrepend, newPrepend) {
++				b := getBatch(table)
++				b.flushedChains[ch] = true
++				for _, r := range newPrepend {
++					if ru, ok := r.(*rule); ok && ru.table == table && ru.chain == ch {
++						b.lines = append(b.lines, insertSpecString(ru, 1))
++					}
++				}
++				for _, r := range newAppend {
++					if ru, ok := r.(*rule); ok && ru.table == table && ru.chain == ch {
++						b.lines = append(b.lines, ru.specString("-A"))
++					}
+ 				}
+ 			}
+ 		}
+-		if i >= len(c.appendRules) {
+-			if err := appendRules[i].Append(c.client(appendRules[i].Proto())); err != nil {
+-				return fmt.Errorf("failed to add rule: %v", err)
++	}
++
++	// Handle non-owned append rules (e.g. INPUT jumps).
++	oldNonOwnedAppend := filterNonOwnedRules(oldAppend, oldOwned)
++	newNonOwnedAppend := filterNonOwnedRules(newAppend, newOwned)
++	if !rulesEqual(oldNonOwnedAppend, newNonOwnedAppend) {
++		diverge := 0
++		for diverge < len(oldNonOwnedAppend) && diverge < len(newNonOwnedAppend) &&
++			oldNonOwnedAppend[diverge].String() == newNonOwnedAppend[diverge].String() {
++			diverge++
++		}
++		for j := diverge; j < len(oldNonOwnedAppend); j++ {
++			ru := oldNonOwnedAppend[j].(*rule)
++			exists, err := rc.exists(c.client(proto), ru)
++			if err != nil {
++				return fmt.Errorf("failed to check if rule exists: %v", err)
++			}
++			if exists {
++				getBatch(ru.table).lines = append(getBatch(ru.table).lines, ru.specString("-D"))
++			}
++		}
++		for j := diverge; j < len(newNonOwnedAppend); j++ {
++			ru := newNonOwnedAppend[j].(*rule)
++			exists, err := rc.exists(c.client(proto), ru)
++			if err != nil {
++				return fmt.Errorf("failed to check if rule exists: %v", err)
++			}
++			// Avoid duplicate if rule already exists in kernel and wasn't scheduled for deletion above.
++			deletedAbove := false
++			for k := diverge; k < len(oldNonOwnedAppend); k++ {
++				if oldNonOwnedAppend[k].String() == ru.String() {
++					deletedAbove = true
++					break
++				}
++			}
++			if !exists || deletedAbove {
++				getBatch(ru.table).lines = append(getBatch(ru.table).lines, ru.specString("-A"))
+ 			}
+-			c.appendRules = append(c.appendRules, appendRules[i])
+ 		}
+ 	}
+-	err := c.deleteFromIndex(i, &c.appendRules)
+-	if err != nil {
+-		return fmt.Errorf("failed to delete rule: %v", err)
++
++	// Handle non-owned prepend rules (e.g. POSTROUTING jumps, FORWARD rules):
++	// add new ones first, then delete obsolete ones before deleting any owned chains they referenced.
++	for _, r := range newPrepend {
++		ru, ok := r.(*rule)
++		if !ok || newOwned[ru.table][ru.chain] {
++			continue
++		}
++		if !containsRule(oldPrepend, r) {
++			exists, err := rc.exists(c.client(proto), ru)
++			if err != nil {
++				return fmt.Errorf("failed to check if rule exists: %v", err)
++			}
++			if !exists {
++				getBatch(ru.table).lines = append(getBatch(ru.table).lines, insertSpecString(ru, 1))
++			}
++		}
++	}
++	for _, r := range oldPrepend {
++		ru, ok := r.(*rule)
++		if !ok || oldOwned[ru.table][ru.chain] || newOwned[ru.table][ru.chain] {
++			continue
++		}
++		if !containsRule(newPrepend, r) {
++			exists, err := rc.exists(c.client(proto), ru)
++			if err != nil {
++				return fmt.Errorf("failed to check if rule exists: %v", err)
++			}
++			if exists {
++				getBatch(ru.table).lines = append(getBatch(ru.table).lines, ru.specString("-D"))
++			}
++		}
+ 	}
+-	return nil
+-}
+ 
+-func (c *Controller) setPrependRules(prependRules []Rule) error {
+-	for _, prependRule := range prependRules {
+-		if !containsRule(c.prependRules, prependRule) {
+-			if err := prependRule.Prepend(c.client(prependRule.Proto())); err != nil {
+-				return fmt.Errorf("failed to add rule: %v", err)
++	// Delete owned chains that are no longer desired (after jump rules in that table were removed).
++	for table, chains := range oldOwned {
++		for ch := range chains {
++			if !newOwned[table][ch] {
++				chainRule := &chain{table: table, chain: ch, proto: proto}
++				exists, err := rc.exists(c.client(proto), chainRule)
++				if err != nil {
++					return fmt.Errorf("failed to check if chain exists: %v", err)
++				}
++				if exists {
++					b := getBatch(table)
++					b.deletedChains[ch] = true
++				}
+ 			}
+-			c.prependRules = append(c.prependRules, prependRule)
+ 		}
+ 	}
+-	for _, existingRule := range c.prependRules {
+-		if !containsRule(prependRules, existingRule) {
+-			if err := existingRule.Delete(c.client(existingRule.Proto())); err != nil {
+-				return fmt.Errorf("failed to delete rule: %v", err)
++
++	return c.restoreTables(proto, tables)
++}
++
++type tableBatch struct {
++	flushedChains map[string]bool
++	deletedChains map[string]bool
++	lines         []string
++}
++
++func (c *Controller) restoreTables(proto Protocol, tables map[string]*tableBatch) error {
++	if len(tables) == 0 {
++		return nil
++	}
++	tableNames := make([]string, 0, len(tables))
++	for t := range tables {
++		tableNames = append(tableNames, t)
++	}
++	sort.Strings(tableNames)
++
++	var buf strings.Builder
++	for _, table := range tableNames {
++		b := tables[table]
++		if len(b.flushedChains) == 0 && len(b.deletedChains) == 0 && len(b.lines) == 0 {
++			continue
++		}
++		buf.WriteByte('*')
++		buf.WriteString(table)
++		buf.WriteByte('\n')
++
++		if len(b.flushedChains) > 0 {
++			chains := make([]string, 0, len(b.flushedChains))
++			for ch := range b.flushedChains {
++				chains = append(chains, ch)
++			}
++			sort.Strings(chains)
++			for _, ch := range chains {
++				buf.WriteByte(':')
++				buf.WriteString(ch)
++				buf.WriteString(" - [0:0]\n")
++			}
++		}
++		for _, line := range b.lines {
++			buf.WriteString(line)
++			buf.WriteByte('\n')
++		}
++		if len(b.deletedChains) > 0 {
++			chains := make([]string, 0, len(b.deletedChains))
++			for ch := range b.deletedChains {
++				chains = append(chains, ch)
++			}
++			sort.Strings(chains)
++			for _, ch := range chains {
++				buf.WriteString("-F ")
++				buf.WriteString(ch)
++				buf.WriteByte('\n')
++				buf.WriteString("-X ")
++				buf.WriteString(ch)
++				buf.WriteByte('\n')
+ 			}
+-			c.prependRules = removeRule(c.prependRules, existingRule)
+ 		}
++		buf.WriteString("COMMIT\n")
++	}
++	payload := buf.String()
++	if payload == "" {
++		return nil
++	}
++	if err := c.client(proto).RestoreNoFlush(payload); err != nil {
++		return fmt.Errorf("failed to restore iptables rules: %v", err)
+ 	}
+ 	return nil
+ }
+ 
+-func removeRule(rules []Rule, toRemove Rule) []Rule {
+-	ret := make([]Rule, 0, len(rules))
+-	for _, rule := range rules {
+-		if rule.String() != toRemove.String() {
+-			ret = append(ret, rule)
++func insertSpecString(r *rule, pos int) string {
++	spec := fmt.Sprintf("-I %s %d", r.chain, pos)
++	for i, s := range r.spec {
++		spec += " "
++		if i > 0 && r.spec[i-1] == "--comment" {
++			spec += `"` + s + `"`
++		} else {
++			spec += s
+ 		}
+ 	}
+-	return ret
++	return spec
++}
++
++func ruleTable(r Rule) string {
++	switch v := r.(type) {
++	case *chain:
++		return v.table
++	case *rule:
++		return v.table
++	default:
++		return ""
++	}
++}
++
++func filterByProto(proto Protocol, rules []Rule) []Rule {
++	var out []Rule
++	for _, r := range rules {
++		if r.Proto() == proto {
++			out = append(out, r)
++		}
++	}
++	return out
++}
++
++func ownedChainsForProto(proto Protocol, ruleSets ...[]Rule) map[string]map[string]bool {
++	owned := make(map[string]map[string]bool)
++	for _, rs := range ruleSets {
++		for _, r := range rs {
++			if r.Proto() != proto {
++				continue
++			}
++			if ch, ok := r.(*chain); ok {
++				if owned[ch.table] == nil {
++					owned[ch.table] = make(map[string]bool)
++				}
++				owned[ch.table][ch.chain] = true
++			}
++		}
++	}
++	return owned
++}
++
++func filterNonOwnedRules(rules []Rule, owned map[string]map[string]bool) []Rule {
++	var out []Rule
++	for _, r := range rules {
++		ru, ok := r.(*rule)
++		if !ok {
++			continue
++		}
++		if owned[ru.table][ru.chain] {
++			continue
++		}
++		out = append(out, r)
++	}
++	return out
++}
++
++func rulesEqual(a, b []Rule) bool {
++	if len(a) != len(b) {
++		return false
++	}
++	for i := range a {
++		if a[i].Proto() != b[i].Proto() || a[i].String() != b[i].String() {
++			return false
++		}
++	}
++	return true
++}
++
++func rulesEqualUnordered(a, b []Rule) bool {
++	if len(a) != len(b) {
++		return false
++	}
++	counts := make(map[string]int, len(a))
++	for _, r := range a {
++		counts[fmt.Sprintf("%d:%s", r.Proto(), r.String())]++
++	}
++	for _, r := range b {
++		k := fmt.Sprintf("%d:%s", r.Proto(), r.String())
++		counts[k]--
++		if counts[k] < 0 {
++			return false
++		}
++	}
++	return true
++}
++
++func chainRulesEqual(table, ch string, a, b []Rule) bool {
++	var ra, rb []Rule
++	for _, r := range a {
++		if ru, ok := r.(*rule); ok && ru.table == table && ru.chain == ch {
++			ra = append(ra, r)
++		}
++	}
++	for _, r := range b {
++		if ru, ok := r.(*rule); ok && ru.table == table && ru.chain == ch {
++			rb = append(rb, r)
++		}
++	}
++	return rulesEqual(ra, rb)
++}
++
++func chainRulesEqualUnordered(table, ch string, a, b []Rule) bool {
++	var ra, rb []Rule
++	for _, r := range a {
++		if ru, ok := r.(*rule); ok && ru.table == table && ru.chain == ch {
++			ra = append(ra, r)
++		}
++	}
++	for _, r := range b {
++		if ru, ok := r.(*rule); ok && ru.table == table && ru.chain == ch {
++			rb = append(rb, r)
++		}
++	}
++	return rulesEqualUnordered(ra, rb)
+ }
+ 
+ func containsRule(haystack []Rule, needle Rule) bool {
+@@ -514,13 +931,7 @@ func containsRule(haystack []Rule, needle Rule) bool {
+ 
+ // CleanUp will clean up any rules created by the controller.
+ func (c *Controller) CleanUp() error {
+-	c.Lock()
+-	defer c.Unlock()
+-	err := c.deleteFromIndex(0, &c.prependRules)
+-	if err != nil {
+-		return err
+-	}
+-	return c.deleteFromIndex(0, &c.appendRules)
++	return c.Set(RuleSet{})
+ }
+ 
+ func (c *Controller) client(p Protocol) Client {
+diff --git a/pkg/iptables/iptables_test.go b/pkg/iptables/iptables_test.go
+index 447eb826..ddc59b6d 100644
+--- a/pkg/iptables/iptables_test.go
++++ b/pkg/iptables/iptables_test.go
+@@ -15,6 +15,10 @@
+ package iptables
+ 
+ import (
++	"fmt"
++	"os/exec"
++	"runtime"
++	"strings"
+ 	"testing"
+ )
+ 
+@@ -238,3 +242,125 @@ func TestReconcile(t *testing.T) {
+ 		}
+ 	}
+ }
++
++func TestBatchRestoreKiloNAT(t *testing.T) {
++	v4 := &fakeClient{}
++	v6 := &fakeClient{}
++	controller, err := New(WithClients(v4, v6))
++	if err != nil {
++		t.Fatalf("unexpected error instantiating controller: %v", err)
++	}
++
++	// Pre-populate an unrelated external POSTROUTING rule that must never be flushed.
++	externalRule := NewIPv4Rule("nat", "POSTROUTING", "-s", "172.17.0.0/16", "-j", "MASQUERADE")
++	if err := externalRule.Append(v4); err != nil {
++		t.Fatalf("failed to seed external rule: %v", err)
++	}
++
++	buildNatSet := func(nodeCount int) RuleSet {
++		rs := RuleSet{}
++		rs.AddToAppend(NewIPv4Chain("nat", "KILO-NAT"))
++		rs.AddToPrepend(NewIPv4Rule("nat", "POSTROUTING", "!", "-s", "192.168.102.0/23", "-d", "192.168.102.0/23", "-m", "comment", "--comment", "Kilo: jump to NAT chain", "-j", "KILO-NAT"))
++		for i := range nodeCount {
++			hi := i / 256
++			lo := i % 256
++			rs.AddToPrepend(NewIPv4Rule("nat", "KILO-NAT", "-d", fmt.Sprintf("100.66.%d.%d/32", hi, lo), "-m", "comment", "--comment", "Kilo: do not NAT packets destined for WireGuared IPs", "-j", "RETURN"))
++			rs.AddToPrepend(NewIPv4Rule("nat", "KILO-NAT", "-d", fmt.Sprintf("10.246.%d.0/24", i%256), "-m", "comment", "--comment", "Kilo: do not NAT packets destined for known IPs", "-j", "RETURN"))
++		}
++		rs.AddToAppend(NewIPv4Rule("nat", "KILO-NAT", "-m", "comment", "--comment", "Kilo: NAT remaining packets", "-j", "MASQUERADE"))
++		return rs
++	}
++
++	v4.calls = 0
++	set200 := buildNatSet(200)
++	if err := controller.Set(set200); err != nil {
++		t.Fatalf("Set(200 nodes) failed: %v", err)
++	}
++	// Expect 1 List(POSTROUTING) + 1 RestoreNoFlush = 2 calls, instead of >800 per-rule calls.
++	if v4.calls > 2 {
++		t.Fatalf("expected <= 2 iptables invocations for 400+ KILO-NAT rules, got %d", v4.calls)
++	}
++
++	// Idempotent Set must do 0 client calls.
++	v4.calls = 0
++	if err := controller.Set(set200); err != nil {
++		t.Fatalf("idempotent Set(200 nodes) failed: %v", err)
++	}
++	if v4.calls != 0 {
++		t.Fatalf("expected 0 calls on unchanged RuleSet, got %d", v4.calls)
++	}
++
++	// Scaling from 200 to 205 nodes should rebuild KILO-NAT in a single RestoreNoFlush call (POSTROUTING unchanged).
++	v4.calls = 0
++	set205 := buildNatSet(205)
++	if err := controller.Set(set205); err != nil {
++		t.Fatalf("Set(205 nodes) failed: %v", err)
++	}
++	if v4.calls != 1 {
++		t.Fatalf("expected exactly 1 RestoreNoFlush call when updating KILO-NAT, got %d", v4.calls)
++	}
++
++	// External POSTROUTING rule must still be intact.
++	foundExternal := false
++	for _, r := range v4.storage {
++		if r.String() == externalRule.String() {
++			foundExternal = true
++			break
++		}
++	}
++	if !foundExternal {
++		t.Fatalf("external POSTROUTING rule was lost during KILO-NAT RestoreNoFlush")
++	}
++
++	// CleanUp must remove KILO-NAT chain and Kilo's POSTROUTING jump while keeping external POSTROUTING rule.
++	if err := controller.CleanUp(); err != nil {
++		t.Fatalf("CleanUp failed: %v", err)
++	}
++	if len(v4.storage) != 1 || v4.storage[0].String() != externalRule.String() {
++		t.Fatalf("expected only external rule after CleanUp, got %v", v4.storage)
++	}
++}
++
++func TestLiveRestoreClient(t *testing.T) {
++	if runtime.GOOS != "linux" {
++		t.Skip("live iptables-restore test requires linux")
++	}
++	if _, err := exec.LookPath("iptables-restore"); err != nil {
++		t.Skip("iptables-restore binary not installed")
++	}
++	if err := exec.Command("iptables", "-t", "nat", "-S").Run(); err != nil {
++		t.Skipf("insufficient privileges for live iptables test: %v", err)
++	}
++
++	c, err := New(WithClients(nil, &fakeClient{}))
++	if err != nil {
++		t.Fatalf("New controller failed: %v", err)
++	}
++	defer func() { _ = c.CleanUp() }()
++
++	rs := RuleSet{}
++	rs.AddToAppend(NewIPv4Chain("nat", "KILO-TEST-NAT"))
++	rs.AddToPrepend(NewIPv4Rule("nat", "POSTROUTING", "!", "-s", "192.168.102.0/23", "-d", "192.168.102.0/23", "-m", "comment", "--comment", "Kilo: jump to NAT chain", "-j", "KILO-TEST-NAT"))
++	rs.AddToPrepend(NewIPv4Rule("nat", "KILO-TEST-NAT", "-d", "100.66.0.1/32", "-m", "comment", "--comment", "Kilo: do not NAT packets destined for WireGuared IPs", "-j", "RETURN"))
++	rs.AddToAppend(NewIPv4Rule("nat", "KILO-TEST-NAT", "-m", "comment", "--comment", "Kilo: NAT remaining packets", "-j", "MASQUERADE"))
++
++	if err := c.Set(rs); err != nil {
++		t.Fatalf("live Set failed: %v", err)
++	}
++	if err := c.reconcile(); err != nil {
++		t.Fatalf("live reconcile failed: %v", err)
++	}
++	out, err := exec.Command("iptables", "-t", "nat", "-S", "KILO-TEST-NAT").CombinedOutput()
++	if err != nil {
++		t.Fatalf("listing KILO-TEST-NAT failed: %v (%s)", err, string(out))
++	}
++	if !strings.Contains(string(out), "100.66.0.1/32") || !strings.Contains(string(out), "MASQUERADE") {
++		t.Fatalf("unexpected KILO-TEST-NAT contents:\n%s", string(out))
++	}
++	if err := c.CleanUp(); err != nil {
++		t.Fatalf("live CleanUp failed: %v", err)
++	}
++	if err := exec.Command("iptables", "-t", "nat", "-S", "KILO-TEST-NAT").Run(); err == nil {
++		t.Fatalf("expected KILO-TEST-NAT chain to be deleted after CleanUp")
++	}
++}
+diff --git a/pkg/iptables/metrics.go b/pkg/iptables/metrics.go
+index dee77b72..7d325157 100644
+--- a/pkg/iptables/metrics.go
++++ b/pkg/iptables/metrics.go
+@@ -122,3 +122,12 @@ func (m *metricsClientWrapper) ListChains(table string) ([]string, error) {
+ 	}).Inc()
+ 	return m.client.ListChains(table)
+ }
++
++func (m *metricsClientWrapper) RestoreNoFlush(input string) error {
++	m.operationCounter.With(prometheus.Labels{
++		"operation": "RestoreNoFlush",
++		"table":     "*",
++		"chain":     "*",
++	}).Inc()
++	return m.client.RestoreNoFlush(input)
++}
+diff --git a/pkg/k8s/backend.go b/pkg/k8s/backend.go
+index ae8a72a9..a464605a 100644
+--- a/pkg/k8s/backend.go
++++ b/pkg/k8s/backend.go
+@@ -129,16 +129,26 @@ func New(c kubernetes.Interface, kc kiloclient.Interface, ec apiextensions.Inter
+ }
+ 
+ // CleanUp removes configuration applied to the backend.
+-func (nb *nodeBackend) CleanUp(ctx context.Context, name string) error {
+-	patch := []byte("[" + strings.Join([]string{
++// cleanUpPatch is the JSON patch CleanUp applies to the node on agent shutdown.
++func cleanUpPatch() []byte {
++	return []byte("[" + strings.Join([]string{
+ 		fmt.Sprintf(jsonRemovePatch, path.Join("/metadata", "annotations", strings.Replace(endpointAnnotationKey, "/", jsonPatchSlash, 1))),
+ 		fmt.Sprintf(jsonRemovePatch, path.Join("/metadata", "annotations", strings.Replace(internalIPAnnotationKey, "/", jsonPatchSlash, 1))),
+ 		fmt.Sprintf(jsonRemovePatch, path.Join("/metadata", "annotations", strings.Replace(keyAnnotationKey, "/", jsonPatchSlash, 1))),
+ 		fmt.Sprintf(jsonRemovePatch, path.Join("/metadata", "annotations", strings.Replace(lastSeenAnnotationKey, "/", jsonPatchSlash, 1))),
+-		fmt.Sprintf(jsonRemovePatch, path.Join("/metadata", "annotations", strings.Replace(wireGuardIPAnnotationKey, "/", jsonPatchSlash, 1))),
++		// The wireguard-ip annotation is deliberately kept: it is the node's
++		// claim on its WireGuard IP. Removing it on every agent restart made the
++		// restarted agent allocate a fresh address from an incomplete view of the
++		// mesh, collide with the current owner and renumber its neighbours.
++		// handleLocal reuses the annotated IP on start, so keeping it makes the
++		// address survive restarts and rolling updates.
+ 		fmt.Sprintf(jsonRemovePatch, path.Join("/metadata", "annotations", strings.Replace(discoveredEndpointsKey, "/", jsonPatchSlash, 1))),
+ 		fmt.Sprintf(jsonRemovePatch, path.Join("/metadata", "annotations", strings.Replace(granularityKey, "/", jsonPatchSlash, 1))),
+ 	}, ",") + "]")
++}
++
++func (nb *nodeBackend) CleanUp(ctx context.Context, name string) error {
++	patch := cleanUpPatch()
+ 	if _, err := nb.client.CoreV1().Nodes().Patch(ctx, name, types.JSONPatchType, patch, metav1.PatchOptions{}); err != nil {
+ 		return fmt.Errorf("failed to patch node: %v", err)
+ 	}
+diff --git a/pkg/k8s/cleanup_test.go b/pkg/k8s/cleanup_test.go
+new file mode 100644
+index 00000000..80d57c0b
+--- /dev/null
++++ b/pkg/k8s/cleanup_test.go
+@@ -0,0 +1,49 @@
++// Copyright 2026 the Kilo authors
++//
++// Licensed under the Apache License, Version 2.0 (the "License");
++// you may not use this file except in compliance with the License.
++// You may obtain a copy of the License at
++//
++//     http://www.apache.org/licenses/LICENSE-2.0
++//
++// Unless required by applicable law or agreed to in writing, software
++// distributed under the License is distributed on an "AS IS" BASIS,
++// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++// See the License for the specific language governing permissions and
++// limitations under the License.
++
++package k8s
++
++import (
++	"encoding/json"
++	"testing"
++)
++
++// CleanUp runs on every agent shutdown, including rolling updates. It must keep
++// the node's wireguard-ip claim, otherwise the restarted agent allocates a fresh
++// address and renumbers its neighbours.
++func TestCleanUpPatchKeepsWireGuardIP(t *testing.T) {
++	var ops []struct {
++		Op   string `json:"op"`
++		Path string `json:"path"`
++	}
++	if err := json.Unmarshal(cleanUpPatch(), &ops); err != nil {
++		t.Fatalf("clean-up patch is not valid JSON: %v", err)
++	}
++	removed := map[string]bool{}
++	for _, op := range ops {
++		if op.Op != "remove" {
++			t.Errorf("unexpected op %q on %q", op.Op, op.Path)
++		}
++		removed[op.Path] = true
++	}
++	path := func(key string) string { return "/metadata/annotations/" + key[:len("kilo.squat.ai")] + "~1" + key[len("kilo.squat.ai/"):] }
++	if removed[path(wireGuardIPAnnotationKey)] {
++		t.Errorf("clean-up removes %s; it must keep the WireGuard IP claim", wireGuardIPAnnotationKey)
++	}
++	for _, k := range []string{endpointAnnotationKey, internalIPAnnotationKey, keyAnnotationKey, lastSeenAnnotationKey, discoveredEndpointsKey, granularityKey} {
++		if !removed[path(k)] {
++			t.Errorf("clean-up no longer removes %s", k)
++		}
++	}
++}
+diff --git a/pkg/mesh/mesh.go b/pkg/mesh/mesh.go
+index 4cb1661d..0ff46cbd 100644
+--- a/pkg/mesh/mesh.go
++++ b/pkg/mesh/mesh.go
+@@ -45,6 +45,8 @@ const (
+ 	kiloPath = "/var/lib/kilo"
+ 	// privateKeyPath is the filepath where the WireGuard private key is stored.
+ 	privateKeyPath = kiloPath + "/key"
++	// nodeDebounce is how long node events are coalesced before the topology is rebuilt.
++	nodeDebounce = time.Second
+ )
+ 
+ // Mesh is able to create Kilo network meshes.
+@@ -280,12 +282,25 @@ func (m *Mesh) Run(ctx context.Context) error {
+ 	pw := m.Peers().Watch()
+ 	var ne *NodeEvent
+ 	var pe *PeerEvent
++	// nodeFlush fires once per debounce window to rebuild the topology
++	// after node events; nil when no rebuild is pending.
++	var nodeFlush <-chan time.Time
+ 	for {
+ 		select {
+ 		case ne = <-nw:
+-			m.syncNodes(ctx, ne)
++			applied, changed := m.syncNodes(ctx, ne)
++			if applied {
++				nodeFlush = nil
++			} else if changed && nodeFlush == nil {
++				nodeFlush = time.After(nodeDebounce)
++			}
++		case <-nodeFlush:
++			nodeFlush = nil
++			m.applyTopology()
+ 		case pe = <-pw:
+-			m.syncPeers(pe)
++			if m.syncPeers(pe) {
++				nodeFlush = nil
++			}
+ 		case <-checkIn.C:
+ 			m.checkIn(ctx)
+ 			checkIn.Reset(checkInPeriod)
+@@ -293,6 +308,7 @@ func (m *Mesh) Run(ctx context.Context) error {
+ 			if m.cni {
+ 				m.updateCNIConfig()
+ 			}
++			nodeFlush = nil
+ 			m.applyTopology()
+ 			resync.Reset(m.resyncPeriod)
+ 		case <-ctx.Done():
+@@ -301,15 +317,13 @@ func (m *Mesh) Run(ctx context.Context) error {
+ 	}
+ }
+ 
+-func (m *Mesh) syncNodes(ctx context.Context, e *NodeEvent) {
++func (m *Mesh) syncNodes(ctx context.Context, e *NodeEvent) (applied bool, diff bool) {
+ 	logger := log.With(m.logger, "event", e.Type)
+ 	_ = level.Debug(logger).Log("msg", "syncing nodes", "event", e.Type)
+ 	if isSelf(m.hostname, e.Node) {
+ 		_ = level.Debug(logger).Log("msg", "processing local node", "node", e.Node)
+-		m.handleLocal(ctx, e.Node)
+-		return
++		return m.handleLocal(ctx, e.Node), false
+ 	}
+-	var diff bool
+ 	m.mu.Lock()
+ 	if !e.Node.Ready() {
+ 		// Trace non ready nodes with their presence in the mesh.
+@@ -320,7 +334,7 @@ func (m *Mesh) syncNodes(ctx context.Context, e *NodeEvent) {
+ 	case AddEvent:
+ 		fallthrough
+ 	case UpdateEvent:
+-		if !nodesAreEqual(m.nodes[e.Node.Name], e.Node) {
++		if !m.remoteNodesAreEqual(m.nodes[e.Node.Name], e.Node) {
+ 			diff = true
+ 		}
+ 		// Even if the nodes are the same,
+@@ -333,11 +347,11 @@ func (m *Mesh) syncNodes(ctx context.Context, e *NodeEvent) {
+ 	m.mu.Unlock()
+ 	if diff {
+ 		_ = level.Info(logger).Log("node", e.Node)
+-		m.applyTopology()
+ 	}
++	return false, diff
+ }
+ 
+-func (m *Mesh) syncPeers(e *PeerEvent) {
++func (m *Mesh) syncPeers(e *PeerEvent) bool {
+ 	logger := log.With(m.logger, "event", e.Type)
+ 	_ = level.Debug(logger).Log("msg", "syncing peers", "event", e.Type)
+ 	var diff bool
+@@ -370,6 +384,7 @@ func (m *Mesh) syncPeers(e *PeerEvent) {
+ 		_ = level.Info(logger).Log("peer", e.Peer)
+ 		m.applyTopology()
+ 	}
++	return diff
+ }
+ 
+ // checkIn will try to update the local node's LastSeen timestamp
+@@ -394,8 +409,7 @@ func (m *Mesh) checkIn(ctx context.Context) {
+ 	_ = level.Debug(m.logger).Log("msg", "successfully checked in local node in backend")
+ }
+ 
+-func (m *Mesh) handleLocal(ctx context.Context, n *Node) {
+-	// Allow the IPs to be overridden.
++func (m *Mesh) handleLocal(ctx context.Context, n *Node) bool {
+ 	if !n.Endpoint.Ready() {
+ 		e := wireguard.NewEndpoint(m.externalIP.IP, m.port)
+ 		_ = level.Info(m.logger).Log("msg", "overriding endpoint", "node", m.hostname, "old endpoint", n.Endpoint.String(), "new endpoint", e.String())
+@@ -404,6 +418,10 @@ func (m *Mesh) handleLocal(ctx context.Context, n *Node) {
+ 	if n.InternalIP == nil && !n.NoInternalIP {
+ 		n.InternalIP = m.internalIP
+ 	}
++	wireGuardIP := m.wireGuardIP
++	if wireGuardIP == nil && n.WireGuardIP != nil && m.subnet != nil && m.subnet.Contains(n.WireGuardIP.IP) && subnetsEqual(m.subnet, n.WireGuardIP) {
++		wireGuardIP = n.WireGuardIP
++	}
+ 	// Compare the given node to the calculated local node.
+ 	// Take leader, location, and subnet from the argument, as these
+ 	// are not determined by kilo.
+@@ -419,7 +437,7 @@ func (m *Mesh) handleLocal(ctx context.Context, n *Node) {
+ 		Name:                m.hostname,
+ 		PersistentKeepalive: n.PersistentKeepalive,
+ 		Subnet:              n.Subnet,
+-		WireGuardIP:         m.wireGuardIP,
++		WireGuardIP:         wireGuardIP,
+ 		DiscoveredEndpoints: n.DiscoveredEndpoints,
+ 		AllowedLocationIPs:  n.AllowedLocationIPs,
+ 		Granularity:         m.granularity,
+@@ -429,7 +447,7 @@ func (m *Mesh) handleLocal(ctx context.Context, n *Node) {
+ 		if err := m.Nodes().Set(ctx, m.hostname, local); err != nil {
+ 			_ = level.Error(m.logger).Log("error", fmt.Sprintf("failed to set local node: %v", err), "node", local)
+ 			m.errorCounter.WithLabelValues("local").Inc()
+-			return
++			return false
+ 		}
+ 		_ = level.Debug(m.logger).Log("msg", "successfully reconciled local node against backend")
+ 	}
+@@ -445,7 +463,9 @@ func (m *Mesh) handleLocal(ctx context.Context, n *Node) {
+ 		m.nodes[local.Name] = local
+ 		m.mu.Unlock()
+ 		m.applyTopology()
++		return true
+ 	}
++	return false
+ }
+ 
+ func (m *Mesh) applyTopology() {
+@@ -529,11 +549,23 @@ func (m *Mesh) applyTopology() {
+ 		m.errorCounter.WithLabelValues("apply").Inc()
+ 		return
+ 	}
+-	// Update the node's WireGuard IP.
++	// Update the node's WireGuard IP and publish it immediately if changed so
++	// remote nodes observe this leader's claimed IP without waiting for checkIn.
++	var newWireGuardIP *net.IPNet
+ 	if t.leader {
+-		m.wireGuardIP = t.wireGuardCIDR
+-	} else {
+-		m.wireGuardIP = nil
++		newWireGuardIP = t.wireGuardCIDR
++	}
++	m.wireGuardIP = newWireGuardIP
++	if !ipNetsEqual(nodes[m.hostname].WireGuardIP, newWireGuardIP) {
++		prevWireGuardIP := nodes[m.hostname].WireGuardIP
++		nodes[m.hostname].WireGuardIP = newWireGuardIP
++		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
++		if err := m.Nodes().Set(ctx, m.hostname, nodes[m.hostname]); err != nil {
++			_ = level.Error(m.logger).Log("error", fmt.Sprintf("failed to set local node WireGuard IP: %v", err), "node", nodes[m.hostname])
++			m.errorCounter.WithLabelValues("apply").Inc()
++			nodes[m.hostname].WireGuardIP = prevWireGuardIP
++		}
++		cancel()
+ 	}
+ 	ipRules := t.Rules(m.cni, m.iptablesForwardRule)
+ 
+@@ -712,6 +744,98 @@ func nodesAreEqual(a, b *Node) bool {
+ 		a.Granularity == b.Granularity
+ }
+ 
++// remoteNodesAreEqual compares a cached remote node against a newly received version,
++// ignoring DiscoveredEndpoints keys that cannot affect any WireGuard peer endpoint on
++// the local node. Caller must hold m.mu.
++func (m *Mesh) remoteNodesAreEqual(a, b *Node) bool {
++	if (a != nil) != (b != nil) {
++		return false
++	}
++	if a == b {
++		return true
++	}
++	if !a.Endpoint.Equal(b.Endpoint, true) {
++		return false
++	}
++	if !(a.Key.String() == b.Key.String() &&
++		ipNetsEqual(a.WireGuardIP, b.WireGuardIP) &&
++		ipNetsEqual(a.InternalIP, b.InternalIP) &&
++		ipNetsEqual(a.CNICompatibilityIP, b.CNICompatibilityIP) &&
++		a.Leader == b.Leader &&
++		a.Location == b.Location &&
++		a.Name == b.Name &&
++		subnetsEqual(a.Subnet, b.Subnet) &&
++		a.Ready() == b.Ready() &&
++		a.PersistentKeepalive == b.PersistentKeepalive &&
++		ipNetSlicesEqual(a.AllowedLocationIPs, b.AllowedLocationIPs) &&
++		a.Granularity == b.Granularity) {
++		return false
++	}
++	return relevantDiscoveredEndpointsEqual(a.DiscoveredEndpoints, b.DiscoveredEndpoints, m.isRelevantDiscoveredEndpointKey)
++}
++
++// isRelevantDiscoveredEndpointKey reports whether a DiscoveredEndpoints entry for key
++// can affect the local node's WireGuard or route configuration. Caller must hold m.mu.
++func (m *Mesh) isRelevantDiscoveredEndpointKey(key string) bool {
++	local := m.nodes[m.hostname]
++	if local != nil && local.DiscoveredEndpoints != nil {
++		// Local node's own discovered endpoint takes precedence in NewTopology.
++		if _, ok := local.DiscoveredEndpoints[key]; ok {
++			return false
++		}
++	}
++	for _, n := range m.nodes {
++		if n == nil || n.Key.String() != key {
++			continue
++		}
++		// updateEndpoint ignores discovered endpoints when PersistentKeepalive == 0.
++		if n.PersistentKeepalive == 0 {
++			return false
++		}
++		if local != nil {
++			if n.Name == m.hostname {
++				return false
++			}
++			// In cross granularity, nodes in the same location never peer over WireGuard.
++			if m.granularity == CrossGranularity && n.Location == local.Location {
++				return false
++			}
++		}
++		return true
++	}
++	for _, p := range m.peers {
++		if p == nil || p.PublicKey.String() != key {
++			continue
++		}
++		return p.PersistentKeepaliveInterval != nil && *p.PersistentKeepaliveInterval != 0
++	}
++	return false
++}
++
++func relevantDiscoveredEndpointsEqual(a, b map[string]*net.UDPAddr, relevant func(string) bool) bool {
++	if len(a) == 0 && len(b) == 0 {
++		return true
++	}
++	for k, va := range a {
++		if !relevant(k) {
++			continue
++		}
++		if !udpAddrsEqual(va, b[k]) {
++			return false
++		}
++	}
++	for k, vb := range b {
++		if !relevant(k) {
++			continue
++		}
++		if _, seen := a[k]; !seen {
++			if !udpAddrsEqual(nil, vb) {
++				return false
++			}
++		}
++	}
++	return true
++}
+ func peersAreEqual(a, b *Peer) bool {
+ 	if (a != nil) != (b != nil) {
+ 		return false
+diff --git a/pkg/mesh/mesh_test.go b/pkg/mesh/mesh_test.go
+index f02c3af2..73ac6c50 100644
+--- a/pkg/mesh/mesh_test.go
++++ b/pkg/mesh/mesh_test.go
+@@ -12,6 +12,9 @@
+ // See the License for the specific language governing permissions and
+ // limitations under the License.
+ 
++//go:build linux
++// +build linux
++
+ package mesh
+ 
+ import (
+@@ -126,3 +129,131 @@ func TestReady(t *testing.T) {
+ 		}
+ 	}
+ }
++
++func TestRemoteNodesAreEqualDiscoveredEndpoints(t *testing.T) {
++	now := time.Now().Unix()
++	bmKey := mustKey()
++	az1Key := mustKey()
++	az2Key := mustKey()
++	peerKey := mustKey()
++
++	mkNode := func(name, loc string, k wgtypes.Key, pka time.Duration, de map[string]*net.UDPAddr) *Node {
++		return &Node{
++			Name:                name,
++			Location:            loc,
++			Key:                 k,
++			Endpoint:            wireguard.NewEndpoint(net.ParseIP("10.0.0.1"), DefaultKiloPort),
++			InternalIP:          oneAddressCIDR(net.ParseIP("10.1.0.1")),
++			Subnet:              &net.IPNet{IP: net.ParseIP("10.246.0.0"), Mask: net.CIDRMask(24, 32)},
++			LastSeen:            now,
++			PersistentKeepalive: pka,
++			DiscoveredEndpoints: de,
++			Granularity:         CrossGranularity,
++		}
++	}
++
++	bm := mkNode("wlprod01", "", bmKey, 0, nil)
++	az1 := mkNode("worke01af000001", "azure", az1Key, 20*time.Second, nil)
++	az2 := mkNode("wkrpol02000001", "azure", az2Key, 20*time.Second, nil)
++
++	pka20 := 20 * time.Second
++	pka0 := time.Duration(0)
++
++	t.Run("bare-metal ignores discovered endpoint churn for non-keepalive bare-metal keys", func(t *testing.T) {
++		m := &Mesh{
++			hostname:    "wlprod01",
++			granularity: CrossGranularity,
++			nodes: map[string]*Node{
++				"wlprod01":        bm,
++				"worke01af000001": az1,
++				"wkrpol02000001":  az2,
++			},
++			peers: map[string]*Peer{},
++		}
++		az1Updated := mkNode("worke01af000001", "azure", az1Key, 20*time.Second, map[string]*net.UDPAddr{
++			bmKey.String(): {IP: net.ParseIP("203.0.113.10"), Port: 51820},
++		})
++		if !m.remoteNodesAreEqual(az1, az1Updated) {
++			t.Fatalf("expected bare-metal node to ignore DiscoveredEndpoints entry for PersistentKeepalive==0 node")
++		}
++	})
++
++	t.Run("azure node in cross mode ignores Azure-to-Azure discovered endpoint churn", func(t *testing.T) {
++		m := &Mesh{
++			hostname:    "worke01af000001",
++			granularity: CrossGranularity,
++			nodes: map[string]*Node{
++				"wlprod01":        bm,
++				"worke01af000001": az1,
++				"wkrpol02000001":  az2,
++			},
++			peers: map[string]*Peer{},
++		}
++		az2Updated := mkNode("wkrpol02000001", "azure", az2Key, 20*time.Second, map[string]*net.UDPAddr{
++			az2Key.String(): {IP: net.ParseIP("20.50.1.9"), Port: 41900},
++		})
++		if !m.remoteNodesAreEqual(az2, az2Updated) {
++			t.Fatalf("expected Azure node in cross mode to ignore same-location Azure DiscoveredEndpoints churn")
++		}
++	})
++
++	t.Run("bare-metal detects discovered endpoint change for cross-location NAT Azure peer when not locally discovered", func(t *testing.T) {
++		m := &Mesh{
++			hostname:    "wlprod01",
++			granularity: CrossGranularity,
++			nodes: map[string]*Node{
++				"wlprod01":        bm,
++				"worke01af000001": az1,
++				"wkrpol02000001":  az2,
++			},
++			peers: map[string]*Peer{},
++		}
++		az1Updated := mkNode("worke01af000001", "azure", az1Key, 20*time.Second, map[string]*net.UDPAddr{
++			az2Key.String(): {IP: net.ParseIP("20.50.1.9"), Port: 41900},
++		})
++		if m.remoteNodesAreEqual(az1, az1Updated) {
++			t.Fatalf("expected bare-metal node to detect newly discovered NAT endpoint for cross-location Azure peer")
++		}
++
++		// Once local node already has its own direct handshake endpoint for az2Key, remote gossip for az2Key is shadowed.
++		bmWithLocalDE := mkNode("wlprod01", "", bmKey, 0, map[string]*net.UDPAddr{
++			az2Key.String(): {IP: net.ParseIP("20.50.1.8"), Port: 51820},
++		})
++		m.nodes["wlprod01"] = bmWithLocalDE
++		if !m.remoteNodesAreEqual(az1, az1Updated) {
++			t.Fatalf("expected remote DiscoveredEndpoints entry shadowed by local DiscoveredEndpoints to be ignored")
++		}
++	})
++
++	t.Run("peer keepalive controls Peer CRD discovered endpoint relevance", func(t *testing.T) {
++		m := &Mesh{
++			hostname:    "wlprod01",
++			granularity: CrossGranularity,
++			nodes: map[string]*Node{
++				"wlprod01":        bm,
++				"worke01af000001": az1,
++			},
++			peers: map[string]*Peer{
++				peerKey.String(): {
++					Name: "vpn-peer",
++					Peer: wireguard.Peer{
++						PeerConfig: wgtypes.PeerConfig{
++							PublicKey:                   peerKey,
++							PersistentKeepaliveInterval: &pka0,
++						},
++					},
++				},
++			},
++		}
++		az1Updated := mkNode("worke01af000001", "azure", az1Key, 20*time.Second, map[string]*net.UDPAddr{
++			peerKey.String(): {IP: net.ParseIP("198.51.100.5"), Port: 51820},
++		})
++		if !m.remoteNodesAreEqual(az1, az1Updated) {
++			t.Fatalf("expected peer with PersistentKeepaliveInterval==0 to be ignored")
++		}
++		m.peers[peerKey.String()].PersistentKeepaliveInterval = &pka20
++		if m.remoteNodesAreEqual(az1, az1Updated) {
++			t.Fatalf("expected peer with PersistentKeepaliveInterval>0 to trigger diff")
++		}
++	})
++}
+diff --git a/pkg/mesh/routes.go b/pkg/mesh/routes.go
+index f81cf821..6834d60e 100644
+--- a/pkg/mesh/routes.go
++++ b/pkg/mesh/routes.go
+@@ -394,6 +394,11 @@ func (t *Topology) Rules(cni, iptablesForwardRule bool) iptables.RuleSet {
+ 			rules.AddToPrepend(iptables.NewRule(iptables.GetProtocol(t.subnet.IP), "filter", "FORWARD", "-m", "comment", "--comment", "Kilo: forward packets to the node's pod subnet", "-d", t.subnet.String(), "-j", "ACCEPT"))
+ 		}
+ 	}
++	// KILO-NAT is only reachable through POSTROUTING jumps. Without any jump,
++	// its rules are dead weight and every change costs iptables invocations.
++	if !t.natJumps(cni) {
++		return rules
++	}
+ 	for _, s := range t.segments {
+ 		rules.AddToPrepend(iptables.NewRule(iptables.GetProtocol(s.wireGuardIP), "nat", "KILO-NAT", "-d", oneAddressCIDR(s.wireGuardIP).String(), "-m", "comment", "--comment", "Kilo: do not NAT packets destined for WireGuared IPs", "-j", "RETURN"))
+ 		for _, aip := range s.allowedIPs {
+@@ -407,7 +412,7 @@ func (t *Topology) Rules(cni, iptablesForwardRule bool) iptables.RuleSet {
+ 		// have no explicit RETURN rule fall through to MASQUERADE and break etcd / control-plane HA.
+ 		if t.location == s.location {
+ 			for _, alip := range s.allowedLocationIPs {
+-				rules.AddToPrepend(iptables.NewRule(iptables.GetProtocol(alip.IP), "nat", "POSTROUTING", "-d", alip.String(), "!", "-s", alip.String(), "-m", "comment", "--comment", "Kilo: jump to NAT chain", "-j", "KILO-NAT"))
++				rules.AddToPrepend(iptables.NewRule(iptables.GetProtocol(alip.IP), "nat", "POSTROUTING", "!", "-s", alip.String(), "-d", alip.String(), "-m", "comment", "--comment", "Kilo: jump to NAT chain", "-j", "KILO-NAT"))
+ 			}
+ 		}
+ 	}
+@@ -425,6 +430,24 @@ func (t *Topology) Rules(cni, iptablesForwardRule bool) iptables.RuleSet {
+ 	return rules
+ }
+ 
++// natJumps reports whether any POSTROUTING rule jumps to KILO-NAT.
++func (t *Topology) natJumps(cni bool) bool {
++	if cni {
++		return true
++	}
++	for _, s := range t.segments {
++		if t.location == s.location && len(s.allowedLocationIPs) > 0 {
++			return true
++		}
++	}
++	for _, p := range t.peers {
++		if len(p.AllowedIPs) > 0 {
++			return true
++		}
++	}
++	return false
++}
++
+ func defaultRule(rule *netlink.Rule) *netlink.Rule {
+ 	base := netlink.NewRule()
+ 	base.Src = rule.Src
+diff --git a/pkg/mesh/topology.go b/pkg/mesh/topology.go
+index 2734900c..6f0b528c 100644
+--- a/pkg/mesh/topology.go
++++ b/pkg/mesh/topology.go
+@@ -239,16 +239,41 @@ func NewTopology(nodes map[string]*Node, peers map[string]*Peer, granularity Gra
+ 		t.discoveredEndpoints[key] = nodes[hostname].DiscoveredEndpoints[key]
+ 	}
+ 	// Allocate IPs to the segment leaders in a stable, coordination-free manner.
+-	a := newAllocator(*subnet)
++	// Preserve any valid, non-colliding WireGuard IP already published by a segment's
++	// leader so newly joining or leaving nodes never renumber existing peers.
++	baseNet := net.IPNet{IP: subnet.IP.Mask(subnet.Mask), Mask: subnet.Mask}
++	claimedIPs := make(map[string]struct{}, len(t.segments))
+ 	for _, segment := range t.segments {
+-		ipNet := a.next()
+-		if ipNet == nil {
+-			return nil, errors.New("failed to allocate an IP address; ran out of IP addresses")
++		segNodes := topoMap[topoKey{location: segment.location, nodeLocation: segment.nodeLocation}]
++		leaderNode := segNodes[segment.leader]
++		if validClaimedWireGuardIP(leaderNode.WireGuardIP, baseNet) {
++			ip := canonicalIP(leaderNode.WireGuardIP.IP)
++			key := ip.String()
++			if _, taken := claimedIPs[key]; !taken {
++				claimedIPs[key] = struct{}{}
++				segment.wireGuardIP = ip
++			}
+ 		}
+-		segment.wireGuardIP = ipNet.IP
+-		segment.allowedIPs = append(segment.allowedIPs, *oneAddressCIDR(ipNet.IP))
++	}
++	a := newAllocator(baseNet)
++	for _, segment := range t.segments {
++		if segment.wireGuardIP == nil {
++			for {
++				ipNet := a.next()
++				if ipNet == nil {
++					return nil, errors.New("failed to allocate an IP address; ran out of IP addresses")
++				}
++				key := ipNet.IP.String()
++				if _, taken := claimedIPs[key]; !taken {
++					claimedIPs[key] = struct{}{}
++					segment.wireGuardIP = ipNet.IP
++					break
++				}
++			}
++		}
++		segment.allowedIPs = append(segment.allowedIPs, *oneAddressCIDR(segment.wireGuardIP))
+ 		if t.leader && segment.location == t.location {
+-			t.wireGuardCIDR = &net.IPNet{IP: ipNet.IP, Mask: subnet.Mask}
++			t.wireGuardCIDR = &net.IPNet{IP: segment.wireGuardIP, Mask: subnet.Mask}
+ 		}
+ 
+ 		// Now that the topology is ordered, update the discoveredEndpoints map
+@@ -260,7 +285,9 @@ func NewTopology(nodes map[string]*Node, peers map[string]*Peer, granularity Gra
+ 				}
+ 			}
+ 		}
+-		// Check for intersecting IPs in allowed location IPs
++	}
++	// Check for intersecting IPs in allowed location IPs after all segment WireGuard IPs are assigned.
++	for _, segment := range t.segments {
+ 		segment.allowedLocationIPs = t.filterAllowedLocationIPs(segment.allowedLocationIPs, segment.location)
+ 	}
+ 
+@@ -498,3 +525,30 @@ func deduplicatePeerIPs(peers []*Peer) []*Peer {
+ 	}
+ 	return ps
+ }
++
++func canonicalIP(ip net.IP) net.IP {
++	if ip4 := ip.To4(); ip4 != nil {
++		out := make(net.IP, len(ip4))
++		copy(out, ip4)
++		return out
++	}
++	out := make(net.IP, len(ip))
++	copy(out, ip)
++	return out
++}
++
++func validClaimedWireGuardIP(wg *net.IPNet, subnet net.IPNet) bool {
++	if wg == nil || wg.IP == nil {
++		return false
++	}
++	ip := canonicalIP(wg.IP)
++	netIP := canonicalIP(subnet.IP.Mask(subnet.Mask))
++	if len(ip) != len(netIP) {
++		return false
++	}
++	if !subnet.Contains(ip) {
++		return false
++	}
++	// Reject the 0th network address, which allocator.next() never hands out.
++	return !ip.Equal(netIP)
++}
+diff --git a/pkg/mesh/topology_test.go b/pkg/mesh/topology_test.go
+index cf71628b..d5682921 100644
+--- a/pkg/mesh/topology_test.go
++++ b/pkg/mesh/topology_test.go
+@@ -1445,3 +1445,117 @@ func TestFilterAllowedIPs(t *testing.T) {
+ 
+ 	}
+ }
++
++func TestStickyWireGuardIPOnNodeJoinAndLeave(t *testing.T) {
++	_, subnet, err := net.ParseCIDR("100.66.0.0/16")
++	if err != nil {
++		t.Fatalf("failed to parse subnet: %v", err)
++	}
++
++	mkNode := func(name, loc, podCIDR, privIP, epIP string, k wgtypes.Key, wgIP *net.IPNet) *Node {
++		_, pc, _ := net.ParseCIDR(podCIDR)
++		return &Node{
++			Name:        name,
++			Location:    loc,
++			Subnet:      pc,
++			InternalIP:  oneAddressCIDR(net.ParseIP(privIP)),
++			Endpoint:    wireguard.NewEndpoint(net.ParseIP(epIP), DefaultKiloPort),
++			Key:         k,
++			WireGuardIP: wgIP,
++		}
++	}
++
++	// Initial cluster: wlprod01, wlprod02, worke01af000001 (no wkrpol02* yet).
++	nodes := map[string]*Node{
++		"wlprod01":        mkNode("wlprod01", "", "10.246.0.0/24", "192.168.102.11", "23.111.0.117", key1, nil),
++		"wlprod02":        mkNode("wlprod02", "", "10.246.1.0/24", "192.168.102.12", "23.111.0.79", key2, nil),
++		"worke01af000001": mkNode("worke01af000001", "azure", "10.246.32.0/24", "10.3.0.4", "20.1.0.4", key3, nil),
++	}
++
++	topoInitial, err := NewTopology(nodes, nil, CrossGranularity, "wlprod01", DefaultKiloPort, key1, subnet, nil, 0, nil)
++	if err != nil {
++		t.Fatalf("initial NewTopology failed: %v", err)
++	}
++
++	initialIPs := make(map[string]string)
++	for _, seg := range topoInitial.segments {
++		host := seg.hostnames[seg.leader]
++		initialIPs[host] = seg.wireGuardIP.String()
++		// Persist allocated WireGuardIP onto node annotations as applyTopology does.
++		nodes[host].WireGuardIP = &net.IPNet{IP: seg.wireGuardIP, Mask: subnet.Mask}
++	}
++	if initialIPs["wlprod01"] != "100.66.0.1" || initialIPs["wlprod02"] != "100.66.0.2" || initialIPs["worke01af000001"] != "100.66.0.3" {
++		t.Fatalf("unexpected initial IP map: %v", initialIPs)
++	}
++	confBefore := topoInitial.Conf()
++
++	// Now a new Azure shard node wkrpol02000001 joins; lexicographically "wkrpol02000001" < "wlprod01" < "worke01af000001".
++	nodes["wkrpol02000001"] = mkNode("wkrpol02000001", "azure", "10.246.64.0/24", "10.4.0.4", "20.2.0.4", key4, nil)
++
++	topoAfterJoin, err := NewTopology(nodes, nil, CrossGranularity, "wlprod01", DefaultKiloPort, key1, subnet, nil, 0, nil)
++	if err != nil {
++		t.Fatalf("post-join NewTopology failed: %v", err)
++	}
++
++	afterJoinIPs := make(map[string]string)
++	for _, seg := range topoAfterJoin.segments {
++		afterJoinIPs[seg.hostnames[seg.leader]] = seg.wireGuardIP.String()
++	}
++	// Existing nodes MUST keep their exact WireGuard IPs; the new node gets the next free IP (100.66.0.4).
++	if afterJoinIPs["wlprod01"] != "100.66.0.1" {
++		t.Errorf("wlprod01 renumbered from 100.66.0.1 to %s", afterJoinIPs["wlprod01"])
++	}
++	if afterJoinIPs["wlprod02"] != "100.66.0.2" {
++		t.Errorf("wlprod02 renumbered from 100.66.0.2 to %s", afterJoinIPs["wlprod02"])
++	}
++	if afterJoinIPs["worke01af000001"] != "100.66.0.3" {
++		t.Errorf("worke01af000001 renumbered from 100.66.0.3 to %s", afterJoinIPs["worke01af000001"])
++	}
++	if afterJoinIPs["wkrpol02000001"] != "100.66.0.4" {
++		t.Errorf("expected new node wkrpol02000001 to get 100.66.0.4, got %s", afterJoinIPs["wkrpol02000001"])
++	}
++
++	// Verify existing peer AllowedIPs on wlprod01 did not change for worke01af000001.
++	confAfter := topoAfterJoin.Conf()
++	var peerBefore, peerAfter *wireguard.Peer
++	for i := range confBefore.Peers {
++		if confBefore.Peers[i].PublicKey == key3 {
++			peerBefore = &confBefore.Peers[i]
++		}
++	}
++	for i := range confAfter.Peers {
++		if confAfter.Peers[i].PublicKey == key3 {
++			peerAfter = &confAfter.Peers[i]
++		}
++	}
++	if peerBefore == nil || peerAfter == nil {
++		t.Fatalf("missing peer key3 in generated WireGuard configs")
++	}
++	if diff := pretty.Compare(peerBefore.AllowedIPs, peerAfter.AllowedIPs); diff != "" {
++		t.Errorf("existing peer AllowedIPs changed when wkrpol02000001 joined: %s", diff)
++	}
++
++	// Verify consistency across all nodes' views (e.g. wkrpol02000001 itself computes identical WireGuard IPs).
++	topoFromNewNode, err := NewTopology(nodes, nil, CrossGranularity, "wkrpol02000001", DefaultKiloPort, key4, subnet, nil, 0, nil)
++	if err != nil {
++		t.Fatalf("NewTopology from wkrpol02000001 failed: %v", err)
++	}
++	if topoFromNewNode.wireGuardCIDR.IP.String() != "100.66.0.4" {
++		t.Errorf("wkrpol02000001 computed own IP %s, expected 100.66.0.4", topoFromNewNode.wireGuardCIDR.IP)
++	}
++
++	// Verify collision resolution: if two nodes somehow claim the same IP, first segment keeps it and second gets next free.
++	nodes["wkrpol02000001"].WireGuardIP = &net.IPNet{IP: net.ParseIP("100.66.0.1"), Mask: subnet.Mask}
++	topoCollision, err := NewTopology(nodes, nil, CrossGranularity, "wlprod01", DefaultKiloPort, key1, subnet, nil, 0, nil)
++	if err != nil {
++		t.Fatalf("collision NewTopology failed: %v", err)
++	}
++	seen := make(map[string]string)
++	for _, seg := range topoCollision.segments {
++		ipStr := seg.wireGuardIP.String()
++		if prev, dup := seen[ipStr]; dup {
++			t.Errorf("duplicate WireGuard IP %s assigned to both %s and %s", ipStr, prev, seg.hostnames[0])
++		}
++		seen[ipStr] = seg.hostnames[0]
++	}
++}
