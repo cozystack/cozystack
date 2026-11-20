@@ -1,0 +1,93 @@
+{{- /*
+Self-signed CA -> leaf certificate for the central OpenBAO server.
+Modeled on packages/apps/qdrant/templates/certmanager.yaml.
+
+A self-signed CA (not letsencrypt) is used deliberately: these listeners are
+internal-only (*.svc.<clusterDomain>) and Raft peers verify each other with the
+CA, so we need both server auth and client auth usages.
+*/}}
+{{- $clusterDomain := "cozy.local" }}
+{{- if .Values._cluster }}
+{{- $clusterDomain = (index .Values._cluster "cluster-domain") | default "cozy.local" }}
+{{- end }}
+{{- $name := "openbao-system" }}
+{{- $headless := printf "%s-internal" $name }}
+---
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: {{ $name }}-selfsigned
+  namespace: {{ .Release.Namespace }}
+spec:
+  selfSigned: {}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ $name }}-ca
+  namespace: {{ .Release.Namespace }}
+spec:
+  secretName: {{ $name }}-ca
+  duration: 43800h
+  commonName: {{ $name }}-ca
+  issuerRef:
+    name: {{ $name }}-selfsigned
+  isCA: true
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+    rotationPolicy: Never
+---
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: {{ $name }}-ca
+  namespace: {{ .Release.Namespace }}
+spec:
+  ca:
+    secretName: {{ $name }}-ca
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ $name }}-tls
+  namespace: {{ .Release.Namespace }}
+spec:
+  secretName: {{ $name }}-tls
+  duration: 8760h
+  renewBefore: 720h
+  isCA: false
+  issuerRef:
+    name: {{ $name }}-ca
+  commonName: {{ $name }}
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+    rotationPolicy: Always
+  # server auth: the API/cluster listeners (8200/8201).
+  # client auth: Raft peers verify each other with this cert (mTLS on 8201).
+  usages:
+    - digital signature
+    - key encipherment
+    - server auth
+    - client auth
+  ipAddresses:
+    # bao CLI/probes inside the pod connect to the local listener on 127.0.0.1.
+    - 127.0.0.1
+  dnsNames:
+    - {{ $name }}
+    - {{ $name }}.{{ .Release.Namespace }}.svc
+    - {{ $name }}.{{ .Release.Namespace }}.svc.{{ $clusterDomain }}
+    - {{ $name }}-active
+    - {{ $name }}-active.{{ .Release.Namespace }}.svc.{{ $clusterDomain }}
+    - {{ $name }}-standby
+    - {{ $name }}-standby.{{ .Release.Namespace }}.svc.{{ $clusterDomain }}
+    - {{ $headless }}
+    - {{ $headless }}.{{ .Release.Namespace }}.svc
+    - {{ $headless }}.{{ .Release.Namespace }}.svc.{{ $clusterDomain }}
+    - "*.{{ $headless }}.{{ .Release.Namespace }}.svc.{{ $clusterDomain }}"
+    {{- range $i := until 3 }}
+    - {{ printf "%s-%d.%s" $name $i $headless | quote }}
+    - {{ printf "%s-%d.%s.%s.svc" $name $i $headless $.Release.Namespace | quote }}
+    - {{ printf "%s-%d.%s.%s.svc.%s" $name $i $headless $.Release.Namespace $clusterDomain | quote }}
+    {{- end }}

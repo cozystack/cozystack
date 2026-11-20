@@ -1,0 +1,69 @@
+{{- /*
+The central instance's server, rendered from the same published chart artifact a
+tenant OpenBAO instance uses (packages/system/openbao, component
+`openbao-system`). Wrapping that artifact rather than vendoring the upstream
+chart a second time keeps one copy of it in the tree, so a `make update` there
+moves both consumers at once and they cannot drift to different upstream
+versions.
+
+Deliberately no `sharding.fluxcd.io/key: tenants` label: this is a platform
+component reconciled by the management Flux, not tenant-scoped work.
+*/ -}}
+{{- $name := "openbao-system" -}}
+{{- $replicas := int .Values.replicas -}}
+{{- if lt $replicas 1 -}}
+{{- fail (printf "openbao-central: replicas must be at least 1, got %d." $replicas) -}}
+{{- end -}}
+
+{{- /*
+  Raft over TLS, at every replica count. retry_join is what an uninitialized pod
+  uses to find the cluster, so it is only meaningful once there is another pod to
+  find: at one replica the whole set is omitted rather than pointed at itself,
+  which would leave a lone node retrying a join it can never complete before the
+  init Job promotes it.
+*/ -}}
+{{- $raftConfig := list -}}
+{{- $raftConfig = append $raftConfig (printf "ui = true\n") -}}
+{{- $raftConfig = append $raftConfig "listener \"tcp\" {\n  address         = \"[::]:8200\"\n  cluster_address = \"[::]:8201\"\n  tls_cert_file   = \"/openbao/tls/tls.crt\"\n  tls_key_file    = \"/openbao/tls/tls.key\"\n}\n" -}}
+{{- $storage := "storage \"raft\" {\n  path = \"/openbao/data\"\n" -}}
+{{- if gt $replicas 1 -}}
+{{-   range $i := until $replicas -}}
+{{-     $storage = printf "%s  retry_join {\n    leader_api_addr     = \"https://%s-%d.%s-internal:8200\"\n    leader_ca_cert_file = \"/openbao/tls/ca.crt\"\n  }\n" $storage $name $i $name -}}
+{{-   end -}}
+{{- end -}}
+{{- $storage = printf "%s}\n" $storage -}}
+{{- $raftConfig = append $raftConfig $storage -}}
+{{- $raftConfig = append $raftConfig "service_registration \"kubernetes\" {}\n" -}}
+
+{{- $vals := deepCopy .Values.openbao -}}
+{{- $_ := set $vals.server.ha "replicas" $replicas -}}
+{{- $_ := set $vals.server.ha.raft "config" (join "\n" $raftConfig) -}}
+{{- /*
+  The upstream chart's server.affinity is a REQUIRED podAntiAffinity on
+  kubernetes.io/hostname. Keep it wherever it can be satisfied, and drop it at
+  one replica so a single-node install schedules instead of sitting Pending.
+  Setting it empty is the escape hatch the upstream chart documents for exactly
+  this case.
+*/ -}}
+{{- if eq $replicas 1 -}}
+{{- $_ := set $vals.server "affinity" "" -}}
+{{- end -}}
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: {{ $name }}
+spec:
+  chartRef:
+    kind: ExternalArtifact
+    name: cozystack-openbao-application-default-openbao-system
+    namespace: cozy-system
+  interval: 5m
+  timeout: 10m
+  install:
+    remediation:
+      retries: -1
+  upgrade:
+    remediation:
+      retries: -1
+  values:
+    openbao: {{- toYaml $vals | nindent 6 }}
