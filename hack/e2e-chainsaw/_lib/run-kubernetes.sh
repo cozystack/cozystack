@@ -349,17 +349,35 @@ cozy_tenant_drained() {
   return 0
 }
 
+# Every worker pool a test cluster can get: md0, the Kairos pool
+# run-kubernetes-kairos.sh adds, and the custom and default-create pools
+# run-kubernetes-upgrade.sh adds. A rerun after an interrupted cleanup deletes
+# them all before the parent, and the drain barrier waits for their disks.
+cozy_cluster_pools() {
+  printf '%s\n' md0 "${KAIROS_POOL_SUFFIX:-kairos}" custom default-create
+}
+
+cozy_delete_stale_pools() {
+  local _pool
+  for _pool in $(cozy_cluster_pools); do
+    if ! kubectl -n tenant-test delete kubernetesnodeses.apps.cozystack.io "$1-${_pool}" --ignore-not-found --wait=true --timeout=2m; then
+      echo "failed to delete stale KubernetesNodes $1-${_pool}" >&2
+      return 1
+    fi
+  done
+}
+
 # Keep only PVC resource names that belong to the worker pools of one test
-# cluster: md0 and the Kairos pool run-kubernetes-kairos.sh adds. The
-# worker-disk PVCs carry no cluster label, but CDI preserves the owning
-# MachineDeployment name (<cluster>-<pool>, nodegroup.yaml) inside every one
-# of their generated names.
+# cluster (cozy_cluster_pools). The worker-disk PVCs carry no cluster label,
+# but CDI preserves the owning MachineDeployment name (<cluster>-<pool>,
+# nodegroup.yaml) inside every one of their generated names.
 cozy_filter_cluster_pvcs() {
   local test_name="$1"
   local capture="$2"
   printf '%s\n' "${capture}" |
-    awk -v md0="kubernetes-${test_name}-md0-" -v kairos="kubernetes-${test_name}-${KAIROS_POOL_SUFFIX:-kairos}-" \
-      'index($0, md0) != 0 || index($0, kairos) != 0'
+    awk -v prefix="kubernetes-${test_name}-" -v pools="$(cozy_cluster_pools | tr '\n' ' ')" '
+      BEGIN { n = split(pools, p, " ") }
+      { for (i = 1; i <= n; i++) if (index($0, prefix p[i] "-") != 0) { print; next } }'
 }
 
 # Block until one tenant cluster's KubeVirt compute and storage are actually
@@ -5700,6 +5718,11 @@ run_kubernetes_test() {
     # The previous-version suite leaves it empty because OIDC is feature
     # coverage, not a compatibility matrix that justifies another upgrade.
     local enable_oidc="${5:-}"
+    local worker_replicas=2 worker_max_replicas=10
+    if [ "${COZY_WORKER_UPGRADE_MODE:-off}" = required ] && [ "$test_name" = test-latest-version ]; then
+      worker_replicas=1
+      worker_max_replicas=1
+    fi
     # The previous suite's baseline must not survive into this suite's cleanup
     # when this run fails before recording its own.
     rm -f -- "$(_cozy_linstor_pool_baseline_file)" || return 1
@@ -5728,8 +5751,7 @@ run_kubernetes_test() {
   # MachineDeployment instead of no-op'ing on a surviving child HelmRelease.
   # These are blocking deletes because recording a baseline while old workers
   # still own their disks would bless the leftover capacity as the new normal.
-  if ! kubectl -n tenant-test delete kubernetesnodeses.apps.cozystack.io "${test_name}-md0" --ignore-not-found --wait=true --timeout=2m; then
-    echo "failed to delete stale KubernetesNodes ${test_name}-md0" >&2
+  if ! cozy_delete_stale_pools "${test_name}"; then
     return 1
   fi
   if ! kubectl -n tenant-test delete kuberneteses.apps.cozystack.io "${test_name}" --ignore-not-found --wait=true --timeout=2m; then
@@ -5901,8 +5923,8 @@ ${talos_block}
   # KubeVirt's guest-console-log container, the only artifact that covers that
   # window.
   logSerialConsole: true
-  maxReplicas: 10
-  minReplicas: 2
+  maxReplicas: ${worker_max_replicas}
+  minReplicas: ${worker_replicas}
   # Headroom above the vCPU count, where KubeVirt would otherwise put the
   # ceiling. Workers failing to join (cozystack/cozystack#3513) have been
   # measured burning their vCPU threads flat out at a ceiling equal to their
@@ -5931,6 +5953,9 @@ ${talos_block}
   storageClass: "${storage_class}"
   version: "${k8s_version}"
 EOF
+  if [ "${COZY_WORKER_UPGRADE_MODE:-off}" = required ] && [ "$test_name" = test-latest-version ]; then
+    cozy_worker_upgrade_create_custom "$test_name" || return 1
+  fi
   # Wait for the tenant-test namespace to be active
   kubectl wait namespace tenant-test --timeout=20s --for=jsonpath='{.status.phase}'=Active
 
@@ -5977,7 +6002,7 @@ EOF
   # Secrets (talos-secrets, talos-ca, k8s ca, apiserver Service ClusterIP)
   # all exist; cold-start in a fresh CI sandbox pushes the time to first
   # MachineSet scale-up past the old 1m budget.
-  kubectl_wait_retry machinedeployment kubernetes-${test_name}-md0 -n tenant-test --timeout=5m --for=jsonpath='{.status.replicas}'=2
+  kubectl_wait_retry machinedeployment kubernetes-${test_name}-md0 -n tenant-test --timeout=5m --for=jsonpath='{.status.replicas}'="$worker_replicas"
   # Get the admin kubeconfig and save it to a file
   kubectl get secret kubernetes-${test_name}-admin-kubeconfig -ojsonpath='{.data.super-admin\.conf}' -n tenant-test | base64 -d > "tenantkubeconfig-${test_name}"
 
@@ -6497,7 +6522,7 @@ EOF
   # Named at v1beta1: status.v1beta2.readyReplicas exists only there, and a bare
   # resource name follows whichever version the cluster prefers, which is
   # v1beta2 from Cluster API v1.11. v1beta1 is served until v1.16.
-  kubectl wait machinedeployments.v1beta1.cluster.x-k8s.io kubernetes-${test_name}-md0 -n tenant-test --timeout=10m --for=jsonpath='{.status.v1beta2.readyReplicas}'=2
+  kubectl wait machinedeployments.v1beta1.cluster.x-k8s.io kubernetes-${test_name}-md0 -n tenant-test --timeout=10m --for=jsonpath='{.status.v1beta2.readyReplicas}'="$worker_replicas"
 
   for component in cilium coredns csi vsnap-crd; do
       kubectl wait hr "kubernetes-${test_name}-${component}" -n tenant-test --timeout=5m --for=condition=ready

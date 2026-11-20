@@ -48,22 +48,21 @@
   # becomes Available, so this can only help.
   # Best-effort: never fail the suite on the band-aid. Remove once tenant workers
   # no longer bulk-pull the OS image from the public internet in CI.
-  local sid ver
-  sid=$(yq --input-format=json --output-format=yaml --unwrapScalar '.talos.schematicID' packages/apps/kubernetes-nodes/files/worker-defaults.json 2>/dev/null)
-  ver=$(yq --input-format=json --output-format=yaml --unwrapScalar '.talos.version' packages/apps/kubernetes-nodes/files/worker-defaults.json 2>/dev/null)
-  if [ -z "$sid" ] || [ "$sid" = "null" ] || [ -z "$ver" ] || [ "$ver" = "null" ]; then
+  local seeds
+  . hack/e2e-chainsaw/_lib/talos-image-cache.sh
+  seeds=$(talos_image_cache_seeds) || {
     echo "WARNING: could not read talos.schematicID/version from packages/apps/kubernetes-nodes/files/worker-defaults.json — skipping mirror (fallback to public factory)"
     return 0
-  fi
+  }
   # The CiliumClusterwideNetworkPolicy in the manifest is intentionally NOT applied
   # here: Cilium's CRDs do not exist until Cozystack is installed (below), so
   # applying it now would error. It is applied at point-of-use by
   # hack/e2e-chainsaw/_lib/talos-image-cache.sh once Cilium is up.
-  sed -e "s|__SCHEMATIC_ID__|${sid}|g" -e "s|__TALOS_VERSION__|${ver}|g" hack/e2e-talos-image-cache.yaml \
+  sed -e "s|__SEEDS__|${seeds}|g" hack/e2e-talos-image-cache.yaml \
     | yq 'select(.kind != "CiliumClusterwideNetworkPolicy")' \
     | kubectl apply -f - || echo "WARNING: failed to apply talos-image-cache (fallback to public factory)"
   if kubectl -n kube-system get deploy talos-image-cache >/dev/null 2>&1; then
-    echo "talos-image-cache Deployment created (seeding ${sid}/${ver} in background)"
+    echo "talos-image-cache Deployment created (seeding ${seeds} in background)"
   else
     echo "WARNING: talos-image-cache Deployment NOT created — tenant workers will use public factory.talos.dev"
   fi
@@ -125,10 +124,21 @@
 
 @test "Install Cozystack" {
   # Install cozy-installer chart (operator installs CRDs on startup via --install-crds)
-  helm upgrade installer packages/core/installer \
+  local installer_chart=packages/core/installer
+  # Only the baseline install passes values: on a fresh install the chart's own
+  # defaults stay defaults instead of showing up as user values.
+  local installer_values=
+  if [ "${COZY_WORKER_UPGRADE_MODE:-off}" = required ]; then
+    installer_chart=_out/worker-upgrade-baseline/packages/core/installer
+    [ -f "$installer_chart/Chart.yaml" ] || { echo "required upgrade baseline chart is missing" >&2; return 1; }
+    bash hack/worker-upgrade-inputs.sh values _out/worker-upgrade-baseline/bundle.json > _out/worker-upgrade-baseline/install-values.json
+    installer_values=_out/worker-upgrade-baseline/install-values.json
+  fi
+  helm upgrade installer "$installer_chart" \
     --install \
     --namespace cozy-system \
     --create-namespace \
+    ${installer_values:+--values "$installer_values"} \
     --set cozystackOperator.helmReleaseInterval=30s \
     --timeout 2m
 

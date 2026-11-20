@@ -97,23 +97,29 @@ load test_helper
     }
 }
 
-# The Kairos pool of the kubernetes-latest suite runs on the same cluster as
-# md0; its disk must hold the barrier like md0's, a pool of another name must
-# not, including one whose name only starts with md0 or with the Kairos pool's.
-@test "PVC filtering keeps the Kairos pool disk and drops other pools of the cluster" {
+# The Kairos pool of the kubernetes-latest suite and the custom pool of the
+# worker upgrade run on the same cluster as md0; their disks must hold the
+# barrier like md0's, a pool of another name must not, including one whose
+# name only starts with md0 or with one of theirs.
+@test "PVC filtering keeps the Kairos and upgrade pool disks and drops other pools of the cluster" {
     . hack/e2e-chainsaw/_lib/run-kubernetes.sh
     pvcs=$(printf '%s\n' \
         'persistentvolumeclaim/disk-system-kubernetes-test-latest-version-kairos-abcde-xyz12' \
         'persistentvolumeclaim/disk-system-kubernetes-test-latest-version-custom-abcde-xyz12' \
+        'persistentvolumeclaim/disk-system-kubernetes-test-latest-version-default-create-abcde-xyz12' \
+        'persistentvolumeclaim/disk-system-kubernetes-test-latest-version-other-abcde-xyz12' \
+        'persistentvolumeclaim/disk-system-kubernetes-test-latest-version-custom2-abcde-xyz12' \
         'persistentvolumeclaim/disk-system-kubernetes-test-latest-version-md01-abcde-xyz12' \
         'persistentvolumeclaim/disk-system-kubernetes-test-latest-version-kairos2-abcde-xyz12' \
         'persistentvolumeclaim/disk-system-kubernetes-test-latest-version-md0-abcde-xyz12')
     got=$(cozy_filter_cluster_pvcs test-latest-version "$pvcs")
     expected=$(printf '%s\n' \
         'persistentvolumeclaim/disk-system-kubernetes-test-latest-version-kairos-abcde-xyz12' \
+        'persistentvolumeclaim/disk-system-kubernetes-test-latest-version-custom-abcde-xyz12' \
+        'persistentvolumeclaim/disk-system-kubernetes-test-latest-version-default-create-abcde-xyz12' \
         'persistentvolumeclaim/disk-system-kubernetes-test-latest-version-md0-abcde-xyz12')
     [ "$got" = "$expected" ] || {
-        echo "PVC filter did not keep exactly md0 and the Kairos pool: [$got]" >&2
+        echo "PVC filter did not keep exactly the pools of the cluster: [$got]" >&2
         exit 1
     }
     if cozy_tenant_drained "" "" "$(cozy_filter_cluster_pvcs test-latest-version 'persistentvolumeclaim/disk-system-kubernetes-test-latest-version-kairos-abcde-xyz12')"; then
@@ -180,4 +186,27 @@ load test_helper
         exit 1
     fi
     rm --recursive --force "$tmp"
+}
+
+@test "a rerun deletes every pool of the cluster" {
+    . hack/e2e-chainsaw/_lib/run-kubernetes.sh
+    log=$(mktemp)
+    kubectl() { printf '%s\n' "$*" >> "$log"; }
+    cozy_delete_stale_pools test-latest-version
+    for pool in md0 kairos custom default-create; do
+        if ! grep -q "delete kubernetesnodeses.apps.cozystack.io test-latest-version-${pool} " "$log"; then
+            echo "pool ${pool} was not deleted" >&2
+            cat "$log" >&2
+            exit 1
+        fi
+    done
+}
+
+@test "a pool that does not delete stops the rerun" {
+    . hack/e2e-chainsaw/_lib/run-kubernetes.sh
+    kubectl() { case "$*" in *-kairos*) return 1 ;; esac; }
+    if cozy_delete_stale_pools test-latest-version 2>/dev/null; then
+        echo "expected a failed pool delete to fail the cleanup" >&2
+        exit 1
+    fi
 }

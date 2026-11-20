@@ -159,7 +159,7 @@ delete-cluster-container:
 # COZY_DISABLED_PACKAGES is the space-separated output of
 # hack/select-install.sh --disabled; empty installs the whole platform.
 install-cozystack:
-	docker exec -e COZY_APISERVER_ENDPOINT="${COZY_APISERVER_ENDPOINT}" -e COZY_LINSTOR_DRBD_ENABLED="${COZY_LINSTOR_DRBD_ENABLED}" -e COZY_E2E_STORAGE_CLASS="${COZY_E2E_STORAGE_CLASS}" -e COZY_DISABLED_PACKAGES="${COZY_DISABLED_PACKAGES}" "${SANDBOX_NAME}" sh -c 'cd /workspace && hack/cozytest.sh hack/e2e-install-cozystack.bats'
+	docker exec --env COZY_WORKER_UPGRADE_MODE="${COZY_WORKER_UPGRADE_MODE}" -e COZY_APISERVER_ENDPOINT="${COZY_APISERVER_ENDPOINT}" -e COZY_LINSTOR_DRBD_ENABLED="${COZY_LINSTOR_DRBD_ENABLED}" -e COZY_E2E_STORAGE_CLASS="${COZY_E2E_STORAGE_CLASS}" -e COZY_DISABLED_PACKAGES="${COZY_DISABLED_PACKAGES}" "${SANDBOX_NAME}" sh -c 'cd /workspace && hack/cozytest.sh hack/e2e-install-cozystack.bats'
 
 test-openapi:
 	docker exec "${SANDBOX_NAME}" sh -c 'cd /workspace && hack/cozytest.sh hack/e2e-test-openapi.bats'
@@ -176,7 +176,7 @@ test-openapi:
 # COZY_E2E_STORAGE_CLASS is passed both to script operations and as a Chainsaw
 # value for templated resource files; empty keeps the QEMU default, replicated.
 test-chainsaw:
-	docker exec -e COZY_E2E_STORAGE_CLASS="${COZY_E2E_STORAGE_CLASS}" "${SANDBOX_NAME}" sh -c 'cd /workspace/hack/e2e-chainsaw && ../e2e-chainsaw-run.sh --set-string storageClass="$${COZY_E2E_STORAGE_CLASS:-replicated}" ${CHAINSAW_SUITES}'
+	docker exec --env COZY_WORKER_UPGRADE_DEADLINE="${COZY_WORKER_UPGRADE_DEADLINE}" --env COZY_WORKER_UPGRADE_MODE="${COZY_WORKER_UPGRADE_MODE}" --env COZY_WORKER_UPGRADE_KAIROS="${COZY_WORKER_UPGRADE_KAIROS}" -e COZY_E2E_STORAGE_CLASS="${COZY_E2E_STORAGE_CLASS}" "${SANDBOX_NAME}" sh -c 'cd /workspace/hack/e2e-chainsaw && ../e2e-chainsaw-run.sh --set-string storageClass="$${COZY_E2E_STORAGE_CLASS:-replicated}" ${CHAINSAW_SUITES}'
 
 collect-report: ## Collect the test report from the sandbox.
 	docker exec "${SANDBOX_NAME}" sh -c 'cd /workspace && hack/cozyreport.sh cozyreport'

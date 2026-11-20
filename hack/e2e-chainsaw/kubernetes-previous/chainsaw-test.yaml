@@ -71,7 +71,8 @@ spec:
           set -eu
           cd ../../..
           . hack/e2e-chainsaw/_lib/run-kubernetes.sh
-          run_kubernetes_test 'keys | sort_by(.) | .[-2]' 'test-previous-version' '59992'
+          version_expr=$(bash -c '. hack/e2e-chainsaw/_lib/run-kubernetes-upgrade.sh; cozy_worker_upgrade_previous_version_expr')
+          run_kubernetes_test "$version_expr" 'test-previous-version' '59992'
         check:
           ($error == null): true
     finally:
