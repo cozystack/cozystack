@@ -50,12 +50,13 @@ func (r *Reconciler) poolConsumer(ctx context.Context, hr *helmv2.HelmRelease) (
 		}
 		return false, unknownConsumer(err)
 	}
-	eaOwner := metav1.GetControllerOf(ea)
-	if eaOwner == nil || eaOwner.APIVersion != watcherv1.GroupVersion.String() || eaOwner.Kind != "ArtifactGenerator" || eaOwner.UID == "" {
+	source := ea.Spec.SourceRef
+	generatorUID := ea.Labels[watcherv1.ArtifactGeneratorLabel]
+	if source == nil || source.APIVersion != watcherv1.GroupVersion.String() || source.Kind != watcherv1.ArtifactGeneratorKind || source.Name == "" || source.Namespace != ea.Namespace || generatorUID == "" {
 		return false, errUnknownConsumer
 	}
 	ag := &watcherv1.ArtifactGenerator{}
-	if err := r.Reader.Get(ctx, client.ObjectKey{Namespace: ea.Namespace, Name: eaOwner.Name}, ag); err != nil || ag.UID != eaOwner.UID {
+	if err := r.Reader.Get(ctx, client.ObjectKey{Namespace: source.Namespace, Name: source.Name}, ag); err != nil || string(ag.UID) != generatorUID {
 		return false, unknownConsumer(err)
 	}
 	agOwner := metav1.GetControllerOf(ag)
