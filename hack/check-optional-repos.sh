@@ -38,7 +38,7 @@ RELEASE_END="$2"
 
 # Get the script directory to return to it later
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-COZYSTACK_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+COZYSTACK_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 cd "$COZYSTACK_ROOT"
 
