@@ -49,3 +49,19 @@ Run each step below as its own change, never together with a Cozystack upgrade. 
 7. Scale `linstor-csi-controller` back by hand to the count from step 1: the operator repoints it in step 6 but keeps the 0 it found, and nothing in the release sets it. Then run the runbook's verification, and check that `piraeus-operator-validating-webhook-configuration` no longer carries the `linstor.cozystack.io/relaxed-webhooks` annotation. The release of step 6 sets back whatever an earlier failed release left relaxed, so an annotation still there means that release did not finish.
 
 Up to step 6 the way back touches the control plane only, and works with the operator still stopped: set `storage: {backend: linstor, acknowledgeBackendChange: linstor}` without `blockstorMigration` in the same change and wait for the release, which passes the webhooks the same way, then scale `linstor-controller` to 1, piraeus-operator to 1 and `linstor-csi-controller` back by hand to its count from step 1. The blockstor CRDs and their objects stay behind; nothing reads them under `linstor`.
+
+## Upgrading the blockstor satellites
+
+The `blockstor-satellite` DaemonSet replaces its pods one node at a time and holds the rollout on each node for `blockstorSatellite.minReadySeconds` (120 by default) after the new pod turns Ready. Ready only means the satellite's caches have synced, which takes seconds; re-rendering and adjusting every DRBD resource on the node takes minutes on a node with a hundred resources. A satellite that fails during that first pass stops the rollout on its own node. `maxSurge` is always 0: a second satellite on the node would drive the same DRBD resources.
+
+The `linstor` HelmRelease waits for the whole rollout, and every node adds its pause to it. cozystack-operator gives a package upgrade 10 minutes (`--helmrelease-upgrade-timeout`), which covers about four nodes at the default pause. On a larger cluster the first upgrade attempt times out while the DaemonSet keeps rolling; the release retries the upgrade, reports `HelmReleaseNotReady` meanwhile, becomes Ready once the last node is done, and runs its post-upgrade hooks with the attempt that succeeds. Lower `minReadySeconds`, or raise the operator's timeout, if that is not acceptable. Changing either value does not restart the satellites.
+
+For an upgrade that changes how the satellite renders DRBD resources, check each node before the next one goes. Set `blockstorSatellite.updateStrategy.type: OnDelete` in `spec.components.linstor.values` of the `cozystack.linstor` Package before the upgrade, so that nothing moves until a pod is deleted:
+
+1. Before the upgrade, save `drbdsetup show` and `drbdsetup status --verbose` from the satellite on every node: `kubectl -n cozy-linstor exec <pod> -c satellite -- drbdsetup show`.
+2. Upgrade. The controller and the apiserver roll; the satellites stay on the old version.
+3. Delete the satellite pod on one node and wait for the new one to be Ready and for its first pass to finish, at least `minReadySeconds`.
+4. On that node, `drbdadm -d adjust all` prints nothing, `drbdsetup show` differs from the saved copy only where the release notes say it does, and `drbdsetup status` shows every resource in the role, disk and connection state it had before, none of them suspended.
+5. Repeat steps 3 and 4 for the next node, then set the strategy back to `RollingUpdate`.
+
+Under `OnDelete` the HelmRelease cannot become Ready until every satellite has been replaced by hand: the upgrade attempt times out and retries, as above, and the post-upgrade hooks run only after the last pod. To roll back, roll the release back first and replace the satellites one node at a time the same way.
