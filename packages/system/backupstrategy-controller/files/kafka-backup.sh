@@ -44,32 +44,67 @@ case "${hostport}" in
   *) host="${hostport%%:*}"; port="${hostport##*:}"; [ "${port}" = "${hostport}" ] && port="" ;;
 esac
 if [ "${scheme}" = http ]; then defport=80; else defport=443; fi
-# curl 7.76.1 (this image) omits a NON-default port from the SigV4 canonical
-# host but still sends it in the Host header, so the backend recomputes a
-# different signature and 403s every request (fixed in curl 7.86.0). Sign and
-# send a portless URL and redirect the connection to the real port with
-# --connect-to, so signed, sent and server-side host all agree; correct on
-# curl >= 7.86 too (which drops the default port anyway). No -k: TLS is
-# verified against the endpoint's certificate (the platform endpoint is the
-# ACME-valid ingress), matching strategy-rabbitmq-default.yaml.
 if [ "${S3_FORCE_PATH_STYLE}" = "false" ]; then
   reqhost="${bucket}.${host}"
-  obj_url="${scheme}://${reqhost}${pathpart}/${key}"
+  objpath="${pathpart}/${key}"
 else
   reqhost="${host}"
-  obj_url="${scheme}://${reqhost}${pathpart}/${bucket}/${key}"
+  objpath="${pathpart}/${bucket}/${key}"
 fi
-# --connect-to matches HOST1 against the request host, which differs between
-# path-style (${host}) and virtual-hosted (${bucket}.${host}) — key it off the
-# host the URL actually uses so the redirect fires in both modes; the real
-# connection target stays ${host}:${port}.
-connect_to=""
-if [ -n "${port}" ] && [ "${port}" != "${defport}" ]; then
-  connect_to="--connect-to ${reqhost}:${defport}:${host}:${port}"
-fi
-# ${connect_to} is unquoted so an empty value expands to no argument.
-s3() { curl -fsS ${connect_to} --aws-sigv4 "aws:amz:${S3_REGION}:s3" \
-  --user "${AWS_ACCESS_KEY_ID}:${AWS_SECRET_ACCESS_KEY}" "$@"; }
+# The Host header curl sends, which is what gets signed: curl leaves the port
+# out exactly when it is the scheme's default.
+authority="${reqhost}"
+if [ -n "${port}" ] && [ "${port}" != "${defport}" ]; then authority="${reqhost}:${port}"; fi
+
+# S3 canonical URI: every byte but the unreserved ones and "/" percent-encoded,
+# once. The masked value keeps bash 3.2 from sign-extending a byte above 0x7f.
+uri_path() {
+  local LC_ALL=C s=$1 out='' c i
+  for ((i = 0; i < ${#s}; i++)); do
+    c=${s:i:1}
+    case "${c}" in
+      [A-Za-z0-9._~/-]) out+=${c} ;;
+      *) printf -v c '%d' "'${c}"; printf -v c '%%%02X' "$((c & 255))"; out+=${c} ;;
+    esac
+  done
+  printf '%s' "${out}"
+}
+objpath=$(uri_path "${objpath}")
+obj_url="${scheme}://${authority}${objpath}"
+
+EMPTY_SHA256=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+hmac() { printf '%s' "$2" | openssl dgst -sha256 -mac HMAC -macopt "$1" -r | cut -d' ' -f1; }
+# s3 METHOD PAYLOAD_SHA256 [curl args...] sends one SigV4-signed request for
+# the object. The signature is computed here, not by curl --aws-sigv4, because
+# the curl in the Strimzi image cannot sign for S3: 7.76.1-40.el9 (Strimzi
+# 1.2) signs the Host without a non-default port while sending it with one,
+# and 7.76.1-43.el9 (Strimzi 1.3.1) carries a RHEL backport of the S3 payload
+# handling that lists x-amz-content-sha256 in SignedHeaders without ever
+# sending the header. Either way the backend answers every request with 403.
+# No -k: TLS is verified against the endpoint's certificate (the platform
+# endpoint is the ACME-valid ingress), matching strategy-rabbitmq-default.yaml.
+s3() {
+  local method=$1 payload=$2 now day scope creq sts k sig
+  shift 2
+  now=$(date -u +%Y%m%dT%H%M%SZ)
+  day=${now%%T*}
+  scope="${day}/${S3_REGION}/s3/aws4_request"
+  creq=$(printf '%s\n%s\n\nhost:%s\nx-amz-content-sha256:%s\nx-amz-date:%s\n\nhost;x-amz-content-sha256;x-amz-date\n%s' \
+    "${method}" "${objpath}" "${authority}" "${payload}" "${now}" "${payload}")
+  sts=$(printf 'AWS4-HMAC-SHA256\n%s\n%s\n%s' "${now}" "${scope}" "$(printf '%s' "${creq}" | sha256sum | cut -d' ' -f1)")
+  k=$(hmac "key:AWS4${AWS_SECRET_ACCESS_KEY}" "${day}")
+  k=$(hmac "hexkey:${k}" "${S3_REGION}")
+  k=$(hmac "hexkey:${k}" s3)
+  k=$(hmac "hexkey:${k}" aws4_request)
+  sig=$(hmac "hexkey:${k}" "${sts}")
+  # --path-as-is: curl would otherwise resolve dot segments in a key and send
+  # a path other than the one signed.
+  curl --path-as-is -X "${method}" \
+    -H "x-amz-date: ${now}" \
+    -H "x-amz-content-sha256: ${payload}" \
+    -H "Authorization: AWS4-HMAC-SHA256 Credential=${AWS_ACCESS_KEY_ID}/${scope}, SignedHeaders=host;x-amz-content-sha256;x-amz-date, Signature=${sig}" \
+    "$@" "${obj_url}"
+}
 
 # Cleanup runs when the owning Backup is deleted: delete the object and exit
 # before any broker access (the source may already be gone). A missing object
@@ -77,10 +112,7 @@ s3() { curl -fsS ${connect_to} --aws-sigv4 "aws:amz:${S3_REGION}:s3" \
 # controller retries rather than orphaning the object.
 if [ "${MODE}" = cleanup ]; then
   echo "deleting ${ARTIFACT_URI}"
-  code=$(curl -sS -o /dev/null -w '%{http_code}' ${connect_to} \
-    --aws-sigv4 "aws:amz:${S3_REGION}:s3" \
-    --user "${AWS_ACCESS_KEY_ID}:${AWS_SECRET_ACCESS_KEY}" \
-    -X DELETE "${obj_url}" || true)
+  code=$(s3 DELETE "${EMPTY_SHA256}" -sS -o /dev/null -w '%{http_code}' || true)
   case "${code}" in
     2*|404) echo "deleted (HTTP ${code})"; exit 0 ;;
     *) echo "delete failed: HTTP ${code}" >&2; exit 1 ;;
@@ -141,11 +173,11 @@ if [ "${MODE}" = backup ]; then
     fi
     echo "  ${t}: partitions=${parts} rf=${rf}"
   done
-  s3 -X PUT --upload-file "${file}" "${obj_url}"
+  s3 PUT "$(sha256sum < "${file}" | cut -d' ' -f1)" -fsS --upload-file "${file}"
   echo "uploaded ${ARTIFACT_URI}"
 else
   echo "restoring Kafka topic metadata into ${BOOTSTRAP} from ${ARTIFACT_URI}"
-  s3 -o "${file}" "${obj_url}"
+  s3 GET "${EMPTY_SHA256}" -fsS -o "${file}"
   # Probe existence with --list, fail closed: a --describe under 2>/dev/null
   # cannot tell "topic absent" from "broker unreachable" (Kafka 3.9.1 exits 1
   # for both, and the distinguishing text goes to stdout). --list instead fails

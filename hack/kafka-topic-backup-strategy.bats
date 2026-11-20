@@ -179,7 +179,14 @@ if [ -n "$up" ]; then cp "$up" "$S3DIR/$key"; exit 0; fi
 [ -f "$S3DIR/$key" ] || { echo "curl: (22) The requested URL returned error: 404" >&2; exit 22; }
 cp "$S3DIR/$key" "$out"
 STUB
-  chmod +x "$BINDIR"/*.sh "$PATHDIR/curl"
+  # date stub: a fixed signing time, so a request's signature is a constant the
+  # S3 transport test can compare with an independently computed one.
+  cat > "$PATHDIR/date" <<'STUB'
+#!/usr/bin/env bash
+if [ "$*" = "-u +%Y%m%dT%H%M%SZ" ]; then echo 20261120T120000Z; exit 0; fi
+exec /bin/date "$@"
+STUB
+  chmod +x "$BINDIR"/*.sh "$PATHDIR/curl" "$PATHDIR/date"
 }
 
 # run_strategy <mode> [VAR=value ...]: runs the rendered script against the
@@ -419,11 +426,26 @@ repack() {
   init_stubs; seed_broker "$STATE/broker"
   printf 'STUB PEM\n' > "$STATE/ca.crt"
   run_strategy backup
-  grep -qF -- "--cacert $STATE/ca.crt --connect-to seaweedfs-s3.tenant-root.svc:443:seaweedfs-s3.tenant-root.svc:8333 --aws-sigv4" "$STATE/curl_args"
+  grep -qF -- "-fsS --cacert $STATE/ca.crt -X PUT" "$STATE/curl_args"
   rm -f "$STATE/ca.crt" "$STATE/curl_args"
   run_strategy backup
-  grep -qF -- "-fsS --connect-to seaweedfs-s3.tenant-root.svc:443" "$STATE/curl_args"
+  grep -qF -- "-fsS -X PUT" "$STATE/curl_args"
   if grep -qE -- '(^| )-k( |$)|--cacert' "$STATE/curl_args"; then
     echo "unexpected TLS flags without a CA file: $(cat "$STATE/curl_args")" >&2; return 1
   fi
+}
+
+# The expected signature was computed with botocore 1.35.99 (S3SigV4Auth,
+# payload signing on) for the same GET: credentials k/s, region us-east-1 and
+# the date stub's 20261120T120000Z. The endpoint carries the e2e harness's
+# non-default :8333, which the signed Host has to keep.
+@test "the restore download is SigV4-signed for the host:port curl sends" {
+  init_stubs; backup_then_target
+  : > "$STATE/curl_args"
+  BROKER="$STATE/tgt" run_strategy restore
+  grep -qF -- "-X GET" "$STATE/curl_args"
+  grep -qF -- "https://seaweedfs-s3.tenant-root.svc:8333/bkt/tenant-root/kafka-test/kafka-topics.tar" "$STATE/curl_args"
+  grep -qF -- "Signature=4069e37c9241b1687649dffba4a7515ee5e5100b96f48fd685a442509e695ea2" "$STATE/curl_args" || {
+    echo "signature is not botocore's: $(cat "$STATE/curl_args")" >&2; return 1
+  }
 }

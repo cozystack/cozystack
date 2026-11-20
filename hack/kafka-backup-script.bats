@@ -18,10 +18,10 @@
 # $(...) capture (set -e makes a failed command fail the test).
 #
 # Each named guard below corresponds to a mutation the script must not survive:
-# \Q literal-match on describe and alter, the --connect-to port workaround with
-# no -k (keyed off the request host in both addressing modes), the fail-closed
-# --list, the comma-value bracket grouping, the replication-factor divergence
-# guard, and the cleanup delete's HTTP handling.
+# \Q literal-match on describe and alter, the SigV4 signature (held to one
+# botocore computes for the same request, in both addressing modes) with no -k,
+# the fail-closed --list, the comma-value bracket grouping, the
+# replication-factor divergence guard, and the cleanup delete's HTTP handling.
 
 load test_helper
 
@@ -150,7 +150,14 @@ if [ -n "\$out" ]; then
 fi
 exit 0
 STUB
-  chmod +x "$BINDIR"/*.sh "$PATHDIR/curl"
+  # date stub: a fixed signing time, so a request's signature is a constant the
+  # S3 signing tests can compare with an independently computed one.
+  cat > "$PATHDIR/date" <<'STUB'
+#!/usr/bin/env bash
+if [ "$*" = "-u +%Y%m%dT%H%M%SZ" ]; then echo 20261120T120000Z; exit 0; fi
+exec /bin/date "$@"
+STUB
+  chmod +x "$BINDIR"/*.sh "$PATHDIR/curl" "$PATHDIR/date"
 
   export BIN="$BINDIR"
   export PATH="$PATHDIR:$PATH"
@@ -208,12 +215,26 @@ expect_fail() {
   grep -qxF "$(printf 'C\torders\tcleanup.policy\tcompact,delete')" "$STATE/s3_object"
 }
 
-# ---- S3 signing (curl 7.76.1 port workaround, no -k) -----------------------
+# ---- S3 signing (SigV4 computed by the script, no -k) ------------------------
+#
+# The expected signatures were computed with botocore 1.35.99 (S3SigV4Auth,
+# payload signing on) for the same request: credentials k/s, region us-east-1
+# and the date stub's 20261120T120000Z. A signer that drifts from SigV4 — a
+# wrong canonical Host, a key encoded twice or not at all, a header signed and
+# not sent — produces a different signature and goes red here.
 
-@test "ported endpoint signs with --connect-to and never -k" {
-  init_stubs; seed_three
-  MODE=backup S3_ENDPOINT="https://s3.example.org:8333" bash "$SCRIPT"
-  grep -qF -- '--connect-to s3.example.org:443:s3.example.org:8333' "$STATE/curl_args"
+# expect_signed <url> <signature>: the request went to <url>, signed as botocore
+# signs it.
+expect_signed() {
+  grep -qF -- "$1" "$STATE/curl_args" || { echo "no request to $1: $(cat "$STATE/curl_args")" >&2; return 1; }
+  grep -qF -- "Signature=$2" "$STATE/curl_args" || { echo "signature is not botocore's $2: $(cat "$STATE/curl_args")" >&2; return 1; }
+}
+
+@test "a ported endpoint signs the host:port curl sends, and never passes -k" {
+  init_stubs
+  MODE=cleanup S3_ENDPOINT="https://s3.example.org:8333" bash "$SCRIPT"
+  expect_signed https://s3.example.org:8333/bkt/ns/app/run/kafka-metadata.txt \
+    429859e912b812c5f16a50f45186ddaedffa32d7d6b89a0f3c781832f692046c
   # Positive form, not `! grep`: hack/cozytest.sh wraps each @test in `set -e`
   # + a trailing `return 0`, and bash exempts a `!`-negated command from errexit,
   # so a `! grep` guard can never fail under the runner CI uses (only real bats).
@@ -222,22 +243,25 @@ expect_fail() {
   fi
 }
 
-@test "default-port endpoint needs no --connect-to" {
-  init_stubs; seed_three
-  MODE=backup S3_ENDPOINT="https://s3.example.org" bash "$SCRIPT"
-  # Positive form (see the -k note above): a `! grep` is vacuous under cozytest.
-  if grep -qF -- '--connect-to' "$STATE/curl_args"; then
-    echo "unexpected --connect-to on a default-port endpoint: $(cat "$STATE/curl_args")" >&2; return 1
-  fi
+@test "a default-port endpoint signs the bare host and percent-encodes the key once" {
+  init_stubs
+  MODE=cleanup ARTIFACT_URI="s3://bkt/ns/app/run 1/ü+x.txt" S3_ENDPOINT="https://s3.example.org" bash "$SCRIPT"
+  expect_signed https://s3.example.org/bkt/ns/app/run%201/%C3%BC%2Bx.txt \
+    56ecae2ddc534434d56e410177f89d10795d5e29fefa5011ea38134d6e089d8e
 }
 
-@test "virtual-hosted ported endpoint keys --connect-to off the bucket host" {
+@test "a virtual-hosted ported endpoint signs the bucket host" {
+  init_stubs
+  MODE=cleanup S3_FORCE_PATH_STYLE=false S3_ENDPOINT="https://s3.example.org:8333" bash "$SCRIPT"
+  expect_signed https://bkt.s3.example.org:8333/ns/app/run/kafka-metadata.txt \
+    998307c7101ca8b4506f54fa3ecd06602d1b25565409a5754e3a19b067b747c7
+}
+
+@test "the upload declares the SHA-256 of the object it sends" {
   init_stubs; seed_three
-  MODE=backup S3_FORCE_PATH_STYLE=false S3_ENDPOINT="https://s3.example.org:8333" bash "$SCRIPT"
-  # HOST1 must be the request host (bkt.s3.example.org), else curl never
-  # redirects and the request hits the wrong port.
-  grep -qF -- '--connect-to bkt.s3.example.org:443:s3.example.org:8333' "$STATE/curl_args"
-  grep -qF 'https://bkt.s3.example.org/ns/app/run/kafka-metadata.txt' "$STATE/curl_args"
+  MODE=backup S3_ENDPOINT="https://s3.example.org" bash "$SCRIPT"
+  sum=$(sha256sum < "$STATE/s3_object" | cut -d' ' -f1)
+  grep -qF -- "x-amz-content-sha256: $sum" "$STATE/curl_args"
 }
 
 # ---- restore --------------------------------------------------------------
