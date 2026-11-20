@@ -409,3 +409,36 @@ _stub_kubectl_dir() {
     [ "$(printf '%s' "$json" | yq -p=json '.spec.securityContext.runAsNonRoot')" = "true" ]
     [ "$(printf '%s' "$json" | yq -p=json '.spec.containers[0].securityContext.allowPrivilegeEscalation')" = "false" ]
 }
+
+# Legacy pools of a required upgrade boot the baseline's Talos through the same
+# mirror, which answers 404 for an image it was not seeded with.
+@test "a required upgrade seeds the mirror with the baseline's Talos images too" {
+    tmp=$(mktemp -d)
+    helper="$PWD/hack/e2e-chainsaw/_lib/talos-image-cache.sh"
+    mkdir -p "$tmp/packages/apps/kubernetes" "$tmp/_out/worker-upgrade-baseline/packages/apps/kubernetes" "$tmp/_out/worker-upgrade-baseline/packages/apps/kubernetes-nodes"
+    printf 'talos:\n  schematicID: aaa\n  version: v1.14.0\n' > "$tmp/packages/apps/kubernetes/values.yaml"
+    printf 'talos:\n  schematicID: aaa\n  version: v1.13.6\n' > "$tmp/_out/worker-upgrade-baseline/packages/apps/kubernetes/values.yaml"
+    printf 'talos:\n  schematicID: aaa\n  version: v1.13.6\n' > "$tmp/_out/worker-upgrade-baseline/packages/apps/kubernetes-nodes/values.yaml"
+    rc=0; output=$(cd "$tmp" && COZY_WORKER_UPGRADE_MODE=required sh -c '. "$1"; talos_image_cache_seeds' _ "$helper") || rc=$?
+    [ "$rc" -eq 0 ]
+    [ "$output" = "aaa/v1.14.0 aaa/v1.13.6" ]
+    rc=0; output=$(cd "$tmp" && COZY_WORKER_UPGRADE_MODE=off sh -c '. "$1"; talos_image_cache_seeds' _ "$helper") || rc=$?
+    [ "$rc" -eq 0 ]
+    [ "$output" = "aaa/v1.14.0" ]
+    printf 'talos:\n  schematicID: aaa\n  version: v1.14.0\n' > "$tmp/_out/worker-upgrade-baseline/packages/apps/kubernetes/values.yaml"
+    rc=0; output=$(cd "$tmp" && COZY_WORKER_UPGRADE_MODE=required sh -c '. "$1"; talos_image_cache_seeds' _ "$helper") || rc=$?
+    [ "$rc" -eq 0 ]
+    [ "$output" = "aaa/v1.14.0 aaa/v1.13.6" ]
+    printf 'talos:\n  version: v1.13.6\n' > "$tmp/packages/apps/kubernetes/values.yaml"
+    rc=0; output=$(cd "$tmp" && sh -c '. "$1"; talos_image_cache_seeds' _ "$helper") || rc=$?
+    [ "$rc" -ne 0 ]
+    rm -rf "$tmp"
+}
+
+@test "the mirror seeds every pair it is given and no fixed single image" {
+    manifest=hack/e2e-talos-image-cache.yaml
+    seed=$(yq 'select(.kind == "Deployment") | .spec.template.spec.initContainers[] | select(.name == "seed") | .args[0]' "$manifest")
+    printf '%s\n' "$seed" | grep -q 'for seed in __SEEDS__; do'
+    if grep -q '__SCHEMATIC_ID__\|__TALOS_VERSION__' "$manifest" hack/e2e-install-cozystack.bats; then echo "FAIL: a single-image placeholder is left"; false; fi
+    grep -q 'sed -e "s|__SEEDS__|${seeds}|g" hack/e2e-talos-image-cache.yaml' hack/e2e-install-cozystack.bats
+}

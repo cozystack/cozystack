@@ -1057,6 +1057,7 @@ jobs:
     permissions:
       contents: read
       packages: read
+      actions: read
       checks: write
     needs: ["finalize", "resolve_assets", "verify-release-candidate"]
     # Regular PRs still enter through finalize. A release-labelled promote PR
@@ -1104,6 +1105,46 @@ jobs:
         if: "!contains(github.event.pull_request.labels.*.name, 'release')"
         run: |
           git apply _out/assets/pr.patch
+
+      - name: Prepare immutable worker upgrade baseline
+        env:
+          BASE_REF: ${{ github.base_ref }}
+          RELEASE: ${{ contains(github.event.pull_request.labels.*.name, 'release') }}
+        run: |
+          git diff --name-only --no-renames "origin/${BASE_REF}...HEAD" > /tmp/worker-upgrade-changed.txt
+          mode=$(bash hack/worker-upgrade-needed.sh /tmp/worker-upgrade-changed.txt)
+          kairos=$(bash hack/worker-upgrade-needed.sh --kairos /tmp/worker-upgrade-changed.txt)
+          # A promotion installs the release candidate it stamps, not the pinned
+          # baseline, and its tag rewrites touch the worker paths.
+          if [ "$RELEASE" = true ]; then
+            mode=off
+            kairos=off
+          fi
+          echo "COZY_WORKER_UPGRADE_MODE=$mode" >> "$GITHUB_ENV"
+          echo "COZY_WORKER_UPGRADE_KAIROS=$kairos" >> "$GITHUB_ENV"
+          if [ "$mode" = required ]; then
+            bash hack/worker-upgrade-inputs.sh prepare hack/testdata/worker-upgrade-baseline.json _out/worker-upgrade-baseline
+          fi
+
+      - name: Record required upgrade job budget
+        if: ${{ env.COZY_WORKER_UPGRADE_MODE == 'required' }}
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
+        with:
+          script: |
+            const jobs = await github.paginate(github.rest.actions.listJobsForWorkflowRun, {
+              ...context.repo, run_id: context.runId, filter: 'latest', per_page: 100,
+            });
+            const active = jobs.filter(job => job.name === 'E2E (in-tree)' && job.status === 'in_progress');
+            if (active.length !== 1 || !active[0].started_at) {
+              throw new Error('Cannot establish the actual E2E job start for the upgrade budget');
+            }
+            core.exportVariable('COZY_WORKER_UPGRADE_JOB_STARTED_AT', active[0].started_at);
+
+      - name: Establish required upgrade deadline
+        if: ${{ env.COZY_WORKER_UPGRADE_MODE == 'required' }}
+        run: |
+          deadline=$(bash hack/worker-upgrade-inputs.sh deadline "$COZY_WORKER_UPGRADE_JOB_STARTED_AT")
+          echo "COZY_WORKER_UPGRADE_DEADLINE=$deadline" >> "$GITHUB_ENV"
 
       - name: Set sandbox ID
         run: echo "SANDBOX_NAME=cozy-e2e-sandbox-$(echo "${GITHUB_REPOSITORY}:${GITHUB_WORKFLOW}:${GITHUB_REF}" | sha256sum | cut -c1-10)" >> $GITHUB_ENV
@@ -1194,6 +1235,12 @@ jobs:
         run: |
           git diff --name-only "origin/${BASE_REF}...HEAD" > /tmp/changed.txt
           apps=$(./hack/select-e2e.sh /tmp/changed.txt)
+          if [ "${COZY_WORKER_UPGRADE_MODE:-off}" = required ]; then
+            case " $apps " in
+              *' kubernetes-latest '*) ;;
+              *) apps="kubernetes-latest $apps" ;;
+            esac
+          fi
           echo "Selected apps: ${apps:-<none>}"
           echo "apps=${apps}" >> $GITHUB_OUTPUT
           if [ -z "${apps}" ]; then
@@ -1248,6 +1295,7 @@ jobs:
           fi
 
       - name: Run OpenAPI tests
+        if: ${{ env.COZY_WORKER_UPGRADE_MODE != 'required' }}
         run: |
           make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME test-openapi
 

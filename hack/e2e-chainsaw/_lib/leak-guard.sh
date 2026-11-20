@@ -21,7 +21,10 @@
 # second condition covers what the third cannot: a pre-existing pod adopted by
 # a controller recreated mid-suite has a new root, but it is not the suite's
 # pod. A leak is charged once, to its own suite: the next suite sees an old
-# root.
+# root. An upgrade scenario additionally records the UIDs of the workloads its
+# upgrade created in platform namespaces. Those ancestors belong to its
+# installation baseline; other roots and tenant pods remain subject to the
+# same checks.
 #
 # The start instant comes from an apiserver rather than from this machine. With
 # several control-plane nodes the reading and a root's creationTimestamp may be
@@ -115,7 +118,12 @@ lg_resource() {
 # schema.ParseKindArg and RESTMapping when no resource matches.
 lg_root() {
     local ns=$1 obj=$2 depth=0 note="" ref api kind name next errf
+    local baseline_roots=${LG_BASELINE_ROOT_UIDS:-[]}
     while :; do
+        if [ "$baseline_roots" != '[]' ] && jq --exit-status --arg uid "$(jq --raw-output '.metadata.uid // empty' <<<"$obj")" 'index($uid) != null' <<<"$baseline_roots" >/dev/null; then
+            note=" (upgrade-platform-baseline)"
+            break
+        fi
         ref=$(jq -r '[.metadata.ownerReferences[]?] | ((map(select(.controller == true)) + .)[0]) // empty
             | "\(.apiVersion) \(.kind) \(.name)"' <<<"$obj")
         [ -n "$ref" ] || break
@@ -163,6 +171,7 @@ lg_leaks() {
         [ -n "$pod" ] || continue
         ns=$(jq -r '.metadata.namespace' <<<"$pod")
         root=$(lg_root "$ns" "$pod") || return 1
+        case "$root" in *' (upgrade-platform-baseline)') continue ;; esac
         root_ts=${root%% *}
         [[ ! "$root_ts" < "$start" ]] || continue
         jq -r --arg root "${root#* }" --arg rts "$root_ts" \
@@ -350,8 +359,9 @@ lg_merge_reports() {
         fi
         files+=("$dir/$key.xml")
         if [ -f "$dir/$key.unchecked" ]; then
-            lg_synthetic_suite "$suite" leak-guard \
-                "the leak guard could not read the cluster after this suite; see the leak-guard annotation for suite=$suite in the job log" >"$dir/$key.unchecked.xml"
+            local reason="the leak guard could not read the cluster after this suite; see the leak-guard annotation for suite=$suite in the job log"
+            [ ! -s "$dir/$key.unchecked" ] || reason=$(cat "$dir/$key.unchecked")
+            lg_synthetic_suite "$suite" leak-guard "$reason" >"$dir/$key.unchecked.xml"
             files+=("$dir/$key.unchecked.xml")
         fi
         if [ -f "$dir/$key.leaked" ]; then

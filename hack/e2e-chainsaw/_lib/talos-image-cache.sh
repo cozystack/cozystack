@@ -32,6 +32,31 @@ TALOS_IMAGE_CACHE_MANIFEST="${TALOS_IMAGE_CACHE_MANIFEST:-hack/e2e-talos-image-c
 TALOS_IMAGE_CACHE_PROBE_NS="${TALOS_IMAGE_CACHE_PROBE_NS:-tenant-test}"
 TALOS_IMAGE_CACHE_PROBE_POD="${TALOS_IMAGE_CACHE_PROBE_POD:-talos-image-cache-probe}"
 
+# talos_image_cache_seeds: the <schematicID>/<version> pairs the mirror seeds,
+# space-separated. The candidate's packages/apps/kubernetes/values.yaml always;
+# in a required worker upgrade also the pinned baseline's kubernetes and
+# kubernetes-nodes charts, because the legacy pools boot from those images
+# through the same mirror, and the mirror answers 404 for an image it was not
+# seeded with. Fails when the candidate pair cannot be read.
+talos_image_cache_seeds() {
+  _ticc_seeds=$(_talos_image_cache_pair packages/apps/kubernetes/values.yaml) || return 1
+  if [ "${COZY_WORKER_UPGRADE_MODE:-off}" = required ]; then
+    for _ticc_values in _out/worker-upgrade-baseline/packages/apps/kubernetes/values.yaml _out/worker-upgrade-baseline/packages/apps/kubernetes-nodes/values.yaml; do
+      _ticc_pair=$(_talos_image_cache_pair "$_ticc_values") || continue
+      case " $_ticc_seeds " in *" $_ticc_pair "*) ;; *) _ticc_seeds="$_ticc_seeds $_ticc_pair" ;; esac
+    done
+  fi
+  printf '%s\n' "$_ticc_seeds"
+}
+
+_talos_image_cache_pair() {
+  _ticc_sid=$(yq '.talos.schematicID' "$1" 2>/dev/null) || return 1
+  _ticc_ver=$(yq '.talos.version' "$1" 2>/dev/null) || return 1
+  case "$_ticc_sid" in ''|null) return 1 ;; esac
+  case "$_ticc_ver" in ''|null) return 1 ;; esac
+  printf '%s/%s\n' "$_ticc_sid" "$_ticc_ver"
+}
+
 # _apply_talos_image_cache_egress_policy: install the CiliumClusterwideNetworkPolicy
 # that lets tenant CDI importer Pods egress to the mirror. It lives in the mirror
 # manifest but is applied here, not in hack/e2e-install-cozystack.bats, because that
