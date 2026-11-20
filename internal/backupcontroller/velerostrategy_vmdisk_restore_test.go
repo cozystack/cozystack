@@ -901,22 +901,38 @@ func TestPrepareForRestore_VMDiskLeavingPodWaitHasDeadline(t *testing.T) {
 // An in-place restore updates the disk HelmReleases that already exist, which
 // leaves their releases in sync, so without a forced upgrade nothing recreates
 // the DataVolumes that preparation deleted and the restored PVCs stay unowned.
+// The upgrade is requested only for a disk whose restored PVC is there to
+// adopt: without it the chart would provision an empty disk under the original
+// name and the RestoreJob would hide that the data never came back.
 func TestReconcileVeleroRestore_CompletedForcesDiskUpgrade(t *testing.T) {
 	const ns = "tenant-root"
+	const pendingStamp = "2026-01-01T00:00:00Z"
 	tests := []struct {
-		name      string
-		appKind   string
-		appName   string
-		ur        *vmInstanceResources
-		hrs       []string
-		wantForce []string
+		name       string
+		appKind    string
+		appName    string
+		opts       *RestoreOptions
+		ur         *vmInstanceResources
+		hrs        []string
+		pvcs       []string
+		dvs        []string
+		pending    []string
+		patchErr   error
+		wantForce  []string
+		wantKept   []string
+		wantErr    bool
+		wantPhase  backupsv1alpha1.RestoreJobPhase
+		wantEvents []string
 	}{
 		{
-			name:      "vmdisk",
-			appKind:   vmDiskAppKind,
-			appName:   "data",
-			hrs:       []string{"vm-disk-data"},
-			wantForce: []string{"vm-disk-data"},
+			name:       "vmdisk",
+			appKind:    vmDiskAppKind,
+			appName:    "data",
+			hrs:        []string{"vm-disk-data"},
+			pvcs:       []string{"vm-disk-data"},
+			wantForce:  []string{"vm-disk-data"},
+			wantPhase:  backupsv1alpha1.RestoreJobPhaseSucceeded,
+			wantEvents: []string{"Normal PostRestore"},
 		},
 		{
 			name:    "vminstance forces its disks, not the VM, and skips a missing disk release",
@@ -926,8 +942,59 @@ func TestReconcileVeleroRestore_CompletedForcesDiskUpgrade(t *testing.T) {
 				{DataVolumeName: "vm-disk-root", ApplicationName: "root"},
 				{DataVolumeName: "vm-disk-gone", ApplicationName: "gone"},
 			}},
-			hrs:       []string{"vm-instance-vm", "vm-disk-root"},
-			wantForce: []string{"vm-disk-root"},
+			hrs:        []string{"vm-instance-vm", "vm-disk-root"},
+			pvcs:       []string{"vm-disk-root"},
+			wantForce:  []string{"vm-disk-root"},
+			wantPhase:  backupsv1alpha1.RestoreJobPhaseSucceeded,
+			wantEvents: []string{"Normal PostRestore"},
+		},
+		{
+			name:       "a disk whose PVC was not restored is not upgraded into an empty one",
+			appKind:    vmDiskAppKind,
+			appName:    "data",
+			opts:       &RestoreOptions{KeepOriginalPVC: new(true)},
+			hrs:        []string{"vm-disk-data"},
+			wantPhase:  backupsv1alpha1.RestoreJobPhaseSucceeded,
+			wantEvents: []string{"Warning PostRestoreDiskMissing", "vm-disk-data-orig-" + shortHash("rj")},
+		},
+		{
+			name:      "a disk whose DataVolume exists needs no upgrade",
+			appKind:   vmDiskAppKind,
+			appName:   "data",
+			hrs:       []string{"vm-disk-data"},
+			pvcs:      []string{"vm-disk-data"},
+			dvs:       []string{"vm-disk-data"},
+			wantPhase: backupsv1alpha1.RestoreJobPhaseSucceeded,
+		},
+		{
+			name:      "a forced upgrade still pending is not stamped again",
+			appKind:   vmDiskAppKind,
+			appName:   "data",
+			hrs:       []string{"vm-disk-data"},
+			pvcs:      []string{"vm-disk-data"},
+			pending:   []string{"vm-disk-data"},
+			wantKept:  []string{"vm-disk-data"},
+			wantPhase: backupsv1alpha1.RestoreJobPhaseSucceeded,
+		},
+		{
+			name:       "a patch the API server refuses for good does not hold the job Running",
+			appKind:    vmDiskAppKind,
+			appName:    "data",
+			hrs:        []string{"vm-disk-data"},
+			pvcs:       []string{"vm-disk-data"},
+			patchErr:   apierrors.NewForbidden(helmReleaseGVR.GroupResource(), "vm-disk-data", errors.New("denied")),
+			wantPhase:  backupsv1alpha1.RestoreJobPhaseSucceeded,
+			wantEvents: []string{"Warning PostRestoreUpgradeFailed"},
+		},
+		{
+			name:      "a transient patch error is retried",
+			appKind:   vmDiskAppKind,
+			appName:   "data",
+			hrs:       []string{"vm-disk-data"},
+			pvcs:      []string{"vm-disk-data"},
+			patchErr:  apierrors.NewServiceUnavailable("try again"),
+			wantErr:   true,
+			wantPhase: backupsv1alpha1.RestoreJobPhaseRunning,
 		},
 	}
 	for _, tt := range tests {
@@ -953,6 +1020,13 @@ func TestReconcileVeleroRestore_CompletedForcesDiskUpgrade(t *testing.T) {
 				Spec:       backupsv1alpha1.RestoreJobSpec{BackupRef: corev1.LocalObjectReference{Name: "bk"}},
 				Status:     backupsv1alpha1.RestoreJobStatus{Phase: backupsv1alpha1.RestoreJobPhaseRunning, StartedAt: &started},
 			}
+			if tt.opts != nil {
+				raw, err := json.Marshal(tt.opts)
+				if err != nil {
+					t.Fatalf("marshal restore options: %v", err)
+				}
+				rj.Spec.Options = &runtime.RawExtension{Raw: raw}
+			}
 			vr := &velerov1.Restore{
 				ObjectMeta: metav1.ObjectMeta{Name: "vr", Namespace: veleroNamespace, Labels: map[string]string{
 					backupsv1alpha1.OwningJobNameLabel:      rj.Name,
@@ -964,23 +1038,42 @@ func TestReconcileVeleroRestore_CompletedForcesDiskUpgrade(t *testing.T) {
 
 			var dyn []runtime.Object
 			for _, name := range tt.hrs {
-				dyn = append(dyn, makeUnstructuredHelmRelease(name, ns, nil))
+				hr := makeUnstructuredHelmRelease(name, ns, nil)
+				if slices.Contains(tt.pending, name) {
+					hr.SetAnnotations(map[string]string{
+						"reconcile.fluxcd.io/forceAt":     pendingStamp,
+						"reconcile.fluxcd.io/requestedAt": pendingStamp,
+					})
+				}
+				dyn = append(dyn, hr)
+			}
+			for _, name := range tt.dvs {
+				dyn = append(dyn, makeUnstructuredDataVolume(name, ns))
+			}
+			objs := []client.Object{rj, backup, vr, strategy}
+			for _, name := range tt.pvcs {
+				objs = append(objs, &corev1.PersistentVolumeClaim{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns}})
 			}
 			r := newTestRestoreJobReconcilerWithDynamic(t, dyn)
 			r.Client = clientfake.NewClientBuilder().WithScheme(vmDiskTestScheme()).
-				WithObjects(rj, backup, vr, strategy).
+				WithObjects(objs...).
 				WithStatusSubresource(&backupsv1alpha1.RestoreJob{}).Build()
+			if tt.patchErr != nil {
+				r.Interface.(*dynamicfake.FakeDynamicClient).PrependReactor("patch", "helmreleases",
+					func(k8stesting.Action) (bool, runtime.Object, error) { return true, nil, tt.patchErr })
+			}
 			ctx := context.Background()
 
-			if _, err := r.reconcileVeleroRestore(ctx, rj, backup); err != nil {
-				t.Fatalf("reconcileVeleroRestore: %v", err)
+			_, err := r.reconcileVeleroRestore(ctx, rj, backup)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("reconcileVeleroRestore error = %v, wantErr %v", err, tt.wantErr)
 			}
 			got := &backupsv1alpha1.RestoreJob{}
 			if err := r.Get(ctx, client.ObjectKeyFromObject(rj), got); err != nil {
 				t.Fatalf("get RestoreJob: %v", err)
 			}
-			if got.Status.Phase != backupsv1alpha1.RestoreJobPhaseSucceeded {
-				t.Fatalf("phase = %q, want Succeeded", got.Status.Phase)
+			if got.Status.Phase != tt.wantPhase {
+				t.Fatalf("phase = %q, want %q", got.Status.Phase, tt.wantPhase)
 			}
 			for _, name := range tt.hrs {
 				hr, err := r.Resource(helmReleaseGVR).Namespace(ns).Get(ctx, name, metav1.GetOptions{})
@@ -988,10 +1081,23 @@ func TestReconcileVeleroRestore_CompletedForcesDiskUpgrade(t *testing.T) {
 					t.Fatalf("get HelmRelease %s: %v", name, err)
 				}
 				ann := hr.GetAnnotations()
-				forced := ann["reconcile.fluxcd.io/forceAt"] != "" && ann["reconcile.fluxcd.io/forceAt"] == ann["reconcile.fluxcd.io/requestedAt"]
+				forceAt := ann["reconcile.fluxcd.io/forceAt"]
+				forced := forceAt != "" && forceAt != pendingStamp && forceAt == ann["reconcile.fluxcd.io/requestedAt"]
 				if want := slices.Contains(tt.wantForce, name); forced != want {
 					t.Errorf("HelmRelease %s forced = %v, want %v (annotations %v)", name, forced, want, ann)
 				}
+				if slices.Contains(tt.wantKept, name) && forceAt != pendingStamp {
+					t.Errorf("HelmRelease %s pending forceAt = %q, want it kept as %q", name, forceAt, pendingStamp)
+				}
+			}
+			events := strings.Join(drainEvents(r.Recorder.(*record.FakeRecorder)), "\n")
+			for _, want := range tt.wantEvents {
+				if !strings.Contains(events, want) {
+					t.Errorf("events %q do not contain %q", events, want)
+				}
+			}
+			if len(tt.wantEvents) == 0 && strings.Contains(events, "PostRestore") {
+				t.Errorf("unexpected PostRestore events %q", events)
 			}
 		})
 	}
