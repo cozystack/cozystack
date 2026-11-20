@@ -14,7 +14,6 @@ bundles:
     - cozystack.clustersecret-operator
     - cozystack.computeplane-application
     - cozystack.cozyplane-apiserver
-    - cozystack.cozyplane-cilium-crds
     - cozystack.external-dns
     - cozystack.external-dns-application
     - cozystack.external-secrets-operator
