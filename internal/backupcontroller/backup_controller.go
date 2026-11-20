@@ -145,8 +145,9 @@ func (r *BackupReconciler) cleanupOnDelete(ctx context.Context, backup *backupsv
 		// a tenant's own bucket is deleted too: the Backup proves it owns
 		// it, and tenants cannot delete Backups, so the delete comes from an
 		// administrator or from namespace teardown. Teardown can remove the
-		// operator Backup first, and the dump is then left behind with a
-		// Warning, since its storage is read from it (see cleanupMariaDBBackup).
+		// operator Backup first; a recorded dump on the platform bucket is
+		// then still deleted, and any other is left behind with a Warning
+		// (see cleanupMariaDBBackup).
 		return r.cleanupMariaDBBackup(ctx, backup)
 	case strategyv1alpha1.MongoDBStrategyKind:
 		// Split by flow (see cleanupMongoDBBackup). A legacy backup writes to the

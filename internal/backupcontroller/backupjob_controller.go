@@ -393,9 +393,7 @@ func strategyNotReadyDeadlineExceeded(startedAt *metav1.Time) bool {
 func (r *BackupJobReconciler) requeueStrategyNotReady(ctx context.Context, j *backupsv1alpha1.BackupJob, strategyName string) (ctrl.Result, error) {
 	logger := getLogger(ctx)
 	if strategyNotReadyDeadlineExceeded(j.Status.StartedAt) {
-		return r.markBackupJobFailed(ctx, j, fmt.Sprintf(
-			"Strategy %q referenced by BackupClass %q was not provisioned within %s; check the strategyRef name or the platform backup-storage bootstrap",
-			strategyName, j.Spec.BackupClassName, StrategyNotReadyDeadline))
+		return r.markBackupJobFailed(ctx, j, strategyNotProvisionedMessage(j, strategyName))
 	}
 	meta.SetStatusCondition(&j.Status.Conditions, metav1.Condition{
 		Type:    "Ready",
@@ -407,4 +405,10 @@ func (r *BackupJobReconciler) requeueStrategyNotReady(ctx context.Context, j *ba
 		logger.Error(updateErr, "failed to update BackupJob status to StrategyNotReady")
 	}
 	return ctrl.Result{RequeueAfter: CredentialsProjectionRequeue}, nil
+}
+
+func strategyNotProvisionedMessage(j *backupsv1alpha1.BackupJob, strategyName string) string {
+	return fmt.Sprintf(
+		"Strategy %q referenced by BackupClass %q was not provisioned within %s; check the strategyRef name or the platform backup-storage bootstrap",
+		strategyName, j.Spec.BackupClassName, StrategyNotReadyDeadline)
 }
