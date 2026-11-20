@@ -157,6 +157,33 @@ metadata:
     app.kubernetes.io/component: blockstor-satellite
 spec:
   selector: {matchLabels: {app: blockstor-satellite}}
+  {{- /*
+     Without these the DaemonSet takes the Kubernetes default, which moves
+     to the next node as soon as the new pod is Ready: seconds after start,
+     long before the satellite has adjusted the node's DRBD resources.
+     maxSurge stays 0 whatever the values say, since a surge pod would run
+     a second satellite against the same host DRBD state. */}}
+  {{- $strategy := .Values.blockstorSatellite.updateStrategy | default dict }}
+  {{- $minReady := .Values.blockstorSatellite.minReadySeconds }}
+  {{- if not (or (kindIs "float64" $minReady) (kindIs "int64" $minReady) (kindIs "int" $minReady)) }}
+  {{- fail (printf "linstor: blockstorSatellite.minReadySeconds must be a number of seconds, got %q" (toString $minReady)) }}
+  {{- end }}
+  {{- if or (lt (float64 $minReady) 0.0) (ne (float64 $minReady) (float64 (int64 $minReady))) }}
+  {{- fail (printf "linstor: blockstorSatellite.minReadySeconds must be a whole number of seconds, 0 or more, got %v" $minReady) }}
+  {{- end }}
+  minReadySeconds: {{ int64 $minReady }}
+  updateStrategy:
+  {{- if eq (toString $strategy.type) "RollingUpdate" }}
+    {{- $maxUnavailable := dig "rollingUpdate" "maxUnavailable" 1 $strategy }}
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: {{ $maxUnavailable | toJson }}
+      maxSurge: 0
+  {{- else if eq (toString $strategy.type) "OnDelete" }}
+    type: OnDelete
+  {{- else }}
+  {{- fail (printf "linstor: blockstorSatellite.updateStrategy.type must be \"RollingUpdate\" or \"OnDelete\", got %q" (toString $strategy.type)) }}
+  {{- end }}
   template:
     metadata:
       labels:
