@@ -28,6 +28,7 @@ import (
 	"github.com/cozystack/cozystack/internal/marketplace/collision"
 	"github.com/cozystack/cozystack/pkg/config"
 	helmv2 "github.com/fluxcd/helm-controller/api/v2"
+	sourcewatcherv1beta1 "github.com/fluxcd/source-watcher/api/v2/v1beta1"
 	appsv1 "k8s.io/api/apps/v1"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -40,6 +41,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	corev1ac "k8s.io/client-go/applyconfigurations/core/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/apiutil"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
@@ -143,6 +145,8 @@ func (r *PackageReconciler) buildHelmReleaseSpec(componentInstall *cozyv1alpha1.
 // +kubebuilder:rbac:groups=cozystack.io,resources=packagesources,verbs=get;list;watch
 // +kubebuilder:rbac:groups=helm.toolkit.fluxcd.io,resources=helmreleases,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=core,resources=namespaces,verbs=get;list;watch;create;update;patch
+// +kubebuilder:rbac:groups=source.extensions.fluxcd.io,resources=artifactgenerators,verbs=get;list;watch
+// +kubebuilder:rbac:groups=source.toolkit.fluxcd.io,resources=ocirepositories;gitrepositories,verbs=get;list;watch
 // +kubebuilder:rbac:groups=core,resources=limitranges,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=core,resources=pods,verbs=get;list;watch
 // +kubebuilder:rbac:groups=apps,resources=deployments;statefulsets;daemonsets,verbs=get;list;watch
@@ -359,6 +363,24 @@ func (r *PackageReconciler) Reconcile(ctx context.Context, req ctrl.Request) (re
 		// Merge values from Package spec if provided
 		if pkgComponent, ok := pkg.Spec.Components[component.Name]; ok && pkgComponent.Values != nil {
 			hr.Spec.Values = pkgComponent.Values
+		}
+
+		if packageSource.GetAnnotations()[AnnotationRenderOnSourceChange] == "true" {
+			values, err := r.sourceDigestValues(ctx, hr, packageSource.Name)
+			if err != nil {
+				logger.Error(err, "failed to stamp the source digest", "component", component.Name)
+				meta.SetStatusCondition(&pkg.Status.Conditions, metav1.Condition{
+					Type:    "Ready",
+					Status:  metav1.ConditionFalse,
+					Reason:  "SourceDigestFailed",
+					Message: fmt.Sprintf("Failed to stamp the source digest for component %s: %v", component.Name, err),
+				})
+				if err := r.Status().Update(ctx, pkg); err != nil {
+					return ctrl.Result{}, err
+				}
+				return ctrl.Result{}, err
+			}
+			hr.Spec.Values = values
 		}
 
 		// Build DependsOn from component Install and variant DependsOn
@@ -1577,6 +1599,11 @@ func (r *PackageReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Named("cozystack-package").
 		For(&cozyv1alpha1.Package{}).
 		Owns(&helmv2.HelmRelease{}).
+		Watches(
+			&sourcewatcherv1beta1.ArtifactGenerator{},
+			handler.EnqueueRequestsFromMapFunc(r.packageForArtifactGenerator),
+			builder.WithPredicates(observedSourcesDigestChanged),
+		).
 		Watches(
 			&cozyv1alpha1.PackageSource{},
 			handler.EnqueueRequestsFromMapFunc(func(ctx context.Context, obj client.Object) []reconcile.Request {
