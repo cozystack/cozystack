@@ -2,6 +2,7 @@ package controller
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -12,12 +13,15 @@ import (
 
 	packages "github.com/cozystack/cozystack/api/v1alpha1"
 	helmv2 "github.com/fluxcd/helm-controller/api/v2"
+	fluxmeta "github.com/fluxcd/pkg/apis/meta"
 	sourcev1 "github.com/fluxcd/source-controller/api/v1"
 	watcherv1 "github.com/fluxcd/source-watcher/api/v2/v1beta1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 )
 
 func schedulerProvenance() (*helmv2.HelmRelease, []client.Object) {
@@ -31,7 +35,7 @@ func schedulerProvenance() (*helmv2.HelmRelease, []client.Object) {
 		Sources:         []watcherv1.SourceReference{{Alias: "cozystack-packages", Kind: "OCIRepository", Name: "cozystack-packages", Namespace: "cozy-system"}},
 		OutputArtifacts: []watcherv1.OutputArtifact{{Name: "cozystack-cozystack-scheduler-default-cozystack-scheduler", Copy: []watcherv1.CopyOperation{{From: "@cozystack-packages/system/cozystack-scheduler/**", To: "@artifact/cozystack-scheduler/"}}}},
 	}}
-	ea := &sourcev1.ExternalArtifact{ObjectMeta: metav1.ObjectMeta{Name: ag.Spec.OutputArtifacts[0].Name, Namespace: ag.Namespace, UID: "artifact-uid", OwnerReferences: []metav1.OwnerReference{{APIVersion: "source.extensions.fluxcd.io/v1beta1", Kind: "ArtifactGenerator", Name: ag.Name, UID: ag.UID, Controller: &controller}}}}
+	ea := &sourcev1.ExternalArtifact{ObjectMeta: metav1.ObjectMeta{Name: ag.Spec.OutputArtifacts[0].Name, Namespace: ag.Namespace, UID: "artifact-uid", Labels: map[string]string{watcherv1.ArtifactGeneratorLabel: string(ag.UID)}}, Spec: sourcev1.ExternalArtifactSpec{SourceRef: &fluxmeta.NamespacedObjectKindReference{APIVersion: watcherv1.GroupVersion.String(), Kind: watcherv1.ArtifactGeneratorKind, Name: ag.Name, Namespace: ag.Namespace}}}
 	hr := pool("kube-system", "cozystack-scheduler", "")
 	hr.OwnerReferences = []metav1.OwnerReference{{APIVersion: "cozystack.io/v1alpha1", Kind: "Package", Name: pkg.Name, UID: pkg.UID, Controller: &controller}}
 	hr.Spec.ChartRef = &helmv2.CrossNamespaceSourceReference{Kind: "ExternalArtifact", Name: ea.Name, Namespace: ea.Namespace}
@@ -64,7 +68,7 @@ func platformProvenance(source, kind, variant string) (*helmv2.HelmRelease, []cl
 		copies = append(copies, watcherv1.CopyOperation{From: "@" + source + "/core/platform/" + file, To: "@artifact/platform/values.yaml", Strategy: strategy})
 	}
 	ag.Spec.OutputArtifacts = []watcherv1.OutputArtifact{{Name: naming.ArtifactName(ps.Name, variant, "platform"), Copy: copies}}
-	ea.Name, ea.OwnerReferences[0].Name = ag.Spec.OutputArtifacts[0].Name, ag.Name
+	ea.Name, ea.Spec.SourceRef.Name = ag.Spec.OutputArtifacts[0].Name, ag.Name
 	hr.Name, hr.Namespace = "cozystack-platform", "cozy-system"
 	hr.OwnerReferences[0].Name = pkg.Name
 	hr.Spec.ChartRef.Name = ea.Name
@@ -92,7 +96,7 @@ func TestPoolTracedThroughItsProvenanceRetainsItsClass(t *testing.T) {
 			{From: "@cozystack-packages/library/cozy-lib/**", To: "@artifact/kubernetes-nodes/charts/cozy-lib/"},
 		}}},
 	}}
-	ea := &sourcev1.ExternalArtifact{ObjectMeta: metav1.ObjectMeta{Name: ag.Spec.OutputArtifacts[0].Name, Namespace: ag.Namespace, UID: "artifact-uid", OwnerReferences: []metav1.OwnerReference{{APIVersion: "source.extensions.fluxcd.io/v1beta1", Kind: "ArtifactGenerator", Name: ag.Name, UID: ag.UID, Controller: &controller}}}}
+	ea := &sourcev1.ExternalArtifact{ObjectMeta: metav1.ObjectMeta{Name: ag.Spec.OutputArtifacts[0].Name, Namespace: ag.Namespace, UID: "artifact-uid", Labels: map[string]string{watcherv1.ArtifactGeneratorLabel: string(ag.UID)}}, Spec: sourcev1.ExternalArtifactSpec{SourceRef: &fluxmeta.NamespacedObjectKindReference{APIVersion: watcherv1.GroupVersion.String(), Kind: watcherv1.ArtifactGeneratorKind, Name: ag.Name, Namespace: ag.Namespace}}}
 	hr := pool("tenant-test", "kubernetes-nodes-k-md0", "custom")
 	if hr.Spec.ChartRef.Name != ea.Name {
 		t.Fatalf("pool chart artifact %q is not the traced one %q", hr.Spec.ChartRef.Name, ea.Name)
@@ -194,7 +198,7 @@ func TestKnownApplicationWithoutPackageOwnerSkipsValues(t *testing.T) {
 		{From: "@cozystack-packages/apps/postgres/**", To: "@artifact/postgres/"},
 		{From: "@cozystack-packages/library/cozy-lib/**", To: "@artifact/postgres/charts/cozy-lib/"},
 	}}}
-	ea.Name, ea.OwnerReferences[0].Name = ag.Spec.OutputArtifacts[0].Name, ag.Name
+	ea.Name, ea.Spec.SourceRef.Name = ag.Spec.OutputArtifacts[0].Name, ag.Name
 	hr.Namespace, hr.Name, hr.OwnerReferences = "tenant-root", "postgres-example", nil
 	hr.Spec.ChartRef.Name = ea.Name
 	hr.Spec.Values.Raw = []byte(`{"workerClassName":"not-a-worker-setting"}`)
@@ -211,12 +215,12 @@ func TestKnownApplicationWithoutPackageOwnerSkipsValues(t *testing.T) {
 }
 
 func TestAmbiguousConsumerRetainsWithoutReadingValues(t *testing.T) {
-	for _, mutation := range []string{"owner UID", "source", "copy", "unlabelled", "forged label", "canonical contradiction", "canonical artifact contradiction", "artifact owner UID", "source owner UID", "missing package", "malformed provenance", "path alias", "worker chart as library", "duplicate artifact"} {
+	for _, mutation := range []string{"owner UID", "source", "copy", "unlabelled", "forged label", "canonical contradiction", "canonical artifact contradiction", "artifact generator UID", "source owner UID", "missing package", "malformed provenance", "path alias", "worker chart as library", "duplicate artifact"} {
 		t.Run(mutation, func(t *testing.T) {
 			hr, objects := schedulerProvenance()
 			switch mutation {
-			case "artifact owner UID":
-				objects[3].(*sourcev1.ExternalArtifact).OwnerReferences[0].UID = "stale"
+			case "artifact generator UID":
+				objects[3].(*sourcev1.ExternalArtifact).Labels[watcherv1.ArtifactGeneratorLabel] = "stale"
 			case "source owner UID":
 				objects[2].(*watcherv1.ArtifactGenerator).OwnerReferences[0].UID = "stale"
 			case "missing package":
@@ -283,5 +287,79 @@ func TestCanonicalPoolArtifactsAreTheOnesThePlatformInstallsFrom(t *testing.T) {
 		if !strings.Contains(string(raw), "name: "+name+"\n") {
 			t.Fatalf("%s names no chart artifact %q", file, name)
 		}
+	}
+}
+
+func TestNativeArtifactReleasesUnusedClass(t *testing.T) {
+	hr, objects := schedulerProvenance()
+	objects = append(objects, hr, terminating(class("unused", Finalizer)))
+	r, c := newReconciler(t, objects...)
+	reconcileClass(t, r, "unused")
+	if err := c.Get(context.Background(), client.ObjectKey{Name: "unused"}, class("unused")); !apierrors.IsNotFound(err) {
+		t.Fatalf("native artifact retained unused class: %v", err)
+	}
+}
+
+func TestUnknownNativeArtifactProvenanceKeepsFinalizer(t *testing.T) {
+	for _, mutation := range []string{"missing reference", "reference API version", "reference kind", "reference name", "empty reference name", "reference namespace", "empty reference namespace", "missing UID label", "empty UID label", "recreated generator", "empty generator UID", "missing generator", "owner only", "generator read error", "artifact read error"} {
+		t.Run(mutation, func(t *testing.T) {
+			hr, objects := schedulerProvenance()
+			ag := objects[2].(*watcherv1.ArtifactGenerator)
+			ea := objects[3].(*sourcev1.ExternalArtifact)
+			switch mutation {
+			case "missing reference":
+				ea.Spec.SourceRef = nil
+			case "reference API version":
+				ea.Spec.SourceRef.APIVersion = "source.extensions.fluxcd.io/v999"
+			case "reference kind":
+				ea.Spec.SourceRef.Kind = "OtherGenerator"
+			case "reference name":
+				ea.Spec.SourceRef.Name = "other"
+			case "empty reference name":
+				ea.Spec.SourceRef.Name = ""
+			case "reference namespace":
+				ea.Spec.SourceRef.Namespace = "other"
+				elsewhere := ag.DeepCopy()
+				elsewhere.Namespace = "other"
+				objects = append(objects, elsewhere)
+			case "empty reference namespace":
+				ea.Spec.SourceRef.Namespace = ""
+			case "missing UID label":
+				ea.Labels = nil
+			case "empty UID label":
+				ea.Labels[watcherv1.ArtifactGeneratorLabel] = ""
+			case "recreated generator":
+				ag.UID = "new-generator-uid"
+			case "empty generator UID":
+				ag.UID = ""
+			case "missing generator":
+				objects = append(objects[:2], objects[3:]...)
+			case "owner only":
+				controller := true
+				ea.OwnerReferences = []metav1.OwnerReference{{APIVersion: watcherv1.GroupVersion.String(), Kind: watcherv1.ArtifactGeneratorKind, Name: ag.Name, UID: ag.UID, Controller: &controller}}
+				ea.Spec.SourceRef = nil
+				ea.Labels = nil
+			}
+			readErr := errors.New("API read unavailable")
+			objects = append(objects, hr, terminating(class("unused", Finalizer)))
+			r, c := newReconcilerWith(t, interceptor.Funcs{Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+				_, generator := obj.(*watcherv1.ArtifactGenerator)
+				_, artifact := obj.(*sourcev1.ExternalArtifact)
+				if mutation == "generator read error" && generator || mutation == "artifact read error" && artifact {
+					return readErr
+				}
+				return c.Get(ctx, key, obj, opts...)
+			}}, objects...)
+			_, err := r.Reconcile(context.Background(), reconcile.Request{NamespacedName: types.NamespacedName{Name: "unused"}})
+			if !errors.Is(err, errUnknownConsumer) {
+				t.Fatalf("unverified artifact: got %v, want unknown consumer", err)
+			}
+			if strings.HasSuffix(mutation, "read error") && !errors.Is(err, readErr) {
+				t.Fatalf("API error lost: %v", err)
+			}
+			if got := finalizers(t, c, "unused"); len(got) != 1 || got[0] != Finalizer {
+				t.Fatalf("unverified artifact released class: %v", got)
+			}
+		})
 	}
 }
