@@ -5,7 +5,7 @@ _cluster: {}
 # Keycloak image used by the one-shot admin-API job that enables the
 # UPDATE_EMAIL required action. Only kcadm.sh is used, so it just needs
 # to track the Keycloak server major version (packages/system/keycloak).
-image: quay.io/keycloak/keycloak:26.5.2
+image: quay.io/keycloak/keycloak:26.8.2-3
 
 # Enable the Keycloak Organizations feature for the platform realm.
 # Mapped to ClusterKeycloakRealm.spec.organizationsEnabled. Defaults to
