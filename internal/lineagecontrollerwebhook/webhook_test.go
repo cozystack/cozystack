@@ -184,10 +184,10 @@ func TestHandle_ReadmissionShortCircuit(t *testing.T) {
 			labels: fullLabels,
 		},
 		{
-			name:        "pod with every lineage label still gets the scheduling fields",
+			name:        "pod with every lineage label still goes through the walk",
 			kind:        "Pod",
 			labels:      fullLabels,
-			wantPatches: []string{"add /spec/schedulerName", "replace " + escape(ManagerNameKey)},
+			wantPatches: []string{"replace " + escape(ManagerNameKey)},
 		},
 		{
 			name: "secret marked unmanaged goes through the walk",
@@ -737,5 +737,29 @@ func TestApplySchedulingClass_ApplicationClassDeletedDuringAdmissionKeepsAClass(
 	}
 	if got := pod.GetAnnotations()[schedulerapi.SchedulingClassAnnotation]; got != "app-class" {
 		t.Errorf("expected pod annotation %s=app-class, got %q", schedulerapi.SchedulingClassAnnotation, got)
+	}
+}
+
+// spec.schedulerName cannot change once a Pod exists. Setting it on an
+// UPDATE, after the tenant or application class changed, would get every
+// later update of the Pod refused by the apiserver.
+func TestHandle_PodUpdateLeavesSchedulingAlone(t *testing.T) {
+	w := newHandleTestWebhook(t)
+
+	resp := w.Handle(context.Background(), admission.Request{AdmissionRequest: admissionv1.AdmissionRequest{
+		Kind:      metav1.GroupVersionKind{Version: "v1", Kind: "Pod"},
+		Namespace: "tenant-demo",
+		Name:      "harbor-demo-core-0",
+		Operation: admissionv1.Update,
+		Object:    runtime.RawExtension{Raw: []byte(podWithNumericFields)},
+		OldObject: runtime.RawExtension{Raw: []byte(podWithNumericFields)},
+	}})
+	if !resp.Allowed {
+		t.Fatalf("expected allowed response, got %+v", resp.Result)
+	}
+	for _, p := range resp.Patches {
+		if p.Path == "/spec/schedulerName" || strings.Contains(p.Path, "scheduling-class") {
+			t.Errorf("UPDATE must not touch scheduling, got %s %s", p.Operation, p.Path)
+		}
 	}
 }
