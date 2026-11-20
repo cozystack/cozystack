@@ -86,6 +86,11 @@ networks: []
 ## @param {[]Network} subnets - Deprecated: use networks instead.
 subnets: []
 
+## @param {string} routeTable - Name of a cozyplane RouteTable in the VM's namespace that routes the VM's traffic. Empty uses the VPC's default table. Requires the cozyplane networking variant and a VPC in `networks`.
+## @maxLength 253
+## @pattern ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*)?$
+routeTable: ""
+
 ## @param {[]GPU} gpus - List of GPUs to attach (NVIDIA driver requires at least 4 GiB RAM).
 gpus: []
 ## Example:

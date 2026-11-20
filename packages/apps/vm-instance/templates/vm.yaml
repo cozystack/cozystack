@@ -27,6 +27,15 @@
 {{- if and $cozyplaneSDN (gt (len ($networks | default list)) 1) }}
 {{- fail (printf "the cozyplane networking variant joins a VM to exactly one VPC, got %d networks" (len $networks)) }}
 {{- end }}
+{{- $routeTable := .Values.routeTable | default "" }}
+{{- if $routeTable }}
+{{-   if not $cozyplaneSDN }}
+{{-     fail (printf "routeTable %q names a cozyplane RouteTable, but the cluster does not serve sdn.cozystack.io: route tables need the cozyplane networking variant" $routeTable) }}
+{{-   end }}
+{{-   if not $networks }}
+{{-     fail (printf "routeTable %q needs the VM to join a VPC: name the VirtualPrivateCloud in networks" $routeTable) }}
+{{-   end }}
+{{- end }}
 
 apiVersion: kubevirt.io/v1
 kind: VirtualMachine
@@ -66,6 +75,9 @@ spec:
         {{- /* The VPC lives in the VM's own namespace, so the bare release name
                resolves; <owner-ns>/<vpc> is only for foreign VPCs. */}}
         sdn.cozystack.io/vpc: {{ printf "virtualprivatecloud-%s" (index $networks 0).name | quote }}
+        {{- with $routeTable }}
+        sdn.cozystack.io/route-table: {{ . | quote }}
+        {{- end }}
         {{- end }}
       labels:
         {{- include "virtual-machine.labels" . | nindent 8 }}
