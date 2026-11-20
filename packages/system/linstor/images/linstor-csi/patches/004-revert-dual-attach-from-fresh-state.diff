@@ -42,10 +42,10 @@ index bd28e06..83d5d03 100644
  		client.LogOut(logOut),
 diff --git a/pkg/client/dual_attach_test.go b/pkg/client/dual_attach_test.go
 new file mode 100644
-index 0000000..3fb1de0
+index 0000000..f26ca8c
 --- /dev/null
 +++ b/pkg/client/dual_attach_test.go
-@@ -0,0 +1,353 @@
+@@ -0,0 +1,498 @@
 +package client
 +
 +import (
@@ -61,12 +61,15 @@ index 0000000..3fb1de0
 +
 +	lapicache "github.com/LINBIT/golinstor/cache"
 +	lapi "github.com/LINBIT/golinstor/client"
++	"github.com/LINBIT/golinstor/clonestatus"
 +	"github.com/sirupsen/logrus"
 +	"github.com/stretchr/testify/assert"
 +	"github.com/stretchr/testify/require"
 +
 +	"github.com/piraeusdatastore/linstor-csi/pkg/linstor"
 +	lc "github.com/piraeusdatastore/linstor-csi/pkg/linstor/highlevelclient"
++	"github.com/piraeusdatastore/linstor-csi/pkg/topology"
++	"github.com/piraeusdatastore/linstor-csi/pkg/volume"
 +)
 +
 +const (
@@ -247,6 +250,47 @@ index 0000000..3fb1de0
 +		f.ok(w)
 +	})
 +
++	// Clone copies the source definition's props, as LINSTOR does, minus
++	// the keys the request deletes.
++	mux.HandleFunc("POST /v1/resource-definitions/{rd}/clone", func(w http.ResponseWriter, r *http.Request) {
++		var req lapi.ResourceDefinitionCloneRequest
++		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
++			f.t.Errorf("decode clone request: %v", err)
++		}
++
++		f.mu.Lock()
++		defer f.mu.Unlock()
++		src := r.PathValue("rd")
++		props := map[string]string{}
++		for k, v := range f.rdProps[src] {
++			props[k] = v
++		}
++		for _, k := range req.DeleteProps {
++			delete(props, k)
++		}
++		for k, v := range req.OverrideProps {
++			props[k] = v
++		}
++		f.rdProps[req.Name] = props
++		f.rdGroup[req.Name] = req.ResourceGroup
++		f.writeJSON(w, lapi.ResourceDefinitionCloneStarted{})
++	})
++
++	mux.HandleFunc("GET /v1/resource-definitions/{rd}/clone/{target}", func(w http.ResponseWriter, r *http.Request) {
++		f.mu.Lock()
++		defer f.mu.Unlock()
++		if _, ok := f.rdProps[r.PathValue("target")]; !ok {
++			f.notFound(w)
++			return
++		}
++		f.writeJSON(w, lapi.ResourceDefinitionCloneStatus{Status: clonestatus.Complete})
++	})
++
++	mux.HandleFunc("GET /v1/resource-definitions/{rd}/volume-definitions/{nr}", func(w http.ResponseWriter, r *http.Request) {
++		nr := int32(0)
++		f.writeJSON(w, lapi.VolumeDefinition{VolumeNumber: &nr, SizeKib: 1 << 20})
++	})
++
 +	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 +		f.t.Errorf("unexpected request: %s %s", r.Method, r.URL)
 +		f.notFound(w)
@@ -380,6 +424,27 @@ index 0000000..3fb1de0
 +	assert.Zero(t, f.rdWrites, "a plain detach does not touch the definition")
 +}
 +
++func TestClone_DropsInheritedDualAttach(t *testing.T) {
++	f := newFakeController(t)
++	l := newDualAttachLinstor(t, f)
++	f.rdProps[dualVol] = dualAttachOverride()
++	f.rdProps[dualVol]["Aux/keep-me"] = "yes"
++
++	vol := &volume.Info{ID: "pvc-clone", DeviceBytes: map[int]int64{0: 1 << 30}, Properties: map[string]string{"Aux/csi-own": "x"}}
++	src := &volume.Info{ID: dualVol}
++	params := &volume.Parameters{ResourceGroup: dualRG, PlacementPolicy: topology.Manual}
++
++	require.NoError(t, l.Clone(context.Background(), vol, src, params, nil))
++
++	props := f.props("pvc-clone")
++	for k := range dualAttachOverride() {
++		assert.NotContains(t, props, k)
++	}
++	assert.Equal(t, "yes", props["Aux/keep-me"])
++	assert.Equal(t, "x", props["Aux/csi-own"])
++	assert.Equal(t, dualAttachOverride()[linstor.PropertyDrbdNetProtocol], f.props(dualVol)[linstor.PropertyDrbdNetProtocol], "the source is not touched")
++}
++
 +func TestDualAttachProps(t *testing.T) {
 +	cases := []struct {
 +		name  string
@@ -399,8 +464,88 @@ index 0000000..3fb1de0
 +		})
 +	}
 +}
++
++// snapshotRoutes adds what VolFromSnap needs on top of the routes above. The
++// restore copies the props the definition had when the snapshot was taken
++// onto the target definition, as LINSTOR does.
++func (f *fakeController) snapshotRoutes(mux *http.ServeMux, snapProps map[string]string) {
++	snap := lapi.Snapshot{
++		Name:         "snap",
++		ResourceName: dualVol,
++		Nodes:        []string{nodeSrc},
++		Flags:        []string{"SUCCESSFUL"},
++		Snapshots:    []lapi.SnapshotNode{{SnapshotName: "snap", NodeName: nodeSrc, Flags: []string{"SUCCESSFUL"}}},
++	}
++
++	mux.HandleFunc("GET /v1/view/snapshots", func(w http.ResponseWriter, r *http.Request) {
++		f.writeJSON(w, []lapi.Snapshot{snap})
++	})
++	mux.HandleFunc("GET /v1/resource-definitions/{rd}/snapshots/{snap}", func(w http.ResponseWriter, r *http.Request) {
++		f.writeJSON(w, snap)
++	})
++	mux.HandleFunc("GET /v1/nodes", func(w http.ResponseWriter, r *http.Request) {
++		f.writeJSON(w, []lapi.Node{{Name: nodeSrc, ConnectionStatus: "ONLINE"}})
++	})
++	mux.HandleFunc("GET /v1/nodes/{node}", func(w http.ResponseWriter, r *http.Request) {
++		f.writeJSON(w, lapi.Node{Name: r.PathValue("node"), ConnectionStatus: "ONLINE"})
++	})
++	mux.HandleFunc("POST /v1/resource-definitions", func(w http.ResponseWriter, r *http.Request) {
++		var req lapi.ResourceDefinitionCreate
++		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
++			f.t.Errorf("decode RD create: %v", err)
++		}
++		f.mu.Lock()
++		defer f.mu.Unlock()
++		props := map[string]string{}
++		for k, v := range req.ResourceDefinition.Props {
++			props[k] = v
++		}
++		f.rdProps[req.ResourceDefinition.Name] = props
++		f.rdGroup[req.ResourceDefinition.Name] = req.ResourceDefinition.ResourceGroupName
++		f.ok(w)
++	})
++	mux.HandleFunc("GET /v1/resource-definitions/{rd}/volume-definitions", func(w http.ResponseWriter, r *http.Request) {
++		f.writeJSON(w, []lapi.VolumeDefinition{})
++	})
++	mux.HandleFunc("POST /v1/resource-definitions/{rd}/snapshot-restore-volume-definition/{snap}", func(w http.ResponseWriter, r *http.Request) {
++		f.ok(w)
++	})
++	mux.HandleFunc("POST /v1/resource-definitions/{rd}/snapshot-restore-resource/{snap}", func(w http.ResponseWriter, r *http.Request) {
++		var req lapi.SnapshotRestore
++		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
++			f.t.Errorf("decode restore: %v", err)
++		}
++		f.mu.Lock()
++		defer f.mu.Unlock()
++		for k, v := range snapProps {
++			f.rdProps[req.ToResource][k] = v
++		}
++		f.inUse[req.ToResource] = map[string]bool{nodeSrc: false}
++		f.ok(w)
++	})
++}
++
++func TestVolFromSnap_DropsInheritedDualAttach(t *testing.T) {
++	f := newFakeController(t)
++	snapProps := dualAttachOverride()
++	snapProps["Aux/keep-me"] = "yes"
++	l := newDualAttachLinstorWith(t, f, func(mux *http.ServeMux) { f.snapshotRoutes(mux, snapProps) })
++
++	vol := &volume.Info{ID: "pvc-restored", DeviceBytes: map[int]int64{0: 1 << 30}, Properties: map[string]string{"Aux/csi-own": "x"}}
++	snap := &volume.Snapshot{SnapshotId: volume.SnapshotId{SourceName: dualVol, SnapshotName: "snap"}}
++	params := &volume.Parameters{ResourceGroup: dualRG, PlacementPolicy: topology.Manual}
++
++	require.NoError(t, l.VolFromSnap(context.Background(), snap, vol, params, nil, nil))
++
++	props := f.props("pvc-restored")
++	for k := range dualAttachOverride() {
++		assert.NotContains(t, props, k)
++	}
++	assert.Equal(t, "yes", props["Aux/keep-me"])
++	assert.Equal(t, "x", props["Aux/csi-own"])
++}
 diff --git a/pkg/client/linstor.go b/pkg/client/linstor.go
-index 5d71c37..4ecca53 100644
+index 5d71c37..a9eb79f 100644
 --- a/pkg/client/linstor.go
 +++ b/pkg/client/linstor.go
 @@ -72,6 +72,8 @@ type Linstor struct {
@@ -428,7 +573,16 @@ index 5d71c37..4ecca53 100644
  // LogOut sets the Linstor client to write logs to the provided io.Writer
  // instead of discarding logs.
  func LogOut(out io.Writer) func(*Linstor) error {
-@@ -790,64 +801,125 @@ func (s *Linstor) Detach(ctx context.Context, volId, node string) error {
+@@ -470,7 +481,7 @@ func (s *Linstor) Clone(ctx context.Context, vol, src *volume.Info, params *volu
+ 
+ 	logger.Debug("reconcile extra properties")
+ 
+-	err = s.client.ResourceDefinitions.Modify(ctx, vol.ID, lapi.GenericPropsModify{OverrideProps: vol.Properties})
++	err = s.reconcileExtraProperties(ctx, vol, logger)
+ 	if err != nil {
+ 		logger.Debugf("reconcile extra properties failed: %v", err)
+ 		return err
+@@ -790,64 +801,142 @@ func (s *Linstor) Detach(ctx context.Context, volId, node string) error {
  		"targetNode": node,
  	})
  
@@ -586,6 +740,32 @@ index 5d71c37..4ecca53 100644
 +	}
 +
 +	return s.client.Resources
++}
++
++// reconcileExtraProperties sets the volume's own properties on a
++// resource-definition made from another volume or from a snapshot. LINSTOR
++// copies the source's definition properties onto it, and with them the
++// dual-attach props of a source that was being live-migrated (or had been
++// left with them) when it was cloned or snapshotted. A new volume is
++// attached nowhere, so those are dropped here: left in place they would
++// allow two Primaries and keep an asynchronous volume on Protocol C for
++// the life of the copy.
++func (s *Linstor) reconcileExtraProperties(ctx context.Context, vol *volume.Info, log *logrus.Entry) error {
++	err := s.dropDualAttachProps(ctx, vol.ID, vol.Properties, log)
++	if err != nil {
++		return err
++	}
++
++	return s.client.ResourceDefinitions.Modify(ctx, vol.ID, lapi.GenericPropsModify{OverrideProps: vol.Properties})
  }
  
  // getEffectiveDrbdProtocol returns the DRBD network protocol ("A", "B" or "C")
+@@ -1379,7 +1468,7 @@ func (s *Linstor) VolFromSnap(ctx context.Context, snap *volume.Snapshot, vol *v
+ 
+ 	logger.Debug("reconcile extra properties")
+ 
+-	err = s.client.ResourceDefinitions.Modify(ctx, vol.ID, lapi.GenericPropsModify{OverrideProps: vol.Properties})
++	err = s.reconcileExtraProperties(ctx, vol, logger)
+ 	if err != nil {
+ 		logger.Debugf("reconcile extra properties failed: %v", err)
+ 		return err
