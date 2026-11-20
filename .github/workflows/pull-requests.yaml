@@ -1196,7 +1196,7 @@ jobs:
           echo "COZY_WORKER_UPGRADE_DEADLINE=$deadline" >> "$GITHUB_ENV"
 
       - name: Set sandbox ID
-        run: echo "SANDBOX_NAME=cozy-e2e-sandbox-$(echo "${GITHUB_REPOSITORY}:${GITHUB_WORKFLOW}:${GITHUB_REF}" | sha256sum | cut -c1-10)" >> $GITHUB_ENV
+        run: echo "SANDBOX_NAME=cozy-e2e-sandbox-$(echo "${GITHUB_REPOSITORY}:${GITHUB_WORKFLOW}:${GITHUB_REF}" | sha256sum | cut -c1-10)" >> "$GITHUB_ENV"
 
       # ▸ Host kernel modules. MANDATORY and up front, because nothing later can
       #   supply them: the nodes take their kernel from this host, and Talos
@@ -1250,14 +1250,14 @@ jobs:
       - name: Prepare environment
         run: |
           attempt=0
-          until make SANDBOX_NAME=$SANDBOX_NAME prepare-env-container; do
+          until make SANDBOX_NAME="$SANDBOX_NAME" prepare-env-container; do
             attempt=$((attempt + 1))
             if [ $attempt -ge 3 ]; then
               echo "Attempt $attempt failed, exiting..."
               exit 1
             fi
             echo "Attempt $attempt failed, retrying..."
-            make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME delete-cluster-container || true
+            make -C packages/core/testing SANDBOX_NAME="$SANDBOX_NAME" delete-cluster-container || true
           done
           echo "Prepare environment completed after $((attempt + 1)) attempts"
 
@@ -1291,11 +1291,11 @@ jobs:
             esac
           fi
           echo "Selected apps: ${apps:-<none>}"
-          echo "apps=${apps}" >> $GITHUB_OUTPUT
+          echo "apps=${apps}" >> "$GITHUB_OUTPUT"
           if [ -z "${apps}" ]; then
-            echo "skip=true" >> $GITHUB_OUTPUT
+            echo "skip=true" >> "$GITHUB_OUTPUT"
           else
-            echo "skip=false" >> $GITHUB_OUTPUT
+            echo "skip=false" >> "$GITHUB_OUTPUT"
           fi
           # The complement of what the selected suites need, for a reduced
           # install. An empty selection installs everything as before.
@@ -1304,7 +1304,7 @@ jobs:
             disabled="$(./hack/select-install.sh --disabled "${apps}")"
           fi
           echo "Disabled packages: ${disabled:-<none>}"
-          echo "disabled=${disabled}" >> $GITHUB_OUTPUT
+          echo "disabled=${disabled}" >> "$GITHUB_OUTPUT"
 
       # ▸ Install Cozystack
       - name: Install Cozystack into sandbox
@@ -1325,7 +1325,7 @@ jobs:
           # the full install.
           COZY_DISABLED_PACKAGES: ${{ steps.select.outputs.disabled }}
         run: |
-          if ! make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME install-cozystack; then
+          if ! make -C packages/core/testing SANDBOX_NAME="$SANDBOX_NAME" install-cozystack; then
             echo "❌ Install failed (no retry — see diagnostics below)"
             echo "::group::Diagnostics: HelmRelease status"
             docker exec "$SANDBOX_NAME" sh -c 'kubectl get hr -A -o wide 2>&1 | tail -100' || true
@@ -1346,7 +1346,7 @@ jobs:
       - name: Run OpenAPI tests
         if: ${{ env.COZY_WORKER_UPGRADE_MODE != 'required' }}
         run: |
-          make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME test-openapi
+          make -C packages/core/testing SANDBOX_NAME="$SANDBOX_NAME" test-openapi
 
       # ▸ Run E2E tests (Chainsaw, scoped by Test Impact Analysis)
       #
@@ -1381,7 +1381,7 @@ jobs:
             suites="$SELECTED_APPS"
             echo "Running selected chainsaw suites: $suites"
           fi
-          if ! make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME test-chainsaw CHAINSAW_SUITES="$suites"; then
+          if ! make -C packages/core/testing SANDBOX_NAME="$SANDBOX_NAME" test-chainsaw CHAINSAW_SUITES="$suites"; then
             echo "❌ Chainsaw E2E failed (see the assertion diffs or LEAKED-PODS lines above and diagnostics below)"
             echo "::group::Diagnostics: HelmRelease status"
             docker exec "$SANDBOX_NAME" sh -c 'kubectl get hr -A -o wide 2>&1 | tail -50' || true
@@ -1448,7 +1448,7 @@ jobs:
         timeout-minutes: 30
         continue-on-error: true
         run: |
-          make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME collect-report || true
+          make -C packages/core/testing SANDBOX_NAME="$SANDBOX_NAME" collect-report || true
 
       # `continue-on-error` keeps the overrun out of the job's result, which also
       # keeps it out of everyone's view: a step that ended at its ceiling renders
@@ -1474,7 +1474,7 @@ jobs:
       - name: Collect images list
         if: always()
         run: |
-          make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME collect-images || true
+          make -C packages/core/testing SANDBOX_NAME="$SANDBOX_NAME" collect-images || true
 
       - name: Upload image list
         if: always()
