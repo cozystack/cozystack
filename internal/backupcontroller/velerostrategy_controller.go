@@ -30,7 +30,6 @@ import (
 	backupsv1alpha1 "github.com/cozystack/cozystack/api/backups/v1alpha1"
 	"github.com/cozystack/cozystack/internal/template"
 
-	fluxmeta "github.com/fluxcd/pkg/apis/meta"
 	"github.com/go-logr/logr"
 	velerov1 "github.com/vmware-tanzu/velero/pkg/apis/velero/v1"
 )
@@ -1604,14 +1603,7 @@ func (r *RestoreJobReconciler) forceDiskHelmReleases(ctx context.Context, restor
 	if disks == nil {
 		return nil
 	}
-	stamp := time.Now().UTC().Format(time.RFC3339Nano)
-	patch, err := json.Marshal(map[string]any{"metadata": map[string]any{"annotations": map[string]string{
-		fluxmeta.ReconcileRequestAnnotation: stamp,
-		fluxmeta.ForceRequestAnnotation:     stamp,
-	}}})
-	if err != nil {
-		return err
-	}
+	patch := helmForceUpgradePatch(time.Now())
 	for _, dv := range disks.DataVolumes {
 		_, err := r.Resource(helmReleaseGVR).Namespace(ns).Patch(ctx, dv.DataVolumeName, types.MergePatchType, patch, metav1.PatchOptions{})
 		if errors.IsNotFound(err) {

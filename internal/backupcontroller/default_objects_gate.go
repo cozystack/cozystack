@@ -685,12 +685,7 @@ func (g *DefaultObjectsGate) forceHelmRelease(ctx context.Context, target types.
 		return errHelmReleaseSuspended
 	}
 
-	stamp := now.UTC().Format(time.RFC3339Nano)
-	patch := fmt.Sprintf(
-		`{"metadata":{"annotations":{"reconcile.fluxcd.io/forceAt":%q,"reconcile.fluxcd.io/requestedAt":%q}}}`,
-		stamp, stamp,
-	)
 	_, err = g.Resource(helmReleaseGVR).Namespace(target.Namespace).
-		Patch(ctx, target.Name, types.MergePatchType, []byte(patch), metav1.PatchOptions{})
+		Patch(ctx, target.Name, types.MergePatchType, helmForceUpgradePatch(now), metav1.PatchOptions{})
 	return err
 }
