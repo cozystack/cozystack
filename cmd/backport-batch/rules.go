@@ -17,6 +17,7 @@ limitations under the License.
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"maps"
 	"path/filepath"
@@ -149,6 +150,7 @@ const (
 	touchesMigrations    = "platform migrations"
 	touchesTargetVersion = "targetVersion"
 	touchesAPI           = "a sizeable API change"
+	touchesField         = "a new API field"
 	touchesCRD           = "a CRD"
 )
 
@@ -177,19 +179,23 @@ func touchesRule(o *original, changes []fileChange) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	apiDetail := ""
+	detail := map[string]string{}
 	if asks {
-		if apiDetail, err = sizeableAPIChange(o); err != nil {
+		if detail[touchesAPI], err = sizeableAPIChange(o); err != nil {
 			return "", err
 		}
-		hit[touchesAPI] = apiDetail != ""
+		if detail[touchesField], err = addedAPIField(o); err != nil {
+			return "", err
+		}
+		hit[touchesAPI] = detail[touchesAPI] != ""
+		hit[touchesField] = detail[touchesField] != ""
 	}
 	var why []string
-	for _, r := range []string{touchesMigrations, touchesTargetVersion, touchesAPI, touchesCRD} {
+	for _, r := range []string{touchesMigrations, touchesTargetVersion, touchesAPI, touchesField, touchesCRD} {
 		switch {
 		case !hit[r]:
-		case r == touchesAPI:
-			why = append(why, r+" ("+apiDetail+")")
+		case detail[r] != "":
+			why = append(why, r+" ("+detail[r]+")")
 		default:
 			why = append(why, r)
 		}
@@ -228,14 +234,14 @@ func changesCRD(parent, merge string, changes []fileChange) (bool, error) {
 			if err != nil {
 				return false, err
 			}
-			before = crdDocs(content)
+			before = crdDocs(content, helmTemplate(c.path))
 		}
 		if c.status != 'D' {
 			content, err := git("cat-file", "blob", merge+":"+c.path)
 			if err != nil {
 				return false, err
 			}
-			after = crdDocs(content)
+			after = crdDocs(content, helmTemplate(c.path))
 		}
 		if !maps.Equal(before, after) {
 			return true, nil
@@ -254,6 +260,14 @@ func manifest(path string) bool {
 	}
 	dirs := strings.Split(path, "/")
 	return slices.ContainsFunc(dirs[:len(dirs)-1], func(d string) bool { return d == "templates" || d == "crds" })
+}
+
+// helmTemplate reports whether Helm renders path as a template: anything under
+// a chart's templates/, and a .tpl helper. A file a template inserts with
+// .Files.Get, and anything under crds/, is applied as written.
+func helmTemplate(path string) bool {
+	dirs := strings.Split(path, "/")
+	return filepath.Ext(path) == ".tpl" || slices.Contains(dirs[:len(dirs)-1], "templates")
 }
 
 func testFixture(path string) bool {
@@ -297,13 +311,15 @@ var (
 )
 
 // crdDocs maps the CRD documents of a file to their text, keyed by
-// metadata.name, so a CRD added, removed or edited changes the map. Every
-// document that names the kind is read, so a CRD in compact JSON or under a
-// quoted key counts as well. A document that declares the kind on a line of
-// its own but cannot be read as an object, a CRD behind a Helm template guard
-// for one, is kept under its own text, so that any change to it counts: the
-// check fails closed. So does a list holding a CRD.
-func crdDocs(content string) map[string]string {
+// metadata.name, so a CRD added, removed or edited changes the map. A named
+// CRD maps to crdContent, so that rewording the descriptions of its schema
+// edits nothing; templated says Helm renders the file. Every document that
+// names the kind is read, so a CRD in compact JSON or under a quoted key
+// counts as well. A document that declares the kind on a line of its own but
+// cannot be read as an object, a CRD behind a Helm template guard for one, is
+// kept under its own text, so that any change to it counts: the check fails
+// closed. So does a list holding a CRD.
+func crdDocs(content string, templated bool) map[string]string {
 	docs := map[string]string{}
 	for _, doc := range docSeparatorRE.Split(content, -1) {
 		declares := crdKindLineRE.MatchString(doc)
@@ -319,14 +335,14 @@ func crdDocs(content string) map[string]string {
 				Kind string `json:"kind"`
 			} `json:"items"`
 		}
-		key := ""
+		key, text := "", doc
 		switch err := yaml.Unmarshal([]byte(doc), &head); {
 		case err != nil && declares:
 			key = "unreadable:" + doc
 		case err != nil:
 			continue
 		case head.Kind == crdKind && head.Metadata.Name != "":
-			key = "crd:" + head.Metadata.Name
+			key, text = "crd:"+head.Metadata.Name, crdContent(doc, templated)
 		case head.Kind == crdKind:
 			key = "unnamed:" + doc
 		case strings.HasSuffix(head.Kind, "List") && slices.ContainsFunc(head.Items, func(i struct {
@@ -338,7 +354,96 @@ func crdDocs(content string) map[string]string {
 		default:
 			continue
 		}
-		docs[key] += doc
+		docs[key] += text
 	}
 	return docs
+}
+
+// crdContent is what of a CRD document a change has to alter to count: its
+// text without the description entries, and the document read as an object
+// without the descriptions of its schemas. The text keeps a comment or any
+// other line outside a description entry counting; the object tells a
+// schema's description from a field of that name, a printer column's or one
+// inside a default, which count. A document Helm renders that holds an action
+// is kept whole, since what the action renders, inside a description or out of
+// it, is not known. In a file Helm does not render, braces are text, as in a
+// description that quotes a Go template.
+func crdContent(doc string, templated bool) string {
+	if templated && strings.Contains(doc, "{{") {
+		return doc
+	}
+	var crd map[string]any
+	if err := yaml.Unmarshal([]byte(doc), &crd, useNumber); err != nil {
+		return doc
+	}
+	spec, _ := crd["spec"].(map[string]any)
+	versions, _ := spec["versions"].([]any)
+	for _, v := range versions {
+		if v, ok := v.(map[string]any); ok {
+			if schema, ok := v["schema"].(map[string]any); ok {
+				dropDescriptions(schema["openAPIV3Schema"])
+			}
+		}
+	}
+	object, err := json.Marshal(crd)
+	if err != nil {
+		return doc
+	}
+	// The text may hold a NUL and the JSON never does, so the last NUL splits
+	// the two apart.
+	return withoutDescriptions(doc) + "\x00" + string(object)
+}
+
+// useNumber keeps an integer bound past float64's precision from comparing
+// equal to its neighbour.
+func useNumber(d *json.Decoder) *json.Decoder {
+	d.UseNumber()
+	return d
+}
+
+// dropDescriptions deletes the description of schema and of every schema
+// nested in it, under the keywords a CRD's structural schema nests one in.
+// A description anywhere else is a value, or the name of a field.
+func dropDescriptions(schema any) {
+	s, ok := schema.(map[string]any)
+	if !ok {
+		return
+	}
+	delete(s, "description")
+	for _, k := range []string{"items", "additionalProperties", "not"} {
+		dropDescriptions(s[k])
+	}
+	for _, k := range []string{"allOf", "anyOf", "oneOf"} {
+		list, _ := s[k].([]any)
+		for _, sub := range list {
+			dropDescriptions(sub)
+		}
+	}
+	props, _ := s["properties"].(map[string]any)
+	for _, sub := range props {
+		dropDescriptions(sub)
+	}
+}
+
+// descriptionKeyRE matches the line a description entry starts on, a list
+// item's first key included.
+var descriptionKeyRE = regexp.MustCompile(`^( *(?:- +)?)description[ \t]*:`)
+
+// withoutDescriptions is doc without its description entries: each the line
+// of the key and every line after it that is blank or indented deeper, which
+// is where YAML puts the rest of a folded or literal value.
+func withoutDescriptions(doc string) string {
+	lines := strings.Split(doc, "\n")
+	var kept []string
+	for i := 0; i < len(lines); i++ {
+		m := descriptionKeyRE.FindStringSubmatch(lines[i])
+		if m == nil {
+			kept = append(kept, lines[i])
+			continue
+		}
+		for i+1 < len(lines) && (strings.TrimSpace(lines[i+1]) == "" || len(lines[i+1])-len(strings.TrimLeft(lines[i+1], " ")) > len(m[1])) {
+			i++
+		}
+	}
+	return strings.Join(kept, "\n")
 }
