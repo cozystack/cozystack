@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/cozystack/cozystack/pkg/lineage"
+	admissionv1 "k8s.io/api/admission/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -111,7 +112,7 @@ func (h *LineageControllerWebhook) Handle(ctx context.Context, req admission.Req
 
 	// The objectSelector skips objects carrying the managed label, but on UPDATE
 	// it matches if either the old or the new object does. Pods go on, since
-	// every Pod admission also needs applySchedulingClass.
+	// a Pod's creation also needs applySchedulingClass.
 	if obj.GetKind() != "Pod" && hasAllLineageLabels(obj) {
 		logger.V(1).Info("object already carries lineage labels, skipping owner walk")
 		return admission.Allowed("lineage labels already present")
@@ -135,9 +136,14 @@ func (h *LineageControllerWebhook) Handle(ctx context.Context, req admission.Req
 
 	h.applyLabels(obj, labels)
 
-	if err := h.applySchedulingClass(ctx, obj, owner, req.Namespace); err != nil {
-		logger.Error(err, "error applying scheduling class")
-		return admission.Errored(500, fmt.Errorf("error applying scheduling class: %w", err))
+	// spec.schedulerName is immutable once the Pod exists, so a class only
+	// takes effect at creation: setting it on an UPDATE, after the tenant or
+	// application class changed, would get every update of the Pod refused.
+	if req.Operation == admissionv1.Create {
+		if err := h.applySchedulingClass(ctx, obj, owner, req.Namespace); err != nil {
+			logger.Error(err, "error applying scheduling class")
+			return admission.Errored(500, fmt.Errorf("error applying scheduling class: %w", err))
+		}
 	}
 
 	mutated, err := json.Marshal(obj)
