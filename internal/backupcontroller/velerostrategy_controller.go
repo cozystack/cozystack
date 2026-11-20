@@ -20,6 +20,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/util/retry"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -29,6 +30,7 @@ import (
 	backupsv1alpha1 "github.com/cozystack/cozystack/api/backups/v1alpha1"
 	"github.com/cozystack/cozystack/internal/template"
 
+	fluxmeta "github.com/fluxcd/pkg/apis/meta"
 	"github.com/go-logr/logr"
 	velerov1 "github.com/vmware-tanzu/velero/pkg/apis/velero/v1"
 )
@@ -381,10 +383,10 @@ func (r *BackupJobReconciler) collectUnderlyingResources(ctx context.Context, ap
 	// restore controller prepare it as it prepares a VMInstance's disks: keep
 	// the live PVC aside and delete the DataVolume, so the restored PVC is
 	// created fresh under the original name. The HelmRelease is suspended only
-	// until Velero restores it; Flux then recreates the DataVolume and CDI
-	// adopts the restored PVC because the vm-disk chart sets allowClaimAdoption
-	// on that DataVolume. A standalone VMDisk has no VM, so there is no IP/MAC
-	// to collect.
+	// until Velero restores it; the restore then forces a Helm upgrade of it,
+	// which recreates the DataVolume, and CDI adopts the restored PVC because
+	// the vm-disk chart sets allowClaimAdoption on that DataVolume. A
+	// standalone VMDisk has no VM, so there is no IP/MAC to collect.
 	if appKind == vmDiskAppKind {
 		return marshalUnderlyingResources(vmInstanceResources{
 			DataVolumes: []backupsv1alpha1.DataVolumeResource{{
@@ -808,6 +810,14 @@ func (r *RestoreJobReconciler) reconcileVeleroRestore(ctx context.Context, resto
 				r.cleanupResourceModifierConfigMaps(ctx, restoreJob)
 				return r.markRestoreJobFailed(ctx, restoreJob, fmt.Sprintf("post-restore rename failed: %v", err))
 			}
+		}
+
+		// Velero updated the disk HelmReleases in place, which helm-controller
+		// does not act on, so nothing recreates their DataVolumes and the
+		// restored PVCs stay unowned until some later upgrade.
+		disks := restoreDisks(backup, r.restoredUnderlyingResources(ctx, backup, veleroBackupName))
+		if err := r.forceDiskHelmReleases(ctx, restoreJob, target.Namespace, disks); err != nil {
+			return ctrl.Result{}, err
 		}
 
 		// Clean up resource modifier ConfigMaps now that the restore is complete.
@@ -1577,6 +1587,43 @@ func (r *RestoreJobReconciler) restoredUnderlyingResources(ctx context.Context, 
 	vb := &velerov1.Backup{}
 	_ = r.Get(ctx, client.ObjectKey{Namespace: veleroNamespace, Name: name}, vb)
 	return resolveUnderlyingResourcesForRestore(backup, vb)
+}
+
+// forceDiskHelmReleases has helm-controller run a Helm upgrade of each
+// restored disk's HelmRelease. Preparation deleted the DataVolume, and Velero
+// strips owner references from the PVC it restores, so the disk is owned again
+// only once the vm-disk chart recreates the DataVolume and CDI adopts the PVC
+// under it. An in-place restore updates a HelmRelease that already exists,
+// which leaves its release in sync, so no upgrade follows on its own: the PVC
+// stays unowned, and deleting the VMDisk leaves it and its volume behind.
+// forceAt is honoured only together with an equal requestedAt; a release that
+// is still suspended keeps both and is upgraded once it is resumed. A missing
+// HelmRelease is skipped, since Velero creates one that did not exist and
+// helm-controller installs it.
+func (r *RestoreJobReconciler) forceDiskHelmReleases(ctx context.Context, restoreJob *backupsv1alpha1.RestoreJob, ns string, disks *vmInstanceResources) error {
+	if disks == nil {
+		return nil
+	}
+	stamp := time.Now().UTC().Format(time.RFC3339Nano)
+	patch, err := json.Marshal(map[string]any{"metadata": map[string]any{"annotations": map[string]string{
+		fluxmeta.ReconcileRequestAnnotation: stamp,
+		fluxmeta.ForceRequestAnnotation:     stamp,
+	}}})
+	if err != nil {
+		return err
+	}
+	for _, dv := range disks.DataVolumes {
+		_, err := r.Resource(helmReleaseGVR).Namespace(ns).Patch(ctx, dv.DataVolumeName, types.MergePatchType, patch, metav1.PatchOptions{})
+		if errors.IsNotFound(err) {
+			continue
+		}
+		if err != nil {
+			return fmt.Errorf("failed to request a Helm upgrade of HelmRelease %s/%s: %w", ns, dv.DataVolumeName, err)
+		}
+		r.Recorder.Event(restoreJob, corev1.EventTypeNormal, "PostRestore",
+			fmt.Sprintf("Requested a Helm upgrade of HelmRelease %s so the restored disk is owned by its DataVolume again", dv.DataVolumeName))
+	}
+	return nil
 }
 
 // suspendHelmRelease sets spec.suspend=true on a HelmRelease.

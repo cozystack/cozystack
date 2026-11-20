@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -864,6 +865,105 @@ func TestPrepareForRestore_VMDiskLeavingPodWaitHasDeadline(t *testing.T) {
 			}
 			if err != nil || res.RequeueAfter == 0 {
 				t.Fatalf("requeue %v, err %v; want a requeue while within the deadline", res.RequeueAfter, err)
+			}
+		})
+	}
+}
+
+// An in-place restore updates the disk HelmReleases that already exist, which
+// leaves their releases in sync, so without a forced upgrade nothing recreates
+// the DataVolumes that preparation deleted and the restored PVCs stay unowned.
+func TestReconcileVeleroRestore_CompletedForcesDiskUpgrade(t *testing.T) {
+	const ns = "tenant-root"
+	tests := []struct {
+		name      string
+		appKind   string
+		appName   string
+		ur        *vmInstanceResources
+		hrs       []string
+		wantForce []string
+	}{
+		{
+			name:      "vmdisk",
+			appKind:   vmDiskAppKind,
+			appName:   "data",
+			hrs:       []string{"vm-disk-data"},
+			wantForce: []string{"vm-disk-data"},
+		},
+		{
+			name:    "vminstance forces its disks, not the VM, and skips a missing disk release",
+			appKind: vmInstanceKind,
+			appName: "vm",
+			ur: &vmInstanceResources{DataVolumes: []backupsv1alpha1.DataVolumeResource{
+				{DataVolumeName: "vm-disk-root", ApplicationName: "root"},
+				{DataVolumeName: "vm-disk-gone", ApplicationName: "gone"},
+			}},
+			hrs:       []string{"vm-instance-vm", "vm-disk-root"},
+			wantForce: []string{"vm-disk-root"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			started := metav1.Now()
+			backup := &backupsv1alpha1.Backup{
+				ObjectMeta: metav1.ObjectMeta{Name: "bk", Namespace: ns},
+				Spec: backupsv1alpha1.BackupSpec{
+					ApplicationRef: corev1.TypedLocalObjectReference{APIGroup: new("apps.cozystack.io"), Kind: tt.appKind, Name: tt.appName},
+					StrategyRef:    corev1.TypedLocalObjectReference{Kind: "Velero", Name: "s"},
+					DriverMetadata: map[string]string{veleroBackupNameMetadataKey: "vb"},
+				},
+			}
+			if tt.ur != nil {
+				raw, err := json.Marshal(tt.ur)
+				if err != nil {
+					t.Fatalf("marshal underlying resources: %v", err)
+				}
+				backup.Status.UnderlyingResources = &runtime.RawExtension{Raw: raw}
+			}
+			rj := &backupsv1alpha1.RestoreJob{
+				ObjectMeta: metav1.ObjectMeta{Name: "rj", Namespace: ns},
+				Spec:       backupsv1alpha1.RestoreJobSpec{BackupRef: corev1.LocalObjectReference{Name: "bk"}},
+				Status:     backupsv1alpha1.RestoreJobStatus{Phase: backupsv1alpha1.RestoreJobPhaseRunning, StartedAt: &started},
+			}
+			vr := &velerov1.Restore{
+				ObjectMeta: metav1.ObjectMeta{Name: "vr", Namespace: veleroNamespace, Labels: map[string]string{
+					backupsv1alpha1.OwningJobNameLabel:      rj.Name,
+					backupsv1alpha1.OwningJobNamespaceLabel: rj.Namespace,
+				}},
+				Status: velerov1.RestoreStatus{Phase: velerov1.RestorePhaseCompleted},
+			}
+			strategy := &strategyv1alpha1.Velero{ObjectMeta: metav1.ObjectMeta{Name: "s"}}
+
+			var dyn []runtime.Object
+			for _, name := range tt.hrs {
+				dyn = append(dyn, makeUnstructuredHelmRelease(name, ns, nil))
+			}
+			r := newTestRestoreJobReconcilerWithDynamic(t, dyn)
+			r.Client = clientfake.NewClientBuilder().WithScheme(vmDiskTestScheme()).
+				WithObjects(rj, backup, vr, strategy).
+				WithStatusSubresource(&backupsv1alpha1.RestoreJob{}).Build()
+			ctx := context.Background()
+
+			if _, err := r.reconcileVeleroRestore(ctx, rj, backup); err != nil {
+				t.Fatalf("reconcileVeleroRestore: %v", err)
+			}
+			got := &backupsv1alpha1.RestoreJob{}
+			if err := r.Get(ctx, client.ObjectKeyFromObject(rj), got); err != nil {
+				t.Fatalf("get RestoreJob: %v", err)
+			}
+			if got.Status.Phase != backupsv1alpha1.RestoreJobPhaseSucceeded {
+				t.Fatalf("phase = %q, want Succeeded", got.Status.Phase)
+			}
+			for _, name := range tt.hrs {
+				hr, err := r.Resource(helmReleaseGVR).Namespace(ns).Get(ctx, name, metav1.GetOptions{})
+				if err != nil {
+					t.Fatalf("get HelmRelease %s: %v", name, err)
+				}
+				ann := hr.GetAnnotations()
+				forced := ann["reconcile.fluxcd.io/forceAt"] != "" && ann["reconcile.fluxcd.io/forceAt"] == ann["reconcile.fluxcd.io/requestedAt"]
+				if want := slices.Contains(tt.wantForce, name); forced != want {
+					t.Errorf("HelmRelease %s forced = %v, want %v (annotations %v)", name, forced, want, ann)
+				}
 			}
 		})
 	}
