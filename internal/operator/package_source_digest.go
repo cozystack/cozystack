@@ -17,6 +17,7 @@ limitations under the License.
 package operator
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -163,7 +164,11 @@ func decodeValues(values *apiextensionsv1.JSON) (map[string]any, error) {
 	if values == nil || len(values.Raw) == 0 {
 		return out, nil
 	}
-	if err := json.Unmarshal(values.Raw, &out); err != nil {
+	// UseNumber keeps integers above 2^53 exact: every value of a following
+	// release passes through here and is encoded again.
+	dec := json.NewDecoder(bytes.NewReader(values.Raw))
+	dec.UseNumber()
+	if err := dec.Decode(&out); err != nil {
 		return nil, fmt.Errorf("release values are not an object: %w", err)
 	}
 	if out == nil {

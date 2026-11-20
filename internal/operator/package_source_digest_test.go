@@ -20,6 +20,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"testing"
 
 	cozyv1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
@@ -300,6 +301,31 @@ func TestPlatformReleaseRendersAgainWhenOnlyTheSourceSpecChanges(t *testing.T) {
 	}
 	if after != stampFor("aaaa", 2) {
 		t.Fatalf("observedDigest = %q, want %q", after, stampFor("aaaa", 2))
+	}
+}
+
+// Every Package value of a following release is decoded and encoded again
+// to add the stamp; a large integer must come out as it went in.
+func TestPlatformReleaseKeepsLargeIntegersExact(t *testing.T) {
+	cl := newPlatformClient(platformPS(true), platformPackage(`{"limit":9007199254740993}`), platformRepo(1, 1, "aaaa"), platformAG("aaaa"))
+	r := &PackageReconciler{Client: cl, Scheme: sourceDigestScheme()}
+	if _, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: platformPkg}}); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	hr := &helmv2.HelmRelease{}
+	if err := cl.Get(context.Background(), types.NamespacedName{Namespace: "cozy-system", Name: "cozystack-platform"}, hr); err != nil {
+		t.Fatal(err)
+	}
+	var values struct {
+		Limit json.Number `json:"limit"`
+	}
+	dec := json.NewDecoder(strings.NewReader(string(hr.Spec.Values.Raw)))
+	dec.UseNumber()
+	if err := dec.Decode(&values); err != nil {
+		t.Fatal(err)
+	}
+	if values.Limit != "9007199254740993" {
+		t.Fatalf("limit = %s, want 9007199254740993", values.Limit)
 	}
 }
 
