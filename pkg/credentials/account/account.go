@@ -59,6 +59,30 @@ const (
 	PasswordKey = "password"
 )
 
+// What the API and the controller share about an engine-issued account, one
+// whose template names a BucketAccess and whose keys the COSI driver issues:
+// the secret key is the password, stored as issued in the plaintext format,
+// the access key sits beside it, and a mint or a revoke is a request the
+// controller serves by re-creating the BucketAccess, or, for a revoke, by
+// deleting it.
+const (
+	// BucketAccessAnnotation on an account Secret names the BucketAccess whose
+	// grant issues its keys, which marks the account engine-issued.
+	BucketAccessAnnotation = "credentials.cozystack.io/bucket-access"
+	// AccessKeyIDKey holds the access key that goes with the password.
+	AccessKeyIDKey = "accessKeyID"
+	// RequestAnnotation carries the id of the latest mint or revoke, which the
+	// API writes with the Secret and the controller puts on the BucketAccess
+	// it creates to serve it.
+	RequestAnnotation = "credentials.cozystack.io/request"
+	// GrantedAnnotation carries the request id the Secret's keys were issued
+	// for; the API returns them only to the request that id names.
+	GrantedAnnotation = "credentials.cozystack.io/granted"
+	// AdoptLabel on a BucketAccess lets the controller take over one the
+	// chart rendered before the conversion, keeping its keys.
+	AdoptLabel = "credentials.cozystack.io/adopt"
+)
+
 var nonNameChars = regexp.MustCompile(`[^a-z0-9-]`)
 
 // Account is one tenant account of an application.
@@ -205,4 +229,10 @@ func IsAccountValuesFrom(ref helmv2.ValuesReference) bool {
 // CredentialTemplate.
 func IsAccountSecret(sec *corev1.Secret) bool {
 	return sec != nil && sec.Labels[AccountLabel] == "true"
+}
+
+// IsEngineIssued reports whether an account Secret belongs to an account
+// whose keys the COSI driver issues.
+func IsEngineIssued(sec *corev1.Secret) bool {
+	return sec != nil && sec.Annotations[BucketAccessAnnotation] != ""
 }
