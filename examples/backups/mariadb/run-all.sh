@@ -146,6 +146,7 @@ wait_hr_ready "mariadb-${MARIADB_SRC_NAME}" 660
 wait_for_field mariadbs.k8s.mariadb.com "$MARIADB_SRC_CR" \
     '{.status.conditions[?(@.type=="Ready")].status}' True "$NAMESPACE" 600
 wait_app_grant_ready "$MARIADB_SRC_CR"
+wait_app_login "$MARIADB_SRC_CR"
 
 print_header "Step 05c: Write a sentinel row so the backup has something to prove"
 SENTINEL_TOKEN="e2e-$(date +%s)-$$"
@@ -202,6 +203,7 @@ wait_for_field restorejobs.backups.cozystack.io "$RESTOREJOB_TOCOPY_NAME" \
 # in the dump — it comes from the target chart. Wait for its grant before the
 # read below so the SELECT authenticates.
 wait_app_grant_ready "$MARIADB_TARGET_CR"
+wait_app_login "$MARIADB_TARGET_CR"
 
 print_header "Step 40 verify: the sentinel round-tripped through S3 into the copy"
 GOT=$(mysql_exec "$MARIADB_TARGET_CR" "SELECT token FROM demo.e2e_sentinel WHERE id = 1;" \
