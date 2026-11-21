@@ -599,3 +599,47 @@ func TestRunRefusesARotateKeyThatIsNotAPlatformKey(t *testing.T) {
 		t.Fatalf("err = %v", err)
 	}
 }
+
+func TestSeedSkipsAPlatformAccountInTheUsersMap(t *testing.T) {
+	ctx := context.Background()
+	// MariaDB keeps root in <release>-credentials and ignores users.root, so
+	// the converted chart renders no template for it: the conversion must
+	// neither write an account Secret holding root's verifier nor let the key
+	// stop the release from being marked for seeding.
+	m := newMigrator(t, release(`{"users":{"web":{},"root":{}}}`, "0.1.0", true), sourceSecret(map[string]string{"web": "hunter2", "root": "toor"}))
+	m.o.formatName = format.MySQLNative
+	m.o.skipAccounts = stringFlags{"root"}
+	if err := m.seed(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := m.secret(t, "postgres-orders.root.account"); ok {
+		t.Fatal("a skipped account must get no account Secret")
+	}
+	sec, ok := m.secret(t, "postgres-orders.web.account")
+	if !ok {
+		t.Fatal("the tenant account must still be migrated")
+	}
+	if got, want := string(sec.Data[account.PasswordKey]), "*58815970BE77B3720276F63DB198B1FA42E5CC02"; got != want {
+		t.Fatalf("stored = %q, want the mysql_native_password hash %q", got, want)
+	}
+	hr := &helmv2.HelmRelease{}
+	if err := m.c.Get(ctx, types.NamespacedName{Namespace: "tenant-foo", Name: "postgres-orders"}, hr); err != nil {
+		t.Fatal(err)
+	}
+	if hr.Annotations[account.SeedAnnotation] != "true" {
+		t.Fatal("a skipped key must not keep the release from being marked for seeding")
+	}
+}
+
+func TestResolveAccountsSkipsBeforeMapping(t *testing.T) {
+	// A skipped key is dropped before the name mapping, so it neither
+	// collides with a tenant account nor fails the mapping.
+	hr := release(`{"users":{"root":{},"web":{}}}`, "", false)
+	got, err := (&options{accountsPath: "users", skipAccounts: stringFlags{"root"}}).resolveAccounts(hr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].Username != "web" {
+		t.Fatalf("accounts = %+v, want only web", got)
+	}
+}
