@@ -55,9 +55,10 @@ RUN mkdir /strimzi-crds && \
       https://github.com/strimzi/strimzi-kafka-operator/releases/download/0.51.0/strimzi-crds-0.51.0.yaml && \
     echo "a11257e67985a946a6facfb17d729aac5670b89675d410d13162fe455a5ac7a8  /strimzi-crds/strimzi-crds-0.51.0.yaml" | sha256sum -c -
 
-# The CredentialTemplate CRD, which migration 64 applies before the converted
-# charts render templates: it ships with cozystack-controller, whose release
-# can upgrade after the tenant releases switch charts.
+# The CredentialTemplate CRD, which the credentials conversions apply (see
+# migrations/lib/credential-crd.sh) before the converted charts render
+# templates: it ships with cozystack-controller, whose release can upgrade
+# after the tenant releases switch charts.
 COPY packages/system/cozystack-controller/definitions/cozystack.io_credentialtemplates.yaml /credential-crds/
 COPY packages/core/platform/images/migrations/migrations /migrations
 # v1alpha2 etcd CRDs, vendored into the build context by `make image-migrations`.
