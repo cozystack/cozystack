@@ -108,7 +108,7 @@ DOCKERFILE
   _del=$(cmdlog_line "^DELETE-JOB$")
   _apply=$(cmdlog_line "^APPLY-FINISH ")
   _own=$(cmdlog_line "^PATCH-SA-OWNER ")
-  _stamp=$(cmdlog_line "^STAMP 62$")
+  _stamp=$(cmdlog_line "^STAMP 63$")
   [ -n "$_del" ] && [ "$_del" -lt "$_apply" ]
   [ -n "$_own" ] && [ "$_apply" -lt "$_own" ]
   [ -n "$_stamp" ] && [ "$_own" -lt "$_stamp" ]
@@ -190,7 +190,7 @@ DOCKERFILE
 
 @test "a failed ownership patch stops before stamping" {
   prep
-  export FAKE_PATCH_FAIL="serviceaccounts \"cozystack-credentials-migration\" not found"
+  export FAKE_PATCH_FAIL="serviceaccounts \"cozystack-credentials-migration-62\" not found"
   rc=0
   run_migration 62 >"$WORK/out" 2>&1 || rc=$?
   cat "$WORK/out"; cat "$FAKE_CMDLOG"

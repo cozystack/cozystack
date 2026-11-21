@@ -38,7 +38,7 @@ case "$args" in
     exit 0
     ;;
 
-  *"delete serviceaccount cozystack-credentials-migration"*)
+  *"delete serviceaccount cozystack-credentials-migration-62"*)
     # The hook deletes a ServiceAccount left owned by the Job it just deleted,
     # so the apply recreates a fresh, owner-less one.
     log "DELETE-SA"
@@ -55,7 +55,7 @@ case "$args" in
     exit 0
     ;;
 
-  *"patch serviceaccount cozystack-credentials-migration"*)
+  *"patch serviceaccount cozystack-credentials-migration-62"*)
     # The ownerReference tying the ServiceAccount to the Job.
     if [ -n "${FAKE_PATCH_FAIL:-}" ]; then
       printf '%s\n' "$FAKE_PATCH_FAIL" >&2
@@ -90,7 +90,7 @@ case "$args" in
         jobname=$(printf '%s\n' "$manifest" | grep -c '^  name: cozystack-credentials-migration-62$')
         mig=$(printf '%s\n' "$manifest" | grep -c -- '--migration=62')
         img=$(printf '%s\n' "$manifest" | grep -c "^          image: ${IMAGE}$")
-        sacc=$(printf '%s\n' "$manifest" | grep -c '^      serviceAccountName: cozystack-credentials-migration$')
+        sacc=$(printf '%s\n' "$manifest" | grep -c '^      serviceAccountName: cozystack-credentials-migration-62$')
         log "APPLY-FINISH role=$role sa=$sa crb=$crb admin=$admin jobname=$jobname migration=$mig image=$img serviceaccount=$sacc"
         exit 0
         ;;

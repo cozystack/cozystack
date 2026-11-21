@@ -82,7 +82,7 @@ fi
 kubectl delete job cozystack-credentials-migration-62 \
   --namespace "$NAMESPACE" \
   --ignore-not-found
-kubectl delete serviceaccount cozystack-credentials-migration \
+kubectl delete serviceaccount cozystack-credentials-migration-62 \
   --namespace "$NAMESPACE" \
   --ignore-not-found
 
@@ -90,7 +90,7 @@ kubectl apply --filename - <<YAML
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: cozystack-credentials-migration
+  name: cozystack-credentials-migration-62
 rules:
   - apiGroups: [""]
     resources: ["secrets"]
@@ -108,20 +108,20 @@ rules:
 apiVersion: v1
 kind: ServiceAccount
 metadata:
-  name: cozystack-credentials-migration
+  name: cozystack-credentials-migration-62
   namespace: ${NAMESPACE}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  name: cozystack-credentials-migration
+  name: cozystack-credentials-migration-62
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
-  name: cozystack-credentials-migration
+  name: cozystack-credentials-migration-62
 subjects:
   - kind: ServiceAccount
-    name: cozystack-credentials-migration
+    name: cozystack-credentials-migration-62
     namespace: ${NAMESPACE}
 ---
 apiVersion: batch/v1
@@ -137,7 +137,7 @@ spec:
       labels:
         policy.cozystack.io/allow-to-apiserver: "true"
     spec:
-      serviceAccountName: cozystack-credentials-migration
+      serviceAccountName: cozystack-credentials-migration-62
       restartPolicy: OnFailure
       containers:
         - name: migration
@@ -154,7 +154,7 @@ spec:
             - --timeout=30m
           env:
             - name: CREDENTIALS_MIGRATE_ACTOR
-              value: system:serviceaccount:${NAMESPACE}:cozystack-credentials-migration
+              value: system:serviceaccount:${NAMESPACE}:cozystack-credentials-migration-62
 YAML
 
 # Tie the ServiceAccount's lifetime to the Job: when the Job is deleted (its
@@ -169,7 +169,7 @@ if [ -z "$job_uid" ]; then
   echo "cannot read the finish Job's uid to own its ServiceAccount" >&2
   exit 1
 fi
-kubectl patch serviceaccount cozystack-credentials-migration \
+kubectl patch serviceaccount cozystack-credentials-migration-62 \
   --namespace "$NAMESPACE" \
   --type merge \
   --patch "{\"metadata\":{\"ownerReferences\":[{\"apiVersion\":\"batch/v1\",\"kind\":\"Job\",\"name\":\"cozystack-credentials-migration-62\",\"uid\":\"${job_uid}\"}]}}"
