@@ -356,6 +356,17 @@ spec:
 {{-     if not (trim .) }}
 {{-       fail (printf "registry mirror %q: an endpoint must not be empty" $host) }}
 {{-     end }}
+{{-     $authority := regexFind `(?i)^https?://[^/?#]*` . }}
+{{-     if contains "@" $authority }}
+{{-       fail (printf "registry mirror %q: credentials must not be embedded in an endpoint URL" $host) }}
+{{-     end }}
+{{-     if not (regexMatch `(?i)^https?://(\[[^]]+\]|[^:\[\][:space:]]+)(:[0-9]+)?$` $authority) }}
+{{-       fail (printf "registry mirror %q: an endpoint must be an HTTP or HTTPS URL with a host" $host) }}
+{{-     end }}
+{{-     $port := trimPrefix ":" (regexFind `:[0-9]+$` $authority) }}
+{{-     if and $port (or (lt (atoi $port) 1) (gt (atoi $port) 65535)) }}
+{{-       fail (printf "registry mirror %q: an endpoint port must be between 1 and 65535" $host) }}
+{{-     end }}
 {{-     $endpoint := dict "url" . }}
 {{-     if eq $overridePath "true" }}
 {{-       $_ := set $endpoint "overridePath" true }}
