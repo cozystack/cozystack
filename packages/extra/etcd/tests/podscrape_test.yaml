@@ -1,0 +1,20 @@
+suite: etcd VMPodScrape selects only this chart's members
+
+release:
+  name: etcd
+  namespace: tenant-root
+
+templates:
+  - templates/podscrape.yaml
+
+# etcd-operator labels every member it runs app.kubernetes.io/name: etcd, the
+# members of a tenant Kubernetes cluster's own etcd in the same namespace
+# included. Selecting on that label folds those members into this etcd's job,
+# and the member-count alerts then count them as this cluster's.
+tests:
+  - it: selects the members by instance, not by name
+    asserts:
+      - equal:
+          path: spec.selector.matchLabels
+          value:
+            app.kubernetes.io/instance: etcd

@@ -1,0 +1,3 @@
+{"items": [
+  {"metadata": {"namespace": "tenant-a", "name": "kubernetes-own"}, "spec": {"dataStoreName": "tenant-a.kubernetes-own"}}
+]}

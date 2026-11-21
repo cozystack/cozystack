@@ -115,3 +115,39 @@ load test_helper
         exit 1
     }
 }
+
+@test "an etcd reclamation read past its deadline is not run and fails as timed out" {
+    . hack/e2e-chainsaw/_lib/run-kubernetes.sh
+    tmp=$(mktemp -d)
+    rc=0
+    _cozy_etcd_reaped_read "$(( $(date +%s) - 1 ))" touch "$tmp/ran" || rc=$?
+    if [ "$rc" -ne 124 ]; then
+        echo "expected status 124 past the deadline, got $rc" >&2
+        exit 1
+    fi
+    if [ -e "$tmp/ran" ]; then
+        echo "the read ran although its deadline had passed" >&2
+        exit 1
+    fi
+    rm -rf "$tmp"
+}
+
+@test "an etcd reclamation read is cut off at the deadline, not at its own 20s" {
+    . hack/e2e-chainsaw/_lib/run-kubernetes.sh
+    timeout() { printf '%s\n' "$*" > "$tmp/timeout.args"; }
+    tmp=$(mktemp -d)
+    _cozy_etcd_reaped_read "$(( $(date +%s) + 3 ))" kubectl get pvc
+    case "$(cat "$tmp/timeout.args")" in
+        "-k 5 "[1-3]" kubectl get pvc") ;;
+        *)
+            echo "expected a bound of at most 3s, got: $(cat "$tmp/timeout.args")" >&2
+            exit 1
+            ;;
+    esac
+    _cozy_etcd_reaped_read "$(( $(date +%s) + 600 ))" kubectl get pvc
+    if [ "$(cat "$tmp/timeout.args")" != "-k 5 20 kubectl get pvc" ]; then
+        echo "expected the 20s cap far from the deadline, got: $(cat "$tmp/timeout.args")" >&2
+        exit 1
+    fi
+    rm -rf "$tmp"
+}

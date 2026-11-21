@@ -1,0 +1,31 @@
+suite: apps.yaml kubernetesEtcd → _cluster wiring
+templates:
+  - templates/apps.yaml
+
+release:
+  name: cozy-platform
+  namespace: cozy-system
+
+# The kubernetes chart picks the StorageClass of each cluster's own etcd from
+# these two _cluster keys by member count. An unset key must stay out of the
+# Secret, so the chart falls back to the namespace default StorageClass.
+
+tests:
+  - it: forwards both classes when they are set
+    set:
+      kubernetesEtcd:
+        storageClassLocal: local
+        storageClassReplicated: replicated
+    asserts:
+      - matchRegex:
+          path: stringData["values.yaml"]
+          pattern: '(?m)^\s*etcd-storage-class-local:\s*"local"$'
+      - matchRegex:
+          path: stringData["values.yaml"]
+          pattern: '(?m)^\s*etcd-storage-class-replicated:\s*"replicated"$'
+
+  - it: writes neither key by default
+    asserts:
+      - notMatchRegex:
+          path: stringData["values.yaml"]
+          pattern: 'etcd-storage-class-'

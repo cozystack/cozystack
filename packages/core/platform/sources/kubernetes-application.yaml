@@ -18,6 +18,9 @@ spec:
         - cozystack.capi-provider-core
         - cozystack.capi-provider-cp-kamaji
         - cozystack.capi-provider-infra-kubevirt
+        # Every cluster renders its own EtcdCluster, so the operator serving
+        # etcd-operator.cozystack.io/v1alpha2 has to exist before one is created.
+        - cozystack.etcd-operator
         # cozystack-engine ships the ApplicationDefinition CRD rendered by the *-rd component below.
         - cozystack.cozystack-engine
       libraries:
