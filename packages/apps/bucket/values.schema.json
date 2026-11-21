@@ -32,6 +32,10 @@
       "additionalProperties": {
         "type": "object",
         "properties": {
+          "platform": {
+            "description": "Marks a user the platform itself consumes, such as the backup bucket's: its keys stay in the `\u003cbucket\u003e-\u003cuser\u003e-credentials` Secret, which no tenant can read, and it has no credential to mint. Leave unset for your own users, whose keys you mint through the bucket's credentials.",
+            "type": "boolean"
+          },
           "readonly": {
             "description": "Whether the user has read-only access.",
             "type": "boolean"

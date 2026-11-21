@@ -41,6 +41,8 @@ tests:
     documentIndex: 0
     set:
       ui: false
+      users:
+        web: {}
     asserts:
       - lengthEqual:
           path: rules
