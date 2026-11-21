@@ -160,17 +160,11 @@
       ]
     },
     "users": {
-      "description": "Users configuration map.",
+      "description": "Users configuration map. Each user is a RabbitMQ user that messaging-topology-operator keeps from an account Secret the platform holds. Passwords are issued through the Cozystack credentials API: a mint on the account's `Credential` (`core.cozystack.io`) returns a new password once, and a revoke retires the password without issuing one. The operator applies either to the broker within seconds. A `password` key here is ignored. The administrator in `<release>-default-user` belongs to the platform and is not shown to tenants.",
       "type": "object",
       "default": {},
       "additionalProperties": {
-        "type": "object",
-        "properties": {
-          "password": {
-            "description": "Password for the user.",
-            "type": "string"
-          }
-        }
+        "type": "object"
       }
     },
     "vhosts": {

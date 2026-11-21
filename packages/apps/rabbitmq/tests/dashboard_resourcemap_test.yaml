@@ -3,160 +3,57 @@ suite: RabbitMQ dashboard Role resource access
 templates:
   - templates/dashboard-resourcemap.yaml
 
+release:
+  name: myrabbitmq
+  namespace: tenant-test
+
+# The Role grants no Secret in any state. The tenant accounts live in account
+# Secrets that only the credentials API writes, <release>-default-user is the
+# platform administrator messaging-topology-operator logs in with, and the TLS
+# Secrets carry private keys (the key-free trust anchor goes through
+# core.cozystack.io/tenantsecrets). Pinning the complete rule list, rather than
+# the absence of known names, keeps a future Secret from slipping in.
+
 tests:
-  # -----------------------------------------------------------------------
-  # Baseline: Role always grants access to default-user secret
-  # -----------------------------------------------------------------------
-
-  - it: Role always grants access to default-user secret
-    release:
-      name: myrabbitmq
-      namespace: tenant-test
+  - it: grants the Service and the WorkloadMonitor only, TLS off
     set:
       tls.enabled: false
-      external: false
     documentIndex: 0
     asserts:
       - isKind:
           of: Role
-      - contains:
-          path: rules[0].resourceNames
-          content: myrabbitmq-default-user
+      - equal:
+          path: rules
+          value:
+            - apiGroups: [""]
+              resources: [services]
+              resourceNames: [myrabbitmq]
+              verbs: ["get", "list", "watch"]
+            - apiGroups: [cozystack.io]
+              resources: [workloadmonitors]
+              resourceNames: [myrabbitmq]
+              verbs: ["get", "list", "watch"]
 
-  # -----------------------------------------------------------------------
-  # B: no key-bearing Secret is ever granted, in any TLS state.
-  #
-  # Both objects that carry ca.crt also carry a private key: <release>-tls holds
-  # the server key and <release>-ca holds the CA key. RBAC cannot filter by key,
-  # so granting either to deliver a trust anchor delivers a key with it. The
-  # tenant reads the key-free <release>.tenant-ca projection through
-  # core.cozystack.io/tenantsecrets instead, which the base tenant roles already
-  # grant — so it is deliberately absent from this core/v1 Role too.
-  # -----------------------------------------------------------------------
-
-  - it: Role never grants the leaf TLS secret when tls.enabled is true
-    release:
-      name: myrabbitmq
-      namespace: tenant-test
-    set:
-      tls.enabled: true
-      external: false
-    documentIndex: 0
-    asserts:
-      - isKind:
-          of: Role
-      - notContains:
-          path: rules[0].resourceNames
-          content: myrabbitmq-tls
-
-  - it: Role never grants the CA secret when tls.enabled is true
-    release:
-      name: myrabbitmq
-      namespace: tenant-test
-    set:
-      tls.enabled: true
-      external: false
-    documentIndex: 0
-    asserts:
-      - isKind:
-          of: Role
-      - notContains:
-          path: rules[0].resourceNames
-          content: myrabbitmq-ca
-
-  - it: Role never grants key-bearing secrets on the external TLS path
-    release:
-      name: myrabbitmq
-      namespace: tenant-test
+  - it: grants no Secret with TLS on, external and users defined
     set:
       tls.enabled: true
       external: true
       _namespace.host: example.com
+      users:
+        alice: {}
     documentIndex: 0
     asserts:
-      - isKind:
-          of: Role
+      - lengthEqual:
+          path: rules
+          count: 2
       - notContains:
-          path: rules[0].resourceNames
-          content: myrabbitmq-tls
+          path: rules[0].resources
+          content: secrets
       - notContains:
-          path: rules[0].resourceNames
-          content: myrabbitmq-ca
-
-  - it: Role does not grant the tenant-ca projection by name either
-    release:
-      name: myrabbitmq
-      namespace: tenant-test
-    set:
-      tls.enabled: true
-      external: false
-    documentIndex: 0
-    asserts:
-      - isKind:
-          of: Role
-      # Delivered through core.cozystack.io/tenantsecrets, not as a core/v1
-      # Secret, so a resourceNames entry here would grant nothing.
-      - notContains:
-          path: rules[0].resourceNames
-          content: myrabbitmq.tenant-ca
-
-  - it: Role still grants the default-user secret when TLS is on
-    release:
-      name: myrabbitmq
-      namespace: tenant-test
-    set:
-      tls.enabled: true
-      external: false
-    documentIndex: 0
-    asserts:
-      - isKind:
-          of: Role
-      - contains:
-          path: rules[0].resourceNames
-          content: myrabbitmq-default-user
-
-  - it: Role does NOT grant access to TLS secret when TLS is disabled
-    release:
-      name: myrabbitmq
-      namespace: tenant-test
-    set:
-      tls.enabled: false
-      external: false
-    documentIndex: 0
-    asserts:
-      - isKind:
-          of: Role
-      - notContains:
-          path: rules[0].resourceNames
-          content: myrabbitmq-tls
-
-  - it: Role does NOT grant access to TLS secret when tls.enabled is explicitly false even if external is true
-    release:
-      name: myrabbitmq
-      namespace: tenant-test
-    set:
-      tls.enabled: false
-      external: true
-      _namespace.host: example.com
-    documentIndex: 0
-    asserts:
-      - isKind:
-          of: Role
-      - notContains:
-          path: rules[0].resourceNames
-          content: myrabbitmq-tls
-
-  # -----------------------------------------------------------------------
-  # Verify RoleBinding is also rendered
-  # -----------------------------------------------------------------------
+          path: rules[1].resources
+          content: secrets
 
   - it: RoleBinding is rendered as second document
-    release:
-      name: myrabbitmq
-      namespace: tenant-test
-    set:
-      tls.enabled: false
-      external: false
     documentIndex: 1
     asserts:
       - isKind:
@@ -164,39 +61,3 @@ tests:
       - equal:
           path: roleRef.name
           value: myrabbitmq-dashboard-resources
-
-  # -----------------------------------------------------------------------
-  # Pin the complete list, not just the absence of known-bad names. Every other
-  # assertion here is a notContains, so a Role that gained the erlang cookie or
-  # any future Secret would satisfy all of them. This is the actual contract.
-  # -----------------------------------------------------------------------
-
-  - it: grants exactly the intended Secrets and nothing else, TLS on
-    release:
-      name: myrabbitmq
-      namespace: tenant-test
-    set:
-      tls.enabled: true
-      external: false
-    documentIndex: 0
-    asserts:
-      - equal:
-          path: rules[0].resourceNames
-          value:
-            - myrabbitmq-default-user
-
-  - it: grants exactly the intended Secrets and nothing else, with users defined
-    release:
-      name: myrabbitmq
-      namespace: tenant-test
-    set:
-      tls.enabled: true
-      external: false
-      users.alice.password: hackme
-    documentIndex: 0
-    asserts:
-      - equal:
-          path: rules[0].resourceNames
-          value:
-            - myrabbitmq-default-user
-            - myrabbitmq-alice-credentials
