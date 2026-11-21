@@ -1,0 +1,156 @@
+suite: tenant LimitRange defaults only what the quota bounds
+
+# The LimitRange defaults requests and limits so pods without them still pass a
+# quota that tracks cpu, memory or ephemeral-storage. A default on a resource
+# the quota does not bound only gets in the way: its 128Mi memory limit refuses
+# any container that requests more without a limit of its own, virt-launcher
+# included. Each test pins the document count, so a quota that stops rendering
+# at all reddens here too.
+templates:
+  - templates/quota.yaml
+
+release:
+  name: tenant-test
+  namespace: tenant-test
+
+tests:
+  - it: renders nothing without resourceQuotas
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: renders no LimitRange under a quota on load balancers alone
+    set:
+      resourceQuotas:
+        services.loadbalancers: "1"
+    asserts:
+      - hasDocuments:
+          count: 1
+      - isKind:
+          of: ResourceQuota
+        documentIndex: 0
+      - equal:
+          path: spec.hard["services.loadbalancers"]
+          value: "1"
+        documentIndex: 0
+
+  - it: renders no LimitRange under a quota on storage alone
+    set:
+      resourceQuotas:
+        storage: 100Gi
+    asserts:
+      - hasDocuments:
+          count: 1
+      - isKind:
+          of: ResourceQuota
+        documentIndex: 0
+
+  - it: renders no LimitRange under a quota on GPUs alone
+    set:
+      resourceQuotas:
+        nvidia.com/gpu: "2"
+    asserts:
+      - hasDocuments:
+          count: 1
+      - isKind:
+          of: ResourceQuota
+        documentIndex: 0
+
+  - it: keeps every default under a quota on cpu, memory and ephemeral-storage
+    set:
+      resourceQuotas:
+        cpu: "4"
+        memory: 8Gi
+        ephemeral-storage: 10Gi
+    asserts:
+      - hasDocuments:
+          count: 2
+      - isKind:
+          of: LimitRange
+        documentIndex: 1
+      - equal:
+          path: metadata.name
+          value: tenant-range-limits
+        documentIndex: 1
+      - equal:
+          path: spec.limits[0].default
+          value:
+            cpu: 250m
+            memory: 128Mi
+            ephemeral-storage: 2Gi
+        documentIndex: 1
+      - equal:
+          path: spec.limits[0].defaultRequest
+          value:
+            cpu: 25m
+            memory: 128Mi
+            ephemeral-storage: 50Mi
+        documentIndex: 1
+
+  - it: defaults only cpu under a quota on cpu alone
+    set:
+      resourceQuotas:
+        cpu: "4"
+    asserts:
+      - hasDocuments:
+          count: 2
+      - equal:
+          path: spec.limits[0].default
+          value:
+            cpu: 250m
+        documentIndex: 1
+      - equal:
+          path: spec.limits[0].defaultRequest
+          value:
+            cpu: 25m
+        documentIndex: 1
+
+  - it: defaults only memory under a quota on memory alone
+    set:
+      resourceQuotas:
+        memory: 8Gi
+    asserts:
+      - hasDocuments:
+          count: 2
+      - equal:
+          path: spec.limits[0].default
+          value:
+            memory: 128Mi
+        documentIndex: 1
+      - equal:
+          path: spec.limits[0].defaultRequest
+          value:
+            memory: 128Mi
+        documentIndex: 1
+
+  - it: defaults only ephemeral-storage under a quota on ephemeral-storage alone
+    set:
+      resourceQuotas:
+        ephemeral-storage: 10Gi
+    asserts:
+      - hasDocuments:
+          count: 2
+      - equal:
+          path: spec.limits[0].default
+          value:
+            ephemeral-storage: 2Gi
+        documentIndex: 1
+      - equal:
+          path: spec.limits[0].defaultRequest
+          value:
+            ephemeral-storage: 50Mi
+        documentIndex: 1
+
+  - it: defaults only memory when memory sits beside non-compute quota keys
+    set:
+      resourceQuotas:
+        services.loadbalancers: "1"
+        memory: 8Gi
+    asserts:
+      - hasDocuments:
+          count: 2
+      - equal:
+          path: spec.limits[0].default
+          value:
+            memory: 128Mi
+        documentIndex: 1
