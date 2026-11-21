@@ -315,7 +315,19 @@ spec:
                      the VPC resolver. The probe resolves the Service name and
                      reports the answer as its termination message. */}}
               echo "[$(date -u +%H:%M:%S)] resolving the apiserver VIP from inside VPC {{ .vpc }}"
-              kubectl -n "$NS" delete pod {{ .probeName | quote }} --ignore-not-found --wait=true
+              {{- /* Polled with get: --wait=true watches, and the probe Role grants
+                     no list or watch. */}}
+              kubectl -n "$NS" delete pod {{ .probeName | quote }} --ignore-not-found --wait=false
+              STALE_PROBE=""
+              for i in $(seq 1 60); do
+                STALE_PROBE=$(kubectl -n "$NS" get pod {{ .probeName | quote }} --ignore-not-found -o name)
+                [ -z "$STALE_PROBE" ] && break
+                sleep 2
+              done
+              if [ -n "$STALE_PROBE" ]; then
+                echo "[$(date -u +%H:%M:%S)] the previous VIP probe pod {{ .probeName }} is still terminating"
+                exit 1
+              fi
               kubectl -n "$NS" apply -f - <<'YAML'
               apiVersion: v1
               kind: Pod
