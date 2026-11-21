@@ -702,3 +702,86 @@ func TestResolveAccountsSkipsBeforeMapping(t *testing.T) {
 		t.Fatalf("accounts = %+v, want only web", got)
 	}
 }
+
+// A chart that renders one Secret per user, as MongoDB's does, is migrated
+// from <release><source-suffix><user> under --source-per-account, and finish
+// deletes what Helm left of those Secrets while the platform Secret stays.
+func TestSeedAndRetirePerAccountSources(t *testing.T) {
+	ctx := context.Background()
+	perUser := func(user, pass string) *corev1.Secret {
+		return &corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{Name: "postgres-orders-user-" + user, Namespace: "tenant-foo"},
+			Data:       map[string][]byte{"password": []byte(pass)},
+		}
+	}
+	hr := release(`{"users":{"web":{},"api":{},"ghost":{}}}`, "0.1.0", true)
+	m := newMigrator(t, hr, perUser("web", "hunter2"), perUser("api", "s3cret"), sourceSecret(map[string]string{"username": "databaseAdmin", "password": "adm"}))
+	m.o.formatName = format.Plaintext
+	m.o.sourceSuffix = "-user-"
+	m.o.sourceKey = "password"
+	m.o.sourcePerAccount = true
+	m.o.labels = labelFlags{}
+	if err := m.seed(ctx); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct{ secret, user, plain string }{{"postgres-orders.web.account", "web", "hunter2"}, {"postgres-orders.api.account", "api", "s3cret"}} {
+		sec, ok := m.secret(t, c.secret)
+		if !ok {
+			t.Fatalf("%s not written", c.secret)
+		}
+		if string(sec.Data[account.UsernameKey]) != c.user || string(sec.Data[account.PasswordKey]) != c.plain || sec.Annotations[account.FormatAnnotation] != format.Plaintext {
+			t.Fatalf("%s = %+v %q", c.secret, sec.ObjectMeta, sec.Data)
+		}
+	}
+	if _, ok := m.secret(t, "postgres-orders.ghost.account"); ok {
+		t.Fatal("an account without a per-user Secret waits for a mint")
+	}
+	cur := &helmv2.HelmRelease{}
+	if err := m.c.Get(ctx, client.ObjectKeyFromObject(hr), cur); err != nil {
+		t.Fatal(err)
+	}
+	if cur.Annotations[account.SeedAnnotation] == "true" {
+		t.Fatal("a release with an account left without a Secret must not be marked for seeding")
+	}
+
+	if err := m.retireSource(ctx, cur); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"postgres-orders-user-web", "postgres-orders-user-api"} {
+		if _, ok := m.secret(t, name); ok {
+			t.Fatalf("%s must be deleted", name)
+		}
+	}
+	if _, ok := m.secret(t, "postgres-orders-credentials"); !ok {
+		t.Fatal("the platform Secret is not a per-account source and must stay")
+	}
+	if _, ok := m.secret(t, "postgres-orders.web.account"); !ok {
+		t.Fatal("the account Secret must stay")
+	}
+}
+
+func TestSeedMarksAReleaseWithoutUsersFromPerAccountSources(t *testing.T) {
+	ctx := context.Background()
+	m := newMigrator(t, release(`{"users":{}}`, "0.1.0", true))
+	m.o.formatName = format.Plaintext
+	m.o.sourceSuffix = "-user-"
+	m.o.sourceKey = "password"
+	m.o.sourcePerAccount = true
+	if err := m.seed(ctx); err != nil {
+		t.Fatal(err)
+	}
+	hr := &helmv2.HelmRelease{}
+	if err := m.c.Get(ctx, types.NamespacedName{Namespace: "tenant-foo", Name: "postgres-orders"}, hr); err != nil {
+		t.Fatal(err)
+	}
+	if hr.Annotations[account.SeedAnnotation] != "true" {
+		t.Fatal("a release without users must be marked, or its first user never gets a Secret")
+	}
+}
+
+func TestRunRefusesPerAccountSourcesWithoutAKey(t *testing.T) {
+	err := run([]string{"seed", "--migration=67", "--kind=MongoDB", "--format=plaintext", "--source-per-account"})
+	if err == nil || !strings.Contains(err.Error(), "--source-key") {
+		t.Fatalf("err = %v", err)
+	}
+}
