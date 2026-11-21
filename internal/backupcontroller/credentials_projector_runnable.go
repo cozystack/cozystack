@@ -8,6 +8,9 @@ import (
 
 	"github.com/go-logr/logr"
 	"github.com/prometheus/client_golang/prometheus"
+	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
@@ -118,6 +121,12 @@ func (p *SystemCredentialsProjector) Start(ctx context.Context) error {
 
 func (p *SystemCredentialsProjector) projectAll(ctx context.Context, logger logr.Logger) {
 	for _, ns := range p.Namespaces {
+		// A listed namespace belongs to an optional package (e.g. the
+		// FoundationDB operator); its absence is not a projection failure.
+		if err := p.Client.Get(ctx, types.NamespacedName{Name: ns}, &corev1.Namespace{}); apierrors.IsNotFound(err) {
+			logger.V(1).Info("system credentials projection skipped: namespace not found", "namespace", ns)
+			continue
+		}
 		if err := ProjectBackupCredentials(ctx, p.Client, p.Config, ns); err != nil {
 			reason := classifyReason(err)
 			credentialsProjectionFailures.WithLabelValues(ns, reason).Inc()

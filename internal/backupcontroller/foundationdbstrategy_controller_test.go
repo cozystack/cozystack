@@ -17,11 +17,13 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	clientfake "sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
 	strategyv1alpha1 "github.com/cozystack/cozystack/api/backups/strategy/v1alpha1"
 	backupsv1alpha1 "github.com/cozystack/cozystack/api/backups/v1alpha1"
@@ -120,11 +122,11 @@ func TestEnsureFoundationDBBackup_IdempotentByLabel(t *testing.T) {
 	rendered := newRenderedFoundationDBTemplate()
 	clusterName := foundationdbClusterNameForApp("fdb-src")
 
-	first, err := r.ensureFoundationDBBackup(context.Background(), job, clusterName, "7.3.63", rendered)
+	first, _, err := r.ensureFoundationDBBackup(context.Background(), job, clusterName, "7.3.63", rendered)
 	if err != nil {
 		t.Fatalf("first ensureFoundationDBBackup: %v", err)
 	}
-	second, err := r.ensureFoundationDBBackup(context.Background(), job, clusterName, "7.3.63", rendered)
+	second, _, err := r.ensureFoundationDBBackup(context.Background(), job, clusterName, "7.3.63", rendered)
 	if err != nil {
 		t.Fatalf("second ensureFoundationDBBackup: %v", err)
 	}
@@ -151,11 +153,11 @@ func TestEnsureFoundationDBBackup_IdempotentByLabel(t *testing.T) {
 	if got.Spec.BackupState != foundationdbtypes.BackupStateRunning {
 		t.Errorf("BackupState: got %q want %q", got.Spec.BackupState, foundationdbtypes.BackupStateRunning)
 	}
-	if got.Spec.BlobStoreConfiguration.BackupName != "bj-1" {
+	if got.Spec.BlobStoreConfiguration.BackupName != "tenant/bj-1" {
 		// Template left BackupName empty, ensure path must default it to
-		// the BackupJob name so each Cozystack BackupJob owns a discrete
-		// blob-store directory.
-		t.Errorf("BlobStoreConfiguration.BackupName: got %q want bj-1 (BackupJob name fallback)", got.Spec.BlobStoreConfiguration.BackupName)
+		// the BackupJob's namespace and name so each Cozystack BackupJob
+		// owns a discrete blob-store directory.
+		t.Errorf("BlobStoreConfiguration.BackupName: got %q want tenant/bj-1 (BackupJob fallback)", got.Spec.BlobStoreConfiguration.BackupName)
 	}
 	if got.Labels[backupsv1alpha1.OwningJobNameLabel] != "bj-1" {
 		t.Errorf("OwningJobName label missing or wrong: %v", got.Labels)
@@ -192,7 +194,7 @@ func TestEnsureFoundationDBBackup_StopsPriorRunning(t *testing.T) {
 	job := newFoundationDBBackupJob("bj-1", "tenant")
 	rendered := newRenderedFoundationDBTemplate()
 
-	if _, err := r.ensureFoundationDBBackup(context.Background(), job, clusterName, "7.3.63", rendered); err != nil {
+	if _, _, err := r.ensureFoundationDBBackup(context.Background(), job, clusterName, "7.3.63", rendered); err != nil {
 		t.Fatalf("ensureFoundationDBBackup: %v", err)
 	}
 
@@ -246,6 +248,75 @@ func TestEnsureFoundationDBRestore_IdempotentByLabel(t *testing.T) {
 	}
 	if !apiequality.Semantic.DeepEqual(got.Spec.BlobStoreConfiguration, blob) {
 		t.Errorf("BlobStoreConfiguration: got %#v want %#v", got.Spec.BlobStoreConfiguration, blob)
+	}
+}
+
+func TestFoundationDBRestoreAgents_StartedStoppedAndRemoved(t *testing.T) {
+	tmpl := *newRenderedFoundationDBTemplate()
+	tmpl.MinimumAgentVersions = []string{"7.3.79"}
+	tmpl.BackupDeploymentPodTemplateSpec = &corev1.PodTemplateSpec{
+		Spec: corev1.PodSpec{Containers: []corev1.Container{{
+			Name: "foundationdb",
+			Env:  []corev1.EnvVar{{Name: "FDB_BLOB_CREDENTIALS", Value: "/creds.json"}},
+		}}},
+	}
+	strategy := &strategyv1alpha1.FoundationDB{
+		ObjectMeta: metav1.ObjectMeta{Name: "fdb-strategy"},
+		Spec:       strategyv1alpha1.FoundationDBSpec{Template: tmpl},
+	}
+	rj := newFoundationDBRestoreJob("rj-agents", "tenant")
+	c := newFoundationDBStrategyTestClient(t, strategy, rj, newFoundationDBApp("fdb-target", "tenant"))
+	r := &RestoreJobReconciler{Client: c, Scheme: c.Scheme()}
+	backup := &backupsv1alpha1.Backup{Spec: backupsv1alpha1.BackupSpec{
+		StrategyRef: corev1.TypedLocalObjectReference{Name: "fdb-strategy"},
+	}}
+	cluster := &foundationdbtypes.FoundationDBCluster{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "foundationdb-fdb-target"},
+		Spec:       foundationdbtypes.FoundationDBClusterSpec{Version: "7.3.63"},
+	}
+	target := foundationdbRestoreTarget{Namespace: "tenant", AppName: "fdb-target"}
+	blob := foundationdbtypes.BlobStoreConfiguration{AccountName: "@s3.example", Bucket: "bkt", BackupName: "tenant/bj-1"}
+
+	for range 2 {
+		if err := r.ensureFoundationDBRestoreAgents(context.Background(), rj, backup, target, cluster, blob, nil); err != nil {
+			t.Fatalf("ensureFoundationDBRestoreAgents: %v", err)
+		}
+	}
+	list := &foundationdbtypes.FoundationDBBackupList{}
+	if err := c.List(context.Background(), list, client.InNamespace("tenant")); err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(list.Items) != 1 {
+		t.Fatalf("expected one agents FoundationDBBackup, got %d", len(list.Items))
+	}
+	got := list.Items[0]
+	if got.Spec.BackupState != foundationdbtypes.BackupStateStopped {
+		t.Errorf("backupState = %q, want Stopped (agents only, no backup)", got.Spec.BackupState)
+	}
+	if got.Spec.ClusterName != "foundationdb-fdb-target" || got.Spec.Version != "7.3.79" {
+		t.Errorf("cluster/version = %q/%q, want foundationdb-fdb-target/7.3.79", got.Spec.ClusterName, got.Spec.Version)
+	}
+	if got.Spec.PodTemplateSpec == nil || got.Spec.PodTemplateSpec.Spec.Containers[0].Env[0].Value != "/creds.json" {
+		t.Errorf("agents miss the strategy pod template: %+v", got.Spec.PodTemplateSpec)
+	}
+	if got.Labels[backupsv1alpha1.OwningJobNameLabel] != "" {
+		t.Errorf("agents must not carry the BackupJob owner label: %v", got.Labels)
+	}
+	if len(got.Spec.CustomParameters) != len(tmpl.CustomParameters) || got.Spec.CustomParameters[0] != tmpl.CustomParameters[0] {
+		t.Errorf("agents must carry the strategy's customParameters: got %v want %v", got.Spec.CustomParameters, tmpl.CustomParameters)
+	}
+	if len(got.OwnerReferences) != 1 || got.OwnerReferences[0].Name != rj.Name {
+		t.Errorf("agents must be owned by the RestoreJob: %+v", got.OwnerReferences)
+	}
+
+	if err := r.deleteFoundationDBRestoreAgents(context.Background(), rj); err != nil {
+		t.Fatalf("deleteFoundationDBRestoreAgents: %v", err)
+	}
+	if err := c.List(context.Background(), list, client.InNamespace("tenant")); err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(list.Items) != 0 {
+		t.Errorf("agents left after the restore: %d", len(list.Items))
 	}
 }
 
@@ -413,25 +484,25 @@ func TestFoundationDBBackupReady(t *testing.T) {
 	})
 	t.Run("not running is not ready", func(t *testing.T) {
 		b := &foundationdbtypes.FoundationDBBackup{Status: foundationdbtypes.FoundationDBBackupStatus{
-			BackupDetails: &foundationdbtypes.BackupDetails{Running: false, SnapshotTime: 100},
+			BackupDetails: &foundationdbtypes.BackupDetails{Running: false, Restorable: true},
 		}}
 		if foundationdbBackupReady(b) {
 			t.Fatalf("running=false must not be ready")
 		}
 	})
-	t.Run("snapshotTime=0 is not ready", func(t *testing.T) {
+	t.Run("not restorable is not ready", func(t *testing.T) {
 		b := &foundationdbtypes.FoundationDBBackup{Status: foundationdbtypes.FoundationDBBackupStatus{
-			BackupDetails: &foundationdbtypes.BackupDetails{Running: true, SnapshotTime: 0},
+			BackupDetails: &foundationdbtypes.BackupDetails{Running: true, Restorable: false},
 		}}
 		if foundationdbBackupReady(b) {
-			t.Fatalf("snapshotTime=0 must not be ready")
+			t.Fatalf("restorable=false must not be ready")
 		}
 	})
 	t.Run("generations not reconciled is not ready", func(t *testing.T) {
 		b := &foundationdbtypes.FoundationDBBackup{
 			ObjectMeta: metav1.ObjectMeta{Generation: 2},
 			Status: foundationdbtypes.FoundationDBBackupStatus{
-				BackupDetails: &foundationdbtypes.BackupDetails{Running: true, SnapshotTime: 100},
+				BackupDetails: &foundationdbtypes.BackupDetails{Running: true, Restorable: true},
 				Generations:   &foundationdbtypes.BackupGenerationStatus{Reconciled: 1},
 			},
 		}
@@ -439,11 +510,14 @@ func TestFoundationDBBackupReady(t *testing.T) {
 			t.Fatalf("generations.reconciled < generation must not be ready")
 		}
 	})
-	t.Run("ready when running + snapshotTime > 0 + reconciled", func(t *testing.T) {
+	t.Run("ready when running + restorable + reconciled on its own directory", func(t *testing.T) {
 		b := &foundationdbtypes.FoundationDBBackup{
 			ObjectMeta: metav1.ObjectMeta{Generation: 1},
+			Spec: foundationdbtypes.FoundationDBBackupSpec{BlobStoreConfiguration: foundationdbtypes.BlobStoreConfiguration{
+				AccountName: "@s3.example", Bucket: "bkt", BackupName: "tenant/bj-1",
+			}},
 			Status: foundationdbtypes.FoundationDBBackupStatus{
-				BackupDetails: &foundationdbtypes.BackupDetails{Running: true, SnapshotTime: 100},
+				BackupDetails: &foundationdbtypes.BackupDetails{Running: true, Restorable: true, URL: "blobstore://@s3.example:443/tenant/bj-1?bucket=bkt"},
 				Generations:   &foundationdbtypes.BackupGenerationStatus{Reconciled: 1},
 			},
 		}
@@ -513,15 +587,15 @@ func TestFoundationDBRestoreOptions_EffectiveDeadline(t *testing.T) {
 }
 
 func TestFoundationDBBackupDeadlineExceeded(t *testing.T) {
-	if foundationdbBackupDeadlineExceeded(nil) {
+	if foundationdbBackupDeadlineExceeded(nil, foundationdbDefaultBackupDeadline) {
 		t.Fatalf("nil StartedAt must not trip the gate (deadline starts when StartedAt is set)")
 	}
 	recent := metav1.NewTime(time.Now())
-	if foundationdbBackupDeadlineExceeded(&recent) {
+	if foundationdbBackupDeadlineExceeded(&recent, foundationdbDefaultBackupDeadline) {
 		t.Fatalf("recent StartedAt must not trip the gate")
 	}
 	old := metav1.NewTime(time.Now().Add(-2 * foundationdbDefaultBackupDeadline))
-	if !foundationdbBackupDeadlineExceeded(&old) {
+	if !foundationdbBackupDeadlineExceeded(&old, foundationdbDefaultBackupDeadline) {
 		t.Fatalf("StartedAt past default deadline must trip the gate")
 	}
 }
@@ -530,36 +604,69 @@ func TestFoundationDBBackupDeadlineExceeded(t *testing.T) {
 // URI synthesis
 // ---------------------------------------------------------------------------
 
-func TestFoundationDBBackupURI_PrefersOperatorReportedURL(t *testing.T) {
+// The URI recorded on a Backup must name this CR's own directory: the
+// operator copies status.backupDetails.url from the cluster-wide status, so
+// it can name another backup's directory.
+func TestFoundationDBBackupURI_IgnoresClusterWideStatus(t *testing.T) {
 	fdb := &foundationdbtypes.FoundationDBBackup{
 		Spec: foundationdbtypes.FoundationDBBackupSpec{
 			BlobStoreConfiguration: foundationdbtypes.BlobStoreConfiguration{
-				AccountName: "key@s3.example:9000",
-				Bucket:      "bkt",
-				BackupName:  "bj-1",
+				AccountName:   "@s3.example",
+				Bucket:        "bkt",
+				BackupName:    "tenant/bj-2",
+				URLParameters: []string{"secure_connection=1", "region=us-east-1"},
 			},
 		},
 		Status: foundationdbtypes.FoundationDBBackupStatus{
-			BackupDetails: &foundationdbtypes.BackupDetails{URL: "blobstore://bkt/bj-1?secure_connection=0"},
+			BackupDetails: &foundationdbtypes.BackupDetails{URL: "blobstore://@s3.example:443/tenant/bj-1?bucket=bkt"},
 		},
 	}
-	if got, want := foundationdbBackupURI(fdb), "blobstore://bkt/bj-1?secure_connection=0"; got != want {
+	want := "blobstore://@s3.example:443/tenant/bj-2?bucket=bkt&region=us-east-1&secure_connection=1"
+	if got := foundationdbBackupURI(fdb); got != want {
 		t.Errorf("URI: got %q want %q", got, want)
 	}
 }
 
-func TestFoundationDBBackupURI_FallsBackToSpec(t *testing.T) {
-	fdb := &foundationdbtypes.FoundationDBBackup{
-		Spec: foundationdbtypes.FoundationDBBackupSpec{
-			BlobStoreConfiguration: foundationdbtypes.BlobStoreConfiguration{
-				AccountName: "key@s3.example:9000",
-				Bucket:      "bkt",
-				BackupName:  "bj-1",
-			},
+func TestFoundationDBBlobURL_MatchesOperatorFormat(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		cfg  foundationdbtypes.BlobStoreConfiguration
+		want string
+	}{
+		{"plain http gets port 80", foundationdbtypes.BlobStoreConfiguration{AccountName: "@s3.example", Bucket: "b", BackupName: "n", URLParameters: []string{"secure_connection=0"}}, "blobstore://@s3.example:80/n?bucket=b&secure_connection=0"},
+		{"explicit port kept", foundationdbtypes.BlobStoreConfiguration{AccountName: "@s3.example:8333", Bucket: "b", BackupName: "n"}, "blobstore://@s3.example:8333/n?bucket=b"},
+		{"key and secret in account", foundationdbtypes.BlobStoreConfiguration{AccountName: "key:secret@s3.example", Bucket: "b", BackupName: "n"}, "blobstore://key:secret@s3.example:443/n?bucket=b"},
+		{"unset bucket uses the operator default", foundationdbtypes.BlobStoreConfiguration{AccountName: "@s3.example", BackupName: "n"}, "blobstore://@s3.example:443/n?bucket=fdb-backups"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := foundationdbBlobURL(tc.cfg)
+			if err != nil || got != tc.want {
+				t.Errorf("got %q, %v; want %q", got, err, tc.want)
+			}
+		})
+	}
+	if _, err := foundationdbBlobURL(foundationdbtypes.BlobStoreConfiguration{AccountName: "s3.example", BackupName: "n"}); err == nil {
+		t.Errorf("an account without @ must be rejected, as the operator does")
+	}
+}
+
+func TestFoundationDBBackupReady_RejectsAnotherBackupsDirectory(t *testing.T) {
+	b := &foundationdbtypes.FoundationDBBackup{
+		ObjectMeta: metav1.ObjectMeta{Generation: 1},
+		Spec: foundationdbtypes.FoundationDBBackupSpec{BlobStoreConfiguration: foundationdbtypes.BlobStoreConfiguration{
+			AccountName: "@s3.example", Bucket: "bkt", BackupName: "tenant/bj-2",
+		}},
+		Status: foundationdbtypes.FoundationDBBackupStatus{
+			BackupDetails: &foundationdbtypes.BackupDetails{Running: true, Restorable: true, URL: "blobstore://@s3.example:443/tenant/bj-1?bucket=bkt"},
+			Generations:   &foundationdbtypes.BackupGenerationStatus{Reconciled: 1},
 		},
 	}
-	if got, want := foundationdbBackupURI(fdb), "blobstore://bkt/bj-1"; got != want {
-		t.Errorf("URI: got %q want %q", got, want)
+	if foundationdbBackupReady(b) {
+		t.Fatalf("a backup whose status shows another directory must not be ready")
+	}
+	b.Status.BackupDetails.URL = "blobstore://@s3.example:443/tenant/bj-2?secure_connection=1&bucket=bkt"
+	if !foundationdbBackupReady(b) {
+		t.Errorf("the backup's own directory, in any parameter order, must be ready")
 	}
 }
 
@@ -587,29 +694,6 @@ func TestFoundationDBBackupStateConstants_OnlyReadableValues(t *testing.T) {
 	}
 	if foundationdbtypes.BackupStateStopped != "Stopped" {
 		t.Errorf("BackupStateStopped: got %q want \"Stopped\"", foundationdbtypes.BackupStateStopped)
-	}
-}
-
-// TestFoundationDBBackupURI_EmptyBucketIsEmpty pins #10 from review: when
-// bucket is unset the helper must NOT fall back to AccountName as the
-// bucket-slot value. AccountName looks like "<api_key>@<host:port>", so
-// the resulting URL "blobstore://<api_key>@<host>/<backupName>" matches
-// nothing the operator actually writes and would mislead anyone trying
-// to locate the artefact in object storage. The helper is informational
-// only (load-bearing coordinates live on Backup.status.driverMetadata),
-// so the right answer is "".
-func TestFoundationDBBackupURI_EmptyBucketIsEmpty(t *testing.T) {
-	fdb := &foundationdbtypes.FoundationDBBackup{
-		Spec: foundationdbtypes.FoundationDBBackupSpec{
-			BlobStoreConfiguration: foundationdbtypes.BlobStoreConfiguration{
-				AccountName: "key@s3.example:9000",
-				BackupName:  "bj-1",
-				// Bucket intentionally empty.
-			},
-		},
-	}
-	if got := foundationdbBackupURI(fdb); got != "" {
-		t.Errorf("empty bucket must produce empty URI; got %q (must not graft AccountName into the bucket slot)", got)
 	}
 }
 
@@ -937,17 +1021,9 @@ func TestReconcileFoundationDB_HealthUnavailableIsTransient(t *testing.T) {
 // Backup-artifact takenAt semantics
 // ---------------------------------------------------------------------------
 
-// TestCreateFoundationDBBackupArtifact_TakenAtIsWallClock pins the
-// semantics noted in the artifact builder's comment block: the FDB
-// operator surfaces backupDetails.snapshotTime as an FDB-internal
-// read-version (an integer counter, not a Unix timestamp), so the
-// Cozystack Backup.spec.takenAt must come from wall-clock "now" instead.
-// Before this regression test a no-op conditional reassigned takenAt with
-// the same wall-clock value, hiding the intent and inviting a future
-// refactor to mis-convert SnapshotTime (e.g. into time.Unix(... , 0)) and
-// produce a year-1970 takenAt. The check below would catch that
-// regression: a SnapshotTime of 43017506 interpreted as a Unix timestamp
-// lands in 1971.
+// TestCreateFoundationDBBackupArtifact_TakenAtIsWallClock pins that
+// Backup.spec.takenAt is wall-clock "now": the operator reports no snapshot
+// timestamp, so nothing else could feed it.
 func TestCreateFoundationDBBackupArtifact_TakenAtIsWallClock(t *testing.T) {
 	apps := foundationdbapp.GroupName
 	strategyAPIGroup := strategyv1alpha1.GroupVersion.Group
@@ -969,14 +1045,11 @@ func TestCreateFoundationDBBackupArtifact_TakenAtIsWallClock(t *testing.T) {
 		},
 		Parameters: map[string]string{},
 	}
-	// SnapshotTime is FDB read-version - a large integer that is NOT a
-	// Unix timestamp. If a future refactor lifts SnapshotTime into
-	// takenAt directly, the resulting time lands far away from "now".
 	fdbBackup := &foundationdbtypes.FoundationDBBackup{
 		ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "fdb-bk"},
 		Status: foundationdbtypes.FoundationDBBackupStatus{
 			BackupDetails: &foundationdbtypes.BackupDetails{
-				Running: true, SnapshotTime: 43017506,
+				Running: true, Restorable: true,
 			},
 		},
 	}
@@ -991,11 +1064,10 @@ func TestCreateFoundationDBBackupArtifact_TakenAtIsWallClock(t *testing.T) {
 	after := time.Now()
 	// takenAt must fall in the wall-clock window the test observed, with a
 	// small slack on either side for clock jitter and the helper's own
-	// metav1.Now() calls. If SnapshotTime ever bled into takenAt the value
-	// would land decades away from this window.
+	// metav1.Now() calls.
 	got := artifact.Spec.TakenAt.Time
 	if got.Before(before.Add(-2 * time.Second)) {
-		t.Errorf("takenAt %s is before the call window start %s; SnapshotTime must not bleed into the wall-clock value", got, before)
+		t.Errorf("takenAt %s is before the call window start %s; takenAt must be wall-clock", got, before)
 	}
 	if got.After(after.Add(2 * time.Second)) {
 		t.Errorf("takenAt %s is after the call window end %s", got, after)
@@ -1386,7 +1458,7 @@ func TestStopOtherFoundationDBBackups_RetriesOnConflict(t *testing.T) {
 		Build()
 	r := &BackupJobReconciler{Client: c, Scheme: s}
 
-	if err := r.stopOtherFoundationDBBackups(context.Background(), job, clusterName); err != nil {
+	if _, err := r.stopOtherFoundationDBBackups(context.Background(), job, clusterName); err != nil {
 		t.Fatalf("stopOtherFoundationDBBackups returned error despite retry budget; the 409 should have been absorbed: %v", err)
 	}
 	if patchAttempts < 2 {
@@ -1412,84 +1484,115 @@ func TestStopOtherFoundationDBBackups_RetriesOnConflict(t *testing.T) {
 // backup_agent Deployment continues retrying against a broken S3
 // endpoint forever (one Deployment leaked per failed BackupJob) and the
 // FDB operator keeps reconciling against an undeleted CR.
-func TestReconcileFoundationDB_DeadlineExpiry_StopsFoundationDBBackup(t *testing.T) {
-	apps := foundationdbapp.GroupName
-	strategyAPIGroup := strategyv1alpha1.GroupVersion.Group
-	clusterName := foundationdbClusterNameForApp("fdb-src")
-	pastStart := metav1.NewTime(time.Now().Add(-2 * foundationdbDefaultBackupDeadline))
+// A backup that never became restorable is not ended by a stop: discontinue
+// waits for a restorable snapshot, so the backup would run on and keep every
+// later BackupJob of the cluster waiting. The deadline aborts it instead.
+func TestReconcileFoundationDB_DeadlineExpiry_AbortsFoundationDBBackup(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		state      string
+		backupName string
+		quiet      bool
+		wantPolicy string // "" means the CR is simply gone
+	}{
+		{"running backup in the job's directory is aborted", foundationdbtypes.BackupStateRunning, "tenant/bj", false, foundationdbDeletionPolicyStop},
+		{"running backup in a pinned directory is aborted", foundationdbtypes.BackupStateRunning, "shared", false, foundationdbDeletionPolicyStop},
+		{"backup another job stopped and that went quiet is only deleted", foundationdbtypes.BackupStateStopped, "tenant/bj", true, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			apps := foundationdbapp.GroupName
+			strategyAPIGroup := strategyv1alpha1.GroupVersion.Group
+			clusterName := foundationdbClusterNameForApp("fdb-src")
+			pastStart := metav1.NewTime(time.Now().Add(-2 * foundationdbDefaultBackupDeadline))
 
-	strategy := &strategyv1alpha1.FoundationDB{
-		ObjectMeta: metav1.ObjectMeta{Name: "fdb-strategy"},
-		Spec:       strategyv1alpha1.FoundationDBSpec{Template: *newRenderedFoundationDBTemplate()},
-	}
-	app := newFoundationDBApp("fdb-src", "tenant")
-	cluster := &foundationdbtypes.FoundationDBCluster{
-		ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: clusterName},
-		Spec:       foundationdbtypes.FoundationDBClusterSpec{Version: "7.3.63"},
-		Status: foundationdbtypes.FoundationDBClusterStatus{
-			Health: foundationdbtypes.FoundationDBClusterHealth{Available: true},
-		},
-	}
-	job := &backupsv1alpha1.BackupJob{
-		ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "bj"},
-		Spec: backupsv1alpha1.BackupJobSpec{
-			ApplicationRef: corev1.TypedLocalObjectReference{
-				Kind: "FoundationDB", Name: "fdb-src", APIGroup: &apps,
-			},
-		},
-		// StartedAt 2x deadline ago - foundationdbBackupDeadlineExceeded
-		// will return true on the first reconcile that reaches the gate.
-		Status: backupsv1alpha1.BackupJobStatus{
-			StartedAt: &pastStart,
-			Phase:     backupsv1alpha1.BackupJobPhaseRunning,
-		},
-	}
-	// Pre-seeded prior FoundationDBBackup with the BackupJob's labels and
-	// no backupDetails (so foundationdbBackupReady returns false) - this
-	// is the CR the driver must Stop on deadline expiry.
-	stuck := &foundationdbtypes.FoundationDBBackup{
-		ObjectMeta: metav1.ObjectMeta{
-			Namespace: "tenant",
-			Name:      "bj-stuck",
-			Labels: map[string]string{
-				backupsv1alpha1.OwningJobNameLabel:      job.Name,
-				backupsv1alpha1.OwningJobNamespaceLabel: job.Namespace,
-				foundationdbClusterLabel:                clusterName,
-			},
-		},
-		Spec: foundationdbtypes.FoundationDBBackupSpec{
-			ClusterName: clusterName,
-			Version:     "7.3.63",
-			BackupState: foundationdbtypes.BackupStateRunning,
-		},
-	}
-	c := newFoundationDBStrategyTestClient(t, strategy, app, cluster, job, stuck)
-	fresh := &backupsv1alpha1.BackupJob{}
-	if err := c.Get(context.Background(), client.ObjectKeyFromObject(job), fresh); err != nil {
-		t.Fatalf("seed Get BackupJob: %v", err)
-	}
-	resolved := &ResolvedBackupConfig{
-		StrategyRef: corev1.TypedLocalObjectReference{
-			APIGroup: &strategyAPIGroup,
-			Kind:     strategyv1alpha1.FoundationDBStrategyKind,
-			Name:     strategy.Name,
-		},
-		Parameters: map[string]string{},
-	}
-	r := &BackupJobReconciler{Client: c, Scheme: c.Scheme(), Recorder: record.NewFakeRecorder(10)}
+			strategy := &strategyv1alpha1.FoundationDB{
+				ObjectMeta: metav1.ObjectMeta{Name: "fdb-strategy"},
+				Spec:       strategyv1alpha1.FoundationDBSpec{Template: *newRenderedFoundationDBTemplate()},
+			}
+			app := newFoundationDBApp("fdb-src", "tenant")
+			cluster := &foundationdbtypes.FoundationDBCluster{
+				ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: clusterName},
+				Spec:       foundationdbtypes.FoundationDBClusterSpec{Version: "7.3.63"},
+				Status: foundationdbtypes.FoundationDBClusterStatus{
+					Health: foundationdbtypes.FoundationDBClusterHealth{Available: true},
+				},
+			}
+			job := &backupsv1alpha1.BackupJob{
+				ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "bj"},
+				Spec: backupsv1alpha1.BackupJobSpec{
+					ApplicationRef: corev1.TypedLocalObjectReference{
+						Kind: "FoundationDB", Name: "fdb-src", APIGroup: &apps,
+					},
+				},
+				Status: backupsv1alpha1.BackupJobStatus{
+					StartedAt: &pastStart,
+					Phase:     backupsv1alpha1.BackupJobPhaseRunning,
+				},
+			}
+			stuck := &foundationdbtypes.FoundationDBBackup{
+				ObjectMeta: metav1.ObjectMeta{
+					Namespace:  "tenant",
+					Name:       "bj-stuck",
+					Generation: 1,
+					Labels: map[string]string{
+						backupsv1alpha1.OwningJobNameLabel:      job.Name,
+						backupsv1alpha1.OwningJobNamespaceLabel: job.Namespace,
+						foundationdbClusterLabel:                clusterName,
+					},
+				},
+				Spec: foundationdbtypes.FoundationDBBackupSpec{
+					ClusterName:            clusterName,
+					Version:                "7.3.63",
+					BackupState:            tc.state,
+					BlobStoreConfiguration: foundationdbtypes.BlobStoreConfiguration{BackupName: tc.backupName},
+				},
+			}
+			if tc.quiet {
+				stuck.Status.Generations = &foundationdbtypes.BackupGenerationStatus{Reconciled: 1}
+				stuck.Status.BackupDetails = &foundationdbtypes.BackupDetails{}
+			}
+			c := newFoundationDBStrategyTestClient(t, strategy, app, cluster, job, stuck)
+			fresh := &backupsv1alpha1.BackupJob{}
+			if err := c.Get(context.Background(), client.ObjectKeyFromObject(job), fresh); err != nil {
+				t.Fatalf("seed Get BackupJob: %v", err)
+			}
+			resolved := &ResolvedBackupConfig{
+				StrategyRef: corev1.TypedLocalObjectReference{
+					APIGroup: &strategyAPIGroup,
+					Kind:     strategyv1alpha1.FoundationDBStrategyKind,
+					Name:     strategy.Name,
+				},
+				Parameters: map[string]string{},
+			}
+			r := &BackupJobReconciler{Client: c, Scheme: c.Scheme(), Recorder: record.NewFakeRecorder(10)}
 
-	if _, err := r.reconcileFoundationDB(context.Background(), fresh, resolved); err != nil {
-		t.Fatalf("reconcileFoundationDB: %v", err)
-	}
-	if fresh.Status.Phase != backupsv1alpha1.BackupJobPhaseFailed {
-		t.Fatalf("expected BackupJob to be Failed on deadline expiry; got phase=%q", fresh.Status.Phase)
-	}
-	got := &foundationdbtypes.FoundationDBBackup{}
-	if err := c.Get(context.Background(), client.ObjectKeyFromObject(stuck), got); err != nil {
-		t.Fatalf("get stuck CR post-reconcile: %v", err)
-	}
-	if got.Spec.BackupState != foundationdbtypes.BackupStateStopped {
-		t.Errorf("FoundationDBBackup must be Stopped before terminal failure; got %q (backup_agent Deployment would otherwise leak past the BackupJob's lifetime)", got.Spec.BackupState)
+			if _, err := r.reconcileFoundationDB(context.Background(), fresh, resolved); err != nil {
+				t.Fatalf("reconcileFoundationDB: %v", err)
+			}
+			if fresh.Status.Phase != backupsv1alpha1.BackupJobPhaseFailed {
+				t.Fatalf("expected BackupJob to be Failed on deadline expiry; got phase=%q", fresh.Status.Phase)
+			}
+			got := &foundationdbtypes.FoundationDBBackup{}
+			err := c.Get(context.Background(), client.ObjectKeyFromObject(stuck), got)
+			if tc.wantPolicy == "" {
+				if !apierrors.IsNotFound(err) {
+					t.Fatalf("a quiet CR must be deleted, got err=%v obj=%+v", err, got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("the CR must wait on the operator's finalizer: %v", err)
+			}
+			if got.DeletionTimestamp == nil {
+				t.Errorf("the CR must be deleted so the operator aborts its backup")
+			}
+			if got.Spec.DeletionPolicy == nil || *got.Spec.DeletionPolicy != tc.wantPolicy {
+				t.Errorf("deletionPolicy = %v, want %q", got.Spec.DeletionPolicy, tc.wantPolicy)
+			}
+			if !controllerutil.ContainsFinalizer(got, foundationdbOperatorFinalizer) {
+				t.Errorf("the operator acts on the deletion only with its finalizer in place")
+			}
+		})
 	}
 }
 
@@ -1713,7 +1816,7 @@ func TestReconcileFoundationDBRestore_SnapshotAPIVersionMismatchIsTerminal(t *te
 // OwnerReference back to the BackupJob would make Kubernetes GC reap
 // the operator CR the moment the parent BackupJob is deleted,
 // defeating the reuse path. The framework's label-based cleanup
-// (cleanup.sh, stopFoundationDBBackupForJob) handles teardown
+// (cleanup.sh, abortFoundationDBBackup) handles teardown
 // explicitly.
 //
 // If a future change adds OwnerReferences "for safety", this test
@@ -1728,7 +1831,7 @@ func TestEnsureFoundationDBBackup_DoesNotSetOwnerReference(t *testing.T) {
 	clusterName := foundationdbClusterNameForApp("fdb-src")
 	rendered := newRenderedFoundationDBTemplate()
 
-	got, err := r.ensureFoundationDBBackup(context.Background(), job, clusterName, "7.3.63", rendered)
+	got, _, err := r.ensureFoundationDBBackup(context.Background(), job, clusterName, "7.3.63", rendered)
 	if err != nil {
 		t.Fatalf("ensureFoundationDBBackup: %v", err)
 	}
@@ -1822,5 +1925,1296 @@ func TestRequeueWithReason_RetriesOnStatusConflict(t *testing.T) {
 	}
 	if cond.Reason != "TestReason" {
 		t.Errorf("Ready reason: got %q want %q", cond.Reason, "TestReason")
+	}
+}
+
+func TestFoundationDBAgentVersion(t *testing.T) {
+	minimums := []string{"7.3.79", "7.4.8"}
+	for _, tc := range []struct {
+		name, cluster string
+		minimums      []string
+		want          string
+	}{
+		{"older patch is raised", "7.3.63", minimums, "7.3.79"},
+		{"other minor picks its own minimum", "7.4.1", minimums, "7.4.8"},
+		{"newer patch is kept", "7.3.80", minimums, "7.3.80"},
+		{"equal patch is kept", "7.3.79", minimums, "7.3.79"},
+		{"no minimum for the minor", "7.1.57", minimums, "7.1.57"},
+		{"no minimums", "7.3.63", nil, "7.3.63"},
+		{"highest matching minimum wins", "7.3.63", []string{"7.3.70", "7.3.79", "7.3.75"}, "7.3.79"},
+		{"malformed minimum is ignored", "7.3.63", []string{"7.3", "7.3.x"}, "7.3.63"},
+		{"unparseable cluster version is kept", "7.3.63-rc1", minimums, "7.3.63-rc1"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := foundationdbAgentVersion(tc.cluster, tc.minimums); got != tc.want {
+				t.Errorf("foundationdbAgentVersion(%q, %v) = %q, want %q", tc.cluster, tc.minimums, got, tc.want)
+			}
+		})
+	}
+}
+
+// The operator reads the agent pod template from spec.podTemplateSpec; the
+// apiserver prunes any other location, so the agents would silently run
+// without the strategy's credentials and CA.
+func TestEnsureFoundationDBBackup_PodTemplateAtSpecRoot(t *testing.T) {
+	c := newFoundationDBStrategyTestClient(t)
+	r := &BackupJobReconciler{Client: c, Scheme: c.Scheme()}
+	job := newFoundationDBBackupJob("bj-pod-template", "tenant")
+	if err := c.Create(context.Background(), job); err != nil {
+		t.Fatalf("seed BackupJob: %v", err)
+	}
+	rendered := newRenderedFoundationDBTemplate()
+	rendered.BackupDeploymentPodTemplateSpec = &corev1.PodTemplateSpec{
+		Spec: corev1.PodSpec{Containers: []corev1.Container{{
+			Name: "foundationdb",
+			Env:  []corev1.EnvVar{{Name: "FDB_BLOB_CREDENTIALS", Value: "/creds.json"}},
+		}}},
+	}
+
+	got, _, err := r.ensureFoundationDBBackup(context.Background(), job, foundationdbClusterNameForApp("fdb-src"), "7.3.63", rendered)
+	if err != nil {
+		t.Fatalf("ensureFoundationDBBackup: %v", err)
+	}
+	raw, err := json.Marshal(got.Spec)
+	if err != nil {
+		t.Fatalf("marshal spec: %v", err)
+	}
+	var spec map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &spec); err != nil {
+		t.Fatalf("unmarshal spec: %v", err)
+	}
+	if _, ok := spec["podTemplateSpec"]; !ok {
+		t.Fatalf("pod template not under spec.podTemplateSpec: %s", raw)
+	}
+	if env := got.Spec.PodTemplateSpec.Spec.Containers[0].Env; len(env) != 1 || env[0].Value != "/creds.json" {
+		t.Errorf("pod template env not carried over: %+v", env)
+	}
+}
+
+func TestRefreshFoundationDBBackupStatus(t *testing.T) {
+	now := time.Date(2026, 10, 14, 8, 0, 0, 0, time.UTC)
+	running := func(restorable bool, annotation string) *foundationdbtypes.FoundationDBBackup {
+		b := &foundationdbtypes.FoundationDBBackup{
+			ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "fdb-bk", Generation: 1},
+			Spec: foundationdbtypes.FoundationDBBackupSpec{BlobStoreConfiguration: foundationdbtypes.BlobStoreConfiguration{
+				AccountName: "@s3.example", Bucket: "bkt", BackupName: "tenant/bj-1",
+			}},
+			Status: foundationdbtypes.FoundationDBBackupStatus{
+				BackupDetails: &foundationdbtypes.BackupDetails{Running: true, Restorable: restorable, URL: "blobstore://@s3.example:443/tenant/bj-1?bucket=bkt"},
+				Generations:   &foundationdbtypes.BackupGenerationStatus{Reconciled: 1},
+			},
+		}
+		if annotation != "" {
+			b.Annotations = map[string]string{foundationdbStatusRefreshAnnotation: annotation}
+		}
+		return b
+	}
+	for _, tc := range []struct {
+		name string
+		in   *foundationdbtypes.FoundationDBBackup
+		want string
+	}{
+		{"reconciled but not restorable is nudged", running(false, ""), now.Format(time.RFC3339)},
+		{"stale nudge is renewed", running(false, now.Add(-2*time.Minute).Format(time.RFC3339)), now.Format(time.RFC3339)},
+		{"recent nudge is kept", running(false, now.Add(-10*time.Second).Format(time.RFC3339)), now.Add(-10 * time.Second).Format(time.RFC3339)},
+		{"restorable is left alone", running(true, ""), ""},
+		{"stopped CR is left alone", func() *foundationdbtypes.FoundationDBBackup {
+			b := running(false, "")
+			b.Spec.BackupState = foundationdbtypes.BackupStateStopped
+			return b
+		}(), ""},
+		{"another backup's directory is nudged", func() *foundationdbtypes.FoundationDBBackup {
+			b := running(true, "")
+			b.Status.BackupDetails.URL = "blobstore://@s3.example:443/tenant/bj-0?bucket=bkt"
+			return b
+		}(), now.Format(time.RFC3339)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := newFoundationDBStrategyTestClient(t, tc.in)
+			r := &BackupJobReconciler{Client: c, Scheme: c.Scheme()}
+			r.refreshFoundationDBBackupStatus(context.Background(), tc.in.DeepCopy(), now)
+			got := &foundationdbtypes.FoundationDBBackup{}
+			if err := c.Get(context.Background(), types.NamespacedName{Namespace: "tenant", Name: "fdb-bk"}, got); err != nil {
+				t.Fatalf("get: %v", err)
+			}
+			if a := got.Annotations[foundationdbStatusRefreshAnnotation]; a != tc.want {
+				t.Errorf("annotation = %q, want %q", a, tc.want)
+			}
+		})
+	}
+}
+
+func TestEnsureFoundationDBBackup_RaisesAgentVersion(t *testing.T) {
+	c := newFoundationDBStrategyTestClient(t)
+	r := &BackupJobReconciler{Client: c, Scheme: c.Scheme()}
+	job := newFoundationDBBackupJob("bj-agent-version", "tenant")
+	if err := c.Create(context.Background(), job); err != nil {
+		t.Fatalf("seed BackupJob: %v", err)
+	}
+	rendered := newRenderedFoundationDBTemplate()
+	rendered.MinimumAgentVersions = []string{"7.3.79"}
+
+	got, _, err := r.ensureFoundationDBBackup(context.Background(), job, foundationdbClusterNameForApp("fdb-src"), "7.3.63", rendered)
+	if err != nil {
+		t.Fatalf("ensureFoundationDBBackup: %v", err)
+	}
+	if got.Spec.Version != "7.3.79" {
+		t.Errorf("FoundationDBBackup.spec.version = %q, want 7.3.79", got.Spec.Version)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Restore agents through reconcileFoundationDBRestore
+// ---------------------------------------------------------------------------
+
+type foundationdbRestoreSeed struct {
+	toCopy     bool
+	startedAgo time.Duration
+	extra      []client.Object
+	funcs      *interceptor.Funcs
+}
+
+// seedFoundationDBRestore builds the object graph a RestoreJob walks to reach
+// the agents and FoundationDBRestore: the strategy the Backup names, the
+// target application and its FoundationDBCluster, the Backup and the
+// RestoreJob.
+func seedFoundationDBRestore(t *testing.T, s foundationdbRestoreSeed) (client.Client, *RestoreJobReconciler, *backupsv1alpha1.RestoreJob, *backupsv1alpha1.Backup) {
+	t.Helper()
+	apps := foundationdbapp.GroupName
+	target := "fdb-src"
+	if s.toCopy {
+		target = "fdb-copy"
+	}
+	strategy := &strategyv1alpha1.FoundationDB{
+		ObjectMeta: metav1.ObjectMeta{Name: "fdb-strategy"},
+		Spec:       strategyv1alpha1.FoundationDBSpec{Template: *newRenderedFoundationDBTemplate()},
+	}
+	cluster := &foundationdbtypes.FoundationDBCluster{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: foundationdbClusterNameForApp(target)},
+		Spec:       foundationdbtypes.FoundationDBClusterSpec{Version: "7.3.63"},
+	}
+	backup := &backupsv1alpha1.Backup{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "src-cozy-bk"},
+		Spec: backupsv1alpha1.BackupSpec{
+			ApplicationRef: corev1.TypedLocalObjectReference{Kind: "FoundationDB", Name: "fdb-src", APIGroup: &apps},
+			StrategyRef:    corev1.TypedLocalObjectReference{Name: strategy.Name},
+			DriverMetadata: map[string]string{
+				foundationdbAccountNameKey:    "@s3.example:9000",
+				foundationdbBucketKey:         "bkt",
+				foundationdbBlobBackupNameKey: "tenant/bj-1",
+			},
+		},
+	}
+	started := metav1.NewTime(time.Now().Add(-s.startedAgo))
+	rj := &backupsv1alpha1.RestoreJob{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "rj"},
+		Spec:       backupsv1alpha1.RestoreJobSpec{BackupRef: corev1.LocalObjectReference{Name: backup.Name}},
+		Status:     backupsv1alpha1.RestoreJobStatus{StartedAt: &started},
+	}
+	if s.toCopy {
+		rj.Spec.TargetApplicationRef = &corev1.TypedLocalObjectReference{Kind: "FoundationDB", Name: target, APIGroup: &apps}
+	}
+	objs := append([]client.Object{strategy, cluster, backup, rj, newFoundationDBApp(target, "tenant")}, s.extra...)
+
+	sch := runtime.NewScheme()
+	_ = scheme.AddToScheme(sch)
+	_ = backupsv1alpha1.AddToScheme(sch)
+	_ = strategyv1alpha1.AddToScheme(sch)
+	_ = foundationdbtypes.AddToScheme(sch)
+	_ = foundationdbapp.AddToScheme(sch)
+	b := clientfake.NewClientBuilder().WithScheme(sch).WithObjects(objs...).
+		WithStatusSubresource(&backupsv1alpha1.RestoreJob{}, &backupsv1alpha1.Backup{})
+	if s.funcs != nil {
+		b = b.WithInterceptorFuncs(*s.funcs)
+	}
+	c := b.Build()
+	fresh := &backupsv1alpha1.RestoreJob{}
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(rj), fresh); err != nil {
+		t.Fatalf("seed Get RestoreJob: %v", err)
+	}
+	r := &RestoreJobReconciler{Client: c, Scheme: c.Scheme(), Recorder: record.NewFakeRecorder(10)}
+	return c, r, fresh, backup
+}
+
+func listFoundationDBBackups(t *testing.T, c client.Client) []foundationdbtypes.FoundationDBBackup {
+	t.Helper()
+	list := &foundationdbtypes.FoundationDBBackupList{}
+	if err := c.List(context.Background(), list, client.InNamespace("tenant")); err != nil {
+		t.Fatalf("list FoundationDBBackup: %v", err)
+	}
+	return list.Items
+}
+
+func TestReconcileFoundationDBRestore_ToCopyStartsAgents(t *testing.T) {
+	c, r, rj, backup := seedFoundationDBRestore(t, foundationdbRestoreSeed{toCopy: true})
+
+	if _, err := r.reconcileFoundationDBRestore(context.Background(), rj, backup); err != nil {
+		t.Fatalf("reconcileFoundationDBRestore: %v", err)
+	}
+	agents := listFoundationDBBackups(t, c)
+	if len(agents) != 1 || agents[0].Spec.ClusterName != "foundationdb-fdb-copy" || agents[0].Spec.BackupState != foundationdbtypes.BackupStateStopped {
+		t.Fatalf("expected one Stopped agents FoundationDBBackup on foundationdb-fdb-copy, got %+v", agents)
+	}
+	restores := &foundationdbtypes.FoundationDBRestoreList{}
+	if err := c.List(context.Background(), restores, client.InNamespace("tenant")); err != nil {
+		t.Fatalf("list FoundationDBRestore: %v", err)
+	}
+	if len(restores.Items) != 1 {
+		t.Fatalf("expected one FoundationDBRestore, got %d", len(restores.Items))
+	}
+}
+
+// Restore agents exist only to run the restore, so a strategy's explicit
+// agentCount: 0 must not leave the destination without any.
+func TestReconcileFoundationDBRestore_AgentsIgnoreZeroAgentCount(t *testing.T) {
+	c, r, rj, backup := seedFoundationDBRestore(t, foundationdbRestoreSeed{toCopy: true})
+	ctx := context.Background()
+	strategy := &strategyv1alpha1.FoundationDB{}
+	if err := c.Get(ctx, client.ObjectKey{Name: "fdb-strategy"}, strategy); err != nil {
+		t.Fatalf("get strategy: %v", err)
+	}
+	zero := int32(0)
+	strategy.Spec.Template.AgentCount = &zero
+	if err := c.Update(ctx, strategy); err != nil {
+		t.Fatalf("update strategy: %v", err)
+	}
+
+	for range 2 {
+		if _, err := r.reconcileFoundationDBRestore(ctx, rj, backup); err != nil {
+			t.Fatalf("reconcileFoundationDBRestore: %v", err)
+		}
+	}
+	if rj.Status.Phase == backupsv1alpha1.RestoreJobPhaseFailed {
+		t.Fatalf("the restore's own agents must not count as agentless")
+	}
+	agents := listFoundationDBBackups(t, c)
+	if len(agents) != 1 || agents[0].Spec.AgentCount != nil {
+		t.Errorf("restore agents must fall back to the operator's agent count, got %+v", agents)
+	}
+}
+
+func TestEnsureFoundationDBRestoreAgents_CarryKeyAndSurviveARepeatedCreate(t *testing.T) {
+	c, r, rj, backup := seedFoundationDBRestore(t, foundationdbRestoreSeed{toCopy: true})
+	ctx := context.Background()
+	strategy := &strategyv1alpha1.FoundationDB{}
+	if err := c.Get(ctx, client.ObjectKey{Name: "fdb-strategy"}, strategy); err != nil {
+		t.Fatalf("get strategy: %v", err)
+	}
+	strategy.Spec.Template.EncryptionKeyPath = "/var/fdb-key/key.bin"
+	if err := c.Update(ctx, strategy); err != nil {
+		t.Fatalf("update strategy: %v", err)
+	}
+	if _, err := r.reconcileFoundationDBRestore(ctx, rj, backup); err != nil {
+		t.Fatalf("reconcileFoundationDBRestore: %v", err)
+	}
+	agents := listFoundationDBBackups(t, c)
+	if len(agents) != 1 || agents[0].Name != rj.Name+"-agents" || agents[0].Spec.EncryptionKeyPath != "/var/fdb-key/key.bin" {
+		t.Fatalf("expected one agents CR named after the RestoreJob carrying the key path, got %+v", agents)
+	}
+	agents[0].Spec.ClusterName = "elsewhere"
+	if err := c.Update(ctx, &agents[0]); err != nil {
+		t.Fatalf("hide agents from the lookup: %v", err)
+	}
+	if _, err := r.reconcileFoundationDBRestore(ctx, rj, backup); err != nil {
+		t.Fatalf("second reconcile: %v", err)
+	}
+	if rj.Status.Phase == backupsv1alpha1.RestoreJobPhaseFailed {
+		t.Errorf("a repeated create of the agents must not fail the restore")
+	}
+	if n := len(listFoundationDBBackups(t, c)); n != 1 {
+		t.Errorf("a repeated create must not start a second set of agents, got %d", n)
+	}
+}
+
+func TestReconcileFoundationDBRestore_CompletedRemovesAgents(t *testing.T) {
+	c, r, rj, backup := seedFoundationDBRestore(t, foundationdbRestoreSeed{toCopy: true})
+	if _, err := r.reconcileFoundationDBRestore(context.Background(), rj, backup); err != nil {
+		t.Fatalf("first reconcile: %v", err)
+	}
+	restores := &foundationdbtypes.FoundationDBRestoreList{}
+	if err := c.List(context.Background(), restores, client.InNamespace("tenant")); err != nil || len(restores.Items) != 1 {
+		t.Fatalf("list FoundationDBRestore: %v (%d)", err, len(restores.Items))
+	}
+	done := restores.Items[0]
+	done.Status.State = foundationdbtypes.RestoreStateCompleted
+	if err := c.Update(context.Background(), &done); err != nil {
+		t.Fatalf("mark restore completed: %v", err)
+	}
+
+	if _, err := r.reconcileFoundationDBRestore(context.Background(), rj, backup); err != nil {
+		t.Fatalf("second reconcile: %v", err)
+	}
+	if rj.Status.Phase != backupsv1alpha1.RestoreJobPhaseSucceeded {
+		t.Errorf("phase = %q, want Succeeded", rj.Status.Phase)
+	}
+	if agents := listFoundationDBBackups(t, c); len(agents) != 0 {
+		t.Errorf("agents left after a completed restore: %d", len(agents))
+	}
+}
+
+func TestReconcileFoundationDBRestore_DeadlineRemovesAgents(t *testing.T) {
+	c, r, rj, backup := seedFoundationDBRestore(t, foundationdbRestoreSeed{toCopy: true, startedAgo: 2 * foundationdbDefaultRestoreDeadline})
+
+	if _, err := r.reconcileFoundationDBRestore(context.Background(), rj, backup); err != nil {
+		t.Fatalf("reconcileFoundationDBRestore: %v", err)
+	}
+	if rj.Status.Phase != backupsv1alpha1.RestoreJobPhaseFailed {
+		t.Errorf("phase = %q, want Failed past the deadline", rj.Status.Phase)
+	}
+	if agents := listFoundationDBBackups(t, c); len(agents) != 0 {
+		t.Errorf("agents left after the restore deadline: %d", len(agents))
+	}
+}
+
+func TestReconcileFoundationDBRestore_RestoreCreateFailureRemovesAgents(t *testing.T) {
+	funcs := interceptor.Funcs{
+		Create: func(ctx context.Context, cl client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
+			if _, ok := obj.(*foundationdbtypes.FoundationDBRestore); ok {
+				return fmt.Errorf("injected create failure")
+			}
+			return cl.Create(ctx, obj, opts...)
+		},
+	}
+	c, r, rj, backup := seedFoundationDBRestore(t, foundationdbRestoreSeed{toCopy: true, funcs: &funcs})
+
+	if _, err := r.reconcileFoundationDBRestore(context.Background(), rj, backup); err != nil {
+		t.Fatalf("reconcileFoundationDBRestore: %v", err)
+	}
+	if rj.Status.Phase != backupsv1alpha1.RestoreJobPhaseFailed {
+		t.Errorf("phase = %q, want Failed", rj.Status.Phase)
+	}
+	if agents := listFoundationDBBackups(t, c); len(agents) != 0 {
+		t.Errorf("agents left after the restore failed: %d", len(agents))
+	}
+}
+
+func TestReconcileFoundationDBRestore_FailureWaitsForAgentDeletion(t *testing.T) {
+	funcs := interceptor.Funcs{
+		Create: func(ctx context.Context, cl client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
+			if _, ok := obj.(*foundationdbtypes.FoundationDBRestore); ok {
+				return fmt.Errorf("injected create failure")
+			}
+			return cl.Create(ctx, obj, opts...)
+		},
+		Delete: func(ctx context.Context, cl client.WithWatch, obj client.Object, opts ...client.DeleteOption) error {
+			return fmt.Errorf("injected delete failure")
+		},
+	}
+	c, r, rj, backup := seedFoundationDBRestore(t, foundationdbRestoreSeed{toCopy: true, funcs: &funcs})
+
+	if _, err := r.reconcileFoundationDBRestore(context.Background(), rj, backup); err == nil {
+		t.Fatalf("expected the delete failure to be returned for a retry")
+	}
+	if rj.Status.Phase == backupsv1alpha1.RestoreJobPhaseFailed {
+		t.Errorf("RestoreJob marked Failed while its agents are still running")
+	}
+	if agents := listFoundationDBBackups(t, c); len(agents) != 1 {
+		t.Errorf("expected the agents to remain for the retry, got %d", len(agents))
+	}
+}
+
+func TestReconcileFoundationDBRestore_InPlaceKeepsRunningBackup(t *testing.T) {
+	running := &foundationdbtypes.FoundationDBBackup{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace: "tenant",
+			Name:      "bj-1-fdb",
+			Labels:    map[string]string{foundationdbClusterLabel: "foundationdb-fdb-src"},
+		},
+		Spec: foundationdbtypes.FoundationDBBackupSpec{
+			ClusterName: "foundationdb-fdb-src",
+			Version:     "7.3.79",
+			BackupState: foundationdbtypes.BackupStateRunning,
+		},
+	}
+	c, r, rj, backup := seedFoundationDBRestore(t, foundationdbRestoreSeed{extra: []client.Object{running}})
+
+	if _, err := r.reconcileFoundationDBRestore(context.Background(), rj, backup); err != nil {
+		t.Fatalf("reconcileFoundationDBRestore: %v", err)
+	}
+	agents := listFoundationDBBackups(t, c)
+	if len(agents) != 1 || agents[0].Name != running.Name || agents[0].Spec.BackupState != foundationdbtypes.BackupStateRunning {
+		t.Errorf("in-place restore must leave the running backup alone and add no Stopped CR, got %+v", agents)
+	}
+}
+
+func TestReconcileFoundationDBRestore_AgentlessBackupFailsRestore(t *testing.T) {
+	zero := int32(0)
+	agentless := &foundationdbtypes.FoundationDBBackup{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace: "tenant",
+			Name:      "bj-1-fdb",
+			Labels:    map[string]string{foundationdbClusterLabel: "foundationdb-fdb-src"},
+		},
+		Spec: foundationdbtypes.FoundationDBBackupSpec{
+			ClusterName: "foundationdb-fdb-src",
+			Version:     "7.3.79",
+			BackupState: foundationdbtypes.BackupStateStopped,
+			AgentCount:  &zero,
+		},
+	}
+	c, r, rj, backup := seedFoundationDBRestore(t, foundationdbRestoreSeed{extra: []client.Object{agentless}})
+
+	if _, err := r.reconcileFoundationDBRestore(context.Background(), rj, backup); err != nil {
+		t.Fatalf("reconcileFoundationDBRestore: %v", err)
+	}
+	if rj.Status.Phase != backupsv1alpha1.RestoreJobPhaseFailed {
+		t.Errorf("phase = %q, want Failed when no FoundationDBBackup of the destination runs agents", rj.Status.Phase)
+	}
+	if agents := listFoundationDBBackups(t, c); len(agents) != 1 || agents[0].Name != agentless.Name {
+		t.Errorf("the existing CR must stay the only one, got %+v", agents)
+	}
+}
+
+func TestReconcileFoundationDB_NotRestorableRequestsStatusRefresh(t *testing.T) {
+	c, job, resolved := reconcileFoundationDBSeed(
+		t,
+		foundationdbtypes.FoundationDBClusterSpec{Version: "7.3.63"},
+		foundationdbtypes.FoundationDBClusterStatus{
+			Health: foundationdbtypes.FoundationDBClusterHealth{Available: true},
+		},
+	)
+	r := &BackupJobReconciler{Client: c, Scheme: c.Scheme(), Recorder: record.NewFakeRecorder(10)}
+	if _, err := r.reconcileFoundationDB(context.Background(), job, resolved); err != nil {
+		t.Fatalf("first reconcile: %v", err)
+	}
+	backups := listFoundationDBBackups(t, c)
+	if len(backups) != 1 {
+		t.Fatalf("expected one FoundationDBBackup, got %d", len(backups))
+	}
+	b := backups[0]
+	b.Status.BackupDetails = &foundationdbtypes.BackupDetails{Running: true}
+	b.Status.Generations = &foundationdbtypes.BackupGenerationStatus{Reconciled: b.Generation}
+	if err := c.Update(context.Background(), &b); err != nil {
+		t.Fatalf("set backup status: %v", err)
+	}
+
+	if _, err := r.reconcileFoundationDB(context.Background(), job, resolved); err != nil {
+		t.Fatalf("second reconcile: %v", err)
+	}
+	got := listFoundationDBBackups(t, c)[0]
+	if got.Annotations[foundationdbStatusRefreshAnnotation] == "" {
+		t.Errorf("a reconciled, not yet restorable backup must get a status-refresh annotation; annotations=%v", got.Annotations)
+	}
+}
+
+func TestReconcileFoundationDBRestore_TransientAgentErrorRequeues(t *testing.T) {
+	funcs := interceptor.Funcs{
+		Get: func(ctx context.Context, cl client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+			if _, ok := obj.(*strategyv1alpha1.FoundationDB); ok {
+				return apierrors.NewServiceUnavailable("injected outage")
+			}
+			return cl.Get(ctx, key, obj, opts...)
+		},
+	}
+	c, r, rj, backup := seedFoundationDBRestore(t, foundationdbRestoreSeed{toCopy: true, funcs: &funcs})
+
+	if _, err := r.reconcileFoundationDBRestore(context.Background(), rj, backup); err == nil {
+		t.Fatalf("expected the transient error returned for a requeue")
+	}
+	if rj.Status.Phase == backupsv1alpha1.RestoreJobPhaseFailed {
+		t.Errorf("a transient error must not fail the RestoreJob")
+	}
+	if agents := listFoundationDBBackups(t, c); len(agents) != 0 {
+		t.Errorf("no agents expected after the failed attempt, got %d", len(agents))
+	}
+}
+
+func TestReconcileFoundationDBRestore_MissingStrategyFailsRestore(t *testing.T) {
+	_, r, rj, backup := seedFoundationDBRestore(t, foundationdbRestoreSeed{toCopy: true})
+	backup.Spec.StrategyRef.Name = "gone"
+
+	if _, err := r.reconcileFoundationDBRestore(context.Background(), rj, backup); err != nil {
+		t.Fatalf("reconcileFoundationDBRestore: %v", err)
+	}
+	if rj.Status.Phase != backupsv1alpha1.RestoreJobPhaseFailed {
+		t.Errorf("phase = %q, want Failed for a strategy that does not exist", rj.Status.Phase)
+	}
+}
+
+func TestCreateFoundationDBBackupArtifact_RecordsDirectoryOwnership(t *testing.T) {
+	apps := foundationdbapp.GroupName
+	strategyAPIGroup := strategyv1alpha1.GroupVersion.Group
+	for _, tc := range []struct {
+		name         string
+		crBackupName string
+		rendered     string
+		wantOwned    bool
+	}{
+		{"driver-named directory is owned", "tenant/bj-own", "", true},
+		{"pinned directory is shared", "fdb-src", "{{ .Application.metadata.name }}", false},
+		{"pin cleared after the CR was created keeps the shared directory", "fdb-src", "", false},
+		{"pin added after the CR was created keeps the job's own directory", "tenant/bj-own", "{{ .Application.metadata.name }}", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			job := &backupsv1alpha1.BackupJob{
+				ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "bj-own"},
+				Spec: backupsv1alpha1.BackupJobSpec{
+					ApplicationRef: corev1.TypedLocalObjectReference{Kind: "FoundationDB", Name: "fdb-src", APIGroup: &apps},
+				},
+			}
+			c := newFoundationDBStrategyTestClient(t, job)
+			r := &BackupJobReconciler{Client: c, Scheme: c.Scheme()}
+			resolved := &ResolvedBackupConfig{
+				StrategyRef: corev1.TypedLocalObjectReference{APIGroup: &strategyAPIGroup, Kind: strategyv1alpha1.FoundationDBStrategyKind, Name: "fdb-strategy"},
+			}
+			rendered := newRenderedFoundationDBTemplate()
+			rendered.BlobStoreConfiguration.BackupName = tc.rendered
+			fdbBackup := &foundationdbtypes.FoundationDBBackup{
+				ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "fdb-bk"},
+				Spec: foundationdbtypes.FoundationDBBackupSpec{
+					Version:                "7.3.79",
+					BlobStoreConfiguration: foundationdbtypes.BlobStoreConfiguration{BackupName: tc.crBackupName},
+				},
+				Status: foundationdbtypes.FoundationDBBackupStatus{BackupDetails: &foundationdbtypes.BackupDetails{Running: true, Restorable: true}},
+			}
+			artifact, err := r.createFoundationDBBackupArtifact(context.Background(), job, resolved, fdbBackup, rendered, newFoundationDBApp("fdb-src", "tenant"))
+			if err != nil {
+				t.Fatalf("createFoundationDBBackupArtifact: %v", err)
+			}
+			md := artifact.Spec.DriverMetadata
+			if (md[foundationdbOwnsDirectoryKey] == "true") != tc.wantOwned {
+				t.Errorf("owns-directory = %q, want owned=%v", md[foundationdbOwnsDirectoryKey], tc.wantOwned)
+			}
+			if md[foundationdbAgentVersionKey] != "7.3.79" {
+				t.Errorf("agent-version = %q, want 7.3.79", md[foundationdbAgentVersionKey])
+			}
+		})
+	}
+}
+
+func TestReconcileFoundationDB_PrunesStoppedPriorBackups(t *testing.T) {
+	c, job, resolved := reconcileFoundationDBSeed(
+		t,
+		foundationdbtypes.FoundationDBClusterSpec{Version: "7.3.63"},
+		foundationdbtypes.FoundationDBClusterStatus{Health: foundationdbtypes.FoundationDBClusterHealth{Available: true}},
+	)
+	cluster := foundationdbClusterNameForApp("fdb-src")
+	prior := func(name string, generation, reconciled int64, extra map[string]string) *foundationdbtypes.FoundationDBBackup {
+		labels := map[string]string{foundationdbClusterLabel: cluster}
+		for k, v := range extra {
+			labels[k] = v
+		}
+		return &foundationdbtypes.FoundationDBBackup{
+			ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: name, Generation: generation, Labels: labels},
+			Spec:       foundationdbtypes.FoundationDBBackupSpec{ClusterName: cluster, Version: "7.3.79", BackupState: foundationdbtypes.BackupStateStopped},
+			Status:     foundationdbtypes.FoundationDBBackupStatus{Generations: &foundationdbtypes.BackupGenerationStatus{Reconciled: reconciled}},
+		}
+	}
+	for _, obj := range []*foundationdbtypes.FoundationDBBackup{
+		prior("stopped-done", 2, 2, nil),
+		prior("stopped-pending", 2, 1, nil),
+		prior("restore-agents", 1, 1, map[string]string{foundationdbRestoreAgentsLabel: "rj"}),
+	} {
+		if err := c.Create(context.Background(), obj); err != nil {
+			t.Fatalf("seed %s: %v", obj.Name, err)
+		}
+	}
+	r := &BackupJobReconciler{Client: c, Scheme: c.Scheme(), Recorder: record.NewFakeRecorder(10)}
+	ctx := context.Background()
+	reconcileNames := func() map[string]bool {
+		t.Helper()
+		fresh := &backupsv1alpha1.BackupJob{}
+		if err := c.Get(ctx, client.ObjectKeyFromObject(job), fresh); err != nil {
+			t.Fatalf("get job: %v", err)
+		}
+		if _, err := r.reconcileFoundationDB(ctx, fresh, resolved); err != nil {
+			t.Fatalf("reconcileFoundationDB: %v", err)
+		}
+		names := map[string]bool{}
+		for _, b := range listFoundationDBBackups(t, c) {
+			names[b.Name] = true
+		}
+		return names
+	}
+
+	names := reconcileNames()
+	if names["stopped-done"] {
+		t.Errorf("a prior backup whose stop the operator reconciled must be deleted")
+	}
+	if !names["stopped-pending"] {
+		t.Errorf("a prior backup must stay until the operator has acted on its stop")
+	}
+	if !names["restore-agents"] {
+		t.Errorf("restore agents must not be pruned by the backup path")
+	}
+	if len(names) != 2 {
+		t.Errorf("no new backup may start while a restore runs into the cluster, got %v", names)
+	}
+
+	// The restore finishes and its agents go.
+	if err := c.Delete(ctx, &foundationdbtypes.FoundationDBBackup{ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "restore-agents"}}); err != nil {
+		t.Fatalf("delete restore agents: %v", err)
+	}
+	if names := reconcileNames(); len(names) != 1 || !names["stopped-pending"] {
+		t.Errorf("no new backup may start while a stop is pending, got %v", names)
+	}
+	pending := &foundationdbtypes.FoundationDBBackup{}
+	if err := c.Get(ctx, types.NamespacedName{Namespace: "tenant", Name: "stopped-pending"}, pending); err != nil {
+		t.Fatalf("get stopped-pending: %v", err)
+	}
+	if pending.Annotations[foundationdbStatusRefreshAnnotation] == "" {
+		t.Errorf("a stop the operator has not acted on must be refreshed rather than left to its error backoff")
+	}
+	pending.Status.Generations.Reconciled = pending.Generation
+	if err := c.Update(ctx, pending); err != nil {
+		t.Fatalf("mark stop reconciled: %v", err)
+	}
+	if names := reconcileNames(); len(names) != 1 || names["stopped-pending"] {
+		t.Errorf("once the stop is reconciled the prior CR goes and the new backup starts, got %v", names)
+	}
+}
+
+// A restore runs on a stopped agents CR; a backup started next to it would be
+// discontinued the next time the operator reconciles that CR.
+func TestReconcileFoundationDB_WaitsForRestoreIntoTheCluster(t *testing.T) {
+	c, job, resolved := reconcileFoundationDBSeed(
+		t,
+		foundationdbtypes.FoundationDBClusterSpec{Version: "7.3.63"},
+		foundationdbtypes.FoundationDBClusterStatus{Health: foundationdbtypes.FoundationDBClusterHealth{Available: true}},
+	)
+	ctx := context.Background()
+	cluster := foundationdbClusterNameForApp("fdb-src")
+	if err := c.Create(ctx, &foundationdbtypes.FoundationDBBackup{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace: "tenant", Name: "rj-agents", Generation: 1,
+			Labels: map[string]string{foundationdbClusterLabel: cluster, foundationdbRestoreAgentsLabel: "rj"},
+		},
+		Spec:   foundationdbtypes.FoundationDBBackupSpec{ClusterName: cluster, Version: "7.3.79", BackupState: foundationdbtypes.BackupStateStopped},
+		Status: foundationdbtypes.FoundationDBBackupStatus{Generations: &foundationdbtypes.BackupGenerationStatus{Reconciled: 1}},
+	}); err != nil {
+		t.Fatalf("seed agents: %v", err)
+	}
+	r := &BackupJobReconciler{Client: c, Scheme: c.Scheme(), Recorder: record.NewFakeRecorder(10)}
+	if _, err := r.reconcileFoundationDB(ctx, job, resolved); err != nil {
+		t.Fatalf("reconcileFoundationDB: %v", err)
+	}
+	if n := len(listFoundationDBBackups(t, c)); n != 1 {
+		t.Errorf("no backup may start while a restore runs into the cluster, got %d CRs", n)
+	}
+}
+
+// A BackupJob that fails to reach the API server is retried within its
+// deadline: an earlier pass may already have stopped the cluster's backup.
+func TestReconcileFoundationDB_TransientEnsureErrorIsRetried(t *testing.T) {
+	c, job, resolved := reconcileFoundationDBSeed(
+		t,
+		foundationdbtypes.FoundationDBClusterSpec{Version: "7.3.63"},
+		foundationdbtypes.FoundationDBClusterStatus{Health: foundationdbtypes.FoundationDBClusterHealth{Available: true}},
+	)
+	unavailable := apierrors.NewServiceUnavailable("apiserver restarting")
+	faulty := interceptor.NewClient(c.(client.WithWatch), interceptor.Funcs{
+		Get: func(ctx context.Context, cl client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+			if _, ok := obj.(*backupsv1alpha1.Backup); ok {
+				return unavailable
+			}
+			return cl.Get(ctx, key, obj, opts...)
+		},
+	})
+	r := &BackupJobReconciler{Client: faulty, Scheme: c.Scheme(), Recorder: record.NewFakeRecorder(10)}
+
+	if _, err := r.reconcileFoundationDB(context.Background(), job, resolved); err == nil {
+		t.Fatalf("a transient error must be returned for a requeue")
+	}
+	if job.Status.Phase == backupsv1alpha1.BackupJobPhaseFailed {
+		t.Errorf("a transient error must not fail the BackupJob")
+	}
+}
+
+// The operator reports backup state for the whole cluster, so a stopped CR it
+// has reconciled can still show the previous backup running. A new CR created
+// then would make the operator move that backup into the new directory.
+func TestReconcileFoundationDB_WaitsForPreviousBackupToStopRunning(t *testing.T) {
+	c, job, resolved := reconcileFoundationDBSeed(
+		t,
+		foundationdbtypes.FoundationDBClusterSpec{Version: "7.3.63"},
+		foundationdbtypes.FoundationDBClusterStatus{Health: foundationdbtypes.FoundationDBClusterHealth{Available: true}},
+	)
+	ctx := context.Background()
+	cluster := foundationdbClusterNameForApp("fdb-src")
+	prior := &foundationdbtypes.FoundationDBBackup{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace: "tenant", Name: "prior", Generation: 2,
+			Labels: map[string]string{foundationdbClusterLabel: cluster, backupsv1alpha1.OwningJobNameLabel: "bj-old", backupsv1alpha1.OwningJobNamespaceLabel: "tenant"},
+		},
+		Spec: foundationdbtypes.FoundationDBBackupSpec{ClusterName: cluster, Version: "7.3.79", BackupState: foundationdbtypes.BackupStateRunning},
+		// The fake client does not bump generation on the stop patch, so
+		// the operator not having acted on it yet is modelled directly.
+		Status: foundationdbtypes.FoundationDBBackupStatus{
+			Generations:   &foundationdbtypes.BackupGenerationStatus{Reconciled: 1},
+			BackupDetails: &foundationdbtypes.BackupDetails{Running: true, Restorable: true, URL: "blobstore://@s3/tenant/bj-old?bucket=b"},
+		},
+	}
+	if err := c.Create(ctx, prior); err != nil {
+		t.Fatalf("seed prior: %v", err)
+	}
+	r := &BackupJobReconciler{Client: c, Scheme: c.Scheme(), Recorder: record.NewFakeRecorder(10)}
+	reconcile := func() {
+		t.Helper()
+		fresh := &backupsv1alpha1.BackupJob{}
+		if err := c.Get(ctx, client.ObjectKeyFromObject(job), fresh); err != nil {
+			t.Fatalf("get job: %v", err)
+		}
+		if _, err := r.reconcileFoundationDB(ctx, fresh, resolved); err != nil {
+			t.Fatalf("reconcileFoundationDB: %v", err)
+		}
+	}
+	got := func(name string) *foundationdbtypes.FoundationDBBackup {
+		t.Helper()
+		b := &foundationdbtypes.FoundationDBBackup{}
+		if err := c.Get(ctx, types.NamespacedName{Namespace: "tenant", Name: name}, b); err != nil {
+			t.Fatalf("get %s: %v", name, err)
+		}
+		return b
+	}
+
+	reconcile()
+	if n := len(listFoundationDBBackups(t, c)); n != 1 {
+		t.Fatalf("no new backup may start before the previous one is stopped, got %d CRs", n)
+	}
+	if got("prior").Spec.BackupState != foundationdbtypes.BackupStateStopped {
+		t.Fatalf("the previous backup must be stopped")
+	}
+	// The operator acts on the stop, but its status still shows the cluster's
+	// backup running: the driver must ask for a fresh status and keep waiting.
+	stopped := got("prior")
+	stopped.Status.Generations.Reconciled = stopped.Generation
+	if err := c.Update(ctx, stopped); err != nil {
+		t.Fatalf("mark stop reconciled: %v", err)
+	}
+	reconcile()
+	stopped = got("prior")
+	if n := len(listFoundationDBBackups(t, c)); n != 1 {
+		t.Fatalf("no new backup may start while the cluster still reports a backup running, got %d CRs", n)
+	}
+	if stopped.Annotations[foundationdbStatusRefreshAnnotation] == "" {
+		t.Errorf("the stopped CR must be asked for a status refresh")
+	}
+
+	stopped.Status.BackupDetails.Running = false
+	if err := c.Update(ctx, stopped); err != nil {
+		t.Fatalf("mark backup stopped: %v", err)
+	}
+	reconcile()
+	var created []foundationdbtypes.FoundationDBBackup
+	for _, b := range listFoundationDBBackups(t, c) {
+		if b.Labels[backupsv1alpha1.OwningJobNameLabel] == job.Name {
+			created = append(created, b)
+		}
+	}
+	if len(created) != 1 || created[0].Spec.BackupState != foundationdbtypes.BackupStateRunning {
+		t.Errorf("the new backup must start once the previous one stopped running, got %+v", created)
+	}
+}
+
+// A stopped backup that never became restorable keeps running: discontinue
+// waits for a restorable snapshot. Once the job that ran it is over, the next
+// BackupJob of the cluster aborts it instead of waiting forever.
+func TestReconcileFoundationDB_AbortsStuckBackupOfFinishedJob(t *testing.T) {
+	c, job, resolved := reconcileFoundationDBSeed(
+		t,
+		foundationdbtypes.FoundationDBClusterSpec{Version: "7.3.63"},
+		foundationdbtypes.FoundationDBClusterStatus{Health: foundationdbtypes.FoundationDBClusterHealth{Available: true}},
+	)
+	ctx := context.Background()
+	cluster := foundationdbClusterNameForApp("fdb-src")
+	failed := &backupsv1alpha1.BackupJob{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "bj-failed"},
+		Spec:       job.Spec,
+	}
+	if err := c.Create(ctx, failed); err != nil {
+		t.Fatalf("seed failed job: %v", err)
+	}
+	failed.Status.Phase = backupsv1alpha1.BackupJobPhaseFailed
+	if err := c.Status().Update(ctx, failed); err != nil {
+		t.Fatalf("seed failed job status: %v", err)
+	}
+	stuck := &foundationdbtypes.FoundationDBBackup{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace: "tenant", Name: "bj-failed-x", Generation: 2,
+			Labels: map[string]string{
+				foundationdbClusterLabel:                cluster,
+				backupsv1alpha1.OwningJobNameLabel:      failed.Name,
+				backupsv1alpha1.OwningJobNamespaceLabel: failed.Namespace,
+			},
+		},
+		Spec: foundationdbtypes.FoundationDBBackupSpec{
+			ClusterName: cluster, Version: "7.3.79", BackupState: foundationdbtypes.BackupStateStopped,
+			BlobStoreConfiguration: foundationdbtypes.BlobStoreConfiguration{BackupName: "tenant/bj-failed"},
+		},
+		Status: foundationdbtypes.FoundationDBBackupStatus{
+			Generations:   &foundationdbtypes.BackupGenerationStatus{Reconciled: 1},
+			BackupDetails: &foundationdbtypes.BackupDetails{Running: true},
+		},
+	}
+	if err := c.Create(ctx, stuck); err != nil {
+		t.Fatalf("seed stuck: %v", err)
+	}
+	r := &BackupJobReconciler{Client: c, Scheme: c.Scheme(), Recorder: record.NewFakeRecorder(10)}
+	fresh := &backupsv1alpha1.BackupJob{}
+	if err := c.Get(ctx, client.ObjectKeyFromObject(job), fresh); err != nil {
+		t.Fatalf("get job: %v", err)
+	}
+	if _, err := r.reconcileFoundationDB(ctx, fresh, resolved); err != nil {
+		t.Fatalf("reconcileFoundationDB: %v", err)
+	}
+
+	got := &foundationdbtypes.FoundationDBBackup{}
+	if err := c.Get(ctx, client.ObjectKeyFromObject(stuck), got); err != nil {
+		t.Fatalf("the stuck CR must wait on the operator's finalizer: %v", err)
+	}
+	if got.DeletionTimestamp == nil || !controllerutil.ContainsFinalizer(got, foundationdbOperatorFinalizer) {
+		t.Errorf("the stuck backup must be aborted through the operator, got %+v", got.ObjectMeta)
+	}
+	if got.Spec.DeletionPolicy == nil || *got.Spec.DeletionPolicy != foundationdbDeletionPolicyStop {
+		t.Errorf("the abort must not depend on the operator deleting data, deletionPolicy = %v", got.Spec.DeletionPolicy)
+	}
+	if n := len(listFoundationDBBackups(t, c)); n != 1 {
+		t.Errorf("no new backup may start until the abort is through, got %d CRs", n)
+	}
+}
+
+// A BackupJob whose CR a later job stopped before its first snapshot still
+// gets a backup: discontinue lets it reach a restorable snapshot and then ends
+// it, so the stopped CR reports its own directory restorable and not running.
+func TestReconcileFoundationDB_StoppedBackupThatCompletedSucceeds(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		reconciled int64
+		running    bool
+	}{
+		{"completed after the stop", 2, false},
+		{"restorable while the operator has not acted on the stop yet", 1, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c, job, resolved := reconcileFoundationDBSeed(
+				t,
+				foundationdbtypes.FoundationDBClusterSpec{Version: "7.3.63"},
+				foundationdbtypes.FoundationDBClusterStatus{Health: foundationdbtypes.FoundationDBClusterHealth{Available: true}},
+			)
+			ctx := context.Background()
+			cluster := foundationdbClusterNameForApp("fdb-src")
+			cfg := foundationdbtypes.BlobStoreConfiguration{AccountName: "@s3.example.com", Bucket: "b", BackupName: "tenant/bj"}
+			url, err := foundationdbBlobURL(cfg)
+			if err != nil {
+				t.Fatalf("foundationdbBlobURL: %v", err)
+			}
+			completed := &foundationdbtypes.FoundationDBBackup{
+				ObjectMeta: metav1.ObjectMeta{
+					Namespace: "tenant", Name: "bj-x", Generation: 2,
+					Labels: map[string]string{
+						foundationdbClusterLabel:                cluster,
+						backupsv1alpha1.OwningJobNameLabel:      job.Name,
+						backupsv1alpha1.OwningJobNamespaceLabel: job.Namespace,
+					},
+				},
+				Spec: foundationdbtypes.FoundationDBBackupSpec{ClusterName: cluster, Version: "7.3.79", BackupState: foundationdbtypes.BackupStateStopped, BlobStoreConfiguration: cfg},
+				Status: foundationdbtypes.FoundationDBBackupStatus{
+					Generations:   &foundationdbtypes.BackupGenerationStatus{Reconciled: tc.reconciled},
+					BackupDetails: &foundationdbtypes.BackupDetails{Running: tc.running, Restorable: true, URL: url},
+				},
+			}
+			if err := c.Create(ctx, completed); err != nil {
+				t.Fatalf("seed completed backup: %v", err)
+			}
+			r := &BackupJobReconciler{Client: c, Scheme: c.Scheme(), Recorder: record.NewFakeRecorder(10)}
+
+			if _, err := r.reconcileFoundationDB(ctx, job, resolved); err != nil {
+				t.Fatalf("reconcileFoundationDB: %v", err)
+			}
+			if job.Status.Phase != backupsv1alpha1.BackupJobPhaseSucceeded || job.Status.BackupRef == nil {
+				t.Fatalf("a completed stopped backup in the job's own directory must succeed, got phase %q", job.Status.Phase)
+			}
+			if err := c.Get(ctx, types.NamespacedName{Namespace: job.Namespace, Name: job.Status.BackupRef.Name}, &backupsv1alpha1.Backup{}); err != nil {
+				t.Errorf("the Backup that owns the directory must exist: %v", err)
+			}
+		})
+	}
+}
+
+// A stopped backup that is not restorable is aborted only for a job that
+// failed: one whose job succeeded had a restorable backup, which the stop ends.
+func TestReconcileFoundationDB_NeverAbortsBackupOfSucceededJob(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		jobExists bool
+	}{
+		{"succeeded job", true},
+		{"job deleted after recording its Backup", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c, job, resolved := reconcileFoundationDBSeed(
+				t,
+				foundationdbtypes.FoundationDBClusterSpec{Version: "7.3.63"},
+				foundationdbtypes.FoundationDBClusterStatus{Health: foundationdbtypes.FoundationDBClusterHealth{Available: true}},
+			)
+			ctx := context.Background()
+			cluster := foundationdbClusterNameForApp("fdb-src")
+			if tc.jobExists {
+				done := &backupsv1alpha1.BackupJob{ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "bj-done"}, Spec: job.Spec}
+				if err := c.Create(ctx, done); err != nil {
+					t.Fatalf("seed job: %v", err)
+				}
+				done.Status.Phase = backupsv1alpha1.BackupJobPhaseSucceeded
+				if err := c.Status().Update(ctx, done); err != nil {
+					t.Fatalf("seed job status: %v", err)
+				}
+			} else if err := c.Create(ctx, &backupsv1alpha1.Backup{ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "bj-done"}}); err != nil {
+				t.Fatalf("seed Backup: %v", err)
+			}
+			stopped := &foundationdbtypes.FoundationDBBackup{
+				ObjectMeta: metav1.ObjectMeta{
+					Namespace: "tenant", Name: "bj-done-x", Generation: 2,
+					Labels: map[string]string{
+						foundationdbClusterLabel:                cluster,
+						backupsv1alpha1.OwningJobNameLabel:      "bj-done",
+						backupsv1alpha1.OwningJobNamespaceLabel: "tenant",
+					},
+				},
+				Spec: foundationdbtypes.FoundationDBBackupSpec{ClusterName: cluster, Version: "7.3.79", BackupState: foundationdbtypes.BackupStateStopped},
+				Status: foundationdbtypes.FoundationDBBackupStatus{
+					Generations:   &foundationdbtypes.BackupGenerationStatus{Reconciled: 1},
+					BackupDetails: &foundationdbtypes.BackupDetails{Running: true},
+				},
+			}
+			if err := c.Create(ctx, stopped); err != nil {
+				t.Fatalf("seed stopped: %v", err)
+			}
+			r := &BackupJobReconciler{Client: c, Scheme: c.Scheme(), Recorder: record.NewFakeRecorder(10)}
+			if _, err := r.reconcileFoundationDB(ctx, job, resolved); err != nil {
+				t.Fatalf("reconcileFoundationDB: %v", err)
+			}
+			got := &foundationdbtypes.FoundationDBBackup{}
+			if err := c.Get(ctx, client.ObjectKeyFromObject(stopped), got); err != nil {
+				t.Fatalf("get stopped: %v", err)
+			}
+			if got.DeletionTimestamp != nil || got.Spec.DeletionPolicy != nil {
+				t.Errorf("the backup of a succeeded job must not be aborted, got %+v", got.ObjectMeta)
+			}
+		})
+	}
+}
+
+// The cache can show a stop patched in this pass as not applied yet, or the
+// stopped CR as already quiet; either way the new CR waits for a later pass.
+func TestEnsureFoundationDBBackup_DoesNotCreateInThePassThatStops(t *testing.T) {
+	c, job, resolved := reconcileFoundationDBSeed(
+		t,
+		foundationdbtypes.FoundationDBClusterSpec{Version: "7.3.63"},
+		foundationdbtypes.FoundationDBClusterStatus{Health: foundationdbtypes.FoundationDBClusterHealth{Available: true}},
+	)
+	ctx := context.Background()
+	cluster := foundationdbClusterNameForApp("fdb-src")
+	prior := &foundationdbtypes.FoundationDBBackup{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace: "tenant", Name: "prior", Generation: 1,
+			Labels: map[string]string{foundationdbClusterLabel: cluster, backupsv1alpha1.OwningJobNameLabel: "bj-old", backupsv1alpha1.OwningJobNamespaceLabel: "tenant"},
+		},
+		Spec: foundationdbtypes.FoundationDBBackupSpec{ClusterName: cluster, Version: "7.3.79", BackupState: foundationdbtypes.BackupStateRunning},
+		Status: foundationdbtypes.FoundationDBBackupStatus{
+			Generations:   &foundationdbtypes.BackupGenerationStatus{Reconciled: 1},
+			BackupDetails: &foundationdbtypes.BackupDetails{},
+		},
+	}
+	if err := c.Create(ctx, prior); err != nil {
+		t.Fatalf("seed prior: %v", err)
+	}
+	r := &BackupJobReconciler{Client: c, Scheme: c.Scheme(), Recorder: record.NewFakeRecorder(10)}
+	rendered, err := renderFoundationDBTemplate(*newRenderedFoundationDBTemplate(), newFoundationDBApp("fdb-src", "tenant"), resolved.Parameters)
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+
+	got, waiting, err := r.ensureFoundationDBBackup(ctx, job, cluster, "7.3.63", rendered)
+	if err != nil {
+		t.Fatalf("ensureFoundationDBBackup: %v", err)
+	}
+	if got != nil || waiting == "" || len(listFoundationDBBackups(t, c)) != 1 {
+		t.Errorf("the pass that stops the previous backup must not create a new one, got %v, %q", got, waiting)
+	}
+}
+
+func TestWaitForStoppedFoundationDBBackups_WaitsOnUnstoppedCR(t *testing.T) {
+	c, job, _ := reconcileFoundationDBSeed(
+		t,
+		foundationdbtypes.FoundationDBClusterSpec{Version: "7.3.63"},
+		foundationdbtypes.FoundationDBClusterStatus{Health: foundationdbtypes.FoundationDBClusterHealth{Available: true}},
+	)
+	ctx := context.Background()
+	cluster := foundationdbClusterNameForApp("fdb-src")
+	if err := c.Create(ctx, &foundationdbtypes.FoundationDBBackup{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "lagging", Labels: map[string]string{foundationdbClusterLabel: cluster}},
+		Spec:       foundationdbtypes.FoundationDBBackupSpec{ClusterName: cluster, Version: "7.3.79", BackupState: foundationdbtypes.BackupStateRunning},
+	}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	r := &BackupJobReconciler{Client: c, Scheme: c.Scheme(), Recorder: record.NewFakeRecorder(10)}
+	waiting, err := r.waitForStoppedFoundationDBBackups(ctx, job, cluster)
+	if err != nil || waiting == "" {
+		t.Errorf("a CR the cache still shows running must hold the new backup back, got %q, %v", waiting, err)
+	}
+}
+
+// A BackupJob recreated under the name of one that failed on its deadline
+// finds that job's stopped CR by the owning-job labels; reusing it would wait
+// on a backup that never runs again.
+func TestReconcileFoundationDB_RecreatedJobReplacesStoppedPreviousAttempt(t *testing.T) {
+	c, job, resolved := reconcileFoundationDBSeed(
+		t,
+		foundationdbtypes.FoundationDBClusterSpec{Version: "7.3.63"},
+		foundationdbtypes.FoundationDBClusterStatus{Health: foundationdbtypes.FoundationDBClusterHealth{Available: true}},
+	)
+	ctx := context.Background()
+	cluster := foundationdbClusterNameForApp("fdb-src")
+	previous := &foundationdbtypes.FoundationDBBackup{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace: "tenant", Name: "bj-previous", Generation: 2,
+			Labels: map[string]string{
+				foundationdbClusterLabel:                cluster,
+				backupsv1alpha1.OwningJobNameLabel:      job.Name,
+				backupsv1alpha1.OwningJobNamespaceLabel: job.Namespace,
+			},
+			Annotations: map[string]string{foundationdbOwningJobUIDAnnotation: "uid-of-the-failed-job"},
+		},
+		Spec: foundationdbtypes.FoundationDBBackupSpec{ClusterName: cluster, Version: "7.3.79", BackupState: foundationdbtypes.BackupStateStopped},
+		Status: foundationdbtypes.FoundationDBBackupStatus{
+			Generations:   &foundationdbtypes.BackupGenerationStatus{Reconciled: 2},
+			BackupDetails: &foundationdbtypes.BackupDetails{},
+		},
+	}
+	if err := c.Create(ctx, previous); err != nil {
+		t.Fatalf("seed previous: %v", err)
+	}
+	r := &BackupJobReconciler{Client: c, Scheme: c.Scheme(), Recorder: record.NewFakeRecorder(10)}
+	for range 2 {
+		fresh := &backupsv1alpha1.BackupJob{}
+		if err := c.Get(ctx, client.ObjectKeyFromObject(job), fresh); err != nil {
+			t.Fatalf("get job: %v", err)
+		}
+		if _, err := r.reconcileFoundationDB(ctx, fresh, resolved); err != nil {
+			t.Fatalf("reconcileFoundationDB: %v", err)
+		}
+	}
+
+	backups := listFoundationDBBackups(t, c)
+	if len(backups) != 1 || backups[0].Name == previous.Name || backups[0].Spec.BackupState != foundationdbtypes.BackupStateRunning {
+		t.Fatalf("the previous attempt's CR must be replaced by a running one, got %+v", backups)
+	}
+	if got := backups[0].Annotations[foundationdbOwningJobUIDAnnotation]; got != string(job.UID) {
+		t.Errorf("owning-job-uid = %q, want the job's UID %q", got, job.UID)
+	}
+}
+
+func TestReconcileFoundationDB_WaitsForSameNamedBackupDeletion(t *testing.T) {
+	c, job, resolved := reconcileFoundationDBSeed(
+		t,
+		foundationdbtypes.FoundationDBClusterSpec{Version: "7.3.63"},
+		foundationdbtypes.FoundationDBClusterStatus{Health: foundationdbtypes.FoundationDBClusterHealth{Available: true}},
+	)
+	ctx := context.Background()
+	deleting := &backupsv1alpha1.Backup{
+		ObjectMeta: metav1.ObjectMeta{Namespace: job.Namespace, Name: job.Name, Finalizers: []string{"test.cozystack.io/hold"}},
+	}
+	if err := c.Create(ctx, deleting); err != nil {
+		t.Fatalf("seed Backup: %v", err)
+	}
+	if err := c.Delete(ctx, deleting); err != nil {
+		t.Fatalf("delete Backup: %v", err)
+	}
+	r := &BackupJobReconciler{Client: c, Scheme: c.Scheme(), Recorder: record.NewFakeRecorder(10)}
+
+	if _, err := r.reconcileFoundationDB(ctx, job, resolved); err != nil {
+		t.Fatalf("reconcileFoundationDB: %v", err)
+	}
+	if n := len(listFoundationDBBackups(t, c)); n != 0 {
+		t.Errorf("no backup may write into a directory a deleting Backup is about to remove, got %d CRs", n)
+	}
+	if job.Status.Phase == backupsv1alpha1.BackupJobPhaseFailed {
+		t.Errorf("waiting for the deletion must not fail the job")
+	}
+}
+
+// A Backup named after the job already records a backup in the directory the
+// job would write; a new backup there would be deleted along with it.
+func TestReconcileFoundationDB_RefusesSameNamedLiveBackup(t *testing.T) {
+	c, job, resolved := reconcileFoundationDBSeed(
+		t,
+		foundationdbtypes.FoundationDBClusterSpec{Version: "7.3.63"},
+		foundationdbtypes.FoundationDBClusterStatus{Health: foundationdbtypes.FoundationDBClusterHealth{Available: true}},
+	)
+	ctx := context.Background()
+	if err := c.Create(ctx, &backupsv1alpha1.Backup{ObjectMeta: metav1.ObjectMeta{Namespace: job.Namespace, Name: job.Name}}); err != nil {
+		t.Fatalf("seed Backup: %v", err)
+	}
+	cluster := foundationdbClusterNameForApp("fdb-src")
+	running := &foundationdbtypes.FoundationDBBackup{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace: "tenant", Name: "nightly-running",
+			Labels: map[string]string{foundationdbClusterLabel: cluster, backupsv1alpha1.OwningJobNameLabel: "nightly", backupsv1alpha1.OwningJobNamespaceLabel: "tenant"},
+		},
+		Spec: foundationdbtypes.FoundationDBBackupSpec{ClusterName: cluster, Version: "7.3.79", BackupState: foundationdbtypes.BackupStateRunning},
+	}
+	if err := c.Create(ctx, running); err != nil {
+		t.Fatalf("seed running backup: %v", err)
+	}
+	r := &BackupJobReconciler{Client: c, Scheme: c.Scheme(), Recorder: record.NewFakeRecorder(10)}
+
+	if _, err := r.reconcileFoundationDB(ctx, job, resolved); err != nil {
+		t.Fatalf("reconcileFoundationDB: %v", err)
+	}
+	if job.Status.Phase != backupsv1alpha1.BackupJobPhaseFailed {
+		t.Errorf("phase = %q, want Failed for a name whose Backup already exists", job.Status.Phase)
+	}
+	backups := listFoundationDBBackups(t, c)
+	if len(backups) != 1 || backups[0].Spec.BackupState != foundationdbtypes.BackupStateRunning {
+		t.Errorf("a refused job must neither start a backup nor stop the cluster's running one, got %+v", backups)
+	}
+}
+
+// The first snapshot of a large database can take longer than the default
+// deadline, which aborts the backup with its data; backupTimeout raises it.
+func TestReconcileFoundationDB_BackupTimeoutParameterExtendsDeadline(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		params     map[string]string
+		wantFailed bool
+	}{
+		{"default deadline has passed", nil, true},
+		{"backupTimeout still covers the run", map[string]string{"backupTimeout": "3h"}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c, job, resolved := reconcileFoundationDBSeed(
+				t,
+				foundationdbtypes.FoundationDBClusterSpec{Version: "7.3.63"},
+				foundationdbtypes.FoundationDBClusterStatus{Health: foundationdbtypes.FoundationDBClusterHealth{Available: true}},
+			)
+			ctx := context.Background()
+			resolved.Parameters = tc.params
+			started := metav1.NewTime(time.Now().Add(-2 * foundationdbDefaultBackupDeadline))
+			job.Status.StartedAt = &started
+			if err := c.Status().Update(ctx, job); err != nil {
+				t.Fatalf("set StartedAt: %v", err)
+			}
+			r := &BackupJobReconciler{Client: c, Scheme: c.Scheme(), Recorder: record.NewFakeRecorder(10)}
+
+			if _, err := r.reconcileFoundationDB(ctx, job, resolved); err != nil {
+				t.Fatalf("reconcileFoundationDB: %v", err)
+			}
+			if failed := job.Status.Phase == backupsv1alpha1.BackupJobPhaseFailed; failed != tc.wantFailed {
+				t.Errorf("failed = %v, want %v (phase %q)", failed, tc.wantFailed, job.Status.Phase)
+			}
+		})
+	}
+}
+
+func TestCreateFoundationDBBackupArtifact_RefusesBackupOfAnotherCR(t *testing.T) {
+	apps := foundationdbapp.GroupName
+	strategyAPIGroup := strategyv1alpha1.GroupVersion.Group
+	job := &backupsv1alpha1.BackupJob{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "bj-reused"},
+		Spec: backupsv1alpha1.BackupJobSpec{
+			ApplicationRef: corev1.TypedLocalObjectReference{Kind: "FoundationDB", Name: "fdb-src", APIGroup: &apps},
+		},
+	}
+	old := &backupsv1alpha1.Backup{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "bj-reused"},
+		Spec:       backupsv1alpha1.BackupSpec{DriverMetadata: map[string]string{foundationdbBackupNameKey: "bj-reused-old"}},
+	}
+	c := newFoundationDBStrategyTestClient(t, job, old)
+	r := &BackupJobReconciler{Client: c, Scheme: c.Scheme()}
+	resolved := &ResolvedBackupConfig{
+		StrategyRef: corev1.TypedLocalObjectReference{APIGroup: &strategyAPIGroup, Kind: strategyv1alpha1.FoundationDBStrategyKind, Name: "fdb-strategy"},
+	}
+	fdbBackup := &foundationdbtypes.FoundationDBBackup{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "bj-reused-new"},
+		Spec: foundationdbtypes.FoundationDBBackupSpec{
+			Version:                "7.3.79",
+			BlobStoreConfiguration: foundationdbtypes.BlobStoreConfiguration{BackupName: "tenant/bj-reused"},
+		},
+	}
+	if _, err := r.createFoundationDBBackupArtifact(context.Background(), job, resolved, fdbBackup, newRenderedFoundationDBTemplate(), newFoundationDBApp("fdb-src", "tenant")); err == nil {
+		t.Fatalf("a Backup recording another FoundationDBBackup must not be adopted")
+	}
+}
+
+// Two BackupJobs of one cluster overlap when the second starts before the
+// first reaches a restorable snapshot. The first one's CR is stopped; it must
+// not be pruned while that job still runs, or the job recreates it and stops
+// the newer backup in turn.
+func TestReconcileFoundationDB_OverlappingJobsDoNotStopEachOther(t *testing.T) {
+	c, bj, resolved := reconcileFoundationDBSeed(
+		t,
+		foundationdbtypes.FoundationDBClusterSpec{Version: "7.3.63"},
+		foundationdbtypes.FoundationDBClusterStatus{Health: foundationdbtypes.FoundationDBClusterHealth{Available: true}},
+	)
+	ctx := context.Background()
+	bj2 := bj.DeepCopy()
+	bj2.ObjectMeta = metav1.ObjectMeta{Namespace: bj.Namespace, Name: "bj2"}
+	if err := c.Create(ctx, bj2); err != nil {
+		t.Fatalf("seed bj2: %v", err)
+	}
+	if err := c.Status().Update(ctx, bj2); err != nil {
+		t.Fatalf("seed bj2 status: %v", err)
+	}
+	r := &BackupJobReconciler{Client: c, Scheme: c.Scheme(), Recorder: record.NewFakeRecorder(10)}
+	reconcile := func(j *backupsv1alpha1.BackupJob) {
+		t.Helper()
+		fresh := &backupsv1alpha1.BackupJob{}
+		if err := c.Get(ctx, client.ObjectKeyFromObject(j), fresh); err != nil {
+			t.Fatalf("get %s: %v", j.Name, err)
+		}
+		if _, err := r.reconcileFoundationDB(ctx, fresh, resolved); err != nil {
+			t.Fatalf("reconcile %s: %v", j.Name, err)
+		}
+	}
+	ownedBy := func(job string) []foundationdbtypes.FoundationDBBackup {
+		var out []foundationdbtypes.FoundationDBBackup
+		for _, b := range listFoundationDBBackups(t, c) {
+			if b.Labels[backupsv1alpha1.OwningJobNameLabel] == job {
+				out = append(out, b)
+			}
+		}
+		return out
+	}
+
+	reconcile(bj)
+	reconcile(bj2)
+	// The operator acts on the stop of bj's CR.
+	first := ownedBy(bj.Name)
+	if len(first) != 1 || first[0].Spec.BackupState != foundationdbtypes.BackupStateStopped {
+		t.Fatalf("expected bj's CR stopped by bj2, got %+v", first)
+	}
+	first[0].Status.Generations = &foundationdbtypes.BackupGenerationStatus{Reconciled: first[0].Generation}
+	if err := c.Update(ctx, &first[0]); err != nil {
+		t.Fatalf("mark stop reconciled: %v", err)
+	}
+	reconcile(bj2)
+	reconcile(bj)
+	reconcile(bj2)
+
+	second := ownedBy("bj2")
+	if len(second) != 1 || second[0].Spec.BackupState != foundationdbtypes.BackupStateRunning {
+		t.Errorf("the newer backup must keep running, got %+v", second)
+	}
+	if got := ownedBy(bj.Name); len(got) != 1 || got[0].Spec.BackupState != foundationdbtypes.BackupStateStopped {
+		t.Errorf("the older job must keep its stopped CR instead of recreating a running one, got %+v", got)
+	}
+}
+
+func TestReconcileFoundationDBRestore_InvalidAgentsFailRestore(t *testing.T) {
+	funcs := interceptor.Funcs{
+		Create: func(ctx context.Context, cl client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
+			if _, ok := obj.(*foundationdbtypes.FoundationDBBackup); ok {
+				return apierrors.NewInvalid(foundationdbtypes.GroupVersion.WithKind("FoundationDBBackup").GroupKind(), obj.GetName(), nil)
+			}
+			return cl.Create(ctx, obj, opts...)
+		},
+	}
+	_, r, rj, backup := seedFoundationDBRestore(t, foundationdbRestoreSeed{toCopy: true, funcs: &funcs})
+
+	if _, err := r.reconcileFoundationDBRestore(context.Background(), rj, backup); err != nil {
+		t.Fatalf("an invalid agents object must fail the RestoreJob, not requeue: %v", err)
+	}
+	if rj.Status.Phase != backupsv1alpha1.RestoreJobPhaseFailed {
+		t.Errorf("phase = %q, want Failed", rj.Status.Phase)
 	}
 }

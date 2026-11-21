@@ -136,9 +136,12 @@ func (in *FoundationDBBackupSpec) DeepCopyInto(out *FoundationDBBackupSpec) {
 	if in.CustomParameters != nil {
 		out.CustomParameters = append([]string(nil), in.CustomParameters...)
 	}
-	if in.BackupDeploymentSpec != nil {
-		out.BackupDeploymentSpec = new(BackupDeploymentSpec)
-		in.BackupDeploymentSpec.DeepCopyInto(out.BackupDeploymentSpec)
+	if in.PodTemplateSpec != nil {
+		out.PodTemplateSpec = in.PodTemplateSpec.DeepCopy()
+	}
+	if in.DeletionPolicy != nil {
+		out.DeletionPolicy = new(string)
+		*out.DeletionPolicy = *in.DeletionPolicy
 	}
 }
 
@@ -170,13 +173,6 @@ func (in *FoundationDBBackupStatus) DeepCopy() *FoundationDBBackupStatus {
 	out := new(FoundationDBBackupStatus)
 	in.DeepCopyInto(out)
 	return out
-}
-
-func (in *BackupDeploymentSpec) DeepCopyInto(out *BackupDeploymentSpec) {
-	*out = *in
-	if in.PodTemplateSpec != nil {
-		out.PodTemplateSpec = in.PodTemplateSpec.DeepCopy()
-	}
 }
 
 func (in *BlobStoreConfiguration) DeepCopyInto(out *BlobStoreConfiguration) {

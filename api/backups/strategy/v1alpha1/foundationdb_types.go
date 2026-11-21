@@ -66,8 +66,7 @@ type FoundationDBSpec struct {
 	//                  access keys through BackupDeploymentPodTemplateSpec
 	//                  volumes/env (typical pattern: mount a Secret-backed
 	//                  blob_credentials.json file and set
-	//                  FDB_BLOB_CREDENTIALS to its path, or pass
-	//                  --blob_credentials=<path> via CustomParameters).
+	//                  FDB_BLOB_CREDENTIALS to its path).
 	Template FoundationDBTemplate `json:"template"`
 }
 
@@ -93,8 +92,9 @@ type FoundationDBTemplate struct {
 
 	// CustomParameters are extra knobs passed to the backup_agent and
 	// fdbrestore processes. Templating is supported on each element.
-	// Common entries include --blob_credentials=<path> and the
-	// --knob_http_request_* tuning knobs.
+	// Write each entry without leading dashes (e.g.
+	// knob_http_request_timeout=60): the FoundationDB operator prepends
+	// "--" itself.
 	// +optional
 	CustomParameters []string `json:"customParameters,omitempty"`
 
@@ -103,8 +103,18 @@ type FoundationDBTemplate struct {
 	// +optional
 	EncryptionKeyPath string `json:"encryptionKeyPath,omitempty"`
 
+	// MinimumAgentVersions raises the backup_agent above the cluster's own
+	// patch release. For each listed version, a cluster on the same
+	// major.minor but an older patch runs its backup agents at the listed
+	// version instead; patch releases of one minor are wire-compatible, so
+	// agents pick up client-side fixes (such as TLS SNI, needed by
+	// SNI-routed S3 endpoints) without upgrading the cluster.
+	// +optional
+	// +kubebuilder:validation:items:Pattern=`^[0-9]+\.[0-9]+\.[0-9]+$`
+	MinimumAgentVersions []string `json:"minimumAgentVersions,omitempty"`
+
 	// BackupDeploymentPodTemplateSpec is the PodTemplateSpec the driver
-	// stamps onto FoundationDBBackup.spec.backupDeploymentSpec.podTemplateSpec.
+	// stamps onto FoundationDBBackup.spec.podTemplateSpec.
 	// Admins use it to mount credentials, CA bundles, or any other
 	// per-tenant secrets the backup_agent needs. Templating is supported
 	// on every string field.
@@ -139,9 +149,9 @@ type FoundationDBBlobStoreTemplate struct {
 	Bucket string `json:"bucket,omitempty"`
 
 	// BackupName is the per-cluster path segment under the bucket. When
-	// empty, the driver fills it per BackupJob to give each run a
-	// discrete S3 path (one operator backup directory per Cozystack
-	// Backup artefact). Templating is supported.
+	// empty, the driver fills it with "<namespace>/<BackupJob name>" to
+	// give each run a discrete S3 path (one operator backup directory per
+	// Cozystack Backup artefact). Templating is supported.
 	// +optional
 	// +kubebuilder:validation:MaxLength=1024
 	BackupName string `json:"backupName,omitempty"`

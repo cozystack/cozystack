@@ -153,16 +153,22 @@ func kafkaStrategyParameters(b *backupsv1alpha1.Backup) map[string]string {
 // silent fallback becomes a Warning Event the caller records; it is empty when the
 // value is honoured or unset.
 func kafkaRunDeadline(parameters map[string]string) (time.Duration, string) {
+	return backupTimeoutDeadline(parameters, kafkaDefaultBackupDeadline)
+}
+
+// backupTimeoutDeadline reads the backupTimeout BackupClass parameter with
+// def as the fallback; see kafkaRunDeadline for the contract.
+func backupTimeoutDeadline(parameters map[string]string, def time.Duration) (time.Duration, string) {
 	v := parameters[kafkaBackupTimeoutParam]
 	if v == "" {
-		return kafkaDefaultBackupDeadline, ""
+		return def, ""
 	}
 	d, err := time.ParseDuration(v)
 	switch {
 	case err != nil:
-		return kafkaDefaultBackupDeadline, fmt.Sprintf("backupTimeout %q is not a valid Go duration; applying the default %s", v, kafkaDefaultBackupDeadline)
+		return def, fmt.Sprintf("backupTimeout %q is not a valid Go duration; applying the default %s", v, def)
 	case d < kafkaMinBackupDeadline:
-		return kafkaDefaultBackupDeadline, fmt.Sprintf("backupTimeout %q is below the %s floor; applying the default %s", v, kafkaMinBackupDeadline, kafkaDefaultBackupDeadline)
+		return def, fmt.Sprintf("backupTimeout %q is below the %s floor; applying the default %s", v, kafkaMinBackupDeadline, def)
 	default:
 		return d, ""
 	}
