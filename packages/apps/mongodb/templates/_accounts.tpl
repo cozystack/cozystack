@@ -23,7 +23,7 @@
   for it would mint a password that never reaches the engine.
 */}}
 {{- define "mongodb.accountsGuard" -}}
-{{- $reserved := list "backup" "clusterAdmin" "clusterMonitor" "databaseAdmin" "userAdmin" -}}
+{{- $reserved := include "mongodb.systemUserNames" . | fromJsonArray -}}
 {{- $seen := dict -}}
 {{- range $user, $_ := .Values.users -}}
   {{- $mapped := include "mongodb.accountName" $user -}}
@@ -38,4 +38,16 @@
     {{- fail (printf "user %q is reserved: it is the name of a MongoDB system user the platform manages; rename the user" $user) -}}
   {{- end -}}
 {{- end -}}
+{{- end -}}
+
+{{/*
+  The role every user the chart declares holds, and nothing else does: only
+  the operator, through spec.users, grants it.
+*/}}
+{{- define "mongodb.managedRole" -}}
+cozystack-managed
+{{- end -}}
+
+{{- define "mongodb.systemUserNames" -}}
+{{- list "backup" "clusterAdmin" "clusterMonitor" "databaseAdmin" "userAdmin" | toJson -}}
 {{- end -}}

@@ -229,8 +229,23 @@ spec:
         - name: {{ .name }}
           db: {{ .db }}
         {{- end }}
+        - name: {{ include "mongodb.managedRole" $ }}
+          db: admin
     {{- end }}
   {{- end }}
+
+  {{- /*
+    The marker role grants nothing. It tells the users this chart declared
+    from every other user in the database, so the post-upgrade hook
+    (hooks/drop-users-job.yaml) drops a user once it leaves values, which the
+    operator never does, and leaves alone the system users and any user the
+    chart did not create. Rendered with no users too, so it outlives the last
+    one.
+  */}}
+  roles:
+    - role: {{ include "mongodb.managedRole" $ }}
+      db: admin
+      privileges: []
 
   backup:
     enabled: {{ .Values.backup.enabled | default false }}
