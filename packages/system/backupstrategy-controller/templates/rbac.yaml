@@ -108,10 +108,11 @@ rules:
 - apiGroups: ["velero.io"]
   resources: ["backupstoragelocations"]
   verbs: ["get"]
-# Velero DeleteBackupRequest: used by BackupReconciler to delete Velero backups with their storage data
+# Velero DeleteBackupRequest: used to delete Velero backups with their storage
+# data. delete replaces a request Velero processed with errors.
 - apiGroups: ["velero.io"]
   resources: ["deletebackuprequests"]
-  verbs: ["create", "get", "list", "watch"]
+  verbs: ["create", "get", "list", "watch", "delete"]
 # Namespaces: validate target namespace exists for cross-namespace restore
 # controller-runtime cache requires list/watch for any resource accessed via r.Get()
 - apiGroups: [""]
@@ -165,7 +166,8 @@ rules:
 # rendered" preconditions, create one-shot k8s.mariadb.com/Backup CRs on
 # the BackupJob path, and create k8s.mariadb.com/Restore CRs on the
 # RestoreJob path. A Backup is deleted once the dump it wrote is, when its
-# Cozystack Backup is deleted; a Restore is never deleted.
+# Cozystack Backup is deleted, or when its BackupJob gives up on it before
+# it completes; a Restore is never deleted.
 - apiGroups: ["k8s.mariadb.com"]
   resources: ["mariadbs"]
   verbs: ["get", "list", "watch"]
