@@ -440,3 +440,162 @@ func TestSeedLeavesOutAReleaseWithARefusedFlag(t *testing.T) {
 		t.Fatal("a release the converted chart refuses must not be converted in part")
 	}
 }
+
+func TestSeedLeavesOutAReleaseWithAReservedUser(t *testing.T) {
+	ctx := context.Background()
+	m := newMigrator(t, release(`{"users":{"web":{},"backup":{}}}`, "0.1.0", true), sourceSecret(map[string]string{"web": "hunter2", "backup": "platform"}))
+	m.o.reservedUsers = stringFlags{"backup", "default"}
+	if err := m.seed(ctx); err != nil {
+		t.Fatal(err)
+	}
+	st, err := m.loadState(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if why, left := st.Skipped["tenant-foo/postgres-orders"]; !left || !strings.Contains(why, "reserves") {
+		t.Fatalf("state = %+v, want the release left out for the reserved name", st)
+	}
+	for _, name := range []string{"postgres-orders.web.account", "postgres-orders.backup.account"} {
+		if _, ok := m.secret(t, name); ok {
+			t.Fatalf("%s: a release the converted chart refuses must not be converted in part", name)
+		}
+	}
+}
+
+// With a values path, the hook gives the release the controller's valuesFrom
+// entries ahead of the switch, so the converted chart's first render already
+// carries every stored value; other entries keep their place.
+func TestSeedAddsTheAccountValuesFrom(t *testing.T) {
+	ctx := context.Background()
+	hr := release(`{"users":{"web":{},"Api.1":{}}}`, "0.1.0", true)
+	hr.Spec.ValuesFrom = []helmv2.ValuesReference{
+		{Kind: "Secret", Name: "cozystack-values"},
+		account.ValuesFrom("postgres-orders.gone.account", "_accounts", "gone"),
+	}
+	m := newMigrator(t, hr, sourceSecret(map[string]string{"web": "hunter2", "Api.1": "secret"}))
+	m.o.valuesPath = "_accounts"
+	if err := m.seed(ctx); err != nil {
+		t.Fatal(err)
+	}
+	cur := &helmv2.HelmRelease{}
+	if err := m.c.Get(ctx, client.ObjectKeyFromObject(hr), cur); err != nil {
+		t.Fatal(err)
+	}
+	want := []helmv2.ValuesReference{
+		{Kind: "Secret", Name: "cozystack-values"},
+		account.ValuesFrom("postgres-orders.api-1.account", "_accounts", "Api.1"),
+		account.ValuesFrom("postgres-orders.web.account", "_accounts", "web"),
+	}
+	if len(cur.Spec.ValuesFrom) != len(want) {
+		t.Fatalf("valuesFrom = %+v", cur.Spec.ValuesFrom)
+	}
+	for i := range want {
+		if cur.Spec.ValuesFrom[i] != want[i] {
+			t.Fatalf("valuesFrom[%d] = %+v, want %+v", i, cur.Spec.ValuesFrom[i], want[i])
+		}
+	}
+	if !strings.HasPrefix(want[2].TargetPath, "_accounts.u") || !want[2].Optional {
+		t.Fatalf("entry = %+v", want[2])
+	}
+
+	// Without a values path the release's valuesFrom is left as it is.
+	hr2 := release(`{"users":{"web":{}}}`, "0.1.0", true)
+	m = newMigrator(t, hr2, sourceSecret(map[string]string{"web": "hunter2"}))
+	if err := m.seed(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.c.Get(ctx, client.ObjectKeyFromObject(hr2), cur); err != nil {
+		t.Fatal(err)
+	}
+	if len(cur.Spec.ValuesFrom) != 0 {
+		t.Fatalf("valuesFrom = %+v, want none", cur.Spec.ValuesFrom)
+	}
+}
+
+func rotationFixture(t *testing.T, suspended bool, annotations map[string]string) (*migrator, *helmv2.HelmRelease) {
+	t.Helper()
+	hr := release(`{"users":{"web":{}}}`, "0.2.0", true)
+	hr.Spec.Suspend = suspended
+	hr.Annotations = annotations
+	m := newMigrator(t, hr, sourceSecret(map[string]string{"backup": "tenant-readable"}))
+	m.o.platformKeys = stringFlags{"backup"}
+	m.o.rotateKeys = stringFlags{"backup"}
+	return m, hr
+}
+
+func TestRotatePlatformKeysOnceAndForcesAnUpgrade(t *testing.T) {
+	ctx := context.Background()
+	m, hr := rotationFixture(t, false, nil)
+	if err := m.rotatePlatformKeys(ctx, hr); err != nil {
+		t.Fatal(err)
+	}
+	sec, _ := m.secret(t, "postgres-orders-credentials")
+	first := string(sec.Data["backup"])
+	if first == "tenant-readable" || len(first) != 32 || sec.Annotations[RotatedAnnotation] == "" {
+		t.Fatalf("source = %v %v", sec.Annotations, len(first))
+	}
+	cur := &helmv2.HelmRelease{}
+	if err := m.c.Get(ctx, client.ObjectKeyFromObject(hr), cur); err != nil {
+		t.Fatal(err)
+	}
+	if cur.Spec.Suspend || cur.Annotations[SuspendedByAnnotation] != "" {
+		t.Fatalf("the suspension the rotation set must be lifted: %+v", cur.Annotations)
+	}
+	if at := cur.Annotations["reconcile.fluxcd.io/forceAt"]; at == "" || at != cur.Annotations["reconcile.fluxcd.io/requestedAt"] {
+		t.Fatalf("want a forced upgrade, annotations = %v", cur.Annotations)
+	}
+
+	// A rerun does not rotate twice.
+	if err := m.rotatePlatformKeys(ctx, cur); err != nil {
+		t.Fatal(err)
+	}
+	sec, _ = m.secret(t, "postgres-orders-credentials")
+	if string(sec.Data["backup"]) != first {
+		t.Fatal("a rerun must not rotate again")
+	}
+}
+
+// A run stopped between the suspension and the Secret write is finished by
+// the next one, which also lifts the suspension it left.
+func TestRotatePlatformKeysRecoversAnInterruptedRun(t *testing.T) {
+	ctx := context.Background()
+	m, hr := rotationFixture(t, true, map[string]string{SuspendedByAnnotation: "62"})
+	if err := m.rotatePlatformKeys(ctx, hr); err != nil {
+		t.Fatal(err)
+	}
+	sec, _ := m.secret(t, "postgres-orders-credentials")
+	if string(sec.Data["backup"]) == "tenant-readable" {
+		t.Fatal("the rotation must complete")
+	}
+	cur := &helmv2.HelmRelease{}
+	if err := m.c.Get(ctx, client.ObjectKeyFromObject(hr), cur); err != nil {
+		t.Fatal(err)
+	}
+	if cur.Spec.Suspend {
+		t.Fatal("the suspension an earlier run set must be lifted")
+	}
+}
+
+// A release someone else suspended stays suspended, and gets the forced
+// upgrade when it is resumed.
+func TestRotatePlatformKeysKeepsAForeignSuspension(t *testing.T) {
+	ctx := context.Background()
+	m, hr := rotationFixture(t, true, nil)
+	if err := m.rotatePlatformKeys(ctx, hr); err != nil {
+		t.Fatal(err)
+	}
+	cur := &helmv2.HelmRelease{}
+	if err := m.c.Get(ctx, client.ObjectKeyFromObject(hr), cur); err != nil {
+		t.Fatal(err)
+	}
+	if !cur.Spec.Suspend || cur.Annotations["reconcile.fluxcd.io/forceAt"] == "" {
+		t.Fatalf("suspend = %v, annotations = %v", cur.Spec.Suspend, cur.Annotations)
+	}
+}
+
+func TestRunRefusesARotateKeyThatIsNotAPlatformKey(t *testing.T) {
+	err := run([]string{"finish", "--migration=63", "--kind=ClickHouse", "--format=sha256", "--rotate-key=backup"})
+	if err == nil || !strings.Contains(err.Error(), "not a --platform-key") {
+		t.Fatalf("err = %v", err)
+	}
+}

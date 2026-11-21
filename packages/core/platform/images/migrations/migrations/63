@@ -1,0 +1,187 @@
+#!/bin/sh
+# Migration 63 --> 64
+# Convert ClickHouse accounts to platform-minted credentials, first part.
+#
+# The converted clickhouse chart renders a CredentialTemplate per user and
+# takes each user's SHA-256 from the release values, which the HelmRelease
+# pulls from the template's account Secret through a valuesFrom entry;
+# cozystack-controller seeds those Secrets with a random password only on a
+# release marked for seeding. This hook runs before any component chart
+# changes version and writes the Secrets, unowned, for every existing
+# ClickHouse release from the passwords in <release>-credentials, and adds the
+# valuesFrom entries itself: the controller adds them only once the templates
+# exist, and without them the converted chart's first render would leave every
+# user out of the ClickHouseInstallation, locking clients out until the next
+# upgrade. The old chart ignores those values. A release whose every account
+# got its Secret is marked for seeding, so users added later are seeded too.
+# A release with a user named backup, default or clickhouse_operator, which
+# the converted chart refuses, is left out.
+#
+# The second part is the cozystack-credentials-migration-63 Job, which waits
+# per release for its chart to switch, strips leftover users.*.password from
+# the values, removes the tenant keys from <release>-credentials while keeping
+# the platform's backup password there, and rotates that password once, since
+# tenants could read it: with the release suspended it writes a new value and
+# then forces an upgrade, which applies its hash and restarts the pods of a
+# release with backups enabled once, for the backup sidecar. The hook creates
+# that Job directly rather than rendering it from the platform chart, for the
+# reasons migration 62 gives, and deletes and recreates it on a rerun.
+#
+# The Job and its ServiceAccount, ClusterRole and ClusterRoleBinding are all
+# named cozystack-credentials-migration-63; the RBAC is least-privilege, not
+# cluster-admin: finish needs only CRUD on Secrets, get/list/patch on
+# HelmReleases (the rotation suspends, resumes and annotates them), create on
+# Events, and its state ConfigMap. The ServiceAccount, ClusterRole and
+# ClusterRoleBinding carry this migration's number, so this hook never deletes
+# or rebinds the identity migration 62's Job may still be running as. The
+# ServiceAccount is owned by the Job, so the garbage collector removes it with
+# the Job; the ClusterRoleBinding is left and grants to no subject that exists
+# once the ServiceAccount is gone. While any release is left out,
+# credentials-migrate labels its state ConfigMap
+# credentials.cozystack.io/incomplete=true, which the
+# CredentialsMigrationIncomplete alert fires on. To rerun it by hand, delete
+# the Job and re-apply the manifest below.
+#
+# Fail-closed: migrations never re-run, so an error here stops the upgrade
+# rather than stamping the version past a release that was not recorded.
+
+set -euo pipefail
+
+# shellcheck source=lib/cozystack-version.sh
+. "$(dirname "$0")/lib/cozystack-version.sh"
+
+NAMESPACE="${NAMESPACE:-cozy-system}"
+
+credentials-migrate seed \
+  --migration 63 \
+  --kind ClickHouse \
+  --format sha256 \
+  --accounts-path users \
+  --reserved-user backup \
+  --reserved-user default \
+  --reserved-user clickhouse_operator \
+  --values-path _accounts \
+  --platform-key backup \
+  --label 'reconcile.fluxcd.io/watch=Enabled'
+
+# The finish Job runs the same image as this hook, so a release and its
+# conversion share the credentials-migrate build. Read it from this pod's own
+# container by name rather than render it from values, which the hook does not
+# carry, and rather than by position, which a webhook-injected container shifts.
+image=$(kubectl get pod "$(hostname)" \
+  --namespace "$NAMESPACE" \
+  --output 'jsonpath={.spec.containers[?(@.name=="migration")].image}')
+if [ -z "$image" ]; then
+  echo "cannot read this pod's image to run the finish Job" >&2
+  exit 1
+fi
+
+# Delete any Job left by an earlier run of this hook: its pod template is
+# immutable, so a rerun on a newer image would fault on apply. finish recovers
+# its progress from the state ConfigMap, so recreating the Job loses nothing.
+# Delete the ServiceAccount with it: an earlier run may have left it owned by
+# the Job just deleted, and the apply below does not touch ownerReferences, so
+# without this the garbage collector could remove the re-applied ServiceAccount
+# out from under the ownerReference patch. A fresh, owner-less ServiceAccount is
+# never collected before the patch names the new Job.
+kubectl delete job cozystack-credentials-migration-63 \
+  --namespace "$NAMESPACE" \
+  --ignore-not-found
+kubectl delete serviceaccount cozystack-credentials-migration-63 \
+  --namespace "$NAMESPACE" \
+  --ignore-not-found
+
+kubectl apply --filename - <<YAML
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: cozystack-credentials-migration-63
+rules:
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get", "create", "patch", "delete"]
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get", "create", "update"]
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["create"]
+  - apiGroups: ["helm.toolkit.fluxcd.io"]
+    resources: ["helmreleases"]
+    verbs: ["get", "list", "patch"]
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: cozystack-credentials-migration-63
+  namespace: ${NAMESPACE}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: cozystack-credentials-migration-63
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: cozystack-credentials-migration-63
+subjects:
+  - kind: ServiceAccount
+    name: cozystack-credentials-migration-63
+    namespace: ${NAMESPACE}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: cozystack-credentials-migration-63
+  namespace: ${NAMESPACE}
+spec:
+  backoffLimit: 6
+  ttlSecondsAfterFinished: 604800
+  template:
+    metadata:
+      labels:
+        policy.cozystack.io/allow-to-apiserver: "true"
+    spec:
+      serviceAccountName: cozystack-credentials-migration-63
+      restartPolicy: OnFailure
+      containers:
+        - name: migration
+          image: ${image}
+          command:
+            - credentials-migrate
+            - finish
+            - --migration=63
+            - --kind=ClickHouse
+            - --format=sha256
+            - --accounts-path=users
+            - --reserved-user=backup
+            - --reserved-user=default
+            - --reserved-user=clickhouse_operator
+            - --values-path=_accounts
+            - --platform-key=backup
+            - --rotate-key=backup
+            - --label=reconcile.fluxcd.io/watch=Enabled
+            - --timeout=30m
+          env:
+            - name: CREDENTIALS_MIGRATE_ACTOR
+              value: system:serviceaccount:${NAMESPACE}:cozystack-credentials-migration-63
+YAML
+
+# Tie the ServiceAccount's lifetime to the Job: when the Job is deleted (its
+# ttlSecondsAfterFinished, a rerun's delete above, or an operator by hand) the
+# garbage collector removes the ServiceAccount, on the success and the failure
+# path alike, so the least-privilege identity does not stand indefinitely after
+# a release the conversion left out.
+job_uid=$(kubectl get job cozystack-credentials-migration-63 \
+  --namespace "$NAMESPACE" \
+  --output 'jsonpath={.metadata.uid}')
+if [ -z "$job_uid" ]; then
+  echo "cannot read the finish Job's uid to own its ServiceAccount" >&2
+  exit 1
+fi
+kubectl patch serviceaccount cozystack-credentials-migration-63 \
+  --namespace "$NAMESPACE" \
+  --type merge \
+  --patch "{\"metadata\":{\"ownerReferences\":[{\"apiVersion\":\"batch/v1\",\"kind\":\"Job\",\"name\":\"cozystack-credentials-migration-63\",\"uid\":\"${job_uid}\"}]}}"
+
+stamp_cozystack_version 64

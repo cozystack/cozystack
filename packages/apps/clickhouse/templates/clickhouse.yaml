@@ -1,31 +1,32 @@
 {{- $clusterDomain := (index .Values._cluster "cluster-domain") | default "cozy.local" }}
+{{- include "clickhouse.accountsGuard" $ }}
+{{- /*
+  <release>-credentials holds only the platform's backup account, which the
+  backup sidecar and the legacy CronJob log in with. It stays chart-generated
+  and is kept from tenants: no ApplicationDefinition selects it, no Role
+  grants it, and the label keeps the lineage webhook from marking it tenant
+  visible. Tenant accounts live in their account Secrets (credentials.yaml).
+*/}}
 {{- $existingSecret := lookup "v1" "Secret" .Release.Namespace (printf "%s-credentials" .Release.Name) }}
-{{- $passwords := dict }}
-{{- $users := .Values.users }}
-{{- $_ := set $users "backup" dict }}
-
+{{- $backupPassword := "" }}
 {{- with (index $existingSecret "data") }}
-  {{- range $k, $v := . }}
-    {{- $_ := set $passwords $k (b64dec $v) }}
+  {{- with .backup }}
+    {{- $backupPassword = b64dec . }}
   {{- end }}
 {{- end }}
-
-{{- range $user, $u := $users }}
-  {{- if $u.password }}
-    {{- $_ := set $passwords $user $u.password }}
-  {{- else if not (index $passwords $user) }}
-    {{- $_ := set $passwords $user (randAlphaNum 16) }}
-  {{- end }}
+{{- if not $backupPassword }}
+  {{- $backupPassword = randAlphaNum 16 }}
 {{- end }}
+{{- $backupRotated := dig "metadata" "annotations" "credentials.cozystack.io/rotated" "" ($existingSecret | default dict) }}
 
 apiVersion: v1
 kind: Secret
 metadata:
   name: {{ .Release.Name }}-credentials
+  labels:
+    internal.cozystack.io/tenantresource: "false"
 stringData:
-  {{- range $user, $u := .Values.users }}
-  {{ quote $user }}: {{ quote (index $passwords $user) }}
-  {{- end }}
+  backup: {{ quote $backupPassword }}
 
 ---
 apiVersion: "clickhouse.altinity.com/v1"
@@ -40,14 +41,23 @@ spec:
       podTemplate: clickhouse-per-host
       serviceTemplate: svc-template
   configuration:
-    {{- with $users }}
     users:
-      {{- range $name, $u := . }}
-      {{ $name }}/password_sha256_hex: {{ sha256sum (index $passwords $name) }}
+      {{- /*
+        A tenant account with no verifier in the values yet, as before
+        cozystack-controller has seeded its Secret, is left out: without a
+        password the operator would give it the password "default".
+      */}}
+      {{- range $name, $u := .Values.users }}
+      {{- $verifier := include "clickhouse.accountVerifier" (list $ $name) }}
+      {{- if $verifier }}
+      {{ $name }}/password_sha256_hex: {{ $verifier | quote }}
       {{ $name }}/profile: {{ ternary "readonly" "default" (index $u "readonly" | default false) }}
       {{ $name }}/networks/ip: ["::/0"]
       {{- end }}
-    {{- end }}
+      {{- end }}
+      backup/password_sha256_hex: {{ sha256sum $backupPassword | quote }}
+      backup/profile: default
+      backup/networks/ip: ["::/0"]
     files:
       config.d/z_log_disable.xml: |
         <clickhouse>
@@ -128,6 +138,14 @@ spec:
         metadata:
           labels:
             app.kubernetes.io/instance: {{ .Release.Name }}
+          {{- if and .Values.backup.enabled $backupRotated }}
+          {{- /*
+            The backup sidecar reads the backup password from its environment
+            at start, so a rotation of it restarts the pods once.
+          */}}
+          annotations:
+            credentials.cozystack.io/backup-rotated: {{ $backupRotated | quote }}
+          {{- end }}
         spec:
           affinity:
             podAntiAffinity:
