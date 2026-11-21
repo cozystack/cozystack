@@ -7,9 +7,8 @@ import (
 
 	cozyv1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
 	"github.com/cozystack/cozystack/internal/shared/appdefowner"
-	"github.com/cozystack/cozystack/pkg/apis/apps/defaulting"
 	"github.com/cozystack/cozystack/pkg/config"
-	"github.com/cozystack/cozystack/pkg/credentials/store"
+	"github.com/cozystack/cozystack/pkg/credentials/account"
 	helmv2 "github.com/fluxcd/helm-controller/api/v2"
 
 	corev1 "k8s.io/api/core/v1"
@@ -153,31 +152,14 @@ func (r *ApplicationDefinitionHelmReconciler) updateHelmReleasesForAppDef(ctx co
 	return errors.Join(errs...)
 }
 
-// expectedValuesFrom returns the valuesFrom a release of a kind without a
-// credentials block carries.
+// expectedValuesFrom returns the expected valuesFrom configuration for HelmReleases
 func expectedValuesFrom() []helmv2.ValuesReference {
-	return store.ValuesFrom(nil, "", nil)
-}
-
-// releaseValuesFrom returns the valuesFrom a release carries under its
-// definition, resolving the accounts with the definition's schema defaults as
-// the API does on a write, so a release created before the block appeared
-// gets its entries on reconcile. An error means values the API would refuse;
-// the release is left as it is.
-func releaseValuesFrom(hr *helmv2.HelmRelease, appDef *cozyv1alpha1.ApplicationDefinition) ([]helmv2.ValuesReference, error) {
-	block := appDef.Spec.Credentials
-	if block == nil || block.ValuesPath == "" {
-		return store.ValuesFrom(block, hr.Name, nil), nil
+	return []helmv2.ValuesReference{
+		{
+			Kind: "Secret",
+			Name: "cozystack-values",
+		},
 	}
-	schema, err := defaulting.BuildSchema(appDef.Spec.Application.OpenAPISchema)
-	if err != nil {
-		return nil, fmt.Errorf("build schema: %w", err)
-	}
-	accounts, err := store.ResolveAccounts(block, schema, hr.Spec.Values)
-	if err != nil {
-		return nil, err
-	}
-	return store.ValuesFrom(block, hr.Name, accounts), nil
 }
 
 // valuesFromEqual compares two ValuesReference slices
@@ -229,10 +211,16 @@ func (r *ApplicationDefinitionHelmReconciler) updateHelmReleaseChart(ctx context
 		updated = true
 	}
 
-	// Check and update valuesFrom configuration
-	if expected, err := releaseValuesFrom(hr, appDef); err != nil {
-		logger.Error(err, "Skipping HelmRelease valuesFrom update: accounts cannot be resolved", "name", hr.Name, "namespace", hr.Namespace)
-	} else if !valuesFromEqual(hrCopy.Spec.ValuesFrom, expected) {
+	// Check and update valuesFrom configuration. The entries that carry an
+	// account's stored value into the chart belong to the CredentialTemplate
+	// controller, so they are kept as they are.
+	expected := expectedValuesFrom()
+	for _, ref := range hrCopy.Spec.ValuesFrom {
+		if account.IsAccountValuesFrom(ref) {
+			expected = append(expected, ref)
+		}
+	}
+	if !valuesFromEqual(hrCopy.Spec.ValuesFrom, expected) {
 		logger.V(4).Info("Updating HelmRelease valuesFrom", "name", hr.Name, "namespace", hr.Namespace)
 		hrCopy.Spec.ValuesFrom = expected
 		updated = true

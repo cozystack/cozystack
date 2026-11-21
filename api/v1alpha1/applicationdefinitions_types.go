@@ -61,10 +61,6 @@ type ApplicationDefinitionSpec struct {
 
 	// Dashboard configuration for this resource
 	Dashboard *ApplicationDefinitionDashboard `json:"dashboard,omitempty"`
-
-	// Credentials converts the kind to platform-minted credentials.
-	// +optional
-	Credentials *ApplicationDefinitionCredentials `json:"credentials,omitempty"`
 }
 
 type ApplicationDefinitionApplication struct {

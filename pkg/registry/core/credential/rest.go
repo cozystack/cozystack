@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Package credential serves core.cozystack.io/credentials, a view over the
-// account Secrets the API writes, with the mint and revoke subresources. The
-// view shows the account's record and never the Secret's data. See
-// design-proposals/user-secrets-api in cozystack/community.
+// CredentialTemplates a kind's chart renders, with the mint and revoke
+// subresources. The view shows the account's record as the template's status
+// mirrors it, and never reads a Secret. See design-proposals/user-secrets-api
+// in cozystack/community.
 package credential
 
 import (
@@ -13,14 +14,11 @@ import (
 	"time"
 
 	helmv2 "github.com/fluxcd/helm-controller/api/v2"
-	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metainternal "k8s.io/apimachinery/pkg/apis/meta/internalversion"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
-	"k8s.io/apimachinery/pkg/selection"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/duration"
 	"k8s.io/apiserver/pkg/endpoints/request"
@@ -50,29 +48,18 @@ const (
 	kindList       = "CredentialList"
 )
 
-// Kind is what the registry knows about one converted application kind: its
-// credentials block, and how to resolve the accounts a HelmRelease declares,
-// which the application registry does with the kind's schema defaults.
-type Kind struct {
-	Block    *cozyv1alpha1.ApplicationDefinitionCredentials
-	Accounts func(ctx context.Context, hr *helmv2.HelmRelease) ([]account.Account, error)
-}
-
 // REST serves the credentials view.
 type REST struct {
 	c client.Client
 	// direct reads and writes for mint and revoke, which the cached client
-	// would answer with a Secret written a moment ago missing.
+	// would answer with a template status a moment old.
 	direct client.Client
 	gvr    schema.GroupVersionResource
-	// kinds is keyed by the application kind the HelmRelease labels name.
-	kinds map[string]Kind
-	now   func() time.Time
+	now    func() time.Time
 }
 
-// NewREST creates the credentials storage. kinds carries every converted
-// application kind; a HelmRelease of a kind absent from it has no credentials.
-func NewREST(c, direct client.Client, kinds map[string]Kind) *REST {
+// NewREST creates the credentials storage.
+func NewREST(c, direct client.Client) *REST {
 	return &REST{
 		c:      c,
 		direct: direct,
@@ -81,8 +68,7 @@ func NewREST(c, direct client.Client, kinds map[string]Kind) *REST {
 			Version:  "v1alpha1",
 			Resource: "credentials",
 		},
-		kinds: kinds,
-		now:   time.Now,
+		now: time.Now,
 	}
 }
 
@@ -104,82 +90,84 @@ func nsFrom(ctx context.Context) (string, error) {
 	return ns, nil
 }
 
-// resolved is one account the registry has located: its HelmRelease, its
-// kind, and its Secret where one exists.
+// resolved is one account the registry has located: its template and the
+// HelmRelease that rendered it.
 type resolved struct {
-	hr     *helmv2.HelmRelease
-	kind   Kind
-	mapped string
-	secret *corev1.Secret
-	// stale is a Secret at the account's name that is not the application's
-	// own, left from a deleted application of the same name; a mint replaces
-	// it rather than reusing it.
-	stale *corev1.Secret
+	tmpl *cozyv1alpha1.CredentialTemplate
+	hr   *helmv2.HelmRelease
 }
 
-// resolve locates the account a Credential name points at. The HelmRelease
-// must exist and belong to a converted kind, or the credential does not exist.
-// A Secret that is not the application's own, by marker or by owner, counts
-// as absent.
+// resolve locates the account a Credential name points at. The template must
+// exist and the HelmRelease that rendered it must be live, or the credential
+// does not exist.
 func (r *REST) resolve(ctx context.Context, c client.Reader, namespace, name string) (*resolved, error) {
-	release, mapped, ok := account.SplitCredentialName(name)
-	if !ok {
-		return nil, apierrors.NewNotFound(r.gvr.GroupResource(), name)
-	}
-	hr := &helmv2.HelmRelease{}
-	if err := c.Get(ctx, types.NamespacedName{Namespace: namespace, Name: release}, hr); err != nil {
+	tmpl := &cozyv1alpha1.CredentialTemplate{}
+	if err := c.Get(ctx, types.NamespacedName{Namespace: namespace, Name: name}, tmpl); err != nil {
 		if apierrors.IsNotFound(err) {
 			return nil, apierrors.NewNotFound(r.gvr.GroupResource(), name)
 		}
 		return nil, err
 	}
-	kind, ok := r.kinds[hr.Labels[appsv1alpha1.ApplicationKindLabel]]
-	if !ok || kind.Block == nil {
-		return nil, apierrors.NewNotFound(r.gvr.GroupResource(), name)
-	}
-	res := &resolved{hr: hr, kind: kind, mapped: mapped}
-	sec := &corev1.Secret{}
-	err := c.Get(ctx, types.NamespacedName{Namespace: namespace, Name: account.SecretName(release, mapped)}, sec)
-	switch {
-	case err == nil && ownedBy(sec, hr):
-		res.secret = sec
-	case err == nil:
-		res.stale = sec
-	case !apierrors.IsNotFound(err):
+	hr, err := r.release(ctx, c, tmpl, nil)
+	if err != nil {
 		return nil, err
 	}
-	return res, nil
+	if hr == nil {
+		return nil, apierrors.NewNotFound(r.gvr.GroupResource(), name)
+	}
+	return &resolved{tmpl: tmpl, hr: hr}, nil
 }
 
-// ownedBy reports whether a Secret is an account Secret owned by the
-// HelmRelease, which is what makes it the application's own.
-func ownedBy(sec *corev1.Secret, hr *helmv2.HelmRelease) bool {
-	if !account.IsAccountSecret(sec) {
-		return false
+// release returns the live HelmRelease that rendered a template, nil when the
+// template names none or its release is gone. cache saves a list from reading
+// one release per template.
+func (r *REST) release(ctx context.Context, c client.Reader, tmpl *cozyv1alpha1.CredentialTemplate, cache map[string]*helmv2.HelmRelease) (*helmv2.HelmRelease, error) {
+	name := tmpl.Annotations[account.ReleaseNameAnnotation]
+	if name == "" || !tmpl.DeletionTimestamp.IsZero() {
+		return nil, nil
 	}
-	for _, ref := range sec.OwnerReferences {
-		if ref.UID == hr.UID {
-			return true
+	if hr, seen := cache[name]; seen {
+		return hr, nil
+	}
+	hr := &helmv2.HelmRelease{}
+	if err := c.Get(ctx, types.NamespacedName{Namespace: tmpl.Namespace, Name: name}, hr); err != nil {
+		if !apierrors.IsNotFound(err) {
+			return nil, err
 		}
+		hr = nil
 	}
-	return false
+	if cache != nil {
+		cache[name] = hr
+	}
+	return hr, nil
 }
 
-// toCredential builds the view of one account Secret.
-func toCredential(sec *corev1.Secret, hr *helmv2.HelmRelease) corev1alpha1.Credential {
-	rec := account.ReadRecord(sec)
-	_, mapped, _ := account.SplitCredentialName(sec.Name[:len(sec.Name)-len(account.SecretSuffix)])
+// toCredential builds the view of one account from its template.
+func toCredential(tmpl *cozyv1alpha1.CredentialTemplate, hr *helmv2.HelmRelease) corev1alpha1.Credential {
+	st := tmpl.Status
+	origin := corev1alpha1.CredentialOrigin(st.Password.Origin)
+	if origin == "" {
+		origin = corev1alpha1.CredentialOriginNotIssued
+	}
+	pw := corev1alpha1.CredentialPasswordState{Origin: origin, By: st.Password.By}
+	if st.Password.At != nil {
+		pw.At = *st.Password.At
+	}
+	var history []corev1alpha1.CredentialHistoryEntry
+	for _, h := range st.History {
+		history = append(history, corev1alpha1.CredentialHistoryEntry{Operation: corev1alpha1.CredentialOperation(h.Operation), At: h.At, By: h.By})
+	}
 	return corev1alpha1.Credential{
 		TypeMeta: metav1.TypeMeta{
 			APIVersion: corev1alpha1.SchemeGroupVersion.String(),
 			Kind:       kindCredential,
 		},
 		ObjectMeta: metav1.ObjectMeta{
-			Name:              account.CredentialName(hr.Name, mapped),
-			Namespace:         sec.Namespace,
-			UID:               sec.UID,
-			ResourceVersion:   sec.ResourceVersion,
-			CreationTimestamp: sec.CreationTimestamp,
+			Name:              tmpl.Name,
+			Namespace:         tmpl.Namespace,
+			UID:               tmpl.UID,
+			ResourceVersion:   st.SecretResourceVersion,
+			CreationTimestamp: tmpl.CreationTimestamp,
 		},
 		Spec: corev1alpha1.CredentialSpec{
 			Application: corev1alpha1.CredentialApplicationRef{
@@ -187,12 +175,9 @@ func toCredential(sec *corev1.Secret, hr *helmv2.HelmRelease) corev1alpha1.Crede
 				Kind:     hr.Labels[appsv1alpha1.ApplicationKindLabel],
 				Name:     hr.Labels[appsv1alpha1.ApplicationNameLabel],
 			},
-			User: string(sec.Data[account.UsernameKey]),
+			User: tmpl.Spec.Username,
 		},
-		Status: corev1alpha1.CredentialStatus{
-			Password: corev1alpha1.CredentialPasswordState{Origin: rec.Origin, At: rec.At, By: rec.By},
-			History:  rec.History,
-		},
+		Status: corev1alpha1.CredentialStatus{Password: pw, History: history},
 	}
 }
 
@@ -205,10 +190,7 @@ func (r *REST) Get(ctx context.Context, name string, _ *metav1.GetOptions) (runt
 	if err != nil {
 		return nil, err
 	}
-	if res.secret == nil {
-		return nil, apierrors.NewNotFound(r.gvr.GroupResource(), name)
-	}
-	cred := toCredential(res.secret, res.hr)
+	cred := toCredential(res.tmpl, res.hr)
 	return &cred, nil
 }
 
@@ -230,37 +212,29 @@ func (r *REST) List(ctx context.Context, opts *metainternal.ListOptions) (runtim
 	if fieldFilter.Namespace != "" && fieldFilter.Namespace != ns {
 		return out, nil
 	}
-
-	sel := labels.NewSelector()
-	req, _ := labels.NewRequirement(account.AccountLabel, selection.Equals, []string{"true"})
-	sel = sel.Add(*req)
+	listOpts := &client.ListOptions{Namespace: ns}
 	if opts.LabelSelector != nil {
-		reqs, selectable := opts.LabelSelector.Requirements()
-		if !selectable {
+		if _, selectable := opts.LabelSelector.Requirements(); !selectable {
 			return out, nil
 		}
-		sel = sel.Add(reqs...)
+		listOpts.LabelSelector = opts.LabelSelector
 	}
 
-	list := &corev1.SecretList{}
-	if err := r.c.List(ctx, list, &client.ListOptions{Namespace: ns, LabelSelector: sel}); err != nil {
+	list := &cozyv1alpha1.CredentialTemplateList{}
+	if err := r.c.List(ctx, list, listOpts); err != nil {
 		return nil, err
 	}
 	releases := map[string]*helmv2.HelmRelease{}
 	for i := range list.Items {
-		sec := &list.Items[i]
-		hr, err := r.liveOwner(ctx, sec, releases)
+		tmpl := &list.Items[i]
+		hr, err := r.release(ctx, r.c, tmpl, releases)
 		if err != nil {
 			return nil, err
 		}
-		if hr == nil {
+		if hr == nil || !fieldFilter.MatchesName(tmpl.Name) {
 			continue
 		}
-		cred := toCredential(sec, hr)
-		if !fieldFilter.MatchesName(cred.Name) {
-			continue
-		}
-		out.Items = append(out.Items, cred)
+		out.Items = append(out.Items, toCredential(tmpl, hr))
 	}
 	listRV := list.ResourceVersion
 	if listRV == "" {
@@ -269,36 +243,6 @@ func (r *REST) List(ctx context.Context, opts *metainternal.ListOptions) (runtim
 	out.ResourceVersion = listRV
 	sorting.ByNamespacedName[corev1alpha1.Credential, *corev1alpha1.Credential](out.Items)
 	return out, nil
-}
-
-// liveOwner returns the HelmRelease that owns an account Secret, provided it
-// exists and belongs to a converted kind; nil otherwise, so a Secret no live
-// release owns is not listed.
-func (r *REST) liveOwner(ctx context.Context, sec *corev1.Secret, cache map[string]*helmv2.HelmRelease) (*helmv2.HelmRelease, error) {
-	for _, ref := range sec.OwnerReferences {
-		if ref.Kind != helmv2.HelmReleaseKind {
-			continue
-		}
-		hr, seen := cache[ref.Name]
-		if !seen {
-			hr = &helmv2.HelmRelease{}
-			if err := r.c.Get(ctx, types.NamespacedName{Namespace: sec.Namespace, Name: ref.Name}, hr); err != nil {
-				if !apierrors.IsNotFound(err) {
-					return nil, err
-				}
-				hr = nil
-			}
-			cache[ref.Name] = hr
-		}
-		if hr == nil || hr.UID != ref.UID {
-			continue
-		}
-		if kind, ok := r.kinds[hr.Labels[appsv1alpha1.ApplicationKindLabel]]; !ok || kind.Block == nil {
-			continue
-		}
-		return hr, nil
-	}
-	return nil, nil
 }
 
 func (r *REST) ConvertToTable(ctx context.Context, object runtime.Object, _ runtime.Object) (*metav1.Table, error) {

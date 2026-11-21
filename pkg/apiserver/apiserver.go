@@ -23,7 +23,6 @@ import (
 
 	cozyv1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
 	helmv2 "github.com/fluxcd/helm-controller/api/v2"
-	coordinationv1 "k8s.io/api/coordination/v1"
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -93,10 +92,6 @@ func init() {
 	}
 	if err := rbacv1.AddToScheme(mgrScheme); err != nil {
 		panic(fmt.Errorf("failed to add RBAC types to scheme: %w", err))
-	}
-	// Register Lease types for the per-application credential lock.
-	if err := coordinationv1.AddToScheme(mgrScheme); err != nil {
-		panic(fmt.Errorf("failed to add coordination types to scheme: %w", err))
 	}
 
 	// Register Cozystack types for WorkloadMonitor queries.
@@ -219,19 +214,6 @@ func (c completedConfig) New() (*CozyServer, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to build dynamic client: %w", err)
 	}
-	// --- dynamically-configured, per-tenant resources ---
-	appsV1alpha1Storage := map[string]rest.Storage{}
-	// credentialKinds carries every converted application kind, by kind name,
-	// for the credentials view that is served from the core group below.
-	credentialKinds := map[string]credentialstorage.Kind{}
-	for _, resConfig := range c.ResourceConfig.Resources {
-		storage := applicationstorage.NewREST(cli, watchCli, &resConfig)
-		appsV1alpha1Storage[resConfig.Application.Plural] = cozyregistry.RESTInPeace(storage)
-		if block := storage.Credentials(); block != nil {
-			credentialKinds[resConfig.Application.Kind] = credentialstorage.Kind{Block: block, Accounts: storage.AccountsOf}
-		}
-	}
-
 	// --- static, cluster-scoped resource for core group ---
 	coreV1alpha1Storage := map[string]rest.Storage{}
 	coreV1alpha1Storage["tenantnamespaces"] = cozyregistry.RESTInPeace(
@@ -252,7 +234,7 @@ func (c completedConfig) New() (*CozyServer, error) {
 	coreV1alpha1Storage["taps"] = cozyregistry.RESTInPeace(
 		tapstorage.NewREST(dyn),
 	)
-	credentials := credentialstorage.NewREST(cli, watchCli, credentialKinds)
+	credentials := credentialstorage.NewREST(cli, watchCli)
 	coreV1alpha1Storage["credentials"] = cozyregistry.RESTInPeace(credentials)
 	coreV1alpha1Storage["credentials/mint"] = credentialstorage.NewMintREST(credentials)
 	coreV1alpha1Storage["credentials/revoke"] = credentialstorage.NewRevokeREST(credentials)
@@ -275,6 +257,12 @@ func (c completedConfig) New() (*CozyServer, error) {
 		return nil, err
 	}
 
+	// --- dynamically-configured, per-tenant resources ---
+	appsV1alpha1Storage := map[string]rest.Storage{}
+	for _, resConfig := range c.ResourceConfig.Resources {
+		storage := applicationstorage.NewREST(cli, watchCli, &resConfig)
+		appsV1alpha1Storage[resConfig.Application.Plural] = cozyregistry.RESTInPeace(storage)
+	}
 	if err := InstallAppsAPIGroup(s.GenericAPIServer, appsV1alpha1Storage); err != nil {
 		return nil, err
 	}

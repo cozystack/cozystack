@@ -3,16 +3,14 @@
 package account
 
 import (
-	"errors"
 	"strings"
 	"testing"
 	"time"
 
+	helmv2 "github.com/fluxcd/helm-controller/api/v2"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	cozyv1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
-	appsv1alpha1 "github.com/cozystack/cozystack/pkg/apis/apps/v1alpha1"
 	corev1alpha1 "github.com/cozystack/cozystack/pkg/apis/core/v1alpha1"
 )
 
@@ -73,122 +71,6 @@ func TestNames(t *testing.T) {
 	}
 }
 
-func block(sources ...cozyv1alpha1.CredentialAccountSource) *cozyv1alpha1.ApplicationDefinitionCredentials {
-	return &cozyv1alpha1.ApplicationDefinitionCredentials{
-		Format:   cozyv1alpha1.CredentialFormat{Name: "scram-sha-256"},
-		Accounts: sources,
-	}
-}
-
-func valuesMap(path string) cozyv1alpha1.CredentialAccountSource {
-	return cozyv1alpha1.CredentialAccountSource{Kind: cozyv1alpha1.CredentialAccountsValuesMap, Path: path}
-}
-
-func static(name, when string, owner cozyv1alpha1.CredentialAccountOwner) cozyv1alpha1.CredentialAccountSource {
-	return cozyv1alpha1.CredentialAccountSource{Kind: cozyv1alpha1.CredentialAccountsStatic, Name: name, When: when, Owner: owner}
-}
-
-func withSecretLabel(key string) *cozyv1alpha1.ApplicationDefinitionCredentials {
-	b := block(valuesMap("users"))
-	b.SecretLabels = map[string]string{key: "x"}
-	return b
-}
-
-func TestValidate(t *testing.T) {
-	if err := Validate(nil); err != nil {
-		t.Errorf("nil block: %v", err)
-	}
-	if err := Validate(block(valuesMap("users"))); err != nil {
-		t.Errorf("valid block: %v", err)
-	}
-	withLabels := block(valuesMap("users"))
-	withLabels.SecretLabels = map[string]string{"cnpg.io/reload": "true"}
-	if err := Validate(withLabels); err != nil {
-		t.Errorf("block with a non-reserved secretLabel: %v", err)
-	}
-
-	notBuilt := []*cozyv1alpha1.ApplicationDefinitionCredentials{
-		{Format: cozyv1alpha1.CredentialFormat{Name: "apr1", Kind: cozyv1alpha1.CredentialFormatWebhook}, Accounts: []cozyv1alpha1.CredentialAccountSource{valuesMap("users")}},
-		block(cozyv1alpha1.CredentialAccountSource{Kind: cozyv1alpha1.CredentialAccountsValuesList, Path: "accounts", NameField: "name"}),
-		block(cozyv1alpha1.CredentialAccountSource{Kind: cozyv1alpha1.CredentialAccountsExpression, Expression: "spec.users"}),
-		block(cozyv1alpha1.CredentialAccountSource{Kind: cozyv1alpha1.CredentialAccountsWebhook}),
-	}
-	for i, b := range notBuilt {
-		err := Validate(b)
-		if !errors.Is(err, ErrNotBuilt) {
-			t.Errorf("notBuilt[%d]: got %v, want ErrNotBuilt", i, err)
-		}
-	}
-
-	invalid := []*cozyv1alpha1.ApplicationDefinitionCredentials{
-		{Format: cozyv1alpha1.CredentialFormat{Name: "apr1"}, Accounts: []cozyv1alpha1.CredentialAccountSource{valuesMap("users")}},
-		{Format: cozyv1alpha1.CredentialFormat{Name: "sha256"}, ValuesPath: "accounts", Accounts: []cozyv1alpha1.CredentialAccountSource{valuesMap("users")}},
-		{Format: cozyv1alpha1.CredentialFormat{Name: "sha256"}},
-		block(cozyv1alpha1.CredentialAccountSource{Kind: cozyv1alpha1.CredentialAccountsValuesMap}),
-		block(cozyv1alpha1.CredentialAccountSource{Kind: cozyv1alpha1.CredentialAccountsStatic}),
-		block(static("x", "", "nobody")),
-		withSecretLabel(AccountLabel),
-		withSecretLabel(appsv1alpha1.ApplicationNameLabel),
-	}
-	for i, b := range invalid {
-		if err := Validate(b); err == nil || errors.Is(err, ErrNotBuilt) {
-			t.Errorf("invalid[%d]: got %v, want a validation error", i, err)
-		}
-	}
-}
-
-func TestResolve(t *testing.T) {
-	values := map[string]any{
-		"users": map[string]any{
-			"web":       map[string]any{},
-			"Bob.Smith": map[string]any{},
-			"backup":    map[string]any{},
-		},
-		"authEnabled": true,
-		"nested":      map[string]any{"accounts": map[string]any{"deep": map[string]any{}}},
-	}
-
-	b := block(valuesMap("users"), static("backup", "", cozyv1alpha1.CredentialAccountOwnerPlatform), static("default", "authEnabled", ""), static("off", "missing", ""))
-	got, err := Resolve(b, values)
-	if err != nil {
-		t.Fatalf("resolve: %v", err)
-	}
-	want := []Account{{"Bob.Smith", "bob-smith"}, {"web", "web"}, {"default", "default"}}
-	if len(got) != len(want) {
-		t.Fatalf("got %v, want %v", got, want)
-	}
-	for i := range want {
-		if got[i] != want[i] {
-			t.Errorf("accounts[%d] = %v, want %v", i, got[i], want[i])
-		}
-	}
-
-	if got, err := Resolve(block(valuesMap("nested.accounts")), values); err != nil || len(got) != 1 || got[0].Username != "deep" {
-		t.Errorf("dotted path: %v, %v", got, err)
-	}
-
-	if got, err := Resolve(block(valuesMap("absent")), values); err != nil || len(got) != 0 {
-		t.Errorf("absent path: %v, %v", got, err)
-	}
-
-	collide := map[string]any{"users": map[string]any{"a_b": map[string]any{}, "a-b": map[string]any{}}}
-	if _, err := Resolve(block(valuesMap("users")), collide); err == nil || !strings.Contains(err.Error(), "a-b") {
-		t.Errorf("collision: %v", err)
-	}
-
-	bad := map[string]any{"users": map[string]any{"-x": map[string]any{}}}
-	if _, err := Resolve(block(valuesMap("users")), bad); err == nil {
-		t.Error("invalid name accepted")
-	}
-
-	if names := PlatformAccounts(b); len(names) != 1 || names[0] != "backup" {
-		t.Errorf("PlatformAccounts = %v", names)
-	}
-	if paths := ValuesMapPaths(b); len(paths) != 1 || paths[0] != "users" {
-		t.Errorf("ValuesMapPaths = %v", paths)
-	}
-}
-
 func TestRecordRoundTrip(t *testing.T) {
 	sec := &corev1.Secret{}
 	if r := ReadRecord(sec); r.Origin != "" || len(r.History) != 0 {
@@ -219,23 +101,30 @@ func TestRecordRoundTrip(t *testing.T) {
 }
 
 func TestLabels(t *testing.T) {
-	b := &cozyv1alpha1.ApplicationDefinitionCredentials{SecretLabels: map[string]string{"cnpg.io/reload": "true"}}
-	l := Labels(b, "apps.cozystack.io", "Postgres", "orders")
-	for k, v := range map[string]string{
-		AccountLabel:                          "true",
-		"apps.cozystack.io/application.group": "apps.cozystack.io",
-		"apps.cozystack.io/application.kind":  "Postgres",
-		"apps.cozystack.io/application.name":  "orders",
-		"cnpg.io/reload":                      "true",
-	} {
-		if l[k] != v {
-			t.Errorf("label %s = %q, want %q", k, l[k], v)
-		}
+	l := Labels(map[string]string{"cnpg.io/reload": "true", AccountLabel: "false"})
+	if l[AccountLabel] != "true" || l["cnpg.io/reload"] != "true" || len(l) != 2 {
+		t.Errorf("labels = %v, want the template's plus the account marker, which a template cannot override", l)
 	}
 	if !IsAccountSecret(&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Labels: l}}) {
 		t.Error("labelled Secret not recognised")
 	}
 	if IsAccountSecret(&corev1.Secret{}) {
 		t.Error("bare Secret recognised")
+	}
+}
+
+func TestValuesFrom(t *testing.T) {
+	ref := ValuesFrom("clickhouse-logs.web.account", "_accounts", "web")
+	if ref.Kind != "Secret" || ref.Name != "clickhouse-logs.web.account" || ref.ValuesKey != PasswordKey || !ref.Optional {
+		t.Errorf("entry = %+v", ref)
+	}
+	if !strings.HasPrefix(ref.TargetPath, "_accounts.u") || len(ref.TargetPath) != len("_accounts.u")+64 {
+		t.Errorf("targetPath = %q, want _accounts.u<sha256 hex>", ref.TargetPath)
+	}
+	if !IsAccountValuesFrom(ref) {
+		t.Error("an entry ValuesFrom builds is not recognised")
+	}
+	if IsAccountValuesFrom(helmv2.ValuesReference{Kind: "Secret", Name: "cozystack-values"}) {
+		t.Error("the platform values entry is taken for an account entry")
 	}
 }

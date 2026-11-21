@@ -4,592 +4,105 @@ package application
 
 import (
 	"context"
-	"fmt"
-	"strings"
-	"sync/atomic"
 	"testing"
 
 	helmv2 "github.com/fluxcd/helm-controller/api/v2"
-	coordinationv1 "k8s.io/api/coordination/v1"
-	corev1 "k8s.io/api/core/v1"
-	apiextv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/apiserver/pkg/authentication/user"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apiserver/pkg/endpoints/request"
-	"k8s.io/apiserver/pkg/warning"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
-	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	cozyv1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
 	appsv1alpha1 "github.com/cozystack/cozystack/pkg/apis/apps/v1alpha1"
 	"github.com/cozystack/cozystack/pkg/config"
 	"github.com/cozystack/cozystack/pkg/credentials/account"
-	"github.com/cozystack/cozystack/pkg/credentials/store"
 )
 
-// The schema defaults backup.enabled to true, so the Static backup account
-// is seeded unless the application turns it off.
-const credentialsSchema = `{"type":"object","properties":{"backup":{"type":"object","default":{},"properties":{"enabled":{"type":"boolean","default":true}}},"users":{"type":"object","additionalProperties":{"type":"object","properties":{"password":{"type":"string"}}}}}}`
-
-func credentialsBlock() *cozyv1alpha1.ApplicationDefinitionCredentials {
-	return &cozyv1alpha1.ApplicationDefinitionCredentials{
-		Format:     cozyv1alpha1.CredentialFormat{Name: "scram-sha-256"},
-		ValuesPath: "_accounts",
-		Accounts: []cozyv1alpha1.CredentialAccountSource{
-			{Kind: cozyv1alpha1.CredentialAccountsValuesMap, Path: "users"},
-			{Kind: cozyv1alpha1.CredentialAccountsStatic, Name: "backup", When: "backup.enabled"},
-			{Kind: cozyv1alpha1.CredentialAccountsStatic, Name: "postgres", Owner: cozyv1alpha1.CredentialAccountOwnerPlatform},
-		},
-	}
-}
-
-func newCredentialsREST(t *testing.T, objects ...client.Object) (*REST, client.Client) {
+func newCredentialsTestREST(t *testing.T, objs ...client.Object) (*REST, client.Client) {
 	t.Helper()
 	scheme := runtime.NewScheme()
 	if err := helmv2.AddToScheme(scheme); err != nil {
 		t.Fatal(err)
 	}
-	if err := corev1.AddToScheme(scheme); err != nil {
+	if err := cozyv1alpha1.AddToScheme(scheme); err != nil {
 		t.Fatal(err)
 	}
-	if err := coordinationv1.AddToScheme(scheme); err != nil {
+	resourceCfg := &config.ResourceConfig{Resources: []config.Resource{{Application: config.ApplicationConfig{Kind: "Postgres"}}}}
+	if err := appsv1alpha1.RegisterDynamicTypes(scheme, resourceCfg); err != nil {
 		t.Fatal(err)
 	}
-	cfg := &config.Resource{
-		Application: config.ApplicationConfig{Kind: postgresKind, Singular: "postgres", Plural: "postgreses", OpenAPISchema: credentialsSchema},
-		Release:     config.ReleaseConfig{Prefix: "postgres-"},
-		Credentials: credentialsBlock(),
-	}
-	if err := appsv1alpha1.RegisterDynamicTypes(scheme, &config.ResourceConfig{Resources: []config.Resource{*cfg}}); err != nil {
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(objs...).Build()
+	return &REST{
+		c:             c,
+		gvr:           schema.GroupVersionResource{Group: appsv1alpha1.GroupName, Version: "v1alpha1", Resource: "postgreses"},
+		gvk:           schema.GroupVersionKind{Group: appsv1alpha1.GroupName, Version: "v1alpha1", Kind: "Postgres"},
+		kindName:      "Postgres",
+		releaseConfig: config.ReleaseConfig{Prefix: "postgres-"},
+	}, c
+}
+
+func accountTemplate(release string) *cozyv1alpha1.CredentialTemplate {
+	return &cozyv1alpha1.CredentialTemplate{ObjectMeta: metav1.ObjectMeta{
+		Name: release + ".web", Namespace: "tenant-foo",
+		Annotations: map[string]string{account.ReleaseNameAnnotation: release},
+	}}
+}
+
+// TestUpdate_KeepsAccountValuesFromAndTheSeedMark pins that an Application
+// write leaves the CredentialTemplate controller's state on the release: the
+// valuesFrom entries that carry each account's stored value into the chart,
+// and the mark that lets the controller seed. The rebuilt release lists only
+// the platform values, so dropping the entries would take the accounts out of
+// the chart until the controller put them back.
+func TestUpdate_KeepsAccountValuesFromAndTheSeedMark(t *testing.T) {
+	hr := suspendTestHelmRelease(false)
+	hr.Annotations = map[string]string{account.SeedAnnotation: "true"}
+	entry := account.ValuesFrom("postgres-pg.web.account", "_accounts", "web")
+	hr.Spec.ValuesFrom = []helmv2.ValuesReference{{Kind: "Secret", Name: "cozystack-values"}, entry}
+	r, c := newCredentialsTestREST(t, hr)
+
+	ctx := request.WithNamespace(context.Background(), "tenant-foo")
+	if _, _, err := r.Update(ctx, "pg", newDefaultUpdatedObjectInfo(suspendTestApplication()), nil, nil, false, &metav1.UpdateOptions{}); err != nil {
 		t.Fatal(err)
 	}
-	// The fake client assigns no UIDs, and without them every ownership check
-	// compares two empty strings and passes.
-	var uids atomic.Int64
-	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(objects...).WithInterceptorFuncs(interceptor.Funcs{
-		Create: func(ctx context.Context, cl client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
-			if obj.GetUID() == "" {
-				obj.SetUID(types.UID(fmt.Sprintf("uid-%d", uids.Add(1))))
-			}
-			return cl.Create(ctx, obj, opts...)
-		},
-		// The API server keeps an object's UID on an update that sends none;
-		// the fake client would blank it.
-		Update: func(ctx context.Context, cl client.WithWatch, obj client.Object, opts ...client.UpdateOption) error {
-			if obj.GetUID() == "" {
-				cur := obj.DeepCopyObject().(client.Object)
-				if err := cl.Get(ctx, client.ObjectKeyFromObject(obj), cur); err == nil {
-					obj.SetUID(cur.GetUID())
-				}
-			}
-			return cl.Update(ctx, obj, opts...)
-		},
-	}).Build()
-	return NewREST(c, c, cfg), c
-}
-
-func credentialsCtx() context.Context {
-	return request.WithUser(request.WithNamespace(context.Background(), "tenant-foo"), &user.DefaultInfo{Name: "jane@example.org"})
-}
-
-func postgresApp(spec string) *appsv1alpha1.Application {
-	return &appsv1alpha1.Application{
-		TypeMeta:   metav1.TypeMeta{APIVersion: "apps.cozystack.io/v1alpha1", Kind: postgresKind},
-		ObjectMeta: metav1.ObjectMeta{Name: "orders", Namespace: "tenant-foo"},
-		Spec:       &apiextv1.JSON{Raw: []byte(spec)},
-	}
-}
-
-func accountSecrets(t *testing.T, c client.Client) map[string]*corev1.Secret {
-	t.Helper()
-	list := &corev1.SecretList{}
-	if err := c.List(context.Background(), list, client.InNamespace("tenant-foo"), client.MatchingLabels{account.AccountLabel: "true"}); err != nil {
+	got := &helmv2.HelmRelease{}
+	if err := c.Get(ctx, client.ObjectKey{Namespace: "tenant-foo", Name: "postgres-pg"}, got); err != nil {
 		t.Fatal(err)
 	}
-	out := map[string]*corev1.Secret{}
-	for i := range list.Items {
-		out[list.Items[i].Name] = &list.Items[i]
+	if len(got.Spec.ValuesFrom) != 2 || got.Spec.ValuesFrom[1] != entry {
+		t.Errorf("valuesFrom = %+v, want the platform values and the account entry", got.Spec.ValuesFrom)
 	}
-	return out
+	if got.Annotations[account.SeedAnnotation] != "true" {
+		t.Error("the seed mark was dropped")
+	}
 }
 
-func getRelease(t *testing.T, c client.Client) *helmv2.HelmRelease {
-	t.Helper()
+func TestMarkForSeeding(t *testing.T) {
 	hr := &helmv2.HelmRelease{}
-	if err := c.Get(context.Background(), types.NamespacedName{Namespace: "tenant-foo", Name: "postgres-orders"}, hr); err != nil {
-		t.Fatal(err)
-	}
-	return hr
-}
-
-func TestCreateSeedsAccountsAndOwnsThem(t *testing.T) {
-	r, c := newCredentialsREST(t)
-	if _, err := r.Create(credentialsCtx(), postgresApp(`{"users":{"web":{},"postgres":{}}}`), nil, &metav1.CreateOptions{}); err != nil {
-		t.Fatal(err)
-	}
-	hr := getRelease(t, c)
-	secrets := accountSecrets(t, c)
-	// web from the values, backup from the defaulted flag; postgres is the
-	// platform's and gets no account Secret.
-	if len(secrets) != 2 || secrets["postgres-orders.web.account"] == nil || secrets["postgres-orders.backup.account"] == nil {
-		t.Fatalf("secrets = %v", keys(secrets))
-	}
-	for name, sec := range secrets {
-		if len(sec.OwnerReferences) != 1 || sec.OwnerReferences[0].Name != hr.Name || sec.OwnerReferences[0].Kind != helmv2.HelmReleaseKind {
-			t.Fatalf("%s owners = %v", name, sec.OwnerReferences)
-		}
-		if account.ReadRecord(sec).By != "jane@example.org" {
-			t.Fatalf("%s record = %+v", name, account.ReadRecord(sec))
-		}
-	}
-	if len(hr.Spec.ValuesFrom) != 3 || hr.Spec.ValuesFrom[0].Name != "cozystack-values" || hr.Spec.ValuesFrom[1].Name != "postgres-orders.web.account" || !strings.HasPrefix(hr.Spec.ValuesFrom[1].TargetPath, "_accounts.u") {
-		t.Fatalf("valuesFrom = %+v", hr.Spec.ValuesFrom)
+	markForSeeding(hr)
+	if hr.Annotations[account.SeedAnnotation] != "true" {
+		t.Errorf("annotations = %v", hr.Annotations)
 	}
 }
 
-func TestCreateRefusesCollidingNames(t *testing.T) {
-	r, c := newCredentialsREST(t)
-	_, err := r.Create(credentialsCtx(), postgresApp(`{"users":{"web_app":{},"web-app":{}}}`), nil, &metav1.CreateOptions{})
-	if !apierrors.IsInvalid(err) || !strings.Contains(err.Error(), `both map to the name "web-app"`) {
-		t.Fatalf("expected Invalid naming the collision, got %v", err)
-	}
-	if n := len(accountSecrets(t, c)); n != 0 {
-		t.Fatalf("a refused write seeds nothing, got %d Secrets", n)
-	}
-}
-
-func TestCreateFailureRemovesSeeded(t *testing.T) {
-	existing := &helmv2.HelmRelease{ObjectMeta: metav1.ObjectMeta{Name: "postgres-orders", Namespace: "tenant-foo"}}
-	r, c := newCredentialsREST(t, existing)
-	if _, err := r.Create(credentialsCtx(), postgresApp(`{"users":{"web":{}}}`), nil, &metav1.CreateOptions{}); !apierrors.IsAlreadyExists(err) {
-		t.Fatalf("expected AlreadyExists, got %v", err)
-	}
-	if n := len(accountSecrets(t, c)); n != 0 {
-		t.Fatalf("Secrets seeded for a release that was not created must go, got %d", n)
+// TestDelete_RefusesASuspendedReleaseWithAccounts: Flux skips the uninstall of
+// a suspended release, so deleting it would leave the database running after
+// its account Secrets went with the templates.
+func TestDelete_RefusesASuspendedReleaseWithAccounts(t *testing.T) {
+	r, _ := newCredentialsTestREST(t, suspendTestHelmRelease(true), accountTemplate("postgres-pg"))
+	ctx := request.WithNamespace(context.Background(), "tenant-foo")
+	if _, _, err := r.Delete(ctx, "pg", nil, &metav1.DeleteOptions{}); !apierrors.IsConflict(err) {
+		t.Fatalf("err = %v, want a conflict", err)
 	}
 }
 
-func TestUpdateSeedsAddedAndPrunesRemoved(t *testing.T) {
-	r, c := newCredentialsREST(t)
-	ctx := credentialsCtx()
-	if _, err := r.Create(ctx, postgresApp(`{"users":{"web":{},"api":{}}}`), nil, &metav1.CreateOptions{}); err != nil {
-		t.Fatal(err)
-	}
-	webBefore := accountSecrets(t, c)["postgres-orders.web.account"]
-
-	updated := postgresApp(`{"users":{"web":{},"reports":{}},"backup":{"enabled":false}}`)
-	if _, _, err := r.Update(ctx, "orders", newDefaultUpdatedObjectInfo(updated), nil, nil, false, &metav1.UpdateOptions{}); err != nil {
-		t.Fatal(err)
-	}
-	secrets := accountSecrets(t, c)
-	if len(secrets) != 2 || secrets["postgres-orders.web.account"] == nil || secrets["postgres-orders.reports.account"] == nil {
-		t.Fatalf("secrets = %v, want web kept, reports added, api and backup pruned", keys(secrets))
-	}
-	if string(secrets["postgres-orders.web.account"].Data[account.PasswordKey]) != string(webBefore.Data[account.PasswordKey]) {
-		t.Fatal("a kept account's Secret must survive the update untouched")
-	}
-	hr := getRelease(t, c)
-	reports := secrets["postgres-orders.reports.account"]
-	if len(reports.OwnerReferences) != 1 || reports.OwnerReferences[0].UID != hr.UID {
-		t.Fatalf("added account's owner = %v", reports.OwnerReferences)
-	}
-	if len(hr.Spec.ValuesFrom) != 3 {
-		t.Fatalf("valuesFrom = %+v", hr.Spec.ValuesFrom)
-	}
-}
-
-func TestUpdateRefusesACaseRename(t *testing.T) {
-	r, c := newCredentialsREST(t)
-	ctx := credentialsCtx()
-	if _, err := r.Create(ctx, postgresApp(`{"users":{"web":{}}}`), nil, &metav1.CreateOptions{}); err != nil {
-		t.Fatal(err)
-	}
-	before := accountSecrets(t, c)["postgres-orders.web.account"]
-
-	updated := postgresApp(`{"users":{"Web":{}}}`)
-	_, _, err := r.Update(ctx, "orders", newDefaultUpdatedObjectInfo(updated), nil, nil, false, &metav1.UpdateOptions{})
-	if !apierrors.IsInvalid(err) || !strings.Contains(err.Error(), "already belongs to account") {
-		t.Fatalf("expected Invalid for a case-only rename, got %v", err)
-	}
-	after := accountSecrets(t, c)["postgres-orders.web.account"]
-	if after == nil || after.UID != before.UID || string(after.Data[account.PasswordKey]) != string(before.Data[account.PasswordKey]) {
-		t.Fatal("a refused rename must leave the live account's Secret untouched")
-	}
-}
-
-func TestPruneAfterUpdatePrunesByTheLiveRelease(t *testing.T) {
-	r, c := newCredentialsREST(t)
-	ctx := credentialsCtx()
-	if _, err := r.Create(ctx, postgresApp(`{"users":{"web":{},"api":{}}}`), nil, &metav1.CreateOptions{}); err != nil {
-		t.Fatal(err)
-	}
-	// The live release still declares web and api; a stale request whose app no
-	// longer lists api must not prune api, because a concurrent update may have
-	// written it back and the live release references it.
-	r.pruneAfterUpdate(ctx, postgresApp(`{"users":{"web":{}}}`), false)
-	if accountSecrets(t, c)["postgres-orders.api.account"] == nil {
-		t.Fatal("prune deleted a Secret the live release still declares")
-	}
-	// Once the live release drops api, pruning removes its Secret.
-	hr := getRelease(t, c)
-	hr.Spec.Values = &apiextv1.JSON{Raw: []byte(`{"users":{"web":{}}}`)}
-	if err := c.Update(ctx, hr); err != nil {
-		t.Fatal(err)
-	}
-	r.pruneAfterUpdate(ctx, postgresApp(`{"users":{"web":{}}}`), false)
-	if accountSecrets(t, c)["postgres-orders.api.account"] != nil {
-		t.Fatal("an account the live release no longer declares must be pruned")
-	}
-}
-
-func TestDeleteRefusesSuspendedRelease(t *testing.T) {
-	r, c := newCredentialsREST(t)
-	ctx := credentialsCtx()
-	if _, err := r.Create(ctx, postgresApp(`{"users":{"web":{}}}`), nil, &metav1.CreateOptions{}); err != nil {
-		t.Fatal(err)
-	}
-	hr := getRelease(t, c)
-	hr.Spec.Suspend = true
-	if err := c.Update(ctx, hr); err != nil {
-		t.Fatal(err)
-	}
-	_, _, err := r.Delete(ctx, "orders", nil, &metav1.DeleteOptions{})
-	if !apierrors.IsConflict(err) || !strings.Contains(err.Error(), "suspended") {
-		t.Fatalf("expected Conflict on a suspended release, got %v", err)
-	}
-	hr = getRelease(t, c)
-	hr.Spec.Suspend = false
-	if err := c.Update(ctx, hr); err != nil {
-		t.Fatal(err)
-	}
-	if _, _, err := r.Delete(ctx, "orders", nil, &metav1.DeleteOptions{}); err != nil {
-		t.Fatal(err)
-	}
-}
-
-func TestWarnMintedPasswords(t *testing.T) {
-	r, _ := newCredentialsREST(t)
-	rec := &fakeWarningRecorder{}
-	ctx := warning.WithWarningRecorder(credentialsCtx(), rec)
-	if _, err := r.Create(ctx, postgresApp(`{"users":{"Web":{"password":"hackme"},"api":{}}}`), nil, &metav1.CreateOptions{}); err != nil {
-		t.Fatal(err)
-	}
-	if len(rec.warnings) != 1 || !strings.Contains(rec.warnings[0], `spec.users["Web"].password is ignored`) || !strings.Contains(rec.warnings[0], "postgres-orders.web") {
-		t.Fatalf("warnings = %v", rec.warnings)
-	}
-}
-
-func keys(m map[string]*corev1.Secret) []string {
-	var out []string
-	for k := range m {
-		out = append(out, k)
-	}
-	return out
-}
-
-func TestCreateDuplicateLeavesLiveSecretsAlone(t *testing.T) {
-	r, c := newCredentialsREST(t)
-	ctx := credentialsCtx()
-	if _, err := r.Create(ctx, postgresApp(`{"users":{"web":{}}}`), nil, &metav1.CreateOptions{}); err != nil {
-		t.Fatal(err)
-	}
-	before := accountSecrets(t, c)["postgres-orders.web.account"]
-
-	if _, err := r.Create(ctx, postgresApp(`{"users":{"web":{}}}`), nil, &metav1.CreateOptions{}); !apierrors.IsAlreadyExists(err) {
-		t.Fatalf("second create: %v, want AlreadyExists", err)
-	}
-	after := accountSecrets(t, c)["postgres-orders.web.account"]
-	if after == nil || after.UID != before.UID || string(after.Data[account.PasswordKey]) != string(before.Data[account.PasswordKey]) {
-		t.Fatal("a refused create must leave the live application's Secret untouched")
-	}
-}
-
-func TestCreateReplacesAnUnownedLeftover(t *testing.T) {
-	// Left by an earlier create whose owner was never set.
-	leftover, err := store.SeedSecret(store.App{Namespace: "tenant-foo", Release: "postgres-orders", Group: appsv1alpha1.GroupName, Kind: postgresKind, Name: "orders", Block: credentialsBlock()},
-		account.Account{Username: "web", Mapped: "web"}, nil, metav1.Now(), "earlier")
-	if err != nil {
-		t.Fatal(err)
-	}
-	leftover.UID = "uid-leftover"
-	r, c := newCredentialsREST(t, leftover)
-	if _, err := r.Create(credentialsCtx(), postgresApp(`{"users":{"web":{}}}`), nil, &metav1.CreateOptions{}); err != nil {
-		t.Fatal(err)
-	}
-	sec := accountSecrets(t, c)["postgres-orders.web.account"]
-	hr := getRelease(t, c)
-	if sec.UID == "uid-leftover" || string(sec.Data[account.PasswordKey]) == string(leftover.Data[account.PasswordKey]) {
-		t.Fatal("a leftover must be replaced, so the account gets a new identity")
-	}
-	if len(sec.OwnerReferences) != 1 || sec.OwnerReferences[0].UID != hr.UID {
-		t.Fatalf("owners = %v, want the new release", sec.OwnerReferences)
-	}
-}
-
-func TestDryRunWritesNoAccountSecrets(t *testing.T) {
-	r, c := newCredentialsREST(t)
-	ctx := credentialsCtx()
-	dry := []string{metav1.DryRunAll}
-
-	if _, err := r.Create(ctx, postgresApp(`{"users":{"web":{}}}`), nil, &metav1.CreateOptions{DryRun: dry}); err != nil {
-		t.Fatal(err)
-	}
-	if n := len(accountSecrets(t, c)); n != 0 {
-		t.Fatalf("a dry-run create wrote %d account Secrets", n)
-	}
-
-	if _, err := r.Create(ctx, postgresApp(`{"users":{"web":{}}}`), nil, &metav1.CreateOptions{}); err != nil {
-		t.Fatal(err)
-	}
-	before := accountSecrets(t, c)
-	updated := postgresApp(`{"users":{"api":{}}}`)
-	if _, _, err := r.Update(ctx, "orders", newDefaultUpdatedObjectInfo(updated), nil, nil, false, &metav1.UpdateOptions{DryRun: dry}); err != nil {
-		t.Fatal(err)
-	}
-	after := accountSecrets(t, c)
-	if len(after) != len(before) || after["postgres-orders.web.account"] == nil || after["postgres-orders.api.account"] != nil {
-		t.Fatalf("a dry-run update changed the account Secrets: %v -> %v", keys(before), keys(after))
-	}
-}
-
-// An account the release already declared and that has no Secret, as after a
-// conversion that left the release out, is not seeded by an unrelated write:
-// a seed would replace its working password with a discarded one.
-func TestUpdateSeedsOnlyAddedAccounts(t *testing.T) {
-	r, c := newCredentialsREST(t)
-	ctx := credentialsCtx()
-	if _, err := r.Create(ctx, postgresApp(`{"users":{"web":{}},"backup":{"enabled":false}}`), nil, &metav1.CreateOptions{}); err != nil {
-		t.Fatal(err)
-	}
-	if err := c.Delete(ctx, accountSecrets(t, c)["postgres-orders.web.account"]); err != nil {
-		t.Fatal(err)
-	}
-	updated := postgresApp(`{"users":{"web":{},"api":{}},"backup":{"enabled":false},"size":"20Gi"}`)
-	if _, _, err := r.Update(ctx, "orders", newDefaultUpdatedObjectInfo(updated), nil, nil, false, &metav1.UpdateOptions{}); err != nil {
-		t.Fatal(err)
-	}
-	got := accountSecrets(t, c)
-	if got["postgres-orders.api.account"] == nil || got["postgres-orders.web.account"] != nil {
-		t.Fatalf("secrets = %v, want api seeded and web left alone", keys(got))
-	}
-}
-
-// Two creates of one application race. The interceptor runs the second create
-// in full at the moment the first is about to write its HelmRelease: the
-// second seeds over the first's unowned Secret, creates the release, and
-// adopts the Secret. The first then fails AlreadyExists, and its cleanup must
-// leave the Secret the live release now owns. Without the release check and
-// the UID check in unseed the live release ends with no account Secret.
-func TestConcurrentCreateKeepsLiveSecret(t *testing.T) {
-	scheme := runtime.NewScheme()
-	if err := helmv2.AddToScheme(scheme); err != nil {
-		t.Fatal(err)
-	}
-	if err := corev1.AddToScheme(scheme); err != nil {
-		t.Fatal(err)
-	}
-	cfg := &config.Resource{
-		Application: config.ApplicationConfig{Kind: postgresKind, Singular: "postgres", Plural: "postgreses", OpenAPISchema: credentialsSchema},
-		Release:     config.ReleaseConfig{Prefix: "postgres-"},
-		Credentials: credentialsBlock(),
-	}
-	if err := appsv1alpha1.RegisterDynamicTypes(scheme, &config.ResourceConfig{Resources: []config.Resource{*cfg}}); err != nil {
-		t.Fatal(err)
-	}
-
-	var r *REST
-	var raced atomic.Bool
-	var uids atomic.Int64
-	c := fake.NewClientBuilder().WithScheme(scheme).WithInterceptorFuncs(interceptor.Funcs{
-		Create: func(ctx context.Context, cl client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
-			// When the first create is about to write its HelmRelease, let a
-			// second create of the same application run to completion first, so
-			// it wins the release and adopts the account Secret the first one
-			// seeded.
-			if _, ok := obj.(*helmv2.HelmRelease); ok && raced.CompareAndSwap(false, true) {
-				if _, err := r.Create(credentialsCtx(), postgresApp(`{"users":{"web":{}}}`), nil, &metav1.CreateOptions{}); err != nil {
-					return fmt.Errorf("concurrent create: %w", err)
-				}
-			}
-			if obj.GetUID() == "" {
-				obj.SetUID(types.UID(fmt.Sprintf("uid-%d", uids.Add(1))))
-			}
-			return cl.Create(ctx, obj, opts...)
-		},
-		Update: func(ctx context.Context, cl client.WithWatch, obj client.Object, opts ...client.UpdateOption) error {
-			if obj.GetUID() == "" {
-				cur := obj.DeepCopyObject().(client.Object)
-				if err := cl.Get(ctx, client.ObjectKeyFromObject(obj), cur); err == nil {
-					obj.SetUID(cur.GetUID())
-				}
-			}
-			return cl.Update(ctx, obj, opts...)
-		},
-	}).Build()
-	r = NewREST(c, c, cfg)
-
-	// The create that loses the race.
-	if _, err := r.Create(credentialsCtx(), postgresApp(`{"users":{"web":{}}}`), nil, &metav1.CreateOptions{}); !apierrors.IsAlreadyExists(err) {
-		t.Fatalf("the create that lost the race: %v, want AlreadyExists", err)
-	}
-
-	hr := getRelease(t, c)
-	sec := accountSecrets(t, c)["postgres-orders.web.account"]
-	if sec == nil {
-		t.Fatal("the live release lost its account Secret to the losing create's cleanup")
-	}
-	if len(sec.OwnerReferences) != 1 || sec.OwnerReferences[0].UID != hr.UID {
-		t.Fatalf("surviving Secret owners = %v, want the live release", sec.OwnerReferences)
-	}
-}
-
-// A concurrent create of the same application can replace a seeded Secret and
-// win the release, but not yet have adopted the replacement when the losing
-// create's cleanup runs: the replacement is still unowned. unseed must leave
-// it, because its UID is not the one this create seeded. Deleting by name, or
-// only skipping an owned Secret, would take it and leave the live release with
-// no account Secret.
-// A concurrent write to one application's credentials is refused while another
-// holds the lock, so the two cannot interleave into deleting a Secret the other
-// reused. Request A adds api; while A holds the lock and writes its release, the
-// interceptor runs request B (which would remove web and prune its Secret). B
-// is refused with Conflict, so web's Secret is untouched.
-func TestConcurrentUpdateRefusedByCredentialLock(t *testing.T) {
-	scheme := runtime.NewScheme()
-	if err := helmv2.AddToScheme(scheme); err != nil {
-		t.Fatal(err)
-	}
-	if err := corev1.AddToScheme(scheme); err != nil {
-		t.Fatal(err)
-	}
-	if err := coordinationv1.AddToScheme(scheme); err != nil {
-		t.Fatal(err)
-	}
-	cfg := &config.Resource{
-		Application: config.ApplicationConfig{Kind: postgresKind, Singular: "postgres", Plural: "postgreses", OpenAPISchema: credentialsSchema},
-		Release:     config.ReleaseConfig{Prefix: "postgres-"},
-		Credentials: credentialsBlock(),
-	}
-	if err := appsv1alpha1.RegisterDynamicTypes(scheme, &config.ResourceConfig{Resources: []config.Resource{*cfg}}); err != nil {
-		t.Fatal(err)
-	}
-
-	var r *REST
-	var raced atomic.Bool
-	var bErr error
-	var uids atomic.Int64
-	c := fake.NewClientBuilder().WithScheme(scheme).WithInterceptorFuncs(interceptor.Funcs{
-		Create: func(ctx context.Context, cl client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
-			if obj.GetUID() == "" {
-				obj.SetUID(types.UID(fmt.Sprintf("uid-%d", uids.Add(1))))
-			}
-			return cl.Create(ctx, obj, opts...)
-		},
-		Update: func(ctx context.Context, cl client.WithWatch, obj client.Object, opts ...client.UpdateOption) error {
-			// Request A is writing its HelmRelease, so A holds the lock: a second
-			// update of the same application must be refused now.
-			if _, ok := obj.(*helmv2.HelmRelease); ok && raced.CompareAndSwap(false, true) {
-				_, _, bErr = r.Update(credentialsCtx(), "orders", newDefaultUpdatedObjectInfo(postgresApp(`{"users":{}}`)), nil, nil, false, &metav1.UpdateOptions{})
-			}
-			if obj.GetUID() == "" {
-				cur := obj.DeepCopyObject().(client.Object)
-				if err := cl.Get(ctx, client.ObjectKeyFromObject(obj), cur); err == nil {
-					obj.SetUID(cur.GetUID())
-				}
-			}
-			return cl.Update(ctx, obj, opts...)
-		},
-	}).Build()
-	r = NewREST(c, c, cfg)
-	ctx := credentialsCtx()
-
-	if _, err := r.Create(ctx, postgresApp(`{"users":{"web":{}}}`), nil, &metav1.CreateOptions{}); err != nil {
-		t.Fatal(err)
-	}
-	webBefore := accountSecrets(t, c)["postgres-orders.web.account"]
-
-	if _, _, err := r.Update(ctx, "orders", newDefaultUpdatedObjectInfo(postgresApp(`{"users":{"web":{},"api":{}}}`)), nil, nil, false, &metav1.UpdateOptions{}); err != nil {
-		t.Fatalf("request A: %v", err)
-	}
-	if !apierrors.IsConflict(bErr) {
-		t.Fatalf("a concurrent credential write must be refused with Conflict, got %v", bErr)
-	}
-	after := accountSecrets(t, c)["postgres-orders.web.account"]
-	if after == nil || after.UID != webBefore.UID {
-		t.Fatal("the refused concurrent update must not have pruned web's Secret")
-	}
-	if accountSecrets(t, c)["postgres-orders.api.account"] == nil {
-		t.Fatal("request A must have seeded api")
-	}
-}
-
-func TestUnseedLeavesAReplacedSecret(t *testing.T) {
-	r, c := newCredentialsREST(t)
-	ctx := credentialsCtx()
-	const name = "postgres-orders.web.account"
-	replacement := &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "tenant-foo", UID: "uid-winner",
-			Labels: map[string]string{account.AccountLabel: "true"}},
-	}
-	if err := c.Create(ctx, replacement); err != nil {
-		t.Fatal(err)
-	}
-	// This create seeded an object that the winner has since replaced, so the
-	// UID it recorded is gone and the live Secret carries the winner's UID. No
-	// release exists here, so the UID guard alone must keep the replacement.
-	r.unseed(ctx, "tenant-foo", "postgres-orders", []store.Seeded{{Name: name, UID: "uid-loser"}})
-	sec := accountSecrets(t, c)[name]
-	if sec == nil || sec.UID != "uid-winner" {
-		t.Fatalf("unseed deleted a Secret this create did not seed: %+v", sec)
-	}
-}
-
-// With no HelmRelease for the application, a failed create's seed is a genuine
-// orphan and unseed deletes the exact object it wrote.
-func TestUnseedDeletesOrphanWhenNoRelease(t *testing.T) {
-	r, c := newCredentialsREST(t)
-	ctx := credentialsCtx()
-	const name = "postgres-orders.web.account"
-	orphan := &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "tenant-foo", UID: "uid-mine",
-			Labels: map[string]string{account.AccountLabel: "true"}},
-	}
-	if err := c.Create(ctx, orphan); err != nil {
-		t.Fatal(err)
-	}
-	r.unseed(ctx, "tenant-foo", "postgres-orders", []store.Seeded{{Name: name, UID: "uid-mine"}})
-	if accountSecrets(t, c)[name] != nil {
-		t.Fatal("unseed must delete its own orphaned seed when no release exists")
-	}
-}
-
-// Once a HelmRelease for the application exists, a concurrent create won it and
-// owns the account Secrets, even one it adopted that this create had seeded, so
-// unseed deletes nothing although the UID still matches.
-func TestUnseedLeavesSecretsWhenReleaseExists(t *testing.T) {
-	r, c := newCredentialsREST(t)
-	ctx := credentialsCtx()
-	const name = "postgres-orders.web.account"
-	hr := &helmv2.HelmRelease{ObjectMeta: metav1.ObjectMeta{Name: "postgres-orders", Namespace: "tenant-foo", UID: "hr-winner"}}
-	if err := c.Create(ctx, hr); err != nil {
-		t.Fatal(err)
-	}
-	adopted := &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "tenant-foo", UID: "uid-seeded",
-			Labels:          map[string]string{account.AccountLabel: "true"},
-			OwnerReferences: []metav1.OwnerReference{{APIVersion: helmv2.GroupVersion.String(), Kind: helmv2.HelmReleaseKind, Name: "postgres-orders", UID: "hr-winner"}}},
-	}
-	if err := c.Create(ctx, adopted); err != nil {
-		t.Fatal(err)
-	}
-	// This create seeded the object the winner then adopted, so the UID matches;
-	// the live release is what must keep unseed from deleting it.
-	r.unseed(ctx, "tenant-foo", "postgres-orders", []store.Seeded{{Name: name, UID: "uid-seeded"}})
-	if accountSecrets(t, c)[name] == nil {
-		t.Fatal("unseed deleted an account Secret while the application's release exists")
+func TestDelete_AllowsASuspendedReleaseWithoutAccounts(t *testing.T) {
+	r, _ := newCredentialsTestREST(t, suspendTestHelmRelease(true), accountTemplate("postgres-other"))
+	ctx := request.WithNamespace(context.Background(), "tenant-foo")
+	if _, _, err := r.Delete(ctx, "pg", nil, &metav1.DeleteOptions{}); apierrors.IsConflict(err) {
+		t.Fatalf("err = %v, a release without accounts must delete", err)
 	}
 }
