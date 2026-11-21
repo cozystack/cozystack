@@ -52,6 +52,8 @@ run_migration() {
     -e FAKE_IMAGE="${FAKE_IMAGE-}" \
     -e FAKE_IMAGE_EMPTY="${FAKE_IMAGE_EMPTY-}" \
     -e FAKE_GETPOD_FAIL="${FAKE_GETPOD_FAIL-}" \
+    -e FAKE_CRD_FAIL="${FAKE_CRD_FAIL-}" \
+    -e CREDENTIAL_CRD_FILE=/work/credentialtemplates.yaml \
     -e FAKE_APPLY_FAIL="${FAKE_APPLY_FAIL-}" \
     -e FAKE_SEED_FAIL="${FAKE_SEED_FAIL-}" \
     -e FAKE_GETJOB_FAIL="${FAKE_GETJOB_FAIL-}" \
@@ -77,7 +79,7 @@ DOCKERFILE
   : > "$FAKE_CMDLOG"
   export NAMESPACE=cozy-system
   export FAKE_IMAGE="$IMAGE"
-  unset FAKE_IMAGE_EMPTY FAKE_GETPOD_FAIL FAKE_APPLY_FAIL FAKE_SEED_FAIL FAKE_GETJOB_FAIL FAKE_JOBUID_EMPTY FAKE_PATCH_FAIL || true
+  unset FAKE_CRD_FAIL FAKE_IMAGE_EMPTY FAKE_GETPOD_FAIL FAKE_APPLY_FAIL FAKE_SEED_FAIL FAKE_GETJOB_FAIL FAKE_JOBUID_EMPTY FAKE_PATCH_FAIL || true
   return 0
 }
 
@@ -90,6 +92,13 @@ DOCKERFILE
 
   # The seed runs for migration 62.
   grep -qE "^CREDMIGRATE seed --migration 62 " "$FAKE_CMDLOG"
+  # The CRD is applied, owned by the cozystack-controller release, and
+  # established before the seed, since the converted chart renders it.
+  _crd=$(cmdlog_line "^CRD established$")
+  _seed=$(cmdlog_line "^CREDMIGRATE seed")
+  [ -n "$_crd" ] && [ "$_crd" -lt "$_seed" ]
+  grep -qE "^CRD label$" "$FAKE_CMDLOG"
+  grep -qE "^CRD annotate$" "$FAKE_CMDLOG"
 
   # The finish Job carries its least-privilege ClusterRole (never cluster-admin),
   # ServiceAccount and binding, the migration number, and the image this hook
@@ -197,4 +206,15 @@ DOCKERFILE
   [ "$rc" -ne 0 ]
   if grep -qF "STAMP" "$FAKE_CMDLOG"; then echo "stamped after the ownership patch failed" >&2; return 1; fi
   rm -rf "$WORK"
+}
+
+@test "a CRD that fails to apply stops before the seed and the stamp" {
+  prep
+  export FAKE_CRD_FAIL=1
+  rc=0
+  run_migration 62 >"$WORK/out" 2>&1 || rc=$?
+  cat "$WORK/out"; cat "$FAKE_CMDLOG"
+  [ "$rc" -ne 0 ]
+  if grep -qE "^CREDMIGRATE seed" "$FAKE_CMDLOG"; then echo "seeded without the CRD" >&2; return 1; fi
+  if grep -qF "STAMP" "$FAKE_CMDLOG"; then echo "stamped without the CRD" >&2; return 1; fi
 }

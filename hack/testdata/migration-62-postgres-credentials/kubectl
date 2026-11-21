@@ -23,6 +23,23 @@ args="$*"
 IMAGE="${FAKE_IMAGE:-registry.example.org/cozystack/cozystack:v1.7.0}"
 
 case "$args" in
+  *"apply --server-side --force-conflicts --filename "*credentialtemplates*)
+    log "CRD apply"
+    [ -n "${FAKE_CRD_FAIL-}" ] && exit 1
+    exit 0
+    ;;
+  *"label crd credentialtemplates.cozystack.io app.kubernetes.io/managed-by=Helm"*)
+    log "CRD label"
+    exit 0
+    ;;
+  *"annotate crd credentialtemplates.cozystack.io"*"meta.helm.sh/release-name=cozystack-controller"*)
+    log "CRD annotate"
+    exit 0
+    ;;
+  *"wait --for=condition=established crd/credentialtemplates.cozystack.io"*)
+    log "CRD established"
+    exit 0
+    ;;
   *"get pod"*jsonpath*)
     if [ -n "${FAKE_GETPOD_FAIL:-}" ]; then
       printf '%s\n' "$FAKE_GETPOD_FAIL" >&2
