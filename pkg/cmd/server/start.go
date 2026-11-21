@@ -34,6 +34,7 @@ import (
 	sdnv1alpha1 "github.com/cozystack/cozystack/pkg/apis/sdn/v1alpha1"
 	"github.com/cozystack/cozystack/pkg/apiserver"
 	"github.com/cozystack/cozystack/pkg/config"
+	credentialstorage "github.com/cozystack/cozystack/pkg/registry/core/credential"
 	"github.com/spf13/cobra"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -72,6 +73,11 @@ type CozyServerOptions struct {
 	HelmReleaseInstallTimeout string
 	HelmReleaseUpgradeTimeout string
 	HelmReleaseMaxHistory     int
+
+	// CredentialsCOSIWait bounds how long a mint or a revoke of a cosi
+	// credential waits for cozystack-controller to re-create its
+	// BucketAccess before it answers a retryable timeout.
+	CredentialsCOSIWait time.Duration
 }
 
 // NewCozyServerOptions returns a new instance of CozyServerOptions
@@ -169,6 +175,9 @@ func NewCommandStartCozyServer(ctx context.Context, defaults *CozyServerOptions)
 	flags.IntVar(&o.HelmReleaseMaxHistory, "helmrelease-max-history", o.HelmReleaseMaxHistory,
 		"Number of release revisions Helm keeps for HelmReleases generated from Application "+
 			"resources (Spec.MaxHistory). 0 means unlimited; 5 matches Helm's default.")
+	flags.DurationVar(&o.CredentialsCOSIWait, "credentials-cosi-wait", credentialstorage.DefaultCOSIWait,
+		"How long a mint or a revoke of a credential whose keys a COSI driver issues waits for the "+
+			"new grant before it answers a retryable timeout.")
 
 	// Note: KEP-4330 component versioning functionality (k8s.io/apiserver/pkg/util/version)
 	// is not available in Kubernetes v0.34.1. The component versioning code has been removed.
@@ -467,8 +476,9 @@ func (o *CozyServerOptions) Config() (*apiserver.Config, error) {
 	}
 
 	config := &apiserver.Config{
-		GenericConfig:  serverConfig,
-		ResourceConfig: o.ResourceConfig,
+		GenericConfig:       serverConfig,
+		ResourceConfig:      o.ResourceConfig,
+		CredentialsCOSIWait: o.CredentialsCOSIWait,
 	}
 	return config, nil
 }

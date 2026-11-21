@@ -10,6 +10,7 @@ import (
 	"flag"
 	"io"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -46,6 +47,7 @@ type fixture struct {
 	c      client.Client
 	r      *REST
 	ctx    context.Context
+	mu     sync.Mutex
 	writes []string
 }
 
@@ -69,7 +71,9 @@ func newFixture(t *testing.T, objs ...client.Object) *fixture {
 	record := func(verb string) func(ctx context.Context, c client.WithWatch, obj client.Object, _ ...any) {
 		return func(_ context.Context, _ client.WithWatch, obj client.Object, _ ...any) {
 			if _, isEvent := obj.(*corev1.Event); !isEvent {
+				f.mu.Lock()
 				f.writes = append(f.writes, verb+" "+obj.GetName())
+				f.mu.Unlock()
 			}
 		}
 	}
