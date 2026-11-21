@@ -6,20 +6,20 @@ import (
 	"context"
 	"fmt"
 
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apiserver/pkg/endpoints/request"
 	"k8s.io/apiserver/pkg/registry/rest"
 	"k8s.io/apiserver/pkg/util/dryrun"
-	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	appsv1alpha1 "github.com/cozystack/cozystack/pkg/apis/apps/v1alpha1"
+	cozyv1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
 	corev1alpha1 "github.com/cozystack/cozystack/pkg/apis/core/v1alpha1"
 	"github.com/cozystack/cozystack/pkg/credentials/account"
 	"github.com/cozystack/cozystack/pkg/credentials/format"
-	"github.com/cozystack/cozystack/pkg/credentials/store"
 )
 
 var (
@@ -29,10 +29,12 @@ var (
 )
 
 // OperationREST is the mint or the revoke subresource of a Credential. Both
-// take a CredentialRequest, replace the account's stored value with that of a
-// fresh random password in one conditional write of the account Secret, and
-// answer with a CredentialRequest. A mint returns the password, once; a
-// revoke discards it, so nobody holds a working one until the next mint.
+// take a CredentialRequest, build the whole account Secret from the template
+// with the stored value of a fresh random password, and write it in one
+// request: an update under the Secret version the template's status mirrors,
+// or a create when the account has no Secret yet. The Secret is never read. A
+// mint returns the password, once; a revoke discards it, so nobody holds a
+// working one until the next mint.
 type OperationREST struct {
 	parent *REST
 	op     corev1alpha1.CredentialOperation
@@ -80,31 +82,28 @@ func (o *OperationREST) Create(ctx context.Context, name string, obj runtime.Obj
 	if err != nil {
 		return nil, err
 	}
-	// Only a declared account is minted, whether or not its Secret exists: a
-	// Secret left behind by a removed user, or by values written around the
-	// API, does not make the account real.
-	acc, err := o.declared(ctx, res)
-	if err != nil {
-		return nil, err
-	}
-	if res.secret != nil && string(res.secret.Data[account.UsernameKey]) != acc.Username {
+	tmpl := res.tmpl
+	if meta.IsStatusConditionTrue(tmpl.Status.Conditions, cozyv1alpha1.CredentialTemplateSecretConflict) {
 		return nil, apierrors.NewConflict(r.gvr.GroupResource(), name, fmt.Errorf(
-			"credential %s holds user %q, the application declares %q; write the application to reseed it", name, res.secret.Data[account.UsernameKey], acc.Username))
+			"credential %s has a Secret it did not create; a platform administrator has to remove it first", name))
+	}
+	if !format.Known(tmpl.Spec.Format.Name) {
+		return nil, apierrors.NewConflict(r.gvr.GroupResource(), name, fmt.Errorf(
+			"credential %s names the format %q, which is not built in", name, tmpl.Spec.Format.Name))
 	}
 
 	var precondition string
 	if req.Spec.Preconditions != nil {
 		precondition = req.Spec.Preconditions.ResourceVersion
 	}
-
-	// The Secret's version is the Credential's, so a caller that read the
-	// credential and sends that version back learns, as a conflict, that
-	// somebody minted in between instead of silently killing the password that
-	// person just received. A missing Secret takes no precondition.
-	if res.secret != nil && precondition != "" && precondition != res.secret.ResourceVersion {
-		rec := account.ReadRecord(res.secret)
+	mirrored := tmpl.Status.SecretResourceVersion
+	// The Credential's version is the account Secret's, as the template's
+	// status mirrors it, so a caller that read the credential and sends that
+	// version back learns, as a conflict, that somebody minted in between
+	// instead of silently killing the password that person just received.
+	if precondition != "" && precondition != mirrored {
 		return nil, apierrors.NewConflict(r.gvr.GroupResource(), name, fmt.Errorf(
-			"credential %s changed: password %s by %s at %s", name, describe(rec.Origin), rec.By, rec.At.UTC().Format("2006-01-02T15:04:05Z")))
+			"credential %s changed: password %s by %s", name, describe(corev1alpha1.CredentialOrigin(tmpl.Status.Password.Origin)), tmpl.Status.Password.By))
 	}
 
 	if options != nil && dryrun.IsDryRun(options.DryRun) {
@@ -112,7 +111,7 @@ func (o *OperationREST) Create(ctx context.Context, name string, obj runtime.Obj
 		// that is never stored would not log in.
 		return &corev1alpha1.CredentialRequest{
 			TypeMeta: metav1.TypeMeta{APIVersion: corev1alpha1.SchemeGroupVersion.String(), Kind: "CredentialRequest"},
-			Status:   corev1alpha1.CredentialRequestStatus{Username: acc.Username, IssuedAt: metav1.NewTime(r.now())},
+			Status:   corev1alpha1.CredentialRequestStatus{Username: tmpl.Spec.Username, IssuedAt: metav1.NewTime(r.now())},
 		}, nil
 	}
 
@@ -120,62 +119,41 @@ func (o *OperationREST) Create(ctx context.Context, name string, obj runtime.Obj
 	if err != nil {
 		return nil, apierrors.NewInternalError(err)
 	}
-	stored, err := format.Encode(res.kind.Block.Format.Name, password)
+	stored, err := format.Encode(tmpl.Spec.Format.Name, password)
 	if err != nil {
 		return nil, apierrors.NewInternalError(err)
 	}
 	now := metav1.NewTime(r.now())
 	by := user.GetName()
+	sec := buildSecret(tmpl, stored, recordOf(tmpl).Apply(o.op, now, by))
 
-	username := acc.Username
-	if res.secret != nil {
-		sec := res.secret.DeepCopy()
-		sec.Data[account.PasswordKey] = []byte(stored)
-		account.WriteRecord(sec, account.ReadRecord(sec).Apply(o.op, now, by))
-		// The update carries the Secret's own resourceVersion, so two concurrent
-		// operations cannot both land: the second gets a conflict and no password.
-		if err := r.direct.Update(ctx, sec); err != nil {
-			if apierrors.IsConflict(err) {
-				return nil, apierrors.NewConflict(r.gvr.GroupResource(), name, fmt.Errorf("credential %s changed while the request was in flight", name))
+	// The status is all the API knows of the Secret. A status that lags the
+	// Secret, or a Secret written since the status was read, makes the write
+	// fail rather than overwrite it, and the caller gets a conflict and no
+	// password.
+	if mirrored == "" {
+		if err := r.direct.Create(ctx, sec); err != nil {
+			if apierrors.IsAlreadyExists(err) {
+				return nil, apierrors.NewConflict(r.gvr.GroupResource(), name, fmt.Errorf("credential %s is being seeded; retry", name))
 			}
 			return nil, err
 		}
 	} else {
-		// A declared account whose Secret is missing, as after a conversion
-		// that left the release out, gets a Secret with a new identity.
-		app := store.App{
-			Namespace: ns, Release: res.hr.Name,
-			Group: res.hr.Labels[appsv1alpha1.ApplicationGroupLabel],
-			Kind:  res.hr.Labels[appsv1alpha1.ApplicationKindLabel],
-			Name:  res.hr.Labels[appsv1alpha1.ApplicationNameLabel],
-			Block: res.kind.Block,
-		}
-		if res.stale != nil {
-			if err := r.direct.Delete(ctx, res.stale, client.Preconditions{UID: &res.stale.UID}); err != nil && !apierrors.IsNotFound(err) {
-				return nil, err
-			}
-		}
-		owner := store.OwnerReference(res.hr)
-		sec, err := store.SeedSecret(app, acc, &owner, now, by)
-		if err != nil {
-			return nil, apierrors.NewInternalError(err)
-		}
-		sec.Data[account.PasswordKey] = []byte(stored)
-		account.WriteRecord(sec, account.Record{}.Apply(o.op, now, by))
-		if err := r.direct.Create(ctx, sec); err != nil {
-			if apierrors.IsAlreadyExists(err) {
-				return nil, apierrors.NewConflict(r.gvr.GroupResource(), name, fmt.Errorf("credential %s was created while the request was in flight", name))
+		sec.ResourceVersion = mirrored
+		if err := r.direct.Update(ctx, sec); err != nil {
+			if apierrors.IsConflict(err) || apierrors.IsNotFound(err) {
+				return nil, apierrors.NewConflict(r.gvr.GroupResource(), name, fmt.Errorf("credential %s changed while the request was in flight; retry", name))
 			}
 			return nil, err
 		}
 	}
 
-	reason := store.ReasonCredentialIssued
+	reason := ReasonCredentialIssued
 	if o.op == corev1alpha1.CredentialOperationRevoke {
-		reason = store.ReasonCredentialRevoked
+		reason = ReasonCredentialRevoked
 		password = ""
 	}
-	store.Emit(ctx, r.direct, res.hr, reason, username, by)
+	Emit(ctx, r.direct, res.hr, reason, tmpl.Spec.Username, by)
 
 	return &corev1alpha1.CredentialRequest{
 		TypeMeta: metav1.TypeMeta{
@@ -183,32 +161,54 @@ func (o *OperationREST) Create(ctx context.Context, name string, obj runtime.Obj
 			Kind:       "CredentialRequest",
 		},
 		Status: corev1alpha1.CredentialRequestStatus{
-			Username: username,
+			Username: tmpl.Spec.Username,
 			Password: password,
 			IssuedAt: now,
 		},
 	}, nil
 }
 
-// declared finds the declared account a Credential name maps to. A name no
-// declared user maps to is NotFound; one two declared users map to is a
-// Conflict, since the write that declared them should have been refused.
-func (o *OperationREST) declared(ctx context.Context, res *resolved) (account.Account, error) {
-	r := o.parent
-	name := account.CredentialName(res.hr.Name, res.mapped)
-	if res.kind.Accounts == nil {
-		return account.Account{}, apierrors.NewNotFound(r.gvr.GroupResource(), name)
+// recordOf returns the record the template's status mirrors, which the mint
+// extends with its own operation.
+func recordOf(tmpl *cozyv1alpha1.CredentialTemplate) account.Record {
+	st := tmpl.Status
+	rec := account.Record{Origin: corev1alpha1.CredentialOrigin(st.Password.Origin), By: st.Password.By}
+	if st.Password.At != nil {
+		rec.At = *st.Password.At
 	}
-	accounts, err := res.kind.Accounts(ctx, res.hr)
-	if err != nil {
-		return account.Account{}, apierrors.NewConflict(r.gvr.GroupResource(), name, err)
+	for _, h := range st.History {
+		rec.History = append(rec.History, corev1alpha1.CredentialHistoryEntry{Operation: corev1alpha1.CredentialOperation(h.Operation), At: h.At, By: h.By})
 	}
-	for _, acc := range accounts {
-		if acc.Mapped == res.mapped {
-			return acc, nil
-		}
+	return rec
+}
+
+// buildSecret builds the whole account Secret of a template, as the
+// controller would seed it, with the given stored value and record.
+func buildSecret(tmpl *cozyv1alpha1.CredentialTemplate, stored string, rec account.Record) *corev1.Secret {
+	controller := true
+	sec := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:        tmpl.Name + account.SecretSuffix,
+			Namespace:   tmpl.Namespace,
+			Labels:      account.Labels(tmpl.Spec.Secret.Labels),
+			Annotations: map[string]string{account.FormatAnnotation: tmpl.Spec.Format.Name},
+			OwnerReferences: []metav1.OwnerReference{{
+				APIVersion:         cozyv1alpha1.GroupVersion.String(),
+				Kind:               "CredentialTemplate",
+				Name:               tmpl.Name,
+				UID:                tmpl.UID,
+				Controller:         &controller,
+				BlockOwnerDeletion: &controller,
+			}},
+		},
+		Type: corev1.SecretTypeBasicAuth,
+		Data: map[string][]byte{
+			account.UsernameKey: []byte(tmpl.Spec.Username),
+			account.PasswordKey: []byte(stored),
+		},
 	}
-	return account.Account{}, apierrors.NewNotFound(r.gvr.GroupResource(), name)
+	account.WriteRecord(sec, rec)
+	return sec
 }
 
 func describe(origin corev1alpha1.CredentialOrigin) string {

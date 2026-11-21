@@ -11,10 +11,8 @@ import (
 	cozyv1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
 	"github.com/cozystack/cozystack/pkg/config"
 	"github.com/cozystack/cozystack/pkg/credentials/account"
-	"github.com/cozystack/cozystack/pkg/credentials/store"
 	helmv2 "github.com/fluxcd/helm-controller/api/v2"
 	"github.com/fluxcd/pkg/apis/kustomize"
-	apiextv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -963,49 +961,45 @@ func TestAppDefHelm_UpdateFailureRequeues(t *testing.T) {
 	}
 }
 
-// TestAppDefHelm_CredentialsValuesFrom pins that a definition with a
-// credentials block naming a valuesPath gives every release of the kind one
-// valuesFrom entry per account, resolved with the schema defaults applied, so
-// a release created before the block appeared gets them on reconcile.
-func TestAppDefHelm_CredentialsValuesFrom(t *testing.T) {
+// TestAppDefHelm_KeepsAccountValuesFrom pins that the canonical valuesFrom
+// leaves the entries the CredentialTemplate controller owns in place: they
+// carry each account's stored value into the chart, and stripping them on
+// every definition change would take the accounts out of the release.
+func TestAppDefHelm_KeepsAccountValuesFrom(t *testing.T) {
 	scheme := newAppDefHelmScheme(t)
-	appDef := vmInstanceAppDef(nil)
-	appDef.Spec.Application.OpenAPISchema = `{"type":"object","properties":{"backup":{"type":"object","default":{},"properties":{"enabled":{"type":"boolean","default":true}}}}}`
-	appDef.Spec.Credentials = &cozyv1alpha1.ApplicationDefinitionCredentials{
-		Format:     cozyv1alpha1.CredentialFormat{Name: "scram-sha-256"},
-		ValuesPath: "_accounts",
-		Accounts: []cozyv1alpha1.CredentialAccountSource{
-			{Kind: cozyv1alpha1.CredentialAccountsValuesMap, Path: "users"},
-			{Kind: cozyv1alpha1.CredentialAccountsStatic, Name: "backup", When: "backup.enabled"},
+	chartRef := &helmv2.CrossNamespaceSourceReference{Kind: "OCIRepository", Name: "clickhouse-app", Namespace: "cozy-public"}
+	appDef := &cozyv1alpha1.ApplicationDefinition{
+		ObjectMeta: metav1.ObjectMeta{Name: "clickhouse"},
+		Spec: cozyv1alpha1.ApplicationDefinitionSpec{
+			Application: cozyv1alpha1.ApplicationDefinitionApplication{Kind: "ClickHouse"},
+			Release:     cozyv1alpha1.ApplicationDefinitionRelease{ChartRef: chartRef},
 		},
 	}
-	hr := vmInstanceRelease(nil, nil)
-	hr.Spec.ValuesFrom = expectedValuesFrom()
-	hr.Spec.Values = &apiextv1.JSON{Raw: []byte(`{"users":{"web":{}}}`)}
+	entry := account.ValuesFrom("clickhouse-logs.web.account", "_accounts", "web")
+	hr := &helmv2.HelmRelease{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "clickhouse-logs",
+			Namespace: "tenant-foo",
+			Labels: map[string]string{
+				"apps.cozystack.io/application.kind":  "ClickHouse",
+				"apps.cozystack.io/application.group": "apps.cozystack.io",
+			},
+		},
+		Spec: helmv2.HelmReleaseSpec{
+			ChartRef:   chartRef,
+			ValuesFrom: []helmv2.ValuesReference{{Kind: "ConfigMap", Name: "wrong"}, entry},
+		},
+	}
 	fakeClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(appDef, hr).Build()
-
 	r := &ApplicationDefinitionHelmReconciler{Client: fakeClient, Scheme: scheme}
-	if _, err := r.Reconcile(context.TODO(), reconcile.Request{NamespacedName: types.NamespacedName{Name: appDef.Name}}); err != nil {
+	if _, err := r.Reconcile(context.TODO(), reconcile.Request{NamespacedName: types.NamespacedName{Name: "clickhouse"}}); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	got := &helmv2.HelmRelease{}
-	if err := fakeClient.Get(context.TODO(), types.NamespacedName{Name: hr.Name, Namespace: hr.Namespace}, got); err != nil {
-		t.Fatalf("get HR: %v", err)
+	if err := fakeClient.Get(context.TODO(), types.NamespacedName{Name: "clickhouse-logs", Namespace: "tenant-foo"}, got); err != nil {
+		t.Fatal(err)
 	}
-	want := store.ValuesFrom(appDef.Spec.Credentials, hr.Name, []account.Account{{Username: "web", Mapped: "web"}, {Username: "backup", Mapped: "backup"}})
-	if !valuesFromEqual(got.Spec.ValuesFrom, want) {
-		t.Fatalf("valuesFrom = %+v, want %+v", got.Spec.ValuesFrom, want)
-	}
-
-	// Idempotent once in line.
-	before := got.ResourceVersion
-	if _, err := r.Reconcile(context.TODO(), reconcile.Request{NamespacedName: types.NamespacedName{Name: appDef.Name}}); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if err := fakeClient.Get(context.TODO(), types.NamespacedName{Name: hr.Name, Namespace: hr.Namespace}, got); err != nil {
-		t.Fatalf("get HR: %v", err)
-	}
-	if got.ResourceVersion != before {
-		t.Fatalf("release rewritten with nothing to change: %q -> %q", before, got.ResourceVersion)
+	if len(got.Spec.ValuesFrom) != 2 || got.Spec.ValuesFrom[0].Name != "cozystack-values" || got.Spec.ValuesFrom[1] != entry {
+		t.Fatalf("valuesFrom = %+v, want the platform values and the account entry", got.Spec.ValuesFrom)
 	}
 }

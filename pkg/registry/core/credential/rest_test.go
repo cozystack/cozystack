@@ -5,6 +5,8 @@ package credential
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"flag"
 	"io"
 	"strings"
@@ -29,88 +31,107 @@ import (
 	appsv1alpha1 "github.com/cozystack/cozystack/pkg/apis/apps/v1alpha1"
 	corev1alpha1 "github.com/cozystack/cozystack/pkg/apis/core/v1alpha1"
 	"github.com/cozystack/cozystack/pkg/credentials/account"
-	"github.com/cozystack/cozystack/pkg/credentials/store"
 )
 
-const ns = "tenant-foo"
+const (
+	ns      = "tenant-foo"
+	release = "clickhouse-logs"
+	cred    = release + ".web"
+)
 
-func testBlock() *cozyv1alpha1.ApplicationDefinitionCredentials {
-	return &cozyv1alpha1.ApplicationDefinitionCredentials{
-		Format: cozyv1alpha1.CredentialFormat{Name: "sha256"},
-		Accounts: []cozyv1alpha1.CredentialAccountSource{
-			{Kind: cozyv1alpha1.CredentialAccountsValuesMap, Path: "users"},
-		},
-	}
-}
-
-// fixture is a fake cluster with one converted Postgres application whose
-// declared accounts are fixed by the test.
+// fixture is a fake cluster with one application release and the templates
+// its chart rendered. writes counts every write a request makes, so a test
+// can hold the API to one object per request.
 type fixture struct {
-	c       client.Client
-	r       *REST
-	hr      *helmv2.HelmRelease
-	ctx     context.Context
-	declare []account.Account
+	c      client.Client
+	r      *REST
+	ctx    context.Context
+	writes []string
 }
 
 func newFixture(t *testing.T, objs ...client.Object) *fixture {
 	t.Helper()
-	return newFixtureWith(t, nil, objs...)
-}
-
-// newFixtureWith builds the fixture on a client whose calls go through funcs.
-func newFixtureWith(t *testing.T, funcs *interceptor.Funcs, objs ...client.Object) *fixture {
-	t.Helper()
 	scheme := runtime.NewScheme()
-	if err := corev1.AddToScheme(scheme); err != nil {
-		t.Fatal(err)
-	}
-	if err := helmv2.AddToScheme(scheme); err != nil {
-		t.Fatal(err)
+	for _, add := range []func(*runtime.Scheme) error{corev1.AddToScheme, helmv2.AddToScheme, cozyv1alpha1.AddToScheme} {
+		if err := add(scheme); err != nil {
+			t.Fatal(err)
+		}
 	}
 	hr := &helmv2.HelmRelease{ObjectMeta: metav1.ObjectMeta{
-		Name: "postgres-orders", Namespace: ns, UID: "hr-uid",
+		Name: release, Namespace: ns, UID: "hr-uid",
 		Labels: map[string]string{
 			appsv1alpha1.ApplicationGroupLabel: appsv1alpha1.GroupName,
-			appsv1alpha1.ApplicationKindLabel:  "Postgres",
-			appsv1alpha1.ApplicationNameLabel:  "orders",
+			appsv1alpha1.ApplicationKindLabel:  "ClickHouse",
+			appsv1alpha1.ApplicationNameLabel:  "logs",
 		},
 	}}
-	f := &fixture{hr: hr}
-	b := fake.NewClientBuilder().WithScheme(scheme).WithObjects(append(objs, hr)...)
-	if funcs != nil {
-		b = b.WithInterceptorFuncs(*funcs)
+	f := &fixture{}
+	record := func(verb string) func(ctx context.Context, c client.WithWatch, obj client.Object, _ ...any) {
+		return func(_ context.Context, _ client.WithWatch, obj client.Object, _ ...any) {
+			if _, isEvent := obj.(*corev1.Event); !isEvent {
+				f.writes = append(f.writes, verb+" "+obj.GetName())
+			}
+		}
 	}
-	c := b.Build()
+	c := fake.NewClientBuilder().WithScheme(scheme).
+		WithObjects(append(objs, hr)...).
+		WithStatusSubresource(&cozyv1alpha1.CredentialTemplate{}).
+		WithInterceptorFuncs(interceptor.Funcs{
+			Create: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
+				record("create")(ctx, c, obj)
+				return c.Create(ctx, obj, opts...)
+			},
+			Update: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.UpdateOption) error {
+				record("update")(ctx, c, obj)
+				return c.Update(ctx, obj, opts...)
+			},
+			Delete: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.DeleteOption) error {
+				record("delete")(ctx, c, obj)
+				return c.Delete(ctx, obj, opts...)
+			},
+		}).Build()
 	f.c = c
-	f.r = NewREST(c, c, map[string]Kind{"Postgres": {
-		Block:    testBlock(),
-		Accounts: func(context.Context, *helmv2.HelmRelease) ([]account.Account, error) { return f.declare, nil },
-	}})
+	f.r = NewREST(c, c)
 	f.r.now = func() time.Time { return time.Date(2026, 10, 2, 9, 14, 7, 0, time.UTC) }
 	f.ctx = request.WithUser(request.WithNamespace(context.Background(), ns), &user.DefaultInfo{Name: "jane@example.org"})
 	return f
 }
 
-func (f *fixture) app() store.App {
-	return store.App{Namespace: ns, Release: "postgres-orders", Group: appsv1alpha1.GroupName, Kind: "Postgres", Name: "orders", Block: testBlock()}
+func template(name, username string) *cozyv1alpha1.CredentialTemplate {
+	return &cozyv1alpha1.CredentialTemplate{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: name, Namespace: ns, UID: types.UID("uid-" + name),
+			Annotations: map[string]string{account.ReleaseNameAnnotation: release},
+		},
+		Spec: cozyv1alpha1.CredentialTemplateSpec{
+			Username: username,
+			Format:   cozyv1alpha1.CredentialTemplateFormat{Name: "sha256"},
+			Secret:   cozyv1alpha1.CredentialTemplateSecret{Labels: map[string]string{"reconcile.fluxcd.io/watch": "Enabled"}},
+		},
+	}
 }
 
-// seed declares user and writes its owned account Secret, and returns the
-// Secret as stored.
-func (f *fixture) seed(t *testing.T, username string) *corev1.Secret {
+// seeded returns a template with its Secret, as the controller leaves them:
+// the Secret seeded and the template's status mirroring its version.
+func (f *fixture) seeded(t *testing.T, name, username string) (*cozyv1alpha1.CredentialTemplate, *corev1.Secret) {
 	t.Helper()
-	owner := store.OwnerReference(f.hr)
-	mapped, _ := account.MapName(username)
-	f.declare = append(f.declare, account.Account{Username: username, Mapped: mapped})
-	sec, err := store.SeedSecret(f.app(), account.Account{Username: username, Mapped: mapped}, &owner, metav1.NewTime(f.r.now()), "seeder")
-	if err != nil {
+	tmpl := template(name, username)
+	if err := f.c.Create(f.ctx, tmpl); err != nil {
 		t.Fatal(err)
 	}
+	at := metav1.NewTime(f.r.now())
+	sec := buildSecret(tmpl, "seed", account.Record{}.Apply(corev1alpha1.CredentialOperationCreate, at, "controller"))
 	if err := f.c.Create(f.ctx, sec); err != nil {
 		t.Fatal(err)
 	}
-	return f.secret(t, sec.Name)
+	tmpl.Status.SecretResourceVersion = sec.ResourceVersion
+	tmpl.Status.Password = cozyv1alpha1.CredentialTemplatePasswordState{Origin: "NotIssued", By: "controller", At: &at}
+	tmpl.Status.History = []cozyv1alpha1.CredentialTemplateHistoryEntry{{Operation: "Create", At: at, By: "controller"}}
+	if err := f.c.Status().Update(f.ctx, tmpl); err != nil {
+		t.Fatal(err)
+	}
+	f.writes = nil
+	return tmpl, sec
 }
 
 func (f *fixture) secret(t *testing.T, name string) *corev1.Secret {
@@ -122,13 +143,16 @@ func (f *fixture) secret(t *testing.T, name string) *corev1.Secret {
 	return sec
 }
 
-func (f *fixture) mint(t *testing.T, name, precondition string) (*corev1alpha1.CredentialRequest, error) {
-	t.Helper()
+func (f *fixture) do(op *OperationREST, name, precondition string, dryRun bool) (*corev1alpha1.CredentialRequest, error) {
 	req := &corev1alpha1.CredentialRequest{}
 	if precondition != "" {
 		req.Spec.Preconditions = &corev1alpha1.CredentialRequestPreconditions{ResourceVersion: precondition}
 	}
-	out, err := NewMintREST(f.r).Create(f.ctx, name, req, nil, &metav1.CreateOptions{})
+	opts := &metav1.CreateOptions{}
+	if dryRun {
+		opts.DryRun = []string{metav1.DryRunAll}
+	}
+	out, err := op.Create(f.ctx, name, req, nil, opts)
 	if err != nil {
 		return nil, err
 	}
@@ -144,252 +168,196 @@ func (f *fixture) events(t *testing.T) []corev1.Event {
 	return list.Items
 }
 
-func TestGetShowsRecordNeverData(t *testing.T) {
+func TestGetShowsTheMirroredRecord(t *testing.T) {
 	f := newFixture(t)
-	sec := f.seed(t, "Web")
-
-	obj, err := f.r.Get(f.ctx, "postgres-orders.web", &metav1.GetOptions{})
+	tmpl, sec := f.seeded(t, cred, "web")
+	obj, err := f.r.Get(f.ctx, cred, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	cred := obj.(*corev1alpha1.Credential)
-	if cred.Name != "postgres-orders.web" || cred.Spec.User != "Web" || cred.Spec.Application.Name != "orders" || cred.Spec.Application.Kind != "Postgres" {
-		t.Fatalf("credential = %+v", cred)
+	c := obj.(*corev1alpha1.Credential)
+	if c.UID != tmpl.UID || c.ResourceVersion != sec.ResourceVersion {
+		t.Errorf("uid %q version %q, want the template's uid and the Secret's version", c.UID, c.ResourceVersion)
 	}
-	if cred.ResourceVersion != sec.ResourceVersion {
-		t.Fatalf("resourceVersion is the Secret's: %q != %q", cred.ResourceVersion, sec.ResourceVersion)
+	if c.Spec.User != "web" || c.Spec.Application.Kind != "ClickHouse" || c.Spec.Application.Name != "logs" {
+		t.Errorf("spec = %+v", c.Spec)
 	}
-	if cred.Status.Password.Origin != corev1alpha1.CredentialOriginNotIssued || cred.Status.Password.By != "seeder" {
-		t.Fatalf("status = %+v", cred.Status)
-	}
-	table, err := f.r.ConvertToTable(f.ctx, cred, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(table.Rows) != 1 || table.Rows[0].Cells[1] != "Postgres/orders" || table.Rows[0].Cells[3] != "NotIssued" {
-		t.Fatalf("table = %+v", table.Rows)
-	}
-	for _, name := range []string{"postgres-orders.nobody", "postgres-orders", "postgres-orders.web.account"} {
-		if _, err := f.r.Get(f.ctx, name, &metav1.GetOptions{}); !apierrors.IsNotFound(err) {
-			t.Errorf("Get(%q) = %v, want NotFound", name, err)
-		}
+	if c.Status.Password.Origin != corev1alpha1.CredentialOriginNotIssued || len(c.Status.History) != 1 {
+		t.Errorf("status = %+v", c.Status)
 	}
 }
 
-func TestListSkipsSecretsNoLiveReleaseOwns(t *testing.T) {
-	gone := &helmv2.HelmRelease{ObjectMeta: metav1.ObjectMeta{Name: "postgres-gone", Namespace: ns, UID: "gone-uid"}}
-	f := newFixture(t)
-	f.seed(t, "web")
-	// Owned by a release that no longer exists.
-	orphan, _ := store.SeedSecret(store.App{Namespace: ns, Release: "postgres-gone", Group: appsv1alpha1.GroupName, Kind: "Postgres", Name: "gone", Block: testBlock()}, account.Account{Username: "web", Mapped: "web"}, ptr(store.OwnerReference(gone)), metav1.Now(), "x")
-	if err := f.c.Create(f.ctx, orphan); err != nil {
-		t.Fatal(err)
+func TestGetAndListSkipATemplateWithoutALiveRelease(t *testing.T) {
+	orphan := template(release+"-gone.web", "web")
+	orphan.Annotations[account.ReleaseNameAnnotation] = release + "-gone"
+	unrendered := template(release+".api", "api")
+	delete(unrendered.Annotations, account.ReleaseNameAnnotation)
+	f := newFixture(t, orphan, unrendered)
+	f.seeded(t, cred, "web")
+	for _, name := range []string{orphan.Name, unrendered.Name} {
+		if _, err := f.r.Get(f.ctx, name, nil); !apierrors.IsNotFound(err) {
+			t.Errorf("get %s: err = %v, want NotFound", name, err)
+		}
 	}
-	// A Secret of an unconverted kind carrying the marker by accident.
-	other := &helmv2.HelmRelease{ObjectMeta: metav1.ObjectMeta{Name: "redis-cache", Namespace: ns, UID: "redis-uid", Labels: map[string]string{appsv1alpha1.ApplicationKindLabel: "Redis", appsv1alpha1.ApplicationNameLabel: "cache"}}}
-	if err := f.c.Create(f.ctx, other); err != nil {
-		t.Fatal(err)
-	}
-	stray, _ := store.SeedSecret(store.App{Namespace: ns, Release: "redis-cache", Kind: "Redis", Name: "cache", Block: testBlock()}, account.Account{Username: "default", Mapped: "default"}, ptr(store.OwnerReference(other)), metav1.Now(), "x")
-	if err := f.c.Create(f.ctx, stray); err != nil {
-		t.Fatal(err)
-	}
-
 	obj, err := f.r.List(f.ctx, &metainternal.ListOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	list := obj.(*corev1alpha1.CredentialList)
-	if len(list.Items) != 1 || list.Items[0].Name != "postgres-orders.web" {
-		t.Fatalf("list = %+v", list.Items)
+	items := obj.(*corev1alpha1.CredentialList).Items
+	if len(items) != 1 || items[0].Name != cred {
+		t.Errorf("list = %v, want only %s", items, cred)
 	}
 }
 
-func TestMintReplacesPasswordOnceAndRecords(t *testing.T) {
-	f := newFixture(t)
-	before := f.seed(t, "web")
-
-	res, err := f.mint(t, "postgres-orders.web", before.ResourceVersion)
+func TestListShowsAnAccountWithoutASecretAsNotIssued(t *testing.T) {
+	f := newFixture(t, template(cred, "web"))
+	obj, err := f.r.List(f.ctx, &metainternal.ListOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res.Status.Username != "web" || len(res.Status.Password) != 32 || res.Status.IssuedAt.Time != f.r.now() {
-		t.Fatalf("response = %+v", res.Status)
+	items := obj.(*corev1alpha1.CredentialList).Items
+	if len(items) != 1 || items[0].Status.Password.Origin != corev1alpha1.CredentialOriginNotIssued || items[0].ResourceVersion != "" {
+		t.Errorf("list = %+v", items)
 	}
-	after := f.secret(t, before.Name)
-	if string(after.Data[account.PasswordKey]) == string(before.Data[account.PasswordKey]) {
-		t.Fatal("stored value unchanged")
+}
+
+func TestMintWritesOneSecretUnderTheMirroredVersion(t *testing.T) {
+	f := newFixture(t)
+	tmpl, _ := f.seeded(t, cred, "web")
+	res, err := f.do(NewMintREST(f.r), cred, tmpl.Status.SecretResourceVersion, false)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if strings.Contains(string(after.Data[account.PasswordKey]), res.Status.Password) {
-		t.Fatal("the plaintext must not be stored")
+	if len(f.writes) != 1 || f.writes[0] != "update "+cred+account.SecretSuffix {
+		t.Errorf("writes = %v, want one update of the account Secret", f.writes)
 	}
-	rec := account.ReadRecord(after)
-	if rec.Origin != corev1alpha1.CredentialOriginMinted || rec.By != "jane@example.org" || len(rec.History) != 2 || rec.History[0].Operation != corev1alpha1.CredentialOperationMint {
-		t.Fatalf("record = %+v", rec)
+	if len(res.Status.Password) != 32 || res.Status.Username != "web" {
+		t.Fatalf("answer = %+v", res.Status)
+	}
+	sec := f.secret(t, cred+account.SecretSuffix)
+	sum := sha256.Sum256([]byte(res.Status.Password))
+	if string(sec.Data[account.PasswordKey]) != hex.EncodeToString(sum[:]) {
+		t.Error("the Secret does not hold the verifier of the minted password")
+	}
+	if sec.Labels["reconcile.fluxcd.io/watch"] != "Enabled" || sec.Labels[account.AccountLabel] != "true" {
+		t.Errorf("labels = %v", sec.Labels)
+	}
+	if ref := metav1.GetControllerOf(sec); ref == nil || ref.UID != tmpl.UID {
+		t.Errorf("controller = %v, want the template", ref)
+	}
+	rec := account.ReadRecord(sec)
+	if rec.Origin != corev1alpha1.CredentialOriginMinted || rec.By != "jane@example.org" || len(rec.History) != 2 {
+		t.Errorf("record = %+v, want Minted by the caller on top of the mirrored history", rec)
 	}
 	evs := f.events(t)
-	if len(evs) != 1 || evs[0].Reason != store.ReasonCredentialIssued || evs[0].InvolvedObject.Kind != "Postgres" || evs[0].InvolvedObject.Name != "orders" {
-		t.Fatalf("events = %+v", evs)
+	if len(evs) != 1 || evs[0].Reason != ReasonCredentialIssued {
+		t.Fatalf("events = %v", evs)
 	}
-	if evs[0].Message != "password of user web issued by jane@example.org" || strings.Contains(evs[0].Message, res.Status.Password) {
-		t.Fatalf("event message = %q", evs[0].Message)
+	if strings.Contains(evs[0].Message, res.Status.Password) {
+		t.Error("the event carries the password")
 	}
+}
 
-	// The stale precondition is the one from before the mint: conflict,
-	// naming who issued in between, and nothing written.
-	_, err = f.mint(t, "postgres-orders.web", before.ResourceVersion)
-	if !apierrors.IsConflict(err) || !strings.Contains(err.Error(), "password issued by jane@example.org at 2026-10-02T09:14:07Z") {
-		t.Fatalf("expected conflict naming the issuer, got %v", err)
-	}
-	if string(f.secret(t, before.Name).Data[account.PasswordKey]) != string(after.Data[account.PasswordKey]) {
-		t.Fatal("a refused mint must not write")
-	}
-	// No precondition: always proceeds.
-	if _, err := f.mint(t, "postgres-orders.web", ""); err != nil {
+func TestMintCreatesTheSecretOfAnAccountThatHasNone(t *testing.T) {
+	f := newFixture(t, template(cred, "web"))
+	res, err := f.do(NewMintREST(f.r), cred, "", false)
+	if err != nil {
 		t.Fatal(err)
+	}
+	if len(f.writes) != 1 || f.writes[0] != "create "+cred+account.SecretSuffix {
+		t.Errorf("writes = %v, want one create of the account Secret", f.writes)
+	}
+	if res.Status.Password == "" {
+		t.Error("no password")
+	}
+}
+
+func TestMintConflictsWhenTheStatusLagsTheSecret(t *testing.T) {
+	f := newFixture(t)
+	tmpl, sec := f.seeded(t, cred, "web")
+	// Somebody minted after the status was mirrored.
+	sec.Data[account.PasswordKey] = []byte("other")
+	if err := f.c.Update(f.ctx, sec); err != nil {
+		t.Fatal(err)
+	}
+	before := f.secret(t, sec.Name)
+	f.writes = nil
+	res, err := f.do(NewMintREST(f.r), cred, "", false)
+	if !apierrors.IsConflict(err) || res != nil {
+		t.Fatalf("err = %v, answer = %v, want a conflict and no password", err, res)
+	}
+	if after := f.secret(t, sec.Name); string(after.Data[account.PasswordKey]) != string(before.Data[account.PasswordKey]) {
+		t.Error("the Secret was overwritten")
+	}
+	_ = tmpl
+}
+
+func TestMintConflictsOnAStalePrecondition(t *testing.T) {
+	f := newFixture(t)
+	f.seeded(t, cred, "web")
+	if _, err := f.do(NewMintREST(f.r), cred, "999999", false); !apierrors.IsConflict(err) {
+		t.Fatalf("err = %v, want a conflict", err)
+	}
+	if len(f.writes) != 0 {
+		t.Errorf("writes = %v, want none", f.writes)
+	}
+}
+
+func TestMintRefusesAConflictingSecretAndAnUnknownFormat(t *testing.T) {
+	conflict := template(cred, "web")
+	conflict.Status.Conditions = []metav1.Condition{{Type: cozyv1alpha1.CredentialTemplateSecretConflict, Status: metav1.ConditionTrue, Reason: "ForeignSecret", LastTransitionTime: metav1.Now()}}
+	unknown := template(release+".api", "api")
+	unknown.Spec.Format.Name = "apr1"
+	f := newFixture(t, conflict, unknown)
+	for _, name := range []string{conflict.Name, unknown.Name} {
+		if _, err := f.do(NewMintREST(f.r), name, "", false); !apierrors.IsConflict(err) {
+			t.Errorf("mint %s: err = %v, want a conflict", name, err)
+		}
+	}
+	if len(f.writes) != 0 {
+		t.Errorf("writes = %v, want none", f.writes)
+	}
+}
+
+func TestMintOnAMissingTemplateIsNotFound(t *testing.T) {
+	f := newFixture(t)
+	if _, err := f.do(NewMintREST(f.r), release+".nobody", "", false); !apierrors.IsNotFound(err) {
+		t.Fatalf("err = %v, want NotFound", err)
 	}
 }
 
 func TestRevokeReturnsNoPassword(t *testing.T) {
 	f := newFixture(t)
-	before := f.seed(t, "web")
-	out, err := NewRevokeREST(f.r).Create(f.ctx, "postgres-orders.web", &corev1alpha1.CredentialRequest{}, nil, &metav1.CreateOptions{})
+	f.seeded(t, cred, "web")
+	res, err := f.do(NewRevokeREST(f.r), cred, "", false)
 	if err != nil {
 		t.Fatal(err)
 	}
-	res := out.(*corev1alpha1.CredentialRequest)
-	if res.Status.Password != "" || res.Status.Username != "web" {
-		t.Fatalf("response = %+v", res.Status)
+	if res.Status.Password != "" {
+		t.Error("a revoke returned a password")
 	}
-	after := f.secret(t, before.Name)
-	if string(after.Data[account.PasswordKey]) == string(before.Data[account.PasswordKey]) {
-		t.Fatal("revoke must replace the stored value")
+	if rec := account.ReadRecord(f.secret(t, cred+account.SecretSuffix)); rec.Origin != corev1alpha1.CredentialOriginRevoked {
+		t.Errorf("origin = %s, want Revoked", rec.Origin)
 	}
-	if rec := account.ReadRecord(after); rec.Origin != corev1alpha1.CredentialOriginRevoked {
-		t.Fatalf("record = %+v", rec)
-	}
-	if evs := f.events(t); len(evs) != 1 || evs[0].Reason != store.ReasonCredentialRevoked {
-		t.Fatalf("events = %+v", evs)
-	}
-}
-
-func TestMintCreatesMissingDeclaredAccount(t *testing.T) {
-	f := newFixture(t)
-	f.declare = []account.Account{{Username: "Web", Mapped: "web"}}
-
-	// Not declared: does not exist.
-	if _, err := f.mint(t, "postgres-orders.api", ""); !apierrors.IsNotFound(err) {
-		t.Fatalf("undeclared account: %v", err)
-	}
-	// A stale Secret at the name, from a deleted application, is replaced.
-	gone := &helmv2.HelmRelease{ObjectMeta: metav1.ObjectMeta{Name: "postgres-orders", Namespace: ns, UID: "old-uid"}}
-	stale, _ := store.SeedSecret(f.app(), account.Account{Username: "Web", Mapped: "web"}, ptr(store.OwnerReference(gone)), metav1.Now(), "x")
-	if err := f.c.Create(f.ctx, stale); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := f.r.Get(f.ctx, "postgres-orders.web", &metav1.GetOptions{}); !apierrors.IsNotFound(err) {
-		t.Fatalf("a stale Secret must not be served: %v", err)
-	}
-	// A precondition on a missing Secret is ignored.
-	res, err := f.mint(t, "postgres-orders.web", "12345")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if res.Status.Username != "Web" {
-		t.Fatalf("username must be the declared one: %+v", res.Status)
-	}
-	sec := f.secret(t, "postgres-orders.web.account")
-	if len(sec.OwnerReferences) != 1 || sec.OwnerReferences[0].UID != f.hr.UID || string(sec.Data[account.UsernameKey]) != "Web" {
-		t.Fatalf("created Secret = %+v", sec.ObjectMeta)
-	}
-	rec := account.ReadRecord(sec)
-	if rec.Origin != corev1alpha1.CredentialOriginMinted || len(rec.History) != 1 {
-		t.Fatalf("record = %+v", rec)
-	}
-}
-
-func TestUnconvertedKindHasNoCredentials(t *testing.T) {
-	f := newFixture(t)
-	f.hr.Labels[appsv1alpha1.ApplicationKindLabel] = "Redis"
-	if err := f.c.Update(f.ctx, f.hr); err != nil {
-		t.Fatal(err)
-	}
-	f.seed(t, "web")
-	if _, err := f.r.Get(f.ctx, "postgres-orders.web", &metav1.GetOptions{}); !apierrors.IsNotFound(err) {
-		t.Fatalf("Get = %v", err)
-	}
-	if _, err := f.mint(t, "postgres-orders.web", ""); !apierrors.IsNotFound(err) {
-		t.Fatalf("mint = %v", err)
-	}
-}
-
-func ptr[T any](v T) *T { return &v }
-
-func TestMintRefusesAnUndeclaredAccountWithASecret(t *testing.T) {
-	f := newFixture(t)
-	before := f.seed(t, "web")
-	// The user left the values and the prune of its Secret failed.
-	f.declare = nil
-	if _, err := f.mint(t, "postgres-orders.web", ""); !apierrors.IsNotFound(err) {
-		t.Fatalf("mint on an undeclared account: %v, want NotFound", err)
-	}
-	// A Secret holding another user than the one the name maps to.
-	f.declare = []account.Account{{Username: "Web", Mapped: "web"}}
-	if _, err := f.mint(t, "postgres-orders.web", ""); !apierrors.IsConflict(err) {
-		t.Fatalf("mint on a Secret of another user: %v, want Conflict", err)
-	}
-	if string(f.secret(t, before.Name).Data[account.PasswordKey]) != string(before.Data[account.PasswordKey]) {
-		t.Fatal("a refused mint must not write")
+	if evs := f.events(t); len(evs) != 1 || evs[0].Reason != ReasonCredentialRevoked {
+		t.Errorf("events = %v", evs)
 	}
 }
 
 func TestDryRunMintAndRevokeWriteNothing(t *testing.T) {
 	f := newFixture(t)
-	before := f.seed(t, "web")
-	dry := &metav1.CreateOptions{DryRun: []string{metav1.DryRunAll}}
+	f.seeded(t, cred, "web")
 	for _, op := range []*OperationREST{NewMintREST(f.r), NewRevokeREST(f.r)} {
-		out, err := op.Create(f.ctx, "postgres-orders.web", &corev1alpha1.CredentialRequest{}, nil, dry)
+		res, err := f.do(op, cred, "", true)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if res := out.(*corev1alpha1.CredentialRequest); res.Status.Password != "" || res.Status.Username != "web" {
-			t.Fatalf("dry-run response = %+v", res.Status)
+		if res.Status.Password != "" {
+			t.Error("a dry run returned a password")
 		}
 	}
-	after := f.secret(t, before.Name)
-	if after.ResourceVersion != before.ResourceVersion || string(after.Data[account.PasswordKey]) != string(before.Data[account.PasswordKey]) {
-		t.Fatal("a dry run changed the account Secret")
-	}
-	if evs := f.events(t); len(evs) != 0 {
-		t.Fatalf("a dry run recorded events: %+v", evs)
-	}
-}
-
-// Two operations racing on one account cannot both land: the write carries
-// the resourceVersion the operation read, so the slower one gets a conflict
-// and no password.
-func TestMintConflictsOnAConcurrentChange(t *testing.T) {
-	var raced bool
-	f := newFixtureWith(t, &interceptor.Funcs{
-		Update: func(ctx context.Context, cl client.WithWatch, obj client.Object, opts ...client.UpdateOption) error {
-			if sec, ok := obj.(*corev1.Secret); ok && !raced {
-				raced = true
-				other := &corev1.Secret{}
-				if err := cl.Get(ctx, client.ObjectKeyFromObject(sec), other); err != nil {
-					return err
-				}
-				other.Annotations["concurrent"] = "write"
-				if err := cl.Update(ctx, other); err != nil {
-					return err
-				}
-			}
-			return cl.Update(ctx, obj, opts...)
-		},
-	})
-	f.seed(t, "web")
-	res, err := f.mint(t, "postgres-orders.web", "")
-	if !apierrors.IsConflict(err) || res != nil {
-		t.Fatalf("mint racing a concurrent write: res=%v err=%v, want a conflict and no password", res, err)
+	if len(f.writes) != 0 || len(f.events(t)) != 0 {
+		t.Errorf("writes = %v, events = %v, want none", f.writes, f.events(t))
 	}
 }
 
@@ -407,8 +375,8 @@ func TestMintLogsNoPassword(t *testing.T) {
 	}()
 
 	f := newFixture(t)
-	f.seed(t, "web")
-	res, err := f.mint(t, "postgres-orders.web", "")
+	f.seeded(t, cred, "web")
+	res, err := f.do(NewMintREST(f.r), cred, "", false)
 	if err != nil {
 		t.Fatal(err)
 	}

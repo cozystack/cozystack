@@ -1,26 +1,25 @@
 // SPDX-License-Identifier: Apache-2.0
 
-// Package account is what the Cozystack API and the migration tooling share
-// about account Secrets: their names, the labels and annotations that carry
-// the record, and how a kind's credentials block yields the accounts of one
-// application. It writes nothing itself.
+// Package account is what the Cozystack API, the CredentialTemplate controller
+// and the migration tooling share about account Secrets: their names, the
+// labels and annotations that carry the record, and how the stored value
+// reaches a chart through valuesFrom. It writes nothing itself.
 package account
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"regexp"
 	"strings"
 
+	helmv2 "github.com/fluxcd/helm-controller/api/v2"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/validation"
 
-	cozyv1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
-	appsv1alpha1 "github.com/cozystack/cozystack/pkg/apis/apps/v1alpha1"
 	corev1alpha1 "github.com/cozystack/cozystack/pkg/apis/core/v1alpha1"
-	"github.com/cozystack/cozystack/pkg/credentials/format"
 )
 
 const (
@@ -40,16 +39,25 @@ const (
 	// HistoryLimit bounds the history kept on the Secret; the audit log keeps
 	// every operation.
 	HistoryLimit = 10
-	// SecretSuffix follows the mapped account name in the Secret's name.
+	// FormatAnnotation names the format the Secret's password is stored in, so
+	// the controller sees when a template's format changed.
+	FormatAnnotation = "credentials.cozystack.io/format"
+	// SeedAnnotation on a HelmRelease lets the controller seed the account
+	// Secrets of its templates. The API sets it on every release it creates,
+	// the conversion on a release whose Secrets it wrote; a release without it
+	// keeps passwords the platform never saw, so its accounts are left for a
+	// mint.
+	SeedAnnotation = "credentials.cozystack.io/seed"
+	// ReleaseNameAnnotation is what Helm puts on every object it renders,
+	// naming the release; it ties a template to its HelmRelease.
+	ReleaseNameAnnotation = "meta.helm.sh/release-name"
+	// SecretSuffix follows the template name in the account Secret's name.
 	SecretSuffix = ".account"
 	// UsernameKey and PasswordKey are the two data keys of every account
 	// Secret, whatever the format.
 	UsernameKey = "username"
 	PasswordKey = "password"
 )
-
-// ErrNotBuilt marks a declared format or source kind the API cannot serve yet.
-var ErrNotBuilt = errors.New("declared but not built")
 
 var nonNameChars = regexp.MustCompile(`[^a-z0-9-]`)
 
@@ -90,191 +98,6 @@ func SplitCredentialName(name string) (release, mapped string, ok bool) {
 		return "", "", false
 	}
 	return release, mapped, true
-}
-
-// Validate reports whether the API can serve a kind with this block: a format
-// or a source kind that is declared but not built, an unknown built-in format,
-// or a source missing the field its kind needs, refuses the whole kind.
-func Validate(c *cozyv1alpha1.ApplicationDefinitionCredentials) error {
-	if c == nil {
-		return nil
-	}
-	switch c.Format.Kind {
-	case "", cozyv1alpha1.CredentialFormatBuiltIn:
-		if !format.Known(c.Format.Name) {
-			return fmt.Errorf("format %q is not a built-in format", c.Format.Name)
-		}
-	case cozyv1alpha1.CredentialFormatWebhook:
-		return fmt.Errorf("format kind Webhook: %w", ErrNotBuilt)
-	default:
-		return fmt.Errorf("format kind %q is unknown", c.Format.Kind)
-	}
-	if c.ValuesPath != "" && !strings.HasPrefix(c.ValuesPath, "_") {
-		return fmt.Errorf("valuesPath %q must start with \"_\"", c.ValuesPath)
-	}
-	// Labels copies secretLabels over the account marker and the application
-	// identity labels, which store.List, store.Prune and the Credential view
-	// select the account Secrets by. A block that sets one of them would make
-	// those Secrets unreachable, so refuse it rather than lose the selector.
-	for k := range c.SecretLabels {
-		switch k {
-		case AccountLabel,
-			appsv1alpha1.ApplicationGroupLabel,
-			appsv1alpha1.ApplicationKindLabel,
-			appsv1alpha1.ApplicationNameLabel:
-			return fmt.Errorf("secretLabels key %q is reserved: it is the account marker or an application identity label the account Secrets are selected by", k)
-		}
-	}
-	if len(c.Accounts) == 0 {
-		return errors.New("accounts is empty")
-	}
-	for i, s := range c.Accounts {
-		switch s.Kind {
-		case cozyv1alpha1.CredentialAccountsValuesMap:
-			if s.Path == "" {
-				return fmt.Errorf("accounts[%d]: a ValuesMap source needs a path", i)
-			}
-		case cozyv1alpha1.CredentialAccountsStatic:
-			if s.Name == "" {
-				return fmt.Errorf("accounts[%d]: a Static source needs a name", i)
-			}
-		case cozyv1alpha1.CredentialAccountsValuesList, cozyv1alpha1.CredentialAccountsExpression, cozyv1alpha1.CredentialAccountsWebhook:
-			return fmt.Errorf("accounts[%d]: source kind %s: %w", i, s.Kind, ErrNotBuilt)
-		default:
-			return fmt.Errorf("accounts[%d]: source kind %q is unknown", i, s.Kind)
-		}
-		switch s.Owner {
-		case "", cozyv1alpha1.CredentialAccountOwnerTenant, cozyv1alpha1.CredentialAccountOwnerPlatform:
-		default:
-			return fmt.Errorf("accounts[%d]: owner %q is unknown", i, s.Owner)
-		}
-	}
-	return nil
-}
-
-// Resolve returns the tenant accounts of an application from its defaulted
-// spec values, in declaration order. Platform accounts are left out, and a
-// ValuesMap key that names one is skipped. Two users that map to one name,
-// or a user whose name maps to an invalid one, are an error naming them.
-func Resolve(c *cozyv1alpha1.ApplicationDefinitionCredentials, values map[string]any) ([]Account, error) {
-	if c == nil {
-		return nil, nil
-	}
-	platform := map[string]bool{}
-	for _, s := range c.Accounts {
-		if s.Kind == cozyv1alpha1.CredentialAccountsStatic && s.Owner == cozyv1alpha1.CredentialAccountOwnerPlatform {
-			platform[s.Name] = true
-		}
-	}
-	var accounts []Account
-	byMapped := map[string]string{}
-	add := func(username string) error {
-		mapped, err := MapName(username)
-		if err != nil {
-			return err
-		}
-		if other, dup := byMapped[mapped]; dup {
-			if other == username {
-				return nil
-			}
-			return fmt.Errorf("users %q and %q both map to the name %q; rename one of them", other, username, mapped)
-		}
-		byMapped[mapped] = username
-		accounts = append(accounts, Account{Username: username, Mapped: mapped})
-		return nil
-	}
-	for _, s := range c.Accounts {
-		switch s.Kind {
-		case cozyv1alpha1.CredentialAccountsValuesMap:
-			m, _ := Lookup(values, s.Path).(map[string]any)
-			for _, name := range sortedKeys(m) {
-				if platform[name] {
-					continue
-				}
-				if err := add(name); err != nil {
-					return nil, err
-				}
-			}
-		case cozyv1alpha1.CredentialAccountsStatic:
-			if s.Owner == cozyv1alpha1.CredentialAccountOwnerPlatform {
-				continue
-			}
-			if s.When != "" {
-				on, _ := Lookup(values, s.When).(bool)
-				if !on {
-					continue
-				}
-			}
-			if err := add(s.Name); err != nil {
-				return nil, err
-			}
-		}
-	}
-	return accounts, nil
-}
-
-// PlatformAccounts returns the names of the kind's platform accounts.
-func PlatformAccounts(c *cozyv1alpha1.ApplicationDefinitionCredentials) []string {
-	if c == nil {
-		return nil
-	}
-	var names []string
-	for _, s := range c.Accounts {
-		if s.Kind == cozyv1alpha1.CredentialAccountsStatic && s.Owner == cozyv1alpha1.CredentialAccountOwnerPlatform {
-			names = append(names, s.Name)
-		}
-	}
-	return names
-}
-
-// ValuesMapPaths returns the paths of the kind's ValuesMap sources.
-func ValuesMapPaths(c *cozyv1alpha1.ApplicationDefinitionCredentials) []string {
-	if c == nil {
-		return nil
-	}
-	var paths []string
-	for _, s := range c.Accounts {
-		if s.Kind == cozyv1alpha1.CredentialAccountsValuesMap {
-			paths = append(paths, s.Path)
-		}
-	}
-	return paths
-}
-
-// Lookup walks a dotted path through nested maps and returns what it finds,
-// or nil where the path leaves the maps.
-func Lookup(values map[string]any, path string) any {
-	var cur any = values
-	for _, key := range strings.Split(path, ".") {
-		m, ok := cur.(map[string]any)
-		if !ok {
-			return nil
-		}
-		cur, ok = m[key]
-		if !ok {
-			return nil
-		}
-	}
-	return cur
-}
-
-func sortedKeys(m map[string]any) []string {
-	keys := make([]string, 0, len(m))
-	for k := range m {
-		keys = append(keys, k)
-	}
-	// Declaration order inside a map is the sorted order: it is what a chart's
-	// range sees and what makes the seeding deterministic.
-	sortStrings(keys)
-	return keys
-}
-
-func sortStrings(s []string) {
-	for i := 1; i < len(s); i++ {
-		for j := i; j > 0 && s[j] < s[j-1]; j-- {
-			s[j], s[j-1] = s[j-1], s[j]
-		}
-	}
 }
 
 // Record is the per-account record an account Secret carries in its
@@ -355,22 +178,42 @@ func parseTime(s string) (metav1.Time, error) {
 	return t, err
 }
 
-// Labels are the labels every account Secret of an application carries: the
-// account marker, the application identity the view lists by, and the labels
-// the kind's block names for its operator.
-func Labels(c *cozyv1alpha1.ApplicationDefinitionCredentials, group, kind, name string) map[string]string {
-	labels := map[string]string{
-		AccountLabel:                       "true",
-		appsv1alpha1.ApplicationGroupLabel: group,
-		appsv1alpha1.ApplicationKindLabel:  kind,
-		appsv1alpha1.ApplicationNameLabel:  name,
+// Labels are the labels an account Secret carries: those its template names,
+// and the account marker, which a template cannot override.
+func Labels(templateLabels map[string]string) map[string]string {
+	labels := make(map[string]string, len(templateLabels)+1)
+	for k, v := range templateLabels {
+		labels[k] = v
 	}
-	if c != nil {
-		for k, v := range c.SecretLabels {
-			labels[k] = v
-		}
-	}
+	labels[AccountLabel] = "true"
 	return labels
+}
+
+// DigestKey is the values key one account's stored value lands under: the
+// SHA-256 of the user name, which fits a valuesFrom targetPath whatever the
+// name holds.
+func DigestKey(username string) string {
+	sum := sha256.Sum256([]byte(username))
+	return "u" + hex.EncodeToString(sum[:])
+}
+
+// ValuesFrom is the HelmRelease valuesFrom entry that carries an account's
+// stored value into <valuesPath>.<DigestKey>. It is optional, so the release
+// renders while the account has no Secret yet.
+func ValuesFrom(secretName, valuesPath, username string) helmv2.ValuesReference {
+	return helmv2.ValuesReference{
+		Kind:       "Secret",
+		Name:       secretName,
+		ValuesKey:  PasswordKey,
+		TargetPath: valuesPath + "." + DigestKey(username),
+		Optional:   true,
+	}
+}
+
+// IsAccountValuesFrom reports whether a valuesFrom entry is one ValuesFrom
+// builds, which the controller owns and the Application API keeps.
+func IsAccountValuesFrom(ref helmv2.ValuesReference) bool {
+	return ref.Kind == "Secret" && ref.ValuesKey == PasswordKey && strings.HasSuffix(ref.Name, SecretSuffix)
 }
 
 // IsAccountSecret reports whether a Secret is one the API writes for an
