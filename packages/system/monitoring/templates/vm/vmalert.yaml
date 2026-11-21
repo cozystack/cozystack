@@ -1,3 +1,4 @@
+{{- $platform := has .Release.Namespace (list "tenant-root" "cozy-monitoring") }}
 {{- range .Values.metricsStorages }}
 ---
 apiVersion: operator.victoriametrics.com/v1beta1
@@ -22,9 +23,9 @@ spec:
   remoteWrite:
     url: http://vminsert-{{ .name }}.{{ $.Release.Namespace }}.svc:8480/insert/0/prometheus/api/v1/write
   resources: {}
-  {{- if eq $.Release.Namespace "tenant-root" }}
+  {{- if $platform }}
   {{- /*
-    Root monitoring is the platform-wide view: it must keep seeing the
+    Platform monitoring is the cluster-wide view: it must keep seeing the
     infrastructure VMRules, which live outside any tenant namespace
     (cozy-monitoring, cozy-kubevirt-cdi, cozy-linstor, ...). Those namespaces
     carry no namespace.cozystack.io/monitoring label, so any selector would
@@ -50,6 +51,24 @@ spec:
   ruleNamespaceSelector:
     matchLabels:
       namespace.cozystack.io/monitoring: {{ $.Release.Namespace }}
+  {{- /* The operator's PrometheusRule lives outside the tenant namespaces. A
+         local file keeps CNPG alerts on the tenant's own metrics without
+         adding duplicate VMRules to the platform instance. */}}
+  {{- $source := required "missing CNPG rules" ($.Files.Get "rules/cnpg-default-alerts.yaml") }}
+  {{- $rules := (fromYaml $source).spec | toYaml }}
+  {{- $config := printf "vmalert-cnpg-%s" (printf "%s/%s" $.Release.Name $rules | sha256sum | trunc 12) }}
+  configMaps:
+    - {{ $config }}
+  rulePath:
+    - /etc/vm/configs/{{ $config }}/rules.yaml
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $config }}
+data:
+  rules.yaml: |
+    {{- $rules | nindent 4 }}
   {{- end }}
 {{- break }}
 {{- end }}
