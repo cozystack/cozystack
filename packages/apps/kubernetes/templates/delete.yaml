@@ -93,6 +93,10 @@ spec:
               # steps that are NOT backstopped — Steps 3, 5, 6 and 7, and the patch
               # inside Step 1 — end the run under set -e and never reach that
               # message at all.
+{{- if not (include "kubernetes.etcd.sharedDataStore" .) }}
+              # On a cluster that owns its etcd, Step 8 is not backstopped either,
+              # and the check before it ends the run on purpose; it says why there.
+{{- end }}
               #
               # What gets recorded is RESIDUE, never a change of route. A
               # bounded delete that times out has a remedy right behind it —
@@ -302,6 +306,48 @@ spec:
               kubectl -n {{ .Release.Namespace }} delete tenantcontrolplanes.kamaji.clastix.io {{ .Release.Name }} \
                 --ignore-not-found=true --wait=true --timeout=120s \
                 || echo "WARNING: TenantControlPlane {{ .Release.Name }} did not delete within timeout; falling through to Step 4b, which reports whether the datastore-secret finalizer was left behind" >&2
+{{- if not (include "kubernetes.etcd.sharedDataStore" .) }}
+
+              echo "Step 4a: Releasing a TenantControlPlane still held by finalizer.kamaji.clastix.io from this cluster's own DataStore"
+              # That finalizer drops the tenant's etcd role, prefix and user and
+              # the datastore-config Secret's finalizer, and Kamaji runs it only
+              # while the DataStore is Ready and answers. On the cluster's own
+              # DataStore the role, prefix and user live in the etcd this
+              # uninstall deletes next, so an etcd that never came up or lost
+              # quorum would hold the TenantControlPlane forever for nothing.
+              # Step 4b still clears the Secret's finalizer. A TenantControlPlane
+              # on a shared DataStore is left to Kamaji: that etcd outlives this
+              # cluster, and the prefix in it must really go.
+              #
+              # The JSON patch tests the finalizer at the index it was read at,
+              # so a list another controller changed in between is refused
+              # rather than overwritten.
+              tcp_state_read=0
+              tcp_state=$(kubectl -n {{ .Release.Namespace }} get tenantcontrolplanes.kamaji.clastix.io {{ .Release.Name }} \
+                            -o jsonpath='{.spec.dataStore}{"\n"}{range .metadata.finalizers[*]}{@}{"\n"}{end}' \
+                            --ignore-not-found 2>/dev/null) || tcp_state_read=1
+              tcp_store=$(printf '%s\n' "$tcp_state" | sed -n 1p)
+              if [ "$tcp_state_read" != 0 ] || [ -z "$tcp_state" ]; then
+                echo "  TenantControlPlane {{ .Release.Name }} is gone or unreadable; Step 4b decides which"
+              elif [ "$tcp_store" != {{ include "kubernetes.etcd.dataStoreName" . | quote }} ]; then
+                echo "  TenantControlPlane {{ .Release.Name }} runs on DataStore $tcp_store, not on its own; leaving it to Kamaji"
+              else
+                fin_index=$(printf '%s\n' "$tcp_state" | sed 1d | grep -nxF 'finalizer.kamaji.clastix.io' | cut -d: -f1 | head -n 1)
+                if [ -z "$fin_index" ]; then
+                  echo "  TenantControlPlane {{ .Release.Name }} no longer carries finalizer.kamaji.clastix.io"
+                else
+                  fin_index=$((fin_index - 1))
+                  echo "  Removing finalizer.kamaji.clastix.io from tenantcontrolplane/{{ .Release.Name }}"
+                  kubectl -n {{ .Release.Namespace }} patch tenantcontrolplanes.kamaji.clastix.io {{ .Release.Name }} --type=json \
+                    -p "[{\"op\":\"test\",\"path\":\"/metadata/finalizers/$fin_index\",\"value\":\"finalizer.kamaji.clastix.io\"},{\"op\":\"remove\",\"path\":\"/metadata/finalizers/$fin_index\"}]" \
+                    || backstop "step 4a (TenantControlPlane datastore finalizer)" \
+                         "failed to remove finalizer.kamaji.clastix.io from tenantcontrolplane/{{ .Release.Name }}; it waits on an etcd this uninstall deletes"
+                fi
+                kubectl -n {{ .Release.Namespace }} delete tenantcontrolplanes.kamaji.clastix.io {{ .Release.Name }} \
+                  --ignore-not-found=true --wait=true --timeout=60s \
+                  || echo "WARNING: TenantControlPlane {{ .Release.Name }} did not delete within 60s of releasing it; Step 4b reports what is left" >&2
+              fi
+{{- end }}
 
               echo "Step 4b: Clearing leftover Kamaji datastore-secret finalizer on {{ .Release.Name }}-datastore-config"
               # Kamaji creates a per-tenant datastore connection Secret named
@@ -432,6 +478,45 @@ spec:
               kubectl -n {{ .Release.Namespace }} delete jobs.batch \
                 {{ .Release.Name }}-oidc-bootstrap \
                 --ignore-not-found=true --wait=false
+{{- if not (include "kubernetes.etcd.sharedDataStore" .) }}
+{{- $etcdName := include "kubernetes.etcd.name" . }}
+{{- $etcdCertificates := list }}
+{{- range list "peer-ca" "ca" "server" "peer" "client" }}
+{{- $etcdCertificates = append $etcdCertificates (printf "%s-%s" $etcdName .) }}
+{{- end }}
+
+              {{- /* Helm deletes this cluster's etcd once the hook exits 0, and a
+                    TenantControlPlane still carrying finalizer.kamaji.clastix.io on
+                    it cannot finish deleting without that etcd. When Step 4a could
+                    not take the finalizer off, or the TenantControlPlane cannot be
+                    read, stop before Step 8 so the uninstall is retried with the
+                    etcd and its PKI still in place. */}}
+              tcp_hold_read=0
+              tcp_hold=$(kubectl -n {{ .Release.Namespace }} get tenantcontrolplanes.kamaji.clastix.io {{ .Release.Name }} \
+                           -o jsonpath='{.spec.dataStore}{"\n"}{range .metadata.finalizers[*]}{@}{"\n"}{end}' \
+                           --ignore-not-found 2>/dev/null) || tcp_hold_read=1
+              if [ "$tcp_hold_read" != 0 ] || {
+                   [ "$(printf '%s\n' "$tcp_hold" | sed -n 1p)" = {{ include "kubernetes.etcd.dataStoreName" . | quote }} ] &&
+                   printf '%s\n' "$tcp_hold" | sed 1d | grep -qxF 'finalizer.kamaji.clastix.io'
+                 }; then
+                if [ -n "$residue_from" ]; then
+                  echo "Cleanup incomplete; residue left by: $residue_from" >&2
+                fi
+                echo "TenantControlPlane {{ .Release.Name }} still holds finalizer.kamaji.clastix.io on this cluster's own etcd, or could not be read; failing before Step 8 so that its etcd is not deleted while Kamaji needs it, and the uninstall is retried" >&2
+                exit 1
+              fi
+
+              echo "Step 8: Deleting the PKI of this cluster's etcd, which outlives the release"
+              # Same reason and order as Step 7. After Step 4, because the
+              # TenantControlPlane's DataStore reads its CA and client
+              # certificate from these Secrets.
+              kubectl -n {{ .Release.Namespace }} delete certificates.cert-manager.io \
+                {{ join " " $etcdCertificates }} \
+                --ignore-not-found=true --wait=false
+              kubectl -n {{ .Release.Namespace }} delete secrets \
+                {{ join "-tls " $etcdCertificates }}-tls \
+                --ignore-not-found=true --wait=false
+{{- end }}
 
               if [ -n "$residue_from" ]; then
                 echo "Cleanup incomplete; residue left by: $residue_from" >&2
@@ -494,6 +579,17 @@ rules:
       - list
       - watch
       - delete
+{{- if not (include "kubernetes.etcd.sharedDataStore" .) }}
+  # Step 4a.
+  - apiGroups:
+      - "kamaji.clastix.io"
+    resources:
+      - tenantcontrolplanes
+    resourceNames:
+      - {{ .Release.Name }}
+    verbs:
+      - patch
+{{- end }}
   - apiGroups:
       - "cdi.kubevirt.io"
     resources:
@@ -559,6 +655,31 @@ rules:
     verbs:
       - get
       - delete
+{{- if not (include "kubernetes.etcd.sharedDataStore" .) }}
+  # Step 8, named for the same reason as Step 7.
+  - apiGroups:
+      - "cert-manager.io"
+    resources:
+      - certificates
+    resourceNames:
+      {{- range list "peer-ca" "ca" "server" "peer" "client" }}
+      - {{ include "kubernetes.etcd.name" $ }}-{{ . }}
+      {{- end }}
+    verbs:
+      - get
+      - delete
+  - apiGroups:
+      - ""
+    resources:
+      - secrets
+    resourceNames:
+      {{- range list "peer-ca" "ca" "server" "peer" "client" }}
+      - {{ include "kubernetes.etcd.name" $ }}-{{ . }}-tls
+      {{- end }}
+    verbs:
+      - get
+      - delete
+{{- end }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding

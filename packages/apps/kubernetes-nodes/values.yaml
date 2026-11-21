@@ -4,6 +4,12 @@
 
 ## @param {string} cluster - Name of the parent Kubernetes cluster (the `Kubernetes` CR) in the same namespace this node pool attaches to. Required. The pool's CAPI objects are wired to the parent cluster `kubernetes-<cluster>`; the KubernetesNodes CR must be named `<cluster>-<pool>`. The pool's objects are named `kubernetes-<cluster>-<pool>`; when a MachineDeployment of that name already exists and belongs to another Helm release, the render fails instead of taking it over.
 ## @immutable
+
+## @typedef {struct} Network - The cozyplane VPC this pool's workers join
+## @field {string} [name] - Name of the VirtualPrivateCloud (without the "virtualprivatecloud-" prefix) in this namespace
+
+## @param {Network} [network] - Joins this pool's worker VMs to a cozyplane VPC. Must match the parent Kubernetes cluster's `network`, which puts the control plane in the same VPC. Setting or changing it on an existing pool rolls every worker VM of the pool. Requires the cozyplane networking variant and `substrate: kubevirt`.
+network: {}
 cluster: ""
 
 # Internal wiring value `clusterReleaseName` (consumed by kubernetes-nodes.clusterName

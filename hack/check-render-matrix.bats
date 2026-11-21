@@ -209,7 +209,11 @@ EOF
     rm -rf "$tmp"
 }
 
-@test "fixture states enable OIDC groups and shared-service resources" {
+@test "fixture states enable OIDC groups, and a new cluster comes up with or without a tenant etcd" {
+    # A new Kubernetes cluster renders its own etcd, so whether the tenant
+    # publishes one (fresh does not, configured and wildcard do) changes
+    # nothing in its render: every state gets the cluster's EtcdCluster and
+    # the metrics-server addon that used to wait for a tenant etcd.
     tmp=$(mktemp -d)
     for state in fresh configured wildcard; do
         helm template tenant-check packages/apps/tenant -n tenant-test \
@@ -219,10 +223,13 @@ EOF
             -f "hack/testdata/render-fixtures/$state.yaml" > "$tmp/kubernetes.yaml"
         groups=$(awk '/^kind: KeycloakRealmGroup$/ {n++} END {print n+0}' "$tmp/tenant.yaml")
         metrics=$(awk '/^  name: kubernetes-check-metrics-server$/ {n++} END {print n+0}' "$tmp/kubernetes.yaml")
+        etcd=$(awk '/^kind: EtcdCluster$/ {k=1; next} k && /^  name: kubernetes-check-etcd$/ {n++} /^---/ {k=0} END {print n+0}' "$tmp/kubernetes.yaml")
         case "$state" in
-            fresh) [ "$groups" -eq 0 ]; [ "$metrics" -eq 0 ] ;;
-            *) [ "$groups" -eq 4 ]; [ "$metrics" -eq 1 ] ;;
+            fresh) [ "$groups" -eq 0 ] ;;
+            *) [ "$groups" -eq 4 ] ;;
         esac
+        [ "$metrics" -eq 1 ]
+        [ "$etcd" -eq 1 ]
     done
     rm -rf "$tmp"
 }

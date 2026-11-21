@@ -212,6 +212,7 @@ idle_pool_datasets() {
   idle_pool_datasets >"$pool_dir/datasets.0"
   idle_pool_datasets | sed 's/^data-\(srv[0-9]\)/\1 &/' >"$COZY_LINSTOR_POOL_BASELINE_FILE"
   cozy_wait_tenant_drained() { return 0; }
+  cozy_wait_etcd_reaped() { return 0; }
   fake_linstor_clock
 
   rc=0
@@ -601,8 +602,8 @@ idle_pool_datasets() {
 @test "Kubernetes cleanup operations outlive their bounded reclamation stages" {
   for suite in latest previous; do
     timeout=$(yq "select(.metadata.name == \"kubernetes-${suite}\") | .spec.steps[0].finally[0].script.timeout" "hack/e2e-chainsaw/kubernetes-${suite}/chainsaw-test.yaml")
-    if [ "$timeout" != 22m ]; then
-      echo "kubernetes-${suite} cleanup timeout is $timeout, expected 22m" >&2
+    if [ "$timeout" != 25m ]; then
+      echo "kubernetes-${suite} cleanup timeout is $timeout, expected 25m" >&2
       return 1
     fi
   done

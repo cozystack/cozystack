@@ -1,0 +1,197 @@
+suite: worker pool inside a cozyplane VPC
+
+templates:
+  - templates/nodegroup.yaml
+  - templates/talos-reconcile-job.yaml
+release:
+  name: kubernetes-nodes-myk8s-md0
+  namespace: tenant-test
+set:
+  cluster: myk8s
+  _cluster:
+    cluster-domain: cozy.local
+  version: "v1.35"
+  minReplicas: 0
+  maxReplicas: 3
+  instanceType: ""
+  diskSize: 20Gi
+  storageClass: replicated
+  roles: []
+  resources:
+    cpu: "2"
+    memory: 4Gi
+kubernetesProvider:
+  scheme:
+    "v1/Service":
+      gvr: {version: "v1", resource: "services"}
+      namespaced: true
+    "instancetype.kubevirt.io/v1beta1/VirtualMachineClusterInstancetype":
+      gvr: {group: instancetype.kubevirt.io, version: v1beta1, resource: virtualmachineclusterinstancetypes}
+      namespaced: false
+    "cluster.x-k8s.io/v1beta1/MachineSet":
+      gvr: {group: cluster.x-k8s.io, version: v1beta1, resource: machinesets}
+      namespaced: true
+    "infrastructure.cluster.x-k8s.io/v1alpha1/KubevirtMachineTemplate":
+      gvr: {group: infrastructure.cluster.x-k8s.io, version: v1alpha1, resource: kubevirtmachinetemplates}
+      namespaced: true
+tests:
+  # Rendered only when set: the KubevirtMachineTemplate is content-hash named,
+  # so an unconditional key would roll every live pool.
+  - it: stamps the VPC annotation on the worker VM template
+    template: templates/nodegroup.yaml
+    capabilities:
+      apiVersions:
+        - sdn.cozystack.io/v1alpha1/VPC
+    set:
+      network:
+        name: myvpc
+    documentSelector:
+      path: kind
+      value: KubevirtMachineTemplate
+    asserts:
+      - equal:
+          path: spec.template.spec.virtualMachineTemplate.spec.template.metadata.annotations["sdn.cozystack.io/vpc"]
+          value: virtualprivatecloud-myvpc
+
+  - it: renders no VPC annotation on the default network
+    template: templates/nodegroup.yaml
+    documentSelector:
+      path: kind
+      value: KubevirtMachineTemplate
+    asserts:
+      - notExists:
+          path: spec.template.spec.virtualMachineTemplate.spec.template.metadata.annotations["sdn.cozystack.io/vpc"]
+
+  - it: refuses a VPC where sdn.cozystack.io is not served
+    template: templates/nodegroup.yaml
+    set:
+      network:
+        name: myvpc
+    asserts:
+      - failedTemplate:
+          errorPattern: 'cozyplane networking variant is required'
+
+  - it: refuses a VPC on the proxmox substrate
+    template: templates/nodegroup.yaml
+    capabilities:
+      apiVersions:
+        - sdn.cozystack.io/v1alpha1/VPC
+    set:
+      network:
+        name: myvpc
+      substrate: proxmox
+    asserts:
+      - failedTemplate:
+          errorPattern: 'substrate proxmox workers are not'
+
+  # A worker inside a VPC reaches only what is attached to it, and a worker on
+  # the default network cannot reach the VIP a VPC control plane advertises.
+  - it: refuses a VPC pool under a control plane on the default network
+    template: templates/nodegroup.yaml
+    capabilities:
+      apiVersions:
+        - sdn.cozystack.io/v1alpha1/VPC
+    set:
+      network:
+        name: myvpc
+    kubernetesProvider:
+      objects:
+        - kind: Service
+          apiVersion: v1
+          metadata: {name: kubernetes-myk8s, namespace: tenant-test}
+          spec: {type: ClusterIP}
+    asserts:
+      - failedTemplate:
+          errorPattern: 'must match the parent Kubernetes cluster''s network'
+
+  - it: refuses a default-network pool under a control plane in a VPC
+    template: templates/nodegroup.yaml
+    kubernetesProvider:
+      objects:
+        - kind: Service
+          apiVersion: v1
+          metadata:
+            name: kubernetes-myk8s
+            namespace: tenant-test
+            annotations:
+              sdn.cozystack.io/vpc: virtualprivatecloud-myvpc
+          spec: {type: ClusterIP}
+    asserts:
+      - failedTemplate:
+          errorPattern: 'must match the parent Kubernetes cluster''s network'
+
+  - it: accepts a pool in the same VPC as its control plane
+    template: templates/nodegroup.yaml
+    capabilities:
+      apiVersions:
+        - sdn.cozystack.io/v1alpha1/VPC
+    set:
+      network:
+        name: myvpc
+    kubernetesProvider:
+      objects:
+        - kind: Service
+          apiVersion: v1
+          metadata:
+            name: kubernetes-myk8s
+            namespace: tenant-test
+            annotations:
+              sdn.cozystack.io/vpc: virtualprivatecloud-myvpc
+          spec: {type: ClusterIP}
+        # Inert: the fake client registers list kinds from the objects given,
+        # and the template lists MachineSets and machine templates.
+        - kind: MachineSet
+          apiVersion: cluster.x-k8s.io/v1beta1
+          metadata: {name: ignored-ms, namespace: tenant-test}
+          spec: {template: {spec: {infrastructureRef: {kind: Other, name: ignored}}}}
+        - kind: KubevirtMachineTemplate
+          apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
+          metadata: {name: ignored-kmt, namespace: tenant-test}
+    documentSelector:
+      path: kind
+      value: KubevirtMachineTemplate
+    asserts:
+      - equal:
+          path: spec.template.spec.virtualMachineTemplate.spec.template.metadata.annotations["sdn.cozystack.io/vpc"]
+          value: virtualprivatecloud-myvpc
+
+  # The reconcile Job learns the apiserver VIP from a probe pod inside the
+  # VPC: one named pod it creates, reads back and deletes.
+  - it: lets the reconcile Job run its VIP probe in VPC mode
+    template: templates/talos-reconcile-job.yaml
+    capabilities:
+      apiVersions:
+        - sdn.cozystack.io/v1alpha1/VPC
+    set:
+      network:
+        name: myvpc
+    documentSelector:
+      path: kind
+      value: Role
+    asserts:
+      - contains:
+          path: rules
+          content:
+            apiGroups: [""]
+            resources: ["pods"]
+            resourceNames: ["kubernetes-myk8s-md0-vip-probe"]
+            verbs: ["get", "delete"]
+      - contains:
+          path: rules
+          content:
+            apiGroups: [""]
+            resources: ["pods"]
+            verbs: ["create"]
+
+  - it: grants no pod access on the default network
+    template: templates/talos-reconcile-job.yaml
+    documentSelector:
+      path: kind
+      value: Role
+    asserts:
+      - notContains:
+          path: rules
+          content:
+            apiGroups: [""]
+            resources: ["pods"]
+            verbs: ["create"]

@@ -1,4 +1,4 @@
-{{- $etcd := .Values._namespace.etcd }}
+{{- $sharedDataStore := include "kubernetes.etcd.sharedDataStore" . }}
 {{- /* Substrate selects the infrastructure half of the cluster. The control
        plane is Kamaji either way, so this changes exactly one object — the
        one Cluster.infrastructureRef points at — plus the two tenant addons
@@ -9,6 +9,28 @@
 {{- fail (printf "substrate %q is not supported; use \"kubevirt\" or \"proxmox\"" $substrate) }}
 {{- end }}
 {{- $isProxmox := eq $substrate "proxmox" }}
+{{- $vpc := include "kubernetes.vpc" . }}
+{{- if $vpc }}
+{{- if not (.Capabilities.APIVersions.Has "sdn.cozystack.io/v1alpha1/VPC") }}
+{{- fail "network.name names a cozyplane VPC, but the cluster does not serve sdn.cozystack.io: the cozyplane networking variant is required" }}
+{{- end }}
+{{- if $isProxmox }}
+{{- fail "network.name applies to kubevirt workers, which are pods; substrate proxmox workers are not" }}
+{{- end }}
+{{- if $sharedDataStore }}
+{{- fail (printf "network.name puts the control plane inside a VPC, which cannot reach the shared DataStore %q this cluster runs on; only a cluster with its own etcd can run in a VPC" $sharedDataStore) }}
+{{- end }}
+{{- end }}
+{{- /* etcd-operator stamps the VPC annotation only on members it creates and
+       never re-stamps a running one, so a cluster moved into or out of a VPC
+       would leave its etcd behind. Compared against the live control plane;
+       inert where there is no cluster to read. */}}
+{{- with lookup "controlplane.cluster.x-k8s.io/v1alpha1" "KamajiControlPlane" .Release.Namespace .Release.Name }}
+{{- $liveVPC := dig "spec" "deployment" "podAdditionalMetadata" "annotations" "sdn.cozystack.io/vpc" "" . }}
+{{- if ne $liveVPC $vpc }}
+{{- fail (printf "network.name can only be set when the cluster is created: the running control plane is in VPC %q and this render would move it to %q" $liveVPC $vpc) }}
+{{- end }}
+{{- end }}
 {{- if $isProxmox }}
 {{- /* capmox assigns static addresses from an InClusterIPPool it builds out of
        these fields and has no DHCP mode, so an unset pool is not a default —
@@ -27,17 +49,6 @@
 {{- end }}
 {{- include "kubernetes.assertSubstrateUnchanged" . }}
 {{- $infraKind := ternary "ProxmoxCluster" "KubevirtCluster" $isProxmox }}
-{{- /*
-  When $etcd is empty, the parent Tenant application has not populated
-  _namespace.etcd in cozystack-values yet - either the operator forgot to
-  set etcd: true on an ancestor Tenant, or the Tenant HelmRelease is still
-  reconciling. Either way, rendering a KamajiControlPlane with an empty
-  dataStoreName would be rejected by Kamaji's admission webhook and the
-  HelmRelease would fail to install, triggering remediation. Instead, emit
-  a single ConfigMap as a user-visible status beacon and skip the rest so
-  flux marks the HelmRelease Ready and retries its 5m reconcile loop until
-  the Tenant chart catches up.
-*/}}
 {{- /* Worker node pools (KubevirtMachineTemplate, MachineDeployment,
        MachineHealthCheck, worker WorkloadMonitor) and the Talos
        reconcile Job that produces each pool's TalosConfigTemplate are
@@ -61,26 +72,6 @@
 {{- $podCIDR := "10.243.0.0/16" }}
 {{- $serviceCIDR := "10.95.0.0/16" }}
 {{- $ingress := .Values._namespace.ingress }}
-{{- if not $etcd }}
----
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: {{ .Release.Name }}-awaiting-etcd
-  namespace: {{ .Release.Namespace }}
-  labels:
-    app.kubernetes.io/managed-by: {{ .Release.Service }}
-    app.kubernetes.io/name: kubernetes
-    app.kubernetes.io/instance: {{ .Release.Name }}
-data:
-  status: "awaiting-etcd"
-  message: |
-    No DataStore is available for this tenant Kubernetes cluster. The parent
-    Tenant application has not populated _namespace.etcd. Set spec.etcd: true
-    on an ancestor Tenant (usually tenant-root) and wait for its HelmRelease
-    to reconcile - this HelmRelease will pick up the DataStore on its next
-    5m reconcile loop and provision the cluster.
-{{- else }}
 {{- /* Worker-pool adoption guard. Worker pools live in per-pool
        kubernetes-nodes releases; the platform migration adopts each pre-split
        pool's live objects onto its child release (re-annotating
@@ -120,15 +111,7 @@ data:
        where lookup returns nil) that never prunes live objects: skip there.
        Discriminate on the adoption annotation, never on mere existence: the
        MachineDeployment always exists at render time, so an existence-only
-       guard would deadlock the routine upgrade (see helmreleases/ouroboros.yaml).
-
-       Scope: this guard lives in the etcd-present branch (the else of
-       `if not $etcd`), so it does NOT run during the awaiting-etcd window,
-       where the chart renders only the status beacon above. An owned+unpinned
-       MD is therefore not refused in that transient window. This is a
-       pre-existing narrow exposure, not introduced by the split (the pre-split
-       chart also rendered pools only in this same else branch), and it closes
-       as soon as etcd resolves and a real control-plane upgrade re-renders. */}}
+       guard would deadlock the routine upgrade (see helmreleases/ouroboros.yaml). */}}
 {{- if .Release.IsUpgrade }}
 {{-   if lookup "v1" "Namespace" "" .Release.Namespace }}
 {{-     $unadopted := list }}
@@ -719,7 +702,7 @@ spec:
     resources: {{- include "cozy-lib.resources.defaultingSanitize" (list .Values.controlPlane.controllerManager.resourcesPreset .Values.controlPlane.controllerManager.resources $) | nindent 6 }}
   scheduler:
     resources: {{- include "cozy-lib.resources.defaultingSanitize" (list .Values.controlPlane.scheduler.resourcesPreset .Values.controlPlane.scheduler.resources $) | nindent 6 }}
-  dataStoreName: "{{ $etcd }}"
+  dataStoreName: {{ $sharedDataStore | default (include "kubernetes.etcd.dataStoreName" .) | quote }}
   {{- with $admissionControllers }}
   admissionControllers:
     {{- toYaml . | nindent 4 }}
@@ -749,6 +732,14 @@ spec:
           unreachable address. Publishing the Service moves the endpoint onto
           a network the workers share. */}}
     serviceType: {{ ternary "LoadBalancer" "ClusterIP" $isProxmox }}
+    {{- with $vpc }}
+    {{- /* Attaches the apiserver Service to the VPC: inside it, the VPC
+          resolver answers the Service's name with a VIP from the VPC's own
+          range, the only address of the control plane a VPC client can reach.
+          The pools' talos-reconcile Job advertises that VIP. */}}
+    serviceAnnotations:
+      sdn.cozystack.io/vpc: {{ . }}
+    {{- end }}
     ingress:
       extraAnnotations:
         nginx.ingress.kubernetes.io/ssl-passthrough: "true"
@@ -774,8 +765,16 @@ spec:
       - {{ printf "%s.%s.svc.%s" .Release.Name .Release.Namespace (include "kubernetes.tenantClusterDomain" .) }}
   deployment:
     podAdditionalMetadata:
+      {{- with $vpc }}
+      annotations:
+        sdn.cozystack.io/vpc: {{ . }}
+      {{- end }}
       labels:
+        {{- if $sharedDataStore }}
         policy.cozystack.io/allow-to-etcd: "true"
+        {{- else }}
+        policy.cozystack.io/allow-to-etcd-cluster: {{ include "kubernetes.etcd.name" . }}
+        {{- end }}
     extraContainers:
       - name: talos-csr-signer
         image: {{ include "cozy-lib.image" (list (.Files.Get "images/talos-csr-signer.tag" | trim) $) | quote }}
@@ -899,5 +898,4 @@ spec:
       {{- toYaml .Values.proxmox.ipv4Config.addresses | nindent 6 }}
     gateway: {{ .Values.proxmox.ipv4Config.gateway | quote }}
     prefix: {{ .Values.proxmox.ipv4Config.prefix }}
-{{- end }}
 {{- end }}

@@ -82,11 +82,12 @@ spec:
     # and failure, followed by the compute/storage reclamation barriers.
     - description: tear down the tenant Kubernetes cluster
       script:
-        # 30s diagnostic Certificate + 5m child + 5m parent + 5m compute/PVC
-        # drain + 5m LINSTOR reclamation = 20m30s of inner bounds. Keep the op
-        # above that sum so an inner timeout reports its stage instead of a
-        # Chainsaw SIGKILL hiding it; normal cleanup returns immediately.
-        timeout: 22m
+        # 30s diagnostic Certificate + 5m child + 5m parent + 3m etcd
+        # reclamation + 5m compute/PVC drain + 5m LINSTOR reclamation = 23m30s
+        # of inner bounds. Keep the op above that sum so an inner timeout
+        # reports its stage instead of a Chainsaw SIGKILL hiding it; normal
+        # cleanup returns immediately.
+        timeout: 25m
         content: |
           set -eu
           cd ../../..
