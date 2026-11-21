@@ -117,6 +117,9 @@ type Config struct {
 	GenericConfig  *genericapiserver.RecommendedConfig
 	ResourceConfig *config.ResourceConfig
 	ServeSDN       bool
+	// CredentialsCOSIWait bounds the wait of a mint or a revoke on an
+	// engine-issued credential; zero keeps the default.
+	CredentialsCOSIWait time.Duration
 }
 
 // CozyServer holds the state for the Kubernetes master/api server.
@@ -125,9 +128,10 @@ type CozyServer struct {
 }
 
 type completedConfig struct {
-	GenericConfig  genericapiserver.CompletedConfig
-	ResourceConfig *config.ResourceConfig
-	ServeSDN       bool
+	GenericConfig       genericapiserver.CompletedConfig
+	ResourceConfig      *config.ResourceConfig
+	ServeSDN            bool
+	CredentialsCOSIWait time.Duration
 }
 
 // CompletedConfig embeds a private pointer that cannot be created outside of this package.
@@ -141,6 +145,7 @@ func (cfg *Config) Complete() CompletedConfig {
 		cfg.GenericConfig.Complete(),
 		cfg.ResourceConfig,
 		cfg.ServeSDN,
+		cfg.CredentialsCOSIWait,
 	}
 
 	return CompletedConfig{&c}
@@ -217,7 +222,7 @@ func (c completedConfig) New() (*CozyServer, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to build dynamic client: %w", err)
 	}
-	if err := InstallStaticAPIGroups(s.GenericAPIServer, cli, watchCli, dyn, c.ServeSDN); err != nil {
+	if err := InstallStaticAPIGroups(s.GenericAPIServer, cli, watchCli, dyn, c.ServeSDN, c.CredentialsCOSIWait); err != nil {
 		return nil, err
 	}
 
@@ -239,7 +244,9 @@ func (c completedConfig) New() (*CozyServer, error) {
 // another server owns the group: kube-aggregator still merges this server's
 // /openapi/v3 index, so both backends list the group-version and fetching its
 // OpenAPI fails on a redirect whenever the two disagree on the hash.
-func InstallStaticAPIGroups(server *genericapiserver.GenericAPIServer, cli client.Client, watchCli client.WithWatch, dyn dynamic.Interface, serveSDN bool) error {
+// credentialsCOSIWait bounds the wait of a mint or a revoke on an
+// engine-issued credential; zero keeps the default.
+func InstallStaticAPIGroups(server *genericapiserver.GenericAPIServer, cli client.Client, watchCli client.WithWatch, dyn dynamic.Interface, serveSDN bool, credentialsCOSIWait time.Duration) error {
 	// --- static, cluster-scoped resource for core group ---
 	coreV1alpha1Storage := map[string]rest.Storage{}
 	coreV1alpha1Storage["tenantnamespaces"] = cozyregistry.RESTInPeace(
@@ -261,6 +268,9 @@ func InstallStaticAPIGroups(server *genericapiserver.GenericAPIServer, cli clien
 		tapstorage.NewREST(dyn),
 	)
 	credentials := credentialstorage.NewREST(cli, watchCli)
+	if credentialsCOSIWait > 0 {
+		credentials.SetCOSIWait(credentialsCOSIWait)
+	}
 	coreV1alpha1Storage["credentials"] = cozyregistry.RESTInPeace(credentials)
 	coreV1alpha1Storage["credentials/mint"] = credentialstorage.NewMintREST(credentials)
 	coreV1alpha1Storage["credentials/revoke"] = credentialstorage.NewRevokeREST(credentials)
