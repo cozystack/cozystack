@@ -94,18 +94,15 @@ logStorageSize: 2Gi
 logTTL: 15
 
 ## @typedef {struct} User - User configuration.
-## @field {string} [password] - Password for the user.
 ## @field {bool} [readonly] - User is readonly (default: false).
 
-## @param {map[string]User} users - Users configuration map.
+## @param {map[string]User} users - Users configuration map. Passwords are issued through the Cozystack credentials API: a mint on the user's `Credential` (`core.cozystack.io`) returns a new password once and stores only its SHA-256, and a revoke retires the password without issuing one. A user can log in once a password has been minted, after the release has upgraded with it. The names `backup`, `default` and `clickhouse_operator` are reserved for platform accounts. A `password` key here is ignored.
 users: {}
 ## Example:
 ## users:
-##   user1:
-##     password: strongpassword
+##   user1: {}
 ##   user2:
 ##     readonly: true
-##     password: hackme
 ##
 
 ##

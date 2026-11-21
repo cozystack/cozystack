@@ -11,13 +11,6 @@ rules:
   - chendpoint-{{ .Release.Name }}
   verbs: ["get", "list", "watch"]
 - apiGroups:
-  - ""
-  resources:
-  - secrets
-  resourceNames:
-  - {{ .Release.Name }}-credentials
-  verbs: ["get", "list", "watch"]
-- apiGroups:
   - cozystack.io
   resources:
   - workloadmonitors
