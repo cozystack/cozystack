@@ -635,6 +635,13 @@ func schema_pkg_apis_core_v1alpha1_CredentialRequestStatus(ref common.ReferenceC
 							Format:      "",
 						},
 					},
+					"accessKeyID": {
+						SchemaProps: spec.SchemaProps{
+							Description: "AccessKeyID is the access key that goes with Password, for an account whose engine issues a key pair (the cosi format); present in a mint's answer only and shown once.",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
 					"issuedAt": {
 						SchemaProps: spec.SchemaProps{
 							Description: "IssuedAt is when the operation took effect in the record.",

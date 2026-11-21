@@ -133,6 +133,11 @@ type CredentialRequestStatus struct {
 	// shown once.
 	// +optional
 	Password string `json:"password,omitempty"`
+	// AccessKeyID is the access key that goes with Password, for an account
+	// whose engine issues a key pair (the cosi format); present in a mint's
+	// answer only and shown once.
+	// +optional
+	AccessKeyID string `json:"accessKeyID,omitempty"`
 	// IssuedAt is when the operation took effect in the record.
 	IssuedAt metav1.Time `json:"issuedAt,omitempty"`
 }
