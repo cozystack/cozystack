@@ -39,7 +39,7 @@ type ConfigSpec struct {
 	// Valkey major version to deploy
 	// +kubebuilder:default:="v8"
 	Version Version `json:"version"`
-	// Enable password generation.
+	// Require a password. The password of the `default` user is issued through the credentials API and is the one replication, the Sentinels, the metrics exporter and backups use, so issuing a new one rotates theirs too.
 	// +kubebuilder:default:=true
 	AuthEnabled bool `json:"authEnabled"`
 }
