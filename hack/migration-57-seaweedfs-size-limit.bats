@@ -106,16 +106,34 @@ runbook_step() {
   return $?
 }
 
+# build_test_image bakes the test's packages onto the pinned base. Its status
+# is docker build's, so a failed build fails whoever called it.
+build_test_image() {
+  docker build -q -t "$TESTIMG" - >/dev/null <<DOCKERFILE
+FROM $ALPINE
+RUN apk add --no-cache jq
+DOCKERFILE
+}
+
+# Build the image once per file, before any test runs. Tests in a file run in
+# parallel under `bats -j`, and concurrent uncached builds of one tag replace
+# each other's image, so a sibling's `docker run` could find the tag missing
+# and fall back to a pull. Without docker, prep() reports why.
+setup_file() {
+  docker info >/dev/null 2>&1 || return 0
+  build_test_image
+  return 0
+}
+
 prep() {
   docker info >/dev/null 2>&1 || {
     echo "docker is required: these tests run migration 57 inside a jq-enabled" >&2
     echo "build of $ALPINE, the migrations image's base." >&2
     return 1
   }
-  docker build -q -t "$TESTIMG" - >/dev/null <<DOCKERFILE
-FROM $ALPINE
-RUN apk add --no-cache jq
-DOCKERFILE
+  # setup_file built it already; this only builds when the file runs without
+  # bats' setup_file, one test at a time.
+  docker image inspect "$TESTIMG" >/dev/null 2>&1 || build_test_image
   chmod +x "$FAKEBIN/kubectl"
   WORK=$(mktemp -d)
   export FAKE_CMDLOG="$WORK/cmdlog"
