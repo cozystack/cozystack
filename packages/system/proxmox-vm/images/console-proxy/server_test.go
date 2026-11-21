@@ -1,0 +1,695 @@
+package main
+
+import (
+	"context"
+	"crypto/tls"
+	"encoding/json"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/gorilla/websocket"
+	authorizationv1 "k8s.io/api/authorization/v1"
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	dynamicfake "k8s.io/client-go/dynamic/fake"
+	kubefake "k8s.io/client-go/kubernetes/fake"
+	k8stesting "k8s.io/client-go/testing"
+)
+
+const (
+	testNode   = "pve1"
+	testVMID   = 100
+	testTicket = "PVEVNC:ticket-with-more-than-eight-bytes"
+	testTermTk = "PVETERM:ticket"
+
+	testShutdownUPID = "UPID:pve1:00109516:046EC5FB:6AE57C90:qmshutdown:100:kubemox@pve!cozy:"
+	testUploadUPID   = "UPID:pve1:0010A001:046EC700:6AE57D00:imgcopy::kubemox@pve!cozy:"
+)
+
+// fakePVE is the Proxmox API as the proxy uses it.
+type fakePVE struct {
+	t         *testing.T
+	srv       *httptest.Server
+	reboots   atomic.Int32
+	shutdowns atomic.Int32
+	// onShutdown, when set, runs as the shutdown request arrives.
+	onShutdown func()
+	// status is what the hypervisor says about the machine.
+	status string
+	// taskExit, when set, is how the shutdown task ends; taskRunning keeps it
+	// going instead.
+	taskExit    string
+	taskRunning atomic.Bool
+	// generatedPassword, when set, is returned by vncproxy as the password
+	// the VNC server expects instead of the ticket.
+	generatedPassword string
+	// uploaded is the last file that arrived on the storage: its form
+	// fields and bytes. uploadExit, when set, is how the import task ends.
+	uploaded   *uploadedFile
+	uploadExit string
+}
+
+type uploadedFile struct {
+	Content, Filename string
+	Bytes             []byte
+}
+
+func newFakePVE(t *testing.T) *fakePVE {
+	t.Helper()
+	f := &fakePVE{t: t}
+	up := websocket.Upgrader{Subprotocols: []string{"binary"}}
+	mux := http.NewServeMux()
+	base := "/api2/json/nodes/" + testNode + "/qemu/100"
+	auth := func(r *http.Request) bool {
+		return r.Header.Get("Authorization") == "PVEAPIToken=kubemox@pve!cozy=s3cr3t"
+	}
+	mux.HandleFunc("POST "+base+"/vncproxy", func(w http.ResponseWriter, r *http.Request) {
+		if !auth(r) {
+			http.Error(w, "no", http.StatusUnauthorized)
+			return
+		}
+		if err := r.ParseForm(); err != nil || r.Form.Get("websocket") != "1" {
+			http.Error(w, "websocket=1 expected", http.StatusBadRequest)
+			return
+		}
+		data := map[string]any{"port": "5900", "ticket": testTicket, "user": "kubemox@pve!cozy"}
+		if f.generatedPassword != "" {
+			data["password"] = f.generatedPassword
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"data": data})
+	})
+	mux.HandleFunc("POST "+base+"/termproxy", func(w http.ResponseWriter, r *http.Request) {
+		if !auth(r) {
+			http.Error(w, "no", http.StatusUnauthorized)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{
+			"port": 5901, "ticket": testTermTk, "user": "kubemox@pve!cozy",
+		}})
+	})
+	mux.HandleFunc("POST "+base+"/status/reboot", func(w http.ResponseWriter, r *http.Request) {
+		if !auth(r) {
+			http.Error(w, "no", http.StatusUnauthorized)
+			return
+		}
+		f.reboots.Add(1)
+		_ = json.NewEncoder(w).Encode(map[string]any{"data": "UPID:pve1:reboot"})
+	})
+	mux.HandleFunc("POST "+base+"/status/shutdown", func(w http.ResponseWriter, r *http.Request) {
+		if !auth(r) {
+			http.Error(w, "no", http.StatusUnauthorized)
+			return
+		}
+		if err := r.ParseForm(); err != nil || r.Form.Get("forceStop") != "1" || r.Form.Get("timeout") == "" {
+			http.Error(w, "forceStop=1 and a timeout expected", http.StatusBadRequest)
+			return
+		}
+		if f.onShutdown != nil {
+			f.onShutdown()
+		}
+		f.shutdowns.Add(1)
+		_ = json.NewEncoder(w).Encode(map[string]any{"data": testShutdownUPID})
+	})
+	mux.HandleFunc("GET "+base+"/status/current", func(w http.ResponseWriter, r *http.Request) {
+		if !auth(r) {
+			http.Error(w, "no", http.StatusUnauthorized)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"status": f.status}})
+	})
+	mux.HandleFunc("GET /api2/json/nodes/"+testNode+"/tasks/"+testShutdownUPID+"/status", func(w http.ResponseWriter, r *http.Request) {
+		if !auth(r) {
+			http.Error(w, "no", http.StatusUnauthorized)
+			return
+		}
+		task := map[string]any{"status": "stopped", "exitstatus": "OK"}
+		switch {
+		case f.taskRunning.Load():
+			task = map[string]any{"status": "running"}
+		case f.taskExit != "":
+			task["exitstatus"] = f.taskExit
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"data": task})
+	})
+	mux.HandleFunc("POST /api2/json/nodes/"+testNode+"/storage/local/upload", func(w http.ResponseWriter, r *http.Request) {
+		if !auth(r) {
+			http.Error(w, "no", http.StatusUnauthorized)
+			return
+		}
+		// pveproxy refuses a body of unknown length.
+		if r.ContentLength < 0 {
+			http.Error(w, "Content-Length required", http.StatusLengthRequired)
+			return
+		}
+		reader, err := r.MultipartReader()
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		up := &uploadedFile{}
+		for {
+			part, err := reader.NextPart()
+			if err != nil {
+				break
+			}
+			data, _ := io.ReadAll(part)
+			switch part.FormName() {
+			case "content":
+				up.Content = string(data)
+			case "filename":
+				up.Filename, up.Bytes = part.FileName(), data
+			}
+		}
+		f.uploaded = up
+		_ = json.NewEncoder(w).Encode(map[string]any{"data": testUploadUPID})
+	})
+	mux.HandleFunc("GET /api2/json/nodes/"+testNode+"/tasks/"+testUploadUPID+"/status", func(w http.ResponseWriter, r *http.Request) {
+		task := map[string]any{"status": "stopped", "exitstatus": "OK"}
+		if f.uploadExit != "" {
+			task["exitstatus"] = f.uploadExit
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"data": task})
+	})
+	mux.HandleFunc("GET "+base+"/vncwebsocket", func(w http.ResponseWriter, r *http.Request) {
+		if !auth(r) {
+			http.Error(w, "no", http.StatusUnauthorized)
+			return
+		}
+		port, ticket := r.URL.Query().Get("port"), r.URL.Query().Get("vncticket")
+		switch {
+		case port == "5900" && ticket == testTicket:
+			conn, err := up.Upgrade(w, r, nil)
+			if err != nil {
+				return
+			}
+			defer func() { _ = conn.Close() }()
+			password := testTicket
+			if f.generatedPassword != "" {
+				password = f.generatedPassword
+			}
+			fakeVNCServer(t, &wsStream{conn: conn}, rfbVersion{3, 8}, password, false)
+		case port == "5901" && ticket == testTermTk:
+			fakeTermproxy(t, "kubemox@pve!cozy", testTermTk, "login: ")(w, r)
+		default:
+			http.Error(w, "bad ticket", http.StatusUnauthorized)
+		}
+	})
+	f.srv = httptest.NewTLSServer(mux)
+	t.Cleanup(f.srv.Close)
+	return f
+}
+
+// events lists the events of the tenant's namespace.
+func (e *testEnv) events(t *testing.T) []corev1.Event {
+	t.Helper()
+	list, err := e.core.CoreV1().Events("tenant-a").List(context.Background(), metav1.ListOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return list.Items
+}
+
+// autoStart reads enableAutoStart off the VirtualMachine.
+func (e *testEnv) autoStart(t *testing.T) bool {
+	t.Helper()
+	vm, err := e.dyn.Resource(vmGVR).Namespace("tenant-a").Get(context.Background(), "vm-instance-demo", metav1.GetOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	on, found, err := unstructured.NestedBool(vm.Object, "spec", "enableAutoStart")
+	if err != nil || !found {
+		t.Fatalf("enableAutoStart: found=%v err=%v", found, err)
+	}
+	return on
+}
+
+// endpoint is host:port, as a ProxmoxConnection names it.
+func (f *fakePVE) endpoint() string { return strings.TrimPrefix(f.srv.URL, "https://") }
+
+type testEnv struct {
+	srv    *server
+	core   *kubefake.Clientset
+	pve    *fakePVE
+	pki    *testPKI
+	proxy  *httptest.Server
+	dyn    *dynamicfake.FakeDynamicClient
+	sars   []authorizationv1.SubjectAccessReviewSpec
+	client *http.Client
+}
+
+func vmObject(state string) *unstructured.Unstructured {
+	return &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "proxmox.alperen.cloud/v1alpha1",
+		"kind":       "VirtualMachine",
+		"metadata":   map[string]any{"name": "vm-instance-demo", "namespace": "tenant-a", "uid": "vm-uid"},
+		"spec": map[string]any{
+			"name": "vm-instance-demo", "nodeName": testNode,
+			"connectionRef":   map[string]any{"name": "pve"},
+			"enableAutoStart": true,
+		},
+		"status": map[string]any{"status": map[string]any{
+			"id": int64(testVMID), "node": testNode, "state": state,
+		}},
+	}}
+}
+
+// volumeObject is a kubemox VirtualMachineVolume; waiting gives it the
+// uploadTarget kubemox publishes for an upload source without a file yet.
+func volumeObject(name string, waiting bool) *unstructured.Unstructured {
+	obj := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "proxmox.alperen.cloud/v1alpha1",
+		"kind":       "VirtualMachineVolume",
+		"metadata":   map[string]any{"name": name, "namespace": "tenant-a"},
+		"spec": map[string]any{
+			"connectionRef": map[string]any{"name": "pve"},
+			"nodeName":      testNode, "storage": "local-zfs", "size": int64(20),
+		},
+		"status": map[string]any{"phase": "Pending"},
+	}}
+	if waiting {
+		obj.Object["status"].(map[string]any)["uploadTarget"] = map[string]any{
+			"node": testNode, "storage": "local", "content": "import", "filename": name,
+		}
+	}
+	return obj
+}
+
+func newTestEnv(t *testing.T, vmState string, allowed func(spec authorizationv1.SubjectAccessReviewSpec) bool) *testEnv {
+	t.Helper()
+	env := &testEnv{pve: newFakePVE(t), pki: newTestPKI(t, "front-proxy-client")}
+	env.pve.status = vmState
+
+	connection := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "proxmox.alperen.cloud/v1alpha1",
+		"kind":       "ProxmoxConnection",
+		"metadata":   map[string]any{"name": "pve"},
+		"spec": map[string]any{
+			"endpoint": env.pve.endpoint(), "tokenID": "kubemox@pve!cozy", "insecureSkipVerify": true,
+			"secretFrom": map[string]any{"name": "pve-token", "namespace": "cozy-proxmox-vm"},
+		},
+	}}
+	scheme := runtime.NewScheme()
+	env.dyn = dynamicfake.NewSimpleDynamicClientWithCustomListKinds(scheme, map[schema.GroupVersionResource]string{
+		vmGVR: "VirtualMachineList", connectionGVR: "ProxmoxConnectionList",
+	}, vmObject(vmState), connection, volumeObject("vm-disk-data", true), volumeObject("vm-disk-ready", false))
+
+	core := kubefake.NewClientset(
+		&corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{Name: "pve-token", Namespace: "cozy-proxmox-vm"},
+			Data:       map[string][]byte{"token": []byte("s3cr3t\n")},
+		},
+		&corev1.ConfigMap{
+			ObjectMeta: metav1.ObjectMeta{Name: authConfigMapName, Namespace: authConfigMapNamespace},
+			Data:       env.pki.authData(),
+		},
+	)
+	core.PrependReactor("create", "subjectaccessreviews", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		sar := action.(k8stesting.CreateAction).GetObject().(*authorizationv1.SubjectAccessReview)
+		env.sars = append(env.sars, sar.Spec)
+		sar.Status.Allowed = allowed(sar.Spec)
+		return true, sar, nil
+	})
+
+	auth := &frontProxyAuth{}
+	if err := auth.load(context.Background(), core); err != nil {
+		t.Fatal(err)
+	}
+	env.core = core
+	env.srv = newServer(auth, core, env.dyn)
+	env.srv.stopWait = 100 * time.Millisecond
+	env.srv.stopFollow = time.Minute
+	env.proxy = httptest.NewUnstartedServer(env.srv.handler())
+	env.proxy.TLS = &tls.Config{ClientAuth: tls.RequestClientCert, MinVersion: tls.VersionTLS12}
+	env.proxy.StartTLS()
+	t.Cleanup(env.proxy.Close)
+
+	env.client = env.proxy.Client()
+	env.client.Transport.(*http.Transport).TLSClientConfig.Certificates = []tls.Certificate{env.pki.client}
+	return env
+}
+
+func (env *testEnv) do(t *testing.T, method, path string, user string) (*http.Response, metav1.Status) {
+	t.Helper()
+	req, err := http.NewRequest(method, env.proxy.URL+path, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if user != "" {
+		req.Header.Set("X-Remote-User", user)
+		req.Header.Set("X-Remote-Group", "system:authenticated")
+	}
+	resp, err := env.client.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	body, _ := io.ReadAll(resp.Body)
+	var status metav1.Status
+	_ = json.Unmarshal(body, &status)
+	return resp, status
+}
+
+func (env *testEnv) dialWS(t *testing.T, path, subprotocol string, user string) (*websocket.Conn, *http.Response, error) {
+	t.Helper()
+	tlsConfig := env.client.Transport.(*http.Transport).TLSClientConfig
+	d := websocket.Dialer{TLSClientConfig: tlsConfig, Subprotocols: []string{subprotocol}}
+	header := http.Header{}
+	if user != "" {
+		header.Set("X-Remote-User", user)
+	}
+	return d.Dial("wss"+strings.TrimPrefix(env.proxy.URL, "https")+path, header)
+}
+
+const vmPath = apiPrefix + "/namespaces/tenant-a/virtualmachines/vm-instance-demo"
+
+func allowAlice(spec authorizationv1.SubjectAccessReviewSpec) bool { return spec.User == "alice" }
+
+func TestDiscovery(t *testing.T) {
+	env := newTestEnv(t, "running", allowAlice)
+	resp, _ := env.do(t, http.MethodGet, apiPrefix, "")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("discovery: %d", resp.StatusCode)
+	}
+
+	req, _ := http.NewRequest(http.MethodGet, env.proxy.URL+apiPrefix, nil)
+	resp, err := env.client.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var list metav1.APIResourceList
+	if err := json.NewDecoder(resp.Body).Decode(&list); err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+	names := map[string][]string{}
+	for _, r := range list.APIResources {
+		names[r.Name] = r.Verbs
+		if !r.Namespaced {
+			t.Errorf("%s is not namespaced", r.Name)
+		}
+	}
+	if got := names["virtualmachinevolumes/upload"]; len(got) != 1 || got[0] != "create" {
+		t.Errorf("virtualmachinevolumes/upload verbs: %v", got)
+	}
+	for sub, verb := range map[string]string{"vnc": "get", "console": "get", "start": "update", "stop": "update", "restart": "update"} {
+		if got := names["virtualmachines/"+sub]; len(got) != 1 || got[0] != verb {
+			t.Errorf("virtualmachines/%s verbs %v, want %s", sub, got, verb)
+		}
+	}
+
+	// Without the front-proxy certificate nothing but health is served.
+	plain := &http.Client{Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}}} //nolint:gosec // test server
+	r, err := plain.Get(env.proxy.URL + apiPrefix)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = r.Body.Close()
+	if r.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("no client cert: %d", r.StatusCode)
+	}
+	r, err = plain.Get(env.proxy.URL + "/healthz")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = r.Body.Close()
+	if r.StatusCode != http.StatusOK {
+		t.Fatalf("healthz: %d", r.StatusCode)
+	}
+}
+
+func TestPowerSubresources(t *testing.T) {
+	env := newTestEnv(t, "running", allowAlice)
+
+	// kubemox would start the machine again if the shutdown came first.
+	env.pve.onShutdown = func() {
+		if env.autoStart(t) {
+			t.Error("enableAutoStart still on when the shutdown arrived")
+		}
+	}
+	resp, status := env.do(t, http.MethodPut, vmPath+"/stop", "alice")
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("stop: %d %s", resp.StatusCode, status.Message)
+	}
+	if env.autoStart(t) {
+		t.Fatal("enableAutoStart after stop: true")
+	}
+	if env.pve.shutdowns.Load() != 1 {
+		t.Fatalf("shutdowns: %d", env.pve.shutdowns.Load())
+	}
+	if resp, _ := env.do(t, http.MethodPost, vmPath+"/start", "alice"); resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("start: %d", resp.StatusCode)
+	}
+	if !env.autoStart(t) {
+		t.Fatal("enableAutoStart after start: false")
+	}
+
+	if resp, status := env.do(t, http.MethodPut, vmPath+"/restart", "alice"); resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("restart: %d %s", resp.StatusCode, status.Message)
+	}
+	if env.pve.reboots.Load() != 1 {
+		t.Fatalf("reboots: %d", env.pve.reboots.Load())
+	}
+
+	// The SubjectAccessReview asked for update on the kubemox object.
+	last := env.sars[len(env.sars)-1]
+	if ra := last.ResourceAttributes; ra.Verb != "update" || ra.Group != vmGroup || ra.Resource != vmResource || ra.Name != "vm-instance-demo" || ra.Namespace != "tenant-a" {
+		t.Fatalf("SAR %+v", ra)
+	}
+
+	for name, tc := range map[string]struct {
+		method, path, user string
+		want               int
+	}{
+		"forbidden user":   {http.MethodPut, vmPath + "/start", "mallory", http.StatusForbidden},
+		"no user":          {http.MethodPut, vmPath + "/start", "", http.StatusUnauthorized},
+		"wrong method":     {http.MethodGet, vmPath + "/start", "alice", http.StatusMethodNotAllowed},
+		"unknown":          {http.MethodPut, vmPath + "/migrate", "alice", http.StatusNotFound},
+		"missing machine":  {http.MethodPut, apiPrefix + "/namespaces/tenant-a/virtualmachines/ghost/start", "alice", http.StatusNotFound},
+		"vnc not upgraded": {http.MethodGet, vmPath + "/vnc", "alice", http.StatusBadRequest},
+	} {
+		resp, _ := env.do(t, tc.method, tc.path, tc.user)
+		if resp.StatusCode != tc.want {
+			t.Errorf("%s: %d, want %d", name, resp.StatusCode, tc.want)
+		}
+	}
+}
+
+func TestStopOfAStoppedMachineOnlyTurnsOffAutoStart(t *testing.T) {
+	env := newTestEnv(t, "stopped", allowAlice)
+	resp, status := env.do(t, http.MethodPut, vmPath+"/stop", "alice")
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("stop: %d %s", resp.StatusCode, status.Message)
+	}
+	if env.autoStart(t) {
+		t.Fatal("enableAutoStart after stop: true")
+	}
+	if env.pve.shutdowns.Load() != 0 {
+		t.Fatalf("shutdowns: %d", env.pve.shutdowns.Load())
+	}
+}
+
+// kubemox's status can say stopped while the machine has just been started.
+func TestStopAsksTheHypervisorWhetherTheMachineRuns(t *testing.T) {
+	env := newTestEnv(t, "stopped", allowAlice)
+	env.pve.status = "running"
+	if resp, status := env.do(t, http.MethodPut, vmPath+"/stop", "alice"); resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("stop: %d %s", resp.StatusCode, status.Message)
+	}
+	if env.pve.shutdowns.Load() != 1 {
+		t.Fatalf("shutdowns: %d", env.pve.shutdowns.Load())
+	}
+}
+
+func TestStopReportsAShutdownThatFails(t *testing.T) {
+	env := newTestEnv(t, "running", allowAlice)
+	env.pve.taskExit = "can't lock file '/var/lock/qemu-server/lock-100.conf' - got timeout"
+
+	resp, status := env.do(t, http.MethodPut, vmPath+"/stop", "alice")
+	if resp.StatusCode != http.StatusBadGateway {
+		t.Fatalf("stop: %d %s", resp.StatusCode, status.Message)
+	}
+	if strings.Contains(status.Message, "/var/lock") {
+		t.Fatalf("Proxmox's own text reached the caller: %q", status.Message)
+	}
+	if env.autoStart(t) {
+		t.Fatal("enableAutoStart after a failed stop: true")
+	}
+
+	env.pve.taskExit = ""
+	if resp, status := env.do(t, http.MethodPut, vmPath+"/stop", "alice"); resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("second stop: %d %s", resp.StatusCode, status.Message)
+	}
+}
+
+func TestStopAcceptsAShutdownStillGoing(t *testing.T) {
+	env := newTestEnv(t, "running", allowAlice)
+	env.pve.taskRunning.Store(true)
+	if resp, status := env.do(t, http.MethodPut, vmPath+"/stop", "alice"); resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("stop: %d %s", resp.StatusCode, status.Message)
+	}
+	env.pve.taskRunning.Store(false)
+	env.srv.follows.Wait()
+	if events := env.events(t); len(events) != 0 {
+		t.Fatalf("events after a shutdown that worked: %v", events)
+	}
+}
+
+func TestStopReportsAShutdownThatFailsAfterTheAnswer(t *testing.T) {
+	env := newTestEnv(t, "running", allowAlice)
+	env.pve.taskRunning.Store(true)
+	if resp, status := env.do(t, http.MethodPut, vmPath+"/stop", "alice"); resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("stop: %d %s", resp.StatusCode, status.Message)
+	}
+	env.pve.taskExit = "can't lock file '/var/lock/qemu-server/lock-100.conf' - got timeout"
+	env.pve.taskRunning.Store(false)
+	env.srv.follows.Wait()
+
+	events := env.events(t)
+	if len(events) != 1 {
+		t.Fatalf("events: %v", events)
+	}
+	e := events[0]
+	if e.Type != corev1.EventTypeWarning || e.Reason != "StopFailed" {
+		t.Errorf("event %s/%s", e.Type, e.Reason)
+	}
+	ref := e.InvolvedObject
+	if ref.Kind != "VirtualMachine" || ref.Name != "vm-instance-demo" || ref.UID != "vm-uid" || ref.Namespace != "tenant-a" {
+		t.Errorf("event is on %+v", ref)
+	}
+	if strings.Contains(e.Message, "/var/lock") {
+		t.Errorf("Proxmox's own text reached the tenant: %q", e.Message)
+	}
+}
+
+func TestStopReportsAShutdownThatNeverEnds(t *testing.T) {
+	env := newTestEnv(t, "running", allowAlice)
+	env.srv.stopFollow = 100 * time.Millisecond
+	env.pve.taskRunning.Store(true)
+	if resp, status := env.do(t, http.MethodPut, vmPath+"/stop", "alice"); resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("stop: %d %s", resp.StatusCode, status.Message)
+	}
+	env.srv.follows.Wait()
+	events := env.events(t)
+	if len(events) != 1 || !strings.Contains(events[0].Message, "shutdown") {
+		t.Fatalf("events: %v", events)
+	}
+}
+
+// Proxmox ends a task that worked but logged warnings with WARNINGS: <count>.
+func TestStopAcceptsAShutdownWithWarnings(t *testing.T) {
+	env := newTestEnv(t, "running", allowAlice)
+	env.pve.taskExit = "WARNINGS: 1"
+	if resp, status := env.do(t, http.MethodPut, vmPath+"/stop", "alice"); resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("stop: %d %s", resp.StatusCode, status.Message)
+	}
+}
+
+func TestConsoleRefusedWhileStopped(t *testing.T) {
+	env := newTestEnv(t, "stopped", allowAlice)
+	for _, sub := range []string{"vnc", "console", "restart"} {
+		method := http.MethodGet
+		if sub == "restart" {
+			method = http.MethodPut
+		}
+		resp, status := env.do(t, method, vmPath+"/"+sub, "alice")
+		if resp.StatusCode != http.StatusConflict || !strings.Contains(status.Message, "stopped") {
+			t.Errorf("%s: %d %q", sub, resp.StatusCode, status.Message)
+		}
+	}
+}
+
+func TestVNCThroughProxy(t *testing.T) {
+	for _, generated := range []string{"", "Ab3dEf9h"} {
+		t.Run("generatedPassword="+generated, func(t *testing.T) {
+			env := newTestEnv(t, "running", allowAlice)
+			env.pve.generatedPassword = generated
+
+			conn, resp, err := env.dialWS(t, vmPath+"/vnc", "binary", "alice")
+			if err != nil {
+				t.Fatalf("dial: %v (%v)", err, resp)
+			}
+			defer func() { _ = conn.Close() }()
+			if conn.Subprotocol() != "binary" {
+				t.Fatalf("subprotocol %q", conn.Subprotocol())
+			}
+			stream := &wsStream{conn: conn}
+			if err := fakeNoVNC(t, stream, rfbVersion{3, 8}, rfbSecurityNone); err != nil {
+				t.Fatal(err)
+			}
+			// Past both handshakes the fake VNC server echoes.
+			if _, err := stream.Write([]byte{1}); err != nil {
+				t.Fatal(err)
+			}
+			_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+			var got [1]byte
+			if _, err := io.ReadFull(stream, got[:]); err != nil || got[0] != 1 {
+				t.Fatalf("echo %v %v", got, err)
+			}
+			// The SubjectAccessReview asked for get.
+			if ra := env.sars[len(env.sars)-1].ResourceAttributes; ra.Verb != "get" {
+				t.Fatalf("SAR verb %q", ra.Verb)
+			}
+		})
+	}
+}
+
+func TestVNCForbidden(t *testing.T) {
+	env := newTestEnv(t, "running", allowAlice)
+	_, resp, err := env.dialWS(t, vmPath+"/vnc", "binary", "mallory")
+	if err == nil {
+		t.Fatal("dial succeeded")
+	}
+	if resp == nil || resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("resp %v", resp)
+	}
+}
+
+func TestSerialConsoleThroughProxy(t *testing.T) {
+	env := newTestEnv(t, "running", allowAlice)
+	conn, resp, err := env.dialWS(t, vmPath+"/console", consoleSubprotocol, "alice")
+	if err != nil {
+		t.Fatalf("dial: %v (%v)", err, resp)
+	}
+	defer func() { _ = conn.Close() }()
+	if conn.Subprotocol() != consoleSubprotocol {
+		t.Fatalf("subprotocol %q", conn.Subprotocol())
+	}
+	_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	_, data, err := conn.ReadMessage()
+	if err != nil || string(data) != "login: " {
+		t.Fatalf("greeting %q %v", data, err)
+	}
+	if err := conn.WriteMessage(websocket.BinaryMessage, []byte("uname\n")); err != nil {
+		t.Fatal(err)
+	}
+	_, data, err = conn.ReadMessage()
+	if err != nil || string(data) != "UNAME\n" {
+		t.Fatalf("echo %q %v", data, err)
+	}
+}
+
+func TestHypervisorRefusalIsNotRelayed(t *testing.T) {
+	env := newTestEnv(t, "running", allowAlice)
+	// A wrong token: the hypervisor answers 401, the tenant sees 502 and a
+	// message without the token or the hypervisor's words.
+	secret, _ := env.dyn.Resource(connectionGVR).Get(context.Background(), "pve", metav1.GetOptions{})
+	_ = unstructured.SetNestedField(secret.Object, "kubemox@pve!wrong", "spec", "tokenID")
+	if _, err := env.dyn.Resource(connectionGVR).Update(context.Background(), secret, metav1.UpdateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	resp, status := env.do(t, http.MethodPut, vmPath+"/restart", "alice")
+	if resp.StatusCode != http.StatusBadGateway {
+		t.Fatalf("restart with a refused token: %d", resp.StatusCode)
+	}
+	if strings.Contains(status.Message, "wrong") || !strings.Contains(status.Message, "refused") {
+		t.Fatalf("message %q", status.Message)
+	}
+}

@@ -1,0 +1,33 @@
+{{- if eq (include "virtual-machine.substrate" .) "proxmox" }}
+{{- $strategy := .Values.runStrategy | default "Always" }}
+This machine runs on the proxmox substrate. The values are the same as on
+kubevirt; where Proxmox has no exact counterpart, the nearest one is used:
+{{- if .Values.netplanDhcp }}
+- netplanDhcp has no effect here: the address comes from the platform's IPAM
+  and is written into the guest's network configuration.
+{{- end }}
+{{- if eq $strategy "RerunOnFailure" }}
+- runStrategy RerunOnFailure behaves as Always: the machine starts with the
+  node, but a crash of the guest is not restarted without Proxmox HA.
+{{- end }}
+{{- if eq $strategy "Once" }}
+- runStrategy Once starts the machine a single time; once it stops, it stays
+  stopped until the strategy changes.
+{{- end }}
+{{- if hasPrefix "rt1." (.Values.instanceType | toString) }}
+- the realtime instance type pins the machine to the node's realtime cores
+  (when the platform lists them) with the host CPU and 1 GiB hugepages; the
+  guest gets no SCHED_FIFO scheduling.
+{{- end }}
+{{- if .Values.external }}
+- external access goes through the same Service as on kubevirt; the operator
+  fills its endpoints with the machine's address once the port is up.
+{{- if and (eq .Values.externalMethod "PortList") (eq .Values.externalAllowICMP false) }}
+- externalAllowICMP is honoured by the Service annotation as on kubevirt.
+{{- end }}
+{{- end }}
+{{- if and (not .Values.networks) (not .Values.subnets) }}
+- networks is empty, so the machine sits in the platform's default tenant
+  network, the counterpart of the pod network.
+{{- end }}
+{{- end }}

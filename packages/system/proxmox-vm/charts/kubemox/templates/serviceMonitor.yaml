@@ -1,0 +1,47 @@
+{{- if and (.Capabilities.APIVersions.Has "monitoring.coreos.com/v1") .Values.metrics.serviceMonitor.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ template "kubemox.fullname" . }}
+  namespace: {{ default .Release.Namespace .Values.metrics.serviceMonitor.namespace | quote }}
+  labels:
+    {{- include "kubemox.labels" . | nindent 4 }} 
+    {{- with .Values.metrics.serviceMonitor.selector }}
+      {{- toYaml . | nindent 4 }}
+    {{- end }}
+    {{- with .Values.metrics.serviceMonitor.additionalLabels }}
+      {{- toYaml . | nindent 4 }}
+    {{- end }}
+  {{- with .Values.metrics.serviceMonitor.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  endpoints:
+    - port: {{ .Values.service.portName }}
+      {{- with .Values.metrics.serviceMonitor.interval }}
+      interval: {{ . }}
+      {{- end }}
+      path: /metrics
+      {{- with .Values.metrics.serviceMonitor.relabelings }}
+      relabelings:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.metrics.serviceMonitor.metricRelabelings }}
+      metricRelabelings:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.metrics.serviceMonitor.scheme }}
+      scheme: {{ . }}
+      {{- end }}
+      {{- with .Values.metrics.serviceMonitor.tlsConfig }}
+      tlsConfig:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+  namespaceSelector:
+    matchNames:
+      - {{ .Release.Namespace }}
+  selector:
+    matchLabels:
+      {{- include "kubemox.selectorLabels" . | nindent 6 }}
+{{- end }}

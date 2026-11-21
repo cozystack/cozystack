@@ -1,3 +1,4 @@
+{{- if ne (include "virtual-machine.substrate" .) "proxmox" }}
 {{- /* The effective type, not the raw value: once complete resources size the
        VM the matcher is gone, and a stale or misspelled instanceType that the
        dashboard gives no way to clear must not fail a render that never
@@ -171,3 +172,4 @@ spec:
         multus:
           networkName: {{ $.Release.Namespace }}/{{ $net.name }}
       {{- end }}
+{{- end }}

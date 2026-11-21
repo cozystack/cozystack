@@ -98,6 +98,18 @@
       "description": "Provision the volume at disk creation instead of waiting for a consumer.",
       "type": "boolean",
       "default": true
+    },
+    "proxmox": {
+      "description": "Proxmox substrate settings.",
+      "type": "object",
+      "default": {},
+      "properties": {
+        "node": {
+          "description": "Proxmox node the volume is created on. A VM can only attach disks that live on its own node. Empty takes the catalog's default node.",
+          "type": "string",
+          "default": ""
+        }
+      }
     }
   }
 }

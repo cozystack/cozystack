@@ -1,0 +1,34 @@
+suite: apps.yaml vmSubstrate → _cluster.vm-substrate wiring
+# vm-disk and vm-instance pick their hypervisor from _cluster.vm-substrate in
+# the cozystack-values Secret; tenants no longer set it per application.
+templates:
+  - templates/apps.yaml
+release:
+  name: cozy-platform
+  namespace: cozy-system
+tests:
+  - it: writes kubevirt by default
+    asserts:
+      - matchRegex:
+          path: stringData["values.yaml"]
+          pattern: '(?m)^\s*vm-substrate:\s*"kubevirt"'
+  - it: writes proxmox when the platform runs VMs on Proxmox
+    set:
+      vmSubstrate: proxmox
+    asserts:
+      - matchRegex:
+          path: stringData["values.yaml"]
+          pattern: '(?m)^\s*vm-substrate:\s*"proxmox"'
+  - it: falls back to kubevirt when the key is null
+    set:
+      vmSubstrate: null
+    asserts:
+      - matchRegex:
+          path: stringData["values.yaml"]
+          pattern: '(?m)^\s*vm-substrate:\s*"kubevirt"'
+  - it: refuses an unknown hypervisor
+    set:
+      vmSubstrate: vsphere
+    asserts:
+      - failedTemplate:
+          errorPattern: "vmSubstrate must be kubevirt or proxmox"

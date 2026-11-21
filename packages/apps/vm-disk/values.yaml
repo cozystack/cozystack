@@ -37,3 +37,12 @@ storageClass: replicated
 
 ## @param {bool} bindImmediately - Provision the volume at disk creation instead of waiting for a consumer.
 bindImmediately: true
+
+## @section Proxmox
+
+## @typedef {struct} Proxmox - Proxmox substrate settings. Read only when the platform runs virtual machines on Proxmox VE (`vmSubstrate: proxmox` in the platform values).
+## @field {string} [node] - Proxmox node the volume is created on. A VM can only attach disks that live on its own node. Empty takes the catalog's default node.
+
+## @param {Proxmox} proxmox - Proxmox substrate settings.
+proxmox:
+  node: ""

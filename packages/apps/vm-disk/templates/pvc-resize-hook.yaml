@@ -1,3 +1,4 @@
+{{- if ne (include "vm-disk.substrate" .) "proxmox" }}
 {{- $existingPVC := lookup "v1" "PersistentVolumeClaim" .Release.Namespace .Release.Name }}
 {{- $shouldResize := false -}}
 {{- if and $existingPVC .Values.storage -}}
@@ -87,4 +88,5 @@ roleRef:
   kind: Role
   name: {{ .Release.Name }}-volume-resize-hook
   apiGroup: rbac.authorization.k8s.io
+{{- end }}
 {{- end }}

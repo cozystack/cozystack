@@ -1,0 +1,107 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "kubemox.fullname" . }}
+  labels:
+    {{- include "kubemox.labels" . | nindent 4 }}
+spec:
+  {{- if not .Values.autoscaling.enabled }}
+  replicas: {{ .Values.replicaCount }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "kubemox.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      labels:
+        {{- include "kubemox.selectorLabels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "kubemox.serviceAccountName" . }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: {{ .Chart.Name }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.service.port }}
+              protocol: TCP
+          # livenessProbe:
+          #   httpGet:
+          #     path: /
+          #     port: http
+          # readinessProbe:
+          #   httpGet:
+          #     path: /
+          #     port: http
+          {{- if .Values.tracing.enabled }}
+          args:
+            - "--enable-tracing"
+            - "--otlp-endpoint={{ .Values.tracing.otlpEndpoint }}"
+          {{- end }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          env:
+          - name: POD_NAMESPACE
+            valueFrom:
+              fieldRef:
+                fieldPath: metadata.namespace
+          {{/* Deprecated: Use ProxmoxConnection resource instead
+          {{- if .Values.proxmox.existingSecret }}
+          {{- with .Values.proxmox }}
+          - name: PROXMOX_ENDPOINT
+            value: {{ .endpoint }}
+          - name: PROXMOX_INSECURE_SKIP_TLS_VERIFY
+            value: {{ .insecureSkipTLSVerify | quote }}
+          - name: PROXMOX_TOKEN_ID
+            valueFrom:
+              secretKeyRef:
+                name: {{ .existingSecret | default "proxmox-credentials" }}
+                key: {{ .tokenIdKey | default "tokenID" }}
+                optional: true
+          - name: PROXMOX_SECRET
+            valueFrom:
+              secretKeyRef:
+                name: {{ .existingSecret | default "proxmox-credentials" }}
+                key: {{ .secretKey | default "secret" }}
+                optional: true
+          - name: PROXMOX_USERNAME
+            valueFrom:
+              secretKeyRef:
+                name: {{ .existingSecret | default "proxmox-credentials" }}
+                key: {{ .usernameKey | default "username" }}
+                optional: true
+          - name: PROXMOX_PASSWORD
+            valueFrom:
+              secretKeyRef:
+                name: {{ .existingSecret | default "proxmox-credentials" }}
+                key: {{ .passwordKey | default "password" }}
+                optional: true
+          {{- end }}
+        */}}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

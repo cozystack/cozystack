@@ -1,3 +1,4 @@
+{{- if ne (include "virtual-machine.substrate" .) "proxmox" }}
 {{- $vmName := include "virtual-machine.fullname" . -}}
 {{- $namespace := .Release.Namespace -}}
 {{- $jobName := printf "%s-update-hook" .Release.Name | trunc 63 | trimSuffix "-" -}}
@@ -159,4 +160,5 @@ roleRef:
   kind: Role
   name: {{ $.Release.Name }}-update-hook
   apiGroup: rbac.authorization.k8s.io
+{{- end }}
 {{- end }}

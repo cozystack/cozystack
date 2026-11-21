@@ -1,0 +1,46 @@
+suite: vm-default-images on kubevirt stays as it was
+
+# The default substrate renders the DataVolume collection as before and
+# nothing of the proxmox substrate; the proxmox template is inert.
+release:
+  name: vm-default-images
+  namespace: cozy-system
+templates:
+  - templates/dv.yaml
+  - templates/proxmox-volume.yaml
+tests:
+  - it: renders a DataVolume per image in cozy-public
+    template: templates/dv.yaml
+    set:
+      images:
+        - name: ubuntu-24.04
+          url: https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img
+          storage: 20Gi
+    asserts:
+      - hasDocuments:
+          count: 1
+      - isKind:
+          of: DataVolume
+      - equal:
+          path: metadata.name
+          value: vm-default-images-ubuntu-24.04
+      - equal:
+          path: spec.source.http.url
+          value: https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img
+  - it: renders the default collection of sixteen images
+    template: templates/dv.yaml
+    asserts:
+      - hasDocuments:
+          count: 16
+  - it: renders no VirtualMachineVolume
+    template: templates/proxmox-volume.yaml
+    asserts:
+      - hasDocuments:
+          count: 0
+  - it: refuses an unknown substrate
+    template: templates/proxmox-volume.yaml
+    set:
+      substrate: vsphere
+    asserts:
+      - failedTemplate:
+          errorPattern: "substrate must be \"kubevirt\" or \"proxmox\""

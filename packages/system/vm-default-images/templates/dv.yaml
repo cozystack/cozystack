@@ -1,3 +1,4 @@
+{{- if ne (include "vm-default-images.substrate" .) "proxmox" }}
 {{- range .Values.images }}
 ---
 apiVersion: cdi.kubevirt.io/v1beta1
@@ -42,4 +43,5 @@ spec:
     {{- else if $.Values.storageClass }}
     storageClassName: {{ $.Values.storageClass }}
     {{- end }}
+{{- end }}
 {{- end }}

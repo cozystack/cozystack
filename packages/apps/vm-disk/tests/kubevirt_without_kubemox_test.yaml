@@ -1,0 +1,38 @@
+suite: vm-disk on kubevirt stays unaffected by the proxmox substrate
+# The default substrate must render as before on a platform that has no
+# kubemox at all: the guard against a disk that already lives on Proxmox is
+# gated on that API being served, since a lookup of an unknown kind fails the
+# render.
+release:
+  name: vm-disk-data
+  namespace: tenant-test
+templates:
+  - templates/dv.yaml
+set:
+  storage: 20Gi
+  storageClass: replicated
+tests:
+  - it: renders the DataVolume with no kubemox API on the cluster
+    capabilities:
+      apiVersions: []
+    asserts:
+      - isKind:
+          of: DataVolume
+  - it: refuses substrate kubevirt when the disk already is a VirtualMachineVolume
+    capabilities:
+      apiVersions:
+        - proxmox.alperen.cloud/v1alpha1/VirtualMachineVolume
+    kubernetesProvider:
+      scheme:
+        "proxmox.alperen.cloud/v1alpha1/VirtualMachineVolume":
+          gvr: {group: proxmox.alperen.cloud, version: v1alpha1, resource: virtualmachinevolumes}
+          namespaced: true
+      objects:
+        - apiVersion: proxmox.alperen.cloud/v1alpha1
+          kind: VirtualMachineVolume
+          metadata:
+            name: vm-disk-data
+            namespace: tenant-test
+    asserts:
+      - failedTemplate:
+          errorPattern: "already exists as a VirtualMachineVolume"
