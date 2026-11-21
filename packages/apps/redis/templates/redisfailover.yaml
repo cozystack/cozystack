@@ -24,20 +24,6 @@
 {{- if or $sentinel.resources $sentinel.resourcesPreset -}}
 {{-   $sentinelResources = $sentinel.resources | default dict -}}
 {{- end -}}
-{{- if .Values.authEnabled }}
-  {{- $existingPassword := lookup "v1" "Secret" .Release.Namespace (printf "%s-auth" .Release.Name) }}
-  {{- $password := randAlphaNum 32 | b64enc }}
-  {{- if $existingPassword }}
-    {{- $password = index $existingPassword.data "password" }}
-  {{- end }}
----
-apiVersion: v1
-kind: Secret
-metadata:
-  name: {{ .Release.Name }}-auth
-data:
-  password: {{ $password }}
-{{- end }}
 
 ---
 
@@ -174,8 +160,13 @@ spec:
       - min-replicas-max-lag {{ .Values.minReplicasMaxLag | int }}
       {{- end }}
   {{- if .Values.authEnabled }}
+  {{- /* The account Secret of the default CredentialTemplate (credentials.yaml),
+         which cozystack-controller keeps and the credentials API rewrites on a
+         mint. The operator reads its password key on every reconcile and
+         applies a changed one to the running servers with CONFIG SET; nothing
+         else it runs authenticates with it. */}}
   auth:
-    secretPath: {{ .Release.Name }}-auth
+    secretPath: {{ printf "%s.default.account" .Release.Name }}
   {{- end }}
 
 ---

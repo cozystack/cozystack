@@ -65,20 +65,20 @@ tests:
       path: kind
       value: Role
     asserts:
-      # The negatives below address rules[1] by index, and notContains is
-      # fail-open on a path that does not exist, so a SECOND secrets rule
-      # granting the key-bearing Secrets would satisfy every one of them.
-      # Pin the rule count: the Role renders services, secrets and
-      # workloadmonitors, and nothing else.
+      # No Secret of this release is granted, TLS or otherwise: the Role
+      # renders services and workloadmonitors and nothing else. Pinning the
+      # count and each rule's resources leaves no rule a Secret could hide in.
       - lengthEqual:
           path: rules
-          count: 3
-      - notContains:
-          path: rules[1].resourceNames
-          content: "my-redis.ca-cert"
-      - notContains:
-          path: rules[1].resourceNames
-          content: "my-redis.tls"
+          count: 2
+      - equal:
+          path: rules[0].resources
+          value:
+            - services
+      - equal:
+          path: rules[1].resources
+          value:
+            - workloadmonitors
 
   - it: "redisfailover.yaml does not have spec.tls when tls.enabled is unset"
     templates:
@@ -101,20 +101,20 @@ tests:
       path: kind
       value: Role
     asserts:
-      # The negatives below address rules[1] by index, and notContains is
-      # fail-open on a path that does not exist, so a SECOND secrets rule
-      # granting the key-bearing Secrets would satisfy every one of them.
-      # Pin the rule count: the Role renders services, secrets and
-      # workloadmonitors, and nothing else.
+      # No Secret of this release is granted, TLS or otherwise: the Role
+      # renders services and workloadmonitors and nothing else. Pinning the
+      # count and each rule's resources leaves no rule a Secret could hide in.
       - lengthEqual:
           path: rules
-          count: 3
-      - notContains:
-          path: rules[1].resourceNames
-          content: "my-redis.tls"
-      - notContains:
-          path: rules[1].resourceNames
-          content: "my-redis.ca-cert"
+          count: 2
+      - equal:
+          path: rules[0].resources
+          value:
+            - services
+      - equal:
+          path: rules[1].resources
+          value:
+            - workloadmonitors
 
   # ------------------------------------------------------------------
   # Case 2: tls.enabled=true -> the full cert-manager chain
@@ -400,34 +400,20 @@ tests:
       path: kind
       value: Role
     asserts:
-      # The negatives below address rules[1] by index, and notContains is
-      # fail-open on a path that does not exist, so a SECOND secrets rule
-      # granting the key-bearing Secrets would satisfy every one of them.
-      # Pin the rule count: the Role renders services, secrets and
-      # workloadmonitors, and nothing else.
+      # No Secret of this release is granted, TLS or otherwise: the Role
+      # renders services and workloadmonitors and nothing else. Pinning the
+      # count and each rule's resources leaves no rule a Secret could hide in.
       - lengthEqual:
           path: rules
-          count: 3
-      # The trust anchor reaches the tenant as the <release>.tenant-ca
-      # projection, not as a grant on a Secret name, so the Role lists exactly
-      # the auth Secret and nothing TLS-related.
+          count: 2
       - equal:
-          path: rules[1].resourceNames
+          path: rules[0].resources
           value:
-            - my-redis-auth
-      # The CA-only Secret the operator publishes. Key-free today, but the name
-      # is the operator's to fill and RBAC cannot filter by key.
-      - notContains:
-          path: rules[1].resourceNames
-          content: "my-redis.ca-cert"
-      # CA certificate and private key.
-      - notContains:
-          path: rules[1].resourceNames
-          content: "my-redis.ca-tls"
-      # Server leaf and private key.
-      - notContains:
-          path: rules[1].resourceNames
-          content: "my-redis.tls"
+            - services
+      - equal:
+          path: rules[1].resources
+          value:
+            - workloadmonitors
 
   - it: "dashboard-resourcemap.yaml withholds both key-bearing secrets in RBAC when authClients=yes"
     templates:
@@ -441,27 +427,20 @@ tests:
       path: kind
       value: Role
     asserts:
-      # The negatives below address rules[1] by index, and notContains is
-      # fail-open on a path that does not exist, so a SECOND secrets rule
-      # granting the key-bearing Secrets would satisfy every one of them.
-      # Pin the rule count: the Role renders services, secrets and
-      # workloadmonitors, and nothing else.
+      # No Secret of this release is granted, TLS or otherwise: the Role
+      # renders services and workloadmonitors and nothing else. Pinning the
+      # count and each rule's resources leaves no rule a Secret could hide in.
       - lengthEqual:
           path: rules
-          count: 3
-      - notContains:
-          path: rules[1].resourceNames
-          content: "my-redis.ca-cert"
-      # The server leaf carries tls.key. Granting it would let the tenant
-      # impersonate this release's Redis and Sentinel endpoints, so it stays
-      # withheld even though authClients=yes leaves the tenant without a
-      # client certificate the CA would accept.
-      - notContains:
-          path: rules[1].resourceNames
-          content: "my-redis.tls"
-      - notContains:
-          path: rules[1].resourceNames
-          content: "my-redis.ca-tls"
+          count: 2
+      - equal:
+          path: rules[0].resources
+          value:
+            - services
+      - equal:
+          path: rules[1].resources
+          value:
+            - workloadmonitors
 
   - it: "dashboard-resourcemap.yaml withholds both key-bearing secrets in RBAC when authClients=optional"
     templates:
@@ -475,23 +454,20 @@ tests:
       path: kind
       value: Role
     asserts:
-      # The negatives below address rules[1] by index, and notContains is
-      # fail-open on a path that does not exist, so a SECOND secrets rule
-      # granting the key-bearing Secrets would satisfy every one of them.
-      # Pin the rule count: the Role renders services, secrets and
-      # workloadmonitors, and nothing else.
+      # No Secret of this release is granted, TLS or otherwise: the Role
+      # renders services and workloadmonitors and nothing else. Pinning the
+      # count and each rule's resources leaves no rule a Secret could hide in.
       - lengthEqual:
           path: rules
-          count: 3
-      - notContains:
-          path: rules[1].resourceNames
-          content: "my-redis.ca-cert"
-      - notContains:
-          path: rules[1].resourceNames
-          content: "my-redis.tls"
-      - notContains:
-          path: rules[1].resourceNames
-          content: "my-redis.ca-tls"
+          count: 2
+      - equal:
+          path: rules[0].resources
+          value:
+            - services
+      - equal:
+          path: rules[1].resources
+          value:
+            - workloadmonitors
 
   # ------------------------------------------------------------------
   # Case 3: external=true, tls.enabled=false -> TLS explicitly off
@@ -800,17 +776,20 @@ tests:
       path: kind
       value: Role
     asserts:
-      # The negatives below address rules[1] by index, and notContains is
-      # fail-open on a path that does not exist, so a SECOND secrets rule
-      # granting the key-bearing Secrets would satisfy every one of them.
-      # Pin the rule count: the Role renders services, secrets and
-      # workloadmonitors, and nothing else.
+      # No Secret of this release is granted, TLS or otherwise: the Role
+      # renders services and workloadmonitors and nothing else. Pinning the
+      # count and each rule's resources leaves no rule a Secret could hide in.
       - lengthEqual:
           path: rules
-          count: 3
-      - notContains:
-          path: rules[1].resourceNames
-          content: "my-redis.ca-cert"
+          count: 2
+      - equal:
+          path: rules[0].resources
+          value:
+            - services
+      - equal:
+          path: rules[1].resources
+          value:
+            - workloadmonitors
 
   # The chart creates <release>-external-lb itself when external is on. It
   # resolves in-cluster like any Service, so a client dialing it by name needs

@@ -822,3 +822,109 @@ func TestRunRefusesTwoWaysToFindPerAccountSources(t *testing.T) {
 		t.Fatalf("err = %v", err)
 	}
 }
+
+// redisMigrator is set up as the Redis conversion runs: one fixed account
+// whose password sits under one key of <release>-auth, switched by
+// authEnabled.
+func redisMigrator(t *testing.T, values string, auth map[string]string) (*migrator, *helmv2.HelmRelease) {
+	t.Helper()
+	hr := release(values, "0.1.0", true)
+	hr.Name = "redis-cache"
+	hr.Labels[appsv1alpha1.ApplicationKindLabel] = "Redis"
+	hr.Labels[appsv1alpha1.ApplicationNameLabel] = "cache"
+	objs := []client.Object{hr}
+	if auth != nil {
+		sec := sourceSecret(auth)
+		sec.Name = "redis-cache-auth"
+		objs = append(objs, sec)
+	}
+	m := newMigrator(t, objs...)
+	m.o.kind = "Redis"
+	m.o.formatName = format.Plaintext
+	m.o.labels = labelFlags{}
+	m.o.sourceSuffix = "-auth"
+	m.o.fixedAccounts = stringFlags{"default"}
+	m.o.sourceKey = "password"
+	m.o.enabledFlag = "authEnabled"
+	return m, hr
+}
+
+func TestSeedFixedAccountFromOneSourceKey(t *testing.T) {
+	ctx := context.Background()
+	for _, values := range []string{`{}`, `{"authEnabled":true}`} {
+		m, hr := redisMigrator(t, values, map[string]string{"password": "s3cret"})
+		if err := m.seed(ctx); err != nil {
+			t.Fatal(err)
+		}
+		sec, ok := m.secret(t, "redis-cache.default.account")
+		if !ok {
+			t.Fatalf("%s: the default account Secret was not written", values)
+		}
+		if string(sec.Data[account.UsernameKey]) != "default" || string(sec.Data[account.PasswordKey]) != "s3cret" || sec.Annotations[account.FormatAnnotation] != format.Plaintext {
+			t.Fatalf("%s: account Secret = %+v %q", values, sec.ObjectMeta, sec.Data)
+		}
+		cur := &helmv2.HelmRelease{}
+		if err := m.c.Get(ctx, client.ObjectKeyFromObject(hr), cur); err != nil {
+			t.Fatal(err)
+		}
+		if cur.Annotations[account.SeedAnnotation] != "true" {
+			t.Fatalf("%s: a release whose account got its Secret must be marked for seeding", values)
+		}
+	}
+}
+
+func TestSeedFixedAccountSwitchedOff(t *testing.T) {
+	ctx := context.Background()
+	m, _ := redisMigrator(t, `{"authEnabled":false}`, nil)
+	if err := m.seed(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := m.secret(t, "redis-cache.default.account"); ok {
+		t.Fatal("a release with authentication off declares no account")
+	}
+	st, _ := m.loadState(ctx)
+	if st.Releases["tenant-foo/redis-cache"] == nil || len(st.Skipped) != 0 {
+		t.Fatalf("state = %+v", st)
+	}
+}
+
+func TestSeedFixedAccountLeavesOutANonBooleanFlag(t *testing.T) {
+	ctx := context.Background()
+	m, _ := redisMigrator(t, `{"authEnabled":"yes"}`, map[string]string{"password": "s3cret"})
+	if err := m.seed(ctx); err != nil {
+		t.Fatal(err)
+	}
+	st, _ := m.loadState(ctx)
+	if why := st.Skipped["tenant-foo/redis-cache"]; !strings.Contains(why, "not a boolean") {
+		t.Fatalf("skipped = %v", st.Skipped)
+	}
+	if _, ok := m.secret(t, "redis-cache.default.account"); ok {
+		t.Fatal("an unresolvable release gets no account Secret")
+	}
+}
+
+func TestFinishFixedAccountRetiresTheSource(t *testing.T) {
+	ctx := context.Background()
+	m, hr := redisMigrator(t, `{}`, map[string]string{"password": "s3cret"})
+	if err := m.seed(ctx); err != nil {
+		t.Fatal(err)
+	}
+	cur := &helmv2.HelmRelease{}
+	if err := m.c.Get(ctx, client.ObjectKeyFromObject(hr), cur); err != nil {
+		t.Fatal(err)
+	}
+	cur.Status.History = helmv2.Snapshots{{Version: 2, ChartVersion: "0.2.0", Status: "deployed"}}
+	if err := m.c.Status().Update(ctx, cur); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.finish(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := m.secret(t, "redis-cache-auth"); ok {
+		t.Fatal("the source Secret must be deleted")
+	}
+	sec, ok := m.secret(t, "redis-cache.default.account")
+	if !ok || string(sec.Data[account.PasswordKey]) != "s3cret" {
+		t.Fatal("the account Secret must keep the migrated password")
+	}
+}
