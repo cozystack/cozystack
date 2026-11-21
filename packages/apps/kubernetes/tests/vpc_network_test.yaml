@@ -30,16 +30,22 @@ tests:
       - equal:
           path: spec.deployment.podAdditionalMetadata.annotations["sdn.cozystack.io/vpc"]
           value: virtualprivatecloud-myvpc
-        documentIndex: 1
+        documentSelector:
+          path: kind
+          value: KamajiControlPlane
       - equal:
           path: spec.network.serviceAnnotations["sdn.cozystack.io/vpc"]
           value: virtualprivatecloud-myvpc
-        documentIndex: 1
+        documentSelector:
+          path: kind
+          value: KamajiControlPlane
       # Host-side consumers keep dialing the ClusterIP; the VPC side gets a VIP.
       - equal:
           path: spec.network.serviceType
           value: ClusterIP
-        documentIndex: 1
+        documentSelector:
+          path: kind
+          value: KamajiControlPlane
 
   - it: carries no VPC metadata on the default network
     capabilities:
@@ -48,10 +54,14 @@ tests:
     asserts:
       - notExists:
           path: spec.deployment.podAdditionalMetadata.annotations
-        documentIndex: 1
+        documentSelector:
+          path: kind
+          value: KamajiControlPlane
       - notExists:
           path: spec.network.serviceAnnotations
-        documentIndex: 1
+        documentSelector:
+          path: kind
+          value: KamajiControlPlane
 
   - it: refuses a VPC where sdn.cozystack.io is not served
     set:
@@ -158,4 +168,6 @@ tests:
       - equal:
           path: spec.deployment.podAdditionalMetadata.annotations["sdn.cozystack.io/vpc"]
           value: virtualprivatecloud-myvpc
-        documentIndex: 1
+        documentSelector:
+          path: kind
+          value: KamajiControlPlane
