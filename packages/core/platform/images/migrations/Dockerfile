@@ -5,6 +5,22 @@
 # target arch and verify it against the release's cli-SHA256SUMS.txt. Bump
 # ETCD_OPERATOR_VERSION (and the pinned checksums below) together, keeping it in
 # sync with packages/system/etcd-operator (Chart appVersion).
+# credentials-migrate shares the password format functions with the API, so
+# it is built from this repository: the build context is the repository root,
+# and every path below is relative to it.
+FROM --platform=$BUILDPLATFORM golang:1.27-alpine@sha256:f92b6ef800e499660581efdabdf25d9d817a9d124eaf900924f0504e7e27e12d AS builder
+ARG GOPROXY
+ARG TARGETOS
+ARG TARGETARCH
+WORKDIR /workspace
+COPY go.mod go.sum ./
+RUN for attempt in 1 2 3; do GOOS=$TARGETOS GOARCH=$TARGETARCH go mod download && break; [ "$attempt" = 3 ] && exit 1; sleep $((attempt * 10)); done
+COPY api api/
+COPY pkg pkg/
+COPY cmd cmd/
+COPY internal internal/
+RUN GOOS=$TARGETOS GOARCH=$TARGETARCH CGO_ENABLED=0 go build -ldflags="-extldflags=-static" -o /credentials-migrate ./cmd/credentials-migrate
+
 FROM alpine:3.24@sha256:294b683cb724975bec92580e1e685676bd4b50bda910ddb8c51d4cabeaec77e6
 
 ARG TARGETOS
@@ -29,6 +45,8 @@ RUN set -eux; \
     echo "${sha256}  /usr/bin/etcd-migrate" | sha256sum -c -; \
     chmod +x /usr/bin/etcd-migrate
 
+COPY --from=builder /credentials-migrate /usr/bin/credentials-migrate
+
 # CRDs of Strimzi 0.51.0, the last release serving both v1beta2 and v1.
 # Migration 61 applies them so Strimzi's conversion tool can move every stored
 # object to v1 before the kafka-operator release installs the v1-only CRDs.
@@ -37,13 +55,17 @@ RUN mkdir /strimzi-crds && \
       https://github.com/strimzi/strimzi-kafka-operator/releases/download/0.51.0/strimzi-crds-0.51.0.yaml && \
     echo "a11257e67985a946a6facfb17d729aac5670b89675d410d13162fe455a5ac7a8  /strimzi-crds/strimzi-crds-0.51.0.yaml" | sha256sum -c -
 
-COPY migrations /migrations
+# The CredentialTemplate CRD, which migration 62 applies before the converted
+# charts render templates: it ships with cozystack-controller, whose release
+# can upgrade after the tenant releases switch charts.
+COPY packages/system/cozystack-controller/definitions/cozystack.io_credentialtemplates.yaml /credential-crds/
+COPY packages/core/platform/images/migrations/migrations /migrations
 # v1alpha2 etcd CRDs, vendored into the build context by `make image-migrations`.
 # migration 50 applies these before adoption so it does not deadlock waiting for
 # the etcd-operator-crds HelmRelease (which only reconciles after the migration
 # pre-upgrade hook completes).
-COPY etcd-operator-crds /etcd-operator-crds
-COPY run-migrations.sh /usr/bin/run-migrations.sh
+COPY packages/core/platform/images/migrations/etcd-operator-crds /etcd-operator-crds
+COPY packages/core/platform/images/migrations/run-migrations.sh /usr/bin/run-migrations.sh
 
 WORKDIR /migrations
 

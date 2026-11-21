@@ -1,0 +1,233 @@
+suite: pre-upgrade hook refuses to adopt a role the chart did not mark
+
+# Pins the pre-upgrade refusal (see preflight-job.yaml for why it runs before
+# the upgrade and reads the live Cluster at run time): the declared names the
+# run compares, the database check only for what is new, the gates on install
+# and bootstrap, and that the flag is read before it is set.
+
+templates:
+  - templates/hooks/preflight-job.yaml
+
+release:
+  name: pg-test
+  namespace: tenant-test
+
+set:
+  _cluster:
+    scheduling: {}
+
+tests:
+  - it: renders nothing on install
+    set:
+      users:
+        app: {}
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: renders nothing while bootstrap.recovery is in effect
+    release:
+      name: pg-test
+      namespace: tenant-test
+      upgrade: true
+    set:
+      users:
+        app: {}
+      bootstrap:
+        enabled: true
+        oldName: pg-old
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: renders nothing for a release without users or databases
+    release:
+      name: pg-test
+      namespace: tenant-test
+      upgrade: true
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: hands every declared user and database role to the comparison with the live Cluster
+    release:
+      name: pg-test
+      namespace: tenant-test
+      upgrade: true
+    set:
+      version: v18
+      users:
+        debezium: {}
+        migrator:
+          createRole: true
+      databases:
+        newdb: {}
+    documentSelector:
+      path: metadata.name
+      value: pg-test-preflight-script
+    asserts:
+      - matchRegex:
+          path: data["new-roles.sh"]
+          pattern: "kubectl -n tenant-test get clusters.postgresql.cnpg.io pg-test -o jsonpath='\\{range .spec.managed.roles\\[\\*\\]\\}\\{.name\\}=\\{.createrole\\}"
+      - matchRegex:
+          path: data["new-roles.sh"]
+          pattern: "\\ncheck user debezium debezium false\\ncheck user migrator migrator true\\ncheck database newdb newdb_admin false\\ncheck database newdb newdb_readonly false\\n"
+
+  # The point of reading the Cluster first: an upgrade that adds no role and
+  # grants no new createRole never waits for the database, so a database that
+  # is down does not block it.
+  - it: leaves before waiting for the database when nothing is new
+    release:
+      name: pg-test
+      namespace: tenant-test
+      upgrade: true
+    set:
+      users:
+        web: {}
+    documentSelector:
+      path: metadata.name
+      value: pg-test-preflight-script
+    asserts:
+      - matchRegex:
+          path: data["preflight.sh"]
+          pattern: "(?s)if \\[ ! -s /work/new \\]; then\\n.*exit 0\\nfi\\nuntil pg_isready"
+
+  - it: refuses an unmarked role only for the names the run found new
+    release:
+      name: pg-test
+      namespace: tenant-test
+      upgrade: true
+    set:
+      users:
+        debezium: {}
+    documentSelector:
+      path: metadata.name
+      value: pg-test-preflight-script
+    asserts:
+      - matchRegex:
+          path: data["preflight.sh"]
+          pattern: "while read -r kind key role; do\\n  \\[ \"\\$kind\" = createrole \\] && continue\\n  psql -v ON_ERROR_STOP=1 --echo-all -v kind=\"\\$kind\" -v key=\"\\$key\" -v role=\"\\$role\""
+      - matchRegex:
+          path: data["preflight.sh"]
+          pattern: "WHERE r.rolname = :'role'\\n  AND current_setting\\('cozystack.createrole_granted', true\\) = 'on'\\n  AND NOT EXISTS \\(SELECT FROM pg_catalog.pg_auth_members m JOIN pg_catalog.pg_roles g ON g.oid = m.roleid WHERE g.rolname = 'cozystack:managed' AND m.member = r.oid\\)\\\\gexec"
+      - notMatchRegex:
+          path: data["preflight.sh"]
+          pattern: "cozystack.createrole_granted = 'on'"
+
+  - it: records createRole after the check when the new values grant it
+    release:
+      name: pg-test
+      namespace: tenant-test
+      upgrade: true
+    set:
+      version: v18
+      users:
+        migrator:
+          createRole: true
+    documentSelector:
+      path: metadata.name
+      value: pg-test-preflight-script
+    asserts:
+      - matchRegex:
+          path: data["preflight.sh"]
+          pattern: "(?s)done < /work/new\\npsql -v ON_ERROR_STOP=1 --echo-all -c \"ALTER DATABASE postgres SET cozystack.createrole_granted = 'on';\""
+
+  - it: may read only its own Cluster
+    release:
+      name: pg-test
+      namespace: tenant-test
+      upgrade: true
+    set:
+      users:
+        web: {}
+    documentSelector:
+      path: kind
+      value: Role
+    asserts:
+      - equal:
+          path: rules
+          value:
+            - apiGroups: ["postgresql.cnpg.io"]
+              resources: ["clusters"]
+              resourceNames: ["pg-test"]
+              verbs: ["get"]
+      - equal:
+          path: metadata.annotations["helm.sh/hook"]
+          value: pre-upgrade
+
+  - it: runs as a bounded pre-upgrade Job that can reach the API server
+    release:
+      name: pg-test
+      namespace: tenant-test
+      upgrade: true
+    set:
+      users:
+        app: {}
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - equal:
+          path: metadata.annotations["helm.sh/hook"]
+          value: pre-upgrade
+      - equal:
+          path: spec.activeDeadlineSeconds
+          value: 300
+      - equal:
+          path: spec.backoffLimit
+          value: 0
+      - equal:
+          path: spec.template.spec.serviceAccountName
+          value: pg-test-preflight
+      - equal:
+          path: spec.template.metadata.labels["policy.cozystack.io/allow-to-apiserver"]
+          value: "true"
+      - equal:
+          path: spec.template.spec.initContainers[0].command
+          value: ["/bin/sh", "/scripts/new-roles.sh"]
+      - equal:
+          path: spec.template.spec.containers[0].env[2].value
+          value: pg-test-rw
+
+  - it: creates and marks each absent declared database role as the superuser on pg16+
+    release:
+      upgrade: true
+    set:
+      version: v18
+      databases:
+        shop: {}
+    documentSelector:
+      path: metadata.name
+      value: pg-test-preflight-script
+    asserts:
+      # The refusal and the create-and-mark run in one psql session, keyed on a
+      # snapshot of whether the role existed, so a role planted between them
+      # collides with the unconditional CREATE and stops the hook.
+      - matchRegex:
+          path: data["preflight.sh"]
+          pattern: "SELECT NOT EXISTS \\(SELECT FROM pg_catalog.pg_roles WHERE rolname = :'role'\\) AS role_absent\\\\gset"
+      # The create and mark run as a top-level SELECT format(...) + \gexec, not a
+      # DO block: psql does not substitute :'role' inside a dollar-quoted body,
+      # so it would reach PostgreSQL literally and the hook would fail to parse.
+      - matchRegex:
+          path: data["preflight.sh"]
+          pattern: "SELECT format\\('CREATE ROLE %I NOINHERIT; COMMENT ON ROLE %I IS %L; GRANT %I TO %I WITH INHERIT FALSE, SET FALSE', :'role', :'role', 'role managed by helm', 'cozystack:managed', :'role'\\)"
+      # The create is gated on the snapshot, not a live NOT EXISTS, so it is
+      # unconditional and fails closed on a concurrent plant.
+      - matchRegex:
+          path: data["preflight.sh"]
+          pattern: "WHERE :'kind' = 'database' AND :'role_absent'::boolean"
+  - it: marks a hook-created database role without the pg16 options on older PostgreSQL
+    release:
+      upgrade: true
+    set:
+      version: v15
+      databases:
+        shop: {}
+    documentSelector:
+      path: metadata.name
+      value: pg-test-preflight-script
+    asserts:
+      - matchRegex:
+          path: data["preflight.sh"]
+          pattern: "SELECT format\\('CREATE ROLE %I NOINHERIT; COMMENT ON ROLE %I IS %L; GRANT %I TO %I', :'role', :'role', 'role managed by helm', 'cozystack:managed', :'role'\\)"

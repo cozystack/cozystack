@@ -19,6 +19,7 @@ _repos
 /cozystack-api
 /cozystack-controller
 /cozystack-operator
+/credentials-migrate
 /flux-plunger
 /flux-shard-operator
 /kubeovn-plunger

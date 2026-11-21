@@ -267,6 +267,52 @@ spec:
   {{- include "postgres.flavorGuard" $ }}
   imageName: {{ include "postgres.imageName" $ }}
   enableSuperuserAccess: true
+  {{- /*
+    Each role is rendered as the init-script created it: CNPG reverts an
+    attribute that differs, revokes a parent role missing from inRoles and
+    clears a comment the spec leaves unset, and the init-script finds the roles
+    to drop by that comment and by membership in the marker. CNPG grants the
+    marker with the default options; the init-script narrows them after each
+    run, which CNPG leaves alone. An account whose Secret is missing is left as
+    it is by CNPG, so nothing here fails the render for it.
+  */}}
+  {{- include "postgres.accountsGuard" $ }}
+  managed:
+    roles:
+      - name: "cozystack:managed"
+        login: false
+      {{- range $database, $d := .Values.databases }}
+      {{- range $suffix := list "admin" "readonly" }}
+      - name: {{ printf "%s_%s" $database $suffix | quote }}
+        login: false
+        inherit: false
+        comment: role managed by helm
+        inRoles:
+          - "cozystack:managed"
+      {{- end }}
+      {{- end }}
+      {{- range $user, $u := .Values.users }}
+      - name: {{ $user | quote }}
+        login: true
+        inherit: true
+        replication: {{ default false $u.replication }}
+        createrole: {{ default false $u.createRole }}
+        bypassrls: {{ default false $u.bypassRls }}
+        comment: user managed by helm
+        inRoles:
+          - "cozystack:managed"
+          {{- range $database, $d := $.Values.databases }}
+          {{- $roles := $d.roles | default dict }}
+          {{- if has $user $roles.admin }}
+          - {{ printf "%s_admin" $database | quote }}
+          {{- end }}
+          {{- if has $user $roles.readonly }}
+          - {{ printf "%s_readonly" $database | quote }}
+          {{- end }}
+          {{- end }}
+        passwordSecret:
+          name: {{ include "postgres.accountSecret" (list $ $user) | quote }}
+      {{- end }}
   {{- if .Values._cluster.scheduling }}
   {{- $rawConstraints := get .Values._cluster.scheduling "globalAppTopologySpreadConstraints" }}
   {{- if $rawConstraints }}
