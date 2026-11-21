@@ -76,10 +76,9 @@ spec:
             readyReplicas: 2
 
   # The password is the platform's to issue: a mint reaches every running
-  # server without a restart first (the operator adds it next to the old one,
-  # moves masterauth and the Sentinels over, then rolls the pods so the probes
-  # and the exporter read it), replication survives it, and a second mint
-  # replaces the first.
+  # server with CONFIG SET, restarts no pod and moves no master (replication,
+  # the Sentinels, the probes and the exporter use the operator's internal
+  # account, not this password), and a second mint replaces the first.
   - name: verify-minted-credential
     try:
     - assert:
@@ -110,8 +109,7 @@ spec:
               | jq -r '.status.password'
           }
           # The password goes to redis-cli on stdin: exec arguments travel in
-          # the request URI, which the audit log records at any level. The pod
-          # is looked up each time, since the rotation rolls them.
+          # the request URI, which the audit log records at any level.
           cli() {
             local password=$1; shift
             local pod
@@ -123,6 +121,14 @@ spec:
               "$@" 2>/dev/null | tr -d '\r' || true
           }
           login() { cli "$1" ping; }
+          # Every redis pod with its uid and restart count, and which one the
+          # master label is on: a mint must change none of it.
+          pods() {
+            kubectl -n "$NAMESPACE" get pod -l app.kubernetes.io/component=redis,app.kubernetes.io/instance=redis-test \
+              -o jsonpath='{range .items[*]}{.metadata.name} {.metadata.uid} {.status.containerStatuses[*].restartCount} {.metadata.labels.redisfailovers-role}{"\n"}{end}' | sort
+          }
+          before=$(pods)
+          [ "$(printf '%s\n' "$before" | grep -c ' master$')" = 1 ] || { echo "no single master before the mint: $before" >&2; exit 1; }
 
           first=$(mint)
           [ "${#first}" -eq 32 ] || { echo "minted password has ${#first} characters, want 32" >&2; exit 1; }
@@ -139,20 +145,14 @@ spec:
           # The operator drops the replaced password once every server takes
           # the new one, a pass after it applies it.
           while [ "$(login "$first")" = "PONG" ]; do sleep 5; done
-          # Replication outlived both rotations: the master still has its
-          # replica, and the pods rolled onto the new password are Ready.
+          # Replication outlived both rotations, and nothing restarted or
+          # failed over to get there.
           until cli "$second" info replication | grep -qx 'connected_slaves:1'; do sleep 5; done
-          # The StatefulSet rolls OnDelete, which rollout status does not
-          # follow: compare each pod's revision with the update revision.
-          rolled() {
-            local want pods
-            want=$(kubectl -n "$NAMESPACE" get statefulset rfr-redis-test -o jsonpath='{.status.updateRevision}')
-            pods=$(kubectl -n "$NAMESPACE" get pod -l app.kubernetes.io/component=redis,app.kubernetes.io/instance=redis-test \
-              -o jsonpath='{range .items[*]}{.metadata.labels.controller-revision-hash}{"\n"}{end}')
-            [ -n "$want" ] && [ "$(printf '%s\n' "$pods" | grep -cx -- "$want")" = 2 ] &&
-              [ "$(kubectl -n "$NAMESPACE" get statefulset rfr-redis-test -o jsonpath='{.status.readyReplicas}')" = 2 ]
-          }
-          until rolled; do sleep 5; done
+          after=$(pods)
+          if [ "$after" != "$before" ]; then
+            printf 'a mint restarted a pod or moved the master:\nbefore:\n%s\nafter:\n%s\n' "$before" "$after" >&2
+            exit 1
+          fi
         check:
           ($error == null): true
 ---

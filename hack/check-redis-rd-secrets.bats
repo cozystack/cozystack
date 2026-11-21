@@ -46,10 +46,11 @@ CHART="$REPO_ROOT/packages/system/redis-rd"
 
 # The complete tenant-visible Secret surface: the trust anchor by label, and
 # nothing else. The password is issued through the credentials API, and its
-# account Secret is the platform's. The two key-bearing Secrets are
+# account Secret is the platform's. The operator's internal account joins the
+# key-bearing Secrets in exclude. The two key-bearing Secrets are
 # named in exclude, which is evaluated before include and so backstops the
 # label-only entry against a mis-stamp.
-EXPECTED_SECRETS='{"exclude":[{"resourceNames":["redis-{{ .name }}.ca-tls","redis-{{ .name }}.tls","redis-{{ .name }}.ca-cert"]}],"include":[{"matchLabels":{"internal.cozystack.io/tenant-ca":"true"}}]}'
+EXPECTED_SECRETS='{"exclude":[{"resourceNames":["redis-{{ .name }}.ca-tls","redis-{{ .name }}.tls","redis-{{ .name }}.ca-cert","rfr-redis-{{ .name }}-internal"]}],"include":[{"matchLabels":{"internal.cozystack.io/tenant-ca":"true"}}]}'
 
 # Order within include is meaningless -- the matcher ORs across entries -- so
 # both arrays are sorted before comparing, and a missing exclude is normalized

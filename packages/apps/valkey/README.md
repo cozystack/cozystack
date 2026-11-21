@@ -33,7 +33,7 @@ Service runs Valkey on the freshworks-oss redis-operator, which manages Sentinel
 
 | Name          | Description                 | Type   | Value  |
 | ------------- | --------------------------- | ------ | ------ |
-| `authEnabled` | Require a password. The password of the `default` user is issued through the credentials API and is the one replication, the Sentinels, the metrics exporter and backups use, so issuing a new one rotates theirs too. | `bool` | `true` |
+| `authEnabled` | Require a password. The password of the `default` user is issued through the credentials API, and issuing a new one takes effect without restarting anything. Replication, the Sentinels and the metrics exporter use an internal account of their own; backups use the `default` password. | `bool` | `true` |
 
 
 ## Parameter examples and reference

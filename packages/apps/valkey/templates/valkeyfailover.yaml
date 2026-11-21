@@ -57,8 +57,8 @@ spec:
   {{- /* The account Secret of the default CredentialTemplate (credentials.yaml),
          which cozystack-controller keeps and the credentials API rewrites on a
          mint. The operator reads its password key on every reconcile and
-         applies a changed one to the running servers and Sentinels before it
-         rolls the pods. */}}
+         applies a changed one to the running servers with CONFIG SET; nothing
+         else it runs authenticates with it. */}}
   auth:
     secretPath: {{ printf "%s.default.account" .Release.Name }}
   {{- end }}

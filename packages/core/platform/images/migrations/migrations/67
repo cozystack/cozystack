@@ -8,9 +8,11 @@
 # with a random password only on a release marked for seeding. This hook runs
 # before any component chart changes version and writes that Secret, unowned,
 # for every existing Redis release from the password in <release>-auth, so
-# the servers, replication, the Sentinels and the clients keep the password
-# they have at every point of the upgrade: the operator finds the same
-# password under a new Secret name, and the pods roll onto it once. The
+# the clients keep the password they have at every point of the upgrade: the
+# operator finds the same password under a new Secret name and changes
+# nothing. (Replication, the Sentinels, the probes and the exporter move to
+# the operator's own internal account when the operator is upgraded,
+# independently of this migration.) The
 # controller adopts the Secret once the template exists. A release whose
 # Secret was written, or that has authentication off, is marked for seeding.
 # The Redis backup strategy reads the same account Secret, so the next
