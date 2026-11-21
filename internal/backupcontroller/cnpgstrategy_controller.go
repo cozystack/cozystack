@@ -44,6 +44,7 @@ const (
 	cnpgClusterLabel        = "cnpg.io/cluster"
 	cnpgBackupPhaseComplete = "completed"
 	cnpgBackupPhaseFailed   = "failed"
+	cnpgBackupPhasePending  = "pending"
 	cnpgBackupPhaseStarted  = "started"
 	cnpgBackupPhaseRunning  = "running"
 
@@ -186,10 +187,10 @@ const (
 	// recorded in DestinationWriteHeld when that is later. Retrying the WAL
 	// archive destination write is counted from the first failure since the
 	// last successful write or the last wait for another backup or a
-	// restore. A Backup that exists is not capped: CloudNativePG keeps a
-	// healthy one pending while another backup of the same Cluster runs, or
-	// while it restarts one on another instance, so no fixed deadline tells
-	// those apart from a stuck one.
+	// restore. It also caps how long a Backup that exists may stay stalled
+	// (see backupCondCNPGBackupStalled). A Backup queued behind a started or
+	// running backup of the same Cluster, or one that has started, is not
+	// capped.
 	cnpgDefaultBackupDeadline = 30 * time.Minute
 
 	cnpgClusterHealthyPhase = "Cluster in healthy state"
@@ -237,6 +238,10 @@ const (
 	// cannot be lost to a failed BackupJob status write after the attach.
 	cnpgPluginAttachedAtAnnotation = "backups.cozystack.io/barman-plugin-attached-at"
 
+	// CloudNativePG's utils.FencedInstanceAnnotation: a JSON list of fenced
+	// instance names, "*" for all of them.
+	cnpgFencedInstancesAnnotation = "cnpg.io/fencedInstances"
+
 	// Annotation on the ObjectStore carrying, as RFC 3339, when a backup job
 	// last changed its configuration. It is written by the apply that makes
 	// the change, so it cannot be lost apart from it.
@@ -262,6 +267,21 @@ const (
 	// attach or of a destination change, may be before it is taken as
 	// corrupt rather than as written by a leader whose clock ran ahead.
 	cnpgAttachClockSkewTolerance = 5 * time.Minute
+
+	// Condition Type recorded while the job's cnpg.io/Backup is pending and no
+	// backup of the Cluster is started or running. Its LastTransitionTime to
+	// True starts the cnpgDefaultBackupDeadline count; False, written in any
+	// other phase of the Backup, while it is queued behind a running backup,
+	// or once the Backup is deleted outside the driver, ends it.
+	backupCondCNPGBackupStalled = "CNPGBackupStalled"
+
+	// Reason of a True backupCondCNPGBackupStalled persisted before the
+	// driver deletes the Backup it gives up on. Only a Backup missing under
+	// this reason fails the job; one missing under any other was deleted by
+	// someone else.
+	cnpgStallAbandoningReason = "Abandoning"
+
+	cnpgEventInvolvedUIDField = "involvedObject.uid"
 
 	cnpgPodRoleLabel    = "cnpg.io/podRole"
 	cnpgPodRoleInstance = "instance"
@@ -385,6 +405,19 @@ func (r *BackupJobReconciler) reconcileCNPG(ctx context.Context, j *backupsv1alp
 	existingBackup, err := r.findCNPGBackupForJob(ctx, j)
 	if err != nil {
 		return ctrl.Result{}, err
+	}
+	if stalled := apimeta.FindStatusCondition(j.Status.Conditions, backupCondCNPGBackupStalled); existingBackup == nil && stalled != nil && stalled.Status == metav1.ConditionTrue {
+		if stalled.Reason == cnpgStallAbandoningReason {
+			// The pass that gave up deleted the Backup and lost the status
+			// write; creating a new Backup would restart a job that failed.
+			return r.markBackupJobFailed(ctx, j, cnpgStallFailedMessage(stalled.Message))
+		}
+		// Someone else deleted the stalled Backup. The one created below is
+		// a fresh attempt, and its stall, if any, counts from its own start.
+		endCNPGStall(j, "BackupDeleted", "the stalled cnpg.io/Backup was deleted outside the driver")
+		if err := r.Status().Update(ctx, j); err != nil {
+			return ctrl.Result{}, err
+		}
 	}
 	rollout := apimeta.FindStatusCondition(j.Status.Conditions, backupCondPluginRolledOut)
 	awaitingRollout := existingBackup == nil && rollout != nil && rollout.Status == metav1.ConditionFalse
@@ -601,7 +634,17 @@ func (r *BackupJobReconciler) reconcileCNPG(ctx context.Context, j *backupsv1alp
 			logger.Info("ignoring an unusable attach record another backup job left",
 				"cluster", clusterName, "annotation", cnpgPluginAttachedAtAnnotation, "error", err)
 		} else if time.Since(recorded) < cnpgDefaultBackupDeadline {
-			pending, err := r.cnpgPluginRolloutPending(ctx, j.Namespace, clusterName, attachment, metav1.NewTime(recorded))
+			var pending string
+			if attachment.fenced {
+				// A fenced Cluster is neither healthy nor ready until the
+				// fence is lifted, however far the rollout got, so only an
+				// instance pod older than the attach shows it unfinished.
+				// Past that the Backup is created, and the bound on a
+				// stalled Backup applies to it.
+				pending, err = r.cnpgInstancePodsPending(ctx, j.Namespace, clusterName, metav1.NewTime(recorded), false)
+			} else {
+				pending, err = r.cnpgPluginRolloutPending(ctx, j.Namespace, clusterName, attachment, metav1.NewTime(recorded))
+			}
 			if err != nil {
 				return ctrl.Result{}, err
 			}
@@ -647,6 +690,7 @@ func (r *BackupJobReconciler) reconcileCNPG(ctx context.Context, j *backupsv1alp
 		if j.Status.BackupRef != nil {
 			return ctrl.Result{}, nil
 		}
+		endCNPGStall(j, "BackupCompleted", "cnpg.io Backup completed")
 		destination, err := cnpgArtifactDestination(cnpgBackup, rendered)
 		if err != nil {
 			return r.markBackupJobFailed(ctx, j, fmt.Sprintf("refusing to create the Backup artifact: %v", err))
@@ -678,23 +722,232 @@ func (r *BackupJobReconciler) reconcileCNPG(ctx context.Context, j *backupsv1alp
 	case cnpgBackupPhaseFailed:
 		// CloudNativePG does not reconcile a Backup out of a terminal phase,
 		// so waiting on a failed one cannot change the outcome.
-		return r.markBackupJobFailed(ctx, j, cnpgBackupFailedMessage(cnpgBackup, message))
+		failed := cnpgBackupFailedMessage(cnpgBackup, message)
+		endCNPGStall(j, "BackupFailed", failed)
+		return r.markBackupJobFailed(ctx, j, failed)
+
+	case cnpgBackupPhasePending:
+		return r.waitOnPendingCNPGBackup(ctx, j, cnpgBackup, clusterName)
 
 	default:
 		waiting := fmt.Sprintf("waiting for cnpg.io/Backup %s/%s, phase %q",
 			cnpgBackup.Namespace, cnpgBackup.Name, phase)
+		ended := endCNPGStall(j, "BackupProgressing", waiting)
 		if apimeta.SetStatusCondition(&j.Status.Conditions, metav1.Condition{
 			Type:    "Ready",
 			Status:  metav1.ConditionFalse,
 			Reason:  "WaitingForCNPGBackup",
 			Message: waiting,
-		}) {
+		}) || ended {
 			if err := r.Status().Update(ctx, j); err != nil {
 				return ctrl.Result{}, err
 			}
 		}
 		return ctrl.Result{RequeueAfter: cnpgPollInterval}, nil
 	}
+}
+
+// waitOnPendingCNPGBackup bounds a pending Backup unless another backup of
+// the Cluster is started or running. CloudNativePG keeps a Backup pending
+// behind one that is (waitIfOtherBackupsRunning), which is healthy. With none,
+// a pending Backup waits on the instance to run on, which can be missing or
+// not ready for as long as the Cluster is fenced. Which pending Backup
+// CloudNativePG lets through first is left to it: the decision reads only
+// whether a backup of the Cluster executes.
+func (r *BackupJobReconciler) waitOnPendingCNPGBackup(ctx context.Context, j *backupsv1alpha1.BackupJob, b *cnpgtypes.Backup, clusterName string) (ctrl.Result, error) {
+	running, pending, err := r.cnpgClusterBackups(ctx, r.Client, b, clusterName)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	if running != nil {
+		waiting := fmt.Sprintf("cnpg.io/Backup %s/%s is queued behind cnpg.io/Backup %s/%s of the same Cluster, phase %q",
+			b.Namespace, b.Name, running.Namespace, running.Name, running.Status.Phase)
+		ended := endCNPGStall(j, "Queued", waiting)
+		if apimeta.SetStatusCondition(&j.Status.Conditions, metav1.Condition{
+			Type:    "Ready",
+			Status:  metav1.ConditionFalse,
+			Reason:  "WaitingForCNPGBackup",
+			Message: waiting,
+		}) || ended {
+			if err := r.Status().Update(ctx, j); err != nil {
+				return ctrl.Result{}, err
+			}
+		}
+		return ctrl.Result{RequeueAfter: cnpgPollInterval}, nil
+	}
+
+	stall := fmt.Sprintf("cnpg.io/Backup %s/%s is pending and CloudNativePG runs no backup of the Cluster: %s",
+		b.Namespace, b.Name, r.cnpgBackupPendingReason(ctx, b, pending))
+	apimeta.SetStatusCondition(&j.Status.Conditions, metav1.Condition{
+		Type:    backupCondCNPGBackupStalled,
+		Status:  metav1.ConditionTrue,
+		Reason:  "NotStarted",
+		Message: stall,
+	})
+	if cnpgStallExpired(apimeta.FindStatusCondition(j.Status.Conditions, backupCondCNPGBackupStalled)) {
+		// Persisted before the delete, so a pass that finds the Backup gone
+		// tells this give-up from a delete by someone else.
+		apimeta.SetStatusCondition(&j.Status.Conditions, metav1.Condition{
+			Type:    backupCondCNPGBackupStalled,
+			Status:  metav1.ConditionTrue,
+			Reason:  cnpgStallAbandoningReason,
+			Message: stall,
+		})
+		if err := r.Status().Update(ctx, j); err != nil {
+			return ctrl.Result{}, err
+		}
+		// The cache can still show pending a backup that has started, and
+		// the conditional delete below sees only this Backup. A running one
+		// found now leaves the Backup queued, and the stall ends here so a
+		// later delete by someone else is not taken for this give-up.
+		running, _, err := r.cnpgClusterBackups(ctx, r.apiReader(), b, clusterName)
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+		if running != nil {
+			endCNPGStall(j, "Queued", fmt.Sprintf("cnpg.io/Backup %s/%s is queued behind cnpg.io/Backup %s/%s of the same Cluster, phase %q",
+				b.Namespace, b.Name, running.Namespace, running.Name, running.Status.Phase))
+			if err := r.Status().Update(ctx, j); err != nil {
+				return ctrl.Result{}, err
+			}
+			return ctrl.Result{RequeueAfter: cnpgPollInterval}, nil
+		}
+		// Conditional on the Backup as read: one CloudNativePG started since
+		// fails the delete with Conflict and is waited on instead.
+		uid, rv := b.UID, b.ResourceVersion
+		if err := r.Delete(ctx, b, client.Preconditions{UID: &uid, ResourceVersion: &rv}); err != nil && !apierrors.IsNotFound(err) {
+			return ctrl.Result{}, err
+		}
+		return r.markBackupJobFailed(ctx, j, cnpgStallFailedMessage(stall))
+	}
+	if apimeta.SetStatusCondition(&j.Status.Conditions, metav1.Condition{
+		Type:    "Ready",
+		Status:  metav1.ConditionFalse,
+		Reason:  "WaitingForCNPGBackup",
+		Message: fmt.Sprintf("%s; the BackupJob fails if this lasts %s", stall, cnpgDefaultBackupDeadline),
+	}) {
+		if err := r.Status().Update(ctx, j); err != nil {
+			return ctrl.Result{}, err
+		}
+	}
+	return ctrl.Result{RequeueAfter: cnpgPollInterval}, nil
+}
+
+// cnpgClusterBackups returns a started or running backup of the Cluster other
+// than b, if any, and otherwise the Cluster's other unfinished backups.
+func (r *BackupJobReconciler) cnpgClusterBackups(ctx context.Context, reader client.Reader, b *cnpgtypes.Backup, clusterName string) (running *cnpgtypes.Backup, pending []cnpgtypes.Backup, err error) {
+	list := &cnpgtypes.BackupList{}
+	if err := reader.List(ctx, list, client.InNamespace(b.Namespace)); err != nil {
+		return nil, nil, err
+	}
+	for i := range list.Items {
+		item := &list.Items[i]
+		if item.Spec.Cluster.Name != clusterName || item.UID == b.UID {
+			continue
+		}
+		switch phase := item.Status.Phase; {
+		case cnpgBackupExecuting(phase):
+			return item, nil, nil
+		case phase != cnpgBackupPhaseComplete && phase != cnpgBackupPhaseFailed:
+			pending = append(pending, *item)
+		}
+	}
+	return nil, pending, nil
+}
+
+func cnpgBackupExecuting(phase string) bool {
+	return phase == cnpgBackupPhaseStarted || phase == cnpgBackupPhaseRunning
+}
+
+// cnpgBackupPendingReason returns the newest Warning event CloudNativePG
+// recorded on b, the only place it says why it keeps a Backup pending. When b
+// carries none, the newest one on another pending backup of the Cluster
+// stands in: CloudNativePG records the cause on whichever of them it tries,
+// and the others wait on the same instance. The events are read uncached and
+// by the Backup's UID, so the driver needs no cluster-wide watch on events.
+func (r *BackupJobReconciler) cnpgBackupPendingReason(ctx context.Context, b *cnpgtypes.Backup, others []cnpgtypes.Backup) string {
+	newest, err := r.newestCNPGWarning(ctx, b)
+	if err != nil {
+		getLogger(ctx).Info("cannot read the events of the cnpg.io/Backup", "backup", b.Name, "error", err.Error())
+		return fmt.Sprintf("the reason CloudNativePG recorded cannot be read: %v", err)
+	}
+	if newest != nil {
+		return fmt.Sprintf("%s: %s", newest.Reason, newest.Message)
+	}
+	var from *cnpgtypes.Backup
+	for i := range others {
+		e, err := r.newestCNPGWarning(ctx, &others[i])
+		if err != nil {
+			getLogger(ctx).Info("cannot read the events of the cnpg.io/Backup", "backup", others[i].Name, "error", err.Error())
+			continue
+		}
+		if e != nil && (newest == nil || cnpgEventTime(e).After(cnpgEventTime(newest))) {
+			newest, from = e, &others[i]
+		}
+	}
+	if newest == nil {
+		return "CloudNativePG recorded no warning event on it or on another pending backup of the Cluster"
+	}
+	return fmt.Sprintf("%s: %s (recorded on cnpg.io/Backup %s/%s, also pending)",
+		newest.Reason, newest.Message, from.Namespace, from.Name)
+}
+
+func (r *BackupJobReconciler) newestCNPGWarning(ctx context.Context, b *cnpgtypes.Backup) (*corev1.Event, error) {
+	events := &corev1.EventList{}
+	if err := r.apiReader().List(ctx, events,
+		client.InNamespace(b.Namespace),
+		client.MatchingFields{cnpgEventInvolvedUIDField: string(b.UID)},
+	); err != nil {
+		return nil, err
+	}
+	var newest *corev1.Event
+	for i := range events.Items {
+		e := &events.Items[i]
+		if e.Type != corev1.EventTypeWarning {
+			continue
+		}
+		if newest == nil || cnpgEventTime(e).After(cnpgEventTime(newest)) {
+			newest = e
+		}
+	}
+	return newest, nil
+}
+
+func cnpgEventTime(e *corev1.Event) time.Time {
+	switch {
+	case e.Series != nil && !e.Series.LastObservedTime.IsZero():
+		return e.Series.LastObservedTime.Time
+	case !e.LastTimestamp.IsZero():
+		return e.LastTimestamp.Time
+	case !e.EventTime.IsZero():
+		return e.EventTime.Time
+	}
+	return e.CreationTimestamp.Time
+}
+
+// endCNPGStall flips a True backupCondCNPGBackupStalled to False, so a later
+// stall counts from its own start, and reports whether it did; the caller
+// persists the change. A job that never stalled gets no condition.
+func endCNPGStall(j *backupsv1alpha1.BackupJob, reason, message string) bool {
+	if !apimeta.IsStatusConditionTrue(j.Status.Conditions, backupCondCNPGBackupStalled) {
+		return false
+	}
+	return apimeta.SetStatusCondition(&j.Status.Conditions, metav1.Condition{
+		Type:    backupCondCNPGBackupStalled,
+		Status:  metav1.ConditionFalse,
+		Reason:  reason,
+		Message: message,
+	})
+}
+
+func cnpgStallExpired(stalled *metav1.Condition) bool {
+	return stalled != nil && stalled.Status == metav1.ConditionTrue &&
+		time.Since(stalled.LastTransitionTime.Time) > cnpgDefaultBackupDeadline
+}
+
+func cnpgStallFailedMessage(stall string) string {
+	return fmt.Sprintf("%s, for longer than %s; deleted the cnpg.io/Backup so it does not run later with no Backup recording it",
+		stall, cnpgDefaultBackupDeadline)
 }
 
 // cnpgBackupFailedMessage carries the error CloudNativePG recorded. When the
@@ -846,6 +1099,7 @@ func (r *BackupJobReconciler) applyClusterPluginBackup(ctx context.Context, name
 		clusterStatus: existing.Status,
 	}
 	attachment.attachedAt = existing.Annotations[cnpgPluginAttachedAtAnnotation]
+	attachment.fenced = cnpgClusterFenced(existing.Annotations)
 	if live := currentBarmanServerName(existing); live != "" {
 		attachment.serverName = live
 	} else {
@@ -1011,6 +1265,9 @@ type cnpgPluginAttachment struct {
 	// pass applied to the ObjectStore, zero when it wrote none.
 	destinationChangedAt time.Time
 	clusterStatus        cnpgtypes.ClusterStatus
+	// fenced is set while the Cluster carries a non-empty
+	// cnpgFencedInstancesAnnotation.
+	fenced bool
 }
 
 // cnpgPluginRolloutPending returns why the rollout that attaching the
@@ -1034,6 +1291,23 @@ func (r *BackupJobReconciler) cnpgPluginRolloutPending(ctx context.Context, name
 		}
 		return pending, nil
 	}
+	return r.cnpgInstancePodsPending(ctx, namespace, clusterName, attachedAt, true)
+}
+
+// cnpgClusterFenced reports whether the Cluster fences any instance. A value
+// that is not a JSON list counts as not fenced, which keeps the stricter
+// rollout wait.
+func cnpgClusterFenced(annotations map[string]string) bool {
+	var fenced []string
+	if err := json.Unmarshal([]byte(annotations[cnpgFencedInstancesAnnotation]), &fenced); err != nil {
+		return false
+	}
+	return len(fenced) > 0
+}
+
+// cnpgInstancePodsPending returns which instance pod of the Cluster predates
+// attachedAt, or, with requireReady, is not ready; "" when none does.
+func (r *BackupJobReconciler) cnpgInstancePodsPending(ctx context.Context, namespace, clusterName string, attachedAt metav1.Time, requireReady bool) (string, error) {
 	pods := &corev1.PodList{}
 	if err := r.List(ctx, pods, client.InNamespace(namespace), client.MatchingLabels{
 		cnpgClusterLabel: clusterName,
@@ -1049,7 +1323,7 @@ func (r *BackupJobReconciler) cnpgPluginRolloutPending(ctx context.Context, name
 		if !pod.CreationTimestamp.After(attachedAt.Time) {
 			return fmt.Sprintf("instance pod %s/%s predates the barman-cloud plugin", namespace, pod.Name), nil
 		}
-		if pod.DeletionTimestamp != nil || !podReady(pod) {
+		if requireReady && (pod.DeletionTimestamp != nil || !podReady(pod)) {
 			return fmt.Sprintf("instance pod %s/%s is not ready", namespace, pod.Name), nil
 		}
 	}
