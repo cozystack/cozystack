@@ -1,0 +1,125 @@
+#!/bin/sh
+# Migration 69 --> 70
+# Convert Bucket users to platform-minted credentials.
+#
+# The converted bucket chart stops rendering a tenant user's BucketAccess and
+# renders a cosi CredentialTemplate in its place; cozystack-controller then
+# owns the BucketAccess and re-creates it on a mint. A BucketAccess's keys are
+# bound to its UID (the COSI sidecar names the driver account after it), so a
+# deleted and re-created BucketAccess is a new key pair. This hook runs before
+# any component chart changes version and keeps every existing user's keys:
+#
+#   - each tenant BucketAccess the bucket chart rendered gets
+#     helm.sh/resource-policy=keep, which Helm reads off the live object
+#     before it deletes a resource the new chart no longer renders, so the
+#     upgrade leaves it in place; and credentials.cozystack.io/adopt=true, which
+#     lets the controller take it over and copy the keys it already has into
+#     the account Secret. Clients keep working until the first mint.
+#
+#   - the CredentialTemplate CRD baked into this image is applied first.
+#     The converted chart renders spec.bucketAccess, which a cluster that ran
+#     migration 62 in an earlier release lacks until cozystack-controller
+#     upgrades, possibly after the bucket releases switch: the API server
+#     would prune the field, and the controller would skip the template.
+#
+#   - the backup bucket's system user is marked platform in its Bucket
+#     release, so it keeps its chart-rendered BucketAccess and its readable
+#     Secret whichever of the bucket chart and backupstrategy-controller is
+#     upgraded first. Its BucketAccess is not marked.
+#
+# There is no finish Job and so no standing identity: the plaintext a tenant
+# could read lives in <bucket>-<user>-credentials, which the converted
+# bucket-system chart stops filling with keys on its own upgrade, and the COSI
+# Secret the sidecar writes has to stay for the grant. The keep annotation is
+# left on adopted BucketAccesses: Helm no longer tracks them, and the garbage
+# collector removes them with their template, which the annotation does not
+# affect.
+#
+# Fail-closed: migrations never re-run, so an error here stops the upgrade
+# rather than stamping the version past a BucketAccess that was not marked.
+
+set -euo pipefail
+
+# shellcheck source=lib/cozystack-version.sh
+. "$(dirname "$0")/lib/cozystack-version.sh"
+# shellcheck source=lib/credential-crd.sh
+. "$(dirname "$0")/lib/credential-crd.sh"
+
+apply_credential_crd
+
+# Where backupstrategy-controller provisions the backup bucket, from its
+# release values when they override the chart defaults.
+BACKUP_RELEASE_NAMESPACE="${BACKUP_RELEASE_NAMESPACE:-cozy-backup-controller}"
+BACKUP_RELEASE_NAME="${BACKUP_RELEASE_NAME:-backupstrategy-controller}"
+
+backup_value() {
+  kubectl get helmreleases.helm.toolkit.fluxcd.io "$BACKUP_RELEASE_NAME" \
+    --namespace "$BACKUP_RELEASE_NAMESPACE" \
+    --ignore-not-found \
+    --output "jsonpath={.spec.values.backupStorage.$1}"
+}
+
+platform_namespace=$(backup_value namespace)
+platform_bucket=$(backup_value bucketName)
+provision=$(backup_value provisionBucket)
+platform_namespace="${platform_namespace:-tenant-root}"
+platform_bucket="${platform_bucket:-cozy-backups}"
+platform_release="bucket-${platform_bucket}"
+platform_access="${platform_release}-system"
+
+# Only a release that has the system user: a merge patch would otherwise add
+# one to a bucket that never declared it.
+if [ "$provision" != "false" ]; then
+  system_user=$(kubectl get helmreleases.helm.toolkit.fluxcd.io "$platform_release" \
+    --namespace "$platform_namespace" \
+    --ignore-not-found \
+    --output 'jsonpath={.spec.values.users.system}')
+  if [ -n "$system_user" ]; then
+    kubectl patch helmreleases.helm.toolkit.fluxcd.io "$platform_release" \
+      --namespace "$platform_namespace" \
+      --type merge \
+      --patch '{"spec":{"values":{"users":{"system":{"platform":true}}}}}'
+  fi
+fi
+
+# A cluster without the COSI API has no BucketAccess to keep.
+crd=$(kubectl get customresourcedefinitions.apiextensions.k8s.io \
+  bucketaccesses.objectstorage.k8s.io \
+  --ignore-not-found \
+  --output name)
+if [ -z "$crd" ]; then
+  stamp_cozystack_version 70
+  exit 0
+fi
+
+# One line per BucketAccess: namespace, name, the Helm release that rendered
+# it, and the kind of its controller, if any.
+accesses=$(kubectl get bucketaccesses.objectstorage.k8s.io \
+  --all-namespaces \
+  --output 'jsonpath={range .items[*]}{.metadata.namespace}{" "}{.metadata.name}{" "}{.metadata.annotations.meta\.helm\.sh/release-name}{" "}{.metadata.ownerReferences[?(@.controller==true)].kind}{"\n"}{end}')
+
+printf '%s\n' "$accesses" | while read -r namespace name release controller; do
+  [ -n "$name" ] || continue
+  # Only what a bucket chart rendered for one of its users.
+  case "$release" in bucket-*) ;; *) continue ;; esac
+  case "$name" in "${release}"-?*) ;; *) continue ;; esac
+  # public-read has no keys and stays chart-rendered.
+  [ "$name" != "${release}-public-read" ] || continue
+  # Already taken over.
+  [ -z "$controller" ] || continue
+  # The backup bucket's system user stays a chart-rendered platform account.
+  if [ "$namespace" = "$platform_namespace" ] && [ "$name" = "$platform_access" ]; then
+    continue
+  fi
+  kubectl annotate bucketaccesses.objectstorage.k8s.io "$name" \
+    --namespace "$namespace" \
+    --overwrite \
+    helm.sh/resource-policy=keep
+  kubectl label bucketaccesses.objectstorage.k8s.io "$name" \
+    --namespace "$namespace" \
+    --overwrite \
+    credentials.cozystack.io/adopt=true
+  echo "marked BucketAccess $namespace/$name for adoption"
+done
+
+stamp_cozystack_version 70
