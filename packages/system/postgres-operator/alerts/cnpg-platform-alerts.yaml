@@ -1,0 +1,16 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: cnpg-platform-alerts
+spec:
+  groups:
+  - name: cnpg-platform.rules
+    rules:
+    - alert: CNPGClusterOffline
+      expr: absent(cnpg_collector_up)
+      for: 5m
+      labels:
+        severity: critical
+      annotations:
+        summary: No CloudNativePG collectors are reporting
+        description: Platform monitoring has received no cnpg_collector_up series for five minutes.

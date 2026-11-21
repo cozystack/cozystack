@@ -24,12 +24,17 @@ tests:
       namespace: tenant-root
     templates:
       - templates/vm/vmalert.yaml
+    documentSelector:
+      path: kind
+      value: VMAlert
     asserts:
       - equal:
           path: spec.selectAllByDefault
           value: true
       - notExists:
           path: spec.ruleNamespaceSelector
+      - hasDocuments:
+          count: 1
 
   - it: scopes a tenant to the namespaces its monitoring stack covers
     release:
@@ -37,6 +42,9 @@ tests:
       namespace: tenant-foo
     templates:
       - templates/vm/vmalert.yaml
+    documentSelector:
+      path: kind
+      value: VMAlert
     asserts:
       - equal:
           path: spec.selectAllByDefault
@@ -44,3 +52,44 @@ tests:
       - equal:
           path: spec.ruleNamespaceSelector.matchLabels["namespace.cozystack.io/monitoring"]
           value: tenant-foo
+
+      - matchRegex:
+          path: spec.rulePath[0]
+          pattern: '^/etc/vm/configs/vmalert-cnpg-[a-f0-9]{12}/rules.yaml$'
+      - matchRegex:
+          path: spec.configMaps[0]
+          pattern: '^vmalert-cnpg-[a-f0-9]{12}$'
+
+  - it: keeps infrastructure rules visible to the platform monitoring package
+    release:
+      name: monitoring
+      namespace: cozy-monitoring
+    templates:
+      - templates/vm/vmalert.yaml
+    asserts:
+      - hasDocuments:
+          count: 1
+      - equal:
+          path: spec.selectAllByDefault
+          value: true
+      - notExists:
+          path: spec.ruleNamespaceSelector
+      - notExists:
+          path: spec.rulePath
+
+  - it: supplies database alerts to a tenant without creating globally selectable VMRules
+    release:
+      name: monitoring-system
+      namespace: tenant-foo
+    templates:
+      - templates/vm/vmalert.yaml
+    documentSelector:
+      path: kind
+      value: ConfigMap
+    asserts:
+      - matchRegex:
+          path: data["rules.yaml"]
+          pattern: 'alert: LongRunningTransaction'
+      - notMatchRegex:
+          path: data["rules.yaml"]
+          pattern: 'absent\(cnpg_collector_up\)|vector\(0\)'
