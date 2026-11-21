@@ -61,6 +61,68 @@ type ApplicationDefinitionSpec struct {
 
 	// Dashboard configuration for this resource
 	Dashboard *ApplicationDefinitionDashboard `json:"dashboard,omitempty"`
+
+	// Consumption declares what an application of this kind reserves from
+	// its tenant's quota budget, computed from its values. Unset means the
+	// kind has not declared it, which is not the same as consuming nothing:
+	// a kind that consumes nothing sets exempt.
+	// +optional
+	Consumption *ApplicationDefinitionConsumption `json:"consumption,omitempty"`
+}
+
+// ApplicationDefinitionConsumption is how an application's reservation is
+// computed from its values, as CEL over the values defaulted against the
+// kind's openAPISchema.
+//
+// An expression sees the variable `values`, every binding in let, and four
+// functions: instanceType(name) and preset(name), which return a map of
+// quantities keyed by quota key, quantity(x), which takes an int or a
+// quantity string, and fail(reason), which raises an evaluation error with
+// that reason, for a spec the kind's chart would refuse to render. CEL's
+// logical operators absorb an error when the other operand decides the
+// result, so fail() refuses the spec only from a branch of a conditional. A
+// quantity is scaled with q.mul(n). An expression may
+// return an int, a double, a quantity string or a quantity; a key that
+// evaluates to zero reserves nothing.
+// Its fields are owned together: expressions refer to bindings by name, so a
+// partial update could leave an expression whose binding is gone.
+// +structType=atomic
+// +kubebuilder:validation:XValidation:rule="!(has(self.exempt) && self.exempt) || (!has(self.__let__) && !has(self.resources))",message="an exempt declaration carries neither let nor resources"
+// +kubebuilder:validation:XValidation:rule="(has(self.exempt) && self.exempt) || (has(self.resources) && size(self.resources) > 0)",message="a declaration either is exempt or names at least one resource"
+type ApplicationDefinitionConsumption struct {
+	// Exempt declares that the kind consumes nothing from a tenant's budget.
+	// +optional
+	Exempt bool `json:"exempt,omitempty"`
+
+	// Let binds intermediate expressions, evaluated in order. A binding
+	// reads only the bindings before it; a resources expression reads them
+	// all. The list is replaced as a whole, since a binding left behind by a
+	// partial update could refer to one that is gone.
+	// +optional
+	// +listType=atomic
+	// +kubebuilder:validation:MaxItems=64
+	// +kubebuilder:validation:XValidation:rule="self.all(b, self.exists_one(c, c.name == b.name))",message="binding names must be unique"
+	Let []ApplicationDefinitionConsumptionBinding `json:"let,omitempty"`
+
+	// Resources maps a quota key, as a Tenant's resourceQuotas spells it,
+	// to the expression computing how much of it the application reserves.
+	// +optional
+	// +kubebuilder:validation:MaxProperties=64
+	// +kubebuilder:validation:XValidation:rule="self.all(k, size(k) > 0)",message="a quota key must not be empty"
+	Resources map[string]string `json:"resources,omitempty"`
+}
+
+// ApplicationDefinitionConsumptionBinding names one intermediate expression.
+type ApplicationDefinitionConsumptionBinding struct {
+	// Name is how later expressions refer to the binding. `values` is taken
+	// by the application's values, and CEL's reserved words cannot name a
+	// variable.
+	// +kubebuilder:validation:Pattern=`^[a-zA-Z_][a-zA-Z0-9_]*$`
+	// +kubebuilder:validation:MaxLength=63
+	// +kubebuilder:validation:XValidation:rule="!(self in ['values', 'true', 'false', 'null', 'in', 'as', 'break', 'const', 'continue', 'else', 'for', 'function', 'if', 'import', 'let', 'loop', 'package', 'namespace', 'return', 'var', 'void', 'while'])",message="the name is reserved"
+	Name string `json:"name"`
+	// +kubebuilder:validation:MinLength=1
+	Expression string `json:"expression"`
 }
 
 type ApplicationDefinitionApplication struct {
