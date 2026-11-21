@@ -682,3 +682,77 @@ tests:
         documentSelector:
           path: kind
           value: Job
+
+  - it: refuses a bare registry hostname before a worker rolls out
+    set:
+      talos:
+        registryMirrors:
+          ghcr.io:
+            endpoints: ["mirror.example.org"]
+    asserts:
+      - failedTemplate:
+          errorMessage: 'registry mirror "ghcr.io": an endpoint must be an HTTP or HTTPS URL with a host'
+
+  - it: refuses a non-HTTP mirror before a worker rolls out
+    set:
+      talos:
+        registryMirrors:
+          ghcr.io:
+            endpoints: ["ftp://mirror.example.org"]
+    asserts:
+      - failedTemplate:
+          errorMessage: 'registry mirror "ghcr.io": an endpoint must be an HTTP or HTTPS URL with a host'
+
+  - it: refuses an endpoint with an empty hostname before a worker rolls out
+    set:
+      talos:
+        registryMirrors:
+          ghcr.io:
+            endpoints: ["https:///v2/"]
+    asserts:
+      - failedTemplate:
+          errorMessage: 'registry mirror "ghcr.io": an endpoint must be an HTTP or HTTPS URL with a host'
+
+  - it: refuses a port without a hostname before a worker rolls out
+    set:
+      talos:
+        registryMirrors:
+          ghcr.io:
+            endpoints: ["https://:5000"]
+    asserts:
+      - failedTemplate:
+          errorMessage: 'registry mirror "ghcr.io": an endpoint must be an HTTP or HTTPS URL with a host'
+
+  - it: preserves the path and port of an IPv6 mirror
+    set:
+      talos:
+        registryMirrors:
+          ghcr.io:
+            endpoints: ["https://[2001:db8::1]:5000/v2/ghcr"]
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'https://\[2001:db8::1\]:5000/v2/ghcr'
+        documentSelector:
+          path: kind
+          value: Job
+
+  - it: refuses a port that cannot be dialed
+    set:
+      talos:
+        registryMirrors:
+          ghcr.io:
+            endpoints: ["https://mirror.example.org:65536"]
+    asserts:
+      - failedTemplate:
+          errorMessage: 'registry mirror "ghcr.io": an endpoint port must be between 1 and 65535'
+
+  - it: refuses user information in a mirror URL
+    set:
+      talos:
+        registryMirrors:
+          ghcr.io:
+            endpoints: ["https://reader@mirror.example.org/v2"]
+    asserts:
+      - failedTemplate:
+          errorMessage: 'registry mirror "ghcr.io": credentials must not be embedded in an endpoint URL'
