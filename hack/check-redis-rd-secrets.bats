@@ -44,11 +44,12 @@ load test_helper
 REPO_ROOT="$(cd "$(dirname "${BATS_TEST_FILENAME:-$0}")/.." && pwd)"
 CHART="$REPO_ROOT/packages/system/redis-rd"
 
-# The complete tenant-visible Secret surface. The generated password by name;
-# the trust anchor by label. Nothing else. The two key-bearing Secrets are
+# The complete tenant-visible Secret surface: the trust anchor by label, and
+# nothing else. The password is issued through the credentials API, and its
+# account Secret is the platform's. The two key-bearing Secrets are
 # named in exclude, which is evaluated before include and so backstops the
 # label-only entry against a mis-stamp.
-EXPECTED_SECRETS='{"exclude":[{"resourceNames":["redis-{{ .name }}.ca-tls","redis-{{ .name }}.tls","redis-{{ .name }}.ca-cert"]}],"include":[{"resourceNames":["redis-{{ .name }}-auth"]},{"matchLabels":{"internal.cozystack.io/tenant-ca":"true"}}]}'
+EXPECTED_SECRETS='{"exclude":[{"resourceNames":["redis-{{ .name }}.ca-tls","redis-{{ .name }}.tls","redis-{{ .name }}.ca-cert"]}],"include":[{"matchLabels":{"internal.cozystack.io/tenant-ca":"true"}}]}'
 
 # Order within include is meaningless -- the matcher ORs across entries -- so
 # both arrays are sorted before comparing, and a missing exclude is normalized
@@ -115,7 +116,7 @@ NORMALIZE='{exclude: ((.exclude // []) | sort), include: (.include | sort)}'
 
 # Whole-structure comparison. Anything added to the tenant's Secret surface --
 # by name, by label, or by an unrestricted entry -- changes this string.
-@test "redis-rd exposes no Secret beyond the password and the trust anchor" {
+@test "redis-rd exposes no Secret beyond the trust anchor" {
   rendered=$(helm template redis-rd "$CHART") || return 1
 
   if [ -z "$rendered" ]; then
