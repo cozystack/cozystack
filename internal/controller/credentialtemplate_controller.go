@@ -87,6 +87,10 @@ func (r *CredentialTemplateReconciler) Reconcile(ctx context.Context, req ctrl.R
 	if !tmpl.DeletionTimestamp.IsZero() {
 		return ctrl.Result{}, nil
 	}
+	if isCOSI(tmpl) {
+		// The engine issues these keys; COSICredentialReconciler keeps them.
+		return ctrl.Result{}, nil
+	}
 	status := tmpl.Status.DeepCopy()
 	status.ObservedGeneration = tmpl.Generation
 
@@ -312,12 +316,17 @@ func mirror(status *cozyv1alpha1.CredentialTemplateStatus, sec *corev1.Secret) {
 }
 
 func (r *CredentialTemplateReconciler) writeStatus(ctx context.Context, tmpl *cozyv1alpha1.CredentialTemplate, status *cozyv1alpha1.CredentialTemplateStatus) error {
+	return writeTemplateStatus(ctx, r.Client, tmpl, status)
+}
+
+// writeTemplateStatus writes a template's status when it changed.
+func writeTemplateStatus(ctx context.Context, c client.Client, tmpl *cozyv1alpha1.CredentialTemplate, status *cozyv1alpha1.CredentialTemplateStatus) error {
 	if equality.Semantic.DeepEqual(&tmpl.Status, status) {
 		return nil
 	}
 	updated := tmpl.DeepCopy()
 	updated.Status = *status
-	return r.Status().Update(ctx, updated)
+	return c.Status().Update(ctx, updated)
 }
 
 // SetupWithManager registers the reconciler. accountSecrets is a metadata

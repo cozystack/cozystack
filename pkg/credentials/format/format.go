@@ -35,6 +35,11 @@ const (
 	Plaintext = "plaintext"
 )
 
+// COSI marks an account whose keys a COSI driver issues rather than the
+// platform: nothing is encoded, and a mint re-creates the BucketAccess the
+// template names. It is not a built-in format, so Known and Encode refuse it.
+const COSI = "cosi"
+
 // PasswordLength is the length of every generated password.
 const PasswordLength = 32
 

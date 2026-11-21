@@ -9,6 +9,7 @@ import (
 // CredentialTemplateSpec describes one account of an application and the
 // Secret that stores its password. A kind's chart renders one per account; a
 // tenant cannot write it.
+// +kubebuilder:validation:XValidation:rule="(self.format.name == 'cosi') == has(self.bucketAccess)",message="bucketAccess is set exactly when the format is cosi"
 type CredentialTemplateSpec struct {
 	// Username is the account name as the engine knows it.
 	// +kubebuilder:validation:MinLength=1
@@ -30,12 +31,33 @@ type CredentialTemplateSpec struct {
 	// +optional
 	// +kubebuilder:validation:Pattern=`^_[A-Za-z0-9_]*$`
 	ValuesPath string `json:"valuesPath,omitempty"`
+
+	// BucketAccess, for the cosi format, names the BucketAccess whose COSI
+	// grant issues the account's keys. cozystack-controller creates and owns
+	// it, and re-creates it on a mint or a revoke.
+	// +optional
+	BucketAccess *CredentialTemplateBucketAccess `json:"bucketAccess,omitempty"`
+}
+
+// CredentialTemplateBucketAccess is the BucketAccess a cosi template stands
+// for. Its credentials Secret carries the BucketAccess's own name.
+// +kubebuilder:validation:XValidation:rule="self.name == oldSelf.name",message="bucketAccess.name is immutable"
+type CredentialTemplateBucketAccess struct {
+	// Name of the BucketAccess and of the Secret the COSI sidecar writes.
+	// +kubebuilder:validation:MinLength=1
+	Name string `json:"name"`
+	// BucketClaimName is the BucketClaim the access is granted on.
+	// +kubebuilder:validation:MinLength=1
+	BucketClaimName string `json:"bucketClaimName"`
+	// BucketAccessClassName is the class that sets the access policy.
+	// +kubebuilder:validation:MinLength=1
+	BucketAccessClassName string `json:"bucketAccessClassName"`
 }
 
 // CredentialTemplateFormat names a stored form of a password.
 type CredentialTemplateFormat struct {
 	// Name is a built-in format: scram-sha-256, mysql-native, sha256 or
-	// plaintext.
+	// plaintext; or cosi, for keys a COSI driver issues.
 	// +kubebuilder:validation:MinLength=1
 	Name string `json:"name"`
 }
@@ -103,6 +125,10 @@ const (
 	CredentialTemplateSecretConflict = "SecretConflict"
 	// CredentialTemplateUnknownFormat: the format names no built-in format.
 	CredentialTemplateUnknownFormat = "UnknownFormat"
+	// CredentialTemplateBucketAccessConflict: a BucketAccess at the name a
+	// cosi template names that the controller did not create or adopt; it is
+	// left alone.
+	CredentialTemplateBucketAccessConflict = "BucketAccessConflict"
 )
 
 // +kubebuilder:object:root=true

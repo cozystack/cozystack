@@ -6,6 +6,11 @@ metadata:
   namespace: {{ .Values.backupStorage.namespace }}
 spec:
   users:
+    # A platform user: its keys stay in the bucket-system Secret this
+    # controller reads (backupStorage.systemSecretName), which no tenant
+    # role selects, and it gets no CredentialTemplate whose mint would
+    # rotate them under every default backup.
     system:
       readonly: false
+      platform: true
 {{- end }}

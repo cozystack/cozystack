@@ -34,6 +34,8 @@ type ConfigSpec struct {
 }
 
 type User struct {
+	// Marks a user the platform itself consumes, such as the backup bucket's: its keys stay in the `<bucket>-<user>-credentials` Secret, which no tenant can read, and it has no credential to mint. Leave unset for your own users, whose keys you mint through the bucket's credentials.
+	Platform bool `json:"platform,omitempty"`
 	// Whether the user has read-only access.
 	Readonly bool `json:"readonly,omitempty"`
 }

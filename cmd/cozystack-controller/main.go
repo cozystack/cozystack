@@ -349,6 +349,15 @@ func main() {
 		setupLog.Error(err, "unable to create controller", "controller", "CredentialTemplate")
 		os.Exit(1)
 	}
+	if err = (&controller.COSICredentialReconciler{
+		Client:   mgr.GetClient(),
+		Reader:   mgr.GetAPIReader(),
+		Scheme:   mgr.GetScheme(),
+		Recorder: mgr.GetEventRecorderFor("credentialtemplate-cosi-controller"),
+	}).SetupWithManager(mgr, caSecretCluster.GetCache()); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "CredentialTemplateCOSI")
+		os.Exit(1)
+	}
 	if err = (&controller.CredentialValuesReconciler{
 		Client: mgr.GetClient(),
 		Reader: mgr.GetAPIReader(),

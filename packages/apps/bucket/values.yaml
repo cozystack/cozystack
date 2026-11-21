@@ -13,6 +13,7 @@ publicRead: false
 
 ## @typedef {struct} User - Bucket user configuration.
 ## @field {bool} [readonly] - Whether the user has read-only access.
+## @field {bool} [platform] - Marks a user the platform itself consumes, such as the backup bucket's: its keys stay in the `<bucket>-<user>-credentials` Secret, which no tenant can read, and it has no credential to mint. Leave unset for your own users, whose keys you mint through the bucket's credentials.
 
 ## @param {map[string]User} users - Users configuration map.
 users: {}

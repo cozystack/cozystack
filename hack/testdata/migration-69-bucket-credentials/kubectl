@@ -1,0 +1,85 @@
+#!/bin/sh
+# Fake kubectl for hack/migration-69-bucket-credentials.bats, modelled on
+# hack/testdata/migration-62-postgres-credentials/kubectl. It serves only the
+# calls migration 69, lib/credential-crd.sh and lib/cozystack-version.sh
+# make, and logs each one to $FAKE_CMDLOG.
+#
+#   FAKE_CMDLOG          file to append a one-line record of each call to
+#   FAKE_BACKUP_NS       backupStorage.namespace of backupstrategy-controller
+#   FAKE_BACKUP_BUCKET   backupStorage.bucketName of backupstrategy-controller
+#   FAKE_NO_SYSTEM       non-empty => the backup Bucket release has no system user
+#   FAKE_NO_CRD          non-empty => the BucketAccess CRD is not installed
+#   FAKE_ACCESSES        the BucketAccess listing, one line per object:
+#                        namespace name release controller-kind
+#   FAKE_LIST_FAIL       non-empty => listing BucketAccesses exits 1
+#   FAKE_LABEL_FAIL      non-empty => labelling a BucketAccess exits 1
+#   FAKE_CRD_FAIL        non-empty => applying the CredentialTemplate CRD exits 1
+set -u
+
+log() { [ -n "${FAKE_CMDLOG:-}" ] && printf '%s\n' "$*" >> "$FAKE_CMDLOG"; }
+log "KUBECTL $*"
+
+args="$*"
+ns_of() { printf '%s\n' "$args" | sed -n 's/.*--namespace \([^ ]*\).*/\1/p'; }
+
+case "$args" in
+  *"apply --server-side --force-conflicts --filename "*credentialtemplates*)
+    log "CRD apply"
+    [ -n "${FAKE_CRD_FAIL-}" ] && exit 1
+    exit 0 ;;
+  *"label crd credentialtemplates.cozystack.io app.kubernetes.io/managed-by=Helm"*)
+    log "CRD label"; exit 0 ;;
+  *"annotate crd credentialtemplates.cozystack.io"*"meta.helm.sh/release-name=cozystack-controller"*"meta.helm.sh/release-namespace=cozy-system"*)
+    log "CRD annotate"; exit 0 ;;
+  *"wait --for=condition=established crd/credentialtemplates.cozystack.io"*)
+    log "CRD established"; exit 0 ;;
+  *"get helmreleases.helm.toolkit.fluxcd.io backupstrategy-controller"*"backupStorage.namespace"*)
+    printf '%s' "${FAKE_BACKUP_NS:-}"; exit 0 ;;
+  *"get helmreleases.helm.toolkit.fluxcd.io backupstrategy-controller"*"backupStorage.bucketName"*)
+    printf '%s' "${FAKE_BACKUP_BUCKET:-}"; exit 0 ;;
+  *"get helmreleases.helm.toolkit.fluxcd.io backupstrategy-controller"*"backupStorage.provisionBucket"*)
+    exit 0 ;;
+  *"get helmreleases.helm.toolkit.fluxcd.io bucket-"*"users.system"*)
+    [ -n "${FAKE_NO_SYSTEM:-}" ] || printf '%s' '{"readonly":false}'
+    exit 0 ;;
+  *"patch helmreleases.helm.toolkit.fluxcd.io "*)
+    name=$(printf '%s\n' "$args" | sed -n 's/.*patch helmreleases.helm.toolkit.fluxcd.io \([^ ]*\).*/\1/p')
+    platform=$(printf '%s\n' "$args" | grep -c '"system":{"platform":true}')
+    log "PATCH-PLATFORM $(ns_of)/$name platform=$platform"
+    exit 0 ;;
+  *"get customresourcedefinitions.apiextensions.k8s.io bucketaccesses.objectstorage.k8s.io"*)
+    [ -n "${FAKE_NO_CRD:-}" ] || printf '%s\n' "customresourcedefinition.apiextensions.k8s.io/bucketaccesses.objectstorage.k8s.io"
+    exit 0 ;;
+  *"get bucketaccesses.objectstorage.k8s.io --all-namespaces"*)
+    if [ -n "${FAKE_LIST_FAIL:-}" ]; then
+      printf '%s\n' "$FAKE_LIST_FAIL" >&2; exit 1
+    fi
+    printf '%s\n' "${FAKE_ACCESSES:-}"
+    exit 0 ;;
+  *"annotate bucketaccesses.objectstorage.k8s.io "*)
+    name=$(printf '%s\n' "$args" | sed -n 's/.*annotate bucketaccesses.objectstorage.k8s.io \([^ ]*\).*/\1/p')
+    keep=$(printf '%s\n' "$args" | grep -c 'helm.sh/resource-policy=keep')
+    log "KEEP $(ns_of)/$name keep=$keep"
+    exit 0 ;;
+  *"label bucketaccesses.objectstorage.k8s.io "*)
+    if [ -n "${FAKE_LABEL_FAIL:-}" ]; then
+      printf '%s\n' "$FAKE_LABEL_FAIL" >&2; exit 1
+    fi
+    name=$(printf '%s\n' "$args" | sed -n 's/.*label bucketaccesses.objectstorage.k8s.io \([^ ]*\).*/\1/p')
+    adopt=$(printf '%s\n' "$args" | grep -c 'credentials.cozystack.io/adopt=true')
+    log "ADOPT $(ns_of)/$name adopt=$adopt"
+    exit 0 ;;
+  *"apply --filename -"*)
+    manifest=$(cat)
+    case "$manifest" in
+      *"kind: ConfigMap"*)
+        v=$(printf '%s\n' "$manifest" | sed -n 's/^  version: "\{0,1\}\([0-9]\{1,\}\)"\{0,1\}$/\1/p' | head -1)
+        log "STAMP ${v:-unknown}"
+        exit 0 ;;
+    esac
+    ;;
+esac
+
+log "UNHANDLED $args"
+printf 'fake kubectl: unmodelled call: %s\n' "$args" >&2
+exit 1

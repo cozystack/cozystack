@@ -116,6 +116,9 @@ func init() {
 type Config struct {
 	GenericConfig  *genericapiserver.RecommendedConfig
 	ResourceConfig *config.ResourceConfig
+	// CredentialsCOSIWait bounds the wait of a mint or a revoke on a cosi
+	// credential; zero keeps the default.
+	CredentialsCOSIWait time.Duration
 }
 
 // CozyServer holds the state for the Kubernetes master/api server.
@@ -124,8 +127,9 @@ type CozyServer struct {
 }
 
 type completedConfig struct {
-	GenericConfig  genericapiserver.CompletedConfig
-	ResourceConfig *config.ResourceConfig
+	GenericConfig       genericapiserver.CompletedConfig
+	ResourceConfig      *config.ResourceConfig
+	CredentialsCOSIWait time.Duration
 }
 
 // CompletedConfig embeds a private pointer that cannot be created outside of this package.
@@ -138,6 +142,7 @@ func (cfg *Config) Complete() CompletedConfig {
 	c := completedConfig{
 		cfg.GenericConfig.Complete(),
 		cfg.ResourceConfig,
+		cfg.CredentialsCOSIWait,
 	}
 
 	return CompletedConfig{&c}
@@ -235,6 +240,9 @@ func (c completedConfig) New() (*CozyServer, error) {
 		tapstorage.NewREST(dyn),
 	)
 	credentials := credentialstorage.NewREST(cli, watchCli)
+	if c.CredentialsCOSIWait > 0 {
+		credentials.SetCOSIWait(c.CredentialsCOSIWait)
+	}
 	coreV1alpha1Storage["credentials"] = cozyregistry.RESTInPeace(credentials)
 	coreV1alpha1Storage["credentials/mint"] = credentialstorage.NewMintREST(credentials)
 	coreV1alpha1Storage["credentials/revoke"] = credentialstorage.NewRevokeREST(credentials)
