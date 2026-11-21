@@ -1,0 +1,32 @@
+suite: fluent-bit extraOutputs add destinations next to the default ones
+
+# outputs is one string, so a user who overrides it to add a destination has
+# to restate the defaults or lose them. extraOutputs is appended by the
+# outputs template itself. packages/apps/kubernetes replaces outputs for
+# tenant clusters and carries the same hook; its counterpart is
+# packages/apps/kubernetes/tests/monitoring_agents_test.yaml.
+templates:
+  - charts/fluent-bit/templates/configmap.yaml
+release:
+  name: monitoring-agents
+  namespace: cozy-monitoring
+set:
+  global:
+    target: tenant-root
+tests:
+  - it: appends extraOutputs after the default outputs, which stay
+    set:
+      fluent-bit.config.extraOutputs: |
+        [OUTPUT]
+            Name stdout
+            Match *
+    asserts:
+      - matchRegex:
+          path: data["fluent-bit.conf"]
+          pattern: '(?s)Match audit\.\*\n    Host vlinsert-generic\.tenant-root\.svc.*\[OUTPUT\]\n    Name stdout\n    Match \*'
+
+  - it: renders no extra output by default
+    asserts:
+      - notMatchRegex:
+          path: data["fluent-bit.conf"]
+          pattern: 'Name stdout'

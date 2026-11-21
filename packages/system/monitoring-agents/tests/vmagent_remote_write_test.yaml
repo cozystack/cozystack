@@ -63,3 +63,23 @@ tests:
       - equal:
           path: spec.externalLabels.tenant
           value: "true"
+
+  - it: appends extraRemoteWrite entries after the urls, as written
+    set:
+      global.target: tenant-root
+      vmagent:
+        extraRemoteWrite:
+          - url: https://metrics.example.org/api/v1/write
+            basicAuth:
+              username: {name: remote-write-auth, key: username}
+              password: {name: remote-write-auth, key: password}
+    asserts:
+      - equal:
+          path: spec.remoteWrite
+          value:
+            - url: http://vminsert-shortterm.tenant-root.svc:8480/insert/0/prometheus
+            - url: http://vminsert-longterm.tenant-root.svc:8480/insert/0/prometheus
+            - url: https://metrics.example.org/api/v1/write
+              basicAuth:
+                username: {name: remote-write-auth, key: username}
+                password: {name: remote-write-auth, key: password}
