@@ -65,16 +65,18 @@ spec:
         Measured on a live cluster: with the flag true the Pod never schedules,
         with it false the PVC binds in seconds. Patched rather than forked so the
         vendored chart still reproduces from `helm pull`. */}}
-  postRenderers:
-    - kustomize:
-        patches:
-          - target:
-              kind: CSIDriver
-              name: csi.proxmox.sinextra.dev
-            patch: |
-              - op: replace
-                path: /spec/storageCapacity
-                value: false
+  {{- $storageCapacityOff := `
+- kustomize:
+    patches:
+      - target:
+          kind: CSIDriver
+          name: csi.proxmox.sinextra.dev
+        patch: |
+          - op: replace
+            path: /spec/storageCapacity
+            value: false
+` | fromYamlArray }}
+  {{- include "cozy-lib.postRenderers" (list $storageCapacityOff $) | nindent 2 }}
   values:
     proxmox-csi-plugin:
       {{- /* The vendored chart has no switch for the controller, so its
