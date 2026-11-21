@@ -237,6 +237,15 @@
             "2xlarge"
           ]
         },
+        "topologySpreadPolicy": {
+          "description": "How strictly the masters are kept one per node. `hard` keeps them apart through a drain, but counts every node, including one the masters cannot run on such as a tainted control plane, so with such a node the masters need as many usable nodes as replicas. `soft` drops the spread constraint and keeps only the preferred anti-affinity, for clusters with fewer usable nodes than masters.",
+          "type": "string",
+          "default": "hard",
+          "enum": [
+            "hard",
+            "soft"
+          ]
+        },
         "volumeSizeLimitMB": {
           "description": "Size in MB at which a volume stops taking writes, and the divisor that sets how many buckets a volume server can serve. Lower it to fit more buckets on the same disk, at the cost of more volume files for the same stored data; on a large volume it is worth raising instead. Changing it on an instance that already holds data costs something either way: lowering it stops writes to every bucket whose volumes all reach the new value until that bucket can grow, and raising it takes the room new buckets grow into, so run the check in docs/operations/seaweedfs-lowering-the-volume-size-limit.md first. Must be between 1 and 30000. A value close to or above `volume.size` leaves each volume server a single slot rather than failing, since the server floors its slot count at one.",
           "type": "integer",
