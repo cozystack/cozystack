@@ -1,0 +1,61 @@
+# Alerta 9.1.0 is the latest upstream release, and its image still carries the
+# Debian packages of its build day plus the toolchain it compiled wheels with.
+# The respin upgrades the OS packages, drops the build-only ones and lifts the
+# Python packages whose fixes postdate the release, within the ranges the
+# installed packages declare: cryptography stays below 47 for pyOpenSSL, and
+# lxml stays on 5.x. A bump of VERSION needs the digest of the new tag's index
+# as well.
+ARG VERSION=9.1.0
+
+FROM docker.io/alerta/alerta-web:${VERSION}@sha256:693845fb8a95a483c8c9d560786f661f5b6198e5ea0baa6ddf368a7e53c94f39 AS patched
+
+USER root
+RUN apt-get update \
+ && apt-get upgrade -y \
+ && apt-get purge -y build-essential linux-libc-dev libc6-dev python3-dev \
+      libpq-dev libldap2-dev libsasl2-dev libxml2-dev libxslt1-dev libexpat1-dev git \
+ && apt-get autoremove -y \
+ && rm -rf /var/lib/apt/lists/* \
+ && /venv/bin/pip install --no-cache-dir --upgrade \
+      'PyJWT>=2.14.0' 'certifi>=2026.10.18' 'brotli>=1.2.1' 'aiohttp>=3.14.4' \
+      'urllib3>=2.8.0' 'pyasn1>=0.6.5' 'pymongo>=4.18.3' 'dnspython>=2.9.0' 'msgpack>=1.2.3' \
+ && /venv/bin/pip check \
+ && pip install --no-cache-dir --upgrade virtualenv 'filelock>=4.2.1'
+
+# A purge on top of the upstream layers hides files without removing them, so
+# the result is copied into an empty image. That drops the image config with
+# the layers; it is restated below exactly as the upstream image declares it,
+# because docker-entrypoint.sh renders the nginx, uWSGI and Alerta configs from
+# these variables.
+FROM scratch
+
+COPY --from=patched / /
+
+ENV PATH=/usr/local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/venv/bin \
+    GPG_KEY=7169605F62C751356D054A26A821E680E5FA6305 \
+    PYTHON_VERSION=3.13.12 \
+    PYTHON_SHA256=2a84cd31dd8d8ea8aaff75de66fc1b4b0127dd5799aa50a64ae9a313885b4593 \
+    PYTHONUNBUFFERED=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PIP_NO_CACHE_DIR=1 \
+    SERVER_VERSION=9.1.0 \
+    CLIENT_VERSION=8.5.3 \
+    WEBUI_VERSION=8.7.1 \
+    NGINX_WORKER_PROCESSES=1 \
+    NGINX_WORKER_CONNECTIONS=1024 \
+    UWSGI_PROCESSES=5 \
+    UWSGI_LISTEN=100 \
+    UWSGI_BUFFER_SIZE=8192 \
+    UWSGI_MAX_WORKER_LIFETIME=30 \
+    UWSGI_WORKER_LIFETIME_DELTA=3 \
+    HEARTBEAT_SEVERITY=major \
+    HK_EXPIRED_DELETE_HRS=2 \
+    HK_INFO_DELETE_HRS=12 \
+    ALERTA_SVR_CONF_FILE=/app/alertad.conf \
+    ALERTA_CONF_FILE=/app/alerta.conf \
+    ALERTA_WEB_CONF_FILE=/web/config.json
+
+USER 1001
+EXPOSE 8080 1717
+ENTRYPOINT ["docker-entrypoint.sh"]
+CMD ["supervisord", "-c", "/app/supervisord.conf"]

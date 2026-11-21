@@ -21,6 +21,10 @@ spec:
       maxUnavailable: 25%
   template:
     metadata:
+      {{- if eq $oidcEnabled "true" }}
+      annotations:
+        checksum/gatekeeper-config: {{ include (print $.Template.BasePath "/gatekeeper-config.yaml") . | sha256sum }}
+      {{- end }}
       labels:
         app.kubernetes.io/instance: incloud-web
         app.kubernetes.io/name: gatekeeper
@@ -51,52 +55,32 @@ spec:
         - name: auth-proxy
           image: quay.io/oauth2-proxy/oauth2-proxy:v7.12.0
           imagePullPolicy: IfNotPresent
+          # Provider, upstream, listen address and injected headers are in
+          # gatekeeper-config.yaml; oauth2-proxy refuses them as flags next to
+          # --alpha-config.
           args:
-            - --provider=oidc
-            - --upstream=http://cozy-dashboard-console.{{ .Release.Namespace }}.svc:8080
-            - --http-address=0.0.0.0:8000
+            - --alpha-config=/etc/oauth2-proxy/config/alpha-config.yaml
             - --redirect-url=https://dashboard.{{ $host }}/oauth2/callback
-            - --oidc-issuer-url=https://keycloak.{{ $host }}/realms/{{ $realm }}
-            {{- if $keycloakInternalUrl }}
-            - --skip-oidc-discovery
-            - --login-url=https://keycloak.{{ $host }}/realms/{{ $realm }}/protocol/openid-connect/auth
-            - --redeem-url={{ $keycloakInternalUrl }}/protocol/openid-connect/token
-            - --oidc-jwks-url={{ $keycloakInternalUrl }}/protocol/openid-connect/certs
-            - --validate-url={{ $keycloakInternalUrl }}/protocol/openid-connect/userinfo
-            - --backend-logout-url={{ $keycloakInternalUrl }}/protocol/openid-connect/logout?id_token_hint={id_token}
-            {{- else }}
-            - --backend-logout-url=https://keycloak.{{ $host }}/realms/{{ $realm }}/protocol/openid-connect/logout?id_token_hint={id_token}
-            {{- end }}
             - --whitelist-domain=keycloak.{{ $host }}
             - --email-domain=*
             - --api-route=^/api(/|$)
             - --api-route=^/apis(/|$)
-            - --pass-access-token=true
-            - --pass-authorization-header=true
             - --cookie-refresh=3m
             - --cookie-name=kc-access
             - --cookie-secure=true
             - --cookie-secret=$(OAUTH2_PROXY_COOKIE_SECRET)
             - --skip-provider-button
-            # No offline_access: that scope makes Keycloak issue an *offline*
-            # refresh token, which is decoupled from the SSO session and is NOT
-            # revoked by logout (end_session). Since oauth2-proxy keeps the
-            # refresh token in the kc-access cookie and silently refreshes it,
-            # a copied cookie would stay valid for the whole offline-session
-            # lifetime (~30d) even after the user logs out. An online refresh
-            # token is bound to the SSO session and is revoked on logout.
-            - --scope=openid email profile
             {{- if eq $oidcInsecureSkipVerify "true" }}
             - --ssl-insecure-skip-verify=true
             {{- end }}
+          volumeMounts:
+            - name: gatekeeper-config
+              mountPath: /etc/oauth2-proxy/config
+              readOnly: true
+            - name: client-secret
+              mountPath: /etc/oauth2-proxy/client
+              readOnly: true
           env:
-            - name: OAUTH2_PROXY_CLIENT_ID
-              value: dashboard
-            - name: OAUTH2_PROXY_CLIENT_SECRET
-              valueFrom:
-                secretKeyRef:
-                  name: dashboard-client
-                  key: client-secret-key
             - name: OAUTH2_PROXY_COOKIE_SECRET
               valueFrom:
                 secretKeyRef:
@@ -212,8 +196,18 @@ spec:
               type: RuntimeDefault
           terminationMessagePath: /dev/termination-log
           terminationMessagePolicy: File
-        {{- if ne $oidcEnabled "true" }}
       volumes:
+        {{- if eq $oidcEnabled "true" }}
+        - name: gatekeeper-config
+          configMap:
+            name: incloud-web-gatekeeper-config
+        - name: client-secret
+          secret:
+            secretName: dashboard-client
+            items:
+              - key: client-secret-key
+                path: client-secret
+        {{- else }}
         # optional: the login page degrades to its unbranded default if the
         # ConfigMap is missing, so a start-up dependency is not worth failing on.
         - name: branding

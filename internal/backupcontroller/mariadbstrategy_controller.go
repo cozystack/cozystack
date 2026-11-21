@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	batchv1 "k8s.io/api/batch/v1"
@@ -134,7 +135,7 @@ func (r *BackupJobReconciler) reconcileMariaDB(ctx context.Context, j *backupsv1
 	}
 
 	if err := validateMariaDBApplicationRef(j.Spec.ApplicationRef); err != nil {
-		return r.markBackupJobFailed(ctx, j, err.Error())
+		return r.failMariaDBBackupJob(ctx, j, err.Error())
 	}
 
 	if j.Status.StartedAt == nil {
@@ -162,6 +163,9 @@ func (r *BackupJobReconciler) reconcileMariaDB(ctx context.Context, j *backupsv1
 	strategy := &strategyv1alpha1.MariaDB{}
 	if err := r.Get(ctx, client.ObjectKey{Name: resolved.StrategyRef.Name}, strategy); err != nil {
 		if apierrors.IsNotFound(err) {
+			if strategyNotReadyDeadlineExceeded(j.Status.StartedAt) {
+				return r.failMariaDBBackupJob(ctx, j, strategyNotProvisionedMessage(j, resolved.StrategyRef.Name))
+			}
 			return r.requeueStrategyNotReady(ctx, j, resolved.StrategyRef.Name)
 		}
 		return ctrl.Result{}, err
@@ -170,14 +174,14 @@ func (r *BackupJobReconciler) reconcileMariaDB(ctx context.Context, j *backupsv1
 	app, err := r.getMariaDBApp(ctx, j.Namespace, j.Spec.ApplicationRef.Name)
 	if err != nil {
 		if apierrors.IsNotFound(err) {
-			return r.markBackupJobFailed(ctx, j, fmt.Sprintf("MariaDB application not found: %s/%s", j.Namespace, j.Spec.ApplicationRef.Name))
+			return r.failMariaDBBackupJob(ctx, j, fmt.Sprintf("MariaDB application not found: %s/%s", j.Namespace, j.Spec.ApplicationRef.Name))
 		}
 		return ctrl.Result{}, err
 	}
 
 	rendered, err := renderMariaDBTemplate(strategy.Spec.Template, app, resolved.Parameters)
 	if err != nil {
-		return r.markBackupJobFailed(ctx, j, fmt.Sprintf("failed to template MariaDB strategy: %v", err))
+		return r.failMariaDBBackupJob(ctx, j, fmt.Sprintf("failed to template MariaDB strategy: %v", err))
 	}
 
 	// Operator-side MariaDB CR carries the prefixed release name (see
@@ -192,7 +196,7 @@ func (r *BackupJobReconciler) reconcileMariaDB(ctx context.Context, j *backupsv1
 		&mariadbtypes.MariaDB{}); err != nil {
 		if apierrors.IsNotFound(err) {
 			if mariadbBackupDeadlineExceeded(j.Status.StartedAt) {
-				return r.markBackupJobFailed(ctx, j, fmt.Sprintf(
+				return r.failMariaDBBackupJob(ctx, j, fmt.Sprintf(
 					"k8s.mariadb.com/MariaDB %s/%s never reached existence within %s",
 					j.Namespace, mdbName, mariadbDefaultBackupDeadline))
 			}
@@ -210,9 +214,30 @@ func (r *BackupJobReconciler) reconcileMariaDB(ctx context.Context, j *backupsv1
 		return ctrl.Result{}, err
 	}
 
-	mdbBackup, err := r.ensureMariaDBBackup(ctx, j, rendered)
-	if err != nil {
-		return r.markBackupJobFailed(ctx, j, fmt.Sprintf("failed to ensure k8s.mariadb.com/Backup: %v", err))
+	// A job that is Running has created its run, and one past the deadline
+	// is only waited for: either way the run is read past the cache and never
+	// started again. A pass whose status write failed after
+	// failMariaDBBackupJob deleted the run would otherwise start another, and
+	// the cache can miss a run created a moment ago.
+	var mdbBackup *mariadbtypes.Backup
+	if pastDeadline := mariadbBackupDeadlineExceeded(j.Status.StartedAt); pastDeadline || j.Status.Phase == backupsv1alpha1.BackupJobPhaseRunning {
+		runs, err := r.mariadbRunsOf(ctx, j)
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+		if len(runs) == 0 {
+			if pastDeadline {
+				return r.markBackupJobFailed(ctx, j, fmt.Sprintf(
+					"k8s.mariadb.com Backup did not complete within %s; no k8s.mariadb.com/Backup of this BackupJob is left", mariadbDefaultBackupDeadline))
+			}
+			return r.markBackupJobFailed(ctx, j, "the k8s.mariadb.com/Backup of this BackupJob is gone")
+		}
+		mdbBackup = &runs[0]
+	} else {
+		mdbBackup, err = r.ensureMariaDBBackup(ctx, j, rendered)
+		if err != nil {
+			return r.failMariaDBBackupJob(ctx, j, fmt.Sprintf("failed to ensure k8s.mariadb.com/Backup: %v", err))
+		}
 	}
 
 	if j.Status.Phase != backupsv1alpha1.BackupJobPhaseRunning {
@@ -226,7 +251,10 @@ func (r *BackupJobReconciler) reconcileMariaDB(ctx context.Context, j *backupsv1
 
 	switch {
 	case cond != nil && cond.Reason == mariadbtypes.ConditionReasonJobFailed:
-		return r.markBackupJobFailed(ctx, j, mariadbJobFailedMessage(ctx, r.Client, "Backup", mdbBackup.Namespace, mdbBackup.Name, cond))
+		// A run at Complete=False/JobFailed counts as unfinished to the dump
+		// cleanup and is deleted; one at Complete=True/JobFailed has a
+		// bounded window and is kept.
+		return r.failMariaDBBackupJob(ctx, j, mariadbJobFailedMessage(ctx, r.Client, "Backup", mdbBackup.Namespace, mdbBackup.Name, cond))
 
 	case cond != nil && cond.Status == metav1.ConditionTrue && cond.Reason == mariadbtypes.ConditionReasonJobComplete:
 		// Backup completed successfully. Materialise the Cozystack artifact
@@ -236,7 +264,7 @@ func (r *BackupJobReconciler) reconcileMariaDB(ctx context.Context, j *backupsv1
 		if j.Status.BackupRef != nil {
 			return ctrl.Result{}, nil
 		}
-		artifact, err := r.createMariaDBBackupArtifact(ctx, j, resolved, mdbBackup, rendered)
+		artifact, err := r.createMariaDBBackupArtifact(ctx, j, resolved, mdbBackup, mariadbRunTemplate(rendered, mdbBackup))
 		if err != nil {
 			return r.failBackupArtifact(ctx, j, err)
 		}
@@ -262,11 +290,135 @@ func (r *BackupJobReconciler) reconcileMariaDB(ctx context.Context, j *backupsv1
 		// Backup eventually fails the BackupJob instead of pinning it Running
 		// forever.
 		if mariadbBackupDeadlineExceeded(j.Status.StartedAt) {
-			return r.markBackupJobFailed(ctx, j, fmt.Sprintf(
-				"k8s.mariadb.com Backup did not complete within %s (%s)", mariadbDefaultBackupDeadline, mariadbCompleteDetail(cond)))
+			return r.giveUpOnMariaDBBackup(ctx, j, mdbBackup)
 		}
 		return ctrl.Result{RequeueAfter: mariadbPollInterval}, nil
 	}
+}
+
+// giveUpOnMariaDBBackup fails a BackupJob past its deadline through
+// failMariaDBBackupJob, unless its run has completed or failed by now.
+func (r *BackupJobReconciler) giveUpOnMariaDBBackup(ctx context.Context, j *backupsv1alpha1.BackupJob, op *mariadbtypes.Backup) (ctrl.Result, error) {
+	// Read past the cache, which can trail a Complete the operator has just
+	// written, or still hold a Backup an earlier pass deleted before its
+	// status write failed.
+	fresh := &mariadbtypes.Backup{}
+	var cond *metav1.Condition
+	if err := r.apiReader().Get(ctx, client.ObjectKeyFromObject(op), fresh); err != nil {
+		if !apierrors.IsNotFound(err) {
+			return ctrl.Result{}, err
+		}
+	} else {
+		cond = apimeta.FindStatusCondition(fresh.Status.Conditions, mariadbtypes.ConditionTypeComplete)
+		if cond != nil && (cond.Reason == mariadbtypes.ConditionReasonJobFailed ||
+			cond.Status == metav1.ConditionTrue && cond.Reason == mariadbtypes.ConditionReasonJobComplete) {
+			return ctrl.Result{RequeueAfter: mariadbPollInterval}, nil
+		}
+	}
+	return r.failMariaDBBackupJob(ctx, j, fmt.Sprintf(
+		"k8s.mariadb.com Backup did not complete within %s (%s)", mariadbDefaultBackupDeadline, mariadbCompleteDetail(cond)))
+}
+
+// mariadbRunsOf lists the operator Backups of a BackupJob past the cache,
+// which can miss one created a moment ago.
+func (r *BackupJobReconciler) mariadbRunsOf(ctx context.Context, j *backupsv1alpha1.BackupJob) ([]mariadbtypes.Backup, error) {
+	runs := &mariadbtypes.BackupList{}
+	if err := r.apiReader().List(ctx, runs, client.InNamespace(j.Namespace), client.MatchingLabels{
+		backupsv1alpha1.OwningJobNameLabel:      j.Name,
+		backupsv1alpha1.OwningJobNamespaceLabel: j.Namespace,
+	}); err != nil {
+		// Without the operator's CRDs there is no run to delete, and a job
+		// failing for that reason must still be failed.
+		if apimeta.IsNoMatchError(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("list k8s.mariadb.com/Backups of BackupJob %s: %w", j.Name, err)
+	}
+	return runs.Items, nil
+}
+
+// failMariaDBBackupJob fails a BackupJob that has started, after deleting
+// each of its operator Backups that has not completed. No Backup is made of
+// such a run, so nothing else would ever delete it, and while it stands
+// short of Complete its window has no end: the dump cleanup would count it
+// as a possible writer of every later dump of the application
+// (neighbourMariaDBRuns). Deleting it also deletes its Job and so stops a
+// run still going; a dump that run has already uploaded is left untracked.
+// One that has completed, on any reason, has a bounded window and is kept.
+func (r *BackupJobReconciler) failMariaDBBackupJob(ctx context.Context, j *backupsv1alpha1.BackupJob, message string) (ctrl.Result, error) {
+	runs, err := r.mariadbRunsOf(ctx, j)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	var deleted []string
+	for i := range runs {
+		run := &runs[i]
+		if apimeta.IsStatusConditionTrue(run.Status.Conditions, mariadbtypes.ConditionTypeComplete) {
+			continue
+		}
+		// Read before the delete, which takes the run's Job and pods with it.
+		stuck := r.mariadbRunStuckReason(ctx, run)
+		// The preconditions keep a run that completes after the listing from
+		// being deleted: the delete then conflicts and the next pass sees it.
+		policy := metav1.DeletePropagationBackground
+		err := r.Delete(ctx, run, &client.DeleteOptions{
+			PropagationPolicy: &policy,
+			Preconditions:     &metav1.Preconditions{UID: &run.UID, ResourceVersion: &run.ResourceVersion},
+		})
+		if apierrors.IsConflict(err) {
+			return ctrl.Result{RequeueAfter: mariadbPollInterval}, nil
+		}
+		if err != nil && !apierrors.IsNotFound(err) {
+			err = fmt.Errorf("delete k8s.mariadb.com/Backup %s/%s: %w", run.Namespace, run.Name, err)
+			apimeta.SetStatusCondition(&j.Status.Conditions, metav1.Condition{
+				Type:    "Ready",
+				Status:  metav1.ConditionFalse,
+				Reason:  "OperatorBackupDeleteFailed",
+				Message: fmt.Sprintf("%s; retrying: %v", message, err),
+			})
+			if updateErr := r.Status().Update(ctx, j); updateErr != nil {
+				getLogger(ctx).Info("cannot record the failed operator Backup delete", "backupjob", j.Name, "error", updateErr)
+			}
+			return ctrl.Result{}, err
+		}
+		getLogger(ctx).Info("deleted the unfinished operator Backup of a failed BackupJob", "operatorBackup", run.Name, "namespace", run.Namespace)
+		deleted = append(deleted, run.Namespace+"/"+run.Name)
+		if stuck != "" {
+			message += "; " + stuck
+		}
+	}
+	if len(deleted) > 0 {
+		message += fmt.Sprintf("; k8s.mariadb.com/Backup %s is deleted", strings.Join(deleted, ", "))
+	}
+	return r.markBackupJobFailed(ctx, j, message)
+}
+
+// mariadbRunStuckReason names what held up a run's pod, or "" when it
+// cannot tell. The operator names the Job after the run, and the Job
+// controller labels its pods with job-name.
+func (r *BackupJobReconciler) mariadbRunStuckReason(ctx context.Context, run *mariadbtypes.Backup) string {
+	pods := &corev1.PodList{}
+	if err := r.List(ctx, pods, client.InNamespace(run.Namespace), client.MatchingLabels{"job-name": run.Name}); err != nil {
+		getLogger(ctx).Info("cannot read the pods of an operator Backup", "operatorBackup", run.Name, "error", err)
+		return ""
+	}
+	for i := range pods.Items {
+		pod := &pods.Items[i]
+		for _, c := range pod.Status.Conditions {
+			if c.Type == corev1.PodScheduled && c.Status == corev1.ConditionFalse {
+				return fmt.Sprintf("pod %s not scheduled: %s: %s", pod.Name, c.Reason, c.Message)
+			}
+		}
+		for _, cs := range append(append([]corev1.ContainerStatus(nil), pod.Status.InitContainerStatuses...), pod.Status.ContainerStatuses...) {
+			if w := cs.State.Waiting; w != nil && w.Reason != "" && w.Reason != "PodInitializing" {
+				return fmt.Sprintf("pod %s container %s waiting: %s: %s", pod.Name, cs.Name, w.Reason, w.Message)
+			}
+			if t := cs.State.Terminated; t != nil && t.ExitCode != 0 {
+				return fmt.Sprintf("pod %s container %s terminated: %s: %s", pod.Name, cs.Name, t.Reason, t.Message)
+			}
+		}
+	}
+	return ""
 }
 
 // mariadbJobFailedMessage names the operator object whose Job failed and
@@ -364,16 +516,15 @@ func (r *BackupJobReconciler) ensureMariaDBBackup(ctx context.Context, j *backup
 // the BackupJob's OwningJob{Name,Namespace}, if any. Returns (nil, nil)
 // when no match is found.
 //
-// In steady state at most one Backup CR carries a given OwningJob label
-// pair (ensureMariaDBBackup is idempotent by this label). The list path
-// can in theory observe two if two controller replicas raced Create
-// between the first list returning empty and the cache catching up. The
-// driver picks list.Items[0] deterministically; the V(1) breadcrumb on
-// duplicates exists so an operator triaging "wrong Backup got reused"
-// has a log line to grep for instead of staring at silent reuse.
+// The listing reads past the cache: a pass whose status write failed right
+// after it created the run would otherwise miss that run and create a
+// second. Two controller replicas racing Create can still make two; the
+// driver picks list.Items[0] deterministically, and the V(1) breadcrumb on
+// duplicates exists so an operator triaging "wrong Backup got reused" has a
+// log line to grep for instead of staring at silent reuse.
 func (r *BackupJobReconciler) findMariaDBBackupForJob(ctx context.Context, j *backupsv1alpha1.BackupJob) (*mariadbtypes.Backup, error) {
 	list := &mariadbtypes.BackupList{}
-	if err := r.List(ctx, list,
+	if err := r.apiReader().List(ctx, list,
 		client.InNamespace(j.Namespace),
 		client.MatchingLabels{
 			backupsv1alpha1.OwningJobNameLabel:      j.Name,
@@ -394,6 +545,49 @@ func (r *BackupJobReconciler) findMariaDBBackupForJob(ctx context.Context, j *ba
 			"backupjob", j.Name, "namespace", j.Namespace, "matches", names, "picked", names[0])
 	}
 	return &list.Items[0], nil
+}
+
+// mariadbRunTemplate returns rendered with the storage run was created
+// with: the strategy is rendered again on every pass, and one edited during
+// the run would otherwise record storage the dump never went to.
+func mariadbRunTemplate(rendered *strategyv1alpha1.MariaDBTemplate, run *mariadbtypes.Backup) *strategyv1alpha1.MariaDBTemplate {
+	storage := run.Spec.Storage
+	if storage.S3 == nil && storage.PersistentVolumeClaim == nil && storage.Volume == nil {
+		return rendered
+	}
+	out := rendered.DeepCopy()
+	out.Storage = strategyv1alpha1.MariaDBStorageTemplate{
+		PersistentVolumeClaim: storage.PersistentVolumeClaim.DeepCopy(),
+		Volume:                storage.Volume.DeepCopy(),
+	}
+	s3 := storage.S3
+	if s3 == nil {
+		return out
+	}
+	out.Storage.S3 = &strategyv1alpha1.MariaDBS3Template{
+		Bucket:   s3.Bucket,
+		Endpoint: s3.Endpoint,
+		Prefix:   s3.Prefix,
+		Region:   s3.Region,
+		AccessKeyIDSecretKeyRef: strategyv1alpha1.MariaDBSecretKeySelector{
+			Name: s3.AccessKeyIdSecretKeyRef.Name,
+			Key:  s3.AccessKeyIdSecretKeyRef.Key,
+		},
+		SecretAccessKeySecretKeyRef: strategyv1alpha1.MariaDBSecretKeySelector{
+			Name: s3.SecretAccessKeySecretKeyRef.Name,
+			Key:  s3.SecretAccessKeySecretKeyRef.Key,
+		},
+	}
+	if ref := s3.SessionTokenSecretKeyRef; ref != nil {
+		out.Storage.S3.SessionTokenSecretKeyRef = &strategyv1alpha1.MariaDBSecretKeySelector{Name: ref.Name, Key: ref.Key}
+	}
+	if tls := s3.TLS; tls != nil {
+		out.Storage.S3.TLS = &strategyv1alpha1.MariaDBS3TLS{Enabled: tls.Enabled}
+		if ref := tls.CASecretKeyRef; ref != nil {
+			out.Storage.S3.TLS.CASecretKeyRef = &strategyv1alpha1.MariaDBSecretKeySelector{Name: ref.Name, Key: ref.Key}
+		}
+	}
+	return out
 }
 
 // createMariaDBBackupArtifact materialises a Cozystack Backup resource
@@ -862,10 +1056,9 @@ func (r *RestoreJobReconciler) resolveMariaDBRestoreTarget(restoreJob *backupsv1
 // Backup.status.underlyingResources at backup time. Carries the rendered
 // storage descriptor and BackupClass parameters. The current restore path
 // resolves the operator-side k8s.mariadb.com/Backup CR directly and fails
-// terminally when it has been reaped; this snapshot is reserved for a
-// future fallback path that would re-materialise the operator Backup from
-// the persisted state. Keep the shape stable so an older snapshot stays
-// machine-readable when that fallback lands.
+// terminally when it has been reaped; the dump cleanup reads the storage
+// from here once that CR is gone (cleanupOrphanedMariaDBDump). Keep the
+// shape stable so an older snapshot stays machine-readable.
 //
 // SECRET-HANDLING CONTRACT (this is plaintext-readable to anyone with read
 // access to backups.cozystack.io/Backups):
