@@ -66,7 +66,7 @@ tests:
     asserts:
       - matchRegex:
           path: spec.template.spec.containers[0].command[2]
-          pattern: "kubectl delete certificate my-bucket-ui-tls -n tenant-root"
+          pattern: 'kubectl delete certificate "\$key" -n tenant-root'
       # Orders are removed by the Certificate cascade and Challenges by the
       # host-scoped dnsName sweep. cert-manager puts no usable label on either
       # (Challenges are unlabeled; certificate-name is an annotation on Orders),
@@ -102,6 +102,23 @@ tests:
       - notMatchRegex:
           path: spec.template.spec.containers[0].command[2]
           pattern: "delete .*-l acme.cert-manager.io/http01-solver=true"
+
+  - it: deletes the TLS Secret of the UI Certificate only once that Certificate is deleted
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      # cert-manager writes the Secret with no owner reference, so nothing else
+      # reclaims it, and a Secret deleted while its Certificate still exists is
+      # issued again.
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'if ! kubectl delete certificate "\$key"[^\n]*; then[\s\S]*return 1[\s\S]*if ! kubectl delete secret "\$key"'
+      # Leftover ACME objects only warn, but a Secret that may still hold the
+      # private key fails the Job, after the sweeps, so its log is kept.
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'if \[ "\$key_left" -ne 0 \]; then\s+echo "ACME cleanup FAILED for my-bucket[^"]*" >&2\s+exit 1\s+fi\s+echo "ACME cleanup complete\."'
 
   - it: sets resource requests and limits on the cleanup container
     documentIndex: 0
@@ -140,7 +157,7 @@ tests:
           content:
             apiGroups: ["cert-manager.io"]
             resources: ["certificates"]
-            verbs: ["get", "list", "delete"]
+            verbs: ["get", "list", "watch", "delete"]
       - contains:
           path: rules
           content:
@@ -163,9 +180,17 @@ tests:
             apiGroups: [""]
             resources: ["services", "pods"]
             verbs: ["get", "list", "delete"]
+      # The TLS Secret of the UI Certificate, by name and nothing wider.
+      - contains:
+          path: rules
+          content:
+            apiGroups: [""]
+            resources: ["secrets"]
+            resourceNames: ["my-bucket-ui-tls"]
+            verbs: ["get", "delete"]
       - lengthEqual:
           path: rules
-          count: 3
+          count: 4
 
   - it: binds the Role to the cleanup ServiceAccount
     documentIndex: 3
@@ -179,3 +204,33 @@ tests:
       - equal:
           path: subjects[0].name
           value: my-bucket-cleanup-acme
+
+  - it: preserves the shared wildcard Certificate and Secret
+    release:
+      name: bucket-test
+    set:
+      _cluster.wildcard-secret-name: bucket-test-ui-tls
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - notMatchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'kubectl delete (certificate|secret) '
+
+  - it: grants no Secret deletion when the TLS name is shared
+    release:
+      name: bucket-test
+    set:
+      _cluster.wildcard-secret-name: bucket-test-ui-tls
+    documentSelector:
+      path: kind
+      value: Role
+    asserts:
+      - notContains:
+          path: rules
+          content:
+            apiGroups: [""]
+            resources: ["secrets"]
+            resourceNames: ["bucket-test-ui-tls"]
+            verbs: ["get", "delete"]
