@@ -60,6 +60,9 @@ func TestInstallPlatformPackageSource_Creates(t *testing.T) {
 	if ps.Annotations["operator.cozystack.io/skip-cozystack-values"] != "true" {
 		t.Errorf("expected skip-cozystack-values annotation to be 'true', got %q", ps.Annotations["operator.cozystack.io/skip-cozystack-values"])
 	}
+	if ps.Annotations["operator.cozystack.io/render-on-source-change"] != "true" {
+		t.Errorf("the platform must re-render when its source moves; render-on-source-change = %q", ps.Annotations["operator.cozystack.io/render-on-source-change"])
+	}
 
 	// Verify sourceRef
 	if ps.Spec.SourceRef == nil {
