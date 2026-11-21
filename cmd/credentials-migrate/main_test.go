@@ -707,3 +707,118 @@ func TestRunRefusesPerAccountSourcesWithoutAKey(t *testing.T) {
 		t.Fatalf("err = %v", err)
 	}
 }
+
+func perAccountSource(name, release, user, password string) *corev1.Secret {
+	return &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: name, Namespace: "tenant-foo",
+			Labels:      map[string]string{"apps.cozystack.io/user-secret": "true"},
+			Annotations: map[string]string{account.ReleaseNameAnnotation: release},
+		},
+		Data: map[string][]byte{account.UsernameKey: []byte(user), account.PasswordKey: []byte(password)},
+	}
+}
+
+// A chart that kept one Secret per account is read by label and by the Helm
+// release that rendered it, so a sibling release's Secrets in the same
+// namespace never feed this one.
+func TestSeedReadsPerAccountSources(t *testing.T) {
+	ctx := context.Background()
+	m := newMigrator(t,
+		release(`{"users":{"web":{},"Api.1":{}}}`, "0.1.0", true),
+		perAccountSource("postgres-orders-web-credentials", "postgres-orders", "web", "hunter2"),
+		perAccountSource("postgres-orders-api-1-credentials", "postgres-orders", "Api.1", "secret"),
+		perAccountSource("postgres-other-web-credentials", "postgres-other", "web", "sibling"),
+	)
+	m.o.formatName = format.Plaintext
+	m.o.labels = labelFlags{"rabbitmq.com/topology-operator": "true"}
+	m.o.sourceSelector = labelFlags{"apps.cozystack.io/user-secret": "true"}
+	m.o.sourceKey = account.PasswordKey
+	if err := m.seed(ctx); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct{ secret, user, plain string }{{"postgres-orders.web.account", "web", "hunter2"}, {"postgres-orders.api-1.account", "Api.1", "secret"}} {
+		sec, ok := m.secret(t, c.secret)
+		if !ok {
+			t.Fatalf("%s not written", c.secret)
+		}
+		if string(sec.Data[account.UsernameKey]) != c.user || string(sec.Data[account.PasswordKey]) != c.plain {
+			t.Fatalf("%s data = %q", c.secret, sec.Data)
+		}
+		if sec.Labels["rabbitmq.com/topology-operator"] != "true" || sec.Annotations[account.FormatAnnotation] != format.Plaintext {
+			t.Fatalf("%s meta = %+v", c.secret, sec.ObjectMeta)
+		}
+	}
+	hr := &helmv2.HelmRelease{}
+	if err := m.c.Get(ctx, types.NamespacedName{Namespace: "tenant-foo", Name: "postgres-orders"}, hr); err != nil {
+		t.Fatal(err)
+	}
+	if hr.Annotations[account.SeedAnnotation] != "true" {
+		t.Fatal("a release whose accounts all got a Secret must be marked for seeding")
+	}
+}
+
+func TestSeedWithoutPerAccountSourcesLeavesTheReleaseUnmarked(t *testing.T) {
+	ctx := context.Background()
+	m := newMigrator(t, release(`{"users":{"web":{}}}`, "0.1.0", true))
+	m.o.formatName = format.Plaintext
+	m.o.sourceSelector = labelFlags{"apps.cozystack.io/user-secret": "true"}
+	m.o.sourceKey = account.PasswordKey
+	if err := m.seed(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := m.secret(t, "postgres-orders.web.account"); ok {
+		t.Fatal("no account Secret can be written without its plaintext")
+	}
+	hr := &helmv2.HelmRelease{}
+	if err := m.c.Get(ctx, types.NamespacedName{Namespace: "tenant-foo", Name: "postgres-orders"}, hr); err != nil {
+		t.Fatal(err)
+	}
+	if hr.Annotations[account.SeedAnnotation] == "true" {
+		t.Fatal("a release whose passwords are gone must not be seeded with random ones")
+	}
+}
+
+func TestRetireSourceDeletesPerAccountSourcesOfThisReleaseOnly(t *testing.T) {
+	ctx := context.Background()
+	hr := release(`{"users":{"web":{}}}`, "0.2.0", true)
+	m := newMigrator(t, hr,
+		perAccountSource("postgres-orders-web-credentials", "postgres-orders", "web", "hunter2"),
+		perAccountSource("postgres-other-web-credentials", "postgres-other", "web", "sibling"),
+	)
+	m.o.sourceSelector = labelFlags{"apps.cozystack.io/user-secret": "true"}
+	m.o.sourceKey = account.PasswordKey
+	if err := m.retireSource(ctx, hr); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := m.secret(t, "postgres-orders-web-credentials"); ok {
+		t.Fatal("the release's per-account source must be deleted")
+	}
+	if _, ok := m.secret(t, "postgres-other-web-credentials"); !ok {
+		t.Fatal("a sibling release's Secret must be left alone")
+	}
+}
+
+func TestHidePlatformSecretsLabelsAnOperatorSecret(t *testing.T) {
+	ctx := context.Background()
+	hr := release(`{}`, "0.2.0", true)
+	admin := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "postgres-orders-default-user", Namespace: "tenant-foo", Labels: map[string]string{
+		corev1alpha1.TenantResourceLabelKey: "true", "app.kubernetes.io/name": "orders",
+	}}}
+	m := newMigrator(t, hr, admin)
+	m.o.hideSuffixes = stringFlags{"-default-user", "-missing"}
+	if err := m.hidePlatformSecrets(ctx, hr); err != nil {
+		t.Fatal(err)
+	}
+	sec, ok := m.secret(t, "postgres-orders-default-user")
+	if !ok || sec.Labels[corev1alpha1.TenantResourceLabelKey] != "false" || sec.Labels["app.kubernetes.io/name"] != "orders" {
+		t.Fatalf("secret = %+v", sec)
+	}
+}
+
+func TestRunRefusesTwoWaysToFindPerAccountSources(t *testing.T) {
+	err := run([]string{"seed", "--migration=66", "--kind=RabbitMQ", "--format=plaintext", "--source-key=password", "--source-per-account", "--source-selector=apps.cozystack.io/user-secret=true"})
+	if err == nil || !strings.Contains(err.Error(), "pass one") {
+		t.Fatalf("err = %v", err)
+	}
+}
