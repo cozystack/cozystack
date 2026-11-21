@@ -61,12 +61,14 @@ CHART="$REPO_ROOT/packages/system/mariadb-rd"
 
 NORMALIZE='{exclude: (.exclude // [] | sort), include: (.include // [] | sort)}'
 
-# The complete tenant-visible Secret surface: the credentials Secret by name,
-# the trust anchor by label, every key-bearing and credential Secret withheld
-# by name. mariadb-<name>.ca-tls holds the CA private key and mariadb-<name>.tls
+# The complete tenant-visible Secret surface: the trust anchor by label, and
+# nothing by name. Every key-bearing and credential Secret is withheld by name,
+# <release>-credentials among them: it holds only root, the platform's own
+# account, and tenant users are Credentials whose account Secrets no definition
+# selects. mariadb-<name>.ca-tls holds the CA private key and mariadb-<name>.tls
 # the server key; the operator's own -ca, -server-cert and -client-cert hold
 # keys too. None of them may reach a tenant, by name or by a label they carry.
-EXPECTED_SECRETS='{"exclude":[{"resourceNames":["mariadb-{{ .name }}.ca-tls","mariadb-{{ .name }}.tls","mariadb-{{ .name }}-ca","mariadb-{{ .name }}-server-cert","mariadb-{{ .name }}-client-cert","mariadb-{{ .name }}-root","mariadb-{{ .name }}-password","mariadb-{{ .name }}-repl-password","mariadb-{{ .name }}-metrics-password","mariadb-{{ .name }}-metrics-config","mariadb-{{ .name }}-backup","mariadb-{{ .name }}-regsecret"]}],"include":[{"matchLabels":{"internal.cozystack.io/tenant-ca":"true"}},{"resourceNames":["mariadb-{{ .name }}-credentials"]}]}'
+EXPECTED_SECRETS='{"exclude":[{"resourceNames":["mariadb-{{ .name }}.ca-tls","mariadb-{{ .name }}.tls","mariadb-{{ .name }}-ca","mariadb-{{ .name }}-server-cert","mariadb-{{ .name }}-client-cert","mariadb-{{ .name }}-credentials","mariadb-{{ .name }}-root","mariadb-{{ .name }}-password","mariadb-{{ .name }}-repl-password","mariadb-{{ .name }}-metrics-password","mariadb-{{ .name }}-metrics-config","mariadb-{{ .name }}-backup","mariadb-{{ .name }}-regsecret"]}],"include":[{"matchLabels":{"internal.cozystack.io/tenant-ca":"true"}}]}'
 
 # The Services an instance exposes, pinned for the same reason: a catch-all
 # selector reaches this list too, and nothing else in the tree holds it.
@@ -133,7 +135,7 @@ EXPECTED_SERVICES='{"exclude":[],"include":[{"resourceNames":["mariadb-{{ .name 
   # cert-manager for are joined with a dot, everything else with a hyphen, so
   # a loop that supplied the hyphen itself would look for names nothing renders.
   for n in .ca-tls .tls -ca -server-cert -client-cert \
-           -root -password -repl-password -metrics-password -metrics-config \
+           -credentials -root -password -repl-password -metrics-password -metrics-config \
            -backup -regsecret; do
     hits=$(printf '%s\n' "$rendered" | yq eval-all \
       "[.. | select(has(\"secrets\")) | .secrets.exclude[].resourceNames[]? | select(. == \"mariadb-{{ .name }}$n\")] | length" \
@@ -150,7 +152,7 @@ EXPECTED_SERVICES='{"exclude":[],"include":[{"resourceNames":["mariadb-{{ .name 
 # Whole-structure comparison. Anything added to the tenant's Secret surface --
 # by name, by label, or by an unrestricted entry -- changes this string, and so
 # does anything removed from the backstop.
-@test "mariadb-rd grants exactly the credentials Secret and the trust anchor" {
+@test "mariadb-rd grants exactly the trust anchor" {
   rendered=$(helm template mariadb-rd "$CHART") || return 1
 
   if [ -z "$rendered" ]; then

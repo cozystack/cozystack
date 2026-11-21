@@ -17,13 +17,10 @@ rules:
   - {{ .Release.Name }}-secondary
   {{- end }}
   verbs: ["get", "list", "watch"]
-- apiGroups:
-  - ""
-  resources:
-  - secrets
-  resourceNames:
-  - {{ .Release.Name }}-credentials
-  verbs: ["get", "list", "watch"]
+# No Secret is granted here. <release>-credentials holds only root, the
+# platform's own account, and each tenant user is a core.cozystack.io
+# Credential backed by an account Secret no tenant reads.
+#
 # The TLS Secrets are deliberately NOT granted here, key-bearing or not.
 # .ca-tls and the operator's own -ca hold the CA private key, .tls holds the
 # server private key, and -ca-bundle — while key-free — is still an operator

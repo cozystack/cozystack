@@ -2346,7 +2346,7 @@ func (r *REST) warnRemovedKubernetesFields(ctx context.Context, app *appsv1alpha
 // getting a silent 200, and where the password comes from now.
 var removedUserPasswordKinds = map[string]string{
 	postgresKind:   mintedPasswordWarning,
-	mariadbKind:    "spec.users[%q].password is ignored: passwords are auto-generated into the <release>-credentials Secret and cannot be set from values. Read the current password from that Secret; editing this field has no effect.",
+	mariadbKind:    mintedPasswordWarning,
 	clickhouseKind: mintedPasswordWarning,
 }
 
