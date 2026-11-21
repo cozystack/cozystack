@@ -207,6 +207,12 @@ spec:
       {{- $_ := set $userRoles $user $roles }}
     {{- end }}
   {{- end }}
+  {{- /*
+    Each user reads its password from the account Secret the platform keeps
+    (accounts.yaml). With the Secret missing the operator skips the user, so an
+    account nobody seeded or minted for keeps whatever password it had.
+  */}}
+  {{- include "mongodb.accountsGuard" $ }}
   users:
     {{- range $username, $user := .Values.users }}
     {{- $roles := index $userRoles $username }}
@@ -216,7 +222,7 @@ spec:
     - name: {{ $username }}
       db: admin
       passwordSecretRef:
-        name: {{ $.Release.Name }}-user-{{ $username }}
+        name: {{ include "mongodb.accountSecret" (list $ $username) | quote }}
         key: password
       roles:
         {{- range $roles }}

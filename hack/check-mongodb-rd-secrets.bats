@@ -55,8 +55,9 @@ SELF="$REPO_ROOT/hack/check-mongodb-rd-secrets.bats"
   # grep-based tests would not notice either, since the strings stay in the
   # file. Deleting `include` outright is already caught by the label grep; this
   # covers the rename.
+  # One entry since the credentials Secret left include: the label selector.
   n="$(yq '.spec.secrets.include // [] | length' "$COZYRDS")"
-  if [ "$n" -lt 2 ]; then
+  if [ "$n" -lt 1 ]; then
     echo "spec.secrets.include has $n entries; the structural checks would be vacuous" >&2
     exit 1
   fi
@@ -126,21 +127,19 @@ SELF="$REPO_ROOT/hack/check-mongodb-rd-secrets.bats"
   done
 }
 
-@test "mongodb-rd cozyrds still delivers the credentials secret" {
-  # The exclude list added alongside the trust anchor is evaluated BEFORE
-  # include and wins outright, so it now sits upstream of this pre-existing
-  # grant. Every other line in that block is about withholding a Secret, which
-  # makes adding this one to it a plausible edit — and one that would silently
-  # revoke the tenant's access to their own connection string. Assert both
-  # directions.
+@test "mongodb-rd cozyrds hides the databaseAdmin credentials secret" {
+  # <release>-credentials holds the databaseAdmin system user, a platform
+  # account since tenant users became Credentials minted through the
+  # Cozystack API. It must be excluded and never included: an include entry
+  # would hand the platform password back to every tenant reader.
   inc="$(yq '[.spec.secrets.include[].resourceNames[]? | select(. == "mongodb-{{ .name }}-credentials")] | length' "$COZYRDS")"
-  if [ "$inc" != "1" ]; then
-    echo "credentials is not granted via include (found $inc entries)" >&2
+  if [ "$inc" != "0" ]; then
+    echo "credentials is still granted via include (found $inc entries)" >&2
     exit 1
   fi
   exc="$(yq '[.spec.secrets.exclude[].resourceNames[]? | select(. == "mongodb-{{ .name }}-credentials")] | length' "$COZYRDS")"
-  if [ "$exc" != "0" ]; then
-    echo "credentials appears in exclude, which wins over include" >&2
+  if [ "$exc" != "1" ]; then
+    echo "credentials is not excluded (found $exc entries)" >&2
     exit 1
   fi
 }
