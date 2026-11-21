@@ -194,7 +194,7 @@ DOCKERFILE
 
 @test "a failed ownership patch stops before stamping" {
   prep
-  export FAKE_PATCH_FAIL="serviceaccounts \"cozystack-credentials-finish-63\" not found"
+  export FAKE_PATCH_FAIL="serviceaccounts \"cozystack-credentials-migration-63\" not found"
   rc=0
   run_migration 63 >"$WORK/out" 2>&1 || rc=$?
   cat "$WORK/out"; cat "$FAKE_CMDLOG"

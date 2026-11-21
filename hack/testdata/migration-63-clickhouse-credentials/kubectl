@@ -38,7 +38,7 @@ case "$args" in
     exit 0
     ;;
 
-  *"delete serviceaccount cozystack-credentials-finish-63"*)
+  *"delete serviceaccount cozystack-credentials-migration-63"*)
     # The hook deletes a ServiceAccount left owned by the Job it just deleted,
     # so the apply recreates a fresh, owner-less one.
     log "DELETE-SA"
@@ -55,7 +55,7 @@ case "$args" in
     exit 0
     ;;
 
-  *"patch serviceaccount cozystack-credentials-finish-63"*)
+  *"patch serviceaccount cozystack-credentials-migration-63"*)
     # The ownerReference tying the ServiceAccount to the Job.
     if [ -n "${FAKE_PATCH_FAIL:-}" ]; then
       printf '%s\n' "$FAKE_PATCH_FAIL" >&2
@@ -87,10 +87,10 @@ case "$args" in
         crb=$(printf '%s\n' "$manifest" | grep -c '^kind: ClusterRoleBinding$')
         # The binding must grant the least-privilege role, never cluster-admin.
         admin=$(printf '%s\n' "$manifest" | grep -c 'cluster-admin')
-        jobname=$(printf '%s\n' "$manifest" | grep -c '^  name: cozystack-credentials-migration-63$')
+        jobname=$(printf "%s\n" "$manifest" | sed -n "/^kind: Job$/,/^spec:$/p" | grep -c "^  name: cozystack-credentials-migration-63$")
         mig=$(printf '%s\n' "$manifest" | grep -c -- '--migration=63')
         img=$(printf '%s\n' "$manifest" | grep -c "^          image: ${IMAGE}$")
-        sacc=$(printf '%s\n' "$manifest" | grep -c '^      serviceAccountName: cozystack-credentials-finish-63$')
+        sacc=$(printf '%s\n' "$manifest" | grep -c '^      serviceAccountName: cozystack-credentials-migration-63$')
         # The Job keeps backup as a platform key and rotates it, refuses the
         # reserved names and carries the values path.
         rotate=$(printf '%s\n' "$manifest" | grep -c -- '--rotate-key=backup')

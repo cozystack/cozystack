@@ -27,8 +27,9 @@
 # that Job directly rather than rendering it from the platform chart, for the
 # reasons migration 62 gives, and deletes and recreates it on a rerun.
 #
-# The Job's ServiceAccount, cozystack-credentials-finish-63, is bound to a
-# least-privilege ClusterRole of the same name, not cluster-admin: finish needs only CRUD on Secrets, get/list/patch on
+# The Job and its ServiceAccount, ClusterRole and ClusterRoleBinding are all
+# named cozystack-credentials-migration-63; the RBAC is least-privilege, not
+# cluster-admin: finish needs only CRUD on Secrets, get/list/patch on
 # HelmReleases (the rotation suspends, resumes and annotates them), create on
 # Events, and its state ConfigMap. The ServiceAccount, ClusterRole and
 # ClusterRoleBinding carry this migration's number, so this hook never deletes
@@ -86,7 +87,7 @@ fi
 kubectl delete job cozystack-credentials-migration-63 \
   --namespace "$NAMESPACE" \
   --ignore-not-found
-kubectl delete serviceaccount cozystack-credentials-finish-63 \
+kubectl delete serviceaccount cozystack-credentials-migration-63 \
   --namespace "$NAMESPACE" \
   --ignore-not-found
 
@@ -94,7 +95,7 @@ kubectl apply --filename - <<YAML
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: cozystack-credentials-finish-63
+  name: cozystack-credentials-migration-63
 rules:
   - apiGroups: [""]
     resources: ["secrets"]
@@ -112,20 +113,20 @@ rules:
 apiVersion: v1
 kind: ServiceAccount
 metadata:
-  name: cozystack-credentials-finish-63
+  name: cozystack-credentials-migration-63
   namespace: ${NAMESPACE}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  name: cozystack-credentials-finish-63
+  name: cozystack-credentials-migration-63
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
-  name: cozystack-credentials-finish-63
+  name: cozystack-credentials-migration-63
 subjects:
   - kind: ServiceAccount
-    name: cozystack-credentials-finish-63
+    name: cozystack-credentials-migration-63
     namespace: ${NAMESPACE}
 ---
 apiVersion: batch/v1
@@ -141,7 +142,7 @@ spec:
       labels:
         policy.cozystack.io/allow-to-apiserver: "true"
     spec:
-      serviceAccountName: cozystack-credentials-finish-63
+      serviceAccountName: cozystack-credentials-migration-63
       restartPolicy: OnFailure
       containers:
         - name: migration
@@ -163,7 +164,7 @@ spec:
             - --timeout=30m
           env:
             - name: CREDENTIALS_MIGRATE_ACTOR
-              value: system:serviceaccount:${NAMESPACE}:cozystack-credentials-finish-63
+              value: system:serviceaccount:${NAMESPACE}:cozystack-credentials-migration-63
 YAML
 
 # Tie the ServiceAccount's lifetime to the Job: when the Job is deleted (its
@@ -178,7 +179,7 @@ if [ -z "$job_uid" ]; then
   echo "cannot read the finish Job's uid to own its ServiceAccount" >&2
   exit 1
 fi
-kubectl patch serviceaccount cozystack-credentials-finish-63 \
+kubectl patch serviceaccount cozystack-credentials-migration-63 \
   --namespace "$NAMESPACE" \
   --type merge \
   --patch "{\"metadata\":{\"ownerReferences\":[{\"apiVersion\":\"batch/v1\",\"kind\":\"Job\",\"name\":\"cozystack-credentials-migration-63\",\"uid\":\"${job_uid}\"}]}}"
