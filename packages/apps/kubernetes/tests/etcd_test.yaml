@@ -212,6 +212,22 @@ tests:
             operator: NotIn
             values: ["kubernetes-alpha-etcd"]
 
+      - contains:
+          path: spec.ingressDeny[0].fromEndpoints[0].matchExpressions
+          content:
+            key: etcd-operator.cozystack.io/cluster
+            operator: NotIn
+            values: ["kubernetes-alpha-etcd"]
+      - equal:
+          path: spec.ingressDeny[1].fromEndpoints[0].matchExpressions
+          value:
+            - key: k8s:io.kubernetes.pod.namespace
+              operator: NotIn
+              values: [tenant-test, kube-system]
+            - key: k8s:io.cilium.k8s.namespace.labels.cozystack.io/system
+              operator: NotIn
+              values: ["true"]
+
   - it: denies the etcd ports to sources outside the cluster
     template: templates/etcd.yaml
     capabilities:
