@@ -343,7 +343,14 @@ func (r *CredentialTemplateReconciler) SetupWithManager(mgr ctrl.Manager, accoun
 // watches only templates, so helm-controller's status writes do not wake it.
 type CredentialValuesReconciler struct {
 	client.Client
+	// Reader checks Secrets uncached, for the reason
+	// CredentialTemplateReconciler gives.
+	Reader client.Reader
 }
+
+// valuesRecheck is how soon a release whose entries were kept for a template
+// not seen yet is looked at again.
+const valuesRecheck = 30 * time.Second
 
 // +kubebuilder:rbac:groups=helm.toolkit.fluxcd.io,resources=helmreleases,verbs=get;list;watch;update;patch
 
@@ -357,12 +364,54 @@ func (r *CredentialValuesReconciler) Reconcile(ctx context.Context, req ctrl.Req
 		return ctrl.Result{}, err
 	}
 	want := DesiredValuesFrom(hr, templates.Items)
+	kept, err := r.keepPending(ctx, hr, want)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	want = append(want, kept...)
+	result := ctrl.Result{}
+	if len(kept) > 0 {
+		result.RequeueAfter = valuesRecheck
+	}
 	if equality.Semantic.DeepEqual(hr.Spec.ValuesFrom, want) {
-		return ctrl.Result{}, nil
+		return result, nil
 	}
 	updated := hr.DeepCopy()
 	updated.Spec.ValuesFrom = want
-	return ctrl.Result{}, r.Update(ctx, updated)
+	return result, r.Update(ctx, updated)
+}
+
+// keepPending returns the account entries of the live release that no
+// template accounts for yet but whose Secret exists: the conversion writes
+// both before the converted chart renders the templates, and the templates
+// of one release reach this controller one event at a time. Dropping such an
+// entry would take the account out of the chart until its template appears.
+// An entry goes once its Secret is gone, which the garbage collector does
+// after the template is removed.
+func (r *CredentialValuesReconciler) keepPending(ctx context.Context, hr *helmv2.HelmRelease, want []helmv2.ValuesReference) ([]helmv2.ValuesReference, error) {
+	present := map[string]bool{}
+	for _, ref := range want {
+		if account.IsAccountValuesFrom(ref) {
+			present[ref.Name] = true
+		}
+	}
+	var kept []helmv2.ValuesReference
+	for _, ref := range hr.Spec.ValuesFrom {
+		if !account.IsAccountValuesFrom(ref) || present[ref.Name] {
+			continue
+		}
+		sec := &metav1.PartialObjectMetadata{}
+		sec.SetGroupVersionKind(corev1.SchemeGroupVersion.WithKind("Secret"))
+		err := r.Reader.Get(ctx, types.NamespacedName{Namespace: hr.Namespace, Name: ref.Name}, sec)
+		switch {
+		case apierrors.IsNotFound(err):
+			continue
+		case err != nil:
+			return nil, err
+		}
+		kept = append(kept, ref)
+	}
+	return kept, nil
 }
 
 // DesiredValuesFrom returns the valuesFrom of a HelmRelease with its account

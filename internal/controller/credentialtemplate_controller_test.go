@@ -260,3 +260,42 @@ func TestDesiredValuesFrom(t *testing.T) {
 		t.Errorf("valuesFrom = %+v, want the platform values, then api and web, and no entry for a removed account", got)
 	}
 }
+
+func TestCredentialValuesKeepsAnEntryWhoseSecretExists(t *testing.T) {
+	scheme := runtime.NewScheme()
+	for _, add := range []func(*runtime.Scheme) error{corev1.AddToScheme, helmv2.AddToScheme, cozyv1alpha1.AddToScheme} {
+		if err := add(scheme); err != nil {
+			t.Fatal(err)
+		}
+	}
+	pending := account.ValuesFrom("clickhouse-logs.api.account", "_accounts", "api")
+	gone := account.ValuesFrom("clickhouse-logs.gone.account", "_accounts", "gone")
+	hr := &helmv2.HelmRelease{ObjectMeta: metav1.ObjectMeta{Name: "clickhouse-logs", Namespace: ctNamespace}}
+	hr.Spec.ValuesFrom = []helmv2.ValuesReference{{Kind: "Secret", Name: "cozystack-values"}, pending, gone}
+	tmpl := &cozyv1alpha1.CredentialTemplate{
+		ObjectMeta: metav1.ObjectMeta{Name: "clickhouse-logs.web", Namespace: ctNamespace, Annotations: map[string]string{account.ReleaseNameAnnotation: "clickhouse-logs"}},
+		Spec:       cozyv1alpha1.CredentialTemplateSpec{Username: "web", ValuesPath: "_accounts"},
+	}
+	// The conversion wrote api's Secret before the chart rendered its template.
+	sec := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "clickhouse-logs.api.account", Namespace: ctNamespace}}
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(hr, tmpl, sec).Build()
+	r := &CredentialValuesReconciler{Client: c, Reader: c}
+	res, err := r.Reconcile(context.Background(), reconcile.Request{NamespacedName: types.NamespacedName{Namespace: ctNamespace, Name: "clickhouse-logs"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.RequeueAfter == 0 {
+		t.Error("a kept entry must be looked at again")
+	}
+	got := &helmv2.HelmRelease{}
+	if err := c.Get(context.Background(), types.NamespacedName{Namespace: ctNamespace, Name: "clickhouse-logs"}, got); err != nil {
+		t.Fatal(err)
+	}
+	names := map[string]bool{}
+	for _, ref := range got.Spec.ValuesFrom {
+		names[ref.Name] = true
+	}
+	if !names["clickhouse-logs.web.account"] || !names["clickhouse-logs.api.account"] || names["clickhouse-logs.gone.account"] {
+		t.Errorf("valuesFrom = %+v, want web (template), api (Secret, template pending), and no gone", got.Spec.ValuesFrom)
+	}
+}
