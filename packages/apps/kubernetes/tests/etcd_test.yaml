@@ -1,0 +1,503 @@
+suite: each cluster owns its etcd unless it already runs on a shared one
+
+release:
+  name: kubernetes-alpha
+  namespace: tenant-test
+
+values:
+  - values-ci.yaml
+
+templates:
+  - templates/cluster.yaml
+  - templates/etcd.yaml
+  - templates/delete.yaml
+
+# helm template has no cluster, so lookup returns nothing and every render
+# below is a new cluster unless a test hands the provider a live object.
+kubernetesProvider: &provider
+  scheme: &scheme
+    "controlplane.cluster.x-k8s.io/v1alpha1/KamajiControlPlane":
+      gvr:
+        group: "controlplane.cluster.x-k8s.io"
+        version: "v1alpha1"
+        resource: "kamajicontrolplanes"
+      namespaced: true
+    "etcd-operator.cozystack.io/v1alpha2/EtcdCluster":
+      gvr:
+        group: "etcd-operator.cozystack.io"
+        version: "v1alpha2"
+        resource: "etcdclusters"
+      namespaced: true
+
+tests:
+  - it: renders an EtcdCluster named after the release, with three members by default
+    template: templates/etcd.yaml
+    documentSelector:
+      path: kind
+      value: EtcdCluster
+    asserts:
+      - equal:
+          path: metadata.name
+          value: kubernetes-alpha-etcd
+      - equal:
+          path: spec.replicas
+          value: 3
+      - equal:
+          path: spec.tls.client.serverSecretRef.name
+          value: kubernetes-alpha-etcd-server-tls
+      - notExists:
+          path: spec.storage.storageClassName
+
+  - it: renders a DataStore pointing at that EtcdCluster
+    template: templates/etcd.yaml
+    documentSelector:
+      path: kind
+      value: DataStore
+    asserts:
+      - equal:
+          path: metadata.name
+          value: tenant-test.kubernetes-alpha
+      - equal:
+          path: spec.endpoints[0]
+          value: kubernetes-alpha-etcd.tenant-test.svc:2379
+      - equal:
+          path: spec.tlsConfig.clientCertificate.certificate.secretReference.name
+          value: kubernetes-alpha-etcd-client-tls
+
+  - it: points the control plane at its own DataStore and labels it as an etcd client
+    template: templates/cluster.yaml
+    documentSelector:
+      path: kind
+      value: KamajiControlPlane
+    asserts:
+      - equal:
+          path: spec.dataStoreName
+          value: tenant-test.kubernetes-alpha
+      - equal:
+          path: spec.deployment.podAdditionalMetadata.labels["policy.cozystack.io/allow-to-etcd-cluster"]
+          value: kubernetes-alpha-etcd
+
+  - it: ignores a tenant etcd published through _namespace.etcd for a new cluster
+    template: templates/cluster.yaml
+    set:
+      _namespace:
+        etcd: tenant-root
+    documentSelector:
+      path: kind
+      value: KamajiControlPlane
+    asserts:
+      - equal:
+          path: spec.dataStoreName
+          value: tenant-test.kubernetes-alpha
+
+  - it: gives a second cluster in the same namespace its own names
+    template: templates/etcd.yaml
+    release:
+      name: kubernetes-beta
+      namespace: tenant-test
+    documentSelector:
+      path: kind
+      value: DataStore
+    asserts:
+      - equal:
+          path: metadata.name
+          value: tenant-test.kubernetes-beta
+      - equal:
+          path: spec.endpoints[0]
+          value: kubernetes-beta-etcd.tenant-test.svc:2379
+
+  - it: keeps the DataStore name inside 63 characters, the same on every render
+    template: templates/etcd.yaml
+    release:
+      name: kubernetes-a-name-of-exactly-thirty-two-chars
+      namespace: tenant-averyverylongtenantname-andanotherlongchild
+    documentSelector:
+      path: kind
+      value: DataStore
+    asserts:
+      - equal:
+          path: metadata.name
+          value: tenant-averyverylongtenantname-andanotherlongchild.kub-8fda7e7c
+      - matchRegex:
+          path: metadata.name
+          pattern: '^.{1,63}$'
+
+  - it: runs a single member on the replicated class and three on the local class
+    template: templates/etcd.yaml
+    set:
+      etcd:
+        replicas: 1
+      _cluster:
+        etcd-storage-class-local: local
+        etcd-storage-class-replicated: replicated
+    documentSelector:
+      path: kind
+      value: EtcdCluster
+    asserts:
+      - equal:
+          path: spec.replicas
+          value: 1
+      - equal:
+          path: spec.storage.storageClassName
+          value: replicated
+
+  - it: picks the local class for three members
+    template: templates/etcd.yaml
+    set:
+      _cluster:
+        etcd-storage-class-local: local
+        etcd-storage-class-replicated: replicated
+    documentSelector:
+      path: kind
+      value: EtcdCluster
+    asserts:
+      - equal:
+          path: spec.storage.storageClassName
+          value: local
+
+  # storageClassName is immutable on an EtcdCluster, so scaling 1 -> 3 must keep
+  # the class the cluster was created with rather than re-derive it.
+  - it: keeps the live StorageClass when the replica count changes
+    template: templates/etcd.yaml
+    set:
+      etcd:
+        replicas: 3
+      _cluster:
+        etcd-storage-class-local: local
+        etcd-storage-class-replicated: replicated
+    kubernetesProvider:
+      scheme: *scheme
+      objects:
+        - apiVersion: etcd-operator.cozystack.io/v1alpha2
+          kind: EtcdCluster
+          metadata:
+            name: kubernetes-alpha-etcd
+            namespace: tenant-test
+          spec:
+            storage:
+              storageClassName: replicated
+    documentSelector:
+      path: kind
+      value: EtcdCluster
+    asserts:
+      - equal:
+          path: spec.storage.storageClassName
+          value: replicated
+
+  - it: refuses an even member count
+    template: templates/etcd.yaml
+    set:
+      etcd:
+        replicas: 2
+    asserts:
+      - failedTemplate:
+          errorMessage: "etcd.replicas must be 1 or 3, got 2: an even member count tolerates no more failures than the odd count below it"
+
+  - it: renders the etcd network policy only where Cilium serves the API
+    template: templates/etcd.yaml
+    capabilities:
+      apiVersions:
+        - cilium.io/v2/CiliumNetworkPolicy
+    documentSelector:
+      path: kind
+      value: CiliumNetworkPolicy
+    asserts:
+      - equal:
+          path: spec.endpointSelector.matchLabels["etcd-operator.cozystack.io/cluster"]
+          value: kubernetes-alpha-etcd
+      - contains:
+          path: spec.ingressDeny[0].fromEndpoints[0].matchExpressions
+          content:
+            key: policy.cozystack.io/allow-to-etcd-cluster
+            operator: NotIn
+            values: ["kubernetes-alpha-etcd"]
+
+  - it: denies the etcd ports to sources outside the cluster
+    template: templates/etcd.yaml
+    capabilities:
+      apiVersions:
+        - cilium.io/v2/CiliumNetworkPolicy
+    documentSelector:
+      path: kind
+      value: CiliumNetworkPolicy
+    asserts:
+      - equal:
+          path: spec.ingressDeny[2].fromEntities
+          value: [world]
+
+  - it: gives the defrag job the quota of this cluster's own etcd
+    template: templates/etcd.yaml
+    documentSelector:
+      path: kind
+      value: CronJob
+    asserts:
+      - contains:
+          path: spec.jobTemplate.spec.template.spec.containers[0].args
+          content: --compaction=false
+      - contains:
+          path: spec.jobTemplate.spec.template.spec.containers[0].args
+          content: --etcd-storage-quota-bytes=4080218931
+
+  # The longest name the app allows. The apiserver refuses a CronJob name over
+  # 52 characters, and kubernetes-<name>-etcd-defrag runs to 55.
+  - it: keeps the defrag CronJob name inside 52 characters for the longest cluster name
+    template: templates/etcd.yaml
+    release:
+      name: kubernetes-abcdefghijklmnopqrstuvwxyz012345
+      namespace: tenant-test
+    documentSelector:
+      path: kind
+      value: CronJob
+    asserts:
+      - equal:
+          path: metadata.name
+          value: kubernetes-abcdefghijklmnopqrstuvwxyz012345-26c42cc8
+
+  - it: refuses to drop to one member while the etcd sits on the local class
+    template: templates/etcd.yaml
+    set:
+      etcd:
+        replicas: 1
+      _cluster:
+        etcd-storage-class-local: local
+        etcd-storage-class-replicated: replicated
+    kubernetesProvider:
+      scheme: *scheme
+      objects:
+        - apiVersion: etcd-operator.cozystack.io/v1alpha2
+          kind: EtcdCluster
+          metadata:
+            name: kubernetes-alpha-etcd
+            namespace: tenant-test
+          spec:
+            replicas: 3.0
+            storage:
+              storageClassName: local
+    asserts:
+      - failedTemplate:
+          errorMessage: 'etcd.replicas cannot drop to 1: the etcd of kubernetes-alpha keeps the StorageClass "local" it was created with, so a single member would hold the only copy of the control-plane state on a volume the platform does not count as replicated. Keep 3 members.'
+
+  - it: refuses to drop to one member off the replicated class when only that class is named
+    template: templates/etcd.yaml
+    set:
+      etcd:
+        replicas: 1
+      _cluster:
+        etcd-storage-class-replicated: replicated
+    kubernetesProvider:
+      scheme: *scheme
+      objects:
+        - apiVersion: etcd-operator.cozystack.io/v1alpha2
+          kind: EtcdCluster
+          metadata:
+            name: kubernetes-alpha-etcd
+            namespace: tenant-test
+          spec:
+            replicas: 3.0
+            storage:
+              storageClassName: some-default
+    asserts:
+      - failedTemplate: {}
+
+  # A single member created on the namespace default before the platform named
+  # a replicated class is already in that shape; refusing it would only block
+  # its upgrades.
+  - it: keeps rendering an etcd that was created with one member
+    template: templates/etcd.yaml
+    set:
+      etcd:
+        replicas: 1
+      _cluster:
+        etcd-storage-class-local: local
+        etcd-storage-class-replicated: replicated
+    kubernetesProvider:
+      scheme: *scheme
+      objects:
+        - apiVersion: etcd-operator.cozystack.io/v1alpha2
+          kind: EtcdCluster
+          metadata:
+            name: kubernetes-alpha-etcd
+            namespace: tenant-test
+          spec:
+            replicas: 1.0
+            storage:
+              storageClassName: local
+    documentSelector:
+      path: kind
+      value: EtcdCluster
+    asserts:
+      - equal:
+          path: spec.replicas
+          value: 1
+
+  - it: drops to one member on the replicated class
+    template: templates/etcd.yaml
+    set:
+      etcd:
+        replicas: 1
+      _cluster:
+        etcd-storage-class-local: local
+        etcd-storage-class-replicated: replicated
+    kubernetesProvider:
+      scheme: *scheme
+      objects:
+        - apiVersion: etcd-operator.cozystack.io/v1alpha2
+          kind: EtcdCluster
+          metadata:
+            name: kubernetes-alpha-etcd
+            namespace: tenant-test
+          spec:
+            replicas: 3.0
+            storage:
+              storageClassName: replicated
+    documentSelector:
+      path: kind
+      value: EtcdCluster
+    asserts:
+      - equal:
+          path: spec.replicas
+          value: 1
+
+  - it: does not admit a new cluster to the tenant's shared etcd
+    template: templates/cluster.yaml
+    documentSelector:
+      path: kind
+      value: KamajiControlPlane
+    asserts:
+      - notExists:
+          path: spec.deployment.podAdditionalMetadata.labels["policy.cozystack.io/allow-to-etcd"]
+
+  - it: lets the pre-delete hook release its TenantControlPlane and delete its etcd PKI
+    template: templates/delete.yaml
+    documentSelector:
+      path: kind
+      value: Role
+    asserts:
+      - contains:
+          path: rules
+          content:
+            apiGroups: ["kamaji.clastix.io"]
+            resources: ["tenantcontrolplanes"]
+            resourceNames: ["kubernetes-alpha"]
+            verbs: ["patch"]
+      - contains:
+          path: rules
+          content:
+            apiGroups: [""]
+            resources: ["secrets"]
+            resourceNames:
+              - kubernetes-alpha-etcd-peer-ca-tls
+              - kubernetes-alpha-etcd-ca-tls
+              - kubernetes-alpha-etcd-server-tls
+              - kubernetes-alpha-etcd-peer-tls
+              - kubernetes-alpha-etcd-client-tls
+            verbs: ["get", "delete"]
+      - contains:
+          path: rules
+          content:
+            apiGroups: ["cert-manager.io"]
+            resources: ["certificates"]
+            resourceNames:
+              - kubernetes-alpha-etcd-peer-ca
+              - kubernetes-alpha-etcd-ca
+              - kubernetes-alpha-etcd-server
+              - kubernetes-alpha-etcd-peer
+              - kubernetes-alpha-etcd-client
+            verbs: ["get", "delete"]
+
+  - it: keeps an existing cluster on the shared DataStore it runs on
+    template: templates/cluster.yaml
+    kubernetesProvider: &shared
+      scheme: *scheme
+      objects:
+        - apiVersion: controlplane.cluster.x-k8s.io/v1alpha1
+          kind: KamajiControlPlane
+          metadata:
+            name: kubernetes-alpha
+            namespace: tenant-test
+          spec:
+            dataStoreName: tenant-root
+    documentSelector:
+      path: kind
+      value: KamajiControlPlane
+    asserts:
+      - equal:
+          path: spec.dataStoreName
+          value: tenant-root
+      - notExists:
+          path: spec.deployment.podAdditionalMetadata.labels["policy.cozystack.io/allow-to-etcd-cluster"]
+
+  # A tenant switching its own etcd on changes _namespace.etcd for every cluster
+  # below it; following that would start a datastore migration on upgrade.
+  - it: does not follow a changed _namespace.etcd on an existing cluster
+    template: templates/cluster.yaml
+    set:
+      _namespace:
+        etcd: tenant-test
+    kubernetesProvider: *shared
+    documentSelector:
+      path: kind
+      value: KamajiControlPlane
+    asserts:
+      - equal:
+          path: spec.dataStoreName
+          value: tenant-root
+
+  - it: renders no etcd of its own for a cluster on a shared DataStore
+    template: templates/etcd.yaml
+    kubernetesProvider: *shared
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: still admits a cluster on a shared DataStore to the tenant's etcd
+    template: templates/cluster.yaml
+    kubernetesProvider: *shared
+    documentSelector:
+      path: kind
+      value: KamajiControlPlane
+    asserts:
+      - equal:
+          path: spec.deployment.podAdditionalMetadata.labels["policy.cozystack.io/allow-to-etcd"]
+          value: "true"
+
+  - it: gives the pre-delete hook nothing to remove from a shared etcd
+    template: templates/delete.yaml
+    kubernetesProvider: *shared
+    asserts:
+      - notContains:
+          path: rules
+          content:
+            apiGroups: ["kamaji.clastix.io"]
+            resources: ["tenantcontrolplanes"]
+            resourceNames: ["kubernetes-alpha"]
+            verbs: ["patch"]
+        documentSelector:
+          path: kind
+          value: Role
+      - notMatchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'Step 8'
+        documentSelector:
+          path: kind
+          value: Job
+
+  - it: stays on its own DataStore once the live control plane uses it
+    template: templates/cluster.yaml
+    kubernetesProvider:
+      scheme: *scheme
+      objects:
+        - apiVersion: controlplane.cluster.x-k8s.io/v1alpha1
+          kind: KamajiControlPlane
+          metadata:
+            name: kubernetes-alpha
+            namespace: tenant-test
+          spec:
+            dataStoreName: tenant-test.kubernetes-alpha
+    documentSelector:
+      path: kind
+      value: KamajiControlPlane
+    asserts:
+      - equal:
+          path: spec.dataStoreName
+          value: tenant-test.kubernetes-alpha

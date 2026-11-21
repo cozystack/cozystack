@@ -1,0 +1,47 @@
+suite: etcd cluster additionalMetadata
+
+templates:
+  - templates/tests/etcd-cluster.yaml
+
+release:
+  name: kubernetes-demo
+  namespace: tenant-demo
+
+tests:
+  - it: copies annotations onto the members next to the labels
+    set:
+      _cluster: {}
+      etcdClusterTest:
+        labels:
+          cozystack.io/service: kubernetes-etcd
+        annotations:
+          sdn.cozystack.io/vpc: virtualprivatecloud-demo
+    asserts:
+      - equal:
+          path: spec.additionalMetadata.labels["cozystack.io/service"]
+          value: kubernetes-etcd
+      - equal:
+          path: spec.additionalMetadata.annotations["sdn.cozystack.io/vpc"]
+          value: virtualprivatecloud-demo
+
+  - it: renders annotations alone without an empty labels map
+    set:
+      _cluster: {}
+      etcdClusterTest:
+        annotations:
+          sdn.cozystack.io/vpc: virtualprivatecloud-demo
+    asserts:
+      - equal:
+          path: spec.additionalMetadata.annotations["sdn.cozystack.io/vpc"]
+          value: virtualprivatecloud-demo
+      - notExists:
+          path: spec.additionalMetadata.labels
+
+  - it: renders no additionalMetadata when given neither
+    set:
+      _cluster: {}
+      etcdClusterTest:
+        replicas: 3
+    asserts:
+      - notExists:
+          path: spec.additionalMetadata

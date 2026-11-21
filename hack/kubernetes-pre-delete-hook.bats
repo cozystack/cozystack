@@ -30,6 +30,11 @@ CHART=packages/apps/kubernetes
 #   $KUBECTL_PRESENT -- these `get ... -o name` invocations print an object.
 #                       Anything not listed exits 0 with no output, which is
 #                       what `--ignore-not-found` does for an absent object.
+#
+# A present TenantControlPlane also answers Step 4a's read with the DataStore
+# in $KUBECTL_TCP_STORE and the finalizers in $KUBECTL_TCP_FINALIZERS, and a
+# patch of it stands for Kamaji's finalizer being removed: from then on the
+# TenantControlPlane reads as gone.
 
 # The ordinary end state after Step 4 waited: the TenantControlPlane is gone and
 # the datastore Secret is still there for Step 4b to clear.
@@ -59,6 +64,11 @@ FAIL_HR_DELETE_AND_LIST='*delete helmreleases*
 FAIL_TCP_PROBE='*get tenantcontrolplanes*'
 FAIL_SECRET_PROBE='*get secret*'
 
+# A cluster on its own etcd: the DataStore name the chart renders for test-k8s
+# in tenant-test, with Kamaji's datastore finalizer second in the list.
+OWN_STORE=tenant-test.test-k8s
+OWN_FINALIZERS='finalizer.kamaji.clastix.io/soot finalizer.kamaji.clastix.io'
+
 # Every failure at once. The two HelmRelease globs are distinguished by the
 # patch body: Step 1 suspends (no "finalizers" in its payload) and must keep
 # working, because it is not backstopped and `set -e` would end the run there.
@@ -66,6 +76,12 @@ FAIL_ALL='*delete helmreleases*
 *patch helmrelease*finalizers*
 *delete tenantcontrolplanes*
 *get tenantcontrolplanes*
+*patch secret*'
+
+# The same, with the TenantControlPlane still readable.
+FAIL_ALL_BUT_TCP_READS='*delete helmreleases*
+*patch helmrelease*finalizers*
+*delete tenantcontrolplanes*
 *patch secret*'
 
 # Extract the pre-delete Job's script from the rendered chart into $1. The
@@ -126,12 +142,23 @@ if matches "${KUBECTL_FAIL:-}"; then
 fi
 
 case "$args" in
+  *"patch tenantcontrolplanes"*)
+    : > "$KUBECTL_STATE/tcp-released"
+    ;;
+  *"get tenantcontrolplanes"*"jsonpath"*)
+    if matches "${KUBECTL_PRESENT:-}" && [ ! -e "$KUBECTL_STATE/tcp-released" ]; then
+      printf '%s\n' "${KUBECTL_TCP_STORE:-}"
+      for f in ${KUBECTL_TCP_FINALIZERS:-}; do printf '%s\n' "$f"; done
+    fi
+    ;;
   *"get helmreleases"*"-o name"*)
     echo "helmrelease.helm.toolkit.fluxcd.io/cilium"
     echo "helmrelease.helm.toolkit.fluxcd.io/coredns"
     ;;
   *"get tenantcontrolplanes"*"-o name"*)
-    matches "${KUBECTL_PRESENT:-}" && echo "tenantcontrolplane.kamaji.clastix.io/test-k8s"
+    if matches "${KUBECTL_PRESENT:-}" && [ ! -e "$KUBECTL_STATE/tcp-released" ]; then
+      echo "tenantcontrolplane.kamaji.clastix.io/test-k8s"
+    fi
     ;;
   *"get secret"*"-o name"*)
     matches "${KUBECTL_PRESENT:-}" && echo "secret/test-k8s-datastore-config"
@@ -159,8 +186,10 @@ run_hook() {
   # Truncated per call, not appended to: the "stub was reached" check below is
   # vacuous on a second run against a log the first run already filled.
   : > "$tmp/kubectl.log"
+  rm -rf "$tmp/state" && mkdir "$tmp/state"
   KUBECONFIG=/dev/null \
   KUBECTL_LOG="$tmp/kubectl.log" \
+  KUBECTL_STATE="$tmp/state" \
   KUBECTL_FAIL="$1" \
   KUBECTL_PRESENT="$2" \
   PATH="$tmp/bin:$PATH" sh "$tmp/s.sh" > "$tmp/out" 2>&1 || rc=$?
@@ -260,13 +289,16 @@ run_hook() {
   rm -rf "$tmp"
 }
 
-@test "a TenantControlPlane outliving Step 4 is reported even though no command failed" {
+@test "a TenantControlPlane on a shared DataStore outliving Step 4 is reported even though no command failed" {
   # Step 4 times out with the TCP still alive, so Step 4b declines to strip a
   # finalizer Kamaji may still own. Every kubectl call in Step 4b succeeds, so
   # nothing is caught by a `||` -- and the namespace is still wedged. This is
   # the one residue the script reports from a branch rather than from a failure.
+  # The shared etcd outlives the cluster, so Step 4a leaves Kamaji's own
+  # finalizer alone for it to drop the tenant's prefix from that etcd.
   setup_case
-  run_hook "$FAIL_TCP_DELETE" "$PRESENT_TCP_AND_SECRET"
+  KUBECTL_TCP_STORE=tenant-root KUBECTL_TCP_FINALIZERS="$OWN_FINALIZERS" \
+    run_hook "$FAIL_TCP_DELETE" "$PRESENT_TCP_AND_SECRET"
 
   [ "$rc" = 0 ]
   if grep -qF 'Cleanup completed successfully' "$tmp/out"; then
@@ -285,6 +317,62 @@ run_hook() {
     return 1
   fi
   grep -qF 'is still present, so Kamaji may still own' "$tmp/out"
+  if grep -qF 'patch tenantcontrolplanes' "$tmp/kubectl.log"; then
+    echo "FAIL: Kamaji's finalizer was removed from a TenantControlPlane on a shared DataStore"
+    cat "$tmp/out"
+    return 1
+  fi
+
+  rm -rf "$tmp"
+}
+
+@test "a TenantControlPlane on its own etcd outliving Step 4 is released and the run completes" {
+  # What Kamaji's finalizer removes lives in the etcd this uninstall deletes
+  # next, and an etcd that never came up keeps Kamaji from ever removing it.
+  # Step 4a takes it off, at the index it was read at, and the rest of the
+  # teardown then sees the TenantControlPlane gone.
+  setup_case
+  KUBECTL_TCP_STORE="$OWN_STORE" KUBECTL_TCP_FINALIZERS="$OWN_FINALIZERS" \
+    run_hook "$FAIL_TCP_DELETE" "$PRESENT_TCP_AND_SECRET"
+
+  [ "$rc" = 0 ]
+  grep -qF '"op":"test","path":"/metadata/finalizers/1","value":"finalizer.kamaji.clastix.io"' "$tmp/kubectl.log"
+  grep -qF 'Removing finalizers from secret/test-k8s-datastore-config' "$tmp/out"
+  grep -qF 'delete secrets test-k8s-etcd-peer-ca-tls test-k8s-etcd-ca-tls test-k8s-etcd-server-tls test-k8s-etcd-peer-tls test-k8s-etcd-client-tls' "$tmp/kubectl.log"
+  grep -qF 'Cleanup completed successfully' "$tmp/out"
+
+  rm -rf "$tmp"
+}
+
+@test "a rejected release of a TenantControlPlane on its own etcd fails before its etcd PKI goes" {
+  # Kamaji's finalizer is still on, so Kamaji still needs the etcd Helm deletes
+  # once the hook exits 0. The hook must stop before Step 8, name what it left,
+  # and leave the etcd's Secrets for the retried uninstall.
+  setup_case
+  KUBECTL_TCP_STORE="$OWN_STORE" KUBECTL_TCP_FINALIZERS="$OWN_FINALIZERS" \
+    run_hook "$FAIL_TCP_DELETE
+*patch tenantcontrolplanes*" "$PRESENT_TCP_AND_SECRET"
+
+  if [ "$rc" = 0 ]; then
+    echo "FAIL: the hook exited 0 with Kamaji's finalizer still on a TenantControlPlane that needs this etcd"
+    cat "$tmp/out"
+    return 1
+  fi
+  grep -qF 'failing before Step 8 so that its etcd is not deleted while Kamaji needs it' "$tmp/out"
+  summary=$(grep -F 'residue left by:' "$tmp/out")
+  case "$summary" in
+    *'step 4a (TenantControlPlane datastore finalizer)'*'step 4b (TenantControlPlane still deleting)'*) ;;
+    *)
+      echo "FAIL: the summary did not name both the rejected release and the TenantControlPlane left behind"
+      cat "$tmp/out"
+      return 1
+      ;;
+  esac
+  if grep -qF 'test-k8s-etcd-' "$tmp/kubectl.log"; then
+    echo "FAIL: the etcd PKI was deleted while Kamaji still needs the etcd"
+    cat "$tmp/out"
+    return 1
+  fi
 
   rm -rf "$tmp"
 }
@@ -293,11 +381,17 @@ run_hook() {
   # The probe is the gate that stops the finalizer being stripped from an owner
   # that still exists, so reading its failure as "confirmed gone" defeats it in
   # the one direction that does damage. The script must neither strip nor claim
-  # the run was clean.
+  # the run was clean. This render owns its etcd, so the same unknown also
+  # keeps that etcd: the hook fails before Step 8 rather than let Helm delete
+  # it under a TenantControlPlane that may still need it.
   setup_case
   run_hook "$FAIL_TCP_PROBE" ""
 
-  [ "$rc" = 0 ]
+  if [ "$rc" = 0 ]; then
+    echo "FAIL: the hook exited 0 without knowing whether Kamaji still needs this cluster's etcd"
+    cat "$tmp/out"
+    return 1
+  fi
   if grep -qF 'Cleanup completed successfully' "$tmp/out"; then
     echo "FAIL: cleanup claimed success without establishing whether the TenantControlPlane was gone"
     cat "$tmp/out"
@@ -338,10 +432,12 @@ run_hook() {
 }
 
 @test "every step that left residue is named in the closing message" {
+  # The TenantControlPlane reads fail as well, so on this cluster's own etcd the
+  # run ends before Step 8, and the summary it prints there is the closing one.
   setup_case
   run_hook "$FAIL_ALL" ""
 
-  [ "$rc" = 0 ]
+  [ "$rc" != 0 ]
   if grep -qF 'Cleanup completed successfully' "$tmp/out"; then
     echo "FAIL: cleanup claimed success with every remedy having failed"
     cat "$tmp/out"
@@ -382,7 +478,7 @@ run_hook() {
   # still end the run under `set -e`. Nothing but `set -e` enforces that, so a
   # `|| true` appended to one of them later would reinstate the exact defect
   # this file pins: a cleanup that did not happen, reported as success. Step 3
-  # stands in for Steps 3, 5, 6, 7 and the patch inside Step 1. Step 1's
+  # stands in for Steps 3, 5, 6, 7, 8 and the patch inside Step 1. Step 1's
   # enumeration is NOT among them: it carries `|| true` on purpose, because
   # Step 2 deletes by label rather than from that list, so a failure there
   # leaves nothing behind to report.
@@ -408,7 +504,9 @@ run_hook() {
   # its honesty with. This is a pre-delete hook: a non-zero exit aborts the Helm
   # uninstall before the release is removed, so the release stays in storage and
   # the same teardown is retried forever. Reporting failure through the exit
-  # code is what the closing message exists to avoid.
+  # code is what the closing message exists to avoid. Every remedy fails here
+  # against a TenantControlPlane on a shared DataStore, which this cluster's
+  # uninstall deletes nothing from.
   setup_case
 
   run_hook "" "$PRESENT_SECRET_ONLY"
@@ -418,9 +516,31 @@ run_hook() {
     return 1
   fi
 
-  run_hook "$FAIL_ALL" ""
+  KUBECTL_TCP_STORE=tenant-root KUBECTL_TCP_FINALIZERS="$OWN_FINALIZERS" \
+    run_hook "$FAIL_ALL_BUT_TCP_READS" "$PRESENT_TCP_AND_SECRET"
   if [ "$rc" != 0 ]; then
-    echo "FAIL: an all-failures run exited $rc, which would wedge the release"
+    echo "FAIL: an all-failures run on a shared DataStore exited $rc, which would wedge the release"
+    cat "$tmp/out"
+    return 1
+  fi
+
+  rm -rf "$tmp"
+}
+
+@test "fails before its etcd PKI goes when every remedy failed on a cluster's own etcd" {
+  # The one exception to exiting 0: Helm deletes this cluster's etcd once the
+  # hook exits 0, and a TenantControlPlane that cannot be read may still need
+  # it. Failing keeps the etcd and its PKI for the retried uninstall.
+  setup_case
+  run_hook "$FAIL_ALL" ""
+
+  if [ "$rc" = 0 ]; then
+    echo "FAIL: an all-failures run on a cluster's own etcd exited 0, letting Helm delete the etcd"
+    cat "$tmp/out"
+    return 1
+  fi
+  if grep -qF 'test-k8s-etcd-' "$tmp/kubectl.log"; then
+    echo "FAIL: the etcd PKI was deleted although the TenantControlPlane could not be read"
     cat "$tmp/out"
     return 1
   fi

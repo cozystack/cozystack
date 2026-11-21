@@ -277,9 +277,13 @@
   # package itself stays installed, because tenant-application declares
   # dependsOn cozystack.monitoring-application. Turning it on also means
   # flipping monitoring.rootEnabled in hack/e2e-platform-packages.sh.
-  kubectl patch tenants/root -n tenant-root --type merge -p '{"spec":{"host":"example.org","ingress":true,"monitoring":false,"etcd":true,"isolated":true, "seaweedfs": true}}'
+  #
+  # The root etcd stays off as well: every tenant Kubernetes cluster brings its
+  # own, and leaving the shared one off is what proves a cluster comes up with
+  # no tenant etcd anywhere above it.
+  kubectl patch tenants/root -n tenant-root --type merge -p '{"spec":{"host":"example.org","ingress":true,"monitoring":false,"etcd":false,"isolated":true, "seaweedfs": true}}'
 
-  timeout 60 sh -ec 'until kubectl get hr -n tenant-root etcd ingress seaweedfs tenant-root >/dev/null 2>&1; do sleep 1; done'
+  timeout 60 sh -ec 'until kubectl get hr -n tenant-root ingress seaweedfs tenant-root >/dev/null 2>&1; do sleep 1; done'
   # tenant-root parent HR only flips Ready after every child HR is Ready,
   # so listing the children this patch enables plus the parent gives precise
   # failure messages without redundant separate waits. seaweedfs now
@@ -290,7 +294,7 @@
   # parent's Ready can land past the HR's single 15m timeout window; the HR
   # re-reconciles every 1m until it converges, so this wait is 20m to observe
   # that eventual Ready rather than expiring first.
-  kubectl wait hr/etcd hr/ingress hr/seaweedfs hr/tenant-root \
+  kubectl wait hr/ingress hr/seaweedfs hr/tenant-root \
     -n tenant-root --timeout=20m --for=condition=ready
 
 
@@ -300,16 +304,6 @@
   # NGINX ingress controller
   timeout 60 sh -ec 'until kubectl get deploy root-ingress-controller -n tenant-root >/dev/null 2>&1; do sleep 1; done'
   kubectl wait deploy/root-ingress-controller -n tenant-root --timeout=10m --for=condition=available
-
-  # etcd cluster. The v1alpha2 operator manages member Pods directly and creates
-  # NO StatefulSet, so gate on the EtcdCluster readiness signal (mirrors
-  # hack/e2e-chainsaw/etcd and the examples) plus the member Pods themselves.
-  timeout 60 sh -ec 'until kubectl -n tenant-root get etcdcluster.etcd-operator.cozystack.io/etcd >/dev/null 2>&1; do sleep 2; done'
-  kubectl -n tenant-root wait etcdcluster.etcd-operator.cozystack.io/etcd \
-    --for=jsonpath='{.status.conditions[?(@.type=="Available")].status}'=True --timeout=10m
-  kubectl -n tenant-root wait pod \
-    -l app.kubernetes.io/name=etcd,app.kubernetes.io/instance=etcd,app.kubernetes.io/managed-by=etcd-operator \
-    --for=condition=ready --timeout=10m
 }
 
 @test "Keycloak OIDC stack is healthy" {
@@ -367,6 +361,48 @@
   # has necessarily been re-reconciled, so Ready here means the whole upgrade
   # converged -- not just the one Deployment this test watched.
   kubectl wait hr/dashboard -n cozy-dashboard --timeout=10m --for=condition=ready
+
+  # The login redirect oauth2-proxy builds from the alpha config: the realm path
+  # must reach the browser-facing auth URL, an allowed kc_idp_hint must be passed
+  # through to Keycloak, and a value outside the allow pattern must be dropped.
+  # Asserted after the port-forward is gone: on failure set -e would skip a kill
+  # placed after the assertion, and a trap would hide the TAP line.
+  pf_log=$(mktemp)
+  kubectl -n cozy-dashboard port-forward deploy/incloud-web-gatekeeper 18000:8000 >"$pf_log" 2>&1 &
+  pf_pid=$!
+  hinted=""
+  rejected=""
+  if timeout 30 sh -ec 'until nc -z localhost 18000; do sleep 0.2; done'; then
+    hinted=$(curl -sS -o /dev/null -w '%{redirect_url}' 'http://localhost:18000/oauth2/start?kc_idp_hint=e2e-idp') || true
+    rejected=$(curl -sS -o /dev/null -w '%{redirect_url}' 'http://localhost:18000/oauth2/start?kc_idp_hint=e2e%26prompt%3Dnone') || true
+  fi
+  kill "$pf_pid" 2>/dev/null || true
+  wait "$pf_pid" 2>/dev/null || true
+
+  case "$hinted" in
+    https://keycloak.example.org/realms/cozy/protocol/openid-connect/auth\?*\&kc_idp_hint=e2e-idp\&*|https://keycloak.example.org/realms/cozy/protocol/openid-connect/auth\?*\&kc_idp_hint=e2e-idp) ;;
+    *)
+      echo "=== /oauth2/start?kc_idp_hint=e2e-idp did not redirect to the cozy realm with the hint ==="
+      echo "Location: ${hinted:-<none>}"
+      cat "$pf_log"
+      false
+      ;;
+  esac
+  case "$rejected" in
+    https://keycloak.example.org/realms/cozy/protocol/openid-connect/auth\?*kc_idp_hint*|https://keycloak.example.org/realms/cozy/protocol/openid-connect/auth\?*prompt=none*)
+      echo "=== a kc_idp_hint outside the allow pattern reached the Keycloak URL ==="
+      echo "Location: $rejected"
+      false
+      ;;
+    https://keycloak.example.org/realms/cozy/protocol/openid-connect/auth\?*) ;;
+    *)
+      echo "=== /oauth2/start with a rejected kc_idp_hint did not redirect to Keycloak ==="
+      echo "Location: ${rejected:-<none>}"
+      cat "$pf_log"
+      false
+      ;;
+  esac
+  rm -f "$pf_log"
 }
 
 @test "Aggregated API rejects Tenant name with dashes" {

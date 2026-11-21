@@ -1,0 +1,42 @@
+suite: opensearch JVM options
+
+release:
+  name: test-os
+  namespace: tenant-test
+
+set:
+  _cluster:
+    cluster-domain: cozy.local
+
+tests:
+  - it: ships the Base64 intrinsics switch as a jvm.options.d file
+    template: templates/jvm-options.yaml
+    asserts:
+      - isKind:
+          of: ConfigMap
+      - equal:
+          path: metadata.name
+          value: test-os-jvm-options
+      - equal:
+          path: data["cozystack.options"]
+          value: |
+            -XX:-UseBASE64Intrinsics
+
+  - it: mounts that file into every pod of the cluster
+    template: templates/opensearch.yaml
+    documentSelector:
+      path: kind
+      value: OpenSearchCluster
+    asserts:
+      - contains:
+          path: spec.general.additionalVolumes
+          content:
+            name: jvm-options
+            path: /usr/share/opensearch/config/jvm.options.d/cozystack.options
+            subPath: cozystack.options
+            restartPods: true
+            configMap:
+              name: test-os-jvm-options
+      # setting jvm would stop the operator sizing the heap from the memory request
+      - notExists:
+          path: spec.nodePools[0].jvm
