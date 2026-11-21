@@ -78,6 +78,7 @@ type options struct {
 	accountsPath   string
 	refuseFlags    stringFlags
 	reservedUsers  stringFlags
+	skipAccounts   stringFlags
 	labels         labelFlags
 	valuesPath     string
 	sourceSuffix   string
@@ -151,6 +152,7 @@ func run(args []string) error {
 	fs.StringVar(&o.accountsPath, "accounts-path", "users", "values map whose keys are the tenant accounts")
 	fs.Var(&o.refuseFlags, "refuse-flag", "user field that leaves a release out when it is true, because the converted chart refuses it; repeatable")
 	fs.Var(&o.reservedUsers, "reserved-user", "user name that leaves a release out, because the converted chart refuses it as a platform or engine account; repeatable")
+	fs.Var(&o.skipAccounts, "skip-account", "key of the accounts map that the converted chart renders no CredentialTemplate for, such as a platform account the chart keeps out of the tenant's map; it gets no account Secret; repeatable")
 	fs.Var(o.labels, "label", "label every account Secret carries, key=value; repeatable")
 	fs.StringVar(&o.valuesPath, "values-path", "", "the kind's CredentialTemplate valuesPath: the hook adds the valuesFrom entry of every account to the release, so the first render of the converted chart already carries the stored values")
 	fs.StringVar(&o.sourceSuffix, "source-suffix", "-credentials", "suffix of the chart-generated Secret holding the plaintext passwords, after the release name")
@@ -372,7 +374,7 @@ func (m *migrator) finishRelease(ctx context.Context, hr *helmv2.HelmRelease, re
 // the first user added later would never get a Secret. Every failure other
 // than unresolvable accounts is an error.
 func (m *migrator) seedRelease(ctx context.Context, hr *helmv2.HelmRelease) error {
-	accounts, err := resolveAccounts(hr, m.o.accountsPath, m.o.refuseFlags, m.o.reservedUsers)
+	accounts, err := m.o.resolveAccounts(hr)
 	if err != nil {
 		return fmt.Errorf("%w: %v", errUnresolvable, err)
 	}
@@ -500,30 +502,34 @@ func (m *migrator) addValuesFrom(ctx context.Context, hr *helmv2.HelmRelease, ac
 // accounts map, in sorted order. Two users mapping to one name, a user whose
 // name maps to an invalid one, or a user with a refused field set to true,
 // which the converted chart would not render, or a reserved user name leave
-// the release unresolvable.
-func resolveAccounts(hr *helmv2.HelmRelease, path string, refuse, reserved []string) ([]account.Account, error) {
+// the release unresolvable. A skipped key is not a tenant account: the
+// converted chart renders no template for it, so it is left out of the result.
+func (o *options) resolveAccounts(hr *helmv2.HelmRelease) ([]account.Account, error) {
 	var values map[string]any
 	if hr.Spec.Values != nil && len(hr.Spec.Values.Raw) > 0 {
 		if err := json.Unmarshal(hr.Spec.Values.Raw, &values); err != nil {
 			return nil, err
 		}
 	}
-	users, _ := lookup(values, path).(map[string]any)
+	users, _ := lookup(values, o.accountsPath).(map[string]any)
 	names := make([]string, 0, len(users))
 	for name := range users {
+		if slices.Contains(o.skipAccounts, name) {
+			continue
+		}
 		names = append(names, name)
 	}
 	sort.Strings(names)
 	var accounts []account.Account
 	byMapped := map[string]string{}
 	for _, name := range names {
-		if slices.Contains(reserved, name) {
-			return nil, fmt.Errorf("%s.%s is a name the converted chart reserves for a platform or engine account; rename the user", path, name)
+		if slices.Contains(o.reservedUsers, name) {
+			return nil, fmt.Errorf("%s.%s is a name the converted chart reserves for a platform or engine account; rename the user", o.accountsPath, name)
 		}
 		if u, ok := users[name].(map[string]any); ok {
-			for _, field := range refuse {
+			for _, field := range o.refuseFlags {
 				if on, _ := u[field].(bool); on {
-					return nil, fmt.Errorf("%s.%s.%s is true, which the converted chart refuses; set it to false", path, name, field)
+					return nil, fmt.Errorf("%s.%s.%s is true, which the converted chart refuses; set it to false", o.accountsPath, name, field)
 				}
 			}
 		}
