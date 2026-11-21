@@ -1,0 +1,36 @@
+##
+## @section Common parameters
+##
+
+## @param {[]string} cidrs - Address ranges (IPv4 and/or IPv6) of the VPC. May overlap with other VPCs: isolation is by overlay, not address space.
+cidrs: []
+## Example:
+## cidrs:
+##   - "10.10.0.0/24"
+
+## @param {int} [mtu] - MTU advertised to workloads in this VPC. 0 selects the platform default.
+mtu: 0
+
+## @typedef {struct} Peer - VPC peering target
+## @field {string} vpcName - Name of the remote VPC (without "virtualprivatecloud-" prefix)
+## @field {string} tenantNamespace - Namespace of the remote tenant
+
+## @param {[]Peer} peers - VPC peering connections (bidirectional declaration required)
+peers: []
+## Example:
+## peers:
+##   - vpcName: "other-vpc"
+##     tenantNamespace: "tenant-other"
+
+## @typedef {struct} Gateway - The VPC's north-south boundary
+## @field {bool} enabled - Open a path to the outside. Without a gateway the VPC is a closed island: no way out, no way in.
+## @field {bool} nat - Many-to-one egress for workloads with no external address of their own.
+## @field {bool} ingressLoadBalancer - Admit Service type=LoadBalancer traffic onto this VPC's workloads.
+## @field {string} [loadBalancerClass] - The LoadBalancer implementation that allocates the egress identity. Empty selects the cluster default.
+
+## @param {Gateway} gateway - North-south boundary of the VPC
+gateway:
+  enabled: false
+  nat: true
+  ingressLoadBalancer: false
+  loadBalancerClass: ""
