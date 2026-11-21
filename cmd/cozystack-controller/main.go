@@ -337,6 +337,26 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Account Secrets are watched as metadata on the same unscoped metadata
+	// cache, for the reason the CA-extraction reconciler gives above, and read
+	// uncached: an account Secret may hold a plaintext.
+	if err = (&controller.CredentialTemplateReconciler{
+		Client:   mgr.GetClient(),
+		Reader:   mgr.GetAPIReader(),
+		Scheme:   mgr.GetScheme(),
+		Recorder: mgr.GetEventRecorderFor("credentialtemplate-controller"),
+	}).SetupWithManager(mgr, caSecretCluster.GetCache()); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "CredentialTemplate")
+		os.Exit(1)
+	}
+	if err = (&controller.CredentialValuesReconciler{
+		Client: mgr.GetClient(),
+		Reader: mgr.GetAPIReader(),
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "CredentialValues")
+		os.Exit(1)
+	}
+
 	// +kubebuilder:scaffold:builder
 
 	if err := mgr.AddHealthzCheck("healthz", healthz.Ping); err != nil {

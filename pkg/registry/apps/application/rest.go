@@ -245,6 +245,7 @@ func (r *REST) Create(ctx context.Context, obj runtime.Object, createValidation 
 	helmRelease.Labels[ApplicationGroupLabel] = r.gvk.Group
 	helmRelease.Labels[ApplicationNameLabel] = app.Name
 	// Note: Annotations from config are not handled as r.releaseConfig.Annotations is undefined
+	markForSeeding(helmRelease)
 
 	klog.V(6).Infof("Creating HelmRelease %s in namespace %s", helmRelease.Name, app.Namespace)
 
@@ -595,6 +596,7 @@ func (r *REST) Update(ctx context.Context, name string, objInfo rest.UpdatedObje
 		helmRelease.SetResourceVersion(cur.GetResourceVersion())
 	}
 	r.applyLiveMetadata(helmRelease, cur, app, previousFinalizers)
+	keepAccountValuesFrom(helmRelease, cur)
 
 	// Suspension is not part of the Application, so the rebuilt object always
 	// says suspend=false, and sending it as is resumes a release that an
@@ -636,6 +638,7 @@ func (r *REST) Update(ctx context.Context, name string, objInfo rest.UpdatedObje
 			}
 			helmRelease = converted.DeepCopy()
 			r.applyLiveMetadata(helmRelease, cur, app, previousFinalizers)
+			keepAccountValuesFrom(helmRelease, cur)
 			helmRelease.SetResourceVersion(cur.GetResourceVersion())
 			helmRelease.Spec.Suspend = cur.Spec.Suspend
 		}
@@ -692,6 +695,10 @@ func (r *REST) Delete(ctx context.Context, name string, deleteValidation rest.Va
 		klog.Errorf("HelmRelease %s does not match the required application labels", helmReleaseName)
 		// Return NotFound error for Application resource
 		return nil, false, apierrors.NewNotFound(r.gvr.GroupResource(), name)
+	}
+
+	if err := r.refuseDeleteSuspended(ctx, name, helmRelease); err != nil {
+		return nil, false, err
 	}
 
 	// Run the genericapiserver-supplied admission chain (validating webhooks
