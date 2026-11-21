@@ -238,6 +238,21 @@ tests:
           path: spec.jobTemplate.spec.template.spec.containers[0].args
           content: --etcd-storage-quota-bytes=4080218931
 
+  - it: pulls the maintenance image from the configured registry
+    template: templates/etcd.yaml
+    set:
+      _cluster.images-registry: mirror.example.org/platform/
+    documentSelector:
+      path: kind
+      value: CronJob
+    asserts:
+      - matchRegex:
+          path: spec.jobTemplate.spec.template.spec.containers[0].image
+          pattern: '^mirror\.example\.org/platform/ghcr\.io/ahrtr/etcd-defrag:v[0-9.]+@sha256:[a-f0-9]{64}$'
+      - equal:
+          path: spec.jobTemplate.spec.template.metadata.labels["policy.cozystack.io/allow-to-etcd-cluster"]
+          value: kubernetes-alpha-etcd
+
   # The longest name the app allows. The apiserver refuses a CronJob name over
   # 52 characters, and kubernetes-<name>-etcd-defrag runs to 55.
   - it: keeps the defrag CronJob name inside 52 characters for the longest cluster name
