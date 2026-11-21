@@ -1,0 +1,38 @@
+--- a/charts/cluster-api-operator/templates/core.yaml
++++ b/charts/cluster-api-operator/templates/core.yaml
+@@ -55,1 +55,1 @@
+-      diagnosticsAddress: {{ $core.manager.metrics.diagnosticsAddress }}
++      diagnosticsAddress: {{ $core.manager.metrics.diagnosticsAddress | toYaml }}
+--- a/charts/cluster-api-operator/templates/bootstrap.yaml
++++ b/charts/cluster-api-operator/templates/bootstrap.yaml
+@@ -51,1 +51,1 @@
+-      diagnosticsAddress: {{ $bootstrap.manager.metrics.diagnosticsAddress }}
++      diagnosticsAddress: {{ $bootstrap.manager.metrics.diagnosticsAddress | toYaml }}
+--- a/charts/cluster-api-operator/templates/control-plane.yaml
++++ b/charts/cluster-api-operator/templates/control-plane.yaml
+@@ -55,1 +55,1 @@
+-      diagnosticsAddress: {{ $controlPlane.manager.metrics.diagnosticsAddress }}
++      diagnosticsAddress: {{ $controlPlane.manager.metrics.diagnosticsAddress | toYaml }}
+--- a/charts/cluster-api-operator/templates/infra.yaml
++++ b/charts/cluster-api-operator/templates/infra.yaml
+@@ -55,1 +55,1 @@
+-      diagnosticsAddress: {{ $infra.manager.metrics.diagnosticsAddress }}
++      diagnosticsAddress: {{ $infra.manager.metrics.diagnosticsAddress | toYaml }}
+--- a/charts/cluster-api-operator/templates/ipam.yaml
++++ b/charts/cluster-api-operator/templates/ipam.yaml
+@@ -55,1 +55,1 @@
+-      diagnosticsAddress: {{ $ipam.manager.metrics.diagnosticsAddress }}
++      diagnosticsAddress: {{ $ipam.manager.metrics.diagnosticsAddress | toYaml }}
+--- a/charts/cluster-api-operator/templates/addon.yaml
++++ b/charts/cluster-api-operator/templates/addon.yaml
+@@ -45,1 +45,1 @@
+-      diagnosticsAddress: {{ $addon.manager.metrics.diagnosticsAddress }}
++      diagnosticsAddress: {{ $addon.manager.metrics.diagnosticsAddress | toYaml }}
+--- a/charts/cluster-api-operator/templates/_helpers.tpl
++++ b/charts/cluster-api-operator/templates/_helpers.tpl
+@@ -30,1 +30,1 @@
+-  name: {{ default (($.Values).configSecret).name (($arg).configSecret).name }}
++  name: {{ default (($.Values).configSecret).name (($arg).configSecret).name | toYaml }}
+@@ -32,1 +32,1 @@
+-  namespace: {{ default (($.Values).configSecret).namespace (($arg).configSecret).namespace }}
++  namespace: {{ default (($.Values).configSecret).namespace (($arg).configSecret).namespace | toYaml }}

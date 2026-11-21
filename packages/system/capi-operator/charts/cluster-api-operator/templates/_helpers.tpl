@@ -22,3 +22,13 @@ We truncate at 63 chars because some Kubernetes name fields are limited to this 
 {{- end -}}
 {{- end -}}
 {{- end -}}
+
+{{- define "capi-operator.configSecret" -}}
+{{- $ := .ROOT -}}
+{{- $arg := .ARGUMENT -}}
+configSecret:
+  name: {{ default (($.Values).configSecret).name (($arg).configSecret).name | toYaml }}
+  {{- if (default (($.Values).configSecret).namespace (($arg).configSecret).namespace) }}
+  namespace: {{ default (($.Values).configSecret).namespace (($arg).configSecret).namespace | toYaml }}
+  {{- end }}
+{{- end -}}
