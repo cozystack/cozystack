@@ -103,7 +103,31 @@ spec:
           run_kubernetes_test 'keys | sort_by(.) | .[-1]' 'test-latest-version' '59991' 'true' 'true'
         check:
           ($error == null): true
+    - script:
+        timeout: 1m
+        content: |
+          set -eu
+          kubectl --namespace tenant-test delete job guest-etcd-defrag-e2e --ignore-not-found --timeout=30s
+          kubectl --namespace tenant-test create job guest-etcd-defrag-e2e --from=cronjob/kubernetes-test-latest-version-etcd-defrag
+        check:
+          ($error == null): true
+    - assert:
+        timeout: 3m
+        resource:
+          apiVersion: batch/v1
+          kind: Job
+          metadata:
+            namespace: tenant-test
+            name: guest-etcd-defrag-e2e
+          status:
+            (conditions[?type == 'Complete']):
+            - status: "True"
     finally:
+    - description: reclaim the guest etcd maintenance job
+      script:
+        timeout: 1m
+        content: |
+          kubectl --namespace tenant-test delete job guest-etcd-defrag-e2e --ignore-not-found --timeout=30s
     # Always runs after try/catch — i.e. after the crust-gather snapshots on a
     # failed run. Reclaims the tenant Kubernetes cluster, which run_kubernetes_test
     # applies imperatively (kubectl), so Chainsaw's auto-cleanup does not track it.
