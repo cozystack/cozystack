@@ -295,9 +295,9 @@ spec:
               subPath: global_common.conf
               readOnly: true
             - {name: stream-tls, mountPath: /etc/blockstor/stream-tls, readOnly: true}
-          resources:
-            requests: {cpu: 50m, memory: 64Mi}
-            limits: {cpu: 500m, memory: 512Mi}
+          {{- with .Values.blockstorSatellite.resources }}
+          resources: {{- toYaml . | nindent 12 }}
+          {{- end }}
       volumes:
         - {name: dev, hostPath: {path: /dev, type: Directory}}
         - {name: modules, hostPath: {path: /lib/modules}}

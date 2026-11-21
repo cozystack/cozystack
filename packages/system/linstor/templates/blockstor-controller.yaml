@@ -169,7 +169,7 @@ spec:
             allowPrivilegeEscalation: false
             capabilities: {drop: [ALL]}
             seccompProfile: {type: RuntimeDefault}
-          resources:
-            requests: {cpu: 50m, memory: 64Mi}
-            limits: {cpu: 500m, memory: 256Mi}
+          {{- with .Values.blockstorController.resources }}
+          resources: {{- toYaml . | nindent 12 }}
+          {{- end }}
 {{- end }}

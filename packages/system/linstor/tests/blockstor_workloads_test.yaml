@@ -497,3 +497,83 @@ tests:
       - equal:
           path: spec.template.spec.terminationGracePeriodSeconds
           value: 21
+
+  # A CPU limit throttles the reconcile passes; the LINSTOR components this
+  # backend replaces run without one.
+  - it: sets the controller no CPU limit
+    template: templates/blockstor-controller.yaml
+    documentSelector:
+      path: kind
+      value: Deployment
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].resources
+          value:
+            requests: {cpu: 100m, memory: 64Mi}
+            limits: {memory: 256Mi}
+
+  - it: sets the apiserver no CPU limit
+    template: templates/blockstor-apiserver.yaml
+    documentSelector:
+      path: kind
+      value: Deployment
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].resources
+          value:
+            requests: {cpu: 50m, memory: 128Mi}
+            limits: {memory: 512Mi}
+
+  - it: sizes the satellite as the LINSTOR satellite, without a CPU limit
+    template: templates/blockstor-satellite.yaml
+    documentSelector:
+      path: kind
+      value: DaemonSet
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].resources
+          value:
+            requests: {cpu: 100m, memory: 128Mi}
+            limits: {memory: 2Gi}
+
+  - it: merges a satellite resources override over the defaults
+    template: templates/blockstor-satellite.yaml
+    documentSelector:
+      path: kind
+      value: DaemonSet
+    set:
+      blockstorSatellite.resources.limits.cpu: "2"
+      blockstorSatellite.resources.requests.cpu: 250m
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].resources
+          value:
+            requests: {cpu: 250m, memory: 128Mi}
+            limits: {cpu: "2", memory: 2Gi}
+
+  - it: merges a controller resources override over the defaults
+    template: templates/blockstor-controller.yaml
+    documentSelector:
+      path: kind
+      value: Deployment
+    set:
+      blockstorController.resources.limits.memory: 1Gi
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].resources
+          value:
+            requests: {cpu: 100m, memory: 64Mi}
+            limits: {memory: 1Gi}
+
+  - it: drops a default the apiserver override sets to null
+    template: templates/blockstor-apiserver.yaml
+    documentSelector:
+      path: kind
+      value: Deployment
+    set:
+      blockstorApiserver.resources.limits: null
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].resources
+          value:
+            requests: {cpu: 50m, memory: 128Mi}
