@@ -22,6 +22,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
@@ -334,7 +335,38 @@ func (r *CredentialTemplateReconciler) SetupWithManager(mgr ctrl.Manager, accoun
 		Named("credentialtemplate").
 		For(&cozyv1alpha1.CredentialTemplate{}, builder.WithPredicates(predicate.GenerationChangedPredicate{})).
 		WatchesRawSource(source.Kind(accountSecrets, secretMeta, owner, isAccount)).
+		Watches(&helmv2.HelmRelease{}, handler.EnqueueRequestsFromMapFunc(r.templatesOfRelease), builder.WithPredicates(seedMarkChanged)).
 		Complete(r)
+}
+
+// seedMarkChanged passes only a HelmRelease whose seed mark appeared or
+// went, so helm-controller's status writes do not wake the reconciler. A
+// template rendered before its release was marked, as when the conversion
+// marks a release whose chart has already switched, is seeded as soon as
+// the mark lands rather than at the next resync.
+var seedMarkChanged = predicate.Funcs{
+	CreateFunc:  func(e event.CreateEvent) bool { return e.Object.GetAnnotations()[account.SeedAnnotation] == "true" },
+	DeleteFunc:  func(event.DeleteEvent) bool { return false },
+	GenericFunc: func(event.GenericEvent) bool { return false },
+	UpdateFunc: func(e event.UpdateEvent) bool {
+		return e.ObjectOld.GetAnnotations()[account.SeedAnnotation] != e.ObjectNew.GetAnnotations()[account.SeedAnnotation]
+	},
+}
+
+// templatesOfRelease maps a HelmRelease to the templates it rendered.
+func (r *CredentialTemplateReconciler) templatesOfRelease(ctx context.Context, o client.Object) []reconcile.Request {
+	list := &cozyv1alpha1.CredentialTemplateList{}
+	if err := r.List(ctx, list, client.InNamespace(o.GetNamespace())); err != nil {
+		log.FromContext(ctx).Error(err, "listing CredentialTemplates for a seed mark change", "release", o.GetName())
+		return nil
+	}
+	var reqs []reconcile.Request
+	for _, t := range list.Items {
+		if t.Annotations[account.ReleaseNameAnnotation] == o.GetName() {
+			reqs = append(reqs, reconcile.Request{NamespacedName: types.NamespacedName{Namespace: t.Namespace, Name: t.Name}})
+		}
+	}
+	return reqs
 }
 
 // CredentialValuesReconciler keeps the valuesFrom entries of a HelmRelease in

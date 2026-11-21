@@ -17,6 +17,7 @@ import (
 	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	cozyv1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
@@ -297,5 +298,27 @@ func TestCredentialValuesKeepsAnEntryWhoseSecretExists(t *testing.T) {
 	}
 	if !names["clickhouse-logs.web.account"] || !names["clickhouse-logs.api.account"] || names["clickhouse-logs.gone.account"] {
 		t.Errorf("valuesFrom = %+v, want web (template), api (Secret, template pending), and no gone", got.Spec.ValuesFrom)
+	}
+}
+
+func TestSeedMarkChangedPassesOnlyAMarkChange(t *testing.T) {
+	marked := &helmv2.HelmRelease{ObjectMeta: metav1.ObjectMeta{Name: "r", Annotations: map[string]string{account.SeedAnnotation: "true"}}}
+	plain := &helmv2.HelmRelease{ObjectMeta: metav1.ObjectMeta{Name: "r"}}
+	if !seedMarkChanged.Update(event.UpdateEvent{ObjectOld: plain, ObjectNew: marked}) {
+		t.Error("a release that gained the mark must wake the templates")
+	}
+	if seedMarkChanged.Update(event.UpdateEvent{ObjectOld: marked, ObjectNew: marked.DeepCopy()}) {
+		t.Error("a status write must not wake the templates")
+	}
+}
+
+func TestTemplatesOfReleaseMapsOnlyItsTemplates(t *testing.T) {
+	other := ctTemplate("scram-sha-256")
+	other.Name = "postgres-other.web"
+	other.Annotations = map[string]string{account.ReleaseNameAnnotation: "postgres-other"}
+	f := newCTFixture(t, true, ctTemplate("scram-sha-256"), other)
+	reqs := f.r.templatesOfRelease(context.Background(), &helmv2.HelmRelease{ObjectMeta: metav1.ObjectMeta{Name: ctRelease, Namespace: ctNamespace}})
+	if len(reqs) != 1 || reqs[0].Name != ctName {
+		t.Errorf("requests = %v, want only %s", reqs, ctName)
 	}
 }
