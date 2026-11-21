@@ -29,8 +29,7 @@ spec:
   resourcesPreset: nano
   resources: {}
   users:
-    testuser:
-      password: xai7Wepo
+    testuser: {}
   backup:
     enabled: true
     useSystemBucket: false

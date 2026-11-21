@@ -157,16 +157,12 @@
       "default": 15
     },
     "users": {
-      "description": "Users configuration map.",
+      "description": "Users configuration map. Passwords are issued through the Cozystack credentials API: a mint on the user's `Credential` (`core.cozystack.io`) returns a new password once and stores only its SHA-256, and a revoke retires the password without issuing one. A user can log in once a password has been minted, after the release has upgraded with it. The names `backup`, `default` and `clickhouse_operator` are reserved for platform accounts. A `password` key here is ignored.",
       "type": "object",
       "default": {},
       "additionalProperties": {
         "type": "object",
         "properties": {
-          "password": {
-            "description": "Password for the user.",
-            "type": "string"
-          },
           "readonly": {
             "description": "User is readonly (default: false).",
             "type": "boolean"

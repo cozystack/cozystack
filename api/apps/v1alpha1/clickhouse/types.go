@@ -45,7 +45,7 @@ type ConfigSpec struct {
 	// TTL (expiration time) for `query_log` and `query_thread_log`.
 	// +kubebuilder:default:=15
 	LogTTL int `json:"logTTL"`
-	// Users configuration map.
+	// Users configuration map. Passwords are issued through the Cozystack credentials API: a mint on the user's `Credential` (`core.cozystack.io`) returns a new password once and stores only its SHA-256, and a revoke retires the password without issuing one. A user can log in once a password has been minted, after the release has upgraded with it. The names `backup`, `default` and `clickhouse_operator` are reserved for platform accounts. A `password` key here is ignored.
 	// +kubebuilder:default:={}
 	Users map[string]User `json:"users,omitempty"`
 	// Backup configuration.
@@ -155,8 +155,6 @@ type S3CredentialsSecret struct {
 }
 
 type User struct {
-	// Password for the user.
-	Password string `json:"password,omitempty"`
 	// User is readonly (default: false).
 	Readonly bool `json:"readonly,omitempty"`
 }
