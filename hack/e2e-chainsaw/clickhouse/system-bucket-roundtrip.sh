@@ -39,8 +39,8 @@ PROBE_TIMEOUT=240
 # Each covers the driver's 2m hold after the credentials change plus the
 # strategy Job itself.
 JOB_TIMEOUT=480
-# The cleanup Job plus one failed attempt and its 30s retry wait.
-BACKUP_DELETE_TIMEOUT=300
+# Two 600s cleanup Jobs, the 30s retry delay and 30s to observe completion.
+BACKUP_DELETE_TIMEOUT=1260
 ARCHIVE_KEY=altinity.strategy.backups.cozystack.io/archive
 
 workdir=$(mktemp -d)
