@@ -1157,6 +1157,10 @@ func (r *BackupReconciler) cleanupAltinityBackup(ctx context.Context, backup *ba
 			rendered.Spec,
 			fmt.Sprintf("chi-clickhouse-%s-clickhouse-0-0.%s.svc", release, backup.Namespace), authSecret, archive)
 		if cerr := r.Create(ctx, desired); cerr != nil && !apierrors.IsAlreadyExists(cerr) {
+			// ResourceQuota also returns Forbidden. Once a Job slot frees up the same cleanup can run.
+			if apierrors.IsForbidden(cerr) && strings.Contains(cerr.Error(), "exceeded quota: ") {
+				return ctrl.Result{}, cerr
+			}
 			if apierrors.IsForbidden(cerr) || apierrors.IsInvalid(cerr) {
 				return r.releaseAltinityCleanup(ctx, backup, archive, fmt.Sprintf("cannot create cleanup Job: %v", cerr)), nil
 			}
