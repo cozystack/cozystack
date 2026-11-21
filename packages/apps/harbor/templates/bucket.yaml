@@ -1,4 +1,7 @@
 {{- $seaweedfs := .Values._namespace.seaweedfs }}
+{{- if not $seaweedfs }}
+{{- fail "harbor keeps images in S3, and neither this tenant nor a tenant above it runs SeaweedFS" }}
+{{- end }}
 apiVersion: objectstorage.k8s.io/v1alpha1
 kind: BucketClaim
 metadata:
