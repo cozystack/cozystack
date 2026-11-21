@@ -59,6 +59,7 @@ type options struct {
 	kind           string
 	formatName     string
 	accountsPath   string
+	refuseFlags    stringFlags
 	labels         labelFlags
 	sourceSuffix   string
 	platformKeys   stringFlags
@@ -123,6 +124,7 @@ func run(args []string) error {
 	fs.StringVar(&o.kind, "kind", "", "application kind, as the HelmRelease label names it")
 	fs.StringVar(&o.formatName, "format", "", "password format of the kind's credentials block")
 	fs.StringVar(&o.accountsPath, "accounts-path", "users", "values map whose keys are the tenant accounts")
+	fs.Var(&o.refuseFlags, "refuse-flag", "user field that leaves a release out when it is true, because the converted chart refuses it; repeatable")
 	fs.Var(o.labels, "label", "label every account Secret carries, key=value; repeatable")
 	fs.StringVar(&o.sourceSuffix, "source-suffix", "-credentials", "suffix of the chart-generated Secret holding the plaintext passwords, after the release name")
 	fs.Var(&o.platformKeys, "platform-key", "key of the source Secret that belongs to a platform account and stays; repeatable")
@@ -305,7 +307,7 @@ func (m *migrator) finishRelease(ctx context.Context, hr *helmv2.HelmRelease, re
 // account waits for a mint. Every failure other than unresolvable accounts is
 // an error.
 func (m *migrator) seedRelease(ctx context.Context, hr *helmv2.HelmRelease) error {
-	accounts, err := resolveAccounts(hr, m.o.accountsPath)
+	accounts, err := resolveAccounts(hr, m.o.accountsPath, m.o.refuseFlags)
 	if err != nil {
 		return fmt.Errorf("%w: %v", errUnresolvable, err)
 	}
@@ -392,9 +394,10 @@ func (m *migrator) seedRelease(ctx context.Context, hr *helmv2.HelmRelease) erro
 }
 
 // resolveAccounts returns the accounts the release declares: the keys of its
-// accounts map, in sorted order. Two users mapping to one name, or a user
-// whose name maps to an invalid one, leave the release unresolvable.
-func resolveAccounts(hr *helmv2.HelmRelease, path string) ([]account.Account, error) {
+// accounts map, in sorted order. Two users mapping to one name, a user whose
+// name maps to an invalid one, or a user with a refused field set to true,
+// which the converted chart would not render, leave the release unresolvable.
+func resolveAccounts(hr *helmv2.HelmRelease, path string, refuse []string) ([]account.Account, error) {
 	var values map[string]any
 	if hr.Spec.Values != nil && len(hr.Spec.Values.Raw) > 0 {
 		if err := json.Unmarshal(hr.Spec.Values.Raw, &values); err != nil {
@@ -410,6 +413,13 @@ func resolveAccounts(hr *helmv2.HelmRelease, path string) ([]account.Account, er
 	var accounts []account.Account
 	byMapped := map[string]string{}
 	for _, name := range names {
+		if u, ok := users[name].(map[string]any); ok {
+			for _, field := range refuse {
+				if on, _ := u[field].(bool); on {
+					return nil, fmt.Errorf("%s.%s.%s is true, which the converted chart refuses; set it to false", path, name, field)
+				}
+			}
+		}
 		mapped, err := account.MapName(name)
 		if err != nil {
 			return nil, err

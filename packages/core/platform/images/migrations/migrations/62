@@ -56,6 +56,7 @@ credentials-migrate seed \
   --kind Postgres \
   --format scram-sha-256 \
   --accounts-path users \
+  --refuse-flag createRole \
   --label 'cnpg.io/reload=true'
 
 # The finish Job runs the same image as this hook, so a release and its
@@ -148,6 +149,7 @@ spec:
             - --kind=Postgres
             - --format=scram-sha-256
             - --accounts-path=users
+            - --refuse-flag=createRole
             - --label=cnpg.io/reload=true
             - --timeout=30m
           env:

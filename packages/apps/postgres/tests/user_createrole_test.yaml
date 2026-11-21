@@ -1,20 +1,13 @@
 suite: per-user CREATEROLE attribute
 
-# users.<name>.createRole grants the CREATEROLE role attribute to a managed login
-# user, so a tenant can create and manage its own roles without the postgres
-# superuser. Role attributes are not inherited through role membership, so the
-# attribute cannot be carried by the generated <db>_admin group role and has to be
-# set on the login user itself.
-#
-# The attribute is declared on the Cluster's managed role, which CloudNativePG
-# reconciles on every change: flipping createRole back to false renders
-# createrole: false and the operator revokes it.
-#
-# The guard on PostgreSQL 16 is a security boundary, not a cosmetic check. Before
-# PostgreSQL 16, CREATEROLE allowed granting membership in any non-superuser role,
-# so a user holding it could grant itself pg_execute_server_program and reach
-# command execution on the instance. PostgreSQL 16 restricted CREATEROLE to roles
-# the grantee administers, which is what makes the attribute safe to expose.
+# users.<name>.createRole is refused while users are CloudNativePG managed
+# roles. A role a CREATEROLE user creates makes that user a member of it;
+# CloudNativePG revokes every membership a managed role is not declared to hold,
+# and the revoke fails on the dependent self-grant, which leaves the user stuck
+# in cannotReconcile on ordinary use. CloudNativePG has no per-role switch to
+# leave memberships alone. The refusal renders with the Cluster, on every path,
+# recovery included, so an existing release that grants it keeps its previous
+# chart version until the flag is set to false.
 
 templates:
   - templates/init-script.yaml
@@ -53,25 +46,18 @@ tests:
             passwordSecret:
               name: pg-test.app.account
 
-  - it: "createRole=true renders createrole on the managed role"
+  - it: "createRole=true is refused while users are managed roles"
     set:
       version: v18
       users:
         app:
           createRole: true
     template: templates/db.yaml
-    documentSelector:
-      path: kind
-      value: Cluster
     asserts:
-      - contains:
-          path: spec.managed.roles
-          content:
-            name: app
-            createrole: true
-          any: true
+      - failedTemplate:
+          errorMessage: "users.app.createRole is not supported: users are CloudNativePG managed roles, which revoke the membership PostgreSQL gives a CREATEROLE user in each role it creates. Set createRole to false; an existing release with it keeps its previous chart version until then"
 
-  - it: "createRole=false renders createrole false so the attribute is revoked"
+  - it: "createRole=false renders createrole false, so a role that held it loses it"
     set:
       version: v18
       users:
@@ -89,29 +75,7 @@ tests:
             createrole: false
           any: true
 
-  - it: "createRole composes with replication and bypassRls"
-    set:
-      version: v18
-      users:
-        app:
-          replication: true
-          createRole: true
-          bypassRls: true
-    template: templates/db.yaml
-    documentSelector:
-      path: kind
-      value: Cluster
-    asserts:
-      - contains:
-          path: spec.managed.roles
-          content:
-            name: app
-            replication: true
-            createrole: true
-            bypassrls: true
-          any: true
-
-  - it: "createRole on PostgreSQL 15 fails fast"
+  - it: "createRole on PostgreSQL 15 is refused"
     set:
       version: v15
       users:
@@ -120,9 +84,9 @@ tests:
     template: templates/db.yaml
     asserts:
       - failedTemplate:
-          errorMessage: "SECURITY: users.app.createRole requires PostgreSQL 16 or newer. On PostgreSQL 15 and older, a role holding CREATEROLE can grant itself any non-superuser role, including pg_execute_server_program, which escalates to command execution on the instance."
+          errorMessage: "users.app.createRole is not supported: users are CloudNativePG managed roles, which revoke the membership PostgreSQL gives a CREATEROLE user in each role it creates. Set createRole to false; an existing release with it keeps its previous chart version until then"
 
-  - it: "createRole on PostgreSQL 13 fails fast"
+  - it: "createRole on PostgreSQL 13 is refused"
     set:
       version: v13
       users:
@@ -131,11 +95,11 @@ tests:
     template: templates/db.yaml
     asserts:
       - failedTemplate:
-          errorMessage: "SECURITY: users.app.createRole requires PostgreSQL 16 or newer. On PostgreSQL 15 and older, a role holding CREATEROLE can grant itself any non-superuser role, including pg_execute_server_program, which escalates to command execution on the instance."
+          errorMessage: "users.app.createRole is not supported: users are CloudNativePG managed roles, which revoke the membership PostgreSQL gives a CREATEROLE user in each role it creates. Set createRole to false; an existing release with it keeps its previous chart version until then"
 
-  # The init-script does not render while the chart restores, but the managed
+  # The refusal renders with the Cluster, so a restore cannot get past it.
   # roles do, so the guard sits with them.
-  - it: "createRole on PostgreSQL 15 fails on recovery too"
+  - it: "createRole on PostgreSQL 15 is refused on recovery too"
     set:
       version: v15
       bootstrap:
@@ -150,9 +114,9 @@ tests:
     template: templates/db.yaml
     asserts:
       - failedTemplate:
-          errorMessage: "SECURITY: users.migrator.createRole requires PostgreSQL 16 or newer. On PostgreSQL 15 and older, a role holding CREATEROLE can grant itself any non-superuser role, including pg_execute_server_program, which escalates to command execution on the instance."
+          errorMessage: "users.migrator.createRole is not supported: users are CloudNativePG managed roles, which revoke the membership PostgreSQL gives a CREATEROLE user in each role it creates. Set createRole to false; an existing release with it keeps its previous chart version until then"
 
-  - it: "createRole on PostgreSQL 13 fails on recovery too"
+  - it: "createRole on PostgreSQL 13 is refused on recovery too"
     set:
       version: v13
       bootstrap:
@@ -167,7 +131,7 @@ tests:
     template: templates/db.yaml
     asserts:
       - failedTemplate:
-          errorMessage: "SECURITY: users.migrator.createRole requires PostgreSQL 16 or newer. On PostgreSQL 15 and older, a role holding CREATEROLE can grant itself any non-superuser role, including pg_execute_server_program, which escalates to command execution on the instance."
+          errorMessage: "users.migrator.createRole is not supported: users are CloudNativePG managed roles, which revoke the membership PostgreSQL gives a CREATEROLE user in each role it creates. Set createRole to false; an existing release with it keeps its previous chart version until then"
 
   - it: "PostgreSQL 15 renders fine as long as createRole is not requested"
     set:
@@ -201,24 +165,8 @@ tests:
             bypassrls: true
           any: true
 
-  # CloudNativePG has no field for createrole_self_grant, so the init-script
   # still sets it, once the role exists, since the hook may run before the
   # operator has created it.
-  - it: "createRole sets createrole_self_grant so the attribute is usable"
-    set:
-      version: v18
-      users:
-        app:
-          createRole: true
-    template: templates/init-script.yaml
-    documentSelector:
-      path: metadata.name
-      value: pg-test-init-script
-    asserts:
-      - matchRegex:
-          path: stringData["init.sh"]
-          pattern: "SELECT 'ALTER ROLE \"app\" SET createrole_self_grant = ''set, inherit'';'\\nWHERE EXISTS \\(SELECT FROM pg_catalog.pg_roles WHERE rolname = 'app'\\)\\\\gexec"
-
   - it: "withdrawing createRole resets createrole_self_grant"
     set:
       version: v18
@@ -234,20 +182,6 @@ tests:
           path: stringData["init.sh"]
           pattern: "SELECT 'ALTER ROLE \"app\" RESET createrole_self_grant;'\\nWHERE EXISTS \\(SELECT FROM pg_catalog.pg_roles WHERE rolname = 'app'\\)\\\\gexec"
 
-  - it: "fails the hook when a declared createRole user is still absent after the wait"
-    set:
-      version: v18
-      users:
-        migrator:
-          createRole: true
-    template: templates/init-script.yaml
-    documentSelector:
-      path: metadata.name
-      value: pg-test-init-script
-    asserts:
-      - matchRegex:
-          path: stringData["init.sh"]
-          pattern: "(?s)if \\[ -n \"\\$missing\" \\]; then\\n.*createRole users still absent after the wait.*\\n.*exit 1"
   - it: "does not fail the wait when no user holds createRole"
     set:
       version: v18

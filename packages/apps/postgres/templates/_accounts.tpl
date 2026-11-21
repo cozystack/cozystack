@@ -21,7 +21,6 @@
   init-script does not render.
 */}}
 {{- define "postgres.accountsGuard" -}}
-{{- $pgMajor := atoi (trimPrefix "v" .Values.version) -}}
 {{- $derived := dict -}}
 {{- range $database, $d := .Values.databases -}}
   {{- $adminRole := printf "%s_admin" $database -}}
@@ -47,8 +46,15 @@
   {{- with index $derived $user -}}
     {{- fail (printf "user %q is the name of a role of database %q; rename the user" $user .) -}}
   {{- end -}}
-  {{- if and (default false $u.createRole) (lt $pgMajor 16) -}}
-    {{- fail (printf "SECURITY: users.%s.createRole requires PostgreSQL 16 or newer. On PostgreSQL 15 and older, a role holding CREATEROLE can grant itself any non-superuser role, including pg_execute_server_program, which escalates to command execution on the instance." $user) -}}
+  {{- /*
+    A role a CREATEROLE user creates makes that user a member of it, which
+    CloudNativePG revokes from a managed role and fails to, on the dependent
+    self-grant, leaving the user stuck in cannotReconcile. CloudNativePG has
+    no per-role switch to leave memberships alone, so the attribute is
+    refused while users are managed roles.
+  */ -}}
+  {{- if default false $u.createRole -}}
+    {{- fail (printf "users.%s.createRole is not supported: users are CloudNativePG managed roles, which revoke the membership PostgreSQL gives a CREATEROLE user in each role it creates. Set createRole to false; an existing release with it keeps its previous chart version until then" $user) -}}
   {{- end -}}
 {{- end -}}
 {{- end -}}

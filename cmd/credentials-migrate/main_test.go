@@ -47,7 +47,7 @@ func newMigratorWith(t *testing.T, funcs *interceptor.Funcs, objs ...client.Obje
 	}
 	c := b.Build()
 	o := &options{
-		migration: 61, kind: "Postgres", formatName: format.ScramSHA256, accountsPath: "users",
+		migration: 62, kind: "Postgres", formatName: format.ScramSHA256, accountsPath: "users",
 		labels: labelFlags{"cnpg.io/reload": "true"}, sourceSuffix: "-credentials",
 		stateNamespace: "cozy-system", actor: "migration", timeout: -time.Second,
 	}
@@ -419,5 +419,24 @@ func TestSaveStateLabelsIncompleteForTheAlert(t *testing.T) {
 	}
 	if got := readLabel(); got != "false" {
 		t.Fatalf("%s = %q, want false once none is skipped", incompleteLabel, got)
+	}
+}
+
+func TestSeedLeavesOutAReleaseWithARefusedFlag(t *testing.T) {
+	ctx := context.Background()
+	m := newMigrator(t, release(`{"users":{"web":{},"migrator":{"createRole":true}}}`, "0.1.0", true), sourceSecret(map[string]string{"web": "hunter2", "migrator": "secret"}))
+	m.o.refuseFlags = stringFlags{"createRole"}
+	if err := m.seed(ctx); err != nil {
+		t.Fatal(err)
+	}
+	st, err := m.loadState(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, left := st.Skipped["tenant-foo/postgres-orders"]; !left {
+		t.Fatalf("state = %+v, want the release left out", st)
+	}
+	if _, ok := m.secret(t, "postgres-orders.web.account"); ok {
+		t.Fatal("a release the converted chart refuses must not be converted in part")
 	}
 }
