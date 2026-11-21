@@ -92,8 +92,8 @@ resolve_kafka_image() {
     # is being assumed. On an air-gapped or operator-less cluster - the persona
     # the README's override note is for - that literal is unreachable, so the
     # run must set KAFKA_IMAGE to an image the nodes can actually pull.
-    echo "! could not read STRIMZI_KAFKA_IMAGES from deploy/strimzi-cluster-operator in cozy-kafka-operator; assuming quay.io/strimzi/kafka:1.2.0-kafka-4.3.1. Set KAFKA_IMAGE explicitly if that image is wrong or unreachable (e.g. air-gapped)." >&2
-    echo "quay.io/strimzi/kafka:1.2.0-kafka-4.3.1"
+    echo "! could not read STRIMZI_KAFKA_IMAGES from deploy/strimzi-cluster-operator in cozy-kafka-operator; assuming quay.io/strimzi/kafka:1.3.1-1-kafka-4.3.1. Set KAFKA_IMAGE explicitly if that image is wrong or unreachable (e.g. air-gapped)." >&2
+    echo "quay.io/strimzi/kafka:1.3.1-1-kafka-4.3.1"
 }
 export KAFKA_IMAGE="${KAFKA_IMAGE:-$(resolve_kafka_image)}"
 export KAFKA_BIN="${KAFKA_BIN:-/opt/kafka/bin}"

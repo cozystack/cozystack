@@ -2,6 +2,13 @@ strimzi-kafka-operator:
   watchAnyNamespace: true
   generateNetworkPolicy: false
   kubernetesServiceDnsDomain: cozy.local
+  # Strimzi rebuilt 1.3.1 on a patched OpenJDK and moved the 1.3.1 tags onto
+  # the rebuild, keeping the first build as 1.3.1-0. The suffixed tags do not
+  # move, so a node that cached the first build cannot keep running it.
+  defaultImageTag: 1.3.1-1
+  kafkaBridge:
+    image:
+      tag: 1.2.1-1
   resources:
     limits:
       memory: 512Mi

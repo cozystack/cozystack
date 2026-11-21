@@ -137,45 +137,65 @@ spec:
                 *) BASE="https://\${S3_ENDPOINT}" ;;
               esac
 
-              # Split the endpoint into scheme/host/port. The Strimzi image ships
-              # curl 7.76.1, whose --aws-sigv4 has a bug fixed only in 7.87.0: it
-              # omits a non-default port from the SigV4 canonical Host even though
-              # it sends the port in the Host header. seaweedfs recomputes the
-              # signature from the received "host:port" and so rejects the PUT
-              # with 403 whenever the endpoint carries a non-default port (the
-              # e2e harness points S3_ENDPOINT at the :8333 in-cluster Service).
-              # Strip the port from the signed/sent URL and redirect the
-              # connection to the real port with --connect-to, so the signed,
-              # sent and server-side Host all agree on the bare host. This is
-              # also correct on curl >= 7.87, which drops the default port too.
-              # Demo-scope parse: handles the "scheme://host[:port]" that
-              # BucketInfo advertises. An IPv6 literal ([::1]:8333) or an
-              # endpoint carrying a path prefix would be mis-split - out of
-              # scope here.
+              # Split the endpoint into scheme/host/port. Demo-scope parse:
+              # handles the "scheme://host[:port]" that BucketInfo advertises.
+              # An IPv6 literal ([::1]:8333) or an endpoint carrying a path
+              # prefix would be mis-split - out of scope here.
               SCHEME="\${BASE%%://*}"
               HOSTPORT="\${BASE#*://}"; HOSTPORT="\${HOSTPORT%%/*}"
               HOST="\${HOSTPORT%%:*}"
               PORT="\${HOSTPORT##*:}"
               if [ "\${PORT}" = "\${HOSTPORT}" ]; then PORT=""; fi
               if [ "\${SCHEME}" = http ]; then DEFPORT=80; else DEFPORT=443; fi
-              CONNECT_TO=""
-              if [ -n "\${PORT}" ] && [ "\${PORT}" != "\${DEFPORT}" ]; then
-                CONNECT_TO="--connect-to \${HOST}:\${DEFPORT}:\${HOST}:\${PORT}"
-              fi
+              # The Host header curl sends, which is what gets signed: curl
+              # leaves the port out exactly when it is the scheme's default.
+              AUTHORITY="\${HOST}"
+              if [ -n "\${PORT}" ] && [ "\${PORT}" != "\${DEFPORT}" ]; then AUTHORITY="\${HOST}:\${PORT}"; fi
 
               if [ "\${MODE}" = backup ]; then SRC="\${SRC_BACKUP}"; else SRC="\${SRC_RESTORE}"; fi
               KEY="\${SRC_NAMESPACE}/\${SRC}/kafka-topics.tar"
-              OBJ_URL="\${SCHEME}://\${HOST}/\${S3_BUCKET}/\${KEY}"
+              # Namespace and application names are DNS labels, so the path
+              # needs no percent-encoding to be its own canonical URI.
+              OBJ_PATH="/\${S3_BUCKET}/\${KEY}"
+              OBJ_URL="\${SCHEME}://\${AUTHORITY}\${OBJ_PATH}"
 
-              # curl --aws-sigv4 signs the request (SigV4) so no separate S3
-              # client image is needed. The certificate is verified: against the
-              # CA projected from the Secret when it carries one, else
-              # against the image's trust store. \${CA_OPT} and \${CONNECT_TO}
-              # are deliberately unquoted so an empty value expands to no
-              # argument.
+              # The request is SigV4-signed here, with openssl and sha256sum,
+              # so no separate S3 client image is needed. It is not left to curl
+              # --aws-sigv4, because the curl in the Strimzi image cannot sign
+              # for S3: 7.76.1-40.el9 (Strimzi 1.2) signs the Host without a
+              # non-default port while sending it with one, and 7.76.1-43.el9
+              # (Strimzi 1.3.1) carries a RHEL backport of the S3 payload
+              # handling that lists x-amz-content-sha256 in SignedHeaders
+              # without ever sending the header. Either way seaweedfs answers
+              # 403. The certificate is verified: against the CA projected from
+              # the Secret when it carries one, else against the image's trust
+              # store. \${CA_OPT} is deliberately unquoted so an empty value
+              # expands to no argument.
               CA_OPT=""
               if [ -s "\${CA_FILE}" ]; then CA_OPT="--cacert \${CA_FILE}"; fi
-              s3() { curl -fsS \${CA_OPT} \${CONNECT_TO} --aws-sigv4 "aws:amz:\${S3_REGION}:s3" --user "\${AWS_ACCESS_KEY_ID}:\${AWS_SECRET_ACCESS_KEY}" "\$@"; }
+              EMPTY_SHA256=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+              hmac() { printf '%s' "\$2" | openssl dgst -sha256 -mac HMAC -macopt "\$1" -r | cut -d' ' -f1; }
+              # s3 METHOD PAYLOAD_SHA256 [curl args...]
+              s3() {
+                local method=\$1 payload=\$2 now day scope creq sts k sig
+                shift 2
+                now=\$(date -u +%Y%m%dT%H%M%SZ)
+                day=\${now%%T*}
+                scope="\${day}/\${S3_REGION}/s3/aws4_request"
+                creq=\$(printf '%s\n%s\n\nhost:%s\nx-amz-content-sha256:%s\nx-amz-date:%s\n\nhost;x-amz-content-sha256;x-amz-date\n%s' \\
+                  "\${method}" "\${OBJ_PATH}" "\${AUTHORITY}" "\${payload}" "\${now}" "\${payload}")
+                sts=\$(printf 'AWS4-HMAC-SHA256\n%s\n%s\n%s' "\${now}" "\${scope}" "\$(printf '%s' "\${creq}" | sha256sum | cut -d' ' -f1)")
+                k=\$(hmac "key:AWS4\${AWS_SECRET_ACCESS_KEY}" "\${day}")
+                k=\$(hmac "hexkey:\${k}" "\${S3_REGION}")
+                k=\$(hmac "hexkey:\${k}" s3)
+                k=\$(hmac "hexkey:\${k}" aws4_request)
+                sig=\$(hmac "hexkey:\${k}" "\${sts}")
+                curl -fsS \${CA_OPT} -X "\${method}" \\
+                  -H "x-amz-date: \${now}" \\
+                  -H "x-amz-content-sha256: \${payload}" \\
+                  -H "Authorization: AWS4-HMAC-SHA256 Credential=\${AWS_ACCESS_KEY_ID}/\${scope}, SignedHeaders=host;x-amz-content-sha256;x-amz-date, Signature=\${sig}" \\
+                  "\$@" "\${OBJ_URL}"
+              }
 
               # Records a topic currently holds, summed over its partitions as
               # end - begin. kafka-get-offsets prints only the partitions whose
@@ -346,11 +366,11 @@ spec:
                   echo "  \${t}: \${pc} partition(s), replication factor \${rf}"
                 done
                 tar -C "\${WORK}" -cf "\${TARBALL}" .
-                s3 -X PUT --upload-file "\${TARBALL}" "\${OBJ_URL}"
+                s3 PUT "\$(sha256sum < "\${TARBALL}" | cut -d' ' -f1)" --upload-file "\${TARBALL}"
                 echo "uploaded s3://\${S3_BUCKET}/\${KEY}"
               else
                 echo "restoring topics into \${BOOT} from s3://\${S3_BUCKET}/\${KEY}"
-                s3 -o "\${TARBALL}" "\${OBJ_URL}"
+                s3 GET "\${EMPTY_SHA256}" -o "\${TARBALL}"
                 tar -C "\${WORK}" -xf "\${TARBALL}"
                 [ -f "\${WORK}/manifest.txt" ] || { echo "manifest missing in backup" >&2; exit 1; }
                 # The manifest arrives inside the downloaded tarball, so treat it
