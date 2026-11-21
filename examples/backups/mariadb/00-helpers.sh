@@ -32,8 +32,7 @@ export BACKUPJOB_NAME="${BACKUPJOB_NAME:-mariadb-src-adhoc}"
 export RESTOREJOB_TOCOPY_NAME="${RESTOREJOB_TOCOPY_NAME:-mariadb-src-to-mariadb-target}"
 export PLAN_NAME="${PLAN_NAME:-mariadb-src-daily}"
 # App user the demo writes and reads the sentinel row as. Its password is
-# chart-generated (the charts no longer accept a plaintext password) and read
-# from the release's <cr>-credentials Secret by mysql_exec at call time.
+# minted through the credentials API by mysql_exec on first use.
 export MARIADB_APP_USER="${MARIADB_APP_USER:-app}"
 
 # S3 endpoint CA. cozystack's default seaweedfs serves its S3 endpoint with a
@@ -74,6 +73,31 @@ mariadb_primary_pod() {
         -o jsonpath='{.status.currentPrimary}' 2>/dev/null
 }
 
+# Password of the application user, minted once through the credentials API
+# and cached for the rest of the run: a mint replaces the account's password,
+# so minting on every call would invalidate the previous one. The Credential is
+# named <release>.<account>, where <account> is the user name lowercased with
+# every character outside [a-z0-9-] replaced by "-", and the MariaDB CR is
+# named after the release. The cache is a private run-scoped directory
+# (mktemp -d is 0700), so a later run does not read a password a mint has
+# since replaced, and no other user on the host can read it.
+# Args: <cr-name> <user>
+export COZY_PW_CACHE_DIR="${COZY_PW_CACHE_DIR:-$(mktemp -d "${TMPDIR:-/tmp}/cozy-pw.XXXXXXXX")}"
+
+app_password() {
+    local cr="$1" user="$2"
+    local acct cache
+    acct=$(printf '%s' "$user" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9-]/-/g')
+    cache="${COZY_PW_CACHE_DIR}/${cr}-${acct}"
+    if [[ ! -s "$cache" ]]; then
+        kubectl create --raw "/apis/core.cozystack.io/v1alpha1/namespaces/${NAMESPACE}/credentials/${cr}.${acct}/mint" \
+            -f <(printf '{"apiVersion":"core.cozystack.io/v1alpha1","kind":"CredentialRequest"}') \
+            | jq -r '.status.password // empty' > "$cache"
+    fi
+    [[ -s "$cache" ]] || { log_error "no password minted for user '${user}' of ${cr}"; return 1; }
+    cat "$cache"
+}
+
 # Run a single SQL statement against a MariaDB CR's primary as the app user,
 # routing through the operator-managed primary Service (mariadb-<app>-primary).
 # Args: <cr-name> <sql>
@@ -82,15 +106,34 @@ mysql_exec() {
     local pod pass
     pod=$(mariadb_primary_pod "$cr")
     [[ -n "$pod" ]] || { log_error "no primary pod for MariaDB CR '$cr'"; return 1; }
-    pass=$(kubectl -n "$NAMESPACE" get secret "${cr}-credentials" -o json \
-        | jq -r --arg u "$MARIADB_APP_USER" '.data[$u] // empty' | base64 -d)
-    [[ -n "$pass" ]] || { log_error "no password for '$MARIADB_APP_USER' in ${cr}-credentials"; return 1; }
-    kubectl -n "$NAMESPACE" exec "$pod" -c mariadb -- \
-        mariadb -u"$MARIADB_APP_USER" -p"$pass" -h "${cr}-primary" -e "$sql"
+    pass=$(app_password "$cr" "$MARIADB_APP_USER") || return 1
+    # The password goes to the client on stdin: exec arguments travel in the
+    # request URI, which the audit log records at any level.
+    printf '%s\n' "$pass" | kubectl -n "$NAMESPACE" exec -i "$pod" -c mariadb -- \
+        sh -c 'IFS= read -r MYSQL_PWD; export MYSQL_PWD; exec mariadb "$@"' sh \
+        -u"$MARIADB_APP_USER" -h "${cr}-primary" -e "$sql"
+}
+
+# Block until the app user authenticates against a CR, or fail after
+# <timeout>s. The first mint rewrites the account Secret and mariadb-operator
+# applies it through the Secret's watch label, asynchronously, so this is a
+# readiness wait on an eventually consistent property, not a retry over a
+# deterministic step. Args: <cr-name> [timeout]
+wait_app_login() {
+    local cr="$1" timeout="${2:-120}" elapsed=0
+    until mysql_exec "$cr" "SELECT 1;" >/dev/null 2>&1; do
+        if [[ $elapsed -ge $timeout ]]; then
+            log_error "Timeout waiting for '${MARIADB_APP_USER}' to authenticate against ${cr}: the minted password never reached the account (is the User Ready?)"
+            return 1
+        fi
+        sleep 5
+        elapsed=$((elapsed + 5))
+    done
 }
 
 # Authenticate as root against a MariaDB CR's primary over TCP, using the
-# chart-generated root password in <cr>-credentials. root is the sharp edge on a
+# chart-generated root password in <cr>-credentials, a platform-only Secret
+# that only a platform administrator can read. root is the sharp edge on a
 # restore into a copy: the operator only applies rootPasswordSecretKeyRef at
 # datadir bootstrap, so if a restore overwrote the grant table with the source's
 # root hash the target's advertised root would be wrong for good. Args: <cr-name>

@@ -535,10 +535,10 @@ tests:
       value: Role
     asserts:
       - notContains:
-          path: rules[1].resourceNames
+          path: rules[?(@.resources[0] == "secrets")].resourceNames
           content: my-mariadb.tls
       - notContains:
-          path: rules[1].resourceNames
+          path: rules[?(@.resources[0] == "secrets")].resourceNames
           content: my-mariadb.ca-tls
 
   - it: "RBAC excludes TLS secrets when external=true and tls.issuer unset"
@@ -551,10 +551,10 @@ tests:
       value: Role
     asserts:
       - notContains:
-          path: rules[1].resourceNames
+          path: rules[?(@.resources[0] == "secrets")].resourceNames
           content: my-mariadb.tls
       - notContains:
-          path: rules[1].resourceNames
+          path: rules[?(@.resources[0] == "secrets")].resourceNames
           content: my-mariadb.ca-tls
 
   - it: "RBAC excludes TLS secrets when tls.issuer=operator even if external=true"
@@ -569,10 +569,10 @@ tests:
       value: Role
     asserts:
       - notContains:
-          path: rules[1].resourceNames
+          path: rules[?(@.resources[0] == "secrets")].resourceNames
           content: my-mariadb.tls
       - notContains:
-          path: rules[1].resourceNames
+          path: rules[?(@.resources[0] == "secrets")].resourceNames
           content: my-mariadb.ca-tls
 
   - it: "RBAC excludes TLS secrets when tls.issuer=cert-manager even if external=false"
@@ -587,10 +587,10 @@ tests:
       value: Role
     asserts:
       - notContains:
-          path: rules[1].resourceNames
+          path: rules[?(@.resources[0] == "secrets")].resourceNames
           content: my-mariadb.tls
       - notContains:
-          path: rules[1].resourceNames
+          path: rules[?(@.resources[0] == "secrets")].resourceNames
           content: my-mariadb.ca-tls
 
   # -------------------------------------------------------------------
@@ -1180,17 +1180,18 @@ tests:
         issuer: cert-manager
     asserts:
       - notContains:
-          path: rules[1].resourceNames
+          path: rules[?(@.resources[0] == "secrets")].resourceNames
           content: my-mariadb.ca-tls
       - notContains:
-          path: rules[1].resourceNames
+          path: rules[?(@.resources[0] == "secrets")].resourceNames
           content: my-mariadb.tls
       - notContains:
-          path: rules[1].resourceNames
+          path: rules[?(@.resources[0] == "secrets")].resourceNames
           content: my-mariadb-ca-bundle
-      - contains:
-          path: rules[1].resourceNames
-          content: my-mariadb-credentials
+      # No Secret at all: <release>-credentials holds only root, the
+      # platform's account, and tenant users are Credentials.
+      - notExists:
+          path: rules[?(@.resources[0] == "secrets")]
 
   # The absence holds regardless of issuer: this is a flat invariant, not a
   # branch that happens to be untested under the operator issuer.
@@ -1205,13 +1206,13 @@ tests:
         issuer: operator
     asserts:
       - notContains:
-          path: rules[1].resourceNames
+          path: rules[?(@.resources[0] == "secrets")].resourceNames
           content: my-mariadb-ca-bundle
       - notContains:
-          path: rules[1].resourceNames
+          path: rules[?(@.resources[0] == "secrets")].resourceNames
           content: my-mariadb.ca-tls
       - notContains:
-          path: rules[1].resourceNames
+          path: rules[?(@.resources[0] == "secrets")].resourceNames
           content: my-mariadb.tls
 
   # The CR must not advertise enforcement the server does not apply. The

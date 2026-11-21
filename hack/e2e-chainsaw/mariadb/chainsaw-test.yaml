@@ -128,6 +128,114 @@ spec:
           status:
             replicas: 1
 
+  # No second disclosure: the minted password logs in over TCP as the user,
+  # the Credential records the mint, no read path the design names carries
+  # the password (the audit log aside, which the sandbox does not collect),
+  # root's Secret is out of the tenant's reach, and a second mint replaces
+  # the first once mariadb-operator applies it.
+  - name: verify-minted-credential
+    try:
+    - assert:
+        timeout: 2m
+        resource:
+          apiVersion: core.cozystack.io/v1alpha1
+          kind: Credential
+          metadata:
+            name: mariadb-test.testuser
+          spec:
+            application:
+              kind: MariaDB
+              name: test
+            user: testuser
+          status:
+            password:
+              origin: NotIssued
+    # bash for pipefail and process substitution; the sandbox's /bin/sh is dash.
+    - script:
+        timeout: 5m
+        shell: bash
+        content: |
+          set -euo pipefail
+          cred=mariadb-test.testuser
+          as="--as=e2e-mariadb-probe --as-group=system:authenticated --as-group=${NAMESPACE}-super-admin"
+          mint() {
+            kubectl create --raw "/apis/core.cozystack.io/v1alpha1/namespaces/$NAMESPACE/credentials/$cred/mint" \
+              -f <(printf '{"apiVersion":"core.cozystack.io/v1alpha1","kind":"CredentialRequest"}') \
+              | jq -r '.status.password'
+          }
+          # The password goes to the client on stdin: exec arguments travel in
+          # the request URI, which the audit log records at any level.
+          login() {
+            printf '%s\n' "$1" | kubectl -n "$NAMESPACE" exec -i mariadb-test-0 -c mariadb -- \
+              sh -c 'IFS= read -r MYSQL_PWD; export MYSQL_PWD; exec mariadb "$@"' sh \
+              -h mariadb-test -u testuser -D testdb -N -e 'SELECT 1' 2>/dev/null | tr -d '[:space:]' || true
+          }
+          # Fails when any of the named texts carries the password.
+          refuse() {
+            local what=$1 text=$2
+            if printf '%s' "$text" | grep -qF -- "$first"; then
+              echo "$what carries the minted password" >&2
+              exit 1
+            fi
+          }
+
+          first=$(mint)
+          [ "${#first}" -eq 32 ] || { echo "minted password has ${#first} characters, want 32" >&2; exit 1; }
+          # mariadb-operator applies the changed account Secret live through
+          # the watch label; a readiness wait on that eventually consistent
+          # property, not a retry.
+          until [ "$(login "$first")" = "1" ]; do sleep 5; done
+
+          view=$(kubectl -n "$NAMESPACE" get credentials.core.cozystack.io "$cred" -o json)
+          [ "$(printf '%s' "$view" | jq -r .status.password.origin)" = "Minted" ] || { echo "origin is not Minted: $view" >&2; exit 1; }
+          [ "$(printf '%s' "$view" | jq -r '.status.history[0].operation')" = "Mint" ] || { echo "history lacks the mint: $view" >&2; exit 1; }
+          refuse "the Credential" "$view"
+
+          # The account Secret holds the mysql_native_password hash, never the
+          # password.
+          stored=$(kubectl -n "$NAMESPACE" get secret "$cred.account" -o json | jq -r '.data.password' | base64 -d)
+          if ! printf '%s' "$stored" | grep -Eqx '\*[0-9A-F]{40}'; then
+            echo "the account Secret does not hold a mysql_native_password hash" >&2; exit 1
+          fi
+          refuse "the account Secret" "$stored"
+
+          # Capture each read in an assignment first: under set -e a failing
+          # command substitution in an argument does not stop the script.
+          events=$(kubectl -n "$NAMESPACE" get events -o json)
+          refuse "an Event" "$events"
+          application=$(kubectl -n "$NAMESPACE" get mariadbs.apps.cozystack.io test -o json)
+          refuse "the application" "$application"
+          rels=$(kubectl -n "$NAMESPACE" get secret -l owner=helm,name=mariadb-test -o name)
+          [ -n "$rels" ] || { echo "no Helm release Secret for mariadb-test to inspect" >&2; exit 1; }
+          for rel in $rels; do
+            decoded=$(kubectl -n "$NAMESPACE" get "$rel" -o jsonpath='{.data.release}' | base64 -d | base64 -d | gunzip)
+            refuse "Helm release $rel" "$decoded"
+          done
+          # Neither the account Secret nor root's Secret is listed through
+          # tenantsecrets, and neither is granted by name.
+          visible=$(kubectl -n "$NAMESPACE" get tenantsecrets.core.cozystack.io $as -o json)
+          for s in "$cred.account" mariadb-test-credentials; do
+            if printf '%s' "$visible" | jq -r '.items[].metadata.name' | grep -Fqx "$s"; then
+              echo "$s is listed through tenantsecrets" >&2; exit 1
+            fi
+            # can-i exits 1 when it answers no, so the answer is read from its
+            # output; anything but a plain "no" fails, an error included.
+            answer=$(kubectl -n "$NAMESPACE" auth can-i get "secret/$s" $as 2>&1) || true
+            if [ "$answer" != no ]; then
+              echo "the tenant super-admin group can read $s, or can-i did not answer: $answer" >&2
+              exit 1
+            fi
+          done
+          decoded_visible=$(printf '%s' "$visible" | jq -r '.items[].data // {} | .[] | @base64d')
+          refuse "tenantsecrets" "$decoded_visible"
+
+          second=$(mint)
+          [ "$second" != "$first" ] || { echo "a second mint returned the same password" >&2; exit 1; }
+          until [ "$(login "$second")" = "1" ]; do sleep 5; done
+          if [ "$(login "$first")" = "1" ]; then echo "the replaced password still logs in" >&2; exit 1; fi
+        check:
+          ($error == null): true
+
   # The trust anchor a client verifies against, read off the live operator
   # rather than off this repo's beliefs about it. The unit suite pins what the
   # chart renders — the sentinel, its source name and its key — from the same
@@ -148,9 +256,10 @@ spec:
     # a kind that never reconciled. Without a witness that the mechanism is
     # live, they would all pass while asserting nothing.
     #
-    # The credentials Secret is the witness: the chart renders it, its lineage
-    # resolves to this instance, and the ApplicationDefinition grants it by
-    # name, so it MUST be stamped.
+    # The tenant-ca projection below is the witness: it must read "true",
+    # which only the webhook writes. <release>-credentials cannot serve: it
+    # holds only root, the platform's account, and the chart renders it with
+    # "false" itself, which this step pins.
     - assert:
         timeout: 2m
         resource:
@@ -159,7 +268,7 @@ spec:
           metadata:
             name: mariadb-test-credentials
             labels:
-              internal.cozystack.io/tenantresource: "true"
+              internal.cozystack.io/tenantresource: "false"
     # tenant-ca is stamped by the CA-extraction controller; tenantresource is
     # the LINEAGE WEBHOOK's verdict, computed from the ApplicationDefinition's
     # secrets.include matchLabels. It reads "true" only if the whole chain held:
