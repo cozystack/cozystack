@@ -36,3 +36,14 @@ tests:
             apiGroups: [""]
             resources: ["secrets"]
             verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - it: lets the cosi credentials reconciler re-create BucketAccesses
+    documentSelector:
+      path: kind
+      value: ClusterRole
+    asserts:
+      - contains:
+          path: rules
+          content:
+            apiGroups: ["objectstorage.k8s.io"]
+            resources: ["bucketaccesses"]
+            verbs: ["get", "list", "watch", "create", "update", "delete"]

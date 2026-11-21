@@ -59,6 +59,25 @@ const (
 	PasswordKey = "password"
 )
 
+// What the API and the controller share about a cosi account, whose keys the
+// COSI driver issues: the secret key is the password, the access key sits
+// beside it, and a mint or a revoke is a request the controller serves by
+// re-creating the BucketAccess.
+const (
+	// AccessKeyIDKey holds the access key that goes with the password.
+	AccessKeyIDKey = "accessKeyID"
+	// RequestAnnotation carries the id of the latest mint or revoke, which the
+	// API writes with the Secret and the controller puts on the BucketAccess
+	// it creates to serve it.
+	RequestAnnotation = "credentials.cozystack.io/request"
+	// GrantedAnnotation carries the request id the Secret's keys were issued
+	// for; the API returns them only to the request that id names.
+	GrantedAnnotation = "credentials.cozystack.io/granted"
+	// AdoptLabel on a BucketAccess lets the controller take over one the
+	// chart rendered before the conversion, keeping its keys.
+	AdoptLabel = "credentials.cozystack.io/adopt"
+)
+
 var nonNameChars = regexp.MustCompile(`[^a-z0-9-]`)
 
 // Account is one tenant account of an application.
