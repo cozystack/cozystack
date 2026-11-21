@@ -1340,13 +1340,40 @@ func TestCleanupAltinityBackup_CarriesTheStrategySchedulingSettings(t *testing.T
 	}
 }
 
+func TestCleanupAltinityBackup_RetriesWhenJobQuotaBecomesAvailable(t *testing.T) {
+	ctx := context.Background()
+	backup := altinityCleanupBackup("ch-bk")
+	quotaFull := true
+	quotaErr := apierrors.NewForbidden(batchv1.Resource("jobs"), "ch-bk-cleanup", errors.New("exceeded quota: tenant, requested: count/jobs.batch=1, used: count/jobs.batch=2, limited: count/jobs.batch=2"))
+	c, scheme := newAltinityCleanupClientWith(interceptor.Funcs{
+		Create: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
+			if _, job := obj.(*batchv1.Job); job && quotaFull {
+				return quotaErr
+			}
+			return c.Create(ctx, obj, opts...)
+		},
+	}, altinityCleanupFixtures(backup)...)
+	r := &BackupReconciler{Client: c, Scheme: scheme, Recorder: record.NewFakeRecorder(10)}
+	if _, err := r.cleanupOnDelete(ctx, backup); !errors.Is(err, quotaErr) {
+		t.Fatalf("full Job quota: got %v, want retryable quota error", err)
+	}
+	quotaFull = false
+	if _, err := r.cleanupOnDelete(ctx, backup); err != nil {
+		t.Fatal(err)
+	}
+	job := &batchv1.Job{}
+	if err := c.Get(ctx, client.ObjectKey{Namespace: backup.Namespace, Name: "ch-bk-cleanup"}, job); err != nil {
+		t.Fatalf("cleanup Job after the quota freed up: %v", err)
+	}
+}
+
 // A cleanup Job the API server will never accept, such as one whose name
 // <backup>-cleanup is too long for a Job, would otherwise be retried for good
 // with the Backup stuck terminating.
 func TestCleanupAltinityBackup_ReleasesWhenTheJobIsRefused(t *testing.T) {
 	for name, refuse := range map[string]error{
 		"invalid":   apierrors.NewInvalid(batchv1.SchemeGroupVersion.WithKind("Job").GroupKind(), "ch-bk-cleanup", nil),
-		"forbidden": apierrors.NewForbidden(batchv1.Resource("jobs"), "ch-bk-cleanup", errors.New("quota")),
+		"forbidden": apierrors.NewForbidden(batchv1.Resource("jobs"), "ch-bk-cleanup", errors.New("service account cannot create jobs")),
 	} {
 		t.Run(name, func(t *testing.T) {
 			backup := altinityCleanupBackup("ch-bk")

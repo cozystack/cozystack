@@ -563,14 +563,14 @@ spec:
     #    480s  RestoreJob to Succeeded; no hold by then, the stamp is
     #          already older than the backup's own 2m wait
     #     30s  listing the archive's objects before the delete
-    #    300s  Backup delete, its cleanup Job included
+    #   1260s  Backup delete, including a second cleanup Job after a timeout
     #     30s  listing them again after it
     #     90s  the EXIT trap: Corefile replace plus a 60s Secret delete
-    #   1690s  (28m10s)
-    # 31m leaves 2m50s for the SQL and kubectl calls between those waits, so
+    #   2650s  (44m10s)
+    # 47m leaves 2m50s for the SQL and kubectl calls between those waits, so
     # an inner wait is what fires and names what stalled.
     - script:
-        timeout: 31m
+        timeout: 47m
         content: |
           set -eu
           cd ../../..
