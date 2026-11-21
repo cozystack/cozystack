@@ -9,6 +9,7 @@ import (
 // CredentialTemplateSpec describes one account of an application and the
 // Secret that stores its password. A kind's chart renders one per account; a
 // tenant cannot write it.
+// +kubebuilder:validation:XValidation:rule="!has(self.bucketAccess) || self.format.name == 'plaintext'",message="a template with bucketAccess stores its keys in the plaintext format"
 type CredentialTemplateSpec struct {
 	// Username is the account name as the engine knows it.
 	// +kubebuilder:validation:MinLength=1
@@ -30,6 +31,29 @@ type CredentialTemplateSpec struct {
 	// +optional
 	// +kubebuilder:validation:Pattern=`^_[A-Za-z0-9_]*$`
 	ValuesPath string `json:"valuesPath,omitempty"`
+
+	// BucketAccess makes the account engine-issued: it names the BucketAccess
+	// whose COSI grant issues the account's keys, which the platform cannot
+	// choose. cozystack-controller creates and owns it, re-creates it on a
+	// mint, and deletes it on a revoke. The keys are stored as they are
+	// issued, so the format is plaintext.
+	// +optional
+	BucketAccess *CredentialTemplateBucketAccess `json:"bucketAccess,omitempty"`
+}
+
+// CredentialTemplateBucketAccess is the BucketAccess an engine-issued
+// template stands for. Its credentials Secret carries the BucketAccess's own name.
+// +kubebuilder:validation:XValidation:rule="self.name == oldSelf.name",message="bucketAccess.name is immutable"
+type CredentialTemplateBucketAccess struct {
+	// Name of the BucketAccess and of the Secret the COSI sidecar writes.
+	// +kubebuilder:validation:MinLength=1
+	Name string `json:"name"`
+	// BucketClaimName is the BucketClaim the access is granted on.
+	// +kubebuilder:validation:MinLength=1
+	BucketClaimName string `json:"bucketClaimName"`
+	// BucketAccessClassName is the class that sets the access policy.
+	// +kubebuilder:validation:MinLength=1
+	BucketAccessClassName string `json:"bucketAccessClassName"`
 }
 
 // CredentialTemplateFormat names a stored form of a password.
@@ -103,6 +127,10 @@ const (
 	CredentialTemplateSecretConflict = "SecretConflict"
 	// CredentialTemplateUnknownFormat: the format names no built-in format.
 	CredentialTemplateUnknownFormat = "UnknownFormat"
+	// CredentialTemplateBucketAccessConflict: a BucketAccess at the name an
+	// engine-issued template names that the controller did not create or
+	// adopt; it is left alone.
+	CredentialTemplateBucketAccessConflict = "BucketAccessConflict"
 )
 
 // +kubebuilder:object:root=true
