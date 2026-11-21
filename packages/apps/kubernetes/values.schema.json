@@ -149,7 +149,7 @@
           "default": false
         },
         "ipv4Config": {
-          "description": "Address pool for workers. capmox assigns static addresses and has no DHCP mode, so this is required rather than optional.",
+          "description": "Address pool for workers. capmox assigns static addresses and has no DHCP mode, so this is required unless `network.name` is set, which brings the network's own pool.",
           "type": "object",
           "default": {},
           "required": [
@@ -174,6 +174,18 @@
               "description": "Netmask prefix length.",
               "type": "integer",
               "default": 24
+            }
+          }
+        },
+        "network": {
+          "description": "Place the cluster on a Proxmox tenant network of this namespace instead of an address pool of your own.",
+          "type": "object",
+          "default": {},
+          "properties": {
+            "name": {
+              "description": "Name of the network as the platform operator listed it for this namespace in a ProxmoxNetworkZone (`cozystack.proxmox-network` package). Set it instead of `ipv4Config`: the workers of every node pool that names the same network take their addresses from the network's own IP pool, and the ProxmoxCluster's `ipv4Config` becomes a sentinel holding only the network's gateway, which capmox cannot hand out. Keep the same name on every `KubernetesNodes` pool of this cluster that should share the network. Empty keeps the `ipv4Config` path.",
+              "type": "string",
+              "default": ""
             }
           }
         }

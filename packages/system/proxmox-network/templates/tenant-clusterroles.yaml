@@ -1,0 +1,14 @@
+# Aggregated into cozy:tenant:view and every role above it. A tenant reads the
+# IP pools of its namespace (addresses, gateway, how many are used) and never
+# writes them: this chart is the only writer. Zones are not shown to tenants;
+# they list every tenant's VLAN.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: cozy:proxmox-networks:view
+  labels:
+    rbac.cozystack.io/aggregate-to-tenant-view: "true"
+rules:
+- apiGroups: ["ipam.cluster.x-k8s.io"]
+  resources: ["inclusterippools"]
+  verbs: ["get", "list", "watch"]

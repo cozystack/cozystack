@@ -1,0 +1,141 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: proxmoxnetworkzones.proxmox.cozystack.io
+spec:
+  group: proxmox.cozystack.io
+  names:
+    kind: ProxmoxNetworkZone
+    listKind: ProxmoxNetworkZoneList
+    plural: proxmoxnetworkzones
+    shortNames:
+    - pxzone
+    singular: proxmoxnetworkzone
+  scope: Cluster
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.bridge
+      name: Bridge
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: |-
+          ProxmoxNetworkZone is the admin's table of Proxmox tenant networks on one
+          VLAN-aware bridge: per network, the namespace that owns it, its VLAN and
+          its address plan. The proxmox-network package renders it from its values,
+          together with one InClusterIPPool per network. It has no status: nothing
+          allocates or reports at runtime.
+        properties:
+          apiVersion:
+            description: APIVersion defines the versioned schema of this representation of an object.
+            type: string
+          kind:
+            description: Kind is a string value representing the REST resource this object represents.
+            type: string
+          metadata:
+            type: object
+          spec:
+            properties:
+              bridge:
+                description: Bridge is the VLAN-aware Proxmox bridge, with the same name on every node tenant VMs may land on.
+                maxLength: 15
+                minLength: 1
+                type: string
+              mtu:
+                description: MTU is the default MTU of every NIC on the zone's networks.
+                maximum: 65520
+                minimum: 576
+                type: integer
+              networks:
+                description: Networks lists the tenant networks of the zone, unique by (namespace, name).
+                items:
+                  properties:
+                    addresses:
+                      description: Addresses are the IP addresses, ranges (a-b) or CIDRs the network's pool hands out.
+                      items:
+                        maxLength: 64
+                        minLength: 1
+                        type: string
+                      maxItems: 32
+                      minItems: 1
+                      type: array
+                    gateway:
+                      description: Gateway is the network's default gateway, served by the operator's router.
+                      maxLength: 15
+                      minLength: 7
+                      type: string
+                    mtu:
+                      description: MTU overrides the zone's MTU for this network.
+                      maximum: 65520
+                      minimum: 576
+                      type: integer
+                    name:
+                      description: Name is the network's name in its namespace; tenants refer to it as proxmox.network.name.
+                      maxLength: 57
+                      minLength: 1
+                      pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+                      type: string
+                    namespace:
+                      description: Namespace is the tenant namespace that owns the network.
+                      maxLength: 63
+                      minLength: 1
+                      pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+                      type: string
+                    prefix:
+                      description: Prefix is the network's IPv4 prefix length.
+                      maximum: 32
+                      minimum: 1
+                      type: integer
+                    vlan:
+                      description: VLAN is the network's VLAN tag on the bridge.
+                      maximum: 4094
+                      minimum: 1
+                      type: integer
+                  required:
+                  - addresses
+                  - gateway
+                  - name
+                  - namespace
+                  - prefix
+                  - vlan
+                  type: object
+                maxItems: 256
+                type: array
+                x-kubernetes-list-map-keys:
+                - namespace
+                - name
+                x-kubernetes-list-type: map
+              uplinkBridges:
+                description: UplinkBridges are bridges that enslave the uplink's parent device; no tenant NIC may sit on them.
+                items:
+                  maxLength: 15
+                  minLength: 1
+                  type: string
+                maxItems: 16
+                type: array
+                x-kubernetes-list-type: set
+              uplinkVLAN:
+                description: UplinkVLAN is the outer VLAN that carries the bridge between hypervisors; no network may use it.
+                maximum: 4094
+                minimum: 1
+                type: integer
+            required:
+            - bridge
+            type: object
+            x-kubernetes-validations:
+            - message: a network's vlan must differ from uplinkVLAN
+              rule: '!has(self.uplinkVLAN) || !has(self.networks) || self.networks.all(n, n.vlan != self.uplinkVLAN)'
+            - message: vlan must be unique within the zone
+              rule: '!has(self.networks) || self.networks.all(a, self.networks.exists_one(b, b.vlan == a.vlan))'
+            - message: uplinkBridges must not contain bridge
+              rule: '!has(self.uplinkBridges) || !(self.bridge in self.uplinkBridges)'
+        required:
+        - spec
+        type: object
+    served: true
+    storage: true

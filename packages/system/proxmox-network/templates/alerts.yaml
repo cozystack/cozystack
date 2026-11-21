@@ -1,0 +1,27 @@
+{{- if .Values.alerts.enabled }}
+{{- /* The pool is the one runtime object of this package, and
+      kube-state-metrics exports its status.ipAddresses through the custom
+      resource state in packages/system/monitoring-agents. Only pools of
+      this package (pxnet-*) are judged; capmox makes a pool of its own for
+      every ProxmoxCluster. */}}
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: proxmox-network
+  labels:
+    app.kubernetes.io/name: proxmox-network
+spec:
+  groups:
+  - name: proxmox-network.rules
+    rules:
+    - alert: ProxmoxNetworkPoolNearlyFull
+      expr: |
+        max by (namespace, name) (capi_ipam_inclusterippool_addresses_used{name=~"pxnet-.*"})
+          / max by (namespace, name) (capi_ipam_inclusterippool_addresses_total{name=~"pxnet-.*"}) > 0.9
+      for: 10m
+      labels:
+        severity: warning
+      annotations:
+        summary: "IP pool {{`{{ $labels.namespace }}/{{ $labels.name }}`}} of a Proxmox tenant network is over 90% used"
+        description: "New workers on this network will wait for an address once the pool is full. Widen the network's addresses in the proxmox-network zone table."
+{{- end }}
