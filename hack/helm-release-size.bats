@@ -62,6 +62,7 @@ packages/extra/gateway
 packages/extra/info
 packages/extra/ingress
 packages/extra/monitoring
+packages/extra/rustfs
 packages/extra/seaweedfs
 packages/library/cozy-lib
 packages/system/kuberture

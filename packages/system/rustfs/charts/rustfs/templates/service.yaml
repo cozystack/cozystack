@@ -1,0 +1,85 @@
+{{- if .Values.mode.distributed.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "rustfs.fullname" . }}-headless
+  namespace: {{ .Release.Namespace }}
+  {{- with (include "rustfs.headlessServiceAnnotations" .) }}
+  annotations:
+    {{- . | nindent 4 }}
+  {{- end }}
+  labels:
+    {{- include "rustfs.labels" . | nindent 4 }}
+    {{- with .Values.commonLabels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  {{- /* headless service */}}
+  clusterIP: None
+  publishNotReadyAddresses: true
+  ports:
+    - name: endpoint
+      port: {{ .Values.service.endpoint.port }}
+    - name: console
+      port: {{ .Values.service.console.port }}
+  selector:
+    {{- include "rustfs.selectorLabels" . | nindent 4 }}
+{{- end }}
+
+---
+{{- $serviceType := .Values.service.type }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "rustfs.fullname" . }}-svc
+  namespace: {{ .Release.Namespace }}
+  {{- with (include "rustfs.serviceAnnotations" .) }}
+  annotations:
+    {{- . | nindent 4 }}
+  {{- end }}
+  labels:
+    {{- include "rustfs.labels" . | nindent 4 }}
+    {{- with (include "rustfs.serviceLabels" .) }}
+    {{- . | nindent 4 }}
+    {{- end }}
+spec:
+  {{- if eq $serviceType "ClusterIP" }}
+  type: ClusterIP
+  {{- else if eq $serviceType "NodePort" }}
+  type: NodePort
+  sessionAffinity: ClientIP
+  sessionAffinityConfig:
+    clientIP:
+      timeoutSeconds: 10800
+  {{- else if eq $serviceType "LoadBalancer" }}
+  type: LoadBalancer
+  {{- with .Values.service.loadBalancerIP }}
+  loadBalancerIP: {{ . }}
+  {{- end }}
+  {{- with .Values.service.loadBalancerClass }}
+  loadBalancerClass: {{ . }}
+  {{- end }}
+  {{- with .Values.service.loadBalancerSourceRanges }}
+  loadBalancerSourceRanges:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  {{- end }}
+  {{- with .Values.service.externalIPs }}
+  externalIPs:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  ports:
+    - name: endpoint
+      port: {{ .Values.service.endpoint.port }}
+      targetPort: {{ .Values.service.endpoint.port }}
+      {{- if eq $serviceType "NodePort" }}
+      nodePort: {{ .Values.service.endpoint.nodePort }}
+      {{- end }}
+    - name: console
+      port: {{ .Values.service.console.port }}
+      targetPort: {{ .Values.service.console.port }}
+      {{- if eq $serviceType "NodePort" }}
+      nodePort: {{ .Values.service.console.nodePort }}
+      {{- end }}
+  selector:
+    {{- include "rustfs.selectorLabels" . | nindent 4 }}

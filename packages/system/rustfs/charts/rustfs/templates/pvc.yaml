@@ -1,0 +1,50 @@
+{{- if and .Values.mode.standalone.enabled (not .Values.mode.standalone.existingClaim.dataClaim) (not (empty .Values.storageclass.dataStorageSize)) }}
+{{- with .Values.storageclass }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  annotations:
+    helm.sh/resource-policy: keep
+    {{- with .pvcAnnotations.data }}
+    {{- toYaml .| nindent 4  }}
+    {{- end }}
+  name: {{ include "rustfs.fullname" $ }}-data
+  namespace: {{ $.Release.Namespace }}
+  labels:
+    {{- toYaml $.Values.commonLabels | nindent 4 }}
+spec:
+  accessModes: [ ReadWriteOnce ]
+  {{- with .name }}
+  storageClassName: {{ . }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .dataStorageSize }}
+{{- end }}
+{{- end }}
+
+{{- if and .Values.mode.standalone.enabled .Values.config.rustfs.obs_log_directory (not .Values.mode.standalone.existingClaim.logsClaim) }}
+{{- with .Values.storageclass }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  annotations:
+    helm.sh/resource-policy: keep
+    {{- with .pvcAnnotations.logs }}
+    {{- toYaml .| nindent 4  }}
+    {{- end }}
+  name: {{ include "rustfs.fullname" $ }}-logs
+  namespace: {{ $.Release.Namespace }}
+  labels:
+    {{- toYaml $.Values.commonLabels | nindent 4 }}
+spec:
+  accessModes: [ ReadWriteOnce ]
+  {{- with .name }}
+  storageClassName: {{ . }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .logStorageSize }}
+{{- end }}
+{{- end }}

@@ -1,0 +1,31 @@
+---
+apiVersion: cozystack.io/v1alpha1
+kind: PackageSource
+metadata:
+  name: cozystack.rustfs-application
+spec:
+  sourceRef:
+    kind: OCIRepository
+    name: cozystack-packages
+    namespace: cozy-system
+    path: /
+  variants:
+    - name: default
+      dependsOn:
+        - cozystack.networking
+        # rustfs-rd ships an ApplicationDefinition, a CRD of cozystack-engine.
+        - cozystack.cozystack-engine
+      libraries:
+        - name: cozy-lib
+          path: library/cozy-lib
+      components:
+        - name: rustfs-system
+          path: system/rustfs
+        - name: rustfs
+          path: extra/rustfs
+          libraries: ["cozy-lib"]
+        - name: rustfs-rd
+          path: system/rustfs-rd
+          install:
+            namespace: cozy-system
+            releaseName: rustfs-rd

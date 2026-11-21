@@ -1,0 +1,519 @@
+# Default values for rustfs.
+# This is a YAML-formatted file.
+# Declare variables to be passed into your templates.
+
+# Number of StatefulSet pods (nodes in the distributed cluster).
+# In distributed mode this must be >= 2 (RustFS requires at least two nodes
+# for an erasure-coded cluster).
+replicaCount: 4
+
+# Number of data drives (PVCs) per pod. Combined with replicaCount this
+# determines the total drive count seen by rustfs. When
+# storageclass.dataStorageSize is empty no PVCs are created and the drives come
+# from extraVolumes/extraVolumeMounts instead.
+# - drivesPerNode > 1: each pod gets N volumes mounted at /data/rustfs0.../data/rustfsN-1
+# - drivesPerNode = 1: each pod gets a single volume mounted at /data
+#
+# When left unset (null) the chart infers a backward-compatible value per
+# pool from that pool's replica count:
+#   replicaCount = 4  -> drivesPerNode = 4  (legacy default)
+#   replicaCount != 4 -> drivesPerNode = 1  (legacy 16x1 and any other topology)
+#
+# WARNING: changing drivesPerNode on an existing StatefulSet is not allowed
+# because Kubernetes forbids updates to volumeClaimTemplates. To change the
+# drive count you must delete the StatefulSet (with --cascade=orphan to keep
+# pods/PVCs) and recreate it, or perform a full reinstall.
+drivesPerNode: null
+
+# Kubernetes cluster DNS domain used to build in-cluster FQDNs for
+# RUSTFS_VOLUMES (distributed mode) and mTLS server certificate SANs.
+# Override this only if your cluster does not use the default `cluster.local`
+# (for example, on-premise clusters configured with a custom domain).
+# Provide the DNS root only, without a `svc.` prefix or leading/trailing dots.
+clusterDomain: cluster.local
+
+# Deprecated and ignored. Retained so existing values files continue to
+# render after peer startup coordination moved into RustFS.
+# RUSTFS_COMPAT_TODO(rustfs-5416): Keep the removed init-gate setting visible to existing values files. Remove after the minimum supported direct-upgrade chart includes localEndpointHost.autoInject and no longer renders peer gates.
+startupWaitTimeoutSeconds: 300
+
+# Inject a pod-specific endpoint identity for chart-generated distributed
+# topologies. The default enables injection unless secret.existingSecret is
+# set, because the chart cannot inspect runtime overrides hidden in that
+# Secret. Without injection, the server infers a unique matching domain
+# endpoint from its kernel hostname in Kubernetes auto/orchestrated mode; custom
+# aliases retain bounded legacy DNS locality when no hostname matches. Configure
+# RUSTFS_LOCAL_ENDPOINT_HOST explicitly for DNS-free startup. Set true for a
+# credentials-only existing Secret or false to suppress chart injection.
+localEndpointHost:
+  autoInject: null
+
+# This sets the container image more information can be found here: https://kubernetes.io/docs/concepts/containers/images/
+image:
+  rustfs: # This sets the rustfs image repository and tag.
+    repository: rustfs/rustfs
+    # This sets the pull policy for images.
+    pullPolicy: IfNotPresent
+    # Overrides the image tag whose default is the chart appVersion.
+    tag: ""
+  initImage: # This sets the init container image repository and tag.
+    repository: busybox
+    pullPolicy: IfNotPresent
+    tag: "stable"
+
+# This is for the secrets for pulling an image from a private repository more information can be found here: https://kubernetes.io/docs/tasks/configure-pod-container/pull-image-private-registry/
+imagePullSecrets: []
+
+imageRegistryCredentials:
+  enabled: false
+  registry: ""
+  username: ""
+  password: ""
+  email: ""
+
+# This is to override the chart name.
+nameOverride: ""
+fullnameOverride: ""
+
+mode:
+  standalone:
+    enabled: false
+    strategy:
+      type: RollingUpdate
+      rollingUpdate:
+        maxSurge: 0
+        maxUnavailable: 1
+    existingClaim:
+      dataClaim: ""
+      logsClaim: ""
+  distributed:
+    enabled: true
+
+# Server pools for horizontal capacity expansion (distributed mode only).
+# Disabled by default: the chart then behaves exactly like the classic
+# single-pool layout driven by the top-level replicaCount/storageclass.
+#
+# With pools.enabled=true, one StatefulSet is rendered per entry of
+# pools.list and RUSTFS_VOLUMES contains every pool's volume expression
+# (space separated), which is how the server discovers multiple pools.
+# Each entry may set replicaCount (>= 2) and/or a storageclass block;
+# omitted fields inherit the top-level values.
+#
+# IMPORTANT:
+# - Pools are append-only. The list index determines the StatefulSet name
+#   (pool 0 keeps the legacy name so existing single-pool deployments can be
+#   expanded in place); never remove or reorder entries. To retire a pool,
+#   use `rc admin decommission` first.
+# - After adding a pool, run `rc admin rebalance start <alias>` to spread
+#   existing data across the new capacity.
+pools:
+  enabled: false
+  list: []
+  # Example: expand an existing 4-node deployment with a second, larger pool:
+  # list:
+  #   - {}                          # pool 0: inherits top-level values, keeps existing PVCs
+  #   - replicaCount: 4             # pool 1: new capacity
+  #     storageclass:
+  #       dataStorageSize: 10Gi
+
+secret:
+  existingSecret: ""
+  # SECURITY: rendering fails by default unless one of the following is true:
+  #   1. `secret.existingSecret` names a Kubernetes Secret you control, or
+  #   2. `secret.rustfs.access_key` and `secret.rustfs.secret_key` are both
+  #      set to non-empty, non-default values, or
+  #   3. `secret.allowInsecureDefaults: true` is set (only for local dev).
+  # This prevents accidental deployment with the well-known default
+  # `rustfsadmin/rustfsadmin` credentials.
+  allowInsecureDefaults: false
+  rustfs:
+    access_key: ""
+    secret_key: ""
+
+config:
+  rustfs:
+    # Examples
+    # volumes: "/data/rustfs0,/data/rustfs1,/data/rustfs2,/data/rustfs3"
+    # volumes: "http://rustfs-{0...3}.rustfs-headless:9000/data/rustfs{0...3}"
+    # NOTE: When overriding volumes manually, the mount paths and drive ranges
+    # must match the number of pods (replicaCount) and drives per pod
+    # (drivesPerNode). Mismatched values will cause broken volume discovery.
+    volumes: ""
+    address: ":9000"
+    console_enable: "true"
+    console_address: ":9001"
+    region: "us-east-1"
+    # Optionally enable support for virtual-hosted-style requests.
+    # See more information: https://docs.rustfs.com/integration/virtual.html
+    domains: "" # e.g. "example.com"
+    ec:
+      # Erasure-coding parity for the STANDARD storage class, e.g. "EC:4".
+      # Left empty by default: the server then picks a parity suited to the
+      # drive count. If you set it, it must be valid for the total drive
+      # count (total drives = replicaCount * drivesPerNode):
+      #
+      # | replicaCount | drivesPerNode | Total drives | Valid parity |
+      # | ------------ | ------------- | ------------ | ------------ |
+      # | 4            | 1             | 4            | 0-2          |
+      # | 4            | 2             | 8            | 0-4          |
+      # | 4            | 4             | 16           | 0-8          |
+      # | 8            | 1             | 8            | 0-4          |
+      # | 16           | 1             | 16           | 0-8          |
+      storage_class_standard: ""
+    scanner:
+      # Scanner speed preset: fastest|fast|default|slow|slowest
+      speed: ""
+      # Override scanner sleep multiplier (0-10000)
+      delay: ""
+      # Override maximum scanner sleep in seconds
+      max_wait_secs: ""
+      # Override scanner cycle interval in seconds
+      cycle_secs: ""
+      # Override start delay in seconds (optional)
+      start_delay_secs: ""
+      # Cap one scanner cycle's runtime in seconds (0 disables)
+      cycle_max_duration_secs: ""
+      # Cap objects processed by one scanner cycle (0 disables)
+      cycle_max_objects: ""
+      # Cap directories entered by one scanner cycle (0 disables)
+      cycle_max_directories: ""
+      # Periodic deep bitrot cycle in seconds; false/off/no/disabled disables
+      bitrot_cycle_secs: ""
+      # Enable/disable scanner sleeps for throttling
+      idle_mode: ""
+      # Timeout for scanner cache saves in seconds (minimum 1 second)
+      cache_save_timeout_secs: ""
+      # Cap on the wait between automatic scanner startup recovery retries in seconds (positive; default 600)
+      recovery_backoff_cap_secs: ""
+      # Cap concurrent scanner set tasks (0 keeps topology-derived concurrency)
+      max_concurrent_set_scans: ""
+      # Cap concurrent scanner disk bucket walks per set (0 keeps disk-count-derived concurrency)
+      max_concurrent_disk_scans: ""
+      # Bucket walkers per local disk (1-16; default 1 keeps one bucket walk per disk, raise on flash)
+      walkers_per_disk: ""
+      # Per-local-disk scanner I/O ceiling in operations per second (auto, off, or a number)
+      disk_io_budget_iops: ""
+      # Per-local-disk scanner I/O ceiling in bytes per second (auto, off, or a number)
+      disk_io_budget_bytes_per_sec: ""
+      # Yield to the async runtime every N scanned objects (0 disables extra yield)
+      yield_every_n_objects: ""
+      # Version count threshold for scanner alerts
+      alert_excess_versions: ""
+      # Retained version byte threshold for scanner alerts
+      alert_excess_version_size: ""
+      # Direct subfolder threshold for scanner alerts
+      alert_excess_folders: ""
+    # Drive timeout profile preset: default|high_latency
+    # - default: keep current timeout defaults.
+    # - high_latency: use higher timeout defaults for scanner-sensitive operations.
+    timeout_profile: ""
+    log_level: "info"
+    log_rotation: # Specify log rotation settings
+      # size: 100 # Default value: 100 MB
+      # time: hour # Default value: hour, eg: day,hour,minute,second
+      # keep_files: 30 # number of rotated log files to keep
+    ## If obs_log_directory is not empty, a separate volume for logs will be created and the logs will NOT be sent to stdout. If not set, will default to default chart value "/logs"
+    obs_log_directory: "/logs"
+    ## Supported values include `production`, `development`, `test`, and `staging`;
+    ## refer to the RustFS configuration documentation/source for the authoritative list.
+    obs_environment: "development"
+    obs_endpoint:
+      enabled: false # If true, rustfs will export metrics, traces, logs and profiling data to the specified OTLP endpoints. If false, the individual settings for metrics, traces, logs and profiling endpoints will be ignored and all data will not be exported.
+      base_endpoint: "" #Root OTLP/HTTP endpoint, e.g. http://otel-collector:4318
+      use_stdout: false # If true, rustfs will also export logs to stdout in addition to the OTLP logs endpoint.
+      metrics:
+        enabled: false
+        endpoint: "" # If specified, rustfs will export metrics to this OTLP endpoint. e.g. "http://localhost:4318/v1/metrics"
+      trace:
+        enabled: false
+        endpoint: "" # If specified, rustfs will export traces to this OTLP endpoint. e.g. "http://localhost:4318/v1/traces"
+      logs:
+        enabled: false
+        endpoint: "" # If specified, rustfs will export logs to this OTLP endpoint. e.g. "http://localhost:4318/v1/logs"
+      profiling:
+        enabled: false
+        endpoint: "" # If specified, rustfs will export profiling data to this endpoint. e.g. "http://localhost:6060/debug/pprof/profile"
+    kms:
+      enabled: false
+      type: "vault" # Only Support vault currently.
+      vault:
+        vault_backend: "" # Only support vault kv2 and vault transit.
+        vault_address: ""
+        vault_token: "" # Rendered into a dedicated Secret, never into the config ConfigMap.
+        vault_mount_path: "" # Transit engine mount for vault-transit; KV2 engine mount for vault. Unset means "secret" for KV2, which only a dev-mode Vault has by default.
+        default_key: ""
+
+
+# Extra environment variables for the RustFS container.
+# In distributed mode with chart-generated volumes (config.rustfs.volumes is
+# empty), the chart injects a private Downward API pod name and
+# RUSTFS_LOCAL_ENDPOINT_HOST to identify the pod's local endpoints. An explicit
+# RUSTFS_LOCAL_ENDPOINT_HOST or RUSTFS_VOLUMES entry disables automatic anchor
+# injection. An explicit bounded or fail-fast
+# RUSTFS_STARTUP_TOPOLOGY_WAIT_MODE, or an unrecognized static value, also keeps
+# legacy DNS-based locality discovery. Otherwise Kubernetes auto-detection
+# selects orchestrated startup when RustFS consumes the generated anchor.
+# With custom volumes, the chart does not inject them and extraEnv may define
+# the local endpoint identity explicitly.
+extraEnv: []
+# extraEnv:
+#   - name: RUSTFS_ERASURE_SET_DRIVE_COUNT
+#     value: "16"
+#   - name: RUSTFS_STORAGE_CLASS_STANDARD
+#     value: "EC:4"
+
+
+extraVolumes: []
+extraVolumeMounts: []
+
+# This section builds out the service account more information can be found here: https://kubernetes.io/docs/concepts/security/service-accounts/
+serviceAccount:
+  # Specifies whether a service account should be created
+  create: true
+  # Automatically mount a ServiceAccount's API credentials?
+  automount: true
+  # Annotations to add to the service account
+  annotations: {}
+  # The name of the service account to use.
+  # If not set and create is true, a name is generated using the fullname template
+  name: ""
+
+# This is for setting Kubernetes Annotations to a Pod.
+# For more information checkout: https://kubernetes.io/docs/concepts/overview/working-with-objects/annotations/
+podAnnotations: {}
+
+# This is for setting Kubernetes Labels to a Pod.
+# For more information checkout: https://kubernetes.io/docs/concepts/overview/working-with-objects/labels/
+podLabels: {}
+
+# Labels to add to all deployed objects
+commonLabels: {}
+
+podSecurityContext:
+  fsGroup: 10001
+  runAsUser: 10001
+  runAsGroup: 10001
+
+containerSecurityContext:
+  capabilities:
+    drop:
+      - ALL
+  readOnlyRootFilesystem: true
+  allowPrivilegeEscalation: false
+  runAsNonRoot: true
+
+# Name of an existing PriorityClass to assign, defining the importance of the pods compared to other pods in the cluster.
+# Ref: https://kubernetes.io/docs/concepts/scheduling-eviction/pod-priority-preemption/
+priorityClassName: ""
+
+service:
+  annotations: {}
+  labels: {} # Additional labels
+  headlessAnnotations: {} # Applied to the headless Service when mode.distributed.enabled=true
+  traefikAnnotations: # Applied to the Service when mode.distributed.enabled=true and ingress.className=traefik
+    traefik.ingress.kubernetes.io/service.sticky.cookie: "true"
+    traefik.ingress.kubernetes.io/service.sticky.cookie.httponly: "true"
+    traefik.ingress.kubernetes.io/service.sticky.cookie.name: rustfs
+    traefik.ingress.kubernetes.io/service.sticky.cookie.samesite: none
+    traefik.ingress.kubernetes.io/service.sticky.cookie.secure: "true"
+  type: ClusterIP
+  # LoadBalancer-specific fields (only used when type=LoadBalancer)
+  loadBalancerIP: ""           # Request a specific IP from the load balancer (e.g. for Cilium LB-IPAM or MetalLB)
+  loadBalancerClass: ""        # Specify a load balancer implementation (e.g. "io.cilium/bgp", "metallb")
+  loadBalancerSourceRanges: [] # Restrict client IPs (e.g. ["10.0.0.0/8"])
+  externalIPs: []             # Expose service via specific external IPs (e.g. ["203.0.113.1"])
+  endpoint:
+    port: 9000
+    nodePort: 32000
+  console:
+    port: 9001
+    nodePort: 32001
+
+# This block is for setting up the ingress for more information can be found here: https://kubernetes.io/docs/concepts/services-networking/ingress/
+ingress:
+  enabled: true
+  className: "nginx" # Specify the classname, traefik or nginx. Different classname has different annotations for session sticky.
+  traefikAnnotations: {} # Deprecated: use service.traefikAnnotations instead
+  nginxAnnotations:
+    nginx.ingress.kubernetes.io/affinity: cookie
+    nginx.ingress.kubernetes.io/proxy-body-size: "0"
+    nginx.ingress.kubernetes.io/session-cookie-expires: "3600"
+    nginx.ingress.kubernetes.io/session-cookie-hash: sha1
+    nginx.ingress.kubernetes.io/session-cookie-max-age: "3600"
+    nginx.ingress.kubernetes.io/session-cookie-name: rustfs
+  annotations: {}
+  customAnnotations: # Deprecated: use ingress.annotations instead
+    {}
+  hosts:
+    - host: console.rustfs.com
+      paths:
+        - path: /
+          pathType: Prefix
+          servicePort: console
+    - host: endpoint.rustfs.com
+      paths:
+        - path: /
+          pathType: Prefix
+          servicePort: endpoint
+  tls:
+    enabled: false # Enable tls and access rustfs via https.
+
+    certManager:
+      enabled: false # Enable certmanager to generate certificate for rustfs, default false.
+
+    existingSecret:
+      # To use an existing secret for tls certificates in the ingress enable this,
+      # set the name of the existing secret and make sure that the secret contains
+      # values for the keys "crt" and "key".
+      enabled: false
+      name: ""
+
+    # If the certmanager is not used and no existing secret is used to provide a tls certificate,
+    # then this certificate can be configured here. A secret will be created and used.
+    # Note: The following input will be base64 encoded during secret creation. There is no need
+    #       to provide it base64 encoded here already.
+    crt: tls.crt
+    key: tls.key
+
+gatewayApi:
+  enabled: false
+  gatewayClass: traefik # Supported gatewayClass: traefik, contour, istio.
+  listeners: # Specify which listeners to create on the Gateway.
+    http:
+      name: web
+      port: 8000
+    https:
+      name: websecure
+      port: 8443
+    tls: # Optional TLS passthrough listener; renders a TLSRoute so TLS terminates at the RustFS backend.
+      enabled: false
+      name: tls
+      port: 443
+      # Service port that terminates TLS on the backend; defaults to the console port.
+      backendPort: null
+  hostname: example.rustfs.com # Console hostname.
+  endpointHostname: "" # Optional separate hostname for the S3 endpoint.
+  httpToHttpsRedirect: true
+  existingGateway:
+    name: ""
+    namespace: ""
+
+# Native TLS identity managed by an external certificate controller.
+# Public TLS and an mTLS backend use separate listeners or an ingress terminator.
+tls:
+  enabled: false
+  existingSecret: "" # kubernetes.io/tls: tls.crt and tls.key only
+  trustSecret: "" # Optional independent outbound trust bundle: ca.crt
+  reloadInterval: 30
+
+mtls:
+  enabled: false
+  clientCertPath: "/opt/tls/client_cert.pem"
+  clientKeyPath: "/opt/tls/client_key.pem"
+  existingIssuerRef:
+    enabled: false
+    name: ""
+    kind: ""
+    group: ""
+
+resources: {}
+  # We usually recommend not to specify default resources and to leave this as a conscious
+  # choice for the user. This also increases chances charts run on environments with little
+  # resources, such as Minikube. If you do want to specify resources, uncomment the following
+  # lines, adjust them as necessary, and remove the curly braces after 'resources:'.
+  # limits:
+  #   cpu: 200m
+  #   memory: 512Mi
+  # requests:
+  #   cpu: 100m
+  #   memory: 128Mi
+
+# This is to setup the liveness and readiness probes more information can be found here: https://kubernetes.io/docs/tasks/configure-pod-container/configure-liveness-readiness-startup-probes/
+livenessProbe:
+  enabled: true # omitted
+  httpGet:
+    path: /health
+    port: 9000
+    scheme: HTTP
+  initialDelaySeconds: 30
+  periodSeconds: 5
+  timeoutSeconds: 3
+  successThreshold: 1
+  failureThreshold: 3
+
+readinessProbe:
+  enabled: true # omitted
+  httpGet:
+    path: /health/ready
+    port: endpoint
+    scheme: HTTP
+  initialDelaySeconds: 10
+  periodSeconds: 5
+  timeoutSeconds: 3
+  successThreshold: 1
+  failureThreshold: 3
+
+# Seconds a replaced pod must stay Ready before the StatefulSet rolling update
+# moves to the next pod. A restarted node is Ready as soon as it can reach the
+# cluster, but surviving nodes keep dialing its previous IP until the platform
+# DNS record expires (kube-dns serves 30s TTLs, CoreDNS 5s by default) and then
+# need a few more probes before they count its drives again. Stopping the next
+# pod inside that window takes two members of an erasure set away from the
+# survivors (#8669). Set to 0 to disable.
+minReadySeconds: 45
+
+nodeSelector: {}
+
+tolerations: []
+
+affinity:
+  podAntiAffinity:
+    enabled: true
+    topologyKey: kubernetes.io/hostname
+  nodeAffinity: {}
+
+topologySpreadConstraints:
+  enabled: false
+  constraints: []
+    # - maxSkew: 1
+    #   topologyKey: topology.kubernetes.io/zone
+    #   whenUnsatisfiable: ScheduleAnyway
+    #   labelSelector:
+    #     matchLabels:
+    #       app.kubernetes.io/name: rustfs
+
+storageclass:
+  name: local-path
+  # Size of each data PVC. Set it to an empty string ("") to stop the chart from
+  # creating data PersistentVolumeClaims: the StatefulSet then renders no data
+  # volumeClaimTemplates (standalone mode renders no data PVC) and no data
+  # volumeMounts, so the drives must come from extraVolumes/extraVolumeMounts,
+  # for example JBOD hostPath or local disks. Mount them at the paths RustFS
+  # expects: /data/rustfs0 ... /data/rustfs<drivesPerNode-1> when drivesPerNode
+  # is greater than 1, otherwise /data. Keep drivesPerNode and replicaCount
+  # accurate because they still drive the generated RUSTFS_VOLUMES. A pool
+  # under pools.list can override this value, including with "". Standalone
+  # mode keeps the data volume when mode.standalone.existingClaim.dataClaim is
+  # set. logStorageSize is independent: the logs PVC is still created unless
+  # config.rustfs.obs_log_directory is empty.
+  # WARNING: switching between an empty and a non-empty value changes the
+  # StatefulSet volumeClaimTemplates, which Kubernetes forbids updating in
+  # place. Delete the StatefulSet with --cascade=orphan and recreate it, or
+  # reinstall.
+  dataStorageSize: 256Mi
+  logStorageSize: 256Mi
+  pvcAnnotations:
+    data: {}
+    logs: {}
+
+pdb:
+  create: false
+  # Minimum number/percentage of pods that should remain scheduled
+  minAvailable: ""
+  # Maximum number/percentage of pods that may be made unavailable
+  maxUnavailable: 1
+
+# Whether information about services should be injected into pod's environment variable
+enableServiceLinks: false
+
+extraManifests: []
