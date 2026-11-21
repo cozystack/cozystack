@@ -1,0 +1,280 @@
+suite: request-path replicas and placement
+
+release:
+  name: harbor
+  namespace: tenant-test
+
+# nginx, core and registry sit on every docker login, pull and push, and portal
+# serves the UI. Their replica count is forwarded to the upstream chart, and only
+# above one replica does the wrapper add a PodDisruptionBudget and a soft zone and
+# node spread, so an install on the default keeps rendering the pod template it had.
+#
+# The release is selected by kind rather than by document index: the template also
+# renders a Secret and three WorkloadMonitors.
+set:
+  _namespace:
+    host: example.org
+    ingress: nginx
+    gateway: ""
+    seaweedfs: seaweedfs
+  _cluster:
+    solver: http01
+
+tests:
+  - it: keeps a single replica and adds no placement by default
+    template: templates/harbor.yaml
+    documentSelector:
+      path: kind
+      value: HelmRelease
+    asserts:
+      - equal:
+          path: spec.values.harbor.nginx.replicas
+          value: 1
+      - equal:
+          path: spec.values.harbor.portal.replicas
+          value: 1
+      - equal:
+          path: spec.values.harbor.core.replicas
+          value: 1
+      - equal:
+          path: spec.values.harbor.registry.replicas
+          value: 1
+      - notExists:
+          path: spec.values.harbor.nginx.podDisruptionBudget
+      - notExists:
+          path: spec.values.harbor.nginx.topologySpreadConstraints
+      - notExists:
+          path: spec.values.harbor.portal.podDisruptionBudget
+      - notExists:
+          path: spec.values.harbor.portal.topologySpreadConstraints
+      - notExists:
+          path: spec.values.harbor.core.podDisruptionBudget
+      - notExists:
+          path: spec.values.harbor.core.topologySpreadConstraints
+      - notExists:
+          path: spec.values.harbor.registry.podDisruptionBudget
+      - notExists:
+          path: spec.values.harbor.registry.topologySpreadConstraints
+
+  - it: adds a PodDisruptionBudget and a soft zone and node spread above one replica
+    template: templates/harbor.yaml
+    documentSelector:
+      path: kind
+      value: HelmRelease
+    set:
+      nginx:
+        replicas: 2
+    asserts:
+      - equal:
+          path: spec.values.harbor.nginx.replicas
+          value: 2
+      # Upstream defaults minAvailable to 1; left in place it would sit next to
+      # maxUnavailable and the API server would reject the PDB.
+      - equal:
+          path: spec.values.harbor.nginx.podDisruptionBudget
+          value:
+            enabled: true
+            minAvailable: 0
+            maxUnavailable: 1
+      - equal:
+          path: spec.values.harbor.nginx.topologySpreadConstraints
+          value:
+            - maxSkew: 1
+              topologyKey: topology.kubernetes.io/zone
+              whenUnsatisfiable: ScheduleAnyway
+            - maxSkew: 1
+              topologyKey: kubernetes.io/hostname
+              whenUnsatisfiable: ScheduleAnyway
+
+  - it: scales each component independently
+    template: templates/harbor.yaml
+    documentSelector:
+      path: kind
+      value: HelmRelease
+    set:
+      core:
+        replicas: 3
+    asserts:
+      - equal:
+          path: spec.values.harbor.core.replicas
+          value: 3
+      - exists:
+          path: spec.values.harbor.core.podDisruptionBudget
+      - equal:
+          path: spec.values.harbor.nginx.replicas
+          value: 1
+      - notExists:
+          path: spec.values.harbor.nginx.podDisruptionBudget
+      - notExists:
+          path: spec.values.harbor.registry.podDisruptionBudget
+
+  # The upstream chart reads registry.replicas, not registry.registry.replicas,
+  # which is where the registry container's resources live.
+  - it: places registry replicas at the Deployment level of the upstream values
+    template: templates/harbor.yaml
+    documentSelector:
+      path: kind
+      value: HelmRelease
+    set:
+      registry:
+        replicas: 2
+    asserts:
+      - equal:
+          path: spec.values.harbor.registry.replicas
+          value: 2
+      - exists:
+          path: spec.values.harbor.registry.topologySpreadConstraints
+      - notExists:
+          path: spec.values.harbor.registry.registry.replicas
+
+  - it: portal follows its own replica count
+    template: templates/harbor.yaml
+    documentSelector:
+      path: kind
+      value: HelmRelease
+    set:
+      portal:
+        replicas: 2
+    asserts:
+      - equal:
+          path: spec.values.harbor.portal.replicas
+          value: 2
+      - exists:
+          path: spec.values.harbor.portal.podDisruptionBudget
+
+  - it: core WorkloadMonitor expects the configured replica count
+    template: templates/harbor.yaml
+    documentSelector:
+      path: metadata.name
+      value: harbor-core
+    set:
+      core:
+        replicas: 3
+    asserts:
+      - isKind:
+          of: WorkloadMonitor
+      - equal:
+          path: spec.replicas
+          value: 3
+      - equal:
+          path: spec.minReplicas
+          value: 1
+
+  - it: registry WorkloadMonitor expects the configured replica count
+    template: templates/harbor.yaml
+    documentSelector:
+      path: metadata.name
+      value: harbor-registry
+    set:
+      registry:
+        replicas: 2
+    asserts:
+      - isKind:
+          of: WorkloadMonitor
+      - equal:
+          path: spec.replicas
+          value: 2
+
+  - it: portal WorkloadMonitor expects the configured replica count
+    template: templates/harbor.yaml
+    documentSelector:
+      path: metadata.name
+      value: harbor-portal
+    set:
+      portal:
+        replicas: 2
+    asserts:
+      - isKind:
+          of: WorkloadMonitor
+      - equal:
+          path: spec.replicas
+          value: 2
+
+  # The platform-wide policy is authored as a block under a top-level
+  # `topologySpreadConstraints:` key, the shape the other applications read.
+  # It replaces the built-in spread, and any labelSelector it carries is
+  # dropped because the upstream chart appends its own to every entry.
+  - it: follows the cluster-wide spread policy when the platform sets one
+    template: templates/harbor.yaml
+    documentSelector:
+      path: kind
+      value: HelmRelease
+    set:
+      _cluster:
+        solver: http01
+        scheduling:
+          globalAppTopologySpreadConstraints: |
+            topologySpreadConstraints:
+            - maxSkew: 2
+              topologyKey: topology.kubernetes.io/zone
+              whenUnsatisfiable: DoNotSchedule
+              labelSelector:
+                matchLabels:
+                  foo: bar
+      core:
+        replicas: 2
+    asserts:
+      - equal:
+          path: spec.values.harbor.core.topologySpreadConstraints
+          value:
+            - maxSkew: 2
+              topologyKey: topology.kubernetes.io/zone
+              whenUnsatisfiable: DoNotSchedule
+      - exists:
+          path: spec.values.harbor.core.podDisruptionBudget
+
+  - it: ignores the cluster-wide spread policy at a single replica
+    template: templates/harbor.yaml
+    documentSelector:
+      path: kind
+      value: HelmRelease
+    set:
+      _cluster:
+        solver: http01
+        scheduling:
+          globalAppTopologySpreadConstraints: |
+            topologySpreadConstraints:
+            - maxSkew: 1
+              topologyKey: topology.kubernetes.io/zone
+              whenUnsatisfiable: DoNotSchedule
+    asserts:
+      - notExists:
+          path: spec.values.harbor.core.topologySpreadConstraints
+
+  # Zero would scale the request path away, and a negative count would fail the
+  # nested HelmRelease at the apiserver; the schema refuses both up front.
+  - it: rejects zero nginx replicas
+    template: templates/harbor.yaml
+    set:
+      nginx:
+        replicas: 0
+    asserts:
+      - failedTemplate:
+          errorPattern: "/nginx/replicas.: minimum: got 0, want 1"
+
+  - it: rejects zero portal replicas
+    template: templates/harbor.yaml
+    set:
+      portal:
+        replicas: 0
+    asserts:
+      - failedTemplate:
+          errorPattern: "/portal/replicas.: minimum: got 0, want 1"
+
+  - it: rejects zero core replicas
+    template: templates/harbor.yaml
+    set:
+      core:
+        replicas: 0
+    asserts:
+      - failedTemplate:
+          errorPattern: "/core/replicas.: minimum: got 0, want 1"
+
+  - it: rejects negative registry replicas
+    template: templates/harbor.yaml
+    set:
+      registry:
+        replicas: -1
+    asserts:
+      - failedTemplate:
+          errorPattern: "/registry/replicas.: minimum: got -1, want 1"

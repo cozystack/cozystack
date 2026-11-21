@@ -192,16 +192,20 @@ spec:
           {{- end }}
         {{- end }}
       nginx:
+        {{- include "harbor.replicaPlacement" (list .Values.nginx.replicas $) | nindent 8 }}
         resources: {{- include "cozy-lib.resources.defaultingSanitize" (list "t1.small" (dict) $) | nindent 10 }}
       portal:
+        {{- include "harbor.replicaPlacement" (list .Values.portal.replicas $) | nindent 8 }}
         resources: {{- include "cozy-lib.resources.defaultingSanitize" (list "t1.micro" (dict) $) | nindent 10 }}
       core:
+        {{- include "harbor.replicaPlacement" (list .Values.core.replicas $) | nindent 8 }}
         {{- if and $tokenKey $tokenCert }}
         tokenKey: {{ $tokenKey | quote }}
         tokenCert: {{ $tokenCert | quote }}
         {{- end }}
         resources: {{- include "cozy-lib.resources.defaultingSanitize" (list .Values.core.resourcesPreset .Values.core.resources $) | nindent 10 }}
       registry:
+        {{- include "harbor.replicaPlacement" (list .Values.registry.replicas $) | nindent 8 }}
         registry:
           resources: {{- include "cozy-lib.resources.defaultingSanitize" (list .Values.registry.resourcesPreset .Values.registry.resources $) | nindent 12 }}
         controller:
@@ -245,7 +249,7 @@ metadata:
   labels:
     workloads.cozystack.io/resource-preset: {{ .Values.core.resourcesPreset | quote }}
 spec:
-  replicas: 1
+  replicas: {{ .Values.core.replicas }}
   minReplicas: 1
   kind: harbor
   type: core
@@ -263,7 +267,7 @@ metadata:
   labels:
     workloads.cozystack.io/resource-preset: {{ .Values.registry.resourcesPreset | quote }}
 spec:
-  replicas: 1
+  replicas: {{ .Values.registry.replicas }}
   minReplicas: 1
   kind: harbor
   type: registry
@@ -279,7 +283,7 @@ kind: WorkloadMonitor
 metadata:
   name: {{ $.Release.Name }}-portal
 spec:
-  replicas: 1
+  replicas: {{ .Values.portal.replicas }}
   minReplicas: 1
   kind: harbor
   type: portal
