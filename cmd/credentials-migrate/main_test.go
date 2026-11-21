@@ -118,13 +118,22 @@ func TestSeedRecordsAndMigrates(t *testing.T) {
 		if strings.Contains(string(sec.Data[account.PasswordKey]), c.plain) {
 			t.Fatal("the plaintext must not be stored")
 		}
-		if sec.Labels["cnpg.io/reload"] != "true" || sec.Labels[account.AccountLabel] != "true" || len(sec.OwnerReferences) != 1 || sec.OwnerReferences[0].UID != "hr-uid" {
+		// Unowned: the CredentialTemplate controller adopts it once the
+		// converted chart renders the template.
+		if sec.Labels["cnpg.io/reload"] != "true" || sec.Labels[account.AccountLabel] != "true" || len(sec.OwnerReferences) != 0 || sec.Annotations[account.FormatAnnotation] != "scram-sha-256" {
 			t.Fatalf("%s meta = %+v", c.secret, sec.ObjectMeta)
 		}
 		r := account.ReadRecord(sec)
 		if r.Origin != corev1alpha1.CredentialOriginMigrated || r.By != "migration" || len(r.History) != 1 || r.History[0].Operation != corev1alpha1.CredentialOperationMigrate {
 			t.Fatalf("%s record = %+v", c.secret, r)
 		}
+	}
+	hr := &helmv2.HelmRelease{}
+	if err := m.c.Get(ctx, types.NamespacedName{Namespace: "tenant-foo", Name: "postgres-orders"}, hr); err != nil {
+		t.Fatal(err)
+	}
+	if hr.Annotations[account.SeedAnnotation] != "true" {
+		t.Fatal("a release whose accounts all got a Secret must be marked for seeding")
 	}
 	// A second run keeps what it wrote.
 	before, _ := m.secret(t, "postgres-orders.web.account")
@@ -332,6 +341,13 @@ func TestSeedReplacesAForeignSecretAndSkipsAMissingPlaintext(t *testing.T) {
 	}
 	if _, ok := m.secret(t, "postgres-orders.api.account"); ok {
 		t.Fatal("an account with no plaintext to migrate is left to its first mint")
+	}
+	hr := &helmv2.HelmRelease{}
+	if err := m.c.Get(ctx, types.NamespacedName{Namespace: "tenant-foo", Name: "postgres-orders"}, hr); err != nil {
+		t.Fatal(err)
+	}
+	if hr.Annotations[account.SeedAnnotation] == "true" {
+		t.Fatal("a release with an account left for a mint must stay unmarked, or the controller seeds over the password its clients use")
 	}
 }
 

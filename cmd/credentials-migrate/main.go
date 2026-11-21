@@ -2,9 +2,10 @@
 
 // Command credentials-migrate converts the accounts of an application kind
 // to platform-minted credentials: "seed" from the pre-upgrade hook, "finish"
-// from a Job once the charts have switched. Both read the kind's credentials
-// block from flags, because the hook runs while the old ApplicationDefinitions
-// are still live. See design-proposals/user-secrets-api in cozystack/community.
+// from a Job once the charts have switched. Both take the kind's format and
+// accounts map from flags, because the hook runs before the converted chart
+// renders the CredentialTemplates. See design-proposals/user-secrets-api in
+// cozystack/community.
 package main
 
 import (
@@ -28,12 +29,10 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	cozyv1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
 	appsv1alpha1 "github.com/cozystack/cozystack/pkg/apis/apps/v1alpha1"
 	corev1alpha1 "github.com/cozystack/cozystack/pkg/apis/core/v1alpha1"
 	"github.com/cozystack/cozystack/pkg/credentials/account"
 	"github.com/cozystack/cozystack/pkg/credentials/format"
-	"github.com/cozystack/cozystack/pkg/credentials/store"
 )
 
 // errUnresolvable marks a release whose accounts cannot be resolved from its
@@ -85,14 +84,6 @@ type stringFlags []string
 func (s *stringFlags) String() string     { return strings.Join(*s, ",") }
 func (s *stringFlags) Set(v string) error { *s = append(*s, v); return nil }
 
-func (o *options) block() *cozyv1alpha1.ApplicationDefinitionCredentials {
-	return &cozyv1alpha1.ApplicationDefinitionCredentials{
-		Format:       cozyv1alpha1.CredentialFormat{Name: o.formatName},
-		SecretLabels: o.labels,
-		Accounts:     []cozyv1alpha1.CredentialAccountSource{{Kind: cozyv1alpha1.CredentialAccountsValuesMap, Path: o.accountsPath}},
-	}
-}
-
 func (o *options) stateName() string {
 	return fmt.Sprintf("credentials-migration-%d", o.migration)
 }
@@ -143,9 +134,6 @@ func run(args []string) error {
 	}
 	if o.migration == 0 || o.kind == "" || !format.Known(o.formatName) {
 		return errors.New("--migration, --kind and a built-in --format are required")
-	}
-	if err := account.Validate(o.block()); err != nil {
-		return fmt.Errorf("credentials block: %w", err)
 	}
 
 	scheme := runtime.NewScheme()
@@ -307,24 +295,19 @@ func (m *migrator) finishRelease(ctx context.Context, hr *helmv2.HelmRelease, re
 	return m.retireSource(ctx, hr)
 }
 
-// seedRelease writes the account Secrets the release lacks. A missing
-// plaintext leaves that account to the first mint; every other failure is an
-// error, wrapping errUnresolvable where the accounts cannot be resolved.
+// seedRelease writes the account Secrets the release lacks, unowned: the
+// CredentialTemplate controller adopts them once the converted chart renders
+// the templates. Once every declared account has its Secret, it marks the
+// release for seeding, so accounts added later get theirs from the
+// controller. A release where an account is left without a Secret, its
+// plaintext missing or one that would not carry over, stays unmarked: a seeded
+// random password would lock out the clients that use the old one, so that
+// account waits for a mint. Every failure other than unresolvable accounts is
+// an error.
 func (m *migrator) seedRelease(ctx context.Context, hr *helmv2.HelmRelease) error {
-	block := m.o.block()
-	accounts, err := store.ResolveAccounts(block, nil, hr.Spec.Values)
+	accounts, err := resolveAccounts(hr, m.o.accountsPath)
 	if err != nil {
 		return fmt.Errorf("%w: %v", errUnresolvable, err)
-	}
-	if len(accounts) == 0 {
-		return nil
-	}
-	app := store.App{
-		Namespace: hr.Namespace, Release: hr.Name,
-		Group: hr.Labels[appsv1alpha1.ApplicationGroupLabel],
-		Kind:  hr.Labels[appsv1alpha1.ApplicationKindLabel],
-		Name:  hr.Labels[appsv1alpha1.ApplicationNameLabel],
-		Block: block,
 	}
 	source := &corev1.Secret{}
 	if err := m.c.Get(ctx, types.NamespacedName{Namespace: hr.Namespace, Name: hr.Name + m.o.sourceSuffix}, source); err != nil {
@@ -334,25 +317,33 @@ func (m *migrator) seedRelease(ctx context.Context, hr *helmv2.HelmRelease) erro
 		fmt.Printf("%s/%s: %s%s is gone; its accounts get a Secret at their first mint\n", hr.Namespace, hr.Name, hr.Name, m.o.sourceSuffix)
 		return nil
 	}
-	owner := store.OwnerReference(hr)
 	now := metav1.NewTime(m.now())
+	complete := true
 	for _, acc := range accounts {
 		name := account.SecretName(hr.Name, acc.Mapped)
 		cur := &corev1.Secret{}
 		err := m.c.Get(ctx, types.NamespacedName{Namespace: hr.Namespace, Name: name}, cur)
 		switch {
-		case err == nil && store.Theirs(cur, acc, &owner):
+		case err == nil && account.IsAccountSecret(cur) && string(cur.Data[account.UsernameKey]) == acc.Username:
 			continue
-		case err == nil:
+		case err == nil && metav1.GetControllerOf(cur) == nil:
+			// Left from a deleted application of the same name, or not an
+			// account Secret at all: the operator would apply whatever it
+			// holds, so this one replaces it.
 			if err := m.c.Delete(ctx, cur, client.Preconditions{UID: &cur.UID}); err != nil && !apierrors.IsNotFound(err) {
 				return fmt.Errorf("replace stale %s: %w", name, err)
 			}
+		case err == nil:
+			fmt.Printf("%s/%s: %s exists and is not an account Secret this conversion wrote; leaving it and the account %q alone\n", hr.Namespace, hr.Name, name, acc.Username)
+			complete = false
+			continue
 		case !apierrors.IsNotFound(err):
 			return err
 		}
 		plaintext, ok := source.Data[acc.Username]
 		if !ok {
 			fmt.Printf("%s/%s: no password for %q in %s%s; the account gets a Secret at its first mint\n", hr.Namespace, hr.Name, acc.Username, hr.Name, m.o.sourceSuffix)
+			complete = false
 			continue
 		}
 		if !format.CarriesOver(m.o.formatName, string(plaintext)) {
@@ -360,24 +351,92 @@ func (m *migrator) seedRelease(ctx context.Context, hr *helmv2.HelmRelease) erro
 			// after the engine's login-time normalization, so the account is
 			// re-minted instead of carried over with a Secret nobody can use.
 			fmt.Printf("%s/%s: the password for %q in %s%s does not carry into a %s verifier unchanged; the account gets a Secret at its first mint\n", hr.Namespace, hr.Name, acc.Username, hr.Name, m.o.sourceSuffix, m.o.formatName)
+			complete = false
 			continue
 		}
 		stored, err := format.Encode(m.o.formatName, string(plaintext))
 		if err != nil {
 			return err
 		}
-		sec, err := store.SeedSecret(app, acc, &owner, now, m.o.actor)
-		if err != nil {
-			return err
+		sec := &corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:        name,
+				Namespace:   hr.Namespace,
+				Labels:      account.Labels(m.o.labels),
+				Annotations: map[string]string{account.FormatAnnotation: m.o.formatName},
+			},
+			Type: corev1.SecretTypeBasicAuth,
+			Data: map[string][]byte{
+				account.UsernameKey: []byte(acc.Username),
+				account.PasswordKey: []byte(stored),
+			},
 		}
-		sec.Data[account.PasswordKey] = []byte(stored)
 		account.WriteRecord(sec, account.Record{}.Apply(corev1alpha1.CredentialOperationMigrate, now, m.o.actor))
 		if err := m.c.Create(ctx, sec); err != nil {
 			return fmt.Errorf("create %s: %w", name, err)
 		}
 		fmt.Printf("%s/%s: migrated account %q into %s\n", hr.Namespace, hr.Name, acc.Username, name)
 	}
+	if !complete || hr.Annotations[account.SeedAnnotation] == "true" {
+		return nil
+	}
+	patch := client.MergeFrom(hr.DeepCopy())
+	if hr.Annotations == nil {
+		hr.Annotations = map[string]string{}
+	}
+	hr.Annotations[account.SeedAnnotation] = "true"
+	if err := m.c.Patch(ctx, hr, patch); err != nil {
+		return fmt.Errorf("mark for seeding: %w", err)
+	}
 	return nil
+}
+
+// resolveAccounts returns the accounts the release declares: the keys of its
+// accounts map, in sorted order. Two users mapping to one name, or a user
+// whose name maps to an invalid one, leave the release unresolvable.
+func resolveAccounts(hr *helmv2.HelmRelease, path string) ([]account.Account, error) {
+	var values map[string]any
+	if hr.Spec.Values != nil && len(hr.Spec.Values.Raw) > 0 {
+		if err := json.Unmarshal(hr.Spec.Values.Raw, &values); err != nil {
+			return nil, err
+		}
+	}
+	users, _ := lookup(values, path).(map[string]any)
+	names := make([]string, 0, len(users))
+	for name := range users {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	var accounts []account.Account
+	byMapped := map[string]string{}
+	for _, name := range names {
+		mapped, err := account.MapName(name)
+		if err != nil {
+			return nil, err
+		}
+		if other, dup := byMapped[mapped]; dup {
+			return nil, fmt.Errorf("users %q and %q both map to the name %q", other, name, mapped)
+		}
+		byMapped[mapped] = name
+		accounts = append(accounts, account.Account{Username: name, Mapped: mapped})
+	}
+	return accounts, nil
+}
+
+// lookup walks a dotted path through nested maps.
+func lookup(values map[string]any, path string) any {
+	var cur any = values
+	for _, key := range strings.Split(path, ".") {
+		m, ok := cur.(map[string]any)
+		if !ok {
+			return nil
+		}
+		cur, ok = m[key]
+		if !ok {
+			return nil
+		}
+	}
+	return cur
 }
 
 // stripPasswords removes a password left under any key of the accounts map in
@@ -390,7 +449,7 @@ func (m *migrator) stripPasswords(ctx context.Context, hr *helmv2.HelmRelease) e
 	if err := json.Unmarshal(hr.Spec.Values.Raw, &values); err != nil {
 		return err
 	}
-	users, _ := account.Lookup(values, m.o.accountsPath).(map[string]any)
+	users, _ := lookup(values, m.o.accountsPath).(map[string]any)
 	changed := false
 	for name, raw := range users {
 		u, ok := raw.(map[string]any)

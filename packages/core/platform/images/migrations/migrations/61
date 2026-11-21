@@ -2,12 +2,15 @@
 # Migration 61 --> 62
 # Convert PostgreSQL accounts to platform-minted credentials, first part.
 #
-# The converted postgres chart reads each account's verifier from an account
-# Secret the Cozystack API writes, and the API seeds those Secrets only on a
-# write of the application. This hook runs before any component chart changes
-# version and seeds them for every existing Postgres release from the
-# passwords in <release>-credentials, so clients keep logging in at every
-# point of the upgrade.
+# The converted postgres chart renders a CredentialTemplate per user, and
+# each managed role reads its verifier from the template's account Secret,
+# which cozystack-controller seeds with a random password only on a release
+# marked for seeding. This hook runs before any component chart changes
+# version and writes those Secrets, unowned, for every existing Postgres
+# release from the passwords in <release>-credentials, so clients keep
+# logging in at every point of the upgrade; the controller adopts them once
+# the templates exist. A release whose every account got its Secret is
+# marked for seeding, so users added later are seeded too.
 #
 # The second part is the cozystack-credentials-migration-61 Job, which waits
 # per release for its chart to switch, then strips the plaintext and retires
