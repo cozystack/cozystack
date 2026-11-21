@@ -883,6 +883,14 @@ func (r *Reconciler) renderWildcardCertificate(tgw *gatewayv1alpha1.TenantGatewa
 		tgw.Spec.Apex:        {},
 		"*." + tgw.Spec.Apex: {},
 	}
+	// Built up front: childApexes is sorted by name, so a covering
+	// wildcard can come after the apex it covers.
+	wildcards := map[string]struct{}{"*." + tgw.Spec.Apex: {}}
+	for _, apex := range childApexes {
+		if apex != "" {
+			wildcards["*."+apex] = struct{}{}
+		}
+	}
 	for _, apex := range childApexes {
 		if apex == "" {
 			continue
@@ -892,7 +900,10 @@ func (r *Reconciler) renderWildcardCertificate(tgw *gatewayv1alpha1.TenantGatewa
 		// sharing an apex during a rename). cert-manager rejects
 		// duplicate dnsNames; the inheriting tenant still attaches
 		// via the parent SANs already present.
-		if _, dup := seen[apex]; !dup {
+		_, dup := seen[apex]
+		// Let's Encrypt refuses the whole order when it lists a name
+		// that a wildcard in the same order already covers.
+		if !dup && !coveredByWildcard(wildcards, apex) {
 			dnsNames = append(dnsNames, apex)
 			seen[apex] = struct{}{}
 		}
@@ -923,6 +934,17 @@ func (r *Reconciler) renderWildcardCertificate(tgw *gatewayv1alpha1.TenantGatewa
 		return nil, err
 	}
 	return cert, nil
+}
+
+// coveredByWildcard mirrors Boulder's wildcardOverlap check. Unlike
+// hostnameCovers, a certificate wildcard spans exactly one label.
+func coveredByWildcard(wildcards map[string]struct{}, host string) bool {
+	_, parent, ok := strings.Cut(host, ".")
+	if !ok {
+		return false
+	}
+	_, covered := wildcards["*."+parent]
+	return covered
 }
 
 func ptrGroup(g string) *gatewayv1.Group {
