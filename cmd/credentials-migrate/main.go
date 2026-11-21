@@ -89,6 +89,8 @@ type options struct {
 	platformKeys     stringFlags
 	rotateKeys       stringFlags
 	hideSuffixes     stringFlags
+	fixedAccounts    stringFlags
+	enabledFlag      string
 	stateNamespace   string
 	actor            string
 	timeout          time.Duration
@@ -167,6 +169,8 @@ func run(args []string) error {
 	fs.Var(&o.platformKeys, "platform-key", "key of the source Secret that belongs to a platform account and stays; repeatable")
 	fs.Var(&o.hideSuffixes, "hide-secret-suffix", "finish: suffix, after the release name, of a Secret the chart does not render that holds a platform account; it is labelled not tenant-visible; repeatable")
 	fs.Var(&o.rotateKeys, "rotate-key", "finish: platform key of the source Secret to replace with a new random password once, followed by a forced upgrade of the release; repeatable")
+	fs.Var(&o.fixedAccounts, "fixed-account", "user the chart renders a template for whatever the values hold, for a kind with no accounts map; used instead of --accounts-path; repeatable")
+	fs.StringVar(&o.enabledFlag, "enabled-flag", "", "boolean value, by dotted path, that switches the fixed accounts off when false; unset counts as true, the chart default")
 	fs.StringVar(&o.stateNamespace, "state-namespace", "cozy-system", "namespace of the state ConfigMap")
 	fs.StringVar(&o.actor, "actor", envOr("CREDENTIALS_MIGRATE_ACTOR", defaultActor), "who the record names for the migrated password")
 	fs.DurationVar(&o.timeout, "timeout", 10*time.Minute, "finish: how long to wait per release for the switched chart to be Ready")
@@ -651,7 +655,13 @@ func (m *migrator) perAccountSource(hr *helmv2.HelmRelease, user string) string 
 // which the converted chart would not render, or a reserved user name leave
 // the release unresolvable. A skipped key is not a tenant account: the
 // converted chart renders no template for it, so it is left out of the result.
+//
+// A kind with fixed accounts has no accounts map: its accounts are the fixed
+// ones, or none when the release turns them off through the enabled flag.
 func (o *options) resolveAccounts(hr *helmv2.HelmRelease) ([]account.Account, error) {
+	if len(o.fixedAccounts) > 0 {
+		return resolveFixedAccounts(hr, o.fixedAccounts, o.enabledFlag)
+	}
 	var values map[string]any
 	if hr.Spec.Values != nil && len(hr.Spec.Values.Raw) > 0 {
 		if err := json.Unmarshal(hr.Spec.Values.Raw, &values); err != nil {
@@ -688,6 +698,39 @@ func (o *options) resolveAccounts(hr *helmv2.HelmRelease) ([]account.Account, er
 			return nil, fmt.Errorf("users %q and %q both map to the name %q", other, name, mapped)
 		}
 		byMapped[mapped] = name
+		accounts = append(accounts, account.Account{Username: name, Mapped: mapped})
+	}
+	return accounts, nil
+}
+
+// resolveFixedAccounts returns the fixed accounts of a kind with no accounts
+// map, such as the one default user of Redis, or none when the release turns
+// them off through the enabled flag. A flag that is not a boolean leaves the
+// release unresolvable rather than guessing what the chart renders.
+func resolveFixedAccounts(hr *helmv2.HelmRelease, users []string, enabledFlag string) ([]account.Account, error) {
+	if enabledFlag != "" {
+		var values map[string]any
+		if hr.Spec.Values != nil && len(hr.Spec.Values.Raw) > 0 {
+			if err := json.Unmarshal(hr.Spec.Values.Raw, &values); err != nil {
+				return nil, err
+			}
+		}
+		switch v := lookup(values, enabledFlag).(type) {
+		case nil:
+		case bool:
+			if !v {
+				return nil, nil
+			}
+		default:
+			return nil, fmt.Errorf("%s is %v, not a boolean", enabledFlag, v)
+		}
+	}
+	accounts := make([]account.Account, 0, len(users))
+	for _, name := range users {
+		mapped, err := account.MapName(name)
+		if err != nil {
+			return nil, err
+		}
 		accounts = append(accounts, account.Account{Username: name, Mapped: mapped})
 	}
 	return accounts, nil
