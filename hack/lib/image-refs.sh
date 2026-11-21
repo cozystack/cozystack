@@ -64,7 +64,7 @@
 # variable able to silently NARROW it is a hazard with no matching use case.
 # Word splitting is intended (the list is whitespace-separated), which also
 # means a path containing whitespace cannot be represented here.
-IMAGE_REF_EXTRA_FILES="system/multus/templates/multus-daemonset-thick.yml"
+IMAGE_REF_EXTRA_FILES="system/multus/templates/multus-daemonset-thick.yml library/cozy-lib/templates/_etcd.tpl"
 
 # Emit every ref-bearing file under <root>, one per line.
 #
