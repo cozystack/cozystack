@@ -40,3 +40,41 @@ tests:
             tenant: tenant-a
       - notExists:
           path: spec.values.global
+
+  - it: applies valuesOverride on top of the defaults instead of dropping it
+    set:
+      addons.monitoringAgents.valuesOverride:
+        vmagent:
+          remoteWrite:
+            urls:
+              - http://vminsert-shortterm.tenant-root.svc.cozy.local:8480/insert/0/prometheus
+              - https://metrics.example.org/api/v1/write
+        fluent-bit:
+          config:
+            outputs: |
+              [OUTPUT]
+                  Name stdout
+                  Match *
+    asserts:
+      - equal:
+          path: spec.values.vmagent.remoteWrite.urls
+          value:
+            - http://vminsert-shortterm.tenant-root.svc.cozy.local:8480/insert/0/prometheus
+            - https://metrics.example.org/api/v1/write
+      - equal:
+          path: spec.values.fluent-bit.config.outputs
+          value: |
+            [OUTPUT]
+                Name stdout
+                Match *
+      - equal:
+          path: spec.values.vmagent.externalLabels
+          value:
+            cluster: kubernetes-clusterprod
+            tenant: tenant-a
+      - matchRegex:
+          path: spec.values.fluent-bit.config.filters
+          pattern: Add cluster kubernetes-clusterprod
+      - equal:
+          path: spec.values.fluent-bit.daemonSetVolumes[0].name
+          value: varlog
