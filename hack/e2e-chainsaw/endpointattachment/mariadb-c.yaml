@@ -1,0 +1,21 @@
+apiVersion: apps.cozystack.io/v1alpha1
+kind: MariaDB
+metadata:
+  name: ea-c
+spec:
+  external: false
+  size: 10Gi
+  replicas: 1
+  storageClass: ""
+  users:
+    testuser:
+      maxUserConnections: 1000
+  databases:
+    testdb:
+      roles:
+        admin:
+        - testuser
+  backup:
+    enabled: false
+  resources: {}
+  resourcesPreset: "nano"

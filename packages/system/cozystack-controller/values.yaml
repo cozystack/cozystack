@@ -15,3 +15,16 @@ cozystackController:
   # Empty by default: no resources block is rendered, so requests and limits are
   # opt-in. Idle usage (measured) is ~69Mi — keep a limit above that.
   resources: {}
+  # EndpointAttachment rendering.
+  endpointAttachments:
+    # Declares that a service proxy answering to the cozy-proxy
+    # service-proxy-name is deployed, so attachments may render
+    # method: WholeIP|PortList Services. The platform sets it wherever it
+    # deploys cozy-proxy. Left false, such attachments render no Service
+    # and report DatapathContractUnavailable instead of attracting an
+    # address nothing would serve.
+    cozyProxyContractImplemented: false
+    # Allocate node ports on rendered LoadBalancer Services. Off unless the
+    # load balancer forwards through node ports (Hetzner RobotLB), matching
+    # the cozy-lib convention the charts follow.
+    allocateLoadBalancerNodePorts: false
