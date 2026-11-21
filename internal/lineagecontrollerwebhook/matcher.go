@@ -3,6 +3,7 @@ package lineagecontrollerwebhook
 import (
 	"bytes"
 	"context"
+	"strings"
 	"text/template"
 
 	cozyv1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
@@ -70,4 +71,22 @@ func matchResourceToExcludeInclude(ctx context.Context, name string, templateCon
 		return false
 	}
 	return matchResourceToSelectorArray(ctx, name, templateContext, l, resources.Include)
+}
+
+// SecretTenantVisible reports whether the webhook stamps a Secret of the
+// named application tenant-visible under the definition's selectors, the way
+// computeLabels evaluates them on admission. Callers outside the webhook use
+// it to tell whether a definition already in the API hides a Secret before
+// they label it, since the webhook re-evaluates on every write that drops the
+// lineage labels.
+func SecretTenantVisible(ctx context.Context, appDef *cozyv1alpha1.ApplicationDefinition, appName, namespace, secretName string, secretLabels map[string]string) bool {
+	if appDef == nil {
+		return false
+	}
+	templateContext := map[string]string{
+		"kind":      strings.ToLower(appDef.Spec.Application.Kind),
+		"name":      appName,
+		"namespace": namespace,
+	}
+	return matchResourceToExcludeInclude(ctx, secretName, templateContext, secretLabels, &appDef.Spec.Secrets)
 }
