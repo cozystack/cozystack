@@ -7,7 +7,12 @@ include ../../../hack/package.mk
 test:
 	helm unittest .
 
-.PHONY: image image-otelcol-tracing
+# Packages artifacts omit symlinks, so the tenant VMAlert rules are a copy of
+# the operator's rule file rather than a link to it.
+generate:
+	cp ../postgres-operator/alerts/cnpg-default-alerts.yaml rules/cnpg-default-alerts.yaml
+
+.PHONY: generate image image-otelcol-tracing
 
 # The collector is versioned by its upstream release, pinned in the
 # Containerfile; bump COZYSTACK_REV for a respin on the same release (a new
