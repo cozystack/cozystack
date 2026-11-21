@@ -6,10 +6,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
+	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
@@ -411,11 +413,11 @@ func TestEnsureMongoDBRestore_IdempotentByLabel(t *testing.T) {
 		},
 	}
 
-	first, err := r.ensureMongoDBRestore(context.Background(), rj, "mongodb-mongodb-target", source, nil)
+	first, err := r.ensureMongoDBRestore(context.Background(), rj, "mongodb-mongodb-target", source, nil, nil)
 	if err != nil {
 		t.Fatalf("first ensureMongoDBRestore: %v", err)
 	}
-	second, err := r.ensureMongoDBRestore(context.Background(), rj, "mongodb-mongodb-target", source, nil)
+	second, err := r.ensureMongoDBRestore(context.Background(), rj, "mongodb-mongodb-target", source, nil, nil)
 	if err != nil {
 		t.Fatalf("second ensureMongoDBRestore: %v", err)
 	}
@@ -1053,7 +1055,7 @@ func newMongoDBStrategyTestClient(t *testing.T, objs ...client.Object) client.Cl
 	return clientfake.NewClientBuilder().
 		WithScheme(s).
 		WithObjects(objs...).
-		WithStatusSubresource(&backupsv1alpha1.BackupJob{}, &backupsv1alpha1.RestoreJob{}, &backupsv1alpha1.Backup{}).
+		WithStatusSubresource(&backupsv1alpha1.BackupJob{}, &backupsv1alpha1.RestoreJob{}, &backupsv1alpha1.Backup{}, &batchv1.Job{}).
 		Build()
 }
 
@@ -1169,8 +1171,11 @@ func TestReconcileMongoDB_InjectsSystemStorageBeforePrecondition(t *testing.T) {
 	// exact state the chart leaves on the useSystemBucket flow.
 	cluster := &psmdbtypes.PerconaServerMongoDB{
 		ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "mongodb-app1"},
-		Spec:       psmdbtypes.PerconaServerMongoDBSpec{Backup: psmdbtypes.PerconaServerMongoDBBackupConfig{Enabled: true}},
-		Status:     psmdbtypes.PerconaServerMongoDBStatus{Conditions: []psmdbtypes.PerconaServerMongoDBCondition{{Type: psmdbtypes.ConditionPBMReady, Status: "True"}}},
+		Spec: psmdbtypes.PerconaServerMongoDBSpec{
+			Backup:  psmdbtypes.PerconaServerMongoDBBackupConfig{Enabled: true},
+			Secrets: &psmdbtypes.PerconaServerMongoDBSecrets{SSL: "mongodb-app1-ssl"},
+		},
+		Status: psmdbtypes.PerconaServerMongoDBStatus{Conditions: []psmdbtypes.PerconaServerMongoDBCondition{{Type: psmdbtypes.ConditionPBMReady, Status: "True"}}},
 	}
 
 	c := newMongoDBStrategyTestClient(t, job, strategy, app, cluster)
@@ -1201,6 +1206,9 @@ func TestReconcileMongoDB_InjectsSystemStorageBeforePrecondition(t *testing.T) {
 	got := &psmdbtypes.PerconaServerMongoDB{}
 	if err := c.Get(context.Background(), types.NamespacedName{Namespace: "tenant", Name: "mongodb-app1"}, got); err != nil {
 		t.Fatalf("get cluster: %v", err)
+	}
+	if got.Spec.Secrets == nil || got.Spec.Secrets.SSL != "mongodb-app1-ssl" {
+		t.Fatal("storage injection must preserve the target's TLS Secret")
 	}
 	entry, ok := got.Spec.Backup.Storages["s3-storage"]
 	if !ok {
@@ -2635,6 +2643,7 @@ func TestReconcileMongoDBRestore_FailsNamedWhenCredentialsSecretMissing(t *testi
 				Enabled:  true,
 				Storages: map[string]runtime.RawExtension{"s3-storage": {Raw: []byte(`{"type":"s3","s3":{"bucket":"cozy-backups","endpointUrl":"https://s3.example","region":"","prefix":"tenant/app1","credentialsSecret":"cozy-backups-creds","insecureSkipTLSVerify":false}}`)}},
 			}},
+			Status: psmdbtypes.PerconaServerMongoDBStatus{State: psmdbtypes.StateReady, BackupVersion: "2.11.0"},
 		}
 	}
 	newRJ := func(name string) *backupsv1alpha1.RestoreJob {
@@ -2737,6 +2746,726 @@ func TestReconcileMongoDBRestore_FailsNamedWhenCredentialsSecretMissing(t *testi
 			t.Errorf("an existing credentialsSecret must not be reported missing: %+v", cond)
 		}
 	})
+}
+
+// mongodbToCopyFixture returns the objects a to-copy restore of mongodb-src
+// into mongodb-target needs to get through every precondition in one
+// reconcile: a legacy Backup, a target cluster whose own storage is on the
+// archive's bucket, that storage's Secret, the target application declaring
+// databases (raw JSON, empty for none) and the RestoreJob.
+func mongodbToCopyFixture(t *testing.T, databases string) (*backupsv1alpha1.Backup, *backupsv1alpha1.RestoreJob, []client.Object) {
+	t.Helper()
+	apps := mongodbapp.GroupName
+	snap := &psmdbtypes.PerconaServerMongoDBBackup{
+		Status: psmdbtypes.PerconaServerMongoDBBackupStatus{
+			Destination: "s3://bkt/mongodb-src/2026-10-26T10:00:00Z",
+			S3:          &psmdbtypes.BackupStorageS3{Bucket: "bkt", CredentialsSecret: "mongodb-mongodb-src-s3-creds"},
+		},
+	}
+	raw, err := marshalMongoDBBackupSnapshot(snap, &strategyv1alpha1.MongoDBTemplate{Type: "logical"}, "s3-storage", nil, false)
+	if err != nil {
+		t.Fatalf("marshal snapshot: %v", err)
+	}
+	backup := &backupsv1alpha1.Backup{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "src-backup"},
+		Spec: backupsv1alpha1.BackupSpec{
+			ApplicationRef: corev1.TypedLocalObjectReference{Kind: "MongoDB", Name: "mongodb-src", APIGroup: &apps},
+		},
+		Status: backupsv1alpha1.BackupStatus{UnderlyingResources: raw},
+	}
+	cluster := &psmdbtypes.PerconaServerMongoDB{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: mongodbNameForApp("mongodb-target")},
+		Spec: psmdbtypes.PerconaServerMongoDBSpec{Backup: psmdbtypes.PerconaServerMongoDBBackupConfig{
+			Enabled:  true,
+			Storages: map[string]runtime.RawExtension{"s3-storage": {Raw: []byte(`{"type":"s3","s3":{"bucket":"bkt","credentialsSecret":"mongodb-mongodb-target-s3-creds"}}`)}},
+		}},
+		Status: psmdbtypes.PerconaServerMongoDBStatus{State: psmdbtypes.StateReady, BackupVersion: "2.11.0"},
+	}
+	app := &mongodbapp.MongoDB{ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "mongodb-target"}}
+	if databases != "" {
+		app.Spec.Databases = &runtime.RawExtension{Raw: []byte(databases)}
+	}
+	secret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "mongodb-mongodb-target-s3-creds"}}
+	rj := newMongoDBRestoreJob("rj-copy", "tenant")
+	rj.Spec.TargetApplicationRef = &corev1.TypedLocalObjectReference{Kind: "MongoDB", Name: "mongodb-target", APIGroup: &apps}
+	rj.Status.StartedAt = &metav1.Time{Time: time.Now()}
+	rj.Status.Phase = backupsv1alpha1.RestoreJobPhaseRunning
+	return backup, rj, []client.Object{backup, rj, cluster, app, secret}
+}
+
+func mongodbRestoresIn(t *testing.T, c client.Client) []psmdbtypes.PerconaServerMongoDBRestore {
+	t.Helper()
+	list := &psmdbtypes.PerconaServerMongoDBRestoreList{}
+	if err := c.List(context.Background(), list, client.InNamespace("tenant")); err != nil {
+		t.Fatalf("list operator restores: %v", err)
+	}
+	return list.Items
+}
+
+func TestReconcileMongoDBRestore_WaitsForTargetAndBackupAgentsBeforeHandOver(t *testing.T) {
+	for _, tc := range []struct {
+		name, state, backupVersion string
+		expired                    bool
+	}{
+		{name: "no status yet"},
+		{name: "initializing with backup agents", state: "initializing", backupVersion: "2.11.0"},
+		{name: "ready without backup agents", state: psmdbtypes.StateReady},
+		{name: "error with backup agents", state: psmdbtypes.StateError, backupVersion: "2.11.0"},
+		{name: "deadline expires before agents are ready", state: psmdbtypes.StateReady, expired: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			backup, rj, objs := mongodbToCopyFixture(t, `{"demo":{}}`)
+			if tc.expired {
+				rj.Spec.Options = &runtime.RawExtension{Raw: []byte(`{"restoreTimeoutSeconds":1}`)}
+				rj.Status.StartedAt = &metav1.Time{Time: time.Now().Add(-time.Minute)}
+			}
+			c := newMongoDBStrategyTestClient(t, objs...)
+			r := &RestoreJobReconciler{Client: c, Scheme: c.Scheme(), Recorder: record.NewFakeRecorder(10)}
+			ctx := context.Background()
+			cluster := &psmdbtypes.PerconaServerMongoDB{}
+			if err := c.Get(ctx, types.NamespacedName{Namespace: "tenant", Name: mongodbNameForApp("mongodb-target")}, cluster); err != nil {
+				t.Fatal(err)
+			}
+			cluster.Status.State, cluster.Status.BackupVersion = tc.state, tc.backupVersion
+			if err := c.Update(ctx, cluster); err != nil {
+				t.Fatal(err)
+			}
+			result, err := r.reconcileMongoDBRestore(ctx, rj.DeepCopy(), backup)
+			if err != nil {
+				t.Fatalf("reconcileMongoDBRestore: %v", err)
+			}
+			if n := len(mongodbRestoresIn(t, c)); n != 0 {
+				t.Fatalf("an unready target must not reach the operator, got %d restores", n)
+			}
+			if err := c.Get(ctx, client.ObjectKeyFromObject(rj), rj); err != nil {
+				t.Fatal(err)
+			}
+			cond := apimeta.FindStatusCondition(rj.Status.Conditions, "Ready")
+			if cond == nil || cond.Status != metav1.ConditionFalse || cond.Reason != "TargetPerconaServerMongoDBNotReady" {
+				t.Fatalf("expected a target readiness condition, got %+v", cond)
+			}
+			if tc.expired {
+				if rj.Status.Phase != backupsv1alpha1.RestoreJobPhaseFailed || result.RequeueAfter != 0 {
+					t.Fatalf("expired wait must fail, got phase=%q result=%+v", rj.Status.Phase, result)
+				}
+				return
+			}
+			if rj.Status.Phase != backupsv1alpha1.RestoreJobPhaseRunning || result.RequeueAfter != psmdbPollInterval {
+				t.Fatalf("target must be retried, got phase=%q result=%+v", rj.Status.Phase, result)
+			}
+			cluster.Status.State, cluster.Status.BackupVersion = psmdbtypes.StateReady, "2.11.0"
+			if err := c.Update(ctx, cluster); err != nil {
+				t.Fatal(err)
+			}
+			for range 2 {
+				if err := c.Get(ctx, client.ObjectKeyFromObject(rj), rj); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := r.reconcileMongoDBRestore(ctx, rj.DeepCopy(), backup); err != nil {
+					t.Fatalf("reconcile ready target: %v", err)
+				}
+			}
+			if n := len(mongodbRestoresIn(t, c)); n != 1 {
+				t.Fatalf("ready target must get exactly one restore, got %d", n)
+			}
+		})
+	}
+}
+
+// A full logical restore into another application replays the source's
+// admin.system.users over the target's, and the target's own Secrets stop
+// authenticating. A to-copy restore must therefore hand the operator a
+// selective restore of the databases the target declares, with users and
+// roles left out, and must say so explicitly in the CR.
+func TestReconcileMongoDBRestore_ToCopyRestoresDeclaredDatabasesWithoutUsers(t *testing.T) {
+	backup, rj, objs := mongodbToCopyFixture(t, `{"orders":{"roles":{"admin":["app"]}},"demo":{}}`)
+	c := newMongoDBStrategyTestClient(t, objs...)
+	r := &RestoreJobReconciler{Client: c, Scheme: c.Scheme(), Recorder: record.NewFakeRecorder(10)}
+
+	if _, err := r.reconcileMongoDBRestore(context.Background(), rj.DeepCopy(), backup); err != nil {
+		t.Fatalf("reconcileMongoDBRestore: %v", err)
+	}
+	restores := mongodbRestoresIn(t, c)
+	if len(restores) != 1 {
+		t.Fatalf("expected one operator restore, got %d", len(restores))
+	}
+	got := restores[0].Spec
+	if got.ClusterName != "mongodb-mongodb-target" {
+		t.Errorf("clusterName: got %q want mongodb-mongodb-target", got.ClusterName)
+	}
+	if got.Selective == nil {
+		t.Fatalf("a to-copy restore must be selective, got a full restore")
+	}
+	if got.Selective.WithUsersAndRoles {
+		t.Errorf("a to-copy restore must not take users and roles from the backup")
+	}
+	if want := []string{"demo.*", "orders.*"}; !slices.Equal(got.Selective.Namespaces, want) {
+		t.Errorf("namespaces: got %v want %v (every declared database, sorted)", got.Selective.Namespaces, want)
+	}
+	raw, err := json.Marshal(got)
+	if err != nil {
+		t.Fatalf("marshal restore spec: %v", err)
+	}
+	if !strings.Contains(string(raw), `"withUsersAndRoles":false`) {
+		t.Errorf("withUsersAndRoles=false must be written into the CR, got %s", raw)
+	}
+	persisted := &backupsv1alpha1.RestoreJob{}
+	if err := c.Get(context.Background(), types.NamespacedName{Namespace: "tenant", Name: rj.Name}, persisted); err != nil {
+		t.Fatalf("get restore job: %v", err)
+	}
+	if persisted.Status.Phase == backupsv1alpha1.RestoreJobPhaseFailed {
+		t.Errorf("a target that declares its databases must not be refused: %+v", persisted.Status.Conditions)
+	}
+}
+
+// An in-place restore puts the cluster back as the backup has it, users
+// included, and does not depend on what the application declares.
+func TestReconcileMongoDBRestore_InPlaceStaysFullRestore(t *testing.T) {
+	apps := mongodbapp.GroupName
+	sameSource := &corev1.TypedLocalObjectReference{Kind: "MongoDB", Name: "mongodb-src", APIGroup: &apps}
+	for _, tc := range []struct {
+		name      string
+		state     string
+		targetRef *corev1.TypedLocalObjectReference
+	}{
+		{"no targetApplicationRef", psmdbtypes.StateReady, nil},
+		{"targetApplicationRef names the source", psmdbtypes.StateReady, sameSource},
+		{"recover the original database", psmdbtypes.StateError, nil},
+		{"explicitly recover the original database", psmdbtypes.StateError, sameSource},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			backup, rj, _ := mongodbToCopyFixture(t, "")
+			rj.Spec.TargetApplicationRef = tc.targetRef
+			cluster := &psmdbtypes.PerconaServerMongoDB{
+				ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: mongodbNameForApp("mongodb-src")},
+				Spec: psmdbtypes.PerconaServerMongoDBSpec{Backup: psmdbtypes.PerconaServerMongoDBBackupConfig{
+					Enabled:  true,
+					Storages: map[string]runtime.RawExtension{"s3-storage": {Raw: []byte(`{"type":"s3","s3":{"bucket":"bkt","credentialsSecret":"mongodb-mongodb-src-s3-creds"}}`)}},
+				}},
+				Status: psmdbtypes.PerconaServerMongoDBStatus{State: tc.state, BackupVersion: "2.11.0"},
+			}
+			secret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "mongodb-mongodb-src-s3-creds"}}
+			// No application object at all, so a read of it would fail the job.
+			c := newMongoDBStrategyTestClient(t, backup, rj, cluster, secret)
+			r := &RestoreJobReconciler{Client: c, Scheme: c.Scheme(), Recorder: record.NewFakeRecorder(10)}
+
+			if _, err := r.reconcileMongoDBRestore(context.Background(), rj.DeepCopy(), backup); err != nil {
+				t.Fatalf("reconcileMongoDBRestore: %v", err)
+			}
+			restores := mongodbRestoresIn(t, c)
+			if len(restores) != 1 {
+				t.Fatalf("expected one operator restore, got %d", len(restores))
+			}
+			if restores[0].Spec.Selective != nil {
+				t.Errorf("an in-place restore must stay a full restore, got selective %+v", restores[0].Spec.Selective)
+			}
+			if restores[0].Spec.ClusterName != "mongodb-mongodb-src" {
+				t.Errorf("clusterName: got %q want mongodb-mongodb-src", restores[0].Spec.ClusterName)
+			}
+		})
+	}
+}
+
+// With nothing declared there is no restore that leaves the target usable, so
+// the RestoreJob fails before the operator sees anything, naming what to add.
+func TestReconcileMongoDBRestore_ToCopyWithoutDeclaredDatabasesFails(t *testing.T) {
+	for name, databases := range map[string]string{
+		"databases unset": "",
+		"databases empty": `{}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			backup, rj, objs := mongodbToCopyFixture(t, databases)
+			c := newMongoDBStrategyTestClient(t, objs...)
+			r := &RestoreJobReconciler{Client: c, Scheme: c.Scheme(), Recorder: record.NewFakeRecorder(10)}
+
+			if _, err := r.reconcileMongoDBRestore(context.Background(), rj.DeepCopy(), backup); err != nil {
+				t.Fatalf("reconcileMongoDBRestore: %v", err)
+			}
+			persisted := &backupsv1alpha1.RestoreJob{}
+			if err := c.Get(context.Background(), types.NamespacedName{Namespace: "tenant", Name: rj.Name}, persisted); err != nil {
+				t.Fatalf("get restore job: %v", err)
+			}
+			if persisted.Status.Phase != backupsv1alpha1.RestoreJobPhaseFailed {
+				t.Fatalf("expected Failed, got phase=%q", persisted.Status.Phase)
+			}
+			cond := apimeta.FindStatusCondition(persisted.Status.Conditions, "Ready")
+			if cond == nil || cond.Reason != mongodbReasonToCopyRefused ||
+				!strings.Contains(cond.Message, "declares none") || !strings.Contains(cond.Message, "spec.databases") {
+				t.Errorf("expected a ToCopyRestoreRefused condition naming spec.databases, got %+v", cond)
+			}
+			if n := len(mongodbRestoresIn(t, c)); n != 0 {
+				t.Errorf("a refused restore must not reach the operator, found %d operator restores", n)
+			}
+		})
+	}
+}
+
+// The database list comes from the target application, so a target cluster
+// with no application behind it is refused rather than restored in full.
+func TestReconcileMongoDBRestore_ToCopyWithoutTargetApplicationFails(t *testing.T) {
+	backup, rj, objs := mongodbToCopyFixture(t, `{"demo":{}}`)
+	var withoutApp []client.Object
+	for _, o := range objs {
+		if _, isApp := o.(*mongodbapp.MongoDB); !isApp {
+			withoutApp = append(withoutApp, o)
+		}
+	}
+	c := newMongoDBStrategyTestClient(t, withoutApp...)
+	r := &RestoreJobReconciler{Client: c, Scheme: c.Scheme(), Recorder: record.NewFakeRecorder(10)}
+
+	if _, err := r.reconcileMongoDBRestore(context.Background(), rj.DeepCopy(), backup); err != nil {
+		t.Fatalf("reconcileMongoDBRestore: %v", err)
+	}
+	persisted := &backupsv1alpha1.RestoreJob{}
+	if err := c.Get(context.Background(), types.NamespacedName{Namespace: "tenant", Name: rj.Name}, persisted); err != nil {
+		t.Fatalf("get restore job: %v", err)
+	}
+	cond := apimeta.FindStatusCondition(persisted.Status.Conditions, "Ready")
+	if persisted.Status.Phase != backupsv1alpha1.RestoreJobPhaseFailed || cond == nil || cond.Reason != mongodbReasonToCopyRefused {
+		t.Fatalf("expected Failed with ToCopyRestoreRefused, got phase=%q cond=%+v", persisted.Status.Phase, cond)
+	}
+	if n := len(mongodbRestoresIn(t, c)); n != 0 {
+		t.Errorf("a refused restore must not reach the operator, found %d operator restores", n)
+	}
+}
+
+// The shape is decided only until the operator CR exists. A target edited
+// while the operator is already writing into it must not fail that restore.
+func TestReconcileMongoDBRestore_ToCopyShapeAndReadinessAreNotRecheckedAfterHandOver(t *testing.T) {
+	backup, rj, objs := mongodbToCopyFixture(t, "")
+	for _, o := range objs {
+		if cluster, ok := o.(*psmdbtypes.PerconaServerMongoDB); ok {
+			cluster.Status = psmdbtypes.PerconaServerMongoDBStatus{State: "initializing"}
+		}
+	}
+	inflight := &psmdbtypes.PerconaServerMongoDBRestore{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace: "tenant", Name: "rj-copy-abc",
+			Labels: map[string]string{
+				backupsv1alpha1.OwningJobNameLabel:      rj.Name,
+				backupsv1alpha1.OwningJobNamespaceLabel: rj.Namespace,
+			},
+		},
+		Spec:   psmdbtypes.PerconaServerMongoDBRestoreSpec{ClusterName: "mongodb-mongodb-target", Selective: &psmdbtypes.SelectiveRestoreOpts{Namespaces: []string{"demo.*"}}},
+		Status: psmdbtypes.PerconaServerMongoDBRestoreStatus{State: psmdbtypes.StateRunning},
+	}
+	c := newMongoDBStrategyTestClient(t, append(objs, inflight)...)
+	r := &RestoreJobReconciler{Client: c, Scheme: c.Scheme(), Recorder: record.NewFakeRecorder(10)}
+
+	if _, err := r.reconcileMongoDBRestore(context.Background(), rj.DeepCopy(), backup); err != nil {
+		t.Fatalf("reconcileMongoDBRestore: %v", err)
+	}
+	persisted := &backupsv1alpha1.RestoreJob{}
+	if err := c.Get(context.Background(), types.NamespacedName{Namespace: "tenant", Name: rj.Name}, persisted); err != nil {
+		t.Fatalf("get restore job: %v", err)
+	}
+	if persisted.Status.Phase == backupsv1alpha1.RestoreJobPhaseFailed {
+		t.Errorf("a restore already running must not be refused for what the target declares now: %+v", persisted.Status.Conditions)
+	}
+	if cond := apimeta.FindStatusCondition(persisted.Status.Conditions, "Ready"); cond != nil && cond.Reason == "TargetPerconaServerMongoDBNotReady" {
+		t.Errorf("an in-flight restore must not wait on pre-restore readiness: %+v", cond)
+	}
+}
+
+// mongodbGateHarness keeps a to-copy RestoreJob whose operator restore has
+// finished in a fake client, so a test can let one pass latch the replay, move
+// the clock on the stored job and run the next pass over it.
+type mongodbGateHarness struct {
+	c      client.Client
+	r      *RestoreJobReconciler
+	backup *backupsv1alpha1.Backup
+	name   string
+}
+
+func newMongoDBGateHarness(t *testing.T, clusterState, clusterMessage string, selective *psmdbtypes.SelectiveRestoreOpts) *mongodbGateHarness {
+	t.Helper()
+	backup, rj, objs := mongodbToCopyFixture(t, `{"demo":{}}`)
+	rj.UID = "current-restore"
+	for _, o := range objs {
+		if cluster, ok := o.(*psmdbtypes.PerconaServerMongoDB); ok {
+			cluster.Spec.Image = "percona/percona-server-mongodb:8.0.12-4"
+			cluster.Spec.Secrets = &psmdbtypes.PerconaServerMongoDBSecrets{SSL: cluster.Name + "-ssl"}
+			cluster.Status.State = clusterState
+			cluster.Status.Message = clusterMessage
+			cluster.Status.BackupVersion = "" // Only the hand-over waits for PBM's version.
+		}
+	}
+	done := &psmdbtypes.PerconaServerMongoDBRestore{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace: "tenant", Name: "rj-copy-done",
+			Labels: map[string]string{
+				backupsv1alpha1.OwningJobNameLabel:      rj.Name,
+				backupsv1alpha1.OwningJobNamespaceLabel: rj.Namespace,
+			},
+		},
+		Spec:   psmdbtypes.PerconaServerMongoDBRestoreSpec{ClusterName: mongodbNameForApp("mongodb-target"), Selective: selective},
+		Status: psmdbtypes.PerconaServerMongoDBRestoreStatus{State: psmdbtypes.StateReady},
+	}
+	c := newMongoDBStrategyTestClient(t, append(objs, done)...)
+	return &mongodbGateHarness{
+		c:      c,
+		r:      &RestoreJobReconciler{Client: c, Scheme: c.Scheme(), Recorder: record.NewFakeRecorder(10)},
+		backup: backup,
+		name:   rj.Name,
+	}
+}
+
+func (h *mongodbGateHarness) job(t *testing.T) *backupsv1alpha1.RestoreJob {
+	t.Helper()
+	rj := &backupsv1alpha1.RestoreJob{}
+	if err := h.c.Get(context.Background(), types.NamespacedName{Namespace: "tenant", Name: h.name}, rj); err != nil {
+		t.Fatalf("get restore job: %v", err)
+	}
+	return rj
+}
+
+func (h *mongodbGateHarness) reconcile(t *testing.T) (ctrl.Result, *backupsv1alpha1.RestoreJob) {
+	t.Helper()
+	res, err := h.r.reconcileMongoDBRestore(context.Background(), h.job(t), h.backup)
+	if err != nil {
+		t.Fatalf("reconcileMongoDBRestore: %v", err)
+	}
+	return res, h.job(t)
+}
+
+// age puts the latched replay and the job's start that far in the past.
+func (h *mongodbGateHarness) age(t *testing.T, sinceReplay, sinceStart time.Duration) {
+	t.Helper()
+	rj := h.job(t)
+	cond := apimeta.FindStatusCondition(rj.Status.Conditions, psmdbRestoreCondReplayed)
+	if cond == nil {
+		t.Fatalf("no %s condition to age", psmdbRestoreCondReplayed)
+	}
+	cond.LastTransitionTime = metav1.NewTime(time.Now().Add(-sinceReplay))
+	rj.Status.StartedAt = &metav1.Time{Time: time.Now().Add(-sinceStart)}
+	if err := h.c.Status().Update(context.Background(), rj); err != nil {
+		t.Fatalf("age restore job: %v", err)
+	}
+}
+
+func (h *mongodbGateHarness) completeHealthCheck(t *testing.T) {
+	t.Helper()
+	job := &batchv1.Job{}
+	if err := h.c.Get(context.Background(), client.ObjectKey{Namespace: "tenant", Name: "mongodb-health-current-restore"}, job); err != nil {
+		t.Fatal(err)
+	}
+	cluster := mongodbNameForApp("mongodb-target")
+	checkMongoDBHealthJob(t, job, cluster, cluster+"-rs0.tenant")
+	job.Status.Conditions = []batchv1.JobCondition{{Type: batchv1.JobComplete, Status: corev1.ConditionTrue}}
+	if err := h.c.Status().Update(context.Background(), job); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// checkMongoDBHealthJob asserts that the check logs in as the cluster admin
+// over verified TLS, with the users and TLS Secrets of that cluster, against
+// the internal service its certificate covers.
+func checkMongoDBHealthJob(t *testing.T, job *batchv1.Job, cluster, endpoint string) {
+	t.Helper()
+	pod := job.Spec.Template.Spec
+	if len(pod.Containers) != 1 {
+		t.Fatalf("expected one health-check container, got %d", len(pod.Containers))
+	}
+	c := pod.Containers[0]
+	script := strings.Join(append(append([]string{}, c.Command...), c.Args...), " ")
+	for _, want := range []string{
+		`mongodb://${MONGODB_HOST}/admin?`,
+		"--tls --tlsCAFile /tls/ca.crt --tlsCertificateKeyFile /tmp/client.pem",
+		`--username "$MONGODB_CLUSTER_ADMIN_USER" --password "$MONGODB_CLUSTER_ADMIN_PASSWORD"`,
+	} {
+		if !strings.Contains(script, want) {
+			t.Errorf("health check script lacks %q:\n%s", want, script)
+		}
+	}
+	for _, insecure := range []string{"tlsAllowInvalid", "tlsInsecure", "tlsDisabledProtocols"} {
+		if strings.Contains(script, insecure) {
+			t.Errorf("health check must verify TLS, found %q", insecure)
+		}
+	}
+	env := map[string]corev1.EnvVar{}
+	for _, e := range c.Env {
+		env[e.Name] = e
+	}
+	if got := env["MONGODB_HOST"].Value; got != endpoint {
+		t.Errorf("MONGODB_HOST = %q, want %q", got, endpoint)
+	}
+	for _, key := range []string{"MONGODB_CLUSTER_ADMIN_USER", "MONGODB_CLUSTER_ADMIN_PASSWORD"} {
+		from := env[key].ValueFrom
+		if from == nil || from.SecretKeyRef == nil || from.SecretKeyRef.Name != "internal-"+cluster+"-users" || from.SecretKeyRef.Key != key {
+			t.Errorf("%s must come from Secret internal-%s-users key %s, got %+v", key, cluster, key, from)
+		}
+	}
+	if len(c.VolumeMounts) != 1 || c.VolumeMounts[0].Name != "tls" || c.VolumeMounts[0].MountPath != "/tls" || !c.VolumeMounts[0].ReadOnly {
+		t.Errorf("expected the TLS Secret mounted read-only at /tls, got %+v", c.VolumeMounts)
+	}
+	if len(pod.Volumes) != 1 || pod.Volumes[0].Secret == nil || pod.Volumes[0].Secret.SecretName != cluster+"-ssl" {
+		t.Fatalf("expected the cluster's TLS Secret %s-ssl as the only volume, got %+v", cluster, pod.Volumes)
+	}
+	items := map[string]bool{}
+	for _, i := range pod.Volumes[0].Secret.Items {
+		items[i.Key] = i.Key == i.Path
+	}
+	for _, key := range []string{"ca.crt", "tls.crt", "tls.key"} {
+		if !items[key] {
+			t.Errorf("TLS volume must project %s under its own name, got %+v", key, pod.Volumes[0].Secret.Items)
+		}
+	}
+	if pod.AutomountServiceAccountToken == nil || *pod.AutomountServiceAccountToken {
+		t.Error("the health check must not mount a service account token")
+	}
+}
+
+func TestMongoDBHealthCheckJob(t *testing.T) {
+	ctx := context.Background()
+	load := func(t *testing.T, h *mongodbGateHarness) *psmdbtypes.PerconaServerMongoDB {
+		cluster := &psmdbtypes.PerconaServerMongoDB{}
+		if err := h.c.Get(ctx, client.ObjectKey{Namespace: "tenant", Name: mongodbNameForApp("mongodb-target")}, cluster); err != nil {
+			t.Fatal(err)
+		}
+		return cluster
+	}
+	t.Run("sharded cluster is checked through mongos", func(t *testing.T) {
+		h := newMongoDBGateHarness(t, psmdbtypes.StateReady, "", nil)
+		cluster := load(t, h)
+		cluster.Spec.Sharding = &psmdbtypes.PerconaServerMongoDBSharding{Enabled: true}
+		job, err := h.r.ensureMongoDBHealthCheck(ctx, h.job(t), cluster, time.Minute)
+		if err != nil {
+			t.Fatal(err)
+		}
+		checkMongoDBHealthJob(t, job, cluster.Name, cluster.Name+"-mongos.tenant")
+	})
+	for _, tc := range []struct {
+		name   string
+		mutate func(*psmdbtypes.PerconaServerMongoDB)
+	}{
+		{"cluster in another namespace", func(c *psmdbtypes.PerconaServerMongoDB) { c.Namespace = "other" }},
+		{"no Secrets section", func(c *psmdbtypes.PerconaServerMongoDB) { c.Spec.Secrets = nil }},
+		{"no TLS Secret", func(c *psmdbtypes.PerconaServerMongoDB) { c.Spec.Secrets.SSL = "" }},
+	} {
+		t.Run("refuses "+tc.name, func(t *testing.T) {
+			h := newMongoDBGateHarness(t, psmdbtypes.StateReady, "", nil)
+			cluster := load(t, h)
+			tc.mutate(cluster)
+			if _, err := h.r.ensureMongoDBHealthCheck(ctx, h.job(t), cluster, time.Minute); err == nil {
+				t.Fatal("expected the health check to be refused")
+			}
+			jobs := &batchv1.JobList{}
+			if err := h.c.List(ctx, jobs, client.InNamespace("tenant")); err != nil {
+				t.Fatal(err)
+			}
+			for _, j := range jobs.Items {
+				if strings.HasPrefix(j.Name, "mongodb-health-") {
+					t.Fatalf("a refused check created Job %s", j.Name)
+				}
+			}
+		})
+	}
+}
+
+func TestMongoDBHealthCheckSubsecondDeadline(t *testing.T) {
+	h := newMongoDBGateHarness(t, psmdbtypes.StateReady, "", nil)
+	cluster := &psmdbtypes.PerconaServerMongoDB{}
+	ctx := context.Background()
+	if err := h.c.Get(ctx, client.ObjectKey{Namespace: "tenant", Name: mongodbNameForApp("mongodb-target")}, cluster); err != nil {
+		t.Fatal(err)
+	}
+	job, err := h.r.ensureMongoDBHealthCheck(ctx, h.job(t), cluster, 500*time.Millisecond)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seconds := job.Spec.Template.Spec.ActiveDeadlineSeconds
+	if seconds == nil {
+		t.Fatal("health-check deadline is missing")
+	}
+	if *seconds != 1 {
+		t.Errorf("expected a one-second health-check deadline, got %d", *seconds)
+	}
+}
+
+// PSMDB's ready status can survive a replay that replaced its system users.
+func TestReconcileMongoDBRestore_SucceedsOnlyOnceTheTargetIsReadyAgain(t *testing.T) {
+	selective := &psmdbtypes.SelectiveRestoreOpts{Namespaces: []string{"demo.*"}}
+
+	t.Run("the finished replay is latched and the job waits", func(t *testing.T) {
+		h := newMongoDBGateHarness(t, psmdbtypes.StateReady, "", selective)
+		res, got := h.reconcile(t)
+		if got.Status.Phase == backupsv1alpha1.RestoreJobPhaseSucceeded {
+			t.Fatalf("must not succeed on the operator's verdict alone")
+		}
+		latch := apimeta.FindStatusCondition(got.Status.Conditions, psmdbRestoreCondReplayed)
+		if latch == nil || latch.Status != metav1.ConditionTrue || latch.Reason != psmdbReasonSelectiveReplayed || !strings.Contains(latch.Message, "copied the databases demo") {
+			t.Errorf("expected %s=True %s naming the copied databases, got %+v", psmdbRestoreCondReplayed, psmdbReasonSelectiveReplayed, latch)
+		}
+		if cond := apimeta.FindStatusCondition(got.Status.Conditions, "Ready"); cond == nil || cond.Reason != psmdbReasonWaitingForTarget {
+			t.Errorf("expected Ready=False %s, got %+v", psmdbReasonWaitingForTarget, cond)
+		}
+		if res.RequeueAfter == 0 {
+			t.Errorf("a waiting job must requeue, got %+v", res)
+		}
+	})
+
+	t.Run("stale ready never replaces an authenticated check", func(t *testing.T) {
+		h := newMongoDBGateHarness(t, psmdbtypes.StateReady, "", selective)
+		h.reconcile(t)
+		h.age(t, 10*time.Minute, 0)
+		if _, got := h.reconcile(t); got.Status.Phase == backupsv1alpha1.RestoreJobPhaseSucceeded {
+			t.Fatal("stale ready must not complete a restore whose health check has not succeeded")
+		}
+	})
+
+	t.Run("ready with a successful authenticated check succeeds", func(t *testing.T) {
+		h := newMongoDBGateHarness(t, psmdbtypes.StateReady, "", selective)
+		h.reconcile(t)
+		h.completeHealthCheck(t)
+		_, got := h.reconcile(t)
+		if got.Status.Phase != backupsv1alpha1.RestoreJobPhaseSucceeded || got.Status.CompletedAt == nil {
+			t.Fatalf("expected Succeeded with CompletedAt, got phase=%q completedAt=%v", got.Status.Phase, got.Status.CompletedAt)
+		}
+		cond := apimeta.FindStatusCondition(got.Status.Conditions, "Ready")
+		if cond == nil || cond.Status != metav1.ConditionTrue || cond.Reason != "RestoreCompleted" ||
+			!strings.Contains(cond.Message, "copied the databases demo") || !strings.Contains(cond.Message, "reports ready") {
+			t.Errorf("expected Ready=True RestoreCompleted naming the copied databases and the ready target, got %+v", cond)
+		}
+	})
+
+	t.Run("a failed check cannot be hidden by stale ready", func(t *testing.T) {
+		h := newMongoDBGateHarness(t, psmdbtypes.StateReady, "", selective)
+		h.reconcile(t)
+		job := &batchv1.Job{}
+		key := client.ObjectKey{Namespace: "tenant", Name: "mongodb-health-current-restore"}
+		if err := h.c.Get(context.Background(), key, job); err != nil {
+			t.Fatal(err)
+		}
+		job.Status.Conditions = []batchv1.JobCondition{{Type: batchv1.JobFailed, Status: corev1.ConditionTrue, Reason: "DeadlineExceeded"}}
+		if err := h.c.Status().Update(context.Background(), job); err != nil {
+			t.Fatal(err)
+		}
+		_, got := h.reconcile(t)
+		if got.Status.Phase != backupsv1alpha1.RestoreJobPhaseFailed {
+			t.Fatalf("failed health check must fail the restore, got %s", got.Status.Phase)
+		}
+	})
+
+	t.Run("not ready before the deadline keeps waiting", func(t *testing.T) {
+		h := newMongoDBGateHarness(t, "error", "Error: dial: auth error", selective)
+		h.reconcile(t)
+		h.age(t, 2*psmdbRestoreTargetGrace, 0)
+		res, got := h.reconcile(t)
+		if got.Status.Phase == backupsv1alpha1.RestoreJobPhaseFailed || got.Status.Phase == backupsv1alpha1.RestoreJobPhaseSucceeded {
+			t.Fatalf("must keep waiting until the deadline, got phase=%q", got.Status.Phase)
+		}
+		if cond := apimeta.FindStatusCondition(got.Status.Conditions, "Ready"); cond == nil || cond.Reason != psmdbReasonWaitingForTarget || !strings.Contains(cond.Message, "state now error") {
+			t.Errorf("expected the wait to name the target's state, got %+v", cond)
+		}
+		if res.RequeueAfter == 0 {
+			t.Errorf("a waiting job must requeue, got %+v", res)
+		}
+	})
+
+	for name, tc := range map[string]struct {
+		selective *psmdbtypes.SelectiveRestoreOpts
+		cause     string
+	}{
+		"full restore names the replayed users":  {nil, "no longer match the target's users Secret"},
+		"selective restore does not blame users": {selective, "left the target's users as they were"},
+	} {
+		t.Run("never ready by the deadline fails, "+name, func(t *testing.T) {
+			h := newMongoDBGateHarness(t, "error", "Error: dial: (AuthenticationFailed) SCRAM authentication failed, storedKey mismatch", tc.selective)
+			h.reconcile(t)
+			h.age(t, 2*psmdbRestoreTargetGrace, 2*psmdbDefaultRestoreDeadline)
+			_, got := h.reconcile(t)
+			if got.Status.Phase != backupsv1alpha1.RestoreJobPhaseFailed {
+				t.Fatalf("expected Failed past the deadline, got phase=%q", got.Status.Phase)
+			}
+			cond := apimeta.FindStatusCondition(got.Status.Conditions, "Ready")
+			if cond == nil || cond.Reason != psmdbReasonTargetNotReady {
+				t.Fatalf("expected Ready=False %s, got %+v", psmdbReasonTargetNotReady, cond)
+			}
+			for _, want := range []string{"did not pass the post-restore readiness check", "storedKey mismatch", "state error", tc.cause} {
+				if !strings.Contains(cond.Message, want) {
+					t.Errorf("message must contain %q, got %q", want, cond.Message)
+				}
+			}
+		})
+	}
+
+	t.Run("a replay that ends past the deadline still gets time for its check", func(t *testing.T) {
+		h := newMongoDBGateHarness(t, "error", "", selective)
+		h.reconcile(t)
+		h.age(t, time.Second, 2*psmdbDefaultRestoreDeadline)
+		if _, got := h.reconcile(t); got.Status.Phase == backupsv1alpha1.RestoreJobPhaseFailed {
+			t.Fatalf("a target must get time for its health check: %+v", got.Status.Conditions)
+		}
+	})
+
+	// The operator restore can be deleted while the job waits. Creating it again
+	// would replay the backup over whatever the target took in since.
+	t.Run("a finished restore whose CR is deleted is not run again", func(t *testing.T) {
+		h := newMongoDBGateHarness(t, psmdbtypes.StateReady, "", selective)
+		h.reconcile(t)
+		for _, restore := range mongodbRestoresIn(t, h.c) {
+			if err := h.c.Delete(context.Background(), &restore); err != nil {
+				t.Fatalf("delete operator restore: %v", err)
+			}
+		}
+		if _, got := h.reconcile(t); got.Status.Phase == backupsv1alpha1.RestoreJobPhaseFailed {
+			t.Fatalf("a missing CR after the replay must not fail the job: %+v", got.Status.Conditions)
+		}
+		h.completeHealthCheck(t)
+		_, got := h.reconcile(t)
+		if n := len(mongodbRestoresIn(t, h.c)); n != 0 {
+			t.Fatalf("the restore was handed to the operator again, %d operator restores exist", n)
+		}
+		if got.Status.Phase != backupsv1alpha1.RestoreJobPhaseSucceeded {
+			t.Errorf("the wait must go on to Succeeded without the CR, got phase=%q", got.Status.Phase)
+		}
+	})
+}
+
+func TestMongoDBToCopySelective(t *testing.T) {
+	app := func(databases string) *mongodbapp.MongoDB {
+		a := &mongodbapp.MongoDB{ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "mongodb-target"}}
+		a.Spec.Databases = &runtime.RawExtension{Raw: []byte(databases)}
+		return a
+	}
+	refused := []struct {
+		name, databases string
+		sharded, pitr   bool
+		want            string
+	}{
+		{"wildcard would widen to a full restore", `{"*":{}}`, false, false, "not a database name"},
+		{"dot", `{"a.b":{}}`, false, false, "not a database name"},
+		{"whitespace", `{"a b":{}}`, false, false, "not a database name"},
+		{"dollar", `{"a$b":{}}`, false, false, "not a database name"},
+		{"empty name", `{"":{}}`, false, false, "not a database name"},
+		{"admin", `{"admin":{},"demo":{}}`, false, false, "are not restored selectively"},
+		{"config", `{"config":{}}`, false, false, "are not restored selectively"},
+		{"local", `{"local":{}}`, false, false, "are not restored selectively"},
+		{"not a map", `["demo"]`, false, false, "not a map"},
+		{"point in time on a sharded cluster", `{"demo":{}}`, true, true, "replica sets only"},
+	}
+	for _, tc := range refused {
+		t.Run(tc.name, func(t *testing.T) {
+			sel, err := mongodbToCopySelective(app(tc.databases), tc.sharded, tc.pitr)
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("expected a refusal containing %q, got selective=%+v err=%v", tc.want, sel, err)
+			}
+		})
+	}
+	for name, tc := range map[string]struct{ sharded, pitr bool }{
+		"point in time on a replica set": {false, true},
+		"sharded without point in time":  {true, false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			sel, err := mongodbToCopySelective(app(`{"demo":{}}`), tc.sharded, tc.pitr)
+			if err != nil {
+				t.Fatalf("unexpected refusal: %v", err)
+			}
+			if sel.WithUsersAndRoles || !slices.Equal(sel.Namespaces, []string{"demo.*"}) {
+				t.Errorf("got %+v, want demo.* without users and roles", sel)
+			}
+		})
+	}
 }
 
 // Opting out (useSystemBucket true→false) stops the injection but leaves the
@@ -3963,5 +4692,88 @@ func TestPsmdbStorageEntrySettled(t *testing.T) {
 		if got := psmdbStorageEntrySettled(runtime.RawExtension{Raw: []byte(tc.live)}, tc.s3); got != tc.want {
 			t.Errorf("%s: settled=%v, want %v", tc.name, got, tc.want)
 		}
+	}
+}
+
+// A to-copy restore checks its selective options only before it creates the
+// operator restore. If the restore found at the start of a pass is gone by the
+// time it is followed, the pass must not create a full one in its place, which
+// would replace the target's users.
+func TestReconcileMongoDBRestore_ToCopyFollowsTheRestoreItFound(t *testing.T) {
+	backup, rj, objs := mongodbToCopyFixture(t, `{"demo":{}}`)
+	inflight := &psmdbtypes.PerconaServerMongoDBRestore{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace: "tenant", Name: "rj-copy-abc",
+			Labels: map[string]string{
+				backupsv1alpha1.OwningJobNameLabel:      rj.Name,
+				backupsv1alpha1.OwningJobNamespaceLabel: rj.Namespace,
+			},
+		},
+		Spec:   psmdbtypes.PerconaServerMongoDBRestoreSpec{ClusterName: mongodbNameForApp("mongodb-target"), Selective: &psmdbtypes.SelectiveRestoreOpts{Namespaces: []string{"demo.*"}}},
+		Status: psmdbtypes.PerconaServerMongoDBRestoreStatus{State: psmdbtypes.StateRunning},
+	}
+	s := newMongoDBStrategyTestClient(t).Scheme()
+	lists, created := 0, 0
+	c := clientfake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(append(objs, inflight)...).
+		WithStatusSubresource(&backupsv1alpha1.BackupJob{}, &backupsv1alpha1.RestoreJob{}, &backupsv1alpha1.Backup{}, &batchv1.Job{}).
+		WithInterceptorFuncs(interceptor.Funcs{
+			List: func(ctx context.Context, cl client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
+				if _, ok := list.(*psmdbtypes.PerconaServerMongoDBRestoreList); ok {
+					lists++
+					if lists > 1 {
+						return nil // deleted after the first lookup
+					}
+				}
+				return cl.List(ctx, list, opts...)
+			},
+			Create: func(ctx context.Context, cl client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
+				if _, ok := obj.(*psmdbtypes.PerconaServerMongoDBRestore); ok {
+					created++
+				}
+				return cl.Create(ctx, obj, opts...)
+			},
+		}).
+		Build()
+	r := &RestoreJobReconciler{Client: c, Scheme: s, Recorder: record.NewFakeRecorder(10)}
+
+	if _, err := r.reconcileMongoDBRestore(context.Background(), rj.DeepCopy(), backup); err != nil {
+		t.Fatalf("reconcileMongoDBRestore: %v", err)
+	}
+	if created != 0 {
+		t.Fatalf("a pass that found an operator restore must not create another one, created %d", created)
+	}
+}
+
+// The replay latch is what keeps a deleted operator restore from being
+// created again, and its transition time anchors the grace window. A pass
+// that latches it and then fails must still leave it saved.
+func TestReconcileMongoDBRestore_ReplayLatchIsSavedBeforeTheHealthCheck(t *testing.T) {
+	selective := &psmdbtypes.SelectiveRestoreOpts{Namespaces: []string{"demo.*"}}
+	h := newMongoDBGateHarness(t, psmdbtypes.StateReady, "", selective)
+	cluster := &psmdbtypes.PerconaServerMongoDB{}
+	if err := h.c.Get(context.Background(), types.NamespacedName{Namespace: "tenant", Name: mongodbNameForApp("mongodb-target")}, cluster); err != nil {
+		t.Fatal(err)
+	}
+	cluster.Spec.Image = "" // the health check cannot be set up
+	if err := h.c.Update(context.Background(), cluster); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := h.r.reconcileMongoDBRestore(context.Background(), h.job(t), h.backup); err == nil {
+		t.Fatal("expected the health check setup to fail")
+	}
+	first := apimeta.FindStatusCondition(h.job(t).Status.Conditions, psmdbRestoreCondReplayed)
+	if first == nil || first.Status != metav1.ConditionTrue {
+		t.Fatalf("the replay must be latched on the stored job before the health check, got %+v", first)
+	}
+	h.age(t, 5*time.Minute, 5*time.Minute)
+	aged := apimeta.FindStatusCondition(h.job(t).Status.Conditions, psmdbRestoreCondReplayed).LastTransitionTime
+
+	_, _ = h.r.reconcileMongoDBRestore(context.Background(), h.job(t), h.backup)
+	again := apimeta.FindStatusCondition(h.job(t).Status.Conditions, psmdbRestoreCondReplayed)
+	if again == nil || !again.LastTransitionTime.Equal(&aged) {
+		t.Fatalf("a retry must keep the latched transition time %v, got %+v", aged, again)
 	}
 }

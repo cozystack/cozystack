@@ -14,7 +14,14 @@ func (in *MongoDB) DeepCopyInto(out *MongoDB) {
 	*out = *in
 	out.TypeMeta = in.TypeMeta
 	in.ObjectMeta.DeepCopyInto(&out.ObjectMeta)
-	out.Spec = in.Spec
+	in.Spec.DeepCopyInto(&out.Spec)
+}
+
+func (in *MongoDBSpec) DeepCopyInto(out *MongoDBSpec) {
+	*out = *in
+	if in.Databases != nil {
+		out.Databases = in.Databases.DeepCopy()
+	}
 }
 
 func (in *MongoDB) DeepCopy() *MongoDB {

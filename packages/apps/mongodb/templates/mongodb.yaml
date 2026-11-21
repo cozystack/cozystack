@@ -195,13 +195,14 @@ spec:
   {{- /* Build a map of username -> list of roles from databases config */}}
   {{- $userRoles := dict }}
   {{- range $dbname, $db := .Values.databases }}
-    {{- range $user := $db.roles.admin }}
+    {{- $dbRoles := dig "roles" dict (default dict $db) | default dict }}
+    {{- range $user := $dbRoles.admin }}
       {{- $roles := index $userRoles $user | default list }}
       {{- $roles = append $roles (dict "name" "readWrite" "db" $dbname) }}
       {{- $roles = append $roles (dict "name" "dbAdmin" "db" $dbname) }}
       {{- $_ := set $userRoles $user $roles }}
     {{- end }}
-    {{- range $user := $db.roles.readonly }}
+    {{- range $user := $dbRoles.readonly }}
       {{- $roles := index $userRoles $user | default list }}
       {{- $roles = append $roles (dict "name" "read" "db" $dbname) }}
       {{- $_ := set $userRoles $user $roles }}
@@ -256,7 +257,17 @@ spec:
       - name: daily-backup
         enabled: true
         schedule: {{ .Values.backup.schedule | quote }}
-        keep: {{ .Values.backup.retentionPolicy | trimSuffix "d" | int }}
+        {{- /*
+          retentionPolicy counts backups, not days, so "30" and the older "30d"
+          both keep the 30 newest. The operator takes keep only as a deprecated
+          alias of this count and honours retention from crVersion 1.21.0 on.
+          A negative count would fail the CRD minimum, keep never did, so it
+          is clamped to 0, which deletes nothing just as keep 0 did.
+        */}}
+        retention:
+          type: count
+          count: {{ .Values.backup.retentionPolicy | trimSuffix "d" | int | max 0 }}
+          deleteFromStorage: true
         storageName: s3-storage
         type: logical
         compressionType: gzip
