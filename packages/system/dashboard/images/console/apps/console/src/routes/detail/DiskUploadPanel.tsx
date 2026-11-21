@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react"
 import { Check, Copy, RefreshCw } from "lucide-react"
 import { Button, Section, StatusBadge } from "@cozystack/ui"
 import {
+  K8sApiError,
   useK8sGet,
   useK8sList,
   useSelfSubjectAccessReview,
@@ -76,6 +77,30 @@ function CopyableCommand({ command }: { command: string }) {
   )
 }
 
+function ManualUploadProxy({ name, namespace }: { name: string; namespace: string }) {
+  const [url, setURL] = useState("")
+  const command = virtctlUploadCommand({ name, namespace, uploadProxyURL: url })
+  return (
+    <div className="mt-4 space-y-2">
+      <label className="block text-sm text-slate-700">
+        Upload proxy URL
+        <input
+          className="mt-1 block w-full rounded-md border border-slate-300 px-3 py-2"
+          type="url"
+          placeholder="https://upload.example.org"
+          value={url}
+          onChange={(event) => setURL(event.target.value)}
+        />
+      </label>
+      <p className="text-xs text-slate-600">
+        Your account cannot read the cluster upload URL. Enter the HTTPS endpoint
+        supplied by your platform administrator and replace ./disk.qcow2 with your local image path.
+      </p>
+      {command && <CopyableCommand command={command} />}
+    </div>
+  )
+}
+
 function UploadPrerequisites({
   name,
   namespace,
@@ -121,6 +146,13 @@ function UploadPrerequisites({
   const proxyError = cdiConfig.isError
   const permissionError = !!canCreateToken.error || !!canGetPVC.error
   const permissionDenied = !canCreateToken.allowed || !canGetPVC.allowed
+  if (
+    cdiConfig.error instanceof K8sApiError && cdiConfig.error.status === 403 &&
+    !permissionError && !permissionDenied
+  ) {
+    return <ManualUploadProxy key={namespace} name={name} namespace={namespace} />
+  }
+
   const command =
     !proxyError && !permissionError && !permissionDenied
       ? virtctlUploadCommand({ name, namespace, uploadProxyURL: proxyURL })

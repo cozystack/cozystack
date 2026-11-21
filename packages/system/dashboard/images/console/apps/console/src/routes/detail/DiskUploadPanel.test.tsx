@@ -690,6 +690,35 @@ describe("DiskUploadPanel states and prerequisites", () => {
     expect(screen.queryByText(/virtctl image-upload/)).not.toBeInTheDocument()
   })
 
+  it("lets a tenant with upload permission supply a trusted proxy when CDIConfig is forbidden", async () => {
+    const h = makeHarness({ cdiConfigError: new K8sApiError(403, "Forbidden") })
+    renderWithK8sProvider(<DiskUploadPanel ad={ad} instance={makeInstance()} />, {
+      client: h.client,
+    })
+    await confirmNoUploadRunning()
+    const url = await screen.findByRole("textbox", { name: "Upload proxy URL" })
+    fireEvent.change(url, { target: { value: "http://upload.example.org" } })
+    expect(screen.queryByText(/virtctl image-upload/)).not.toBeInTheDocument()
+    fireEvent.change(url, { target: { value: "https://upload.example.org" } })
+    expect(await screen.findByText(/virtctl image-upload/)).toHaveTextContent(
+      "--uploadproxy-url 'https://upload.example.org'",
+    )
+  })
+
+  it("keeps the proxy fallback closed when upload permission is denied", async () => {
+    const h = makeHarness({
+      cdiConfigError: new K8sApiError(403, "Forbidden"),
+      canCreateUploadToken: false,
+    })
+    renderWithK8sProvider(<DiskUploadPanel ad={ad} instance={makeInstance()} />, {
+      client: h.client,
+    })
+    await confirmNoUploadRunning()
+    expect(await screen.findByText(/does not have all permissions/)).toBeInTheDocument()
+    expect(screen.queryByRole("textbox", { name: "Upload proxy URL" })).not.toBeInTheDocument()
+    expect(screen.queryByText(/virtctl image-upload/)).not.toBeInTheDocument()
+  })
+
   it.each([
     ["missing", ""],
     ["insecure", "http://proxy.example.org"],
