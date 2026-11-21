@@ -1,0 +1,515 @@
+suite: opencost optional package (opt-in via enabledPackages)
+templates:
+  - templates/bundles/system.yaml
+release:
+  name: cozystack
+  namespace: cozy-system
+tests:
+  - it: does not emit cozystack.opencost by default (optional, not enabled)
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+    asserts:
+      # any: true is REQUIRED inside the matcher for the negative to search the whole
+      # document set; without it containsDocument matches nothing and `not: true` is a
+      # vacuous no-op (a package.default regression would pass unnoticed).
+      - containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.opencost
+          any: true
+        not: true
+
+  - it: emits cozystack.opencost when listed in enabledPackages
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+        enabledPackages:
+          - cozystack.opencost
+    asserts:
+      - containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.opencost
+          any: true
+
+  - it: honors disabledPackages even when also enabled
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+        enabledPackages:
+          - cozystack.opencost
+        disabledPackages:
+          - cozystack.opencost
+    asserts:
+      - containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.opencost
+          any: true
+        not: true
+
+  - it: fails on a slim variant and names every package it still needs
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-slim
+        enabledPackages:
+          - cozystack.opencost
+    asserts:
+      - failedTemplate:
+          errorPattern: "needs cozystack.grafana-operator, cozystack.metrics-server, cozystack.monitoring-agents, cozystack.monitoring-application, cozystack.vertical-pod-autoscaler, cozystack.postgres-operator in bundles.enabledPackages"
+
+  # The monitoring packages alone stay DependenciesNotReady on a slim variant:
+  # their own dependencies are opt-in there too.
+  - it: fails on a slim variant with only the two monitoring packages enabled
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-slim
+        enabledPackages:
+          - cozystack.opencost
+          - cozystack.monitoring-application
+          - cozystack.monitoring-agents
+    asserts:
+      - failedTemplate:
+          errorPattern: "needs cozystack.grafana-operator, cozystack.metrics-server, cozystack.vertical-pod-autoscaler, cozystack.postgres-operator in"
+
+  - it: emits OpenCost and its whole dependency closure on a slim variant
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-slim
+        enabledPackages:
+          - cozystack.opencost
+          - cozystack.grafana-operator
+          - cozystack.metrics-server
+          - cozystack.monitoring-agents
+          - cozystack.monitoring-application
+          - cozystack.vertical-pod-autoscaler
+          - cozystack.postgres-operator
+    asserts:
+      - containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.opencost
+          any: true
+      - containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.cert-manager
+          any: true
+      - containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.cozystack-engine
+          any: true
+      - containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.gateway-api-crds
+          any: true
+      - containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.grafana-operator
+          any: true
+      - containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.metrics-server
+          any: true
+      - containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.monitoring-agents
+          any: true
+      - containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.monitoring-application
+          any: true
+      - containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.postgres-operator
+          any: true
+      - containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.prometheus-operator-crds
+          any: true
+      - containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.vertical-pod-autoscaler
+          any: true
+      - containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.victoria-metrics-operator
+          any: true
+
+  # OIDC emits postgres-operator on every variant, because keycloak needs it.
+  - it: does not ask for postgres-operator on a slim variant with OIDC
+    set:
+      authentication:
+        oidc:
+          enabled: true
+      bundles:
+        system:
+          enabled: true
+          variant: isp-slim
+        enabledPackages:
+          - cozystack.opencost
+          - cozystack.grafana-operator
+          - cozystack.metrics-server
+          - cozystack.monitoring-agents
+          - cozystack.monitoring-application
+          - cozystack.vertical-pod-autoscaler
+    asserts:
+      - containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.opencost
+          any: true
+      - containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.cert-manager
+          any: true
+      - containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.cozystack-engine
+          any: true
+      - containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.gateway-api-crds
+          any: true
+      - containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.grafana-operator
+          any: true
+      - containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.metrics-server
+          any: true
+      - containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.monitoring-agents
+          any: true
+      - containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.monitoring-application
+          any: true
+      - containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.postgres-operator
+          any: true
+      - containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.prometheus-operator-crds
+          any: true
+      - containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.vertical-pod-autoscaler
+          any: true
+      - containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.victoria-metrics-operator
+          any: true
+      - containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.keycloak
+          any: true
+      - containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.keycloak-operator
+          any: true
+
+  - it: fails when a dependency of OpenCost is in disabledPackages
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+        enabledPackages:
+          - cozystack.opencost
+        disabledPackages:
+          - cozystack.victoria-metrics-operator
+    asserts:
+      - failedTemplate:
+          errorPattern: "cozystack.opencost cannot be installed: it depends on cozystack.victoria-metrics-operator, listed in bundles.disabledPackages"
+
+  - it: names every disabled dependency of OpenCost at once
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+        enabledPackages:
+          - cozystack.opencost
+        disabledPackages:
+          - cozystack.monitoring-agents
+          - cozystack.grafana-operator
+    asserts:
+      - failedTemplate:
+          errorPattern: "depends on cozystack.grafana-operator, cozystack.monitoring-agents, listed in"
+
+  - it: fails when OIDC is on and keycloak-operator is in disabledPackages
+    set:
+      authentication:
+        oidc:
+          enabled: true
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+        enabledPackages:
+          - cozystack.opencost
+        disabledPackages:
+          - cozystack.keycloak-operator
+    asserts:
+      - failedTemplate:
+          errorPattern: "cozystack.opencost cannot be installed: it depends on cozystack.keycloak-operator, listed in"
+
+  # A CNI managed by hand is kept by listing cozystack.networking there.
+  - it: allows cozystack.networking in disabledPackages
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+        enabledPackages:
+          - cozystack.opencost
+        disabledPackages:
+          - cozystack.networking
+    asserts:
+      - containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.opencost
+          any: true
+
+  - it: fails when the root tenant runs no monitoring
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+        enabledPackages:
+          - cozystack.opencost
+      monitoring:
+        rootEnabled: false
+    asserts:
+      - failedTemplate:
+          errorPattern: "cozystack.opencost cannot be installed: it requires monitoring.rootEnabled"
+
+  - it: does not check the monitoring stack while OpenCost is not enabled
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-slim
+        disabledPackages:
+          - cozystack.victoria-metrics-operator
+      monitoring:
+        rootEnabled: false
+    asserts:
+      - containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.opencost
+          any: true
+        not: true
+
+  # hack/check-opencost-prerequisites.bats reads the names below: together they
+  # must be the dependsOn closure, and the absent ones $opencostSlimOptIn.
+  - it: on a slim variant emits only the always-on part of the OpenCost closure
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-slim
+    asserts:
+      - containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.cert-manager
+          any: true
+      - containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.cozystack-engine
+          any: true
+      - containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.gateway-api-crds
+          any: true
+      - containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.prometheus-operator-crds
+          any: true
+      - containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.victoria-metrics-operator
+          any: true
+      - containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.grafana-operator
+          any: true
+        not: true
+      - containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.metrics-server
+          any: true
+        not: true
+      - containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.monitoring-agents
+          any: true
+        not: true
+      - containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.monitoring-application
+          any: true
+        not: true
+      - containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.vertical-pod-autoscaler
+          any: true
+        not: true
+      - containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.postgres-operator
+          any: true
+        not: true
+
+  # hack/check-opencost-prerequisites.bats reads the names below: together they
+  # must be the dependsOn closure, and the absent ones $opencostSlimOptIn.
+  - it: on a slim variant with OIDC emits only the always-on part of the OpenCost closure
+    set:
+      authentication:
+        oidc:
+          enabled: true
+      bundles:
+        system:
+          enabled: true
+          variant: isp-slim
+    asserts:
+      - containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.cert-manager
+          any: true
+      - containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.cozystack-engine
+          any: true
+      - containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.gateway-api-crds
+          any: true
+      - containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.prometheus-operator-crds
+          any: true
+      - containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.victoria-metrics-operator
+          any: true
+      - containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.keycloak
+          any: true
+      - containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.keycloak-operator
+          any: true
+      - containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.postgres-operator
+          any: true
+      - containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.grafana-operator
+          any: true
+        not: true
+      - containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.metrics-server
+          any: true
+        not: true
+      - containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.monitoring-agents
+          any: true
+        not: true
+      - containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.monitoring-application
+          any: true
+        not: true
+      - containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.vertical-pod-autoscaler
+          any: true
+        not: true
+
+  - it: names every problem in one message
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-slim
+        enabledPackages:
+          - cozystack.opencost
+        disabledPackages:
+          - cozystack.victoria-metrics-operator
+      monitoring:
+        rootEnabled: false
+    asserts:
+      - failedTemplate:
+          errorPattern: "cannot be installed: it depends on cozystack.victoria-metrics-operator, listed in bundles.disabledPackages: remove it from there; on a slim variant it also needs cozystack.grafana-operator, .*; it requires monitoring.rootEnabled"

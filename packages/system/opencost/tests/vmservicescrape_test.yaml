@@ -1,0 +1,49 @@
+suite: opencost scrape keeps workload labels without duplicating kube-state-metrics
+templates:
+  - templates/vmservicescrape.yaml
+release:
+  name: opencost
+  namespace: cozy-opencost
+tests:
+  - it: keeps the namespace and pod of the measured workload
+    asserts:
+      - equal:
+          path: spec.endpoints[0].honorLabels
+          value: true
+
+  # namespace:gpu_count:allocated and cluster:gpu_count:allocated sum
+  # kube_pod_container_resource_requests without a job filter.
+  - it: drops OpenCost's copies of the series kube-state-metrics stores
+    asserts:
+      - equal:
+          path: spec.endpoints[0].metricRelabelConfigs[0].action
+          value: drop
+      - equal:
+          path: spec.endpoints[0].metricRelabelConfigs[0].sourceLabels
+          value: [__name__]
+      - matchRegex:
+          path: spec.endpoints[0].metricRelabelConfigs[0].regex
+          pattern: '[(|]kube_pod_container_resource_requests[|)]'
+      - matchRegex:
+          path: spec.endpoints[0].metricRelabelConfigs[0].regex
+          pattern: '[(|]kube_node_status_allocatable[|)]'
+      - matchRegex:
+          path: spec.endpoints[0].metricRelabelConfigs[0].regex
+          pattern: '[(|]kube_pod_labels[|)]'
+
+  # OpenCost queries these and only it exports them.
+  - it: keeps the series that have no kube-state-metrics copy
+    asserts:
+      - notMatchRegex:
+          path: spec.endpoints[0].metricRelabelConfigs[0].regex
+          pattern: '[(|](kube_namespace_labels|kube_node_labels|kube_node_status_(capacity|allocatable)_(cpu_cores|memory_bytes))[|)]'
+      - notMatchRegex:
+          path: spec.endpoints[0].metricRelabelConfigs[0].regex
+          pattern: '_hourly_cost|_allocation'
+
+  # A wildcard in the alternation would drop every series, cost metrics included.
+  - it: drops only literal metric names
+    asserts:
+      - matchRegex:
+          path: spec.endpoints[0].metricRelabelConfigs[0].regex
+          pattern: '^\((kube_[a-z_]+\|)*kube_[a-z_]+\)$'
