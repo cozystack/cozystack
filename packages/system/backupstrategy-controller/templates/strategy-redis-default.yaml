@@ -82,14 +82,15 @@ spec:
             {{- end }}
           env:
             {{- /*
-            Redis password, when the app has authEnabled (the default). The chart
-            emits the Secret <prefix><app>-auth; mount it optionally so a no-auth
-            app still schedules.
+            Redis password, when the app has authEnabled (the default): the
+            account Secret <prefix><app>.default.account of its default
+            CredentialTemplate, which a mint rewrites. Mount it optionally so a
+            no-auth app still schedules.
             */}}
             - name: REDIS_PASSWORD
               valueFrom:
                 secretKeyRef:
-                  name: {{ printf `{{ .Release.Prefix | default "redis-" }}{{ .Release.Name }}-auth` | quote }}
+                  name: {{ printf `{{ .Release.Prefix | default "redis-" }}{{ .Release.Name }}.default.account` | quote }}
                   key: password
                   optional: true
             {{- /*

@@ -92,3 +92,19 @@ tests:
           content:
             name: S3_INSECURE_SKIP_VERIFY
             value: "true"
+
+  - it: "reads the password from the account Secret of the app's default account"
+    asserts:
+      # The app's chart no longer renders <app>-auth: the password lives in the
+      # account Secret of its default CredentialTemplate, which a mint
+      # rewrites, so the next backup authenticates with the new password. The
+      # reference stays optional so an app without authentication schedules.
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: REDIS_PASSWORD
+            valueFrom:
+              secretKeyRef:
+                name: '{{ .Release.Prefix | default "redis-" }}{{ .Release.Name }}.default.account'
+                key: password
+                optional: true
