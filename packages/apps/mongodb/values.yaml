@@ -116,15 +116,13 @@ shardingConfig:
 ## @section Users configuration
 ##
 
-## @typedef {struct} User - User configuration.
-## @field {string} [password] - Password for the user (auto-generated if omitted).
+## @typedef {struct} User - User configuration. Users have no settings of their own; their roles come from `databases`.
 
-## @param {map[string]User} users - Users configuration map.
+## @param {map[string]User} users - Users configuration map. Each user is a MongoDB user the operator manages from an account Secret the platform keeps. Passwords are issued through the Cozystack credentials API: a mint on the account's `Credential` (`core.cozystack.io`) returns a new password once, and a revoke retires the password without issuing one. A `password` key here is ignored. The names of the MongoDB system users (`backup`, `clusterAdmin`, `clusterMonitor`, `databaseAdmin`, `userAdmin`) are refused.
 users: {}
 ## Example:
 ## users:
-##   user1:
-##     password: strongpassword
+##   user1: {}
 ##   user2: {}
 
 ##

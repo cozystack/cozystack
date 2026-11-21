@@ -1,0 +1,171 @@
+suite: users no longer declared are dropped, and only those the chart marked
+
+# The operator never drops a user that leaves spec.users. The chart marks the
+# users it declares with a role that grants nothing, and a post-upgrade hook
+# drops marked users that are no longer declared, logging in as the userAdmin
+# platform account.
+
+templates:
+  - templates/hooks/drop-users-job.yaml
+  - templates/mongodb.yaml
+
+release:
+  name: test-mongodb
+  namespace: tenant-test
+  upgrade: true
+
+set:
+  _cluster:
+    cluster-domain: cozy.local
+  users:
+    web: {}
+  databases:
+    app:
+      roles:
+        admin:
+          - web
+
+tests:
+  - it: marks every declared user with the role that grants nothing
+    template: templates/mongodb.yaml
+    documentSelector:
+      path: kind
+      value: PerconaServerMongoDB
+    asserts:
+      - contains:
+          path: spec.users[0].roles
+          content:
+            name: cozystack-managed
+            db: admin
+      - equal:
+          path: spec.roles
+          value:
+            - role: cozystack-managed
+              db: admin
+              privileges: []
+
+  - it: keeps the marker role when no user is left
+    template: templates/mongodb.yaml
+    documentSelector:
+      path: kind
+      value: PerconaServerMongoDB
+    set:
+      # null rather than {}: the suite's users would be merged into an empty map.
+      users: null
+      databases: null
+    asserts:
+      - notExists:
+          path: spec.users
+      - equal:
+          path: spec.roles[0].role
+          value: cozystack-managed
+
+  - it: runs as a post-upgrade hook bounded under the hook budget
+    template: templates/hooks/drop-users-job.yaml
+    asserts:
+      - isKind:
+          of: Job
+      - equal:
+          path: metadata.annotations["helm.sh/hook"]
+          value: post-upgrade
+      - equal:
+          path: spec.activeDeadlineSeconds
+          value: 540
+      - equal:
+          path: spec.backoffLimit
+          value: 0
+
+  - it: logs in as the userAdmin platform account, never a tenant account
+    template: templates/hooks/drop-users-job.yaml
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: MONGO_USER
+            valueFrom:
+              secretKeyRef:
+                name: test-mongodb-percona-server-mongodb-users
+                key: MONGODB_USER_ADMIN_USER
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: MONGO_PASSWORD
+            valueFrom:
+              secretKeyRef:
+                name: test-mongodb-percona-server-mongodb-users
+                key: MONGODB_USER_ADMIN_PASSWORD
+      - notMatchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: \.account
+
+  - it: passes the declared users and protects the system users
+    template: templates/hooks/drop-users-job.yaml
+    set:
+      users:
+        web: {}
+        api: {}
+      databases:
+        app:
+          roles:
+            admin: [web, api]
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: DECLARED_USERS
+            value: '["api","web"]'
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: DEFAULT_SYSTEM_USERS
+            value: '["backup","clusterAdmin","clusterMonitor","databaseAdmin","userAdmin"]'
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: SYS_MONGODB_DATABASE_ADMIN_USER
+            valueFrom:
+              secretKeyRef:
+                name: test-mongodb-percona-server-mongodb-users
+                key: MONGODB_DATABASE_ADMIN_USER
+                optional: true
+
+  - it: drops only marked, undeclared, non-system users in admin
+    template: templates/hooks/drop-users-job.yaml
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].env[?(@.name == "DROP_JS")].value
+          pattern: 'u\.db !== "admin" \|\| !marked \|\| declared\.has\(u\.user\) \|\| system\.has\(u\.user\)\) continue'
+
+  - it: declares an empty list when every user is removed
+    template: templates/hooks/drop-users-job.yaml
+    set:
+      # null rather than {}: the suite's users would be merged into an empty map.
+      users: null
+      databases: null
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: DECLARED_USERS
+            value: "[]"
+
+  - it: connects through mongos on a sharded cluster
+    template: templates/hooks/drop-users-job.yaml
+    set:
+      sharding: true
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: MONGO_URI
+            value: mongodb://test-mongodb-mongos.tenant-test.svc.cozy.local:27017/admin
+
+  - it: is skipped while restoring from a backup
+    template: templates/hooks/drop-users-job.yaml
+    set:
+      bootstrap:
+        enabled: true
+        backupName: b1
+    asserts:
+      - hasDocuments:
+          count: 0
