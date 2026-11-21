@@ -351,6 +351,7 @@ func main() {
 	}
 	if err = (&controller.CredentialValuesReconciler{
 		Client: mgr.GetClient(),
+		Reader: mgr.GetAPIReader(),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "CredentialValues")
 		os.Exit(1)
