@@ -145,8 +145,9 @@ func (r *BackupReconciler) cleanupOnDelete(ctx context.Context, backup *backupsv
 		// a tenant's own bucket is deleted too: the Backup proves it owns
 		// it, and tenants cannot delete Backups, so the delete comes from an
 		// administrator or from namespace teardown. Teardown can remove the
-		// operator Backup first, and the dump is then left behind with a
-		// Warning, since its storage is read from it (see cleanupMariaDBBackup).
+		// operator Backup first; a recorded dump on the platform bucket is
+		// then still deleted, and any other is left behind with a Warning
+		// (see cleanupMariaDBBackup).
 		return r.cleanupMariaDBBackup(ctx, backup)
 	case strategyv1alpha1.MongoDBStrategyKind:
 		// Split by flow (see cleanupMongoDBBackup). A legacy backup writes to the
@@ -248,28 +249,16 @@ func (r *BackupReconciler) cleanupVeleroBackup(ctx context.Context, backup *back
 		return fmt.Errorf("failed to get Velero backup %s/%s: %w", veleroBackupNamespace, veleroBackupName, err)
 	}
 
-	// Create a DeleteBackupRequest so Velero removes backup data from storage.
-	// Without this, BSL sync will recreate the backup.velero.io resource.
-	dbr := &velerov1.DeleteBackupRequest{
-		ObjectMeta: metav1.ObjectMeta{
-			GenerateName: veleroBackupName + "-",
-			Namespace:    veleroBackupNamespace,
-		},
-		Spec: velerov1.DeleteBackupRequestSpec{
-			BackupName: veleroBackupName,
-		},
+	req, err := requestVeleroBackupDeletion(ctx, r.Client, veleroBackupNamespace, veleroBackupName, true)
+	if err != nil {
+		return err
 	}
-	if err := r.Create(ctx, dbr); err != nil {
-		if apierrors.IsAlreadyExists(err) {
-			logger.V(1).Info("DeleteBackupRequest already exists", "backup", veleroBackupName)
-			return nil
-		}
-		return fmt.Errorf("failed to create DeleteBackupRequest for %s/%s: %w", veleroBackupNamespace, veleroBackupName, err)
+	if req.created {
+		logger.Info("created DeleteBackupRequest for Velero backup",
+			"name", veleroBackupName, "namespace", veleroBackupNamespace)
+	} else {
+		logger.V(1).Info("deletion of Velero backup already requested", "backup", veleroBackupName)
 	}
-
-	logger.Info("created DeleteBackupRequest for Velero backup",
-		"name", veleroBackupName, "namespace", veleroBackupNamespace,
-		"deleteRequest", dbr.Name)
 	return nil
 }
 
