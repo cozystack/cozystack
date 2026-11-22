@@ -88,6 +88,10 @@ rules:
   - apiGroups: ["sdn.cozystack.io"]
     resources: ["hostfirewalls"]
     verbs: ["get", "list", "watch"]
+  # PortClaims: the CNI plugin binds a pod to the claim its annotation names.
+  - apiGroups: ["sdn.cozystack.io"]
+    resources: ["portclaims"]
+    verbs: ["get"]
   # FloatingIPs: the agent programs the floating map and advertises the address
   # for those whose target Port is on this node.
   - apiGroups: ["sdn.cozystack.io"]

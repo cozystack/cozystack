@@ -1,7 +1,7 @@
 cozyplane-apiserver:
   # The cozyplane release's image by tag and digest, for mirroring and
   # promotion; the vendored chart pins a digest only.
-  image: ghcr.io/lllamnyp/cozyplane:v0.1.2@sha256:0fbf42fca2f65fc500a0b48738ee321c483246952fc013d249b6bb27445cc19f
+  image: ghcr.io/lllamnyp/cozyplane:v0.1.5@sha256:2cc55293000b64a4c4233910cbc3803b9bea7c16e9e7d44ddcc44fb4042cdd98
   # The aggregated apiserver backs every tenant's SDN API.
   replicas: 2
   etcd:

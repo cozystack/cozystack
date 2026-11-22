@@ -1,4 +1,4 @@
 cozyplane-kpr:
   # The cozyplane release's image by tag and digest, for mirroring and
   # promotion; the vendored chart pins a digest only.
-  image: ghcr.io/lllamnyp/cozyplane-kpr:v0.1.2@sha256:39cd8391952c951c050fe818e4e9a0f83deb10caef20741093e39cea54f4ce01
+  image: ghcr.io/lllamnyp/cozyplane-kpr:v0.1.5@sha256:28254bdc0283b3797ea8c5f26146932c46b0be98a15cdd660cb42330963cb01c
