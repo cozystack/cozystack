@@ -75,6 +75,7 @@ spec:
         {{- /* The VPC lives in the VM's own namespace, so the bare release name
                resolves; <owner-ns>/<vpc> is only for foreign VPCs. */}}
         sdn.cozystack.io/vpc: {{ printf "virtualprivatecloud-%s" (index $networks 0).name | quote }}
+        sdn.cozystack.io/port-claim: {{ include "virtual-machine.fullname" . }}
         {{- with $routeTable }}
         sdn.cozystack.io/route-table: {{ . | quote }}
         {{- end }}
