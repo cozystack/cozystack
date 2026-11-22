@@ -67,7 +67,13 @@ if [ -z "$CHANGED" ] || [ "$CHANGED" = "FULL" ]; then
   exit 0
 fi
 
-if grep -qE "$full_rebuild_pattern" "$CHANGED"; then
+# CI-only Go tools that no image builds. Dropped before the full-rebuild check,
+# whose cmd/ would otherwise rebuild everything for an edit no image contains.
+# hack/select-e2e.sh skips the same two, and a diff made only of them and docs/
+# never reaches this script's build jobs (the plan job's `code` is false).
+tooling_pattern='^cmd/(backport-batch|api-gate)/'
+
+if grep -vE "$tooling_pattern" "$CHANGED" | grep -qE "$full_rebuild_pattern"; then
   emit_json "$units"
   exit 0
 fi
@@ -87,6 +93,16 @@ if grep -qE '^packages/system/seaweedfs/' "$CHANGED"; then
   case " $selected " in
     *" packages/system/objectstorage-controller "*) : ;;
     *) selected="$selected packages/system/objectstorage-controller" ;;
+  esac
+fi
+
+#   the kubevirt-csi-node sidecars run on tenant vCPUs and are ISA-checked by
+#   hack/image-smoke.bats in the job that builds kubevirt-csi-driver, so a
+#   kubevirt-csi-node-only diff must still run the kubernetes build.
+if grep -qE '^packages/system/kubevirt-csi-node/' "$CHANGED"; then
+  case " $selected " in
+    *" packages/apps/kubernetes "*) : ;;
+    *) selected="$selected packages/apps/kubernetes" ;;
   esac
 fi
 

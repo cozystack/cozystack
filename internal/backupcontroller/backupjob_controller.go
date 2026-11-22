@@ -39,6 +39,13 @@ type BackupJobReconciler struct {
 	// re-reads the BackupJob before dispatching to a driver. Wired in
 	// SetupWithManager.
 	APIReader client.Reader
+
+	// newS3ObjectLister overrides the S3 client used to measure artifact
+	// sizes; nil means a real minio client. Set by unit tests.
+	newS3ObjectLister func(conn s3Connection) (s3ObjectLister, error)
+
+	// now is a test seam for the clock that paces Velero deletion retries.
+	now func() time.Time
 }
 
 func (r *BackupJobReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -56,12 +63,17 @@ func (r *BackupJobReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		return ctrl.Result{}, err
 	}
 
-	// Skip terminal BackupJobs: a Succeeded/Failed run must not keep
-	// projecting Secrets or re-running dispatch on every requeue, which
-	// would otherwise materialise cozy-backups-creds in tenant namespaces
-	// long after the BackupJob is done and pin needless work on the
-	// apiserver.
-	if j.Status.Phase == backupsv1alpha1.BackupJobPhaseSucceeded || j.Status.Phase == backupsv1alpha1.BackupJobPhaseFailed {
+	// A terminal BackupJob never reaches credentials projection or strategy
+	// dispatch: a finished run must not keep projecting Secrets or
+	// re-running dispatch on every requeue, which would otherwise
+	// materialise cozy-backups-creds in tenant namespaces long after the
+	// BackupJob is done and pin needless work on the apiserver. A Failed
+	// one only has the failed Velero backups it left behind deleted.
+	if j.Status.Phase == backupsv1alpha1.BackupJobPhaseFailed {
+		logger.V(1).Info("BackupJob already terminal, cleaning up its Velero Backups", "phase", j.Status.Phase)
+		return r.deleteFailedJobVeleroBackups(ctx, j)
+	}
+	if j.Status.Phase == backupsv1alpha1.BackupJobPhaseSucceeded {
 		logger.V(1).Info("BackupJob already terminal, skipping", "phase", j.Status.Phase)
 		return ctrl.Result{}, nil
 	}
@@ -210,6 +222,8 @@ func (r *BackupJobReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		return r.reconcileRedis(ctx, j, resolved)
 	case strategyv1alpha1.KafkaStrategyKind:
 		return r.reconcileKafka(ctx, j, resolved)
+	case strategyv1alpha1.KubernetesStrategyKind:
+		return r.reconcileKubernetes(ctx, j, resolved)
 	default:
 		logger.V(1).Info("BackupJob resolved StrategyRef.Kind not supported, skipping",
 			"backupjob", j.Name,
@@ -236,6 +250,7 @@ func supportedBackupStrategyKinds() []string {
 		strategyv1alpha1.RabbitmqStrategyKind,
 		strategyv1alpha1.RedisStrategyKind,
 		strategyv1alpha1.KafkaStrategyKind,
+		strategyv1alpha1.KubernetesStrategyKind,
 	}
 }
 
@@ -311,14 +326,6 @@ func (r *BackupJobReconciler) handleProjectionError(ctx context.Context, j *back
 }
 
 // markBackupJobFailed records a terminal Failed phase on the BackupJob.
-//
-// Coupling note: a failure that fires before reconcileCNPG's StartedAt block
-// has set backupJob.Status.StartedAt leaves StartedAt nil. The CNPG path's
-// cnpgDefaultBackupDeadline check only fires once StartedAt is set, so an
-// early-failure retry that reaches the StartedAt block restarts the deadline
-// budget from the retry's StartedAt - intentional, since retries are
-// user-driven and a fresh budget is what users expect after correcting the
-// cause of the previous failure.
 func (r *BackupJobReconciler) markBackupJobFailed(ctx context.Context, backupJob *backupsv1alpha1.BackupJob, message string) (ctrl.Result, error) {
 	logger := getLogger(ctx)
 	now := metav1.Now()
@@ -386,9 +393,7 @@ func strategyNotReadyDeadlineExceeded(startedAt *metav1.Time) bool {
 func (r *BackupJobReconciler) requeueStrategyNotReady(ctx context.Context, j *backupsv1alpha1.BackupJob, strategyName string) (ctrl.Result, error) {
 	logger := getLogger(ctx)
 	if strategyNotReadyDeadlineExceeded(j.Status.StartedAt) {
-		return r.markBackupJobFailed(ctx, j, fmt.Sprintf(
-			"Strategy %q referenced by BackupClass %q was not provisioned within %s; check the strategyRef name or the platform backup-storage bootstrap",
-			strategyName, j.Spec.BackupClassName, StrategyNotReadyDeadline))
+		return r.markBackupJobFailed(ctx, j, strategyNotProvisionedMessage(j, strategyName))
 	}
 	meta.SetStatusCondition(&j.Status.Conditions, metav1.Condition{
 		Type:    "Ready",
@@ -400,4 +405,10 @@ func (r *BackupJobReconciler) requeueStrategyNotReady(ctx context.Context, j *ba
 		logger.Error(updateErr, "failed to update BackupJob status to StrategyNotReady")
 	}
 	return ctrl.Result{RequeueAfter: CredentialsProjectionRequeue}, nil
+}
+
+func strategyNotProvisionedMessage(j *backupsv1alpha1.BackupJob, strategyName string) string {
+	return fmt.Sprintf(
+		"Strategy %q referenced by BackupClass %q was not provisioned within %s; check the strategyRef name or the platform backup-storage bootstrap",
+		strategyName, j.Spec.BackupClassName, StrategyNotReadyDeadline)
 }

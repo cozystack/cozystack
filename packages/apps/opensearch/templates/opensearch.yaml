@@ -17,6 +17,18 @@ spec:
     version: {{ include "opensearch.versionMap" $ }}
     httpPort: 9200
     {{- /*
+    JVM options go in as a jvm.options.d file because neither other route works:
+    bin/opensearch-env unsets JAVA_TOOL_OPTIONS, and setting nodePools[].jvm makes
+    the operator stop sizing the heap from the memory request.
+    */}}
+    additionalVolumes:
+      - name: jvm-options
+        path: /usr/share/opensearch/config/jvm.options.d/cozystack.options
+        subPath: cozystack.options
+        restartPods: true
+        configMap:
+          name: {{ .Release.Name }}-jvm-options
+    {{- /*
     The operator's own way to raise vm.max_map_count is a privileged init
     container in every OpenSearch pod, and the PodSecurity level tenant
     namespaces run at refuses that before any pod exists. The sysctl comes from

@@ -8,8 +8,9 @@
 # Output:
 #   - empty         no E2E impact, decided by one of the rules that select
 #                   nothing: step 1 for docs/, dashboards/ and *.md, step 2 for
-#                   a *.disabled Chainsaw suite and for an
-#                   examples/backups/<app>/ with no suite, and
+#                   a *.disabled Chainsaw suite, for an
+#                   examples/backups/<app>/ with no suite and for the CI-only
+#                   tools cmd/backport-batch/ and cmd/api-gate/, and
 #                   inert_config_pattern for repo meta and agent config
 #   - <suite names> selected per the PackageSource dependency graph
 #   - full list     any path that affects all tests, OR an unrecognised
@@ -496,6 +497,14 @@ while IFS= read -r file || [ -n "$file" ]; do
       # select nothing.
       echo "select-e2e: '$file' belongs to no single backup walkthrough — escalating to the full suite" >&2
       trigger_full=1
+      continue ;;
+    cmd/backport-batch/*|cmd/api-gate/*)
+      # CI-only Go tools. No image builds them and nothing in the e2e sandbox
+      # runs them, so an edit cannot regress a suite. Matched here because
+      # full_suite_pattern takes all of cmd/ and is checked before the inert
+      # list. The plan job's `code` output and e2e-fork.yaml skip e2e for a
+      # diff made only of these and docs/; this arm keeps them from escalating
+      # a diff that also touches something else.
       continue ;;
   esac
 

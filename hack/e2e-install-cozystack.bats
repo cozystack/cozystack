@@ -49,10 +49,10 @@
   # Best-effort: never fail the suite on the band-aid. Remove once tenant workers
   # no longer bulk-pull the OS image from the public internet in CI.
   local sid ver
-  sid=$(yq '.talos.schematicID' packages/apps/kubernetes/values.yaml 2>/dev/null)
-  ver=$(yq '.talos.version' packages/apps/kubernetes/values.yaml 2>/dev/null)
+  sid=$(yq '.talos.schematicID' packages/apps/kubernetes-nodes/values.yaml 2>/dev/null)
+  ver=$(yq '.talos.version' packages/apps/kubernetes-nodes/values.yaml 2>/dev/null)
   if [ -z "$sid" ] || [ "$sid" = "null" ] || [ -z "$ver" ] || [ "$ver" = "null" ]; then
-    echo "WARNING: could not read talos.schematicID/version from values.yaml — skipping mirror (fallback to public factory)"
+    echo "WARNING: could not read talos.schematicID/version from packages/apps/kubernetes-nodes/values.yaml — skipping mirror (fallback to public factory)"
     return 0
   fi
   # The CiliumClusterwideNetworkPolicy in the manifest is intentionally NOT applied
@@ -367,6 +367,48 @@
   # has necessarily been re-reconciled, so Ready here means the whole upgrade
   # converged -- not just the one Deployment this test watched.
   kubectl wait hr/dashboard -n cozy-dashboard --timeout=10m --for=condition=ready
+
+  # The login redirect oauth2-proxy builds from the alpha config: the realm path
+  # must reach the browser-facing auth URL, an allowed kc_idp_hint must be passed
+  # through to Keycloak, and a value outside the allow pattern must be dropped.
+  # Asserted after the port-forward is gone: on failure set -e would skip a kill
+  # placed after the assertion, and a trap would hide the TAP line.
+  pf_log=$(mktemp)
+  kubectl -n cozy-dashboard port-forward deploy/incloud-web-gatekeeper 18000:8000 >"$pf_log" 2>&1 &
+  pf_pid=$!
+  hinted=""
+  rejected=""
+  if timeout 30 sh -ec 'until nc -z localhost 18000; do sleep 0.2; done'; then
+    hinted=$(curl -sS -o /dev/null -w '%{redirect_url}' 'http://localhost:18000/oauth2/start?kc_idp_hint=e2e-idp') || true
+    rejected=$(curl -sS -o /dev/null -w '%{redirect_url}' 'http://localhost:18000/oauth2/start?kc_idp_hint=e2e%26prompt%3Dnone') || true
+  fi
+  kill "$pf_pid" 2>/dev/null || true
+  wait "$pf_pid" 2>/dev/null || true
+
+  case "$hinted" in
+    https://keycloak.example.org/realms/cozy/protocol/openid-connect/auth\?*\&kc_idp_hint=e2e-idp\&*|https://keycloak.example.org/realms/cozy/protocol/openid-connect/auth\?*\&kc_idp_hint=e2e-idp) ;;
+    *)
+      echo "=== /oauth2/start?kc_idp_hint=e2e-idp did not redirect to the cozy realm with the hint ==="
+      echo "Location: ${hinted:-<none>}"
+      cat "$pf_log"
+      false
+      ;;
+  esac
+  case "$rejected" in
+    https://keycloak.example.org/realms/cozy/protocol/openid-connect/auth\?*kc_idp_hint*|https://keycloak.example.org/realms/cozy/protocol/openid-connect/auth\?*prompt=none*)
+      echo "=== a kc_idp_hint outside the allow pattern reached the Keycloak URL ==="
+      echo "Location: $rejected"
+      false
+      ;;
+    https://keycloak.example.org/realms/cozy/protocol/openid-connect/auth\?*) ;;
+    *)
+      echo "=== /oauth2/start with a rejected kc_idp_hint did not redirect to Keycloak ==="
+      echo "Location: ${rejected:-<none>}"
+      cat "$pf_log"
+      false
+      ;;
+  esac
+  rm -f "$pf_log"
 }
 
 @test "Aggregated API rejects Tenant name with dashes" {
@@ -560,4 +602,41 @@ metadata:
 data:
   version: "${version}"
 EOF
+}
+
+@test "Tenant namespace delete policy refuses a direct delete and keeps the Tenant uninstall" {
+  if ! kubectl api-resources --api-group=admissionregistration.k8s.io \
+       2>/dev/null | grep -qw validatingadmissionpolicies; then
+    skip "ValidatingAdmissionPolicy API not available on this cluster"
+  fi
+  kubectl get validatingadmissionpolicy cozystack-tenant-namespace-delete-policy
+  kubectl get validatingadmissionpolicybinding cozystack-tenant-namespace-delete-policy
+
+  kubectl apply -f - <<EOF
+apiVersion: apps.cozystack.io/v1alpha1
+kind: Tenant
+metadata:
+  name: deleteprobe
+  namespace: tenant-root
+spec: {}
+EOF
+  timeout 60 sh -ec 'until kubectl get hr/tenant-deleteprobe -n tenant-root >/dev/null 2>&1; do sleep 2; done'
+  kubectl wait hr/tenant-deleteprobe -n tenant-root --timeout=1m --for=condition=ready
+
+  local selected output rc still_there
+  selected=$(kubectl get namespaces --selector tenant.cozystack.io/tenant-root --field-selector metadata.name=tenant-deleteprobe -o name)
+  [ "$selected" = "namespace/tenant-deleteprobe" ]
+
+  output=$(kubectl delete namespace tenant-deleteprobe --dry-run=server 2>&1) && rc=0 || rc=$?
+  echo "kubectl delete exit=$rc, output=$output"
+  [ "$rc" -ne 0 ]
+  echo "$output" | grep -qF "ValidatingAdmissionPolicy 'cozystack-tenant-namespace-delete-policy'"
+  echo "$output" | grep -qF 'kubectl delete tenants.apps.cozystack.io deleteprobe --namespace tenant-root.'
+
+  kubectl delete tenants.apps.cozystack.io deleteprobe -n tenant-root --timeout=5m
+  kubectl wait namespace/tenant-deleteprobe --for=delete --timeout=5m
+  if ! still_there=$(kubectl get namespace tenant-deleteprobe --ignore-not-found -o name); then
+    echo "FAIL: reading the tenant-deleteprobe namespace did not answer"; false
+  fi
+  if [ -n "$still_there" ]; then echo "FAIL: deleting the Tenant must remove its namespace"; false; fi
 }

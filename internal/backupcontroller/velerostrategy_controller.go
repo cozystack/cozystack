@@ -307,12 +307,12 @@ func (r *BackupJobReconciler) reconcileVelero(ctx context.Context, j *backupsv1a
 	}
 
 	if len(veleroBackupList.Items) > 1 {
-		logger.Error(fmt.Errorf("too many Velero backups for BackupJob"), "found more than one Velero Backup referencing a single BackupJob as owner")
-		j.Status.Phase = backupsv1alpha1.BackupJobPhaseFailed
-		if err := r.Status().Update(ctx, j); err != nil {
-			logger.Error(err, "failed to update BackupJob status")
+		names := make([]string, 0, len(veleroBackupList.Items))
+		for _, vb := range veleroBackupList.Items {
+			names = append(names, vb.Name)
 		}
-		return ctrl.Result{}, nil
+		sort.Strings(names)
+		return r.markBackupJobFailed(ctx, j, fmt.Sprintf("more than one Velero Backup references this BackupJob: %s", strings.Join(names, ", ")))
 	}
 
 	veleroBackup := veleroBackupList.Items[0].DeepCopy()
@@ -360,6 +360,8 @@ func (r *BackupJobReconciler) reconcileVelero(ctx context.Context, j *backupsv1a
 
 	// Step 5: On failure
 	if phase == "Failed" || phase == "PartiallyFailed" {
+		// The Velero backup is deleted by deleteFailedJobVeleroBackups once
+		// the Failed phase written here triggers the next reconcile.
 		message := formatVeleroBackupFailureMessageForBackupJob(ctx, r.Client, veleroBackup)
 		return r.markBackupJobFailed(ctx, j, message)
 	}
@@ -558,7 +560,9 @@ func (r *BackupJobReconciler) createBackupResource(ctx context.Context, backupJo
 		veleroBackupNamespaceMetadataKey: veleroBackup.Namespace,
 	}
 
-	// Create a basic artifact referencing the Velero backup
+	// SizeBytes stays unset: data lands in a content-addressed kopia
+	// repository shared across backups, so there is no per-backup stored
+	// size, and DataUpload totalBytes counts bytes read, not bytes stored.
 	artifact := &backupsv1alpha1.BackupArtifact{
 		URI: fmt.Sprintf("velero://%s/%s", veleroBackup.Namespace, veleroBackup.Name),
 	}

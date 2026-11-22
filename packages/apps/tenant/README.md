@@ -104,6 +104,7 @@ The `resourceQuotas` parameter allows you to limit resources available to the te
 - `memory` - Total memory (e.g., `"4Gi"` or `"512Mi"`)
 - `ephemeral-storage` - Ephemeral storage limit (e.g., `"10Gi"`)
 - `storage` - Total persistent storage (e.g., `"100Gi"`)
+- `hugepages-2Mi`, `hugepages-1Gi` - Total huge pages of that size (e.g., `"4Gi"`), converted to `requests.hugepages-<size>` only, as Kubernetes has no limits quota for huge pages
 
 **Object count quotas** (passed as-is):
 - `pods` - Maximum number of pods

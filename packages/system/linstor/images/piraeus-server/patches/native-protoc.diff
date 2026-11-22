@@ -1,8 +1,8 @@
 diff --git a/build.gradle b/build.gradle
-index 75b7f64..d2dfec9 100644
+index 9df6c840cdc0..9894a436712c 100644
 --- a/build.gradle
 +++ b/build.gradle
-@@ -37,6 +37,9 @@ configurations {
+@@ -34,6 +34,9 @@ configurations {
  }
  
  def protobufVersion = '31.1'
@@ -12,7 +12,7 @@ index 75b7f64..d2dfec9 100644
  def protoc = file("${projectDir}/tools/protoc-" + protobufVersion + '/bin/protoc')
  def logbackConfig = "logback.xml"
  def jvmOpts = ["-Xms32M"]
-@@ -577,7 +580,7 @@ tasks.register('buildTestCommands', Exec) {
+@@ -650,7 +653,7 @@ tasks.register('buildTestCommands', Exec) {
  tasks.register('unzipProtoc', Copy) {
      dependsOn(downloadProtoc)
  
@@ -21,7 +21,7 @@ index 75b7f64..d2dfec9 100644
      def outputDir = file("tools/protoc-" + protobufVersion)
  
      from zipTree(zipFile)
-@@ -591,7 +594,7 @@ tasks.register('unzipProtoc', Copy) {
+@@ -664,7 +667,7 @@ tasks.register('unzipProtoc', Copy) {
  
  tasks.register('downloadProtoc') {
      outputs.dir "tools"
@@ -30,7 +30,7 @@ index 75b7f64..d2dfec9 100644
      outputs.file protozip
  
      doLast {
-@@ -599,7 +602,7 @@ tasks.register('downloadProtoc') {
+@@ -672,7 +675,7 @@ tasks.register('downloadProtoc') {
              mkdir "tools"
              println "downloading protoc..."
              new URL('https://github.com/google/protobuf/releases/download/v'

@@ -48,3 +48,32 @@ tests:
 
       - notExists:
           path: spec.hard["requests.services.loadbalancers"]
+
+  - it: renders hugepages only as requests
+    set:
+      quota:
+        hugepages-2Mi: "4Gi"
+        hugepages-1Gi: "2Gi"
+      _cluster: {}
+      _namespace: {}
+
+    release:
+      name: myrelease
+      namespace: default
+      revision: 1
+      isUpgrade: false
+
+    asserts:
+      - equal:
+          path: spec.hard["requests.hugepages-2Mi"]
+          value: "4Gi"
+
+      - equal:
+          path: spec.hard["requests.hugepages-1Gi"]
+          value: "2Gi"
+
+      - notExists:
+          path: spec.hard["limits.hugepages-2Mi"]
+
+      - notExists:
+          path: spec.hard["limits.hugepages-1Gi"]

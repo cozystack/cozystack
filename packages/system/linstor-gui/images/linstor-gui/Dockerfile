@@ -2,7 +2,7 @@
 # Serves the pre-built LINSTOR GUI tarball published by LINBIT from a hardened
 # nginx-unprivileged image. nginx.conf is supplied by the chart via ConfigMap,
 # so the upstream docker-entrypoint.sh / nginx.conf.template is not used.
-FROM nginxinc/nginx-unprivileged:1.29-alpine@sha256:0c79d56aee561a1d81c63f00eee5fb5fe29279560cdc55e91425133104c7fbe6
+FROM nginxinc/nginx-unprivileged:1.31-alpine@sha256:b9241c6e7b8e9a862f129d8d4199ab64b10390949a78bdd5603379b32c844083
 
 ARG LINSTOR_GUI_VERSION
 USER root
