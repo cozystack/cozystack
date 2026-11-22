@@ -2,6 +2,7 @@
 # Regenerate after changing the PackageSource inventory or install baseline.
 bundles:
   disabledPackages:
+    - cozystack.address-controller
     - cozystack.bootbox
     - cozystack.bootbox-application
     - cozystack.capi-provider-infra-proxmox
@@ -37,6 +38,7 @@ bundles:
     - cozystack.local-storage
     - cozystack.mariadb-application
     - cozystack.mariadb-operator
+    - cozystack.metallb-iad
     - cozystack.mongodb-application
     - cozystack.mongodb-operator
     - cozystack.monitoring

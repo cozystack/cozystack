@@ -139,14 +139,10 @@ rd-presets-check:
 migrations-target-check:
 	hack/check-migrations-target.sh
 
-# Go tests of the cozystack-api surface and of the standalone packages and
-# commands listed here, whose tests need no cluster. Kept narrow
-# intentionally - running `go test ./...` pulls in generated code round-trip
-# suites whose behavior depends on tool versions outside this repo's control
-# (kubebuilder, openapi-gen, etc.) and is better exercised from their
-# generator workflows.
+# ./internal/... runs in test-controllers; ./test/... and cmd/backport-batch
+# run in targets of their own.
 go-unit-tests:
-	go test ./pkg/registry/... ./pkg/config/... ./pkg/cmd/server/... ./pkg/lineage/... ./pkg/ovnstatus/... ./pkg/reservation/... ./cmd/cozypkg/... ./cmd/check-readiness/...
+	go test -count=1 ./pkg/... $(patsubst %,./%/...,$(filter-out cmd/backport-batch,$(wildcard cmd/*)))
 
 # The nested Go modules (image sources and the published API types) are
 # outside ./... of the root module, so no other target reaches their tests.

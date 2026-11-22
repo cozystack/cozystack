@@ -21,7 +21,7 @@ spec:
   conversion:
     strategy: None
   versions:
-    - name: v1beta2
+    - name: v1
       served: true
       storage: true
       subresources:
@@ -126,3 +126,5 @@ spec:
                   type: integer
                   description: Number of pods managed by this `StrimziPodSet` resource that have the current revision.
               description: The status of the StrimziPodSet.
+          required:
+            - spec

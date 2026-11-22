@@ -3,8 +3,9 @@
 #
 # Sourced by hack/promote-rewrite-tags.sh, hack/promote-retag.sh,
 # hack/nightly-mirror.sh, hack/verify-promoted-packages.sh,
-# hack/stitch-multiarch.sh, hack/verify-multiarch.sh and
-# hack/retention-packages.sh. It exists because the
+# hack/stitch-multiarch.sh, hack/verify-multiarch.sh,
+# hack/retention-packages.sh and the image-reference record and smoke steps
+# of the PR build job. It exists because the
 # first three call sites each grew their own idea of where a ref can live, and
 # drifted: promote-retag and nightly-mirror scanned only the depth-2
 # values.yaml, while the promote workflow's tag rewrite scanned those plus

@@ -3,6 +3,7 @@ package backupcontroller
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
@@ -44,7 +45,8 @@ var mariadbDumpCleanupTimeout = 10 * time.Second
 // no dump is proven the Backup is released with a Warning and nothing is
 // deleted, the operator Backup included, since it is what any later
 // attribution would start from. A failed delete holds the Backup and
-// retries, as the Redis and Rabbitmq cleanups do.
+// retries, as the Redis and Rabbitmq cleanups do. When the operator Backup
+// is gone, cleanupOrphanedMariaDBDump deletes the dump instead.
 func (r *BackupReconciler) cleanupMariaDBBackup(ctx context.Context, backup *backupsv1alpha1.Backup) (ctrl.Result, error) {
 	logger := getLogger(ctx)
 	if backup.Annotations[mariadbSkipArtifactCleanupAnnotation] == "true" {
@@ -75,7 +77,10 @@ func (r *BackupReconciler) cleanupMariaDBBackup(ctx context.Context, backup *bac
 
 	op := &mariadbtypes.Backup{}
 	if err := r.Get(ctx, types.NamespacedName{Namespace: backup.Namespace, Name: opName}, op); err != nil {
-		if apierrors.IsNotFound(err) || apimeta.IsNoMatchError(err) {
+		if apierrors.IsNotFound(err) {
+			return r.cleanupOrphanedMariaDBDump(ctx, backup, opName)
+		}
+		if apimeta.IsNoMatchError(err) {
 			return r.releaseMariaDBCleanup(ctx, backup, "the dump",
 				fmt.Sprintf("k8s.mariadb.com/Backup %s is gone, so the storage and credentials its dump was written with cannot be read", opName)), nil
 		}
@@ -173,6 +178,96 @@ func (r *BackupReconciler) cleanupMariaDBBackup(ctx context.Context, backup *bac
 	return ctrl.Result{}, nil
 }
 
+// cleanupOrphanedMariaDBDump deletes the recorded dump of a Backup whose
+// operator Backup is gone, as it can be by the time a namespace being torn
+// down reaches the Backup's finalizer: mariadb-operator puts none on its
+// Backup. The storage comes from the snapshot the Backup was made with.
+// Only a dump on the platform bucket is deleted, since the platform
+// credentials are the only ones that do not go with the namespace, and only
+// a recorded one: attributing a dump needs the operator Backup's lifetime.
+func (r *BackupReconciler) cleanupOrphanedMariaDBDump(ctx context.Context, backup *backupsv1alpha1.Backup, opName string) (ctrl.Result, error) {
+	gone := fmt.Sprintf("k8s.mariadb.com/Backup %s is gone", opName)
+	name := backup.Spec.DriverMetadata[mariadbDumpFileKey]
+	if name == "" {
+		return r.releaseMariaDBCleanup(ctx, backup, "the dump", gone+" and the Backup records no dump, so none can be attributed to it"), nil
+	}
+	if _, ok := parseMariaDBLogicalBackupFile(name); !ok {
+		return r.releaseMariaDBCleanup(ctx, backup, "the dump",
+			fmt.Sprintf("driverMetadata %s=%q is not the name of a mariadb-operator dump", mariadbDumpFileKey, name)), nil
+	}
+	storage, err := mariadbSnapshotStorage(backup)
+	if err != nil {
+		return r.releaseMariaDBCleanup(ctx, backup, "the dump", fmt.Sprintf("%s and its storage cannot be read from the Backup: %v", gone, err)), nil
+	}
+	if storage.S3 == nil {
+		return r.releaseMariaDBCleanup(ctx, backup, "the dump on a storage volume", "PVC and Volume storage is not reachable from the controller"), nil
+	}
+	op := &mariadbtypes.Backup{
+		ObjectMeta: metav1.ObjectMeta{Namespace: backup.Namespace, Name: opName},
+		Spec:       mariadbtypes.BackupSpec{Storage: storage},
+	}
+	location := fmt.Sprintf("s3://%s/%s%s", storage.S3.Bucket, mariadbOperatorS3Prefix(storage.S3.Prefix), name)
+
+	conn, onPlatform, err := r.mariadbPlatformConnection(ctx, op)
+	if err != nil {
+		return r.retryMariaDBCleanup(ctx, backup, location, fmt.Errorf("resolve S3 credentials: %w", err))
+	}
+	if !onPlatform {
+		return r.releaseMariaDBCleanup(ctx, backup, location,
+			gone+", and the dump is not on the platform bucket or the platform credentials cannot be read, so no credentials to reach it are left"), nil
+	}
+
+	s3ctx, cancel := context.WithTimeout(ctx, mariadbDumpCleanupTimeout)
+	defer cancel()
+	store := r.objectStore()
+	lister, err := store.lister(conn)
+	if err != nil {
+		return r.retryMariaDBCleanup(ctx, backup, location, fmt.Errorf("build S3 client: %w", err))
+	}
+	other, found, err := contestedMariaDBDump(s3ctx, lister, r.apiReader(), op, name)
+	if err != nil {
+		return r.retryMariaDBCleanup(ctx, backup, location, err)
+	}
+	if other != "" {
+		return r.releaseMariaDBCleanup(ctx, backup, location,
+			fmt.Sprintf("the recorded dump also falls in the lifetime of k8s.mariadb.com/Backup %s, which may have written it", other)), nil
+	}
+	if !found {
+		getLogger(ctx).Info("MariaDB dump already absent", "backup", backup.Name, "dump", location, "endpoint", conn.Endpoint, "operatorBackup", opName)
+		if r.Recorder != nil {
+			r.Recorder.Eventf(backup, corev1.EventTypeNormal, "ArtifactAlreadyAbsent",
+				"%s was not found when listed through %s, so it was deleted earlier or never reached that storage", location, conn.Endpoint)
+		}
+		return ctrl.Result{}, nil
+	}
+	remover, err := store.remover(conn)
+	if err != nil {
+		return r.retryMariaDBCleanup(ctx, backup, location, fmt.Errorf("build S3 client: %w", err))
+	}
+	if err := remover.RemoveObject(s3ctx, storage.S3.Bucket, mariadbOperatorS3Prefix(storage.S3.Prefix)+name); err != nil {
+		return r.retryMariaDBCleanup(ctx, backup, location, err)
+	}
+	getLogger(ctx).Info("deleted MariaDB dump of a gone operator Backup", "backup", backup.Name, "dump", location, "operatorBackup", opName)
+	return ctrl.Result{}, nil
+}
+
+// mariadbSnapshotStorage returns the storage the Backup's operator Backup
+// was made with, from the snapshot in status.underlyingResources.
+func mariadbSnapshotStorage(backup *backupsv1alpha1.Backup) (mariadbtypes.BackupStorage, error) {
+	raw := backup.Status.UnderlyingResources
+	if raw == nil || len(raw.Raw) == 0 {
+		return mariadbtypes.BackupStorage{}, errors.New("status.underlyingResources is empty")
+	}
+	var snap mariadbBackupSnapshot
+	if err := json.Unmarshal(raw.Raw, &snap); err != nil {
+		return mariadbtypes.BackupStorage{}, fmt.Errorf("decode status.underlyingResources: %w", err)
+	}
+	if snap.Kind != mariadbBackupSnapshotKind || snap.Storage == nil {
+		return mariadbtypes.BackupStorage{}, fmt.Errorf("status.underlyingResources is not a %s with storage", mariadbBackupSnapshotKind)
+	}
+	return buildMariaDBBackupStorage(*snap.Storage)
+}
+
 // contestedMariaDBDump returns the name of another operator Backup on op's
 // bucket and prefix whose run, finished or not, could have written the dump
 // name, or "" when none could, and whether the listing found the dump. The
@@ -261,28 +356,42 @@ func (r *BackupReconciler) activeRestoreOf(ctx context.Context, backup *backupsv
 // recorded endpoint may be the one the platform moved off, where the dump
 // would be found missing and reported deleted.
 func (r *BackupReconciler) mariadbCleanupConnection(ctx context.Context, op *mariadbtypes.Backup) (s3Connection, error) {
-	if r.CredentialsConfig.IsEnabled() {
-		conn, bucket, err := r.platformS3Connection(ctx)
-		var projErr *ProjectionError
-		switch {
-		case errors.As(err, &projErr) && projErr.Reason == ReasonAPIError:
-			return s3Connection{}, err
-		case err != nil:
-			getLogger(ctx).Info("cannot read the platform backup credentials; using the operator Backup's own", "operatorBackup", op.Name, "error", err)
-		case bucket == op.Spec.Storage.S3.Bucket && op.Spec.Storage.S3.AccessKeyIdSecretKeyRef.Name == r.CredentialsConfig.TargetSecretName:
-			// A strategy can pin a private CA for the platform bucket; the
-			// platform credentials carry none.
-			if tls := op.Spec.Storage.S3.TLS; conn.Secure && tls != nil && tls.CASecretKeyRef != nil {
-				ca, err := r.objectStore().secretValue(ctx, op.Namespace, tls.CASecretKeyRef.Name, tls.CASecretKeyRef.Key)
-				if err != nil {
-					return s3Connection{}, err
-				}
-				conn.CAPEM = []byte(ca)
-			}
-			return conn, nil
-		}
+	conn, onPlatform, err := r.mariadbPlatformConnection(ctx, op)
+	if err != nil || onPlatform {
+		return conn, err
 	}
 	return mariadbS3Connection(ctx, r.objectStore(), op.Namespace, op.Spec.Storage.S3)
+}
+
+// mariadbPlatformConnection returns the platform's connection to the bucket
+// op wrote to, and false when op did not write to the platform bucket or the
+// platform credentials are missing or malformed. Only a failed read of the
+// platform credentials is an error.
+func (r *BackupReconciler) mariadbPlatformConnection(ctx context.Context, op *mariadbtypes.Backup) (s3Connection, bool, error) {
+	if !r.CredentialsConfig.IsEnabled() {
+		return s3Connection{}, false, nil
+	}
+	conn, bucket, err := r.platformS3Connection(ctx)
+	var projErr *ProjectionError
+	switch {
+	case errors.As(err, &projErr) && projErr.Reason == ReasonAPIError:
+		return s3Connection{}, false, err
+	case err != nil:
+		getLogger(ctx).Info("cannot read the platform backup credentials; using the operator Backup's own", "operatorBackup", op.Name, "error", err)
+		return s3Connection{}, false, nil
+	case bucket != op.Spec.Storage.S3.Bucket || op.Spec.Storage.S3.AccessKeyIdSecretKeyRef.Name != r.CredentialsConfig.TargetSecretName:
+		return s3Connection{}, false, nil
+	}
+	// A strategy can pin a private CA for the platform bucket; the platform
+	// credentials carry none.
+	if tls := op.Spec.Storage.S3.TLS; conn.Secure && tls != nil && tls.CASecretKeyRef != nil {
+		ca, err := r.objectStore().secretValue(ctx, op.Namespace, tls.CASecretKeyRef.Name, tls.CASecretKeyRef.Key)
+		if err != nil {
+			return s3Connection{}, false, err
+		}
+		conn.CAPEM = []byte(ca)
+	}
+	return conn, true, nil
 }
 
 // platformS3Connection reads the platform's backup bucket from the Secret

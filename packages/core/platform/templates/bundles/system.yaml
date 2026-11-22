@@ -397,5 +397,8 @@ variants and opt-in on the slim ones. */}}
 {{- end }}
 {{include "cozystack.platform.package.optional.default" (list "cozystack.hetzner-robotlb" $) }}
 {{include "cozystack.platform.package.optional.default" (list "cozystack.talos-log-collector" $) }}
+{{- /* Its MetalLB driver, cozystack.metallb-iad, is emitted from the
+       common-packages helper. */}}
+{{include "cozystack.platform.package.optional.default" (list "cozystack.address-controller" $) }}
 
 {{- end }}
