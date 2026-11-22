@@ -11,6 +11,9 @@ tests:
   # The rules reach the cluster only through the .Files.Glob in
   # templates/alerts.yaml, which drops a file silently if it moves or is renamed.
   - it: ships the WAL archive backlog rule as a critical alert
+    documentSelector:
+      path: metadata.name
+      value: cnpg-default-alerts
     asserts:
       - contains:
           path: spec.groups[0].rules
@@ -21,3 +24,15 @@ tests:
               severity: critical
               namespace: "{{ $labels.namespace }}"
               job: "{{ $labels.job }}"
+
+  - it: keeps the missing-collector alarm in the platform rule
+    documentSelector:
+      path: metadata.name
+      value: cnpg-platform-alerts
+    asserts:
+      - contains:
+          path: spec.groups[0].rules
+          any: true
+          content:
+            alert: CNPGClusterOffline
+            expr: absent(cnpg_collector_up)
