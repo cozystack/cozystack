@@ -1,0 +1,20 @@
+--- a/charts/cluster-api-operator/templates/infra.yaml
++++ b/charts/cluster-api-operator/templates/infra.yaml
+@@ -62,4 +62,3 @@
+-  fetchConfig:
+-    {{- range $k, $v := $value }}
+-      {{ $k }}: {{ $v }}
+-    {{- end }}
++{{- if not (or (kindIs "invalid" $value) (and (kindIs "map" $value) (empty $value))) }}
++  fetchConfig: {{- toYaml $value | nindent 4 }}
++{{- end }}
+--- a/charts/cluster-api-operator/templates/ipam.yaml
++++ b/charts/cluster-api-operator/templates/ipam.yaml
+@@ -62,4 +62,3 @@
+-  fetchConfig:
+-    {{- range $k, $v := $value }}
+-      {{ $k }}: {{ $v }}
+-    {{- end }}
++{{- if not (or (kindIs "invalid" $value) (and (kindIs "map" $value) (empty $value))) }}
++  fetchConfig: {{- toYaml $value | nindent 4 }}
++{{- end }}

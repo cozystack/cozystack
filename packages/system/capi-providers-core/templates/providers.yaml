@@ -5,10 +5,11 @@ metadata:
   name: cluster-api
 spec:
   # https://github.com/kubernetes-sigs/cluster-api
-  version: v1.10.1-core
+  version: {{ .Chart.AppVersion }}-core
   fetchConfig:
     selector:
       matchLabels:
+        provider.cluster.x-k8s.io/version: {{ .Chart.AppVersion }}-core
         core-components: cozy
   deployment:
     containers:
