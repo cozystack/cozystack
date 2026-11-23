@@ -1,0 +1,46 @@
+suite: registry BucketClaim is selected by the registry WorkloadMonitor
+
+release:
+  name: harbor
+  namespace: tenant-test
+
+# The WorkloadMonitor controller lists BucketClaims by the monitor's selector,
+# so a BucketClaim without matching labels gets no Workload and its storage
+# never reaches billing. The registry keeps its images in this bucket, so it is
+# reported under the registry monitor, as the registry PVC was before storage
+# moved to S3. Both sides are asserted so that renaming either one fails here.
+set:
+  _namespace:
+    host: example.org
+    ingress: nginx
+    gateway: ""
+    seaweedfs: seaweedfs
+  _cluster:
+    solver: http01
+
+tests:
+  - it: labels the registry BucketClaim with the registry monitor's selector
+    template: templates/bucket.yaml
+    documentSelector:
+      path: kind
+      value: BucketClaim
+    asserts:
+      - equal:
+          path: metadata.labels
+          value:
+            release: harbor-system
+            component: registry
+
+  - it: selects the registry BucketClaim from the registry monitor
+    template: templates/harbor.yaml
+    documentSelector:
+      path: metadata.name
+      value: harbor-registry
+    asserts:
+      - isKind:
+          of: WorkloadMonitor
+      - equal:
+          path: spec.selector
+          value:
+            release: harbor-system
+            component: registry
