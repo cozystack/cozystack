@@ -76,7 +76,7 @@ kubectl --context <ctx> --namespace <tenant> \
   --output jsonpath='{.data.ca\.crt}' | base64 --decode > ca.crt
 
 kubectl --context <ctx> --namespace <tenant> \
-  get secret mongodb-<name>-credentials \
+  get tenantsecret mongodb-<name>-credentials \
   --output jsonpath='{.data.uri}' | base64 --decode
 ```
 
