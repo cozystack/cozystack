@@ -86,6 +86,15 @@ type Reservation struct {
 
 	mu    sync.Mutex
 	locks map[string]*sync.Mutex
+	// pending holds, per pool root, a write that was stored but that the
+	// cache had not served when its writer gave the lock back.
+	pending map[string]pendingWrite
+}
+
+// pendingWrite is a stored release the cache has not shown yet.
+type pendingWrite struct {
+	key     client.ObjectKey
+	visible func(*helmv2.HelmRelease) bool
 }
 
 // NewReservation compiles the consumption declaration of every resource. A
@@ -97,6 +106,7 @@ func NewReservation(resources []config.Resource, env reservation.Environment) *R
 		env:           env,
 		settleTimeout: defaultSettleTimeout,
 		locks:         map[string]*sync.Mutex{},
+		pending:       map[string]pendingWrite{},
 	}
 	for _, res := range resources {
 		decl := res.Application.Consumption
@@ -138,10 +148,27 @@ func (g *Reservation) evaluator(kind, group string) (*reservation.Evaluator, err
 	return k.ev, k.err
 }
 
-// lock serialises the gate per pool root within this process, from the check
-// to the moment the informer cache shows the write, so that a client's
+type heldPoolKey struct{}
+
+// withHeldPool marks root as locked by this request, so that a second
+// acquire of the same pool further down the same request does not deadlock.
+func withHeldPool(ctx context.Context, root string) context.Context {
+	return context.WithValue(ctx, heldPoolKey{}, root)
+}
+
+// acquire serialises the gate per pool root within this process, from the
+// check to the moment the informer cache shows the write, so that a client's
 // sequential writes into one pool each see the previous one.
-func (g *Reservation) lock(root string) func() {
+//
+// A write whose writer gave the lock back before the cache showed it is
+// still owed to the pool. Until the cache shows it, the pool's figure read
+// from the cache is short by that write, so no growth is admitted and the
+// caller is asked to retry. The returned unlock is nil when ctx already
+// holds root.
+func (g *Reservation) acquire(ctx context.Context, c client.Client, root string) (func(), error) {
+	if held, _ := ctx.Value(heldPoolKey{}).(string); held == root {
+		return nil, nil
+	}
 	g.mu.Lock()
 	m, ok := g.locks[root]
 	if !ok {
@@ -150,7 +177,38 @@ func (g *Reservation) lock(root string) func() {
 	}
 	g.mu.Unlock()
 	m.Lock()
-	return m.Unlock
+
+	g.mu.Lock()
+	pw, owed := g.pending[root]
+	g.mu.Unlock()
+	if owed {
+		if err := g.waitVisible(c, pw); err != nil {
+			m.Unlock()
+			return nil, apierrors.NewTooManyRequests(fmt.Sprintf("an earlier write into tenant pool %q is not visible yet; retry", root), 1)
+		}
+		g.mu.Lock()
+		delete(g.pending, root)
+		g.mu.Unlock()
+	}
+	return m.Unlock, nil
+}
+
+// waitVisible polls the cache until it serves the write. It is detached from
+// the request: a client that gives up must not shorten the wait the next
+// writer depends on.
+func (g *Reservation) waitVisible(c client.Client, pw pendingWrite) error {
+	ctx, cancel := context.WithTimeout(context.Background(), g.settleTimeout)
+	defer cancel()
+	return wait.PollUntilContextCancel(ctx, settleInterval, true, func(ctx context.Context) (bool, error) {
+		hr := &helmv2.HelmRelease{}
+		if err := c.Get(ctx, pw.key, hr); err != nil {
+			if apierrors.IsNotFound(err) {
+				return false, nil
+			}
+			return false, err
+		}
+		return pw.visible(hr), nil
+	})
 }
 
 // valuesHash hashes values in a canonical form: the apiserver may hand back
@@ -199,15 +257,20 @@ func stored(hr *helmv2.HelmRelease) *storedReservation {
 // of the pool to the next writer. With no stored figure either, the error is
 // returned and the application is left out of the sum.
 func (g *Reservation) reservedBy(hr *helmv2.HelmRelease) (rl reservation.ResourceList, stale bool, err error) {
+	prev := stored(hr)
 	ev, err := g.evaluator(hr.Labels[ApplicationKindLabel], hr.Labels[ApplicationGroupLabel])
 	if err != nil {
+		// The kind's declaration no longer compiles. Its new writes are
+		// refused, but what it was admitted with stays charged.
+		if prev != nil {
+			return prev.Resources, true, nil
+		}
 		return nil, false, err
 	}
 	if ev == nil {
 		return nil, false, nil
 	}
 	values := helmReleaseValues(hr)
-	prev := stored(hr)
 	if prev != nil {
 		if hash, hashErr := valuesHash(values); hashErr == nil && hash == prev.ValuesHash {
 			return prev.Resources, false, nil
@@ -394,12 +457,16 @@ func (r *REST) reservedIn(ctx context.Context, namespaces []string) (poolFigure,
 	return fig, nil
 }
 
-// reservationAdmission is the outcome of the gate for one write: the figure to store on
-// the release and the lock to release once the write is visible.
+// reservationAdmission is the outcome of the gate for one write: the figure
+// to store on the release, the pool lock to give back once the write is
+// visible, and the stored values the decision was made against.
 type reservationAdmission struct {
-	gate   *Reservation
-	stored *storedReservation
-	unlock func()
+	gate     *Reservation
+	root     string
+	stored   *storedReservation
+	unlock   func()
+	baseHash string
+	visible  func(*helmv2.HelmRelease) bool
 }
 
 // release drops the pool lock. Safe on a nil reservationAdmission.
@@ -410,9 +477,21 @@ func (a *reservationAdmission) release() {
 	}
 }
 
-// annotate writes the admitted figure onto the release about to be stored.
+// annotate writes the admitted figure onto the release about to be stored,
+// and records what the cache has to show before the pool lock is given back.
 func (a *reservationAdmission) annotate(hr *helmv2.HelmRelease) error {
-	if a == nil || a.stored == nil {
+	if a == nil {
+		return nil
+	}
+	if a.stored == nil {
+		hash, err := valuesHash(helmReleaseValues(hr))
+		if err != nil {
+			return err
+		}
+		a.visible = func(cached *helmv2.HelmRelease) bool {
+			h, err := valuesHash(helmReleaseValues(cached))
+			return err == nil && h == hash
+		}
 		return nil
 	}
 	raw, err := json.Marshal(a.stored)
@@ -425,32 +504,92 @@ func (a *reservationAdmission) annotate(hr *helmv2.HelmRelease) error {
 	if hr.Annotations == nil {
 		hr.Annotations = map[string]string{}
 	}
-	hr.Annotations[ReservedAnnotation] = string(raw)
+	written := string(raw)
+	hr.Annotations[ReservedAnnotation] = written
+	a.visible = func(cached *helmv2.HelmRelease) bool {
+		return cached.Annotations[ReservedAnnotation] == written
+	}
 	return nil
 }
 
+// stale reports whether the stored release changed since the decision was
+// made, so that a conflict retry carrying the admitted figure onto a
+// different object would skip the check the change calls for.
+func (a *reservationAdmission) stale(cur *helmv2.HelmRelease) bool {
+	if a == nil || a.baseHash == "" {
+		return false
+	}
+	h, err := valuesHash(helmReleaseValues(cur))
+	return err != nil || h != a.baseHash
+}
+
+// base records the stored release a decision taken before it was read was
+// made against, for stale to compare a conflict retry with.
+func (a *reservationAdmission) base(cur *helmv2.HelmRelease) error {
+	if a == nil {
+		return nil
+	}
+	h, err := valuesHash(helmReleaseValues(cur))
+	if err != nil {
+		return err
+	}
+	a.baseHash = h
+	return nil
+}
+
+// finalUpdateError carries an error out of a conflict retry loop without
+// being retried as one: it deliberately does not unwrap to its APIStatus.
+type finalUpdateError struct{ err error }
+
+func (e finalUpdateError) Error() string { return e.err.Error() }
+
 // settle waits until the cache serves the release as written, so that the
-// next writer into the pool, which reads the cache, counts it. A timeout is
-// logged and not fatal: the write has happened.
-func (a *reservationAdmission) settle(ctx context.Context, c client.Client, key client.ObjectKey) {
-	if a == nil || a.stored == nil || a.unlock == nil {
+// next writer into the pool, which reads the cache, counts it. If it does
+// not in time, the write is recorded as owed to the pool, and the pool
+// admits no growth until the cache shows it.
+func (a *reservationAdmission) settle(c client.Client, key client.ObjectKey) {
+	if a == nil || a.unlock == nil || a.visible == nil {
 		return
 	}
-	want := a.stored.ValuesHash
-	err := wait.PollUntilContextTimeout(ctx, settleInterval, a.gate.settleTimeout, true, func(ctx context.Context) (bool, error) {
-		hr := &helmv2.HelmRelease{}
-		if err := c.Get(ctx, key, hr); err != nil {
-			if apierrors.IsNotFound(err) {
-				return false, nil
-			}
-			return false, err
-		}
-		s := stored(hr)
-		return s != nil && s.ValuesHash == want, nil
-	})
-	if err != nil {
-		klog.Warningf("HelmRelease %s is not in the cache yet after %s; releasing its pool lock anyway: %v", key, a.gate.settleTimeout, err)
+	pw := pendingWrite{key: key, visible: a.visible}
+	if err := a.gate.waitVisible(c, pw); err != nil {
+		klog.Warningf("HelmRelease %s is not in the cache after %s; pool %q admits no growth until it is: %v", key, a.gate.settleTimeout, a.root, err)
+		a.gate.mu.Lock()
+		a.gate.pending[a.root] = pw
+		a.gate.mu.Unlock()
 	}
+}
+
+// lockTenantPool holds the pool a Tenant's quota is carved out of, from the
+// carve-out check to the moment the cache shows the Tenant, so that an
+// application admitted into the same pool and the carve-out cannot both
+// count the same headroom. It returns a nil admission when the gate is off
+// or the Tenant declares no quota, and ctx marked with the held pool.
+func (r *REST) lockTenantPool(ctx context.Context, app *appsv1alpha1.Application) (context.Context, *reservationAdmission, error) {
+	if r.reservation == nil || r.kindName != validation.TenantKind {
+		return ctx, nil, nil
+	}
+	var raw []byte
+	if app.Spec != nil {
+		raw = app.Spec.Raw
+	}
+	quotas, err := parseDeclaredQuotas(raw)
+	if err != nil || len(quotas) == 0 {
+		return ctx, nil, nil
+	}
+	tree, err := r.tenantTree(ctx)
+	if err != nil {
+		return ctx, nil, err
+	}
+	p := poolOf(tree, app.Namespace)
+	if p == nil {
+		return ctx, nil, nil
+	}
+	unlock, err := r.reservation.acquire(ctx, r.c, p.root)
+	if err != nil {
+		return ctx, nil, err
+	}
+	return withHeldPool(ctx, p.root), &reservationAdmission{gate: r.reservation, root: p.root, unlock: unlock}, nil
 }
 
 // admitReservation is the reservation gate for a write of app, whose stored
@@ -461,18 +600,29 @@ func (a *reservationAdmission) settle(ctx context.Context, c client.Client, key 
 //
 // Only the delta counts: an edit that reserves nothing more is accepted even
 // in a pool that is already over budget, and shrinking is always accepted.
-func (r *REST) admitReservation(ctx context.Context, app *appsv1alpha1.Application, old *helmv2.HelmRelease) (*reservationAdmission, field.ErrorList) {
+func (r *REST) admitReservation(ctx context.Context, app *appsv1alpha1.Application, old *helmv2.HelmRelease) (*reservationAdmission, error) {
+	adm, errs, err := r.admit(ctx, app, old)
+	if err != nil {
+		return nil, err
+	}
+	if len(errs) > 0 {
+		return nil, apierrors.NewInvalid(r.gvk.GroupKind(), app.Name, errs)
+	}
+	return adm, nil
+}
+
+func (r *REST) admit(ctx context.Context, app *appsv1alpha1.Application, old *helmv2.HelmRelease) (*reservationAdmission, field.ErrorList, error) {
 	g := r.reservation
 	if g == nil {
-		return nil, nil
+		return nil, nil, nil
 	}
 	specPath := field.NewPath("spec")
 	ev, err := g.evaluator(r.kindName, r.gvk.Group)
 	if err != nil {
-		return nil, field.ErrorList{field.Forbidden(specPath, fmt.Sprintf("%s cannot be admitted: %v", r.kindName, err))}
+		return nil, field.ErrorList{field.Forbidden(specPath, fmt.Sprintf("%s cannot be admitted: %v", r.kindName, err))}, nil
 	}
 	if ev == nil {
-		return nil, nil
+		return nil, nil, nil
 	}
 
 	var raw []byte
@@ -481,13 +631,18 @@ func (r *REST) admitReservation(ctx context.Context, app *appsv1alpha1.Applicati
 	}
 	want, err := ev.EvaluateJSON(raw, g.env)
 	if err != nil {
-		return nil, field.ErrorList{field.Invalid(specPath, "", fmt.Sprintf("cannot compute what this %s reserves from its tenant's quota: %v", r.kindName, err))}
+		return nil, field.ErrorList{field.Invalid(specPath, "", fmt.Sprintf("cannot compute what this %s reserves from its tenant's quota: %v", r.kindName, err))}, nil
 	}
 	hash, err := valuesHash(raw)
 	if err != nil {
-		return nil, field.ErrorList{field.Invalid(specPath, "", err.Error())}
+		return nil, field.ErrorList{field.Invalid(specPath, "", err.Error())}, nil
 	}
 	adm := &reservationAdmission{gate: g, stored: &storedReservation{ValuesHash: hash, Resources: want}}
+	if old != nil {
+		if adm.baseHash, err = valuesHash(helmReleaseValues(old)); err != nil {
+			return nil, field.ErrorList{field.Invalid(specPath, "", err.Error())}, nil
+		}
+	}
 
 	delta := want.DeepCopy()
 	if old != nil {
@@ -508,25 +663,40 @@ func (r *REST) admitReservation(ctx context.Context, app *appsv1alpha1.Applicati
 		}
 	}
 	if !growing {
-		return adm, nil
+		return adm, nil, nil
 	}
 
 	tree, err := r.tenantTree(ctx)
 	if err != nil {
-		return nil, field.ErrorList{field.InternalError(specPath, err)}
+		return nil, field.ErrorList{field.InternalError(specPath, err)}, nil
 	}
 	p := poolOf(tree, app.Namespace)
 	if p == nil {
-		return adm, nil
+		return adm, nil, nil
 	}
-	adm.unlock = g.lock(p.root)
+	adm.root = p.root
+	if adm.unlock, err = g.acquire(ctx, r.c, p.root); err != nil {
+		return nil, nil, err
+	}
+	// The pool read above only chose the lock. Budget, carve-outs and
+	// members are read again under it, since a Tenant write holding it may
+	// have just changed them.
+	if tree, err = r.tenantTree(ctx); err != nil {
+		adm.release()
+		return nil, field.ErrorList{field.InternalError(specPath, err)}, nil
+	}
+	if p = poolOf(tree, app.Namespace); p == nil || p.root != adm.root {
+		adm.release()
+		return nil, nil, apierrors.NewConflict(r.gvr.GroupResource(), app.Name,
+			fmt.Errorf("the tenant pool of namespace %s changed while this write was checked; retry it", app.Namespace))
+	}
 
 	// The object being updated stays in the figure at its old reservation,
 	// so that what is checked against the budget is the delta.
 	fig, err := r.reservedIn(ctx, p.members)
 	if err != nil {
 		adm.release()
-		return nil, field.ErrorList{field.InternalError(specPath, err)}
+		return nil, field.ErrorList{field.InternalError(specPath, err)}, nil
 	}
 
 	var errs field.ErrorList
@@ -554,9 +724,9 @@ func (r *REST) admitReservation(ctx context.Context, app *appsv1alpha1.Applicati
 	}
 	if len(errs) > 0 {
 		adm.release()
-		return nil, errs
+		return nil, errs, nil
 	}
-	return adm, nil
+	return adm, nil, nil
 }
 
 // summarize renders a reservation for an error message.

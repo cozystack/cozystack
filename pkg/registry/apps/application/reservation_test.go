@@ -24,6 +24,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	helmv2 "github.com/fluxcd/helm-controller/api/v2"
 	corev1 "k8s.io/api/core/v1"
@@ -36,6 +37,7 @@ import (
 	"k8s.io/apiserver/pkg/registry/rest"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 	"sigs.k8s.io/yaml"
 
 	cozyv1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
@@ -91,6 +93,14 @@ type gateFixture struct {
 // seeded with objects.
 func newGateFixture(t *testing.T, objects ...client.Object) gateFixture {
 	t.Helper()
+	return newGateFixtureWith(t, interceptor.Funcs{}, objects...)
+}
+
+// newGateFixtureWith serves VMInstance through a client whose calls funcs
+// can intercept, while the fixture's own client reads and writes the store
+// directly.
+func newGateFixtureWith(t *testing.T, funcs interceptor.Funcs, objects ...client.Object) gateFixture {
+	t.Helper()
 	res := shippedResource(t, "../../../../packages/system/vm-instance-rd/cozyrds/vm-instance.yaml")
 	scheme := runtime.NewScheme()
 	for _, add := range []func(*runtime.Scheme) error{helmv2.AddToScheme, corev1.AddToScheme, cozyv1alpha1.AddToScheme} {
@@ -102,8 +112,9 @@ func newGateFixture(t *testing.T, objects ...client.Object) gateFixture {
 		t.Fatal(err)
 	}
 	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(objects...).Build()
+	served := interceptor.NewClient(c, funcs)
 	gate := NewReservation([]config.Resource{res}, testEnvironment())
-	vms := NewREST(c, c, &res)
+	vms := NewREST(served, served, &res)
 	vms.SetReservation(gate)
 	return gateFixture{client: c, gate: gate, vms: vms}
 }
@@ -383,5 +394,161 @@ func TestReservationAnnotationIsBounded(t *testing.T) {
 	adm.stored.Resources = reservation.ResourceList{"memory": resource.MustParse("4Gi")}
 	if err := adm.annotate(hr); err != nil {
 		t.Fatalf("an ordinary reservation must be stored: %v", err)
+	}
+}
+
+func TestReservationKeepsTheStoredFigureOfAKindWhoseDeclarationBroke(t *testing.T) {
+	f := newGateFixture(t, tenantHelmRelease(t, "acme", rootTenantNamespace, map[string]string{"memory": "8Gi"}))
+	if err := f.create(t, vmApplication(t, "web", "tenant-acme", map[string]any{"instanceType": "u1.small"})); err != nil {
+		t.Fatal(err)
+	}
+	f.gate.evaluators["VMInstance"] = kindEvaluator{err: fmt.Errorf("consumption: does not compile")}
+
+	hr := &helmv2.HelmRelease{}
+	if err := f.client.Get(context.Background(), client.ObjectKey{Namespace: "tenant-acme", Name: "vm-instance-web"}, hr); err != nil {
+		t.Fatal(err)
+	}
+	rl, stale, err := f.gate.reservedBy(hr)
+	mem := rl["memory"]
+	if err != nil || !stale || mem.Cmp(resource.MustParse("4Gi")) != 0 {
+		t.Fatalf("a kind whose declaration broke must keep charging what it was admitted with: %v stale=%v err=%v", rl, stale, err)
+	}
+	if err := f.create(t, vmApplication(t, "db", "tenant-acme", map[string]any{"instanceType": "u1.small"})); !apierrors.IsInvalid(err) {
+		t.Fatalf("a kind whose declaration broke must not be admitted, got %v", err)
+	}
+}
+
+func TestReservationSettlesOnTheFigureWrittenNotOnlyItsValues(t *testing.T) {
+	adm := &reservationAdmission{stored: &storedReservation{ValuesHash: "same", Resources: reservation.ResourceList{"memory": resource.MustParse("16Gi")}}}
+	hr := &helmv2.HelmRelease{}
+	if err := adm.annotate(hr); err != nil {
+		t.Fatal(err)
+	}
+	cached := &helmv2.HelmRelease{}
+	cached.Annotations = map[string]string{ReservedAnnotation: `{"valuesHash":"same","resources":{"memory":"4Gi"}}`}
+	if adm.visible(cached) {
+		t.Fatal("a cached figure with the same values but another size is not the write")
+	}
+	if !adm.visible(hr) {
+		t.Fatal("the written figure is the write")
+	}
+}
+
+func TestReservationOwesAPoolAWriteTheCacheHasNotShown(t *testing.T) {
+	hidden := true
+	f := newGateFixtureWith(t, interceptor.Funcs{
+		Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+			if hidden && key.Name == "vm-instance-one" {
+				return apierrors.NewNotFound(helmv2.GroupVersion.WithResource("helmreleases").GroupResource(), key.Name)
+			}
+			return c.Get(ctx, key, obj, opts...)
+		},
+	}, tenantHelmRelease(t, "acme", rootTenantNamespace, map[string]string{"memory": "8Gi"}))
+	f.gate.settleTimeout = 100 * time.Millisecond
+
+	if err := f.create(t, vmApplication(t, "one", "tenant-acme", map[string]any{"instanceType": "u1.small"})); err != nil {
+		t.Fatalf("the write itself succeeds even if the cache is late: %v", err)
+	}
+	err := f.create(t, vmApplication(t, "two", "tenant-acme", map[string]any{"instanceType": "u1.small"}))
+	if !apierrors.IsTooManyRequests(err) {
+		t.Fatalf("while a write is not visible the pool admits no growth; got %v", err)
+	}
+
+	hidden = false
+	if err := f.create(t, vmApplication(t, "two", "tenant-acme", map[string]any{"instanceType": "u1.small"})); err != nil {
+		t.Fatalf("once the cache shows the write the pool admits again: %v", err)
+	}
+	if err := f.create(t, vmApplication(t, "three", "tenant-acme", map[string]any{"instanceType": "u1.small"})); !apierrors.IsInvalid(err) {
+		t.Fatalf("and counts it: the third 4Gi VM does not fit 8Gi, got %v", err)
+	}
+}
+
+func TestReservationRefusesARetryOverAReleaseThatChanged(t *testing.T) {
+	var f gateFixture
+	conflicted := false
+	f = newGateFixtureWith(t, interceptor.Funcs{
+		Update: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.UpdateOption) error {
+			if !conflicted && obj.GetName() == "vm-instance-web" {
+				conflicted = true
+				// Another writer shrinks the VM between this update's
+				// decision and its write.
+				live := &helmv2.HelmRelease{}
+				if err := c.Get(ctx, client.ObjectKeyFromObject(obj), live); err != nil {
+					return err
+				}
+				live.Spec.Values = &apiextv1.JSON{Raw: []byte(`{"instanceType":"u1.small"}`)}
+				if err := c.Update(ctx, live); err != nil {
+					return err
+				}
+				return apierrors.NewConflict(helmv2.GroupVersion.WithResource("helmreleases").GroupResource(), obj.GetName(), fmt.Errorf("stale"))
+			}
+			return c.Update(ctx, obj, opts...)
+		},
+	}, tenantHelmRelease(t, "acme", rootTenantNamespace, map[string]string{"memory": "20Gi"}))
+	if err := f.create(t, vmApplication(t, "web", "tenant-acme", map[string]any{"instanceType": "u1.large"})); err != nil {
+		t.Fatal(err)
+	}
+	err := f.update(t, vmApplication(t, "web", "tenant-acme", map[string]any{"instanceType": "u1.large", "external": false}))
+	if !apierrors.IsConflict(err) {
+		t.Fatalf("an update decided against values that changed before its write must come back as a conflict, got %v", err)
+	}
+}
+
+func TestReservationRetriesAStatusOnlyConflict(t *testing.T) {
+	conflicted := false
+	f := newGateFixtureWith(t, interceptor.Funcs{
+		Update: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.UpdateOption) error {
+			if !conflicted && obj.GetName() == "vm-instance-web" {
+				conflicted = true
+				return apierrors.NewConflict(helmv2.GroupVersion.WithResource("helmreleases").GroupResource(), obj.GetName(), fmt.Errorf("stale"))
+			}
+			return c.Update(ctx, obj, opts...)
+		},
+	}, tenantHelmRelease(t, "acme", rootTenantNamespace, map[string]string{"memory": "20Gi"}))
+	if err := f.create(t, vmApplication(t, "web", "tenant-acme", map[string]any{"instanceType": "u1.small"})); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.update(t, vmApplication(t, "web", "tenant-acme", map[string]any{"instanceType": "u1.large"})); err != nil {
+		t.Fatalf("a conflict that left the values alone is retried as before: %v", err)
+	}
+}
+
+func TestTenantCarveOutAndAnOrderIntoTheSamePoolAreSerialised(t *testing.T) {
+	tenantChecked := make(chan struct{})
+	f := newGateFixtureWith(t, interceptor.Funcs{
+		Create: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
+			if obj.GetName() == "tenant-dev" {
+				// The carve-out has been checked and not stored yet: the
+				// window in which an order into the same pool would see the
+				// headroom the carve-out is about to take.
+				close(tenantChecked)
+				time.Sleep(200 * time.Millisecond)
+			}
+			return c.Create(ctx, obj, opts...)
+		},
+	}, tenantHelmRelease(t, "acme", rootTenantNamespace, map[string]string{"memory": "8Gi"}))
+	if err := f.create(t, vmApplication(t, "web", "tenant-acme", map[string]any{"instanceType": "u1.small"})); err != nil {
+		t.Fatal(err)
+	}
+	tenants := newTenantREST(t)
+	tenants.c, tenants.w = f.vms.c, f.vms.w
+	tenants.SetReservation(f.gate)
+
+	var tenantErr error
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		ctx := request.WithNamespace(context.Background(), "tenant-acme")
+		_, tenantErr = tenants.Create(ctx, childApplication(t, "dev", "tenant-acme", map[string]string{"memory": "4Gi"}), nil, &metav1.CreateOptions{})
+	}()
+	<-tenantChecked
+	vmErr := f.create(t, vmApplication(t, "db", "tenant-acme", map[string]any{"instanceType": "u1.small"}))
+	<-done
+
+	if tenantErr != nil {
+		t.Fatalf("the carve-out checked first must be admitted: %v", tenantErr)
+	}
+	if !apierrors.IsInvalid(vmErr) || !strings.Contains(vmErr.Error(), "4Gi carved out by sub-tenants") {
+		t.Fatalf("the order must wait for the carve-out and then find no room, got %v", vmErr)
 	}
 }
