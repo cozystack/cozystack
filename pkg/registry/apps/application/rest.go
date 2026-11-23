@@ -714,6 +714,9 @@ func (r *REST) Update(ctx context.Context, name string, objInfo rest.UpdatedObje
 				return finalUpdateError{apierrors.NewConflict(r.gvr.GroupResource(), name,
 					fmt.Errorf("the application changed while this update was checked against its tenant's quota; retry it"))}
 			}
+			if errs := r.validateVMDiskStorageNotLoweredFrom(helmReleaseValues(cur), app); len(errs) > 0 {
+				return apierrors.NewInvalid(r.gvk.GroupKind(), app.Name, errs)
+			}
 			helmRelease = converted.DeepCopy()
 			r.applyLiveMetadata(helmRelease, cur, app, previousFinalizers)
 			if err := adm.annotate(helmRelease); err != nil {

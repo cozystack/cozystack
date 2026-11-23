@@ -17,6 +17,7 @@ limitations under the License.
 package application
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 
@@ -29,12 +30,16 @@ import (
 
 const vmDiskKind = "VMDisk"
 
-// storageOf reads spec.storage, schema default applied, or reports false when
-// it is absent or not a quantity.
-func (r *REST) storageOf(app *appsv1alpha1.Application) (resource.Quantity, bool) {
+// storageOf reads storage from values, schema default applied, or reports
+// false when it is absent or not a quantity. The schema admits a string or a
+// number; numbers are decoded as written, since a byte count above 2^53 does
+// not survive a float.
+func (r *REST) storageOf(raw []byte) (resource.Quantity, bool) {
 	values := map[string]any{}
-	if app.Spec != nil && len(app.Spec.Raw) > 0 {
-		if err := json.Unmarshal(app.Spec.Raw, &values); err != nil {
+	if len(raw) > 0 {
+		dec := json.NewDecoder(bytes.NewReader(raw))
+		dec.UseNumber()
+		if err := dec.Decode(&values); err != nil {
 			return resource.Quantity{}, false
 		}
 	}
@@ -43,11 +48,16 @@ func (r *REST) storageOf(app *appsv1alpha1.Application) (resource.Quantity, bool
 			return resource.Quantity{}, false
 		}
 	}
-	raw, ok := values["storage"].(string)
-	if !ok {
+	var text string
+	switch v := values["storage"].(type) {
+	case string:
+		text = v
+	case json.Number:
+		text = v.String()
+	default:
 		return resource.Quantity{}, false
 	}
-	q, err := resource.ParseQuantity(raw)
+	q, err := resource.ParseQuantity(text)
 	if err != nil {
 		return resource.Quantity{}, false
 	}
@@ -59,14 +69,29 @@ func (r *REST) storageOf(app *appsv1alpha1.Application) (resource.Quantity, bool
 // would store a size the disk does not have, and the tenant quota reservation
 // would release capacity the volume still holds.
 func (r *REST) validateVMDiskStorageNotLowered(old, app *appsv1alpha1.Application) field.ErrorList {
+	var raw []byte
+	if old.Spec != nil {
+		raw = old.Spec.Raw
+	}
+	return r.validateVMDiskStorageNotLoweredFrom(raw, app)
+}
+
+// validateVMDiskStorageNotLoweredFrom is validateVMDiskStorageNotLowered
+// against stored values, for a conflict retry that writes over a release
+// another writer may have grown since.
+func (r *REST) validateVMDiskStorageNotLoweredFrom(oldValues []byte, app *appsv1alpha1.Application) field.ErrorList {
 	if r.kindName != vmDiskKind {
 		return nil
 	}
-	before, ok := r.storageOf(old)
+	before, ok := r.storageOf(oldValues)
 	if !ok {
 		return nil
 	}
-	after, ok := r.storageOf(app)
+	var raw []byte
+	if app.Spec != nil {
+		raw = app.Spec.Raw
+	}
+	after, ok := r.storageOf(raw)
 	if !ok || after.Cmp(before) >= 0 {
 		return nil
 	}

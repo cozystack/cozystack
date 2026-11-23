@@ -19,6 +19,7 @@ package application
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -30,7 +31,9 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apiserver/pkg/endpoints/request"
 	"k8s.io/apiserver/pkg/registry/rest"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	cozyv1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
 	appsv1alpha1 "github.com/cozystack/cozystack/pkg/apis/apps/v1alpha1"
@@ -78,6 +81,9 @@ func TestVMDiskStorageCannotBeLowered(t *testing.T) {
 		{name: "same size in other units", before: map[string]any{"storage": "1Gi"}, after: map[string]any{"storage": "1024Mi"}},
 		{name: "grown", before: map[string]any{"storage": "10Gi"}, after: map[string]any{"storage": "20Gi"}},
 		{name: "unrelated edit", before: map[string]any{"storage": "10Gi"}, after: map[string]any{"storage": "10Gi", "storageClass": "local"}},
+		{name: "lowered to a byte count", before: map[string]any{"storage": "10Gi"}, after: map[string]any{"storage": json.Number("5368709120")}, forbidden: true},
+		{name: "byte count lowered", before: map[string]any{"storage": json.Number("10737418240")}, after: map[string]any{"storage": "5Gi"}, forbidden: true},
+		{name: "byte count grown", before: map[string]any{"storage": json.Number("5368709120")}, after: map[string]any{"storage": json.Number("10737418240")}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -97,5 +103,47 @@ func TestVMDiskStorageCannotBeLowered(t *testing.T) {
 				t.Fatalf("want spec.storage refused as a shrink, got %v", err)
 			}
 		})
+	}
+}
+
+func TestVMDiskStorageIsCheckedAgainOnAConflictRetry(t *testing.T) {
+	res := shippedResource(t, "../../../../packages/system/vm-disk-rd/cozyrds/vm-disk.yaml")
+	scheme := runtime.NewScheme()
+	for _, add := range []func(*runtime.Scheme) error{helmv2.AddToScheme, corev1.AddToScheme, cozyv1alpha1.AddToScheme} {
+		if err := add(scheme); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := appsv1alpha1.RegisterDynamicTypes(scheme, &config.ResourceConfig{Resources: []config.Resource{res}}); err != nil {
+		t.Fatal(err)
+	}
+	conflicted := false
+	base := fake.NewClientBuilder().WithScheme(scheme).Build()
+	c := interceptor.NewClient(base, interceptor.Funcs{
+		Update: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.UpdateOption) error {
+			if !conflicted {
+				conflicted = true
+				// Another writer grows the disk to 20Gi first.
+				live := &helmv2.HelmRelease{}
+				if err := c.Get(ctx, client.ObjectKeyFromObject(obj), live); err != nil {
+					return err
+				}
+				live.Spec.Values = &apiextv1.JSON{Raw: []byte(`{"storage":"20Gi"}`)}
+				if err := c.Update(ctx, live); err != nil {
+					return err
+				}
+				return apierrors.NewConflict(helmv2.GroupVersion.WithResource("helmreleases").GroupResource(), obj.GetName(), fmt.Errorf("stale"))
+			}
+			return c.Update(ctx, obj, opts...)
+		},
+	})
+	r := NewREST(c, c, &res)
+	ctx := request.WithNamespace(context.Background(), "tenant-acme")
+	if _, err := r.Create(ctx, vmDisk(t, map[string]any{"storage": "10Gi"}), nil, &metav1.CreateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	_, _, err := r.Update(ctx, "data", rest.DefaultUpdatedObjectInfo(vmDisk(t, map[string]any{"storage": "15Gi"})), nil, nil, false, &metav1.UpdateOptions{})
+	if !apierrors.IsInvalid(err) || !strings.Contains(err.Error(), "cannot be shrunk") {
+		t.Fatalf("15Gi over a disk grown to 20Gi meanwhile is a shrink; got %v", err)
 	}
 }
