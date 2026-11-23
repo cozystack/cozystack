@@ -9,13 +9,14 @@ spec:
   # stores v1alpha2. v1alpha1 is still served through conversion, but that has
   # not been tested with the kubernetes-nodes templates, and in-cluster IPAM
   # should move to v1.1 at the same time. Bump the two together.
-  version: v0.7.7-infraprovider-proxmox
+  version: {{ include "capi-providers-infraprovider-proxmox.version" . }}
   configSecret:
     name: {{ .Values.credentialsSecretName | quote }}
     namespace: {{ .Release.Namespace }}
   fetchConfig:
     selector:
       matchLabels:
+        provider.cluster.x-k8s.io/version: {{ include "capi-providers-infraprovider-proxmox.version" . }}
         infraprovider-provider: proxmox
   deployment:
     containers:

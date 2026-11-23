@@ -317,3 +317,129 @@ check_bootstrap_version() {
     jq --exit-status '.httpGet.path == "/healthz" and .httpGet.port == "healthz" and .failureThreshold * .periodSeconds >= 300' <<< "$probe"
   done
 }
+
+# capi-operator refuses a provider when its selector matches more than one
+# ConfigMap, and it does that before it reads spec.version
+# (processProviderConfigMaps in v0.30). During a Helm upgrade that renames the
+# ConfigMap the old and the new one coexist for the length of the release, so a
+# selector that does not pin the version matches both and the reconcile fails.
+# Every selector therefore carries provider.cluster.x-k8s.io/version, and every
+# ConfigMap carries it with the value the operator compares against.
+#
+# The old and new ConfigMaps are synthesised here rather than waiting for a
+# bump: adding the retained copy of the current release beside the rendered one
+# is the same state the upgrade window creates.
+check_selectors_pin_the_version() {
+  local pkg="$1" provider_kind="$2"
+  local dir="$REPO_ROOT/packages/system/$pkg" rendered="$BATS_TEST_TMPDIR/$pkg.yaml"
+
+  helm template provider "$dir" --namespace cozy-cluster-api --kube-version 1.33.0 > "$rendered" \
+    || { echo "$pkg: does not render" >&2; return 1; }
+
+  # One provider object and one components bundle, both carrying the same
+  # non-empty version label, and the selector's version equal to that label.
+  # Only ConfigMaps marked compressed are bundles: capi-providers-core also
+  # ships its upgrade script in one, which no selector matches.
+  yq --output-format=json --no-doc '.' "$rendered" | jq --slurp --exit-status --arg kind "$provider_kind" --arg pkg "$pkg" '
+    [.[] | select(.kind == $kind)] as $providers
+    | [.[] | select(.kind == "ConfigMap"
+                    and .metadata.annotations["provider.cluster.x-k8s.io/compressed"] == "true")] as $maps
+    | ($providers | length) == 1
+    and ($maps | length) == 1
+    and ($maps[0].metadata.labels["provider.cluster.x-k8s.io/version"] // "") != ""
+    and $providers[0].spec.fetchConfig.selector.matchLabels["provider.cluster.x-k8s.io/version"]
+        == $maps[0].metadata.labels["provider.cluster.x-k8s.io/version"]
+    and $providers[0].spec.fetchConfig.selector.matchLabels["provider.cluster.x-k8s.io/version"]
+        == $providers[0].spec.version
+  ' > /dev/null || { echo "$pkg: selector does not pin the ConfigMap version" >&2; return 1; }
+}
+
+@test "every provider selector pins the ConfigMap version" {
+  check_selectors_pin_the_version capi-providers-infraprovider InfrastructureProvider
+  check_selectors_pin_the_version capi-providers-infraprovider-proxmox InfrastructureProvider
+  check_selectors_pin_the_version capi-providers-cpprovider ControlPlaneProvider
+  check_selectors_pin_the_version capi-providers-ipam-in-cluster IPAMProvider
+  check_selectors_pin_the_version capi-providers-core CoreProvider
+}
+
+# The upgrade window itself: with the previous release's ConfigMap still in the
+# namespace, the selector must still match exactly one object. Reverting the
+# version label out of both the selector and the ConfigMap reproduces the bug
+# this guard is for, so the fixture below proves the assertion can fail.
+check_one_match_during_upgrade() {
+  local pkg="$1" provider_kind="$2" drop_version="$3"
+  local dir="$REPO_ROOT/packages/system/$pkg" rendered="$BATS_TEST_TMPDIR/$pkg-upgrade.yaml"
+  local objects="$BATS_TEST_TMPDIR/$pkg-upgrade.json"
+
+  helm template provider "$dir" --namespace cozy-cluster-api --kube-version 1.33.0 > "$rendered" \
+    || { echo "$pkg: does not render" >&2; return 1; }
+
+  yq --output-format=json --no-doc '.' "$rendered" | jq --slurp --arg kind "$provider_kind" \
+    --arg drop "$drop_version" '
+    # The components bundle the previous release left behind, one version lower.
+    . + [([.[] | select(.kind == "ConfigMap"
+                        and .metadata.annotations["provider.cluster.x-k8s.io/compressed"] == "true")][0]
+           | .metadata.name = "v0.0.1-previous"
+           | if $drop == "true" then del(.metadata.labels["provider.cluster.x-k8s.io/version"])
+             else .metadata.labels["provider.cluster.x-k8s.io/version"] = "v0.0.1-previous" end)]
+    | if $drop == "true" then
+        map(if (.kind == $kind) then del(.spec.fetchConfig.selector.matchLabels["provider.cluster.x-k8s.io/version"]) else . end)
+      else . end
+  ' > "$objects"
+
+  jq --slurp --exit-status --arg kind "$provider_kind" --arg pkg "$pkg" --arg drop "$drop_version" '
+    .[0] as $all
+    | [$all[] | select(.kind == $kind)][0] as $provider
+    | [$all[] | select(.kind == "ConfigMap"
+                       and .metadata.annotations["provider.cluster.x-k8s.io/compressed"] == "true")
+       | select(.metadata.labels as $labels
+                | $provider.spec.fetchConfig.selector.matchLabels | to_entries | all(.[]; $labels[.key] == .value))]
+    | if $drop == "true" then
+        # The regression: without the version in the selector both ConfigMaps
+        # match, which is what the operator rejects.
+        length != 1
+      else
+        length == 1
+      end
+  ' "$objects" > /dev/null || {
+    if [ "$drop_version" = "true" ]; then
+      echo "$pkg: fixture no longer reproduces a double match" >&2
+    else
+      echo "$pkg: an upgrade matches more than one ConfigMap" >&2
+    fi
+    return 1
+  }
+}
+
+@test "an upgrade with the previous ConfigMap present still matches one bundle" {
+  check_one_match_during_upgrade capi-providers-infraprovider InfrastructureProvider false
+  check_one_match_during_upgrade capi-providers-infraprovider-proxmox InfrastructureProvider false
+  check_one_match_during_upgrade capi-providers-cpprovider ControlPlaneProvider false
+  check_one_match_during_upgrade capi-providers-ipam-in-cluster IPAMProvider false
+}
+
+@test "the double-match fixture fails when the version label is removed" {
+  check_one_match_during_upgrade capi-providers-infraprovider-proxmox InfrastructureProvider true
+}
+
+# capi-providers-bootstrap carries two providers and two ConfigMaps, so the
+# single-provider helpers above do not fit it. Each pair has to pin its own
+# version, and selects exactly one bundle while the other provider's ConfigMap
+# is present.
+@test "both bootstrap providers pin their own ConfigMap version" {
+  local rendered="$BATS_TEST_TMPDIR/capi-providers-bootstrap.yaml" objects="$BATS_TEST_TMPDIR/capi-providers-bootstrap.json"
+  helm template provider "$REPO_ROOT/packages/system/capi-providers-bootstrap" --namespace cozy-cluster-api --kube-version 1.33.0 > "$rendered"
+  yq --output-format=json --no-doc '.' "$rendered" | jq --slurp '.' > "$objects"
+
+  for provider in kubeadm talos; do
+    jq --slurp --exit-status --arg provider "$provider" '
+      .[0] as $all
+      | [$all[] | select(.kind == "BootstrapProvider" and .metadata.name == $provider)][0] as $p
+      | $p.spec.fetchConfig.selector.matchLabels["provider.cluster.x-k8s.io/version"] == $p.spec.version
+      and ([$all[] | select(.kind == "ConfigMap")
+             | select(.metadata.labels as $labels
+                      | $p.spec.fetchConfig.selector.matchLabels | to_entries | all(.[]; $labels[.key] == .value))] | length) == 1
+    ' "$objects" > /dev/null || { echo "capi-providers-bootstrap: $provider does not select exactly one bundle" >&2; return 1; }
+  done
+}
+

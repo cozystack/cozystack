@@ -16,8 +16,9 @@ data:
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: v0.6.13-bootstrap-talos
+  name: {{ include "capi-providers-bootstrap.talosVersion" . }}
   labels:
+    provider.cluster.x-k8s.io/version: {{ include "capi-providers-bootstrap.talosVersion" . }}
     bootstrap-components: cozy
     bootstrap-provider: talos
   annotations:
