@@ -35,7 +35,8 @@ spec:
   containers:
   - name: probe
     image: docker.io/alpine/k8s:1.36.2@sha256:44ef4942e171939b9c665a4a84beb80e2dcdb9a24330d4651cfdfd2e9deecc47
-    command: [sleep, "3600"]
+    # Outlives the step timeouts from here through the run step (68m30s).
+    command: [sleep, "4800"]
     securityContext:
       allowPrivilegeEscalation: false
       capabilities:
