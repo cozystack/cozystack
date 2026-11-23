@@ -1,0 +1,76 @@
+suite: nested system HelmRelease install retry strategy
+
+release:
+  name: harbor
+  namespace: tenant-test
+
+# helm-unittest renders every template in the chart, so the platform-injected
+# globals consumed by the ingress/httproute/bucket templates must be supplied
+# even though only templates/harbor.yaml is asserted on.
+set:
+  _namespace:
+    host: example.org
+    ingress: nginx
+    gateway: ""
+    seaweedfs: seaweedfs
+  _cluster:
+    solver: http01
+
+# templates/harbor.yaml renders a Secret, this HelmRelease and three
+# WorkloadMonitors, so the release is selected by kind rather than by document
+# index: a template gaining a document ahead of it moves the index onto another
+# object, and these asserts would then red for a reason that has nothing to do
+# with the strategy they exist to pin. The selector names what it wants, so it
+# keeps pointing at the release wherever the release ends up, and a selector
+# that matches nothing fails loudly rather than quietly matching the wrong
+# document.
+tests:
+  # The workload lives in this nested release: the harbor Deployments, the
+  # inline RedisFailover and its PVC. Install remediation is an uninstall in
+  # every case Flux offers, so under the default strategy an install that goes
+  # over budget deletes all of it, and the next attempt re-provisions the redis
+  # volume and re-runs the master election from zero.
+  - it: retries a failed install instead of uninstalling the harbor workload
+    template: templates/harbor.yaml
+    documentSelector:
+      path: kind
+      value: HelmRelease
+    asserts:
+      - equal:
+          path: spec.install.strategy.name
+          value: RetryOnFailure
+      - equal:
+          path: spec.install.strategy.retryInterval
+          value: 30s
+
+  # The controller performs the retry of a failed install as an upgrade, so
+  # without a strategy here that retry's own failure falls through to upgrade
+  # remediation instead of retrying again.
+  - it: carries the strategy on the upgrade action the retry runs as
+    template: templates/harbor.yaml
+    documentSelector:
+      path: kind
+      value: HelmRelease
+    asserts:
+      - equal:
+          path: spec.upgrade.strategy.name
+          value: RetryOnFailure
+      - equal:
+          path: spec.upgrade.strategy.retryInterval
+          value: 30s
+
+  # The strategy governs a failed release. An absent release and an out-of-sync
+  # one take different branches, which consult the retry count instead and stop
+  # acting once it is exhausted.
+  - it: keeps unlimited retries for the branches the strategy does not reach
+    template: templates/harbor.yaml
+    documentSelector:
+      path: kind
+      value: HelmRelease
+    asserts:
+      - equal:
+          path: spec.install.remediation.retries
+          value: -1
+      - equal:
+          path: spec.upgrade.remediation.retries
+          value: -1

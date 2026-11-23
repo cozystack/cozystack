@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	cozyv1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
+	"github.com/cozystack/cozystack/pkg/config"
 	helmv2 "github.com/fluxcd/helm-controller/api/v2"
 
 	"k8s.io/apimachinery/pkg/runtime"
@@ -161,6 +162,44 @@ func (r *ApplicationDefinitionHelmReconciler) updateHelmReleaseChart(ctx context
 		logger.V(4).Info("Updating HelmRelease valuesFrom", "name", hr.Name, "namespace", hr.Namespace)
 		hrCopy.Spec.ValuesFrom = expected
 		updated = true
+	}
+
+	// Check and update the readiness wait. cozystack-api reads
+	// release.cozystack.io/helm-install-disable-wait off the definition when it
+	// builds a release, and only there, so a release created before the
+	// annotation appeared keeps waiting on readiness until its Application is
+	// written through the apps API again. Where the wait is what broke, that is
+	// every existing instance of the kind at once, each looping upgrade and
+	// timeout until an operator rewrites it by hand. The definition is the
+	// source of truth in both directions, since the API rebuilds the whole spec
+	// on every write and emits DisableWait=false once the annotation is gone.
+	disableWait, err := config.ParseHelmInstallDisableWaitAnnotation(
+		appDef.Annotations[config.HelmInstallDisableWaitAnnotation],
+	)
+	if err != nil {
+		// cozystack-api refuses to start on this same value, so the cluster
+		// already has a loud signal; leave the field as it is rather than guess.
+		logger.Error(err, "Skipping HelmRelease wait update: invalid annotation",
+			"appDef", appDef.Name, "annotation", config.HelmInstallDisableWaitAnnotation)
+	} else {
+		// An absent install/upgrade block already behaves as DisableWait=false,
+		// so it is only materialised when the definition asks to disable the wait.
+		if disableWait && hrCopy.Spec.Install == nil {
+			hrCopy.Spec.Install = &helmv2.Install{}
+		}
+		if hrCopy.Spec.Install != nil && hrCopy.Spec.Install.DisableWait != disableWait {
+			logger.V(4).Info("Updating HelmRelease install wait", "name", hr.Name, "namespace", hr.Namespace, "disableWait", disableWait)
+			hrCopy.Spec.Install.DisableWait = disableWait
+			updated = true
+		}
+		if disableWait && hrCopy.Spec.Upgrade == nil {
+			hrCopy.Spec.Upgrade = &helmv2.Upgrade{}
+		}
+		if hrCopy.Spec.Upgrade != nil && hrCopy.Spec.Upgrade.DisableWait != disableWait {
+			logger.V(4).Info("Updating HelmRelease upgrade wait", "name", hr.Name, "namespace", hr.Namespace, "disableWait", disableWait)
+			hrCopy.Spec.Upgrade.DisableWait = disableWait
+			updated = true
+		}
 	}
 
 	// Check and update labels from ApplicationDefinition

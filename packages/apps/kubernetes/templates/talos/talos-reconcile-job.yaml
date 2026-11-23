@@ -321,7 +321,7 @@ spec:
               # Apply the TalosConfigTemplate. ownerReference back to the KCP
               # makes the standard Kubernetes garbage collector clean it up on
               # release uninstall; Helm itself does not track this resource.
-              cat <<EOF | kubectl apply -f -
+              cat <<EOF | kubectl apply --server-side --force-conflicts -f -
               apiVersion: bootstrap.cluster.x-k8s.io/v1alpha3
               kind: TalosConfigTemplate
               metadata:
