@@ -545,3 +545,32 @@ func TestEvaluatorsRecompileARecreatedDefinition(t *testing.T) {
 		t.Error("a recreated definition at the same generation kept the old evaluator")
 	}
 }
+
+// TestReservation_KeepsTheStoredFigureOfAKindThatNoLongerCompiles: when a
+// kind's declaration stops compiling, its applications count at their last
+// stored figure, and the pool says its figure is incomplete, instead of the
+// whole kind dropping out of the sum.
+func TestReservation_KeepsTheStoredFigureOfAKindThatNoLongerCompiles(t *testing.T) {
+	r, c, _ := newReservationReconciler(t,
+		tenantWithQuotas(t, "foo", "tenant-root", map[string]string{"cpu": "3"}),
+		withStored(t, vm(t, "a", "tenant-foo", "u1.small"), true, map[string]string{"cpu": "4"}),
+	)
+	def := &cozyv1alpha1.ApplicationDefinition{}
+	if err := c.Get(context.Background(), types.NamespacedName{Name: vmInstanceDefinition(t).Name}, def); err != nil {
+		t.Fatal(err)
+	}
+	def.Spec.Consumption.Resources = map[string]string{"cpu": "this is not CEL ("}
+	if err := c.Update(context.Background(), def); err != nil {
+		t.Fatal(err)
+	}
+	sweep(t, r)
+
+	foo := poolStatusOf(t, c, "tenant-root", "tenant-foo")
+	assertFigure(t, "reserved", foo.Reserved, map[string]string{"cpu": "4"})
+	if cond := conditionOf(t, foo, reservation.ConditionOvercommitted); cond.Status != metav1.ConditionTrue {
+		t.Errorf("Overcommitted = %s, want True", cond.Status)
+	}
+	if cond := conditionOf(t, foo, reservation.ConditionReservationIncomplete); cond.Status != metav1.ConditionTrue {
+		t.Errorf("ReservationIncomplete = %s, want True", cond.Status)
+	}
+}

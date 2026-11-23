@@ -170,14 +170,20 @@ func (r *Reconciler) snapshotReservations(ctx context.Context) (*reservationSnap
 			continue
 		}
 		name := fmt.Sprintf("%s %s/%s", kind, hr.Namespace, hr.Name)
-		if c.err != nil {
-			snap.incompleteByNS[hr.Namespace] = append(snap.incompleteByNS[hr.Namespace], fmt.Sprintf("%s: %v", name, c.err))
-			continue
-		}
 		prev, err := reservation.ReadStored(hr.Annotations)
 		if err != nil {
 			logger.Error(err, "ignoring an unreadable stored reservation", "helmRelease", client.ObjectKeyFromObject(hr))
 			prev = nil
+		}
+		if c.err != nil {
+			// The kind's declaration no longer compiles: count the last
+			// figure stored, as for values that no longer evaluate, rather
+			// than letting the whole kind drop out of the pool.
+			snap.incompleteByNS[hr.Namespace] = append(snap.incompleteByNS[hr.Namespace], fmt.Sprintf("%s: %v", name, c.err))
+			if prev != nil {
+				snap.usedByNS[hr.Namespace] = addResourceList(snap.usedByNS[hr.Namespace], toCore(prev.Resources))
+			}
+			continue
 		}
 		values := helmReleaseValues(hr)
 		rl, src, err := reservation.Resolve(c.ev, values, prev, r.Env)
