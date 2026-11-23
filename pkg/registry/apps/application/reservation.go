@@ -99,13 +99,7 @@ type Reservation struct {
 type pendingWrite struct {
 	visible func(*helmv2.HelmRelease) bool
 	deleted bool
-	since   time.Time
 }
-
-// pendingDebtLimit bounds how long a write the cache never shows can hold a
-// pool. Past it the cache is stuck or the release was changed by a client
-// other than this server, and holding the pool would only lock tenants out.
-const pendingDebtLimit = 10 * time.Minute
 
 // writtenState recognises, in the cache, the release as just written or as
 // changed again since. The resourceVersion is compared for equality only. A
@@ -116,7 +110,7 @@ func writtenState(hr *helmv2.HelmRelease) pendingWrite {
 	rv := hr.ResourceVersion
 	annotation := hr.Annotations[ReservedAnnotation]
 	hash, _ := valuesHash(helmReleaseValues(hr))
-	return pendingWrite{since: time.Now(), visible: func(cached *helmv2.HelmRelease) bool {
+	return pendingWrite{visible: func(cached *helmv2.HelmRelease) bool {
 		if rv != "" && cached.ResourceVersion == rv {
 			return true
 		}
@@ -196,7 +190,7 @@ func withHeldPool(ctx context.Context, root string) context.Context {
 // from the cache is short by that write, so no growth is admitted and the
 // caller is asked to retry. The returned unlock is nil when ctx already
 // holds root.
-func (g *Reservation) acquire(ctx context.Context, c client.Client, root string) (func(), error) {
+func (g *Reservation) acquire(ctx context.Context, c client.Client, live client.Reader, root string) (func(), error) {
 	if held, _ := ctx.Value(heldPoolKey{}).(string); held == root {
 		return nil, nil
 	}
@@ -216,9 +210,7 @@ func (g *Reservation) acquire(ctx context.Context, c client.Client, root string)
 	}
 	g.mu.Unlock()
 	for key, pw := range owed {
-		if time.Since(pw.since) > pendingDebtLimit {
-			klog.Warningf("HelmRelease %s was still not in the cache after %s; pool %q stops waiting for it", key, pendingDebtLimit, root)
-		} else if err := g.waitVisible(c, key, pw); err != nil {
+		if err := g.waitVisible(c, live, key, pw); err != nil {
 			m.Unlock()
 			return nil, apierrors.NewTooManyRequests(fmt.Sprintf("an earlier write into tenant pool %q is not visible yet; retry", root), 1)
 		}
@@ -257,8 +249,7 @@ func (g *Reservation) supersede(key client.ObjectKey, pw pendingWrite) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	for _, owed := range g.pending {
-		if prev, ok := owed[key]; ok {
-			pw.since = prev.since
+		if _, ok := owed[key]; ok {
 			owed[key] = pw
 		}
 	}
@@ -267,10 +258,17 @@ func (g *Reservation) supersede(key client.ObjectKey, pw pendingWrite) {
 // waitVisible polls the cache until it serves the write. It is detached from
 // the request: a client that gives up must not shorten the wait the next
 // writer depends on.
-func (g *Reservation) waitVisible(c client.Client, key client.ObjectKey, pw pendingWrite) error {
+//
+// If the cache never shows the write itself, the release may have been
+// changed or deleted by a client other than this server since. One read of
+// the live object settles it: a cache serving the same resourceVersion as the
+// API server, or both agreeing the release is gone, has seen the write and
+// whatever followed it. Otherwise the write is still owed, however long ago
+// it was made.
+func (g *Reservation) waitVisible(c client.Client, live client.Reader, key client.ObjectKey, pw pendingWrite) error {
 	ctx, cancel := context.WithTimeout(context.Background(), g.settleTimeout)
 	defer cancel()
-	return wait.PollUntilContextCancel(ctx, settleInterval, true, func(ctx context.Context) (bool, error) {
+	err := wait.PollUntilContextCancel(ctx, settleInterval, true, func(ctx context.Context) (bool, error) {
 		hr := &helmv2.HelmRelease{}
 		if err := c.Get(ctx, key, hr); err != nil {
 			if apierrors.IsNotFound(err) {
@@ -280,6 +278,20 @@ func (g *Reservation) waitVisible(c client.Client, key client.ObjectKey, pw pend
 		}
 		return !pw.deleted && pw.visible(hr), nil
 	})
+	if err == nil || live == nil {
+		return err
+	}
+	readCtx, readCancel := context.WithTimeout(context.Background(), g.settleTimeout)
+	defer readCancel()
+	cached, actual := &helmv2.HelmRelease{}, &helmv2.HelmRelease{}
+	cachedErr, liveErr := c.Get(readCtx, key, cached), live.Get(readCtx, key, actual)
+	switch {
+	case apierrors.IsNotFound(cachedErr) && apierrors.IsNotFound(liveErr):
+		return nil
+	case cachedErr == nil && liveErr == nil && cached.ResourceVersion == actual.ResourceVersion:
+		return nil
+	}
+	return err
 }
 
 // valuesHash hashes values in a canonical form: the apiserver may hand back
@@ -576,6 +588,19 @@ func (a *reservationAdmission) annotate(hr *helmv2.HelmRelease) error {
 	return nil
 }
 
+// baseOf identifies what a decision subtracted for a stored release: its
+// values and the figure stored on it. The figure is part of it because a
+// release can be admitted again with the same values and another figure, an
+// instance type redefined in between, and the delta taken from the old one
+// would then be wrong.
+func baseOf(hr *helmv2.HelmRelease) (string, error) {
+	h, err := valuesHash(helmReleaseValues(hr))
+	if err != nil {
+		return "", err
+	}
+	return h + "\x00" + hr.Annotations[ReservedAnnotation], nil
+}
+
 // stale reports whether the stored release changed since the decision was
 // made, so that a conflict retry carrying the admitted figure onto a
 // different object would skip the check the change calls for.
@@ -583,8 +608,8 @@ func (a *reservationAdmission) stale(cur *helmv2.HelmRelease) bool {
 	if a == nil || a.baseHash == "" {
 		return false
 	}
-	h, err := valuesHash(helmReleaseValues(cur))
-	return err != nil || h != a.baseHash
+	b, err := baseOf(cur)
+	return err != nil || b != a.baseHash
 }
 
 // base records the stored release a decision taken before it was read was
@@ -593,11 +618,11 @@ func (a *reservationAdmission) base(cur *helmv2.HelmRelease) error {
 	if a == nil {
 		return nil
 	}
-	h, err := valuesHash(helmReleaseValues(cur))
+	b, err := baseOf(cur)
 	if err != nil {
 		return err
 	}
-	a.baseHash = h
+	a.baseHash = b
 	return nil
 }
 
@@ -611,13 +636,13 @@ func (e finalUpdateError) Error() string { return e.err.Error() }
 // next writer into the pool, which reads the cache, counts it. If it does
 // not in time, the write is recorded as owed to the pool, and the pool
 // admits no growth until the cache shows it or a later state of it.
-func (a *reservationAdmission) settle(c client.Client, hr *helmv2.HelmRelease) {
+func (a *reservationAdmission) settle(c client.Client, live client.Reader, hr *helmv2.HelmRelease) {
 	if a == nil || a.unlock == nil {
 		return
 	}
 	key := client.ObjectKeyFromObject(hr)
 	pw := writtenState(hr)
-	if err := a.gate.waitVisible(c, key, pw); err != nil {
+	if err := a.gate.waitVisible(c, live, key, pw); err != nil {
 		klog.Warningf("HelmRelease %s is not in the cache after %s; pool %q admits no growth until it is: %v", key, a.gate.settleTimeout, a.root, err)
 		a.gate.owe(a.root, key, pw)
 	}
@@ -648,7 +673,7 @@ func (r *REST) lockTenantPool(ctx context.Context, app *appsv1alpha1.Application
 	if p == nil {
 		return ctx, nil, nil
 	}
-	unlock, err := r.reservation.acquire(ctx, r.c, p.root)
+	unlock, err := r.reservation.acquire(ctx, r.c, r.w, p.root)
 	if err != nil {
 		return ctx, nil, err
 	}
@@ -702,7 +727,7 @@ func (r *REST) admit(ctx context.Context, app *appsv1alpha1.Application, old *he
 	}
 	adm := &reservationAdmission{gate: g, stored: &storedReservation{ValuesHash: hash, Resources: want}}
 	if old != nil {
-		if adm.baseHash, err = valuesHash(helmReleaseValues(old)); err != nil {
+		if adm.baseHash, err = baseOf(old); err != nil {
 			return nil, field.ErrorList{field.Invalid(specPath, "", err.Error())}, nil
 		}
 	}
@@ -738,7 +763,7 @@ func (r *REST) admit(ctx context.Context, app *appsv1alpha1.Application, old *he
 		return adm, nil, nil
 	}
 	adm.root = p.root
-	if adm.unlock, err = g.acquire(ctx, r.c, p.root); err != nil {
+	if adm.unlock, err = g.acquire(ctx, r.c, r.w, p.root); err != nil {
 		return nil, nil, err
 	}
 	// The pool read above only chose the lock. Budget, carve-outs and

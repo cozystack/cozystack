@@ -451,6 +451,8 @@ func TestReservationOwesAPoolAWriteTheCacheHasNotShown(t *testing.T) {
 		},
 	}, tenantHelmRelease(t, "acme", rootTenantNamespace, map[string]string{"memory": "8Gi"}))
 	f.gate.settleTimeout = 100 * time.Millisecond
+	// The API server has the release; only the cache does not.
+	f.vms.w = f.client
 
 	if err := f.create(t, vmApplication(t, "one", "tenant-acme", map[string]any{"instanceType": "u1.small"})); err != nil {
 		t.Fatalf("the write itself succeeds even if the cache is late: %v", err)
@@ -680,11 +682,53 @@ func TestReservationDebtClearsOnADeleteTheCacheShows(t *testing.T) {
 func TestReservationDebtStillRefusesWhileTheWriteIsHidden(t *testing.T) {
 	hidden := true
 	f := hideable(t, "vm-instance-one", &hidden, tenantHelmRelease(t, "acme", rootTenantNamespace, map[string]string{"memory": "20Gi"}))
+	// The API server has the release; only the cache does not.
+	f.vms.w = f.client
 	if err := f.create(t, vmApplication(t, "one", "tenant-acme", map[string]any{"instanceType": "u1.small"})); err != nil {
 		t.Fatal(err)
 	}
-	if err := f.create(t, vmApplication(t, "two", "tenant-acme", map[string]any{"instanceType": "u1.small"})); !apierrors.IsTooManyRequests(err) {
-		t.Fatalf("a missing object is not taken for a delete this server did not issue; want 429, got %v", err)
+	for i := 0; i < 2; i++ {
+		if err := f.create(t, vmApplication(t, "two", "tenant-acme", map[string]any{"instanceType": "u1.small"})); !apierrors.IsTooManyRequests(err) {
+			t.Fatalf("a release the API server has and the cache does not is still owed; want 429, got %v", err)
+		}
+	}
+}
+
+func TestReservationDebtClearsWhenAnotherClientDeletedTheRelease(t *testing.T) {
+	hidden := true
+	f := hideable(t, "vm-instance-one", &hidden, tenantHelmRelease(t, "acme", rootTenantNamespace, map[string]string{"memory": "8Gi"}))
+	f.vms.w = f.client
+	if err := f.create(t, vmApplication(t, "one", "tenant-acme", map[string]any{"instanceType": "u1.small"})); err != nil {
+		t.Fatal(err)
+	}
+	// Deleted behind this server's back, before the cache ever showed it.
+	hr := &helmv2.HelmRelease{}
+	if err := f.client.Get(context.Background(), client.ObjectKey{Namespace: "tenant-acme", Name: "vm-instance-one"}, hr); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.client.Delete(context.Background(), hr); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.create(t, vmApplication(t, "two", "tenant-acme", map[string]any{"instanceType": "u1.small"})); err != nil {
+		t.Fatalf("the API server and the cache agree the release is gone, so the pool admits again: %v", err)
+	}
+}
+
+func TestReservationStaleSeesAFigureChangedUnderTheSameValues(t *testing.T) {
+	cur := &helmv2.HelmRelease{}
+	cur.Spec.Values = &apiextv1.JSON{Raw: []byte(`{"instanceType":"u1.small"}`)}
+	cur.Annotations = map[string]string{ReservedAnnotation: `{"valuesHash":"h","resources":{"memory":"4Gi"}}`}
+	adm := &reservationAdmission{}
+	if err := adm.base(cur); err != nil {
+		t.Fatal(err)
+	}
+	if adm.stale(cur) {
+		t.Fatal("the release the decision was made against is not stale")
+	}
+	readmitted := cur.DeepCopy()
+	readmitted.Annotations[ReservedAnnotation] = `{"valuesHash":"h","resources":{"memory":"2Gi"}}`
+	if !adm.stale(readmitted) {
+		t.Fatal("the same values readmitted with another figure change what the delta subtracted")
 	}
 }
 
