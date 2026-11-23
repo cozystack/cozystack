@@ -22,6 +22,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"strings"
 
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -81,8 +82,10 @@ func ValuesHash(raw []byte) (string, error) {
 		if err := dec.Decode(&v); err != nil {
 			return "", err
 		}
-		if dec.More() {
-			return "", fmt.Errorf("values carry more than one JSON document")
+		// More reports false before a stray ] or }, so only io.EOF proves
+		// nothing follows the document; trailing whitespace is still fine.
+		if _, err := dec.Token(); err != io.EOF {
+			return "", fmt.Errorf("values carry data after their JSON document")
 		}
 	}
 	canonical, err := json.Marshal(v)

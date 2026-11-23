@@ -38,10 +38,24 @@ func TestValuesHash_IgnoresKeyOrder(t *testing.T) {
 	if a == c {
 		t.Error("different values hash the same")
 	}
-	big1, _ := ValuesHash([]byte(`{"n":9007199254740992}`))
-	big2, _ := ValuesHash([]byte(`{"n":9007199254740993}`))
+	big1, err := ValuesHash([]byte(`{"n":9007199254740992}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	big2, err := ValuesHash([]byte(`{"n":9007199254740993}`))
+	if err != nil {
+		t.Fatal(err)
+	}
 	if big1 == big2 {
 		t.Error("two integers above 2^53 hash the same")
+	}
+	for _, trailing := range []string{`{"n":1}]`, `{"n":1}}`, `{"n":1} {"n":2}`, `{"n":1} x`} {
+		if _, err := ValuesHash([]byte(trailing)); err == nil {
+			t.Errorf("values %s with data after the document hashed", trailing)
+		}
+	}
+	if _, err := ValuesHash([]byte("{\"n\":1}\n  ")); err != nil {
+		t.Errorf("trailing whitespace refused: %v", err)
 	}
 }
 
