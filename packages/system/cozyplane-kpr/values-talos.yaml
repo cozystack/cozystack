@@ -1,0 +1,4 @@
+cozyplane-kpr:
+  # kpr is the ClusterIP proxy, so it cannot reach the apiserver through a
+  # ClusterIP it has not programmed yet; on Talos it dials KubePrism.
+  apiServerURL: "https://localhost:7445"

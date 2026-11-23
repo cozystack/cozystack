@@ -1,0 +1,31 @@
+{{- /* Cozystack tenants hold the cozy:tenant* roles, not the built-in
+       admin/edit/view the cozyplane chart's own tenant roles aggregate into.
+       These roles carry those rules across by aggregating the chart's roles,
+       so the list of tenant kinds stays the chart's to maintain. */}}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: cozy:tenant:cozyplane-edit
+  labels:
+    rbac.cozystack.io/aggregate-to-tenant: "true"
+    rbac.cozystack.io/aggregate-to-tenant-admin: "true"
+aggregationRule:
+  clusterRoleSelectors:
+  - matchLabels:
+      app.kubernetes.io/part-of: cozyplane
+      rbac.authorization.k8s.io/aggregate-to-edit: "true"
+rules: []
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: cozy:tenant:cozyplane-view
+  labels:
+    rbac.cozystack.io/aggregate-to-tenant-view: "true"
+aggregationRule:
+  clusterRoleSelectors:
+  - matchLabels:
+      app.kubernetes.io/part-of: cozyplane
+      rbac.authorization.k8s.io/aggregate-to-view: "true"
+rules: []

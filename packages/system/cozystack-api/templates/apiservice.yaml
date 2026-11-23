@@ -27,7 +27,11 @@ spec:
     name: cozystack-api
     namespace: cozy-system
   version: v1alpha1
+{{- if .Values.cozystackAPI.serveSDN }}
 ---
+# The sdn.cozystack.io group (SecurityGroup projected over CiliumNetworkPolicy).
+# Off in the cozyplane networking variant, where cozyplane is the group's only
+# server — see the platform bundle (templates/bundles/system.yaml).
 apiVersion: apiregistration.k8s.io/v1
 kind: APIService
 metadata:
@@ -42,3 +46,4 @@ spec:
     name: cozystack-api
     namespace: cozy-system
   version: v1alpha1
+{{- end }}

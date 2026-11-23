@@ -142,3 +142,22 @@ tests:
       - matchRegex:
           path: stringData["values.yaml"]
           pattern: '(?m)^\s*gateway-tenant-classes:\s*""'
+
+  # The gateway chart refuses a resolved class in this list, which is how a
+  # tenant that enables its own Gateway is kept off a class nothing serves.
+  - it: marks the cilium class unserved on the cozyplane variant
+    set:
+      bundles:
+        system:
+          networkingVariant: cozyplane
+    asserts:
+      - matchRegex:
+          path: stringData["values.yaml"]
+          pattern: '(?m)^\s*gateway-unserved-classes:\s*"cilium"'
+
+  - it: marks no class unserved on the default variant
+    asserts:
+      - matchRegex:
+          path: stringData["values.yaml"]
+          pattern: '(?m)^\s*gateway-unserved-classes:\s*""'
+
