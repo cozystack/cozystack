@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-: "${KUBE_CONTEXT:?}" "${NAMESPACE:?}" "${BRIDGE_VERSION:?}" "${TARGET_VERSION:?}"
+: "${KUBECONFIG:?}" "${KUBE_CONTEXT:?}" "${NAMESPACE:?}" "${BRIDGE_VERSION:?}" "${TARGET_VERSION:?}"
 
 fail() {
   printf 'CAPI upgrade: %s\n' "$*" >&2
