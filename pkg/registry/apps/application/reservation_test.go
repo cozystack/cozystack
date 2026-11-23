@@ -755,3 +755,28 @@ func TestTenantCreateDoesNotHoldThePoolAcrossTheAdmissionChain(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestValuesHashKeepsLargeIntegersApart(t *testing.T) {
+	a, err := valuesHash([]byte(`{"n":9007199254740992}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := valuesHash([]byte(`{"n":9007199254740993}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a == b {
+		t.Fatal("two integers a float64 cannot tell apart hashed alike, so a figure stored for one would be trusted for the other")
+	}
+	reordered, err := valuesHash([]byte(`{"b":1,"a":{"d":2,"c":3}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ordered, err := valuesHash([]byte(`{"a":{"c":3,"d":2},"b":1}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reordered != ordered {
+		t.Fatal("the same values in another key order must hash alike")
+	}
+}

@@ -17,6 +17,7 @@ limitations under the License.
 package application
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -283,10 +284,14 @@ func (g *Reservation) waitVisible(c client.Client, key client.ObjectKey, pw pend
 
 // valuesHash hashes values in a canonical form: the apiserver may hand back
 // a stored blob with its keys in another order than the one written.
+// Numbers keep their literal, since through a float64 two integers above
+// 2^53 would hash alike.
 func valuesHash(raw []byte) (string, error) {
 	var v any
 	if len(raw) > 0 {
-		if err := json.Unmarshal(raw, &v); err != nil {
+		dec := json.NewDecoder(bytes.NewReader(raw))
+		dec.UseNumber()
+		if err := dec.Decode(&v); err != nil {
 			return "", err
 		}
 	}
