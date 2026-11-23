@@ -470,6 +470,88 @@ EOF
   | grep -qx '250m 128Mi 25m 128Mi'
 }
 
+@test "Tenant super-admin holds no write verb outside the allowlist" {
+  # cozy:tenant:super-admin is aggregated from every ClusterRole labelled for
+  # it or for a level below, across several packages, so a write path into a
+  # tenant namespace can arrive without touching the role that names it. The
+  # raw kubevirt.io VirtualMachine grant did: a '*' that let a tenant size a VM
+  # outside any application. The effective rules are read back from the
+  # apiserver, after aggregation, and any write verb the allowlist does not
+  # name fails the test; adding a line there is the statement that the write
+  # is accounted for.
+  #
+  # The bare system:authenticated identity is subtracted first, so what
+  # Kubernetes grants every user (the selfsubject* reviews) does not tie the
+  # list to a Kubernetes version. An allowlisted line the cluster does not
+  # grant is reported without failing: a lane with COZY_DISABLED_PACKAGES set
+  # lacks the tenant roles those packages ship.
+  #
+  # Rules and status come from the same SelfSubjectRulesReview response, so
+  # a partial list cannot pass on the strength of a later, complete one.
+  # can-i --list hides both failure modes behind exit 0: it only warns on
+  # incomplete, and says nothing when RBAC reports an evaluationError with
+  # incomplete left false. The jq rendering keeps can-i's resource column,
+  # which the allowlist is written in.
+  #
+  # Lines covered by a wildcard grant are folded into it, so a '*' on a whole
+  # group (apps.cozystack.io, the gated API) does not make every new kind an
+  # allowlist edit. Staged through files rather than pipes: /bin/sh here has
+  # no pipefail, and a failed kubectl must not pass as an empty grant list.
+  local complete normalize subsume review allowlist granted baseline effective unexpected missing f
+  complete='.status.incomplete == false and (.status.evaluationError // "") == ""'
+  normalize='.status.resourceRules[] | . as $r
+    | ($r.resourceNames // [] | if length == 0 then ["-"] else . end)[] as $name
+    | $r.apiGroups[] as $group | $r.resources[] as $resource | $r.verbs[] as $verb
+    | select($verb != "get" and $verb != "list" and $verb != "watch")
+    | ($resource | split("/")) as $part
+    | $part[0] + (if $group == "" then "" else "." + $group end)
+      + (if ($part | length) > 1 then "/" + ($part[1:] | join("/")) else "" end)
+      + " " + $name + " " + $verb'
+  subsume='NR == FNR { have[$0] = 1; next }
+    {
+      dot = index($1, ".")
+      if (dot > 1 && $1 !~ /^\*\./ && (("*" substr($1, dot) " - *") in have)) next
+      if ($3 != "*" && (($1 " " $2 " *") in have)) next
+      print
+    }'
+  review=$(mktemp); allowlist=$(mktemp); granted=$(mktemp); baseline=$(mktemp)
+  effective=$(mktemp); unexpected=$(mktemp); missing=$(mktemp)
+  echo '{"apiVersion":"authorization.k8s.io/v1","kind":"SelfSubjectRulesReview","spec":{"namespace":"tenant-test"}}' > "$review"
+  # --validate=false: client-side validation would run as the impersonated
+  # identity, which cannot list CRDs.
+  timeout -k 5 30 kubectl create --validate=false -f "$review" -o json \
+    --as=e2e-rbac-probe --as-group=system:authenticated --as-group=tenant-test-super-admin > "$granted"
+  timeout -k 5 30 kubectl create --validate=false -f "$review" -o json \
+    --as=e2e-rbac-probe --as-group=system:authenticated > "$baseline"
+  for f in "$granted" "$baseline"; do
+    if jq -e "$complete" "$f" > /dev/null; then :; else
+      echo "FAIL: the apiserver could not enumerate the tenant-test rules completely:" >&2
+      jq -c '.status | {incomplete, evaluationError}' "$f" >&2
+      false
+    fi
+  done
+  jq -r "$normalize" "$granted" > "$granted.n"
+  jq -r "$normalize" "$baseline" > "$baseline.n"
+  yq '.writeVerbs[]' hack/e2e-tenant-super-admin-write-verbs.yaml > "$allowlist"
+  LC_ALL=C sort -u -o "$granted.n" "$granted.n"
+  LC_ALL=C sort -u -o "$baseline.n" "$baseline.n"
+  LC_ALL=C sort -u -o "$allowlist" "$allowlist"
+  LC_ALL=C comm -23 "$granted.n" "$baseline.n" > "$effective.n"
+  awk "$subsume" "$effective.n" "$effective.n" > "$effective"
+  LC_ALL=C comm -23 "$effective" "$allowlist" > "$unexpected"
+  LC_ALL=C comm -13 "$effective" "$allowlist" > "$missing"
+  if [ -s "$missing" ]; then
+    echo "allowlisted but not granted on this cluster:"
+    cat "$missing"
+  fi
+  if [ -s "$unexpected" ]; then
+    echo "FAIL: tenant-test-super-admin holds write verbs hack/e2e-tenant-super-admin-write-verbs.yaml does not allow:" >&2
+    cat "$unexpected" >&2
+    false
+  fi
+  rm -f "$review" "$allowlist" "$granted" "$granted.n" "$baseline" "$baseline.n" "$effective" "$effective.n" "$unexpected" "$missing"
+}
+
 @test "Deletion-protection VAP denies delete on labeled cozystack-version ConfigMap" {
   # Locks down the contract delivered by packages/core/platform/templates/
   # deletion-protection.yaml: a DELETE on any object carrying
