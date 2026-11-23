@@ -470,7 +470,10 @@ spec:
           # unlinked, and a dropped link re-enters it. The topology is thus in
           # motion here and one sampling would decide on it. Wait for it to
           # settle, then assert the sentinels moved off the bootstrap address,
-          # which nothing above covers at all.
+          # which nothing above covers at all. The redis container's
+          # REDIS_PASSWORD belongs to REDIS_USER (rf-internal), not to
+          # default, so the dial names that user, as the operator's own
+          # scripts do.
           link_wait=60
           started=$(date +%s)
           deadline=$(( started + link_wait ))
@@ -481,7 +484,7 @@ spec:
             for i in 0 1; do
               rc=0
               info=$(k -n "$NAMESPACE" exec "rfr-redis-secure-$i" -c redis -- \
-                sh -c 'REDISCLI_AUTH="$REDIS_PASSWORD" timeout 15 redis-cli --tls --cacert /tls/ca.crt -h localhost -p 6379 info replication' 2>&1) || rc=$?
+                sh -c 'REDISCLI_AUTH="$REDIS_PASSWORD" timeout 15 redis-cli ${REDIS_USER:+--user "$REDIS_USER"} --tls --cacert /tls/ca.crt -h localhost -p 6379 info replication' 2>&1) || rc=$?
               if [ "$rc" -ne 0 ]; then
                 echo "INFO replication on rfr-redis-secure-$i failed (exit $rc): $info" >&2
                 exit 1
