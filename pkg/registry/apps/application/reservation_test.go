@@ -76,9 +76,9 @@ func shippedResource(t *testing.T, path string) config.Resource {
 func testEnvironment() reservation.Environment {
 	return &reservation.StaticEnvironment{
 		Instancetypes: map[string]reservation.ResourceList{
-			"u1.small": {"cpu": resource.MustParse("1"), "memory": resource.MustParse("4Gi")},
+			"u1.small":  {"cpu": resource.MustParse("1"), "memory": resource.MustParse("4Gi")},
 			"u1.medium": {"cpu": resource.MustParse("2"), "memory": resource.MustParse("8Gi")},
-			"u1.large": {"cpu": resource.MustParse("4"), "memory": resource.MustParse("16Gi")},
+			"u1.large":  {"cpu": resource.MustParse("4"), "memory": resource.MustParse("16Gi")},
 		},
 		Presets: reservation.ShippedPresets(),
 	}
@@ -778,5 +778,8 @@ func TestValuesHashKeepsLargeIntegersApart(t *testing.T) {
 	}
 	if reordered != ordered {
 		t.Fatal("the same values in another key order must hash alike")
+	}
+	if _, err := valuesHash([]byte(`{"a":1} {"a":2}`)); err == nil {
+		t.Fatal("values carrying a second document must not hash as the first alone")
 	}
 }
