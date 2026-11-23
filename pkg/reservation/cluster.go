@@ -127,7 +127,7 @@ func (e *ClusterEnvironment) refresh() error {
 	defer cancel()
 	list, err := e.dyn.Resource(InstancetypeGVR).List(ctx, metav1.ListOptions{})
 	if err != nil {
-		e.failure = fmt.Errorf("list %s: %w", InstancetypeGVR.GroupResource(), err)
+		e.failure = fmt.Errorf("list %s: %w: %w", InstancetypeGVR.GroupResource(), ErrUnavailable, err)
 		e.failed = e.now()
 		return e.failure
 	}

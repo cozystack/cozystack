@@ -364,7 +364,7 @@ func (r *REST) poolUsage(ctx context.Context, parentNS, excludeNS string) (func(
 	if err != nil {
 		return nil, err
 	}
-	fig, err := r.reservedIn(ctx, members)
+	fig, err := r.reservedIn(ctx, members, client.ObjectKey{})
 	if err != nil {
 		return nil, err
 	}

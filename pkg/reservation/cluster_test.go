@@ -128,8 +128,9 @@ func TestClusterEnvironmentReportsListErrors(t *testing.T) {
 	f.dyn.PrependReactor("list", InstancetypeGVR.Resource, func(k8stesting.Action) (bool, runtime.Object, error) {
 		return true, nil, errors.New("forbidden")
 	})
-	if _, err := f.env.Instancetype("u1.small"); err == nil || errors.Is(err, ErrNotFound) {
-		t.Fatalf("a failed list must surface as an error, not as a missing type: %v", err)
+	_, err := f.env.Instancetype("u1.small")
+	if err == nil || errors.Is(err, ErrNotFound) || !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("a failed list must surface as unavailable, not as a missing type: %v", err)
 	}
 }
 
@@ -174,5 +175,22 @@ func TestClusterEnvironmentHoldsAFailedListBeforeListingAgain(t *testing.T) {
 	}
 	if _, err := f.env.Instancetype("u1.small"); err != nil || *f.lists != 2 {
 		t.Fatalf("a success clears the failure and serves from the snapshot: err=%v lists=%d", err, *f.lists)
+	}
+}
+
+// The evaluator runs lookups inside CEL; a caller has to be able to tell an
+// unreadable environment from a declaration that fails on these values.
+func TestEvaluationKeepsAnUnavailableEnvironmentRecognisable(t *testing.T) {
+	f := newClusterFixture()
+	f.dyn.PrependReactor("list", InstancetypeGVR.Resource, func(k8stesting.Action) (bool, runtime.Object, error) {
+		return true, nil, errors.New("apiserver unavailable")
+	})
+	ev, err := Compile(&Declaration{Resources: map[string]string{"memory": "instanceType(values.instanceType).memory"}}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = ev.EvaluateJSON([]byte(`{"instanceType":"u1.small"}`), f.env)
+	if !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("want an error wrapping ErrUnavailable, got %v", err)
 	}
 }
