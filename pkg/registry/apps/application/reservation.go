@@ -294,6 +294,9 @@ func valuesHash(raw []byte) (string, error) {
 		if err := dec.Decode(&v); err != nil {
 			return "", err
 		}
+		if dec.More() {
+			return "", fmt.Errorf("values carry more than one JSON document")
+		}
 	}
 	canonical, err := json.Marshal(v)
 	if err != nil {

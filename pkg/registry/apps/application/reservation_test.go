@@ -779,4 +779,7 @@ func TestValuesHashKeepsLargeIntegersApart(t *testing.T) {
 	if reordered != ordered {
 		t.Fatal("the same values in another key order must hash alike")
 	}
+	if _, err := valuesHash([]byte(`{"a":1} {"a":2}`)); err == nil {
+		t.Fatal("values carrying a second document must not hash as the first alone")
+	}
 }
