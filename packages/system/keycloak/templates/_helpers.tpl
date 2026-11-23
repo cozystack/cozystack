@@ -1,3 +1,22 @@
+{{- /* Public hostname Keycloak serves on and issues tokens for.
+       ingress.host keeps precedence for deployments that set it before the
+       platform-wide authentication.oidc.keycloakHost existed. Setting both to
+       different hosts is refused: KC_HOSTNAME would follow ingress.host while
+       every OIDC consumer builds its issuer from _cluster.keycloak-host, so
+       every login would fail issuer validation. A keycloak-host equal to the
+       derived keycloak.<root-host> is the platform default, not a choice, and
+       does not conflict. */}}
+{{- define "keycloak.host" -}}
+{{- $cluster := .Values._cluster | default dict }}
+{{- $derived := printf "keycloak.%s" (dig "root-host" "" $cluster) }}
+{{- $platformHost := dig "keycloak-host" "" $cluster }}
+{{- $override := .Values.ingress.host }}
+{{- if and $override $platformHost (ne $platformHost $derived) (ne $platformHost $override) }}
+{{-   fail (printf "ingress.host %q conflicts with the platform authentication.oidc.keycloakHost %q: OIDC consumers would expect an issuer Keycloak does not sign with. Drop ingress.host and keep only the platform value" $override $platformHost) }}
+{{- end }}
+{{- $override | default $platformHost | default $derived }}
+{{- end }}
+
 {{- /* Realms published on the login host in the narrowed (ingress.adminHost)
        mode, as a YAML list — callers parse it with fromYamlArray.
 
