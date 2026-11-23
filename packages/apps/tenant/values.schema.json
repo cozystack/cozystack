@@ -51,6 +51,14 @@
       "type": "string",
       "default": ""
     },
+    "allowedSchedulingClasses": {
+      "description": "SchedulingClasses an application in this tenant may select through its own `schedulingClass`, in place of the tenant's. Empty allows none, so every application runs under the tenant's class. Inherited from the parent tenant, and not settable here, when the parent has a `schedulingClass` or a non-empty list.",
+      "type": "array",
+      "default": [],
+      "items": {
+        "type": "string"
+      }
+    },
     "resourceQuotas": {
       "description": "Define resource quotas for the tenant.",
       "type": "object",

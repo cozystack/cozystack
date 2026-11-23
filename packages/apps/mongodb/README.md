@@ -270,3 +270,10 @@ Releases with `external: false`, and sharded releases in any configuration, are 
 | `bootstrap.recoveryTime` | Timestamp for point-in-time recovery; empty means latest. | `string` | `""`    |
 | `bootstrap.backupName`   | Name of backup to restore from.                           | `string` | `""`    |
 
+
+### Scheduling parameters
+
+| Name              | Description                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         | Type     | Value |
+| ----------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------- | ----- |
+| `schedulingClass` | Name of a SchedulingClass CR (cluster-scoped, group cozystack.io) used in place of the tenant's for this application's pods. A pod gets its class when it is created, so running pods keep theirs until they are recreated. Must be the tenant's own class or one listed in the tenant's `allowedSchedulingClasses`. Setting any other value is refused, and the pods of an application whose class is not, or no longer, in that list get the tenant's class. Empty means inherit from the tenant. | `string` | `""`  |
+

@@ -279,3 +279,24 @@ tests:
       - matchRegex:
           path: spec.template.spec.containers[0].args[0]
           pattern: 'brokerPool="b-[0-9a-f]{8}"'
+
+  # The pools are created by the hook, outside Flux, so they carry the
+  # HelmRelease labels themselves: the lineage walk needs them to resolve
+  # broker and controller pods to the Kafka application.
+  - it: labels both node pools with their HelmRelease
+    release:
+      name: test-kafka
+      namespace: tenant-test
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].args[0]
+          pattern: 'name: \$\{brokerPool\}\s+namespace: \$\{ns\}\s+labels:\s+strimzi\.io/cluster: \$\{name\}\s+app\.kubernetes\.io/managed-by: Helm\s+(#[^\n]*\s+)*helm\.toolkit\.fluxcd\.io/name: \$\{name\}\s+helm\.toolkit\.fluxcd\.io/namespace: \$\{ns\}\s+annotations:'
+        documentSelector:
+          path: kind
+          value: Job
+      - matchRegex:
+          path: spec.template.spec.containers[0].args[0]
+          pattern: 'name: [-a-z0-9]+\s+namespace: \$\{ns\}\s+labels:\s+strimzi\.io/cluster: \$\{name\}\s+app\.kubernetes\.io/managed-by: Helm\s+helm\.toolkit\.fluxcd\.io/name: \$\{name\}\s+helm\.toolkit\.fluxcd\.io/namespace: \$\{ns\}\s+annotations:\s+meta\.helm\.sh/release-name: \$\{name\}\s+meta\.helm\.sh/release-namespace: \$\{ns\}\s+# Controller node IDs'
+        documentSelector:
+          path: kind
+          value: Job
