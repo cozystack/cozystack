@@ -61,16 +61,18 @@ tests:
           path: spec.bucketAccessClassName
           value: tenant-root-public
 
-  - it: keeps the users' BucketAccesses next to the public one
+  - it: renders only the platform users' BucketAccesses next to the public one
     set:
       publicRead: true
       users:
         app: {}
         reader:
           readonly: true
+        system:
+          platform: true
     asserts:
       - hasDocuments:
-          count: 4
+          count: 3
 
   - it: refuses a user that would own the public BucketAccess name
     set:
