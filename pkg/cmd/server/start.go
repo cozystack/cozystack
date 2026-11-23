@@ -25,6 +25,7 @@ import (
 	"io"
 	"net"
 	"slices"
+	"strings"
 	"time"
 
 	v1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
@@ -44,6 +45,7 @@ import (
 	utilfeature "k8s.io/apiserver/pkg/util/feature"
 	basecompatibility "k8s.io/component-base/compatibility"
 	baseversion "k8s.io/component-base/version"
+	"k8s.io/kube-openapi/pkg/validation/spec"
 	netutils "k8s.io/utils/net"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	k8sconfig "sigs.k8s.io/controller-runtime/pkg/client/config"
@@ -276,10 +278,7 @@ func (o *CozyServerOptions) Complete() error {
 		delay = min(time.Duration(float64(delay)*1.5), maxDelay)
 	}
 
-	resourceConfig, err := resourceConfigFrom(crdList.Items, hrFlags)
-	if err != nil {
-		return err
-	}
+	resourceConfig, _ := resourceConfigFrom(crdList.Items, hrFlags)
 	o.ResourceConfig = resourceConfig
 
 	return nil
@@ -289,20 +288,29 @@ func (o *CozyServerOptions) Complete() error {
 // cozystack-api serves. A kind declared by more than one definition is
 // registered once, for the definition that owns it, rather than as two
 // resources for one GVK; the definitions left out are logged.
-func resourceConfigFrom(defs []v1alpha1.ApplicationDefinition, hrFlags helmReleaseFlagValues) (*config.ResourceConfig, error) {
+//
+// A definition that cannot be turned into a resource (an unparseable
+// release.cozystack.io/* annotation, an openAPISchema that is not valid JSON)
+// is left out and logged too, and returned in the error list. Failing startup
+// on it would let one definition take cozystack-api down for every tenant, and
+// definitions can come from a connected repository, not only from an operator.
+func resourceConfigFrom(defs []v1alpha1.ApplicationDefinition, hrFlags helmReleaseFlagValues) (*config.ResourceConfig, []error) {
 	owned, skipped := ownedDefinitions(defs)
 	for _, msg := range skipped {
 		fmt.Printf("Skipping %s\n", msg)
 	}
 	resourceConfig := &config.ResourceConfig{}
+	var invalid []error
 	for _, crd := range owned {
 		resource, err := buildResourceFromCRD(crd, hrFlags)
 		if err != nil {
-			return nil, err
+			fmt.Printf("Skipping invalid ApplicationDefinition %q: %v\n", crd.Name, err)
+			invalid = append(invalid, err)
+			continue
 		}
 		resourceConfig.Resources = append(resourceConfig.Resources, resource)
 	}
-	return resourceConfig, nil
+	return resourceConfig, invalid
 }
 
 // ownedDefinitions returns the definitions that own their application kind
@@ -362,10 +370,10 @@ func buildResourceFromCRD(crd v1alpha1.ApplicationDefinition, hrFlags helmReleas
 	// Kamaji-provisioned admin-kubeconfig Secret for Kubernetes tenants) need a
 	// longer wait budget than the Flux default. Consumed by the REST storage
 	// layer when building the HelmRelease Spec. The parser rejects
-	// units Flux would reject at webhook time, so a bad annotation
-	// surfaces as a loud startup failure instead of a silent drop to
-	// defaults. helm-install-timeout covers both install and upgrade;
-	// helm-upgrade-timeout overrides only the upgrade side for kinds
+	// units Flux would reject at webhook time, so a bad annotation leaves
+	// this kind out of cozystack-api (see resourceConfigFrom) instead of a
+	// silent drop to defaults. helm-install-timeout covers both install and
+	// upgrade; helm-upgrade-timeout overrides only the upgrade side for kinds
 	// that need an asymmetric budget.
 	installTimeout, err := config.ParseHelmTimeoutAnnotation(
 		crd.Annotations[config.HelmInstallTimeoutAnnotation],
@@ -408,6 +416,19 @@ func buildResourceFromCRD(crd v1alpha1.ApplicationDefinition, hrFlags helmReleas
 		)
 	}
 	release.HelmServerSideApply = serverSideApply
+
+	// The OpenAPI post-processors parse this schema for every served kind and
+	// fail the whole spec on one that does not parse, so reject it here, where
+	// only this definition is left out.
+	if raw := crd.Spec.Application.OpenAPISchema; strings.TrimSpace(raw) != "" {
+		var schema spec.Schema
+		if err := json.Unmarshal([]byte(raw), &schema); err != nil {
+			return config.Resource{}, fmt.Errorf(
+				"ApplicationDefinition %q has invalid spec.application.openAPISchema: %w",
+				crd.Name, err,
+			)
+		}
+	}
 	return config.Resource{
 		Application: config.ApplicationConfig{
 			Kind:          crd.Spec.Application.Kind,
