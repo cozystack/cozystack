@@ -16,6 +16,34 @@ tests:
           path: spec.csiController.podTemplate.spec.containers[0].image
           pattern: '^ghcr\.io/cozystack/cozystack/linstor-csi:[^@]+@sha256:[0-9a-f]{64}$'
 
+  - it: pins the NFS server's wait-node-online init container to the cozystack-built CSI image
+    template: templates/cluster.yaml
+    documentSelector:
+      path: kind
+      value: LinstorCluster
+    asserts:
+      - matchRegex:
+          path: spec.nfsServer.podTemplate.spec.initContainers[?(@.name=="linstor-wait-node-online")].image
+          pattern: '^ghcr\.io/cozystack/cozystack/linstor-csi:[^@]+@sha256:[0-9a-f]{64}$'
+      - equal:
+          path: spec.nfsServer.enabled
+          value: true
+
+  - it: the NFS server's wait-node-online init container follows linstorCSI.image
+    template: templates/cluster.yaml
+    documentSelector:
+      path: kind
+      value: LinstorCluster
+    set:
+      linstorCSI:
+        image:
+          repository: registry.example/linstor-csi
+          tag: v0.0.0-test
+    asserts:
+      - equal:
+          path: spec.nfsServer.podTemplate.spec.initContainers[?(@.name=="linstor-wait-node-online")].image
+          value: registry.example/linstor-csi:v0.0.0-test
+
   - it: pins the satellite to the cozystack-built piraeus-server image
     template: templates/satellites-cozy.yaml
     documentSelector:

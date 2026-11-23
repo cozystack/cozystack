@@ -27,13 +27,17 @@ spec:
     # bump it as a deliberate, separate change.
     image: redis:6.2.6-alpine
     replicas: 3
-    {{- /* Setting affinity would replace the operator's default per-node
-           anti-affinity, so the zone spread goes through
-           topologySpreadConstraints instead and the two add up. The selector
-           leaves out redisfailovers-role, which flips between master and
-           slave at runtime. */}}
+    {{- /* Hard per node, because the operator's default anti-affinity is only
+           a preference and a drain can leave two of three sentinels on one
+           node, below quorum once it goes. pod-template-hash keeps a rollout's
+           outgoing sentinels out of the count. Soft across zones on top, so a
+           cluster without zone labels still schedules. The selector leaves
+           out redisfailovers-role, which flips between master and slave at
+           runtime. */}}
+    {{- $nodeSpread := dict "maxSkew" 1 "topologyKey" "kubernetes.io/hostname" "whenUnsatisfiable" "DoNotSchedule" "nodeTaintsPolicy" "Ignore" }}
+    {{- $zoneSpread := dict "maxSkew" 1 "topologyKey" "topology.kubernetes.io/zone" "whenUnsatisfiable" "ScheduleAnyway" }}
     topologySpreadConstraints:
-    {{- include "harbor.topologySpreadConstraints" (list . (dict "app.kubernetes.io/name" (printf "%s-redis" .Values.harbor.fullnameOverride) "app.kubernetes.io/component" "sentinel")) | nindent 4 }}
+    {{- include "harbor.topologySpreadConstraints" (list . (dict "app.kubernetes.io/name" (printf "%s-redis" .Values.harbor.fullnameOverride) "app.kubernetes.io/component" "sentinel") (list (merge (dict "matchLabelKeys" (list "pod-template-hash")) $nodeSpread) $zoneSpread)) | nindent 4 }}
     resources:
       limits:
         cpu: 250m
@@ -46,10 +50,8 @@ spec:
     # Harbor's dump.rdb into a 7.x format a platform rollback can no longer load.
     image: redis:6.2.6-alpine
     replicas: {{ .Values.redis.replicas }}
-    {{- if gt (int .Values.redis.replicas) 1 }}
     topologySpreadConstraints:
-    {{- include "harbor.topologySpreadConstraints" (list . (dict "app.kubernetes.io/name" (printf "%s-redis" .Values.harbor.fullnameOverride) "app.kubernetes.io/component" "redis")) | nindent 4 }}
-    {{- end }}
+    {{- include "harbor.topologySpreadConstraints" (list . (dict "app.kubernetes.io/name" (printf "%s-redis" .Values.harbor.fullnameOverride) "app.kubernetes.io/component" "redis") (list $nodeSpread $zoneSpread)) | nindent 4 }}
     resources:
       limits:
         cpu: "1"

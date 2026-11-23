@@ -13,7 +13,7 @@ spec:
          instances off a shared node on a cluster that carries no zone labels. */}}
   {{- if gt (int .Values.db.replicas) 1 }}
   topologySpreadConstraints:
-  {{- include "harbor.topologySpreadConstraints" (list . (dict "cnpg.io/cluster" (printf "%s-db" .Values.harbor.fullnameOverride) "cnpg.io/podRole" "instance")) | nindent 2 }}
+  {{- include "harbor.topologySpreadConstraints" (list . (dict "cnpg.io/cluster" (printf "%s-db" .Values.harbor.fullnameOverride) "cnpg.io/podRole" "instance") (list (dict "maxSkew" 1 "topologyKey" "topology.kubernetes.io/zone" "whenUnsatisfiable" "ScheduleAnyway"))) | nindent 2 }}
   {{- end }}
   storage:
     size: {{ .Values.db.size }}
