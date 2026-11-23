@@ -39,7 +39,7 @@ type ConfigSpec struct {
 	// Valkey major version to deploy
 	// +kubebuilder:default:="v8"
 	Version Version `json:"version"`
-	// Enable password generation.
+	// Require a password. The password of the `default` user is issued through the credentials API, and issuing a new one takes effect without restarting anything. Replication, the Sentinels and the metrics exporter use an internal account of their own; backups use the `default` password.
 	// +kubebuilder:default:=true
 	AuthEnabled bool `json:"authEnabled"`
 	// Name of a SchedulingClass CR (cluster-scoped, group cozystack.io) used in place of the tenant's for this application's pods. A pod gets its class when it is created, so running pods keep theirs until they are recreated. Must be the tenant's own class or one listed in the tenant's `allowedSchedulingClasses`. Setting any other value is refused, and the pods of an application whose class is not, or no longer, in that list get the tenant's class. Empty means inherit from the tenant.

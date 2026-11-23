@@ -6,23 +6,7 @@
 {{-     fail (trim (printf "valkey: _cluster.scheduling.globalAppTopologySpreadConstraints must be YAML with a non-empty topologySpreadConstraints list. %s" (get $policy "Error"))) }}
 {{-   end }}
 {{- end }}
-{{- if .Values.authEnabled }}
-  {{- $existingPassword := lookup "v1" "Secret" .Release.Namespace (printf "%s-auth" .Release.Name) }}
-  {{- $password := randAlphaNum 32 | b64enc }}
-  {{- if $existingPassword }}
-    {{- $password = index $existingPassword.data "password" }}
-  {{- end }}
 ---
-apiVersion: v1
-kind: Secret
-metadata:
-  name: {{ .Release.Name }}-auth
-data:
-  password: {{ $password }}
-{{- end }}
-
----
-
 apiVersion: databases.spotahome.com/v1
 kind: RedisFailover
 metadata:
@@ -113,8 +97,13 @@ spec:
       - save ""
       {{- end }}
   {{- if .Values.authEnabled }}
+  {{- /* The account Secret of the default CredentialTemplate (credentials.yaml),
+         which cozystack-controller keeps and the credentials API rewrites on a
+         mint. The operator reads its password key on every reconcile and
+         applies a changed one to the running servers with CONFIG SET; nothing
+         else it runs authenticates with it. */}}
   auth:
-    secretPath: {{ .Release.Name }}-auth
+    secretPath: {{ printf "%s.default.account" .Release.Name }}
   {{- end }}
 
 ---
