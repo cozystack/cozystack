@@ -56,6 +56,8 @@ func TestControllerHashesValuesLikeTheGate(t *testing.T) {
 		`{"instanceType":"u1.small"}`,
 		`{"b":{"d":3,"c":2},"a":1}`,
 		`{"resources":{"cpu":2,"memory":"4Gi"},"disks":[{"name":"root"}]}`,
+		`{"n":9007199254740993}`,
+		`{"n":1e21}`,
 	} {
 		gate, err := valuesHash([]byte(values))
 		if err != nil {
