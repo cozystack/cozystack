@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"maps"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -14,6 +15,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -57,6 +59,27 @@ const (
 	// the backup Job was created. It is not proof of where the archive went:
 	// the sidecar uploads to the bucket it was last restarted with.
 	altinityUseSystemBucketKey = "altinity.strategy.backups.cozystack.io/use-system-bucket"
+
+	// altinityBucketKey records, on the backup Job and then on the Backup,
+	// the system bucket the projected credentials named when the backup Job
+	// was created: the bucket the sidecar of a system-bucket application
+	// reads, so the one its archive went to unless the sidecar had not been
+	// restarted onto it yet.
+	altinityBucketKey = "altinity.strategy.backups.cozystack.io/bucket"
+
+	altinityModeCleanup                   = "cleanup"
+	altinitySkipArtifactCleanupAnnotation = "backups.cozystack.io/skip-artifact-cleanup"
+
+	// The cleanup Job that failed is deleted to make room for the next one,
+	// so the count of failed attempts and the time the next may start are
+	// kept on the Backup.
+	altinityCleanupFailuresAnnotation   = "altinity.strategy.backups.cozystack.io/cleanup-failures"
+	altinityCleanupRetryAfterAnnotation = "altinity.strategy.backups.cozystack.io/cleanup-retry-after"
+
+	// altinityCleanupRetryBase is the wait after the first failed cleanup
+	// Job; it doubles with each further failure up to altinityCleanupRetryMax.
+	altinityCleanupRetryBase = 30 * time.Second
+	altinityCleanupRetryMax  = 30 * time.Minute
 
 	// altinityArchiveTimeLayout is the UTC timestamp that ends an archive
 	// name. It is fixed-width, so names sharing a prefix sort chronologically
@@ -386,6 +409,16 @@ func (r *BackupJobReconciler) reconcileAltinity(ctx context.Context, j *backupsv
 	if err != nil {
 		return r.markBackupJobFailed(ctx, j, fmt.Sprintf("failed to read spec.backup.useSystemBucket: %v", err))
 	}
+	jobAnnotations := map[string]string{altinityUseSystemBucketKey: fmt.Sprint(useSystemBucket)}
+	if useSystemBucket {
+		bucket, berr := altinitySystemBucket(ctx, r.Client, r.CredentialsConfig, j.Namespace)
+		if berr != nil {
+			return ctrl.Result{}, berr
+		}
+		if bucket != "" {
+			jobAnnotations[altinityBucketKey] = bucket
+		}
+	}
 
 	batchJob, err := r.ensureAltinityJob(ctx, j, j.Namespace, jobNameForBackupJob(j),
 		altinityModeBackup,
@@ -393,7 +426,7 @@ func (r *BackupJobReconciler) reconcileAltinity(ctx context.Context, j *backupsv
 			backupsv1alpha1.OwningJobNameLabel:      j.Name,
 			backupsv1alpha1.OwningJobNamespaceLabel: j.Namespace,
 		},
-		map[string]string{altinityUseSystemBucketKey: fmt.Sprint(useSystemBucket)},
+		jobAnnotations,
 		rendered,
 	)
 	if err != nil {
@@ -419,7 +452,7 @@ func (r *BackupJobReconciler) reconcileAltinity(ctx context.Context, j *backupsv
 		if !ok {
 			flow = fmt.Sprint(useSystemBucket)
 		}
-		artifact, err := r.createAltinityBackupArtifact(ctx, j, resolved, archive, flow)
+		artifact, err := r.createAltinityBackupArtifact(ctx, j, resolved, archive, flow, batchJob.Annotations[altinityBucketKey])
 		if err != nil {
 			return r.markBackupJobFailed(ctx, j, fmt.Sprintf("failed to create Backup artifact: %v", err))
 		}
@@ -588,12 +621,19 @@ func jobConditionState(j *batchv1.Job) batchv1.JobConditionType {
 // Used to surface the underlying clickhouse-backup error on the BackupJob
 // status without re-templating it.
 func jobFailureMessage(j *batchv1.Job) string {
-	for _, c := range j.Status.Conditions {
-		if c.Type == batchv1.JobFailed && c.Status == corev1.ConditionTrue {
-			return c.Message
-		}
+	if c := jobFailedCondition(j); c != nil {
+		return c.Message
 	}
 	return ""
+}
+
+func jobFailedCondition(j *batchv1.Job) *batchv1.JobCondition {
+	for i := range j.Status.Conditions {
+		if c := &j.Status.Conditions[i]; c.Type == batchv1.JobFailed && c.Status == corev1.ConditionTrue {
+			return c
+		}
+	}
+	return nil
 }
 
 // createAltinityBackupArtifact materialises a Cozystack Backup carrying the
@@ -605,11 +645,14 @@ func (r *BackupJobReconciler) createAltinityBackupArtifact(
 	ctx context.Context,
 	j *backupsv1alpha1.BackupJob,
 	resolved *ResolvedBackupConfig,
-	archive, useSystemBucket string,
+	archive, useSystemBucket, bucket string,
 ) (*backupsv1alpha1.Backup, error) {
 	driverMD := map[string]string{altinityUseSystemBucketKey: useSystemBucket}
 	if archive != "" {
 		driverMD[altinityArchiveMetaKey] = archive
+	}
+	if bucket != "" {
+		driverMD[altinityBucketKey] = bucket
 	}
 	for k, v := range resolved.Parameters {
 		driverMD[altinityParamPrefix+k] = v
@@ -619,6 +662,10 @@ func (r *BackupJobReconciler) createAltinityBackupArtifact(
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      j.Name,
 			Namespace: j.Namespace,
+			// The archive is deleted from the finalizer; without it at creation,
+			// a Backup deleted before the Backup reconciler first sees it goes
+			// at once and leaves its archive in the bucket.
+			Finalizers: []string{backupFinalizer},
 		},
 		Spec: backupsv1alpha1.BackupSpec{
 			ApplicationRef: j.Spec.ApplicationRef,
@@ -633,14 +680,8 @@ func (r *BackupJobReconciler) createAltinityBackupArtifact(
 	if j.Spec.PlanRef != nil {
 		backup.Spec.PlanRef = j.Spec.PlanRef
 	}
-	// Status fields set on the struct above are dropped server-side because
-	// Backup has the status subresource, but populating them here keeps the
-	// struct in step with what an out-of-band reconciler will fill in (the
-	// owning BackupReconciler watches Backup and is the natural place to
-	// promote phase=Ready). Mirrors the CNPG/Velero pattern - issuing a
-	// follow-up Status().Patch from this driver races with that reconciler
-	// adding the cleanup finalizer and surfaces as a "not found" 404 even
-	// though the Backup is on disk in Ready state.
+	// Status fields set on the struct above are dropped server-side, because
+	// Backup has the status subresource.
 	if err := r.Create(ctx, backup); err != nil {
 		if !apierrors.IsAlreadyExists(err) {
 			return nil, err
@@ -875,5 +916,475 @@ func (r *RestoreJobReconciler) reconcileAltinityRestore(ctx context.Context, res
 			}
 		}
 		return ctrl.Result{RequeueAfter: altinityPollInterval}, nil
+	}
+}
+
+// altinityArchiveNamePattern keeps the recorded archive name a single URL
+// path segment; the name is interpolated into the sidecar's delete route.
+var altinityArchiveNamePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
+
+// altinityArchiveNamedBeforeUIDs matches a name ending in its start time, as a
+// controller that did not append the BackupJob's UID gave it. Two runs of one
+// application started in the same second got that name, and a run still in
+// flight across the upgrade may yet record it, so no Backup can tell that the
+// archive is its alone.
+var altinityArchiveNamedBeforeUIDs = regexp.MustCompile(`-[0-9]{8}T[0-9]{6}Z$`)
+
+// altinityCleanupScript deletes one remote archive through the
+// clickhouse-backup sidecar (POST /backup/delete/{where}/{name} in 2.7.x).
+// The sidecar answers 423 while any other operation runs, a backup of the
+// same application included, and cannot be reached at all while its Pod
+// restarts, so the delete is retried until it is answered and accepted within
+// a budget kept shorter than the Job's activeDeadlineSeconds. It
+// answers 500 with "is not found on remote storage" for an archive that is
+// already gone, which is the outcome cleanup wants; every other non-200
+// answer (a ClickHouse or S3 error) fails the Pod so the controller retries.
+const altinityCleanupScript = `set -eu
+deadline=$(( $(date +%s) + 540 ))
+while :; do
+  left=$(( deadline - $(date +%s) ))
+  if [ "${left}" -le 0 ]; then
+    echo "delete ${ARCHIVE_NAME} not run: the sidecar stayed busy with another operation or unreachable" >&2
+    exit 1
+  fi
+  if resp=$(curl -sS --max-time "${left}" -u "${API_USERNAME}:${API_PASSWORD}" -w '\n%{http_code}' -X POST "http://${API_HOST}:7171/backup/delete/remote/${ARCHIVE_NAME}"); then
+    code=$(printf '%s' "${resp}" | tail -n 1)
+    [ "${code}" = "423" ] || break
+  fi
+  sleep 5
+done
+body=$(printf '%s' "${resp}" | sed '$d')
+if [ "${code}" = "200" ]; then
+  echo "deleted ${ARCHIVE_NAME}"
+  exit 0
+fi
+case "${body}" in
+  *"is not found on remote storage"*)
+    echo "${ARCHIVE_NAME} is already absent"
+    exit 0
+    ;;
+esac
+echo "delete ${ARCHIVE_NAME} failed: HTTP ${code}: ${body}" >&2
+exit 1
+`
+
+// cleanupAltinityBackup deletes the remote archive of a system-bucket Backup
+// and holds the Backup until the delete finished. Nothing else prunes that
+// bucket, so a Backup removed without this leaks its archive for good. An
+// application on its own bucket keeps the archive's lifecycle, the same split
+// as the MongoDB driver. The delete runs through the application's sidecar,
+// so it needs the application; when the application or the namespace is
+// gone, the Backup is released with a Warning Event naming the archive left.
+//
+// The cleanup Pod is built here, not rendered from the strategy template: the
+// shipped and the example templates run restore_remote for every mode other
+// than backup, so a template rendered in a delete mode would overwrite live
+// data. Only the strategy container's image, how to pull it, and where the
+// strategy's Pods may be scheduled are taken from the template, rendered as
+// for the strategy's own Pods.
+func (r *BackupReconciler) cleanupAltinityBackup(ctx context.Context, backup *backupsv1alpha1.Backup) (ctrl.Result, error) {
+	logger := getLogger(ctx)
+	jobKey := types.NamespacedName{Namespace: backup.Namespace, Name: backup.Name + "-cleanup"}
+
+	if backup.Annotations[altinitySkipArtifactCleanupAnnotation] == "true" {
+		existing := &batchv1.Job{}
+		err := r.Get(ctx, jobKey, existing)
+		switch {
+		case err == nil:
+			if !isAltinityCleanupJob(existing) {
+				break
+			}
+			if derr := r.deleteAltinityCleanupJob(ctx, existing); derr != nil {
+				return ctrl.Result{}, derr
+			}
+		case !apierrors.IsNotFound(err):
+			return ctrl.Result{}, err
+		}
+		logger.Debug("skipping Altinity archive cleanup per annotation", "backup", backup.Name)
+		return ctrl.Result{}, nil
+	}
+
+	archive := backup.Spec.DriverMetadata[altinityArchiveMetaKey]
+	if archive == "" || backup.Spec.DriverMetadata[altinityUseSystemBucketKey] != "true" {
+		return ctrl.Result{}, nil
+	}
+	if !altinityArchiveNamePattern.MatchString(archive) {
+		return r.releaseAltinityCleanup(ctx, backup, archive, "the recorded archive name is not a valid archive name"), nil
+	}
+
+	job := &batchv1.Job{}
+	err := r.Get(ctx, jobKey, job)
+	switch {
+	case apierrors.IsNotFound(err):
+		terminating, nsErr := r.namespaceTerminating(ctx, backup.Namespace)
+		if nsErr != nil {
+			return ctrl.Result{}, nsErr
+		}
+		if terminating {
+			return r.releaseAltinityCleanup(ctx, backup, archive, "namespace is terminating"), nil
+		}
+		strategy := &strategyv1alpha1.Altinity{}
+		if err := r.Get(ctx, client.ObjectKey{Name: backup.Spec.StrategyRef.Name}, strategy); err != nil {
+			if apierrors.IsNotFound(err) {
+				return r.releaseAltinityCleanup(ctx, backup, archive, "strategy CR is gone"), nil
+			}
+			return ctrl.Result{}, err
+		}
+		containers := strategy.Spec.Template.Spec.Containers
+		if len(containers) == 0 || containers[0].Image == "" {
+			return r.releaseAltinityCleanup(ctx, backup, archive, "strategy template has no container image"), nil
+		}
+		if altinityArchiveNamedBeforeUIDs.MatchString(archive) {
+			return r.releaseAltinityCleanup(ctx, backup, archive,
+				"the archive is named without its BackupJob's UID, so another run started in the same second may have written or still be writing it"), nil
+		}
+		// The delete goes through the application's current sidecar. One that
+		// has since moved to its own bucket reports the archive as not found
+		// there, which the script would take for a completed delete.
+		app, onSystemBucket, found, aerr := r.altinityAppOnSystemBucket(ctx, backup)
+		if aerr != nil {
+			return ctrl.Result{}, aerr
+		}
+		if !found {
+			return r.releaseAltinityCleanup(ctx, backup, archive, "the ClickHouse application is gone"), nil
+		}
+		if !onSystemBucket {
+			return r.releaseAltinityCleanup(ctx, backup, archive, "the ClickHouse application no longer uses the system bucket"), nil
+		}
+		if recorded, current, changed, berr := r.altinityBucketChange(ctx, backup); berr != nil {
+			return ctrl.Result{}, berr
+		} else if changed {
+			return r.releaseAltinityCleanup(ctx, backup, archive,
+				fmt.Sprintf("the archive was written to bucket %s, but the system bucket is now %s", recorded, altinityBucketName(current))), nil
+		}
+		release := backup.Spec.ApplicationRef.Name
+		authSecret := "clickhouse-" + release + "-backup-api-auth"
+		if serr := r.Get(ctx, types.NamespacedName{Namespace: backup.Namespace, Name: authSecret}, &corev1.Secret{}); serr != nil {
+			if apierrors.IsNotFound(serr) {
+				return r.releaseAltinityCleanup(ctx, backup, archive,
+					fmt.Sprintf("Secret %s is gone, so the application's backup sidecar cannot be called", authSecret)), nil
+			}
+			return ctrl.Result{}, serr
+		}
+		if wait := altinityCleanupRetryWait(ctx, backup, time.Now()); wait > 0 {
+			return ctrl.Result{RequeueAfter: wait}, nil
+		}
+		// A sidecar that has not taken up the projected credentials yet still
+		// serves the bucket before them and answers "not found" there.
+		wait, werr := credentialsPropagationWait(ctx, r.Client, r.CredentialsConfig.TargetSecretName, backup.Namespace, jobKey.Name)
+		if werr != nil {
+			return ctrl.Result{}, werr
+		}
+		if wait > 0 {
+			logger.Debug("holding the Altinity archive delete until the projected credentials reach the sidecar", "backup", backup.Name, "wait", wait)
+			return ctrl.Result{RequeueAfter: wait}, nil
+		}
+		// Rendered as for the strategy's own Pods, so the settings taken from
+		// it reach the cleanup Pod resolved.
+		rendered, rerr := renderAltinityTemplate(strategy.Spec.Template, app.Object, release, backup.Namespace,
+			altinityModeCleanup, archive, backupParameters(backup), backup)
+		if rerr != nil {
+			return r.releaseAltinityCleanup(ctx, backup, archive, fmt.Sprintf("cannot render the strategy template: %v", rerr)), nil
+		}
+		desired := buildAltinityCleanupJob(jobKey.Namespace, jobKey.Name, rendered.Spec.Containers[0],
+			rendered.Spec,
+			fmt.Sprintf("chi-clickhouse-%s-clickhouse-0-0.%s.svc", release, backup.Namespace), authSecret, archive)
+		if cerr := r.Create(ctx, desired); cerr != nil && !apierrors.IsAlreadyExists(cerr) {
+			// ResourceQuota also returns Forbidden. Once a Job slot frees up the same cleanup can run.
+			if apierrors.IsForbidden(cerr) && strings.Contains(cerr.Error(), "exceeded quota: ") {
+				return ctrl.Result{}, cerr
+			}
+			if apierrors.IsForbidden(cerr) || apierrors.IsInvalid(cerr) {
+				return r.releaseAltinityCleanup(ctx, backup, archive, fmt.Sprintf("cannot create cleanup Job: %v", cerr)), nil
+			}
+			return ctrl.Result{}, cerr
+		}
+		return ctrl.Result{RequeueAfter: altinityPollInterval}, nil
+	case err != nil:
+		return ctrl.Result{}, err
+	}
+
+	if !isAltinityCleanupJob(job) {
+		return r.releaseAltinityCleanup(ctx, backup, archive,
+			fmt.Sprintf("Job %s, which this controller did not create, holds the cleanup Job name", job.Name)), nil
+	}
+	if !job.DeletionTimestamp.IsZero() {
+		return ctrl.Result{RequeueAfter: altinityPollInterval}, nil
+	}
+	if altinityCleanupJobArchive(job) != archive {
+		// Left by an earlier Backup of the same name that was released while
+		// its Job ran; its outcome is about another archive.
+		if derr := r.deleteAltinityCleanupJob(ctx, job); derr != nil {
+			return ctrl.Result{}, derr
+		}
+		return ctrl.Result{RequeueAfter: altinityPollInterval}, nil
+	}
+	switch jobConditionState(job) {
+	case batchv1.JobComplete:
+		_, onSystemBucket, found, aerr := r.altinityAppOnSystemBucket(ctx, backup)
+		if aerr != nil {
+			return ctrl.Result{}, aerr
+		}
+		recorded, current, bucketChanged, berr := r.altinityBucketChange(ctx, backup)
+		if berr != nil {
+			return ctrl.Result{}, berr
+		}
+		if derr := r.deleteAltinityCleanupJob(ctx, job); derr != nil {
+			return ctrl.Result{}, derr
+		}
+		if found && !onSystemBucket {
+			return r.releaseAltinityCleanup(ctx, backup, archive,
+				"the ClickHouse application moved to its own bucket while the delete ran, so the archive may remain"), nil
+		}
+		if bucketChanged {
+			return r.releaseAltinityCleanup(ctx, backup, archive,
+				fmt.Sprintf("the system bucket changed from %s to %s while the delete ran, so the archive may remain", recorded, altinityBucketName(current))), nil
+		}
+		logger.Debug("Altinity archive deleted", "backup", backup.Name, "archive", archive)
+		return ctrl.Result{}, nil
+	case batchv1.JobFailed:
+		failures := altinityCleanupFailures(ctx, backup) + 1
+		delay := altinityCleanupRetryDelay(failures)
+		logger.Debug("Altinity cleanup Job failed; retrying", "backup", backup.Name, "job", job.Name, "failures", failures, "delay", delay)
+		// The Job and its Pod log go with the delete below, so the Event
+		// keeps the only account of why the attempt failed.
+		if c := jobFailedCondition(job); r.Recorder != nil && c != nil {
+			r.Recorder.Eventf(backup, corev1.EventTypeWarning, "ArtifactCleanupFailed",
+				"cleanup Job %s did not delete archive %s (%s: %s); retrying in %s", job.Name, archive, c.Reason, c.Message, delay)
+		}
+		// Recorded before the Job goes: should the delete below fail, the next
+		// reconcile counts this failure again and waits longer, rather than
+		// starting the next Job at once.
+		base := backup.DeepCopy()
+		if backup.Annotations == nil {
+			backup.Annotations = map[string]string{}
+		}
+		backup.Annotations[altinityCleanupFailuresAnnotation] = strconv.Itoa(failures)
+		backup.Annotations[altinityCleanupRetryAfterAnnotation] = time.Now().Add(delay).UTC().Format(time.RFC3339)
+		if perr := r.Patch(ctx, backup, client.MergeFrom(base)); perr != nil {
+			return ctrl.Result{}, perr
+		}
+		if derr := r.deleteAltinityCleanupJob(ctx, job); derr != nil {
+			return ctrl.Result{}, derr
+		}
+		return ctrl.Result{RequeueAfter: delay}, nil
+	default:
+		return ctrl.Result{RequeueAfter: altinityPollInterval}, nil
+	}
+}
+
+// altinityAppOnSystemBucket reads the flag live rather than from the Backup:
+// the delete goes through the sidecar the application runs now, and that
+// sidecar answers for the bucket it was started on. The application is
+// returned too, for rendering the strategy template against it.
+func (r *BackupReconciler) altinityAppOnSystemBucket(ctx context.Context, backup *backupsv1alpha1.Backup) (app *unstructured.Unstructured, onSystemBucket, found bool, err error) {
+	group := backupsv1alpha1.DefaultApplicationAPIGroup
+	if ref := backup.Spec.ApplicationRef; ref.APIGroup != nil && *ref.APIGroup != "" {
+		group = *ref.APIGroup
+	}
+	mapping, err := r.RESTMapper().RESTMapping(schema.GroupKind{Group: group, Kind: backup.Spec.ApplicationRef.Kind})
+	if err != nil {
+		if apimeta.IsNoMatchError(err) {
+			return nil, false, false, nil
+		}
+		return nil, false, false, err
+	}
+	app = &unstructured.Unstructured{}
+	app.SetGroupVersionKind(mapping.GroupVersionKind)
+	if err := r.Get(ctx, types.NamespacedName{Namespace: backup.Namespace, Name: backup.Spec.ApplicationRef.Name}, app); err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil, false, false, nil
+		}
+		return nil, false, false, err
+	}
+	v, _, err := unstructured.NestedBool(app.Object, "spec", "backup", "useSystemBucket")
+	if err != nil {
+		return app, false, true, fmt.Errorf("read spec.backup.useSystemBucket: %w", err)
+	}
+	return app, v, true, nil
+}
+
+// altinitySystemBucket reads the bucket the projected credentials name in the
+// namespace, the one the sidecar of a system-bucket application reads. It is
+// empty when no credentials are projected there or they name no bucket.
+func altinitySystemBucket(ctx context.Context, c client.Client, cfg BackupCredentialsConfig, namespace string) (string, error) {
+	if !cfg.IsEnabled() {
+		return "", nil
+	}
+	secret := &corev1.Secret{}
+	if err := c.Get(ctx, types.NamespacedName{Namespace: namespace, Name: cfg.TargetSecretName}, secret); err != nil {
+		if apierrors.IsNotFound(err) {
+			return "", nil
+		}
+		return "", err
+	}
+	return string(secret.Data["bucketName"]), nil
+}
+
+// altinityBucketChange compares the bucket a Backup records with the one the
+// projected credentials name now. A Backup that records none, taken before
+// buckets were recorded, reports no change.
+func (r *BackupReconciler) altinityBucketChange(ctx context.Context, backup *backupsv1alpha1.Backup) (recorded, current string, changed bool, err error) {
+	recorded = backup.Spec.DriverMetadata[altinityBucketKey]
+	if recorded == "" {
+		return "", "", false, nil
+	}
+	current, err = altinitySystemBucket(ctx, r.Client, r.CredentialsConfig, backup.Namespace)
+	if err != nil {
+		return "", "", false, err
+	}
+	return recorded, current, current != recorded, nil
+}
+
+func altinityBucketName(bucket string) string {
+	if bucket == "" {
+		return "unknown, as the projected credentials name none"
+	}
+	return bucket
+}
+
+// altinityCleanupFailures reads how many cleanup Jobs of the Backup have
+// failed. An unreadable count is logged and read as none, so the wait starts
+// over rather than the cleanup stopping.
+func altinityCleanupFailures(ctx context.Context, backup *backupsv1alpha1.Backup) int {
+	v, ok := backup.Annotations[altinityCleanupFailuresAnnotation]
+	if !ok {
+		return 0
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil || n < 0 {
+		getLogger(ctx).Info("ignoring an unreadable cleanup failure count", "backup", backup.Name, "value", v)
+		return 0
+	}
+	return n
+}
+
+// altinityCleanupRetryDelay is the wait after the given number of failed
+// cleanup Jobs: altinityCleanupRetryBase, doubled with each further failure,
+// at most altinityCleanupRetryMax.
+func altinityCleanupRetryDelay(failures int) time.Duration {
+	d := altinityCleanupRetryBase
+	for i := 1; i < failures && d < altinityCleanupRetryMax; i++ {
+		d *= 2
+	}
+	return min(d, altinityCleanupRetryMax)
+}
+
+// altinityCleanupRetryWait is how long the next cleanup Job still has to wait
+// after the last failure. An unreadable time is logged and waits for nothing,
+// so the cleanup goes on.
+func altinityCleanupRetryWait(ctx context.Context, backup *backupsv1alpha1.Backup, now time.Time) time.Duration {
+	v, ok := backup.Annotations[altinityCleanupRetryAfterAnnotation]
+	if !ok {
+		return 0
+	}
+	at, err := time.Parse(time.RFC3339, v)
+	if err != nil {
+		getLogger(ctx).Info("ignoring an unreadable cleanup retry time", "backup", backup.Name, "value", v)
+		return 0
+	}
+	if at.After(now.Add(altinityCleanupRetryMax)) {
+		getLogger(ctx).Info("ignoring a cleanup retry time further ahead than any failure sets", "backup", backup.Name, "value", v)
+		return 0
+	}
+	return at.Sub(now)
+}
+
+// isAltinityCleanupJob tells a cleanup Job this controller created from
+// another Job of the same name, such as the ClickHouse chart's own
+// <release>-cleanup hook.
+func isAltinityCleanupJob(job *batchv1.Job) bool {
+	return job.Labels[altinityLabelMode] == altinityModeCleanup
+}
+
+func altinityCleanupJobArchive(job *batchv1.Job) string {
+	for _, c := range job.Spec.Template.Spec.Containers {
+		for _, e := range c.Env {
+			if e.Name == "ARCHIVE_NAME" {
+				return e.Value
+			}
+		}
+	}
+	return ""
+}
+
+func (r *BackupReconciler) deleteAltinityCleanupJob(ctx context.Context, job *batchv1.Job) error {
+	policy := metav1.DeletePropagationBackground
+	return client.IgnoreNotFound(r.Delete(ctx, job, &client.DeleteOptions{PropagationPolicy: &policy}))
+}
+
+// releaseAltinityCleanup gives up deleting the archive and lets the Backup be
+// removed, with a Warning Event naming the archive left in the bucket.
+func (r *BackupReconciler) releaseAltinityCleanup(ctx context.Context, backup *backupsv1alpha1.Backup, archive, reason string) ctrl.Result {
+	getLogger(ctx).Info("releasing Backup without deleting its archive", "backup", backup.Name, "archive", archive, "reason", reason)
+	if r.Recorder != nil {
+		r.Recorder.Eventf(backup, corev1.EventTypeWarning, "ArtifactNotDeleted", "left archive %s in the bucket: %s", archive, reason)
+	}
+	return ctrl.Result{}
+}
+
+// buildAltinityCleanupJob is ownerless because cleanupAltinityBackup manages
+// its lifecycle and it must outlive the Backup being deleted;
+// activeDeadlineSeconds and the TTL are backstops if the controller stops
+// mid-wait. It runs the strategy container's image with that image's pull
+// settings, since only those are known to fetch it, and is placed as the
+// strategy's own Pods are. The strategy's service account is left out: the
+// cleanup Pod only calls the sidecar's HTTP API.
+func buildAltinityCleanupJob(namespace, name string, strategyContainer corev1.Container, strategyPod corev1.PodSpec, apiHost, authSecret, archive string) *batchv1.Job {
+	labels := map[string]string{altinityLabelMode: altinityModeCleanup}
+	backoffLimit := int32(1)
+	activeDeadline := int64(600)
+	ttl := int32(300)
+	authEnv := func(envName, key string) corev1.EnvVar {
+		return corev1.EnvVar{Name: envName, ValueFrom: &corev1.EnvVarSource{SecretKeyRef: &corev1.SecretKeySelector{
+			LocalObjectReference: corev1.LocalObjectReference{Name: authSecret},
+			Key:                  key,
+		}}}
+	}
+	return &batchv1.Job{
+		ObjectMeta: metav1.ObjectMeta{Namespace: namespace, Name: name, Labels: labels},
+		Spec: batchv1.JobSpec{
+			BackoffLimit:            &backoffLimit,
+			ActiveDeadlineSeconds:   &activeDeadline,
+			TTLSecondsAfterFinished: &ttl,
+			Template: corev1.PodTemplateSpec{
+				ObjectMeta: metav1.ObjectMeta{Labels: labels},
+				Spec: corev1.PodSpec{
+					RestartPolicy:     corev1.RestartPolicyNever,
+					ImagePullSecrets:  strategyPod.ImagePullSecrets,
+					NodeSelector:      strategyPod.NodeSelector,
+					Tolerations:       strategyPod.Tolerations,
+					Affinity:          strategyPod.Affinity,
+					PriorityClassName: strategyPod.PriorityClassName,
+					Containers: []corev1.Container{{
+						Name:            "ch-backup-cleanup",
+						Image:           strategyContainer.Image,
+						ImagePullPolicy: strategyContainer.ImagePullPolicy,
+						Command:         []string{"/bin/sh", "-c", altinityCleanupScript},
+						Env: []corev1.EnvVar{
+							{Name: "API_HOST", Value: apiHost},
+							{Name: "ARCHIVE_NAME", Value: archive},
+							authEnv("API_USERNAME", "username"),
+							authEnv("API_PASSWORD", "password"),
+						},
+						Resources: corev1.ResourceRequirements{
+							Requests: corev1.ResourceList{
+								corev1.ResourceCPU:    resource.MustParse("10m"),
+								corev1.ResourceMemory: resource.MustParse("32Mi"),
+							},
+							Limits: corev1.ResourceList{
+								corev1.ResourceCPU:    resource.MustParse("200m"),
+								corev1.ResourceMemory: resource.MustParse("128Mi"),
+							},
+						},
+						SecurityContext: &corev1.SecurityContext{
+							AllowPrivilegeEscalation: new(false),
+							Capabilities:             &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}},
+							SeccompProfile:           &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault},
+						},
+					}},
+				},
+			},
+		},
 	}
 }
