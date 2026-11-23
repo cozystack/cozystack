@@ -342,7 +342,17 @@ spec:
       that bypass schema validation. helm-unittest cannot reach it, since the schema
       rejects first, so hack/check-postgres-preload-allowlist.bats pins it instead.
     */ -}}
-    {{- with .Values.postgresql.sharedPreloadLibraries }}
+    {{- /*
+      audit.enabled loads pgaudit through the same allowlist the explicit list
+      uses, so the audit trail is on without the tenant hand-editing the preload
+      list. The class set and connection-logging parameters are seeded below.
+    */ -}}
+    {{- $auditEnabled := and .Values.audit .Values.audit.enabled }}
+    {{- $preload := default (list) .Values.postgresql.sharedPreloadLibraries }}
+    {{- if and $auditEnabled (not (has "pgaudit" $preload)) }}
+    {{- $preload = append $preload "pgaudit" }}
+    {{- end }}
+    {{- with $preload }}
     {{- $allowedPreload := list "pg_stat_statements" "auto_explain" "pgaudit" "pg_prewarm" }}
     shared_preload_libraries:
       {{- range . }}
@@ -354,6 +364,16 @@ spec:
     {{- end }}
     parameters:
       {{- $defaults := dict "max_wal_senders" "30" }}
+      {{- /*
+        Audit defaults seed pgaudit.log and connection logging. They go into
+        $defaults, so an explicit pgaudit.log/log_connections in
+        postgresql.parameters still takes precedence through the merge below.
+      */}}
+      {{- if $auditEnabled }}
+      {{- $_ := set $defaults "pgaudit.log" (default "write, ddl, role" .Values.audit.log) }}
+      {{- $_ := set $defaults "log_connections" "on" }}
+      {{- $_ := set $defaults "log_disconnections" "on" }}
+      {{- end }}
       {{- /*
         PostgreSQL sizes shared_buffers at 128MB whatever the container gets.
         The pool is shared memory, which the kernel cannot reclaim without
