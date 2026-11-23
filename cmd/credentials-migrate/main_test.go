@@ -10,6 +10,7 @@ import (
 	"time"
 
 	helmv2 "github.com/fluxcd/helm-controller/api/v2"
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	apiextv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -41,6 +42,9 @@ func newMigratorWith(t *testing.T, funcs *interceptor.Funcs, objs ...client.Obje
 	if err := helmv2.AddToScheme(scheme); err != nil {
 		t.Fatal(err)
 	}
+	if err := appsv1.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
 	b := fake.NewClientBuilder().WithScheme(scheme).WithObjects(objs...).WithStatusSubresource(&helmv2.HelmRelease{})
 	if funcs != nil {
 		b = b.WithInterceptorFuncs(*funcs)
@@ -49,7 +53,7 @@ func newMigratorWith(t *testing.T, funcs *interceptor.Funcs, objs ...client.Obje
 	o := &options{
 		migration: 64, kind: "Postgres", formatName: format.ScramSHA256, accountsPath: "users",
 		labels: labelFlags{"cnpg.io/reload": "true"}, sourceSuffix: "-credentials",
-		stateNamespace: "cozy-system", actor: "migration", timeout: -time.Second,
+		stateNamespace: "cozy-system", actor: "migration", timeout: -time.Second, holdTimeout: -time.Second,
 	}
 	return &migrator{c: c, o: o, now: func() time.Time { return time.Date(2026, 10, 14, 12, 0, 0, 0, time.UTC) }}
 }

@@ -23,6 +23,7 @@ import (
 
 	helmv2 "github.com/fluxcd/helm-controller/api/v2"
 	fluxmeta "github.com/fluxcd/pkg/apis/meta"
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -85,6 +86,8 @@ type options struct {
 	stateNamespace string
 	actor          string
 	timeout        time.Duration
+	holdRollouts   stringFlags
+	holdTimeout    time.Duration
 }
 
 type labelFlags map[string]string
@@ -116,6 +119,9 @@ type state struct {
 	// Skipped maps namespace/name to the reason and time it was left out on
 	// the last run. A release leaves the map once a later run finishes it.
 	Skipped map[string]string `json:"skipped,omitempty"`
+	// Rollouts maps namespace/name of each Deployment the held releases wait
+	// for to the images it ran when the hook recorded it.
+	Rollouts map[string]string `json:"rollouts,omitempty"`
 }
 
 type releaseState struct {
@@ -153,6 +159,8 @@ func run(args []string) error {
 	fs.StringVar(&o.stateNamespace, "state-namespace", "cozy-system", "namespace of the state ConfigMap")
 	fs.StringVar(&o.actor, "actor", envOr("CREDENTIALS_MIGRATE_ACTOR", defaultActor), "who the record names for the migrated password")
 	fs.DurationVar(&o.timeout, "timeout", 10*time.Minute, "finish: how long to wait per release for the switched chart to be Ready")
+	fs.Var(&o.holdRollouts, "hold-until-rollout", "seed: Deployment, namespace/name, whose new revision the converted chart needs; the hook suspends every release of the kind and the finish Job resumes them once each such Deployment runs images other than the ones recorded now; repeatable")
+	fs.DurationVar(&o.holdTimeout, "hold-timeout", time.Hour, "finish: how long to wait for the --hold-until-rollout Deployments before reporting the held releases left out")
 	if err := fs.Parse(args[1:]); err != nil {
 		return err
 	}
@@ -164,12 +172,20 @@ func run(args []string) error {
 			return fmt.Errorf("--rotate-key %q is not a --platform-key, and finish would delete it from the source Secret", k)
 		}
 	}
+	for _, d := range o.holdRollouts {
+		if _, err := parseObjectKey(d); err != nil {
+			return fmt.Errorf("--hold-until-rollout: %w", err)
+		}
+	}
 
 	scheme := runtime.NewScheme()
 	if err := corev1.AddToScheme(scheme); err != nil {
 		return err
 	}
 	if err := helmv2.AddToScheme(scheme); err != nil {
+		return err
+	}
+	if err := appsv1.AddToScheme(scheme); err != nil {
 		return err
 	}
 	c, err := client.New(ctrl.GetConfigOrDie(), client.Options{Scheme: scheme})
@@ -214,6 +230,16 @@ func (m *migrator) seed(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	if len(releases) > 0 {
+		// Saved before any release is held, so the finish Job always knows
+		// what it waits for before it resumes them.
+		if err := m.recordRollouts(ctx, st); err != nil {
+			return err
+		}
+		if err := m.saveState(ctx, st); err != nil {
+			return err
+		}
+	}
 	for i := range releases {
 		hr := &releases[i]
 		key := hr.Namespace + "/" + hr.Name
@@ -230,10 +256,13 @@ func (m *migrator) seed(ctx context.Context) error {
 				return fmt.Errorf("%s: %w", key, err)
 			}
 			m.skip(ctx, st, hr, err)
-			continue
+		} else {
+			delete(st.Skipped, key)
+			fmt.Printf("%s: recorded chart version %q\n", key, rec.ChartVersion)
 		}
-		delete(st.Skipped, key)
-		fmt.Printf("%s: recorded chart version %q\n", key, rec.ChartVersion)
+		if err := m.hold(ctx, hr); err != nil {
+			return errors.Join(fmt.Errorf("%s: %w", key, err), m.saveState(ctx, st))
+		}
 	}
 	return m.saveState(ctx, st)
 }
@@ -243,6 +272,9 @@ func (m *migrator) seed(ctx context.Context) error {
 func (m *migrator) finish(ctx context.Context) error {
 	st, err := m.loadState(ctx)
 	if err != nil {
+		return err
+	}
+	if err := m.releaseHolds(ctx, st); err != nil {
 		return err
 	}
 	keys := make([]string, 0, len(st.Releases))
