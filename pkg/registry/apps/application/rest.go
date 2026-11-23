@@ -285,8 +285,12 @@ func (r *REST) Create(ctx context.Context, obj runtime.Object, createValidation 
 		klog.Errorf("Failed to create HelmRelease %s: %v", helmRelease.Name, err)
 		return nil, registry.WrapPreservingStatus("failed to create HelmRelease", err, r.gvr.GroupResource(), app.Name)
 	}
-	adm.settle(r.c, client.ObjectKeyFromObject(helmRelease))
-	tenantAdm.settle(r.c, client.ObjectKeyFromObject(helmRelease))
+	// A dry run stores nothing, so there is no write for the cache to show,
+	// and waiting for one would leave it owed to the pool for good.
+	if options == nil || len(options.DryRun) == 0 {
+		adm.settle(r.c, client.ObjectKeyFromObject(helmRelease))
+		tenantAdm.settle(r.c, client.ObjectKeyFromObject(helmRelease))
+	}
 
 	// Convert the created HelmRelease back to Application
 	convertedApp, err := r.ConvertHelmReleaseToApplication(ctx, helmRelease)
@@ -738,8 +742,10 @@ func (r *REST) Update(ctx context.Context, name string, objInfo rest.UpdatedObje
 		klog.Errorf("Failed to update HelmRelease %s: %v", helmRelease.Name, err)
 		return nil, false, registry.WrapPreservingStatus("failed to update HelmRelease", err, r.gvr.GroupResource(), name)
 	}
-	adm.settle(r.c, client.ObjectKeyFromObject(helmRelease))
-	tenantAdm.settle(r.c, client.ObjectKeyFromObject(helmRelease))
+	if options == nil || len(options.DryRun) == 0 {
+		adm.settle(r.c, client.ObjectKeyFromObject(helmRelease))
+		tenantAdm.settle(r.c, client.ObjectKeyFromObject(helmRelease))
+	}
 
 	// Convert the updated HelmRelease back to Application
 	convertedApp, err := r.ConvertHelmReleaseToApplication(ctx, helmRelease)

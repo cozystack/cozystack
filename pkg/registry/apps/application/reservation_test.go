@@ -77,6 +77,7 @@ func testEnvironment() reservation.Environment {
 	return &reservation.StaticEnvironment{
 		Instancetypes: map[string]reservation.ResourceList{
 			"u1.small": {"cpu": resource.MustParse("1"), "memory": resource.MustParse("4Gi")},
+			"u1.medium": {"cpu": resource.MustParse("2"), "memory": resource.MustParse("8Gi")},
 			"u1.large": {"cpu": resource.MustParse("4"), "memory": resource.MustParse("16Gi")},
 		},
 		Presets: reservation.ShippedPresets(),
@@ -550,5 +551,74 @@ func TestTenantCarveOutAndAnOrderIntoTheSamePoolAreSerialised(t *testing.T) {
 	}
 	if !apierrors.IsInvalid(vmErr) || !strings.Contains(vmErr.Error(), "4Gi carved out by sub-tenants") {
 		t.Fatalf("the order must wait for the carve-out and then find no room, got %v", vmErr)
+	}
+}
+
+func TestReservationDryRunLeavesNothingOwedToThePool(t *testing.T) {
+	f := newGateFixture(t, tenantHelmRelease(t, "acme", rootTenantNamespace, map[string]string{"memory": "8Gi"}))
+	f.gate.settleTimeout = 300 * time.Millisecond
+	ctx := request.WithNamespace(context.Background(), "tenant-acme")
+	dryRun := []string{metav1.DryRunAll}
+
+	start := time.Now()
+	if _, err := f.vms.Create(ctx, vmApplication(t, "probe", "tenant-acme", map[string]any{"instanceType": "u1.small"}), nil, &metav1.CreateOptions{DryRun: dryRun}); err != nil {
+		t.Fatalf("a dry run that fits is admitted: %v", err)
+	}
+	if err := f.create(t, vmApplication(t, "web", "tenant-acme", map[string]any{"instanceType": "u1.small"})); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := f.vms.Update(ctx, "web", rest.DefaultUpdatedObjectInfo(vmApplication(t, "web", "tenant-acme", map[string]any{"instanceType": "u1.large"})), nil, nil, false, &metav1.UpdateOptions{DryRun: dryRun}); !apierrors.IsInvalid(err) {
+		t.Fatalf("a dry run that does not fit is refused like the write, got %v", err)
+	}
+	if _, _, err := f.vms.Update(ctx, "web", rest.DefaultUpdatedObjectInfo(vmApplication(t, "web", "tenant-acme", map[string]any{"instanceType": "u1.small", "external": false})), nil, nil, false, &metav1.UpdateOptions{DryRun: dryRun}); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.create(t, vmApplication(t, "db", "tenant-acme", map[string]any{"instanceType": "u1.small"})); err != nil {
+		t.Fatalf("a dry run stores nothing, so it must not leave the pool waiting for a write: %v", err)
+	}
+	if elapsed := time.Since(start); elapsed >= f.gate.settleTimeout {
+		t.Fatalf("dry runs waited for a write that never comes: %s", elapsed)
+	}
+}
+
+// The delta of an update is computed from the release as the cache served
+// it, before the pool lock. If that copy is stale, the write carries its
+// stale resourceVersion and conflicts, and the retry finds the values moved.
+func TestReservationAStaleBaselineCannotPassAGrowthAsAShrink(t *testing.T) {
+	var snapshot *helmv2.HelmRelease
+	staleReads := 0
+	f := newGateFixtureWith(t, interceptor.Funcs{
+		Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+			if snapshot != nil && staleReads > 0 && key.Name == "vm-instance-web" {
+				staleReads--
+				snapshot.DeepCopyInto(obj.(*helmv2.HelmRelease))
+				return nil
+			}
+			return c.Get(ctx, key, obj, opts...)
+		},
+	}, tenantHelmRelease(t, "acme", rootTenantNamespace, map[string]string{"memory": "20Gi"}))
+	if err := f.create(t, vmApplication(t, "web", "tenant-acme", map[string]any{"instanceType": "u1.large"})); err != nil {
+		t.Fatal(err)
+	}
+	snapshot = &helmv2.HelmRelease{}
+	if err := f.client.Get(context.Background(), client.ObjectKey{Namespace: "tenant-acme", Name: "vm-instance-web"}, snapshot); err != nil {
+		t.Fatal(err)
+	}
+	// web shrinks to 4Gi and a sibling takes the 16Gi it freed: the pool is full.
+	if err := f.update(t, vmApplication(t, "web", "tenant-acme", map[string]any{"instanceType": "u1.small"})); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.create(t, vmApplication(t, "db", "tenant-acme", map[string]any{"instanceType": "u1.large"})); err != nil {
+		t.Fatal(err)
+	}
+
+	// The next update of web reads the 16Gi copy: 8Gi looks like a shrink.
+	staleReads = 2
+	err := f.update(t, vmApplication(t, "web", "tenant-acme", map[string]any{"instanceType": "u1.medium"}))
+	if !apierrors.IsConflict(err) {
+		t.Fatalf("an update decided against a stale copy must come back as a conflict, got %v", err)
+	}
+	if err := f.update(t, vmApplication(t, "web", "tenant-acme", map[string]any{"instanceType": "u1.medium"})); !apierrors.IsInvalid(err) {
+		t.Fatalf("sent again against the live release, 4Gi to 8Gi does not fit a full pool; got %v", err)
 	}
 }
