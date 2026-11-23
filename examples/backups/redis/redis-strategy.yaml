@@ -51,7 +51,7 @@ spec:
             - name: REDIS_PASSWORD
               valueFrom:
                 secretKeyRef:
-                  name: '{{ .Release.Prefix | default "redis-" }}{{ .Release.Name }}-auth'
+                  name: '{{ .Release.Prefix | default "redis-" }}{{ .Release.Name }}.default.account'
                   key: password
                   optional: true
             # S3 coordinates come from this demo's Bucket: the access keys are

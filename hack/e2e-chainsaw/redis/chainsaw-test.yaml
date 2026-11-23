@@ -74,6 +74,87 @@ spec:
             name: rfr-redis-test
           status:
             readyReplicas: 2
+
+  # The password is the platform's to issue: a mint reaches every running
+  # server with CONFIG SET, restarts no pod and moves no master (replication,
+  # the Sentinels, the probes and the exporter use the operator's internal
+  # account, not this password), and a second mint replaces the first.
+  - name: verify-minted-credential
+    try:
+    - assert:
+        timeout: 2m
+        resource:
+          apiVersion: core.cozystack.io/v1alpha1
+          kind: Credential
+          metadata:
+            name: redis-test.default
+          spec:
+            application:
+              kind: Redis
+              name: test
+            user: default
+          status:
+            password:
+              origin: NotIssued
+    # bash for pipefail and process substitution; the sandbox's /bin/sh is dash.
+    - script:
+        timeout: 10m
+        shell: bash
+        content: |
+          set -euo pipefail
+          cred=redis-test.default
+          mint() {
+            kubectl create --raw "/apis/core.cozystack.io/v1alpha1/namespaces/$NAMESPACE/credentials/$cred/mint" \
+              -f <(printf '{"apiVersion":"core.cozystack.io/v1alpha1","kind":"CredentialRequest"}') \
+              | jq -r '.status.password'
+          }
+          # The password goes to redis-cli on stdin: exec arguments travel in
+          # the request URI, which the audit log records at any level.
+          cli() {
+            local password=$1; shift
+            local pod
+            pod=$(kubectl -n "$NAMESPACE" get pod -l app.kubernetes.io/component=redis,app.kubernetes.io/instance=redis-test \
+              --field-selector status.phase=Running -o name | head -n1)
+            [ -n "$pod" ] || return 0
+            printf '%s\n' "$password" | kubectl -n "$NAMESPACE" exec -i "$pod" -c redis -- \
+              sh -c 'IFS= read -r REDISCLI_AUTH; export REDISCLI_AUTH; exec redis-cli -h rfrm-redis-test "$@"' sh \
+              "$@" 2>/dev/null | tr -d '\r' || true
+          }
+          login() { cli "$1" ping; }
+          # Every redis pod with its uid and restart count, and which one the
+          # master label is on: a mint must change none of it.
+          pods() {
+            kubectl -n "$NAMESPACE" get pod -l app.kubernetes.io/component=redis,app.kubernetes.io/instance=redis-test \
+              -o jsonpath='{range .items[*]}{.metadata.name} {.metadata.uid} {.status.containerStatuses[*].restartCount} {.metadata.labels.redisfailovers-role}{"\n"}{end}' | sort
+          }
+          before=$(pods)
+          [ "$(printf '%s\n' "$before" | grep -c ' master$')" = 1 ] || { echo "no single master before the mint: $before" >&2; exit 1; }
+
+          first=$(mint)
+          [ "${#first}" -eq 32 ] || { echo "minted password has ${#first} characters, want 32" >&2; exit 1; }
+          # The operator applies the changed account Secret on its next
+          # reconcile; a readiness wait on that, not a retry.
+          until [ "$(login "$first")" = "PONG" ]; do sleep 5; done
+          view=$(kubectl -n "$NAMESPACE" get credentials.core.cozystack.io "$cred" -o json)
+          [ "$(printf '%s' "$view" | jq -r .status.password.origin)" = "Minted" ] || { echo "origin is not Minted: $view" >&2; exit 1; }
+          if printf '%s' "$view" | grep -qF -- "$first"; then echo "the Credential carries the minted password" >&2; exit 1; fi
+
+          second=$(mint)
+          [ "$second" != "$first" ] || { echo "a second mint returned the same password" >&2; exit 1; }
+          until [ "$(login "$second")" = "PONG" ]; do sleep 5; done
+          # The operator drops the replaced password once every server takes
+          # the new one, a pass after it applies it.
+          while [ "$(login "$first")" = "PONG" ]; do sleep 5; done
+          # Replication outlived both rotations, and nothing restarted or
+          # failed over to get there.
+          until cli "$second" info replication | grep -qx 'connected_slaves:1'; do sleep 5; done
+          after=$(pods)
+          if [ "$after" != "$before" ]; then
+            printf 'a mint restarted a pod or moved the master:\nbefore:\n%s\nafter:\n%s\n' "$before" "$after" >&2
+            exit 1
+          fi
+        check:
+          ($error == null): true
 ---
 # TLS on. Everything the unit tests can only render runs live here: the
 # rebuilt operator with the TLS patch, the CRD and ClusterRole patches on its
@@ -199,9 +280,10 @@ spec:
   - name: verify-tenant-ca-projection
     try:
     # The name-granting path, on the deployed object rather than the render:
-    # the Role must reach exactly the auth Secret. The unit tests pin the same
-    # rule, but only against the template, so a Role that fails to apply or
-    # gets widened in the cluster is invisible to them.
+    # the Role grants no Secret at all, the password being issued through the
+    # credentials API. The unit tests pin the same rule, but only against the
+    # template, so a Role that fails to apply or gets widened in the cluster
+    # is invisible to them.
     - assert:
         timeout: 2m
         resource:
@@ -209,25 +291,13 @@ spec:
           kind: Role
           metadata:
             name: redis-secure-dashboard-resources
-          (length(rules[?contains(resources, 'secrets')])): 1
-          (rules[?contains(resources, 'secrets')].resourceNames[]):
-          - redis-secure-auth
+          (length(rules[?contains(resources, 'secrets')])): 0
     # Positive control, and it comes first: the negatives below are satisfied
     # by an ABSENT label, which is also what a webhook that stamped nothing
-    # this run looks like. The auth Secret is chart-rendered, traces to the
-    # Redis CR and is granted by name, so it MUST be stamped.
-    - assert:
-        timeout: 2m
-        resource:
-          apiVersion: v1
-          kind: Secret
-          metadata:
-            name: redis-secure-auth
-            labels:
-              internal.cozystack.io/tenantresource: "true"
-    # tenant-ca is stamped by the CA-extraction controller; tenantresource is
-    # the lineage webhook's verdict from the redis ApplicationDefinition's
-    # matchLabels include. Both true means the whole chain held.
+    # this run looks like. tenant-ca is stamped by the CA-extraction
+    # controller; tenantresource is the lineage webhook's verdict from the
+    # redis ApplicationDefinition's matchLabels include. Both true means the
+    # whole chain held.
     - assert:
         timeout: 2m
         resource:
@@ -266,6 +336,15 @@ spec:
           kind: Secret
           metadata:
             name: redis-secure.ca-cert
+          (metadata.labels."internal.cozystack.io/tenantresource" != 'true'): true
+    # The account Secret holds the password itself and is the platform's.
+    - assert:
+        timeout: 2m
+        resource:
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: redis-secure.default.account
           (metadata.labels."internal.cozystack.io/tenantresource" != 'true'): true
     # No retry around this script. The replica link it reads is settled by
     # none of the asserts above and carries its own bounded wait below. The

@@ -80,13 +80,16 @@ print_header() {
 source "$(dirname "${BASH_SOURCE[0]}")/../_lib/wait-helpers.sh"
 
 # The cozystack redis chart names its RedisFailover (hence the operator's rfr-/
-# rfs- Services and the -auth Secret) redis-<app>, the valkey chart valkey-<app>,
-# mirroring the strategy driver that derives the same base from .Release.Prefix
-# and .Release.Name. So app X's password lives in <prefix>X-auth. The chart
-# renders that Secret only with authEnabled, so its absence reads as no
-# password; any other error still fails the read.
+# rfs- Services) redis-<app>, the valkey chart valkey-<app>, mirroring the
+# strategy driver that derives the same base from .Release.Prefix and
+# .Release.Name. App X's password lives in the account Secret of its default
+# CredentialTemplate, <prefix>X.default.account, which holds the password itself
+# and which this walkthrough reads with the platform credentials it runs under;
+# a tenant gets the password by minting it instead. The Secret exists only with
+# authEnabled, so its absence reads as no password; any other error still fails
+# the read.
 redis_pw() {
-    kubectl -n "$NAMESPACE" get secret "${APP_PREFIX}$1-auth" --ignore-not-found -o jsonpath='{.data.password}' | base64 -d
+    kubectl -n "$NAMESPACE" get secret "${APP_PREFIX}$1.default.account" --ignore-not-found -o jsonpath='{.data.password}' | base64 -d
 }
 
 # Run a redis-cli command against an application's CURRENT master. Master
