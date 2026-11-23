@@ -82,6 +82,7 @@ the apiserver checks that user's RBAC.
    poll. Don't add `refetchInterval`. If you need a one-shot, pass
    `{ watch: false }`.
    The one exception is the metrics panels in `components/observability`: the observability proxy serves the Prometheus query API, which has no watch, so they refresh on a fixed interval instead. Log lines stream through the tail endpoint and are not polled.
+   The Credentials tab is the other one: the `core.cozystack.io` Credential API serves no watch, so `use-app-credentials.ts` polls its list. Mint and revoke call `K8sClient.subresource` directly rather than through a mutation hook, because React Query keeps a mutation's result in its cache and a minted password must live only in the dialog's state.
 4. **Tenant scoping.** Most resources live in `tenant-<name>` namespaces.
    Pull the active tenant from `useTenantContext()` — never read the
    namespace from a URL param or guess it.

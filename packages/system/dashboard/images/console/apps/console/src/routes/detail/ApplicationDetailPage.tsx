@@ -44,6 +44,8 @@ import { useResourceBasePath } from "../../lib/portal.ts"
 import { useResourcePresence } from "./use-resource-presence.ts"
 import { useApplicationConfigMaps } from "./use-app-configmaps.ts"
 import { ConfigMapsTab } from "./ConfigMapsTab.tsx"
+import { useApplicationCredentials } from "./use-app-credentials.ts"
+import { CredentialsTab } from "./CredentialsTab.tsx"
 import { LogsTab } from "./LogsTab.tsx"
 
 export function ApplicationDetailPage() {
@@ -82,6 +84,7 @@ export function ApplicationDetailPage() {
 
   const presence = useResourcePresence(ad, instance)
   const configMaps = useApplicationConfigMaps(ad, instance, tenantNamespace ?? undefined)
+  const credentials = useApplicationCredentials(ad, instance, tenantNamespace ?? undefined)
 
   if (!plural || !name) return <Navigate to="/console" replace />
   // Check the fetch error before the loading guard: on a failed GET, isLoading
@@ -166,6 +169,10 @@ export function ApplicationDetailPage() {
     if (configMaps.names.length > 0 || configMaps.error) {
       tabs.push({ to: `${base}/configmaps`, label: "ConfigMaps", end: false })
     }
+    // Accounts appear seconds after the application is created, on a poll.
+    if (credentials.credentials.length > 0 || credentials.error) {
+      tabs.push({ to: `${base}/credentials`, label: "Credentials", end: false })
+    }
     tabs.push(
       { to: `${base}/secrets`, label: "Secrets", end: false },
       { to: `${base}/metrics`, label: "Metrics", end: false },
@@ -245,6 +252,18 @@ export function ApplicationDetailPage() {
           <Route
             path="configmaps"
             element={<ConfigMapsTab namespace={tenantNamespace ?? ""} names={configMaps.names} error={configMaps.error} />}
+          />
+          <Route
+            path="credentials"
+            element={
+              <CredentialsTab
+                namespace={tenantNamespace ?? ""}
+                credentials={credentials.credentials}
+                isLoading={credentials.isLoading}
+                error={credentials.error}
+                onChanged={() => { void credentials.refetch() }}
+              />
+            }
           />
           <Route
             path="secrets"

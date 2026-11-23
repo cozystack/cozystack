@@ -11,6 +11,7 @@ const h = vi.hoisted(() => ({
   tabLabels: [] as string[],
   configMaps: [] as unknown[],
   configMapsError: undefined as unknown,
+  credentials: [] as unknown[],
 }))
 
 vi.mock("@cozystack/k8s-client", async (importOriginal) => ({
@@ -20,7 +21,9 @@ vi.mock("@cozystack/k8s-client", async (importOriginal) => ({
   // Presence probes (use-resource-presence.ts) — report empty lists.
   useK8sList: (ref: { plural: string }) => ref.plural === "configmaps"
     ? { data: { items: h.configMaps }, error: h.configMapsError, isLoading: false }
-    : { data: { items: [] }, isLoading: false },
+    : ref.plural === "credentials"
+      ? { data: { items: h.credentials }, isLoading: false }
+      : { data: { items: [] }, isLoading: false },
 }))
 vi.mock("../../lib/app-definitions.ts", () => ({
   useApplicationDefinitions: () => ({
@@ -61,6 +64,7 @@ vi.mock("./SerialTab.tsx", () => ({ SerialTab: () => null }))
 vi.mock("./VMPowerControls.tsx", () => ({ VMPowerControls: () => null }))
 vi.mock("./MetricsTab.tsx", () => ({ MetricsTab: () => null }))
 vi.mock("./LogsTab.tsx", () => ({ LogsTab: () => null }))
+vi.mock("./CredentialsTab.tsx", () => ({ CredentialsTab: () => null }))
 
 const { ApplicationDetailPage } = await import("./ApplicationDetailPage.tsx")
 
@@ -179,5 +183,38 @@ describe("ApplicationDetailPage configuration", () => {
     h.tabLabels = []
     renderPage()
     expect(h.tabLabels).not.toContain("ConfigMaps")
+  })
+})
+
+describe("ApplicationDetailPage credentials", () => {
+  function showPostgres(credentials: unknown[]) {
+    h.appKind = "Postgres"
+    h.appPlural = "postgreses"
+    h.get = {
+      data: { kind: "Postgres", metadata: { name: "demo", namespace: "tenant-test" } },
+      isLoading: false,
+      error: undefined,
+    }
+    h.configMaps = []
+    h.configMapsError = undefined
+    h.credentials = credentials
+    h.tabLabels = []
+    renderPage()
+  }
+
+  it("offers Credentials ahead of Secrets once the application has an account", () => {
+    showPostgres([{
+      metadata: { name: "demo.app" },
+      spec: { application: { apiGroup: "apps.cozystack.io", kind: "Postgres", name: "demo" }, user: "app" },
+    }])
+    expect(h.tabLabels.slice(-5)).toEqual(["Credentials", "Secrets", "Metrics", "Logs", "Events"])
+  })
+
+  it("leaves Credentials off while only other applications have accounts", () => {
+    showPostgres([{
+      metadata: { name: "other.app" },
+      spec: { application: { apiGroup: "apps.cozystack.io", kind: "Postgres", name: "other" }, user: "app" },
+    }])
+    expect(h.tabLabels).not.toContain("Credentials")
   })
 })
