@@ -1,3 +1,4 @@
+{{- include "cozystack.platform.kafkaKRaftGuard" . }}
 {{- $sourceRef := .Values.sourceRef }}
 {{- $apiVersion := "source.toolkit.fluxcd.io/v1" }}
 {{- $kind := $sourceRef.kind }}

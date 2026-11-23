@@ -1,0 +1,32 @@
+suite: seaweedfs s3 gRPC listener speaks mTLS
+
+templates:
+  - charts/seaweedfs/templates/shared/security-configmap.yaml
+  - charts/seaweedfs/templates/s3/s3-deployment.yaml
+
+release:
+  name: seaweedfs-system
+  namespace: tenant-root
+
+tests:
+  # weed s3 serves its internal gRPC (the LifecycleDelete RPC among it) with
+  # the [grpc.s3] identity and as plaintext without one, while the worker dials
+  # it with [grpc.worker] mTLS credentials, so every delete failed the TLS
+  # handshake. patches/s3-grpc-tls.patch backports the section from upstream.
+  - it: gives the s3 gRPC server a TLS identity signed by the internal CA
+    template: charts/seaweedfs/templates/shared/security-configmap.yaml
+    asserts:
+      - matchRegex:
+          path: data["security.toml"]
+          pattern: '\[grpc\.s3\]\s+cert = "/usr/local/share/ca-certificates/client/tls\.crt"\s+key  = "/usr/local/share/ca-certificates/client/tls\.key"'
+
+  # security.toml reaches the s3 pods through a subPath mount, which a running
+  # container never re-reads, so an upgrade that only changes the ConfigMap
+  # leaves s3 serving plaintext gRPC until something restarts it. The pod
+  # template has to change in the same release.
+  - it: rolls the s3 pods so they load the new section
+    template: charts/seaweedfs/templates/s3/s3-deployment.yaml
+    asserts:
+      - equal:
+          path: spec.template.metadata.annotations["seaweedfs.cozystack.io/grpc-s3-tls"]
+          value: "true"

@@ -1,7 +1,6 @@
 suite: worker pool pod CPU limit
 
-# Mirror of the parent kubernetes chart's suite, on the pool-shaped values of
-# this chart. `podCpuLimit` is the only knob that sets
+# `podCpuLimit` is the only knob that sets
 # `domain.resources.limits.cpu` on a worker VM. KubeVirt otherwise derives that
 # limit from the guest vCPU count whenever the namespace carries a ResourceQuota
 # that limits CPU, and it stops deriving as soon as the VMI declares the limit
@@ -79,8 +78,7 @@ tests:
     asserts:
       # Absent, not empty: the KubevirtMachineTemplate is content-hash named, so
       # a `cpu:` key rendered for a pool that asked for nothing would rename the
-      # template and roll every live worker VM of the pool on upgrade. The
-      # render-parity gate compares those bytes against the parent chart.
+      # template and roll every live worker VM of the pool on upgrade.
       - notExists:
           path: spec.template.spec.virtualMachineTemplate.spec.template.spec.domain.resources.limits.cpu
       - equal:

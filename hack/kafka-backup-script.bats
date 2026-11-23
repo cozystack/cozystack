@@ -18,10 +18,10 @@
 # $(...) capture (set -e makes a failed command fail the test).
 #
 # Each named guard below corresponds to a mutation the script must not survive:
-# \Q literal-match on describe and alter, the --connect-to port workaround with
-# no -k (keyed off the request host in both addressing modes), the fail-closed
-# --list, the comma-value bracket grouping, the replication-factor divergence
-# guard, and the cleanup delete's HTTP handling.
+# \Q literal-match on describe and alter, the SigV4 signature (held to one
+# botocore computes for the same request, in both addressing modes) with no -k,
+# the fail-closed --list, the comma-value bracket grouping, the
+# replication-factor divergence guard, and the cleanup delete's HTTP handling.
 
 load test_helper
 
@@ -106,7 +106,19 @@ if [ "\$mode" = describe ]; then
   [ -n "\${CFG_FAIL:-}" ] && exit 3
   cat "$STATE/cfg.\$name" 2>/dev/null || true; exit 0
 fi
-if [ "\$mode" = alter ]; then echo "\$name \$add" >> "$STATE/configs_applied"; exit 0; fi
+if [ "\$mode" = alter ]; then
+  # Topic configs a Kafka 4 broker no longer knows.
+  case "\${add%%=*}" in
+    message.downconversion.enable|message.format.version|message.timestamp.difference.max.ms)
+      echo "InvalidConfigurationException: Unknown topic config name: \${add%%=*}" >&2; exit 1 ;;
+  esac
+  # Kafka 4 raised the segment.bytes floor to 1 MiB.
+  case "\$add" in
+    segment.bytes=*)
+      [ "\${add#*=}" -ge 1048576 ] || { echo "InvalidConfigurationException: Invalid value \${add#*=} for configuration segment.bytes: Value must be at least 1048576" >&2; exit 1; } ;;
+  esac
+  echo "\$name \$add" >> "$STATE/configs_applied"; exit 0
+fi
 exit 0
 STUB
 
@@ -138,7 +150,14 @@ if [ -n "\$out" ]; then
 fi
 exit 0
 STUB
-  chmod +x "$BINDIR"/*.sh "$PATHDIR/curl"
+  # date stub: a fixed signing time, so a request's signature is a constant the
+  # S3 signing tests can compare with an independently computed one.
+  cat > "$PATHDIR/date" <<'STUB'
+#!/usr/bin/env bash
+if [ "$*" = "-u +%Y%m%dT%H%M%SZ" ]; then echo 20261120T120000Z; exit 0; fi
+exec /bin/date "$@"
+STUB
+  chmod +x "$BINDIR"/*.sh "$PATHDIR/curl" "$PATHDIR/date"
 
   export BIN="$BINDIR"
   export PATH="$PATHDIR:$PATH"
@@ -196,12 +215,26 @@ expect_fail() {
   grep -qxF "$(printf 'C\torders\tcleanup.policy\tcompact,delete')" "$STATE/s3_object"
 }
 
-# ---- S3 signing (curl 7.76.1 port workaround, no -k) -----------------------
+# ---- S3 signing (SigV4 computed by the script, no -k) ------------------------
+#
+# The expected signatures were computed with botocore 1.35.99 (S3SigV4Auth,
+# payload signing on) for the same request: credentials k/s, region us-east-1
+# and the date stub's 20261120T120000Z. A signer that drifts from SigV4 — a
+# wrong canonical Host, a key encoded twice or not at all, a header signed and
+# not sent — produces a different signature and goes red here.
 
-@test "ported endpoint signs with --connect-to and never -k" {
-  init_stubs; seed_three
-  MODE=backup S3_ENDPOINT="https://s3.example.org:8333" bash "$SCRIPT"
-  grep -qF -- '--connect-to s3.example.org:443:s3.example.org:8333' "$STATE/curl_args"
+# expect_signed <url> <signature>: the request went to <url>, signed as botocore
+# signs it.
+expect_signed() {
+  grep -qF -- "$1" "$STATE/curl_args" || { echo "no request to $1: $(cat "$STATE/curl_args")" >&2; return 1; }
+  grep -qF -- "Signature=$2" "$STATE/curl_args" || { echo "signature is not botocore's $2: $(cat "$STATE/curl_args")" >&2; return 1; }
+}
+
+@test "a ported endpoint signs the host:port curl sends, and never passes -k" {
+  init_stubs
+  MODE=cleanup S3_ENDPOINT="https://s3.example.org:8333" bash "$SCRIPT"
+  expect_signed https://s3.example.org:8333/bkt/ns/app/run/kafka-metadata.txt \
+    429859e912b812c5f16a50f45186ddaedffa32d7d6b89a0f3c781832f692046c
   # Positive form, not `! grep`: hack/cozytest.sh wraps each @test in `set -e`
   # + a trailing `return 0`, and bash exempts a `!`-negated command from errexit,
   # so a `! grep` guard can never fail under the runner CI uses (only real bats).
@@ -210,22 +243,25 @@ expect_fail() {
   fi
 }
 
-@test "default-port endpoint needs no --connect-to" {
-  init_stubs; seed_three
-  MODE=backup S3_ENDPOINT="https://s3.example.org" bash "$SCRIPT"
-  # Positive form (see the -k note above): a `! grep` is vacuous under cozytest.
-  if grep -qF -- '--connect-to' "$STATE/curl_args"; then
-    echo "unexpected --connect-to on a default-port endpoint: $(cat "$STATE/curl_args")" >&2; return 1
-  fi
+@test "a default-port endpoint signs the bare host and percent-encodes the key once" {
+  init_stubs
+  MODE=cleanup ARTIFACT_URI="s3://bkt/ns/app/run 1/ü+x.txt" S3_ENDPOINT="https://s3.example.org" bash "$SCRIPT"
+  expect_signed https://s3.example.org/bkt/ns/app/run%201/%C3%BC%2Bx.txt \
+    56ecae2ddc534434d56e410177f89d10795d5e29fefa5011ea38134d6e089d8e
 }
 
-@test "virtual-hosted ported endpoint keys --connect-to off the bucket host" {
+@test "a virtual-hosted ported endpoint signs the bucket host" {
+  init_stubs
+  MODE=cleanup S3_FORCE_PATH_STYLE=false S3_ENDPOINT="https://s3.example.org:8333" bash "$SCRIPT"
+  expect_signed https://bkt.s3.example.org:8333/ns/app/run/kafka-metadata.txt \
+    998307c7101ca8b4506f54fa3ecd06602d1b25565409a5754e3a19b067b747c7
+}
+
+@test "the upload declares the SHA-256 of the object it sends" {
   init_stubs; seed_three
-  MODE=backup S3_FORCE_PATH_STYLE=false S3_ENDPOINT="https://s3.example.org:8333" bash "$SCRIPT"
-  # HOST1 must be the request host (bkt.s3.example.org), else curl never
-  # redirects and the request hits the wrong port.
-  grep -qF -- '--connect-to bkt.s3.example.org:443:s3.example.org:8333' "$STATE/curl_args"
-  grep -qF 'https://bkt.s3.example.org/ns/app/run/kafka-metadata.txt' "$STATE/curl_args"
+  MODE=backup S3_ENDPOINT="https://s3.example.org" bash "$SCRIPT"
+  sum=$(sha256sum < "$STATE/s3_object" | cut -d' ' -f1)
+  grep -qF -- "x-amz-content-sha256: $sum" "$STATE/curl_args"
 }
 
 # ---- restore --------------------------------------------------------------
@@ -241,6 +277,81 @@ write_backup_object() {
   grep -qxF "create orders 3" "$STATE/actions"
   # comma value must be bracket-grouped so kafka-configs does not split it.
   grep -qxF "orders cleanup.policy=[compact,delete]" "$STATE/configs_applied"
+}
+
+@test "restore of a Kafka 3.x backup skips the topic configs Kafka 4 removed and restores the rest" {
+  init_stubs
+  {
+    printf 'T\torders\t3\t1\n'
+    printf 'C\torders\tmessage.format.version\t3.0-IV1\n'
+    printf 'C\torders\tmessage.downconversion.enable\ttrue\n'
+    printf 'C\torders\tmessage.timestamp.difference.max.ms\t60000\n'
+    printf 'C\torders\tretention.ms\t86400000\n'
+    printf 'T\tpayments\t2\t1\n'
+    printf 'C\tpayments\tcleanup.policy\tcompact\n'
+  } > "$STATE/s3_object"
+  : > "$STATE/topics"
+  out=$(MODE=restore S3_ENDPOINT="https://s3.example.org" bash "$SCRIPT" 2>&1)
+  grep -qxF "orders retention.ms=86400000" "$STATE/configs_applied"
+  grep -qxF "create payments 2" "$STATE/actions"
+  grep -qxF "payments cleanup.policy=compact" "$STATE/configs_applied"
+  for k in message.format.version message.downconversion.enable message.timestamp.difference.max.ms; do
+    printf '%s\n' "$out" | grep -qF "orders: skipping $k"
+  done
+}
+
+@test "restore of a Kafka 3.x backup raises segment.bytes below the Kafka 4 floor and restores the rest" {
+  init_stubs
+  {
+    printf 'T\torders\t3\t1\n'
+    printf 'C\torders\tretention.ms\t86400000\n'
+    printf 'C\torders\tsegment.bytes\t524288\n'
+    printf 'T\tpayments\t2\t1\n'
+    printf 'C\tpayments\tsegment.bytes\t1048576\n'
+    printf 'T\tpadded\t1\t1\n'
+    printf 'C\tpadded\tsegment.bytes\t 524288 \n'
+    printf 'T\tsigned\t1\t1\n'
+    printf 'C\tsigned\tsegment.bytes\t+524288\n'
+    printf 'T\tctrl\t1\t1\n'
+    printf 'C\tctrl\tsegment.bytes\t\013524288\n'
+    printf 'T\tzeros\t1\t1\n'
+    printf 'C\tzeros\tsegment.bytes\t0524288\n'
+    printf 'T\tlarge\t1\t1\n'
+    printf 'C\tlarge\tsegment.bytes\t02000000\n'
+    printf 'T\tnegative\t1\t1\n'
+    printf 'C\tnegative\tsegment.bytes\t-2000000\n'
+  } > "$STATE/s3_object"
+  : > "$STATE/topics"
+  out=$(MODE=restore S3_ENDPOINT="https://s3.example.org" bash "$SCRIPT" 2>&1)
+  grep -qxF "orders retention.ms=86400000" "$STATE/configs_applied"
+  grep -qxF "orders segment.bytes=1048576" "$STATE/configs_applied"
+  grep -qxF "create payments 2" "$STATE/actions"
+  grep -qxF "payments segment.bytes=1048576" "$STATE/configs_applied"
+  printf '%s\n' "$out" | grep -qF "orders: raising segment.bytes from 524288 to 1048576"
+  # Kafka trims the value and reads it with Integer.parseInt, which takes a sign.
+  grep -qxF "padded segment.bytes=1048576" "$STATE/configs_applied"
+  grep -qxF "signed segment.bytes=1048576" "$STATE/configs_applied"
+  # A tab is a field separator in the backup, so a control character pads instead.
+  grep -qxF "ctrl segment.bytes=1048576" "$STATE/configs_applied"
+  grep -qxF "zeros segment.bytes=1048576" "$STATE/configs_applied"
+  grep -qxF "large segment.bytes=02000000" "$STATE/configs_applied"
+  grep -qxF "negative segment.bytes=1048576" "$STATE/configs_applied"
+  if printf '%s\n' "$out" | grep -qF "payments: raising"; then echo "warned about a value at the floor" >&2; return 1; fi
+}
+
+# Integer.parseInt rejects it, so the value reaches Kafka as it is and Kafka refuses it.
+@test "restore passes a segment.bytes Kafka cannot parse as an integer through unchanged" {
+  init_stubs
+  {
+    printf 'T\texp\t1\t1\n'
+    printf 'C\texp\tsegment.bytes\t1e3\n'
+  } > "$STATE/s3_object"
+  : > "$STATE/topics"
+  rc=0
+  out=$(MODE=restore S3_ENDPOINT="https://s3.example.org" bash "$SCRIPT" 2>&1) || rc=$?
+  [ "$rc" -ne 0 ]
+  printf '%s\n' "$out" | grep -qF "Invalid value 1e3 for configuration segment.bytes"
+  if printf '%s\n' "$out" | grep -qF "raising"; then echo "rewrote a value Kafka cannot parse" >&2; return 1; fi
 }
 
 @test "restore fails loudly on a replication-factor mismatch" {

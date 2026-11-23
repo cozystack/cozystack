@@ -68,12 +68,12 @@ tests:
           path: metadata.annotations["helm.sh/hook"]
         documentIndex: 1
 
-  # The two cases below pin the bootstrap-token Job's content-hash contract:
-  # an image change rotates the immutable Job's name (so Helm creates a fresh
-  # Job instead of failing on an immutable-field patch), while an unchanged
-  # render keeps the same name (so Helm no-ops). The exact suffix is expected
-  # to change whenever the Job spec changes; that is the signal that the Job
-  # will roll, and the fixture is updated in lockstep.
+  # The cases below pin the bootstrap-token Job's content-hash contract: a
+  # change to what the Job runs with rotates the immutable Job's name (so Helm
+  # creates a fresh Job instead of failing on an immutable-field patch), while
+  # an unchanged render keeps the same name (so Helm no-ops). The exact suffix
+  # is expected to change whenever the Job spec changes; that is the signal that
+  # the Job will roll, and the fixture is updated in lockstep.
   - it: bootstrap-token Job name is derived from the rendered spec
     templates:
       - templates/talos/bootstrap-token-tenant-job.yaml
@@ -88,7 +88,59 @@ tests:
           path: kind
           value: Job
 
-  - it: bootstrap-token Job name rotates when images.kubectl changes
+  - it: bootstrap-token Job name rotates when the bootstrap token changes
+    templates:
+      - templates/talos/bootstrap-token-tenant-job.yaml
+    release:
+      name: test-k8s
+      namespace: tenant-test
+    kubernetesProvider:
+      # helm-unittest's fake client refuses a LIST of any kind it has no object
+      # for, and other templates in the chart LIST StorageClasses; the throwaway
+      # StorageClass only registers that kind.
+      scheme:
+        "v1/Secret":
+          gvr:
+            group: ""
+            version: "v1"
+            resource: "secrets"
+          namespaced: true
+        "storage.k8s.io/v1/StorageClass":
+          gvr:
+            group: "storage.k8s.io"
+            version: "v1"
+            resource: "storageclasses"
+          namespaced: false
+      objects:
+        - kind: StorageClass
+          apiVersion: storage.k8s.io/v1
+          metadata:
+            name: unrelated
+          provisioner: example.test/none
+        - kind: Secret
+          apiVersion: v1
+          metadata:
+            name: test-k8s-talos-secrets
+            namespace: tenant-test
+          data:
+            token: YWJjZGVmLjAxMjM0NTY3ODlhYmNkZWY=
+            clusterId: Y2x1c3Rlci1pZC0wMDAwMDAwMDAwMDAwMDAwMDAwMDAw
+            clusterSecret: Y2x1c3Rlci1zZWNyZXQtMDAwMDAwMDAwMDAwMDAwMDAw
+            bootstrapTokenId: YWJjZGVm
+            bootstrapTokenSecret: MDEyMzQ1Njc4OWFiY2RlZg==
+    asserts:
+      # A different exact hash from the render above (fc314f): the token reaches
+      # the Job only through secretKeyRef, so without folding it into the hash a
+      # rotated token would leave Helm no-oping the completed Job. Pinned exactly
+      # rather than by regex, so a hash drift on either render is caught.
+      - equal:
+          path: metadata.name
+          value: test-k8s-bootstrap-token-tenant-bd8f15
+        documentSelector:
+          path: kind
+          value: Job
+
+  - it: bootstrap-token Job keeps the bundled kubectl image when values carry an image override
     templates:
       - templates/talos/bootstrap-token-tenant-job.yaml
     release:
@@ -98,14 +150,15 @@ tests:
       images:
         kubectl: example.com/kubectl:v9.9.9
     asserts:
-      # A different exact hash from the default-image render above (fc314f),
-      # proving the hash tracks the rendered spec (the kubectl image is in it),
-      # so an image bump lands a fresh Job rather than an immutable-field patch.
-      # Pinned exactly (like the talos-reconcile sibling cases) rather than by
-      # regex, so a hash drift on either render is caught, not silently masked.
       - equal:
           path: metadata.name
-          value: test-k8s-bootstrap-token-tenant-dbf53d
+          value: test-k8s-bootstrap-token-tenant-fc314f
+        documentSelector:
+          path: kind
+          value: Job
+      - matchRegex:
+          path: spec.template.spec.containers[0].image
+          pattern: '^docker\.io/alpine/k8s:[^@]+@sha256:[0-9a-f]{64}$'
         documentSelector:
           path: kind
           value: Job

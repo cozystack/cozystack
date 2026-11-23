@@ -1,0 +1,4 @@
+{"items":[
+ {"metadata":{"namespace":"tenant-a","name":"kafka-one","annotations":{"strimzi.io/kraft":"enabled"}},"spec":{"kafka":{"version":"3.9.0"}},"status":{"kafkaMetadataState":"KRaft","kafkaMetadataVersion":"3.9-IV0","conditions":[{"type":"Ready","status":"True"}]}},
+ {"metadata":{"namespace":"tenant-b","name":"kafka-two"},"spec":{"kafka":{"version":"3.8.1"}},"status":{"kafkaMetadataState":"KRaft","kafkaMetadataVersion":"3.9-IV0","conditions":[{"type":"Ready","status":"True"}]}}
+]}

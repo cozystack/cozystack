@@ -22,7 +22,7 @@ limitations under the License.
 // The same table is mirrored in three other places — keep them in sync:
 //   - packages/library/cozy-lib/templates/_resourcepresets.tpl (legacy block)
 //   - packages/core/platform/images/migrations/migrations/39
-//   - docs/operations/resource-presets.md
+//   - https://cozystack.io/docs/v1/guides/resource-management/
 package presets
 
 import "fmt"

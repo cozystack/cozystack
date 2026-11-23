@@ -130,7 +130,7 @@ jobs:
           echo "Resolved main build: sha=$sha version=$version packages_ref=$packages_ref"
 
       - name: Checkout source commit
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ steps.resolve.outputs.sha }}
           fetch-depth: 1
@@ -197,7 +197,7 @@ jobs:
       packages: write
     steps:
       - name: Checkout source commit
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.mirror.outputs.sha }}
           fetch-depth: 1
@@ -250,13 +250,13 @@ jobs:
     # Covers a green full suite. It does not cover a tenant-Kubernetes suite
     # running into its node-join deadline, so a red there can end as a
     # cancelled job. Held to one figure across every lane that runs the suite.
-    timeout-minutes: 215
+    timeout-minutes: 265
     permissions:
       contents: read
       packages: read
     steps:
       - name: Checkout source commit
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.mirror.outputs.sha }}
           fetch-depth: 1
@@ -379,13 +379,13 @@ jobs:
 
       - name: Upload chainsaw report
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: chainsaw-report
           path: _out/chainsaw-report.xml
           if-no-files-found: ignore
 
-      # A ceiling of its own, not the job's 215 minutes. `Upload cozyreport.tgz`
+      # A ceiling of its own, not the job's 265 minutes. `Upload cozyreport.tgz`
       # is the next step and the collector writes its tarball at the very end of
       # its run, so a read that never returns spends what is left of the job
       # budget, the job is cancelled, and the upload never runs -- the artifact
@@ -418,7 +418,7 @@ jobs:
 
       - name: Upload cozyreport.tgz
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: cozyreport
           path: _out/cozyreport.tgz

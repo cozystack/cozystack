@@ -144,6 +144,39 @@ load test_helper
   echo "$out" | grep -q -- '--push=0 --load=1'
 }
 
+@test "SBOM=1 attaches an SPDX attestation from a scanner pinned by digest and a mode=min provenance, and the default builds none" {
+  # An image built with an attestation is an index, not a plain manifest, which
+  # the stitch and the gate have to read, so it stays off unless a build asks.
+  # --sbom=true would pull the scanner by a floating tag. Provenance rides the
+  # same attestation manifest; mode=max would write build arguments into it.
+  out=$(make -n -C packages/system/cozystack-controller image IMAGE_TAG=pr-1-abc COZYSTACK_VERSION=0 BUILDER=b)
+  if echo "$out" | grep -q -- '--attest\|--sbom'; then echo "FAIL: an attestation without SBOM=1"; false; fi
+  echo "$out" | grep -q -- '--provenance=false' || { echo "FAIL: provenance not switched off without SBOM=1"; false; }
+  out=$(make -n -C packages/system/cozystack-controller image IMAGE_TAG=pr-1-abc COZYSTACK_VERSION=0 BUILDER=b SBOM=1)
+  echo "$out" | grep -qE -- '--attest type=sbom,generator=[^ ]+@sha256:[0-9a-f]{64} ' || { echo "FAIL: no digest-pinned scanner"; false; }
+  if echo "$out" | grep -q -- '--sbom'; then echo "FAIL: --sbom=true pulls a floating scanner tag"; false; fi
+  echo "$out" | grep -q -- '--attest type=provenance,mode=min' || { echo "FAIL: no mode=min provenance beside the SBOM"; false; }
+  if echo "$out" | grep -q -- '--provenance=false'; then echo "FAIL: --provenance=false cancels the provenance attestation"; false; fi
+  if echo "$out" | grep -qE -- 'provenance,mode=max|--provenance=true'; then echo "FAIL: full provenance would carry build arguments"; false; fi
+  # The environment reaches buildx as well, which is how the release workflow sets it.
+  out=$(SBOM=1 make -n -C packages/system/cozystack-controller image IMAGE_TAG=pr-1-abc COZYSTACK_VERSION=0 BUILDER=b)
+  echo "$out" | grep -q -- '--attest type=sbom,'
+}
+
+@test "Renovate moves the SBOM scanner pin, tag and digest together" {
+  # Renovate reaches hack/common-envs.mk only through a custom manager, and a
+  # reformatted SBOM_SCANNER line drops out of its regexp without a word, so the
+  # pin would stay on its syft. The named groups are Renovate's: depName,
+  # currentValue and currentDigest, in that order.
+  re=$(jq -r '.customManagers[] | select(any(.managerFilePatterns[]; test("common-envs"))) | .matchStrings[0]' .github/renovate.json)
+  [ -n "$re" ] || { echo "FAIL: no Renovate custom manager covers hack/common-envs.mk"; false; }
+  ere=$(printf '%s' "$re" | sed -E 's/\(\?<[A-Za-z]+>/(/g')
+  pin=$(sed -nE "s#^.*${ere}.*\$#\\1:\\2@\\3#p" hack/common-envs.mk)
+  [ -n "$pin" ] || { echo "FAIL: the manager matches no SBOM_SCANNER line in hack/common-envs.mk"; false; }
+  out=$(make -n -C packages/system/cozystack-controller image IMAGE_TAG=pr-1-abc COZYSTACK_VERSION=0 BUILDER=b SBOM=1)
+  echo "$out" | grep -qF -- "generator=${pin} " || { echo "FAIL: the manager reads ${pin}, not the scanner the build passes"; false; }
+}
+
 @test "talos publishes nothing to the registry with PUSH=0" {
   out=$(make -n -B -C packages/core/talos image-talos PUSH=0 PUBLISH_VERSIONED=1 PUBLISH_FLOATING=1 IMAGE_TAG=pr-1-abc COZYSTACK_VERSION=0)
   echo "$out" | grep -q 'docker://'

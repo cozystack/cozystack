@@ -53,7 +53,9 @@ tests:
           value: mg-test-ssl
 
   - it: spec.tls has no issuerConf (the operator-managed secret is passed directly)
-    documentIndex: 0
+    documentSelector:
+      path: kind
+      value: PerconaServerMongoDB
     asserts:
       - notExists:
           path: spec.tls.issuerConf
@@ -127,13 +129,17 @@ tests:
       # test would pass even with the external check removed.
       _namespace:
         host: example.com
-    documentIndex: 0
+    documentSelector:
+      path: kind
+      value: PerconaServerMongoDB
     asserts:
       - notExists:
           path: spec.replsets[0].splitHorizons
 
   - it: chart does not set allowInvalidCertificates, leaving the operator default
-    documentIndex: 0
+    documentSelector:
+      path: kind
+      value: PerconaServerMongoDB
     asserts:
       # The README states the permissive default is inherited rather than
       # chosen here. Pin that, so the claim stays falsifiable.
@@ -141,7 +147,9 @@ tests:
           path: spec.tls.allowInvalidCertificates
 
   - it: chart does not set certValidityDuration, leaving the operator default
-    documentIndex: 0
+    documentSelector:
+      path: kind
+      value: PerconaServerMongoDB
     asserts:
       # Same class as allowInvalidCertificates above: the leaf lifetime is the
       # operator's to choose, not this chart's. Deliberately left unpinned.
@@ -177,7 +185,9 @@ tests:
   # the CRD and notExists on it can never fail.
 
   - it: no TLS-disabling escape hatches with a default replica count
-    documentIndex: 0
+    documentSelector:
+      path: kind
+      value: PerconaServerMongoDB
     asserts:
       - notExists:
           path: spec.allowUnsafeConfigurations
@@ -235,7 +245,9 @@ tests:
           - name: rs0
             replicas: 3
             size: 10Gi
-    documentIndex: 0
+    documentSelector:
+      path: kind
+      value: PerconaServerMongoDB
     asserts:
       # splitHorizons is replica-set scoped and rendered only for the
       # non-sharded topology. In sharded mode external access goes through the
@@ -255,7 +267,9 @@ tests:
       replicas: 0
       _namespace:
         host: example.com
-    documentIndex: 0
+    documentSelector:
+      path: kind
+      value: PerconaServerMongoDB
     asserts:
       # With replicas: 0 the range body renders nothing. Emitting the key with
       # a null value would be rejected by the API server: the CRD types
@@ -269,7 +283,9 @@ tests:
       external: true
       _namespace:
         host: ""
-    documentIndex: 0
+    documentSelector:
+      path: kind
+      value: PerconaServerMongoDB
     asserts:
       # The controller may create _namespace before populating host, so the
       # bootstrap window presents host as an empty string rather than as an

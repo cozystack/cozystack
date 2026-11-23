@@ -5,8 +5,8 @@ ingress-nginx:
     image:
       registry: ghcr.io
       image: cozystack/ingress-nginx-with-protobuf-exporter/controller
-      tag: v1.11.6
-      digest: sha256:a8ddcee59b63f6cbf93f4d3c9ffa1d1dda3c1d39497748d4484655356c68b3f6
+      tag: v1.11.6-cozystack.1
+      digest: sha256:1d3f0e01ae61801b5ba2ec121f649eec76ce8577c81ef98c2a96fc24c8264f9b
     allowSnippetAnnotations: true
     replicaCount: 2
     admissionWebhooks:
@@ -47,6 +47,13 @@ ingress-nginx:
       upstream-keepalive-timeout: "60"
       upstream-keepalive-connections: "320"
       ssl-session-tickets: "true"
+      # Client-side keepalive_time has no ConfigMap key, so nginx keeps its
+      # 1h default and sends GOAWAY to any HTTP/2 connection older than that.
+      # A long S3 operation (kopia maintenance behind Velero) multiplexes its
+      # requests over one connection, and the in-flight object listing fails
+      # instead of being retried. Idle connections still close after
+      # keep-alive (75s).
+      http-snippet: "keepalive_time 12h;"
     resources:
       limits:
         cpu: "1"

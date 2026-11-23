@@ -14,8 +14,4 @@ spec:
     replicas: 1
     size: 2Gi
     resourcesPreset: "c1.small"
-  zookeeper:
-    replicas: 1
-    size: 1Gi
-    resourcesPreset: "c1.small"
   topics: []

@@ -41,7 +41,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: kcadm
-          image: {{ .Values.image | default "quay.io/keycloak/keycloak:26.5.2" | quote }}
+          image: {{ .Values.image | default "quay.io/keycloak/keycloak:26.8.2-3" | quote }}
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true

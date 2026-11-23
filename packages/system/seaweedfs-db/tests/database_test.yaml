@@ -60,3 +60,17 @@ tests:
       - equal:
           path: spec.inheritedMetadata.labels["policy.cozystack.io/allow-to-apiserver"]
           value: "true"
+
+  # A StorageClass name may be all digits; emitted unquoted it renders as a
+  # number, which the Cluster rejects.
+  - it: keeps a numeric storage class name a string
+    release:
+      name: seaweedfs-db
+      namespace: cozy-seaweedfs
+    set:
+      db:
+        storageClass: "123"
+    asserts:
+      - equal:
+          path: spec.storage.storageClass
+          value: "123"

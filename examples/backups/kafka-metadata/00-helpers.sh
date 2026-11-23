@@ -63,7 +63,7 @@ export CA_MOUNT_DIR="${CA_MOUNT_DIR:-/etc/ssl/kafka-backup-ca}"
 # the target broker's own image at reconcile time and renders it as the
 # strategy's .ClientImage. Override this only to match your operator's image if
 # the CLI it carries differs.
-export KAFKA_IMAGE="${KAFKA_IMAGE:-quay.io/strimzi/kafka:0.45.1-rc1-kafka-3.9.1@sha256:ba52ed046b1dccdbd96f4e68057ce014d862a7c9c1fc670760c023b9aa09f23f}"
+export KAFKA_IMAGE="${KAFKA_IMAGE:-quay.io/strimzi/kafka:1.3.1-1-kafka-4.3.1@sha256:a15f05b54941937d3bc6881985679d9f429f7af2025bcbcc045c069cf9a48905}"
 export KAFKA_BIN="${KAFKA_BIN:-/opt/kafka/bin}"
 # Name of that long-lived CLI Pod; cleanup.sh removes it.
 export KAFKA_CLI_POD="${KAFKA_CLI_POD:-kafka-cli}"

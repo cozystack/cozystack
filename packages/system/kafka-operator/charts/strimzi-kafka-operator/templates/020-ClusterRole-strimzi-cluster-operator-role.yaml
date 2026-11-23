@@ -65,12 +65,25 @@ rules:
   - patch
   - update
 - apiGroups:
+    - ""
+  resources:
+    # For inplace resizing, we need access to pods/resize subresource
+    - pods/resize
+  verbs:
+    - patch
+    - update
+- apiGroups:
+    - ""
+  resources:
+    # For Service Account based authentication
+    - serviceaccounts/token
+  verbs:
+    - create
+- apiGroups:
   - "apps"
   resources:
     # The cluster operator needs to access and manage deployments to run deployment based Strimzi components
   - deployments
-    # The cluster operator needs to access and manage stateful sets to run stateful sets based Strimzi components
-  - statefulsets
     # The cluster operator needs to access replica-sets to manage Strimzi components and to determine error states
   - replicasets
   verbs:
@@ -157,6 +170,30 @@ rules:
   verbs:
   - get
   - list
+  - watch
+  - create
+  - delete
+  - patch
+  - update
+- apiGroups:
+  - gateway.networking.k8s.io
+  resources:
+    # The cluster operator needs to access and manage TLSRoutes to expose Strimzi components for external access
+  - tlsroutes
+  verbs:
+  - get
+  - list
+  - watch
+  - create
+  - delete
+  - patch
+  - update
+- apiGroups:
+  - "cert-manager.io"
+  resources:
+  - certificates
+  verbs:
+  - get
   - watch
   - create
   - delete

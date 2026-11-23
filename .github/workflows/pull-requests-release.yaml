@@ -55,7 +55,7 @@ jobs:
     steps:
       - name: Generate GitHub App token
         id: app-token
-        uses: actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547 # v1
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
           app-id: ${{ secrets.COZYSTACK_CI_APP_ID }}
           private-key: ${{ secrets.COZYSTACK_CI_PRIVATE_KEY }}
@@ -64,7 +64,7 @@ jobs:
       # Extract tag from branch name  (branch = release-X.Y.Z*)
       - name: Extract tag from branch name
         id: get_tag
-        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         with:
           script: |
             const branch = context.payload.pull_request.head.ref;
@@ -79,7 +79,7 @@ jobs:
 
       # Checkout repo & create / push annotated tag
       - name: Checkout repo
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
           # Do NOT persist GITHUB_TOKEN as http.extraheader. Every tag/branch push
@@ -96,7 +96,7 @@ jobs:
       # argument remains the merged packages tree checked out above. This keeps
       # the final guard independent of the release PR's executable contents.
       - name: Checkout release tooling from base
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.pull_request.base.sha }}
           path: .release-tooling
@@ -236,7 +236,7 @@ jobs:
 
       # Ensure maintenance branch release-X.Y
       - name: Ensure maintenance branch release-X.Y
-        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         with:
           github-token: ${{ steps.app-token.outputs.token }}
           script: |
@@ -308,7 +308,7 @@ jobs:
       # Publish draft release and ensure correct latest flag
       - name: Publish draft release
         id: publish
-        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         with:
           github-token: ${{ steps.app-token.outputs.token }}
           script: |
@@ -419,24 +419,51 @@ jobs:
             // Reading the file here is both race-free and branch-agnostic;
             // update-releasenotes.yaml remains for later maintainer edits and
             // manual re-syncs.
+            //
+            // docs/releasenotes/${tag}.md, a short hand-written summary for a
+            // release whose changelog is too long to read on the release page,
+            // is the body when it has content; the changelog otherwise.
+            //
+            // The tags above already exist, so a body GitHub refuses would
+            // strand a half-promoted release. GitHub's web UI cut the
+            // v1.7.0-rc.2 changelog at about 125000 characters. MAX_BODY_BYTES
+            // counts bytes, which are never fewer than characters, and sits 25
+            // percent under that figure, so neither the difference nor an
+            // imprecise limit matters, and GitHub's answer to an oversized
+            // body is never relied on. update-releasenotes.yaml uses the same
+            // constant.
             const fs = require('fs');
+            const MAX_BODY_BYTES = 100000;
             const changelogPath = `docs/changelogs/${tag}.md`;
-            let body;
-            if (fs.existsSync(changelogPath)) {
-              const raw = fs.readFileSync(changelogPath, 'utf8');
+            let sourcePath;
+            let raw;
+            for (const candidate of [`docs/releasenotes/${tag}.md`, changelogPath]) {
+              if (!fs.existsSync(candidate)) continue;
+              raw = fs.readFileSync(candidate, 'utf8');
               // Last line of defence before the body becomes public and
               // immutable-by-convention. promote-rc.yaml validates the changelog
               // structurally, but it can also arrive by hand-commit, and an
               // empty or whitespace-only file here would blank the release notes
               // more thoroughly than publishing the draft's body would.
               if (raw.trim().length === 0) {
-                console.log(`::warning::${changelogPath} is empty or whitespace-only — refusing to use it as the release body for ${tag}. Publishing with the draft's existing body instead.`);
+                console.log(`::warning::${candidate} is empty or whitespace-only — not using it as the release body for ${tag}.`);
+                continue;
+              }
+              sourcePath = candidate;
+              break;
+            }
+            let body;
+            if (!sourcePath) {
+              console.log(`::warning::No usable docs/releasenotes/${tag}.md or ${changelogPath} in the merge commit — publishing ${tag} with the draft's existing body. Add the changelog and re-run 'Update Release Notes' to backfill it.`);
+            } else {
+              const bytes = Buffer.byteLength(raw, 'utf8');
+              if (bytes > MAX_BODY_BYTES) {
+                body = `The release notes for ${tag} are too long for a GitHub release description; the full changelog is [${changelogPath}](https://github.com/${context.repo.owner}/${context.repo.repo}/blob/${tag}/${changelogPath}).`;
+                console.log(`::warning::${sourcePath} is ${bytes} bytes, over MAX_BODY_BYTES (${MAX_BODY_BYTES}) — publishing ${tag} with a link to ${changelogPath} instead.`);
               } else {
                 body = raw;
-                console.log(`📝 Release body from ${changelogPath} (${body.length} bytes)`);
+                console.log(`📝 Release body from ${sourcePath} (${bytes} bytes)`);
               }
-            } else {
-              console.log(`::warning::${changelogPath} not found in the merge commit — publishing ${tag} with the draft's existing body. Add the changelog and re-run 'Update Release Notes' to backfill it.`);
             }
 
             // Publish the release

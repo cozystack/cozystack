@@ -118,11 +118,11 @@ func (c *Collector) collect(ctx context.Context) {
 
 	// Write application count metrics
 	for kind, count := range appKindCounts {
-		metrics.WriteString(fmt.Sprintf(
+		fmt.Fprintf(&metrics,
 			"cozy_application_count{kind=\"%s\"} %d\n",
 			kind,
 			count,
-		))
+		)
 	}
 
 	// Send metrics only if there's something to send
@@ -147,7 +147,7 @@ func (c *Collector) sendMetrics(clusterID, metrics string) error {
 	if err != nil {
 		return fmt.Errorf("failed to send request: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("unexpected status code: %d", resp.StatusCode)

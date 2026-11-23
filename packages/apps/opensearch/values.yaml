@@ -180,17 +180,6 @@ version: v2
 tls: {}
 
 ##
-## @section Image configuration
-##
-
-## @typedef {struct} Images - Container image configuration.
-## @field {string} opensearch - OpenSearch image.
-
-## @param {Images} images - Container images used by the operator.
-images:
-  opensearch: ""
-
-##
 ## @section Node roles configuration
 ##
 

@@ -29,6 +29,12 @@ operator:
     #   cpu: 100m
     #   memory: 128Mi
 
+  ## Additional volume mounts
+  extraVolumeMounts: [ ]
+  # - name: clusterapi-kubeconfig
+  #   mountPath: /etc/operator
+  #   readOnly: true
+
 kubeRbacProxy:
   enabled: false
   image:
@@ -53,6 +59,16 @@ kubeRbacProxy:
     # requests:
     #   cpu: 100m
     #   memory: 128Mi
+
+  ## Additional volume mounts
+  extraVolumeMounts: [ ]
+
+
+## Additional volumes
+extraVolumes: []
+# - name: clusterapi-kubeconfig
+#   secret:
+#     secretName: super-secret
 
 webhook:
   timeoutSeconds: 2
@@ -111,3 +127,30 @@ imageConfigOverride: []
   #       tag: my-custom-tag
   #   Results in the image example.com/piraeus/linstor-csi:my-custom-tag being used.
   #   See templates/config.yaml for available components.
+
+## Extra manifests to deploy. Can be of type dict or list.
+## If dict, keys are ignored and only values are used.
+## Items contained within extraObjects can be defined as dict or string and are passed through tpl.
+extraManifests: null
+  # - apiVersion: v1
+  #   kind: ConfigMap
+  #   metadata:
+  #   labels:
+  #     name: piraeus-extra
+  #   data:
+  #     extra-data: "value"
+  #
+  # can also be defined as a string, useful for templating field names
+  # - |
+  #   apiVersion: v1
+  #   kind: Secret
+  #   type: Opaque
+  #   metadata:
+  #     name: super-secret
+  #     labels:
+  #       {{- range $key, $value := .Values.commonLabels }}
+  #       {{ $key }}: {{ $value }}
+  #       {{- end }}
+  #   data:
+  #     plaintext: Zm9vYmFy
+#     templated: '{{ print "foobar" | upper | b64enc }}'
