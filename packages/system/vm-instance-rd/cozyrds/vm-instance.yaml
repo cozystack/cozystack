@@ -39,3 +39,35 @@ spec:
     include:
       - matchLabels:
           apps.cozystack.io/user-service: "true"
+  consumption:
+    let:
+      # cpu and sockets become KubeVirt's uint32 cores and sockets. The chart
+      # decodes them as YAML, so 2.0, +2 and 1e1 are whole numbers to it, and
+      # it refuses a leading zero, which YAML would read as octal.
+      - name: cpuCount
+        expression: "!has(values.resources.cpu) ? 0.0 : type(values.resources.cpu) == int ? double(values.resources.cpu) : values.resources.cpu.matches('^[+]?0[0-9]') || !values.resources.cpu.matches('^[-+]?([0-9]+[.]?[0-9]*|[.][0-9]+)([eE][-+]?[0-9]+)?$') ? -1.0 : double(values.resources.cpu)"
+      - name: socketCount
+        expression: "!has(values.resources.sockets) ? 0.0 : type(values.resources.sockets) == int ? double(values.resources.sockets) : values.resources.sockets.matches('^[+]?0[0-9]') || !values.resources.sockets.matches('^[-+]?([0-9]+[.]?[0-9]*|[.][0-9]+)([eE][-+]?[0-9]+)?$') ? -1.0 : double(values.resources.sockets)"
+      # A count that is not whole, or a memory below the 1M KubeVirt admits,
+      # fails the render whenever it is present, with or without an instance
+      # type.
+      - name: resourcesValid
+        expression: "(!has(values.resources.memory) || quantity(values.resources.memory).compareTo(quantity('1M')) >= 0) && (!has(values.resources.cpu) || (cpuCount > 0.0 && cpuCount <= 4294967295.0 && double(int(cpuCount)) == cpuCount)) && (!has(values.resources.sockets) || (socketCount > 0.0 && socketCount <= 4294967295.0 && double(int(socketCount)) == socketCount))"
+      # The chart emits a CPU topology only from cpu and sockets together,
+      # cpu being cores per socket, and emits memory on its own. All of it
+      # sizes the VM in place of the instance type; part of it fails the
+      # render.
+      - name: emitsCpu
+        expression: has(values.resources.cpu) && has(values.resources.sockets)
+      - name: sized
+        expression: emitsCpu && has(values.resources.memory)
+      - name: partial
+        expression: emitsCpu != has(values.resources.memory)
+    resources:
+      cpu: "!resourcesValid ? fail('resources.cpu and resources.sockets must be positive whole numbers and resources.memory at least 1M') : partial ? fail('resources must set cpu, sockets and memory together, or none of them') : sized ? quantity(int(cpuCount)).mul(int(socketCount)) : instanceType(values.instanceType).cpu"
+      dedicated-cpu: "sized ? 0 : instanceType(values.instanceType)['dedicated-cpu']"
+      memory: "sized ? quantity(values.resources.memory) : instanceType(values.instanceType).memory"
+      hugepages-2Mi: "sized ? 0 : instanceType(values.instanceType)['hugepages-2Mi']"
+      hugepages-1Gi: "sized ? 0 : instanceType(values.instanceType)['hugepages-1Gi']"
+      overcommitted-memory: "sized ? 0 : instanceType(values.instanceType)['overcommitted-memory']"
+      services.loadbalancers: "values.external ? 1 : 0"

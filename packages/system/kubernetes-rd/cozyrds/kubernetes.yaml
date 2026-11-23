@@ -71,3 +71,33 @@ spec:
       - resourceNames:
           - kubernetes-{{ .name }}
           - kubernetes-{{ .name }}-ingress-nginx
+  consumption:
+    # Each control-plane replica runs all four components. cozy-lib fills a
+    # component's preset per key, so cpu and memory are overridden apart.
+    let:
+      - name: cp
+        expression: values.controlPlane
+      - name: apiServerCpu
+        expression: "has(cp.apiServer.resources.cpu) ? quantity(cp.apiServer.resources.cpu) : preset(cp.apiServer.resourcesPreset).cpu"
+      - name: apiServerMemory
+        expression: "has(cp.apiServer.resources.memory) ? quantity(cp.apiServer.resources.memory) : preset(cp.apiServer.resourcesPreset).memory"
+      - name: controllerManagerCpu
+        expression: "has(cp.controllerManager.resources.cpu) ? quantity(cp.controllerManager.resources.cpu) : preset(cp.controllerManager.resourcesPreset).cpu"
+      - name: controllerManagerMemory
+        expression: "has(cp.controllerManager.resources.memory) ? quantity(cp.controllerManager.resources.memory) : preset(cp.controllerManager.resourcesPreset).memory"
+      - name: schedulerCpu
+        expression: "has(cp.scheduler.resources.cpu) ? quantity(cp.scheduler.resources.cpu) : preset(cp.scheduler.resourcesPreset).cpu"
+      - name: schedulerMemory
+        expression: "has(cp.scheduler.resources.memory) ? quantity(cp.scheduler.resources.memory) : preset(cp.scheduler.resourcesPreset).memory"
+      - name: konnectivityCpu
+        expression: "has(cp.konnectivity.server.resources.cpu) ? quantity(cp.konnectivity.server.resources.cpu) : preset(cp.konnectivity.server.resourcesPreset).cpu"
+      - name: konnectivityMemory
+        expression: "has(cp.konnectivity.server.resources.memory) ? quantity(cp.konnectivity.server.resources.memory) : preset(cp.konnectivity.server.resourcesPreset).memory"
+    resources:
+      cpu: apiServerCpu.add(controllerManagerCpu).add(schedulerCpu).add(konnectivityCpu).mul(cp.replicas)
+      memory: apiServerMemory.add(controllerManagerMemory).add(schedulerMemory).add(konnectivityMemory).mul(cp.replicas)
+      # Proxmox workers cannot route to a ClusterIP, so the apiserver Service
+      # is published instead. On KubeVirt the tenant cluster's cloud
+      # controller realizes the ingress controller's LoadBalancer Service in
+      # the tenant namespace.
+      services.loadbalancers: "values.substrate == 'proxmox' ? 1 : values.addons.ingressNginx.enabled && values.addons.ingressNginx.exposeMethod == 'LoadBalancer' ? 1 : 0"

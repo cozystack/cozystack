@@ -125,6 +125,21 @@ tests:
       - equal:
           path: spec.values.roles[0]
           value: ingress-nginx
+      # The pool's size is written out rather than left to the pool chart's
+      # schema defaults, which a platform-rendered release never carries, so
+      # the release alone says what the pool can reserve.
+      - equal:
+          path: spec.values.minReplicas
+          value: 0
+      - equal:
+          path: spec.values.maxReplicas
+          value: 10
+      - equal:
+          path: spec.values.instanceType
+          value: u1.medium
+      - equal:
+          path: spec.values.diskSize
+          value: 20Gi
       # canonical KubernetesNodes pool shape (mirrors rest.go): RetryOnFailure
       # strategy + disableWait, not the parent module's remediation style.
       - equal:

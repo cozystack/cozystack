@@ -35,3 +35,6 @@ spec:
   secrets:
     exclude: []
     include: []
+  consumption:
+    resources:
+      storage: quantity(values.storage)
