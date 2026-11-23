@@ -194,11 +194,6 @@ func (r *REST) Create(ctx context.Context, obj runtime.Object, createValidation 
 		if nsErrs := r.validateTenantNamespaceLength(app.Namespace, app.Name); len(nsErrs) > 0 {
 			return nil, apierrors.NewInvalid(r.gvk.GroupKind(), app.Name, nsErrs)
 		}
-		// Enforce hierarchical quota allocation: a child tenant's declared
-		// quota may not exceed its parent's remaining (un-carved) quota.
-		if qErrs := r.validateTenantResourceQuotas(ctx, app); len(qErrs) > 0 {
-			return nil, apierrors.NewInvalid(r.gvk.GroupKind(), app.Name, qErrs)
-		}
 	}
 
 	if err := r.validateWorkloadMemory(app, nil); err != nil {
@@ -238,6 +233,21 @@ func (r *REST) Create(ctx context.Context, obj runtime.Object, createValidation 
 		}
 	}
 
+	// After the admission chain, so that the pool lock a bounded Tenant
+	// takes is never held across a webhook call.
+	ctx, tenantAdm, err := r.lockTenantPool(ctx, app)
+	if err != nil {
+		return nil, err
+	}
+	defer tenantAdm.release()
+	if r.kindName == "Tenant" {
+		// Enforce hierarchical quota allocation: a child tenant's declared
+		// quota may not exceed its parent's remaining (un-carved) quota.
+		if qErrs := r.validateTenantResourceQuotas(ctx, app); len(qErrs) > 0 {
+			return nil, apierrors.NewInvalid(r.gvk.GroupKind(), app.Name, qErrs)
+		}
+	}
+
 	// Convert Application to HelmRelease
 	helmRelease, err := r.ConvertApplicationToHelmRelease(app)
 	if err != nil {
@@ -258,13 +268,16 @@ func (r *REST) Create(ctx context.Context, obj runtime.Object, createValidation 
 	helmRelease.Labels[ApplicationNameLabel] = app.Name
 	// Note: Annotations from config are not handled as r.releaseConfig.Annotations is undefined
 
-	adm, qErrs := r.admitReservation(ctx, app, nil)
-	if len(qErrs) > 0 {
-		return nil, apierrors.NewInvalid(r.gvk.GroupKind(), app.Name, qErrs)
+	adm, err := r.admitReservation(ctx, app, nil)
+	if err != nil {
+		return nil, err
 	}
 	defer adm.release()
 	if err := adm.annotate(helmRelease); err != nil {
 		return nil, fmt.Errorf("record the reservation: %w", err)
+	}
+	if err := tenantAdm.annotate(helmRelease); err != nil {
+		return nil, err
 	}
 
 	klog.V(6).Infof("Creating HelmRelease %s in namespace %s", helmRelease.Name, app.Namespace)
@@ -275,8 +288,12 @@ func (r *REST) Create(ctx context.Context, obj runtime.Object, createValidation 
 		klog.Errorf("Failed to create HelmRelease %s: %v", helmRelease.Name, err)
 		return nil, registry.WrapPreservingStatus("failed to create HelmRelease", err, r.gvr.GroupResource(), app.Name)
 	}
+	// A dry run stores nothing, so there is no write for the cache to show,
+	// and waiting for one would leave it owed to the pool for good.
 	if options == nil || len(options.DryRun) == 0 {
-		adm.settle(ctx, r.c, client.ObjectKeyFromObject(helmRelease))
+		r.reservation.supersede(client.ObjectKeyFromObject(helmRelease), writtenState(helmRelease))
+		adm.settle(r.c, helmRelease)
+		tenantAdm.settle(r.c, helmRelease)
 	}
 
 	// Convert the created HelmRelease back to Application
@@ -590,9 +607,18 @@ func (r *REST) Update(ctx context.Context, name string, objInfo rest.UpdatedObje
 		}
 	}
 
+	if errs := r.validateVMDiskStorageNotLowered(oldObj.(*appsv1alpha1.Application), app); len(errs) > 0 {
+		return nil, false, apierrors.NewInvalid(r.gvk.GroupKind(), app.Name, errs)
+	}
+
 	// Enforce hierarchical quota allocation on quota changes too: raising a
 	// child tenant's declared quota above its parent's remaining budget is
 	// rejected the same way as on create.
+	ctx, tenantAdm, err := r.lockTenantPool(ctx, app)
+	if err != nil {
+		return nil, false, err
+	}
+	defer tenantAdm.release()
 	if r.kindName == "Tenant" {
 		if qErrs := r.validateTenantResourceQuotas(ctx, app); len(qErrs) > 0 {
 			return nil, false, apierrors.NewInvalid(r.gvk.GroupKind(), app.Name, qErrs)
@@ -622,6 +648,18 @@ func (r *REST) Update(ctx context.Context, name string, objInfo rest.UpdatedObje
 	}
 	if helmRelease.ResourceVersion == "" {
 		helmRelease.SetResourceVersion(cur.GetResourceVersion())
+	} else if helmRelease.ResourceVersion != cur.ResourceVersion {
+		// The client names another version than the cache served. The
+		// checks below compare the update with the release it replaces, so
+		// read that one; the client's precondition stays on the write.
+		live := &helmv2.HelmRelease{}
+		if err := r.w.Get(ctx, client.ObjectKeyFromObject(cur), live); err != nil {
+			return nil, false, registry.WrapPreservingStatus("failed to fetch current HelmRelease", err, r.gvr.GroupResource(), name)
+		}
+		cur = live
+	}
+	if errs := r.validateVMDiskStorageNotLoweredFrom(helmReleaseValues(cur), app); len(errs) > 0 {
+		return nil, false, apierrors.NewInvalid(r.gvk.GroupKind(), app.Name, errs)
 	}
 	// The memory check above compared against the read at the start of Update.
 	// Compare again against the live release, so a stale value below 1Mi cannot
@@ -630,15 +668,21 @@ func (r *REST) Update(ctx context.Context, name string, objInfo rest.UpdatedObje
 		return nil, false, err
 	}
 
-	adm, qErrs := r.admitReservation(ctx, app, cur)
-	if len(qErrs) > 0 {
-		return nil, false, apierrors.NewInvalid(r.gvk.GroupKind(), app.Name, qErrs)
+	adm, err := r.admitReservation(ctx, app, cur)
+	if err != nil {
+		return nil, false, err
 	}
 	defer adm.release()
+	if err := tenantAdm.base(cur); err != nil {
+		return nil, false, err
+	}
 
 	r.applyLiveMetadata(helmRelease, cur, app, previousFinalizers)
 	if err := adm.annotate(helmRelease); err != nil {
 		return nil, false, fmt.Errorf("record the reservation: %w", err)
+	}
+	if err := tenantAdm.annotate(helmRelease); err != nil {
+		return nil, false, err
 	}
 
 	// Suspension is not part of the Application, so the rebuilt object always
@@ -682,12 +726,23 @@ func (r *REST) Update(ctx context.Context, name string, objInfo rest.UpdatedObje
 			if memErr := r.validateWorkloadMemory(app, cur.Spec.Values); memErr != nil {
 				return memErr
 			}
-			if adm.baseMoved(cur) {
-				return errReservationBaseMoved
+			// Both quota decisions were made against the release read before
+			// the conflict. If its values changed since, the decision does
+			// not hold for the object now stored, and the client has to send
+			// its update again against it.
+			if adm.stale(cur) || tenantAdm.stale(cur) {
+				return finalUpdateError{apierrors.NewConflict(r.gvr.GroupResource(), name,
+					fmt.Errorf("the application changed while this update was checked against its tenant's quota; retry it"))}
+			}
+			if errs := r.validateVMDiskStorageNotLoweredFrom(helmReleaseValues(cur), app); len(errs) > 0 {
+				return apierrors.NewInvalid(r.gvk.GroupKind(), app.Name, errs)
 			}
 			helmRelease = converted.DeepCopy()
 			r.applyLiveMetadata(helmRelease, cur, app, previousFinalizers)
 			if err := adm.annotate(helmRelease); err != nil {
+				return err
+			}
+			if err := tenantAdm.annotate(helmRelease); err != nil {
 				return err
 			}
 			helmRelease.SetResourceVersion(cur.GetResourceVersion())
@@ -695,16 +750,18 @@ func (r *REST) Update(ctx context.Context, name string, objInfo rest.UpdatedObje
 		}
 		return updateErr
 	})
-	if errors.Is(err, errReservationBaseMoved) {
-		return nil, false, apierrors.NewConflict(r.gvr.GroupResource(), name,
-			fmt.Errorf("its values changed while this update was being checked against its tenant pool; retry it"))
+	var final finalUpdateError
+	if errors.As(err, &final) {
+		return nil, false, final.err
 	}
 	if err != nil {
 		klog.Errorf("Failed to update HelmRelease %s: %v", helmRelease.Name, err)
 		return nil, false, registry.WrapPreservingStatus("failed to update HelmRelease", err, r.gvr.GroupResource(), name)
 	}
 	if options == nil || len(options.DryRun) == 0 {
-		adm.settle(ctx, r.c, client.ObjectKeyFromObject(helmRelease))
+		r.reservation.supersede(client.ObjectKeyFromObject(helmRelease), writtenState(helmRelease))
+		adm.settle(r.c, helmRelease)
+		tenantAdm.settle(r.c, helmRelease)
 	}
 
 	// Convert the updated HelmRelease back to Application
@@ -798,6 +855,9 @@ func (r *REST) Delete(ctx context.Context, name string, deleteValidation rest.Va
 	if err != nil {
 		klog.Errorf("Failed to delete HelmRelease %s: %v", helmReleaseName, err)
 		return nil, false, registry.WrapPreservingStatus("failed to delete HelmRelease", err, r.gvr.GroupResource(), name)
+	}
+	if options == nil || len(options.DryRun) == 0 {
+		r.reservation.supersede(client.ObjectKeyFromObject(helmRelease), pendingWrite{deleted: true})
 	}
 
 	klog.V(6).Infof("Successfully deleted HelmRelease %s", helmReleaseName)

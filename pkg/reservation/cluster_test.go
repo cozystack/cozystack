@@ -146,3 +146,33 @@ func TestClusterEnvironmentPresets(t *testing.T) {
 		t.Fatalf("unknown preset: %v", err)
 	}
 }
+
+func TestClusterEnvironmentHoldsAFailedListBeforeListingAgain(t *testing.T) {
+	f := newClusterFixture(instancetypeObject("u1.small", 1, "4Gi"))
+	failing := true
+	f.dyn.PrependReactor("list", InstancetypeGVR.Resource, func(k8stesting.Action) (bool, runtime.Object, error) {
+		if failing {
+			*f.lists++
+			return true, nil, errors.New("apiserver unavailable")
+		}
+		return false, nil, nil
+	})
+
+	for i := 0; i < 3; i++ {
+		if _, err := f.env.Instancetype("u1.small"); err == nil {
+			t.Fatal("a failed list must surface as an error")
+		}
+	}
+	if *f.lists != 1 {
+		t.Fatalf("callers queued behind a failed list listed %d times, want 1", *f.lists)
+	}
+
+	failing = false
+	*f.clock = f.clock.Add(instancetypeFailureHold)
+	if _, err := f.env.Instancetype("u1.small"); err != nil {
+		t.Fatalf("past the hold the list is retried and succeeds: %v", err)
+	}
+	if _, err := f.env.Instancetype("u1.small"); err != nil || *f.lists != 2 {
+		t.Fatalf("a success clears the failure and serves from the snapshot: err=%v lists=%d", err, *f.lists)
+	}
+}
