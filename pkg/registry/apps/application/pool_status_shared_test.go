@@ -49,6 +49,12 @@ func TestControllerSharesTheGatesReservedAnnotation(t *testing.T) {
 	}
 }
 
+func TestControllerBoundsItsAnnotationsLikeTheGate(t *testing.T) {
+	if reservation.MaxAnnotationSize != maxReservedAnnotationSize {
+		t.Fatalf("the gate caps the figure at %d bytes, the controller at %d", maxReservedAnnotationSize, reservation.MaxAnnotationSize)
+	}
+}
+
 func TestControllerHashesValuesLikeTheGate(t *testing.T) {
 	for _, values := range []string{
 		``,

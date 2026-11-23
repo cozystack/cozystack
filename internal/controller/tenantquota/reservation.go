@@ -198,6 +198,9 @@ func (r *Reconciler) snapshotReservations(ctx context.Context) (*reservationSnap
 				// The figure still counts this sweep; storing it is retried
 				// on the next one.
 				logPatchError(logger, err, "failed to store an application's reservation", "helmRelease", client.ObjectKeyFromObject(hr))
+				if !apierrors.IsConflict(err) {
+					snap.incompleteByNS[hr.Namespace] = append(snap.incompleteByNS[hr.Namespace], fmt.Sprintf("%s: %v", name, err))
+				}
 			}
 		}
 		snap.usedByNS[hr.Namespace] = addResourceList(snap.usedByNS[hr.Namespace], toCore(rl))
@@ -216,6 +219,9 @@ func (r *Reconciler) storeReservation(ctx context.Context, hr *helmv2.HelmReleas
 	raw, err := (&reservation.Stored{ValuesHash: hash, Resources: rl}).Encode()
 	if err != nil {
 		return err
+	}
+	if len(raw) > reservation.MaxAnnotationSize {
+		return fmt.Errorf("the reservation takes %d bytes, more than the %d an annotation is allowed here", len(raw), reservation.MaxAnnotationSize)
 	}
 	return r.patchAnnotation(ctx, hr, reservation.ReservedAnnotation, &raw)
 }
@@ -284,6 +290,10 @@ func (r *Reconciler) reconcileReservations(ctx context.Context) (ctrl.Result, er
 		if err != nil {
 			return ctrl.Result{}, err
 		}
+		if len(raw) > reservation.MaxAnnotationSize {
+			logger.Error(nil, "not publishing a pool status larger than an annotation is allowed here", "pool", p.Root, "bytes", len(raw))
+			continue
+		}
 		if err := r.patchAnnotation(ctx, hr, reservation.PoolAnnotation, &raw); err != nil {
 			logPatchError(logger, err, "failed to publish a pool status", "pool", p.Root)
 		}
@@ -331,10 +341,22 @@ func (r *Reconciler) poolStatus(hr *helmv2.HelmRelease, p *Pool, snap *reservati
 		sort.Strings(incomplete)
 		cond.Status = metav1.ConditionTrue
 		cond.Reason = "NotEvaluated"
-		cond.Message = strings.Join(incomplete, "; ")
+		cond.Message = incompleteMessage(incomplete)
 	}
 	meta.SetStatusCondition(&status.Conditions, cond)
 	return status
+}
+
+// maxIncompleteListed caps how many applications the ReservationIncomplete
+// message names, so that a whole kind failing in a large pool cannot push
+// the pool status past reservation.MaxAnnotationSize.
+const maxIncompleteListed = 10
+
+func incompleteMessage(incomplete []string) string {
+	if len(incomplete) <= maxIncompleteListed {
+		return strings.Join(incomplete, "; ")
+	}
+	return fmt.Sprintf("%s; and %d more", strings.Join(incomplete[:maxIncompleteListed], "; "), len(incomplete)-maxIncompleteListed)
 }
 
 // overcommitted returns, for every key the budget bounds, how far what the

@@ -44,6 +44,12 @@ const (
 	PoolAnnotation = "reservation.cozystack.io/pool"
 )
 
+// MaxAnnotationSize bounds the value of ReservedAnnotation and
+// PoolAnnotation, well inside the 256KiB the API server allows for all of an
+// object's annotations together. The gate refuses a reservation larger than
+// this, and the controller writes nothing larger either.
+const MaxAnnotationSize = 16 << 10
+
 // Pool condition types.
 const (
 	// ConditionOvercommitted is True when what a pool's applications

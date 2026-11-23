@@ -574,3 +574,23 @@ func TestReservation_KeepsTheStoredFigureOfAKindThatNoLongerCompiles(t *testing.
 		t.Errorf("ReservationIncomplete = %s, want True", cond.Status)
 	}
 }
+
+// TestReservation_BoundsTheIncompleteList: a pool where many applications
+// fail to evaluate names only the first few, so its status stays well inside
+// what an annotation may hold.
+func TestReservation_BoundsTheIncompleteList(t *testing.T) {
+	objs := []client.Object{tenantWithQuotas(t, "foo", "tenant-root", map[string]string{"cpu": "100"})}
+	for i := 0; i < 3*maxIncompleteListed; i++ {
+		objs = append(objs, vm(t, "broken-"+strings.Repeat("x", 200)+string(rune('a'+i%26))+string(rune('a'+i/26)), "tenant-foo", "x1.gone"))
+	}
+	r, c, _ := newReservationReconciler(t, objs...)
+	sweep(t, r)
+
+	cond := conditionOf(t, poolStatusOf(t, c, "tenant-root", "tenant-foo"), reservation.ConditionReservationIncomplete)
+	if cond.Status != metav1.ConditionTrue || !strings.HasSuffix(cond.Message, "and 20 more") {
+		t.Errorf("ReservationIncomplete message does not stop after %d names: %q", maxIncompleteListed, cond.Message)
+	}
+	if raw := getRelease(t, c, "tenant-root", "tenant-foo").Annotations[reservation.PoolAnnotation]; len(raw) > reservation.MaxAnnotationSize {
+		t.Errorf("pool status takes %d bytes", len(raw))
+	}
+}
