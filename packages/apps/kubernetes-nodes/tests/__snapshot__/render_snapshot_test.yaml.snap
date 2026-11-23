@@ -3,7 +3,7 @@ matches the golden render of a GPU pool:
     apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
     kind: KubevirtMachineTemplate
     metadata:
-      name: kubernetes-myk8s-md0-8ed0ab
+      name: kubernetes-myk8s-md0-26667b
       namespace: tenant-test
     spec:
       template:
@@ -19,6 +19,9 @@ matches the golden render of a GPU pool:
                 - metadata:
                     annotations:
                       cdi.kubevirt.io/storage.usePopulator: "false"
+                    labels:
+                      cluster.x-k8s.io/deployment-name: kubernetes-myk8s-md0
+                      cluster.x-k8s.io/role: worker
                     name: disk-system
                   spec:
                     source:
@@ -115,7 +118,7 @@ matches the golden render of a GPU pool:
           infrastructureRef:
             apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
             kind: KubevirtMachineTemplate
-            name: kubernetes-myk8s-md0-8ed0ab
+            name: kubernetes-myk8s-md0-26667b
             namespace: tenant-test
           version: v1.35.6
   3: |
@@ -149,7 +152,6 @@ matches the golden render of a GPU pool:
       kind: kubernetes
       minReplicas: 0
       selector:
-        cluster.x-k8s.io/cluster-name: kubernetes-myk8s
         cluster.x-k8s.io/deployment-name: kubernetes-myk8s-md0
         cluster.x-k8s.io/role: worker
       type: worker
@@ -159,7 +161,7 @@ matches the golden render of a kubelet-override pool:
     apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
     kind: KubevirtMachineTemplate
     metadata:
-      name: kubernetes-myk8s-md0-2d362e
+      name: kubernetes-myk8s-md0-04d5d9
       namespace: tenant-test
     spec:
       template:
@@ -175,6 +177,9 @@ matches the golden render of a kubelet-override pool:
                 - metadata:
                     annotations:
                       cdi.kubevirt.io/storage.usePopulator: "false"
+                    labels:
+                      cluster.x-k8s.io/deployment-name: kubernetes-myk8s-md0
+                      cluster.x-k8s.io/role: worker
                     name: disk-system
                   spec:
                     source:
@@ -268,7 +273,7 @@ matches the golden render of a kubelet-override pool:
           infrastructureRef:
             apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
             kind: KubevirtMachineTemplate
-            name: kubernetes-myk8s-md0-2d362e
+            name: kubernetes-myk8s-md0-04d5d9
             namespace: tenant-test
           version: v1.35.6
   3: |
@@ -302,7 +307,6 @@ matches the golden render of a kubelet-override pool:
       kind: kubernetes
       minReplicas: 0
       selector:
-        cluster.x-k8s.io/cluster-name: kubernetes-myk8s
         cluster.x-k8s.io/deployment-name: kubernetes-myk8s-md0
         cluster.x-k8s.io/role: worker
       type: worker
@@ -312,7 +316,7 @@ matches the golden render of the pool objects:
     apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
     kind: KubevirtMachineTemplate
     metadata:
-      name: kubernetes-myk8s-md0-a6ac3e
+      name: kubernetes-myk8s-md0-57ef01
       namespace: tenant-test
     spec:
       template:
@@ -329,6 +333,9 @@ matches the golden render of the pool objects:
                 - metadata:
                     annotations:
                       cdi.kubevirt.io/storage.usePopulator: "false"
+                    labels:
+                      cluster.x-k8s.io/deployment-name: kubernetes-myk8s-md0
+                      cluster.x-k8s.io/role: worker
                     name: disk-system
                   spec:
                     source:
@@ -424,7 +431,7 @@ matches the golden render of the pool objects:
           infrastructureRef:
             apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
             kind: KubevirtMachineTemplate
-            name: kubernetes-myk8s-md0-a6ac3e
+            name: kubernetes-myk8s-md0-57ef01
             namespace: tenant-test
           version: v1.35.6
   3: |
@@ -458,7 +465,6 @@ matches the golden render of the pool objects:
       kind: kubernetes
       minReplicas: 0
       selector:
-        cluster.x-k8s.io/cluster-name: kubernetes-myk8s
         cluster.x-k8s.io/deployment-name: kubernetes-myk8s-md0
         cluster.x-k8s.io/role: worker
       type: worker

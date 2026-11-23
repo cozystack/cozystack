@@ -246,7 +246,7 @@ tests:
           value: KubevirtMachineTemplate
       - equal:
           path: metadata.name
-          value: kubernetes-myk8s-md0-ce2335
+          value: kubernetes-myk8s-md0-d5921f
         documentSelector:
           path: kind
           value: KubevirtMachineTemplate
@@ -314,7 +314,7 @@ tests:
     asserts:
       - equal:
           path: metadata.name
-          value: kubernetes-myk8s-md0-ce2335
+          value: kubernetes-myk8s-md0-d5921f
 
   # KubeVirt declares cores as uint32, so a count past its ceiling cannot size
   # the guest even though it is a whole number.
