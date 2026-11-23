@@ -275,7 +275,9 @@ func (r *REST) Create(ctx context.Context, obj runtime.Object, createValidation 
 		klog.Errorf("Failed to create HelmRelease %s: %v", helmRelease.Name, err)
 		return nil, registry.WrapPreservingStatus("failed to create HelmRelease", err, r.gvr.GroupResource(), app.Name)
 	}
-	adm.settle(ctx, r.c, client.ObjectKeyFromObject(helmRelease))
+	if options == nil || len(options.DryRun) == 0 {
+		adm.settle(ctx, r.c, client.ObjectKeyFromObject(helmRelease))
+	}
 
 	// Convert the created HelmRelease back to Application
 	convertedApp, err := r.ConvertHelmReleaseToApplication(ctx, helmRelease)
@@ -701,7 +703,9 @@ func (r *REST) Update(ctx context.Context, name string, objInfo rest.UpdatedObje
 		klog.Errorf("Failed to update HelmRelease %s: %v", helmRelease.Name, err)
 		return nil, false, registry.WrapPreservingStatus("failed to update HelmRelease", err, r.gvr.GroupResource(), name)
 	}
-	adm.settle(ctx, r.c, client.ObjectKeyFromObject(helmRelease))
+	if options == nil || len(options.DryRun) == 0 {
+		adm.settle(ctx, r.c, client.ObjectKeyFromObject(helmRelease))
+	}
 
 	// Convert the updated HelmRelease back to Application
 	convertedApp, err := r.ConvertHelmReleaseToApplication(ctx, helmRelease)

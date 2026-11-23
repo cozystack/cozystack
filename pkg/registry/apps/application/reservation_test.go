@@ -569,3 +569,31 @@ func mustGet(t *testing.T, c client.Client, namespace, name string) *helmv2.Helm
 	hr.ResourceVersion = ""
 	return hr
 }
+
+// TestReservationGateDoesNotSettleADryRun: a dry-run write is never stored,
+// so the gate neither waits for it nor keeps counting it.
+func TestReservationGateDoesNotSettleADryRun(t *testing.T) {
+	f := newGateFixtureWith(t, interceptor.Funcs{
+		Create: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
+			o := &client.CreateOptions{}
+			o.ApplyOptions(opts)
+			if len(o.DryRun) > 0 {
+				return nil
+			}
+			return c.Create(ctx, obj, opts...)
+		},
+	}, tenantHelmRelease(t, "acme", rootTenantNamespace, map[string]string{"memory": "8Gi"}))
+	f.gate.settleTimeout = 2 * time.Second
+	ctx := request.WithNamespace(context.Background(), "tenant-acme")
+	start := time.Now()
+	if _, err := f.vms.Create(ctx, vmApplication(t, "web", "tenant-acme", map[string]any{"instanceType": "u1.small"}), nil,
+		&metav1.CreateOptions{DryRun: []string{metav1.DryRunAll}}); err != nil {
+		t.Fatal(err)
+	}
+	if d := time.Since(start); d >= f.gate.settleTimeout {
+		t.Errorf("a dry-run create waited %s for a write that never happens", d)
+	}
+	if len(f.gate.pendingIn("tenant-acme")) != 0 {
+		t.Error("a dry-run create is counted in its pool")
+	}
+}

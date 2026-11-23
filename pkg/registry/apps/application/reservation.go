@@ -430,8 +430,11 @@ func (a *reservationAdmission) annotate(hr *helmv2.HelmRelease) error {
 }
 
 // settle waits until the cache serves the release as written, so that the
-// next writer into the pool, which reads the cache, counts it. A timeout is
-// logged and not fatal: the write has happened.
+// next writer into the pool, which reads the cache, counts it. On a timeout
+// the write has still happened, so it is counted from the gate's record
+// instead. Callers skip a dry-run write: it is never stored, so settle would
+// hold the pool lock for the whole timeout and then count a figure nothing
+// reserves.
 func (a *reservationAdmission) settle(ctx context.Context, c client.Client, key client.ObjectKey) {
 	if a == nil || a.stored == nil || a.unlock == nil {
 		return
