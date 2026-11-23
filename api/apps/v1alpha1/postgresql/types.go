@@ -77,11 +77,12 @@ type ConfigSpec struct {
 }
 
 type Audit struct {
-	// Enable PostgreSQL auditing. Loads the pgaudit extension through the `sharedPreloadLibraries` allowlist and turns on `log_connections`/`log_disconnections`, so who connected and the classes of statement they ran are written to the instance log and collected by the platform log stack. The audited statement classes are set by `log`. Off by default. Enabling or disabling it restarts PostgreSQL, since pgaudit is a preloaded library.
+	// Enable PostgreSQL auditing. Loads the pgaudit extension through the `sharedPreloadLibraries` allowlist and turns on `log_connections`/`log_disconnections`, so who connected and the classes of statement they ran are written to the instance log and collected by the platform log stack. The audited statement classes are set by `log`. Off by default. Enabling or disabling it restarts PostgreSQL, since pgaudit is a preloaded library. Note that `write` and `all` record statement text with literal values, so anyone who can read the tenant's log stack can read audited data; keep that in mind on a shared Monitoring.
 	// +kubebuilder:default:=false
 	Enabled bool `json:"enabled,omitempty"`
-	// pgaudit session audit classes recorded when `enabled`, as the comma-separated value of `pgaudit.log`. Valid classes are `read`, `write`, `function`, `role`, `ddl`, `misc`, `misc_set`, `all` and `none`; a class may be prefixed with `-` to subtract it from `all` (for example `ddl, role`, `write, ddl, role`, or `all, -misc`). `all` logs every statement including reads and is heavy. Defaults to `write, ddl, role`. A `pgaudit.log` set in `postgresql.parameters` overrides this. An unrecognised class makes pgaudit fall back to `none` at start, which silently disables auditing, so keep to the listed names.
+	// pgaudit session audit classes recorded when `enabled`, as the comma-separated value of `pgaudit.log`. Valid classes are `read`, `write`, `function`, `role`, `ddl`, `misc`, `misc_set`, `all` and `none`; a class may be prefixed with `-` to subtract it from `all` (for example `ddl, role`, `write, ddl, role`, or `all, -misc`). `all` logs every statement including reads and is heavy. Defaults to `write, ddl, role`. A `pgaudit.log` set in `postgresql.parameters` overrides this. The pattern rejects an unrecognised class at admission, which otherwise makes pgaudit fall back to `none` at the next start and silently disables auditing.
 	// +kubebuilder:default:="write, ddl, role"
+	// +kubebuilder:validation:Pattern="^(\\s*-?(read|write|function|role|ddl|misc_set|misc|all|none)\\s*(,\\s*-?(read|write|function|role|ddl|misc_set|misc|all|none)\\s*)*)?$"
 	Log string `json:"log,omitempty"`
 }
 

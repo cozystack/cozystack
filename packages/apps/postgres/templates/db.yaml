@@ -369,12 +369,16 @@ spec:
         when postgresql.parameters does not set it, so an explicit value wins
         unconditionally — including a falsy one like log_connections: 0, which
         merge would otherwise read as unset and overwrite with the default.
+        The match is case-insensitive because PostgreSQL parameter names are,
+        so a user key like pgaudit.LoG still suppresses the lowercase seed
+        instead of landing beside it.
       */}}
       {{- if $auditEnabled }}
-      {{- $userParams := default (dict) .Values.postgresql.parameters }}
-      {{- if not (hasKey $userParams "pgaudit.log") }}{{- $_ := set $defaults "pgaudit.log" (default "write, ddl, role" .Values.audit.log) }}{{- end }}
-      {{- if not (hasKey $userParams "log_connections") }}{{- $_ := set $defaults "log_connections" "on" }}{{- end }}
-      {{- if not (hasKey $userParams "log_disconnections") }}{{- $_ := set $defaults "log_disconnections" "on" }}{{- end }}
+      {{- $userKeys := dict }}
+      {{- range $k, $_v := (default (dict) .Values.postgresql.parameters) }}{{- $_ := set $userKeys (lower $k) true }}{{- end }}
+      {{- if not (hasKey $userKeys "pgaudit.log") }}{{- $_ := set $defaults "pgaudit.log" (default "write, ddl, role" .Values.audit.log) }}{{- end }}
+      {{- if not (hasKey $userKeys "log_connections") }}{{- $_ := set $defaults "log_connections" "on" }}{{- end }}
+      {{- if not (hasKey $userKeys "log_disconnections") }}{{- $_ := set $defaults "log_disconnections" "on" }}{{- end }}
       {{- end }}
       {{- /*
         PostgreSQL sizes shared_buffers at 128MB whatever the container gets.

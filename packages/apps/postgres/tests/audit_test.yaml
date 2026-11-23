@@ -119,3 +119,72 @@ tests:
       - equal:
           path: spec.postgresql.parameters.log_disconnections
           value: "on"
+
+  - it: "an explicit falsy log_disconnections wins over the audit default"
+    set:
+      audit:
+        enabled: true
+      postgresql:
+        parameters:
+          log_disconnections: 0
+    documentSelector:
+      path: kind
+      value: Cluster
+    asserts:
+      - equal:
+          path: spec.postgresql.parameters.log_disconnections
+          value: "0"
+
+  - it: "an explicit empty pgaudit.log in parameters wins over the audit default"
+    set:
+      audit:
+        enabled: true
+      postgresql:
+        parameters:
+          pgaudit.log: ""
+    documentSelector:
+      path: kind
+      value: Cluster
+    asserts:
+      - equal:
+          path: spec.postgresql.parameters["pgaudit.log"]
+          value: ""
+
+  - it: "an empty audit.log falls back to the default classes"
+    set:
+      audit:
+        enabled: true
+        log: ""
+    documentSelector:
+      path: kind
+      value: Cluster
+    asserts:
+      - equal:
+          path: spec.postgresql.parameters["pgaudit.log"]
+          value: "write, ddl, role"
+
+  - it: "a case-variant parameter key suppresses the lowercase audit seed"
+    set:
+      audit:
+        enabled: true
+      postgresql:
+        parameters:
+          pgaudit.LoG: "all"
+    documentSelector:
+      path: kind
+      value: Cluster
+    asserts:
+      - equal:
+          path: spec.postgresql.parameters["pgaudit.LoG"]
+          value: "all"
+      - notExists:
+          path: spec.postgresql.parameters["pgaudit.log"]
+
+  - it: "a mistyped audit class is rejected by the schema"
+    set:
+      audit:
+        enabled: true
+        log: "write, ddl, rol"
+    asserts:
+      - failedTemplate:
+          errorPattern: "audit/log"
