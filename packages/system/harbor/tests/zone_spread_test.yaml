@@ -1,0 +1,218 @@
+suite: zone spread of the data tier and the request path
+
+release:
+  name: harbor-system
+  namespace: tenant-test
+
+# Both operators already keep replicas off a shared node. The spread follows
+# the platform's globalAppTopologySpreadConstraints when one is set, and is a
+# soft zone spread otherwise. It goes through topologySpreadConstraints so the
+# operators' per-node default survives:
+# overriding affinity on the RedisFailover, or moving CloudNativePG's
+# topologyKey to the zone, would drop it on a cluster without zone labels.
+set:
+  harbor:
+    fullnameOverride: harbor
+    expose:
+      type: clusterIP
+      tls:
+        enabled: false
+
+tests:
+  - it: spreads database instances across zones
+    template: templates/database.yaml
+    set:
+      db:
+        replicas: 3
+    asserts:
+      - equal:
+          path: spec.topologySpreadConstraints
+          value:
+            - maxSkew: 1
+              topologyKey: topology.kubernetes.io/zone
+              whenUnsatisfiable: ScheduleAnyway
+              labelSelector:
+                matchLabels:
+                  cnpg.io/cluster: harbor-db
+                  cnpg.io/podRole: instance
+      - notExists:
+          path: spec.affinity
+
+  - it: leaves a single database instance unconstrained
+    template: templates/database.yaml
+    set:
+      db:
+        replicas: 1
+    asserts:
+      - notExists:
+          path: spec.topologySpreadConstraints
+
+  - it: spreads redis replicas across zones without replacing the operator's affinity
+    template: templates/redis.yaml
+    documentSelector:
+      path: kind
+      value: RedisFailover
+    set:
+      redis:
+        replicas: 3
+    asserts:
+      - equal:
+          path: spec.redis.topologySpreadConstraints
+          value:
+            - maxSkew: 1
+              topologyKey: topology.kubernetes.io/zone
+              whenUnsatisfiable: ScheduleAnyway
+              labelSelector:
+                matchLabels:
+                  app.kubernetes.io/name: harbor-redis
+                  app.kubernetes.io/component: redis
+      - notExists:
+          path: spec.redis.affinity
+
+  - it: leaves a single redis replica unconstrained
+    template: templates/redis.yaml
+    documentSelector:
+      path: kind
+      value: RedisFailover
+    set:
+      redis:
+        replicas: 1
+    asserts:
+      - notExists:
+          path: spec.redis.topologySpreadConstraints
+
+  - it: always spreads the three sentinels across zones
+    template: templates/redis.yaml
+    documentSelector:
+      path: kind
+      value: RedisFailover
+    set:
+      redis:
+        replicas: 1
+    asserts:
+      - equal:
+          path: spec.sentinel.topologySpreadConstraints
+          value:
+            - maxSkew: 1
+              topologyKey: topology.kubernetes.io/zone
+              whenUnsatisfiable: ScheduleAnyway
+              labelSelector:
+                matchLabels:
+                  app.kubernetes.io/name: harbor-redis
+                  app.kubernetes.io/component: sentinel
+      - notExists:
+          path: spec.sentinel.affinity
+
+  - it: follows the cluster-wide spread policy for the database
+    template: templates/database.yaml
+    set:
+      db:
+        replicas: 3
+      _cluster:
+        scheduling:
+          globalAppTopologySpreadConstraints: |
+            topologySpreadConstraints:
+            - maxSkew: 1
+              topologyKey: kubernetes.io/hostname
+              whenUnsatisfiable: DoNotSchedule
+            - maxSkew: 2
+              topologyKey: topology.kubernetes.io/zone
+              whenUnsatisfiable: ScheduleAnyway
+    asserts:
+      - equal:
+          path: spec.topologySpreadConstraints
+          value:
+            - maxSkew: 1
+              topologyKey: kubernetes.io/hostname
+              whenUnsatisfiable: DoNotSchedule
+              labelSelector:
+                matchLabels:
+                  cnpg.io/cluster: harbor-db
+                  cnpg.io/podRole: instance
+            - maxSkew: 2
+              topologyKey: topology.kubernetes.io/zone
+              whenUnsatisfiable: ScheduleAnyway
+              labelSelector:
+                matchLabels:
+                  cnpg.io/cluster: harbor-db
+                  cnpg.io/podRole: instance
+
+  # A selector written into the platform-wide policy cannot know this
+  # release's pods, so it is replaced rather than kept.
+  - it: scopes the cluster-wide spread policy to the sentinels
+    template: templates/redis.yaml
+    documentSelector:
+      path: kind
+      value: RedisFailover
+    set:
+      _cluster:
+        scheduling:
+          globalAppTopologySpreadConstraints: |
+            topologySpreadConstraints:
+            - maxSkew: 1
+              topologyKey: topology.kubernetes.io/zone
+              whenUnsatisfiable: DoNotSchedule
+              labelSelector:
+                matchLabels:
+                  foo: bar
+    asserts:
+      - equal:
+          path: spec.sentinel.topologySpreadConstraints
+          value:
+            - maxSkew: 1
+              topologyKey: topology.kubernetes.io/zone
+              whenUnsatisfiable: DoNotSchedule
+              labelSelector:
+                matchLabels:
+                  app.kubernetes.io/name: harbor-redis
+                  app.kubernetes.io/component: sentinel
+
+  # The values below are what packages/apps/harbor forwards for nginx.replicas: 2.
+  # The API server rejects a PDB that sets both minAvailable and maxUnavailable,
+  # and upstream defaults minAvailable to 1, so the forwarded zero has to reach
+  # the rendered object as an absent field.
+  - it: renders the upstream PodDisruptionBudget with maxUnavailable alone
+    template: charts/harbor/templates/nginx/nginx-pdb.yaml
+    set:
+      harbor:
+        nginx:
+          replicas: 2
+          podDisruptionBudget:
+            enabled: true
+            minAvailable: 0
+            maxUnavailable: 1
+    asserts:
+      - isKind:
+          of: PodDisruptionBudget
+      - equal:
+          path: spec.maxUnavailable
+          value: 1
+      - notExists:
+          path: spec.minAvailable
+
+  - it: scopes the forwarded spread to the component's own pods
+    template: charts/harbor/templates/core/core-dpl.yaml
+    set:
+      harbor:
+        core:
+          replicas: 2
+          topologySpreadConstraints:
+            - maxSkew: 1
+              topologyKey: topology.kubernetes.io/zone
+              whenUnsatisfiable: ScheduleAnyway
+            - maxSkew: 1
+              topologyKey: kubernetes.io/hostname
+              whenUnsatisfiable: ScheduleAnyway
+    asserts:
+      - equal:
+          path: spec.replicas
+          value: 2
+      - equal:
+          path: spec.template.spec.topologySpreadConstraints[0].labelSelector.matchLabels.component
+          value: core
+      - equal:
+          path: spec.template.spec.topologySpreadConstraints[1].labelSelector.matchLabels.component
+          value: core
+      - equal:
+          path: spec.template.spec.topologySpreadConstraints[1].labelSelector.matchLabels.release
+          value: harbor-system

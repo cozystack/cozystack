@@ -1,3 +1,6 @@
+{{- $componentDefaults := dict "resourcesPreset" "t1.small" }}
+{{- $core := .Values.core | default $componentDefaults }}
+{{- $registry := .Values.registry | default $componentDefaults }}
 {{- $host := include "cozy-lib.ns-host-required" . }}
 {{- $harborHost := .Values.host | default (printf "%s.%s" .Release.Name $host) }}
 
@@ -192,20 +195,24 @@ spec:
           {{- end }}
         {{- end }}
       nginx:
+        {{- include "harbor.replicaPlacement" (list (.Values.nginx).replicas $) | nindent 8 }}
         resources: {{- include "cozy-lib.resources.defaultingSanitize" (list "t1.small" (dict) $) | nindent 10 }}
       portal:
+        {{- include "harbor.replicaPlacement" (list (.Values.portal).replicas $) | nindent 8 }}
         resources: {{- include "cozy-lib.resources.defaultingSanitize" (list "t1.micro" (dict) $) | nindent 10 }}
       core:
+        {{- include "harbor.replicaPlacement" (list $core.replicas $) | nindent 8 }}
         {{- if and $tokenKey $tokenCert }}
         tokenKey: {{ $tokenKey | quote }}
         tokenCert: {{ $tokenCert | quote }}
         {{- end }}
-        resources: {{- include "cozy-lib.resources.defaultingSanitize" (list .Values.core.resourcesPreset .Values.core.resources $) | nindent 10 }}
+        resources: {{- include "cozy-lib.resources.defaultingSanitize" (list $core.resourcesPreset $core.resources $) | nindent 10 }}
       registry:
+        {{- include "harbor.replicaPlacement" (list $registry.replicas $) | nindent 8 }}
         registry:
-          resources: {{- include "cozy-lib.resources.defaultingSanitize" (list .Values.registry.resourcesPreset .Values.registry.resources $) | nindent 12 }}
+          resources: {{- include "cozy-lib.resources.defaultingSanitize" (list $registry.resourcesPreset $registry.resources $) | nindent 12 }}
         controller:
-          resources: {{- include "cozy-lib.resources.defaultingSanitize" (list .Values.registry.resourcesPreset .Values.registry.resources $) | nindent 12 }}
+          resources: {{- include "cozy-lib.resources.defaultingSanitize" (list $registry.resourcesPreset $registry.resources $) | nindent 12 }}
       jobservice:
         resources: {{- include "cozy-lib.resources.defaultingSanitize" (list .Values.jobservice.resourcesPreset .Values.jobservice.resources $) | nindent 10 }}
       trivy:
@@ -243,9 +250,9 @@ kind: WorkloadMonitor
 metadata:
   name: {{ $.Release.Name }}-core
   labels:
-    workloads.cozystack.io/resource-preset: {{ .Values.core.resourcesPreset | quote }}
+    workloads.cozystack.io/resource-preset: {{ $core.resourcesPreset | quote }}
 spec:
-  replicas: 1
+  replicas: {{ default 1 $core.replicas }}
   minReplicas: 1
   kind: harbor
   type: core
@@ -261,9 +268,9 @@ kind: WorkloadMonitor
 metadata:
   name: {{ $.Release.Name }}-registry
   labels:
-    workloads.cozystack.io/resource-preset: {{ .Values.registry.resourcesPreset | quote }}
+    workloads.cozystack.io/resource-preset: {{ $registry.resourcesPreset | quote }}
 spec:
-  replicas: 1
+  replicas: {{ default 1 $registry.replicas }}
   minReplicas: 1
   kind: harbor
   type: registry
@@ -279,7 +286,7 @@ kind: WorkloadMonitor
 metadata:
   name: {{ $.Release.Name }}-portal
 spec:
-  replicas: 1
+  replicas: {{ default 1 (.Values.portal).replicas }}
   minReplicas: 1
   kind: harbor
   type: portal
