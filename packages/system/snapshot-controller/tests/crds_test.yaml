@@ -1,0 +1,85 @@
+suite: snapshot CRDs and the VolumeGroupSnapshot gate
+
+# The vendored chart renders the snapshot CRDs from a template, so they belong
+# to this release: keepCRDs stops an uninstall from taking every VolumeSnapshot
+# with them. Velero 1.18 and piraeus-operator both look for
+# groupsnapshot.storage.k8s.io/v1beta2, and the controller only acts on group
+# snapshots with the CSIVolumeGroupSnapshot gate on.
+
+templates:
+  - charts/snapshot-controller/templates/crds.yaml
+  - charts/snapshot-controller/templates/deployment_controller.yaml
+
+tests:
+  - it: every CRD is kept on uninstall
+    template: charts/snapshot-controller/templates/crds.yaml
+    asserts:
+      - hasDocuments:
+          count: 6
+      - equal:
+          path: metadata.annotations["helm.sh/resource-policy"]
+          value: keep
+
+  - it: volumegroupsnapshots serves v1beta2 and no longer v1alpha1
+    template: charts/snapshot-controller/templates/crds.yaml
+    documentSelector:
+      path: metadata.name
+      value: volumegroupsnapshots.groupsnapshot.storage.k8s.io
+    asserts:
+      - contains:
+          path: spec.versions
+          content:
+            name: v1beta2
+            served: true
+            storage: true
+          any: true
+      - notContains:
+          path: spec.versions
+          content:
+            name: v1alpha1
+          any: true
+
+  - it: volumegroupsnapshotcontents serves v1beta2 and no longer v1alpha1
+    template: charts/snapshot-controller/templates/crds.yaml
+    documentSelector:
+      path: metadata.name
+      value: volumegroupsnapshotcontents.groupsnapshot.storage.k8s.io
+    asserts:
+      - contains:
+          path: spec.versions
+          content:
+            name: v1beta2
+            served: true
+            storage: true
+          any: true
+      - notContains:
+          path: spec.versions
+          content:
+            name: v1alpha1
+          any: true
+
+  - it: volumegroupsnapshotclasses serves v1beta2 and no longer v1alpha1
+    template: charts/snapshot-controller/templates/crds.yaml
+    documentSelector:
+      path: metadata.name
+      value: volumegroupsnapshotclasses.groupsnapshot.storage.k8s.io
+    asserts:
+      - contains:
+          path: spec.versions
+          content:
+            name: v1beta2
+            served: true
+            storage: true
+          any: true
+      - notContains:
+          path: spec.versions
+          content:
+            name: v1alpha1
+          any: true
+
+  - it: the controller runs with the CSIVolumeGroupSnapshot gate
+    template: charts/snapshot-controller/templates/deployment_controller.yaml
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --feature-gates=CSIVolumeGroupSnapshot=true

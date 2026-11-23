@@ -1,0 +1,23 @@
+{{- if .Values.controller.volumeGroupSnapshotClasses }}
+{{ fail "Use volumeGroupSnapshotClasses instead of controller.volumeGroupSnapshotClasses" }}
+{{- end}}
+{{- range concat .Values.volumeGroupSnapshotClasses }}
+---
+kind: VolumeGroupSnapshotClass
+apiVersion: groupsnapshot.storage.k8s.io/v1beta1
+metadata:
+  name: {{ .name }}
+{{- with .annotations }}
+  annotations: {{- . | toYaml | trim | nindent 4 }}
+{{- end }}
+  labels:
+  {{- include "snapshot-controller.labels" $ | nindent 4 }}
+{{- with .labels }}
+  {{- . | toYaml | trim | nindent 4 }}
+{{- end }}
+driver: {{ .driver }}
+deletionPolicy: {{ .deletionPolicy }}
+{{- with .parameters }}
+parameters: {{- . | toYaml | trim | nindent 2 }}
+{{- end }}
+{{- end }}

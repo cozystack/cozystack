@@ -1,0 +1,120 @@
+{{- /* A vm-disk-<name> claim belongs to the vm-disk release, so it outlives
+       a deleted VM still labelled with that VM's group. Every later VM skips
+       a claim grouped under another name, so without this hook a replacement
+       VM could never group the disk, and a backup taken after the driver's
+       default VolumeGroupSnapshotClass goes away would fail on it.
+
+       Helm runs uninstall hooks from the last stored manifest, so this one is
+       rendered unconditionally rather than only when the post-install hook had
+       work to do. The claims are selected when the Job runs, not at render:
+       the render-time list is stale by the time the release is deleted. The
+       selector can name no claim in advance, hence list on every claim of the
+       namespace instead of resourceNames. */}}
+{{- $vmName := include "virtual-machine.fullname" . -}}
+{{- $namespace := .Release.Namespace -}}
+{{- $groupKey := "velero.io/volume-group" -}}
+{{- $path := printf "/metadata/labels/%s" ($groupKey | replace "/" "~1") -}}
+{{- $hookName := printf "%s-volume-ungroup" .Release.Name -}}
+{{- if gt (len $hookName) 63 -}}
+  {{- $hookName = printf "%s-%s-volume-ungroup" (.Release.Name | trunc 39 | trimSuffix "-") (sha256sum .Release.Name | trunc 8) -}}
+{{- end -}}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ $hookName }}
+  annotations:
+    helm.sh/hook: pre-delete
+    helm.sh/hook-weight: "0"
+    helm.sh/hook-delete-policy: hook-succeeded,before-hook-creation
+spec:
+  template:
+    metadata:
+      labels:
+        app: {{ $hookName }}
+        policy.cozystack.io/allow-to-apiserver: "true"
+    spec:
+      serviceAccountName: {{ $hookName }}
+      restartPolicy: Never
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: unlabel-claims
+          image: docker.io/alpine/k8s:1.36.2
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              memory: "16Mi"
+              cpu: "10m"
+            limits:
+              memory: "128Mi"
+              cpu: "100m"
+          command: ["sh", "-exc"]
+          {{- /* The JSON patch tests for this VM's value before removing it, so
+                 a claim another VM grouped since the list keeps its group. A
+                 claim that no longer carries this VM's value, or no longer
+                 exists, is what the uninstall wants; anything else fails the
+                 Job and the uninstall with it, rather than leave a label no
+                 release would ever remove. */}}
+          args:
+            - |
+              claims=$(kubectl get persistentvolumeclaims -n {{ $namespace }} -l {{ $groupKey }}={{ $vmName }} -o name)
+              for claim in $claims; do
+                if out=$(kubectl patch "$claim" -n {{ $namespace }} --type=json -p '{{ list (dict "op" "test" "path" $path "value" $vmName) (dict "op" "remove" "path" $path) | toJson }}' 2>&1); then
+                  continue
+                fi
+                if ! have=$(kubectl get "$claim" -n {{ $namespace }} -o jsonpath='{.metadata.labels.{{ $groupKey | replace "." "\\." }}}' 2>&1); then
+                  case "$have" in
+                    *"(NotFound)"*) echo "$have"; continue ;;
+                  esac
+                  echo "$have" >&2
+                  exit 1
+                fi
+                if [ "$have" = {{ $vmName }} ]; then
+                  echo "$out" >&2
+                  exit 1
+                fi
+              done
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ $hookName }}
+  annotations:
+    helm.sh/hook: pre-delete
+    helm.sh/hook-weight: "-5"
+    helm.sh/hook-delete-policy: hook-succeeded,before-hook-creation
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $hookName }}
+  annotations:
+    helm.sh/hook: pre-delete
+    helm.sh/hook-weight: "-5"
+    helm.sh/hook-delete-policy: hook-succeeded,before-hook-creation
+rules:
+  - apiGroups: [""]
+    resources: ["persistentvolumeclaims"]
+    verbs: ["list", "get", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $hookName }}
+  annotations:
+    helm.sh/hook: pre-delete
+    helm.sh/hook-weight: "-5"
+    helm.sh/hook-delete-policy: hook-succeeded,before-hook-creation
+subjects:
+  - kind: ServiceAccount
+    name: {{ $hookName }}
+roleRef:
+  kind: Role
+  name: {{ $hookName }}
+  apiGroup: rbac.authorization.k8s.io

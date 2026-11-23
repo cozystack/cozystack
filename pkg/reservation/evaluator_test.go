@@ -19,6 +19,7 @@ package reservation
 import (
 	"errors"
 	"os"
+	"strings"
 	"sync"
 	"testing"
 
@@ -434,6 +435,133 @@ func TestCompile(t *testing.T) {
 		if _, err := Compile(decl, nil); err == nil {
 			t.Errorf("%s: expected a compile error", name)
 		}
+	}
+}
+
+// The Kubernetes quantity library returns a pointer from add and sub, where
+// quantity() and mul return a value; a declaration summing several components
+// mixes both.
+func TestEvaluateQuantityArithmetic(t *testing.T) {
+	env := testEnvironment(t)
+	cases := map[string]struct {
+		expr string
+		want string
+	}{
+		"add":           {`quantity('1').add(quantity('500m'))`, "1500m"},
+		"add an int":    {`quantity('1').add(2)`, "3"},
+		"sub":           {`quantity('2Gi').sub(quantity('512Mi'))`, "1536Mi"},
+		"mul after add": {`preset('t1.micro').cpu.add(preset('t1.nano').cpu).mul(2)`, "1500m"},
+		"add after mul": {`quantity('1Gi').mul(2).add(quantity('1Gi'))`, "3Gi"},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			ev, err := Compile(&Declaration{Resources: map[string]string{"x": tc.expr}}, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			got, err := ev.Evaluate(map[string]any{}, env)
+			if err != nil {
+				t.Fatal(err)
+			}
+			assertList(t, name, got, rl("x", tc.want))
+		})
+	}
+}
+
+// A fractional binary quantity is stored at a scale whose coefficient leaves
+// int64 well before its value does, which is where resource.Quantity.Mul
+// reports an inexact int64 for a product it still holds exactly.
+func TestEvaluateMulKeepsExactProducts(t *testing.T) {
+	env := testEnvironment(t)
+	cases := map[string]struct {
+		expr string
+		want string
+	}{
+		"fractional Gi": {`quantity('20.5Gi').mul(3)`, "62976Mi"},
+		"fractional Ti": {`quantity('1.5Ti').mul(3)`, "4608Gi"},
+		"after a sum":   {`quantity('8.5Gi').add(quantity('1Gi')).mul(2)`, "19Gi"},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			ev, err := Compile(&Declaration{Resources: map[string]string{"x": tc.expr}}, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			got, err := ev.Evaluate(map[string]any{}, env)
+			if err != nil {
+				t.Fatal(err)
+			}
+			assertList(t, name, got, rl("x", tc.want))
+		})
+	}
+}
+
+// A declaration states a spec its chart refuses to render with fail(), so
+// that the refusal carries the declaration's own reason.
+func TestEvaluateFail(t *testing.T) {
+	env := testEnvironment(t)
+	// Keys evaluate in sorted order, so cpu succeeds before memory fails.
+	ev, err := Compile(&Declaration{Resources: map[string]string{
+		"cpu":    `quantity('1')`,
+		"memory": `has(values.memory) ? quantity(values.memory) : fail('memory is required')`,
+	}}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := ev.Evaluate(map[string]any{}, env)
+	if err == nil || !strings.Contains(err.Error(), "memory is required") {
+		t.Errorf("got %v, want an error carrying the declared reason", err)
+	}
+	if got != nil {
+		t.Errorf("a failed evaluation returned a partial reservation %v", got)
+	}
+	got, err = ev.Evaluate(map[string]any{"memory": "1Gi"}, env)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertList(t, "branch not taken", got, rl("cpu", "1", "memory", "1Gi"))
+}
+
+// A null is absent to Helm, which deletes the key it nulls, so it must be
+// absent to an expression too, including where the schema has no default to
+// put in its place.
+func TestEvaluateTreatsNullAsAbsent(t *testing.T) {
+	env := testEnvironment(t)
+	ev, err := Compile(&Declaration{Resources: map[string]string{
+		"cpu": `has(values.r.cpu) ? 1 : 2`,
+	}}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := ev.Evaluate(map[string]any{"r": map[string]any{"cpu": nil}}, env)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertList(t, "null", got, rl("cpu", "2"))
+}
+
+// Helm deletes a nulled key from the chart's defaults as well, so a null must
+// not be replaced by the schema default either.
+func TestEvaluateNullOverridesDefault(t *testing.T) {
+	env := testEnvironment(t)
+	ev := mustCompile(t, &Declaration{Resources: map[string]string{
+		"cpu": `has(values.instanceType) ? 1 : 2`,
+	}}, "vm-instance")
+	for name, tc := range map[string]struct {
+		values string
+		want   string
+	}{
+		"omitted takes the default": {`{}`, "1"},
+		"null deletes the default":  {`{"instanceType": null}`, "2"},
+		"nested null":               {`{"resources": null}`, "1"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			got, err := ev.EvaluateJSON([]byte(tc.values), env)
+			if err != nil {
+				t.Fatal(err)
+			}
+			assertList(t, name, got, rl("cpu", tc.want))
+		})
 	}
 }
 

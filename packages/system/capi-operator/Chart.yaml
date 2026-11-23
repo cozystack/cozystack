@@ -1,3 +1,7 @@
 apiVersion: v2
 name: cozy-capi-operator
 version: 0.0.0 # Placeholder, the actual version will be automatically set during the build process
+dependencies:
+  - name: cluster-api-operator
+    version: "*"
+    repository: "file://charts/cluster-api-operator"

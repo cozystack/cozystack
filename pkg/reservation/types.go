@@ -30,6 +30,8 @@ import (
 	"sort"
 
 	"k8s.io/apimachinery/pkg/api/resource"
+
+	cozyv1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
 )
 
 // Quota keys for KubeVirt instance-type classes. A shared vCPU and a pinned
@@ -45,31 +47,18 @@ const (
 	KeyHugepagesPrefix = "hugepages-"
 )
 
-// Declaration is how a kind's reservation is computed from its values.
+// Declaration is how a kind's reservation is computed from its values. It is
+// the type an ApplicationDefinition carries, so a definition is compiled
+// as read, with no conversion in between.
 //
 // Exactly one of Exempt or Resources is meaningful: a kind that consumes
 // nothing says so with Exempt rather than with an empty Resources map, so
 // that a zero reservation is always a reviewed statement and never an
 // omission.
-type Declaration struct {
-	// Exempt declares that the kind consumes nothing from a tenant's budget.
-	Exempt bool `json:"exempt,omitempty"`
-
-	// Let binds intermediate CEL expressions, evaluated in order, each one
-	// visible to the later bindings and to every Resources expression.
-	Let []Binding `json:"let,omitempty"`
-
-	// Resources maps a quota key to the CEL expression computing the
-	// amount of it the application reserves. An expression may return an
-	// int, a double, a quantity string or a quantity.
-	Resources map[string]string `json:"resources,omitempty"`
-}
+type Declaration = cozyv1alpha1.ApplicationDefinitionConsumption
 
 // Binding names one intermediate CEL expression of a Declaration.
-type Binding struct {
-	Name       string `json:"name"`
-	Expression string `json:"expression"`
-}
+type Binding = cozyv1alpha1.ApplicationDefinitionConsumptionBinding
 
 // ResourceList is a reservation, keyed by quota key.
 type ResourceList map[string]resource.Quantity

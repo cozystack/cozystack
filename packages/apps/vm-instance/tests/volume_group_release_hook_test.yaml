@@ -1,0 +1,67 @@
+suite: vm-instance releases its Velero volume group on uninstall
+
+# Helm runs uninstall hooks from the stored manifest, so the hook has to be
+# there whatever the cluster looked like at render: no capability and no
+# lookup is mocked here. hack/vm-volume-group-release-hook.bats runs the
+# script itself against a fake kubectl.
+release:
+  name: vm-instance-win
+  namespace: tenant-test
+templates:
+  - templates/volume-group-release-hook.yaml
+tests:
+  - it: renders the pre-delete hook with nothing to look up
+    asserts:
+      - hasDocuments:
+          count: 4
+      - equal:
+          path: metadata.annotations["helm.sh/hook"]
+          value: pre-delete
+
+  - it: selects the claims when the Job runs, by this VM's group
+    documentSelector: {path: kind, value: Job}
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].args[0]
+          pattern: 'kubectl get persistentvolumeclaims -n tenant-test -l velero\.io/volume-group=vm-instance-win -o name'
+      - matchRegex:
+          path: spec.template.spec.containers[0].args[0]
+          pattern: 'kubectl patch "\$claim" -n tenant-test --type=json -p ''\[\{"op":"test","path":"/metadata/labels/velero.io~1volume-group","value":"vm-instance-win"\},\{"op":"remove","path":"/metadata/labels/velero.io~1volume-group"\}\]'''
+
+  - it: lets the hook list and patch claims it cannot name in advance
+    documentSelector: {path: kind, value: Role}
+    asserts:
+      - equal:
+          path: rules
+          value:
+            - apiGroups: [""]
+              resources: ["persistentvolumeclaims"]
+              verbs: ["list", "get", "patch"]
+
+  - it: keeps apart from the post-install hook and within 63 characters for a 53-character release
+    release:
+      name: vm-instance-a-virtual-machine-name-of-41-characters-x
+    asserts:
+      - matchRegex:
+          path: metadata.name
+          pattern: '^vm-instance-a-virtual-machine-name-of-4-[0-9a-f]{8}-volume-ungroup$'
+      - matchRegex:
+          path: spec.template.metadata.labels.app
+          pattern: '^.{1,63}$'
+        documentSelector: {path: kind, value: Job}
+
+  - it: runs the Job under a restrictive non-root securityContext
+    documentSelector: {path: kind, value: Job}
+    asserts:
+      - equal:
+          path: spec.template.spec.securityContext.runAsNonRoot
+          value: true
+      - equal:
+          path: spec.template.spec.containers[0].securityContext.allowPrivilegeEscalation
+          value: false
+      - contains:
+          path: spec.template.spec.containers[0].securityContext.capabilities.drop
+          content: ALL
+      - equal:
+          path: spec.template.metadata.labels["policy.cozystack.io/allow-to-apiserver"]
+          value: "true"

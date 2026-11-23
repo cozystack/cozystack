@@ -14,9 +14,13 @@ spec:
     dependsOn:
     - cozystack.networking
     - cozystack.capi-operator
+    libraries:
+    - name: cozy-lib
+      path: library/cozy-lib
     components:
     - name: capi-providers-core
       path: system/capi-providers-core
+      libraries: ["cozy-lib"]
       install:
         privileged: true
         namespace: cozy-cluster-api

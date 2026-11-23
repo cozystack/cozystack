@@ -3,6 +3,7 @@ apiVersion: monitoring.coreos.com/v1
 kind: ServiceMonitor
 metadata:
   name: {{ include "snapshot-controller.fullname" . }}
+  namespace: {{ .Release.Namespace }}
   labels:
     {{- include "snapshot-controller.labels" . | nindent 4 }}
 spec:

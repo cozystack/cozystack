@@ -1,0 +1,18 @@
+--- a/charts/cluster-api-operator/templates/deployment.yaml
++++ b/charts/cluster-api-operator/templates/deployment.yaml
+@@ -87,14 +87,14 @@
+         {{- end }}
+         {{- if .retryPeriod }}
+         - --leader-elect-retry-period={{ .retryPeriod }}
+         {{- end }}
++        {{- end }}
+         {{- if $.Values.profilerAddress }}
+         - --profiler-address={{ if hasPrefix ":" ($.Values.profilerAddress | toString) }}localhost{{ end }}{{ $.Values.profilerAddress }}
+         {{- end }}
+         {{- if $.Values.contentionProfiling }}
+         - --contention-profiling={{ $.Values.contentionProfiling }}
+         {{- end }}
+-        {{- end }}
+         {{- with .Values.syncPeriod }}
+         - --sync-period={{ . }}
+         {{- end }}

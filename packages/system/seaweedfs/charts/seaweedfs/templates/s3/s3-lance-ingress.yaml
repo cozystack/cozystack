@@ -5,11 +5,11 @@ paths:
   backend:
     {{- if semverCompare ">=1.19-0" .Capabilities.KubeVersion.GitVersion }}
     service:
-      name: {{ include "seaweedfs.componentName" (list . "s3") }}
+      name: {{ template "seaweedfs.name" . }}-s3
       port:
         number: {{ .Values.s3.lancePort }}
     {{- else }}
-    serviceName: {{ include "seaweedfs.componentName" (list . "s3") }}
+    serviceName: {{ template "seaweedfs.name" . }}-s3
     servicePort: {{ .Values.s3.lancePort }}
     {{- end }}
 {{- end -}}
@@ -41,6 +41,9 @@ metadata:
     app.kubernetes.io/managed-by: {{ .Release.Service }}
     app.kubernetes.io/instance: {{ .Release.Name }}
     app.kubernetes.io/component: s3-lance
+    {{- with .Values.s3.lanceIngress.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
 spec:
   {{- if .Values.s3.lanceIngress.className }}
   ingressClassName: {{ .Values.s3.lanceIngress.className | quote }}

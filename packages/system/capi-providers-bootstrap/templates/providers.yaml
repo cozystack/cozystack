@@ -1,13 +1,15 @@
+{{- include "capi-providers-bootstrap.assertUpgradeWindow" . }}
 apiVersion: operator.cluster.x-k8s.io/v1alpha2
 kind: BootstrapProvider
 metadata:
   name: kubeadm
 spec:
   # https://github.com/kubernetes-sigs/cluster-api
-  version: v1.10.1-bootstrap
+  version: {{ .Chart.AppVersion }}-bootstrap
   fetchConfig:
     selector:
       matchLabels:
+        provider.cluster.x-k8s.io/version: {{ .Chart.AppVersion }}-bootstrap
         bootstrap-components: cozy
         bootstrap-provider: kubeadm
   deployment:
@@ -27,7 +29,7 @@ metadata:
   name: talos
 spec:
   # https://github.com/siderolabs/cluster-api-bootstrap-provider-talos
-  version: v0.6.12-bootstrap-talos
+  version: v0.6.13-bootstrap-talos
   fetchConfig:
     selector:
       matchLabels:

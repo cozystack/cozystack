@@ -151,3 +151,57 @@ tests:
       - equal:
           path: spec.template.spec.containers[0].ports[0].containerPort
           value: 8000
+
+  # The browser-facing issuer, login URL, logout URL and redirect whitelist
+  # follow _cluster.keycloak-host (authentication.oidc.keycloakHost in the
+  # platform), so moving Keycloak off keycloak.<root-host> keeps dashboard SSO
+  # working.
+  - it: builds the browser-facing OIDC URLs on a custom keycloak-host
+    template: templates/gatekeeper-config.yaml
+    set:
+      _cluster:
+        root-host: example.org
+        oidc-enabled: "true"
+        keycloak-host: auth.example.org
+        keycloak-internal-url: http://keycloak-http.cozy-keycloak.svc:8080/realms/cozy
+    asserts:
+      - matchRegex:
+          path: data["alpha-config.yaml"]
+          pattern: 'issuerURL: https://auth\.example\.org/realms/cozy\n'
+      - matchRegex:
+          path: data["alpha-config.yaml"]
+          pattern: 'loginURL: https://auth\.example\.org/realms/cozy/protocol/openid-connect/auth\n'
+      - notMatchRegex:
+          path: data["alpha-config.yaml"]
+          pattern: 'keycloak\.example\.org'
+
+  - it: builds the external-discovery logout URL on a custom keycloak-host
+    template: templates/gatekeeper-config.yaml
+    set:
+      _cluster:
+        root-host: example.org
+        oidc-enabled: "true"
+        keycloak-host: auth.example.org
+        keycloak-internal-url: ""
+    asserts:
+      - matchRegex:
+          path: data["alpha-config.yaml"]
+          pattern: 'backendLogoutURL: https://auth\.example\.org/realms/cozy/protocol/openid-connect/logout\?id_token_hint=\{id_token\}\n'
+      - notMatchRegex:
+          path: data["alpha-config.yaml"]
+          pattern: 'keycloak\.example\.org'
+
+  - it: whitelists the custom keycloak-host for the post-logout redirect
+    template: templates/gatekeeper.yaml
+    set:
+      _cluster:
+        root-host: example.org
+        oidc-enabled: "true"
+        keycloak-host: auth.example.org
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --whitelist-domain=auth.example.org
+      - notContains:
+          path: spec.template.spec.containers[0].args
+          content: --whitelist-domain=keycloak.example.org

@@ -63,6 +63,13 @@ Service utilizes the freshworks-oss Redis Operator (a maintained fork of the arc
 | `sentinel.resourcesPreset`  | Sizing preset for the Sentinel pods. Defaults to `resourcesPreset`.                                                                                                                                                                                                                 | `string`   | `{}`  |
 
 
+### Scheduling parameters
+
+| Name              | Description                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         | Type     | Value |
+| ----------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------- | ----- |
+| `schedulingClass` | Name of a SchedulingClass CR (cluster-scoped, group cozystack.io) used in place of the tenant's for this application's pods. A pod gets its class when it is created, so running pods keep theirs until they are recreated. Must be the tenant's own class or one listed in the tenant's `allowedSchedulingClasses`. Setting any other value is refused, and the pods of an application whose class is not, or no longer, in that list get the tenant's class. Empty means inherit from the tenant. | `string` | `""`  |
+
+
 ## Parameter examples and reference
 
 ### resources and resourcesPreset
