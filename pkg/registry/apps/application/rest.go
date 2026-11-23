@@ -578,6 +578,10 @@ func (r *REST) Update(ctx context.Context, name string, objInfo rest.UpdatedObje
 		}
 	}
 
+	if errs := r.validateVMDiskStorageNotLowered(oldObj.(*appsv1alpha1.Application), app); len(errs) > 0 {
+		return nil, false, apierrors.NewInvalid(r.gvk.GroupKind(), app.Name, errs)
+	}
+
 	// Enforce hierarchical quota allocation on quota changes too: raising a
 	// child tenant's declared quota above its parent's remaining budget is
 	// rejected the same way as on create.
