@@ -83,6 +83,8 @@ setup() {
   [ "$(yq --no-doc 'select(.kind == "Job") | .spec.template.spec.volumes[] | select(.name == "scripts") | .configMap.name' "$RENDERED")" = capi-providers-core-upgrade ]
   [ "$(yq --no-doc 'select(.kind == "Job") | .spec.template.spec.containers[0].volumeMounts[] | select(.name == "scripts") | .mountPath' "$RENDERED")" = /scripts ]
   [ "$(yq --no-doc 'select(.kind == "Job") | .spec.template.spec.containers[0].env[] | select(.name == "KUBE_CONTEXT") | .value' "$RENDERED")" = capi-upgrade ]
+  [ "$(yq --no-doc 'select(.kind == "Job") | .spec.template.spec.containers[0].env[] | select(.name == "KUBECONFIG") | .value' "$RENDERED")" = /scripts/kubeconfig ]
+  [ "$(yq --no-doc 'select(.kind == "ConfigMap" and .metadata.name == "capi-providers-core-upgrade") | .data.kubeconfig | from_yaml | .current-context' "$RENDERED")" = capi-upgrade ]
   image="$(yq --no-doc 'select(.kind == "Job") | .spec.template.spec.containers[0].image' "$RENDERED")"
   [[ "$image" =~ @sha256:[0-9a-f]{64}$ ]]
 }

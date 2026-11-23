@@ -53,6 +53,14 @@ accepted_patches() {
   jq --slurp --compact-output '[.[] | select(.accepted == true) | {name, version: (.patch[] | select(.path == "/spec/version" and .op == "replace") | .value)}]' "$CAPI_TEST_LOG"
 }
 
+@test "the script refuses to reach the API without the hook's kubeconfig" {
+  unset KUBECONFIG
+  run bash "$UPGRADE_SCRIPT"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *KUBECONFIG* ]]
+  [ ! -s "$CAPI_TEST_LOG" ]
+}
+
 @test "fresh installations do not create or patch providers" {
   fixture '.providers = {}'
   run bash "$UPGRADE_SCRIPT"
