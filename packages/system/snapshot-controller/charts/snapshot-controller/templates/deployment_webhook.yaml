@@ -2,15 +2,16 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: {{ include "snapshot-validation-webhook.fullname" . }}
+  name: {{ include "conversion-webhook.fullname" . }}
+  namespace: {{ .Release.Namespace }}
   labels:
-    {{- include "snapshot-validation-webhook.labels" . | nindent 4 }}
+    {{- include "conversion-webhook.labels" . | nindent 4 }}
 spec:
   replicas: {{ .Values.webhook.replicaCount }}
   revisionHistoryLimit: {{ .Values.webhook.revisionHistoryLimit }}
   selector:
     matchLabels:
-      {{- include "snapshot-validation-webhook.selectorLabels" . | nindent 6 }}
+      {{- include "conversion-webhook.selectorLabels" . | nindent 6 }}
   template:
     metadata:
       {{- with .Values.webhook.podAnnotations }}
@@ -18,7 +19,7 @@ spec:
         {{- toYaml . | nindent 8 }}
       {{- end }}
       labels:
-        {{- include "snapshot-validation-webhook.selectorLabels" . | nindent 8 }}
+        {{- include "conversion-webhook.selectorLabels" . | nindent 8 }}
         {{- with .Values.webhook.podLabels }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
@@ -27,14 +28,11 @@ spec:
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
       {{- end }}
-      serviceAccountName: {{ include "snapshot-validation-webhook.serviceAccountName" . }}
+      serviceAccountName: {{ include "conversion-webhook.serviceAccountName" . }}
       securityContext:
         {{- toYaml .Values.webhook.podSecurityContext | nindent 8 }}
-      {{- with .Values.webhook.priorityClassName }}
-      priorityClassName: {{ . }}
-      {{- end }}
       containers:
-        - name: {{ include "snapshot-validation-webhook.name" . }}
+        - name: "conversion-webhook"
           securityContext:
             {{- toYaml .Values.webhook.securityContext | nindent 12 }}
           image: "{{ .Values.webhook.image.repository }}:{{ .Values.webhook.image.tag | default .Chart.AppVersion }}"
@@ -45,27 +43,19 @@ spec:
             {{- end }}
           ports:
             - name: https
-              containerPort: {{ .Values.webhook.args.port | default 8443 }}
+              containerPort: {{ .Values.webhook.args.port }}
               protocol: TCP
-          volumeMounts:
-            - mountPath: /etc/snapshot-validation
-              name: tls-config
           livenessProbe:
             httpGet:
-              path: /readyz
               port: https
-              scheme: HTTPS
-          readinessProbe:
-            httpGet:
               path: /readyz
-              port: https
               scheme: HTTPS
           resources:
             {{- toYaml .Values.webhook.resources | nindent 12 }}
-      volumes:
-        - name: tls-config
-          secret:
-            secretName: {{ include "snapshot-validation-webhook.certifcateName" . }}
+          volumeMounts:
+            - name: tls
+              mountPath: /etc/webhook
+              readOnly: true
       {{- with .Values.webhook.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}
@@ -74,13 +64,16 @@ spec:
       affinity:
         {{- toYaml . | nindent 8 }}
       {{- end }}
-      {{- if .Values.webhook.topologySpreadConstraints }}
-      topologySpreadConstraints:
-        {{- toYaml .Values.webhook.topologySpreadConstraints | nindent 8 }}
-      {{- end }}
       {{- with .Values.webhook.tolerations }}
       tolerations:
         {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.webhook.topologySpreadConstraints }}
+      topologySpreadConstraints:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- if .Values.webhook.priorityClassName }}
+      priorityClassName: {{ .Values.webhook.priorityClassName }}
       {{- end }}
       hostNetwork: {{ .Values.webhook.hostNetwork }}
       {{- with .Values.webhook.dnsConfig }}
@@ -88,4 +81,8 @@ spec:
         {{- toYaml . | nindent 8 }}
       {{- end }}
       dnsPolicy: {{ .Values.webhook.dnsPolicy }}
+      volumes:
+      - name: tls
+        secret:
+          secretName: {{ include "conversion-webhook.certifcateName" . }}
 {{- end }}
