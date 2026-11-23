@@ -24,6 +24,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	helmv2 "github.com/fluxcd/helm-controller/api/v2"
 	corev1 "k8s.io/api/core/v1"
@@ -32,10 +33,12 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apiserver/pkg/endpoints/request"
 	"k8s.io/apiserver/pkg/registry/rest"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 	"sigs.k8s.io/yaml"
 
 	cozyv1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
@@ -91,6 +94,13 @@ type gateFixture struct {
 // seeded with objects.
 func newGateFixture(t *testing.T, objects ...client.Object) gateFixture {
 	t.Helper()
+	return newGateFixtureWith(t, interceptor.Funcs{}, objects...)
+}
+
+// newGateFixtureWith is newGateFixture over a client whose calls funcs
+// intercept.
+func newGateFixtureWith(t *testing.T, funcs interceptor.Funcs, objects ...client.Object) gateFixture {
+	t.Helper()
 	res := shippedResource(t, "../../../../packages/system/vm-instance-rd/cozyrds/vm-instance.yaml")
 	scheme := runtime.NewScheme()
 	for _, add := range []func(*runtime.Scheme) error{helmv2.AddToScheme, corev1.AddToScheme, cozyv1alpha1.AddToScheme} {
@@ -101,7 +111,7 @@ func newGateFixture(t *testing.T, objects ...client.Object) gateFixture {
 	if err := appsv1alpha1.RegisterDynamicTypes(scheme, &config.ResourceConfig{Resources: []config.Resource{res}}); err != nil {
 		t.Fatal(err)
 	}
-	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(objects...).Build()
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(objects...).WithInterceptorFuncs(funcs).Build()
 	gate := NewReservation([]config.Resource{res}, testEnvironment())
 	vms := NewREST(c, c, &res)
 	vms.SetReservation(gate)
@@ -320,7 +330,13 @@ func TestReservationGateDoesNotStoreWithoutTheGate(t *testing.T) {
 func TestReservationAnnotationIsNotWritableThroughTheApplication(t *testing.T) {
 	f := newGateFixture(t, tenantHelmRelease(t, "acme", rootTenantNamespace, map[string]string{"memory": "8Gi"}))
 	app := vmApplication(t, "web", "tenant-acme", map[string]any{"instanceType": "u1.large"})
-	app.Annotations = map[string]string{ReservedAnnotation: `{"valuesHash":"x","resources":{}}`}
+	// A figure whose hash does describe the values, so that only reading
+	// the Application's own annotation could make it count.
+	hash, err := reservation.ValuesHash(app.Spec.Raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	app.Annotations = map[string]string{ReservedAnnotation: `{"valuesHash":"` + hash + `","resources":{}}`}
 	if err := f.create(t, app); !apierrors.IsInvalid(err) {
 		t.Fatalf("an Application annotation must not stand in for the gate's figure, got %v", err)
 	}
@@ -364,4 +380,192 @@ func TestTenantQuotaDeclarationCountsReservationsWithTheGate(t *testing.T) {
 	if len(errs) != 1 || !strings.Contains(errs[0].Error(), "16Gi currently in use by the parent pool") {
 		t.Fatalf("the parent pool's 16Gi is reserved by its VM, so a 1Gi child does not fit; got %v", errs)
 	}
+}
+
+// TestReservationGateKeepsCountingAWriteTheCacheHasNotServed: when the
+// cache does not show a write before the settle timeout, the pool lock is
+// released, but the write is still counted from the gate's own record, so
+// the next writer cannot spend it twice.
+func TestReservationGateKeepsCountingAWriteTheCacheHasNotServed(t *testing.T) {
+	hidden := map[string]bool{}
+	var mu sync.Mutex
+	f := newGateFixtureWith(t, interceptor.Funcs{
+		// The gate reads the pool through List and settles through Get:
+		// a release hidden from both is one the cache has not served.
+		Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+			mu.Lock()
+			h := hidden[key.Name]
+			mu.Unlock()
+			if _, ok := obj.(*helmv2.HelmRelease); ok && h {
+				return apierrors.NewNotFound(helmv2.GroupVersion.WithResource("helmreleases").GroupResource(), key.Name)
+			}
+			return c.Get(ctx, key, obj, opts...)
+		},
+		List: func(ctx context.Context, c client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
+			if err := c.List(ctx, list, opts...); err != nil {
+				return err
+			}
+			if l, ok := list.(*helmv2.HelmReleaseList); ok {
+				mu.Lock()
+				defer mu.Unlock()
+				kept := l.Items[:0]
+				for _, hr := range l.Items {
+					if !hidden[hr.Name] {
+						kept = append(kept, hr)
+					}
+				}
+				l.Items = kept
+			}
+			return nil
+		},
+	}, tenantHelmRelease(t, "acme", rootTenantNamespace, map[string]string{"memory": "8Gi"}))
+	f.gate.settleTimeout = 50 * time.Millisecond
+
+	// 8Gi of memory holds two u1.small VMs. The first never reaches the
+	// cache; without the gate's record the pool would look like it holds
+	// only the second, and a third would be admitted.
+	mu.Lock()
+	hidden["vm-instance-first"] = true
+	mu.Unlock()
+	small := map[string]any{"instanceType": "u1.small"}
+	if err := f.create(t, vmApplication(t, "first", "tenant-acme", small)); err != nil {
+		t.Fatalf("first VM: %v", err)
+	}
+	if err := f.create(t, vmApplication(t, "second", "tenant-acme", small)); err != nil {
+		t.Fatalf("second VM: %v", err)
+	}
+	if err := f.create(t, vmApplication(t, "third", "tenant-acme", small)); !apierrors.IsInvalid(err) {
+		t.Fatalf("a third VM was admitted while the first was not in the cache yet: %v", err)
+	}
+
+	// Once the cache serves it, the record is dropped and the release
+	// counts as itself.
+	mu.Lock()
+	delete(hidden, "vm-instance-first")
+	mu.Unlock()
+	if err := f.create(t, vmApplication(t, "third", "tenant-acme", small)); !apierrors.IsInvalid(err) {
+		t.Fatalf("a third VM was admitted once the first reached the cache: %v", err)
+	}
+	if len(f.gate.pendingIn("tenant-acme")) != 0 {
+		t.Error("the gate kept its record of a write the cache now serves")
+	}
+}
+
+// TestReservationGateExpiresItsRecordOfAnUnservedWrite: the gate's record
+// of a write is bounded in time, so a release deleted before the cache ever
+// served it does not hold its share of the pool forever.
+func TestReservationGateExpiresItsRecordOfAnUnservedWrite(t *testing.T) {
+	g := NewReservation(nil, testEnvironment())
+	now := time.Unix(0, 0)
+	g.now = func() time.Time { return now }
+	g.addPending(types.NamespacedName{Namespace: "tenant-acme", Name: "vm-instance-gone"}, &reservation.Stored{})
+	if len(g.pendingIn("tenant-acme")) != 1 {
+		t.Fatal("a fresh record is not served")
+	}
+	now = now.Add(g.pendingTTL + time.Second)
+	if len(g.pendingIn("tenant-acme")) != 0 {
+		t.Fatal("an expired record is still counted")
+	}
+}
+
+// TestReservationGateReturnsAConflictWhenTheBaseMoves: an update is admitted
+// against the release as it was read. If a conflicting write changed its
+// values before the update committed, retrying would commit a delta that was
+// never checked, so the client gets the conflict instead.
+func TestReservationGateReturnsAConflictWhenTheBaseMoves(t *testing.T) {
+	budget := tenantHelmRelease(t, "acme", rootTenantNamespace, map[string]string{"memory": "20Gi"})
+	f := newGateFixture(t, budget)
+	if err := f.create(t, vmApplication(t, "web", "tenant-acme", map[string]any{"instanceType": "u1.small"})); err != nil {
+		t.Fatal(err)
+	}
+
+	var once sync.Once
+	moved := newGateFixtureWith(t, interceptor.Funcs{
+		Update: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.UpdateOption) error {
+			conflict := false
+			once.Do(func() {
+				// Another writer changes the values first.
+				live := &helmv2.HelmRelease{}
+				if err := c.Get(ctx, client.ObjectKeyFromObject(obj), live); err != nil {
+					t.Error(err)
+					return
+				}
+				live.Spec.Values = &apiextv1.JSON{Raw: []byte(`{"instanceType":"u1.small","runStrategy":"Halted"}`)}
+				if err := c.Update(ctx, live); err != nil {
+					t.Error(err)
+				}
+				conflict = true
+			})
+			if conflict {
+				return apierrors.NewConflict(helmv2.GroupVersion.WithResource("helmreleases").GroupResource(), obj.GetName(), fmt.Errorf("modified"))
+			}
+			return c.Update(ctx, obj, opts...)
+		},
+	}, budget.DeepCopy(), mustGet(t, f.client, "tenant-acme", "vm-instance-web"))
+
+	err := moved.update(t, vmApplication(t, "web", "tenant-acme", map[string]any{"instanceType": "u1.large"}))
+	if !apierrors.IsConflict(err) {
+		t.Fatalf("an update whose base moved before it committed returned %v, want a conflict", err)
+	}
+	if got := string(mustGet(t, moved.client, "tenant-acme", "vm-instance-web").Spec.Values.Raw); strings.Contains(got, "u1.large") {
+		t.Fatalf("the unchecked delta was committed: %s", got)
+	}
+}
+
+// TestReservationGateRetriesAConflictThatLeftTheValuesAlone: the conflicts a
+// release sees all the time, from helm-controller writing its status, do not
+// move its values, and the update still goes through.
+func TestReservationGateRetriesAConflictThatLeftTheValuesAlone(t *testing.T) {
+	budget := tenantHelmRelease(t, "acme", rootTenantNamespace, map[string]string{"memory": "20Gi"})
+	f := newGateFixture(t, budget)
+	if err := f.create(t, vmApplication(t, "web", "tenant-acme", map[string]any{"instanceType": "u1.small"})); err != nil {
+		t.Fatal(err)
+	}
+	var once sync.Once
+	g := newGateFixtureWith(t, interceptor.Funcs{
+		Update: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.UpdateOption) error {
+			conflict := false
+			once.Do(func() { conflict = true })
+			if conflict {
+				return apierrors.NewConflict(helmv2.GroupVersion.WithResource("helmreleases").GroupResource(), obj.GetName(), fmt.Errorf("status written"))
+			}
+			return c.Update(ctx, obj, opts...)
+		},
+	}, budget.DeepCopy(), mustGet(t, f.client, "tenant-acme", "vm-instance-web"))
+	if err := g.update(t, vmApplication(t, "web", "tenant-acme", map[string]any{"instanceType": "u1.large"})); err != nil {
+		t.Fatalf("a conflict that left the values alone was not retried: %v", err)
+	}
+}
+
+// TestSettleWaitsForTheWrittenValues: a cached release carrying the written
+// figure, but older values, is not the write. An edit made with the gate off
+// keeps the annotation and can leave exactly that behind.
+func TestSettleWaitsForTheWrittenValues(t *testing.T) {
+	written := []byte(`{"instanceType":"u1.large"}`)
+	hash, err := reservation.ValuesHash(written)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stale := &helmv2.HelmRelease{
+		ObjectMeta: metav1.ObjectMeta{Name: "vm-instance-web", Namespace: "tenant-acme",
+			Annotations: map[string]string{ReservedAnnotation: `{"valuesHash":"` + hash + `","resources":{}}`}},
+		Spec: helmv2.HelmReleaseSpec{Values: &apiextv1.JSON{Raw: []byte(`{"instanceType":"u1.small"}`)}},
+	}
+	f := newGateFixture(t, stale)
+	f.gate.settleTimeout = 50 * time.Millisecond
+	adm := &reservationAdmission{gate: f.gate, stored: &reservation.Stored{ValuesHash: hash}, unlock: func() {}}
+	adm.settle(context.Background(), f.client, client.ObjectKeyFromObject(stale))
+	if len(f.gate.pendingIn("tenant-acme")) != 1 {
+		t.Fatal("settle took a release with older values for the write")
+	}
+}
+
+func mustGet(t *testing.T, c client.Client, namespace, name string) *helmv2.HelmRelease {
+	t.Helper()
+	hr := &helmv2.HelmRelease{}
+	if err := c.Get(context.Background(), client.ObjectKey{Namespace: namespace, Name: name}, hr); err != nil {
+		t.Fatal(err)
+	}
+	hr.ResourceVersion = ""
+	return hr
 }

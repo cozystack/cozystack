@@ -18,6 +18,7 @@ package application
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -29,6 +30,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/selection"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/klog/v2"
@@ -51,7 +53,11 @@ const tenantNamespacePrefix = "tenant-"
 
 const (
 	defaultSettleTimeout = 5 * time.Second
-	settleInterval       = 50 * time.Millisecond
+	// defaultPendingTTL bounds how long a write the cache has not served is
+	// counted from the gate's own record. An informer that lags this far is
+	// broken, and the controller reports what the pool reserves anyway.
+	defaultPendingTTL = 5 * time.Minute
+	settleInterval    = 50 * time.Millisecond
 )
 
 type kindEvaluator struct {
@@ -66,9 +72,25 @@ type Reservation struct {
 	evaluators    map[string]kindEvaluator
 	env           reservation.Environment
 	settleTimeout time.Duration
+	pendingTTL    time.Duration
+	now           func() time.Time
 
 	mu    sync.Mutex
 	locks map[string]*sync.Mutex
+	// pending holds the figures of writes the cache had not served when
+	// their pool lock was released, so that the next writer into the pool
+	// still counts them.
+	pending map[types.NamespacedName]pendingWrite
+}
+
+// errReservationBaseMoved stops an update's conflict retry when the release
+// it was admitted against changed values in the meantime.
+var errReservationBaseMoved = errors.New("the release changed values since its update was admitted")
+
+// pendingWrite is a written figure the cache has not served yet.
+type pendingWrite struct {
+	stored  *reservation.Stored
+	expires time.Time
 }
 
 // NewReservation compiles the consumption declaration of every resource. A
@@ -79,7 +101,10 @@ func NewReservation(resources []config.Resource, env reservation.Environment) *R
 		evaluators:    map[string]kindEvaluator{},
 		env:           env,
 		settleTimeout: defaultSettleTimeout,
+		pendingTTL:    defaultPendingTTL,
+		now:           time.Now,
 		locks:         map[string]*sync.Mutex{},
+		pending:       map[types.NamespacedName]pendingWrite{},
 	}
 	for _, res := range resources {
 		decl := res.Application.Consumption
@@ -126,6 +151,40 @@ func (g *Reservation) lock(root string) func() {
 	g.mu.Unlock()
 	m.Lock()
 	return m.Unlock
+}
+
+// addPending records a written figure the cache has not served yet.
+func (g *Reservation) addPending(key types.NamespacedName, s *reservation.Stored) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.pending[key] = pendingWrite{stored: s, expires: g.now().Add(g.pendingTTL)}
+}
+
+// pendingIn returns the unexpired pending writes in namespace ns, keyed by
+// release name, dropping the expired ones.
+func (g *Reservation) pendingIn(ns string) map[string]*reservation.Stored {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	now := g.now()
+	out := map[string]*reservation.Stored{}
+	for key, p := range g.pending {
+		if now.After(p.expires) {
+			klog.Warningf("HelmRelease %s was still not in the cache %s after it was written; no longer counting it from the gate's record", key, g.pendingTTL)
+			delete(g.pending, key)
+			continue
+		}
+		if key.Namespace == ns {
+			out[key.Name] = p.stored
+		}
+	}
+	return out
+}
+
+// dropPending forgets a pending write once the cache serves it.
+func (g *Reservation) dropPending(key types.NamespacedName) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	delete(g.pending, key)
 }
 
 func helmReleaseValues(hr *helmv2.HelmRelease) []byte {
@@ -285,8 +344,20 @@ func (r *REST) reservedIn(ctx context.Context, namespaces []string) (poolFigure,
 		if err := r.c.List(ctx, list, &client.ListOptions{Namespace: ns, LabelSelector: selector}); err != nil {
 			return fig, err
 		}
+		pending := r.reservation.pendingIn(ns)
 		for i := range list.Items {
 			hr := &list.Items[i]
+			if p, ok := pending[hr.Name]; ok {
+				delete(pending, hr.Name)
+				if !p.Matches(helmReleaseValues(hr)) {
+					// The cache still serves the release as it was before
+					// the write: count what was written.
+					fig.reserved.Add(p.Resources)
+					fig.applications++
+					continue
+				}
+				r.reservation.dropPending(client.ObjectKeyFromObject(hr))
+			}
 			rl, stale, err := r.reservation.reservedBy(hr)
 			if err != nil {
 				klog.Warningf("leaving %s %s/%s out of its pool's reservation: %v", hr.Labels[ApplicationKindLabel], hr.Namespace, hr.Name, err)
@@ -301,6 +372,11 @@ func (r *REST) reservedIn(ctx context.Context, namespaces []string) (poolFigure,
 			fig.reserved.Add(rl)
 			fig.applications++
 		}
+		// Written, but not in the cache at all yet: a create.
+		for _, p := range pending {
+			fig.reserved.Add(p.Resources)
+			fig.applications++
+		}
 	}
 	return fig, nil
 }
@@ -311,6 +387,22 @@ type reservationAdmission struct {
 	gate   *Reservation
 	stored *reservation.Stored
 	unlock func()
+	// base is the values hash of the release the delta was computed
+	// against, empty on a create.
+	base string
+}
+
+// baseMoved reports whether cur, the live release a conflicting update is
+// about to be retried on, carries other values than the ones this admission
+// subtracted. Retrying would then commit a delta that was never checked, so
+// the conflict has to go back to the client, whose next write is admitted
+// against the new base. Safe on a nil reservationAdmission.
+func (a *reservationAdmission) baseMoved(cur *helmv2.HelmRelease) bool {
+	if a == nil || a.stored == nil || a.base == "" {
+		return false
+	}
+	hash, err := reservation.ValuesHash(helmReleaseValues(cur))
+	return err != nil || hash != a.base
 }
 
 // release drops the pool lock. Safe on a nil reservationAdmission.
@@ -353,11 +445,15 @@ func (a *reservationAdmission) settle(ctx context.Context, c client.Client, key 
 			}
 			return false, err
 		}
+		// The annotation alone is not enough: an edit made with the gate
+		// off keeps a figure whose hash may equal this one on a release
+		// whose values are older.
 		s := stored(hr)
-		return s != nil && s.ValuesHash == want, nil
+		return s != nil && s.ValuesHash == want && s.Matches(helmReleaseValues(hr)), nil
 	})
 	if err != nil {
-		klog.Warningf("HelmRelease %s is not in the cache yet after %s; releasing its pool lock anyway: %v", key, a.gate.settleTimeout, err)
+		klog.Warningf("HelmRelease %s is not in the cache yet after %s; releasing its pool lock and counting the write from the gate's record: %v", key, a.gate.settleTimeout, err)
+		a.gate.addPending(key, a.stored)
 	}
 }
 
@@ -396,6 +492,11 @@ func (r *REST) admitReservation(ctx context.Context, app *appsv1alpha1.Applicati
 		return nil, field.ErrorList{field.Invalid(specPath, "", err.Error())}
 	}
 	adm := &reservationAdmission{gate: g, stored: &reservation.Stored{ValuesHash: hash, Resources: want}}
+	if old != nil {
+		if adm.base, err = reservation.ValuesHash(helmReleaseValues(old)); err != nil {
+			return nil, field.ErrorList{field.InternalError(specPath, err)}
+		}
+	}
 
 	delta := want.DeepCopy()
 	if old != nil {

@@ -680,6 +680,9 @@ func (r *REST) Update(ctx context.Context, name string, objInfo rest.UpdatedObje
 			if memErr := r.validateWorkloadMemory(app, cur.Spec.Values); memErr != nil {
 				return memErr
 			}
+			if adm.baseMoved(cur) {
+				return errReservationBaseMoved
+			}
 			helmRelease = converted.DeepCopy()
 			r.applyLiveMetadata(helmRelease, cur, app, previousFinalizers)
 			if err := adm.annotate(helmRelease); err != nil {
@@ -690,6 +693,10 @@ func (r *REST) Update(ctx context.Context, name string, objInfo rest.UpdatedObje
 		}
 		return updateErr
 	})
+	if errors.Is(err, errReservationBaseMoved) {
+		return nil, false, apierrors.NewConflict(r.gvr.GroupResource(), name,
+			fmt.Errorf("its values changed while this update was being checked against its tenant pool; retry it"))
+	}
 	if err != nil {
 		klog.Errorf("Failed to update HelmRelease %s: %v", helmRelease.Name, err)
 		return nil, false, registry.WrapPreservingStatus("failed to update HelmRelease", err, r.gvr.GroupResource(), name)

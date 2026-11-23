@@ -17,6 +17,7 @@ limitations under the License.
 package reservation
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -63,12 +64,19 @@ type Stored struct {
 }
 
 // ValuesHash hashes values in a canonical form: the apiserver may hand back
-// a stored blob with its keys in another order than the one written.
+// a stored blob with its keys in another order than the one written. Numbers
+// keep their literal, since a float64 would hash two integers above 2^53
+// alike.
 func ValuesHash(raw []byte) (string, error) {
 	var v any
 	if len(raw) > 0 {
-		if err := json.Unmarshal(raw, &v); err != nil {
+		dec := json.NewDecoder(bytes.NewReader(raw))
+		dec.UseNumber()
+		if err := dec.Decode(&v); err != nil {
 			return "", err
+		}
+		if dec.More() {
+			return "", fmt.Errorf("values carry more than one JSON document")
 		}
 	}
 	canonical, err := json.Marshal(v)

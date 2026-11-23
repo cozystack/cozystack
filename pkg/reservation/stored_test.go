@@ -38,6 +38,11 @@ func TestValuesHash_IgnoresKeyOrder(t *testing.T) {
 	if a == c {
 		t.Error("different values hash the same")
 	}
+	big1, _ := ValuesHash([]byte(`{"n":9007199254740992}`))
+	big2, _ := ValuesHash([]byte(`{"n":9007199254740993}`))
+	if big1 == big2 {
+		t.Error("two integers above 2^53 hash the same")
+	}
 }
 
 func TestTenantBudget_MapsQuotaKeysOntoReservationKeys(t *testing.T) {
