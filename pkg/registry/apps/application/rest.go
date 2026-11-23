@@ -658,6 +658,9 @@ func (r *REST) Update(ctx context.Context, name string, objInfo rest.UpdatedObje
 		}
 		cur = live
 	}
+	if errs := r.validateVMDiskStorageNotLoweredFrom(helmReleaseValues(cur), app); len(errs) > 0 {
+		return nil, false, apierrors.NewInvalid(r.gvk.GroupKind(), app.Name, errs)
+	}
 	// The memory check above compared against the read at the start of Update.
 	// Compare again against the live release, so a stale value below 1Mi cannot
 	// overwrite memory that another writer has fixed since.
