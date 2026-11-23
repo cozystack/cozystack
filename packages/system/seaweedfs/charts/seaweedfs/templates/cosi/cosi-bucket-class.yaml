@@ -22,6 +22,15 @@ parameters:
   objectLockRetentionMode: "COMPLIANCE"
   objectLockRetentionDays: "365"
 ---
+kind: BucketClass
+apiVersion: objectstorage.k8s.io/v1alpha1
+metadata:
+  name: {{ .Values.cosi.bucketClassName }}-lock-noretention
+driverName: {{ .Values.cosi.driverName }}
+deletionPolicy: Retain
+parameters:
+  objectLockEnabled: "true"
+---
 kind: BucketAccessClass
 apiVersion: objectstorage.k8s.io/v1alpha1
 metadata:
