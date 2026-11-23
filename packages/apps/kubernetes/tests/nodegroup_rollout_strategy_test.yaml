@@ -96,3 +96,76 @@ tests:
       - equal:
           path: spec.strategy.rollingUpdate.maxUnavailable
           value: 1
+
+  # A Proxmox template that passes a GPU through leaves gpus empty, so the
+  # chart cannot tell; the group says so itself.
+  - it: honours an explicit maxUnavailable on a group without gpus
+    set:
+      nodeGroups:
+        md0:
+          minReplicas: 1
+          maxReplicas: 1
+          instanceType: ""
+          diskSize: 20Gi
+          roles: [worker]
+          resources: {cpu: 2, memory: 4Gi}
+          maxUnavailable: 1
+    documentSelector:
+      path: kind
+      value: MachineDeployment
+    asserts:
+      - equal:
+          path: spec.strategy.rollingUpdate.maxUnavailable
+          value: 1
+
+  - it: honours an explicit 0 on a GPU group
+    set:
+      nodeGroups:
+        md0:
+          minReplicas: 1
+          maxReplicas: 1
+          instanceType: ""
+          diskSize: 20Gi
+          roles: [worker]
+          resources: {cpu: 2, memory: 8Gi}
+          gpus:
+            - name: nvidia.com/AD102GL_L40S
+          maxUnavailable: 0
+    documentSelector:
+      path: kind
+      value: MachineDeployment
+    asserts:
+      - equal:
+          path: spec.strategy.rollingUpdate.maxUnavailable
+          value: 0
+
+  - it: refuses a negative maxUnavailable (schema minimum 0)
+    set:
+      nodeGroups:
+        md0:
+          minReplicas: 1
+          maxReplicas: 1
+          instanceType: ""
+          diskSize: 20Gi
+          roles: [worker]
+          resources: {cpu: 2, memory: 4Gi}
+          maxUnavailable: -1
+    asserts:
+      - failedTemplate: {}
+
+  # CAPI decodes the field as an int32, so a larger value would render and
+  # then be refused by the MachineDeployment decoder.
+  - it: refuses a maxUnavailable above the int32 range (schema maximum)
+    set:
+      nodeGroups:
+        md0:
+          minReplicas: 1
+          maxReplicas: 1
+          instanceType: ""
+          diskSize: 20Gi
+          roles: [worker]
+          resources: {cpu: 2, memory: 4Gi}
+          maxUnavailable: 2147483648
+    asserts:
+      - failedTemplate:
+          errorPattern: "maxUnavailable"

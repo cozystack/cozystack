@@ -410,6 +410,11 @@ func (in *NodeGroup) DeepCopyInto(out *NodeGroup) {
 		copy(*out, *in)
 	}
 	out.Kubelet = in.Kubelet
+	if in.MaxUnavailable != nil {
+		in, out := &in.MaxUnavailable, &out.MaxUnavailable
+		*out = new(int)
+		**out = **in
+	}
 	in.Resources.DeepCopyInto(&out.Resources)
 	if in.Roles != nil {
 		in, out := &in.Roles, &out.Roles

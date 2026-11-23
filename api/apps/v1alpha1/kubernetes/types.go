@@ -276,6 +276,10 @@ type NodeGroup struct {
 	// Maximum number of replicas.
 	// +kubebuilder:default:=10
 	MaxReplicas int `json:"maxReplicas"`
+	// Workers a rollout (instance type, image or version change) may remove before their replacement is up. Unset, it is 0, so each replacement joins before an old worker is drained, and 1 on a group with `gpus`, whose replacement may need the very GPU the old worker holds. With 0, a rollout needs room for one extra VM: a group short of quota or capacity for it stalls, with the new Machine Pending, until room is made or `maxUnavailable` is set to 1.
+	// +kubebuilder:validation:Minimum=0
+	// +kubebuilder:validation:Maximum=2.147483647e+09
+	MaxUnavailable *int `json:"maxUnavailable,omitempty"`
 	// Per-group override for `nodeHealthCheck.maxUnhealthy`. When unset, the cluster-wide `nodeHealthCheck.maxUnhealthy` applies. Accepts a bare integer ("0", "1", ...) or an integer percentage ("0%", "50%").
 	MaxUnhealthy string `json:"maxUnhealthy,omitempty"`
 	// Minimum number of replicas.
