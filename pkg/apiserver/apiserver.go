@@ -47,6 +47,7 @@ import (
 	"github.com/cozystack/cozystack/pkg/config"
 	cozyregistry "github.com/cozystack/cozystack/pkg/registry"
 	applicationstorage "github.com/cozystack/cozystack/pkg/registry/apps/application"
+	credentialstorage "github.com/cozystack/cozystack/pkg/registry/core/credential"
 	optionstorage "github.com/cozystack/cozystack/pkg/registry/core/option"
 	tapstorage "github.com/cozystack/cozystack/pkg/registry/core/tap"
 	tenantmodulestorage "github.com/cozystack/cozystack/pkg/registry/core/tenantmodule"
@@ -259,6 +260,10 @@ func InstallStaticAPIGroups(server *genericapiserver.GenericAPIServer, cli clien
 	coreV1alpha1Storage["taps"] = cozyregistry.RESTInPeace(
 		tapstorage.NewREST(dyn),
 	)
+	credentials := credentialstorage.NewREST(cli, watchCli)
+	coreV1alpha1Storage["credentials"] = cozyregistry.RESTInPeace(credentials)
+	coreV1alpha1Storage["credentials/mint"] = credentialstorage.NewMintREST(credentials)
+	coreV1alpha1Storage["credentials/revoke"] = credentialstorage.NewRevokeREST(credentials)
 
 	coreApiGroupInfo := genericapiserver.NewDefaultAPIGroupInfo(core.GroupName, Scheme, metav1.ParameterCodec, Codecs)
 	coreApiGroupInfo.VersionedResourcesStorageMap["v1alpha1"] = coreV1alpha1Storage
