@@ -221,7 +221,7 @@ func (r *REST) validateTenantResourceQuotas(ctx context.Context, app *appsv1alph
 	// already-running pods are never evicted) — the tenant-quota controller is
 	// the runtime backstop.
 	childNamespace := r.computeTenantNamespace(app.Namespace, app.Name)
-	poolUsed, err := r.parentPoolUsage(ctx, app.Namespace, childNamespace)
+	usedBy, err := r.poolUsage(ctx, app.Namespace, childNamespace)
 	if err != nil {
 		return append(allErrs, field.InternalError(fldPath, err))
 	}
@@ -233,7 +233,7 @@ func (r *REST) validateTenantResourceQuotas(ctx context.Context, app *appsv1alph
 		}
 		parentLimit := parentQuota[res]
 		allocated := siblings[res] // zero value when no sibling bounds this resource
-		used := poolUsed[usageKey(res)]
+		used := usedBy(res)
 		remaining := parentLimit.DeepCopy()
 		remaining.Sub(allocated)
 		remaining.Sub(used)
@@ -348,6 +348,29 @@ func (r *REST) poolRootOf(ns string, bounded map[string]bool) string {
 	return ""
 }
 
+// poolUsage returns, per declared quota key, what the pool rooted at parentNS
+// currently consumes, excluding excludeNS. With the reservation gate on it
+// is what the pool's applications reserve; otherwise it is the usage their
+// ResourceQuotas report.
+func (r *REST) poolUsage(ctx context.Context, parentNS, excludeNS string) (func(string) resource.Quantity, error) {
+	if r.reservation == nil {
+		used, err := r.parentPoolUsage(ctx, parentNS, excludeNS)
+		if err != nil {
+			return nil, err
+		}
+		return func(res string) resource.Quantity { return used[usageKey(res)] }, nil
+	}
+	members, err := r.parentPoolMembers(ctx, parentNS, excludeNS)
+	if err != nil {
+		return nil, err
+	}
+	fig, err := r.reservedIn(ctx, members)
+	if err != nil {
+		return nil, err
+	}
+	return func(res string) resource.Quantity { return fig.reserved[budgetKey(res)] }, nil
+}
+
 // parentPoolUsage sums the current usage of the pool rooted at parentNS: the
 // parent's own namespace plus every unbounded descendant whose nearest bounded
 // ancestor is parentNS. Bounded sub-tenants are excluded — their reservations
@@ -359,6 +382,38 @@ func (r *REST) poolRootOf(ns string, bounded map[string]bool) string {
 // resourceQuotas so the result does not depend on whether Flux has rendered a
 // freshly-created tenant's quota yet.
 func (r *REST) parentPoolUsage(ctx context.Context, parentNS, excludeNS string) (map[string]resource.Quantity, error) {
+	members, err := r.parentPoolMembers(ctx, parentNS, excludeNS)
+	if err != nil {
+		return nil, err
+	}
+
+	perNamespace := map[string]map[string]resource.Quantity{}
+	for _, ns := range members {
+		quotas := &corev1.ResourceQuotaList{}
+		// Direct (uncached), namespace-scoped read: the aggregated apiserver
+		// must not spin up a cluster-wide ResourceQuota informer just for
+		// admission, so this goes through the watch client (r.w) rather than the
+		// cached r.c, and is scoped to the handful of pool-member namespaces.
+		if err := r.w.List(ctx, quotas, client.InNamespace(ns)); err != nil {
+			return nil, err
+		}
+		for i := range quotas.Items {
+			rq := &quotas.Items[i]
+			perNamespace[ns] = maxQuotas(perNamespace[ns], resourceListToQuotas(rq.Status.Used))
+		}
+	}
+
+	total := map[string]resource.Quantity{}
+	for _, used := range perNamespace {
+		addQuotas(total, used)
+	}
+	return total, nil
+}
+
+// parentPoolMembers returns the namespaces of the pool rooted at parentNS:
+// parentNS itself and every unbounded descendant whose nearest bounded
+// ancestor is parentNS, without excludeNS.
+func (r *REST) parentPoolMembers(ctx context.Context, parentNS, excludeNS string) ([]string, error) {
 	releases := &helmv2.HelmReleaseList{}
 	selector := labels.SelectorFromSet(labels.Set{
 		ApplicationKindLabel:  r.kindName,
@@ -396,27 +451,12 @@ func (r *REST) parentPoolUsage(ctx context.Context, parentNS, excludeNS string) 
 	}
 	delete(members, excludeNS)
 
-	perNamespace := map[string]map[string]resource.Quantity{}
+	out := make([]string, 0, len(members))
 	for ns := range members {
-		quotas := &corev1.ResourceQuotaList{}
-		// Direct (uncached), namespace-scoped read: the aggregated apiserver
-		// must not spin up a cluster-wide ResourceQuota informer just for
-		// admission, so this goes through the watch client (r.w) rather than the
-		// cached r.c, and is scoped to the handful of pool-member namespaces.
-		if err := r.w.List(ctx, quotas, client.InNamespace(ns)); err != nil {
-			return nil, err
-		}
-		for i := range quotas.Items {
-			rq := &quotas.Items[i]
-			perNamespace[ns] = maxQuotas(perNamespace[ns], resourceListToQuotas(rq.Status.Used))
-		}
+		out = append(out, ns)
 	}
-
-	total := map[string]resource.Quantity{}
-	for _, used := range perNamespace {
-		addQuotas(total, used)
-	}
-	return total, nil
+	sort.Strings(out)
+	return out, nil
 }
 
 // resourceListToQuotas converts a corev1.ResourceList to the string-keyed quota

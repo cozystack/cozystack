@@ -101,6 +101,13 @@ type REST struct {
 	specSchema    *structuralschema.Structural
 	nameSchema    *validation.NameSchema
 	nameSchemaErr error
+	// reservation is the tenant-quota reservation gate, nil while it is off.
+	reservation *Reservation
+}
+
+// SetReservation turns the tenant-quota reservation gate on for this kind.
+func (r *REST) SetReservation(g *Reservation) {
+	r.reservation = g
 }
 
 // buildSpecSchema parses an OpenAPI-v3 JSON schema string and returns the
@@ -246,6 +253,15 @@ func (r *REST) Create(ctx context.Context, obj runtime.Object, createValidation 
 	helmRelease.Labels[ApplicationNameLabel] = app.Name
 	// Note: Annotations from config are not handled as r.releaseConfig.Annotations is undefined
 
+	adm, qErrs := r.admitReservation(ctx, app, nil)
+	if len(qErrs) > 0 {
+		return nil, apierrors.NewInvalid(r.gvk.GroupKind(), app.Name, qErrs)
+	}
+	defer adm.release()
+	if err := adm.annotate(helmRelease); err != nil {
+		return nil, fmt.Errorf("record the reservation: %w", err)
+	}
+
 	klog.V(6).Infof("Creating HelmRelease %s in namespace %s", helmRelease.Name, app.Namespace)
 
 	// Create HelmRelease in Kubernetes
@@ -254,6 +270,7 @@ func (r *REST) Create(ctx context.Context, obj runtime.Object, createValidation 
 		klog.Errorf("Failed to create HelmRelease %s: %v", helmRelease.Name, err)
 		return nil, registry.WrapPreservingStatus("failed to create HelmRelease", err, r.gvr.GroupResource(), app.Name)
 	}
+	adm.settle(ctx, r.c, client.ObjectKeyFromObject(helmRelease))
 
 	// Convert the created HelmRelease back to Application
 	convertedApp, err := r.ConvertHelmReleaseToApplication(ctx, helmRelease)
@@ -594,7 +611,17 @@ func (r *REST) Update(ctx context.Context, name string, objInfo rest.UpdatedObje
 	if helmRelease.ResourceVersion == "" {
 		helmRelease.SetResourceVersion(cur.GetResourceVersion())
 	}
+
+	adm, qErrs := r.admitReservation(ctx, app, cur)
+	if len(qErrs) > 0 {
+		return nil, false, apierrors.NewInvalid(r.gvk.GroupKind(), app.Name, qErrs)
+	}
+	defer adm.release()
+
 	r.applyLiveMetadata(helmRelease, cur, app, previousFinalizers)
+	if err := adm.annotate(helmRelease); err != nil {
+		return nil, false, fmt.Errorf("record the reservation: %w", err)
+	}
 
 	// Suspension is not part of the Application, so the rebuilt object always
 	// says suspend=false, and sending it as is resumes a release that an
@@ -636,6 +663,9 @@ func (r *REST) Update(ctx context.Context, name string, objInfo rest.UpdatedObje
 			}
 			helmRelease = converted.DeepCopy()
 			r.applyLiveMetadata(helmRelease, cur, app, previousFinalizers)
+			if err := adm.annotate(helmRelease); err != nil {
+				return err
+			}
 			helmRelease.SetResourceVersion(cur.GetResourceVersion())
 			helmRelease.Spec.Suspend = cur.Spec.Suspend
 		}
@@ -645,6 +675,7 @@ func (r *REST) Update(ctx context.Context, name string, objInfo rest.UpdatedObje
 		klog.Errorf("Failed to update HelmRelease %s: %v", helmRelease.Name, err)
 		return nil, false, registry.WrapPreservingStatus("failed to update HelmRelease", err, r.gvr.GroupResource(), name)
 	}
+	adm.settle(ctx, r.c, client.ObjectKeyFromObject(helmRelease))
 
 	// Convert the updated HelmRelease back to Application
 	convertedApp, err := r.ConvertHelmReleaseToApplication(ctx, helmRelease)

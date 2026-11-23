@@ -78,6 +78,12 @@ type CozyServerOptions struct {
 	// ServeSDN installs the sdn.cozystack.io group; off where another
 	// aggregated server owns it.
 	ServeSDN bool
+
+	// TenantQuotaReservation turns on the reservation gate: every write of
+	// a kind that declares its consumption is checked against its tenant
+	// pool's budget, and tenant pools are counted in reservations instead
+	// of ResourceQuota usage.
+	TenantQuotaReservation bool
 }
 
 // NewCozyServerOptions returns a new instance of CozyServerOptions
@@ -179,6 +185,10 @@ func NewCommandStartCozyServer(ctx context.Context, defaults *CozyServerOptions)
 
 	flags.BoolVar(&o.ServeSDN, "serve-sdn", o.ServeSDN,
 		"Serve the sdn.cozystack.io API group. Turn off where another aggregated API server owns the group.")
+
+	flags.BoolVar(&o.TenantQuotaReservation, "tenant-quota-reservation", o.TenantQuotaReservation,
+		"Check every application write of a kind that declares its consumption against its tenant pool's budget, "+
+			"counting pools in declared reservations rather than in ResourceQuota usage.")
 
 	// Note: KEP-4330 component versioning functionality (k8s.io/apiserver/pkg/util/version)
 	// is not available in Kubernetes v0.34.1. The component versioning code has been removed.
@@ -436,6 +446,7 @@ func buildResourceFromCRD(crd v1alpha1.ApplicationDefinition, hrFlags helmReleas
 			Plural:        crd.Spec.Application.Plural,
 			ShortNames:    []string{}, // TODO: implement shortnames
 			OpenAPISchema: crd.Spec.Application.OpenAPISchema,
+			Consumption:   crd.Spec.Consumption.DeepCopy(),
 		},
 		Release: release,
 	}, nil
@@ -499,6 +510,8 @@ func (o *CozyServerOptions) Config() (*apiserver.Config, error) {
 		GenericConfig:  serverConfig,
 		ResourceConfig: o.ResourceConfig,
 		ServeSDN:       o.ServeSDN,
+
+		TenantQuotaReservation: o.TenantQuotaReservation,
 	}
 	return config, nil
 }

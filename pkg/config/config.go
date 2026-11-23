@@ -24,6 +24,8 @@ import (
 
 	helmv2 "github.com/fluxcd/helm-controller/api/v2"
 	"github.com/fluxcd/pkg/apis/kustomize"
+
+	cozyv1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
 )
 
 // ReleaseAnnotationPrefix is the prefix shared by every ApplicationDefinition
@@ -204,6 +206,10 @@ type ApplicationConfig struct {
 	Plural        string   `yaml:"plural"`
 	ShortNames    []string `yaml:"shortNames"`
 	OpenAPISchema string   `yaml:"openAPISchema"`
+	// Consumption is the definition's declaration of what one application
+	// of this kind reserves from its tenant's quota; nil when it declares
+	// nothing.
+	Consumption *cozyv1alpha1.ApplicationDefinitionConsumption `yaml:"consumption,omitempty"`
 }
 
 // ReleaseConfig contains the release settings.
