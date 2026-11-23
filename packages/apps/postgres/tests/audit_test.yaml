@@ -101,3 +101,21 @@ tests:
       - equal:
           path: spec.postgresql.parameters["pgaudit.log"]
           value: "ddl"
+
+  - it: "an explicit falsy connection-logging value wins over the audit default"
+    set:
+      audit:
+        enabled: true
+      postgresql:
+        parameters:
+          log_connections: 0
+    documentSelector:
+      path: kind
+      value: Cluster
+    asserts:
+      - equal:
+          path: spec.postgresql.parameters.log_connections
+          value: "0"
+      - equal:
+          path: spec.postgresql.parameters.log_disconnections
+          value: "on"

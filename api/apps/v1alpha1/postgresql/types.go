@@ -80,7 +80,7 @@ type Audit struct {
 	// Enable PostgreSQL auditing. Loads the pgaudit extension through the `sharedPreloadLibraries` allowlist and turns on `log_connections`/`log_disconnections`, so who connected and the classes of statement they ran are written to the instance log and collected by the platform log stack. The audited statement classes are set by `log`. Off by default. Enabling or disabling it restarts PostgreSQL, since pgaudit is a preloaded library.
 	// +kubebuilder:default:=false
 	Enabled bool `json:"enabled,omitempty"`
-	// pgaudit session audit classes recorded when `enabled`, as the comma-separated value of `pgaudit.log` (for example `ddl, role`, `write, ddl, role` or `all`; `all` logs every statement including reads and is heavy). Defaults to `write, ddl, role`. A `pgaudit.log` set directly in `postgresql.parameters` overrides this.
+	// pgaudit session audit classes recorded when `enabled`, as the comma-separated value of `pgaudit.log`. Valid classes are `read`, `write`, `function`, `role`, `ddl`, `misc`, `misc_set`, `all` and `none`; a class may be prefixed with `-` to subtract it from `all` (for example `ddl, role`, `write, ddl, role`, or `all, -misc`). `all` logs every statement including reads and is heavy. Defaults to `write, ddl, role`. A `pgaudit.log` set in `postgresql.parameters` overrides this. An unrecognised class makes pgaudit fall back to `none` at start, which silently disables auditing, so keep to the listed names.
 	// +kubebuilder:default:="write, ddl, role"
 	Log string `json:"log,omitempty"`
 }

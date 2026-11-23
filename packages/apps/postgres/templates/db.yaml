@@ -365,14 +365,16 @@ spec:
     parameters:
       {{- $defaults := dict "max_wal_senders" "30" }}
       {{- /*
-        Audit defaults seed pgaudit.log and connection logging. They go into
-        $defaults, so an explicit pgaudit.log/log_connections in
-        postgresql.parameters still takes precedence through the merge below.
+        Audit seeds pgaudit.log and connection logging. Each key is seeded only
+        when postgresql.parameters does not set it, so an explicit value wins
+        unconditionally — including a falsy one like log_connections: 0, which
+        merge would otherwise read as unset and overwrite with the default.
       */}}
       {{- if $auditEnabled }}
-      {{- $_ := set $defaults "pgaudit.log" (default "write, ddl, role" .Values.audit.log) }}
-      {{- $_ := set $defaults "log_connections" "on" }}
-      {{- $_ := set $defaults "log_disconnections" "on" }}
+      {{- $userParams := default (dict) .Values.postgresql.parameters }}
+      {{- if not (hasKey $userParams "pgaudit.log") }}{{- $_ := set $defaults "pgaudit.log" (default "write, ddl, role" .Values.audit.log) }}{{- end }}
+      {{- if not (hasKey $userParams "log_connections") }}{{- $_ := set $defaults "log_connections" "on" }}{{- end }}
+      {{- if not (hasKey $userParams "log_disconnections") }}{{- $_ := set $defaults "log_disconnections" "on" }}{{- end }}
       {{- end }}
       {{- /*
         PostgreSQL sizes shared_buffers at 128MB whatever the container gets.
