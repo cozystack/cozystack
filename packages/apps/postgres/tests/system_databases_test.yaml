@@ -80,7 +80,7 @@ tests:
           pattern: "SYSTEM_DBS=\\$\\(psql -v ON_ERROR_STOP=1 -t -A -c \"SELECT datname FROM pg_database d JOIN pg_shdescription s ON d.oid = s.objoid WHERE s.description = 'database managed by helm' AND d.datname IN \\('postgres', 'template0', 'template1'\\)\"\\)"
       - matchRegex:
           path: stringData["init.sh"]
-          pattern: '(?s)== release system databases.*DROP EVENT TRIGGER IF EXISTS trigger_auto_grant;\s+DROP FUNCTION IF EXISTS auto_grant_schema_privileges\(\);.*REASSIGN OWNED BY %I TO "cozystack:orphaned"''.*DROP OWNED BY %I.*ALTER DATABASE :"db" OWNER TO CURRENT_USER;.*ALTER SCHEMA public OWNER TO %s.*COMMENT ON DATABASE :"db" IS NULL;.*== delete databases'
+          pattern: '(?s)== release system databases.*DROP EVENT TRIGGER IF EXISTS trigger_auto_grant;\s+DROP FUNCTION IF EXISTS auto_grant_schema_privileges\(\);.*ALTER SCHEMA public OWNER TO %s.*ALTER DATABASE %I OWNER TO CURRENT_USER.*REASSIGN OWNED BY %I TO "cozystack:orphaned"''.*DROP OWNED BY %I.*COMMENT ON DATABASE :"db" IS NULL;.*== delete databases'
 
   # A tenant holding <db>_admin may have created a SECURITY DEFINER function
   # there; handed to the superuser it would run with superuser rights for
@@ -120,4 +120,16 @@ tests:
     asserts:
       - matchRegex:
           path: stringData["init.sh"]
-          pattern: "(?s)if \\[ \"\\$db\" = template1 \\]; then.*SELECT format\\('ALTER SCHEMA public OWNER TO %s', .*\\) WHERE EXISTS \\(SELECT FROM pg_namespace n JOIN pg_roles r ON r.oid = n.nspowner WHERE n.nspname = 'public' AND r.rolname = 'template1_admin'\\).*== delete databases"
+          pattern: "(?s)if \\[ \"\\$db\" = template1 \\]; then.*SELECT format\\('ALTER SCHEMA public OWNER TO %s', .*\\) FROM pg_namespace n JOIN pg_roles o ON o.oid = n.nspowner WHERE n.nspname = 'public' AND o.rolname = 'template1_admin' AND EXISTS \\(SELECT FROM pg_shdescription s WHERE s.classoid = 'pg_authid'::regclass AND s.objoid = o.oid AND s.description = 'role managed by helm'\\).*== delete databases"
+
+  # template0 accepts no connection: only postgres and template1 are connected
+  # to and released, template0 just has its comment cleared. The behaviour is
+  # run against a fake psql in hack/postgres-release-system-databases.bats.
+  - it: connects to every released system database but template0
+    documentSelector:
+      path: metadata.name
+      value: pg-test-init-script
+    asserts:
+      - matchRegex:
+          path: stringData["init.sh"]
+          pattern: "(?s)for db in \\$SYSTEM_DBS; do\\s+if \\[ \"\\$db\" != template0 \\]; then\\s+psql -v ON_ERROR_STOP=1 --echo-all --dbname \"\\$db\" -v db=\"\\$db\""
