@@ -1,0 +1,177 @@
+suite: every values file that works on kubevirt works with substrate proxmox
+
+# The promise of the substrate: switching the hypervisor is one line. The
+# first test is the chart's own defaults, the second sets every value the
+# schema has to something a kubevirt machine accepts.
+release:
+  name: vm-instance-compat
+  namespace: tenant-test
+templates:
+  - templates/proxmox-vm.yaml
+  - templates/service.yaml
+set:
+  fullnameOverride: vm-instance-compat
+  _cluster:
+    vm-substrate: proxmox
+    scheduling:
+      dedicatedNodesForWindowsVMs: "false"
+kubernetesProvider:
+  scheme:
+    "v1/ConfigMap":
+      gvr:
+        group: ""
+        version: v1
+        resource: configmaps
+      namespaced: true
+    "proxmox.alperen.cloud/v1alpha1/VirtualMachineVolume":
+      gvr:
+        group: proxmox.alperen.cloud
+        version: v1alpha1
+        resource: virtualmachinevolumes
+      namespaced: true
+  objects:
+    - apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: proxmox-vm-catalog
+        namespace: cozy-public
+      data:
+        connection: pve
+        defaultNode: pve1
+        defaultNetwork: tenant
+        dnsServers: |
+          - 10.0.0.1
+        storageClasses: |
+          replicated:
+            storage: shared-rdma
+        networks: |
+          tenant:
+            bridge: vmbr70
+            vlan: 101
+            ipPool: tenant-pool
+          lan:
+            bridge: vmbr0
+            ipPool: lan-pool
+        gpuMappings: |
+          nvidia.com/GA102GL_A10:
+            mapping: a10
+        profiles: |
+          ubuntu:
+            ostype: l26
+            bios: seabios
+            machine: q35
+            scsiController: virtio-scsi-single
+          windows.2k19:
+            ostype: win10
+            bios: ovmf
+            machine: q35
+            scsiController: virtio-scsi-single
+            efiPreEnrolledKeys: true
+            tpm: false
+        instancetypes: |
+          u1.medium:
+            cores: 1
+            sockets: 1
+            memoryMiB: 4096
+            balloon: 0
+          rt1.medium:
+            cores: 1
+            sockets: 1
+            memoryMiB: 4096
+            cpu: host
+            numa: true
+            hugepages: "1024"
+            cpuunits: 10000
+            balloon: 0
+            realtime: true
+    - apiVersion: proxmox.alperen.cloud/v1alpha1
+      kind: VirtualMachineVolume
+      metadata:
+        name: vm-disk-system
+        namespace: tenant-test
+      spec:
+        nodeName: pve1
+        storage: shared-rdma
+tests:
+  - it: renders the chart's defaults, which on kubevirt is a u1.medium ubuntu machine in the pod network
+    asserts:
+      - template: templates/proxmox-vm.yaml
+        hasDocuments:
+          count: 2
+      - template: templates/proxmox-vm.yaml
+        documentIndex: 1
+        equal:
+          path: spec.vmSpec.network[0].bridge
+          value: vmbr70
+      - template: templates/proxmox-vm.yaml
+        documentIndex: 1
+        equal:
+          path: spec.vmSpec.memory
+          value: 4096
+      - template: templates/service.yaml
+        hasDocuments:
+          count: 0
+  - it: renders every value of the schema set the way a kubevirt machine accepts it
+    set:
+      external: true
+      externalMethod: PortList
+      externalPorts: [22, 80]
+      externalAllowICMP: false
+      runStrategy: Once
+      instanceType: rt1.medium
+      instanceProfile: windows.2k19
+      disks:
+        - name: system
+          bus: sata
+      networks:
+        - name: lan
+      subnets:
+        - name: tenant
+      gpus:
+        - name: nvidia.com/GA102GL_A10
+      cpuModel: EPYC-Rome
+      firmware:
+        bootloader: uefi
+        secureBoot: true
+        efiPersistent: true
+      sshKeys:
+        - ssh-ed25519 AAAATEST
+      cloudInit: |
+        #cloud-config
+        hostname: compat
+      netplanDhcp: true
+      cloudInitSeed: upd1
+    asserts:
+      - template: templates/proxmox-vm.yaml
+        hasDocuments:
+          count: 4
+      - template: templates/proxmox-vm.yaml
+        documentIndex: 3
+        equal:
+          path: spec.vmSpec.network[1].vlan
+          value: 101
+      - template: templates/proxmox-vm.yaml
+        documentIndex: 3
+        equal:
+          path: spec.additionalConfig.cpu
+          value: EPYC-Rome
+      - template: templates/service.yaml
+        hasDocuments:
+          count: 1
+      - template: templates/service.yaml
+        equal:
+          path: metadata.annotations["networking.cozystack.io/allowICMP"]
+          value: "false"
+  - it: sizes from resources alone, with no instance type, as kubevirt does
+    set:
+      instanceType: ""
+      resources:
+        cpu: 2
+        sockets: 1
+        memory: 2Gi
+    asserts:
+      - template: templates/proxmox-vm.yaml
+        documentIndex: 1
+        equal:
+          path: spec.vmSpec.cores
+          value: 2

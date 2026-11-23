@@ -1,5 +1,7 @@
+{{- if ne (include "vm-disk.substrate" .) "proxmox" }}
 {{- if and .Values.source (hasKey .Values.source "upload") }}
 To upload your disk run:
 
 virtctl image-upload dv {{ .Release.Name }} --no-create --namespace {{ .Release.Namespace }} --image-path <path_to_image>
+{{- end }}
 {{- end }}

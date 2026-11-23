@@ -1,0 +1,69 @@
+{{- if eq (include "vm-disk.substrate" .) "proxmox" }}
+{{- $catalog := include "vm-disk.proxmoxCatalog" . | fromJson }}
+{{- $node := .Values.proxmox.node | default $catalog.defaultNode }}
+{{- if not $node }}
+{{-   fail "proxmox.node is empty and the platform's catalog has no defaultNode" }}
+{{- end }}
+{{- $allowed := $catalog.allowedNodes | default list }}
+{{- if and .Values.proxmox.node (ne .Values.proxmox.node $catalog.defaultNode) (not (has .Values.proxmox.node $allowed)) }}
+{{-   fail (printf "proxmox.node %q is not one of the nodes the platform allows (%s)" .Values.proxmox.node (join ", " (append $allowed $catalog.defaultNode | uniq))) }}
+{{- end }}
+{{- $classes := $catalog.storageClasses | default dict }}
+{{- $class := index $classes (.Values.storageClass | toString) }}
+{{- if not $class }}
+{{-   fail (printf "storageClass %q is not in the platform's Proxmox catalog (known: %s). On this substrate a storage class is an entry the platform maps to a Proxmox storage, not a Kubernetes StorageClass." (.Values.storageClass | toString) (join ", " (keys $classes | sortAlpha))) }}
+{{- end }}
+{{- /* Exactly one source, the same rule as the DataVolume side. */}}
+{{- $source := .Values.source | default dict }}
+{{- if gt (len $source) 1 }}
+{{-   fail "Exactly one type of source is expected!" }}
+{{- end }}
+{{- /* A file that populates the disk (http, upload) lands on the platform's
+       import storage; kubemox fetches or awaits it and imports from there.
+       An optical disk is such a file, kept as iso content, and that storage
+       is where it lives. */}}
+{{- $needsFile := or .Values.optical (hasKey $source "http") (hasKey $source "upload") }}
+{{- if and $needsFile (not $catalog.importStorage) }}
+{{-   fail "source.http, source.upload and optical need the platform's Proxmox catalog to name an import storage (catalog.importStorage in the proxmox-vm package): a storage with the import and iso content types" }}
+{{- end }}
+{{- if and .Values.optical (not (or (hasKey $source "http") (hasKey $source "upload"))) }}
+{{-   fail "an optical disk needs an image: give it source.http.url or source.upload" }}
+{{- end }}
+{{- $volumeSource := dict }}
+{{- if hasKey $source "image" }}
+{{-   $name := required "A valid .Values.source.image.name entry required!" $source.image.name }}
+{{-   $volumeSource = include "vm-disk.proxmoxImageSource" (list $catalog . $name $node) | fromJson }}
+{{- else if hasKey $source "disk" }}
+{{-   $volumeSource = dict "disk" (dict "name" (printf "vm-disk-%s" (required "A valid .Values.source.disk.name entry required!" $source.disk.name))) }}
+{{- else if hasKey $source "http" }}
+{{-   $volumeSource = dict "http" (dict "url" (required "A valid .Values.source.http.url entry required!" $source.http.url) "storage" $catalog.importStorage) }}
+{{- else if hasKey $source "upload" }}
+{{-   $volumeSource = dict "upload" (dict "storage" $catalog.importStorage) }}
+{{- else if gt (len $source) 0 }}
+{{-   fail (printf "Unknown source type: %s. Expected one of: image, disk, http, upload." (keys $source | join ", ")) }}
+{{- end }}
+---
+apiVersion: proxmox.alperen.cloud/v1alpha1
+kind: VirtualMachineVolume
+metadata:
+  name: {{ .Release.Name }}
+  labels:
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+  annotations:
+    vm-disk.cozystack.io/storage-class: {{ .Values.storageClass | toString | quote }}
+spec:
+  connectionRef:
+    name: {{ required "the platform's Proxmox catalog has no connection" $catalog.connection | quote }}
+  nodeName: {{ $node | quote }}
+  storage: {{ ternary $catalog.importStorage $class.storage (.Values.optical | default false) | quote }}
+  size: {{ include "vm-disk.gib" .Values.storage }}
+  {{- if .Values.optical }}
+  optical: true
+  {{- end }}
+  {{- with $volumeSource }}
+  source:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  deletionProtection: false
+{{- end }}

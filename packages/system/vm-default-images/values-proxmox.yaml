@@ -1,0 +1,5 @@
+# Values file of the proxmox variant of the cozystack.vm-default-images
+# package (packages/core/platform/sources/vm-default-images.yaml): merged over
+# values.yaml by the operator. The collection itself has to be overridden on
+# this substrate, since the default images carry no proxmox.volume.
+substrate: proxmox

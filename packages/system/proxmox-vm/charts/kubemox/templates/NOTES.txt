@@ -1,0 +1,12 @@
+* Thanks for installing the kubemox!
+
+* Kubemox aims managing Proxmox resources through Kubernetes objects. 
+
+- To create a VirtualMachine from a template on Proxmox use one of the examples below:
+  
+ 1. kubectl create -f kubemox/samples/virtualmachineclone.yaml
+
+ 2. kubectl create -f kubemox/samples/virtualmachinscratch.yaml
+
+
+DISCLAIMER: Kubemox is still under development so please use accordingly!
