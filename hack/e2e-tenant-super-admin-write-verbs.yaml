@@ -13,6 +13,8 @@ writeVerbs:
 - "backupjobs.backups.cozystack.io - delete"
 - "backupjobs.backups.cozystack.io - patch"
 - "backupjobs.backups.cozystack.io - update"
+- "credentials.core.cozystack.io/mint - create"
+- "credentials.core.cozystack.io/revoke - create"
 - "endpoints - delete"
 - "events - delete"
 - "persistentvolumes - delete"
