@@ -32,6 +32,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/selection"
+	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
@@ -42,8 +43,11 @@ import (
 )
 
 // compiledDefinition is an ApplicationDefinition's evaluator, kept for as
-// long as the definition's generation does not move.
+// long as the definition is the same object at the same generation. The UID
+// matters: a definition deleted and recreated under its name starts again at
+// generation 1.
 type compiledDefinition struct {
+	uid        types.UID
 	generation int64
 	ev         *reservation.Evaluator
 	err        error
@@ -75,9 +79,9 @@ func (e *evaluators) lookup(defs []cozyv1alpha1.ApplicationDefinition) map[strin
 		}
 		seen[def.Name] = true
 		c, ok := e.byName[def.Name]
-		if !ok || c.generation != def.Generation {
+		if !ok || c.uid != def.UID || c.generation != def.Generation {
 			ev, err := reservation.CompileDefinition(def.Spec.Application.Kind, def.Spec.Consumption, def.Spec.Application.OpenAPISchema)
-			c = compiledDefinition{generation: def.Generation, ev: ev, err: err}
+			c = compiledDefinition{uid: def.UID, generation: def.Generation, ev: ev, err: err}
 			e.byName[def.Name] = c
 		}
 		byKind[def.Spec.Application.Kind] = c

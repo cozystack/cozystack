@@ -526,3 +526,22 @@ func TestReleaseChanged(t *testing.T) {
 		})
 	}
 }
+
+// TestEvaluatorsRecompileARecreatedDefinition: a definition deleted and
+// recreated under its name starts again at the same generation; its new
+// declaration is compiled, not the one cached for the old object.
+func TestEvaluatorsRecompileARecreatedDefinition(t *testing.T) {
+	def := vmInstanceDefinition(t)
+	def.UID, def.Generation = "first", 1
+	var e evaluators
+	before := e.lookup([]cozyv1alpha1.ApplicationDefinition{*def})["VMInstance"].ev
+
+	if again := e.lookup([]cozyv1alpha1.ApplicationDefinition{*def})["VMInstance"].ev; again != before {
+		t.Error("an unchanged definition was recompiled")
+	}
+	recreated := def.DeepCopy()
+	recreated.UID = "second"
+	if after := e.lookup([]cozyv1alpha1.ApplicationDefinition{*recreated})["VMInstance"].ev; after == before {
+		t.Error("a recreated definition at the same generation kept the old evaluator")
+	}
+}
