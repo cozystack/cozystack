@@ -24,7 +24,9 @@ import (
 	"sync"
 
 	helmv2 "github.com/fluxcd/helm-controller/api/v2"
+	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -185,7 +187,7 @@ func (r *Reconciler) snapshotReservations(ctx context.Context) (*reservationSnap
 			if err := r.storeReservation(ctx, hr, values, rl); err != nil {
 				// The figure still counts this sweep; storing it is retried
 				// on the next one.
-				logger.Error(err, "failed to store an application's reservation", "helmRelease", client.ObjectKeyFromObject(hr))
+				logPatchError(logger, err, "failed to store an application's reservation", "helmRelease", client.ObjectKeyFromObject(hr))
 			}
 		}
 		snap.usedByNS[hr.Namespace] = addResourceList(snap.usedByNS[hr.Namespace], toCore(rl))
@@ -248,12 +250,21 @@ func (r *Reconciler) reconcileReservations(ctx context.Context) (ctrl.Result, er
 		p, isRoot := pools[ns]
 		if !isRoot {
 			if err := r.patchAnnotation(ctx, hr, reservation.PoolAnnotation, nil); err != nil {
-				logger.Error(err, "failed to clear a pool status", "helmRelease", client.ObjectKeyFromObject(hr))
+				logPatchError(logger, err, "failed to clear a pool status", "helmRelease", client.ObjectKeyFromObject(hr))
 			}
 			continue
 		}
+		var prev *metav1.Condition
+		if s, err := reservation.ReadPoolStatus(hr.Annotations); err == nil && s != nil {
+			prev = meta.FindStatusCondition(s.Conditions, reservation.ConditionOvercommitted)
+		}
 		status := r.poolStatus(hr, p, snap)
-		if over := overcommitted(status); len(over) > 0 {
+		cur := meta.FindStatusCondition(status.Conditions, reservation.ConditionOvercommitted)
+		// Every sweep re-derives the condition, and a sweep runs on any
+		// application change, so the event goes out only when the pool
+		// becomes overcommitted or by a different amount.
+		if cur.Status == metav1.ConditionTrue && (prev == nil || prev.Status != cur.Status || prev.Message != cur.Message) {
+			over := overcommitted(status)
 			logger.Info("tenant quota pool is overcommitted", "pool", p.Root, "overcommit", over)
 			r.recordOvercommit(ctx, p.Root, fmt.Sprintf(
 				"what this tenant's pool reserves and its sub-tenants carved out exceed its budget by %s; nothing is evicted, but no write that grows the pool is admitted until it fits",
@@ -264,7 +275,7 @@ func (r *Reconciler) reconcileReservations(ctx context.Context) (ctrl.Result, er
 			return ctrl.Result{}, err
 		}
 		if err := r.patchAnnotation(ctx, hr, reservation.PoolAnnotation, &raw); err != nil {
-			logger.Error(err, "failed to publish a pool status", "pool", p.Root)
+			logPatchError(logger, err, "failed to publish a pool status", "pool", p.Root)
 		}
 	}
 
@@ -349,6 +360,17 @@ func (r *Reconciler) clearPoolStatuses(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+// logPatchError logs a failed annotation write. A conflict means the release
+// moved since it was read, which is routine on releases helm-controller
+// keeps writing: the next sweep reads it again and retries.
+func logPatchError(logger logr.Logger, err error, msg string, kv ...any) {
+	if apierrors.IsConflict(err) {
+		logger.V(1).Info(msg+"; retrying on the next sweep", append(kv, "error", err.Error())...)
+		return
+	}
+	logger.Error(err, msg, kv...)
 }
 
 func helmReleaseValues(hr *helmv2.HelmRelease) []byte {

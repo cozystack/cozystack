@@ -34,6 +34,7 @@ import (
 	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/yaml"
 
 	cozyv1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
@@ -467,5 +468,61 @@ func TestReservation_UnrenderedChildIsCarvedOut(t *testing.T) {
 	assertFigure(t, "carvedOut", foo.CarvedOut, map[string]string{"storage": "400Gi"})
 	if poolStatusOf(t, c, "tenant-foo", "tenant-down") == nil {
 		t.Error("the unrendered child roots no pool of its own")
+	}
+}
+
+// TestReservation_OvercommitEventOnlyOnChange: a pool that stays
+// overcommitted by the same amount gets one event, not one per sweep, and a
+// new one when the amount changes.
+func TestReservation_OvercommitEventOnlyOnChange(t *testing.T) {
+	r, c, rec := newReservationReconciler(t,
+		tenantWithQuotas(t, "foo", "tenant-root", map[string]string{"cpu": "4"}),
+		ns("tenant-foo"),
+		vm(t, "a", "tenant-foo", "u1.large"),
+		vm(t, "b", "tenant-foo", "u1.small"),
+	)
+	sweep(t, r)
+	sweep(t, r)
+	sweep(t, r)
+	if n := len(rec.Events); n != 1 {
+		t.Fatalf("%d events over three sweeps of an unchanged overcommit, want 1", n)
+	}
+	<-rec.Events
+
+	extra := vm(t, "c", "tenant-foo", "u1.small")
+	if err := c.Create(context.Background(), extra); err != nil {
+		t.Fatal(err)
+	}
+	sweep(t, r)
+	if n := len(rec.Events); n != 1 {
+		t.Errorf("%d events after the overcommit grew, want 1", n)
+	}
+}
+
+// TestReleaseChanged: a status-only write, which helm-controller makes on
+// every reconcile, does not trigger a sweep; a values, label or annotation
+// change does.
+func TestReleaseChanged(t *testing.T) {
+	base := vm(t, "a", "tenant-foo", "u1.small")
+	base.Generation = 1
+	for _, tc := range []struct {
+		name   string
+		mutate func(hr *helmv2.HelmRelease)
+		want   bool
+	}{
+		{"status only", func(hr *helmv2.HelmRelease) { hr.Status.ObservedGeneration = 1 }, false},
+		{"values", func(hr *helmv2.HelmRelease) { hr.Generation = 2 }, true},
+		{"annotation", func(hr *helmv2.HelmRelease) {
+			hr.Annotations = map[string]string{reservation.ReservedAnnotation: "{}"}
+		}, true},
+		{"label", func(hr *helmv2.HelmRelease) { hr.Labels["x"] = "y" }, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			updated := base.DeepCopy()
+			tc.mutate(updated)
+			if got := releaseChanged.Update(event.UpdateEvent{ObjectOld: base, ObjectNew: updated}); got != tc.want {
+				t.Errorf("releaseChanged = %v, want %v", got, tc.want)
+			}
+		})
 	}
 }

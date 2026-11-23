@@ -353,9 +353,13 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 	tenantLimitRanges := predicate.NewPredicateFuncs(func(o client.Object) bool {
 		return o.GetName() == chartLimitRangeName || o.GetName() == allocatedLimitRangeName
 	})
+	releasePredicates := []predicate.Predicate{tenantReleases}
+	if r.Reservation {
+		releasePredicates = append(releasePredicates, releaseChanged)
+	}
 	b := ctrl.NewControllerManagedBy(mgr).
 		Named("tenantquota-controller").
-		Watches(&helmv2.HelmRelease{}, toSweep, builder.WithPredicates(tenantReleases)).
+		Watches(&helmv2.HelmRelease{}, toSweep, builder.WithPredicates(releasePredicates...)).
 		Watches(&corev1.Namespace{}, toSweep).
 		Watches(&corev1.ResourceQuota{}, toSweep, builder.WithPredicates(tenantQuotas)).
 		Watches(&corev1.LimitRange{}, toSweep, builder.WithPredicates(tenantLimitRanges))
@@ -364,6 +368,17 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 	}
 	return b.Complete(r)
 }
+
+// releaseChanged passes a release event only when what the reservation
+// oracle reads changed: the values, which move the generation, or the labels
+// and annotations, which carry the kind and the stored figures. With every
+// application release watched, the status writes helm-controller makes on
+// each reconcile would otherwise sweep the whole tree continuously.
+var releaseChanged = predicate.Or(
+	predicate.GenerationChangedPredicate{},
+	predicate.LabelChangedPredicate{},
+	predicate.AnnotationChangedPredicate{},
+)
 
 // ownedNamespace maps a tenant HelmRelease (name "<prefix><app>" in namespace
 // hrNamespace) to the namespace that tenant owns. It mirrors
