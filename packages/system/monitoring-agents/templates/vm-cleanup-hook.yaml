@@ -72,7 +72,7 @@ metadata:
     helm.sh/hook-delete-policy: hook-succeeded,before-hook-creation
 spec:
   # Bounds every kubectl call as well: --request-timeout would make kubectl
-  # skip the in-cluster credentials (hack/check-hook-request-timeout.bats).
+  # skip the in-cluster credentials.
   # Well inside the HelmRelease's 10m uninstall budget, and above the 60s
   # wait plus one call per object on either side of it.
   activeDeadlineSeconds: 180
@@ -158,9 +158,26 @@ spec:
                 fi
               done
 
-              echo "finalizers still held after 60s; clearing them by hand"
+              # Only the operator's own finalizer, and only on an object that is
+              # already being deleted: any other finalizer belongs to a
+              # controller that is still there to release it, and dropping it
+              # would skip that controller's cleanup. The JSON patch tests the
+              # entry before removing it, so a list that shifted since the read
+              # fails the patch instead of removing a neighbour.
+              vmfin=apps.victoriametrics.com/finalizer
+              echo "finalizers still held after 60s; clearing $vmfin by hand"
               echo "$objs" | while read -r k ns n; do
-                kubectl -n "$ns" patch "$k" "$n" --type=merge \
-                  -p '{"metadata":{"finalizers":null}}'
+                state=$(kubectl -n "$ns" get "$k" "$n" \
+                  -o jsonpath='{.metadata.deletionTimestamp}{"|"}{range .metadata.finalizers[*]}{@}{" "}{end}') || continue
+                [ -n "${state%%|*}" ] || continue
+                i=0
+                for f in ${state#*|}; do
+                  if [ "$f" = "$vmfin" ]; then
+                    kubectl -n "$ns" patch "$k" "$n" --type=json \
+                      -p "[{\"op\":\"test\",\"path\":\"/metadata/finalizers/$i\",\"value\":\"$vmfin\"},{\"op\":\"remove\",\"path\":\"/metadata/finalizers/$i\"}]"
+                    break
+                  fi
+                  i=$((i + 1))
+                done
               done
               exit 0

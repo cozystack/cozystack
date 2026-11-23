@@ -97,7 +97,7 @@ tests:
             name: vm-objects-cleanup
             namespace: cozy-monitoring
 
-  - it: touches only objects this release owns, and clears their finalizers
+  - it: touches only objects this release owns, and clears only the operator's finalizer
     template: templates/vm-cleanup-hook.yaml
     documentSelector:
       path: kind
@@ -115,7 +115,11 @@ tests:
       - matchRegex:
           path: spec.template.spec.containers[0].command[2]
           pattern: 'delete "\$k" "\$n" --wait=false'
+      # Only the operator's finalizer: another controller's must survive.
       - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: vmfin=apps\.victoriametrics\.com/finalizer
+      - notMatchRegex:
           path: spec.template.spec.containers[0].command[2]
           pattern: '"finalizers":null'
       # A pre-delete hook that fails aborts the uninstall it exists to unblock.
