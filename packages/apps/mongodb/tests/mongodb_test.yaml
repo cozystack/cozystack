@@ -582,7 +582,7 @@ tests:
         documentIndex: 0
       - equal:
           path: spec.users[0].passwordSecretRef.name
-          value: test-mongodb-user-appuser
+          value: test-mongodb.appuser.account
         documentIndex: 0
       - equal:
           path: spec.users[0].passwordSecretRef.key

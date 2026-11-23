@@ -12,13 +12,6 @@ rules:
   - {{ .Release.Name }}-mongos
   - {{ .Release.Name }}-external
   verbs: ["get", "list", "watch"]
-- apiGroups:
-  - ""
-  resources:
-  - secrets
-  resourceNames:
-  - {{ .Release.Name }}-credentials
-  verbs: ["get", "list", "watch"]
 # The TLS Secrets the PSMDB operator creates are deliberately NOT granted here.
 # Both carry private key material: <release>-ca-cert holds the CA private key
 # (full trust-chain compromise if leaked) and <release>-ssl holds the server

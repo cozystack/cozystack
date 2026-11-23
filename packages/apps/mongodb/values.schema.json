@@ -221,17 +221,11 @@
       }
     },
     "users": {
-      "description": "Users configuration map.",
+      "description": "Users configuration map. Each user is a MongoDB user the operator manages from an account Secret the platform keeps. Passwords are issued through the Cozystack credentials API: a mint on the account's `Credential` (`core.cozystack.io`) returns a new password once, and a revoke retires the password without issuing one. A `password` key here is ignored. The names of the MongoDB system users (`backup`, `clusterAdmin`, `clusterMonitor`, `databaseAdmin`, `userAdmin`) are refused.",
       "type": "object",
       "default": {},
       "additionalProperties": {
-        "type": "object",
-        "properties": {
-          "password": {
-            "description": "Password for the user (auto-generated if omitted).",
-            "type": "string"
-          }
-        }
+        "type": "object"
       }
     },
     "databases": {

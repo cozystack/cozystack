@@ -229,10 +229,9 @@ Releases with `external: false`, and sharded releases in any configuration, are 
 
 ### Users configuration
 
-| Name                   | Description                                        | Type                | Value |
-| ---------------------- | -------------------------------------------------- | ------------------- | ----- |
-| `users`                | Users configuration map.                           | `map[string]object` | `{}`  |
-| `users[name].password` | Password for the user (auto-generated if omitted). | `string`            | `""`  |
+| Name    | Description                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     | Type                | Value |
+| ------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------- | ----- |
+| `users` | Users configuration map. Each user is a MongoDB user the operator manages from an account Secret the platform keeps. Passwords are issued through the Cozystack credentials API: a mint on the account's `Credential` (`core.cozystack.io`) returns a new password once, and a revoke retires the password without issuing one. A `password` key here is ignored. The names of the MongoDB system users (`backup`, `clusterAdmin`, `clusterMonitor`, `databaseAdmin`, `userAdmin`) are refused. | `map[string]object` | `{}`  |
 
 
 ### Databases configuration
