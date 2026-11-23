@@ -1805,6 +1805,22 @@ func TestReconcileAltinity_DoesNotReuseAJobItDoesNotControl(t *testing.T) {
 				if c := meta.FindStatusCondition(got.Status.Conditions, "Ready"); c == nil || !strings.Contains(c.Message, job.Name) {
 					t.Errorf("Ready condition %+v does not say which Job it waits for", c)
 				}
+
+				// Once the garbage collector has removed the earlier Job, this
+				// run's own Job starts and the wait is over.
+				if err := r.Delete(ctx, job); err != nil {
+					t.Fatalf("remove the earlier Job: %v", err)
+				}
+				if _, err := r.reconcileAltinity(ctx, got, altinityResolved(strategy.Name)); err != nil {
+					t.Fatalf("reconcileAltinity after the earlier Job went: %v", err)
+				}
+				after := &backupsv1alpha1.BackupJob{}
+				if err := r.Get(ctx, client.ObjectKeyFromObject(bj), after); err != nil {
+					t.Fatalf("get BackupJob: %v", err)
+				}
+				if c := meta.FindStatusCondition(after.Status.Conditions, "Ready"); c != nil && c.Reason == altinityPredecessorJobReason {
+					t.Errorf("Ready condition %+v still says the run waits for an earlier Job while its own runs", c)
+				}
 			})
 		}
 	}
@@ -1901,6 +1917,22 @@ func TestReconcileAltinityRestore_DoesNotReuseAJobItDoesNotControl(t *testing.T)
 				}
 				if c := meta.FindStatusCondition(got.Status.Conditions, "Ready"); c == nil || !strings.Contains(c.Message, job.Name) {
 					t.Errorf("Ready condition %+v does not say which Job it waits for", c)
+				}
+
+				// Once the garbage collector has removed the earlier Job, this
+				// run's own Job starts and the wait is over.
+				if err := rr.Delete(ctx, job); err != nil {
+					t.Fatalf("remove the earlier Job: %v", err)
+				}
+				if _, err := rr.reconcileAltinityRestore(ctx, got, backup); err != nil {
+					t.Fatalf("reconcileAltinityRestore after the earlier Job went: %v", err)
+				}
+				after := &backupsv1alpha1.RestoreJob{}
+				if err := rr.Get(ctx, client.ObjectKeyFromObject(restoreJob), after); err != nil {
+					t.Fatalf("get RestoreJob: %v", err)
+				}
+				if c := meta.FindStatusCondition(after.Status.Conditions, "Ready"); c != nil && c.Reason == altinityPredecessorJobReason {
+					t.Errorf("Ready condition %+v still says the run waits for an earlier Job while its own runs", c)
 				}
 			})
 		}

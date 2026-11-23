@@ -180,6 +180,17 @@ func clearCredentialsWait(conditions *[]metav1.Condition) bool {
 	return apimeta.RemoveStatusCondition(conditions, "Ready")
 }
 
+// clearPredecessorWait drops the Ready condition a run set while it waited
+// for the Job of an earlier owner of its name, once its own Job runs. It
+// reports whether it did.
+func clearPredecessorWait(conditions *[]metav1.Condition) bool {
+	ready := apimeta.FindStatusCondition(*conditions, "Ready")
+	if ready == nil || ready.Reason != altinityPredecessorJobReason {
+		return false
+	}
+	return apimeta.RemoveStatusCondition(conditions, "Ready")
+}
+
 const credentialsWaitReason = "WaitingForCredentials"
 
 // credentialsWaitCondition is the Ready condition of a job held back by
@@ -436,7 +447,7 @@ func (r *BackupJobReconciler) reconcileAltinity(ctx context.Context, j *backupsv
 		apimeta.SetStatusCondition(&j.Status.Conditions, metav1.Condition{
 			Type:    "Ready",
 			Status:  metav1.ConditionFalse,
-			Reason:  "PredecessorJobPending",
+			Reason:  altinityPredecessorJobReason,
 			Message: err.Error(),
 		})
 		if uerr := r.Status().Update(ctx, j); uerr != nil {
@@ -494,7 +505,7 @@ func (r *BackupJobReconciler) reconcileAltinity(ctx context.Context, j *backupsv
 		return r.markBackupJobFailed(ctx, j, message)
 
 	default:
-		if clearCredentialsWait(&j.Status.Conditions) {
+		if clearCredentialsWait(&j.Status.Conditions) || clearPredecessorWait(&j.Status.Conditions) {
 			if err := r.Status().Update(ctx, j); err != nil {
 				return ctrl.Result{}, err
 			}
@@ -546,6 +557,10 @@ func (r *BackupJobReconciler) ensureAltinityJob(
 	}
 	return desired, nil
 }
+
+// altinityPredecessorJobReason is the Ready reason of a run that waits for
+// the Job of an earlier owner of its name to be removed.
+const altinityPredecessorJobReason = "PredecessorJobPending"
 
 // errAltinityPredecessorJob marks a Job left under the Job name by an earlier
 // BackupJob or RestoreJob of the same name. Its owner is gone, so the garbage
@@ -926,7 +941,7 @@ func (r *RestoreJobReconciler) reconcileAltinityRestore(ctx context.Context, res
 		apimeta.SetStatusCondition(&restoreJob.Status.Conditions, metav1.Condition{
 			Type:    "Ready",
 			Status:  metav1.ConditionFalse,
-			Reason:  "PredecessorJobPending",
+			Reason:  altinityPredecessorJobReason,
 			Message: err.Error(),
 		})
 		if uerr := r.Status().Update(ctx, restoreJob); uerr != nil {
@@ -962,7 +977,7 @@ func (r *RestoreJobReconciler) reconcileAltinityRestore(ctx context.Context, res
 		return r.markRestoreJobFailed(ctx, restoreJob, message)
 
 	default:
-		if clearCredentialsWait(&restoreJob.Status.Conditions) {
+		if clearCredentialsWait(&restoreJob.Status.Conditions) || clearPredecessorWait(&restoreJob.Status.Conditions) {
 			if err := r.Status().Update(ctx, restoreJob); err != nil {
 				return ctrl.Result{}, err
 			}
