@@ -76,9 +76,9 @@ func shippedResource(t *testing.T, path string) config.Resource {
 func testEnvironment() reservation.Environment {
 	return &reservation.StaticEnvironment{
 		Instancetypes: map[string]reservation.ResourceList{
-			"u1.small": {"cpu": resource.MustParse("1"), "memory": resource.MustParse("4Gi")},
+			"u1.small":  {"cpu": resource.MustParse("1"), "memory": resource.MustParse("4Gi")},
 			"u1.medium": {"cpu": resource.MustParse("2"), "memory": resource.MustParse("8Gi")},
-			"u1.large": {"cpu": resource.MustParse("4"), "memory": resource.MustParse("16Gi")},
+			"u1.large":  {"cpu": resource.MustParse("4"), "memory": resource.MustParse("16Gi")},
 		},
 		Presets: reservation.ShippedPresets(),
 	}
