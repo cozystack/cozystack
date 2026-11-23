@@ -210,13 +210,23 @@ func (g *Reservation) acquire(ctx context.Context, c client.Client, live client.
 	}
 	g.mu.Unlock()
 	for key, pw := range owed {
-		if err := g.waitVisible(c, live, key, pw); err != nil {
+		if err := g.waitVisible(c, live, root, key, pw); err != nil {
 			m.Unlock()
 			return nil, apierrors.NewTooManyRequests(fmt.Sprintf("an earlier write into tenant pool %q is not visible yet; retry", root), 1)
 		}
 		g.clear(root, key)
 	}
 	return m.Unlock, nil
+}
+
+// current returns the debt owed for key in root, or fallback when none is.
+func (g *Reservation) current(root string, key client.ObjectKey, fallback pendingWrite) pendingWrite {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if pw, ok := g.pending[root][key]; ok {
+		return pw
+	}
+	return fallback
 }
 
 func (g *Reservation) clear(root string, key client.ObjectKey) {
@@ -265,16 +275,32 @@ func (g *Reservation) supersede(key client.ObjectKey, pw pendingWrite) {
 // API server, or both agreeing the release is gone, has seen the write and
 // whatever followed it. Otherwise the write is still owed, however long ago
 // it was made.
-func (g *Reservation) waitVisible(c client.Client, live client.Reader, key client.ObjectKey, pw pendingWrite) error {
+func (g *Reservation) waitVisible(c client.Client, live client.Reader, root string, key client.ObjectKey, pw pendingWrite) error {
 	ctx, cancel := context.WithTimeout(context.Background(), g.settleTimeout)
 	defer cancel()
 	err := wait.PollUntilContextCancel(ctx, settleInterval, true, func(ctx context.Context) (bool, error) {
+		// A later write or delete of the release may have replaced what
+		// the debt waits for while this poll runs.
+		pw := g.current(root, key, pw)
 		hr := &helmv2.HelmRelease{}
 		if err := c.Get(ctx, key, hr); err != nil {
-			if apierrors.IsNotFound(err) {
-				return pw.deleted, nil
+			if !apierrors.IsNotFound(err) {
+				return false, err
 			}
-			return false, err
+			if !pw.deleted {
+				return false, nil
+			}
+			// A delete that waits on finalizers leaves the release stored,
+			// and a cache that never saw the create reports it missing all
+			// the same. Only the API server can say it is gone.
+			if live == nil {
+				return false, nil
+			}
+			liveErr := live.Get(ctx, key, &helmv2.HelmRelease{})
+			if apierrors.IsNotFound(liveErr) {
+				return true, nil
+			}
+			return false, client.IgnoreNotFound(liveErr)
 		}
 		return !pw.deleted && pw.visible(hr), nil
 	})
@@ -633,19 +659,24 @@ type finalUpdateError struct{ err error }
 func (e finalUpdateError) Error() string { return e.err.Error() }
 
 // settle waits until the cache serves the release as written, so that the
-// next writer into the pool, which reads the cache, counts it. If it does
-// not in time, the write is recorded as owed to the pool, and the pool
-// admits no growth until the cache shows it or a later state of it.
+// next writer into the pool, which reads the cache, counts it. The write is
+// recorded as owed to the pool before the wait starts, so that a shrink or a
+// delete landing meanwhile replaces what is waited for instead of finding
+// nothing to replace. If the cache does not show it in time, the debt stays,
+// and the pool admits no growth until the cache shows the write or a later
+// state of it.
 func (a *reservationAdmission) settle(c client.Client, live client.Reader, hr *helmv2.HelmRelease) {
 	if a == nil || a.unlock == nil {
 		return
 	}
 	key := client.ObjectKeyFromObject(hr)
 	pw := writtenState(hr)
-	if err := a.gate.waitVisible(c, live, key, pw); err != nil {
+	a.gate.owe(a.root, key, pw)
+	if err := a.gate.waitVisible(c, live, a.root, key, pw); err != nil {
 		klog.Warningf("HelmRelease %s is not in the cache after %s; pool %q admits no growth until it is: %v", key, a.gate.settleTimeout, a.root, err)
-		a.gate.owe(a.root, key, pw)
+		return
 	}
+	a.gate.clear(a.root, key)
 }
 
 // lockTenantPool holds the pool a Tenant's quota is carved out of, from the
