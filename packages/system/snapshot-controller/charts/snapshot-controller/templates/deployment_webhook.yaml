@@ -1,0 +1,88 @@
+{{- if .Values.webhook.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "conversion-webhook.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "conversion-webhook.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.webhook.replicaCount }}
+  revisionHistoryLimit: {{ .Values.webhook.revisionHistoryLimit }}
+  selector:
+    matchLabels:
+      {{- include "conversion-webhook.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      {{- with .Values.webhook.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      labels:
+        {{- include "conversion-webhook.selectorLabels" . | nindent 8 }}
+        {{- with .Values.webhook.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      {{- with .Values.webhook.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "conversion-webhook.serviceAccountName" . }}
+      securityContext:
+        {{- toYaml .Values.webhook.podSecurityContext | nindent 8 }}
+      containers:
+        - name: "conversion-webhook"
+          securityContext:
+            {{- toYaml .Values.webhook.securityContext | nindent 12 }}
+          image: "{{ .Values.webhook.image.repository }}:{{ .Values.webhook.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.webhook.image.pullPolicy }}
+          args:
+            {{- range $flag, $val := .Values.webhook.args }}
+            - --{{ $flag | kebabcase }}={{ $val }}
+            {{- end }}
+          ports:
+            - name: https
+              containerPort: {{ .Values.webhook.args.port }}
+              protocol: TCP
+          livenessProbe:
+            httpGet:
+              port: https
+              path: /readyz
+              scheme: HTTPS
+          resources:
+            {{- toYaml .Values.webhook.resources | nindent 12 }}
+          volumeMounts:
+            - name: tls
+              mountPath: /etc/webhook
+              readOnly: true
+      {{- with .Values.webhook.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.webhook.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.webhook.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.webhook.topologySpreadConstraints }}
+      topologySpreadConstraints:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- if .Values.webhook.priorityClassName }}
+      priorityClassName: {{ .Values.webhook.priorityClassName }}
+      {{- end }}
+      hostNetwork: {{ .Values.webhook.hostNetwork }}
+      {{- with .Values.webhook.dnsConfig }}
+      dnsConfig:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      dnsPolicy: {{ .Values.webhook.dnsPolicy }}
+      volumes:
+      - name: tls
+        secret:
+          secretName: {{ include "conversion-webhook.certifcateName" . }}
+{{- end }}

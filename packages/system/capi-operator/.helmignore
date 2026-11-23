@@ -1,3 +1,5 @@
 images
 hack
 .gitkeep
+files/*-components.yaml
+patches/

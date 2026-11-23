@@ -800,3 +800,25 @@ tests:
       - equal:
           path: spec.config["auth.generic_oauth"].auth_url
           value: "https://keycloak.example.org/realms/acme/protocol/openid-connect/auth"
+
+  # Grafana calls the token and userinfo endpoints on the public host, so all
+  # three URLs must move with _cluster.keycloak-host.
+  - it: mode=System grafana.yaml builds the OIDC URLs on a custom keycloak-host
+    template: templates/grafana/grafana.yaml
+    set:
+      oidc.mode: System
+      _cluster.oidc-enabled: "true"
+      _cluster.keycloak-host: auth.example.org
+      oidc.users:
+        - email: alice@example.com
+          role: Admin
+    asserts:
+      - equal:
+          path: spec.config["auth.generic_oauth"].auth_url
+          value: "https://auth.example.org/realms/cozy/protocol/openid-connect/auth"
+      - equal:
+          path: spec.config["auth.generic_oauth"].token_url
+          value: "https://auth.example.org/realms/cozy/protocol/openid-connect/token"
+      - equal:
+          path: spec.config["auth.generic_oauth"].api_url
+          value: "https://auth.example.org/realms/cozy/protocol/openid-connect/userinfo"

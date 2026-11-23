@@ -699,7 +699,7 @@ spec:
         - --insecure-diagnostics=${CAPI_INSECURE_DIAGNOSTICS:=false}
         command:
         - /manager
-        image: ghcr.io/siderolabs/cluster-api-talos-controller:v0.6.12
+        image: ghcr.io/siderolabs/cluster-api-talos-controller:v0.6.13
         imagePullPolicy: Always
         livenessProbe:
           httpGet:

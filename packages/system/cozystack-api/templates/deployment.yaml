@@ -31,6 +31,9 @@ spec:
         args:
         - --tls-cert-file=/tmp/cozystack-api-certs/tls.crt
         - --tls-private-key-file=/tmp/cozystack-api-certs/tls.key
+        {{- if not .Values.cozystackAPI.serveSDN }}
+        - --serve-sdn=false
+        {{- end }}
         image: "{{ .Values.cozystackAPI.image }}"
         ports:
         - containerPort: 443

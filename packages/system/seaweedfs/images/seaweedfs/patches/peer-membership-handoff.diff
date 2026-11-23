@@ -1,0 +1,631 @@
+diff --git a/weed/filer/filer.go b/weed/filer/filer.go
+index d83486c..a48c9df 100644
+--- a/weed/filer/filer.go
++++ b/weed/filer/filer.go
+@@ -165,14 +165,6 @@ func (f *Filer) AggregateFromPeers(self pb.ServerAddress, existingNodes []*maste
+ 	// The ring starts empty while peer history sits on disk: mark the pre-startFrom
+ 	// range evicted so a cursor there reads disk, not the ring's earliest entry.
+ 	f.MetaAggregator.MetaLogBuffer.MarkEvictedThrough(startFrom.UnixNano())
+-	f.MasterClient.SetOnPeerUpdateFn(func(update *master_pb.ClusterNodeUpdate, startFrom time.Time) {
+-		if update.NodeType != cluster.FilerType {
+-			return
+-		}
+-		// Lock ring is now managed by the master via LockRingUpdate,
+-		// so we no longer call AddServer/RemoveServer here.
+-		f.MetaAggregator.OnPeerUpdate(update, startFrom)
+-	})
+ 	f.MasterClient.SetOnLockRingUpdateFn(func(update *master_pb.LockRingUpdate) {
+ 		var servers []pb.ServerAddress
+ 		for _, s := range update.Servers {
+@@ -186,19 +178,31 @@ func (f *Filer) AggregateFromPeers(self pb.ServerAddress, existingNodes []*maste
+ 		f.Dlm.LockRing.Reset()
+ 	})
+ 
+-	// Subscribe to the local filer first: its events reach the aggregated
+-	// buffer only through this subscription, and the peer watermarks must
+-	// account for it before any remote peer - a remotes-only watermark set
+-	// would claim completeness without self. existingNodes can omit self
+-	// (master registration races this bootstrap); duplicate adds are no-ops.
++	// Remote-only watermarks could claim completeness without the local merge source.
+ 	f.MetaAggregator.OnPeerUpdate(&master_pb.ClusterNodeUpdate{
+ 		NodeType: cluster.FilerType,
+ 		Address:  string(self),
+ 		IsAdd:    true,
+ 	}, startFrom)
+-	for _, peerUpdate := range existingNodes {
+-		f.MetaAggregator.OnPeerUpdate(peerUpdate, startFrom)
++	initialPeers := make(map[string]struct{}, len(existingNodes))
++	for _, peer := range existingNodes {
++		initialPeers[pb.ServerAddress(peer.Address).ToHttpAddress()] = struct{}{}
+ 	}
++	// The bootstrap snapshot can predate a streamed removal; use the stream's retained state.
++	f.MasterClient.SetOnPeerUpdateFn(func(update *master_pb.ClusterNodeUpdate, observedAt time.Time) {
++		if update.NodeType != cluster.FilerType {
++			return
++		}
++		address := pb.ServerAddress(update.Address).ToHttpAddress()
++		if _, initial := initialPeers[address]; initial {
++			delete(initialPeers, address)
++			// A delayed initial ADD must not skip the bootstrap replay window.
++			if update.IsAdd && startFrom.Before(observedAt) {
++				observedAt = startFrom
++			}
++		}
++		f.MetaAggregator.OnPeerUpdate(update, observedAt)
++	})
+ 
+ }
+ 
+diff --git a/weed/filer/peer_discovery_gap_test.go b/weed/filer/peer_discovery_gap_test.go
+new file mode 100644
+index 0000000..4c70b40
+--- /dev/null
++++ b/weed/filer/peer_discovery_gap_test.go
+@@ -0,0 +1,184 @@
++package filer
++
++import (
++	"context"
++	"net"
++	"testing"
++	"time"
++
++	"github.com/seaweedfs/seaweedfs/weed/cluster"
++	"github.com/seaweedfs/seaweedfs/weed/cluster/lock_manager"
++	"github.com/seaweedfs/seaweedfs/weed/pb"
++	"github.com/seaweedfs/seaweedfs/weed/pb/filer_pb"
++	"github.com/seaweedfs/seaweedfs/weed/pb/master_pb"
++	"github.com/seaweedfs/seaweedfs/weed/wdclient"
++	"google.golang.org/grpc"
++	"google.golang.org/grpc/credentials/insecure"
++)
++
++type discoveryGapMaster struct {
++	master_pb.UnimplementedSeaweedServer
++	self            pb.ServerAddress
++	peer            pb.ServerAddress
++	announce        chan struct{}
++	snapshotHasPeer bool
++	events          []bool
++	delayInitial    bool
++}
++
++func (s *discoveryGapMaster) KeepConnected(stream master_pb.Seaweed_KeepConnectedServer) error {
++	if _, err := stream.Recv(); err != nil {
++		return err
++	}
++	if err := stream.Send(&master_pb.KeepConnectedResponse{VolumeLocation: &master_pb.VolumeLocation{Leader: string(s.self)}}); err != nil {
++		return err
++	}
++	initial := []pb.ServerAddress{s.self}
++	if s.snapshotHasPeer && !s.delayInitial {
++		initial = append(initial, s.peer)
++	}
++	for _, address := range initial {
++		if err := stream.Send(&master_pb.KeepConnectedResponse{ClusterNodeUpdate: &master_pb.ClusterNodeUpdate{NodeType: cluster.FilerType, Address: string(address), IsAdd: true}}); err != nil {
++			return err
++		}
++	}
++	select {
++	case <-s.announce:
++	case <-stream.Context().Done():
++		return stream.Context().Err()
++	}
++	for _, add := range s.events {
++		if err := stream.Send(&master_pb.KeepConnectedResponse{ClusterNodeUpdate: &master_pb.ClusterNodeUpdate{NodeType: cluster.FilerType, Address: string(s.peer), IsAdd: add}}); err != nil {
++			return err
++		}
++	}
++	if err := stream.Send(&master_pb.KeepConnectedResponse{LockRingUpdate: &master_pb.LockRingUpdate{Version: 1}}); err != nil {
++		return err
++	}
++	<-stream.Context().Done()
++	return stream.Context().Err()
++}
++
++func (s *discoveryGapMaster) ListClusterNodes(context.Context, *master_pb.ListClusterNodesRequest) (*master_pb.ListClusterNodesResponse, error) {
++	nodes := []*master_pb.ListClusterNodesResponse_ClusterNode{{Address: string(s.self)}}
++	if s.snapshotHasPeer {
++		nodes = append(nodes, &master_pb.ListClusterNodesResponse_ClusterNode{Address: string(s.peer)})
++	}
++	return &master_pb.ListClusterNodesResponse{ClusterNodes: nodes}, nil
++}
++
++type discoveryGapFiler struct {
++	filer_pb.UnimplementedSeaweedFilerServer
++	subscriptions chan int64
++}
++
++func (*discoveryGapFiler) GetFilerConfiguration(context.Context, *filer_pb.GetFilerConfigurationRequest) (*filer_pb.GetFilerConfigurationResponse, error) {
++	return &filer_pb.GetFilerConfigurationResponse{Signature: 41}, nil
++}
++func (s *discoveryGapFiler) SubscribeLocalMetadata(req *filer_pb.SubscribeMetadataRequest, stream filer_pb.SeaweedFiler_SubscribeLocalMetadataServer) error {
++	s.subscriptions <- req.SinceNs
++	<-stream.Context().Done()
++	return stream.Context().Err()
++}
++
++func TestPeerDiscoveryAcrossAggregatorInitialization(t *testing.T) {
++	cases := []struct {
++		name            string
++		before          bool
++		snapshotHasPeer bool
++		events          []bool
++		wantPeer        bool
++		cursor          bool
++	}{
++		{"pre_init_add", true, false, []bool{true}, true, false},
++		{"pre_init_remove", true, true, []bool{false}, false, false},
++		{"pre_init_add_remove", true, false, []bool{true, false}, false, false},
++		{"pre_init_remove_add", true, true, []bool{false, true}, true, false},
++		{"post_init_add", false, false, []bool{true}, true, false},
++		{"post_init_remove", false, true, []bool{false}, false, false},
++		{"delayed_initial_add_replay_cursor", false, true, []bool{true}, true, true},
++	}
++	for _, tc := range cases {
++		t.Run(tc.name, func(t *testing.T) {
++			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
++			defer cancel()
++			listener, err := net.Listen("tcp", "127.0.0.1:0")
++			if err != nil {
++				t.Fatal(err)
++			}
++			_, port, err := net.SplitHostPort(listener.Addr().String())
++			if err != nil {
++				t.Fatal(err)
++			}
++			self := pb.ServerAddress("127.0.0.1:0." + port)
++			peer := pb.ServerAddress("localhost:0." + port)
++			master := &discoveryGapMaster{self: self, peer: peer, announce: make(chan struct{}), snapshotHasPeer: tc.snapshotHasPeer, events: tc.events, delayInitial: tc.cursor}
++			server := grpc.NewServer()
++			master_pb.RegisterSeaweedServer(server, master)
++			subscriptions := make(chan int64, 16)
++			filer_pb.RegisterSeaweedFilerServer(server, &discoveryGapFiler{subscriptions: subscriptions})
++			go server.Serve(listener)
++			defer server.Stop()
++			dial := grpc.WithTransportCredentials(insecure.NewCredentials())
++			mc := wdclient.NewMasterClient(dial, "", cluster.FilerType, self, "", "", *pb.NewServiceDiscoveryFromMap(map[string]pb.ServerAddress{"master": self}))
++			go mc.KeepConnectedToMaster(ctx)
++			f := &Filer{MasterClient: mc, GrpcDialOption: dial, Signature: 41, Dlm: lock_manager.NewDistributedLockManager(self)}
++			snapshot := f.ListExistingPeerUpdates(ctx)
++			wantSize := 1
++			if tc.snapshotHasPeer {
++				wantSize++
++			}
++			if len(snapshot) != wantSize {
++				t.Fatalf("snapshot = %v, want %d nodes", snapshot, wantSize)
++			}
++			if mc.OnPeerUpdate != nil {
++				t.Fatal("unexpected peer callback before initialization")
++			}
++			dispatched := make(chan struct{})
++			barrier := func(*master_pb.LockRingUpdate) { close(dispatched) }
++			await := func() {
++				select {
++				case <-dispatched:
++				case <-ctx.Done():
++					t.Fatal("master dispatch barrier not reached")
++				}
++			}
++			if tc.before {
++				mc.SetOnLockRingUpdateFn(barrier)
++				close(master.announce)
++				await()
++				t.Log("membership events passed through real MasterClient dispatch while OnPeerUpdate was nil")
++			}
++			replayFrom := time.Now().Add(-time.Minute)
++			f.AggregateFromPeers(self, snapshot, replayFrom)
++			defer func() {
++				f.MetaAggregator.OnPeerUpdate(&master_pb.ClusterNodeUpdate{Address: string(self)}, time.Now())
++				f.MetaAggregator.OnPeerUpdate(&master_pb.ClusterNodeUpdate{Address: string(peer)}, time.Now())
++				f.MetaAggregator.MetaLogBuffer.ShutdownLogBuffer()
++			}()
++			if mc.OnPeerUpdate == nil {
++				t.Fatal("initialization did not install callback")
++			}
++			if !tc.before {
++				mc.SetOnLockRingUpdateFn(barrier)
++				close(master.announce)
++				await()
++			}
++			if tc.cursor {
++				for range 2 {
++					select {
++					case since := <-subscriptions:
++						if since > replayFrom.UnixNano() {
++							t.Errorf("initial peer replay starts at %d, after bootstrap overlap %d", since, replayFrom.UnixNano())
++						}
++					case <-ctx.Done():
++						t.Fatal("metadata subscription not started")
++					}
++				}
++			}
++			if got := f.MetaAggregator.HasRemotePeers(); got != tc.wantPeer {
++				t.Fatalf("remote peer membership = %t, want %t after events %v", got, tc.wantPeer, tc.events)
++			}
++		})
++	}
++}
+diff --git a/weed/wdclient/masterclient.go b/weed/wdclient/masterclient.go
+index 6d638b6..9f16364 100644
+--- a/weed/wdclient/masterclient.go
++++ b/weed/wdclient/masterclient.go
+@@ -142,6 +142,16 @@ func (p *masterVolumeProvider) LookupVolumeIds(ctx context.Context, volumeIds []
+ 
+ // MasterClient connects to master servers and maintains volume location cache
+ // It receives real-time updates via KeepConnected streaming and uses vidMapClient for caching
++type peerUpdateKey struct {
++	nodeType string
++	address  string
++}
++
++type pendingPeerUpdate struct {
++	update    *master_pb.ClusterNodeUpdate
++	startFrom time.Time
++}
++
+ type MasterClient struct {
+ 	*vidMapClient // Embedded cache with shared logic
+ 
+@@ -157,6 +167,7 @@ type MasterClient struct {
+ 	grpcTimeout          time.Duration // Timeout for gRPC calls to master
+ 	OnPeerUpdate         func(update *master_pb.ClusterNodeUpdate, startFrom time.Time)
+ 	OnPeerUpdateLock     sync.RWMutex
++	pendingPeerUpdates   map[peerUpdateKey]pendingPeerUpdate
+ 	OnLockRingUpdate     func(update *master_pb.LockRingUpdate)
+ 	OnLockRingUpdateLock sync.RWMutex
+ 	OnMasterChange       func(previous, current pb.ServerAddress)
+@@ -185,8 +196,58 @@ func NewMasterClient(grpcDialOption grpc.DialOption, filerGroup string, clientTy
+ 
+ func (mc *MasterClient) SetOnPeerUpdateFn(onPeerUpdate func(update *master_pb.ClusterNodeUpdate, startFrom time.Time)) {
+ 	mc.OnPeerUpdateLock.Lock()
+-	mc.OnPeerUpdate = onPeerUpdate
++	if onPeerUpdate == nil || len(mc.pendingPeerUpdates) == 0 {
++		if onPeerUpdate != nil {
++			mc.pendingPeerUpdates = nil
++		}
++		mc.OnPeerUpdate = onPeerUpdate
++		mc.OnPeerUpdateLock.Unlock()
++		return
++	}
++	pending := mc.pendingPeerUpdates
++	mc.pendingPeerUpdates = nil
++	// Retained state must precede concurrently arriving live events.
++	replayed := make(chan struct{})
++	mc.OnPeerUpdate = func(update *master_pb.ClusterNodeUpdate, startFrom time.Time) {
++		<-replayed
++		onPeerUpdate(update, startFrom)
++	}
+ 	mc.OnPeerUpdateLock.Unlock()
++	defer close(replayed)
++	for _, peer := range pending {
++		onPeerUpdate(peer.update, peer.startFrom)
++	}
++}
++
++func (mc *MasterClient) dispatchPeerUpdate(update *master_pb.ClusterNodeUpdate) {
++	if update.FilerGroup != mc.FilerGroup {
++		return
++	}
++	startFrom := time.Now()
++	mc.OnPeerUpdateLock.Lock()
++	callback := mc.OnPeerUpdate
++	if callback == nil {
++		key := peerUpdateKey{nodeType: update.NodeType, address: update.Address}
++		if update.IsAdd {
++			if mc.pendingPeerUpdates == nil {
++				mc.pendingPeerUpdates = make(map[peerUpdateKey]pendingPeerUpdate)
++			}
++			mc.pendingPeerUpdates[key] = pendingPeerUpdate{update: update, startFrom: startFrom}
++		} else {
++			delete(mc.pendingPeerUpdates, key)
++		}
++	}
++	mc.OnPeerUpdateLock.Unlock()
++	if callback == nil {
++		return
++	}
++	if update.IsAdd {
++		glog.V(0).Infof("+ %s@%s noticed %s.%s %s", mc.clientType, mc.clientHost, update.FilerGroup, update.NodeType, update.Address)
++	} else {
++		glog.V(0).Infof("- %s@%s noticed %s.%s %s", mc.clientType, mc.clientHost, update.FilerGroup, update.NodeType, update.Address)
++	}
++	stats.MasterClientConnectCounter.WithLabelValues(stats.OnPeerUpdate).Inc()
++	callback(update, startFrom)
+ }
+ 
+ func (mc *MasterClient) SetOnLockRingUpdateFn(fn func(update *master_pb.LockRingUpdate)) {
+@@ -289,6 +350,14 @@ func (mc *MasterClient) tryConnectToMaster(ctx context.Context, master pb.Server
+ 			// Still need to reset cache to ensure we don't use stale data from previous master
+ 			mc.resetVidMap()
+ 		}
++		// Retained peers are valid only while this stream lives: the next
++		// stream lists just its current members and never reports removals
++		// made before it connected.
++		defer func() {
++			mc.OnPeerUpdateLock.Lock()
++			mc.pendingPeerUpdates = nil
++			mc.OnPeerUpdateLock.Unlock()
++		}()
+ 		if previous := mc.markServingMaster(master); previous != "" {
+ 			mc.OnMasterChangeLock.RLock()
+ 			if mc.OnMasterChange != nil {
+@@ -323,20 +392,7 @@ func (mc *MasterClient) tryConnectToMaster(ctx context.Context, master pb.Server
+ 				mc.updateVidMap(resp)
+ 			}
+ 			if resp.ClusterNodeUpdate != nil {
+-				update := resp.ClusterNodeUpdate
+-				mc.OnPeerUpdateLock.RLock()
+-				if mc.OnPeerUpdate != nil {
+-					if update.FilerGroup == mc.FilerGroup {
+-						if update.IsAdd {
+-							glog.V(0).Infof("+ %s@%s noticed %s.%s %s\n", mc.clientType, mc.clientHost, update.FilerGroup, update.NodeType, update.Address)
+-						} else {
+-							glog.V(0).Infof("- %s@%s noticed %s.%s %s\n", mc.clientType, mc.clientHost, update.FilerGroup, update.NodeType, update.Address)
+-						}
+-						stats.MasterClientConnectCounter.WithLabelValues(stats.OnPeerUpdate).Inc()
+-						mc.OnPeerUpdate(update, time.Now())
+-					}
+-				}
+-				mc.OnPeerUpdateLock.RUnlock()
++				mc.dispatchPeerUpdate(resp.ClusterNodeUpdate)
+ 			}
+ 			if resp.LockRingUpdate != nil {
+ 				update := resp.LockRingUpdate
+diff --git a/weed/wdclient/masterclient_peer_handoff_test.go b/weed/wdclient/masterclient_peer_handoff_test.go
+new file mode 100644
+index 0000000..38730ec
+--- /dev/null
++++ b/weed/wdclient/masterclient_peer_handoff_test.go
+@@ -0,0 +1,99 @@
++package wdclient
++
++import (
++	"reflect"
++	"sync"
++	"testing"
++	"testing/synctest"
++	"time"
++
++	"github.com/seaweedfs/seaweedfs/weed/pb/master_pb"
++)
++
++func TestPeerUpdateHandoffRetainsActiveState(t *testing.T) {
++	mc := &MasterClient{FilerGroup: "test"}
++	event := func(kind, address, group string, add bool) *master_pb.ClusterNodeUpdate {
++		return &master_pb.ClusterNodeUpdate{NodeType: kind, Address: address, FilerGroup: group, IsAdd: add}
++	}
++	for i := 0; i < 100; i++ {
++		mc.dispatchPeerUpdate(event("filer", "gone:8888", "test", true))
++		mc.dispatchPeerUpdate(event("filer", "gone:8888", "test", false))
++	}
++	mc.dispatchPeerUpdate(event("filer", "keep:8888", "test", true))
++	mc.dispatchPeerUpdate(event("s3", "keep:8888", "test", true))
++	mc.dispatchPeerUpdate(event("filer", "foreign:8888", "other", true))
++	if len(mc.pendingPeerUpdates) != 2 {
++		t.Fatalf("retained entries = %d, want two active peer keys", len(mc.pendingPeerUpdates))
++	}
++	got := make(map[string]bool)
++	mc.SetOnPeerUpdateFn(func(update *master_pb.ClusterNodeUpdate, _ time.Time) {
++		got[update.NodeType+"/"+update.Address] = true
++	})
++	want := map[string]bool{"filer/keep:8888": true, "s3/keep:8888": true}
++	if !reflect.DeepEqual(got, want) {
++		t.Fatalf("handoff = %v, want %v", got, want)
++	}
++	if len(mc.pendingPeerUpdates) != 0 {
++		t.Fatal("handoff retained state after consumer installation")
++	}
++}
++
++func TestPeerUpdateHandoffOrdersConcurrentDispatch(t *testing.T) {
++	synctest.Test(t, func(t *testing.T) {
++		mc := &MasterClient{}
++		add := &master_pb.ClusterNodeUpdate{NodeType: "filer", Address: "peer:8888", IsAdd: true}
++		remove := &master_pb.ClusterNodeUpdate{NodeType: "filer", Address: "peer:8888"}
++		mc.dispatchPeerUpdate(add)
++		replayEntered := make(chan struct{})
++		releaseReplay := make(chan struct{})
++		callbackReturned := make(chan struct{})
++		var got []bool
++		var mu sync.Mutex
++		var wg sync.WaitGroup
++		wg.Add(1)
++		go func() {
++			defer wg.Done()
++			mc.SetOnPeerUpdateFn(func(update *master_pb.ClusterNodeUpdate, _ time.Time) {
++				if update.IsAdd {
++					close(replayEntered)
++					<-releaseReplay
++				}
++				mu.Lock()
++				got = append(got, update.IsAdd)
++				mu.Unlock()
++			})
++		}()
++		<-replayEntered
++		wg.Add(1)
++		go func() {
++			defer wg.Done()
++			mc.dispatchPeerUpdate(remove)
++			close(callbackReturned)
++		}()
++		synctest.Wait()
++		mu.Lock()
++		early := len(got)
++		mu.Unlock()
++		if early != 0 {
++			t.Errorf("live callback overtook retained-state replay: %d callbacks", early)
++		}
++		close(releaseReplay)
++		wg.Wait()
++		<-callbackReturned
++		if !reflect.DeepEqual(got, []bool{true, false}) {
++			t.Fatalf("callback order = %v, want ADD then REMOVE", got)
++		}
++	})
++}
++
++func TestPeerUpdateHandoffCallbackRunsOutsideStateLock(t *testing.T) {
++	mc := &MasterClient{}
++	mc.dispatchPeerUpdate(&master_pb.ClusterNodeUpdate{NodeType: "filer", Address: "peer:8888", IsAdd: true})
++	mc.SetOnPeerUpdateFn(func(*master_pb.ClusterNodeUpdate, time.Time) {
++		if !mc.OnPeerUpdateLock.TryLock() {
++			t.Fatal("callback invoked with state lock held")
++		}
++		mc.OnPeerUpdateLock.Unlock()
++	})
++	mc.dispatchPeerUpdate(&master_pb.ClusterNodeUpdate{NodeType: "filer", Address: "peer:8888"})
++}
+diff --git a/weed/wdclient/masterclient_peer_reconnect_test.go b/weed/wdclient/masterclient_peer_reconnect_test.go
+new file mode 100644
+index 0000000..70efe0f
+--- /dev/null
++++ b/weed/wdclient/masterclient_peer_reconnect_test.go
+@@ -0,0 +1,146 @@
++package wdclient
++
++import (
++	"context"
++	"sync/atomic"
++	"testing"
++	"time"
++
++	"github.com/seaweedfs/seaweedfs/weed/pb"
++	"github.com/seaweedfs/seaweedfs/weed/pb/master_pb"
++	"google.golang.org/grpc"
++	"google.golang.org/grpc/codes"
++	"google.golang.org/grpc/credentials/insecure"
++	"google.golang.org/grpc/status"
++)
++
++type peerReconnectMaster struct {
++	master_pb.UnimplementedSeaweedServer
++	address     pb.ServerAddress
++	streams     [][]string
++	connections atomic.Int32
++}
++
++func (s *peerReconnectMaster) KeepConnected(stream master_pb.Seaweed_KeepConnectedServer) error {
++	if _, err := stream.Recv(); err != nil {
++		return err
++	}
++	n := s.connections.Add(1)
++	if err := stream.Send(&master_pb.KeepConnectedResponse{VolumeLocation: &master_pb.VolumeLocation{Leader: string(s.address)}}); err != nil {
++		return err
++	}
++	for _, address := range s.streams[min(int(n), len(s.streams))-1] {
++		if err := stream.Send(&master_pb.KeepConnectedResponse{ClusterNodeUpdate: &master_pb.ClusterNodeUpdate{NodeType: "filer", Address: address, IsAdd: true}}); err != nil {
++			return err
++		}
++	}
++	if n == 1 {
++		return status.Error(codes.Unavailable, "reconnect")
++	}
++	if err := stream.Send(&master_pb.KeepConnectedResponse{LockRingUpdate: &master_pb.LockRingUpdate{Version: 2}}); err != nil {
++		return err
++	}
++	<-stream.Context().Done()
++	return stream.Context().Err()
++}
++
++func TestPeerUpdateHandoffReconnectInitialAdds(t *testing.T) {
++	server := &peerReconnectMaster{streams: [][]string{{"peer-a:8888"}, {"peer-a:8888", "peer-b:8888"}}}
++	server.address = startFakeMasterServer(t, server)
++	mc := NewMasterClient(grpc.WithTransportCredentials(insecure.NewCredentials()), "", "filer", "", "", "", pb.ServerDiscovery{})
++	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
++	defer cancel()
++	mc.tryConnectToMaster(ctx, server.address)
++	if server.connections.Load() != 1 {
++		t.Fatal("first stream did not register")
++	}
++	updates := make(chan string, 3)
++	mc.SetOnPeerUpdateFn(func(update *master_pb.ClusterNodeUpdate, _ time.Time) { updates <- update.Address })
++	barrier := make(chan struct{})
++	mc.SetOnLockRingUpdateFn(func(*master_pb.LockRingUpdate) { close(barrier) })
++	done := make(chan struct{})
++	go func() { mc.tryConnectToMaster(ctx, server.address); close(done) }()
++	select {
++	case <-barrier:
++	case <-ctx.Done():
++		t.Fatal("reconnected stream did not dispatch its initial ADDs")
++	}
++	cancel()
++	<-done
++	for _, want := range []string{"peer-a:8888", "peer-b:8888"} {
++		select {
++		case got := <-updates:
++			if got != want {
++				t.Fatalf("update = %q, want %q", got, want)
++			}
++		default:
++			t.Fatalf("missing update %q", want)
++		}
++	}
++}
++
++func TestPeerUpdateHandoffReconnectDropsPeersAbsentFromNewStream(t *testing.T) {
++	server := &peerReconnectMaster{streams: [][]string{{"peer-a:8888"}, {"peer-b:8888"}}}
++	server.address = startFakeMasterServer(t, server)
++	mc := NewMasterClient(grpc.WithTransportCredentials(insecure.NewCredentials()), "", "filer", "", "", "", pb.ServerDiscovery{})
++	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
++	defer cancel()
++	mc.tryConnectToMaster(ctx, server.address)
++	if server.connections.Load() != 1 {
++		t.Fatal("first stream did not register")
++	}
++	barrier := make(chan struct{})
++	mc.SetOnLockRingUpdateFn(func(*master_pb.LockRingUpdate) { close(barrier) })
++	done := make(chan struct{})
++	go func() { mc.tryConnectToMaster(ctx, server.address); close(done) }()
++	select {
++	case <-barrier:
++	case <-ctx.Done():
++		t.Fatal("reconnected stream did not deliver its initial ADDs")
++	}
++	var replayed []string
++	mc.SetOnPeerUpdateFn(func(update *master_pb.ClusterNodeUpdate, _ time.Time) { replayed = append(replayed, update.Address) })
++	cancel()
++	<-done
++	if len(replayed) != 1 || replayed[0] != "peer-b:8888" {
++		t.Fatalf("replayed %v, want only the reconnected stream's [peer-b:8888]", replayed)
++	}
++}
++
++func TestPeerUpdateHandoffReconnectSkipsPeersOfEndedStream(t *testing.T) {
++	server := &peerReconnectMaster{streams: [][]string{{"peer-a:8888"}, {"peer-b:8888"}}}
++	server.address = startFakeMasterServer(t, server)
++	mc := NewMasterClient(grpc.WithTransportCredentials(insecure.NewCredentials()), "", "filer", "", "", "", pb.ServerDiscovery{})
++	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
++	defer cancel()
++	mc.tryConnectToMaster(ctx, server.address)
++	if server.connections.Load() != 1 {
++		t.Fatal("first stream did not register")
++	}
++	updates := make(chan string, 3)
++	mc.SetOnPeerUpdateFn(func(update *master_pb.ClusterNodeUpdate, _ time.Time) { updates <- update.Address })
++	select {
++	case got := <-updates:
++		t.Fatalf("replayed %q from a stream that already ended", got)
++	default:
++	}
++	barrier := make(chan struct{})
++	mc.SetOnLockRingUpdateFn(func(*master_pb.LockRingUpdate) { close(barrier) })
++	done := make(chan struct{})
++	go func() { mc.tryConnectToMaster(ctx, server.address); close(done) }()
++	select {
++	case <-barrier:
++	case <-ctx.Done():
++		t.Fatal("reconnected stream did not deliver its initial ADDs")
++	}
++	cancel()
++	<-done
++	close(updates)
++	var got []string
++	for address := range updates {
++		got = append(got, address)
++	}
++	if len(got) != 1 || got[0] != "peer-b:8888" {
++		t.Fatalf("updates %v, want only the reconnected stream's [peer-b:8888]", got)
++	}
++}

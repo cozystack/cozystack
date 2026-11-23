@@ -1,0 +1,19 @@
+apiVersion: v2
+name: cozyplane
+description: Multi-tenant eBPF CNI for Cozystack — flat default network plus VPC tenancy
+type: application
+# Unused as a release coordinate: these charts are consumed straight from this
+# git repository (packages/packagesources/, GitRepository -> PackageSource), so
+# the commit is the version and nothing resolves this field. Kept at 0.0.0.
+version: 0.0.0
+appVersion: "0.1.0"
+kubeVersion: ">=1.30.0-0"
+keywords:
+  - cni
+  - networking
+  - ebpf
+  - cozystack
+  - vpc
+home: https://github.com/lllamnyp/cozyplane
+sources:
+  - https://github.com/lllamnyp/cozyplane

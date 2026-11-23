@@ -1,0 +1,97 @@
+suite: fluent-bit extraOutputs is refused where outputs would drop it
+
+# extraOutputs only reaches fluent-bit.conf through the hook in outputs. An
+# outputs override without a working hook would accept extraOutputs and drop
+# it, so the render fails instead. The guard renders outputs, so a hook that
+# is only mentioned, or that glues the extra section to the previous line,
+# counts as missing. The tenant HelmRelease carries the same check;
+# its counterpart is packages/apps/kubernetes/tests/monitoring_agents_test.yaml.
+templates:
+  - templates/fluent-bit-extra-outputs-guard.yaml
+release:
+  name: monitoring-agents
+  namespace: cozy-monitoring
+set:
+  global:
+    target: tenant-root
+tests:
+  - it: refuses extraOutputs when outputs is overridden without the hook
+    set:
+      fluent-bit.config.outputs: |
+        [OUTPUT]
+            Name http
+            Host logs-a.example.org
+      fluent-bit.config.extraOutputs: |
+        [OUTPUT]
+            Name http
+            Host logs-b.example.org
+    asserts:
+      - failedTemplate:
+          errorPattern: 'fluent-bit\.config\.outputs does not emit it on a line of its own'
+
+  - it: refuses a hook that is commented out
+    set:
+      fluent-bit.config.outputs: |
+        [OUTPUT]
+            Name http
+            Host logs-a.example.org
+        {{/* .Values.config.extraOutputs */}}
+      fluent-bit.config.extraOutputs: |
+        [OUTPUT]
+            Name http
+            Host logs-b.example.org
+    asserts:
+      - failedTemplate:
+          errorPattern: 'does not emit it on a line of its own'
+
+  - it: refuses a compact hook that trims the newline before the extra section
+    set:
+      fluent-bit.config.outputs: |
+        [OUTPUT]
+            Name http
+            Host logs-a.example.org
+        {{- with .Values.config.extraOutputs }}{{ . }}{{- end }}
+      fluent-bit.config.extraOutputs: |
+        [OUTPUT]
+            Name http
+            Host logs-b.example.org
+    asserts:
+      - failedTemplate:
+          errorPattern: 'does not emit it on a line of its own'
+
+  - it: accepts an outputs override that keeps the three-line hook
+    set:
+      fluent-bit.config.outputs: |
+        [OUTPUT]
+            Name http
+            Host logs-a.example.org
+        {{- with .Values.config.extraOutputs }}
+        {{ . }}
+        {{- end }}
+      fluent-bit.config.extraOutputs: |
+        [OUTPUT]
+            Name http
+            Host logs-b.example.org
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: accepts extraOutputs with the default outputs
+    set:
+      fluent-bit.config.extraOutputs: |
+        [OUTPUT]
+            Name stdout
+            Match *
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: accepts an outputs override without extraOutputs
+    set:
+      fluent-bit.config.outputs: |
+        [OUTPUT]
+            Name http
+            Host logs-a.example.org
+    asserts:
+      - hasDocuments:
+          count: 0

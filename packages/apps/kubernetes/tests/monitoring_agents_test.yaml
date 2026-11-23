@@ -78,3 +78,110 @@ tests:
       - equal:
           path: spec.values.fluent-bit.daemonSetVolumes[0].name
           value: varlog
+
+  - it: adds extra destinations through valuesOverride without dropping the tenant ones
+    set:
+      addons.monitoringAgents.valuesOverride:
+        vmagent:
+          extraRemoteWrite:
+            - url: https://metrics.example.org/api/v1/write
+        fluent-bit:
+          config:
+            extraOutputs: |
+              [OUTPUT]
+                  Name stdout
+                  Match *
+    asserts:
+      - equal:
+          path: spec.values.vmagent.remoteWrite.urls
+          value:
+            - http://vminsert-shortterm.tenant-root.svc.cozy.local:8480/insert/0/prometheus
+      - equal:
+          path: spec.values.vmagent.extraRemoteWrite
+          value:
+            - url: https://metrics.example.org/api/v1/write
+      - matchRegex:
+          path: spec.values.fluent-bit.config.outputs
+          pattern: 'Host vlinsert-generic\.tenant-root\.svc\.cozy\.local'
+      # The outputs string is rendered again by the fluent-bit subchart,
+      # which is where extraOutputs gets appended.
+      - matchRegex:
+          path: spec.values.fluent-bit.config.outputs
+          pattern: '\{\{- with \.Values\.config\.extraOutputs \}\}\n\{\{ \. \}\}\n\{\{- end \}\}'
+
+  - it: refuses extraOutputs when valuesOverride replaces outputs without the hook
+    set:
+      addons.monitoringAgents.valuesOverride:
+        fluent-bit:
+          config:
+            outputs: |
+              [OUTPUT]
+                  Name http
+                  Host logs-a.example.org
+            extraOutputs: |
+              [OUTPUT]
+                  Name http
+                  Host logs-b.example.org
+    asserts:
+      - failedTemplate:
+          errorPattern: 'overrides fluent-bit\.config\.outputs without a hook that emits it on a line of its own'
+
+  - it: refuses extraOutputs when the hook in an outputs override is commented out
+    set:
+      addons.monitoringAgents.valuesOverride:
+        fluent-bit:
+          config:
+            outputs: |
+              [OUTPUT]
+                  Name http
+                  Host logs-a.example.org
+              {{/* .Values.config.extraOutputs */}}
+            extraOutputs: |
+              [OUTPUT]
+                  Name http
+                  Host logs-b.example.org
+    asserts:
+      - failedTemplate:
+          errorPattern: 'without a hook that emits it on a line of its own'
+
+  - it: refuses extraOutputs when the hook in an outputs override trims the newline
+    set:
+      addons.monitoringAgents.valuesOverride:
+        fluent-bit:
+          config:
+            outputs: |
+              [OUTPUT]
+                  Name http
+                  Host logs-a.example.org
+              {{- with .Values.config.extraOutputs }}{{ . }}{{- end }}
+            extraOutputs: |
+              [OUTPUT]
+                  Name http
+                  Host logs-b.example.org
+    asserts:
+      - failedTemplate:
+          errorPattern: 'without a hook that emits it on a line of its own'
+
+  - it: passes both destinations through when valuesOverride replaces outputs and keeps the hook
+    set:
+      addons.monitoringAgents.valuesOverride:
+        fluent-bit:
+          config:
+            outputs: |
+              [OUTPUT]
+                  Name http
+                  Host logs-a.example.org
+              {{- with .Values.config.extraOutputs }}
+              {{ . }}
+              {{- end }}
+            extraOutputs: |
+              [OUTPUT]
+                  Name http
+                  Host logs-b.example.org
+    asserts:
+      - matchRegex:
+          path: spec.values.fluent-bit.config.outputs
+          pattern: 'Host logs-a\.example\.org\n\{\{- with \.Values\.config\.extraOutputs \}\}'
+      - matchRegex:
+          path: spec.values.fluent-bit.config.extraOutputs
+          pattern: 'Host logs-b\.example\.org'
