@@ -648,35 +648,42 @@ func hideable(t *testing.T, name string, hidden *bool, objects ...client.Object)
 }
 
 func TestReservationDebtClearsOnAShrinkTheCacheShows(t *testing.T) {
-	hidden := true
-	f := hideable(t, "vm-instance-one", &hidden, tenantHelmRelease(t, "acme", rootTenantNamespace, map[string]string{"memory": "20Gi"}))
+	blind := true
+	f := cacheBlind(t, "vm-instance-one", &blind, tenantHelmRelease(t, "acme", rootTenantNamespace, map[string]string{"memory": "20Gi"}))
+	f.gate.settleTimeout = 100 * time.Millisecond
 	if err := f.create(t, vmApplication(t, "one", "tenant-acme", map[string]any{"instanceType": "u1.large"})); err != nil {
 		t.Fatal(err)
 	}
-	hidden = false
-	// The release is shrunk before the cache ever showed the 16Gi write:
-	// the cache will only ever show the 4Gi one.
+	if err := f.create(t, vmApplication(t, "probe", "tenant-acme", map[string]any{"instanceType": "u1.small"})); !apierrors.IsTooManyRequests(err) {
+		t.Fatalf("while the cache has not shown the 16Gi write the pool owes it; want 429, got %v", err)
+	}
+	// The release is shrunk before the cache ever showed the 16Gi write;
+	// the cache then shows only the 4Gi one.
 	if err := f.update(t, vmApplication(t, "one", "tenant-acme", map[string]any{"instanceType": "u1.small"})); err != nil {
 		t.Fatal(err)
 	}
+	blind = false
 	if err := f.create(t, vmApplication(t, "two", "tenant-acme", map[string]any{"instanceType": "u1.large"})); err != nil {
 		t.Fatalf("the cache shows a later state of the owed release, so the pool admits again: %v", err)
 	}
 }
 
 func TestReservationDebtClearsOnADeleteTheCacheShows(t *testing.T) {
-	hidden := true
-	f := hideable(t, "vm-instance-one", &hidden, tenantHelmRelease(t, "acme", rootTenantNamespace, map[string]string{"memory": "8Gi"}))
+	blind := true
+	f := cacheBlind(t, "vm-instance-one", &blind, tenantHelmRelease(t, "acme", rootTenantNamespace, map[string]string{"memory": "8Gi"}))
+	f.gate.settleTimeout = 100 * time.Millisecond
 	if err := f.create(t, vmApplication(t, "one", "tenant-acme", map[string]any{"instanceType": "u1.small"})); err != nil {
 		t.Fatal(err)
 	}
-	hidden = false
+	if err := f.create(t, vmApplication(t, "probe", "tenant-acme", map[string]any{"instanceType": "u1.small"})); !apierrors.IsTooManyRequests(err) {
+		t.Fatalf("while the cache has not shown the write the pool owes it; want 429, got %v", err)
+	}
 	ctx := request.WithNamespace(context.Background(), "tenant-acme")
 	if _, _, err := f.vms.Delete(ctx, "one", nil, &metav1.DeleteOptions{}); err != nil {
 		t.Fatal(err)
 	}
 	if err := f.create(t, vmApplication(t, "two", "tenant-acme", map[string]any{"instanceType": "u1.small"})); err != nil {
-		t.Fatalf("the cache no longer has the release this server deleted, so the pool admits again: %v", err)
+		t.Fatalf("the release this server deleted is gone from the API server, so the pool admits again: %v", err)
 	}
 }
 
