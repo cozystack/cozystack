@@ -127,6 +127,116 @@ spec:
           kind: Job
           name: postgres-test-init-job
 
+  # No second disclosure: the minted password logs in over TCP as the user,
+  # the Credential records the mint, no read path the design names carries
+  # the password (the audit log aside, which the sandbox does not collect),
+  # and a second mint replaces the first once CloudNativePG applies it.
+  - name: verify-minted-credential
+    try:
+    - assert:
+        timeout: 2m
+        resource:
+          apiVersion: core.cozystack.io/v1alpha1
+          kind: Credential
+          metadata:
+            name: postgres-test.testuser
+          spec:
+            application:
+              kind: Postgres
+              name: test
+            user: testuser
+          status:
+            password:
+              origin: NotIssued
+    # bash for pipefail and process substitution; the sandbox's /bin/sh is dash.
+    - script:
+        timeout: 5m
+        shell: bash
+        content: |
+          set -euo pipefail
+          cred=postgres-test.testuser
+          as="--as=e2e-postgres-probe --as-group=system:authenticated --as-group=${NAMESPACE}-super-admin"
+          mint() {
+            kubectl create --raw "/apis/core.cozystack.io/v1alpha1/namespaces/$NAMESPACE/credentials/$cred/mint" \
+              -f <(printf '{"apiVersion":"core.cozystack.io/v1alpha1","kind":"CredentialRequest"}') \
+              | jq -r '.status.password'
+          }
+          # The password goes to psql on stdin: exec arguments travel in the
+          # request URI, which the audit log records at any level.
+          login() {
+            printf '%s\n' "$1" | kubectl -n "$NAMESPACE" exec -i "$pod" -c postgres -- \
+              sh -c 'IFS= read -r PGPASSWORD; export PGPASSWORD; exec psql "$@"' sh \
+              -h postgres-test-rw -U testuser -d testdb -tAc 'SELECT 1' 2>/dev/null | tr -d '[:space:]' || true
+          }
+          # Fails when any of the named texts carries the password.
+          refuse() {
+            local what=$1 text=$2
+            if printf '%s' "$text" | grep -qF -- "$first"; then
+              echo "$what carries the minted password" >&2
+              exit 1
+            fi
+          }
+          pod=$(kubectl -n "$NAMESPACE" get pod \
+            -l cnpg.io/cluster=postgres-test,cnpg.io/instanceRole=primary -o name | head -n1)
+
+          first=$(mint)
+          [ "${#first}" -eq 32 ] || { echo "minted password has ${#first} characters, want 32" >&2; exit 1; }
+          # CloudNativePG applies the changed account Secret live; a readiness
+          # wait on that eventually consistent property, not a retry.
+          until [ "$(login "$first")" = "1" ]; do sleep 5; done
+
+          view=$(kubectl -n "$NAMESPACE" get credentials.core.cozystack.io "$cred" -o json)
+          [ "$(printf '%s' "$view" | jq -r .status.password.origin)" = "Minted" ] || { echo "origin is not Minted: $view" >&2; exit 1; }
+          [ "$(printf '%s' "$view" | jq -r '.status.history[0].operation')" = "Mint" ] || { echo "history lacks the mint: $view" >&2; exit 1; }
+          refuse "the Credential" "$view"
+
+          # The account Secret holds the verifier, decoded, never the password.
+          stored=$(kubectl -n "$NAMESPACE" get secret "$cred.account" -o json | jq -r '.data.password' | base64 -d)
+          case "$stored" in
+            'SCRAM-SHA-256$4096:'*) ;;
+            *) echo "the account Secret does not hold a SCRAM verifier" >&2; exit 1 ;;
+          esac
+          refuse "the account Secret" "$stored"
+
+          # Capture each read in an assignment first: under set -e a failing
+          # command substitution in an argument does not stop the script (the
+          # argument just comes out empty and the check passes without reading).
+          events=$(kubectl -n "$NAMESPACE" get events -o json)
+          refuse "an Event" "$events"
+          application=$(kubectl -n "$NAMESPACE" get postgreses.apps.cozystack.io test -o json)
+          refuse "the application" "$application"
+          # Every revision of the release, decoded: Helm stores each as base64
+          # of gzipped JSON inside the Secret's base64. Require at least one, so
+          # an empty match cannot pass the check without reading anything.
+          rels=$(kubectl -n "$NAMESPACE" get secret -l owner=helm,name=postgres-test -o name)
+          [ -n "$rels" ] || { echo "no Helm release Secret for postgres-test to inspect" >&2; exit 1; }
+          for rel in $rels; do
+            decoded=$(kubectl -n "$NAMESPACE" get "$rel" -o jsonpath='{.data.release}' | base64 -d | base64 -d | gunzip)
+            refuse "Helm release $rel" "$decoded"
+          done
+          # Everything the tenant's own super-admins can read through
+          # tenantsecrets, decoded; the account Secret is not among it.
+          visible=$(kubectl -n "$NAMESPACE" get tenantsecrets.core.cozystack.io $as -o json)
+          if printf '%s' "$visible" | jq -r '.items[].metadata.name' | grep -Fqx "$cred.account"; then
+            echo "the account Secret is listed through tenantsecrets" >&2; exit 1
+          fi
+          decoded_visible=$(printf '%s' "$visible" | jq -r '.items[].data // {} | .[] | @base64d')
+          refuse "tenantsecrets" "$decoded_visible"
+          # can-i exits 1 when it answers no, so the answer is read from its
+          # output; anything but a plain "no" fails, an error included.
+          answer=$(kubectl -n "$NAMESPACE" auth can-i get "secret/$cred.account" $as 2>&1) || true
+          if [ "$answer" != no ]; then
+            echo "the tenant super-admin group can read the account Secret, or can-i did not answer: $answer" >&2
+            exit 1
+          fi
+
+          second=$(mint)
+          [ "$second" != "$first" ] || { echo "a second mint returned the same password" >&2; exit 1; }
+          until [ "$(login "$second")" = "1" ]; do sleep 5; done
+          if [ "$(login "$first")" = "1" ]; then echo "the replaced password still logs in" >&2; exit 1; fi
+        check:
+          ($error == null): true
+
   # The trust anchor a client verifies against, checked against the live
   # operator rather than against our own beliefs about it.
   #
