@@ -1809,3 +1809,100 @@ func TestReconcileAltinity_DoesNotReuseAJobItDoesNotControl(t *testing.T) {
 		}
 	}
 }
+
+// TestReconcileAltinityRestore_DoesNotReuseAJobItDoesNotControl is the restore
+// side of TestReconcileAltinity_DoesNotReuseAJobItDoesNotControl: taking
+// another Job's completion would report a restore that never ran.
+func TestReconcileAltinityRestore_DoesNotReuseAJobItDoesNotControl(t *testing.T) {
+	restoreRef := func(name, uid string, gv schema.GroupVersion, kind string) []metav1.OwnerReference {
+		owner := &backupsv1alpha1.RestoreJob{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "tenant-test", UID: types.UID(uid)}}
+		return []metav1.OwnerReference{*metav1.NewControllerRef(owner, gv.WithKind(kind))}
+	}
+	other := schema.GroupVersion{Group: "example.com", Version: "v1alpha1"}
+	cases := []struct {
+		name       string
+		owners     []metav1.OwnerReference
+		wantFailed bool
+	}{
+		{name: "an earlier RestoreJob of the same name controls it", owners: restoreRef("rj", "predecessor-uid", backupsv1alpha1.GroupVersion, "RestoreJob")},
+		{name: "nothing controls it", wantFailed: true},
+		{name: "a RestoreJob of another name controls it", wantFailed: true, owners: restoreRef("other-rj", "other-uid", backupsv1alpha1.GroupVersion, "RestoreJob")},
+		{name: "a BackupJob controls it", wantFailed: true, owners: restoreRef("rj", "predecessor-uid", backupsv1alpha1.GroupVersion, "BackupJob")},
+		{name: "a RestoreJob of another API group controls it", wantFailed: true, owners: restoreRef("rj", "predecessor-uid", other, "RestoreJob")},
+	}
+	for _, tc := range cases {
+		for _, raced := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/raced=%t", tc.name, raced), func(t *testing.T) {
+				targetApp := newAltinityClickHouseApp("ch-test", "tenant-test")
+				strategy := newAltinityArchiveStrategy("clickhouse-strategy")
+				now := metav1.Now()
+				backup := &backupsv1alpha1.Backup{
+					ObjectMeta: metav1.ObjectMeta{Name: "ch-backup", Namespace: "tenant-test"},
+					Spec: backupsv1alpha1.BackupSpec{
+						ApplicationRef: newAltinityClickHouseRef("ch-test"),
+						StrategyRef: corev1.TypedLocalObjectReference{
+							APIGroup: new(strategyv1alpha1.GroupVersion.Group),
+							Kind:     strategyv1alpha1.AltinityStrategyKind,
+							Name:     "clickhouse-strategy",
+						},
+						TakenAt: now,
+					},
+				}
+				restoreJob := &backupsv1alpha1.RestoreJob{
+					ObjectMeta: metav1.ObjectMeta{Name: "rj", Namespace: "tenant-test", UID: "this-uid"},
+					Spec:       backupsv1alpha1.RestoreJobSpec{BackupRef: corev1.LocalObjectReference{Name: backup.Name}},
+					Status:     backupsv1alpha1.RestoreJobStatus{StartedAt: &now, Phase: backupsv1alpha1.RestoreJobPhaseRunning},
+				}
+				job := &batchv1.Job{
+					ObjectMeta: metav1.ObjectMeta{Name: jobNameForRestoreJob(restoreJob), Namespace: "tenant-test", OwnerReferences: tc.owners},
+					Status: batchv1.JobStatus{Conditions: []batchv1.JobCondition{
+						{Type: batchv1.JobComplete, Status: corev1.ConditionTrue},
+					}},
+				}
+				builder := clientfake.NewClientBuilder().WithObjects(strategy, backup, restoreJob, job)
+				if raced {
+					hidden := false
+					builder = builder.WithInterceptorFuncs(interceptor.Funcs{
+						Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+							if _, isJob := obj.(*batchv1.Job); isJob && !hidden {
+								hidden = true
+								return apierrors.NewNotFound(batchv1.Resource("jobs"), key.Name)
+							}
+							return c.Get(ctx, key, obj, opts...)
+						},
+					})
+				}
+				_, rr, _ := newAltinityTestEnv(t, targetApp, builder)
+				ctx := context.Background()
+
+				res, err := rr.reconcileAltinityRestore(ctx, restoreJob, backup)
+				if err != nil {
+					t.Fatalf("reconcileAltinityRestore: %v", err)
+				}
+
+				got := &backupsv1alpha1.RestoreJob{}
+				if err := rr.Get(ctx, client.ObjectKeyFromObject(restoreJob), got); err != nil {
+					t.Fatalf("get RestoreJob: %v", err)
+				}
+				if tc.wantFailed {
+					if got.Status.Phase != backupsv1alpha1.RestoreJobPhaseFailed {
+						t.Fatalf("phase = %q, want Failed", got.Status.Phase)
+					}
+					if !strings.Contains(got.Status.Message, job.Name) {
+						t.Errorf("message %q does not name Job %s", got.Status.Message, job.Name)
+					}
+					return
+				}
+				if got.Status.Phase != backupsv1alpha1.RestoreJobPhaseRunning {
+					t.Errorf("phase = %q, want Running while the earlier Job awaits garbage collection", got.Status.Phase)
+				}
+				if res.RequeueAfter <= 0 {
+					t.Errorf("no requeue while the earlier Job awaits garbage collection: %+v", res)
+				}
+				if c := meta.FindStatusCondition(got.Status.Conditions, "Ready"); c == nil || !strings.Contains(c.Message, job.Name) {
+					t.Errorf("Ready condition %+v does not say which Job it waits for", c)
+				}
+			})
+		}
+	}
+}
