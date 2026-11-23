@@ -54,11 +54,12 @@ type tenantValues struct {
 
 // parseDeclaredQuotas extracts spec.resourceQuotas from a tenant values JSON
 // blob. The quota keys are kept verbatim as the operator writes them (e.g.
-// "cpu", "memory", "requests.storage", "count/services") — the same vocabulary
-// the parent and every child use — so they can be compared directly. The
-// `cozy-lib.resources.flatten` expansion into limits.*/requests.* is a
-// downstream rendering concern of the tenant chart and is intentionally not
-// applied here.
+// "cpu", "memory", "storage", "services.loadbalancers") — the shorthand
+// vocabulary the parent and every child use — so they can be compared
+// directly. The `cozy-lib.resources.flatten` expansion into
+// limits.*/requests.* is a downstream rendering concern of the tenant chart and
+// is intentionally not applied here. Keys that already carry a requests. or
+// limits. prefix are not part of that vocabulary; see prefixedQuotaKey.
 func parseDeclaredQuotas(raw []byte) (map[string]resource.Quantity, error) {
 	if len(raw) == 0 {
 		return nil, nil
@@ -157,9 +158,75 @@ func (r *REST) siblingDeclaredQuotas(ctx context.Context, namespace, excludeName
 			klog.Warningf("skipping sibling tenant %s/%s with unparseable quotas: %v", hr.Namespace, hr.Name, err)
 			continue
 		}
-		addQuotas(sum, quotas)
+		// A sibling stored before prefixed keys were rejected may still name a
+		// resource as "requests.cpu" or through two keys at once. Count it under
+		// the shorthand key, at the largest figure it names, so the slice it
+		// claims is never undercounted.
+		addQuotas(sum, foldPrefixedQuotas(quotas, largerQuantity))
 	}
 	return sum, nil
+}
+
+// quotaSectionPrefixes are the ResourceQuota sections that
+// cozy-lib.resources.flatten prepends to every shorthand resourceQuotas key.
+var quotaSectionPrefixes = []string{"requests.", "limits."}
+
+// prefixedQuotaKey reports whether a resourceQuotas key already carries a
+// requests. or limits. section prefix, and returns the shorthand key it names.
+//
+// The tenant chart has a single budget per resource: a shorthand key such as
+// "cpu" is rendered by cozy-lib.resources.flatten as both limits.cpu and
+// requests.cpu (the request scaled by the allocation ratio). A prefixed key is
+// prefixed a second time, so "requests.cpu" renders as requests.requests.cpu and
+// limits.requests.cpu, which the API server rejects along with the whole
+// ResourceQuota. Such a key therefore names no budget of its own, only an alias
+// of the shorthand key that cannot be rendered.
+func prefixedQuotaKey(key string) (string, bool) {
+	for _, prefix := range quotaSectionPrefixes {
+		if short, ok := strings.CutPrefix(key, prefix); ok && short != "" {
+			return short, true
+		}
+	}
+	return key, false
+}
+
+// foldPrefixedQuotas returns q with every prefixed key folded onto the
+// shorthand key it aliases. When a resource is named through several keys,
+// pick decides which figure stands for it. Declarations are validated against
+// prefixed keys on write, but tenants stored before that may still carry them,
+// and comparing raw keys would let an alias escape the parent's bound.
+func foldPrefixedQuotas(q map[string]resource.Quantity, pick func(a, b resource.Quantity) resource.Quantity) map[string]resource.Quantity {
+	if len(q) == 0 {
+		return q
+	}
+	out := make(map[string]resource.Quantity, len(q))
+	for _, k := range sortedQuotaKeys(q) {
+		short, _ := prefixedQuotaKey(k)
+		v := q[k]
+		if cur, ok := out[short]; ok {
+			out[short] = pick(cur, v).DeepCopy()
+		} else {
+			out[short] = v.DeepCopy()
+		}
+	}
+	return out
+}
+
+// smallerQuantity and largerQuantity pick between two figures for one
+// resource: the parent's bound is the tightest it names, a sibling's slice the
+// largest.
+func smallerQuantity(a, b resource.Quantity) resource.Quantity {
+	if b.Cmp(a) < 0 {
+		return b
+	}
+	return a
+}
+
+func largerQuantity(a, b resource.Quantity) resource.Quantity {
+	if b.Cmp(a) > 0 {
+		return b
+	}
+	return a
 }
 
 // validateTenantResourceQuotas enforces hierarchical quota allocation for Tenant
@@ -197,11 +264,25 @@ func (r *REST) validateTenantResourceQuotas(ctx context.Context, app *appsv1alph
 		// Unbounded child: shares the parent pool, allowed at declaration time.
 		return allErrs
 	}
+	// A prefixed key renders an invalid ResourceQuota and aliases the shorthand
+	// key, so comparing it verbatim would let it slip past the parent's bound.
+	for _, res := range sortedQuotaKeys(childQuota) {
+		if short, prefixed := prefixedQuotaKey(res); prefixed {
+			allErrs = append(allErrs, field.Invalid(fldPath.Key(res), res,
+				fmt.Sprintf("use the key %q instead: the tenant quota sets one budget per resource and applies it to both requests and limits", short)))
+		}
+	}
+	if len(allErrs) > 0 {
+		return allErrs
+	}
 
 	parentQuota, err := r.parentTenantDeclaredQuotas(ctx, app.Namespace)
 	if err != nil {
 		return append(allErrs, field.InternalError(fldPath, err))
 	}
+	// A parent stored before prefixed keys were rejected is bounded by the
+	// tightest figure it names for each resource.
+	parentQuota = foldPrefixedQuotas(parentQuota, smallerQuantity)
 	if len(parentQuota) == 0 {
 		// Parent declares no quota: it does not directly constrain the child.
 		return allErrs
