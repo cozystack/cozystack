@@ -27,7 +27,6 @@ import (
 	"io"
 	"strings"
 	"sync"
-	"time"
 
 	helmv2 "github.com/fluxcd/helm-controller/api/v2"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -35,7 +34,6 @@ import (
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/selection"
 	"k8s.io/apimachinery/pkg/util/validation/field"
-	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/klog/v2"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -61,11 +59,6 @@ const maxReservedAnnotationSize = 16 << 10
 // Tenant HelmRelease, whatever the REST handler's own release prefix is.
 const tenantNamespacePrefix = "tenant-"
 
-const (
-	defaultSettleTimeout = 5 * time.Second
-	settleInterval       = 50 * time.Millisecond
-)
-
 // storedReservation is the value of ReservedAnnotation. ValuesHash ties the
 // figure to the values it was computed from, so that a figure written before
 // an edit made with the gate off is recognised as stale instead of trusted.
@@ -83,48 +76,11 @@ type kindEvaluator struct {
 // the REST handlers of every kind, since a pool's figure sums applications of
 // all kinds and its lock has to be the same whichever kind is written.
 type Reservation struct {
-	evaluators    map[string]kindEvaluator
-	env           reservation.Environment
-	settleTimeout time.Duration
+	evaluators map[string]kindEvaluator
+	env        reservation.Environment
 
 	mu    sync.Mutex
 	locks map[string]*sync.Mutex
-	// pending holds, per pool root, the writes that were stored but that
-	// the cache had not served when their writer gave the lock back.
-	pending map[string]map[client.ObjectKey]pendingWrite
-}
-
-// pendingWrite is a stored state of a release the cache has not shown yet.
-// visible recognises that state or a later one; deleted means the state is
-// the release's absence, which only a delete issued here can claim, since a
-// missing object otherwise means a create the cache has not seen.
-type pendingWrite struct {
-	visible func(*helmv2.HelmRelease) bool
-	deleted bool
-	// superseded marks a state recorded by a later write or delete, which
-	// the write that owes the debt must not overwrite with its own.
-	superseded bool
-}
-
-// writtenState recognises, in the cache, the release as just written or as
-// changed again since. The resourceVersion is compared for equality only. A
-// status write by Flux right after it changes the resourceVersion and keeps
-// the spec and annotations, so the figure or the values written are matched
-// too.
-func writtenState(hr *helmv2.HelmRelease) pendingWrite {
-	rv := hr.ResourceVersion
-	annotation := hr.Annotations[ReservedAnnotation]
-	hash, _ := valuesHash(helmReleaseValues(hr))
-	return pendingWrite{visible: func(cached *helmv2.HelmRelease) bool {
-		if rv != "" && cached.ResourceVersion == rv {
-			return true
-		}
-		if annotation != "" {
-			return cached.Annotations[ReservedAnnotation] == annotation
-		}
-		h, err := valuesHash(helmReleaseValues(cached))
-		return err == nil && h == hash
-	}}
 }
 
 // NewReservation compiles the consumption declaration of every resource. A
@@ -132,11 +88,9 @@ func writtenState(hr *helmv2.HelmRelease) pendingWrite {
 // refused rather than counted as free.
 func NewReservation(resources []config.Resource, env reservation.Environment) *Reservation {
 	g := &Reservation{
-		evaluators:    map[string]kindEvaluator{},
-		env:           env,
-		settleTimeout: defaultSettleTimeout,
-		locks:         map[string]*sync.Mutex{},
-		pending:       map[string]map[client.ObjectKey]pendingWrite{},
+		evaluators: map[string]kindEvaluator{},
+		env:        env,
+		locks:      map[string]*sync.Mutex{},
 	}
 	for _, res := range resources {
 		decl := res.Application.Consumption
@@ -187,17 +141,14 @@ func withHeldPool(ctx context.Context, root string) context.Context {
 }
 
 // acquire serialises the gate per pool root within this process, from the
-// check to the moment the informer cache shows the write, so that a client's
-// sequential writes into one pool each see the previous one.
-//
-// A write whose writer gave the lock back before the cache showed it is
-// still owed to the pool. Until the cache shows it, the pool's figure read
-// from the cache is short by that write, so no growth is admitted and the
-// caller is asked to retry. The returned unlock is nil when ctx already
-// holds root.
-func (g *Reservation) acquire(ctx context.Context, c client.Client, live client.Reader, root string) (func(), error) {
+// pool's read to the write, so that two writes into one pool cannot both
+// count the same headroom. The pool is read from the API server once the
+// lock is held, so every write committed before it is counted, whatever the
+// informer cache has caught up with. The returned unlock is nil when ctx
+// already holds root.
+func (g *Reservation) acquire(ctx context.Context, root string) func() {
 	if held, _ := ctx.Value(heldPoolKey{}).(string); held == root {
-		return nil, nil
+		return nil
 	}
 	g.mu.Lock()
 	m, ok := g.locks[root]
@@ -207,124 +158,43 @@ func (g *Reservation) acquire(ctx context.Context, c client.Client, live client.
 	}
 	g.mu.Unlock()
 	m.Lock()
-
-	g.mu.Lock()
-	owed := make(map[client.ObjectKey]pendingWrite, len(g.pending[root]))
-	for key, pw := range g.pending[root] {
-		owed[key] = pw
-	}
-	g.mu.Unlock()
-	for key, pw := range owed {
-		if err := g.waitVisible(c, live, root, key, pw); err != nil {
-			m.Unlock()
-			return nil, apierrors.NewTooManyRequests(fmt.Sprintf("an earlier write into tenant pool %q is not visible yet; retry", root), 1)
-		}
-		g.clear(root, key)
-	}
-	return m.Unlock, nil
+	return m.Unlock
 }
 
-// current returns the debt owed for key in root, or fallback when none is.
-func (g *Reservation) current(root string, key client.ObjectKey, fallback pendingWrite) pendingWrite {
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	if pw, ok := g.pending[root][key]; ok {
-		return pw
-	}
-	return fallback
+// snapshot resolves each instance type and preset at most once, so that
+// one admission evaluates the release it replaces and every member of its
+// pool against the same definitions.
+type snapshot struct {
+	env           reservation.Environment
+	instancetypes map[string]resolved
+	presets       map[string]resolved
 }
 
-func (g *Reservation) clear(root string, key client.ObjectKey) {
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	delete(g.pending[root], key)
-	if len(g.pending[root]) == 0 {
-		delete(g.pending, root)
-	}
+type resolved struct {
+	list reservation.ResourceList
+	err  error
 }
 
-func (g *Reservation) owe(root string, key client.ObjectKey, pw pendingWrite) {
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	if g.pending[root] == nil {
-		g.pending[root] = map[client.ObjectKey]pendingWrite{}
-	}
-	g.pending[root][key] = pw
+func newSnapshot(env reservation.Environment) *snapshot {
+	return &snapshot{env: env, instancetypes: map[string]resolved{}, presets: map[string]resolved{}}
 }
 
-// supersede records that this server stored a later state of key, through
-// a write or a delete that may not have taken the pool lock (a shrink, a
-// Tenant losing its quota). A debt owed for key then waits for that state
-// instead, which the cache may show even though it will never show the
-// earlier one. The debt itself still clears only from the cache.
-func (g *Reservation) supersede(key client.ObjectKey, pw pendingWrite) {
-	if g == nil {
-		return
+func (s *snapshot) Instancetype(name string) (reservation.ResourceList, error) {
+	if r, ok := s.instancetypes[name]; ok {
+		return r.list, r.err
 	}
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	for _, owed := range g.pending {
-		if _, ok := owed[key]; ok {
-			pw.superseded = true
-			owed[key] = pw
-		}
-	}
+	rl, err := s.env.Instancetype(name)
+	s.instancetypes[name] = resolved{rl, err}
+	return rl, err
 }
 
-// waitVisible polls the cache until it serves the write. It is detached from
-// the request: a client that gives up must not shorten the wait the next
-// writer depends on.
-//
-// If the cache never shows the write itself, the release may have been
-// changed or deleted by a client other than this server since. One read of
-// the live object settles it: a cache serving the same resourceVersion as the
-// API server, or both agreeing the release is gone, has seen the write and
-// whatever followed it. Otherwise the write is still owed, however long ago
-// it was made.
-func (g *Reservation) waitVisible(c client.Client, live client.Reader, root string, key client.ObjectKey, pw pendingWrite) error {
-	ctx, cancel := context.WithTimeout(context.Background(), g.settleTimeout)
-	defer cancel()
-	err := wait.PollUntilContextCancel(ctx, settleInterval, true, func(ctx context.Context) (bool, error) {
-		// A later write or delete of the release may have replaced what
-		// the debt waits for while this poll runs.
-		pw := g.current(root, key, pw)
-		hr := &helmv2.HelmRelease{}
-		if err := c.Get(ctx, key, hr); err != nil {
-			if !apierrors.IsNotFound(err) {
-				return false, err
-			}
-			if !pw.deleted {
-				return false, nil
-			}
-
-			// A delete that waits on finalizers leaves the release stored,
-			// and a cache that never saw the create reports it missing all
-			// the same. Only the API server can say it is gone.
-			if live == nil {
-				return false, nil
-			}
-			liveErr := live.Get(ctx, key, &helmv2.HelmRelease{})
-			if apierrors.IsNotFound(liveErr) {
-				return true, nil
-			}
-			return false, client.IgnoreNotFound(liveErr)
-		}
-		return !pw.deleted && pw.visible != nil && pw.visible(hr), nil
-	})
-	if err == nil || live == nil {
-		return err
+func (s *snapshot) Preset(name string) (reservation.ResourceList, error) {
+	if r, ok := s.presets[name]; ok {
+		return r.list, r.err
 	}
-	readCtx, readCancel := context.WithTimeout(context.Background(), g.settleTimeout)
-	defer readCancel()
-	cached, actual := &helmv2.HelmRelease{}, &helmv2.HelmRelease{}
-	cachedErr, liveErr := c.Get(readCtx, key, cached), live.Get(readCtx, key, actual)
-	switch {
-	case apierrors.IsNotFound(cachedErr) && apierrors.IsNotFound(liveErr):
-		return nil
-	case cachedErr == nil && liveErr == nil && cached.ResourceVersion == actual.ResourceVersion:
-		return nil
-	}
-	return err
+	rl, err := s.env.Preset(name)
+	s.presets[name] = resolved{rl, err}
+	return rl, err
 }
 
 // valuesHash hashes values in a canonical form: the apiserver may hand back
@@ -381,7 +251,7 @@ func stored(hr *helmv2.HelmRelease) *storedReservation {
 // with, reported as stale, rather than dropping to zero and handing its share
 // of the pool to the next writer. With no stored figure either, the error is
 // returned and the application is left out of the sum.
-func (g *Reservation) reservedBy(hr *helmv2.HelmRelease) (rl reservation.ResourceList, stale bool, err error) {
+func (g *Reservation) reservedBy(hr *helmv2.HelmRelease, env reservation.Environment) (rl reservation.ResourceList, stale bool, err error) {
 	prev := stored(hr)
 	ev, err := g.evaluator(hr.Labels[ApplicationKindLabel], hr.Labels[ApplicationGroupLabel])
 	if err != nil {
@@ -401,7 +271,7 @@ func (g *Reservation) reservedBy(hr *helmv2.HelmRelease) (rl reservation.Resourc
 			return prev.Resources, false, nil
 		}
 	}
-	rl, err = ev.EvaluateJSON(values, g.env)
+	rl, err = ev.EvaluateJSON(values, env)
 	if err == nil {
 		return rl, false, nil
 	}
@@ -474,14 +344,14 @@ type pool struct {
 }
 
 // tenantTree reads the declared quota of every tenant, keyed by the
-// namespace it owns.
-func (r *REST) tenantTree(ctx context.Context) (map[string]map[string]resource.Quantity, error) {
+// namespace it owns, through reader.
+func (r *REST) tenantTree(ctx context.Context, reader client.Reader) (map[string]map[string]resource.Quantity, error) {
 	list := &helmv2.HelmReleaseList{}
 	selector := labels.SelectorFromSet(labels.Set{
 		ApplicationKindLabel:  validation.TenantKind,
 		ApplicationGroupLabel: appsv1alpha1.GroupName,
 	})
-	if err := r.c.List(ctx, list, &client.ListOptions{LabelSelector: selector}); err != nil {
+	if err := reader.List(ctx, list, &client.ListOptions{LabelSelector: selector}); err != nil {
 		return nil, err
 	}
 	tree := make(map[string]map[string]resource.Quantity, len(list.Items))
@@ -543,12 +413,12 @@ type poolFigure struct {
 	applications int
 }
 
-// reservedIn sums the reservations of the applications in namespaces,
-// leaving out the release named by exclude. An application that cannot be
+// reservedIn sums the reservations of the applications in namespaces, read
+// from the API server, leaving out the release named by exclude. An application that cannot be
 // evaluated is logged and left out; it must not block an unrelated write.
 // An environment that cannot be read is different: the application is fine
 // and its share unknown, so the sum is refused rather than short.
-func (r *REST) reservedIn(ctx context.Context, namespaces []string, exclude client.ObjectKey) (poolFigure, error) {
+func (r *REST) reservedIn(ctx context.Context, namespaces []string, exclude client.ObjectKey, env reservation.Environment) (poolFigure, error) {
 	fig := poolFigure{reserved: reservation.ResourceList{}}
 	kindReq, err := labels.NewRequirement(ApplicationKindLabel, selection.Exists, nil)
 	if err != nil {
@@ -561,7 +431,7 @@ func (r *REST) reservedIn(ctx context.Context, namespaces []string, exclude clie
 	selector := labels.NewSelector().Add(*kindReq, *groupReq)
 	for _, ns := range namespaces {
 		list := &helmv2.HelmReleaseList{}
-		if err := r.c.List(ctx, list, &client.ListOptions{Namespace: ns, LabelSelector: selector}); err != nil {
+		if err := r.w.List(ctx, list, &client.ListOptions{Namespace: ns, LabelSelector: selector}); err != nil {
 			return fig, err
 		}
 		for i := range list.Items {
@@ -569,7 +439,7 @@ func (r *REST) reservedIn(ctx context.Context, namespaces []string, exclude clie
 			if hr.Namespace == exclude.Namespace && hr.Name == exclude.Name {
 				continue
 			}
-			rl, stale, err := r.reservation.reservedBy(hr)
+			rl, stale, err := r.reservation.reservedBy(hr, env)
 			if errors.Is(err, reservation.ErrUnavailable) {
 				return fig, err
 			}
@@ -591,16 +461,14 @@ func (r *REST) reservedIn(ctx context.Context, namespaces []string, exclude clie
 }
 
 // reservationAdmission is the outcome of the gate for one write: the figure
-// to store on the release, the pool lock to give back once the write is
-// visible, and the stored values the decision was made against.
+// to store on the release, the pool lock to give back once it is written,
+// and the stored release the decision was made against.
 type reservationAdmission struct {
 	gate     *Reservation
 	root     string
 	stored   *storedReservation
 	unlock   func()
 	baseHash string
-	// key is the release whose write is owed to the pool, set by begin.
-	key client.ObjectKey
 }
 
 // release drops the pool lock. Safe on a nil reservationAdmission.
@@ -677,68 +545,8 @@ type finalUpdateError struct{ err error }
 
 func (e finalUpdateError) Error() string { return e.err.Error() }
 
-// begin records the write about to be made as owed to the pool, before it
-// is made, so that a shrink or a delete of the same release committing
-// between this write and its settle replaces what settle waits for instead
-// of finding nothing to replace. A dry run stores nothing and owes nothing.
-func (a *reservationAdmission) begin(key client.ObjectKey, dryRun bool) {
-	if a == nil || a.unlock == nil || dryRun {
-		return
-	}
-	a.key = key
-	a.gate.owe(a.root, key, pendingWrite{})
-}
-
-// owes reports whether this write holds a debt of its own, which settle
-// records; recording it through supersede as well would overwrite a later
-// state another write left in the meantime.
-func (a *reservationAdmission) owes() bool {
-	return a != nil && a.key != (client.ObjectKey{})
-}
-
-// abort drops the debt of a write that failed.
-func (a *reservationAdmission) abort() {
-	if a == nil || a.key == (client.ObjectKey{}) {
-		return
-	}
-	a.gate.clear(a.root, a.key)
-	a.key = client.ObjectKey{}
-}
-
-// settle waits until the cache serves the release as written, or the later
-// state a shrink or a delete recorded meanwhile, so that the next writer into
-// the pool, which reads the cache, counts it. If the cache does not show it
-// in time, the debt stays, and the pool admits no growth until it does.
-func (a *reservationAdmission) settle(c client.Client, live client.Reader, hr *helmv2.HelmRelease) {
-	if a == nil || a.key == (client.ObjectKey{}) {
-		return
-	}
-	key := a.key
-	pw := a.gate.record(a.root, key, writtenState(hr))
-	if err := a.gate.waitVisible(c, live, a.root, key, pw); err != nil {
-		klog.Warningf("HelmRelease %s is not in the cache after %s; pool %q admits no growth until it is: %v", key, a.gate.settleTimeout, a.root, err)
-		return
-	}
-	a.gate.clear(a.root, key)
-}
-
-// record sets the state a debt waits for to own, unless a later write or
-// delete has already superseded it, and returns the state in effect.
-func (g *Reservation) record(root string, key client.ObjectKey, own pendingWrite) pendingWrite {
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	if g.pending[root] == nil {
-		g.pending[root] = map[client.ObjectKey]pendingWrite{}
-	}
-	if cur, ok := g.pending[root][key]; ok && cur.superseded {
-		return cur
-	}
-	g.pending[root][key] = own
-	return own
-}
-
 // lockTenantPool holds the pool a Tenant's quota is carved out of, from the
-// carve-out check to the moment the cache shows the Tenant, so that an
+// carve-out check to the Tenant's write, so that an
 // application admitted into the same pool and the carve-out cannot both
 // count the same headroom. It returns a nil admission when the gate is off
 // or the Tenant declares no quota, and ctx marked with the held pool.
@@ -754,7 +562,7 @@ func (r *REST) lockTenantPool(ctx context.Context, app *appsv1alpha1.Application
 	if err != nil || len(quotas) == 0 {
 		return ctx, nil, nil
 	}
-	tree, err := r.tenantTree(ctx)
+	tree, err := r.tenantTree(ctx, r.c)
 	if err != nil {
 		return ctx, nil, err
 	}
@@ -762,15 +570,11 @@ func (r *REST) lockTenantPool(ctx context.Context, app *appsv1alpha1.Application
 	if p == nil {
 		return ctx, nil, nil
 	}
-	unlock, err := r.reservation.acquire(ctx, r.c, r.w, p.root)
-	if err != nil {
-		return ctx, nil, err
-	}
-	adm := &reservationAdmission{gate: r.reservation, root: p.root, unlock: unlock}
-	// The root was chosen before the lock was held; an ancestor that became
-	// bounded meanwhile would put this Tenant under another lock than the
-	// applications of its pool.
-	if tree, err = r.tenantTree(ctx); err != nil {
+	adm := &reservationAdmission{gate: r.reservation, root: p.root, unlock: r.reservation.acquire(ctx, p.root)}
+	// The root was chosen from the cache before the lock was held; an
+	// ancestor that became bounded meanwhile would put this Tenant under
+	// another lock than the applications of its pool.
+	if tree, err = r.tenantTree(ctx, r.w); err != nil {
 		adm.release()
 		return ctx, nil, err
 	}
@@ -783,10 +587,10 @@ func (r *REST) lockTenantPool(ctx context.Context, app *appsv1alpha1.Application
 }
 
 // admitReservation is the reservation gate for a write of app, whose stored
-// release is old (nil on Create). It returns a nil reservationAdmission when the gate
-// is off or the kind declares nothing. Otherwise the caller holds the pool
-// lock until it calls release, and must annotate the release it writes and
-// settle after writing.
+// release is old (nil on Create). It returns a nil reservationAdmission when
+// the gate is off or the kind declares nothing. Otherwise the caller holds
+// the pool lock until it calls release, after its write, and must annotate
+// the release it writes.
 //
 // Only the delta counts: an edit that reserves nothing more is accepted even
 // in a pool that is already over budget, and shrinking is always accepted.
@@ -819,7 +623,8 @@ func (r *REST) admit(ctx context.Context, app *appsv1alpha1.Application, old *he
 	if app.Spec != nil {
 		raw = app.Spec.Raw
 	}
-	want, err := ev.EvaluateJSON(raw, g.env)
+	env := newSnapshot(g.env)
+	want, err := ev.EvaluateJSON(raw, env)
 	if errors.Is(err, reservation.ErrUnavailable) {
 		return nil, nil, apierrors.NewServiceUnavailable(fmt.Sprintf("cannot compute what this %s reserves from its tenant's quota yet: %v", r.kindName, err))
 	}
@@ -839,7 +644,7 @@ func (r *REST) admit(ctx context.Context, app *appsv1alpha1.Application, old *he
 
 	delta := want.DeepCopy()
 	if old != nil {
-		prev, _, err := g.reservedBy(old)
+		prev, _, err := g.reservedBy(old, env)
 		if err != nil {
 			// The stored object no longer evaluates and carries no figure:
 			// count the whole new reservation, the conservative reading.
@@ -859,7 +664,7 @@ func (r *REST) admit(ctx context.Context, app *appsv1alpha1.Application, old *he
 		return adm, nil, nil
 	}
 
-	tree, err := r.tenantTree(ctx)
+	tree, err := r.tenantTree(ctx, r.c)
 	if err != nil {
 		return nil, field.ErrorList{field.InternalError(specPath, err)}, nil
 	}
@@ -868,13 +673,10 @@ func (r *REST) admit(ctx context.Context, app *appsv1alpha1.Application, old *he
 		return adm, nil, nil
 	}
 	adm.root = p.root
-	if adm.unlock, err = g.acquire(ctx, r.c, r.w, p.root); err != nil {
-		return nil, nil, err
-	}
-	// The pool read above only chose the lock. Budget, carve-outs and
-	// members are read again under it, since a Tenant write holding it may
-	// have just changed them.
-	if tree, err = r.tenantTree(ctx); err != nil {
+	adm.unlock = g.acquire(ctx, p.root)
+	// The cached read above only chose the lock. Budget, carve-outs and
+	// members are read from the API server under it.
+	if tree, err = r.tenantTree(ctx, r.w); err != nil {
 		adm.release()
 		return nil, field.ErrorList{field.InternalError(specPath, err)}, nil
 	}
@@ -885,10 +687,10 @@ func (r *REST) admit(ctx context.Context, app *appsv1alpha1.Application, old *he
 	}
 
 	// The object written is left out of the pool's figure and checked at
-	// its full new reservation: what the cache holds for it may be older
-	// than the release the delta was taken from.
+	// its full new reservation, so that the figure does not depend on which
+	// copy of it the delta was taken from.
 	self := client.ObjectKey{Namespace: app.Namespace, Name: r.releaseConfig.Prefix + app.Name}
-	fig, err := r.reservedIn(ctx, p.members, self)
+	fig, err := r.reservedIn(ctx, p.members, self, env)
 	if errors.Is(err, reservation.ErrUnavailable) {
 		adm.release()
 		return nil, nil, apierrors.NewServiceUnavailable(fmt.Sprintf("cannot sum tenant pool %q yet: %v", p.root, err))
