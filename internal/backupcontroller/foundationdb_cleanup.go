@@ -35,6 +35,9 @@ const (
 
 	foundationdbSkipArtifactCleanupAnnotation = "backups.cozystack.io/skip-artifact-cleanup"
 	foundationdbCleanupLabel                  = "backups.cozystack.io/foundationdb-cleanup"
+	// The Job is named after the Backup, so a Backup recreated under the
+	// same name finds its predecessor's Job; this records whose it is.
+	foundationdbCleanupBackupUIDAnnotation = "backups.cozystack.io/foundationdb-cleanup-backup-uid"
 	// The operator's default image for the split image type; it ships bash
 	// and fdbbackup.
 	foundationdbCleanupBaseImage = "foundationdb/foundationdb"
@@ -100,9 +103,17 @@ func (r *BackupReconciler) cleanupFoundationDBBackup(ctx context.Context, backup
 	if !job.DeletionTimestamp.IsZero() {
 		return ctrl.Result{RequeueAfter: foundationdbPollInterval}, nil
 	}
+	// A Job left by an earlier Backup of this name says nothing about this
+	// one's directory: it is removed and a Job of this Backup's own runs.
+	if job.Annotations[foundationdbCleanupBackupUIDAnnotation] != string(backup.UID) {
+		return ctrl.Result{RequeueAfter: foundationdbPollInterval}, r.deleteFoundationDBCleanupJob(ctx, job)
+	}
 	switch jobConditionState(job) {
 	case batchv1.JobComplete:
-		_ = r.deleteFoundationDBCleanupJob(ctx, job)
+		// The Backup is released only once its completed Job is gone too.
+		if err := r.deleteFoundationDBCleanupJob(ctx, job); err != nil {
+			return ctrl.Result{}, err
+		}
 		getLogger(ctx).Debug("FoundationDB backup directory deleted", "backup", backup.Name, "url", url)
 		return ctrl.Result{}, nil
 	case batchv1.JobFailed:
@@ -331,9 +342,10 @@ func buildFoundationDBCleanupJob(backup *backupsv1alpha1.Backup, name, url, vers
 	ttl := int32(300)
 	return &batchv1.Job{
 		ObjectMeta: metav1.ObjectMeta{
-			Namespace: backup.Namespace,
-			Name:      name,
-			Labels:    map[string]string{foundationdbCleanupLabel: backup.Name},
+			Namespace:   backup.Namespace,
+			Name:        name,
+			Labels:      map[string]string{foundationdbCleanupLabel: backup.Name},
+			Annotations: map[string]string{foundationdbCleanupBackupUIDAnnotation: string(backup.UID)},
 		},
 		Spec: batchv1.JobSpec{
 			BackoffLimit:            &backoffLimit,

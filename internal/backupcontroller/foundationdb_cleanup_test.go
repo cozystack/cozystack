@@ -82,7 +82,7 @@ func newFoundationDBCleanupBackup(owned bool) *backupsv1alpha1.Backup {
 		md[foundationdbOwnsDirectoryKey] = "true"
 	}
 	return &backupsv1alpha1.Backup{
-		ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "bj-1"},
+		ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "bj-1", UID: "backup-uid-1"},
 		Spec: backupsv1alpha1.BackupSpec{
 			ApplicationRef: corev1.TypedLocalObjectReference{Kind: "FoundationDB", Name: "fdb-src", APIGroup: &apps},
 			StrategyRef: corev1.TypedLocalObjectReference{
@@ -249,6 +249,83 @@ func TestCleanupFoundationDBBackup_JobOutcome(t *testing.T) {
 				t.Errorf("the finished Job must be collected, got %d", len(jobs))
 			}
 		})
+	}
+}
+
+// The delete Job is named after the Backup. A Backup recreated under the same
+// name must not take its predecessor's finished Job for its own deletion.
+func TestCleanupFoundationDBBackup_IgnoresJobOfEarlierSameNamedBackup(t *testing.T) {
+	ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "tenant"}}
+	c := newFoundationDBCleanupClient(ns, newFoundationDBCleanupStrategy())
+	r := &BackupReconciler{Client: c, Recorder: record.NewFakeRecorder(10)}
+	ctx := context.Background()
+	earlier := newFoundationDBCleanupBackup(true)
+	if _, err := r.cleanupFoundationDBBackup(ctx, earlier); err != nil {
+		t.Fatalf("earlier Backup: %v", err)
+	}
+	job := listCleanupJobs(t, c)[0]
+	job.Status.Conditions = []batchv1.JobCondition{{Type: batchv1.JobComplete, Status: corev1.ConditionTrue}}
+	if err := c.Status().Update(ctx, &job); err != nil {
+		t.Fatalf("complete earlier Job: %v", err)
+	}
+
+	recreated := newFoundationDBCleanupBackup(true)
+	recreated.UID = "backup-uid-2"
+	res, err := r.cleanupFoundationDBBackup(ctx, recreated)
+	if err != nil {
+		t.Fatalf("recreated Backup: %v", err)
+	}
+	if res.RequeueAfter == 0 {
+		t.Fatalf("the recreated Backup must not be released on its predecessor's Job")
+	}
+	if jobs := listCleanupJobs(t, c); len(jobs) != 0 {
+		t.Fatalf("the predecessor's Job must be removed, got %d", len(jobs))
+	}
+	if _, err := r.cleanupFoundationDBBackup(ctx, recreated); err != nil {
+		t.Fatalf("next pass: %v", err)
+	}
+	jobs := listCleanupJobs(t, c)
+	if len(jobs) != 1 || jobs[0].Annotations[foundationdbCleanupBackupUIDAnnotation] != "backup-uid-2" {
+		t.Errorf("the recreated Backup must run a delete Job of its own, got %+v", jobs)
+	}
+}
+
+// A Backup is released only once its completed delete Job is gone, so the Job
+// cannot outlive it and be found by a Backup recreated under the same name.
+func TestCleanupFoundationDBBackup_CompletedJobDeleteErrorRetries(t *testing.T) {
+	ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "tenant"}}
+	failDelete := false
+	c := newFoundationDBCleanupClientWith(&interceptor.Funcs{
+		Delete: func(ctx context.Context, cl client.WithWatch, obj client.Object, opts ...client.DeleteOption) error {
+			if _, ok := obj.(*batchv1.Job); ok && failDelete {
+				return apierrors.NewServiceUnavailable("apiserver restarting")
+			}
+			return cl.Delete(ctx, obj, opts...)
+		},
+	}, ns, newFoundationDBCleanupStrategy())
+	r := &BackupReconciler{Client: c, Recorder: record.NewFakeRecorder(10)}
+	ctx := context.Background()
+	backup := newFoundationDBCleanupBackup(true)
+	if _, err := r.cleanupFoundationDBBackup(ctx, backup); err != nil {
+		t.Fatalf("first pass: %v", err)
+	}
+	job := listCleanupJobs(t, c)[0]
+	job.Status.Conditions = []batchv1.JobCondition{{Type: batchv1.JobComplete, Status: corev1.ConditionTrue}}
+	if err := c.Status().Update(ctx, &job); err != nil {
+		t.Fatalf("complete Job: %v", err)
+	}
+
+	failDelete = true
+	if _, err := r.cleanupFoundationDBBackup(ctx, backup); err == nil {
+		t.Fatalf("a failed delete of the completed Job must be retried, not release the Backup")
+	}
+	failDelete = false
+	res, err := r.cleanupFoundationDBBackup(ctx, backup)
+	if err != nil || res.RequeueAfter != 0 {
+		t.Fatalf("expected the release once the Job is deleted, got %+v, %v", res, err)
+	}
+	if jobs := listCleanupJobs(t, c); len(jobs) != 0 {
+		t.Errorf("the completed Job must be gone before the release, got %d", len(jobs))
 	}
 }
 
