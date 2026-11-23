@@ -33,6 +33,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/apiserver/pkg/endpoints/request"
 	"k8s.io/apiserver/pkg/registry/rest"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -825,5 +826,100 @@ func TestValuesHashKeepsLargeIntegersApart(t *testing.T) {
 	}
 	if _, err := valuesHash([]byte(`{"a":1} {"a":2}`)); err == nil {
 		t.Fatal("values carrying a second document must not hash as the first alone")
+	}
+}
+
+// cacheBlind serves VMInstance through a client whose informer-side reads
+// (the gate's waits, which carry no request namespace, and pool listings)
+// do not see the named release while blind is set. Request reads still do,
+// and the live client is the store itself.
+func cacheBlind(t *testing.T, name string, blind *bool, objects ...client.Object) gateFixture {
+	t.Helper()
+	f := newGateFixtureWith(t, interceptor.Funcs{
+		Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+			if _, fromRequest := request.NamespaceFrom(ctx); *blind && !fromRequest && key.Name == name {
+				return apierrors.NewNotFound(helmv2.GroupVersion.WithResource("helmreleases").GroupResource(), key.Name)
+			}
+			return c.Get(ctx, key, obj, opts...)
+		},
+		List: func(ctx context.Context, c client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
+			if err := c.List(ctx, list, opts...); err != nil {
+				return err
+			}
+			if hrs, ok := list.(*helmv2.HelmReleaseList); ok && *blind {
+				kept := hrs.Items[:0]
+				for _, hr := range hrs.Items {
+					if hr.Name != name {
+						kept = append(kept, hr)
+					}
+				}
+				hrs.Items = kept
+			}
+			return nil
+		},
+	}, objects...)
+	f.vms.w = f.client
+	return f
+}
+
+func TestReservationDeleteDebtWaitsForTheAPIServerToDropTheRelease(t *testing.T) {
+	blind := true
+	f := cacheBlind(t, "vm-instance-one", &blind, tenantHelmRelease(t, "acme", rootTenantNamespace, map[string]string{"memory": "4Gi"}))
+	f.gate.settleTimeout = 100 * time.Millisecond
+	if err := f.create(t, vmApplication(t, "one", "tenant-acme", map[string]any{"instanceType": "u1.small"})); err != nil {
+		t.Fatal(err)
+	}
+	hr := &helmv2.HelmRelease{}
+	key := client.ObjectKey{Namespace: "tenant-acme", Name: "vm-instance-one"}
+	if err := f.client.Get(context.Background(), key, hr); err != nil {
+		t.Fatal(err)
+	}
+	hr.Finalizers = append(hr.Finalizers, "example.com/hold")
+	if err := f.client.Update(context.Background(), hr); err != nil {
+		t.Fatal(err)
+	}
+	ctx := request.WithNamespace(context.Background(), "tenant-acme")
+	if _, _, err := f.vms.Delete(ctx, "one", nil, &metav1.DeleteOptions{}); err != nil {
+		t.Fatal(err)
+	}
+
+	err := f.create(t, vmApplication(t, "two", "tenant-acme", map[string]any{"instanceType": "u1.small"}))
+	if !apierrors.IsTooManyRequests(err) {
+		t.Fatalf("a release terminating behind its finalizers is still stored and still owed; want 429, got %v", err)
+	}
+}
+
+func TestReservationShrinkDuringTheWaitReplacesWhatIsWaitedFor(t *testing.T) {
+	blind := true
+	f := cacheBlind(t, "vm-instance-one", &blind, tenantHelmRelease(t, "acme", rootTenantNamespace, map[string]string{"memory": "20Gi"}))
+	f.gate.settleTimeout = 400 * time.Millisecond
+
+	created := make(chan error, 1)
+	go func() {
+		created <- f.create(t, vmApplication(t, "one", "tenant-acme", map[string]any{"instanceType": "u1.large"}))
+	}()
+	key := client.ObjectKey{Namespace: "tenant-acme", Name: "vm-instance-one"}
+	if err := wait.PollUntilContextTimeout(context.Background(), 5*time.Millisecond, time.Second, true, func(ctx context.Context) (bool, error) {
+		return f.client.Get(ctx, key, &helmv2.HelmRelease{}) == nil, nil
+	}); err != nil {
+		t.Fatal("the growing write was never stored")
+	}
+	// The shrink lands while the growing write still waits for the cache,
+	// and the cache then shows the shrink, never the 16Gi write.
+	if err := f.update(t, vmApplication(t, "one", "tenant-acme", map[string]any{"instanceType": "u1.small"})); err != nil {
+		t.Fatal(err)
+	}
+	blind = false
+	shown := time.Now()
+	if err := <-created; err != nil {
+		t.Fatal(err)
+	}
+	// The pool lock is held until the wait ends: it has to end when the
+	// cache shows the shrink, not run out its timeout on the 16Gi write.
+	if held := time.Since(shown); held >= f.gate.settleTimeout/2 {
+		t.Fatalf("the growing write held the pool %s after the cache showed the shrink", held)
+	}
+	if err := f.create(t, vmApplication(t, "two", "tenant-acme", map[string]any{"instanceType": "u1.large"})); err != nil {
+		t.Fatalf("4Gi + 16Gi fits 20Gi once the cache shows the shrink: %v", err)
 	}
 }
