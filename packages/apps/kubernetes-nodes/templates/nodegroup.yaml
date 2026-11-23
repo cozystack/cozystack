@@ -1044,15 +1044,21 @@ spec:
          joined. A pool with passed-through GPUs keeps 1: its replacement VM
          may need the very GPU the old node holds, and would wait for it
          forever. A Proxmox template's GPU is invisible here, hence the
-         maxUnavailable override. CAPI refuses maxSurge and maxUnavailable both
-         at 0, and maxReplicas may be 0, hence the floor of 1. */}}
+         maxUnavailable override.
+         maxSurge is one Machine whatever the pool's size. A tenant's quota
+         reserves maxReplicas workers, and the surge runs on top of whatever
+         the pool runs, so it is capacity the platform lends during a rollout;
+         a fixed surge bounds that loan to one worker per pool. It is not a
+         value because tenants write the values, and would then size the
+         platform's margin themselves. CAPI refuses maxSurge and
+         maxUnavailable both at 0, so it cannot be 0 either. */}}
   {{- $maxUnavailable := ternary 1 0 (not (empty $group.gpus)) }}
   {{- if not (kindIs "invalid" $.Values.maxUnavailable) }}
   {{-   $maxUnavailable = $.Values.maxUnavailable | int }}
   {{- end }}
   strategy:
     rollingUpdate:
-      maxSurge: {{ max 1 ($group.maxReplicas | int) }}
+      maxSurge: 1
       maxUnavailable: {{ $maxUnavailable }}
     type: RollingUpdate
   selector:

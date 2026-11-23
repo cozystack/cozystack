@@ -36,8 +36,11 @@ tests:
           path: spec.strategy.rollingUpdate.maxSurge
           value: 1
 
-  - it: surges up to the pool ceiling
+  # The tenant's quota reserves maxReplicas workers; the surge runs on top
+  # of them, so it is bounded to one worker whatever the pool's size.
+  - it: surges one worker at a time whatever the pool ceiling
     set:
+      minReplicas: 5
       maxReplicas: 5
     documentSelector:
       path: kind
@@ -45,7 +48,7 @@ tests:
     asserts:
       - equal:
           path: spec.strategy.rollingUpdate.maxSurge
-          value: 5
+          value: 1
       - equal:
           path: spec.strategy.rollingUpdate.maxUnavailable
           value: 0
