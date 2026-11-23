@@ -379,7 +379,7 @@ func fromCore(rl corev1.ResourceList) reservation.ResourceList {
 
 // addResourceList returns the per-resource sum of a and b.
 func addResourceList(a, b corev1.ResourceList) corev1.ResourceList {
-	out := make(corev1.ResourceList, len(a)+len(b))
+	out := make(corev1.ResourceList, max(len(a), len(b)))
 	for k, v := range a {
 		out[k] = v.DeepCopy()
 	}

@@ -1378,7 +1378,7 @@ func mergeMaps(a, b map[string]string) map[string]string {
 	if a == nil && b == nil {
 		return nil
 	}
-	merged := make(map[string]string, len(a)+len(b))
+	merged := make(map[string]string, max(len(a), len(b)))
 	maps.Copy(merged, a)
 	maps.Copy(merged, b)
 	return merged
