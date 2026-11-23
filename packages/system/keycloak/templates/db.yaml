@@ -44,6 +44,33 @@ spec:
         # to the Cluster name anyway); it must never change on a live cluster.
         serverName: keycloak-db
   {{- end }}
+  {{- with .Values.database.readonlyRole }}
+  {{- if .enabled }}
+  {{- if not .name }}{{ fail "database.readonlyRole.name must not be empty" }}{{ end }}
+  {{- if eq .name "app" }}{{ fail "database.readonlyRole.name must not be app, the role Keycloak logs in with" }}{{ end }}
+  {{- if not (regexMatch "^[a-z][a-z0-9_]*$" .name) }}{{ fail "database.readonlyRole.name must be lowercase letters, digits and underscores, starting with a letter" }}{{ end }}
+  {{- if not (has .ensure (list "present" "absent")) }}{{ fail "database.readonlyRole.ensure must be present or absent" }}{{ end }}
+  {{- $secretName := .passwordSecretName | default (printf "keycloak-db-%s" .name) }}
+  {{- if not (regexMatch "^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$" $secretName) }}{{ fail (printf "database.readonlyRole: %s is not a valid Secret name; set passwordSecretName" $secretName) }}{{ end }}
+  managed:
+    roles:
+      - name: {{ .name | quote }}
+        ensure: {{ .ensure }}
+        comment: Read-only access to every table (pg_read_all_data)
+        login: true
+        inherit: true
+        superuser: false
+        createdb: false
+        createrole: false
+        replication: false
+        bypassrls: false
+        connectionLimit: {{ .connectionLimit }}
+        inRoles:
+          - pg_read_all_data
+        passwordSecret:
+          name: {{ $secretName }}
+  {{- end }}
+  {{- end }}
   monitoring:
     enablePodMonitor: true
 
