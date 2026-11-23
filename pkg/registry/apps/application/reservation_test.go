@@ -422,16 +422,21 @@ func TestReservationKeepsTheStoredFigureOfAKindWhoseDeclarationBroke(t *testing.
 func TestReservationSettlesOnTheFigureWrittenNotOnlyItsValues(t *testing.T) {
 	adm := &reservationAdmission{stored: &storedReservation{ValuesHash: "same", Resources: reservation.ResourceList{"memory": resource.MustParse("16Gi")}}}
 	hr := &helmv2.HelmRelease{}
+	hr.ResourceVersion = "7"
 	if err := adm.annotate(hr); err != nil {
 		t.Fatal(err)
 	}
+	written := writtenState(hr)
 	cached := &helmv2.HelmRelease{}
+	cached.ResourceVersion = "6"
 	cached.Annotations = map[string]string{ReservedAnnotation: `{"valuesHash":"same","resources":{"memory":"4Gi"}}`}
-	if adm.visible(cached) {
+	if written.visible(cached) {
 		t.Fatal("a cached figure with the same values but another size is not the write")
 	}
-	if !adm.visible(hr) {
-		t.Fatal("the written figure is the write")
+	statusOnly := hr.DeepCopy()
+	statusOnly.ResourceVersion = "8"
+	if !written.visible(hr) || !written.visible(statusOnly) {
+		t.Fatal("the write, and a status update on top of it, show the written figure")
 	}
 }
 
@@ -620,5 +625,133 @@ func TestReservationAStaleBaselineCannotPassAGrowthAsAShrink(t *testing.T) {
 	}
 	if err := f.update(t, vmApplication(t, "web", "tenant-acme", map[string]any{"instanceType": "u1.medium"})); !apierrors.IsInvalid(err) {
 		t.Fatalf("sent again against the live release, 4Gi to 8Gi does not fit a full pool; got %v", err)
+	}
+}
+
+// hideable serves VMInstance through a client that reports the named
+// release missing while hidden is set, as a cache that has not seen it yet.
+func hideable(t *testing.T, name string, hidden *bool, objects ...client.Object) gateFixture {
+	t.Helper()
+	f := newGateFixtureWith(t, interceptor.Funcs{
+		Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+			if *hidden && key.Name == name {
+				return apierrors.NewNotFound(helmv2.GroupVersion.WithResource("helmreleases").GroupResource(), key.Name)
+			}
+			return c.Get(ctx, key, obj, opts...)
+		},
+	}, objects...)
+	f.gate.settleTimeout = 100 * time.Millisecond
+	return f
+}
+
+func TestReservationDebtClearsOnAShrinkTheCacheShows(t *testing.T) {
+	hidden := true
+	f := hideable(t, "vm-instance-one", &hidden, tenantHelmRelease(t, "acme", rootTenantNamespace, map[string]string{"memory": "20Gi"}))
+	if err := f.create(t, vmApplication(t, "one", "tenant-acme", map[string]any{"instanceType": "u1.large"})); err != nil {
+		t.Fatal(err)
+	}
+	hidden = false
+	// The release is shrunk before the cache ever showed the 16Gi write:
+	// the cache will only ever show the 4Gi one.
+	if err := f.update(t, vmApplication(t, "one", "tenant-acme", map[string]any{"instanceType": "u1.small"})); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.create(t, vmApplication(t, "two", "tenant-acme", map[string]any{"instanceType": "u1.large"})); err != nil {
+		t.Fatalf("the cache shows a later state of the owed release, so the pool admits again: %v", err)
+	}
+}
+
+func TestReservationDebtClearsOnADeleteTheCacheShows(t *testing.T) {
+	hidden := true
+	f := hideable(t, "vm-instance-one", &hidden, tenantHelmRelease(t, "acme", rootTenantNamespace, map[string]string{"memory": "8Gi"}))
+	if err := f.create(t, vmApplication(t, "one", "tenant-acme", map[string]any{"instanceType": "u1.small"})); err != nil {
+		t.Fatal(err)
+	}
+	hidden = false
+	ctx := request.WithNamespace(context.Background(), "tenant-acme")
+	if _, _, err := f.vms.Delete(ctx, "one", nil, &metav1.DeleteOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.create(t, vmApplication(t, "two", "tenant-acme", map[string]any{"instanceType": "u1.small"})); err != nil {
+		t.Fatalf("the cache no longer has the release this server deleted, so the pool admits again: %v", err)
+	}
+}
+
+func TestReservationDebtStillRefusesWhileTheWriteIsHidden(t *testing.T) {
+	hidden := true
+	f := hideable(t, "vm-instance-one", &hidden, tenantHelmRelease(t, "acme", rootTenantNamespace, map[string]string{"memory": "20Gi"}))
+	if err := f.create(t, vmApplication(t, "one", "tenant-acme", map[string]any{"instanceType": "u1.small"})); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.create(t, vmApplication(t, "two", "tenant-acme", map[string]any{"instanceType": "u1.small"})); !apierrors.IsTooManyRequests(err) {
+		t.Fatalf("a missing object is not taken for a delete this server did not issue; want 429, got %v", err)
+	}
+}
+
+func TestReservationBaselineIsTheReleaseTheClientNames(t *testing.T) {
+	var snapshot *helmv2.HelmRelease
+	staleReads := 0
+	f := newGateFixtureWith(t, interceptor.Funcs{
+		Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+			if snapshot != nil && staleReads > 0 && key.Name == "vm-instance-web" {
+				staleReads--
+				snapshot.DeepCopyInto(obj.(*helmv2.HelmRelease))
+				return nil
+			}
+			return c.Get(ctx, key, obj, opts...)
+		},
+	}, tenantHelmRelease(t, "acme", rootTenantNamespace, map[string]string{"memory": "20Gi"}))
+	if err := f.create(t, vmApplication(t, "web", "tenant-acme", map[string]any{"instanceType": "u1.large"})); err != nil {
+		t.Fatal(err)
+	}
+	snapshot = &helmv2.HelmRelease{}
+	if err := f.client.Get(context.Background(), client.ObjectKey{Namespace: "tenant-acme", Name: "vm-instance-web"}, snapshot); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.update(t, vmApplication(t, "web", "tenant-acme", map[string]any{"instanceType": "u1.small"})); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.create(t, vmApplication(t, "db", "tenant-acme", map[string]any{"instanceType": "u1.large"})); err != nil {
+		t.Fatal(err)
+	}
+	live := &helmv2.HelmRelease{}
+	if err := f.client.Get(context.Background(), client.ObjectKey{Namespace: "tenant-acme", Name: "vm-instance-web"}, live); err != nil {
+		t.Fatal(err)
+	}
+
+	// The client names the live 4Gi release; the cache still serves 16Gi.
+	staleReads = 2
+	app := vmApplication(t, "web", "tenant-acme", map[string]any{"instanceType": "u1.medium"})
+	app.ResourceVersion = live.ResourceVersion
+	if err := f.update(t, app); !apierrors.IsInvalid(err) {
+		t.Fatalf("4Gi to 8Gi in a full pool is a growth whatever the cache says; got %v", err)
+	}
+}
+
+func TestTenantCreateDoesNotHoldThePoolAcrossTheAdmissionChain(t *testing.T) {
+	f := newGateFixture(t, tenantHelmRelease(t, "acme", rootTenantNamespace, map[string]string{"memory": "8Gi"}))
+	tenants := newTenantREST(t)
+	tenants.c, tenants.w = f.vms.c, f.vms.w
+	tenants.SetReservation(f.gate)
+
+	orderDone := make(chan error, 1)
+	slowWebhook := func(context.Context, runtime.Object) error {
+		go func() {
+			orderDone <- f.create(t, vmApplication(t, "web", "tenant-acme", map[string]any{"instanceType": "u1.small"}))
+		}()
+		select {
+		case err := <-orderDone:
+			orderDone <- err
+		case <-time.After(time.Second):
+			t.Error("an order into the pool waited on a Tenant's admission chain")
+		}
+		return nil
+	}
+	ctx := request.WithNamespace(context.Background(), "tenant-acme")
+	if _, err := tenants.Create(ctx, childApplication(t, "dev", "tenant-acme", map[string]string{"memory": "2Gi"}), slowWebhook, &metav1.CreateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-orderDone; err != nil {
+		t.Fatal(err)
 	}
 }

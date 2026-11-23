@@ -195,18 +195,6 @@ func (r *REST) Create(ctx context.Context, obj runtime.Object, createValidation 
 			return nil, apierrors.NewInvalid(r.gvk.GroupKind(), app.Name, nsErrs)
 		}
 	}
-	ctx, tenantAdm, err := r.lockTenantPool(ctx, app)
-	if err != nil {
-		return nil, err
-	}
-	defer tenantAdm.release()
-	if r.kindName == "Tenant" {
-		// Enforce hierarchical quota allocation: a child tenant's declared
-		// quota may not exceed its parent's remaining (un-carved) quota.
-		if qErrs := r.validateTenantResourceQuotas(ctx, app); len(qErrs) > 0 {
-			return nil, apierrors.NewInvalid(r.gvk.GroupKind(), app.Name, qErrs)
-		}
-	}
 
 	if err := r.validateWorkloadMemory(app, nil); err != nil {
 		return nil, err
@@ -242,6 +230,21 @@ func (r *REST) Create(ctx context.Context, obj runtime.Object, createValidation 
 	if createValidation != nil {
 		if err := createValidation(ctx, app); err != nil {
 			return nil, err
+		}
+	}
+
+	// After the admission chain, so that the pool lock a bounded Tenant
+	// takes is never held across a webhook call.
+	ctx, tenantAdm, err := r.lockTenantPool(ctx, app)
+	if err != nil {
+		return nil, err
+	}
+	defer tenantAdm.release()
+	if r.kindName == "Tenant" {
+		// Enforce hierarchical quota allocation: a child tenant's declared
+		// quota may not exceed its parent's remaining (un-carved) quota.
+		if qErrs := r.validateTenantResourceQuotas(ctx, app); len(qErrs) > 0 {
+			return nil, apierrors.NewInvalid(r.gvk.GroupKind(), app.Name, qErrs)
 		}
 	}
 
@@ -288,8 +291,9 @@ func (r *REST) Create(ctx context.Context, obj runtime.Object, createValidation 
 	// A dry run stores nothing, so there is no write for the cache to show,
 	// and waiting for one would leave it owed to the pool for good.
 	if options == nil || len(options.DryRun) == 0 {
-		adm.settle(r.c, client.ObjectKeyFromObject(helmRelease))
-		tenantAdm.settle(r.c, client.ObjectKeyFromObject(helmRelease))
+		r.reservation.supersede(client.ObjectKeyFromObject(helmRelease), writtenState(helmRelease))
+		adm.settle(r.c, helmRelease)
+		tenantAdm.settle(r.c, helmRelease)
 	}
 
 	// Convert the created HelmRelease back to Application
@@ -644,6 +648,15 @@ func (r *REST) Update(ctx context.Context, name string, objInfo rest.UpdatedObje
 	}
 	if helmRelease.ResourceVersion == "" {
 		helmRelease.SetResourceVersion(cur.GetResourceVersion())
+	} else if helmRelease.ResourceVersion != cur.ResourceVersion {
+		// The client names another version than the cache served. The
+		// checks below compare the update with the release it replaces, so
+		// read that one; the client's precondition stays on the write.
+		live := &helmv2.HelmRelease{}
+		if err := r.w.Get(ctx, client.ObjectKeyFromObject(cur), live); err != nil {
+			return nil, false, registry.WrapPreservingStatus("failed to fetch current HelmRelease", err, r.gvr.GroupResource(), name)
+		}
+		cur = live
 	}
 	// The memory check above compared against the read at the start of Update.
 	// Compare again against the live release, so a stale value below 1Mi cannot
@@ -743,8 +756,9 @@ func (r *REST) Update(ctx context.Context, name string, objInfo rest.UpdatedObje
 		return nil, false, registry.WrapPreservingStatus("failed to update HelmRelease", err, r.gvr.GroupResource(), name)
 	}
 	if options == nil || len(options.DryRun) == 0 {
-		adm.settle(r.c, client.ObjectKeyFromObject(helmRelease))
-		tenantAdm.settle(r.c, client.ObjectKeyFromObject(helmRelease))
+		r.reservation.supersede(client.ObjectKeyFromObject(helmRelease), writtenState(helmRelease))
+		adm.settle(r.c, helmRelease)
+		tenantAdm.settle(r.c, helmRelease)
 	}
 
 	// Convert the updated HelmRelease back to Application
@@ -838,6 +852,9 @@ func (r *REST) Delete(ctx context.Context, name string, deleteValidation rest.Va
 	if err != nil {
 		klog.Errorf("Failed to delete HelmRelease %s: %v", helmReleaseName, err)
 		return nil, false, registry.WrapPreservingStatus("failed to delete HelmRelease", err, r.gvr.GroupResource(), name)
+	}
+	if options == nil || len(options.DryRun) == 0 {
+		r.reservation.supersede(client.ObjectKeyFromObject(helmRelease), pendingWrite{deleted: true})
 	}
 
 	klog.V(6).Infof("Successfully deleted HelmRelease %s", helmReleaseName)

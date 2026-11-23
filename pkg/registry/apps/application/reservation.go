@@ -86,15 +86,45 @@ type Reservation struct {
 
 	mu    sync.Mutex
 	locks map[string]*sync.Mutex
-	// pending holds, per pool root, a write that was stored but that the
-	// cache had not served when its writer gave the lock back.
-	pending map[string]pendingWrite
+	// pending holds, per pool root, the writes that were stored but that
+	// the cache had not served when their writer gave the lock back.
+	pending map[string]map[client.ObjectKey]pendingWrite
 }
 
-// pendingWrite is a stored release the cache has not shown yet.
+// pendingWrite is a stored state of a release the cache has not shown yet.
+// visible recognises that state or a later one; deleted means the state is
+// the release's absence, which only a delete issued here can claim, since a
+// missing object otherwise means a create the cache has not seen.
 type pendingWrite struct {
-	key     client.ObjectKey
 	visible func(*helmv2.HelmRelease) bool
+	deleted bool
+	since   time.Time
+}
+
+// pendingDebtLimit bounds how long a write the cache never shows can hold a
+// pool. Past it the cache is stuck or the release was changed by a client
+// other than this server, and holding the pool would only lock tenants out.
+const pendingDebtLimit = 10 * time.Minute
+
+// writtenState recognises, in the cache, the release as just written or as
+// changed again since. The resourceVersion is compared for equality only. A
+// status write by Flux right after it changes the resourceVersion and keeps
+// the spec and annotations, so the figure or the values written are matched
+// too.
+func writtenState(hr *helmv2.HelmRelease) pendingWrite {
+	rv := hr.ResourceVersion
+	annotation := hr.Annotations[ReservedAnnotation]
+	hash, _ := valuesHash(helmReleaseValues(hr))
+	return pendingWrite{since: time.Now(), visible: func(cached *helmv2.HelmRelease) bool {
+		if rv != "" && cached.ResourceVersion == rv {
+			return true
+		}
+		if annotation != "" {
+			return cached.Annotations[ReservedAnnotation] == annotation
+		}
+		h, err := valuesHash(helmReleaseValues(cached))
+		return err == nil && h == hash
+	}}
 }
 
 // NewReservation compiles the consumption declaration of every resource. A
@@ -106,7 +136,7 @@ func NewReservation(resources []config.Resource, env reservation.Environment) *R
 		env:           env,
 		settleTimeout: defaultSettleTimeout,
 		locks:         map[string]*sync.Mutex{},
-		pending:       map[string]pendingWrite{},
+		pending:       map[string]map[client.ObjectKey]pendingWrite{},
 	}
 	for _, res := range resources {
 		decl := res.Application.Consumption
@@ -179,35 +209,75 @@ func (g *Reservation) acquire(ctx context.Context, c client.Client, root string)
 	m.Lock()
 
 	g.mu.Lock()
-	pw, owed := g.pending[root]
+	owed := make(map[client.ObjectKey]pendingWrite, len(g.pending[root]))
+	for key, pw := range g.pending[root] {
+		owed[key] = pw
+	}
 	g.mu.Unlock()
-	if owed {
-		if err := g.waitVisible(c, pw); err != nil {
+	for key, pw := range owed {
+		if time.Since(pw.since) > pendingDebtLimit {
+			klog.Warningf("HelmRelease %s was still not in the cache after %s; pool %q stops waiting for it", key, pendingDebtLimit, root)
+		} else if err := g.waitVisible(c, key, pw); err != nil {
 			m.Unlock()
 			return nil, apierrors.NewTooManyRequests(fmt.Sprintf("an earlier write into tenant pool %q is not visible yet; retry", root), 1)
 		}
-		g.mu.Lock()
-		delete(g.pending, root)
-		g.mu.Unlock()
+		g.clear(root, key)
 	}
 	return m.Unlock, nil
+}
+
+func (g *Reservation) clear(root string, key client.ObjectKey) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	delete(g.pending[root], key)
+	if len(g.pending[root]) == 0 {
+		delete(g.pending, root)
+	}
+}
+
+func (g *Reservation) owe(root string, key client.ObjectKey, pw pendingWrite) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.pending[root] == nil {
+		g.pending[root] = map[client.ObjectKey]pendingWrite{}
+	}
+	g.pending[root][key] = pw
+}
+
+// supersede records that this server stored a later state of key, through
+// a write or a delete that may not have taken the pool lock (a shrink, a
+// Tenant losing its quota). A debt owed for key then waits for that state
+// instead, which the cache may show even though it will never show the
+// earlier one. The debt itself still clears only from the cache.
+func (g *Reservation) supersede(key client.ObjectKey, pw pendingWrite) {
+	if g == nil {
+		return
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	for _, owed := range g.pending {
+		if prev, ok := owed[key]; ok {
+			pw.since = prev.since
+			owed[key] = pw
+		}
+	}
 }
 
 // waitVisible polls the cache until it serves the write. It is detached from
 // the request: a client that gives up must not shorten the wait the next
 // writer depends on.
-func (g *Reservation) waitVisible(c client.Client, pw pendingWrite) error {
+func (g *Reservation) waitVisible(c client.Client, key client.ObjectKey, pw pendingWrite) error {
 	ctx, cancel := context.WithTimeout(context.Background(), g.settleTimeout)
 	defer cancel()
 	return wait.PollUntilContextCancel(ctx, settleInterval, true, func(ctx context.Context) (bool, error) {
 		hr := &helmv2.HelmRelease{}
-		if err := c.Get(ctx, pw.key, hr); err != nil {
+		if err := c.Get(ctx, key, hr); err != nil {
 			if apierrors.IsNotFound(err) {
-				return false, nil
+				return pw.deleted, nil
 			}
 			return false, err
 		}
-		return pw.visible(hr), nil
+		return !pw.deleted && pw.visible(hr), nil
 	})
 }
 
@@ -466,7 +536,6 @@ type reservationAdmission struct {
 	stored   *storedReservation
 	unlock   func()
 	baseHash string
-	visible  func(*helmv2.HelmRelease) bool
 }
 
 // release drops the pool lock. Safe on a nil reservationAdmission.
@@ -477,21 +546,12 @@ func (a *reservationAdmission) release() {
 	}
 }
 
-// annotate writes the admitted figure onto the release about to be stored,
-// and records what the cache has to show before the pool lock is given back.
+// annotate writes the admitted figure onto the release about to be stored.
 func (a *reservationAdmission) annotate(hr *helmv2.HelmRelease) error {
 	if a == nil {
 		return nil
 	}
 	if a.stored == nil {
-		hash, err := valuesHash(helmReleaseValues(hr))
-		if err != nil {
-			return err
-		}
-		a.visible = func(cached *helmv2.HelmRelease) bool {
-			h, err := valuesHash(helmReleaseValues(cached))
-			return err == nil && h == hash
-		}
 		return nil
 	}
 	raw, err := json.Marshal(a.stored)
@@ -504,11 +564,7 @@ func (a *reservationAdmission) annotate(hr *helmv2.HelmRelease) error {
 	if hr.Annotations == nil {
 		hr.Annotations = map[string]string{}
 	}
-	written := string(raw)
-	hr.Annotations[ReservedAnnotation] = written
-	a.visible = func(cached *helmv2.HelmRelease) bool {
-		return cached.Annotations[ReservedAnnotation] == written
-	}
+	hr.Annotations[ReservedAnnotation] = string(raw)
 	return nil
 }
 
@@ -546,17 +602,16 @@ func (e finalUpdateError) Error() string { return e.err.Error() }
 // settle waits until the cache serves the release as written, so that the
 // next writer into the pool, which reads the cache, counts it. If it does
 // not in time, the write is recorded as owed to the pool, and the pool
-// admits no growth until the cache shows it.
-func (a *reservationAdmission) settle(c client.Client, key client.ObjectKey) {
-	if a == nil || a.unlock == nil || a.visible == nil {
+// admits no growth until the cache shows it or a later state of it.
+func (a *reservationAdmission) settle(c client.Client, hr *helmv2.HelmRelease) {
+	if a == nil || a.unlock == nil {
 		return
 	}
-	pw := pendingWrite{key: key, visible: a.visible}
-	if err := a.gate.waitVisible(c, pw); err != nil {
+	key := client.ObjectKeyFromObject(hr)
+	pw := writtenState(hr)
+	if err := a.gate.waitVisible(c, key, pw); err != nil {
 		klog.Warningf("HelmRelease %s is not in the cache after %s; pool %q admits no growth until it is: %v", key, a.gate.settleTimeout, a.root, err)
-		a.gate.mu.Lock()
-		a.gate.pending[a.root] = pw
-		a.gate.mu.Unlock()
+		a.gate.owe(a.root, key, pw)
 	}
 }
 
