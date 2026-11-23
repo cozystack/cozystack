@@ -18,9 +18,6 @@ package application
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"strings"
 	"sync"
@@ -36,7 +33,6 @@ import (
 	"k8s.io/klog/v2"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	"github.com/cozystack/cozystack/pkg/apis/apps/defaulting"
 	appsv1alpha1 "github.com/cozystack/cozystack/pkg/apis/apps/v1alpha1"
 	"github.com/cozystack/cozystack/pkg/apis/apps/validation"
 	"github.com/cozystack/cozystack/pkg/config"
@@ -46,7 +42,7 @@ import (
 // ReservedAnnotation carries, on an application's HelmRelease, the
 // reservation the gate admitted it with. It sits outside AnnotationPrefix, so
 // an Application's own annotations can never write it.
-const ReservedAnnotation = "reservation.cozystack.io/reserved"
+const ReservedAnnotation = reservation.ReservedAnnotation
 
 // tenantNamespacePrefix is the prefix of every tenant namespace and of every
 // Tenant HelmRelease, whatever the REST handler's own release prefix is.
@@ -56,14 +52,6 @@ const (
 	defaultSettleTimeout = 5 * time.Second
 	settleInterval       = 50 * time.Millisecond
 )
-
-// storedReservation is the value of ReservedAnnotation. ValuesHash ties the
-// figure to the values it was computed from, so that a figure written before
-// an edit made with the gate off is recognised as stale instead of trusted.
-type storedReservation struct {
-	ValuesHash string                   `json:"valuesHash"`
-	Resources  reservation.ResourceList `json:"resources"`
-}
 
 type kindEvaluator struct {
 	ev  *reservation.Evaluator
@@ -98,16 +86,8 @@ func NewReservation(resources []config.Resource, env reservation.Environment) *R
 			continue
 		}
 		kind := res.Application.Kind
-		schema, err := defaulting.BuildSchema(res.Application.OpenAPISchema)
+		ev, err := reservation.CompileDefinition(kind, decl, res.Application.OpenAPISchema)
 		if err != nil {
-			err = fmt.Errorf("the ApplicationDefinition of kind %s: schema: %w", kind, err)
-			klog.Error(err)
-			g.evaluators[kind] = kindEvaluator{err: err}
-			continue
-		}
-		ev, err := reservation.Compile(decl, schema)
-		if err != nil {
-			err = fmt.Errorf("the ApplicationDefinition of kind %s: consumption: %w", kind, err)
 			klog.Error(err)
 			g.evaluators[kind] = kindEvaluator{err: err}
 			continue
@@ -147,23 +127,6 @@ func (g *Reservation) lock(root string) func() {
 	return m.Unlock
 }
 
-// valuesHash hashes values in a canonical form: the apiserver may hand back
-// a stored blob with its keys in another order than the one written.
-func valuesHash(raw []byte) (string, error) {
-	var v any
-	if len(raw) > 0 {
-		if err := json.Unmarshal(raw, &v); err != nil {
-			return "", err
-		}
-	}
-	canonical, err := json.Marshal(v)
-	if err != nil {
-		return "", err
-	}
-	sum := sha256.Sum256(canonical)
-	return hex.EncodeToString(sum[:]), nil
-}
-
 func helmReleaseValues(hr *helmv2.HelmRelease) []byte {
 	if hr.Spec.Values == nil {
 		return nil
@@ -172,26 +135,17 @@ func helmReleaseValues(hr *helmv2.HelmRelease) []byte {
 }
 
 // stored reads ReservedAnnotation, or nil when it is absent or unreadable.
-func stored(hr *helmv2.HelmRelease) *storedReservation {
-	raw, ok := hr.Annotations[ReservedAnnotation]
-	if !ok {
+func stored(hr *helmv2.HelmRelease) *reservation.Stored {
+	s, err := reservation.ReadStored(hr.Annotations)
+	if err != nil {
+		klog.Warningf("ignoring unreadable annotation on HelmRelease %s/%s: %v", hr.Namespace, hr.Name, err)
 		return nil
 	}
-	var s storedReservation
-	if err := json.Unmarshal([]byte(raw), &s); err != nil {
-		klog.Warningf("ignoring unreadable %s on HelmRelease %s/%s: %v", ReservedAnnotation, hr.Namespace, hr.Name, err)
-		return nil
-	}
-	return &s
+	return s
 }
 
-// reservedBy returns what a stored application reserves.
-//
-// The figure the gate stored is used while it still matches the values. An
-// application that no longer evaluates keeps the last figure it was admitted
-// with, reported as stale, rather than dropping to zero and handing its share
-// of the pool to the next writer. With no stored figure either, the error is
-// returned and the application is left out of the sum.
+// reservedBy returns what a stored application reserves, by the rule of
+// reservation.Resolve.
 func (g *Reservation) reservedBy(hr *helmv2.HelmRelease) (rl reservation.ResourceList, stale bool, err error) {
 	ev, err := g.evaluator(hr.Labels[ApplicationKindLabel], hr.Labels[ApplicationGroupLabel])
 	if err != nil {
@@ -200,21 +154,8 @@ func (g *Reservation) reservedBy(hr *helmv2.HelmRelease) (rl reservation.Resourc
 	if ev == nil {
 		return nil, false, nil
 	}
-	values := helmReleaseValues(hr)
-	prev := stored(hr)
-	if prev != nil {
-		if hash, hashErr := valuesHash(values); hashErr == nil && hash == prev.ValuesHash {
-			return prev.Resources, false, nil
-		}
-	}
-	rl, err = ev.EvaluateJSON(values, g.env)
-	if err == nil {
-		return rl, false, nil
-	}
-	if prev != nil {
-		return prev.Resources, true, nil
-	}
-	return nil, false, err
+	rl, src, err := reservation.Resolve(ev, helmReleaseValues(hr), stored(hr), g.env)
+	return rl, src == reservation.StaleStored, err
 }
 
 // tenantOwnedNamespace is the namespace a Tenant HelmRelease owns. It is
@@ -241,31 +182,6 @@ func tenantParentNamespace(ns string) string {
 		return rootTenantNamespace
 	}
 	return strings.Join(segments[:len(segments)-1], "-")
-}
-
-// budgetKey maps a resourceQuotas key onto the reservation vocabulary. An
-// operator may write requests.storage where a declaration reserves storage;
-// both name the same budget.
-func budgetKey(k string) string {
-	if rest, ok := strings.CutPrefix(k, "requests."); ok {
-		return rest
-	}
-	if rest, ok := strings.CutPrefix(k, "limits."); ok {
-		return rest
-	}
-	return k
-}
-
-func budgetOf(declared map[string]resource.Quantity) reservation.ResourceList {
-	out := reservation.ResourceList{}
-	for k, v := range declared {
-		key := budgetKey(k)
-		if cur, ok := out[key]; ok && cur.Cmp(v) <= 0 {
-			continue
-		}
-		out[key] = v.DeepCopy()
-	}
-	return out
 }
 
 // pool is the budget a namespace draws from: its nearest bounded tenant,
@@ -319,13 +235,13 @@ func poolOf(tree map[string]map[string]resource.Quantity, ns string) *pool {
 	if root == "" {
 		return nil
 	}
-	p := &pool{root: root, budget: budgetOf(tree[root]), carved: reservation.ResourceList{}}
+	p := &pool{root: root, budget: reservation.Budget(tree[root]), carved: reservation.ResourceList{}}
 	for owned, declared := range tree {
 		if rootOf(owned) == root {
 			p.members = append(p.members, owned)
 		}
 		if owned != root && len(declared) > 0 && rootOf(tenantParentNamespace(owned)) == root {
-			p.carved.Add(budgetOf(declared))
+			p.carved.Add(reservation.Budget(declared))
 		}
 	}
 	if _, ok := tree[root]; ok && !containsString(p.members, root) {
@@ -392,7 +308,7 @@ func (r *REST) reservedIn(ctx context.Context, namespaces []string) (poolFigure,
 // the release and the lock to release once the write is visible.
 type reservationAdmission struct {
 	gate   *Reservation
-	stored *storedReservation
+	stored *reservation.Stored
 	unlock func()
 }
 
@@ -409,14 +325,14 @@ func (a *reservationAdmission) annotate(hr *helmv2.HelmRelease) error {
 	if a == nil || a.stored == nil {
 		return nil
 	}
-	raw, err := json.Marshal(a.stored)
+	raw, err := a.stored.Encode()
 	if err != nil {
 		return err
 	}
 	if hr.Annotations == nil {
 		hr.Annotations = map[string]string{}
 	}
-	hr.Annotations[ReservedAnnotation] = string(raw)
+	hr.Annotations[ReservedAnnotation] = raw
 	return nil
 }
 
@@ -474,11 +390,11 @@ func (r *REST) admitReservation(ctx context.Context, app *appsv1alpha1.Applicati
 	if err != nil {
 		return nil, field.ErrorList{field.Invalid(specPath, "", fmt.Sprintf("cannot compute what this %s reserves from its tenant's quota: %v", r.kindName, err))}
 	}
-	hash, err := valuesHash(raw)
+	hash, err := reservation.ValuesHash(raw)
 	if err != nil {
 		return nil, field.ErrorList{field.Invalid(specPath, "", err.Error())}
 	}
-	adm := &reservationAdmission{gate: g, stored: &storedReservation{ValuesHash: hash, Resources: want}}
+	adm := &reservationAdmission{gate: g, stored: &reservation.Stored{ValuesHash: hash, Resources: want}}
 
 	delta := want.DeepCopy()
 	if old != nil {

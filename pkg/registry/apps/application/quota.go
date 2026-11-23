@@ -34,6 +34,7 @@ import (
 
 	appsv1alpha1 "github.com/cozystack/cozystack/pkg/apis/apps/v1alpha1"
 	"github.com/cozystack/cozystack/pkg/apis/apps/validation"
+	"github.com/cozystack/cozystack/pkg/reservation"
 )
 
 // rootTenantNamespace is the namespace of the cluster's root tenant. The root
@@ -368,7 +369,7 @@ func (r *REST) poolUsage(ctx context.Context, parentNS, excludeNS string) (func(
 	if err != nil {
 		return nil, err
 	}
-	return func(res string) resource.Quantity { return fig.reserved[budgetKey(res)] }, nil
+	return func(res string) resource.Quantity { return fig.reserved[reservation.BudgetKey(res)] }, nil
 }
 
 // parentPoolUsage sums the current usage of the pool rooted at parentNS: the
