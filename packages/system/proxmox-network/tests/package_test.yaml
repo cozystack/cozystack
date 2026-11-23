@@ -26,34 +26,48 @@ tests:
       - equal:
           path: apiVersion
           value: ipam.cluster.x-k8s.io/v1alpha2
-        documentIndex: 0
+        documentSelector:
+          path: spec.gateway
+          value: "198.18.1.1"
       - equal:
           path: metadata.name
           value: pxnet-workers
-        documentIndex: 0
+        documentSelector:
+          path: spec.gateway
+          value: "198.18.1.1"
       - equal:
           path: metadata.namespace
           value: tenant-a
-        documentIndex: 0
+        documentSelector:
+          path: spec.gateway
+          value: "198.18.1.1"
       - equal:
           path: spec
           value:
             addresses: ["198.18.1.10-198.18.1.250"]
             prefix: 24
             gateway: "198.18.1.1"
-        documentIndex: 0
+        documentSelector:
+          path: spec.gateway
+          value: "198.18.1.1"
       - equal:
           path: metadata.namespace
           value: tenant-b
-        documentIndex: 1
+        documentSelector:
+          path: spec.gateway
+          value: "198.18.2.1"
       - equal:
           path: metadata.labels["proxmox.cozystack.io/zone"]
           value: second
-        documentIndex: 2
+        documentSelector:
+          path: metadata.name
+          value: pxnet-storage
       - equal:
           path: metadata.name
           value: pxnet-storage
-        documentIndex: 2
+        documentSelector:
+          path: metadata.name
+          value: pxnet-storage
 
   - it: holds the zones back until the CRD is known, so the first install does not fail
     templates:
@@ -81,13 +95,19 @@ tests:
             networks:
               - {namespace: tenant-a, name: workers, vlan: 201, addresses: ["198.18.1.10-198.18.1.250"], gateway: "198.18.1.1", prefix: 24}
               - {namespace: tenant-b, name: workers, vlan: 202, addresses: ["198.18.2.10-198.18.2.250"], gateway: "198.18.2.1", prefix: 24, mtu: 1400}
-        documentIndex: 0
+        documentSelector:
+          path: metadata.name
+          value: default
       - notExists:
           path: spec.uplinkVLAN
-        documentIndex: 1
+        documentSelector:
+          path: metadata.name
+          value: second
       - notExists:
           path: spec.mtu
-        documentIndex: 1
+        documentSelector:
+          path: metadata.name
+          value: second
 
   - it: refuses two zones on one bridge
     templates:
@@ -165,39 +185,55 @@ tests:
       - equal:
           path: kind
           value: ValidatingAdmissionPolicy
-        documentIndex: 0
+        documentSelector:
+          path: metadata.name
+          value: proxmox-network-zone-binding
       - equal:
           path: spec.paramKind
           value:
             apiVersion: proxmox.cozystack.io/v1alpha1
             kind: ProxmoxNetworkZone
-        documentIndex: 0
+        documentSelector:
+          path: metadata.name
+          value: proxmox-network-zone-binding
       - equal:
           path: metadata.name
           value: proxmox-network-zone-binding-default
-        documentIndex: 1
+        documentSelector:
+          path: metadata.name
+          value: proxmox-network-zone-binding-default
       - equal:
           path: spec.paramRef
           value:
             name: default
             parameterNotFoundAction: Deny
-        documentIndex: 1
+        documentSelector:
+          path: metadata.name
+          value: proxmox-network-zone-binding-default
       - equal:
           path: spec.validationActions
           value: [Warn, Audit]
-        documentIndex: 1
+        documentSelector:
+          path: metadata.name
+          value: proxmox-network-zone-binding-default
       - equal:
           path: spec.paramRef.name
           value: second
-        documentIndex: 2
+        documentSelector:
+          path: metadata.name
+          value: proxmox-network-zone-binding-second
       - equal:
           path: metadata.name
           value: proxmox-network-cluster-pools
-        documentIndex: 3
+        documentSelector:
+          path: spec.matchConstraints.resourceRules[0].resources
+          value: [proxmoxclusters]
       - equal:
           path: spec.validationActions
           value: [Warn, Audit]
-        documentIndex: 4
+        documentSelector:
+          path: spec.policyName
+          value: proxmox-network-cluster-pools
 
   - it: judges every namespace and only the zone's own bridge in the zone policy, on CREATE and UPDATE
     templates:
@@ -209,39 +245,55 @@ tests:
       - equal:
           path: spec.matchConstraints.resourceRules[0].operations
           value: [CREATE, UPDATE]
-        documentIndex: 0
+        documentSelector:
+          path: metadata.name
+          value: proxmox-network-zone-binding
       - equal:
           path: spec.matchConstraints.resourceRules[0].resources
           value: [proxmoxmachines, proxmoxmachinetemplates, proxmoxclusters]
-        documentIndex: 0
+        documentSelector:
+          path: metadata.name
+          value: proxmox-network-zone-binding
       - equal:
           path: spec.matchConditions
           value:
             - name: not-being-deleted
               expression: "!has(object.metadata.deletionTimestamp)"
-        documentIndex: 0
+        documentSelector:
+          path: metadata.name
+          value: proxmox-network-zone-binding
       - contains:
           path: spec.variables
           content:
             name: changed
             expression: "oldObject == null || variables.current != variables.previous"
-        documentIndex: 0
+        documentSelector:
+          path: metadata.name
+          value: proxmox-network-zone-binding
       - matchRegex:
           path: spec.validations[1].expression
           pattern: 'variables\.nics\.all\(n, n\.bridge != params\.spec\.bridge \|\|'
-        documentIndex: 0
+        documentSelector:
+          path: metadata.name
+          value: proxmox-network-zone-binding
       - matchRegex:
           path: spec.validations[1].expression
           pattern: "in variables\\.allowed"
-        documentIndex: 0
+        documentSelector:
+          path: metadata.name
+          value: proxmox-network-zone-binding
       - matchRegex:
           path: spec.validations[2].expression
           pattern: 'n\.bridge == params\.spec\.bridge \|\| !has\(n\.vlan\) \|\| n\.vlan != params\.spec\.uplinkVLAN'
-        documentIndex: 0
+        documentSelector:
+          path: metadata.name
+          value: proxmox-network-zone-binding
       - matchRegex:
           path: spec.validations[3].expression
           pattern: 'variables\.nics\.all\(n, !\(n\.bridge in params\.spec\.uplinkBridges\)\)'
-        documentIndex: 0
+        documentSelector:
+          path: metadata.name
+          value: proxmox-network-zone-binding
 
   - it: keeps the zone policy and its bindings back until the CRD is known
     templates:
@@ -252,7 +304,9 @@ tests:
       - equal:
           path: metadata.name
           value: proxmox-network-cluster-pools
-        documentIndex: 0
+        documentSelector:
+          path: spec.matchConstraints.resourceRules[0].resources
+          value: [proxmoxclusters]
 
   - it: lets a ProxmoxCluster in an owning namespace list only its networks' gateways
     templates:
@@ -261,17 +315,23 @@ tests:
       - equal:
           path: spec.matchConstraints.resourceRules[0].resources
           value: [proxmoxclusters]
-        documentIndex: 0
+        documentSelector:
+          path: spec.matchConstraints.resourceRules[0].resources
+          value: [proxmoxclusters]
       - contains:
           path: spec.variables
           content:
             name: gateways
             expression: '{"tenant-a":["198.18.1.1","198.18.3.1"],"tenant-b":["198.18.2.1"]}'
-        documentIndex: 0
+        documentSelector:
+          path: spec.matchConstraints.resourceRules[0].resources
+          value: [proxmoxclusters]
       - matchRegex:
           path: spec.validations[0].expression
           pattern: 'variables\.spec\.ipv4Config\.addresses\.all\(a, a in variables\.gateways\[request\.namespace\]\)'
-        documentIndex: 0
+        documentSelector:
+          path: spec.matchConstraints.resourceRules[0].resources
+          value: [proxmoxclusters]
 
   - it: leaves the raw bridge/vlan path alone by default
     templates:
@@ -282,7 +342,9 @@ tests:
       - notEqual:
           path: metadata.name
           value: proxmox-network-raw-networks
-        documentIndex: 0
+        documentSelector:
+          path: spec.matchConstraints.resourceRules[0].resources
+          value: [proxmoxclusters]
 
   - it: warns on the raw path with rawNetworks Warn, outside the platform and exempt namespaces
     templates:
@@ -296,21 +358,29 @@ tests:
       - equal:
           path: metadata.name
           value: proxmox-network-raw-networks
-        documentIndex: 2
+        documentSelector:
+          path: spec.matchConstraints.resourceRules[0].resources
+          value: [proxmoxmachines, proxmoxmachinetemplates]
       - equal:
           path: spec.matchConditions[0].expression
           value: "!request.namespace.startsWith('cozy-') && !(request.namespace in [\"kube-system\",\"cozy-proxmox-network\",\"ops\"])"
-        documentIndex: 2
+        documentSelector:
+          path: spec.matchConstraints.resourceRules[0].resources
+          value: [proxmoxmachines, proxmoxmachinetemplates]
       - contains:
           path: spec.variables
           content:
             name: zoneBridges
             expression: '["vmbr70","vmbr71"]'
-        documentIndex: 2
+        documentSelector:
+          path: spec.matchConstraints.resourceRules[0].resources
+          value: [proxmoxmachines, proxmoxmachinetemplates]
       - equal:
           path: spec.validationActions
           value: [Warn, Audit]
-        documentIndex: 3
+        documentSelector:
+          path: spec.policyName
+          value: proxmox-network-raw-networks
 
   - it: refuses the raw path with rawNetworks Deny
     templates:
@@ -321,7 +391,9 @@ tests:
       - equal:
           path: spec.validationActions
           value: [Deny]
-        documentIndex: 3
+        documentSelector:
+          path: spec.policyName
+          value: proxmox-network-raw-networks
 
   - it: refuses an unknown rawNetworks mode
     templates:
