@@ -78,6 +78,11 @@ spec:
               # \${API_USERNAME} / \${API_PASSWORD} come from the
               # backup-api-auth Secret mounted via env (see above).
               auth="-u \${API_USERNAME}:\${API_PASSWORD}"
+              # The archive the controller named for this run and records on
+              # its Backup, so that the restore and the delete of that Backup
+              # reach the archive the run wrote. Empty when the controller
+              # gave no name; the names below are the fallback for that case.
+              archive="{{ .ArchiveName | default "" }}"
 
               # Sidecar may still be coming up when the strategy Pod fires.
               # Block on /backup/status until it answers (max ~5 minutes).
@@ -101,18 +106,21 @@ spec:
               # also lands on the correct archive.
               if [ "{{ .Mode }}" = "backup" ]; then
                 prefix="clickhouse-{{ .Release.Name }}-"
-                target="\${prefix}\$(date -u +%Y%m%dT%H%M%SZ)"
+                target="\${archive:-\${prefix}\$(date -u +%Y%m%dT%H%M%SZ)}"
                 echo "create_remote \${target}"
                 curl -fsS \${auth} -X POST "\${api}/backup/create_remote?name=\${target}" >/dev/null
               else
                 prefix="clickhouse-{{ .Backup.ApplicationRef.Name }}-"
-                # Pick the latest archive whose name starts with the
-                # source-release prefix. Falls through to "no remote
-                # backup found" if S3_PATH is misconfigured AND none of
-                # the listed names match.
-                target=\$(curl -fsS \${auth} --max-time 60 "\${api}/backup/list/remote" \\
-                  | jq -rs --arg prefix "\${prefix}" \\
-                      '[.[] | select((.name // "") | startswith(\$prefix))] | sort_by(.created // "") | last.name // ""')
+                # A Backup that records no archive gets the latest archive
+                # whose name starts with the source-release prefix. Falls
+                # through to "no remote backup found" if S3_PATH is
+                # misconfigured AND none of the listed names match.
+                target="\${archive}"
+                if [ -z "\${target}" ]; then
+                  target=\$(curl -fsS \${auth} --max-time 60 "\${api}/backup/list/remote" \\
+                    | jq -rs --arg prefix "\${prefix}" \\
+                        '[.[] | select((.name // "") | startswith(\$prefix))] | sort_by(.created // "") | last.name // ""')
+                fi
                 if [ -z "\${target}" ] || [ "\${target}" = "null" ]; then
                   echo "no remote backup found" >&2
                   exit 1

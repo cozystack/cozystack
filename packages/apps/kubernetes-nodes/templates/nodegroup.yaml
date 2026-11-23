@@ -473,6 +473,17 @@ spec:
       {{- end }}
       - metadata:
           name: disk-system
+          {{- /* The worker WorkloadMonitor selects PVCs by these labels. CAPK
+                 stamps cluster-name and role on the VM and its VMI template
+                 only, copying dataVolumeTemplates verbatim, and CDI copies a
+                 DataVolume's labels onto the PVC it creates -- so without them
+                 here the disk is never tracked as a Workload. cluster-name must
+                 NOT be added: the Kubernetes backup strategy selects DataVolumes
+                 and PVCs by it, and would then back up and restore-in-place
+                 every worker root disk as cluster data. */}}
+          labels:
+            cluster.x-k8s.io/deployment-name: {{ .clusterName }}-{{ .groupName }}
+            cluster.x-k8s.io/role: worker
           {{- /* usePopulator=false stays ONLY on the HTTP/import path: it preserves
                  the legacy import behaviour and keeps an image-omitted DV — hence the
                  KMT hash — byte-identical to the pre-feature render, so those workers
@@ -1144,8 +1155,11 @@ spec:
   {{- end }}
   kind: kubernetes
   type: worker
+  {{- /* No cluster-name here: deployment-name already names one
+         MachineDeployment in the namespace, and requiring cluster-name would
+         force it onto the worker disk, which the Kubernetes backup strategy
+         would then select (see the disk-system labels above). */}}
   selector:
-    cluster.x-k8s.io/cluster-name: {{ $clusterName }}
     cluster.x-k8s.io/deployment-name: {{ $clusterName }}-{{ $groupName }}
     cluster.x-k8s.io/role: worker
   version: {{ $.Chart.Version }}
