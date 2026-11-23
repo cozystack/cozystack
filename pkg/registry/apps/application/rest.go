@@ -292,8 +292,8 @@ func (r *REST) Create(ctx context.Context, obj runtime.Object, createValidation 
 	// and waiting for one would leave it owed to the pool for good.
 	if options == nil || len(options.DryRun) == 0 {
 		r.reservation.supersede(client.ObjectKeyFromObject(helmRelease), writtenState(helmRelease))
-		adm.settle(r.c, helmRelease)
-		tenantAdm.settle(r.c, helmRelease)
+		adm.settle(r.c, r.w, helmRelease)
+		tenantAdm.settle(r.c, r.w, helmRelease)
 	}
 
 	// Convert the created HelmRelease back to Application
@@ -760,8 +760,8 @@ func (r *REST) Update(ctx context.Context, name string, objInfo rest.UpdatedObje
 	}
 	if options == nil || len(options.DryRun) == 0 {
 		r.reservation.supersede(client.ObjectKeyFromObject(helmRelease), writtenState(helmRelease))
-		adm.settle(r.c, helmRelease)
-		tenantAdm.settle(r.c, helmRelease)
+		adm.settle(r.c, r.w, helmRelease)
+		tenantAdm.settle(r.c, r.w, helmRelease)
 	}
 
 	// Convert the updated HelmRelease back to Application
