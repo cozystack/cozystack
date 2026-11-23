@@ -122,3 +122,47 @@ func (in TapPackage) OpenAPIModelName() string {
 func (in TapVerify) OpenAPIModelName() string {
 	return "com.github.cozystack.cozystack.pkg.apis.core.v1alpha1.TapVerify"
 }
+
+func (in Credential) OpenAPIModelName() string {
+	return "com.github.cozystack.cozystack.pkg.apis.core.v1alpha1.Credential"
+}
+
+func (in CredentialApplicationRef) OpenAPIModelName() string {
+	return "com.github.cozystack.cozystack.pkg.apis.core.v1alpha1.CredentialApplicationRef"
+}
+
+func (in CredentialHistoryEntry) OpenAPIModelName() string {
+	return "com.github.cozystack.cozystack.pkg.apis.core.v1alpha1.CredentialHistoryEntry"
+}
+
+func (in CredentialList) OpenAPIModelName() string {
+	return "com.github.cozystack.cozystack.pkg.apis.core.v1alpha1.CredentialList"
+}
+
+func (in CredentialPasswordState) OpenAPIModelName() string {
+	return "com.github.cozystack.cozystack.pkg.apis.core.v1alpha1.CredentialPasswordState"
+}
+
+func (in CredentialRequest) OpenAPIModelName() string {
+	return "com.github.cozystack.cozystack.pkg.apis.core.v1alpha1.CredentialRequest"
+}
+
+func (in CredentialRequestPreconditions) OpenAPIModelName() string {
+	return "com.github.cozystack.cozystack.pkg.apis.core.v1alpha1.CredentialRequestPreconditions"
+}
+
+func (in CredentialRequestSpec) OpenAPIModelName() string {
+	return "com.github.cozystack.cozystack.pkg.apis.core.v1alpha1.CredentialRequestSpec"
+}
+
+func (in CredentialRequestStatus) OpenAPIModelName() string {
+	return "com.github.cozystack.cozystack.pkg.apis.core.v1alpha1.CredentialRequestStatus"
+}
+
+func (in CredentialSpec) OpenAPIModelName() string {
+	return "com.github.cozystack.cozystack.pkg.apis.core.v1alpha1.CredentialSpec"
+}
+
+func (in CredentialStatus) OpenAPIModelName() string {
+	return "com.github.cozystack.cozystack.pkg.apis.core.v1alpha1.CredentialStatus"
+}
