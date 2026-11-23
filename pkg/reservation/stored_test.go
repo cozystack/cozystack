@@ -17,6 +17,8 @@ limitations under the License.
 package reservation
 
 import (
+	"errors"
+	"fmt"
 	"testing"
 
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -151,5 +153,28 @@ func TestPoolStatus_RoundTrips(t *testing.T) {
 	}
 	if s, err := ReadPoolStatus(nil); s != nil || err != nil {
 		t.Errorf("ReadPoolStatus(nil) = %v, %v; want nil, nil", s, err)
+	}
+}
+
+// unavailableEnv fails every lookup the way ClusterEnvironment does when
+// it cannot list instance types.
+type unavailableEnv struct{}
+
+func (unavailableEnv) Instancetype(string) (ResourceList, error) {
+	return nil, fmt.Errorf("list instance types: %w", ErrUnavailable)
+}
+
+func (unavailableEnv) Preset(string) (ResourceList, error) {
+	return nil, fmt.Errorf("presets: %w", ErrUnavailable)
+}
+
+func TestResolve_UnavailableIsNeverAStaleFigure(t *testing.T) {
+	ev, err := Compile(&Declaration{Resources: map[string]string{"cpu": "instanceType(values.t).cpu"}}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prev := &Stored{ValuesHash: "other values", Resources: ResourceList{"cpu": resource.MustParse("7")}}
+	if _, _, err := Resolve(ev, []byte(`{"t":"u1.small"}`), prev, unavailableEnv{}); !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("Resolve = %v, want the ErrUnavailable error rather than the stale figure", err)
 	}
 }

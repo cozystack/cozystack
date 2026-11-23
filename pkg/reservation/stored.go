@@ -21,6 +21,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -222,6 +223,7 @@ const (
 // reported as StaleStored, rather than dropping to zero and handing its share
 // of the pool to the next writer. With no stored figure either, the
 // evaluation error is returned and the application is left out of the sum.
+// An error wrapping ErrUnavailable is returned whatever was stored.
 func Resolve(ev *Evaluator, values []byte, prev *Stored, env Environment) (ResourceList, Source, error) {
 	if prev.Matches(values) {
 		return prev.Resources, FromStored, nil
@@ -229,6 +231,12 @@ func Resolve(ev *Evaluator, values []byte, prev *Stored, env Environment) (Resou
 	rl, err := ev.EvaluateJSON(values, env)
 	if err == nil {
 		return rl, Evaluated, nil
+	}
+	// The environment could not be read: the values may evaluate fine, so
+	// this is neither a stale figure nor a broken declaration, and the
+	// caller has to retry rather than sum without it.
+	if errors.Is(err, ErrUnavailable) {
+		return nil, Evaluated, err
 	}
 	if prev != nil {
 		return prev.Resources, StaleStored, nil

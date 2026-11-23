@@ -19,6 +19,8 @@ package tenantquota
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -592,5 +594,39 @@ func TestReservation_BoundsTheIncompleteList(t *testing.T) {
 	}
 	if raw := getRelease(t, c, "tenant-root", "tenant-foo").Annotations[reservation.PoolAnnotation]; len(raw) > reservation.MaxAnnotationSize {
 		t.Errorf("pool status takes %d bytes", len(raw))
+	}
+}
+
+// unavailableEnv fails every lookup the way ClusterEnvironment does when it
+// cannot list instance types.
+type unavailableEnv struct{}
+
+func (unavailableEnv) Instancetype(string) (reservation.ResourceList, error) {
+	return nil, fmt.Errorf("list instance types: %w", reservation.ErrUnavailable)
+}
+
+func (unavailableEnv) Preset(string) (reservation.ResourceList, error) {
+	return nil, fmt.Errorf("presets: %w", reservation.ErrUnavailable)
+}
+
+// TestReservation_KeepsTheLastFiguresWhenTheEnvironmentIsUnavailable: when
+// instance types cannot be listed, a release with no stored figure cannot be
+// summed. The sweep fails and retries, rather than publishing a pool lighter
+// than it is or storing anything.
+func TestReservation_KeepsTheLastFiguresWhenTheEnvironmentIsUnavailable(t *testing.T) {
+	published := `{"reserved":{"cpu":"4"},"budget":{"cpu":"10"}}`
+	foo := tenantWithQuotas(t, "foo", "tenant-root", map[string]string{"cpu": "10"})
+	foo.Annotations = map[string]string{reservation.PoolAnnotation: published}
+	r, c, _ := newReservationReconciler(t, foo, vm(t, "a", "tenant-foo", "u1.large"))
+	r.Env = unavailableEnv{}
+
+	if _, err := r.Reconcile(context.Background(), sweepKey); !errors.Is(err, reservation.ErrUnavailable) {
+		t.Fatalf("Reconcile = %v, want the ErrUnavailable error", err)
+	}
+	if got := getRelease(t, c, "tenant-root", "tenant-foo").Annotations[reservation.PoolAnnotation]; got != published {
+		t.Errorf("pool status rewritten while the environment was unavailable: %s", got)
+	}
+	if _, ok := getRelease(t, c, "tenant-foo", "vm-instance-a").Annotations[reservation.ReservedAnnotation]; ok {
+		t.Error("a figure was stored while the environment was unavailable")
 	}
 }

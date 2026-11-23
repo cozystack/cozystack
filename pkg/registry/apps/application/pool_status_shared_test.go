@@ -79,6 +79,16 @@ func TestControllerHashesValuesLikeTheGate(t *testing.T) {
 	}
 }
 
+func TestControllerRefusesTrailingDataLikeTheGate(t *testing.T) {
+	for _, values := range []string{`{"n":1} {"n":2}`, `{"n":1}]`, `{"n":1}}`, `{"n":1} x`} {
+		_, gateErr := valuesHash([]byte(values))
+		_, controllerErr := reservation.ValuesHash([]byte(values))
+		if (gateErr == nil) != (controllerErr == nil) {
+			t.Errorf("values %s: the gate returns %v, the controller %v", values, gateErr, controllerErr)
+		}
+	}
+}
+
 func TestControllerMapsBudgetKeysLikeTheGate(t *testing.T) {
 	for _, k := range []string{"cpu", "requests.cpu", "limits.memory", "requests.storage", "services.loadbalancers"} {
 		if got, want := reservation.BudgetKey(k), budgetKey(k); got != want {

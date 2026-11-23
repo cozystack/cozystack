@@ -18,6 +18,7 @@ package tenantquota
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -187,6 +188,11 @@ func (r *Reconciler) snapshotReservations(ctx context.Context) (*reservationSnap
 		}
 		values := helmReleaseValues(hr)
 		rl, src, err := reservation.Resolve(c.ev, values, prev, r.Env)
+		if errors.Is(err, reservation.ErrUnavailable) {
+			// Summing without this release would publish a pool lighter
+			// than it is; keep the last published figures and retry.
+			return nil, fmt.Errorf("%s: %w", name, err)
+		}
 		switch {
 		case err != nil:
 			snap.incompleteByNS[hr.Namespace] = append(snap.incompleteByNS[hr.Namespace], fmt.Sprintf("%s: %v", name, err))
