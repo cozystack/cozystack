@@ -120,7 +120,7 @@ func (r *REST) parentTenantDeclaredQuotas(ctx context.Context, childNamespace st
 		return nil, nil
 	}
 	hr := &helmv2.HelmRelease{}
-	if err := r.c.Get(ctx, client.ObjectKey{Namespace: hrNamespace, Name: hrName}, hr); err != nil {
+	if err := r.poolReader().Get(ctx, client.ObjectKey{Namespace: hrNamespace, Name: hrName}, hr); err != nil {
 		if apierrors.IsNotFound(err) {
 			return nil, nil
 		}
@@ -139,7 +139,7 @@ func (r *REST) siblingDeclaredQuotas(ctx context.Context, namespace, excludeName
 		ApplicationKindLabel:  r.kindName,
 		ApplicationGroupLabel: r.gvk.Group,
 	})
-	if err := r.c.List(ctx, list, &client.ListOptions{Namespace: namespace, LabelSelector: selector}); err != nil {
+	if err := r.poolReader().List(ctx, list, &client.ListOptions{Namespace: namespace, LabelSelector: selector}); err != nil {
 		return nil, err
 	}
 
@@ -244,6 +244,17 @@ func (r *REST) validateTenantResourceQuotas(ctx context.Context, app *appsv1alph
 		}
 	}
 	return allErrs
+}
+
+// poolReader is where the Tenant quota check reads the tenant tree from.
+// With the reservation gate on it runs under the pool lock and reads the
+// API server, so that a carve-out and an order into the same pool see each
+// other's committed writes; otherwise it reads the informer cache as before.
+func (r *REST) poolReader() client.Reader {
+	if r.reservation != nil {
+		return r.w
+	}
+	return r.c
 }
 
 // addQuotas adds src into dst in place, per resource key.
@@ -364,7 +375,7 @@ func (r *REST) poolUsage(ctx context.Context, parentNS, excludeNS string) (func(
 	if err != nil {
 		return nil, err
 	}
-	fig, err := r.reservedIn(ctx, members, client.ObjectKey{})
+	fig, err := r.reservedIn(ctx, members, client.ObjectKey{}, newSnapshot(r.reservation.env))
 	if err != nil {
 		return nil, err
 	}
@@ -419,7 +430,7 @@ func (r *REST) parentPoolMembers(ctx context.Context, parentNS, excludeNS string
 		ApplicationKindLabel:  r.kindName,
 		ApplicationGroupLabel: r.gvk.Group,
 	})
-	if err := r.c.List(ctx, releases, &client.ListOptions{LabelSelector: selector}); err != nil {
+	if err := r.poolReader().List(ctx, releases, &client.ListOptions{LabelSelector: selector}); err != nil {
 		return nil, err
 	}
 

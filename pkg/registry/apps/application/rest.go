@@ -282,26 +282,11 @@ func (r *REST) Create(ctx context.Context, obj runtime.Object, createValidation 
 
 	klog.V(6).Infof("Creating HelmRelease %s in namespace %s", helmRelease.Name, app.Namespace)
 
-	dryRun := options != nil && len(options.DryRun) > 0
-	adm.begin(client.ObjectKeyFromObject(helmRelease), dryRun)
-	tenantAdm.begin(client.ObjectKeyFromObject(helmRelease), dryRun)
-
 	// Create HelmRelease in Kubernetes
 	err = r.c.Create(ctx, helmRelease, registry.ClientCreateOptions(options))
 	if err != nil {
-		adm.abort()
-		tenantAdm.abort()
 		klog.Errorf("Failed to create HelmRelease %s: %v", helmRelease.Name, err)
 		return nil, registry.WrapPreservingStatus("failed to create HelmRelease", err, r.gvr.GroupResource(), app.Name)
-	}
-	// A dry run stores nothing, so there is no write for the cache to show,
-	// and waiting for one would leave it owed to the pool for good.
-	if options == nil || len(options.DryRun) == 0 {
-		if !adm.owes() && !tenantAdm.owes() {
-			r.reservation.supersede(client.ObjectKeyFromObject(helmRelease), writtenState(helmRelease))
-		}
-		adm.settle(r.c, r.w, helmRelease)
-		tenantAdm.settle(r.c, r.w, helmRelease)
 	}
 
 	// Convert the created HelmRelease back to Application
@@ -724,9 +709,6 @@ func (r *REST) Update(ctx context.Context, name string, objInfo rest.UpdatedObje
 	// carry-over exists for. Keeping the copy read before the conflict would put
 	// the stale metadata back and undo that write, so rebuild from the
 	// conversion output against the object just read.
-	dryRun := options != nil && len(options.DryRun) > 0
-	adm.begin(client.ObjectKeyFromObject(helmRelease), dryRun)
-	tenantAdm.begin(client.ObjectKeyFromObject(helmRelease), dryRun)
 	err = retry.RetryOnConflict(retry.DefaultBackoff, func() error {
 		updateErr := r.c.Update(ctx, helmRelease, registry.ClientUpdateOptions(options))
 		if apierrors.IsConflict(updateErr) {
@@ -761,10 +743,6 @@ func (r *REST) Update(ctx context.Context, name string, objInfo rest.UpdatedObje
 		}
 		return updateErr
 	})
-	if err != nil {
-		adm.abort()
-		tenantAdm.abort()
-	}
 	var final finalUpdateError
 	if errors.As(err, &final) {
 		return nil, false, final.err
@@ -772,13 +750,6 @@ func (r *REST) Update(ctx context.Context, name string, objInfo rest.UpdatedObje
 	if err != nil {
 		klog.Errorf("Failed to update HelmRelease %s: %v", helmRelease.Name, err)
 		return nil, false, registry.WrapPreservingStatus("failed to update HelmRelease", err, r.gvr.GroupResource(), name)
-	}
-	if options == nil || len(options.DryRun) == 0 {
-		if !adm.owes() && !tenantAdm.owes() {
-			r.reservation.supersede(client.ObjectKeyFromObject(helmRelease), writtenState(helmRelease))
-		}
-		adm.settle(r.c, r.w, helmRelease)
-		tenantAdm.settle(r.c, r.w, helmRelease)
 	}
 
 	// Convert the updated HelmRelease back to Application
@@ -872,9 +843,6 @@ func (r *REST) Delete(ctx context.Context, name string, deleteValidation rest.Va
 	if err != nil {
 		klog.Errorf("Failed to delete HelmRelease %s: %v", helmReleaseName, err)
 		return nil, false, registry.WrapPreservingStatus("failed to delete HelmRelease", err, r.gvr.GroupResource(), name)
-	}
-	if options == nil || len(options.DryRun) == 0 {
-		r.reservation.supersede(client.ObjectKeyFromObject(helmRelease), pendingWrite{deleted: true})
 	}
 
 	klog.V(6).Infof("Successfully deleted HelmRelease %s", helmReleaseName)

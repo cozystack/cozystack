@@ -410,65 +410,13 @@ func TestReservationKeepsTheStoredFigureOfAKindWhoseDeclarationBroke(t *testing.
 	if err := f.client.Get(context.Background(), client.ObjectKey{Namespace: "tenant-acme", Name: "vm-instance-web"}, hr); err != nil {
 		t.Fatal(err)
 	}
-	rl, stale, err := f.gate.reservedBy(hr)
+	rl, stale, err := f.gate.reservedBy(hr, f.gate.env)
 	mem := rl["memory"]
 	if err != nil || !stale || mem.Cmp(resource.MustParse("4Gi")) != 0 {
 		t.Fatalf("a kind whose declaration broke must keep charging what it was admitted with: %v stale=%v err=%v", rl, stale, err)
 	}
 	if err := f.create(t, vmApplication(t, "db", "tenant-acme", map[string]any{"instanceType": "u1.small"})); !apierrors.IsInvalid(err) {
 		t.Fatalf("a kind whose declaration broke must not be admitted, got %v", err)
-	}
-}
-
-func TestReservationSettlesOnTheFigureWrittenNotOnlyItsValues(t *testing.T) {
-	adm := &reservationAdmission{stored: &storedReservation{ValuesHash: "same", Resources: reservation.ResourceList{"memory": resource.MustParse("16Gi")}}}
-	hr := &helmv2.HelmRelease{}
-	hr.ResourceVersion = "7"
-	if err := adm.annotate(hr); err != nil {
-		t.Fatal(err)
-	}
-	written := writtenState(hr)
-	cached := &helmv2.HelmRelease{}
-	cached.ResourceVersion = "6"
-	cached.Annotations = map[string]string{ReservedAnnotation: `{"valuesHash":"same","resources":{"memory":"4Gi"}}`}
-	if written.visible(cached) {
-		t.Fatal("a cached figure with the same values but another size is not the write")
-	}
-	statusOnly := hr.DeepCopy()
-	statusOnly.ResourceVersion = "8"
-	if !written.visible(hr) || !written.visible(statusOnly) {
-		t.Fatal("the write, and a status update on top of it, show the written figure")
-	}
-}
-
-func TestReservationOwesAPoolAWriteTheCacheHasNotShown(t *testing.T) {
-	hidden := true
-	f := newGateFixtureWith(t, interceptor.Funcs{
-		Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
-			if hidden && key.Name == "vm-instance-one" {
-				return apierrors.NewNotFound(helmv2.GroupVersion.WithResource("helmreleases").GroupResource(), key.Name)
-			}
-			return c.Get(ctx, key, obj, opts...)
-		},
-	}, tenantHelmRelease(t, "acme", rootTenantNamespace, map[string]string{"memory": "8Gi"}))
-	f.gate.settleTimeout = 100 * time.Millisecond
-	// The API server has the release; only the cache does not.
-	f.vms.w = f.client
-
-	if err := f.create(t, vmApplication(t, "one", "tenant-acme", map[string]any{"instanceType": "u1.small"})); err != nil {
-		t.Fatalf("the write itself succeeds even if the cache is late: %v", err)
-	}
-	err := f.create(t, vmApplication(t, "two", "tenant-acme", map[string]any{"instanceType": "u1.small"}))
-	if !apierrors.IsTooManyRequests(err) {
-		t.Fatalf("while a write is not visible the pool admits no growth; got %v", err)
-	}
-
-	hidden = false
-	if err := f.create(t, vmApplication(t, "two", "tenant-acme", map[string]any{"instanceType": "u1.small"})); err != nil {
-		t.Fatalf("once the cache shows the write the pool admits again: %v", err)
-	}
-	if err := f.create(t, vmApplication(t, "three", "tenant-acme", map[string]any{"instanceType": "u1.small"})); !apierrors.IsInvalid(err) {
-		t.Fatalf("and counts it: the third 4Gi VM does not fit 8Gi, got %v", err)
 	}
 }
 
@@ -566,46 +514,6 @@ func TestTenantCarveOutAndAnOrderIntoTheSamePoolAreSerialised(t *testing.T) {
 	}
 }
 
-func TestReservationDryRunLeavesNothingOwedToThePool(t *testing.T) {
-	var settleReads atomic.Int32
-	f := newGateFixtureWith(t, interceptor.Funcs{
-		Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
-			if _, fromRequest := request.NamespaceFrom(ctx); !fromRequest {
-				settleReads.Add(1)
-			}
-			return c.Get(ctx, key, obj, opts...)
-		},
-	}, tenantHelmRelease(t, "acme", rootTenantNamespace, map[string]string{"memory": "20Gi"}))
-	ctx := request.WithNamespace(context.Background(), "tenant-acme")
-	dryRun := []string{metav1.DryRunAll}
-	if err := f.create(t, vmApplication(t, "web", "tenant-acme", map[string]any{"instanceType": "u1.small"})); err != nil {
-		t.Fatal(err)
-	}
-	settleReads.Store(0)
-
-	if _, err := f.vms.Create(ctx, vmApplication(t, "probe", "tenant-acme", map[string]any{"instanceType": "u1.small"}), nil, &metav1.CreateOptions{DryRun: dryRun}); err != nil {
-		t.Fatalf("a growing dry-run create that fits is admitted: %v", err)
-	}
-	if _, _, err := f.vms.Update(ctx, "web", rest.DefaultUpdatedObjectInfo(vmApplication(t, "web", "tenant-acme", map[string]any{"instanceType": "u1.large"})), nil, nil, false, &metav1.UpdateOptions{DryRun: dryRun}); err != nil {
-		t.Fatalf("a growing dry-run update that fits is admitted: %v", err)
-	}
-	if _, _, err := f.vms.Update(ctx, "web", rest.DefaultUpdatedObjectInfo(vmApplication(t, "web", "tenant-acme", map[string]any{"instanceType": "u1.large", "external": false})), nil, nil, false, &metav1.UpdateOptions{DryRun: dryRun}); err != nil {
-		t.Fatal(err)
-	}
-	if n := settleReads.Load(); n != 0 {
-		t.Fatalf("dry runs store nothing, yet the gate read the cache %d times waiting for them", n)
-	}
-	f.gate.mu.Lock()
-	owed := len(f.gate.pending)
-	f.gate.mu.Unlock()
-	if owed != 0 {
-		t.Fatalf("dry runs left %d pools owed a write", owed)
-	}
-	if err := f.create(t, vmApplication(t, "db", "tenant-acme", map[string]any{"instanceType": "u1.large"})); err != nil {
-		t.Fatalf("after dry runs the pool admits as before: %v", err)
-	}
-}
-
 // The delta of an update is computed from the release as the cache served
 // it, before the pool lock. If that copy is stale, the write carries its
 // stale resourceVersion and conflicts, and the retry finds the values moved.
@@ -645,99 +553,6 @@ func TestReservationAStaleBaselineCannotPassAGrowthAsAShrink(t *testing.T) {
 	}
 	if err := f.update(t, vmApplication(t, "web", "tenant-acme", map[string]any{"instanceType": "u1.medium"})); !apierrors.IsInvalid(err) {
 		t.Fatalf("sent again against the live release, 4Gi to 8Gi does not fit a full pool; got %v", err)
-	}
-}
-
-// hideable serves VMInstance through a client that reports the named
-// release missing while hidden is set, as a cache that has not seen it yet.
-func hideable(t *testing.T, name string, hidden *bool, objects ...client.Object) gateFixture {
-	t.Helper()
-	f := newGateFixtureWith(t, interceptor.Funcs{
-		Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
-			if *hidden && key.Name == name {
-				return apierrors.NewNotFound(helmv2.GroupVersion.WithResource("helmreleases").GroupResource(), key.Name)
-			}
-			return c.Get(ctx, key, obj, opts...)
-		},
-	}, objects...)
-	f.gate.settleTimeout = 100 * time.Millisecond
-	return f
-}
-
-func TestReservationDebtClearsOnAShrinkTheCacheShows(t *testing.T) {
-	var blind atomic.Bool
-	blind.Store(true)
-	f := cacheBlind(t, "vm-instance-one", &blind, tenantHelmRelease(t, "acme", rootTenantNamespace, map[string]string{"memory": "20Gi"}))
-	f.gate.settleTimeout = 100 * time.Millisecond
-	if err := f.create(t, vmApplication(t, "one", "tenant-acme", map[string]any{"instanceType": "u1.large"})); err != nil {
-		t.Fatal(err)
-	}
-	if err := f.create(t, vmApplication(t, "probe", "tenant-acme", map[string]any{"instanceType": "u1.small"})); !apierrors.IsTooManyRequests(err) {
-		t.Fatalf("while the cache has not shown the 16Gi write the pool owes it; want 429, got %v", err)
-	}
-	// The release is shrunk before the cache ever showed the 16Gi write;
-	// the cache then shows only the 4Gi one.
-	if err := f.update(t, vmApplication(t, "one", "tenant-acme", map[string]any{"instanceType": "u1.small"})); err != nil {
-		t.Fatal(err)
-	}
-	blind.Store(false)
-	if err := f.create(t, vmApplication(t, "two", "tenant-acme", map[string]any{"instanceType": "u1.large"})); err != nil {
-		t.Fatalf("the cache shows a later state of the owed release, so the pool admits again: %v", err)
-	}
-}
-
-func TestReservationDebtClearsOnADeleteTheCacheShows(t *testing.T) {
-	var blind atomic.Bool
-	blind.Store(true)
-	f := cacheBlind(t, "vm-instance-one", &blind, tenantHelmRelease(t, "acme", rootTenantNamespace, map[string]string{"memory": "8Gi"}))
-	f.gate.settleTimeout = 100 * time.Millisecond
-	if err := f.create(t, vmApplication(t, "one", "tenant-acme", map[string]any{"instanceType": "u1.small"})); err != nil {
-		t.Fatal(err)
-	}
-	if err := f.create(t, vmApplication(t, "probe", "tenant-acme", map[string]any{"instanceType": "u1.small"})); !apierrors.IsTooManyRequests(err) {
-		t.Fatalf("while the cache has not shown the write the pool owes it; want 429, got %v", err)
-	}
-	ctx := request.WithNamespace(context.Background(), "tenant-acme")
-	if _, _, err := f.vms.Delete(ctx, "one", nil, &metav1.DeleteOptions{}); err != nil {
-		t.Fatal(err)
-	}
-	if err := f.create(t, vmApplication(t, "two", "tenant-acme", map[string]any{"instanceType": "u1.small"})); err != nil {
-		t.Fatalf("the release this server deleted is gone from the API server, so the pool admits again: %v", err)
-	}
-}
-
-func TestReservationDebtStillRefusesWhileTheWriteIsHidden(t *testing.T) {
-	hidden := true
-	f := hideable(t, "vm-instance-one", &hidden, tenantHelmRelease(t, "acme", rootTenantNamespace, map[string]string{"memory": "20Gi"}))
-	// The API server has the release; only the cache does not.
-	f.vms.w = f.client
-	if err := f.create(t, vmApplication(t, "one", "tenant-acme", map[string]any{"instanceType": "u1.small"})); err != nil {
-		t.Fatal(err)
-	}
-	for i := 0; i < 2; i++ {
-		if err := f.create(t, vmApplication(t, "two", "tenant-acme", map[string]any{"instanceType": "u1.small"})); !apierrors.IsTooManyRequests(err) {
-			t.Fatalf("a release the API server has and the cache does not is still owed; want 429, got %v", err)
-		}
-	}
-}
-
-func TestReservationDebtClearsWhenAnotherClientDeletedTheRelease(t *testing.T) {
-	hidden := true
-	f := hideable(t, "vm-instance-one", &hidden, tenantHelmRelease(t, "acme", rootTenantNamespace, map[string]string{"memory": "8Gi"}))
-	f.vms.w = f.client
-	if err := f.create(t, vmApplication(t, "one", "tenant-acme", map[string]any{"instanceType": "u1.small"})); err != nil {
-		t.Fatal(err)
-	}
-	// Deleted behind this server's back, before the cache ever showed it.
-	hr := &helmv2.HelmRelease{}
-	if err := f.client.Get(context.Background(), client.ObjectKey{Namespace: "tenant-acme", Name: "vm-instance-one"}, hr); err != nil {
-		t.Fatal(err)
-	}
-	if err := f.client.Delete(context.Background(), hr); err != nil {
-		t.Fatal(err)
-	}
-	if err := f.create(t, vmApplication(t, "two", "tenant-acme", map[string]any{"instanceType": "u1.small"})); err != nil {
-		t.Fatalf("the API server and the cache agree the release is gone, so the pool admits again: %v", err)
 	}
 }
 
@@ -860,144 +675,6 @@ func TestValuesHashKeepsLargeIntegersApart(t *testing.T) {
 	}
 }
 
-// cacheBlind serves VMInstance through a client whose informer-side reads
-// (the gate's waits, which carry no request namespace, and pool listings)
-// do not see the named release while blind is set. Request reads still do,
-// and the live client is the store itself.
-func cacheBlind(t *testing.T, name string, blind *atomic.Bool, objects ...client.Object) gateFixture {
-	t.Helper()
-	f := newGateFixtureWith(t, interceptor.Funcs{
-		Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
-			if _, fromRequest := request.NamespaceFrom(ctx); blind.Load() && !fromRequest && key.Name == name {
-				return apierrors.NewNotFound(helmv2.GroupVersion.WithResource("helmreleases").GroupResource(), key.Name)
-			}
-			return c.Get(ctx, key, obj, opts...)
-		},
-		List: func(ctx context.Context, c client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
-			if err := c.List(ctx, list, opts...); err != nil {
-				return err
-			}
-			if hrs, ok := list.(*helmv2.HelmReleaseList); ok && blind.Load() {
-				kept := hrs.Items[:0]
-				for _, hr := range hrs.Items {
-					if hr.Name != name {
-						kept = append(kept, hr)
-					}
-				}
-				hrs.Items = kept
-			}
-			return nil
-		},
-	}, objects...)
-	f.vms.w = f.client
-	return f
-}
-
-func TestReservationDeleteDebtWaitsForTheAPIServerToDropTheRelease(t *testing.T) {
-	var blind atomic.Bool
-	blind.Store(true)
-	f := cacheBlind(t, "vm-instance-one", &blind, tenantHelmRelease(t, "acme", rootTenantNamespace, map[string]string{"memory": "4Gi"}))
-	f.gate.settleTimeout = 100 * time.Millisecond
-	if err := f.create(t, vmApplication(t, "one", "tenant-acme", map[string]any{"instanceType": "u1.small"})); err != nil {
-		t.Fatal(err)
-	}
-	hr := &helmv2.HelmRelease{}
-	key := client.ObjectKey{Namespace: "tenant-acme", Name: "vm-instance-one"}
-	if err := f.client.Get(context.Background(), key, hr); err != nil {
-		t.Fatal(err)
-	}
-	hr.Finalizers = append(hr.Finalizers, "example.com/hold")
-	if err := f.client.Update(context.Background(), hr); err != nil {
-		t.Fatal(err)
-	}
-	ctx := request.WithNamespace(context.Background(), "tenant-acme")
-	if _, _, err := f.vms.Delete(ctx, "one", nil, &metav1.DeleteOptions{}); err != nil {
-		t.Fatal(err)
-	}
-
-	err := f.create(t, vmApplication(t, "two", "tenant-acme", map[string]any{"instanceType": "u1.small"}))
-	if !apierrors.IsTooManyRequests(err) {
-		t.Fatalf("a release terminating behind its finalizers is still stored and still owed; want 429, got %v", err)
-	}
-}
-
-func TestReservationShrinkDuringTheWaitReplacesWhatIsWaitedFor(t *testing.T) {
-	var blind atomic.Bool
-	blind.Store(true)
-	waiting := make(chan struct{})
-	var once sync.Once
-	f := newGateFixtureWith(t, interceptor.Funcs{
-		Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
-			if _, fromRequest := request.NamespaceFrom(ctx); !fromRequest && key.Name == "vm-instance-one" {
-				// The gate's own wait: the debt is recorded by now.
-				once.Do(func() { close(waiting) })
-				if blind.Load() {
-					return apierrors.NewNotFound(helmv2.GroupVersion.WithResource("helmreleases").GroupResource(), key.Name)
-				}
-			}
-			return c.Get(ctx, key, obj, opts...)
-		},
-	}, tenantHelmRelease(t, "acme", rootTenantNamespace, map[string]string{"memory": "20Gi"}))
-	f.vms.w = f.client
-	f.gate.settleTimeout = 400 * time.Millisecond
-
-	created := make(chan error, 1)
-	go func() {
-		created <- f.create(t, vmApplication(t, "one", "tenant-acme", map[string]any{"instanceType": "u1.large"}))
-	}()
-	select {
-	case <-waiting:
-	case err := <-created:
-		t.Fatalf("the growing write never waited for the cache: %v", err)
-	}
-	// The shrink lands while the growing write still waits for the cache,
-	// and the cache then shows the shrink, never the 16Gi write.
-	if err := f.update(t, vmApplication(t, "one", "tenant-acme", map[string]any{"instanceType": "u1.small"})); err != nil {
-		t.Fatal(err)
-	}
-	blind.Store(false)
-	shown := time.Now()
-	if err := <-created; err != nil {
-		t.Fatal(err)
-	}
-	// The pool lock is held until the wait ends: it has to end when the
-	// cache shows the shrink, not run out its timeout on the 16Gi write.
-	if held := time.Since(shown); held >= f.gate.settleTimeout/2 {
-		t.Fatalf("the growing write held the pool %s after the cache showed the shrink", held)
-	}
-	if err := f.create(t, vmApplication(t, "two", "tenant-acme", map[string]any{"instanceType": "u1.large"})); err != nil {
-		t.Fatalf("4Gi + 16Gi fits 20Gi once the cache shows the shrink: %v", err)
-	}
-}
-
-func TestReservationShrinkCommittedBeforeTheSettleIsWhatItWaitsFor(t *testing.T) {
-	var f gateFixture
-	shrunk := false
-	f = newGateFixtureWith(t, interceptor.Funcs{
-		Create: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
-			if err := c.Create(ctx, obj, opts...); err != nil {
-				return err
-			}
-			if obj.GetName() == "vm-instance-one" && !shrunk {
-				shrunk = true
-				// A shrink commits between the growing write and its settle.
-				return f.update(t, vmApplication(t, "one", "tenant-acme", map[string]any{"instanceType": "u1.small"}))
-			}
-			return nil
-		},
-	}, tenantHelmRelease(t, "acme", rootTenantNamespace, map[string]string{"memory": "20Gi"}))
-	f.vms.w = f.client
-	f.gate.settleTimeout = 400 * time.Millisecond
-
-	start := time.Now()
-	if err := f.create(t, vmApplication(t, "one", "tenant-acme", map[string]any{"instanceType": "u1.large"})); err != nil {
-		t.Fatal(err)
-	}
-	if held := time.Since(start); held >= f.gate.settleTimeout/2 {
-		t.Fatalf("the growing write waited %s for a state the shrink had already replaced", held)
-	}
-}
-
 func TestTenantPoolRootIsCheckedAgainUnderTheLock(t *testing.T) {
 	f := newGateFixture(t,
 		tenantHelmRelease(t, "acme", rootTenantNamespace, map[string]string{"memory": "20Gi"}),
@@ -1009,10 +686,7 @@ func TestTenantPoolRootIsCheckedAgainUnderTheLock(t *testing.T) {
 
 	// Hold tenant-acme's lock while tenant-acme-dev becomes bounded: a child
 	// of dev chose tenant-acme as its root, which is no longer its pool.
-	unlock, err := f.gate.acquire(context.Background(), f.client, f.client, "tenant-acme")
-	if err != nil {
-		t.Fatal(err)
-	}
+	unlock := f.gate.acquire(context.Background(), "tenant-acme")
 	done := make(chan error, 1)
 	go func() {
 		ctx := request.WithNamespace(context.Background(), "tenant-acme-dev")
@@ -1094,5 +768,141 @@ func TestReservationRefusesToSumAPoolItCannotEvaluate(t *testing.T) {
 	err := f.create(t, vmApplication(t, "web", "tenant-acme", map[string]any{"resources": map[string]any{"cpu": 1, "sockets": 1, "memory": "4Gi"}}))
 	if !apierrors.IsServiceUnavailable(err) {
 		t.Fatalf("a pool whose members cannot be evaluated right now is not summed short; want 503, got %v", err)
+	}
+}
+
+func TestReservationDryRunIsAdmittedAndStoresNothing(t *testing.T) {
+	f := newGateFixture(t, tenantHelmRelease(t, "acme", rootTenantNamespace, map[string]string{"memory": "8Gi"}))
+	ctx := request.WithNamespace(context.Background(), "tenant-acme")
+	dryRun := &metav1.CreateOptions{DryRun: []string{metav1.DryRunAll}}
+	if _, err := f.vms.Create(ctx, vmApplication(t, "probe", "tenant-acme", map[string]any{"instanceType": "u1.small"}), nil, dryRun); err != nil {
+		t.Fatalf("a dry run that fits is admitted: %v", err)
+	}
+	if _, err := f.vms.Create(ctx, vmApplication(t, "big", "tenant-acme", map[string]any{"instanceType": "u1.large"}), nil, dryRun); !apierrors.IsInvalid(err) {
+		t.Fatalf("a dry run that does not fit is refused like the write, got %v", err)
+	}
+	for _, name := range []string{"one", "two"} {
+		if err := f.create(t, vmApplication(t, name, "tenant-acme", map[string]any{"instanceType": "u1.small"})); err != nil {
+			t.Fatalf("a dry run reserves nothing, so the pool still holds two 4Gi VMs: %v", err)
+		}
+	}
+}
+
+// The gate reads the pool from the API server once it holds the lock, so a
+// write the informer cache has not shown yet is counted all the same.
+func TestReservationCountsWritesTheCacheHasNotShown(t *testing.T) {
+	f := newGateFixture(t, tenantHelmRelease(t, "acme", rootTenantNamespace, map[string]string{"memory": "8Gi"}))
+	var hidden atomic.Bool
+	f.vms.c = interceptor.NewClient(f.client, interceptor.Funcs{
+		Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+			if hidden.Load() && key.Name == "vm-instance-one" {
+				return apierrors.NewNotFound(helmv2.GroupVersion.WithResource("helmreleases").GroupResource(), key.Name)
+			}
+			return c.Get(ctx, key, obj, opts...)
+		},
+		List: func(ctx context.Context, c client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
+			if err := c.List(ctx, list, opts...); err != nil {
+				return err
+			}
+			if hrs, ok := list.(*helmv2.HelmReleaseList); ok && hidden.Load() {
+				kept := hrs.Items[:0]
+				for _, hr := range hrs.Items {
+					if hr.Name != "vm-instance-one" {
+						kept = append(kept, hr)
+					}
+				}
+				hrs.Items = kept
+			}
+			return nil
+		},
+	})
+	f.vms.w = f.client
+	hidden.Store(true)
+
+	if err := f.create(t, vmApplication(t, "one", "tenant-acme", map[string]any{"instanceType": "u1.large"})); !apierrors.IsInvalid(err) {
+		t.Fatalf("16Gi does not fit 8Gi, got %v", err)
+	}
+	if err := f.create(t, vmApplication(t, "one", "tenant-acme", map[string]any{"instanceType": "u1.small"})); err != nil {
+		t.Fatal(err)
+	}
+	// The cache still does not have "one".
+	if err := f.create(t, vmApplication(t, "two", "tenant-acme", map[string]any{"instanceType": "u1.small"})); err != nil {
+		t.Fatalf("4Gi + 4Gi fits 8Gi: %v", err)
+	}
+	err := f.create(t, vmApplication(t, "three", "tenant-acme", map[string]any{"instanceType": "u1.small"}))
+	if !apierrors.IsInvalid(err) || !strings.Contains(err.Error(), "8Gi already reserved by 2 applications") {
+		t.Fatalf("the pool counts the write the cache has not shown; want the third VM refused, got %v", err)
+	}
+}
+
+// A carve-out the cache has not shown yet is counted by an order into the
+// same pool, since the tenant tree is read from the API server too.
+func TestReservationCountsACarveOutTheCacheHasNotShown(t *testing.T) {
+	f := newGateFixture(t, tenantHelmRelease(t, "acme", rootTenantNamespace, map[string]string{"memory": "8Gi"}))
+	f.vms.c = interceptor.NewClient(f.client, interceptor.Funcs{
+		List: func(ctx context.Context, c client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
+			if err := c.List(ctx, list, opts...); err != nil {
+				return err
+			}
+			if hrs, ok := list.(*helmv2.HelmReleaseList); ok {
+				kept := hrs.Items[:0]
+				for _, hr := range hrs.Items {
+					if hr.Name != "tenant-dev" {
+						kept = append(kept, hr)
+					}
+				}
+				hrs.Items = kept
+			}
+			return nil
+		},
+	})
+	f.vms.w = f.client
+	if err := f.client.Create(context.Background(), tenantHelmRelease(t, "dev", "tenant-acme", map[string]string{"memory": "6Gi"})); err != nil {
+		t.Fatal(err)
+	}
+	err := f.create(t, vmApplication(t, "web", "tenant-acme", map[string]any{"instanceType": "u1.small"}))
+	if !apierrors.IsInvalid(err) || !strings.Contains(err.Error(), "6Gi carved out by sub-tenants") {
+		t.Fatalf("8Gi - 6Gi carved out leaves no room for 4Gi; got %v", err)
+	}
+}
+
+type countingEnvironment struct {
+	reservation.Environment
+	calls map[string]int
+}
+
+func (e *countingEnvironment) Instancetype(name string) (reservation.ResourceList, error) {
+	e.calls[name]++
+	if e.calls[name] > 1 {
+		// Redefined between two lookups of the same admission.
+		return reservation.ResourceList{"cpu": resource.MustParse("1"), "memory": resource.MustParse("2Gi")}, nil
+	}
+	return e.Environment.Instancetype(name)
+}
+
+func TestReservationResolvesEachInstancetypeOncePerAdmission(t *testing.T) {
+	f := newGateFixture(t, tenantHelmRelease(t, "acme", rootTenantNamespace, map[string]string{"memory": "8Gi"}))
+	if err := f.create(t, vmApplication(t, "web", "tenant-acme", map[string]any{"instanceType": "u1.small", "external": true})); err != nil {
+		t.Fatal(err)
+	}
+	// web's stored figure no longer matches its values, so the pool has to
+	// evaluate it, in the same admission that evaluates db.
+	hr := &helmv2.HelmRelease{}
+	if err := f.client.Get(context.Background(), client.ObjectKey{Namespace: "tenant-acme", Name: "vm-instance-web"}, hr); err != nil {
+		t.Fatal(err)
+	}
+	hr.Spec.Values = &apiextv1.JSON{Raw: []byte(`{"instanceType":"u1.small"}`)}
+	if err := f.client.Update(context.Background(), hr); err != nil {
+		t.Fatal(err)
+	}
+	env := &countingEnvironment{Environment: testEnvironment(), calls: map[string]int{}}
+	f.gate.env = env
+
+	err := f.create(t, vmApplication(t, "db", "tenant-acme", map[string]any{"instanceType": "u1.small"}))
+	if err != nil {
+		t.Fatalf("4Gi + 4Gi fits 8Gi when both are read from one definition of u1.small: %v", err)
+	}
+	if env.calls["u1.small"] != 1 {
+		t.Fatalf("u1.small was resolved %d times in one admission", env.calls["u1.small"])
 	}
 }
