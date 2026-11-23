@@ -202,6 +202,27 @@ func shippedPresets(t *testing.T) map[string]ResourceList {
 	return out
 }
 
+func TestShippedPresetsMatchTheChartTable(t *testing.T) {
+	want := shippedPresets(t)
+	got := ShippedPresets()
+	if len(got) != len(want) {
+		t.Fatalf("ShippedPresets has %d presets, the chart table %d", len(got), len(want))
+	}
+	for name, w := range want {
+		g, ok := got[name]
+		if !ok {
+			t.Errorf("preset %q is in the chart table but not in ShippedPresets", name)
+			continue
+		}
+		for _, key := range []string{KeyCPU, KeyMemory} {
+			gq, wq := g[key], w[key]
+			if gq.Cmp(wq) != 0 {
+				t.Errorf("preset %q %s: ShippedPresets has %s, the chart table %s", name, key, gq.String(), wq.String())
+			}
+		}
+	}
+}
+
 func shippedEnvironment(t *testing.T) Environment {
 	t.Helper()
 	env, err := NewStaticEnvironment(shippedInstancetypes(t), shippedPresets(t))
