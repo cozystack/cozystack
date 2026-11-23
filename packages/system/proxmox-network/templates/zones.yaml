@@ -1,0 +1,95 @@
+{{- /* The zone table is checked here, before any object renders, so a wrong
+      value fails the release with a message instead of rendering a policy
+      that refuses every machine:
+      - two zones on one bridge would give one NIC two sets of rules;
+      - a (namespace, name) pair in two zones would give one pool two specs;
+      - every per-network field the CRD requires is required here too, so
+        the pool and the zone object are rendered from the same checked
+        table. */}}
+{{- $bridges := dict }}
+{{- $networks := dict }}
+{{- range .Values.zones }}
+{{- $zone := . }}
+{{- $name := required "zones[].name is required" .name }}
+{{- $bridge := required (printf "zones[%s].bridge is required" $name) .bridge }}
+{{- if hasKey $bridges $bridge }}
+{{- fail (printf "zones[%s] and zones[%s] share bridge %s; one zone per bridge" (get $bridges $bridge) $name $bridge) }}
+{{- end }}
+{{- $_ := set $bridges $bridge $name }}
+{{- with .uplinkBridges }}
+{{- if not (kindIs "slice" .) }}
+{{- fail (printf "zones[%s].uplinkBridges must be a list of bridge names" $name) }}
+{{- end }}
+{{- if has $bridge . }}
+{{- fail (printf "zones[%s].uplinkBridges lists %s, which is the zone's own bridge" $name $bridge) }}
+{{- end }}
+{{- end }}
+{{- if hasKey . "uplinkVLAN" }}
+{{- $vlan := int .uplinkVLAN }}
+{{- if or (lt $vlan 1) (gt $vlan 4094) }}
+{{- fail (printf "zones[%s].uplinkVLAN must be a VLAN ID (1-4094), got %v" $name .uplinkVLAN) }}
+{{- end }}
+{{- end }}
+{{- range .networks }}
+{{- $net := . }}
+{{- $ns := required (printf "zones[%s].networks[].namespace is required" $name) .namespace }}
+{{- $n := required (printf "zones[%s].networks[].name is required" $name) .name }}
+{{- $key := printf "%s/%s" $ns $n }}
+{{- if hasKey $networks $key }}
+{{- fail (printf "network %s is listed twice (zones %s and %s)" $key (get $networks $key) $name) }}
+{{- end }}
+{{- $_ := set $networks $key $name }}
+{{- range $f := list "vlan" "addresses" "gateway" "prefix" }}
+{{- if not (hasKey $net $f) }}
+{{- fail (printf "zones[%s].networks[%s].%s is required" $name $key $f) }}
+{{- end }}
+{{- end }}
+{{- if hasKey $zone "uplinkVLAN" }}
+{{- if eq (int $net.vlan) (int $zone.uplinkVLAN) }}
+{{- fail (printf "zones[%s].networks[%s].vlan %v is the zone's uplink VLAN" $name $key $net.vlan) }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- /* Zones are instances of a CRD the proxmox-network-crds component installs
+      first. The gate only matters when this chart is installed on its own
+      before the CRDs exist: Helm resolves every kind before it applies
+      anything, so an unknown kind would fail the whole release. The zone
+      bindings in admission.yaml are gated the same way: a binding whose
+      parameter does not exist denies every machine. */}}
+{{- if .Capabilities.APIVersions.Has "proxmox.cozystack.io/v1alpha1/ProxmoxNetworkZone" }}
+{{- range .Values.zones }}
+---
+apiVersion: proxmox.cozystack.io/v1alpha1
+kind: ProxmoxNetworkZone
+metadata:
+  name: {{ .name }}
+spec:
+  bridge: {{ .bridge | quote }}
+  {{- with .mtu }}
+  mtu: {{ . }}
+  {{- end }}
+  {{- if hasKey . "uplinkVLAN" }}
+  uplinkVLAN: {{ .uplinkVLAN }}
+  {{- end }}
+  {{- with .uplinkBridges }}
+  uplinkBridges:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  {{- with .networks }}
+  networks:
+    {{- range . }}
+    - namespace: {{ .namespace | quote }}
+      name: {{ .name | quote }}
+      vlan: {{ .vlan }}
+      addresses:
+        {{- toYaml .addresses | nindent 8 }}
+      gateway: {{ .gateway | quote }}
+      prefix: {{ .prefix }}
+      {{- with .mtu }}
+      mtu: {{ . }}
+      {{- end }}
+    {{- end }}
+  {{- end }}
+{{- end }}
+{{- end }}
