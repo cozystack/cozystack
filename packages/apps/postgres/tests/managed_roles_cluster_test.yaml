@@ -1,0 +1,241 @@
+suite: the Cluster declares every role as CloudNativePG managed roles
+
+# Pins the managed roles render (see the comment in db.yaml for why each role
+# is rendered as the init-script created it) and the account Secret naming the
+# API shares.
+
+templates:
+  - templates/db.yaml
+
+release:
+  name: pg-test
+  namespace: tenant-test
+
+set:
+  _cluster:
+    scheduling: {}
+
+tests:
+  - it: declares the marker with no login and no comment
+    set:
+      users:
+        app: {}
+    documentSelector:
+      path: kind
+      value: Cluster
+    asserts:
+      - contains:
+          path: spec.managed.roles
+          content:
+            name: "cozystack:managed"
+            login: false
+
+  - it: declares the database roles with no login, no inherit, the comment and the marker
+    set:
+      databases:
+        shop: {}
+    documentSelector:
+      path: kind
+      value: Cluster
+    asserts:
+      - contains:
+          path: spec.managed.roles
+          content:
+            name: shop_admin
+            login: false
+            inherit: false
+            comment: role managed by helm
+            inRoles:
+              - "cozystack:managed"
+      - contains:
+          path: spec.managed.roles
+          content:
+            name: shop_readonly
+            login: false
+            inherit: false
+            comment: role managed by helm
+            inRoles:
+              - "cozystack:managed"
+
+  - it: gives an account its database roles through inRoles and its Secret by the account name
+    set:
+      users:
+        Web.App: {}
+        reporter: {}
+      databases:
+        shop:
+          roles:
+            admin: [Web.App]
+            readonly: [reporter]
+        logs:
+          roles:
+            readonly: [Web.App, reporter]
+    documentSelector:
+      path: kind
+      value: Cluster
+    asserts:
+      - contains:
+          path: spec.managed.roles
+          content:
+            name: Web.App
+            login: true
+            inherit: true
+            replication: false
+            createrole: false
+            bypassrls: false
+            comment: user managed by helm
+            inRoles:
+              - "cozystack:managed"
+              - logs_readonly
+              - shop_admin
+            passwordSecret:
+              name: pg-test.web-app.account
+      - contains:
+          path: spec.managed.roles
+          content:
+            name: reporter
+            inRoles:
+              - "cozystack:managed"
+              - logs_readonly
+              - shop_readonly
+            passwordSecret:
+              name: pg-test.reporter.account
+          any: true
+
+  # The same refusal the API makes, for a HelmRelease written around it.
+  - it: refuses two users that map to one account name
+    set:
+      users:
+        web_app: {}
+        web-app: {}
+    asserts:
+      - failedTemplate:
+          errorMessage: 'users "web-app" and "web_app" both map to the account name "web-app"; rename one of them'
+
+  - it: renders no managed roles beyond the marker for a release without users or databases
+    documentSelector:
+      path: kind
+      value: Cluster
+    asserts:
+      - lengthEqual:
+          path: spec.managed.roles
+          count: 1
+
+  # The account Secret name must be the one the API derives; the same rows are
+  # pinned for account.MapName in pkg/credentials/account/account_test.go.
+  - it: names each account Secret as the API does
+    set:
+      users:
+        web: {}
+        Bob.Smith: {}
+        app_user: {}
+        UPPER: {}
+        x-1: {}
+        db.user_2: {}
+    documentSelector:
+      path: kind
+      value: Cluster
+    asserts:
+      - contains: {path: spec.managed.roles, content: {name: web, passwordSecret: {name: pg-test.web.account}}, any: true}
+      - contains: {path: spec.managed.roles, content: {name: Bob.Smith, passwordSecret: {name: pg-test.bob-smith.account}}, any: true}
+      - contains: {path: spec.managed.roles, content: {name: app_user, passwordSecret: {name: pg-test.app-user.account}}, any: true}
+      - contains: {path: spec.managed.roles, content: {name: UPPER, passwordSecret: {name: pg-test.upper.account}}, any: true}
+      - contains: {path: spec.managed.roles, content: {name: x-1, passwordSecret: {name: pg-test.x-1.account}}, any: true}
+      - contains: {path: spec.managed.roles, content: {name: db.user_2, passwordSecret: {name: pg-test.db-user-2.account}}, any: true}
+
+  - it: refuses a user whose account name does not start and end with a letter or digit
+    set:
+      users:
+        app_: {}
+    asserts:
+      - failedTemplate:
+          errorMessage: 'user "app_" maps to the account name "app-", which must start and end with a letter or a digit; rename the user'
+
+  - it: refuses a user whose account name starts with a dash
+    set:
+      users:
+        _svc: {}
+    asserts:
+      - failedTemplate:
+          errorMessage: 'user "_svc" maps to the account name "-svc", which must start and end with a letter or a digit; rename the user'
+
+  - it: refuses a user whose account name ends with a dash
+    set:
+      users:
+        x.: {}
+    asserts:
+      - failedTemplate:
+          errorMessage: 'user "x." maps to the account name "x-", which must start and end with a letter or a digit; rename the user'
+
+  - it: refuses the CloudNativePG replication user
+    set:
+      users:
+        streaming_replica: {}
+    asserts:
+      - failedTemplate:
+          errorMessage: 'user "streaming_replica" is reserved: streaming_replica and names starting with pg_ or cnpg_ belong to PostgreSQL and CloudNativePG; rename the user'
+
+  - it: refuses names PostgreSQL reserves
+    set:
+      users:
+        pg_owner: {}
+    asserts:
+      - failedTemplate:
+          errorMessage: 'user "pg_owner" is reserved: streaming_replica and names starting with pg_ or cnpg_ belong to PostgreSQL and CloudNativePG; rename the user'
+
+  - it: refuses names CloudNativePG reserves
+    set:
+      users:
+        cnpg_pooler: {}
+    asserts:
+      - failedTemplate:
+          errorMessage: 'user "cnpg_pooler" is reserved: streaming_replica and names starting with pg_ or cnpg_ belong to PostgreSQL and CloudNativePG; rename the user'
+
+  - it: refuses a user named as a role of a declared database
+    set:
+      users:
+        shop_admin: {}
+      databases:
+        shop: {}
+    asserts:
+      - failedTemplate:
+          errorMessage: 'user "shop_admin" is the name of a role of database "shop"; rename the user'
+
+  - it: refuses a database whose derived roles PostgreSQL reserves
+    set:
+      databases:
+        pg_stat: {}
+    asserts:
+      - failedTemplate:
+          errorMessage: 'database "pg_stat" is reserved: its roles pg_stat_admin and pg_stat_readonly would start with pg_ or cnpg_, which PostgreSQL and CloudNativePG reserve and the CloudNativePG webhook rejects; rename the database'
+
+  - it: refuses a database whose derived roles CloudNativePG reserves
+    set:
+      databases:
+        cnpg_x: {}
+    asserts:
+      - failedTemplate:
+          errorMessage: 'database "cnpg_x" is reserved: its roles cnpg_x_admin and cnpg_x_readonly would start with pg_ or cnpg_, which PostgreSQL and CloudNativePG reserve and the CloudNativePG webhook rejects; rename the database'
+
+  - it: refuses a database named pg because pg_admin is reserved
+    set:
+      databases:
+        pg: {}
+    asserts:
+      - failedTemplate:
+          errorMessage: 'database "pg" is reserved: its roles pg_admin and pg_readonly would start with pg_ or cnpg_, which PostgreSQL and CloudNativePG reserve and the CloudNativePG webhook rejects; rename the database'
+
+  - it: refuses a database named cnpg because cnpg_admin is reserved
+    set:
+      databases:
+        cnpg: {}
+    asserts:
+      - failedTemplate:
+          errorMessage: 'database "cnpg" is reserved: its roles cnpg_admin and cnpg_readonly would start with pg_ or cnpg_, which PostgreSQL and CloudNativePG reserve and the CloudNativePG webhook rejects; rename the database'
+
+  - it: allows a database whose name merely begins with pg
+    set:
+      databases:
+        pgdata: {}
+    asserts:
+      - notFailedTemplate: {}

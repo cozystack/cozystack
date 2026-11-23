@@ -62,7 +62,7 @@ type ConfigSpec struct {
 	// Read-replica autoscaling configuration.
 	// +kubebuilder:default:={}
 	Autoscaling Autoscaling `json:"autoscaling"`
-	// Users configuration map. Passwords are always auto-generated and stored in the `<release>-credentials` Secret; they cannot be set from values — read a user's password from that Secret. A `password` left over in values from before the field was removed is ignored by the render and draws an admission warning, but it is not inert on an upgraded release: the chart preserves whatever password is already in the Secret, which on the first upgrade is the value that was set before removal, so that value stays the live credential until it is rotated (dedicated rotation is tracked in cozystack/community#72). The live password lives only in the Secret.
+	// Users configuration map. Each user is a PostgreSQL role the operator manages from an account Secret the platform keeps. Passwords are issued through the Cozystack credentials API: a mint on the account's `Credential` (`core.cozystack.io`) returns a new password once and stores only its SCRAM verifier, and a revoke retires the password without issuing one. A `password` key here is ignored and draws an admission warning. A password set inside PostgreSQL is reverted by the operator.
 	// +kubebuilder:default:={}
 	Users map[string]User `json:"users,omitempty"`
 	// Databases configuration map. The PostgreSQL system databases `postgres`, `template0` and `template1` are refused.
@@ -237,9 +237,9 @@ type TLS struct {
 }
 
 type User struct {
-	// Whether the user can bypass row-level security policies (BYPASSRLS). A role can only create other roles carrying BYPASSRLS if it holds the attribute itself, so this is required alongside `createRole` to provision a privileged service role.
+	// Whether the user can bypass row-level security policies (BYPASSRLS). A role can only create other roles carrying BYPASSRLS if it holds the attribute itself.
 	BypassRls bool `json:"bypassRls,omitempty"`
-	// Whether the user can create and manage roles (CREATEROLE). Requires PostgreSQL 16 or newer. Setting it back to `false` withdraws the attribute only: the roles the user created, and its ADMIN and SET memberships in them, stay. Once any user has held it, the chart no longer adopts an existing role it did not create, so a user or database declared later under the name of such a role fails the init job until a platform administrator drops that role.
+	// Not supported while users are CloudNativePG managed roles: the chart refuses to render when it is true, and a release that sets it keeps its previous chart version until it is false. CloudNativePG revokes every membership a managed role is not declared to hold, including the one PostgreSQL gives a CREATEROLE user in each role it creates. Setting it to false withdraws CREATEROLE from a role that held it.
 	CreateRole bool `json:"createRole,omitempty"`
 	// Whether the user has replication privileges.
 	Replication bool `json:"replication,omitempty"`
