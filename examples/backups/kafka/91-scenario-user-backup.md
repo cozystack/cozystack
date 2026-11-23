@@ -39,7 +39,7 @@ The user's own action here, at the tenant admin level, is the `BackupJob` in ste
    - writes a manifest (`topic partition begin end replicationFactor` per
      line), `tar`s everything and `PUT`s it to
      `s3://<bucket>/<namespace>/<release>/kafka-topics.tar` using
-     `curl --aws-sigv4`, verified against the CA from the Secret.
+     `curl` with a SigV4 signature the script computes, verified against the CA from the Secret.
 4. The controller watches the Job's terminal condition. On `Complete` it
    creates a `Backup` CR in the same namespace, recording the BackupClass
    parameters under `spec.driverMetadata` (the `parameter/` prefix), so a later

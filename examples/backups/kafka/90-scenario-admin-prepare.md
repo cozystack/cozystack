@@ -21,7 +21,7 @@ A cluster administrator performs the cluster-level preparation once. Tenant admi
 
 | Resource | Scope | Purpose |
 |---|---|---|
-| `Job.strategy.backups.cozystack.io/kafka-job` | Cluster | PodTemplateSpec for a `quay.io/strimzi/kafka` Pod that drains the topics with `kafka-console-consumer`, replays them with `kafka-console-producer`, and moves a tarball to/from S3 with `curl --aws-sigv4` |
+| `Job.strategy.backups.cozystack.io/kafka-job` | Cluster | PodTemplateSpec for a `quay.io/strimzi/kafka` Pod that drains the topics with `kafka-console-consumer`, replays them with `kafka-console-producer`, and moves a tarball to/from S3 with `curl`, SigV4-signed by the script |
 | `BackupClass/kafka-backup` | Cluster | Maps `apps.cozystack.io/Kafka` to the strategy. `parameters.topics` selects the topics (empty = every non-internal topic); `parameters.replicationFactor`, when set, overrides the replication factor the backup captured when restore recreates a topic |
 
 ## How the strategy template gets rendered
