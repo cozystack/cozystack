@@ -1,6 +1,7 @@
 suite: tenant gateway default — inherit from parent, opt-in for own Gateway
 templates:
   - templates/gateway.yaml
+  - templates/namespace.yaml
 
 # Cozystack targets low-skill operators. A child tenant under a Gateway-
 # enabled parent must publish through the parent's Gateway by default —
@@ -19,19 +20,18 @@ templates:
 # That logic is exercised by the cozystack-basics secret test for the
 # root tenant (cozystack-values-secret_test.yaml) plus by the
 # controller-level reconciler tests for the cross-namespace attach
-# flow — helm-unittest cannot mock the `lookup` call namespace.yaml
-# uses for ownerReferences, so the chart-level pin here covers only
-# the HelmRelease render side.
+# flow.
 
 release:
   name: tenant-alice
-  namespace: tenant-alice
+  namespace: tenant-root
 
 set:
   _cluster:
     expose-ingress: tenant-root
     expose-external-ips: "192.0.2.10"
     gateway-enabled: "true"
+    root-host: example.com
 
 tests:
   - it: gateway unset → inherit, no own HelmRelease
@@ -72,6 +72,13 @@ tests:
         equal:
           path: metadata.name
           value: gateway
+      - template: templates/namespace.yaml
+        documentSelector:
+          path: kind
+          value: Namespace
+        equal:
+          path: metadata.labels["namespace.cozystack.io/gateway"]
+          value: tenant-alice
 
   - it: gateway=true explicit on custom apex → own HelmRelease
     # The intended path for an operator who wants a custom apex
@@ -86,19 +93,26 @@ tests:
           path: kind
           value: HelmRelease
 
-  - it: gateway=false explicit → no own HelmRelease (same as unset)
+  - it: gateway=false explicit → no own HelmRelease, still inherits
     # An explicit false renders no own Gateway HelmRelease, exactly like
-    # leaving the key unset. It does NOT opt out of inheritance:
-    # tenant.gatewayEffective returns "false" for both false and unset, so
-    # namespace.yaml keeps _namespace.gateway pointing at the nearest
-    # ancestor that owns a Gateway and this tenant still publishes through it.
+    # leaving the key unset. The namespace must still point to the nearest
+    # ancestor tenant that owns a Gateway.
     set:
       gateway: false
       host: ""
+      _namespace:
+        gateway: tenant-root
     asserts:
       - template: templates/gateway.yaml
         hasDocuments:
           count: 0
+      - template: templates/namespace.yaml
+        documentSelector:
+          path: kind
+          value: Namespace
+        equal:
+          path: metadata.labels["namespace.cozystack.io/gateway"]
+          value: tenant-root
 
   - it: gateway=true on platform-off cluster → own HelmRelease (operator override)
     # The HelmRelease will fail at runtime (no gateway-application
