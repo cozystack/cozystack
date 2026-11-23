@@ -109,3 +109,28 @@ func TestResolve(t *testing.T) {
 		})
 	}
 }
+
+func TestPoolStatus_RoundTrips(t *testing.T) {
+	in := &PoolStatus{
+		Reserved: ResourceList{"cpu": resource.MustParse("1500m")},
+		Budget:   ResourceList{"cpu": resource.MustParse("4")},
+	}
+	raw, err := in.Encode()
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err := ReadPoolStatus(map[string]string{PoolAnnotation: raw})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if q := out.Reserved["cpu"]; q.Cmp(resource.MustParse("1.5")) != 0 {
+		t.Errorf("reserved cpu = %s after a round trip", q.String())
+	}
+	again, _ := out.Encode()
+	if again != raw {
+		t.Errorf("re-encoding is not stable: %s != %s", again, raw)
+	}
+	if s, err := ReadPoolStatus(nil); s != nil || err != nil {
+		t.Errorf("ReadPoolStatus(nil) = %v, %v; want nil, nil", s, err)
+	}
+}

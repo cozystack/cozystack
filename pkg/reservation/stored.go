@@ -24,13 +24,35 @@ import (
 	"strings"
 
 	"k8s.io/apimachinery/pkg/api/resource"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-// ReservedAnnotation carries, on an application's HelmRelease, the figure
-// it reserves. It lives outside the apps.cozystack.io- prefix through which
-// an Application's own annotations reach its release, so a tenant can
-// neither write it nor read it back as metadata.
-const ReservedAnnotation = "reservation.cozystack.io/reserved"
+// The annotations below live on HelmReleases, outside the
+// apps.cozystack.io- prefix through which an Application's own annotations
+// reach its release, so a tenant can neither write them nor read them back
+// as metadata.
+const (
+	// ReservedAnnotation carries, on an application's HelmRelease, the
+	// figure it reserves: written by the apiserver gate when it admits the
+	// write, and by the tenant-quota controller for a release the gate never
+	// admitted.
+	ReservedAnnotation = "reservation.cozystack.io/reserved"
+	// PoolAnnotation carries, on the HelmRelease of a Tenant that roots a
+	// pool, the pool's figures as the tenant-quota controller last observed
+	// them. The apiserver projects it into the Tenant's status.
+	PoolAnnotation = "reservation.cozystack.io/pool"
+)
+
+// Pool condition types.
+const (
+	// ConditionOvercommitted is True when what a pool's applications
+	// reserve plus what its sub-tenants carved out exceeds its budget.
+	ConditionOvercommitted = "Overcommitted"
+	// ConditionReservationIncomplete is True when an application of the
+	// pool does not evaluate, so the pool's figure counts it at its last
+	// stored reservation or, with none, not at all.
+	ConditionReservationIncomplete = "ReservationIncomplete"
+)
 
 // Stored is the value of ReservedAnnotation. ValuesHash ties the figure to
 // the values it was computed from, so that a figure written before an edit
@@ -126,6 +148,40 @@ func TenantBudget(values []byte) (ResourceList, error) {
 		return nil, fmt.Errorf("decode tenant values: %w", err)
 	}
 	return Budget(v.ResourceQuotas), nil
+}
+
+// PoolStatus is the value of PoolAnnotation.
+type PoolStatus struct {
+	// Reserved is what the applications in the pool's namespaces reserve.
+	Reserved ResourceList `json:"reserved,omitempty"`
+	// CarvedOut is what the pool's bounded sub-tenants declared, each of
+	// which is a slice of this pool's budget.
+	CarvedOut ResourceList `json:"carvedOut,omitempty"`
+	// Budget is the pool root's declared quota.
+	Budget ResourceList `json:"budget,omitempty"`
+	// Conditions are ConditionOvercommitted and
+	// ConditionReservationIncomplete.
+	Conditions []metav1.Condition `json:"conditions,omitempty"`
+}
+
+// ReadPoolStatus reads PoolAnnotation from annotations. It returns nil and
+// no error when the annotation is absent.
+func ReadPoolStatus(annotations map[string]string) (*PoolStatus, error) {
+	raw, ok := annotations[PoolAnnotation]
+	if !ok {
+		return nil, nil
+	}
+	var s PoolStatus
+	if err := json.Unmarshal([]byte(raw), &s); err != nil {
+		return nil, fmt.Errorf("%s: %w", PoolAnnotation, err)
+	}
+	return &s, nil
+}
+
+// Encode renders s as the value of PoolAnnotation.
+func (s *PoolStatus) Encode() (string, error) {
+	raw, err := json.Marshal(s)
+	return string(raw), err
 }
 
 // Source says where Resolve took an application's figure from.

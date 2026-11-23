@@ -24,6 +24,7 @@ import (
 	"time"
 
 	helmv2 "github.com/fluxcd/helm-controller/api/v2"
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/apimachinery/pkg/labels"
@@ -480,4 +481,39 @@ func summarize(rl reservation.ResourceList) string {
 		return "nothing"
 	}
 	return strings.Join(parts, ", ")
+}
+
+// projectPoolStatus copies the pool figures the tenant-quota controller
+// published on a Tenant's release into the Tenant's status, with the pool's
+// conditions next to the release's own. A release without them, because the
+// Tenant roots no pool or the reservation is off, projects nothing.
+func projectPoolStatus(app *appsv1alpha1.Application, hr *helmv2.HelmRelease) {
+	s, err := reservation.ReadPoolStatus(hr.Annotations)
+	if err != nil {
+		klog.Warningf("ignoring an unreadable pool status on HelmRelease %s/%s: %v", hr.Namespace, hr.Name, err)
+		return
+	}
+	if s == nil {
+		return
+	}
+	app.Status.Reserved = toResourceList(s.Reserved)
+	app.Status.CarvedOut = toResourceList(s.CarvedOut)
+	app.Status.Budget = toResourceList(s.Budget)
+	for _, c := range s.Conditions {
+		if c.Type != reservation.ConditionOvercommitted && c.Type != reservation.ConditionReservationIncomplete {
+			continue
+		}
+		app.Status.Conditions = append(app.Status.Conditions, c)
+	}
+}
+
+func toResourceList(rl reservation.ResourceList) corev1.ResourceList {
+	if len(rl) == 0 {
+		return nil
+	}
+	out := make(corev1.ResourceList, len(rl))
+	for k, v := range rl {
+		out[corev1.ResourceName(k)] = v.DeepCopy()
+	}
+	return out
 }

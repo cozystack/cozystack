@@ -1292,7 +1292,8 @@ func mergeGarbageCollectionFinalizers(current, previous, desired []string) []str
 //     remove the HelmRelease instantly, orphaning every resource of the release.
 //   - ownerReferences: garbage collection and lineage.
 //   - labels/annotations outside the apps.cozystack.io- prefix: set directly on
-//     the HelmRelease by Flux or other controllers. Keys under the prefix are
+//     the HelmRelease by Flux or other controllers, such as the reservation and
+//     pool figures under reservation.cozystack.io/. Keys under the prefix are
 //     owned by this API and recomputed from the Application, so stale ones are
 //     dropped and a deletion on the Application propagates.
 //
@@ -1699,6 +1700,7 @@ func (r *REST) convertHelmReleaseToApplication(ctx context.Context, hr *helmv2.H
 		} else {
 			app.Status.ExternalIPsCount = externalIPsCount
 		}
+		projectPoolStatus(&app, hr)
 	}
 
 	return app, nil

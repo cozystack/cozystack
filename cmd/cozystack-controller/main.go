@@ -29,6 +29,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
+	"k8s.io/client-go/dynamic"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/cache"
@@ -50,6 +51,7 @@ import (
 	"github.com/cozystack/cozystack/internal/controller/tenantquota"
 	"github.com/cozystack/cozystack/internal/controller/wildcardsecret"
 	"github.com/cozystack/cozystack/internal/telemetry"
+	"github.com/cozystack/cozystack/pkg/reservation"
 
 	cmv1 "github.com/cert-manager/cert-manager/pkg/apis/certmanager/v1"
 	helmv2 "github.com/fluxcd/helm-controller/api/v2"
@@ -90,6 +92,7 @@ func main() {
 	var telemetryEndpoint string
 	var telemetryInterval string
 	var quotaBufferPercent int64
+	var tenantQuotaReservation bool
 	var seaweedfsMetricsEndpoint string
 	var tlsOpts []func(*tls.Config)
 	flag.StringVar(&metricsAddr, "metrics-bind-address", "0", "The address the metrics endpoint binds to. "+
@@ -110,6 +113,10 @@ func main() {
 		"Interval between telemetry data collection (e.g. 15m, 1h)")
 	flag.Int64Var(&quotaBufferPercent, "tenant-quota-buffer-percent", 0,
 		"Temporary buffer (e.g. 130 = +30%) added to every hierarchical tenant quota pool so workloads already over a freshly-introduced quota keep running during rollout. 0 disables it.")
+	flag.BoolVar(&tenantQuotaReservation, "tenant-quota-reservation", false,
+		"Count tenant quota pools in what their applications reserve, against the budget in each tenant's resourceQuotas values, "+
+			"and publish the figures on the Tenant instead of enforcing them with a tenant-quota-allocated ResourceQuota. "+
+			"Pair it with the cozystack-api flag of the same name, whose admission gate then enforces the pools.")
 	flag.StringVar(&seaweedfsMetricsEndpoint, "seaweedfs-metrics-endpoint", "",
 		"Base URL of a Prometheus-compatible query API to fetch SeaweedFS bucket size metrics from, e.g. https://vm.example.com/path/to/prometheus (/api/v1/query is appended). "+
 			"Overrides discovery via the namespace.cozystack.io/monitoring label; use when SeaweedFS and the monitoring stack that scrapes it run in a separate cluster. "+
@@ -278,12 +285,22 @@ func main() {
 		os.Exit(1)
 	}
 
-	if err = (&tenantquota.Reconciler{
+	tenantQuota := &tenantquota.Reconciler{
 		Client:        mgr.GetClient(),
 		Scheme:        mgr.GetScheme(),
 		Recorder:      mgr.GetEventRecorderFor("tenantquota-controller"),
 		BufferPercent: quotaBufferPercent,
-	}).SetupWithManager(mgr); err != nil {
+		Reservation:   tenantQuotaReservation,
+	}
+	if tenantQuotaReservation {
+		dyn, err := dynamic.NewForConfig(config)
+		if err != nil {
+			setupLog.Error(err, "unable to create the dynamic client the tenant quota reservation resolves instance types with")
+			os.Exit(1)
+		}
+		tenantQuota.Env = reservation.NewClusterEnvironment(dyn, reservation.ShippedPresets())
+	}
+	if err = tenantQuota.SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "TenantQuota")
 		os.Exit(1)
 	}

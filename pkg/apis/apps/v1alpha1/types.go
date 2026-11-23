@@ -19,6 +19,7 @@ package v1alpha1
 import (
 	"encoding/json"
 
+	corev1 "k8s.io/api/core/v1"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
@@ -57,6 +58,19 @@ type ApplicationStatus struct {
 	// ExternalIPsCount holds the number of LoadBalancer services with assigned external IPs for Tenant applications.
 	// +optional
 	ExternalIPsCount int32 `json:"externalIPsCount,omitempty"`
+	// Reserved is what the applications of the tenant quota pool this
+	// Tenant roots reserve, keyed like the pool's budget. Set for a Tenant
+	// that declares resourceQuotas while the tenant quota reservation is on.
+	// +optional
+	Reserved corev1.ResourceList `json:"reserved,omitempty"`
+	// CarvedOut is what the bounded sub-tenants of the pool this Tenant
+	// roots declared, each a slice of its budget. Set with Reserved.
+	// +optional
+	CarvedOut corev1.ResourceList `json:"carvedOut,omitempty"`
+	// Budget is the pool's budget: this Tenant's resourceQuotas in
+	// reservation keys. Set with Reserved.
+	// +optional
+	Budget corev1.ResourceList `json:"budget,omitempty"`
 	// InstallFailures is the install failure count of the underlying HelmRelease.
 	// It counts only attempts that recorded a Helm release, so a failure before
 	// Helm records one, such as a chart that fails to render, shows only as

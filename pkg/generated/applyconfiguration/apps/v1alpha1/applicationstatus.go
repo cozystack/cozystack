@@ -19,6 +19,7 @@ limitations under the License.
 package v1alpha1
 
 import (
+	corev1 "k8s.io/api/core/v1"
 	v1 "k8s.io/client-go/applyconfigurations/meta/v1"
 )
 
@@ -34,6 +35,16 @@ type ApplicationStatusApplyConfiguration struct {
 	Namespace *string `json:"namespace,omitempty"`
 	// ExternalIPsCount holds the number of LoadBalancer services with assigned external IPs for Tenant applications.
 	ExternalIPsCount *int32 `json:"externalIPsCount,omitempty"`
+	// Reserved is what the applications of the tenant quota pool this
+	// Tenant roots reserve, keyed like the pool's budget. Set for a Tenant
+	// that declares resourceQuotas while the tenant quota reservation is on.
+	Reserved *corev1.ResourceList `json:"reserved,omitempty"`
+	// CarvedOut is what the bounded sub-tenants of the pool this Tenant
+	// roots declared, each a slice of its budget. Set with Reserved.
+	CarvedOut *corev1.ResourceList `json:"carvedOut,omitempty"`
+	// Budget is the pool's budget: this Tenant's resourceQuotas in
+	// reservation keys. Set with Reserved.
+	Budget *corev1.ResourceList `json:"budget,omitempty"`
 	// InstallFailures is the install failure count of the underlying HelmRelease.
 	// It counts only attempts that recorded a Helm release, so a failure before
 	// Helm records one, such as a chart that fails to render, shows only as
@@ -90,6 +101,30 @@ func (b *ApplicationStatusApplyConfiguration) WithNamespace(value string) *Appli
 // If called multiple times, the ExternalIPsCount field is set to the value of the last call.
 func (b *ApplicationStatusApplyConfiguration) WithExternalIPsCount(value int32) *ApplicationStatusApplyConfiguration {
 	b.ExternalIPsCount = &value
+	return b
+}
+
+// WithReserved sets the Reserved field in the declarative configuration to the given value
+// and returns the receiver, so that objects can be built by chaining "With" function invocations.
+// If called multiple times, the Reserved field is set to the value of the last call.
+func (b *ApplicationStatusApplyConfiguration) WithReserved(value corev1.ResourceList) *ApplicationStatusApplyConfiguration {
+	b.Reserved = &value
+	return b
+}
+
+// WithCarvedOut sets the CarvedOut field in the declarative configuration to the given value
+// and returns the receiver, so that objects can be built by chaining "With" function invocations.
+// If called multiple times, the CarvedOut field is set to the value of the last call.
+func (b *ApplicationStatusApplyConfiguration) WithCarvedOut(value corev1.ResourceList) *ApplicationStatusApplyConfiguration {
+	b.CarvedOut = &value
+	return b
+}
+
+// WithBudget sets the Budget field in the declarative configuration to the given value
+// and returns the receiver, so that objects can be built by chaining "With" function invocations.
+// If called multiple times, the Budget field is set to the value of the last call.
+func (b *ApplicationStatusApplyConfiguration) WithBudget(value corev1.ResourceList) *ApplicationStatusApplyConfiguration {
+	b.Budget = &value
 	return b
 }
 

@@ -7,6 +7,12 @@ cozystackController:
   # stack that scrapes it run in a separate cluster. Empty keeps discovery
   # via the namespace.cozystack.io/monitoring label.
   seaweedfsMetricsEndpoint: ""
+  # Count tenant quota pools in what their applications reserve, against each
+  # tenant's resourceQuotas, and publish the figures on the Tenant instead of
+  # enforcing them with a tenant-quota-allocated ResourceQuota
+  # (--tenant-quota-reservation). Turn it on together with
+  # cozystackAPI.tenantQuotaReservation, whose gate then enforces the pools.
+  tenantQuotaReservation: false
   # Raising this gives the reconciliation loop a standby, not a second writer:
   # the chart always passes --leader-elect, so exactly one manager holds the
   # Lease and runs the reconcilers. With the default of 1 the extra Lease is

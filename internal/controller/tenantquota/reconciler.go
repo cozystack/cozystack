@@ -18,6 +18,7 @@ package tenantquota
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"time"
 
@@ -37,7 +38,9 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
+	cozyv1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
 	appsv1alpha1 "github.com/cozystack/cozystack/pkg/apis/apps/v1alpha1"
+	"github.com/cozystack/cozystack/pkg/reservation"
 )
 
 const (
@@ -88,6 +91,15 @@ type Reconciler struct {
 	// that tenants already over a freshly-introduced quota keep running while
 	// operators right-size. 0 or 100 disables the buffer.
 	BufferPercent int64
+	// Reservation switches the pool figures from ResourceQuota usage and
+	// the rendered tenant-quota to what the pool's applications reserve and
+	// the tenants' own resourceQuotas values. With it on the controller
+	// writes no tenant-quota-allocated ResourceQuota and only reports.
+	Reservation bool
+	// Env resolves instance types and presets for the reservation oracle.
+	Env reservation.Environment
+
+	evaluators evaluators
 }
 
 func (r *Reconciler) bufferPercent() int64 {
@@ -103,6 +115,9 @@ func (r *Reconciler) bufferPercent() int64 {
 // fair share of the pool. Pools that need no tightening beyond the chart-owned
 // quota (a lone tenant with no sub-tenants) are left untouched.
 func (r *Reconciler) Reconcile(ctx context.Context, _ ctrl.Request) (ctrl.Result, error) {
+	if r.Reservation {
+		return r.reconcileReservations(ctx)
+	}
 	logger := log.FromContext(ctx)
 
 	tenants, usedByNS, existing, err := r.snapshot(ctx)
@@ -119,7 +134,8 @@ func (r *Reconciler) Reconcile(ctx context.Context, _ ctrl.Request) (ctrl.Result
 	for _, p := range pools {
 		if over := p.Overcommitted(); len(over) > 0 {
 			logger.Info("tenant quota pool is overcommitted by sub-tenant carve-outs", "pool", p.Root, "overcommit", over)
-			r.recordOvercommit(ctx, p.Root, over)
+			r.recordOvercommit(ctx, p.Root, fmt.Sprintf(
+				"sub-tenant quotas exceed this tenant's budget by %s; lower a sub-tenant quota or raise this tenant's quota", resourceListString(over)))
 		}
 		// A pool with no carve-outs and a single member is fully covered by the
 		// chart-rendered tenant-quota already; the controller adds nothing.
@@ -165,6 +181,9 @@ func (r *Reconciler) Reconcile(ctx context.Context, _ ctrl.Request) (ctrl.Result
 	}
 	if err := r.gcAllocatedLimitRanges(ctx, written); err != nil {
 		logger.Error(err, "failed to garbage-collect stale allocated limit ranges")
+	}
+	if err := r.clearPoolStatuses(ctx); err != nil {
+		logger.Error(err, "failed to clear the pool statuses the reservation oracle published")
 	}
 
 	return ctrl.Result{RequeueAfter: resyncInterval}, nil
@@ -301,7 +320,7 @@ func (r *Reconciler) gcAllocatedLimitRanges(ctx context.Context, keep map[string
 	return nil
 }
 
-func (r *Reconciler) recordOvercommit(ctx context.Context, rootNamespace string, over corev1.ResourceList) {
+func (r *Reconciler) recordOvercommit(ctx context.Context, rootNamespace, message string) {
 	if r.Recorder == nil {
 		return
 	}
@@ -309,19 +328,24 @@ func (r *Reconciler) recordOvercommit(ctx context.Context, rootNamespace string,
 	if err := r.Get(ctx, types.NamespacedName{Name: rootNamespace}, ns); err != nil {
 		return
 	}
-	r.Recorder.Eventf(ns, corev1.EventTypeWarning, "QuotaOvercommitted",
-		"sub-tenant quotas exceed this tenant's budget by %s; lower a sub-tenant quota or raise this tenant's quota", resourceListString(over))
+	r.Recorder.Event(ns, corev1.EventTypeWarning, "QuotaOvercommitted", message)
 }
 
 // SetupWithManager wires the controller. Every relevant change (a tenant
 // HelmRelease, a namespace, a tenant ResourceQuota whose usage moved, or a
-// tenant LimitRange) coalesces into one full-tree sweep.
+// tenant LimitRange) coalesces into one full-tree sweep. With the
+// reservation oracle on, so does a change to any application release or
+// ApplicationDefinition.
 func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 	toSweep := handler.EnqueueRequestsFromMapFunc(func(context.Context, client.Object) []reconcile.Request {
 		return []reconcile.Request{sweepKey}
 	})
 	tenantReleases := predicate.NewPredicateFuncs(func(o client.Object) bool {
-		return o.GetLabels()[appsv1alpha1.ApplicationKindLabel] == tenantKind
+		kind, labelled := o.GetLabels()[appsv1alpha1.ApplicationKindLabel]
+		if r.Reservation {
+			return labelled
+		}
+		return kind == tenantKind
 	})
 	tenantQuotas := predicate.NewPredicateFuncs(func(o client.Object) bool {
 		return o.GetName() == chartQuotaName || o.GetName() == allocatedQuotaName
@@ -329,13 +353,16 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 	tenantLimitRanges := predicate.NewPredicateFuncs(func(o client.Object) bool {
 		return o.GetName() == chartLimitRangeName || o.GetName() == allocatedLimitRangeName
 	})
-	return ctrl.NewControllerManagedBy(mgr).
+	b := ctrl.NewControllerManagedBy(mgr).
 		Named("tenantquota-controller").
 		Watches(&helmv2.HelmRelease{}, toSweep, builder.WithPredicates(tenantReleases)).
 		Watches(&corev1.Namespace{}, toSweep).
 		Watches(&corev1.ResourceQuota{}, toSweep, builder.WithPredicates(tenantQuotas)).
-		Watches(&corev1.LimitRange{}, toSweep, builder.WithPredicates(tenantLimitRanges)).
-		Complete(r)
+		Watches(&corev1.LimitRange{}, toSweep, builder.WithPredicates(tenantLimitRanges))
+	if r.Reservation {
+		b = b.Watches(&cozyv1alpha1.ApplicationDefinition{}, toSweep)
+	}
+	return b.Complete(r)
 }
 
 // ownedNamespace maps a tenant HelmRelease (name "<prefix><app>" in namespace
