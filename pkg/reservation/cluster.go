@@ -42,6 +42,10 @@ const (
 	// stream of orders for a nonexistent type list the cluster on each one.
 	instancetypeMissRefresh = 5 * time.Second
 	instancetypeListTimeout = 10 * time.Second
+	// A failed list is answered from memory for this long, so that callers
+	// queued behind it do not each wait out their own list against an API
+	// server that just failed one.
+	instancetypeFailureHold = 5 * time.Second
 )
 
 type classified struct {
@@ -65,6 +69,8 @@ type ClusterEnvironment struct {
 	mu      sync.Mutex
 	fetched time.Time
 	types   map[string]classified
+	failed  time.Time
+	failure error
 }
 
 var _ Environment = (*ClusterEnvironment)(nil)
@@ -111,15 +117,21 @@ func (e *ClusterEnvironment) Preset(name string) (ResourceList, error) {
 }
 
 // refresh replaces the snapshot. It must be called with e.mu held. A failed
-// list keeps the previous snapshot out of use rather than serving it past
-// its age, so that the error reaches the caller.
+// list leaves the snapshot as it was, so an expired one stays unusable, and
+// is returned again without listing until instancetypeFailureHold passes.
 func (e *ClusterEnvironment) refresh() error {
+	if e.failure != nil && e.now().Sub(e.failed) < instancetypeFailureHold {
+		return e.failure
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), instancetypeListTimeout)
 	defer cancel()
 	list, err := e.dyn.Resource(InstancetypeGVR).List(ctx, metav1.ListOptions{})
 	if err != nil {
-		return fmt.Errorf("list %s: %w", InstancetypeGVR.GroupResource(), err)
+		e.failure = fmt.Errorf("list %s: %w", InstancetypeGVR.GroupResource(), err)
+		e.failed = e.now()
+		return e.failure
 	}
+	e.failure = nil
 	types := make(map[string]classified, len(list.Items))
 	for i := range list.Items {
 		obj := list.Items[i]
