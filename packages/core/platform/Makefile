@@ -56,7 +56,7 @@ image-migrations:
 	# yq exits 0 on empty input, so a failed render would otherwise ship an
 	# image whose migration 62 deletes the old CRDs and cannot recreate them.
 	test "$$(ls images/migrations/snapshot-controller-crds | wc -l)" -eq 3
-	docker buildx build images/migrations \
+	docker buildx build -f images/migrations/Dockerfile ../../.. \
 		$(call image-tags,platform-migrations,v$(COZYSTACK_VERSION)) \
 		$(call cache-args,platform-migrations) \
 		--metadata-file images/migrations.json \
