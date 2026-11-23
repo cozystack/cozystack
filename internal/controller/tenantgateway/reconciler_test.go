@@ -1813,9 +1813,9 @@ func TestReconcile_HTTP01CollectsHostnamesFromInheritingChildNamespaces(t *testi
 // the SAN-expansion contract: when a tenant inherits this Gateway's
 // publishing layer (its namespace is labelled namespace.cozystack.
 // io/gateway=<owner>), the wildcard Certificate that the owner
-// issues for DNS-01 mode must also cover the child's apex —
-// <child-apex> and *.<child-apex>. Let's Encrypt wildcards are
-// single-level, so the parent's `*.<apex>` does not match a child
+// issues for DNS-01 mode must also cover the child's apex and
+// *.<child-apex>. Let's Encrypt wildcards are single-level, so the
+// parent's `*.<apex>` does not match a child
 // hostname `harbor.alice.example.com` (two labels deep). Without
 // SAN expansion the inheritance flow renders Gateway listeners
 // referencing a cert that fails the SNI handshake — silently in
@@ -1882,7 +1882,6 @@ func TestReconcile_DNS01WildcardCertCoversInheritingChildApexes(t *testing.T) {
 	want := map[string]bool{
 		"example.org":         false,
 		"*.example.org":       false,
-		"alice.example.org":   false,
 		"*.alice.example.org": false,
 	}
 	for _, n := range cert.Spec.DNSNames {
@@ -1894,6 +1893,9 @@ func TestReconcile_DNS01WildcardCertCoversInheritingChildApexes(t *testing.T) {
 		if !seen {
 			t.Errorf("missing DNS name %q in cert.spec.dnsNames=%v", n, cert.Spec.DNSNames)
 		}
+	}
+	if containsString(cert.Spec.DNSNames, "alice.example.org") {
+		t.Errorf("cert.spec.dnsNames=%v lists alice.example.org, which *.example.org already covers; Let's Encrypt refuses such an order", cert.Spec.DNSNames)
 	}
 }
 
