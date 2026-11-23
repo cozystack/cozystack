@@ -365,3 +365,23 @@ func TestTenantQuotaDeclarationCountsReservationsWithTheGate(t *testing.T) {
 		t.Fatalf("the parent pool's 16Gi is reserved by its VM, so a 1Gi child does not fit; got %v", errs)
 	}
 }
+
+func TestReservationAnnotationIsBounded(t *testing.T) {
+	huge := reservation.ResourceList{}
+	for i := 0; i < 2000; i++ {
+		huge[fmt.Sprintf("example.com/resource-%04d", i)] = resource.MustParse("1")
+	}
+	adm := &reservationAdmission{stored: &storedReservation{ValuesHash: "x", Resources: huge}}
+	hr := &helmv2.HelmRelease{}
+	if err := adm.annotate(hr); err == nil {
+		t.Fatal("an oversized reservation must be refused, not stored")
+	}
+	if _, ok := hr.Annotations[ReservedAnnotation]; ok {
+		t.Fatal("an oversized reservation was written")
+	}
+
+	adm.stored.Resources = reservation.ResourceList{"memory": resource.MustParse("4Gi")}
+	if err := adm.annotate(hr); err != nil {
+		t.Fatalf("an ordinary reservation must be stored: %v", err)
+	}
+}

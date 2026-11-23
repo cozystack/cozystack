@@ -48,6 +48,12 @@ import (
 // an Application's own annotations can never write it.
 const ReservedAnnotation = "reservation.cozystack.io/reserved"
 
+// maxReservedAnnotationSize bounds ReservedAnnotation well inside the 256KiB
+// the API server allows for all of an object's annotations together. A
+// reservation is a hash and a handful of quantities; one this large means a
+// declaration gone wrong, and it is refused rather than stored.
+const maxReservedAnnotationSize = 16 << 10
+
 // tenantNamespacePrefix is the prefix of every tenant namespace and of every
 // Tenant HelmRelease, whatever the REST handler's own release prefix is.
 const tenantNamespacePrefix = "tenant-"
@@ -412,6 +418,9 @@ func (a *reservationAdmission) annotate(hr *helmv2.HelmRelease) error {
 	raw, err := json.Marshal(a.stored)
 	if err != nil {
 		return err
+	}
+	if len(raw) > maxReservedAnnotationSize {
+		return fmt.Errorf("the reservation takes %d bytes, more than the %d an annotation is allowed here", len(raw), maxReservedAnnotationSize)
 	}
 	if hr.Annotations == nil {
 		hr.Annotations = map[string]string{}
