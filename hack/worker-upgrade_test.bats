@@ -644,6 +644,26 @@ load test_helper
   [ "$output" = "HelmRelease cozy-x/broken stalled while applying generation 4: InvalidChartReference: chart not found" ]
 }
 
+# A failed action with a later one above it stays in the history, so the
+# history guard would fail the run anyway; one still at the head may be a
+# first install that a retry rewrites to superseded, so the wait goes on.
+@test "only a settled failed action on a platform release that retries in place fails convergence at once" {
+  tmp=$(mktemp -d)
+  mkdir -p "$tmp/_out"
+  printf '%s\n' '{}' > "$tmp/_out/worker-upgrade-platform-history-before.json"
+  lib="$PWD/hack/e2e-chainsaw/_lib/run-kubernetes-upgrade.sh"
+  pending='{"kind":"HelmRelease","metadata":{"namespace":"cozy-x","name":"pending"},"spec":{},"status":{"conditions":[{"type":"Ready","status":"False"}]}}'
+  settled='{"items":[{"kind":"HelmRelease","metadata":{"namespace":"cozy-x","name":"upgraded"},"spec":{"install":{"strategy":{"name":"RetryOnFailure"}}},"status":{"conditions":[{"type":"Ready","status":"False"}],"history":[{"version":3,"status":"deployed","digest":"sha256:c"},{"version":2,"status":"failed","digest":"sha256:b"}]}},'"$pending"']}'
+  head='{"items":[{"kind":"HelmRelease","metadata":{"namespace":"cozy-x","name":"installing"},"spec":{"install":{"strategy":{"name":"RetryOnFailure"}}},"status":{"conditions":[{"type":"Ready","status":"False"}],"history":[{"version":1,"status":"failed","digest":"sha256:a"}]}},'"$pending"']}'
+  rc=0; output=$(cd "$tmp" && LIB="$lib" LIST="$settled" bash -c '. "$LIB"; kubectl() { printf "%s\n" "$LIST"; }; sleep() { echo slept; exit 3; }; cozy_worker_upgrade_platform_converged ctx' 2>&1) || rc=$?
+  [ "$rc" -eq 1 ] || { printf 'settled: %s\n' "$output"; false; }
+  [ "$output" = "FAIL HelmRelease cozy-x/upgraded (install strategy RetryOnFailure) recorded v2 failed after the upgrade began" ]
+  rc=0; output=$(cd "$tmp" && LIB="$lib" LIST="$head" bash -c '. "$LIB"; kubectl() { printf "%s\n" "$LIST"; }; sleep() { echo slept; exit 3; }; cozy_worker_upgrade_platform_converged ctx' 2>&1) || rc=$?
+  rm -rf "$tmp"
+  [ "$rc" -eq 3 ] || { printf 'head: %s\n' "$output"; false; }
+  [ "$output" = slept ]
+}
+
 @test "a stalled tenant release fails the Helm action wait at once instead of waiting out the deadline" {
   tmp=$(mktemp -d)
   lib="$PWD/hack/e2e-chainsaw/_lib/run-kubernetes-upgrade.sh"
@@ -682,6 +702,64 @@ load test_helper
   rc=0; output=$(bash hack/testdata/worker-upgrade/default-order.sh 2>&1) || rc=$?
   [ "$rc" -eq 0 ]
   [ "$output" = "$(printf 'connect\ncreate-one\nnode-identity\nscheduled-pod\nscale-zero-and-drain')" ]
+}
+
+# A release that failed an action and recovered under RetryOnFailure is current
+# and Ready again; only the history guard sees that it failed.
+@test "platform convergence judges actions the upgrade caused, and the default pool's scale-down runs the history guard" {
+  tmp=$(mktemp -d)
+  for history in failed:v4 uninstalled:v4 reset:v1 new-release:v4; do
+    rc=0; output=$(HISTORY=${history%%:*} bash hack/testdata/worker-upgrade/platform-producers.sh current 2>&1) || rc=$?
+    [ "$rc" -ne 0 ] || { printf '%s: %s\n' "$history" "$output"; false; }
+    case "$output" in *"FAIL HelmRelease cozy-cluster-api/capi-providers-infraprovider (install strategy RetryOnFailure) recorded ${history#*:} "*" after the upgrade began"*) ;; *) printf '%s: %s\n' "$history" "$output"; false ;; esac
+  done
+  rc=0; output=$(HISTORY=missing-baseline bash hack/testdata/worker-upgrade/platform-producers.sh current 2>&1) || rc=$?
+  [ "$rc" -ne 0 ] || { printf 'missing-baseline: %s\n' "$output"; false; }
+  rc=0; output=$(HISTORY=note bash hack/testdata/worker-upgrade/platform-producers.sh current 2>&1) || rc=$?
+  [ "$rc" -eq 0 ] || { printf '%s\n' "$output"; false; }
+  case "$output" in *"NOTE HelmRelease cozy-cluster-api/capi-providers-infraprovider (install strategy <unset>) recorded v4 failed"*) ;; *) printf '%s\n' "$output"; false ;; esac
+  for history in baseline-failed suspended-failed; do
+    rc=0; output=$(HISTORY=$history bash hack/testdata/worker-upgrade/platform-producers.sh current 2>&1) || rc=$?
+    [ "$rc" -eq 0 ] || { printf '%s: %s\n' "$history" "$output"; false; }
+  done
+  rc=0; output=$(GUARD_LOG="$tmp/drain" bash hack/testdata/worker-upgrade/default-drain.sh 2>&1) || rc=$?
+  [ "$rc" -eq 0 ] || { printf '%s\n' "$output"; false; }
+  # The pool is scaled down only once its release passed the history guard.
+  [ "$(cat "$tmp/drain")" = "$(printf 'tenant-test/kubernetes-nodes-example-default-create required\nscale')" ]
+  rc=0; output=$(GUARD_FAIL=1 GUARD_LOG="$tmp/failed" bash hack/testdata/worker-upgrade/default-drain.sh 2>&1) || rc=$?
+  [ "$rc" -ne 0 ]
+  if grep -qx scale "$tmp/failed"; then false; fi
+  rm -rf "$tmp"
+}
+
+@test "the platform history baseline records the digest of each release's actions" {
+  tmp=$(mktemp -d)
+  lib="$PWD/hack/e2e-chainsaw/_lib/run-kubernetes-upgrade.sh"
+  rc=0; output=$(cd "$tmp" && mkdir _out && bash -c '
+    . "$1"
+    kubectl() { echo "{\"items\":[{\"metadata\":{\"namespace\":\"cozy-a\",\"name\":\"one\"},\"status\":{\"history\":[{\"version\":4,\"digest\":\"sha256:b\"},{\"version\":3,\"digest\":\"sha256:a\"}]}},{\"metadata\":{\"namespace\":\"cozy-b\",\"name\":\"new\"},\"status\":{}}]}"; }
+    cozy_worker_upgrade_platform_history_before synthetic && cat _out/worker-upgrade-platform-history-before.json
+  ' _ "$lib" 2>&1) || rc=$?
+  [ "$rc" -eq 0 ] || { printf '%s\n' "$output"; false; }
+  [ "$(printf '%s' "$output" | jq --compact-output --sort-keys .)" = '{"cozy-a/one":["sha256:b","sha256:a"],"cozy-b/new":[]}' ]
+  rm -rf "$tmp"
+}
+
+@test "the default-class pool is judged by the history guard once its release is ready" {
+  for guard in pass fail; do
+    rc=0; output=$(GUARD=$guard bash -c '
+      . hack/e2e-chainsaw/_lib/run-kubernetes-upgrade.sh
+      COZY_UPGRADE_CONTEXT=synthetic
+      cozy_e2e_storage_class() { echo local; }
+      cozy_worker_upgrade_minor() { echo v1.34; }
+      kubectl() { case " $* " in *" apply "*) cat >/dev/null ;; *" get kubernetesnodeses"*) echo "{\"spec\":{\"workerClassName\":\"talos\"}}" ;; esac; }
+      cozy_wait_kairos_pool_release() { echo "ready $1"; }
+      cozy_guard_helmrelease() { echo "guard $1/$2 ${3:-}"; [ "$GUARD" = pass ]; }
+      cozy_worker_upgrade_default_create example
+    ' 2>&1) || rc=$?
+    case "$output" in *"ready kubernetes-nodes-example-default-create"*"guard tenant-test/kubernetes-nodes-example-default-create required"*) ;; *) printf '%s\n' "$output"; false ;; esac
+    if [ "$guard" = pass ]; then [ "$rc" -eq 0 ]; else [ "$rc" -ne 0 ]; fi
+  done
 }
 
 @test "the default guest gets its whole drain budget after the scale-down settles" {

@@ -21,6 +21,10 @@ date() {
 cozy_wait_helmrelease_upgrade() {
   if [ "$BUSY" = late ]; then echo 290 > "$DATE_MARKER"; fi
 }
+cozy_guard_helmrelease() {
+  printf '%s/%s %s\n' "$1" "$2" "${3:-}" >> "${GUARD_LOG:-/dev/null}"
+  [ -z "${GUARD_FAIL:-}" ]
+}
 sleep() { :; }
 kubectl() {
   case " $* " in

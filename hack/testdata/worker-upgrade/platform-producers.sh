@@ -49,4 +49,35 @@ kubectl() {
     *) jq '.items |= map(select(.kind != "ArtifactGenerator"))' <<< "$PLATFORM_LIST" ;;
   esac
 }
-cozy_worker_upgrade_platform_converged synthetic "$revision"
+# HISTORY names the platform release's history against the baseline digests:
+# baseline-failed fails an action the baseline already had; failed and
+# uninstalled add one after it; reset reinstalls from version 1; note fails one
+# on a release that does not retry in place; new-release fails one on a release
+# the baseline did not have; suspended-failed fails one on a suspended release;
+# missing-baseline fails one with no baseline recorded at all.
+hr='.items[] | select(.kind == "HelmRelease" and .metadata.name == "capi-providers-infraprovider")'
+key=cozy-cluster-api/capi-providers-infraprovider
+known='["sha256:d1","sha256:d2","sha256:d3"]'
+history='[{version:3,status:"deployed",digest:"sha256:d3"},{version:2,status:"failed",digest:"sha256:d2"}]'
+case "${HISTORY:-}" in
+  failed|suspended-failed|note|new-release|missing-baseline) history='[{version:4,status:"failed",digest:"sha256:d4"},{version:3,status:"deployed",digest:"sha256:d3"}]' ;;
+  uninstalled) history='[{version:4,status:"uninstalled",digest:"sha256:d4"},{version:3,status:"deployed",digest:"sha256:d3"}]' ;;
+  reset) history='[{version:2,status:"deployed",digest:"sha256:r2"},{version:1,status:"failed",digest:"sha256:r1"}]' ;;
+esac
+if [ -n "${HISTORY:-}" ]; then
+  strategy='"RetryOnFailure"'
+  [ "$HISTORY" != note ] || strategy=null
+  PLATFORM_LIST=$(jq "($hr) |= (.spec.install.strategy.name = $strategy | .status.history = $history)" <<< "$PLATFORM_LIST")
+fi
+[ "${HISTORY:-}" != suspended-failed ] || PLATFORM_LIST=$(jq "($hr).spec.suspend = true" <<< "$PLATFORM_LIST")
+baseline="{\"$key\":$known}"
+[ "${HISTORY:-}" != new-release ] || baseline='{}'
+work=$(mktemp -d)
+mkdir -p "$work/_out"
+[ "${HISTORY:-}" = missing-baseline ] || printf '%s\n' "$baseline" > "$work/_out/worker-upgrade-platform-history-before.json"
+cd "$work"
+rc=0
+cozy_worker_upgrade_platform_converged synthetic "$revision" || rc=$?
+cd /
+rm -rf "$work"
+exit "$rc"

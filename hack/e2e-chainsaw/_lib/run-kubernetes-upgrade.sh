@@ -498,6 +498,7 @@ cozy_worker_upgrade_before() {
   done
   cp _out/worker-upgrade-release-revisions.jsonl _out/cozyreport/snapshots/worker-upgrade/actions-before.jsonl || return 1
   cozy_worker_upgrade_platform_before "$COZY_UPGRADE_CONTEXT" || return 1
+  cozy_worker_upgrade_platform_history_before "$COZY_UPGRADE_CONTEXT" || return 1
   date +%s > _out/worker-upgrade-before-epoch
 }
 
@@ -616,21 +617,55 @@ cozy_worker_upgrade_stalled() {
 }
 
 cozy_worker_upgrade_platform_converged() {
-  local context=$1 candidate=${2:-} list pending stalled refs deadline=$(( $(date +%s) + _cozy_worker_upgrade_converge_secs ))
+  local context=$1 candidate=${2:-} list pending stalled settled refs deadline=$(( $(date +%s) + _cozy_worker_upgrade_converge_secs ))
   while :; do
     list=$(kubectl --request-timeout=20s --context "$context" get helmreleases,externalartifacts,ocirepositories,helmcharts,artifactgenerators --all-namespaces --output json) || return 1
     stalled=$(cozy_worker_upgrade_stalled <<< "$list") || return 1
     [ -z "$stalled" ] || { printf '%s\n' "$stalled" >&2; return 1; }
+    settled=$(cozy_worker_upgrade_settled_failures <<< "$list") || return 1
+    [ -z "$settled" ] || { printf '%s\n' "$settled" >&2; return 1; }
     refs=$(jq --compact-output '[.items[] | select(.kind == "HelmRelease" and .spec.suspend != true and .spec.chartRef.kind == "ExternalArtifact") | {name:.spec.chartRef.name,namespace:(.spec.chartRef.namespace // .metadata.namespace)}] | unique' <<< "$list") || return 1
     if cozy_worker_upgrade_artifacts_current "$candidate" "$refs" <<< "$list"; then
       pending=$(cozy_worker_upgrade_unconverged <<< "$list") || return 1
     else
       pending="platform artifact producers have not consumed the candidate bundle"
     fi
-    [ -n "$pending" ] || return 0
+    if [ -z "$pending" ]; then
+      cozy_worker_upgrade_platform_histories <<< "$list"
+      return
+    fi
     [ "$(date +%s)" -lt "$deadline" ] || { printf 'HelmReleases not reconciled against their current source artifact:\n%s\n' "$pending" >&2; return 1; }
     sleep 5
   done
+}
+
+# A release that failed an action and recovered under RetryOnFailure is current
+# and Ready; only its history shows the failure. Actions older than the upgrade
+# belong to the baseline and are not judged.
+cozy_worker_upgrade_platform_histories() {
+  local found
+  found=$(jq --raw-output --slurpfile before _out/worker-upgrade-platform-history-before.json '
+    .items[] | select(.kind == "HelmRelease" and .spec.suspend != true)
+    | "\(.metadata.namespace)/\(.metadata.name)" as $key
+    | ($before[0][$key] // []) as $known
+    | [.status.history[]? | select((.digest as $d | $known | index($d) | not) and (.status == "failed" or .status == "uninstalled"))] as $bad
+    | select($bad | length > 0)
+    | "\(if .spec.install.strategy.name == "RetryOnFailure" then "FAIL" else "NOTE" end) HelmRelease \($key) (install strategy \(.spec.install.strategy.name // "<unset>")) recorded \($bad | map("v\(.version) \(.status)") | join(", ")) after the upgrade began"') || return 1
+  [ -z "$found" ] || printf '%s\n' "$found" >&2
+  ! grep --quiet '^FAIL ' <<< "$found"
+}
+
+# The part of the history verdict that cannot change any more: a failed or
+# uninstalled action with a later one above it. One still at the head of the
+# history may be a first install that a retry rewrites to superseded.
+cozy_worker_upgrade_settled_failures() {
+  jq --raw-output --slurpfile before _out/worker-upgrade-platform-history-before.json '
+    .items[] | select(.kind == "HelmRelease" and .spec.suspend != true and .spec.install.strategy.name == "RetryOnFailure")
+    | "\(.metadata.namespace)/\(.metadata.name)" as $key
+    | ($before[0][$key] // []) as $known
+    | [(.status.history // [])[1:][] | select((.digest as $d | $known | index($d) | not) and (.status == "failed" or .status == "uninstalled"))] as $bad
+    | select($bad | length > 0)
+    | "FAIL HelmRelease \($key) (install strategy RetryOnFailure) recorded \($bad | map("v\(.version) \(.status)") | join(", ")) after the upgrade began"'
 }
 
 cozy_worker_upgrade_releases_ready() {
@@ -674,6 +709,16 @@ cozy_worker_upgrade_platform_workloads() {
 
 cozy_worker_upgrade_platform_before() {
   cozy_worker_upgrade_platform_workloads "$1" > _out/worker-upgrade-platform-before.json
+}
+
+# The Helm actions every platform release had before the upgrade, by Snapshot
+# digest, so the history check judges only actions the candidate caused.
+# Versions cannot mark the boundary: a reinstall clears the history and starts
+# again from version 1.
+cozy_worker_upgrade_platform_history_before() {
+  local list
+  list=$(kubectl --request-timeout=20s --context "$1" get helmreleases --all-namespaces --output json) || return 1
+  jq --exit-status '[.items[] | {key:"\(.metadata.namespace)/\(.metadata.name)", value:[.status.history[]?.digest | select(. != null)]}] | from_entries' <<< "$list" > _out/worker-upgrade-platform-history-before.json
 }
 
 # The baseline is pinned while main moves, so the upgrade creates every
@@ -808,6 +853,7 @@ cozy_worker_upgrade_default_drain() {
   previous=$(kubectl --request-timeout=20s --context "$COZY_UPGRADE_CONTEXT" --namespace tenant-test get helmrelease "$hr" --output 'jsonpath={.metadata.generation}') || return 1
   kubectl --request-timeout=20s --context "$COZY_UPGRADE_CONTEXT" --namespace tenant-test patch kubernetesnodeses.apps.cozystack.io "${parent}-default-create" --type merge --patch '{"spec":{"minReplicas":0,"maxReplicas":0}}' || return 1
   cozy_wait_helmrelease_upgrade tenant-test "$hr" "$previous" "$_cozy_default_pool_release_upgrade_secs" || return 1
+  cozy_guard_helmrelease tenant-test "$hr" required || return 1
   # The chart leaves replicas to the cluster-autoscaler, which removes a node
   # above the new maximum only once it has been unneeded for its scale-down
   # delay, minutes past this deadline; with the maximum at zero it will not
@@ -874,7 +920,8 @@ spec:
 EOF
   object=$(kubectl --request-timeout=20s --context "$COZY_UPGRADE_CONTEXT" --namespace tenant-test get kubernetesnodeses.apps.cozystack.io "${parent}-default-create" --output json) || return 1
   jq --exit-status '.spec.workerClassName == "talos"' <<< "$object" >/dev/null || return 1
-  cozy_wait_kairos_pool_release "kubernetes-nodes-${parent}-default-create"
+  cozy_wait_kairos_pool_release "kubernetes-nodes-${parent}-default-create" || return 1
+  cozy_guard_helmrelease tenant-test "kubernetes-nodes-${parent}-default-create" required
 }
 
 # The stage a bounded operation is in, so a run stopped by its bound names
