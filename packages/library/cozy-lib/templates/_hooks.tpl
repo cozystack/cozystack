@@ -229,3 +229,33 @@ spec:
           emptyDir: {}
 {{- end -}}
 {{- end -}}
+
+{{- define "cozy-lib.hooks.deleteIngressTLS" -}}
+cleanup_ingress_tls() {
+  key={{ .key | quote }}
+  host={{ .host | quote }}
+  if ! target=$(kubectl get certificate "$key" --namespace {{ .namespace }} --ignore-not-found --output jsonpath='{.spec.secretName}{"|"}{.spec.dnsNames[*]}'); then
+    return 1
+  fi
+  case "$target" in
+    ""|"$key|$host") ;;
+    *) echo "ERROR: refusing to delete unrelated Certificate $key" >&2; return 1 ;;
+  esac
+  if ! kubectl delete certificate "$key" --namespace {{ .namespace }} --ignore-not-found --wait=true --timeout=20s; then
+    echo "ERROR: failed to delete Certificate {{ .namespace }}/$key, so its Secret is left as well" >&2
+    return 1
+  fi
+  if ! metadata=$(kubectl get secret "$key" --namespace {{ .namespace }} --ignore-not-found --output jsonpath='{.type}{"|"}{.metadata.annotations.cert-manager\.io/certificate-name}{"|"}{.metadata.annotations.cert-manager\.io/alt-names}'); then
+    return 1
+  fi
+  case "$metadata" in
+    "") return 0 ;;
+    "kubernetes.io/tls|$key|$host") ;;
+    *) echo "ERROR: refusing to delete unrelated Secret $key" >&2; return 1 ;;
+  esac
+  if ! kubectl delete secret "$key" --namespace {{ .namespace }} --ignore-not-found --wait=false; then
+    echo "ERROR: failed to delete Secret $key in {{ .namespace }}" >&2
+    return 1
+  fi
+}
+{{- end -}}
