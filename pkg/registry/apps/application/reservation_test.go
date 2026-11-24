@@ -698,7 +698,11 @@ func TestTenantPoolRootIsCheckedAgainUnderTheLock(t *testing.T) {
 
 	// Hold tenant-acme's lock while tenant-acme-dev becomes bounded: a child
 	// of dev chose tenant-acme as its root, which is no longer its pool.
-	unlock := f.gate.acquire(context.Background(), "tenant-acme")
+	var releaseOnce sync.Once
+	held := f.gate.acquire(context.Background(), "tenant-acme")
+	unlock := func() { releaseOnce.Do(held) }
+	// A failed step below must not leave the worker blocked on the lock.
+	t.Cleanup(unlock)
 	armed.Store(true)
 	done := make(chan error, 1)
 	go func() {
