@@ -669,6 +669,9 @@ func (r *REST) Update(ctx context.Context, name string, objInfo rest.UpdatedObje
 	if err := tenantAdm.base(cur); err != nil {
 		return nil, false, err
 	}
+	if err := r.checkReplaced(tenantAdm, app, cur); err != nil {
+		return nil, false, err
+	}
 
 	r.applyLiveMetadata(helmRelease, cur, app, previousFinalizers)
 	if err := adm.annotate(helmRelease); err != nil {

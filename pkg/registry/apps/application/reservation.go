@@ -81,6 +81,9 @@ type Reservation struct {
 
 	mu    sync.Mutex
 	locks map[string]*sync.Mutex
+	// waiting, when set, is told the root a request is about to wait for.
+	// Tests use it to know a request has reached a lock it does not hold.
+	waiting func(root string)
 }
 
 // NewReservation compiles the consumption declaration of every resource. A
@@ -166,8 +169,23 @@ func (g *Reservation) acquire(ctx context.Context, root string) func() {
 		g.locks[root] = m
 	}
 	g.mu.Unlock()
+	if g.waiting != nil {
+		g.waiting(root)
+	}
 	m.Lock()
 	return m.Unlock
+}
+
+// unavailable turns a failed read of the pool into a status the client may
+// retry: nothing in the request can fix it.
+func unavailable(what string, err error) error {
+	if errors.Is(err, reservation.ErrUnavailable) {
+		return apierrors.NewServiceUnavailable(fmt.Sprintf("%s: %v", what, err))
+	}
+	if _, ok := err.(apierrors.APIStatus); ok || errors.As(err, new(apierrors.APIStatus)) {
+		return err
+	}
+	return apierrors.NewServiceUnavailable(fmt.Sprintf("%s: %v", what, err))
 }
 
 // snapshot resolves each instance type and preset at most once, so that
@@ -481,6 +499,9 @@ type reservationAdmission struct {
 	stored   *storedReservation
 	unlock   func()
 	baseHash string
+	// ownHeld records that a Tenant write holds the pool its former quota
+	// bounded, decided from the copy read before the lock.
+	ownHeld bool
 }
 
 // release drops the pool lock. Safe on a nil reservationAdmission.
@@ -551,6 +572,22 @@ func (a *reservationAdmission) base(cur *helmv2.HelmRelease) error {
 	return nil
 }
 
+// checkReplaced refuses a Tenant update whose locks were chosen from a copy
+// that declared no quota while the release it replaces declares one: the
+// pool that quota bounds was not locked, and dropping it would merge it into
+// the parent's while an order admitted into it may not be written yet.
+func (r *REST) checkReplaced(a *reservationAdmission, app *appsv1alpha1.Application, cur *helmv2.HelmRelease) error {
+	if r.reservation == nil || r.kindName != validation.TenantKind {
+		return nil
+	}
+	quotas, err := declaredQuotasFromHelmRelease(cur)
+	if err != nil || len(quotas) == 0 || a != nil && a.ownHeld {
+		return nil
+	}
+	return apierrors.NewConflict(r.gvr.GroupResource(), app.Name,
+		fmt.Errorf("the tenant's quota changed while this update was checked; retry it"))
+}
+
 // finalUpdateError carries an error out of a conflict retry loop without
 // being retried as one: it deliberately does not unwrap to its APIStatus.
 type finalUpdateError struct{ err error }
@@ -583,14 +620,16 @@ func (r *REST) lockTenantPool(ctx context.Context, app *appsv1alpha1.Application
 	}
 	parentRoot, err := r.poolRootFor(ctx, app.Namespace)
 	if err != nil {
-		return ctx, nil, err
+		return ctx, nil, unavailable("cannot read the tenant tree", err)
 	}
 	var roots []string
 	if parentRoot != "" {
 		roots = append(roots, parentRoot)
 	}
-	if hadQuota {
-		roots = append(roots, r.computeTenantNamespace(app.Namespace, app.Name))
+	// The root Tenant owns the namespace its own pool is rooted at, so its
+	// former quota and its parent's pool are the same lock.
+	if own := r.computeTenantNamespace(app.Namespace, app.Name); hadQuota && own != parentRoot {
+		roots = append(roots, own)
 	}
 	if len(roots) == 0 {
 		return ctx, nil, nil
@@ -603,7 +642,7 @@ func (r *REST) lockTenantPool(ctx context.Context, app *appsv1alpha1.Application
 			unlocks = append(unlocks, u)
 		}
 	}
-	adm := &reservationAdmission{gate: r.reservation, root: parentRoot, unlock: func() {
+	adm := &reservationAdmission{gate: r.reservation, root: parentRoot, ownHeld: hadQuota, unlock: func() {
 		for i := len(unlocks) - 1; i >= 0; i-- {
 			unlocks[i]()
 		}
@@ -614,7 +653,7 @@ func (r *REST) lockTenantPool(ctx context.Context, app *appsv1alpha1.Application
 	tree, err := r.tenantTree(ctx, r.w)
 	if err != nil {
 		adm.release()
-		return ctx, nil, err
+		return ctx, nil, unavailable("cannot read the tenant tree", err)
 	}
 	if p := poolOf(tree, app.Namespace); (p == nil) != (parentRoot == "") || p != nil && p.root != parentRoot {
 		adm.release()
@@ -662,7 +701,7 @@ func (r *REST) checkTenantCarveOut(ctx context.Context, app *appsv1alpha1.Applic
 	}
 	tree, err := r.tenantTree(ctx, r.w)
 	if err != nil {
-		return err
+		return unavailable("cannot read the tenant tree", err)
 	}
 	own := r.computeTenantNamespace(app.Namespace, app.Name)
 	for ns := range tree {
@@ -675,11 +714,8 @@ func (r *REST) checkTenantCarveOut(ctx context.Context, app *appsv1alpha1.Applic
 		return nil
 	}
 	fig, err := r.reservedIn(ctx, p.members, client.ObjectKey{}, newSnapshot(r.reservation.env))
-	if errors.Is(err, reservation.ErrUnavailable) {
-		return apierrors.NewServiceUnavailable(fmt.Sprintf("cannot sum tenant pool %q yet: %v", p.root, err))
-	}
 	if err != nil {
-		return err
+		return unavailable(fmt.Sprintf("cannot sum tenant pool %q yet", p.root), err)
 	}
 	want := budgetOf(declared)
 	var errs field.ErrorList
@@ -799,7 +835,7 @@ func (r *REST) admit(ctx context.Context, app *appsv1alpha1.Application, old *he
 
 	root, err := r.poolRootFor(ctx, app.Namespace)
 	if err != nil {
-		return nil, field.ErrorList{field.InternalError(specPath, err)}, nil
+		return nil, nil, unavailable("cannot read the tenant tree", err)
 	}
 	if root == "" {
 		return adm, nil, nil
@@ -811,7 +847,7 @@ func (r *REST) admit(ctx context.Context, app *appsv1alpha1.Application, old *he
 	tree, err := r.tenantTree(ctx, r.w)
 	if err != nil {
 		adm.release()
-		return nil, field.ErrorList{field.InternalError(specPath, err)}, nil
+		return nil, nil, unavailable("cannot read the tenant tree", err)
 	}
 	p := poolOf(tree, app.Namespace)
 	if p == nil || p.root != adm.root {
@@ -825,13 +861,9 @@ func (r *REST) admit(ctx context.Context, app *appsv1alpha1.Application, old *he
 	// copy of it the delta was taken from.
 	self := client.ObjectKey{Namespace: app.Namespace, Name: r.releaseConfig.Prefix + app.Name}
 	fig, err := r.reservedIn(ctx, p.members, self, env)
-	if errors.Is(err, reservation.ErrUnavailable) {
-		adm.release()
-		return nil, nil, apierrors.NewServiceUnavailable(fmt.Sprintf("cannot sum tenant pool %q yet: %v", p.root, err))
-	}
 	if err != nil {
 		adm.release()
-		return nil, field.ErrorList{field.InternalError(specPath, err)}, nil
+		return nil, nil, unavailable(fmt.Sprintf("cannot sum tenant pool %q yet", p.root), err)
 	}
 
 	var errs field.ErrorList
