@@ -1151,3 +1151,61 @@ func TestTenantUpdateRefusesALockChosenFromAStaleCopy(t *testing.T) {
 		t.Fatalf("dev's quota appeared after its locks were chosen; want the drop refused as a conflict, got %v", err)
 	}
 }
+
+// conflictOnce makes the first update of the named Tenant release conflict,
+// after applying change to the stored release, as another writer would.
+func conflictOnce(t *testing.T, name string, change func(*helmv2.HelmRelease)) interceptor.Funcs {
+	t.Helper()
+	conflicted := false
+	return interceptor.Funcs{
+		Update: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.UpdateOption) error {
+			if !conflicted && obj.GetName() == name {
+				conflicted = true
+				live := &helmv2.HelmRelease{}
+				if err := c.Get(ctx, client.ObjectKeyFromObject(obj), live); err != nil {
+					return err
+				}
+				if change != nil {
+					change(live)
+					if err := c.Update(ctx, live); err != nil {
+						return err
+					}
+				}
+				return apierrors.NewConflict(helmv2.GroupVersion.WithResource("helmreleases").GroupResource(), name, fmt.Errorf("stale"))
+			}
+			return c.Update(ctx, obj, opts...)
+		},
+	}
+}
+
+func TestTenantUpdateRetryRefusesAQuotaAddedMeanwhile(t *testing.T) {
+	f := newGateFixtureWith(t, conflictOnce(t, "tenant-dev", func(hr *helmv2.HelmRelease) {
+		hr.Spec.Values = tenantValuesJSON(t, map[string]string{"memory": "8Gi"})
+	}),
+		tenantHelmRelease(t, "acme", rootTenantNamespace, map[string]string{"memory": "20Gi"}),
+		tenantHelmRelease(t, "dev", "tenant-acme", nil),
+	)
+	ctx := request.WithNamespace(context.Background(), "tenant-acme")
+	_, _, err := gatedTenants(t, f).Update(ctx, "dev", rest.DefaultUpdatedObjectInfo(childApplication(t, "dev", "tenant-acme", nil)), nil, nil, false, &metav1.UpdateOptions{})
+	if !apierrors.IsConflict(err) {
+		t.Fatalf("dev gained a quota while this update was retried, and its pool was never locked; want a conflict, got %v", err)
+	}
+	hr := &helmv2.HelmRelease{}
+	if err := f.client.Get(context.Background(), client.ObjectKey{Namespace: "tenant-acme", Name: "tenant-dev"}, hr); err != nil {
+		t.Fatal(err)
+	}
+	if quotas, _ := declaredQuotasFromHelmRelease(hr); len(quotas) == 0 {
+		t.Fatal("the retry wrote over the quota added meanwhile")
+	}
+}
+
+func TestTenantUpdateRetriesAStatusOnlyConflict(t *testing.T) {
+	f := newGateFixtureWith(t, conflictOnce(t, "tenant-dev", nil),
+		tenantHelmRelease(t, "acme", rootTenantNamespace, map[string]string{"memory": "20Gi"}),
+		tenantHelmRelease(t, "dev", "tenant-acme", nil),
+	)
+	ctx := request.WithNamespace(context.Background(), "tenant-acme")
+	if _, _, err := gatedTenants(t, f).Update(ctx, "dev", rest.DefaultUpdatedObjectInfo(childApplication(t, "dev", "tenant-acme", nil)), nil, nil, false, &metav1.UpdateOptions{}); err != nil {
+		t.Fatalf("a conflict that left the Tenant's quota alone is retried: %v", err)
+	}
+}

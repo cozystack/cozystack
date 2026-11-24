@@ -726,6 +726,12 @@ func (r *REST) Update(ctx context.Context, name string, objInfo rest.UpdatedObje
 			// the conflict. If its values changed since, the decision does
 			// not hold for the object now stored, and the client has to send
 			// its update again against it.
+			// The locks were chosen for the release read before the
+			// conflict; one that has gained a quota since bounds a pool
+			// they do not cover.
+			if err := r.checkReplaced(tenantAdm, app, cur); err != nil {
+				return finalUpdateError{err}
+			}
 			if adm.stale(cur) || tenantAdm.stale(cur) {
 				return finalUpdateError{apierrors.NewConflict(r.gvr.GroupResource(), name,
 					fmt.Errorf("the application changed while this update was checked against its tenant's quota; retry it"))}
