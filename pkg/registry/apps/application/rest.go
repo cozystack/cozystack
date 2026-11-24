@@ -235,7 +235,7 @@ func (r *REST) Create(ctx context.Context, obj runtime.Object, createValidation 
 
 	// After the admission chain, so that the pool lock a bounded Tenant
 	// takes is never held across a webhook call.
-	ctx, tenantAdm, err := r.lockTenantPool(ctx, app)
+	ctx, tenantAdm, err := r.lockTenantPool(ctx, app, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -243,8 +243,8 @@ func (r *REST) Create(ctx context.Context, obj runtime.Object, createValidation 
 	if r.kindName == "Tenant" {
 		// Enforce hierarchical quota allocation: a child tenant's declared
 		// quota may not exceed its parent's remaining (un-carved) quota.
-		if qErrs := r.validateTenantResourceQuotas(ctx, app); len(qErrs) > 0 {
-			return nil, apierrors.NewInvalid(r.gvk.GroupKind(), app.Name, qErrs)
+		if err := r.checkTenantQuota(ctx, app); err != nil {
+			return nil, err
 		}
 	}
 
@@ -607,14 +607,14 @@ func (r *REST) Update(ctx context.Context, name string, objInfo rest.UpdatedObje
 	// Enforce hierarchical quota allocation on quota changes too: raising a
 	// child tenant's declared quota above its parent's remaining budget is
 	// rejected the same way as on create.
-	ctx, tenantAdm, err := r.lockTenantPool(ctx, app)
+	ctx, tenantAdm, err := r.lockTenantPool(ctx, app, oldObj.(*appsv1alpha1.Application))
 	if err != nil {
 		return nil, false, err
 	}
 	defer tenantAdm.release()
 	if r.kindName == "Tenant" {
-		if qErrs := r.validateTenantResourceQuotas(ctx, app); len(qErrs) > 0 {
-			return nil, false, apierrors.NewInvalid(r.gvk.GroupKind(), app.Name, qErrs)
+		if err := r.checkTenantQuota(ctx, app); err != nil {
+			return nil, false, err
 		}
 	}
 

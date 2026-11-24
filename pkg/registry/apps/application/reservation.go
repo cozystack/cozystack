@@ -134,10 +134,19 @@ func (g *Reservation) evaluator(kind, group string) (*reservation.Evaluator, err
 
 type heldPoolKey struct{}
 
-// withHeldPool marks root as locked by this request, so that a second
-// acquire of the same pool further down the same request does not deadlock.
-func withHeldPool(ctx context.Context, root string) context.Context {
-	return context.WithValue(ctx, heldPoolKey{}, root)
+// withHeldPool marks roots as locked by this request, so that a second
+// acquire of one of them further down the same request does not deadlock.
+func withHeldPool(ctx context.Context, roots ...string) context.Context {
+	held := map[string]bool{}
+	if prev, ok := ctx.Value(heldPoolKey{}).(map[string]bool); ok {
+		for k := range prev {
+			held[k] = true
+		}
+	}
+	for _, root := range roots {
+		held[root] = true
+	}
+	return context.WithValue(ctx, heldPoolKey{}, held)
 }
 
 // acquire serialises the gate per pool root within this process, from the
@@ -147,7 +156,7 @@ func withHeldPool(ctx context.Context, root string) context.Context {
 // informer cache has caught up with. The returned unlock is nil when ctx
 // already holds root.
 func (g *Reservation) acquire(ctx context.Context, root string) func() {
-	if held, _ := ctx.Value(heldPoolKey{}).(string); held == root {
+	if held, _ := ctx.Value(heldPoolKey{}).(map[string]bool); held[root] {
 		return nil
 	}
 	g.mu.Lock()
@@ -275,7 +284,10 @@ func (g *Reservation) reservedBy(hr *helmv2.HelmRelease, env reservation.Environ
 	if err == nil {
 		return rl, false, nil
 	}
-	if prev != nil {
+	// An environment that could not be read says nothing about the values:
+	// what they reserve now is unknown, and the figure stored for other
+	// values may be smaller.
+	if prev != nil && !errors.Is(err, reservation.ErrUnavailable) {
 		return prev.Resources, true, nil
 	}
 	return nil, false, err
@@ -545,45 +557,166 @@ type finalUpdateError struct{ err error }
 
 func (e finalUpdateError) Error() string { return e.err.Error() }
 
-// lockTenantPool holds the pool a Tenant's quota is carved out of, from the
-// carve-out check to the Tenant's write, so that an
-// application admitted into the same pool and the carve-out cannot both
-// count the same headroom. It returns a nil admission when the gate is off
-// or the Tenant declares no quota, and ctx marked with the held pool.
-func (r *REST) lockTenantPool(ctx context.Context, app *appsv1alpha1.Application) (context.Context, *reservationAdmission, error) {
+// lockTenantPool holds, from the quota check to the Tenant's write, the
+// pool the Tenant's quota is carved out of and, when the Tenant had a quota
+// of its own, the pool that quota bounded. The first keeps a carve-out and
+// an order into the same pool from both counting the same headroom. The
+// second keeps a Tenant from dropping its quota, which merges its namespaces
+// into the parent's pool, while an order admitted against its own pool has
+// not been written yet. It returns a nil admission when the gate is off or
+// neither the new nor the old Tenant declares a quota, and ctx marked with
+// the pools held.
+func (r *REST) lockTenantPool(ctx context.Context, app *appsv1alpha1.Application, old *appsv1alpha1.Application) (context.Context, *reservationAdmission, error) {
 	if r.reservation == nil || r.kindName != validation.TenantKind {
 		return ctx, nil, nil
 	}
-	var raw []byte
-	if app.Spec != nil {
-		raw = app.Spec.Raw
+	declares := func(a *appsv1alpha1.Application) bool {
+		if a == nil || a.Spec == nil {
+			return false
+		}
+		quotas, err := parseDeclaredQuotas(a.Spec.Raw)
+		return err == nil && len(quotas) > 0
 	}
-	quotas, err := parseDeclaredQuotas(raw)
-	if err != nil || len(quotas) == 0 {
+	hadQuota := declares(old)
+	if !declares(app) && !hadQuota {
 		return ctx, nil, nil
 	}
-	tree, err := r.tenantTree(ctx, r.c)
+	parentRoot, err := r.poolRootFor(ctx, app.Namespace)
 	if err != nil {
 		return ctx, nil, err
 	}
-	p := poolOf(tree, app.Namespace)
-	if p == nil {
+	var roots []string
+	if parentRoot != "" {
+		roots = append(roots, parentRoot)
+	}
+	if hadQuota {
+		roots = append(roots, r.computeTenantNamespace(app.Namespace, app.Name))
+	}
+	if len(roots) == 0 {
 		return ctx, nil, nil
 	}
-	adm := &reservationAdmission{gate: r.reservation, root: p.root, unlock: r.reservation.acquire(ctx, p.root)}
-	// The root was chosen from the cache before the lock was held; an
-	// ancestor that became bounded meanwhile would put this Tenant under
-	// another lock than the applications of its pool.
-	if tree, err = r.tenantTree(ctx, r.w); err != nil {
+	// A child's root always extends its parent's, so taking the parent's
+	// first is the same order every request takes them in.
+	var unlocks []func()
+	for _, root := range roots {
+		if u := r.reservation.acquire(ctx, root); u != nil {
+			unlocks = append(unlocks, u)
+		}
+	}
+	adm := &reservationAdmission{gate: r.reservation, root: parentRoot, unlock: func() {
+		for i := len(unlocks) - 1; i >= 0; i-- {
+			unlocks[i]()
+		}
+	}}
+	// The parent's root was chosen before the lock was held; an ancestor
+	// that became bounded meanwhile would put this Tenant under another lock
+	// than the applications of its pool.
+	tree, err := r.tenantTree(ctx, r.w)
+	if err != nil {
 		adm.release()
 		return ctx, nil, err
 	}
-	if p = poolOf(tree, app.Namespace); p == nil || p.root != adm.root {
+	if p := poolOf(tree, app.Namespace); (p == nil) != (parentRoot == "") || p != nil && p.root != parentRoot {
 		adm.release()
 		return ctx, nil, apierrors.NewConflict(r.gvr.GroupResource(), app.Name,
 			fmt.Errorf("the tenant pool of namespace %s changed while this write was checked; retry it", app.Namespace))
 	}
-	return withHeldPool(ctx, adm.root), adm, nil
+	return withHeldPool(ctx, roots...), adm, nil
+}
+
+// poolRootFor chooses the pool root that governs ns, from the cache when it
+// knows one and from the API server when it does not, so that a budget the
+// cache has not seen yet cannot leave a write ungated.
+func (r *REST) poolRootFor(ctx context.Context, ns string) (string, error) {
+	for _, reader := range []client.Reader{r.c, r.w} {
+		tree, err := r.tenantTree(ctx, reader)
+		if err != nil {
+			return "", err
+		}
+		if p := poolOf(tree, ns); p != nil {
+			return p.root, nil
+		}
+	}
+	return "", nil
+}
+
+// checkTenantCarveOut is the Tenant quota check with the gate on: a bounded
+// Tenant's quota has to fit what is left of the pool it is carved out of,
+// whether its immediate parent is bounded or the pool belongs to a further
+// ancestor. What is left is the pool's budget less its other carve-outs and
+// less what its applications reserve, all read from the API server under the
+// pool lock, with quota keys compared as the budget names them. The Tenant's
+// own subtree is left out: on an update it is what is being resized.
+func (r *REST) checkTenantCarveOut(ctx context.Context, app *appsv1alpha1.Application) error {
+	fldPath := field.NewPath("spec").Child(resourceQuotasField)
+	var raw []byte
+	if app.Spec != nil {
+		raw = app.Spec.Raw
+	}
+	declared, err := parseDeclaredQuotas(raw)
+	if err != nil {
+		return apierrors.NewInvalid(r.gvk.GroupKind(), app.Name, field.ErrorList{field.Invalid(fldPath, "", err.Error())})
+	}
+	if len(declared) == 0 {
+		return nil
+	}
+	tree, err := r.tenantTree(ctx, r.w)
+	if err != nil {
+		return err
+	}
+	own := r.computeTenantNamespace(app.Namespace, app.Name)
+	for ns := range tree {
+		if ns == own || strings.HasPrefix(ns, own+"-") {
+			delete(tree, ns)
+		}
+	}
+	p := poolOf(tree, app.Namespace)
+	if p == nil {
+		return nil
+	}
+	fig, err := r.reservedIn(ctx, p.members, client.ObjectKey{}, newSnapshot(r.reservation.env))
+	if errors.Is(err, reservation.ErrUnavailable) {
+		return apierrors.NewServiceUnavailable(fmt.Sprintf("cannot sum tenant pool %q yet: %v", p.root, err))
+	}
+	if err != nil {
+		return err
+	}
+	want := budgetOf(declared)
+	var errs field.ErrorList
+	for _, k := range want.Keys() {
+		limit, bounded := p.budget[k]
+		if !bounded {
+			continue
+		}
+		requested := want[k]
+		carved, reserved := p.carved[k], fig.reserved[k]
+		remaining := limit.DeepCopy()
+		remaining.Sub(carved)
+		remaining.Sub(reserved)
+		if requested.Cmp(remaining) <= 0 {
+			continue
+		}
+		errs = append(errs, field.Forbidden(fldPath.Key(k), fmt.Sprintf(
+			"requested %s exceeds the remaining %q budget of tenant pool %q: %s allowed, %s carved out by other sub-tenants, %s reserved by %d applications; a tenant may not be granted more quota than its pool has left",
+			requested.String(), k, p.root, limit.String(), carved.String(), reserved.String(), fig.applications)))
+	}
+	if len(errs) > 0 {
+		return apierrors.NewInvalid(r.gvk.GroupKind(), app.Name, errs)
+	}
+	return nil
+}
+
+// checkTenantQuota runs the Tenant quota check that applies: against the
+// pool under the reservation gate, against the parent's declared quota and
+// ResourceQuota usage without it.
+func (r *REST) checkTenantQuota(ctx context.Context, app *appsv1alpha1.Application) error {
+	if r.reservation != nil {
+		return r.checkTenantCarveOut(ctx, app)
+	}
+	if errs := r.validateTenantResourceQuotas(ctx, app); len(errs) > 0 {
+		return apierrors.NewInvalid(r.gvk.GroupKind(), app.Name, errs)
+	}
+	return nil
 }
 
 // admitReservation is the reservation gate for a write of app, whose stored
@@ -664,23 +797,24 @@ func (r *REST) admit(ctx context.Context, app *appsv1alpha1.Application, old *he
 		return adm, nil, nil
 	}
 
-	tree, err := r.tenantTree(ctx, r.c)
+	root, err := r.poolRootFor(ctx, app.Namespace)
 	if err != nil {
 		return nil, field.ErrorList{field.InternalError(specPath, err)}, nil
 	}
-	p := poolOf(tree, app.Namespace)
-	if p == nil {
+	if root == "" {
 		return adm, nil, nil
 	}
-	adm.root = p.root
-	adm.unlock = g.acquire(ctx, p.root)
+	adm.root = root
+	adm.unlock = g.acquire(ctx, root)
 	// The cached read above only chose the lock. Budget, carve-outs and
 	// members are read from the API server under it.
-	if tree, err = r.tenantTree(ctx, r.w); err != nil {
+	tree, err := r.tenantTree(ctx, r.w)
+	if err != nil {
 		adm.release()
 		return nil, field.ErrorList{field.InternalError(specPath, err)}, nil
 	}
-	if p = poolOf(tree, app.Namespace); p == nil || p.root != adm.root {
+	p := poolOf(tree, app.Namespace)
+	if p == nil || p.root != adm.root {
 		adm.release()
 		return nil, nil, apierrors.NewConflict(r.gvr.GroupResource(), app.Name,
 			fmt.Errorf("the tenant pool of namespace %s changed while this write was checked; retry it", app.Namespace))

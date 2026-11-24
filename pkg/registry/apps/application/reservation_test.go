@@ -373,9 +373,9 @@ func TestTenantQuotaDeclarationCountsReservationsWithTheGate(t *testing.T) {
 	tenants.c, tenants.w = f.client, f.client
 	tenants.SetReservation(f.gate)
 
-	errs := tenants.validateTenantResourceQuotas(context.Background(), childApplication(t, "dev", "tenant-acme", map[string]string{"memory": "1Gi"}))
-	if len(errs) != 1 || !strings.Contains(errs[0].Error(), "16Gi currently in use by the parent pool") {
-		t.Fatalf("the parent pool's 16Gi is reserved by its VM, so a 1Gi child does not fit; got %v", errs)
+	err := tenants.checkTenantQuota(context.Background(), childApplication(t, "dev", "tenant-acme", map[string]string{"memory": "1Gi"}))
+	if !apierrors.IsInvalid(err) || !strings.Contains(err.Error(), "16Gi reserved by 1 applications") {
+		t.Fatalf("the parent pool's 16Gi is reserved by its VM, so a 1Gi child does not fit; got %v", err)
 	}
 }
 
@@ -676,24 +676,42 @@ func TestValuesHashKeepsLargeIntegersApart(t *testing.T) {
 }
 
 func TestTenantPoolRootIsCheckedAgainUnderTheLock(t *testing.T) {
-	f := newGateFixture(t,
+	var armed atomic.Bool
+	chose := make(chan struct{})
+	var once sync.Once
+	f := newGateFixtureWith(t, interceptor.Funcs{
+		List: func(ctx context.Context, c client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
+			err := c.List(ctx, list, opts...)
+			if armed.Load() {
+				// The cached tree the root is chosen from has been read.
+				once.Do(func() { close(chose) })
+			}
+			return err
+		},
+	},
 		tenantHelmRelease(t, "acme", rootTenantNamespace, map[string]string{"memory": "20Gi"}),
 		tenantHelmRelease(t, "dev", "tenant-acme", nil),
 	)
 	tenants := newTenantREST(t)
-	tenants.c, tenants.w = f.vms.c, f.vms.w
+	tenants.c, tenants.w = f.vms.c, f.client
 	tenants.SetReservation(f.gate)
 
 	// Hold tenant-acme's lock while tenant-acme-dev becomes bounded: a child
 	// of dev chose tenant-acme as its root, which is no longer its pool.
 	unlock := f.gate.acquire(context.Background(), "tenant-acme")
+	armed.Store(true)
 	done := make(chan error, 1)
 	go func() {
 		ctx := request.WithNamespace(context.Background(), "tenant-acme-dev")
 		_, err := tenants.Create(ctx, childApplication(t, "qa", "tenant-acme-dev", map[string]string{"memory": "1Gi"}), nil, &metav1.CreateOptions{})
 		done <- err
 	}()
-	time.Sleep(100 * time.Millisecond)
+	select {
+	case <-chose:
+	case err := <-done:
+		unlock()
+		t.Fatalf("the Tenant never chose its pool: %v", err)
+	}
 	dev := &helmv2.HelmRelease{}
 	if err := f.client.Get(context.Background(), client.ObjectKey{Namespace: "tenant-acme", Name: "tenant-dev"}, dev); err != nil {
 		t.Fatal(err)
@@ -881,12 +899,13 @@ func (e *countingEnvironment) Instancetype(name string) (reservation.ResourceLis
 }
 
 func TestReservationResolvesEachInstancetypeOncePerAdmission(t *testing.T) {
-	f := newGateFixture(t, tenantHelmRelease(t, "acme", rootTenantNamespace, map[string]string{"memory": "8Gi"}))
-	if err := f.create(t, vmApplication(t, "web", "tenant-acme", map[string]any{"instanceType": "u1.small", "external": true})); err != nil {
+	f := newGateFixture(t, tenantHelmRelease(t, "acme", rootTenantNamespace, map[string]string{"memory": "20Gi"}))
+	if err := f.create(t, vmApplication(t, "web", "tenant-acme", map[string]any{"resources": map[string]any{"cpu": 1, "sockets": 1, "memory": "2Gi"}})); err != nil {
 		t.Fatal(err)
 	}
-	// web's stored figure no longer matches its values, so the pool has to
-	// evaluate it, in the same admission that evaluates db.
+	// web is changed behind the gate to u1.small: its stored 2Gi no longer
+	// matches its values, so the pool has to evaluate it, in the same
+	// admission that evaluates db.
 	hr := &helmv2.HelmRelease{}
 	if err := f.client.Get(context.Background(), client.ObjectKey{Namespace: "tenant-acme", Name: "vm-instance-web"}, hr); err != nil {
 		t.Fatal(err)
@@ -897,12 +916,154 @@ func TestReservationResolvesEachInstancetypeOncePerAdmission(t *testing.T) {
 	}
 	env := &countingEnvironment{Environment: testEnvironment(), calls: map[string]int{}}
 	f.gate.env = env
+	lowerBudget(t, f, "6Gi")
 
+	// web and db both reserve u1.small's 4Gi: 8Gi exceeds 6Gi. Leaving web
+	// out, trusting its stale 2Gi, or reading the redefined 2Gi for either
+	// would fit.
 	err := f.create(t, vmApplication(t, "db", "tenant-acme", map[string]any{"instanceType": "u1.small"}))
-	if err != nil {
-		t.Fatalf("4Gi + 4Gi fits 8Gi when both are read from one definition of u1.small: %v", err)
+	if !apierrors.IsInvalid(err) || !strings.Contains(err.Error(), "4Gi already reserved by 1 applications, 4Gi requested") {
+		t.Fatalf("both VMs read from one definition of u1.small: want db refused at 4Gi + 4Gi, got %v", err)
 	}
 	if env.calls["u1.small"] != 1 {
 		t.Fatalf("u1.small was resolved %d times in one admission", env.calls["u1.small"])
+	}
+}
+
+func lowerBudget(t *testing.T, f gateFixture, memory string) {
+	t.Helper()
+	tenant := &helmv2.HelmRelease{}
+	if err := f.client.Get(context.Background(), client.ObjectKey{Namespace: rootTenantNamespace, Name: "tenant-acme"}, tenant); err != nil {
+		t.Fatal(err)
+	}
+	tenant.Spec.Values = tenantValuesJSON(t, map[string]string{"memory": memory})
+	if err := f.client.Update(context.Background(), tenant); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func gatedTenants(t *testing.T, f gateFixture) *REST {
+	t.Helper()
+	tenants := newTenantREST(t)
+	tenants.c, tenants.w = f.vms.c, f.vms.w
+	tenants.SetReservation(f.gate)
+	return tenants
+}
+
+func TestTenantCarveOutIsCheckedAgainstTheNearestBoundedAncestor(t *testing.T) {
+	f := newGateFixture(t,
+		tenantHelmRelease(t, "acme", rootTenantNamespace, map[string]string{"memory": "8Gi"}),
+		tenantHelmRelease(t, "dev", "tenant-acme", nil),
+	)
+	if err := f.create(t, vmApplication(t, "web", "tenant-acme", map[string]any{"instanceType": "u1.small"})); err != nil {
+		t.Fatal(err)
+	}
+	ctx := request.WithNamespace(context.Background(), "tenant-acme-dev")
+	_, err := gatedTenants(t, f).Create(ctx, childApplication(t, "qa", "tenant-acme-dev", map[string]string{"memory": "6Gi"}), nil, &metav1.CreateOptions{})
+	if !apierrors.IsInvalid(err) || !strings.Contains(err.Error(), `tenant pool "tenant-acme"`) {
+		t.Fatalf("dev declares nothing, so qa's 6Gi is carved out of acme's 8Gi with 4Gi reserved; want it refused, got %v", err)
+	}
+}
+
+func TestTenantCarveOutComparesQuotaKeysAsTheBudgetNamesThem(t *testing.T) {
+	f := newGateFixture(t, tenantHelmRelease(t, "acme", rootTenantNamespace, map[string]string{"memory": "8Gi"}))
+	if err := f.create(t, vmApplication(t, "web", "tenant-acme", map[string]any{"instanceType": "u1.small"})); err != nil {
+		t.Fatal(err)
+	}
+	ctx := request.WithNamespace(context.Background(), "tenant-acme")
+	_, err := gatedTenants(t, f).Create(ctx, childApplication(t, "dev", "tenant-acme", map[string]string{"requests.memory": "6Gi"}), nil, &metav1.CreateOptions{})
+	if !apierrors.IsInvalid(err) {
+		t.Fatalf("requests.memory draws on the parent's memory budget; want 6Gi refused next to 4Gi reserved in 8Gi, got %v", err)
+	}
+}
+
+func TestTenantCarveOutAnswers503WhenThePoolCannotBeSummed(t *testing.T) {
+	f := newGateFixture(t, tenantHelmRelease(t, "acme", rootTenantNamespace, map[string]string{"memory": "8Gi"}))
+	sibling := &helmv2.HelmRelease{}
+	sibling.Name, sibling.Namespace = "vm-instance-old", "tenant-acme"
+	sibling.Labels = map[string]string{ApplicationKindLabel: "VMInstance", ApplicationGroupLabel: appsv1alpha1.GroupName, ApplicationNameLabel: "old"}
+	sibling.Spec.Values = &apiextv1.JSON{Raw: []byte(`{"instanceType":"u1.small"}`)}
+	if err := f.client.Create(context.Background(), sibling); err != nil {
+		t.Fatal(err)
+	}
+	f.gate.env = unavailableEnvironment{testEnvironment()}
+	ctx := request.WithNamespace(context.Background(), "tenant-acme")
+	_, err := gatedTenants(t, f).Create(ctx, childApplication(t, "dev", "tenant-acme", map[string]string{"memory": "1Gi"}), nil, &metav1.CreateOptions{})
+	if !apierrors.IsServiceUnavailable(err) {
+		t.Fatalf("a pool that cannot be summed right now is a 503, not an invalid spec; got %v", err)
+	}
+}
+
+// A budget the cache has not seen yet still gates the write: the pool root
+// is looked up live when the cache knows none.
+func TestReservationFindsABudgetTheCacheHasNotSeen(t *testing.T) {
+	f := newGateFixture(t, tenantHelmRelease(t, "acme", rootTenantNamespace, map[string]string{"memory": "8Gi"}))
+	f.vms.c = interceptor.NewClient(f.client, interceptor.Funcs{
+		List: func(ctx context.Context, c client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
+			if err := c.List(ctx, list, opts...); err != nil {
+				return err
+			}
+			if hrs, ok := list.(*helmv2.HelmReleaseList); ok {
+				for i := range hrs.Items {
+					if hrs.Items[i].Name == "tenant-acme" {
+						hrs.Items[i].Spec.Values = tenantValuesJSON(t, nil)
+					}
+				}
+			}
+			return nil
+		},
+	})
+	f.vms.w = f.client
+	if err := f.create(t, vmApplication(t, "web", "tenant-acme", map[string]any{"instanceType": "u1.large"})); !apierrors.IsInvalid(err) {
+		t.Fatalf("the cache shows acme unbounded but the API server has 8Gi; want 16Gi refused, got %v", err)
+	}
+}
+
+func TestTenantDroppingItsQuotaWaitsForOrdersInFlightInItsPool(t *testing.T) {
+	f := newGateFixture(t,
+		tenantHelmRelease(t, "acme", rootTenantNamespace, map[string]string{"memory": "20Gi"}),
+		tenantHelmRelease(t, "dev", "tenant-acme", map[string]string{"memory": "8Gi"}),
+	)
+	tenants := gatedTenants(t, f)
+	// An order admitted into dev's pool, not written yet, holds its lock.
+	unlock := f.gate.acquire(context.Background(), "tenant-acme-dev")
+	done := make(chan error, 1)
+	go func() {
+		ctx := request.WithNamespace(context.Background(), "tenant-acme")
+		_, _, err := tenants.Update(ctx, "dev", rest.DefaultUpdatedObjectInfo(childApplication(t, "dev", "tenant-acme", nil)), nil, nil, false, &metav1.UpdateOptions{})
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		unlock()
+		t.Fatalf("dropping dev's quota merged its pool into acme's while an order into dev was in flight: %v", err)
+	case <-time.After(200 * time.Millisecond):
+	}
+	unlock()
+	if err := <-done; err != nil {
+		t.Fatalf("once the order is written, dev may drop its quota: %v", err)
+	}
+}
+
+func TestReservationDoesNotTrustAStaleFigureWhenTheEnvironmentIsUnreadable(t *testing.T) {
+	f := newGateFixture(t, tenantHelmRelease(t, "acme", rootTenantNamespace, map[string]string{"memory": "8Gi"}))
+	if err := f.create(t, vmApplication(t, "web", "tenant-acme", map[string]any{"resources": map[string]any{"cpu": 1, "sockets": 1, "memory": "2Gi"}})); err != nil {
+		t.Fatal(err)
+	}
+	// Resized behind the gate: the stored 2Gi is stale, and what web
+	// reserves now depends on an instance type that cannot be read.
+	hr := &helmv2.HelmRelease{}
+	if err := f.client.Get(context.Background(), client.ObjectKey{Namespace: "tenant-acme", Name: "vm-instance-web"}, hr); err != nil {
+		t.Fatal(err)
+	}
+	hr.Spec.Values = &apiextv1.JSON{Raw: []byte(`{"instanceType":"u1.large"}`)}
+	if err := f.client.Update(context.Background(), hr); err != nil {
+		t.Fatal(err)
+	}
+	f.gate.env = unavailableEnvironment{testEnvironment()}
+
+	err := f.create(t, vmApplication(t, "db", "tenant-acme", map[string]any{"resources": map[string]any{"cpu": 1, "sockets": 1, "memory": "4Gi"}}))
+	if !apierrors.IsServiceUnavailable(err) {
+		t.Fatalf("a sibling whose current size cannot be read is not counted at its stale 2Gi; want 503, got %v", err)
 	}
 }
