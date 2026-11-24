@@ -1030,7 +1030,17 @@ func TestTenantDroppingItsQuotaWaitsForOrdersInFlightInItsPool(t *testing.T) {
 	)
 	tenants := gatedTenants(t, f)
 	// An order admitted into dev's pool, not written yet, holds its lock.
-	unlock := f.gate.acquire(context.Background(), "tenant-acme-dev")
+	var releaseOnce sync.Once
+	held := f.gate.acquire(context.Background(), "tenant-acme-dev")
+	unlock := func() { releaseOnce.Do(held) }
+	t.Cleanup(unlock)
+	waiting := make(chan struct{})
+	var once sync.Once
+	f.gate.waiting = func(root string) {
+		if root == "tenant-acme-dev" {
+			once.Do(func() { close(waiting) })
+		}
+	}
 	done := make(chan error, 1)
 	go func() {
 		ctx := request.WithNamespace(context.Background(), "tenant-acme")
@@ -1038,10 +1048,16 @@ func TestTenantDroppingItsQuotaWaitsForOrdersInFlightInItsPool(t *testing.T) {
 		done <- err
 	}()
 	select {
+	case <-waiting:
 	case err := <-done:
-		unlock()
-		t.Fatalf("dropping dev's quota merged its pool into acme's while an order into dev was in flight: %v", err)
-	case <-time.After(200 * time.Millisecond):
+		t.Fatalf("dropping dev's quota did not wait for dev's pool: %v", err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("dropping dev's quota never asked for dev's pool")
+	}
+	select {
+	case err := <-done:
+		t.Fatalf("dropping dev's quota finished while an order into dev was in flight: %v", err)
+	default:
 	}
 	unlock()
 	if err := <-done; err != nil {
@@ -1069,5 +1085,65 @@ func TestReservationDoesNotTrustAStaleFigureWhenTheEnvironmentIsUnreadable(t *te
 	err := f.create(t, vmApplication(t, "db", "tenant-acme", map[string]any{"resources": map[string]any{"cpu": 1, "sockets": 1, "memory": "4Gi"}}))
 	if !apierrors.IsServiceUnavailable(err) {
 		t.Fatalf("a sibling whose current size cannot be read is not counted at its stale 2Gi; want 503, got %v", err)
+	}
+}
+
+func TestRootTenantWithAQuotaCanBeUpdated(t *testing.T) {
+	f := newGateFixture(t, tenantHelmRelease(t, "root", rootTenantNamespace, map[string]string{"memory": "20Gi"}))
+	tenants := gatedTenants(t, f)
+	done := make(chan error, 1)
+	go func() {
+		ctx := request.WithNamespace(context.Background(), rootTenantNamespace)
+		_, _, err := tenants.Update(ctx, "root", rest.DefaultUpdatedObjectInfo(childApplication(t, "root", rootTenantNamespace, map[string]string{"memory": "30Gi"})), nil, nil, false, &metav1.UpdateOptions{})
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("updating the root Tenant locked its own pool twice and never returned")
+	}
+	if err := f.create(t, vmApplication(t, "web", rootTenantNamespace, map[string]any{"instanceType": "u1.small"})); err != nil {
+		t.Fatalf("the root pool is usable after the update: %v", err)
+	}
+}
+
+func TestReservationAnswers503WhenThePoolCannotBeRead(t *testing.T) {
+	f := newGateFixture(t, tenantHelmRelease(t, "acme", rootTenantNamespace, map[string]string{"memory": "8Gi"}))
+	f.vms.w = interceptor.NewClient(f.client, interceptor.Funcs{
+		List: func(context.Context, client.WithWatch, client.ObjectList, ...client.ListOption) error {
+			return fmt.Errorf("connection refused")
+		},
+	})
+	err := f.create(t, vmApplication(t, "web", "tenant-acme", map[string]any{"instanceType": "u1.small"}))
+	if !apierrors.IsServiceUnavailable(err) {
+		t.Fatalf("a pool the API server cannot list right now is a 503, not an invalid spec; got %v", err)
+	}
+}
+
+func TestTenantUpdateRefusesALockChosenFromAStaleCopy(t *testing.T) {
+	stale := true
+	f := newGateFixtureWith(t, interceptor.Funcs{
+		Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+			if err := c.Get(ctx, key, obj, opts...); err != nil {
+				return err
+			}
+			if stale && key.Name == "tenant-dev" {
+				// The first read, which chooses the locks, predates dev's quota.
+				stale = false
+				obj.(*helmv2.HelmRelease).Spec.Values = tenantValuesJSON(t, nil)
+			}
+			return nil
+		},
+	},
+		tenantHelmRelease(t, "acme", rootTenantNamespace, map[string]string{"memory": "20Gi"}),
+		tenantHelmRelease(t, "dev", "tenant-acme", map[string]string{"memory": "8Gi"}),
+	)
+	ctx := request.WithNamespace(context.Background(), "tenant-acme")
+	_, _, err := gatedTenants(t, f).Update(ctx, "dev", rest.DefaultUpdatedObjectInfo(childApplication(t, "dev", "tenant-acme", nil)), nil, nil, false, &metav1.UpdateOptions{})
+	if !apierrors.IsConflict(err) {
+		t.Fatalf("dev's quota appeared after its locks were chosen; want the drop refused as a conflict, got %v", err)
 	}
 }
