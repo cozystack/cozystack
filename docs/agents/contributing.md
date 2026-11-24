@@ -311,7 +311,21 @@ The rest of the organisation's repositories do not restate anything this one own
 
 The release process keeps a **separate** list of repositories, in [`changelog.md`](./changelog.md), checked for tags cut during a release window. That list exists to assemble release notes; this one exists to catch code coupling. They overlap but are not interchangeable, and neither replaces the other.
 
+## API Changes
+
+The API Review Gate (`.github/workflows/api-review-gate.yaml`) requires an API owner's review only for a new API group, a new resource, or a breaking change to an existing schema. These are API changes too, and the gate passes every one of them:
+
+- a new field on a platform CRD (`ApplicationDefinition`, `PackageSource`, `Package` and the rest under `api/`), optional fields included;
+- the semantics of a language or expression a field carries: its variables, functions, evaluation order, defaulting, error behaviour, and what an empty or missing value means. A field typed `string` that holds CEL is as much API as the schema around it, and a change to the Go code that evaluates it changes every declaration already written;
+- a vocabulary other components or users read: quota keys, labels, annotations, condition types, `_cluster` and `_namespace` keys;
+- a field that is optional now and that a later change makes required, enforced or fail-closed. The change that starts enforcing it is the breaking one, whether it arrives as a schema change, a flag or a new default, and carries `!` in its title.
+
+A PR making one of these changes says so under `## API change` in its body, links the accepted design that settles the shape or states that none does, and requests a review from an API owner listed in `API_OWNERS` in that workflow. The semantics of an embedded language are written in a document beside the types (`api/<group>/<version>/DESIGN.md`), not only in Go doc comments.
+
 ## Review Expectations
+
+- A review checks the design, not only the text. The [Review Blockers](#review-blockers-messages-trailers-comments) are decided by the text alone; they are the floor of a review, not its scope. Before approving, answer: does the change follow the accepted design it implements, and does the PR body name each deviation from it; does platform code or a platform test now name an application or read an application package ([`overview.md`](./overview.md#what-a-test-may-depend-on)); does it add a rule other contributors must follow, and is that rule written down; is it an [API change](#api-changes) the gate did not flag. Any of these unanswered is NOT LGTM.
+- An automated reviewer's request to harden a test (another guard, another fixture, another format check) is weighed against whether the test should exist at all. A test that grows a new guard every round is usually checking the wrong layer; move it rather than extend it.
 
 - A bug-fix PR should include a behavioural regression test, not just a single field assertion — prove the bug can no longer recur.
 - Keep the PR description aligned with the template: `## What this PR does` plus the `release-note` block.
