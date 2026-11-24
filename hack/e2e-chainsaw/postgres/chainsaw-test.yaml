@@ -312,8 +312,10 @@ spec:
   steps:
   - name: run
     try:
-    # The 66m budget is the whole documented flow: bucket provisioning, a
-    # 2-replica source Postgres, the plugin base backup to S3, an empty target
+    # The 76m budget is the whole documented flow: bucket provisioning, a
+    # 2-replica source Postgres, the plugin base backup to S3, a second backup
+    # held pending on the fenced Cluster until the fence is lifted (step 26,
+    # which waits for the Cluster to come back healthy), an empty target
     # app, and THREE sequential purge + re-bootstrap restores against it - the
     # latest-point to-copy restore, the point-in-time restore (step 45), and
     # the negative unreachable-target restore (step 46, which sets a short
@@ -326,7 +328,7 @@ spec:
     # run-all.sh fails fast on terminal BackupJob/RestoreJob phases and stalled
     # HelmReleases rather than polling out the budget.
     - script:
-        timeout: 66m
+        timeout: 76m
         content: |
           set -eu
           cd ../../..
