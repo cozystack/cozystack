@@ -975,9 +975,13 @@ func TestTenantCarveOutComparesQuotaKeysAsTheBudgetNamesThem(t *testing.T) {
 		t.Fatal(err)
 	}
 	ctx := request.WithNamespace(context.Background(), "tenant-acme")
-	_, err := gatedTenants(t, f).Create(ctx, childApplication(t, "dev", "tenant-acme", map[string]string{"requests.memory": "6Gi"}), nil, &metav1.CreateOptions{})
-	if !apierrors.IsInvalid(err) {
-		t.Fatalf("requests.memory draws on the parent's memory budget; want 6Gi refused next to 4Gi reserved in 8Gi, got %v", err)
+	tenants := gatedTenants(t, f)
+	_, err := tenants.Create(ctx, childApplication(t, "dev", "tenant-acme", map[string]string{"requests.memory": "6Gi"}), nil, &metav1.CreateOptions{})
+	if !apierrors.IsInvalid(err) || !strings.Contains(err.Error(), `remaining "memory" budget of tenant pool "tenant-acme"`) || !strings.Contains(err.Error(), "4Gi reserved by 1 applications") {
+		t.Fatalf("requests.memory draws on the parent's memory budget; want 6Gi refused on it next to 4Gi reserved in 8Gi, got %v", err)
+	}
+	if _, err := tenants.Create(ctx, childApplication(t, "qa", "tenant-acme", map[string]string{"requests.memory": "4Gi"}), nil, &metav1.CreateOptions{}); err != nil {
+		t.Fatalf("4Gi of requests.memory fits the 4Gi left of the memory budget: %v", err)
 	}
 }
 
