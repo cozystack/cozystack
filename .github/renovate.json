@@ -20,6 +20,13 @@
   "customManagers": [
     {
       "customType": "regex",
+      "description": "Track the multi-architecture etcd-defrag image used by tenant and guest maintenance jobs.",
+      "managerFilePatterns": ["/^packages/library/cozy-lib/templates/_etcd\\.tpl$/"],
+      "matchStrings": ["(?<depName>ghcr\\.io/ahrtr/etcd-defrag):(?<currentValue>v[0-9]+\\.[0-9]+\\.[0-9]+)@(?<currentDigest>sha256:[a-f0-9]+)"],
+      "datasourceTemplate": "docker"
+    },
+    {
+      "customType": "regex",
       "description": "Track the etcd image pinned in the extra/etcd EtcdCluster podTemplate. etcd-operator v0.4.5 bakes etcd 3.5.12 into its binary, and the chart overrides it with a hardcoded image string that the gomod/dockerfile managers cannot see. Without this manager the security-relevant pin (etcd 3.5.x releases are overwhelmingly security fixes) would silently age.",
       "managerFilePatterns": ["/^packages/extra/etcd/templates/etcd-cluster\\.yaml$/"],
       "matchStrings": ["image:\\s+(?<depName>quay\\.io/coreos/etcd):(?<currentValue>v[0-9]+\\.[0-9]+\\.[0-9]+)"],
