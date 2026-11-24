@@ -1,0 +1,53 @@
+suite: seaweedfs master spread policy reaches the data plane
+
+# hard leaves the data-plane chart's spread constraint in place. soft sends
+# an empty one, and the master StatefulSet renders no constraint at all, which
+# the system chart's suite pins, so only the preferred anti-affinity is left.
+
+templates:
+  - templates/seaweedfs.yaml
+
+release:
+  name: seaweedfs
+  namespace: tenant-root
+
+tests:
+  - it: keeps the data-plane spread constraint by default
+    set: &platform
+      _namespace:
+        host: example.org
+        ingress: tenant-root
+      _cluster:
+        issuer-name: letsencrypt-prod
+        solver: http01
+    documentSelector:
+      path: metadata.name
+      value: seaweedfs-system
+    asserts:
+      - notExists:
+          path: spec.values.seaweedfs.master.topologySpreadConstraints
+
+  - it: keeps the data-plane spread constraint on hard
+    set:
+      <<: *platform
+      master:
+        topologySpreadPolicy: hard
+    documentSelector:
+      path: metadata.name
+      value: seaweedfs-system
+    asserts:
+      - notExists:
+          path: spec.values.seaweedfs.master.topologySpreadConstraints
+
+  - it: clears the spread constraint on soft
+    set:
+      <<: *platform
+      master:
+        topologySpreadPolicy: soft
+    documentSelector:
+      path: metadata.name
+      value: seaweedfs-system
+    asserts:
+      - equal:
+          path: spec.values.seaweedfs.master.topologySpreadConstraints
+          value: ""
